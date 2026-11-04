@@ -20,6 +20,7 @@ import UpgradePanel, {
   resolvedImage,
 } from "./UpgradePanel.jsx";
 import api from "../api.js";
+import { optionValues } from "../searchSelectTesting.js";
 import { fetchUpgradeTargets } from "../upgradeTargets.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
@@ -49,6 +50,27 @@ describe("UpgradePanel", () => {
         /upgrade status could not be read \(upgrader unreachable\)/,
       ),
     ).toBeInTheDocument();
+  });
+
+  // 2026-11-04 deployment-operations walkthrough: behind an unreachable
+  // hostd the first read takes seconds, and the tab stayed blank for all
+  // of them.
+  it("shows that the upgrade status is being read until the first read answers", async () => {
+    let answer;
+    api.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    render(<UpgradePanel showError={() => {}} />);
+
+    expect(
+      screen.getByRole("progressbar", { name: "Reading the upgrade status" }),
+    ).toBeInTheDocument();
+    answer({ enabled: false });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("progressbar", {
+          name: "Reading the upgrade status",
+        }),
+      ).not.toBeInTheDocument(),
+    );
   });
 
   // grain/task-3689: the box starts on the channel the deployment
@@ -486,6 +508,27 @@ describe("UpgradePanel", () => {
     await user.click(input);
     const list = await screen.findByRole("listbox");
     expect(within(list).getByText("latest")).toBeInTheDocument();
+  });
+
+  it("filters upgrade targets with searchFilter while keeping groups contiguous", async () => {
+    fetchUpgradeTargets.mockResolvedValueOnce({
+      targets: [
+        { name: "latest", kind: "channel", allowed: true },
+        { name: "candidate", kind: "channel", allowed: true },
+        { name: "release/v1.8", kind: "branch", allowed: true },
+        { name: "v1.8.0", kind: "version", allowed: true },
+        { name: "v1.7.0", kind: "version", allowed: true },
+      ],
+      allowedBranches: ["**"],
+    });
+    api.mockResolvedValue({ enabled: true, phase: "ok", branch: "" });
+    const user = userEvent.setup();
+    render(<UpgradePanel showError={() => {}} />);
+
+    const input = await screen.findByLabelText(/Branch/);
+    await user.click(input);
+    await user.type(input, "1.8");
+    expect(optionValues(input)).toEqual(["release/v1.8", "v1.8.0"]);
   });
 
   it("claims neither pipeline when the API names no mode", async () => {
@@ -2172,5 +2215,117 @@ describe("AutoUpgradeSettings", () => {
     expect(
       screen.getByRole("option", { name: "release-2026" }),
     ).toBeInTheDocument();
+  });
+});
+
+describe("ImageSourceSettings on UpgradePanel", () => {
+  it("shows release-asset source, fallback note, and saves source changes when unlocked", async () => {
+    const baseStatus = {
+      enabled: true,
+      mode: "image",
+      channel: "main",
+      running: { image: "ghcr.io/bwsalmon/grain/grain:main" },
+      phase: "done",
+      branch: "main",
+      source: "registry",
+      fallbackNote:
+        "release has no image assets; pulled from ghcr.io/bwsalmon/grain/grain",
+      detail:
+        "release has no image assets; pulled from ghcr.io/bwsalmon/grain/grain",
+      imageRepo: "ghcr.io/bwsalmon/grain/grain",
+      defaultImageRepo: "ghcr.io/bwsalmon/grain/grain",
+      imageRepos: ["ghcr.io/bwsalmon/grain/grain"],
+      imageSource: {
+        source: "release-assets",
+        sourceDefault: true,
+        locked: false,
+        fallback: "registry",
+        releaseRepository: "github.com/ai-on-gke/grain",
+        manifestAsset: "images.json",
+        checksumSuffix: ".sha256",
+      },
+    };
+
+    let putBody = null;
+    api.mockImplementation((url, opts) => {
+      if (
+        String(url).includes("/api/upgrade/source") &&
+        opts?.method === "PUT"
+      ) {
+        putBody = JSON.parse(opts.body);
+        return Promise.resolve({
+          ...baseStatus,
+          imageSource: {
+            source: "registry",
+            sourceDefault: false,
+            locked: false,
+          },
+        });
+      }
+      if (String(url).includes("/api/upgrade/targets")) {
+        return Promise.resolve({
+          targets: [{ name: "main", kind: "channel", allowed: true }],
+          default: "main",
+        });
+      }
+      return Promise.resolve(baseStatus);
+    });
+
+    const user = userEvent.setup();
+    render(<UpgradePanel showError={() => {}} />);
+
+    expect(
+      await screen.findByText(/Last upgrade: release has no image assets/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByDisplayValue("github.com/ai-on-gke/grain"),
+    ).not.toBeDisabled();
+
+    await user.click(screen.getByRole("combobox", { name: /^source$/i }));
+    await user.click(
+      screen.getByRole("option", { name: /Container registry only/i }),
+    );
+    expect(putBody).toEqual({ mode: "registry", releaseRepository: "" });
+  });
+
+  it("renders read-only when locked by a daemon flag or environment variable", async () => {
+    const lockedStatus = {
+      enabled: true,
+      mode: "image",
+      channel: "main",
+      running: { image: "ghcr.io/bwsalmon/grain/grain:main" },
+      phase: "done",
+      branch: "main",
+      source: "release-assets",
+      detail: "loaded grain-image.tar.gz",
+      imageRepo: "ghcr.io/bwsalmon/grain/grain",
+      imageSource: {
+        source: "release-assets",
+        sourceDefault: false,
+        locked: true,
+        releaseRepository: "ghe.internal.example/platform/grain",
+        manifestAsset: "images.json",
+        checksumSuffix: ".sha256",
+      },
+    };
+
+    api.mockImplementation((url) => {
+      if (String(url).includes("/api/upgrade/targets")) {
+        return Promise.resolve({
+          targets: [{ name: "main", kind: "channel", allowed: true }],
+          default: "main",
+        });
+      }
+      return Promise.resolve(lockedStatus);
+    });
+
+    render(<UpgradePanel showError={() => {}} />);
+
+    expect(
+      await screen.findByText("Read-only (set by flag/env)"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByDisplayValue("ghe.internal.example/platform/grain"),
+    ).toBeDisabled();
   });
 });

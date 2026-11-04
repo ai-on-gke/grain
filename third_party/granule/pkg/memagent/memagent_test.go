@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/hypervisor"
-	"github.com/bwsalmon/granule/pkg/telemetry"
+	"github.com/gke-labs/granule/pkg/hypervisor"
+	"github.com/gke-labs/granule/pkg/telemetry"
 )
 
 const mib = 1024 * 1024

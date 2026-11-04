@@ -64,8 +64,12 @@ const notAllowedPrincipalSuffix = " is not on the allowed users and groups list 
 
 // defaultPrincipalAdvice names Settings -> Access and `grain access allow`.
 func defaultPrincipalAdvice(entry, _ string) string {
-	if entry == "" || strings.HasPrefix(entry, "serviceAccount:") {
+	if entry == "" {
 		return "To let them in, an allowed user or access-code holder can add their user or group under Settings -> Access, or run grain access allow."
+	}
+	if strings.HasPrefix(entry, "serviceAccount:") {
+		return "To let this service account in with full operator access, an allowed user or access-code holder can add " + entry +
+			" with a reason under Settings -> Access, or run: grain access allow " + entry + " --reason <why>"
 	}
 	return "To let them in, an allowed user or access-code holder can add " + entry +
 		" under Settings -> Access, or run: grain access allow " + entry
@@ -204,19 +208,60 @@ func (s *Server) writePrincipalRefusedPage(w http.ResponseWriter, r *http.Reques
 // browser loading a UI page is shown a page that says so, rather than
 // the API's JSON error, since an expired or rotated-key assertion
 // reaches a person's browser, not only a forger's curl.
+//
+// A verifier that could not check the header yet
+// (VerifierUnavailableError) is refused just the same, but with 503 and
+// Retry-After, and a page that says to reload rather than advice about
+// audiences and clocks.
 func writeAssertionRefused(w http.ResponseWriter, r *http.Request, err error) {
-	err = fmt.Errorf("identity assertion was not accepted: %w", err)
+	status, page := http.StatusUnauthorized, assertionRefusedPage
+	if verifierUnavailable(err) {
+		status, page = http.StatusServiceUnavailable, verifierStartingPage
+		w.Header().Set("Retry-After", verifierRetryAfter)
+		err = fmt.Errorf("identity assertion could not be checked yet: %w", err)
+	} else {
+		err = fmt.Errorf("identity assertion was not accepted: %w", err)
+	}
 	if !browserNavigation(r) {
-		writeError(w, http.StatusUnauthorized, err)
+		writeError(w, status, err)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusUnauthorized)
-	if err := assertionRefusedPage.Execute(w, err.Error()); err != nil {
+	w.WriteHeader(status)
+	if err := page.Execute(w, err.Error()); err != nil {
 		fmt.Fprintln(w, "identity assertion was not accepted")
 	}
 }
+
+// verifierRetryAfter is the Retry-After, in seconds, on a refusal whose
+// verifier was not available yet.
+const verifierRetryAfter = "5"
+
+var verifierStartingPage = template.Must(template.New("verifier-starting").Parse(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>grain: sign-in verification is starting up</title>
+<style>
+body { font-family: system-ui, sans-serif; display: flex; min-height: 100vh; margin: 0; align-items: center; justify-content: center; background: #f5f5f5; }
+main { background: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.15); max-width: 30rem; width: 100%; box-sizing: border-box; }
+h1 { font-size: 1.25rem; margin: 0 0 1rem; }
+p { color: #444; font-size: .9rem; overflow-wrap: anywhere; }
+code { font-size: .85rem; }
+</style>
+</head>
+<body>
+<main>
+<h1>Sign-in verification is starting up</h1>
+<p>grain could not check the signed identity the proxy in front of it attached to this request yet -- usually because the daemon has just restarted -- so it has not let the request in.</p>
+<p id="refused-reason"><code>{{.}}</code></p>
+<p>Reload the page in a few seconds and it should work.</p>
+</main>
+</body>
+</html>
+`))
 
 var assertionRefusedPage = template.Must(template.New("assertion-refused").Parse(`<!doctype html>
 <html lang="en">

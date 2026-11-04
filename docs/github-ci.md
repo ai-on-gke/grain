@@ -90,10 +90,13 @@ tails are recorded in `github_ci_job` and then acts on the concluded run:
    When `branches:` is omitted, grain matches the schedule's `base` branch or
    the repository's default branch.
    When `template:` and `suite:` are omitted on a `.grain/schedules/` declaration,
-   grain defaults to the built-in `system:workflow-review:<stem>` ("Review last
-   night's `<stem>` run") template and records the firing in
-   `scheduled_workflow_run` (`model.ScheduledWorkflowRun`), matching grain CI's
-   scheduled workflow reviews. Both the filed task's prompt and its opening
+   grain defaults to the built-in `system:workflow-review-github:<stem>`
+   ("Review the `<stem>` GitHub Actions run") template and records the firing in
+   `scheduled_workflow_run` (`model.ScheduledWorkflowRun`), the way grain CI's
+   scheduled workflow reviews are recorded. The prompt is GitHub's own rather
+   than grain CI's `system:workflow-review:<stem>`: it sends the agent to
+   `.github/workflows/<stem>.yml` and to `grain ci log <run>` / `grain ci list`,
+   and makes no claim that grain started the run. Both the filed task's prompt and its opening
    comment include the GitHub run URL, conclusion, failing jobs and steps, and
    the stored failure tails from `github_ci_job`.
 2. **Release triage parity.** When a GitHub Actions release or publish workflow

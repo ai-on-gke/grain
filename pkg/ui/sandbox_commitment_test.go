@@ -199,9 +199,10 @@ func TestSandboxCommitmentUsesTheDefaultShapeWhereNothingIsStored(t *testing.T) 
 	if got == nil {
 		t.Fatal("NewSandboxCommitment = nil, want a commitment")
 	}
-	if got.CPUsPerSandbox != granule.DefaultCPUs || got.MemoryMBPerSandbox != granule.DefaultMemoryMB {
-		t.Fatalf("per-sandbox shape = %d vCPU / %d MiB, want grain's default %d / %d",
-			got.CPUsPerSandbox, got.MemoryMBPerSandbox, granule.DefaultCPUs, granule.DefaultMemoryMB)
+	if got.CPUsPerSandbox != granule.DefaultCPUs || got.MemoryMBPerSandbox != granule.DefaultMemoryMB || got.DiskGBPerSandbox != granule.DefaultDiskGB {
+		t.Fatalf("per-sandbox shape = %d vCPU / %d MiB / %d GiB, want grain's default %d / %d / %d",
+			got.CPUsPerSandbox, got.MemoryMBPerSandbox, got.DiskGBPerSandbox,
+			granule.DefaultCPUs, granule.DefaultMemoryMB, granule.DefaultDiskGB)
 	}
 	if got.CPUsCommitted != 2*granule.DefaultCPUs {
 		t.Errorf("CPUsCommitted = %d, want %d", got.CPUsCommitted, 2*granule.DefaultCPUs)

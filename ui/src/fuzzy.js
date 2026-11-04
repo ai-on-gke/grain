@@ -61,3 +61,117 @@ export function fuzzyFilter(items, query, text = (item) => item) {
     .sort((a, b) => b.score - a.score || a.index - b.index)
     .map((entry) => entry.item);
 }
+
+// searchMatch is how a searchable picker (SearchSelect.jsx, RepoPicker.jsx)
+// reads what was typed against one option's text, or null when it does
+// not match. The query is split on spaces and every token must appear
+// somewhere in the text, in any order, case ignored -- so "granule" finds
+// "gke-labs/granule" and "exp grain" finds "host.example/experimental/grain"
+// without being typed from the start of the name. tier says how good the
+// match is: 0 when some token starts a "/"-segment (the repo's own name,
+// its owner, or the text itself), 1 for any other substring, and 2 for a
+// subsequence -- the query's characters in order with gaps between them,
+// which searchFilter only falls back to when nothing matched at tier 0
+// or 1. ranges are the [start, end) runs of text the query hit, merged
+// and in order, for a picker to highlight.
+export function searchMatch(query, text) {
+  const t = String(text ?? "").toLowerCase();
+  const tokens = String(query ?? "")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((tok) => tok !== "");
+  if (tokens.length === 0) return { tier: 0, ranges: [] };
+  const ranges = [];
+  let segmentStart = false;
+  for (const tok of tokens) {
+    let at = t.indexOf(tok);
+    if (at < 0) return null;
+    // Prefer an occurrence that starts a segment over the first one, so
+    // "grain" highlights the name in "grain-tools/grain" rather than
+    // ranking on whichever it happened to find first.
+    let best = at;
+    while (at >= 0) {
+      if (at === 0 || t[at - 1] === "/") {
+        best = at;
+        segmentStart = true;
+        break;
+      }
+      at = t.indexOf(tok, at + 1);
+    }
+    ranges.push([best, best + tok.length]);
+  }
+  return { tier: segmentStart ? 0 : 1, ranges: mergeRanges(ranges) };
+}
+
+// subsequenceMatch is searchMatch's fallback: every character of the
+// query, spaces dropped, in order somewhere in the text.
+function subsequenceMatch(query, text) {
+  const q = String(query ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, "");
+  const t = String(text ?? "").toLowerCase();
+  const ranges = [];
+  let ti = 0;
+  for (const ch of q) {
+    const found = t.indexOf(ch, ti);
+    if (found < 0) return null;
+    ranges.push([found, found + 1]);
+    ti = found + 1;
+  }
+  return { tier: 2, ranges: mergeRanges(ranges) };
+}
+
+function mergeRanges(ranges) {
+  const sorted = [...ranges].sort((a, b) => a[0] - b[0]);
+  const out = [];
+  for (const [s, e] of sorted) {
+    const last = out[out.length - 1];
+    if (last && s <= last[1]) last[1] = Math.max(last[1], e);
+    else out.push([s, e]);
+  }
+  return out;
+}
+
+// searchFilter is the items searchMatch keeps for query, best first, each
+// as {item, ranges}: segment-start matches, then other substrings, and
+// only when neither found anything, subsequences (ranked by fuzzyScore).
+// Within a tier shorter texts come first -- the closest thing to an exact
+// match -- and ties keep their original order. With no query it is every
+// item, in order, with nothing to highlight.
+export function searchFilter(items, query, text = (item) => item) {
+  if (!String(query ?? "").trim()) {
+    return items.map((item) => ({ item, ranges: [] }));
+  }
+  const rank = (entries) =>
+    entries
+      .sort(
+        (a, b) =>
+          a.tier - b.tier ||
+          b.score - a.score ||
+          a.length - b.length ||
+          a.index - b.index,
+      )
+      .map(({ item, ranges }) => ({ item, ranges }));
+  const substring = [];
+  items.forEach((item, index) => {
+    const t = String(text(item) ?? "");
+    const m = searchMatch(query, t);
+    if (m) substring.push({ item, index, length: t.length, score: 0, ...m });
+  });
+  if (substring.length > 0) return rank(substring);
+  const fuzzy = [];
+  items.forEach((item, index) => {
+    const t = String(text(item) ?? "");
+    const m = subsequenceMatch(query, t);
+    if (m) {
+      fuzzy.push({
+        item,
+        index,
+        length: t.length,
+        score: fuzzyScore(query, t),
+        ...m,
+      });
+    }
+  });
+  return rank(fuzzy);
+}

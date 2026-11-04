@@ -51,6 +51,7 @@ func (s *Server) deploymentRoutes() {
 	s.route("POST /api/deployment/broadcast", s.handleDeploymentBroadcast)
 	s.route("GET /api/deployment/secret-audit", s.handleGetDeploymentSecretAudit)
 	s.route("GET /api/deployment/audit-logs", s.handleGetDeploymentAuditLogs)
+	s.route("GET /api/deployment/config-audit", s.handleGetConfigAudit)
 }
 
 // deploymentRepo is the {owner}/{name} a deployment repo route names.
@@ -259,6 +260,15 @@ func (c *HTTPClient) BroadcastDeploymentMessage(ctx context.Context, req Broadca
 		return BroadcastTeamResponse{}, err
 	}
 	return resp, nil
+}
+
+// ListDeploymentGitConnections is GET /api/deployment/git-connections.
+func (c *HTTPClient) ListDeploymentGitConnections(ctx context.Context) ([]TeamGitConnectionView, error) {
+	var views []TeamGitConnectionView
+	if err := c.do(ctx, http.MethodGet, "/api/deployment/git-connections", nil, &views); err != nil {
+		return nil, err
+	}
+	return views, nil
 }
 
 // AddDeploymentGitConnection is POST /api/deployment/git-connections.

@@ -738,6 +738,10 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	accessRequests, err := c.Store.PendingAccessRequests(ctx)
+	if err != nil {
+		return nil, err
+	}
 	// And once for goals, which name what a resting goal task waits for.
 	goalKinds, err := c.Store.TaskGoalKinds(ctx)
 	if err != nil {
@@ -766,6 +770,7 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 		task.TurnStopped = task.State == model.StateAwaitingReply && turnsStopped[t.ID]
 		if task.State == model.StateAwaitingReply {
 			task.QuestionSummary = questionSummaries[t.ID]
+			task.AwaitingAccess = accessRequests[t.ID]
 		}
 		var wait *model.GrantWait
 		if w, ok := grantWaits[t.ID]; ok {
@@ -1073,6 +1078,7 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 		}
 		task.TurnStopped = turnStopped(state, obs, comments)
 		task.QuestionSummary = questionSummary(state, obs, comments)
+		task.AwaitingAccess = obs != nil && obs.PendingAccess != nil
 	}
 	if err := c.attachPause(ctx, &task); err != nil {
 		return Task{}, err
@@ -1210,6 +1216,7 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	}
 	detail.Task.TurnStopped = turnStopped(state, obs, comments)
 	detail.Task.QuestionSummary = questionSummary(state, obs, comments)
+	detail.Task.AwaitingAccess = state == model.StateAwaitingReply && obs != nil && obs.PendingAccess != nil
 	detail.Goal = goal
 	if err := c.attachPause(ctx, &detail.Task); err != nil {
 		return TaskDetail{}, err
@@ -1305,6 +1312,7 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	detail.PendingSecret = c.pendingSecretFor(obs)
 	if obs != nil {
 		detail.PendingConfigChange = obs.PendingConfigChange
+		detail.PendingAccess = c.pendingAccessFor(ctx, *t, obs)
 	}
 	detail.LocalScriptApprovals = c.localScriptApprovals().ForTask(id, c.now())
 	detail.CI = ciStatusFrom(obs)
@@ -1826,6 +1834,13 @@ type CreateTaskRequest struct {
 	// Capabilities is. SetDependency is the picker's attach/detach
 	// counterpart for a task that already exists.
 	DependsOn []string `json:"dependsOn"`
+	// Designs are design or spec files (design/... paths) the task
+	// implements, and DerivedFrom the pull requests ("owner/repo#number")
+	// its work derives from: provenance links only (model.LinkDesign,
+	// model.LinkDerivedFrom; `grain create --design`, external-cli spec
+	// #XC-19), granting and blocking nothing.
+	Designs     []string `json:"designs,omitempty"`
+	DerivedFrom []string `json:"derivedFrom,omitempty"`
 	// Reads is a set of owner/name repos this task's run may read but
 	// never push to -- model.Task.Reads, docs/data-model.md's "one write
 	// target, many read targets". Unlike Repo, a Reads entry grants
@@ -2064,6 +2079,50 @@ func (c *Client) defaultCapabilities(ctx context.Context, teamID string, target 
 	return ids, nil
 }
 
+// ownerTrustApproves is the owner a filing is approved on behalf of by
+// the deployment's owner-trust policy (model.Config.OwnerTrust,
+// design/spec/external-cli/external-cli.spec.md#XC-17), or nil when the
+// policy does not approve it. Only an external agent credential's own
+// unapproved filing qualifies, and only when its owner is trusted on the
+// filing's repository and nothing holds the work for a person: a
+// catalogue or requires-person hold (held), or a setting only a person
+// may give -- keepRunning, or a priority above the default. The
+// X-Grain-Client label plays no part.
+func (c *Client) ownerTrustApproves(ctx context.Context, req CreateTaskRequest, proposedBy *model.Task,
+	target *model.RepoRef, reads []model.RepoRef, writes []model.WriteTarget, held, keepRunning bool, priority int) (*model.Principal, error) {
+	tok := externalTokenFromContext(ctx)
+	if tok == nil || proposedBy != nil || req.Approved || req.HoldForApproval || req.FixesBaseBranch || req.Interactive || held || keepRunning || priority > model.DefaultTaskPriority {
+		return nil, nil
+	}
+	if p, ok := PrincipalFromContext(ctx); !ok || p.Kind != model.PrincipalAgent || p.Source != model.SourceExternalToken {
+		return nil, nil
+	}
+	owner := tok.OwnerPrincipal()
+	if owner == nil {
+		return nil, nil
+	}
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil || len(cfg.OwnerTrust) == 0 {
+		return nil, nil
+	}
+	if model.NormalizeNetworkAccess(cfg.NetworkAccess) == model.NetworkNone &&
+		strings.TrimSpace(req.NetworkAccess) != "" &&
+		model.NormalizeNetworkAccess(model.NetworkAccess(req.NetworkAccess)) != model.NetworkNone {
+		return nil, nil
+	}
+	repo := ""
+	if target != nil {
+		repo = target.String()
+	}
+	if !model.OwnerTrustedForTask(cfg.OwnerTrust, owner.ID, repo, reads, writes) {
+		return nil, nil
+	}
+	return owner, nil
+}
+
 // CreateTask files a task straight into the store.
 //
 // No GitHub issue is created, and none is needed: Store.NewTaskID
@@ -2201,6 +2260,26 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		}
 	}
 
+	// A filing that names no hostd, and whose template names none
+	// (fromTemplate has already put a template's pin in req.Hostd),
+	// starts pinned to its repository's own default
+	// (model.RepoConfig.DefaultHostd), and failing that to the default
+	// hostd. The repository's default is the operator's word, not the
+	// filer's, so the agent API's hostd gate (agentMayRouteHostd) is not
+	// asked about it; it is still held to the registry, so a default
+	// left naming a hostd that has since gone is refused here rather
+	// than filed onto a pin nothing answers.
+	if hostdSelector == "" && target != nil {
+		repoHostd, err := c.Store.RepoDefaultHostd(ctx, *target)
+		if err != nil {
+			return Task{}, err
+		}
+		if err := c.checkHostdSelector(ctx, repoHostd); err != nil {
+			return Task{}, fmt.Errorf("%s's default hostd (its repository settings): %w", target, err)
+		}
+		hostdSelector = repoHostd
+	}
+
 	var forkPR *forkhead.PR
 	if isForkHead {
 		if forkPR, err = c.resolveForkHead("base", target, forkHead); err != nil {
@@ -2280,6 +2359,11 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err != nil {
 		return Task{}, err
 	}
+	provenance, err := provenanceLinks(req.Designs, req.DerivedFrom)
+	if err != nil {
+		return Task{}, err
+	}
+	links = append(links, provenance...)
 	forkNote := ""
 	if forkPR != nil {
 		links = append(links, forkPR.Link())
@@ -2679,8 +2763,10 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// task -- "Filed by: operator (human)" on work no operator had seen
 	// -- which is the one thing a provenance field must never say
 	// (grain/task-311).
+	// An owned external agent credential files on behalf of its owner
+	// (RequestActor, #XC-14).
 	origin := model.Origin{
-		Attribution: model.Attribution{Actor: c.requestActor(ctx).Actor},
+		Attribution: c.requestActor(ctx),
 		Reason:      model.ReasonDirect,
 	}
 	if proposedBy != nil {
@@ -2738,6 +2824,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		Tags:                 proposalTags(req.ProposalKey, heldNote != ""),
 		CreatedAt:            &now,
 		OrderKey:             orderKey,
+		FiledVia:             filedViaFromContext(ctx),
 	}
 	// A proposal is its proposer's root requester's work, whoever the
 	// request names: an agent's propose_task call cannot file as anybody,
@@ -2764,6 +2851,10 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// can be interactive too, through an interactive template's
 	// templateId (fromTemplate), and that must not turn propose_task into
 	// a way to approve its own work.
+	ownerTrust, err := c.ownerTrustApproves(ctx, req, proposedBy, target, reads, writes, catalogueHold || needsPersonWhy != "", keepRunning, priority)
+	if err != nil {
+		return Task{}, err
+	}
 	switch {
 	case catalogueHold:
 		task.Body += "\n\n_Filed for a person to approve: " + needsPersonWhy + "._"
@@ -2775,6 +2866,9 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		task.ApprovedAt = &now
 	case autoSubmit:
 		task.Approval = &model.Attribution{Actor: model.AutoSubmitPrincipal}
+		task.ApprovedAt = &now
+	case ownerTrust != nil:
+		task.Approval = &model.Attribution{Actor: model.OwnerTrustPrincipal, OnBehalfOf: ownerTrust}
 		task.ApprovedAt = &now
 	}
 	if task.Approval == nil && proposedBy != nil {
@@ -3016,6 +3110,10 @@ func validateAgentFramework(framework string) error {
 	// doc comment), and only this caller reads it that way.
 	if framework == "" || model.ValidAgentFramework(framework) {
 		return nil
+	}
+	if strings.TrimSpace(framework) == model.RemovedAgentFrameworkCustom {
+		return validationErrorf("agentFramework: %s; use one of %s, or empty for this deployment's default",
+			removedCustomConnectionError, model.AgentFrameworkNames())
 	}
 	return validationErrorf("agentFramework must be %s, or empty for this deployment's default",
 		model.AgentFrameworkNames())
@@ -3415,6 +3513,7 @@ func (c *Client) park(ctx context.Context, taskID, reason string, now time.Time)
 	return c.Store.ObserveField(ctx, taskID, now, func(o *model.Observation) {
 		o.PendingQuestionCommentID = &commentID
 		o.PendingSecret = ""
+		o.PendingAccess = nil
 	})
 }
 
@@ -4596,6 +4695,14 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			submittedHead = c.submittedHead(ctx, *current)
 		}
 	}
+	var ownerTrustCfg *model.Config
+	if c.requestActor(ctx).Actor.Kind == model.PrincipalAgent {
+		var err error
+		ownerTrustCfg, err = c.Store.GetConfig(ctx)
+		if err != nil {
+			return Task{}, err
+		}
+	}
 	if err := c.mutate(model.WithAutoMergeChange(ctx, c.requestActor(ctx).Actor, "edited"), id, func(task *model.Task) error {
 		submitted = false
 		// Whether this edit moves the task off a repository it had a
@@ -4952,6 +5059,39 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		if req.Reads != nil || req.Repo != nil {
 			if err := refuseTargetAmongReads(task.Reads, task.Target); err != nil {
 				return err
+			}
+		}
+		// An agent editing a task approved by owner-trust cannot move its
+		// target, reads or writes outside the owner's trusted repositories
+		// and keep that approval (#XC-17): if the edited task would no
+		// longer qualify for owner-trust auto-approval, it reverts to
+		// proposed for a person to approve.
+		if task.Approval != nil && task.Approval.Actor == model.OwnerTrustPrincipal && c.requestActor(ctx).Actor.Kind == model.PrincipalAgent {
+			ownerID := ""
+			if task.Approval.OnBehalfOf != nil {
+				ownerID = strings.TrimSpace(task.Approval.OnBehalfOf.ID)
+			}
+			repo := ""
+			if task.Target != nil {
+				repo = task.Target.String()
+			}
+			netWidened := (ownerTrustCfg == nil || model.NormalizeNetworkAccess(ownerTrustCfg.NetworkAccess) == model.NetworkNone) &&
+				strings.TrimSpace(string(task.NetworkAccess)) != "" &&
+				model.NormalizeNetworkAccess(task.NetworkAccess) != model.NetworkNone
+			sameCallerOwner := false
+			if tok := externalTokenFromContext(ctx); tok != nil {
+				sameCallerOwner = ownerID != "" && strings.EqualFold(strings.TrimSpace(tok.Owner), ownerID)
+			}
+			stillTrusted := ownerTrustCfg != nil &&
+				sameCallerOwner &&
+				!task.KeepRunning &&
+				task.Priority <= model.DefaultTaskPriority &&
+				!model.FixesBaseBranch(*task) &&
+				!netWidened &&
+				model.OwnerTrustedForTask(ownerTrustCfg.OwnerTrust, ownerID, repo, task.Reads, task.Writes)
+			if !stillTrusted {
+				task.Approval = nil
+				task.ApprovedAt = nil
 			}
 		}
 		return nil
@@ -5725,14 +5865,14 @@ func (c *Client) commentWithAuthor(ctx context.Context, id, body string, uploads
 	if err != nil {
 		return err
 	}
-	actor := c.requestActor(ctx).Actor
+	by := c.requestActor(ctx)
 	// An author naming the request's own principal keeps its kind: a
 	// verified *.gserviceaccount.com caller is a service principal, as it
 	// is on the tasks it files and closes, not a human.
-	if trimmed := strings.TrimSpace(author); trimmed != "" && trimmed != actor.ID {
-		actor = model.Principal{Kind: model.PrincipalHuman, ID: trimmed}
+	if trimmed := strings.TrimSpace(author); trimmed != "" && trimmed != by.Actor.ID {
+		by = model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: trimmed}}
 	}
-	return c.addAttributedComment(ctx, id, body, attachments, model.Attribution{Actor: actor}, now, reopenAck)
+	return c.addAttributedComment(ctx, id, body, attachments, by, now, reopenAck)
 }
 
 // addAttributedComment is AddCommentWithAuthor once the author is
@@ -5756,6 +5896,7 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 		Author:    by,
 		Body:      body,
 		CreatedAt: now,
+		FiledVia:  filedViaFromContext(ctx),
 	}, attachments); err != nil {
 		return err
 	}
@@ -5815,6 +5956,7 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
 		o.PendingQuestionCommentID = nil
 		o.PendingSecret = ""
+		o.PendingAccess = nil
 	}); err != nil {
 		return err
 	}
@@ -5878,6 +6020,7 @@ func (c *Client) reopenAcknowledgeable(ctx context.Context, id string, now time.
 		o.RetryRequestedAt = &now
 		o.PendingQuestionCommentID = nil
 		o.PendingSecret = ""
+		o.PendingAccess = nil
 	}); err != nil {
 		return false, err
 	}
@@ -5918,6 +6061,7 @@ func (c *Client) Stop(ctx context.Context, id string) error {
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
 		o.PendingQuestionCommentID = &commentID
 		o.PendingSecret = ""
+		o.PendingAccess = nil
 	}); err != nil {
 		return err
 	}
@@ -6112,6 +6256,7 @@ func (c *Client) retry(ctx context.Context, id string) error {
 		if stopped {
 			o.PendingQuestionCommentID = nil
 			o.PendingSecret = ""
+			o.PendingAccess = nil
 		}
 	}); err != nil {
 		return err
@@ -6659,6 +6804,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 		o.RetryRequestedAt = &now
 		o.PendingQuestionCommentID = nil
 		o.PendingSecret = ""
+		o.PendingAccess = nil
 	}); err != nil {
 		return err
 	}

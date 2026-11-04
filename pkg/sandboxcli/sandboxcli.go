@@ -46,6 +46,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/nsclient"
 )
 
 // sandboxProxyEnv names the sandbox proxy explicitly; sandboxCLIEnv=0
@@ -59,6 +60,9 @@ const (
 	// serverEnvVar is pkg/cli's own: a CLI pointed at a daemon is not in
 	// sandbox mode, wherever it runs.
 	serverEnvVar = "GRAIN_SERVER"
+	// contextEnvVar is pkg/cli's too: a named context
+	// (design/spec/external-cli/external-cli.spec.md#XC-2) is a daemon.
+	contextEnvVar = "GRAIN_CONTEXT"
 )
 
 var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
@@ -128,7 +132,7 @@ func detectSandboxProxy(env sandboxEnv) (base, token string, ok bool) {
 	if v := strings.TrimSpace(env.Getenv(sandboxCLIEnv)); v == "0" || strings.EqualFold(v, "false") {
 		return "", "", false
 	}
-	if strings.TrimSpace(env.Getenv(serverEnvVar)) != "" {
+	if strings.TrimSpace(env.Getenv(serverEnvVar)) != "" || strings.TrimSpace(env.Getenv(contextEnvVar)) != "" {
 		// Somebody pointed this CLI at a daemon: that wins.
 		return "", "", false
 	}
@@ -168,7 +172,7 @@ func detectSandboxProxy(env sandboxEnv) (base, token string, ok bool) {
 var sandboxCommands = map[string][]string{
 	"help": nil, "-h": nil, "--help": nil,
 	"ls": nil, "read": nil, "grep": nil,
-	"ci":            {"list", "show", "log", "test-history", "artifact", "wait", "run-job", "retrigger"},
+	"ci":            {"list", "show", "checks", "log", "test-history", "artifact", "wait", "run-job", "retrigger"},
 	"pr":            {"status", "base-status", "open", "reply", "resolve", "review-comment"},
 	"git":           {"revert"},
 	"merge-queue":   nil,
@@ -193,8 +197,9 @@ var sandboxCommandFlags = map[string][]string{
 	"ls":                    {"glob"},
 	"read":                  {"tail", "offset", "limit", "lines", "n", "cursor", "since", "page"},
 	"grep":                  {"i", "C", "glob", "max"},
-	"ci list":               {"ref", "conclusion", "job", "workflow", "since", "limit", "repo", "task", "provider"},
+	"ci list":               {"ref", "conclusion", "job", "workflow", "since", "limit", "repo", "task", "provider", "format"},
 	"ci show":               nil,
+	"ci checks":             {"repo", "name", "format"},
 	"ci test-history":       {"limit", "repo"},
 	"ci log":                {"task", "repo", "job", "step", "attempt", "tail", "offset", "limit", "lines", "n"},
 	"ci artifact":           {"o", "run", "task", "repo"},
@@ -279,7 +284,7 @@ func IsCommand(args []string) bool { return isSandboxCommand(args) }
 // maybeRunSandboxCLI runs args as a sandbox command when this process is in
 // a sandbox and args name one; handled is false otherwise.
 func maybeRunSandboxCLI(args []string, env sandboxEnv, stdout, stderr io.Writer) (code int, handled bool) {
-	if !isSandboxCommand(args) {
+	if !isSandboxCommand(args) || namesADaemon(args) {
 		return 0, false
 	}
 	base, token, ok := detectSandboxProxy(env)
@@ -312,7 +317,7 @@ func Unknown(args []string, stderr io.Writer) (code int, handled bool) {
 }
 
 func unknownCommand(args []string, env sandboxEnv, stderr io.Writer) (code int, handled bool) {
-	if len(args) > 0 && strings.HasPrefix(args[0], "-") {
+	if len(args) > 0 && strings.HasPrefix(args[0], "-") || namesADaemon(args) {
 		return 0, false
 	}
 	base, _, ok := detectSandboxProxy(env)
@@ -324,6 +329,27 @@ func unknownCommand(args []string, env sandboxEnv, stderr io.Writer) (code int, 
 	}
 	fmt.Fprintf(stderr, sandboxHelpText, redactProxy(base))
 	return 2, true
+}
+
+// namesADaemon reports whether args point this CLI at a daemon with
+// -server or -context (either spelling, anywhere before a bare "--"):
+// like $GRAIN_SERVER and $GRAIN_CONTEXT, that is pkg/cli's to answer, in
+// a sandbox or not (external-cli.spec.md#XC-3).
+func namesADaemon(args []string) bool {
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		name := strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-")
+		if name == arg {
+			continue
+		}
+		name, _, _ = strings.Cut(name, "=")
+		if name == "server" || name == "context" {
+			return true
+		}
+	}
+	return false
 }
 
 // redactProxy is base as help prints it: without the sandbox's token,
@@ -414,7 +440,7 @@ func (c *sandboxCLI) run(args []string) error {
 		if err != nil {
 			return err
 		}
-		return c.fs(uri, p.query("list", "", "glob"))
+		return c.fs(uri, nsclient.ListQuery(p.get("glob")))
 	case "read":
 		uri, err := p.arg(0, "uri")
 		if err != nil {
@@ -448,21 +474,24 @@ func (c *sandboxCLI) run(args []string) error {
 			// been asked, and with exit status 1.
 			return usageError{fmt.Sprintf("grain grep: --max %q is not a match limit: it takes a positive integer\n", p.get("max"))}
 		}
-		q := p.query("glob", "max")
-		q.Set("grep", pattern)
-		if p.has("i") {
-			q.Set("i", "1")
-		}
 		if v := p.get("C"); v != "" {
 			if n, err := strconv.Atoi(v); err != nil || n < 0 {
 				return usageError{fmt.Sprintf("grain grep: -C %q is not a count: it takes a non-negative integer\n", v)}
 			}
-			q.Set("context", v)
 		}
-		q.Set("n", "1")
-		return c.grep(uri, q)
+		return c.grep(uri, nsclient.GrepQuery(pattern, nsclient.GrepOptions{
+			IgnoreCase: p.has("i"), Context: p.get("C"), Glob: p.get("glob"), Max: p.get("max"),
+		}))
 	case "ci list":
-		return c.get("/cli/ci/runs", p.query("ref", "conclusion", "job", "workflow", "since", "limit", "repo", "task", "provider"), c.out)
+		return c.get("/cli/ci/runs", p.query("ref", "conclusion", "job", "workflow", "since", "limit", "repo", "task", "provider", "format"), c.out)
+	case "ci checks":
+		sha, err := p.arg(0, "sha")
+		if err != nil {
+			return err
+		}
+		q := p.query("repo", "name", "format")
+		q.Set("sha", sha)
+		return c.get("/cli/ci/checks", q, c.out)
 	case "ci show":
 		run, err := p.arg(0, "run-id")
 		if err != nil {
@@ -624,21 +653,11 @@ func (c *sandboxCLI) help(cmd string) error {
 	return nil
 }
 
-// fsPath turns "ci://owner/repo/run" into "/fs/ci/owner/repo/run".
+// fsPath turns "ci://owner/repo/run" into "/fs/ci/owner/repo/run"
+// (nsclient.Path), for the commands that build a URI of their own.
 func fsPath(uri string) (string, error) {
-	scheme, rel, ok := strings.Cut(uri, "://")
-	if !ok || scheme == "" {
-		return "", fmt.Errorf("%q is not a namespace URI (ci://, src://, task://, config://, memory://, deploy://)", uri)
-	}
-	segs := strings.Split(strings.Trim(rel, "/"), "/")
-	for i, s := range segs {
-		segs[i] = url.PathEscape(s)
-	}
-	p := "/fs/" + scheme
-	if joined := strings.Join(segs, "/"); joined != "" {
-		p += "/" + joined
-	}
-	return p, nil
+	p, _, err := nsclient.Path(nsclient.SandboxPrefix, uri)
+	return p, err
 }
 
 // isPipelineChangesURI is whether uri names deploy://pipeline-changes, the
@@ -649,40 +668,36 @@ func isPipelineChangesURI(uri string) bool {
 	return scheme == "deploy" && (rel == "pipeline-changes" || rel == "pipeline-changes.md")
 }
 
-func (c *sandboxCLI) fs(uri string, q url.Values) error {
-	p, err := fsPath(uri)
-	if err != nil {
-		return err
+// ns is the namespace client over the sandbox proxy's /fs/: the one
+// grain fs speaks over the daemon's /api/fs/ (pkg/cli/fscmd.go).
+func (c *sandboxCLI) ns() *nsclient.Client {
+	return &nsclient.Client{
+		Base: c.base, Prefix: nsclient.SandboxPrefix, HTTP: c.client, Name: "the sandbox proxy",
+		Authorize: func(req *http.Request) {
+			if c.token != "" {
+				req.SetBasicAuth("x-access-token", c.token)
+			}
+		},
+		Out: c.out, Err: c.errOut,
 	}
-	return c.get(p, q, c.out)
+}
+
+func (c *sandboxCLI) fs(uri string, q url.Values) error {
+	return reported(c.ns().Get(uri, q))
 }
 
 // grep is fs for a ?grep= query, except that a walk the namespace cut
-// short before finding anything exits 1: what it did not search may hold
-// the match, so an empty answer with exit 0 would read as "not there".
+// short before finding anything exits 1 (nsclient.Client.Grep).
 func (c *sandboxCLI) grep(uri string, q url.Values) error {
-	p, err := fsPath(uri)
-	if err != nil {
-		return err
-	}
-	resp, err := c.do(p, q)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		fmt.Fprintln(c.errOut, "grain: "+strings.TrimSpace(string(body)))
+	return reported(c.ns().Grep(uri, q))
+}
+
+// reported is err with nsclient's "already printed" as this package's.
+func reported(err error) error {
+	if errors.Is(err, nsclient.ErrReported) {
 		return errSandboxReported
 	}
-	if _, err := io.Copy(c.out, resp.Body); err != nil {
-		return err
-	}
-	if resp.Header.Get("X-Grain-Walk-Truncated") == "true" && resp.Header.Get("X-Grain-Matches") == "0" {
-		fmt.Fprintf(c.errOut, "grain grep: no match in the part of %s searched before the walk cap, and the rest was not searched: narrow the path or pass --glob\n", uri)
-		return errSandboxReported
-	}
-	return nil
+	return err
 }
 
 // get streams path's response body to w, or prints the proxy's refusal.
@@ -722,24 +737,7 @@ func (c *sandboxCLI) do(path string, q url.Values) (*http.Response, error) {
 
 // encodeQuery is url.Values.Encode, except that a flag with no value
 // ("list") is sent bare, as the namespace expects.
-func encodeQuery(q url.Values) string {
-	keys := make([]string, 0, len(q))
-	for k := range q {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var parts []string
-	for _, k := range keys {
-		for _, v := range q[k] {
-			if v == "" {
-				parts = append(parts, url.QueryEscape(k))
-				continue
-			}
-			parts = append(parts, url.QueryEscape(k)+"="+url.QueryEscape(v))
-		}
-	}
-	return strings.Join(parts, "&")
-}
+func encodeQuery(q url.Values) string { return nsclient.EncodeQuery(q) }
 
 type runContext struct {
 	Task, Repo, Branch, Base string
@@ -794,11 +792,12 @@ func (c *sandboxCLI) ciRun(p sandboxArgs, run string) (repo, id string, err erro
 			return "", "", err
 		}
 	}
-	if repo = p.get("repo"); repo != "" {
-		return repo, run, nil
-	}
+	repo = p.get("repo")
 	var buf strings.Builder
 	if err := c.get("/cli/ci/run", url.Values{"id": {run}}, &buf); err != nil {
+		if repo != "" {
+			return repo, run, nil
+		}
 		if rc.Repo == "" {
 			return "", "", err
 		}
@@ -807,13 +806,26 @@ func (c *sandboxCLI) ciRun(p sandboxArgs, run string) (repo, id string, err erro
 		return rc.Repo, run, nil
 	}
 	var named struct {
+		ID   string `json:"id"`
 		Repo string `json:"repo"`
 	}
 	if err := json.Unmarshal([]byte(buf.String()), &named); err != nil || named.Repo == "" {
+		if repo != "" {
+			return repo, run, nil
+		}
 		if rc.Repo == "" {
 			return "", "", fmt.Errorf("finding the repository of CI run %s: %q", run, buf.String())
 		}
 		return rc.Repo, run, nil
+	}
+	if repo != "" && !strings.EqualFold(repo, named.Repo) {
+		// --repo names a different run with the same id.
+		return repo, run, nil
+	}
+	if strings.HasPrefix(named.ID, "gha:") {
+		// A bare GitHub Actions run id: its logs are read by the id
+		// the forge serves them under.
+		run = named.ID
 	}
 	return named.Repo, run, nil
 }
@@ -830,8 +842,16 @@ func (c *sandboxCLI) ciLog(p sandboxArgs) error {
 	}
 	uri += "/" + job
 	if strings.HasPrefix(run, "gha:") {
-		// A GitHub Actions job keeps one log, not one per step.
-		return c.read(uri+"/job.log", p, false)
+		// A GitHub Actions job keeps one log, job.log, which a step's
+		// <step>.log is a slice of.
+		step := p.get("step")
+		if step == "" {
+			return c.read(uri+"/job.log", p, false)
+		}
+		if !strings.HasSuffix(step, ".log") {
+			step += ".log"
+		}
+		return c.read(uri+"/"+step, p, false)
 	}
 	if n := p.get("attempt"); n != "" {
 		uri += "/attempts/" + n
@@ -1084,69 +1104,9 @@ func (p sandboxArgs) lastLines() int {
 // name (the namespace's own), then only its last --lines lines.
 // With sayingSize it says on stderr how big the whole file is, too.
 func (c *sandboxCLI) read(uri string, p sandboxArgs, sayingSize bool) error {
-	path, err := fsPath(uri)
-	if err != nil {
-		return err
+	o := nsclient.ReadOptions{SaySize: sayingSize}
+	if p.has("lines") || p.has("n") {
+		o.LastLines = p.lastLines()
 	}
-	resp, err := c.do(path, p.query("tail", "offset", "limit", "cursor", "since", "page"))
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		fmt.Fprintln(c.errOut, "grain: "+strings.TrimSpace(string(body)))
-		return errSandboxReported
-	}
-	if size := resp.Header.Get("X-Grain-Total-Size"); sayingSize && size != "" {
-		fmt.Fprintf(c.errOut, "grain: %s is %s bytes; --tail, --offset and --limit take bytes, --lines N the last N lines\n", uri, size)
-	}
-	if !p.has("lines") && !p.has("n") {
-		_, err = io.Copy(c.out, resp.Body)
-		return err
-	}
-	tw := &tailWriter{n: p.lastLines()}
-	if _, err := io.Copy(tw, resp.Body); err != nil {
-		return err
-	}
-	_, err = c.out.Write(tw.bytes())
-	return err
-}
-
-// tailWriter keeps the last n lines written to it.
-type tailWriter struct {
-	n     int
-	lines [][]byte
-	// part is the line still being written.
-	part []byte
-}
-
-func (t *tailWriter) Write(b []byte) (int, error) {
-	written := len(b)
-	for len(b) > 0 {
-		i := bytes.IndexByte(b, '\n')
-		if i < 0 {
-			t.part = append(t.part, b...)
-			break
-		}
-		t.part = append(t.part, b[:i+1]...)
-		t.lines = append(t.lines, t.part)
-		t.part = nil
-		if len(t.lines) > t.n {
-			t.lines = t.lines[len(t.lines)-t.n:]
-		}
-		b = b[i+1:]
-	}
-	return written, nil
-}
-
-func (t *tailWriter) bytes() []byte {
-	lines := t.lines
-	if len(t.part) > 0 {
-		lines = append(lines, t.part)
-	}
-	if len(lines) > t.n {
-		lines = lines[len(lines)-t.n:]
-	}
-	return bytes.Join(lines, nil)
+	return reported(c.ns().Read(uri, p.query("tail", "offset", "limit", "cursor", "since", "page"), o))
 }

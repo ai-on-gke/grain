@@ -71,7 +71,7 @@ run() { # run <label> <VAR=value...> -- <args...>
   echo "== $label: ${envs[*]} release-from-trunk.sh $*"
   (cd "$scratch/clone" && env RELEASE_RUNS_JSON="$scratch/runs.json" \
     RELEASE_QUALIFICATION_RUNS_JSON="$scratch/qual-runs.json" RELEASE_QUALIFICATION_CHECKS_JSON="$scratch/qual-checks.json" \
-    RELEASE_CI_SOURCE=grain RELEASE_IMAGES="$scratch/images.sh" RELEASE_NOTES_TASK=off RELEASE_NOTIFY=off \
+    RELEASE_CI_SOURCE=grain RELEASE_IMAGES="$scratch/images.sh" RELEASE_NOTES_TASK=off RELEASE_NOTIFY=off RELEASE_QUALIFICATION_APP=grain \
     RELEASE_TRAIN_OUTPUT="$scratch/train.out" RELEASE_NOW="$now" RELEASE_MAJOR=9 RELEASE_FLOOR_MINOR=1 \
     RELEASE_MIN_INTERVAL_MINUTES=100000000 "${envs[@]}" bash "$train" "$@" 2>&1) || status=$?
   echo "== exit $status"
@@ -99,7 +99,7 @@ for id in go-long staterepo-soak loadtest scalability merge-stress long-term-tes
 done
 printf '{"enabled":true,"runs":[{"id":"n1","commit":"%s","ref":"v9.1.0-rc.1","startedAt":"%s","jobs":[%s]}]}' \
   "$head" "$(iso $((now - 7200)))" "$jobs" > "$scratch/qual-runs.json"
-printf '{"check_runs":[{"id":1,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"success","started_at":"%s"}]}' \
+printf '{"check_runs":[{"id":1,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"success","started_at":"%s","app":{"id":1,"slug":"grain"}}]}' \
   "$head" "$(iso "$now")" > "$scratch/qual-checks.json"
 : > "$scratch/train.out"
 run "1d qualification PASS" --

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption, optionValues } from "./searchSelect.js";
 
 // The phone shell (src/phone.js, src/components/PhoneNav.jsx), in the one
 // suite that can actually see a layout: jsdom has no layout engine and no
@@ -625,8 +626,13 @@ test.describe("on a phone", () => {
       expect(box.y).toBeGreaterThanOrEqual(0);
       expect(box.y + box.height).toBeLessThanOrEqual(SHORT_PHONE.height);
     }
-    // grain has no users (design/design/settings-panel.design.md §6).
-    await expect(drawer.getByTestId("user-tile")).toHaveCount(0);
+    // The user tile names who GET /api/whoami says this browser is --
+    // the operator, marked as such -- never a typed-in user
+    // (operator-attribution spec §5.4).
+    await expect(drawer.getByTestId("user-tile")).toHaveAttribute(
+      "title",
+      /^operator \((access code|local)\)$/,
+    );
   });
 
   // The New task form, which is a phone surface by construction: "+" is
@@ -674,11 +680,9 @@ test.describe("on a phone", () => {
       .tap();
 
     const repo = page.getByLabel(/^Repos/);
-    const repoOption = repo.locator("option[value*='/']").first();
-    await expect(repoOption).toBeAttached();
-    const option = await repoOption.getAttribute("value");
+    const option = (await optionValues(repo)).find((v) => v.includes("/"));
     expect(option).toBeTruthy();
-    await repo.selectOption(option);
+    await chooseOption(repo, option);
     await recordWideBranch(page, option);
 
     const branch = page.getByLabel("Base branch");
@@ -893,11 +897,9 @@ test.describe("on a tablet", () => {
       .tap();
 
     const repo = page.getByLabel(/^Repos/);
-    const repoOption = repo.locator("option[value*='/']").first();
-    await expect(repoOption).toBeAttached();
-    const option = await repoOption.getAttribute("value");
+    const option = (await optionValues(repo)).find((v) => v.includes("/"));
     expect(option).toBeTruthy();
-    await repo.selectOption(option);
+    await chooseOption(repo, option);
     await recordWideBranch(page, option);
     const branch = page.getByLabel("Base branch");
     await branch.fill("");

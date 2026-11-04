@@ -142,8 +142,10 @@ These are scoped by the proxy to the run's task repository and branch. **Needs**
 
 `GET /cli/ci/runs` with every given flag copied into the query. Output is the proxy's text table: a header line, then one run per line, run id first. `--provider` is `grain` or `github-actions`. `--since` takes a span or an RFC 3339 time.
 
+`--format github` answers JSON instead, in GitHub's own shape for `GET /repos/{owner}/{repo}/actions/runs` (`{"total_count", "workflow_runs": [...]}`, `--limit` up to 500), and `--format github-jobs` every attempt of every job of each listed run (`GET .../actions/runs/{id}/jobs?filter=all`, `{"total_count", "jobs": [...]}`, at most 50 runs). Both imply `--provider github-actions` and refuse `--provider grain`. A run grain holds only from its record of the run's jobs (no workflow-run status and conclusion of the forge's) is left out, never made up, and a `grain_note` field says how many; a run whose jobs the forge will not give fails the whole answer. This is what `scripts/candidate-gate.sh` reads as `--runs-json` from a task with no GitHub token (`.grain/templates/release-train.yml`).
+
 <!-- BEGIN GENERATED FLAGS: grain ci list -->
-Usage: `grain ci list [--task <id> | --ref <branch>] [--conclusion failure,errored] [--job <j>] [--workflow <file>] [--since 24h] [--limit N] [--repo owner/name] [--provider grain|github-actions]`
+Usage: `grain ci list [--task <id> | --ref <branch>] [--conclusion failure,errored] [--job <j>] [--workflow <file>] [--since 24h] [--limit N] [--repo owner/name] [--provider grain|github-actions] [--format github|github-jobs]`
 
 | Flag | Type |
 |---|---|
@@ -156,6 +158,7 @@ Usage: `grain ci list [--task <id> | --ref <branch>] [--conclusion failure,error
 | `--repo` | string |
 | `--task` | string |
 | `--provider` | string |
+| `--format` | string |
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/sandboxcli/actions_ci_test.go`: `TestSandboxCLIReadsGitHubActionsRuns`; `pkg/sandboxcli/sandboxcli_test.go`: `TestSandboxCLIReadsOtherTasksCI`.
@@ -171,6 +174,22 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/sandboxcli/actions_ci_test.go`: `TestSandboxCLIReadsGitHubActionsRuns`.
+
+### 3.2a `grain ci checks`
+
+`grain ci checks <sha>` sends `GET /cli/ci/checks?sha=<sha>` with `--repo`, `--name` and `--format` copied into the query: every check run on the commit (every attempt of each, GitHub's `filter=all`), or every attempt of the check run `--name` names, read through grain's own forge connection. Text is one check run per line: its conclusion (or status), name, the App that posted it (`(grain)` beside grain's own) and its page. `--format github` answers GitHub's `GET /repos/{owner}/{repo}/commits/{sha}/check-runs` shape (`{"total_count", "check_runs": [...]}`), plus `grain_app`, the slug of the App grain's forge connection posts check runs as ("" when it cannot tell): `scripts/candidate-gate.sh check-qualification` reads the first as `--checks-json` and trusts only check runs whose `app.slug` is the second (its `CHECK_QUALIFICATION_APP`). Needs the same CI read scope as `grain ci list`.
+
+<!-- BEGIN GENERATED FLAGS: grain ci checks -->
+Usage: `grain ci checks <sha> [--repo owner/name] [--name <check>] [--format github]`
+
+| Flag | Type |
+|---|---|
+| `--repo` | string |
+| `--name` | string |
+| `--format` | string |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/gitproxy/cli_github_shape_test.go`: `TestCLICIChecksAnswersGitHubsShape`, `TestCLICIListFormatGitHub`.
 
 ### 3.3 `grain ci log` {#CLI-88}
 
@@ -205,6 +224,8 @@ Usage: `grain ci log [<run-id> | --task <id>] [--repo owner/name] [--job <j>] [-
 
 ### 3.4 `grain ci test-history` {#CLI-89}
 
+The external `grain ci test-history` is [host #CLI-62](host.spec.md#CLI-62), rendering the same report.
+
 `grain ci test-history <test-name>` sends `GET /cli/ci/test-history?test=<name>[&limit][&repo]`.
 
 <!-- BEGIN GENERATED FLAGS: grain ci test-history -->
@@ -236,6 +257,8 @@ Usage: `grain ci artifact <job> <name> [-o <dest>] [--run <run-id> | --task <id>
 **Pinned by:** `pkg/sandboxcli/actions_test.go`: `TestSandboxAPIInputModesAndCIArtifactDownload`.
 
 ### 3.6 `grain ci wait` and `grain ci run-job` {#CLI-91}
+
+The external `grain ci wait` is [host #CLI-62](host.spec.md#CLI-62): it names its run, waits up to 30m with no wait credit, and answers the same JSON shape.
 
 `grain ci wait` sends `POST /cli/ci/wait` with `{"timeout_seconds", "jobs"?, "resume_run_id"?}`. `grain ci run-job <job>` sends `POST /cli/ci/run-job` with `{"job", "timeout_seconds", "resume_run_id"?}`.
 
@@ -271,6 +294,8 @@ Usage: `grain ci run-job <job> [--timeout 9m] [--resume <run-id>]`
 **Pinned by:** `pkg/sandboxcli/actions_test.go`: `TestSandboxCIWaitReportsEachVerdict`, `TestParseWaitTimeout`.
 
 ### 3.7 `grain ci retrigger` {#CLI-92}
+
+The external `grain ci retrigger <run-id>` is [host #CLI-62](host.spec.md#CLI-62).
 
 `POST /cli/ci/retrigger` with `{"jobs"?, "all"?, "commit"?, "workflow"?}`. Reruns failed or named jobs fresh and uncached.
 
@@ -353,6 +378,8 @@ Usage: `grain pr review-comment <body|--file f> [--path <file> --line <N>]`
 **Pinned by:** `pkg/sandboxcli/actions_test.go`: `TestStage3SandboxCLICommands`; `pkg/sandboxcli/sandboxcli_test.go`: `TestSandboxCLIReadsOtherTasksCI`.
 
 ### 3.9 `grain merge-queue` {#CLI-95}
+
+The external `grain merge-queue` is [host #CLI-107](host.spec.md#CLI-107), reading the same file.
 
 Reads `deploy://merge-queue`.
 
@@ -551,7 +578,7 @@ Usage: `grain task propose --title <t> (--body <b> | --file <f>) [flags]`
 ### 5.1 `grain api` {#CLI-99}
 
 - `grain api routes [--scope s] [--json]` sends `GET /cli/api-routes` and prints one `METHOD PATH (scope)[ [--reason required]]` line per granted route, or `No agent API routes are granted to this attempt.`
-- `grain api <METHOD> <path>` sends that method to the proxy at `<path>`, which **MUST** start with `/api/` (`agent API path must start with /api/ (got "<p>")`). The body comes from the first of `--body`, `--file` (`-` for stdin), or repeated `--field key=value` (values parsed as JSON when they parse, else strings; `--field "<kv>" must be key=value`).
+- `grain api <METHOD> <path>` sends that method to the proxy at `<path>`, which **MUST** start with `/api/` (`agent API path must start with /api/ (got "<p>")`). The body comes from the first of `--body`, `--file` (`-` for stdin), or repeated `--field key=value` (a value that starts with `{` or `[`, or is `true`, `false` or `null`, is parsed as JSON; every other value, numbers included, is sent as a string; `--field "<kv>" must be key=value`).
 - `--reason` is sent as `X-Grain-Acting-Reason` and `X-Grain-Reason`.
 
 **Needs** an `api:<scope>` grant covering the route.

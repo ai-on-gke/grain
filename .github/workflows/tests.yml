@@ -551,9 +551,9 @@ jobs:
             ./pkg/granule/... ./pkg/grit/... ./pkg/gritapi/... ./pkg/hostd/... ./pkg/hostinit/... ./pkg/hostscriptcli/... ./pkg/whererun/... ./pkg/workflows/... \
             ./pkg/hosttop/... ./pkg/iapreconciler/... ./pkg/installtrack/... ./pkg/jwks/... \
             ./pkg/k8s/... ./pkg/kubectlgate/... ./pkg/lifecycle/... ./pkg/localexec/... ./pkg/mcp/... \
-            ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/pkgcache/... \
+            ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/pkgcache/... \
             ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/registryauth/... \
-            ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
+            ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
             ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \
             ./pkg/secretsrepo/... ./pkg/statemachine/... ./pkg/sysstat/... \
             ./pkg/systemlog/... ./pkg/treeid/... ./pkg/trustboundary/... ./pkg/tunnel/... ./pkg/upgrade/... \
@@ -793,7 +793,7 @@ jobs:
       - name: Daemon restart acceptance test
         env:
           GRAIN_RUNHOST_DOCKER: "1"
-        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 20m -run '^(TestDaemonRestartAdoptsTheRunAndItOpensItsPullRequest|TestDaemonRestartKeepsAWarmSessionSandboxOnlyUnderItsRecordedKeys)$' -v ./pkg/cli/
+        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 20m -run '^(TestDaemonRestartAdoptsTheRunAndItOpensItsPullRequest|TestDaemonRestartKeepsAWarmSessionSandboxOnlyUnderItsRecordedKeys|TestRunHostAgentCannotReachAHostDirectorySandbox)$' -v ./pkg/cli/
 
   host-script-container:
     name: host-script container
@@ -893,7 +893,10 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.ui-e2e == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # The suite alone runs about 32 minutes now (887 tests, one worker per
+    # two cores), and the frontend build and browser download come on top:
+    # at 35 a slow runner was cancelled mid-suite with no verdict at all.
+    timeout-minutes: 50
     concurrency:
       group: ${{ github.workflow }}-ui-e2e-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}

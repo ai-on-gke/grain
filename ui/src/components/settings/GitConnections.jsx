@@ -31,6 +31,7 @@ import {
 } from "@mui/material";
 import { useEffect, useMemo, useState } from "react";
 import api from "../../api.js";
+import SearchSelect from "../SearchSelect.jsx";
 import {
   distinctConnections,
   repoPinnedConnection,
@@ -758,14 +759,20 @@ function GitConnectionsList({
             </Stack>
 
             {presets.length > 0 && (
-              <TextField
-                select
+              <SearchSelect
                 name="new-connection-preset"
                 label="Preset (optional)"
-                size="small"
+                shrinkLabel
                 value={preset}
-                onChange={(evt) => {
-                  const value = evt.target.value;
+                options={[
+                  { value: "", label: "None" },
+                  ...presets.map((p) => ({
+                    value: p.host,
+                    label: p.label,
+                    match: `${p.label} ${p.host}`,
+                  })),
+                ]}
+                onChange={(value) => {
                   setPreset(value);
                   const chosen = presets.find((p) => p.host === value);
                   if (chosen) {
@@ -776,15 +783,7 @@ function GitConnectionsList({
                     setProxy("");
                   }
                 }}
-                fullWidth
-              >
-                <MenuItem value="">None</MenuItem>
-                {presets.map((p) => (
-                  <MenuItem key={p.host} value={p.host}>
-                    {p.label}
-                  </MenuItem>
-                ))}
-              </TextField>
+              />
             )}
             {chosenPreset?.source.help && (
               <Alert severity="info" data-testid="new-connection-preset-help">
@@ -866,27 +865,23 @@ function GitConnectionsList({
 
             {authType === "ambient" && (
               <Stack spacing={1} data-testid="new-connection-ambient">
-                <TextField
-                  select
+                <SearchSelect
                   name="new-connection-ambient-source"
                   label="Source"
-                  size="small"
                   value={ambientSource}
-                  onChange={(evt) => setAmbientSource(evt.target.value)}
+                  onChange={(next) => setAmbientSource(next)}
                   helperText="Asked for a token each time one is needed, as the account the grain daemon runs as. Nothing is stored."
-                  fullWidth
-                >
-                  <MenuItem value="auto">
-                    {autoSourceLabel(ambientSources)}
-                  </MenuItem>
-                  <MenuItem value="gh">gh auth token</MenuItem>
-                  {ambientSources.map((src) => (
-                    <MenuItem key={src.name} value={src.name}>
-                      {src.label || src.command}
-                    </MenuItem>
-                  ))}
-                  <MenuItem value="git">git credential fill</MenuItem>
-                </TextField>
+                  options={[
+                    { value: "auto", label: autoSourceLabel(ambientSources) },
+                    { value: "gh", label: "gh auth token" },
+                    ...ambientSources.map((src) => ({
+                      value: src.name,
+                      label: src.label || src.command,
+                      match: `${src.name} ${src.label || src.command}`,
+                    })),
+                    { value: "git", label: "git credential fill" },
+                  ]}
+                />
                 <Alert severity="warning">
                   Pushes and API calls act as the account this host&apos;s{" "}
                   <code>gh</code> is logged in as, with all of its access — not
@@ -1087,25 +1082,24 @@ function RepoConnections({
                     </Typography>
                   )}
                 </Box>
-                <TextField
-                  select
-                  size="small"
+                <SearchSelect
                   label="Connection"
                   name={`repo-connection-picker-${repo}`}
+                  shrinkLabel
+                  fullWidth={false}
                   value={pinned?.credential || ""}
                   disabled={readOnly || loading || savingRepo === repo}
-                  onChange={(evt) => pick(repo, evt.target.value)}
+                  onChange={(next) => pick(repo, next)}
                   sx={{ minWidth: 260 }}
-                  SelectProps={{ displayEmpty: true }}
-                  InputLabelProps={{ shrink: true }}
-                >
-                  <MenuItem value="">Default</MenuItem>
-                  {options.map((conn) => (
-                    <MenuItem key={conn.credential} value={conn.credential}>
-                      {connectionLabel(conn)}
-                    </MenuItem>
-                  ))}
-                </TextField>
+                  options={[
+                    { value: "", label: "Default" },
+                    ...options.map((conn) => ({
+                      value: conn.credential,
+                      label: connectionLabel(conn),
+                      match: `${connectionLabel(conn)} ${conn.credential}`,
+                    })),
+                  ]}
+                />
               </Stack>
             );
           })}

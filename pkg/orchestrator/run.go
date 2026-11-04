@@ -363,6 +363,17 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 			checkoutDir, branch, branch,
 		)
 	}
+	if task.Target != nil && history.UpstreamRepo != (model.RepoRef{}) && !history.UpstreamRepo.Same(*task.Target) {
+		prompt += fmt.Sprintf(
+			"\n\n%s is a fork push repository for upstream %s: push your branch to `origin` (%s) "+
+				"and grain will open and track the cross-repository pull request (%s:%s) against "+
+				"upstream %s automatically (or when you run `grain pr open`). An `upstream` git "+
+				"remote pointing at %s is already configured in your checkout for fetching fresh "+
+				"upstream refs; do not try to run `gh pr create` across repositories yourself.",
+			task.Target, history.UpstreamRepo, task.Target,
+			task.Target.Owner, branch, history.UpstreamRepo, history.UpstreamRepo,
+		)
+	}
 	prompt += sandboxDirsSection(checkoutDir, sandboxRoot)
 	prompt += sandboxToolingSection(task.Target != nil, grainci.Granted(task.Grants))
 	prompt += grainCLISection(task)
@@ -997,7 +1008,7 @@ func nothingNeededSection(task model.Task) string {
 // the task list and notifications show nothing else of it, so a summary
 // that says only that there is a question tells a person nothing.
 const questionSummarySection = "\n\nWhenever you ask a person something -- ask_question, " +
-	"request_secret, chat -- give a `summary` as well: one line, at most 100 characters, " +
+	"request_secret, request_access, chat -- give a `summary` as well: one line, at most 100 characters, " +
 	"naming the decision or input you need (\"Keep the v1 API alongside v2, or remove " +
 	"it?\"). The inbox, the task list and notifications show only that line, with your " +
 	"full question behind an expander, so never write \"I have a question\" or " +
@@ -1484,7 +1495,7 @@ func grainCLISection(task model.Task) string {
 		"--title <t>`, `grain git revert --task <id> --reason \"<why>\"`, `grain merge-queue`.\n" +
 		grainCLIGrantBullets(task.Grants) +
 		"- **Turn-ending, parking and proposals stay tool calls:** use `comment_on_issue`, " +
-		"`nothing_needed`, `ask_question`, `request_secret`, `wait_for_task` (`park: true`), " +
+		"`nothing_needed`, `ask_question`, `request_secret`, `request_access`, `wait_for_task` (`park: true`), " +
 		"`resume_later` and `propose_task` directly, not as shell commands.\n\n" +
 		"Run `grain help` or `grain <command> --help` for every flag."
 	return s
@@ -1547,9 +1558,10 @@ func grainCLIGrantBullets(grants []model.Grant) string {
 		}
 	}
 	if api {
-		b.WriteString("- **api grants:** `grain api routes` lists the agent API routes they reach; " +
-			"`grain api <METHOD> <path> [--body '<json>']` calls one. Routes a sandbox process may " +
-			"not call stay `api_*` tool calls.\n")
+		b.WriteString("- **api grants:** `grain api routes` lists the agent API routes they reach from the sandbox, " +
+			"and `grain api <METHOD> <path> [--body '<json>']` calls one; the `grain-controller` MCP server " +
+			"(`grain_explore_scope`, `grain_invoke`, `grain_list_tasks`, `grain_get_task`, `grain_filing_context`, `grain_submit_task`) " +
+			"calls any authorized route, including model-only scopes.\n")
 	}
 	return b.String()
 }
@@ -2180,11 +2192,15 @@ func baseDescription(task model.Task) string {
 // description says the rest; this is the sentence that gets a run to
 // read it.
 func proposalSection(task model.Task) string {
+	hasRepo := task.Target != nil || len(task.Writes) > 0
 	waitOn := fmt.Sprintf("task %s itself, when the follow-up only makes sense once "+
 		"this task's own change has landed, and the id you gave an earlier proposal "+
 		"in this same run that it builds on", task.ID)
 	if model.NeverCompletes(task) {
 		waitOn = "the id you gave an earlier proposal in this same run that it builds on"
+	} else if !hasRepo {
+		waitOn = "the id you gave an earlier proposal in this same run that it builds on, " +
+			"or another existing task whose change must land first"
 	}
 	s := fmt.Sprintf(
 		"\n\nYou are running as task %s. Anything you split out with propose_task "+
@@ -2201,6 +2217,10 @@ func proposalSection(task model.Task) string {
 			"target closing -- so a proposal waiting on this one would wait forever. grain "+
 			"refuses such a link and says so in the proposal's body, but a proposal that asks "+
 			"for it is one whose ordering nobody recorded.", task.ID)
+	} else if !hasRepo {
+		s += fmt.Sprintf(" Do not put task %s itself in depends_on: this task has no repository "+
+			"change to land and rests in awaiting_reply until a human closes the report, so a "+
+			"proposal that depends on it stays blocked until then.", task.ID)
 	}
 	if task.Target != nil {
 		s += fmt.Sprintf(" A proposal is filed against %s, the repository you are "+
@@ -2295,6 +2315,10 @@ type History struct {
 	// (model.RepoConfig.PairedBranches), or nil for a repository that
 	// pairs fewer than two. See pairedBranchesSection.
 	PairedBranches []string
+	// UpstreamRepo is the upstream repository pull requests for task.Target
+	// open against when task.Target is a fork (model.RepoConfig.UpstreamRepo),
+	// or the zero RepoRef when pull requests open on task.Target itself.
+	UpstreamRepo model.RepoRef
 	// Resumed is the tasks the previous attempt parked this one on
 	// through wait_for_task, as they stand now -- set only when that
 	// attempt ended model.ParkedOutcome. See parkedResumeSection.
@@ -2572,6 +2596,9 @@ func attemptDetail(r model.Run) string {
 // a team broadcast (ui.Client.BroadcastTeamMessage) -- is that task's,
 // not "you".
 func attributionLabel(a model.Attribution, taskID string) string {
+	if ext := externalAgentLabel(a); ext != "" {
+		return ext
+	}
 	if a.OnBehalfOf != nil {
 		switch a.OnBehalfOf.Kind {
 		case model.PrincipalAgent:
@@ -2618,6 +2645,21 @@ func otherTaskRun(a model.Attribution, taskID string) string {
 	return fmt.Sprintf("the run of another task (task %s), not a human", run.ID)
 }
 
+// externalAgentLabel labels a comment an external agent credential posted
+// (an "external:<name>" agent principal), or is empty for any other
+// comment. Such a comment carries its credential's owner as OnBehalfOf
+// (design/spec/external-cli/external-cli.spec.md#XC-14), but its words
+// are the agent's, not that person's, so it is never labelled a human's.
+func externalAgentLabel(a model.Attribution) string {
+	if a.Actor.Kind != model.PrincipalAgent || !strings.HasPrefix(a.Actor.ID, model.ExternalAgentPrincipalPrefix) {
+		return ""
+	}
+	if b := a.OnBehalfOf; b != nil && b.Kind == model.PrincipalHuman && b.ID != "" {
+		return fmt.Sprintf("an external agent (%s) acting for %s, not a human", a.Actor.ID, b.ID)
+	}
+	return fmt.Sprintf("an external agent (%s), not a human", a.Actor.ID)
+}
+
 // addendumText renders one just-arrived comment for a Framework to fold
 // into its conversation mid-run -- present tense, unlike
 // attributionLabel's own labels ("an earlier attempt at this task"),
@@ -2626,7 +2668,9 @@ func otherTaskRun(a model.Attribution, taskID string) string {
 // currently reading it.
 func addendumText(c model.Comment) string {
 	who := "a human"
-	if other := otherTaskRun(c.Author, c.TaskID); other != "" {
+	if ext := externalAgentLabel(c.Author); ext != "" {
+		who = ext
+	} else if other := otherTaskRun(c.Author, c.TaskID); other != "" {
 		who = other
 	} else if c.Author.OnBehalfOf != nil && c.Author.OnBehalfOf.Kind == model.PrincipalHuman {
 		if c.Author.OnBehalfOf.ID != "" {
@@ -2953,6 +2997,13 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	if err != nil {
 		return unprepared(err)
 	}
+	upstreamRepo, hasUpstreamRepo, err := resolveUpstreamRepo(ctx, store, task)
+	if err != nil {
+		return unprepared(err)
+	}
+	if !hasUpstreamRepo {
+		upstreamRepo = model.RepoRef{}
+	}
 	// Whether GitHub's check runs are a source of verdicts in this run's
 	// repository at all, read here for the same reason the two above are:
 	// it is a fact about the repository, settled when the run is
@@ -3008,7 +3059,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 				defer srcWG.Done()
 				placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &srcOut, cfg.sandboxReused)
 			}()
-			prepared, checkoutErr = prepareCheckoutWithReuse(ctx, tools, cfg.GitRemoteBase, cloneURL, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
+			prepared, checkoutErr = prepareCheckoutWithUpstream(ctx, tools, cfg.GitRemoteBase, cloneURL, upstreamRepo, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
 			srcWG.Wait()
 			if checkoutErr == nil {
 				prepared.GrainSource = srcOut.GrainSource
@@ -3017,7 +3068,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 				prepared.GrainSourceCommits = srcOut.GrainSourceCommits
 			}
 		} else {
-			prepared, checkoutErr = prepareCheckoutWithReuse(ctx, tools, cfg.GitRemoteBase, cloneURL, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
+			prepared, checkoutErr = prepareCheckoutWithUpstream(ctx, tools, cfg.GitRemoteBase, cloneURL, upstreamRepo, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
 			if checkoutErr == nil {
 				placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &prepared, cfg.sandboxReused)
 			}
@@ -3034,6 +3085,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		Attempts:         previous,
 		Comments:         comments,
 		Repair:           repair,
+		UpstreamRepo:     upstreamRepo,
 		SandboxReused:    cfg.sandboxReused,
 		SandboxReclaimed: cfg.sandboxReclaimed,
 	}
@@ -3292,6 +3344,13 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		if localScriptsEnvFile != "" {
 			defer os.Remove(localScriptsEnvFile)
 		}
+		capabilityMCPServers, controllerEP, err := wireControllerMCP(ctx, cfg, store, task)
+		if err != nil {
+			return unprepared(fmt.Errorf("serving grain-controller MCP: %w", err))
+		}
+		if controllerEP != nil {
+			defer controllerEP.Close()
+		}
 
 		// The repositories a propose_task call from this run may name,
 		// which the forked mcpserver folds into that tool's own `repo`
@@ -3421,8 +3480,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			SandboxHide:    cfg.sandboxHide,
 			// The MCP servers this run's capability grants expose, each
 			// registered beside grain-sandbox (§5.2.4).
-			CapabilityMCPServers: cfg.capabilityMCPServers,
+			CapabilityMCPServers: capabilityMCPServers,
 			Repo:                 repo, Branch: task.BranchName(),
+			UpstreamRepo: upstreamRepo.String(),
 			// The branch that branch merges into, which is what
 			// base_branch_status reads CI for. Passed as the task wrote
 			// it, empty included: an empty Base is a task that merges
@@ -4843,6 +4903,22 @@ func classifyRunEndArms(ctx context.Context, store *model.Store, cfg Config, tas
 		// sentence (stopOnExpiredHostCredentials).
 		outcome = model.EnvironmentOutcome
 		detail = expired.Error() + partialWorkSuffix(result)
+		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
+	case runErr != nil && agent.HostSetupFailure(runErr):
+		// grain's own wiring to the CLI's host failed -- no grain hostd
+		// connected to carry the run's endpoints to, one too old to
+		// carry them, a file it could not stage there -- before the CLI
+		// said anything. Ahead of the arm below for the same reason as
+		// credsExpired: three of these in five minutes are fast,
+		// toolless and worded alike, and would read there as a provider
+		// refusing the framework and pause a connection the provider
+		// never refused (docs/test-runs/2026-11-03-hostd-routing.md,
+		// F4). Nor are its words a refusal grain lost a marker for, so
+		// they are kept out of the unmatched log too. A setup failure,
+		// as one before the agent started is; a task pinned to its
+		// hostd waits for it to reconnect at its next dispatch.
+		outcome = model.SetupFailedOutcome
+		detail = runErr.Error() + partialWorkSuffix(result)
 		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
 	case runErr != nil:
 		// runErr's own text, not the wrapped form below: that form

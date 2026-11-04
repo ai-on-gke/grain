@@ -483,6 +483,16 @@ type RepoDefaults struct {
 	// renamed. It is never covered by a declaration, whatever is stored
 	// (forge.Unfixable.Covers), and SetRepoUnfixableChecks refuses it.
 	GrainCICheckName string `json:"grainCICheckName"`
+	// DefaultHostd is the hostd pin or label selector a task filed
+	// against this repository starts with when neither the filing nor
+	// its template names one (model.RepoConfig.DefaultHostd), "" for
+	// the default hostd. Set through SetRepoSettings.
+	DefaultHostd string `json:"defaultHostd"`
+	// UpstreamRepo is the upstream owner/name repository that pull
+	// requests are opened and tracked against when tasks target this fork
+	// repository (model.RepoConfig.UpstreamRepo), "" when pull requests
+	// open against this repository itself.
+	UpstreamRepo string `json:"upstreamRepo"`
 }
 
 // RepoDeclarationsStatus is what grain has made of one repository's
@@ -602,6 +612,10 @@ type SetRepoSettingsRequest struct {
 	RepairTemplateID    *string   `json:"repairTemplateID,omitempty"`
 	SetupCommand        *string   `json:"setupCommand,omitempty"`
 	UnfixableChecks     *[]string `json:"unfixableChecks,omitempty"`
+	// DefaultHostd sets model.RepoConfig.DefaultHostd: a hostd name,
+	// label=value[,label=value], or "" to put this repository's tasks
+	// back on the default hostd.
+	DefaultHostd *string `json:"defaultHostd,omitempty"`
 	// The GitHub issue importer's settings (model.RepoConfig.IssueImport),
 	// each left alone when omitted. IssueImportRepo is owner/name, "" for
 	// this repository; IssueImportIntervalSeconds 0 is the default.
@@ -610,6 +624,11 @@ type SetRepoSettingsRequest struct {
 	IssueImportLabel           *string `json:"issueImportLabel,omitempty"`
 	IssueImportApproved        *bool   `json:"issueImportApproved,omitempty"`
 	IssueImportIntervalSeconds *int    `json:"issueImportIntervalSeconds,omitempty"`
+	// UpstreamRepo sets model.RepoConfig.UpstreamRepo: the upstream
+	// owner/name repository that pull requests for this fork repository
+	// are opened and tracked against, or "" to open pull requests on this
+	// repository itself.
+	UpstreamRepo *string `json:"upstreamRepo,omitempty"`
 }
 
 // SetRepoWatchDefaultBranchRequest is PUT /api/repos/{owner}/{name}/
@@ -723,6 +742,8 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 		out.MergeOnGreen = stored.MergeOnGreen
 		out.BaseRepairBypassesHumanGates = stored.BaseRepairBypassesHumanGates
 		out.UnfixableChecks = stored.UnfixableChecks
+		out.DefaultHostd = stored.DefaultHostd
+		out.UpstreamRepo = stored.UpstreamRepo
 		out.PortBranches = stored.PortBranches
 		out.DeclaredPortBranches = stored.DeclaredPortBranches
 		out.PairedBranches = stored.PairedBranches()
@@ -1080,10 +1101,32 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 			return RepoDefaults{}, err
 		}
 	}
+	var defaultHostd string
+	if req.DefaultHostd != nil {
+		if defaultHostd, err = model.NormalizeHostdSelector(*req.DefaultHostd); err != nil {
+			return RepoDefaults{}, validationErrorf("defaultHostd: %v", err)
+		}
+		if err := c.checkHostdSelector(ctx, defaultHostd); err != nil {
+			return RepoDefaults{}, err
+		}
+	}
 	var importRepo string
 	if req.IssueImportRepo != nil {
 		if importRepo, err = c.cleanIssueImportRepo(*req.IssueImportRepo); err != nil {
 			return RepoDefaults{}, err
+		}
+	}
+	var upstreamRepo string
+	if req.UpstreamRepo != nil {
+		raw := strings.TrimSpace(*req.UpstreamRepo)
+		if raw != "" {
+			up, err := model.ParseRepo(raw)
+			if err != nil {
+				return RepoDefaults{}, validationErrorf("upstreamRepo: %v", err)
+			}
+			if !up.Same(parsed) {
+				upstreamRepo = up.String()
+			}
 		}
 	}
 	if req.IssueImportIntervalSeconds != nil {
@@ -1120,6 +1163,9 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		if req.UnfixableChecks != nil {
 			rc.UnfixableChecks = unfixable
 		}
+		if req.DefaultHostd != nil {
+			rc.DefaultHostd = defaultHostd
+		}
 		if req.CIMode != nil {
 			mode := strings.ToLower(strings.TrimSpace(*req.CIMode))
 			if mode == string(model.CIModeGrain) || mode == string(model.CIModeGitHub) || mode == string(model.CIModeNone) {
@@ -1155,6 +1201,9 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		}
 		if req.SetupCommand != nil {
 			rc.SetupCommand = strings.TrimSpace(*req.SetupCommand)
+		}
+		if req.UpstreamRepo != nil {
+			rc.UpstreamRepo = upstreamRepo
 		}
 	})
 }

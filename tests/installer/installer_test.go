@@ -468,7 +468,7 @@ func (d *deployment) teardown() {
 	sudo("systemctl", "reload", "systemd-logind.service")
 
 	for _, unit := range []string{
-		"grain-daemon.service",
+		"grain-daemon.service", "grain-postgres.service",
 		"grain-reboot.path", "grain-restart.path", "grain-shutdown.path",
 		"grain-reboot.service", "grain-restart.service", "grain-shutdown.service",
 		// Nothing installs these two any more (grain/task-193), but a
@@ -482,6 +482,8 @@ func (d *deployment) teardown() {
 	}
 	sudo("systemctl", "daemon-reload")
 	sudo("docker", "rm", "--force", "grain-daemon")
+	sudo("docker", "rm", "--force", "grain-postgres")
+	sudo("rm", "-f", "/etc/grain/postgres.env")
 	// Empty now, and setup.sh's own: `rmdir` rather than `rm -rf`, so a
 	// host that keeps something else under /etc/grain keeps it.
 	sudo("rmdir", "/etc/grain")
@@ -514,7 +516,7 @@ func (d *deployment) uninstall() []string {
 
 	var left []string
 	for _, unit := range []string{
-		"grain-daemon.service",
+		"grain-daemon.service", "grain-postgres.service",
 		"grain-reboot.path", "grain-restart.path", "grain-shutdown.path",
 		"grain-reboot.service", "grain-restart.service", "grain-shutdown.service",
 	} {
@@ -525,12 +527,14 @@ func (d *deployment) uninstall() []string {
 			left = append(left, unit+" still active")
 		}
 	}
-	if sudo("docker", "container", "inspect", "grain-daemon").exitCode == 0 {
-		left = append(left, "the grain-daemon container")
+	for _, container := range []string{"grain-daemon", "grain-postgres"} {
+		if sudo("docker", "container", "inspect", container).exitCode == 0 {
+			left = append(left, "the "+container+" container")
+		}
 	}
 	for _, path := range []string{
 		"/usr/local/bin/grain", "/usr/local/bin/granule", "/usr/local/lib/grain",
-		"/etc/grain/image.env", "/etc/grain/cli.env", "/etc/profile.d/grain.sh",
+		"/etc/grain/image.env", "/etc/grain/cli.env", "/etc/grain/postgres.env", "/etc/profile.d/grain.sh",
 		logindDropIn, d.data, d.sandbox,
 	} {
 		if sudoTest("-e", path) {
@@ -661,9 +665,11 @@ func TestInstalledContainerBackendRunsAndCleansUpACompleteTask(t *testing.T) {
 	client.Token = d.accessCode(t)
 	backends := []model.AgentBackend{{
 		ID: "installer-container-e2e", Name: "installer container e2e",
-		Framework: model.AgentFrameworkCustom, Command: d.testAgent,
-		// A custom command can't be asked what it serves, and one with an
-		// empty list has no models -- its tasks wait for one to be set.
+		// testagent speaks agy's interface, so an antigravity connection
+		// whose CLI path is that binary runs it.
+		Framework: model.AgentFrameworkAntigravity, AuthMode: model.AntigravityAuthAmbient,
+		CLIPath: d.testAgent,
+		// Pinned, so nothing waits on asking testagent what it serves.
 		Models: []string{"installer-test-model"},
 	}}
 	// Only the connection: it is a Models setting, which a deployment
@@ -673,13 +679,12 @@ func TestInstalledContainerBackendRunsAndCleansUpACompleteTask(t *testing.T) {
 	if _, err := client.UpdateSettings(ctx, ui.UpdateSettingsRequest{
 		AgentBackends: &backends,
 	}); err != nil {
-		t.Fatalf("configuring the deterministic custom backend: %v", err)
+		t.Fatalf("configuring the deterministic agent's connection: %v", err)
 	}
-	// Deliberately no credential for this backend. A custom command may
-	// authenticate some other way or not at all, and this one -- this
-	// suite's own binary -- has nothing to authenticate to, so the
-	// dispatch below is also what proves a backend with no model proxy
-	// token still runs.
+	// Deliberately no credential for this connection: it runs on the
+	// ambient login, and testagent -- this suite's own binary -- has
+	// nothing to authenticate to, so the dispatch below is also what
+	// proves a connection with no model proxy token still runs.
 
 	hostMarker := filepath.Join("/tmp", fmt.Sprintf("grain-host-marker-%d", os.Getpid()))
 	signal := filepath.Join(d.data, "container-e2e.ready")
@@ -694,7 +699,7 @@ func TestInstalledContainerBackendRunsAndCleansUpACompleteTask(t *testing.T) {
 	task, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title:          "installer local Docker lifecycle",
 		Repo:           "acme/widgets",
-		AgentFramework: model.AgentFrameworkCustom,
+		AgentFramework: model.AgentFrameworkAntigravity,
 	})
 	if err != nil {
 		t.Fatalf("filing the task: %v", err)
@@ -731,7 +736,7 @@ func TestInstalledContainerBackendRunsAndCleansUpACompleteTask(t *testing.T) {
 	if err := client.Approve(ctx, task.ID); err != nil {
 		t.Fatalf("approving the task: %v", err)
 	}
-	waitFor(t, "the custom agent to finish checkout and its MCP write", 90*time.Second, func() error {
+	waitFor(t, "the deterministic agent to finish checkout and its MCP write", 90*time.Second, func() error {
 		if !sudoTest("-f", signal) {
 			return errors.New("the agent has not signalled readiness")
 		}
@@ -905,6 +910,47 @@ func TestTheDaemonServiceExistsAndIsRunning(t *testing.T) {
 	if state != "active" {
 		journal := sudo("journalctl", "-u", "grain-daemon.service", "-n", "50", "--no-pager").stdout
 		t.Fatalf("grain-daemon.service is %q:\n%s", state, journal)
+	}
+}
+
+// A fresh install keeps its store in PostgreSQL, on the local server
+// setup.sh provisions (its database block): running, reachable on the
+// loopback interface only, and what the daemon's unit is ordered after.
+func TestAFreshDeployKeepsItsStoreOnTheLocalPostgres(t *testing.T) {
+	requireInstaller(t)
+	d := deployed(t)
+
+	if state := strings.TrimSpace(sudo("systemctl", "is-active", "grain-postgres.service").stdout); state != "active" {
+		journal := sudo("journalctl", "-u", "grain-postgres.service", "-n", "50", "--no-pager").stdout
+		t.Fatalf("grain-postgres.service is %q:\n%s", state, journal)
+	}
+	unit := sudoRead("/etc/systemd/system/grain-daemon.service")
+	for _, want := range []string{"Requires=docker.service grain-postgres.service", "grain-postgres.service", "EnvironmentFile=/etc/grain/postgres.env"} {
+		if !strings.Contains(unit, want) {
+			t.Errorf("grain-daemon.service has no %q:\n%s", want, unit)
+		}
+	}
+	env := sudoRead("/etc/grain/postgres.env")
+	if !strings.Contains(env, "GRAIN_DB_DSN=postgres://grain:") || !strings.Contains(env, "@127.0.0.1:5432/grain") {
+		t.Errorf("/etc/grain/postgres.env does not name the local server:\n%s", strings.Split(env, ":")[0])
+	}
+	if strings.Contains(unit, strings.TrimSpace(sudoRead(filepath.Join(d.data, "secrets", "postgres-password")))) {
+		t.Errorf("grain-daemon.service carries the database password")
+	}
+	if mode := strings.TrimSpace(sudo("stat", "-c", "%a %U", "/etc/grain/postgres.env").stdout); mode != "600 root" {
+		t.Errorf("/etc/grain/postgres.env is %q, want \"600 root\"", mode)
+	}
+	listening := sudo("ss", "-ltnH", "sport = :5432").stdout
+	if !strings.Contains(listening, "127.0.0.1:5432") {
+		t.Errorf("nothing listens on 127.0.0.1:5432:\n%s", listening)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(listening), "\n") {
+		if line != "" && !strings.Contains(line, "127.0.0.1:5432") {
+			t.Errorf("PostgreSQL listens beyond the loopback interface: %s", line)
+		}
+	}
+	if got := sudoUID(t, filepath.Join(d.data, "postgres", "PG_VERSION")); got != sudoUID(t, d.data) {
+		t.Errorf("the cluster is owned by uid %d, not the deployment's account", got)
 	}
 }
 

@@ -22,6 +22,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/nsclient"
 )
 
 // fakeFileProxy answers every /fs/ read with body, as the namespace does
@@ -120,7 +122,7 @@ func TestUnknownSubcommandGetsTheSandboxHelp(t *testing.T) {
 		want string
 	}{
 		{[]string{"task", "lsit"}, "grain task: unknown command \"lsit\"\n\ngrain task (list | read | prompt | transcript | wait | message | propose)"},
-		{[]string{"ci", "foo"}, "grain ci: unknown command \"foo\"\n\ngrain ci (list | show | log | test-history | artifact | wait | run-job | retrigger)"},
+		{[]string{"ci", "foo"}, "grain ci: unknown command \"foo\"\n\ngrain ci (list | show | checks | log | test-history | artifact | wait | run-job | retrigger)"},
 		{[]string{"db", "upgrade-postgres"}, "grain db: unknown command \"upgrade-postgres\""},
 	} {
 		out, errOut, code := runIn(t, env, tc.args...)
@@ -295,11 +297,11 @@ func TestTailWriterKeepsTheLastLinesAcrossWrites(t *testing.T) {
 		{[]string{"a\nb\n"}, 0, ""},
 		{nil, 3, ""},
 	} {
-		tw := &tailWriter{n: tc.n}
+		tw := &nsclient.TailWriter{N: tc.n}
 		for _, c := range tc.chunks {
 			tw.Write([]byte(c))
 		}
-		if got := string(tw.bytes()); got != tc.want {
+		if got := string(tw.Bytes()); got != tc.want {
 			t.Errorf("%q, last %d = %q, want %q", tc.chunks, tc.n, got, tc.want)
 		}
 	}

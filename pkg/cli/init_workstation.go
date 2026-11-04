@@ -48,6 +48,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -222,16 +223,63 @@ func renderWorkstationPolicy(o workstationOptions) string {
 		}
 	}
 	if len(o.Capabilities) == 0 {
-		b.WriteString("  # Only grain CI's own: allow lists the ones to permit, and deny wins over it.\n")
+		b.WriteString("  # Only grain CI's own and the Director's: allow lists the ones to permit, and deny wins over it.\n")
 	} else {
-		b.WriteString("  # Only these, and grain CI's own. Add to deny anything allow's patterns cover too widely.\n")
+		b.WriteString("  # Only these, grain CI's own and the Director's. Add to deny anything allow's patterns cover too widely.\n")
 	}
-	b.WriteString("  allow: [" + yamlQuoteAll(allow) + "]\n")
+	b.WriteString("  allow:\n")
+	for _, c := range allow {
+		fmt.Fprintf(&b, "    - %q\n", c)
+	}
+	// The Director's own grants, named exactly rather than by pattern:
+	// without them local policy held the Director chat this deployment
+	// files for itself, forever (docs/test-runs/2026-11-03-config-state.md,
+	// "Left open"). They are written out so the owner can see each one
+	// and take it away; any task may be granted them, not only the
+	// Director.
+	b.WriteString("    # The Director chat's own grants. Remove one and the Director is held for it.\n")
+	for _, c := range directorCapabilities() {
+		if !slices.ContainsFunc(allow, func(a string) bool { return strings.EqualFold(a, c) }) {
+			fmt.Fprintf(&b, "    - %q\n", c)
+		}
+	}
 	b.WriteString("\n# The network a task's sandbox may have.\n")
 	writeYAMLList(&b, "network", []string{o.Network})
 	b.WriteString("\n# Host sandboxes run as you; only your own tasks run there.\n" +
 		"allow_external_on_host_sandboxes: false\n")
 	return b.String()
+}
+
+// directorNetworkWarning is what init says when the policy it wrote
+// allows only network none: the Director asks for open
+// (model.DefaultConsoleSessions), so local policy holds it until one of
+// them gives way.
+const directorNetworkWarning = "The Director chat asks for open network, so this policy holds it: add \"open\" to network: in the policy, " +
+	"or set the Director's network to none in its console session settings."
+
+// directorCapabilities is every capability the Director chat is granted
+// (model.DefaultConsoleSessions, by way of model.ConsoleSessionGrants),
+// as local policy's capabilities.allow names it: a capability reference
+// by its reference alone, since policy matches one without its
+// arguments. It is read from this binary, so a capability a linked-in
+// package registers for the Director is among them.
+func directorCapabilities() []string {
+	var out []string
+	for _, s := range model.DefaultConsoleSessions() {
+		if s.ID != model.DirectorSessionID {
+			continue
+		}
+		for _, g := range model.ConsoleSessionGrants(s) {
+			c := g.Capability
+			if model.IsCapabilityRef(c) {
+				c = model.CapabilityGrantRef(c)
+			}
+			if !slices.Contains(out, c) {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
 }
 
 // withConfigRepo is repos with grain/config (model.ConfigRepo) appended
@@ -394,7 +442,7 @@ func runInitWorkstation(ctx context.Context, args []string, stdin io.Reader, out
 	fs.Var(&repos, "repo", "a repository tasks may work on, as owner/name, a URL or a local checkout; repeatable. None refuses every task that names one")
 	fs.Var(&owners, "owner", "a requester whose tasks are this machine's own (local_requesters); repeatable. Defaults to git's user.email; "+
 		"this account's name, which the daemon files the local CLI's and UI's tasks as, is always added")
-	fs.Var(&caps, "capability", "a capability pattern tasks may be granted (capabilities.allow); repeatable. None denies every capability")
+	fs.Var(&caps, "capability", "a capability pattern tasks may be granted (capabilities.allow); repeatable. The Director's own and grain CI's are allowed without being named")
 	network := fs.String("network", "", "network a task's sandbox may have: open or none (default open; host sandboxes have the host's own network, so only open)")
 	sandboxBackend := fs.String("sandbox-backend", "", "container, granule or host (default: the strongest this machine runs)")
 	containerProxyHost := fs.String("container-git-proxy-host", "", "with container sandboxes, the address a sandbox container reaches "+
@@ -618,6 +666,9 @@ func runInitWorkstation(ctx context.Context, args []string, stdin io.Reader, out
 		}
 	} else if o.Network == string(model.NetworkNone) {
 		fmt.Fprintln(out, "Once the daemon is up, run `grain settings -network-access none`: the policy allows only that network.")
+	}
+	if o.Network == string(model.NetworkNone) {
+		fmt.Fprintln(out, directorNetworkWarning)
 	}
 	if !started {
 		fmt.Fprintf(out, "Run the daemon in the foreground with: %s\n", launcher)

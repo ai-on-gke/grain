@@ -38,6 +38,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 // The run kinds a catalogue restriction names (CapabilityRestrictions.Kinds).
@@ -288,27 +290,37 @@ func (c *CapabilityCatalogue) judgeRef(g string, gc GrantContext) (bool, error) 
 }
 
 func (c *CapabilityCatalogue) judgeServerRef(g string, gc GrantContext) (bool, error) {
+	var spec protocol.GrantSpec
 	var with map[string]any
 	ref := CapabilityGrantRef(g)
-	if spec, err := CapabilityGrantSpec(g); err == nil {
-		ref, with = spec.Capability, spec.With
+	if parsed, err := CapabilityGrantSpec(g); err == nil {
+		spec = parsed
+		ref, with = parsed.Capability, parsed.With
+	}
+	id, method, _ := strings.Cut(ref, "#")
+	srv, ok := c.server(id)
+	resolvedID := ""
+	if ok {
+		resolvedID = srv.ID
+	}
+	if spec.Capability != "" {
+		if err := CheckGCPKeyGrantArgs(spec, resolvedID); err != nil {
+			return false, err
+		}
 	}
 	unnamedGCPKey := false
-	if ref == GCPKeyRef {
-		unnamedGCPKey = GCPKeySetUnnamed(g)
+	if ref == GCPKeyRef || (resolvedID == GCPCapabilityServerID && (method == "" || method == GCPKeyMethod)) {
+		set, _ := with["permission_set"].(string)
+		unnamedGCPKey = set == ""
 		eff := make(map[string]any, len(with)+1)
 		for k, v := range with {
 			eff[k] = v
 		}
-		if old, _ := eff["account"].(string); old != "" {
-			eff["permission_set"] = old
-		} else if _, has := eff["permission_set"]; !has {
+		if _, has := eff["permission_set"]; !has {
 			eff["permission_set"] = ""
 		}
 		with = eff
 	}
-	id, method, _ := strings.Cut(ref, "#")
-	srv, ok := c.server(id)
 	if !ok {
 		return false, nil
 	}
@@ -773,6 +785,18 @@ func (c *CapabilityCatalogue) Validate() error {
 				add("%s: method %s is listed twice", mw, m.Name)
 			}
 			methods[m.Name] = true
+			if strings.TrimSpace(s.ID) == GCPCapabilityServerID && m.Name == GCPKeyMethod {
+				for _, removed := range []string{"account", "activate"} {
+					if _, has := m.Args[removed]; has {
+						add("%s.args.%s: %q was removed from gcp#gcp-key; use \"permission_set\"", mw, removed, removed)
+					}
+					if m.Restrictions != nil {
+						if _, has := m.Restrictions.RequiresPersonWhen[removed]; has {
+							add("%s.restrictions.requires_person_when.%s: %q was removed from gcp#gcp-key; use \"permission_set\"", mw, removed, removed)
+						}
+					}
+				}
+			}
 			check(mw, m.Restrictions)
 		}
 	}

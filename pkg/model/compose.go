@@ -470,7 +470,7 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 			nil, "", &sched.AutoApproveProposals, LayerSchedule, true, LayerSchedule)
 		// A review of a workflow run says which branch the run was on
 		// when the schedule chose one (WorkflowReviewTitle).
-		if _, ok := WorkflowReviewStem(tmpl.ID); ok {
+		if IsWorkflowReviewTemplateID(tmpl.ID) {
 			comp.Title = WorkflowReviewTitle(comp.Title, sched.Base)
 		}
 		// Unlike the template's content, a model the schedule chose
@@ -696,7 +696,7 @@ func applyGrainCIGrant(comp *Composition, usesGrainCI bool) {
 // grant when the target repository does not use grain CI.
 func scheduleReviewsWorkflowRun(sched Schedule, tmpl *Template) (CompositionLayer, bool) {
 	if tmpl != nil {
-		if _, ok := WorkflowReviewStem(tmpl.ID); ok {
+		if IsWorkflowReviewTemplateID(tmpl.ID) {
 			return LayerTemplate, true
 		}
 	}
@@ -784,6 +784,9 @@ func (s *Store) composeScheduleTask(ctx context.Context, sched Schedule, stateRe
 			return Composition{}, nil, err
 		}
 		applyGrainCIGrant(&comp, usesGrainCI)
+		if err := applyRepoDefaultHostd(ctx, s.db, &comp); err != nil {
+			return Composition{}, nil, err
+		}
 		if !usesGrainCI {
 			if from, ok := scheduleReviewsWorkflowRun(sched, tmpl); ok {
 				applyWorkflowReviewCIReadGrant(&comp, from)
@@ -820,6 +823,9 @@ func composeSuitePass(ctx context.Context, q querier, items []SuiteItem, templat
 				return nil, err
 			}
 			applyGrainCIGrant(&comp, usesGrainCI)
+			if err := applyRepoDefaultHostd(ctx, q, &comp); err != nil {
+				return nil, err
+			}
 		}
 		out = append(out, comp)
 	}
@@ -891,6 +897,9 @@ func (s *Store) TemplateComposition(ctx context.Context, tmpl Template, values m
 			return Composition{}, err
 		}
 		applyGrainCIGrant(&comp, usesGrainCI)
+		if err := applyRepoDefaultHostd(ctx, s.db, &comp); err != nil {
+			return Composition{}, err
+		}
 	}
 	return comp, nil
 }

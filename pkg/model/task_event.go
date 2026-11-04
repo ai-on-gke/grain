@@ -68,6 +68,11 @@ const (
 	TaskEventReordered         TaskEventKind = "reordered"
 	// TaskEventSecretSet's Detail names the secret, never its value.
 	TaskEventSecretSet TaskEventKind = "secret-set"
+	// TaskEventAccessGranted's Detail lists what a person granted of an
+	// access request (ui.Client.GrantAccessRequest); TaskEventAccessDenied's
+	// is their reason for denying one.
+	TaskEventAccessGranted TaskEventKind = "access-granted"
+	TaskEventAccessDenied  TaskEventKind = "access-denied"
 )
 
 // TransitionReopened is the timeline's name for a reopen. It is not one
@@ -332,7 +337,7 @@ func MergeTaskEvents(ts []Transition, events []TaskEvent) []Transition {
 			continue
 		}
 		by := e.By
-		out = append(out, Transition{State: state, At: e.At, By: &by, Reason: e.Reason, Detail: e.Detail})
+		out = append(out, Transition{State: state, At: e.At, By: &by, OnBehalfOf: e.OnBehalfOf, Reason: e.Reason, Detail: e.Detail})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
 	return out

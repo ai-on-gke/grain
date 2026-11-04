@@ -70,6 +70,9 @@ type Tool struct {
 	// attaches by path (SandboxFileReaderOf). Nil on every other tool,
 	// and never advertised.
 	ReadBytes SandboxFileReader
+	// Meta is optional MCP _meta metadata advertised in tools/list
+	// (for example, {"antigravity/alwaysLoad": true}).
+	Meta map[string]any
 }
 
 // elisionAdvice is the sentence the backstop appends when it cuts this
@@ -87,8 +90,10 @@ func (t Tool) elisionAdvice() string {
 // plain bytes in, bytes out -- no subprocess, no real pipes required,
 // mirroring v1's McpServer.handle.
 type Registry struct {
-	tools map[string]Tool
-	order []string
+	tools        map[string]Tool
+	order        []string
+	serverName   string
+	instructions string
 	// deadline, when AnnounceDeadline has been called, is when grain
 	// cancels the run this registry serves -- read on every tools/call so
 	// that a run approaching it is told so on every answer it gets. nil
@@ -118,6 +123,18 @@ type Registry struct {
 
 func NewRegistry() *Registry {
 	return &Registry{tools: make(map[string]Tool)}
+}
+
+// SetServerName overrides serverInfo.name in initialize responses; when
+// unset, the registry reports "grain-sandbox".
+func (r *Registry) SetServerName(name string) {
+	r.serverName = name
+}
+
+// SetInstructions sets the optional MCP instructions string returned in
+// initialize responses to guide clients on how to use this server's tools.
+func (r *Registry) SetInstructions(instructions string) {
+	r.instructions = instructions
 }
 
 // Register adds tools to the registry, in the order given, appended after
@@ -159,6 +176,10 @@ func (r *Registry) Names() []string {
 // (no id) that has no response at all -- notifications/initialized is the
 // only one a client sends here.
 func (r *Registry) Handle(ctx context.Context, line []byte) []byte {
+	return r.handle(ctx, line, protocolVersion)
+}
+
+func (r *Registry) handle(ctx context.Context, line []byte, initVersion string) []byte {
 	var req rpcRequest
 	if err := json.Unmarshal(line, &req); err != nil {
 		return mustMarshalLine(rpcResponse{
@@ -170,26 +191,46 @@ func (r *Registry) Handle(ctx context.Context, line []byte) []byte {
 
 	switch req.Method {
 	case "initialize":
+		name := r.serverName
+		if name == "" {
+			name = serverName
+		}
+		if initVersion == "" {
+			initVersion = protocolVersion
+		}
+		result := map[string]any{
+			"protocolVersion": initVersion,
+			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"serverInfo":      map[string]any{"name": name, "version": serverVersion},
+		}
+		if r.instructions != "" {
+			result["instructions"] = r.instructions
+		}
 		return mustMarshalLine(rpcResponse{
 			JSONRPC: "2.0",
 			ID:      req.ID,
-			Result: map[string]any{
-				"protocolVersion": protocolVersion,
-				"capabilities":    map[string]any{"tools": map[string]any{}},
-				"serverInfo":      map[string]any{"name": serverName, "version": serverVersion},
-			},
+			Result:  result,
 		})
 	case "notifications/initialized":
 		return nil
+	case "ping":
+		if len(req.ID) == 0 {
+			return nil
+		}
+		return mustMarshalLine(rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{}})
 	case "tools/list":
 		list := make([]map[string]any, 0, len(r.order))
 		for _, name := range r.order {
 			t := r.tools[name]
-			list = append(list, map[string]any{
+			entry := map[string]any{
 				"name":        t.Name,
 				"description": t.Description,
 				"inputSchema": t.InputSchema,
-			})
+			}
+			if len(t.Meta) > 0 {
+				entry["_meta"] = t.Meta
+			}
+			list = append(list, entry)
 		}
 		return mustMarshalLine(rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": list}})
 	case "tools/call":
@@ -293,7 +334,7 @@ func (r *Registry) handleCall(ctx context.Context, id json.RawMessage, params js
 
 func isTurnEndingTool(name string, result Result) bool {
 	switch name {
-	case "comment_on_issue", "ask_question", "nothing_needed", "request_secret", "resume_later":
+	case "comment_on_issue", "ask_question", "nothing_needed", "request_secret", "request_access", "resume_later":
 		return true
 	case "chat":
 		return !result.HumanTurn

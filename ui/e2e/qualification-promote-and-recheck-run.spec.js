@@ -123,7 +123,7 @@ test.describe("Qualification demo promote and merge re-check run link", () => {
     await page.goto("/repos/acme/widgets/releases/1.0");
 
     const picker = page.getByRole("combobox", { name: "Release" });
-    await expect(picker).toContainText("1.0 -- Active");
+    await expect(picker).toHaveValue("1.0 -- Active");
 
     const currentCandidate = page.locator(".candidate-current");
     await expect(currentCandidate).toContainText("1.0.rc.1 -- active");

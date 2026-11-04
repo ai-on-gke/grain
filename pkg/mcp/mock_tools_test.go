@@ -28,8 +28,10 @@ import (
 func escapeHatchText(t *testing.T) map[string]struct{ description, confirmation string } {
 	t.Helper()
 	args := map[string]map[string]any{
-		"ask_question":       {"question": "which config file?"},
-		"request_secret":     {"secret": "stripe-api-key", "reason": "the deploy script authenticates with it"},
+		"ask_question":   {"question": "which config file?"},
+		"request_secret": {"secret": "stripe-api-key", "reason": "the deploy script authenticates with it"},
+		"request_access": {"summary": "Grant read of acme/lib", "reason": "the fix spans both repos",
+			"requests": []any{map[string]any{"kind": "read", "repo": "acme/lib"}}},
 		"comment_on_issue":   {"comment": "the answer is 4"},
 		"nothing_needed":     {"reason": "the flag is already off on main"},
 		"write_handover":     {"handover": "the merge lane may only ever hold one branch"},

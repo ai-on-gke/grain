@@ -17,11 +17,21 @@ package ui
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -29,6 +39,7 @@ import (
 
 	"golang.org/x/oauth2"
 
+	"github.com/ai-on-gke/grain/pkg/authfix"
 	"github.com/ai-on-gke/grain/pkg/ci"
 )
 
@@ -336,5 +347,253 @@ func TestHTTPClient_DefaultClientHasResponseHeaderTimeout(t *testing.T) {
 	tr, ok := NewHTTPClient("http://127.0.0.1:1").httpClient().Transport.(*http.Transport)
 	if !ok || tr.ResponseHeaderTimeout <= 0 {
 		t.Fatalf("default client transport %#v has no ResponseHeaderTimeout", tr)
+	}
+}
+
+// #XC-15: the CLI names the tool and session it runs in on every request,
+// as one sanitized X-Grain-Client line built from $GRAIN_CLIENT and
+// $GRAIN_CLIENT_SESSION, and sends nothing when neither is set.
+func TestHTTPClient_XGrainClientFromEnvAndSession(t *testing.T) {
+	var got []string
+	var present []bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, ok := r.Header[http.CanonicalHeaderKey("X-Grain-Client")]
+		present = append(present, ok)
+		got = append(got, r.Header.Get("X-Grain-Client"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+
+	long := strings.Repeat("x", 400)
+	cases := []struct {
+		name, client, session, want string
+		sent                        bool
+	}{
+		{name: "neither", sent: false},
+		{name: "client and session", client: "jetski/1.4", session: "abc123", want: "jetski/1.4 session=abc123", sent: true},
+		{name: "client alone", client: "jetski/1.4", want: "jetski/1.4", sent: true},
+		{name: "session alone", session: "abc123", want: "session=abc123", sent: true},
+		{name: "client already names a session", client: "jetski/1.4 session=s1", session: "s2", want: "jetski/1.4 session=s1", sent: true},
+		{name: "control characters and newlines stripped", client: "jet\x01ski/1.4\r\nX-Evil: 1", session: "a\tb\x7f",
+			want: "jetski/1.4 X-Evil: 1 session=a b", sent: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, present = nil, nil
+			t.Setenv("GRAIN_CLIENT", tc.client)
+			t.Setenv("GRAIN_CLIENT_SESSION", tc.session)
+			c := NewHTTPClient(srv.URL)
+			c.Token = "tok"
+			if _, err := c.ListTasks(context.Background()); err != nil {
+				t.Fatalf("ListTasks: %v", err)
+			}
+			if len(got) != 1 || present[0] != tc.sent || got[0] != tc.want {
+				t.Fatalf("X-Grain-Client = %q (sent %v), want %q (sent %v)", got, present, tc.want, tc.sent)
+			}
+		})
+	}
+	t.Run("capped at 256 bytes", func(t *testing.T) {
+		got, present = nil, nil
+		t.Setenv("GRAIN_CLIENT", "tool/"+long)
+		t.Setenv("GRAIN_CLIENT_SESSION", "abc")
+		c := NewHTTPClient(srv.URL)
+		c.Token = "tok"
+		if _, err := c.ListTasks(context.Background()); err != nil {
+			t.Fatalf("ListTasks: %v", err)
+		}
+		if len(got) != 1 || len(got[0]) > 256 || !strings.HasPrefix(got[0], "tool/xxx") {
+			t.Fatalf("X-Grain-Client = %q (%d bytes), want a tool/... prefix of at most 256 bytes", got, len(got[0]))
+		}
+	})
+}
+
+func TestHTTPClient_ServiceAccountIAPSelfSignedJWT(t *testing.T) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generating RSA key: %v", err)
+	}
+	pkcs8, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatalf("marshaling PKCS8 key: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8})
+
+	saEmail := "iap-caller@example-project.iam.gserviceaccount.com"
+	saJSON, err := json.Marshal(map[string]string{
+		"type":           "service_account",
+		"client_email":   saEmail,
+		"private_key":    string(pemBytes),
+		"private_key_id": "key-id-42",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credFile := filepath.Join(t.TempDir(), "sa.json")
+	if err := os.WriteFile(credFile, saJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", credFile)
+
+	// 1. With Cloud Run Direct IAP wildcard audience ("https://<host>/*"),
+	// HTTPClient signs an RS256 service-account JWT without calling ADC/gcloud.
+	c := NewHTTPClient("https://grain-iap-1234.us-central1.run.app")
+	c.Audience = "https://grain-iap-1234.us-central1.run.app/*"
+	c.adcIDToken = noADC
+	var gcloudCalls []string
+	c.gcloud = gcloudStub("", "", &gcloudCalls)
+
+	tok, err := c.getGoogleIDToken(context.Background())
+	if err != nil {
+		t.Fatalf("getGoogleIDToken failed: %v", err)
+	}
+	if len(gcloudCalls) != 0 {
+		t.Fatalf("expected 0 gcloud calls, got %v", gcloudCalls)
+	}
+
+	parts := strings.Split(tok, ".")
+	if len(parts) != 3 {
+		t.Fatalf("expected 3 JWT segments, got %d", len(parts))
+	}
+	hdrBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		t.Fatalf("decoding header: %v", err)
+	}
+	var hdr map[string]string
+	if err := json.Unmarshal(hdrBytes, &hdr); err != nil {
+		t.Fatalf("unmarshaling header: %v", err)
+	}
+	if hdr["alg"] != "RS256" || hdr["kid"] != "key-id-42" {
+		t.Errorf("unexpected JWT header: %#v", hdr)
+	}
+
+	claimBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("decoding claims: %v", err)
+	}
+	var claims struct {
+		Iss string `json:"iss"`
+		Sub string `json:"sub"`
+		Aud string `json:"aud"`
+		Iat int64  `json:"iat"`
+		Exp int64  `json:"exp"`
+	}
+	if err := json.Unmarshal(claimBytes, &claims); err != nil {
+		t.Fatalf("unmarshaling claims: %v", err)
+	}
+	if claims.Iss != saEmail || claims.Sub != saEmail {
+		t.Errorf("got iss=%q sub=%q, want %q", claims.Iss, claims.Sub, saEmail)
+	}
+	if claims.Aud != c.Audience {
+		t.Errorf("got aud=%q, want %q", claims.Aud, c.Audience)
+	}
+	if claims.Exp <= claims.Iat {
+		t.Errorf("invalid iat=%d exp=%d", claims.Iat, claims.Exp)
+	}
+
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		t.Fatalf("decoding signature: %v", err)
+	}
+	sum := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
+	if err := rsa.VerifyPKCS1v15(&priv.PublicKey, crypto.SHA256, sum[:], sig); err != nil {
+		t.Fatalf("RS256 signature verification failed: %v", err)
+	}
+
+	// Cached on repeat call.
+	tok2, err := c.getGoogleIDToken(context.Background())
+	if err != nil || tok2 != tok {
+		t.Fatalf("second call got (%q, %v), want cached token", tok2, err)
+	}
+
+	// 2. Without trailing "/*", standard Cloud Run IAM path (adcIDToken) still wins.
+	var adcCalled bool
+	c2 := NewHTTPClient("https://grain-iam-1234.us-central1.run.app")
+	c2.adcIDToken = func(_ context.Context, aud string) (*oauth2.Token, error) {
+		adcCalled = true
+		return &oauth2.Token{AccessToken: "oidc-id-token", Expiry: time.Now().Add(time.Hour)}, nil
+	}
+	got2, err := c2.getGoogleIDToken(context.Background())
+	if err != nil || got2 != "oidc-id-token" || !adcCalled {
+		t.Fatalf("non-wildcard audience got (%q, %v), adcCalled=%v; want oidc-id-token", got2, err, adcCalled)
+	}
+}
+
+// TestRegisterCredentialSourceAndHTTPClientRefusesLoginRedirectAndHTML is
+// HTTPClient's half of external-cli.spec.md#XC-4 and #XC-10 (pkg/cli's
+// credsource_test.go is the CLI's): a context's credential is sent after
+// the environment's and before the local API token; a redirect to a
+// login page a wrapper's classifier knows is not followed; and an HTML
+// page where JSON was asked for is a LoginRequiredError, not a parse
+// error.
+func TestRegisterCredentialSourceAndHTTPClientRefusesLoginRedirectAndHTML(t *testing.T) {
+	for _, env := range TokenEnvVars {
+		t.Setenv(env, "")
+	}
+	t.Setenv(LocalAPITokenFileEnv, filepath.Join(t.TempDir(), "absent"))
+
+	var gotAuth atomic.Value
+	login := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, "<html>sign in</html>")
+	}))
+	defer login.Close()
+	var followed atomic.Bool
+	unregister := authfix.RegisterRedirect("test-sso", func(u *url.URL) (authfix.Fix, bool) {
+		if u.Host != strings.TrimPrefix(login.URL, "http://") {
+			return authfix.Fix{}, false
+		}
+		followed.Store(true)
+		return authfix.Fix{Summary: "session expired", Action: "run `renew-sso`"}, true
+	})
+	defer unregister()
+
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth.Store(r.Header.Get("Authorization"))
+		switch r.URL.Query().Get("as") {
+		case "redirect":
+			http.Redirect(w, r, login.URL+"/signin?continue=x", http.StatusFound)
+		case "html":
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, "<html>please sign in</html>")
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, "[]")
+		}
+	}))
+	defer api.Close()
+
+	c := NewHTTPClient(api.URL)
+	c.RetryPolicy = &RetryPolicy{}
+	c.ContextToken = func(context.Context) (string, error) { return "gma_fromcontext", nil }
+	if _, err := c.ListTasks(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := gotAuth.Load(); got != "Bearer gma_fromcontext" {
+		t.Errorf("Authorization = %v, want the context's credential", got)
+	}
+	t.Setenv("GRAIN_TOKEN", "from-env")
+	if _, err := c.ListTasks(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := gotAuth.Load(); got != "Bearer from-env" {
+		t.Errorf("Authorization = %v, want $GRAIN_TOKEN ahead of the context", got)
+	}
+	t.Setenv("GRAIN_TOKEN", "")
+
+	var out []Task
+	err := c.do(context.Background(), http.MethodGet, "/api/tasks?as=redirect", nil, &out)
+	var lr *LoginRequiredError
+	if !errors.As(err, &lr) || lr.Fix == "" || !followed.Load() {
+		t.Fatalf("login redirect: %v, want a LoginRequiredError with the classifier's fix", err)
+	}
+	if want := "not signed in to 127.0.0.1: run `renew-sso`"; !strings.Contains(err.Error(), want) {
+		t.Errorf("login redirect said %q, want it to contain %q", err, want)
+	}
+
+	err = c.do(context.Background(), http.MethodGet, "/api/tasks?as=html", nil, &out)
+	if !errors.As(err, &lr) || !strings.Contains(err.Error(), "unexpected HTML sign-in response from "+api.URL) {
+		t.Fatalf("HTML 401: %v, want an unexpected HTML sign-in response", err)
 	}
 }

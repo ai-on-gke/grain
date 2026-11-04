@@ -17,6 +17,7 @@ import {
   ASKED_STATES,
   DISPLAY_STATE_ORDER,
   askedCase,
+  baseRepairWaitReason,
   displayCounts,
   displayState,
   statesOf,
@@ -2630,7 +2631,7 @@ describe("advertisedModels", () => {
       expect(advertisedModels({ framework })).toEqual([]);
     }
   });
-  it("never reads a discovered list for a custom command", () => {
+  it("never reads a discovered list for a removed custom command connection", () => {
     expect(
       advertisedModels({ framework: "custom", models: [], discovered }),
     ).toEqual([]);
@@ -2791,9 +2792,29 @@ describe("askedCase", () => {
   });
 
   it("names each case with its tooltip and its action", () => {
-    expect(askedCase({ state: "awaiting_reply" })).toEqual({
+    expect(
+      askedCase({
+        state: "awaiting_reply",
+        questionSummary: "Which base branch?",
+      }),
+    ).toEqual({
       kind: "question",
       title: "Asked a question",
+      action: "reply",
+    });
+    expect(
+      askedCase({
+        state: "awaiting_reply",
+        pendingSecret: { name: "deploy-key" },
+      }),
+    ).toEqual({
+      kind: "question",
+      title: "Asked a question",
+      action: "reply",
+    });
+    expect(askedCase({ state: "awaiting_reply" })).toEqual({
+      kind: "answer",
+      title: "Answered in a comment",
       action: "reply",
     });
     expect(askedCase({ state: "awaiting_reply", interactive: true })).toEqual({
@@ -2818,6 +2839,28 @@ describe("askedCase", () => {
       title: "Asked you to submit acme/widgets#12",
       action: "submit",
     });
+  });
+
+  it("distinguishes a parked question from an answered report in baseRepairWaitReason", () => {
+    expect(
+      baseRepairWaitReason({
+        state: "awaiting_reply",
+        questionSummary: "Which base branch?",
+      }),
+    ).toBe("waiting for a reply to its question");
+    expect(
+      baseRepairWaitReason({
+        state: "awaiting_reply",
+        autoMerge: true,
+        questionSummary: "Which base branch?",
+      }),
+    ).toBe("waiting for a reply to its question");
+    expect(baseRepairWaitReason({ state: "awaiting_reply" })).toBe(
+      "answered in a comment",
+    );
+    expect(
+      baseRepairWaitReason({ state: "awaiting_reply", autoMerge: true }),
+    ).toBe("answered in a comment");
   });
 
   it("says what holds a change waiting on Submit", () => {

@@ -447,6 +447,10 @@ func Run(ctx context.Context, cfg Config) error {
 			// The same copy orchestrator.Config.GrainSourceDir is given
 			// below, mounted into self-debug runs' containers.
 			GrainSourceDir: sourceDir(cfg.UpgradeSrcDir),
+			// The fence's accepts: the address containers reach grain's
+			// services at, and only the ports those services listen on.
+			Fence: cfg.ContainerFence, GitProxyHost: cfg.ContainerGitProxyHost,
+			SandboxServicePorts: servicePorts.Ports,
 		})
 		log.Printf("grain daemon: container sandboxing -- one local Docker container per run from image %q", startImage)
 	} else if cfg.K8sSandboxes {
@@ -636,6 +640,12 @@ func Run(ctx context.Context, cfg Config) error {
 	if localHostSandboxes(sandboxes) {
 		cfg.Overcommit = model.NewOvercommitController(cfg.SandboxOvercommit, cfg.CpuOvercommit, cfg.MemoryOvercommit)
 	}
+	// Before the capability servers start, so the host-script server
+	// starts with the scripts of every local-scripts declaration that
+	// moved onto it.
+	if _, err := migrateLocalScripts(ctx, store, cfg.LocalScriptsConfig()); err != nil {
+		log.Printf("daemon: local-scripts: moving declarations to host-script: %v", err)
+	}
 	capabilityServers, hostdCapabilityServers := startCapabilityServers(ctx, store, secretStore, cfg.DataDir, cfg.capabilityHostd(), gcpKeyPool(cfg))
 	live := NewLiveConfig(store, sandboxes, cfg, githubCredentials).
 		WithSandboxImages(sandboxImages, stockSandboxImage, sandboxImageLabels()).
@@ -814,7 +824,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// nil on a deployment configured for neither pipeline, which both
 	// halves already have to handle: the UI hides the pane and the
 	// reconciler applies nothing.
-	upgrader := newUpgrader(cfg, db, store)
+	upgrader := newUpgrader(cfg, db, store, githubCredentials)
 
 	// Which filesystems this deployment's own state sits on, resolved once
 	// for the two halves that read them: the host status pane's disk rows
@@ -1313,6 +1323,18 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	}
 	reservePersistentPorts(cfg)
 	defer persistentSandboxes.Close()
+	// Where a repository's `.grain` declarations, and the refs git_ref
+	// schedules watch, are read from (wired into deps below).
+	declarationSource := RepoDeclarationSource{Clone: CiWorkflowSource{
+		ConfigRepoDir:       StateRepoDir(cfg.DataDir),
+		Credentials:         credentials,
+		GitHubHost:          cfg.GithubHost,
+		InsecureHTTP:        cfg.GithubInsecureHTTP,
+		Forbidden:           forbidden,
+		TempDir:             filepath.Join(cfg.DataDir, "state"),
+		TeamGitCredential:   teamGitCredential,
+		TeamGitCredentialOn: teamGitCredentialOn,
+	}}
 	deps := orchestrator.Deps{
 		// The attached capability servers a task's capability
 		// references are minted through at admission.
@@ -1373,6 +1395,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// Where a run's sandbox-callable capability tools are
 			// registered for the proxy's /cap/ (grain cap).
 			CapabilitySandboxServers: SandboxCapabilities,
+			ControllerMCP:            controllerMCPProxy(cfg),
 			GrantTools:               grantTools(grainSrcDir, SecretsDir(cfg.DataDir)),
 			// Where a sandbox reaches this deployment's package
 			// cache -- asked per dispatch, and answering "" while the
@@ -1578,16 +1601,11 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		// unconditionally, unlike CI above, because it costs nothing at
 		// all until an operator turns a repository's declarations on:
 		// with none on, the reconciler reads repo_config and stops.
-		Declarations: RepoDeclarationSource{Clone: CiWorkflowSource{
-			ConfigRepoDir:       StateRepoDir(cfg.DataDir),
-			Credentials:         credentials,
-			GitHubHost:          cfg.GithubHost,
-			InsecureHTTP:        cfg.GithubInsecureHTTP,
-			Forbidden:           forbidden,
-			TempDir:             filepath.Join(cfg.DataDir, "state"),
-			TeamGitCredential:   teamGitCredential,
-			TeamGitCredentialOn: teamGitCredentialOn,
-		}},
+		Declarations: declarationSource,
+		// The same ls-remote, for the refs git_ref schedules watch
+		// (orchestrator.reconcileGitRefSchedules). Costs nothing until a
+		// schedule declares one.
+		Refs: declarationSource,
 	}
 	// The same gate the UI/API server was given, so the CI a branch is put
 	// through by the cycle (orchestrator.reconcileCI) is the CI an

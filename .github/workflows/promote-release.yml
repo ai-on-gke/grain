@@ -15,10 +15,32 @@
 # GitHub Actions port of .grain/workflows/promote-release.yml.
 #
 # Makes a pending release (`vX.Y.0-pending`) official (`approve` + `promote`),
-# or drops it (`reject`). Triggered exclusively via `workflow_dispatch` by a
-# human operator (`GRAIN_CI_REQUESTED_BY_KIND=human`).
+# drops it (`reject`), or rolls a bad release back (`rollback`). Triggered
+# exclusively via `workflow_dispatch` by a human operator
+# (`GRAIN_CI_REQUESTED_BY_KIND=human`). The release train stages
+# `vX.Y.0-pending` when an rc passes qualification; approving it is the one
+# person action of a release (design/playbook/releases.playbook.md §0).
+#
+# `rollback` (playbook §11) never deletes or moves `version`: it tags
+# `vX.Y.Z-retracted` on it (who, and `reason`), marks its images retracted,
+# and re-points `latest` -- the git tag and the images -- at `rollback_to`,
+# by default the newest earlier release neither retracted nor in
+# RELEASE_NEVER_PROMOTE (scripts/release-from-trunk.sh rollback).
 #
 # On non-main refs, `dry_run` defaults to and is enforced as `true`.
+#
+# The person who decides is either the run's own actor -- somebody who
+# pressed "Run workflow" here -- or, when grain dispatched the run on a
+# person's Approve or Reject in its Inbox or on a person's rollback
+# (POST /api/releases/{version}/rollback), the person named in the signed
+# `approval` record: grain's own forge identity is a bot, which is refused
+# as an actor, and the record is the proof a person decided. It is
+# verified against the deployment's public key in the repository variable
+# GRAIN_RELEASE_APPROVAL_KEY (`grain release approval-key`) by
+# scripts/verify-release-approval.sh, and is bound to this repository,
+# version, decision, short-soak and allow-breaking answers and the commit vX.Y.Z-pending
+# stages -- for a rollback, the commit vX.Y.Z tags, `rollback_to` and the
+# SHA-256 of `reason` -- for 15 minutes. No schedule and no other event runs this.
 #
 # `approve` refuses a pending release whose recorded staging soak is under
 # the minimum (scripts/release-from-trunk.sh records it on the -pending tag)
@@ -39,17 +61,18 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Pending release version to approve or reject (e.g. v3.1.0)"
+        description: "Pending release version to approve or reject, or the bad release to roll back (e.g. v3.1.0)"
         required: true
         type: string
       decision:
-        description: "Whether to approve (promote) or reject (drop) the pending release"
+        description: "Whether to approve (promote) or reject (drop) the pending release, or roll a promoted release back (retract it and re-point latest)"
         required: true
         default: approve
         type: choice
         options:
           - approve
           - reject
+          - rollback
       short_soak_ok:
         description: "Approve even though the pending release's recorded staging soak is under the minimum (24h less the slack), e.g. one staged with FORCE=true; the release tag records the override"
         required: false
@@ -60,11 +83,31 @@ on:
         required: false
         default: false
         type: boolean
+      rollback_to:
+        description: "Rollback only: the release `latest` goes back to (vA.B.C); empty picks the newest earlier release neither retracted nor in RELEASE_NEVER_PROMOTE"
+        required: false
+        default: ""
+        type: string
+      reason:
+        description: "Rollback only: why the release is retracted, recorded on its vX.Y.Z-retracted tag"
+        required: false
+        default: ""
+        type: string
       dry_run:
         description: "Verify promotion or rejection plan without pushing git tags or container images (always true on non-main refs)"
         required: false
         default: false
         type: boolean
+      approval:
+        description: "Set by grain only: the signed record of a person's Approve, Reject or rollback in grain (base64). Leave empty when dispatching by hand"
+        required: false
+        default: ""
+        type: string
+      approval_signature:
+        description: "Set by grain only: the record's signature (base64), verified against vars.GRAIN_RELEASE_APPROVAL_KEY"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -86,6 +129,12 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-approve-${{ inputs.version }}
       cancel-in-progress: false
+    outputs:
+      # The person the signed approval record named, once
+      # scripts/verify-release-approval.sh accepted it; empty on a run a
+      # person dispatched by hand. `promote` reads it: by then this job
+      # has deleted vX.Y.Z-pending, so the record cannot be checked again.
+      approved_by: ${{ steps.person.outputs.approved_by }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -101,10 +150,17 @@ jobs:
           cache: false
 
       - name: Refuse anybody but a person and resolve context
+        id: person
         env:
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           GH_REF_NAME: ${{ github.head_ref || github.ref_name }}
+          APPROVAL: ${{ inputs.approval }}
+          APPROVAL_SIGNATURE: ${{ inputs.approval_signature }}
+          APPROVAL_PUBLIC_KEY: ${{ vars.GRAIN_RELEASE_APPROVAL_KEY }}
+          EXPECT_DECISION: approve
+          EXPECT_SHORT_SOAK_OK: ${{ inputs.short_soak_ok }}
+          EXPECT_ALLOW_BREAKING: ${{ inputs.allow_breaking }}
         run: |
           set -euo pipefail
           if ! [[ "${INPUT_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -115,14 +171,23 @@ jobs:
             echo "promote-release: only workflow_dispatch by a person may approve a release" >&2
             exit 1
           fi
-          case "${GITHUB_ACTOR:-}" in
-            ""|*"[bot]"|grain-ci*)
-              echo "promote-release: only a person approves a release (actor=${GITHUB_ACTOR:-})" >&2
-              exit 1
-              ;;
-          esac
-          git config --global user.name "${GITHUB_ACTOR}"
-          git config --global user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          if [ -n "${APPROVAL:-}${APPROVAL_SIGNATURE:-}" ]; then
+            # Dispatched by grain on a person's answer in its Inbox: the
+            # signed record names the person, whoever the actor is.
+            by="$(EXPECT_REPO="${GITHUB_REPOSITORY}" EXPECT_VERSION="${INPUT_VERSION}" bash ./scripts/verify-release-approval.sh)"
+            echo "promote-release: ${by} approved ${INPUT_VERSION} in grain's Inbox (dispatched as ${GITHUB_ACTOR:-})"
+            echo "approved_by=${by}" >>"$GITHUB_OUTPUT"
+          else
+            case "${GITHUB_ACTOR:-}" in
+              ""|*"[bot]"|grain-ci*)
+                echo "promote-release: only a person approves a release (actor=${GITHUB_ACTOR:-})" >&2
+                exit 1
+                ;;
+            esac
+            by="${GITHUB_ACTOR}"
+          fi
+          git config --global user.name "${by}"
+          git config --global user.email "${by%%@*}@users.noreply.github.com"
 
           case "${GITHUB_REF:-}" in
             refs/heads/main)
@@ -141,7 +206,7 @@ jobs:
           fi
           {
             echo "GRAIN_CI_REQUESTED_BY_KIND=human"
-            echo "GRAIN_CI_REQUESTED_BY=${GITHUB_ACTOR}"
+            echo "GRAIN_CI_REQUESTED_BY=${by}"
             echo "GRAIN_CI_RELEASE_VERSION=${INPUT_VERSION}"
             echo "GRAIN_CI_REPO=${GITHUB_REPOSITORY}"
             echo "GRAIN_CI_COMMIT=${GITHUB_SHA}"
@@ -270,18 +335,32 @@ jobs:
         env:
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           GH_REF_NAME: ${{ github.head_ref || github.ref_name }}
+          APPROVAL: ${{ inputs.approval }}
+          APPROVAL_SIGNATURE: ${{ inputs.approval_signature }}
+          APPROVED_BY: ${{ needs.approve.outputs.approved_by }}
         run: |
           set -euo pipefail
           if [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
             echo "promote-release: only a person approves a release" >&2
             exit 1
           fi
-          case "${GITHUB_ACTOR:-}" in
-            ""|*"[bot]"|grain-ci*)
-              echo "promote-release: only a person approves a release" >&2
+          if [ -n "${APPROVAL:-}${APPROVAL_SIGNATURE:-}" ]; then
+            # Dispatched by grain on a person's Inbox Approve: `approve`,
+            # in this same run, verified the signed record and names the
+            # person; without that name this job does not run as anybody.
+            if [ -z "${APPROVED_BY:-}" ]; then
+              echo "promote-release: the approval record was not verified by the approve job" >&2
               exit 1
-              ;;
-          esac
+            fi
+            echo "promote-release: publishing for ${APPROVED_BY}'s Inbox approval (dispatched as ${GITHUB_ACTOR:-})"
+          else
+            case "${GITHUB_ACTOR:-}" in
+              ""|*"[bot]"|grain-ci*)
+                echo "promote-release: only a person approves a release" >&2
+                exit 1
+                ;;
+            esac
+          fi
 
           case "${GITHUB_REF:-}" in
             refs/heads/main)
@@ -408,6 +487,12 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           GH_REF_NAME: ${{ github.head_ref || github.ref_name }}
+          APPROVAL: ${{ inputs.approval }}
+          APPROVAL_SIGNATURE: ${{ inputs.approval_signature }}
+          APPROVAL_PUBLIC_KEY: ${{ vars.GRAIN_RELEASE_APPROVAL_KEY }}
+          EXPECT_DECISION: reject
+          EXPECT_SHORT_SOAK_OK: false
+          EXPECT_ALLOW_BREAKING: false
         run: |
           set -euo pipefail
           if ! [[ "${INPUT_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -418,14 +503,22 @@ jobs:
             echo "promote-release: only workflow_dispatch by a person may reject a release" >&2
             exit 1
           fi
-          case "${GITHUB_ACTOR:-}" in
-            ""|*"[bot]"|grain-ci*)
-              echo "promote-release: only a person rejects a release (actor=${GITHUB_ACTOR:-})" >&2
-              exit 1
-              ;;
-          esac
-          git config --global user.name "${GITHUB_ACTOR}"
-          git config --global user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          if [ -n "${APPROVAL:-}${APPROVAL_SIGNATURE:-}" ]; then
+            # Dispatched by grain on a person's answer in its Inbox: the
+            # signed record names the person, whoever the actor is.
+            by="$(EXPECT_REPO="${GITHUB_REPOSITORY}" EXPECT_VERSION="${INPUT_VERSION}" bash ./scripts/verify-release-approval.sh)"
+            echo "promote-release: ${by} rejected ${INPUT_VERSION} in grain's Inbox (dispatched as ${GITHUB_ACTOR:-})"
+          else
+            case "${GITHUB_ACTOR:-}" in
+              ""|*"[bot]"|grain-ci*)
+                echo "promote-release: only a person rejects a release (actor=${GITHUB_ACTOR:-})" >&2
+                exit 1
+                ;;
+            esac
+            by="${GITHUB_ACTOR}"
+          fi
+          git config --global user.name "${by}"
+          git config --global user.email "${by%%@*}@users.noreply.github.com"
 
           case "${GITHUB_REF:-}" in
             refs/heads/main)
@@ -444,7 +537,7 @@ jobs:
           fi
           {
             echo "GRAIN_CI_REQUESTED_BY_KIND=human"
-            echo "GRAIN_CI_REQUESTED_BY=${GITHUB_ACTOR}"
+            echo "GRAIN_CI_REQUESTED_BY=${by}"
             echo "GRAIN_CI_RELEASE_VERSION=${INPUT_VERSION}"
             echo "GRAIN_CI_REPO=${GITHUB_REPOSITORY}"
             echo "GRAIN_CI_COMMIT=${GITHUB_SHA}"
@@ -488,3 +581,134 @@ jobs:
           GRAIN_API_TOKEN: ${{ secrets.GRAIN_API_TOKEN }}
           RELEASE_IMAGES: ${{ vars.RELEASE_IMAGES }}
         run: bash ./scripts/release-from-trunk.sh reject "$GRAIN_CI_RELEASE_VERSION"
+
+  rollback:
+    name: roll a promoted release back
+    if: inputs.decision == 'rollback'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+    concurrency:
+      group: ${{ github.workflow }}-rollback-${{ inputs.version }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ secrets.REPO_WRITE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Refuse anybody but a person and resolve context
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_ROLLBACK_TO: ${{ inputs.rollback_to }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          GH_REF_NAME: ${{ github.head_ref || github.ref_name }}
+          APPROVAL: ${{ inputs.approval }}
+          APPROVAL_SIGNATURE: ${{ inputs.approval_signature }}
+          APPROVAL_PUBLIC_KEY: ${{ vars.GRAIN_RELEASE_APPROVAL_KEY }}
+          EXPECT_DECISION: rollback
+          EXPECT_SHORT_SOAK_OK: false
+          EXPECT_ALLOW_BREAKING: false
+          EXPECT_REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          if ! [[ "${INPUT_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "promote-release: version must be vX.Y.Z, not ${INPUT_VERSION@Q}" >&2
+            exit 1
+          fi
+          if [ -n "${INPUT_ROLLBACK_TO:-}" ] && ! [[ "${INPUT_ROLLBACK_TO}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "promote-release: rollback_to must be empty or vX.Y.Z, not ${INPUT_ROLLBACK_TO@Q}" >&2
+            exit 1
+          fi
+          if [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
+            echo "promote-release: only workflow_dispatch by a person may roll a release back" >&2
+            exit 1
+          fi
+          if [ -n "${APPROVAL:-}${APPROVAL_SIGNATURE:-}" ]; then
+            by="$(EXPECT_REPO="${GITHUB_REPOSITORY}" EXPECT_VERSION="${INPUT_VERSION}" EXPECT_ROLLBACK_TO="${INPUT_ROLLBACK_TO:-}" bash ./scripts/verify-release-approval.sh)"
+            echo "promote-release: ${by} rolled ${INPUT_VERSION} back in grain (dispatched as ${GITHUB_ACTOR:-})"
+          else
+            case "${GITHUB_ACTOR:-}" in
+              ""|*"[bot]"|grain-ci*)
+                echo "promote-release: only a person rolls a release back (actor=${GITHUB_ACTOR:-})" >&2
+                exit 1
+                ;;
+            esac
+            by="${GITHUB_ACTOR}"
+          fi
+          git config --global user.name "${by}"
+          git config --global user.email "${by%%@*}@users.noreply.github.com"
+
+          case "${GITHUB_REF:-}" in
+            refs/heads/main)
+              is_main_ref=true
+              ;;
+            *)
+              is_main_ref=false
+              ;;
+          esac
+
+          dry_run="${INPUT_DRY_RUN:-}"
+          if [ "$is_main_ref" != "true" ]; then
+            dry_run="true"
+          elif [ -z "$dry_run" ]; then
+            dry_run="false"
+          fi
+          {
+            echo "GRAIN_CI_REQUESTED_BY_KIND=human"
+            echo "GRAIN_CI_REQUESTED_BY=${by}"
+            echo "GRAIN_CI_RELEASE_VERSION=${INPUT_VERSION}"
+            echo "RELEASE_ROLLBACK_TO=${INPUT_ROLLBACK_TO:-}"
+            echo "GRAIN_CI_REPO=${GITHUB_REPOSITORY}"
+            echo "GRAIN_CI_COMMIT=${GITHUB_SHA}"
+            echo "GRAIN_CI_REF=${GH_REF_NAME}"
+            echo "DRY_RUN=${dry_run}"
+          } >> "$GITHUB_ENV"
+
+      - name: Configure package-publish credentials
+        if: env.DRY_RUN != 'true'
+        env:
+          GHCR_PAT: ${{ secrets.GHCR_TOKEN }}
+          FALLBACK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY || 'ghcr.io' }}
+          PUBLISH_USERNAME: ${{ vars.GHCR_USERNAME || 'bwsalmon' }}
+        run: |
+          set -euo pipefail
+          token="${GHCR_PAT:-}"
+          username="${PUBLISH_USERNAME}"
+          if [ -z "$token" ]; then
+            case "${RELEASE_IMAGE_REPO}" in
+              bwsalmon/*)
+                echo "::error::GHCR_TOKEN secret is required to publish packages under ghcr.io/${RELEASE_IMAGE_REPO} from ${GITHUB_REPOSITORY}" >&2
+                exit 1
+                ;;
+              *)
+                token="${FALLBACK_TOKEN}"
+                username="${GITHUB_ACTOR}"
+                ;;
+            esac
+          fi
+          echo "::add-mask::${token}"
+          {
+            echo "PACKAGE_PUBLISH_REGISTRY=${PUBLISH_REGISTRY}"
+            echo "PACKAGE_PUBLISH_USERNAME=${username}"
+            echo "PACKAGE_PUBLISH_TOKEN=${token}"
+          } >> "$GITHUB_ENV"
+
+      - name: Retract the release a person rolled back and re-point latest
+        env:
+          RELEASE_IMAGES: ${{ vars.RELEASE_IMAGES }}
+          # Free text: only ever this step's environment, never $GITHUB_ENV,
+          # where a newline in it could set a variable for later steps.
+          RELEASE_ROLLBACK_REASON: ${{ inputs.reason }}
+        run: bash ./scripts/release-from-trunk.sh rollback --bad "$GRAIN_CI_RELEASE_VERSION"

@@ -176,3 +176,90 @@ func TestCheckSandboxBudgetSettingsCommandEmptyWhenNothingToSet(t *testing.T) {
 		}
 	}
 }
+
+// A beefy 16 vCPU / 64 GiB host with max_workers=10 whose grain and docker
+// directories sit on a small 30 GiB boot partition: 30 GiB less the 5 GiB
+// floor is 25 GiB usable, 50 GiB at 2x overcommit, and holding 1 sandbox
+// (30 GiB) back for repair leaves 20 GiB for ordinary work -- so only the
+// sole first run is admitted and a second can never start alongside it.
+func TestCheckSandboxBudgetFlagsSmallDiskRestrictingConcurrencyToOneTask(t *testing.T) {
+	const beefyHostSmallDiskJSON = `{
+		"maxWorkers": 10,
+		"sandboxDiskGbDefault": 30,
+		"sandboxDiskOvercommit": 2,
+		"sandboxDiskFloors": [
+			{"holds": ["store", "docker"], "path": "/var/lib/grain/data", "usedMB": 4096, "totalMB": 30720, "floorMB": 5120}
+		],
+		"sandboxCommitment": {
+			"workers": 10, "mergers": 2, "ciJobs": 5, "runs": 17,
+			"cpusPerSandbox": 2, "memoryMbPerSandbox": 8192, "diskGbPerSandbox": 30,
+			"hostCpus": 16, "hostMemoryMb": 65536,
+			"budget": {
+				"cpuOvercommit": 2, "memoryOvercommit": 1, "diskOvercommit": 2,
+				"reserveMemoryMb": 8192, "cpus": 28, "cpusBounded": true, "memoryMb": 57344, "memoryBounded": true
+			}
+		}
+	}`
+	v, err := CheckSandboxBudget([]byte(beefyHostSmallDiskJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.Checked || !v.Fits || !v.UnderResourced {
+		t.Fatalf("verdict = %+v, want Checked, Fits, and UnderResourced", v)
+	}
+	if v.ConfiguredWorkers != 10 || v.MaxConcurrent != 1 {
+		t.Errorf("ConfiguredWorkers = %d, MaxConcurrent = %d, want 10 and 1", v.ConfiguredWorkers, v.MaxConcurrent)
+	}
+	for _, want := range []string{
+		"one 8192 MiB sandbox fits in 57344 MiB of sandbox memory",
+		"configured for 10 workers (max_workers) while its sandbox budget restricts it to 1 task at a time",
+		"/var/lib/grain/data (30.0 GiB holding store, docker, 5.0 GiB floor, 50 GiB sandbox disk budget at 2.00x)",
+		"Move the grain data directory",
+		"Docker's data-root",
+	} {
+		if !strings.Contains(v.Detail, want) {
+			t.Errorf("Detail = %q, want it to mention %q", v.Detail, want)
+		}
+	}
+	if got, want := v.SettingsCommand(), "grain settings -max-workers 1"; got != want {
+		t.Errorf("SettingsCommand() = %q, want %q", got, want)
+	}
+
+	step := runCheckSandboxBudget(t, beefyHostSmallDiskJSON)
+	if step.Status != StepDone {
+		t.Errorf("Step.Status = %s, want %s (the host still admits a run)", step.Status, StepDone)
+	}
+	if !strings.Contains(step.Detail, "restricts it to 1 task at a time") {
+		t.Errorf("Step.Detail = %q, want concurrency warning in step detail", step.Detail)
+	}
+}
+
+func TestCheckSandboxBudgetPassesWhenDiskAndHostMatchConcurrency(t *testing.T) {
+	const beefyHostLargeDiskJSON = `{
+		"maxWorkers": 10,
+		"sandboxDiskGbDefault": 30,
+		"sandboxDiskOvercommit": 2,
+		"sandboxDiskFloors": [
+			{"holds": ["store", "docker"], "path": "/var/lib/grain/data", "usedMB": 10240, "totalMB": 204800, "floorMB": 20480}
+		],
+		"sandboxCommitment": {
+			"workers": 10, "mergers": 2, "ciJobs": 5, "runs": 17,
+			"cpusPerSandbox": 2, "memoryMbPerSandbox": 8192, "diskGbPerSandbox": 30,
+			"hostCpus": 16, "hostMemoryMb": 65536,
+			"budget": {
+				"cpuOvercommit": 2, "memoryOvercommit": 1, "diskOvercommit": 2,
+				"reserveMemoryMb": 8192, "cpus": 28, "cpusBounded": true, "memoryMb": 57344, "memoryBounded": true
+			}
+		}
+	}`
+	v, err := CheckSandboxBudget([]byte(beefyHostLargeDiskJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.Checked || !v.Fits || v.UnderResourced {
+		t.Fatalf("verdict = %+v, want Checked, Fits, and not UnderResourced", v)
+	}
+	if cmd := v.SettingsCommand(); cmd != "" {
+		t.Errorf("SettingsCommand() = %q, want empty", cmd)
+	}
+}

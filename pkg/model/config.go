@@ -930,8 +930,15 @@ type Config struct {
 	// deployment has none, and the form is drawn as it always was.
 	// Stored as JSON in one column.
 	NewTaskForm *NewTaskForm
+	// OwnerTrust is the owner-trust proposal policy
+	// (design/spec/external-cli/external-cli.spec.md#XC-17): the
+	// (owner, repo) pairs whose external agent credentials' unapproved
+	// filings queue without waiting for a person, approved by
+	// OwnerTrustPrincipal on behalf of the owner. Empty -- the default --
+	// leaves every such filing proposed. Stored as JSON in one column.
+	OwnerTrust []OwnerTrustRule
 	// CLIRun is where each agent CLI runs, keyed by framework name
-	// (claude, codex, antigravity, custom): on the host, in a per-run
+	// (claude, codex, antigravity): on the host, in a per-run
 	// container of an image, or whichever of those the host allows
 	// (cli_run.go, design/design/cli-run-location.design.md). A framework with no
 	// entry runs where the daemon's flags, and then its built-in default,
@@ -1322,10 +1329,14 @@ const (
 	AgentFrameworkAntigravity = "antigravity"
 	AgentFrameworkClaude      = "claude"
 	AgentFrameworkCodex       = "codex"
-	// AgentFrameworkCustom runs a deployment-owned executable from the
-	// checked-out state repository using docs/custom-agent-backends.md's
-	// versioned JSON protocol.
-	AgentFrameworkCustom = "custom"
+	// RemovedAgentFrameworkCustom is the framework of the retired
+	// "Custom command" connection type, which ran a deployment-owned
+	// executable as the agent. It is not a framework anyone can select
+	// or dispatch onto any more: migration 104 disables every stored
+	// connection that names it (RemovedCustomConnectionReason), and the
+	// name survives only so that row can be recognized, shown as removed
+	// and deleted.
+	RemovedAgentFrameworkCustom = "custom"
 
 	// LegacyAgentFrameworkGemini is what AgentFrameworkAntigravity used
 	// to be called, back when it named a home-grown in-process Gemini
@@ -1371,17 +1382,21 @@ type AgentBackend struct {
 	// Disabled keeps the backend configured but removes it from dispatch
 	// rotation. False is deliberately the default for existing configs.
 	Disabled bool `json:"disabled,omitempty"`
-	// Command is the executable for a custom backend. Relative paths are
-	// resolved from the deployment's checked-out state repository.
+	// DisabledReason says why grain itself disabled the connection, for
+	// one it can no longer run (RemovedCustomConnectionReason). It is ""
+	// for a connection an operator disabled.
+	DisabledReason string `json:"disabledReason,omitempty"`
+	// Command is the executable a retired custom command connection
+	// (RemovedAgentFrameworkCustom) ran. Nothing reads it; it is kept so
+	// such a connection round-trips unchanged until it is deleted.
 	Command string `json:"command,omitempty"`
 	// CLIPath is the executable a claude, codex or antigravity connection
 	// runs, overriding the deployment's -claude-path / -codex-path /
-	// -agy-path for this connection alone. It is a separate field from
-	// Command, which belongs to a custom backend and is read relative to
-	// the state repository; this one is an absolute path, or a bare name
-	// resolved on the daemon's own PATH, on the machine (or inside the
-	// container) the daemon runs in. Empty means the deployment flag, then
-	// PATH -- what every connection did before the field existed.
+	// -agy-path for this connection alone. It is an absolute path, or a
+	// bare name resolved on the daemon's own PATH, on the machine (or
+	// inside the container) the daemon runs in. Empty means the
+	// deployment flag, then PATH -- what every connection did before the
+	// field existed.
 	//
 	// Setting it is effectively "run this binary as the daemon": the
 	// daemon execs it with its own account and hands it the connection's
@@ -1459,9 +1474,8 @@ func (b AgentBackend) TurnLimits() (turnTimeout, retryCutoff time.Duration) {
 }
 
 // AgentCLIBinary is the CLI a connection of framework runs -- "claude",
-// "codex" or "agy" -- or "" for a framework with no CLI of grain's own
-// to point at (a custom command names its own). It is what CLIPath
-// overrides.
+// "codex" or "agy" -- or "" for a name that is not a framework. It is
+// what CLIPath overrides.
 func AgentCLIBinary(framework string) string {
 	switch NormalizeAgentFrameworkName(framework) {
 	case AgentFrameworkClaude:
@@ -1503,7 +1517,7 @@ type DiscoveredModels struct {
 }
 
 // DiscoversModels reports whether b's provider can be asked which
-// models it serves -- every framework but a custom command.
+// models it serves: every framework grain dispatches onto.
 func (b AgentBackend) DiscoversModels() bool {
 	switch NormalizeAgentFrameworkName(b.Framework) {
 	case AgentFrameworkAntigravity, AgentFrameworkClaude, AgentFrameworkCodex:
@@ -1572,10 +1586,9 @@ func (b AgentBackend) SupportedModels() []string {
 }
 
 // HasModels reports whether b advertises any model at all. A connection
-// that does not -- a provider that has never answered, a custom command
-// with an empty list -- has "no models -- set one", and a task that
-// would run on it waits rather than being dispatched onto a guessed
-// model name (docs/connections-and-models.md).
+// that does not -- a provider that has never answered -- has "no models
+// -- set one", and a task that would run on it waits rather than being
+// dispatched onto a guessed model name (docs/connections-and-models.md).
 func (b AgentBackend) HasModels() bool { return len(b.SupportedModels()) > 0 }
 
 // ProviderModelAuto is what agy is asked for to let it pick the model
@@ -1715,6 +1728,10 @@ func DecodeAgentBackends(v string) ([]AgentBackend, error) {
 	if err := json.Unmarshal([]byte(v), &out); err != nil {
 		return nil, fmt.Errorf("decode agent backends: %w", err)
 	}
+	// Migration 104 disabled every stored custom command connection; one
+	// that arrives some other way (a grain/config edited by hand) is
+	// read disabled too, so nothing ever dispatches onto it.
+	DisableRemovedCustomConnections(out)
 	return out, nil
 }
 
@@ -1760,7 +1777,7 @@ func NormalizeAgentFramework(v string) string {
 // third is exactly the change that would have left one of them quietly
 // rejecting a framework the others accept.
 func AgentFrameworks() []string {
-	return []string{AgentFrameworkAntigravity, AgentFrameworkClaude, AgentFrameworkCodex, AgentFrameworkCustom}
+	return []string{AgentFrameworkAntigravity, AgentFrameworkClaude, AgentFrameworkCodex}
 }
 
 // ValidAgentFramework reports whether v names a framework grain can

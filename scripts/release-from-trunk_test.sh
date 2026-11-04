@@ -73,6 +73,13 @@ else
   echo "skip the GitHub API cases: python3 or curl is not installed"
 fi
 
+# Whether setup's release.conf lets the train release a qualified rc
+# itself (RELEASE_AUTO_PROMOTE). The cases up to "auto-promote" are of the
+# person's path -- a qualified rc staged as -pending and approved -- which
+# RELEASE_AUTO_PROMOTE=false keeps for every release; the ones after it
+# turn it on, as scripts/release.conf has it.
+auto_promote=false
+
 # setup <never-promote> [<subject>...]: a fresh remote whose main is
 # c0..c4 (or c0 and a commit per subject given), v2.1.0 promoted (and
 # latest) on c0 two days ago, and a clone of it to run the train in.
@@ -85,7 +92,7 @@ setup() {
   (
     cd "$work/seed"
     mkdir scripts
-    printf 'RELEASE_MAJOR=2\nRELEASE_FLOOR_MINOR=3\nRELEASE_NEVER_PROMOTE="%s"\n' "$1" > scripts/release.conf
+    printf 'RELEASE_MAJOR=2\nRELEASE_FLOOR_MINOR=3\nRELEASE_NEVER_PROMOTE="%s"\nRELEASE_AUTO_PROMOTE=%s\n' "$1" "$auto_promote" > scripts/release.conf
     git add scripts/release.conf
     git commit -q -m c0
     GIT_COMMITTER_DATE="@$((now - 48 * 3600)) +0000" git tag -a v2.1.0 -m "Release v2.1.0"
@@ -104,6 +111,7 @@ setup() {
   git clone -q "$work/remote.git" "$work/clone"
   runs
   qualification none
+  rc_hold none
 }
 
 # tag_remote <tag> <commit> [<hours-ago>]: an annotated tag on the remote,
@@ -134,15 +142,17 @@ runs() {
   } > "$work/runs.json"
 }
 
-# qualification <none|pass|flake|infra|fail> [<commit>]: what
+# qualification <none|pass|flake|infra|fail> [<commit>] [<app>]: what
 # check-qualification reads for the rc on commit -- nightly.yml's jobs
 # (grain CI runs, one per attempt: the first runs every Stage 1 job, a
 # retry only upgrade-test, which is the one that fails) and the
-# grain/release-qualification check run.
+# grain/release-qualification check run, posted by app (grain's own,
+# grain-test, unless it names another).
 stage1_ids=(go-long staterepo-soak loadtest scalability merge-stress long-term-test long-sim postgres-stress
   tunnel-stress ui-e2e-long installer-variants vulns cmd-grain-stress upgrade-test)
 qualification() {
-  local sha="${2:-}" check=success attempts=() a id t jobs runs=() ids
+  local sha="${2:-}" app="${3:-grain-test}" app_id=42 check=success attempts=() a id t jobs runs=() ids
+  [ "$app" = grain-test ] || app_id=15368
   case "$1" in
     none) check="" ;;
     pass) attempts=(success) ;;
@@ -164,18 +174,43 @@ qualification() {
   done
   printf '{"enabled":true,"runs":[%s]}' "$(IFS=,; echo "${runs[*]}")" > "$work/qual-runs.json"
   if [ -n "$check" ]; then
-    printf '{"check_runs":[{"id":1,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"%s","started_at":"%s"}]}' \
-      "$sha" "$check" "$(iso "$now")" > "$work/qual-checks.json"
+    printf '{"check_runs":[{"id":1,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"%s","started_at":"%s","app":{"id":%s,"slug":"%s"}}]}' \
+      "$sha" "$check" "$(iso "$now")" "$app_id" "$app" > "$work/qual-checks.json"
   else
     echo '{"check_runs":[]}' > "$work/qual-checks.json"
   fi
+}
+
+# rc_hold <none|held|completed> [<commit>] [<summary>]: what rc_hold_summary
+# reads for the dropped rc on commit.
+rc_hold() {
+  local sha="${2:-}" summary="${3:-v2.3.0-rc.2 is held until these blockers of v2.3.0-rc.1 land: task 101.}"
+  case "$1" in
+    none)
+      echo '{"check_runs":[]}' > "$work/hold-checks.json"
+      ;;
+    held)
+      jq -cn --arg sha "$sha" --arg s "$summary" --arg t "$(iso $((now - 300)))" \
+        '{check_runs:[{id:1,name:"grain/rc-hold",head_sha:$sha,status:"in_progress",started_at:$t,output:{title:"Holding v2.3.0-rc.2",summary:$s},app:{id:42,slug:"grain-test"}}]}' \
+        > "$work/hold-checks.json"
+      ;;
+    completed)
+      jq -cn --arg sha "$sha" --arg t1 "$(iso $((now - 600)))" --arg t2 "$(iso $((now - 60)))" \
+        '{check_runs:[
+          {id:1,name:"grain/rc-hold",head_sha:$sha,status:"in_progress",started_at:$t1,output:{title:"Holding v2.3.0-rc.2",summary:"held earlier"},app:{id:42,slug:"grain-test"}},
+          {id:2,name:"grain/rc-hold",head_sha:$sha,status:"completed",conclusion:"success",started_at:$t2,output:{title:"Blockers landed",summary:"Every blocker landed."},app:{id:42,slug:"grain-test"}}
+        ]}' > "$work/hold-checks.json"
+      ;;
+  esac
 }
 
 train() { # train [VAR=value...]: run the train in the clone
   status=0
   out="$(cd "$work/clone" && env RELEASE_RUNS_JSON="$work/runs.json" \
     RELEASE_QUALIFICATION_RUNS_JSON="$work/qual-runs.json" RELEASE_QUALIFICATION_CHECKS_JSON="$work/qual-checks.json" \
-    RELEASE_IMAGES="$work/images.sh" RELEASE_NOTES_TASK=off RELEASE_NOW="$now" "$@" bash "$train" 2>&1)" || status=$?
+    RELEASE_HOLD_CHECKS_JSON="$work/hold-checks.json" \
+    RELEASE_IMAGES="$work/images.sh" RELEASE_NOTES_TASK=off RELEASE_NOW="$now" RELEASE_QUALIFICATION_APP=grain-test \
+    "$@" bash "$train" 2>&1)" || status=$?
 }
 
 remote_tag() { git -C "$work/remote.git" rev-parse -q --verify "refs/tags/$1^{commit}" 2>/dev/null || true; }
@@ -196,6 +231,7 @@ expect() { # expect <case> <condition-description> <test-command...>
 }
 eq() { [ "$1" = "$2" ]; }
 has() { [[ "$out" == *"$1"* ]]; }
+no_line() { ! grep -q "$1" "$2"; }
 images_were() { [ "$(paste -sd'|' "$work/images.log")" = "$1" ]; }
 
 # --- the first cut from trunk ---
@@ -226,6 +262,7 @@ qualification flake "$c3"
 train RELEASE_TRAIN_OUTPUT="$work/train.out"
 expect "flake" "exits 0" eq "$status" 0
 expect "flake" "asks for the one retry" grep -qxF "qualification_rerun=nightly:upgrade-test:flake" "$work/train.out"
+expect "flake" "names the rc to re-run it on" grep -qxF "qualifying_rc=v2.3.0-rc.1" "$work/train.out"
 expect "flake" "drops nothing" eq "$(remote_tag v2.3.0-rc.1-discarded)" ""
 
 # --- infra: re-run, never red ---
@@ -360,6 +397,144 @@ expect "nothing newer" "exits 0" eq "$status" 0
 expect "nothing newer" "says there is nothing to cut" has "no new LKG commit on main since ${c3:0:12}; nothing to cut"
 expect "nothing newer" "cuts no rc.2 on an older green commit" eq "$(remote_tag v2.3.0-rc.2)" ""
 expect "nothing newer" "only marks the dropped rc" images_were "discard-rc v2.3.0-rc.1"
+
+# --- grain/rc-hold: held while open, released after completion, absent cuts ---
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+git -C "$work/seed" push -q --force origin "$c2:refs/heads/candidate"
+qualification fail "$c2"
+rc_hold held "$c2" "v2.3.0-rc.2 is held until these blockers of v2.3.0-rc.1 land: task 101."
+runs "$c2" "$c3"
+: > "$work/images.log"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "rc-hold, held" "exits 0" eq "$status" 0
+expect "rc-hold, held" "drops rc.1 in phase 1" eq "$(remote_tag v2.3.0-rc.1-discarded)" "$c2"
+expect "rc-hold, held" "says rc.2 is held with its summary" \
+  has "phase 2: v2.3.0-rc.2 is held by grain/rc-hold on ${c2:0:12}: v2.3.0-rc.2 is held until these blockers of v2.3.0-rc.1 land: task 101."
+expect "rc-hold, held" "emits rc_held=v2.3.0-rc.2" grep -qxF "rc_held=v2.3.0-rc.2" "$work/train.out"
+expect "rc-hold, held" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+expect "rc-hold, held" "leaves candidate on rc.1" eq "$(remote_candidate)" "$c2"
+expect "rc-hold, held" "only marks rc.1 discarded" images_were "discard-rc v2.3.0-rc.1"
+
+# Still held on a later run (already discarded), even if another app posts a
+# completed check run of the same name.
+jq -cn --arg sha "$c2" --arg t1 "$(iso $((now - 300)))" --arg t2 "$(iso $((now - 60)))" \
+  '{check_runs:[
+    {id:1,name:"grain/rc-hold",head_sha:$sha,status:"in_progress",started_at:$t1,output:{title:"Holding v2.3.0-rc.2",summary:"still waiting on task 101"},app:{id:42,slug:"grain-test"}},
+    {id:2,name:"grain/rc-hold",head_sha:$sha,status:"completed",conclusion:"success",started_at:$t2,output:{title:"Done",summary:"forged"},app:{id:15368,slug:"github-actions"}}
+  ]}' > "$work/hold-checks.json"
+: > "$work/images.log"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "rc-hold, foreign completion" "exits 0" eq "$status" 0
+expect "rc-hold, foreign completion" "still held by grain's check" \
+  has "phase 2: v2.3.0-rc.2 is held by grain/rc-hold on ${c2:0:12}: still waiting on task 101"
+expect "rc-hold, foreign completion" "emits rc_held=v2.3.0-rc.2" grep -qxF "rc_held=v2.3.0-rc.2" "$work/train.out"
+expect "rc-hold, foreign completion" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+expect "rc-hold, foreign completion" "publishes nothing" images_were ""
+
+# Blockers land: the newest grain/rc-hold check completes, so rc.2 is cut.
+rc_hold completed "$c2"
+: > "$work/images.log"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "rc-hold, completed" "exits 0" eq "$status" 0
+expect "rc-hold, completed" "cuts rc.2 once completed" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
+expect "rc-hold, completed" "moves candidate onto rc.2" eq "$(remote_candidate)" "$c3"
+expect "rc-hold, completed" "publishes rc.2" images_were "rc v2.3.0-rc.2"
+expect "rc-hold, completed" "emits no rc_held" no_line '^rc_held=' "$work/train.out"
+
+# Absent: no grain/rc-hold check run at all means no hold.
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+tag_remote v2.3.0-rc.1-discarded "$c2" 2
+rc_hold none
+runs "$c2" "$c3"
+: > "$work/images.log"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "rc-hold, absent" "exits 0" eq "$status" 0
+expect "rc-hold, absent" "cuts rc.2 with no hold check" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
+expect "rc-hold, absent" "publishes rc.2" images_were "rc v2.3.0-rc.2"
+expect "rc-hold, absent" "emits no rc_held" no_line '^rc_held=' "$work/train.out"
+
+# No token and no file: the hold cannot be read, and the train says so
+# rather than passing over it in silence.
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+tag_remote v2.3.0-rc.1-discarded "$c2" 2
+runs "$c2" "$c3"
+train RELEASE_HOLD_CHECKS_JSON= GITHUB_TOKEN= GH_TOKEN=
+expect "rc-hold, no token" "exits 0" eq "$status" 0
+expect "rc-hold, no token" "says it has no grain/rc-hold to read" has "no GitHub token, so no grain/rc-hold check run to read on ${c2:0:12}"
+expect "rc-hold, no token" "cuts rc.2" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
+
+# Hardening: RELEASE_QUALIFICATION_APP unset refuses rather than trust a foreign
+# completion, numeric app id matches, whitespace-only summary still holds, and a
+# malformed check-run response fails closed.
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+tag_remote v2.3.0-rc.1-discarded "$c2" 2
+runs "$c2" "$c3"
+jq -cn --arg sha "$c2" --arg t1 "$(iso $((now - 300)))" --arg t2 "$(iso $((now - 60)))" \
+  '{check_runs:[
+    {id:1,name:"grain/rc-hold",head_sha:$sha,status:"in_progress",started_at:$t1,output:{title:"Holding v2.3.0-rc.2",summary:"waiting on task 101"},app:{id:42,slug:"grain-test"}},
+    {id:2,name:"grain/rc-hold",head_sha:$sha,status:"completed",conclusion:"success",started_at:$t2,output:{title:"Done",summary:"forged"},app:{id:15368,slug:"github-actions"}}
+  ]}' > "$work/hold-checks.json"
+: > "$work/images.log"
+train RELEASE_QUALIFICATION_APP=
+expect "rc-hold, no app configured" "exits 1" eq "$status" 1
+expect "rc-hold, no app configured" "says why" has "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted"
+expect "rc-hold, no app configured" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+expect "rc-hold, no app configured" "publishes nothing" images_were ""
+
+jq -cn --arg sha "$c2" --arg t "$(iso $((now - 300)))" \
+  '{check_runs:[{id:1,name:"grain/rc-hold",head_sha:$sha,status:"in_progress",started_at:$t,output:{title:"Holding v2.3.0-rc.2",summary:"  \n\t  "},app:{id:42,slug:"grain-test"}}]}' \
+  > "$work/hold-checks.json"
+: > "$work/train.out"
+train RELEASE_QUALIFICATION_APP=42 RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "rc-hold, whitespace summary & numeric app" "exits 0" eq "$status" 0
+expect "rc-hold, whitespace summary & numeric app" "falls back to title instead of skipping hold" \
+  has "phase 2: v2.3.0-rc.2 is held by grain/rc-hold on ${c2:0:12}: Holding v2.3.0-rc.2"
+expect "rc-hold, whitespace summary & numeric app" "emits rc_held=v2.3.0-rc.2" grep -qxF "rc_held=v2.3.0-rc.2" "$work/train.out"
+expect "rc-hold, whitespace summary & numeric app" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+
+echo '{"message":"bad gateway"}' > "$work/hold-checks.json"
+train
+expect "rc-hold, malformed json" "exits 1" eq "$status" 1
+expect "rc-hold, malformed json" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+
+# --- a same-named check run from another app qualifies nothing ---
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+git -C "$work/seed" push -q --force origin "$c2:refs/heads/candidate"
+qualification pass "$c2" github-actions
+runs "$c2" "$c4"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "foreign check run" "exits 0" eq "$status" 0
+expect "foreign check run" "says it ignored it" has "IGNORED grain/release-qualification: 1 from github-actions, not grain-test"
+expect "foreign check run" "still waits for grain's own" has "Qualification: PENDING"
+expect "foreign check run" "stages no release" eq "$(remote_tag v2.3.0-pending)" ""
+expect "foreign check run" "publishes nothing" images_were ""
+qualification pass "$c2"
+train RELEASE_QUALIFICATION_APP=
+expect "no app configured" "exits 1" eq "$status" 1
+expect "no app configured" "says why" has "CHECK_QUALIFICATION_APP is unset"
+expect "no app configured" "stages no release" eq "$(remote_tag v2.3.0-pending)" ""
+
+# --- a hand-cut rc.1 of the next version still waits out the interval ---
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+git -C "$work/seed" push -q --force origin "$c2:refs/heads/candidate"
+tag_remote v2.4.0-rc.1 "$c3" 1
+qualification pass "$c2"
+runs "$c2" "$c4"
+train
+expect "hand-cut next rc.1" "exits 0" eq "$status" 0
+expect "hand-cut next rc.1" "still waits RELEASE_MIN_INTERVAL_MINUTES" has "under RELEASE_MIN_INTERVAL_MINUTES (120)"
+expect "hand-cut next rc.1" "so cuts no v2.4.0-rc.2 inside it" eq "$(remote_tag v2.4.0-rc.2)" ""
 
 # --- qualification passes: staged as a pending release ---
 setup ""
@@ -706,14 +881,81 @@ if [ -n "$api" ]; then
     printf ',{"run_id":7,"run_attempt":2,"workflow_name":"nightly","head_sha":"%s","name":"govulncheck","status":"completed","conclusion":"success","created_at":"%s"}' "$c2" "$(iso $((now - 1800)))"
     printf ']}'
   } > "$work/www/gh/repos/o/r/actions/runs/7/jobs"
-  printf '{"check_runs":[{"id":9,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"success","started_at":"%s"}]}' \
+  printf '{"check_runs":[{"id":9,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"success","started_at":"%s","app":{"id":42,"slug":"grain-test"}}]}' \
     "$c2" "$(iso $((now - 600)))" > "$work/www/gh/repos/o/r/commits/$c2/check-runs"
   : > "$work/images.log"
-  train RELEASE_RUNS_JSON= RELEASE_QUALIFICATION_RUNS_JSON= RELEASE_QUALIFICATION_CHECKS_JSON= GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$api/gh"
+  train RELEASE_RUNS_JSON= RELEASE_QUALIFICATION_RUNS_JSON= RELEASE_QUALIFICATION_CHECKS_JSON= RELEASE_HOLD_CHECKS_JSON= GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$api/gh"
   expect "github actions, qualified" "exits 0" eq "$status" 0
   expect "github actions, qualified" "reads the retried job as a flake" has "PASS vulns: passed on its one retry (failure,success): a flake"
   expect "github actions, qualified" "stages the release" eq "$(remote_tag v2.3.0-pending)" "$c2"
+
+  # Reading commits/<floor>/check-runs for grain/rc-hold over GitHub's API.
+  setup ""
+  tag_remote v2.3.0-rc.1 "$c2" 3
+  tag_remote v2.3.0-rc.1-discarded "$c2" 2
+  github_runs "$c3"
+  mkdir -p "$work/www/gh/repos/o/r/commits/$c2"
+  printf '{"check_runs":[{"id":11,"name":"grain/rc-hold","head_sha":"%s","status":"in_progress","started_at":"%s","output":{"title":"Holding v2.3.0-rc.2","summary":"waiting on task 55"},"app":{"id":42,"slug":"grain-test"}}]}' \
+    "$c2" "$(iso $((now - 300)))" > "$work/www/gh/repos/o/r/commits/$c2/check-runs"
+  : > "$work/train.out"
+  train RELEASE_RUNS_JSON= RELEASE_HOLD_CHECKS_JSON= RELEASE_TRAIN_OUTPUT="$work/train.out" GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$api/gh"
+  expect "github actions, rc-hold" "exits 0" eq "$status" 0
+  expect "github actions, rc-hold" "holds rc.2 over HTTP" has "phase 2: v2.3.0-rc.2 is held by grain/rc-hold on ${c2:0:12}: waiting on task 55"
+  expect "github actions, rc-hold" "emits rc_held" grep -qxF "rc_held=v2.3.0-rc.2" "$work/train.out"
+  expect "github actions, rc-hold" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+  printf '{"check_runs":[{"id":11,"name":"grain/rc-hold","head_sha":"%s","status":"completed","conclusion":"success","started_at":"%s","app":{"id":42,"slug":"grain-test"}}]}' \
+    "$c2" "$(iso $((now - 60)))" > "$work/www/gh/repos/o/r/commits/$c2/check-runs"
+  train RELEASE_RUNS_JSON= RELEASE_HOLD_CHECKS_JSON= GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$api/gh"
+  expect "github actions, rc-hold completed" "cuts rc.2 once completed" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
+
+  # Flooding commits/<floor>/check-runs with 100 foreign runs per page fails closed
+  # instead of dropping grain's hold off the end of page 1.
+  setup ""
+  tag_remote v2.3.0-rc.1 "$c2" 3
+  tag_remote v2.3.0-rc.1-discarded "$c2" 2
+  github_runs "$c3"
+  mkdir -p "$work/www/gh/repos/o/r/commits/$c2"
+  jq -cn --arg sha "$c2" --arg t "$(iso $((now - 60)))" \
+    '{check_runs: [range(1; 101) | {id: ., name: "grain/rc-hold", head_sha: $sha, status: "completed", conclusion: "success", started_at: $t, app: {id: 15368, slug: "github-actions"}}]}' \
+    > "$work/www/gh/repos/o/r/commits/$c2/check-runs"
+  train RELEASE_RUNS_JSON= RELEASE_HOLD_CHECKS_JSON= RELEASE_GITHUB_PAGES=1 GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$api/gh"
+  expect "github actions, rc-hold flooded" "exits 1 rather than fail open" eq "$status" 1
+  expect "github actions, rc-hold flooded" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
 fi
+
+# --- the task train (.grain/templates/release-train.yml): no GitHub token,
+# its files written by `grain ci list --format github-jobs` and `grain ci
+# checks --format github` in GitHub's shapes, the trusted App taken from
+# the checks answer's grain_app ---
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+git -C "$work/seed" push -q --force origin "$c2:refs/heads/candidate"
+runs "$c2" "$c4"
+{
+  printf '{"total_count":15,"jobs":['
+  first=1
+  for name in "go, shuffled and repeated (1)" "state repository soak" "sustained load" "metadata and model scalability" \
+    "merge liveness stress" "end-to-end long term tests" "long randomized cluster simulation" "postgres concurrency and stress" \
+    "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "installer trixie and hostmode" "govulncheck" \
+    "pkg/cli stress under load" "upgrade from previous versions"; do
+    [ $first = 1 ] || printf ','
+    first=0
+    printf '{"id":%s,"run_id":7,"run_attempt":1,"workflow_name":"nightly","head_sha":"%s","name":"%s","status":"completed","conclusion":"%s","created_at":"%s","started_at":null,"completed_at":null}' \
+      "${#name}" "$c2" "$name" "$([ "$name" = govulncheck ] && echo failure || echo success)" "$(iso $((now - 3600)))"
+  done
+  printf ',{"id":99,"run_id":7,"run_attempt":2,"workflow_name":"nightly","head_sha":"%s","name":"govulncheck","status":"completed","conclusion":"success","created_at":"%s","started_at":null,"completed_at":null}' "$c2" "$(iso $((now - 1800)))"
+  printf ']}'
+} > "$work/qual-runs.json"
+printf '{"total_count":2,"check_runs":[{"id":9,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"success","started_at":"%s","completed_at":null,"app":{"slug":"grain-forge"}},{"id":10,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"failure","started_at":"%s","completed_at":null,"app":{"slug":"github-actions"}}],"grain_app":"grain-forge"}\n' \
+  "$c2" "$(iso $((now - 600)))" "$c2" "$(iso $((now - 300)))" > "$work/qual-checks.json"
+: > "$work/images.log"
+train RELEASE_CI_SOURCE=grain RELEASE_PUSH_GRANT=train GITHUB_TOKEN= GH_TOKEN= \
+  RELEASE_QUALIFICATION_APP="$(jq -r '.grain_app // empty' "$work/qual-checks.json")"
+expect "task train, qualified" "exits 0" eq "$status" 0
+expect "task train, qualified" "reads the retried job as a flake" has "PASS vulns: passed on its one retry (failure,success): a flake"
+expect "task train, qualified" "trusts grain's App alone" has "IGNORED grain/release-qualification: 1 from github-actions, not grain-forge"
+expect "task train, qualified" "stages the release" eq "$(remote_tag v2.3.0-pending)" "$c2"
+expect "task train, qualified" "pushes no v2.3.0" eq "$(remote_tag v2.3.0)" ""
 
 setup ""
 train RELEASE_RUNS_JSON= RELEASE_CI_SOURCE=github
@@ -746,8 +988,302 @@ expect "dry run" "publishes nothing" images_were ""
 expect "dry run" "leaves no local rc tag behind" eq "$(git -C "$work/clone" tag -l 'v2.3.0-rc.*')" ""
 expect "dry run" "writes no user.name into .git/config" eq "$(git -C "$work/clone" config --local --get user.name || true)" ""
 expect "dry run" "writes no user.email into .git/config" eq "$(git -C "$work/clone" config --local --get user.email || true)" ""
+expect "dry run" "cuts v2.3.0-rc.1" has "phase 2: cutting v2.3.0-rc.1 on ${c3:0:12}"
+train DRY_RUN=true
+expect "dry run, again" "exits 0" eq "$status" 0
+expect "dry run, again" "cuts the same rc, not reading the first one's as soaking" has "phase 2: cutting v2.3.0-rc.1 on ${c3:0:12}"
+expect "dry run, again" "leaves no local rc tag behind" eq "$(git -C "$work/clone" tag -l 'v2.3.0-rc.*')" ""
 train
 expect "a real run" "writes no identity into .git/config either" eq "$(git -C "$work/clone" config --local --get user.name || true)" ""
+
+# --- approve promotes only a commit on main or release/vX.Y.Z ---
+setup ""
+(
+  cd "$work/seed"
+  git checkout -q -b side "$c1"
+  git commit -q --allow-empty -m "not on main"
+  git push -q origin side
+  git checkout -q main
+)
+side="$(git -C "$work/seed" rev-parse side)"
+tag_remote v2.3.0-rc.1 "$side"
+(
+  cd "$work/seed"
+  git tag -a v2.3.0-pending "$side" -m "Release v2.3.0 pending approval" -m "Qualification: PASS"
+  git push -q origin refs/tags/v2.3.0-pending
+)
+: > "$work/images.log"
+approve approve v2.3.0 GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=alice@example.com
+expect "pending off main" "is refused" eq "$status" 1
+expect "pending off main" "says why" has "which is on neither main nor release/v2.3.0"
+expect "pending off main" "tags no v2.3.0" eq "$(remote_tag v2.3.0)" ""
+expect "pending off main" "leaves latest on v2.1.0" eq "$(remote_tag latest)" "$c0"
+expect "pending off main" "publishes nothing" images_were ""
+
+# --- the release train's tag grant (RELEASE_PUSH_GRANT=train, playbook 0.4) ---
+setup ""
+runs "$c3"
+train RELEASE_PUSH_GRANT=train
+expect "tag grant" "exits 0" eq "$status" 0
+expect "tag grant" "cuts v2.3.0-rc.1" eq "$(remote_tag v2.3.0-rc.1)" "$c3"
+expect "tag grant" "force-moves candidate" eq "$(remote_candidate)" "$c3"
+
+approve approve v2.3.0 RELEASE_PUSH_GRANT=train GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=alice@example.com
+expect "tag grant, approve" "is refused" eq "$status" 2
+expect "tag grant, approve" "says it is the approval's run" has "approve needs the approval's own run"
+approve reject v2.3.0 RELEASE_PUSH_GRANT=train GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=alice@example.com
+expect "tag grant, reject" "is refused" eq "$status" 2
+
+train RELEASE_PUSH_GRANT=everything
+expect "tag grant, unknown" "is refused" has "RELEASE_PUSH_GRANT is everything, not train"
+
+# A train that tried to push a promotion's ref is refused before the push,
+# with or without the grant: a copy of the script whose cut pushes latest,
+# v2.3.0 or main instead of the rc tag.
+mutant() { # mutant <ref> [VAR=value...]: run a train whose rc push is the LKG to <ref>
+  local ref="$1"
+  shift
+  mkdir -p "$work/mutant"
+  cp "$(dirname "$train")/candidate-gate.sh" "$work/mutant/"
+  sed "s|push \"refs/tags/\$new_rc\"|push --force \"\$lkg:$ref\"|" "$train" > "$work/mutant/release-from-trunk.sh"
+  grep -qF "push --force \"\$lkg:$ref\"" "$work/mutant/release-from-trunk.sh" || { echo "mutant: the rc push was not found"; exit 1; }
+  status=0
+  out="$(cd "$work/clone" && env RELEASE_RUNS_JSON="$work/runs.json" \
+    RELEASE_QUALIFICATION_RUNS_JSON="$work/qual-runs.json" RELEASE_QUALIFICATION_CHECKS_JSON="$work/qual-checks.json" \
+    RELEASE_IMAGES="$work/images.sh" RELEASE_NOTES_TASK=off RELEASE_NOW="$now" "$@" bash "$work/mutant/release-from-trunk.sh" 2>&1)" || status=$?
+}
+for grant in "" train; do
+  for ref in refs/tags/latest refs/tags/v2.3.0; do
+    setup ""
+    runs "$c3"
+    mutant "$ref" RELEASE_PUSH_GRANT="$grant"
+    expect "train pushing $ref${grant:+ (grant)}" "exits 1" eq "$status" 1
+    expect "train pushing $ref${grant:+ (grant)}" "says why" has "the train never pushes $ref"
+    expect "train pushing $ref${grant:+ (grant)}" "leaves latest on v2.1.0" eq "$(remote_tag latest)" "$c0"
+    expect "train pushing $ref${grant:+ (grant)}" "pushes no v2.3.0" eq "$(remote_tag v2.3.0)" ""
+    expect "train pushing $ref${grant:+ (grant)}" "moves no candidate" eq "$(remote_candidate)" ""
+  done
+done
+setup ""
+runs "$c3"
+mutant refs/heads/main RELEASE_PUSH_GRANT=train
+expect "grant pushing main" "exits 1" eq "$status" 1
+expect "grant pushing main" "says it is outside the grant" has "refs/heads/main is outside the release train's tag grant"
+expect "grant pushing main" "leaves main where it was" eq "$(git -C "$work/remote.git" rev-parse refs/heads/main)" "$c4"
+
+# --- auto-promote: the continuous train releases a qualified rc itself ---
+# (design/playbook/releases.playbook.md section 1): from here on,
+# release.conf has RELEASE_AUTO_PROMOTE=true, as scripts/release.conf does.
+auto_promote=true
+
+# qualified_rc <rc> <commit>: the rc cut 3h ago, candidate on it, and
+# both stages passed.
+qualified_rc() {
+  tag_remote "$1" "$2" 3
+  git -C "$work/seed" push -q --force origin "$2:refs/heads/candidate"
+  qualification pass "$2"
+}
+
+# pass -> vX.Y.Z and latest, under the train's own tag grant.
+setup ""
+qualified_rc v2.3.0-rc.1 "$c2"
+runs "$c2" "$c4"
+: > "$work/train.out"
+train RELEASE_PUSH_GRANT=train RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "auto-promote" "exits 0" eq "$status" 0
+expect "auto-promote" "tags v2.3.0 on the rc's own commit" eq "$(remote_tag v2.3.0)" "$c2"
+expect "auto-promote" "moves latest onto it" eq "$(remote_tag latest)" "$c2"
+expect "auto-promote" "stages no -pending" eq "$(remote_tag v2.3.0-pending)" ""
+expect "auto-promote" "promotes its images" images_were "promote v2.3.0"
+expect "auto-promote" "outputs the release" grep -qxF "promoted_version=v2.3.0" "$work/train.out"
+expect "auto-promote" "then waits the interval before v2.4.0-rc.1" eq "$(remote_tag v2.4.0-rc.1)" ""
+out="$(git -C "$work/remote.git" for-each-ref --format='%(contents)' refs/tags/v2.3.0)"
+expect "auto-promote" "the release tag names its rc" has "Promoted-From: v2.3.0-rc.1"
+expect "auto-promote" "and records the qualification" has "Qualification: PASS"
+
+# publish-release.yml's check of the tag before it publishes anything.
+verify() { # verify <version> [VAR=value...]
+  local v="$1"
+  shift
+  status=0
+  out="$(cd "$work/clone" && env RELEASE_QUALIFICATION_RUNS_JSON="$work/qual-runs.json" \
+    RELEASE_QUALIFICATION_CHECKS_JSON="$work/qual-checks.json" RELEASE_QUALIFICATION_APP=grain-test \
+    RELEASE_IMAGES="$work/images.sh" "$@" bash "$train" verify "$v" 2>&1)" || status=$?
+}
+verify v2.3.0
+expect "verify, the train's release" "exits 0" eq "$status" 0
+expect "verify, the train's release" "names the rc" has "v2.3.0 is the train's release of v2.3.0-rc.1"
+verify v2.1.0
+expect "verify, not the train's" "exits 4" eq "$status" 4
+qualification fail "$c2"
+verify v2.3.0
+expect "verify, no longer qualified" "exits 1" eq "$status" 1
+expect "verify, no longer qualified" "says so" has "does not pass qualification now"
+qualification pass "$c2"
+(
+  cd "$work/seed"
+  git tag -a v2.7.0 "$c3" -m "Release v2.7.0" -m "Qualification: PASS" -m "Promoted-From: v2.7.0-rc.1"
+  git tag -a v2.7.0-rc.1 "$c2" -m rc
+  git push -q origin refs/tags/v2.7.0 refs/tags/v2.7.0-rc.1
+)
+verify v2.7.0
+expect "verify, forged" "exits 1" eq "$status" 1
+expect "verify, forged" "says the commits differ" has "is not on v2.7.0-rc.1's commit"
+git -C "$work/seed" push -q origin :refs/tags/v2.7.0 :refs/tags/v2.7.0-rc.1
+git -C "$work/clone" tag -d v2.7.0 v2.7.0-rc.1 >/dev/null
+# A qualified rc the train would have staged for a person is not published,
+# however its tag reads: the train's grant reaches any vM.Y.0 on main.
+verify v2.3.0 RELEASE_AUTO_PROMOTE=false
+expect "verify, auto-promote off" "exits 1" eq "$status" 1
+expect "verify, auto-promote off" "says why" has "RELEASE_AUTO_PROMOTE is false"
+verify v2.3.0 RELEASE_NEVER_PROMOTE=v2.3.0
+expect "verify, never promote" "exits 1" eq "$status" 1
+expect "verify, never promote" "publishes nothing" has "v2.3.0 is not published"
+expect "verify, refused" "puts the local tag back" eq "$(git -C "$work/clone" rev-parse -q --verify 'refs/tags/v2.3.0^{commit}')" "$c2"
+(
+  cd "$work/seed"
+  git tag -a v3.0.0 "$c2" -m "Release v3.0.0" -m "Qualification: PASS" -m "Promoted-From: v3.0.0-rc.1"
+  git tag -a v3.0.0-rc.1 "$c2" -m rc
+  git push -q origin refs/tags/v3.0.0 refs/tags/v3.0.0-rc.1
+)
+verify v3.0.0
+expect "verify, a major bump" "exits 1" eq "$status" 1
+expect "verify, a major bump" "says why" has "may not release v3.0.0-rc.1 as v3.0.0 itself"
+verify v3.0.0 RELEASE_MAJOR=3
+expect "verify, a major bump RELEASE_MAJOR asks for" "exits 1" eq "$status" 1
+expect "verify, a major bump RELEASE_MAJOR asks for" "says why" has "first release of major 3"
+git -C "$work/seed" push -q origin :refs/tags/v3.0.0 :refs/tags/v3.0.0-rc.1
+git -C "$work/clone" tag -d v3.0.0 v3.0.0-rc.1 >/dev/null
+
+# The next run, the interval over: the next minor's rc.1 after the release.
+: > "$work/images.log"
+train RELEASE_PUSH_GRANT=train RELEASE_MIN_INTERVAL_MINUTES=0
+expect "auto-promote, next" "exits 0" eq "$status" 0
+expect "auto-promote, next" "targets v2.4.0 after v2.3.0" has "newest promoted release v2.3.0"
+expect "auto-promote, next" "cuts v2.4.0-rc.1 past the release" eq "$(remote_tag v2.4.0-rc.1)" "$c4"
+expect "auto-promote, next" "moves no release" eq "$(remote_tag latest)" "$c2"
+
+# fail -> -discarded -> rc.2 -> pass -> released: the continuous cycle.
+setup ""
+qualified_rc v2.3.0-rc.1 "$c2"
+qualification fail "$c2"
+runs "$c2" "$c3"
+: > "$work/images.log"
+train RELEASE_PUSH_GRANT=train
+expect "auto cycle, red" "exits 0" eq "$status" 0
+expect "auto cycle, red" "drops rc.1" eq "$(remote_tag v2.3.0-rc.1-discarded)" "$c2"
+expect "auto cycle, red" "cuts rc.2 on the next green commit" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
+expect "auto cycle, red" "releases nothing" eq "$(remote_tag v2.3.0)" ""
+expect "auto cycle, red" "leaves latest on v2.1.0" eq "$(remote_tag latest)" "$c0"
+qualification pass "$c3"
+: > "$work/images.log"
+train RELEASE_PUSH_GRANT=train
+expect "auto cycle, green" "exits 0" eq "$status" 0
+expect "auto cycle, green" "releases rc.2 as v2.3.0" eq "$(remote_tag v2.3.0)" "$c3"
+expect "auto cycle, green" "moves latest onto rc.2" eq "$(remote_tag latest)" "$c3"
+expect "auto cycle, green" "promotes its images" images_were "promote v2.3.0"
+
+# RELEASE_NEVER_PROMOTE naming the rc drops it; naming the version skips it.
+setup "v2.3.0-rc.1"
+qualified_rc v2.3.0-rc.1 "$c2"
+runs "$c2" "$c3"
+train
+expect "auto, never-promote rc" "exits 0" eq "$status" 0
+expect "auto, never-promote rc" "releases nothing" eq "$(remote_tag v2.3.0)" ""
+expect "auto, never-promote rc" "drops the rc" eq "$(remote_tag v2.3.0-rc.1-discarded)" "$c2"
+expect "auto, never-promote rc" "leaves latest on v2.1.0" eq "$(remote_tag latest)" "$c0"
+setup "v2.3.0"
+qualified_rc v2.3.0-rc.1 "$c2"
+runs "$c2" "$c3"
+train
+expect "auto, never-promote version" "exits 0" eq "$status" 0
+expect "auto, never-promote version" "releases no v2.3.0" eq "$(remote_tag v2.3.0)" ""
+expect "auto, never-promote version" "leaves latest on v2.1.0" eq "$(remote_tag latest)" "$c0"
+expect "auto, never-promote version" "targets v2.4.0 instead" has "next minor v2.4.0"
+
+# RELEASE_AUTO_PROMOTE=false (the environment over release.conf): staged.
+setup ""
+qualified_rc v2.3.0-rc.1 "$c2"
+train RELEASE_AUTO_PROMOTE=false
+expect "auto off" "exits 0" eq "$status" 0
+expect "auto off" "releases nothing" eq "$(remote_tag v2.3.0)" ""
+expect "auto off" "stages v2.3.0-pending for a person" eq "$(remote_tag v2.3.0-pending)" "$c2"
+expect "auto off" "says why" has "the train does not release it itself: RELEASE_AUTO_PROMOTE is false"
+train RELEASE_AUTO_PROMOTE=maybe
+expect "auto, unknown" "is refused" has "RELEASE_AUTO_PROMOTE is \"maybe\", not true or false"
+
+# A major bump never releases itself: v3.0.0 is staged for a person.
+setup ""
+qualified_rc v3.0.0-rc.1 "$c2"
+: > "$work/train.out"
+train RELEASE_MAJOR=3 RELEASE_FLOOR_MINOR=0 RELEASE_PUSH_GRANT=train RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "auto, major bump" "exits 0" eq "$status" 0
+expect "auto, major bump" "releases no v3.0.0" eq "$(remote_tag v3.0.0)" ""
+expect "auto, major bump" "leaves latest on v2.1.0" eq "$(remote_tag latest)" "$c0"
+expect "auto, major bump" "stages v3.0.0-pending" eq "$(remote_tag v3.0.0-pending)" "$c2"
+expect "auto, major bump" "says a person releases it" has "first release of major 3, and a major bump is a person's to release"
+expect "auto, major bump" "outputs the block" grep -q "^promotion_blocked=" "$work/train.out"
+
+# Breaking changes (release-notes.sh check-breaking) never release themselves.
+setup "" "fix: one" "feat!: drop the v1 API" "fix: two"
+qualified_rc v2.3.0-rc.1 "$c3"
+train
+expect "auto, breaking" "exits 0" eq "$status" 0
+expect "auto, breaking" "releases no v2.3.0" eq "$(remote_tag v2.3.0)" ""
+expect "auto, breaking" "stages it for a person" eq "$(remote_tag v2.3.0-pending)" "$c3"
+expect "auto, breaking" "says why" has "carries breaking changes since v2.1.0"
+
+# RELEASE_MIN_INTERVAL_MINUTES: v2.1.0 was released 48h ago.
+setup ""
+qualified_rc v2.3.0-rc.1 "$c2"
+: > "$work/images.log"
+: > "$work/train.out"
+train RELEASE_MIN_INTERVAL_MINUTES=$((49 * 60)) RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "auto, interval" "exits 0" eq "$status" 0
+expect "auto, interval" "releases nothing yet" eq "$(remote_tag v2.3.0)" ""
+expect "auto, interval" "stages nothing either" eq "$(remote_tag v2.3.0-pending)" ""
+expect "auto, interval" "says it waits" has "under RELEASE_MIN_INTERVAL_MINUTES (2940); a later run releases it"
+expect "auto, interval" "outputs it" grep -qxF "promotion_waits=v2.3.0" "$work/train.out"
+expect "auto, interval" "publishes nothing" images_were ""
+train
+expect "auto, interval over" "then releases it" eq "$(remote_tag v2.3.0)" "$c2"
+
+# Wrong commit: a train that tagged the release anywhere but on the
+# qualified rc's own commit, or pushed another commit to it, is refused
+# before the push.
+wrong() { # wrong <sed expression> [VAR=value...]: run a train with its promotion edited
+  local expr="$1"
+  shift
+  mkdir -p "$work/wrong"
+  cp "$(dirname "$train")/candidate-gate.sh" "$(dirname "$train")/release-notes.sh" "$work/wrong/"
+  sed "$expr" "$train" > "$work/wrong/release-from-trunk.sh"
+  cmp -s "$train" "$work/wrong/release-from-trunk.sh" && { echo "wrong: $expr changed nothing"; exit 1; }
+  status=0
+  out="$(cd "$work/clone" && env RELEASE_RUNS_JSON="$work/runs.json" \
+    RELEASE_QUALIFICATION_RUNS_JSON="$work/qual-runs.json" RELEASE_QUALIFICATION_CHECKS_JSON="$work/qual-checks.json" \
+    RELEASE_HOLD_CHECKS_JSON="$work/hold-checks.json" RELEASE_QUALIFICATION_APP=grain-test \
+    RELEASE_IMAGES="$work/images.sh" RELEASE_NOTES_TASK=off RELEASE_NOW="$now" "$@" bash "$work/wrong/release-from-trunk.sh" 2>&1)" || status=$?
+}
+# shellcheck disable=SC2016 # sed expressions, not shell
+for grant in "" train; do
+  for expr in \
+    's|git tag -a "$1" "$3" -m "Release $1"|git tag -a "$1" "$main_ref" -m "Release $1"|' \
+    's|git tag -fa latest "$3"|git tag -fa latest "$main_ref"|' \
+    's|push "refs/tags/$1" \|\||push "$main_ref:refs/tags/$1" \|\||' \
+    's|push "refs/tags/$1" \|\||push "$3:refs/tags/v2.4.0" \|\||'; do
+    setup ""
+    qualified_rc v2.3.0-rc.1 "$c2"
+    : > "$work/images.log"
+    wrong "$expr" RELEASE_PUSH_GRANT="$grant"
+    name="wrong commit (${expr:0:40}...)${grant:+ (grant)}"
+    expect "$name" "exits 1" eq "$status" 1
+    expect "$name" "says why" has "except to release an rc that qualified, on that rc's own commit"
+    expect "$name" "leaves latest on v2.1.0" eq "$(remote_tag latest)" "$c0"
+    expect "$name" "pushes no v2.3.0" eq "$(remote_tag v2.3.0)" ""
+    expect "$name" "pushes no other release" eq "$(remote_tag v2.4.0)" ""
+    expect "$name" "publishes nothing" images_were ""
+  done
+done
 
 echo
 echo "$((cases - failures))/$cases passed"

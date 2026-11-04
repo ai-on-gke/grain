@@ -16,6 +16,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // Host scripts end to end (docs/host-scripts.md): a real
 // `grain capability host-script` server -- the binary global-setup.js
@@ -190,7 +191,7 @@ test("defines a host script, tests it with an argv, and grants it on a task", as
     const title = `E2E host script grant ${Date.now()}`;
     await page.getByRole("button", { name: "+ New task" }).click();
     await page.getByLabel("Title").fill(title);
-    await page.getByLabel(/^Repos/).selectOption("none");
+    await chooseOption(page.getByLabel(/^Repos/), "none");
     const grants = page.getByTestId("new-task-grants");
     await grants.getByRole("button", { name: "Add grant…" }).click();
     await page.getByRole("menuitem", { name: /host-script/ }).click();

@@ -1149,6 +1149,28 @@ func RepoSettingsSchema() Schema {
 				Columns: []string{"git_credential"},
 			},
 
+			// The hostd a task filed here starts pinned to when neither
+			// the filing nor its template names one
+			// (model.RepoConfig.DefaultHostd). Authority, for the
+			// template `hostd` key's reason: a repository naming one
+			// would be routing its own work onto somebody's hostd.
+			{
+				Model:   "DefaultHostd",
+				Keys:    []Key{settingsOnly("default-hostd", Authority)},
+				Columns: []string{"default_hostd"},
+			},
+
+			// The upstream repository pull requests are opened against when
+			// tasks push branches to this fork repository
+			// (model.RepoConfig.UpstreamRepo). Authority, because a
+			// repository cannot redirect where this deployment opens pull
+			// requests or which upstream repository its runs fetch from.
+			{
+				Model:   "UpstreamRepo",
+				Keys:    []Key{settingsOnly("upstream-repo", Authority)},
+				Columns: []string{"upstream_repo"},
+			},
+
 			// Which repository these settings are about. Grain read the
 			// file out of a repository it already had in hand, and a file
 			// that could name another one would be a repository writing

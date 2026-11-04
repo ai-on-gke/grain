@@ -17,8 +17,7 @@
 // of this shape, Claude, hardcoded throughout grain/automation/dispatch.py
 // -- there is no equivalent interface there to reuse. This is that
 // interface's first appearance. The built-in implementations drive real
-// CLIs as subprocesses; pkg/agent/custom also adapts an executable from a
-// deployment's state repository through a versioned JSON protocol.
+// CLIs as subprocesses.
 // pkg/cli/daemon.go's agentFrameworks chooses between them per run.
 package agent
 
@@ -128,6 +127,14 @@ type RunConfig struct {
 	// itself.
 	Repo   string
 	Branch string
+	// UpstreamRepo ("owner/name"), when non-empty and distinct from Repo,
+	// is the upstream repository pull requests for Repo are opened against
+	// (model.RepoConfig.UpstreamRepo). Passed to the forked "mcpserver"
+	// subprocess as "-pr-upstream-repo" so pull_request_status,
+	// wait_for_checks, base_branch_status and review tools read the
+	// upstream pull request (<fork-owner>:<branch>) while still reading
+	// the pushed branch head from Repo.
+	UpstreamRepo string
 	// Base is the branch Branch merges into -- model.Task's own Base --
 	// passed to the same subprocess as its -pr-base, so pkg/mcp's
 	// base_branch_status can read CI for the branch this work is aimed
@@ -537,7 +544,7 @@ func CarryCapabilityServers(h Host, servers []CapabilityMCPServer) (carried []Ca
 		}
 		return carried, release, nil
 	}
-	return nil, nil, fmt.Errorf("this run's capability grants expose MCP servers, which grain proxies on its own host, and its agent CLI runs where it cannot reach them (%T)", h)
+	return nil, nil, hostSetup(fmt.Errorf("this run's capability grants expose MCP servers, which grain proxies on its own host, and its agent CLI runs where it cannot reach them (%T)", h))
 }
 
 // InteractiveArgs is the "-interactive" flag a Framework passes its

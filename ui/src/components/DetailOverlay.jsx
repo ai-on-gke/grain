@@ -34,6 +34,7 @@ import { branchRefs } from "../branchRefs.js";
 import {
   STATE_LABELS,
   activityTitle,
+  blockerState,
   completionPhase,
   mergeQueueBatching,
   mergeQueueStall,
@@ -47,6 +48,7 @@ import {
   taskBadgeModifier,
   taskBadgeState,
   isAgentRunning,
+  isTaskMerged,
   isTaskRepairing,
   taskPause,
 } from "../state.js";
@@ -70,6 +72,7 @@ import LiveAttemptTranscript from "./detail/LiveAttemptTranscript.jsx";
 import PendingQuestion from "./detail/PendingQuestion.jsx";
 import PendingSecret from "./detail/PendingSecret.jsx";
 import PendingConfigChange from "./detail/PendingConfigChange.jsx";
+import PendingAccess from "./detail/PendingAccess.jsx";
 import LocalScriptApprovals from "./detail/LocalScriptApprovals.jsx";
 import ReadOnlyRepos from "./detail/ReadOnlyRepos.jsx";
 import SuspendedSession from "./detail/SuspendedSession.jsx";
@@ -621,6 +624,9 @@ export default function DetailOverlay({
 
           <PendingSecret t={t} act={act} showError={showError} />
 
+          {/* An interactive task shows it in its chat (TaskChat). */}
+          {!t.interactive && <PendingAccess t={t} act={act} />}
+
           {/* A proposed config change, like a local-script approval, is
               answered in an interactive task's chat (TaskChat). */}
           {!t.interactive && <PendingConfigChange t={t} act={act} />}
@@ -737,6 +743,28 @@ export default function DetailOverlay({
               label={`priority: ${t.priority ?? 5}`}
             />
           </div>
+          {t.blocked &&
+            t.blockedBy?.length > 0 &&
+            t.state !== "running" &&
+            !isTaskMerged(t) && (
+              <div className="detail-blocked">
+                {t.parked ? "Waiting on" : "Blocked on"}{" "}
+                {t.blockedBy.map((id, idx) => {
+                  const dep = byId.get(id) ?? byId.get(String(id));
+                  const state = blockerState(dep);
+                  return (
+                    <Fragment key={id}>
+                      {idx > 0 && ", "}
+                      <TaskLink id={id} onOpenTask={onOpenTask}>
+                        #{id}
+                        {dep?.title ? ` ${dep.title}` : ""}
+                      </TaskLink>
+                      {state && ` (${state})`}
+                    </Fragment>
+                  );
+                })}
+              </div>
+            )}
           {/* And the sentence itself, spelled out under the badge it is
               about, for the same reason the merge queue's note is
               spelled out below: the row has to make do with a chip and a
@@ -810,7 +838,7 @@ export default function DetailOverlay({
           <Actions t={t} config={config} act={act} onOpenTask={onOpenTask} />
           {/* What grain checks to close this task, rather than its agent's
               word (design/design/durable-tasks.design.md#DT-4). */}
-          <GoalSection t={t} act={act} />
+          <GoalSection t={t} act={act} config={config} tasks={tasks} />
           {/* Which grain hostd its host work goes to, and the control
               that changes it (PUT /api/tasks/{id}/hostd). */}
           <HostdSection t={t} act={act} />

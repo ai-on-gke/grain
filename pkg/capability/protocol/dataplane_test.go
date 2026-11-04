@@ -327,3 +327,51 @@ func TestServerConfigDataPlane(t *testing.T) {
 		t.Error("a non-loopback -listen was accepted")
 	}
 }
+
+func TestNewEndpointProxyForwardsToExactTargetURL(t *testing.T) {
+	var seenPath, seenAccessCode, seenActingTask, seenAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.RequestURI()
+		seenAccessCode = r.Header.Get("X-Grain-Access-Code")
+		seenActingTask = r.Header.Get("X-Grain-Acting-Task")
+		seenAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+	}))
+	defer srv.Close()
+
+	if _, err := NewEndpointProxy("ftp://127.0.0.1/api/mcp", nil, nil); err == nil {
+		t.Fatal("NewEndpointProxy accepted non-http(s) URL")
+	}
+	p, err := NewEndpointProxy(srv.URL+"/api/mcp", map[string]string{
+		"X-Grain-Access-Code": "secret-code",
+		"X-Grain-Acting-Task": "42",
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewEndpointProxy: %v", err)
+	}
+	ep, err := ServeEndpoint(p)
+	if err != nil {
+		t.Fatalf("ServeEndpoint: %v", err)
+	}
+	defer ep.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, ep.URL+"?ignored=1", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer spoofed")
+	req.Header.Set("X-Grain-Acting-Task", "999")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if seenPath != "/api/mcp" {
+		t.Errorf("upstream path = %q, want /api/mcp", seenPath)
+	}
+	if seenAccessCode != "secret-code" || seenActingTask != "42" || seenAuth != "" {
+		t.Errorf("upstream headers: X-Grain-Access-Code=%q X-Grain-Acting-Task=%q Authorization=%q", seenAccessCode, seenActingTask, seenAuth)
+	}
+}

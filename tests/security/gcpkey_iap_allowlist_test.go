@@ -71,7 +71,7 @@ func TestUnlistedServicePrincipalCannotMintDangerousExternalAgentToken(t *testin
 	sharedIdentityProxy().configure(&uiCfg)
 
 	client := ui.NewClient(uiCfg, store)
-	if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: "user:owner@example.com"}); err != nil {
+	if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: "user:owner@example.com", Reason: "test"}); err != nil {
 		t.Fatal(err)
 	}
 	srv := ui.NewServerWithClient(client)
@@ -157,7 +157,7 @@ func TestUnlistedServicePrincipalCannotMintDangerousExternalAgentToken(t *testin
 
 	// 5. A human principal added live to the DB allowlist CAN mint and rotate a dangerous token,
 	// while an unlisted service account cannot.
-	if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: "user:admin2@example.com"}); err != nil {
+	if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: "user:admin2@example.com", Reason: "test"}); err != nil {
 		t.Fatal(err)
 	}
 	if rec := serveIAP("explicit-ci@my-proj.iam.gserviceaccount.com", http.MethodPost, "/api/external-agents/tokens",
@@ -185,7 +185,7 @@ func TestUnlistedServicePrincipalCannotMintDangerousExternalAgentToken(t *testin
 			t.Fatalf("AllowPrincipal(%q) succeeded, want rejection of *.gserviceaccount.com", badEntry)
 		}
 	}
-	if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: "group:admins@example.com"}); err != nil {
+	if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: "group:admins@example.com", Reason: "test"}); err != nil {
 		t.Fatal(err)
 	}
 	var groupChecks atomic.Int32

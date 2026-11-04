@@ -21,6 +21,7 @@ import RepoReleases, {
   withoutDanglingDependencies,
 } from "./RepoReleases.jsx";
 import api from "../api.js";
+import { chooseOption, optionValues } from "../searchSelectTesting.js";
 import { runTimers } from "../testClock.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
@@ -279,8 +280,8 @@ describe("RepoReleases", () => {
     );
     await screen.findByRole("button", { name: "Promote current RC" });
 
-    expect(screen.getByRole("combobox", { name: "Release" })).toHaveTextContent(
-      "myfeat",
+    expect(screen.getByRole("combobox", { name: "Release" })).toHaveValue(
+      "myfeat -- Active",
     );
     expect(api).toHaveBeenCalledWith(
       "/api/repos/acme/widgets/releases/myfeat/candidates",
@@ -308,13 +309,11 @@ describe("RepoReleases", () => {
     );
     await screen.findByRole("button", { name: "Promote current RC" });
     // Opened without one, it shows the newest and leaves the address be.
-    expect(screen.getByRole("combobox", { name: "Release" })).toHaveTextContent(
-      "newer",
-    );
+    const picker = screen.getByRole("combobox", { name: "Release" });
+    expect(picker).toHaveValue("newer -- Active");
     expect(onSelectRelease).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole("combobox", { name: "Release" }));
-    await user.click(await screen.findByRole("option", { name: /^myfeat/ }));
+    await chooseOption(user, picker, "myfeat");
 
     expect(onSelectRelease).toHaveBeenCalledWith("myfeat");
   });
@@ -335,8 +334,8 @@ describe("RepoReleases", () => {
     await vi.waitFor(() =>
       expect(onSelectRelease).toHaveBeenCalledWith(null, "gone"),
     );
-    expect(screen.getByRole("combobox", { name: "Release" })).toHaveTextContent(
-      "newer",
+    expect(screen.getByRole("combobox", { name: "Release" })).toHaveValue(
+      "newer -- Active",
     );
     // In place, naming both the release asked for and the one shown,
     // rather than as a toast that is gone before it is read.
@@ -415,23 +414,23 @@ describe("RepoReleases", () => {
 
     rerender(<RepoReleases {...props} release="newer" />);
     await vi.waitFor(() =>
-      expect(
-        screen.getByRole("combobox", { name: "Release" }),
-      ).toHaveTextContent("newer"),
+      expect(screen.getByRole("combobox", { name: "Release" })).toHaveValue(
+        "newer -- Active",
+      ),
     );
 
     rerender(<RepoReleases {...props} release="myfeat" />);
     await vi.waitFor(() =>
-      expect(
-        screen.getByRole("combobox", { name: "Release" }),
-      ).toHaveTextContent("myfeat"),
+      expect(screen.getByRole("combobox", { name: "Release" })).toHaveValue(
+        "myfeat -- Active",
+      ),
     );
     // And back to the bare address, which is the newest again.
     rerender(<RepoReleases {...props} release={null} />);
     await vi.waitFor(() =>
-      expect(
-        screen.getByRole("combobox", { name: "Release" }),
-      ).toHaveTextContent("newer"),
+      expect(screen.getByRole("combobox", { name: "Release" })).toHaveValue(
+        "newer -- Active",
+      ),
     );
   });
 
@@ -1367,14 +1366,14 @@ describe("RepoReleases", () => {
     await user.click(screen.getByRole("button", { name: "Delete release" }));
     expect(
       await screen.findByRole("combobox", { name: "Release" }),
-    ).toHaveTextContent("v1.0");
+    ).toHaveValue("v1.0 -- Active");
 
     // Now the stale poll from before the deletion resolves with the old list.
     resolveSlowReleases();
     await new Promise((r) => setTimeout(r, 20));
 
-    expect(screen.getByRole("combobox", { name: "Release" })).toHaveTextContent(
-      "v1.0",
+    expect(screen.getByRole("combobox", { name: "Release" })).toHaveValue(
+      "v1.0 -- Active",
     );
   });
 
@@ -1407,9 +1406,46 @@ describe("RepoReleases", () => {
     await user.click(screen.getByRole("button", { name: "Delete release" }));
     expect(
       await screen.findByRole("combobox", { name: "Release" }),
-    ).toHaveTextContent("v1.0");
+    ).toHaveValue("v1.0 -- Active");
     expect(onSelectRelease).toHaveBeenCalledWith(null);
     expect(onSelectRelease).not.toHaveBeenCalledWith(null, "myfeat");
+  });
+
+  it("searches releases and qualification templates by word or fragment", async () => {
+    const secondRelease = {
+      repo: "acme/widgets",
+      name: "2026.11-hotfix",
+      latestBranch: "2026.11-hotfix.latest",
+      prodBranch: "2026.11-hotfix",
+      status: "active",
+    };
+    setupApi({
+      releases: [activeRelease, secondRelease],
+      candidates: [activeCandidate],
+    });
+    const user = userEvent.setup();
+    render(
+      <RepoReleases
+        repo="acme/widgets"
+        templates={[smokeTemplate, unrelatedTemplate]}
+        onBack={() => {}}
+        showError={() => {}}
+      />,
+    );
+    const releasePicker = await screen.findByRole("combobox", {
+      name: "Release",
+    });
+    await user.click(releasePicker);
+    await user.clear(releasePicker);
+    await user.type(releasePicker, "hotfix");
+    expect(optionValues(releasePicker)).toEqual(["2026.11-hotfix"]);
+    await user.keyboard("{Escape}");
+
+    await user.click(screen.getByRole("button", { name: "Add item" }));
+    const templatePicker = screen.getByLabelText("Template");
+    await user.click(templatePicker);
+    await user.type(templatePicker, "test smoke");
+    expect(optionValues(templatePicker)).toEqual(["template-1"]);
   });
 });
 

@@ -24,15 +24,30 @@ import (
 	"time"
 )
 
-// AllowedPrincipal is one user or group entry in the deployment's
-// verified-identity sign-in allowlist (`allowed_principal`).
+// AllowedPrincipal is one user, group or service-account entry in the
+// deployment's verified-identity sign-in allowlist (`allowed_principal`).
 type AllowedPrincipal struct {
-	// Entry is canonicalized as `user:<email>` or `group:<email>` with the
-	// email lowercased.
+	// Entry is canonicalized as `user:<email>`, `group:<email>` or
+	// `serviceAccount:<email>` with the email lowercased.
 	Entry   string    `json:"entry"`
 	AddedBy string    `json:"addedBy"`
 	AddedAt time.Time `json:"addedAt"`
+	// Reason is why the entry was added, as its adder gave it. Required
+	// for serviceAccount: entries, which admit a non-human caller with
+	// full operator access.
+	Reason string `json:"reason,omitempty"`
+	// Role is the API scope set the entry's sessions are held to
+	// (docs/design/access-rbac.md), DefaultAccessRole unless set.
+	Role string `json:"role"`
 }
+
+// DefaultAccessRole is the role an allowlist entry has unless given
+// another: every scope, which is what every entry had before roles.
+const DefaultAccessRole = APIScopeSetBuiltinPrefix + "operator"
+
+// ServiceAccountDomainSuffix is the domain every Google service account
+// address ends in; only such addresses may be serviceAccount: entries.
+const ServiceAccountDomainSuffix = ".gserviceaccount.com"
 
 // AllowedPrincipalsMigration records the one-time startup import off
 // `-ui-allowed-principals` / `$GRAIN_ALLOWED_PRINCIPALS`.
@@ -42,25 +57,27 @@ type AllowedPrincipalsMigration struct {
 	Dropped    []string  `json:"dropped,omitempty"`
 }
 
-// NormalizeAllowedPrincipalEntry validates and canonicalizes a `user:<email>`
-// or `group:<email>` allowlist entry.
+// NormalizeAllowedPrincipalEntry validates and canonicalizes a `user:<email>`,
+// `group:<email>` or `serviceAccount:<email>` allowlist entry. A
+// serviceAccount: entry must name a *.gserviceaccount.com address, and user:
+// and group: entries must not; domain: entries are refused.
 func NormalizeAllowedPrincipalEntry(raw string) (prefix, email, canonical string, err error) {
 	item := strings.TrimSpace(raw)
 	if item == "" {
-		return "", "", "", fmt.Errorf("allowed principal entry is required (expected user:<email> or group:<email>)")
+		return "", "", "", fmt.Errorf("allowed principal entry is required (expected user:<email>, group:<email> or serviceAccount:<email>)")
 	}
 	p, val, ok := strings.Cut(item, ":")
 	if !ok {
-		return "", "", "", fmt.Errorf("invalid allowed principal %q: must start with user: or group:", item)
+		return "", "", "", fmt.Errorf("invalid allowed principal %q: must start with user:, group: or serviceAccount:", item)
 	}
 	p = strings.TrimSpace(p)
 	val = strings.ToLower(strings.TrimSpace(val))
 	switch p {
-	case "user", "group":
-	case "serviceAccount", "domain":
-		return "", "", "", fmt.Errorf("invalid allowed principal %q: %s: entries are not supported; use user:<email> or group:<email>", item, p)
+	case "user", "group", "serviceAccount":
+	case "domain":
+		return "", "", "", fmt.Errorf("invalid allowed principal %q: domain: entries are not supported; use user:<email>, group:<email> or serviceAccount:<email>", item)
 	default:
-		return "", "", "", fmt.Errorf("invalid allowed principal %q: unknown prefix %q (expected user: or group:)", item, p)
+		return "", "", "", fmt.Errorf("invalid allowed principal %q: unknown prefix %q (expected user:, group: or serviceAccount:)", item, p)
 	}
 	if val == "" {
 		return "", "", "", fmt.Errorf("invalid allowed principal %q: empty %s email address", item, p)
@@ -70,8 +87,12 @@ func NormalizeAllowedPrincipalEntry(raw string) (prefix, email, canonical string
 		strings.ContainsAny(val, " \t\r\n/,;'\"<>") {
 		return "", "", "", fmt.Errorf("invalid allowed principal %q: %s entry must be a valid email address", item, p)
 	}
-	if strings.HasSuffix(domain, ".gserviceaccount.com") && len(domain) > len(".gserviceaccount.com") {
-		return "", "", "", fmt.Errorf("invalid allowed principal %q: service account addresses (*.gserviceaccount.com) are not supported in the allowed users and groups list", item)
+	isSA := strings.HasSuffix(domain, ServiceAccountDomainSuffix) && len(domain) > len(ServiceAccountDomainSuffix)
+	if p == "serviceAccount" && !isSA {
+		return "", "", "", fmt.Errorf("invalid allowed principal %q: serviceAccount: entries must name a service account address (*%s)", item, ServiceAccountDomainSuffix)
+	}
+	if p != "serviceAccount" && isSA {
+		return "", "", "", fmt.Errorf("invalid allowed principal %q: service account addresses (*%s) must be added as serviceAccount:<email>", item, ServiceAccountDomainSuffix)
 	}
 	return p, val, p + ":" + val, nil
 }
@@ -81,11 +102,11 @@ func NormalizeAllowedPrincipalEntry(raw string) (prefix, email, canonical string
 func (s *Store) ListAllowedPrincipals(ctx context.Context) ([]AllowedPrincipal, error) {
 	var out []AllowedPrincipal
 	err := each(ctx, s.db,
-		"SELECT `entry`, `added_by`, `added_at` FROM `allowed_principal` ORDER BY `added_at` ASC, `entry` ASC",
+		"SELECT `entry`, `added_by`, `added_at`, `reason`, `role` FROM `allowed_principal` ORDER BY `added_at` ASC, `entry` ASC",
 		nil,
 		func(rows *sql.Rows) error {
 			var p AllowedPrincipal
-			if err := rows.Scan(&p.Entry, &p.AddedBy, &p.AddedAt); err != nil {
+			if err := rows.Scan(&p.Entry, &p.AddedBy, &p.AddedAt, &p.Reason, &p.Role); err != nil {
 				return err
 			}
 			p.AddedAt = p.AddedAt.UTC()
@@ -98,13 +119,28 @@ func (s *Store) ListAllowedPrincipals(ctx context.Context) ([]AllowedPrincipal, 
 	return out, nil
 }
 
-// AddAllowedPrincipal adds a `user:<email>` or `group:<email>` entry to the
-// allowlist. Adding an entry that is already present is a no-op and returns
-// the existing row with created=false.
-func (s *Store) AddAllowedPrincipal(ctx context.Context, rawEntry, addedBy string, at time.Time) (AllowedPrincipal, bool, error) {
-	_, _, canonical, err := NormalizeAllowedPrincipalEntry(rawEntry)
+// AddAllowedPrincipal adds a `user:<email>`, `group:<email>` or
+// `serviceAccount:<email>` entry to the allowlist, recording who added it
+// and why. A serviceAccount: entry needs a reason. Adding an entry that is
+// already present is a no-op and returns the existing row with
+// created=false.
+func (s *Store) AddAllowedPrincipal(ctx context.Context, rawEntry, addedBy, reason string, at time.Time) (AllowedPrincipal, bool, error) {
+	return s.AddAllowedPrincipalWithRole(ctx, rawEntry, addedBy, reason, "", at)
+}
+
+// AddAllowedPrincipalWithRole is AddAllowedPrincipal giving the entry role
+// ("" for DefaultAccessRole). An entry already present keeps its own role.
+func (s *Store) AddAllowedPrincipalWithRole(ctx context.Context, rawEntry, addedBy, reason, role string, at time.Time) (AllowedPrincipal, bool, error) {
+	prefix, _, canonical, err := NormalizeAllowedPrincipalEntry(rawEntry)
 	if err != nil {
 		return AllowedPrincipal{}, false, err
+	}
+	reason = strings.TrimSpace(reason)
+	if prefix == "serviceAccount" && reason == "" {
+		return AllowedPrincipal{}, false, fmt.Errorf("allowed principal %q: a reason is required to admit a service account", canonical)
+	}
+	if role = strings.TrimSpace(role); role == "" {
+		role = DefaultAccessRole
 	}
 	if at.IsZero() {
 		at = time.Now()
@@ -117,9 +153,9 @@ func (s *Store) AddAllowedPrincipal(ctx context.Context, rawEntry, addedBy strin
 	err = s.write(ctx, "add allowed principal "+canonical, func(tx *sql.Tx) error {
 		var existing AllowedPrincipal
 		qErr := tx.QueryRowContext(ctx,
-			"SELECT `entry`, `added_by`, `added_at` FROM `allowed_principal` WHERE `entry` = ?",
+			"SELECT `entry`, `added_by`, `added_at`, `reason`, `role` FROM `allowed_principal` WHERE `entry` = ?",
 			canonical,
-		).Scan(&existing.Entry, &existing.AddedBy, &existing.AddedAt)
+		).Scan(&existing.Entry, &existing.AddedBy, &existing.AddedAt, &existing.Reason, &existing.Role)
 		if qErr == nil {
 			existing.AddedAt = existing.AddedAt.UTC()
 			result = existing
@@ -130,8 +166,8 @@ func (s *Store) AddAllowedPrincipal(ctx context.Context, rawEntry, addedBy strin
 			return qErr
 		}
 		if _, execErr := tx.ExecContext(ctx,
-			"INSERT INTO `allowed_principal` (`entry`, `added_by`, `added_at`) VALUES (?, ?, ?)",
-			canonical, addedBy, at,
+			"INSERT INTO `allowed_principal` (`entry`, `added_by`, `added_at`, `reason`, `role`) VALUES (?, ?, ?, ?, ?)",
+			canonical, addedBy, at, reason, role,
 		); execErr != nil {
 			return execErr
 		}
@@ -139,6 +175,8 @@ func (s *Store) AddAllowedPrincipal(ctx context.Context, rawEntry, addedBy strin
 			Entry:   canonical,
 			AddedBy: addedBy,
 			AddedAt: at,
+			Reason:  reason,
+			Role:    role,
 		}
 		created = true
 		return nil
@@ -147,6 +185,37 @@ func (s *Store) AddAllowedPrincipal(ctx context.Context, rawEntry, addedBy strin
 		return AllowedPrincipal{}, false, fmt.Errorf("adding allowed principal %q: %w", canonical, err)
 	}
 	return result, created, nil
+}
+
+// SetAllowedPrincipalRole gives an existing entry role and returns the
+// role it had before. found is false for an entry not on the list.
+func (s *Store) SetAllowedPrincipalRole(ctx context.Context, rawEntry, role string) (canonical, previous string, found bool, err error) {
+	_, _, canonical, err = NormalizeAllowedPrincipalEntry(rawEntry)
+	if err != nil {
+		return "", "", false, err
+	}
+	if role = strings.TrimSpace(role); role == "" {
+		return "", "", false, fmt.Errorf("allowed principal %q: a role is required", canonical)
+	}
+	err = s.write(ctx, "set role of allowed principal "+canonical, func(tx *sql.Tx) error {
+		qErr := tx.QueryRowContext(ctx,
+			"SELECT `role` FROM `allowed_principal` WHERE `entry` = ?", canonical,
+		).Scan(&previous)
+		if errors.Is(qErr, sql.ErrNoRows) {
+			return nil
+		}
+		if qErr != nil {
+			return qErr
+		}
+		found = true
+		_, execErr := tx.ExecContext(ctx,
+			"UPDATE `allowed_principal` SET `role` = ? WHERE `entry` = ?", role, canonical)
+		return execErr
+	})
+	if err != nil {
+		return "", "", false, fmt.Errorf("setting role of allowed principal %q: %w", canonical, err)
+	}
+	return canonical, previous, found, nil
 }
 
 // RemoveAllowedPrincipal removes an entry from the allowlist and reports
@@ -204,7 +273,8 @@ func (s *Store) GetAllowedPrincipalsMigration(ctx context.Context) (*AllowedPrin
 // ImportAllowedPrincipalsFromFlag performs the one-time startup import from
 // `-ui-allowed-principals` / `$GRAIN_ALLOWED_PRINCIPALS`. If the migration has
 // already run once, or if `allowed_principal` already holds entries, nothing
-// is imported and didImport is false.
+// is imported and didImport is false. serviceAccount: entries are never
+// imported: an operator adds each one deliberately, with a reason.
 func (s *Store) ImportAllowedPrincipalsFromFlag(
 	ctx context.Context,
 	entries []string,
@@ -224,9 +294,12 @@ func (s *Store) ImportAllowedPrincipalsFromFlag(
 	var canonicalList []string
 	seen := make(map[string]bool, len(entries))
 	for _, raw := range entries {
-		_, _, c, nErr := NormalizeAllowedPrincipalEntry(raw)
+		prefix, _, c, nErr := NormalizeAllowedPrincipalEntry(raw)
 		if nErr != nil {
 			return nil, false, nErr
+		}
+		if prefix == "serviceAccount" {
+			return nil, false, fmt.Errorf("allowed principal %q: serviceAccount: entries are not imported from %s", c, source)
 		}
 		if !seen[c] {
 			seen[c] = true

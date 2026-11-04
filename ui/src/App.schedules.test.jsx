@@ -20,6 +20,7 @@
 
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { optionValues } from "./searchSelectTesting.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App.jsx";
 import api from "./api.js";
@@ -140,6 +141,57 @@ describe("App", () => {
       ([path, o]) => path === "/api/schedules/sched-1" && o?.method === "PATCH",
     );
     expect(JSON.parse(opts.body)).toMatchObject({ keepRunning: false });
+  });
+
+  it("previews a saved schedule with the model it asks for", async () => {
+    // The draft endpoint has no saved row to fall back on, so the model
+    // the save leaves out when unchanged has to be in the preview's body
+    // (docs/test-runs/2026-11-04-recurring-composed-ui.md, bug 1).
+    const schedule = {
+      id: "sched-1",
+      title: "Nightly dependency bump",
+      description: "",
+      repo: "acme/widgets",
+      base: "",
+      autoMerge: false,
+      model: "gemini-2.5-flash",
+      recurrence: { kind: "everyNHours", everyNHours: 24 },
+      enabled: true,
+      nextRunAt: "2026-08-29T00:00:00Z",
+    };
+    setupApi(initialTasks, [schedule]);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Fix bug");
+
+    await user.click(screen.getByRole("button", { name: /^Processes/ }));
+    await user.click(await screen.findByText("Nightly dependency bump"));
+    await screen.findByRole("heading", { name: "Edit schedule" });
+
+    const previews = () =>
+      api.mock.calls
+        .filter(
+          ([path, o]) =>
+            path === "/api/schedules/composition" && o?.method === "POST",
+        )
+        .map(([, o]) => JSON.parse(o.body));
+    await waitFor(() => expect(previews().length).toBeGreaterThan(0));
+    expect(previews().at(-1)).toMatchObject({ model: "gemini-2.5-flash" });
+
+    // The save itself still leaves an unchanged model out.
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(
+        api.mock.calls.find(
+          ([path, o]) =>
+            path === "/api/schedules/sched-1" && o?.method === "PATCH",
+        ),
+      ).toBeTruthy(),
+    );
+    const [, opts] = api.mock.calls.find(
+      ([path, o]) => path === "/api/schedules/sched-1" && o?.method === "PATCH",
+    );
+    expect(JSON.parse(opts.body)).not.toHaveProperty("model");
   });
 
   it("switches a schedule to every N minutes", async () => {
@@ -560,10 +612,14 @@ describe("App", () => {
     );
     await screen.findByRole("heading", { name: "New schedule" });
 
-    await user.click(screen.getByLabelText("Template"));
-    await user.click(
-      await screen.findByRole("option", { name: "Dependency bump" }),
-    );
+    // A SearchSelect (grain/task-2910): a word from the template's name
+    // finds it.
+    const picker = screen.getByRole("combobox", { name: "Template" });
+    await user.click(picker);
+    await user.clear(picker);
+    await user.type(picker, "bump");
+    expect(optionValues(picker)).toEqual(["template-1"]);
+    await user.keyboard("{Enter}");
 
     expect(screen.queryByLabelText(/^Title/)).not.toBeInTheDocument();
     expect(
@@ -635,13 +691,22 @@ describe("App", () => {
     window.history.replaceState(null, "", "/processes?kind=schedule");
     window.dispatchEvent(new PopStateEvent("popstate"));
 
-    expect(confirm).toHaveBeenCalledWith(DISCARD_PROMPT);
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("heading", { name: "New schedule" }),
-      ).not.toBeInTheDocument(),
-    );
-    confirm.mockRestore();
+    try {
+      expect(confirm).toHaveBeenCalledWith(DISCARD_PROMPT);
+      // The dialog leaves through MUI's exit transition, which on a
+      // loaded CI runner outlasts waitFor's one-second default.
+      await waitFor(
+        () =>
+          expect(
+            screen.queryByRole("heading", { name: "New schedule" }),
+          ).not.toBeInTheDocument(),
+        { timeout: 5000 },
+      );
+    } finally {
+      // Restored even when the wait fails, so the next test's own spy
+      // does not wrap this one and count its calls as well.
+      confirm.mockRestore();
+    }
   });
 
   it("guards unsaved schedule edits before following the suppressed task link", async () => {
@@ -667,20 +732,25 @@ describe("App", () => {
     const title = screen.getByLabelText("Title");
     await user.type(title, " edited");
 
-    await user.click(screen.getByRole("link", { name: "task 1" }));
-    expect(confirm).toHaveBeenCalledWith(DISCARD_PROMPT);
-    expect(
-      screen.getByRole("heading", { name: "Edit schedule" }),
-    ).toBeInTheDocument();
-
-    confirm.mockReturnValue(true);
-    await user.click(screen.getByRole("link", { name: "task 1" }));
-    expect(confirm).toHaveBeenCalledTimes(2);
-    await waitFor(() =>
+    try {
+      await user.click(screen.getByRole("link", { name: "task 1" }));
+      expect(confirm).toHaveBeenCalledWith(DISCARD_PROMPT);
       expect(
-        screen.queryByRole("heading", { name: "Edit schedule" }),
-      ).not.toBeInTheDocument(),
-    );
-    confirm.mockRestore();
+        screen.getByRole("heading", { name: "Edit schedule" }),
+      ).toBeInTheDocument();
+
+      confirm.mockReturnValue(true);
+      await user.click(screen.getByRole("link", { name: "task 1" }));
+      expect(confirm).toHaveBeenCalledTimes(2);
+      await waitFor(
+        () =>
+          expect(
+            screen.queryByRole("heading", { name: "Edit schedule" }),
+          ).not.toBeInTheDocument(),
+        { timeout: 5000 },
+      );
+    } finally {
+      confirm.mockRestore();
+    }
   });
 });

@@ -51,6 +51,7 @@ type Recurrence struct {
 	DayOfMonth        int                             `json:"dayOfMonth,omitempty"`
 	TimeZone          string                          `json:"timeZone,omitempty"`
 	GitHubWorkflowRun *model.GitHubWorkflowRunTrigger `json:"githubWorkflowRun,omitempty"`
+	GitRef            *model.GitRefTrigger            `json:"gitRef,omitempty"`
 }
 
 var weekdayNames = [...]string{"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"}
@@ -98,6 +99,8 @@ func recurrenceFrom(r model.Recurrence) Recurrence {
 		out.DayOfMonth = r.DayOfMonth
 	case model.RecurrenceGitHubWorkflowRun:
 		out.GitHubWorkflowRun = r.GitHubWorkflowRun
+	case model.RecurrenceGitRef:
+		out.GitRef = r.GitRef
 	}
 	return out
 }
@@ -116,6 +119,7 @@ func parseRecurrence(req Recurrence) (model.Recurrence, error) {
 		DayOfMonth:        req.DayOfMonth,
 		TimeZone:          strings.TrimSpace(req.TimeZone),
 		GitHubWorkflowRun: req.GitHubWorkflowRun,
+		GitRef:            req.GitRef,
 	}
 	if req.TimeOfDay != "" {
 		minutes, err := parseTimeOfDay(req.TimeOfDay)
@@ -455,7 +459,7 @@ func scheduleFrom(s model.Schedule, templateName, suiteName string) Schedule {
 		out.TemplateName = templateName
 		out.System = model.IsSystemTemplateID(*s.TemplateID)
 	}
-	if s.TemplateID != nil && strings.HasPrefix(*s.TemplateID, model.WorkflowReviewTemplatePrefix) {
+	if s.TemplateID != nil && model.IsWorkflowReviewTemplateID(*s.TemplateID) {
 		out.WorkflowReview = string(model.WorkflowReviewOnFailure)
 		if s.WorkflowReview.Always() {
 			out.WorkflowReview = string(model.WorkflowReviewAlways)
@@ -2029,7 +2033,7 @@ func (c *Client) RunScheduleNow(ctx context.Context, id string) (ScheduleRun, er
 	if firing.Skipped {
 		workflow := false
 		if sched.TemplateID != nil {
-			_, workflow = model.WorkflowReviewStem(*sched.TemplateID)
+			workflow = model.IsWorkflowReviewTemplateID(*sched.TemplateID)
 		}
 		return ScheduleRun{}, &scheduleBusyError{ID: id, Review: firing.OpenReview, Workflow: workflow}
 	}

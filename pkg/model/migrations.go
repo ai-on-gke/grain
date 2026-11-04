@@ -696,6 +696,67 @@ var Migrations = []Migration{
 		Description: "rewrite stored image-signing, registry-push and package-publish grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/release#<method>={} (the in-process providers are retired)",
 		Up:          migrateReleaseGrants,
 	},
+	{
+		Version:     102,
+		Description: "add the hostd selector a repository's tasks start pinned to",
+		Statements: []string{
+			"ALTER TABLE `repo_config` ADD COLUMN `default_hostd` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     103,
+		Description: "seed gcp#gemini-key on the gcp server where grain_config.gcp_project is set, minting with the gcp-key-minter secret, and rewrite stored gemini-key grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/gcp#gemini-key={} (the in-process gemini-key is retired)",
+		Up:          migrateGeminiKeyToCapabilityServer,
+	},
+	{
+		Version:     104,
+		Description: "disable (and keep) every stored custom command connection: the connection type is removed",
+		Up:          disableCustomConnections,
+	},
+	{
+		Version:     105,
+		Description: "add pending_access_request and access_decisions to task_observation for request_access",
+		Statements: []string{
+			"ALTER TABLE `task_observation` ADD COLUMN `pending_access_request` TEXT NULL",
+			"ALTER TABLE `task_observation` ADD COLUMN `access_decisions` TEXT NULL",
+		},
+	},
+	{
+		Version:     106,
+		Description: "add repo_config.upstream_repo for fork-to-upstream pull request workflows",
+		Statements: []string{
+			"ALTER TABLE `repo_config` ADD COLUMN `upstream_repo` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     107,
+		Description: "add external_agent_token.owner, task.filed_via, task_comment.filed_via and grain_config.owner_trust (external agent owner attribution and owner-trust approval)",
+		Statements: []string{
+			"ALTER TABLE `external_agent_token` ADD COLUMN `owner` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `filed_via` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task_comment` ADD COLUMN `filed_via` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `grain_config` ADD COLUMN `owner_trust` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     108,
+		Description: "add allowed_principal.reason, why an allowlist entry was added (required for serviceAccount: entries)",
+		Statements: []string{
+			"ALTER TABLE `allowed_principal` ADD COLUMN `reason` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     109,
+		Description: "rewrite stored gcp#gcp-key grants from deprecated account and activate arguments to permission_set",
+		Up:          MigrateGCPKeyGrantArgs,
+	},
+	{
+		Version:     110,
+		Description: "add allowed_principal.role, the scope set an allowlist entry's sessions are held to (existing entries become grain/operator)",
+		Statements: []string{
+			"ALTER TABLE `allowed_principal` ADD COLUMN `role` TEXT NOT NULL DEFAULT 'grain/operator'",
+		},
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as

@@ -192,7 +192,7 @@ func (d DaemonTasks) Task(ctx context.Context, id string) (mcp.TaskRecord, error
 	if err != nil {
 		return mcp.TaskRecord{}, err
 	}
-	record := mcp.TaskRecord{TaskSummary: taskSummary(detail.Task), Description: detail.Description, Author: detail.Author, AuthorKind: detail.AuthorKind, Base: detail.Base, Capabilities: detail.Capabilities, PullRequest: detail.PullRequest, PullRequestMergedAt: detail.PrMergedAt, PullRequestClosedAt: detail.PrClosedAt, FailedAttempts: detail.FailedAttempts, LastFailureAt: detail.LastFailureAt, LastFailureReason: detail.LastFailureReason, Activity: mcp.TaskActivity{Note: detail.Activity, At: detail.ActivityAt, BySetup: detail.ActivityBySetup}}
+	record := mcp.TaskRecord{TaskSummary: taskSummary(detail.Task), Description: detail.Description, Author: detail.Author, AuthorKind: detail.AuthorKind, AuthorLabel: detail.AuthorLabel, Base: detail.Base, Capabilities: detail.Capabilities, PullRequest: detail.PullRequest, PullRequestMergedAt: detail.PrMergedAt, PullRequestClosedAt: detail.PrClosedAt, FailedAttempts: detail.FailedAttempts, LastFailureAt: detail.LastFailureAt, LastFailureReason: detail.LastFailureReason, Activity: mcp.TaskActivity{Note: detail.Activity, At: detail.ActivityAt, BySetup: detail.ActivityBySetup}}
 	for _, a := range detail.Attempts {
 		record.Attempts = append(record.Attempts, mcp.TaskAttempt{Number: a.Number, StartedAt: a.StartedAt, FinishedAt: a.FinishedAt, Outcome: a.Outcome, Detail: a.Detail, PromptBytes: a.PromptBytes, PromptTokens: a.PromptTokens, Model: a.Model, AgentFramework: a.AgentFramework})
 	}
@@ -200,7 +200,7 @@ func (d DaemonTasks) Task(ctx context.Context, id string) (mcp.TaskRecord, error
 		record.Transitions = append(record.Transitions, mcp.TaskTransition{State: string(tr.State), At: tr.At, Inferred: tr.Inferred, By: tr.By, Reason: tr.Reason, Detail: tr.Detail})
 	}
 	for _, c := range detail.Comments {
-		record.Comments = append(record.Comments, mcp.TaskComment{ID: c.ID, Author: c.Author, AuthorKind: c.AuthorKind, Body: c.Body, CreatedAt: c.CreatedAt, Handover: c.Handover})
+		record.Comments = append(record.Comments, mcp.TaskComment{ID: c.ID, Author: c.Author, AuthorKind: c.AuthorKind, AuthorLabel: c.Who(), Body: c.Body, CreatedAt: c.CreatedAt, Handover: c.Handover})
 	}
 	return record, nil
 }
@@ -550,6 +550,18 @@ func (d daemonConfigChanges) ProposeConfigChange(ctx context.Context, p mcp.Conf
 	return d.client.ProposeConfigChange(ctx, d.taskID, ui.ConfigChangeProposal{
 		Summary: p.Summary, Description: p.Description, Branch: p.Branch, HeadSHA: p.HeadSHA,
 	})
+}
+
+// daemonAccessRequests is request_access's mcp.AccessRequestChecker: the
+// daemon judges what the call names against this run's own task, as the
+// task's grants editor would.
+type daemonAccessRequests struct {
+	client *ui.HTTPClient
+	taskID string
+}
+
+func (d daemonAccessRequests) CheckAccessRequest(ctx context.Context, items []model.AccessRequestItem) error {
+	return d.client.CheckAccessRequest(ctx, d.taskID, items)
 }
 
 // writesConfigRepo reports whether t may push grain/config from the
@@ -1446,13 +1458,13 @@ func warnUnknownGrants(grants GrantNames) {
 	served := append(slices.Clone(servedGrants), capability.RunGrants()...)
 	for _, name := range grants {
 		if _, isAPI, err := ui.ParseAPIGrant(name); isAPI && err == nil {
-			continue // served as generated tools (ui.AgentAPITools)
+			continue // served by grain-controller on POST /api/mcp
 		}
 		if grainserver.IsInProcessGrant(name) {
 			continue
 		}
 		if model.APIAliasPreset(name) != "" {
-			continue // bare alias for an api preset (ui.AgentAPITools)
+			continue // bare alias for an api preset (served by grain-controller on POST /api/mcp)
 		}
 		if !slices.Contains(served, name) {
 			fmt.Fprintf(os.Stderr,
@@ -1496,16 +1508,6 @@ func GrantedDaemonTools(grants GrantNames, srcDir, secretsDir, stateDir, taskID 
 			AllowWrite: grainserver.HasSQLWrite(grants),
 			Executor:   executor,
 		})...)
-	}
-	// The agent API: one tool per route of grain's own API whose scope
-	// the task's api grants reach (docs/agent-api.md). Each call goes to
-	// the daemon naming this task, which holds it to those same grants
-	// (ui.ActingTaskHeader) -- so a tool listed here is an offer, and
-	// the daemon is what decides. Registered last, so a hand-written
-	// tool of the same name could never be shadowed by one, though the
-	// api_ prefix keeps them apart anyway.
-	if client != nil && taskID != "" {
-		tools = append(tools, ui.AgentAPITools(client, taskID, grants)...)
 	}
 	return tools
 }
@@ -1849,6 +1851,9 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 		"daemon-pinned external pull request number within -pr-repo (from model.LinkExternalPR) "+
 			"that pull_request_status, reply_to_pull_request_comment and resolve_review_thread "+
 			"scope to when -pr-branch has no open pull request of its own")
+	prUpstreamRepo := fs.String("pr-upstream-repo", "",
+		"owner/name of the upstream repository that pull requests for -pr-repo are opened and "+
+			"tracked against (model.RepoConfig.UpstreamRepo)")
 	prCredential := fs.String("pr-credential", "",
 		"name of the credential in -data-dir's secrets/github that this run's branch is pushed "+
 			"with (its team's git connection for -pr-repo, or its own github-credential grant), "+
@@ -2110,13 +2115,14 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 			Read:  mcp.SandboxFileReaderOf(tools),
 			Stage: daemonStagedAttachments{client: client, taskID: *taskID}.Stage,
 		})
+		escapeSink.SetAccessChecker(daemonAccessRequests{client: client, taskID: *taskID})
 	}
 
 	// Unlike the escape hatches, this one acts within the run rather than
 	// after it: it really does read GitHub, from this process, on the
 	// controller. See the file's doc comment.
-	registry.Register(pullRequestToolsWithNumber(*dataDir, *githubHost, *githubInsecureHTTP,
-		*prRepo, *prBranch, *prBase, *prCredential, *prRepair, *prIgnoreGitHubCI, *prBaseIncident,
+	registry.Register(pullRequestToolsWithUpstream(*dataDir, *githubHost, *githubInsecureHTTP,
+		*prRepo, *prBranch, *prBase, *prUpstreamRepo, *prCredential, *prRepair, *prIgnoreGitHubCI, *prBaseIncident,
 		*prNumber, grainCIReader(client, *taskID, grants))...)
 
 	var queueReader mcp.MergeQueueReader
@@ -2605,7 +2611,14 @@ func PullRequestTools(dataDir, githubHost string, insecureHTTP bool, repo, branc
 func pullRequestToolsWithNumber(dataDir, githubHost string, insecureHTTP bool, repo, branch, base, credential string,
 	repair, ignoreGitHubCI bool, baseIncident string, prNumber int, grainCI mcp.GrainCIReader) []mcp.Tool {
 
-	client, scope, err := pullRequestReaderWithNumber(dataDir, githubHost, insecureHTTP, repo, branch, base, credential,
+	return pullRequestToolsWithUpstream(dataDir, githubHost, insecureHTTP, repo, branch, base, "", credential,
+		repair, ignoreGitHubCI, baseIncident, prNumber, grainCI)
+}
+
+func pullRequestToolsWithUpstream(dataDir, githubHost string, insecureHTTP bool, repo, branch, base, upstreamRepo, credential string,
+	repair, ignoreGitHubCI bool, baseIncident string, prNumber int, grainCI mcp.GrainCIReader) []mcp.Tool {
+
+	client, scope, err := pullRequestReaderWithUpstream(dataDir, githubHost, insecureHTTP, repo, branch, base, upstreamRepo, credential,
 		repair, ignoreGitHubCI, baseIncident, prNumber)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
@@ -2656,6 +2669,12 @@ func PullRequestReader(dataDir, githubHost string, insecureHTTP bool, repo, bran
 
 func pullRequestReaderWithNumber(dataDir, githubHost string, insecureHTTP bool, repo, branch, base, credential string,
 	repair, ignoreGitHubCI bool, baseIncident string, prNumber int) (mcp.PullRequestReader, mcp.PullRequestScope, error) {
+	return pullRequestReaderWithUpstream(dataDir, githubHost, insecureHTTP, repo, branch, base, "", credential,
+		repair, ignoreGitHubCI, baseIncident, prNumber)
+}
+
+func pullRequestReaderWithUpstream(dataDir, githubHost string, insecureHTTP bool, repo, branch, base, upstreamRepo, credential string,
+	repair, ignoreGitHubCI bool, baseIncident string, prNumber int) (mcp.PullRequestReader, mcp.PullRequestScope, error) {
 	if repo == "" {
 		return nil, mcp.PullRequestScope{}, nil
 	}
@@ -2668,6 +2687,16 @@ func pullRequestReaderWithNumber(dataDir, githubHost string, insecureHTTP bool, 
 	ref, err := model.ParseRepo(repo)
 	if err != nil {
 		return nil, mcp.PullRequestScope{}, fmt.Errorf("-pr-repo %q: %w", repo, err)
+	}
+	var upRef model.RepoRef
+	if strings.TrimSpace(upstreamRepo) != "" {
+		parsedUp, err := model.ParseRepo(upstreamRepo)
+		if err != nil {
+			return nil, mcp.PullRequestScope{}, fmt.Errorf("-pr-upstream-repo %q: %w", upstreamRepo, err)
+		}
+		if !parsedUp.Same(ref) {
+			upRef = parsedUp
+		}
 	}
 	credentials, err := gitproxy.LoadCredentialSet(filepath.Join(dataDir, "secrets", "github"))
 	if err != nil {
@@ -2694,6 +2723,7 @@ func pullRequestReaderWithNumber(dataDir, githubHost string, insecureHTTP bool, 
 	// pull_request_status and wait_for_checks as well.
 	return client, mcp.PullRequestScope{
 		Owner: ref.Owner, Repo: ref.Name, Branch: branch, Base: base,
+		UpstreamOwner: upRef.Owner, UpstreamRepo: upRef.Name,
 		// Carried through as it was given, and never derived from
 		// anything here: whether a run is a repair is grain's own reading
 		// of the task it dispatched (orchestrator.mergeRepairRun), the

@@ -104,6 +104,7 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "secrets:write", Description: "Set and delete secrets, keys and tokens", Dangerous: true},
 	{Scope: "deployment:read", Description: "Read host, sandbox, log, metric and upgrade status"},
 	{Scope: "sandboxes:read", Description: "Read the status of persistent sandboxes (implied by deployment:read)"},
+	{Scope: "deployment:src", Description: "Read grain's own source under src:// over GET /api/fs/src, which an external agent token is refused without even when it holds deployment:read"},
 	{Scope: "deployment:upgrade", Description: "Upgrade grain and its database, or cancel a scheduled upgrade", Dangerous: true},
 	{Scope: "deployment:restart", Description: "Restart grain, act on persistent sandboxes, and run sandbox probes", Dangerous: true},
 	{Scope: "deployment:reboot", Description: "Reboot or shut down grain's host", Dangerous: true},
@@ -162,6 +163,15 @@ var apiPresets = []APIPreset{
 		"and tasks, the persistent sandboxes' status, and its release-notes task",
 		Scopes:    []APIScope{"ci:read", "tasks:read", "sandboxes:read", "tasks:from-template"},
 		Templates: []string{"release-notes"}},
+	// The two sets an external agent credential is issued with
+	// (design/spec/external-cli/external-cli.spec.md#XC-16): neither
+	// holds a dangerous scope, so neither needs a person to issue.
+	{Name: "external-dev", Description: "What a workstation coding agent needs: file and follow tasks, " +
+		"drive their CI and merges, and read repositories, templates and deployment status",
+		Scopes: []APIScope{"tasks:read", "tasks:write", "ci:read", "ci:write", "merge:write",
+			"repos:read", "templates:read", "deployment:read"}},
+	{Name: "external-read", Description: "Read-only observer: read tasks, CI, repositories, templates and deployment status",
+		Scopes: []APIScope{"tasks:read", "ci:read", "repos:read", "templates:read", "deployment:read"}},
 }
 
 // apiAliasCapabilities are the older capabilities that are now aliases
@@ -315,21 +325,20 @@ func ParseGCPKeyServerGrant(grant string) (permissionSet string, ok bool) {
 	if err != nil || spec.Capability != GCPKeyRef {
 		return "", false
 	}
-	set, _ := spec.With["permission_set"].(string)
-	if old, hasOld := spec.With["account"].(string); hasOld && old != "" {
-		set = old
+	if err := CheckGCPKeyGrantArgs(spec, ""); err != nil {
+		return "", false
 	}
-	if set == "" || set == "default" {
+	set, _ := spec.With["permission_set"].(string)
+	if set == "" {
 		set = GCPKeyDefaultPermissionSet
 	}
 	return set, true
 }
 
 // GCPKeySetUnnamed reports whether grant is a gcp#gcp-key capability-server
-// grant that leaves its permission set to the server's first configured set:
-// no permission_set, or "default" in permission_set or the deprecated account
-// field. (Bare "gcp-key" is false: CanonicalLegacyGrant rewrites it to
-// GCPKeySandboxAgentGrant.)
+// grant that leaves its permission set to the server's first configured set
+// (no permission_set). (Bare "gcp-key" is false: CanonicalLegacyGrant rewrites
+// it to GCPKeySandboxAgentGrant.)
 func GCPKeySetUnnamed(grant string) bool {
 	s := strings.TrimSpace(grant)
 	if !IsCapabilityRef(s) {
@@ -339,11 +348,11 @@ func GCPKeySetUnnamed(grant string) bool {
 	if err != nil || spec.Capability != GCPKeyRef {
 		return false
 	}
-	set, _ := spec.With["permission_set"].(string)
-	if old, _ := spec.With["account"].(string); old != "" {
-		set = old
+	if err := CheckGCPKeyGrantArgs(spec, ""); err != nil {
+		return false
 	}
-	return set == "" || set == "default"
+	set, _ := spec.With["permission_set"].(string)
+	return set == ""
 }
 
 func init() {
@@ -493,6 +502,9 @@ var legacyGrantReplacements = map[string]string{
 	"image-signing":          ImageSigningRef + "={}",
 	"registry-push":          RegistryPushRef + "={}",
 	CapabilityPackagePublish: PackagePublishRef + "={}",
+	// Retired by schema migration 103 onto the gcp server's gemini-key,
+	// which mints with the same gcp-key-minter secret.
+	"gemini-key": GCPGeminiKeyGrant,
 }
 
 // legacyGrantMultiReplacements maps retired bare capabilities that split into
@@ -582,6 +594,9 @@ func CanonicalLegacyGrants(name string) []string {
 	if many, ok := legacyGrantMultiReplacements[trimmed]; ok {
 		return slices.Clone(many)
 	}
+	if many, ok := runtimeExpansion(trimmed); ok {
+		return many
+	}
 	return []string{CanonicalLegacyGrant(name)}
 }
 
@@ -595,7 +610,7 @@ func RetiredGrantNames() []string {
 	for name := range legacyGrantMultiReplacements {
 		names = append(names, name)
 	}
-	return names
+	return append(names, runtimeExpansionNames()...)
 }
 
 // APIAliasPreset returns the preset name that a bare capability name aliases,

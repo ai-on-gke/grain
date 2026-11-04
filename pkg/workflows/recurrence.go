@@ -60,7 +60,19 @@ const (
 	// RecurrenceGitHubWorkflowRun fires when a GitHub Actions workflow run
 	// concludes matching GitHubWorkflowRunTrigger.
 	RecurrenceGitHubWorkflowRun RecurrenceKind = "github_workflow_run"
+	// RecurrenceGitRef fires when a ref of some repository -- any one this
+	// deployment can read, not only the schedule's own target -- comes to
+	// name a different commit (GitRefTrigger). The daemon notices with a
+	// `git ls-remote` of its own; nothing runs in a sandbox until it does.
+	RecurrenceGitRef RecurrenceKind = "git_ref"
 )
+
+// EventDriven reports whether k fires on something happening rather than
+// on a wall-clock cadence: such a schedule is never returned by the store's
+// due-schedule query, and its NextRunAt means nothing.
+func (k RecurrenceKind) EventDriven() bool {
+	return k == RecurrenceGitHubWorkflowRun || k == RecurrenceGitRef
+}
 
 // RecurrenceKinds is every RecurrenceKind, in declaration order. Tests
 // that have to cover each kind -- the state repository's export/import
@@ -73,6 +85,7 @@ var RecurrenceKinds = []RecurrenceKind{
 	RecurrenceWeekly,
 	RecurrenceMonthly,
 	RecurrenceGitHubWorkflowRun,
+	RecurrenceGitRef,
 }
 
 // GitHubWorkflowRunTrigger configures a schedule that fires when a GitHub
@@ -158,6 +171,34 @@ func (t GitHubWorkflowRunTrigger) MatchesBranch(branch, fallbackBase string) boo
 	return false
 }
 
+// GitRefTrigger configures a schedule that fires when Ref of Repo moves:
+// when the commit it peels to (a tag's target commit rather than the tag
+// object) differs from the one last seen. The first look at a ref only
+// records where it is -- there is no "before" to have moved from.
+//
+// Repo is "owner/name" (or "host/owner/name") and need not be the
+// schedule's own target: an edition watching its upstream's
+// refs/tags/latest is what this is for.
+type GitRefTrigger struct {
+	Repo string `json:"repo" yaml:"repo"`
+	Ref  string `json:"ref" yaml:"ref"`
+}
+
+// Validate reports whether t names a repository and a full ref.
+func (t GitRefTrigger) Validate() error {
+	repo := strings.TrimSpace(t.Repo)
+	if repo == "" || strings.Count(repo, "/") < 1 || strings.HasPrefix(repo, "/") || strings.HasSuffix(repo, "/") ||
+		strings.ContainsAny(repo, " \t\n") {
+		return fmt.Errorf("git_ref trigger needs `repo: owner/name`, got %q", t.Repo)
+	}
+	ref := strings.TrimSpace(t.Ref)
+	if !strings.HasPrefix(ref, "refs/") || len(ref) == len("refs/") || strings.ContainsAny(ref, " \t\n^~:?*[\\") ||
+		strings.Contains(ref, "..") || strings.HasSuffix(ref, "/") {
+		return fmt.Errorf("git_ref trigger needs a full `ref:` such as refs/tags/latest or refs/heads/main, got %q", t.Ref)
+	}
+	return nil
+}
+
 // Recurrence is a schedule's cadence. TimeOfDay, Weekday and DayOfMonth
 // are read against the deployment's own wall clock -- the zone
 // Config.TimeZone names, handed to Next as a *time.Location by whoever
@@ -198,19 +239,44 @@ type Recurrence struct {
 
 	// GitHubWorkflowRun is set when Kind is RecurrenceGitHubWorkflowRun.
 	GitHubWorkflowRun *GitHubWorkflowRunTrigger
+
+	// GitRef is set when Kind is RecurrenceGitRef.
+	GitRef *GitRefTrigger
 }
 
-// StoredKind encodes r.Kind (and GitHubWorkflowRun trigger details when
-// Kind is RecurrenceGitHubWorkflowRun) into the schedule.recurrence_kind
-// column so no schema migration is required.
+// StoredKind encodes r.Kind (and the trigger's details when Kind is
+// RecurrenceGitHubWorkflowRun or RecurrenceGitRef) into the
+// schedule.recurrence_kind column so no schema migration is required.
 func (r Recurrence) StoredKind() string {
-	if r.Kind == RecurrenceGitHubWorkflowRun && r.GitHubWorkflowRun != nil {
-		b, err := json.Marshal(r.GitHubWorkflowRun)
-		if err == nil {
-			return string(RecurrenceGitHubWorkflowRun) + ":" + string(b)
-		}
+	var trig any
+	switch {
+	case r.Kind == RecurrenceGitHubWorkflowRun && r.GitHubWorkflowRun != nil:
+		trig = r.GitHubWorkflowRun
+	case r.Kind == RecurrenceGitRef && r.GitRef != nil:
+		trig = r.GitRef
+	default:
+		return string(r.Kind)
 	}
-	return string(r.Kind)
+	b, err := json.Marshal(trig)
+	if err != nil {
+		return string(r.Kind)
+	}
+	return string(r.Kind) + ":" + string(b)
+}
+
+// ParseStoredGitRefTrigger decodes the git_ref trigger a
+// schedule.recurrence_kind column value written by Recurrence.StoredKind
+// carries, or nil when it carries none.
+func ParseStoredGitRefTrigger(raw string) *GitRefTrigger {
+	rest, ok := strings.CutPrefix(raw, string(RecurrenceGitRef)+":")
+	if !ok {
+		return nil
+	}
+	var trig GitRefTrigger
+	if err := json.Unmarshal([]byte(rest), &trig); err != nil {
+		return nil
+	}
+	return &trig
 }
 
 // ParseStoredRecurrenceKind decodes a schedule.recurrence_kind column value
@@ -222,6 +288,9 @@ func ParseStoredRecurrenceKind(raw string) (RecurrenceKind, *GitHubWorkflowRunTr
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(raw, prefix)), &trig); err == nil {
 			return RecurrenceGitHubWorkflowRun, &trig
 		}
+	}
+	if ParseStoredGitRefTrigger(raw) != nil {
+		return RecurrenceGitRef, nil
 	}
 	return RecurrenceKind(raw), nil
 }
@@ -303,6 +372,11 @@ func (r Recurrence) Validate() error {
 				return fmt.Errorf("github_workflow_run branches cannot contain empty strings")
 			}
 		}
+	case RecurrenceGitRef:
+		if r.GitRef == nil {
+			return fmt.Errorf("git_ref trigger needs a repo and a ref")
+		}
+		return r.GitRef.Validate()
 	default:
 		return fmt.Errorf("unknown recurrence kind %q", r.Kind)
 	}
@@ -371,7 +445,7 @@ func (r Recurrence) Next(after time.Time, loc *time.Location) time.Time {
 			minutes = MaxEveryNMinutes
 		}
 		return after.Add(time.Duration(minutes) * time.Minute)
-	case RecurrenceGitHubWorkflowRun:
+	case RecurrenceGitHubWorkflowRun, RecurrenceGitRef:
 		// Event-triggered schedules do not fire on a wall-clock cadence.
 		return after.Add(time.Duration(MaxEveryNHours) * time.Hour)
 	default:

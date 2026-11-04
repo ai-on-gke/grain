@@ -645,6 +645,12 @@ type Settings struct {
 	// vocabulary, in a picker's order.
 	AutoUpgradeOn    string   `json:"autoUpgradeOn"`
 	AutoUpgradeModes []string `json:"autoUpgradeModes"`
+	// OwnerTrust is the owner-trust proposal policy
+	// (model.Config.OwnerTrust): the (owner, repo) pairs -- repo "*" for
+	// every repository -- whose external agent credentials' unapproved
+	// filings queue without a person's approval. Never nil coming out of
+	// here.
+	OwnerTrust []model.OwnerTrustRule `json:"ownerTrust"`
 	// TimeZone is model.Config.TimeZone: the IANA zone every timestamp the
 	// frontend prints is shown in. Never empty coming out of here -- an
 	// unset stored value reads back as model.DefaultTimeZone.
@@ -1174,6 +1180,7 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		AutoUpgradeTime:                    autoUpgradeTimeOrDefault(cfg.AutoUpgradeTime),
 		AutoUpgradeOn:                      cfg.AutoUpgradeMode(),
 		AutoUpgradeModes:                   model.AutoUpgradeModes(),
+		OwnerTrust:                         ownerTrustOrEmpty(cfg.OwnerTrust),
 		TimeZone:                           model.TimeZoneOrDefault(cfg.TimeZone),
 		AgentBackends:                      cfg.AgentBackends,
 		AgentCLIDefaults:                   c.Config.AgentCLIDefaults,
@@ -1452,6 +1459,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			AutoUpgradeTime:                    autoUpgradeTimeOrDefault(def.AutoUpgradeTime),
 			AutoUpgradeOn:                      def.AutoUpgradeMode(),
 			AutoUpgradeModes:                   model.AutoUpgradeModes(),
+			OwnerTrust:                         ownerTrustOrEmpty(def.OwnerTrust),
 			TimeZone:                           model.TimeZoneOrDefault(def.TimeZone),
 			NetworkAccess:                      string(model.NormalizeNetworkAccess(def.NetworkAccess)),
 			NetworkAccesses:                    networkAccessNames(),
@@ -1557,15 +1565,18 @@ type UpdateSettingsRequest struct {
 	AutoUpgradeChannel *string `json:"autoUpgradeChannel"`
 	AutoUpgradeTime    *string `json:"autoUpgradeTime"`
 	// AutoUpgradeOn is "off", "daily" or "release" (Settings.AutoUpgradeOn).
-	AutoUpgradeOn       *string               `json:"autoUpgradeOn"`
-	AgentBackends       *[]model.AgentBackend `json:"agentBackends"`
-	DefaultModel        *string               `json:"defaultModel"`
-	PromptExtension     *string               `json:"promptExtension"`
-	RepairTemplateID    *string               `json:"repairTemplateID"`
-	TaskBranchTemplate  *string               `json:"taskBranchTemplate"`
-	DeploymentID        *string               `json:"deploymentId"`
-	DefaultCapabilities *[]string             `json:"defaultCapabilities"`
-	SettingsLocked      *bool                 `json:"settingsLocked"`
+	AutoUpgradeOn *string `json:"autoUpgradeOn"`
+	// OwnerTrust replaces the owner-trust proposal policy
+	// (Settings.OwnerTrust); an empty list turns it off.
+	OwnerTrust          *[]model.OwnerTrustRule `json:"ownerTrust"`
+	AgentBackends       *[]model.AgentBackend   `json:"agentBackends"`
+	DefaultModel        *string                 `json:"defaultModel"`
+	PromptExtension     *string                 `json:"promptExtension"`
+	RepairTemplateID    *string                 `json:"repairTemplateID"`
+	TaskBranchTemplate  *string                 `json:"taskBranchTemplate"`
+	DeploymentID        *string                 `json:"deploymentId"`
+	DefaultCapabilities *[]string               `json:"defaultCapabilities"`
+	SettingsLocked      *bool                   `json:"settingsLocked"`
 }
 
 func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
@@ -2276,6 +2287,13 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		}
 		cfg.AutoUpgradeOn = on
 	}
+	if req.OwnerTrust != nil {
+		rules, err := model.NormalizeOwnerTrust(*req.OwnerTrust)
+		if err != nil {
+			return model.Config{}, validationErrorf("%v", err)
+		}
+		cfg.OwnerTrust = rules
+	}
 	// A channel is a daily upgrade at some time; one saved without a
 	// time gets the default rather than a schedule that never fires.
 	if cfg.AutoUpgradeChannel != "" && strings.TrimSpace(cfg.AutoUpgradeTime) == "" {
@@ -2306,7 +2324,6 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 				}
 			}
 			backend.ExcludedModels = excluded
-			backend.Command = strings.TrimSpace(backend.Command)
 			backend.CredentialBackendID = strings.TrimSpace(backend.CredentialBackendID)
 			backend.Team = strings.TrimSpace(backend.Team)
 			if backend.AuthMode != "" {
@@ -2326,17 +2343,31 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			if seen[backend.ID] {
 				return model.Config{}, validationErrorf("agent backend id %q is duplicated", backend.ID)
 			}
+			if backend.IsRemovedCustomConnection() {
+				// A custom command connection the store already has is
+				// kept, disabled, exactly as stored until it is deleted:
+				// the Models page sends every connection back on a save.
+				// A new one is refused.
+				stored := findStoredBackend(cfg.AgentBackends, backend.ID)
+				if stored == nil || !stored.IsRemovedCustomConnection() {
+					return model.Config{}, validationErrorf("agentBackends[%d].framework: %s; "+
+						"use one of %s", i, removedCustomConnectionError, model.AgentFrameworkNames())
+				}
+				kept := *stored
+				kept.Disabled, kept.DisabledReason = true, model.RemovedCustomConnectionReason
+				seen[backend.ID] = true
+				(*req.AgentBackends)[i] = kept
+				continue
+			}
 			if !model.ValidAgentFramework(backend.Framework) {
 				return model.Config{}, validationErrorf("agentBackends[%d].framework must be %s", i, model.AgentFrameworkNames())
 			}
-			if backend.Framework == model.AgentFrameworkCustom && backend.Command == "" {
-				return model.Config{}, validationErrorf("agentBackends[%d].command is required for a custom backend", i)
-			}
+			backend.Command = ""
+			backend.DisabledReason = ""
 			backend.CLIPath = strings.TrimSpace(backend.CLIPath)
 			if backend.CLIPath != "" {
 				if model.AgentCLIBinary(backend.Framework) == "" {
-					return model.Config{}, validationErrorf("agentBackends[%d].cliPath is only for claude, codex and antigravity connections; "+
-						"a custom backend names its executable in command", i)
+					return model.Config{}, validationErrorf("agentBackends[%d].cliPath is only for claude, codex and antigravity connections", i)
 				}
 				// Checked only when it changes, so a binary removed after
 				// it was saved fails that connection's runs (naming it)
@@ -2563,4 +2594,13 @@ func k8sPriorityClassName(key, raw string) (string, error) {
 		return "", validationErrorf("%s %q is not a Kubernetes PriorityClass name: lowercase letters, digits, '-' and '.', starting and ending with a letter or digit", key, name)
 	}
 	return name, nil
+}
+
+// ownerTrustOrEmpty is rules, or an empty list for none, so the settings
+// payload always carries the field.
+func ownerTrustOrEmpty(rules []model.OwnerTrustRule) []model.OwnerTrustRule {
+	if rules == nil {
+		return []model.OwnerTrustRule{}
+	}
+	return rules
 }

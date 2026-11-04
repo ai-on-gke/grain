@@ -22,10 +22,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 // processStartedAt is when this process started, near enough: package
@@ -137,7 +139,11 @@ func deploymentMode(cfg Config) upgrade.Mode {
 // store is the same deployment's rows at the level the pause lives at,
 // and it is what an upgrade holds the queue with while it runs
 // (orchestrator.UpgradeHold). Nil takes no hold.
-func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
+func newUpgrader(cfg Config, db *sql.DB, store *model.Store, creds ...*gitproxy.CredentialSet) *upgrade.Upgrader {
+	var credentials *gitproxy.CredentialSet
+	if len(creds) > 0 {
+		credentials = creds[0]
+	}
 	switch {
 	case cfg.K8sSandboxes && cfg.UpgradeImage != "" && cfg.UpgradeImageRefFile == "":
 		// The Kubernetes path: no pull, no ref file and no restart
@@ -230,7 +236,14 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 					UIAllowedHosts: cfg.UiAllowedHosts,
 					DataDir:        cfg.DataDir,
 				}).Detect().Track,
+				Source:             upgrade.ImageSource(strings.TrimSpace(cfg.UpgradeImageSource)),
+				SourceLocked:       cfg.UpgradeImageSourceLocked,
+				SourceOverrideFile: filepath.Join(cfg.DataDir, "upgrade-image-source.json"),
+				Fallback:           upgrade.ImageSource(strings.TrimSpace(cfg.UpgradeImageFallback)),
+				FallbackExplicit:   cfg.UpgradeImageFallbackExplicit,
+				ReleaseAssets:      upgradeReleaseAssetsConfig(cfg, store, credentials),
 			},
+			RunningCommit:   daemonRunningCommit,
 			HealthCheckArgs: []string{"schema-version"},
 			// What the pane previews when a target is chosen: the
 			// release notes that build carries, from this one's
@@ -375,4 +388,12 @@ func upgradeRestartRequest(cfg Config) func(branch string) {
 	return func(branch string) {
 		requests.recordOrLog("upgrade to "+branch, log.Printf)
 	}
+}
+
+func daemonRunningCommit() string {
+	info := version.Get()
+	if info.Modified {
+		return ""
+	}
+	return strings.TrimSpace(info.Revision)
 }

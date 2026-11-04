@@ -150,6 +150,39 @@ func TestTheStarterPolicyFailsClosed(t *testing.T) {
 	if err := p.Check(writer, model.NetworkNone); err != nil {
 		t.Errorf("a repo-less grain/config writer was refused: %v", err)
 	}
+	// The Director's own grants are allowed by name, so the Director
+	// chat this deployment files for itself is not held for one
+	// (docs/test-runs/2026-11-03-config-state.md, "Left open").
+	session := model.DefaultConsoleSessions()[0]
+	directorChat := director
+	directorChat.Grants = model.ConsoleSessionGrants(session)
+	if err := p.Check(directorChat, model.NetworkNone); err != nil {
+		t.Errorf("the Director chat's own grants were refused: %v", err)
+	}
+	// Its open network is not: the owner chose none, and init says so.
+	directorChat.NetworkAccess = session.NetworkAccess
+	if err := p.Check(directorChat, model.NetworkNone); err == nil || !strings.Contains(err.Error(), "network") {
+		t.Errorf("the Director's open network under a none policy = %v, want a network refusal", err)
+	}
+	open, err := policy.Parse([]byte(renderWorkstationPolicy(workstationOptions{
+		Repos: []string{"acme/widgets"}, Owners: []string{"me@example.com"}, Network: "open",
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := open.Check(directorChat, model.NetworkOpen); err != nil {
+		t.Errorf("the Director chat was held on a fresh workstation: %v", err)
+	}
+	// Named exactly: a capability the Director is not granted stays
+	// refused, even one in a family it holds a grant of.
+	for _, c := range []string{"api:deployment:write", "repo-write:acme/widgets"} {
+		if err := p.Check(model.Task{Target: widgets, Creator: "me@example.com", Grants: []model.Grant{{Capability: c}}}, model.NetworkNone); err == nil {
+			t.Errorf("the Director's grants let %s through", c)
+		}
+	}
+	if !strings.Contains(text, "The Director chat's own grants") {
+		t.Errorf("the starter policy does not say which grants are the Director's:\n%s", text)
+	}
 	if got := withConfigRepo([]string{"acme/widgets", "grain/config"}); len(got) != 2 {
 		t.Errorf("grain/config named twice: %v", got)
 	}
@@ -176,7 +209,7 @@ func TestTheStarterPolicyFailsClosed(t *testing.T) {
 	if err := withCaps.Check(model.Task{Target: widgets, Creator: "me", Grants: []model.Grant{{Capability: "gcp-key:team-a"}}}, ""); err != nil {
 		t.Errorf("a named capability was refused: %v", err)
 	}
-	if err := withCaps.Check(model.Task{Target: widgets, Creator: "me", Grants: []model.Grant{{Capability: "self-debug"}}}, ""); err == nil {
+	if err := withCaps.Check(model.Task{Target: widgets, Creator: "me", Grants: []model.Grant{{Capability: "repo-write:acme/widgets"}}}, ""); err == nil {
 		t.Error("a capability nobody named was allowed")
 	}
 	if err := withCaps.Check(model.Task{Target: widgets, Creator: "me", Grants: []model.Grant{{Capability: grainci.Grant}}}, ""); err != nil {
@@ -193,6 +226,9 @@ func TestInitWorkstationWritesWhatTheServiceRuns(t *testing.T) {
 		"-owner", "me@example.com", "-network", "none"}, strings.NewReader(""), &out, env)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), directorNetworkWarning) {
+		t.Errorf("init with -network none did not say the Director is held for its network:\n%s", out.String())
 	}
 	dataDir := filepath.Join(home, ".grain")
 	if _, err := policy.Load(filepath.Join(dataDir, "grain_policy.yml")); err != nil {

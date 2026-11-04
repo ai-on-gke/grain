@@ -17,6 +17,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ReleaseNotesPanel from "./ReleaseNotesPanel.jsx";
 import api from "../api.js";
+import { chooseOption, optionValues } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 
@@ -225,13 +226,16 @@ describe("ReleaseNotesPanel", () => {
       },
     });
 
+    const user = userEvent.setup();
     render(<ReleaseNotesPanel showError={() => {}} />);
     expect(await screen.findByText("Now.")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByLabelText("week"));
-    await userEvent.click(
-      await screen.findByRole("option", { name: /Week 37/ }),
-    );
+    const weekPicker = screen.getByLabelText("week");
+    await user.click(weekPicker);
+    await user.clear(weekPicker);
+    await user.type(weekPicker, "w37");
+    expect(optionValues(weekPicker)).toEqual(["2026-W37"]);
+    await chooseOption(user, weekPicker, "2026-W37");
 
     expect(await screen.findByText("Then.")).toBeInTheDocument();
     expect(
@@ -378,5 +382,86 @@ describe("ReleaseNotesPanel", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText("running")).not.toBeInTheDocument();
+  });
+
+  it("shows what each root direction produced and switches between daily, weekly and monthly rollups", async () => {
+    answers({
+      weeks: [{ period: "2026-W44", title: "Week 44", length: 20 }],
+      counts: {
+        default: stats("2026-W44", {
+          directions: [
+            {
+              taskId: "7",
+              title: "Support fork workflow",
+              author: "operator",
+              pullRequestsMerged: 2,
+              pullRequestsMeasured: 2,
+              linesAdded: 1318,
+              linesDeleted: 123,
+              tasksCompleted: 3,
+              tasksFiled: 3,
+              tasksSpawned: 2,
+              runs: 4,
+            },
+          ],
+        }),
+        today: stats("2026-11-04", {
+          pullRequestsMerged: 1,
+          pullRequestsMeasured: 1,
+          linesAdded: 193,
+          linesDeleted: 41,
+          tasksCompleted: 1,
+          tasksFiled: 1,
+          runs: 1,
+          runsSucceeded: 1,
+          directions: [
+            {
+              taskId: "12",
+              title: "Distinguish answered reports",
+              author: "operator",
+              pullRequestsMerged: 1,
+              pullRequestsMeasured: 1,
+              linesAdded: 193,
+              linesDeleted: 41,
+              tasksCompleted: 1,
+              tasksFiled: 1,
+              tasksSpawned: 1,
+              runs: 1,
+            },
+          ],
+        }),
+      },
+      notes: {
+        "2026-W44": {
+          period: "2026-W44",
+          title: "Week 44",
+          text: "Weekly summary.",
+        },
+      },
+    });
+
+    const user = userEvent.setup();
+    render(<ReleaseNotesPanel showError={() => {}} />);
+
+    const dirBox = await screen.findByTestId("direction-rollup");
+    expect(within(dirBox).getByText("#7")).toBeInTheDocument();
+    expect(
+      within(dirBox).getByText(
+        /Support fork workflow \(operator\): 2 merged \(\+1318 -123\), 3 tasks completed, 2 follow-up tasks spawned, 4 runs/,
+      ),
+    ).toBeInTheDocument();
+
+    const winGroup = screen.getByRole("group", { name: "Rollup window" });
+    await user.click(within(winGroup).getByText("Today"));
+
+    expect(
+      await screen.findByText("Pull requests merged: 1"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/cover November 4, 2026\./)).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("direction-rollup")).getByText(
+        /Distinguish answered reports \(operator\): 1 merged \(\+193 -41\), 1 tasks completed, 1 follow-up task spawned, 1 runs/,
+      ),
+    ).toBeInTheDocument();
   });
 });

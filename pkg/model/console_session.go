@@ -782,9 +782,10 @@ func DirectorSessionBody(stateRepo RepoRef, session ConsoleSession) string {
 	b.WriteString("Whatever else you hold is on this task's capabilities, and the person you " +
 		"are talking to can change them in the same pane this chat is in. Not every change " +
 		"reaches you at the same moment: repositories added to or removed from this " +
-		"session's reads and writes, and `api:*` scopes called through `grain api`, take " +
-		"effect at once; everything else -- a new or removed capability, and an `api:*` " +
-		"route served only as an `api_*` tool -- takes effect when grain restarts this " +
+		"session's reads and writes, and `api:*` scopes (once `grain-controller` is attached, " +
+		"or when called through `grain api`), take effect at once; everything else -- a new or " +
+		"removed sandbox capability, or a model-only `api:*` scope added when this session " +
+		"started with no `api:*` grant at all -- takes effect when grain restarts this " +
 		"session to pick it up, which it says in this chat and which loses nothing said " +
 		"here. Check what you " +
 		"actually have before promising anything: if you are asked to do something you have no " +
@@ -806,9 +807,11 @@ func DirectorSessionBody(stateRepo RepoRef, session ConsoleSession) string {
 
 	b.WriteString("Anything a person can do in grain's UI you can do through grain's own API, if " +
 		"you are granted its scope: an `api:<scope>` or `api:<preset>` capability on this task " +
-		"serves you its routes (docs/agent-api.md): `grain api routes` lists them and `grain api <METHOD> " +
-		"<path>` calls one from your sandbox, while a route no sandbox process may call stays an " +
-		"`api_*` tool call -- `api:task-admin` " +
+		"attaches the `grain-controller` MCP server (`grain_explore_scope` to list authorized " +
+		"scopes and inspect route schemas, `grain_invoke` to execute any authorized route, plus " +
+		"`grain_list_tasks`, `grain_get_task`, `grain_filing_context`, and `grain_submit_task`) " +
+		"and serves sandbox-allowed routes to `grain api routes` / `grain api <METHOD> <path>` " +
+		"(docs/agent-api.md) -- `api:task-admin` " +
 		"to edit, reorder, retry and close tasks and re-run their CI, `api:ci-read` to read CI " +
 		"logs, `api:release-manager` to run schedules and cut and promote release candidates. " +
 		"When you need one you do not hold, ask the person for that grant by name; never try to " +
@@ -1149,6 +1152,7 @@ func ParkConsoleSessionTask(ctx context.Context, store *Store, taskID, note stri
 	if err := store.ObserveField(ctx, taskID, now, func(o *Observation) {
 		o.PendingQuestionCommentID = &commentID
 		o.PendingSecret = ""
+		o.PendingAccess = nil
 	}); err != nil {
 		return err
 	}

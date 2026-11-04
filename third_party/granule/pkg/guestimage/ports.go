@@ -7,7 +7,7 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/bwsalmon/granule/pkg/dockercli"
+	"github.com/gke-labs/granule/pkg/dockercli"
 )
 
 // What an image declares with EXPOSE, read back off the image, for the

@@ -30,8 +30,6 @@ import {
   FormControl,
   FormControlLabel,
   FormHelperText,
-  InputLabel,
-  ListItemText,
   MenuItem,
   Select,
   Stack,
@@ -81,6 +79,7 @@ import ReadOnlyReposField from "./ReadOnlyReposField.jsx";
 import WriteReposField from "./WriteReposField.jsx";
 import RepoField, { NO_REPO } from "./RepoField.jsx";
 import NoGitConnectionNotice from "./NoGitConnectionNotice.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import SidePanel from "./SidePanel.jsx";
 import TaskPicker from "./TaskPicker.jsx";
 import { clearTaskDraft, loadTaskDraft, saveTaskDraft } from "../taskDraft.js";
@@ -1654,77 +1653,59 @@ export default function NewTaskOverlay({
   const grantsNode = (
     <>
       <FormControl fullWidth margin="normal" size="small">
-        <InputLabel id="new-task-capabilities-label">
-          Legacy capabilities
-        </InputLabel>
-        <Select
-          labelId="new-task-capabilities-label"
-          label="Legacy capabilities"
+        <SearchSelect
           multiple
+          label="Legacy capabilities"
+          inputProps={{ "data-testid": "new-task-capabilities" }}
           value={capabilityIds}
-          onChange={(e) => {
+          onChange={(next) => {
             capabilitiesEdited.current = true;
-            setCapabilities([...e.target.value, ...apiIds, ...capabilityRefs]);
+            setCapabilities([...next, ...apiIds, ...capabilityRefs]);
           }}
-          renderValue={(selected) => (
-            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-              {selected.map((id) => (
-                <GrantChip
-                  key={id}
-                  grant={id}
-                  config={config}
-                  tabIndex={-1}
-                  // Marked by its border and icon, its label left at
-                  // full contrast: warning-coloured text on a light
-                  // chip is too faint to read at this size.
-                  {...(catalogueRefusals[id]
-                    ? {
-                        note: catalogueRefusals[id],
-                        variant: "outlined",
-                        icon: (
-                          <WarningAmberIcon fontSize="small" color="warning" />
-                        ),
-                        sx: { borderColor: "warning.main" },
-                        ariaSuffix: " (refused here)",
-                        "data-catalogue-refused": "true",
-                      }
-                    : {})}
-                />
-              ))}
-            </Box>
-          )}
-        >
-          {capabilityOptions.length === 0 && (
-            <MenuItem disabled>{NO_CAPABILITIES_HINT}</MenuItem>
-          )}
-          {capabilityOptions.map((c) => {
+          noOptionsText={
+            capabilityOptions.length === 0 ? NO_CAPABILITIES_HINT : "No matches"
+          }
+          options={capabilityOptions.map((c) => {
             const refused = catalogueRefusals[c.id] || "";
             const unavailable = refused || capabilityUnavailableHint(c);
-            return (
-              <MenuItem
-                key={c.id}
-                value={c.id}
-                // One the catalogue refuses here is not offered, but
-                // one already ticked stays enabled: its own row is
-                // the only way to untick it.
-                disabled={Boolean(refused) && !capabilityIds.includes(c.id)}
-                data-catalogue-refused={refused ? "true" : undefined}
-                title={
-                  unavailable
-                    ? `${c.description}\n\n${unavailable}`
-                    : c.description
-                }
-              >
-                <Checkbox checked={capabilityIds.includes(c.id)} size="small" />
-                <ListItemText
-                  primary={c.name}
-                  secondary={unavailable || null}
-                  secondaryTypographyProps={{ color: "warning.main" }}
-                />
-              </MenuItem>
-            );
+            return {
+              value: c.id,
+              label: c.name,
+              // One the catalogue refuses here is not offered, but one
+              // already ticked stays enabled: its own row is the only
+              // way to untick it.
+              disabled: Boolean(refused) && !capabilityIds.includes(c.id),
+              title: unavailable
+                ? `${c.description}\n\n${unavailable}`
+                : c.description,
+              secondary: unavailable ? (
+                <Box component="span" sx={{ color: "warning.main" }}>
+                  {unavailable}
+                </Box>
+              ) : null,
+            };
           })}
-        </Select>
+          renderChip={(o, props) => (
+            <GrantChip
+              grant={o.value}
+              config={config}
+              {...props}
+              // Marked by its border and icon, its label left at full
+              // contrast: warning-coloured text on a light chip is too
+              // faint to read at this size.
+              {...(catalogueRefusals[o.value]
+                ? {
+                    note: catalogueRefusals[o.value],
+                    variant: "outlined",
+                    icon: <WarningAmberIcon fontSize="small" color="warning" />,
+                    sx: { borderColor: "warning.main" },
+                    ariaSuffix: " (refused here)",
+                    "data-catalogue-refused": "true",
+                  }
+                : {})}
+            />
+          )}
+        />
         {defaultCapabilitiesFor(config, noRepo ? "" : repo).length > 0 && (
           <FormHelperText>
             Pre-ticked ones are the defaults for this repo -- this
@@ -1862,8 +1843,7 @@ export default function NewTaskOverlay({
                 connection is among them, labelled pin-only, because a
                 pin is the only way work reaches it. */}
       {connections.length > 0 && (
-        <TextField
-          select
+        <SearchSelect
           name="agentBackendId"
           label={F.agentBackendId.label || "Specific connection"}
           value={
@@ -1871,27 +1851,22 @@ export default function NewTaskOverlay({
               ? agentBackendId
               : ""
           }
-          onChange={(e) =>
-            edit("agentBackendId", setAgentBackendId)(e.target.value)
-          }
+          onChange={edit("agentBackendId", setAgentBackendId)}
           InputLabelProps={{ shrink: true }}
-          SelectProps={{ displayEmpty: true }}
+          options={[
+            { value: "", label: "Any enabled connection serving the model" },
+            ...pinChoices.map((backend) => ({
+              value: backend.id,
+              label: connectionLabel(backend),
+            })),
+          ]}
           helperText={
             effectiveModel
               ? `connections that serve ${effectiveModel} -- pin one only if this task needs that account`
               : "pin this task to one connection -- leave it on any connection unless it needs that account"
           }
-          fullWidth
           margin="normal"
-          size="small"
-        >
-          <MenuItem value="">Any enabled connection serving the model</MenuItem>
-          {pinChoices.map((backend) => (
-            <MenuItem key={backend.id} value={backend.id}>
-              {connectionLabel(backend)}
-            </MenuItem>
-          ))}
-        </TextField>
+        />
       )}
     </>
   );
@@ -1977,47 +1952,43 @@ export default function NewTaskOverlay({
                 instructions into, because those instructions are the
                 same on every task they are attached to -- write them
                 once in Templates and pick them here. */}
-      <TextField
-        select
+      <SearchSelect
         name="reviewTemplateId"
         label={F.reviewTemplateId.label || "Review"}
         value={reviewTemplateId}
-        onChange={(e) =>
-          edit("reviewTemplateId", setReviewTemplateId)(e.target.value)
-        }
-        // displayEmpty and the shrink with it, for the reason
-        // Agent framework above needs both: "" is a real choice
-        // (no review), not a blank field, and the label has to be
-        // out of the way of the "No review" it displays.
+        onChange={edit("reviewTemplateId", setReviewTemplateId)}
+        // Shrunk: "" is a real choice (no review), not a blank field,
+        // and the label has to be out of the way of the "No review" it
+        // displays.
         InputLabelProps={{ shrink: true }}
-        SelectProps={{ displayEmpty: true }}
         helperText={
           (templates || []).length > 0
             ? "run a second agent over this task's own code before it merges, with instructions from a template"
             : "no templates yet -- write one in Templates to be able to attach a review here"
         }
         disabled={(templates || []).length === 0}
-        fullWidth
         margin="normal"
-        size="small"
-      >
-        {/* The templates figure in front of each name
-                  (ItemGlyph.jsx), as on the schedule editor's own
-                  template picker and on the Review row this choice
-                  becomes in the task pane -- so the thing picked here is
-                  recognisably the thing the Templates page lists. "No
-                  review" names no template and holds the slot open
-                  instead, GlyphLabel's own rule for a row in a glyphed
-                  menu that names nothing a figure stands for. */}
-        <MenuItem value="">
-          <GlyphLabel kind={null}>No review</GlyphLabel>
-        </MenuItem>
-        {(templates || []).map((t) => (
-          <MenuItem key={t.id} value={t.id}>
-            <GlyphLabel kind="templates">{templateLabel(t)}</GlyphLabel>
-          </MenuItem>
-        ))}
-      </TextField>
+        // The templates figure in front of each row
+        // (ItemGlyph.jsx), as on the schedule editor's own
+        // template picker and on the Review row this choice
+        // becomes in the task pane -- so the thing picked here is
+        // recognisably the thing the Templates page lists. "No
+        // review" names no template and holds the slot open
+        // instead, GlyphLabel's own rule for a row in a glyphed
+        // menu that names nothing a figure stands for.
+        options={[
+          {
+            value: "",
+            label: "No review",
+            row: <GlyphLabel kind={null}>No review</GlyphLabel>,
+          },
+          ...(templates || []).map((t) => ({
+            value: t.id,
+            label: templateLabel(t),
+            row: <GlyphLabel kind="templates">{templateLabel(t)}</GlyphLabel>,
+          })),
+        ]}
+      />
     </>
   );
   const promptExtensionNode = (
@@ -2118,8 +2089,7 @@ export default function NewTaskOverlay({
           </Alert>
         )}
         {(F.sandboxShape.presets || []).length > 0 && (
-          <TextField
-            select
+          <SearchSelect
             label="Preset"
             value={
               (F.sandboxShape.presets || []).find(
@@ -2129,29 +2099,26 @@ export default function NewTaskOverlay({
                   String(p.disk_gb || "") === String(sandboxDiskGb || ""),
               )?.id ?? ""
             }
-            onChange={(e) => {
+            onChange={(next) => {
               const shape = sandboxShapeDefault({
                 presets: F.sandboxShape.presets,
-                defaultPreset: e.target.value,
+                defaultPreset: next,
               });
               edit("sandboxShape", setSandboxCpus)(shape.cpus);
               setSandboxMemoryMb(shape.memoryMb);
               setSandboxDiskGb(shape.diskGb);
             }}
             InputLabelProps={{ shrink: true }}
-            SelectProps={{ displayEmpty: true }}
             inputProps={{ "data-testid": "sandbox-preset" }}
-            fullWidth
+            options={[
+              { value: "", label: "Deployment default" },
+              ...F.sandboxShape.presets.map((p) => ({
+                value: p.id,
+                label: p.label || p.id,
+              })),
+            ]}
             margin="normal"
-            size="small"
-          >
-            <MenuItem value="">Deployment default</MenuItem>
-            {F.sandboxShape.presets.map((p) => (
-              <MenuItem key={p.id} value={p.id}>
-                {p.label || p.id}
-              </MenuItem>
-            ))}
-          </TextField>
+          />
         )}
         {F.sandboxShape.allowCustomNumbers !== false && (
           <>
@@ -2261,14 +2228,12 @@ export default function NewTaskOverlay({
   // form, ahead of the title it may fill. Switching it re-applies the
   // layer's defaults to every field nobody has touched (formDefaultsKey).
   const templateNode = templatePickerShown ? (
-    <TextField
-      select
+    <SearchSelect
       name="templateId"
       label="Template"
       value={fromTemplate}
-      onChange={(e) => setFromTemplate(e.target.value)}
+      onChange={setFromTemplate}
       InputLabelProps={{ shrink: true }}
-      SelectProps={{ displayEmpty: true }}
       helperText={
         pickedTemplate
           ? pickedTemplate.repo
@@ -2280,19 +2245,20 @@ export default function NewTaskOverlay({
             : "fills what this form leaves blank: title, description, reads, writes, capabilities, model"
           : "file from a template to have it fill what this form leaves blank"
       }
-      fullWidth
       margin="normal"
-      size="small"
-    >
-      <MenuItem value="">
-        <GlyphLabel kind={null}>No template</GlyphLabel>
-      </MenuItem>
-      {formTemplates.map((t) => (
-        <MenuItem key={t.id} value={t.id}>
-          <GlyphLabel kind="templates">{templateLabel(t)}</GlyphLabel>
-        </MenuItem>
-      ))}
-    </TextField>
+      options={[
+        {
+          value: "",
+          label: "No template",
+          row: <GlyphLabel kind={null}>No template</GlyphLabel>,
+        },
+        ...formTemplates.map((t) => ({
+          value: t.id,
+          label: templateLabel(t),
+          row: <GlyphLabel kind="templates">{templateLabel(t)}</GlyphLabel>,
+        })),
+      ]}
+    />
   ) : null;
   const priorityNode = (
     <>

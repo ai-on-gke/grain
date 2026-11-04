@@ -27,7 +27,6 @@ import {
   Collapse,
   FormControlLabel,
   Link,
-  MenuItem,
   Table,
   TableBody,
   TableCell,
@@ -45,6 +44,7 @@ import { ListHeader } from "./ListPrimitives.jsx";
 import NarrowingBar from "./NarrowingBar.jsx";
 import { formatBytes } from "./PackageCachePanel.jsx";
 import RepoField from "./RepoField.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import {
   CONCLUSION_LABELS,
   RUN_ATTRIBUTES,
@@ -1201,21 +1201,18 @@ export function StartRunForm({
         {loadingWorkflows && <CircularProgress size={18} />}
       </Box>
       {workflows?.length > 0 && (
-        <TextField
-          select
-          fullWidth
-          size="small"
+        <SearchSelect
           margin="dense"
           label="Workflow"
           value={workflow}
-          onChange={(e) => setWorkflow(e.target.value)}
-        >
-          {workflows.map((option) => (
-            <MenuItem key={option.path} value={option.path}>
-              {option.name} — {option.path}
-            </MenuItem>
-          ))}
-        </TextField>
+          options={workflows.map((option) => ({
+            value: option.path,
+            label: `${option.name} — ${option.path}`,
+          }))}
+          onChange={(next) => {
+            if (next) setWorkflow(next);
+          }}
+        />
       )}
       {workflows?.length === 0 && (
         <Alert severity="info" sx={{ mt: 1 }}>

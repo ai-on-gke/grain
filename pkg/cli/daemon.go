@@ -453,10 +453,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	// since nothing here builds or installs a binary: an image deployment
 	// passes neither, and the self-debug capability reads the source the
 	// image carries rather than a checkout a flag names (see sourceDir).
-	upgradeImage := fs.String("upgrade-image", "",
-		"image repository, with no tag, that CI publishes a tag per branch to (e.g. "+
-			"ghcr.io/bwsalmon/grain/grain); set, the UI's Upgrade button pulls a branch's image instead of "+
-			"building one, and -upgrade-image-ref-file is required")
+	upgradeSource := registerUpgradeSourceFlags(fs)
 	// Which branches an upgrade may install (bwsalmon/grain#2385). An
 	// upgrade replaces this daemon with whatever the branch builds, and a
 	// branch name says nothing about whether anybody reviewed it, so the
@@ -759,6 +756,11 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	containerCapAdd := fs.String("container-sandbox-cap-add", "",
 		"comma-separated Linux capabilities handed back to local sandbox containers, which otherwise run with "+
 			"every capability dropped and no-new-privileges set; the stock sandbox image needs none")
+	containerFence := fs.String("container-sandbox-fence", string(orchestrator.ContainerFenceAuto),
+		"auto, require or off: whether local sandbox containers are fenced off from this host, its networks and "+
+			"link-local (the metadata server) by a per-container nftables chain. auto fences when nft can be run and "+
+			"otherwise runs containers unfenced and refuses external capability grants; require refuses a container "+
+			"that cannot be fenced; off never fences and refuses external capability grants")
 	granuleSandboxes := fs.Bool("granule-sandboxes", false,
 		"dispatch onto real bwsalmon/granule-managed VMs (one per run, named orchestrator.VMNamePrefix+<run id>) "+
 			"over SSH, instead of local host directories. This was -granule-vm-name-prefix, whose value both opted "+
@@ -768,7 +770,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	runHostImage := fs.String("run-host-image", "",
 		"drive each claude run in a run host of this image: a container that is a sibling of the daemon, "+
 			"not a child of it, writing to a spool the daemon tails (pkg/runhost, design/design/non-disruptive-upgrade.design.md). "+
-			"Normally the deployment image itself (\"self\" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes: a run host cannot reach a container sandbox")
+			"Normally the deployment image itself (\"self\" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes or -host-sandboxes: a run host cannot reach either sandbox")
 	runHostCredentialDir := fs.String("run-host-credential-dir", "",
 		"the shared credential directory every run host mounts read-write, as a directory and at the same path "+
 			"(only used with -run-host-image)")
@@ -1183,6 +1185,10 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	if err := removedRelaySettings(passed, unknownFlags); err != nil {
 		return daemon.Config{}, fs, unknownFlags, err
 	}
+	containerFenceMode, err := orchestrator.ParseContainerFenceMode(*containerFence)
+	if err != nil {
+		return daemon.Config{}, fs, unknownFlags, fmt.Errorf("-container-sandbox-fence: %w", err)
+	}
 
 	cfg := daemon.Config{
 		UnitFlags: unitFlags, UnknownFlags: unknownFlags,
@@ -1220,7 +1226,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		IapBackendService: *iapBackendService,
 		IapResource:       *iapResource,
 		UpgradeSrcDir:     *upgradeSrcDir, UpgradeInstallPath: *upgradeInstallPath, UpgradeRestartCmd: upgradeRestartCmd, UpgradeVerifyCmd: upgradeVerifyCmd,
-		UpgradeImage: *upgradeImage, UpgradeImageRefFile: *upgradeImageRefFile,
+		UpgradeImageRefFile:    *upgradeImageRefFile,
 		UpgradeAllowedBranches: daemon.SplitBranchPatterns(*upgradeAllowedBranches),
 		UpgradeDrainWindow:     *upgradeDrainWindow,
 		RebootCmd:              rebootCmd,
@@ -1269,6 +1275,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		HostSandboxes: *hostSandboxes, AllowUnisolatedHostSandboxes: *allowUnisolatedHostSandboxes,
 		HostSandboxEnv:   hostSandboxEnv,
 		ContainerNetwork: *containerNetwork, ContainerCapAdd: splitRepoList(*containerCapAdd),
+		ContainerFence:       containerFenceMode,
 		GranuleSandboxes:     *granuleSandboxes,
 		GranuleStateDir:      *granuleStateDir,
 		LocalScripts:         localScripts,
@@ -1300,6 +1307,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		K8sGranuleAccess:      *k8sGranuleAccess, K8sGranuleReattachTimeout: *k8sGranuleReattachTimeout, SandboxCPUs: *sandboxCPUs, SandboxMemoryMB: *sandboxMemoryMB, SandboxDiskGB: *sandboxDiskGB,
 	}
 	grit.Apply(&cfg)
+	if err = upgradeSource.apply(&cfg, passed); err != nil {
+		return cfg, fs, unknownFlags, err
+	}
 	if cfg.HostdRemote, err = hostdRemote(*hostdTokenFile, *hostdTokenName, *hostdTokenOwner); err != nil {
 		return cfg, fs, unknownFlags, err
 	}

@@ -15,6 +15,7 @@
 package ui
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,7 +63,7 @@ type Task struct {
 	Goal        *model.TaskGoal `json:"goal,omitempty"`
 	ID          string          `json:"id"`
 	Title       string          `json:"title"`
-	Description string          `json:"description"`
+	Description string          `json:"description,omitempty"`
 	Author      string          `json:"author"`
 	// AuthorKind is that author's model.PrincipalKind -- "human",
 	// "agent" or "automation", Comment.AuthorKind's own vocabulary for
@@ -73,12 +74,21 @@ type Task struct {
 	// filed by hand from steering a human's own defaults -- see
 	// state.js's lastBaseForRepo.
 	AuthorKind string `json:"authorKind,omitempty"`
-	// AuthorLabel is how the filer reads to a person (shownLabel), empty
-	// for a task filed before sources were recorded.
-	AuthorLabel string      `json:"authorLabel,omitempty"`
-	State       model.State `json:"state"`
-	Repo        string      `json:"repo,omitempty"`
-	Branch      string      `json:"branch,omitempty"`
+	// AuthorSource is how Author was established (model.AuthSource), ""
+	// on a task filed before sources existed, and AuthorLabel is how the
+	// whole attribution reads to a person (PrincipalLabel,
+	// operator-attribution spec §1.2): what "Filed by" shows.
+	AuthorSource string `json:"authorSource,omitempty"`
+	AuthorLabel  string `json:"authorLabel,omitempty"`
+	// ApprovedBy* is who approved the task (model.Task.Approval), in the
+	// same four fields; all empty for a task nobody has approved.
+	ApprovedBy       string      `json:"approvedBy,omitempty"`
+	ApprovedByKind   string      `json:"approvedByKind,omitempty"`
+	ApprovedBySource string      `json:"approvedBySource,omitempty"`
+	ApprovedByLabel  string      `json:"approvedByLabel,omitempty"`
+	State            model.State `json:"state"`
+	Repo             string      `json:"repo,omitempty"`
+	Branch           string      `json:"branch,omitempty"`
 	// Reads is every repo this task's run may read but never push to --
 	// model.Task.Reads, rendered as owner/name strings the same way Repo
 	// renders its single Target.
@@ -194,6 +204,12 @@ type Task struct {
 	ReviewTemplateID   string `json:"reviewTemplateId,omitempty"`
 	ReviewTemplateName string `json:"reviewTemplateName,omitempty"`
 	Creator            string `json:"creator,omitempty"`
+	// FiledVia is the X-Grain-Client label of the tool that filed the
+	// task (model.Task.FiledVia), and Provenance the line it reads as
+	// ("filed from jetski/1.4 by jane@example.com"); both "" for a task
+	// filed without one. A label only: it grants nothing.
+	FiledVia   string `json:"filedVia,omitempty"`
+	Provenance string `json:"provenance,omitempty"`
 	// ReviewTask is the ID of the task actually filed to review this one
 	// (model.LinkReviewTask), empty until orchestrator.SyncReviews has
 	// filed it. Paired with ReviewTemplateID it is what tells a reader
@@ -262,7 +278,14 @@ type Task struct {
 	// PullRequest beside it is the one grain pushes to; these it only
 	// reads and comments on.
 	ExternalPullRequests []string `json:"externalPullRequests,omitempty"`
-	GeneratedFrom        string   `json:"generatedFrom,omitempty"`
+	// DerivedFrom is the pull requests ("owner/repo#number") the task's
+	// work was derived from (model.LinkDerivedFrom), and Designs the
+	// design or spec files it implements (model.LinkDesign, `grain create
+	// --design`): the provenance an external orchestrator filters and
+	// follows (external-cli spec #XC-18, #XC-19).
+	DerivedFrom   []string `json:"derivedFrom,omitempty"`
+	Designs       []string `json:"designs,omitempty"`
+	GeneratedFrom string   `json:"generatedFrom,omitempty"`
 	// Origin is the pull request, issue or grain task this task's tree of
 	// work came from (model.WorkOrigin): "owner/repo#12" or "task:1766",
 	// empty for a task that has none.
@@ -468,6 +491,10 @@ type Task struct {
 	// sentence for one asked without a summary; "" when the task is not
 	// parked on a question, or is parked on a stopped turn.
 	QuestionSummary string `json:"questionSummary,omitempty"`
+	// AwaitingAccess is an awaiting_reply task parked on an access
+	// request (request_access) rather than a question: what it wants is
+	// a grant, which its card offers, not a reply.
+	AwaitingAccess bool `json:"awaitingAccess,omitempty"`
 	// MergeQueueBlockedAt mirrors model.Observation's own field: non-nil
 	// once the merge queue has stopped driving this task's pull request
 	// -- an automatic fix that did not take, or checks that never
@@ -624,16 +651,21 @@ func grantWaitActivity(wait model.GrantWait) *model.RunActivity {
 // else's words, so a question from a dispatched run renders as grain
 // speaking for an agent rather than as grain's own.
 type Comment struct {
-	ID         int64  `json:"id"`
-	Author     string `json:"author"`
-	AuthorKind string `json:"authorKind"`
-	OnBehalfOf string `json:"onBehalfOf,omitempty"`
-	// AuthorLabel is how the author reads to a person (shownLabel), empty
-	// for grain's own notes and for a comment written before sources were
-	// recorded. OnBehalfOf stays separate, as the timeline shows it.
-	AuthorLabel string    `json:"authorLabel,omitempty"`
-	Body        string    `json:"body"`
-	CreatedAt   time.Time `json:"createdAt"`
+	ID         int64     `json:"id"`
+	Author     string    `json:"author"`
+	AuthorKind string    `json:"authorKind"`
+	OnBehalfOf string    `json:"onBehalfOf,omitempty"`
+	Body       string    `json:"body"`
+	CreatedAt  time.Time `json:"createdAt"`
+	// AuthorSource and AuthorLabel are the author's model.AuthSource and
+	// how the whole attribution reads (PrincipalLabel, operator-attribution
+	// spec §1.2): a verified on-behalf-of is named in it. OnBehalfOfKind
+	// and OnBehalfOfLabel describe OnBehalfOf on its own, so a reader can
+	// still say whose words grain relayed when they are an agent's.
+	AuthorSource    string `json:"authorSource,omitempty"`
+	AuthorLabel     string `json:"authorLabel,omitempty"`
+	OnBehalfOfKind  string `json:"onBehalfOfKind,omitempty"`
+	OnBehalfOfLabel string `json:"onBehalfOfLabel,omitempty"`
 	// Handover marks this comment as the task's handover: a run's standing
 	// summary of the older part of the conversation, written for the next
 	// run on the task rather than for a person (model.Comment.Handover).
@@ -647,6 +679,10 @@ type Comment struct {
 	// (model.Comment.Summary); "" on every other comment, and on a question
 	// stored before summaries existed.
 	Summary string `json:"summary,omitempty"`
+	// FiledVia and Provenance are Task.FiledVia and Task.Provenance for
+	// the comment: the X-Grain-Client label it was posted with.
+	FiledVia   string `json:"filedVia,omitempty"`
+	Provenance string `json:"provenance,omitempty"`
 	// Attachments is every file posted alongside this comment
 	// (bwsalmon/agents#522) -- metadata only, GET
 	// /api/tasks/{id}/attachments/{attachmentId} is what serves one's
@@ -741,6 +777,10 @@ type TaskDetail struct {
 	// proposed (propose_config_change, task_config_change.go): what the
 	// task pane renders as an inline diff with Approve and Reject.
 	PendingConfigChange *model.PendingConfigChange `json:"pendingConfigChange,omitempty"`
+	// PendingAccess is the access request a parked run made with
+	// request_access (task_access_request.go), each item judged against
+	// what the task holds now; nil for a task parked on none.
+	PendingAccess *AccessRequestView `json:"pendingAccess,omitempty"`
 	// CI is what grain's own CI last said about the branch this task
 	// pushed (model.Observation.CI), nil for the overwhelming majority of
 	// tasks -- one that does not hold the grain-ci capability, or whose
@@ -874,19 +914,23 @@ type PullRequestEvent struct {
 // earliest the state can have begun, not a recorded moment, and the
 // timeline says so rather than showing it as precise.
 //
-// A close or reopen somebody asked for (model.TaskEvent) carries By --
-// who, as "<kind> <id>" (principalLabel) -- and the Reason they gave and
-// the Detail of what it cancelled. Its state is "closed", or "reopened"
-// (model.TransitionReopened) for the step that undid one.
+// A close or reopen somebody asked for (model.TaskEvent) carries who
+// asked -- Actor, ActorKind and ActorSource, and By and ActorLabel, the
+// two the same PrincipalLabel (operator-attribution spec §1.2) -- and the
+// Reason they gave and the Detail of what it cancelled. Its state is
+// "closed", or "reopened" (model.TransitionReopened) for the step that
+// undid one.
 type Transition struct {
-	State    model.State `json:"state"`
-	At       time.Time   `json:"at"`
-	Inferred bool        `json:"inferred,omitempty"`
-	By       string      `json:"by,omitempty"`
-	// ByLabel is how By reads to a person (shownLabel): "operator
-	// (access code)" rather than the deployment's own address for a
-	// change made with the access code. Empty for a row written before
-	// sources were recorded, which reads as By always has.
+	State       model.State `json:"state"`
+	At          time.Time   `json:"at"`
+	Inferred    bool        `json:"inferred,omitempty"`
+	By          string      `json:"by,omitempty"`
+	Actor       string      `json:"actor,omitempty"`
+	ActorKind   string      `json:"actorKind,omitempty"`
+	ActorSource string      `json:"actorSource,omitempty"`
+	ActorLabel  string      `json:"actorLabel,omitempty"`
+	// ByLabel is ActorLabel again, under the name the frontend first
+	// read it by.
 	ByLabel string `json:"byLabel,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 	Detail  string `json:"detail,omitempty"`
@@ -895,21 +939,12 @@ type Transition struct {
 func transitionFrom(t model.Transition) Transition {
 	out := Transition{State: t.State, At: t.At, Inferred: t.Inferred, Reason: t.Reason, Detail: t.Detail}
 	if t.By != nil {
-		out.By = principalLabel(*t.By)
-		out.ByLabel = shownLabel(*t.By, nil)
+		out.Actor, out.ActorKind, out.ActorSource = t.By.ID, string(t.By.Kind), string(t.By.Source)
+		out.ActorLabel = PrincipalLabel(*t.By, t.OnBehalfOf)
+		out.By = out.ActorLabel
+		out.ByLabel = out.ActorLabel
 	}
 	return out
-}
-
-// shownLabel is PrincipalLabel for a principal whose source is recorded,
-// and "" for one written before sources existed (schema 91): such a row
-// cannot be told apart from a verified one, so it keeps reading as its
-// bare id rather than as "(unverified)" noise.
-func shownLabel(p model.Principal, behalf *model.Principal) string {
-	if p.Source == "" {
-		return ""
-	}
-	return PrincipalLabel(p, behalf)
 }
 
 // Attempt is one of a task's runs, projected from model.Run.
@@ -1033,7 +1068,8 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		Description:          t.Body,
 		Author:               t.Origin.Attribution.Actor.ID,
 		AuthorKind:           string(t.Origin.Attribution.Actor.Kind),
-		AuthorLabel:          shownLabel(t.Origin.Attribution.Actor, t.Origin.Attribution.OnBehalfOf),
+		AuthorSource:         string(t.Origin.Attribution.Actor.Source),
+		AuthorLabel:          PrincipalLabel(t.Origin.Attribution.Actor, t.Origin.Attribution.OnBehalfOf),
 		State:                state,
 		Base:                 t.Base,
 		Priority:             priority,
@@ -1059,6 +1095,8 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		ReviewTemplateID:     t.ReviewTemplateID,
 		ReviewTemplateName:   reviewTemplateName,
 		Creator:              t.Creator,
+		FiledVia:             t.FiledVia,
+		Provenance:           provenanceLabel(t.FiledVia, cmp.Or(attributedPerson(t.Origin.Attribution), t.Creator)),
 		Capabilities:         []string{},
 		CustomFields:         customFieldValues(t.CustomFields),
 		Stacked:              t.Origin.Reason == model.ReasonFix || t.Origin.Reason == model.ReasonReview,
@@ -1102,6 +1140,10 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		out.Capabilities = append(out.Capabilities, g.Capability)
 	}
 	out.Approvals = approvalViews(t)
+	if a := t.Approval; a != nil && (a.Actor.ID != "" || a.Actor.Kind != "") {
+		out.ApprovedBy, out.ApprovedByKind, out.ApprovedBySource = a.Actor.ID, string(a.Actor.Kind), string(a.Actor.Source)
+		out.ApprovedByLabel = PrincipalLabel(a.Actor, a.OnBehalfOf)
+	}
 	if model.HeldForApproval(t) && t.Origin.Attribution.OnBehalfOf != nil {
 		out.HeldBy = t.Origin.Attribution.OnBehalfOf.ID
 	}
@@ -1116,6 +1158,12 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		}
 		if l.Kind == model.LinkExternalPR {
 			out.ExternalPullRequests = append(out.ExternalPullRequests, l.Target)
+		}
+		if l.Kind == model.LinkDerivedFrom {
+			out.DerivedFrom = append(out.DerivedFrom, l.Target)
+		}
+		if l.Kind == model.LinkDesign {
+			out.Designs = append(out.Designs, l.Target)
 		}
 		if l.Kind == model.LinkProposedBy {
 			out.GeneratedFrom = l.Target
@@ -1210,13 +1258,20 @@ func commentFrom(c model.Comment, attachments []Attachment) Comment {
 		CreatedAt:   c.CreatedAt,
 		Handover:    c.Handover,
 		Summary:     c.Summary,
+		FiledVia:    c.FiledVia,
+		Provenance:  provenanceLabel(c.FiledVia, attributedPerson(c.Author)),
 		Attachments: attachments,
+	}
+	out.AuthorSource = string(c.Author.Actor.Source)
+	// grain's own notes keep their author ("console-session",
+	// "schedule"), which says more than "grain" would.
+	if c.Author.Actor.Kind != model.PrincipalAutomation {
+		out.AuthorLabel = PrincipalLabel(c.Author.Actor, c.Author.OnBehalfOf)
 	}
 	if b := c.Author.OnBehalfOf; b != nil {
 		out.OnBehalfOf = b.ID
-	}
-	if c.Author.Actor.Kind != model.PrincipalAutomation {
-		out.AuthorLabel = shownLabel(c.Author.Actor, nil)
+		out.OnBehalfOfKind = string(b.Kind)
+		out.OnBehalfOfLabel = PrincipalLabel(*b, nil)
 	}
 	return out
 }
@@ -1325,6 +1380,10 @@ type configResponse struct {
 	// AuthMethod is AuthUserResponse's, so the frontend knows without a
 	// second request how the caller is signed in.
 	AuthMethod AuthMethod `json:"authMethod,omitempty"`
+	// Access is the caller's role and the scopes it resolves to, for a
+	// verified session (docs/design/access-rbac.md §6); absent for an
+	// unlimited caller such as the access code.
+	Access *AccessRoleInfo `json:"access,omitempty"`
 	// Allowed is always true: whoever holds the access code is the
 	// deployment's owner (docs/access-code.md), and nobody else gets
 	// past the gate to be refused. The frontend still reads it.
@@ -1960,6 +2019,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	authMethod, _ := s.authMethod(r)
 	resp := configResponse{
+		Access:              accessRoleInfo(r.Context()),
 		AuthMethod:          authMethod,
 		Actor:               actor.ID,
 		ActorKind:           string(actor.Kind),
@@ -2155,18 +2215,24 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// handleListTasks answers the whole task list -- and answers a poller
-// that already has it with a 304 and no body at all. taskListCache is
-// where the reasoning for both lives, including why it cannot serve a
-// stale list. A caller who is not a system admin is answered only the
+// handleListTasks answers the live task list -- every task not closed,
+// without descriptions (taskListLive), or the whole list under
+// ?fields=full -- and answers a poller that already has it with a 304
+// and no body at all. taskListCache is where the reasoning for both
+// lives, including why it cannot serve a stale list. A caller who is not a system admin is answered only the
 // tasks of the teams they belong to (bwsalmon/grain#2415). ?repo=owner/name
 // answers only that repository's tasks.
 func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
-	if q, ok := parseTaskListQuery(r.URL.Query()); ok {
+	q, narrowed := parseTaskListQuery(r.URL.Query())
+	if narrowed {
 		s.handleFilteredTaskList(w, r, q)
 		return
 	}
-	body, etag, err := s.taskList.response(r.Context(), s.tasks, strings.TrimSpace(r.URL.Query().Get("repo")))
+	view := taskListLive
+	if q.full {
+		view = taskListFull
+	}
+	body, etag, err := s.taskList.response(r.Context(), s.tasks, q.repo, view)
 	if err != nil {
 		writeClientError(w, err)
 		return
@@ -2222,6 +2288,26 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	body, etag, err := s.taskDetails.response(r.Context(), s.tasks, id)
 	if err != nil {
 		writeClientError(w, err)
+		return
+	}
+	// ?comments_since= (external-cli spec #XC-18) is a polling loop's
+	// cursor: the same detail, with only the conversation items written
+	// strictly after it. Never answered 304 -- the cached ETag is the
+	// whole detail's.
+	if raw := strings.TrimSpace(r.URL.Query().Get("comments_since")); raw != "" {
+		since, perr := time.Parse(time.RFC3339Nano, raw)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("comments_since %q is not an RFC 3339 time", raw))
+			return
+		}
+		var detail TaskDetail
+		if err := json.Unmarshal(body, &detail); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		detail.Comments = commentsAfter(detail.Comments, since)
+		w.Header().Set("Cache-Control", "no-cache")
+		writeJSON(w, http.StatusOK, detail)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-cache")
@@ -2312,7 +2398,13 @@ func (s *Server) handleGetTaskPrompt(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
+	r = withFiledVia(r)
 	user := s.tasks.requestPersonOrOperator(r.Context())
+	if user == "" {
+		if tok := externalTokenFromContext(r.Context()); tok != nil {
+			user = strings.TrimSpace(tok.Owner)
+		}
+	}
 	if user == "" {
 		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
 		return
@@ -2335,6 +2427,12 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	if author := strings.TrimSpace(req.Author); author != "" && requestPerson(r.Context()) != "" && !strings.EqualFold(author, user) {
 		writeError(w, http.StatusForbidden, fmt.Errorf("a signed-in user files tasks as themselves, not as %q", author))
 		return
+	}
+	// An external agent credential files as the person who owns it
+	// (#XC-14): its requester is the owner, whatever the body says --
+	// agentAPIGate has already refused a body naming an author.
+	if tok := externalTokenFromContext(r.Context()); tok != nil {
+		req.Author = strings.TrimSpace(tok.Owner)
 	}
 	// The browser's zone when the body names none (TimeZoneHeader).
 	if strings.TrimSpace(req.TimeZone) == "" {
@@ -2562,6 +2660,7 @@ type addCommentRequest struct {
 }
 
 func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
+	r = withFiledVia(r)
 	var req addCommentRequest
 	if !readAttachmentJSON(w, r, &req, func(req *addCommentRequest) []AttachmentUpload { return req.Attachments }) {
 		return
@@ -3064,4 +3163,15 @@ func readOptionalJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 		return false
 	}
 	return true
+}
+
+// commentsAfter is the comments created strictly after since, in order.
+func commentsAfter(comments []Comment, since time.Time) []Comment {
+	out := make([]Comment, 0, len(comments))
+	for _, c := range comments {
+		if c.CreatedAt.After(since) {
+			out = append(out, c)
+		}
+	}
+	return out
 }

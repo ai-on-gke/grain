@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -228,6 +229,28 @@ func TestDemoGitHubSimDrivesWorkflowRunScheduleAndReleaseTriage(t *testing.T) {
 		if !strings.Contains(reviews[0].Body, want) {
 			t.Errorf("review task body missing %q:\n%s", want, reviews[0].Body)
 		}
+	}
+	// The description is GitHub's review prompt, not grain CI's: it sends
+	// the agent to the file GitHub ran, and claims nothing about grain
+	// having started the run or bypassed a cache
+	// (docs/test-runs/2026-11-02-github-ghes-release-train.md, F3).
+	if sched.TemplateID == nil || *sched.TemplateID != model.GitHubWorkflowReviewTemplateID("release") {
+		t.Errorf("schedule template = %v, want %q", sched.TemplateID, model.GitHubWorkflowReviewTemplateID("release"))
+	}
+	for _, want := range []string{"GitHub Actions has run", ".github/workflows/release.yml", "grain ci log"} {
+		if !strings.Contains(reviews[0].Body, want) {
+			t.Errorf("review task body missing %q:\n%s", want, reviews[0].Body)
+		}
+	}
+	for _, unwanted := range []string{".grain/workflows", "grain CI has run", "cache bypassed"} {
+		if strings.Contains(reviews[0].Body, unwanted) {
+			t.Errorf("review task body says %q, which is about a grain CI run:\n%s", unwanted, reviews[0].Body)
+		}
+	}
+	if !slices.ContainsFunc(reviews[0].Grants, func(g model.Grant) bool {
+		return g.Capability == model.APIGrantPrefix+"ci-read@"+repo.String()
+	}) {
+		t.Errorf("review task grants = %+v, want the read-only CI grant on %s", reviews[0].Grants, repo)
 	}
 	if swr, err := store.GetScheduledWorkflowRun(ctx, schedID); err != nil || swr == nil ||
 		swr.RunID != "1201" || swr.ReviewTaskID != reviews[0].ID {

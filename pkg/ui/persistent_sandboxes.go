@@ -162,6 +162,7 @@ func (s *Server) handleStagingProxy(w http.ResponseWriter, r *http.Request) {
 			// The UI's own credentials are for the UI: the service behind
 			// it is somebody's staging build, not something to hand them to.
 			pr.Out.Header.Del("Authorization")
+			pr.Out.Header.Del(AccessCodeHeader)
 			stripGrainCookies(pr.Out)
 		},
 		Transport: &http.Transport{

@@ -14,6 +14,7 @@
 
 import path from "node:path";
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // Stage (c) of design/design/settings-panel.design.md (§6), walked through on a
 // real `grain demo` in a real browser. Nothing is stubbed: the board is
@@ -96,8 +97,13 @@ test("a browser's old per-user pins and name become deployment-wide", async ({
       expect(key).not.toMatch(/^grain\.(pinnedNav|username$|userTimeZone$)/);
     }
 
-    // No user tile; the build stamp is the foot.
-    await expect(aside.getByTestId("user-tile")).toHaveCount(0);
+    // The user tile is back, but fed by GET /api/whoami
+    // (operator-attribution spec §5.4): it names the operator, never the
+    // browser's old typed-in name.
+    await expect(aside.getByTestId("user-tile")).toHaveAttribute(
+      "title",
+      /^operator \((access code|local)\)$/,
+    );
     await expect(aside.getByText("alice", { exact: true })).toHaveCount(0);
     const buildStamp = aside.getByTestId("build-stamp");
     await expect(buildStamp).toBeVisible();
@@ -115,7 +121,10 @@ test("a browser's old per-user pins and name become deployment-wide", async ({
     expect((await phoneStamp.boundingBox()).y).toBeGreaterThan(
       (await system.boundingBox()).y,
     );
-    await expect(drawer.getByTestId("user-tile")).toHaveCount(0);
+    await expect(drawer.getByTestId("user-tile")).toHaveAttribute(
+      "title",
+      /^operator \((access code|local)\)$/,
+    );
     await shot(page, "sidebar-footer-phone");
   } finally {
     await page.request.delete(`/api/boards/${board.id}`).catch(() => {});
@@ -148,7 +157,7 @@ test("a task and a comment filed from the UI are the server's actor's", async ({
   await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
   const title = `No username ${Date.now()}`;
   await page.getByLabel("Title", { exact: true }).fill(title);
-  await page.getByLabel(/^Repos/).selectOption("acme/widgets");
+  await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
   const created = page.waitForResponse(
     (r) => r.url().endsWith("/api/tasks") && r.request().method() === "POST",
   );

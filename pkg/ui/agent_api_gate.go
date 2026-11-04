@@ -157,6 +157,15 @@ func (c agentCall) source() model.AuthSource {
 	return model.SourceSandbox
 }
 
+// owner is the person an external agent credential's call is made on
+// behalf of (model.ExternalAgentToken.Owner), "" for none.
+func (c agentCall) owner() string {
+	if c.external == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.external.Owner)
+}
+
 func (c agentCall) principalID() string {
 	if c.external != nil {
 		return "external:" + c.external.Name
@@ -209,6 +218,14 @@ func handlerName(h http.HandlerFunc) string {
 func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.HandlerFunc {
 	scope := routeScopes[pattern]
 	return func(w http.ResponseWriter, r *http.Request) {
+		if pattern == "POST /api/mcp" {
+			next(w, r)
+			return
+		}
+		if tok := externalTokenFromContext(r.Context()); tok != nil && ownCredentialRoute(pattern, r, tok) {
+			next(w, r)
+			return
+		}
 		if pattern != "POST /mcp" {
 			if tok := externalTokenFromContext(r.Context()); tok != nil {
 				call, err := s.authorizeExternalAgentCall(r, pattern, scope, tok)
@@ -238,6 +255,20 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 		r = r.WithContext(withAgentCall(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call))
 		s.serveAgentCall(w, r, next, call)
 	}
+}
+
+// ownCredentialRoute is a call an external agent credential may always
+// make about itself, whatever its scopes: ask what it is (GET
+// /api/auth/whoami) and revoke itself (`grain logout`), both
+// external-cli.spec.md#XC-8 and #XC-9.
+func ownCredentialRoute(pattern string, r *http.Request, tok *model.ExternalAgentToken) bool {
+	switch pattern {
+	case "GET /api/auth/whoami":
+		return true
+	case "POST /api/external-agents/tokens/{id}/revoke":
+		return strings.TrimSpace(r.PathValue("id")) == tok.ID
+	}
+	return false
 }
 
 // agentRefusalStatus is the status a refused agent call answers with: 400
@@ -289,6 +320,9 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	capAllowed := agentCapabilityAllowsRoute(held, set, pattern, scope)
 	ciCap := grainCIReadsRoute(held, pattern)
 	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
+	if fsMergeQueueByCI(set, pattern, r) {
+		capAllowed = true
+	}
 	if !set.Has(scope) && !capAllowed && !ciCap && !adminPatch {
 		return call, fmt.Errorf("task %s holds no api grant for scope %s, which %s needs: "+
 			"ask a person to grant api:%s or a preset that includes it (docs/agent-api.md)", taskID, scope, pattern, scope)
@@ -305,6 +339,11 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	call.repo, err = s.agentCallRepo(ctx, r, pattern, call.targetTask, body, acting, set, scope, ciCap)
 	if err != nil {
 		return call, err
+	}
+	if _, fs := fsRoutes[pattern]; fs && call.repo == "" && set.Has(scope) {
+		// A namespace read naming no repository is narrowed to the
+		// ones the grant reaches by fsScope, not refused for naming none.
+		capAllowed = true
 	}
 	if ciCap && !capAllowed && !set.Allows(scope, call.repo) && call.repo != "" && agentMayRead(acting, call.repo) {
 		// grain-ci reads CI of the repositories the task's runs may
@@ -1037,6 +1076,16 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 					return fmt.Errorf("an agent cannot grant read access to %s, which its own task cannot read", r)
 				}
 			}
+		case "readsall", "reads_all":
+			// A console session's opt-in to reading every repository
+			// this deployment works in (model.ConsoleSessionAutoReads):
+			// the same grant as naming each of them in reads, so held to
+			// the same rule -- an agent may turn it on only when its own
+			// task already reads every one of them.
+			var on bool
+			if json.Unmarshal(raw, &on) == nil && on && !s.agentMayReadAllRepos(ctx, acting) {
+				return errors.New("an agent cannot turn on readsAll, which its own task does not have")
+			}
 		case "automerge":
 			var on bool
 			if json.Unmarshal(raw, &on) == nil && on {
@@ -1052,11 +1101,19 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 			if json.Unmarshal(raw, &access) == nil && s.networkAccessWidens(ctx, acting.NetworkAccess, access) {
 				return errors.New("an agent with networkAccess \"none\" cannot widen networkAccess")
 			}
-		case "hostd":
+		case "hostd", "defaulthostd":
 			// Which grain hostd a task's agent CLI runs on (a filing's
-			// hostd, PUT /api/tasks/{id}/hostd): another machine, and
-			// whatever CLI login lives on it. An agent may hand out only
-			// the default hostd or the selector its own task runs under.
+			// hostd, PUT /api/tasks/{id}/hostd, or a repository's
+			// default for every task filed against it, PUT
+			// /api/repos/{owner}/{name}/settings' defaultHostd): another
+			// machine, and whatever CLI login lives on it. An agent may
+			// hand out only the default hostd or the selector its own
+			// task runs under.
+			//
+			// A filing that names none is not asked about the default
+			// its repository resolves it to (ui.Client.CreateTask):
+			// that one was set by whoever may set repository settings,
+			// which this case holds an agent to, and not by the filer.
 			var sel string
 			if json.Unmarshal(raw, &sel) != nil {
 				continue // the handler refuses a body it cannot read
@@ -1250,6 +1307,30 @@ func agentMayWrite(acting *model.Task, repo string) bool {
 	return slices.ContainsFunc(acting.Writes, func(w model.WriteTarget) bool { return model.SameRepoText(w.Repo.String(), repo) })
 }
 
+// agentMayReadAllRepos reports whether acting can already read every
+// repository a session that reads all of them is given
+// (model.ConsoleSessionWorkingRepos, less the state repository, which a
+// session reads either way). Anything it cannot work out is a no.
+func (s *Server) agentMayReadAllRepos(ctx context.Context, acting *model.Task) bool {
+	if s.tasks == nil || s.tasks.Store == nil {
+		return false
+	}
+	working, err := model.ConsoleSessionWorkingRepos(ctx, s.tasks.Store)
+	if err != nil {
+		return false
+	}
+	stateRepo := s.tasks.stateRepoRef()
+	for _, r := range working {
+		if stateRepo.Owner != "" && r.Same(stateRepo) {
+			continue
+		}
+		if !agentMayRead(acting, r.String()) {
+			return false
+		}
+	}
+	return true
+}
+
 // agentMayRead reports whether the acting task's own runs may read repo.
 func agentMayRead(acting *model.Task, repo string) bool {
 	if agentMayWrite(acting, repo) {
@@ -1268,6 +1349,15 @@ func agentMayRead(acting *model.Task, repo string) bool {
 // grant for every repository reaches it.
 func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, target string, body []byte,
 	acting *model.Task, set APIGrantSet, scope APIScope, ciCap bool) (string, error) {
+	if repo, ok, err := pullRequestCallRepo(r, pattern, body); ok {
+		if err == nil {
+			repo, err = s.agentCanonicalRepo(repo)
+		}
+		return repo, err
+	}
+	if repo, ok, err := s.fsCallRepo(ctx, r, pattern); ok {
+		return repo, err
+	}
 	if owner, name := r.PathValue("owner"), r.PathValue("name"); owner != "" && name != "" {
 		// {owner} is host/owner, escaped into one segment, for a
 		// repository off the default host (RepoFromStored), and an
@@ -1293,6 +1383,12 @@ func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, ta
 		if repo, _, ok := ParseActionsRunID(r.PathValue("id")); ok {
 			return s.agentCanonicalRepo(repo)
 		}
+	}
+	if pattern == tasksWaitRoute {
+		repo, _ := s.tasksWaitCallRepo(ctx, r, func(c string) bool {
+			return set.Allows(scope, c) || (ciCap && agentMayRead(acting, c))
+		})
+		return repo, nil
 	}
 	if pathParam.MatchString(pathOf(pattern)) && !agentRepoDefaultRoutes[pattern] {
 		return "", nil
@@ -1468,7 +1564,10 @@ func (s *Server) queryCallRepo(r *http.Request, pattern string, allowed func(str
 // narrowed to when it names none: the one repository granted, or the
 // task's own where that is among those granted (or grain-ci reaches it).
 func agentDefaultRepo(acting *model.Task, granted []string, ciCap bool) string {
-	own := taskRepo(acting)
+	var own string
+	if acting != nil {
+		own = taskRepo(acting)
+	}
 	if own != "" && (ciCap || slices.ContainsFunc(granted, func(g string) bool { return model.SameRepoText(g, own) })) {
 		return own
 	}
@@ -1484,12 +1583,18 @@ func agentDefaultRepo(acting *model.Task, granted []string, ciCap bool) string {
 // grain on the acting run's behalf.
 func (s *Server) recordAgentCall(ctx context.Context, call agentCall, status int, resultBytes int64) {
 	principal := call.principalID()
+	// who is the principal as the journal names it, with the person an
+	// owned external agent credential acts for (#XC-14).
+	who := principal
+	if owner := call.owner(); owner != "" {
+		who += " on behalf of " + owner
+	}
 	if call.channel != "" {
 		log.Printf("grain api: {agent, %s} %s scope=%s repo=%q channel=%q reason=%q -> %d",
-			principal, call.pattern, call.scope, call.repo, call.channel, call.reason, status)
+			who, call.pattern, call.scope, call.repo, call.channel, call.reason, status)
 	} else {
 		log.Printf("grain api: {agent, %s} %s scope=%s repo=%q reason=%q -> %d",
-			principal, call.pattern, call.scope, call.repo, call.reason, status)
+			who, call.pattern, call.scope, call.repo, call.reason, status)
 	}
 	if call.external == nil && s.tasks != nil && s.tasks.Store != nil {
 		bgCtx := context.WithoutCancel(ctx)
@@ -1516,8 +1621,12 @@ func (s *Server) recordAgentCall(ctx context.Context, call agentCall, status int
 	}
 	var body string
 	if call.external != nil {
-		body = fmt.Sprintf("External agent `%s` (`%s`) called `%s` through the agent API (scope `%s`).",
-			call.external.Name, principal, call.pattern, call.scope)
+		onBehalf := ""
+		if owner := call.owner(); owner != "" {
+			onBehalf = fmt.Sprintf(" on behalf of `%s`", owner)
+		}
+		body = fmt.Sprintf("External agent `%s` (`%s`)%s called `%s` through the agent API (scope `%s`).",
+			call.external.Name, principal, onBehalf, call.pattern, call.scope)
 	} else {
 		body = fmt.Sprintf("Task %s called `%s` through the agent API (scope `%s`).", call.taskID, call.pattern, call.scope)
 	}
@@ -1604,8 +1713,16 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	}
 	call.grants = set
 	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
-	if !set.Has(scope) && !adminPatch {
+	// GET /api/inbox without ?repo= answers only the repositories the
+	// token reads (Server.inboxReadable), so a token held to some of
+	// them is let through to it rather than refused for naming none.
+	fsAllowed := fsMergeQueueByCI(set, pattern, r) ||
+		(pattern == "GET /api/inbox" && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "")
+	if !set.Has(scope) && !adminPatch && !fsAllowed {
 		return call, fmt.Errorf("%s holds no api grant for scope %s, which %s needs", principal, scope, pattern)
+	}
+	if fsRoutes[pattern] == "src" && !set.Has("deployment:src") {
+		return call, errExternalSrc(principal)
 	}
 	body, err := peekBody(r)
 	if err != nil {
@@ -1627,13 +1744,17 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 		call.targetTask = extraTargets[0]
 	}
 	adminPatchAllowed := false
+	if _, fs := fsRoutes[pattern]; fs && call.repo == "" && set.Has(scope) {
+		// As for a task's call: fsScope narrows it.
+		fsAllowed = true
+	}
 	if adminPatch && !set.Allows(scope, call.repo) && set.Allows("tasks:admin", call.repo) {
 		if err := tasksAdminTaskPatchBodyAllowed(body); err != nil {
 			return call, err
 		}
 		adminPatchAllowed = true
 	}
-	if !set.Allows(scope, call.repo) && !adminPatchAllowed {
+	if !set.Allows(scope, call.repo) && !adminPatchAllowed && !fsAllowed {
 		missingScope := scope
 		if !set.Has(scope) && adminPatch {
 			missingScope = "tasks:admin"
@@ -1684,6 +1805,13 @@ func (s *Server) checkExternalTokenRotationEscalation(ctx context.Context, held 
 	if err != nil || existing == nil {
 		return nil
 	}
+	own := ""
+	if tok := externalTokenFromContext(ctx); tok != nil {
+		own = strings.TrimSpace(tok.Owner)
+	}
+	if existingOwner := strings.TrimSpace(existing.Owner); !strings.EqualFold(existingOwner, own) {
+		return fmt.Errorf("an agent cannot rotate a credential owned by %q", existingOwner)
+	}
 	grants, _, needsPerson, err := model.ResolveExternalAgentGrants(existing.ScopeSet, existing.Scopes, existing.Repos)
 	if err != nil {
 		return err
@@ -1700,6 +1828,15 @@ func (s *Server) checkExternalTokenRotationEscalation(ctx context.Context, held 
 }
 
 func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pattern string, scope APIScope, set APIGrantSet, target string, body []byte, tok *model.ExternalAgentToken) (string, []string, error) {
+	if repo, ok, err := pullRequestCallRepo(r, pattern, body); ok {
+		if err == nil {
+			repo, err = s.agentCanonicalRepo(repo)
+		}
+		return repo, nil, err
+	}
+	if repo, ok, err := s.fsCallRepo(ctx, r, pattern); ok {
+		return repo, nil, err
+	}
 	if owner, name := r.PathValue("owner"), r.PathValue("name"); owner != "" && name != "" {
 		repo, err := s.agentCanonicalRepo(owner + "/" + name)
 		return repo, nil, err
@@ -1725,6 +1862,10 @@ func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pat
 	if pathParam.MatchString(pathOf(pattern)) {
 		return "", nil, nil
 	}
+	if pattern == tasksWaitRoute {
+		repo, ids := s.tasksWaitCallRepo(ctx, r, func(c string) bool { return set.Allows(scope, c) })
+		return repo, ids, nil
+	}
 	if pattern == "POST /api/tasks/reorder" && len(body) > 0 {
 		var req ReorderRequest
 		if json.Unmarshal(body, &req) == nil && len(req.IDs) > 0 {
@@ -1746,8 +1887,9 @@ func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pat
 		}
 	}
 	var fields struct {
-		Repo   string `json:"repo"`
-		TaskID string `json:"taskId"`
+		Repo       string `json:"repo"`
+		TaskID     string `json:"taskId"`
+		TemplateID string `json:"templateId"`
 	}
 	if len(body) > 0 && json.Unmarshal(body, &fields) == nil {
 		if id := strings.TrimSpace(fields.TaskID); id != "" && routeBodyHasField(pattern, "taskId") {
@@ -1758,6 +1900,11 @@ func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pat
 		if repo := strings.TrimSpace(fields.Repo); repo != "" && routeBodyHasField(pattern, "repo") {
 			repo, err := s.agentCanonicalRepo(repo)
 			return repo, nil, err
+		}
+		if pattern == "POST /api/tasks" && strings.TrimSpace(fields.TemplateID) != "" {
+			if tmpl, err := s.tasks.Store.GetTemplate(ctx, strings.TrimSpace(fields.TemplateID)); err == nil && tmpl != nil && tmpl.Target != nil {
+				return tmpl.Target.String(), nil, nil
+			}
 		}
 	}
 	if repo, ok, err := s.queryCallRepo(r, pattern, func(c string) bool {
@@ -1813,8 +1960,13 @@ func (s *Server) externalAgentRails(ctx context.Context, tok *model.ExternalAgen
 		if len(body) == 0 || json.Unmarshal(body, &req) != nil {
 			return fmt.Errorf("%s has no calling task context: POST /api/tasks requires an explicit repo (or noRepo: true)", principal)
 		}
-		if strings.TrimSpace(req.Repo) == "" && !req.NoRepo && strings.TrimSpace(req.TemplateID) == "" {
-			return fmt.Errorf("%s has no calling task context: POST /api/tasks requires an explicit repo (or noRepo: true)", principal)
+		if strings.TrimSpace(req.Repo) == "" && !req.NoRepo {
+			if strings.TrimSpace(req.TemplateID) == "" {
+				return fmt.Errorf("%s has no calling task context: POST /api/tasks requires an explicit repo (or noRepo: true)", principal)
+			}
+			if tmpl, err := s.tasks.Store.GetTemplate(ctx, strings.TrimSpace(req.TemplateID)); err == nil && tmpl != nil && tmpl.Target == nil {
+				return fmt.Errorf("%s has no calling task context: template %s names no repository, so POST /api/tasks requires an explicit repo (or noRepo: true)", principal, tmpl.ID)
+			}
 		}
 	}
 	path := pathOf(pattern)
@@ -1908,12 +2060,38 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 			if json.Unmarshal(raw, &access) == nil && s.networkAccessWidens(ctx, "", access) {
 				return errors.New("an external agent cannot widen networkAccess past this deployment's default of \"none\"")
 			}
-		case "approved":
+		case "hostd", "defaulthostd":
+			var sel string
+			if json.Unmarshal(raw, &sel) != nil {
+				continue
+			}
+			if err := s.agentMayRouteHostd(ctx, nil, sel); err != nil {
+				return err
+			}
+		case "keeprunning", "keep_running":
+			var on bool
+			if json.Unmarshal(raw, &on) == nil && on {
+				return errors.New("an external agent cannot turn on keepRunning")
+			}
+		case "priority":
+			var on bool
+			if json.Unmarshal(raw, &on) == nil {
+				continue
+			}
+			if p, err := decodeTaskPriority(raw); err == nil && p > model.DefaultTaskPriority && !set.Allows("tasks:admin", repo) {
+				return fmt.Errorf("an external agent cannot set priority above %d without tasks:admin", model.DefaultTaskPriority)
+			}
+		case "fixesbasebranch", "fixes_base_branch":
+			var on bool
+			if json.Unmarshal(raw, &on) == nil && on && !set.Allows("tasks:admin", repo) {
+				return errors.New("an external agent cannot mark a task fixesBaseBranch without tasks:admin")
+			}
+		case "approved", "interactive":
 			var on bool
 			if json.Unmarshal(raw, &on) == nil && on && !set.Allows("tasks:admin", repo) {
 				return errors.New("an agent files work unapproved: approving it needs tasks:admin")
 			}
-		case "author", "proposedby":
+		case "author", "creator", "proposedby":
 			var who string
 			if json.Unmarshal(raw, &who) == nil && strings.TrimSpace(who) != "" {
 				return fmt.Errorf("an agent cannot name somebody else as the %s of work it files", key)
@@ -1939,8 +2117,25 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 			if err := externalTemplateWithin(tok, held, *tmpl, allowedRepo); err != nil {
 				return err
 			}
+			if tmpl.Hostd != "" && !bodyNamesHostd(fields) {
+				if err := s.agentMayRouteHostd(ctx, nil, tmpl.Hostd); err != nil {
+					return fmt.Errorf("template %s pins its tasks' hostd: %w", tmpl.ID, err)
+				}
+			}
 			if tmpl.AutoMerge {
 				return fmt.Errorf("template %s is auto-merge: %w", tmpl.ID, errAgentAutoMerge)
+			}
+			if tmpl.KeepRunning {
+				return fmt.Errorf("template %s sets keepRunning, which an external agent cannot turn on", tmpl.ID)
+			}
+			if tmpl.Interactive && !set.Allows("tasks:admin", repo) {
+				return fmt.Errorf("template %s is interactive: approving it needs tasks:admin", tmpl.ID)
+			}
+			if tmpl.Priority != nil && *tmpl.Priority > model.DefaultTaskPriority && !set.Allows("tasks:admin", repo) {
+				return fmt.Errorf("template %s sets priority %d (above %d), which needs tasks:admin", tmpl.ID, *tmpl.Priority, model.DefaultTaskPriority)
+			}
+			if s.networkAccessWidens(ctx, "", string(tmpl.NetworkAccess)) {
+				return fmt.Errorf("template %s widens networkAccess past this deployment's default of \"none\"", tmpl.ID)
 			}
 			if tmpl.Target != nil && !set.Allows(scope, tmpl.Target.String()) {
 				return fmt.Errorf("template %s files against %s, which the external agent's %s does not reach", tmpl.ID, tmpl.Target, scope)
@@ -2116,11 +2311,13 @@ var taskMutationResponseKinds = map[string]taskMutationRespKind{
 	"POST /api/tasks/{id}/approve":                 taskRespSingle,
 	"POST /api/tasks/{id}/withdraw-approval":       taskRespSingle,
 	"POST /api/tasks/{id}/park-until":              taskRespNone,
+	"POST /api/pull-requests/review":               taskRespNone,
 	"POST /api/tasks/{id}/resume-later":            taskRespNone,
 	"POST /api/tasks/{id}/defer":                   taskRespSingle,
 	"POST /api/tasks/{id}/undefer":                 taskRespSingle,
 	"POST /api/tasks/{id}/submit":                  taskRespSingle,
 	"POST /api/tasks/{id}/comments":                taskRespSingle,
+	"POST /api/tasks/{id}/reply":                   taskRespSingle,
 	"PUT /api/tasks/{id}/secret":                   taskRespSingle,
 	"POST /api/tasks/{id}/close":                   taskRespSingle,
 	"POST /api/tasks/{id}/stop":                    taskRespSingle,
@@ -2376,4 +2573,36 @@ func marshalJSONLine(v any, fallback []byte) []byte {
 		return fallback
 	}
 	return append(b, '\n')
+}
+
+// tasksWaitRoute is GET /api/tasks/wait, whose tasks are named in its
+// query rather than its path.
+const tasksWaitRoute = "GET /api/tasks/wait"
+
+// tasksWaitCallRepo is the repository a GET /api/tasks/wait call is
+// judged on, checking every task it names (#XC-22): the first task's
+// repository whose grant allowed refuses, so it is the one the gate
+// names, and otherwise the first task's own. A task id that names no
+// task (yet) belongs to no repository a grant can be judged on, so the
+// call is judged on "" -- only a grant for every repository reaches it,
+// and the handler answers that caller 404 -- rather than letting a
+// token held to some repositories name an id another's task is filed
+// under between this check and the handler's read.
+func (s *Server) tasksWaitCallRepo(ctx context.Context, r *http.Request, allowed func(string) bool) (string, []string) {
+	ids := TasksWaitIDs(r)
+	first, firstSet := "", false
+	for _, id := range ids {
+		t, err := s.tasks.Store.GetTask(ctx, id)
+		if err != nil || t == nil {
+			return "", ids
+		}
+		repo := taskRepo(t)
+		if !allowed(repo) {
+			return repo, ids
+		}
+		if !firstSet {
+			first, firstSet = repo, true
+		}
+	}
+	return first, ids
 }

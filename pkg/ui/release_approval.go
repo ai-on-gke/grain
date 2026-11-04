@@ -18,7 +18,10 @@ package ui
 // (design/playbook/releases.playbook.md): the release train stops a
 // release whose candidate qualified at vX.Y.Z-pending -- a minor release,
 // vX.Y.0, or a patch the train cut from fixes alone, vX.Y.Z -- and a
-// person approves or rejects it here. Approving runs .grain/workflows/promote-release.yml's
+// person approves or rejects it here. On a repository that publishes
+// from GitHub Actions (ci_mode: github) the answer is a signed dispatch
+// of .github/workflows/promote-release.yml instead
+// (release_approval_github.go). Otherwise approving runs .grain/workflows/promote-release.yml's
 // `promote` job (which needs `approve`), rejecting its `reject` job; both
 // are workflow_dispatch runs of the repository's trunk that carry
 // GRAIN_CI_REQUESTED_BY_KIND=human and GRAIN_CI_RELEASE_VERSION, which no
@@ -49,6 +52,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -66,14 +70,23 @@ const releaseTrunk = "main"
 // minor ones.
 var pendingReleasePattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
-// ReleaseDecision is what approving or rejecting a pending release
-// answers: the CI run carrying it out.
+// ReleaseDecision is what approving, rejecting, or rolling back a
+// release answers: the CI run carrying it out.
 type ReleaseDecision struct {
-	Version       string `json:"version"`
-	Approve       bool   `json:"approve"`
-	ShortSoakOK   bool   `json:"shortSoakOk,omitempty"`
-	AllowBreaking bool   `json:"allowBreaking,omitempty"`
-	Run           ci.Run `json:"run"`
+	Version        string `json:"version"`
+	Approve        bool   `json:"approve"`
+	Rollback       bool   `json:"rollback,omitempty"`
+	RollbackTo     string `json:"rollbackTo,omitempty"`
+	RollbackReason string `json:"rollbackReason,omitempty"`
+	ShortSoakOK    bool   `json:"shortSoakOk,omitempty"`
+	AllowBreaking  bool   `json:"allowBreaking,omitempty"`
+	// Run is the grain CI run carrying the answer out, on a repository
+	// grain CI releases.
+	Run ci.Run `json:"run"`
+	// Dispatched is the GitHub Actions dispatch carrying it out instead,
+	// on a repository that publishes from GitHub Actions (ci_mode:
+	// github; release_approval_github.go).
+	Dispatched *ReleaseDispatch `json:"dispatched,omitempty"`
 }
 
 // ReleaseApproval is the optional body of POST
@@ -88,6 +101,20 @@ type ReleaseApproval struct {
 	// without being the major release RELEASE_MAJOR asks for. Without it
 	// the approve job refuses such a release.
 	AllowBreaking bool `json:"allow_breaking,omitempty"`
+}
+
+// ReleaseRollback is the optional body of POST /api/releases/{version}/rollback.
+type ReleaseRollback struct {
+	// Repo is the repository whose promoted release version is rolled
+	// back; empty defaults to grain's own source repository.
+	Repo string `json:"repo,omitempty"`
+	// To is the earlier release (vA.B.C) latest goes back to; empty lets
+	// scripts/release-from-trunk.sh pick the newest earlier release
+	// neither retracted nor in RELEASE_NEVER_PROMOTE.
+	To string `json:"to,omitempty"`
+	// Reason is why version is retracted, recorded on its
+	// vX.Y.Z-retracted tag.
+	Reason string `json:"reason,omitempty"`
 }
 
 // DecideRelease starts the promote-release run that approves (approve)
@@ -115,15 +142,26 @@ func (c *Client) DecideRelease(ctx context.Context, repo, version string, approv
 	if answers.AllowBreaking && !approve {
 		return ReleaseDecision{}, validationErrorf("allow_breaking is an approval's answer: rejecting %s promotes nothing", version)
 	}
-	if c.Config.CI == nil {
-		return ReleaseDecision{}, fmt.Errorf("this deployment has no grain CI wired")
-	}
 	parsed, err := c.parseRepo(repo)
 	if err != nil {
 		return ReleaseDecision{}, validationErrorf("repo: %v", err)
 	}
 	if !pendingReleasePattern.MatchString(version) {
 		return ReleaseDecision{}, validationErrorf("%q is not a release a person is asked about: name it vX.Y.Z", version)
+	}
+	if onGitHub, err := c.publishesFromGitHub(ctx, parsed); err != nil {
+		return ReleaseDecision{}, err
+	} else if onGitHub {
+		d, err := c.dispatchGitHubRelease(ctx, parsed, version, actor.ID, approve, answers)
+		if err != nil {
+			return ReleaseDecision{}, err
+		}
+		c.clearReleasePending(ctx, version, actor, verb)
+		return ReleaseDecision{Version: version, Approve: approve, ShortSoakOK: answers.ShortSoakOK,
+			AllowBreaking: answers.AllowBreaking, Dispatched: &d}, nil
+	}
+	if c.Config.CI == nil {
+		return ReleaseDecision{}, fmt.Errorf("this deployment has no grain CI wired")
 	}
 	enabled, err := c.ciEnabledFor(ctx, parsed)
 	if err != nil {
@@ -145,14 +183,21 @@ func (c *Client) DecideRelease(ctx context.Context, repo, version string, approv
 	if err != nil {
 		return ReleaseDecision{}, &ValidationError{err: err}
 	}
-	if c.Store != nil {
-		subject := model.NotificationSubject(model.FamilyReleasePending, version)
-		if _, err := c.Store.ClearNotification(ctx, subject, model.PrincipalString(actor)); err != nil {
-			log.Printf("grain: clearing %s after %s's %s: %v", subject, actor.ID, verb, err)
-		}
-	}
+	c.clearReleasePending(ctx, version, actor, verb)
 	return ReleaseDecision{Version: version, Approve: approve,
 		ShortSoakOK: answers.ShortSoakOK, AllowBreaking: answers.AllowBreaking, Run: run}, nil
+}
+
+// clearReleasePending clears version's "ready to promote" notification
+// once a person's answer is on its way.
+func (c *Client) clearReleasePending(ctx context.Context, version string, actor model.Principal, verb string) {
+	if c.Store == nil {
+		return
+	}
+	subject := model.NotificationSubject(model.FamilyReleasePending, version)
+	if _, err := c.Store.ClearNotification(ctx, subject, model.PrincipalString(actor)); err != nil {
+		log.Printf("grain: clearing %s after %s's %s: %v", subject, actor.ID, verb, err)
+	}
 }
 
 func kindName(k model.PrincipalKind) string {
@@ -177,6 +222,86 @@ func (s *Server) decideRelease(w http.ResponseWriter, r *http.Request, approve b
 	}
 	out, err := s.tasks.DecideRelease(r.Context(), r.PathValue("owner")+"/"+r.PathValue("name"),
 		r.PathValue("version"), approve, req)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, out)
+}
+
+// RollbackRelease starts the promote-release run that retracts version,
+// a promoted release of repo, and re-points latest to opts.To (or the
+// newest earlier non-retracted release). Only a person may: any other
+// caller is refused with a ForbiddenError and nothing is started.
+func (c *Client) RollbackRelease(ctx context.Context, repo, version string, opts ReleaseRollback) (ReleaseDecision, error) {
+	// Who first, before anything about the release is looked at.
+	actor := c.requestActor(ctx).Actor
+	if actor.Kind != model.PrincipalHuman || actor.ID == "" {
+		return ReleaseDecision{}, forbiddenErrorf("only a person may roll back a release: %q is a %s, and a release "+
+			"is rolled back by a person, never by an agent or a schedule", actor.ID, kindName(actor.Kind))
+	}
+	if strings.TrimSpace(repo) == "" {
+		repo = strings.TrimSpace(opts.Repo)
+	}
+	if repo == "" {
+		repo = model.GrainSourceRepo().String()
+	}
+	parsed, err := c.parseRepo(repo)
+	if err != nil {
+		return ReleaseDecision{}, validationErrorf("repo: %v", err)
+	}
+	if !pendingReleasePattern.MatchString(version) {
+		return ReleaseDecision{}, validationErrorf("%q is not a release version: name it vX.Y.Z", version)
+	}
+	to := strings.TrimSpace(opts.To)
+	if to != "" && !pendingReleasePattern.MatchString(to) {
+		return ReleaseDecision{}, validationErrorf("to %q is not a release version: name it vX.Y.Z or leave it empty", opts.To)
+	}
+	if strings.ContainsAny(opts.Reason, "\x00\r\n") {
+		return ReleaseDecision{}, validationErrorf("reason must be a single line")
+	}
+	reason := strings.TrimSpace(opts.Reason)
+	cleanOpts := ReleaseRollback{Repo: parsed.String(), To: to, Reason: reason}
+	if onGitHub, err := c.publishesFromGitHub(ctx, parsed); err != nil {
+		return ReleaseDecision{}, err
+	} else if onGitHub {
+		d, err := c.dispatchGitHubRollback(ctx, parsed, version, actor.ID, cleanOpts)
+		if err != nil {
+			return ReleaseDecision{}, err
+		}
+		return ReleaseDecision{Version: version, Rollback: true, RollbackTo: to,
+			RollbackReason: reason, Dispatched: &d}, nil
+	}
+	if c.Config.CI == nil {
+		return ReleaseDecision{}, fmt.Errorf("this deployment has no grain CI wired")
+	}
+	enabled, err := c.ciEnabledFor(ctx, parsed)
+	if err != nil {
+		return ReleaseDecision{}, err
+	}
+	if !enabled {
+		return ReleaseDecision{}, forbiddenErrorf("%s", ciNotEnabledMessage(parsed))
+	}
+	job := PromoteReleaseWorkflow + ":rollback"
+	run, err := c.Config.CI.Start(ctx, ci.Request{
+		Repo: parsed.String(), Ref: releaseTrunk,
+		Event: ci.EventManual, Workflow: PromoteReleaseWorkflow, Jobs: []string{job},
+		RequestedBy: actor.ID, RequestedByKind: string(model.PrincipalHuman), ReleaseVersion: version,
+		ReleaseRollbackTo: to, ReleaseRollbackReason: reason,
+	})
+	if err != nil {
+		return ReleaseDecision{}, &ValidationError{err: err}
+	}
+	return ReleaseDecision{Version: version, Rollback: true,
+		RollbackTo: to, RollbackReason: reason, Run: run}, nil
+}
+
+func (s *Server) handleRollbackRelease(w http.ResponseWriter, r *http.Request) {
+	var req ReleaseRollback
+	if !readOptionalJSON(w, r, &req) {
+		return
+	}
+	out, err := s.tasks.RollbackRelease(r.Context(), req.Repo, r.PathValue("version"), req)
 	if err != nil {
 		writeClientError(w, err)
 		return

@@ -270,7 +270,14 @@ func (t *RealTransport) sendOnce(method, path string, headers map[string]string,
 	case t.PathPrefix != "" && (path == t.PathPrefix || strings.HasPrefix(path, t.PathPrefix+"/")):
 		fullPath = path
 	}
-	req, err := http.NewRequest(method, scheme+"://"+t.Host+fullPath, bodyReader)
+	target := scheme + "://" + t.Host + fullPath
+	if strings.HasPrefix(path, "https://") || strings.HasPrefix(path, "http://") {
+		// A whole URL -- a redirect a caller follows itself, such as a
+		// job log's blob URL -- goes where it says, with only the
+		// headers the caller gave it.
+		target = path
+	}
+	req, err := http.NewRequest(method, target, bodyReader)
 	if err != nil {
 		return ApiResponse{}, err
 	}
@@ -338,6 +345,12 @@ func (t *RealTransport) sendOnce(method, path string, headers map[string]string,
 	respHeaders := headerMap(resp.Header)
 	out := ApiResponse{Status: resp.StatusCode, Headers: respHeaders, Body: data,
 		URL: method + " " + req.URL.String()}
+	if final := resp.Request; final != nil && final.URL != nil && final.URL.Host != req.URL.Host {
+		// Answered by wherever a redirect sent the request -- a job
+		// log's blob store, say -- so a refusal names that host too.
+		// Its path and query stay out: they are a signed URL.
+		out.URL += " -> " + final.URL.Scheme + "://" + final.URL.Host
+	}
 	// A caller that sent its own validator (CompletedWorkflowRuns keeps
 	// one per repository) and got a 304 back was revalidated all the
 	// same: GitHub does not charge it, so neither does Health's budget.
@@ -1207,12 +1220,14 @@ type CheckRun struct {
 	// The rest is what recording this check as GitHub CI needs
 	// (orchestrator.recordPolledChecks, model.GitHubCIJob), and comes in
 	// the same response: ID is the check run's id (an Actions job's id),
-	// App the slug of the App that posted it, Output its whole output --
-	// title, summary and text -- bounded.
+	// App the slug of the App that posted it, ExternalID the caller-supplied
+	// identifier on CheckRunWrite, Output its whole output -- title, summary
+	// and text -- bounded.
 	ID           int64
 	CheckSuiteID int64
 	HeadSHA      string
 	App          string
+	ExternalID   string
 	StartedAt    *time.Time
 	CompletedAt  *time.Time
 	Output       string
@@ -2266,6 +2281,7 @@ func (c *RESTClient) CreatePullRequest(owner, repo, head, base, title, body stri
 	if err := c.gitOnly(owner, repo); err != nil {
 		return PullRequest{}, err
 	}
+	body = c.signPullRequestBody(owner, repo, body)
 	payload, _ := json.Marshal(map[string]string{
 		"title": title, "head": head, "base": base, "body": body,
 	})
@@ -2300,6 +2316,7 @@ func (c *RESTClient) CreatePullRequest(owner, repo, head, base, title, body stri
 // then describes the commits that existed then, and the run's later
 // commits are the ones a reviewer needs to read about.
 func (c *RESTClient) UpdatePullRequestBody(owner, repo string, number int, body string) error {
+	body = c.signPullRequestBody(owner, repo, body)
 	payload, _ := json.Marshal(map[string]string{"body": body})
 	resp, err := c.request(
 		"PATCH", fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, number),
@@ -2384,10 +2401,13 @@ func (c *RESTClient) ClosePullRequest(owner, repo string, number int) error {
 // exists" after a CreatePullRequest 422, rather than failing a finish
 // that has in fact already succeeded.
 //
-// head is qualified owner:branch the way GitHub's own filter requires;
-// grain only ever pushes to branches in the target repo itself (never a
-// fork), so the head owner is always owner.
+// head is qualified owner:branch the way GitHub's own filter requires; when
+// branch already carries a "<fork-owner>:" prefix (for a cross-repository
+// pull request opened from a fork), that qualifier is preserved as given.
 func (c *RESTClient) FindOpenPullRequestForBranch(owner, repo, branch string) (*PullRequest, error) {
+	if strings.Contains(branch, ":") {
+		return c.FindOpenPullRequestForHead(owner, repo, branch)
+	}
 	return c.FindOpenPullRequestForHead(owner, repo, owner+":"+branch)
 }
 
@@ -2872,6 +2892,27 @@ func (c *RESTClient) ListPullRequestCommits(owner, repo string, number int) ([]C
 	return commits, nil
 }
 
+// AppSlugSource is a TokenSource that can say which GitHub App the token
+// it hands out for owner/repo belongs to: the slug check runs posted with
+// it carry (CheckRun.App), or "" when that token is not an App's.
+type AppSlugSource interface {
+	AppSlugFor(owner, repo string) (string, error)
+}
+
+// CheckRunApp is the slug of the GitHub App this client's check runs on
+// owner/repo are posted as, or "" when it cannot tell (its TokenSource is
+// no AppSlugSource, or the token is not an App's). A check run's name is
+// not an identity -- anything that can write check runs on a repository
+// can post one by any name -- so a caller that trusts its own check run
+// matches it on this.
+func (c *RESTClient) CheckRunApp(owner, repo string) (string, error) {
+	src, ok := c.Tokens.(AppSlugSource)
+	if !ok {
+		return "", nil
+	}
+	return src.AppSlugFor(owner, repo)
+}
+
 // ListCheckRuns returns the check runs against ref -- a branch name works
 // fine here, GitHub resolves it to that branch's current tip itself, so a
 // caller never needs a commit sha in hand. Paginates the same Link-header
@@ -2879,8 +2920,35 @@ func (c *RESTClient) ListPullRequestCommits(owner, repo string, number int) ([]C
 // is shaped differently -- {"total_count": N, "check_runs": [...]}, not a
 // bare array, which is GitHub's own shape for this one endpoint.
 func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) {
+	return c.listCheckRuns(owner, repo, ref, "")
+}
+
+// CheckRunAttemptsReader is the optional Client capability for every check
+// run named name against ref (GitHub's filter=all), where ListCheckRuns is
+// the latest of each alone, and for the App this client's own check
+// runs are posted as. It is what the release train's qualification gate
+// reads grain/release-qualification's attempts from.
+type CheckRunAttemptsReader interface {
+	ListCheckRunAttempts(owner, repo, ref, name string) ([]CheckRun, error)
+	CheckRunApp(owner, repo string) (string, error)
+}
+
+var _ CheckRunAttemptsReader = (*RESTClient)(nil)
+
+// ListCheckRunAttempts is GET
+// /repos/{owner}/{repo}/commits/{ref}/check-runs?check_name={name}&filter=all,
+// every check run of every name for "".
+func (c *RESTClient) ListCheckRunAttempts(owner, repo, ref, name string) ([]CheckRun, error) {
+	query := "&filter=all"
+	if name != "" {
+		query += "&check_name=" + url.QueryEscape(name)
+	}
+	return c.listCheckRuns(owner, repo, ref, query)
+}
+
+func (c *RESTClient) listCheckRuns(owner, repo, ref, query string) ([]CheckRun, error) {
 	var runs []CheckRun
-	path := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs?per_page=100", owner, repo, url.PathEscape(ref))
+	path := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs?per_page=100%s", owner, repo, url.PathEscape(ref), query)
 	for path != "" {
 		resp, err := c.get(owner, repo, path)
 		if err != nil {
@@ -2893,6 +2961,7 @@ func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) 
 			CheckRuns []struct {
 				ID          int64      `json:"id"`
 				HeadSHA     string     `json:"head_sha"`
+				ExternalID  string     `json:"external_id"`
 				Name        string     `json:"name"`
 				Status      string     `json:"status"`
 				Conclusion  *string    `json:"conclusion"`
@@ -2938,6 +3007,7 @@ func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) 
 				CheckSuiteID:  item.CheckSuite.ID,
 				HeadSHA:       item.HeadSHA,
 				App:           item.App.Slug,
+				ExternalID:    item.ExternalID,
 				StartedAt:     item.StartedAt,
 				CompletedAt:   item.CompletedAt,
 				Output:        checkOutput(item.Output.Title, item.Output.Summary, item.Output.Text),
@@ -4165,6 +4235,7 @@ func (c *RESTClient) ListComments(owner, repo string, number int) ([]Comment, er
 // trusted reply arrived after this," since a comment's own id is the one
 // thing that can't be spoofed by editing an earlier comment's body.
 func (c *RESTClient) CreateComment(owner, repo string, number int, body string) (int, error) {
+	body = c.signCommentBody(owner, repo, body)
 	payload, _ := json.Marshal(map[string]string{"body": body})
 	resp, err := c.request(
 		"POST", fmt.Sprintf("/repos/%s/%s/issues/%d/comments", owner, repo, number),
@@ -4191,6 +4262,7 @@ func (c *RESTClient) CreateComment(owner, repo string, number int, body string) 
 // files the reply under the thread's root either way. Returns the new
 // comment's id, as CreateComment does.
 func (c *RESTClient) ReplyToReviewComment(owner, repo string, pullNumber, commentID int, body string) (int, error) {
+	body = c.signCommentBody(owner, repo, body)
 	payload, _ := json.Marshal(map[string]string{"body": body})
 	resp, err := c.request(
 		"POST", fmt.Sprintf("/repos/%s/%s/pulls/%d/comments/%d/replies", owner, repo, pullNumber, commentID),
@@ -4382,6 +4454,7 @@ func (c *RESTClient) ResolveReviewThread(owner, repo, threadID string) error {
 // tree's origin (orchestrator.reconcileWorkTrees) rather than posting a
 // new one each time the tree moves.
 func (c *RESTClient) UpdateComment(owner, repo string, commentID int64, body string) error {
+	body = c.signCommentBody(owner, repo, body)
 	payload, _ := json.Marshal(map[string]string{"body": body})
 	resp, err := c.request(
 		"PATCH", fmt.Sprintf("/repos/%s/%s/issues/comments/%d", owner, repo, commentID),
@@ -4456,6 +4529,7 @@ func (c *RESTClient) MergePullRequestWithMessage(owner, repo string, number int,
 // review's id, kept for the same reason CreateComment returns one: cheap,
 // and the pattern every other creation call here already follows.
 func (c *RESTClient) CreateReview(owner, repo string, number int, body string, comments []NewReviewComment) (int, error) {
+	body = c.signCommentBody(owner, repo, body)
 	payloadComments := make([]map[string]any, len(comments))
 	for i, cm := range comments {
 		payloadComments[i] = map[string]any{"path": cm.Path, "line": cm.Line, "body": cm.Body}

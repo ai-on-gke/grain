@@ -21,14 +21,14 @@ package deploy
 // ./...` -- and those cannot go wrong quietly: the directory is either in
 // the checkout or it is not. A handful name an import path instead,
 // because the package is in another module. Dockerfile builds
-// github.com/bwsalmon/granule/cmd/granule into the runtime image,
+// github.com/gke-labs/granule/cmd/granule into the runtime image,
 // scripts/granule-guest-probe.sh builds the same binary to look inside a
 // guest with, and pkg/orchestrator's real-Docker tests build and run it.
 // Those resolve through the module graph, and nothing else in this
 // repository notices when they stop resolving.
 //
 // They did stop, for a day. e811fd4f1 ("Clean up module dependencies and
-// deploy tests for granule", #1725) dropped github.com/bwsalmon/granule
+// deploy tests for granule", #1725) dropped github.com/gke-labs/granule
 // from go.mod and go.sum while every one of those call sites still named
 // it, and each of them began failing with "no required module provides
 // package ..." before it reached the network. `go build ./...` stayed
@@ -337,7 +337,7 @@ func TestEveryGoBuildTargetOutsideThisModuleIsRequiredByGoMod(t *testing.T) {
 // has to have that directory, holding a module of that name.
 //
 // This is the same failure wearing the other hat. go.mod requires
-// github.com/bwsalmon/granule and points it at third_party/granule, so
+// github.com/gke-labs/granule and points it at third_party/granule, so
 // the requirement can be present and correct and every one of those call
 // sites still fail -- on a checkout where that directory was removed, or
 // on one where it is there but holds no module.
@@ -377,32 +377,32 @@ func TestTheGoCommandScannerFindsATargetInEveryFormTheTreeUsesOne(t *testing.T) 
 	}{{
 		name: "Dockerfile's RUN, behind a line continuation and an environment variable",
 		text: "RUN vcs=\"$(./scripts/buildvcs.sh ${BUILDVCS})\" && mkdir -p /out \\\n" +
-			"\t&& CGO_ENABLED=0 go build -buildvcs=\"$vcs\" -o /out/granule github.com/bwsalmon/granule/cmd/granule",
-		want: []string{"github.com/bwsalmon/granule/cmd/granule"},
+			"\t&& CGO_ENABLED=0 go build -buildvcs=\"$vcs\" -o /out/granule github.com/gke-labs/granule/cmd/granule",
+		want: []string{"github.com/gke-labs/granule/cmd/granule"},
 	}, {
 		name: "a shell script's subshell",
-		text: `  (cd "$repo_root" && go build -buildvcs="$vcs" -o "$workdir/granule" github.com/bwsalmon/granule/cmd/granule)`,
-		want: []string{"github.com/bwsalmon/granule/cmd/granule"},
+		text: `  (cd "$repo_root" && go build -buildvcs="$vcs" -o "$workdir/granule" github.com/gke-labs/granule/cmd/granule)`,
+		want: []string{"github.com/gke-labs/granule/cmd/granule"},
 	}, {
 		name: "a Go test shelling out, where the words are string literals",
-		text: `	cmd := exec.Command("go", "build", "-o", bin, "github.com/bwsalmon/granule/cmd/granule")`,
-		want: []string{"github.com/bwsalmon/granule/cmd/granule"},
+		text: `	cmd := exec.Command("go", "build", "-o", bin, "github.com/gke-labs/granule/cmd/granule")`,
+		want: []string{"github.com/gke-labs/granule/cmd/granule"},
 	}, {
 		name: "go run resolves a module the same way go build does",
-		text: `	cmd := exec.Command("go", "run", "github.com/bwsalmon/granule/cmd/granule", "granulefile", "build", "-f", "Granulefile")`,
-		want: []string{"github.com/bwsalmon/granule/cmd/granule"},
+		text: `	cmd := exec.Command("go", "run", "github.com/gke-labs/granule/cmd/granule", "granulefile", "build", "-f", "Granulefile")`,
+		want: []string{"github.com/gke-labs/granule/cmd/granule"},
 	}, {
 		name: "a go tool reached by path",
-		text: `RUN CGO_ENABLED=0 /usr/local/go/bin/go build -o /out/x github.com/bwsalmon/granule/cmd/granule`,
-		want: []string{"github.com/bwsalmon/granule/cmd/granule"},
+		text: `RUN CGO_ENABLED=0 /usr/local/go/bin/go build -o /out/x github.com/gke-labs/granule/cmd/granule`,
+		want: []string{"github.com/gke-labs/granule/cmd/granule"},
 	}, {
 		name: "a trailing /...",
-		text: `go build github.com/bwsalmon/granule/cmd/...`,
-		want: []string{"github.com/bwsalmon/granule/cmd"},
+		text: `go build github.com/gke-labs/granule/cmd/...`,
+		want: []string{"github.com/gke-labs/granule/cmd"},
 	}, {
 		name: "the whole-module form",
-		text: `go build -o bin github.com/bwsalmon/granule`,
-		want: []string{"github.com/bwsalmon/granule"},
+		text: `go build -o bin github.com/gke-labs/granule`,
+		want: []string{"github.com/gke-labs/granule"},
 	}, {
 		name: "two targets on one line",
 		text: `go build github.com/a.io/x/cmd/one github.com/b.io/y/cmd/two`,
@@ -425,15 +425,15 @@ func TestTheGoCommandScannerFindsATargetInEveryFormTheTreeUsesOne(t *testing.T) 
 		want: nil,
 	}, {
 		name: "a comment about a build is not a build",
-		text: `# the line above runs go build github.com/bwsalmon/granule/cmd/granule`,
+		text: `# the line above runs go build github.com/gke-labs/granule/cmd/granule`,
 		want: nil,
 	}, {
 		name: "a Go comment about a build is not a build either",
-		text: `// pkg/granule shells out to go build github.com/bwsalmon/granule/cmd/granule`,
+		text: `// pkg/granule shells out to go build github.com/gke-labs/granule/cmd/granule`,
 		want: nil,
 	}, {
 		name: "a subcommand that resolves no package",
-		text: `go mod download github.com/bwsalmon/granule`,
+		text: `go mod download github.com/gke-labs/granule`,
 		want: nil,
 	}} {
 		t.Run(c.name, func(t *testing.T) {
@@ -452,8 +452,8 @@ func TestTheGoCommandScannerFindsATargetInEveryFormTheTreeUsesOne(t *testing.T) 
 // neighbours that are not requirements.
 func TestGoModRequirementsAreReadWithoutTheLinesThatAreNotOne(t *testing.T) {
 	required := goModRequires(t)
-	if got := providedBy("github.com/bwsalmon/granule/cmd/granule", required); got != "github.com/bwsalmon/granule" {
-		t.Errorf("go.mod's requirements yield %q for granule's cmd, want github.com/bwsalmon/granule; read %v", got, required)
+	if got := providedBy("github.com/gke-labs/granule/cmd/granule", required); got != "github.com/gke-labs/granule" {
+		t.Errorf("go.mod's requirements yield %q for granule's cmd, want github.com/gke-labs/granule; read %v", got, required)
 	}
 	for _, module := range required {
 		switch module {

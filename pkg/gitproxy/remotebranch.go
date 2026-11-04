@@ -135,6 +135,15 @@ func remoteRefs(h CredentialHost, credential Credential, owner, repo string) (ma
 // "<id> <ref>" pkt-line per ref, the first carrying capabilities after a
 // NUL) into ref name -> object id.
 func readRefAdvertisement(body io.Reader) (map[string]string, error) {
+	refs, _, err := readRefAdvertisementHead(body)
+	return refs, err
+}
+
+// readRefAdvertisementHead is readRefAdvertisement, and the branch HEAD
+// names, from the advertisement's symref=HEAD:<ref> capability ("" when
+// the remote does not say).
+func readRefAdvertisementHead(body io.Reader) (map[string]string, string, error) {
+	headRef := ""
 	r := bufio.NewReader(body)
 	refs := map[string]string{}
 	flushes := 0
@@ -146,37 +155,42 @@ func readRefAdvertisement(body io.Reader) (map[string]string, error) {
 				// than with its flush.
 				break
 			}
-			return nil, errors.New("the remote's ref advertisement ended early")
+			return nil, "", errors.New("the remote's ref advertisement ended early")
 		}
 		n, err := strconv.ParseUint(string(head[:]), 16, 16)
 		if err != nil {
-			return nil, fmt.Errorf("malformed pkt-line length %q in the remote's ref advertisement", head)
+			return nil, "", fmt.Errorf("malformed pkt-line length %q in the remote's ref advertisement", head)
 		}
 		if n == 0 {
 			flushes++
 			continue
 		}
 		if n < 4 {
-			return nil, fmt.Errorf("malformed pkt-line length %d in the remote's ref advertisement", n)
+			return nil, "", fmt.Errorf("malformed pkt-line length %d in the remote's ref advertisement", n)
 		}
 		line := make([]byte, n-4)
 		if _, err := io.ReadFull(r, line); err != nil {
-			return nil, errors.New("the remote's ref advertisement ended early")
+			return nil, "", errors.New("the remote's ref advertisement ended early")
 		}
 		text := strings.TrimSuffix(string(line), "\n")
 		if msg, ok := strings.CutPrefix(text, "ERR "); ok {
-			return nil, fmt.Errorf("the remote refused: %s", strings.TrimSpace(msg))
+			return nil, "", fmt.Errorf("the remote refused: %s", strings.TrimSpace(msg))
 		}
 		if flushes == 0 {
 			if !strings.HasPrefix(text, "# service=") {
-				return nil, errors.New("the remote did not answer as a smart-HTTP git server")
+				return nil, "", errors.New("the remote did not answer as a smart-HTTP git server")
 			}
 			continue
 		}
-		text, _, _ = strings.Cut(text, "\x00")
+		text, capabilities, _ := strings.Cut(text, "\x00")
+		for _, c := range strings.Fields(capabilities) {
+			if ref, ok := strings.CutPrefix(c, "symref=HEAD:"); ok {
+				headRef = ref
+			}
+		}
 		if id, name, ok := strings.Cut(text, " "); ok {
 			refs[name] = id
 		}
 	}
-	return refs, nil
+	return refs, headRef, nil
 }

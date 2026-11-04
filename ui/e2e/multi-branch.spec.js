@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 test.describe("Multi-branch task configuration and cross-branch proposals", () => {
   let originalTargetRepos = [];
@@ -53,7 +54,7 @@ test.describe("Multi-branch task configuration and cross-branch proposals", () =
     await page.getByLabel("Title").fill(title);
 
     // Select target repository
-    await page.getByLabel(/^Repos/).selectOption("acme/widgets");
+    await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
     await page.getByLabel("Base branch").fill("main");
 
     // Open Advanced options to configure extra write targets

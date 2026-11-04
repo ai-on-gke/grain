@@ -19,6 +19,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
 // attributedRoute is one write path's row in operator-attribution spec
@@ -70,6 +73,23 @@ func fileTask(approved bool) func(*testing.T, *ui.Client, sender) string {
 		}
 		return task.ID
 	}
+}
+
+// taskParkedOnQuestion is a task whose run parked it on a question
+// (ask_question): what POST /api/tasks/{id}/reply answers.
+func taskParkedOnQuestion(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	ctx := context.Background()
+	id := fileTask(true)(t, client, nil)
+	qid, err := client.Store.AddComment(ctx, model.Comment{TaskID: id, Body: "which one?",
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: "run"}}, CreatedAt: baseTime})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Store.Observe(ctx, model.Observation{TaskID: id, PendingQuestionCommentID: &qid}); err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
 
 // taskWithPullRequest is a task whose pull request the merge queue has
@@ -227,12 +247,47 @@ func releaseSecret(t *testing.T, client *ui.Client, _ sender) string {
 	return ""
 }
 
+// adopterClient is testClient's deployment with a fake pull-request
+// adopter, and adoptedFor who its newest filing was for.
+func adopterClient(t *testing.T) *ui.Client {
+	t.Helper()
+	client, _, _ := testClient(t)
+	client.Config.PullRequests = &fakeAdopter{}
+	return client
+}
+
+func adoptedFor(t *testing.T, _ context.Context, client *ui.Client, _, _ string) model.Principal {
+	t.Helper()
+	return client.Config.PullRequests.(*fakeAdopter).lastRequester()
+}
+
 // ciClient is testClient's deployment with a fake grain CI runner whose
 // every cancel succeeds.
 func ciClient(t *testing.T) *ui.Client {
 	t.Helper()
 	client, _, _ := testClient(t)
 	client.Config.CI = &fakeCIRunner{cancelOK: true}
+	return client
+}
+
+// imageSourceClient is testClient's deployment on the image upgrade
+// pipeline, whose image source an operator may still change.
+func imageSourceClient(t *testing.T) *ui.Client {
+	t.Helper()
+	client, _, _ := testClient(t)
+	dir := t.TempDir()
+	refFile := filepath.Join(dir, "image-ref")
+	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE=ghcr.io/acme/grain:main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	client.Config.Upgrader = upgrade.New(upgrade.Config{
+		StatusFile: filepath.Join(dir, "upgrade-status.json"),
+		Image: &upgrade.ImageConfig{
+			Repository:         "ghcr.io/acme/grain",
+			RefFile:            refFile,
+			SourceOverrideFile: filepath.Join(dir, "upgrade-image-source.json"),
+		},
+	})
 	return client
 }
 
@@ -250,6 +305,18 @@ func cancelledBy(t *testing.T, _ context.Context, client *ui.Client, _, _ string
 // inventory for tasks, the conversation, releases and the merge queue,
 // settings, sessions, and through the agent row the agent API.
 var attributedRoutes = map[string]attributedRoute{
+	"POST /api/pull-requests/adopt": {
+		client:      adopterClient,
+		body:        `{"pr":"acme/widgets#7"}`,
+		agentGrants: []string{"api:merge:write", "api:tasks:write"},
+		recorded:    adoptedFor,
+	},
+	"POST /api/pull-requests/review": {
+		client:      adopterClient,
+		body:        `{"pr":"acme/widgets#7","design":true}`,
+		agentGrants: []string{"api:tasks:write", "api:repos:read"},
+		recorded:    adoptedFor,
+	},
 	"POST /api/tasks": {
 		body:        `{"title":"filed","noRepo":true}`,
 		agentGrants: []string{"api:tasks:write"},
@@ -270,6 +337,12 @@ var attributedRoutes = map[string]attributedRoute{
 	"POST /api/tasks/{id}/comments": {
 		setup:       fileTask(true),
 		body:        `{"body":"a word"}`,
+		agentGrants: []string{"api:tasks:write"},
+		recorded:    newestComment,
+	},
+	"POST /api/tasks/{id}/reply": {
+		setup:       taskParkedOnQuestion,
+		body:        `{"body":"an answer"}`,
 		agentGrants: []string{"api:tasks:write"},
 		recorded:    newestComment,
 	},
@@ -323,6 +396,12 @@ var attributedRoutes = map[string]attributedRoute{
 	"POST /api/repos/{owner}/{name}/pending-releases/{version}/approve": {
 		client:   releaseClient,
 		path:     "/api/repos/ai-on-gke/grain/pending-releases/v2.4.0/approve",
+		idOnly:   true,
+		recorded: releaseRequester,
+	},
+	"POST /api/releases/{version}/rollback": {
+		client:   releaseClient,
+		path:     "/api/releases/v2.4.0/rollback",
 		idOnly:   true,
 		recorded: releaseRequester,
 	},
@@ -429,6 +508,14 @@ var attributedRoutes = map[string]attributedRoute{
 		bareID:   true,
 		recorded: cancelledBy,
 	},
+	// Where image upgrades come from: an override in a file of the
+	// upgrader's, so the handler writes the config_audit row itself.
+	"PUT /api/upgrade/source": {
+		client:      imageSourceClient,
+		body:        `{"mode":"registry"}`,
+		agentGrants: []string{"api:deployment-ops"},
+		recorded:    lastConfigAudit,
+	},
 	"PUT /api/memory": {
 		body:        `{"text":"remember this"}`,
 		agentGrants: []string{"api:memory"},
@@ -477,22 +564,34 @@ var attributedRoutes = map[string]attributedRoute{
 		agentGrants: []string{"api:capabilities:admin"},
 		recorded:    lastConfigAudit,
 	},
+	// Agents never change who signs in (docs/design/access-rbac.md §3),
+	// and a verified operator assigns only roles with no dangerous scope.
 	"POST /api/access/principals": {
-		body:        `{"entry":"user:newbie@example.com"}`,
-		agentGrants: []string{"api:access:write"},
-		recorded:    lastConfigAudit,
+		body:     `{"entry":"user:newbie@example.com","role":"grain/viewer"}`,
+		recorded: lastConfigAudit,
 	},
-	"DELETE /api/access/principals/{entry}": {
+	"PATCH /api/access/principals/{entry}": {
 		setup: func(t *testing.T, client *ui.Client, _ sender) string {
 			t.Helper()
-			if _, err := client.AllowPrincipal(context.Background(), ui.AllowPrincipalRequest{Entry: "user:temp@example.com"}); err != nil {
+			if _, err := client.AllowPrincipal(context.Background(), ui.AllowPrincipalRequest{Entry: "user:temp@example.com", Role: "grain/viewer"}); err != nil {
 				t.Fatalf("seeding allowed principal: %v", err)
 			}
 			return "user:temp@example.com"
 		},
-		path:        "/api/access/principals/{id}",
-		agentGrants: []string{"api:access:write"},
-		recorded:    lastConfigAudit,
+		path:     "/api/access/principals/{id}",
+		body:     `{"role":"grain/contributor"}`,
+		recorded: lastConfigAudit,
+	},
+	"DELETE /api/access/principals/{entry}": {
+		setup: func(t *testing.T, client *ui.Client, _ sender) string {
+			t.Helper()
+			if _, err := client.AllowPrincipal(context.Background(), ui.AllowPrincipalRequest{Entry: "user:temp@example.com", Role: "grain/viewer"}); err != nil {
+				t.Fatalf("seeding allowed principal: %v", err)
+			}
+			return "user:temp@example.com"
+		},
+		path:     "/api/access/principals/{id}",
+		recorded: lastConfigAudit,
 	},
 	"POST /api/pipeline-pause": {
 		body: `{"reason":"maintenance"}`,
@@ -557,9 +656,12 @@ var neverAttributedRoutes = map[string]bool{
 	"POST /api/database/test":                    true,
 	"POST /api/deployment/git-connections/check": true,
 	"POST /api/settings/plan":                    true,
-	// The MCP endpoint is a transport: each tool it serves calls one of
-	// the routes here, and is attributed there.
-	"POST /mcp": true,
+	// The MCP endpoints are transports: each tool they serve calls one of
+	// the routes here, and is attributed there. POST /api/mcp's
+	// grain_invoke dispatches the route through s.mux with the outer
+	// request's principal and acting task (dispatchSubrequest).
+	"POST /mcp":     true,
+	"POST /api/mcp": true,
 }
 
 // notYetAttributedRoutes are the rest of spec §3's write paths, exempt
@@ -668,6 +770,9 @@ var notYetAttributedRoutes = map[string]bool{
 	"POST /api/tasks/{id}/config-change":                                   true,
 	"POST /api/tasks/{id}/config-change/approve":                           true,
 	"POST /api/tasks/{id}/config-change/reject":                            true,
+	"POST /api/tasks/{id}/access-request/check":                            true,
+	"POST /api/tasks/{id}/access-request/grant":                            true,
+	"POST /api/tasks/{id}/access-request/deny":                             true,
 	"POST /api/tasks/{id}/db/execute":                                      true,
 	"POST /api/tasks/{id}/db/query":                                        true,
 	"POST /api/tasks/{id}/delivered":                                       true,

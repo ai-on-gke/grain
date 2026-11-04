@@ -458,7 +458,11 @@ test.describe("Responsive Navigation Matrix & Shell Behavior", () => {
     const stampBox = await buildStamp.boundingBox();
     expect(stampBox.height).toBeGreaterThan(0);
     expect(stampBox.y + stampBox.height).toBeLessThanOrEqual(500);
-    await expect(aside.getByTestId("user-tile")).toHaveCount(0);
+    // The whoami tile sits over the stamp (operator-attribution spec §5.4).
+    await expect(aside.getByTestId("user-tile")).toHaveAttribute(
+      "title",
+      /^operator \((access code|local)\)$/,
+    );
 
     // System and Settings are reachable from the page's header rail
     await expect(page.getByTestId("top-bar-system")).toBeVisible();

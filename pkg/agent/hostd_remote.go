@@ -88,7 +88,41 @@ func (h HostdHost) SessionRoot() string {
 func (h HostdHost) ServesMCPOverHTTP() bool { return h.remote() }
 
 func (h HostdHost) stage(ctx context.Context, op hostd.StageOp) (hostd.StageReply, error) {
-	return h.Client.Stage(ctx, op)
+	r, err := h.Client.Stage(ctx, op)
+	return r, hostSetup(err)
+}
+
+// ErrHostSetup marks, by errors.Is, a run's error that came from grain
+// setting up the host its CLI runs on -- staging files on a grain
+// hostd's machine, carrying the run's endpoints there -- rather than
+// from anything the CLI itself said. The text is the wrapped error's
+// own; the mark is only for a reader that has to tell grain's wiring
+// from a provider's words (the orchestrator's refusal-burst reading).
+var ErrHostSetup = errors.New("grain could not set up the agent CLI's host")
+
+// hostSetupError is err, marked ErrHostSetup.
+type hostSetupError struct{ err error }
+
+func (e hostSetupError) Error() string        { return e.err.Error() }
+func (e hostSetupError) Unwrap() error        { return e.err }
+func (e hostSetupError) Is(target error) bool { return target == ErrHostSetup }
+
+// hostSetup is err marked ErrHostSetup, or nil.
+func hostSetup(err error) error {
+	if err == nil || errors.Is(err, ErrHostSetup) {
+		return err
+	}
+	return hostSetupError{err}
+}
+
+// HostSetupFailure reports whether err came from grain's own setup of
+// the CLI's host (ErrHostSetup) or its link to a grain hostd -- none
+// connected (hostd.ErrRemoteNotConnected), or one too old to carry
+// grain's endpoints (hostd.ErrCarryUnsupported) -- and not from the
+// CLI's output: nothing a provider said, however alike a burst of them
+// reads.
+func HostSetupFailure(err error) bool {
+	return errors.Is(err, ErrHostSetup) || errors.Is(err, hostd.ErrRemoteNotConnected) || errors.Is(err, hostd.ErrCarryUnsupported)
 }
 
 // MkdirTemp implements Host.
@@ -215,18 +249,18 @@ func (h HostdHost) CarryCapabilityServers(servers []CapabilityMCPServer) ([]Capa
 	for _, s := range servers {
 		if s.Handler == nil {
 			releaseAll()
-			return nil, nil, fmt.Errorf("capability MCP server %q is not one grain proxies, so it cannot be carried to the grain hostd's machine", s.Name)
+			return nil, nil, hostSetup(fmt.Errorf("capability MCP server %q is not one grain proxies, so it cannot be carried to the grain hostd's machine", s.Name))
 		}
 		base, release, err := h.carry(s.Handler)
 		if err != nil {
 			releaseAll()
-			return nil, nil, fmt.Errorf("carrying capability MCP server %q to the grain hostd's machine: %w", s.Name, err)
+			return nil, nil, hostSetup(fmt.Errorf("carrying capability MCP server %q to the grain hostd's machine: %w", s.Name, err))
 		}
 		releases = append(releases, release)
 		s.URL, err = rebase(base, s.URL)
 		if err != nil {
 			releaseAll()
-			return nil, nil, err
+			return nil, nil, hostSetup(err)
 		}
 		carried = append(carried, s)
 	}
@@ -249,7 +283,7 @@ func (h HostdHost) CarryMCPEndpoint(endpoint, token string) (string, func(), err
 	}
 	target, err := url.Parse(endpoint)
 	if err != nil {
-		return "", nil, fmt.Errorf("carrying the run's MCP endpoint: %w", err)
+		return "", nil, hostSetup(fmt.Errorf("carrying the run's MCP endpoint: %w", err))
 	}
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -264,12 +298,12 @@ func (h HostdHost) CarryMCPEndpoint(endpoint, token string) (string, func(), err
 	}
 	base, release, err := h.carry(proxy)
 	if err != nil {
-		return "", nil, fmt.Errorf("carrying the run's MCP endpoint to the grain hostd's machine: %w", err)
+		return "", nil, hostSetup(fmt.Errorf("carrying the run's MCP endpoint to the grain hostd's machine: %w", err))
 	}
 	carried, err := rebase(base, endpoint)
 	if err != nil {
 		release()
-		return "", nil, err
+		return "", nil, hostSetup(err)
 	}
 	return carried, release, nil
 }

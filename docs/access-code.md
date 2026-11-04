@@ -83,20 +83,73 @@ the database (`allowed_principal`).
   through the Cloud Identity groups API (cached briefly) only when at
   least one `group:` entry is present and no `user:` entry already
   matched.
-- **Equal privileges:** A verified user admitted through the list has
-  full operator access, the same as an access-code holder, including
-  viewing, adding and removing entries on the list. Anyone not on the
-  list gets a `403` naming **Settings → Access** and `grain access allow`.
+- **Service accounts:** `serviceAccount:<email>` admits a non-human
+  caller (a `*.gserviceaccount.com` address), at full operator access
+  unless its entry is given a narrower role (see **Roles** below).
+  Each one is added explicitly, with a reason: `grain access allow
+  serviceAccount:<email> --reason "<why>"`, or **Settings → Access**
+  with the Reason field filled in (`POST /api/access/principals` takes
+  it as `reason`, or as `X-Grain-Acting-Reason`). The reason is kept
+  with the entry and recorded in `config_audit`, and Settings → Access
+  lists service accounts in their own group with who added each, when
+  and why. A service account is admitted only by its own
+  `serviceAccount:` entry, never through a `group:`, and what it does is
+  attributed to it as kind `service`, not `operator`. Accounts whose
+  keys grain hands to tasks -- the `gcp-key` pool and the gcp
+  capability's permission-set accounts -- are always refused, both when
+  added and at sign-in, even if an entry for one is already in the
+  table. `domain:` entries are not supported.
+- **Roles:** every entry has a role, which is an API scope set
+  ([`docs/agent-api.md`, "Scope sets"](agent-api.md#scope-sets)). A
+  verified session can call only the routes its role's scopes cover, on
+  the repositories they reach. It is checked against the same route
+  table as an agent ([`docs/design/access-rbac.md`](design/access-rbac.md)).
+  grain ships three roles:
+  - `grain/operator`: every scope. This is the default, and every entry
+    that existed before roles has it.
+  - `grain/contributor`: `grain/viewer` plus `tasks:write` and `ci:write`.
+  - `grain/viewer`: every `*:read` scope.
+
+  A deployment can also declare its own sets, for example one with
+  `repos: [acme/widgets]` to limit a role to one repository. A person
+  who matches several entries (a `user:` entry plus `group:` entries)
+  holds the union of their roles. A scope that any of those roles'
+  sets `deny` is withheld from that person, even when another role
+  grants it. A refusal is a `403` that names the missing scope and the
+  caller's role. `GET /api/auth/user` and `GET /api/config` report the
+  caller's role and scopes as `access`, and Settings → Access shows
+  your role and hides controls your role does not cover. Anyone not on
+  the list gets a `403` naming **Settings → Access** and
+  `grain access allow`.
+- **Who assigns roles:** the access code (and loopback break-glass) can
+  assign any role. A role that holds a dangerous scope, including
+  `grain/operator` itself, can be assigned only with the access code,
+  and the assignment needs a reason (`--reason`). The reason is
+  recorded in `config_audit` along with the old and new role. A
+  verified session whose role holds `access:write` can add, re-role and
+  remove entries, but only at roles no wider than its own and holding
+  no dangerous scope. It cannot change or remove an entry at a wider or
+  dangerous role. Agents and sandboxes cannot change the list by any
+  route, whatever they hold.
+- **Routes outside the scope table:** the SPA's static pages are served
+  to every admitted caller, and so are sign-in, `GET /api/config` and
+  `whoami`. Event streams, console terminals and file downloads are
+  ordinary scoped routes. `/api/mcp`, `/mcp`, persistent sandboxes'
+  `/staging/` services and a run's own plumbing routes are refused to
+  every role that does not hold every scope.
 - **Live changes (no restart):** Adding or removing an entry takes
   effect immediately. Manage the list in **Settings → Access → Allowed
   users and groups** (`/settings/access#allowed-principals`), over the
   REST API (`GET /api/access/principals`, `POST /api/access/principals`,
+  `PATCH /api/access/principals/{entry}` with `{"role": ...}`,
   `DELETE /api/access/principals/{entry}`), or from the CLI:
 
   ```bash
   grain access list
-  grain access allow user:alice@example.com
-  grain access allow group:team@example.com
+  grain access allow user:alice@example.com --reason "on-call lead"
+  grain access allow group:team@example.com --role grain/viewer
+  grain access role group:team@example.com grain/contributor
+  grain access allow serviceAccount:ci@my-project.iam.gserviceaccount.com --role acme/ci-bot --reason "release pipeline"
   grain access deny user:alice@example.com
   ```
 
@@ -108,30 +161,33 @@ the database (`allowed_principal`).
   the code, and with `-ui-require-iap` the code is taken over loopback
   only ([Break-glass over loopback](#break-glass-over-loopback)). Every
   addition and removal is recorded in `config_audit` (`surface =
-  "access"`).
+  "access"`), and so is every role change.
 - **No implicit owner entry:** the daemon's own `-as` actor is no
   longer admitted by default. A deployment that relied on the old
   default allowlist (no `-ui-allowed-principals`) admits no verified
   person after upgrading until someone runs `grain access allow
   user:<owner-email>` -- with the access code, or from the daemon's own
   host when `-ui-require-iap` is set.
-- **Agent API scopes:** `api:access:read` allows listing entries.
-  `api:access:write` is a **dangerous** scope: only a person may grant
-  it, every call requires an acting reason (`X-Grain-Acting-Reason`)
-  recorded in `config_audit`, and it is refused on the `sandbox-cli`
-  channel. Without `api:access:write`, sandboxes and agents cannot
-  modify the list.
+- **Agent API scopes:** `api:access:read` allows listing entries. Agents
+  and sandboxes cannot add, re-role or remove entries by any route, even
+  with a person-granted `api:access:write`. Only people decide who signs
+  in. In a person's role, `access:write` is what lets a verified session
+  manage the list, as described above.
 - **State repository:** `allowed_principal` lives in the database (and
-  cold backups) and is never exported to `grain/config` pull requests,
-  so a config PR can neither lock operators out nor grant sign-in
-  access.
+  cold backups), and so do its roles. It is never exported to
+  `grain/config` pull requests, so a config PR can neither lock
+  operators out nor grant sign-in access. What a role grants is its
+  scope set, which is exported in `tables/api_scope_set.json`. The state
+  check's scope-set diff therefore also reports how each role built on
+  a set widens or narrows.
 - **One-time migration off `-ui-allowed-principals`:** On start, if
   `-ui-allowed-principals` or `$GRAIN_ALLOWED_PRINCIPALS` is set and the
   database list has never been populated or migrated, grain imports its
-  `user:` and `group:` entries once and logs the import. Entries of
-  other kinds (`serviceAccount:`, `domain:`) are not imported; each
-  dropped entry is logged and shown as a warning in **Settings →
-  Access**. On subsequent starts, `-ui-allowed-principals` and
+  `user:` and `group:` entries once and logs the import.
+  `serviceAccount:` entries are not imported -- an operator adds each
+  one back deliberately, with a reason -- and neither are `domain:`
+  entries; each dropped entry is logged and shown as a warning in
+  **Settings → Access**. On subsequent starts, `-ui-allowed-principals` and
   `$GRAIN_ALLOWED_PRINCIPALS` are deprecated: grain logs a warning when
   either is set and ignores its value.
 
@@ -274,6 +330,18 @@ Start the hostd with `-iap-audience <IAP client ID>` so that it sends an
 ID token from its service account or its user's login. At startup it
 logs the email that token names, which is the owner the daemon expects.
 
+`GET /api/hostd/install.sh`, the script that sets such a hostd up
+(Settings → Hostds shows the command when it issues a token), is served
+without the access code too: the machine fetching it holds no credential
+yet, and the script carries none. It holds the daemon's URL as the
+request reached it, and reads the hostd token on the machine itself, from
+stdin or `$GRAIN_HOSTD_TOKEN`. The daemon's release and the image it runs
+are filled in only for a caller the gate would let through elsewhere (the
+access code or its session, or an admitted identity); anybody else's copy
+leaves them blank and refuses to guess a version. The command Settings →
+Hostds shows passes them as `--release` and `--image`; add
+`--iap-audience` for a hostd that dials in through IAP.
+
 The remote executor routes that were open the same way, including the
 executor bootstrap routes (`executorBootstrapRoute`), were removed with
 remote executors ([executors-removed.md](executors-removed.md)).
@@ -353,7 +421,11 @@ Agents must not be able to read the code. What holds today:
   is shared into it, and nothing the daemon sets in its own environment
   reaches it.
 - **Run hosts** (`-run-host-image`) are given their spool, staging and
-  credential directories, never the data directory.
+  credential directories, never the data directory. They are never
+  given a host sandbox either, so the daemon refuses `-run-host-image`
+  with `-host-sandboxes`: a host sandbox's commands would run in the run
+  host, beside the credential directory and every other run's spool and
+  staging, with no bubblewrap there to hide them.
 - **Transcripts and logs:** the code isn't in any of them.
   The daemon logs the file's path, never its contents. The code travels
   only as an `Authorization` header from the CLI or `grain mcpserver` to

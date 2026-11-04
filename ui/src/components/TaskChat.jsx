@@ -14,6 +14,7 @@
 
 import LocalScriptApprovals from "./detail/LocalScriptApprovals.jsx";
 import PendingConfigChange from "./detail/PendingConfigChange.jsx";
+import PendingAccess from "./detail/PendingAccess.jsx";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Box, Button, Typography } from "@mui/material";
 import {
@@ -438,7 +439,7 @@ export default function TaskChat({
           kind: "message",
           at: new Date(),
           direction: "outgoing",
-          sender: t.creator || t.author || "human",
+          sender: t.authorLabel || t.creator || t.author || "human",
           body,
           attachments: [],
           afterCommentLen,
@@ -478,7 +479,7 @@ export default function TaskChat({
             kind: "message",
             at: new Date(),
             direction: "outgoing",
-            sender: t.creator || t.author || "human",
+            sender: t.authorLabel || t.creator || t.author || "human",
             body: body.trim() ? body : files.map((f) => f.name).join(", "),
             attachments: [],
             afterCommentLen,
@@ -642,6 +643,7 @@ export default function TaskChat({
       </span>
       <LocalScriptApprovals t={t} act={act} />
       <PendingConfigChange t={t} act={act} />
+      <PendingAccess t={t} act={act} />
       <div className="task-chat-window" ref={windowRef} id={windowId}>
         <MainContainer>
           <ChatContainer>

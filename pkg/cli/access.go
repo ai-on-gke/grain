@@ -24,15 +24,24 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-const accessUsage = `usage: grain access <list|allow|deny> [args]
+const accessUsage = `usage: grain access <list|allow|role|deny> [args]
 
   list
-  allow <user:<email>|group:<email>>
-  deny  <user:<email>|group:<email>>
+  allow [--role <set>] [--reason <why>] <user:<email>|group:<email>|serviceAccount:<email>>
+  role  [--reason <why>] <entry> <set>
+  deny  <user:<email>|group:<email>|serviceAccount:<email>>
 
 Manage the allowed users and groups list (Settings -> Access): who may
 sign in when authenticated by Cloud IAP or another registered
-IdentityVerifier. Adding an existing entry is a no-op.`
+IdentityVerifier, and with what role. A role is an API scope set
+(docs/agent-api.md, "Scope sets"): grain/operator (everything, the
+default), grain/contributor, grain/viewer, or one the deployment declares.
+Adding an existing entry is a no-op; 'role' changes an entry's role.
+
+A role holding a dangerous scope -- grain/operator among them -- is
+assigned only with the access code, and needs --reason. A serviceAccount:
+entry always needs --reason; accounts whose keys grain hands to tasks
+(the gcp-key pools) are always refused, whatever their role.`
 
 // cmdAccess is `grain access`: manage the verified-identity allowlist
 // through /api/access/principals.
@@ -70,23 +79,29 @@ func cmdAccess(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 				if by == "" {
 					by = "-"
 				}
-				fmt.Printf("%s\tadded by %s\t%s\n", p.Entry, by, p.AddedAt.UTC().Format(time.RFC3339))
+				line := fmt.Sprintf("%s\t%s\tadded by %s\t%s", p.Entry, p.Role, by, p.AddedAt.UTC().Format(time.RFC3339))
+				if p.Reason != "" {
+					line += "\t" + p.Reason
+				}
+				fmt.Println(line)
 			}
 		}
 		for _, dropped := range resp.DroppedFlagEntries {
-			fmt.Printf("warning: dropped unsupported flag entry %s (only user: and group: are supported)\n", dropped)
+			fmt.Printf("warning: dropped flag entry %s (only user: and group: are imported; add a service account with 'grain access allow serviceAccount:<email> --reason <why>')\n", dropped)
 		}
 		return nil
 	case "allow", "add":
 		fs := flag.NewFlagSet("grain access allow", flag.ContinueOnError)
+		reason := fs.String("reason", "", "why the entry is added (required for serviceAccount: and for a role with a dangerous scope)")
+		role := fs.String("role", "", "the scope set the entry's sessions are held to (default grain/operator)")
 		rest, err := parseArgs(fs, subArgs)
 		if err != nil {
 			return err
 		}
 		if len(rest) != 1 {
-			return errors.New("usage: grain access allow <user:<email>|group:<email>>")
+			return errors.New("usage: grain access allow [--role <set>] [--reason <why>] <user:<email>|group:<email>|serviceAccount:<email>>")
 		}
-		resp, err := c.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: rest[0]})
+		resp, err := c.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: rest[0], Reason: *reason, Role: *role})
 		if err != nil {
 			return err
 		}
@@ -95,9 +110,33 @@ func cmdAccess(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 			return nil
 		}
 		if resp.Created {
-			fmt.Printf("allowed %s\n", resp.Principal.Entry)
+			fmt.Printf("allowed %s as %s\n", resp.Principal.Entry, resp.Principal.Role)
 		} else {
-			fmt.Printf("already allowed: %s\n", resp.Principal.Entry)
+			fmt.Printf("already allowed: %s (as %s; change it with 'grain access role')\n", resp.Principal.Entry, resp.Principal.Role)
+		}
+		return nil
+	case "role":
+		fs := flag.NewFlagSet("grain access role", flag.ContinueOnError)
+		reason := fs.String("reason", "", "why the role changes (required for a role with a dangerous scope)")
+		rest, err := parseArgs(fs, subArgs)
+		if err != nil {
+			return err
+		}
+		if len(rest) != 2 {
+			return errors.New("usage: grain access role [--reason <why>] <user:<email>|group:<email>|serviceAccount:<email>> <set>")
+		}
+		resp, err := c.SetPrincipalRole(ctx, rest[0], ui.SetPrincipalRoleRequest{Role: rest[1], Reason: *reason})
+		if err != nil {
+			return err
+		}
+		if out.json {
+			out.encode(resp)
+			return nil
+		}
+		if resp.Previous == resp.Role {
+			fmt.Printf("%s already has role %s\n", resp.Entry, resp.Role)
+		} else {
+			fmt.Printf("%s: role %s -> %s\n", resp.Entry, resp.Previous, resp.Role)
 		}
 		return nil
 	case "deny", "remove", "rm":
@@ -107,7 +146,7 @@ func cmdAccess(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 			return err
 		}
 		if len(rest) != 1 {
-			return errors.New("usage: grain access deny <user:<email>|group:<email>>")
+			return errors.New("usage: grain access deny <user:<email>|group:<email>|serviceAccount:<email>>")
 		}
 		resp, err := c.DenyPrincipal(ctx, rest[0])
 		if err != nil {

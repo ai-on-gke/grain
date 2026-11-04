@@ -13,12 +13,13 @@
 // limitations under the License.
 
 import { expect, test } from "./fixtures.js";
+import { chips, chooseOption } from "./searchSelect.js";
 
 // A deployment default the capability catalogue restricts to one repo,
 // on a task filed with No repo (2026-10-29 test run, Bug 3). The demo
-// defaults self-debug and gemini-key; with gemini-key restricted to
+// defaults self-debug and read-issues; with read-issues restricted to
 // acme/widgets, the form used to post all defaults and be refused with
-// a 400 for a grant nobody had picked. Now it marks gemini-key as refused
+// a 400 for a grant nobody had picked. Now it marks read-issues as refused
 // where it is ticked, says it is left off, and files the task with the
 // defaults the server keeps.
 
@@ -26,7 +27,7 @@ test.use({ demoArgs: ["-github-sim", "-fake-ci"] });
 
 const RESTRICTED = {
   catalogue: {
-    inProcess: { "gemini-key": { restrictions: { repos: ["acme/widgets"] } } },
+    inProcess: { "read-issues": { restrictions: { repos: ["acme/widgets"] } } },
   },
 };
 
@@ -41,11 +42,11 @@ async function openStandalone(page, title) {
   await page.getByRole("button", { name: /^\+? ?New task$/ }).click();
   await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
   await page.getByLabel("Title").fill(title);
-  await page.getByLabel(/^Repos/).selectOption("none");
-  const picker = page.getByLabel("Legacy capabilities");
+  await chooseOption(page.getByLabel(/^Repos/), "none");
+  const picker = page.getByRole("combobox", { name: "Legacy capabilities" });
   const note = page.getByTestId("new-task-catalogue-refused");
   await expect(note).toHaveText(
-    "settings/capabilities.yml refuses gemini-key on a task with no repo, so that default is left off this task.",
+    "settings/capabilities.yml refuses read-issues on a task with no repo, so that default is left off this task.",
   );
   return { picker, note };
 }
@@ -71,13 +72,17 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
 
       // Only gcp-key is marked, and it sits inside the picker; the note
       // sits inside the picker's own column, at either width.
-      const refused = picker.locator("[data-catalogue-refused]");
+      const refused = chips(picker).and(
+        page.locator("[data-catalogue-refused]"),
+      );
       await expect(refused).toHaveCount(1);
       await expect(refused).toHaveAccessibleName(/\(refused here\)$/);
-      const pickerBox = await picker.boundingBox();
+      const pickerBox = await picker
+        .locator("xpath=ancestor::div[contains(@class,'MuiInputBase-root')][1]")
+        .boundingBox();
       within(await refused.boundingBox(), pickerBox);
       const control = picker.locator(
-        "xpath=ancestor::div[contains(@class,'MuiFormControl-root')][1]",
+        "xpath=ancestor::div[contains(@class,'MuiFormControl-root')][.//*[@data-testid='new-task-catalogue-refused']][1]",
       );
       within(await note.boundingBox(), await control.boundingBox());
       const form = page.locator("form", {
@@ -90,7 +95,7 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
       // Its option carries the catalogue's reason, and stays enabled:
       // it is ticked, and its own row is how it would come off.
       await picker.click();
-      const option = page.getByRole("option", { name: /Gemini key/i });
+      const option = page.getByRole("option", { name: /Read issues/i });
       await expect(option).toContainText("repos: acme/widgets");
       await expect(option).not.toHaveAttribute("aria-disabled", "true");
       await page.keyboard.press("Escape");
@@ -121,7 +126,7 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
 
       if (width !== 1440) continue;
       // Filing leaves the untouched list to the server, which keeps the
-      // defaults it may and drops gemini-key, rather than refusing the task.
+      // defaults it may and drops read-issues, rather than refusing the task.
       const filing = page.waitForResponse(
         (r) =>
           r.url().endsWith("/api/tasks") && r.request().method() === "POST",
@@ -137,7 +142,7 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
       expect(detail.capabilities).toEqual(
         expect.arrayContaining(["self-debug"]),
       );
-      expect(detail.capabilities).not.toContain("gemini-key");
+      expect(detail.capabilities).not.toContain("read-issues");
     }
   } finally {
     await request.put("/api/capability-policy", {
@@ -163,15 +168,16 @@ test("an edited picker is asked to untick a refused grant", async ({
       page,
       `E2E catalogue edited ${Date.now()}`,
     );
-    await picker.click();
-    await page.getByRole("option", { name: /Self debug/i }).click();
+    await chooseOption(picker, "self-debug");
     await page.keyboard.press("Escape");
     await expect(note).toHaveText(
-      "settings/capabilities.yml refuses gemini-key on a task with no repo: untick it, or the task will not be filed.",
+      "settings/capabilities.yml refuses read-issues on a task with no repo: untick it, or the task will not be filed.",
     );
-    await page.getByLabel(/^Repos/).selectOption("acme/widgets");
+    await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
     await expect(note).toHaveCount(0);
-    await expect(picker.locator("[data-catalogue-refused]")).toHaveCount(0);
+    await expect(
+      chips(picker).and(page.locator("[data-catalogue-refused]")),
+    ).toHaveCount(0);
     await page.getByRole("button", { name: "Discard draft" }).click();
   } finally {
     await request.put("/api/capability-policy", {

@@ -66,8 +66,12 @@ describe("ReadOnlyReposField", () => {
 
     await user.type(screen.getByLabelText(/Read-only repos/), "SHARED");
 
-    expect(screen.getByText("owner/shared-lib")).toBeInTheDocument();
-    expect(screen.queryByText("owner/schema")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: "owner/shared-lib" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("menuitem", { name: "owner/schema" }),
+    ).not.toBeInTheDocument();
   });
 
   it("adds a clicked repo to the picked set", async () => {
@@ -82,7 +86,9 @@ describe("ReadOnlyReposField", () => {
     );
 
     await user.type(screen.getByLabelText(/Read-only repos/), "shared");
-    await user.click(screen.getByText("owner/shared-lib"));
+    await user.click(
+      screen.getByRole("menuitem", { name: "owner/shared-lib" }),
+    );
 
     expect(onChange).toHaveBeenCalledWith(["owner/schema", "owner/shared-lib"]);
     expect(screen.getByLabelText(/Read-only repos/)).toHaveValue("");
@@ -271,7 +277,9 @@ describe("ReadOnlyReposField", () => {
     );
 
     await user.type(screen.getByLabelText(/Read-only repos/), "owner/s");
-    await user.click(screen.getByText("owner/shared-lib"));
+    await user.click(
+      screen.getByRole("menuitem", { name: "owner/shared-lib" }),
+    );
 
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange).toHaveBeenCalledWith(["owner/shared-lib"]);
@@ -301,10 +309,14 @@ describe("ReadOnlyReposField", () => {
     );
 
     await user.type(screen.getByLabelText(/Read-only repos/), "owner");
-    expect(screen.getByText("owner/schema")).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: "owner/schema" }),
+    ).toBeInTheDocument();
 
     await user.keyboard("{Escape}");
-    expect(screen.queryByText("owner/schema")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("menuitem", { name: "owner/schema" }),
+    ).not.toBeInTheDocument();
   });
 
   // Escape with the list open closes the list and nothing else: the New

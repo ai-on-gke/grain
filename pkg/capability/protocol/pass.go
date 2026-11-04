@@ -218,8 +218,20 @@ type GrantAudit struct {
 // (§4.4.2), and returns every audit a release returned (§4.4.4) and
 // every error that remained.
 func (p *Pass) Release(ctx context.Context) ([]GrantAudit, error) {
+	audits, _, err := p.ReleaseReachable(ctx)
+	return audits, err
+}
+
+// ReleaseReachable is Release, handing back what it could not reach: the
+// releasable grants whose server could not be looked up at all -- one
+// that is needs-config or failed -- as a pass of their own, nil when
+// there are none, so they can be released once the server is back
+// rather than left to its own reaper. Their errors are among the ones
+// returned.
+func (p *Pass) ReleaseReachable(ctx context.Context) ([]GrantAudit, *Pass, error) {
 	var errs []error
 	var audits []GrantAudit
+	var unreached []MintedGrant
 	for _, g := range p.Grants {
 		if !g.Releasable {
 			continue
@@ -227,6 +239,7 @@ func (p *Pass) Release(ctx context.Context) ([]GrantAudit, error) {
 		m, err := p.minters(g.Ref.CapabilityID)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("releasing %s (%s): %w", g.Ref, g.AttemptID, err))
+			unreached = append(unreached, g)
 			continue
 		}
 		var last error
@@ -254,7 +267,11 @@ func (p *Pass) Release(ctx context.Context) ([]GrantAudit, error) {
 			})
 		}
 	}
-	return audits, errors.Join(errs...)
+	var rest *Pass
+	if len(unreached) > 0 {
+		rest = &Pass{Grants: unreached, minters: p.minters}
+	}
+	return audits, rest, errors.Join(errs...)
 }
 
 // Renew re-mints every grant with a later deadline (§4.3.5), reading only
@@ -337,8 +354,8 @@ func (p *Pass) SetupCommands() []SetupCommand {
 // AssignServerNames gives each granted MCP endpoint its final name
 // (§5.2.3): reported holds serverInfo.name per grant index ("" for a grant
 // with no endpoint). Each must match the method grammar and must not be
-// grain-sandbox; when several share a name the lowest index keeps it and
-// the rest become <name>-2, <name>-3, ... in index order.
+// grain-sandbox or grain-controller; when several share a name the lowest
+// index keeps it and the rest become <name>-2, <name>-3, ... in index order.
 func AssignServerNames(reported []string) ([]string, error) {
 	out := make([]string, len(reported))
 	count := map[string]int{}
@@ -347,8 +364,8 @@ func AssignServerNames(reported []string) ([]string, error) {
 		if name == "" {
 			continue
 		}
-		if !methodPattern.MatchString(name) || name == "grain-sandbox" {
-			return nil, fmt.Errorf("mcp_endpoint of grant %d reports server name %q, which must match %s and not be grain-sandbox", i, name, methodPattern)
+		if !methodPattern.MatchString(name) || name == "grain-sandbox" || name == "grain-controller" {
+			return nil, fmt.Errorf("mcp_endpoint of grant %d reports server name %q, which must match %s and not be grain-sandbox or grain-controller", i, name, methodPattern)
 		}
 		taken[name] = true
 	}

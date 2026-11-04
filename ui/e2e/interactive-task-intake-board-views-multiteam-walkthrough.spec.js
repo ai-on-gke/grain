@@ -14,6 +14,7 @@
 
 import { expect } from "@playwright/test";
 import { test } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // Comprehensive E2E Walkthrough: Interactive Task Intake, Board Views,
 // Multi-Team Filtering, and Saved Board State Persistence across Session Reloads.
@@ -72,7 +73,7 @@ test.describe("Interactive Task Intake, Board Views and Multi-Team Filter Workfl
     await expect(createBtn).toBeDisabled();
 
     // Select Repository: choose 'none' ("No repo")
-    await page.getByLabel(/^Repos/).selectOption("none");
+    await chooseOption(page.getByLabel(/^Repos/), "none");
 
     // Test draft input and discard draft
     await page.getByLabel("Title").fill("Temporary Draft Title");
@@ -84,7 +85,7 @@ test.describe("Interactive Task Intake, Board Views and Multi-Team Filter Workfl
     await expect(page.getByLabel("Title")).toHaveValue("");
     await expect(createBtn).toBeDisabled();
     // Re-select repo after draft discard
-    await page.getByLabel(/^Repos/).selectOption("none");
+    await chooseOption(page.getByLabel(/^Repos/), "none");
 
     // Fill Title and Description
     await page.getByLabel("Title").fill(taskTitle);

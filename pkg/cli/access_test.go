@@ -68,12 +68,16 @@ func TestGrainAccessCLI(t *testing.T) {
 		t.Fatalf("empty list output = %q", out)
 	}
 
-	// 2. Allow user:<email> -> created; re-running is an idempotent no-op.
-	out, err = runAccessCLI(t, ts.URL, code, "access", "allow", "user:Alice@Example.com")
+	// 2. Allow user:<email> -> created at grain/operator, which needs a
+	// reason; re-running is an idempotent no-op.
+	if _, err := runAccessCLI(t, ts.URL, code, "access", "allow", "user:Alice@Example.com"); err == nil || !strings.Contains(err.Error(), "reason") {
+		t.Fatalf("grain access allow at grain/operator without --reason: %v, want refused naming the reason", err)
+	}
+	out, err = runAccessCLI(t, ts.URL, code, "access", "allow", "--reason", "on-call", "user:Alice@Example.com")
 	if err != nil {
 		t.Fatalf("grain access allow: %v", err)
 	}
-	if !strings.Contains(out, "allowed user:alice@example.com") {
+	if !strings.Contains(out, "allowed user:alice@example.com as grain/operator") {
 		t.Fatalf("allow output = %q", out)
 	}
 
@@ -86,8 +90,12 @@ func TestGrainAccessCLI(t *testing.T) {
 	}
 
 	// 3. Allow group:<email> and list (-json and plain).
-	if _, err := runAccessCLI(t, ts.URL, code, "access", "allow", "group:team@example.com"); err != nil {
+	if _, err := runAccessCLI(t, ts.URL, code, "access", "allow", "--role", "grain/viewer", "group:team@example.com"); err != nil {
 		t.Fatalf("grain access allow group: %v", err)
+	}
+	out, err = runAccessCLI(t, ts.URL, code, "access", "role", "group:team@example.com", "grain/contributor")
+	if err != nil || !strings.Contains(out, "group:team@example.com: role grain/viewer -> grain/contributor") {
+		t.Fatalf("grain access role: %q, %v", out, err)
 	}
 
 	jsonOut, err := runAccessCLI(t, ts.URL, code, "-json", "access", "list")
@@ -98,8 +106,8 @@ func TestGrainAccessCLI(t *testing.T) {
 	if err := json.Unmarshal([]byte(jsonOut), &parsed); err != nil {
 		t.Fatalf("decoding json list %q: %v", jsonOut, err)
 	}
-	if len(parsed.Entries) != 2 {
-		t.Fatalf("expected 2 entries, got %+v", parsed.Entries)
+	if len(parsed.Entries) != 2 || parsed.Entries[1].Role != "grain/contributor" {
+		t.Fatalf("expected 2 entries, the group at grain/contributor, got %+v", parsed.Entries)
 	}
 
 	// 4. Deny removes the entry.

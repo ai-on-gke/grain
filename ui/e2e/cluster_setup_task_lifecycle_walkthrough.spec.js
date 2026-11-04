@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 const BASELINE_SETTINGS = {
   general: {
@@ -131,7 +132,7 @@ test.describe("Grain Cluster Setup, Task Submission, and Lifecycle Completion Wa
 
     await page.getByLabel("Title").fill(queuedTitle);
     await page.getByLabel("Description").fill(queuedDesc);
-    await page.getByLabel(/^Repos/).selectOption("none");
+    await chooseOption(page.getByLabel(/^Repos/), "none");
 
     await page.getByRole("button", { name: "Create task" }).click();
     await expect(page.getByRole("heading", { name: "New task" })).toHaveCount(
@@ -159,7 +160,7 @@ test.describe("Grain Cluster Setup, Task Submission, and Lifecycle Completion Wa
     await page
       .getByLabel("Description")
       .fill("Architectural proposal for cluster autoscaling.");
-    await page.getByLabel(/^Repos/).selectOption("none");
+    await chooseOption(page.getByLabel(/^Repos/), "none");
     await page.getByLabel(/Queue immediately/).uncheck();
 
     await page.getByRole("button", { name: "Create task" }).click();

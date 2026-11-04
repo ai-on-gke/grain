@@ -117,6 +117,29 @@ async function startDemo(addr, tmpDir, context) {
   return proc;
 }
 
+// startDemoOnFreePort is freePort and startDemo together, retried on a
+// fresh port when the one freePort handed back was taken before `grain
+// demo` could bind it: freePort closes its listener to give the port
+// back, and another worker's demo listening on an ephemeral port of its
+// own can land on the same number in between ("bind: address already in
+// use"). Only a first start can move -- a restart has to come back on
+// the address the page already has, so it calls startDemo itself.
+async function startDemoOnFreePort(tmpDir, context) {
+  for (let attempt = 1; ; attempt++) {
+    const addr = `127.0.0.1:${await freePort()}`;
+    try {
+      return { addr, proc: await startDemo(addr, tmpDir, context) };
+    } catch (err) {
+      if (
+        attempt >= 5 ||
+        !/address already in use/.test(String(err?.message))
+      ) {
+        throw err;
+      }
+    }
+  }
+}
+
 async function stopDemo(proc) {
   if (!proc || proc.exitCode !== null) return;
   const stopped = new Promise((resolve) => proc.once("exit", resolve));
@@ -127,15 +150,14 @@ async function stopDemo(proc) {
 test("shows the disconnected banner when the daemon stops answering, and recovers on its own when it returns", async ({
   page,
 }) => {
-  const port = await freePort();
-  const addr = `127.0.0.1:${port}`;
-  const url = `http://${addr}`;
   const tmpDir = await fs.mkdtemp(
     path.join(os.tmpdir(), "grain-e2e-disconnect-"),
   );
   let proc;
   try {
-    proc = await startDemo(addr, tmpDir, page.context());
+    let addr;
+    ({ proc, addr } = await startDemoOnFreePort(tmpDir, page.context()));
+    const url = `http://${addr}`;
 
     await page.goto(url);
     await expect(page.getByText("Bump the Go toolchain to 1.24")).toBeVisible();
@@ -207,15 +229,14 @@ for (const motion of ["no-preference", "reduce"]) {
       page,
     }) => {
       test.setTimeout(150_000);
-      const port = await freePort();
-      const addr = `127.0.0.1:${port}`;
-      const url = `http://${addr}`;
       const tmpDir = await fs.mkdtemp(
         path.join(os.tmpdir(), "grain-e2e-disconnect-"),
       );
       let proc;
       try {
-        proc = await startDemo(addr, tmpDir, page.context());
+        let addr;
+        ({ proc, addr } = await startDemoOnFreePort(tmpDir, page.context()));
+        const url = `http://${addr}`;
         await page.emulateMedia({ reducedMotion: motion });
         await page.goto(url + route);
         if (ready) {
@@ -292,15 +313,14 @@ for (const motion of ["no-preference", "reduce"]) {
     page,
   }) => {
     test.setTimeout(150_000);
-    const port = await freePort();
-    const addr = `127.0.0.1:${port}`;
-    const url = `http://${addr}`;
     const tmpDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "grain-e2e-disconnect-"),
     );
     let proc;
     try {
-      proc = await startDemo(addr, tmpDir, page.context());
+      let addr;
+      ({ proc, addr } = await startDemoOnFreePort(tmpDir, page.context()));
+      const url = `http://${addr}`;
       await page.emulateMedia({ reducedMotion: motion });
       await page.goto(url);
       await expect(
@@ -356,15 +376,14 @@ for (const motion of ["no-preference", "reduce"]) {
 test("a task pane open when the daemon stops answering still has the outage as its status", async ({
   page,
 }) => {
-  const port = await freePort();
-  const addr = `127.0.0.1:${port}`;
-  const url = `http://${addr}`;
   const tmpDir = await fs.mkdtemp(
     path.join(os.tmpdir(), "grain-e2e-disconnect-"),
   );
   let proc;
   try {
-    proc = await startDemo(addr, tmpDir, page.context());
+    let addr;
+    ({ proc, addr } = await startDemoOnFreePort(tmpDir, page.context()));
+    const url = `http://${addr}`;
     await page.goto(`${url}/tasks/3`);
     const pane = page.getByRole("dialog");
     await expect(pane).toBeVisible();
@@ -407,14 +426,13 @@ for (const [name, viewport] of [
     page,
   }) => {
     await page.setViewportSize(viewport);
-    const port = await freePort();
-    const addr = `127.0.0.1:${port}`;
     const tmpDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "grain-e2e-disconnect-"),
     );
     let proc;
     try {
-      proc = await startDemo(addr, tmpDir, page.context());
+      let addr;
+      ({ proc, addr } = await startDemoOnFreePort(tmpDir, page.context()));
       await page.goto(`http://${addr}/tasks/4`);
       const pane = page.getByRole("dialog");
       await expect(pane).toBeVisible();

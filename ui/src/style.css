@@ -42,7 +42,9 @@
   --on-accent: #ffffff;
   --accent-subtle: #f6eeda;
 
-  --danger: #d0453a;
+  /* theme.js's error.main: text on every ground and on --danger-subtle
+     holds 4.5:1, and so does white on it. */
+  --danger: #b93a30;
   --danger-subtle: #fbebe9;
 
   --state-proposed: #b45309;
@@ -459,6 +461,21 @@ samp,
   height: 44px;
   padding: 2px 0;
   overflow: hidden;
+}
+/* A strut as tall as the slot's content box, first on its first line:
+   that line is never shorter than the rail, so a count is still level
+   with the title when the page's actions have wrapped behind "more".
+   Without it the wrapped lines packed from the top and a lone count sat
+   ~10px above the title's centre line on Repos, Inbox and a board in an
+   820px window. Its negative margin takes back the column gap it would
+   otherwise add; in the opened menu the slot's height is auto, so it is
+   0px tall there. */
+.page-header-slot::before {
+  content: "";
+  flex: none;
+  width: 0;
+  height: 100%;
+  margin-right: -0.75rem;
 }
 .page-header-slot-expanded {
   row-gap: 0.5rem;
@@ -1037,9 +1054,16 @@ main,
   flex: 1 1 100%;
 }
 
+.narrowing-attr {
+  width: 11rem;
+  max-width: 100%;
+  flex: 0 1 11rem;
+}
+
 .narrowing-values {
   min-width: 12rem;
-  max-width: 22rem;
+  max-width: min(24rem, 100%);
+  flex: 1 1 12rem;
 }
 
 .narrowing-value {
@@ -3147,9 +3171,9 @@ html[data-phone="true"] .gantt-body {
 
 /* Form fields themselves are MUI's own TextField/Checkbox now; fieldset
    and legend remain plain HTML (MUI has no fieldset primitive) and keep
-   their own look here. RepoField's <input>/<select> are plain HTML too
-   (it predates this MUI pass and needs native <select> semantics its
-   own tests rely on) -- scoped to .repo-field rather than a bare "form
+   their own look here. RepoField's <input>s are plain HTML too (it
+   predates this MUI pass, and its search box is MUI's Autocomplete
+   drawn over a bare input, SearchSelect.jsx) -- scoped to .repo-field rather than a bare "form
    input" selector so it never fights MUI's own input styling elsewhere
    in the same form. */
 /* The repos glyph and the control it labels sit on one line, with the
@@ -3165,6 +3189,32 @@ html[data-phone="true"] .gantt-body {
   flex: 1;
   width: auto;
   min-width: 0;
+}
+/* The dropdown's caret: the box is a search field now, not a <select>,
+   so nothing draws one for it, and without it the field reads as a
+   blank text box that has to be typed into. Clicks go through to the
+   input, which is what opens the list. */
+.repo-field-control {
+  position: relative;
+}
+.repo-field-control .repo-field-caret {
+  position: absolute;
+  right: 0.75rem;
+  top: 50%;
+  width: 0.4rem;
+  height: 0.4rem;
+  margin-top: -0.3rem;
+  border-right: 1.5px solid var(--text-secondary);
+  border-bottom: 1.5px solid var(--text-secondary);
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+.repo-field-control input[role="combobox"] {
+  padding-right: 2rem;
+}
+/* What a search hit in SearchSelect's list, in bold. */
+.search-select-hit {
+  font-weight: 600;
 }
 .repo-field-icon {
   display: flex;
@@ -3942,7 +3992,8 @@ fieldset legend {
    not an alert: it is a diagnosis off the record's own timestamps
    rather than a failure grain has recorded, and the chip beside the
    badge is what catches the eye. */
-.detail-stall {
+.detail-stall,
+.detail-blocked {
   margin: -0.6rem 0 1rem;
   color: var(--text-secondary);
   font-size: 0.82rem;
@@ -4307,6 +4358,14 @@ fieldset legend {
 }
 :root[data-phone="true"] .standalone-page {
   --standalone-page-gutter: 1rem;
+}
+:root[data-phone="true"] .narrowing-attr {
+  flex: 1 1 9.5rem;
+}
+:root[data-phone="true"] .narrowing-values {
+  min-width: 0;
+  max-width: 100%;
+  flex: 1 1 11rem;
 }
 :root[data-phone="true"] .board-hidden-note {
   margin-left: 1rem;
@@ -5087,4 +5146,11 @@ fieldset legend {
   flex-wrap: wrap;
   gap: 4px;
   margin-top: 4px;
+}
+
+/* The closed-tasks pager at the end of a task view (ClosedTasksMore.jsx). */
+.closed-tasks-more {
+  display: flex;
+  justify-content: center;
+  padding: 12px 0 16px;
 }

@@ -478,15 +478,64 @@ import "strconv"
 // package-publish providers onto the in-process release server: stored
 // grants, repo_config.ci_capabilities among them, become
 // https://grain.dev/capabilities/release#<method>={}.
-const SchemaVersion = 101
+//
+// 102 adds `default_hostd` to `repo_config` (model.RepoConfig.DefaultHostd):
+// the hostd pin or label selector a task filed against the repository
+// starts with when neither the filing nor its template names one.
+//
+// 103 retires the in-process gemini-key onto the gcp server's
+// https://grain.dev/capabilities/gcp#gemini-key: where `gcp_project` is
+// set, seeds the gcp entry in `grain_config`.`mcp_servers` with
+// gemini_key: {project}, minting with the gcp-key-minter secret, and
+// rewrites stored gemini-key grants as 100 did the model proxies.
+//
+// 104 retires the custom command connection type: every stored
+// connection whose framework is "custom" is disabled and kept, with
+// model.RemovedCustomConnectionReason (custom_connection_migration.go).
+//
+// 105 adds `pending_access_request` and `access_decisions` to
+// `task_observation`: the request_access call a task is parked on
+// (model.PendingAccessRequest) and the answers people gave its earlier
+// ones (model.AccessDecision), both JSON.
+//
+// 106 adds `upstream_repo` to `repo_config` (model.RepoConfig.UpstreamRepo):
+// the upstream repository (`<owner>/<name>`) pull requests are opened
+// against when tasks target this fork repository.
+//
+// 107 adds `external_agent_token`.`owner` (model.ExternalAgentToken.Owner,
+// the person a credential acts on behalf of), `filed_via` to `task` and
+// `task_comment` (the X-Grain-Client label of the tool that filed them,
+// model.Task.FiledVia and model.Comment.FiledVia) and
+// `grain_config`.`owner_trust` (model.Config.OwnerTrust, the owners whose
+// external agents' filings queue without a person's approval;
+// design/spec/external-cli/external-cli.spec.md#XC-14..#XC-17).
+//
+// 108 adds `reason` to `allowed_principal` (model.AllowedPrincipal.Reason):
+// why an entry was added, required for the `serviceAccount:<email>` entries
+// the allowlist accepts again.
+//
+// 109 removes the deprecated account and activate arguments from
+// https://grain.dev/capabilities/gcp#gcp-key: stored grants carrying
+// account: X become permission_set: X ("default" resolves to the first
+// configured permission set) and activate is dropped; grants naming a
+// permission set that does not exist are kept, logged, and noted on their
+// task, template or schedule (gcp_key_args_migration.go).
+//
+// 110 adds `role` to `allowed_principal` (model.AllowedPrincipal.Role): the
+// API scope set an entry's sessions are held to, defaulting to
+// grain/operator so every entry that existed before keeps full access
+// (docs/design/access-rbac.md).
+const SchemaVersion = 110
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
-// `user:<email>` or `group:<email>` entry admitted through a verified
-// identity (model.AllowedPrincipal).
+// `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
+// through a verified identity (model.AllowedPrincipal).
 const allowedPrincipalTable = `CREATE TABLE IF NOT EXISTS ` + "`allowed_principal`" + ` (
   ` + "`entry`" + `    TEXT     NOT NULL PRIMARY KEY,
   ` + "`added_by`" + ` TEXT     NOT NULL DEFAULT '',
-  ` + "`added_at`" + ` DATETIME NOT NULL
+  ` + "`added_at`" + ` DATETIME NOT NULL,
+  ` + "`reason`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`role`" + `     TEXT     NOT NULL DEFAULT 'grain/operator'
 )`
 
 // allowedPrincipalMigrationTable records the one-time startup migration off
@@ -625,6 +674,7 @@ const externalAgentTokenTable = `CREATE TABLE IF NOT EXISTS ` + "`external_agent
   ` + "`revoked_at`" + `     DATETIME NULL,
   ` + "`last_used_at`" + `   DATETIME NULL,
   ` + "`created_by`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`owner`" + `          TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `),
   UNIQUE (` + "`token_hash`" + `)
 )`
@@ -782,6 +832,7 @@ var Tables = []string{
   ` + "`reviewers`" + `             TEXT     NOT NULL DEFAULT '',
   ` + "`priority`" + `              INTEGER  NOT NULL DEFAULT 5,
   ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
+  ` + "`filed_via`" + `             TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -976,6 +1027,8 @@ var Tables = []string{
   ` + "`baseline_comment_id`" + `         INTEGER  NULL,
   ` + "`pending_secret`" + `              TEXT     NULL,
   ` + "`pending_config_change`" + `       TEXT     NULL,
+  ` + "`pending_access_request`" + `      TEXT     NULL,
+  ` + "`access_decisions`" + `            TEXT     NULL,
   ` + "`merge_queue_blocked_at`" + `      DATETIME NULL,
   ` + "`merge_queue_refreshed_at`" + `    DATETIME NULL,
   ` + "`merge_queue_repair_at`" + `       DATETIME NULL,
@@ -1641,7 +1694,8 @@ var Tables = []string{
   ` + "`body`" + `               TEXT     NOT NULL,
   ` + "`created_at`" + `         DATETIME NOT NULL,
   ` + "`handover`" + `           INTEGER  NOT NULL DEFAULT 0,
-  ` + "`summary`" + `            TEXT     NOT NULL DEFAULT ''
+  ` + "`summary`" + `            TEXT     NOT NULL DEFAULT '',
+  ` + "`filed_via`" + `          TEXT     NOT NULL DEFAULT ''
 )`,
 
 	`CREATE INDEX IF NOT EXISTS ` + "`task_comment_task`" + ` ON ` + "`task_comment`" + ` (` + "`task_id`" + `)`,
@@ -2373,6 +2427,7 @@ var Tables = []string{
   ` + "`settings_locked`" + `              INTEGER NOT NULL DEFAULT 0,
   ` + "`new_task_form`" + `                TEXT    NOT NULL DEFAULT '',
   ` + "`auto_upgrade_on`" + `              TEXT    NOT NULL DEFAULT '',
+  ` + "`owner_trust`" + `                  TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -3089,6 +3144,10 @@ var Tables = []string{
 	// issue importer (schema 65). DEFAULT 0 / '' imports nothing, and
 	// issue_import_approved DEFAULT 0 files what it does import
 	// unapproved.
+	//
+	// default_hostd is RepoConfig.DefaultHostd: the hostd pin or label
+	// selector a task filed here starts with when neither the filing nor
+	// its template names one (schema 102). DEFAULT '' is the default hostd.
 	`CREATE TABLE IF NOT EXISTS ` + "`repo_config`" + ` (
   ` + "`owner`" + `                TEXT NOT NULL,
   ` + "`name`" + `                 TEXT NOT NULL,
@@ -3125,6 +3184,8 @@ var Tables = []string{
   ` + "`issue_import_label`" + `       TEXT NOT NULL DEFAULT '',
   ` + "`issue_import_approved`" + `    INTEGER NOT NULL DEFAULT 0,
   ` + "`issue_import_interval_seconds`" + ` INTEGER NOT NULL DEFAULT 0,
+  ` + "`default_hostd`" + `            TEXT NOT NULL DEFAULT '',
+  ` + "`upstream_repo`" + `            TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 
@@ -3277,6 +3338,20 @@ var Tables = []string{
   ` + "`commit`" + `     TEXT NOT NULL DEFAULT '',
   ` + "`updated_at`" + ` DATETIME NOT NULL,
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `, ` + "`branch`" + `)
+)`,
+
+	// Where each git_ref schedule last saw the ref it watches
+	// (model.ScheduleRefCursor): the commit it peeled to, so a restart
+	// neither re-fires on a ref that has not moved nor misses one that
+	// moved while the daemon was down. Grain's own record, like
+	// path_trigger_cursor.
+	`CREATE TABLE IF NOT EXISTS ` + "`git_ref_cursor`" + ` (
+  ` + "`schedule_id`" + ` TEXT NOT NULL,
+  ` + "`repo`" + `        TEXT NOT NULL DEFAULT '',
+  ` + "`ref`" + `         TEXT NOT NULL DEFAULT '',
+  ` + "`commit`" + `      TEXT NOT NULL DEFAULT '',
+  ` + "`updated_at`" + `  DATETIME NOT NULL,
+  PRIMARY KEY (` + "`schedule_id`" + `)
 )`,
 
 	// What grain has learned about working here (model.Memory,

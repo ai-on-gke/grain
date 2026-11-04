@@ -115,7 +115,7 @@ func TestConfigValidationForBothCredentialSources(t *testing.T) {
 		"set over its admin's role ceiling": {func(c map[string]any) {
 			c["admin_credentials"] = `{"a": ` + adminKey + `}`
 			c["permission_sets"].([]any)[0].(map[string]any)["roles"] = []any{"roles/viewer", "roles/owner"}
-		}, "roles/owner exceed(s) admin \"a\"'s role ceiling"},
+		}, "roles/owner exceeds admin a's role ceiling: add it to the admin's role_ceiling too"},
 		"unknown admin": {func(c map[string]any) {
 			c["admin_credentials"] = `{"a": ` + adminKey + `}`
 			c["permission_sets"].([]any)[0].(map[string]any)["admin"] = "b"

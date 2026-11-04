@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // A well-formed base branch the repo does not have (grain/task-1620),
 // on a demo with no GitHub behind it: `grain demo` without -github-sim
@@ -35,7 +36,7 @@ test("a missing base is accepted when GitHub cannot be read, with no warning", a
   await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
   const title = `Missing base, GitHub unreadable ${Date.now()}`;
   await page.getByLabel("Title").fill(title);
-  await page.getByLabel(/^Repos/).selectOption("acme/widgets");
+  await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
   const refs = page.waitForResponse((response) =>
     response.url().endsWith("/api/repos/acme/widgets/github-branches"),
   );

@@ -114,6 +114,8 @@ import NewSessionPage, {
 } from "./components/NewSessionPage.jsx";
 import { PreferencesProvider, usePreferences } from "./PreferencesContext.jsx";
 import { PinnedNavProvider, usePinnedNav } from "./PinnedNavContext.jsx";
+import { mergeTaskLists, useClosedTasks } from "./closedTasks.js";
+import ClosedTasksMore from "./components/ClosedTasksMore.jsx";
 import {
   notificationsEnabled,
   useInboxNotifications,
@@ -321,6 +323,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
     );
   }, [sidebarCollapsed]);
   const [config, setConfig] = useState(null);
+  // GET /api/whoami: who this browser acts as (operator-attribution spec
+  // §5), for the sidebar's user tile and Settings -> Access. Asked again
+  // whenever /api/config says the way this browser is signed in changed.
+  const [whoami, setWhoami] = useState(null);
   // The time zone this browser chose in Settings → Preferences, or "" for
   // none. It wins over the deployment's own clock (config.timeZone) for
   // every time printed here: until the 2026-10-23 settings walkthrough it
@@ -342,11 +348,26 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // until this is true the shell draws LoadingScreen rather than a page
   // that says, in prose and in counts, that this deployment has nothing.
   const [loaded, setLoaded] = useState(false);
-  const [tasks, setTasks] = useState([]);
+  // liveTasks is what the poll brings back: every task that is not
+  // closed, without descriptions (pkg/ui/task_list_cache.go's
+  // taskListLive). Closed ones are paged in beside it (closedTasks.js),
+  // and `tasks` -- what every view draws -- is the two together.
+  const [liveTasks, setLiveTasks] = useState([]);
   // Whether /api/tasks has answered with a list at least once. Until it
-  // has, the empty `tasks` above is not "no tasks" but "not read yet",
+  // has, the empty `tasks` below is not "no tasks" but "not read yet",
   // and a page that would say nothing is waiting must not say it.
   const [tasksListed, setTasksListed] = useState(false);
+  const closedTasks = useClosedTasks(tasksListed);
+  const tasks = useMemo(
+    () => mergeTaskLists(liveTasks, closedTasks.closed),
+    [liveTasks, closedTasks.closed],
+  );
+  // The ids the last poll listed and the closed ones held, for
+  // refreshList to tell a task that closed from one that is gone.
+  const liveIdsRef = useRef(null);
+  const closedIdsRef = useRef(new Set());
+  closedIdsRef.current = new Set(closedTasks.closed.map((t) => String(t.id)));
+  const refreshClosed = closedTasks.refresh;
   const [schedules, setSchedules] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [suites, setSuites] = useState([]);
@@ -974,16 +995,26 @@ function AppContent({ onReload = () => window.location.reload() }) {
     // expensive. Still worth doing beside the 304: that covers the
     // endpoint's own bytes, this covers a change those views do not care
     // about.
-    setTasks((prev) => keepIfSame(prev, next));
+    setLiveTasks((prev) => keepIfSame(prev, next));
     setTasksListed(true);
+    const ids = new Set(next.map((t) => String(t.id)));
+    // A task that has dropped out of the live list has most likely
+    // closed: ask for the newest closed page now rather than up to a
+    // minute from now, so a view showing closed work does not lose it.
+    const before = liveIdsRef.current;
+    liveIdsRef.current = ids;
+    if (before && [...before].some((id) => !ids.has(id))) refreshClosed();
     // Drop any selected id the store no longer reports, so a stale
     // selection never quietly outlives the task it named.
-    const ids = new Set(next.map((t) => t.id));
     setSelected((prev) => {
-      const kept = new Set([...prev].filter((id) => ids.has(id)));
+      const kept = new Set(
+        [...prev].filter(
+          (id) => ids.has(String(id)) || closedIdsRef.current.has(String(id)),
+        ),
+      );
       return kept.size === prev.size ? prev : kept;
     });
-  }, []);
+  }, [refreshClosed]);
 
   // All three of these drop an open item the store no longer reports --
   // one deleted from its own pane, or a URL naming one that never
@@ -1298,6 +1329,26 @@ function AppContent({ onReload = () => window.location.reload() }) {
     },
     [applySessions, refreshSessions, loadSessionTask, refreshList],
   );
+
+  const signedInAs = config
+    ? `${config.authenticated ? 1 : 0}|${config.authMethod || ""}|${config.actor || ""}`
+    : "";
+  useEffect(() => {
+    if (!signedInAs) return undefined;
+    let cancelled = false;
+    api("/api/whoami")
+      .then((next) => {
+        if (!cancelled) setWhoami(next?.actor ? next : null);
+      })
+      .catch(() => {
+        // A daemon too old for the route, or a gate that refused it:
+        // no tile, rather than a guess at who this is.
+        if (!cancelled) setWhoami(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [signedInAs]);
 
   // refreshConfig re-fetches /api/config -- needed after adding a target
   // repo (RepoList's own "Add") or removing one (RepoPage's own
@@ -3028,6 +3079,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
         onShownChange={setShownIds}
         onRefresh={refreshList}
         showError={showError}
+        footer={<ClosedTasksMore closed={closedTasks} />}
       />
       <BatchActionsBar
         selection={selectedTasks}
@@ -3069,6 +3121,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
         onReorder={reorderTasks}
         onShownChange={setShownIds}
       />
+      {list.some((t) => t.state === "closed") && (
+        <ClosedTasksMore closed={closedTasks} />
+      )}
       <BatchActionsBar
         selection={selectedTasks}
         shownIds={shownIds}
@@ -3111,14 +3166,19 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // batch bar, for the timeline's reason: a tree row has no checkbox to
   // feed one.
   const taskTreePane = (list, { landmark = true } = {}) => (
-    <TaskTreeBoard
-      landmark={landmark}
-      tasks={list}
-      config={config}
-      narrowing={narrowing}
-      onNarrow={narrow}
-      onOpenTask={openTask}
-    />
+    <>
+      <TaskTreeBoard
+        landmark={landmark}
+        tasks={list}
+        config={config}
+        narrowing={narrowing}
+        onNarrow={narrow}
+        onOpenTask={openTask}
+      />
+      {list.some((t) => t.state === "closed") && (
+        <ClosedTasksMore closed={closedTasks} />
+      )}
+    </>
   );
 
   // openPanelView is a click on a panel's heading, or on one of the
@@ -3377,11 +3437,13 @@ function AppContent({ onReload = () => window.location.reload() }) {
       collapsed={sidebarCollapsed}
       onToggleCollapsed={isPhone ? undefined : toggleSidebarCollapsed}
       config={config}
+      whoami={whoami}
       view={view}
       systemTab={systemTab}
       settingsSection={settingsSection}
       onSetView={navigateFromRail}
       tasks={tasks}
+      unseenClosed={closedTasks.unseen}
       notificationCount={notifications.length}
       schedules={schedules}
       templates={templates}
@@ -3653,6 +3715,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                             onRefreshConfig={refreshConfig}
                             onRefreshGates={refreshBaseBranchGates}
                             showError={showError}
+                            dismissError={dismissError}
                           />
                         ) : view === "repos" ? (
                           <RepoList
@@ -3852,6 +3915,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                           <ErrorBoundary label="settings">
                             <SettingsPage
                               config={config}
+                              whoami={whoami}
                               section={settingsSection}
                               anchor={settingsAnchor}
                               item={settingsItem}

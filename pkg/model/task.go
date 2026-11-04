@@ -1240,6 +1240,16 @@ const (
 	// itself (unlike LinkFixes). Provenance and PR-tool scoping only; never
 	// blocks dispatch and never places a task in awaiting_submit.
 	LinkExternalPR LinkKind = "external-pr"
+	// LinkDerivedFrom records the pull request ("owner/repo#number") a
+	// task's work was derived from -- the provenance an external
+	// orchestrator filters on with `grain list -filter
+	// derived_from:eq:<owner/name#pr>` (external-cli spec #XC-18).
+	// Provenance only: it blocks nothing.
+	LinkDerivedFrom LinkKind = "derived-from"
+	// LinkDesign records a design or spec file (a design/... path) the
+	// task implements, `grain create --design` (#XC-19), so reviews and
+	// commits downstream inherit the design/spec chain. Provenance only.
+	LinkDesign LinkKind = "design"
 	// LinkTakeover marks a shepherd task filed by the GitHub bot's
 	// "@<slug> take over" command (-> the pull request it took over,
 	// "owner/repo#number"). The task's own pull request is its LinkFixes
@@ -1731,6 +1741,12 @@ type Task struct {
 	// instead of completing, closing on nothing_needed, or resting on a
 	// goal.
 	KeepRunning bool
+	// FiledVia is the sanitized X-Grain-Client label of the tool that
+	// filed this task ("jetski/1.4 session=abc"), "" when none was sent
+	// (SanitizeGrainClient). A label for provenance only: it is the
+	// caller's own word about itself and grants nothing
+	// (design/spec/external-cli/external-cli.spec.md#XC-15).
+	FiledVia string
 	// SandboxCPUs, SandboxMemoryMB and SandboxDiskGB
 	// (bwsalmon/agents#534, grain/task-41) override
 	// Config.SandboxCPUs/SandboxMemoryMB/SandboxDiskGB for this task's
@@ -2015,6 +2031,16 @@ type Observation struct {
 	// offered, since the branch it pins is still there to approve.
 	// Cleared by the approval or the rejection.
 	PendingConfigChange *PendingConfigChange
+	// PendingAccess is the access a parked run asked a person for with
+	// request_access (PendingAccessRequest's own doc). Like PendingSecret
+	// it sits beside PendingQuestionCommentID, which is what parks the
+	// task, and like it it is cleared when the task un-parks: by the
+	// person's grant or denial, or by a reply in words instead.
+	PendingAccess *PendingAccessRequest
+	// AccessDecisions are the answers people gave this task's access
+	// requests, latest last, so a request repeating one already denied
+	// shows the denial on its card.
+	AccessDecisions []AccessDecision
 	// MergeQueueBlockedAt is set once the merge queue has stopped driving
 	// this task, for any of the three reasons it ever does: the repair
 	// run it asked for finished and the PR is still conflicted or
@@ -2700,6 +2726,9 @@ type Comment struct {
 	// column existed, which a reader derives one for instead
 	// (DeriveQuestionSummary).
 	Summary string
+	// FiledVia is the sanitized X-Grain-Client label of the tool the
+	// comment was posted from, as Task.FiledVia is the task's.
+	FiledVia string
 }
 
 // Attachment is one file carried alongside a task -- bwsalmon/agents#522's

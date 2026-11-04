@@ -340,6 +340,61 @@ func TestHostdAndCIRepoAccessGatesAreClassified(t *testing.T) {
 	}
 }
 
+// One path per file v15 added (2026-11-04 security review finding 2): each
+// decides who may do what -- the controller MCP endpoint's caller access,
+// the hostd install script run as root, the CI grant rule, the auto-merge
+// guard, the sign-in allowlist's refusals and the person-only access
+// decision -- and v14 classified none of them, so a change to any merged
+// itself.
+func TestNewAuthorizationFilesAreClassified(t *testing.T) {
+	cases := map[string]string{
+		"pkg/ui/mcp_endpoint.go":          "auth-routes",
+		"pkg/model/allowed_principals.go": "auth-routes",
+		"pkg/ui/access_principals.go":     "auth-routes",
+		"pkg/ui/task_access_request.go":   "auth-routes",
+		"pkg/model/ci_grant_rule.go":      "capabilities-secrets",
+		"pkg/model/task_auto_merge.go":    "hold-policy",
+		"pkg/ui/hostd_install.sh":         "setup-scripts",
+		"pkg/ui/hostd_install.go":         "setup-scripts",
+	}
+	for p, want := range cases {
+		got := categoryIDs(Classify([]string{p}))
+		if !reflect.DeepEqual(got, []string{want}) {
+			t.Errorf("Classify(%q) = %v, want [%s]", p, got, want)
+		}
+	}
+	// Control: an ordinary pkg/ui file is still nothing.
+	if got := Classify([]string{"pkg/ui/actionscache.go"}); got != nil {
+		t.Errorf("Classify(pkg/ui/actionscache.go) = %v, want nothing", categoryIDs(got))
+	}
+
+	// The gates by name, as in TestHostdAndCIRepoAccessGatesAreClassified.
+	gates := map[string][]string{
+		"pkg/model": {
+			"NormalizeAllowedPrincipalEntry", "RegisterCIGrantRule", "CIGrantRuleFor",
+			"guardAutoMerge", "restoreAfterHolds",
+		},
+		"pkg/ui": {
+			"resolveMCPCallerAccess", "allowsRoute", "dispatchSubrequest", "filingContextTool",
+			"hostdInstallRoute", "hostdInstallCallerHasAccess", "renderHostdInstallScript",
+			"pendingAccessToDecide", "refuseAgentAccessDecision",
+		},
+	}
+	for dir, names := range gates {
+		defined := funcFiles(t, dir)
+		for _, name := range names {
+			file, ok := defined[name]
+			if !ok {
+				t.Errorf("%s: no func or method %s -- update this test to where it went", dir, name)
+				continue
+			}
+			if Classify([]string{file}) == nil {
+				t.Errorf("%s is defined in %s, which Classify leaves unclassified", name, file)
+			}
+		}
+	}
+}
+
 // funcFiles maps each func and method name declared in dir's non-test Go
 // files (dir relative to the repository root) to the repository path of
 // the file declaring it.
@@ -367,4 +422,67 @@ func funcFiles(t *testing.T, dir string) map[string]string {
 		}
 	}
 	return out
+}
+
+// v12 (design/playbook/releases.playbook.md §0.3): the approval and what
+// decides who may act without it wait for a person; the release jobs and
+// scripts, which cannot reach the approval, are released by a clean review
+// that is told what to check on them.
+func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
+	human := map[string]string{
+		".grain/workflows/promote-release.yml":  "release-promotion",
+		".github/workflows/promote-release.yml": "release-promotion",
+		"pkg/ui/release_approval.go":            "release-promotion",
+		".grain/templates/release-train.yml":    "release-promotion",
+		"scripts/release-from-trunk.sh":         "release-promotion",
+		"scripts/release.conf":                  "release-promotion",
+		"scripts/release-train-task.sh":         "release-promotion",
+		".grain/schedules/release-train.yml":    "release-promotion",
+		".github/workflows/publish-release.yml": "release-promotion",
+		"pkg/trustboundary/trustboundary.go":    "hold-policy",
+		".grain/triggers/release-promotion.yml": "path-triggers",
+		".grain/triggers/release-machinery.yml": "path-triggers",
+		".grain/merge-rules.yml":                "merge-rules",
+	}
+	for p, want := range human {
+		got := Classify([]string{p})
+		if ids := categoryIDs(got); !reflect.DeepEqual(ids, []string{want}) {
+			t.Errorf("Classify(%q) = %v, want [%s]", p, ids, want)
+		}
+		if !RequiresHuman(got) {
+			t.Errorf("%s no longer waits for a person", p)
+		}
+	}
+
+	reviewed := []string{
+		"scripts/release-images.sh",
+		"scripts/release-notes.sh", "scripts/candidate-gate.sh",
+		"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
+		".grain/workflows/release.yml", ".github/workflows/release.yml",
+		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
+		".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
+	}
+	for _, p := range reviewed {
+		got := Classify([]string{p})
+		if ids := categoryIDs(got); !reflect.DeepEqual(ids, []string{"release-machinery"}) {
+			t.Errorf("Classify(%q) = %v, want [release-machinery]", p, ids)
+		}
+		if RequiresHuman(got) {
+			t.Errorf("%s waits for a person; a clean security review should release it", p)
+		}
+	}
+
+	var machinery Category
+	for _, c := range Categories {
+		if c.ID == "release-machinery" {
+			machinery = c
+		}
+	}
+	brief := strings.Join(machinery.Review, "\n")
+	for _, want := range []string{"`vX.Y.Z` or `latest`", "`permissions:`", "secrets", "dispatch",
+		"anybody but a person", "RELEASE_MAJOR"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("release-machinery's review brief does not mention %s:\n%s", want, brief)
+		}
+	}
 }

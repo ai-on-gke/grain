@@ -28,19 +28,31 @@ import api from "../api.js";
 import ConnectionModelsField from "./ConnectionModelsField.jsx";
 import CodexAuthFields from "./CodexAuthFields.jsx";
 import Overlay from "./Overlay.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import { ReadOnlyFieldset } from "./settings/SettingsCard.jsx";
 
 export const frameworkLabels = {
   antigravity: "Antigravity",
   claude: "Claude",
   codex: "Codex",
+};
+
+// removedFrameworkLabels name the connection types grain no longer runs.
+// A stored connection of one is kept, disabled with a disabledReason, until
+// somebody deletes it, and is never offered for a new connection.
+export const removedFrameworkLabels = {
   custom: "Custom command",
 };
+
+export function isRemovedFramework(framework) {
+  return Object.hasOwn(removedFrameworkLabels, framework || "");
+}
 
 export function modelBackendLabel(backend) {
   return (
     backend.name ||
     frameworkLabels[backend.framework] ||
+    removedFrameworkLabels[backend.framework] ||
     backend.id ||
     "Connection"
   );
@@ -72,7 +84,7 @@ function authenticationValue(backend) {
 }
 
 // cliBinaryFor is the CLI a connection of framework runs, the one its
-// CLI path overrides -- "" for a custom command, which names its own.
+// CLI path overrides.
 export function cliBinaryFor(framework) {
   return (
     { claude: "claude", codex: "codex", antigravity: "agy" }[framework] || ""
@@ -282,7 +294,6 @@ export default function ModelBackendPage({
           change({
             framework: event.target.value,
             models: [],
-            command: "",
             cliPath: undefined,
             modelTurnTimeout: undefined,
             modelRetryCutoff: undefined,
@@ -303,16 +314,6 @@ export default function ModelBackendPage({
           </MenuItem>
         ))}
       </TextField>
-      {draft.framework === "custom" && (
-        <TextField
-          label="Command"
-          helperText="Relative to the config repository"
-          value={draft.command || ""}
-          onChange={(event) => change({ command: event.target.value })}
-          required
-          fullWidth
-        />
-      )}
     </>
   );
 
@@ -401,63 +402,68 @@ export default function ModelBackendPage({
             ) : (
               <Stack spacing={2}>
                 <ReadOnlyFieldset disabled={configReadOnly}>
-                  <TextField
-                    select
+                  <SearchSelect
                     label="Authentication method"
-                    value={authValue}
-                    disabled={saving}
-                    onChange={(event) =>
-                      chooseAuthentication(event.target.value)
+                    shrinkLabel
+                    placeholder={
+                      requiresChoice
+                        ? "Choose an authentication method"
+                        : undefined
                     }
-                    fullWidth
-                    SelectProps={{ displayEmpty: true }}
-                    InputLabelProps={{ shrink: true }}
-                  >
-                    {requiresChoice && (
-                      <MenuItem value="" disabled>
-                        Choose an authentication method
-                      </MenuItem>
-                    )}
-                    {draft.framework === "antigravity" && [
-                      <MenuItem key="ambient" value="ambient">
-                        Ambient Antigravity login
-                      </MenuItem>,
-                      <MenuItem key="api_key" value="api_key">
-                        Gemini API key
-                      </MenuItem>,
+                    value={authValue}
+                    disabled={saving || configReadOnly}
+                    onChange={(next) => chooseAuthentication(next)}
+                    options={[
+                      ...(requiresChoice
+                        ? [
+                            {
+                              value: "",
+                              label: "Choose an authentication method",
+                              disabled: true,
+                            },
+                          ]
+                        : []),
+                      ...(draft.framework === "antigravity"
+                        ? [
+                            {
+                              value: "ambient",
+                              label: "Ambient Antigravity login",
+                            },
+                            { value: "api_key", label: "Gemini API key" },
+                          ]
+                        : []),
+                      ...(draft.framework === "codex"
+                        ? [
+                            { value: "api_key", label: "OpenAI API key" },
+                            {
+                              value: "subscription",
+                              label: "ChatGPT subscription (auth.json)",
+                            },
+                          ]
+                        : []),
+                      ...(draft.framework === "claude"
+                        ? [
+                            {
+                              value: "api_key",
+                              label: "Claude Code OAuth token",
+                            },
+                            {
+                              value: "vertex",
+                              label: "Google Cloud Vertex AI",
+                            },
+                          ]
+                        : []),
+                      // Named as the connection list names it, by id when it
+                      // has no name: every source shares this one's framework,
+                      // so modelBackendLabel's framework fallback gave several
+                      // nameless ones the same "Reuse authentication from
+                      // Claude" and no way to tell them apart.
+                      ...sources.map((source) => ({
+                        value: `reuse:${source.id}`,
+                        label: `Reuse authentication from ${source.name || source.id}`,
+                      })),
                     ]}
-                    {draft.framework === "codex" && [
-                      <MenuItem key="api_key" value="api_key">
-                        OpenAI API key
-                      </MenuItem>,
-                      <MenuItem key="subscription" value="subscription">
-                        ChatGPT subscription (auth.json)
-                      </MenuItem>,
-                    ]}
-                    {draft.framework === "claude" && [
-                      <MenuItem key="api_key" value="api_key">
-                        Claude Code OAuth token
-                      </MenuItem>,
-                      <MenuItem key="vertex" value="vertex">
-                        Google Cloud Vertex AI
-                      </MenuItem>,
-                    ]}
-                    {draft.framework === "custom" && (
-                      <MenuItem value="own">
-                        Use a credential for this connection
-                      </MenuItem>
-                    )}
-                    {/* Named as the connection list names it, by id when it
-                      has no name: every source shares this one's framework,
-                      so modelBackendLabel's framework fallback gave several
-                      nameless ones the same "Reuse authentication from
-                      Claude" and no way to tell them apart. */}
-                    {sources.map((source) => (
-                      <MenuItem key={source.id} value={`reuse:${source.id}`}>
-                        Reuse authentication from {source.name || source.id}
-                      </MenuItem>
-                    ))}
-                  </TextField>
+                  />
                 </ReadOnlyFieldset>
                 {!authenticationChosen && (
                   <Alert severity="info">

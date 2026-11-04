@@ -17,6 +17,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import CustomizeSidebarOverlay from "./CustomizeSidebarOverlay.jsx";
 import { PinnedNavProvider } from "../PinnedNavContext.jsx";
+import { chooseOption, optionValues } from "../searchSelectTesting.js";
 
 const sessions = [
   { id: "director", title: "Director" },
@@ -67,9 +68,7 @@ describe("CustomizeSidebarOverlay", () => {
     );
 
     // Pick "CI" from view dropdown
-    const itemSelect = screen.getByLabelText("Item");
-    await userEvent.click(itemSelect);
-    await userEvent.click(screen.getByRole("option", { name: "CI" }));
+    await chooseOption(userEvent, screen.getByLabelText("Item"), "CI");
 
     // Click Pin item
     await userEvent.click(screen.getByRole("button", { name: /Pin item/ }));
@@ -148,9 +147,7 @@ describe("CustomizeSidebarOverlay", () => {
     await userEvent.click(customizeInboxBtn);
 
     // Select custom icon: "Tasks (Solid mass)"
-    const iconSelect = screen.getByLabelText("Icon");
-    await userEvent.click(iconSelect);
-    await userEvent.click(screen.getByRole("option", { name: /Tasks/ }));
+    await chooseOption(userEvent, screen.getByLabelText("Icon"), "tasks");
 
     // Select color: "Indigo"
     const indigoBtn = screen.getByRole("button", { name: "Color Indigo" });
@@ -215,13 +212,12 @@ describe("CustomizeSidebarOverlay", () => {
     await userEvent.click(typeSelect);
     await userEvent.click(screen.getByRole("option", { name: "Session" }));
 
-    const itemSelect = screen.getByLabelText("Item");
-    await userEvent.click(itemSelect);
-    await userEvent.click(screen.getByRole("option", { name: "Director" }));
-
-    const iconSelect = screen.getByLabelText("Icon (optional)");
-    await userEvent.click(iconSelect);
-    await userEvent.click(screen.getByRole("option", { name: /Director/ }));
+    await chooseOption(userEvent, screen.getByLabelText("Item"), "Director");
+    await chooseOption(
+      userEvent,
+      screen.getByLabelText("Icon (optional)"),
+      "director",
+    );
 
     await userEvent.click(screen.getByRole("button", { name: /Pin item/ }));
 
@@ -255,9 +251,7 @@ describe("CustomizeSidebarOverlay", () => {
     await userEvent.click(typeSelect);
     await userEvent.click(screen.getByRole("option", { name: "Board" }));
 
-    const itemSelect = screen.getByLabelText("Item");
-    await userEvent.click(itemSelect);
-    await userEvent.click(screen.getByRole("option", { name: "Sprint 42" }));
+    await chooseOption(userEvent, screen.getByLabelText("Item"), "Sprint 42");
 
     await userEvent.click(screen.getByRole("button", { name: /Pin item/ }));
     expect(screen.getByText("Sprint 42")).toBeInTheDocument();
@@ -265,9 +259,7 @@ describe("CustomizeSidebarOverlay", () => {
     // Add a session
     await userEvent.click(typeSelect);
     await userEvent.click(screen.getByRole("option", { name: "Session" }));
-    const sessionSelect = screen.getByLabelText("Item");
-    await userEvent.click(sessionSelect);
-    await userEvent.click(screen.getByRole("option", { name: "Director" }));
+    await chooseOption(userEvent, screen.getByLabelText("Item"), "Director");
     await userEvent.click(screen.getByRole("button", { name: /Pin item/ }));
     expect(screen.getByText("Director")).toBeInTheDocument();
 
@@ -397,5 +389,59 @@ describe("CustomizeSidebarOverlay", () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+
+  it("searches views, boards and icons anywhere in their labels and preserves Default icon", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    renderWithProviders(
+      <CustomizeSidebarOverlay
+        open={true}
+        onClose={vi.fn()}
+        onSave={onSave}
+        sessions={sessions}
+        boards={[...boards, { id: "board-3", name: "Release Triage — Q4" }]}
+      />,
+    );
+
+    // Search nested Caches views by word ("caches").
+    const itemBox = screen.getByLabelText("Item");
+    await user.click(itemBox);
+    await user.clear(itemBox);
+    await user.type(itemBox, "caches");
+    expect(optionValues(itemBox)).toEqual(["system/caches", "settings/caches"]);
+    await user.keyboard("{Enter}");
+    await user.click(screen.getByRole("button", { name: /Pin item/ }));
+
+    // Switch Type to Board and search by mid-name ("triage").
+    await user.click(screen.getByLabelText("Type"));
+    await user.click(screen.getByRole("option", { name: "Board" }));
+    await user.click(itemBox);
+    await user.clear(itemBox);
+    await user.type(itemBox, "triage");
+    expect(optionValues(itemBox)).toEqual(["board-3"]);
+    await user.keyboard("{Enter}");
+
+    // Search Icon (optional) by glyph description ("portico"), then reset to Default icon ("").
+    const addIconBox = screen.getByLabelText("Icon (optional)");
+    await user.click(addIconBox);
+    expect(optionValues(addIconBox)[0]).toBe("");
+    await user.clear(addIconBox);
+    await user.type(addIconBox, "portico");
+    expect(optionValues(addIconBox)).toEqual(["director"]);
+    await user.keyboard("{Enter}");
+    expect(addIconBox).toHaveValue("Director (Portico)");
+
+    await chooseOption(user, addIconBox, "Default icon");
+    expect(addIconBox).toHaveValue("Default icon");
+
+    await user.click(screen.getByRole("button", { name: /Pin item/ }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(onSave).toHaveBeenCalledWith([
+      { kind: "view", id: "inbox" },
+      { kind: "view", id: "system", tab: "caches" },
+      { kind: "board", id: "board-3" },
+    ]);
   });
 });

@@ -21,6 +21,7 @@
 // serves a deployment whose config repository carries the file.
 
 import { expect, test } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 async function serveForm(page, newTaskForm) {
   await page.route("**/api/config", async (route) => {
@@ -114,17 +115,17 @@ test("a repo switch re-applies layer defaults only to fields nobody touched", as
   await openForm(page);
   const dialog = page.getByRole("dialog");
   const repos = dialog.getByLabel(/^Repos/);
-  await repos.selectOption("none");
+  await chooseOption(repos, "none");
   const ext = dialog.locator("textarea[name=promptExtension]");
   await expect(dialog.getByLabel("Extension (default layer)")).toBeVisible();
   await expect(ext).toHaveValue("from the default layer");
-  await repos.selectOption("acme/widgets");
+  await chooseOption(repos, "acme/widgets");
   await expect(dialog.getByLabel("Extension (widgets layer)")).toBeVisible();
   await expect(ext).toHaveValue("from the widgets layer");
-  await repos.selectOption("none");
+  await chooseOption(repos, "none");
   await expect(ext).toHaveValue("from the default layer");
   await ext.fill("typed by a person");
-  await repos.selectOption("acme/widgets");
+  await chooseOption(repos, "acme/widgets");
   await expect(dialog.getByLabel("Extension (widgets layer)")).toBeVisible();
   await expect(ext).toHaveValue("typed by a person");
   await dialog.getByRole("button", { name: "Discard draft" }).click();
@@ -171,7 +172,7 @@ test("New task opened on a board takes the board's layer and files its boardId",
     });
   });
   await dialog.getByLabel(/^Title/).fill(`Board layer ${Date.now()}`);
-  await dialog.getByLabel(/^Repos/).selectOption("none");
+  await chooseOption(dialog.getByLabel(/^Repos/), "none");
   await dialog.getByRole("button", { name: "Create task" }).click();
   await expect.poll(() => filed?.boardId).toBe("board-1");
   await dialog.getByRole("button", { name: "Discard draft" }).click();
@@ -237,7 +238,7 @@ test("New task from a template takes its layer, switches layers, and files its t
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("heading", { name: "New task" })).toBeVisible();
   const picker = dialog.getByRole("combobox", { name: "Template" });
-  await expect(picker).toContainText("E2E release");
+  await expect(picker).toHaveValue(/E2E release/);
   // The picker sits at the top of the form, above the title it fills.
   expect(await top(picker)).toBeLessThan(
     await top(dialog.getByLabel(/^Title/)),
@@ -280,7 +281,7 @@ test("New task from a template takes its layer, switches layers, and files its t
     "placeholder",
     "Cut the release",
   );
-  await dialog.getByLabel(/^Repos/).selectOption("none");
+  await chooseOption(dialog.getByLabel(/^Repos/), "none");
   await dialog.getByRole("button", { name: "Create task" }).click();
   await expect.poll(() => filed?.templateId).toBe("e2e-release");
   expect(filed.title).toBe("");
@@ -326,7 +327,7 @@ test("a /new link names what a tucked-away or hidden custom field leaves out", a
     });
   });
   await dialog.getByLabel(/^Title/).fill(`Hidden link value ${Date.now()}`);
-  await dialog.getByLabel(/^Repos/).selectOption("none");
+  await chooseOption(dialog.getByLabel(/^Repos/), "none");
   await dialog.getByRole("button", { name: "Create task" }).click();
   await expect.poll(() => filed !== null).toBe(true);
   expect(filed.customFields?.priority ?? "").not.toBe("high");
@@ -442,7 +443,7 @@ test("Task priority follows the picked template and files what it shows", async 
     .click();
   const dialog = page.getByRole("dialog");
   const picker = dialog.getByRole("combobox", { name: "Template" });
-  await expect(picker).toContainText("E2E urgent");
+  await expect(picker).toHaveValue(/E2E urgent/);
   const pane = await dialog.boundingBox();
   const box = await picker.boundingBox();
   expect(box.x).toBeGreaterThanOrEqual(pane.x);
@@ -490,7 +491,7 @@ test("Task priority follows the picked template and files what it shows", async 
   await pick("No template");
   await pick("E2E urgent");
   await expect(priority).toHaveValue("5");
-  await dialog.getByLabel(/^Repos/).selectOption("none");
+  await chooseOption(dialog.getByLabel(/^Repos/), "none");
   await create.click();
   await expect.poll(() => filed?.templateId).toBe("e2e-urgent");
   expect(filed.priority).toBe(5);

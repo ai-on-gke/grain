@@ -39,8 +39,9 @@ package orchestrator
 // There is no table of its own. Every attempt is a suite run tagged
 // model.ReleaseQualificationTag(repo, rc_tag), so the attempts of one
 // candidate are Store.SuiteRunsTagged's answer; and the verdict, once
-// reached, is the completed check run itself, so a candidate whose
-// check run is completed is never looked at again: a candidate is
+// reached, is the completed check run itself -- grain's own, posted by
+// the GitHub App its forge connection is (latestCheckRun) -- so a
+// candidate whose check run is completed is never looked at again: a candidate is
 // qualified again by cutting rc.(N+1), the ordinary path after a red one.
 
 import (
@@ -64,6 +65,9 @@ type ReleaseQualificationForge interface {
 	github.TagLister
 	github.CheckRunWriter
 	ListCheckRuns(owner, repo, ref string) ([]github.CheckRun, error)
+	// CheckRunApp is the GitHub App grain posts check runs on owner/repo
+	// as (github.RESTClient.CheckRunApp), or "" when it cannot tell.
+	CheckRunApp(owner, repo string) (string, error)
 	ListWorkflowRuns(owner, repo, headSHA string) ([]github.CheckRun, error)
 	BranchExists(owner, repo, branch string) (bool, error)
 	DefaultBranch(owner, repo string) (string, error)
@@ -154,11 +158,17 @@ func newestCandidate(tags []github.Tag) (model.RCTag, string, bool) {
 	return best, sha, found
 }
 
-// latestCheckRun is the newest check run named name, or nil.
-func latestCheckRun(runs []github.CheckRun, name string) *github.CheckRun {
+// latestCheckRun is the newest check run named name that app posted for
+// externalID, or nil. One of the same name from anything else -- an
+// Actions workflow with checks: write, another installed app, or an
+// earlier discarded candidate on the same commit -- is not this
+// candidate's verdict, and neither ends qualification nor is updated as
+// if it were.
+func latestCheckRun(runs []github.CheckRun, name, app, externalID string) *github.CheckRun {
 	var out *github.CheckRun
 	for i := range runs {
-		if runs[i].Name == name && (out == nil || runs[i].ID > out.ID) {
+		if runs[i].Name == name && runs[i].App == app && runs[i].ExternalID == externalID &&
+			(out == nil || runs[i].ID > out.ID) {
 			out = &runs[i]
 		}
 	}
@@ -188,16 +198,38 @@ func syncRepoReleaseQualification(ctx context.Context, store *model.Store, forge
 	if err != nil {
 		return fmt.Errorf("listing tags: %w", err)
 	}
+	commits := tagCommits(tags)
 	rc, sha, ok := newestCandidate(tags)
-	if !ok {
-		return nil
+	current := ""
+	if ok {
+		current = rc.String()
 	}
+	holds := syncRedRCHolds(ctx, store, forge, repo, commits, current, now)
+	if !ok {
+		return holds
+	}
+	return errors.Join(holds, qualifyCandidate(ctx, store, forge, repo, suite, commits, rc, sha, now))
+}
+
+// qualifyCandidate advances Stage 2 of rc, the candidate now qualifying.
+func qualifyCandidate(ctx context.Context, store *model.Store, forge ReleaseQualificationForge,
+	repo model.RepoRef, suite model.Suite, commits map[string]string, rc model.RCTag, sha string, now time.Time) error {
+
 	rcTag := rc.String()
+	app, err := forge.CheckRunApp(repo.Owner, repo.Name)
+	if err != nil {
+		return fmt.Errorf("reading which GitHub App posts %s on %s: %w", model.ReleaseQualificationCheckName, rcTag, err)
+	}
+	if app == "" {
+		return fmt.Errorf("not qualifying %s: its forge connection is not a GitHub App grain can name, so its own %s could not be told from one anything else posted",
+			rcTag, model.ReleaseQualificationCheckName)
+	}
 	checks, err := forge.ListCheckRuns(repo.Owner, repo.Name, sha)
 	if err != nil {
 		return fmt.Errorf("reading checks on %s: %w", rcTag, err)
 	}
-	check := latestCheckRun(checks, model.ReleaseQualificationCheckName)
+	tag := model.ReleaseQualificationTag(repo, rcTag)
+	check := latestCheckRun(checks, model.ReleaseQualificationCheckName, app, tag)
 	if check != nil && check.Status == "completed" {
 		return nil
 	}
@@ -206,7 +238,6 @@ func syncRepoReleaseQualification(ctx context.Context, store *model.Store, forge
 	for _, it := range suite.Items {
 		items = append(items, it.TemplateID)
 	}
-	tag := model.ReleaseQualificationTag(repo, rcTag)
 	runs, err := store.SuiteRunsTagged(ctx, tag)
 	if err != nil {
 		return err
@@ -242,6 +273,32 @@ func syncRepoReleaseQualification(ctx context.Context, store *model.Store, forge
 	}
 	d := model.DecideReleaseQualification(items, attempts, model.DefaultQualificationPolicy)
 	summary := strings.Join(d.Lines, "\n")
+	// The notifications go up before the verdict is posted: a candidate
+	// with a completed check run is never looked at again, so a raise
+	// that failed after it would never be retried.
+	switch d.Conclusion {
+	case model.ConclusionFailure:
+		if err := q.raiseRCFailed(ctx, commits, rc, d.Lines); err != nil {
+			return err
+		}
+	case model.ConclusionNeutral:
+		if err := q.raiseInfraStalled(ctx, d.Lines[len(d.Lines)-1]); err != nil {
+			return err
+		}
+	case "":
+		if err := q.trackInfra(ctx, items, attempts); err != nil {
+			return err
+		}
+		if err := q.noteFlakeRetries(ctx, d.Rerun, attempts); err != nil {
+			return err
+		}
+	}
+	if d.Conclusion != "" && d.Conclusion != model.ConclusionNeutral {
+		if err := clearPipelineNotification(ctx, store,
+			model.NotificationSubject(model.FamilyReleaseInfraStalled, rcTag), releaseQualificationNotifier); err != nil {
+			return err
+		}
+	}
 	if d.Conclusion != "" {
 		return q.post("completed", d.Conclusion,
 			fmt.Sprintf("Release qualification of %s: %s", rcTag, d.Conclusion), summary)

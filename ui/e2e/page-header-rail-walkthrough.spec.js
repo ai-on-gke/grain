@@ -217,6 +217,36 @@ test.describe("the page header rail", () => {
     });
   }
 
+  // Still level once the page's actions have wrapped behind "more":
+  // the wrapped lines packed from the top, and a count alone on the
+  // first one sat ~10px above the title's centre line on every counted
+  // page in a 760px window.
+  for (const [name, path] of [
+    ["Tasks", "/"],
+    ["Inbox", "/inbox"],
+    ["Repos", "/repos"],
+    ["Sessions", "/sessions"],
+    ["Processes", "/processes"],
+  ]) {
+    test(`centres ${name}'s count on its label behind more`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 760, height: 900 });
+      await page.goto(path);
+      const rail = page.getByTestId("page-header");
+      await expect(rail.getByTestId("page-header-more")).toBeVisible();
+      await expect(rail.locator(".count:visible").first()).toBeVisible();
+      const counts = await page.evaluate(measureCounts);
+      expect(counts.length).toBeGreaterThan(0);
+      for (const c of counts) {
+        expect(
+          Math.abs(c.dy),
+          `count "${c.text}" (${c.where}) is ${c.dy}px off its label "${c.label}"`,
+        ).toBeLessThanOrEqual(1);
+      }
+    });
+  }
+
   // A page's own actions sit at the right-hand end of the rail's slot,
   // after its count, search and filters and just before the global
   // buttons -- not wherever the page's header happened to portal them,

@@ -440,3 +440,20 @@ func TestCIAdmissionEnforcesPolicyAndUntrustedOnRepoAccessGrants(t *testing.T) {
 		}
 	}
 }
+
+// local-scripts was refused to every CI job, whatever the event; what a
+// declaration became on host-script (model.SetRuntimeGrantExpansions,
+// migrateLocalScripts) is refused to one as well, before anything is
+// minted.
+func TestCIAdmissionRefusesWhatALocalScriptsDeclarationBecame(t *testing.T) {
+	h := newCIPassHarness(t)
+	t.Cleanup(model.SetRuntimeGrantExpansions(map[string][]string{
+		"local-scripts:ops": {ciPassTestCap + `#gcp-key={"account":"staging"}`},
+	}))
+	if _, err := h.acquire(h.request(ci.EventPush)); err == nil || !strings.Contains(err.Error(), "never granted to a CI job") {
+		t.Fatalf("push: error = %v, want local-scripts' CI refusal", err)
+	}
+	if n := h.caller.mints(); n != 0 {
+		t.Fatalf("%d mints, want none", n)
+	}
+}

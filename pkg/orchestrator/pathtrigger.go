@@ -281,7 +281,11 @@ func fileMergeTrigger(ctx context.Context, deps Deps, repo model.RepoRef, branch
 	rule model.RepoPathTrigger, group string, paths []string, from, to string, now time.Time) (model.Task, error) {
 
 	tag := model.PathTriggerTag(strings.ToLower(repo.String())+"@"+branch, rule.Trigger.Name, group)
-	return fileCoalesced(ctx, deps.Store, tag, now, func(prev *model.Task, superseding bool) (model.Task, error) {
+	// The hostd the composition pins the task to (its template's, or its
+	// repository's default, model.Composition.Hostd), written beside the
+	// task once fileCoalesced has filed it, as a schedule's firing does.
+	var hostd string
+	filed, err := fileCoalesced(ctx, deps.Store, tag, now, func(prev *model.Task, superseding bool) (model.Task, error) {
 		if superseding {
 			// Keep the earliest commit the superseded task covered, and
 			// everything changed since then in this group.
@@ -301,6 +305,7 @@ func fileMergeTrigger(ctx context.Context, deps Deps, repo model.RepoRef, branch
 		if err != nil {
 			return model.Task{}, fmt.Errorf("orchestrator: composing trigger %s's task for %s: %w", rule.Trigger.Name, repo, err)
 		}
+		hostd = comp.Hostd
 		if comp.Base == "" {
 			// A template bound to this repository with no branch of its
 			// own still works on the branch that moved.
@@ -332,6 +337,19 @@ func fileMergeTrigger(ctx context.Context, deps Deps, repo model.RepoRef, branch
 			pathTriggerRuleTag(rule.Commit)}
 		return task, nil
 	})
+	return pinFiledHostd(ctx, deps.Store, filed, hostd, err)
+}
+
+// pinFiledHostd writes hostd as the pin of filed, a task fileCoalesced
+// has just filed, unless filing it failed or hostd is the default hostd.
+func pinFiledHostd(ctx context.Context, store *model.Store, filed model.Task, hostd string, err error) (model.Task, error) {
+	if err != nil || hostd == "" {
+		return filed, err
+	}
+	if err := store.SetTaskHostd(ctx, filed.ID, hostd); err != nil {
+		return filed, fmt.Errorf("orchestrator: pinning task %s's hostd: %w", filed.ID, err)
+	}
+	return filed, nil
 }
 
 // mergeOrigin is the origin of a task a merge trigger files: the pull

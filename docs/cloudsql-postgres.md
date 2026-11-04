@@ -7,7 +7,7 @@ Grain supports PostgreSQL as an alternative to the embedded SQLite task store. T
 ## 1. Overview & Architecture
 
 ### Backend Selection
-By default, Grain uses SQLite storing database files under `<data-dir>/store`. To switch to PostgreSQL:
+A `grain daemon` started without database flags uses SQLite, storing database files under `<data-dir>/store`. A fresh `scripts/setup.sh` install is the exception: it provisions a local PostgreSQL server and points the daemon at it ([database.md](database.md)). To choose PostgreSQL yourself:
 - Flag: `-db-driver=postgres` (or env var `GRAIN_DB_DRIVER=postgres`)
 - DSN: `-db-dsn="<connection-string>"` (or env var `GRAIN_DB_DSN="<connection-string>"`)
 
@@ -48,7 +48,7 @@ Grain's `openStore` implementation automatically performs startup connection rea
 
 ## 3. Host Provisioning via `scripts/setup.sh`
 
-`scripts/setup.sh` supports database backend configuration via CLI flags or environment variables when generating systemd units (`grain-daemon.service`):
+With no database settings, a fresh `scripts/setup.sh` install provisions a local PostgreSQL server (`grain-postgres.service`). An existing install keeps the store it has. See [database.md](database.md). To point grain at Cloud SQL or another server of your own instead, give its DSN. No local server is provisioned when a DSN is given:
 
 ### Using CLI Flags
 ```bash

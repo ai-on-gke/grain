@@ -90,10 +90,19 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/auth/logout":               public,
 	"GET /api/auth/user":                 public,
 	"GET /api/auth/status":               public,
+	"GET /api/auth/whoami":               public,
+	"GET /api/whoami":                    trusted,
 
 	// The long poll that tells a signed-in page the daemon is going down
 	// for a restart before it stops answering (grain/task-3543).
 	"GET /api/restart-watch": trusted,
+	// grain's namespace (pkg/ui/api_fs.go): grain fs and external agents.
+	"GET /api/fs/ci/{path...}":     trusted,
+	"GET /api/fs/task/{path...}":   trusted,
+	"GET /api/fs/deploy/{path...}": trusted,
+	"GET /api/fs/config/{path...}": trusted,
+	"GET /api/fs/memory/{path...}": trusted,
+	"GET /api/fs/src/{path...}":    trusted,
 
 	"GET /api/settings":                         trusted,
 	"PUT /api/settings":                         trusted,
@@ -107,6 +116,8 @@ var routeAuthorization = map[string]authLevel{
 	// Tasks.
 	"GET /api/tasks":                                                trusted,
 	"GET /api/tasks/states":                                         trusted,
+	"GET /api/tasks/wait":                                           trusted,
+	"GET /api/inbox":                                                trusted,
 	"GET /api/states":                                               trusted,
 	"POST /api/tasks":                                               trusted,
 	"POST /api/tasks/from-template":                                 trusted,
@@ -121,10 +132,14 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/tasks/{id}/undefer":                                  trusted,
 	"POST /api/tasks/{id}/submit":                                   trusted,
 	"POST /api/tasks/{id}/comments":                                 trusted,
+	"POST /api/tasks/{id}/reply":                                    trusted,
 	"PUT /api/tasks/{id}/secret":                                    trusted,
 	"POST /api/tasks/{id}/config-change":                            trusted,
 	"POST /api/tasks/{id}/config-change/approve":                    trusted,
 	"POST /api/tasks/{id}/config-change/reject":                     trusted,
+	"POST /api/tasks/{id}/access-request/check":                     trusted,
+	"POST /api/tasks/{id}/access-request/grant":                     trusted,
+	"POST /api/tasks/{id}/access-request/deny":                      trusted,
 	"GET /api/tasks/{id}/attachments/{attachmentId}":                trusted,
 	"POST /api/tasks/{id}/close":                                    trusted,
 	"POST /api/tasks/{id}/stop":                                     trusted,
@@ -139,6 +154,9 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/tasks/{id}/force-merge":                              trusted,
 	"POST /api/tasks/{id}/run-now":                                  trusted,
 	"POST /api/tasks/{id}/pull-request":                             trusted,
+	"POST /api/pull-requests/adopt":                                 trusted,
+	"POST /api/pull-requests/review":                                trusted,
+	"GET /api/pull-requests/status":                                 trusted,
 	"POST /api/tasks/{id}/sandbox/recreate":                         trusted,
 	"POST /api/tasks/{id}/activity":                                 trusted,
 	"PUT /api/tasks/{id}/session-title":                             trusted,
@@ -240,6 +258,8 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/repos/{owner}/{name}/releases/{release}/candidates/promote": trusted,
 	"POST /api/repos/{owner}/{name}/pending-releases/{version}/approve":    trusted,
 	"POST /api/repos/{owner}/{name}/pending-releases/{version}/reject":     trusted,
+	"POST /api/releases/{version}/rollback":                                trusted,
+	"GET /api/release-approval-key":                                        trusted,
 	"GET /api/repos/{owner}/{name}/branches":                               trusted,
 	"POST /api/repos/{owner}/{name}/branches":                              trusted,
 	"GET /api/repos/{owner}/{name}/github-branches":                        trusted,
@@ -296,6 +316,7 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/deployment/broadcast":   trusted,
 	"GET /api/deployment/secret-audit": trusted,
 	"GET /api/deployment/audit-logs":   trusted,
+	"GET /api/deployment/config-audit": trusted,
 
 	"GET /api/agent-models": trusted,
 
@@ -310,16 +331,18 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/hostds/{name}/revoke":               trusted,
 	"GET /api/access/principals":                   trusted,
 	"POST /api/access/principals":                  trusted,
+	"PATCH /api/access/principals/{entry}":         trusted,
 	"DELETE /api/access/principals/{entry}":        trusted,
 	"POST /api/external-agents/tokens/{id}/rotate": trusted,
 	"POST /api/external-agents/tokens/{id}/revoke": trusted,
 	"DELETE /api/external-agents/tokens/{id}":      trusted,
 	"POST /api/external-agents/tokens/revoke-all":  trusted,
-	"POST /mcp":                              trusted,
-	"GET /api/agent-keys":                    trusted,
-	"PUT /api/agent-keys/{framework}":        trusted,
-	"DELETE /api/agent-keys/{framework}":     trusted,
-	"POST /api/agent-keys/{framework}/check": trusted,
+	"POST /api/mcp":                                trusted,
+	"POST /mcp":                                    trusted,
+	"GET /api/agent-keys":                          trusted,
+	"PUT /api/agent-keys/{framework}":              trusted,
+	"DELETE /api/agent-keys/{framework}":           trusted,
+	"POST /api/agent-keys/{framework}/check":       trusted,
 	// A connection's key (grain/task-1601).
 	"PUT /api/agent-backends/{id}/credential":    trusted,
 	"DELETE /api/agent-backends/{id}/credential": trusted,
@@ -387,6 +410,7 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/upgrade":                   trusted,
 	"POST /api/upgrade":                  trusted,
 	"DELETE /api/upgrade/scheduled":      trusted,
+	"PUT /api/upgrade/source":            trusted,
 	"GET /api/upgrade/targets":           trusted,
 	"GET /api/upgrade/release-notes":     trusted,
 	"GET /api/database":                  trusted,
@@ -445,6 +469,9 @@ var routeAuthorization = map[string]authLevel{
 	// A grain hostd dialing in authenticates with the hostd token in
 	// its upgrade (hostd.Remote.ServeHTTP), not with a principal.
 	"GET /api/hostd/connect": public,
+	// The script that installs one: grain's own, with no token in it
+	// (TestHostdInstallScriptIsPublicAndHoldsNoSecret).
+	"GET /api/hostd/install.sh": public,
 }
 
 // The people the fixtures name. On the single-tenant daemon

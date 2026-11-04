@@ -17,6 +17,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import GitConnections from "./GitConnections.jsx";
 import api from "../../api.js";
+import { chooseOption, optionValues } from "../../searchSelectTesting.js";
 
 vi.mock("../../api.js", () => ({ default: vi.fn() }));
 
@@ -121,12 +122,8 @@ describe("GitConnections repositories", () => {
       await screen.findByTestId("repo-connection-resolved-acme/widgets"),
     ).toHaveTextContent("the owner's connection");
 
-    await user.click(within(row("acme/widgets")).getByRole("combobox"));
-    await user.click(
-      await screen.findByRole("option", {
-        name: "github.com default (PAT)",
-      }),
-    );
+    const picker = within(row("acme/widgets")).getByRole("combobox");
+    await chooseOption(user, picker, "team-default");
     await waitFor(() =>
       expect(api).toHaveBeenCalledWith(
         "/api/deployment/repos/acme/widgets/git-connection",
@@ -152,8 +149,7 @@ describe("GitConnections repositories", () => {
       1,
     );
 
-    await user.click(within(row("acme/widgets")).getByRole("combobox"));
-    await user.click(await screen.findByRole("option", { name: "Default" }));
+    await chooseOption(user, picker, "Default");
     await waitFor(() =>
       expect(api).toHaveBeenCalledWith(
         "/api/deployment/repos/acme/widgets/git-connection",
@@ -190,12 +186,26 @@ describe("GitConnections repositories", () => {
     expect(
       await screen.findByTestId("repo-connection-resolved-acme/widgets"),
     ).toHaveTextContent("the host's default");
-    expect(within(row("acme/widgets")).getByRole("combobox")).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
+    expect(within(row("acme/widgets")).getByRole("combobox")).toBeDisabled();
     expect(
       screen.queryByTestId("add-connection-button"),
     ).not.toBeInTheDocument();
+  });
+
+  it("filters a repository's connections by mid-word and multi-word query", async () => {
+    const user = userEvent.setup();
+    fakeServer([
+      view("team-default"),
+      view("acme-owner", "acme"),
+      view("corp-bot", "widgets-corp"),
+    ]);
+    renderPanel();
+    await screen.findByTestId("repo-connection-resolved-acme/widgets");
+
+    const picker = within(row("acme/widgets")).getByRole("combobox");
+    await user.click(picker);
+    await user.clear(picker);
+    await user.type(picker, "corp pat");
+    expect(optionValues(picker)).toEqual(["corp-bot"]);
   });
 });
