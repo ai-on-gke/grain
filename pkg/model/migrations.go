@@ -745,6 +745,13 @@ var Migrations = []Migration{
 			"ALTER TABLE `allowed_principal` ADD COLUMN `reason` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     109,
+		Description: "add allowed_principal.role, the scope set an allowlist entry's sessions are held to (existing entries become grain/operator)",
+		Statements: []string{
+			"ALTER TABLE `allowed_principal` ADD COLUMN `role` TEXT NOT NULL DEFAULT 'grain/operator'",
+		},
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as

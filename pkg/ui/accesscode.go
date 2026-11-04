@@ -669,7 +669,7 @@ func (s *Server) singleTenantGate(w http.ResponseWriter, r *http.Request, cfg IA
 		if singleTenantOpenRoute(r) {
 			return true
 		}
-		if err := s.checkAllowedPrincipal(r.Context(), cv.id); err != nil {
+		if err := s.admitVerifiedPrincipal(r.Context(), cv.id); err != nil {
 			if browserNavigation(r) {
 				s.writePrincipalRefusedPage(w, r, cv, err)
 				return false

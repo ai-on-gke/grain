@@ -513,7 +513,12 @@ import "strconv"
 // 108 adds `reason` to `allowed_principal` (model.AllowedPrincipal.Reason):
 // why an entry was added, required for the `serviceAccount:<email>` entries
 // the allowlist accepts again.
-const SchemaVersion = 108
+//
+// 109 adds `role` to `allowed_principal` (model.AllowedPrincipal.Role): the
+// API scope set an entry's sessions are held to, defaulting to
+// grain/operator so every entry that existed before keeps full access
+// (docs/design/access-rbac.md).
+const SchemaVersion = 109
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
@@ -522,7 +527,8 @@ const allowedPrincipalTable = `CREATE TABLE IF NOT EXISTS ` + "`allowed_principa
   ` + "`entry`" + `    TEXT     NOT NULL PRIMARY KEY,
   ` + "`added_by`" + ` TEXT     NOT NULL DEFAULT '',
   ` + "`added_at`" + ` DATETIME NOT NULL,
-  ` + "`reason`" + `   TEXT     NOT NULL DEFAULT ''
+  ` + "`reason`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`role`" + `     TEXT     NOT NULL DEFAULT 'grain/operator'
 )`
 
 // allowedPrincipalMigrationTable records the one-time startup migration off

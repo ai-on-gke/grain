@@ -23,6 +23,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -65,6 +66,9 @@ type GroupMemberChecker interface {
 type AllowedPrincipalEntry struct {
 	Prefix string // "user", "serviceAccount", "domain", "group"
 	Value  string // lowercased email or domain
+	// Role is the entry's role on the database allowlist
+	// (model.AllowedPrincipal.Role); "" is model.DefaultAccessRole.
+	Role string
 }
 
 // AllowedPrincipalsUsage describes the deprecated -ui-allowed-principals flag.
@@ -418,7 +422,7 @@ func (s *Server) effectiveAllowedPrincipals(ctx context.Context) ([]AllowedPrinc
 		if nErr != nil || (prefix == "serviceAccount" && pool[val]) {
 			continue
 		}
-		out = append(out, AllowedPrincipalEntry{Prefix: prefix, Value: val})
+		out = append(out, AllowedPrincipalEntry{Prefix: prefix, Value: val, Role: r.Role})
 	}
 	out = append(out, s.provisionedServiceAccountEntries(ctx)...)
 	return out, nil
@@ -451,37 +455,65 @@ func (s *Server) checkAllowedPrincipal(ctx context.Context, id VerifiedIdentity)
 var errGCPKeyPoolPrincipal = errors.New("gcp-key agent service account")
 
 func (s *Server) allowedPrincipalErr(ctx context.Context, id VerifiedIdentity) error {
+	_, err := s.allowedPrincipalRoles(ctx, id, false)
+	return err
+}
+
+// allowedPrincipalRoles admits id as allowedPrincipalErr describes and, with
+// all, returns the role of every entry it matches (docs/design/access-rbac.md
+// §2). Without all it stops at the first match and returns that one's role.
+// With all, a group whose role could change nothing -- no deny, when what
+// already matched holds every scope -- is not looked up, and a failed group
+// lookup leaves that group's role out rather than refusing a caller admitted
+// some other way.
+func (s *Server) allowedPrincipalRoles(ctx context.Context, id VerifiedIdentity, all bool) ([]string, error) {
 	email := normalizeIdentityEmail(id.Email)
 	if id.Kind == model.PrincipalService && s.tasks != nil && s.tasks.gcpKeyPoolSet(ctx)[email] {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"principal %q is a %w whose key is materialized into task sandboxes and cannot be admitted",
 			id.Email, errGCPKeyPoolPrincipal,
 		)
 	}
 	entries, err := s.effectiveAllowedPrincipals(ctx)
 	if err != nil {
-		return fmt.Errorf("principal %q cannot be authorized: %w", id.Email, err)
+		return nil, fmt.Errorf("principal %q cannot be authorized: %w", id.Email, err)
 	}
-	var groups []string
+	var roles []string
+	var groups []AllowedPrincipalEntry
 	for _, e := range entries {
+		role := e.Role
+		if role == "" {
+			role = model.DefaultAccessRole
+		}
 		switch e.Prefix {
 		case "user":
 			if id.Kind == model.PrincipalHuman && email == e.Value {
-				return nil
+				roles = append(roles, role)
 			}
 		case "serviceAccount":
 			if id.Kind == model.PrincipalService && email == e.Value {
-				return nil
+				roles = append(roles, role)
 			}
 		case "group":
-			groups = append(groups, e.Value)
+			groups = append(groups, e)
+		}
+		if len(roles) > 0 && !all {
+			return roles, nil
 		}
 	}
 	if len(groups) > 0 && id.Kind == model.PrincipalHuman {
 		checker := s.groupChecker()
 		var firstErr error
 		for _, grp := range groups {
-			ok, err := checker.IsMember(ctx, grp, email)
+			role := grp.Role
+			if role == "" {
+				role = model.DefaultAccessRole
+			}
+			if slices.Contains(roles, role) ||
+				(len(roles) > 0 && len(roleDenies(role)) == 0 && resolveAccessRoles(email, roles).Full) {
+				continue
+			}
+			ok, err := checker.IsMember(ctx, grp.Value, email)
 			if err != nil {
 				if firstErr == nil {
 					firstErr = err
@@ -489,14 +521,20 @@ func (s *Server) allowedPrincipalErr(ctx context.Context, id VerifiedIdentity) e
 				continue
 			}
 			if ok {
-				return nil
+				roles = append(roles, role)
+				if !all {
+					return roles, nil
+				}
 			}
 		}
-		if firstErr != nil {
-			return fmt.Errorf("principal %q could not be authorized against group allowlist: %w", id.Email, firstErr)
+		if len(roles) == 0 && firstErr != nil {
+			return nil, fmt.Errorf("principal %q could not be authorized against group allowlist: %w", id.Email, firstErr)
 		}
 	}
-	return fmt.Errorf("principal %q is not on the allowed users and groups list (Settings -> Access)", id.Email)
+	if len(roles) > 0 {
+		return roles, nil
+	}
+	return nil, fmt.Errorf("principal %q is not on the allowed users and groups list (Settings -> Access)", id.Email)
 }
 
 // refusedPrincipalsLogged is which principals have been logged as refused
