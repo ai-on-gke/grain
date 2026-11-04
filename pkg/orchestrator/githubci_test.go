@@ -438,8 +438,8 @@ trigger:
 		parsedSched.Recurrence.GitHubWorkflowRun.Workflow != "nightly.yml" {
 		t.Fatalf("parsed recurrence = %+v", parsedSched.Recurrence)
 	}
-	if parsedSched.TemplateID == nil || *parsedSched.TemplateID != model.WorkflowReviewTemplateID("nightly") {
-		t.Fatalf("default template = %v, want %q", parsedSched.TemplateID, model.WorkflowReviewTemplateID("nightly"))
+	if parsedSched.TemplateID == nil || *parsedSched.TemplateID != model.GitHubWorkflowReviewTemplateID("nightly") {
+		t.Fatalf("default template = %v, want %q", parsedSched.TemplateID, model.GitHubWorkflowReviewTemplateID("nightly"))
 	}
 	// Allow multiple reviews in this test so we can observe attempt 2 firing while attempt 1's review is open.
 	parsedSched.Overlap = model.OverlapAllow

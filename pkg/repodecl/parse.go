@@ -737,7 +737,10 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 		if err := model.ValidateDeclarationStem(stem); err != nil {
 			return model.Schedule{}, fmt.Errorf("%s: github_workflow_run workflow %q: %w", f.path, gh.Workflow, err)
 		}
-		id := model.WorkflowReviewTemplateID(stem)
+		// GitHub's run, not grain CI's: its own prompt
+		// (model.GitHubWorkflowReviewTemplateID), which sends the agent to
+		// `.github/workflows` rather than `.grain/workflows`.
+		id := model.GitHubWorkflowReviewTemplateID(stem)
 		review := model.SystemTemplate(id, model.RepoRef{})
 		if review == nil {
 			return model.Schedule{}, fmt.Errorf("%s: grain has no template to review a workflow with (%s)",
