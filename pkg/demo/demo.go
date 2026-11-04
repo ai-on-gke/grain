@@ -388,7 +388,7 @@ func Run(opts Options) error {
 	storedCfg.DefaultModel = "gemini-2.5-pro"
 	storedCfg.GCPProject = "grain-sandbox-dev"
 	storedCfg.GCPServiceAccountEmail = "grain-sb-agent-0@grain-sandbox-dev.iam.gserviceaccount.com"
-	storedCfg.DefaultCapabilities = []string{"self-debug", "gemini-key"}
+	storedCfg.DefaultCapabilities = []string{"self-debug", "read-issues"}
 	storedCfg.TargetRepos = []string{"acme/widgets"}
 	// The deployment's git connection to the fake credential above, as
 	// `grain connections import` would record it.
@@ -641,6 +641,7 @@ func Run(opts Options) error {
 		go runDemoReviewQuestions(context.Background(), store, interval)
 	}
 	var srv http.Handler = ui.NewServerWithClient(client)
+	defer ui.RegisterHealthCounters("sign-in verification (demo)", demoHealthCounters(time.Now()))()
 	if fakeCI, ok := cfg.CI.(*demoFakeCI); ok {
 		srv = scheduledWorkflowsDemoHandler(srv, fakeCI, githubSimRepo)
 	}
