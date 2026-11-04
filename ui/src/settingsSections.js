@@ -58,6 +58,13 @@ export const SETTINGS_GROUPS = [
         label: "Hostds",
         keywords: ["hostd", "host", "remote", "token", "workstation"],
       },
+      // Who changed what (operator-attribution spec §4.4): read-only
+      // logs, nothing to save.
+      {
+        id: "audit",
+        label: "Audit",
+        keywords: ["audit", "log", "history", "who", "changes", "principal"],
+      },
     ],
   },
   {
