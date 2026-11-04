@@ -470,7 +470,7 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 			nil, "", &sched.AutoApproveProposals, LayerSchedule, true, LayerSchedule)
 		// A review of a workflow run says which branch the run was on
 		// when the schedule chose one (WorkflowReviewTitle).
-		if _, ok := WorkflowReviewStem(tmpl.ID); ok {
+		if IsWorkflowReviewTemplateID(tmpl.ID) {
 			comp.Title = WorkflowReviewTitle(comp.Title, sched.Base)
 		}
 		// Unlike the template's content, a model the schedule chose
@@ -696,7 +696,7 @@ func applyGrainCIGrant(comp *Composition, usesGrainCI bool) {
 // grant when the target repository does not use grain CI.
 func scheduleReviewsWorkflowRun(sched Schedule, tmpl *Template) (CompositionLayer, bool) {
 	if tmpl != nil {
-		if _, ok := WorkflowReviewStem(tmpl.ID); ok {
+		if IsWorkflowReviewTemplateID(tmpl.ID) {
 			return LayerTemplate, true
 		}
 	}
