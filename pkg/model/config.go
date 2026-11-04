@@ -930,6 +930,13 @@ type Config struct {
 	// deployment has none, and the form is drawn as it always was.
 	// Stored as JSON in one column.
 	NewTaskForm *NewTaskForm
+	// OwnerTrust is the owner-trust proposal policy
+	// (design/spec/external-cli/external-cli.spec.md#XC-17): the
+	// (owner, repo) pairs whose external agent credentials' unapproved
+	// filings queue without waiting for a person, approved by
+	// OwnerTrustPrincipal on behalf of the owner. Empty -- the default --
+	// leaves every such filing proposed. Stored as JSON in one column.
+	OwnerTrust []OwnerTrustRule
 	// CLIRun is where each agent CLI runs, keyed by framework name
 	// (claude, codex, antigravity): on the host, in a per-run
 	// container of an image, or whichever of those the host allows

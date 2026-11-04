@@ -45,7 +45,7 @@ export default function ModelSelect({
       label={label}
       value={value ?? ""}
       options={options}
-      onChange={onChange}
+      onChange={(next) => onChange(next ?? "")}
       helperText={helperText}
       disabled={disabled}
       margin={margin}

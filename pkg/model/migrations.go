@@ -729,7 +729,17 @@ var Migrations = []Migration{
 		},
 	},
 	{
-		Version: 107,
+		Version:     107,
+		Description: "add external_agent_token.owner, task.filed_via, task_comment.filed_via and grain_config.owner_trust (external agent owner attribution and owner-trust approval)",
+		Statements: []string{
+			"ALTER TABLE `external_agent_token` ADD COLUMN `owner` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `filed_via` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task_comment` ADD COLUMN `filed_via` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `grain_config` ADD COLUMN `owner_trust` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version: 108,
 		Description: "drop the task, template and repository hostd selectors: a model connection or capability server " +
 			"chooses its hostd; task_run_hostd keeps where each run ran",
 		Statements: []string{

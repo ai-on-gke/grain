@@ -15,6 +15,7 @@
 package ui
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -203,6 +204,12 @@ type Task struct {
 	ReviewTemplateID   string `json:"reviewTemplateId,omitempty"`
 	ReviewTemplateName string `json:"reviewTemplateName,omitempty"`
 	Creator            string `json:"creator,omitempty"`
+	// FiledVia is the X-Grain-Client label of the tool that filed the
+	// task (model.Task.FiledVia), and Provenance the line it reads as
+	// ("filed from jetski/1.4 by jane@example.com"); both "" for a task
+	// filed without one. A label only: it grants nothing.
+	FiledVia   string `json:"filedVia,omitempty"`
+	Provenance string `json:"provenance,omitempty"`
 	// ReviewTask is the ID of the task actually filed to review this one
 	// (model.LinkReviewTask), empty until orchestrator.SyncReviews has
 	// filed it. Paired with ReviewTemplateID it is what tells a reader
@@ -665,6 +672,10 @@ type Comment struct {
 	// (model.Comment.Summary); "" on every other comment, and on a question
 	// stored before summaries existed.
 	Summary string `json:"summary,omitempty"`
+	// FiledVia and Provenance are Task.FiledVia and Task.Provenance for
+	// the comment: the X-Grain-Client label it was posted with.
+	FiledVia   string `json:"filedVia,omitempty"`
+	Provenance string `json:"provenance,omitempty"`
 	// Attachments is every file posted alongside this comment
 	// (bwsalmon/agents#522) -- metadata only, GET
 	// /api/tasks/{id}/attachments/{attachmentId} is what serves one's
@@ -1074,6 +1085,8 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		ReviewTemplateID:     t.ReviewTemplateID,
 		ReviewTemplateName:   reviewTemplateName,
 		Creator:              t.Creator,
+		FiledVia:             t.FiledVia,
+		Provenance:           provenanceLabel(t.FiledVia, cmp.Or(attributedPerson(t.Origin.Attribution), t.Creator)),
 		Capabilities:         []string{},
 		CustomFields:         customFieldValues(t.CustomFields),
 		Stacked:              t.Origin.Reason == model.ReasonFix || t.Origin.Reason == model.ReasonReview,
@@ -1229,6 +1242,8 @@ func commentFrom(c model.Comment, attachments []Attachment) Comment {
 		CreatedAt:   c.CreatedAt,
 		Handover:    c.Handover,
 		Summary:     c.Summary,
+		FiledVia:    c.FiledVia,
+		Provenance:  provenanceLabel(c.FiledVia, attributedPerson(c.Author)),
 		Attachments: attachments,
 	}
 	out.AuthorSource = string(c.Author.Actor.Source)
@@ -2336,7 +2351,13 @@ func (s *Server) handleGetTaskPrompt(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
+	r = withFiledVia(r)
 	user := s.tasks.requestPersonOrOperator(r.Context())
+	if user == "" {
+		if tok := externalTokenFromContext(r.Context()); tok != nil {
+			user = strings.TrimSpace(tok.Owner)
+		}
+	}
 	if user == "" {
 		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
 		return
@@ -2359,6 +2380,12 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	if author := strings.TrimSpace(req.Author); author != "" && requestPerson(r.Context()) != "" && !strings.EqualFold(author, user) {
 		writeError(w, http.StatusForbidden, fmt.Errorf("a signed-in user files tasks as themselves, not as %q", author))
 		return
+	}
+	// An external agent credential files as the person who owns it
+	// (#XC-14): its requester is the owner, whatever the body says --
+	// agentAPIGate has already refused a body naming an author.
+	if tok := externalTokenFromContext(r.Context()); tok != nil {
+		req.Author = strings.TrimSpace(tok.Owner)
 	}
 	// The browser's zone when the body names none (TimeZoneHeader).
 	if strings.TrimSpace(req.TimeZone) == "" {
@@ -2586,6 +2613,7 @@ type addCommentRequest struct {
 }
 
 func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
+	r = withFiledVia(r)
 	var req addCommentRequest
 	if !readAttachmentJSON(w, r, &req, func(req *addCommentRequest) []AttachmentUpload { return req.Attachments }) {
 		return

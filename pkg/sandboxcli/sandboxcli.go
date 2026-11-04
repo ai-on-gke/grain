@@ -169,7 +169,7 @@ func detectSandboxProxy(env sandboxEnv) (base, token string, ok bool) {
 var sandboxCommands = map[string][]string{
 	"help": nil, "-h": nil, "--help": nil,
 	"ls": nil, "read": nil, "grep": nil,
-	"ci":            {"list", "show", "log", "test-history", "artifact", "wait", "run-job", "retrigger"},
+	"ci":            {"list", "show", "checks", "log", "test-history", "artifact", "wait", "run-job", "retrigger"},
 	"pr":            {"status", "base-status", "open", "reply", "resolve", "review-comment"},
 	"git":           {"revert"},
 	"merge-queue":   nil,
@@ -194,8 +194,9 @@ var sandboxCommandFlags = map[string][]string{
 	"ls":                    {"glob"},
 	"read":                  {"tail", "offset", "limit", "lines", "n", "cursor", "since", "page"},
 	"grep":                  {"i", "C", "glob", "max"},
-	"ci list":               {"ref", "conclusion", "job", "workflow", "since", "limit", "repo", "task", "provider"},
+	"ci list":               {"ref", "conclusion", "job", "workflow", "since", "limit", "repo", "task", "provider", "format"},
 	"ci show":               nil,
+	"ci checks":             {"repo", "name", "format"},
 	"ci test-history":       {"limit", "repo"},
 	"ci log":                {"task", "repo", "job", "step", "attempt", "tail", "offset", "limit", "lines", "n"},
 	"ci artifact":           {"o", "run", "task", "repo"},
@@ -458,7 +459,15 @@ func (c *sandboxCLI) run(args []string) error {
 			IgnoreCase: p.has("i"), Context: p.get("C"), Glob: p.get("glob"), Max: p.get("max"),
 		}))
 	case "ci list":
-		return c.get("/cli/ci/runs", p.query("ref", "conclusion", "job", "workflow", "since", "limit", "repo", "task", "provider"), c.out)
+		return c.get("/cli/ci/runs", p.query("ref", "conclusion", "job", "workflow", "since", "limit", "repo", "task", "provider", "format"), c.out)
+	case "ci checks":
+		sha, err := p.arg(0, "sha")
+		if err != nil {
+			return err
+		}
+		q := p.query("repo", "name", "format")
+		q.Set("sha", sha)
+		return c.get("/cli/ci/checks", q, c.out)
 	case "ci show":
 		run, err := p.arg(0, "run-id")
 		if err != nil {

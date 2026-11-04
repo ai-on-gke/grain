@@ -31,14 +31,16 @@
 #
 # The person who decides is either the run's own actor -- somebody who
 # pressed "Run workflow" here -- or, when grain dispatched the run on a
-# person's Approve or Reject in its Inbox, the person named in the signed
+# person's Approve or Reject in its Inbox or on a person's rollback
+# (POST /api/releases/{version}/rollback), the person named in the signed
 # `approval` record: grain's own forge identity is a bot, which is refused
 # as an actor, and the record is the proof a person decided. It is
 # verified against the deployment's public key in the repository variable
 # GRAIN_RELEASE_APPROVAL_KEY (`grain release approval-key`) by
 # scripts/verify-release-approval.sh, and is bound to this repository,
 # version, decision, short-soak and allow-breaking answers and the commit vX.Y.Z-pending
-# stages, for 15 minutes. No schedule and no other event runs this.
+# stages -- for a rollback, the commit vX.Y.Z tags, `rollback_to` and the
+# SHA-256 of `reason` -- for 15 minutes. No schedule and no other event runs this.
 #
 # `approve` refuses a pending release whose recorded staging soak is under
 # the minimum (scripts/release-from-trunk.sh records it on the -pending tag)
@@ -97,7 +99,7 @@ on:
         default: false
         type: boolean
       approval:
-        description: "Set by grain only: the signed record of a person's Approve or Reject in grain's Inbox (base64). Leave empty when dispatching by hand"
+        description: "Set by grain only: the signed record of a person's Approve, Reject or rollback in grain (base64). Leave empty when dispatching by hand"
         required: false
         default: ""
         type: string
