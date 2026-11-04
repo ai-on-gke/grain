@@ -656,6 +656,9 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	// same handler, in process, what the MCP tools ask it over the wire
 	// (sandbox_namespace.go).
 	LiveAPI.Set(srv)
+	// GET /api/fs/ serves the namespace the sandbox proxy is built with
+	// (startGitProxy), which comes up after this server does.
+	srv.SetNamespace(liveNamespace.Load)
 
 	var httpSrv *http.Server
 	if cfg.UiAddr != "" {

@@ -104,6 +104,7 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "secrets:write", Description: "Set and delete secrets, keys and tokens", Dangerous: true},
 	{Scope: "deployment:read", Description: "Read host, sandbox, log, metric and upgrade status"},
 	{Scope: "sandboxes:read", Description: "Read the status of persistent sandboxes (implied by deployment:read)"},
+	{Scope: "deployment:src", Description: "Read grain's own source under src:// over GET /api/fs/src, which an external agent token is refused without even when it holds deployment:read"},
 	{Scope: "deployment:upgrade", Description: "Upgrade grain and its database, or cancel a scheduled upgrade", Dangerous: true},
 	{Scope: "deployment:restart", Description: "Restart grain, act on persistent sandboxes, and run sandbox probes", Dangerous: true},
 	{Scope: "deployment:reboot", Description: "Reboot or shut down grain's host", Dangerous: true},
