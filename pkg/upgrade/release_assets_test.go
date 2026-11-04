@@ -1484,3 +1484,73 @@ func TestReleaseContractV2ChannelPointersAndLatestMarker(t *testing.T) {
 		}
 	})
 }
+
+// The upgrade pane may point release-asset upgrades only at a release
+// repository this deployment could already boot images from: one its
+// flags or track name, or the release repository of an image
+// repository it may move onto. A release asset is checked only against
+// the images.json beside it, so an arbitrary repository there would let
+// anyone holding deployment:upgrade choose what the daemon boots.
+func TestSetImageSourceHoldsTheReleaseRepositoryToTheAllowedOnes(t *testing.T) {
+	dir := t.TempDir()
+	u := New(Config{Image: &ImageConfig{
+		Repository:         "ghcr.io/ai-on-gke/grain",
+		SourceOverrideFile: filepath.Join(dir, "source.json"),
+		ReleaseAssets: ReleaseAssetsConfig{
+			Repository: "ghe.example.test/platform/grain",
+			Asset:      "flag-asset.tar.gz",
+		},
+	}})
+	for _, repo := range []string{"github.com/attacker/grain", "ghe.example.test/attacker/grain", "evil.example.test/ai-on-gke/grain"} {
+		if err := u.SetImageSource(ImageSourceOverride{Mode: "release-assets", ReleaseRepository: repo}); err == nil {
+			t.Errorf("SetImageSource accepted release repository %s", repo)
+		}
+	}
+	if got := u.EffectiveReleaseAssets().Repository; got != "ghe.example.test/platform/grain" {
+		t.Fatalf("a refused override moved the release repository to %q", got)
+	}
+	for _, repo := range []string{"github.com/ai-on-gke/grain", "GitHub.com/AI-on-GKE/grain", "ghe.example.test/platform/grain"} {
+		if err := u.SetImageSource(ImageSourceOverride{Mode: "release-assets", ReleaseRepository: repo}); err != nil {
+			t.Errorf("SetImageSource(%s): %v", repo, err)
+		}
+	}
+	// An override that names no repository or asset goes back to the
+	// daemon's flags rather than clearing them.
+	if err := u.SetImageSource(ImageSourceOverride{Mode: "registry"}); err != nil {
+		t.Fatal(err)
+	}
+	ra := u.EffectiveReleaseAssets()
+	if ra.Repository != "ghe.example.test/platform/grain" || ra.Asset != "flag-asset.tar.gz" {
+		t.Fatalf("an empty override left repository %q, asset %q; want the flags' values", ra.Repository, ra.Asset)
+	}
+
+	// A file written before the repository fell out of the allowed set
+	// is not trusted on the next start either.
+	raw, _ := json.Marshal(ImageSourceOverride{Mode: "release-assets", ReleaseRepository: "github.com/attacker/grain"})
+	if err := os.WriteFile(filepath.Join(dir, "source.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	u = New(Config{Image: &ImageConfig{
+		Repository:         "ghcr.io/ai-on-gke/grain",
+		SourceOverrideFile: filepath.Join(dir, "source.json"),
+	}})
+	if got := u.EffectiveReleaseAssets().Repository; got != "github.com/ai-on-gke/grain" {
+		t.Fatalf("release repository loaded from the override file = %q, want github.com/ai-on-gke/grain", got)
+	}
+}
+
+// The release host's token goes only to that host's API, never to an
+// asset URL the API's answer names somewhere else.
+func TestReleaseTokenStaysOnTheAPIHost(t *testing.T) {
+	r := &resolvedRelease{apiBase: "https://api.github.com", hostClient: &ReleaseHostClient{Token: "tok"}}
+	for target, want := range map[string]string{
+		"https://api.github.com/repos/o/r/releases/assets/1": "Bearer tok",
+		"https://elsewhere.example.test/asset":               "",
+	} {
+		req, _ := http.NewRequest(http.MethodGet, target, nil)
+		r.authorize(req)
+		if got := req.Header.Get("Authorization"); got != want {
+			t.Errorf("Authorization to %s = %q, want %q", target, got, want)
+		}
+	}
+}

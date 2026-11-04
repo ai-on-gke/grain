@@ -454,6 +454,13 @@ type Upgrader struct {
 	// notes, the recent previews by branch (releasenotes.go).
 	notesMu sync.Mutex
 	notes   map[string]releaseNotesEntry
+
+	// operatorReleaseAssets is the release repository, asset and checksum
+	// the daemon's own flags configured, before any operator override
+	// from the upgrade pane (SetImageSource) is laid over them: what an
+	// override that leaves a field empty goes back to, and a release
+	// repository an override may always name.
+	operatorReleaseAssets ReleaseAssetsConfig
 }
 
 // New builds an Upgrader. It does not validate cfg -- Start reports
@@ -461,6 +468,14 @@ type Upgrader struct {
 // the same as most of this package's callers.
 func New(cfg Config) *Upgrader {
 	u := &Upgrader{cfg: cfg}
+	if cfg.Image != nil {
+		u.operatorReleaseAssets = ReleaseAssetsConfig{
+			Repository:     cfg.Image.ReleaseAssets.Repository,
+			Asset:          cfg.Image.ReleaseAssets.Asset,
+			ChecksumAsset:  cfg.Image.ReleaseAssets.ChecksumAsset,
+			ChecksumSuffix: cfg.Image.ReleaseAssets.ChecksumSuffix,
+		}
+	}
 	u.loadImageSourceOverride()
 	return u
 }

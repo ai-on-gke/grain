@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -151,7 +152,7 @@ func (u *Upgrader) SetImageSource(ov ImageSourceOverride) error {
 	}
 	relRepo := strings.TrimSpace(ov.ReleaseRepository)
 	if relRepo != "" {
-		if _, _, _, err := ParseReleaseRepository(relRepo); err != nil {
+		if err := u.validateReleaseRepositoryLocked(relRepo); err != nil {
 			return err
 		}
 	}
@@ -205,7 +206,57 @@ func (u *Upgrader) loadImageSourceOverride() {
 	if json.Unmarshal(raw, &ov) != nil {
 		return
 	}
+	if repo := strings.TrimSpace(ov.ReleaseRepository); repo != "" {
+		if err := u.validateReleaseRepositoryLocked(repo); err != nil {
+			log.Printf("grain upgrade: ignoring the release repository in %s: %v", p, err)
+			ov.ReleaseRepository = ""
+		}
+	}
 	u.applyImageSourceOverrideLocked(ov)
+}
+
+// validateReleaseRepositoryLocked is whether an override from the upgrade
+// pane may name repo as the release repository image upgrades load from.
+//
+// A release-asset tarball is checked only against the images.json and
+// sidecar published beside it, so the release repository decides what
+// this deployment boots exactly as its image repository does -- and an
+// image repository is held to the ones it may move onto
+// (installtrack.ValidateTargetRepository). So is this: repo must be the
+// one the daemon's flags or its track name, or the release repository
+// of an image repository this deployment may upgrade onto. Anything else
+// takes a daemon flag (-upgrade-release-repo), which only the operator
+// of the host sets.
+func (u *Upgrader) validateReleaseRepositoryLocked(repo string) error {
+	host, owner, name, err := ParseReleaseRepository(repo)
+	if err != nil {
+		return err
+	}
+	want := strings.ToLower(host + "/" + owner + "/" + name)
+	var allowed []string
+	add := func(r string) {
+		if h, o, n, err := ParseReleaseRepository(r); err == nil {
+			allowed = append(allowed, strings.ToLower(h+"/"+o+"/"+n))
+		}
+	}
+	add(u.operatorReleaseAssets.Repository)
+	if d, ok := TrackDefaultsFor(u.cfg.Image.Track); ok {
+		add(d.ReleaseRepository)
+	}
+	if eff, err := u.effectiveRepository(); err == nil {
+		add(ReleaseRepositoryForImage(eff))
+	}
+	for _, r := range installtrack.KnownSuccessorRepositories(u.cfg.Image.AllowedRepositories...) {
+		if u.validateRepository(r) == nil {
+			add(ReleaseRepositoryForImage(r))
+		}
+	}
+	if slices.Contains(allowed, want) {
+		return nil
+	}
+	slices.Sort(allowed)
+	return fmt.Errorf("release repository %q is not one this deployment may upgrade from; allowed are %s (set another with the daemon's -upgrade-release-repo flag)",
+		repo, strings.Join(slices.Compact(allowed), ", "))
 }
 
 func (u *Upgrader) applyImageSourceOverrideLocked(ov ImageSourceOverride) {
@@ -224,8 +275,17 @@ func (u *Upgrader) applyImageSourceOverrideLocked(ov ImageSourceOverride) {
 		u.cfg.Image.Fallback = ""
 		u.cfg.Image.FallbackExplicit = false
 	}
-	u.cfg.Image.ReleaseAssets.Repository = strings.TrimSpace(ov.ReleaseRepository)
-	u.cfg.Image.ReleaseAssets.Asset = strings.TrimSpace(ov.ReleaseAsset)
+	// A field the override leaves empty goes back to what the daemon's
+	// flags set, rather than clearing -upgrade-release-repo and the rest.
+	op := u.operatorReleaseAssets
+	u.cfg.Image.ReleaseAssets.Repository = op.Repository
+	if r := strings.TrimSpace(ov.ReleaseRepository); r != "" {
+		u.cfg.Image.ReleaseAssets.Repository = r
+	}
+	u.cfg.Image.ReleaseAssets.Asset = op.Asset
+	if a := strings.TrimSpace(ov.ReleaseAsset); a != "" {
+		u.cfg.Image.ReleaseAssets.Asset = a
+	}
 	chk := strings.TrimSpace(ov.Checksum)
 	if strings.HasPrefix(chk, ".") {
 		u.cfg.Image.ReleaseAssets.ChecksumSuffix = chk
@@ -234,8 +294,8 @@ func (u *Upgrader) applyImageSourceOverrideLocked(ov ImageSourceOverride) {
 		u.cfg.Image.ReleaseAssets.ChecksumAsset = chk
 		u.cfg.Image.ReleaseAssets.ChecksumSuffix = ""
 	} else {
-		u.cfg.Image.ReleaseAssets.ChecksumAsset = ""
-		u.cfg.Image.ReleaseAssets.ChecksumSuffix = ""
+		u.cfg.Image.ReleaseAssets.ChecksumAsset = op.ChecksumAsset
+		u.cfg.Image.ReleaseAssets.ChecksumSuffix = op.ChecksumSuffix
 	}
 }
 
@@ -919,6 +979,20 @@ func formatReleaseAuthError(host, owner, repo string, status int, cause error, h
 		host, owner, repo, status, hint)
 }
 
+// authorize sends the release host's token with req only when req goes
+// to that host's own API: an asset's URL is read from the API's answer,
+// and the token is never to follow it anywhere else.
+func (r *resolvedRelease) authorize(req *http.Request) {
+	if r.hostClient == nil || r.hostClient.Token == "" {
+		return
+	}
+	base, err := url.Parse(r.apiBase)
+	if err != nil || !strings.EqualFold(base.Host, req.URL.Host) {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+r.hostClient.Token)
+}
+
 func (r *resolvedRelease) doAPI(ctx context.Context, targetURL, accept string) ([]byte, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {
@@ -927,9 +1001,7 @@ func (r *resolvedRelease) doAPI(ctx context.Context, targetURL, accept string) (
 	if accept != "" {
 		req.Header.Set("Accept", accept)
 	}
-	if r.hostClient != nil && r.hostClient.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+r.hostClient.Token)
-	}
+	r.authorize(req)
 	client := clientWithRedirectAuthGuard(r.hostClient.Client, releaseMetadataTimeout)
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1268,9 +1340,7 @@ func (u *Upgrader) streamAndVerifyAsset(ctx context.Context, p *progress, step s
 		return "", err
 	}
 	req.Header.Set("Accept", "application/octet-stream")
-	if r.hostClient != nil && r.hostClient.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+r.hostClient.Token)
-	}
+	r.authorize(req)
 	if p != nil {
 		p.logf("%s: streaming %s from %s/%s/%s release %s", step, asset.Name, r.host, r.owner, r.repo, r.tag)
 	}
