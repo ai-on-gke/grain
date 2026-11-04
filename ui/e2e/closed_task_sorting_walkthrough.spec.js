@@ -120,8 +120,15 @@ test.describe("Closed Task Default Sorting and Lifecycle Visibility Walkthrough"
     // -------------------------------------------------------------------------
     // Phase 3: REST API and CLI Verification of Default Sorting (closed_at DESC)
     // -------------------------------------------------------------------------
-    // 3.1 Verify GET /api/tasks
-    const getTasksRes = await fetch(`${demoServer}/api/tasks`, {
+    // 3.1 Verify GET /api/tasks?fields=full -- the whole list. The bare
+    // route is the live list the UI polls, which carries no closed task
+    // at all (grain task 2983).
+    const liveRes = await fetch(`${demoServer}/api/tasks`, { headers: auth });
+    expect(liveRes.status).toBe(200);
+    const liveIds = (await liveRes.json()).map((t) => t.id);
+    expect(liveIds).not.toContain(task1.id);
+    expect(liveIds).toContain(task3.id);
+    const getTasksRes = await fetch(`${demoServer}/api/tasks?fields=full`, {
       headers: auth,
     });
     expect(getTasksRes.status).toBe(200);
