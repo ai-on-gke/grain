@@ -30,6 +30,21 @@ import { chooseOption, optionValues } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
 
+// createdPayload is the create request's body, once it has gone. Other
+// requests can land in api first -- a GET with no options, under a loaded
+// host's timing -- so the call is found by its path and body, not taken
+// as the first one.
+async function createdPayload() {
+  let call;
+  await waitFor(() => {
+    call = api.mock.calls.find(
+      ([path, opts]) => path === "/api/tasks" && opts?.body,
+    );
+    expect(call).toBeTruthy();
+  });
+  return JSON.parse(call[1].body);
+}
+
 describe("NewTaskOverlay", () => {
   afterEach(() => {
     api.mockClear();
@@ -174,7 +189,7 @@ describe("NewTaskOverlay", () => {
 
     await waitFor(() => expect(api).toHaveBeenCalled());
 
-    const payload = JSON.parse(api.mock.calls[0][1].body);
+    const payload = await createdPayload();
     expect(payload.reads).toEqual([
       "acme/shared-lib",
       "other/tooling",
@@ -361,7 +376,7 @@ describe("NewTaskOverlay", () => {
 
     await waitFor(() => expect(api).toHaveBeenCalled());
 
-    const payload = JSON.parse(api.mock.calls[0][1].body);
+    const payload = await createdPayload();
     expect(payload.repo).toBe("acme/widgets");
     expect(payload.noRepo).toBe(false);
   });
@@ -430,7 +445,7 @@ describe("NewTaskOverlay", () => {
 
     await waitFor(() => expect(api).toHaveBeenCalled());
 
-    const payload = JSON.parse(api.mock.calls[0][1].body);
+    const payload = await createdPayload();
     expect(payload.repo).toBe("acme/other");
   });
 
@@ -589,7 +604,7 @@ describe("NewTaskOverlay", () => {
 
     await waitFor(() => expect(api).toHaveBeenCalled());
 
-    const payload = JSON.parse(api.mock.calls[0][1].body);
+    const payload = await createdPayload();
     expect(payload.base).toBe("release/2.0");
   });
 
@@ -638,7 +653,7 @@ describe("NewTaskOverlay", () => {
 
     await waitFor(() => expect(api).toHaveBeenCalled());
 
-    const payload = JSON.parse(api.mock.calls[0][1].body);
+    const payload = await createdPayload();
     expect(payload.base).toBe("release/2.0");
   });
 
@@ -683,7 +698,7 @@ describe("NewTaskOverlay", () => {
 
     await waitFor(() => expect(api).toHaveBeenCalled());
 
-    const payload = JSON.parse(api.mock.calls[0][1].body);
+    const payload = await createdPayload();
     expect(payload.base).toBe("");
   });
 
@@ -740,7 +755,7 @@ describe("NewTaskOverlay", () => {
 
     await waitFor(() => expect(api).toHaveBeenCalled());
 
-    const payload = JSON.parse(api.mock.calls[0][1].body);
+    const payload = await createdPayload();
     expect(payload.base).toBe("release/2.0");
   });
 
@@ -825,7 +840,7 @@ describe("NewTaskOverlay", () => {
 
     await waitFor(() => expect(api).toHaveBeenCalled());
 
-    const payload = JSON.parse(api.mock.calls[0][1].body);
+    const payload = await createdPayload();
     expect(payload.base).toBe("my-branch");
   });
 
@@ -862,7 +877,7 @@ describe("NewTaskOverlay", () => {
 
     await waitFor(() => expect(api).toHaveBeenCalled());
 
-    const payload = JSON.parse(api.mock.calls[0][1].body);
+    const payload = await createdPayload();
     expect(payload.base).toBe("my-branch");
   });
 
@@ -911,11 +926,8 @@ describe("NewTaskOverlay", () => {
     await user.click(screen.getByRole("button", { name: "Create task" }));
     // The create request is sent after an await; read it once it has
     // gone rather than in the same tick, which a loaded CI host loses.
-    // Picking a repo may itself fetch (its branches), so the create is
-    // found by its method rather than by being the first call.
-    const posted = () => api.mock.calls.find(([, o]) => o?.method === "POST");
-    await waitFor(() => expect(posted()).toBeTruthy());
-    const payload = JSON.parse(posted()[1].body);
+    await waitFor(() => expect(api).toHaveBeenCalled());
+    const payload = await createdPayload();
     expect(payload.base).toBe("");
   });
 });

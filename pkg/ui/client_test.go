@@ -197,7 +197,7 @@ func TestQueuedTaskShowsWhichGrantResourceIsHoldingItsAdmission(t *testing.T) {
 	c, store, ctx := testClient(t)
 	task := create(t, c, ctx)
 	if err := store.SetGrantWait(ctx, model.GrantWait{
-		TaskID: task.ID, Capability: "gemini-key", Resource: "Gemini API keys", WaitingAt: baseTime,
+		TaskID: task.ID, Capability: "github-sandbox", Resource: "GitHub sandbox repos", WaitingAt: baseTime,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestQueuedTaskShowsWhichGrantResourceIsHoldingItsAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(tasks) != 1 || tasks[0].State != model.StateQueued ||
-		tasks[0].Activity != "waiting for Gemini API keys (gemini-key grant)" ||
+		tasks[0].Activity != "waiting for GitHub sandbox repos (github-sandbox grant)" ||
 		!tasks[0].ActivityBySetup || tasks[0].ActivityAt == nil || !tasks[0].ActivityAt.Equal(baseTime) {
 		t.Fatalf("queued task = %+v, want its pre-run grant wait", tasks)
 	}
@@ -751,19 +751,19 @@ func TestCreateTaskCarriesCapabilityGrants(t *testing.T) {
 	c, store, ctx := testClient(t)
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{
-		Title: "needs a key", Approved: true, Capabilities: &[]string{"gemini-key"},
+		Title: "needs a key", Approved: true, Capabilities: &[]string{"read-issues"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(task.Capabilities) != 1 || task.Capabilities[0] != "gemini-key" {
+	if len(task.Capabilities) != 1 || task.Capabilities[0] != "read-issues" {
 		t.Fatalf("capabilities = %v, want [gemini-key]", task.Capabilities)
 	}
 	stored, err := store.GetTask(ctx, task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stored.Grants) != 1 || stored.Grants[0].Capability != "gemini-key" {
+	if len(stored.Grants) != 1 || stored.Grants[0].Capability != "read-issues" {
 		t.Fatalf("grants = %+v, want one gemini-key grant", stored.Grants)
 	}
 }
@@ -776,7 +776,7 @@ func TestCreateTaskProposalAcceptsGrainCICapability(t *testing.T) {
 	proposal, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title:        "proposed subtask",
 		ProposedBy:   parent.ID,
-		Capabilities: &[]string{"grain-ci", "gemini-key"},
+		Capabilities: &[]string{"grain-ci", "read-issues"},
 	})
 	if err != nil {
 		t.Fatalf("CreateTask proposal: %v", err)
@@ -787,7 +787,7 @@ func TestCreateTaskProposalAcceptsGrainCICapability(t *testing.T) {
 	}
 	hasGemini := false
 	for _, g := range stored.Grants {
-		if g.Capability == "gemini-key" {
+		if g.Capability == "read-issues" {
 			hasGemini = true
 		}
 	}
@@ -863,12 +863,12 @@ func TestCreateTaskCapabilitiesOverrideDeploymentDefaults(t *testing.T) {
 	putDefaultCapabilities(t, ctx, store, "gcp-key")
 
 	named, err := c.CreateTask(ctx, ui.CreateTaskRequest{
-		Title: "only this one", Approved: true, Capabilities: &[]string{"gemini-key"},
+		Title: "only this one", Approved: true, Capabilities: &[]string{"read-issues"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(named.Capabilities, []string{"gemini-key"}) {
+	if !reflect.DeepEqual(named.Capabilities, []string{"read-issues"}) {
 		t.Errorf("capabilities = %v, want [gemini-key] alone", named.Capabilities)
 	}
 	stored, err := store.GetTask(ctx, named.ID)
@@ -899,13 +899,13 @@ func TestCreateTaskCapabilitiesOverrideDeploymentDefaults(t *testing.T) {
 func TestCreateTaskSkipsRetiredDefaultCapability(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
-	putDefaultCapabilities(t, ctx, store, "scratch-repo", "gemini-key")
+	putDefaultCapabilities(t, ctx, store, "scratch-repo", "read-issues")
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "still filable", Approved: true})
 	if err != nil {
 		t.Fatalf("filing a task on a deployment defaulting a retired capability: %v", err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{"gemini-key"}) {
+	if !reflect.DeepEqual(task.Capabilities, []string{"read-issues"}) {
 		t.Fatalf("capabilities = %v, want [gemini-key]: the retired id is skipped, the rest still granted",
 			task.Capabilities)
 	}
@@ -932,7 +932,7 @@ func putRepoDefaultCapabilities(t *testing.T, ctx context.Context, store *model.
 func TestCreateTaskUnionsRepoDefaultCapabilities(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
-	putDefaultCapabilities(t, ctx, store, "gemini-key")
+	putDefaultCapabilities(t, ctx, store, "read-issues")
 	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "gcp-key")
 
 	here, err := c.CreateTask(ctx, ui.CreateTaskRequest{
@@ -944,8 +944,8 @@ func TestCreateTaskUnionsRepoDefaultCapabilities(t *testing.T) {
 	// Compared sorted: a task's capabilities come back in the order
 	// Store.grantsOf reads them (by capability), not in the order they
 	// were seeded.
-	if !reflect.DeepEqual(here.Capabilities, []string{"gemini-key", model.GCPKeySandboxAgentGrant}) {
-		t.Errorf("capabilities = %v, want both the deployment's gemini-key and the repo's %s",
+	if !reflect.DeepEqual(here.Capabilities, []string{model.GCPKeySandboxAgentGrant, "read-issues"}) {
+		t.Errorf("capabilities = %v, want both the deployment's read-issues and the repo's %s",
 			here.Capabilities, model.GCPKeySandboxAgentGrant)
 	}
 	stored, err := store.GetTask(ctx, here.ID)
@@ -966,7 +966,7 @@ func TestCreateTaskUnionsRepoDefaultCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(elsewhere.Capabilities, []string{"gemini-key"}) {
+	if !reflect.DeepEqual(elsewhere.Capabilities, []string{"read-issues"}) {
 		t.Errorf("capabilities = %v, want [gemini-key] alone on a repo with no defaults of its own",
 			elsewhere.Capabilities)
 	}
@@ -996,7 +996,7 @@ func TestCreateTaskUsesDefaultTargetRepoDefaultCapabilities(t *testing.T) {
 func TestCreateTaskWithNoRepoTakesOnlyDeploymentDefaultCapabilities(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
-	putDefaultCapabilities(t, ctx, store, "gemini-key")
+	putDefaultCapabilities(t, ctx, store, "read-issues")
 	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "gcp-key")
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{
@@ -1005,7 +1005,7 @@ func TestCreateTaskWithNoRepoTakesOnlyDeploymentDefaultCapabilities(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{"gemini-key"}) {
+	if !reflect.DeepEqual(task.Capabilities, []string{"read-issues"}) {
 		t.Fatalf("capabilities = %v, want [gemini-key] alone", task.Capabilities)
 	}
 }
@@ -1016,13 +1016,13 @@ func TestCreateTaskWithNoRepoTakesOnlyDeploymentDefaultCapabilities(t *testing.T
 func TestCreateTaskSkipsRetiredRepoDefaultCapability(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
-	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "scratch-repo", "gemini-key")
+	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "scratch-repo", "read-issues")
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "still filable", Approved: true})
 	if err != nil {
 		t.Fatalf("filing a task against a repo defaulting a retired capability: %v", err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{"gemini-key"}) {
+	if !reflect.DeepEqual(task.Capabilities, []string{"read-issues"}) {
 		t.Fatalf("capabilities = %v, want [gemini-key]", task.Capabilities)
 	}
 }
@@ -1142,12 +1142,12 @@ func TestCreateTaskCapabilitiesOverrideRepoDefaults(t *testing.T) {
 	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "gcp-key")
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{
-		Title: "not that one", Approved: true, Capabilities: &[]string{"gemini-key"},
+		Title: "not that one", Approved: true, Capabilities: &[]string{"read-issues"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{"gemini-key"}) {
+	if !reflect.DeepEqual(task.Capabilities, []string{"read-issues"}) {
 		t.Fatalf("capabilities = %v, want [gemini-key] alone", task.Capabilities)
 	}
 }
@@ -2116,7 +2116,7 @@ func TestSetCapabilityAttachesAndDetaches(t *testing.T) {
 	c, _, ctx := testClient(t)
 	task := create(t, c, ctx)
 
-	if err := c.SetCapability(ctx, task.ID, "gemini-key", true); err != nil {
+	if err := c.SetCapability(ctx, task.ID, "read-issues", true); err != nil {
 		t.Fatal(err)
 	}
 	got, err := c.Task(ctx, task.ID)
@@ -2128,14 +2128,14 @@ func TestSetCapabilityAttachesAndDetaches(t *testing.T) {
 	}
 
 	// Attaching twice must not produce two grants.
-	if err := c.SetCapability(ctx, task.ID, "gemini-key", true); err != nil {
+	if err := c.SetCapability(ctx, task.ID, "read-issues", true); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ = c.Task(ctx, task.ID); len(got.Capabilities) != 1 {
 		t.Fatalf("capabilities after a second attach = %v, want still one", got.Capabilities)
 	}
 
-	if err := c.SetCapability(ctx, task.ID, "gemini-key", false); err != nil {
+	if err := c.SetCapability(ctx, task.ID, "read-issues", false); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ = c.Task(ctx, task.ID); len(got.Capabilities) != 0 {
@@ -2143,7 +2143,7 @@ func TestSetCapabilityAttachesAndDetaches(t *testing.T) {
 	}
 	// Detaching one that is not attached is a no-op, matching what
 	// removing an absent label used to do.
-	if err := c.SetCapability(ctx, task.ID, "gemini-key", false); err != nil {
+	if err := c.SetCapability(ctx, task.ID, "read-issues", false); err != nil {
 		t.Fatalf("detaching an absent capability: %v", err)
 	}
 }

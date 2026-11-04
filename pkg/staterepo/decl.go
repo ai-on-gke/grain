@@ -842,6 +842,10 @@ func recurrenceNode(row map[string]any) (string, *yaml.Node, error) {
 			}
 			return "trigger", block(key("github_workflow_run"), inner), nil
 		}
+		if refTrig := model.ParseStoredGitRefTrigger(kind); refTrig != nil &&
+			!hoursSet && !minutesSet && !atSet && !weekdaySet && !daySet {
+			return "trigger", block(key("git_ref"), block(key("repo"), str(refTrig.Repo), key("ref"), str(refTrig.Ref))), nil
+		}
 	}
 	out := block()
 	for _, c := range []string{
@@ -1312,12 +1316,28 @@ func decodeRecurrence(path, id string, node *yaml.Node, row map[string]any) erro
 		}
 		return nil
 	case "trigger":
+		refNode, ok := inside["git_ref"]
+		if !ok {
+			refNode, ok = inside["git-ref"]
+		}
+		if ok {
+			if refNode.Kind != yaml.MappingNode {
+				return fail("`git_ref` needs `repo` and `ref`")
+			}
+			var trig model.GitRefTrigger
+			if err := refNode.Decode(&trig); err != nil {
+				return fail(err.Error())
+			}
+			r := model.Recurrence{Kind: model.RecurrenceGitRef, GitRef: &trig}
+			row["recurrence_kind"] = r.StoredKind()
+			return nil
+		}
 		ghNode, ok := inside["github_workflow_run"]
 		if !ok {
 			ghNode, ok = inside["github-workflow-run"]
 		}
 		if !ok || ghNode.Kind != yaml.MappingNode {
-			return fail("`trigger` needs `github_workflow_run`")
+			return fail("`trigger` needs `github_workflow_run` or `git_ref`")
 		}
 		var trig model.GitHubWorkflowRunTrigger
 		if err := ghNode.Decode(&trig); err != nil {

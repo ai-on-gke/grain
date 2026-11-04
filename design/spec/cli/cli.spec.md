@@ -146,10 +146,10 @@ A scoped external agent token (`gma_…`) is not special-cased by the CLI. Passe
 |---|---|---|
 | task CLI (`runCLI`) | 0 | success |
 | task CLI | 1 | any error, printed as `grain: <message>` on stderr. This includes flag errors (`flag provided but not defined: -x`) and `-h` (`grain: flag: help requested`, after the command's usage) |
-| mode commands | 0 / 1 | each mode exits 1 on error after printing `grain <mode>: <message>`. Exceptions are listed per command in `host.spec.md`: `init` has three outcomes, `backup -h` exits 0, and `version`, `schema-version` and the image printers exit 0 |
+| mode commands | 0 / 1 | each mode exits 1 on error after printing `grain <mode>: <message>`. Exceptions are listed per command in `host.spec.md`: `init` has three outcomes, `backup -h` and `access-code -h` exit 0, `release-notes` given stray arguments exits 2 (`grain release-notes: unexpected arguments: …`), and `version`, `schema-version` and the image printers exit 0 (they ignore stray arguments) |
 | sandbox CLI | 0 | success |
 | sandbox CLI | 1 | an error. Either the proxy refused (its body printed as `grain: <body>`), the transport failed (`grain: reaching the sandbox proxy at <base>: <err>`), or a verdict command reported failure (`ci wait`/`run-job` on a failed run; `grep` on a truncated walk that matched nothing) |
-| sandbox CLI | 2 | a usage error, printed as given with no `grain:` prefix: an unknown command, subcommand or flag, a missing positional argument, or a malformed count |
+| sandbox CLI | 2 | a usage error, printed as given with no `grain:` prefix: an unknown command, subcommand or flag, a missing positional argument, or one of the malformed counts the parser checks itself (`grep -C`/`--max`, `read --page`, `log` counts). Value checks made later by the command are status-1 errors with the `grain:` prefix instead: `task list --limit 0`, `ci wait`/`run-job --timeout`, `pr --comment-id`/`--line`, `task propose --priority`/`--custom-field`/`--not-before`/missing `--body`, `git revert` without exactly one of `--task`/`--commit` |
 
 **Pinned by:** `pkg/sandboxcli/flags_test.go`: `TestMissingArgumentIsAUsageError`, `TestUnknownSubcommandGetsTheSandboxHelp`; `pkg/sandboxcli/flags_test.go`: `TestSandboxCommandsRefuseFlagsTheyDoNotRead`; `pkg/cli/init_test.go`: `TestInitExitCodeDistinguishesTheThreeOutcomes`; `pkg/cli/backup_test.go`: `TestBackupHelpExitsZero`; `pkg/sandboxcli/actions_test.go`: `TestSandboxCIWaitReportsEachVerdict`.
 
@@ -204,6 +204,7 @@ The command and flag tables in `host.spec.md` and `sandbox.spec.md` are **genera
 The guard does **not** check:
 - flags of in-tree capability servers (`grain capability <server> …`), which belong to each server's package;
 - flags `pkg/cli` builds with non-literal names;
+- subcommand verbs missing from the hand-kept `hostSpecSubcommands` list: they are never run with `-h`, so a new verb is not noticed, and a flag added to one is caught only by the literal-name test. Today that is `access list|allow|deny` and `db upgrade-postgres|upgrade-sqlite-to-postgres` (none of which has flags of its own);
 - the per-tool flags of `grain cap`, which are generated from each tool's schema at run time.
 
 **Pinned by:** the three tests named above.

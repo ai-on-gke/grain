@@ -19,7 +19,24 @@ import {
   describeGrant,
   isSecretLooking,
   methodMenuLabel,
+  unsupportedReason,
 } from "./capabilityArgs.js";
+
+describe("unsupportedReason", () => {
+  it("draws an enum that reserves some values to a person", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        permission_set: {
+          type: "string",
+          enum: ["ci", "org-deploy"],
+          "x-grain-person-granted": ["org-deploy"],
+        },
+      },
+    };
+    expect(unsupportedReason(schema)).toBe("");
+  });
+});
 
 describe("methodMenuLabel", () => {
   it("names a built-in server's method apart from the in-process capability", () => {

@@ -23,8 +23,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
-	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
-	"github.com/ai-on-gke/grain/pkg/capability/geminikey"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
@@ -362,7 +360,6 @@ func capabilityDisplayName(id string) string {
 // dispatch, so their specs can be read back out.
 func capabilityProviderCatalog() []model.CapabilityProvider {
 	providers := []model.CapabilityProvider{
-		geminikey.New("", model.CredentialRef{Name: gcpkey.DefaultMinterCredential}),
 		githubsandbox.NewProvider(githubsandbox.Config{}),
 	}
 	providers = append(providers, admincaps.Providers()...)
@@ -500,17 +497,10 @@ func (c *Client) checkable(id string) bool {
 
 // missingConfigFor is capabilityProviders' own gates
 // (pkg/cli/daemon.go), read back as the human-facing labels Settings'
-// Capabilities tab already uses for the same two fields -- gcp-key needs
-// both a project and the service account it mints keys for; gemini-key
-// needs only the project, sharing it with whatever standing credential
-// mints under it.
-func missingConfigFor(name string, cfg model.Config) []string {
-	switch name {
-	case "gemini-key":
-		if cfg.GCPProject == "" {
-			return []string{"GCP project"}
-		}
-	}
+// Capabilities tab already uses. No provider grain ships is gated on a
+// setting since gemini-key, the last one that was (on the GCP project),
+// was retired onto the gcp server (schema migration 103).
+func missingConfigFor(string, model.Config) []string {
 	return nil
 }
 
