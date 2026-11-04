@@ -263,3 +263,51 @@ func TestAuthWhoamiUnauthenticatedAuthenticatedAndExpiredToken(t *testing.T) {
 		t.Fatalf("HTTPClient.AuthWhoami = %v, want a TokenExpiredError at %v", err, expires)
 	}
 }
+
+// TestExternalTokenRevokesItselfOnly holds agentAPIGate's ownCredentialRoute
+// to its word (external-cli.spec.md#XC-9): a gma_ token with no
+// capabilities:admin may revoke itself (`grain logout`), and no other
+// credential -- naming another token's id is refused like any call
+// outside its scopes, and leaves that token working.
+func TestExternalTokenRevokesItselfOnly(t *testing.T) {
+	srv, client := testServer(t)
+	enableExternalAgentAPI(t, client.Store)
+	humanCtx := ui.WithPrincipal(context.Background(), model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	mint := func(name string) ui.IssuedExternalAgentToken {
+		t.Helper()
+		issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+			Name: name, ScopeSet: "grain/external-read", Owner: "jane@example.com",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return issued
+	}
+	mine, other := mint("laptop"), mint("desktop")
+
+	call := func(method, path, bearer string) int {
+		t.Helper()
+		req := httptest.NewRequest(method, path, nil)
+		req.RemoteAddr = "198.51.100.7:4242"
+		req.Header.Set("Authorization", "Bearer "+bearer)
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := call(http.MethodPost, "/api/external-agents/tokens/"+other.ID+"/revoke", mine.Token); code != http.StatusForbidden {
+		t.Fatalf("revoking another token answered %d, want 403", code)
+	}
+	if code := call(http.MethodGet, "/api/auth/whoami", other.Token); code != http.StatusOK {
+		t.Fatalf("the other token after a refused revoke: GET /api/auth/whoami answered %d, want 200", code)
+	}
+	if code := call(http.MethodPost, "/api/external-agents/tokens/"+mine.ID+"/rotate", mine.Token); code != http.StatusForbidden {
+		t.Fatalf("rotating itself answered %d, want 403: only revoke is a token's own to call", code)
+	}
+	if code := call(http.MethodPost, "/api/external-agents/tokens/"+mine.ID+"/revoke", mine.Token); code != http.StatusNoContent {
+		t.Fatalf("revoking itself answered %d, want 204", code)
+	}
+	if code := call(http.MethodGet, "/api/auth/whoami", mine.Token); code != http.StatusUnauthorized {
+		t.Fatalf("a revoked token: GET /api/auth/whoami answered %d, want 401", code)
+	}
+}

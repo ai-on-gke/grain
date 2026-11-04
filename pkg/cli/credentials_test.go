@@ -125,3 +125,36 @@ func exitOf(err error) int {
 	code, _, _ := classifyError(err)
 	return code
 }
+
+// TestMacKeychainSetKeepsTheSecretOffTheCommandLine: security(1) is
+// given the secret on stdin, never in its argv, where ps shows it to
+// every account on the machine.
+func TestMacKeychainSetKeepsTheSecretOffTheCommandLine(t *testing.T) {
+	bin := t.TempDir()
+	record := filepath.Join(t.TempDir(), "security")
+	script := "#!/bin/sh\necho \"argv: $*\" > " + record + "\ncat >> " + record + "\n"
+	if err := os.WriteFile(filepath.Join(bin, "security"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	const secret = `gma_s3cret "quoted" \ back`
+	if err := (macKeychain{}).set("work", secret); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv, stdin, _ := strings.Cut(string(got), "\n")
+	if argv != "argv: -i" {
+		t.Errorf("security ran with %q, want only -i", argv)
+	}
+	want := `"add-generic-password" "-U" "-s" "grain" "-a" "work" "-w" "gma_s3cret \"quoted\" \\ back"` + "\n"
+	if stdin != want {
+		t.Errorf("security read %q on stdin, want %q", stdin, want)
+	}
+	if err := (macKeychain{}).set("work", "two\nlines"); err == nil {
+		t.Error("a secret spanning two lines was handed to security")
+	}
+}

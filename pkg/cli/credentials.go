@@ -90,8 +90,29 @@ func (macKeychain) get(account string) (string, error) {
 	return strings.TrimRight(string(out), "\n"), err
 }
 
+// set hands the secret to security(1) on stdin, as a command for its
+// interactive mode: given with -w on the command line it would sit in
+// the process table, where any other account on the machine can read it
+// with ps. A secret that cannot be one quoted line is refused, and store
+// falls back to the 0600 file.
 func (macKeychain) set(account, secret string) error {
-	return keyringCommand("security", "add-generic-password", "-U", "-s", keyringService, "-a", account, "-w", secret).Run()
+	if strings.ContainsAny(secret, "\r\n\x00") || strings.ContainsAny(account, "\r\n\x00") {
+		return errors.New("a keychain secret must be one line")
+	}
+	cmd := keyringCommand("security", "-i")
+	cmd.Stdin = strings.NewReader(macKeychainCommand("add-generic-password", "-U",
+		"-s", keyringService, "-a", account, "-w", secret) + "\n")
+	return cmd.Run()
+}
+
+// macKeychainCommand is args as one line of security(1)'s interactive
+// mode, each double-quoted so whitespace and quotes in it stay its own.
+func macKeychainCommand(args ...string) string {
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		quoted[i] = `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(a) + `"`
+	}
+	return strings.Join(quoted, " ")
 }
 
 func (macKeychain) delete(account string) error {
