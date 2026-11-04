@@ -419,7 +419,7 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 		}
 	}
 	brief := strings.Join(machinery.Review, "\n")
-	for _, want := range []string{"`vX.Y.Z` or `latest`", "`permissions:`", "secrets", "dispatch",
+	for _, want := range []string{"`vX.Y.Z` or `latest`", "`permissions:`", "`capabilities:`", "secrets", "dispatch",
 		"anybody but a person", "RELEASE_MAJOR"} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("release-machinery's review brief does not mention %s:\n%s", want, brief)

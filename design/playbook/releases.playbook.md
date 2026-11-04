@@ -125,7 +125,7 @@ A release-path change that **can't reach the approval** clears on grain's securi
 
 For the right-hand column, the security review counts any of the following as a finding, and a finding (or a review that can't decide) sends the change to a person:
 - the change could move `vX.Y.Z` or `latest`, as a git tag or an image, other than as a result of the person's approval;
-- it widens a workflow's `permissions:`, the secrets it reads, or who may dispatch it;
+- it widens a workflow's `permissions:` (GitHub) or `capabilities:` / `optional-capabilities:` (grain), the secrets it reads, or who or what may dispatch it (`on:`);
 - it weakens a "refuse anybody but a person" check.
 
 This is the release-promotion rule narrowed to the approval path. The narrowing is gap 2, and that change itself waits for a person's Submit, because it changes the rules rather than shipping a release.
