@@ -29,6 +29,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -170,10 +171,15 @@ func (c *Client) canIssuePersonExternalAgentToken(_ context.Context, actor model
 //     somebody -- may name its owner, which defaults to themselves.
 func (c *Client) externalAgentTokenOwner(ctx context.Context, req CreateExternalAgentTokenRequest) (string, error) {
 	asked := strings.TrimSpace(req.Owner)
-	if strings.ContainsAny(asked, " \t\r\n") {
-		return "", validationErrorf("owner %q may not contain whitespace", asked)
+	for _, r := range asked {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return "", validationErrorf("owner %q may not contain whitespace or control characters", asked)
+		}
 	}
 	if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
+		if req.SelfService {
+			return "", forbiddenErrorf("a self-service credential is minted by a signed-in person")
+		}
 		own := ""
 		if tok := externalTokenFromContext(ctx); tok != nil {
 			own = strings.TrimSpace(tok.Owner)
@@ -308,6 +314,18 @@ func (c *Client) RotateExternalAgentToken(ctx context.Context, id string) (Issue
 			"external agent credential %q includes a dangerous scope or a requires_person scope set: only a person may rotate it",
 			existing.Name,
 		)
+	}
+	if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
+		own := ""
+		if tok := externalTokenFromContext(ctx); tok != nil {
+			own = strings.TrimSpace(tok.Owner)
+		}
+		if existingOwner := strings.TrimSpace(existing.Owner); !strings.EqualFold(existingOwner, own) {
+			return IssuedExternalAgentToken{}, forbiddenErrorf(
+				"an agent cannot rotate a credential owned by %q",
+				existingOwner,
+			)
+		}
 	}
 	rawToken, hash, prefix, err := model.GenerateExternalAgentToken()
 	if err != nil {

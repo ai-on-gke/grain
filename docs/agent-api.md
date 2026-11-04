@@ -849,13 +849,17 @@ through `agentAPIGate`:
   label only: no scope, repository, approval or owner-trust decision
   reads it.
 - **Owner-trust approval**: work an external agent files lands
-  `proposed`. The deployment setting `ownerTrust` (`PUT /api/settings`,
-  `settings:write`), a list of `{"owner": "<person>", "repo":
-  "<owner/name>|*"}`, queues an unapproved filing whose credential owner
-  and repository match a rule. The approval is recorded as grain's
+  `proposed` (setting `priority` above the default, `approved: true`,
+  `interactive: true`, or `fixesBaseBranch: true` requires `tasks:admin`,
+  and `keepRunning` is refused). The deployment setting `ownerTrust`
+  (`PUT /api/settings`, `settings:write`), a list of
+  `{"owner": "<person>", "repo": "<owner/name>|*"}`, queues an unapproved
+  filing whose credential owner and every repository the task targets,
+  reads, or writes match a rule. The approval is recorded as grain's
   `owner-trust` principal on behalf of the owner. A catalogue or
-  requires-person hold, `keepRunning`, or a priority above the default
-  still waits for a person.
+  requires-person hold, `holdForApproval`, `fixesBaseBranch`,
+  `keepRunning`, or a priority above the default still waits for a
+  person.
 
 ### Routes without calling-task context
 

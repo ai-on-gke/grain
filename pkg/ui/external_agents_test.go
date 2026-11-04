@@ -1249,4 +1249,210 @@ func TestOwnerTrustProposalPolicyAutoApprovesMatchingOwnerAndRepoOnly(t *testing
 	if _, err := client.UpdateSettings(operator, ui.UpdateSettingsRequest{OwnerTrust: &bad}); err == nil {
 		t.Error("a rule naming no repository was accepted")
 	}
+	// Control characters in owner are refused on both settings and token issuance.
+	badCtrl := []model.OwnerTrustRule{{Owner: "bob\x1b[31m@example.com", Repo: "acme/widgets"}}
+	if _, err := client.UpdateSettings(operator, ui.UpdateSettingsRequest{OwnerTrust: &badCtrl}); err == nil {
+		t.Error("an ownerTrust rule with control characters in owner was accepted")
+	}
+	if _, err := client.CreateExternalAgentToken(operator, ui.CreateExternalAgentTokenRequest{
+		Name: "ctrl-owner", ScopeSet: "grain/external-dev", Owner: "jane\x00@example.com",
+	}); err == nil {
+		t.Error("CreateExternalAgentToken accepted control characters in owner")
+	}
 }
+
+func TestOwnerTrustChecksReadsWritesHoldsAndPatchEdits(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	enableExternalAgentAPI(t, client.Store)
+	operator := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP})
+	rules := []model.OwnerTrustRule{{Owner: "jane@example.com", Repo: "acme/widgets"}}
+	if _, err := client.UpdateSettings(operator, ui.UpdateSettingsRequest{OwnerTrust: &rules}); err != nil {
+		t.Fatal(err)
+	}
+	issue := func(name, owner string) string {
+		t.Helper()
+		issued, err := client.CreateExternalAgentToken(operator, ui.CreateExternalAgentTokenRequest{
+			Name: name, ScopeSet: "grain/external-dev", Owner: owner,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return issued.Token
+	}
+	janeTok := issue("jane-dev", "jane@example.com")
+	bobTok := issue("bob-dev", "bob@example.com")
+
+	// Cross-repo writes, cross-repo reads, and holdForApproval must not auto-approve
+	// under an ownerTrust rule that covers only acme/widgets.
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"untrusted extra write repo", `{"title":"x","repo":"acme/widgets","writes":[{"repo":"acme/gadgets"}]}`},
+		{"untrusted extra read repo", `{"title":"x","repo":"acme/widgets","reads":["acme/gadgets"]}`},
+		{"explicit holdForApproval", `{"title":"x","repo":"acme/widgets","holdForApproval":true}`},
+	} {
+		created := filedTask(t, fileAsExternal(t, srv, janeTok, "/api/tasks", tc.body, nil))
+		stored, err := client.Store.GetTask(ctx, created.ID)
+		if err != nil || stored == nil {
+			t.Fatalf("%s: reading task %s: %v", tc.name, created.ID, err)
+		}
+		if stored.Approval != nil {
+			t.Errorf("%s: approval = %+v, want nil (proposed)", tc.name, stored.Approval)
+		}
+	}
+
+	doPatch := func(token, id, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPatch, "/api/tasks/"+id, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Editing title on Jane's own owner-trust task within acme/widgets stays queued.
+	approvedTask := filedTask(t, fileAsExternal(t, srv, janeTok, "/api/tasks", `{"title":"orig","repo":"acme/widgets"}`, nil))
+	if rec := doPatch(janeTok, approvedTask.ID, `{"title":"updated within widgets"}`); rec.Code != http.StatusOK {
+		t.Fatalf("jane editing own owner-trust task within trusted repo: %d %s", rec.Code, rec.Body)
+	}
+	if stored, _ := client.Store.GetTask(ctx, approvedTask.ID); stored == nil || stored.Approval == nil || stored.Approval.Actor != model.OwnerTrustPrincipal {
+		t.Fatalf("expected owner-trust approval kept on in-scope title edit, got %+v", stored)
+	}
+
+	// Another owner's external-dev credential editing Jane's owner-trust task
+	// withdraws Jane's owner-trust approval so Bob's edits wait for a person.
+	if rec := doPatch(bobTok, approvedTask.ID, `{"description":"edited by bob"}`); rec.Code != http.StatusOK {
+		t.Fatalf("bob editing task: status %d (%s), want 200", rec.Code, rec.Body)
+	}
+	if stored, _ := client.Store.GetTask(ctx, approvedTask.ID); stored == nil || stored.Approval != nil {
+		t.Errorf("expected owner-trust approval withdrawn after untrusted owner's edit, got %+v", stored)
+	}
+
+	// Moving repo, adding writes, or adding reads outside Jane's ownerTrust via PATCH
+	// withdraws the owner-trust approval so the task reverts to proposed.
+	for _, patch := range []string{
+		`{"repo":"acme/gadgets"}`,
+		`{"writes":[{"repo":"acme/gadgets"}]}`,
+		`{"reads":["acme/gadgets"]}`,
+	} {
+		tk := filedTask(t, fileAsExternal(t, srv, janeTok, "/api/tasks", `{"title":"move-me","repo":"acme/widgets"}`, nil))
+		if rec := doPatch(janeTok, tk.ID, patch); rec.Code != http.StatusOK {
+			t.Fatalf("PATCH %s on %s: %d %s", patch, tk.ID, rec.Code, rec.Body)
+		}
+		stored, err := client.Store.GetTask(ctx, tk.ID)
+		if err != nil || stored == nil {
+			t.Fatalf("GetTask(%s): %v", tk.ID, err)
+		}
+		if stored.Approval != nil {
+			t.Errorf("after PATCH %s, approval = %+v, want withdrawn (proposed)", patch, stored.Approval)
+		}
+	}
+}
+
+func TestExternalAgentEscalationRailsAndTokenRotationOwnerGuard(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	enableExternalAgentAPI(t, client.Store)
+	operator := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP})
+	netNone := string(model.NetworkNone)
+	if _, err := client.UpdateSettings(operator, ui.UpdateSettingsRequest{NetworkAccess: &netNone}); err != nil {
+		t.Fatal(err)
+	}
+
+	widgets, _ := model.ParseRepo("acme/widgets")
+	highPrio := 8
+	for _, tmpl := range []model.Template{
+		{ID: "tpl-targetless", Name: "targetless", Title: "no target"},
+		{ID: "tpl-widgets", Name: "widgets", Title: "on widgets", Target: &widgets},
+		{ID: "tpl-net-open", Name: "net-open", Title: "open net", Target: &widgets, NetworkAccess: model.NetworkOpen},
+		{ID: "tpl-durable", Name: "durable", Title: "durable", Target: &widgets, KeepRunning: true},
+		{ID: "tpl-prio", Name: "prio", Title: "high prio", Target: &widgets, Priority: &highPrio},
+		{ID: "tpl-hostd", Name: "hostd", Title: "pinned hostd", Target: &widgets, Hostd: "workstation-1"},
+		{ID: "tpl-interactive", Name: "interactive", Title: "interactive", Target: &widgets, Interactive: true},
+	} {
+		if err := client.Store.PutTemplate(ctx, tmpl); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	janeIssued, err := client.CreateExternalAgentToken(operator, ui.CreateExternalAgentTokenRequest{
+		Name: "jane-ext", ScopeSet: "grain/external-dev", Owner: "jane@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedAPITask(t, client, "200", "acme/widgets")
+
+	call := func(token, method, path, body string) (int, string) {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(ui.ActingReasonHeader, "testing")
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+
+	// #XC-17 & parity rails: priority > 5, keepRunning, creator, interactive,
+	// fixesBaseBranch, hostd routing, targetless template without repo, and
+	// escalating templates are refused with 403.
+	for _, tc := range []struct {
+		method, path, body string
+	}{
+		{http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets","priority":6}`},
+		{http.MethodPatch, "/api/tasks/200", `{"priority":6}`},
+		{http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets","keepRunning":true}`},
+		{http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets","creator":"ops@example.com"}`},
+		{http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets","interactive":true}`},
+		{http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets","fixesBaseBranch":true}`},
+		{http.MethodPatch, "/api/tasks/200", `{"fixesBaseBranch":true}`},
+		{http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets","hostd":"workstation-1"}`},
+		{http.MethodPut, "/api/tasks/200/hostd", `{"hostd":"workstation-1"}`},
+		{http.MethodPost, "/api/tasks", `{"title":"x","templateId":"tpl-targetless"}`},
+		{http.MethodPost, "/api/tasks", `{"title":"x","templateId":"tpl-net-open"}`},
+		{http.MethodPost, "/api/tasks", `{"title":"x","templateId":"tpl-durable"}`},
+		{http.MethodPost, "/api/tasks", `{"title":"x","templateId":"tpl-prio"}`},
+		{http.MethodPost, "/api/tasks", `{"title":"x","templateId":"tpl-hostd"}`},
+		{http.MethodPost, "/api/tasks", `{"title":"x","templateId":"tpl-interactive"}`},
+	} {
+		if code, resp := call(janeIssued.Token, tc.method, tc.path, tc.body); code != http.StatusForbidden {
+			t.Errorf("%s %s %s: status %d (%s), want 403", tc.method, tc.path, tc.body, code, resp)
+		}
+	}
+
+	// Default/lower priority (<= 5) and a clean template naming its own target repo succeed.
+	if code, resp := call(janeIssued.Token, http.MethodPost, "/api/tasks", `{"title":"ok","repo":"acme/widgets","priority":3}`); code != http.StatusCreated {
+		t.Errorf("POST priority=3 failed: %d %s", code, resp)
+	}
+	if code, resp := call(janeIssued.Token, http.MethodPost, "/api/tasks", `{"title":"from-tmpl","templateId":"tpl-widgets"}`); code != http.StatusCreated {
+		t.Errorf("POST templateId=tpl-widgets failed: %d %s", code, resp)
+	}
+
+	// Token rotation owner guard: neither an in-sandbox agent nor another owner's
+	// agent holding capabilities:admin + external-dev may rotate Jane's credential
+	// to obtain a live bearer token acting as jane@example.com, nor mint selfService.
+	seedAPITask(t, client, "201", "acme/widgets", "api:capabilities:admin", "api:grain/external-dev")
+	if code, resp := asAgent(t, srv, "201", http.MethodPost, "/api/external-agents/tokens/"+janeIssued.ID+"/rotate", `{}`, "rotating"); code != http.StatusForbidden {
+		t.Errorf("in-sandbox agent rotated Jane's owned token: %d %s, want 403", code, resp)
+	}
+	if code, resp := asAgent(t, srv, "201", http.MethodPost, "/api/external-agents/tokens",
+		`{"name":"self-by-agent","scopeSet":"grain/external-dev","selfService":true}`, "minting"); code != http.StatusForbidden {
+		t.Errorf("in-sandbox agent minted selfService credential: %d %s, want 403", code, resp)
+	}
+	bobAdmin, err := client.CreateExternalAgentToken(operator, ui.CreateExternalAgentTokenRequest{
+		Name:   "bob-cap-admin",
+		Scopes: []string{"capabilities:admin", "tasks:read", "tasks:write", "ci:read", "ci:write", "merge:write", "repos:read", "templates:read", "deployment:read"},
+		Owner:  "bob@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, resp := call(bobAdmin.Token, http.MethodPost, "/api/external-agents/tokens/"+janeIssued.ID+"/rotate", `{}`); code != http.StatusForbidden {
+		t.Errorf("bob's agent rotated Jane's token: %d %s, want 403", code, resp)
+	}
+}
+

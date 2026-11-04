@@ -2082,9 +2082,9 @@ func (c *Client) defaultCapabilities(ctx context.Context, teamID string, target 
 // may give -- keepRunning, or a priority above the default. The
 // X-Grain-Client label plays no part.
 func (c *Client) ownerTrustApproves(ctx context.Context, req CreateTaskRequest, proposedBy *model.Task,
-	target *model.RepoRef, held, keepRunning bool, priority int) (*model.Principal, error) {
+	target *model.RepoRef, reads []model.RepoRef, writes []model.WriteTarget, held, keepRunning bool, priority int) (*model.Principal, error) {
 	tok := externalTokenFromContext(ctx)
-	if tok == nil || proposedBy != nil || req.Approved || held || keepRunning || priority > model.DefaultTaskPriority {
+	if tok == nil || proposedBy != nil || req.Approved || req.HoldForApproval || req.FixesBaseBranch || req.Interactive || held || keepRunning || priority > model.DefaultTaskPriority {
 		return nil, nil
 	}
 	if p, ok := PrincipalFromContext(ctx); !ok || p.Kind != model.PrincipalAgent || p.Source != model.SourceExternalToken {
@@ -2101,11 +2101,16 @@ func (c *Client) ownerTrustApproves(ctx context.Context, req CreateTaskRequest, 
 	if cfg == nil || len(cfg.OwnerTrust) == 0 {
 		return nil, nil
 	}
+	if model.NormalizeNetworkAccess(cfg.NetworkAccess) == model.NetworkNone &&
+		strings.TrimSpace(req.NetworkAccess) != "" &&
+		model.NormalizeNetworkAccess(model.NetworkAccess(req.NetworkAccess)) != model.NetworkNone {
+		return nil, nil
+	}
 	repo := ""
 	if target != nil {
 		repo = target.String()
 	}
-	if !model.OwnerTrusted(cfg.OwnerTrust, owner.ID, repo) {
+	if !model.OwnerTrustedForTask(cfg.OwnerTrust, owner.ID, repo, reads, writes) {
 		return nil, nil
 	}
 	return owner, nil
@@ -2820,7 +2825,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// can be interactive too, through an interactive template's
 	// templateId (fromTemplate), and that must not turn propose_task into
 	// a way to approve its own work.
-	ownerTrust, err := c.ownerTrustApproves(ctx, req, proposedBy, target, catalogueHold || needsPersonWhy != "", keepRunning, priority)
+	ownerTrust, err := c.ownerTrustApproves(ctx, req, proposedBy, target, reads, writes, catalogueHold || needsPersonWhy != "", keepRunning, priority)
 	if err != nil {
 		return Task{}, err
 	}
@@ -4664,6 +4669,14 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			submittedHead = c.submittedHead(ctx, *current)
 		}
 	}
+	var ownerTrustCfg *model.Config
+	if c.requestActor(ctx).Actor.Kind == model.PrincipalAgent {
+		var err error
+		ownerTrustCfg, err = c.Store.GetConfig(ctx)
+		if err != nil {
+			return Task{}, err
+		}
+	}
 	if err := c.mutate(model.WithAutoMergeChange(ctx, c.requestActor(ctx).Actor, "edited"), id, func(task *model.Task) error {
 		submitted = false
 		// Whether this edit moves the task off a repository it had a
@@ -5020,6 +5033,39 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		if req.Reads != nil || req.Repo != nil {
 			if err := refuseTargetAmongReads(task.Reads, task.Target); err != nil {
 				return err
+			}
+		}
+		// An agent editing a task approved by owner-trust cannot move its
+		// target, reads or writes outside the owner's trusted repositories
+		// and keep that approval (#XC-17): if the edited task would no
+		// longer qualify for owner-trust auto-approval, it reverts to
+		// proposed for a person to approve.
+		if task.Approval != nil && task.Approval.Actor == model.OwnerTrustPrincipal && c.requestActor(ctx).Actor.Kind == model.PrincipalAgent {
+			ownerID := ""
+			if task.Approval.OnBehalfOf != nil {
+				ownerID = strings.TrimSpace(task.Approval.OnBehalfOf.ID)
+			}
+			repo := ""
+			if task.Target != nil {
+				repo = task.Target.String()
+			}
+			netWidened := (ownerTrustCfg == nil || model.NormalizeNetworkAccess(ownerTrustCfg.NetworkAccess) == model.NetworkNone) &&
+				strings.TrimSpace(string(task.NetworkAccess)) != "" &&
+				model.NormalizeNetworkAccess(task.NetworkAccess) != model.NetworkNone
+			sameCallerOwner := false
+			if tok := externalTokenFromContext(ctx); tok != nil {
+				sameCallerOwner = ownerID != "" && strings.EqualFold(strings.TrimSpace(tok.Owner), ownerID)
+			}
+			stillTrusted := ownerTrustCfg != nil &&
+				sameCallerOwner &&
+				!task.KeepRunning &&
+				task.Priority <= model.DefaultTaskPriority &&
+				!model.FixesBaseBranch(*task) &&
+				!netWidened &&
+				model.OwnerTrustedForTask(ownerTrustCfg.OwnerTrust, ownerID, repo, task.Reads, task.Writes)
+			if !stillTrusted {
+				task.Approval = nil
+				task.ApprovedAt = nil
 			}
 		}
 		return nil

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // OwnerTrustAnyRepo is OwnerTrustRule.Repo for a rule covering every
@@ -50,8 +51,8 @@ func NormalizeOwnerTrust(rules []OwnerTrustRule) ([]OwnerTrustRule, error) {
 		if owner == "" {
 			return nil, fmt.Errorf("ownerTrust[%d]: owner is required", i)
 		}
-		if strings.ContainsAny(owner, " \t\r\n") {
-			return nil, fmt.Errorf("ownerTrust[%d]: owner %q may not contain whitespace", i, owner)
+		if containsSpaceOrControl(owner) {
+			return nil, fmt.Errorf("ownerTrust[%d]: owner %q may not contain whitespace or control characters", i, owner)
 		}
 		repo := strings.TrimSpace(r.Repo)
 		switch repo {
@@ -98,6 +99,35 @@ func OwnerTrusted(rules []OwnerTrustRule, owner, repo string) bool {
 			return true
 		}
 		if repo != "" && SameRepoText(rr, repo) {
+			return true
+		}
+	}
+	return false
+}
+
+// OwnerTrustedForTask reports whether rules trust owner's external agents to
+// queue work targeting repo and reaching reads and writes: every repository
+// the run clones or pushes to must be covered, not only its primary target.
+func OwnerTrustedForTask(rules []OwnerTrustRule, owner, repo string, reads []RepoRef, writes []WriteTarget) bool {
+	if !OwnerTrusted(rules, owner, repo) {
+		return false
+	}
+	for _, w := range writes {
+		if !OwnerTrusted(rules, owner, w.Repo.String()) {
+			return false
+		}
+	}
+	for _, r := range reads {
+		if !OwnerTrusted(rules, owner, r.String()) {
+			return false
+		}
+	}
+	return true
+}
+
+func containsSpaceOrControl(s string) bool {
+	for _, r := range s {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
 			return true
 		}
 	}

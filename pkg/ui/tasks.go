@@ -2357,6 +2357,11 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	r = withFiledVia(r)
 	user := s.tasks.requestPersonOrOperator(r.Context())
 	if user == "" {
+		if tok := externalTokenFromContext(r.Context()); tok != nil {
+			user = strings.TrimSpace(tok.Owner)
+		}
+	}
+	if user == "" {
 		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
 		return
 	}

@@ -1715,6 +1715,13 @@ func (s *Server) checkExternalTokenRotationEscalation(ctx context.Context, held 
 	if err != nil || existing == nil {
 		return nil
 	}
+	own := ""
+	if tok := externalTokenFromContext(ctx); tok != nil {
+		own = strings.TrimSpace(tok.Owner)
+	}
+	if existingOwner := strings.TrimSpace(existing.Owner); !strings.EqualFold(existingOwner, own) {
+		return fmt.Errorf("an agent cannot rotate a credential owned by %q", existingOwner)
+	}
 	grants, _, needsPerson, err := model.ResolveExternalAgentGrants(existing.ScopeSet, existing.Scopes, existing.Repos)
 	if err != nil {
 		return err
@@ -1777,8 +1784,9 @@ func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pat
 		}
 	}
 	var fields struct {
-		Repo   string `json:"repo"`
-		TaskID string `json:"taskId"`
+		Repo       string `json:"repo"`
+		TaskID     string `json:"taskId"`
+		TemplateID string `json:"templateId"`
 	}
 	if len(body) > 0 && json.Unmarshal(body, &fields) == nil {
 		if id := strings.TrimSpace(fields.TaskID); id != "" && routeBodyHasField(pattern, "taskId") {
@@ -1789,6 +1797,11 @@ func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pat
 		if repo := strings.TrimSpace(fields.Repo); repo != "" && routeBodyHasField(pattern, "repo") {
 			repo, err := s.agentCanonicalRepo(repo)
 			return repo, nil, err
+		}
+		if pattern == "POST /api/tasks" && strings.TrimSpace(fields.TemplateID) != "" {
+			if tmpl, err := s.tasks.Store.GetTemplate(ctx, strings.TrimSpace(fields.TemplateID)); err == nil && tmpl != nil && tmpl.Target != nil {
+				return tmpl.Target.String(), nil, nil
+			}
 		}
 	}
 	if repo, ok, err := s.queryCallRepo(r, pattern, func(c string) bool {
@@ -1844,8 +1857,13 @@ func (s *Server) externalAgentRails(ctx context.Context, tok *model.ExternalAgen
 		if len(body) == 0 || json.Unmarshal(body, &req) != nil {
 			return fmt.Errorf("%s has no calling task context: POST /api/tasks requires an explicit repo (or noRepo: true)", principal)
 		}
-		if strings.TrimSpace(req.Repo) == "" && !req.NoRepo && strings.TrimSpace(req.TemplateID) == "" {
-			return fmt.Errorf("%s has no calling task context: POST /api/tasks requires an explicit repo (or noRepo: true)", principal)
+		if strings.TrimSpace(req.Repo) == "" && !req.NoRepo {
+			if strings.TrimSpace(req.TemplateID) == "" {
+				return fmt.Errorf("%s has no calling task context: POST /api/tasks requires an explicit repo (or noRepo: true)", principal)
+			}
+			if tmpl, err := s.tasks.Store.GetTemplate(ctx, strings.TrimSpace(req.TemplateID)); err == nil && tmpl != nil && tmpl.Target == nil {
+				return fmt.Errorf("%s has no calling task context: template %s names no repository, so POST /api/tasks requires an explicit repo (or noRepo: true)", principal, tmpl.ID)
+			}
 		}
 	}
 	path := pathOf(pattern)
@@ -1939,12 +1957,38 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 			if json.Unmarshal(raw, &access) == nil && s.networkAccessWidens(ctx, "", access) {
 				return errors.New("an external agent cannot widen networkAccess past this deployment's default of \"none\"")
 			}
-		case "approved":
+		case "hostd", "defaulthostd":
+			var sel string
+			if json.Unmarshal(raw, &sel) != nil {
+				continue
+			}
+			if err := s.agentMayRouteHostd(ctx, nil, sel); err != nil {
+				return err
+			}
+		case "keeprunning", "keep_running":
+			var on bool
+			if json.Unmarshal(raw, &on) == nil && on {
+				return errors.New("an external agent cannot turn on keepRunning")
+			}
+		case "priority":
+			var on bool
+			if json.Unmarshal(raw, &on) == nil {
+				continue
+			}
+			if p, err := decodeTaskPriority(raw); err == nil && p > model.DefaultTaskPriority && !set.Allows("tasks:admin", repo) {
+				return fmt.Errorf("an external agent cannot set priority above %d without tasks:admin", model.DefaultTaskPriority)
+			}
+		case "fixesbasebranch", "fixes_base_branch":
+			var on bool
+			if json.Unmarshal(raw, &on) == nil && on && !set.Allows("tasks:admin", repo) {
+				return errors.New("an external agent cannot mark a task fixesBaseBranch without tasks:admin")
+			}
+		case "approved", "interactive":
 			var on bool
 			if json.Unmarshal(raw, &on) == nil && on && !set.Allows("tasks:admin", repo) {
 				return errors.New("an agent files work unapproved: approving it needs tasks:admin")
 			}
-		case "author", "proposedby":
+		case "author", "creator", "proposedby":
 			var who string
 			if json.Unmarshal(raw, &who) == nil && strings.TrimSpace(who) != "" {
 				return fmt.Errorf("an agent cannot name somebody else as the %s of work it files", key)
@@ -1970,8 +2014,25 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 			if err := externalTemplateWithin(tok, held, *tmpl, allowedRepo); err != nil {
 				return err
 			}
+			if tmpl.Hostd != "" && !bodyNamesHostd(fields) {
+				if err := s.agentMayRouteHostd(ctx, nil, tmpl.Hostd); err != nil {
+					return fmt.Errorf("template %s pins its tasks' hostd: %w", tmpl.ID, err)
+				}
+			}
 			if tmpl.AutoMerge {
 				return fmt.Errorf("template %s is auto-merge: %w", tmpl.ID, errAgentAutoMerge)
+			}
+			if tmpl.KeepRunning {
+				return fmt.Errorf("template %s sets keepRunning, which an external agent cannot turn on", tmpl.ID)
+			}
+			if tmpl.Interactive && !set.Allows("tasks:admin", repo) {
+				return fmt.Errorf("template %s is interactive: approving it needs tasks:admin", tmpl.ID)
+			}
+			if tmpl.Priority != nil && *tmpl.Priority > model.DefaultTaskPriority && !set.Allows("tasks:admin", repo) {
+				return fmt.Errorf("template %s sets priority %d (above %d), which needs tasks:admin", tmpl.ID, *tmpl.Priority, model.DefaultTaskPriority)
+			}
+			if s.networkAccessWidens(ctx, "", string(tmpl.NetworkAccess)) {
+				return fmt.Errorf("template %s widens networkAccess past this deployment's default of \"none\"", tmpl.ID)
 			}
 			if tmpl.Target != nil && !set.Allows(scope, tmpl.Target.String()) {
 				return fmt.Errorf("template %s files against %s, which the external agent's %s does not reach", tmpl.ID, tmpl.Target, scope)
