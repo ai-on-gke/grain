@@ -47,6 +47,7 @@ import GChatSpaceList, { isGChatServer } from "./GChatSpaceList.jsx";
 import { argumentRows } from "../capabilityArgs.js";
 import { identifierField } from "../identifierField.js";
 import { HostdMissingNote, hostdEntryProblem } from "./HostdMissingNote.jsx";
+import ConnectionHostdField from "./settings/ConnectionHostdField.jsx";
 import { guardLeaving, leavingLosesEdits } from "../unsavedEdits.js";
 import { DISCARD_PROMPT } from "./Overlay.jsx";
 
@@ -107,6 +108,12 @@ export const stateHelp = {
     "No status reported yet: the daemon behind this page has not tried to connect to it.",
 };
 
+// needsHostd is whether state is a placed server's wait for its hostd
+// (daemon.NeedsHostd): "needs-hostd:<selector>".
+const needsHostd = (state) => String(state).startsWith("needs-hostd:");
+const needsHostdHelp =
+  "The grain hostd this server is placed on is not connected: a grant of it waits until that hostd dials in.";
+
 function serverState(server) {
   return (
     server.status?.state || (server.config?.disabled ? "disabled" : "unknown")
@@ -121,11 +128,13 @@ export function runsAt(config) {
       label: "remote (HTTP)",
       help: "grain reaches this server at its URL; it runs wherever that is, not under grain.",
     };
-  if (config.run === "host")
+  if (config.run === "host" || config.run === "hostd")
     return {
       key: "host",
-      label: "on the host",
-      help: "grain starts the command on the bare machine through grain hostd, outside any container.",
+      label: config.hostd ? `on hostd ${config.hostd}` : "on the host",
+      help: config.hostd
+        ? `grain starts the command through grain hostd ${config.hostd}, on that hostd's machine, for every run that holds a grant of it.`
+        : "grain starts the command on the bare machine through grain hostd, outside any container.",
     };
   return {
     key: "container",
@@ -334,7 +343,8 @@ function formFromServer(server) {
     command: config.command || "",
     args: (config.args || []).join("\n"),
     env: pairsToLines(config.env),
-    run: config.run || "container",
+    run: config.run === "hostd" ? "host" : config.run || "container",
+    hostd: config.hostd || "",
     serverUrl: config.serverUrl || "",
     headers: pairsToLines(config.headers),
   };
@@ -356,7 +366,10 @@ function configFromForm(form, base) {
     if (args.length) config.args = args;
     const env = linesToPairs(form.env);
     if (Object.keys(env).length) config.env = env;
-    if (form.run === "host") config.run = "host";
+    // run: hostd with the hostd it is placed on (protocol.ServerConfig.
+    // Hostd); run: host, as before, for the default hostd.
+    if (form.run === "host") config.run = form.hostd ? "hostd" : "host";
+    if (form.run === "host" && form.hostd) config.hostd = form.hostd;
   } else {
     config.serverUrl = form.serverUrl.trim();
     const headers = linesToPairs(form.headers);
@@ -704,6 +717,19 @@ function ServerForm({
               host (through grain hostd)
             </MenuItem>
           </TextField>
+          {form.run === "host" && (
+            <ConnectionHostdField
+              backend={{ hostd: form.hostd }}
+              onChange={(patch) =>
+                setForm((f) => ({ ...f, hostd: patch.hostd || "" }))
+              }
+              noFallback
+              disabled={readOnly}
+              testId="capability-server-hostd"
+              emptyLabel="The default hostd"
+              helperText="Which grain hostd this server runs on, for every run that holds a grant of it. Run the same server on two hostds as two entries under two ids. While its hostd is not connected a grant of it waits (needs-hostd)."
+            />
+          )}
         </>
       ) : (
         <>
@@ -1099,9 +1125,9 @@ function ServerChips({ server, holders }) {
         data-testid="capability-server-usage-count"
       />
       <HelpChip
-        help={stateHelp[state] || ""}
+        help={stateHelp[state] || (needsHostd(state) ? needsHostdHelp : "")}
         label={stateLabel[state] || state}
-        color={stateColor[state] || "default"}
+        color={stateColor[state] || (needsHostd(state) ? "warning" : "default")}
         data-testid="capability-server-state"
       />
     </Stack>
@@ -1550,7 +1576,7 @@ export default function CapabilityServersPanel({
             Needs configuring: {server.status.reason}
           </Alert>
         )}
-        {server.config.run === "host" && (
+        {server.config.run === "host" && !server.config.hostd && (
           <HostdMissingNote
             problem={hostdEntryProblem(hostEntries, server.config.command)}
             sx={{ mt: 1 }}

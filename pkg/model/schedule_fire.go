@@ -673,11 +673,6 @@ func (s *Store) putScheduleTask(ctx context.Context, comp Composition, tags []st
 	if err := s.PutTask(ctx, task); err != nil {
 		return "", fmt.Errorf("filing task: %w", err)
 	}
-	if comp.Hostd != "" {
-		if err := s.SetTaskHostd(ctx, id, comp.Hostd); err != nil {
-			return "", fmt.Errorf("pinning task %s's hostd: %w", id, err)
-		}
-	}
 	return id, nil
 }
 

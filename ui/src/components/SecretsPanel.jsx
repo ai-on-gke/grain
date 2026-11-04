@@ -154,7 +154,7 @@ export default function SecretsPanel({ showError, claimed, onSecretsChanged }) {
   const others = listed.filter((s) => !s.capabilityServers?.length);
 
   return (
-    <Box sx={{ mt: 3 }}>
+    <Box id="other-secrets" sx={{ mt: 3 }}>
       <Typography variant="subtitle2">Other secrets</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
         Everything in this deployment&apos;s secrets store that nothing above

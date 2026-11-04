@@ -17,6 +17,7 @@ package ui_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"reflect"
 	"strings"
@@ -26,6 +27,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
 	"github.com/ai-on-gke/grain/pkg/hostd"
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -51,6 +53,9 @@ type fakeProber struct {
 	noHostd     bool
 	// hostd, when set, is asked for hostEntries as the registry asks it.
 	hostd *hostd.Client
+	// placedEntries, when non-nil, simulates CapabilityServerPlacedProber:
+	// nil slice for a key means registered-but-disconnected.
+	placedEntries map[string][]string
 	// refuse makes the server's configure refuse every config with it;
 	// unreachable makes the probe fail before configure is reached.
 	refuse, unreachable string
@@ -95,6 +100,17 @@ func (f *fakeProber) HostCapabilityEntries(ctx context.Context) ([]string, error
 		}
 	}
 	return f.hostEntries, nil
+}
+
+func (f *fakeProber) HostCapabilityEntriesFor(_ context.Context, selector string) ([]string, bool, error) {
+	if f.placedEntries == nil {
+		return f.hostEntries, !f.noHostd, nil
+	}
+	entries, ok := f.placedEntries[selector]
+	if !ok {
+		return nil, false, fmt.Errorf("hostd %s is not connected", selector)
+	}
+	return entries, true, nil
 }
 
 func configTestServer(t *testing.T, p *fakeProber) (*httptest.Server, *ui.HTTPClient, *ui.Client, *secrets.Store) {
@@ -247,6 +263,101 @@ func TestRunHostIsCheckedAgainstTheHostdAllowlist(t *testing.T) {
 	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: protocol.ServerConfig{Command: "grain"}}); err != nil {
 		t.Errorf("run in the container: %v", err)
 	}
+}
+
+func TestPlacedCapabilityServerChecksRegistryAndTargetHostdAllowlist(t *testing.T) {
+	ctx := context.Background()
+	// Even with no default hostd (as on Kubernetes), a server placed on a
+	// registered hostd checks that hostd's registry status and allowlist.
+	_, hc, client, _ := configTestServer(t, &fakeProber{
+		noHostd: true,
+		placedEntries: map[string][]string{
+			"ws-a":            {"placed-cap"},
+			"gpu=yes,zone=us": {"placed-cap"},
+		},
+	})
+	registerHostds(t, client.Store,
+		model.Hostd{Name: "ws-a"},
+		model.Hostd{Name: "ws-off"},
+		model.Hostd{Name: "gpu-box", Labels: map[string]string{"gpu": "yes", "zone": "us"}},
+	)
+
+	// Unknown, malformed, empty-valued and revoked hostds are refused before saving or probing.
+	for _, bad := range []protocol.HostdTarget{"no-such-hostd", "gone", "gpu=nope", "gpu="} {
+		cfg := protocol.ServerConfig{Command: "placed-cap", Run: protocol.RunHostd, Hostd: bad}
+		if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: cfg}); err == nil {
+			t.Errorf("SetCapabilityServer(hostd=%q) succeeded; want registry refusal", bad)
+		}
+		if _, err := hc.TestCapabilityServer(ctx, ui.TestCapabilityServerRequest{ID: configCap, Config: &cfg}); err == nil {
+			t.Errorf("TestCapabilityServer(hostd=%q) succeeded; want registry refusal", bad)
+		}
+	}
+
+	// A connected placed hostd lacking the allowlist entry is refused.
+	missing := protocol.ServerConfig{Command: "not-offered", Run: protocol.RunHostd, Hostd: "ws-a"}
+	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: missing}); err == nil || !strings.Contains(err.Error(), "on hostd ws-a") {
+		t.Errorf("missing allowlist entry on ws-a: err = %v", err)
+	}
+
+	// A connected placed hostd offering the entry succeeds and normalizes labels.
+	byLabel := protocol.ServerConfig{Command: "placed-cap", Run: protocol.RunHostd, Hostd: "zone=us,gpu=yes"}
+	list, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: byLabel})
+	if err != nil || own(list)[0].Config.Hostd != "gpu=yes,zone=us" {
+		t.Errorf("placed by labels: err=%v, list=%+v", err, own(list))
+	}
+
+	// A registered but currently disconnected hostd can be saved (it parks
+	// in needs-hostd), while Test refuses immediately.
+	offline := protocol.ServerConfig{Command: "placed-cap", Run: protocol.RunHostd, Hostd: "ws-off"}
+	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: offline}); err != nil {
+		t.Errorf("saving server on disconnected registered hostd ws-off: %v", err)
+	}
+	if _, err := hc.TestCapabilityServer(ctx, ui.TestCapabilityServerRequest{ID: configCap, Config: &offline}); err == nil || !strings.Contains(err.Error(), "ws-off") {
+		t.Errorf("testing server on disconnected hostd ws-off: err = %v, want immediate refusal", err)
+	}
+
+	// If ws-off is later revoked, editing another field of the saved server
+	// still works without forcing the operator to change hostd first.
+	if _, err := client.Store.RevokeHostd(ctx, "ws-off"); err != nil {
+		t.Fatal(err)
+	}
+	offline.Disabled = true
+	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: offline}); err != nil {
+		t.Errorf("editing disabled on server whose hostd was later revoked: %v", err)
+	}
+
+	// If CapabilityServers does not implement CapabilityServerPlacedProber,
+	// saving or testing a placed server refuses immediately rather than
+	// falling back to probing on the default hostd with typed-in secrets.
+	inner := &fakeProber{hostEntries: []string{"placed-cap"}}
+	client.Config.CapabilityServers = unplacedOnlyProber{inner}
+	placedWithSecret := protocol.ServerConfig{
+		Command: "placed-cap", Run: protocol.RunHostd, Hostd: "ws-a",
+		Config: map[string]any{"project": "p1"},
+	}
+	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{
+		ID: configCap, Config: placedWithSecret, ConfigSecrets: map[string]string{"token": "must-not-probe-default"},
+	}); err == nil {
+		t.Error("SetCapabilityServer succeeded without CapabilityServerPlacedProber")
+	}
+	if _, err := hc.TestCapabilityServer(ctx, ui.TestCapabilityServerRequest{
+		ID: configCap, Config: &placedWithSecret, ConfigSecrets: map[string]string{"token": "must-not-probe-default"},
+	}); err == nil {
+		t.Error("TestCapabilityServer succeeded without CapabilityServerPlacedProber")
+	}
+	if len(inner.probed) > 0 || len(inner.resolved) > 0 {
+		t.Errorf("placed server touched default hostd prober without PlacedProber: probed=%+v resolved=%+v", inner.probed, inner.resolved)
+	}
+}
+
+type unplacedOnlyProber struct{ p *fakeProber }
+
+func (u unplacedOnlyProber) Statuses() []servers.Status { return u.p.Statuses() }
+func (u unplacedOnlyProber) Probe(ctx context.Context, id string, cfg protocol.ServerConfig, extra protocol.SecretLookup) servers.ProbeResult {
+	return u.p.Probe(ctx, id, cfg, extra)
+}
+func (u unplacedOnlyProber) HostCapabilityEntries(ctx context.Context) ([]string, error) {
+	return u.p.HostCapabilityEntries(ctx)
 }
 
 // Only config-map's secret_values is merged into what is stored: another

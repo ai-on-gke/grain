@@ -642,8 +642,7 @@ type AgentChoice struct {
 	// back to the rest of the rotation only when unavailable or paused.
 	PreferFramework string
 	PreferModel     string
-	// TaskID is the task the run is for, whose hostd pin or selector
-	// (model.Store.TaskHostd) routes its host work.
+	// TaskID is the task the run is for.
 	TaskID string
 }
 
