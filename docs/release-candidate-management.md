@@ -146,11 +146,12 @@ qualification, or that a person rejects, is dropped and a later run cuts
   (`success`) once every blocker has landed (`neutral` if superseded). Before
   cutting `rc.(N+1)` (`next_n > 1`), Phase 2 reads
   `commits/<floor>/check-runs?check_name=grain%2Frc-hold&filter=all` (or
-  `RELEASE_HOLD_CHECKS_JSON` in tests): if the newest check run from
-  `RELEASE_QUALIFICATION_APP` is not `completed`, Phase 2 cuts nothing, logs
+  `RELEASE_HOLD_CHECKS_JSON` in tests): if `RELEASE_QUALIFICATION_APP` is unset
+  it refuses rather than trust another app's check run, and if the newest check
+  run from `RELEASE_QUALIFICATION_APP` is not `completed`, Phase 2 cuts nothing, logs
   `phase 2: vX.Y.0-rc.(N+1) is held by grain/rc-hold on <floor>: <summary>`,
-  emits `rc_held=vX.Y.0-rc.(N+1)` and exits 0. No check run at all means no
-  hold.
+  emits `rc_held=vX.Y.0-rc.(N+1)` and exits 0. No check run from
+  `RELEASE_QUALIFICATION_APP` means no hold.
 - **Converging `rc.3` on `release/vX.Y.0`.** After `rc.2` is dropped, Phase 2
   creates the short-lived `release/vX.Y.0` branch from `rc.2`'s commit and
   cuts `rc.3` from cherry-picked `fix:` commits (`Backported-from: <sha>`) on

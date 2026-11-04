@@ -451,6 +451,41 @@ expect "rc-hold, absent" "cuts rc.2 with no hold check" eq "$(remote_tag v2.3.0-
 expect "rc-hold, absent" "publishes rc.2" images_were "rc v2.3.0-rc.2"
 expect "rc-hold, absent" "emits no rc_held" no_line '^rc_held=' "$work/train.out"
 
+# Hardening: RELEASE_QUALIFICATION_APP unset refuses rather than trust a foreign
+# completion, numeric app id matches, whitespace-only summary still holds, and a
+# malformed check-run response fails closed.
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+tag_remote v2.3.0-rc.1-discarded "$c2" 2
+runs "$c2" "$c3"
+jq -cn --arg sha "$c2" --arg t1 "$(iso $((now - 300)))" --arg t2 "$(iso $((now - 60)))" \
+  '{check_runs:[
+    {id:1,name:"grain/rc-hold",head_sha:$sha,status:"in_progress",started_at:$t1,output:{title:"Holding v2.3.0-rc.2",summary:"waiting on task 101"},app:{id:42,slug:"grain-test"}},
+    {id:2,name:"grain/rc-hold",head_sha:$sha,status:"completed",conclusion:"success",started_at:$t2,output:{title:"Done",summary:"forged"},app:{id:15368,slug:"github-actions"}}
+  ]}' > "$work/hold-checks.json"
+: > "$work/images.log"
+train RELEASE_QUALIFICATION_APP=
+expect "rc-hold, no app configured" "exits 1" eq "$status" 1
+expect "rc-hold, no app configured" "says why" has "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted"
+expect "rc-hold, no app configured" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+expect "rc-hold, no app configured" "publishes nothing" images_were ""
+
+jq -cn --arg sha "$c2" --arg t "$(iso $((now - 300)))" \
+  '{check_runs:[{id:1,name:"grain/rc-hold",head_sha:$sha,status:"in_progress",started_at:$t,output:{title:"Holding v2.3.0-rc.2",summary:"  \n\t  "},app:{id:42,slug:"grain-test"}}]}' \
+  > "$work/hold-checks.json"
+: > "$work/train.out"
+train RELEASE_QUALIFICATION_APP=42 RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "rc-hold, whitespace summary & numeric app" "exits 0" eq "$status" 0
+expect "rc-hold, whitespace summary & numeric app" "falls back to title instead of skipping hold" \
+  has "phase 2: v2.3.0-rc.2 is held by grain/rc-hold on ${c2:0:12}: Holding v2.3.0-rc.2"
+expect "rc-hold, whitespace summary & numeric app" "emits rc_held=v2.3.0-rc.2" grep -qxF "rc_held=v2.3.0-rc.2" "$work/train.out"
+expect "rc-hold, whitespace summary & numeric app" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+
+echo '{"message":"bad gateway"}' > "$work/hold-checks.json"
+train
+expect "rc-hold, malformed json" "exits 1" eq "$status" 1
+expect "rc-hold, malformed json" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+
 # --- a same-named check run from another app qualifies nothing ---
 setup ""
 tag_remote v2.3.0-rc.1 "$c2" 3
@@ -841,6 +876,20 @@ if [ -n "$api" ]; then
     "$c2" "$(iso $((now - 60)))" > "$work/www/gh/repos/o/r/commits/$c2/check-runs"
   train RELEASE_RUNS_JSON= RELEASE_HOLD_CHECKS_JSON= GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$api/gh"
   expect "github actions, rc-hold completed" "cuts rc.2 once completed" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
+
+  # Flooding commits/<floor>/check-runs with 100 foreign runs per page fails closed
+  # instead of dropping grain's hold off the end of page 1.
+  setup ""
+  tag_remote v2.3.0-rc.1 "$c2" 3
+  tag_remote v2.3.0-rc.1-discarded "$c2" 2
+  github_runs "$c3"
+  mkdir -p "$work/www/gh/repos/o/r/commits/$c2"
+  jq -cn --arg sha "$c2" --arg t "$(iso $((now - 60)))" \
+    '{check_runs: [range(1; 101) | {id: ., name: "grain/rc-hold", head_sha: $sha, status: "completed", conclusion: "success", started_at: $t, app: {id: 15368, slug: "github-actions"}}]}' \
+    > "$work/www/gh/repos/o/r/commits/$c2/check-runs"
+  train RELEASE_RUNS_JSON= RELEASE_HOLD_CHECKS_JSON= RELEASE_GITHUB_PAGES=1 GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$api/gh"
+  expect "github actions, rc-hold flooded" "exits 1 rather than fail open" eq "$status" 1
+  expect "github actions, rc-hold flooded" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
 fi
 
 setup ""

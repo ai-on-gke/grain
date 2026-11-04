@@ -162,11 +162,12 @@
 #                            check runs from instead
 #   RELEASE_QUALIFICATION_APP
 #                            the GitHub App (slug or numeric id) grain posts
-#                            grain/release-qualification as: only its check
-#                            run qualifies an rc, never a same-named one
-#                            from an Actions workflow or another app; unset,
-#                            Stage 2 trusts no check run and the train stops
-#                            (candidate-gate.sh's CHECK_QUALIFICATION_APP)
+#                            grain/release-qualification and grain/rc-hold as:
+#                            only its check runs qualify an rc or lift a hold,
+#                            never same-named ones from an Actions workflow or
+#                            another app; unset, neither check run is trusted
+#                            and the train stops (candidate-gate.sh's
+#                            CHECK_QUALIFICATION_APP)
 #   RELEASE_IMAGES           the image publisher (bash scripts/release-images.sh);
 #                            "off" publishes nothing
 #   RELEASE_NOTES_TASK       "off" files no release-notes task
@@ -556,24 +557,41 @@ qualification_json() {
 }
 
 # rc_hold_summary <floor_sha>: if the newest grain/rc-hold check run on
-# floor_sha (from RELEASE_QUALIFICATION_APP when set) is not completed,
-# prints its summary; otherwise prints nothing. No check at all means no
-# hold.
+# floor_sha from RELEASE_QUALIFICATION_APP is not completed, prints its
+# summary; otherwise prints nothing. No check at all means no hold; an unset
+# RELEASE_QUALIFICATION_APP refuses rather than trust another app's check run.
 rc_hold_summary() {
-  local app_id="" hold_checks=""
+  local app_id="" hold_checks="" pages page n flooded=false
   [[ ! "${RELEASE_QUALIFICATION_APP:-}" =~ ^[0-9]+$ ]] || app_id="&app_id=$RELEASE_QUALIFICATION_APP"
   if [ -n "${RELEASE_HOLD_CHECKS_JSON:-}" ]; then
+    [ -n "${RELEASE_QUALIFICATION_APP:-}" ] ||
+      die "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted: set it to the slug or id of the GitHub App grain posts it as"
     gate_json RELEASE_HOLD_CHECKS_JSON "" "$work/hold-checks.json"
     hold_checks="$work/hold-checks.json"
   elif [ -n "$github_token" ]; then
-    github_get "commits/$1/check-runs?check_name=grain%2Frc-hold&filter=all&per_page=100$app_id" "$work/hold-checks.json" ||
-      die "could not read the grain/rc-hold check runs on ${1:0:12} from $github_api"
+    [ -n "${RELEASE_QUALIFICATION_APP:-}" ] ||
+      die "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted: set it to the slug or id of the GitHub App grain posts it as"
+    pages="${RELEASE_GITHUB_PAGES:-3}"
+    : > "$work/hold-checks.jsonl"
+    flooded=true
+    for ((page = 1; page <= pages; page++)); do
+      github_get "commits/$1/check-runs?check_name=grain%2Frc-hold&filter=all&per_page=100&page=$page$app_id" "$work/hold-page.json" ||
+        die "could not read the grain/rc-hold check runs on ${1:0:12} from $github_api"
+      n="$(jq 'if type == "object" and (.check_runs | type == "array") then .check_runs | length else error("not a check run listing") end' "$work/hold-page.json" 2>/dev/null)" ||
+        die "$github_api's answer for grain/rc-hold on ${1:0:12} is not a listing of check runs"
+      cat "$work/hold-page.json" >> "$work/hold-checks.jsonl"
+      if [ "$n" -lt 100 ]; then
+        flooded=false
+        break
+      fi
+    done
+    jq -s '{check_runs: (map(.check_runs) | add // [])}' "$work/hold-checks.jsonl" > "$work/hold-checks.json"
     hold_checks="$work/hold-checks.json"
   else
     return 0
   fi
   # shellcheck disable=SC2016 # jq, not shell
-  jq -r --arg sha "${1,,}" --arg app "${RELEASE_QUALIFICATION_APP:-}" '
+  jq -r --arg sha "${1,,}" --arg app "${RELEASE_QUALIFICATION_APP:-}" --argjson flooded "$flooded" '
     def epoch:
       if . == null or . == "" then 0
       else sub("\\.[0-9]+"; "")
@@ -582,19 +600,23 @@ rc_hold_summary() {
             | ($c.d + "Z" | fromdateiso8601) - (($c.s + "1" | tonumber) * (($c.h | tonumber) * 3600 + ($c.m | tonumber) * 60)))
           end
       end;
-    def from_app: $app == "" or ((.app | type == "object")
-      and ((.app.slug // "") == $app or ((.app.id // "") | tostring) == $app));
+    def from_app: $app != "" and (.app | type == "object")
+      and ((.app.slug // "") == $app or ((.app.id // "") | tostring) == $app);
     def sha_ok: (. // "" | ascii_downcase) as $h | $h == "" or ($sha | startswith($h)) or ($h | startswith($sha));
-    [ (if type == "array" then . else (.check_runs // []) end)[]
-      | select(.name == "grain/rc-hold")
-      | select(.head_sha | sha_ok)
-      | select(from_app) ]
+    (if type == "array" then .
+     elif type == "object" and (.check_runs | type == "array") then .check_runs
+     else error("not a check run listing") end) as $runs
+    | [ $runs[]
+        | select(.name == "grain/rc-hold")
+        | select(.head_sha | sha_ok)
+        | select(from_app) ]
+    | if length == 0 and $flooded then error("all fetched grain/rc-hold pages were from other apps") else . end
     | sort_by([(.id // 0), ((.started_at // .startedAt) | epoch)])
     | last // empty
-    | select((.status // "completed") != "completed")
-    | ([.output.summary, .output.title, .status] | map(select(type == "string" and length > 0)) | first // "in_progress")
-    | gsub("[\\r\\n]+"; " ")
-    | sub("^\\s+"; "") | sub("\\s+$"; "")
+    | select((.status // "") != "completed")
+    | ([.output.summary, .output.title, .status]
+        | map(select(type == "string") | gsub("[\\r\\n]+"; " ") | sub("^\\s+"; "") | sub("\\s+$"; "") | select(length > 0))
+        | first // "in_progress")
   ' "$hold_checks" || die "could not parse grain/rc-hold check runs on ${1:0:12}"
 }
 
