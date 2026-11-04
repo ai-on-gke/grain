@@ -158,6 +158,71 @@ func TestHostdUpgradeScriptDrainsOnlyAHostdOnAnOldBinary(t *testing.T) {
 	}
 }
 
+// A move of current that lands while the drain script runs starts no run
+// of its own -- systemd merges it into the one under way -- so a run that
+// read current before the move, and found hostd already on it, looks
+// again before it exits and drains hostd onto the moved link.
+func TestHostdUpgradeScriptDrainsOntoAMoveThatLandsWhileItRuns(t *testing.T) {
+	sleepBin, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("no sleep")
+	}
+	dir := t.TempDir()
+	versions := filepath.Join(dir, "hostd")
+	stubs := filepath.Join(dir, "stubs")
+	calls := filepath.Join(dir, "calls")
+	for _, d := range []string{filepath.Join(versions, "old"), filepath.Join(versions, "new"), stubs} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := os.ReadFile(sleepBin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{"old", "new"} {
+		if err := os.WriteFile(filepath.Join(versions, v, "grain"), data, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	current := filepath.Join(versions, "current")
+	if err := os.Symlink("old", current); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(dir, "hostd-upgrade.sh")
+	runBash(t, shellFunction(t, "write_hostd_upgrade_script")+"write_hostd_upgrade_script\n",
+		"HOSTD_UPGRADE_SCRIPT="+script, "HOSTD_VERSIONS_DIR="+versions,
+		"HOSTD_SOCKET=/run/grain-hostd/hostd.sock", "GRAIN_USER=grain")
+
+	hostd := exec.Command(filepath.Join(versions, "old", "grain"), "30")
+	if err := hostd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { hostd.Process.Kill(); hostd.Wait() }()
+	// The extractor's move lands just after this run has read current:
+	// while it starts grain-hostd-allowlist.service, the first time.
+	moved := filepath.Join(dir, "moved")
+	for name, body := range map[string]string{
+		"systemctl": `if [ "$1" = start ] && [ ! -e ` + moved + ` ]; then
+  touch ` + moved + `
+  ln -sfn new ` + current + `.new && mv -fT ` + current + `.new ` + current + `
+  exit 0
+fi
+[ "$1" = show ] && echo ` + strconv.Itoa(hostd.Process.Pid) + "\n",
+		"runuser": `echo "runuser $*" >> ` + calls + "\n",
+	} {
+		if err := os.WriteFile(filepath.Join(stubs, name), []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runBash(t, script, "PATH="+stubs+":"+os.Getenv("PATH"))
+	got, _ := os.ReadFile(calls)
+	want := "runuser -u grain -- " + filepath.Join(versions, "new", "grain") + " hostd -drain -socket /run/grain-hostd/hostd.sock\n"
+	if string(got) != want {
+		t.Errorf("a move of current while the script ran: %q, want %q", got, want)
+	}
+}
+
 // The extractor takes that lock before the new version's directory and
 // lets it go only once current has moved.
 func TestTheExtractorMovesCurrentUnderTheVersionsLock(t *testing.T) {
