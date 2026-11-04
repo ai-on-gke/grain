@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { signIn, writeAccessCode } from "./accesscode.js";
+import { chooseOption } from "./searchSelect.js";
 
 // §5 of docs/test-plans/2026-10-06.md: every model a connection's
 // provider lists is advertised (645822463), every Model picker searches
@@ -315,7 +316,7 @@ test.describe("discovered models and searchable pickers (§5)", () => {
     await page.getByRole("button", { name: "+ New task" }).click();
     await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
     await page.getByLabel("Title").fill(`Picker new task ${Date.now()}`);
-    await page.getByLabel(/^Repos/).selectOption("acme/widgets");
+    await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
     await pickByTyping(
       page,
       page.getByRole("combobox", { name: "Model", exact: true }),

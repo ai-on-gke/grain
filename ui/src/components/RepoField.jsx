@@ -14,6 +14,8 @@
 
 import { useState } from "react";
 import ItemGlyph from "./ItemGlyph.jsx";
+import { looksLikeRepo } from "./RepoPicker.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import { identifierField } from "../identifierField.js";
 
 // CUSTOM is the select's escape hatch, not a real option a repo could
@@ -149,61 +151,87 @@ export default function RepoField({
     );
   }
 
+  // The list is searched as it is typed into (SearchSelect, fuzzy.js):
+  // "grain" finds ai-on-gke/grain wherever in the name it sits, which a
+  // native <select>'s type-ahead -- first letters only -- never could
+  // (grain/task-2879). The rows other than repos are searched by what
+  // they say, so "no repo" finds NO_REPO; "Other…" is pinned, so a
+  // search that found nothing still offers the way out of the list.
+  const rows = [
+    // The empty row's label is empty too, so choosing it leaves the box
+    // blank under its placeholder rather than holding a dash.
+    ...(!required ? [{ value: "", label: "", row: "—" }] : []),
+    ...options.map((r) => ({ value: r, label: r })),
+    ...(allowNoRepo
+      ? [
+          {
+            value: NO_REPO,
+            label: "No repo (standalone task -- nothing to check out)",
+          },
+        ]
+      : []),
+    ...changeTargets.map((kind) => ({
+      value: kind,
+      label: `${kind} -- a changelist in a ${kind} workspace, no git checkout`,
+    })),
+    { value: CUSTOM, label: "Other…", pinned: true },
+  ];
+  const pick = (v) => {
+    if (v === CUSTOM) {
+      // "Other…" reports the value the text input it swaps in is about
+      // to show (its own defaultValue), not the option that was just
+      // left behind: a caller tracking this field's value -- to enable a
+      // submit button on it, say -- would otherwise still be holding a
+      // repo that is no longer displayed anywhere, and in particular
+      // would still think NO_REPO was chosen.
+      setCustom(true);
+      onChange?.(defaultValue);
+      return;
+    }
+    onChange?.(v);
+    onCommit?.(v);
+  };
+
   return (
     <div className="repo-field">
-      <div className="repo-field-control">
-        <RepoGlyph />
-        <select
-          name={name}
-          defaultValue={selectDefault}
-          required={required}
-          onChange={(e) => {
-            if (e.target.value === CUSTOM) {
-              // "Other…" reports the value the text input it swaps in
-              // is about to show (its own defaultValue), not the option
-              // that was just left behind: a caller tracking this
-              // field's value -- to enable a submit button on it, say --
-              // would otherwise still be holding a repo that is no
-              // longer displayed anywhere, and in particular would
-              // still think NO_REPO was chosen.
-              setCustom(true);
-              onChange?.(defaultValue);
-              return;
-            }
-            onChange?.(e.target.value);
-            onCommit?.(e.target.value);
-          }}
-        >
-          {!required && <option value="">—</option>}
-          {options.map((r) => (
-            <option key={r} value={r}>
-              {r}
-            </option>
-          ))}
-          {allowNoRepo && (
-            <option value={NO_REPO}>
-              No repo (standalone task -- nothing to check out)
-            </option>
-          )}
-          {changeTargets.map((kind) => (
-            <option key={kind} value={kind}>
-              {`${kind} -- a changelist in a ${kind} workspace, no git checkout`}
-            </option>
-          ))}
-          <option value={CUSTOM}>Other…</option>
-        </select>
-      </div>
+      <SearchSelect
+        name={name}
+        options={rows}
+        defaultValue={selectDefault}
+        onChange={pick}
+        // A repo typed in full that the list does not hold is offered as
+        // a row of its own, the way RepoPicker offers one, rather than
+        // only behind "Other…" -- and leaving the box with one typed in
+        // takes it (SearchSelect), since clicking Create is itself what
+        // blurs the box.
+        typedOption={(text) =>
+          looksLikeRepo(text) && !/\s/.test(text) && !options.includes(text)
+            ? { value: text, label: text, row: `Use ${text}` }
+            : null
+        }
+        noOptionsText="No matching repos"
+        renderInput={(params) => (
+          <div className="repo-field-control" ref={params.InputProps.ref}>
+            <RepoGlyph />
+            <input
+              {...params.inputProps}
+              {...identifierField}
+              placeholder="Search repos…"
+            />
+            <span className="repo-field-caret" aria-hidden="true" />
+          </div>
+        )}
+      />
     </div>
   );
 }
 
-// The repos figure in front of the field, not on each option: an
-// <option> can hold no markup, and this stays a native <select> for the
-// semantics its own tests and a phone's own picker rely on. In front of
-// the whole control the ring says the same thing once -- what this field
-// names -- for a picker whose caption is often the single word "Repo",
-// and it is the same figure the Repos page and the read-only repos
-// picker beside this one carry (ItemGlyph.jsx).
+// The repos figure in front of the field, not on each row: every row of
+// this list names the same kind of thing, so the ring says it once, in
+// front of the whole control -- what this field names -- for a picker
+// whose caption is often the single word "Repo", and it is the same
+// figure the Repos page and the read-only repos picker beside this one
+// carry (ItemGlyph.jsx).
 function RepoGlyph() {
   return (
     <span className="repo-field-icon">

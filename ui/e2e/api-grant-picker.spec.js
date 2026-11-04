@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { expect, test } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // The grain API half of the task pane's Grants picker (GrantsPicker.jsx)
 // over grain demo's real /api/config, whose capability rows carry the
@@ -247,7 +248,10 @@ test("exercises Grain API picker across NewTaskOverlay, ConsoleSessionPage, Sche
   const menu = page.getByTestId("new-process-kind");
   await menu.getByRole("menuitem", { name: "Schedule" }).click();
   await page.getByLabel("Title", { exact: true }).fill(schedTitle);
-  await page.locator("select[name='repo']").selectOption("acme/widgets");
+  await chooseOption(
+    page.locator(".repo-field:has(input[name='repo']) [role='combobox']"),
+    "acme/widgets",
+  );
 
   const schedGroup = page.getByTestId("schedule-grants");
   await grantSelfDebugAndRepoCIWrite(page, schedGroup);

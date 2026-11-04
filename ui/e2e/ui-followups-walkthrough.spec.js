@@ -14,6 +14,7 @@
 
 import { request as playwrightRequest } from "@playwright/test";
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // docs/test-plans/2026-10-04.md §9, "UI behaviour from yesterday's
 // walkthroughs" (grain/task-1835, docs/test-runs/2026-10-04-ui-followups.md),
@@ -71,10 +72,12 @@ test("nothingNeededAction picked on a template is what Run now files", async ({
     await page.getByRole("button", { name: "+ New template" }).click();
     await page.locator('input[name="name"]').fill(name);
     await page.locator('input[name="title"]').fill(`NN ${action} ${stamp}`);
-    await page
-      .locator('select[name="repo"]')
-      .first()
-      .selectOption("acme/widgets");
+    await chooseOption(
+      page
+        .locator('.repo-field:has(input[name="repo"]) [role="combobox"]')
+        .first(),
+      "acme/widgets",
+    );
     await page.getByLabel("When the agent finds nothing to do").click();
     await page.getByRole("option", { name: option, exact: true }).click();
     await page.getByRole("button", { name: "Add template" }).click();
@@ -199,7 +202,7 @@ test("a base branch GitHub cannot be asked about is accepted without a warning i
   await page.goto("/");
   await page.getByRole("button", { name: "+ New task" }).click();
   await page.getByLabel("Title").fill(`Base probe ${Date.now()}`);
-  await page.getByLabel(/^Repos/).selectOption("acme/widgets");
+  await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
   const refs = page.waitForResponse((r) =>
     r.url().endsWith("/api/repos/acme/widgets/github-branches"),
   );

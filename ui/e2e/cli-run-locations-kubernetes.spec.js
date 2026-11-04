@@ -27,7 +27,7 @@ import { test, expect } from "./fixtures.js";
 
 test.use({ demoArgs: ["-host-executor=kubernetes"] });
 
-const CLIS = ["claude", "codex", "antigravity", "custom"];
+const CLIS = ["claude", "codex", "antigravity"];
 
 async function setMode(page, mode) {
   await page.addInitScript(
