@@ -662,7 +662,7 @@ jobs:
             ./pkg/version/... ./tests/bench/...
 
   # The vendored granule tree's own tests. third_party/granule is a module
-  # of its own (github.com/bwsalmon/granule), so none of the four shards
+  # of its own (github.com/gke-labs/granule), so none of the four shards
   # above reaches it -- their `./...` stops at its go.mod -- and until
   # this job the only thing that ran `go test` in it was somebody doing it
   # by hand. pkg/forward/forward_test.go's refusal of Open frames for targets

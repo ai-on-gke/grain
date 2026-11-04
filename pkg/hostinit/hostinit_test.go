@@ -2093,7 +2093,7 @@ func TestInitLeavesADeploymentThatCanBeSignedIntoAndDispatch(t *testing.T) {
 	sys.on("", nil, "docker", "image", "inspect", full.GuestImage)
 
 	// The two builds this fake host has not already done.
-	sys.on("", nil, "go", "build", "-o", full.GranuleBinaryPath, "github.com/bwsalmon/granule/cmd/granule")
+	sys.on("", nil, "go", "build", "-o", full.GranuleBinaryPath, "github.com/gke-labs/granule/cmd/granule")
 	sys.on("", nil, "make", "build")
 	sys.on("", nil, "setcap", "cap_net_bind_service=+ep", full.GrainBinaryPath)
 

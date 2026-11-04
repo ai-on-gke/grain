@@ -76,6 +76,11 @@ type HTTPClient struct {
 	Audience string
 	// TokenProvider dynamically resolves an authentication token for each request.
 	TokenProvider func(ctx context.Context) (string, error)
+	// ContextToken is the credential of the CLI's named context
+	// (external-cli.spec.md#XC-4): asked after the environment's tokens
+	// and before the local API token or a Google ID token. "" with no
+	// error falls through to those.
+	ContextToken func(ctx context.Context) (string, error)
 	// User is the optional identity to send in proxy identity headers (e.g. X-Forwarded-User).
 	User string
 	// RetryPolicy is how long a call waits out a daemon that is not
@@ -165,6 +170,15 @@ func (c *HTTPClient) resolveToken(ctx context.Context) (string, error) {
 	for _, env := range TokenEnvVars {
 		if val := strings.TrimSpace(os.Getenv(env)); val != "" {
 			return val, nil
+		}
+	}
+	if c.ContextToken != nil {
+		tok, err := c.ContextToken(ctx)
+		if err != nil {
+			return "", contextTokenError{err}
+		}
+		if tok != "" {
+			return tok, nil
 		}
 	}
 
@@ -538,9 +552,13 @@ func (c *HTTPClient) send(ctx context.Context, method string, newRequest func() 
 			return nil, err
 		}
 		if err := c.prepareRequest(ctx, req); err != nil {
+			var own contextTokenError
+			if errors.As(err, &own) {
+				return nil, own.err // already says what it is about
+			}
 			return nil, fmt.Errorf("authenticating request to %s: %w", c.BaseURL, err)
 		}
-		resp, err := c.httpClient().Do(req)
+		resp, err := c.redirectClient().Do(req)
 		var failure error
 		switch {
 		case err != nil && retryableError(method, err) && ctx.Err() == nil:
@@ -626,6 +644,9 @@ func (c *HTTPClient) do(ctx context.Context, method, path string, body, out any)
 	}
 	defer resp.Body.Close()
 
+	if err := signInResponse(c.BaseURL, resp); err != nil {
+		return err
+	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return c.httpError(resp)
 	}
@@ -732,7 +753,7 @@ func (c *HTTPClient) SandboxHealth(ctx context.Context) (SandboxHealthResponse, 
 
 func (c *HTTPClient) ListTasks(ctx context.Context) ([]Task, error) {
 	var tasks []Task
-	if err := c.do(ctx, http.MethodGet, "/api/tasks", nil, &tasks); err != nil {
+	if err := c.do(ctx, http.MethodGet, "/api/tasks?fields=full", nil, &tasks); err != nil {
 		return nil, err
 	}
 	return tasks, nil

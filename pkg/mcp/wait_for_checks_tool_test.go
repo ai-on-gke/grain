@@ -31,6 +31,9 @@ import (
 type scriptedChecks struct {
 	head    *github.BranchHead
 	headErr error
+	// repoErr is what a read of the repository itself answers, which
+	// happens only once the branch has come back missing.
+	repoErr error
 
 	// rounds[i] is the answer to the i'th read of CI; the last entry
 	// answers every read after it, so a script does not have to guess
@@ -59,10 +62,14 @@ func (s *scriptedChecks) GetBranchHead(owner, repo, branch string) (*github.Bran
 
 // wait_for_checks waits on the branch it was given and never resolves a
 // base: it points at base_branch_status in words when something fails
-// (baseComparisonPointer) rather than reading that branch itself, and a
-// call here would mean it had started to.
+// (baseComparisonPointer) rather than reading that branch itself. The
+// one read of the repository it makes is confirmRepoReadable's, on the
+// branch-not-found path only, and repoErr is what that read answers.
 func (s *scriptedChecks) DefaultBranch(string, string) (string, error) {
-	return "", errors.New("wait_for_checks must not resolve the default branch")
+	if s.head != nil {
+		return "", errors.New("wait_for_checks must not resolve the default branch")
+	}
+	return "main", s.repoErr
 }
 
 func (s *scriptedChecks) FindOpenPullRequestForBranch(string, string, string) (*github.PullRequest, error) {

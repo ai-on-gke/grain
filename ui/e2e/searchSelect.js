@@ -51,3 +51,31 @@ export async function optionValues(box) {
   await box.press("Escape");
   return values;
 }
+
+// chooseOptions ticks several rows of a multiple SearchSelect box in
+// turn; the list stays open between them.
+export async function chooseOptions(box, wanted) {
+  for (const w of wanted) await chooseOption(box, w);
+}
+
+// chips is the locator for the chips a multiple SearchSelect box holds,
+// one per chosen value, each carrying its value as data-value.
+export function chips(box) {
+  return box
+    .locator("xpath=ancestor::*[contains(@class,'MuiAutocomplete-root')][1]")
+    .locator(".MuiChip-root[data-value]");
+}
+
+// chosenValues is the values a multiple SearchSelect box holds.
+export async function chosenValues(box) {
+  return chips(box).evaluateAll((cs) => cs.map((c) => c.dataset.value));
+}
+
+// removeOption takes one value back off a multiple SearchSelect box with
+// its chip's delete button; wanted is the value.
+export async function removeOption(box, wanted) {
+  await chips(box)
+    .and(box.page().locator(`[data-value=${JSON.stringify(wanted)}]`))
+    .locator(".MuiChip-deleteIcon")
+    .click();
+}

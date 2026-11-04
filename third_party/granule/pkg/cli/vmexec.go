@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/dockervm"
-	"github.com/bwsalmon/granule/pkg/vmspec"
+	"github.com/gke-labs/granule/pkg/dockervm"
+	"github.com/gke-labs/granule/pkg/vmspec"
 )
 
 // exitStatusError carries a guest command's own exit status out to Run,

@@ -1,0 +1,13 @@
+name: Release train
+# The continuous release train (design/playbook/releases.playbook.md
+# section 0.4): every 20 minutes, one tick of
+# .grain/templates/release-train.yml -- judge the rc in qualification,
+# release it (vX.Y.Z and latest) or drop it, or cut the next rc. A tick
+# with nothing to do is one command and a nothing_needed close
+# (scripts/release-train-task.sh, RELEASE_TRAIN_RESULT=noop). overlap: skip,
+# so two ticks never race for the same tags.
+template: release-train
+base: main
+every:
+  minutes: 20
+overlap: skip

@@ -320,8 +320,8 @@ const GROUPS = [
     hint: "A run stopped to ask something, you stopped its turn, or it answered on the task itself and opened no pull request. Reply to run it again, or acknowledge to close it.",
     match: (t) => t.state === "awaiting_reply",
     // Which of "Asked"'s cases this is (state.js's askedCase): a
-    // question, a stopped turn, or a conversation waiting for its next
-    // message.
+    // question, an answer, a stopped turn, or a conversation waiting for
+    // its next message.
     note: (t) => askedCase(t)?.title || null,
     // The one group whose response can be prose rather than a verb, so it
     // opens Responder below in addition to offering Acknowledge.
@@ -1311,7 +1311,8 @@ function Responder({ t, open, onAct, onOpenTask, onSent, showError }) {
   // questions, a report waiting to be read) is grain's own text with no
   // summary of its own to stand in for it, so it is shown whole.
   const shown = (expanded) =>
-    effectiveDetail?.state === "awaiting_reply" ? (
+    effectiveDetail?.state === "awaiting_reply" &&
+    Boolean(effectiveDetail?.questionSummary || question?.summary) ? (
       <QuestionDisclosure
         t={effectiveDetail}
         question={question}

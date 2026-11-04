@@ -39,12 +39,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -63,9 +65,7 @@ const ciActionsCaller = "ci-read"
 const MaxActionsLogBytes = ci.MaxStepOutput
 
 // ActionsRunID is the ci:read id of run runID of repo.
-func ActionsRunID(repo string, runID int64) string {
-	return ActionsRunIDPrefix + strings.ReplaceAll(repo, "/", ":") + ":" + strconv.FormatInt(runID, 10)
-}
+func ActionsRunID(repo string, runID int64) string { return ci.ActionsRunID(repo, runID) }
 
 // ParseActionsRunID reads an id ActionsRunID made back into its
 // repository and GitHub run id (ci.ParseActionsRunID).
@@ -681,7 +681,8 @@ func actionsRunWithJobs(repo model.RepoRef, r github.WorkflowRun, jobs []github.
 			Status:     j.Status,
 		}
 		for _, st := range j.Steps {
-			job.Steps = append(job.Steps, ci.StepRun{Name: st.Name, Conclusion: actionsConclusion(st.Status, st.Conclusion)})
+			job.Steps = append(job.Steps, ci.StepRun{Name: st.Name, Conclusion: actionsConclusion(st.Status, st.Conclusion),
+				StartedAt: st.StartedAt, FinishedAt: st.CompletedAt})
 		}
 		if job.Conclusion == ci.ConclusionFailure {
 			run.Actions.FailedJobs = append(run.Actions.FailedJobs, j.Name)
@@ -732,6 +733,11 @@ func (s *Server) handleGetCIRunLog(w http.ResponseWriter, r *http.Request) {
 			writeClientError(w, err)
 			return
 		}
+		if status == http.StatusBadGateway {
+			// Why the forge served no log is what the agent asking needs
+			// to act on, and it is already trusted with the log itself.
+			err = apierror.Expose(err)
+		}
 		writeError(w, status, err)
 		return
 	}
@@ -774,14 +780,41 @@ func (c *Client) actionsJobLog(ctx context.Context, repo model.RepoRef, runID in
 		case errors.Is(err, errActionsBudgetLow):
 			return job, "", http.StatusServiceUnavailable, err
 		case errors.As(err, &gh) && (gh.Status == http.StatusNotFound || gh.Status == http.StatusGone):
-			return job, "", http.StatusNotFound, fmt.Errorf("the forge has no log for job %q (%d): it is past its retention window, or not written yet", job.Name, job.ID)
+			return job, "", http.StatusNotFound, fmt.Errorf("the forge has no log for job %q (%d), %s: it is past its retention window, or not written yet", job.Name, job.ID, forgeAnswer(gh))
 		case errors.As(err, &gh) && gh.Status == http.StatusForbidden:
-			return job, "", http.StatusForbidden, fmt.Errorf("the forge refused job %q's log to this deployment's credential (it needs actions:read)", job.Name)
+			return job, "", http.StatusForbidden, fmt.Errorf("the forge refused job %q's log to this deployment's credential (it needs actions:read), %s", job.Name, forgeAnswer(gh))
+		case errors.As(err, &gh):
+			// The status and hosts, not the body: that is whatever page
+			// the forge or its blob store answered with.
+			return job, "", http.StatusBadGateway, fmt.Errorf("reading job %q's log from the forge: %s", job.Name, forgeAnswer(gh))
 		default:
 			return job, "", http.StatusBadGateway, fmt.Errorf("reading job %q's log from the forge: %w", job.Name, err)
 		}
 	}
+	if text == "" && job.Status == "completed" {
+		// A finished job always wrote something; nothing back is a log
+		// that went missing on its way here, not one that is empty.
+		return job, "", http.StatusBadGateway, fmt.Errorf("the forge answered job %q's log (%d) with no bytes at all", job.Name, job.ID)
+	}
 	return job, text, http.StatusOK, nil
+}
+
+// forgeAnswer is gh's status and the host or hosts it came from ("HTTP
+// 404 from ghe.example.com"), for a sentence saying why a log is not
+// here. The URL's path and query are left out: a log's redirect target
+// is a signed URL.
+func forgeAnswer(gh *github.Error) string {
+	out := fmt.Sprintf("HTTP %d", gh.Status)
+	var hosts []string
+	for _, field := range strings.Fields(gh.URL) {
+		if u, err := url.Parse(field); err == nil && u.Host != "" && !slices.Contains(hosts, u.Host) {
+			hosts = append(hosts, u.Host)
+		}
+	}
+	if len(hosts) > 0 {
+		out += " from " + strings.Join(hosts, ", redirected to ")
+	}
+	return out
 }
 
 // ExternalCIRuns is this client's GitHub Actions runs as ci.ExternalRuns,

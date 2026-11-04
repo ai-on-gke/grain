@@ -289,7 +289,7 @@ run_attempt() {
   if command -v granule >/dev/null 2>&1; then
     granule granulefile build -kontur-image "$granule_image" -f Granulefile -t "$IMAGE" > "$log" 2>&1 &
   else
-    go run github.com/bwsalmon/granule/cmd/granule granulefile build -kontur-image "$granule_image" -f Granulefile -t "$IMAGE" > "$log" 2>&1 &
+    go run github.com/gke-labs/granule/cmd/granule granulefile build -kontur-image "$granule_image" -f Granulefile -t "$IMAGE" > "$log" 2>&1 &
   fi
   local pid=$!
 

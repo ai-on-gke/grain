@@ -30,8 +30,6 @@ import {
   FormControl,
   FormControlLabel,
   FormHelperText,
-  InputLabel,
-  ListItemText,
   MenuItem,
   Select,
   Stack,
@@ -1655,77 +1653,59 @@ export default function NewTaskOverlay({
   const grantsNode = (
     <>
       <FormControl fullWidth margin="normal" size="small">
-        <InputLabel id="new-task-capabilities-label">
-          Legacy capabilities
-        </InputLabel>
-        <Select
-          labelId="new-task-capabilities-label"
-          label="Legacy capabilities"
+        <SearchSelect
           multiple
+          label="Legacy capabilities"
+          inputProps={{ "data-testid": "new-task-capabilities" }}
           value={capabilityIds}
-          onChange={(e) => {
+          onChange={(next) => {
             capabilitiesEdited.current = true;
-            setCapabilities([...e.target.value, ...apiIds, ...capabilityRefs]);
+            setCapabilities([...next, ...apiIds, ...capabilityRefs]);
           }}
-          renderValue={(selected) => (
-            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-              {selected.map((id) => (
-                <GrantChip
-                  key={id}
-                  grant={id}
-                  config={config}
-                  tabIndex={-1}
-                  // Marked by its border and icon, its label left at
-                  // full contrast: warning-coloured text on a light
-                  // chip is too faint to read at this size.
-                  {...(catalogueRefusals[id]
-                    ? {
-                        note: catalogueRefusals[id],
-                        variant: "outlined",
-                        icon: (
-                          <WarningAmberIcon fontSize="small" color="warning" />
-                        ),
-                        sx: { borderColor: "warning.main" },
-                        ariaSuffix: " (refused here)",
-                        "data-catalogue-refused": "true",
-                      }
-                    : {})}
-                />
-              ))}
-            </Box>
-          )}
-        >
-          {capabilityOptions.length === 0 && (
-            <MenuItem disabled>{NO_CAPABILITIES_HINT}</MenuItem>
-          )}
-          {capabilityOptions.map((c) => {
+          noOptionsText={
+            capabilityOptions.length === 0 ? NO_CAPABILITIES_HINT : "No matches"
+          }
+          options={capabilityOptions.map((c) => {
             const refused = catalogueRefusals[c.id] || "";
             const unavailable = refused || capabilityUnavailableHint(c);
-            return (
-              <MenuItem
-                key={c.id}
-                value={c.id}
-                // One the catalogue refuses here is not offered, but
-                // one already ticked stays enabled: its own row is
-                // the only way to untick it.
-                disabled={Boolean(refused) && !capabilityIds.includes(c.id)}
-                data-catalogue-refused={refused ? "true" : undefined}
-                title={
-                  unavailable
-                    ? `${c.description}\n\n${unavailable}`
-                    : c.description
-                }
-              >
-                <Checkbox checked={capabilityIds.includes(c.id)} size="small" />
-                <ListItemText
-                  primary={c.name}
-                  secondary={unavailable || null}
-                  secondaryTypographyProps={{ color: "warning.main" }}
-                />
-              </MenuItem>
-            );
+            return {
+              value: c.id,
+              label: c.name,
+              // One the catalogue refuses here is not offered, but one
+              // already ticked stays enabled: its own row is the only
+              // way to untick it.
+              disabled: Boolean(refused) && !capabilityIds.includes(c.id),
+              title: unavailable
+                ? `${c.description}\n\n${unavailable}`
+                : c.description,
+              secondary: unavailable ? (
+                <Box component="span" sx={{ color: "warning.main" }}>
+                  {unavailable}
+                </Box>
+              ) : null,
+            };
           })}
-        </Select>
+          renderChip={(o, props) => (
+            <GrantChip
+              grant={o.value}
+              config={config}
+              {...props}
+              // Marked by its border and icon, its label left at full
+              // contrast: warning-coloured text on a light chip is too
+              // faint to read at this size.
+              {...(catalogueRefusals[o.value]
+                ? {
+                    note: catalogueRefusals[o.value],
+                    variant: "outlined",
+                    icon: <WarningAmberIcon fontSize="small" color="warning" />,
+                    sx: { borderColor: "warning.main" },
+                    ariaSuffix: " (refused here)",
+                    "data-catalogue-refused": "true",
+                  }
+                : {})}
+            />
+          )}
+        />
         {defaultCapabilitiesFor(config, noRepo ? "" : repo).length > 0 && (
           <FormHelperText>
             Pre-ticked ones are the defaults for this repo -- this

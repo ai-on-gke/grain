@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bwsalmon/granule/pkg/granulefile"
+	"github.com/gke-labs/granule/pkg/granulefile"
 )
 
 // Supported lists the instructions a granule guest Dockerfile may use, in

@@ -1046,12 +1046,13 @@ describe("InboxPage", () => {
       expect(toggle).toHaveAttribute("aria-expanded", "false");
     });
 
-    it("falls back to the question's first line for a question asked without a summary", async () => {
+    it("falls back to the task's derived questionSummary for a question asked without a comment summary", async () => {
       api.mockImplementation(async (path) =>
         path === "/api/tasks/4"
           ? {
               id: "4",
               state: "awaiting_reply",
+              questionSummary: "Which base branch?",
               comments: [
                 {
                   id: 2,
@@ -1072,6 +1073,55 @@ describe("InboxPage", () => {
       expect(
         within(item).queryByText("The long version."),
       ).not.toBeInTheDocument();
+    });
+
+    it("renders a closing report whole without QuestionDisclosure when no question summary is present", async () => {
+      api.mockImplementation(async (path) =>
+        path === "/api/tasks/4"
+          ? {
+              id: "4",
+              state: "awaiting_reply",
+              comments: [
+                {
+                  id: 2,
+                  body: "## Infra review\n\nEverything is healthy.",
+                },
+              ],
+            }
+          : null,
+      );
+      renderInbox({
+        tasks: [
+          task({
+            id: "4",
+            title: "Investigate the stall",
+            state: "awaiting_reply",
+          }),
+          task({
+            id: "14",
+            title: "Parked on a question",
+            state: "awaiting_reply",
+            questionSummary: "Which base branch?",
+          }),
+        ],
+      });
+
+      const reportItem = row("Investigate the stall");
+      expect(reportItem.querySelector(".inbox-note")).toHaveTextContent(
+        "Answered in a comment",
+      );
+      expect(
+        await within(reportItem).findByText("Everything is healthy."),
+      ).toBeInTheDocument();
+      expect(within(reportItem).getByText("Infra review")).toBeInTheDocument();
+      expect(
+        within(reportItem).queryByRole("button", { name: /Show question/ }),
+      ).not.toBeInTheDocument();
+
+      const questionItem = row("Parked on a question");
+      expect(questionItem.querySelector(".inbox-note")).toHaveTextContent(
+        "Asked a question",
+      );
     });
 
     it("shows the question and posts the answer as a comment", async () => {
@@ -1294,6 +1344,7 @@ describe("InboxPage", () => {
       api.mockResolvedValue({
         id: "4",
         state: "awaiting_reply",
+        questionSummary: "Should this wait on task 91 first?",
         comments: [
           {
             id: 1,

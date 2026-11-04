@@ -671,6 +671,7 @@ var singleTenantOpenRoutes = map[string]string{
 	"GET /api/auth/access-code/login.js": "the login page's script",
 	"POST /api/auth/logout":              "signing out",
 	"GET /api/auth/logout":               "signing out",
+	"GET /api/auth/whoami":               "a CLI asking how it may sign in, which names nobody (external-cli.spec.md#XC-8)",
 	"GET /api/hostd/connect":             "a grain hostd dialing in, with the hostd token",
 	"GET /api/hostd/install.sh":          "the script that installs a grain hostd, which holds no secret",
 }

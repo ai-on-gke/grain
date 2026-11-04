@@ -13,7 +13,12 @@
 // limitations under the License.
 
 import { describe, expect, it } from "vitest";
-import { releaseNoteAuthor, weekLabel } from "./releaseNotes.js";
+import {
+  isWeekPeriod,
+  periodLabel,
+  releaseNoteAuthor,
+  weekLabel,
+} from "./releaseNotes.js";
 
 describe("weekLabel", () => {
   it("reads an ISO week back as a week and a year", () => {
@@ -26,6 +31,17 @@ describe("weekLabel", () => {
   it("leaves anything that is not one alone", () => {
     expect(weekLabel("last week")).toBe("last week");
     expect(weekLabel(undefined)).toBe("");
+  });
+});
+
+describe("periodLabel", () => {
+  it("formats daily, weekly and monthly rollup keys", () => {
+    expect(periodLabel("2026-11-04")).toBe("November 4, 2026");
+    expect(periodLabel("2026-W38")).toBe("Week 38, 2026");
+    expect(periodLabel("2026-11")).toBe("November 2026");
+    expect(isWeekPeriod("2026-W38")).toBe(true);
+    expect(isWeekPeriod("2026-11-04")).toBe(false);
+    expect(isWeekPeriod("2026-11")).toBe(false);
   });
 });
 

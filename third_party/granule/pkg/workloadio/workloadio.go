@@ -69,7 +69,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/execwire"
+	"github.com/gke-labs/granule/pkg/execwire"
 )
 
 // Port is the vsock port granule-container serves the workload's streams

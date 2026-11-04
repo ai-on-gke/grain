@@ -74,7 +74,13 @@ export function taskReason(t) {
       text: `is repairing red base branch ${t.redBaseBranch} (${baseRepairWaitReason(t)})`,
     };
   if (t.state === "awaiting_reply")
-    return { id: "reply", text: "asked a question" };
+    return {
+      id: "reply",
+      text:
+        t.questionSummary || t.pendingSecret
+          ? "asked a question"
+          : "answered in a comment",
+    };
   if (t.state === "awaiting_submit" && t.reviewQuestions)
     return { id: "review_questions", text: "has review questions for you" };
   // A CL nobody has mailed to a reviewer yet is the owner's to Mail

@@ -428,6 +428,23 @@ it can reach, not only the team's. So:
 - Every git use is audited like any stored credential's, with an
   `(ambient: this host's gh login)` note on the outcome.
 
+**Delegating your own GitHub login (`grain git-login`).** `grain git-login`
+hands the deployment your own GitHub HTTPS token and registers it as a PAT
+connection, much as `gh auth login` would. `-from-gh` takes `gh auth token`,
+`-with-token` reads the token from standard input, and `-web` runs GitHub's
+OAuth Device Flow in a browser. With none of them, it uses an active `gh`
+login and falls back to the Device Flow. Name the host with `-host` and
+`-base-url`, and narrow the connection with `-scope owner[/repo]`.
+
+The new connection **replaces** whatever connection the deployment already
+had on that host and scope, so with no `-scope` it becomes the host's
+deployment-wide default. A deployment-owned credential it replaces is
+removed. A connection made this way is signed: pull requests grain opens
+with it end in `Signed by <Name> (via Grain)`, and its comments and reviews
+end in the same line, in italics. `<Name>` is `-author`, or else your
+GitHub profile name or login (design/design/git-login.design.md). There is
+no `grain login` alias: `grain login` signs the CLI in to a deployment.
+
 **The commit identity.** A sandbox commits as the account its git
 credential acts as -- there is no commit author to type in. For a task
 whose git credential for its target (`Store.TaskGitCredentialOn`)

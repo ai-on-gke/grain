@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
-import { chooseOption } from "./searchSelect.js";
+import { chooseOption, chooseOptions } from "./searchSelect.js";
 
 test.describe("Inputs in Templates, Schedules, and Suites Automation Walkthrough", () => {
   async function seedOne(page, path, data) {
@@ -351,10 +351,10 @@ test.describe("Inputs in Templates, Schedules, and Suites Automation Walkthrough
     await expect(page.getByText(/needs at least one template/i)).toBeVisible();
 
     // 3.2.2 Build template sequence using item selector
-    const tmplSelect = page.locator("#suite-templates-label + div");
-    await tmplSelect.click();
-    await page.getByRole("option", { name: tmplA.name }).click();
-    await page.getByRole("option", { name: tmplB.name }).click();
+    await chooseOptions(page.getByRole("combobox", { name: "Templates" }), [
+      tmplA.name,
+      tmplB.name,
+    ]);
     await page.keyboard.press("Escape");
 
     // 3.2.3 Run mode selector & pass inputs
