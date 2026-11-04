@@ -58,6 +58,7 @@ var routeScopes = map[string]APIScope{
 	"GET /api/auth/logout":                                                 "internal",
 	"GET /api/auth/user":                                                   "internal",
 	"GET /api/auth/status":                                                 "internal",
+	"GET /api/auth/whoami":                                                 "internal",
 	"GET /api/whoami":                                                      "internal",
 	"GET /api/settings":                                                    "settings:read",
 	"PUT /api/settings":                                                    "settings:write",
