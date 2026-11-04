@@ -107,6 +107,14 @@ func classifyError(err error) (exit int, code, fix string) {
 		return exitUsage, "invalid_flag", ""
 	}
 
+	var login *ui.LoginRequiredError
+	if errors.As(err, &login) {
+		return exitAuth, "login_required", login.Fix
+	}
+	var expired *ui.TokenExpiredError
+	if errors.As(err, &expired) {
+		return exitAuth, "auth_expired", "grain login --refresh"
+	}
 	var notFound *ui.NotFoundError
 	var validation *ui.ValidationError
 	var forbidden *ui.ForbiddenError
