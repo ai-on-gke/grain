@@ -119,6 +119,10 @@ const ANNOTATIONS = new Set([
   "deprecated",
   "readOnly",
   "writeOnly",
+  // Grain's own: which values only a person may grant (a gcp permission
+  // set over an existing service account). Grain enforces it when a
+  // grant is filed, not the form, and every value is still a choice.
+  "x-grain-person-granted",
 ]);
 const KIND_KEYWORDS = {
   choice: ["enum", "const", "type"],

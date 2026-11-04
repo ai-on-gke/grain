@@ -342,17 +342,17 @@ func TestConsoleSessionCapabilitiesSayWhichOnesThisDeploymentCanHonour(t *testin
 	for _, capability := range resp.Capabilities {
 		byID[capability.ID] = capability
 	}
-	// Nothing is configured on this deployment: no GCP project, no
-	// secret pasted, so the two that need one are not ready and say so.
-	gemini, ok := byID["gemini-key"]
+	// Nothing is configured on this deployment: no App secret pasted, so
+	// github-sandbox, which needs them, is not ready and says so.
+	sandbox, ok := byID["github-sandbox"]
 	if !ok {
-		t.Fatalf("gemini-key is missing from %v", resp.Capabilities)
+		t.Fatalf("github-sandbox is missing from %v", resp.Capabilities)
 	}
-	if gemini.Ready == nil || *gemini.Ready {
-		t.Errorf("gemini-key ready = %v, want false on a deployment with no GCP project", gemini.Ready)
+	if sandbox.Ready == nil || *sandbox.Ready {
+		t.Errorf("github-sandbox ready = %v, want false on a deployment with no App secrets", sandbox.Ready)
 	}
-	if len(gemini.Needs) == 0 {
-		t.Error("gemini-key says it is not ready without naming a single thing it needs")
+	if len(sandbox.Needs) == 0 {
+		t.Error("github-sandbox says it is not ready without naming a single thing it needs")
 	}
 	// One that needs no configuration at all stays on offer.
 	debug, ok := byID["self-debug"]
