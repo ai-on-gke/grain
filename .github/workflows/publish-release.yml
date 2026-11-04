@@ -23,9 +23,12 @@
 #      the rc is not dropped, the commit is on main or release/vX.Y.0, and
 #      the rc still passes Stage 1 (nightly.yml) and Stage 2
 #      (grain/release-qualification, from vars.RELEASE_QUALIFICATION_APP
-#      only). Anything else fails the run and publishes nothing. A tag a
-#      person's approval pushed (no Promoted-From) is promote-release.yml's
-#      to publish, so its images are left alone here;
+#      only), and none of the guards that make the train stage an rc for a
+#      person instead applies. Anything else fails the run and publishes
+#      nothing. A tag with no Promoted-From is not the train's: this
+#      workflow publishes nothing for it -- neither images nor a GitHub
+#      Release -- because nothing on a tag push can tell a person's approval
+#      from any other holder of the train's tag grant;
 #   2. release-images.sh promote vX.Y.0: the images re-stamped with the
 #      release and tagged :vX.Y.0, and :latest when the git tag latest is on
 #      it;
@@ -183,6 +186,7 @@ jobs:
         run: bash ./scripts/release-images.sh promote "${RELEASE_VERSION}"
 
       - name: Write the release notes and the GitHub Release
+        if: steps.verify.outputs.train == 'true'
         env:
           RELEASE_VERSION: ${{ github.ref_name }}
           GH_TOKEN: ${{ github.token }}

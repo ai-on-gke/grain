@@ -1126,6 +1126,29 @@ expect "verify, forged" "exits 1" eq "$status" 1
 expect "verify, forged" "says the commits differ" has "is not on v2.7.0-rc.1's commit"
 git -C "$work/seed" push -q origin :refs/tags/v2.7.0 :refs/tags/v2.7.0-rc.1
 git -C "$work/clone" tag -d v2.7.0 v2.7.0-rc.1 >/dev/null
+# A qualified rc the train would have staged for a person is not published,
+# however its tag reads: the train's grant reaches any vM.Y.0 on main.
+verify v2.3.0 RELEASE_AUTO_PROMOTE=false
+expect "verify, auto-promote off" "exits 1" eq "$status" 1
+expect "verify, auto-promote off" "says why" has "RELEASE_AUTO_PROMOTE is false"
+verify v2.3.0 RELEASE_NEVER_PROMOTE=v2.3.0
+expect "verify, never promote" "exits 1" eq "$status" 1
+expect "verify, never promote" "publishes nothing" has "v2.3.0 is not published"
+expect "verify, refused" "puts the local tag back" eq "$(git -C "$work/clone" rev-parse -q --verify 'refs/tags/v2.3.0^{commit}')" "$c2"
+(
+  cd "$work/seed"
+  git tag -a v3.0.0 "$c2" -m "Release v3.0.0" -m "Qualification: PASS" -m "Promoted-From: v3.0.0-rc.1"
+  git tag -a v3.0.0-rc.1 "$c2" -m rc
+  git push -q origin refs/tags/v3.0.0 refs/tags/v3.0.0-rc.1
+)
+verify v3.0.0
+expect "verify, a major bump" "exits 1" eq "$status" 1
+expect "verify, a major bump" "says why" has "may not release v3.0.0-rc.1 as v3.0.0 itself"
+verify v3.0.0 RELEASE_MAJOR=3
+expect "verify, a major bump RELEASE_MAJOR asks for" "exits 1" eq "$status" 1
+expect "verify, a major bump RELEASE_MAJOR asks for" "says why" has "first release of major 3"
+git -C "$work/seed" push -q origin :refs/tags/v3.0.0 :refs/tags/v3.0.0-rc.1
+git -C "$work/clone" tag -d v3.0.0 v3.0.0-rc.1 >/dev/null
 
 # The next run, the interval over: the next minor's rc.1 after the release.
 : > "$work/images.log"

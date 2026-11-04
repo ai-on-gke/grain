@@ -141,7 +141,7 @@ func TestPromoteReleaseIsDeclaredHumanRequired(t *testing.T) {
 		// workflow verifies it with.
 		"pkg/ui/release_approval_github.go", "pkg/releaseapproval/releaseapproval.go", "scripts/verify-release-approval.sh",
 		// The continuous train's own promotion (playbook section 1).
-		"scripts/release-from-trunk.sh", "scripts/release.conf",
+		"scripts/release-from-trunk.sh", "scripts/release.conf", "scripts/release-train-task.sh",
 		".grain/schedules/release-train.yml", ".github/workflows/publish-release.yml"} {
 		if !containsString(trigger.Paths, p) {
 			t.Errorf("the release-promotion trigger does not hold %s (paths %v)", p, trigger.Paths)
@@ -306,4 +306,18 @@ func TestPublishReleaseVerifiesBeforeItPublishes(t *testing.T) {
 	contains(t, text, "RELEASE_QUALIFICATION_APP: ${{ vars.RELEASE_QUALIFICATION_APP }}")
 	contains(t, text, "scripts/release-notes.sh write")
 	contains(t, text, "gh release create")
+	// Every step that publishes -- images, credentials, the GitHub Release
+	// -- runs only for a tag verify passed as the train's: a vX.Y.0 with no
+	// Promoted-From (verify's exit 4) publishes nothing, since the train's
+	// grant can push one on any commit of main.
+	for _, step := range strings.Split(text, "- name: ")[1:] {
+		name := strings.SplitN(step, "\n", 2)[0]
+		switch name {
+		case "Checkout", "Setup Node.js", "Setup Go", "Verify the release is the train's, from a qualified rc":
+			continue
+		}
+		if !strings.Contains(step, "if: steps.verify.outputs.train == 'true'") {
+			t.Errorf("publish-release.yml step %q runs for a tag verify did not pass as the train's", name)
+		}
+	}
 }

@@ -860,8 +860,11 @@ promote_rc() {
 # .github/workflows/publish-release.yml runs this on every vX.Y.0 tag push
 # before it publishes anything: exit 0 when the tag says the train released
 # it (Promoted-From: <rc>, Qualification: PASS), the rc is on the same
-# commit and not dropped, the commit is on main or release/vX.Y.Z, and
-# check-qualification still passes the rc; 4 when the tag is not the
+# commit and not dropped, the commit is on main or release/vX.Y.Z,
+# check-qualification still passes the rc, and none of the guards that make
+# the train stage an rc for a person instead (auto_promote_blocker: a major
+# bump, breaking changes, RELEASE_NEVER_PROMOTE, RELEASE_AUTO_PROMOTE=false)
+# applies; 4 when the tag is not the
 # train's (a person's approval, which promote-release.yml publishes); 1
 # when it claims to be the train's and any of that does not hold.
 if [ "$mode" = verify ]; then
@@ -890,6 +893,28 @@ if [ "$mode" = verify ]; then
     --runs-json "$work/qual-runs.json" ${qual_checks:+--checks-json "$qual_checks"} 2>&1)" || q_status=$?
   printf '%s\n' "$q_out" | sed 's/^/  /'
   [ "$q_status" = 0 ] || die "verify: $from_rc does not pass qualification now (check-qualification exited $q_status); $version is not published"
+  # The tag only says the train made it; the train's tag grant reaches any
+  # vM.Y.0 on main, so check it is a release the train would have made
+  # itself rather than staged for a person: the guards promote_rc runs
+  # behind (auto_promote_blocker), judged as they were before the tag
+  # existed -- so with it hidden, and RELEASE_MAJOR recomputed without it.
+  tag_obj="$(git rev-parse "refs/tags/$version")"
+  git update-ref -d "refs/tags/$version"
+  major="${RELEASE_MAJOR:-$(conf_value RELEASE_MAJOR)}"
+  major="${major:-${highest_major:-0}}"
+  released_major="$(git tag -l 'v[0-9]*' | sed -nE 's/^v([0-9]+)\.[0-9]+\.[0-9]+(-pending)?$/\1/p' | sort -n | tail -n 1)"
+  if [ -n "$released_major" ] && [ "$major" -lt "$released_major" ]; then
+    major="$released_major"
+  fi
+  target_release
+  blocker=""
+  if [ "${version%%.*}" != "v$major" ]; then
+    blocker="it is not in major $major, the one RELEASE_MAJOR has the train release"
+  else
+    blocker="$(auto_promote_blocker "$version" "$from_rc" "$sha")"
+  fi
+  git update-ref "refs/tags/$version" "$tag_obj"
+  [ -z "$blocker" ] || die "verify: the train may not release $from_rc as $version itself ($blocker); $version is not published"
   say "verify: $version is the train's release of $from_rc (${sha:0:12}), which qualified"
   emit verified_release "$version"
   exit 0

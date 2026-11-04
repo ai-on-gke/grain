@@ -223,7 +223,8 @@ and Stage 2, the next tick tags `vX.Y.0` on the rc's commit (annotated:
 onto it. `.github/workflows/publish-release.yml` runs on that tag: it runs
 `scripts/release-from-trunk.sh verify vX.Y.0` (the tag names its rc, is on that
 rc's commit, the rc is not dropped, the commit is on `main` or
-`release/vX.Y.0`, and the rc still passes both stages), then
+`release/vX.Y.0`, the rc still passes both stages, and none of the cases below
+that make the train stage it for a person applies), then
 `release-images.sh promote vX.Y.0` and `gh release create` with the notes from
 `scripts/release-notes.sh write`. Nothing waits on a person. The train does
 **not** release it, and stages it as below instead, when:
