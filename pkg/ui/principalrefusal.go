@@ -64,8 +64,12 @@ const notAllowedPrincipalSuffix = " is not on the allowed users and groups list 
 
 // defaultPrincipalAdvice names Settings -> Access and `grain access allow`.
 func defaultPrincipalAdvice(entry, _ string) string {
-	if entry == "" || strings.HasPrefix(entry, "serviceAccount:") {
+	if entry == "" {
 		return "To let them in, an allowed user or access-code holder can add their user or group under Settings -> Access, or run grain access allow."
+	}
+	if strings.HasPrefix(entry, "serviceAccount:") {
+		return "To let this service account in with full operator access, an allowed user or access-code holder can add " + entry +
+			" with a reason under Settings -> Access, or run: grain access allow " + entry + " --reason <why>"
 	}
 	return "To let them in, an allowed user or access-code holder can add " + entry +
 		" under Settings -> Access, or run: grain access allow " + entry

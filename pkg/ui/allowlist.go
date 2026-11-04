@@ -412,9 +412,10 @@ func (s *Server) effectiveAllowedPrincipals(ctx context.Context) ([]AllowedPrinc
 		return nil, err
 	}
 	out := make([]AllowedPrincipalEntry, 0, len(rows)+2)
+	pool := s.tasks.gcpKeyPoolSet(ctx)
 	for _, r := range rows {
 		prefix, val, _, nErr := model.NormalizeAllowedPrincipalEntry(r.Entry)
-		if nErr != nil {
+		if nErr != nil || (prefix == "serviceAccount" && pool[val]) {
 			continue
 		}
 		out = append(out, AllowedPrincipalEntry{Prefix: prefix, Value: val})

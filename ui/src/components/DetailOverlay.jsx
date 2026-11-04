@@ -34,6 +34,7 @@ import { branchRefs } from "../branchRefs.js";
 import {
   STATE_LABELS,
   activityTitle,
+  blockerState,
   completionPhase,
   mergeQueueBatching,
   mergeQueueStall,
@@ -47,6 +48,7 @@ import {
   taskBadgeModifier,
   taskBadgeState,
   isAgentRunning,
+  isTaskMerged,
   isTaskRepairing,
   taskPause,
 } from "../state.js";
@@ -740,6 +742,28 @@ export default function DetailOverlay({
               label={`priority: ${t.priority ?? 5}`}
             />
           </div>
+          {t.blocked &&
+            t.blockedBy?.length > 0 &&
+            t.state !== "running" &&
+            !isTaskMerged(t) && (
+              <div className="detail-blocked">
+                {t.parked ? "Waiting on" : "Blocked on"}{" "}
+                {t.blockedBy.map((id, idx) => {
+                  const dep = byId.get(id) ?? byId.get(String(id));
+                  const state = blockerState(dep);
+                  return (
+                    <Fragment key={id}>
+                      {idx > 0 && ", "}
+                      <TaskLink id={id} onOpenTask={onOpenTask}>
+                        #{id}
+                        {dep?.title ? ` ${dep.title}` : ""}
+                      </TaskLink>
+                      {state && ` (${state})`}
+                    </Fragment>
+                  );
+                })}
+              </div>
+            )}
           {/* And the sentence itself, spelled out under the badge it is
               about, for the same reason the merge queue's note is
               spelled out below: the row has to make do with a chip and a

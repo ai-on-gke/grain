@@ -510,20 +510,25 @@ import "strconv"
 // external agents' filings queue without a person's approval;
 // design/spec/external-cli/external-cli.spec.md#XC-14..#XC-17).
 //
-// 108 drops `task_hostd`, `template`.`hostd` and
+// 108 adds `reason` to `allowed_principal` (model.AllowedPrincipal.Reason):
+// why an entry was added, required for the `serviceAccount:<email>` entries
+// the allowlist accepts again.
+//
+// 109 drops `task_hostd`, `template`.`hostd` and
 // `repo_config`.`default_hostd`: which grain hostd host work runs on is
 // the model connection's (model.AgentBackend.Hostd) or the capability
 // server's (protocol.ServerConfig.Hostd), never a task's. `task_run_hostd`
 // stays, the read-only record of where each run's agent CLI ran.
-const SchemaVersion = 108
+const SchemaVersion = 109
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
-// `user:<email>` or `group:<email>` entry admitted through a verified
-// identity (model.AllowedPrincipal).
+// `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
+// through a verified identity (model.AllowedPrincipal).
 const allowedPrincipalTable = `CREATE TABLE IF NOT EXISTS ` + "`allowed_principal`" + ` (
   ` + "`entry`" + `    TEXT     NOT NULL PRIMARY KEY,
   ` + "`added_by`" + ` TEXT     NOT NULL DEFAULT '',
-  ` + "`added_at`" + ` DATETIME NOT NULL
+  ` + "`added_at`" + ` DATETIME NOT NULL,
+  ` + "`reason`" + `   TEXT     NOT NULL DEFAULT ''
 )`
 
 // allowedPrincipalMigrationTable records the one-time startup migration off
@@ -617,7 +622,7 @@ const hostdTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd`" + ` (
 )`
 
 // taskHostdTable and taskRunHostdTable are a task's hostd selector (only
-// migrations 93 to 107 had one; 108 drops it) and the hostd each run
+// migrations 93 to 108 had one; 109 drops it) and the hostd each run
 // resolved (model.TaskRunHostd),
 // named once for Tables and for migration 93.
 const taskHostdTable = `CREATE TABLE IF NOT EXISTS ` + "`task_hostd`" + ` (

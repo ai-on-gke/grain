@@ -465,7 +465,7 @@ The tests that hold this in place are in `pkg/hostd`:
 - `TestServeSocketIsOwnerOnly`;
 - the reaping, deadline, cancel, disconnect and stdin back-pressure tests.
 
-### Which hostd (schema 108)
+### Which hostd (schema 109)
 
 With more than one hostd registered, which one a run's CLI starts on is
 its model connection's placement (`model.AgentBackend.Hostd`, then
@@ -474,8 +474,8 @@ its model connection's placement (`model.AgentBackend.Hostd`, then
 on a hostd runs its CLI on the host there whatever the framework's run
 location says. A connection with no placement goes where this document's
 run location says, through the default hostd. Tasks, templates and
-repositories had a hostd selector from schema 93 to 107 (`task_hostd`,
-`template.hostd`, `repo_config.default_hostd`); 108 dropped them, and a
+repositories had a hostd selector from schema 93 to 108 (`task_hostd`,
+`template.hostd`, `repo_config.default_hostd`); 109 dropped them, and a
 request that still names one is refused. `task_run_hostd` stays, recording
 where each run's CLI ran. A `run: hostd` capability server names its own
 hostd (`protocol.ServerConfig.Hostd`). See

@@ -83,7 +83,7 @@ minted and the task waits with `needs-hostd:<selector>`.
 
 ## Migration
 
-Schema 108 drops `task_hostd`, `template.hostd` and
+Schema 109 drops `task_hostd`, `template.hostd` and
 `repo_config.default_hostd`. `task_run_hostd` is kept: it is the read-only
 record of where each run's agent CLI ran, and the run history keeps
 showing it. A deployment that pinned tasks or repositories to a hostd

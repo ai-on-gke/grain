@@ -222,7 +222,7 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `POST /api/tasks/{id}/resume` | `tasks:write` | `writer` | Resumes paused task. |
 | `PUT /api/tasks/{id}/goal` | `tasks:write` | `writer` | Sets task completion goal. |
 | `DELETE /api/tasks/{id}/goal` | `tasks:write` | `writer` | Clears task completion goal. |
-| `PUT /api/tasks/{id}/hostd` | `tasks:write` | `writer` | Refused (400): a task has no `hostd`; it is set on the model connection or capability server (schema 108). |
+| `PUT /api/tasks/{id}/hostd` | `tasks:write` | `writer` | Refused (400): a task has no `hostd`; it is set on the model connection or capability server (schema 109). |
 | `POST /api/tasks/{id}/reopen` | `tasks:write` | `writer` | Reopens closed task. |
 | `POST /api/tasks/{id}/retry` | `tasks:write` | `writer` | Retries failed/stopped task. |
 | `POST /api/tasks/{id}/retry-merge` | `merge:write` | `writer` | Re-queues PR into normal merge checks. |

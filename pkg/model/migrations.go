@@ -739,7 +739,14 @@ var Migrations = []Migration{
 		},
 	},
 	{
-		Version: 108,
+		Version:     108,
+		Description: "add allowed_principal.reason, why an allowlist entry was added (required for serviceAccount: entries)",
+		Statements: []string{
+			"ALTER TABLE `allowed_principal` ADD COLUMN `reason` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version: 109,
 		Description: "drop the task, template and repository hostd selectors: a model connection or capability server " +
 			"chooses its hostd; task_run_hostd keeps where each run ran",
 		Statements: []string{
