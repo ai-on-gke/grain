@@ -65,6 +65,7 @@ var hostSpecSubcommands = map[string][]string{
 	"connections":        {"import"},
 	"controller":         {"bootstrap-github-app"},
 	"declarations":       {"check"},
+	"fs":                 {"ls", "cat", "read", "grep"},
 	"gcp-key":            {"list", "get", "set", "delete"},
 	"hostds":             {"list", "register", "set-owner"},
 	"init":               {"workstation"},
