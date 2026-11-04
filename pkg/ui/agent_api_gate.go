@@ -1006,9 +1006,10 @@ func (s *Server) networkAccessWidens(ctx context.Context, limit model.NetworkAcc
 // agentFilingEscalation refuses the rest of what a task, schedule or
 // template body can hand out beyond its capabilities (agentGrantEscalation):
 // push or read access to a repository, auto-merge (and Submit, which
-// turns it on), approval, a requester, a hostd its own task does not run
-// on, a template's grants, or a move of the work to a repository the scope does
-// not reach. Each is what propose_task already withholds from a run
+// turns it on), approval, a requester, a template's grants, or a move of
+// the work to a repository the scope does not reach. (A hostd is no
+// longer the filer's to name: a body that sets one is refused by the
+// handler, TaskHostdRefusal.) Each is what propose_task already withholds from a run
 // (model.EscalatedCapabilities, the auto-merge and approval rules), and the
 // API is not a way around it. encoding/json matches keys without regard to
 // case, and so does this.
