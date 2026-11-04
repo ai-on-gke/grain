@@ -379,6 +379,11 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 		".github/workflows/promote-release.yml": "release-promotion",
 		"pkg/ui/release_approval.go":            "release-promotion",
 		".grain/templates/release-train.yml":    "release-promotion",
+		"scripts/release-from-trunk.sh":         "release-promotion",
+		"scripts/release.conf":                  "release-promotion",
+		"scripts/release-train-task.sh":         "release-promotion",
+		".grain/schedules/release-train.yml":    "release-promotion",
+		".github/workflows/publish-release.yml": "release-promotion",
 		"pkg/trustboundary/trustboundary.go":    "hold-policy",
 		".grain/triggers/release-promotion.yml": "path-triggers",
 		".grain/triggers/release-machinery.yml": "path-triggers",
@@ -395,8 +400,8 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 	}
 
 	reviewed := []string{
-		"scripts/release-images.sh", "scripts/release-from-trunk.sh",
-		"scripts/release-notes.sh", "scripts/candidate-gate.sh", "scripts/release.conf",
+		"scripts/release-images.sh",
+		"scripts/release-notes.sh", "scripts/candidate-gate.sh",
 		"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
 		".grain/workflows/release.yml", ".github/workflows/release.yml",
 		".grain/workflows/promote.yml", ".github/workflows/promote.yml",

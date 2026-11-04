@@ -240,9 +240,11 @@ var Categories = []Category{
 	},
 	{
 		ID: "release-promotion",
-		Description: "the person-only approval that makes a pending release official: the workflow that " +
-			"pushes vX.Y.0 and latest, the route that starts it, and the release train's template, whose " +
-			"push: list decides which tags the train may move without it",
+		Description: "what makes a release official: the person-only approval workflow that pushes " +
+			"vX.Y.0 and latest and the route that starts it; the release train that promotes a qualified " +
+			"rc on its own -- its script, its operator settings (release.conf), its template, whose push: " +
+			"list decides which tags it may move, and its schedule; and the workflow that publishes what it " +
+			"promotes",
 		RequiresHuman: true,
 		// Before github-workflows and grain-config, which would otherwise
 		// take the workflow's two copies and the template.
@@ -254,6 +256,14 @@ var Categories = []Category{
 			// and the check the workflow verifies it with.
 			"pkg/ui/release_approval_github.go", "pkg/releaseapproval/releaseapproval.go",
 			"scripts/verify-release-approval.sh",
+			// The continuous train's own promotion (playbook section 1):
+			// the script that tags vX.Y.0 and latest on a qualified rc,
+			// the settings that turn it on and off, its schedule, and the
+			// workflow that publishes the release from the tag. The tick
+			// wrapper too: it writes the CI verdicts and the trusted
+			// qualification app the train promotes on.
+			"scripts/release-from-trunk.sh", "scripts/release.conf", "scripts/release-train-task.sh",
+			".grain/schedules/release-train.yml", ".github/workflows/publish-release.yml",
 		},
 	},
 	{
@@ -264,14 +274,15 @@ var Categories = []Category{
 		// reach the approval (design/playbook/releases.playbook.md §0.3).
 		Review: []string{
 			"the change cannot move a `vX.Y.Z` or `latest` git tag or image except as a result of a person's " +
-				"approval in promote-release.yml",
+				"approval in promote-release.yml or the release train's promotion of a qualified rc " +
+				"(scripts/release-from-trunk.sh, publish-release.yml: release-promotion)",
 			"it does not widen any workflow's `permissions:`, the secrets it reads, or who may dispatch it",
 			"it does not weaken a check that refuses anybody but a person (`GRAIN_CI_REQUESTED_BY_KIND`)",
 			"in scripts/release.conf, it does not raise `RELEASE_MAJOR`, which only a person may do",
 		},
 		files: []string{
-			"scripts/release-images.sh", "scripts/release-from-trunk.sh",
-			"scripts/release-notes.sh", "scripts/candidate-gate.sh", "scripts/release.conf",
+			"scripts/release-images.sh",
+			"scripts/release-notes.sh", "scripts/candidate-gate.sh",
 			// What the release jobs run besides: the patch-tag guard
 			// that refuses a vX.Y.Z not cut from its release branch, the
 			// version every published image is tagged with, and the host
