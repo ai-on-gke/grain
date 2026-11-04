@@ -20,6 +20,7 @@
 
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { optionValues } from "./searchSelectTesting.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App.jsx";
 import api from "./api.js";
@@ -560,10 +561,14 @@ describe("App", () => {
     );
     await screen.findByRole("heading", { name: "New schedule" });
 
-    await user.click(screen.getByLabelText("Template"));
-    await user.click(
-      await screen.findByRole("option", { name: "Dependency bump" }),
-    );
+    // A SearchSelect (grain/task-2910): a word from the template's name
+    // finds it.
+    const picker = screen.getByRole("combobox", { name: "Template" });
+    await user.click(picker);
+    await user.clear(picker);
+    await user.type(picker, "bump");
+    expect(optionValues(picker)).toEqual(["template-1"]);
+    await user.keyboard("{Enter}");
 
     expect(screen.queryByLabelText(/^Title/)).not.toBeInTheDocument();
     expect(

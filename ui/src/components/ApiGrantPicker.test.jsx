@@ -14,7 +14,9 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import ApiGrantPicker from "./ApiGrantPicker.jsx";
+import { optionValues } from "../searchSelectTesting.js";
 import { groupApiRows, withoutApiRows } from "../apiGrants.js";
 
 const config = {
@@ -101,6 +103,35 @@ describe("ApiGrantPicker", () => {
       "api:ci:read",
       "api:tasks:read@acme/widgets",
     ]);
+  });
+
+  // grain/task-2910: the repository list grows with the deployment, so
+  // it is searched: a word from the middle of a name finds it.
+  it("finds the repository to limit to by any part of its name", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <ApiGrantPicker
+        config={{
+          ...config,
+          targetRepos: ["acme/widgets", "acme/gadgets", "other/widgets-docs"],
+        }}
+        selected={[]}
+        onChange={onChange}
+        idPrefix="t"
+      />,
+    );
+    open();
+    const box = screen.getByRole("combobox", {
+      name: "Limit what you tick to",
+    });
+    await user.click(box);
+    await user.clear(box);
+    await user.type(box, "gadg");
+    expect(optionValues(box)).toEqual(["acme/gadgets"]);
+    await user.keyboard("{Enter}");
+    await user.click(screen.getByRole("checkbox", { name: "tasks:read" }));
+    expect(onChange).toHaveBeenLastCalledWith(["api:tasks:read@acme/gadgets"]);
   });
 
   it("removes a held grant from its chip, a retired one included", () => {
