@@ -253,7 +253,7 @@ func TestRepoLimitedRoleReadsOnlyItsRepositoriesInTheNamespace(t *testing.T) {
 func TestEntriesFromBeforeRolesKeepFullAccess(t *testing.T) {
 	h := newRoleHarness(t)
 	// AddAllowedPrincipal is what wrote every entry before roles; the
-	// column's default is what migration 109 gives them.
+	// column's default is what migration 110 gives them.
 	if _, _, err := h.client.Store.AddAllowedPrincipal(context.Background(), "user:old@example.com", "installer", "", time.Now()); err != nil {
 		t.Fatal(err)
 	}

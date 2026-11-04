@@ -178,6 +178,9 @@ func SystemTemplate(id string, stateRepo RepoRef) *Template {
 	if stem, ok := WorkflowReviewStem(id); ok {
 		return workflowReviewTemplate(stem)
 	}
+	if stem, ok := GitHubWorkflowReviewStem(id); ok {
+		return gitHubWorkflowReviewTemplate(stem)
+	}
 	return nil
 }
 

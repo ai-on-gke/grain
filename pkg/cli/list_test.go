@@ -15,6 +15,8 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -603,5 +605,84 @@ func TestPriorityFilterAndSort(t *testing.T) {
 	}
 	if got := specs[0].compare(ui.Task{ID: "1", Priority: 8}, ui.Task{ID: "2", Priority: 5}, time.UTC); got >= 0 {
 		t.Errorf("priority:desc compare(8, 5) = %d, want < 0", got)
+	}
+}
+
+// #XC-18: grain list's derived_from and filed_via conditions, sent
+// through cmdList against a daemon, and grain get -comments-since.
+func TestListDerivedFromAndFiledViaFiltersAndGetCommentsSince(t *testing.T) {
+	client, c := externalCLIServer(t)
+	ctx := context.Background()
+	derived, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "derived", NoRepo: true, Approved: true,
+		DerivedFrom: []string{"acme/widgets#42"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	via, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "via jetski", NoRepo: true, Approved: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Store.UpdateTask(ctx, via.ID, func(tk *model.Task) error {
+		tk.FiledVia = "jetski/1.2 session=abc123"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "neither", NoRepo: true, Approved: true}); err != nil {
+		t.Fatal(err)
+	}
+	list := func(args ...string) []string {
+		t.Helper()
+		var tasks []ui.Task
+		text := captureStdout(t, func() {
+			if err := cmdList(ctx, c, &printer{json: true}, args); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if err := json.Unmarshal([]byte(text), &tasks); err != nil {
+			t.Fatalf("decoding %q: %v", text, err)
+		}
+		var titles []string
+		for _, tk := range tasks {
+			titles = append(titles, tk.Title)
+		}
+		return titles
+	}
+	if got := strings.Join(list("-filter", "derived_from:eq:https://github.com/acme/widgets/pull/42"), ","); got != "derived" {
+		t.Errorf("derived_from:eq:<url> listed %q", got)
+	}
+	if got := strings.Join(list("-filter", "filed_via:has:SESSION=abc"), ","); got != "via jetski" {
+		t.Errorf("filed_via:has:SESSION=abc listed %q", got)
+	}
+	for _, bad := range []string{"derived_from:has:acme/widgets#42", "derived_from:eq:nope", "filed_via:eq:x"} {
+		err := cmdList(ctx, c, &printer{json: true}, []string{"-filter", bad})
+		if exit, _, _ := classifyError(err); err == nil || exit != exitUsage {
+			t.Errorf("-filter %s: %v (exit %d), want a usage error", bad, err, exit)
+		}
+	}
+
+	first := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	for i, body := range []string{"old", "new"} {
+		if _, err := client.Store.AddComment(ctx, model.Comment{TaskID: derived.ID, Body: body,
+			Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
+			CreatedAt: first.Add(time.Duration(i) * time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	text := captureStdout(t, func() {
+		if err := cmdGet(ctx, c, &printer{json: true}, []string{derived.ID, "-comments-since", first.Format(time.RFC3339)}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	var detail ui.TaskDetail
+	if err := json.Unmarshal([]byte(text), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Comments) != 1 || detail.Comments[0].Body != "new" {
+		t.Errorf("-comments-since answered %+v, want only the later comment", detail.Comments)
+	}
+	err = cmdGet(ctx, c, &printer{}, []string{derived.ID, "-comments-since", "last tuesday"})
+	if exit, _, _ := classifyError(err); exit != exitUsage {
+		t.Errorf("-comments-since with no time: %v (exit %d), want exit 2", err, exit)
 	}
 }

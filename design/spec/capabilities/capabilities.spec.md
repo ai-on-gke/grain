@@ -174,9 +174,9 @@ capabilities:
       root: false
 ```
 
-2.2.2. `with:` values are committed to repositories and copied into task records; they MUST NOT carry secrets. A capability that needs a secret selects it by name (`account: infra-staging`) and keeps the material on the server.
+2.2.2. `with:` values are committed to repositories and copied into task records; they MUST NOT carry secrets. A capability that needs a secret selects it by name (`permission_set: infra-staging`) and keeps the material on the server.
 
-2.2.3. On the `grain` CLI, `-capability` accepts a bare reference or a reference followed by `=` and an inline JSON object (`-capability 'https://github.com/ai-on-gke/grain/capabilities/gcp#gcp-key={"account":"infra-staging"}'`).
+2.2.3. On the `grain` CLI, `-capability` accepts a bare reference or a reference followed by `=` and an inline JSON object (`-capability 'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"infra-staging"}'`).
 
 ### 2.3 Canonical Grant Identity, Multi-Instance Grants, and Sub-Task Privilege Containment
 
@@ -184,7 +184,7 @@ capabilities:
 
 2.3.2. **Equality and deduplication.** Two grants are equal if and only if their `capability` strings are identical and their normalized `args` are deep-equal. Equal grants on one run MUST be deduplicated before minting; the first occurrence keeps its position.
 
-2.3.3. **Multi-instance grants and `attempt_id` assignment.** A run MAY hold several grants for one `<capability_id>#<method>` with different normalized `args` (two `#git-repo` grants for two repositories — one with `root: true` for the root working directory and the other with `root: false`, §5.5.2; `#gcp-key` with `{account: "staging"}` and `{account: "prod"}`), and grants across several methods of one server. Deduplicated grants are indexed `0, 1, …` in declaration order, and the grant at index `i` is minted with `attempt_id` `<deployment>-<task>-<attempt>-<i>`.
+2.3.3. **Multi-instance grants and `attempt_id` assignment.** A run MAY hold several grants for one `<capability_id>#<method>` with different normalized `args` (two `#git-repo` grants for two repositories — one with `root: true` for the root working directory and the other with `root: false`, §5.5.2; `#gcp-key` with `{permission_set: "staging"}` and `{permission_set: "prod", primary: false}`), and grants across several methods of one server. Deduplicated grants are indexed `0, 1, …` in declaration order, and the grant at index `i` is minted with `attempt_id` `<deployment>-<task>-<attempt>-<i>`.
 
 2.3.4. **Sub-task privilege containment.** When an agent proposes a child task via `propose_task`, a child grant is covered by the parent if and only if some parent grant has the same `capability` and deep-equal normalized `args` — the parent's `args` as **recorded at the parent's admission**, the child's as normalized against the schema current when the child is filed. A child requesting any uncovered capability or argument MUST NOT inherit auto-approval or auto-merge and MUST be parked as unapproved for human approval. Two exceptions are declared by a server linked into the build, never by a remote one: a method marked person-granted (`protocol.RequirePersonGrant`, e.g. a workspace server's `#submit`) is covered by nothing, and a method with a grant policy (`protocol.SetGrantPolicy`) is judged by the grant's `args` -- `GrantByAgent` grants are covered without a parent grant (they are scoped to the task they are granted to, like a task's own branch: a `#workspace` grant with no `workspace:`), `GrantByPerson` grants by nothing (a `#workspace` grant naming a workspace). If a server's schema change alters the normalization of an existing grant (a changed `default`), the grant is no longer covered by anything recorded earlier and requires approval again. A reference a child carries only because the deployment's `default_capabilities` seeds it on every new task is judged the same way, and the note on such a child names it as a default its proposer does not hold rather than as something it asked for; a new standing chat session is seeded with the deployment's `default_capabilities` in its own `Capabilities` at creation (`ui.Client.CreateConsoleSession`), so its proposals are covered for them unless an operator removes one from the session.
 
@@ -321,11 +321,16 @@ Every Capability Server — whether connected over **stdio** (`command`, `args`,
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "account": {
+              "permission_set": {
                 "type": "string",
-                "default": "default",
+                "default": "sandbox-agent",
                 "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
-                "description": "Named GCP key configuration on the capability server to mint from."
+                "description": "Named GCP permission set on the capability server to mint from."
+              },
+              "primary": {
+                "type": "boolean",
+                "default": true,
+                "description": "Place at /home/debian/.gcp-service-account.json and sign gcloud in."
               }
             }
           }
@@ -383,7 +388,7 @@ Other standard MCP tool fields (`title`, `outputSchema`, `annotations`) are perm
     "arguments": {
       "attempt_id": "e1010c47-175-2-0",
       "deadline": "2026-10-19T23:00:00Z",
-      "args": { "account": "infra-staging" }
+      "args": { "permission_set": "infra-staging", "primary": true }
     }
   }
 }
@@ -656,7 +661,7 @@ Every capability combines the primitives of §4–§5 into one of four patterns.
 
 ### 6.1 Leased Cloud Credential (`#gcp-key` → `mint_gcp-key` + `release_gcp-key`)
 
-- `mint_gcp-key({attempt_id: "e1010c47-175-2-0", deadline, args: {account: "staging"}})` mints a short-lived IAM key for `staging`, records `attempt_id → key_name` with a timer at `deadline`, and returns a `placements` entry for `/home/debian/.gcp-service-account-staging.json` (`mode: "0600"`) plus a `prompt_section`; it MAY add a `setup` command (a placed `0700` script that runs `gcloud auth activate-service-account` against the key, §5.5) so the CLI is signed in before the agent starts. If the service account is at its key limit it returns `{"status": "resource_exhausted", "retry_after": "2026-10-19T21:05:30Z"}` and the run stays queued without booting. A `deadline` past the key's maximum lifetime returns `refused`.
+- `mint_gcp-key({attempt_id: "e1010c47-175-2-0", deadline, args: {permission_set: "staging", primary: true}})` mints a short-lived IAM key for `staging`, records `attempt_id → key_name` with a timer at `deadline`, and returns a `placements` entry for `/home/debian/.gcp-service-account.json` (`mode: "0600"`) plus a `prompt_section`; it MAY add a `setup` command (a placed `0700` script that runs `gcloud auth activate-service-account` against the key, §5.5) so the CLI is signed in before the agent starts. If the service account is at its key limit it returns `{"status": "resource_exhausted", "retry_after": "2026-10-19T21:05:30Z"}` and the run stays queued without booting. A `deadline` past the key's maximum lifetime returns `refused`.
 - `release_gcp-key({attempt_id})` deletes the recorded key and returns `{"status": "ok"}`.
 
 ### 6.2 Attempt-Scoped MCP Toolset (`#self-debug` → `mint_self-debug` + `release_self-debug`)

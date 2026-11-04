@@ -12,7 +12,7 @@ checks an agent. No second permission system is added.
 
 ## 1. Model
 
-- `allowed_principal` gains a `role` column (schema 109). It holds a
+- `allowed_principal` gains a `role` column (schema 110). It holds a
   scope set name, built-in or declared, and defaults to the new built-in
   `grain/operator`, which resolves to every scope of the vocabulary.
   Every existing row migrates to `grain/operator` through the column

@@ -170,7 +170,8 @@ func TestCheckCapabilityPatterns(t *testing.T) {
 		// first, so any gcp-key:<set> deny stops it and only an allow
 		// covering every set admits it.
 		{"deny: [gcp-key:team-a]", model.GCPKeyRef + "={}", "forbids capability"},
-		{"deny: [gcp-key:team-a]", model.GCPKeyRef + `={"account":"default"}`, "forbids capability"},
+		{"deny: [gcp-key:team-a]", model.GCPKeyRef + `={"account":"default"}`, "permission_set"},
+		{`allow: ["*"]`, model.GCPKeyRef + `={"activate":true}`, "permission_set"},
 		{"allow: [gcp-key:team-*]", model.GCPKeyRef + "={}", "does not allow capability"},
 		{"allow: [gcp-key]", model.GCPKeyRef + "={}", ""},
 		// A retired bare name in a policy file still reaches the grant
@@ -388,9 +389,12 @@ func TestAllowNamedSandboxAgentPatternRefusesUnnamedGCPKey(t *testing.T) {
 	if err := p.CheckClaims(model.Task{Grants: []model.Grant{{Capability: model.GCPKeySandboxAgentGrant}}}, ""); err != nil {
 		t.Fatalf("named sandbox-agent refused by allow [gcp-key:sandbox-*]: %v", err)
 	}
-	for _, unnamed := range []string{model.GCPKeyRef, model.GCPKeyRef + "={}", model.GCPKeyRef + `={"account":"default"}`} {
+	for _, unnamed := range []string{model.GCPKeyRef, model.GCPKeyRef + "={}"} {
 		if err := p.CheckClaims(model.Task{Grants: []model.Grant{{Capability: unnamed}}}, ""); err == nil {
 			t.Errorf("unnamed %q admitted by allow [gcp-key:sandbox-*]", unnamed)
 		}
+	}
+	if err := p.CheckClaims(model.Task{Grants: []model.Grant{{Capability: model.GCPKeyRef + `={"account":"default"}`}}}, ""); err == nil || !strings.Contains(err.Error(), "permission_set") {
+		t.Errorf("account=default CheckClaims = %v, want refusal naming permission_set", err)
 	}
 }

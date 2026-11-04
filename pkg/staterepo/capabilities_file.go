@@ -46,6 +46,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -229,10 +230,57 @@ func ValidateCapabilitiesFile(data []byte) (*model.CapabilityCatalogue, error) {
 	return doc.validate()
 }
 
+func (d *capabilitiesDoc) validate() (*model.CapabilityCatalogue, error) {
+	var sets []string
+	var serverIDs map[string]bool
+	hasExplicitSets := false
+	if d.Servers != nil {
+		if servers, err := d.mcpServers(); err == nil {
+			if encoded, err := model.EncodeMCPServers(servers); err == nil {
+				sets, serverIDs = model.GCPPermissionSetsFromMCPServers(encoded)
+				if srv, ok := servers[model.GCPCapabilityServerID]; ok {
+					_, hasExplicitSets = srv.Config["permission_sets"]
+				}
+			}
+		}
+	}
+	if !hasExplicitSets && len(sets) == 0 {
+		// Standalone file check with no gcp server permission_sets block:
+		// allow named account values during the one-release import window.
+		sets = referencedGCPAccountNames(d.catalogue(nil))
+	}
+	return d.validateWithGCPSets(sets, serverIDs)
+}
+
+func referencedGCPAccountNames(cat *model.CapabilityCatalogue) []string {
+	if cat == nil {
+		return nil
+	}
+	var out []string
+	collect := func(grants []string) {
+		for _, g := range grants {
+			spec, err := model.CapabilityGrantSpec(g)
+			if err != nil {
+				continue
+			}
+			if acct, _ := spec.With["account"].(string); strings.TrimSpace(acct) != "" && strings.TrimSpace(acct) != "default" {
+				out = append(out, strings.TrimSpace(acct))
+			}
+		}
+	}
+	collect(cat.Defaults.Task)
+	collect(cat.Defaults.CI)
+	for _, rd := range cat.Defaults.Repos {
+		collect(rd.Task)
+		collect(rd.CI)
+	}
+	return out
+}
+
 // validate is the document's consistency: transports that parse,
 // secrets held by reference, scope sets that resolve, and everything the
 // catalogue checks of itself (model.CapabilityCatalogue.Validate).
-func (d *capabilitiesDoc) validate() (*model.CapabilityCatalogue, error) {
+func (d *capabilitiesDoc) validateWithGCPSets(configuredSets []string, gcpServerIDs map[string]bool) (*model.CapabilityCatalogue, error) {
 	var errs []string
 	if d.Servers != nil {
 		for i, s := range *d.Servers {
@@ -265,6 +313,9 @@ func (d *capabilitiesDoc) validate() (*model.CapabilityCatalogue, error) {
 		}
 	}
 	cat := d.catalogue(nil)
+	// One-release compatibility (schema 109): accept old-form gcp#gcp-key
+	// arguments in settings/capabilities.yml during state-repo import/check.
+	model.RewriteGCPKeyCatalogue(cat, configuredSets, gcpServerIDs, nil)
 	if err := cat.Validate(); err != nil {
 		errs = append(errs, err.Error())
 	}
@@ -712,7 +763,40 @@ func checkCapabilities(dir string) error {
 	if err != nil || doc == nil {
 		return err
 	}
-	cat, err := doc.validate()
+	var configuredSets []string
+	var serverIDs map[string]bool
+	hasExplicitSets := false
+	if doc.Servers != nil {
+		if servers, err := doc.mcpServers(); err == nil {
+			if encoded, err := model.EncodeMCPServers(servers); err == nil {
+				configuredSets, serverIDs = model.GCPPermissionSetsFromMCPServers(encoded)
+				if srv, ok := servers[model.GCPCapabilityServerID]; ok {
+					_, hasExplicitSets = srv.Config["permission_sets"]
+				}
+			}
+		}
+	} else if cfgRows, present, err := dumpRowsOf(dir, grainConfigTable); err == nil && present {
+		for _, r := range cfgRows {
+			mcpText, _ := textOf(r["mcp_servers"])
+			sets, ids := model.GCPPermissionSetsFromMCPServers(mcpText)
+			for _, s := range sets {
+				if !slices.Contains(configuredSets, s) {
+					configuredSets = append(configuredSets, s)
+				}
+			}
+			if serverIDs == nil {
+				serverIDs = ids
+			} else {
+				for id := range ids {
+					serverIDs[id] = true
+				}
+			}
+		}
+	}
+	if !hasExplicitSets && len(configuredSets) == 0 {
+		configuredSets = referencedGCPAccountNames(doc.catalogue(nil))
+	}
+	cat, err := doc.validateWithGCPSets(configuredSets, serverIDs)
 	if err != nil {
 		return err
 	}
@@ -737,6 +821,9 @@ func checkCapabilities(dir string) error {
 			id := fmt.Sprint(g[kind.parent])
 			owner := byID[id]
 			capability, _ := textOf(g["capability"])
+			if rewritten, changed, missing := model.RewriteGCPKeyGrant(capability, configuredSets, serverIDs); changed && missing == "" {
+				capability = rewritten
+			}
 			gc := model.GrantContext{Kind: model.CatalogueKindTask, Grants: []string{capability}}
 			if o, _ := textOf(owner["target_owner"]); o != "" {
 				n, _ := textOf(owner["target_name"])

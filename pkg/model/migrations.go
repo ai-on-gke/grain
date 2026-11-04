@@ -747,6 +747,11 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     109,
+		Description: "rewrite stored gcp#gcp-key grants from deprecated account and activate arguments to permission_set",
+		Up:          MigrateGCPKeyGrantArgs,
+	},
+	{
+		Version:     110,
 		Description: "add allowed_principal.role, the scope set an allowlist entry's sessions are held to (existing entries become grain/operator)",
 		Statements: []string{
 			"ALTER TABLE `allowed_principal` ADD COLUMN `role` TEXT NOT NULL DEFAULT 'grain/operator'",

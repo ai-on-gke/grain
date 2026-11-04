@@ -514,11 +514,18 @@ import "strconv"
 // why an entry was added, required for the `serviceAccount:<email>` entries
 // the allowlist accepts again.
 //
-// 109 adds `role` to `allowed_principal` (model.AllowedPrincipal.Role): the
+// 109 removes the deprecated account and activate arguments from
+// https://grain.dev/capabilities/gcp#gcp-key: stored grants carrying
+// account: X become permission_set: X ("default" resolves to the first
+// configured permission set) and activate is dropped; grants naming a
+// permission set that does not exist are kept, logged, and noted on their
+// task, template or schedule (gcp_key_args_migration.go).
+//
+// 110 adds `role` to `allowed_principal` (model.AllowedPrincipal.Role): the
 // API scope set an entry's sessions are held to, defaulting to
 // grain/operator so every entry that existed before keeps full access
 // (docs/design/access-rbac.md).
-const SchemaVersion = 109
+const SchemaVersion = 110
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted

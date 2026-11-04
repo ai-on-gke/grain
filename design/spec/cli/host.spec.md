@@ -20,7 +20,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 
 | Kind | Commands |
 |---|---|
-| Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume` |
+| Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `reply`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume`, `inbox`, `wait`, `logs` |
 | Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|role|deny`, `git-ambient`, `git-connections`, `git-login`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status`, `declarations check` |
 | Task CLI: sign-in | `login`, `logout`, `whoami`, `context list\|use\|show\|delete` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
@@ -69,6 +69,7 @@ Each command parses its own flags, with flags allowed after the task id ([#CLI-1
 - `-filter attribute:comparison:value` is repeatable, in the UI's link spelling. Shorthands such as `-state`, `-repo` and `-capability` are conditions too.
 - `-sort attribute[:asc|desc]` is repeatable, and the sort is stable.
 - `grain list -h` prints the attribute and comparison vocabulary, including declared custom fields.
+- Two provenance conditions sit outside the vocabulary the UI shares ([external-cli #XC-18](../external-cli/external-cli.spec.md#XC-18)): `derived_from:eq:<owner/name#pr or its URL>` (a `derived-from` link, or a `Derived from:` line in the body) and `filed_via:has:<substring>` (case-insensitive over `filedVia`). `GET /api/tasks` takes the same as `?derived_from=` and `?filed_via=`.
 - A value nobody can act on is refused before the daemon is asked.
 
 With `-json` it prints the `ui.Task` array.
@@ -92,14 +93,16 @@ With `-json` it prints the `ui.Task` array.
 | `-state` | string |  |  | shorthand for -filter state:any:VALUE (proposed, queued, running, awaiting_reply, failed, awaiting_submit, completed, deferred, closed, or asked for awaiting_reply and awaiting_submit both) |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/list_test.go`: `TestConditionsNarrowTheListing`, `TestShorthandFlagsAreConditions`, `TestSortKeysOrderTheListing`, `TestConditionsRejectWhatNobodyCanActOn`; `pkg/cli/list_hidden_test.go`: `TestListHidesClosedAndDeferredTasksUnlessAsked`; `pkg/cli/list_declared_test.go`: `TestListHelpNamesTheDeclaredFields`; `pkg/cli/list_vocabulary_test.go`.
+**Pinned by:** `pkg/cli/list_test.go`: `TestConditionsNarrowTheListing`, `TestShorthandFlagsAreConditions`, `TestSortKeysOrderTheListing`, `TestConditionsRejectWhatNobodyCanActOn`; `pkg/cli/list_hidden_test.go`: `TestListHidesClosedAndDeferredTasksUnlessAsked`; `pkg/cli/list_declared_test.go`: `TestListHelpNamesTheDeclaredFields`; `pkg/cli/list_vocabulary_test.go`; `pkg/cli/list_test.go`: `TestListDerivedFromAndFiledViaFiltersAndGetCommentsSince`.
 
 ### 3.2 `grain get <id>` {#CLI-23}
 
-Calls `GET /api/tasks/{id}` and prints the task block, the failure streak, a pending credential request and the conversation. `-json` prints `ui.TaskDetail`.
+Calls `GET /api/tasks/{id}` and prints the task block, the failure streak, a pending credential request and the conversation. `-json` prints `ui.TaskDetail`. `-comments-since <RFC3339>` (`?comments_since=`) keeps only the conversation items created strictly after that time, for a polling loop ([external-cli #XC-18](../external-cli/external-cli.spec.md#XC-18)).
 
 <!-- BEGIN GENERATED FLAGS: grain get -->
-_No flags._
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-comments-since` | string |  |  | only the conversation items created strictly after this RFC 3339 time -- a polling loop's cursor |
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/args_test.go`: `TestCommandsRefuseArgumentsTheyHaveNoUseFor`.
@@ -112,6 +115,7 @@ Calls `POST /api/tasks` (`HTTPClient.CreateTask`) and prints the new task.
 - `-field name=value` sets a declared custom field and is repeatable; `grain create -h` lists the fields.
 - `-model` must be a model this deployment has (`TestCreateRefusesAModelThisDeploymentDoesNotHave`).
 - A task filed unapproved prints a note saying so.
+- `-body-file <path|->` reads the description from a file, or stdin for `-`; naming `-body` as well exits `2`. `-design <path>` (repeatable) records a design or spec file as a `design` provenance link (`ui.Task.Designs`) ([external-cli #XC-19](../external-cli/external-cli.spec.md#XC-19)).
 
 <!-- BEGIN GENERATED FLAGS: grain create -->
 | Flag | Type | Default | Env | Description |
@@ -122,8 +126,10 @@ Calls `POST /api/tasks` (`HTTPClient.CreateTask`) and prints the new task.
 | `-auto-merge` | bool |  |  | merge this task's pull request automatically once it reads clean |
 | `-base` | string |  |  | base branch, if not the target repo's default |
 | `-body` | string |  |  | task description |
+| `-body-file` | string |  |  | read the task description from this path (- for stdin) instead of -body |
 | `-capability` | value |  |  | capability to attach (repeatable): a capability ID, a capability reference (https://...[#method]), or a reference with its arguments as ref={json} |
 | `-depends-on` | value |  |  | task this one must wait on before it is dispatched -- 12, #12, task-12, grain/task-12 or the task's page URL (repeatable) |
+| `-design` | value |  |  | a design or spec path (design/...) this task implements, recorded on its provenance (repeatable) |
 | `-field` | value |  |  | name=value for one of the fields this deployment declares (repeatable; "name=" clears it, and a field holding a set takes the flag more than once or a comma-separated list) |
 | `-interactive` | bool |  |  | file this as a live chat rather than a change to run unattended (bwsalmon/agents#539); implies -approve and dispatches ahead of the backlog |
 | `-issue` | int |  |  | GitHub issue number associated with this task |
@@ -139,7 +145,7 @@ Calls `POST /api/tasks` (`HTTPClient.CreateTask`) and prints the new task.
 | `-write` | value |  |  | owner/name[@branch] of another repo this task may land work in, by proposing a task against it (repeatable) |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/create_position_test.go`: `TestBacklogPosition`; `pkg/cli/create_model_test.go`; `pkg/cli/create_author_test.go`: `TestCreateAuthorFilesTheTaskAsItsRequester`; `pkg/cli/create_unapproved_test.go`: `TestUnapprovedNote`; `pkg/cli/taskcmd_priority_test.go`: `TestPriorityFlagReadsTheAPIsSpellings`.
+**Pinned by:** `pkg/cli/create_position_test.go`: `TestBacklogPosition`; `pkg/cli/create_model_test.go`; `pkg/cli/create_author_test.go`: `TestCreateAuthorFilesTheTaskAsItsRequester`; `pkg/cli/create_unapproved_test.go`: `TestUnapprovedNote`; `pkg/cli/taskcmd_priority_test.go`: `TestPriorityFlagReadsTheAPIsSpellings`; `pkg/cli/taskcmd_test.go`: `TestCreateBodyFileStdinConflictAndDesignLink`.
 
 ### 3.4 `grain update <id> [flags]` {#CLI-25}
 
@@ -292,6 +298,44 @@ The command has two forms:
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/pause_test.go`: `TestPrintAgentPause`, `TestPrintAgentPauseJSON`, `TestRunCLIPauseReadsAndLifts`, `TestRunCLIPausesAndResumesThePipeline`, `TestRunCLIPauseWithNoGateWired`; `pkg/cli/args_test.go`: `TestPauseRefusesAReasonWrittenWithoutItsFlag`.
+
+### 3.9 `grain reply`, `inbox`, `wait` and `logs` {#CLI-65}
+
+The external-agent workflow's answering and polling verbs ([external-cli #XC-20..#XC-23](../external-cli/external-cli.spec.md#XC-20)).
+- `reply <id> [<body...> | -body-file <path|->]` answers the question task `<id>`'s run parked on (`POST /api/tasks/{id}/reply`). It is refused with exit `2`, posting nothing, when no `ask_question` is parked and when the task waits on a `request_secret`, which names `/tasks/<id>` and its encrypted input instead; `comment` posts a general note either way.
+- `inbox [-repo R] [-kind question|secret|notification|merge-held|proposal]` lists what needs a person (`GET /api/inbox`) on the repositories the caller reads, one item per line with its root-relative UI path.
+- `wait <id...> [-until closed|merged|awaiting-reply|ci-done|any[,…]] [-timeout 30m]` re-issues `GET /api/tasks/wait` slices of at most 60 s. It exits `0` when a condition is met, `1` when `-until merged` (without `closed`) meets a task that closed unmerged or `-until closed` a failed one, and `5` when `-timeout` (the global flag, written after the verb; `30m` when unset) runs out, printing the `grain wait …` line that carries on.
+- `logs <id> [-attempt N] [-tail N] [-follow]` prints the latest (or `N`th) attempt's activity and transcript; `-follow` streams new lines until the attempt finishes, exiting `1` when it errored.
+
+<!-- BEGIN GENERATED FLAGS: grain reply -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-attach` | value |  |  | path to a local file to attach to the reply (repeatable) |
+| `-body-file` | string |  |  | read the reply from this path (- for stdin) instead of the words after the id |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain inbox -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-kind` | string |  |  | only items of this kind: question, secret, notification, merge-held, proposal |
+| `-repo` | string |  |  | only this repository's (owner/name) items |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain wait -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-until` | string | `"closed"` |  | what to wait for, comma-separated for the first of several: closed, merged, awaiting-reply, ci-done, any |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain logs -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-attempt` | int | `the latest` |  | the attempt to read, 1 for the first |
+| `-follow` | bool |  |  | stream new lines until the attempt finishes (exit 0 when it ends normally, 1 when it errored) |
+| `-tail` | int |  |  | only the last N lines of the transcript |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/reply_test.go`: `TestGrainReplyAnswersQuestionRefusesIdleAndRefusesSecretRequest`; `pkg/cli/inbox_test.go`: `TestGrainInboxMatchesActionableCategoriesWithinRepoGrants`; `pkg/cli/wait_test.go`: `TestTasksWaitEndpointWakesOnConditionsEarnsNoWaitCreditAndExits5OnTimeout`; `pkg/cli/logs_test.go`: `TestGrainLogsStreamsAndExitsOnAttemptCompletion`.
 
 ---
 
@@ -1281,9 +1325,15 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-upgrade-allowed-branches` | string | `"main,candidate,rc,latest,v[0-9]*.[0-9]*.[0-9]*"` |  | comma-separated branches the UI's Upgrade button, a scheduled upgrade or an agent may upgrade this deployment to, each a path.Match pattern ('*' never crosses a '/'; e.g. main,release/*), or ** for any branch at all; any other branch is refused. The default is grain's own release names -- main, candidate, latest and vX.Y.Z release tags -- which only grain's merge queue and release cut move; a task or feature branch needs listing here |
 | `-upgrade-drain-window` | duration |  |  | maximum time a scheduled upgrade waits for active tasks and CI runs to drain before proceeding with the upgrade (0 waits indefinitely for runs to complete normally) |
 | `-upgrade-image` | string |  |  | image repository, with no tag, that CI publishes a tag per branch to (e.g. ghcr.io/bwsalmon/grain/grain); set, the UI's Upgrade button pulls a branch's image instead of building one, and -upgrade-image-ref-file is required |
+| `-upgrade-image-fallback` | string |  |  | fallback image source when the primary source cannot fetch a candidate daemon image: "none", "registry", or "release-assets" (or GRAIN_UPGRADE_IMAGE_FALLBACK) |
 | `-upgrade-image-ref-file` | string |  |  | file a successful -upgrade-image upgrade rewrites with the image the service should run, as one GRAIN_IMAGE=<ref> line for grain-daemon.service to read as an EnvironmentFile (required with -upgrade-image) |
+| `-upgrade-image-source` | value |  |  | where -upgrade-image loads candidate container images from: "release-assets" (gzip tarballs on the repository's releases) or "registry" (docker pull); empty defaults to release-assets with registry fallback when a release has no image assets (or GRAIN_UPGRADE_IMAGE_SOURCE) |
 | `-upgrade-install-path` | string |  |  | where a successful upgrade's binary is installed to (required with -upgrade-src-dir) |
+| `-upgrade-release-asset` | string |  |  | daemon tarball asset name on releases when images.json is not used (e.g. grain-image.tar.gz, or GRAIN_UPGRADE_RELEASE_ASSET) |
+| `-upgrade-release-checksum` | string |  |  | checksum asset name or suffix (starting with '.') for release-asset tarballs; defaults to .sha256 (or GRAIN_UPGRADE_RELEASE_CHECKSUM) |
+| `-upgrade-release-repo` | string |  |  | host-qualified repository (<host>/<owner>/<name>) whose releases carry upgrade image assets; defaults to the repository mapped from -upgrade-image or registered by the edition (or GRAIN_UPGRADE_RELEASE_REPO) |
 | `-upgrade-restart-cmd` | value |  |  | one argument of the command run at the end of a successful upgrade to bring the new build up -- repeat for every argument, e.g. -upgrade-restart-cmd=sudo -upgrade-restart-cmd=systemctl -upgrade-restart-cmd=restart -upgrade-restart-cmd=grain-daemon.service. Omitted entirely, the upgrade still happens but nothing brings the new build up on its own. Used by both upgrade paths below. |
+| `-upgrade-sandbox-release-asset` | value |  |  | per-sandbox-image release asset mapping as <role-or-repo>=<asset> -- repeat for each image, e.g. -upgrade-sandbox-release-asset=guest=grain-guest.tar.gz (or comma-separated in GRAIN_UPGRADE_SANDBOX_RELEASE_ASSETS) |
 | `-upgrade-src-dir` | string |  |  | git checkout of bwsalmon/grain to fetch/build from when the UI's Upgrade button is used; empty disables the feature |
 | `-upgrade-verify-cmd` | value |  |  | one argument of the command that verifies an -upgrade-image image's signature before anything runs it -- repeat for every argument, e.g. -upgrade-verify-cmd=cosign -upgrade-verify-cmd=verify -upgrade-verify-cmd=--key=/etc/grain/cosign.pub -upgrade-verify-cmd=--insecure-ignore-tlog=true (docs/image-signing.md). The image is appended (by digest on a host, by tag in a cluster, where the command must print cosign's JSON); a non-zero exit refuses the upgrade. Omitted, upgrades go ahead unverified and say so. |
 <!-- END GENERATED FLAGS -->
