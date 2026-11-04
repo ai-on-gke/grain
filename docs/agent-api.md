@@ -642,7 +642,11 @@ Its arguments are:
 - `query`, an object of query parameters, naming and describing the
   ones the route's handler reads (`routeQueries`);
 - `body`, for a route that reads one: the JSON request body, described
-  field by field from the request type declared in `routeBodies`.
+  field by field from the request type declared in `routeBodies`, with
+  the sentence `routeFieldDocs` gives a field whose name and type do not
+  say enough on their own (the git connection check's `credential`,
+  which is only ever a saved credential's name, against its `type`,
+  which is how an unsaved one is described).
 
 A route that changes one task by its id (`/api/tasks/{id}...`, any method
 but GET) also takes `expect`: `{state, title_prefix, kind}`, what the caller
@@ -671,12 +675,54 @@ daemon, serving six tools whatever the caller holds:
 
 | Tool | What it does |
 |---|---|
-| `grain_explore_scope(scope?, tool?)` | With no arguments, the scope groups the caller is authorized for; with a group or scope, the routes under it with their JSON input schemas; with `tool`, only the routes whose tool name or path matches, which is far cheaper than a whole group. |
-| `grain_invoke(tool, arguments, reason?)` | Runs one route. `arguments` carries the path parameters by name, `query`, `body` (or the body's fields directly) and, on task mutations, `expect` (`state`, `title_prefix`, `kind`), which reads the task first and refuses the call if the record disagrees. A destructive or dangerous route needs `reason`. |
-| `grain_filing_context(repo?)` | Target repositories, templates, boards, custom fields and grantable capabilities, each part served only to a caller holding the scope of the route that serves the same data. |
+| `grain_explore_scope(scope?, tool?, view?, includeAliases?)` | With no arguments, the scope groups the caller is authorized for; with a group or scope (or `all`), the routes under it; with `tool`, only the routes a word finds -- in tool names, paths, scopes and descriptions -- which is far cheaper than a whole group. The answer shrinks to fit one page (below). |
+| `grain_invoke(tool, arguments, reason?)` | Runs one route. `arguments` carries the path parameters by name, `query`, `body` (or the body's fields directly) and, on task mutations, `expect` (`state`, `title_prefix`, `kind`), which reads the task first and refuses the call if the record disagrees. A destructive or dangerous route needs `reason`. A `tool` that names no route is answered with the nearest names the caller may use (`did you mean api_get_log_lines?`). |
+| `grain_filing_context(repo?)` | `targetRepos`, `anyRepoAllowed`, `defaultRepo`, templates, boards, custom fields and grantable capabilities, each part served only to a caller holding the scope of the route that serves the same data. A key is absent only when the caller lacks that scope; a list the caller may read is `[]` when empty, never `null`. |
 | `grain_submit_task(...)` | `POST /api/tasks`; `approve` defaults to false, so the task lands proposed. |
 | `grain_list_tasks(repo?, state?, q?, limit?, summary?)` | Compact summary rows by default. |
 | `grain_get_task(id, view?)` | A ~1 KB summary by default; `conversation` pages comments, `full` is the whole record. |
+
+### Exploring: views, words and aliases
+
+`grain_explore_scope` answers a route query in one of three views, and
+left to choose picks the most detailed one that fits in about 10 KB
+(`maxExploreResultBytes`, under `pkg/mcp`'s own cap, so an answer is
+never elided in the middle):
+
+| `view` | Per route | Fits |
+|---|---|---|
+| `full` | `tool`, `method`, `path`, `scope`, `description`, `inputSchema` | a few routes: one named in `tool`, or a word's matches |
+| `compact` | `tool`, `method`, `path`, `scope`, one-line `summary`; no schema | any one group (`repos`, `tasks`, ...) |
+| `index` | tool names only, grouped by scope | every route the caller may call, in one call |
+
+So `grain_explore_scope(scope="all")` (or `view="index"` with no scope)
+lists every authorized tool name on one page; `scope="tasks"` lists the
+group's routes as compact lines with a `hint` saying how to get one
+route's schema; and `tool="api_add_comment"` gives that route's schema
+in full. Naming `view` overrides the choice: `view="full"` on a whole
+group is allowed and large.
+
+`tool` is a search, not only a name. One or more words are matched
+against the words of each route's tool name, path segments, scope and
+description, every word having to be found somewhere (`tool="git
+connection"`, `tool="merge queue"`, `tool="access"`); a query that is
+exactly a tool's name, with or without its `api_` prefix, finds that
+tool alone. A word that finds nothing is answered with the nearest tool
+names and scope groups (`Did you mean api_add_comment?`), ranked by
+word overlap, prefix and edit distance, rather than a dead end; a word
+that finds routes the caller holds no grant for says which grant.
+
+The per-field repository configuration routes -- `GET`/`PUT`
+`/api/repos/{owner}/{name}/ci-mode`, `.../setup-command`,
+`.../ignore-github-ci` and the rest named in `repoSettingsFieldRoutes`
+-- are aliases: each reads or writes one field of the document
+`api_get_repo_settings` reports whole and `api_set_repo_settings`
+writes field by field (`api_set_deployment_repo_config` is the other
+whole-document write). They stay for the UI and run as any route does,
+but a listing folds them out, with an `aliases` note saying how many
+and for which fields, unless `includeAliases=true`; when listed, each
+carries `aliasOf` naming the route it stands for, and a `tool` word that
+names one (`ci_mode`) finds it regardless.
 
 Six fixed schemas in the model's context instead of one per route is
 what the design is for: for a session holding many scopes the tool list
