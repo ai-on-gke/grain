@@ -55,10 +55,10 @@ const capabilityServerPrincipal = "capability-servers"
 //
 // A stdio server set to run: host is started through grain hostd where
 // that is this deployment's host executor (hostdClient non-nil,
-// Config.capabilityHostd), and refused anywhere else. A run routed to
-// another hostd has its run: host servers started there instead, through
-// the hostdCapabilityServers returned beside the registry, which
-// LiveConfig.Refresh keeps in step with it.
+// Config.capabilityHostd), and refused anywhere else. A run: hostd server
+// that names a hostd of its own (protocol.ServerConfig.Hostd) is started
+// on that hostd instead, through the hostdCapabilityServers returned
+// beside the registry, which LiveConfig.Refresh keeps in step with it.
 //
 // The first configuration is handed over from the stored row here; after
 // that LiveConfig.Refresh hands over each one it reads, so a merged
@@ -120,14 +120,15 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 	}
 	go reg.Run(ctx, 0)
 	if store != nil {
+		combined := placedStatusRegistry{Registry: reg, placed: onHostd}
 		// Task workspaces any agent may create (RegisterWorkspaceJanitorTools)
 		// are deleted once their tasks have closed and the server's retention has passed.
-		go runWorkspaceJanitor(ctx, reg, storeClosedAt(store), workspaceJanitorInterval)
+		go runWorkspaceJanitor(ctx, combined, storeClosedAt(store), workspaceJanitorInterval)
 		// Non-PR change providers (pkg/change: workspace changelists) reach their
-		// capability server's daemon-only control tools through reg, and
+		// capability server's daemon-only control tools through combined, and
 		// a kind blocked on expired credentials is checked again every
 		// 5 minutes until it clears.
-		change.Bind(changeControl{reg: reg})
+		change.Bind(changeControl{reg: combined})
 		go change.Watch(ctx, store)
 		// Every live CL is handed to its provider's poller once a minute,
 		// for the task view's presubmit badge (changelists.md §3).

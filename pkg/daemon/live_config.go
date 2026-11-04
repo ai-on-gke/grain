@@ -204,6 +204,7 @@ func (l *LiveConfig) withHostdCapabilityServers(h *hostdCapabilityServers) *Live
 	if h != nil {
 		// Each run routed by the configuration as it stands.
 		h.live = l.Current
+		go h.attachConnected()
 	}
 	l.hostdCapabilityServers = h
 	return l

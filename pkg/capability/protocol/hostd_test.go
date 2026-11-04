@@ -18,6 +18,7 @@ package protocol
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,6 +28,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/hostd"
+	"gopkg.in/yaml.v3"
 )
 
 // startTestHostd serves a real grain hostd whose allowlist offers this
@@ -175,13 +177,80 @@ func TestValidateRunHost(t *testing.T) {
 		{Command: "/usr/local/bin/corp-search", Run: RunHost},
 		{ServerURL: "http://127.0.0.1:9802/mcp", Run: RunHost},
 		{Command: "corp-search", Run: "sideways"},
+		{Command: "corp-search", Hostd: "ws-a"},
+		{Command: "corp-search", Run: RunHostd, Hostd: "UPPERCASE"},
+		{Command: "corp-search", Run: RunHostd, Hostd: "ws a"},
+		{Command: "corp-search", Run: RunHostd, Hostd: "=gpu"},
+		{Command: "corp-search", Run: RunHostd, Hostd: "pool=gpu,notalabel"},
 	} {
 		if err := bad.Validate(id); err == nil {
 			t.Errorf("%+v validated", bad)
 		}
 	}
-	if err := (ServerConfig{Command: "corp-search", Run: RunHost}).Validate(id); err != nil {
-		t.Error(err)
+	for _, good := range []ServerConfig{
+		{Command: "corp-search", Run: RunHost},
+		{Command: "corp-search", Run: RunHostd, Hostd: "ws-a"},
+		{Command: "corp-search", Run: RunHostd, Hostd: "pool=gpu,zone=west"},
+	} {
+		if err := good.Validate(id); err != nil {
+			t.Errorf("%+v: %v", good, err)
+		}
+	}
+}
+
+func TestHostdTargetJSONAndYAMLValidation(t *testing.T) {
+	for _, tc := range []struct {
+		json string
+		yaml string
+		want HostdTarget
+	}{
+		{`"ws-a"`, `ws-a`, "ws-a"},
+		{`{"name":"ws-a"}`, `{name: ws-a}`, "ws-a"},
+		{`{"labels":{"zone":"west","pool":"gpu"}}`, "labels:\n  zone: west\n  pool: gpu\n", "pool=gpu,zone=west"},
+		{`"zone=west,pool=gpu"`, `zone=west,pool=gpu`, "pool=gpu,zone=west"},
+		{`""`, `""`, ""},
+	} {
+		var jt HostdTarget
+		if err := json.Unmarshal([]byte(tc.json), &jt); err != nil || jt != tc.want {
+			t.Errorf("json %s -> %q, %v; want %q", tc.json, jt, err, tc.want)
+		}
+		var yt HostdTarget
+		if err := yaml.Unmarshal([]byte(tc.yaml), &yt); err != nil || yt != tc.want {
+			t.Errorf("yaml %q -> %q, %v; want %q", tc.yaml, yt, err, tc.want)
+		}
+	}
+	for _, badJSON := range []string{
+		`{}`,
+		`{"labels":{}}`,
+		`{"name":""}`,
+		`{"name":"ws-a","labels":{"pool":"gpu"}}`,
+		`{"name":"UPPER"}`,
+		`{"name":"pool=gpu"}`,
+		`{"labels":{"a,b":"1"}}`,
+		`{"labels":{"a":"1=2"}}`,
+		`{"labels":{"":"1"}}`,
+		`{"other":"ws-a"}`,
+		`"=gpu"`,
+		`"pool=gpu,bare"`,
+	} {
+		var jt HostdTarget
+		if err := json.Unmarshal([]byte(badJSON), &jt); err == nil {
+			t.Errorf("json %s decoded as %q; want refusal", badJSON, jt)
+		}
+	}
+	for _, badYAML := range []string{
+		`{}`,
+		`{labels: {}}`,
+		`{name: ws-a, labels: {pool: gpu}}`,
+		`{name: UPPER}`,
+		`{labels: {"a,b": "1"}}`,
+		`{unknown: ws-a}`,
+		`"=gpu"`,
+	} {
+		var yt HostdTarget
+		if err := yaml.Unmarshal([]byte(badYAML), &yt); err == nil {
+			t.Errorf("yaml %s decoded as %q; want refusal", badYAML, yt)
+		}
 	}
 }
 

@@ -60,8 +60,8 @@ type hostdRoute struct {
 	// none dialing in) and nothing pinned one.
 	Name string
 	Exec HostExecutor
-	// Pinned is whether the task's own selector chose it, rather than
-	// the default.
+	// Pinned is whether the connection's own selector chose it, rather
+	// than the default.
 	Pinned bool
 }
 
@@ -109,25 +109,46 @@ func resolveHostdSelector(ctx context.Context, live Config, store *model.Store, 
 // itself gives -- wrapped to say whose hostd it is.
 func connectionHostdRoute(ctx context.Context, live Config, store *model.Store, b model.AgentBackend) (hostdRoute, error) {
 	targets := b.HostdTargets()
-	if len(targets) == 0 {
-		return resolveHostdSelector(ctx, live, store, "")
+	r, badSel, wait, fatal := resolveConnectionTargets(ctx, live, store, targets)
+	if err := wrapConnectionTargetErr(b.ID, targets, badSel, wait, fatal); err != nil {
+		return hostdRoute{}, err
 	}
-	var wait error
+	return r, nil
+}
+
+func resolveConnectionTargets(ctx context.Context, live Config, store *model.Store, targets []string) (route hostdRoute, badSel string, wait error, fatal error) {
+	if len(targets) == 0 {
+		r, err := resolveHostdSelector(ctx, live, store, "")
+		return r, "", nil, err
+	}
 	for _, sel := range targets {
 		r, err := resolveHostdSelector(ctx, live, store, sel)
 		if err == nil {
-			return r, nil
+			return r, "", nil, nil
 		}
 		var w *HostdWaitError
 		if !errors.As(err, &w) {
-			return hostdRoute{}, fmt.Errorf("connection %q's hostd %s: %w", b.ID, sel, err)
+			return hostdRoute{}, sel, nil, err
 		}
 		if wait == nil {
 			wait = err
 		}
 	}
-	return hostdRoute{}, fmt.Errorf("connection %q runs its CLI on %s, which is not connected; its runs wait (%w)",
-		b.ID, describeHostdTargets(targets), wait)
+	return hostdRoute{}, "", wait, nil
+}
+
+func wrapConnectionTargetErr(id string, targets []string, badSel string, wait, fatal error) error {
+	if fatal != nil {
+		if len(targets) == 0 {
+			return fatal
+		}
+		return fmt.Errorf("connection %q's hostd %s: %w", id, badSel, fatal)
+	}
+	if wait != nil {
+		return fmt.Errorf("connection %q runs its CLI on %s, which is not connected; its runs wait (%w)",
+			id, describeHostdTargets(targets), wait)
+	}
+	return nil
 }
 
 // describeHostdTargets says a connection's hostd list as a wait reason
@@ -149,19 +170,22 @@ func (p *AgentPool) connectionRoutes(ctx context.Context, live Config, backends 
 	routes := map[string]hostdRoute{}
 	blocked := map[string]error{}
 	type resolved struct {
-		route hostdRoute
-		err   error
+		route  hostdRoute
+		badSel string
+		wait   error
+		fatal  error
 	}
 	seen := map[string]resolved{}
 	for _, b := range backends {
-		key := strings.Join(b.HostdTargets(), "\x00")
+		targets := b.HostdTargets()
+		key := strings.Join(targets, "\x00")
 		res, ok := seen[key]
 		if !ok {
-			res.route, res.err = connectionHostdRoute(ctx, live, p.Store, b)
+			res.route, res.badSel, res.wait, res.fatal = resolveConnectionTargets(ctx, live, p.Store, targets)
 			seen[key] = res
 		}
-		if res.err != nil {
-			blocked[b.ID] = res.err
+		if err := wrapConnectionTargetErr(b.ID, targets, res.badSel, res.wait, res.fatal); err != nil {
+			blocked[b.ID] = err
 			continue
 		}
 		routes[b.ID] = res.route

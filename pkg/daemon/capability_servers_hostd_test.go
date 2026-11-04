@@ -28,6 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/ui"
 	"github.com/ai-on-gke/grain/pkg/whererun"
 )
 
@@ -116,7 +117,41 @@ func TestAPlacedCapabilityServerRunsOnItsOwnHostd(t *testing.T) {
 	h := newHostdCapabilityServers(ctx, base, opts, store)
 	h.update(configured)
 	live := NewLiveConfig(store, nil, cfg, nil).WithCapabilityServers(base).withHostdCapabilityServers(h)
-	routed, ok := capabilityServerLookup(live).(orchestrator.TaskCapabilityServers)
+	uiStatuses := capabilityServerStatuses(live)
+
+	// Settings attaches placed servers on connected hostds before any task
+	// runs, and shows disconnected ones as waiting.
+	rows := map[string]servers.Status{}
+	for _, st := range uiStatuses.Statuses() {
+		rows[st.ID] = st
+	}
+	if got := rows[offScripts].State; got != NeedsHostd("ws-off") {
+		t.Errorf("the server on ws-off reads %q in Settings before any task runs, want %q", got, NeedsHostd("ws-off"))
+	}
+	if got := rows[hostScriptsA].State; got != servers.Attached {
+		t.Errorf("the server on ws-a reads %q in Settings before any task runs, want attached", got)
+	}
+	if _, ok := rows[inContainer]; !ok {
+		t.Error("Settings lost the deployment's own servers")
+	}
+
+	// Control-plane tool calls (TestHostScript, TestGChatPost, janitor) and
+	// non-task Lookup (CI passes) also reach placed servers on their hostd.
+	caller, ok := uiStatuses.(ui.CapabilityServerToolCaller)
+	if !ok {
+		t.Fatal("capabilityServerStatuses does not implement CapabilityServerToolCaller")
+	}
+	if out, err := caller.CallTool(ctx, hostScriptsA, "run_script", map[string]any{}, 5*time.Second); err != nil || string(out) != "ran on only-a" {
+		t.Errorf("CallTool(placed on ws-a) = %q, %v; want ran on only-a", out, err)
+	}
+	ciLookup := capabilityServerLookup(live)
+	if ciSrv, err := ciLookup.Lookup(hostScriptsA); err != nil {
+		t.Fatalf("CI Lookup(placed on ws-a) = %v", err)
+	} else if out, err := ciSrv.CallTool(ctx, "run_script", map[string]any{}, 5*time.Second); err != nil || string(out) != "ran on only-a" {
+		t.Errorf("CI Lookup CallTool(placed on ws-a) = %q, %v; want ran on only-a", out, err)
+	}
+
+	routed, ok := ciLookup.(orchestrator.TaskCapabilityServers)
 	if !ok {
 		t.Fatal("the daemon's capability servers do not route placed servers to their hostd")
 	}
@@ -164,22 +199,6 @@ func TestAPlacedCapabilityServerRunsOnItsOwnHostd(t *testing.T) {
 		t.Errorf("a server on a disconnected hostd: Lookup = %v, want needs-hostd:ws-off", err)
 	}
 
-	// Settings lists the placed servers beside the deployment's: the one
-	// on ws-a as its own registry has it, the one on ws-off as waiting.
-	rows := map[string]servers.Status{}
-	for _, st := range capabilityServerStatuses(live).Statuses() {
-		rows[st.ID] = st
-	}
-	if got := rows[offScripts].State; got != NeedsHostd("ws-off") {
-		t.Errorf("the server on ws-off reads %q in Settings, want %q", got, NeedsHostd("ws-off"))
-	}
-	if got := rows[hostScriptsA].State; got != servers.Attached {
-		t.Errorf("the server on ws-a reads %q in Settings, want attached", got)
-	}
-	if _, ok := rows[inContainer]; !ok {
-		t.Error("Settings lost the deployment's own servers")
-	}
-
 	// A server dropped from mcp_servers goes from the hostd's registry too.
 	h.update(map[string]protocol.ServerConfig{inContainer: configured[inContainer]})
 	h.mu.Lock()
@@ -189,6 +208,105 @@ func TestAPlacedCapabilityServerRunsOnItsOwnHostd(t *testing.T) {
 		_, err := regA.Lookup(hostScriptsA)
 		return err != nil
 	})
+}
+
+// Settings' Test button (Probe) and run-location check reach a placed
+// server's own hostd -- never the deployment's default hostd -- so a
+// credential typed into the form or referenced by $secret: is never
+// forwarded to the default hostd's machine.
+func TestProbingAPlacedCapabilityServerNeverTouchesDefaultHostd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	store, closeStore := openTestStore(t, t.TempDir())
+	t.Cleanup(closeStore)
+	if err := store.EnsureLocalHostd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, tokA, err := store.CreateHostd(ctx, model.Hostd{Name: "ws-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.CreateHostd(ctx, model.Hostd{Name: "ws-off"}); err != nil {
+		t.Fatal(err)
+	}
+	sock := startTestHostd(t, "capabilities:\n  local-only-cap:\n    command: %[1]s\n")
+	cfg := withExecutor(Config{HostdSocket: sock}, whererun.Detection{Signal: "/.dockerenv"}, nil)
+	cfg.HostdHub = newHostdHub(cfg, store)
+	ctl := httptest.NewServer(cfg.HostdHub)
+	t.Cleanup(ctl.Close)
+	startDialingHostd(t, ctl.URL, tokA, "capabilities:\n  ws-a-cap:\n    command: %[1]s\n")
+	waitFor(t, func() bool { return cfg.HostdHub.HostdStatus("ws-a").Connected })
+
+	type seen struct {
+		where  string
+		secret string
+	}
+	var probes []seen
+	attach := func(ctx context.Context, id string, sc protocol.ServerConfig, lookup protocol.SecretLookup, opts protocol.DialOptions) (*protocol.Server, error) {
+		offers, err := opts.Hostd.Offers(ctx)
+		if err != nil {
+			return nil, err
+		}
+		where := ""
+		for _, o := range offers {
+			where = o.Name
+		}
+		tok, _ := lookup("grain-capability-test/token")
+		probes = append(probes, seen{where: where, secret: tok})
+		return protocol.NewServer(ctx, id, hostScriptCaller{hostd: where})
+	}
+	client := cfg.capabilityHostd()
+	opts := servers.Options{Hostd: client, Attach: attach}
+	base := servers.New(opts)
+	h := newHostdCapabilityServers(ctx, base, opts, store)
+	live := NewLiveConfig(store, nil, cfg, nil).WithCapabilityServers(base).withHostdCapabilityServers(h)
+
+	prober, ok := capabilityServerStatuses(live).(ui.CapabilityServerProber)
+	if !ok {
+		t.Fatal("capabilityServerStatuses does not implement CapabilityServerProber")
+	}
+	placedProber, ok := capabilityServerStatuses(live).(ui.CapabilityServerPlacedProber)
+	if !ok {
+		t.Fatal("capabilityServerStatuses does not implement CapabilityServerPlacedProber")
+	}
+	entries, connected, err := placedProber.HostCapabilityEntriesFor(ctx, "ws-a")
+	if err != nil || !connected || !slices.Equal(entries, []string{"ws-a-cap"}) {
+		t.Errorf("HostCapabilityEntriesFor(ws-a) = %v, %v, %v; want [ws-a-cap], true, nil", entries, connected, err)
+	}
+	if _, connected, err := placedProber.HostCapabilityEntriesFor(ctx, "ws-off"); err == nil || connected {
+		t.Errorf("HostCapabilityEntriesFor(ws-off) = connected=%v, err=%v; want disconnected wait error", connected, err)
+	}
+
+	res := prober.Probe(ctx, "https://example.com/caps/placed", protocol.ServerConfig{
+		Command: "ws-a-cap", Run: protocol.RunHostd, Hostd: "ws-a",
+	}, func(name string) (string, bool) {
+		if name == "grain-capability-test/token" {
+			return "secret-for-ws-a", true
+		}
+		return "", false
+	})
+	if !res.OK {
+		t.Fatalf("Probe(ws-a) failed: %+v", res)
+	}
+	if len(probes) != 1 || probes[0].where != "ws-a-cap" || probes[0].secret != "secret-for-ws-a" {
+		t.Errorf("Probe(ws-a) ran on %+v, want only ws-a", probes)
+	}
+
+	// Probing a server placed on an offline hostd fails immediately without
+	// resolving secrets or falling back to the default hostd.
+	offCalled := false
+	resOff := prober.Probe(ctx, "https://example.com/caps/off", protocol.ServerConfig{
+		Command: "ws-a-cap", Run: protocol.RunHostd, Hostd: "ws-off",
+	}, func(string) (string, bool) {
+		offCalled = true
+		return "secret-for-off", true
+	})
+	if resOff.OK || !strings.Contains(resOff.Error, "ws-off") {
+		t.Errorf("Probe(ws-off) = %+v, want failure naming ws-off", resOff)
+	}
+	if offCalled || len(probes) != 1 {
+		t.Errorf("Probe(ws-off) resolved secrets (%v) or touched another hostd (%+v)", offCalled, probes)
+	}
 }
 
 // A hostd's registry attaches the placed servers that name it and the

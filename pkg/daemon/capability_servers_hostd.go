@@ -16,6 +16,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -87,6 +88,45 @@ func (h *hostdCapabilityServers) update(configured map[string]protocol.ServerCon
 	h.mu.Unlock()
 	for name, reg := range regs {
 		reg.Update(placedOn(placed, name, h.hostdLabels(h.ctx, name)))
+	}
+	if len(placed) > 0 && h.live != nil {
+		go h.attachConnected()
+	}
+}
+
+// attachConnected builds the registry of every connected hostd a placed
+// server resolves to now, so placed servers attach and advertise their
+// methods and config schemas in Settings before any task grants them.
+func (h *hostdCapabilityServers) attachConnected() {
+	if h == nil || h.live == nil {
+		return
+	}
+	h.mu.Lock()
+	placed := h.configured
+	h.mu.Unlock()
+	if len(placed) == 0 {
+		return
+	}
+	cfg := h.live()
+	seen := map[string]bool{}
+	for _, entry := range placed {
+		sel := string(entry.Hostd)
+		if seen[sel] {
+			continue
+		}
+		seen[sel] = true
+		ctx, cancel := context.WithTimeout(h.ctx, placedStatusTimeout)
+		route, err := resolveHostdSelector(ctx, cfg, h.store, sel)
+		cancel()
+		if err != nil {
+			continue
+		}
+		h.mu.Lock()
+		exists := h.regs[route.Name] != nil
+		h.mu.Unlock()
+		if !exists {
+			_, _ = h.registry(h.ctx, route.Name, route.Exec.hostdClient())
+		}
 	}
 }
 
@@ -168,14 +208,16 @@ func (h *hostdCapabilityServers) registry(ctx context.Context, name string, clie
 	}
 	placed := h.configured
 	h.mu.Unlock()
-	configured := placedOn(placed, name, h.hostdLabels(ctx, name))
 	if creating {
-		// Attached now rather than on the registry's first tick, so the
-		// run that is waiting to mint finds them.
-		r.reg.Sync(h.ctx, configured)
-		r.reg.Update(configured)
-		go r.reg.Run(h.ctx, 0)
-		close(r.ready)
+		// Attached off the caller's ctx so a short status timeout cannot
+		// strand the initial Sync while still letting ctx bound the wait.
+		go func() {
+			configured := placedOn(placed, name, h.hostdLabels(h.ctx, name))
+			r.reg.Sync(h.ctx, configured)
+			r.reg.Update(configured)
+			go r.reg.Run(h.ctx, 0)
+			close(r.ready)
+		}()
 	}
 	select {
 	case <-r.ready:
@@ -203,10 +245,29 @@ func (h *hostdCapabilityServers) ForTask(ctx context.Context, taskID string) (or
 	return &hostdRoutedServers{h: h, ctx: ctx, cfg: cfg, placed: placed, hostdOf: map[string]string{}}, capabilityHostdName(cfg), nil
 }
 
-// Lookup is the deployment registry's, for whatever is not minting for
-// one task.
+// Lookup reaches capabilityID on the deployment's registry, or on the
+// hostd its entry places it on when it is a placed run: hostd server
+// (for CI passes and control-plane callers that are not a task run).
 func (h *hostdCapabilityServers) Lookup(capabilityID string) (*protocol.Server, error) {
-	return h.base.Lookup(capabilityID)
+	if h == nil || h.live == nil {
+		return h.base.Lookup(capabilityID)
+	}
+	h.mu.Lock()
+	placed := h.configured
+	h.mu.Unlock()
+	entry, ok := placedEntry(placed, capabilityID)
+	if !ok {
+		return h.base.Lookup(capabilityID)
+	}
+	route, err := resolveHostdSelector(h.ctx, h.live(), h.store, string(entry.Hostd))
+	if err != nil {
+		return nil, fmt.Errorf("needs-hostd:%s: capability %s runs on hostd %s: %w", entry.Hostd, capabilityID, entry.Hostd, err)
+	}
+	reg, err := h.registry(h.ctx, route.Name, route.Exec.hostdClient())
+	if err != nil {
+		return nil, err
+	}
+	return reg.Lookup(capabilityID)
 }
 
 // hostdRoutedServers is one run's capability servers when some are
@@ -298,17 +359,16 @@ func (h *hostdCapabilityServers) statuses() []servers.Status {
 		row := servers.Status{ID: id, State: servers.Pending, Transport: "stdio", Run: protocol.RunHost, Builtin: entry.Builtin, Aliases: entry.Aliases}
 		ctx, cancel := context.WithTimeout(h.ctx, placedStatusTimeout)
 		route, err := resolveHostdSelector(ctx, cfg, h.store, sel)
-		cancel()
 		if err != nil {
+			cancel()
 			row.State, row.Error = NeedsHostd(sel), err.Error()
 			out = append(out, row)
 			continue
 		}
-		h.mu.Lock()
-		r := h.regs[route.Name]
-		h.mu.Unlock()
-		if r != nil {
-			for _, st := range r.reg.Statuses() {
+		reg, regErr := h.registry(ctx, route.Name, route.Exec.hostdClient())
+		cancel()
+		if regErr == nil && reg != nil {
+			for _, st := range reg.Statuses() {
 				if st.ID == id {
 					row = st
 				}
@@ -319,9 +379,70 @@ func (h *hostdCapabilityServers) statuses() []servers.Status {
 	return out
 }
 
-// placedStatusRegistry is the deployment's registry as Settings reads
-// it, with a row for each server placed on a hostd of its own, which the
-// deployment's registry does not attach.
+func (h *hostdCapabilityServers) probe(ctx context.Context, id string, cfg protocol.ServerConfig, extra protocol.SecretLookup) servers.ProbeResult {
+	if h == nil || h.live == nil {
+		return servers.ProbeResult{ID: id, Methods: []servers.MethodDetail{}, Error: servers.ErrNoHostd.Error()}
+	}
+	route, err := resolveHostdSelector(hostd.ForDisplay(ctx), h.live(), h.store, string(cfg.Hostd))
+	if err != nil {
+		return servers.ProbeResult{ID: id, Methods: []servers.MethodDetail{}, Error: err.Error()}
+	}
+	client := route.Exec.hostdClient()
+	opts := h.opts
+	opts.Hostd = &client
+	return servers.New(opts).Probe(ctx, id, cfg, extra)
+}
+
+func (h *hostdCapabilityServers) hostCapabilityEntries(ctx context.Context, selector string) ([]string, bool, error) {
+	if h == nil || h.live == nil {
+		return nil, false, servers.ErrNoHostd
+	}
+	route, err := resolveHostdSelector(hostd.ForDisplay(ctx), h.live(), h.store, selector)
+	if err != nil {
+		var w *HostdWaitError
+		if errors.As(err, &w) {
+			return nil, false, err
+		}
+		return nil, true, err
+	}
+	client := route.Exec.hostdClient()
+	opts := h.opts
+	opts.Hostd = &client
+	entries, err := servers.New(opts).HostCapabilityEntries(ctx)
+	if err != nil {
+		return nil, true, err
+	}
+	return entries, true, nil
+}
+
+func (h *hostdCapabilityServers) rotateManaged(capabilityID string) ([]string, error) {
+	if h == nil || h.live == nil {
+		return h.base.RotateManaged(capabilityID)
+	}
+	h.mu.Lock()
+	placed := h.configured
+	h.mu.Unlock()
+	entry, ok := placedEntry(placed, capabilityID)
+	if !ok {
+		return h.base.RotateManaged(capabilityID)
+	}
+	ctx, cancel := context.WithTimeout(h.ctx, placedStatusTimeout)
+	defer cancel()
+	route, err := resolveHostdSelector(ctx, h.live(), h.store, string(entry.Hostd))
+	if err != nil {
+		return nil, fmt.Errorf("needs-hostd:%s: capability %s runs on hostd %s: %w", entry.Hostd, capabilityID, entry.Hostd, err)
+	}
+	reg, err := h.registry(ctx, route.Name, route.Exec.hostdClient())
+	if err != nil {
+		return nil, err
+	}
+	return reg.RotateManaged(capabilityID)
+}
+
+// placedStatusRegistry is the deployment's registry as Settings and
+// control-plane callers read it, routing placed run: hostd servers --
+// including Probe and CallTool, so credentials never go to the default
+// hostd -- to the hostd each entry names.
 type placedStatusRegistry struct {
 	*servers.Registry
 	placed *hostdCapabilityServers
@@ -329,4 +450,37 @@ type placedStatusRegistry struct {
 
 func (r placedStatusRegistry) Statuses() []servers.Status {
 	return append(r.Registry.Statuses(), r.placed.statuses()...)
+}
+
+func (r placedStatusRegistry) Lookup(capabilityID string) (*protocol.Server, error) {
+	if r.placed != nil {
+		return r.placed.Lookup(capabilityID)
+	}
+	return r.Registry.Lookup(capabilityID)
+}
+
+func (r placedStatusRegistry) CallTool(ctx context.Context, capabilityID, tool string, arguments map[string]any, timeout time.Duration) ([]byte, error) {
+	srv, err := r.Lookup(capabilityID)
+	if err != nil {
+		return nil, err
+	}
+	return srv.CallTool(ctx, tool, arguments, timeout)
+}
+
+func (r placedStatusRegistry) Probe(ctx context.Context, id string, cfg protocol.ServerConfig, extra protocol.SecretLookup) servers.ProbeResult {
+	if cfg.OnHost() && cfg.Hostd != "" {
+		return r.placed.probe(ctx, id, cfg, extra)
+	}
+	return r.Registry.Probe(ctx, id, cfg, extra)
+}
+
+func (r placedStatusRegistry) HostCapabilityEntriesFor(ctx context.Context, selector string) ([]string, bool, error) {
+	return r.placed.hostCapabilityEntries(ctx, selector)
+}
+
+func (r placedStatusRegistry) RotateManaged(capabilityID string) ([]string, error) {
+	if r.placed != nil {
+		return r.placed.rotateManaged(capabilityID)
+	}
+	return r.Registry.RotateManaged(capabilityID)
 }

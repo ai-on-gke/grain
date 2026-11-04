@@ -205,6 +205,17 @@ func TestRunsRouteToTheirConnectionsHostdWithCapacityAndPerHostdPauses(t *testin
 		t.Errorf("paused on ws-a = %v, on ws-b = %v; want only ws-a paused", pausedOnA, pausedElsewhere)
 	}
 
+	// Two connections sharing an offline hostd target each report their own
+	// connection ID in their wait reason.
+	twoAway := []model.AgentBackend{conn("away-one", "ws-off"), conn("away-two", "ws-off")}
+	_, awayBlocked := pool.connectionRoutes(ctx, cfg, twoAway, false)
+	if awayBlocked["away-one"] == nil || !strings.Contains(awayBlocked["away-one"].Error(), `"away-one"`) {
+		t.Errorf("away-one error = %v, want connection \"away-one\"", awayBlocked["away-one"])
+	}
+	if awayBlocked["away-two"] == nil || !strings.Contains(awayBlocked["away-two"].Error(), `"away-two"`) {
+		t.Errorf("away-two error = %v, want connection \"away-two\"", awayBlocked["away-two"])
+	}
+
 	// The audit: the hostd, its instance and its owner.
 	instance, owner := pool.hostdAudit(ctx, cfg, routeA)
 	if instance != "cloudtop" || owner != "alice@example.com" {

@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v12"
+const Version = "trust-boundary/v13"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +81,12 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v13 added connection_hostd.go to auth-routes and capability server
+// hostd placement (capability_servers.go, capability_servers_hostd.go,
+// pkg/ui/capability_servers.go) to capabilities-secrets (grain/task-2165):
+// where run: hostd capability servers start and receive their resolved
+// secrets.
 //
 // v12 narrowed release-promotion to the approval path (grain/task-2664,
 // design/playbook/releases.playbook.md §0.3): the approval workflow, in
@@ -191,6 +197,11 @@ var Categories = []Category{
 		files: []string{
 			// Running a command on grain's own host once a person approves.
 			"pkg/daemon/mcpserver_hostexec.go",
+			// Which grain hostd starts a run: hostd capability server and
+			// receives its resolved secrets, and the Settings routes that
+			// write and probe mcpServers entries.
+			"pkg/daemon/capability_servers.go", "pkg/daemon/capability_servers_hostd.go",
+			"pkg/ui/capability_servers.go",
 			// What a CI sandbox is handed on other repositories, on which
 			// events, and the refusal of untrusted pull-request runs.
 			"pkg/model/repo_access.go", "pkg/daemon/ci.go", "pkg/daemon/ci_policy.go",
