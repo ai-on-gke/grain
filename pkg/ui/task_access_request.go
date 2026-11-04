@@ -78,9 +78,9 @@ type AccessRequestView struct {
 	Items     []AccessRequestItemView `json:"items"`
 	CreatedAt string                  `json:"createdAt"`
 	Holds     AccessHolds             `json:"holds"`
-	// Earlier is what people answered earlier requests on this task for
-	// exactly the same items, latest first: a request repeating one
-	// already denied shows the denial.
+	// Earlier is what people answered earlier requests on this task that
+	// asked for any of these items, latest first: a request repeating an
+	// item already denied or declined shows the earlier answer.
 	Earlier []model.AccessDecision `json:"earlier,omitempty"`
 }
 
@@ -236,10 +236,17 @@ func (c *Client) pendingAccessFor(ctx context.Context, task model.Task, obs *mod
 	for _, it := range req.Items {
 		view.Items = append(view.Items, c.checkAccessItem(ctx, task, it))
 	}
-	key := req.Key()
+	asked := make(map[string]bool, len(req.Items))
+	for _, it := range req.Items {
+		asked[it.Key()] = true
+	}
 	for i := len(obs.AccessDecisions) - 1; i >= 0; i-- {
-		if d := obs.AccessDecisions[i]; d.Request.Key() == key {
-			view.Earlier = append(view.Earlier, d)
+		d := obs.AccessDecisions[i]
+		for _, it := range d.Request.Items {
+			if asked[it.Key()] {
+				view.Earlier = append(view.Earlier, d)
+				break
+			}
 		}
 	}
 	return view

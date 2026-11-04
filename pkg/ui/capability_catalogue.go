@@ -125,22 +125,22 @@ func (c *Client) catalogueEditRefusal(ctx context.Context, task model.Task, gran
 	if err != nil {
 		return validationErrorf("%v", err)
 	}
-	if len(verdict.RequiresPerson) > 0 && c.requestActor(ctx).Actor.Kind == model.PrincipalAgent {
+	if len(verdict.RequiresPerson) > 0 && c.requestActor(ctx).Actor.Kind != model.PrincipalHuman {
 		return forbiddenErrorf("capability %s requires human approval (settings/capabilities.yml marks it requires_person)", grant)
 	}
 	return nil
 }
 
-// catalogueApprovalRefusal refuses an agent approving a task that holds a
+// catalogueApprovalRefusal refuses a non-person approving a task that holds a
 // grant the catalogue marks as a person's decision. Filing leaves such a
 // task proposed for a person to approve (catalogueFilingGrants), and
 // nothing at dispatch asks again whether a person did: without this, an
-// agent holding api:tasks:admin could file the task and approve it
+// agent or service account holding tasks:admin could file the task and approve it
 // itself, and the run would hold the grant with no person deciding.
 // A grant the catalogue refuses outright is not this check's business:
 // dispatch holds that task whoever approves it (orchestrator.catalogueHold).
 func (c *Client) catalogueApprovalRefusal(ctx context.Context, task model.Task) error {
-	if c.requestActor(ctx).Actor.Kind != model.PrincipalAgent {
+	if c.requestActor(ctx).Actor.Kind == model.PrincipalHuman {
 		return nil
 	}
 	cat, err := c.capabilityCatalogue(ctx)

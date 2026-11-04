@@ -208,14 +208,14 @@ export function askedCase(t) {
   }
   if (t.turnStopped)
     return { kind: "stopped", title: "Stopped by you", action: "reply" };
+  if (t.awaitingAccess)
+    return { kind: "access", title: "Asked for access", action: "grant" };
   if (t.interactive || t.consoleSession)
     return {
       kind: "message",
       title: "Waiting for your message",
       action: "reply",
     };
-  if (t.awaitingAccess)
-    return { kind: "access", title: "Asked for access", action: "grant" };
   if (t.questionSummary || t.pendingSecret)
     return { kind: "question", title: "Asked a question", action: "reply" };
   return { kind: "answer", title: "Answered in a comment", action: "reply" };
