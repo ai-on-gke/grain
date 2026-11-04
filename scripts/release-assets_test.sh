@@ -15,7 +15,7 @@
 
 # Drives scripts/release-assets.sh against a fake docker and a local git
 # remote, in dry-run mode, with no GitHub token: packaging every asset and
-# a manifest that meets release-asset contract v1, refusing manifests that
+# a manifest that meets the release-asset contract (v2), refusing manifests that
 # do not, and planning the publish, promote and retag of every release a
 # build, a promotion and the release train make -- with no registry push
 # anywhere. tests/deploy runs it (TestReleaseTrainShellSuites).
@@ -108,13 +108,14 @@ check "package writes every asset, sidecar and images.json" \
 check "sidecars are in sha256sum format and verify" \
   '(cd "$RELEASE_ASSETS_DIR" && sha256sum -c --quiet ./*.sha256)'
 m="$RELEASE_ASSETS_DIR/images.json"
-check "images.json is schema 1 for this repository, commit and version" \
-  '[ "$(jq -r "[.schema, .repository, .commit, .version] | @tsv" "$m")" = "$(printf "1\tgithub.com/ai-on-gke/grain\t%s\tv3.5.0-dev.2+%s" "$commit" "${commit:0:7}")" ]'
+check "images.json is schema 2 for this repository, commit and version" \
+  '[ "$(jq -r "[.schema, .repository, .commit, .version] | @tsv" "$m")" = "$(printf "2\tgithub.com/ai-on-gke/grain\t%s\tv3.5.0-dev.2+%s" "$commit" "${commit:0:7}")" ]'
 check "images.json names local refs, the gzip sha256 and the image ID" \
   '[ "$(jq -r .images.guest.ref "$m")" = "grain/guest:sha-$short" ] &&
    [ "$(jq -r .images["\"k8s-sandbox\""].ref "$m")" = "grain/k8s-sandbox:sha-$short" ] &&
    [ "$(jq -r .images.grain.sha256 "$m")" = "$(sha256sum "$RELEASE_ASSETS_DIR/grain-image.tar.gz" | cut -c1-64)" ] &&
-   [[ "$(jq -r .images.grain.imageId "$m")" =~ ^sha256:[0-9a-f]{64}$ ]]'
+   [[ "$(jq -r .images.grain.imageId "$m")" =~ ^sha256:[0-9a-f]{64}$ ]] &&
+   [ "$(jq -r "[.images[].release] | unique | .[]" "$m")" = "sha-$short" ]'
 check "the assets are gzip" 'gzip -t "$RELEASE_ASSETS_DIR/guest-image.tar.gz"'
 
 run bash "$assets" validate
@@ -128,7 +129,9 @@ bad() {
   run bash "$assets" validate "$work/bad"
   check "validate refuses $2" '[ "$status" != 0 ] && grep -q -- "$want" <<< "$out"'
 }
-bad '.schema = 2' "another schema" "schema is 2"
+bad '.schema = 3' "another schema" "schema is 3"
+bad '.images.guest.release = "channel-main"' "an image held by a moving release" "guest.release"
+bad '.schema = 1' "a schema 1 manifest naming releases" "which schema 1 does not"
 bad '.images.guest.ref = "ghcr.io/x/grain/guest:sha-1@sha256:'"$(printf '0%.0s' {1..64})"'"' "a registry pin" "guest.ref"
 bad '.images.guest.ref = "ghcr.io/guest:sha-'"$short"'"' "a ref naming a registry" "names a registry host"
 bad 'del(.images["k8s-sandbox"])' "a missing image" "not grain, guest and k8s-sandbox"
@@ -141,20 +144,28 @@ check "an image over the per-asset limit fails, naming the limit" '[ "$status" !
 bash "$assets" package > /dev/null
 
 run bash "$assets" --dry-run publish "sha-$short" channel-main
-check "a dry-run publish plans every asset on the sha- and channel releases" \
-  '[ "$status" = 0 ] && [ "$(grep -c "would POST .*/assets --upload" <<< "$out")" = 14 ] && grep -q "would POST /repos/ai-on-gke/grain/releases" <<< "$out"'
-check "images.json is the last asset a moving release gets" \
-  '[ "$(grep "would POST .*--upload" <<< "$out" | tail -n 1 | grep -c images.json)" = 1 ]'
+check "a dry-run publish puts every asset on the sha- release and only images.json on the channel" \
+  '[ "$status" = 0 ] && [ "$(grep -c "would POST .*/assets --upload" <<< "$out")" = 8 ] &&
+   [ "$(sed -n "/channel-main: holds/,\$p" <<< "$out" | grep -c "would POST .*--upload")" = 1 ] &&
+   sed -n "/channel-main: holds/,\$p" <<< "$out" | grep -q -- "--upload images.json"'
+check "images.json is the last asset the sha- release gets" \
+  '[ "$(sed -n "1,/published sha-/p" <<< "$out" | grep "would POST .*--upload" | tail -n 1 | grep -c images.json)" = 1 ]'
+check "every release is created as a prerelease that can never be latest" \
+  '[ "$(grep -c "\"prerelease\":true,\"make_latest\":\"false\"" <<< "$out")" = 2 ]'
 check "nothing was pushed to a registry" '! grep -qE "docker (push|login|tag)" "$DOCKER_LOG"'
 
 run bash "$assets" --dry-run publish main
 check "a release named after a bare branch is refused" '[ "$status" != 0 ] && grep -q "never a bare branch name" <<< "$out"'
+run bash "$assets" --dry-run publish latest
+check "there is no release named latest" '[ "$status" != 0 ] && grep -q "no release named latest" <<< "$out"'
 run bash "$assets" publish "sha-$short"
 check "a real publish with no token fails before writing anything" '[ "$status" != 0 ] && grep -q "needs GITHUB_TOKEN" <<< "$out"'
 
 run bash "$assets" --dry-run promote
-check "promote publishes the sha- assets as vX.Y.Z and latest" \
-  '[ "$status" = 0 ] && grep -q "promoting sha-$short as v3.4.0" <<< "$out" && grep -q "published v3.4.0" <<< "$out" && grep -q "published latest" <<< "$out"'
+check "promote points vX.Y.Z at the sha- release and marks it GitHub's latest" \
+  '[ "$status" = 0 ] && grep -q "promoting sha-$short as v3.4.0" <<< "$out" && grep -q "published v3.4.0" <<< "$out" &&
+   grep -q "\"prerelease\":false,\"make_latest\":\"true\"" <<< "$out" && [ "$(grep -c "would POST .*--upload" <<< "$out")" = 1 ] &&
+   ! grep -q "release latest" <<< "$out"'
 check "a promoted manifest differs only in version and createdAt" \
   '[ "$(jq -r .version "$m")" = v3.4.0 ] && [ "$(jq -r .commit "$m")" = "$commit" ] && bash "$assets" validate > /dev/null'
 
@@ -166,8 +177,9 @@ check "promoting a release whose sha- assets cannot be fetched fails closed" '[ 
 
 bash "$assets" package > /dev/null
 run bash "$assets" --dry-run retag "sha-$short" v3.5.0-rc.1 v3.5.0-rc.1 channel-candidate
-check "retag plans the release train's rc and channel-candidate releases" \
-  '[ "$status" = 0 ] && grep -q "published v3.5.0-rc.1" <<< "$out" && grep -q "published channel-candidate" <<< "$out" && [ "$(jq -r .version "$m")" = v3.5.0-rc.1 ]'
+check "retag points the release train's rc and channel-candidate at the sha- release" \
+  '[ "$status" = 0 ] && grep -q "published v3.5.0-rc.1" <<< "$out" && grep -q "published channel-candidate" <<< "$out" && [ "$(jq -r .version "$m")" = v3.5.0-rc.1 ] &&
+   [ "$(grep -c "would POST .*--upload" <<< "$out")" = 2 ] && ! grep -q "upload .*tar.gz" <<< "$out"'
 run bash "$assets" --dry-run retag "sha-$short" v3.5.0 v3.5.0-pending
 check "retag plans a pending release" '[ "$status" = 0 ] && grep -q "published v3.5.0-pending" <<< "$out"'
 run bash "$assets" --dry-run retag "sha-$short" v3.5.0-rc.1 v3.5.0-rc.1-discarded
@@ -202,6 +214,9 @@ check "mirror retags a release's image into the deployment's registry" \
   '[ "$status" = 0 ] && grep -qx "k8s-sandbox=registry.example/proj/grain/k8s-sandbox:sha-$short" <<< "$out"'
 
 bash "$assets" package > /dev/null
+run bash "$assets" --dry-run prune
+check "prune plans retention without writing anything" '[ "$status" = 0 ] && grep -q "keep the newest 50" <<< "$out"'
+
 run bash "$assets" load
 check "load checks every image ID the manifest names" '[ "$status" = 0 ] && [ "$(grep -c "^release-assets.sh: loaded" <<< "$out")" = 3 ]'
 

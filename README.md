@@ -81,7 +81,7 @@ sudo \
 ```
 
 A new deployment runs the last promoted release, the `latest` channel, the
-core build -- installed from the `latest` GitHub release's assets
+core build -- installed from the assets of GitHub's latest release
 (`images.json` and `docker save` tarballs, checksum-verified and
 `docker load`ed; [docs/release-assets.md](docs/release-assets.md)), so the
 host needs no registry or registry credential. Set `GRAIN_IMAGE` to pull a

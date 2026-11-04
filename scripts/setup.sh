@@ -3563,9 +3563,15 @@ manifest_field() {
 # (scripts/release-assets.sh replaces its assets non-atomically): it is
 # tried again, never taken for a release with nothing in it.
 install_release_assets() {
-  local release base dir key asset sum side ref id got attempt
+  local release base dir key asset sum side ref id got attempt holder holder_base
   release="$(release_for_tag "$GRAIN_IMAGE_TAG")"
-  base="https://github.com/$GRAIN_RELEASE_REPO/releases/download/$release"
+  # latest is GitHub's latest-release marker (contract v2), not a release
+  # of that name; every other name is a release tag.
+  if [ "$release" = latest ]; then
+    base="https://github.com/$GRAIN_RELEASE_REPO/releases/latest/download"
+  else
+    base="https://github.com/$GRAIN_RELEASE_REPO/releases/download/$release"
+  fi
   if ! command -v curl >/dev/null 2>&1; then
     log "No curl on this host to download release $release with; pulling $GRAIN_IMAGE_REF from the registry instead"
     return 2
@@ -3586,7 +3592,9 @@ install_release_assets() {
         ;;
     esac
     rm -rf "$dir"
-    if [ -z "$GRAIN_IMAGE_EXPLICIT" ] && ! curl -fsSLI -o /dev/null "https://github.com/$GRAIN_RELEASE_REPO/releases/tag/$release"; then
+    local page="https://github.com/$GRAIN_RELEASE_REPO/releases/tag/$release"
+    [ "$release" = latest ] && page="https://api.github.com/repos/$GRAIN_RELEASE_REPO/releases/latest"
+    if [ -z "$GRAIN_IMAGE_EXPLICIT" ] && ! curl -fsSLI -o /dev/null "$page"; then
       # No such release at all -- a name published only before release
       # assets -- is the registry fallback; a release that exists without
       # images.json is not.
@@ -3599,20 +3607,31 @@ install_release_assets() {
     echo "  GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain to pull a release published before release assets." >&2
     exit 1
   done
-  if [ "$(manifest_field "$dir/images.json" schema 2>/dev/null)" != 1 ]; then
-    rm -rf "$dir"
-    echo "setup.sh: $release's images.json is not schema 1" >&2
-    exit 1
-  fi
+  case "$(manifest_field "$dir/images.json" schema 2>/dev/null)" in
+    1 | 2) ;;
+    *)
+      rm -rf "$dir"
+      echo "setup.sh: $release's images.json is not schema 1 or 2" >&2
+      exit 1
+      ;;
+  esac
   for key in guest k8s-sandbox grain; do
     asset="$(manifest_field "$dir/images.json" "$key" asset)" || { echo "setup.sh: $release's images.json names no $key asset" >&2; exit 1; }
     sum="$(manifest_field "$dir/images.json" "$key" sha256)"
     ref="$(manifest_field "$dir/images.json" "$key" ref)"
     id="$(manifest_field "$dir/images.json" "$key" imageId)"
     case "$asset" in */* | .* | "") echo "setup.sh: $release names an unsafe asset '$asset'" >&2; exit 1 ;; esac
-    log "  downloading $asset"
-    curl -fsSL -o "$dir/$asset" "$base/$asset" || { echo "setup.sh: could not download $base/$asset" >&2; exit 1; }
-    curl -fsSL -o "$dir/$asset.sha256" "$base/$asset.sha256" || { echo "setup.sh: could not download $base/$asset.sha256" >&2; exit 1; }
+    # Schema 2 names the immutable release that holds each asset; schema 1
+    # keeps it on the release itself.
+    holder="$(manifest_field "$dir/images.json" "$key" release 2>/dev/null || true)"
+    holder_base="$base"
+    if [ -n "$holder" ]; then
+      case "$holder" in sha-* | v[0-9]*) ;; *) echo "setup.sh: $release names '$holder' as the release holding $asset" >&2; exit 1 ;; esac
+      holder_base="https://github.com/$GRAIN_RELEASE_REPO/releases/download/$holder"
+    fi
+    log "  downloading $asset${holder:+ from $holder}"
+    curl -fsSL -o "$dir/$asset" "$holder_base/$asset" || { echo "setup.sh: could not download $holder_base/$asset" >&2; exit 1; }
+    curl -fsSL -o "$dir/$asset.sha256" "$holder_base/$asset.sha256" || { echo "setup.sh: could not download $holder_base/$asset.sha256" >&2; exit 1; }
     side="$(cat "$dir/$asset.sha256")"
     if [ "$side" != "$sum  $asset" ] || ! (cd "$dir" && sha256sum --quiet -c "$asset.sha256"); then
       rm -rf "$dir"

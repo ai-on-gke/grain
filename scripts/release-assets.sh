@@ -14,9 +14,15 @@
 # limitations under the License.
 
 # Publish Grain's release images as assets on this repository's own GitHub
-# releases -- release-asset contract v1, docs/release-assets.md -- rather
+# releases -- release-asset contract v2, docs/release-assets.md -- rather
 # than as registry packages. It needs nothing but the repository's own
 # GITHUB_TOKEN with `contents: write`.
+#
+# Only sha-<short> releases carry images. Every other release -- vX.Y.Z,
+# channel-<branch>, the release train's -rc.N / -pending / -discarded /
+# -rejected / -retracted -- holds images.json alone (schema 2), whose
+# images each name the sha- release holding their asset. There is no
+# release named `latest`: promote marks vX.Y.Z GitHub's latest release.
 #
 #   package
 #           `docker save | gzip` the grain, guest and k8s-sandbox images
@@ -25,44 +31,42 @@
 #           with a `<asset>.sha256` sidecar, and write images.json beside
 #           them. An image at or over GitHub's 2 GiB per-asset limit fails.
 #   validate [DIR]
-#           check DIR's images.json against contract v1, and every asset
+#           check DIR's images.json against the contract, and every asset
 #           and sidecar it names against it.
 #   publish <release>...
-#           upload DIR to each release, creating it (and its tag, at the
-#           manifest's commit) if it does not exist. See release_kind for
-#           which releases are immutable and which move, and how.
+#           publish DIR's images.json (and, on a sha- release, its assets)
+#           to each release, creating it (and its tag, at the manifest's
+#           commit) if it does not exist. See release_kind.
 #   promote [vX.Y.Z]
-#           publish the sha-<short> release of vX.Y.Z's commit -- the
-#           release the git tag `latest` names, with no argument -- as
-#           vX.Y.Z, and as `latest` when the git tag `latest` agrees. The
-#           tarballs are the sha- release's own; only images.json's
-#           version and createdAt differ.
-#   retag <from-release> <version> <release>...
-#           the same for any other name: the release train's
-#           vX.Y.0-rc.N / channel-candidate, vX.Y.0-pending, and the
-#           -discarded / -rejected / -retracted markers.
+#           publish vX.Y.Z -- the release the git tag `latest` names, with
+#           no argument -- pointing at its commit's sha-<short> release,
+#           marked GitHub's latest release when the git tag latest agrees.
+#   retag <from-sha-release> <version> <release>...
+#           the same for any other name: the train's vX.Y.0-rc.N /
+#           channel-candidate, vX.Y.0-pending and the markers.
 #   rc [vX.Y.Z-rc.N] | pending <vX.Y.Z> | discard-rc <vX.Y.Z-rc.N> |
 #   discard-pending <vX.Y.Z> | retract <vX.Y.Z>
 #           release-images.sh's release-train phases, so that
 #           RELEASE_IMAGES="bash scripts/release-assets.sh" publishes the
-#           train's names as release assets: an rc as vX.Y.Z-rc.N and, when
-#           it is the newest rc, channel-candidate; a pending release as
-#           vX.Y.Z-pending (version vX.Y.Z); and the vX.Y.Z-rc.N-discarded,
-#           vX.Y.Z-rejected and vX.Y.Z-retracted markers. Each is the
-#           sha-<short> release of the commit the train's git tag names.
+#           train's names: an rc as vX.Y.Z-rc.N and, when it is the newest
+#           rc, channel-candidate; a pending release as vX.Y.Z-pending
+#           (version vX.Y.Z); and the vX.Y.Z-rc.N-discarded,
+#           vX.Y.Z-rejected and vX.Y.Z-retracted markers.
 #   train-tag <tag>
 #           the phase a pushed train tag asks for (release-train-assets.yml)
+#   prune   delete sha- releases past the newest $RELEASE_ASSETS_KEEP
+#           (default 50) that no other release points at
 #   mirror <release> <registry/prefix> [image...]
 #           for a cluster, which cannot `docker load`: fetch and load the
 #           release, then tag each image (all three by default) as
 #           <registry/prefix>/<name>:<tag> -- grain/guest:sha-x becomes
 #           <prefix>/guest:sha-x -- push it, and print `<image>=<pushed
-#           ref>` per image. The deployment's own registry or
-#           sandbox_image_mirror is the prefix (docs/release-assets.md).
+#           ref>` per image.
 #   fetch <release> [DIR]
-#           download a release's images.json and assets into DIR and
-#           validate them. A moving release with no images.json is
-#           mid-update: exit 75 (EX_TEMPFAIL), try again later.
+#           download a release's images.json and the assets it names into
+#           DIR and validate them; `latest` is GitHub's latest release. A
+#           channel with no images.json is mid-update: exit 75
+#           (EX_TEMPFAIL), try again later.
 #   load [DIR]
 #           validate DIR, then `docker load` every image and check the
 #           loaded image IDs and refs are the ones the manifest names.
@@ -128,7 +132,7 @@ validate_manifest() {
     def hex($n): type == "string" and test("^[0-9a-f]{" + ($n|tostring) + "}$");
     . as $m |
     [
-      (if .schema != 1 then "schema is \(.schema|tojson), not 1" else empty end),
+      (if .schema != 1 and .schema != 2 then "schema is \(.schema|tojson), not 1 or 2" else empty end),
       (if (.repository|type) != "string" or (.repository|test("^github\\.com/[a-z0-9._-]+/[a-z0-9._-]+$")|not)
         then "repository \(.repository|tojson) is not github.com/<owner>/<name>" else empty end),
       (if (.commit|hex(40)|not) then "commit \(.commit|tojson) is not a 40-hex commit" else empty end),
@@ -142,6 +146,9 @@ validate_manifest() {
            (if (.asset|type) != "string" or (.asset|test("^[A-Za-z0-9._-]+\\.tar\\.gz$")|not) then "\($k).asset \(.asset|tojson) is not a <name>.tar.gz" else empty end),
            (if (.sha256|hex(64)|not) then "\($k).sha256 \(.sha256|tojson) is not 64 hex" else empty end),
            (if (.imageId|type) != "string" or (.imageId|test("^sha256:[0-9a-f]{64}$")|not) then "\($k).imageId \(.imageId|tojson) is not sha256:<64 hex>" else empty end),
+           (if $m.schema == 2 and ((.release|type) != "string" or (.release|test("^(sha-[0-9a-f]{12}|v[0-9]+\\.[0-9]+\\.[0-9]+)$")|not))
+             then "\($k).release \(.release|tojson) is not the sha-<12 hex> or vX.Y.Z release that holds the asset" else empty end),
+           (if $m.schema == 1 and has("release") then "\($k) has a release, which schema 1 does not" else empty end),
            (if (.ref|type) != "string" or (.ref|test("^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*:[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$")|not)
              then "\($k).ref \(.ref|tojson) is not a local repo:tag (no digest)"
             elif (.ref|split("/")[0]|test("[.:]")) or (.ref|split("/")|length) < 2 then "\($k).ref \(.ref|tojson) names a registry host or none at all; a manifest ref is local, <edition>/<image>:<tag>"
@@ -153,7 +160,7 @@ validate_manifest() {
         then "not every ref is tagged sha-\(.commit[0:12]), the commit the manifest names" else empty end)
     ] | .[]' "$manifest" 2>&1)" || die "$manifest is not JSON: $problems"
   if [ -n "$problems" ]; then
-    printf 'release-assets.sh: %s does not meet release-asset contract v1:\n' "$manifest" >&2
+    printf 'release-assets.sh: %s does not meet the release-asset contract (schema 1 or 2):\n' "$manifest" >&2
     printf '  %s\n' "$problems" >&2
     exit 1
   fi
@@ -195,8 +202,10 @@ package() {
   )
   mkdir -p "$dir"
   rm -f "$dir"/images.json "$dir"/*.tar.gz "$dir"/*.tar.gz.sha256
+  # Schema 2: every image names the release that holds its asset -- this
+  # commit's sha- release, which is also the one these assets go on.
   json="$(jq -n --arg r "github.com/$repo" --arg c "$commit" --arg v "$version" --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{schema: 1, repository: $r, commit: $c, version: $v, createdAt: $t, images: {}}')"
+    '{schema: 2, repository: $r, commit: $c, version: $v, createdAt: $t, images: {}}')"
   for key in "${image_keys[@]}"; do
     ref="${ref_of[$key]}"
     asset="${asset_of[$key]}"
@@ -209,8 +218,8 @@ package() {
     fi
     (cd "$dir" && sha256sum "$asset" > "$asset.sha256")
     sum="$(cut -d' ' -f1 "$dir/$asset.sha256")"
-    json="$(jq --arg k "$key" --arg a "$asset" --arg s "$sum" --arg i "$id" --arg ref "$ref" \
-      '.images[$k] = {asset: $a, sha256: $s, imageId: $i, ref: $ref}' <<< "$json")"
+    json="$(jq --arg k "$key" --arg a "$asset" --arg s "$sum" --arg i "$id" --arg ref "$ref" --arg rel "sha-${commit:0:12}" \
+      '.images[$k] = {asset: $a, sha256: $s, imageId: $i, ref: $ref, release: $rel}' <<< "$json")"
     say "$asset: $size bytes, sha256 $sum, image $id"
   done
   printf '%s\n' "$json" > "$dir/images.json"
@@ -289,19 +298,26 @@ asset_list() {
   cat "$scratch/assets"
 }
 
-# Which releases move. sha-<short>, vX.Y.Z and every vX.Y.Z-<suffix>
-# (rc.N, pending, rc.N-discarded, rejected, retracted) are immutable: an
-# asset is only ever added, never replaced. channel-<branch> moves forward
-# only, onto a commit its current one is an ancestor of (the rule
-# release-images.sh's tag_may_move applies to registry branch tags).
-# `latest` moves exactly when the git tag `latest` names the commit, which
-# is how a rollback moves it back.
+# Which releases are which (release-asset contract v2):
+#   holder   sha-<short>: the only release that carries tarballs. Immutable:
+#            an asset is only ever added, never replaced.
+#   pointer  vX.Y.Z and every vX.Y.Z-<suffix> (rc.N, pending,
+#            rc.N-discarded, rejected, retracted): images.json alone,
+#            naming the sha- release that holds each asset. Immutable.
+#   channel  channel-<branch>: images.json alone, moved forward only, onto
+#            a commit its current one is an ancestor of (the rule
+#            release-images.sh's tag_may_move applies to registry branch
+#            tags).
+# There is no release named `latest`: the latest channel is GitHub's own
+# latest-release marker, which promote sets on vX.Y.Z (make_latest) when
+# the git tag latest names its commit.
 release_kind() {
   case "$1" in
+    sha-*) echo holder ;;
     channel-*) echo channel ;;
-    latest) echo latest ;;
-    sha-* | v[0-9]*) echo immutable ;;
-    *) die "$1 is not a release name contract v1 publishes (sha-<short>, channel-<branch>, vX.Y.Z[-...], latest); never a bare branch name" ;;
+    v[0-9]*) echo pointer ;;
+    latest) die "there is no release named latest: the latest channel is GitHub's latest-release marker on a vX.Y.Z (contract v2)" ;;
+    *) die "$1 is not a release name the contract publishes (sha-<short>, channel-<branch>, vX.Y.Z[-...]); never a bare branch name" ;;
   esac
 }
 
@@ -310,21 +326,10 @@ remote_commit_of_tag() {
     awk '{ c[$2] = $1 } END { t = "refs/tags/'"$1"'"; if ((t "^{}") in c) print c[t "^{}"]; else if (t in c) print c[t] }'
 }
 
-# may_move RELEASE COMMIT HELD: 0 if a moving release holding HELD may
-# move onto COMMIT, saying why either way.
+# may_move RELEASE COMMIT HELD: 0 if a channel holding HELD may move onto
+# COMMIT, saying why either way.
 may_move() {
-  local release="$1" commit="$2" held="$3" latest
-  case "$(release_kind "$release")" in
-    latest)
-      latest="$(remote_commit_of_tag latest)"
-      if [ "$latest" = "$commit" ]; then
-        say "latest: the git tag latest names ${commit:0:12}; moving the release onto it"
-        return 0
-      fi
-      say "latest: the git tag latest names ${latest:-nothing}, not ${commit:0:12}; leaving the release where it is"
-      return 1
-      ;;
-  esac
+  local release="$1" commit="$2" held="$3"
   if [ -z "$held" ]; then
     say "$release: holds no manifest yet; publishing ${commit:0:12}"
     return 0
@@ -354,8 +359,8 @@ content_type() {
   esac
 }
 
-# The files a release carries, images.json last.
-release_files() {
+# holder_files: the tarballs and sidecars a holder carries, then images.json.
+holder_files() {
   local key asset
   for key in "${image_keys[@]}"; do
     asset="$(jq -r --arg k "$key" '.images[$k].asset' "$dir/images.json")"
@@ -392,16 +397,68 @@ held_version() {
   jq -r '.version // empty' "$scratch/held.json" 2>/dev/null || true
 }
 
+# check_holders RELEASE: every release the manifest's images name, other
+# than RELEASE itself, exists and carries the image's asset and sidecar --
+# so a pointer is never published to assets that are not there.
+check_holders() {
+  local self="$1" holder key asset
+  while read -r holder; do
+    [ "$holder" = "$self" ] && continue
+    if [ -z "$token" ] && [ "$dry_run" = true ]; then
+      say "[dry-run] would check that $holder holds the assets $self points at"
+      continue
+    fi
+    release_json "$holder" || die "$self would point at $holder, which does not exist"
+    asset_list "$(jq -r .id "$scratch/release")" | awk '{print $2}' > "$scratch/holder-assets"
+    for key in "${image_keys[@]}"; do
+      [ "$(jq -r --arg k "$key" '.images[$k].release' "$dir/images.json")" = "$holder" ] || continue
+      asset="$(jq -r --arg k "$key" '.images[$k].asset' "$dir/images.json")"
+      if ! grep -qx "$asset" "$scratch/holder-assets" || ! grep -qx "$asset.sha256" "$scratch/holder-assets"; then
+        die "$self would point at $holder for $asset, which $holder does not carry"
+      fi
+    done
+  done < <(jq -r '[.images[].release // empty] | unique | .[]' "$dir/images.json")
+}
+
+# swap_manifest ID: replace a channel's images.json -- asset names are
+# unique on a release, so the old one is renamed aside, the new one
+# uploaded, and the old one deleted. A loader that finds none, or two,
+# in between retries on its next poll.
+swap_manifest() {
+  local id="$1" old
+  while read -r old; do
+    delete_asset "$old"
+  done < <(awk '$2 == "images.json.prev" {print $1}' "$scratch/existing")
+  while read -r old; do
+    status="$(write PATCH "/repos/$repo/releases/assets/$old" --data '{"name":"images.json.prev"}')"
+    ok "$status" || die "renaming the old images.json of release $id aside answered $status"
+  done < <(awk '$2 == "images.json" {print $1}' "$scratch/existing")
+  upload "$id" images.json
+  while read -r old; do
+    delete_asset "$old"
+  done < <(awk '$2 == "images.json" || $2 ~ /\.tar\.gz(\.sha256)?$/ {print $1}' "$scratch/existing")
+}
+
 publish_one() {
-  local release="$1" kind commit version id held="" status name prerelease=true make_latest=false listed missing
+  local release="$1" kind commit version id="" held="" status name prerelease=true make_latest=false listed missing
   upload_base=""
   rm -f "$scratch/held.json"
   kind="$(release_kind "$release")"
   commit="$(jq -r .commit "$dir/images.json")"
   version="$(jq -r .version "$dir/images.json")"
-  case "$release" in
-    v[0-9]*.[0-9]*.[0-9]*) [[ "$release" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && prerelease=false ;;
-  esac
+  if [[ "$release" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    prerelease=false
+    # GitHub's latest-release marker is the latest channel; it follows the
+    # git tag latest, which is how a rollback moves it back.
+    [ "$(remote_commit_of_tag latest)" = "$commit" ] && make_latest=true
+  fi
+  if [ "$kind" = holder ]; then
+    [ "$release" = "sha-${commit:0:12}" ] || die "$release cannot hold ${commit:0:12}'s assets"
+    [ "$(jq -r --arg r "$release" '[.images[].release] | all(. == $r)' "$dir/images.json")" = true ] ||
+      die "a holder's images.json must name itself as every image's release"
+  else
+    check_holders "$release"
+  fi
 
   if release_json "$release"; then
     id="$(jq -r .id "$scratch/release")"
@@ -409,38 +466,32 @@ publish_one() {
     asset_list "$id" > "$scratch/existing"
     if grep -q ' images.json$' "$scratch/existing"; then
       curl -sSL ${token:+-H "Authorization: Bearer $token"} -H 'Accept: application/octet-stream' -o "$scratch/held.json" \
-        "$api_url/repos/$repo/releases/assets/$(awk '$2 == "images.json" {print $1}' "$scratch/existing")" || true
+        "$api_url/repos/$repo/releases/assets/$(awk '$2 == "images.json" {print $1; exit}' "$scratch/existing")" || true
       held="$(jq -r '.commit // empty' "$scratch/held.json" 2>/dev/null || true)"
     fi
   else
-    id=""
     : > "$scratch/existing"
   fi
 
   case "$kind" in
-    immutable)
+    holder | pointer)
       if [ -n "$held" ] && [ "$held" != "$commit" ]; then
         die "$release is immutable and already holds ${held:0:12}, not ${commit:0:12}"
       fi
       ;;
-    *)
+    channel)
       may_move "$release" "$commit" "$held" || return 0
-      if [ "$held" = "$commit" ] && [ "$(jq -r .version "$dir/images.json")" = "$(held_version)" ]; then
-        missing=""
-        while read -r name; do
-          grep -q " $name\$" "$scratch/existing" || missing="$missing $name"
-        done < <(release_files)
-        if [ -z "$missing" ]; then
-          say "$release already carries every asset of ${commit:0:12} ($version); nothing to move"
-          return 0
-        fi
+      if [ "$held" = "$commit" ] && [ "$version" = "$(held_version)" ] &&
+          [ "$(grep -c ' images.json$' "$scratch/existing")" = 1 ] && ! grep -q ' images.json.prev$' "$scratch/existing"; then
+        say "$release already points at ${commit:0:12} ($version); nothing to move"
+        return 0
       fi
       ;;
   esac
 
   if [ -z "$id" ]; then
     # A release on a tag that does not exist creates the tag at
-    # target_commitish; one that does (vX.Y.Z, latest) keeps it.
+    # target_commitish; one that does (vX.Y.Z, the train's) keeps it.
     status="$(write POST "/repos/$repo/releases" --data "$(jq -nc --arg t "$release" --arg c "$commit" --arg v "$version" \
       --argjson p "$prerelease" --arg l "$make_latest" \
       '{tag_name: $t, target_commitish: $c, name: $t, body: "Grain \($v) (\($c[0:12])) as release assets: docs/release-assets.md.", prerelease: $p, make_latest: $l}')")"
@@ -453,43 +504,46 @@ publish_one() {
     fi
     id="$(jq -r '.id // "dry-run"' "$scratch/body")"
     upload_base="$(jq -r '(.upload_url // "") | sub("\\{.*$"; "")' "$scratch/body")"
-    say "created release $release"
-  elif [ "$kind" = channel ]; then
-    point_tag "$release" "$commit"
+    if [ "$make_latest" = true ]; then
+      say "created release $release, marked GitHub's latest release"
+    else
+      say "created release $release"
+    fi
+  elif [ "$make_latest" = true ]; then
+    status="$(write PATCH "/repos/$repo/releases/$id" --data '{"make_latest":"true"}')"
+    ok "$status" || die "marking $release latest answered $status"
+    say "marked $release latest"
   fi
+  [ "$kind" = channel ] && point_tag "$release" "$commit"
 
-  if [ "$kind" = immutable ]; then
-    while read -r name; do
-      if grep -q " $name\$" "$scratch/existing"; then
-        say "$release already has $name; an immutable release's assets are never replaced"
-        continue
-      fi
-      upload "$id" "$name"
-    done < <(release_files)
-  else
-    # Non-atomic by design (docs/release-assets.md): images.json goes
-    # first and comes back last, so a moving release without one is
-    # mid-update and a loader tries again rather than falling back.
-    local manifest_id
-    manifest_id="$(awk '$2 == "images.json" {print $1}' "$scratch/existing")"
-    [ -n "$manifest_id" ] && delete_asset "$manifest_id"
-    while read -r name; do
-      [ "$name" = images.json ] && continue
-      while read -r old; do
-        delete_asset "$old"
-      done < <(awk -v n="$name" '$2 == n {print $1}' "$scratch/existing")
-      upload "$id" "$name"
-    done < <(release_files)
-    upload "$id" images.json
-  fi
+  case "$kind" in
+    holder)
+      while read -r name; do
+        if grep -q " $name\$" "$scratch/existing"; then
+          say "$release already has $name; an immutable release's assets are never replaced"
+          continue
+        fi
+        upload "$id" "$name"
+      done < <(holder_files)
+      ;;
+    pointer)
+      grep -q ' images.json$' "$scratch/existing" || upload "$id" images.json
+      ;;
+    channel)
+      swap_manifest "$id"
+      ;;
+  esac
 
   # Fail closed: a release missing any asset is not a release.
   if [ "$dry_run" != true ]; then
     listed="$(asset_list "$id" | awk '{print $2}')"
     missing=""
-    while read -r name; do
-      grep -qx "$name" <<< "$listed" || missing="$missing $name"
-    done < <(release_files)
+    if [ "$kind" = holder ]; then
+      while read -r name; do
+        grep -qx "$name" <<< "$listed" || missing="$missing $name"
+      done < <(holder_files)
+    fi
+    [ "$(grep -cx images.json <<< "$listed")" = 1 ] || missing="$missing images.json"
     [ -z "$missing" ] || die "$release is missing$missing after publishing"
   fi
   say "published $release: ${commit:0:12} ($version)"
@@ -499,27 +553,87 @@ publish() {
   [ $# -gt 0 ] || die "publish needs at least one release name"
   need jq curl git
   [ -n "$token" ] || [ "$dry_run" = true ] || die "publishing needs GITHUB_TOKEN (permissions: contents: write)"
-  validate_manifest "$dir"
   local release
   for release in "$@"; do
+    # A holder's assets must all be here; a pointer's live on its holders.
+    if [ "$(release_kind "$release")" = holder ]; then
+      validate_manifest "$dir"
+    else
+      validate_manifest "$dir" false
+    fi
     publish_one "$release"
   done
 }
 
+# prune: delete sha- releases (and their tags) past the newest
+# $RELEASE_ASSETS_KEEP (default 50), except any release another one's
+# images.json points at -- a channel, a vX.Y.Z, a train marker. vX.Y.Z
+# and every other release are never pruned.
+prune() {
+  need jq curl
+  [ -n "$token" ] || [ "$dry_run" = true ] || die "pruning needs GITHUB_TOKEN (permissions: contents: write)"
+  local keep="${RELEASE_ASSETS_KEEP:-50}" page=1 status n tag id i=0
+  [[ "$keep" =~ ^[0-9]+$ ]] || die "RELEASE_ASSETS_KEEP=$keep is not a number"
+  if [ -z "$token" ]; then
+    say "[dry-run] no GITHUB_TOKEN to list releases with; would keep the newest $keep sha- releases and every one pointed at"
+    return 0
+  fi
+  : > "$scratch/releases"
+  while :; do
+    status="$(api GET "/repos/$repo/releases?per_page=100&page=$page")"
+    ok "$status" || die "listing releases answered $status"
+    jq -r '.[] | "\(.created_at) \(.id) \(.tag_name)"' "$scratch/body" >> "$scratch/releases"
+    n="$(jq length "$scratch/body")"
+    [ "$n" -lt 100 ] && break
+    page=$((page + 1))
+  done
+  : > "$scratch/referenced"
+  while read -r _ id tag; do
+    case "$tag" in sha-*) continue ;; esac
+    if download "$server_url/$repo/releases/download/$tag" images.json "$scratch/ref.json"; then
+      jq -r '.images[]?.release // empty' "$scratch/ref.json" >> "$scratch/referenced" 2>/dev/null || true
+    fi
+  done < "$scratch/releases"
+  while read -r _ id tag; do
+    i=$((i + 1))
+    [ "$i" -le "$keep" ] && continue
+    if grep -qx "$tag" "$scratch/referenced"; then
+      say "keeping $tag: a channel or release points at it"
+      continue
+    fi
+    status="$(write DELETE "/repos/$repo/releases/$id")"
+    ok "$status" || die "deleting release $tag answered $status"
+    status="$(write DELETE "/repos/$repo/git/refs/tags/$tag")"
+    ok "$status" || [ "$status" = 422 ] || [ "$status" = 404 ] || die "deleting tag $tag answered $status"
+    say "pruned $tag"
+  done < <(grep ' sha-' "$scratch/releases" | sort -r)
+}
+
 # --- reading releases -------------------------------------------------------
 
+# base_of RELEASE: where RELEASE's assets download from. `latest` is
+# GitHub's latest-release marker, never a release of that name.
+base_of() {
+  if [ "$1" = latest ]; then
+    printf '%s/%s/releases/latest/download' "$server_url" "$repo"
+  else
+    printf '%s/%s/releases/download/%s' "$server_url" "$repo" "$1"
+  fi
+}
+
+# download BASE NAME OUT
 download() {
-  local release="$1" name="$2" out="$3" status
-  status="$(curl -sSL -o "$out" -w '%{http_code}' ${token:+-H "Authorization: Bearer $token"} \
-    "$server_url/$repo/releases/download/$release/$name" || echo 000)"
+  local status
+  status="$(curl -sSL -o "$3" -w '%{http_code}' ${token:+-H "Authorization: Bearer $token"} "$1/$2" || echo 000)"
   ok "$status"
 }
 
-fetch() {
-  local release="${1:?fetch needs a release name}" out="${2:-$dir}" key asset
-  need curl jq sha256sum
+# fetch_manifest RELEASE OUT: RELEASE's images.json alone. A channel (or
+# latest) without one is mid-update: exit 75 (EX_TEMPFAIL), try again.
+fetch_manifest() {
+  local release="$1" out="$2"
   mkdir -p "$out"
-  if ! download "$release" images.json "$out/images.json"; then
+  if ! download "$(base_of "$release")" images.json "$out/images.json"; then
     rm -f "$out/images.json"
     case "$release" in
       channel-* | latest)
@@ -529,11 +643,20 @@ fetch() {
     esac
     die "$release has no images.json"
   fi
+  validate_manifest "$out" false
+}
+
+# fetch RELEASE [DIR]: images.json and every asset, each from the release
+# its image names (schema 2) or from RELEASE itself (schema 1).
+fetch() {
+  local release="${1:?fetch needs a release name}" out="${2:-$dir}" key asset holder
+  need curl jq sha256sum
+  fetch_manifest "$release" "$out"
   for key in "${image_keys[@]}"; do
-    asset="$(jq -r --arg k "$key" '.images[$k].asset // empty' "$out/images.json")"
-    [ -n "$asset" ] || die "$release's images.json names no $key asset"
-    download "$release" "$asset" "$out/$asset" || die "$release has no $asset"
-    download "$release" "$asset.sha256" "$out/$asset.sha256" || die "$release has no $asset.sha256"
+    asset="$(jq -r --arg k "$key" '.images[$k].asset' "$out/images.json")"
+    holder="$(jq -r --arg k "$key" --arg r "$release" '.images[$k].release // $r' "$out/images.json")"
+    download "$(base_of "$holder")" "$asset" "$out/$asset" || die "$holder has no $asset, which $release names"
+    download "$(base_of "$holder")" "$asset.sha256" "$out/$asset.sha256" || die "$holder has no $asset.sha256"
   done
   validate_manifest "$out"
   say "fetched $release ($(jq -r .commit "$out/images.json" | cut -c1-12)) into $out"
@@ -578,22 +701,23 @@ mirror() {
   done
 }
 
-# source_into RELEASE: the release's assets in $dir, unless $dir already
-# holds that commit's packaged assets (the release job's own, in a dry run).
+# source_into RELEASE COMMIT: RELEASE's images.json in $dir, unless $dir
+# already holds that commit's (the release job's own, in a dry run). A
+# pointer needs nothing else: its images stay on their holder.
 source_into() {
   local release="$1" commit="$2"
   if [ -f "$dir/images.json" ] && [ "$(jq -r .commit "$dir/images.json")" = "$commit" ]; then
-    validate_manifest "$dir"
-    say "using the ${commit:0:12} assets already in $dir"
+    validate_manifest "$dir" false
+    say "using the ${commit:0:12} manifest already in $dir"
     return 0
   fi
-  fetch "$release" "$dir" > /dev/null
+  fetch_manifest "$release" "$dir"
   [ "$(jq -r .commit "$dir/images.json")" = "$commit" ] || die "$release holds $(jq -r .commit "$dir/images.json"), not $commit"
 }
 
 promote() {
   need git jq
-  local version="${1:-}" latest commit sha_release releases
+  local version="${1:-}" latest commit sha_release
   latest="$(remote_commit_of_tag latest)"
   if [ -z "$version" ]; then
     [ -n "$latest" ] || die "the git tag latest names nothing on $remote, and no version was given"
@@ -611,16 +735,15 @@ promote() {
   # has no sha- release to promote. Asked for by name, that fails; on the
   # automatic run every push makes, it is said and skipped.
   if [ -z "${1:-}" ] && ! { [ -f "$dir/images.json" ] && [ "$(jq -r .commit "$dir/images.json")" = "$commit" ]; } &&
-      ! download "$sha_release" images.json "$scratch/probe.json"; then
-    echo "::warning::release-assets.sh: $version (${commit:0:12}) has no $sha_release release: it predates release assets, so there is nothing to promote as $version and latest"
+      ! download "$(base_of "$sha_release")" images.json "$scratch/probe.json"; then
+    echo "::warning::release-assets.sh: $version (${commit:0:12}) has no $sha_release release: it predates release assets, so there is nothing to promote as $version"
     return 0
   fi
   source_into "$sha_release" "$commit"
   rewrite_manifest "$dir" "$dir" "$version"
-  validate_manifest "$dir"
-  releases=("$version")
-  [ "$latest" = "$commit" ] && releases+=(latest)
-  publish "${releases[@]}"
+  # vX.Y.Z points at the sha- release's assets; publish_one marks it
+  # GitHub's latest when the git tag latest names its commit.
+  publish "$version"
 }
 
 retag() {
@@ -635,7 +758,7 @@ retag() {
   if [ -f "$dir/images.json" ] && [ "sha-$(jq -r .commit "$dir/images.json" | cut -c1-12)" = "$from" ]; then
     commit="$(jq -r .commit "$dir/images.json")"
   else
-    fetch "$from" "$dir" > /dev/null
+    fetch_manifest "$from" "$dir"
     commit="$(jq -r .commit "$dir/images.json")"
   fi
   source_into "$from" "$commit"
@@ -723,6 +846,7 @@ train_tag() {
 case "$cmd" in
   package) package ;;
   rc | pending | discard-rc | discard-pending | retract) train_phase "$cmd" "$@" ;;
+  prune) prune ;;
   train-tag) train_tag "$@" ;;
   validate) validate_manifest "${1:-$dir}" && say "${1:-$dir}/images.json meets release-asset contract v1" ;;
   publish) publish "$@" ;;
@@ -732,7 +856,7 @@ case "$cmd" in
   load) load "$@" ;;
   mirror) mirror "$@" ;;
   *)
-    sed -n '17,51p' "$0" >&2
+    sed -n '17,72p' "$0" >&2
     exit 2
     ;;
 esac

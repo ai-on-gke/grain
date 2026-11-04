@@ -20,9 +20,10 @@
 # trixie, and hostmode) against the built image before publishing, and then
 # publishes the grain, guest and k8s-sandbox images as assets on this
 # repository's own GitHub releases (scripts/release-assets.sh, release-asset
-# contract v1, docs/release-assets.md): the immutable `sha-<short>` release,
-# and the branch's moving `channel-<branch>` release. No registry is
-# written to, so nothing but the repository's own GITHUB_TOKEN is needed.
+# contract v2, docs/release-assets.md): the tarballs on the immutable
+# `sha-<short>` release, and an images.json pointing at them on the branch's
+# moving `channel-<branch>` release. No registry is written to, so nothing
+# but the repository's own GITHUB_TOKEN is needed.
 #
 # On non-main / PR refs, `dry_run` defaults to and is enforced as `true`:
 # every image, every asset and images.json are built, packaged and
@@ -311,3 +312,19 @@ jobs:
               echo "- ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${r}"
             done
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prune old sha- releases
+        # Retention (docs/release-assets.md): the newest RELEASE_ASSETS_KEEP
+        # sha- releases, plus every one a channel, vX.Y.Z or train marker
+        # points at. A failure here leaves extra releases, never a missing one.
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ASSETS_KEEP: ${{ vars.RELEASE_ASSETS_KEEP || '50' }}
+        run: |
+          set -euo pipefail
+          if [ "${DRY_RUN}" = "true" ]; then
+            bash ./scripts/release-assets.sh --dry-run prune
+          else
+            bash ./scripts/release-assets.sh prune
+          fi

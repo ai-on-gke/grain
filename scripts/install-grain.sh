@@ -73,12 +73,19 @@ if [ -z "$image" ]; then
   trap 'rm -rf "$work"' EXIT
   curl -fsSL -o "${work}/images.json" "${base}/images.json" ||
     { echo "install-grain.sh: ${repo} release ${version} has no images.json; a release from before release assets needs -image ghcr.io/bwsalmon/grain/grain" >&2; exit 1; }
-  [ "$(jq -r .schema "${work}/images.json")" = 1 ] || { echo "install-grain.sh: ${version}'s images.json is not schema 1" >&2; exit 1; }
+  case "$(jq -r .schema "${work}/images.json")" in
+    1 | 2) ;;
+    *) echo "install-grain.sh: ${version}'s images.json is not schema 1 or 2" >&2; exit 1 ;;
+  esac
   asset="$(jq -er .images.grain.asset "${work}/images.json")"
   sum="$(jq -er .images.grain.sha256 "${work}/images.json")"
   ref="$(jq -er .images.grain.ref "${work}/images.json")"
   id="$(jq -er .images.grain.imageId "${work}/images.json")"
   case "$asset" in */* | .* | "") echo "install-grain.sh: unsafe asset name '${asset}'" >&2; exit 1 ;; esac
+  # Schema 2: the asset lives on the immutable release the image names.
+  holder="$(jq -r --arg v "$version" '.images.grain.release // $v' "${work}/images.json")"
+  [[ "$holder" =~ ^(sha-[0-9a-f]{12}|v[0-9]+\.[0-9]+\.[0-9]+)$ ]] || { echo "install-grain.sh: ${version} names '${holder}' as the release holding ${asset}" >&2; exit 1; }
+  base="https://github.com/${repo}/releases/download/${holder}"
   curl -fsSL -o "${work}/${asset}" "${base}/${asset}"
   curl -fsSL -o "${work}/${asset}.sha256" "${base}/${asset}.sha256"
   if [ "$(cat "${work}/${asset}.sha256")" != "${sum}  ${asset}" ] || ! (cd "$work" && sha256sum --quiet -c "${asset}.sha256"); then
