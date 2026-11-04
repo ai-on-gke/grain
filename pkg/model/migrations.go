@@ -738,6 +738,13 @@ var Migrations = []Migration{
 			"ALTER TABLE `grain_config` ADD COLUMN `owner_trust` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     108,
+		Description: "add allowed_principal.reason, why an allowlist entry was added (required for serviceAccount: entries)",
+		Statements: []string{
+			"ALTER TABLE `allowed_principal` ADD COLUMN `reason` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as
