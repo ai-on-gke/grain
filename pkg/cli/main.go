@@ -383,6 +383,8 @@ Commands:
                                        the pull request, and refused if the branch does not merge cleanly;
                                        -head <sha> names the commit you reviewed, and the override is
                                        withdrawn if anything else is pushed before the merge
+  pr adopt|review|status <pr>          adopt (-mode review-only|finish), review (-design) or report on
+                                       (-threads) a pull request grain did not open (see prcmd.go)
   run-now <id>                         start a run of this task next, ahead of the queue and whatever
                                        its state says -- including sending a finished or merging task
                                        back to an agent for more work on its own branch
@@ -650,6 +652,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdResume(ctx, c, out, cmdArgs)
 	case "ci":
 		return cmdCI(ctx, c, out, cmdArgs)
+	case "pr":
+		return cmdPR(ctx, c, out, cmdArgs)
 	case "fs":
 		return cmdFS(ctx, c, out, cmdArgs)
 	case "merge-queue":
@@ -713,81 +717,6 @@ func (s *stringList) String() string { return strings.Join(*s, ",") }
 func (s *stringList) Set(v string) error {
 	*s = append(*s, v)
 	return nil
-}
-
-// parseArgs is flag.FlagSet.Parse for a command that takes positional
-// arguments as well as flags, and it exists because Go's own Parse stops
-// at the first word that is not a flag. Every usage line here is written
-// the way people type these commands -- `grain update <id> [flags]`,
-// `grain repo capabilities [-set a,b] <owner/name>` -- and with a plain
-// Parse the first of those forms silently did nothing at all: the id
-// ended parsing, -title was left among the leftover arguments, fs.Visit
-// saw no flag set, and the command sent an empty request and printed the
-// unchanged task as though it had worked. `grain repo capabilities
-// acme/widgets -set self-debug` was the same shape of quiet failure --
-// it printed the repo's capabilities instead of replacing them.
-//
-// So flags are parsed wherever they appear: Parse is called again on
-// what is left after each positional word, which is what a GNU-style
-// getopt does with permutation, and the positional words are returned in
-// the order they were written. A bare "--" still ends the flags, and
-// everything after it is positional verbatim -- which is how a value
-// that starts with a dash is passed to a command that takes one.
-//
-// `grain comment <id> <body...>` deliberately does not use this: its
-// body is free text, and a body word that happens to name a flag has to
-// stay a body word. misplacedFlag below is what that command says
-// instead of guessing.
-func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
-	var terminated []string
-	for i, arg := range args {
-		if arg == "--" {
-			terminated = args[i+1:]
-			args = args[:i]
-			break
-		}
-	}
-	var positional []string
-	for {
-		if err := fs.Parse(args); err != nil {
-			return nil, err
-		}
-		rest := fs.Args()
-		if len(rest) == 0 {
-			break
-		}
-		positional = append(positional, rest[0])
-		args = rest[1:]
-	}
-	return append(positional, terminated...), nil
-}
-
-// first is args[0] or "", so a command missing its one positional
-// argument reports that through taskID's own error rather than panicking
-// on an empty slice -- flag.FlagSet.Arg's behaviour, which parseArgs'
-// callers no longer go through.
-func first(args []string) string {
-	if len(args) == 0 {
-		return ""
-	}
-	return args[0]
-}
-
-// misplacedFlag reports the first word in args that names a flag defined
-// on fs -- a flag written after the positional arguments, where
-// flag.Parse has already stopped looking at them.
-func misplacedFlag(fs *flag.FlagSet, args []string) (string, bool) {
-	for _, arg := range args {
-		name := strings.TrimLeft(arg, "-")
-		if name == arg || name == "" {
-			continue // not a flag-shaped word, or a bare "--"
-		}
-		name, _, _ = strings.Cut(name, "=")
-		if fs.Lookup(name) != nil {
-			return name, true
-		}
-	}
-	return "", false
 }
 
 // printer renders CLI output either as a human-readable table (the

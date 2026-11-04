@@ -21,7 +21,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 | Kind | Commands |
 |---|---|
 | Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume` |
-| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|deny`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `declarations check` |
+| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|deny`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status`, `declarations check` |
 | Task CLI: sign-in | `login`, `logout`, `whoami`, `context list\|use\|show\|delete` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
 | Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db upgrade-postgres`), `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
@@ -978,7 +978,55 @@ _No flags._
 
 ---
 
-### 4.15 `grain login`, `logout`, `whoami` and `grain context` {#CLI-108}
+### 4.15 `grain pr adopt|review|status <pr>` {#CLI-65}
+
+The external half of pull-request coordination ([`external-cli.spec.md`](../external-cli/external-cli.spec.md) #XC-28, #XC-29). `<pr>` is `owner/name#n` or the pull request's GitHub URL; anything else **MUST** fail with a usage error before any request is sent. Every verb takes `-json` and the global `-json`. The in-sandbox `grain pr` ([`sandbox.spec.md`](sandbox.spec.md)) is a different command about the task's own branch.
+
+1. `grain pr adopt <pr> [-mode review-only|finish] [-spec <path>] [-design <path>]` calls `POST /api/pull-requests/adopt` (scope `merge:write`, and `tasks:write` on the pull request's repository) and prints the shepherd task's ID, state and mode. `-mode` defaults to `review-only`; `finish` on a pull request a review-only shepherd already holds upgrades that task in place. A filing that lands `proposed` says it waits for a person.
+2. `grain pr review <pr> [-design] [-spec <path>]` calls `POST /api/pull-requests/review` (scope `tasks:write`, and `repos:read` on the repository) and prints the review task. `-design` asks for a design review: `design/spec/contributions/contributions.spec.md` conventions and overlapping designs under `design/`.
+3. `grain pr status <pr> [-threads]` calls `GET /api/pull-requests/status` (scope `ci:read`, and `tasks:read` on the repository) and prints the head SHA, the shepherd task and mode, the latest grain CI run and its failing jobs, each grain review with its state and finding count, the merge-queue gate, and with `-threads` every inline review thread's file, line and body.
+
+#### `grain pr`
+
+<!-- BEGIN GENERATED FLAGS: grain pr -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+#### `grain pr adopt`
+
+<!-- BEGIN GENERATED FLAGS: grain pr adopt -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-design` | string |  |  | the design the change implements, as a repository path under design/design/ |
+| `-json` | bool |  |  | print the shepherd task as JSON |
+| `-mode` | string | `"review-only"` |  | review-only (grain reviews and gates the pull request without pushing) or finish (it also pushes fixes) |
+| `-spec` | string |  |  | the specification the change implements, as a repository path under design/spec/ |
+<!-- END GENERATED FLAGS -->
+
+#### `grain pr review`
+
+<!-- BEGIN GENERATED FLAGS: grain pr review -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-design` | bool |  |  | review the design: design-folder conventions (contributions.spec.md) and overlapping designs under design/ |
+| `-json` | bool |  |  | print the review task as JSON |
+| `-spec` | string |  |  | a specification to check the change's conformance against, as a repository path under design/ |
+<!-- END GENERATED FLAGS -->
+
+#### `grain pr status`
+
+<!-- BEGIN GENERATED FLAGS: grain pr status -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-json` | bool |  |  | print the status as JSON |
+| `-threads` | bool |  |  | list every inline review thread's file, line and body |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/prcmd_test.go`, `pkg/ui/pull_requests_api_test.go`: `TestGrainPRReviewDesignAndPRStatusThreadsJSON`; `pkg/orchestrator/takeover_adopt_test.go`: `TestAdoptPullRequestReviewOnlyVsFinishUpgradeInPlace`, `TestAdoptPullRequestLinksSpecAndDesignIntoConformanceReviewAndProposalGate`, `TestPullRequestReviewDesignAndStatusThreads`.
+
+---
+
+### 4.16 `grain login`, `logout`, `whoami` and `grain context` {#CLI-108}
 
 These sign a workstation in to a deployment as a named context, and say who it is signed in as. Their behaviour is [#XC-1](../external-cli/external-cli.spec.md#XC-1), [#XC-2](../external-cli/external-cli.spec.md#XC-2), [#XC-7](../external-cli/external-cli.spec.md#XC-7), [#XC-8](../external-cli/external-cli.spec.md#XC-8) and [#XC-9](../external-cli/external-cli.spec.md#XC-9).
 - `grain context` needs no daemon. It reads and writes `$XDG_CONFIG_HOME/grain/config.json` and the credentials kept beside it.

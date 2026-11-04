@@ -301,6 +301,11 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/force-merge", s.handleForceMerge)
 	s.route("POST /api/tasks/{id}/run-now", s.handleRunNow)
 	s.route("POST /api/tasks/{id}/pull-request", s.handleOpenPullRequest)
+	// A pull request grain did not open (pull_requests_api.go, #XC-28,
+	// #XC-29): adopt it, review it, or report where it stands.
+	s.route("POST /api/pull-requests/adopt", s.handleAdoptPullRequest)
+	s.route("POST /api/pull-requests/review", s.handleReviewPullRequest)
+	s.route("GET /api/pull-requests/status", s.handlePullRequestStatus)
 	s.route("POST /api/tasks/{id}/sandbox/recreate", s.handleRecreateSandbox)
 	s.route("POST /api/sandbox-probe", s.handleSandboxProbe)
 	s.route("POST /api/tasks/{id}/activity", s.handleSetTaskActivity)
