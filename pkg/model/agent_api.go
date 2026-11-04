@@ -595,6 +595,9 @@ func CanonicalLegacyGrants(name string) []string {
 	if many, ok := legacyGrantMultiReplacements[trimmed]; ok {
 		return slices.Clone(many)
 	}
+	if many, ok := runtimeExpansion(trimmed); ok {
+		return many
+	}
 	return []string{CanonicalLegacyGrant(name)}
 }
 
@@ -608,7 +611,7 @@ func RetiredGrantNames() []string {
 	for name := range legacyGrantMultiReplacements {
 		names = append(names, name)
 	}
-	return names
+	return append(names, runtimeExpansionNames()...)
 }
 
 // APIAliasPreset returns the preset name that a bare capability name aliases,

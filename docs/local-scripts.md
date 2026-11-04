@@ -84,6 +84,89 @@ description, unless `description` is set) and one `# grain-args:` usage
 line, within its first 20 lines. Silo's `# silo:` and `# silo-args:`
 lines are read too, so a script written for Silo carries over unchanged.
 
+## Moving to host-script
+
+`local-scripts:<name>` is retiring onto the `host-script` capability
+server ([capabilities.md](capabilities.md#host-scripts-grain-capability-host-script),
+[host-scripts.md](host-scripts.md)). Each script of a declaration becomes
+one host-script script, and a grant of the declaration becomes one
+`…/host-script#host-script` `{script}` grant per script. Those grants
+are still refused to the runs local-scripts refused, though host-script
+itself has no such rule. A scheduled run is minted none of them, and the
+rest of its grants as usual. A CI job asking for one is refused, whatever
+the event (`localscripts.MigratedFrom`).
+
+At every start, before the capability servers start, the daemon
+(`daemon.migrateLocalScripts`) does the following:
+
+- **Reads the declarations.** It reads every declaration it can find,
+  in the state repository's `local-scripts/` and from each
+  `-local-scripts` flag, the way a run's snapshot reads them.
+- **Adds the scripts to host-script.** Each script is added to the
+  host-script server that runs in the daemon's own environment, which
+  is also where local scripts run. A `run: host` server is passed over.
+  If there is no such server, it is created as
+  `https://grain.dev/capabilities/host-script`. Each script is named
+  `<declaration>-<tool name without local_>`, so `ops`'s
+  `tools/deploy.sh` becomes `ops-deploy_sh`. Its body ends
+  `exec '<the script's real path>' "$@"`, so the file in the state
+  repository is still what runs, under its own `#!`. Before that, the
+  body unsets the ambient identity host-script would pass on and
+  local-scripts never did (`SSH_AUTH_SOCK`, `KUBECONFIG`,
+  `GOOGLE_APPLICATION_CREDENTIALS`, `DOCKER_HOST` and the rest), unless
+  the declaration's `env` sets it. On every call it also refuses (exit
+  126) a file that is now a symlink, not a regular executable, not
+  owned by grain's user, or writable by group or others, or that sits
+  under a directory (up to the declaration's folder) writable by group
+  or others, as the per-run snapshot did. Its `cwd` is the
+  declaration's `workdir`, its `timeout` the script's timeout rounded
+  up to whole seconds, and its `max_output` the declaration's
+  `output_cap`. `max_calls` is unlimited. Each `env` secret becomes
+  `$env:GRAIN_LOCAL_SCRIPTS_<SECRET>`, and the server's own `env` binds
+  that variable to `$secret:<name>`.
+- **Converts again at every start.** Each body it writes starts
+  `# grain: converted from local-scripts:<declaration>`. At every start
+  the daemon first removes every script with that first line, and every
+  `GRAIN_LOCAL_SCRIPTS_*` binding no remaining script uses, then
+  converts the declarations as they are now. A script since removed, a
+  declaration since deleted or given an `approve: true` script, and a
+  changed `workdir`, timeout, output cap or `env` therefore stop running
+  as they were. A host-script grant of a script that is gone is refused.
+  A declaration's new scripts are added at the next start. Granting
+  them is a separate step: a grant names one script. When nothing
+  changed, the config row is not written.
+- **Leaves the operator's own scripts alone.** A script without that
+  first line is the operator's, and is kept as it is. If it has the
+  name a declaration's script would take, the declaration stays on
+  local-scripts and the daemon logs why, so a `local-scripts:<name>`
+  grant never becomes a grant of a script the declaration did not
+  declare.
+- **Rewrites stored grants.** Every stored `local-scripts:<name>` is
+  rewritten to its declaration's host-script grants (`Store.RewriteRetiredGrants`).
+  This covers task, template and schedule grants, default and CI
+  capabilities, and console sessions.
+- **Keeps the old name working.** `local-scripts:<name>` stays an alias
+  for the same grants wherever it is still written
+  (`model.SetRuntimeGrantExpansions`).
+
+The `pkg/capability/intree` fidelity test runs one declaration both
+ways. Both give the same stdout, stderr, exit status, working directory
+and secret.
+
+What host-script does differently:
+
+- It does not forward stdin.
+- A secret is resolved when the server starts, not per run as the
+  task's team.
+- A script is reached as `grain host-script <name>`, not as an MCP tool.
+- A changed script file is picked up on its next call, not refused
+  until the next run.
+
+**What does not move yet.** A declaration with an `approve: true` script
+is left on local-scripts, and served as before, because host-script has
+no per-call approval. The daemon logs why. The provider and the run's
+local-scripts tools stay until host-script can approve calls.
+
 ## Wiring
 
 **Where scripts are declared.** Never in the repository the agent works
