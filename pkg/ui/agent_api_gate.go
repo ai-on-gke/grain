@@ -1280,7 +1280,6 @@ func agentMayWrite(acting *model.Task, repo string) bool {
 	return slices.ContainsFunc(acting.Writes, func(w model.WriteTarget) bool { return model.SameRepoText(w.Repo.String(), repo) })
 }
 
-// agentMayRead reports whether the acting task's own runs may read repo.
 // agentMayReadAllRepos reports whether acting can already read every
 // repository a session that reads all of them is given
 // (model.ConsoleSessionWorkingRepos, less the state repository, which a
@@ -1305,6 +1304,7 @@ func (s *Server) agentMayReadAllRepos(ctx context.Context, acting *model.Task) b
 	return true
 }
 
+// agentMayRead reports whether the acting task's own runs may read repo.
 func agentMayRead(acting *model.Task, repo string) bool {
 	if agentMayWrite(acting, repo) {
 		return true
