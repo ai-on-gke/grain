@@ -192,6 +192,7 @@ var routeScopes = map[string]APIScope{
 	"POST /api/repos/{owner}/{name}/releases/{release}/candidates/promote": "releases:write",
 	"POST /api/repos/{owner}/{name}/pending-releases/{version}/approve":    "releases:write",
 	"POST /api/repos/{owner}/{name}/pending-releases/{version}/reject":     "releases:write",
+	"GET /api/release-approval-key":                                        "releases:read",
 	"GET /api/repos/{owner}/{name}/branches":                               "repos:read",
 	"POST /api/repos/{owner}/{name}/branches":                              "repos:write",
 	"GET /api/repos/{owner}/{name}/github-branches":                        "repos:read",

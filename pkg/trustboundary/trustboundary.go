@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v12"
+const Version = "trust-boundary/v13"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +81,11 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v13 added the GitHub Actions Inbox approval (grain/task-2666,
+// design/playbook/releases.playbook.md §0.2) to release-promotion: the
+// route that signs a person's answer and dispatches promote-release.yml,
+// the signed record, and the script the workflow verifies it with.
 //
 // v12 narrowed release-promotion to the approval path (grain/task-2664,
 // design/playbook/releases.playbook.md §0.3): the approval workflow, in
@@ -244,6 +249,11 @@ var Categories = []Category{
 		files: []string{
 			".grain/workflows/promote-release.yml", ".github/workflows/promote-release.yml",
 			"pkg/ui/release_approval.go", ".grain/templates/release-train.yml",
+			// The Inbox approval of a release on GitHub Actions (gap 4):
+			// the signed record, the route that signs and dispatches it,
+			// and the check the workflow verifies it with.
+			"pkg/ui/release_approval_github.go", "pkg/releaseapproval/releaseapproval.go",
+			"scripts/verify-release-approval.sh",
 		},
 	},
 	{

@@ -667,7 +667,9 @@ _No flags._
 
 ### 4.10 `grain release approve|reject vX.Y.Z` {#CLI-39}
 
-Calls `POST /api/repos/{owner}/{name}/pending-releases/{version}/approve` or `…/reject` (`DecideRelease`). `-repo` defaults to grain's own source repository (`ai-on-gke/grain`).
+Calls `POST /api/repos/{owner}/{name}/pending-releases/{version}/approve` or `…/reject` (`DecideRelease`). `-repo` defaults to grain's own source repository (`ai-on-gke/grain`). On a repository that publishes from GitHub Actions (`ci_mode: github`) the answer is a signed dispatch of `.github/workflows/promote-release.yml`, and the command prints the dispatch instead of a grain CI run.
+
+`grain release approval-key` prints the deployment's release-approval public key (`GET /api/release-approval-key`): the value for the GitHub repository variable `GRAIN_RELEASE_APPROVAL_KEY`, which that workflow verifies an Inbox approval against.
 
 Errors, each printed after the usage:
 - an unknown verb: `unknown release command "<v>": approve or reject`;

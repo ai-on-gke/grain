@@ -1783,6 +1783,16 @@ func (c *HTTPClient) DecideRelease(ctx context.Context, repo, version string, ap
 	return resp, err
 }
 
+// ReleaseApprovalKey is the deployment's release-approval public key,
+// PEM -- GET /api/release-approval-key.
+func (c *HTTPClient) ReleaseApprovalKey(ctx context.Context) (string, error) {
+	var resp struct {
+		PublicKey string `json:"publicKey"`
+	}
+	err := c.do(ctx, http.MethodGet, "/api/release-approval-key", nil, &resp)
+	return resp.PublicKey, err
+}
+
 // MergeBatches queries the merge batches currently in flight -- GET /api/merge-batches.
 func (c *HTTPClient) MergeBatches(ctx context.Context, repo string) (MergeBatches, error) {
 	var resp MergeBatches
