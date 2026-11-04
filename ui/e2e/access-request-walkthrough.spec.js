@@ -35,9 +35,7 @@ async function expectInside(card, page, width) {
     expect(b.x).toBeGreaterThanOrEqual(box.x - 1);
     expect(b.x + b.width).toBeLessThanOrEqual(box.x + box.width + 1);
   }
-  const overflow = await card.evaluate(
-    (el) => el.scrollWidth - el.clientWidth,
-  );
+  const overflow = await card.evaluate((el) => el.scrollWidth - el.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
   for (const chip of await card.getByTestId("access-item-chip").all()) {
     const c = await chip.boundingBox();
@@ -47,7 +45,13 @@ async function expectInside(card, page, width) {
   await expect(page.locator("body")).toBeVisible();
 }
 
-async function captureSurfaceShots(page, surfaceName, prepareAfterReload, outDir, shotLog) {
+async function captureSurfaceShots(
+  page,
+  surfaceName,
+  prepareAfterReload,
+  outDir,
+  shotLog,
+) {
   if (!outDir) return;
   await fs.mkdir(outDir, { recursive: true });
   for (const [widthName, size] of Object.entries(VIEWPORTS)) {
@@ -156,7 +160,8 @@ test("request_access end-to-end grant/deny, earlier partial decision, refusals, 
             {
               name: "request_access",
               arguments: {
-                summary: "Grant read on acme/docs and open network to verify docs",
+                summary:
+                  "Grant read on acme/docs and open network to verify docs",
                 reason:
                   "Need read access to acme/docs and outbound network to validate external links.",
                 requests: [
@@ -174,8 +179,10 @@ test("request_access end-to-end grant/deny, earlier partial decision, refusals, 
             {
               name: "request_access",
               arguments: {
-                summary: "Requesting api:tasks:admin again to inspect sibling tasks",
-                reason: "Checking whether sibling tasks already updated the guide.",
+                summary:
+                  "Requesting api:tasks:admin again to inspect sibling tasks",
+                reason:
+                  "Checking whether sibling tasks already updated the guide.",
                 requests: [{ kind: "grant", capability: "api:tasks:admin" }],
               },
             },
@@ -187,7 +194,8 @@ test("request_access end-to-end grant/deny, earlier partial decision, refusals, 
             {
               name: "comment_on_issue",
               arguments: {
-                comment: "Completed verification using granted acme/docs read and open network.",
+                comment:
+                  "Completed verification using granted acme/docs read and open network.",
               },
             },
           ],
@@ -224,7 +232,9 @@ test("request_access end-to-end grant/deny, earlier partial decision, refusals, 
         const res = await request.get(`/api/tasks/${bgTask.id}`);
         if (!res.ok()) return null;
         lastBgDetail = await res.json();
-        return lastBgDetail.awaitingAccess ? lastBgDetail.state : lastBgDetail.state;
+        return lastBgDetail.awaitingAccess
+          ? lastBgDetail.state
+          : lastBgDetail.state;
       },
       { timeout: 20_000 },
     )
@@ -232,7 +242,9 @@ test("request_access end-to-end grant/deny, earlier partial decision, refusals, 
   expect(lastBgDetail?.awaitingAccess).toBe(true);
 
   // Verify Turn 1's first request_access failed the pre-park check and the second succeeded.
-  const turn1Runs = await (await request.get(`/e2e/runs?task=${bgTask.id}`)).json();
+  const turn1Runs = await (
+    await request.get(`/e2e/runs?task=${bgTask.id}`)
+  ).json();
   expect(turn1Runs.runs).toHaveLength(1);
   expect(turn1Runs.runs[0].toolCalls).toHaveLength(2);
   expect(turn1Runs.runs[0].toolCalls[0].isError).toBe(true);
@@ -349,7 +361,9 @@ test("request_access end-to-end grant/deny, earlier partial decision, refusals, 
     })
     .toBe(true);
 
-  const afterTurn2 = await (await request.get(`/e2e/runs?task=${bgTask.id}`)).json();
+  const afterTurn2 = await (
+    await request.get(`/e2e/runs?task=${bgTask.id}`)
+  ).json();
   const turn2 = afterTurn2.runs[1];
   expect(turn2.reads).toEqual(["acme/docs"]);
   expect(turn2.networkAccess).toBe("open");
@@ -420,7 +434,9 @@ test("request_access end-to-end grant/deny, earlier partial decision, refusals, 
     })
     .toBe(3);
 
-  const afterTurn3 = await (await request.get(`/e2e/runs?task=${bgTask.id}`)).json();
+  const afterTurn3 = await (
+    await request.get(`/e2e/runs?task=${bgTask.id}`)
+  ).json();
   expect(afterTurn3.runs[2].prompt).toContain("Access request denied:");
   expect(afterTurn3.runs[2].prompt).toContain(
     "Inspect task summary from parent note instead.",
@@ -475,9 +491,12 @@ test("request_access end-to-end grant/deny, earlier partial decision, refusals, 
   expect(chatTaskRes.ok()).toBeTruthy();
   const chatTask = await chatTaskRes.json();
   if (!chatTask.approved) {
-    const approveChat = await request.post(`/api/tasks/${chatTask.id}/approve`, {
-      data: {},
-    });
+    const approveChat = await request.post(
+      `/api/tasks/${chatTask.id}/approve`,
+      {
+        data: {},
+      },
+    );
     expect(approveChat.ok()).toBeTruthy();
   }
 
@@ -508,7 +527,9 @@ test("request_access end-to-end grant/deny, earlier partial decision, refusals, 
       name: "Access request waiting for your decision",
     });
     await expect(chatCard).toBeVisible();
-    await expect(chatCard).toContainText("Grant read on acme/lib in interactive chat");
+    await expect(chatCard).toContainText(
+      "Grant read on acme/lib in interactive chat",
+    );
     await expectInside(chatCard, page, size.width);
   }
 
@@ -547,12 +568,16 @@ test("request_access end-to-end grant/deny, earlier partial decision, refusals, 
 
   await expect
     .poll(async () => {
-      const r = await (await request.get(`/e2e/runs?task=${chatTask.id}`)).json();
+      const r = await (
+        await request.get(`/e2e/runs?task=${chatTask.id}`)
+      ).json();
       return r.runs?.length || 0;
     })
     .toBe(2);
 
-  const chatRuns = await (await request.get(`/e2e/runs?task=${chatTask.id}`)).json();
+  const chatRuns = await (
+    await request.get(`/e2e/runs?task=${chatTask.id}`)
+  ).json();
   expect(chatRuns.runs[1].reads).toEqual(["acme/lib"]);
   expect(chatRuns.runs[1].grants || []).not.toContain("api:tasks:admin");
 });
