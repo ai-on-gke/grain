@@ -278,7 +278,14 @@ type Task struct {
 	// PullRequest beside it is the one grain pushes to; these it only
 	// reads and comments on.
 	ExternalPullRequests []string `json:"externalPullRequests,omitempty"`
-	GeneratedFrom        string   `json:"generatedFrom,omitempty"`
+	// DerivedFrom is the pull requests ("owner/repo#number") the task's
+	// work was derived from (model.LinkDerivedFrom), and Designs the
+	// design or spec files it implements (model.LinkDesign, `grain create
+	// --design`): the provenance an external orchestrator filters and
+	// follows (external-cli spec #XC-18, #XC-19).
+	DerivedFrom   []string `json:"derivedFrom,omitempty"`
+	Designs       []string `json:"designs,omitempty"`
+	GeneratedFrom string   `json:"generatedFrom,omitempty"`
 	// Origin is the pull request, issue or grain task this task's tree of
 	// work came from (model.WorkOrigin): "owner/repo#12" or "task:1766",
 	// empty for a task that has none.
@@ -1151,6 +1158,12 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		}
 		if l.Kind == model.LinkExternalPR {
 			out.ExternalPullRequests = append(out.ExternalPullRequests, l.Target)
+		}
+		if l.Kind == model.LinkDerivedFrom {
+			out.DerivedFrom = append(out.DerivedFrom, l.Target)
+		}
+		if l.Kind == model.LinkDesign {
+			out.Designs = append(out.Designs, l.Target)
 		}
 		if l.Kind == model.LinkProposedBy {
 			out.GeneratedFrom = l.Target
@@ -2266,6 +2279,26 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
+	// ?comments_since= (external-cli spec #XC-18) is a polling loop's
+	// cursor: the same detail, with only the conversation items written
+	// strictly after it. Never answered 304 -- the cached ETag is the
+	// whole detail's.
+	if raw := strings.TrimSpace(r.URL.Query().Get("comments_since")); raw != "" {
+		since, perr := time.Parse(time.RFC3339Nano, raw)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("comments_since %q is not an RFC 3339 time", raw))
+			return
+		}
+		var detail TaskDetail
+		if err := json.Unmarshal(body, &detail); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		detail.Comments = commentsAfter(detail.Comments, since)
+		w.Header().Set("Cache-Control", "no-cache")
+		writeJSON(w, http.StatusOK, detail)
+		return
+	}
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("ETag", etag)
 	if etagMatches(r.Header.Get("If-None-Match"), etag) {
@@ -3119,4 +3152,15 @@ func readOptionalJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 		return false
 	}
 	return true
+}
+
+// commentsAfter is the comments created strictly after since, in order.
+func commentsAfter(comments []Comment, since time.Time) []Comment {
+	out := make([]Comment, 0, len(comments))
+	for _, c := range comments {
+		if c.CreatedAt.After(since) {
+			out = append(out, c)
+		}
+	}
+	return out
 }

@@ -72,6 +72,23 @@ func fileTask(approved bool) func(*testing.T, *ui.Client, sender) string {
 	}
 }
 
+// taskParkedOnQuestion is a task whose run parked it on a question
+// (ask_question): what POST /api/tasks/{id}/reply answers.
+func taskParkedOnQuestion(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	ctx := context.Background()
+	id := fileTask(true)(t, client, nil)
+	qid, err := client.Store.AddComment(ctx, model.Comment{TaskID: id, Body: "which one?",
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: "run"}}, CreatedAt: baseTime})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Store.Observe(ctx, model.Observation{TaskID: id, PendingQuestionCommentID: &qid}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 // taskWithPullRequest is a task whose pull request the merge queue has
 // given up on: what retry-merge and force-merge act on.
 func taskWithPullRequest(t *testing.T, client *ui.Client, _ sender) string {
@@ -270,6 +287,12 @@ var attributedRoutes = map[string]attributedRoute{
 	"POST /api/tasks/{id}/comments": {
 		setup:       fileTask(true),
 		body:        `{"body":"a word"}`,
+		agentGrants: []string{"api:tasks:write"},
+		recorded:    newestComment,
+	},
+	"POST /api/tasks/{id}/reply": {
+		setup:       taskParkedOnQuestion,
+		body:        `{"body":"an answer"}`,
 		agentGrants: []string{"api:tasks:write"},
 		recorded:    newestComment,
 	},

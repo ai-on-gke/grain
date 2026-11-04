@@ -110,7 +110,7 @@ var globalFlagNames = map[string]bool{
 // like "-as" is the sentence's and not a flag (`grain comment 5 file
 // this -as a bug`). A global flag is lifted from them only before the
 // first word that is not a flag.
-var freeTextCommands = map[string]bool{"comment": true, "broadcast": true, "notify": true}
+var freeTextCommands = map[string]bool{"comment": true, "reply": true, "broadcast": true, "notify": true}
 
 // splitFlag reads one argument as a flag: its name without the dashes
 // (one or two, the same either way), and the value written after an "="

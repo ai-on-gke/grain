@@ -255,6 +255,8 @@ func (s *Server) routes() {
 	s.route("POST /api/capabilities/{id}/check", s.handleCheckCapability)
 	s.route("GET /api/tasks", s.handleListTasks)
 	s.route("GET /api/tasks/states", s.handleTaskStates)
+	s.route("GET /api/tasks/wait", s.handleTasksWait)
+	s.route("GET /api/inbox", s.handleInbox)
 	s.route("GET /api/states", s.handleTaskStates)
 	s.route("POST /api/tasks", s.handleCreateTask)
 	s.route("POST /api/tasks/from-template", s.handleCreateTaskFromTemplate)
@@ -269,6 +271,7 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/undefer", s.handleUndefer)
 	s.route("POST /api/tasks/{id}/submit", s.handleSubmit)
 	s.route("POST /api/tasks/{id}/comments", s.handleAddComment)
+	s.route("POST /api/tasks/{id}/reply", s.handleReplyTask)
 	// PUT, not POST: setting the one secret a parked run asked for is an
 	// idempotent write of a value at a name the task already fixed --
 	// the same shape (and the same verb) /api/secrets/{secret}/{key}

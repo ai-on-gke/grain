@@ -1360,6 +1360,12 @@ func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, ta
 			return s.agentCanonicalRepo(repo)
 		}
 	}
+	if pattern == tasksWaitRoute {
+		repo, _ := s.tasksWaitCallRepo(ctx, r, func(c string) bool {
+			return set.Allows(scope, c) || (ciCap && agentMayRead(acting, c))
+		})
+		return repo, nil
+	}
 	if pathParam.MatchString(pathOf(pattern)) && !agentRepoDefaultRoutes[pattern] {
 		return "", nil
 	}
@@ -1680,7 +1686,11 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	}
 	call.grants = set
 	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
-	fsAllowed := fsMergeQueueByCI(set, pattern, r)
+	// GET /api/inbox without ?repo= answers only the repositories the
+	// token reads (Server.inboxReadable), so a token held to some of
+	// them is let through to it rather than refused for naming none.
+	fsAllowed := fsMergeQueueByCI(set, pattern, r) ||
+		(pattern == "GET /api/inbox" && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "")
 	if !set.Has(scope) && !adminPatch && !fsAllowed {
 		return call, fmt.Errorf("%s holds no api grant for scope %s, which %s needs", principal, scope, pattern)
 	}
@@ -1818,6 +1828,10 @@ func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pat
 	}
 	if pathParam.MatchString(pathOf(pattern)) {
 		return "", nil, nil
+	}
+	if pattern == tasksWaitRoute {
+		repo, ids := s.tasksWaitCallRepo(ctx, r, func(c string) bool { return set.Allows(scope, c) })
+		return repo, ids, nil
 	}
 	if pattern == "POST /api/tasks/reorder" && len(body) > 0 {
 		var req ReorderRequest
@@ -2269,6 +2283,7 @@ var taskMutationResponseKinds = map[string]taskMutationRespKind{
 	"POST /api/tasks/{id}/undefer":                 taskRespSingle,
 	"POST /api/tasks/{id}/submit":                  taskRespSingle,
 	"POST /api/tasks/{id}/comments":                taskRespSingle,
+	"POST /api/tasks/{id}/reply":                   taskRespSingle,
 	"PUT /api/tasks/{id}/secret":                   taskRespSingle,
 	"POST /api/tasks/{id}/close":                   taskRespSingle,
 	"POST /api/tasks/{id}/stop":                    taskRespSingle,
@@ -2524,4 +2539,32 @@ func marshalJSONLine(v any, fallback []byte) []byte {
 		return fallback
 	}
 	return append(b, '\n')
+}
+
+// tasksWaitRoute is GET /api/tasks/wait, whose tasks are named in its
+// query rather than its path.
+const tasksWaitRoute = "GET /api/tasks/wait"
+
+// tasksWaitCallRepo is the repository a GET /api/tasks/wait call is
+// judged on, checking every task it names (#XC-22): the first task's
+// repository whose grant allowed refuses, so it is the one the gate
+// names, and otherwise the first task's own. A task id that names no
+// task is left for the handler to answer 404.
+func (s *Server) tasksWaitCallRepo(ctx context.Context, r *http.Request, allowed func(string) bool) (string, []string) {
+	ids := TasksWaitIDs(r)
+	first, firstSet := "", false
+	for _, id := range ids {
+		t, err := s.tasks.Store.GetTask(ctx, id)
+		if err != nil || t == nil {
+			continue
+		}
+		repo := taskRepo(t)
+		if !allowed(repo) {
+			return repo, ids
+		}
+		if !firstSet {
+			first, firstSet = repo, true
+		}
+	}
+	return first, ids
 }

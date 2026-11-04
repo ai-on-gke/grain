@@ -354,7 +354,7 @@ Commands:
                                        list, repeatably, with -state/-repo/-capability and friends
                                        as shorthands; -sort attribute:asc orders it. "grain list -h"
                                        prints the attributes and comparisons -- see list.go)
-  get <id>                             show one task and its conversation
+  get <id> [-comments-since T]         show one task and its conversation (only what came after T)
   create -title T [flags]              file a new task (-position front|end picks which end of
                                        the backlog it joins, and is remembered for the next one;
                                        -field name=value sets one of the fields this deployment
@@ -369,6 +369,14 @@ Commands:
                                        queued its approval says
   capability <id> <cap> attach|detach  attach or detach a capability
   comment <id> <body...>               post a comment (and answer a parked question)
+  reply <id> <body...>                 answer the question a task is parked on -- refused, posting
+                                       nothing, when none is or when it waits on a secret request
+  inbox [-repo R] [-kind K]            what needs a person: parked questions and secret requests,
+                                       notifications, merge-held pull requests, proposals
+  wait <id...> [-until C] [-timeout D] block until the tasks are closed, merged, awaiting-reply,
+                                       ci-done or any change (exit 5 when -timeout, 30m, runs out)
+  logs <id> [-attempt N] [-tail N] [-follow]
+                                       an attempt's live activity and transcript
   close [-close-pull-request] <id>     close a task (grain's "delete" -- see the package doc comment),
                                        and with the flag its open pull request too
   delete <id>                          alias for close
@@ -612,6 +620,14 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdCapability(ctx, c, out, cmdArgs)
 	case "comment":
 		return cmdComment(ctx, c, out, cmdArgs)
+	case "reply":
+		return cmdReply(ctx, c, out, cmdArgs)
+	case "inbox":
+		return cmdInbox(ctx, c, out, cmdArgs)
+	case "wait":
+		return cmdWait(ctx, c, out, cmdArgs)
+	case "logs":
+		return cmdLogs(ctx, c, out, cmdArgs)
 	case "close", "delete":
 		return cmdClose(ctx, c, out, cmdArgs)
 	case "reopen":

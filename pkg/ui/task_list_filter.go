@@ -44,6 +44,11 @@ type taskListQuery struct {
 	search  string
 	limit   int
 	summary bool
+	// derivedFrom and filedVia are the external-cli spec's provenance
+	// filters (#XC-18): ?derived_from=<owner/name#pr or its URL> and
+	// ?filed_via=<substring>.
+	derivedFrom string
+	filedVia    string
 }
 
 // parseTaskListQuery reads q, and reports whether it asks for anything the
@@ -73,6 +78,14 @@ func parseTaskListQuery(q url.Values) (taskListQuery, bool) {
 			out.limit = n
 		}
 	}
+	if q.Has("derived_from") {
+		narrowed = true
+		out.derivedFrom = strings.TrimSpace(q.Get("derived_from"))
+	}
+	if q.Has("filed_via") {
+		narrowed = true
+		out.filedVia = strings.TrimSpace(q.Get("filed_via"))
+	}
 	if q.Has("fields") {
 		narrowed = true
 		out.summary = strings.EqualFold(strings.TrimSpace(q.Get("fields")), "summary")
@@ -99,7 +112,43 @@ func (q taskListQuery) matches(t Task) bool {
 	if q.search != "" && !strings.Contains(strings.ToLower(t.Title), strings.ToLower(q.search)) {
 		return false
 	}
+	if q.derivedFrom != "" && !TaskDerivedFrom(t, q.derivedFrom) {
+		return false
+	}
+	if q.filedVia != "" && !strings.Contains(strings.ToLower(t.FiledVia), strings.ToLower(q.filedVia)) {
+		return false
+	}
 	return true
+}
+
+// TaskDerivedFrom reports whether t records that its work was derived
+// from the pull request ref names (owner/name#number or its URL): a
+// model.LinkDerivedFrom link, or a "Derived from: <ref>" line in its
+// description, which is how a task filed by hand says the same thing.
+// `grain list -filter derived_from:eq:<ref>` asks it of every task.
+func TaskDerivedFrom(t Task, ref string) bool {
+	want, ok := NormalizePullRequestRef(ref)
+	if !ok {
+		want = strings.TrimSpace(ref)
+	}
+	for _, d := range t.DerivedFrom {
+		if strings.EqualFold(d, want) {
+			return true
+		}
+	}
+	for _, line := range strings.Split(t.Description, "\n") {
+		rest, found := strings.CutPrefix(strings.TrimSpace(line), "Derived from:")
+		if !found {
+			continue
+		}
+		for _, word := range strings.FieldsFunc(rest, func(r rune) bool { return r == ' ' || r == ',' || r == '\t' }) {
+			word = strings.Trim(word, "()[]<>`*_.")
+			if got, ok := NormalizePullRequestRef(word); ok && strings.EqualFold(got, want) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // taskListSummary is one task under fields=summary: what picks a row out
