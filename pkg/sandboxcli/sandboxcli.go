@@ -60,6 +60,9 @@ const (
 	// serverEnvVar is pkg/cli's own: a CLI pointed at a daemon is not in
 	// sandbox mode, wherever it runs.
 	serverEnvVar = "GRAIN_SERVER"
+	// contextEnvVar is pkg/cli's too: a named context
+	// (design/spec/external-cli/external-cli.spec.md#XC-2) is a daemon.
+	contextEnvVar = "GRAIN_CONTEXT"
 )
 
 var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
@@ -129,7 +132,7 @@ func detectSandboxProxy(env sandboxEnv) (base, token string, ok bool) {
 	if v := strings.TrimSpace(env.Getenv(sandboxCLIEnv)); v == "0" || strings.EqualFold(v, "false") {
 		return "", "", false
 	}
-	if strings.TrimSpace(env.Getenv(serverEnvVar)) != "" {
+	if strings.TrimSpace(env.Getenv(serverEnvVar)) != "" || strings.TrimSpace(env.Getenv(contextEnvVar)) != "" {
 		// Somebody pointed this CLI at a daemon: that wins.
 		return "", "", false
 	}
@@ -281,7 +284,7 @@ func IsCommand(args []string) bool { return isSandboxCommand(args) }
 // maybeRunSandboxCLI runs args as a sandbox command when this process is in
 // a sandbox and args name one; handled is false otherwise.
 func maybeRunSandboxCLI(args []string, env sandboxEnv, stdout, stderr io.Writer) (code int, handled bool) {
-	if !isSandboxCommand(args) {
+	if !isSandboxCommand(args) || namesADaemon(args) {
 		return 0, false
 	}
 	base, token, ok := detectSandboxProxy(env)
@@ -314,7 +317,7 @@ func Unknown(args []string, stderr io.Writer) (code int, handled bool) {
 }
 
 func unknownCommand(args []string, env sandboxEnv, stderr io.Writer) (code int, handled bool) {
-	if len(args) > 0 && strings.HasPrefix(args[0], "-") {
+	if len(args) > 0 && strings.HasPrefix(args[0], "-") || namesADaemon(args) {
 		return 0, false
 	}
 	base, _, ok := detectSandboxProxy(env)
@@ -326,6 +329,27 @@ func unknownCommand(args []string, env sandboxEnv, stderr io.Writer) (code int, 
 	}
 	fmt.Fprintf(stderr, sandboxHelpText, redactProxy(base))
 	return 2, true
+}
+
+// namesADaemon reports whether args point this CLI at a daemon with
+// -server or -context (either spelling, anywhere before a bare "--"):
+// like $GRAIN_SERVER and $GRAIN_CONTEXT, that is pkg/cli's to answer, in
+// a sandbox or not (external-cli.spec.md#XC-3).
+func namesADaemon(args []string) bool {
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		name := strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-")
+		if name == arg {
+			continue
+		}
+		name, _, _ = strings.Cut(name, "=")
+		if name == "server" || name == "context" {
+			return true
+		}
+	}
+	return false
 }
 
 // redactProxy is base as help prints it: without the sandbox's token,
