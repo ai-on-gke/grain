@@ -396,13 +396,24 @@ export function collectAlerts(config, zone = "", tasks = []) {
   const out = [...redBaseRepairAlerts(config, tasks)];
 
   if (config.reconcilerDown) {
+    // The conditions the daemon recorded against itself say why
+    // (config.dispatchBlocked, each with its error and since when); the
+    // boolean alone could only say that it stopped.
+    const conditions = config.dispatchBlocked || [];
+    const why = conditions
+      .map((c) => `${c.name.replaceAll("-", " ")}: ${c.error}`)
+      .join("; ");
+    const remedy = conditions.find((c) => c.remedy)?.remedy;
     out.push({
       id: "reconciler-down",
       severity: "critical",
       title: "Reconcile loop stopped",
       sentence:
-        "This deployment's reconcile loop has stopped -- no tasks are being dispatched or checked. Restart the daemon to recover.",
+        "This deployment's reconcile loop has stopped -- no tasks are being dispatched or checked." +
+        (why ? ` ${why}.` : "") +
+        ` ${remedy ? remedy.charAt(0).toUpperCase() + remedy.slice(1) : "Restart the daemon to recover"}.`,
       scope: { kind: "deployment" },
+      since: conditions[0]?.since || undefined,
       impact: "No task is dispatched or checked until the daemon restarts.",
       // The restart it asks for is System → Power's "Restart grain";
       // without this the alert named the fix and left the reader to

@@ -80,7 +80,9 @@ func readPipelineChangesTool(reader PipelineReader) Tool {
 		Description: "Read what changed in this grain deployment's pipeline since a cursor, one line per change, " +
 			"oldest first: task transitions (filed, running, ended, closed, merged), merge-queue moves, " +
 			"stalls (a task whose state outlived its patience, a merge-queue entry stalled or blocked), " +
-			"base-branch verdicts and merge-batch results. Each line is the id, the kind, from→to and when. " +
+			"base-branch verdicts, merge-batch results, and the deployment's own dispatch being blocked or " +
+			"unblocked (kind dispatch: a git proxy that failed to bind, a reconcile loop that died -- nothing is " +
+			"dispatched while one holds). Each line is the id, the kind, from→to and when. " +
 			"The answer ends with the cursor to pass as \"after\" next time -- write it into your handover. " +
 			"With no \"after\" it reads the last 24 hours. Read-only. Start a wake here and read nothing " +
 			"else unless a line names it.",

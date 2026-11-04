@@ -1095,6 +1095,12 @@ func Run(ctx context.Context, cfg Config) error {
 				// while the UI it left running kept looking perfectly
 				// healthy.
 				ReconcilerDown.Store(true)
+				// And as a named condition with the error and the time,
+				// which is what the health route, every queued task's
+				// reason and the pipeline feed say it by
+				// (DispatchConditions): the boolean above says dispatch
+				// is dead, and this says why.
+				recordDispatchBlock(err)
 				log.Printf("grain daemon: %v -- the UI/API server above is still up, but nothing is "+
 					"dispatching or reconciling tasks until this is fixed and the process is restarted", err)
 			}
@@ -1222,7 +1228,10 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		// without it. The UI and every other sandbox-facing service --
 		// both caches and the model proxies -- were started by run()
 		// before this, and stay up (TestAGitProxyPortTakenFailsOnlyTheGitProxy).
-		return fmt.Errorf("starting git proxy: %w", err)
+		// Named, so that run() records it as the git proxy's own
+		// condition (DispatchConditions) rather than a loop that died.
+		return &dispatchBlock{name: ConditionGitProxy, err: fmt.Errorf("starting git proxy: %w", err),
+			remedy: "free the port the git proxy binds (or move the block with -sandbox-port-base) and restart the daemon"}
 	}
 	cfg.restartGaps.Up(upgrade.ServiceGitProxy)
 	defer func() {

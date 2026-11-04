@@ -1606,6 +1606,10 @@ type configResponse struct {
 	// rather than an operator having to notice tasks have stopped moving
 	// and go searching logs to learn why (bwsalmon/agents#576).
 	ReconcilerDown bool `json:"reconcilerDown,omitempty"`
+	// DispatchBlocked is why, where the daemon recorded it
+	// (Config.DispatchConditions): the conditions holding dispatch,
+	// each with its error and since when. Absent while dispatching.
+	DispatchBlocked []DispatchCondition `json:"dispatchBlocked,omitempty"`
 	// StoreSwitch is Config.StoreSwitch: the data directory now selects a
 	// store other than the one this daemon writes to, and nothing is
 	// dispatched until it restarts. Absent when there is nothing to say.
@@ -2242,6 +2246,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if s.tasks.Config.ReconcilerDown != nil {
 		resp.ReconcilerDown = s.tasks.Config.ReconcilerDown()
 	}
+	resp.DispatchBlocked = s.tasks.dispatchBlocked()
 	if s.tasks.Config.StoreSwitch != nil {
 		resp.StoreSwitch = s.tasks.Config.StoreSwitch()
 	}

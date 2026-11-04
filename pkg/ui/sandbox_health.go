@@ -444,8 +444,15 @@ type DaemonHealth struct {
 // already establishes for the Logs pane the System overlay
 // (bwsalmon/agents#536) puts this one alongside.
 type SandboxHealthResponse struct {
-	Enabled   bool              `json:"enabled"`
-	Sandboxes []SandboxSnapshot `json:"sandboxes,omitempty"`
+	Enabled bool `json:"enabled"`
+	// DispatchBlocked is every condition holding this deployment's
+	// dispatch (Config.DispatchConditions): the failing checks of this
+	// response, first because nothing below them matters while one is
+	// in force -- a pool of healthy sandboxes is no use to a daemon
+	// whose git proxy never bound. Absent on a deployment that is
+	// dispatching, which is the ordinary day.
+	DispatchBlocked []DispatchCondition `json:"dispatchBlocked,omitempty"`
+	Sandboxes       []SandboxSnapshot   `json:"sandboxes,omitempty"`
 	// SandboxReading is how old those rows are, and whether they came
 	// from a sweep that has already been superseded by one still running
 	// (grain/task-262). nil on a deployment with no sandbox backend
@@ -1047,13 +1054,15 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 	// The same goes for a stale sandbox image pin: it is in the settings,
 	// and says so whether or not a pool is wired to report on.
 	if s.tasks.Config.Sandboxes == nil && s.tasks.Config.HostStats == nil && s.tasks.Config.Daemon == nil && s.tasks.Config.StandingSandboxes == nil && s.tasks.Config.PersistentSandboxes == nil && s.tasks.Config.Overcommit == nil {
-		writeJSON(w, http.StatusOK, SandboxHealthResponse{Enabled: false, StateRepoSync: syncFailure, HostCredentials: hostCredentials,
+		writeJSON(w, http.StatusOK, SandboxHealthResponse{Enabled: false, DispatchBlocked: s.tasks.dispatchBlocked(),
+			StateRepoSync: syncFailure, HostCredentials: hostCredentials,
 			SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()), Counters: healthCounterSections(),
 			CapabilityServers: s.tasks.capabilityServersDown(), Registry: s.tasks.registryHealth(r.Context())})
 		return
 	}
 	resp := SandboxHealthResponse{
 		Enabled:              true,
+		DispatchBlocked:      s.tasks.dispatchBlocked(),
 		StateRepoSync:        syncFailure,
 		HostCredentials:      hostCredentials,
 		SandboxImage:         s.tasks.sandboxImage(),

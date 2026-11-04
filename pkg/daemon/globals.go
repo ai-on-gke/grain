@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/console"
+	"github.com/ai-on-gke/grain/pkg/dispatchcondition"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
@@ -47,6 +48,56 @@ import (
 // endpoint, can see reconciliation is dead without an operator having to
 // notice and interpret a single log line (bwsalmon/agents#576).
 var ReconcilerDown atomic.Bool
+
+// DispatchConditions is why this deployment is not dispatching, as named
+// conditions with the error and the time each was set
+// (pkg/dispatchcondition): reconcilerDown's boolean, with the words an
+// agent or an operator needs beside it. Set where the daemon learns it
+// cannot dispatch -- runDaemon's own failure, the git proxy among its
+// causes -- and read by the health route (a failing check), every
+// queued task's reason (ReasonClassifier.DispatchBlocked), GET
+// /api/config and the pipeline feed. Package-level for reconcilerDown's
+// reason: the two halves of this process see one fact about each other
+// without either owning the other.
+var DispatchConditions = &dispatchcondition.Set{}
+
+// The condition names this daemon sets.
+const (
+	// ConditionGitProxy is the git proxy failing to come up -- its port
+	// taken, most often -- without which nothing clones and nothing is
+	// dispatched.
+	ConditionGitProxy = "git-proxy"
+	// ConditionReconciler is runDaemon having given up for any other
+	// reason: an error from a setup step, or a panic.
+	ConditionReconciler = "reconciler"
+)
+
+// dispatchBlock is an error runDaemon returns that names the condition
+// it is: run() records it under that name rather than the catch-all.
+type dispatchBlock struct {
+	name   string
+	remedy string
+	err    error
+}
+
+func (b *dispatchBlock) Error() string { return b.err.Error() }
+func (b *dispatchBlock) Unwrap() error { return b.err }
+
+// recordDispatchBlock sets the condition for a runDaemon failure: the
+// named one when err carries a name, ConditionReconciler otherwise.
+// Only a restart clears either -- a fresh process has a fresh Set --
+// and the remedy says so.
+func recordDispatchBlock(err error) {
+	name, remedy := ConditionReconciler, "fix what the error names and restart the daemon"
+	var block *dispatchBlock
+	if errors.As(err, &block) {
+		name = block.name
+		if block.remedy != "" {
+			remedy = block.remedy
+		}
+	}
+	DispatchConditions.Block(name, err, remedy)
+}
 
 // livePullRequests holds the GitHub-backed pull request opener runDaemon
 // builds, for the UI/API server that was started before it to reach.
