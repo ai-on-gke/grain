@@ -447,6 +447,10 @@ func Run(ctx context.Context, cfg Config) error {
 			// The same copy orchestrator.Config.GrainSourceDir is given
 			// below, mounted into self-debug runs' containers.
 			GrainSourceDir: sourceDir(cfg.UpgradeSrcDir),
+			// The fence's accepts: the address containers reach grain's
+			// services at, and only the ports those services listen on.
+			Fence: cfg.ContainerFence, GitProxyHost: cfg.ContainerGitProxyHost,
+			SandboxServicePorts: servicePorts.Ports,
 		})
 		log.Printf("grain daemon: container sandboxing -- one local Docker container per run from image %q", startImage)
 	} else if cfg.K8sSandboxes {

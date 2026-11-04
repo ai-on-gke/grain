@@ -318,6 +318,38 @@ func TestAdmissionRefusesGrantsOnHostDirectorySandboxes(t *testing.T) {
 	}
 }
 
+// A container sandbox that is not fenced off from grain's own host
+// (ContainerConfig.Fence) is refused external grants as a host
+// directory is, saying why; a fenced one is minted for.
+func TestAdmissionRefusesGrantsOnUnfencedContainerSandboxes(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mode  ContainerFenceMode
+		admit bool
+	}{
+		"unfenced": {ContainerFenceOff, false},
+		"fenced":   {ContainerFenceRequire, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			caller := &mintCaller{}
+			deps, store, ctx, _ := passHarness(t, caller)
+			deps.Sandboxes = NewContainerSandboxes(ContainerConfig{Image: "img", Workspace: "/w", Fence: tc.mode})
+			adm, _ := capabilityAdmitter(deps, admitAll)(ctx, dispatch.Candidate{TaskID: "7", RunID: "7-1", Attempt: 1})
+			if adm.Admitted != tc.admit {
+				t.Fatalf("admitted = %v, want %v", adm.Admitted, tc.admit)
+			}
+			if tc.admit {
+				return
+			}
+			if got := caller.called(); len(got) != 0 {
+				t.Errorf("calls = %q, want nothing minted", got)
+			}
+			if comments, _ := store.Comments(ctx, "7"); len(comments) != 1 || !strings.Contains(comments[0].Body, "unfenced") {
+				t.Errorf("comments = %+v, want the unfenced-container refusal", comments)
+			}
+		})
+	}
+}
+
 // What a run's grants did for it reaches the run record when the run's
 // pass is released: each record under the grant and attempt_id it is
 // about, then grain's note on any the server left out.
