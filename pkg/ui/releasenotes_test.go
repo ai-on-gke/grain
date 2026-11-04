@@ -216,6 +216,88 @@ func TestClusterStatsRouteNamesTheLinesTheWayThePaneReadsThem(t *testing.T) {
 	if row["linesAdded"] != float64(214) || row["pullRequestsMeasured"] != float64(1) {
 		t.Errorf("repo row = %v, want the same lines under the same keys", row)
 	}
+	directions, _ := body["directions"].([]any)
+	if len(directions) != 1 {
+		t.Fatalf("directions = %v, want the one root direction", body["directions"])
+	}
+	dirRow, _ := directions[0].(map[string]any)
+	if dirRow["taskId"] != "a" || dirRow["author"] != "alice" || dirRow["linesAdded"] != float64(214) {
+		t.Errorf("direction row = %v, want taskId a, author alice and linesAdded 214", dirRow)
+	}
+}
+
+func TestClusterStatsSupportsDailyWeeklyAndMonthlyRollupsAndDirections(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	now := time.Date(2026, 11, 4, 14, 0, 0, 0, time.UTC)
+	c.Now = func() time.Time { return now }
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+
+	// Root task #10 filed on Nov 3 ("yesterday"), spawning follow-up #11 on
+	// Nov 4 ("today") that merges a PR on Nov 4.
+	yesterday := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
+	today := time.Date(2026, 11, 4, 9, 0, 0, 0, time.UTC)
+	merged := today.Add(2 * time.Hour)
+	if err := store.PutTask(ctx, model.Task{
+		ID: "10", Title: "Improve CI caching", Target: &repo, CreatedAt: &yesterday,
+		Origin: model.Origin{Attribution: model.Attribution{
+			Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator"}}},
+		Binding: model.BindingDirective,
+	}); err != nil {
+		t.Fatalf("filing root 10: %v", err)
+	}
+	if err := store.PutTask(ctx, model.Task{
+		ID: "11", Title: "Warm npm cache in step", Target: &repo, CreatedAt: &today,
+		Origin: model.Origin{Attribution: model.Attribution{
+			Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
+			OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: "10"}}},
+		Links:   []model.Link{{Kind: model.LinkProposedBy, Target: "10"}},
+		Binding: model.BindingDirective,
+	}); err != nil {
+		t.Fatalf("filing child 11: %v", err)
+	}
+	if err := store.Observe(ctx, model.Observation{
+		TaskID: "11", PrMergedAt: &merged, CompletedAt: &merged,
+		PrAdditions: intPtr(120), PrDeletions: intPtr(30), PrChangedFiles: intPtr(3),
+	}); err != nil {
+		t.Fatalf("observing child 11: %v", err)
+	}
+
+	// Daily rollup for "today" (2026-11-04): child #11 was filed and merged
+	// today, rolled up under root direction #10 ("Improve CI caching").
+	dayStats, err := c.ClusterStats(ctx, "today")
+	if err != nil {
+		t.Fatalf("ClusterStats(today): %v", err)
+	}
+	if dayStats.Period != "2026-11-04" {
+		t.Errorf("today period = %q, want 2026-11-04", dayStats.Period)
+	}
+	if dayStats.PullRequestsMerged != 1 || dayStats.TasksFiled != 1 {
+		t.Errorf("today stats = %+v, want 1 merged and 1 filed", dayStats)
+	}
+	if len(dayStats.Directions) != 1 {
+		t.Fatalf("today directions = %+v, want 1 direction", dayStats.Directions)
+	}
+	dir := dayStats.Directions[0]
+	if dir.TaskID != "10" || dir.Title != "Improve CI caching" || dir.Author != "operator" || dir.TasksSpawned != 1 {
+		t.Errorf("today direction = %+v, want root #10 by operator with 1 spawned follow-up", dir)
+	}
+
+	// Monthly rollup for "this-month" (2026-11): includes both yesterday's
+	// root filing and today's follow-up filing + merge under direction #10.
+	monthStats, err := c.ClusterStats(ctx, "this-month")
+	if err != nil {
+		t.Fatalf("ClusterStats(this-month): %v", err)
+	}
+	if monthStats.Period != "2026-11" {
+		t.Errorf("this-month period = %q, want 2026-11", monthStats.Period)
+	}
+	if monthStats.TasksFiled != 2 || monthStats.PullRequestsMerged != 1 {
+		t.Errorf("this-month stats = %+v, want 2 tasks filed and 1 merged", monthStats)
+	}
+	if len(monthStats.Directions) != 1 || monthStats.Directions[0].TasksFiled != 2 || monthStats.Directions[0].TasksSpawned != 1 {
+		t.Errorf("this-month directions = %+v, want 1 direction with 2 filed and 1 spawned", monthStats.Directions)
+	}
 }
 
 func TestReleaseNotesRefuseWhatIsNoLongerNotes(t *testing.T) {
