@@ -549,6 +549,18 @@ type externalReview struct {
 	// security files the security review (model.SecurityReviewTemplateID)
 	// rather than a code review.
 	security bool
+	// spec and design are the documents the change says it implements
+	// (model.LinkImplementsSpec, model.LinkDesignDoc, from `grain pr
+	// adopt --spec/--design` or the description's "Implements:" and
+	// "Design:" lines): the review carries them as links and is asked to
+	// check the change, and its tests, against them.
+	spec, design string
+	// designReview asks for a design review (`grain pr review --design`):
+	// design-folder conventions and overlapping designs under design/.
+	designReview bool
+	// requester, when set, is who the review is filed for in place of
+	// sender's GitHub login: the API principal of `grain pr review`.
+	requester *model.Attribution
 }
 
 // fileExternalPRReview files r and returns the review task's ID.
@@ -599,6 +611,12 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 	if r.shepherdID != "" {
 		links = append(links, model.Link{Kind: model.LinkTakeoverReviewOf, Target: r.shepherdID})
 	}
+	if r.spec != "" {
+		links = append(links, model.Link{Kind: model.LinkImplementsSpec, Target: r.spec})
+	}
+	if r.design != "" {
+		links = append(links, model.Link{Kind: model.LinkDesignDoc, Target: r.design})
+	}
 
 	// Best-effort native GitHub Check Run while the review is queued/running.
 	if trusted && headSHA != "" && r.shepherdID == "" {
@@ -622,9 +640,21 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 	}
 
 	origin, approval, approvedAt := attributionForSender(sender, trusted, model.ReasonReview, now)
+	if r.requester != nil {
+		origin = model.Origin{Attribution: *r.requester, Reason: model.ReasonReview}
+		approval, approvedAt = nil, nil
+		if trusted {
+			a := *r.requester
+			approval, approvedAt = &a, &now
+		} else {
+			origin.Reason = model.ReasonProposal
+		}
+	}
 	verb := "Review"
 	if r.security {
 		verb = "Security review"
+	} else if r.designReview {
+		verb = "Design review"
 	}
 	title := fmt.Sprintf("%s %s#%d", verb, repo, number)
 	if strings.TrimSpace(prTitle) != "" {
@@ -657,6 +687,10 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 		b.WriteString("Review this change as a security review: look for anything that widens what an " +
 			"untrusted party can do -- credentials, capabilities, workflow and CI changes, sandbox and " +
 			"proxy scoping, injection through prompts or shell. Do not push to the branch under review.\n\n")
+	}
+	b.WriteString(conformanceInstructions(r.spec, r.design))
+	if r.designReview {
+		b.WriteString(designReviewInstructions)
 	}
 	b.WriteString("Inspect the changes against the base branch, run relevant tests, and record each " +
 		"finding with `add_review_comment` (supplying `path` and `line` for inline diff findings). " +

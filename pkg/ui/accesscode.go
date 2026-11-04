@@ -609,7 +609,7 @@ const (
 
 func singleTenantOpenRoute(r *http.Request) bool {
 	switch r.URL.Path {
-	case accessCodePath, accessCodeScriptPath, "/api/auth/logout":
+	case accessCodePath, accessCodeScriptPath, "/api/auth/logout", "/api/auth/whoami":
 		return true
 	}
 	return hostdConnectRoute(r) || hostdInstallRoute(r)

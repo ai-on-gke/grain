@@ -149,9 +149,18 @@ func TestPullRequestStatusListsReviewCommentsWithoutThreads(t *testing.T) {
 		!strings.Contains(res.Text, "comment 11 by @gemini-code-assist on pkg/a.go:7\n") {
 		t.Errorf("got:\n%s", res.Text)
 	}
+	// The thread read's refusal is said, so "no resolution state" is
+	// not read as "nothing left open" (2026-11-02 GHES walkthrough: a
+	// 401 from /api/graphql left no trace in pull_request_status).
+	if !strings.Contains(res.Text, "Whether each thread is resolved could not be read: graphql unavailable\n") {
+		t.Errorf("the thread read's refusal is not reported; got:\n%s", res.Text)
+	}
 	res = call(t, client.fakePullRequests, testScope)
 	if !strings.Contains(res.Text, "comment 12 by @gemini-code-assist on pkg/b.go:3\n    Typo in the comment.") {
 		t.Errorf("got:\n%s", res.Text)
+	}
+	if strings.Contains(res.Text, "could not be read") {
+		t.Errorf("a reader with no thread view at all reports a refusal; got:\n%s", res.Text)
 	}
 }
 

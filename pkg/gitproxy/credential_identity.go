@@ -70,6 +70,26 @@ func (c *CredentialSet) CredentialGitIdentity(name string) (CommitIdentity, erro
 	return c.credentialGitIdentity(name, 0)
 }
 
+// AuthorOf returns the human author attribution name recorded for
+// credential name (or its paired SSH API credential), or "" when none is
+// recorded.
+func (c *CredentialSet) AuthorOf(name string) string {
+	if c == nil || name == "" || name == "anonymous" {
+		return ""
+	}
+	if h := c.HostOf(name); h.Author != "" {
+		return h.Author
+	}
+	if c.IsSSH(name) {
+		if cred, ok := c.Get(name); ok && cred.SSH != nil {
+			if api, paired := c.APICredential(cred); paired {
+				return c.HostOf(api.Name).Author
+			}
+		}
+	}
+	return ""
+}
+
 // credentialGitIdentity is CredentialGitIdentity, following at most one
 // SSH key -> API credential pairing (depth guards a pairing that points
 // back at an SSH key, which APICredential already refuses).
