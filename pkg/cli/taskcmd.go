@@ -220,7 +220,7 @@ func cmdCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		Title:        *title, Description: description, Repo: *repo, NoRepo: *noRepo, Base: *base,
 		Issue:       *issue,
 		ExternalRef: strings.TrimSpace(*externalRef),
-		AutoMerge: autoMerge, Reads: reads, Writes: writeTargets, Approved: *approve, AtFront: atFront,
+		AutoMerge:   autoMerge, Reads: reads, Writes: writeTargets, Approved: *approve, AtFront: atFront,
 		Priority:    priorityOpt,
 		Interactive: *interactive, Attachments: attachments,
 		ReviewTemplateID: *reviewTemplate, CustomFields: customFields,

@@ -1668,7 +1668,7 @@ type CreateTaskRequest struct {
 	// "CA-204"), inherited by tasks grain spawns from this task when
 	// omitted on the child.
 	ExternalRef string `json:"externalRef,omitempty"`
-	AutoMerge     bool   `json:"autoMerge"`
+	AutoMerge   bool   `json:"autoMerge"`
 	// DeclineAutoMerge is the filer saying auto_merge: false out loud
 	// (propose_task's explicit false), rather than leaving it to the
 	// proposer's permission or a default -- which AutoMerge alone, always
