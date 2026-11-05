@@ -15,6 +15,8 @@
 package deploy
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -651,4 +653,332 @@ func TestAReleaseWithAGHCRTokenLackingWritePackagesStopsBeforeTheBuild(t *testin
 			}
 		}
 	})
+}
+
+func TestConfigureDockerHubAuthHandlesRepoScopedOAT(t *testing.T) {
+	runConfigure := func(t *testing.T, authStatus int, loginFail bool, args []string, extraEnv map[string]string) (out string, loginConfigs []string, homeConfigExists bool, githubEnv string, probedUser string, err error) {
+		t.Helper()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			u, p, ok := r.BasicAuth()
+			if ok {
+				probedUser = u + ":" + p
+			}
+			w.WriteHeader(authStatus)
+			if authStatus == http.StatusOK {
+				_, _ = w.Write([]byte(`{"token":"ok"}`))
+			} else {
+				_, _ = w.Write([]byte(`{"details":"access token has insufficient scopes"}`))
+			}
+		}))
+		t.Cleanup(srv.Close)
+
+		dir := t.TempDir()
+		home := filepath.Join(dir, "home")
+		if err := os.MkdirAll(home, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		bin := filepath.Join(dir, "bin")
+		if err := os.MkdirAll(bin, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		dockerLog := filepath.Join(dir, "docker-login.log")
+		ghEnvFile := filepath.Join(dir, "github.env")
+
+		stub := "#!/bin/sh\n" +
+			"if [ \"$1\" = login ]; then\n" +
+			"  while IFS= read -r _; do :; done\n" +
+			"  cfg=\"${DOCKER_CONFIG:-$HOME/.docker}\"\n" +
+			"  echo \"$cfg|$*\" >> \"" + dockerLog + "\"\n" +
+			"  mkdir -p \"$cfg\" && printf '{\"auths\":{\"https://index.docker.io/v1/\":{}}}' > \"$cfg/config.json\"\n" +
+			"  exit 0\n" +
+			"fi\n" +
+			"exit 0\n"
+		if loginFail {
+			stub = "#!/bin/sh\n" +
+				"if [ \"$1\" = login ]; then\n" +
+				"  while IFS= read -r _; do :; done\n" +
+				"  cfg=\"${DOCKER_CONFIG:-$HOME/.docker}\"\n" +
+				"  echo \"$cfg|$*\" >> \"" + dockerLog + "\"\n" +
+				"  echo 'unauthorized: incorrect username or password' >&2\n" +
+				"  exit 1\n" +
+				"fi\n" +
+				"exit 0\n"
+		}
+		if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(stub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, tool := range []string{"mkdir", "mktemp", "chmod", "rm", "curl"} {
+			src, lookErr := exec.LookPath(tool)
+			if lookErr != nil {
+				t.Fatalf("missing required host tool %s: %v", tool, lookErr)
+			}
+			if err := os.Symlink(src, filepath.Join(bin, tool)); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "scripts", "configure-dockerhub-auth.sh")}, args...)...)
+		cmd.Dir = repoRoot(t)
+		cmd.Env = []string{
+			"PATH=" + bin,
+			"HOME=" + home,
+			"GITHUB_ENV=" + ghEnvFile,
+			"DOCKERHUB_AUTH_URL=" + srv.URL,
+		}
+		for k, v := range extraEnv {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+		raw, runErr := cmd.CombinedOutput()
+		if rawLog, readErr := os.ReadFile(dockerLog); readErr == nil {
+			for _, line := range strings.Split(strings.TrimSpace(string(rawLog)), "\n") {
+				if line != "" {
+					loginConfigs = append(loginConfigs, line)
+				}
+			}
+		}
+		if _, statErr := os.Stat(filepath.Join(home, ".docker", "config.json")); statErr == nil {
+			homeConfigExists = true
+		}
+		if rawEnv, readErr := os.ReadFile(ghEnvFile); readErr == nil {
+			githubEnv = string(rawEnv)
+		}
+		return string(raw), loginConfigs, homeConfigExists, githubEnv, probedUser, runErr
+	}
+
+	t.Run("publish mode verifies token in isolated config and keeps home docker config unauthenticated", func(t *testing.T) {
+		out, logins, homeCfg, ghEnv, _, err := runConfigure(t, http.StatusUnauthorized, false, nil, map[string]string{
+			"DOCKERHUB_USERNAME": "grainai",
+			"DOCKER_PAT":         "dckr_oat_repo_only",
+		})
+		if err != nil {
+			t.Fatalf("configure-dockerhub-auth.sh failed: %v\n%s", err, out)
+		}
+		if len(logins) != 1 {
+			t.Fatalf("expected exactly 1 isolated verification login, got %v", logins)
+		}
+		cfgDir := strings.SplitN(logins[0], "|", 2)[0]
+		if strings.HasSuffix(cfgDir, "/home/.docker") {
+			t.Fatalf("verification login mutated ~/.docker: %s", logins[0])
+		}
+		if _, statErr := os.Stat(cfgDir); !os.IsNotExist(statErr) {
+			t.Errorf("temporary login DOCKER_CONFIG %q was not cleaned up", cfgDir)
+		}
+		if homeCfg {
+			t.Fatalf("~/.docker/config.json must remain absent in publish mode so no Docker Hub credential is active during base image builds:\n%s", out)
+		}
+		for _, want := range []string{
+			"PACKAGE_PUBLISH_REGISTRY=docker.io",
+			"RELEASE_IMAGE_REPO=grainai",
+			"PACKAGE_PUBLISH_USERNAME=grainai",
+			"PACKAGE_PUBLISH_TOKEN=dckr_oat_repo_only",
+		} {
+			containsRun(t, ghEnv, want)
+		}
+	})
+
+	t.Run("pull-only mode with public-read token populates home docker config", func(t *testing.T) {
+		out, logins, homeCfg, _, probed, err := runConfigure(t, http.StatusOK, false, []string{"--pull-only"}, map[string]string{
+			"DOCKERHUB_USERNAME": "grainai",
+			"DOCKER_PAT":         "dckr_oat_with_public_read",
+		})
+		if err != nil {
+			t.Fatalf("configure-dockerhub-auth.sh --pull-only failed: %v\n%s", err, out)
+		}
+		if probed != "grainai:dckr_oat_with_public_read" {
+			t.Fatalf("auth probe credentials = %q, want grainai:dckr_oat_with_public_read", probed)
+		}
+		if len(logins) != 2 {
+			t.Fatalf("expected isolated verify login + ~/.docker login, got %v", logins)
+		}
+		if !homeCfg {
+			t.Fatalf("expected ~/.docker/config.json to be populated in --pull-only when token has Public Repo Read-Only scope:\n%s", out)
+		}
+	})
+
+	t.Run("publish mode fails fast when docker login rejects token", func(t *testing.T) {
+		out, _, homeCfg, ghEnv, _, err := runConfigure(t, http.StatusUnauthorized, true, nil, map[string]string{
+			"DOCKERHUB_USERNAME": "grainai",
+			"DOCKER_PAT":         "dckr_oat_invalid",
+		})
+		if err == nil {
+			t.Fatalf("expected failure on invalid DOCKER_PAT, got success:\n%s", out)
+		}
+		if homeCfg {
+			t.Errorf("~/.docker/config.json should not exist after failed login")
+		}
+		if ghEnv != "" {
+			t.Errorf("GITHUB_ENV should remain empty after failed login, got:\n%s", ghEnv)
+		}
+	})
+
+	t.Run("pull-only mode with repo-only OAT skips home login cleanly", func(t *testing.T) {
+		out, logins, homeCfg, _, _, err := runConfigure(t, http.StatusUnauthorized, false, []string{"--pull-only"}, map[string]string{
+			"DOCKERHUB_USERNAME": "grainai",
+			"DOCKER_PAT":         "dckr_oat_repo_only",
+		})
+		if err != nil {
+			t.Fatalf("configure-dockerhub-auth.sh --pull-only failed: %v\n%s", err, out)
+		}
+		if len(logins) != 1 {
+			t.Fatalf("expected only isolated verification login, got %v", logins)
+		}
+		if homeCfg {
+			t.Fatalf("~/.docker/config.json must remain absent in --pull-only when OAT lacks Public Repo Read-Only scope")
+		}
+	})
+}
+
+func TestReleaseImagesIsolatesDockerHubAuthFromLocalBuilds(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	envLog := filepath.Join(dir, "docker-env.log")
+	stateFile := filepath.Join(dir, "release-images.env")
+
+	// Resolve HEAD of repoRoot so git rev-parse inside resolve_guest works cleanly.
+	headCmd := exec.Command("git", "-C", repoRoot(t), "rev-parse", "HEAD")
+	headBytes, err := headCmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD: %v", err)
+	}
+	commit := strings.TrimSpace(string(headBytes))
+	const fakeDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+
+	dockerStub := "#!/bin/sh\n" +
+		"cfg=\"${DOCKER_CONFIG:-<default>}\"\n" +
+		"echo \"$cfg|$*\" >> \"" + envLog + "\"\n" +
+		"case \"$1\" in\n" +
+		"  login)\n" +
+		"    while IFS= read -r _; do :; done\n" +
+		"    if [ \"$cfg\" != \"<default>\" ]; then\n" +
+		"      printf '{\"auths\":{\"https://index.docker.io/v1/\":{}}}' > \"$cfg/config.json\"\n" +
+		"    fi\n" +
+		"    exit 0\n" +
+		"    ;;\n" +
+		"  pull)\n" +
+		"    exit 1\n" +
+		"    ;;\n" +
+		"  push)\n" +
+		"    echo \"pushed: digest: " + fakeDigest + " size: 100\"\n" +
+		"    exit 0\n" +
+		"    ;;\n" +
+		"  run)\n" +
+		"    img=\"$3\"\n" +
+		"    q=\"$4\"\n" +
+		"    case \"$q\" in\n" +
+		"      sandbox-image) echo \"docker.io/grainai/sandbox:sha-" + commit[:7] + "@" + fakeDigest + "\" ;;\n" +
+		"      k8s-sandbox-image) echo \"docker.io/grainai/sandbox-k8s:sha-" + commit[:7] + "@" + fakeDigest + "\" ;;\n" +
+		"      version) echo '{\"release\":\"v3.2.0-dev.1+" + commit[:7] + "\"}' ;;\n" +
+		"    esac\n" +
+		"    exit 0\n" +
+		"    ;;\n" +
+		"  image)\n" +
+		"    if [ \"$2\" = inspect ]; then echo \"" + commit + "\"; exit 0; fi\n" +
+		"    ;;\n" +
+		"esac\n" +
+		"exit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(dockerStub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Stub granule so granulefile_build invokes `docker build` under the current environment.
+	granuleStub := "#!/bin/sh\nexec docker build \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "granule"), []byte(granuleStub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Stub make so `make image ...` invokes `docker build` under the current environment
+	// without running a real multi-stage container build.
+	makeStub := "#!/bin/sh\nexec docker build -f Dockerfile .\n"
+	if err := os.WriteFile(filepath.Join(bin, "make"), []byte(makeStub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Provide standard POSIX/git utilities needed by build_images/resolve_guest, omitting `go`
+	// so build_daemon_image skips `docker create`/`docker cp` binary extraction.
+	for _, tool := range []string{
+		"bash", "sh", "env", "git", "sha256sum", "cut", "mktemp", "chmod", "cp", "rm",
+		"tee", "grep", "tail", "sed", "tr", "cat", "sleep", "awk",
+	} {
+		if src, lookErr := exec.LookPath(tool); lookErr == nil {
+			_ = os.Symlink(src, filepath.Join(bin, tool))
+		}
+	}
+
+	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", "release-images.sh"), "build")
+	cmd.Dir = repoRoot(t)
+	cmd.Env = []string{
+		"PATH=" + bin,
+		"HOME=" + home,
+		"GRAIN_CI=true",
+		"GRAIN_CI_REPO=ai-on-gke/grain",
+		"GRAIN_CI_REF=main",
+		"GRAIN_CI_COMMIT=" + commit,
+		"RELEASE=v3.2.0-dev.1+" + commit[:7],
+		"PACKAGE_PUBLISH_REGISTRY=docker.io",
+		"RELEASE_IMAGE_REPO=grainai",
+		"PACKAGE_PUBLISH_USERNAME=grainai",
+		"PACKAGE_PUBLISH_TOKEN=dckr_oat_repo_only",
+		"RELEASE_IMAGES_STATE=" + stateFile,
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("release-images.sh build failed: %v\n%s", err, out)
+	}
+
+	rawLog, err := os.ReadFile(envLog)
+	if err != nil {
+		t.Fatalf("reading docker env log: %v", err)
+	}
+	var isolatedDir string
+	sawBuild := 0
+	sawPush := 0
+	sawPull := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(rawLog)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "|", 2)
+		if len(parts) != 2 {
+			t.Fatalf("malformed log line %q", line)
+		}
+		cfg, argv := parts[0], parts[1]
+		switch {
+		case strings.HasPrefix(argv, "login ") || strings.HasPrefix(argv, "pull ") || strings.HasPrefix(argv, "push "):
+			if cfg == "<default>" || cfg == filepath.Join(home, ".docker") {
+				t.Errorf("registry command %q used unisolated DOCKER_CONFIG=%q", argv, cfg)
+			}
+			if isolatedDir == "" {
+				isolatedDir = cfg
+			} else if cfg != isolatedDir {
+				t.Errorf("registry command %q used DOCKER_CONFIG=%q, want %q", argv, cfg, isolatedDir)
+			}
+			if strings.HasPrefix(argv, "pull ") {
+				sawPull++
+			}
+			if strings.HasPrefix(argv, "push ") {
+				sawPush++
+			}
+		case strings.HasPrefix(argv, "build "):
+			sawBuild++
+			if cfg != "<default>" {
+				t.Errorf("local image build %q inherited DOCKER_CONFIG=%q; upstream library/* pulls would fail with 401 on repo-scoped OATs", argv, cfg)
+			}
+		}
+	}
+	if isolatedDir == "" {
+		t.Fatalf("no isolated DOCKER_CONFIG recorded in log:\n%s", rawLog)
+	}
+	if sawPull < 2 || sawPush < 4 || sawBuild < 4 {
+		t.Fatalf("unexpected command counts (pull=%d, push=%d, build=%d):\n%s", sawPull, sawPush, sawBuild, rawLog)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".docker", "config.json")); !os.IsNotExist(statErr) {
+		t.Errorf("~/.docker/config.json was created by release-images.sh; subsequent test suites pulling library/* would fail")
+	}
+	if _, statErr := os.Stat(isolatedDir); !os.IsNotExist(statErr) {
+		t.Errorf("isolated DOCKER_CONFIG %q was not cleaned up on exit", isolatedDir)
+	}
 }
