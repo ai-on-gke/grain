@@ -18,6 +18,11 @@
 
 BIN := bin
 CMDS := grain grit
+# Commands built the same way, but only when asked for by name and never
+# by `build` (so not into the image, which runs `make build`):
+# grain-agentd is the agents-only, rootless hostd for a machine that is
+# not the daemon's (docs/grain-agentd.md), and nothing ships it yet.
+EXTRA_CMDS := grain-agentd
 
 BUILDVCS ?= auto
 
@@ -81,6 +86,9 @@ EDITION ?=
 # main of its own and names it here. `make image` passes it on to the
 # Dockerfile as MAIN_GRAIN.
 MAIN_grain ?= ./cmd/grain
+# The same for bin/grain-agentd: a build that registers a transport or
+# host-tool grants of its own (pkg/agentd) names its own main here.
+MAIN_grain-agentd ?= ./cmd/grain-agentd
 LDFLAGS := $(strip \
 	$(if $(RELEASE),-X github.com/ai-on-gke/grain/pkg/version.Release=$(RELEASE),) \
 	$(if $(EDITION),-X github.com/ai-on-gke/grain/pkg/version.Edition=$(EDITION),) \
@@ -151,7 +159,7 @@ CONTAINER_USER ?= $(shell id -u):$(shell id -g)
 # from .git. GO_VERSION is passed for the same reason `builder` passes
 # it -- one version, read out of go.mod.
 IMAGE ?= grain:dev
-.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-long playwright-browsers ui-screenshots vet vuln security fmt fmt-frontend clean builder container-build image frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli $(CMDS)
+.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-long playwright-browsers ui-screenshots vet vuln security fmt fmt-frontend clean builder container-build image frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli $(CMDS) $(EXTRA_CMDS)
 
 all: vet test build
 
@@ -228,7 +236,7 @@ frontend:
 # left to carry to the controller. `test` and `vet` below leave
 # CGO_ENABLED alone: `go test -race` requires it (the race detector is a
 # cgo library), and nothing about testing this module ships anywhere.
-$(CMDS):
+$(CMDS) $(EXTRA_CMDS):
 	CGO_ENABLED=0 go build -buildvcs=$$(./scripts/buildvcs.sh $(BUILDVCS)) -ldflags "$(LDFLAGS)" -o $(BIN)/$@ $(or $(MAIN_$@),./cmd/$@)
 
 cli: grain

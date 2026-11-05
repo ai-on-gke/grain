@@ -16,6 +16,7 @@ package antigravity
 
 import (
 	"encoding/json"
+	"github.com/ai-on-gke/grain/pkg/agent/antigravity/hook"
 	"os"
 	"path/filepath"
 	"slices"
@@ -79,7 +80,7 @@ func hookVerdict(t *testing.T, reply []byte) string {
 // host tool, and nothing is recorded anywhere.
 func TestHookDeniesHostToolsWithoutTheGrant(t *testing.T) {
 	registerMadeUpGrant(t)
-	record := filepath.Join(t.TempDir(), hostToolCallsFilename)
+	record := filepath.Join(t.TempDir(), hook.HostToolCallsFilename)
 	for _, opts := range []HookOptions{{}, {RecordPath: record, Grants: []string{"self-debug"}}} {
 		for _, tool := range madeUpTools {
 			reply := HookDecisionFor(opts, hookPayload(t, tool, map[string]any{"query": "q"}))
@@ -101,7 +102,7 @@ func TestHookDeniesHostToolsWithoutTheGrant(t *testing.T) {
 // tool off its list is still denied.
 func TestHookAllowsAndRecordsAGrantsHostTools(t *testing.T) {
 	registerMadeUpGrant(t)
-	record := filepath.Join(t.TempDir(), "grain-run", hostToolCallsFilename)
+	record := filepath.Join(t.TempDir(), "grain-run", hook.HostToolCallsFilename)
 	args := hookArgs(agent.RunConfig{Grants: []string{madeUpGrant}, TaskID: "3720", RunID: "run-1"},
 		filepath.Dir(filepath.Dir(record)))
 	if want := []string{"-grant", madeUpGrant, "-record", record, "-task", "3720", "-run", "run-1"}; !slices.Equal(args, want) {
@@ -295,7 +296,7 @@ func TestHostToolGrantIsMatchedByMethod(t *testing.T) {
 				if len(ignored) != 0 {
 					t.Fatalf("ParseHookArgs ignored %q", ignored)
 				}
-				if _, ok := opts.allowsHostTool(madeUpTools[0]); !ok {
+				if _, ok := opts.AllowsHostTool(madeUpTools[0]); !ok {
 					t.Errorf("holding %s: the hook does not admit %s from %q", held, madeUpTools[0], args)
 				}
 			}
