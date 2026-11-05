@@ -57,12 +57,25 @@ type APIRoute struct {
 	Scope       APIScope `json:"scope"`
 	Tool        string   `json:"tool"`
 	Description string   `json:"description"`
-	Params      []string `json:"params,omitempty"`
+	// Summary is Description's first line: what the route does, in the
+	// sentence routeDocs gives it (or its handler's name), without the
+	// boilerplate about the handler and scope that Description adds. It
+	// is what the compact explore listing shows and what the keyword
+	// filter searches.
+	Summary string   `json:"summary,omitempty"`
+	Params  []string `json:"params,omitempty"`
 	// NeedsReason says a call must carry a reason: a dangerous scope,
 	// or a DELETE.
 	NeedsReason bool `json:"needsReason,omitempty"`
-	body        any
-	query       map[string]string
+	// AliasOf names the whole-document route this one is a per-field
+	// alias of -- api_set_repo_ci_mode is api_set_repo_settings for the
+	// one field AliasField -- or is empty for a route that stands alone.
+	// grain_explore_scope folds aliases out of a listing unless asked
+	// for them (repoSettingsFieldRoutes).
+	AliasOf    string `json:"aliasOf,omitempty"`
+	AliasField string `json:"aliasField,omitempty"`
+	body       any
+	query      map[string]string
 }
 
 // APIToolPrefix begins every generated tool's name, so none can collide
@@ -99,13 +112,14 @@ var routeDocs = map[string]string{
 	"POST /api/tasks/{id}/reply":                                           "Answer the question a task's run parked on (ask_question): refused with 409, posting nothing, when no question is parked or the task waits on a secret request, which is set on its page instead.",
 	"GET /api/tasks/wait":                                                  "Block up to timeout seconds (at most 60) until the tasks in ids reach an until condition: closed, merged, awaiting-reply, ci-done or any; re-issue it to wait longer.",
 	"GET /api/inbox":                                                       "The actionable items the Inbox surfaces: parked questions and secret requests, warning and critical notifications, merge-held pull requests and unapproved proposals, each with its UI path.",
+	"GET /api/events":                                                      "Ordered task state transitions, questions, comments, and CI verdicts resumable from cursor since, as JSON (with optional wait long-poll) or Server-Sent Events (Accept: text/event-stream or stream=1).",
 	"PUT /api/tasks/{id}/secret":                                           "Answer a task's pending secret request with its value, which goes to the secret store and is never shown back.",
 	"POST /api/tasks/{id}/close":                                           "Close a task.",
 	"POST /api/tasks/{id}/stop":                                            "Stop a task's running attempt.",
 	"POST /api/tasks/{id}/pause":                                           "Pause a task in any open state, releasing everything it holds and keeping its place; immediate true skips a running task's grace period.",
 	"POST /api/tasks/{id}/resume":                                          "Resume a paused task, back to exactly the state and dispatch standing it had.",
-	"PUT /api/tasks/{id}/hostd":                                            "Pin a task's host work to one grain hostd by name, or to any hostd carrying label=value[,label=value]; \"\" is the default hostd.",
 	"PUT /api/tasks/{id}/goal":                                             "Set a task's goal -- {kind, spec, on_met, on_limit}, as propose_task's goal -- replacing any it had; grain closes or rests the task when it is met.",
+	"PUT /api/tasks/{id}/hostd":                                            "Refused: a task has no hostd. Which grain hostd host work runs on is set on the model connection or capability server, not the task.",
 	"DELETE /api/tasks/{id}/goal":                                          "Remove a task's goal, making it an ordinary task again.",
 	"POST /api/tasks/{id}/reopen":                                          "Reopen a closed task.",
 	"POST /api/tasks/{id}/retry":                                           "Queue a task for another attempt.",
@@ -187,7 +201,7 @@ var routeDocs = map[string]string{
 	"PUT /api/deployment":                                                  "Change the deployment's default model, per-model settings and target repositories.",
 	"POST /api/deployment/git-connections":                                 "Add a git connection to the deployment: the credential grain reaches a git host with.",
 	"DELETE /api/deployment/git-connections/{cred}":                        "Remove one of the deployment's git connections.",
-	"POST /api/deployment/git-connections/check":                           "Check a git connection works, without saving it.",
+	"POST /api/deployment/git-connections/check":                           "Check a git connection works, without saving it. To check an unsaved connection, leave credential empty and give what the editor would: type (pat with value, app with app, or ambient with nothing else) and host. To check a saved connection instead, name it in credential and give no value: credential is only ever a saved credential's name, never a type.",
 	"PUT /api/deployment/agent-backends/{backendId}":                       "Create or replace one of the deployment's model connections.",
 	"DELETE /api/deployment/agent-backends/{backendId}":                    "Delete one of the deployment's model connections.",
 	"PUT /api/deployment/repos/{owner}/{name}/config":                      "Set a repository's deployment-level configuration: only the fields given are changed.",
@@ -304,7 +318,6 @@ var routeBodies = map[string]any{
 	"POST /api/sandbox-probe":                                           SandboxProbeRequest{},
 	"POST /api/tasks/{id}/pause":                                        pauseRequest{},
 	"PUT /api/tasks/{id}/goal":                                          setGoalRequest{},
-	"PUT /api/tasks/{id}/hostd":                                         setHostdRequest{},
 	"POST /api/tasks/{id}/run-now":                                      runNowRequest{},
 	"POST /api/tasks/{id}/comments":                                     addCommentRequest{},
 	"POST /api/tasks/{id}/reply":                                        addCommentRequest{},
@@ -457,6 +470,14 @@ var routeQueries = map[string]map[string]string{
 		"repo": "Only this repository's (owner/name) items.",
 		"kind": "Only items of this kind: question, secret, notification, merge-held or proposal.",
 	},
+	"GET /api/events": {
+		"since":  "Return events strictly after this event id cursor, or \"now\" to start from the current head.",
+		"wait":   "Long-poll up to this many seconds (at most 25) for a matching event when none is already waiting.",
+		"limit":  "At most this many events per JSON page, 1 to 500 (default 100).",
+		"repo":   "Only events for tasks targeting this repository (owner/name).",
+		"types":  "Comma-separated event types to include: task.state, task.question, task.comment, task.ci.",
+		"stream": "1 or true to stream Server-Sent Events (text/event-stream) instead of a JSON page.",
+	},
 	"GET /api/tasks/{id}": {
 		"comments_since": "An RFC 3339 time: answer only the conversation items created strictly after it.",
 	},
@@ -528,6 +549,71 @@ var (
 	apiRoutes     []APIRoute
 )
 
+// routeFieldDocs describes a body field whose meaning the field's name
+// and type do not carry: keyed by route pattern, then by the field's
+// JSON name, each sentence becomes the description of that property in
+// the route's input schema. Most bodies need none; the ones here are
+// where a caller working from the schema alone got it wrong.
+var routeFieldDocs = map[string]map[string]string{
+	"POST /api/deployment/git-connections/check": {
+		"credential": "The name of a SAVED credential to check (as listed by the deployment's git connections). Leave it empty to check an unsaved connection described by type, value, app and host; it is never a type such as \"ambient\".",
+		"type":       "The unsaved connection's kind: \"pat\" (a token in value), \"app\" (a GitHub App in app) or \"ambient\" (the host's own login -- nothing else needed; leave credential empty). Ignored when credential names a saved one.",
+		"value":      "The unsaved token (PAT) to check; empty when checking a saved credential or an ambient login.",
+		"app":        "The unsaved GitHub App to check: appId, installationId and privateKey.",
+		"host":       "The git host to check against, github.com when empty; a saved credential can only be checked on the host it is recorded for.",
+		"kind":       "The host's kind, \"github\" or \"git\" (a plain git host, checked by reading its repositories rather than its API).",
+		"scope":      "What to check access to: an owner/name repository, an owner (its target repositories on this host), or empty for every target repository on the host.",
+		"source":     "For an ambient login, which tool is asked for the token: \"gh\", \"git\" or \"auto\".",
+	},
+}
+
+// repoSettingsFieldRoutes names the per-field repository configuration
+// routes: GET and PUT /api/repos/{owner}/{name}/<suffix>, each reading
+// or writing the one field of the repository's settings named here --
+// the field GET /api/repos/{owner}/{name}/settings reports among the
+// rest and PUT .../settings (api_set_repo_settings) writes beside the
+// others. They stay for the UI, whose panes save one field at a time,
+// and run as any route does; grain_explore_scope folds them out of a
+// listing unless includeAliases is set, so a reader skimming the repos
+// group sees the one route that covers them all rather than twenty
+// that each cover a field.
+var repoSettingsFieldRoutes = map[string]string{
+	"ci-mode":                          "ciMode",
+	"ignore-github-ci":                 "ignoreGitHubCI",
+	"require-branch-up-to-date":        "requireBranchUpToDate",
+	"watch-default-branch":             "watchDefaultBranch",
+	"merge-on-green":                   "mergeOnGreen",
+	"base-repair-bypasses-human-gates": "baseRepairBypassesHumanGates",
+	"unfixable-checks":                 "unfixableChecks",
+	"prompt-extension":                 "promptExtension",
+	"setup-command":                    "setupCommand",
+	"capabilities":                     "defaultCapabilities",
+	"ci-capabilities":                  "ciCapabilities",
+}
+
+const repoSettingsPathPrefix = "/api/repos/{owner}/{name}/"
+
+// repoSettingsAlias is the whole-document route and the field a
+// per-field repository configuration route stands for, or "" for any
+// other route.
+func repoSettingsAlias(method, path string) (canonical, field string) {
+	suffix, ok := strings.CutPrefix(path, repoSettingsPathPrefix)
+	if !ok || strings.Contains(suffix, "/") {
+		return "", ""
+	}
+	field, ok = repoSettingsFieldRoutes[suffix]
+	if !ok {
+		return "", ""
+	}
+	switch method {
+	case http.MethodGet:
+		return APIToolPrefix + "get_repo_settings", field
+	case http.MethodPut:
+		return APIToolPrefix + "set_repo_settings", field
+	}
+	return "", ""
+}
+
 // AgentAPIRoutes is every route of the agent API, in registration order:
 // all of Server's routes but grain's internal plumbing, each with the
 // tool it is served as.
@@ -551,7 +637,9 @@ func AgentAPIRoutes() []APIRoute {
 				route.Params = append(route.Params, m[1])
 			}
 			route.Tool = uniqueToolName(toolNameFor(s.handlers[pattern], method, path), method, path, taken)
-			route.Description = routeDescription(route, s.handlers[pattern])
+			route.Summary = routeSummary(route, s.handlers[pattern])
+			route.Description = routeDescription(route)
+			route.AliasOf, route.AliasField = repoSettingsAlias(method, path)
 			apiRoutes = append(apiRoutes, route)
 		}
 	})
@@ -630,7 +718,9 @@ func snake(s string) string {
 	return b.String()
 }
 
-func routeDescription(r APIRoute, handler string) string {
+// routeSummary is the sentence a route is described by: routeDocs' for
+// the route, or, for a read with none, its handler's name as words.
+func routeSummary(r APIRoute, handler string) string {
 	doc := routeDocs[r.Pattern]
 	if doc == "" {
 		words := strings.ReplaceAll(snake(strings.TrimPrefix(handler, "handle")), "_", " ")
@@ -639,6 +729,13 @@ func routeDescription(r APIRoute, handler string) string {
 		}
 		doc = strings.ToUpper(words[:1]) + words[1:] + "."
 	}
+	return doc
+}
+
+// routeDescription is the route's tool's full description: its summary,
+// the route it calls and the scope it needs, and whether it is destructive.
+func routeDescription(r APIRoute) string {
+	doc := r.Summary
 	doc += fmt.Sprintf(" Calls %s through the same handler grain's UI uses (agent API scope %s).", r.Pattern, r.Scope)
 	if r.NeedsReason {
 		doc += " Destructive: reason is required and is recorded with the call."
@@ -673,6 +770,14 @@ func (r APIRoute) inputSchema() map[string]any {
 	if r.body != nil && r.Method != http.MethodGet {
 		body := jsonSchemaOf(reflect.TypeOf(r.body), 0)
 		body["description"] = "The JSON request body."
+		if docs := routeFieldDocs[r.Pattern]; len(docs) > 0 {
+			fields, _ := body["properties"].(map[string]any)
+			for name, doc := range docs {
+				if field, ok := fields[name].(map[string]any); ok {
+					field["description"] = doc
+				}
+			}
+		}
 		props["body"] = body
 	}
 	if r.takesExpect() {

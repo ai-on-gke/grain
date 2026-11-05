@@ -53,14 +53,16 @@ import (
 	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
-const secretsUsage = `usage: grain secrets -data-dir DIR <command> [args]
+const secretsUsage = `usage: grain secrets -data-dir DIR [flags] <command> [args]
 
 -data-dir must name the same root a colocated ` + "`grain daemon`" + ` was
-started with -- the encrypted secrets file and its key both live in
-<data-dir>/secrets, the same paths daemon.go itself resolves. It defaults to $GRAIN_DATA_DIR when that is set, which a host
-installed by scripts/setup.sh exports already. This edits files on disk, not
-a running daemon, so it only works when run on the same host as the server
-(bwsalmon/agents#357).
+started with -- under -secrets-backend=file (the default), the encrypted secrets
+file and its key both live in <data-dir>/secrets, the same paths daemon.go itself
+resolves. Under -secrets-backend=secretmanager, secrets live in Google Cloud Secret
+Manager under -secrets-sm-prefix (projects/<project>/secrets/<id-prefix>) and their
+catalogue lives in the database (-db-driver / -db-dsn, or resolved from -data-dir).
+-data-dir defaults to $GRAIN_DATA_DIR when set; -secrets-backend and
+-secrets-sm-prefix default to $GRAIN_SECRETS_BACKEND and $GRAIN_SECRETS_SM_PREFIX.
 
 Commands:
   list                          list every secret and the keys it holds (never values)
@@ -78,25 +80,81 @@ func secretsCmd(args []string) {
 	}
 }
 
+func secretsBackendDefault() string {
+	if v := strings.TrimSpace(os.Getenv("GRAIN_SECRETS_BACKEND")); v != "" {
+		return v
+	}
+	return secrets.BackendFile
+}
+
 func runSecrets(args []string) error {
 	fs := flag.NewFlagSet("grain secrets", flag.ContinueOnError)
 	fs.Usage = func() { fmt.Fprint(os.Stderr, secretsUsage) }
-	dataDir := fs.String("data-dir", dataDirDefault(), "root directory a colocated `grain daemon` was started with (required; $"+dataDirEnvVar+" supplies the default)")
+	dataDir := fs.String("data-dir", dataDirDefault(), "root directory a colocated `grain daemon` was started with (required for file backend; $"+dataDirEnvVar+" supplies the default)")
+	secretsBackend := fs.String("secrets-backend", secretsBackendDefault(), "secret store backend (\"file\" or \"secretmanager\"; defaults to $GRAIN_SECRETS_BACKEND, then \"file\")")
+	secretsSMPrefix := fs.String("secrets-sm-prefix", strings.TrimSpace(os.Getenv("GRAIN_SECRETS_SM_PREFIX")), "Secret Manager resource prefix (projects/<project>/secrets/<id-prefix>) when -secrets-backend=secretmanager; defaults to $GRAIN_SECRETS_SM_PREFIX")
+	dbDriver := fs.String("db-driver", "", "database driver (\"sqlite\" or \"postgres\") for the secret_entries catalogue under -secrets-backend=secretmanager")
+	dbDSN := fs.String("db-dsn", "", "database DSN or path for the secret_entries catalogue under -secrets-backend=secretmanager")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *dataDir == "" {
-		fs.Usage()
-		return errors.New("-data-dir is required")
+	if err := daemon.CheckSecretsConfig(*secretsBackend, *secretsSMPrefix); err != nil {
+		return err
+	}
+
+	var store *secrets.Store
+	if *secretsBackend == secrets.BackendSecretManager {
+		rest := fs.Args()
+		if len(rest) == 0 {
+			fs.Usage()
+			return errors.New("a command is required")
+		}
+		if rest[0] == "repo" {
+			return errors.New("grain secrets repo backs up encrypted file secrets; under -secrets-backend=secretmanager secrets live in Secret Manager")
+		}
+		driver, dsn := *dbDriver, *dbDSN
+		if driver == "" || dsn == "" {
+			resolvedDriver, resolvedDSN, err := daemon.ResolveDatabase(*dataDir)
+			if err != nil {
+				return err
+			}
+			if driver == "" {
+				driver = resolvedDriver
+			}
+			if dsn == "" {
+				dsn = resolvedDSN
+			}
+		}
+		if *dataDir == "" && (driver == "" || driver == "sqlite") && dsn == "" {
+			fs.Usage()
+			return errors.New("-data-dir (or -db-driver and -db-dsn) is required")
+		}
+		catStore, db, err := daemon.OpenStore(driver, dsn, *dataDir)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		store, err = daemon.OpenSecretsForConfig(daemon.Config{
+			DataDir:         *dataDir,
+			SecretsBackend:  *secretsBackend,
+			SecretsSMPrefix: *secretsSMPrefix,
+		}, catStore)
+		if err != nil {
+			return err
+		}
+	} else {
+		if *dataDir == "" {
+			fs.Usage()
+			return errors.New("-data-dir is required")
+		}
+		if len(fs.Args()) == 0 {
+			fs.Usage()
+			return errors.New("a command is required")
+		}
+		store = daemon.OpenSecrets(*dataDir)
 	}
 
 	rest := fs.Args()
-	if len(rest) == 0 {
-		fs.Usage()
-		return errors.New("a command is required")
-	}
-
-	store := daemon.OpenSecrets(*dataDir)
 	cmd, cmdArgs := rest[0], rest[1:]
 	switch cmd {
 	case "list":
@@ -229,6 +287,9 @@ func secretsMintGeminiKey(store *secrets.Store, dataDir string, args []string) e
 
 	path := *out
 	if path == "" {
+		if dataDir == "" {
+			return errors.New("-out or -data-dir is required")
+		}
 		path = filepath.Join(dataDir, "secrets", "gemini-api-key")
 	}
 	if info, err := os.Stat(path); err == nil && info.Size() > 0 {

@@ -235,7 +235,7 @@ func TestClickingUpgradeRunsARealUpgrade(t *testing.T) {
 	pulled := filepath.Join(dir, "pulled")
 	ran := filepath.Join(dir, "ran")
 	refFile := filepath.Join(dir, "image.env")
-	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:main\n"), 0o644); err != nil {
+	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE=docker.io/grainai/grain:main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -249,7 +249,7 @@ func TestClickingUpgradeRunsARealUpgrade(t *testing.T) {
 	// on "running" would be reporting (grain/task-179).
 	releaseFile := filepath.Join(dir, "release-pull")
 	srv := serverWithRealUpgrader(t, &upgrade.ImageConfig{
-		Repository: "ghcr.io/bwsalmon/grain/grain",
+		Repository: "docker.io/grainai/grain",
 		RefFile:    refFile,
 		// Stand-ins for `docker pull` and `docker run --rm`, each
 		// recording the argv it was handed so the assertions below can
@@ -305,7 +305,7 @@ func TestClickingUpgradeRunsARealUpgrade(t *testing.T) {
 	// '/' is not legal in a tag, so the branch the operator typed and the
 	// image CI published for it are spelled differently -- the button has
 	// to have made that translation rather than pulling ":grain/task-31".
-	const wantRef = "ghcr.io/bwsalmon/grain/grain:grain..task-31"
+	const wantRef = "docker.io/grainai/grain:grain..task-31"
 	if got := readTestFile(t, pulled); got != wantRef {
 		t.Errorf("pulled %q, want %q", got, wantRef)
 	}
@@ -361,13 +361,13 @@ func TestAFailedUpgradeIsReportedThroughTheAPI(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	refFile := filepath.Join(dir, "image.env")
-	const previous = "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:main\n"
+	const previous = "GRAIN_IMAGE=docker.io/grainai/grain:main\n"
 	if err := os.WriteFile(refFile, []byte(previous), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	srv := serverWithRealUpgrader(t, &upgrade.ImageConfig{
-		Repository: "ghcr.io/bwsalmon/grain/grain",
+		Repository: "docker.io/grainai/grain",
 		RefFile:    refFile,
 		PullCmd:    []string{"sh", "-c", "echo 'manifest unknown' >&2; exit 1", "sh"},
 	}, dir)
@@ -411,7 +411,7 @@ func TestUpgradeRejectsABranchNameThatIsNotOne(t *testing.T) {
 	dir := t.TempDir()
 	pullMarker := filepath.Join(dir, "pulled")
 	srv := serverWithRealUpgrader(t, &upgrade.ImageConfig{
-		Repository: "ghcr.io/bwsalmon/grain/grain",
+		Repository: "docker.io/grainai/grain",
 		RefFile:    filepath.Join(dir, "image.env"),
 		PullCmd:    []string{"touch", pullMarker},
 	}, dir)
@@ -440,7 +440,7 @@ func TestUpgradeRejectsABranchNameThatIsNotOne(t *testing.T) {
 // still has to be told.
 func TestAnUpgradeThatNamesNoBranchFollowsTheChannel(t *testing.T) {
 	t.Parallel()
-	up := &fakeUpgrader{running: upgrade.Running{Ref: "ghcr.io/bwsalmon/grain/grain:latest@sha256:0123abcd"}}
+	up := &fakeUpgrader{running: upgrade.Running{Ref: "docker.io/grainai/grain:latest@sha256:0123abcd"}}
 	srv := testServerWithUpgrader(t, up)
 
 	if got := decode[upgradeResponse](t, do(t, srv, http.MethodGet, "/api/upgrade", "")); got.Channel != "latest" {
@@ -453,7 +453,7 @@ func TestAnUpgradeThatNamesNoBranchFollowsTheChannel(t *testing.T) {
 		t.Errorf("an upgrade naming no branch started onto %q, want the deployment's channel, latest", up.started)
 	}
 
-	pinned := &fakeUpgrader{running: upgrade.Running{Ref: "ghcr.io/bwsalmon/grain/grain:sha-1234567"}}
+	pinned := &fakeUpgrader{running: upgrade.Running{Ref: "docker.io/grainai/grain:sha-1234567"}}
 	srv = testServerWithUpgrader(t, pinned)
 	if rec := do(t, srv, http.MethodPost, "/api/upgrade", `{}`); rec.Code != http.StatusBadRequest {
 		t.Errorf("POST /api/upgrade with no branch on a pinned deployment = %d, want 400: %s", rec.Code, rec.Body)
@@ -482,7 +482,7 @@ func TestUpgradeStatusReportsWhichPipelineItRuns(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	image := serverWithRealUpgrader(t, &upgrade.ImageConfig{
-		Repository: "ghcr.io/bwsalmon/grain/grain",
+		Repository: "docker.io/grainai/grain",
 		RefFile:    filepath.Join(dir, "image.env"),
 	}, dir)
 	rec := do(t, image, http.MethodGet, "/api/upgrade", "")
@@ -519,11 +519,11 @@ func TestUpgradeStatusReportsWhatItIsUpgradingFrom(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	refFile := filepath.Join(dir, "image.env")
-	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:main\n"), 0o644); err != nil {
+	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE=docker.io/grainai/grain:main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	srv := serverWithRealUpgrader(t, &upgrade.ImageConfig{
-		Repository: "ghcr.io/bwsalmon/grain/grain",
+		Repository: "docker.io/grainai/grain",
 		RefFile:    refFile,
 		PullCmd:    []string{"true"},
 		RunCmd:     []string{"true"},
@@ -534,7 +534,7 @@ func TestUpgradeStatusReportsWhatItIsUpgradingFrom(t *testing.T) {
 	if got.Running == nil {
 		t.Fatalf("no \"running\" on a deployment whose ref file names one: %+v", got)
 	}
-	if want := "ghcr.io/bwsalmon/grain/grain:main"; got.Running.Image != want {
+	if want := "docker.io/grainai/grain:main"; got.Running.Image != want {
 		t.Errorf("running.image = %q, want %q", got.Running.Image, want)
 	}
 	if got.Phase != "" {
@@ -550,7 +550,7 @@ func TestUpgradeStatusReportsWhatItIsUpgradingFrom(t *testing.T) {
 	if final.Phase != string(upgrade.PhaseOK) {
 		t.Fatalf("phase = %q, want %q: %s", final.Phase, upgrade.PhaseOK, final.Detail)
 	}
-	if want := "ghcr.io/bwsalmon/grain/grain:grain..task-50@" + testImageDigest; final.Running == nil || final.Running.Image != want {
+	if want := "docker.io/grainai/grain:grain..task-50@" + testImageDigest; final.Running == nil || final.Running.Image != want {
 		t.Errorf("running = %+v after the upgrade, want %q", final.Running, want)
 	}
 }
@@ -563,7 +563,7 @@ func TestUpgradeStatusOmitsWhatItCannotDetermine(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	srv := serverWithRealUpgrader(t, &upgrade.ImageConfig{
-		Repository: "ghcr.io/bwsalmon/grain/grain",
+		Repository: "docker.io/grainai/grain",
 		RefFile:    filepath.Join(dir, "never-written.env"),
 	}, dir)
 
@@ -617,7 +617,7 @@ func TestUpgradeStatusReportsAnUnreadableStatusFile(t *testing.T) {
 func TestUpgradeTargetsListsTheSelector(t *testing.T) {
 	t.Parallel()
 	up := upgrade.New(upgrade.Config{
-		Image:           &upgrade.ImageConfig{Repository: "ghcr.io/bwsalmon/grain/grain"},
+		Image:           &upgrade.ImageConfig{Repository: "docker.io/grainai/grain"},
 		AllowedBranches: []string{"main", "candidate"},
 		ListTags: func(context.Context, string) ([]string, error) {
 			return []string{"main", "v1.6.0", "sha-1234567"}, nil
@@ -645,7 +645,7 @@ func TestUpgradeTargetsListsTheSelector(t *testing.T) {
 	// pane builds from this offers latest, candidate, main and the
 	// released versions as ones it takes.
 	def := testServerWithUpgrader(t, upgrade.New(upgrade.Config{
-		Image: &upgrade.ImageConfig{Repository: "ghcr.io/bwsalmon/grain/grain"},
+		Image: &upgrade.ImageConfig{Repository: "docker.io/grainai/grain"},
 		ListTags: func(context.Context, string) ([]string, error) {
 			return []string{"main", "v1.6.0", "v1.7.0", "sha-1234567"}, nil
 		},
@@ -674,12 +674,12 @@ func TestClickingUpgradeDoesNotUpgradeWhenVersionHasNotChanged(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	refFile := filepath.Join(dir, "image.env")
-	alreadyRunning := "ghcr.io/bwsalmon/grain/grain:main@" + testImageDigest
+	alreadyRunning := "docker.io/grainai/grain:main@" + testImageDigest
 	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE="+alreadyRunning+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	srv := serverWithRealUpgrader(t, &upgrade.ImageConfig{
-		Repository: "ghcr.io/bwsalmon/grain/grain",
+		Repository: "docker.io/grainai/grain",
 		RefFile:    refFile,
 		PullCmd:    []string{"true"},
 		RunCmd:     []string{"false"},
@@ -762,12 +762,12 @@ func TestUpgradeStatusAndTargetsReportDiscardedRC(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	refFile := filepath.Join(dir, "image.env")
-	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:v2.3.0-rc.1\n"), 0o644); err != nil {
+	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE=docker.io/grainai/grain:v2.3.0-rc.1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	up := upgrade.New(upgrade.Config{
 		Image: &upgrade.ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 		},
 		RunningRelease: func() string { return "v2.3.0-rc.1" },

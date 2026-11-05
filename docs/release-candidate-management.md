@@ -369,14 +369,16 @@ commit's images as `:sha-<short>` and `:main`. Releases are published from
 those images, so the train and the approval build no new artifact. They
 only re-stamp the daemon images with the release name and retag.
 
-- **Two daemon images** share the `guest` and `k8s-sandbox` images.
-  `ghcr.io/bwsalmon/grain/grain` is the core build (`./cmd/grain`, the
+- **Daemon and sandbox images** are published to Docker Hub under `docker.io/grainai/*`
+  (`grain`, `sandbox`, `sandbox-base`, `sandbox-k8s`, `sandbox-k8s-base`, with
+  `docker.io/grainai/registry` reserved for the future `grain-registry` image).
+  `docker.io/grainai/grain` is the core build (`./cmd/grain`, the
   `oss` install track). A wrapper distribution's
   build is published beside it under its own image name and install track
   (`pkg/installtrack`), with the same tags.
 - **What the tags mean:** `latest` is the last promoted release and never
   `main`'s head. `main` is the head of `main`. `candidate`/`rc` is the
-  current rc. `vX.Y.Z` is one release, kept forever by the GHCR pruner.
+  current rc. `vX.Y.Z` is one release, kept forever by `cmd/ghcr-prune`.
 - **`latest` follows the git tag.** `.grain/workflows/promote.yml`
   (`scripts/release-images.sh promote`) publishes the release the git
   `latest` tag names, as `vX.Y.Z` and `latest`. It runs on every `release`

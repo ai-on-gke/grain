@@ -325,6 +325,7 @@ func (a SandboxCLIActions) ProposeTask(ctx context.Context, callerTaskID, runID 
 		DependsOn:       deps,
 		CustomFields:    fields,
 		Reads:           req.Reads,
+		Designs:         req.Designs,
 		ProposedBy:      callerTaskID,
 		ProposalKey:     key,
 		Capabilities:    caps,

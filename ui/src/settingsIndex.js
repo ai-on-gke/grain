@@ -370,6 +370,8 @@ export const SETTINGS_INDEX = [
       "image",
       "oci",
       "dockerfile",
+      "sandbox-base",
+      "sandbox-k8s-base",
       "guest-base",
       "k8s-sandbox-base",
       "contract",

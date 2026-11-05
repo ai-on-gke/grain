@@ -18,6 +18,7 @@ package daemon
 
 import (
 	"context"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -26,6 +27,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/whererun"
 )
 
 // While grain hostd drains for its own upgrade, a task whose CLI runs on
@@ -179,5 +181,37 @@ func TestRotationNeverPicksAHostConnectionWhileHostdDrains(t *testing.T) {
 	}
 	if reason := pool.Availability(ctx, orchestrator.AgentChoice{}); !strings.Contains(reason, "agy runs on the host") {
 		t.Errorf("Availability with only host-run connections while hostd drains = %q, want it waiting on hostd", reason)
+	}
+}
+
+// A pinned connection placed on its own hostd checks that hostd's drain
+// state rather than the deployment's default hostd's.
+func TestPlacedConnectionChecksItsOwnHostdDrainState(t *testing.T) {
+	ctx := context.Background()
+	localSock := startTestHostd(t, offersAgy)
+	unplaced := model.AgentBackend{ID: "unplaced", Framework: model.AgentFrameworkAntigravity, Models: []string{"m"}, AuthMode: model.AntigravityAuthAmbient}
+	placed := model.AgentBackend{ID: "on-ws-a", Framework: model.AgentFrameworkAntigravity, Models: []string{"m"}, AuthMode: model.AntigravityAuthAmbient, Hostd: "ws-a"}
+	pool := providerDefaultPool(t, "", unplaced, placed)
+	if err := pool.Store.EnsureLocalHostd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, tokA, err := pool.Store.CreateHostd(ctx, model.Hostd{Name: "ws-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := withExecutor(Config{HostdSocket: localSock, AgyRun: model.CLIRunHost}, whererun.Detection{Signal: "/.dockerenv"}, nil)
+	cfg.HostdHub = newHostdHub(cfg, pool.Store)
+	pool.cfg = cfg
+	ctl := httptest.NewServer(cfg.HostdHub)
+	t.Cleanup(ctl.Close)
+	startDialingHostd(t, ctl.URL, tokA, offersAgy)
+	waitFor(t, func() bool { return cfg.HostdHub.HostdStatus("ws-a").Connected })
+
+	drainTestHostd(t, localSock)
+	if why := pool.Availability(ctx, orchestrator.AgentChoice{BackendID: "unplaced", Model: "m"}); !strings.Contains(why, "draining") {
+		t.Errorf("unplaced connection while local drains = %q, want draining hold", why)
+	}
+	if why := pool.Availability(ctx, orchestrator.AgentChoice{BackendID: "on-ws-a", Model: "m"}); why != "" {
+		t.Errorf("connection placed on ws-a while local drains = %q, want dispatchable", why)
 	}
 }

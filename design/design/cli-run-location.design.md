@@ -465,6 +465,22 @@ The tests that hold this in place are in `pkg/hostd`:
 - `TestServeSocketIsOwnerOnly`;
 - the reaping, deadline, cancel, disconnect and stdin back-pressure tests.
 
+### Which hostd (schema 111)
+
+With more than one hostd registered, which one a run's CLI starts on is
+its model connection's placement (`model.AgentBackend.Hostd`, then
+`HostdFallback`), resolved once the pool has chosen the connection
+(`connectionHostdRoute`, `pkg/daemon/hostd_route.go`). A connection placed
+on a hostd runs its CLI on the host there whatever the framework's run
+location says. A connection with no placement goes where this document's
+run location says, through the default hostd. Tasks, templates and
+repositories had a hostd selector from schema 93 to 110 (`task_hostd`,
+`template.hostd`, `repo_config.default_hostd`); 111 dropped them, and a
+request that still names one is refused. `task_run_hostd` stays, recording
+where each run's CLI ran. A `run: hostd` capability server names its own
+hostd (`protocol.ServerConfig.Hostd`). See
+[docs/hostd-placement.md](../../docs/hostd-placement.md).
+
 ## Trust levels
 
 Host mode is gone, so a machine install is one of three trust levels,

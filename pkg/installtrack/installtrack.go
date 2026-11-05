@@ -45,17 +45,124 @@ const (
 )
 
 const (
-	// LegacyGrainRepository is the pre-split container image repository shared
-	// by all deployments through the 2.0 release.
-	LegacyGrainRepository = "ghcr.io/bwsalmon/grain/grain"
+	// LegacyGrainRepository is the pre-Docker-Hub container image repository
+	// shared by open-source and pre-split deployments on GHCR.
+	LegacyGrainRepository          = "ghcr.io/bwsalmon/grain/grain"
+	LegacyGuestRepository          = "ghcr.io/bwsalmon/grain/guest"
+	LegacyGuestBaseRepository      = "ghcr.io/bwsalmon/grain/guest-base"
+	LegacyGranuleSandboxRepository = "ghcr.io/bwsalmon/grain/granule-sandbox"
+	LegacyK8sSandboxRepository     = "ghcr.io/bwsalmon/grain/k8s-sandbox"
+	LegacyK8sSandboxBaseRepository = "ghcr.io/bwsalmon/grain/k8s-sandbox-base"
 
-	// DefaultOSSGrainRepository is the default post-split container image
-	// repository for open-source deployments.
-	DefaultOSSGrainRepository = "ghcr.io/bwsalmon/grain/grain"
+	// DefaultOSSGrainRepository is the default container image repository for
+	// open-source deployments on Docker Hub.
+	DefaultOSSGrainRepository          = "docker.io/grainai/grain"
+	DefaultOSSSandboxRepository        = "docker.io/grainai/sandbox"
+	DefaultOSSSandboxBaseRepository    = "docker.io/grainai/sandbox-base"
+	DefaultOSSK8sSandboxRepository     = "docker.io/grainai/sandbox-k8s"
+	DefaultOSSK8sSandboxBaseRepository = "docker.io/grainai/sandbox-k8s-base"
 
 	// OSSImageRepoEnv overrides DefaultOSSGrainRepository.
 	OSSImageRepoEnv = "GRAIN_OSS_IMAGE_REPO"
 )
+
+type ossImageRepoAlias struct {
+	oss    string
+	legacy []string
+}
+
+// ossImageRepositories is the single Go source of truth for open-source Docker
+// Hub image repositories and the legacy GHCR repositories that transition onto
+// them. Matches scripts/release-image-repos.sh.
+var ossImageRepositories = []ossImageRepoAlias{
+	{oss: DefaultOSSGrainRepository, legacy: []string{LegacyGrainRepository, "ghcr.io/ai-on-gke/grain/grain"}},
+	{oss: DefaultOSSSandboxRepository, legacy: []string{LegacyGuestRepository, LegacyGranuleSandboxRepository, "ghcr.io/ai-on-gke/grain/guest"}},
+	{oss: DefaultOSSSandboxBaseRepository, legacy: []string{LegacyGuestBaseRepository, "ghcr.io/ai-on-gke/grain/guest-base"}},
+	{oss: DefaultOSSK8sSandboxRepository, legacy: []string{LegacyK8sSandboxRepository, "ghcr.io/ai-on-gke/grain/k8s-sandbox"}},
+	{oss: DefaultOSSK8sSandboxBaseRepository, legacy: []string{LegacyK8sSandboxBaseRepository, "ghcr.io/ai-on-gke/grain/k8s-sandbox-base"}},
+	// Reserved for future grain-registry image (not published yet; enable with one line):
+	// {oss: "docker.io/grainai/registry"},
+}
+
+var (
+	legacyToOSSRepositories map[string]string
+	ossToLegacyRepositories map[string]string
+)
+
+func init() {
+	legacyToOSSRepositories = make(map[string]string, len(ossImageRepositories)*2)
+	ossToLegacyRepositories = make(map[string]string, len(ossImageRepositories))
+	for _, entry := range ossImageRepositories {
+		if len(entry.legacy) > 0 {
+			ossToLegacyRepositories[entry.oss] = entry.legacy[0]
+		}
+		for _, leg := range entry.legacy {
+			legacyToOSSRepositories[leg] = entry.oss
+		}
+	}
+}
+
+func normalizeOSSRepo(repo string) string {
+	trimmed := strings.TrimSpace(repo)
+	if rest, ok := strings.CutPrefix(trimmed, "index.docker.io/"); ok {
+		return "docker.io/" + rest
+	}
+	if rest, ok := strings.CutPrefix(trimmed, "registry-1.docker.io/"); ok {
+		return "docker.io/" + rest
+	}
+	if strings.HasPrefix(trimmed, "grainai/") {
+		return "docker.io/" + trimmed
+	}
+	return trimmed
+}
+
+// ResolveLegacyRepository returns the canonical Docker Hub repository for a
+// legacy GHCR open-source Grain image repository, or repo (with Docker Hub
+// grainai/* short/alias prefixes normalized) when it is not a legacy GHCR name.
+func ResolveLegacyRepository(repo string) string {
+	norm := normalizeOSSRepo(repo)
+	if oss, ok := legacyToOSSRepositories[norm]; ok {
+		return oss
+	}
+	return norm
+}
+
+// IsLegacyRepository reports whether repo is one of the legacy GHCR open-source
+// Grain image repositories that moved to Docker Hub.
+func IsLegacyRepository(repo string) bool {
+	_, ok := legacyToOSSRepositories[strings.TrimSpace(repo)]
+	return ok
+}
+
+// LegacyRepositoryFor returns the primary legacy GHCR repository that ossRepo
+// replaced, when one exists.
+func LegacyRepositoryFor(ossRepo string) (string, bool) {
+	leg, ok := ossToLegacyRepositories[normalizeOSSRepo(ossRepo)]
+	return leg, ok
+}
+
+// ResolveLegacyImageRef rewrites an unpinned legacy GHCR Grain image reference
+// (e.g. "ghcr.io/bwsalmon/grain/guest:latest") onto its Docker Hub counterpart
+// ("docker.io/grainai/sandbox:latest"). Digest-pinned references (`@sha256:...`)
+// are returned unchanged unless stripDigest is true, since pre-cutover GHCR
+// digests may not exist in Docker Hub.
+func ResolveLegacyImageRef(ref string) (resolved string, changed bool) {
+	trimmed := strings.TrimSpace(ref)
+	if trimmed == "" || strings.Contains(trimmed, "@") {
+		return ref, false
+	}
+	repo := trimmed
+	suffix := ""
+	if idx := strings.LastIndex(trimmed, ":"); idx != -1 && idx > strings.LastIndex(trimmed, "/") {
+		repo = trimmed[:idx]
+		suffix = trimmed[idx:]
+	}
+	oss, ok := legacyToOSSRepositories[repo]
+	if !ok {
+		return ref, false
+	}
+	return oss + suffix, true
+}
 
 // DefaultUnitFile is the standard systemd unit path written by scripts/setup.sh.
 const DefaultUnitFile = "/etc/systemd/system/grain-daemon.service"
@@ -175,6 +282,9 @@ func RepositoryForTrack(repo string, track Track) string {
 	if d, ok := lookup(track); ok && d.DefaultRepository != "" && slices.Contains(d.MovesFrom, trimmed) {
 		return d.DefaultRepository
 	}
+	if track == TrackOSS && (trimmed == LegacyGrainRepository || trimmed == "ghcr.io/ai-on-gke/grain/grain") {
+		return ImageRepository(TrackOSS)
+	}
 	return repo
 }
 
@@ -182,7 +292,7 @@ func RepositoryForTrack(repo string, track Track) string {
 // caller-supplied successor repositories that a pre-split deployment on
 // LegacyGrainRepository may shift to.
 func KnownSuccessorRepositories(extra ...string) []string {
-	repos := []string{LegacyGrainRepository, DefaultOSSGrainRepository}
+	repos := []string{LegacyGrainRepository, "ghcr.io/ai-on-gke/grain/grain", DefaultOSSGrainRepository}
 	envs := []string{OSSImageRepoEnv}
 	for _, d := range registered() {
 		repos = append(repos, d.MovesFrom...)

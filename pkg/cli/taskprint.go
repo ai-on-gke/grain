@@ -212,6 +212,24 @@ func taskBlock(t ui.Task) string {
 	if len(t.Reads) > 0 {
 		fmt.Fprintf(&b, "reads:      %s\n", strings.Join(t.Reads, ", "))
 	}
+	if len(t.Context) > 0 {
+		items := make([]string, 0, len(t.Context))
+		for _, c := range t.Context {
+			label := c.Path
+			if c.Placement == "read" && c.Repo != "" {
+				label = c.Repo + ":" + c.Path
+			}
+			if c.Rev != "" {
+				rev := c.Rev
+				if len(rev) > 12 {
+					rev = rev[:12]
+				}
+				label += "@" + rev
+			}
+			items = append(items, label)
+		}
+		fmt.Fprintf(&b, "context:    %s\n", strings.Join(items, ", "))
+	}
 	if len(t.Writes) > 0 {
 		// The branch beside each repo, since it is half of what the
 		// declaration says: a repo listed here with no branch shown would

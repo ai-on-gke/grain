@@ -156,26 +156,6 @@ func TestGrantArgsCarriesStateAndSecretsWithDeploymentHealth(t *testing.T) {
 	}
 }
 
-// Local scripts travel with the grants, so every Framework that forks
-// the mcpserver passes them: each declaration as NAME=PATH, and the
-// credentials as a file path, never their values.
-func TestGrantArgsCarriesLocalScripts(t *testing.T) {
-	args := agent.GrantArgs(agent.RunConfig{
-		Grants:              []string{"self-debug"},
-		LocalScripts:        []agent.LocalScripts{{Name: "ops", Path: "/state/local-scripts/ops/local-scripts.yaml"}},
-		LocalScriptsEnvFile: "/tmp/grain-local-scripts-1.json",
-	})
-	want := []string{"-grant", "self-debug",
-		"-local-scripts", "ops=/state/local-scripts/ops/local-scripts.yaml",
-		"-local-scripts-env-file", "/tmp/grain-local-scripts-1.json"}
-	if !slices.Equal(args, want) {
-		t.Fatalf("GrantArgs = %v, want %v", args, want)
-	}
-	if args := agent.GrantArgs(agent.RunConfig{LocalScriptsEnvFile: "/tmp/x"}); len(args) != 0 {
-		t.Fatalf("GrantArgs = %v: want no credentials file without a declaration", args)
-	}
-}
-
 // A durable judgement task's wake tells its mcpserver to count the tool
 // budget; every other run's arguments are unchanged.
 func TestGrantArgsCarriesTheToolBudget(t *testing.T) {

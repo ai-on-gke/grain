@@ -310,7 +310,7 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
             json: {
               enabled: true,
               mode: "image",
-              running: { image: "ghcr.io/bwsalmon/grain/grain:main" },
+              running: { image: "docker.io/grainai/grain:main" },
               scheduled: upgradeScheduled,
             },
           });
@@ -320,7 +320,7 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
             json: {
               enabled: true,
               mode: "image",
-              running: { image: "ghcr.io/bwsalmon/grain/grain:main" },
+              running: { image: "docker.io/grainai/grain:main" },
               branch: body.branch,
               phase: "running",
             },
@@ -332,7 +332,7 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
           json: {
             enabled: true,
             mode: "image",
-            running: { image: "ghcr.io/bwsalmon/grain/grain:main" },
+            running: { image: "docker.io/grainai/grain:main" },
             scheduled: upgradeScheduled,
           },
         });
@@ -347,7 +347,7 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
           json: {
             enabled: true,
             mode: "image",
-            running: { image: "ghcr.io/bwsalmon/grain/grain:main" },
+            running: { image: "docker.io/grainai/grain:main" },
             cancelled: true,
           },
         });

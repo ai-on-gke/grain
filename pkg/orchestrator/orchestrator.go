@@ -56,7 +56,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/console"
@@ -702,11 +701,6 @@ type Config struct {
 	GrainSecretsDir string
 	// GrainStateDir is the controller-local synchronized state repository used by deployment-health.
 	GrainStateDir string
-	// LocalScripts is where this host finds local-scripts declarations
-	// (pkg/capability/localscripts): a run whose task holds
-	// local-scripts:<name> is told the declaration's path and handed its
-	// credentials in a 0600 file (agent.RunConfig.LocalScripts).
-	LocalScripts localscripts.Config
 	// SandboxGuestImage is the reference this deployment's sandboxes are
 	// really created from -- cmd/grain's chooseSandboxImage, the same
 	// value ui.SandboxImage.Image reports.

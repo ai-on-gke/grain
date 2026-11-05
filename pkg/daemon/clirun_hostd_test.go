@@ -19,11 +19,14 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -672,5 +675,144 @@ func TestUpgradeInterruptNotesReadTheStoredRunLocations(t *testing.T) {
 	}
 	if notes := cfg.upgradeInterruptNotes(ctx, store); notes["claude"] != "" {
 		t.Errorf("claude stored as detached is still expected to be lost: %q", notes["claude"])
+	}
+}
+
+// Resolving CLI runs repeatedly behind an unreachable grain hostd dials it
+// at most once per hostdUnreachableTTL interval, and notices immediately
+// when a missing socket appears.
+func TestUnreachableHostdIsDialedAtMostOncePerInterval(t *testing.T) {
+	resetHostdUnreachableCache()
+	var clockMu sync.Mutex
+	now := time.Date(2026, 11, 4, 21, 0, 0, 0, time.UTC)
+	prevNow := hostdOffersNow
+	hostdOffersNow = func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		clockMu.Lock()
+		now = now.Add(d)
+		clockMu.Unlock()
+	}
+	t.Cleanup(func() {
+		hostdOffersNow = prevNow
+		resetHostdUnreachableCache()
+	})
+
+	dir, err := os.MkdirTemp("", "hostd-dead")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	// 1. A socket whose peer hangs up without answering: exact dial count is observable.
+	deadSock := filepath.Join(dir, "dead.sock")
+	ln, err := net.Listen("unix", deadSock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	var dials atomic.Int32
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			dials.Add(1)
+			_ = conn.Close()
+		}
+	}()
+
+	ctx := context.Background()
+	cfg := withExecutor(Config{HostdSocket: deadSock, AgyRun: model.CLIRunHost}, inContainer, nil)
+
+	rs := cfg.ResolveCLIRuns(ctx)
+	if got := dials.Load(); got != 1 {
+		t.Fatalf("first ResolveCLIRuns dialed hostd %d times, want 1", got)
+	}
+	for _, r := range rs {
+		if r.Framework == model.AgentFrameworkAntigravity && r.Err == "" {
+			t.Fatalf("agy resolved with no error behind a dead hostd: %+v", r)
+		}
+	}
+
+	// Within hostdUnreachableTTL, further resolutions and status reads reuse
+	// the unreachable result without dialing hostd again.
+	advance(hostdUnreachableTTL / 2)
+	_ = cfg.ResolveCLIRuns(ctx)
+	_ = cfg.ResolveCLIRun(ctx, model.AgentFrameworkAntigravity)
+	if st := cfg.HostExecutorStatus(ctx); st.Hostd == nil || st.Hostd.Reachable {
+		t.Fatalf("HostExecutorStatus = %+v, want unreachable", st.Hostd)
+	}
+	if got := dials.Load(); got != 1 {
+		t.Fatalf("resolutions within hostdUnreachableTTL dialed hostd %d times, want still 1", got)
+	}
+
+	// Once the interval elapses, the next resolution dials again.
+	advance(hostdUnreachableTTL)
+	_ = cfg.ResolveCLIRuns(ctx)
+	if got := dials.Load(); got != 2 {
+		t.Fatalf("resolution after hostdUnreachableTTL dialed hostd %d times, want 2", got)
+	}
+
+	// 2. An absent socket (the hostd-down shape): the first resolution waits
+	// out hostdOffersTimeout once, a second resolution returns immediately,
+	// and starting hostd on that socket path is seen at once without waiting
+	// for the TTL to expire.
+	if os.Geteuid() == 0 {
+		return
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		return
+	}
+	sh, _ = filepath.EvalSymlinks(sh)
+	absentSock := filepath.Join(dir, "absent.sock")
+	absentCfg := withExecutor(Config{HostdSocket: absentSock, AgyRun: model.CLIRunHost}, inContainer, nil)
+	if r := absentCfg.ResolveCLIRun(ctx, model.AgentFrameworkAntigravity); !strings.Contains(r.Err, "not reachable") {
+		t.Fatalf("absent socket first resolution = %+v, want not reachable", r)
+	}
+
+	start := time.Now()
+	if r := absentCfg.ResolveCLIRun(ctx, model.AgentFrameworkAntigravity); !strings.Contains(r.Err, "not reachable") {
+		t.Fatalf("absent socket cached resolution = %+v, want not reachable", r)
+	}
+	if st := absentCfg.HostExecutorStatus(ctx); st.Hostd == nil || st.Hostd.Reachable {
+		t.Fatalf("absent socket cached status = %+v, want unreachable", st.Hostd)
+	}
+	if took := time.Since(start); took > 200*time.Millisecond {
+		t.Fatalf("cached absent-socket resolution + status took %s, want immediate reuse", took)
+	}
+
+	allow := filepath.Join(dir, "hostd.yaml")
+	if err := os.WriteFile(allow, []byte(fmt.Sprintf(offersAgy, sh, dir)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := &hostd.Server{
+		Socket:          absentSock,
+		Allowlist:       allow,
+		AllowlistOwners: []uint32{uint32(os.Getuid())},
+		StateDir:        filepath.Join(dir, "state"),
+		Logf:            func(string, ...any) {},
+	}
+	sctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { srv.Serve(sctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	for i := 0; ; i++ {
+		if _, err := os.Stat(absentSock); err == nil {
+			break
+		}
+		if i > 500 {
+			t.Fatal("hostd never listened")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if r := absentCfg.ResolveCLIRun(ctx, model.AgentFrameworkAntigravity); r.Err != "" || r.Via != ViaHostd {
+		t.Fatalf("after hostd started on %s, agy resolved %+v, want reachable host via hostd", absentSock, r)
 	}
 }

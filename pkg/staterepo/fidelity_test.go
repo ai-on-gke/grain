@@ -487,15 +487,11 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	}); err != nil {
 		t.Fatalf("recording exec-tunnel failures: %v", err)
 	}
-	// Which hostd the run went to (task_run_hostd), and the task's own
-	// hostd pin (task_hostd).
+	// Which hostd the run went to (task_run_hostd).
 	if err := store.RecordTaskRunHostd(ctx, model.TaskRunHostd{
 		RunID: "a1b2-1", TaskID: "a1b2", Hostd: "laptop", Instance: "laptop.example.com", Owner: "owner@example.com", At: sub,
 	}); err != nil {
 		t.Fatalf("recording a run's hostd: %v", err)
-	}
-	if err := store.SetTaskHostd(ctx, "a1b2", "gpu=a100,zone=b"); err != nil {
-		t.Fatalf("pinning a task's hostd: %v", err)
 	}
 	// What a run's capability grants did for it
 	// (task_run_capability_audit): a capability server's own JSON
@@ -677,7 +673,6 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 		SetupCommand:                 "make test",
 		CIMode:                       model.CIModeGrain,
 		GitCredential:                "billing-token",
-		DefaultHostd:                 "pool=gpu",
 		UpstreamRepo:                 "upstream/billing",
 		RepairTemplateID:             "repair-tpl",
 		RequireBranchUpToDate:        true,
@@ -1256,6 +1251,8 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 			[]any{"user:alice@example.com", "the access code", time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)}},
 		{"INSERT INTO `allowed_principal_migration` (`id`, `imported_at`, `source`, `dropped`) VALUES (?, ?, ?, ?)",
 			[]any{1, time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC), "-ui-allowed-principals", `["domain:example.com"]`}},
+		{"INSERT INTO `secret_entries` (`secret_name`, `key`, `sm_secret`, `version`, `updated_at`) VALUES (?, ?, ?, ?, ?)",
+			[]any{"gemini-api-key", "value", "grain-inst-alice-gemini-api-key", "2", time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)}},
 	} {
 		if _, err := db.ExecContext(ctx, stmt.sql, stmt.args...); err != nil {
 			t.Fatalf("writing %s: %v", stmt.sql, err)

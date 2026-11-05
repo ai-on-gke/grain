@@ -81,7 +81,7 @@ sudo \
 ```
 
 A new deployment runs the last promoted release, the `latest` channel
-(`ghcr.io/bwsalmon/grain/grain:latest`, the core build). On a machine an
+(`docker.io/grainai/grain:latest`, the core build). On a machine an
 edition's install track claims (`pkg/installtrack`, where an edition linked
 into grain registers its track) the installer pulls that edition's build
 instead. The images are published with the same tags, and
@@ -330,7 +330,7 @@ sudo ./scripts/setup.sh --purge       # or GRAIN_UNINSTALL_PURGE=1
 | `grain-postgres.service` and the `grain-postgres` container (the local PostgreSQL server; its data is in `GRAIN_DATA_DIR`) | stopped, disabled and removed | stopped, disabled and removed |
 | `/etc/grain/{image.env,cli.env,cosign.pub,postgres.env}` (the directory too, once it is empty) | removed | removed |
 | grain's sudoers drop-in (`/etc/sudoers.d/90-grain-nft`, left by host mode) and `/etc/modprobe.d/kvm-nested-grain.conf` | removed | removed |
-| the grain images (`ghcr.io/bwsalmon/grain/grain`, every tag) and every sandbox image those tags name | removed (`--keep-images` keeps them) | removed (`--keep-images` keeps them) |
+| the grain images (`docker.io/grainai/grain` and legacy `ghcr.io/bwsalmon/grain/grain`, every tag) and every sandbox image those tags name | removed (`--keep-images` keeps them) | removed (`--keep-images` keeps them) |
 | `sleep`/`suspend`/`hibernate`/`hybrid-sleep.target` masks and `/etc/systemd/logind.conf.d/10-grain-no-suspend.conf` | unmasked, drop-in removed | unmasked, drop-in removed |
 | `GRAIN_SANDBOX_DIR` (`/var/lib/grain/scratch`, caches) and `/var/lib/granule/vms` | removed | removed |
 | `GRAIN_DATA_DIR` (`/var/lib/grain/data`: the task store, the secrets and `secrets/secrets.key`) | **kept**; the path of the key is printed | removed |
@@ -358,7 +358,7 @@ On the local PostgreSQL server (the default for a new install), the cluster in
 `data/postgres` is part of that directory. Copy it with both
 `grain-daemon.service` and `grain-postgres.service` stopped, or take an online
 dump with
-`sudo docker exec grain-postgres pg_dump -U grain -d grain -Fc > grain.dump`.
+`sudo docker exec grain-postgres sh -c 'PGPASSWORD=$(cat /run/grain/postgres-password) exec pg_dump -U grain -d grain -Fc' > grain.dump`.
 `grain backup` covers SQLite only. [docs/database.md](docs/database.md#backups)
 has the restore steps, and covers upgrading the PostgreSQL image, which is a
 separate, explicit step.

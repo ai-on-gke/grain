@@ -558,7 +558,7 @@ spec:
         runAsUser: 0
       containers:
         - name: chown
-          image: ghcr.io/bwsalmon/grain/grain:main
+          image: docker.io/grainai/grain:main
           command: ["/bin/sh", "-c", "chown -R 1000:1000 /data"]
           volumeMounts:
             - name: data

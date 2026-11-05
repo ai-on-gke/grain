@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/ciapi"
-	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -253,7 +252,7 @@ func TestTheDeploymentRegistersReleaseGateRead(t *testing.T) {
 	if !provider.Spec().SupportsCI() {
 		t.Errorf("%s is not offered to CI", model.ReleaseGateReadCapability)
 	}
-	full := newCapabilityRegistryWithStore(nil, localscripts.Config{})
+	full := newCapabilityRegistryWithStore(nil)
 	if p, ok := full.LookupFor("api:ci:read", true); !ok || !p.Spec().SupportsCI() {
 		t.Errorf("api:ci:read has no CI provider in the deployment's registry")
 	}

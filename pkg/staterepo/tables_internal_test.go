@@ -179,10 +179,9 @@ var notSettings = []string{
 	// record of what happened, written after the run finished.
 	"task_run_capability_audit",
 	"task_run_startup",
-	// Which hostd each run went to (model.TaskRunHostd), and a task's own
-	// hostd pin, written with the task like task_tag.
+	// Which hostd each run went to (model.TaskRunHostd), written with the
+	// task like task_tag.
 	"task_run_hostd",
-	"task_hostd",
 	"task_run_sandbox_key",
 	// A run's suspension (model.Suspension): grain's record of how a run
 	// stopped, written in the transaction that finished it.
@@ -220,6 +219,10 @@ var notSettings = []string{
 	// Who closed or reopened a task (model.TaskEvent): grain's record of
 	// what somebody did, written in the same breath as the closure.
 	"task_event",
+	// Ordered task state, comment/question, and CI verdict log backing
+	// GET /api/events (model.IntegrationEvent): runtime event history
+	// written by Store transactions, never settings a PR applies.
+	"integration_event",
 	// config_audit is the record of who changed the configuration
 	// (operator-attribution spec §4.4): grain's own history, not settings
 	// a merged pull request applies.
@@ -425,6 +428,12 @@ var notSettings = []string{
 	// declarative settings.
 	"secret_resolution_audit",
 	"credential_access_audit",
+	// Non-secret catalogue of secret names and keys stored in Google Cloud
+	// Secret Manager (-secrets-backend=secretmanager, design/design/registry.design.md):
+	// written live by secrets.Store alongside Secret Manager mutations, and
+	// kept out of grain/config so a config-repo merge never overwrites or
+	// erases the instance's secret catalogue.
+	"secret_entries",
 	// Operator notifications (model.Notification) and the subscriptions
 	// that wake durable tasks on them: grain's own running record of
 	// what it raised and who has seen it, rewritten every cycle, and

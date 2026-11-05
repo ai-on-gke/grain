@@ -15,31 +15,16 @@
 package ui
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
-	"strings"
+
+	"github.com/ai-on-gke/grain/pkg/webauth"
 )
 
-// crossOriginProtection refuses a state-changing request a browser sent
-// on behalf of some other site (#2371). Every POST route here decodes
-// its body as JSON whatever Content-Type it claims, so a plain <form> or
-// a no-preflight fetch() from any page an operator's browser loads could
-// otherwise drive the daemon as that operator.
-//
-// http.CrossOriginProtection lets GET, HEAD and OPTIONS through, and any
-// request a browser marks Sec-Fetch-Site: same-origin (or none, for one
-// the user typed). Without that header it falls back to comparing Origin
-// with Host. A request carrying neither -- the CLI, pkg/mcp's client, a
-// sandbox's curl, a webhook -- did not come from a browser and is not
-// what CSRF is about, so it passes too.
-var crossOriginProtection = http.NewCrossOriginProtection()
-
 // checkCrossOrigin answers 403 and returns false for a cross-site
-// browser request with an unsafe method.
+// browser request with an unsafe method (#2371).
 func checkCrossOrigin(w http.ResponseWriter, r *http.Request) bool {
-	if err := crossOriginProtection.Check(r); err != nil {
+	if err := webauth.CheckCrossOrigin(r); err != nil {
 		writeError(w, http.StatusForbidden, fmt.Errorf("cross-origin %s %s refused: %w", r.Method, r.URL.Path, err))
 		return false
 	}
@@ -59,53 +44,9 @@ func checkVerifiedIdentityCSRF(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		return true
 	}
-	if err := verifySameOriginForProxyAuth(r); err != nil {
+	if err := webauth.VerifySameOriginForProxyAuth(r); err != nil {
 		writeError(w, http.StatusForbidden, fmt.Errorf("CSRF check refused %s %s: %w", r.Method, r.URL.Path, err))
 		return false
 	}
 	return true
-}
-
-func verifySameOriginForProxyAuth(r *http.Request) error {
-	switch sfs := strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")); sfs {
-	case "":
-		// Fall through to Origin check.
-	case "same-origin", "none":
-		return nil
-	default:
-		return fmt.Errorf("Sec-Fetch-Site %q is not same-origin", sfs)
-	}
-
-	origin := strings.TrimSpace(r.Header.Get("Origin"))
-	if origin != "" {
-		u, err := url.Parse(origin)
-		if err != nil || u.Host == "" {
-			return fmt.Errorf("invalid Origin %q", origin)
-		}
-		if originMatchesRequestHost(u.Host, r) {
-			return nil
-		}
-		return fmt.Errorf("Origin %q does not match request host %q", origin, r.Host)
-	}
-
-	// Neither Sec-Fetch-Site nor Origin is present. If the request carries any
-	// Cookie (such as IAP's session cookie), treat it as a browser request and
-	// refuse it; cookie-less requests are programmatic clients (e.g. CLI with
-	// Proxy-Authorization, which IAP strips before forwarding).
-	if strings.TrimSpace(r.Header.Get("Cookie")) != "" {
-		return errors.New("state-changing cookie-authenticated request must carry Sec-Fetch-Site: same-origin or a matching Origin")
-	}
-	return nil
-}
-
-func originMatchesRequestHost(originHost string, r *http.Request) bool {
-	if r.Host != "" && strings.EqualFold(originHost, r.Host) {
-		return true
-	}
-	for _, xfh := range strings.Split(r.Header.Get("X-Forwarded-Host"), ",") {
-		if xfh = strings.TrimSpace(xfh); xfh != "" && strings.EqualFold(originHost, xfh) {
-			return true
-		}
-	}
-	return false
 }

@@ -17,62 +17,40 @@ package security
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-// A task's hostd pin moves its agent CLI onto another machine, and onto
-// whatever CLI login lives there. An agent with tasks:write may not route
-// work it files or edits to a hostd its own task does not run on: not on
-// a filing, and not through PUT /api/tasks/{id}/hostd. The default hostd,
-// and the acting task's own selector, stay allowed.
+// Which hostd an agent CLI runs on -- another machine, and whatever CLI
+// login lives there -- is the model connection's and the capability
+// server's, set in Settings. No task carries one, so an agent with
+// tasks:write cannot move work it files or edits onto a hostd: not on a
+// filing, and not through PUT /api/tasks/{id}/hostd. Both are refused,
+// never accepted and quietly ignored.
 func TestAgentCannotRouteWorkToAnotherHostd(t *testing.T) {
 	agent := map[string]string{ui.ActingTaskHeader: "901"}
 	srv, store := networkWideningFixture(t, model.NetworkNone)
 	ctx := context.Background()
-	siblingHostd := func() string {
+	if _, _, err := store.CreateHostd(ctx, model.Hostd{Name: "someone-laptop"}); err != nil {
+		t.Fatal(err)
+	}
+	refused := func(what string, code int, resp string) {
 		t.Helper()
-		sel, err := store.TaskHostd(ctx, "902")
-		if err != nil {
-			t.Fatal(err)
+		if code != http.StatusBadRequest && code != http.StatusForbidden {
+			t.Errorf("%s: %d %s, want it refused", what, code, resp)
 		}
-		return sel
 	}
-
 	for _, body := range []string{`{"hostd":"someone-laptop"}`, `{"Hostd":"gpu=a100"}`} {
-		if code, resp := serveNetworkWidening(t, srv, http.MethodPut, "/api/tasks/902/hostd", body, agent); code != http.StatusForbidden {
-			t.Errorf("PUT hostd %s: %d %s, want 403", body, code, resp)
-		}
+		code, resp := serveNetworkWidening(t, srv, http.MethodPut, "/api/tasks/902/hostd", body, agent)
+		refused("PUT hostd "+body, code, resp)
 	}
-	if got := siblingHostd(); got != "" {
-		t.Errorf("sibling hostd = %q after refused pins, want unchanged", got)
-	}
-	if code, resp := serveNetworkWidening(t, srv, http.MethodPost, "/api/tasks",
-		`{"title":"elsewhere","repo":"acme/widgets","hostd":"someone-laptop"}`, agent); code != http.StatusForbidden {
-		t.Errorf("filing with a hostd: %d %s, want 403", code, resp)
-	}
-
-	// The acting task's own selector, in any label order, and the
-	// default hostd are what it already has. A hostd in the registry
-	// carries its labels, or no pin to them is taken at all.
-	if _, _, err := store.CreateHostd(ctx, model.Hostd{Name: "gpu-box", Labels: map[string]string{"gpu": "a100", "zone": "b"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetTaskHostd(ctx, "901", "gpu=a100,zone=b"); err != nil {
-		t.Fatal(err)
-	}
-	if code, resp := serveNetworkWidening(t, srv, http.MethodPut, "/api/tasks/902/hostd", `{"hostd":"zone=b,gpu=a100"}`, agent); code != http.StatusOK {
-		t.Fatalf("PUT the acting task's own hostd: %d %s, want 200", code, resp)
-	}
-	if got := siblingHostd(); got != "gpu=a100,zone=b" {
-		t.Errorf("sibling hostd = %q, want gpu=a100,zone=b", got)
-	}
-	if code, resp := serveNetworkWidening(t, srv, http.MethodPut, "/api/tasks/902/hostd", `{"hostd":""}`, agent); code != http.StatusOK {
-		t.Fatalf("PUT the default hostd: %d %s, want 200", code, resp)
-	}
-	if got := siblingHostd(); got != "" {
-		t.Errorf("sibling hostd = %q after clearing, want the default", got)
+	code, resp := serveNetworkWidening(t, srv, http.MethodPost, "/api/tasks",
+		`{"title":"elsewhere","repo":"acme/widgets","hostd":"someone-laptop"}`, agent)
+	refused("filing with a hostd", code, resp)
+	if code == http.StatusBadRequest && !strings.Contains(resp, "not the task") {
+		t.Errorf("filing with a hostd was refused with %q, want it to say hostd is set on the connection or server", resp)
 	}
 }

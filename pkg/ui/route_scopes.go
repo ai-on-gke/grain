@@ -71,6 +71,7 @@ var routeScopes = map[string]APIScope{
 	"GET /api/tasks/states":                                                "tasks:read",
 	"GET /api/tasks/wait":                                                  "tasks:read",
 	"GET /api/inbox":                                                       "tasks:read",
+	"GET /api/events":                                                      "tasks:read",
 	"GET /api/states":                                                      "tasks:read",
 	"POST /api/tasks":                                                      "tasks:write",
 	"POST /api/tasks/from-template":                                        "tasks:from-template",
