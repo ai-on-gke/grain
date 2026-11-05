@@ -138,6 +138,7 @@ const SETTING_LABELS = {
   autoUpgradeChannel: "Automatic upgrade channel",
   autoUpgradeTime: "Automatic upgrade time of day",
   autoUpgradeOn: "Automatic upgrades",
+  registry: "Registry",
 };
 
 // settingLabel is what to call one setting, by its JSON name.

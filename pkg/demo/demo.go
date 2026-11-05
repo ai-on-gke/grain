@@ -399,6 +399,9 @@ func Run(opts Options) error {
 		storedCfg.GitHubHost = opts.GitHubAPI
 		storedCfg.GitHubInsecureHTTP = true
 	}
+	if !opts.Unconfigured {
+		configureRegistryDemo(&storedCfg, store, &cfg)
+	}
 	// cfg.Secrets is read at each lookup, so -secrets-store's store,
 	// configured below, is the one a saved server configuration uses.
 	capabilityServers, err := configureCapabilityServerDemo(ctx, &storedCfg, func(name string) (string, bool) {

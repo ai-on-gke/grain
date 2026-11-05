@@ -53,6 +53,7 @@ import SandboxesSection from "./settings/SandboxesSection.jsx";
 import CachesSection from "./settings/CachesSection.jsx";
 import PreferencesSection from "./settings/PreferencesSection.jsx";
 import UpgradeSection from "./settings/UpgradeSection.jsx";
+import RegistrySection from "./settings/RegistrySection.jsx";
 import { SettingsReadOnlyContext } from "./settings/SettingsCard.jsx";
 import {
   EditInConfigRepo,
@@ -102,6 +103,7 @@ const READS_SETTINGS = new Set([
   "capabilities",
   "credentials",
   "engine",
+  "registry",
   "ci",
   "sandboxes",
   "caches",
@@ -638,6 +640,7 @@ export default function SettingsPage({
           <CredentialsSection
             s={s}
             claimedSecrets={[
+              "registry-registration-token",
               ...(settings?.agentBackends || []).map(
                 (backend) => `agent-backend-${backend.id}`,
               ),
@@ -650,6 +653,9 @@ export default function SettingsPage({
         break;
       case "engine":
         body = <EngineSection s={s} />;
+        break;
+      case "registry":
+        body = <RegistrySection s={s} />;
         break;
       case "ci":
         body = <CISection s={s} />;
