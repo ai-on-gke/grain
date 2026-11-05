@@ -27,6 +27,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/model/postgres"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // DefaultSandboxImage is overwritten at link time. The value here is the
@@ -93,6 +94,9 @@ func LoadDatabaseConfig(dataDir string) (*postgres.DatabaseConfig, error) {
 	saved, err := postgres.ReadDatabaseConfig(dataDir)
 	if err != nil || saved == nil {
 		return saved, err
+	}
+	if os.Getenv("GRAIN_SECRETS_BACKEND") == secrets.BackendSecretManager && saved.PasswordSecret == "" {
+		return saved, nil
 	}
 	if saved.HasPlaintextPassword() {
 		if _, err := postgres.MigrateDatabaseConfigPassword(dataDir, OpenSecrets(dataDir)); err != nil {

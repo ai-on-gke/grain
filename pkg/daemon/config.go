@@ -39,9 +39,11 @@ import (
 )
 
 type Config struct {
-	DataDir  string
-	DbDriver string
-	DbDSN    string
+	DataDir         string
+	DbDriver        string
+	DbDSN           string
+	SecretsBackend  string
+	SecretsSMPrefix string
 	// unitFlags are the names of the flags this process was actually
 	// started with, undefined ones included -- which on a deployment
 	// scripts/setup.sh installed is what grain-daemon.service's ExecStart
