@@ -398,4 +398,63 @@ describe("ProcessesList", () => {
     expect(onRefreshSuites).toHaveBeenCalledTimes(1);
     expect(onRefreshSchedules).toHaveBeenCalledTimes(1);
   });
+
+  it("renders a Suppressed badge, reason, and overlay warning for off-target git_ref schedules", async () => {
+    const user = userEvent.setup();
+    api.mockImplementation(async (path) => {
+      if (String(path).endsWith("/composition")) {
+        return { title: "Track external tag", repo: "acme/widgets" };
+      }
+      return {};
+    });
+
+    const offTargetSchedule = {
+      id: "sched-offlist",
+      title: "Track external tag",
+      description: "Pick up external releases.",
+      repo: "acme/widgets",
+      recurrence: {
+        kind: "git_ref",
+        gitRef: { repo: "offlist/upstream", ref: "refs/tags/latest" },
+      },
+      enabled: true,
+      nextRunAt: "2027-11-05T00:00:00Z",
+      suppressed: {
+        reason: "watchedRepoOffTarget",
+        detail:
+          "watches offlist/upstream, which is not on this deployment's target repo list",
+      },
+    };
+
+    render(
+      <Harness
+        initialQuery={{ f: "kind:any:schedule" }}
+        schedules={[...schedules, offTargetSchedule]}
+      />,
+    );
+
+    const link = screen.getByRole("link", { name: "Track external tag" });
+    const row = link.closest(".process-row");
+    expect(within(row).getByText("Suppressed")).toBeInTheDocument();
+    expect(
+      within(row).getByText(
+        "suppressed: watches offlist/upstream, which is not on this deployment's target repo list",
+      ),
+    ).toBeInTheDocument();
+    expect(within(row).getByText("suppressed")).toBeInTheDocument();
+    expect(within(row).queryByText("on ref move")).not.toBeInTheDocument();
+
+    await user.click(link);
+    expect(
+      await screen.findByText(
+        /This schedule is suppressed and is not polling its watched ref: watches offlist\/upstream, which is not on this deployment's target repo list\./,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText(/Watched repository/i)).toHaveValue(
+      "offlist/upstream",
+    );
+    expect(screen.getByLabelText(/Watched git ref/i)).toHaveValue(
+      "refs/tags/latest",
+    );
+  });
 });
