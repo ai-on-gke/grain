@@ -151,6 +151,21 @@ func newGitHubWebhookConsumer(ctx context.Context, cfg Config, creds *gitproxy.C
 	if err != nil {
 		return nil, fmt.Errorf("opening local GitHub webhook store: %w", err)
 	}
+	// A cursor kept in PostgreSQL outlives github-webhooks.jsonl, which stays
+	// on this VM's scratch disk: a replacement VM opens an empty store whose
+	// sequence numbers start again at 1. A cursor ahead of everything the
+	// local store has ever numbered therefore belongs to a store that no
+	// longer exists, and honouring it would silently drop every new event
+	// until the fresh store's numbering caught up with it. Start this store
+	// from zero instead; the first Ack writes the new position back.
+	if useDBCursor {
+		if _, latest := st.After(c.ackedSeq, 1); latest < c.ackedSeq {
+			log.Printf("grain daemon: GitHub webhook cursor %d in the database is ahead of local store %s (latest %d), which was replaced; starting from its beginning",
+				c.ackedSeq, storePath, latest)
+			c.ackedSeq = 0
+			c.maxSeen = 0
+		}
+	}
 	envSecret := strings.TrimSpace(os.Getenv(githubWebhookSecretEnv))
 	c.localStore = st
 	c.localAddr = cfg.GithubWebhookAddr

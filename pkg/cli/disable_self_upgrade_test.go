@@ -91,6 +91,9 @@ func TestDaemonDisableSelfUpgradeFlagsAndEnv(t *testing.T) {
 			"https://",
 			"https://:8080/entries/alice",
 			"https://user:super-secret-token@grain.example.com/entries/alice",
+			// Unparseable (bad escape), so url.Parse returns no URL to
+			// strip the userinfo from: the credential must not be echoed.
+			"https://user:super-secret-token%zz@grain.example.com/entries/alice",
 		} {
 			cfg, _, _, err := parseDaemonArgs([]string{
 				"-data-dir", t.TempDir(),

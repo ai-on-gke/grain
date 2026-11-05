@@ -294,7 +294,12 @@ func TestGitHubWebhookConsumerSeedsPostgresCursorFromExistingFileOnce(t *testing
 	postgrestest.SkipUnlessAvailable(t)
 	store, _ := postgrestest.Open(t)
 
-	t.Setenv(githubWebhookSecretEnv, "whsec_seed")
+	// A relay-backed consumer: its sequence numbers are the gateway's, which
+	// outlive this data dir, so the seeded cursor is honoured as it stands.
+	// (A local -github-webhook-addr store with no events would instead reset
+	// a cursor ahead of it -- see
+	// TestGitHubWebhookConsumerResetsPostgresCursorAheadOfFreshLocalStore.)
+	t.Setenv(githubWebhookRelaySecretEnv, "relay_seed")
 	dataDir := t.TempDir()
 	cursorPath := filepath.Join(dataDir, "github-webhook-cursor.json")
 	if err := saveWebhookCursor(cursorPath, 77); err != nil {
@@ -302,9 +307,9 @@ func TestGitHubWebhookConsumerSeedsPostgresCursorFromExistingFileOnce(t *testing
 	}
 
 	cfg := Config{
-		DataDir:           dataDir,
-		DbDriver:          "postgres",
-		GithubWebhookAddr: "127.0.0.1:0",
+		DataDir:          dataDir,
+		DbDriver:         "postgres",
+		GithubWebhookURL: "http://127.0.0.1:1",
 	}
 	consumer, err := NewGitHubWebhookConsumerWithStore(context.Background(), cfg, nil, store)
 	if err != nil {
@@ -335,5 +340,51 @@ func TestGitHubWebhookConsumerSeedsPostgresCursorFromExistingFileOnce(t *testing
 	}
 	if reopened.ackedSeq != 105 {
 		t.Fatalf("reopened ackedSeq = %d, want 105", reopened.ackedSeq)
+	}
+}
+
+// TestGitHubWebhookConsumerResetsPostgresCursorAheadOfFreshLocalStore is the
+// VM-replacement case for an in-process -github-webhook-addr listener: the
+// cursor survives in PostgreSQL, but github-webhooks.jsonl was on the old
+// VM's scratch disk, so the new store numbers its events from 1 again. Those
+// events must reach the consumer rather than sit below the stale cursor.
+func TestGitHubWebhookConsumerResetsPostgresCursorAheadOfFreshLocalStore(t *testing.T) {
+	postgrestest.SkipUnlessAvailable(t)
+	store, _ := postgrestest.Open(t)
+	ctx := context.Background()
+
+	if err := store.SetGitHubWebhookCursor(ctx, 500, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(githubWebhookSecretEnv, "whsec_reset")
+	consumer, err := NewGitHubWebhookConsumerWithStore(ctx, Config{
+		DataDir:           t.TempDir(),
+		DbDriver:          "postgres",
+		GithubWebhookAddr: "127.0.0.1:0",
+	}, nil, store)
+	if err != nil {
+		t.Fatalf("NewGitHubWebhookConsumerWithStore: %v", err)
+	}
+	defer consumer.localStore.Close()
+	if consumer.ackedSeq != 0 || consumer.maxSeen != 0 {
+		t.Fatalf("ackedSeq, maxSeen = %d, %d over an empty local store; want 0, 0", consumer.ackedSeq, consumer.maxSeen)
+	}
+
+	stored, _, err := consumer.localStore.Append(ghwebhook.Event{DeliveryID: "deliv-fresh-1", Repo: "acme/widgets", ReceivedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, _ := consumer.localStore.After(consumer.maxSeen, 100)
+	consumer.ingest(events, nil, nil)
+	pending, err := consumer.Pending()
+	if err != nil || len(pending) != 1 || pending[0].Seq != stored.Seq {
+		t.Fatalf("Pending() = %+v, %v; want the fresh store's event %d", pending, err, stored.Seq)
+	}
+	if err := consumer.Ack(stored.Seq); err != nil {
+		t.Fatal(err)
+	}
+	cur, err := store.GetGitHubWebhookCursor(ctx)
+	if err != nil || cur == nil || cur.LastAckedSeq != stored.Seq {
+		t.Fatalf("Postgres cursor after Ack = %+v, %v; want %d", cur, err, stored.Seq)
 	}
 }

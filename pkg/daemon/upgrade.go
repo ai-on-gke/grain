@@ -106,6 +106,11 @@ func ValidateManagementURL(raw string) (string, error) {
 			uCopy := *u
 			uCopy.User = nil
 			redacted = uCopy.String()
+		} else if u == nil && strings.Contains(trimmed, "@") {
+			// Unparseable, so there is no userinfo to strip precisely: a
+			// value with an '@' in it may still carry a password, and this
+			// error is printed to the journal at startup.
+			redacted = "<redacted>"
 		}
 		return "", fmt.Errorf("-management-url must be an absolute http:// or https:// URL without user credentials, got %q", redacted)
 	}
