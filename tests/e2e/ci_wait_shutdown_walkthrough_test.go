@@ -205,19 +205,50 @@ jobs:
 	// run-job's; on a loaded runner the stop below could land between the
 	// two, and the run-job would answer with its own run rather than
 	// following the full one. So wait for the supersession itself.
+	var supersededRunID string
 	waitUntil(t, "the full run to supersede the run-job's", 10*time.Second, func() bool {
 		runs, _, err := c.ListCIRuns(context.Background(), "acme/widgets")
 		if err != nil {
 			return false
 		}
 		for _, r := range runs {
-			if _, ok := ci.SupersedingRun(r); ok {
+			if id, ok := ci.SupersedingRun(r); ok {
+				supersededRunID = id
 				return true
 			}
 		}
 		return false
 	})
-	time.Sleep(4 * time.Second)
+	waitStopStart := time.Now()
+	waitUntil(t, "the superseding run's jobs to start their detached step runners", 12*time.Second, func() bool {
+		runs, _, err := c.ListCIRuns(context.Background(), "acme/widgets")
+		if err != nil {
+			return false
+		}
+		for _, r := range runs {
+			if r.ID != supersededRunID {
+				continue
+			}
+			startedJobs := 0
+			for _, j := range r.Jobs {
+				if j.Sandbox == "" {
+					continue
+				}
+				matches, _ := filepath.Glob(filepath.Join(daemon.HostSandboxRunsDir(cfg), j.Sandbox, ".grain-ci-step", "*", "pid"))
+				for _, pidPath := range matches {
+					if pidBytes, err := os.ReadFile(pidPath); err == nil && strings.TrimSpace(string(pidBytes)) != "" {
+						startedJobs++
+						break
+					}
+				}
+			}
+			return startedJobs >= 2
+		}
+		return false
+	})
+	if rem := 4*time.Second - time.Since(waitStopStart); rem > 0 {
+		time.Sleep(rem)
+	}
 	if agent.done("wait.1") || agent.done("runjob.1") {
 		t.Fatalf("a wait ended before the daemon stopped: wait %q, run-job %q",
 			agent.output(t, "wait.1"), agent.output(t, "runjob.1"))

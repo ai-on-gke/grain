@@ -1319,3 +1319,166 @@ func TestAReleaseInFlightHandsOnToTheNewestTipHoweverItEnds(t *testing.T) {
 		})
 	}
 }
+
+func TestBaseBranchReleaseTriageSupersedeRequiresCommitAtOrAfterFailure(t *testing.T) {
+	t.Parallel()
+
+	setup := func(t *testing.T) (
+		*model.Store, context.Context, github.Client, *fakeCI, model.RepoRef,
+		string, string, string, string,
+	) {
+		t.Helper()
+		store, ctx := openStore(t)
+		sim, client := newSim(t, "acme", "widgets", "main")
+		repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+		runner := newFakeCI()
+		releasingRepo(t, ctx, store, repo)
+
+		older := headSHA(t, client, repo, "main")
+		pushBranch(t, sim.BareRepo, "diverged-side")
+		diverged := headSHA(t, client, repo, "diverged-side")
+		pushBranch(t, sim.BareRepo, "main")
+		failing := headSHA(t, client, repo, "main")
+		pushBranch(t, sim.BareRepo, "main")
+		descendant := headSHA(t, client, repo, "main")
+		pushBranch(t, sim.BareRepo, "main")
+		tip := headSHA(t, client, repo, "main")
+
+		judged := baseTime.Add(-time.Hour)
+		if err := store.PutBaseBranchCI(ctx, model.BaseBranchCI{
+			Repo: repo, Branch: "main", Commit: tip, RunID: "judge-1",
+			StartedAt: judged, FinishedAt: &judged, Conclusion: string(ci.ConclusionSuccess),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return store, ctx, client, runner, repo, older, failing, descendant, diverged
+	}
+
+	failRelease := func(t *testing.T, ctx context.Context, store *model.Store, client github.Client,
+		runner *fakeCI, repo model.RepoRef, commit string, at time.Time) string {
+		t.Helper()
+		if err := store.PutBaseBranchRelease(ctx, model.BaseBranchRelease{
+			Repo: repo, Branch: "main", Commit: commit, RunID: "rel-fail", StartedAt: at.Add(-5 * time.Minute),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		runner.finish("rel-fail", ci.ConclusionFailure, ci.JobRun{
+			WorkflowPath: ".grain/workflows/release.yml", JobID: "images", Conclusion: ci.ConclusionFailure,
+		})
+		runBaseBranchReleaseReconciler(t, ctx, store, client, runner, at)
+		ids, err := store.OpenTasksWithTag(ctx, orchestrator.BaseReleaseTriageBranchTag(repo, "main"))
+		if err != nil || len(ids) != 1 {
+			t.Fatalf("open release-triage tasks = %v (%v), want 1", ids, err)
+		}
+		return ids[0]
+	}
+
+	succeedRelease := func(t *testing.T, ctx context.Context, store *model.Store, client github.Client,
+		runner *fakeCI, repo model.RepoRef, runID, commit string, started, finished time.Time) {
+		t.Helper()
+		if err := store.PutBaseBranchRelease(ctx, model.BaseBranchRelease{
+			Repo: repo, Branch: "main", Commit: commit, RunID: runID, StartedAt: started,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		runner.finishAt(runID, ci.ConclusionSuccess, finished, ci.JobRun{
+			WorkflowPath: ".grain/workflows/release.yml", JobID: "images", Conclusion: ci.ConclusionSuccess,
+		})
+		runBaseBranchReleaseReconciler(t, ctx, store, client, runner, finished)
+	}
+
+	t.Run("older commit finishing after failure keeps triage open", func(t *testing.T) {
+		t.Parallel()
+		store, ctx, client, runner, repo, older, failing, _, _ := setup(t)
+		triageID := failRelease(t, ctx, store, client, runner, repo, failing, baseTime)
+
+		succeedRelease(t, ctx, store, client, runner, repo, "rel-older", older,
+			baseTime.Add(-15*time.Minute), baseTime.Add(30*time.Minute))
+
+		if st, err := store.State(ctx, triageID); err != nil || st == model.StateClosed {
+			t.Fatalf("triage task %s state after older commit success = %q (%v), want still open", triageID, st, err)
+		}
+	})
+
+	t.Run("re-run of the same failing commit closes triage", func(t *testing.T) {
+		t.Parallel()
+		store, ctx, client, runner, repo, _, failing, _, _ := setup(t)
+		triageID := failRelease(t, ctx, store, client, runner, repo, failing, baseTime)
+
+		succeedRelease(t, ctx, store, client, runner, repo, "rel-rerun", failing,
+			baseTime.Add(5*time.Minute), baseTime.Add(20*time.Minute))
+
+		if st, err := store.State(ctx, triageID); err != nil || st != model.StateClosed {
+			t.Fatalf("triage task %s state after re-run of failing commit = %q (%v), want closed", triageID, st, err)
+		}
+	})
+
+	t.Run("descendant commit on branch closes triage", func(t *testing.T) {
+		t.Parallel()
+		store, ctx, client, runner, repo, _, failing, descendant, _ := setup(t)
+		triageID := failRelease(t, ctx, store, client, runner, repo, failing, baseTime)
+
+		succeedRelease(t, ctx, store, client, runner, repo, "rel-desc", descendant,
+			baseTime.Add(5*time.Minute), baseTime.Add(20*time.Minute))
+
+		if st, err := store.State(ctx, triageID); err != nil || st != model.StateClosed {
+			t.Fatalf("triage task %s state after descendant commit success = %q (%v), want closed", triageID, st, err)
+		}
+	})
+
+	t.Run("unknown ancestry keeps triage open", func(t *testing.T) {
+		t.Parallel()
+		store, ctx, client, runner, repo, _, failing, descendant, diverged := setup(t)
+		triageID := failRelease(t, ctx, store, client, runner, repo, failing, baseTime)
+
+		// Unknown commit SHA not in git.
+		succeedRelease(t, ctx, store, client, runner, repo, "rel-unknown",
+			"9999999999999999999999999999999999999999",
+			baseTime.Add(5*time.Minute), baseTime.Add(10*time.Minute))
+		if st, _ := store.State(ctx, triageID); st == model.StateClosed {
+			t.Fatal("unknown commit SHA closed triage task")
+		}
+
+		// Diverged commit not on main.
+		succeedRelease(t, ctx, store, client, runner, repo, "rel-div", diverged,
+			baseTime.Add(11*time.Minute), baseTime.Add(15*time.Minute))
+		if st, _ := store.State(ctx, triageID); st == model.StateClosed {
+			t.Fatal("diverged commit closed triage task")
+		}
+
+		// Nil client (ancestry cannot be queried).
+		succeedRelease(t, ctx, store, nil, runner, repo, "rel-nil-client", descendant,
+			baseTime.Add(16*time.Minute), baseTime.Add(20*time.Minute))
+		if st, _ := store.State(ctx, triageID); st == model.StateClosed {
+			t.Fatal("nil client closed triage task without verifying ancestry")
+		}
+
+		// Task missing commit tag stays open even when descendant publishes.
+		created := baseTime
+		untagged := model.Task{
+			ID:         "triage-no-sha",
+			Intent:     model.IntentImplement,
+			Title:      "Fix base branch release on acme/widgets main",
+			Body:       "Manual triage task without commit tag.",
+			Origin:     model.Origin{Attribution: model.Attribution{Actor: orchestrator.BaseReleaseTriager}, Reason: model.ReasonDirect},
+			Approval:   &model.Attribution{Actor: orchestrator.BaseReleaseTriager},
+			ApprovedAt: &created,
+			Target:     &repo,
+			Binding:    model.BindingDirective,
+			Base:       "main",
+			Tags:       []string{orchestrator.BaseReleaseTriageBranchTag(repo, "main")},
+			CreatedAt:  &created,
+		}
+		if err := store.PutTask(ctx, untagged); err != nil {
+			t.Fatal(err)
+		}
+		succeedRelease(t, ctx, store, client, runner, repo, "rel-desc-ok", descendant,
+			baseTime.Add(21*time.Minute), baseTime.Add(25*time.Minute))
+		if st, _ := store.State(ctx, triageID); st != model.StateClosed {
+			t.Fatalf("triage task %s with known ancestry = %q, want closed", triageID, st)
+		}
+		if st, _ := store.State(ctx, untagged.ID); st == model.StateClosed {
+			t.Fatal("triage task without commit tag closed despite unknown ancestry")
+		}
+	})
+}

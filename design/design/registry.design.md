@@ -2,7 +2,7 @@
 
 **Owner:** @bwsalmon
 
-**Status:** Decided by bsalmon, 2026-11-05 — all open questions decided; the production installation is a separate next step (no code yet)
+**Status:** Decided by bsalmon, 2026-11-05 — all open questions decided; the production installation is a separate next step (no code yet). The *Delegated identity* revision (task 3130, 2026-11-05) is proposed: its open questions 14–17 carry recommendations awaiting a decision.
 
 A grain deployment today is one controller with one owner ([`architecture.design.md`](architecture.design.md)). That creates two problems across an organisation. First, people who want their own grain have to stand one up: a machine, a domain, IAP or an access code, a database, and a release to keep current. Second, a product-lifecycle layer that sits above grain—planning boards, chat commands, issue triagers, and cross-team handoffs—cannot tell *which* grain owns a repository or subdirectory, whether that grain is alive, or which person and team are accountable for it.
 
@@ -28,6 +28,7 @@ Read with: [`authentication.design.md`](authentication.design.md) and [`authenti
 - Grains running anywhere outside the registry fleet (a workstation, behind an interactive corporate proxy, in an inbound-blocked dev capsule, on dynamically re-addressed hosts, a Kubernetes/GKE cluster, or another cloud) can register as **`connected`** entries under a reserved name, report version, commit, health, active/awaiting task counts, and repository scopes via ~15 s heartbeats, and dial an outbound multiplexed tunnel (`wss://<registry-host>/api/entries/<name>/connect`, `-registry-connect`) so the registry reverse-proxies `https://<name>.<instance-domain>/` (including streaming SSE and WebSocket/`hostd` upgrades) without inbound ports or a separate pull-queue API.
 - Every entry carries catalog metadata (`display_name`, `purpose`, `host_kind`, `tags`, `listed` defaulting to `false`) and `(repo, path_prefix, role)` **scopes** preferring instance-reported scopes over manual overrides, with non-overlapping `primary` prefixes across listed entries and low-latency discovery (`GET /api/directory`) and longest-prefix routing (`GET /api/route`).
 - Instance VMs reach only the public internet, plus Cloud SQL (private IP, through the connector) and Secret Manager / Cloud Storage (through Private Google Access, restricted to their own resources by IAM). They never reach each other, the registry's cluster, or anything else in the project.
+- A registered **delegating app**, such as a planning board or a chat app, can act through the registry *on behalf of* a signed-in person who has granted it consent. The grain then admits, authorizes and records the real person, via the app (`sub` = the person, `act` = the app), instead of the app or the operator (see *Delegated identity*).
 - Subdomain routing is the primary design; path routing (`https://<registry-host>/<name>/…`) is documented only as an optional secondary mode for small single-team setups and is outside the MVP.
 
 ## Non-goals
@@ -38,7 +39,7 @@ Read with: [`authentication.design.md`](authentication.design.md) and [`authenti
 - Billing or chargeback. Quotas limit spending; the registry does not record cost.
 - Live migration of in-flight sandbox runs across a VM replacement. Replacing a VM drains it and interrupts active local runs so they re-queue cleanly on the new VM, matching a daemon restart today.
 - **Static `redirect` entries** (and unrouted "link only" directory entries) in the first version. Deferred in favour of routing only hosted VMs (`instance`) and outbound-tunnelled grains (`connected`), while keeping `entries.kind`, per-kind backend routing, and kind-independent naming, reservation, ownership, and quotas so new entry kinds remain cheap to add later (see *Deferred: redirect entries*).
-- **Delegated (on-behalf-of) identity and cross-grain task submission** through the registry (deferred to a follow-up design; `/api/directory` and `/api/route` return ranked candidates and URLs, and hooks are left on `DelegationPolicy` and the registry JWT claims).
+- **Grains as delegating apps, and multi-hop delegation.** A grain, or an agent inside one, acting through the registry on another grain on behalf of the person who asked is out of scope. Delegation is exactly one hop: a person, via one registered app (see *Delegated identity*). A grain that needs to call another grain uses that grain's own external-agent token, attributed to the calling agent.
 
 ## Terms
 
@@ -57,13 +58,16 @@ Read with: [`authentication.design.md`](authentication.design.md) and [`authenti
 - **Scope**: a `(repo, path_prefix, role)` claim (`role` in `primary` | `secondary`) declaring that an entry handles work in `<owner>/<name>` under `<path_prefix>`.
 - **Status**: derived runtime health of an entry (`online`, `degraded`, or `offline`), distinct from its provisioning lifecycle `state` (`creating`, `running`, `replacing`, `deleting`, `deleted`, `failed`).
 - **Admin**: a principal listed in the registry's `admins` configuration.
+- **Delegating app**: a service principal that a registry admin has registered in `delegating_apps`, so that it may ask to act on behalf of people who consent (for example `planning-app`).
+- **Delegation grant**: a person's recorded consent (`dlg_…`) letting one delegating app act for them on named entries (or `*`), with `read` or `write` access, until an expiry.
+- **Delegated request**: a request from a delegating app to an entry host naming a person in `X-Grain-On-Behalf-Of`. The registry forwards it with a JWT whose `sub` is the person and whose `act` is the app.
 
 ## Components and data flow
 
 ```mermaid
 flowchart LR
   user((browser · CLI · agent)) -->|HTTPS| lb
-  board(("planning board · chat<br/>(user or service principal)")) -->|"GET /api/directory · /api/route"| lb
+  board(("planning board · chat<br/>(user, service principal, or delegating app)")) -->|"GET /api/directory · /api/route<br/>X-Grain-On-Behalf-Of to entry hosts"| lb
   extgrain["external grain<br/>(workstation · corp proxy · K8s · other cloud)"] -->|"PUT /api/entries/&lt;name&gt;/heartbeat<br/>wss /api/entries/&lt;name&gt;/connect (mux)"| lb
   subgraph edge["Global external HTTPS load balancer"]
     lb["Cert Manager: grain.example.com + *.grain-user.com<br/>IAP backend: UI/API · *.grain-user.com · OIDC /connect<br/>public backend: /.well-known/* · grc_ /heartbeat &amp; /connect"]
@@ -170,12 +174,24 @@ type GroupResolver interface {
 }
 
 // DelegationPolicy decides which verified service principals may read the
-// catalog (/api/directory, /api/route) and—in the follow-up delegation design—
-// act on a human's behalf. Core ships a static service-principal reader list
-// and a deny-all delegation stub.
+// catalog (/api/directory, /api/route) and whether a delegating app may act
+// on a person's behalf on one entry (see Delegated identity). Core ships
+// "consent" (registered apps plus per-person consent grants, the default) and
+// "static" (catalog readers only; every delegated request refused).
 type DelegationPolicy interface {
 	MayReadCatalog(ctx context.Context, caller webauth.VerifiedIdentity) bool
-	AuthorizeOnBehalfOf(ctx context.Context, caller webauth.VerifiedIdentity, r *http.Request) (*DelegatedActor, error)
+	// AuthorizeOnBehalfOf is called only for requests to an entry host that
+	// carry X-Grain-On-Behalf-Of. It returns the actor to sign into the JWT,
+	// or a *DelegationRefusal naming the reason.
+	AuthorizeOnBehalfOf(ctx context.Context, caller webauth.VerifiedIdentity, entry EntryRef, r *http.Request) (*DelegatedActor, error)
+}
+
+// DelegatedActor is what the registry signs into a delegated JWT.
+type DelegatedActor struct {
+	Subject webauth.VerifiedIdentity // the person (sub); Kind is always human
+	App     string                   // delegating_apps.name (act.app)
+	Grant   string                   // delegation_grants.id (act.grant)
+	Access  string                   // "read" or "write" (act.access)
 }
 
 // Signer signs registry JWTs with the current key and publishes the JWKS.
@@ -240,7 +256,7 @@ Before the registry service skeleton lands, those self-contained HTTP authentica
 
 - **`RegisterFrontIdentity(name, factory)`:** edge identity verification (`"iap"` built in; downstream proxies registered by name and selected via `identity.front`).
 - **`RegisterGroupResolver(name, factory)`:** resolves `group:<email>` membership for `owner_group`, `admins`, and `creators` (`"cloud-identity"` and `"static"` built in; corporate directory resolvers registered by wrapper editions).
-- **`RegisterDelegationPolicy(name, factory)`:** governs which verified service principals may query `/api/directory` and `/api/route` and provides the hook (`AuthorizeOnBehalfOf`) for the follow-up delegated (on-behalf-of) identity design (default `"static"` admits configured `identity.service_principals` for read-only catalog/route calls and refuses all on-behalf-of assertions until the delegation design lands).
+- **`RegisterDelegationPolicy(name, factory)`:** governs which verified service principals may query `/api/directory` and `/api/route`, and whether a delegating app may act for a person (`AuthorizeOnBehalfOf`, see *Delegated identity*). The default is `"consent"`: registered `delegating_apps` plus per-person `delegation_grants`. `"static"` admits configured `identity.service_principals` for read-only catalog and route calls and refuses every delegated request. A wrapper distribution can register a policy backed by an existing organisational consent or app-trust service, selected via `identity.delegation.policy`.
 - **`RegisterComputeProvider`, `RegisterInstanceResourcesProvider`, `RegisterConfigReposProvider`, `RegisterSignerProvider`:** cloud and forge provider seams (`"gce"`, `"gcp"`, `"github"`, `"none"`, `"kms"`, `"local"`).
 - **`RegisterConnectTransport(name, factory)`:** server-side outbound-tunnel transport seam (`"ws-mux"` built in, selected via `tunnel.transport`; paired with `api.RegisterConnectDialer` on the grain side so wrapper distributions behind non-HTTP corporate tunnel edges can supply a matching dialer/acceptor without modifying routing, HA forwarding, or JWT verification).
 
@@ -408,14 +424,66 @@ CREATE TABLE entry_credentials (
 );
 CREATE INDEX entry_credentials_name ON entry_credentials(name);
 
--- Append-only. Every mutation and every admin read of another owner's data.
+-- Append-only. Every mutation, every admin read of another owner's data,
+-- every delegation change, and every delegated unsafe-method request.
 CREATE TABLE audit_log (
   id             BIGSERIAL PRIMARY KEY,
   at             TIMESTAMPTZ NOT NULL,
-  actor          TEXT NOT NULL,             -- verified email, "grain:<name>", or "registry"
-  action         TEXT NOT NULL,             -- create, replace, delete, purge, transfer, scopes, ...
+  actor          TEXT NOT NULL,             -- verified email (the person, for delegated rows), "grain:<name>", or "registry"
+  via            TEXT,                      -- delegating_apps.name when the actor acted through an app; NULL otherwise
+  grant_id       TEXT,                      -- delegation_grants.id for delegated rows
+  action         TEXT NOT NULL,             -- create, replace, delete, purge, transfer, scopes, app_*, delegation_*, delegated_write, ...
   name           TEXT,
   detail         JSONB NOT NULL
+);
+CREATE INDEX audit_log_via ON audit_log(via, at) WHERE via IS NOT NULL;
+
+-- Applications a registry admin has registered as able to act on behalf of
+-- people who consent (see Delegated identity).
+CREATE TABLE delegating_apps (
+  name                  TEXT PRIMARY KEY,           -- [a-z][a-z0-9-]{1,30}[a-z0-9], shown as "(via <name>)"
+  principal             TEXT NOT NULL UNIQUE,       -- "serviceAccount:<email>", matched against FrontIdentity
+  display_name          TEXT NOT NULL,
+  description           TEXT NOT NULL DEFAULT '',
+  homepage              TEXT,
+  owner                 TEXT NOT NULL REFERENCES owners(email),
+  owner_group           TEXT,
+  max_access            TEXT NOT NULL CHECK (max_access IN ('read', 'write')),
+  max_grant_ttl         INTERVAL NOT NULL,          -- <= identity.delegation.max_grant_ttl
+  require_subject_token BOOLEAN NOT NULL DEFAULT false,
+  redirect_uris         TEXT[] NOT NULL DEFAULT '{}',
+  created_by            TEXT NOT NULL,
+  created_at            TIMESTAMPTZ NOT NULL,
+  disabled_at           TIMESTAMPTZ,
+  disabled_by           TEXT
+);
+
+-- One person's consent for one app. At most one live grant per (app, person).
+CREATE TABLE delegation_grants (
+  id             TEXT PRIMARY KEY,                  -- "dlg_<random>"
+  app            TEXT NOT NULL REFERENCES delegating_apps(name) ON DELETE CASCADE,
+  person         TEXT NOT NULL,                     -- verified human email; always the caller who granted
+  entries        TEXT[] NOT NULL,                   -- {'*'} or entry names
+  access         TEXT NOT NULL CHECK (access IN ('read', 'write')),
+  created_at     TIMESTAMPTZ NOT NULL,
+  updated_at     TIMESTAMPTZ NOT NULL,
+  expires_at     TIMESTAMPTZ NOT NULL,
+  revoked_at     TIMESTAMPTZ,
+  revoked_by     TEXT,                              -- the person, an admin, or "registry" (expiry, app deletion, disabled person)
+  last_used_at   TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX delegation_grants_live ON delegation_grants(app, person) WHERE revoked_at IS NULL;
+CREATE INDEX delegation_grants_person ON delegation_grants(person) WHERE revoked_at IS NULL;
+
+-- Rolled-up delegated read/write counts, batched every 30 s from each replica.
+CREATE TABLE delegation_usage (
+  grant_id       TEXT NOT NULL REFERENCES delegation_grants(id) ON DELETE CASCADE,
+  name           TEXT NOT NULL,                     -- entry
+  day            DATE NOT NULL,                     -- UTC
+  reads          BIGINT NOT NULL DEFAULT 0,
+  writes         BIGINT NOT NULL DEFAULT 0,
+  last_at        TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (grant_id, name, day)
 );
 
 -- Reconciler leadership (see Scale and HA).
@@ -628,17 +696,17 @@ After IAP verifies, the registry signs a JWT for the single target instance and 
 |---|---|
 | `iss` | The registry's issuer URL, `https://<registry-host>` (configured, never taken from the request) |
 | `aud` | The instance's origin URL, `https://<name>.<instance-domain>`. Exactly one audience. |
-| `sub` | The verified email, lower-cased |
+| `sub` | The verified email, lower-cased. On a delegated request, the **person** named in `X-Grain-On-Behalf-Of` once `DelegationPolicy` has allowed it |
 | `email` | The same email, reusing `pkg/webauth`'s `NormalizeIdentityEmail` (extracted from `pkg/ui/principal.go`) |
 | `kind` | `human` (`model.PrincipalHuman`) or `service` (`model.PrincipalService` for `.gserviceaccount.com`, matching `VerifiedIdentity` in [`authentication.design.md`](authentication.design.md) §2 and `{#AU-5}` in [`authentication.spec.md`](../spec/authentication/authentication.spec.md)) |
-| `act` *(reserved)* | Omitted today. Reserved hook (`{sub, kind}`) for the follow-up delegated (on-behalf-of) identity design, mapping to `OnBehalfOf` in [`operator-attribution.design.md`](operator-attribution.design.md) and [`rbac.design.md`](rbac.design.md). |
+| `act` | Present only on a delegated request: `{sub: <app service-account email>, kind: "service", app: <delegating_apps.name>, grant: <dlg_…>, access: "read" \| "write"}` (RFC 8693 actor claim, exactly one level, never nested). Top-level `kind` is then always `human`. The grain maps it to `Attribution{Actor: app, OnBehalfOf: person}` ([`operator-attribution.design.md`](operator-attribution.design.md), [`rbac.design.md`](rbac.design.md) §3). See *Delegated identity*. |
 | `iat`, `nbf` | Now, with `nbf` 30 s back for clock skew |
 | `exp` | `iat + 60 s` |
 | `jti` | Random identifier, logged with the request id |
 | `rid` | The registry request id, for joining logs across registry and instance |
 
 - **Header:** `alg: ES256` (Cloud KMS `EC_SIGN_P256_SHA256`), `kid` set to the KMS key version.
-- **Lifetime and caching:** 60 s lifetime; each registry replica caches a signed JWT per `(email, name)` for up to 30 s to amortise KMS signing latency and cost. Upgraded connections (`hostd`, WebSockets) verify at handshake and live up to the 24 h backend timeout.
+- **Lifetime and caching:** 60 s lifetime; each registry replica caches a signed JWT per `(email, act.sub, act.grant, name)` (the `act` parts empty for direct callers) for up to 30 s to amortise KMS signing latency and cost. Upgraded connections (`hostd`, WebSockets) verify at handshake and live up to the 24 h backend timeout.
 - **Keys, rotation, and how rotation reaches instances:** The signing key lives in Cloud KMS (or a Kubernetes Secret in `local` mode); **no signing key or shared secret is ever copied to an instance VM**. Instances fetch `GET https://<registry-host>/.well-known/jwks.json` (`Cache-Control: max-age=3600`), served on a dedicated `grain-registry-public` Service port whose Gateway route omits IAP so VMs reaching it via Cloud NAT need no edge identity. Planned 30-day rotation creates a new KMS key version and publishes its public key in the JWKS first, promotes it to active signer after one cache lifetime plus margin (>1 h), and disables the previous version 24 h later. On emergency key disablement, `pkg/jwks` refreshes on seeing an unknown `kid` (rate-limited to once per minute).
 
 ### The grain-side verifier (`registry`)
@@ -655,7 +723,7 @@ Both hosted `instance` VMs and outbound-tunnelled `connected` grains run the **e
 - `Name()` is `registry` (`AuthMethod` and `model.Principal.Source` `model.AuthSource("registry")`: `{human, alice@example.com, registry}`, rendered by `ui.PrincipalLabel` as `alice@example.com (via registry)`).
 - `AccessCodeWins()` is `false` (default `ui.AccessCodePrecedence`: the verified `registry` assertion takes precedence over any access code, matching IAP under `{#AU-10}`).
 - `Headers()` is `["X-Grain-Registry-Assertion"]`, which `Server.relayedByProxy` automatically treats as a proxy header (`{#AU-1}`, `{#AU-13}`).
-- `Verify` validates the signature via `pkg/jwks`, pins `alg` to `ES256` (never `none` or HMAC), checks `iss` and `aud` for exact equality against locally configured `-ui-registry-issuer` and `-ui-registry-audience` (never trusting an inbound header to tell the grain its own audience), enforces `exp`, `nbf`, and `iat` with 30 s skew and `exp - iat <= 5 min`, and fails closed with `401` (`writeAssertionRefused`, `{#AU-2}`, `{#AU-16}`) on any invalid present assertion (`503` with `Retry-After: 5` on `VerifierUnavailableError` while initial JWKS fetch is unreachable, and `401` on any unexpected `act` claim until the delegation design lands).
+- `Verify` validates the signature via `pkg/jwks`, pins `alg` to `ES256` (never `none` or HMAC), checks `iss` and `aud` for exact equality against locally configured `-ui-registry-issuer` and `-ui-registry-audience` (never trusting an inbound header to tell the grain its own audience), enforces `exp`, `nbf`, and `iat` with 30 s skew and `exp - iat <= 5 min`, and fails closed with `401` (`writeAssertionRefused`, `{#AU-2}`, `{#AU-16}`) on any invalid present assertion (`503` with `Retry-After: 5` on `VerifierUnavailableError` while initial JWKS fetch is unreachable, and `401` on a malformed `act` claim: nested, `act.kind` not `service`, top-level `kind` not `human`, or `act.sub` missing). A well-formed `act` sets `VerifiedIdentity.Via`, and admission then requires both the person's allowlist entry and a `delegate:` entry for the app (*Delegated identity*, *Instance side*).
 - The grain's own database `allowed_principal` allowlist and role gate (`pkg/ui/access_principals.go`, `pkg/ui/access_roles.go`, `{#AU-6}`, [`rbac.design.md`](rbac.design.md), with `-deployment-owner=<owner>` pinning the owner's immutable `admin` floor and optional initial seeding of `owner_group`), refusal pages (`writePrincipalRefusedPage` in `pkg/ui/principalrefusal.go`), remote `hostd` owner verification (`hostdConnectIdentity` in `pkg/ui/hostd_connect.go`, `{#AU-17}`–`{#AU-18}`), operator attribution (`ui.RequestActor(ctx)`, [`operator-attribution.design.md`](operator-attribution.design.md)), and `checkVerifiedIdentityCSRF` (`pkg/ui/csrf.go` delegating to `pkg/webauth`, `{#AU-14}`) then apply unchanged.
 - **Mandatory tunnel-listener gate on `connected` grains:** When `-registry-connect` is enabled on a `connected` grain (such as a developer workstation whose TCP listener is bound only to `127.0.0.1:8080` for local CLI use without `-ui-require-verifier=registry`), incoming tunnel streams are served directly in-process over a `MuxListener`—never dialed over `127.0.0.1` TCP, so `Stream.RemoteAddr()` (`stream-<id>-remote`, network `"mux"`) never satisfies `isLoopbackRequest` or `singleTenantTrusted`—and wrapped in an unconditional tunnel-ingress gate that requires a valid `X-Grain-Registry-Assertion` on **every** tunnelled request (including open routes like `/api/hostd/connect`) and never accepts `grain_access` cookies, `X-Grain-Access-Code`, or bearer access codes over the tunnel. Starting `-registry-connect` without `-ui-registry-issuer`, `-ui-registry-audience`, and `-ui-registry-keys-url` fails closed at startup.
 
@@ -1086,7 +1154,7 @@ Both `GET /api/directory` and `GET /api/route` admit:
 - any verified human user in `identity.allowed_domains` (not `disabled`), and
 - any verified service principal (`Kind == PrincipalService`) permitted by `DelegationPolicy.MayReadCatalog` (configured in core via `identity.service_principals`, such as a planning board's or chat bot's service account).
 
-Service principals admitted via `MayReadCatalog` hold **catalog-read access only**: mutating routes and `GET /api/entries` reject them with `403`. When a caller has picked a target grain from `/api/route`, filing a task on that grain still authenticates directly against that grain's own `allowed_principal` / external-agent policy; the follow-up delegated (on-behalf-of) identity design will fill in `DelegationPolicy.AuthorizeOnBehalfOf` and the registry JWT `act` claim so trusted lifecycle services can forward end-user attribution.
+Service principals admitted via `MayReadCatalog` hold **catalog-read access only**: mutating routes and `GET /api/entries` reject them with `403`. When a caller has picked a target grain from `/api/route`, filing a task on that grain either goes as the service principal itself, under that grain's own `allowed_principal` / external-agent policy, or as a person via the app: a registered delegating app sends `X-Grain-On-Behalf-Of` on the request to the entry host, and the registry forwards it with the `act` claim (*Delegated identity*).
 
 ### Latency target and split caching (`hostCache`, `tunnelCache`, and `catalogCache`)
 
@@ -1099,6 +1167,258 @@ Rather than stretching the subdomain `Host` routing cache to serve catalog queri
 | **`catalogCache`** | Immutable snapshot of **`listed = true AND state <> 'deleted'`** entries only, pre-indexed by `repo` (`map[string][]scopedEntry` sorted by role and prefix length) and lowercased search tokens | Background refresh every `3 s` (`catalog.cache_ttl`) + immediate `LISTEN registry_catalog` when `listed`, catalog metadata, or `entry_scopes` change (routine heartbeats with unchanged scopes do **not** emit `NOTIFY`) | Guarantees unlisted entries and `backend_url` never enter the catalog memory structure, and answers `/api/directory` and `/api/route` with **zero SQL queries on the request path** |
 
 **Latency target:** **p50 < 2 ms, p99 < 10 ms** inside the registry pod (< 30 ms end-to-end through the load balancer) for fleets up to several thousand listed entries, with `status` (including `tunnelCache` session presence for `kind = 'connected'`) and `heartbeat_age_seconds` evaluated against `time.Now()` on read so `degraded` / `offline` transitions take effect immediately without waiting for a database write.
+
+## Delegated identity: apps acting for a signed-in person
+
+Integrations above grain, such as a planning board, a chat app or an issue triager, call grain *for* people: "post this reply to the parked task as Roman", "start this work tree as Brandon". Without delegation they have two bad options:
+
+- **Call as a plain service principal.** Attribution names the app, and the grain's allowlist and roles judge the app, not the person who asked.
+- **Use the operator access token.** This is worse: attribution says `operator`, and every role check is bypassed.
+
+Delegation lets a **delegating app** ask the registry to forward one request *as a named person, via the app*. The grain then:
+
+- admits and authorizes the real person;
+- bounds that person by what it lets that app do; and
+- records both of them.
+
+Grain already has verified identity, the `allowed_principal` allowlist (formerly `-ui-allowed-principals`), operator attribution with an `OnBehalfOf` slot, and RBAC. Delegation reuses all four instead of adding a parallel model.
+
+### How an app makes a delegated call
+
+```mermaid
+sequenceDiagram
+  participant P as Roman (in the chat app)
+  participant A as planning-app (service account)
+  participant E as Edge proxy (IAP)
+  participant R as Registry
+  participant G as grain calm-otter-7f3a
+  P->>A: reply "ship it" on task 412
+  A->>E: POST calm-otter-7f3a.grain-user.com/api/tasks/412/comments with app ID token and X-Grain-On-Behalf-Of roman@example.com
+  E->>R: request plus edge assertion naming planning-app@example-prod.iam.gserviceaccount.com
+  R->>R: DelegationPolicy checks registered app, admitted person, live grant covering entry and write
+  R->>G: X-Grain-Registry-Assertion with sub roman, kind human, act planning-app
+  G->>G: registry verifier exposes both identities, allowlist admits roman, delegate entry admits planning-app, scopes are roman's role intersected with the delegate role
+  G-->>R: 201, comment author shown as roman@example.com (via planning-app)
+  R->>R: audit_log row delegated_write with actor roman, via planning-app, grant id
+```
+
+1. **Authenticate as the app.** The app authenticates to the edge as its own service account, exactly as a plain service caller does: an OIDC ID token for the edge audience. `FrontIdentity` verifies it as `Kind == PrincipalService`.
+2. **Name the person.** On a request to an entry host (`https://<name>.<instance-domain>/…`), the app names the person in **`X-Grain-On-Behalf-Of: <email>`**. When its registration requires proof of presence (`require_subject_token`), it also sends **`X-Grain-Subject-Token: <the person's ID token>`**.
+3. **The registry decides.** The registry calls `DelegationPolicy.AuthorizeOnBehalfOf`, described below.
+   - **On success**, it mints the delegated registry JWT (*The registry JWT*: `sub` is the person, `act` is the app).
+   - **Otherwise** it refuses with `403` and JSON `{"code": "delegation_refused", "reason": …}`. The reason is one of `app_not_registered`, `app_disabled`, `person_not_admitted`, `no_grant`, `grant_expired`, `entry_out_of_reach`, `read_only_grant`, `subject_token_required`, `subject_token_invalid`, `not_delegable`, or `delegation_disabled`.
+4. **Strip and forward.** The registry strips `X-Grain-On-Behalf-Of` and `X-Grain-Subject-Token` before forwarding, next to the edge credentials and IAP cookies it already strips. A grain never learns who the person is from a header, only from the signed `act`-bearing assertion.
+
+A request without `X-Grain-On-Behalf-Of` is a plain call and is unchanged (*Plain service calls*). An `X-Grain-On-Behalf-Of` header sent by a **human** caller is refused with `400` (`delegation_requires_service_caller`). A person never needs to delegate to themselves.
+
+**Delegation exists only on entry hosts.** On `<registry-host>`, a request carrying `X-Grain-On-Behalf-Of` is refused with `400` (`delegation_not_supported`). The registry's own control plane only takes direct callers. That covers creating, resizing, deleting and transferring entries, credentials, admin, and granting or revoking delegation itself. An app reads `/api/directory` and `/api/route` as itself.
+
+### Claims: `sub` is the person, `act` is the app
+
+A delegated assertion keeps every rule of *The registry JWT* unchanged: one audience (`https://<name>.<instance-domain>`), `ES256` from the registry's signer, `iat`/`nbf`/`exp` with a 60 s lifetime, `jti` and `rid`. It adds an RFC 8693-style `act` (actor) claim:
+
+```json
+{
+  "iss": "https://grain.example.com",
+  "aud": "https://calm-otter-7f3a.grain-user.com",
+  "sub": "roman@example.com",
+  "email": "roman@example.com",
+  "kind": "human",
+  "act": {
+    "sub": "planning-app@example-prod.iam.gserviceaccount.com",
+    "kind": "service",
+    "app": "planning-app",
+    "grant": "dlg_4f9c2a7e1b",
+    "access": "write"
+  },
+  "iat": 1793900000, "nbf": 1793899970, "exp": 1793900060,
+  "jti": "9b1d…", "rid": "r-5e2…"
+}
+```
+
+| Claim | Rule |
+|---|---|
+| `sub`, `email`, `kind` | The **person**: the normalized email named in `X-Grain-On-Behalf-Of`. `kind` MUST be `human`. Nobody delegates for a service account, and a service account cannot be the subject of a grant. |
+| `act.sub` | The **delegating app's** verified service-principal email, as `FrontIdentity` saw it. It is never taken from a header. |
+| `act.kind` | MUST be `service`. |
+| `act.app` | The app's registered short name (`delegating_apps.name`, `[a-z][a-z0-9-]{1,30}[a-z0-9]`). It is informational, for logs. Grains key every decision on `act.sub` and take display labels from their own `delegate:` entry. |
+| `act.grant` | The consent grant id (`dlg_…`), so the registry's audit, the grain's audit and request logs can be joined. |
+| `act.access` | `read` or `write`, the grant's access class. The grain refuses unsafe methods when this is `read`, as defence in depth next to the registry's own check. |
+
+**Two things are never allowed:**
+
+- **Chains.** A nested `act` inside `act`, as RFC 8693 allows for chains, is never minted, and grains refuse it with `401`. Delegation is exactly one hop: a person, via one app.
+- **Plain service assertions with an `act`.** These keep today's shape, with `sub` as the service account, `kind: service` and no `act`.
+
+**Caching.** The per-replica signed-JWT cache key becomes `(sub, act.sub, act.grant, name)`. A delegated JWT is never served for a plain call or for another grant, and revoking a grant drops its cached JWTs (*Revocation*).
+
+### How the registry decides an app may act for a person
+
+Three ways were considered:
+
+| Option | How it works | What it gets right | Why not on its own |
+|---|---|---|---|
+| **Registry-side allowlist of trusted apps** (per registry, per instance, or per owner) | An admin, or an entry manager for their own entries, lists apps that may name *anyone* | Simplest. No step for people. | A compromised app, or a leaked app key, acts as every person on every grain it reaches. People can neither see nor stop it. A per-owner list puts the decision with the owner of the *grain*, not the owner of the *identity*. |
+| **User consent grant recorded in the registry** | Each person grants a named app, for named entries and an access class, until an expiry | The person decides, sees and revokes. It works for apps that act asynchronously and hold no user token (chat, board automations, reminders). A compromise reaches only consenting people, only within their grants, and only until revoked. | The app still asserts *which* person is talking, so its own user mapping (chat handle to email) must be trusted. |
+| **Token exchange** (proof of the person's own token) | On every call, the app presents the person's ID token from the registry's identity provider | Proves the person is present | Chat platforms and boards usually do not hold the person's token from the registry's identity provider, and asynchronous actions have no live token at all. Every integration would have to run OAuth against that provider and store refresh tokens, which is more secret material than a consent row. It is also the most identity-provider-specific option. |
+
+**Recommendation: consent grants, on top of registered apps.** A delegated request is allowed only when all of these hold:
+
+1. **The caller is a registered delegating app.** A registry admin registers it in `delegating_apps`. Registration gives the app a short name, an accountable human `owner` (with an optional `owner_group`), a ceiling on what any grant may give it, and an off switch. Registration alone lets the app act for nobody.
+2. **The named person is an admitted human on the registry right now.** They are in `identity.allowed_domains` (or `creators`, when the registry admits only that list), are not `disabled`, and are `kind: human`.
+3. **A live consent grant from that person to that app covers the target entry and the request's access class.**
+4. **If the app has `require_subject_token: true`**, `X-Grain-Subject-Token` must carry a valid ID token for the same person. It must come from an issuer in `identity.delegation.subject_token_issuers`, with `aud` equal to `identity.delegation.subject_token_audience`, `email` equal to `X-Grain-On-Behalf-Of`, and `iat` within 10 minutes. It is verified through `pkg/jwks`. Token exchange is therefore a per-app hardening for apps that already sign people into the same identity provider, not the mechanism every app must implement.
+
+The **grain** then applies its own two checks independently (*Instance side*): the person must pass its allowlist and role, and the app must hold a `delegate:` entry on that grain.
+
+Each party holds one key:
+
+- the registry admin decides that the app exists;
+- the person decides that it may act for them;
+- the grain's admin decides that it may act on that grain;
+- the grain's roles decide what the person may do there.
+
+#### Registered apps (`delegating_apps`)
+
+| Field | Meaning |
+|---|---|
+| `name` | Short unique name shown in labels and consent pages (`planning-app`) |
+| `principal` | The app's service principal, `serviceAccount:<email>`. It is unique, and it is matched against `FrontIdentity` exactly as `identity.service_principals` entries are. |
+| `display_name`, `description`, `homepage` | Shown on the consent page and in *Connected apps* |
+| `owner`, `owner_group` | The accountable human, and an optional group, who answer for the app |
+| `max_access` | `read` or `write`. This is the ceiling for every grant to this app. |
+| `max_grant_ttl` | At most `identity.delegation.max_grant_ttl` (default 90 days) |
+| `require_subject_token` | Default `false` |
+| `redirect_uris` | Exact URLs the consent page may return to, which prevents open redirects |
+| `disabled_at`, `disabled_by` | Off switch |
+
+A registered app may also read `/api/directory` and `/api/route` as itself, so it need not be listed again in `identity.service_principals`.
+
+#### Grants (`delegation_grants`): what a grant reaches
+
+A grant is `(app, person, entries, access, expires_at)`. Each person holds at most one live grant per app. Granting again replaces it, widening or narrowing it, and keeps the same `id`.
+
+- **Which entries.**
+  - `entries: ["*"]` reaches every non-deleted entry, listed or unlisted.
+  - A list of names reaches exactly those entries.
+  - The consent page defaults to the entries the app asked for. Granting `*` needs an explicit choice on the page.
+  - Reaching an entry is necessary but not sufficient, because the grain's own allowlist and `delegate:` entry still decide.
+  - A grant never reaches the registry's control plane (above).
+- **Which methods.**
+  - `access: read` allows `GET` and `HEAD`.
+  - `access: write` allows every method.
+  - `access` can never exceed the app's `max_access`.
+  - **Never delegable, whatever the grant:**
+    - protocol upgrades: any `Upgrade:` request, including WebSockets and `/api/hostd/connect`;
+    - streaming responses held open longer than `identity.delegation.max_stream_age` (default 15 min).
+
+    Together these mean no delegated connection can outlive a revocation for long. Refused requests get `403` with `not_delegable`.
+- **How long.** `expires_at` is at most the smaller of the app's `max_grant_ttl` and the registry's `max_grant_ttl`. It defaults to `identity.delegation.default_grant_ttl` (30 days). The person can renew it from *Connected apps*.
+- **For whom.** A grant always names the person who created it. No API lets an app, an admin or an entry manager create a grant for somebody else.
+
+#### Granting
+
+- **In the browser.** The app sends the person to the **consent page** `https://<registry-host>/apps/<app>/connect?entries=<a,b|*>&access=read|write&state=<opaque>&redirect_uri=<registered uri>`.
+  - After IAP sign-in, the page shows the app's `display_name`, `owner`, the entries (with their `display_name`s), the access class and the expiry.
+  - **Allow** posts `POST /api/delegations`, under the registry's same-origin CSRF rules. The page then returns to the matching `redirect_uri` with `?grant=dlg_…&state=…`.
+  - An unregistered or non-matching `redirect_uri` shows the result page without redirecting.
+- **From the CLI.** `grain registry delegations grant <app> --entries a,b|'*' --access read|write [--ttl 720h]`.
+
+Granting requires a **direct, verified human caller**: never a service principal, and never a delegated request.
+
+#### Revocation
+
+- **By the person:**
+  - *Connected apps* page → **Revoke**;
+  - `DELETE /api/delegations/<id>`; or
+  - `grain registry delegations revoke <app|id>`.
+- **By a registry admin:**
+  - revoke any grant;
+  - **disable** an app, which stops all of its grants (re-enabling restores the grants that have neither expired nor been revoked); or
+  - **delete** an app, which revokes all of its grants permanently.
+- **Automatically:**
+  - when `expires_at` passes;
+  - when the person is `disabled` or no longer admitted (their grants are inert, and are revoked once they have been off for `reservation_period`);
+  - when the app is deleted.
+- **On the grain**, independently: the grain's admin removes the app's `delegate:` entry (`grain access deny delegate:<email>`). This takes effect on the next request and needs nothing from the registry.
+
+**How fast it takes effect.** A grant or app change is committed in the transaction that writes `audit_log`, then announced with `NOTIFY registry_delegations`. Each replica then:
+
+- drops the grant from its `delegationCache` (5 s TTL fallback);
+- drops every cached JWT carrying that `act.grant`; and
+- closes any in-flight delegated stream for that grant.
+
+The next request is refused, within about 1 s, and in the worst case within `identity.delegation.cache_ttl` (5 s). A JWT already forwarded covers one request, is bound to one audience, lives at most 60 s, and travels only from the registry to the grain. The app never holds it, so it has nothing to replay.
+
+### Instance side
+
+The grain-side rules are specified in [`authentication.design.md`](authentication.design.md) §6 and [`authentication.spec.md`](../spec/authentication/authentication.spec.md) `{#AU-22}`–`{#AU-27}`. In summary:
+
+- **The `registry` verifier exposes both identities.** `VerifiedIdentity` gains `Via *DelegatingApp` (`Email`, `Name`, `Grant`, `Access`), set only from a well-formed one-level `act`. A malformed `act` gets `401` and never falls back to the access code (`{#AU-2}`). Malformed means a nested `act`, `act.kind` other than `service`, top-level `kind` other than `human`, or a missing `act.sub`.
+- **Admission checks the person, and requires the app to be allowed to delegate on this grain.**
+  - The person must pass `allowed_principal` exactly as a direct caller (`user:` and `group:`, plus `domain:` under RBAC; `{#AU-6}`–`{#AU-9}`).
+  - The app must match a **`delegate:<service-account-email>`** entry on the grain's allowlist. That is a new entry prefix, added only by a verified human admin or an access-code admin, with a required reason, and refused to every agent.
+  - Without a matching `delegate:` entry, the request gets `403` and the refusal page *"planning-app is not allowed to act for people on this grain"*.
+  - A `serviceAccount:` entry for the same account does **not** let it delegate, and a `delegate:` entry does not admit it as a plain caller.
+- **Roles intersect.** The request holds the person's current role (the union of their matching entries' scope sets, `{#AU-6}`; `rbac.design.md`'s `admin`/`writer`/`reader`) **intersected with** the `delegate:` entry's role. This is the same rule `rbac.design.md` §3 applies to agents acting `OnBehalfOf` a person (`{#RB-13}`), so demoting or removing the person takes effect on their next delegated request.
+  - A `delegate:` entry's role MUST NOT include a dangerous scope (`model.IsDangerousAPIScope`), `access:write`, or any admin-only permission.
+  - Core ships a built-in `grain/delegated` scope set: read everything a writer reads, file and edit tasks, comment and reply, approve non-admin-only grants, and start or resume work.
+- **Attribution records both.** `ui.RequestActor(ctx)` returns `Attribution{Actor: {service, <app-email>, registry}, OnBehalfOf: {human, roman@example.com, registry}}`, stored in the existing actor and on-behalf-of columns. `ui.PrincipalLabel` renders it as **`roman@example.com (via planning-app)`**, taking the app's label from the `delegate:` entry's `label`, or else the local part of its email.
+  - `Requested-by:` trailers name the person.
+  - `Approved-by:` names the person when the approval was delegated.
+  - `GET /api/auth/user` and `GET /api/whoami` report `actor: service:<app-email>`, `onBehalfOf: user:<email>` and `via: <label>`.
+- **Person-only operations stay person-only.** Some operations require `Actor.Kind == human` and are refused to delegated requests with `403` (`requires_person`), whatever both roles allow:
+  - changing the allowlist or roles;
+  - minting or rotating `gma_…` tokens that carry dangerous or `requires_person` scopes (`{#AU-11}`);
+  - approving `IsAdminOnlyGrant` grants;
+  - registering `hostd`s.
+- **CSRF, loopback and break-glass rules are unchanged.**
+  - Delegated calls are server-to-server and cookie-less, so `checkVerifiedIdentityCSRF` passes them as programmatic callers (`{#AU-14}`).
+  - The registry additionally refuses with `403` (`delegation_from_browser`) any request that carries `X-Grain-On-Behalf-Of` together with a `Cookie`, `Origin` or `Sec-Fetch-Site` header, so a browser can never trigger delegation.
+  - Unproxied-loopback break-glass with the access code (`{#AU-13}`) and the mandatory tunnel-ingress gate on `connected` grains are untouched.
+  - A delegated identity never satisfies `hostd` owner matching (`{#AU-18}`).
+
+### Plain service calls (no person)
+
+Plain service principals keep `kind: service` with no `act`. **On the registry:**
+
+- A service principal may read `GET /api/directory` and `GET /api/route` when it is listed in `identity.service_principals` or is a registered delegating app (`DelegationPolicy.MayReadCatalog`).
+- The registry forwards a plain service principal to an entry host only under the same condition. Any other service principal that gets past the edge is refused with `403` at the registry, so a stray workload identity never reaches a grain.
+- Plain service principals never use the registry's control plane: entries, credentials, transfers, delegations or admin. The exception is a `connected` entry's own `connected_principal` on `/heartbeat` and `/connect`, which is unchanged.
+
+**On a grain**, a plain service principal is admitted only by an explicit `serviceAccount:` entry with a reason (`{#AU-6}`), and attributed to itself alone. It never renders as a person and never fills `Requested-by:`. The recommended role for such an entry is read-only, such as a `reader` / `grain/ci-read`-style scope set. Writes that represent a person's intent should arrive delegated, so they carry the person:
+
+| Operation | Plain service principal | Delegated (person via app) | Person directly |
+|---|---|---|---|
+| Read `/api/directory`, `/api/route` | Yes, if in `service_principals` or a registered app | Not applicable: the app reads as itself | Yes |
+| Read grain status, tasks, CI, `/api/registry/status` | Yes, within its `serviceAccount:` entry's role | Yes, within person ∩ `delegate:` role | Yes, within role |
+| File or edit a task, reply to a parked task, comment, approve a non-admin-only grant, start a work tree | Not by default. A grain admin may grant write scopes to a `serviceAccount:` entry with a reason, for genuine automation, and those writes attribute to the app alone. | Yes, within person ∩ `delegate:` role | Yes, within role |
+| Change the allowlist or roles, mint dangerous `gma_…` tokens, approve admin-only grants, register `hostd`s, connect a `hostd` | Never | Never | Yes, by role |
+| Registry control plane (entries, transfers, credentials, delegations, admin) | Never | Never | Yes, by registry rules |
+
+### Audit
+
+- **Registry.**
+  - `audit_log` gains `via` (the delegating app's `name`, NULL for direct callers) and `grant_id`. For a delegated row, `actor` is the person.
+  - New actions: `app_register`, `app_update`, `app_disable`, `app_enable`, `app_delete`, `delegation_grant`, `delegation_update`, `delegation_revoke` and `delegation_expire`.
+  - **Every delegated request with an unsafe method** writes a `delegated_write` row: `actor` is the person, `via` the app, `grant_id` the grant, `name` the entry, and `detail` holds `{method, path, status, jti, rid}`. The path is recorded without its query string.
+  - Delegated reads are counted in `delegation_usage` (per grant, entry and UTC day; batched every 30 s) rather than logged row by row.
+  - Refusals write a deduplicated `delegation_refused` row: at most one per `(app, person, entry, reason)` per hour.
+  - Every delegated request also emits one structured log line with `rid`, `jti`, `sub`, `act.sub`, `act.grant`, `name`, `method`, `path` and `status`.
+  - People see their own grants' usage on *Connected apps*. App owners see their app's usage. Admins see everything on *Admin → Apps* and *Audit*.
+- **Grain.**
+  - Every delegated write stores `Actor` (the app) and `OnBehalfOf` (the person) through the existing attribution columns: task origin and approval actor and behalf, comment author and author behalf, `task_event` behalf, and `config_audit`'s `actor` and `on_behalf_of` ([`operator-attribution.design.md`](operator-attribution.design.md)).
+  - The grain's request log records `registry_rid`, `registry_jti` and `delegation_grant` for each delegated request, so a grain-side event joins to the registry's `delegated_write` row on `jti` and `rid`.
+  - `Settings → Access` lists `delegate:` entries with who added them, why, and when each was last used.
+
+### Rate limits for delegated traffic
+
+Delegated traffic counts against the existing per-entry proxy limits, plus two limits per app:
+
+- 50 req/s with a burst of 100 per `(app, entry)`;
+- 30 unsafe-method requests per minute per `(app, person)`.
+
+One busy or compromised app therefore cannot starve an entry or flood a person's audit trail. Exceeding a limit returns `429` with `Retry-After`.
 
 ## Authorization rules
 
@@ -1123,7 +1443,11 @@ Every entry keeps a single accountable human **`owner`** (`owners.email`) and ad
 | Set or clear `owner_group` | `owner` (caller must belong to target group unless admin), or an existing `owner_group` member belonging to target group, or Admins |
 | Accept a pending ownership transfer (`…/transfer/accept`) | Only the named recipient `user:<to>`, within `to`'s personal quota |
 | See all entries (listed & unlisted) and scope conflicts, delete or hard-purge any, force-transfer, restore any, change quotas and shapes, disable an owner, manage orphans | Admins |
-| Use a running grain (`instance` or tunnelled `connected`) | Decided solely by the grain's own `allowed_principal` and `rbac.design.md` roles, never by the registry |
+| Register, update, disable, enable or delete a delegating app (`/api/admin/apps`) | Admins |
+| Grant, widen, narrow, renew or revoke delegation *for yourself* (`/api/delegations`, consent page) | Any admitted human, directly. Never a service principal, a delegating app, or a delegated request. |
+| Revoke any person's grant, see every app's usage | Admins. An app's `owner` / `owner_group` sees that app's grants and usage, but cannot create or widen grants. |
+| Send a delegated request (`X-Grain-On-Behalf-Of`) to an entry host | A registered, enabled delegating app holding a live grant from that admitted person that covers the entry and access class; then the grain's own `delegate:` entry and the person's role decide |
+| Use a running grain (`instance` or tunnelled `connected`) | Decided solely by the grain's own `allowed_principal` and `rbac.design.md` roles, never by the registry. A delegated request needs both the person's entry and the app's `delegate:` entry. |
 
 ## APIs and UI
 
@@ -1151,6 +1475,13 @@ Served over HTTPS on **`https://<registry-host>/api/`** behind `FrontIdentity` (
 | `DELETE /api/entries/<name>` | Body `{"confirm": "<name>"}`. Deletes VM and fences state for retention (`202` for `instance`; immediate credential revocation, active tunnel termination, and name reservation for `connected`) |
 | `POST /api/entries/<name>/transfer` / `…/accept` | Two-step accountable `owner` transfer (`{to, clear_owner_group?}`) |
 | `GET /api/names/<name>` | Availability check (`free`, `taken`, `reserved`, `invalid`) |
+| `GET /api/apps` / `GET /api/apps/<app>` | Public metadata of enabled delegating apps (`name`, `display_name`, `description`, `homepage`, `owner`, `max_access`) for the consent page and *Connected apps* |
+| `GET /apps/<app>/connect` | **(browser)** Consent page (`?entries=<a,b\|*>&access=read\|write&state=…&redirect_uri=…`). It returns only to an exact registered `redirect_uri`. |
+| `GET /api/delegations` | Caller's own grants (live, expired and revoked in the last 30 days) with per-entry usage from `delegation_usage`. Admins: `?app=…`, `?person=…`. App owners: `?app=<their app>`. |
+| `POST /api/delegations` | Create or replace the caller's grant `{app, entries, access, ttl?}` (`201`; same `id` on replace). Direct human callers only. Validated against the app's `max_access` and `max_grant_ttl`. |
+| `DELETE /api/delegations/<id>` | Revoke (the grant's person or an admin). Takes effect on every replica within about 1 s (`NOTIFY registry_delegations`). |
+| `GET/POST /api/admin/apps`, `PATCH/DELETE /api/admin/apps/<app>` | Register, update, `{disabled: true\|false}`, or delete a delegating app (admins) |
+| *Any request to `https://<name>.<instance-domain>/…` with `X-Grain-On-Behalf-Of`* | Delegated request (*Delegated identity*): `403 delegation_refused` with a `reason`, `403 not_delegable` for upgrades, `429` past the per-app limits, otherwise proxied with an `act`-bearing JWT |
 | `GET /api/admin/…` / `POST /api/admin/…` | Owners, group overrides, quotas, scope conflicts, active tunnel sessions, SQL pool utilisation, orphans, hard purge, fleet versions, audit log |
 | `GET /.well-known/jwks.json` | **(public listener)** Public signing keys for registry-minted instance JWTs |
 | `GET /healthz` | Liveness and readiness (registry database reachable; returns not-ready during `SIGTERM` tunnel drain) |
@@ -1171,6 +1502,11 @@ Implemented in `pkg/cli` importing **only `pkg/registry/api`** (enforced by `pkg
   - `grain registry scopes <name> [--set <repo>:<prefix>:<primary|secondary> … | --clear-declared]` — inspect or replace registry-declared scope overrides.
   - `grain registry rotate-credential <name> [--revoke-previous]` — rotate a `connected` entry's `grc_…` registration credential.
   - `grain registry upgrade <name>`, `resize <name> <shape>`, `delete <name>`, `restore <name>`, `transfer <name> <email>`, `accept-transfer <name>` — lifecycle and ownership commands.
+- **Delegation (any admitted human, for themselves):**
+  - `grain registry delegations list` — the caller's grants with app, entries, access, expiry, last use and per-entry usage.
+  - `grain registry delegations grant <app> --entries <a,b|'*'> --access read|write [--ttl <dur>]` — create or replace the caller's grant to `<app>`.
+  - `grain registry delegations revoke <app|dlg_id>` — revoke it.
+- **Delegating apps (admins):** `grain registry apps list|show|register|update|disable|enable|delete` (`register <name> --principal serviceAccount:<email> --owner <email> --max-access read|write [--require-subject-token] [--redirect-uri …]`).
 
 ### UI (`ui-registry/`)
 
@@ -1185,7 +1521,8 @@ Built from the standalone `ui-registry/` React app (sharing design tokens and ac
   - **Scopes panel**: table showing self-`reported` scopes (read-only badge: *"Reported by grain from repo config"*) alongside editable `declared` scope overrides (`repo`, `path_prefix`, `role`), highlighting effective precedence and any `conflict_with` warning with a direct link to the conflicting listed entry.
   - **Credentials & lifecycle actions**: `grc_…` credential prefixes, `last_used_at`, **Rotate token** / **Revoke** for `connected` entries, shape/upgrade controls on `instance` entries, and entry audit history.
 - **Delete confirmation**: requires typing `<name>`; explains that for `instance` entries active sandboxes stop immediately while DB, secrets, transcripts, and config repo remain recoverable during `db_retention_period`, whereas for `connected` entries credentials are revoked and any active outbound tunnel is closed immediately without touching the remote grain process.
-- **Admin (`/admin`)** and **Status (`/status`)**: all entries (listed and unlisted), active outbound tunnels per replica, active scope conflicts, owners and `owner_group` bindings, quotas, Cloud SQL pool database counts and sizes, orphans, fleet versions, reconciler lease lag, and audit log.
+- **Connected apps (`/apps`)**: the caller's delegation grants. Each shows the app's `display_name` and owner, the entries (or *all grains*), the access class, the expiry with **Renew**, the last use with per-entry counts, and **Revoke**. The consent page (`/apps/<app>/connect`) shares the same components.
+- **Admin (`/admin`)** and **Status (`/status`)**: delegating apps (register, disable, usage) and all entries (listed and unlisted), active outbound tunnels per replica, active scope conflicts, owners and `owner_group` bindings, quotas, Cloud SQL pool database counts and sizes, orphans, fleet versions, reconciler lease lag, and audit log.
 - **Instance-host error exception (`<name>.<instance-domain>`)**: kept as tiny self-contained server-rendered Go HTML pages with inline CSS (`503` including offline `connected` pages naming `owner`/`owner_group` and `last_seen_at`, `410`, `502`, and `404`) so instance subdomains never load `ui-registry/` JS bundles.
 
 ## Scale and HA
@@ -1218,6 +1555,14 @@ identity:
   # creators: [group:grain-early-adopters@example.com]  # optional; omit so every admitted user can create
   service_principals:                      # non-human callers permitted to read /api/directory and /api/route
     - serviceAccount:lifecycle-router@example-prod.iam.gserviceaccount.com
+  delegation:                              # apps acting for people (see Delegated identity); apps live in delegating_apps
+    policy: consent                        # consent (default) | static (no delegation) | <wrapper-registered policy>
+    default_grant_ttl: 720h                # 30 days
+    max_grant_ttl: 2160h                   # 90 days; caps every app's max_grant_ttl
+    max_stream_age: 15m                    # delegated streaming responses are closed after this
+    cache_ttl: 5s                          # delegationCache fallback alongside LISTEN registry_delegations
+    subject_token_issuers: []              # OIDC issuers accepted in X-Grain-Subject-Token (apps with require_subject_token)
+    subject_token_audience: ""             # required audience of those tokens; required when any issuer is set
 
 names:
   default_random: true                     # generate random name when POST /api/entries omits name
@@ -1295,7 +1640,7 @@ database:
   instance: grain-registry:us-central1:registry
 ```
 
-At startup the registry validates configuration and refuses to start if `host` is a subdomain of `instance_domain` (or equal to it in `subdomain` mode), if `vm_prefix` or `sa_prefix` is empty or invalid, if zones fall outside `region`, if `sql_instances` is empty when `compute.provider != "none"`, if `allowed_domains` is empty, if `catalog.offline_after <= catalog.degraded_after`, or if `tunnel.replica_ttl <= tunnel.replica_heartbeat` or `tunnel.max_concurrent_streams <= 0`.
+At startup the registry validates configuration and refuses to start if `host` is a subdomain of `instance_domain` (or equal to it in `subdomain` mode), if `vm_prefix` or `sa_prefix` is empty or invalid, if zones fall outside `region`, if `sql_instances` is empty when `compute.provider != "none"`, if `allowed_domains` is empty, if `catalog.offline_after <= catalog.degraded_after`, or if `tunnel.replica_ttl <= tunnel.replica_heartbeat` or `tunnel.max_concurrent_streams <= 0`, or if `identity.delegation.default_grant_ttl > identity.delegation.max_grant_ttl`, or if `subject_token_issuers` is non-empty without `subject_token_audience`.
 
 ## Rollout
 
@@ -1304,9 +1649,12 @@ At startup the registry validates configuration and refuses to start if `host` i
    - The registry service (`cmd/grain-registry`) and React UI (`ui-registry/`): IAP + service-principal verification via `pkg/webauth`, wildcard `Host` routing (`<name>.<instance-domain>`) and separate `<registry-host>` UI/API, pre-strip CSRF enforcement, JWT minting, public JWKS + `X-Grain-Auth: token` `/heartbeat` and `/connect` listener (`grain-registry-public`), outbound-tunnel reverse proxying (`ConnectTransport`, `tunnel_sessions` fencing, `:8082` replica-to-replica peer forwarding, `2 s` reconnect grace, rate/stream caps, and offline `503` pages naming `owner` and `last_seen_at`), GCE / Cloud SQL / Secret Manager / GCS / GitHub config-repo reconciler with direct VPC proxying (`backend_url`) and 15 s status polling, catalog metadata and (`repo`, `path_prefix`, `role`) scopes, `owner_group` co-management, `GET /api/directory` + `GET /api/route`, and the `grain registry` CLI.
    - Reference Kubernetes and Terraform deployment assets under `deploy/kubernetes/registry/` and `deploy/terraform/gcp/registry/` (including `X-Grain-Auth: token` Gateway `HTTPRoute`, `timeoutSec: 86400` upgraded-connection backend configs, and `:8082` `NetworkPolicy`), plus the minimal `grain-registry` container image published to `docker.io/grainai/registry` in CI/release scripts once `cmd/grain-registry` lands.
 2. **Formal spec, admin recovery, and ownership transfer.** Authoritative `design/spec/registry/registry.spec.md`, admin UI (`Owners`, `Quotas`, active outbound tunnels, active scope conflicts, SQL pool view, `Orphans`, `Audit`), self-service and admin `restore` during `db_retention_period`, hard purge, and two-step accountable `owner` transfer composing with `owner_group`.
-3. **Fleet lifecycle policies and follow-up delegation extension.**
+3. **Fleet lifecycle policies and delegated identity.**
    - Scheduled fleet upgrades (`auto_upgrade: off | notify | minor` driving `replacing` during idle/maintenance windows) and `stopping`/`stopped` with auto-wake on visit so occasional hosted instances consume zero VM compute while idle.
-   - **Follow-up design (hook already reserved above):** delegated (`act` / on-behalf-of) identity via `DelegationPolicy` so planning boards and chat bots can file tasks on routed grains (both hosted instances and tunnelled `connected` entries) as the invoking human.
+   - **Delegated identity** (*Delegated identity*), shipped grain side first so a registry never mints an `act` that a grain cannot understand:
+     1. **Grains:** `VerifiedIdentity.Via`, `act` parsing in the `registry` verifier, `delegate:` allowlist entries with role intersection, `requires_person` refusals, and the `(via <app>)` label. A grain with no `delegate:` entry refuses every delegated request, so upgrading grains changes nothing until a grain admin opts in.
+     2. **Registry:** `delegating_apps`, `delegation_grants`, the `"consent"` policy, `X-Grain-On-Behalf-Of` handling, the consent page and *Connected apps*, audit and usage. Ships with `identity.delegation.policy: static` as the default for one release, then `consent`.
+     3. **First integration:** one planning-board or chat integration registered by an admin, piloted with a few people who grant it consent on a few named entries before anyone grants `*`.
 4. **Optional path-routing mode (if needed).** Only if small single-team installations ask for single-hostname deployments without wildcard DNS: `-ui-base-path`, CLI/hostd URL path-joining, CSP floor, and `routing: path`.
 5. **Production installation (separate next step).** Standing up the production installation—selecting the concrete `instance_domain` and `host`, GCP projects and GKE cluster, IAP client, Cloud KMS key, shared Cloud SQL pool, and DNS-authorized wildcard certificates—is tracked as its own step once the registry code and reference manifests land.
 
@@ -1386,19 +1734,28 @@ All open questions were decided by bsalmon on 2026-11-05 (the production install
 12. **Direct VPC proxying vs outbound tunnel for hosted VMs (`kind = instance`).** **Decided:** hosted VMs keep direct VPC proxying (`backend_url`, `http://<internal-ip>:8080` in v1) while `connected` entries use `/api/entries/<name>/connect`. Direct VPC proxying keeps hosted VMs completely free of registry credentials and registry-bound egress, stays stateless 1-hop across all registry pods with zero rollout redials, avoids `wsupgrade`/`mux` framing CPU overhead inside the VPC, and lets the reconciler probe `/healthz` directly during `creating`/`replacing`.
 13. **Image repository and production installation.** **Decided:** publish the core `grain-registry` image as **`docker.io/grainai/registry`**, beside `grainai/grain`, `grainai/sandbox`, and `grainai/sandbox-k8s`, using the same Docker Hub credentials (`DOCKER_PAT`), built and published once the registry code exists (plan #9) and not before. **Deferred (not open):** the production installation (instance domain, GCP project and cluster, IAP client, KMS key, Cloud SQL, certificates) is a separate next step rather than an open question; the design's deployment-agnostic seams and reference Terraform remain as they are.
 
+### Open questions for delegated identity (task 3130)
+
+These carry recommendations and await a decision:
+
+14. **How the registry decides an app may act for a person.** **Recommended:** per-person consent grants on admin-registered apps, with token exchange as an optional per-app hardening (`require_subject_token`). Neither a registry-wide trusted-app allowlist (any person, no consent) nor mandatory token exchange (excludes asynchronous and chat integrations) is used on its own. See *How the registry decides an app may act for a person*.
+15. **Who registers delegating apps.** **Recommended:** registry admins only, with an accountable human `owner`. Self-service registration by any admitted user, held for admin approval, can follow if demand appears.
+16. **Grant reach default.** **Recommended:** the consent page defaults to the entries the app asked for, makes `*` an explicit choice, defaults to 30 days and caps at 90 days.
+17. **Plain service principals writing on grains.** **Recommended:** keep it possible (an admin grants write scopes to a `serviceAccount:` entry with a reason) for genuine automation, but document read-only as the default, and steer integrations that act for people to delegation so writes carry the person.
+
 ## Implementation plan
 
 These are the implementation tasks in dependency order (for example, step #7 corresponds to task 3131). Standing up the production installation follows as a separate step once the code and reference deployment assets land.
 
 1. **Shared `pkg/webauth`, `pkg/registry/api` wire & tunnel-client package, and import-boundary test.** Extract IAP JWT verification, `GroupMemberChecker`, and Fetch-Metadata / `Origin` CSRF helpers from `pkg/ui` into `pkg/webauth` (re-exporting/using them in `pkg/ui` with zero behaviour change); create `pkg/registry/api` (wire DTOs for entries, catalog metadata, scopes, heartbeats, directory, route, typed HTTP client, plus `ConnectDialer`, `RegisterConnectDialer`, and `MuxListener` built on `pkg/tunnel/{wsupgrade,mux}`); add `pkg/registry/independence_test.go` allowing `pkg/tunnel/...` and `pkg/webauth` while enforcing both directions of the import boundary. No dependencies.
 2. **Grain: generalise `-ui-require-iap` to `-ui-require-verifier`.** Single rule in `accessCodeAccepted`, keeping `-ui-require-iap` as an alias, with unit tests. Depends on 1.
-3. **Grain: the `registry` `IdentityVerifier`.** Flags `-ui-registry-issuer`, `-ui-registry-audience`, `-ui-registry-keys-url`; signature, algorithm, issuer, single-audience (`https://<name>.<instance-domain>`), reserved `act`-claim rejection (until delegated-identity support is enabled), and lifetime checks via `pkg/jwks`; `AuthMethod`/`Source` `registry`. Depends on 2.
+3. **Grain: the `registry` `IdentityVerifier`.** Flags `-ui-registry-issuer`, `-ui-registry-audience`, `-ui-registry-keys-url`; signature, algorithm, issuer, single-audience (`https://<name>.<instance-domain>`), `act`-claim rejection (until step 19 accepts well-formed delegated assertions), and lifetime checks via `pkg/jwks`; `AuthMethod`/`Source` `registry`. Depends on 2.
 4. **Grain: PostgreSQL single-writer advisory lock, DB webhook cursor, and `-disable-self-upgrade`.** Session-level `pg_try_advisory_lock` fence on Postgres startup, moving `github-webhook-cursor.json` into Postgres when running on Postgres, and `-disable-self-upgrade` hiding in-VM self-upgrade actions in favour of an optional external management URL. No dependencies.
 5. **Grain: Secret Manager backend for `pkg/secrets`.** `-secrets-backend=secretmanager` and `-secrets-sm-prefix`, secret-name catalogue table in Postgres (avoiding project-wide `secrets.list`), version cleanup on update, and tests against a fake Secret Manager HTTP server. No dependencies.
 6. **Grain: GCS object store for transcripts, CI artifacts, and durable session bundles.** `-object-store=gs://<bucket>/instances/<name>/` flushing run transcripts, uploaded CI artifacts, and durable `agent-sessions` archives to GCS with local read-through caching, tested against an in-memory object-store fake. No dependencies.
 7. **Grain: registry status endpoint, `connected` heartbeat reporter, and outbound tunnel supervisor (`-registry-connect`, task 3131).** Loopback/internal `GET /api/registry/status` (version, commit, health, active/awaiting task counts, and self-reported scopes derived from `RepoConfig` + `WorkOwnership`, excluding the `grain/config` repo), background reporter calling `PUT /api/entries/<name>/heartbeat` every ~15 s via `pkg/registry/api`, and `-registry-connect` supervisor dialing `wss://<registry-host>/api/entries/<name>/connect` (`grc_…` or `FrontIdentity` OIDC, `HTTPS_PROXY` support, `250 ms` → `30 s` jittered redial backoff, `23 h` graceful session rotation) and serving accepted `mux` streams in-process via `MuxListener` behind an unconditional `X-Grain-Registry-Assertion` verifier gate (rejecting loopback/access-code shortcuts on tunnel streams). Depends on 1 and 3.
 8. **Grain: replaceable VM image and `grain-instance-init`.** Bake per-release Compute Engine images into family `grain-release` with `cloud-sql-proxy` (`--auto-iam-authn`), `grain-instance-init.service` (reads `grain-config` metadata, fetches `local-api-token` and `config-repo-key` from Secret Manager into `/run/grain-secrets`, clones the per-instance config repo, writes `/etc/grain/daemon.env` including `-deployment-owner`), and bounded systemd shutdown drain. Depends on 3–7.
-9. **Registry: service skeleton, `pkg/registry/store`, `registry.Main()` extension hooks, and `docker.io/grainai/registry` release target.** `cmd/grain-registry` calling `registry.Main()`, `RegisterFrontIdentity` / `RegisterGroupResolver` / `RegisterDelegationPolicy` (with refuse-all stub) / `RegisterConnectTransport` (default `"ws-mux"`) / provider seam registries, config validation (`host` vs `instance_domain`, `catalog` thresholds, `tunnel` limits, prefixes, SQL pool), `pkg/registry/store` PostgreSQL migrations (`entries` with `FILLFACTOR = 80` and scheme-qualified `backend_url`, `entry_scopes`, `entry_credentials`, `replicas`, `tunnel_sessions`, `quotas`, `leases`, `audit_log`), `pkg/webauth` IAP + service-principal + optional `creators` admission, `Signer` (`kms` and `local`), public JWKS listener, `/healthz`, metrics, and `Dockerfile.registry` / `Makefile` / `scripts/release-images.sh` + release workflow publishing **`docker.io/grainai/registry`** beside `grainai/grain`, `grainai/sandbox`, and `grainai/sandbox-k8s` via `DOCKER_PAT` (built and published once this code exists, not before). Depends on 1.
+9. **Registry: service skeleton, `pkg/registry/store`, `registry.Main()` extension hooks, and `docker.io/grainai/registry` release target.** `cmd/grain-registry` calling `registry.Main()`, `RegisterFrontIdentity` / `RegisterGroupResolver` / `RegisterDelegationPolicy` (with `"static"`: catalog readers only, delegation refused, until step 20) / `RegisterConnectTransport` (default `"ws-mux"`) / provider seam registries, config validation (`host` vs `instance_domain`, `catalog` thresholds, `tunnel` limits, prefixes, SQL pool), `pkg/registry/store` PostgreSQL migrations (`entries` with `FILLFACTOR = 80` and scheme-qualified `backend_url`, `entry_scopes`, `entry_credentials`, `replicas`, `tunnel_sessions`, `quotas`, `leases`, `audit_log`), `pkg/webauth` IAP + service-principal + optional `creators` admission, `Signer` (`kms` and `local`), public JWKS listener, `/healthz`, metrics, and `Dockerfile.registry` / `Makefile` / `scripts/release-images.sh` + release workflow publishing **`docker.io/grainai/registry`** beside `grainai/grain`, `grainai/sandbox`, and `grainai/sandbox-k8s` via `DOCKER_PAT` (built and published once this code exists, not before). Depends on 1.
 10. **Registry: subdomain routing, outbound-tunnel acceptor, peer forwarding, and reverse proxy (`pkg/registry/server`).** `Host` extraction for `<name>.<instance-domain>` vs `<registry-host>`, per-`kind` backend dispatch (`backend_url` for `instance`, outbound tunnel for `connected`), `hostCache` + `LISTEN registry_entries`, `tunnelCache` + `LISTEN registry_tunnels`, `GET /api/entries/<name>/connect` (`grc_…` on `grain-registry-public` and `owner`/`owner_group`/`connected_principal` on `grain-registry`, `session_id` fencing, `IsServer: true`, `MaxPeerInitiatedStreams = 0`, `256` stream cap, `16 MiB` buffer cap, connect/request rate limits, immediate disconnect on delete/revoke/transfer, graceful `SIGTERM` drain), `:8082` replica-to-replica peer forwarder (`X-Registry-Peer-Auth` with `aud = "urn:grain:registry:peer"`, single-hop `X-Registry-Hop` guard, `2 s` `reconnect_grace`), pre-strip CSRF verification, IAP cookie and edge-credential header stripping, `Host` preservation, `Set-Cookie` `Domain` stripping, per-request JWT signing/caching, SSE + WebSocket/`hostd` upgrade streaming, and self-contained inline-CSS `503`/`410`/`502`/`404` instance-host state pages (including offline `connected` `503` naming `owner`/`owner_group` and `last_seen_at`). Depends on 9.
 11. **Registry: `pkg/registry/providers/gcp` and `pkg/registry/reconcile`.** GCE `Compute` with prefix/label scope checks, per-instance GSA provisioner, shared Cloud SQL database + IAM user provisioner (`REVOKE … FROM PUBLIC`, `CONNECTION LIMIT`, placement across `sql_instances`), GCS Managed Folder and Secret Manager conditional IAM provisioner, GitHub per-instance config-repo + deploy-key provisioner, and reconciler loops for `creating` (recording scheme-qualified `backend_url`), `replacing` (drain → delete → create → health check → switch), `deleting`, delayed `purge_after` cleanup, expired `replicas` cleanup, 15 s `<backend_url>/api/registry/status` polling into `entries` + `entry_scopes(source='reported')`, and orphan reporting under the database lease. Depends on 9.
 12. **Registry: catalog metadata, `owner_group`, `connected` heartbeats, `/api/directory`, and `/api/route`.** Entry CRUD (`instance` and `connected`) + random/custom naming + weighted `instance` unit and per-owner `connected` quotas, `owner_group` authorization via `GroupResolver`, `entry_scopes` (`reported` + `declared` combination, synchronous `409` and async `conflict_with` primary-prefix conflict rules), `PUT /api/entries/<name>/heartbeat` (`grc_…` SHA-256 token + `FrontIdentity` auth, token rotation with immediate tunnel revocation on revoked `cred_id`, HOT-friendly updates), and `catalogCache`-backed `GET /api/directory` and `GET /api/route`. Depends on 10 and 11.
@@ -1409,4 +1766,10 @@ These are the implementation tasks in dependency order (for example, step #7 cor
 17. **Scheduled fleet upgrades and stop/start with auto-wake on visit** (rollout step 3a). Depends on 11 and 12.
 18. **Docs.** `docs/registry.md` covering hosted instances, outbound-tunnel and self-registering `connected` grains, catalog scopes, `owner_group`, and `/api/directory` + `/api/route`, plus an update to `docs/access-code.md` covering `-ui-require-verifier=registry` and break-glass SSH. Depends on 3 and 13.
 
-*(Separate follow-up steps—not part of this plan—will stand up the production installation and specify on-behalf-of delegated task submission via `DelegationPolicy` and the registry JWT `act` claim.)*
+19. **Grain: delegated identity on the instance side** (rollout step 3b-1). `VerifiedIdentity.Via` from a well-formed one-level `act` in the `registry` verifier (`401` on a malformed one), `delegate:<email>` allowlist entries (reason required, person-only to add, no dangerous scopes, `access:write` or admin-only permissions in the role, optional `label`), admission requiring both the person and the `delegate:` entry, person ∩ delegate role intersection through the `RB-13` path, `Attribution{Actor: app, OnBehalfOf: person}` with the `(via <label>)` label, `Requested-by:` naming the person, `requires_person` refusals, `hostd` refusal, `act.access = read` refusal of unsafe methods, a built-in `grain/delegated` scope set, `Settings → Access` listing, and `authentication.spec.md` `AU-22`–`AU-27` tests. Depends on 3.
+20. **Registry: delegating apps, consent grants, and the `"consent"` policy** (rollout step 3b-2). `delegating_apps`, `delegation_grants`, `delegation_usage` migrations, `audit_log.via` / `grant_id`, `DelegationPolicy.AuthorizeOnBehalfOf` with `EntryRef`, `X-Grain-On-Behalf-Of` / `X-Grain-Subject-Token` handling and stripping on entry hosts (refused on `<registry-host>`, from browsers, and on upgrades), `act`-bearing JWT minting with the `(email, act.sub, act.grant, name)` cache key, `delegationCache` + `LISTEN registry_delegations` with immediate stream closing on revoke, per-app rate limits, `delegated_write` / `delegation_refused` audit rows, `/api/apps`, `/api/delegations`, `/api/admin/apps`, and `identity.delegation` config validation. Depends on 10, 12, and 19.
+21. **Registry: consent page, *Connected apps*, admin apps UI, and CLI.** `/apps/<app>/connect` with exact `redirect_uri` matching, `/apps`, *Admin → Apps*, `grain registry delegations …` and `grain registry apps …` (updating the CLI spec snapshot with `GRAIN_UPDATE_CLI_SPEC=1`), with Playwright screenshots at desktop and phone widths. Depends on 13 and 20.
+22. **End-to-end delegated identity test.** Extends step 15: a fake delegating app posts a comment and files a task on a hosted and a `connected` entry as a person, and the test asserts the `(via app)` label and trailers, the person ∩ delegate role ceiling, and a `403` for each of: no `delegate:` entry, no grant, read-only grant, a demoted person, a disabled app, an upgrade attempt, `X-Grain-On-Behalf-Of` on `<registry-host>`, a browser-originated header, and a forged nested `act`. It also checks revocation within the cache bound and the registry/grain audit join on `jti`. Depends on 15, 19, and 20.
+23. **Docs.** `docs/registry.md` *Delegated identity* (registering an app, the consent flow, revocation, and the `delegate:` entry on grains) and `docs/access-code.md` / `Settings → Access` help for `delegate:` entries. Depends on 18 and 21.
+
+*(Standing up the production installation is a separate follow-up step, not part of this plan.)*

@@ -83,6 +83,11 @@ export default function CapabilityAudit({ taskId, attempt, showError }) {
                 <span className="capability-audit-grant">
                   <GrantChip grant={r.grant} variant="outlined" />
                 </span>
+                {r.hostd && (
+                  <span className="capability-audit-hostd">
+                    hostd {r.hostd}
+                  </span>
+                )}
                 <span className="capability-audit-time">
                   {formatDateTime(r.at, zone)}
                 </span>

@@ -16,12 +16,16 @@ package namespace
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/redact"
 )
@@ -580,5 +584,315 @@ func TestMergeQueueQueryCarriesRepoFormatAndCIRepoLimit(t *testing.T) {
 	}
 	if rec := serveRequest(plain, Scope{MayReadAllCI: true}, http.MethodGet, "/fs/deploy/merge-queue?repo=acme/widgets", nil); rec.Code != http.StatusBadRequest {
 		t.Fatalf("a provider that cannot narrow the queue should refuse ?repo=: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+type countingMemoryProvider struct {
+	repos      []string
+	standing   map[string]string
+	docs       map[string]map[string]MemoryDocView
+	ordered    map[string][]MemoryDocView
+	layerReads atomic.Int64
+	docReads   atomic.Int64
+	textReads  atomic.Int64
+}
+
+func newCountingMemoryProvider(repo string, docCount int) *countingMemoryProvider {
+	p := &countingMemoryProvider{
+		repos: []string{repo},
+		standing: map[string]string{
+			"global": "global standing lessons\n",
+			repo:     "widgets standing lessons\n",
+		},
+		docs: map[string]map[string]MemoryDocView{
+			"global": {
+				"global-note": {Slug: "global-note", Summary: "Global note", Text: "global note body\n"},
+			},
+			repo: make(map[string]MemoryDocView, docCount),
+		},
+		ordered: map[string][]MemoryDocView{
+			"global": {{Slug: "global-note", Summary: "Global note", Size: int64(len("global note body\n"))}},
+		},
+	}
+	list := make([]MemoryDocView, 0, docCount)
+	for i := 0; i < docCount; i++ {
+		slug := fmt.Sprintf("doc-%04d", i)
+		body := fmt.Sprintf("# Document %d\nObservation marker-%04d for %s.\n", i, i, repo)
+		p.docs[repo][slug] = MemoryDocView{
+			Slug:    slug,
+			Summary: fmt.Sprintf("Summary %d", i),
+			Text:    body,
+			Size:    int64(len(body)),
+		}
+		list = append(list, MemoryDocView{
+			Slug:    slug,
+			Summary: fmt.Sprintf("Summary %d", i),
+			Size:    int64(len(body)),
+		})
+	}
+	p.ordered[repo] = list
+	return p
+}
+
+func (p *countingMemoryProvider) ListMemoryRepos(context.Context) ([]string, error) {
+	return p.repos, nil
+}
+
+func (p *countingMemoryProvider) ReadMemoryLayer(_ context.Context, scope string) (*MemoryLayerView, error) {
+	p.layerReads.Add(1)
+	text, hasText := p.standing[scope]
+	docs := p.ordered[scope]
+	if !hasText && len(docs) == 0 && scope != "global" {
+		return nil, ErrNotFound
+	}
+	return &MemoryLayerView{Scope: scope, Text: text, Docs: docs}, nil
+}
+
+func (p *countingMemoryProvider) ReadMemoryDocument(_ context.Context, scope, slug string) (*MemoryDocView, error) {
+	p.docReads.Add(1)
+	bySlug := p.docs[scope]
+	if bySlug == nil {
+		return nil, ErrNotFound
+	}
+	doc, ok := bySlug[slug]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return &doc, nil
+}
+
+func (p *countingMemoryProvider) ReadMemoryText(_ context.Context, scope string) (string, error) {
+	p.textReads.Add(1)
+	text, hasText := p.standing[scope]
+	if !hasText && len(p.ordered[scope]) == 0 && scope != "global" {
+		return "", ErrNotFound
+	}
+	return text, nil
+}
+
+func (p *countingMemoryProvider) resetCounts() {
+	p.layerReads.Store(0)
+	p.docReads.Store(0)
+	p.textReads.Store(0)
+}
+
+// TestMemorySingleDocumentAndLargeWalkAvoidQuadraticLayerFetches pins that
+// resolving single memory:// documents uses O(1) single-document reads (0
+// full-layer listings) and that listing, globbing, and grepping a 2,050-doc
+// memory:// layer perform O(1) layer listings and O(N) single-doc reads well
+// under 1 second.
+func TestMemorySingleDocumentAndLargeWalkAvoidQuadraticLayerFetches(t *testing.T) {
+	t.Parallel()
+
+	const docCount = 2050
+	const repo = "acme/widgets"
+	mem := newCountingMemoryProvider(repo, docCount)
+	srv := &Server{Memory: mem, Redactor: redact.New(nil)}
+	scope := Scope{TaskID: 1, TaskIDStr: "1", TaskRepo: repo}
+
+	// 1. Single-document reads on global/ and repos/<owner>/<repo>/ fetch only
+	// that document without listing the layer.
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{"/fs/memory/global/global-note.md", "global note body\n"},
+		{"/fs/memory/global/docs/global-note.md", "global note body\n"},
+		{"/fs/memory/repos/acme/widgets/doc-0042.md", "# Document 42\nObservation marker-0042 for acme/widgets.\n"},
+		{"/fs/memory/repos/acme/widgets/doc-0042", "# Document 42\nObservation marker-0042 for acme/widgets.\n"},
+		{"/fs/memory/repos/acme/widgets/docs/doc-2049.md", "# Document 2049\nObservation marker-2049 for acme/widgets.\n"},
+	} {
+		mem.resetCounts()
+		rec := serveRequest(srv, scope, http.MethodGet, tc.path, nil)
+		if rec.Code != http.StatusOK || rec.Body.String() != tc.want {
+			t.Fatalf("GET %s: status=%d body=%q, want %q", tc.path, rec.Code, rec.Body.String(), tc.want)
+		}
+		if got := mem.layerReads.Load(); got != 0 {
+			t.Fatalf("GET %s called ReadMemoryLayer %d times, want 0", tc.path, got)
+		}
+		if got := mem.docReads.Load(); got != 1 {
+			t.Fatalf("GET %s called ReadMemoryDocument %d times, want 1", tc.path, got)
+		}
+	}
+
+	// Missing single document returns 404 in a single document lookup.
+	mem.resetCounts()
+	if rec := serveRequest(srv, scope, http.MethodGet, "/fs/memory/repos/acme/widgets/no-such-doc.md", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("missing doc status=%d, want 404", rec.Code)
+	}
+	if mem.layerReads.Load() != 0 || mem.docReads.Load() != 1 {
+		t.Fatalf("missing doc counts: layer=%d doc=%d, want 0 and 1", mem.layerReads.Load(), mem.docReads.Load())
+	}
+
+	// Standing MEMORY.md reads do not list documents either.
+	for _, p := range []string{
+		"/fs/memory/global.md",
+		"/fs/memory/global/MEMORY.md",
+		"/fs/memory/repos/acme/widgets.md",
+		"/fs/memory/repos/acme/widgets/MEMORY.md",
+	} {
+		mem.resetCounts()
+		rec := serveRequest(srv, scope, http.MethodGet, p, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: status=%d body=%q", p, rec.Code, rec.Body.String())
+		}
+		if mem.layerReads.Load() != 0 || mem.docReads.Load() != 0 || mem.textReads.Load() != 1 {
+			t.Fatalf("GET %s counts: layer=%d doc=%d text=%d, want 0, 0, 1",
+				p, mem.layerReads.Load(), mem.docReads.Load(), mem.textReads.Load())
+		}
+	}
+
+	// 2. Directory listing (?list with JSON sizes) and globbing over 2,050 docs
+	// perform 1 layer listing and 0 document body reads.
+	mem.resetCounts()
+	start := time.Now()
+	listRec := serveRequest(srv, scope, http.MethodGet, "/fs/memory/repos/acme/widgets?list", map[string]string{"Accept": "application/json"})
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("?list over %d docs took %v, want < 1s", docCount, elapsed)
+	}
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("?list status=%d body=%q", listRec.Code, listRec.Body.String())
+	}
+	var listPayload struct {
+		Entries []Entry `json:"entries"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listPayload); err != nil {
+		t.Fatalf("unmarshal ?list JSON: %v", err)
+	}
+	if len(listPayload.Entries) != docCount+1 {
+		t.Fatalf("?list entries=%d, want %d", len(listPayload.Entries), docCount+1)
+	}
+	for _, e := range listPayload.Entries {
+		if e.Size <= 0 {
+			t.Fatalf("entry %q has non-positive size %d; lazy listing must preserve byte size", e.Name, e.Size)
+		}
+	}
+	if mem.layerReads.Load() != 1 || mem.docReads.Load() != 0 {
+		t.Fatalf("?list counts: layer=%d doc=%d, want 1 and 0", mem.layerReads.Load(), mem.docReads.Load())
+	}
+
+	mem.resetCounts()
+	start = time.Now()
+	globRes, err := srv.GlobEntries(context.Background(), scope, "memory", "", "repos/**/*.md")
+	if err != nil {
+		t.Fatalf("GlobEntries: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("GlobEntries over %d docs took %v, want < 1s", docCount, elapsed)
+	}
+	if len(globRes.Matches) == 0 {
+		t.Fatalf("GlobEntries returned no matches")
+	}
+	if mem.layerReads.Load() != 1 || mem.docReads.Load() != 0 {
+		t.Fatalf("GlobEntries counts: layer=%d doc=%d, want 1 and 0", mem.layerReads.Load(), mem.docReads.Load())
+	}
+
+	// 3. Grep (with and without --glob) over 2,050 docs performs 1 layer listing
+	// and O(N) single-document reads (bounded by maxWalkFiles) in well under 1s.
+	mem.resetCounts()
+	start = time.Now()
+	grepRes, err := srv.Grep(context.Background(), scope, "memory", "repos/acme/widgets", GrepOptions{
+		Pattern:    "marker-1500",
+		GlobFilter: "*.md",
+	})
+	if err != nil {
+		t.Fatalf("Grep: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("Grep over %d docs took %v, want < 1s", docCount, elapsed)
+	}
+	if grepRes.Matches != 1 || !strings.Contains(grepRes.Output, "doc-1500.md:2:Observation marker-1500") {
+		t.Fatalf("Grep result = %+v, want 1 match for marker-1500", grepRes)
+	}
+	if !grepRes.WalkTruncated {
+		t.Fatalf("Grep over %d docs should report WalkTruncated at maxWalkFiles=%d", docCount, maxWalkFiles)
+	}
+	if got := mem.layerReads.Load(); got != 1 {
+		t.Fatalf("Grep called ReadMemoryLayer %d times, want 1", got)
+	}
+	if got := mem.docReads.Load(); got < 1500 || got > maxWalkFiles {
+		t.Fatalf("Grep called ReadMemoryDocument %d times, want O(N) bounded by %d", got, maxWalkFiles)
+	}
+
+	// 4. Even a plain MemoryProvider without MemoryDocumentReader (which JSON-decodes
+	// all 2,050 documents inside ReadMemoryLayer) decodes the layer only once across
+	// a Grep walk rather than N+1 times.
+	var legacyLayerDecodes atomic.Int64
+	rawLayerJSON, err := json.Marshal(MemoryLayerView{
+		Scope: repo,
+		Text:  "widgets standing lessons\n",
+		Docs: func() []MemoryDocView {
+			out := make([]MemoryDocView, 0, docCount)
+			for i := 0; i < docCount; i++ {
+				out = append(out, mem.docs[repo][fmt.Sprintf("doc-%04d", i)])
+			}
+			return out
+		}(),
+	})
+	if err != nil {
+		t.Fatalf("marshal legacy layer: %v", err)
+	}
+	legacySrv := &Server{
+		Memory: legacyDecodingMemoryProvider{
+			repos:   []string{repo},
+			payload: map[string][]byte{repo: rawLayerJSON},
+			decodes: &legacyLayerDecodes,
+		},
+		Redactor: redact.New(nil),
+	}
+	start = time.Now()
+	legacyGrep, err := legacySrv.Grep(context.Background(), scope, "memory", "repos/acme/widgets", GrepOptions{
+		Pattern: "marker-1500",
+	})
+	if err != nil {
+		t.Fatalf("legacy Grep: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("legacy Grep over %d docs took %v, want < 1s", docCount, elapsed)
+	}
+	if legacyGrep.Matches != 1 || legacyLayerDecodes.Load() != 1 {
+		t.Fatalf("legacy Grep matches=%d layerDecodes=%d, want 1 match and 1 layer decode",
+			legacyGrep.Matches, legacyLayerDecodes.Load())
+	}
+}
+
+type legacyDecodingMemoryProvider struct {
+	repos   []string
+	payload map[string][]byte
+	decodes *atomic.Int64
+}
+
+func (p legacyDecodingMemoryProvider) ListMemoryRepos(context.Context) ([]string, error) {
+	return p.repos, nil
+}
+
+func (p legacyDecodingMemoryProvider) ReadMemoryLayer(_ context.Context, scope string) (*MemoryLayerView, error) {
+	p.decodes.Add(1)
+	raw, ok := p.payload[scope]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	var layer MemoryLayerView
+	if err := json.Unmarshal(raw, &layer); err != nil {
+		return nil, err
+	}
+	return &layer, nil
+}
+
+func BenchmarkMemoryGrepLargeLayer(b *testing.B) {
+	const repo = "acme/widgets"
+	mem := newCountingMemoryProvider(repo, 2050)
+	srv := &Server{Memory: mem, Redactor: redact.New(nil)}
+	scope := Scope{TaskID: 1, TaskIDStr: "1", TaskRepo: repo}
+	ctx := context.Background()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		res, err := srv.Grep(ctx, scope, "memory", "repos/acme/widgets", GrepOptions{
+			Pattern: "marker-1500",
+		})
+		if err != nil || res.Matches != 1 {
+			b.Fatalf("Grep = %+v, %v", res, err)
+		}
 	}
 }

@@ -1,0 +1,573 @@
+{
+  "tokens": {
+    "aliceSelf": {
+      "id": "1",
+      "name": "alice-self",
+      "principal": "external:alice-self",
+      "tokenPrefix": "gma_0435",
+      "scopeSet": "grain/external-dev",
+      "resolvedScopes": [
+        "ci:read@acme/app",
+        "ci:write@acme/app",
+        "deployment:read@acme/app",
+        "merge:write@acme/app",
+        "repos:read@acme/app",
+        "sandboxes:read@acme/app",
+        "tasks:read@acme/app",
+        "tasks:write@acme/app",
+        "templates:read@acme/app"
+      ],
+      "repos": [
+        "acme/app"
+      ],
+      "rateLimit": 60,
+      "maxConcurrent": 8,
+      "createdBy": "human:alice@example.com",
+      "owner": "alice@example.com",
+      "createdAt": "2026-11-04T22:43:03.322452095Z",
+      "active": true
+    },
+    "bobByOperator": {
+      "id": "2",
+      "name": "bob-by-op",
+      "principal": "external:bob-by-op",
+      "tokenPrefix": "gma_5b84",
+      "scopeSet": "grain/external-dev",
+      "resolvedScopes": [
+        "ci:read@acme/app",
+        "ci:write@acme/app",
+        "deployment:read@acme/app",
+        "merge:write@acme/app",
+        "repos:read@acme/app",
+        "sandboxes:read@acme/app",
+        "tasks:read@acme/app",
+        "tasks:write@acme/app",
+        "templates:read@acme/app"
+      ],
+      "repos": [
+        "acme/app"
+      ],
+      "rateLimit": 60,
+      "maxConcurrent": 8,
+      "createdBy": "human:operator@example.com",
+      "owner": "bob@example.com",
+      "createdAt": "2026-11-04T22:43:03.409126133Z",
+      "active": true
+    },
+    "aliceChildByExternalAgent": {
+      "id": "4",
+      "name": "alice-child-agent",
+      "principal": "external:alice-child-agent",
+      "tokenPrefix": "gma_71fc",
+      "scopes": [
+        "tasks:read",
+        "tasks:write"
+      ],
+      "resolvedScopes": [
+        "tasks:read@acme/app",
+        "tasks:write@acme/app"
+      ],
+      "repos": [
+        "acme/app"
+      ],
+      "rateLimit": 60,
+      "maxConcurrent": 8,
+      "createdBy": "agent:external:alice-issuer",
+      "owner": "alice@example.com",
+      "createdAt": "2026-11-04T22:43:03.565460803Z",
+      "active": true
+    },
+    "unownedByTask": {
+      "id": "5",
+      "name": "task-minted-bot",
+      "principal": "external:task-minted-bot",
+      "tokenPrefix": "gma_1702",
+      "scopes": [
+        "tasks:read",
+        "tasks:write"
+      ],
+      "resolvedScopes": [
+        "tasks:read@acme/app",
+        "tasks:write@acme/app"
+      ],
+      "repos": [
+        "acme/app"
+      ],
+      "rateLimit": 60,
+      "maxConcurrent": 8,
+      "createdBy": "agent:2",
+      "createdAt": "2026-11-04T22:43:03.702185585Z",
+      "active": true
+    }
+  },
+  "bodyAuthorRefusal": "{\"error\":\"an agent cannot name somebody else as the author of work it files\"}",
+  "apiTasks": {
+    "aliceSelf": {
+      "id": "3",
+      "title": "Task from alice self-minted token",
+      "description": "Filed via CLI walkthrough (claude-code/1.2.0, sess-alice-101).",
+      "author": "external:alice-self",
+      "authorKind": "agent",
+      "authorSource": "external-token",
+      "authorLabel": "external agent alice-self for alice@example.com",
+      "state": "proposed",
+      "repo": "acme/app",
+      "branch": "grain/80f0ded0/task-3-task-from-alice-self-minted",
+      "priority": 5,
+      "autoMerge": false,
+      "autoApproveProposals": false,
+      "interactive": false,
+      "creator": "alice@example.com",
+      "filedVia": "claude-code/1.2.0 session=sess-alice-101",
+      "provenance": "filed from claude-code/1.2.0 session=sess-alice-101 by alice@example.com",
+      "capabilities": [],
+      "createdAt": "2026-11-04T22:43:03.810993441Z",
+      "blocked": false,
+      "reason": {
+        "reason": "proposed/unapproved",
+        "class": "awaiting a person",
+        "control": "Approve"
+      },
+      "comments": [
+        {
+          "id": 2,
+          "author": "external:alice-self",
+          "authorKind": "agent",
+          "onBehalfOf": "alice@example.com",
+          "body": "Follow-up comment from alice-self CLI",
+          "createdAt": "2026-11-04T22:43:03.849062522Z",
+          "authorSource": "external-token",
+          "authorLabel": "external agent alice-self for alice@example.com",
+          "onBehalfOfKind": "human",
+          "onBehalfOfLabel": "alice@example.com",
+          "filedVia": "claude-code/1.2.0 session=sess-alice-101",
+          "provenance": "filed from claude-code/1.2.0 session=sess-alice-101 by alice@example.com"
+        },
+        {
+          "id": 3,
+          "author": "grain",
+          "authorKind": "automation",
+          "onBehalfOf": "external:alice-self",
+          "body": "External agent `alice-self` (`external:alice-self`) on behalf of `alice@example.com` called `POST /api/tasks/{id}/comments` through the agent API (scope `tasks:write`).",
+          "createdAt": "2026-11-04T22:43:03.851152838Z",
+          "onBehalfOfKind": "agent",
+          "onBehalfOfLabel": "external agent alice-self"
+        }
+      ],
+      "transitions": [
+        {
+          "state": "proposed",
+          "at": "2026-11-04T22:43:03.810993441Z"
+        }
+      ]
+    },
+    "bobByOperator": {
+      "id": "4",
+      "title": "Task from operator-minted bob token",
+      "description": "Filed via CLI walkthrough (codex-cli/0.9.2, sess-bob-202).",
+      "author": "external:bob-by-op",
+      "authorKind": "agent",
+      "authorSource": "external-token",
+      "authorLabel": "external agent bob-by-op for bob@example.com",
+      "state": "proposed",
+      "repo": "acme/app",
+      "branch": "grain/80f0ded0/task-4-task-from-operator-minted-bob",
+      "priority": 5,
+      "autoMerge": false,
+      "autoApproveProposals": false,
+      "interactive": false,
+      "creator": "bob@example.com",
+      "filedVia": "codex-cli/0.9.2 session=sess-bob-202",
+      "provenance": "filed from codex-cli/0.9.2 session=sess-bob-202 by bob@example.com",
+      "capabilities": [],
+      "createdAt": "2026-11-04T22:43:03.899778368Z",
+      "blocked": false,
+      "reason": {
+        "reason": "proposed/unapproved",
+        "class": "awaiting a person",
+        "control": "Approve"
+      },
+      "comments": [
+        {
+          "id": 4,
+          "author": "external:bob-by-op",
+          "authorKind": "agent",
+          "onBehalfOf": "bob@example.com",
+          "body": "Follow-up comment from bob-by-op CLI",
+          "createdAt": "2026-11-04T22:43:03.937910006Z",
+          "authorSource": "external-token",
+          "authorLabel": "external agent bob-by-op for bob@example.com",
+          "onBehalfOfKind": "human",
+          "onBehalfOfLabel": "bob@example.com",
+          "filedVia": "codex-cli/0.9.2 session=sess-bob-202",
+          "provenance": "filed from codex-cli/0.9.2 session=sess-bob-202 by bob@example.com"
+        },
+        {
+          "id": 5,
+          "author": "grain",
+          "authorKind": "automation",
+          "onBehalfOf": "external:bob-by-op",
+          "body": "External agent `bob-by-op` (`external:bob-by-op`) on behalf of `bob@example.com` called `POST /api/tasks/{id}/comments` through the agent API (scope `tasks:write`).",
+          "createdAt": "2026-11-04T22:43:03.940035548Z",
+          "onBehalfOfKind": "agent",
+          "onBehalfOfLabel": "external agent bob-by-op"
+        }
+      ],
+      "transitions": [
+        {
+          "state": "proposed",
+          "at": "2026-11-04T22:43:03.899778368Z"
+        }
+      ]
+    },
+    "aliceChildByExternalAgent": {
+      "id": "5",
+      "title": "Task from external-agent-minted child token",
+      "description": "Filed via CLI walkthrough (jetski/2.1, sess-child-303).",
+      "author": "external:alice-child-agent",
+      "authorKind": "agent",
+      "authorSource": "external-token",
+      "authorLabel": "external agent alice-child-agent for alice@example.com",
+      "state": "proposed",
+      "repo": "acme/app",
+      "branch": "grain/80f0ded0/task-5-task-from-external-agent",
+      "priority": 5,
+      "autoMerge": false,
+      "autoApproveProposals": false,
+      "interactive": false,
+      "creator": "alice@example.com",
+      "filedVia": "jetski/2.1 session=sess-child-303",
+      "provenance": "filed from jetski/2.1 session=sess-child-303 by alice@example.com",
+      "capabilities": [],
+      "createdAt": "2026-11-04T22:43:03.980013603Z",
+      "blocked": false,
+      "reason": {
+        "reason": "proposed/unapproved",
+        "class": "awaiting a person",
+        "control": "Approve"
+      },
+      "comments": [
+        {
+          "id": 6,
+          "author": "external:alice-child-agent",
+          "authorKind": "agent",
+          "onBehalfOf": "alice@example.com",
+          "body": "Follow-up comment from alice-child-agent CLI",
+          "createdAt": "2026-11-04T22:43:04.019761279Z",
+          "authorSource": "external-token",
+          "authorLabel": "external agent alice-child-agent for alice@example.com",
+          "onBehalfOfKind": "human",
+          "onBehalfOfLabel": "alice@example.com",
+          "filedVia": "jetski/2.1 session=sess-child-303",
+          "provenance": "filed from jetski/2.1 session=sess-child-303 by alice@example.com"
+        },
+        {
+          "id": 7,
+          "author": "grain",
+          "authorKind": "automation",
+          "onBehalfOf": "external:alice-child-agent",
+          "body": "External agent `alice-child-agent` (`external:alice-child-agent`) on behalf of `alice@example.com` called `POST /api/tasks/{id}/comments` through the agent API (scope `tasks:write`).",
+          "createdAt": "2026-11-04T22:43:04.02206961Z",
+          "onBehalfOfKind": "agent",
+          "onBehalfOfLabel": "external agent alice-child-agent"
+        }
+      ],
+      "transitions": [
+        {
+          "state": "proposed",
+          "at": "2026-11-04T22:43:03.980013603Z"
+        }
+      ]
+    },
+    "unownedByTask": {
+      "id": "6",
+      "title": "Task from task-minted unowned token",
+      "description": "Filed via CLI walkthrough (subagent-runner/0.4, sess-taskbot-404).",
+      "author": "external:task-minted-bot",
+      "authorKind": "agent",
+      "authorSource": "external-token",
+      "authorLabel": "external agent task-minted-bot",
+      "state": "proposed",
+      "repo": "acme/app",
+      "branch": "grain/80f0ded0/task-6-task-from-task-minted-unowned",
+      "priority": 5,
+      "autoMerge": false,
+      "autoApproveProposals": false,
+      "interactive": false,
+      "creator": "operator@example.com",
+      "filedVia": "subagent-runner/0.4 session=sess-taskbot-404",
+      "provenance": "filed from subagent-runner/0.4 session=sess-taskbot-404 by operator@example.com",
+      "capabilities": [],
+      "createdAt": "2026-11-04T22:43:04.063425709Z",
+      "blocked": false,
+      "reason": {
+        "reason": "proposed/unapproved",
+        "class": "awaiting a person",
+        "control": "Approve"
+      },
+      "comments": [
+        {
+          "id": 8,
+          "author": "external:task-minted-bot",
+          "authorKind": "agent",
+          "body": "Follow-up comment from task-minted-bot CLI",
+          "createdAt": "2026-11-04T22:43:04.103570005Z",
+          "authorSource": "external-token",
+          "authorLabel": "external agent task-minted-bot",
+          "filedVia": "subagent-runner/0.4 session=sess-taskbot-404",
+          "provenance": "filed from subagent-runner/0.4 session=sess-taskbot-404"
+        },
+        {
+          "id": 9,
+          "author": "grain",
+          "authorKind": "automation",
+          "onBehalfOf": "external:task-minted-bot",
+          "body": "External agent `task-minted-bot` (`external:task-minted-bot`) called `POST /api/tasks/{id}/comments` through the agent API (scope `tasks:write`).",
+          "createdAt": "2026-11-04T22:43:04.106242502Z",
+          "onBehalfOfKind": "agent",
+          "onBehalfOfLabel": "external agent task-minted-bot"
+        }
+      ],
+      "transitions": [
+        {
+          "state": "proposed",
+          "at": "2026-11-04T22:43:04.063425709Z"
+        }
+      ]
+    },
+    "xForwardedUserSpoof": {
+      "id": "7",
+      "title": "Task with forged X-Forwarded-User and body filedVia",
+      "author": "external:alice-self",
+      "authorKind": "agent",
+      "authorSource": "external-token",
+      "authorLabel": "external agent alice-self for alice@example.com",
+      "state": "proposed",
+      "repo": "acme/app",
+      "branch": "grain/80f0ded0/task-7-task-with-forged-x-forwarded",
+      "priority": 5,
+      "autoMerge": false,
+      "autoApproveProposals": false,
+      "interactive": false,
+      "creator": "alice@example.com",
+      "filedVia": "spoof-check/1.0 session=xfu",
+      "provenance": "filed from spoof-check/1.0 session=xfu by alice@example.com",
+      "capabilities": [],
+      "createdAt": "2026-11-04T22:43:04.14632996Z",
+      "blocked": false,
+      "reason": {
+        "reason": "proposed/unapproved",
+        "class": "awaiting a person",
+        "control": "Approve"
+      },
+      "comments": [],
+      "transitions": [
+        {
+          "state": "proposed",
+          "at": "2026-11-04T22:43:04.14632996Z"
+        }
+      ]
+    }
+  },
+  "sqlite": {
+    "tasks": [
+      {
+        "id": "3",
+        "title": "Task from alice self-minted token",
+        "creator": "alice@example.com",
+        "origin_actor_kind": "agent",
+        "origin_actor_id": "external:alice-self",
+        "origin_behalf_kind": "human",
+        "origin_behalf_id": "alice@example.com",
+        "origin_behalf_source": "token",
+        "filed_via": "claude-code/1.2.0 session=sess-alice-101"
+      },
+      {
+        "id": "4",
+        "title": "Task from operator-minted bob token",
+        "creator": "bob@example.com",
+        "origin_actor_kind": "agent",
+        "origin_actor_id": "external:bob-by-op",
+        "origin_behalf_kind": "human",
+        "origin_behalf_id": "bob@example.com",
+        "origin_behalf_source": "token",
+        "filed_via": "codex-cli/0.9.2 session=sess-bob-202"
+      },
+      {
+        "id": "5",
+        "title": "Task from external-agent-minted child token",
+        "creator": "alice@example.com",
+        "origin_actor_kind": "agent",
+        "origin_actor_id": "external:alice-child-agent",
+        "origin_behalf_kind": "human",
+        "origin_behalf_id": "alice@example.com",
+        "origin_behalf_source": "token",
+        "filed_via": "jetski/2.1 session=sess-child-303"
+      },
+      {
+        "id": "6",
+        "title": "Task from task-minted unowned token",
+        "creator": "operator@example.com",
+        "origin_actor_kind": "agent",
+        "origin_actor_id": "external:task-minted-bot",
+        "origin_behalf_kind": null,
+        "origin_behalf_id": null,
+        "origin_behalf_source": "",
+        "filed_via": "subagent-runner/0.4 session=sess-taskbot-404"
+      },
+      {
+        "id": "7",
+        "title": "Task with forged X-Forwarded-User and body filedVia",
+        "creator": "alice@example.com",
+        "origin_actor_kind": "agent",
+        "origin_actor_id": "external:alice-self",
+        "origin_behalf_kind": "human",
+        "origin_behalf_id": "alice@example.com",
+        "origin_behalf_source": "token",
+        "filed_via": "spoof-check/1.0 session=xfu"
+      }
+    ],
+    "comments": [
+      {
+        "id": 2,
+        "task_id": "3",
+        "body": "Follow-up comment from alice-self CLI",
+        "author_kind": "agent",
+        "author_id": "external:alice-self",
+        "author_behalf_kind": "human",
+        "author_behalf_id": "alice@example.com",
+        "author_behalf_source": "token",
+        "filed_via": "claude-code/1.2.0 session=sess-alice-101"
+      },
+      {
+        "id": 3,
+        "task_id": "3",
+        "body": "External agent `alice-self` (`external:alice-self`) on behalf of `alice@example.com` called `POST /api/tasks/{id}/comments` through the agent API (scope `tasks:write`).",
+        "author_kind": "automation",
+        "author_id": "grain",
+        "author_behalf_kind": "agent",
+        "author_behalf_id": "external:alice-self",
+        "author_behalf_source": "",
+        "filed_via": ""
+      },
+      {
+        "id": 4,
+        "task_id": "4",
+        "body": "Follow-up comment from bob-by-op CLI",
+        "author_kind": "agent",
+        "author_id": "external:bob-by-op",
+        "author_behalf_kind": "human",
+        "author_behalf_id": "bob@example.com",
+        "author_behalf_source": "token",
+        "filed_via": "codex-cli/0.9.2 session=sess-bob-202"
+      },
+      {
+        "id": 5,
+        "task_id": "4",
+        "body": "External agent `bob-by-op` (`external:bob-by-op`) on behalf of `bob@example.com` called `POST /api/tasks/{id}/comments` through the agent API (scope `tasks:write`).",
+        "author_kind": "automation",
+        "author_id": "grain",
+        "author_behalf_kind": "agent",
+        "author_behalf_id": "external:bob-by-op",
+        "author_behalf_source": "",
+        "filed_via": ""
+      },
+      {
+        "id": 6,
+        "task_id": "5",
+        "body": "Follow-up comment from alice-child-agent CLI",
+        "author_kind": "agent",
+        "author_id": "external:alice-child-agent",
+        "author_behalf_kind": "human",
+        "author_behalf_id": "alice@example.com",
+        "author_behalf_source": "token",
+        "filed_via": "jetski/2.1 session=sess-child-303"
+      },
+      {
+        "id": 7,
+        "task_id": "5",
+        "body": "External agent `alice-child-agent` (`external:alice-child-agent`) on behalf of `alice@example.com` called `POST /api/tasks/{id}/comments` through the agent API (scope `tasks:write`).",
+        "author_kind": "automation",
+        "author_id": "grain",
+        "author_behalf_kind": "agent",
+        "author_behalf_id": "external:alice-child-agent",
+        "author_behalf_source": "",
+        "filed_via": ""
+      },
+      {
+        "id": 8,
+        "task_id": "6",
+        "body": "Follow-up comment from task-minted-bot CLI",
+        "author_kind": "agent",
+        "author_id": "external:task-minted-bot",
+        "author_behalf_kind": null,
+        "author_behalf_id": null,
+        "author_behalf_source": "",
+        "filed_via": "subagent-runner/0.4 session=sess-taskbot-404"
+      },
+      {
+        "id": 9,
+        "task_id": "6",
+        "body": "External agent `task-minted-bot` (`external:task-minted-bot`) called `POST /api/tasks/{id}/comments` through the agent API (scope `tasks:write`).",
+        "author_kind": "automation",
+        "author_id": "grain",
+        "author_behalf_kind": "agent",
+        "author_behalf_id": "external:task-minted-bot",
+        "author_behalf_source": "",
+        "filed_via": ""
+      }
+    ],
+    "tokens": [
+      {
+        "id": "1",
+        "name": "alice-self",
+        "prefix": "gma_0435",
+        "owner": "alice@example.com",
+        "created_by": "human:alice@example.com",
+        "scope_set": "grain/external-dev",
+        "scopes": "",
+        "repos": "acme/app"
+      },
+      {
+        "id": "2",
+        "name": "bob-by-op",
+        "prefix": "gma_5b84",
+        "owner": "bob@example.com",
+        "created_by": "human:operator@example.com",
+        "scope_set": "grain/external-dev",
+        "scopes": "",
+        "repos": "acme/app"
+      },
+      {
+        "id": "3",
+        "name": "alice-issuer",
+        "prefix": "gma_7169",
+        "owner": "alice@example.com",
+        "created_by": "human:operator@example.com",
+        "scope_set": "",
+        "scopes": "capabilities:admin,tasks:read,tasks:write",
+        "repos": ""
+      },
+      {
+        "id": "4",
+        "name": "alice-child-agent",
+        "prefix": "gma_71fc",
+        "owner": "alice@example.com",
+        "created_by": "agent:external:alice-issuer",
+        "scope_set": "",
+        "scopes": "tasks:read,tasks:write",
+        "repos": "acme/app"
+      },
+      {
+        "id": "5",
+        "name": "task-minted-bot",
+        "prefix": "gma_1702",
+        "owner": "",
+        "created_by": "agent:2",
+        "scope_set": "",
+        "scopes": "tasks:read,tasks:write",
+        "repos": "acme/app"
+      }
+    ]
+  }
+}

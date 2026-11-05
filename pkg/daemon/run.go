@@ -33,11 +33,13 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
+	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/cifault"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
 	"github.com/ai-on-gke/grain/pkg/policy"
@@ -150,6 +152,17 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 
+	// The data directory's daemon lock, held for as long as this process
+	// runs (storelock.go): a second daemon on the same store, or a copy,
+	// migration or move of it, refuses while it is held.
+	if cfg.DataDir != "" {
+		lock, err := AcquireStoreLock(cfg.DataDir, storeLockWait)
+		if err != nil {
+			return err
+		}
+		defer lock.Release()
+	}
+
 	// openStore, plus the one recovery a store this build cannot open has:
 	// the note an in-place upgrade leaves when it cut over to a build with
 	// a different schema, which authorises this start to move that store
@@ -161,11 +174,27 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer db.Close()
+	// And the same on a PostgreSQL store itself, which a tool on another
+	// host can see where it cannot see the lock file (postgres.HoldDaemonLease).
+	if cfg.DbDriver == "postgres" {
+		release, err := holdPostgresLease(ctx, db)
+		if err != nil {
+			return err
+		}
+		defer release()
+	}
 	// Recorded once the store has opened, so a mistyped DSN never replaces
 	// a good one: a daemon started with -postgres-url (or the environment)
 	// otherwise leaves nothing in its data dir saying where its store is.
 	if err := recordDatabaseConfigForDaemon(cfg); err != nil {
 		log.Printf("grain daemon: recording the database in %s: %v", cfg.DataDir, err)
+	}
+	// What the data directory selects now, with the store open and
+	// recorded: the db-config.json watcher raises its alert the moment
+	// that changes (storeswitch.go).
+	openedSelection, selErr := storeSelection(cfg.DataDir)
+	if selErr != nil {
+		log.Printf("grain daemon: reading which store %s selects: %v", cfg.DataDir, selErr)
 	}
 	// The hostd registry: the co-located hostd is always in it as local,
 	// and any hostd it names may dial in alongside it.
@@ -231,6 +260,40 @@ func Run(ctx context.Context, cfg Config) error {
 	// question is asked of what it holds now, before anything serves it.
 	if err := store.CheckSingleTenant(ctx); err != nil {
 		return err
+	}
+	// A store behind the writes a previous daemon on this data directory
+	// made is refused, by name, before anything is served from it or
+	// written to it; one at or past them moves the mark (highwater.go).
+	if err := CheckStoreHighWater(ctx, db, cfg.DbDriver, cfg.DbDSN, cfg.DataDir); err != nil {
+		return err
+	}
+	{
+		// A copy: Run goes on to reassign cfg.
+		dataDir := cfg.DataDir
+		desc := StoreDescription(cfg.DbDriver, cfg.DbDSN, dataDir)
+		storeSwitched.Store(nil)
+		watchCtx, stopWatching := context.WithCancel(ctx)
+		markDone := make(chan struct{})
+		go func() {
+			defer close(markDone)
+			watchStoreHighWater(watchCtx, db, desc, dataDir)
+		}()
+		selDone := make(chan struct{})
+		if selErr == nil {
+			go func() {
+				defer close(selDone)
+				watchStoreSelection(watchCtx, dataDir, openedSelection)
+			}()
+		} else {
+			close(selDone)
+		}
+		// Ahead of db.Close, deferred above: the mark's last move reads
+		// the store.
+		defer func() {
+			stopWatching()
+			<-markDone
+			<-selDone
+		}()
 	}
 	// Both halves of the schema change are done -- the store rebuilt at
 	// this build's schema above, the repository's dump rewritten from it
@@ -654,15 +717,6 @@ func Run(ctx context.Context, cfg Config) error {
 	if _, err := migrateLocalScripts(ctx, store, cfg.LocalScriptsConfig()); err != nil {
 		log.Printf("daemon: local-scripts: moving declarations to host-script: %v", err)
 	}
-	capabilityServers, hostdCapabilityServers := startCapabilityServers(ctx, store, secretStore, cfg.DataDir, cfg.capabilityHostd(), gcpKeyPool(cfg))
-	live := NewLiveConfig(store, sandboxes, cfg, githubCredentials).
-		WithSandboxImages(sandboxImages, stockSandboxImage, sandboxImageLabels()).
-		WithCapabilityServers(capabilityServers).
-		withHostdCapabilityServers(hostdCapabilityServers)
-	if cfg.Overcommit != nil {
-		go runOvercommit(ctx, live, cfg.Overcommit)
-	}
-
 	// transcriptDir is where a run's own agent.Framework may mirror its
 	// transcript-in-progress live, and where the UI server below reads one
 	// back from for a still-running attempt -- the two sides of
@@ -683,6 +737,57 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	if err := os.Chmod(transcriptDir, 0o700); err != nil {
 		return fmt.Errorf("restricting transcript directory: %w", err)
+	}
+	if cfg.ObjectStore == nil && cfg.ObjectStoreURI != "" {
+		openedStore, err := objectstore.Open(ctx, cfg.ObjectStoreURI)
+		if err != nil {
+			return fmt.Errorf("opening -object-store %q: %w", cfg.ObjectStoreURI, err)
+		}
+		cfg.ObjectStore = openedStore
+	}
+	if cfg.ObjectStore != nil {
+		transcriptCacheDir := filepath.Join(cfg.DataDir, "cache", "object-store", "transcripts")
+		tStore, err := NewTranscriptObjectStore(cfg.ObjectStore, transcriptCacheDir, transcriptDir, transcriptObjectRedactor(cfg, secretStore))
+		if err != nil {
+			return fmt.Errorf("preparing transcript object store: %w", err)
+		}
+		cfg.transcriptObjects = tStore
+		stopTranscriptSync := tStore.StartPeriodicSync(ctx, DefaultTranscriptSyncInterval)
+		defer stopTranscriptSync()
+		flushObjectStoreState(ctx, cfg)
+		defer func() {
+			flushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			flushObjectStoreState(flushCtx, cfg)
+		}()
+		if cfg.ObjectStoreURI != "" {
+			log.Printf("grain daemon: syncing transcripts, CI artifacts, and agent-sessions to %s with local read-through caching", cfg.ObjectStoreURI)
+		}
+	}
+
+	var uiLn net.Listener
+	if cfg.UiAddr != "" {
+		uiLn, err = net.Listen("tcp", cfg.UiAddr)
+		if err != nil {
+			return fmt.Errorf("starting the UI/API server: listening on %s: %w", cfg.UiAddr, err)
+		}
+		defer func() {
+			if uiLn != nil {
+				_ = uiLn.Close()
+			}
+		}()
+	}
+
+	capabilityServers, hostdCapabilityServers := startCapabilityServers(ctx, store, secretStore, cfg.DataDir, cfg.capabilityHostd(), gcpKeyPool(cfg))
+	live := NewLiveConfig(store, sandboxes, cfg, githubCredentials).
+		WithSandboxImages(sandboxImages, stockSandboxImage, sandboxImageLabels()).
+		WithCapabilityServers(capabilityServers).
+		withHostdCapabilityServers(hostdCapabilityServers)
+	if cfg.ObjectStore != nil && cfg.ciArtifacts == nil {
+		cfg.ciArtifacts = CiArtifactStore(cfg, live.ciStorageBounds)
+	}
+	if cfg.Overcommit != nil {
+		go runOvercommit(ctx, live, cfg.Overcommit)
 	}
 
 	// The package cache (pkg/cli/packagecache.go), started here rather
@@ -868,8 +973,10 @@ func Run(ctx context.Context, cfg Config) error {
 	// longer happens: runDaemon's own failure is logged, not fatal, and
 	// run() itself only returns once ctx is actually cancelled.
 	if cfg.UiAddr != "" {
-		stopUI, err := startUIServer(cfg, store, db, transcriptDir, sandboxes, live, pkgCache, actionsCache,
-			stateManager, stateManager.settingsRepo, upgrader, secretStore)
+		preboundUI := uiLn
+		uiLn = nil
+		stopUI, err := startUIServer(cfg, preboundUI, store, db, transcriptDir, sandboxes, live, pkgCache, actionsCache,
+			stateManager, stateManager.settingsRepo, forbidden, upgrader, secretStore)
 		if err != nil {
 			return fmt.Errorf("starting the UI/API server: %w", err)
 		}
@@ -1002,7 +1109,10 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		},
 	}))
 
-	proxyURL, proxyHandler, stopProxy, err := startGitProxy(cfg.DataDir, store, secretStore, cfg.GithubHost, cfg.GithubInsecureHTTP, fabric, forbidden, cfg.shutdownStarted)
+	if cfg.ObjectStore != nil && cfg.ciArtifacts == nil {
+		cfg.ciArtifacts = CiArtifactStore(cfg, live.ciStorageBounds)
+	}
+	proxyURL, proxyHandler, stopProxy, err := startGitProxy(cfg.DataDir, store, secretStore, cfg.GithubHost, cfg.GithubInsecureHTTP, fabric, forbidden, cfg.shutdownStarted, cfg.ciArtifacts)
 	if err != nil {
 		// Fatal to this loop, and only to it: every dispatch and every CI
 		// job clones through this proxy, so there is nothing to reconcile
@@ -1344,6 +1454,9 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		TeamGitCredentialOn: teamGitCredentialOn,
 	}}
 	deps := orchestrator.Deps{
+		// Nothing new is dispatched once the store has been switched
+		// underneath this process (storeswitch.go).
+		DispatchHalted: storeDispatchHalted,
 		// The attached capability servers a task's capability
 		// references are minted through at admission.
 		CapabilityServers: capabilityServerLookup(live),
@@ -1407,6 +1520,12 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			Credentials:   secretStore,
 			MaxAgentTurns: cfg.MaxAgentTurns,
 			TranscriptDir: transcriptDir,
+			TranscriptSink: func() orchestrator.TranscriptSink {
+				if cfg.transcriptObjects == nil {
+					return nil
+				}
+				return cfg.transcriptObjects
+			}(),
 			// The same proxy URL the credential files above are written
 			// for, now also the address each dispatched run's own
 			// checkout is cloned from (orchestrator.prepareCheckout).
@@ -1688,7 +1807,45 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	// every live run to wind up -- so this is the shutdown drain, not a
 	// wait for work still to be done.
 	DrainInFlight(inFlight)
+	if cfg.ObjectStore != nil {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		flushObjectStoreState(flushCtx, cfg)
+		cancel()
+	}
 	return nil
+}
+
+func flushObjectStoreState(ctx context.Context, cfg Config) {
+	if cfg.transcriptObjects != nil {
+		if err := cfg.transcriptObjects.FlushAll(ctx); err != nil {
+			log.Printf("grain daemon: flushing transcripts to object store: %v", err)
+		}
+	}
+	var objArt *ci.ObjectArtifacts
+	if a, ok := cfg.ciArtifacts.(*ci.ObjectArtifacts); ok {
+		objArt = a
+	} else if cfg.ObjectStore != nil && cfg.DataDir != "" {
+		objArt, _ = ci.OpenObjectArtifacts(
+			objectstore.WithPrefix(cfg.ObjectStore, "ci-artifacts"),
+			ciArtifactDir(cfg.DataDir),
+			ci.DirArtifactsOptions{},
+		)
+	}
+	if objArt != nil {
+		if err := objArt.FlushLocal(ctx); err != nil {
+			log.Printf("grain daemon: flushing CI artifacts to object store: %v", err)
+		}
+	}
+	if s := agentSessionStoreFor(cfg); s != nil {
+		if err := s.FlushAll(ctx); err != nil {
+			log.Printf("grain daemon: flushing agent-sessions to object store: %v", err)
+		}
+	}
+	if arch := claudeSessionArchiveFor(cfg); arch != nil {
+		if err := arch.FlushAll(ctx); err != nil {
+			log.Printf("grain daemon: flushing claude sessions to object store: %v", err)
+		}
+	}
 }
 
 // shutdownServerGrace bounds how long a deferred HTTP listener shutdown

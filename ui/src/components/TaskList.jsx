@@ -856,6 +856,16 @@ export function TaskRow({
           />
         )}
         {t.repo && <Chip size="small" label={t.repo} />}
+        {t.owner && (
+          <Chip
+            size="small"
+            variant="outlined"
+            className="chip-owner"
+            data-testid="task-owner-chip"
+            title={`Owner: ${t.owner}`}
+            label={t.owner}
+          />
+        )}
         {t.base && t.base !== "main" && (
           <Chip size="small" variant="outlined" label={t.base} />
         )}

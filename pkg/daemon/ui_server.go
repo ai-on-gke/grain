@@ -121,7 +121,12 @@ func CheckUIRequireIAP(cfg Config) error {
 // mode is gone -- see this file's own doc comment), it always has that
 // directory to hand; there is no longer a cross-process case where it
 // would not.
-func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir string, sandboxes orchestrator.Sandboxes, live *LiveConfig, pkgCache *PackageCache, actionsCache *ActionsCache, stateRepo ui.StateRepoManager, settingsRepo func() model.RepoRef, upgrader *upgrade.Upgrader, secretStore *secrets.Store) (stop func(context.Context) error, err error) {
+func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB, transcriptDir string, sandboxes orchestrator.Sandboxes, live *LiveConfig, pkgCache *PackageCache, actionsCache *ActionsCache, stateRepo ui.StateRepoManager, settingsRepo func() model.RepoRef, forbidden *gitproxy.ForbiddenSet, upgrader *upgrade.Upgrader, secretStore *secrets.Store) (stop func(context.Context) error, err error) {
+	defer func() {
+		if err != nil && uiLn != nil {
+			_ = uiLn.Close()
+		}
+	}()
 	// The credential ladder run() already loaded, not a second copy of
 	// it: this is the one Settings checks targetRepos against to flag
 	// bwsalmon/agents#427's drift before a push ever reaches the proxy
@@ -298,7 +303,8 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// the template can know which that is. The reconcile loop is
 		// handed the identical function for the identical reason
 		// (orchestrator.Config.StateRepo above).
-		StateRepoRef: settingsRepo,
+		StateRepoRef:   settingsRepo,
+		ForbiddenRepos: forbidden,
 		// The three host-power actions, nil under Kubernetes: there is
 		// no machine here that is this deployment's to reboot or power
 		// off (the node runs other people's workloads), and restarting
@@ -345,7 +351,13 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// able to override this deployment's framework both formats can
 		// be in this one directory at once -- so the reader wired here
 		// picks between them per file rather than per deployment.
-		LiveTranscripts: LiveTranscriptDir(transcriptDir),
+		LiveTranscripts: LiveTranscriptDirWithStore(transcriptDir, cfg.transcriptObjects),
+		ArchivedTranscripts: func() ui.ArchivedTranscript {
+			if cfg.transcriptObjects == nil {
+				return nil
+			}
+			return cfg.transcriptObjects
+		}(),
 		// orchestrator.ChecksUnavailable reads process-lifetime state
 		// RunCycle's own reconcile loop sets the first time GitHub 403s a
 		// check-runs read against this deployment's credential -- see its
@@ -449,6 +461,8 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// reconcilerDown (daemon.go), the same way AutoMergeDegraded above
 		// mirrors orchestrator.ChecksUnavailable -- bwsalmon/agents#576.
 		ReconcilerDown: func() bool { return ReconcilerDown.Load() },
+		// And the store switched underneath it (storeswitch.go).
+		StoreSwitch: CurrentStoreSwitch,
 		// Restarting: this process has been told to stop, or the
 		// upgrader is running an upgrade that ends in a restart.
 		Restarting: daemonRestarting(cfg, upgrader),
@@ -713,11 +727,15 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 
 	var httpSrv *http.Server
 	if cfg.UiAddr != "" {
-		ln, err := net.Listen("tcp", cfg.UiAddr)
-		if err != nil {
-			localScriptApprovalURL.Store("")
-			_ = callbackSrv.Close()
-			return nil, fmt.Errorf("listening on %s: %w", cfg.UiAddr, err)
+		ln := uiLn
+		uiLn = nil
+		if ln == nil {
+			ln, err = net.Listen("tcp", cfg.UiAddr)
+			if err != nil {
+				localScriptApprovalURL.Store("")
+				_ = callbackSrv.Close()
+				return nil, fmt.Errorf("listening on %s: %w", cfg.UiAddr, err)
+			}
 		}
 		url := "http://" + ln.Addr().String()
 		log.Printf("grain daemon: serving the UI/API on %s as %s", url, uiCfg.Actor.ID)

@@ -51,7 +51,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/metrics"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/postgres"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 	"github.com/ai-on-gke/grain/pkg/version"
@@ -515,6 +514,11 @@ type Config struct {
 	// there is none -- an honest answer for a deployment whose state is
 	// local-only, and for any UI not colocated with a daemon at all.
 	StateRepoRef func() model.RepoRef
+	// ForbiddenRepos is the live set of external repositories this
+	// deployment never reads or serves (such as the encrypted secrets backup
+	// repository), shared with the git proxy and declaration poller so
+	// schedule writes refuse forbidden git_ref watched repositories up front.
+	ForbiddenRepos *gitproxy.ForbiddenSet
 	// HostdRemote, when set, takes the upgrades of a grain hostd on
 	// another machine dialing in to /api/hostd/connect (hostd.Remote,
 	// which checks the hostd token itself); nil refuses them.
@@ -568,6 +572,10 @@ type Config struct {
 	// attempt is read the way bwsalmon/agents#446 originally left it,
 	// nothing to show until it finishes (bwsalmon/agents#467).
 	LiveTranscripts LiveTranscript
+	// ArchivedTranscripts, when set, reads finished run transcripts from an
+	// object store (via a local read-through cache) when Store.RunTranscript
+	// holds none.
+	ArchivedTranscripts ArchivedTranscript
 	// Sandboxes, when set, is what GET /api/sandboxes calls to report
 	// every live run's own sandbox status -- pkg/cli/daemon.go's
 	// sandboxHealthAdapter over whichever of orchestrator.GranuleSandboxes/
@@ -774,6 +782,11 @@ type Config struct {
 	// ReconcilerDown always reports false, the same nil-means-
 	// unavailable-feature default AutoMergeDegraded above gives.
 	ReconcilerDown func() bool
+	// StoreSwitch, when set, is polled by GET /api/config and GET
+	// /api/sandbox-health (DaemonHealth.StoreSwitch) for the standing
+	// alert that the store was switched underneath this daemon
+	// (pkg/daemon/storeswitch.go). nil, or a nil answer, is no alert.
+	StoreSwitch func() *StoreSwitch
 	// InstallNotice, when set, is what GET /api/config reports as
 	// installNotice: something about how this deployment is installed
 	// that an operator has to fix, found once at start -- an unmigrated
@@ -1145,16 +1158,9 @@ type Config struct {
 	DBDSN string
 	// DataDir is the root data directory of the grain installation.
 	DataDir string
-	// SourceDB is the raw *sql.DB backing this store, used during migration exports.
+	// SourceDB is the raw *sql.DB backing this store, which a task's
+	// database access queries (task_db.go).
 	SourceDB *sql.DB
-	// UpgradePostgres, when set, is what POST /api/database/upgrade calls to upgrade
-	// SQLite to PostgreSQL.
-	UpgradePostgres func(ctx context.Context, dsn string, migrateData bool) (*postgres.UpgradeResult, error)
-	// DatabaseConfirm, when set, is handed each confirmation token POST
-	// /api/database/upgrade issues, with a sentence saying what it would
-	// confirm, instead of the daemon log. It must deliver them somewhere
-	// the HTTP caller cannot read; tests set it to catch the token.
-	DatabaseConfirm func(token, summary string)
 	// IAPAudience, when set, specifies the expected target audience for verifying
 	// Google Cloud IAP JWT assertions (X-Goog-IAP-JWT-Assertion), or
 	// several separated by commas. With none (here or in
@@ -1359,6 +1365,19 @@ type LiveTranscript interface {
 	// should fall back to the store the same way it would if
 	// LiveTranscripts were nil.
 	Tail(runID string) (text string, ok bool, err error)
+}
+
+// ArchivedTranscript reads finished run transcripts stored outside model.Store
+// (for example in gs://<bucket>/instances/<name>/transcripts/ behind a local
+// read-through disk cache).
+type ArchivedTranscript interface {
+	Read(ctx context.Context, runID string) (text string, ok bool, err error)
+}
+
+// ArchivedTranscriptSizes is an optional extension of ArchivedTranscript that
+// reports byte sizes of stored transcripts for the metrics report.
+type ArchivedTranscriptSizes interface {
+	Sizes(ctx context.Context) ([]model.RunTranscript, error)
 }
 
 // Upgrader is the subset of *upgrade.Upgrader the UI needs -- an

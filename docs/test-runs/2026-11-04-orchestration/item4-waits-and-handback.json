@@ -1,0 +1,26 @@
+{
+  "scenario4a_resumeLaterActions": {
+    "attempt2PromptHasReason": true,
+    "attemptsAfterVerdict": 2,
+    "attemptsWhileInProgress": 1,
+    "resumeToolReply": "Parked. This task is queued again once CI (my-branch) has a verdict; the next run's prompt says this one was suspended, and why. This ends your run: stop here and take no further actions.\n\nresume_on: {\"ci\":\"my-branch\"}",
+    "stateAfterAttempt2": "awaiting_submit",
+    "stateAfterSuspend": "deferred",
+    "stateWhileInProgress": "deferred"
+  },
+  "scenario4b_untilMergedOnClosedTaskWithOpenPR": {
+    "attemptsAfterMerge": 2,
+    "attemptsWhilePROpen": 1,
+    "promptMentionsWait": true,
+    "stateAfterMerge": "awaiting_reply",
+    "stateWhilePROpen": "queued",
+    "waitToolReply": "Parked. This task now depends on #601 and is queued again once every one of them has closed; the next attempt's prompt says how each ended. This ends your run: stop here and take no further actions.\n\n[reached] Task 601 \"feat: prerequisite change\": closed, outcome cancelled (closed, but its pull request is still open: grain records a merge if a person merges it by hand).\n"
+  },
+  "scenario4c_autoMergeHandBack": {
+    "restoredAndMergedAfterClean": true,
+    "survivedExportImport": true,
+    "underHoldAutoMerge": false,
+    "underHoldHasSecurityLink": true,
+    "withheldWhenClearanceAlsoDropped": true
+  }
+}

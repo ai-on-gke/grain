@@ -1579,10 +1579,7 @@ export default function UpgradePanel({
           onSave={(payload) => onSaveSettings(payload, { close: false })}
         />
       )}
-      <PostgresDatabaseUpgrade
-        showError={showError}
-        databaseStatus={status?.database}
-      />
+      <DatabaseBackend databaseStatus={status?.database} />
     </>
   );
 }
@@ -1909,270 +1906,69 @@ function UpgradeSteps({ steps, progress, now }) {
   );
 }
 
-// PostgresDatabaseUpgrade lets an operator upgrade an existing SQLite database
-// into PostgreSQL and migrate all tables and data.
-export function PostgresDatabaseUpgrade({
-  showError = defaultShowError,
-  databaseStatus,
-}) {
-  const reportError =
-    typeof showError === "function" ? showError : defaultShowError;
-  const [dbStatus, setDbStatus] = useState(databaseStatus || null);
-  const [dsn, setDsn] = useState("");
-  const [migrateData, setMigrateData] = useState(true);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState(null);
-  const [upgrading, setUpgrading] = useState(false);
-  const [upgradeResult, setUpgradeResult] = useState(null);
-  // confirmation is the server's 202 answer to a first request: nothing
-  // has been done, and a single-use token bound to this DSN and these
-  // options has been written to the daemon's log (pkg/ui/
-  // database_confirm.go). The token is read there, on the daemon host,
-  // and typed back here; GET /api/logs blanks it out on purpose.
-  const [confirmation, setConfirmation] = useState(null);
-  const [confirmationToken, setConfirmationToken] = useState("");
+// DatabaseBackend says which store this deployment runs on, read-only,
+// and how to move it. There is no button that moves it: a store copied
+// or migrated while the daemon writes to it forks, and the daemon keeps
+// writing to the original after the copy is taken (pkg/ui/database.go).
+// A move is offline only -- stop, migrate, check, start -- and these are
+// the commands for it (docs/database.md).
+export const OFFLINE_MIGRATION_COMMANDS = [
+  "sudo systemctl stop grain-daemon.service",
+  "sudo ./scripts/setup.sh --db-driver postgres",
+  "sudo grain db check -data-dir /var/lib/grain/data",
+].join("\n");
 
-  // A token is bound to exactly the request it was issued for, so a
-  // changed DSN or option needs a new one rather than a doomed 403.
-  const forgetConfirmation = () => {
-    setConfirmation(null);
-    setConfirmationToken("");
-  };
-
-  useEffect(() => {
-    if (databaseStatus) {
-      setDbStatus(databaseStatus);
-    }
-  }, [databaseStatus]);
-
-  const fetchDbStatus = useCallback(async () => {
-    try {
-      const res = await api("/api/database");
-      setDbStatus(res);
-    } catch {
-      // Keep current state on fetch error
-    }
-  }, []);
-
-  const handleTestConnection = async () => {
-    setTesting(true);
-    setTestResult(null);
-    try {
-      const res = await api("/api/database/test", {
-        method: "POST",
-        body: JSON.stringify({ dsn }),
-      });
-      setTestResult({
-        ok: true,
-        message: res?.message || "PostgreSQL connection successful",
-      });
-    } catch (err) {
-      reportError(err);
-      setTestResult({
-        ok: false,
-        message: err?.message || "Connection failed",
-      });
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  const handleUpgrade = async (e) => {
-    if (e) e.preventDefault();
-    setUpgrading(true);
-    setUpgradeResult(null);
-    const token = confirmation ? confirmationToken.trim() : "";
-    try {
-      const res = await api("/api/database/upgrade", {
-        method: "POST",
-        body: JSON.stringify(
-          token
-            ? { dsn, migrateData, confirmationToken: token }
-            : { dsn, migrateData },
-        ),
-      });
-      if (res && res.confirmationRequired) {
-        setConfirmation(res);
-        setConfirmationToken("");
-        return;
-      }
-      forgetConfirmation();
-      setUpgradeResult(res);
-      if (res && res.driver === "postgres") {
-        setDbStatus({
-          driver: "postgres",
-          dsn: res.dsn || dsn || "",
-          isSqlite: false,
-          postgresAvailable: true,
-        });
-      }
-      await fetchDbStatus();
-    } catch (err) {
-      reportError(err);
-      // Any attempt spends the token, right or wrong.
-      forgetConfirmation();
-      setUpgradeResult({
-        ok: false,
-        message: err?.message || "Migration failed",
-      });
-    } finally {
-      setUpgrading(false);
-    }
-  };
-
-  const currentStatus = dbStatus || {
-    driver: "sqlite",
-    isSqlite: true,
-    postgresAvailable: false,
-  };
+// databaseStatus is GET /api/upgrade's "database" (the same reading as
+// GET /api/database), so the pane asks nothing of its own.
+export function DatabaseBackend({ databaseStatus }) {
+  const dbStatus = databaseStatus || null;
+  const postgres = dbStatus && dbStatus.driver === "postgres";
 
   return (
-    <Box sx={{ mt: 4 }} className="database-upgrade-section">
+    <Box sx={{ mt: 4 }} className="database-backend-section">
       <Typography variant="subtitle2" sx={{ mb: 1 }}>
         Database Backend
       </Typography>
-
-      {!currentStatus.isSqlite && currentStatus.driver === "postgres" ? (
-        <Alert
-          severity="success"
-          sx={{ mb: 2 }}
-          className="database-postgres-active"
+      {dbStatus && (
+        <Typography
+          variant="body2"
+          sx={{ mb: 2, overflowWrap: "anywhere" }}
+          className="database-backend-current"
         >
-          This deployment is running on <strong>PostgreSQL</strong>
-          {currentStatus.dsn ? ` (${currentStatus.dsn})` : ""}.
-        </Alert>
-      ) : (
-        <>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Currently running on <strong>SQLite</strong>. Upgrade this
-            deployment to a PostgreSQL database by migrating all tasks,
-            configurations, runs, and conversation history.
-          </Typography>
-
-          {upgradeResult && upgradeResult.ok && (
-            <Alert
-              severity="success"
-              sx={{ mb: 2 }}
-              className="database-upgrade-success"
-            >
-              {upgradeResult.message ||
-                `Successfully migrated database to PostgreSQL (${upgradeResult.tablesMigrated} tables migrated).`}
-            </Alert>
-          )}
-
-          {upgradeResult && !upgradeResult.ok && (
-            <Alert
-              severity="error"
-              sx={{ mb: 2 }}
-              className="database-upgrade-error"
-            >
-              {upgradeResult.message}
-            </Alert>
-          )}
-
-          {confirmation && (
-            <Alert
-              severity="info"
-              sx={{ mb: 2 }}
-              className="database-upgrade-confirm"
-            >
-              {confirmation.message ||
-                "A confirmation token has been written to the daemon log."}{" "}
-              Find the line on the daemon host (for example{" "}
-              <code>journalctl -u grain-daemon.service</code>) and enter its
-              token below.
-            </Alert>
-          )}
-
-          {testResult && (
-            <Alert
-              severity={testResult.ok ? "success" : "error"}
-              sx={{ mb: 2 }}
-              className={
-                testResult.ok ? "database-test-success" : "database-test-error"
-              }
-            >
-              {testResult.message}
-            </Alert>
-          )}
-
-          <form onSubmit={handleUpgrade}>
-            <TextField
-              name="postgresDSN"
-              label="PostgreSQL DSN / Connection URL"
-              value={dsn}
-              onChange={(e) => {
-                setDsn(e.target.value);
-                forgetConfirmation();
-              }}
-              placeholder="postgres://user:password@localhost:5432/grain?sslmode=disable"
-              autoComplete="off"
-              disabled={upgrading}
-              fullWidth
-              margin="normal"
-              helperText="Target PostgreSQL connection string (or leave blank if local embedded PostgreSQL is available)."
-            />
-
-            <FormControlLabel
-              control={
-                <Checkbox
-                  name="migrateData"
-                  checked={migrateData}
-                  disabled={upgrading}
-                  onChange={(e) => {
-                    setMigrateData(e.target.checked);
-                    forgetConfirmation();
-                  }}
-                />
-              }
-              label="Migrate existing SQLite data (tasks, runs, settings, and secrets)"
-              sx={{ display: "flex", mt: 1 }}
-            />
-
-            {confirmation && (
-              <TextField
-                name="confirmationToken"
-                label="Confirmation token"
-                value={confirmationToken}
-                onChange={(e) => setConfirmationToken(e.target.value)}
-                autoComplete="off"
-                disabled={upgrading}
-                required
-                fullWidth
-                margin="normal"
-                helperText="The token from the daemon log line that names this request."
-              />
-            )}
-
-            <Stack
-              direction="row"
-              spacing={2}
-              justifyContent="flex-end"
-              sx={{ mt: 2 }}
-            >
-              <Button
-                variant="outlined"
-                disabled={testing || upgrading}
-                onClick={handleTestConnection}
-                className="test-db-button"
-              >
-                {testing ? "Testing…" : "Test Connection"}
-              </Button>
-              <Button
-                type="submit"
-                variant="contained"
-                disabled={upgrading}
-                className="upgrade-db-button"
-              >
-                {upgrading
-                  ? "Migrating Database…"
-                  : confirmation
-                    ? "Confirm Migration"
-                    : "Migrate Database to PostgreSQL"}
-              </Button>
-            </Stack>
-          </form>
-        </>
+          This deployment runs on{" "}
+          <strong>{postgres ? "PostgreSQL" : "SQLite"}</strong>
+          {dbStatus.dsn ? ` (${dbStatus.dsn})` : ""}.
+        </Typography>
+      )}
+      <Alert
+        severity="info"
+        sx={{ mb: 2 }}
+        className="database-backend-offline"
+      >
+        The store is moved only with the daemon stopped, never from here: a copy
+        taken while grain is running loses everything written after it.
+        {postgres
+          ? " To move this PostgreSQL store to another server, stop the daemon, dump and restore it, check it with grain db check, and start the daemon again."
+          : " To move this SQLite store into PostgreSQL, run these on the daemon's host. setup.sh stops the daemon, migrates the store and starts it again once grain db check finds nothing missing."}{" "}
+        See docs/database.md.
+      </Alert>
+      {!postgres && (
+        <Box
+          component="pre"
+          className="database-backend-commands"
+          sx={{
+            m: 0,
+            p: 1.5,
+            borderRadius: 1,
+            bgcolor: "action.hover",
+            fontFamily: "monospace",
+            fontSize: "0.8125rem",
+            overflowX: "auto",
+            whiteSpace: "pre",
+          }}
+        >
+          {OFFLINE_MIGRATION_COMMANDS}
+        </Box>
       )}
     </Box>
   );

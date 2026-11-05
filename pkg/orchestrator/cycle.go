@@ -55,6 +55,12 @@ import (
 // its own, and because zero means "no ceiling of mine" rather than "start
 // nothing".
 type Deps struct {
+	// DispatchHalted, when set and answering a non-empty reason, stops
+	// every new dispatch until the process restarts: the daemon sets it
+	// when db-config.json starts selecting a store other than the one
+	// it opened (pkg/daemon/storeguard.go). Everything else -- runs
+	// already going, pull request sync -- carries on.
+	DispatchHalted func() string
 	// CapabilityServers are the deployment's attached capability
 	// servers, which admission mints a task's capability references
 	// through (capabilityAdmitter). Nil refuses every task holding one.
@@ -1134,6 +1140,12 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 	// the deployment sets none (grain/task-28), so the invariant is
 	// stated here instead of being a side effect of an unset number.
 	if deps.Sandboxes == nil {
+		return nil
+	}
+	// Nor while the store this process opened is no longer the one its
+	// data dir selects (Deps.DispatchHalted): what it dispatched now would
+	// be written into a store the next start does not open.
+	if deps.DispatchHalted != nil && deps.DispatchHalted() != "" {
 		return nil
 	}
 

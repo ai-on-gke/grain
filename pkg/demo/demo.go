@@ -46,6 +46,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/namespace"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/systemlog"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -642,7 +643,20 @@ func Run(opts Options) error {
 		}
 		go runDemoReviewQuestions(context.Background(), store, interval)
 	}
-	var srv http.Handler = ui.NewServerWithClient(client)
+	uiSrv := ui.NewServerWithClient(client)
+	var srv http.Handler = uiSrv
+	var (
+		demoNS    *namespace.Server
+		demoNSCLI *daemon.SandboxCLIBackend
+		demoNSAPI *daemon.InProcessAPI
+	)
+	if gitProxy != nil {
+		ns := gitProxy.ns
+		uiSrv.SetNamespace(func() *namespace.Server { return ns })
+	} else {
+		demoNS, demoNSCLI, demoNSAPI = newDemoNamespace(dir, store)
+		uiSrv.SetNamespace(func() *namespace.Server { return demoNS })
+	}
 	defer ui.RegisterHealthCounters("sign-in verification (demo)", demoHealthCounters(time.Now()))()
 	if fakeCI, ok := cfg.CI.(*demoFakeCI); ok {
 		srv = scheduledWorkflowsDemoHandler(srv, fakeCI, githubSimRepo)
@@ -661,6 +675,9 @@ func Run(opts Options) error {
 		if simClient, ok := cfg.GitHubBranches.(github.Client); ok {
 			srv = githubSimDemoHandler(srv, simClient)
 		}
+	}
+	if demoNS != nil {
+		wireDemoNamespace(demoNS, demoNSCLI, demoNSAPI, srv, client, cfg, store)
 	}
 	ln, err := net.Listen("tcp", opts.Addr)
 	if err != nil {
@@ -1325,6 +1342,13 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		},
 		Reason: model.ReasonProposal,
 	}
+	st.Proposer = model.TaskProposer{
+		Attribution: model.Attribution{
+			Actor: model.Principal{Kind: model.PrincipalAgent, ID: firstRun},
+		},
+		TaskID: repairing.ID,
+		RunID:  firstRun,
+	}
 	st.Links = append(st.Links,
 		model.Link{Kind: model.LinkChildOf, Target: repairing.ID},
 		model.Link{Kind: model.LinkDependsOn, Target: repairing.ID},
@@ -1332,6 +1356,14 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	)
 	if err := store.PutTask(ctx, *st); err != nil {
 		return err
+	}
+	if err := store.UpdateTask(model.WithOwnerChange(ctx, model.Attribution{
+		Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator", Source: model.SourceAccessCode},
+	}), subtask.ID, func(t *model.Task) error {
+		t.Owner = "dana@example.com"
+		return nil
+	}); err != nil {
+		return fmt.Errorf("seeding subtask owner transfer: %w", err)
 	}
 
 	// An open GitHub issue the issue importer filed and nobody has
@@ -1349,6 +1381,11 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		t.Origin = model.Origin{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "issue-import"}},
 			Reason:      model.ReasonImported,
+		}
+		t.Proposer = model.TaskProposer{
+			Attribution: model.Attribution{
+				Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "issue-import"},
+			},
 		}
 		if t.Target != nil {
 			t.Issue = 42
@@ -1452,6 +1489,12 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		}
 		if t.Parent() == "" {
 			t.Links = append(t.Links, model.Link{Kind: model.LinkProposedBy, Target: directorTask.ID})
+			t.Proposer = model.TaskProposer{
+				Attribution: model.Attribution{
+					Actor: model.Principal{Kind: model.PrincipalAgent, ID: "director-agent", Source: "session"},
+				},
+				TaskID: directorTask.ID,
+			}
 		}
 		t.WorkOrigin = treeOrigin
 		if err := store.PutTask(ctx, *t); err != nil {

@@ -55,6 +55,7 @@ var gritAllowed = []string{
 	// Leaf utilities.
 	"pkg/actionscache",
 	"pkg/jwks",
+	"pkg/objectstore",
 	"pkg/pkgcache",
 	"pkg/pkgcache/...",
 	"pkg/redact",
