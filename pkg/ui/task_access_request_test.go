@@ -352,7 +352,7 @@ func TestCheckAccessRequestHonorsTemplateAndSessionCatalogueContext(t *testing.T
 
 	fromTemplate := model.Task{
 		ID: "tmpl-task", Title: "Audit", Body: "Check",
-		Target: &model.RepoRef{Owner: "acme", Name: "widgets"},
+		Target:     &model.RepoRef{Owner: "acme", Name: "widgets"},
 		TemplateID: "tmpl-release", ApprovedAt: &now, CreatedAt: &now,
 	}
 	if err := store.PutTask(ctx, fromTemplate); err != nil {
@@ -369,7 +369,7 @@ func TestCheckAccessRequestHonorsTemplateAndSessionCatalogueContext(t *testing.T
 	sessionTask := model.Task{
 		ID: "sess-task", Title: "Console", Body: "Session",
 		Interactive: true, Tags: []string{model.ConsoleSessionTag("ops")},
-		Origin: model.Origin{Reason: model.ReasonConsoleSession},
+		Origin:     model.Origin{Reason: model.ReasonConsoleSession},
 		ApprovedAt: &now, CreatedAt: &now,
 	}
 	if err := store.PutTask(ctx, sessionTask); err != nil {
