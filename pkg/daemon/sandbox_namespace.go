@@ -437,7 +437,23 @@ func (d sandboxDeploy) ListGrainLogSources(context.Context) ([]string, error) {
 // of each scope and the documents filed under it.
 type sandboxMemory struct{ store *model.Store }
 
-var _ namespace.MemoryProvider = sandboxMemory{}
+var (
+	_ namespace.MemoryProvider            = sandboxMemory{}
+	_ namespace.MemoryDocumentReader      = sandboxMemory{}
+	_ namespace.MemoryDocumentBatchReader = sandboxMemory{}
+	_ namespace.MemoryTextReader          = sandboxMemory{}
+)
+
+func parseMemoryScope(scope string) (*model.RepoRef, error) {
+	if scope == "global" {
+		return nil, nil
+	}
+	ref, err := model.ParseRepo(scope)
+	if err != nil {
+		return nil, fmt.Errorf("%w: memory scope %q: %v", namespace.ErrNotFound, scope, err)
+	}
+	return &ref, nil
+}
 
 func (m sandboxMemory) ListMemoryRepos(ctx context.Context) ([]string, error) {
 	seen := map[string]bool{}
@@ -468,13 +484,9 @@ func (m sandboxMemory) ListMemoryRepos(ctx context.Context) ([]string, error) {
 }
 
 func (m sandboxMemory) ReadMemoryLayer(ctx context.Context, scope string) (*namespace.MemoryLayerView, error) {
-	var repo *model.RepoRef
-	if scope != "global" {
-		ref, err := model.ParseRepo(scope)
-		if err != nil {
-			return nil, fmt.Errorf("%w: memory scope %q: %v", namespace.ErrNotFound, scope, err)
-		}
-		repo = &ref
+	repo, err := parseMemoryScope(scope)
+	if err != nil {
+		return nil, err
 	}
 	layer := &namespace.MemoryLayerView{Scope: scope}
 	mem, err := m.store.GetMemory(ctx, repo)
@@ -488,20 +500,84 @@ func (m sandboxMemory) ReadMemoryLayer(ctx context.Context, scope string) (*name
 	if err != nil {
 		return nil, err
 	}
+	layer.Docs = make([]namespace.MemoryDocView, 0, len(docs))
 	for _, d := range docs {
-		doc, err := m.store.GetMemoryDocument(ctx, repo, d.Name)
-		if err != nil {
-			return nil, err
-		}
-		if doc == nil {
-			continue // forgotten between the listing and the read
-		}
-		layer.Docs = append(layer.Docs, namespace.MemoryDocView{Slug: doc.Name, Summary: doc.Summary, Text: doc.Text})
+		layer.Docs = append(layer.Docs, namespace.MemoryDocView{
+			Slug:    d.Name,
+			Summary: d.Summary,
+			Size:    int64(d.Length),
+		})
 	}
 	if mem == nil && len(layer.Docs) == 0 && repo != nil {
 		return nil, fmt.Errorf("%w: no memory for %s", namespace.ErrNotFound, scope)
 	}
 	return layer, nil
+}
+
+func (m sandboxMemory) ReadMemoryDocument(ctx context.Context, scope, slug string) (*namespace.MemoryDocView, error) {
+	repo, err := parseMemoryScope(scope)
+	if err != nil {
+		return nil, err
+	}
+	doc, err := m.store.GetMemoryDocument(ctx, repo, strings.TrimSuffix(slug, ".md"))
+	if err != nil {
+		return nil, err
+	}
+	if doc == nil {
+		return nil, fmt.Errorf("%w: no memory document %q for %s", namespace.ErrNotFound, slug, scope)
+	}
+	return &namespace.MemoryDocView{
+		Slug:    doc.Name,
+		Summary: doc.Summary,
+		Text:    doc.Text,
+		Size:    int64(len(doc.Text)),
+	}, nil
+}
+
+func (m sandboxMemory) ReadMemoryDocuments(ctx context.Context, scope string) (map[string]namespace.MemoryDocView, error) {
+	repo, err := parseMemoryScope(scope)
+	if err != nil {
+		return nil, err
+	}
+	docs, err := m.store.GetMemoryDocuments(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]namespace.MemoryDocView, len(docs))
+	for _, d := range docs {
+		out[d.Name] = namespace.MemoryDocView{
+			Slug:    d.Name,
+			Summary: d.Summary,
+			Text:    d.Text,
+			Size:    int64(len(d.Text)),
+		}
+	}
+	return out, nil
+}
+
+func (m sandboxMemory) ReadMemoryText(ctx context.Context, scope string) (string, error) {
+	repo, err := parseMemoryScope(scope)
+	if err != nil {
+		return "", err
+	}
+	mem, err := m.store.GetMemory(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	if mem != nil {
+		return mem.Text, nil
+	}
+	if repo == nil {
+		return "", nil
+	}
+	docs, err := m.store.ListMemoryDocuments(ctx, model.MemoryScope{Repo: repo})
+	if err != nil {
+		return "", err
+	}
+	if len(docs) == 0 {
+		return "", fmt.Errorf("%w: no memory for %s", namespace.ErrNotFound, scope)
+	}
+	return "", nil
 }
 
 // sandboxRepoConfig is config://repos/<owner>/<repo>: one repository's

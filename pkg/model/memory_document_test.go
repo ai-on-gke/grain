@@ -98,6 +98,13 @@ func TestMemoryDocumentsRoundTripPerScope(t *testing.T) {
 	if got, err := store.ListMemoryDocuments(ctx, model.MemoryScope{Repo: &other}); err != nil || len(got) != 0 {
 		t.Fatalf("ListMemoryDocuments(%s) = %v, %v, want nothing for a scope nobody has written for", other, got, err)
 	}
+	repoDocs, err := store.GetMemoryDocuments(ctx, &repo)
+	if err != nil || len(repoDocs) != 1 || repoDocs[0].Name != "flaky-e2e" || repoDocs[0].Text != text {
+		t.Fatalf("GetMemoryDocuments(%s) = %v, %v, want flaky-e2e with its full text", repo, repoDocs, err)
+	}
+	if empty, err := store.GetMemoryDocuments(ctx, &other); err != nil || len(empty) != 0 {
+		t.Fatalf("GetMemoryDocuments(%s) = %v, %v, want empty slice", other, empty, err)
+	}
 }
 
 func TestMemoryDocumentIsReplacedAndDeleted(t *testing.T) {
