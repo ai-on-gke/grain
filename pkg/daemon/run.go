@@ -712,6 +712,19 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 
+	var uiLn net.Listener
+	if cfg.UiAddr != "" {
+		uiLn, err = net.Listen("tcp", cfg.UiAddr)
+		if err != nil {
+			return fmt.Errorf("starting the UI/API server: listening on %s: %w", cfg.UiAddr, err)
+		}
+		defer func() {
+			if uiLn != nil {
+				_ = uiLn.Close()
+			}
+		}()
+	}
+
 	capabilityServers, hostdCapabilityServers := startCapabilityServers(ctx, store, secretStore, cfg.DataDir, cfg.capabilityHostd(), gcpKeyPool(cfg))
 	live := NewLiveConfig(store, sandboxes, cfg, githubCredentials).
 		WithSandboxImages(sandboxImages, stockSandboxImage, sandboxImageLabels()).
@@ -907,7 +920,9 @@ func Run(ctx context.Context, cfg Config) error {
 	// longer happens: runDaemon's own failure is logged, not fatal, and
 	// run() itself only returns once ctx is actually cancelled.
 	if cfg.UiAddr != "" {
-		stopUI, err := startUIServer(cfg, store, db, transcriptDir, sandboxes, live, pkgCache, actionsCache,
+		preboundUI := uiLn
+		uiLn = nil
+		stopUI, err := startUIServer(cfg, preboundUI, store, db, transcriptDir, sandboxes, live, pkgCache, actionsCache,
 			stateManager, stateManager.settingsRepo, upgrader, secretStore)
 		if err != nil {
 			return fmt.Errorf("starting the UI/API server: %w", err)
