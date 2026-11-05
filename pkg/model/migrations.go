@@ -774,6 +774,22 @@ var Migrations = []Migration{
 			"ALTER TABLE `grain_config` ADD COLUMN `auto_grant_context_reads` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     113,
+		Description: "add task.owner and task.proposer_*, backfill existing tasks, and enforce non-empty task owner",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `owner` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_actor_kind` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_actor_id` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_actor_source` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_behalf_kind` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_behalf_id` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_behalf_source` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_task_id` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_run_id` TEXT NOT NULL DEFAULT ''",
+		},
+		Up: MigrateTaskOwnerAndProposer,
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as

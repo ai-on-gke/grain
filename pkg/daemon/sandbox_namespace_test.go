@@ -17,6 +17,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -419,5 +420,170 @@ func TestSandboxProxyPagesPipelineChanges(t *testing.T) {
 	}
 	if status, body := stage2Get(t, srv, "steward", "/fs/deploy/pipeline-changes?page=lots"); status != http.StatusBadRequest {
 		t.Errorf("?page=lots: status=%d, want 400; body=%q", status, body)
+	}
+}
+
+func TestInProcessAPIDetachesExternalTokenContextOnMergeQueue(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := sqlite.Open(sqlite.DefaultConfig(dataDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := model.New(db)
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		id, repo, pr string
+	}{
+		{"1", "acme/widgets", "acme/widgets#11"},
+		{"2", "acme/secret", "acme/secret#22"},
+	} {
+		parts := strings.Split(tc.repo, "/")
+		ref := model.RepoRef{Owner: parts[0], Name: parts[1]}
+		if err := store.PutTask(ctx, model.Task{
+			ID:         tc.id,
+			Intent:     model.IntentImplement,
+			Title:      "Task " + tc.id,
+			Body:       "Task " + tc.id,
+			Target:     &ref,
+			Base:       "main",
+			Branch:     "grain/task-" + tc.id,
+			CreatedAt:  &now,
+			AutoMerge:  true,
+			Approval:   &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "op"}},
+			ApprovedAt: &now,
+			Links:      []model.Link{{Kind: model.LinkFixes, Target: tc.pr}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.ObserveField(ctx, tc.id, now, func(o *model.Observation) {
+			o.CompletedAt = &now
+			o.MergeQueueState = "waiting_ci"
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	api := &inProcessAPI{}
+	ns := &namespace.Server{
+		NewRedactor: func() *redact.Redactor { return BuildNamespaceRedactor(dataDir) },
+	}
+	WireSandboxNamespace(ns, SandboxNamespaceConfig{
+		DataDir:      dataDir,
+		Store:        store,
+		InsecureHTTP: true,
+		API:          api,
+	})
+	client := ui.NewClient(ui.Config{
+		DataDir:      dataDir,
+		Actor:        ui.DefaultActor("op"),
+		Capabilities: ui.OfferedCapabilities(),
+		PullRequests: PullRequestGate{},
+	}, store)
+	cfgRow, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfgRow == nil {
+		cfgRow = &model.Config{}
+	}
+	cfgRow.ExternalAgentAPI = true
+	if err := store.PutConfig(ctx, *cfgRow); err != nil {
+		t.Fatal(err)
+	}
+	uiSrv := ui.NewServerWithClient(client)
+	uiSrv.SetNamespace(func() *namespace.Server { return ns })
+	api.Set(uiSrv)
+
+	person := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "op@example.com"})
+	issued, err := client.CreateExternalAgentToken(person, ui.CreateExternalAgentTokenRequest{
+		Name:   "ci-widgets",
+		Scopes: []string{"ci:read"},
+		Repos:  []string{"acme/widgets"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/fs/deploy/merge-queue", nil)
+	req.Header.Set("Authorization", "Bearer "+issued.Token)
+	rec := httptest.NewRecorder()
+	uiSrv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/fs/deploy/merge-queue with ci:read token = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "acme/widgets") || strings.Contains(body, "acme/secret") {
+		t.Errorf("ci:read@acme/widgets merge-queue body = %q, want acme/widgets and no acme/secret", body)
+	}
+
+	// PullRequestGate implements ui.PullRequestAdopter and reports unavailable cleanly before LivePullRequests is set.
+	var adopter ui.PullRequestAdopter = PullRequestGate{}
+	if _, err := adopter.PullRequestStatus(ctx, model.PullRequestRef{Repo: model.RepoRef{Owner: "acme", Name: "widgets"}, Number: 11}, false); err == nil {
+		t.Error("PullRequestGate.PullRequestStatus without LivePullRequests succeeded, want error")
+	}
+}
+
+// TestSandboxMemoryLargeLayerWalkIsLinear verifies end-to-end against SQLite
+// that reading a single document, listing, globbing, and grepping a memory://
+// repository layer with 2,050 documents completes well under 1 second rather
+// than running N+1 full-layer fetches (F11).
+func TestSandboxMemoryLargeLayerWalkIsLinear(t *testing.T) {
+	const repo = "acme/widgets"
+	const docCount = 2050
+	srv, store, _ := stage2Proxy(t, stage2Scopes{
+		"own": {TaskID: "t-1", RunID: "run-1", TaskRepo: repo},
+	})
+	ctx := context.Background()
+	ref, err := model.ParseRepo(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	if err := store.PutMemory(ctx, model.Memory{Repo: &ref, Text: "Standing widgets memory.\n", UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := store.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmt, err := tx.PrepareContext(ctx,
+		"INSERT INTO `memory_document` (`owner`,`name`,`document`,`summary`,`text`,`updated_at`,`updated_by_kind`,`updated_by_id`,`updated_by_source`) "+
+			"VALUES (?,?,?,?,?,?,?,?,?)")
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	for i := 0; i < docCount; i++ {
+		slug := fmt.Sprintf("doc-%04d", i)
+		summary := fmt.Sprintf("Summary %d", i)
+		body := fmt.Sprintf("# Note %d\nUnique token needle-%04d in document.\n", i, i)
+		if _, err := stmt.ExecContext(ctx, ref.Owner, ref.Name, slug, summary, body, now, "agent", "memory-agent", ""); err != nil {
+			_ = stmt.Close()
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+	}
+	_ = stmt.Close()
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	if status, body := stage2Get(t, srv, "own", "/fs/memory/repos/acme/widgets/doc-2040.md"); status != http.StatusOK || !strings.Contains(body, "needle-2040") {
+		t.Fatalf("single doc read = %d %q, want 200 with needle-2040", status, body)
+	}
+	if status, body := stage2Get(t, srv, "own", "/fs/memory/repos/acme/widgets?list"); status != http.StatusOK || !strings.Contains(body, "doc-2049.md") {
+		t.Fatalf("layer ?list = %d (len=%d), want 200 containing doc-2049.md", status, len(body))
+	}
+	if status, body := stage2Get(t, srv, "own", "/fs/memory/repos/acme/widgets?grep=needle-1500"); status != http.StatusOK || !strings.Contains(body, "doc-1500.md:2:Unique token needle-1500") {
+		t.Fatalf("layer ?grep = %d %q, want 200 matching doc-1500.md", status, body)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("single-doc + ?list + ?grep over %d SQLite memory docs took %v, want < 5s", docCount, elapsed)
 	}
 }

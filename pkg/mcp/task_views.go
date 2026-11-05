@@ -207,7 +207,11 @@ func renderTaskConversation(t TaskRecord, after int64) string {
 		if c.Handover {
 			kind += ", handover"
 		}
-		fmt.Fprintf(&b, "  #%d [%s] %s (%s):\n", c.ID, c.CreatedAt.UTC().Format(time.RFC3339), c.Who(), kind)
+		from := ""
+		if c.FiledVia != "" {
+			from = fmt.Sprintf(" (from %s)", c.FiledVia)
+		}
+		fmt.Fprintf(&b, "  #%d [%s] %s (%s)%s:\n", c.ID, c.CreatedAt.UTC().Format(time.RFC3339), c.Who(), kind, from)
 		b.WriteString(indent(clipNote(c.Body, maxConversationBodyBytes)))
 	}
 	if more {

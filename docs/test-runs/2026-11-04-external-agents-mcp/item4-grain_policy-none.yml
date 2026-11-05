@@ -1,0 +1,34 @@
+# grain_policy.yml, written by `grain init workstation`. It is yours to
+# edit; a re-run keeps it. Every key is described in docs/local-policy.md.
+# The daemon reads it at start: `systemctl --user restart grain` after editing.
+
+# Repositories a task may target, read or write. Nothing else.
+# grain/config is this deployment's own state repository, served by this daemon:
+# the Director and any chat proposing a config change read or write it.
+repos: ["acme/app", "grain/config"]
+
+# Whose tasks are this machine's own: they need no further approval.
+# Anybody else's needs an approval by one of approvers.
+local_requesters: ["alice@example.com", "debian"]
+approvers: ["alice@example.com", "debian"]
+allow_unapproved_external: false
+
+# Capabilities a task may be granted.
+capabilities:
+  # Only grain CI's own and the Director's: allow lists the ones to permit, and deny wins over it.
+  allow:
+    - "grain-ci"
+    # The Director chat's own grants. Remove one and the Director is held for it.
+    - "durable"
+    - "self-debug"
+    - "https://grain.dev/capabilities/grain#journal"
+    - "api:deployment:read"
+    - "https://grain.dev/capabilities/grain#health"
+    - "bootstrap-playbooks"
+    - "api:ci-read"
+
+# The network a task's sandbox may have.
+network: ["none"]
+
+# Host sandboxes run as you; only your own tasks run there.
+allow_external_on_host_sandboxes: false

@@ -120,8 +120,12 @@ func (p *printer) detail(d ui.TaskDetail) {
 			if tr.Reason != "" {
 				line += fmt.Sprintf(" (%s)", tr.Reason)
 			}
-			if tr.Detail != "" {
-				line += "; " + tr.Detail
+			detail := tr.Detail
+			if detail == "" && (tr.OldOwner != "" || tr.NewOwner != "") {
+				detail = fmt.Sprintf("%s -> %s", tr.OldOwner, tr.NewOwner)
+			}
+			if detail != "" {
+				line += "; " + detail
 			}
 			fmt.Println(line)
 		}
@@ -190,6 +194,9 @@ func taskBlock(t ui.Task) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s\n", t.ID, t.Title)
 	fmt.Fprintf(&b, "state:      %s\n", t.State)
+	if t.Owner != "" {
+		fmt.Fprintf(&b, "owner:      %s\n", t.Owner)
+	}
 	if t.Paused != nil {
 		paused := fmt.Sprintf("by %s at %s (was %s)", pausedBy(t.Paused), t.Paused.At.Format(time.RFC3339), t.Paused.FromState)
 		switch {

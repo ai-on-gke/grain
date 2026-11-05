@@ -1071,8 +1071,10 @@ func TestExternalAgentTokenOwnerAttributionOnJournalAuditAndTaskAuthor(t *testin
 	}
 
 	// A write to the task leaves an audit note naming the owner, and the
-	// journal line says the same.
-	if rec := fileAsExternal(t, srv, issued.Token, "/api/tasks/"+task.ID+"/comments", `{"body":"hello"}`, nil); rec.Code >= 300 {
+	// journal line says the same -- including on refused calls and with
+	// client=<filed_via> when X-Grain-Client is present.
+	if rec := fileAsExternal(t, srv, issued.Token, "/api/tasks/"+task.ID+"/comments", `{"body":"hello"}`,
+		map[string]string{"X-Grain-Client": "codex-cli/0.9.2 session=s9"}); rec.Code >= 300 {
 		t.Fatalf("commenting answered %d: %s", rec.Code, rec.Body)
 	}
 	comments, err := client.Store.Comments(ctx, task.ID)
@@ -1094,8 +1096,15 @@ func TestExternalAgentTokenOwnerAttributionOnJournalAuditAndTaskAuthor(t *testin
 	if !said {
 		t.Errorf("the agent's comment is not attributed on behalf of jane@example.com: %+v", comments)
 	}
-	if !strings.Contains(logBuf.String(), "{agent, external:jane-laptop on behalf of jane@example.com} POST /api/tasks") {
-		t.Errorf("journal does not name the owner:\n%s", logBuf.String())
+	journal := logBuf.String()
+	for _, want := range []string{
+		"refused {agent, external:jane-laptop on behalf of jane@example.com} POST /api/tasks",
+		"{agent, external:jane-laptop on behalf of jane@example.com} POST /api/tasks",
+		`client="codex-cli/0.9.2 session=s9"`,
+	} {
+		if !strings.Contains(journal, want) {
+			t.Errorf("journal missing %q:\n%s", want, journal)
+		}
 	}
 }
 

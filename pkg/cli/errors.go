@@ -207,7 +207,9 @@ func transportError(err error) bool {
 		return true
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "connection reset by peer") || strings.Contains(msg, "tls: ")
+	return strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "tls: ") ||
+		strings.Contains(msg, "server gave HTTP response to HTTPS client")
 }
 
 // signInPage is a proxy in front of the daemon answering with its HTML

@@ -642,6 +642,9 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 			return fmt.Errorf("staterepo: clearing %s: %w", t, err)
 		}
 	}
+	if err := model.SuspendTaskOwnerConstraintForImport(ctx, tx); err != nil {
+		return fmt.Errorf("staterepo: suspending task owner constraint: %w", err)
+	}
 	for _, t := range tables {
 		if err := importTable(ctx, tx, dir, t, withhold, found); err != nil {
 			return err
@@ -669,6 +672,9 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 		// the database so the next export writes canonical permission_set
 		// grants. Remove in the next release's schema so old forms are refused.
 		if err := model.MigrateGCPKeyGrantArgs(ctx, tx); err != nil {
+			return fmt.Errorf("staterepo: %w", err)
+		}
+		if err := model.MigrateTaskOwnerAndProposer(ctx, tx); err != nil {
 			return fmt.Errorf("staterepo: %w", err)
 		}
 	}

@@ -202,11 +202,15 @@ func TestAPIFsPerSchemeScopesRepoLimitsAndExternalSrcRefusal(t *testing.T) {
 	})
 
 	// tasks:read and memory:read on acme/widgets: its task and its
-	// memory, not acme/secret's.
+	// memory, not acme/secret's -- including owner directory listings and
+	// tree-wide grep where the URI does not name a single repository.
 	readWidgets := issueFSToken(t, client, "read-widgets", []string{"tasks:read", "memory:read"}, "acme/widgets")
 	check(t, "tasks+memory:read@acme/widgets", bearer(readWidgets), []probe{
 		{path: "/api/fs/task/7/record.md", want: http.StatusOK, contains: "task 7 in widgets"},
 		{path: "/api/fs/task/8/record.md", want: http.StatusForbidden},
+		{path: "/api/fs/memory/repos?list", want: http.StatusOK, contains: "acme"},
+		{path: "/api/fs/memory/repos/acme?list", want: http.StatusOK, contains: "widgets", absent: "secret"},
+		{path: "/api/fs/memory/?grep=memory", want: http.StatusOK, contains: "widgets memory", absent: "secret memory"},
 		{path: "/api/fs/memory/repos/acme/widgets.md", want: http.StatusOK, contains: "widgets memory"},
 		{path: "/api/fs/memory/repos/acme/secret.md", want: http.StatusForbidden},
 		{path: "/api/fs/ci/acme/widgets/run-w/go/Test.log", want: http.StatusForbidden, contains: "ci:read"},

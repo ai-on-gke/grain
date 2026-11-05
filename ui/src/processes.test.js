@@ -304,4 +304,31 @@ describe("processes", () => {
     expect(tmplRow.nextRunAt).toBeNull();
     expect(tmplRow.nextLabel).toBe("on demand");
   });
+
+  it("marks off-target git_ref schedules as suppressed instead of active on ref move", () => {
+    const built = buildProcessRows({
+      schedules: [
+        {
+          id: "sched-off-target",
+          title: "Watch external release",
+          repo: "acme/edition",
+          enabled: true,
+          nextRunAt: "2027-11-05T00:00:00Z",
+          recurrence: {
+            kind: "git_ref",
+            gitRef: { repo: "offlist/upstream", ref: "refs/tags/latest" },
+          },
+          suppressed: {
+            reason: "watchedRepoOffTarget",
+            detail:
+              "watches offlist/upstream, which is not on this deployment's target repo list",
+          },
+        },
+      ],
+    });
+
+    const row = built.find((r) => r.key === "schedule:sched-off-target");
+    expect(row.nextRunAt).toBeNull();
+    expect(row.nextLabel).toBe("suppressed");
+  });
 });

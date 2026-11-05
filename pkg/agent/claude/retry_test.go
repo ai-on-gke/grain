@@ -514,6 +514,43 @@ func TestADetachedRunIsNotRetried(t *testing.T) {
 	}
 }
 
+// A hostd drain or mid-run loss stops the retry loop at once rather than
+// mistaking an unopened resume stream for a refused --resume flag.
+func TestAHostdStopIsNotRetriedAndKeepsSession(t *testing.T) {
+	for _, stopErr := range []error{agent.ErrHostdDraining, agent.ErrHostdLost} {
+		r := &attemptRunner{replies: []attemptReply{
+			{stdout: "", err: fmt.Errorf("runhost: %w", stopErr)},
+			{stdout: stream(systemInit("sess-fresh"), assistantText("done"), successResult("done", 1))},
+		}}
+		f := newFramework(r, "mcpserver-path", withoutBackoff())
+		result, err := f.Run(context.Background(), agent.RunConfig{
+			Prompt: "do the thing", SandboxRoot: t.TempDir(), ResumeSession: "sess-carried",
+		})
+		if !errors.Is(err, stopErr) {
+			t.Fatalf("Run(%v) err = %v, want %v", stopErr, err, stopErr)
+		}
+		if len(r.calls) != 1 {
+			t.Fatalf("claude was exec'd %d time(s) on %v, want 1", len(r.calls), stopErr)
+		}
+		if result != nil {
+			t.Fatalf("result on empty stream = %+v, want nil", result)
+		}
+	}
+
+	mid := &attemptRunner{replies: []attemptReply{
+		{stdout: stream(systemInit("sess-live"), assistantText("partial")), err: fmt.Errorf("runhost: %w", agent.ErrHostdLost)},
+		{stdout: stream(systemInit("sess-fresh"), assistantText("done"), successResult("done", 1))},
+	}}
+	f := newFramework(mid, "mcpserver-path", withoutBackoff())
+	result, err := f.Run(context.Background(), agent.RunConfig{Prompt: "do the thing", SandboxRoot: t.TempDir()})
+	if !errors.Is(err, agent.ErrHostdLost) || len(mid.calls) != 1 {
+		t.Fatalf("mid-run hostd loss = %v (%d calls), want ErrHostdLost after 1 call", err, len(mid.calls))
+	}
+	if result == nil || result.ResumableSession != "sess-live" || !strings.Contains(result.Transcript, "partial") {
+		t.Fatalf("mid-run result = %+v, want partial transcript and sess-live", result)
+	}
+}
+
 // A run adopted after it had already retried is read whole: the stored
 // transcript has every attempt's narrative, not just the attempt the
 // adopting daemon tailed, while the run is classified by its last attempt
