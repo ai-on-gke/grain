@@ -643,7 +643,7 @@ jobs:
       - name: Test
         run: |
           ./scripts/run-go-tests.sh go test -race -timeout 20m \
-            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/grain-connect/... ./cmd/grain-sandbox/... ./cmd/grit/... \
+            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/grain-connect/... ./cmd/grain-registry/... ./cmd/grain-sandbox/... ./cmd/grit/... \
             ./docs/releases/... ./tests/hygiene/... ./tests/container/... ./tests/installer/... \
             ./pkg/access/... ./pkg/actionscache/... ./pkg/agent/... ./pkg/apierror/... ./pkg/attest/... \
             ./pkg/authfix/... ./pkg/backup/... ./pkg/capability/... ./pkg/change/... ./pkg/checkpost/... \
@@ -764,7 +764,7 @@ jobs:
       - name: Test
         env:
           GRAIN_REQUIRE_POSTGRES: "1"
-        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 15m -exec "$PWD/scripts/exec-unprivileged.sh" ./pkg/model/postgres/... ./pkg/model/
+        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 15m -exec "$PWD/scripts/exec-unprivileged.sh" ./pkg/model/postgres/... ./pkg/model/ ./pkg/registry/store/...
 
   run-host:
     capabilities: []

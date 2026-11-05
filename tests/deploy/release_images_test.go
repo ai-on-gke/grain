@@ -306,7 +306,9 @@ func TestReleaseImagesDryRun(t *testing.T) {
 			containsRun(t, out, "repository: bwsalmon/grain")
 			containsRun(t, out, "phase 'all': would build and publish")
 			containsRun(t, out, "grain=docker.io/grainai/grain:sha-0123456")
+			containsRun(t, out, "registry=docker.io/grainai/registry:sha-0123456")
 			containsRun(t, out, "docker.io/grainai/grain:sha-0123456 from ./cmd/grain (install track oss)")
+			containsRun(t, out, "docker.io/grainai/registry:sha-0123456 from ./cmd/grain-registry (install track oss)")
 			if strings.Contains(out, "google-grain") {
 				t.Errorf("dry-run mentioned google-grain:\n%s", out)
 			}

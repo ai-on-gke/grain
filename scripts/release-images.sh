@@ -460,6 +460,10 @@ k8s_sandbox="$root/sandbox-k8s:sha-$short"
 # Kubernetes sandbox image.
 grain="$root/grain:sha-$short"
 core_main=./cmd/grain
+# The registry image, built from ./cmd/grain-registry alongside the daemon
+# and sandbox images.
+registry_image="$root/registry:sha-$short"
+registry_main=./cmd/grain-registry
 
 # Where the build phase records what it built. Steps of a Grain CI job
 # share a sandbox but not a shell, so a variable does not reach the step
@@ -742,9 +746,10 @@ stage_grain_ca
 if [ "$dry_run" = true ]; then
   echo "release-images.sh: [dry-run] repository: $GRAIN_CI_REPO (ref: $GRAIN_CI_REF, commit: $commit)"
   echo "release-images.sh: [dry-run] registry: $registry, root: $root"
-  echo "release-images.sh: [dry-run] images: guest=$guest, k8s_sandbox=$k8s_sandbox, grain=$grain"
+  echo "release-images.sh: [dry-run] images: guest=$guest, k8s_sandbox=$k8s_sandbox, grain=$grain, registry=$registry_image"
   echo "release-images.sh: [dry-run] base images: guest_base=$guest_base, k8s_sandbox_base=$k8s_sandbox_base"
   echo "release-images.sh: [dry-run] daemon image: $grain from $core_main (install track oss)"
+  echo "release-images.sh: [dry-run] registry image: $registry_image from $registry_main (install track oss)"
   case "$phase" in
     build | all)
       if [ -n "$build_version" ]; then
@@ -1091,6 +1096,22 @@ build_daemon_image() {
   check_edition "$image" "$main"
 }
 
+build_registry_image() {
+  local image="$1" main="$2" labelled
+  make image-registry IMAGE_REGISTRY="$image" MAIN_grain-registry="$main" \
+    GIT_REVISION="$commit" RELEASE="${RELEASE:-}"
+
+  if ! labelled="$(docker image inspect \
+      --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image" 2>&1)"; then
+    echo "release-images.sh: could not read $image's revision label: $labelled" >&2
+    exit 1
+  fi
+  if [ "$labelled" != "$commit" ]; then
+    echo "release-images.sh: $image is labelled with ${labelled:-no commit}, not $commit" >&2
+    exit 1
+  fi
+}
+
 build_images() {
   resolve_guest
 
@@ -1166,6 +1187,7 @@ build_images() {
   # v2.2.0-rc.1.<n>+<sha7> on candidate). Never a bare vX.Y.Z here: that
   # is `promote`'s to stamp, by rebuilding.
   build_daemon_image "$grain" "$core_main"
+  build_registry_image "$registry_image" "$registry_main"
 
   cat > "$state" <<EOF
 # Written by scripts/release-images.sh for $commit. The steps after the
@@ -1177,6 +1199,7 @@ RELEASE_IMAGE_GUEST='$guest'
 RELEASE_IMAGE_K8S_SANDBOX_BASE='$k8s_sandbox_base'
 RELEASE_IMAGE_K8S_SANDBOX='$k8s_sandbox'
 RELEASE_IMAGE_GRAIN='$grain'
+RELEASE_IMAGE_REGISTRY='$registry_image'
 # Already published by the build, and stamped into the grain image by
 # these references; the push phase signs them.
 RELEASE_IMAGE_GUEST_BASE_PINNED='$guest_base_pinned'
@@ -1292,6 +1315,10 @@ publish_images() {
   # deployment resolves ever points at an image that is not yet signed.
   push_image "$grain"
   sign_image "$grain"
+  if [ -n "${registry_image:-}" ]; then
+    push_image "$registry_image"
+    sign_image "$registry_image"
+  fi
 
   # Immutable tags are published for every merge. Moving tags move forward
   # only: onto this commit when the commit the grain image's branch tag
@@ -1314,7 +1341,8 @@ publish_images() {
     "$guest $root/sandbox:$branch" \
     "$k8s_sandbox_base $root/sandbox-k8s-base:$branch" \
     "$k8s_sandbox $root/sandbox-k8s:$branch" \
-    "$grain $root/grain:$branch"; do
+    "$grain $root/grain:$branch" \
+    "$registry_image $root/registry:$branch"; do
     read -r source target <<< "$pair"
     docker tag "$source" "$target"
     push_image "$target"
@@ -1773,6 +1801,7 @@ if [ "$phase" = push ]; then
   k8s_sandbox_base="${RELEASE_IMAGE_K8S_SANDBOX_BASE:-$k8s_sandbox_base}"
   k8s_sandbox="$RELEASE_IMAGE_K8S_SANDBOX"
   grain="$RELEASE_IMAGE_GRAIN"
+  registry_image="${RELEASE_IMAGE_REGISTRY:-$registry_image}"
   guest_base_pinned="${RELEASE_IMAGE_GUEST_BASE_PINNED:-}"
   guest_pinned="${RELEASE_IMAGE_GUEST_PINNED:-}"
   k8s_sandbox_base_pinned="${RELEASE_IMAGE_K8S_SANDBOX_BASE_PINNED:-}"
