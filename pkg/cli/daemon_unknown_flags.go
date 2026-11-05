@@ -250,3 +250,26 @@ func writeDaemonUsage(fs *flag.FlagSet, w io.Writer) {
 	fmt.Fprintf(w, "Usage of %s:\n", fs.Name())
 	fs.PrintDefaults()
 }
+
+// logDeprecatedGranuleFlags warns once per start when -granule-net,
+// -granule-base-ip, or -granule-base-port (or their former kontur-* aliases)
+// were explicitly passed: the vendored third_party/granule deprecates and
+// ignores all three, and accepting them with a loud warning keeps an older
+// systemd unit starting instead of crash-looping.
+func logDeprecatedGranuleFlags(passed map[string]bool, granuleNet, granuleBaseIP string, granuleBasePort int) {
+	if passed["granule-net"] || passed["kontur-net"] {
+		log.Printf("grain daemon: -granule-net=%s is ignored: the granule this build vendors has only "+
+			"the former \"flat\" behaviour, and it is the default. Remove the flag; it goes away in a "+
+			"later release", granuleNet)
+	}
+	if passed["granule-base-ip"] || passed["kontur-base-ip"] {
+		log.Printf("grain daemon: -granule-base-ip=%s is ignored: granule assigns a guest the address "+
+			"the container runtime gave its container, and its own -ip is deprecated and ignored. "+
+			"Remove the flag; it goes away in a later release", granuleBaseIP)
+	}
+	if passed["granule-base-port"] || passed["kontur-base-port"] {
+		log.Printf("grain daemon: -granule-base-port=%d is ignored: granule publishes ports on the "+
+			"sandbox itself rather than forwarding one per VM, and its own -port is deprecated and "+
+			"ignored. Remove the flag; it goes away in a later release", granuleBasePort)
+	}
+}
