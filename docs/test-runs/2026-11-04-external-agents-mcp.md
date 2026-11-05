@@ -279,9 +279,10 @@ Captured Playwright screenshots (`docs/test-runs/2026-11-04-external-agents-mcp/
 
 All unit, Spec, hygiene, and security tests pass locally:
 
-- `cd ui && npx vitest run src/chat.test.js src/components/detail/Declared.test.jsx src/components/attribution.test.jsx src/components/detail/Timeline.test.jsx` (`94 passed`)
+- `cd ui && npx vitest run src/chat.test.js src/components/detail/Declared.test.jsx src/components/attribution.test.jsx src/components/detail/Timeline.test.jsx` (`93 passed`)
 - `cd ui && npm run format:check && npm run build`
-- `go test -race ./pkg/redact/... ./pkg/mcp/...`
-- `go test -race ./pkg/ui -run "TestExternalAgent|TestMCP|TestOwnerTrust|TestXGrainClient"`
+- `cd ui && PLAYWRIGHT_BROWSERS_PATH=/var/cache/playwright PLAYWRIGHT_PROJECT=chromium npx playwright test e2e/external-agent-filer.spec.js --project=chromium` (`1 passed`, updated for owned-token `for <owner>` attribution in `Filed by`)
+- `go test -race ./pkg/redact/... ./pkg/mcp/... ./pkg/ports/...`
+- `go test -race ./pkg/ui -run "TestExternalAgent|TestControllerMCP|TestOwnerTrust|TestXGrainClient"`
 - `go test ./pkg/cli ./pkg/sandboxcli -run CLISpec` (no CLI flags changed)
 - `go test ./tests/hygiene/... ./tests/security/...`

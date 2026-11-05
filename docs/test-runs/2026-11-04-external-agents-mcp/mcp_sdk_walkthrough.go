@@ -357,7 +357,7 @@ func runSequence(ctx context.Context, endpoint, label string, headers, redacts m
 }
 
 func main() {
-	endpoint := flag.String("endpoint", "http://127.0.0.1:14300/api/mcp", "MCP HTTP endpoint")
+	endpoint := flag.String("endpoint", "http://127.0.0.1:4242/api/mcp", "MCP HTTP endpoint")
 	gmaToken := flag.String("gma-token", "", "gma_ external agent token")
 	accessCode := flag.String("access-code", "", "daemon access code")
 	narrowTaskID := flag.String("narrow-task", "", "optional narrow task ID for X-Grain-Acting-Task with access code")
