@@ -69,16 +69,16 @@ func TestFingerprintCanonicalizesDigestPinnedSandboxImageAndExcludesBuiltinJobs(
 		Ref:          "main",
 		Commit:       "abc123",
 		Event:        EventPush,
-		SandboxImage: "ghcr.io/bwsalmon/grain/guest:sha-66c5a15@" + digest,
+		SandboxImage: "docker.io/grainai/sandbox:sha-66c5a15@" + digest,
 	}
 	req2 := req1
-	req2.SandboxImage = "ghcr.io/bwsalmon/grain/guest:sha-dc5b5a1@" + digest
+	req2.SandboxImage = "docker.io/grainai/sandbox:sha-dc5b5a1@" + digest
 	if got1, got2 := Fingerprint(req1, w, w.Jobs[0]), Fingerprint(req2, w, w.Jobs[0]); got1 != got2 {
 		t.Errorf("two sha- tags pointing at the same digest must share a key:\n %s\n %s", got1, got2)
 	}
 
 	req3 := req1
-	req3.SandboxImage = "ghcr.io/bwsalmon/grain/guest:sha-dc5b5a1@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	req3.SandboxImage = "docker.io/grainai/sandbox:sha-dc5b5a1@sha256:1111111111111111111111111111111111111111111111111111111111111111"
 	if Fingerprint(req1, w, w.Jobs[0]) == Fingerprint(req3, w, w.Jobs[0]) {
 		t.Error("different guest digests must not share a key")
 	}

@@ -84,6 +84,9 @@ func CheckDaemonFlags(cfg Config, hasLocalSandboxes bool, checkPackageCache func
 	default:
 		return fmt.Errorf("-db-driver must be \"sqlite\" or \"postgres\", got %q", cfg.DbDriver)
 	}
+	if err := CheckSecretsConfig(cfg.SecretsBackend, cfg.SecretsSMPrefix); err != nil {
+		return err
+	}
 	if err := CheckSandboxBackend(cfg, hasLocalSandboxes); err != nil {
 		return err
 	}

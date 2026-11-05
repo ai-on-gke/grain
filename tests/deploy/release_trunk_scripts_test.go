@@ -100,8 +100,8 @@ func TestReleaseImagesRCPublishesTheCandidateChannel(t *testing.T) {
 		if err != nil {
 			t.Fatalf("rc --dry-run failed: %v\n%s", err, out)
 		}
-		containsRun(t, out, "phase 'rc': would retag ghcr.io/bwsalmon/grain/{guest,k8s-sandbox}:sha-"+short+" as v1.6.0-rc.1, candidate rc")
-		containsRun(t, out, "and rebuild ghcr.io/bwsalmon/grain/grain:sha-"+short+" from "+commits["candidate"])
+		containsRun(t, out, "phase 'rc': would retag docker.io/grainai/{sandbox,sandbox-k8s}:sha-"+short+" as v1.6.0-rc.1, candidate rc")
+		containsRun(t, out, "and rebuild docker.io/grainai/grain:sha-"+short+" from "+commits["candidate"])
 		containsRun(t, out, "with RELEASE=v1.6.0-rc.1 as v1.6.0-rc.1, candidate rc")
 		if strings.Contains(out, "google-grain") {
 			t.Errorf("rc --dry-run mentioned google-grain:\n%s", out)
@@ -133,15 +133,15 @@ func TestReleaseImagesRCPublishesTheCandidateChannel(t *testing.T) {
 		if err != nil {
 			t.Fatalf("rc failed: %v\n%s\ndocker was asked:\n%s", err, out, docker)
 		}
-		for _, image := range []string{"guest", "k8s-sandbox"} {
+		for _, image := range []string{"sandbox", "sandbox-k8s"} {
 			for _, tag := range []string{"v1.6.0-rc.1", "candidate", "rc"} {
 				containsRun(t, docker, retagLine(image, short, tag))
 			}
 		}
-		containsRun(t, docker, "--build-arg RELEASE=v1.6.0-rc.1 --label org.opencontainers.image.version=v1.6.0-rc.1 -t ghcr.io/bwsalmon/grain/grain:v1.6.0-rc.1")
-		containsRun(t, docker, "push ghcr.io/bwsalmon/grain/grain:v1.6.0-rc.1")
+		containsRun(t, docker, "--build-arg RELEASE=v1.6.0-rc.1 --label org.opencontainers.image.version=v1.6.0-rc.1 -t docker.io/grainai/grain:v1.6.0-rc.1")
+		containsRun(t, docker, "push docker.io/grainai/grain:v1.6.0-rc.1")
 		for _, tag := range []string{"candidate", "rc", "sha-" + short} {
-			containsRun(t, docker, "buildx imagetools create --tag ghcr.io/bwsalmon/grain/grain:"+tag+" ghcr.io/bwsalmon/grain/grain:v1.6.0-rc.1")
+			containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/grain:"+tag+" docker.io/grainai/grain:v1.6.0-rc.1")
 		}
 		if strings.Contains(docker, ":latest") || strings.Contains(docker, "google-grain") {
 			t.Errorf("publishing an rc touched latest or google-grain:\n%s", docker)
@@ -156,22 +156,22 @@ func TestReleaseImagesDiscardRCMarksWithoutMovingTheChannel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discard-rc --dry-run failed: %v\n%s", err, out)
 	}
-	containsRun(t, out, "would tag ghcr.io/bwsalmon/grain/{grain,guest,k8s-sandbox}:v1.6.0-rc.1 as v1.6.0-rc.1-discarded, and leave candidate and rc where they are")
+	containsRun(t, out, "would tag docker.io/grainai/{grain,sandbox,sandbox-k8s}:v1.6.0-rc.1 as v1.6.0-rc.1-discarded, and leave candidate and rc where they are")
 	if docker != "" {
 		t.Errorf("a dry run asked docker for something:\n%s", docker)
 	}
 
 	env := publishEnv("")
-	env["DOCKER_STUB_MISSING"] = "ghcr.io/bwsalmon/grain/k8s-sandbox:v1.6.0-rc.1"
+	env["DOCKER_STUB_MISSING"] = "docker.io/grainai/sandbox-k8s:v1.6.0-rc.1"
 	out, docker, err = promoteRun(t, remote, []string{"discard-rc", "v1.6.0-rc.1"}, env)
 	if err != nil {
 		t.Fatalf("discard-rc failed: %v\n%s\ndocker was asked:\n%s", err, out, docker)
 	}
-	for _, image := range []string{"grain", "guest"} {
-		containsRun(t, docker, "buildx imagetools create --tag ghcr.io/bwsalmon/grain/"+image+":v1.6.0-rc.1-discarded ghcr.io/bwsalmon/grain/"+image+":v1.6.0-rc.1")
+	for _, image := range []string{"grain", "sandbox"} {
+		containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/"+image+":v1.6.0-rc.1-discarded docker.io/grainai/"+image+":v1.6.0-rc.1")
 	}
-	containsRun(t, out, "never published as k8s-sandbox")
-	if strings.Contains(docker, ":candidate") || strings.Contains(docker, ":rc ") || strings.Contains(docker, "k8s-sandbox:v1.6.0-rc.1-discarded") || strings.Contains(docker, "google-grain") {
+	containsRun(t, out, "never published as sandbox-k8s")
+	if strings.Contains(docker, ":candidate") || strings.Contains(docker, ":rc ") || strings.Contains(docker, "sandbox-k8s:v1.6.0-rc.1-discarded") || strings.Contains(docker, "google-grain") {
 		t.Errorf("discard-rc moved a channel tag, touched google-grain, or marked an image the rc was never published as:\n%s", docker)
 	}
 

@@ -103,6 +103,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/k8s"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/postgres"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
@@ -191,6 +192,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	dbDriver := fs.String("db-driver", "sqlite", "database backend driver (\"sqlite\" or \"postgres\"); defaults to sqlite")
 	dbDSN := fs.String("db-dsn", "", "database connection string / DSN or path; for sqlite defaults to <data-dir>/store")
 	postgresURL := fs.String("postgres-url", "", "PostgreSQL connection URL (alias for -db-driver=postgres -db-dsn=URL)")
+	secretsBackend := fs.String("secrets-backend", secrets.BackendFile, "secret store backend (\"file\" or \"secretmanager\"); defaults to $GRAIN_SECRETS_BACKEND, then \"file\"")
+	secretsSMPrefix := fs.String("secrets-sm-prefix", "", "Secret Manager resource prefix (projects/<project>/secrets/<id-prefix>) when -secrets-backend=secretmanager; defaults to $GRAIN_SECRETS_SM_PREFIX")
 	sandboxDir := fs.String("sandbox-dir", "", "root directory for this deployment's disposable scratch space -- host-sandbox run directories, "+
 		"and the package and Actions caches default under it, and the UI reports its disk as the sandboxes' own (scripts/setup.sh installs it "+
 		"at /var/lib/grain/scratch, beside -data-dir's /var/lib/grain/data). Deliberately a separate flag from -data-dir rather than a "+
@@ -1054,17 +1057,36 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	unitFlags := append([]string{}, unknownFlags...)
 	fs.Visit(func(f *flag.Flag) { unitFlags = append(unitFlags, "-"+f.Name) })
 	slices.Sort(unitFlags)
+	if !passed["secrets-backend"] {
+		if env := strings.TrimSpace(os.Getenv("GRAIN_SECRETS_BACKEND")); env != "" {
+			*secretsBackend = env
+		}
+	}
+	if !passed["secrets-sm-prefix"] {
+		if env := strings.TrimSpace(os.Getenv("GRAIN_SECRETS_SM_PREFIX")); env != "" {
+			*secretsSMPrefix = env
+		}
+	}
 	if !passed["db-driver"] {
 		if env := os.Getenv("GRAIN_DB_DRIVER"); env != "" {
 			*dbDriver = env
 		} else if passed["postgres-url"] || os.Getenv("GRAIN_POSTGRES_URL") != "" || os.Getenv("DATABASE_URL") != "" {
 			*dbDriver = "postgres"
-		} else if saved, err := daemon.LoadDatabaseConfig(*dataDir); err != nil {
-			return daemon.Config{}, fs, unknownFlags, err
-		} else if saved != nil && saved.Driver != "" {
-			*dbDriver = saved.Driver
-			if !passed["db-dsn"] && saved.DSN != "" {
-				*dbDSN = saved.DSN
+		} else {
+			var saved *postgres.DatabaseConfig
+			if *secretsBackend == secrets.BackendSecretManager {
+				saved, err = postgres.ReadDatabaseConfig(*dataDir)
+			} else {
+				saved, err = daemon.LoadDatabaseConfig(*dataDir)
+			}
+			if err != nil {
+				return daemon.Config{}, fs, unknownFlags, err
+			}
+			if saved != nil && saved.Driver != "" {
+				*dbDriver = saved.Driver
+				if !passed["db-dsn"] && saved.DSN != "" {
+					*dbDSN = saved.DSN
+				}
 			}
 		}
 	}
@@ -1213,7 +1235,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 
 	cfg := daemon.Config{
 		UnitFlags: unitFlags, UnknownFlags: unknownFlags,
-		DataDir: *dataDir, DbDriver: *dbDriver, DbDSN: *dbDSN, SandboxDir: *sandboxDir, DockerRootDir: *dockerRootDir,
+		DataDir: *dataDir, DbDriver: *dbDriver, DbDSN: *dbDSN,
+		SecretsBackend: *secretsBackend, SecretsSMPrefix: *secretsSMPrefix,
+		SandboxDir: *sandboxDir, DockerRootDir: *dockerRootDir,
 		MaxWorkers: *maxWorkers, MaxMergers: *maxMergers, MaxCIJobs: model.DefaultMaxCIJobs,
 		Ledger:        &model.Ledger{},
 		CpuOvercommit: *cpuOvercommit, MemoryOvercommit: *memoryOvercommit, MemoryReserveMB: *memoryReserveMB,

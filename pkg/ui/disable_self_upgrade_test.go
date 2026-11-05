@@ -35,7 +35,7 @@ func TestDisableSelfUpgradeBlocksUpgradeAndDatabaseCutoverRoutes(t *testing.T) {
 	refFile := filepath.Join(dir, "image.env")
 	up := upgrade.New(upgrade.Config{
 		Image: &upgrade.ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 		},
 		StatusFile:      filepath.Join(dir, "upgrade-status.json"),

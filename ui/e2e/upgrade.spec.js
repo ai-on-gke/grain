@@ -45,7 +45,7 @@ test.use({ reducedMotion: "no-preference" });
 // RUNNING_IMAGE is what the stubbed deployment is on before anything is
 // clicked -- GET /api/upgrade's "running", the ref file's own line on a
 // real host (pkg/upgrade's Running).
-const RUNNING_IMAGE = "ghcr.io/bwsalmon/grain/grain:main";
+const RUNNING_IMAGE = "docker.io/grainai/grain:main";
 
 // IDLE is what the stubbed deployment reports before anything is
 // clicked: an upgrader, the image it is on, and no upgrade of any kind

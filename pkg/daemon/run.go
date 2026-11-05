@@ -150,6 +150,9 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := checkStateRepoBaseline(cfg.DataDir); err != nil {
 		return err
 	}
+	if err := CheckSecretsConfig(cfg.SecretsBackend, cfg.SecretsSMPrefix); err != nil {
+		return err
+	}
 
 	writerLock, err := acquireDaemonWriterLock(ctx, cfg, func(lockErr error) {
 		wrapped := fmt.Errorf("PostgreSQL single-writer advisory lock lost: %w", lockErr)
@@ -185,7 +188,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// Recorded once the store has opened, so a mistyped DSN never replaces
 	// a good one: a daemon started with -postgres-url (or the environment)
 	// otherwise leaves nothing in its data dir saying where its store is.
-	if err := RecordDatabaseConfig(cfg.DataDir, cfg.DbDriver, cfg.DbDSN); err != nil {
+	if err := recordDatabaseConfigForDaemon(cfg); err != nil {
 		log.Printf("grain daemon: recording the database in %s: %v", cfg.DataDir, err)
 	}
 	// The hostd registry: the co-located hostd is always in it as local,
@@ -241,7 +244,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// -- and a store opened first would have minted a key over the
 	// absence of one. Nothing is configured on most deployments and
 	// nothing happens then.
-	secretsRepo := StartupSecretsRepoSync(ctx, cfg.DataDir)
+	secretsRepo := startupSecretsRepoSyncFor(ctx, cfg)
 	loadErr := loadStateRepo(ctx, cfg.DataDir, stateRepo, db, schemaMigrated)
 	if fatalStateRepoLoad(loadErr) {
 		return fmt.Errorf("loading the config repository: %w", loadErr)
@@ -276,7 +279,10 @@ func Run(ctx context.Context, cfg Config) error {
 	// The secrets database is opened once, here, and shared: the state
 	// manager syncs it, and the model proxies below and runDaemon's own
 	// dispatches resolve agent credentials through it.
-	secretStore := OpenSecrets(cfg.DataDir)
+	secretStore, err := OpenSecretsForConfig(cfg, store)
+	if err != nil {
+		return err
+	}
 	LogIgnoredRelaySettings(cfg.DataDir, secretStore, log.Printf)
 	// Every secret a run resolves through it is audited against its team
 	// (the Audit / Security tab). ui.NewServer attaches the store only to
@@ -916,7 +922,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// run() itself only returns once ctx is actually cancelled.
 	if cfg.UiAddr != "" {
 		stopUI, err := startUIServer(cfg, uiLn, store, db, transcriptDir, sandboxes, live, pkgCache, actionsCache,
-			stateManager, stateManager.settingsRepo, upgrader)
+			stateManager, stateManager.settingsRepo, upgrader, secretStore)
 		if err != nil {
 			return fmt.Errorf("starting the UI/API server: %w", err)
 		}
@@ -1057,7 +1063,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		},
 	}))
 
-	proxyURL, proxyHandler, stopProxy, err := startGitProxy(cfg.DataDir, store, cfg.GithubHost, cfg.GithubInsecureHTTP, fabric, forbidden, cfg.shutdownStarted)
+	proxyURL, proxyHandler, stopProxy, err := startGitProxy(cfg.DataDir, store, secretStore, cfg.GithubHost, cfg.GithubInsecureHTTP, fabric, forbidden, cfg.shutdownStarted)
 	if err != nil {
 		// Fatal to this loop, and only to it: every dispatch and every CI
 		// job clones through this proxy, so there is nothing to reconcile
@@ -1474,7 +1480,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// registered for the proxy's /cap/ (grain cap).
 			CapabilitySandboxServers: SandboxCapabilities,
 			ControllerMCP:            controllerMCPProxy(cfg),
-			GrantTools:               grantTools(grainSrcDir, SecretsDir(cfg.DataDir)),
+			GrantTools:               grantTools(grainSrcDir, SecretsDir(cfg.DataDir), secretStore),
 			// Where a sandbox reaches this deployment's package
 			// cache -- asked per dispatch, and answering "" while the
 			// setting is off, so the switch in Settings reaches the next

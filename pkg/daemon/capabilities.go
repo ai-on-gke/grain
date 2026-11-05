@@ -43,6 +43,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -246,7 +247,7 @@ func sourceDir(flagged string) string {
 // run's forked mcpserver, which confirms each command over the daemon
 // (daemonHostExecConfirm), and an entry here would only build a second
 // copy no framework reads.
-func grantTools(srcDir, secretsDir string) map[string]func(store *model.Store, taskID string) []mcp.Tool {
+func grantTools(srcDir, secretsDir string, secretStore *secrets.Store) map[string]func(store *model.Store, taskID string) []mcp.Tool {
 	return map[string]func(store *model.Store, taskID string) []mcp.Tool{
 		// Built per run rather than once here, so that a secret set
 		// since this process started is redacted by the next run that
@@ -254,13 +255,13 @@ func grantTools(srcDir, secretsDir string) map[string]func(store *model.Store, t
 		grainlog.CapabilityName: func(_ *model.Store, taskID string) []mcp.Tool {
 			return grainlog.Tools(grainlog.Config{
 				TaskID:   taskID,
-				Redactor: grainLogRedactor(secretsDir),
+				Redactor: grainLogRedactorFor(secretsDir, secretStore),
 			})
 		},
 		grainserver.JournalGrant: func(_ *model.Store, taskID string) []mcp.Tool {
 			return grainlog.Tools(grainlog.Config{
 				TaskID:   taskID,
-				Redactor: grainLogRedactor(secretsDir),
+				Redactor: grainLogRedactorFor(secretsDir, secretStore),
 			})
 		},
 		bootstrap.CapabilityName: func(*model.Store, string) []mcp.Tool {

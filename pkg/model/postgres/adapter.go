@@ -158,6 +158,7 @@ var tablePrimaryKeys = map[string][]string{
 	"allowed_principal":              {"entry"},
 	"allowed_principal_migration":    {"id"},
 	"integration_event":              {"id"},
+	"secret_entries":                 {"secret_name", "key"},
 }
 
 // Auto-increment primary key column for tables that use sequences or SERIAL.

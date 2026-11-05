@@ -31,6 +31,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
@@ -93,7 +94,7 @@ func CheckUIRequireIAP(cfg Config) error {
 // mode is gone -- see this file's own doc comment), it always has that
 // directory to hand; there is no longer a cross-process case where it
 // would not.
-func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB, transcriptDir string, sandboxes orchestrator.Sandboxes, live *LiveConfig, pkgCache *PackageCache, actionsCache *ActionsCache, stateRepo ui.StateRepoManager, settingsRepo func() model.RepoRef, upgrader *upgrade.Upgrader) (stop func(context.Context) error, err error) {
+func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB, transcriptDir string, sandboxes orchestrator.Sandboxes, live *LiveConfig, pkgCache *PackageCache, actionsCache *ActionsCache, stateRepo ui.StateRepoManager, settingsRepo func() model.RepoRef, upgrader *upgrade.Upgrader, secretStore *secrets.Store) (stop func(context.Context) error, err error) {
 	// The credential ladder run() already loaded, not a second copy of
 	// it: this is the one Settings checks targetRepos against to flag
 	// bwsalmon/agents#427's drift before a push ever reaches the proxy
@@ -108,11 +109,14 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 	// Charged to "ui" in the metrics' per-caller breakdown (github.WithCaller).
 	githubClient = githubClient.As("ui")
 	disks := cfg.hostVolumes()
-	// One open of this deployment's secrets, used twice below: the
-	// secrets fields on the Capabilities tab write into it, and the
-	// "test this credential" action on that same tab resolves the
-	// standing credential it is about to authenticate as out of it.
-	uiSecrets := OpenSecrets(cfg.DataDir)
+	// Shared with run(): the secrets fields on the Capabilities tab write
+	// into it, and the "test this credential" action on that same tab
+	// resolves the standing credential it is about to authenticate as out
+	// of it.
+	uiSecrets := secretStore
+	if uiSecrets == nil {
+		uiSecrets = OpenSecrets(cfg.DataDir)
+	}
 	// The local API token: how this host's grain CLI, and the `grain
 	// mcpserver` each run starts here, reach the API. Named in this
 	// process's environment so every child it starts can find it
@@ -299,7 +303,7 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		// show is a property of the shape it runs as, so logSources
 		// decides it rather than a literal here.
 		Logs:        LogSources(cfg),
-		LogRedactor: logRedactor(SecretsDir(cfg.DataDir)),
+		LogRedactor: logRedactor(SecretsDir(cfg.DataDir), uiSecrets),
 		// The deployment's external UI base, for the one absolute link
 		// grain writes (Grain-Task: in a changelist CL's description); unset
 		// leaves that line out rather than writing localhost.

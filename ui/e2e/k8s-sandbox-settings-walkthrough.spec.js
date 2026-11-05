@@ -201,10 +201,10 @@ exit 0
     expect(k8sSelectedSettings.k8sContainerDefault).toBe("grain");
     expect(k8sSelectedSettings.k8sKubectlDefault).toBe("kubectl");
     expect(k8sSelectedSettings.k8sSandboxImageDefault).toBe(
-      "ghcr.io/bwsalmon/grain/k8s-sandbox:v1.2.0",
+      "docker.io/grainai/sandbox-k8s:v1.2.0",
     );
     expect(k8sSelectedSettings.k8sGranuleImageDefault).toBe(
-      "ghcr.io/bwsalmon/grain/guest:v1.2.0",
+      "docker.io/grainai/sandbox:v1.2.0",
     );
     expect(k8sSelectedSettings.sources).toMatchObject({
       k8sNamespace: "default",
@@ -233,7 +233,7 @@ exit 0
     ).toHaveValue("kubectl");
     await expect(
       desktopPage.locator('[data-setting-id="k8sSandboxImage"] input'),
-    ).toHaveValue("ghcr.io/bwsalmon/grain/k8s-sandbox:v1.2.0");
+    ).toHaveValue("docker.io/grainai/sandbox-k8s:v1.2.0");
     await expect(
       desktopPage.getByTestId("k8sNamespace-source-chip"),
     ).toHaveText("default");
@@ -273,7 +273,7 @@ exit 0
     await setInputAndBlur(
       desktopPage,
       "k8sSandboxImage",
-      "ghcr.io/bwsalmon/grain/k8s-sandbox:v2",
+      "docker.io/grainai/sandbox-k8s:v2",
     );
     await setInputAndBlur(desktopPage, "k8sWorkspace", "/workspace/agent");
     await setInputAndBlur(desktopPage, "k8sGitProxyHost", "10.244.0.10");
@@ -311,7 +311,7 @@ exit 0
       sandboxBackend: "kubernetes",
       k8sNamespace: "grain-sandboxes",
       k8sKubectl: stubKubectl,
-      k8sSandboxImage: "ghcr.io/bwsalmon/grain/k8s-sandbox:v2",
+      k8sSandboxImage: "docker.io/grainai/sandbox-k8s:v2",
       k8sWorkspace: "/workspace/agent",
       k8sGitProxyHost: "10.244.0.10",
       k8sSandboxService: "grain-sandbox",
@@ -404,7 +404,7 @@ exit 0
     );
     await expect(granuleImageInput).toBeVisible();
     await expect(granuleImageInput).toHaveValue(
-      "ghcr.io/bwsalmon/grain/guest:v1.2.0",
+      "docker.io/grainai/sandbox:v1.2.0",
     );
     await expect(
       desktopPage.getByTestId("k8sGranuleImage-source-chip"),
@@ -413,7 +413,7 @@ exit 0
     await setInputAndBlur(
       desktopPage,
       "k8sGranuleImage",
-      "ghcr.io/bwsalmon/grain/guest:v2",
+      "docker.io/grainai/sandbox:v2",
     );
 
     const afterGranuleEdit = await (
@@ -422,7 +422,7 @@ exit 0
     expect(afterGranuleEdit.sandboxBackend).toBe("kubernetes-granule");
     expect(afterGranuleEdit.k8sWorkspaceDefault).toBe("/home/debian");
     expect(afterGranuleEdit.k8sGranuleImage).toBe(
-      "ghcr.io/bwsalmon/grain/guest:v2",
+      "docker.io/grainai/sandbox:v2",
     );
     expect(afterGranuleEdit.pendingRestart).toEqual(
       expect.arrayContaining([...expectedPendingK8sKeys, "k8sGranuleImage"]),
@@ -445,8 +445,8 @@ exit 0
       sandbox_backend: "kubernetes-granule",
       k8s_namespace: "grain-sandboxes",
       k8s_kubectl: stubKubectl,
-      k8s_sandbox_image: "ghcr.io/bwsalmon/grain/k8s-sandbox:v2",
-      k8s_granule_image: "ghcr.io/bwsalmon/grain/guest:v2",
+      k8s_sandbox_image: "docker.io/grainai/sandbox-k8s:v2",
+      k8s_granule_image: "docker.io/grainai/sandbox:v2",
       k8s_workspace: "/workspace/agent",
       k8s_git_proxy_host: "10.244.0.10",
       k8s_sandbox_service: "grain-sandbox",
@@ -543,10 +543,10 @@ exit 0
       ).toBeChecked();
       await expect(
         pg.locator('[data-setting-id="k8sSandboxImage"] input'),
-      ).toHaveValue("ghcr.io/bwsalmon/grain/k8s-sandbox:v2");
+      ).toHaveValue("docker.io/grainai/sandbox-k8s:v2");
       await expect(
         pg.locator('[data-setting-id="k8sGranuleImage"] input'),
-      ).toHaveValue("ghcr.io/bwsalmon/grain/guest:v2");
+      ).toHaveValue("docker.io/grainai/sandbox:v2");
       await expect(
         pg.locator('[data-setting-id="k8sWorkspace"] input'),
       ).toHaveValue("/workspace/agent");
@@ -591,11 +591,11 @@ exit 0
     const imageRefFile = path.join(root, "image-ref");
     await fs.writeFile(
       imageRefFile,
-      "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:main\n",
+      "GRAIN_IMAGE=docker.io/grainai/grain:main\n",
     );
     daemon = await startDaemon(root, dataDir, sandboxDir, [
       "-disable-native-sandboxes",
-      "-upgrade-image=ghcr.io/bwsalmon/grain/grain:main",
+      "-upgrade-image=docker.io/grainai/grain:main",
       `-upgrade-image-ref-file=${imageRefFile}`,
     ]);
 
@@ -612,8 +612,8 @@ exit 0
       sandboxBackend: "kubernetes-granule",
       k8sNamespace: "grain-cli-ns",
       k8sKubectl: stubKubectl,
-      k8sSandboxImage: "ghcr.io/bwsalmon/grain/k8s-sandbox:v2",
-      k8sGranuleImage: "ghcr.io/bwsalmon/grain/guest:v2",
+      k8sSandboxImage: "docker.io/grainai/sandbox-k8s:v2",
+      k8sGranuleImage: "docker.io/grainai/sandbox:v2",
       k8sWorkspace: "/workspace/agent",
       k8sGitProxyHost: "10.244.0.10",
       k8sSandboxService: "",

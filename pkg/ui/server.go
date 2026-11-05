@@ -77,7 +77,7 @@ type Server struct {
 	accessCode        atomic.Pointer[accessCodeFile]
 	externalLimiter   *externalAgentLimiter
 	defaultGroupsOnce sync.Once
-	defaultGroups     *CloudIdentityGroupChecker
+	defaultGroups     GroupMemberChecker
 	// controllerMCPHandler serves POST /api/mcp (mcp_endpoint.go), built
 	// once on first use.
 	controllerMCPOnce    sync.Once

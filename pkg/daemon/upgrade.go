@@ -170,6 +170,12 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store, creds ...*gitproxy.
 	if len(creds) > 0 {
 		credentials = creds[0]
 	}
+	track := (installtrack.Probe{
+		IncludeHost:    true,
+		AgyPath:        cfg.AgyPath,
+		UIAllowedHosts: cfg.UiAllowedHosts,
+		DataDir:        cfg.DataDir,
+	}).Detect().Track
 	switch {
 	case cfg.K8sSandboxes && cfg.UpgradeImage != "" && cfg.UpgradeImageRefFile == "":
 		// The Kubernetes path: no pull, no ref file and no restart
@@ -184,6 +190,7 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store, creds ...*gitproxy.
 		return upgrade.New(upgrade.Config{
 			Kube: &upgrade.KubeConfig{
 				Repository:       cfg.UpgradeImage,
+				Track:            track,
 				Deployment:       cfg.K8sDeployment,
 				Container:        cfg.K8sContainer,
 				Namespace:        cfg.K8sNamespace,
@@ -254,14 +261,9 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store, creds ...*gitproxy.
 				// image moves under it on every upgrade, so this is the
 				// one check that is about the *deployment* rather than
 				// about the build (grain/task-233).
-				UnitFlags:     cfg.UnitFlags,
-				FlagNamesArgs: []string{"daemon", "-flag-names"},
-				Track: (installtrack.Probe{
-					IncludeHost:    true,
-					AgyPath:        cfg.AgyPath,
-					UIAllowedHosts: cfg.UiAllowedHosts,
-					DataDir:        cfg.DataDir,
-				}).Detect().Track,
+				UnitFlags:          cfg.UnitFlags,
+				FlagNamesArgs:      []string{"daemon", "-flag-names"},
+				Track:              track,
 				Source:             upgrade.ImageSource(strings.TrimSpace(cfg.UpgradeImageSource)),
 				SourceLocked:       cfg.UpgradeImageSourceLocked,
 				SourceOverrideFile: filepath.Join(cfg.DataDir, "upgrade-image-source.json"),

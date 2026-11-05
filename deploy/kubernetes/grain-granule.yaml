@@ -353,7 +353,7 @@ spec:
       terminationGracePeriodSeconds: 300
       initContainers:
         - name: home
-          image: ghcr.io/bwsalmon/grain/grain:main
+          image: docker.io/grainai/grain:main
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "mkdir -p /data/home && chmod 0700 /data/home"]
           resources:
@@ -371,7 +371,7 @@ spec:
               mountPath: /data
       containers:
         - name: grain
-          image: ghcr.io/bwsalmon/grain/grain:main
+          image: docker.io/grainai/grain:main
           imagePullPolicy: IfNotPresent
           args:
             - daemon
@@ -412,7 +412,7 @@ spec:
             # uncommented line and not a RoleBinding change -- which is
             # what that Role's own comment says, and what this line
             # contradicted by shipping the flag anyway.
-            # - -upgrade-image=ghcr.io/bwsalmon/grain/grain
+            # - -upgrade-image=docker.io/grainai/grain
             - -k8s-deployment=grain
             - -k8s-container=grain
             # CHANGEME (3 of 3): which repository this deployment files

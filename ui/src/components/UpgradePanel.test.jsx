@@ -86,7 +86,7 @@ describe("UpgradePanel", () => {
         enabled: true,
         mode: "image",
         channel: "latest",
-        running: { image: "ghcr.io/bwsalmon/grain/grain:latest@sha256:0123" },
+        running: { image: "docker.io/grainai/grain:latest@sha256:0123" },
         phase: "ok",
         branch: "main",
       });
@@ -159,7 +159,7 @@ describe("UpgradePanel", () => {
         enabled: true,
         mode: "image",
         channel: "candidate",
-        running: { image: "ghcr.io/bwsalmon/grain/grain:v2.3.0-rc.1" },
+        running: { image: "docker.io/grainai/grain:v2.3.0-rc.1" },
         discardedRc: {
           running: "v2.3.0-rc.1",
           latest: "v2.1.1",
@@ -205,7 +205,7 @@ describe("UpgradePanel", () => {
         enabled: true,
         mode: "image",
         channel: "candidate",
-        running: { image: "ghcr.io/bwsalmon/grain/grain:v2.3.0-rc.1" },
+        running: { image: "docker.io/grainai/grain:v2.3.0-rc.1" },
         discardedRc: {
           running: "v2.3.0-rc.1",
           latest: "v2.1.1",
@@ -247,7 +247,7 @@ describe("UpgradePanel", () => {
         enabled: true,
         mode: "image",
         channel: "latest",
-        running: { image: "ghcr.io/bwsalmon/grain/grain:v3.5.0" },
+        running: { image: "docker.io/grainai/grain:v3.5.0" },
         retractedRelease: {
           running: "v3.5.0",
           latest: "v3.4.0",
@@ -295,7 +295,7 @@ describe("UpgradePanel", () => {
         enabled: true,
         mode: "image",
         channel: "latest",
-        running: { image: "ghcr.io/bwsalmon/grain/grain:v3.5.0" },
+        running: { image: "docker.io/grainai/grain:v3.5.0" },
         phase: "",
       });
     });
@@ -555,12 +555,12 @@ describe("UpgradePanel", () => {
       enabled: true,
       mode: "image",
       phase: "",
-      running: { image: "ghcr.io/bwsalmon/grain/grain:main" },
+      running: { image: "docker.io/grainai/grain:main" },
     });
     render(<UpgradePanel showError={() => {}} />);
 
     expect(await screen.findByText(/Now running/)).toHaveTextContent(
-      "Now running ghcr.io/bwsalmon/grain/grain:main",
+      "Now running docker.io/grainai/grain:main",
     );
   });
 
@@ -1000,7 +1000,7 @@ describe("UpgradePanel", () => {
       enabled: true,
       phase: "ok",
       branch: "main",
-      detail: "pulled ghcr.io/bwsalmon/grain/grain:main; restarting",
+      detail: "pulled docker.io/grainai/grain:main; restarting",
     });
     render(<UpgradePanel showError={() => {}} />);
 
@@ -1024,7 +1024,7 @@ describe("UpgradePanel", () => {
         enabled: true,
         phase: "ok",
         branch: "main",
-        detail: "pulled ghcr.io/bwsalmon/grain/grain:main; restarting",
+        detail: "pulled docker.io/grainai/grain:main; restarting",
       });
     // act() around each step, so the re-render an answer causes has
     // happened by the time the assertions below read the DOM. The fake
@@ -1049,9 +1049,7 @@ describe("UpgradePanel", () => {
       await poll();
       expect(screen.getByText("ok")).toBeInTheDocument();
       expect(
-        screen.getByText(
-          "pulled ghcr.io/bwsalmon/grain/grain:main; restarting",
-        ),
+        screen.getByText("pulled docker.io/grainai/grain:main; restarting"),
       ).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Upgrade" })).toBeEnabled();
 
@@ -1474,7 +1472,7 @@ describe("UpgradePanel scheduling", () => {
       phase: "",
       branch: "",
       running: {
-        image: "ghcr.io/bwsalmon/grain/grain:v1.7.0",
+        image: "docker.io/grainai/grain:v1.7.0",
         release: "v1.7.0",
       },
       inFlightRuns: 2,
@@ -1518,7 +1516,7 @@ describe("UpgradePanel scheduling", () => {
         phase: "",
         branch: "",
         running: {
-          image: "ghcr.io/bwsalmon/grain/grain:v1.7.0",
+          image: "docker.io/grainai/grain:v1.7.0",
           release: "v1.7.0",
         },
       });
@@ -1556,7 +1554,7 @@ describe("UpgradePanel scheduling", () => {
         phase: "",
         branch: "",
         running: {
-          image: "ghcr.io/bwsalmon/grain/grain:latest@sha256:abc",
+          image: "docker.io/grainai/grain:latest@sha256:abc",
         },
       })
       .mockResolvedValueOnce({
@@ -1575,7 +1573,7 @@ describe("UpgradePanel scheduling", () => {
         unchanged: true,
         branch: "latest",
         detail:
-          "the version on latest has not changed (already running ghcr.io/bwsalmon/grain/grain:latest@sha256:abc)",
+          "the version on latest has not changed (already running docker.io/grainai/grain:latest@sha256:abc)",
       });
 
     try {
@@ -1604,7 +1602,7 @@ describe("UpgradePanel scheduling", () => {
       ).toBeInTheDocument();
       expect(
         screen.getByText(
-          /already running ghcr\.io\/bwsalmon\/grain\/grain:latest@sha256:abc/,
+          /already running docker\.io\/grainai\/grain:latest@sha256:abc/,
         ),
       ).toBeInTheDocument();
 
@@ -2224,17 +2222,17 @@ describe("ImageSourceSettings on UpgradePanel", () => {
       enabled: true,
       mode: "image",
       channel: "main",
-      running: { image: "ghcr.io/bwsalmon/grain/grain:main" },
+      running: { image: "docker.io/grainai/grain:main" },
       phase: "done",
       branch: "main",
       source: "registry",
       fallbackNote:
-        "release has no image assets; pulled from ghcr.io/bwsalmon/grain/grain",
+        "release has no image assets; pulled from docker.io/grainai/grain",
       detail:
-        "release has no image assets; pulled from ghcr.io/bwsalmon/grain/grain",
-      imageRepo: "ghcr.io/bwsalmon/grain/grain",
-      defaultImageRepo: "ghcr.io/bwsalmon/grain/grain",
-      imageRepos: ["ghcr.io/bwsalmon/grain/grain"],
+        "release has no image assets; pulled from docker.io/grainai/grain",
+      imageRepo: "docker.io/grainai/grain",
+      defaultImageRepo: "docker.io/grainai/grain",
+      imageRepos: ["docker.io/grainai/grain"],
       imageSource: {
         source: "release-assets",
         sourceDefault: true,
@@ -2293,12 +2291,12 @@ describe("ImageSourceSettings on UpgradePanel", () => {
       enabled: true,
       mode: "image",
       channel: "main",
-      running: { image: "ghcr.io/bwsalmon/grain/grain:main" },
+      running: { image: "docker.io/grainai/grain:main" },
       phase: "done",
       branch: "main",
       source: "release-assets",
       detail: "loaded grain-image.tar.gz",
-      imageRepo: "ghcr.io/bwsalmon/grain/grain",
+      imageRepo: "docker.io/grainai/grain",
       imageSource: {
         source: "release-assets",
         sourceDefault: false,
