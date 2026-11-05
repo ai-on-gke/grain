@@ -154,10 +154,10 @@ func buildNamespaceRedactorFor(dataDir string, secretStore *secrets.Store) *reda
 // in when the process started. A nil set is a caller with nothing that
 // can change that answer, which gets one of its own.
 func StartGitProxy(dataDir string, store *model.Store, githubHost string, insecureHTTP bool, fabric Fabric, forbidden *gitproxy.ForbiddenSet) (url string, handler http.Handler, stop func(context.Context) error, err error) {
-	return startGitProxy(dataDir, store, nil, githubHost, insecureHTTP, fabric, forbidden, nil)
+	return startGitProxy(dataDir, store, nil, githubHost, insecureHTTP, fabric, forbidden, nil, nil)
 }
 
-func startGitProxy(dataDir string, store *model.Store, secretStore *secrets.Store, githubHost string, insecureHTTP bool, fabric Fabric, forbidden *gitproxy.ForbiddenSet, shutdownStarted <-chan struct{}) (url string, handler http.Handler, stop func(context.Context) error, err error) {
+func startGitProxy(dataDir string, store *model.Store, secretStore *secrets.Store, githubHost string, insecureHTTP bool, fabric Fabric, forbidden *gitproxy.ForbiddenSet, shutdownStarted <-chan struct{}, artifacts ci.ArtifactStore) (url string, handler http.Handler, stop func(context.Context) error, err error) {
 	repos, err := ForbiddenRepos(context.Background(), dataDir)
 	if err != nil {
 		return "", nil, nil, err
@@ -176,6 +176,7 @@ func startGitProxy(dataDir string, store *model.Store, secretStore *secrets.Stor
 		CIStore:     daemonNamespaceCIStore{fallback: fallbackCI},
 		ExternalCI:  sandboxExternalCI{},
 		ArtifactDir: ciArtifactDir(dataDir),
+		Artifacts:   artifacts,
 		SrcDir:      srcDir,
 		CoreSrcDir:  coreSrcDir,
 		CoreModule:  coreModule,
