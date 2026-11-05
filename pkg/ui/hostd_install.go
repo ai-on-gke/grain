@@ -16,12 +16,14 @@ package ui
 
 import (
 	_ "embed"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
 
@@ -115,6 +117,10 @@ func (s *Server) hostdInstallCallerHasAccess(r *http.Request) bool {
 // HostdInstall is what the install command Settings -> Hostds shows
 // passes the script (--release, --image), since the script itself tells
 // a caller without access neither.
+//
+// Lines and Note are the instructions themselves, rendered by the daemon
+// (RegisterHostdInstall) so every build's text comes from Go; Release
+// and Image stay for a client that still assembles the command itself.
 type HostdInstall struct {
 	// Release is the daemon's own build, the grain the script installs;
 	// "" for an unstamped build, which takes any grain (--any-version).
@@ -122,6 +128,154 @@ type HostdInstall struct {
 	// Image is the image the daemon runs, to take that grain out of; ""
 	// when the deployment cannot say.
 	Image string `json:"image,omitempty"`
+	// Lines are the shell lines that install the hostd on its machine, in
+	// order, shown as one block to copy. They never carry the token: the
+	// installer asks for it, or reads $GRAIN_HOSTD_TOKEN. Empty when the
+	// daemon could not render them (an older daemon sends none either),
+	// and the client then assembles the root installer's line itself.
+	Lines []string `json:"lines,omitempty"`
+	// Note is a short line shown beside Lines, such as who to run them
+	// as; "" for none.
+	Note string `json:"note,omitempty"`
+}
+
+// HostdInstallContext is what a HostdInstallProvider is told about the
+// hostd whose install instructions it writes.
+type HostdInstallContext struct {
+	// Origin is this daemon's URL as the caller reached it ("https://host"
+	// or "http://host:port", no path), or "" when that is not one a shell
+	// line could safely carry.
+	Origin string
+	// Name is the hostd's registry name (model.ValidateHostdName).
+	Name string
+	// Owner is the hostd's owner, the identity it dials in as; "" for
+	// none.
+	Owner string
+	// Release is the daemon's own build; "" for an unstamped one.
+	Release string
+	// Image is the image the daemon runs; "" when it cannot say.
+	Image string
+}
+
+// HostdInstallInstructions is what Settings -> Hostds and `grain hostds`
+// show for installing a hostd: shell lines in order, and an optional
+// short note. They must never carry the hostd's token, which a provider
+// is not given: an installer prompts for it or reads $GRAIN_HOSTD_TOKEN,
+// and the note may say so ("prefix with GRAIN_HOSTD_TOKEN=<token>, or
+// paste it when asked").
+type HostdInstallInstructions struct {
+	Lines []string
+	Note  string
+}
+
+// HostdInstallProvider writes the install instructions for a hostd, in
+// place of the root installer's line (defaultHostdInstall), for a build
+// that installs hostds some other way.
+type HostdInstallProvider func(HostdInstallContext) HostdInstallInstructions
+
+var (
+	hostdInstallProviderMu sync.RWMutex
+	hostdInstallProvider   HostdInstallProvider
+)
+
+// RegisterHostdInstall makes f the writer of the install instructions
+// Settings -> Hostds and `grain hostds` show for a hostd, in place of the
+// default sudo line running /api/hostd/install.sh, and returns a function
+// that puts back what was there before (for tests). nil puts back the
+// default.
+func RegisterHostdInstall(f HostdInstallProvider) (unregister func()) {
+	hostdInstallProviderMu.Lock()
+	defer hostdInstallProviderMu.Unlock()
+	prev := hostdInstallProvider
+	hostdInstallProvider = f
+	return func() {
+		hostdInstallProviderMu.Lock()
+		defer hostdInstallProviderMu.Unlock()
+		hostdInstallProvider = prev
+	}
+}
+
+func registeredHostdInstall() HostdInstallProvider {
+	hostdInstallProviderMu.RLock()
+	defer hostdInstallProviderMu.RUnlock()
+	return hostdInstallProvider
+}
+
+// defaultHostdInstall is the one line that installs the hostd from this
+// daemon's /api/hostd/install.sh as root, the same line Settings -> Hostds
+// assembled itself before the daemon rendered it (installCommand in
+// HostdsSection.jsx). It has no lines without an origin to fetch from.
+func defaultHostdInstall(c HostdInstallContext) HostdInstallInstructions {
+	if c.Origin == "" || c.Name == "" {
+		return HostdInstallInstructions{}
+	}
+	cmd := `sudo sh -c "$(curl -fsSL '` + c.Origin + hostdInstallPath + `')" grain-hostd-install --name ` + c.Name
+	if c.Release != "" {
+		cmd += " --release " + c.Release
+	} else {
+		cmd += " --any-version"
+	}
+	if c.Image != "" {
+		cmd += " --image " + c.Image
+	}
+	return HostdInstallInstructions{Lines: []string{cmd}}
+}
+
+// hostdInstallOrigin is the URL r reached this daemon at, or "" when it
+// is not one a shell line can carry between single quotes.
+func hostdInstallOrigin(r *http.Request) string {
+	url := hostdInstallDaemonURL(r)
+	host := strings.TrimPrefix(strings.TrimPrefix(url, "http://"), "https://")
+	if host == url || !hostdInstallHostRE.MatchString(host) {
+		return ""
+	}
+	return url
+}
+
+// hostdInstallFor is HostdInstall for hostd h, with the instructions the
+// registered provider writes (or the default's). token, when the caller
+// is about to be shown it, is held out of them: instructions that carry
+// it anyway are dropped for the default's.
+func (s *Server) hostdInstallFor(r *http.Request, h model.Hostd, token string) *HostdInstall {
+	out := s.hostdInstallInfo()
+	c := HostdInstallContext{
+		Origin:  hostdInstallOrigin(r),
+		Name:    h.Name,
+		Owner:   h.Owner,
+		Release: out.Release,
+		Image:   out.Image,
+	}
+	inst := defaultHostdInstall(c)
+	if f := registeredHostdInstall(); f != nil {
+		if got := f(c); len(got.Lines) > 0 {
+			if hostdInstallCarries(got, token) {
+				log.Printf("grain hostd: the registered install instructions for hostd %s carry its token; showing the default ones instead", h.Name)
+			} else {
+				inst = got
+			}
+		}
+	}
+	if hostdInstallCarries(inst, token) {
+		inst = HostdInstallInstructions{}
+	}
+	out.Lines, out.Note = inst.Lines, inst.Note
+	return out
+}
+
+// hostdInstallCarries reports whether any of in's text holds token.
+func hostdInstallCarries(in HostdInstallInstructions, token string) bool {
+	if token == "" {
+		return false
+	}
+	if strings.Contains(in.Note, token) {
+		return true
+	}
+	for _, l := range in.Lines {
+		if strings.Contains(l, token) {
+			return true
+		}
+	}
+	return false
 }
 
 // hostdInstallInfo is HostdInstall for this daemon, each value held to

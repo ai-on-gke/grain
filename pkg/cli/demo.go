@@ -106,6 +106,7 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	uiIAPIssuer := fs.String("ui-iap-issuer", "", "as on grain daemon: the issuer a signed assertion must carry (default "+ui.GoogleIAPIssuer+")")
 	uiIAPKeysURL := fs.String("ui-iap-keys-url", "", "as on grain daemon: where the assertions' signing keys are published (default "+ui.GoogleIAPCertURL+")")
 	uiRequireIAP := fs.Bool("ui-require-iap", false, "as on grain daemon: accept the access code only from loopback with no forwarding headers; needs -ui-iap-audience")
+	uiRequireVerifier := fs.String("ui-require-verifier", "", "as on grain daemon: require network callers to sign in through the named IdentityVerifier (-ui-require-iap is an alias for -ui-require-verifier=iap)")
 	uiAllowedPrincipals := fs.String("ui-allowed-principals", "", ui.AllowedPrincipalsUsage)
 	uiCloudIdentityEndpoint := fs.String("ui-cloud-identity-endpoint", "", "resolve -ui-allowed-principals' group: entries against this Cloud Identity API base URL (a test stand-in) rather than "+ui.DefaultCloudIdentityEndpoint)
 	githubWebhookURL, githubWebhookAddr := githubWebhookFlags(fs)
@@ -151,17 +152,25 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	if err != nil {
 		return demo.Options{}, fmt.Errorf("-default-target-repo: %w", err)
 	}
-	iapCfg := daemon.Config{UiIAPAudience: *uiIAPAudience, UiRequireIAP: *uiRequireIAP, UiAllowedPrincipals: ui.SplitAllowedPrincipals(*uiAllowedPrincipals)}
+	iapCfg := daemon.Config{
+		UiIAPAudience:       *uiIAPAudience,
+		UiIAPIssuer:         *uiIAPIssuer,
+		UiIAPKeysURL:        *uiIAPKeysURL,
+		UiRequireVerifier:   strings.TrimSpace(*uiRequireVerifier),
+		UiRequireIAP:        *uiRequireIAP,
+		UiAllowedPrincipals: ui.SplitAllowedPrincipals(*uiAllowedPrincipals),
+	}
 	if err := daemon.CheckUIAllowedPrincipals(iapCfg); err != nil {
 		return demo.Options{}, err
 	}
-	if err := daemon.CheckUIRequireIAP(iapCfg); err != nil {
+	if err := daemon.CheckUIRequireVerifier(iapCfg); err != nil {
 		return demo.Options{}, err
 	}
 	return demo.Options{
 		IAPAudience:            *uiIAPAudience,
 		IAPIssuer:              *uiIAPIssuer,
 		IAPKeysURL:             *uiIAPKeysURL,
+		RequireVerifier:        iapCfg.UiRequireVerifier,
 		RequireIAP:             *uiRequireIAP,
 		AllowedPrincipals:      iapCfg.UiAllowedPrincipals,
 		CloudIdentityEndpoint:  *uiCloudIdentityEndpoint,

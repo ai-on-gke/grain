@@ -135,6 +135,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			Audience:              s.tasks.Config.IAPAudience,
 			Issuer:                s.tasks.Config.IAPIssuer,
 			KeysURL:               s.tasks.Config.IAPKeysURL,
+			RequireVerifier:       s.tasks.Config.RequireVerifier,
 			RequireIAP:            s.tasks.Config.RequireIAP,
 			LocalAPIToken:         s.localAPITokenNow(),
 			AccessSessionLifetime: s.tasks.Config.AccessSessionLifetime,
@@ -703,6 +704,7 @@ func (s *Server) routes() {
 	s.route("GET /api/hostds", s.handleListHostds)
 	s.route("POST /api/hostds", s.handleCreateHostd)
 	s.route("PATCH /api/hostds/{name}", s.handleUpdateHostd)
+	s.route("GET /api/hostds/{name}/install", s.handleHostdInstall)
 	s.route("POST /api/hostds/{name}/rotate", s.handleRotateHostdToken)
 	s.route("POST /api/hostds/{name}/revoke", s.handleRevokeHostd)
 
