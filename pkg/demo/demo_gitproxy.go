@@ -144,48 +144,7 @@ func configureGitProxyDemo(dir string, store *model.Store, repo model.RepoRef, b
 		return nil, fmt.Errorf("serving the simulated forge: %w", err)
 	}
 
-	// Ensure state-repo/settings/settings.yaml and secrets/secrets.key exist so
-	// config://, deploy://health, and deploy://grain.log reads work in demo.
-	settingsDir := filepath.Join(daemon.StateRepoDir(dir), "settings")
-	_ = os.MkdirAll(settingsDir, 0o755)
-	_ = os.WriteFile(filepath.Join(settingsDir, "settings.yaml"), []byte("default_model: gemini-2.5-pro\n"), 0o644)
-	_ = secrets.New(daemon.SecretsDir(dir))
-
-	logPath := filepath.Join(dir, "demo-daemon.log")
-	_ = os.WriteFile(logPath, []byte("2026-10-29T00:00:00Z grain demo: started daemon log\n"), 0o644)
-	api := &daemon.InProcessAPI{}
-	srcDir := demoSrcDir(dir)
-	coreSrcDir, coreModule := namespace.CoreSource(srcDir, "/usr/local/share/grain/core-src")
-	nsServer := &namespace.Server{
-		ArtifactDir: filepath.Join(dir, "state", "ci-artifacts"),
-		SrcDir:      srcDir,
-		CoreSrcDir:  coreSrcDir,
-		CoreModule:  coreModule,
-		NewRedactor: func() *redact.Redactor { return daemon.BuildNamespaceRedactor(dir) },
-	}
-	cliBackend := daemon.WireSandboxNamespace(nsServer, daemon.SandboxNamespaceConfig{
-		DataDir:      dir,
-		Store:        store,
-		InsecureHTTP: true,
-		API:          api,
-		GrainLogSources: []grainlog.Source{
-			{
-				Name: "daemon",
-				What: "the grain demo daemon's log",
-				Read: func(_ context.Context, _ systemlog.Query) ([]string, error) {
-					b, err := os.ReadFile(logPath)
-					if err != nil {
-						return nil, err
-					}
-					trimmed := strings.TrimRight(string(b), "\n")
-					if trimmed == "" {
-						return nil, nil
-					}
-					return strings.Split(trimmed, "\n"), nil
-				},
-			},
-		},
-	})
+	nsServer, cliBackend, api := newDemoNamespace(dir, store)
 	p := &demoGitProxy{
 		store:  store,
 		tokens: gitproxy.NewSandboxTokenStore(filepath.Join(dir, "secrets", "sandbox-tokens.json")),
@@ -221,19 +180,77 @@ func configureGitProxyDemo(dir string, store *model.Store, repo model.RepoRef, b
 	return p, nil
 }
 
+func newDemoNamespace(dir string, store *model.Store) (*namespace.Server, *daemon.SandboxCLIBackend, *daemon.InProcessAPI) {
+	// Ensure state-repo/settings/settings.yaml and secrets/secrets.key exist so
+	// config://, deploy://health, and deploy://grain.log reads work in demo.
+	settingsDir := filepath.Join(daemon.StateRepoDir(dir), "settings")
+	_ = os.MkdirAll(settingsDir, 0o755)
+	settingsPath := filepath.Join(settingsDir, "settings.yaml")
+	if _, err := os.Stat(settingsPath); os.IsNotExist(err) {
+		_ = os.WriteFile(settingsPath, []byte("default_model: gemini-2.5-pro\n"), 0o644)
+	}
+	_ = secrets.New(daemon.SecretsDir(dir))
+
+	logPath := filepath.Join(dir, "demo-daemon.log")
+	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		_ = os.WriteFile(logPath, []byte("2026-10-29T00:00:00Z grain demo: started daemon log\n"), 0o644)
+	}
+	api := &daemon.InProcessAPI{}
+	srcDir := demoSrcDir(dir)
+	coreSrcDir, coreModule := namespace.CoreSource(srcDir, "/usr/local/share/grain/core-src")
+	nsServer := &namespace.Server{
+		ArtifactDir: filepath.Join(dir, "state", "ci-artifacts"),
+		SrcDir:      srcDir,
+		CoreSrcDir:  coreSrcDir,
+		CoreModule:  coreModule,
+		NewRedactor: func() *redact.Redactor { return daemon.BuildNamespaceRedactor(dir) },
+	}
+	cliBackend := daemon.WireSandboxNamespace(nsServer, daemon.SandboxNamespaceConfig{
+		DataDir:      dir,
+		Store:        store,
+		InsecureHTTP: true,
+		API:          api,
+		GrainLogSources: []grainlog.Source{
+			{
+				Name: "daemon",
+				What: "the grain demo daemon's log",
+				Read: func(_ context.Context, _ systemlog.Query) ([]string, error) {
+					b, err := os.ReadFile(logPath)
+					if err != nil {
+						return nil, err
+					}
+					trimmed := strings.TrimRight(string(b), "\n")
+					if trimmed == "" {
+						return nil, nil
+					}
+					return strings.Split(trimmed, "\n"), nil
+				},
+			},
+		},
+	})
+	return nsServer, cliBackend, api
+}
+
+func wireDemoNamespace(ns *namespace.Server, cli *daemon.SandboxCLIBackend, api *daemon.InProcessAPI, srv http.Handler, client *ui.Client, cfg ui.Config, store *model.Store) {
+	api.Set(srv)
+	if ciStore, ok := cfg.CI.(ci.RunStore); ok {
+		ns.CIStore = ciStore
+	} else if store != nil {
+		ns.CIStore = ci.NewStoredRunStore(store, ci.StoredRunStoreOptions{})
+	}
+	if client != nil {
+		ns.ExternalCI = client.ExternalCIRuns()
+	}
+	if ghClient, ok := cfg.GitHubBranches.(github.Client); ok {
+		cli.SetIssues(ghClient)
+	}
+}
+
 // wireServer connects the proxy's namespace and /cli/ routes to the demo's
 // UI/API server, CI run store, and simulated GitHub client once they are built.
 func (p *demoGitProxy) wireServer(srv http.Handler, client *ui.Client, cfg ui.Config) {
-	p.api.Set(srv)
 	p.proxy.CLIActions = ui.SandboxCLIActions{Client: client}
-	if ciStore, ok := cfg.CI.(ci.RunStore); ok {
-		p.ns.CIStore = ciStore
-	} else if p.store != nil {
-		p.ns.CIStore = ci.NewStoredRunStore(p.store, ci.StoredRunStoreOptions{})
-	}
-	if ghClient, ok := cfg.GitHubBranches.(github.Client); ok {
-		p.cli.SetIssues(ghClient)
-	}
+	wireDemoNamespace(p.ns, p.cli, p.api, srv, client, cfg, p.store)
 }
 
 // serveLoopback serves h on a free loopback port for as long as the demo

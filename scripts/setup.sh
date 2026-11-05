@@ -3103,7 +3103,10 @@ ensure_local_postgres() {
 # migrate_sqlite_to_local_postgres carries $GRAIN_DATA_DIR/store into the
 # local server with `grain upgrade-postgres`, which also writes
 # db-config.json. The daemon is stopped first, so nothing writes to SQLite
-# after the copy; the SQLite store itself is left where it is.
+# after the copy -- this is the offline procedure, and the one place that
+# stops the daemon for it; `grain upgrade-postgres` itself refuses while
+# a daemon holds $GRAIN_DATA_DIR/daemon.lock and never stops one. The
+# SQLite store itself is left where it is.
 migrate_sqlite_to_local_postgres() {
   if systemctl is-active --quiet grain-daemon.service 2>/dev/null; then
     log "  stopping grain-daemon.service to migrate its store"
@@ -3122,6 +3125,65 @@ migrate_sqlite_to_local_postgres() {
   fi
   : | grain_write 0600 "$GRAIN_DATA_DIR/.postgres-migrated"
   step_done "migrated"
+}
+
+# store_count: how many stores $GRAIN_DATA_DIR holds or db-config.json
+# names -- the SQLite store, each PostgreSQL cluster (postgres, and any
+# postgres.* set aside), and a server db-config.json points at that is
+# not the local one.
+store_count() {
+  local n=0 d
+  [ -e "$GRAIN_DATA_DIR/store/grain.db" ] && n=$((n + 1))
+  for d in "$GRAIN_DATA_DIR"/postgres*; do
+    [ -e "$d/PG_VERSION" ] && n=$((n + 1))
+  done
+  if [ ! -e "$GRAIN_DATA_DIR/postgres/PG_VERSION" ] && [ -e "$GRAIN_DATA_DIR/db-config.json" ] &&
+     grep -q '"driver": *"postgres"' "$GRAIN_DATA_DIR/db-config.json" 2>/dev/null; then
+    n=$((n + 1))
+  fi
+  echo "$n"
+}
+
+# check_store_before_restart runs before the daemon is (re)started. It
+# says which store the daemon will start on, and, on a host holding more
+# than one store, asks `grain db check` whether that store is behind the
+# writes the running (or last) daemon made -- its high-water mark,
+# $GRAIN_DATA_DIR/store-highwater.json. A store behind it stops the run
+# here with the daemon left as it is: restarting onto it is how a host
+# loses every task written since the copy, and hands their ids out again
+# (docs/database.md). The daemon makes the same check on every start.
+check_store_before_restart() {
+  local out status=0
+  case "$GRAIN_DB_DRIVER" in
+    postgres)
+      if [ "$GRAIN_POSTGRES_PROVISION" = 1 ]; then
+        log "Database: grain-daemon.service will start on the local PostgreSQL server ($GRAIN_DATA_DIR/postgres)"
+      else
+        log "Database: grain-daemon.service will start on the PostgreSQL store db-config.json or GRAIN_DB_DSN names"
+      fi
+      ;;
+    *) log "Database: grain-daemon.service will start on SQLite ($GRAIN_DATA_DIR/store)" ;;
+  esac
+  [ "$(store_count)" -ge 2 ] || return 0
+  [ -x /usr/local/lib/grain/run-image.sh ] || return 0
+  step_start "Checking the store against the last daemon's writes (grain db check)"
+  # shellcheck disable=SC2016 # expanded by the container's sh, not here
+  out="$(/usr/local/lib/grain/run-image.sh --entrypoint sh -- -c \
+        'exec /usr/local/bin/grain db check -data-dir "$GRAIN_DATA_DIR"' 2>&1)" || status=$?
+  if [ "$status" = 0 ]; then
+    step_done "$(printf '%s\n' "$out" | sed -n 's/^store: //p' | head -n 1)"
+    return 0
+  fi
+  if printf '%s\n' "$out" | grep -q "is behind the writes"; then
+    printf '%s\n' "$out" >&2
+    echo "setup.sh: not restarting grain-daemon.service onto a store that is behind the writes the last daemon made." >&2
+    echo "          Nothing was changed; a daemon that is running keeps running. docs/database.md says how to recover." >&2
+    exit 1
+  fi
+  # Anything else (a check this image cannot make, a server not up yet)
+  # is the daemon's own start to settle: it makes the same check.
+  log "  could not check the store (the daemon checks it again as it starts):"
+  printf '%s\n' "$out" | sed 's/^/    /' >&2
 }
 
 # postgres_daemon_unit sets what grain-daemon.service gains when its store
@@ -4703,18 +4765,21 @@ install_hostd_version() {
   # (Its closing brace is indented: the tests read setup.sh's own
   # functions up to the first one that is not.)
   local version="\$1" stage="\${2:-}" dir="${HOSTD_VERSIONS_DIR}" previous="" name
-  # Held until current has moved: the new version's directory is itself
-  # a change grain-hostd-upgrade.path sees, and the upgrade script it
-  # starts takes this lock before reading current. Without it that run
-  # could read the old link, find hostd already on it and exit, while the
-  # rename's own trigger and the start below merge into the same run and
-  # are lost: hostd would stay on the old binary. Beside the versions
-  # directory rather than in it, so taking it is not a change there.
-  install -d -m0755 "\$dir"
+  # Held until current has moved: touching \$dir (install -d fires
+  # IN_ATTRIB even when \$dir already exists) or making the new version's
+  # directory is itself a change grain-hostd-upgrade.path sees, and the
+  # upgrade script it starts takes this lock before reading current.
+  # Without it that run could read the old link, find hostd already on it
+  # and exit, while the rename's own trigger and the start below merge
+  # into the same run and are lost: hostd would stay on the old binary.
+  # Beside the versions directory rather than in it, so taking it is not
+  # a change there.
+  install -d -m0755 "\$(dirname "\$dir")"
   if command -v flock >/dev/null 2>&1; then
     exec 9>"\$dir.lock"
     flock 9
   fi
+  install -d -m0755 "\$dir"
   # A version already here -- the one a rollback returns to -- is the
   # same image's grain, and may be the file a hostd is running: it is
   # pointed at again, never written over.
@@ -7579,31 +7644,42 @@ write_hostd_upgrade_script() {
 # Written by scripts/setup.sh (write_hostd_upgrade_script); run by
 # grain-hostd-upgrade.service when ${HOSTD_VERSIONS_DIR}/current moves.
 set -uo pipefail
-# The extractor holds this lock from making a new version's directory
-# (a change that starts this script) until it has moved current
-# (install_hostd_version): read current under it, or this run can see
-# the link before it moves and miss the upgrade.
-if command -v flock >/dev/null 2>&1; then
-  exec 9>"${HOSTD_VERSIONS_DIR}.lock" && flock 9
-fi
-current="\$(readlink -f "${HOSTD_VERSIONS_DIR}/current/grain")"
-exec 9>&-
-# The new build's own capabilities entries first, whether or not hostd
-# needs draining onto it (write_hostd_allowlist_unit).
-systemctl start grain-hostd-allowlist.service || true
-pid="\$(systemctl show -p MainPID --value grain-hostd.service)"
-if [ -z "\$pid" ] || [ "\$pid" = 0 ]; then
-  exit 0
-fi
-running="\$(readlink "/proc/\$pid/exe" 2>/dev/null || true)"
-if [ "\$running" = "\$current" ]; then
-  exit 0
-fi
-echo "grain hostd (pid \$pid) runs \${running:-an unknown binary}; draining it onto \$current"
-if ! runuser -u "${GRAIN_USER}" -- "\$current" hostd -drain -socket "${HOSTD_SOCKET}"; then
-  echo "grain hostd did not take a drain (it predates draining); restarting it onto \$current"
-  systemctl restart grain-hostd.service
-fi
+# Re-read current on each pass: if current moves while this oneshot unit
+# is running grain-hostd-allowlist.service or draining hostd, systemd
+# folds both grain-hostd-upgrade.path's trigger and the extractor's
+# systemctl start --no-block into this already-activating run. Looping
+# until current settles keeps that second move from being lost.
+seen=""
+while :; do
+  # The extractor holds this lock from touching the versions directory
+  # until it has moved current (install_hostd_version): read current
+  # under it, or this run can see the link before it moves.
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"${HOSTD_VERSIONS_DIR}.lock" && flock 9
+  fi
+  current="\$(readlink -f "${HOSTD_VERSIONS_DIR}/current/grain")"
+  exec 9>&-
+  if [ -z "\$current" ] || [ "\$current" = "\$seen" ]; then
+    exit 0
+  fi
+  seen="\$current"
+  # The new build's own capabilities entries first, whether or not hostd
+  # needs draining onto it (write_hostd_allowlist_unit).
+  systemctl start grain-hostd-allowlist.service || true
+  pid="\$(systemctl show -p MainPID --value grain-hostd.service)"
+  if [ -z "\$pid" ] || [ "\$pid" = 0 ]; then
+    continue
+  fi
+  running="\$(readlink "/proc/\$pid/exe" 2>/dev/null || true)"
+  if [ "\$running" = "\$current" ]; then
+    continue
+  fi
+  echo "grain hostd (pid \$pid) runs \${running:-an unknown binary}; draining it onto \$current"
+  if ! runuser -u "${GRAIN_USER}" -- "\$current" hostd -drain -socket "${HOSTD_SOCKET}"; then
+    echo "grain hostd did not take a drain (it predates draining); restarting it onto \$current"
+    systemctl restart grain-hostd.service
+  fi
+done
 SCRIPT
   chmod 0755 "$HOSTD_UPGRADE_SCRIPT"
 }
@@ -9031,6 +9107,9 @@ main() {
   # host can dispatch work" and "this host will stay awake to finish it"
   # should not exist at all.
   disable_host_suspend
+  # Before enable_services restarts the daemon: which store it starts on,
+  # and that it is not behind the last daemon's writes.
+  check_store_before_restart
   enable_services
   # After enable_services: the daemon has left the image it replaced, and
   # a run that failed before here keeps it to go back to.

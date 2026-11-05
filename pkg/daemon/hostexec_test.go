@@ -124,6 +124,20 @@ func TestDetectHostExecutorOffTheBareMachine(t *testing.T) {
 	if e.Kind != HostExecutorHostd || e.Socket != "/srv/hostd.sock" {
 		t.Errorf("with -hostd-socket: %+v, want hostd at that socket", e)
 	}
+	// An explicit -hostd-socket on the bare machine is honoured too rather
+	// than silently discarded for HostExecutorLocal, so co-located hostd
+	// routing and run: host capability servers work when grain daemon is
+	// started outside a container with -hostd-socket.
+	onHost := whererun.Detection{Host: true, Signal: "no container marker found"}
+	e = DetectHostExecutor(Config{HostdSocket: "/srv/hostd.sock"}, onHost, noHostdLookup(t))
+	if e.Kind != HostExecutorHostd || e.Socket != "/srv/hostd.sock" {
+		t.Errorf("on the host with explicit -hostd-socket: %+v, want hostd at that socket", e)
+	}
+	cfg := Config{HostdSocket: "/srv/hostd.sock", HostExec: &e}
+	if cfg.capabilityHostd() == nil || capabilityHostdName(cfg) != model.LocalHostd {
+		t.Errorf("capabilityHostd with explicit -hostd-socket on host: client=%v name=%q, want non-nil %q",
+			cfg.capabilityHostd(), capabilityHostdName(cfg), model.LocalHostd)
+	}
 }
 
 // noHostConfigs are the two deployments with no host executor.

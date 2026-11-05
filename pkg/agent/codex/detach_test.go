@@ -130,6 +130,43 @@ func TestADetachedCodexRunIsLeftAlone(t *testing.T) {
 	}
 }
 
+func TestAHostdStopIsNotRetriedAndKeepsThread(t *testing.T) {
+	for _, stopErr := range []error{agent.ErrHostdDraining, agent.ErrHostdLost} {
+		r := &attemptRunner{replies: []attemptReply{
+			{stdout: "", err: fmt.Errorf("hostd: %w", stopErr)},
+			{stdout: attemptStream(agentMessage("done"), `{"type":"turn.completed"}`)},
+		}}
+		f := newTestFramework(r, "/usr/local/bin/grain", withSessionsIn(t.TempDir()), withoutBackoff())
+		result, err := f.Run(context.Background(), agent.RunConfig{
+			Prompt: "do the thing", SandboxRoot: t.TempDir(), TaskID: "77", ResumeSession: "thread-carried",
+		})
+		if !errors.Is(err, stopErr) {
+			t.Fatalf("Run(%v) err = %v, want %v", stopErr, err, stopErr)
+		}
+		if len(r.calls) != 1 {
+			t.Fatalf("codex was exec'd %d time(s) on %v, want 1", len(r.calls), stopErr)
+		}
+		if result != nil {
+			t.Fatalf("result on empty stream = %+v, want nil", result)
+		}
+	}
+
+	mid := &attemptRunner{replies: []attemptReply{
+		{stdout: `{"type":"thread.started","thread_id":"thread-live"}` + "\n" + agentMessage("partial") + "\n", err: fmt.Errorf("hostd: %w", agent.ErrHostdLost)},
+		{stdout: attemptStream(agentMessage("done"), `{"type":"turn.completed"}`)},
+	}}
+	f := newTestFramework(mid, "/usr/local/bin/grain", withSessionsIn(t.TempDir()), withoutBackoff())
+	result, err := f.Run(context.Background(), agent.RunConfig{
+		Prompt: "do the thing", SandboxRoot: t.TempDir(), TaskID: "78",
+	})
+	if !errors.Is(err, agent.ErrHostdLost) || len(mid.calls) != 1 {
+		t.Fatalf("mid-run hostd loss = %v (%d calls), want ErrHostdLost after 1 call", err, len(mid.calls))
+	}
+	if result == nil || result.ResumableSession != "thread-live" || !strings.Contains(result.Transcript, "partial") {
+		t.Fatalf("mid-run result = %+v, want partial transcript and thread-live", result)
+	}
+}
+
 func TestDetachedMCPTestChild(t *testing.T) {
 	if os.Getenv("GRAIN_CODEX_DETACHED_MCP_CHILD") != "1" {
 		return
