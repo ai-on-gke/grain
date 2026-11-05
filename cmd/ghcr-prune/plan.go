@@ -129,11 +129,17 @@ const (
 	KindSignature
 )
 
-// BasePackage is the package whose every tag is a cache key. It is named
-// here because that is the one place the classification differs per
-// package: a bare hex tag means "granule base built from this vendored
-// tree" there and would be an unrecognised tag anywhere else.
-const BasePackage = "guest-base"
+// BasePackage is the package whose bare hex tags are granule base cache keys
+// (`sandbox-base` on Docker Hub, `guest-base` on legacy GHCR).
+const (
+	BasePackage       = "sandbox-base"
+	LegacyBasePackage = "guest-base"
+)
+
+func isBasePackage(pkg string) bool {
+	return pkg == BasePackage || strings.HasSuffix(pkg, "/"+BasePackage) ||
+		pkg == LegacyBasePackage || strings.HasSuffix(pkg, "/"+LegacyBasePackage)
+}
 
 var (
 	commitTag = regexp.MustCompile(`^sha-[0-9a-f]{7,40}$`)
@@ -156,7 +162,7 @@ var releaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 // outlives a rule that has never heard of it, and the cost of the
 // mistake is disk rather than an image somebody was relying on.
 func classify(pkg, tag string) TagKind {
-	if pkg == BasePackage || strings.HasSuffix(pkg, "/"+BasePackage) {
+	if isBasePackage(pkg) {
 		if hashTag.MatchString(tag) {
 			return KindBase
 		}

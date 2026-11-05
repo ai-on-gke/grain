@@ -99,7 +99,7 @@ func TestCheckConfigRefusesWhatCannotBeRepairedWithoutARestart(t *testing.T) {
 			c.UpgradeSrcDir = "/src"
 		}, "-upgrade-install-path is required"},
 		{"upgrade to an image with nowhere to record it", func(c *daemon.Config) {
-			c.UpgradeImage = "ghcr.io/bwsalmon/grain:latest"
+			c.UpgradeImage = "docker.io/grainai/grain:latest"
 		}, "-upgrade-image-ref-file is required"},
 		{"no workers", func(c *daemon.Config) { c.MaxWorkers = 0 }, "-max-workers must be at least 1"},
 		// Not merely a silly number: it is the value loadConfig falls

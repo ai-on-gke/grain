@@ -85,9 +85,10 @@ async function expectOneRail(page, title) {
   await expect(globals.getByTestId("alerts-button")).toBeVisible();
   await expect(globals.getByTestId("top-bar-system")).toBeVisible();
   await expect(globals.getByTestId("top-bar-settings")).toBeVisible();
-  await expect(
-    globals.getByRole("button", { name: "+ New task" }),
-  ).toBeVisible();
+  await expect(globals.getByRole("button", { name: "+ New task" })).toHaveCount(
+    0,
+  );
+  await expect(globals.getByTestId("top-bar-user")).toHaveCount(0);
   // One row: the rail is exactly as tall wherever it is.
   const box = await rail.boundingBox();
   expect(Math.round(box.height)).toBe(77);
@@ -220,7 +221,7 @@ test.describe("the page header rail", () => {
   // Still level once the page's actions have wrapped behind "more":
   // the wrapped lines packed from the top, and a count alone on the
   // first one sat ~10px above the title's centre line on every counted
-  // page in a 760px window.
+  // page in a narrow desktop window.
   for (const [name, path] of [
     ["Tasks", "/"],
     ["Inbox", "/inbox"],
@@ -231,7 +232,7 @@ test.describe("the page header rail", () => {
     test(`centres ${name}'s count on its label behind more`, async ({
       page,
     }) => {
-      await page.setViewportSize({ width: 760, height: 900 });
+      await page.setViewportSize({ width: 620, height: 900 });
       await page.goto(path);
       const rail = page.getByTestId("page-header");
       await expect(rail.getByTestId("page-header-more")).toBeVisible();
@@ -281,26 +282,30 @@ test.describe("the page header rail", () => {
     });
   }
 
-  test("aligns the brand logo, tray icons and New task on one shared horizontal baseline", async ({
+  test("aligns the borderless sidebar header with the top rail, places New task just below it, and moves Expand sidebar into PageHeader when collapsed", async ({
     page,
   }) => {
     for (const width of [1440, 960]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto("/");
       await expect(page.locator(".task-row").first()).toBeVisible();
+
+      const sidebarHeader = page.getByTestId("sidebar-header");
+      const borderWidth = await sidebarHeader.evaluate(
+        (el) => getComputedStyle(el).borderBottomWidth,
+      );
+      expect(borderWidth).toBe("0px");
+
+      const headerBox = await sidebarHeader.boundingBox();
+      expect(Math.round(headerBox.height)).toBe(77);
+
       const boxes = await Promise.all(
         [
           page.locator("aside .header-logo-box"),
-          page.getByTestId("sidebar-toggle"),
+          page.locator("aside").getByTestId("sidebar-toggle"),
           page.getByTestId("alerts-button"),
           page.getByTestId("top-bar-system"),
           page.getByTestId("top-bar-settings"),
-          page
-            .getByTestId("page-header-globals")
-            .getByRole("button", { name: "+ New task" }),
-          page
-            .getByTestId("page-header-globals")
-            .getByRole("button", { name: "Create options" }),
         ].map((loc) => loc.boundingBox()),
       );
       const heights = boxes.map((b) => Math.round(b.height));
@@ -309,7 +314,58 @@ test.describe("the page header rail", () => {
         1,
       );
       expect(Math.max(...mids) - Math.min(...mids)).toBeLessThanOrEqual(1);
+
+      const newTaskBox = await page
+        .locator("aside")
+        .getByRole("button", { name: "+ New task" })
+        .boundingBox();
+      expect(newTaskBox).not.toBeNull();
+      expect(newTaskBox.y).toBeGreaterThan(headerBox.y + headerBox.height);
     }
+
+    // Collapsed state: restore button sits at the leading edge of PageHeader,
+    // not stacked below the logo in the left rail, and Create sits below the
+    // 77px header band.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    await page.getByTestId("sidebar-toggle").click();
+    const aside = page.locator("aside");
+    const pageHeader = page.getByTestId("page-header");
+    await expect(aside).toHaveAttribute("data-collapsed", "true");
+    await expect(aside.getByTestId("sidebar-toggle")).toHaveCount(0);
+
+    const expandToggle = pageHeader.getByTestId("sidebar-toggle");
+    await expect(expandToggle).toBeVisible();
+    await expect(expandToggle).toHaveAttribute("aria-label", "Expand sidebar");
+
+    const [
+      collapsedHeaderBox,
+      collapsedLogoBox,
+      expandBox,
+      titleBox,
+      settingsBox,
+      createBox,
+    ] = await Promise.all([
+      page.getByTestId("sidebar-header").boundingBox(),
+      aside.locator(".header-logo-box").boundingBox(),
+      expandToggle.boundingBox(),
+      pageHeader.getByTestId("page-header-title").boundingBox(),
+      page.getByTestId("top-bar-settings").boundingBox(),
+      aside.getByRole("button", { name: "Create" }).boundingBox(),
+    ]);
+    expect(expandBox.x + expandBox.width).toBeLessThanOrEqual(titleBox.x + 1);
+    const collapsedMids = [collapsedLogoBox, expandBox, settingsBox].map(
+      (b) => b.y + b.height / 2,
+    );
+    expect(
+      Math.max(...collapsedMids) - Math.min(...collapsedMids),
+    ).toBeLessThanOrEqual(1);
+    expect(createBox.y).toBeGreaterThan(
+      collapsedHeaderBox.y + collapsedHeaderBox.height,
+    );
+
+    await expandToggle.click();
+    await expect(aside).toHaveAttribute("data-collapsed", "false");
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/");

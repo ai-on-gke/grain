@@ -51,9 +51,9 @@ import (
 //     layout, or a bump in Granule's `dev.granule.guest.contract`).
 //   - Do NOT bump Contract for changes to the daemon, UI, orchestrator logic
 //     that does not change the in-sandbox boundary, or optional developer tools
-//     in the full `guest` / `k8s-sandbox` images. Users maintaining custom
-//     sandbox images `FROM ghcr.io/bwsalmon/grain/guest-base` or
-//     `FROM ghcr.io/bwsalmon/grain/k8s-sandbox-base` only need to rebuild
+//     in the full `sandbox` / `sandbox-k8s` images. Users maintaining custom
+//     sandbox images `FROM docker.io/grainai/sandbox-base` or
+//     `FROM docker.io/grainai/sandbox-k8s-base` only need to rebuild
 //     when Contract (or Granule's guest contract) changes, not on every Grain
 //     commit.
 //   - Bump MinimumContract ONLY when the daemon drops support for an older
@@ -113,8 +113,8 @@ const (
 
 	// DefaultGuestBaseImage and DefaultK8sSandboxBaseImage are the published
 	// minimal base images that custom sandbox images build FROM.
-	DefaultGuestBaseImage      = "ghcr.io/bwsalmon/grain/guest-base:latest"
-	DefaultK8sSandboxBaseImage = "ghcr.io/bwsalmon/grain/k8s-sandbox-base:latest"
+	DefaultGuestBaseImage      = "docker.io/grainai/sandbox-base:latest"
+	DefaultK8sSandboxBaseImage = "docker.io/grainai/sandbox-k8s-base:latest"
 
 	// BackendGranule, BackendK8s, and BackendContainer name the sandbox
 	// backend families for VerifyScript and RequiredComponents.
@@ -498,9 +498,9 @@ done`, SandboxCLIPath, strings.Join(SandboxCLICommands, " "))
 }
 
 // BaseImageFor derives the corresponding minimal base image reference
-// (`guest-base` or `k8s-sandbox-base`) carrying the same tag as a full sandbox
-// image reference (strip-digesting `@sha256:...` because the base image has its
-// own manifest digest).
+// (`sandbox-base` / `guest-base` or `sandbox-k8s-base` / `k8s-sandbox-base`)
+// carrying the same tag as a full sandbox image reference (strip-digesting
+// `@sha256:...` because the base image has its own manifest digest).
 func BaseImageFor(fullImage, baseName, fallback string) string {
 	ref := strings.TrimSpace(fullImage)
 	if ref == "" {
@@ -518,6 +518,17 @@ func BaseImageFor(fullImage, baseName, fallback string) string {
 		}
 	}
 	if slash := strings.LastIndexByte(repo, '/'); slash >= 0 {
+		leaf := repo[slash+1:]
+		switch {
+		case leaf == "sandbox" && baseName == "guest-base":
+			baseName = "sandbox-base"
+		case leaf == "guest" && baseName == "sandbox-base":
+			baseName = "guest-base"
+		case leaf == "sandbox-k8s" && baseName == "k8s-sandbox-base":
+			baseName = "sandbox-k8s-base"
+		case leaf == "k8s-sandbox" && baseName == "sandbox-k8s-base":
+			baseName = "k8s-sandbox-base"
+		}
 		return repo[:slash+1] + baseName + ":" + tag
 	}
 	return fallback
@@ -562,8 +573,8 @@ func GetContractInfo(defaultGuestImage, defaultK8sSandboxImage string) ContractI
 		GranuleMinimumContract: GranuleMinimumContract,
 		GranuleContractLabel:   GranuleContractLabel,
 		GranuleContractFile:    GranuleContractFile,
-		GuestBaseImage:         BaseImageFor(defaultGuestImage, "guest-base", DefaultGuestBaseImage),
-		K8sSandboxBaseImage:    BaseImageFor(defaultK8sSandboxImage, "k8s-sandbox-base", DefaultK8sSandboxBaseImage),
+		GuestBaseImage:         BaseImageFor(defaultGuestImage, "sandbox-base", DefaultGuestBaseImage),
+		K8sSandboxBaseImage:    BaseImageFor(defaultK8sSandboxImage, "sandbox-k8s-base", DefaultK8sSandboxBaseImage),
 		DefaultGuestImage:      defaultGuestImage,
 		DefaultK8sSandboxImage: defaultK8sSandboxImage,
 		RequiredCommon:         common,
@@ -647,7 +658,11 @@ func InspectAndCheckImage(ctx context.Context, dockerBin, image, backend string,
 
 	resolvedBackend := strings.ToLower(strings.TrimSpace(backend))
 	if resolvedBackend == "" || resolvedBackend == "auto" {
-		if (labels != nil && strings.TrimSpace(labels[GranuleContractLabel]) != "") || strings.Contains(image, "/guest") || strings.Contains(image, "guest-base") {
+		repo := ImageRepository(image)
+		isGranuleName := strings.HasSuffix(repo, "/guest") || strings.HasSuffix(repo, "/guest-base") ||
+			strings.HasSuffix(repo, "/sandbox") || strings.HasSuffix(repo, "/sandbox-base") ||
+			repo == "grainai/sandbox" || repo == "grainai/sandbox-base"
+		if (labels != nil && strings.TrimSpace(labels[GranuleContractLabel]) != "") || isGranuleName {
 			resolvedBackend = BackendGranule
 		} else {
 			resolvedBackend = BackendK8s

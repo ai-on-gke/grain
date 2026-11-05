@@ -399,6 +399,9 @@ func stateRepoSyncFailure(stateRepo ui.StateRepoManager) func() *ui.StateRepoSyn
 // that is one push behind for thirty seconds rather than one that is
 // wrong.
 func (m *StateManager) syncSecrets(ctx context.Context) {
+	if m.secrets != nil && m.secrets.Backend() == secrets.BackendSecretManager {
+		return
+	}
 	repo, err := m.currentSecretsRepo(ctx)
 	if err == nil && repo != nil {
 		err = syncOpenSecretsRepo(ctx, repo)
@@ -567,6 +570,41 @@ func (m *StateManager) Branches(ctx context.Context) ([]string, error) {
 	}
 	slices.Sort(names)
 	return names, nil
+}
+
+// ResolveRev resolves rev (or "" / "HEAD" for HEAD) in the controller's own
+// config repository checkout to a full commit SHA, or ("", nil) when rev is
+// not found.
+func (m *StateManager) ResolveRev(ctx context.Context, rev string) (string, error) {
+	if m == nil {
+		return "", errors.New("config repository is not available")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.repo == nil {
+		return "", errors.New("config repository is not available")
+	}
+	lookup := strings.TrimSpace(rev)
+	if lookup == "" {
+		lookup = "HEAD"
+	}
+	for _, candidate := range []string{
+		lookup,
+		"refs/heads/" + lookup,
+		"refs/remotes/origin/" + lookup,
+		"refs/tags/" + lookup,
+	} {
+		cmd := exec.CommandContext(ctx, "git", "-C", m.repo.Dir(), "rev-parse", "--verify", "--quiet",
+			"--end-of-options", candidate+"^{commit}")
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "GIT_TERMINAL_PROMPT=0"}
+		out, err := cmd.Output()
+		if err == nil {
+			if sha := strings.ToLower(strings.TrimSpace(string(out))); sha != "" {
+				return sha, nil
+			}
+		}
+	}
+	return "", nil
 }
 
 // localMergeBase is `git merge-base`, the commit two revisions last had

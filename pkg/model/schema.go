@@ -531,7 +531,12 @@ import "strconv"
 // the model connection's (model.AgentBackend.Hostd) or the capability
 // server's (protocol.ServerConfig.Hostd), never a task's. `task_run_hostd`
 // stays, the read-only record of where each run's agent CLI ran.
-const SchemaVersion = 111
+//
+// 112 adds `grain_config`.`auto_grant_context_reads`
+// (model.Config.AutoGrantContextReads): the repositories ("*" or owner/name)
+// whose read-only access is auto-granted when a task names them as a
+// committed-context repository (`-design owner/name:path@rev`).
+const SchemaVersion = 112
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
@@ -598,6 +603,53 @@ const taskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
   ` + "`behalf_source`" + ` TEXT  NOT NULL DEFAULT '',
   ` + "`reason`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`detail`" + `     TEXT     NOT NULL DEFAULT ''
+)`
+
+// integrationEventTable backs GET /api/events (model.IntegrationEvent,
+// design/design/integration-events.design.md): ordered task state changes,
+// questions, comments, and CI verdicts resumable from an integer cursor.
+// Needs no SchemaVersion bump and no migration rung, for taskEventTable's
+// own reason above.
+const integrationEventTable = `CREATE TABLE IF NOT EXISTS ` + "`integration_event`" + ` (
+  ` + "`id`" + `               INTEGER  PRIMARY KEY AUTOINCREMENT,
+  ` + "`type`" + `             TEXT     NOT NULL,
+  ` + "`at`" + `               DATETIME NOT NULL,
+  ` + "`task_id`" + `          TEXT     NOT NULL,
+  ` + "`repo`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`previous_state`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`state`" + `            TEXT     NOT NULL DEFAULT '',
+  ` + "`question_summary`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`comment_id`" + `       INTEGER  NOT NULL DEFAULT 0,
+  ` + "`external_ref`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`origin`" + `           TEXT     NOT NULL DEFAULT '',
+  ` + "`pull_request`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`filed_via`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`ci_provider`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`ci_run_id`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`ci_commit`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`ci_conclusion`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`ci_detail`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_kind`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_id`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_source`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`behalf_kind`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`behalf_id`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`behalf_source`" + `    TEXT     NOT NULL DEFAULT ''
+)`
+
+// secretEntriesTable is the `secret_entries` catalogue for
+// -secrets-backend=secretmanager (design/design/registry.design.md, "Secrets in
+// Secret Manager"): non-secret metadata (secret name, key name, Secret Manager
+// secret ID, and active version number) so List, Has, and bare-name Resolve
+// never call project-wide secretmanager.secrets.list. Secret values are never
+// stored here. Needs no SchemaVersion bump, for taskEventTable's own reason.
+const secretEntriesTable = `CREATE TABLE IF NOT EXISTS ` + "`secret_entries`" + ` (
+  ` + "`secret_name`" + ` TEXT     NOT NULL,
+  ` + "`key`" + `         TEXT     NOT NULL,
+  ` + "`sm_secret`" + `   TEXT     NOT NULL,
+  ` + "`version`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`updated_at`" + `  DATETIME NOT NULL,
+  PRIMARY KEY (` + "`secret_name`" + `, ` + "`key`" + `)
 )`
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
@@ -2433,6 +2485,7 @@ var Tables = []string{
   ` + "`new_task_form`" + `                TEXT    NOT NULL DEFAULT '',
   ` + "`auto_upgrade_on`" + `              TEXT    NOT NULL DEFAULT '',
   ` + "`owner_trust`" + `                  TEXT    NOT NULL DEFAULT '',
+  ` + "`auto_grant_context_reads`" + `     TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -4107,10 +4160,20 @@ var Tables = []string{
 	`CREATE INDEX IF NOT EXISTS ` + "`task_event_task`" + ` ON ` + "`task_event`" + ` (` + "`task_id`" + `)`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_event_at`" + ` ON ` + "`task_event`" + ` (` + "`at`" + `)`,
 
+	// Resumable task state, comment/question, and CI verdict stream for
+	// external integrations (model.IntegrationEvent, GET /api/events).
+	integrationEventTable,
+	`CREATE INDEX IF NOT EXISTS ` + "`integration_event_task`" + ` ON ` + "`integration_event`" + ` (` + "`task_id`" + `, ` + "`id`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`integration_event_repo`" + ` ON ` + "`integration_event`" + ` (` + "`repo`" + `, ` + "`id`" + `)`,
+
 	// Verified-identity sign-in allowlist (`user:<email>` and `group:<email>`)
 	// and its one-time startup migration off `-ui-allowed-principals`.
 	allowedPrincipalTable,
 	allowedPrincipalMigrationTable,
+
+	// Non-secret catalogue of names and keys stored in Google Cloud Secret
+	// Manager (-secrets-backend=secretmanager).
+	secretEntriesTable,
 }
 
 // Views is the derivations, each a (name, DDL) pair so Init can drop and

@@ -22,23 +22,10 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import {
-  Box,
-  Button,
-  ButtonBase,
-  ButtonGroup,
-  IconButton,
-  ListItemIcon,
-  ListItemText,
-  Menu,
-  MenuItem,
-  Tooltip,
-  Typography,
-} from "@mui/material";
+import { Box, IconButton, Tooltip, Typography } from "@mui/material";
+import { SIDEBAR_TOGGLE_KEY } from "../sidebarCollapse.js";
 import AppIcon, { NavGlyph } from "./AppIcon.jsx";
-import ItemGlyph from "./ItemGlyph.jsx";
 import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
-import { verifiedUserEmail } from "./settings/AccessSection.jsx";
 
 // crumbSx is the one type style of the page title: every crumb and the
 // slash between them share a family, size, line height, letter-spacing
@@ -153,16 +140,7 @@ export function GlobalButtons({
   config = null,
   onOpenSystem,
   onOpenSettings,
-  onOpenAccess,
-  onLogout,
-  onOpenNewTask,
-  onNewSession,
-  onNewBoard,
 }) {
-  const [userAnchor, setUserAnchor] = useState(null);
-  const [createMenuAnchor, setCreateMenuAnchor] = useState(null);
-  const createMenuOpen = Boolean(createMenuAnchor);
-  const email = verifiedUserEmail(config);
   const selectedSx = (on) => ({
     color: on ? "primary.main" : "text.secondary",
     bgcolor: on ? "action.selected" : "transparent",
@@ -207,179 +185,6 @@ export function GlobalButtons({
           </IconButton>
         </Tooltip>
       )}
-      {email && (
-        <>
-          <Tooltip title={`Signed in as ${email}`}>
-            <ButtonBase
-              data-testid="top-bar-user"
-              className="header-user-pill"
-              aria-label={`Signed in as ${email}`}
-              aria-haspopup={onLogout || onOpenAccess ? "menu" : undefined}
-              aria-expanded={Boolean(userAnchor) || undefined}
-              onClick={(e) => {
-                if (onLogout || onOpenAccess) {
-                  setUserAnchor(e.currentTarget);
-                } else {
-                  onOpenSettings?.();
-                }
-              }}
-              sx={{
-                px: 1.25,
-                gap: 0.75,
-                height: "var(--header-control-size)",
-                borderRadius: 1.5,
-                maxWidth: { xs: 120, md: 200 },
-                fontSize: "0.75rem",
-                fontWeight: 500,
-                color: "text.secondary",
-                border: 1,
-                borderColor: "divider",
-                "&:hover": {
-                  bgcolor: "action.hover",
-                  color: "text.primary",
-                },
-              }}
-            >
-              <AppIcon name="user" size={16} />
-              <Typography
-                component="span"
-                variant="caption"
-                noWrap
-                sx={{ fontSize: "0.75rem", fontWeight: 500, lineHeight: 1 }}
-              >
-                {email}
-              </Typography>
-            </ButtonBase>
-          </Tooltip>
-          <Menu
-            anchorEl={userAnchor}
-            open={Boolean(userAnchor)}
-            onClose={() => setUserAnchor(null)}
-            anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-            transformOrigin={{ vertical: "top", horizontal: "right" }}
-          >
-            {(onOpenAccess || onOpenSettings) && (
-              <MenuItem
-                dense
-                onClick={() => {
-                  setUserAnchor(null);
-                  (onOpenAccess || onOpenSettings)();
-                }}
-              >
-                <ListItemIcon sx={{ minWidth: 28 }}>
-                  <AppIcon name="user" size={16} />
-                </ListItemIcon>
-                <ListItemText>Access settings</ListItemText>
-              </MenuItem>
-            )}
-            {onLogout && (
-              <MenuItem
-                dense
-                onClick={() => {
-                  setUserAnchor(null);
-                  onLogout();
-                }}
-              >
-                <ListItemIcon sx={{ minWidth: 28 }}>
-                  <AppIcon name="signOut" size={16} />
-                </ListItemIcon>
-                <ListItemText>Log out</ListItemText>
-              </MenuItem>
-            )}
-          </Menu>
-        </>
-      )}
-      {onOpenNewTask && (
-        <>
-          <ButtonGroup
-            size="small"
-            variant="contained"
-            className="header-split-button"
-            data-testid="header-new-task-group"
-            sx={{ flex: "none" }}
-          >
-            <Button
-              aria-label="+ New task"
-              onClick={onOpenNewTask}
-              startIcon={<AppIcon name="add" size={16} />}
-              sx={{
-                px: 1.25,
-                whiteSpace: "nowrap",
-                "& .MuiButton-startIcon": { mr: 0.5, ml: 0 },
-              }}
-            >
-              New task
-            </Button>
-            {(onNewSession || onNewBoard) && (
-              <Button
-                aria-label="Create options"
-                aria-controls={
-                  createMenuOpen ? "create-options-menu" : undefined
-                }
-                aria-haspopup="true"
-                aria-expanded={createMenuOpen ? "true" : undefined}
-                onClick={(e) => setCreateMenuAnchor(e.currentTarget)}
-                sx={{
-                  px: 0,
-                  width: 32,
-                  minWidth: 32,
-                  flex: "0 0 32px",
-                }}
-              >
-                <AppIcon name="dropdown" size={18} />
-              </Button>
-            )}
-          </ButtonGroup>
-          {(onNewSession || onNewBoard) && (
-            <Menu
-              id="create-options-menu"
-              anchorEl={createMenuAnchor}
-              open={createMenuOpen}
-              onClose={() => setCreateMenuAnchor(null)}
-              anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-              transformOrigin={{ vertical: "top", horizontal: "right" }}
-            >
-              <MenuItem
-                onClick={() => {
-                  setCreateMenuAnchor(null);
-                  onOpenNewTask();
-                }}
-              >
-                <ListItemIcon sx={{ minWidth: 28 }}>
-                  <ItemGlyph kind="tasks" />
-                </ListItemIcon>
-                <ListItemText>New task</ListItemText>
-              </MenuItem>
-              {onNewSession && (
-                <MenuItem
-                  onClick={() => {
-                    setCreateMenuAnchor(null);
-                    onNewSession();
-                  }}
-                >
-                  <ListItemIcon sx={{ minWidth: 28 }}>
-                    <ItemGlyph kind="sessions" />
-                  </ListItemIcon>
-                  <ListItemText>New session</ListItemText>
-                </MenuItem>
-              )}
-              {onNewBoard && (
-                <MenuItem
-                  onClick={() => {
-                    setCreateMenuAnchor(null);
-                    onNewBoard();
-                  }}
-                >
-                  <ListItemIcon sx={{ minWidth: 28 }}>
-                    <ItemGlyph kind="boards" />
-                  </ListItemIcon>
-                  <ListItemText>New board</ListItemText>
-                </MenuItem>
-              )}
-            </Menu>
-          )}
-        </>
-      )}
     </Box>
   );
 }
@@ -411,6 +216,7 @@ export default function PageHeader({
   icon = undefined,
   globals = null,
   onSlot = null,
+  onExpandSidebar = null,
   variant = "page",
   children = null,
 }) {
@@ -565,6 +371,23 @@ export default function PageHeader({
       className={`page-header page-header-${variant}`}
       ref={headerRef}
     >
+      {onExpandSidebar && (
+        <Tooltip title={`Expand sidebar (${SIDEBAR_TOGGLE_KEY})`} describeChild>
+          <IconButton
+            size="small"
+            className="header-control-icon"
+            aria-label="Expand sidebar"
+            aria-expanded={false}
+            aria-controls="sidebar-rail"
+            aria-keyshortcuts={SIDEBAR_TOGGLE_KEY}
+            data-testid="sidebar-toggle"
+            onClick={onExpandSidebar}
+            sx={{ flex: "none", color: "text.secondary" }}
+          >
+            <AppIcon name="sidebar" size={18} />
+          </IconButton>
+        </Tooltip>
+      )}
       {resolvedIcon ? (
         <span className="header-icon">{resolvedIcon}</span>
       ) : null}

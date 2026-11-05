@@ -283,9 +283,10 @@ type Task struct {
 	// design or spec files it implements (model.LinkDesign, `grain create
 	// --design`): the provenance an external orchestrator filters and
 	// follows (external-cli spec #XC-18, #XC-19).
-	DerivedFrom   []string `json:"derivedFrom,omitempty"`
-	Designs       []string `json:"designs,omitempty"`
-	GeneratedFrom string   `json:"generatedFrom,omitempty"`
+	DerivedFrom   []string         `json:"derivedFrom,omitempty"`
+	Designs       []string         `json:"designs,omitempty"`
+	Context       []ContextRefView `json:"context,omitempty"`
+	GeneratedFrom string           `json:"generatedFrom,omitempty"`
 	// Origin is the pull request, issue or grain task this task's tree of
 	// work came from (model.WorkOrigin): "owner/repo#12" or "task:1766",
 	// empty for a task that has none.
@@ -1238,6 +1239,7 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 			out.BlockedBy = append(out.BlockedBy, l.Target)
 		}
 	}
+	out.Context = contextRefViews(t)
 	out.Blocked = len(out.BlockedBy) > 0
 	return out
 }

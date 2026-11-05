@@ -25,7 +25,7 @@
 #             verify against it (docs/image-signing.md) before anything is
 #             installed. Without it, nothing is verified -- say so loudly
 #   -dest     where the binary goes (default ~/.local/bin)
-#   -image    the image repository (default ghcr.io/bwsalmon/grain/grain)
+#   -image    the image repository (default docker.io/grainai/grain)
 #
 # It pulls the image, pins it to the digest the registry served, verifies
 # that digest, copies /usr/local/bin/grain out of it, and prints the
@@ -35,7 +35,7 @@ set -euo pipefail
 version=""
 key=""
 dest="${HOME}/.local/bin"
-image="ghcr.io/bwsalmon/grain/grain"
+image="docker.io/grainai/grain"
 
 while [ $# -gt 0 ]; do
   case "$1" in

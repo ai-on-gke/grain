@@ -590,11 +590,13 @@ samp,
    height (--header-control-size) and one vertical centreline. */
 .sidebar-header {
   height: 77px;
+  padding-bottom: 1px;
   box-sizing: border-box;
   flex: none;
 }
 :root[data-phone="true"] .sidebar-header {
   height: 56px;
+  padding-bottom: 0;
 }
 /* The phone layout is a touch layout whatever the pointer reports, so
    its toolbar controls get the same 40px floor as (pointer: coarse). */
@@ -5158,4 +5160,118 @@ fieldset legend {
   display: flex;
   justify-content: center;
   padding: 12px 0 16px;
+}
+
+/* Committed context references on the task detail sidebar (CommittedContext.jsx). */
+.committed-context-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.committed-context-item {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+}
+.committed-context-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+}
+.committed-context-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+}
+.committed-context-badge.is-read {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+.committed-context-sha {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.72rem;
+  color: var(--accent);
+  text-decoration: none;
+}
+a.committed-context-sha:hover {
+  text-decoration: underline;
+}
+.committed-context-path {
+  font-size: 0.78rem;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.committed-context-path code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.76rem;
+}
+.committed-context-manifest {
+  margin-top: 0.15rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.committed-context-manifest-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.committed-context-manifest-desc {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.committed-context-files {
+  list-style: none;
+  margin: 0.15rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.committed-context-file {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem;
+  font-size: 0.73rem;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.committed-context-file code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.72rem;
+  color: var(--text);
+}
+.committed-context-file-kind {
+  font-size: 0.66rem;
+  padding: 0.05rem 0.32rem;
+  border-radius: 3px;
+  background: var(--surface-hover);
+  color: var(--text-tertiary);
+}
+.committed-context-file-source {
+  font-size: 0.71rem;
+  color: var(--accent);
 }

@@ -389,7 +389,10 @@ test.describe("Repository Settings, Releases, and Memory Views Inputs Walkthroug
     });
 
     // Attempt to leave the Memory page from the rail
-    await page.getByRole("button", { name: /^CI\b/ }).first().click();
+    await page
+      .getByRole("button", { name: /^Inbox\b/ })
+      .first()
+      .click();
     await expect.poll(() => confirmDialogShown).toBe(true);
     await expect(page).toHaveURL(/\/memory$/);
 

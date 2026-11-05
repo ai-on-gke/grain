@@ -76,6 +76,9 @@ test("traces an uncached CI sandbox through polling and serves the identical run
   const acquiresBefore = (
     await (await page.request.get("/api/e2e/sandboxes/acquires")).json()
   ).acquires;
+  await page.addInitScript(() =>
+    localStorage.setItem("grain.sidebar.hidden", "[]"),
+  );
   await page.goto("/");
   await page.getByRole("button", { name: /^CI \d+$/ }).click();
   await expect(page.getByRole("heading", { name: "CI" })).toBeVisible();
@@ -163,6 +166,8 @@ test("traces an uncached CI sandbox through polling and serves the identical run
     page.getByText("Nothing in flight, so no sandboxes exist."),
   ).toBeVisible({ timeout: 10_000 });
 
+  await page.evaluate(() => localStorage.setItem("grain.sidebar.hidden", "[]"));
+  await page.reload();
   await page.getByRole("button", { name: /^CI/ }).click();
   await expect(page.getByText("1 job, all green", { exact: true })).toBeVisible(
     {

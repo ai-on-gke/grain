@@ -830,11 +830,10 @@ func TestPlacedServerDropAndRetriedReleaseFollowGrantHostd(t *testing.T) {
 	}
 }
 
-// local-scripts serves a scheduled run none of its declarations
-// (localscripts.Untrusted); what a declaration became on host-script
-// (model.SetRuntimeGrantExpansions) is not minted for one either, while
-// the task's other grants still are and a task a person filed holding
-// the same grant is minted it.
+// What a local-scripts declaration became on host-script
+// (model.SetRuntimeGrantExpansions) is withheld from a scheduled run,
+// while the task's other grants still are minted and a task a person
+// filed holding the same grant is minted it.
 func TestAdmissionWithholdsWhatALocalScriptsDeclarationBecameFromAScheduledRun(t *testing.T) {
 	caller := &mintCaller{}
 	deps, store, ctx, _ := passHarness(t, caller)

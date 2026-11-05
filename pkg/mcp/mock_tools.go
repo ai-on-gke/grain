@@ -203,6 +203,11 @@ type ProposedTask struct {
 	// Reads is the list of repositories this proposal is allowed to read.
 	Reads []string
 
+	// Designs is the committed-context references ([owner/name:]path[@rev])
+	// requested for this proposal; when empty, the proposal inherits its
+	// parent task's committed context.
+	Designs []string
+
 	// Writes is the list of extra repositories and branches this proposal is allowed to write to.
 	Writes []WriteTarget
 
@@ -920,6 +925,10 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 					"type":  "array",
 					"items": map[string]any{"type": "string"},
 				},
+				"designs": map[string]any{
+					"type":  "array",
+					"items": map[string]any{"type": "string"},
+				},
 				"writes": map[string]any{
 					"type": "array",
 					"items": map[string]any{
@@ -1051,6 +1060,17 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 			if err != nil {
 				return Result{Text: fmt.Sprintf("goal: %v", err), IsError: true}
 			}
+			var designs []string
+			for _, raw := range argStringSlice(args, "designs") {
+				raw = strings.TrimSpace(raw)
+				if raw == "" {
+					continue
+				}
+				if _, err := model.ParseContextRef(raw); err != nil {
+					return Result{Text: fmt.Sprintf("designs: %v", err), IsError: true}
+				}
+				designs = append(designs, raw)
+			}
 			model, _ := argString(args, "model")
 			agentFramework, _ := argString(args, "agent_framework")
 			var notBefore *time.Time
@@ -1090,6 +1110,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 				Capabilities:        capabilities,
 				CustomFields:        argCustomFields(args, "custom_fields"),
 				Reads:               argStringSlice(args, "reads"),
+				Designs:             designs,
 				Writes:              argWrites(args, "writes"),
 				ReviewTemplateID:    strings.TrimSpace(reviewTemplateID),
 				SandboxCPUs:         cpus,

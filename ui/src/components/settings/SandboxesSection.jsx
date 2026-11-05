@@ -632,7 +632,7 @@ export default function SandboxesSection({ s }) {
           )}
           defaultValue={
             settings.k8sSandboxImageDefault ||
-            "ghcr.io/bwsalmon/grain/k8s-sandbox:latest"
+            "docker.io/grainai/sandbox-k8s:latest"
           }
           endAdornment={restartChip("k8sSandboxImage")}
         />
@@ -646,7 +646,7 @@ export default function SandboxesSection({ s }) {
           )}
           defaultValue={
             settings.k8sGranuleImageDefault ||
-            "ghcr.io/bwsalmon/grain/guest:latest"
+            "docker.io/grainai/sandbox:latest"
           }
           endAdornment={restartChip("k8sGranuleImage")}
         />

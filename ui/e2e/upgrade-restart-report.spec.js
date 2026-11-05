@@ -28,7 +28,7 @@ const STATUS = {
   branch: "main",
   phase: "ok",
   detail: "",
-  running: { image: "ghcr.io/bwsalmon/grain/grain:main" },
+  running: { image: "docker.io/grainai/grain:main" },
   inFlightRuns: 9,
   atRisk: {
     lost: 8,

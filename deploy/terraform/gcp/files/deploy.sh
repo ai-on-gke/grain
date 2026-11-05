@@ -386,7 +386,7 @@ OPENAI_API_KEY="$(secret openai-api-key)"
 # to -- and normally unset on a first deploy, where the host minting its
 # own is exactly right.
 SECRETS_KEY="$(secret secrets-key)"
-# Only needed for a private image package; ghcr.io/bwsalmon/grain's is
+# Only needed for a private image package; docker.io/grainai's is
 # public and pulls anonymously (variables.tf's own
 # grain_image_pull_user).
 IMAGE_PULL_TOKEN="$(secret image-pull-token)"

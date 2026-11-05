@@ -53,6 +53,7 @@ func TestLocalScriptsDeclarationRunsTheSameOnHostScript(t *testing.T) {
     - path: tools/deploy.sh
       description: Deploy one thing.
       timeout: 90s
+      approve: true
       env: {TOKEN: ops-token}
 workdir: work
 timeout: 2m
@@ -60,6 +61,7 @@ timeout: 2m
 	body := "#!/bin/sh\n# grain: Show what it was called with.\n" +
 		"for a in \"$@\"; do printf '<%s>\\n' \"$a\"; done\n" +
 		"printf 'cwd=%s token=%s agent=%s\\n' \"$(basename \"$PWD\")\" \"${TOKEN-unset}\" \"${SSH_AUTH_SOCK-unset}\"\n" +
+		"cat\n" +
 		"echo to-stderr >&2\nexit 3\n"
 	write("scripts/show", body, 0o755)
 	write("tools/deploy.sh", body, 0o755)
@@ -108,9 +110,14 @@ timeout: 2m
 		t.Fatalf("converted configuration is refused: %v", err)
 	}
 
-	// local-scripts, as the run's mcpserver serves it.
+	// local-scripts, as the run's mcpserver served it.
+	var localApproved, hostApproved []localexec.Request
 	path, _ := cfg.Path("ops")
-	execs, err := localscripts.Open([]string{path}, localscripts.Credentials{"ops-token": "s3cret"}, nil)
+	execs, err := localscripts.Open([]string{path}, localscripts.Credentials{"ops-token": "s3cret"},
+		localexec.ApproverFunc(func(_ context.Context, r localexec.Request) (bool, error) {
+			localApproved = append(localApproved, r)
+			return true, nil
+		}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +131,15 @@ timeout: 2m
 	// SSH_AUTH_SOCK is ambient identity host-script would pass on, and
 	// local-scripts never did.
 	environ := append([]string{"GRAIN_LOCAL_SCRIPTS_OPS_TOKEN=s3cret", "SSH_AUTH_SOCK=/run/agent.sock"}, hostScriptEnviron...)
-	s, err := NewHostScript(HostScriptConfig{Listen: "127.0.0.1:0", DataDir: t.TempDir(), Environ: func() []string { return environ }})
+	s, err := NewHostScript(HostScriptConfig{
+		Listen:  "127.0.0.1:0",
+		DataDir: t.TempDir(),
+		Environ: func() []string { return environ },
+		Approver: localexec.ApproverFunc(func(_ context.Context, r localexec.Request) (bool, error) {
+			hostApproved = append(hostApproved, r)
+			return true, nil
+		}),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,26 +147,31 @@ timeout: 2m
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &hostScriptFixture{t: t, s: s, ps: ps}
+	f := &hostScriptFixture{t: t, s: s, ps: ps, data: t.TempDir()}
 
 	argv := []string{"two words", "$(touch /tmp/pwned)", ""}
+	stdinText := "manifest: v1\n"
 	for tool, script := range map[string]string{"local_show": "ops-show", "local_deploy_sh": "ops-deploy_sh"} {
 		args := make([]any, len(argv))
 		for i, a := range argv {
 			args[i] = a
 		}
-		res := execs[0].Call(context.Background(), tool, map[string]any{"args": args})
+		res := execs[0].Call(context.Background(), tool, map[string]any{"args": args, "stdin": stdinText})
 		var local localexec.Result
 		if err := json.Unmarshal([]byte(res.Text), &local); err != nil {
 			t.Fatalf("%s answered %q: %v", tool, res.Text, err)
 		}
-		host := f.testScript(script, argv...)
-		if host.Refused != "" {
-			t.Fatalf("host-script refused %s: %s", script, host.Refused)
-		}
-		if host.Stdout != local.Stdout || host.Stderr != local.Stderr || host.ExitCode != local.ExitCode {
+		cmd, _ := f.grant("e1-42-1-"+script, script)
+		host := callStdin(t, cmd, true, []byte(stdinText), argv...)
+		if host.stdout != local.Stdout || host.stderr != local.Stderr || host.code != local.ExitCode {
 			t.Errorf("%s on host-script = (%q, %q, %d); local-scripts' %s = (%q, %q, %d)",
-				script, host.Stdout, host.Stderr, host.ExitCode, tool, local.Stdout, local.Stderr, local.ExitCode)
+				script, host.stdout, host.stderr, host.code, tool, local.Stdout, local.Stderr, local.ExitCode)
 		}
+	}
+	if len(localApproved) != 1 || len(hostApproved) != 1 {
+		t.Fatalf("approvals: local=%d host=%d, want 1 each (only deploy.sh has approve: true)", len(localApproved), len(hostApproved))
+	}
+	if hostApproved[0].Stdin != localApproved[0].Stdin || hostApproved[0].StdinSHA256 != localApproved[0].StdinSHA256 || hostApproved[0].StdinPreview != localApproved[0].StdinPreview {
+		t.Errorf("host approval stdin = %+v; local = %+v", hostApproved[0], localApproved[0])
 	}
 }

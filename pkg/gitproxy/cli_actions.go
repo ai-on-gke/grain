@@ -280,6 +280,7 @@ type CLIProposeRequest struct {
 	KeepRunning     bool                `json:"keep_running,omitempty"`
 	Origin          string              `json:"origin,omitempty"`
 	Reads           []string            `json:"reads,omitempty"`
+	Designs         []string            `json:"designs,omitempty"`
 	HoldForApproval *bool               `json:"hold_for_approval,omitempty"`
 	AutoMerge       *bool               `json:"auto_merge,omitempty"`
 	Supersedes      string              `json:"supersedes,omitempty"`

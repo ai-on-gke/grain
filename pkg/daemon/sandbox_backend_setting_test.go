@@ -257,6 +257,12 @@ func TestKubernetesSandboxDefaultsAndModelConfigRoundTrip(t *testing.T) {
 	if got := EffectiveK8sGranuleImage(granuleCfg); got != DefaultSandboxImage {
 		t.Fatalf("EffectiveK8sGranuleImage = %q, want %q", got, DefaultSandboxImage)
 	}
+	if got := EffectiveK8sSandboxImage(Config{K8sSandboxes: true, K8sSandboxImage: model.LegacyDefaultK8sSandboxImage}); got != DefaultK8sSandboxImage {
+		t.Fatalf("EffectiveK8sSandboxImage(legacy GHCR default) = %q, want %q", got, DefaultK8sSandboxImage)
+	}
+	if got := EffectiveK8sGranuleImage(Config{K8sGranuleSandboxes: true, K8sGranuleImage: model.LegacyDefaultSandboxImage}); got != DefaultSandboxImage {
+		t.Fatalf("EffectiveK8sGranuleImage(legacy GHCR default) = %q, want %q", got, DefaultSandboxImage)
+	}
 	if got := EffectiveK8sGitProxyHost(granuleCfg); got != "127.0.0.1" {
 		t.Fatalf("EffectiveK8sGitProxyHost off-cluster k8s-granule = %q, want 127.0.0.1", got)
 	}
@@ -430,12 +436,12 @@ func TestKubernetesGranuleIsOfferedAndRunnableInImageMode(t *testing.T) {
 	t.Parallel()
 	cfg := Config{
 		ContainerSandboxes:    true,
-		ContainerImage:        "ghcr.io/bwsalmon/grain/guest:main",
+		ContainerImage:        "docker.io/grainai/sandbox:main",
 		ContainerGitProxyHost: "172.17.0.1",
 		GranuleSSHUser:        "debian",
 		GranuleWorkspace:      "/home/debian",
 		GranuleGitProxyHost:   "172.18.0.1",
-		UpgradeImage:          "ghcr.io/bwsalmon/grain/grain:main",
+		UpgradeImage:          "docker.io/grainai/grain:main",
 		UpgradeImageRefFile:   "/var/lib/grain/data/image-ref",
 	}
 
@@ -489,7 +495,7 @@ func TestKubernetesModeVsKubernetesSandboxesPredicateSplit(t *testing.T) {
 
 	cfg := Config{
 		K8sGranuleSandboxes: true,
-		UpgradeImage:        "ghcr.io/bwsalmon/grain/grain",
+		UpgradeImage:        "docker.io/grainai/grain",
 	}
 	if !KubernetesSandboxes(cfg) {
 		t.Fatal("KubernetesSandboxes(cfg) = false for off-cluster K8sGranuleSandboxes, want true")
@@ -519,7 +525,7 @@ func TestSandboxBackendAvailableWithUpgradeImageOffClusterVsInPod(t *testing.T) 
 	t.Setenv("KUBERNETES_SERVICE_HOST", "")
 
 	cfg := Config{
-		UpgradeImage: "ghcr.io/bwsalmon/grain/grain",
+		UpgradeImage: "docker.io/grainai/grain",
 	}
 	if !cfg.sandboxBackendAvailable(model.SandboxBackendKubernetesGranule) {
 		t.Fatal("sandboxBackendAvailable(kubernetes-granule) = false off-cluster with UpgradeImage set, want true")

@@ -259,7 +259,7 @@ YAML
 [Service]
 User=grain
 ExecStart=/usr/local/bin/grain daemon -data-dir /var/lib/grain/data \
-  -granule-sandboxes -sandbox-image ghcr.io/bwsalmon/grain/guest:v2.1.0 \
+  -granule-sandboxes -sandbox-image docker.io/grainai/sandbox:v2.1.0 \
   -default-target-repo ai-on-gke/grain
 UNIT
   cat >"$h/etc/systemd/system/grain-hostd.service" <<'UNIT'
@@ -301,7 +301,7 @@ migrate --dry-run
 check "a dry run walks every stage" 0 "dry run" "Stage 1: preflight" "Stage 2: drain" "Stage 3: migrate" \
   "Stage 4: start" "Stage 5: point this host" "Stage 5b: readiness" \
   "+ systemctl stop grain-daemon.service" "+ systemctl mask grain-daemon.service" \
-  "sandbox image:    ghcr.io/bwsalmon/grain/guest:v2.1.0" "target repo:      ai-on-gke/grain" \
+  "sandbox image:    docker.io/grainai/sandbox:v2.1.0" "target repo:      ai-on-gke/grain" \
   "tar -C" "-server http://127.0.0.1:4280 -token-file" "sandboxBackend"
 lacks "a dry run stops nothing" "$(calls)" "systemctl stop"
 lacks "a dry run applies nothing" "$(calls)" "kubectl apply"
@@ -358,7 +358,7 @@ applied="$(cat "$work"/stub/cluster/applied-*.yaml)"
 holds "the Secret carries secrets.key and the token" "$c" "--from-file=secrets.key=$work/host/var/lib/grain/data/secrets/secrets.key --from-file=hostd-token=$work/host/etc/grain/hostd.token"
 holds "the manifest is applied at replicas 0 first" "$applied" "  replicas: 0"
 holds "with the hostd token flag" "$applied" "- -hostd-token-file=/etc/grain-secrets/hostd-token"
-holds "with the sandbox image" "$applied" "- -k8s-granule-image=ghcr.io/bwsalmon/grain/guest:v2.1.0"
+holds "with the sandbox image" "$applied" "- -k8s-granule-image=docker.io/grainai/sandbox:v2.1.0"
 holds "with the target repo" "$applied" "- -default-target-repo=ai-on-gke/grain"
 lacks "with no CHANGEME left in an arg" "$(grep -E '^ +- -' <<<"$applied")" "CHANGEME"
 holds "the transfer pod runs as uid 1000" "$applied" "runAsUser: 1000"
@@ -419,7 +419,7 @@ status=0
 out="$(env PATH="$stubs:$PATH" STUB="$work/stub" GRAIN_ROOT_DIR="$work/host/var/lib/grain" \
   GRAIN_ETC_DIR="$work/host/etc/grain" GRAIN_SYSTEMD_DIR="$sysd" GRAIN_MIGRATE_SKIP_ROOT_CHECK=1 \
   bash "$script" --kubeconfig "$work/host/etc/grain/admin.kubeconfig" --rollback --dry-run 2>&1)" || status=$?
-check "a rollback dry run names the transfer pod's image" 0 "pod/grain-data-transfer (ghcr.io/bwsalmon/grain/grain:main, uid 1000)" \
+check "a rollback dry run names the transfer pod's image" 0 "pod/grain-data-transfer (docker.io/grainai/grain:main, uid 1000)" \
   "+ mv $sysd/grain-daemon.service.pre-gke $sysd/grain-daemon.service"
 lacks "and every kubectl it prints names the kubeconfig" "$(grep -E '(^[+] |[|] )kubectl' <<<"$out" | grep -v -- 'kubectl --kubeconfig=' || true)" "kubectl"
 migrate --rollback
