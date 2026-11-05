@@ -441,6 +441,7 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `GET /api/hostds` | `capabilities:read` | `admin` | Lists registered `grain hostd` instances. |
 | `POST /api/hostds` | `capabilities:admin` | `admin` | Registers `hostd` and mints `ghd_…` token (``RB-9`.4`, `RB-14`). |
 | `PATCH /api/hostds/{name}` | `capabilities:admin` | `admin` | Updates `hostd` owner/metadata. |
+| `GET /api/hostds/{name}/install` | `capabilities:read` | `admin` | Shows a registered `hostd`'s install instructions again (`ui.RegisterHostdInstall`); never its token. |
 | `POST /api/hostds/{name}/rotate` | `capabilities:admin` | `admin` | Rotates `ghd_…` token. |
 | `POST /api/hostds/{name}/revoke` | `capabilities:admin` | `admin` | Revokes `ghd_…` token. |
 | `GET /api/hostd/connect` | `internal` | `protocol` | `hostd` dial-in upgrade; enforces `X-Grain-Hostd-Token` + verified owner (`AU-17`, `AU-18`). |
