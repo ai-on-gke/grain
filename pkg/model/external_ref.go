@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -79,6 +80,16 @@ func WithExternalRefReadable(ctx context.Context, readable func(repo string) boo
 	return context.WithValue(ctx, externalRefReadableKey{}, readable)
 }
 
+// HasExternalRefReadable reports whether ctx carries a scoped
+// WithExternalRefReadable predicate.
+func HasExternalRefReadable(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	readable, ok := ctx.Value(externalRefReadableKey{}).(func(string) bool)
+	return ok && readable != nil
+}
+
 // ExternalRefReadable reports whether ctx permits inheriting externalRef from
 // a task in repo ("" for a repo-less task).
 func ExternalRefReadable(ctx context.Context, repo string) bool {
@@ -90,6 +101,10 @@ func ExternalRefReadable(ctx context.Context, repo string) bool {
 		return true
 	}
 	return readable(repo)
+}
+
+func isCallerNamedLineageKind(kind LinkKind) bool {
+	return kind == LinkSupersedes || kind == LinkReverts
 }
 
 // taskAPIGrantsTx loads parentID's stored API grants inside tx.
@@ -129,69 +144,101 @@ func taskRepoTx(ctx context.Context, tx *sql.Tx, taskID string) (string, bool) {
 // task inherits when its caller left ExternalRef empty. It walks upward
 // along lineage links and task WorkOrigin pointers in tx until it finds an
 // ancestor carrying a non-empty external_ref, guarding against cycles and
-// skipping tasks outside ctx's ExternalRefReadable scope (or, for an explicit
-// origin=task:N override on a proposed task, outside the proposer's stored
-// tasks:read grants).
+// skipping tasks outside ctx's ExternalRefReadable scope (or, for caller-named
+// origin/supersedes/reverts pointers on proposed or agent-filed tasks, outside
+// that agent's stored tasks:read grants).
 func externalRefForNewTask(ctx context.Context, tx *sql.Tx, t Task, explicitWorkOrigin WorkOrigin) (string, error) {
 	type node struct {
-		id         string
-		fromOrigin bool
+		id      string
+		readers []APIGrantSet
 	}
 	var queue []node
-	seen := map[string]bool{t.ID: true}
-	directLineage := map[string]bool{}
-	enqueue := func(id string, fromOrigin bool) {
+	seenAny := map[string]bool{t.ID: true}
+	seenUnrestricted := map[string]bool{t.ID: true}
+	enqueue := func(id string, readers []APIGrantSet) {
 		id = strings.TrimSpace(id)
 		if id == "" || id == t.ID {
 			return
 		}
-		if !fromOrigin {
-			directLineage[id] = true
-		}
-		if seen[id] {
+		if len(readers) == 0 {
+			if seenUnrestricted[id] {
+				return
+			}
+			seenUnrestricted[id] = true
+			seenAny[id] = true
+			queue = append(queue, node{id: id})
 			return
 		}
-		seen[id] = true
-		queue = append(queue, node{id: id, fromOrigin: fromOrigin})
+		if seenAny[id] {
+			return
+		}
+		seenAny[id] = true
+		queue = append(queue, node{id: id, readers: slices.Clone(readers)})
 	}
+
+	parent := t.Parent()
+	var parentGrants APIGrantSet
+	var parentGrantsLoaded, parentGrantsOK bool
+	loadParentGrants := func() (APIGrantSet, bool) {
+		if !parentGrantsLoaded {
+			parentGrantsLoaded = true
+			parentGrants, parentGrantsOK = taskAPIGrantsTx(ctx, tx, parent)
+		}
+		return parentGrants, parentGrantsOK
+	}
+	enqueueFromProposer := func(target string) {
+		target = strings.TrimSpace(target)
+		if target == "" || target == parent {
+			enqueue(target, nil)
+			return
+		}
+		grants, ok := loadParentGrants()
+		if !ok {
+			return
+		}
+		if namedRepo, exists := taskRepoTx(ctx, tx, target); !exists || !grants.Allows("tasks:read", namedRepo) {
+			return
+		}
+		enqueue(target, []APIGrantSet{grants})
+	}
+
 	for _, kind := range externalRefLineageKinds {
 		for _, l := range t.Links {
-			if l.Kind == kind {
-				enqueue(l.Target, false)
+			if l.Kind != kind {
+				continue
+			}
+			if parent != "" && isCallerNamedLineageKind(kind) && strings.TrimSpace(l.Target) != parent {
+				enqueueFromProposer(l.Target)
+			} else {
+				enqueue(l.Target, nil)
 			}
 		}
 	}
 
-	var parentGrants APIGrantSet
-	var checkOriginGrants bool
 	if origTask := t.WorkOrigin.Task(); origTask != "" {
-		allowOrigin := true
-		if parent := t.Parent(); parent != "" && explicitWorkOrigin.Task() != "" && explicitWorkOrigin.Task() != parent {
-			checkOriginGrants = true
-			var ok bool
-			parentGrants, ok = taskAPIGrantsTx(ctx, tx, parent)
-			if !ok {
-				allowOrigin = false
-			} else if namedRepo, exists := taskRepoTx(ctx, tx, explicitWorkOrigin.Task()); !exists || !parentGrants.Allows("tasks:read", namedRepo) {
-				allowOrigin = false
-			}
-		}
-		if allowOrigin {
-			enqueue(origTask, checkOriginGrants)
+		if parent != "" && explicitWorkOrigin.Task() != "" && explicitWorkOrigin.Task() != parent {
+			enqueueFromProposer(origTask)
+		} else {
+			enqueue(origTask, nil)
 		}
 	}
 
 	for len(queue) > 0 {
 		cur := queue[0]
 		queue = queue[1:]
-		fromOrigin := cur.fromOrigin && !directLineage[cur.id]
+		readers := cur.readers
+		if seenUnrestricted[cur.id] {
+			readers = nil
+		}
 
-		var extRef, origRef string
-		var tOwner, tName sql.NullString
+		var extRef, origRef, oaKind, oaID string
+		var tOwner, tName, obKind, obID sql.NullString
 		err := tx.QueryRowContext(ctx,
-			"SELECT `external_ref`, `origin_ref`, `target_owner`, `target_name` FROM `task` WHERE `id` = ?",
+			"SELECT `external_ref`, `origin_ref`, `target_owner`, `target_name`, "+
+				"`origin_actor_kind`, `origin_actor_id`, `origin_behalf_kind`, `origin_behalf_id` "+
+				"FROM `task` WHERE `id` = ?",
 			cur.id,
-		).Scan(&extRef, &origRef, &tOwner, &tName)
+		).Scan(&extRef, &origRef, &tOwner, &tName, &oaKind, &oaID, &obKind, &obID)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
@@ -205,7 +252,14 @@ func externalRefForNewTask(ctx context.Context, tx *sql.Tx, t Task, explicitWork
 		if !ExternalRefReadable(ctx, curRepo) {
 			continue
 		}
-		if fromOrigin && !parentGrants.Allows("tasks:read", curRepo) {
+		allowed := true
+		for _, g := range readers {
+			if !g.Allows("tasks:read", curRepo) {
+				allowed = false
+				break
+			}
+		}
+		if !allowed {
 			continue
 		}
 		if trimmed := strings.TrimSpace(extRef); trimmed != "" {
@@ -213,20 +267,29 @@ func externalRefForNewTask(ctx context.Context, tx *sql.Tx, t Task, explicitWork
 		}
 
 		rows, err := tx.QueryContext(ctx,
-			"SELECT `target` FROM `task_link` WHERE `task_id` = ? AND `kind` IN ("+externalRefLineageSQL+") ORDER BY `kind`, `target`",
+			"SELECT `kind`, `target` FROM `task_link` WHERE `task_id` = ? AND `kind` IN ("+externalRefLineageSQL+") ORDER BY `kind`, `target`",
 			cur.id,
 		)
 		if err != nil {
 			return "", fmt.Errorf("reading lineage links of task %s: %w", cur.id, err)
 		}
-		var parents []string
+		type linkEdge struct {
+			kind   LinkKind
+			target string
+		}
+		var edges []linkEdge
+		var curParent string
 		for rows.Next() {
-			var target string
-			if err := rows.Scan(&target); err != nil {
+			var k, target string
+			if err := rows.Scan(&k, &target); err != nil {
 				rows.Close()
 				return "", err
 			}
-			parents = append(parents, target)
+			kind := LinkKind(k)
+			if kind == LinkProposedBy && curParent == "" {
+				curParent = strings.TrimSpace(target)
+			}
+			edges = append(edges, linkEdge{kind: kind, target: target})
 		}
 		if err := rows.Close(); err != nil {
 			return "", err
@@ -234,11 +297,46 @@ func externalRefForNewTask(ctx context.Context, tx *sql.Tx, t Task, explicitWork
 		if err := rows.Err(); err != nil {
 			return "", err
 		}
-		for _, p := range parents {
-			enqueue(p, fromOrigin)
+
+		curAgentID := ""
+		if obKind.Valid && PrincipalKind(obKind.String) == PrincipalAgent && strings.TrimSpace(obID.String) != "" && !strings.HasPrefix(strings.TrimSpace(obID.String), "external:") {
+			curAgentID = strings.TrimSpace(obID.String)
+		} else if PrincipalKind(oaKind) == PrincipalAgent && strings.TrimSpace(oaID) != "" && !strings.HasPrefix(strings.TrimSpace(oaID), "external:") {
+			curAgentID = strings.TrimSpace(oaID)
+		}
+		var curAgentGrants APIGrantSet
+		var curAgentLoaded, curAgentOK bool
+		withCurCallerGrants := func(target string) ([]APIGrantSet, bool) {
+			target = strings.TrimSpace(target)
+			if curAgentID == "" || target == "" || target == curParent {
+				return readers, true
+			}
+			if !curAgentLoaded {
+				curAgentLoaded = true
+				curAgentGrants, curAgentOK = taskAPIGrantsTx(ctx, tx, curAgentID)
+			}
+			if !curAgentOK {
+				return nil, false
+			}
+			out := make([]APIGrantSet, 0, len(readers)+1)
+			out = append(out, readers...)
+			out = append(out, curAgentGrants)
+			return out, true
+		}
+
+		for _, e := range edges {
+			if isCallerNamedLineageKind(e.kind) && strings.TrimSpace(e.target) != curParent {
+				if nextReaders, ok := withCurCallerGrants(e.target); ok {
+					enqueue(e.target, nextReaders)
+				}
+			} else {
+				enqueue(e.target, readers)
+			}
 		}
 		if origTask := WorkOrigin(origRef).Task(); origTask != "" {
-			enqueue(origTask, fromOrigin)
+			if nextReaders, ok := withCurCallerGrants(origTask); ok {
+				enqueue(origTask, nextReaders)
+			}
 		}
 	}
 	return "", nil

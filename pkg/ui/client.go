@@ -2399,6 +2399,15 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err != nil {
 		return Task{}, validationErrorf("%v", err)
 	}
+	if proposedBy == nil && explicitOrigin.Task() != "" && model.HasExternalRefReadable(ctx) {
+		origTask, err := c.Store.GetTask(ctx, explicitOrigin.Task())
+		if err != nil {
+			return Task{}, err
+		}
+		if origTask == nil || !model.ExternalRefReadable(ctx, taskRepo(origTask)) {
+			explicitOrigin = ""
+		}
+	}
 	// A task names no team. One filed against a team's config repo is
 	// judged as that team's, and every other task as the default team's.
 	teamID := model.DefaultTeamID
@@ -2511,6 +2520,15 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		links = append(links, model.Link{Kind: model.LinkSupersedes, Target: supersedes})
 	}
 	revertsID := model.NormalizeTaskID(req.Reverts)
+	if revertsID != "" && model.HasExternalRefReadable(ctx) {
+		revTask, err := c.Store.GetTask(ctx, revertsID)
+		if err != nil {
+			return Task{}, err
+		}
+		if revTask == nil || !model.ExternalRefReadable(ctx, taskRepo(revTask)) {
+			revertsID = ""
+		}
+	}
 	if revertsID != "" {
 		links = append(links, model.Link{Kind: model.LinkReverts, Target: revertsID})
 	}

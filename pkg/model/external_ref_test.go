@@ -250,6 +250,43 @@ func TestExternalRefInheritanceAndClearing(t *testing.T) {
 	if got, _ := store.GetTask(ctx, "proposal-transitive-bounce"); got.ExternalRef != "" {
 		t.Errorf("proposal-transitive-bounce ExternalRef = %q, want empty", got.ExternalRef)
 	}
+
+	// Same transitive guard applies to LinkSupersedes on a proposed task and to
+	// a second-hop child spawned from that proposal in daemon context.
+	if err := store.PutTask(ctx, model.Task{
+		ID:     "proposal-supersedes-bounce",
+		Intent: model.IntentImplement,
+		Title:  "proposal-supersedes-bounce",
+		Target: &widgets,
+		Origin: model.Origin{
+			Attribution: model.Attribution{
+				Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
+				OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: "widgets-reader-proposer"},
+			},
+			Reason: model.ReasonDirect,
+		},
+		Links: []model.Link{
+			{Kind: model.LinkProposedBy, Target: "widgets-reader-proposer"},
+			{Kind: model.LinkSupersedes, Target: "widgets-bridge"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := store.GetTask(ctx, "proposal-supersedes-bounce"); got.ExternalRef != "" {
+		t.Errorf("proposal-supersedes-bounce ExternalRef = %q, want empty", got.ExternalRef)
+	}
+	if err := store.PutTask(ctx, model.Task{
+		ID:     "proposal-two-hop-child",
+		Intent: model.IntentReview,
+		Title:  "proposal-two-hop-child",
+		Target: &widgets,
+		Links:  []model.Link{{Kind: model.LinkProposedBy, Target: "proposal-supersedes-bounce"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := store.GetTask(ctx, "proposal-two-hop-child"); got.ExternalRef != "" {
+		t.Errorf("proposal-two-hop-child ExternalRef = %q, want empty", got.ExternalRef)
+	}
 }
 
 func TestRefTaskRollupRowsAndSummary(t *testing.T) {

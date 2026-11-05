@@ -359,9 +359,26 @@ func TestRefSummaryAndTaskFilterVisibility(t *testing.T) {
 		t.Errorf("signed-in user proposedBy = %d (%s), want 403", propRec.Code, propRec.Body.String())
 	}
 	xrepoHumanRec := doWithHeaders(t, srv, http.MethodPost, "/api/tasks",
-		`{"repo":"acme/widgets","title":"human-xrepo","origin":"task:102"}`, h.as("rwlimited@example.com"))
+		`{"repo":"acme/widgets","title":"human-xrepo","origin":"task:102","reverts":"102"}`, h.as("rwlimited@example.com"))
 	if xrepoHumanRec.Code != http.StatusCreated || strings.Contains(xrepoHumanRec.Body.String(), "SEC-ONLY") {
 		t.Errorf("limited human cross-repo origin = %d: %s", xrepoHumanRec.Code, xrepoHumanRec.Body.String())
+	}
+	var xrepoCreated ui.Task
+	if err := json.Unmarshal(xrepoHumanRec.Body.Bytes(), &xrepoCreated); err != nil || xrepoCreated.ID == "" {
+		t.Fatalf("unmarshal human-xrepo response: %v (%s)", err, xrepoHumanRec.Body.String())
+	}
+	// A daemon-spawned child of human-xrepo must not inherit acme/secret's
+	// externalRef on a second hop either.
+	spawnedFromBridge, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title:      "daemon follow-up from human-xrepo",
+		Repo:       "acme/widgets",
+		ProposedBy: xrepoCreated.ID,
+	})
+	if err != nil {
+		t.Fatalf("CreateTask spawnedFromBridge: %v", err)
+	}
+	if spawnedFromBridge.ExternalRef != "" {
+		t.Errorf("spawnedFromBridge.ExternalRef = %q, want empty (no two-hop cross-repo leak)", spawnedFromBridge.ExternalRef)
 	}
 
 	// 7. Repeated ?repo=&repo=acme/secret and empty ?externalRef= query parameter
