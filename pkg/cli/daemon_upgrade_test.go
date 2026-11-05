@@ -227,14 +227,14 @@ func TestRunUpgradesAContainerDeploymentWhenTheButtonIsClicked(t *testing.T) {
 printf '%%s\n' "$*" >> %s
 case "$*" in
 *schema-version) echo %d ;;
-"image inspect "*) printf 'ghcr.io/bwsalmon/grain/grain@%s\n' ;;
+"image inspect "*) printf 'docker.io/grainai/grain@%s\n' ;;
 esac
 exit 0
 `, dockerLog, model.SchemaVersion, fakeImageDigest))
 
 	dataDir := upgradeDataDir(t)
 	refFile := filepath.Join(dataDir, "image.env")
-	const before = "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:main\n"
+	const before = "GRAIN_IMAGE=docker.io/grainai/grain:main\n"
 	if err := os.WriteFile(refFile, []byte(before), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ exit 0
 
 	deployment := daemon.Config{
 		DataDir:             dataDir,
-		UpgradeImage:        "ghcr.io/bwsalmon/grain/grain",
+		UpgradeImage:        "docker.io/grainai/grain",
 		UpgradeImageRefFile: refFile,
 		UpgradeRestartCmd:   []string{"touch", restartMarker},
 		// What -upgrade-allowed-branches=main,grain/* parses to: the
@@ -262,7 +262,7 @@ exit 0
 		t.Fatalf("the upgrade ended %q: %s", final.Phase, final.Detail)
 	}
 
-	const wantRef = "ghcr.io/bwsalmon/grain/grain:grain..task-31"
+	const wantRef = "docker.io/grainai/grain:grain..task-31"
 	// Pinned to what the pull fetched, so the tag moving before the
 	// restart cannot change what the restart runs.
 	const pinned = wantRef + "@" + fakeImageDigest

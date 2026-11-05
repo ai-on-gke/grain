@@ -300,7 +300,7 @@ test.describe("2026-10-22 UI fixes, together on one tip", () => {
     // is typed answers with that upgrade finished on main -- the phase
     // "ok", no-channel reading whose poll used to put "main" back over a
     // typed branch. Nothing is ever posted.
-    const running = { image: "ghcr.io/bwsalmon/grain:sweep" };
+    const running = { image: "docker.io/grainai/grain:sweep" };
     let finished = false;
     let polls = 0;
     let upgrades = 0;

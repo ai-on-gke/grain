@@ -345,19 +345,19 @@ GRAIN_HOSTD="${GRAIN_HOSTD:-auto}"
 # .grain/workflows/promote.yml) -- never main's head. A release is also
 # published under its own name, so GRAIN_IMAGE_TAG=v1.5.0 pins one.
 GRAIN_LEGACY_IMAGE_REPO="${GRAIN_LEGACY_IMAGE_REPO:-ghcr.io/bwsalmon/grain/grain}"
-GRAIN_OSS_IMAGE_REPO="${GRAIN_OSS_IMAGE_REPO:-$GRAIN_LEGACY_IMAGE_REPO}"
+GRAIN_OSS_IMAGE_REPO="${GRAIN_OSS_IMAGE_REPO:-docker.io/grainai/grain}"
 GRAIN_ALLOWED_IMAGE_REPOS="${GRAIN_ALLOWED_IMAGE_REPOS:-}"
 GRAIN_INSTALL_TRACK="${GRAIN_INSTALL_TRACK:-}"
 GRAIN_IMAGE_EXPLICIT="${GRAIN_IMAGE:-}"
-GRAIN_IMAGE="${GRAIN_IMAGE:-ghcr.io/bwsalmon/grain/grain}"
+GRAIN_IMAGE="${GRAIN_IMAGE:-docker.io/grainai/grain}"
 GRAIN_IMAGE_TAG="${GRAIN_IMAGE_TAG:-}"
 # Credentials for `docker login` against the image's registry, needed
-# only if the package is private -- bwsalmon/grain and its packages are
-# public, so an ordinary deployment sets neither and pulls anonymously.
-# A GitHub PAT with read:packages is what these want when they are
-# needed; GRAIN_GITHUB_TOKEN is deliberately *not* reused by default,
-# since the credential grain clones repositories with and the credential
-# it pulls images with are not the same decision.
+# only if the package is private or if a shared NAT IP hits Docker Hub's
+# anonymous pull rate limit (100 pulls per 6 hours per IPv4) --
+# docker.io/grainai/* repositories are public, so an ordinary deployment
+# sets neither and pulls anonymously. GRAIN_GITHUB_TOKEN is deliberately
+# *not* reused by default, since the credential grain clones repositories
+# with and the credential it pulls images with are not the same decision.
 GRAIN_IMAGE_PULL_USER="${GRAIN_IMAGE_PULL_USER:-}"
 # The cosign public key the images this host pulls must be signed with
 # (docs/image-signing.md). Set, the grain image and its sandbox image are
@@ -1071,7 +1071,7 @@ Recognized variables:
                              runs so token refreshes persist; used only
                              when no OpenAI API key is configured
   GRAIN_IMAGE               image repository the deployment runs, with no tag
-                             (default ghcr.io/bwsalmon/grain/grain -- what CI
+                             (default docker.io/grainai/grain -- what CI
                              publishes on every commit)
   GRAIN_IMAGE_TAG           which tag of it to run; always wins when set.
                              Default: GRAIN_CHANNEL's tag, else the tag
@@ -1083,8 +1083,9 @@ Recognized variables:
                              last promoted release), candidate (the current
                              candidate), main (head of main)
   GRAIN_IMAGE_PULL_USER     credentials for `docker login` against that
-  GRAIN_IMAGE_PULL_TOKEN     registry -- only needed for a private package;
-                             bwsalmon/grain's is public and pulls anonymously
+  GRAIN_IMAGE_PULL_TOKEN     registry -- only needed for a private package or
+                             to avoid Docker Hub anonymous pull rate limits;
+                             docker.io/grainai/* are public and pull anonymously
   GRAIN_IMAGE_VERIFY_KEY    a cosign public key (a file on this host) the grain
                              and sandbox images must be signed with; needs
                              cosign on PATH. Copied to /etc/grain/cosign.pub,
@@ -3300,10 +3301,17 @@ report_image_revision() {
     return 0 # a release, release candidate or one build: there is no branch head to be behind
   fi
   branch="${tag//..//}"
-  # ghcr.io/<owner>/<repo>/grain is published from github.com/<owner>/<repo>.
-  repo="${GRAIN_IMAGE#*/}"
-  repo="${repo%/*}"
-  case "$repo" in */*) ;; *) return 0 ;; esac
+  case "$GRAIN_IMAGE" in
+    docker.io/grainai/grain | index.docker.io/grainai/grain | grainai/grain | ghcr.io/bwsalmon/grain/grain | ghcr.io/ai-on-gke/grain/grain)
+      repo="ai-on-gke/grain"
+      ;;
+    *)
+      # ghcr.io/<owner>/<repo>/grain is published from github.com/<owner>/<repo>.
+      repo="${GRAIN_IMAGE#*/}"
+      repo="${repo%/*}"
+      case "$repo" in */*) ;; *) return 0 ;; esac
+      ;;
+  esac
   api="${GRAIN_GITHUB_API:-https://api.github.com}"
   # The image's own curl, as every other tool this script reaches for
   # (image_run): the host is promised docker and systemd and nothing else.
@@ -3338,7 +3346,7 @@ detect_install_track() {
 
 # default_image_for_track returns the default image repository for track $1.
 default_image_for_track() {
-  printf '%s\n' "${GRAIN_OSS_IMAGE_REPO:-${GRAIN_LEGACY_IMAGE_REPO:-ghcr.io/bwsalmon/grain/grain}}"
+  printf '%s\n' "${GRAIN_OSS_IMAGE_REPO:-docker.io/grainai/grain}"
 }
 
 # image_repo_can_transition is whether a deployment whose ref file names
@@ -3350,9 +3358,11 @@ image_repo_can_transition() {
   [ -n "$from" ] && [ -n "$to" ] || return 1
   [ "$from" = "$to" ] && return 0
   local known=(
+    "docker.io/grainai/grain"
     "ghcr.io/bwsalmon/grain/grain"
+    "ghcr.io/ai-on-gke/grain/grain"
     "${GRAIN_LEGACY_IMAGE_REPO:-ghcr.io/bwsalmon/grain/grain}"
-    "${GRAIN_OSS_IMAGE_REPO:-ghcr.io/bwsalmon/grain/grain}"
+    "${GRAIN_OSS_IMAGE_REPO:-docker.io/grainai/grain}"
   )
   local allowed_list="${GRAIN_ALLOWED_IMAGE_REPOS:-}"
   for repo in ${allowed_list//,/ }; do
@@ -3756,9 +3766,11 @@ image_ref_from() {
     [ -n "$r" ] && repos+=("$r")
   done
   case "$repo" in
-    "ghcr.io/bwsalmon/grain/grain" | "${GRAIN_LEGACY_IMAGE_REPO:-}" | "${GRAIN_OSS_IMAGE_REPO:-}")
+    "docker.io/grainai/grain" | "ghcr.io/bwsalmon/grain/grain" | "ghcr.io/ai-on-gke/grain/grain" | "${GRAIN_LEGACY_IMAGE_REPO:-}" | "${GRAIN_OSS_IMAGE_REPO:-}")
       repos+=(
+        "docker.io/grainai/grain"
         "ghcr.io/bwsalmon/grain/grain"
+        "ghcr.io/ai-on-gke/grain/grain"
       )
       [ -n "${GRAIN_LEGACY_IMAGE_REPO:-}" ] && repos+=("$GRAIN_LEGACY_IMAGE_REPO")
       [ -n "${GRAIN_OSS_IMAGE_REPO:-}" ] && repos+=("$GRAIN_OSS_IMAGE_REPO")
@@ -3859,7 +3871,7 @@ image_run() {
 
 # registry_login authenticates to the image's registry, if this
 # deployment was given a credential for it. Nothing to do in the ordinary
-# case: bwsalmon/grain's GHCR package is public, and an anonymous pull
+# case: docker.io/grainai/* repositories are public, and an anonymous pull
 # works. Never fatal on its own -- a failed login is reported here and
 # then simply becomes whatever the pull below reports.
 #
@@ -3875,7 +3887,9 @@ registry_login() {
   local registry="${GRAIN_IMAGE%%/*}" target user token="$GRAIN_IMAGE_PULL_TOKEN"
   target="$registry"
   user="${GRAIN_IMAGE_PULL_USER:-x-access-token}"
-  if [[ "$GRAIN_IMAGE" == */* ]] && google_registry_host "$registry"; then
+  if [ "$registry" = "docker.io" ] || [ "$registry" = "index.docker.io" ]; then
+    user="${GRAIN_IMAGE_PULL_USER:-grainai}"
+  elif [[ "$GRAIN_IMAGE" == */* ]] && google_registry_host "$registry"; then
     target="https://${registry}"
     user="${GRAIN_IMAGE_PULL_USER:-oauth2accesstoken}"
     if [ -z "$token" ]; then

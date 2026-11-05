@@ -47,6 +47,40 @@ for (const width of [360, 390]) {
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth),
       ).toBeLessThanOrEqual(viewport.width);
+
+      // While an add is in flight the button is in its loading state: a
+      // spinner over a label kept in place (grain/task-55). Nothing is
+      // added beside it and its width does not change, so it has to be
+      // exactly where "Add repo" was, with the field as wide as it was.
+      // The POST is held and answered here so the window is long enough
+      // to measure and the demo's allowlist is left alone.
+      let releaseAdd;
+      const held = new Promise((resolve) => {
+        releaseAdd = resolve;
+      });
+      await page.route(/\/api\/repos$/, async (route) => {
+        if (route.request().method() !== "POST") return route.continue();
+        await held;
+        await route.fulfill({
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        });
+      });
+      await field.fill("acme/new-thing");
+      await add.click();
+      await expect(add).toBeDisabled();
+      await expect(add.getByRole("progressbar")).toBeVisible();
+      expect(await add.boundingBox()).toEqual(addBox);
+      const heldFieldBox = await field.boundingBox();
+      expect(heldFieldBox.x).toBe(fieldBox.x);
+      expect(heldFieldBox.width).toBeGreaterThanOrEqual(fieldBox.width);
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth),
+      ).toBeLessThanOrEqual(viewport.width);
+      releaseAdd();
+      await expect(add).toBeEnabled();
+      expect(await add.boundingBox()).toEqual(addBox);
     });
   });
 }

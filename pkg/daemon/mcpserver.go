@@ -1550,11 +1550,69 @@ func grainLogRedactor(secretsDir string) *grainlog.Redactor {
 	return grainlog.NewRedactor(known)
 }
 
+func grainLogRedactorFor(secretsDir string, secretStore *secrets.Store) *grainlog.Redactor {
+	if secretStore == nil {
+		return grainLogRedactor(secretsDir)
+	}
+	known, err := KnownSecretValuesFromStore(context.Background(), secretStore)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "grain mcpserver: read_grain_log is unavailable this run: "+
+			"this host's secret store could not be read (%v), so nothing can be redacted "+
+			"out of the journal\n", err)
+		return nil
+	}
+	if secretsDir != "" {
+		known = append(known, knownGitHubTokens(secretsDir)...)
+	}
+	return grainlog.NewRedactor(known)
+}
+
+// KnownSecretValuesFromStore reads every stored value from an already-opened
+// secret store without emitting a secret resolution audit event.
+func KnownSecretValuesFromStore(ctx context.Context, store *secrets.Store) ([]grainlog.KnownValue, error) {
+	if store == nil {
+		return nil, errors.New("nil secret store")
+	}
+	if err := store.Check(); err != nil {
+		return nil, err
+	}
+	vals, err := store.KnownValues(ctx)
+	if err != nil {
+		return nil, err
+	}
+	known := make([]grainlog.KnownValue, 0, len(vals))
+	for _, v := range vals {
+		known = append(known, grainlog.KnownValue{Label: "secret " + v.SecretName + "/" + v.Key, Value: v.Value})
+	}
+	return known, nil
+}
+
 // knownSecretValues is every value in this deployment's own secret store
 // (pkg/secrets), labelled by the name it is stored under. A store that
 // holds nothing yet is not an error -- a fresh install, a deployment
 // whose credentials are all in the ladder -- and yields no values.
 func KnownSecretValues(secretsDir string) ([]grainlog.KnownValue, error) {
+	if os.Getenv("GRAIN_SECRETS_BACKEND") == secrets.BackendSecretManager {
+		dataDir := filepath.Dir(secretsDir)
+		driver, dsn, err := ResolveDatabase(dataDir)
+		if err != nil {
+			return nil, err
+		}
+		catStore, db, err := OpenStore(driver, dsn, dataDir)
+		if err != nil {
+			return nil, err
+		}
+		defer db.Close()
+		smStore, err := OpenSecretsForConfig(Config{
+			DataDir:         dataDir,
+			SecretsBackend:  secrets.BackendSecretManager,
+			SecretsSMPrefix: os.Getenv("GRAIN_SECRETS_SM_PREFIX"),
+		}, catStore)
+		if err != nil {
+			return nil, err
+		}
+		return KnownSecretValuesFromStore(context.Background(), smStore)
+	}
 	cfg := secrets.Config{
 		File:    filepath.Join(secretsDir, secrets.DefaultFileName),
 		KeyFile: filepath.Join(secretsDir, secrets.DefaultKeyFileName),
@@ -1575,25 +1633,7 @@ func KnownSecretValues(secretsDir string) ([]grainlog.KnownValue, error) {
 	// host has no secrets" look identical downstream, and treating the
 	// first as the second is how a journal full of a credential this
 	// process could not name gets served as a redacted one.
-	if err := store.Check(); err != nil {
-		return nil, err
-	}
-	listed, err := store.List()
-	if err != nil {
-		return nil, err
-	}
-	var known []grainlog.KnownValue
-	for _, info := range listed {
-		for _, key := range info.Keys {
-			name := info.Name + "/" + key
-			value, err := store.Resolve(context.Background(), name)
-			if err != nil {
-				return nil, fmt.Errorf("reading %s: %w", name, err)
-			}
-			known = append(known, grainlog.KnownValue{Label: "secret " + name, Value: value})
-		}
-	}
-	return known, nil
+	return KnownSecretValuesFromStore(context.Background(), store)
 }
 
 // knownGitHubTokens is the static half of the git proxy's credential
@@ -1727,7 +1767,7 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		DeclineAutoMerge: p.AutoMerge != nil && !*p.AutoMerge,
 		TemplateID:       p.TemplateID, Fields: p.TemplateFields, AtFront: p.AtFront,
 		DependsOn: deps, CustomFields: fields, Supersedes: supersedes,
-		Reads: p.Reads, Writes: writes, ReviewTemplateID: p.ReviewTemplateID,
+		Reads: p.Reads, Designs: p.Designs, Writes: writes, ReviewTemplateID: p.ReviewTemplateID,
 		ProposedBy: f.parent, ProposalKey: key, Capabilities: caps,
 		Model: p.Model, AgentBackendID: p.Model, AgentFramework: p.AgentFramework,
 		SandboxCPUs: p.SandboxCPUs, SandboxMemoryMB: p.SandboxMemoryMB,

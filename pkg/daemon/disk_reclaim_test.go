@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -27,8 +28,8 @@ import (
 
 func TestDockerPrunerRemovesOldGuestTagsUntaggedDigestsAndBuildCache(t *testing.T) {
 	const (
-		guestRepo     = "ghcr.io/bwsalmon/grain/guest"
-		grainRepo     = "ghcr.io/bwsalmon/grain/grain"
+		guestRepo     = "docker.io/grainai/sandbox"
+		grainRepo     = "docker.io/grainai/grain"
 		activeSandbox = guestRepo + ":sha-active@sha256:activeguest"
 		activeGrain   = grainRepo + ":main"
 	)
@@ -162,16 +163,16 @@ func TestDiskReclaimSweepRunsDockerPrunerStep(t *testing.T) {
 	totalMB := 443 * 1024
 	var logs []string
 	pruner := &DockerPruner{
-		ActiveSandboxImage: "ghcr.io/bwsalmon/grain/guest:sha-active",
-		ActiveGrainImage:   "ghcr.io/bwsalmon/grain/grain:main",
+		ActiveSandboxImage: "docker.io/grainai/sandbox:sha-active",
+		ActiveGrainImage:   "docker.io/grainai/grain:main",
 		Run: func(_ context.Context, args ...string) (string, error) {
 			cmd := strings.Join(args, " ")
 			switch {
 			case args[0] == "ps":
 				return "", nil
 			case len(args) >= 2 && args[0] == "image" && args[1] == "ls":
-				if args[len(args)-1] == "ghcr.io/bwsalmon/grain/guest" {
-					return "ghcr.io/bwsalmon/grain/guest:sha-old ghcr.io/bwsalmon/grain/guest@sha256:old sha256:1111\n", nil
+				if args[len(args)-1] == "docker.io/grainai/sandbox" {
+					return "docker.io/grainai/sandbox:sha-old docker.io/grainai/sandbox@sha256:old sha256:1111\n", nil
 				}
 				return "", nil
 			case cmd == "image prune -f":
@@ -224,11 +225,48 @@ func TestParseDockerReclaimedBytes(t *testing.T) {
 // An empty {{.Digest}} lists as a bare `repo@`, which is no reference
 // docker image rm accepts; it is left for `docker image prune` instead.
 func TestReclaimRemovableImageSkipsEmptyDigest(t *testing.T) {
-	const repo = "ghcr.io/bwsalmon/grain/grain"
+	const repo = "docker.io/grainai/grain"
 	if got := reclaimRemovableImage(repo, []string{repo + ":<none>", repo + "@", "0123456789ab"}); got != "" {
 		t.Errorf("reclaimRemovableImage(empty digest) = %q, want \"\"", got)
 	}
 	if got, want := reclaimRemovableImage(repo, []string{repo + ":<none>", repo + "@sha256:1111"}), repo+"@sha256:1111"; got != want {
 		t.Errorf("reclaimRemovableImage = %q, want %q", got, want)
+	}
+}
+
+func TestDockerPrunerHandlesDockerHubStrippedLocalNames(t *testing.T) {
+	var removed []string
+	pruner := &DockerPruner{
+		ActiveSandboxImage: "docker.io/grainai/sandbox:sha-active@sha256:activesbx",
+		ActiveGrainImage:   "docker.io/grainai/grain:main",
+		Run: func(_ context.Context, args ...string) (string, error) {
+			switch {
+			case len(args) >= 1 && args[0] == "ps":
+				return "grainai/grain:main\n", nil
+			case len(args) >= 4 && args[0] == "image" && args[1] == "ls" && args[len(args)-1] == "docker.io/grainai/sandbox":
+				return strings.Join([]string{
+					"grainai/sandbox:sha-active grainai/sandbox@sha256:activesbx sha256:1111",
+					"grainai/sandbox:previous grainai/sandbox@sha256:prevsbx sha256:2222",
+					"grainai/sandbox:sha-old grainai/sandbox@sha256:oldsbx sha256:3333",
+				}, "\n"), nil
+			case len(args) >= 4 && args[0] == "image" && args[1] == "ls" && args[len(args)-1] == "docker.io/grainai/grain":
+				return strings.Join([]string{
+					"grainai/grain:main grainai/grain@sha256:activegrain sha256:4444",
+					"grainai/grain:sha-oldgrain grainai/grain@sha256:oldgrain sha256:5555",
+				}, "\n"), nil
+			case len(args) >= 3 && args[0] == "image" && args[1] == "rm":
+				removed = append(removed, args[2])
+				return "", nil
+			default:
+				return "", nil
+			}
+		},
+	}
+	if _, err := pruner.Prune(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"grainai/sandbox:sha-old", "grainai/grain:sha-oldgrain"}
+	if !slices.Equal(removed, want) {
+		t.Fatalf("removed = %v, want %v", removed, want)
 	}
 }

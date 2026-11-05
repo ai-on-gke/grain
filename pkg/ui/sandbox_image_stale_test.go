@@ -113,8 +113,8 @@ func TestGetSandboxHealthReportsStaleSandboxImagePins(t *testing.T) {
 	stampedAt(c)
 	c.Config.Sandboxes = fakeSandboxHealth{}
 	putImages(t, c, func(cfg *model.Config) {
-		cfg.K8sSandboxImage = "ghcr.io/bwsalmon/grain/k8s-sandbox:v2.1.0"
-		cfg.K8sGranuleImage = "ghcr.io/bwsalmon/grain/guest:sha-e5544d6"
+		cfg.K8sSandboxImage = "docker.io/grainai/sandbox-k8s:v2.1.0"
+		cfg.K8sGranuleImage = "docker.io/grainai/sandbox:sha-e5544d6"
 	})
 
 	got := decode[struct {
@@ -122,6 +122,18 @@ func TestGetSandboxHealthReportsStaleSandboxImagePins(t *testing.T) {
 	}](t, do(t, srv, http.MethodGet, "/api/sandboxes", ""))
 	if len(got.Warnings) != 1 || !strings.HasPrefix(got.Warnings[0], "k8s_sandbox_image: ") || !strings.Contains(got.Warnings[0], "v2.1.0") {
 		t.Errorf("sandboxImageWarnings = %q, want one for k8s_sandbox_image naming v2.1.0", got.Warnings)
+	}
+
+	// A pre-cutover GHCR stock pin gets the same warning against the Docker Hub stamp.
+	putImages(t, c, func(cfg *model.Config) {
+		cfg.K8sSandboxImage = "ghcr.io/bwsalmon/grain/k8s-sandbox:v2.1.0"
+		cfg.K8sGranuleImage = "ghcr.io/bwsalmon/grain/guest:sha-e5544d6"
+	})
+	got = decode[struct {
+		Warnings []string `json:"sandboxImageWarnings"`
+	}](t, do(t, srv, http.MethodGet, "/api/sandboxes", ""))
+	if len(got.Warnings) != 1 || !strings.HasPrefix(got.Warnings[0], "k8s_sandbox_image: ") || !strings.Contains(got.Warnings[0], "v2.1.0") {
+		t.Errorf("legacy GHCR sandboxImageWarnings = %q, want one for k8s_sandbox_image naming v2.1.0", got.Warnings)
 	}
 
 	// A deployment with no pool to report on still says it: the pin is

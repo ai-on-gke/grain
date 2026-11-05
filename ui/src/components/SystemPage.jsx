@@ -264,7 +264,7 @@ export default function SystemPage({
             Metrics
           </Typography>
           <Box sx={{ mb: 3 }}>
-            <ReleaseNotesPanel showError={showError} />
+            <ReleaseNotesPanel showError={showError} onOpenTask={onOpenTask} />
           </Box>
           <ReportBoard
             config={config}

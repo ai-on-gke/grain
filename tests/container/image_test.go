@@ -129,7 +129,7 @@ func TestTheImageNamesTheSandboxContainerItExpects(t *testing.T) {
 	requireImage(t)
 	out := strings.TrimSpace(docker(t, "run", "--rm", image, "sandbox-image"))
 
-	if !strings.Contains(out, "/guest:") {
+	if !strings.Contains(out, "/sandbox:") {
 		t.Fatalf("sandbox-image printed %q", out)
 	}
 	// A bare `make image` leaves the source default (the tag CI keeps

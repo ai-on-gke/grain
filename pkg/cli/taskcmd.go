@@ -114,7 +114,7 @@ func cmdCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	body := fs.String("body", "", "task description")
 	bodyFile := fs.String("body-file", "", "read the task description from this path (- for stdin) instead of -body")
 	var designs stringList
-	fs.Var(&designs, "design", "a design or spec path (design/...) this task implements, recorded on its provenance (repeatable)")
+	fs.Var(&designs, "design", "committed-context path ([owner/name:]path[@rev]) this task implements, pinned to a commit SHA (repeatable)")
 	repo := fs.String("repo", "", "owner/name of the repo this task's work targets")
 	// The requester (Task.Creator) of a task filed from this
 	// workstation's own CLI (ui.CreateTaskRequest.Author). Metadata
@@ -308,6 +308,8 @@ func cmdUpdate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	fs.BoolVar(&autoMerge, "auto-merge", false, "whether the task auto-merges once clean")
 	var reads stringList
 	fs.Var(&reads, "read", "owner/name of a repo this task's run may read but never push to (repeatable) -- replaces the whole set")
+	var designs stringList
+	fs.Var(&designs, "design", "committed-context path ([owner/name:]path[@rev]) this task implements (repeatable) -- replaces the whole set; pass -design \"\" to clear")
 	var writes stringList
 	fs.Var(&writes, "write", "owner/name[@branch] of another repo this task may land work in (repeatable) -- replaces the whole set")
 	// Empty is a real value, not an unset one: it detaches whatever
@@ -402,6 +404,14 @@ func cmdUpdate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		case "read":
 			v := []string(reads)
 			req.Reads = &v
+		case "design":
+			cleaned := make([]string, 0, len(designs))
+			for _, d := range designs {
+				if trimmed := strings.TrimSpace(d); trimmed != "" {
+					cleaned = append(cleaned, trimmed)
+				}
+			}
+			req.Designs = &cleaned
 		case "write":
 			v := writeTargets
 			req.Writes = &v

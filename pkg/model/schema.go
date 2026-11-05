@@ -532,10 +532,15 @@ import "strconv"
 // server's (protocol.ServerConfig.Hostd), never a task's. `task_run_hostd`
 // stays, the read-only record of where each run's agent CLI ran.
 //
-// 112 adds `external_ref` to `task` (model.Task.ExternalRef) and the
+// 112 adds `grain_config`.`auto_grant_context_reads`
+// (model.Config.AutoGrantContextReads): the repositories ("*" or owner/name)
+// whose read-only access is auto-granted when a task names them as a
+// committed-context repository (`-design owner/name:path@rev`).
+//
+// 113 adds `external_ref` to `task` (model.Task.ExternalRef) and the
 // `task_external_ref`, `github_ci_job_repo_ref` and `ci_run_repo_ref`
 // indexes that back external-reference filtering and GET /api/refs/{ref}/summary.
-const SchemaVersion = 112
+const SchemaVersion = 113
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
@@ -634,6 +639,21 @@ const integrationEventTable = `CREATE TABLE IF NOT EXISTS ` + "`integration_even
   ` + "`behalf_kind`" + `      TEXT     NOT NULL DEFAULT '',
   ` + "`behalf_id`" + `        TEXT     NOT NULL DEFAULT '',
   ` + "`behalf_source`" + `    TEXT     NOT NULL DEFAULT ''
+)`
+
+// secretEntriesTable is the `secret_entries` catalogue for
+// -secrets-backend=secretmanager (design/design/registry.design.md, "Secrets in
+// Secret Manager"): non-secret metadata (secret name, key name, Secret Manager
+// secret ID, and active version number) so List, Has, and bare-name Resolve
+// never call project-wide secretmanager.secrets.list. Secret values are never
+// stored here. Needs no SchemaVersion bump, for taskEventTable's own reason.
+const secretEntriesTable = `CREATE TABLE IF NOT EXISTS ` + "`secret_entries`" + ` (
+  ` + "`secret_name`" + ` TEXT     NOT NULL,
+  ` + "`key`" + `         TEXT     NOT NULL,
+  ` + "`sm_secret`" + `   TEXT     NOT NULL,
+  ` + "`version`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`updated_at`" + `  DATETIME NOT NULL,
+  PRIMARY KEY (` + "`secret_name`" + `, ` + "`key`" + `)
 )`
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
@@ -2472,6 +2492,7 @@ var Tables = []string{
   ` + "`new_task_form`" + `                TEXT    NOT NULL DEFAULT '',
   ` + "`auto_upgrade_on`" + `              TEXT    NOT NULL DEFAULT '',
   ` + "`owner_trust`" + `                  TEXT    NOT NULL DEFAULT '',
+  ` + "`auto_grant_context_reads`" + `     TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -4157,6 +4178,10 @@ var Tables = []string{
 	// and its one-time startup migration off `-ui-allowed-principals`.
 	allowedPrincipalTable,
 	allowedPrincipalMigrationTable,
+
+	// Non-secret catalogue of names and keys stored in Google Cloud Secret
+	// Manager (-secrets-backend=secretmanager).
+	secretEntriesTable,
 }
 
 // Views is the derivations, each a (name, DDL) pair so Init can drop and

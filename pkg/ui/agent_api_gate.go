@@ -1083,6 +1083,12 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 					return fmt.Errorf("an agent cannot grant read access to %s, which its own task cannot read", r)
 				}
 			}
+		case "designs", "context":
+			for _, r := range contextReposInBody(gateKey(key), raw) {
+				if !agentMayRead(acting, r) {
+					return fmt.Errorf("an agent cannot reference committed context in %s, which its own task cannot read", r)
+				}
+			}
 		case "readsall", "reads_all":
 			// A console session's opt-in to reading every repository
 			// this deployment works in (model.ConsoleSessionAutoReads):
@@ -2008,6 +2014,12 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 					return fmt.Errorf("external agent %q cannot grant read access to %s, which its credential does not cover", tok.Name, r)
 				}
 			}
+		case "designs", "context":
+			for _, r := range contextReposInBody(gateKey(key), raw) {
+				if !allowedRepo(r) {
+					return fmt.Errorf("external agent %q cannot reference committed context in %s, which its credential does not cover", tok.Name, r)
+				}
+			}
 		case "automerge":
 			var on bool
 			if json.Unmarshal(raw, &on) == nil && on {
@@ -2509,6 +2521,8 @@ func editedPatchResponseKeys(body []byte) []string {
 	add(req.Reads != nil, "reads")
 	add(req.Writes != nil, "writes")
 	add(req.GoogleChatSpace != nil, "googleChatSpace")
+	add(req.Designs != nil, "designs")
+	add(req.Context != nil, "context")
 	return keys
 }
 

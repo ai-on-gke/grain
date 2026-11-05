@@ -358,8 +358,8 @@ type Config struct {
 	// deployment, and what a task needs installed in it is not the same
 	// everywhere: one deployment's agents work on Rust, another's need a
 	// private CA. Such an image is built FROM one of grain's minimal base
-	// images (ghcr.io/bwsalmon/grain/guest-base for VM backends,
-	// ghcr.io/bwsalmon/grain/k8s-sandbox-base for pods and containers),
+	// images (docker.io/grainai/sandbox-base for VM backends,
+	// docker.io/grainai/sandbox-k8s-base for pods and containers),
 	// which carry only what grain itself needs inside a sandbox -- and
 	// that boundary is versioned (pkg/sandboximage.Contract), so a custom
 	// image needs rebuilding only when the contract it was built at falls
@@ -937,6 +937,13 @@ type Config struct {
 	// OwnerTrustPrincipal on behalf of the owner. Empty -- the default --
 	// leaves every such filing proposed. Stored as JSON in one column.
 	OwnerTrust []OwnerTrustRule
+	// AutoGrantContextReads lists committed-context repositories ("*" or
+	// owner/name) for which filing or updating a task with a repo-qualified
+	// context reference (`owner/name:path@rev`) automatically adds the
+	// required -read grant instead of refusing when -read was omitted. Empty
+	// -- the default -- requires an explicit -read grant for any non-target
+	// context repository. Stored as JSON in one column.
+	AutoGrantContextReads []string
 	// CLIRun is where each agent CLI runs, keyed by framework name
 	// (claude, codex, antigravity): on the host, in a per-run
 	// container of an image, or whichever of those the host allows
@@ -971,14 +978,16 @@ type Config struct {
 
 // Default Kubernetes sandbox configuration values.
 const (
-	DefaultK8sNamespace        = "grain"
-	DefaultK8sKubectl          = "kubectl"
-	DefaultK8sDeployment       = "grain"
-	DefaultK8sContainer        = "grain"
-	DefaultK8sWorkspace        = "/home/agent"
-	DefaultK8sGranuleWorkspace = "/home/debian"
-	DefaultK8sSandboxImage     = "ghcr.io/bwsalmon/grain/k8s-sandbox:latest"
-	DefaultSandboxImage        = "ghcr.io/bwsalmon/grain/guest:latest"
+	DefaultK8sNamespace          = "grain"
+	DefaultK8sKubectl            = "kubectl"
+	DefaultK8sDeployment         = "grain"
+	DefaultK8sContainer          = "grain"
+	DefaultK8sWorkspace          = "/home/agent"
+	DefaultK8sGranuleWorkspace   = "/home/debian"
+	DefaultK8sSandboxImage       = "docker.io/grainai/sandbox-k8s:latest"
+	DefaultSandboxImage          = "docker.io/grainai/sandbox:latest"
+	LegacyDefaultK8sSandboxImage = "ghcr.io/bwsalmon/grain/k8s-sandbox:latest"
+	LegacyDefaultSandboxImage    = "ghcr.io/bwsalmon/grain/guest:latest"
 
 	// The PriorityClasses deploy/kubernetes/ ships, highest first --
 	// k8s.PriorityClassInteractive and its siblings, restated here

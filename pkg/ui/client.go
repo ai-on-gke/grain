@@ -1835,13 +1835,14 @@ type CreateTaskRequest struct {
 	// Capabilities is. SetDependency is the picker's attach/detach
 	// counterpart for a task that already exists.
 	DependsOn []string `json:"dependsOn"`
-	// Designs are design or spec files (design/... paths) the task
-	// implements, and DerivedFrom the pull requests ("owner/repo#number")
-	// its work derives from: provenance links only (model.LinkDesign,
-	// model.LinkDerivedFrom; `grain create --design`, external-cli spec
-	// #XC-19), granting and blocking nothing.
-	Designs     []string `json:"designs,omitempty"`
-	DerivedFrom []string `json:"derivedFrom,omitempty"`
+	// Designs (`[owner/name:]path[@rev]`) and Context (`{repo, path, rev}`)
+	// are committed-context references the task implements, either in its
+	// target repository or in a -read context repository, pinned to a commit
+	// SHA when filed and inherited by child tasks and reviews. DerivedFrom is
+	// the pull requests ("owner/repo#number") its work derives from.
+	Designs     []string          `json:"designs,omitempty"`
+	Context     []ContextRefInput `json:"context,omitempty"`
+	DerivedFrom []string          `json:"derivedFrom,omitempty"`
 	// Reads is a set of owner/name repos this task's run may read but
 	// never push to -- model.Task.Reads, docs/data-model.md's "one write
 	// target, many read targets". Unlike Repo, a Reads entry grants
@@ -2340,7 +2341,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err != nil {
 		return Task{}, err
 	}
-	provenance, err := provenanceLinks(req.Designs, req.DerivedFrom)
+	provenance, err := derivedFromLinks(req.DerivedFrom)
 	if err != nil {
 		return Task{}, err
 	}
@@ -2421,6 +2422,26 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	if err := refuseTargetAmongReads(reads, target); err != nil {
 		return Task{}, err
+	}
+	var contextCfg *model.Config
+	if len(req.Designs) > 0 || len(req.Context) > 0 {
+		if c.Store != nil {
+			contextCfg, err = c.Store.GetConfig(ctx)
+			if err != nil {
+				return Task{}, err
+			}
+		}
+		var contextLinks []model.Link
+		contextLinks, reads, err = c.resolveContextLinksAndReads(ctx, req.Designs, req.Context, target, reads, contextCfg, nil)
+		if err != nil {
+			return Task{}, err
+		}
+		links = append(links, contextLinks...)
+	} else if proposedBy != nil {
+		inherited := model.Task{Target: target, Links: links, Reads: reads}
+		model.InheritContext(&inherited, *proposedBy)
+		links = inherited.Links
+		reads = readsBesidesTarget(inherited.Reads, target)
 	}
 	// A repository the team's GitHub credential cannot reach is turned
 	// away here, where whoever is filing can still do something about it,
@@ -4252,6 +4273,11 @@ type UpdateTaskRequest struct {
 	// GoogleChatSpace links the task to a Google Chat space, or clears
 	// the link when set to "".
 	GoogleChatSpace *string `json:"googleChatSpace,omitempty"`
+	// Designs and Context replace the task's committed-context references
+	// (`[owner/name:]path[@rev]` or `{repo, path, rev}`). A non-nil empty
+	// slice clears them.
+	Designs *[]string          `json:"designs,omitempty"`
+	Context *[]ContextRefInput `json:"context,omitempty"`
 	// Reviewers, given, replaces this task's person-set reviewer list
 	// (model.Task.Reviewers, docs/design/changelists.md §5). A non-nil empty
 	// slice clears it. Refused to agents by agentFilingEscalation /
@@ -4682,9 +4708,42 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		}
 	}
 	var ownerTrustCfg *model.Config
-	if c.requestActor(ctx).Actor.Kind == model.PrincipalAgent {
+	if c.requestActor(ctx).Actor.Kind == model.PrincipalAgent || req.Designs != nil || req.Context != nil || req.Reads != nil || req.Repo != nil {
 		var err error
 		ownerTrustCfg, err = c.Store.GetConfig(ctx)
+		if err != nil {
+			return Task{}, err
+		}
+	}
+	var resolvedContextLinks []model.Link
+	var resolvedContextReads []model.RepoRef
+	if req.Designs != nil || req.Context != nil {
+		current, err := c.Store.GetTask(ctx, id)
+		if err != nil {
+			return Task{}, err
+		}
+		if current == nil {
+			return Task{}, &NotFoundError{ID: id}
+		}
+		effectiveTarget := current.Target
+		if target != nil {
+			effectiveTarget = target
+		}
+		effectiveReads := slices.Clone(current.Reads)
+		if req.Reads != nil {
+			effectiveReads = slices.Clone(reads)
+		}
+		var designsInput []string
+		if req.Designs != nil {
+			designsInput = *req.Designs
+		}
+		var contextInput []ContextRefInput
+		if req.Context != nil {
+			contextInput = *req.Context
+		}
+		resolvedContextLinks, resolvedContextReads, err = c.resolveContextLinksAndReads(
+			ctx, designsInput, contextInput, effectiveTarget, effectiveReads, ownerTrustCfg, current.Links,
+		)
 		if err != nil {
 			return Task{}, err
 		}
@@ -4982,6 +5041,25 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 				newLinks = append(newLinks, model.Link{Kind: model.LinkGoogleChat, Target: space})
 			}
 			task.Links = newLinks
+		}
+		if req.Designs != nil || req.Context != nil {
+			var newLinks []model.Link
+			for _, l := range task.Links {
+				if l.Kind != model.LinkDesign && l.Kind != model.LinkContextManifest {
+					newLinks = append(newLinks, l)
+				}
+			}
+			newLinks = append(newLinks, resolvedContextLinks...)
+			task.Links = newLinks
+			for _, r := range resolvedContextReads {
+				if !slices.ContainsFunc(task.Reads, r.Same) {
+					task.Reads = append(task.Reads, r)
+				}
+			}
+		} else if req.Reads != nil || req.Repo != nil {
+			if err := validateExistingContextReads(task, ownerTrustCfg); err != nil {
+				return err
+			}
 		}
 		if req.CustomFields != nil {
 			declaredFields, err := c.Store.ListCustomFields(ctx)

@@ -467,6 +467,10 @@ func TestReleaseTagsForBranch(t *testing.T) {
 func TestReleaseRepositoryForImage(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
+		"docker.io/grainai/grain":           "github.com/ai-on-gke/grain",
+		"docker.io/grainai/grain:main":      "github.com/ai-on-gke/grain",
+		"index.docker.io/grainai/grain":     "github.com/ai-on-gke/grain",
+		"grainai/grain":                     "github.com/ai-on-gke/grain",
 		"ghcr.io/bwsalmon/grain/grain":      "github.com/ai-on-gke/grain",
 		"ghcr.io/bwsalmon/grain/grain:main": "github.com/ai-on-gke/grain",
 		"ghcr.io/ai-on-gke/grain/grain":     "github.com/ai-on-gke/grain",
@@ -486,7 +490,7 @@ func TestDefaultImageSourceLoadsWhenManifestPresentAndFallsBackWhenAbsent(t *tes
 
 	t.Run("manifest present loads from release without registry pull", func(t *testing.T) {
 		forge := newFakeForgeServer(t, "ai-on-gke", "grain")
-		const daemonRef = "ghcr.io/bwsalmon/grain/grain:sha-111111111111"
+		const daemonRef = "docker.io/grainai/grain:sha-111111111111"
 		addV1Release(forge, "channel-main", "github.com/ai-on-gke/grain", testCommit1, "sha-111111111111", daemonRef, testDaemonID1, false)
 
 		dk := newFakeDockerEnv(t)
@@ -497,7 +501,7 @@ func TestDefaultImageSourceLoadsWhenManifestPresentAndFallsBackWhenAbsent(t *tes
 		// Source is intentionally left empty ("") to exercise the default path.
 		u := newUpgrader(t, Config{
 			Image: &ImageConfig{
-				Repository:   "ghcr.io/bwsalmon/grain/grain",
+				Repository:   "docker.io/grainai/grain",
 				RefFile:      refFile,
 				PullCmd:      []string{"sh", "-c", `echo "$1" >> ` + pulledFile + `; exit 1`, "sh"},
 				LoadCmd:      dk.loadCmd(map[string][2]string{testCommit1: {daemonRef, testDaemonID1}}),
@@ -530,7 +534,7 @@ func TestDefaultImageSourceLoadsWhenManifestPresentAndFallsBackWhenAbsent(t *tes
 		if _, err := os.Stat(pulledFile); !os.IsNotExist(err) {
 			t.Errorf("registry PullCmd was called when release had images.json")
 		}
-		if got := readFile(t, refFile); got != "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:main\n" {
+		if got := readFile(t, refFile); got != "GRAIN_IMAGE=docker.io/grainai/grain:main\n" {
 			t.Errorf("RefFile = %q", got)
 		}
 		if ch := ChannelForRef(strings.TrimPrefix(strings.TrimSpace(readFile(t, refFile)), "GRAIN_IMAGE=")); ch != "main" {
@@ -553,10 +557,10 @@ func TestDefaultImageSourceLoadsWhenManifestPresentAndFallsBackWhenAbsent(t *tes
 
 		u := newUpgrader(t, Config{
 			Image: &ImageConfig{
-				Repository: "ghcr.io/bwsalmon/grain/grain",
+				Repository: "docker.io/grainai/grain",
 				RefFile:    refFile,
 				PullCmd:    []string{"sh", "-c", `printf '%s\n' "$1" >> ` + pulledFile, "sh"},
-				DigestCmd:  []string{"echo", "ghcr.io/bwsalmon/grain/grain@" + testDigest},
+				DigestCmd:  []string{"echo", "docker.io/grainai/grain@" + testDigest},
 				RunCmd:     []string{"echo", "7"},
 				RemoveCmd:  []string{"true"},
 				ListCmd:    []string{"true"},
@@ -575,15 +579,15 @@ func TestDefaultImageSourceLoadsWhenManifestPresentAndFallsBackWhenAbsent(t *tes
 		if status.Source != string(ImageSourceRegistry) {
 			t.Errorf("status.Source = %q, want %q", status.Source, ImageSourceRegistry)
 		}
-		wantNote := "release has no image assets; pulled from ghcr.io/bwsalmon/grain/grain"
+		wantNote := "release has no image assets; pulled from docker.io/grainai/grain"
 		if status.FallbackNote != wantNote {
 			t.Errorf("status.FallbackNote = %q, want %q", status.FallbackNote, wantNote)
 		}
 		if !strings.Contains(status.Detail, wantNote) {
 			t.Errorf("status.Detail = %q, want it to contain %q", status.Detail, wantNote)
 		}
-		if got := strings.TrimSpace(readFile(t, pulledFile)); got != "ghcr.io/bwsalmon/grain/grain:v3.1.0" {
-			t.Errorf("pulled = %q, want ghcr.io/bwsalmon/grain/grain:v3.1.0", got)
+		if got := strings.TrimSpace(readFile(t, pulledFile)); got != "docker.io/grainai/grain:v3.1.0" {
+			t.Errorf("pulled = %q, want docker.io/grainai/grain:v3.1.0", got)
 		}
 	})
 
@@ -594,10 +598,10 @@ func TestDefaultImageSourceLoadsWhenManifestPresentAndFallsBackWhenAbsent(t *tes
 
 		u := newUpgrader(t, Config{
 			Image: &ImageConfig{
-				Repository: "ghcr.io/bwsalmon/grain/grain",
+				Repository: "docker.io/grainai/grain",
 				RefFile:    refFile,
 				PullCmd:    []string{"true"},
-				DigestCmd:  []string{"echo", "ghcr.io/bwsalmon/grain/grain@" + testDigest},
+				DigestCmd:  []string{"echo", "docker.io/grainai/grain@" + testDigest},
 				RunCmd:     []string{"echo", "7"},
 				RemoveCmd:  []string{"true"},
 				ListCmd:    []string{"true"},
@@ -616,7 +620,7 @@ func TestDefaultImageSourceLoadsWhenManifestPresentAndFallsBackWhenAbsent(t *tes
 		if status.Source != string(ImageSourceRegistry) {
 			t.Errorf("status.Source = %q, want registry", status.Source)
 		}
-		wantNote := "release has no image assets; pulled from ghcr.io/bwsalmon/grain/grain"
+		wantNote := "release has no image assets; pulled from docker.io/grainai/grain"
 		if !strings.Contains(status.Detail, wantNote) || status.FallbackNote != wantNote {
 			t.Errorf("detail=%q fallbackNote=%q, want %q", status.Detail, status.FallbackNote, wantNote)
 		}
@@ -640,10 +644,10 @@ func TestDefaultImageSourceLoadsWhenManifestPresentAndFallsBackWhenAbsent(t *tes
 			dir := t.TempDir()
 			pulledFile := filepath.Join(dir, "pulled")
 			img := &ImageConfig{
-				Repository: "ghcr.io/bwsalmon/grain/grain",
+				Repository: "docker.io/grainai/grain",
 				RefFile:    filepath.Join(dir, "image.env"),
 				PullCmd:    []string{"sh", "-c", `printf '%s\n' "$1" >> ` + pulledFile, "sh"},
-				DigestCmd:  []string{"echo", "ghcr.io/bwsalmon/grain/grain@" + testDigest},
+				DigestCmd:  []string{"echo", "docker.io/grainai/grain@" + testDigest},
 				RunCmd:     []string{"echo", "7"},
 				RemoveCmd:  []string{"true"},
 				ListCmd:    []string{"true"},
@@ -677,7 +681,7 @@ func TestDefaultImageSourceLoadsWhenManifestPresentAndFallsBackWhenAbsent(t *tes
 		dir := t.TempDir()
 		u := newUpgrader(t, Config{
 			Image: &ImageConfig{
-				Repository: "ghcr.io/bwsalmon/grain/grain",
+				Repository: "docker.io/grainai/grain",
 				Source:     ImageSourceReleaseAssets,
 				RefFile:    filepath.Join(dir, "image.env"),
 				PullCmd:    []string{"true"},
@@ -698,11 +702,11 @@ func TestDefaultImageSourceLoadsWhenManifestPresentAndFallsBackWhenAbsent(t *tes
 		dir := t.TempDir()
 		u := newUpgrader(t, Config{
 			Image: &ImageConfig{
-				Repository: "ghcr.io/bwsalmon/grain/grain",
+				Repository: "docker.io/grainai/grain",
 				Source:     ImageSourceRegistry,
 				RefFile:    filepath.Join(dir, "image.env"),
 				PullCmd:    []string{"true"},
-				DigestCmd:  []string{"echo", "ghcr.io/bwsalmon/grain/grain@" + testDigest},
+				DigestCmd:  []string{"echo", "docker.io/grainai/grain@" + testDigest},
 				RunCmd:     []string{"echo", "7"},
 				RemoveCmd:  []string{"true"},
 				ListCmd:    []string{"true"},
@@ -818,20 +822,20 @@ func TestReleaseManifestAndIntegrityChecksRefuseTamperedOrMissingAssets(t *testi
 
 	t.Run("tarball sha256 mismatch refuses cutover and never falls back to registry", func(t *testing.T) {
 		forge := newFakeForgeServer(t, "ai-on-gke", "grain")
-		addV1Release(forge, "channel-main", "github.com/ai-on-gke/grain", testCommit1, "sha-111111111111", "ghcr.io/bwsalmon/grain/grain:sha-111111111111", testDaemonID1, false)
+		addV1Release(forge, "channel-main", "github.com/ai-on-gke/grain", testCommit1, "sha-111111111111", "docker.io/grainai/grain:sha-111111111111", testDaemonID1, false)
 		// Corrupt the tarball bytes while leaving images.json and .sha256 intact.
 		forge.releases["channel-main"].assets["grain-edition-image.tar.gz"] = []byte("corrupted-tarball-bytes")
 
 		dk := newFakeDockerEnv(t)
 		dir := t.TempDir()
 		refFile := filepath.Join(dir, "image.env")
-		_ = os.WriteFile(refFile, []byte("GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:previous-good\n"), 0o644)
+		_ = os.WriteFile(refFile, []byte("GRAIN_IMAGE=docker.io/grainai/grain:previous-good\n"), 0o644)
 
 		// Even on default Source ("") where missing-manifest fallback is enabled,
 		// a SHA-256 mismatch must FAIL rather than falling back to registry.
 		u := newUpgrader(t, Config{
 			Image: &ImageConfig{
-				Repository:   "ghcr.io/bwsalmon/grain/grain",
+				Repository:   "docker.io/grainai/grain",
 				RefFile:      refFile,
 				PullCmd:      []string{"true"},
 				LoadCmd:      dk.loadCmd(nil),
@@ -849,7 +853,7 @@ func TestReleaseManifestAndIntegrityChecksRefuseTamperedOrMissingAssets(t *testi
 		if status.Phase != PhaseFailed || !strings.Contains(status.Detail, "sha256 mismatch") {
 			t.Fatalf("expected sha256 mismatch failure, got %+v", status)
 		}
-		if got := readFile(t, refFile); got != "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:previous-good\n" {
+		if got := readFile(t, refFile); got != "GRAIN_IMAGE=docker.io/grainai/grain:previous-good\n" {
 			t.Errorf("RefFile modified on failed checksum: %q", got)
 		}
 	})

@@ -170,6 +170,9 @@ ARGUMENTS & FLAGS:
   --capability <cap>           Request a capability (repeatable). Naming a capability your own task
                                does not hold always files the proposal unapproved.
   --read <owner/name>          Extra repository this task may read (repeatable).
+  --design <[owner/name:]path[@rev]>
+                               Committed-context spec path (repeatable; 'designs' in propose_task).
+                               Omitted, the proposal inherits your task's committed context.
   --write <owner/name[:base]>  Extra repository this task may push to (repeatable).
   --custom-field <k=v>         Deployment custom field value (repeatable).
   --review-template-id <id>    Pre-merge code review template ID.

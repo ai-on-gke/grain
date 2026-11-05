@@ -479,7 +479,7 @@ func (u *Upgrader) LatestRelease(ctx context.Context) (string, error) {
 func (u *Upgrader) registryRepository() string {
 	switch u.Mode() {
 	case ModeKube:
-		return u.cfg.Kube.Repository
+		return u.EffectiveKubeRepository()
 	case ModeImage:
 		return u.EffectiveRepository()
 	}
@@ -619,7 +619,7 @@ func releasedVersions(tags []string, edition ...string) []string {
 // registryClient is what ListRegistryTags talks to the registry with.
 var registryClient = &http.Client{Timeout: 15 * time.Second}
 
-// ListRegistryTags lists repository's tags ("ghcr.io/bwsalmon/grain/grain")
+// ListRegistryTags lists repository's tags ("docker.io/grainai/grain")
 // through the registry's own v2 API, anonymously: a public package
 // answers a pull-scoped token to anybody, which is all a tag list needs,
 // and the pull credentials scripts/setup.sh gives docker are docker's,
@@ -675,9 +675,16 @@ func ListRegistryTags(ctx context.Context, repository string) ([]string, error) 
 func registryLocation(repository string) (host, name string) {
 	host, name, ok := strings.Cut(repository, "/")
 	if !ok || !strings.ContainsAny(host, ".:") && host != "localhost" {
-		// A Docker Hub short name ("library/grain", "grain"): its
+		// A Docker Hub short name ("grainai/grain", "grain"): its
 		// registry host is not in the name.
 		host, name = "registry-1.docker.io", repository
+		if !strings.Contains(name, "/") {
+			name = "library/" + name
+		}
+		return host, name
+	}
+	if host == "docker.io" || host == "index.docker.io" || host == "registry-1.docker.io" {
+		host = "registry-1.docker.io"
 		if !strings.Contains(name, "/") {
 			name = "library/" + name
 		}

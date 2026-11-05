@@ -63,6 +63,7 @@ import StateDot from "./StateDot.jsx";
 import TaskChat from "./TaskChat.jsx";
 import Actions from "./detail/Actions.jsx";
 import CapabilityToggles from "./detail/CapabilityToggles.jsx";
+import CommittedContext from "./detail/CommittedContext.jsx";
 import CustomFieldsSection from "./detail/CustomFieldsSection.jsx";
 import Declared from "./detail/Declared.jsx";
 import Dependencies from "./detail/Dependencies.jsx";
@@ -912,6 +913,7 @@ export default function DetailOverlay({
             act={act}
             showError={showError}
           />
+          <CommittedContext t={t} config={config} />
           <Declared t={t} config={config} act={act} />
           {(t.interactive || t.consoleSession) && (
             <fieldset>

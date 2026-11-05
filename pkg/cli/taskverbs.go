@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// taskaction.go holds the single-task lifecycle verbs (close, reopen, retry,
-// retry-merge, force-merge, run-now) split from taskcmd.go.
 package cli
 
 import (

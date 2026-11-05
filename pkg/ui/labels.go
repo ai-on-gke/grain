@@ -397,6 +397,9 @@ type Config struct {
 	// GitHub is asked -- and the config repository, which GitHub has
 	// never heard of, answers that its branches cannot be listed here.
 	RepoBranches RepoBranchSource
+	// RepoRevs resolves committed-context git refs (`[owner/name:]path[@rev]`)
+	// to full commit SHAs when tasks are filed or updated.
+	RepoRevs RepoRevResolver
 	// GitHubPullRequestFiles is that same client asked a second question:
 	// which files an open pull request touches. It is what lets a shared
 	// CI fault name the change that already fixes it (cifault.go), and

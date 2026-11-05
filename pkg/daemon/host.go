@@ -30,6 +30,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/hosttop"
 	"github.com/ai-on-gke/grain/pkg/k8s"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/sysstat"
 	"github.com/ai-on-gke/grain/pkg/systemlog"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -165,9 +166,9 @@ func LogSources(cfg Config) map[string]ui.LogSource {
 // The Logs tab serves this same host's journal to a browser, so the
 // same refusal applies when the list cannot be built: an error, never
 // the lines as they are.
-func logRedactor(secretsDir string) func() (*grainlog.Redactor, error) {
+func logRedactor(secretsDir string, secretStore *secrets.Store) func() (*grainlog.Redactor, error) {
 	return func() (*grainlog.Redactor, error) {
-		if r := grainLogRedactor(secretsDir); r != nil {
+		if r := grainLogRedactorFor(secretsDir, secretStore); r != nil {
 			return r, nil
 		}
 		return nil, errors.New("this host's secrets could not be read (see the daemon's own log)")
