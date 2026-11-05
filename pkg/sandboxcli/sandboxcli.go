@@ -188,6 +188,9 @@ var sandboxCommands = map[string][]string{
 	"issue": {"list", "read"},
 	"db":    {"query"},
 	"cap":   nil,
+	// grain screenshot runs locally, with node and Playwright: its flags
+	// are screenshot.mjs's own.
+	"screenshot": nil,
 }
 
 // sandboxCommandFlags are the flags each command reads; parseSandboxArgs
@@ -390,6 +393,9 @@ func (c *sandboxCLI) run(args []string) error {
 		// grain cap <server> <tool>'s flags are the tool's own, and its
 		// --help the tool's.
 		return c.capCommand(rest)
+	}
+	if cmd == "screenshot" {
+		return c.screenshotCommand(rest)
 	}
 	if subs := sandboxCommands[cmd]; subs != nil {
 		if len(rest) == 0 || isHelpFlag(rest[0]) {
