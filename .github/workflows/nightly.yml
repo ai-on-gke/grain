@@ -895,6 +895,12 @@ jobs:
           git config --global user.email "grain-ci@example.com"
           ./scripts/warm-npm-cache.sh ui
 
+      - name: Configure authenticated Docker Hub pulls
+        env:
+          DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+        run: ./scripts/configure-dockerhub-auth.sh --pull-only
+
       - name: Assemble the image to install
         run: ./scripts/installer-test-image.sh grain-installer:test
 
@@ -1177,6 +1183,12 @@ jobs:
           free -m
           df -h /
 
+      - name: Configure authenticated Docker Hub pulls
+        env:
+          DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+        run: ./scripts/configure-dockerhub-auth.sh --pull-only
+
       - name: Resolve the sandbox guest
         timeout-minutes: 50
         env:
@@ -1304,6 +1316,12 @@ jobs:
           free -m
           df -h /
 
+      - name: Configure authenticated Docker Hub pulls
+        env:
+          DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+        run: ./scripts/configure-dockerhub-auth.sh --pull-only
+
       - name: Resolve the sandbox guest
         timeout-minutes: 50
         env:
@@ -1408,14 +1426,23 @@ jobs:
       # (latest -> RC) and from the oldest supported release of its major
       # (floor -> RC), both pulled from the published images. Each has to
       # PASS; a skip means it proved nothing and fails the job.
+      - name: Configure authenticated Docker Hub pulls
+        env:
+          DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+        run: ./scripts/configure-dockerhub-auth.sh --pull-only
+
       - name: Run upgrade tests
         env:
-          RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO || 'bwsalmon/grain' }}
+          PACKAGE_PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY }}
+          RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
         run: |
           set +e
-          export GRAIN_UPGRADE_RELEASE_IMAGE="ghcr.io/${RELEASE_IMAGE_REPO,,}/grain"
+          # shellcheck source=scripts/release-image-repos.sh
+          . ./scripts/release-image-repos.sh
+          export GRAIN_UPGRADE_RELEASE_IMAGE="$(release_image_repo_for daemon)"
           if [ "$REF_TYPE" = tag ]; then
             export GRAIN_UPGRADE_TARGET="$REF_NAME"
           fi
