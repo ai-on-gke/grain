@@ -1356,7 +1356,7 @@ The grain-side rules are specified in [`authentication.design.md`](authenticatio
 
 - **The `registry` verifier exposes both identities.** `VerifiedIdentity` gains `Via *DelegatingApp` (`Email`, `Name`, `Grant`, `Access`), set only from a well-formed one-level `act`. A malformed `act` gets `401` and never falls back to the access code (`{#AU-2}`). Malformed means a nested `act`, `act.kind` other than `service`, top-level `kind` other than `human`, or a missing `act.sub`.
 - **Admission checks the person, and requires the app to be allowed to delegate on this grain.**
-  - The person must pass `allowed_principal` exactly as a direct caller (`user:`, `group:`, `domain:`; `{#AU-6}`–`{#AU-9}`).
+  - The person must pass `allowed_principal` exactly as a direct caller (`user:` and `group:`, plus `domain:` under RBAC; `{#AU-6}`–`{#AU-9}`).
   - The app must match a **`delegate:<service-account-email>`** entry on the grain's allowlist. That is a new entry prefix, added only by a verified human admin or an access-code admin, with a required reason, and refused to every agent.
   - Without a matching `delegate:` entry, the request gets `403` and the refusal page *"planning-app is not allowed to act for people on this grain"*.
   - A `serviceAccount:` entry for the same account does **not** let it delegate, and a `delegate:` entry does not admit it as a plain caller.
