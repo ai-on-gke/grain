@@ -39,7 +39,7 @@ func probeImageUpgrader(t *testing.T, running, digest string, lookupErr error) (
 	}
 	var asked []string
 	u := newUpgrader(t, Config{
-		Image: &ImageConfig{Repository: "ghcr.io/bwsalmon/grain/grain", RefFile: refFile},
+		Image: &ImageConfig{Repository: "docker.io/grainai/grain", RefFile: refFile},
 		ManifestDigest: func(_ context.Context, ref string) (string, error) {
 			asked = append(asked, ref)
 			return digest, lookupErr
@@ -49,7 +49,7 @@ func probeImageUpgrader(t *testing.T, running, digest string, lookupErr error) (
 }
 
 func TestAlreadyRunningComparesTheImageDigestWithoutPulling(t *testing.T) {
-	const repo = "ghcr.io/bwsalmon/grain/grain"
+	const repo = "docker.io/grainai/grain"
 	for name, tc := range map[string]struct {
 		running, digest string
 		err             error
@@ -81,7 +81,7 @@ func TestAlreadyRunningComparesTheImageDigestWithoutPulling(t *testing.T) {
 }
 
 func TestAlreadyRunningRefusesABranchItWouldNotUpgradeOnto(t *testing.T) {
-	u, asked := probeImageUpgrader(t, "ghcr.io/bwsalmon/grain/grain:main@"+testDigest, testDigest, nil)
+	u, asked := probeImageUpgrader(t, "docker.io/grainai/grain:main@"+testDigest, testDigest, nil)
 	u.cfg.AllowedBranches = []string{"main"}
 	if got, err := u.AlreadyRunning(t.Context(), "grain/task-1"); err == nil || got {
 		t.Errorf("AlreadyRunning on a branch not allowed = %v, %v; want false and an error", got, err)
