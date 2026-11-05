@@ -158,7 +158,7 @@ type jobFingerprint struct {
 // image reference for job fingerprinting. When the reference is pinned by
 // digest ("repo:tag@sha256:..."), a tag before "@" is just a human-readable
 // label for the commit that stamped the reference
-// ("ghcr.io/bwsalmon/grain/guest:sha-dc5b5a1@sha256:...") while the digest
+// ("docker.io/grainai/sandbox:sha-dc5b5a1@sha256:...") while the digest
 // is the image's actual content. Dropping the tag when a digest is present
 // keeps the key identical across grain commits that reuse the same
 // content-addressed guest image.

@@ -157,7 +157,11 @@ func TestGuestImageRepoReadsThePublisherOffTheReference(t *testing.T) {
 		image string
 		want  string
 	}{
+		{"docker.io/grainai/sandbox:latest", "ai-on-gke/grain"},
+		{"docker.io/grainai/sandbox:sha-abc1234", "ai-on-gke/grain"},
+		{"grainai/sandbox:latest", "ai-on-gke/grain"},
 		{"ghcr.io/acme/widgets/guest:latest", "acme/widgets"},
+		{"ghcr.io/acme/widgets/sandbox:latest", "acme/widgets"},
 		{"ghcr.io/acme/widgets/guest:sha-abc1234", "acme/widgets"},
 		{"ghcr.io/acme/widgets/guest@sha256:" + zeros(64), "acme/widgets"},
 		{"ghcr.io/acme/widgets/guest", "acme/widgets"},

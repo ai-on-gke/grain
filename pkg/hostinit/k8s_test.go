@@ -253,8 +253,8 @@ func TestManifestK8sSandboxImageSkipsComments(t *testing.T) {
 func TestCheckK8sSandboxImageMatchesManifestRefusesADifferentTag(t *testing.T) {
 	t.Parallel()
 	k := K8sOptions{
-		SandboxImage: "ghcr.io/bwsalmon/grain/k8s-sandbox:latest",
-		Manifest:     writeTestManifest(t, "        - -k8s-sandbox-image=ghcr.io/bwsalmon/grain/k8s-sandbox:main\n"),
+		SandboxImage: "docker.io/grainai/sandbox-k8s:latest",
+		Manifest:     writeTestManifest(t, "        - -k8s-sandbox-image=docker.io/grainai/sandbox-k8s:main\n"),
 	}
 	var r Result
 	ok, _ := checkK8sSandboxImageMatchesManifest(k)(context.Background(), newFakeSystem(), &r)
@@ -262,7 +262,7 @@ func TestCheckK8sSandboxImageMatchesManifestRefusesADifferentTag(t *testing.T) {
 		t.Fatal("ok = true, want false")
 	}
 	s, _ := stepStatus(r, "sandbox image matches the manifest")
-	if s.Status != StepRefused || !strings.Contains(s.Detail, "k8s-sandbox:main") || !strings.Contains(s.Detail, "k8s-sandbox:latest") {
+	if s.Status != StepRefused || !strings.Contains(s.Detail, "sandbox-k8s:main") || !strings.Contains(s.Detail, "sandbox-k8s:latest") {
 		t.Fatalf("step = %+v, want StepRefused naming both tags", s)
 	}
 }
