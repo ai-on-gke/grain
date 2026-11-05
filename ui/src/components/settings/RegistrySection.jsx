@@ -176,7 +176,14 @@ export default function RegistrySection({ s }) {
           alignItems={{ xs: "flex-start", sm: "center" }}
           justifyContent="space-between"
         >
-          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+          <Stack
+            direction="row"
+            spacing={1}
+            alignItems="center"
+            flexWrap="wrap"
+            useFlexGap
+            sx={{ minWidth: 0 }}
+          >
             <Chip
               size="small"
               label={badge.label}
@@ -185,7 +192,11 @@ export default function RegistrySection({ s }) {
               data-testid="registry-state-chip"
             />
             {enabled && (
-              <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+              <Typography
+                variant="body2"
+                data-testid="registry-endpoint-label"
+                sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}
+              >
                 {reg.url} · {reg.entry}
               </Typography>
             )}

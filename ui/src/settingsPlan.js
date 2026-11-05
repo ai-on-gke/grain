@@ -139,6 +139,15 @@ const SETTING_LABELS = {
   autoUpgradeTime: "Automatic upgrade time of day",
   autoUpgradeOn: "Automatic upgrades",
   registry: "Registry",
+  registryUrl: "Registry URL",
+  registryEntry: "Entry name",
+  registryAuthMode: "Credential source",
+  registryHostKind: "Host kind",
+  registryOidcAudience: "OIDC audience",
+  registryDisplayName: "Display name",
+  registryPurpose: "Purpose",
+  registryExternalUrl: "External URL",
+  registryListed: "Listed in registry directory",
 };
 
 // settingLabel is what to call one setting, by its JSON name.
