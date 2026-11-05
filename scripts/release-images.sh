@@ -1417,14 +1417,49 @@ registry_digest() {
   registry_env docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}' 2>/dev/null
 }
 
+# Whether $1 (a repo@sha256:... reference) carries a signature made with
+# this job's own signing key: the public half is derived from the key
+# sign_image would sign with, so nothing else has to be configured.
+signed_with_our_key() {
+  local ref="$1" pub status=0
+  ensure_cosign || return 1
+  pub="$(mktemp)"
+  if ! COSIGN_PASSWORD="$(cat "$signing_password_file" 2>/dev/null || true)" \
+    cosign public-key --key "$signing_key" >"$pub" 2>/dev/null || [ ! -s "$pub" ]; then
+    rm -f "$pub"
+    return 1
+  fi
+  registry_env cosign verify --key "$pub" --insecure-ignore-tlog=true "$ref" >/dev/null 2>&1 || status=1
+  rm -f "$pub"
+  return "$status"
+}
+
 # Copy $1 (a tag) to $2 by digest, registry-side, and refuse a copy whose
 # digest differs from the source's: the copy has to be the image that was
 # tested, byte for byte, not a re-encoding of it.
+#
+# The source's tag is mutable and its registry is not this job's, so the
+# copy is signed with this job's key only when the source already carries
+# a signature made with that same key: re-signing would otherwise vouch,
+# with the key deployments verify upgrades against, for whatever the GHCR
+# tag names today. A source that does not verify is refused where
+# REQUIRE_IMAGE_SIGNING is set, and otherwise copied unsigned with a
+# warning -- as every image is published where no key is granted.
 copy_by_digest() {
-  local source="$1" target="$2" want got
+  local source="$1" target="$2" want got vouch=false
   if ! want="$(registry_digest "$source")" || [[ "$want" != sha256:* ]]; then
     echo "release-images.sh: could not read the digest of $source" >&2
     return 1
+  fi
+  if [ -r "$signing_key" ]; then
+    if signed_with_our_key "${source%:*}@$want"; then
+      vouch=true
+    elif [ "$require_signing" = true ]; then
+      echo "release-images.sh: ${source%:*}@$want ($source) carries no signature made with $signing_key, and REQUIRE_IMAGE_SIGNING is set, so it is not copied to $target" >&2
+      return 1
+    else
+      echo "release-images.sh: WARNING: ${source%:*}@$want ($source) carries no signature made with $signing_key, so $target is copied unsigned and a deployment verifying signatures will refuse it"
+    fi
   fi
   retag_image "${source%:*}@$want" "$target" || return 1
   got="$(registry_digest "$target" || true)"
@@ -1433,7 +1468,9 @@ copy_by_digest() {
     return 1
   fi
   echo "release-images.sh: copied $source to $target by digest ($want)"
-  sign_image "$target" "${target%:*}@$want"
+  if [ "$vouch" = true ] || [ ! -r "$signing_key" ]; then
+    sign_image "$target" "${target%:*}@$want"
+  fi
 }
 
 # A one-time bridge for releases cut before the switch to Docker Hub
@@ -1470,6 +1507,15 @@ adopt_legacy_ghcr_release() {
     read -r image tag legacy_tag <<< "$target"
     legacy="$(legacy_ghcr_image_repo "$root/$image")"
     [ -n "$legacy" ] || continue
+    # The grain image comes last and may be the stamped :vX.Y.Z itself,
+    # so it is copied only once both sandbox images promotion requires
+    # are here: otherwise publish_release refuses the release ("nothing
+    # was moved") with a :vX.Y.Z already written beside it.
+    if [ "$image" = grain ] &&
+        { ! image_exists "$root/sandbox:sha-$promoted_short" 2>/dev/null ||
+          ! image_exists "$root/sandbox-k8s:sha-$promoted_short" 2>/dev/null; }; then
+      continue
+    fi
     if image_exists "$root/$image:$tag" 2>/dev/null; then
       continue
     fi

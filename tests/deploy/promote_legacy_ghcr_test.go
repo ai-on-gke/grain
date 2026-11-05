@@ -159,3 +159,96 @@ func TestPromoteDryRunOfAPreDockerHubReleaseNamesTheCopy(t *testing.T) {
 	containsRun(t, out, "v1.5.0 predates the switch to Docker Hub (#739), so first copy by digest")
 	containsRun(t, out, "ghcr.io/bwsalmon/grain/{guest,k8s-sandbox,guest-base,k8s-sandbox-base}:sha-"+short)
 }
+
+// A pre-Docker-Hub release GHCR has only part of -- its stamped grain
+// image but not its sandbox images -- writes no :vX.Y.Z to Docker Hub:
+// promotion refuses it as having nothing to move, and must not leave a
+// release tag behind that says otherwise.
+func TestPromoteOfAPartialPreDockerHubReleaseCopiesNoReleaseTag(t *testing.T) {
+	remote, commits := preDockerHubReleaseRepo(t)
+	short := commits["released"][:7]
+	env := publishEnv(legacyAnswers(t, commits["released"], true, "sha256:1234"))
+	env["DOCKER_STUB_MISSING"] = "ghcr.io/bwsalmon/grain/guest:sha-" + short
+	out, docker, err := promoteRun(t, remote, []string{"promote"}, env)
+	if err == nil {
+		t.Fatalf("promote succeeded with GHCR's sandbox image missing:\n%s", out)
+	}
+	containsRun(t, out, "never published docker.io/grainai/sandbox:sha-"+short)
+	if strings.Contains(docker, "--tag docker.io/grainai/grain:") {
+		t.Errorf("promote copied the grain image although the release could not be promoted:\n%s", docker)
+	}
+}
+
+// legacySigningEnv is publishEnv with a signing key in place and a cosign
+// stub that logs what it is asked and, where unsigned, finds no
+// signature on the GHCR source.
+func legacySigningEnv(t *testing.T, answers string, unsigned bool) (map[string]string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "cosign.log")
+	verify := "exit 0"
+	if unsigned {
+		verify = "exit 1"
+	}
+	stub := "#!/bin/sh\necho \"$*\" >> " + log + "\ncase \"$1\" in\n" +
+		"  public-key) echo '-----BEGIN PUBLIC KEY-----'; echo 'stub'; echo '-----END PUBLIC KEY-----' ;;\n" +
+		"  verify) " + verify + " ;;\nesac\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "cosign"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	key := filepath.Join(dir, "image-signing-key")
+	if err := os.WriteFile(key, []byte("stub key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := publishEnv(answers)
+	env["IMAGE_SIGNING_KEY"] = key
+	env["PATH"] = dir + ":" + realToolPath(t)
+	return env, log
+}
+
+// With a signing key, a GHCR image is signed on Docker Hub only after its
+// GHCR digest verified against that same key: the copy is not vouched
+// for on the strength of a mutable tag in another registry.
+func TestPromoteOfAPreDockerHubReleaseSignsOnlyWhatVerified(t *testing.T) {
+	remote, commits := preDockerHubReleaseRepo(t)
+	short := commits["released"][:7]
+	env, log := legacySigningEnv(t, legacyAnswers(t, commits["released"], true, "sha256:1234"), false)
+	out, docker, err := promoteRun(t, remote, []string{"promote"}, env)
+	if err != nil {
+		t.Fatalf("promote failed: %v\n%s\ndocker was asked:\n%s", err, out, docker)
+	}
+	asked, _ := os.ReadFile(log)
+	containsRun(t, string(asked), "verify --key ")
+	containsRun(t, string(asked), "--insecure-ignore-tlog=true ghcr.io/bwsalmon/grain/guest@sha256:1234")
+	containsRun(t, string(asked), "docker.io/grainai/sandbox@sha256:1234")
+	containsRun(t, out, "copied ghcr.io/bwsalmon/grain/guest:sha-"+short+" to docker.io/grainai/sandbox:sha-"+short)
+}
+
+// A GHCR image that carries no signature made with the job's key is
+// copied unsigned, with a warning, and never signed with that key -- and
+// with REQUIRE_IMAGE_SIGNING it is not copied at all.
+func TestPromoteOfAPreDockerHubReleaseDoesNotSignAnUnverifiedSource(t *testing.T) {
+	remote, commits := preDockerHubReleaseRepo(t)
+	short := commits["released"][:7]
+
+	env, log := legacySigningEnv(t, legacyAnswers(t, commits["released"], true, "sha256:1234"), true)
+	out, docker, err := promoteRun(t, remote, []string{"promote"}, env)
+	asked, _ := os.ReadFile(log)
+	if strings.Contains(string(asked), "sign --yes --key "+env["IMAGE_SIGNING_KEY"]+" --tlog-upload=false docker.io/grainai/sandbox@") {
+		t.Errorf("promote signed a copy whose source did not verify:\n%s", asked)
+	}
+	containsRun(t, out, "carries no signature made with")
+	containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/sandbox:sha-"+short+" ghcr.io/bwsalmon/grain/guest@sha256:1234")
+	_ = err
+
+	env, _ = legacySigningEnv(t, legacyAnswers(t, commits["released"], true, "sha256:1234"), true)
+	env["REQUIRE_IMAGE_SIGNING"] = "true"
+	out, docker, err = promoteRun(t, remote, []string{"promote"}, env)
+	if err == nil {
+		t.Fatalf("promote succeeded with REQUIRE_IMAGE_SIGNING and an unsigned source:\n%s", out)
+	}
+	containsRun(t, out, "REQUIRE_IMAGE_SIGNING is set, so it is not copied")
+	if strings.Contains(docker, "imagetools create --tag docker.io/grainai/") {
+		t.Errorf("promote copied an unverified source although signing is required:\n%s", docker)
+	}
+}
