@@ -426,7 +426,7 @@ func (gr *figmaMCPGrant) buildToolset(serverName, token string) (*protocol.Capab
 
 	if err := cs.HandleTool(
 		"export_images",
-		"Render one or more Figma frames/nodes as PNG, SVG, JPG, or PDF and return their base64-encoded image bytes so you can save and compare them against rendered UI screenshots.",
+		"Render one or more Figma frames/nodes as PNG, SVG, JPG, or PDF to compare against rendered UI screenshots. PNG and JPG renders come back as images you can look at; SVG and PDF as base64 bytes. Each also carries Figma's download URL, which a sandbox with network can fetch to a file (e.g. for grain screenshot --reference).",
 		map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,
@@ -650,13 +650,25 @@ func (gr *figmaMCPGrant) handleExportImages(ctx context.Context, args map[string
 			finish(dlErr)
 			return nil, fmt.Errorf("node %s: %w", id, dlErr)
 		}
-		exported = append(exported, map[string]any{
-			"node_id":        id,
-			"format":         format,
-			"content_type":   ct,
-			"byte_length":    len(data),
-			"content_base64": base64.StdEncoding.EncodeToString(data),
-		})
+		img := map[string]any{
+			"node_id":      id,
+			"format":       format,
+			"content_type": ct,
+			"byte_length":  len(data),
+			// Figma's own rendered-image URL (it expires after a while):
+			// a sandbox with network can download it to a file, e.g. for
+			// grain screenshot --reference.
+			"url": imgURL,
+		}
+		// A raster render goes back as an MCP image the agent can look at,
+		// not as base64 text in its context. Anything else -- SVG, PDF --
+		// or a caller that takes no images carries its bytes in the JSON.
+		if (format == "png" || format == "jpg") && protocol.ToolImage(ctx, ct, data) {
+			img["image_content"] = true
+		} else {
+			img["content_base64"] = base64.StdEncoding.EncodeToString(data)
+		}
+		exported = append(exported, img)
 	}
 	finish(nil)
 	return json.Marshal(map[string]any{

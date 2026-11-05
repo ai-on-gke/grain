@@ -950,7 +950,7 @@ func (f *figmaServer) mintToken(ctx context.Context, attemptID string, _ time.Ti
 			{Path: FigmaTokenPath, Content: tok + "\n", Mode: "0600"},
 		},
 		PromptSection: fmt.Sprintf(
-			"A short-lived Figma OAuth 2.0 access token for account %q (~%ds TTL) is placed at %s. Pass it as `Authorization: Bearer [redacted: authorization] authorization] %s)` to Figma REST or MCP tools; never commit or log its contents.",
+			"A short-lived Figma OAuth 2.0 access token for account %q (~%ds TTL) is placed at %s. Pass it as `Authorization: Bearer $(cat %s)` to Figma REST or MCP tools; never commit or log its contents.",
 			accName, expiresIn, FigmaTokenPath, FigmaTokenPath,
 		),
 	}, nil

@@ -142,7 +142,7 @@ func TestFigmaCapabilityServerMCPAndTokenGeneration(t *testing.T) {
 				ExpiresIn:   1800,
 			})
 		case "/v1/me":
-			if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer [redacted: bearer token]") && r.Header.Get("X-Figma-Token") != "figd_pat_1" {
+			if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer figu_minted_") && r.Header.Get("X-Figma-Token") != "figd_pat_1" {
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}
@@ -300,6 +300,12 @@ func TestFigmaCapabilityServerMCPAndTokenGeneration(t *testing.T) {
 	}
 	dpURL := "http://" + srv.addr + mcpResp.MCPEndpoint
 
+	// lastImages are the image content blocks of callMCP's last answer.
+	type mcpImage struct {
+		Data     string `json:"data"`
+		MIMEType string `json:"mimeType"`
+	}
+	var lastImages []mcpImage
 	callMCP := func(tool string, args map[string]any) (string, bool) {
 		t.Helper()
 		payload, _ := json.Marshal(map[string]any{
@@ -324,12 +330,21 @@ func TestFigmaCapabilityServerMCPAndTokenGeneration(t *testing.T) {
 			Result struct {
 				IsError bool `json:"isError"`
 				Content []struct {
-					Text string `json:"text"`
+					Type     string `json:"type"`
+					Text     string `json:"text"`
+					Data     string `json:"data"`
+					MIMEType string `json:"mimeType"`
 				} `json:"content"`
 			} `json:"result"`
 		}
 		if err := json.Unmarshal(raw, &rpc); err != nil {
 			t.Fatalf("unmarshal MCP response %s: %v", string(raw), err)
+		}
+		lastImages = nil
+		for _, c := range rpc.Result.Content {
+			if c.Type == "image" {
+				lastImages = append(lastImages, mcpImage{Data: c.Data, MIMEType: c.MIMEType})
+			}
 		}
 		var text string
 		if len(rpc.Result.Content) > 0 {
@@ -360,8 +375,22 @@ func TestFigmaCapabilityServerMCPAndTokenGeneration(t *testing.T) {
 	if imageSawAuth.Load() {
 		t.Fatal("export_images leaked Figma auth header to CDN download URL")
 	}
-	if !strings.Contains(imgJSON, base64.StdEncoding.EncodeToString(pngBytes)) {
-		t.Fatalf("export_images did not return base64 PNG bytes: %s", imgJSON)
+	// The render comes back as an MCP image block the agent can look at,
+	// not as base64 text in the JSON.
+	if len(lastImages) != 1 || lastImages[0].MIMEType != "image/png" || lastImages[0].Data != base64.StdEncoding.EncodeToString(pngBytes) {
+		t.Fatalf("export_images did not return the PNG as an image content block: %+v", lastImages)
+	}
+	if strings.Contains(imgJSON, "content_base64") || !strings.Contains(imgJSON, `"image_content":true`) || !strings.Contains(imgJSON, `"url":"http`) {
+		t.Fatalf("export_images JSON should point at the image block and Figma's URL, not carry base64: %s", imgJSON)
+	}
+	// SVG cannot be an image block, so its bytes ride in the JSON.
+	svgJSON, isErr := callMCP("export_images", map[string]any{
+		"file_key": "AllowedKey1",
+		"node_id":  "12-34",
+		"format":   "svg",
+	})
+	if isErr || !strings.Contains(svgJSON, "content_base64") || len(lastImages) != 0 {
+		t.Fatalf("export_images svg: isErr=%v images=%d %s", isErr, len(lastImages), svgJSON)
 	}
 
 	// 3. Disallowed file_key is refused by the grant's allowlist.
