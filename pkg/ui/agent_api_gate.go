@@ -235,7 +235,8 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 					return
 				}
 				agent := model.Principal{Kind: model.PrincipalAgent, ID: call.principalID(), Source: call.source()}
-				r = r.WithContext(withAgentCall(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call))
+				callCtx := withAgentCall(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call)
+				r = r.WithContext(model.WithEventActor(callCtx, RequestActor(callCtx)))
 				s.serveAgentCall(w, r, next, call)
 				return
 			}
@@ -252,7 +253,8 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 			return
 		}
 		agent := model.Principal{Kind: model.PrincipalAgent, ID: taskID, Source: call.source()}
-		r = r.WithContext(withAgentCall(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call))
+		callCtx := withAgentCall(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call)
+		r = r.WithContext(model.WithEventActor(callCtx, RequestActor(callCtx)))
 		s.serveAgentCall(w, r, next, call)
 	}
 }
@@ -340,9 +342,10 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	if err != nil {
 		return call, err
 	}
-	if _, fs := fsRoutes[pattern]; fs && call.repo == "" && set.Has(scope) {
-		// A namespace read naming no repository is narrowed to the
-		// ones the grant reaches by fsScope, not refused for naming none.
+	if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events") && call.repo == "" && set.Has(scope) {
+		// A namespace read or event stream naming no repository is narrowed
+		// to the ones the grant reaches by fsScope / eventsReadable, not
+		// refused for naming none.
 		capAllowed = true
 	}
 	if ciCap && !capAllowed && !set.Allows(scope, call.repo) && call.repo != "" && agentMayRead(acting, call.repo) {
@@ -1654,11 +1657,12 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	}
 	call.grants = set
 	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
-	// GET /api/inbox without ?repo= answers only the repositories the
-	// token reads (Server.inboxReadable), so a token held to some of
-	// them is let through to it rather than refused for naming none.
+	// GET /api/inbox and GET /api/events without ?repo= answer only the
+	// repositories the token reads (Server.inboxReadable,
+	// Server.eventsReadable), so a token held to some of them is let
+	// through rather than refused for naming none.
 	fsAllowed := fsMergeQueueByCI(set, pattern, r) ||
-		(pattern == "GET /api/inbox" && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "")
+		((pattern == "GET /api/inbox" || pattern == "GET /api/events") && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "")
 	if !set.Has(scope) && !adminPatch && !fsAllowed {
 		return call, fmt.Errorf("%s holds no api grant for scope %s, which %s needs", principal, scope, pattern)
 	}

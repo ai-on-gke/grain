@@ -565,6 +565,14 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM `task` WHERE `id` = ?", t.ID).Scan(&existing); err != nil {
 		return err
 	}
+	var prevState State
+	if existing > 0 {
+		st, _, err := taskStateTx(ctx, tx, t.ID)
+		if err != nil {
+			return err
+		}
+		prevState = st
+	}
 	if t.Branch == "" {
 		branch, err := branchForTask(ctx, tx, t.ID, t.Title)
 		if err != nil {
@@ -729,7 +737,22 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 			}
 		}
 	}
-	return nil
+	var eventAt time.Time
+	if t.CreatedAt != nil {
+		eventAt = *t.CreatedAt
+	}
+	eventActor := eventActorOr(ctx, t.Origin.Attribution)
+	if existing > 0 {
+		eventAt = time.Now()
+		if a, ok := EventActorFromContext(ctx); ok {
+			eventActor = a
+		} else if prevState == StateProposed && t.Approval != nil {
+			eventActor = *t.Approval
+		} else {
+			eventActor = eventActorOrGrain(ctx)
+		}
+	}
+	return recordTaskStateChangeTx(ctx, tx, t.ID, prevState, eventAt, eventActor)
 }
 
 // invalidateStaleGrantWait drops t's admission wait when this write
@@ -967,6 +990,9 @@ func addComment(ctx context.Context, tx *sql.Tx, c Comment) (int64, error) {
 	id, err := res.LastInsertId()
 	if err != nil {
 		return 0, fmt.Errorf("reading the new comment's id on task %s: %w", c.TaskID, err)
+	}
+	if err := recordCommentEventTx(ctx, tx, c, id); err != nil {
+		return 0, err
 	}
 	return id, nil
 }
@@ -1825,13 +1851,22 @@ func (s *Store) Approve(ctx context.Context, taskID string, a Attribution, appro
 }
 
 func approve(ctx context.Context, tx *sql.Tx, taskID string, a Attribution, approvedAt time.Time) error {
-	_, err := tx.ExecContext(ctx,
+	prevState, ok, err := taskStateTx(ctx, tx, taskID)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
 		"UPDATE `task` SET `approval_actor_kind` = ?, `approval_actor_id` = ?, "+
 			"`approval_behalf_kind` = ?, `approval_behalf_id` = ?, `approved_at` = ?, "+
 			"`approval_actor_source` = ?, `approval_behalf_source` = ? WHERE `id` = ?",
 		string(a.Actor.Kind), a.Actor.ID, kindOf(a.OnBehalfOf), idOf(a.OnBehalfOf), approvedAt.UTC(),
-		string(a.Actor.Source), sourceOf(a.OnBehalfOf), taskID)
-	return err
+		string(a.Actor.Source), sourceOf(a.OnBehalfOf), taskID); err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	return recordTaskStateChangeTx(ctx, tx, taskID, prevState, approvedAt, eventActorOr(ctx, a))
 }
 
 // WithdrawApproval is approve's exact inverse, down to the columns it
@@ -1848,12 +1883,21 @@ func approve(ctx context.Context, tx *sql.Tx, taskID string, a Attribution, appr
 // task as having queued at an instant its approval no longer claims.
 func (s *Store) WithdrawApproval(ctx context.Context, taskID string) error {
 	return s.write(ctx, "withdraw approval from task "+taskID, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx,
+		prevState, ok, err := taskStateTx(ctx, tx, taskID)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
 			"UPDATE `task` SET `approval_actor_kind` = NULL, `approval_actor_id` = NULL, "+
 				"`approval_behalf_kind` = NULL, `approval_behalf_id` = NULL, `approved_at` = NULL, "+
 				"`approval_actor_source` = '', `approval_behalf_source` = '' "+
-				"WHERE `id` = ?", taskID)
-		return err
+				"WHERE `id` = ?", taskID); err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		return recordTaskStateChangeTx(ctx, tx, taskID, prevState, time.Now(), eventActorOrGrain(ctx))
 	})
 }
 
@@ -1898,13 +1942,26 @@ func (s *Store) WithdrawApproval(ctx context.Context, taskID string) error {
 // place on the timeline for it.
 func (s *Store) SetDeferred(ctx context.Context, taskID string, deferredAt, deferredUntil *time.Time, now time.Time) error {
 	return s.write(ctx, "defer task "+taskID, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx,
+		prevState, ok, err := taskStateTx(ctx, tx, taskID)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
 			"UPDATE `task` SET "+
 				"`undeferred_at` = CASE WHEN ? IS NULL AND `deferred_at` IS NOT NULL THEN ? "+
 				"ELSE `undeferred_at` END, "+
 				"`deferred_at` = ?, `deferred_until` = ? WHERE `id` = ?",
-			timeOf(deferredAt), now.UTC(), timeOf(deferredAt), timeOf(deferredUntil), taskID)
-		return err
+			timeOf(deferredAt), now.UTC(), timeOf(deferredAt), timeOf(deferredUntil), taskID); err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		at := now
+		if deferredAt != nil && !deferredAt.IsZero() {
+			at = *deferredAt
+		}
+		return recordTaskStateChangeTx(ctx, tx, taskID, prevState, at, eventActorOrGrain(ctx))
 	})
 }
 
@@ -2000,6 +2057,14 @@ func observe(ctx context.Context, tx *sql.Tx, o Observation) error {
 		o.LastFailedAt = lastFailed
 		o.LastSucceededAt = lastSucceeded
 	}
+	prevState, hasPrev, err := taskStateTx(ctx, tx, o.TaskID)
+	if err != nil {
+		return err
+	}
+	prevObs, err := getObservation(ctx, tx, o.TaskID)
+	if err != nil {
+		return err
+	}
 	_, err = tx.ExecContext(ctx,
 		"REPLACE INTO `task_observation` (`task_id`,`closed_at`,`completed_at`,"+
 			"`pending_question_comment_id`,`baseline_comment_id`,`pending_secret`,"+
@@ -2041,7 +2106,10 @@ func observe(ctx context.Context, tx *sql.Tx, o Observation) error {
 		int64Of(o.DeliveredCommentID),
 		timeOf(o.MergeQueueCancelHandoffAt), o.MergeQueueCancelHandoffRun, o.MergeQueueReason,
 		pendingConfigChange, pendingAccess, accessDecisions)
-	return err
+	if err != nil {
+		return err
+	}
+	return recordObservationEventsTx(ctx, tx, prevState, hasPrev, prevObs, o, eventActorOrGrain(ctx))
 }
 
 // GetObservation reads grain's observation row for taskID, nil with no
@@ -2375,6 +2443,10 @@ func taskIsMerger(ctx context.Context, tx *sql.Tx, taskID string) (bool, error) 
 // specifically, the loud failure a second live run on one task should
 // produce instead of one run's row quietly clobbering the other's.
 func startRun(ctx context.Context, tx *sql.Tx, r Run) error {
+	prevState, hasPrev, err := taskStateTx(ctx, tx, r.TaskID)
+	if err != nil {
+		return err
+	}
 	// Admission has finished: the run row and the disappearance of its
 	// queued wait marker are one durable transition.
 	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_grant_wait` WHERE `task_id` = ?", r.TaskID); err != nil {
@@ -2433,7 +2505,10 @@ func startRun(ctx context.Context, tx *sql.Tx, r Run) error {
 			return err
 		}
 	}
-	return nil
+	if !hasPrev {
+		return nil
+	}
+	return recordTaskStateChangeTx(ctx, tx, r.TaskID, prevState, r.StartedAt, eventActorOrGrain(ctx))
 }
 
 func computeStreakForTask(ctx context.Context, q querier, taskID string, retryRequestedAt *time.Time) (int, *time.Time, *time.Time, error) {
@@ -2542,6 +2617,10 @@ func finishRunTx(ctx context.Context, tx *sql.Tx, runID string, at time.Time, ou
 	if err != nil {
 		return err
 	}
+	prevState, hasPrev, err := taskStateTx(ctx, tx, taskID)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx,
 		"UPDATE `task_run` SET `finished_at` = ?, `outcome` = ?, `detail` = ? WHERE `id` = ?",
 		at.UTC(), outcome, nullable(detail), runID); err != nil {
@@ -2571,8 +2650,13 @@ func finishRunTx(ctx context.Context, tx *sql.Tx, runID string, at time.Time, ou
 	if err := updateTaskStreakTx(ctx, tx, taskID); err != nil {
 		return err
 	}
-	_, err = settleRunNow(ctx, tx, runID, taskID)
-	return err
+	if _, err := settleRunNow(ctx, tx, runID, taskID); err != nil {
+		return err
+	}
+	if !hasPrev {
+		return nil
+	}
+	return recordTaskStateChangeTx(ctx, tx, taskID, prevState, at, eventActorOrGrain(ctx))
 }
 
 // SetRunOutcome overrides a run's outcome and detail after FinishRun has
@@ -2594,6 +2678,10 @@ func (s *Store) SetRunOutcome(ctx context.Context, runID, outcome, detail string
 		if err != nil {
 			return err
 		}
+		prevState, hasPrev, err := taskStateTx(ctx, tx, taskID)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx,
 			"UPDATE `task_run` SET `outcome` = ?, `detail` = ? WHERE `id` = ?",
 			outcome, nullable(detail), runID); err != nil {
@@ -2610,8 +2698,13 @@ func (s *Store) SetRunOutcome(ctx context.Context, runID, outcome, detail string
 		if err := updateTaskStreakTx(ctx, tx, taskID); err != nil {
 			return err
 		}
-		_, err = settleRunNow(ctx, tx, runID, taskID)
-		return err
+		if _, err := settleRunNow(ctx, tx, runID, taskID); err != nil {
+			return err
+		}
+		if !hasPrev {
+			return nil
+		}
+		return recordTaskStateChangeTx(ctx, tx, taskID, prevState, finished.Time, eventActorOrGrain(ctx))
 	})
 }
 
