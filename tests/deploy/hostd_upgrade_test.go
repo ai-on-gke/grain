@@ -156,17 +156,55 @@ func TestHostdUpgradeScriptDrainsOnlyAHostdOnAnOldBinary(t *testing.T) {
 	if got := upgrade("old"); got != want {
 		t.Errorf("a run started while the extractor held the lock: %q, want %q", got, want)
 	}
+
+	// If current moves while grain-hostd-allowlist.service is running (after
+	// the first lock read), systemd coalesces both the path trigger and
+	// systemctl start --no-block into the already-activating run, so the
+	// script must re-read current before exiting.
+	if err := os.Remove(current); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("old", current); err != nil {
+		t.Fatal(err)
+	}
+	func() {
+		hostd := exec.Command(filepath.Join(versions, "old", "grain"), "30")
+		if err := hostd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { hostd.Process.Kill(); hostd.Wait() }()
+		os.Remove(calls)
+		flipped := filepath.Join(dir, "flipped")
+		systemctlStub := "if [ \"$1\" = start ] && [ ! -e " + flipped + " ]; then\n" +
+			"  touch " + flipped + "\n" +
+			"  ln -sfn new " + current + ".new && mv -fT " + current + ".new " + current + "\n" +
+			"  exit 0\n" +
+			"fi\n" +
+			"echo " + strconv.Itoa(hostd.Process.Pid) + "\n"
+		if err := os.WriteFile(filepath.Join(stubs, "systemctl"), []byte("#!/bin/sh\n"+systemctlStub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(stubs, "runuser"), []byte("#!/bin/sh\necho \"runuser $*\" >> "+calls+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		runBash(t, script, "PATH="+stubs+":"+os.Getenv("PATH"))
+		got, _ := os.ReadFile(calls)
+		if string(got) != want {
+			t.Errorf("current moved mid-upgrade-script: %q, want %q", string(got), want)
+		}
+	}()
 }
 
-// The extractor takes that lock before the new version's directory and
+// The extractor takes that lock before touching the versions directory and
 // lets it go only once current has moved.
 func TestTheExtractorMovesCurrentUnderTheVersionsLock(t *testing.T) {
 	install := body(t, setupCode(t), "install_hostd_version() {")
 	locked := strings.Index(install, "flock 9")
+	dirTouch := strings.Index(install, `install -d -m0755 "\$dir"`+"\n")
 	mkdir := strings.Index(install, `install -d -m0755 "\$dir/\$version"`)
 	moved := strings.Index(install, `mv -fT "\$dir/current.new" "\$dir/current"`)
 	unlocked := strings.Index(install, "exec 9>&-")
-	if locked < 0 || mkdir < 0 || moved < 0 || unlocked < 0 || !(locked < mkdir && mkdir < moved && moved < unlocked) {
-		t.Errorf("install_hostd_version does not hold the versions lock from the new directory to current's move:\n%s", install)
+	if locked < 0 || dirTouch < 0 || mkdir < 0 || moved < 0 || unlocked < 0 || !(locked < dirTouch && dirTouch < mkdir && mkdir < moved && moved < unlocked) {
+		t.Errorf("install_hostd_version does not hold the versions lock from touching $dir to current's move:\n%s", install)
 	}
 }

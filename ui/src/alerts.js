@@ -400,6 +400,26 @@ export function collectAlerts(config, zone = "", tasks = []) {
     });
   }
 
+  // The store was switched underneath the daemon (pkg/daemon/
+  // storeswitch.go): db-config.json now selects a store other than the
+  // one it writes to, so everything written since lives only in the old
+  // one. It dispatches nothing until restarted, and a restart is not the
+  // fix by itself -- the new store has to be brought up to date first,
+  // which is what the sentence says.
+  const storeSwitch = config.storeSwitch;
+  if (storeSwitch) {
+    out.push({
+      id: "store-switched",
+      severity: "critical",
+      title: "Store switched while grain was running",
+      sentence: storeSwitch.message.replace(/[^.!?]$/, "$&."),
+      scope: { kind: "deployment" },
+      since: storeSwitch.since || undefined,
+      impact: "No task is dispatched until the daemon restarts.",
+      actions: [],
+    });
+  }
+
   const sync = config.stateRepoSyncFailure;
   if (sync) {
     out.push({

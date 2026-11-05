@@ -19,15 +19,23 @@
 # Modes:
 #   scripts/configure-dockerhub-auth.sh
 #     Publish mode (default): requires DOCKER_PAT (when registry is docker.io)
-#     or GHCR_PAT/GITHUB_TOKEN (when registry is ghcr.io), runs `docker login`
-#     immediately so invalid credentials fail fast with one clear message before
-#     any image is built or pushed, and writes PACKAGE_PUBLISH_* to $GITHUB_ENV
-#     when running in GitHub Actions.
+#     or GHCR_PAT/GITHUB_TOKEN (when registry is ghcr.io), verifies `docker
+#     login` immediately in an isolated temporary DOCKER_CONFIG so invalid
+#     credentials fail fast with one clear message before any image is built or
+#     pushed, and writes PACKAGE_PUBLISH_* to $GITHUB_ENV when running in
+#     GitHub Actions. On Docker Hub, ~/.docker/config.json is intentionally left
+#     untouched so no Docker Hub credential is active during `docker build`
+#     (repository-scoped Organization Access Tokens without "Public Repo
+#     Read-Only" fail upstream library/* base image pulls with HTTP 401 "access
+#     token has insufficient scopes"), while scripts/release-images.sh scopes
+#     its publishing login to an isolated DOCKER_CONFIG.
 #
 #   scripts/configure-dockerhub-auth.sh --pull-only
-#     CI pull mode: logs in to Docker Hub when DOCKER_PAT is set (raising pull
-#     rate limits from 100 anonymous pulls/6h/IPv4 to authenticated org limits),
-#     and skips cleanly when DOCKER_PAT is absent (e.g. fork PR runs).
+#     CI pull mode: logs in to Docker Hub when DOCKER_PAT is set and grants
+#     Public Repo Read-Only scope (raising pull rate limits from 100 anonymous
+#     pulls/6h/IPv4 to authenticated org limits), and skips cleanly when
+#     DOCKER_PAT is absent (e.g. fork PR runs) or is scoped only to grainai/*
+#     without Public Repo Read-Only.
 #
 #   scripts/configure-dockerhub-auth.sh --dry-run
 #     Dry-run publish mode: exports PACKAGE_PUBLISH_REGISTRY and
@@ -71,6 +79,40 @@ write_github_env() {
   fi
 }
 
+login_tmp_dir=""
+cleanup_login_tmp() {
+  if [ -n "$login_tmp_dir" ]; then
+    rm -rf "$login_tmp_dir" 2>/dev/null || true
+    login_tmp_dir=""
+  fi
+}
+trap cleanup_login_tmp EXIT INT TERM
+
+# Verify credentials against $1 without mutating the runner's ~/.docker/config.json.
+verify_docker_login() {
+  local reg="$1" login_user="$2" login_token="$3"
+  if [ -z "$login_tmp_dir" ]; then
+    login_tmp_dir="$(mktemp -d)"
+    chmod 700 "$login_tmp_dir"
+  fi
+  printf '%s' "$login_token" | DOCKER_CONFIG="$login_tmp_dir" docker login "$reg" -u "$login_user" --password-stdin
+}
+
+# Probe whether a Docker Hub credential has "Public Repo Read-Only" scope
+# (ability to pull library/*). Organization Access Tokens (dckr_oat_...) scoped
+# only to grainai/* pass `docker login docker.io` and can push/pull grainai/*,
+# yet auth.docker.io rejects authenticated token requests for library/* with
+# 401 ("access token has insufficient scopes"). Leaving such a token in
+# ~/.docker/config.json breaks `docker build` of upstream base images.
+dockerhub_token_can_pull_library() {
+  local check_user="$1" check_token="$2" code
+  command -v curl >/dev/null 2>&1 || return 1
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 \
+    -u "${check_user}:${check_token}" \
+    "${DOCKERHUB_AUTH_URL:-https://auth.docker.io/token}?scope=repository%3Alibrary%2Fdebian%3Apull&service=registry.docker.io" 2>/dev/null || true)"
+  [ "$code" = "200" ]
+}
+
 if [ "$mode" = "dry-run" ]; then
   write_github_env printf '%s\n' \
     "PACKAGE_PUBLISH_REGISTRY=${registry}" \
@@ -84,9 +126,17 @@ if [ "$mode" = "pull-only" ]; then
     echo "configure-dockerhub-auth.sh: DOCKER_PAT is not set; using unauthenticated Docker Hub pulls"
     exit 0
   fi
-  if ! printf '%s' "$token" | docker login docker.io -u "$dockerhub_user" --password-stdin; then
+  if ! verify_docker_login docker.io "$dockerhub_user" "$token"; then
     echo "::error::Docker Hub login failed for user '${dockerhub_user}' (check DOCKER_PAT and DOCKERHUB_USERNAME)." >&2
     exit 1
+  fi
+  if dockerhub_token_can_pull_library "$dockerhub_user" "$token"; then
+    if ! printf '%s' "$token" | docker login docker.io -u "$dockerhub_user" --password-stdin >/dev/null; then
+      echo "::error::Docker Hub login failed for user '${dockerhub_user}' (check DOCKER_PAT and DOCKERHUB_USERNAME)." >&2
+      exit 1
+    fi
+  else
+    echo "configure-dockerhub-auth.sh: DOCKER_PAT for '${dockerhub_user}' lacks Public Repo Read-Only scope (library/debian:pull not permitted); keeping ~/.docker/config.json unauthenticated so upstream base image pulls succeed"
   fi
   exit 0
 fi
@@ -99,10 +149,11 @@ case "$registry" in
       echo "::error::DOCKER_PAT secret is required to publish images to ${registry}/${repo}/* (log in as '${user}', configurable via DOCKERHUB_USERNAME). Stopping before building or pushing any release images." >&2
       exit 1
     fi
-    if ! printf '%s' "$token" | docker login "$registry" -u "$user" --password-stdin; then
+    if ! verify_docker_login "$registry" "$user" "$token"; then
       echo "::error::Docker Hub login failed for '${user}' on ${registry} (verify the DOCKER_PAT secret and DOCKERHUB_USERNAME repository variable). Stopping before building or pushing any release images." >&2
       exit 1
     fi
+    echo "configure-dockerhub-auth.sh: verified Docker Hub login for '${user}'; keeping ~/.docker/config.json unauthenticated for upstream base image builds while exporting PACKAGE_PUBLISH_* for ${repo}/*"
     write_github_env printf '%s\n' \
       "PACKAGE_PUBLISH_REGISTRY=${registry}" \
       "RELEASE_IMAGE_REPO=${repo}" \

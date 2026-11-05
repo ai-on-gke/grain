@@ -1300,7 +1300,18 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	}
 	detail.Transitions = make([]Transition, 0, len(transitions))
 	for _, tr := range transitions {
-		detail.Transitions = append(detail.Transitions, transitionFrom(tr))
+		var proposingAttempt int
+		if tr.State == model.StateProposed && tr.ProposingTaskID != "" && tr.ProposingRunID != "" {
+			if pRuns, rerr := c.Store.Runs(ctx, tr.ProposingTaskID); rerr == nil {
+				for _, pr := range pRuns {
+					if pr.ID == tr.ProposingRunID {
+						proposingAttempt = pr.Attempt
+						break
+					}
+				}
+			}
+		}
+		detail.Transitions = append(detail.Transitions, transitionFromWithAttempt(tr, proposingAttempt))
 	}
 	detail.PullRequestEvents = pullRequestEventsFrom(obs)
 	if obs != nil {
@@ -1463,7 +1474,7 @@ func (c *Client) AttemptCapabilityAudit(ctx context.Context, taskID string, numb
 	}
 	out := make([]CapabilityAuditEntry, 0, len(records))
 	for _, r := range records {
-		e := CapabilityAuditEntry{Grant: r.Grant, AttemptID: r.AttemptID, At: r.At, Note: r.Note}
+		e := CapabilityAuditEntry{Grant: r.Grant, AttemptID: r.AttemptID, At: r.At, Hostd: r.Hostd, Note: r.Note}
 		if r.Record != "" {
 			if json.Valid([]byte(r.Record)) {
 				e.Record = json.RawMessage(r.Record)
@@ -1932,6 +1943,10 @@ type CreateTaskRequest struct {
 	// Reviewers is the person-set list of reviewer usernames for this task's
 	// change (model.Task.Reviewers, docs/design/changelists.md §5). Refused to
 	// agents by agentFilingEscalation / externalAgentFilingEscalation.
+	// Owner names the account responsible for this task (model.Task.Owner,
+	// attribution.design.md). Left out, it defaults from the filer, verified
+	// OnBehalfOf, parent task, or deployment operator. Agents cannot set it.
+	Owner     string   `json:"owner,omitempty"`
 	Reviewers []string `json:"reviewers,omitempty"`
 	// ProposalKey and ProposedBy are daemon-internal fields used by an
 	// interactive propose_task call. ProposalKey makes retries and the
@@ -2803,6 +2818,10 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent {
 		filedFrom = strings.TrimSpace(req.TemplateID)
 	}
+	resolvedOwner, sessionBehalf, err := c.resolveNewTaskOwner(ctx, req, proposedBy)
+	if err != nil {
+		return Task{}, err
+	}
 	task := model.Task{
 		ID:                   id,
 		Intent:               model.IntentImplement,
@@ -2834,7 +2853,9 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		PromptExtension:      strings.TrimSpace(req.PromptExtension),
 		ReviewTemplateID:     reviewTemplateID,
 		TemplateID:           filedFrom,
+		Owner:                resolvedOwner,
 		Creator:              cmp.Or(strings.TrimSpace(req.Author), strings.TrimSpace(req.Creator)),
+		Proposer:             c.proposerForNewTask(ctx, resolvedOwner, sessionBehalf, proposedBy),
 		TimeZone:             validRequesterTimeZone(req.TimeZone),
 		Grants:               grants,
 		Links:                links,
@@ -2852,6 +2873,11 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// and filing as nobody would read as grain's own to local policy.
 	if proposedBy != nil {
 		model.InheritRequester(&task, *proposedBy)
+		if proposedBy.IsConsoleSession() && resolvedOwner != "" {
+			task.Owner = resolvedOwner
+		} else if strings.TrimSpace(req.Owner) != "" {
+			task.Owner = resolvedOwner
+		}
 	}
 	if req.DeclineAutoMerge && !req.AutoMerge {
 		model.DeclineAutoMerge(&task, model.PrincipalString(c.requestActor(ctx).Actor))
@@ -4150,6 +4176,7 @@ func readsBesidesTarget(reads []model.RepoRef, target *model.RepoRef) []model.Re
 type UpdateTaskRequest struct {
 	Title       *string `json:"title,omitempty"`
 	Description *string `json:"description,omitempty"`
+	Owner       *string `json:"owner,omitempty"`
 	// Repo and Base are the task's target and the branch its runs check
 	// out from. Both reach the task's next run and neither reaches one
 	// already live: the checkout is made once, when a run starts
@@ -4766,8 +4793,22 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			return Task{}, err
 		}
 	}
-	if err := c.mutate(model.WithAutoMergeChange(ctx, c.requestActor(ctx).Actor, "edited"), id, func(task *model.Task) error {
+	var normalizedOwner string
+	if req.Owner != nil {
+		if c.requestActor(ctx).Actor.Kind == model.PrincipalAgent {
+			return Task{}, forbiddenErrorf("%s", errAgentTaskOwner)
+		}
+		var err error
+		normalizedOwner, err = model.NormalizeTaskOwner(*req.Owner)
+		if err != nil {
+			return Task{}, validationErrorf("%v", err)
+		}
+	}
+	if err := c.mutate(model.WithOwnerChange(model.WithAutoMergeChange(ctx, c.requestActor(ctx).Actor, "edited"), c.requestActor(ctx)), id, func(task *model.Task) error {
 		submitted = false
+		if req.Owner != nil {
+			task.Owner = normalizedOwner
+		}
 		// Whether this edit moves the task off a repository it had a
 		// target in, which takes the pull requests it opened there off
 		// it (below).

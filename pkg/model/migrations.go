@@ -776,6 +776,22 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     113,
+		Description: "add task.owner and task.proposer_*, backfill existing tasks, and enforce non-empty task owner",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `owner` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_actor_kind` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_actor_id` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_actor_source` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_behalf_kind` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_behalf_id` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_behalf_source` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_task_id` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_run_id` TEXT NOT NULL DEFAULT ''",
+		},
+		Up: MigrateTaskOwnerAndProposer,
+	},
+	{
+		Version:     114,
 		Description: "add task.external_ref and indexes for external-reference filtering and per-reference rollups",
 		Statements: []string{
 			"ALTER TABLE `task` ADD COLUMN `external_ref` TEXT NOT NULL DEFAULT ''",

@@ -137,6 +137,7 @@ type agentCall struct {
 	scope       APIScope
 	repo        string
 	reason      string
+	filedVia    string
 	body        []byte
 	targetTask  string
 	targetTasks []string
@@ -171,6 +172,14 @@ func (c agentCall) principalID() string {
 		return "external:" + c.external.Name
 	}
 	return c.taskID
+}
+
+func (c agentCall) journalActor() string {
+	who := c.principalID()
+	if owner := c.owner(); owner != "" {
+		who += " on behalf of " + owner
+	}
+	return who
 }
 
 type agentCallContextKey struct{}
@@ -230,7 +239,11 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 			if tok := externalTokenFromContext(r.Context()); tok != nil {
 				call, err := s.authorizeExternalAgentCall(r, pattern, scope, tok)
 				if err != nil {
-					log.Printf("grain api: refused {agent, %s} %s: %v", call.principalID(), pattern, err)
+					if call.filedVia != "" {
+						log.Printf("grain api: refused {agent, %s} %s client=%q: %v", call.journalActor(), pattern, call.filedVia, err)
+					} else {
+						log.Printf("grain api: refused {agent, %s} %s: %v", call.journalActor(), pattern, err)
+					}
 					writeError(w, agentRefusalStatus(err), err)
 					return
 				}
@@ -289,12 +302,13 @@ var errNoAgentAPI = errors.New("this server has no task store, so it cannot chec
 // authorizeAgentCall decides whether taskID's run may make this call.
 func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APIScope, taskID string) (agentCall, error) {
 	call := agentCall{
-		taskID:  taskID,
-		runID:   strings.TrimSpace(r.Header.Get(ActingRunHeader)),
-		channel: strings.TrimSpace(r.Header.Get(ChannelHeader)),
-		pattern: pattern,
-		scope:   scope,
-		reason:  strings.TrimSpace(r.Header.Get(ActingReasonHeader)),
+		taskID:   taskID,
+		runID:    strings.TrimSpace(r.Header.Get(ActingRunHeader)),
+		channel:  strings.TrimSpace(r.Header.Get(ChannelHeader)),
+		pattern:  pattern,
+		scope:    scope,
+		reason:   strings.TrimSpace(r.Header.Get(ActingReasonHeader)),
+		filedVia: model.SanitizeGrainClient(r.Header.Get(model.GrainClientHeader)),
 	}
 	if scope == "" || scope == scopeInternal {
 		return call, fmt.Errorf("%s is not part of the agent API (docs/agent-api.md)", pattern)
@@ -1119,6 +1133,10 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 			if json.Unmarshal(raw, &on) == nil && on && !set.Allows("tasks:admin", repo) {
 				return errors.New("an agent files work unapproved: approving it needs tasks:admin")
 			}
+		case "owner":
+			if hasTaskOwnerField(pattern, raw) {
+				return errAgentTaskOwner
+			}
 		case "author", "proposedby":
 			var who string
 			if json.Unmarshal(raw, &who) == nil && strings.TrimSpace(who) != "" {
@@ -1228,6 +1246,16 @@ var errAgentChangeReview = errors.New("an agent cannot mail a CL, publish its re
 
 var errAgentReviewers = errors.New("an agent cannot set reviewers: " +
 	"who reviews a change is a person's decision (changelists.md §5)")
+
+func hasTaskOwnerField(pattern string, raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return false
+	}
+	return pattern == "POST /api/tasks" ||
+		pattern == "PATCH /api/tasks/{id}" ||
+		pattern == "POST /api/tasks/from-template"
+}
 
 func hasReviewersField(pattern string, raw json.RawMessage) bool {
 	if strings.TrimSpace(string(raw)) == "null" {
@@ -1546,16 +1574,17 @@ func (s *Server) recordAgentCall(ctx context.Context, call agentCall, status int
 	principal := call.principalID()
 	// who is the principal as the journal names it, with the person an
 	// owned external agent credential acts for (#XC-14).
-	who := principal
-	if owner := call.owner(); owner != "" {
-		who += " on behalf of " + owner
+	who := call.journalActor()
+	clientAttr := ""
+	if call.filedVia != "" {
+		clientAttr = fmt.Sprintf(" client=%q", call.filedVia)
 	}
 	if call.channel != "" {
-		log.Printf("grain api: {agent, %s} %s scope=%s repo=%q channel=%q reason=%q -> %d",
-			who, call.pattern, call.scope, call.repo, call.channel, call.reason, status)
+		log.Printf("grain api: {agent, %s} %s scope=%s repo=%q channel=%q reason=%q%s -> %d",
+			who, call.pattern, call.scope, call.repo, call.channel, call.reason, clientAttr, status)
 	} else {
-		log.Printf("grain api: {agent, %s} %s scope=%s repo=%q reason=%q -> %d",
-			who, call.pattern, call.scope, call.repo, call.reason, status)
+		log.Printf("grain api: {agent, %s} %s scope=%s repo=%q reason=%q%s -> %d",
+			who, call.pattern, call.scope, call.repo, call.reason, clientAttr, status)
 	}
 	if call.external == nil && s.tasks != nil && s.tasks.Store != nil {
 		bgCtx := context.WithoutCancel(ctx)
@@ -1656,6 +1685,7 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 		pattern:  pattern,
 		scope:    scope,
 		reason:   strings.TrimSpace(r.Header.Get(ActingReasonHeader)),
+		filedVia: model.SanitizeGrainClient(r.Header.Get(model.GrainClientHeader)),
 	}
 	principal := call.principalID()
 	if scope == "" || scope == scopeInternal {
@@ -2061,6 +2091,10 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 			var on bool
 			if json.Unmarshal(raw, &on) == nil && on && !set.Allows("tasks:admin", repo) {
 				return errors.New("an agent files work unapproved: approving it needs tasks:admin")
+			}
+		case "owner":
+			if hasTaskOwnerField(pattern, raw) {
+				return errAgentTaskOwner
 			}
 		case "author", "creator", "proposedby":
 			var who string
@@ -2502,6 +2536,7 @@ func editedPatchResponseKeys(body []byte) []string {
 	}
 	add(req.Title != nil, "title")
 	add(req.Description != nil, "description")
+	add(req.Owner != nil, "owner")
 	add(req.Repo != nil, "repo")
 	add(req.Base != nil, "base")
 	add(req.ExternalRef != nil, "externalRef")

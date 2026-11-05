@@ -188,6 +188,17 @@ assignment, at add time or by `PATCH`, is recorded in `config_audit`
 under surface `access`, with the old and new roles and the reason, for
 example `role user:bob@x.com grain/operator -> grain/viewer (rotation)`.
 
+Tasks created by a verified session (`user:` or `serviceAccount:`) record
+that identity as both `Task.Proposer` (shown on the timeline's **Proposed**
+step) and the default `Task.Owner` (unless an explicit `owner` is given on
+`POST /api/tasks` or `grain create -owner`). Any caller whose role grants
+`tasks:write` on the task's repository (other than an agent or external-agent
+token, which are refused on `owner`) may reassign `owner` via
+`PATCH /api/tasks/{id}`, `grain update -owner`, or the task detail page,
+recording an `owner_changed` audit step with the old owner, new owner, and
+actor. `GET /api/tasks?owner=<account>` and `grain list -owner <account>`
+accept `me` as a shorthand for the caller's own account.
+
 ## 9. State repository
 
 The entries and their roles stay out of the export, as `allowed_principal`

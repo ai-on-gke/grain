@@ -391,6 +391,13 @@ func (f *Framework) runAttempts(ctx context.Context, s attemptSetup) attemptsRes
 		if id := events.threadID; id != "" {
 			thread = id
 		}
+		if agent.IsHostdStop(runErr) {
+			// The hostd running codex is draining or disconnected past the
+			// reattach timeout: return the run to the queue with any
+			// carried or opened thread intact rather than treating an
+			// unopened resume as a bad flag or retrying into the lost hostd.
+			break
+		}
 
 		// A resumed exec codex never opened a thread for. No model turn
 		// was spent, so neither a retry nor any of this run's budget is

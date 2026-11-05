@@ -1,0 +1,31 @@
+
+=== 1. Issue credentials for alice and bob; configure ownerTrust=(alice@example.com, acme/app) ===
+external-dev PUT /api/settings ownerTrust -> HTTP 403: {"error":"external:alice-dev holds no api grant for scope settings:write, which PUT /api/settings needs"}
+Configured ownerTrust: [{"owner":"alice@example.com","repo":"acme/app"}]
+PUT /api/capability-policy -> HTTP 200: {"policy":{"catalogue":{"defaults":{},"inProcess":{"read-issues":{"restrictions":{"repos":null,"templates":null,"kinds":null,"requiresPerson":true}}},"apiScopes":{}}}}
+
+=== 2. Trusted (owner, repo) vs untrusted repo, cross-repo reads/writes, and spoofed owner ===
+Alice on acme/app -> id=2 state=queued approvedBy=owner-trust approvedByLabel=grain\ for\ alice@example.com
+Alice on acme/other -> state=proposed approvedBy=none
+Alice on acme/app + reads=[acme/other] -> state=proposed
+Bob on acme/app (X-Forwarded-User=alice) -> state=proposed authorLabel=external\ agent\ bob-dev\ for\ bob@example.com
+
+=== 3. Priority, keep_running, and requires_person grants hold or refuse for a person ===
+external-dev priority=6 -> HTTP 403: {"error":"an external agent cannot set priority above 5 without tasks:admin"}
+external-dev keepRunning=true -> HTTP 403: {"error":"durable lets a task jump the queue and run with no deadline: only a person may grant it"}
+external-dev capabilities=[read-issues] -> HTTP 403: {"error":"an agent cannot grant read-issues, which its own task does not hold"}
+alice-admin-ext baseline -> state=queued approvedBy=owner-trust
+alice-admin-ext priority=8 -> HTTP 201: {"id":"7","state":"proposed","priority":8,"approvedBy":null}
+alice-admin-ext keepRunning=true -> HTTP 403: {"error":"durable lets a task jump the queue and run with no deadline: only a person may grant it"}
+alice-admin-ext capabilities=[read-issues] -> HTTP 403: {"error":"an agent cannot grant read-issues, which its own task does not hold"}
+
+=== 4. PATCH withdrawal on repo move or cross-owner edit ===
+Alice PATCH title in acme/app -> state=queued approvedBy=owner-trust
+Alice PATCH repo=acme/other -> state=proposed approvedBy=none
+
+=== 5. Token rotation preserves owner; agents cannot rotate another owner's token or widen scopes ===
+Bob cap-admin agent rotating Alice token -> HTTP 403: {"error":"an agent cannot rotate a credential owned by \"alice@example.com\""}
+Acting task rotating Alice token -> HTTP 403: {"error":"an agent cannot rotate a credential owned by \"alice@example.com\""}
+Rotated Alice token view: {"id":"1","name":"alice-dev","principal":"external:alice-dev","tokenPrefix":"gma_349d","scopeSet":"grain/external-dev","resolvedScopes":["ci:read","ci:write","deployment:read","merge:write","repos:read","sandboxes:read","tasks:read","tasks:write","templates:read"],"rateLimit":60,"maxConcurrent":8,"createdBy":"human:operator@example.com","owner":"alice@example.com","createdAt":"2026-11-04T22:44:15.1697283Z","rotatedAt":"2026-11-04T22:44:16.375343109Z","lastUsedAt":"2026-11-04T22:44:16.172268533Z","active":true}
+Old rotated-out token GET /api/tasks -> HTTP 401: {"error":"invalid external agent bearer token"}
+Post-rotation Alice filing on acme/app -> state=queued approvedBy=owner-trust approvedByLabel=grain\ for\ alice@example.com

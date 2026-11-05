@@ -267,6 +267,11 @@ func (s *Store) Init(ctx context.Context) error {
 	if version != 0 {
 		return nil
 	}
+	if err := s.write(ctx, "enforce task owner constraint", func(tx *sql.Tx) error {
+		return enforceNonEmptyTaskOwnerConstraint(ctx, tx)
+	}); err != nil {
+		return fmt.Errorf("enforcing task owner constraint: %w", err)
+	}
 	// INSERT OR IGNORE for ensureInstanceID's reason: two processes
 	// initializing the same empty store converge on one stamp.
 	if _, err := s.db.ExecContext(ctx,
@@ -596,6 +601,10 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 	if err != nil {
 		return err
 	}
+	ownerEvent, err := guardTaskOwnerAndProposer(ctx, tx, existing, &t)
+	if err != nil {
+		return err
+	}
 
 	explicitWorkOrigin := t.WorkOrigin
 	if t.WorkOrigin == "" {
@@ -637,14 +646,20 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 	if priority == 0 {
 		priority = DefaultTaskPriority
 	}
+	pActor, pBehalf := t.Proposer.Attribution.Actor, t.Proposer.Attribution.OnBehalfOf
+	var pbKind, pbID, pbSource string
+	if pBehalf != nil {
+		pbKind, pbID, pbSource = string(pBehalf.Kind), pBehalf.ID, string(pBehalf.Source)
+	}
 	if _, err := tx.ExecContext(ctx, `REPLACE INTO `+"`task`"+` (
   `+"`id`, `branch`, `intent`, `title`, `body`"+`,
   `+"`origin_actor_kind`, `origin_actor_id`, `origin_behalf_kind`, `origin_behalf_id`, `origin_reason`"+`,
   `+"`approval_actor_kind`, `approval_actor_id`, `approval_behalf_kind`, `approval_behalf_id`, `approved_at`, `deferred_at`, `deferred_until`, `undeferred_at`"+`,
   `+"`target_owner`, `target_name`, `binding`, `base`, `folder`"+`,
   `+"`auto_merge`, `auto_approve_proposals`, `created_at`, `order_key`, `sandbox_cpus`, `sandbox_memory_mb`, `sandbox_disk_gb`, `interactive`, `agent_framework`, `agent_backend_id`, `agent_model`, `prompt_extension`, `review_template_id`, `network_access`, `nothing_needed_action`, `creator`, `time_zone`, `issue`, `no_port`, `agent_model_source`, `origin_ref`, `resume_on_deadline`, `change_target_kind`, `change_target_spec`, `reviewers`, `priority`, `keep_running`"+`,
-  `+"`origin_actor_source`, `origin_behalf_source`, `approval_actor_source`, `approval_behalf_source`, `filed_via`, `external_ref`"+`
-) VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?)`,
+  `+"`origin_actor_source`, `origin_behalf_source`, `approval_actor_source`, `approval_behalf_source`, `filed_via`"+`,
+  `+"`owner`, `proposer_actor_kind`, `proposer_actor_id`, `proposer_actor_source`, `proposer_behalf_kind`, `proposer_behalf_id`, `proposer_behalf_source`, `proposer_task_id`, `proposer_run_id`, `external_ref`"+`
+) VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Branch, string(t.Intent), t.Title, t.Body,
 		string(oActor.Kind), oActor.ID, kindOf(oBehalf), idOf(oBehalf), string(t.Origin.Reason),
 		aActorKind, aActorID, aBehalfKind, aBehalfID, timeOf(t.ApprovedAt), timeOf(t.DeferredAt), timeOf(t.DeferredUntil),
@@ -653,13 +668,19 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 		t.AutoMerge, t.AutoApproveProposals, timeOf(t.CreatedAt), t.OrderKey, t.SandboxCPUs, t.SandboxMemoryMB, t.SandboxDiskGB, t.Interactive,
 		t.AgentFramework, t.AgentBackendID, t.Model, t.PromptExtension, t.ReviewTemplateID, string(t.NetworkAccess), string(t.NothingNeededAction), t.Creator, t.TimeZone, t.Issue, t.NoPort, string(t.ModelSource), string(t.WorkOrigin), t.ResumeOnDeadline,
 		changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(), joinCSV(NormalizeReviewers(t.Reviewers)), priority, t.KeepRunning,
-		string(oActor.Source), sourceOf(oBehalf), aActorSource, aBehalfSource, t.FiledVia, t.ExternalRef,
+		string(oActor.Source), sourceOf(oBehalf), aActorSource, aBehalfSource, t.FiledVia,
+		t.Owner, string(pActor.Kind), pActor.ID, string(pActor.Source), pbKind, pbID, pbSource, t.Proposer.TaskID, t.Proposer.RunID, t.ExternalRef,
 	); err != nil {
 		return fmt.Errorf("writing task %s: %w", t.ID, err)
 	}
 	if autoMergeEvent != nil {
 		if _, err := insertTaskEvent(ctx, tx, *autoMergeEvent); err != nil {
 			return fmt.Errorf("recording %s's auto-merge change: %w", t.ID, err)
+		}
+	}
+	if ownerEvent != nil {
+		if _, err := insertTaskEvent(ctx, tx, *ownerEvent); err != nil {
+			return fmt.Errorf("recording %s's owner change: %w", t.ID, err)
 		}
 	}
 
@@ -1205,7 +1226,8 @@ const taskColumns = "`id`,`branch`,`intent`,`title`,`body`," +
 	"`target_owner`,`target_name`,`binding`,`base`,`folder`," +
 	"`auto_merge`,`auto_approve_proposals`,`created_at`,`order_key`,`sandbox_cpus`,`sandbox_memory_mb`,`sandbox_disk_gb`,`interactive`," +
 	"`agent_framework`,`agent_backend_id`,`agent_model`,`prompt_extension`,`review_template_id`,`network_access`,`nothing_needed_action`,`creator`,`time_zone`,`issue`,`no_port`,`agent_model_source`,`origin_ref`,`resume_on_deadline`,`change_target_kind`,`change_target_spec`,`reviewers`,`priority`,`keep_running`," +
-	"`origin_actor_source`,`origin_behalf_source`,`approval_actor_source`,`approval_behalf_source`,`filed_via`,`external_ref`"
+	"`origin_actor_source`,`origin_behalf_source`,`approval_actor_source`,`approval_behalf_source`,`filed_via`," +
+	"`owner`,`proposer_actor_kind`,`proposer_actor_id`,`proposer_actor_source`,`proposer_behalf_kind`,`proposer_behalf_id`,`proposer_behalf_source`,`proposer_task_id`,`proposer_run_id`,`external_ref`"
 
 // scanTask reads one task row. It takes the Scan method rather than a
 // *sql.Row or *sql.Rows so one function serves both the single-row and
@@ -1216,6 +1238,7 @@ func scanTask(scan func(...any) error) (Task, error) {
 	var ctKind, ctSpec, reviewers string
 	var oaKind, oaID, oReason string
 	var oaSource, obSource, aaSource, abSource string
+	var paKind, paID, paSource, pbKind, pbID, pbSource, pTaskID, pRunID string
 	var obKind, obID, aaKind, aaID, abKind, abID sql.NullString
 	var tOwner, tName, base, folder sql.NullString
 	var createdAt, approvedAt, deferredAt, deferredUntil, undeferredAt sql.NullTime
@@ -1225,8 +1248,19 @@ func scanTask(scan func(...any) error) (Task, error) {
 		&tOwner, &tName, &binding, &base, &folder,
 		&t.AutoMerge, &t.AutoApproveProposals, &createdAt, &t.OrderKey, &t.SandboxCPUs, &t.SandboxMemoryMB, &t.SandboxDiskGB, &t.Interactive,
 		&t.AgentFramework, &t.AgentBackendID, &t.Model, &t.PromptExtension, &t.ReviewTemplateID, &networkAccess, &nothingNeeded, &t.Creator, &t.TimeZone, &t.Issue, &t.NoPort, &modelSource, &workOrigin, &t.ResumeOnDeadline, &ctKind, &ctSpec, &reviewers, &t.Priority, &t.KeepRunning,
-		&oaSource, &obSource, &aaSource, &abSource, &t.FiledVia, &t.ExternalRef); err != nil {
+		&oaSource, &obSource, &aaSource, &abSource, &t.FiledVia,
+		&t.Owner, &paKind, &paID, &paSource, &pbKind, &pbID, &pbSource, &pTaskID, &pRunID, &t.ExternalRef); err != nil {
 		return Task{}, err
+	}
+	if paKind != "" || paID != "" || pTaskID != "" || pRunID != "" {
+		t.Proposer = TaskProposer{
+			Attribution: Attribution{
+				Actor:      Principal{Kind: PrincipalKind(paKind), ID: paID, Source: AuthSource(paSource)},
+				OnBehalfOf: principalFrom(sql.NullString{String: pbKind, Valid: pbKind != ""}, sql.NullString{String: pbID, Valid: pbID != ""}, pbSource),
+			},
+			TaskID: pTaskID,
+			RunID:  pRunID,
+		}
 	}
 	if t.Priority == 0 {
 		t.Priority = DefaultTaskPriority

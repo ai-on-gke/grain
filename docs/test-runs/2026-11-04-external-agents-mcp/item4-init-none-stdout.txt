@@ -1,0 +1,10 @@
+Model backend: claude -- found /var/tmp/grain-workstation-3070/home-open/bin/claude.
+Wrote the starter policy /var/tmp/grain-workstation-3070/home-none/.grain/grain_policy.yml.
+Wrote /var/tmp/grain-workstation-3070/home-none/.grain/daemon.sh, the daemon's command line.
+Once the daemon is up, run `grain settings -network-access none`: the policy allows only that network.
+The Director chat asks for open network, so this policy holds it: add "open" to network: in the policy, or set the Director's network to none in its console session settings.
+Run the daemon in the foreground with: /var/tmp/grain-workstation-3070/home-none/.grain/daemon.sh
+Point the grain CLI at it (add this to your shell's profile):
+  export GRAIN_DATA_DIR='/var/tmp/grain-workstation-3070/home-none/.grain'
+Then open http://127.0.0.1:4242, add a model connection under Settings, and file a task:
+  grain create -title "Say hello" -approve

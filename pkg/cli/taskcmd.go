@@ -121,6 +121,7 @@ func cmdCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	// only: the daemon still checks the filing against its own actor,
 	// and refuses it from a signed-in caller naming somebody else.
 	author := fs.String("author", "", "who asked for this task, recorded as its requester (defaults to the daemon's own actor)")
+	owner := fs.String("owner", "", "account responsible for this task (defaults to the caller)")
 	noRepo := fs.Bool("no-repo", false, "file this task with no repo at all, rather than falling back to the deployment default")
 	resolveChangeTarget := bindChangeTargetFlags(fs)
 	base := fs.String("base", "", "base branch, if not the target repo's default")
@@ -225,7 +226,7 @@ func cmdCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		Interactive: *interactive, Attachments: attachments,
 		ReviewTemplateID: *reviewTemplate, CustomFields: customFields,
 		NetworkAccess: *networkAccess, AgentBackendID: *agentBackend,
-		DependsOn: dependsOn, Author: strings.TrimSpace(*author),
+		DependsOn: dependsOn, Author: strings.TrimSpace(*author), Owner: strings.TrimSpace(*owner),
 		Designs: designs,
 	}
 	// Naming any -capability names the whole set (ui.CreateTaskRequest.
@@ -301,6 +302,7 @@ func cmdUpdate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	title := fs.String("title", "", "new task title")
 	body := fs.String("body", "", "new task description")
 	repo := fs.String("repo", "", "new target repo (owner/name)")
+	owner := fs.String("owner", "", "transfer task ownership to this account")
 	base := fs.String("base", "", "new base branch")
 	issue := fs.Int("issue", 0, "new associated GitHub issue number")
 	externalRef := fs.String("external-ref", "", "new external work reference (e.g. CA-204) -- empty clears it")
@@ -389,6 +391,9 @@ func cmdUpdate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		case "repo":
 			v := *repo
 			req.Repo = &v
+		case "owner":
+			v := strings.TrimSpace(*owner)
+			req.Owner = &v
 		case "base":
 			v := *base
 			req.Base = &v

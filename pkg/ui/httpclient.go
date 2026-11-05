@@ -690,6 +690,12 @@ func (c *HTTPClient) statusError(resp *http.Response, plainText bool) error {
 	if resp.StatusCode == http.StatusUnauthorized && IsLoopbackURL(c.BaseURL) {
 		message += loopbackUnauthorizedHint()
 	}
+	if resp.StatusCode == http.StatusBadRequest {
+		lower := strings.ToLower(string(body))
+		if strings.Contains(lower, "http request") && strings.Contains(lower, "https") {
+			return fmt.Errorf("tls: %s", strings.TrimSpace(string(body)))
+		}
+	}
 	switch resp.StatusCode {
 	case http.StatusNotFound:
 		return &NotFoundError{message: message}
@@ -1314,6 +1320,7 @@ type TaskListConfig struct {
 	DefaultFilters      *string
 	ShowClosedByDefault bool
 	CustomFields        []CustomFieldDeclaration
+	ViewerOwner         string
 }
 
 // TaskListConfig reads the config-to-query seam shared by the browser and
@@ -1324,6 +1331,7 @@ func (c *HTTPClient) TaskListConfig(ctx context.Context) (TaskListConfig, error)
 		DefaultFilters      *string                  `json:"defaultFilters"`
 		ShowClosedByDefault bool                     `json:"showClosedByDefault"`
 		CustomFields        []CustomFieldDeclaration `json:"customFields"`
+		ViewerOwner         string                   `json:"viewerOwner"`
 	}
 	if err := c.do(ctx, http.MethodGet, "/api/config", nil, &resp); err != nil {
 		return TaskListConfig{}, err
@@ -1332,6 +1340,7 @@ func (c *HTTPClient) TaskListConfig(ctx context.Context) (TaskListConfig, error)
 		DefaultFilters:      resp.DefaultFilters,
 		ShowClosedByDefault: resp.ShowClosedByDefault,
 		CustomFields:        resp.CustomFields,
+		ViewerOwner:         resp.ViewerOwner,
 	}, nil
 }
 

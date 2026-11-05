@@ -95,7 +95,27 @@ describe("Declared", () => {
   // and its page named only that person
   // (docs/test-runs/2026-10-29-external-agent-mcp.md, follow-up 1).
   it("names the external agent that filed a task ahead of its creator", () => {
-    render(
+    const { rerender } = render(
+      <Declared
+        t={{
+          id: "31",
+          team: "default",
+          creator: "debian",
+          author: "external:widgets-writer",
+          authorKind: "agent",
+          authorLabel: "external agent widgets-writer",
+        }}
+        config={{}}
+        act={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Filed by")).toBeInTheDocument();
+    expect(screen.getByTestId("filed-by")).toHaveTextContent(
+      "external agent widgets-writer (external:widgets-writer)",
+    );
+    expect(screen.getByText("debian")).toBeInTheDocument();
+
+    rerender(
       <Declared
         t={{
           id: "31",
@@ -108,13 +128,29 @@ describe("Declared", () => {
         act={vi.fn()}
       />,
     );
-    expect(screen.getByText("Filed by")).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "external agent widgets-writer (external:widgets-writer)",
-      ),
-    ).toBeInTheDocument();
-    expect(screen.getByText("debian")).toBeInTheDocument();
+    expect(screen.getByTestId("filed-by")).toHaveTextContent(
+      "external agent widgets-writer (external:widgets-writer)",
+    );
+  });
+
+  it("shows authorLabel with the owner on an owned external agent task", () => {
+    render(
+      <Declared
+        t={{
+          id: "32",
+          team: "default",
+          creator: "alice@example.com",
+          author: "external:alice-self",
+          authorKind: "agent",
+          authorLabel: "external agent alice-self for alice@example.com",
+        }}
+        config={{}}
+        act={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("filed-by")).toHaveTextContent(
+      "external agent alice-self for alice@example.com (external:alice-self)",
+    );
   });
 
   it("has no filed-by row for a task its creator filed", () => {

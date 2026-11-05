@@ -465,6 +465,13 @@ export default function DetailOverlay({
                     page. */}
                 {(() => {
                   const items = [];
+                  if (t.provenance) {
+                    items.push(
+                      <span key="provenance" data-testid="task-provenance">
+                        {t.provenance}
+                      </span>,
+                    );
+                  }
                   if (t.generatedFrom) {
                     items.push(
                       <Fragment key="generated-from">

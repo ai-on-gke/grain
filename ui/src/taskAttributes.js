@@ -152,6 +152,46 @@ export function isExternalAgent(author) {
   return typeof author === "string" && author.startsWith(EXTERNAL_AGENT_PREFIX);
 }
 
+export function normalizeOwnerValue(raw) {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return "";
+  if (/^user:/i.test(trimmed)) return trimmed.slice(5).trim().toLowerCase();
+  if (trimmed.toLowerCase() === "operator") return "operator";
+  if (/^serviceAccount:/i.test(trimmed)) {
+    return (
+      "serviceAccount:" +
+      trimmed.slice("serviceAccount:".length).trim().toLowerCase()
+    );
+  }
+  return trimmed.includes("@") ? trimmed.toLowerCase() : trimmed;
+}
+
+export function viewerOwnerOf(config) {
+  const raw = config?.viewerOwner || config?.actor || "";
+  return raw ? normalizeOwnerValue(raw) : "";
+}
+
+function expandOwnerFilterValue(value, config) {
+  const trimmed = String(value || "").trim();
+  if (trimmed.toLowerCase() === "me") {
+    return [viewerOwnerOf(config) || "operator"];
+  }
+  const norm = normalizeOwnerValue(trimmed);
+  return norm ? [norm] : [trimmed];
+}
+
+function ownerValueLabel(value, config) {
+  if (
+    String(value || "")
+      .trim()
+      .toLowerCase() === "me"
+  ) {
+    const me = viewerOwnerOf(config);
+    return me ? `me (${me})` : "me";
+  }
+  return value;
+}
+
 // originOf is the one thing that put this task in the list -- what the
 // row's own scheduled/suite/merge-fix chips say, collapsed to a single
 // value so it can be asked about as one attribute. The order matters
@@ -320,6 +360,15 @@ export const ATTRIBUTES = [
     values: (t) => (t.writes || []).map((w) => w?.repo).filter(Boolean),
     noneLabel: "No other writeable repos",
     glyphOf: (v) => (v === NONE ? null : "repos"),
+  },
+  {
+    id: "owner",
+    label: "Owner",
+    type: TYPE_ENUM,
+    values: one((t) => t.owner),
+    expand: expandOwnerFilterValue,
+    labelOf: ownerValueLabel,
+    people: true,
   },
   {
     id: "author",

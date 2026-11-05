@@ -147,8 +147,8 @@ A scoped external agent token (`gma_…`) is not special-cased by the CLI. Passe
 
 | CLI | Status | Meaning |
 |---|---|---|
-| task CLI (`runCLI`) | 0 | success |
-| task CLI | 1 | any error, printed as `grain: <message>` on stderr. This includes flag errors (`flag provided but not defined: -x`) and `-h` (`grain: flag: help requested`, after the command's usage) |
+| task CLI (`runCLI`) | 0 | success (and `-h` / `--help`) |
+| task CLI | 1–5 | classified exit codes per [external-cli #XC-13](../external-cli/external-cli.spec.md#XC-13): `1` target failed or unclassified `5xx`/daemon error, `2` CLI usage error / unknown flag / `400`/`404`/`409`/`422`, `3` authentication or authorization failure (`401`/`403` / login redirect), `4` daemon unreachable (DNS, refused/reset TCP, TLS mismatch, HTTP timeout), `5` blocking wait (`wait`, `ci wait`) timed out; printed as `grain: <message>` on stderr in text mode or `{"error": ...}` under `-json` |
 | mode commands | 0 / 1 | each mode exits 1 on error after printing `grain <mode>: <message>`. Exceptions are listed per command in `host.spec.md`: `init` has three outcomes, `backup -h` and `access-code -h` exit 0, `release-notes` given stray arguments exits 2 (`grain release-notes: unexpected arguments: …`), and `version`, `schema-version` and the image printers exit 0 (they ignore stray arguments) |
 | sandbox CLI | 0 | success |
 | sandbox CLI | 1 | an error. Either the proxy refused (its body printed as `grain: <body>`), the transport failed (`grain: reaching the sandbox proxy at <base>: <err>`), or a verdict command reported failure (`ci wait`/`run-job` on a failed run; `grep` on a truncated walk that matched nothing) |
@@ -168,7 +168,7 @@ A scoped external agent token (`gma_…`) is not special-cased by the CLI. Passe
    - parsing stops at the first non-flag argument.
 2. To accept `grain <verb> <id> [flags]`, task commands reorder arguments (`parseArgs`) so flags after the id are parsed. Exception: `comment` keeps everything after the id as its body. A flag written after the id **MUST** be refused with a message naming the flag (`misplacedFlag`).
 3. A task command given positional arguments it has no use for **MUST** refuse them (`atMostArgs`).
-4. Global flags **MUST** come before the command.
+4. Global flags (`-url`, `-token`, `-token-file`, `-context`, `-as`, `-json`) are accepted either before or after the command (`liftGlobalFlags`, [external-cli #XC-11](../external-cli/external-cli.spec.md#XC-11)), except after `comment <id>`, where every remaining token belongs to the comment body.
 
 **Pinned by:** `pkg/cli/args_test.go`: `TestCommandsRefuseArgumentsTheyHaveNoUseFor`, `TestHostLocalCommandsRefuseArgumentsTheyHaveNoUseFor`, `TestArgumentCheckWording`; `pkg/cli/comment_flag_order_test.go`: `TestCommentRefusesAFlagWrittenAfterTheTaskID`, `TestMisplacedFlagOnlyMatchesThisCommandsOwnFlags`.
 

@@ -319,6 +319,7 @@ type listFlags struct {
 	repo        string
 	base        string
 	capability  string
+	owner       string
 	author      string
 	origin      string
 	externalRef string
@@ -354,6 +355,7 @@ func (f listFlags) query(attrs attributeSet) (taskQuery, error) {
 		{flag: "repo", attr: "repo", value: f.repo},
 		{flag: "base", attr: "base", value: f.base},
 		{flag: "capability", attr: "capability", value: f.capability},
+		{flag: "owner", attr: "owner", value: f.owner},
 		{flag: "author", attr: "author", value: f.author},
 		{flag: "origin", attr: "origin", value: f.origin},
 		{flag: "external-ref", attr: "externalRef", value: f.externalRef},
@@ -445,6 +447,7 @@ func cmdList(ctx context.Context, c *ui.HTTPClient, out *printer, args []string)
 	fs.StringVar(&f.repo, "repo", "", `shorthand for -filter repo:any:VALUE (owner/name, or "none" for the tasks with no target repo)`)
 	fs.StringVar(&f.base, "base", "", `shorthand for -filter base:any:VALUE (or "none" for the tasks taking the repo's default)`)
 	fs.StringVar(&f.capability, "capability", "", `shorthand for -filter capability:any:VALUE (or "none" for the tasks carrying none)`)
+	fs.StringVar(&f.owner, "owner", "", `shorthand for -filter owner:any:VALUE (or "me" for your own tasks)`)
 	fs.StringVar(&f.author, "author", "", "shorthand for -filter author:any:VALUE")
 	fs.StringVar(&f.origin, "origin", "", "shorthand for -filter origin:any:VALUE ("+strings.Join(taskOrigins, ", ")+")")
 	fs.StringVar(&f.externalRef, "external-ref", "", `shorthand for -filter externalRef:any:VALUE (e.g. CA-204, or "none" for tasks with no external reference)`)
@@ -559,6 +562,7 @@ func cmdList(ctx context.Context, c *ui.HTTPClient, out *printer, args []string)
 	if needsHidden {
 		q.hidden = hiddenStates(q, show, settings)
 	}
+	normalizeOwnerConditions(ctx, c, &q, listConfig.ViewerOwner)
 	tasks, err := c.ListTasks(ctx)
 	if err != nil {
 		return err

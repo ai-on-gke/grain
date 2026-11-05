@@ -300,3 +300,55 @@ describe("commentAuthor", () => {
     );
   });
 });
+
+describe("external agent provenance and filedVia", () => {
+  afterEach(resetDetailMocks);
+
+  it("renders task provenance and comment filedVia on the task detail overlay", async () => {
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          author: "external:alice-self",
+          authorKind: "agent",
+          authorLabel: "external agent alice-self for alice@example.com",
+          creator: "alice@example.com",
+          filedVia: "codex-cli/0.9.2 session=sess-42",
+          provenance:
+            "filed from codex-cli/0.9.2 session=sess-42 by alice@example.com",
+          comments: [
+            {
+              id: 1,
+              author: "external:alice-self",
+              authorKind: "agent",
+              authorLabel: "external agent alice-self for alice@example.com",
+              filedVia: "codex-cli/0.9.2 session=sess-42",
+              body: "follow-up from CLI",
+              createdAt: "2026-08-28T09:30:00Z",
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("filed-by")).toHaveTextContent(
+      "external agent alice-self for alice@example.com (external:alice-self)",
+    );
+    expect(screen.getByTestId("filed-via")).toHaveTextContent(
+      "codex-cli/0.9.2 session=sess-42",
+    );
+    screen.getByRole("button", { name: /^Provenance/i }).click();
+    expect(await screen.findByTestId("task-provenance")).toHaveTextContent(
+      "filed from codex-cli/0.9.2 session=sess-42 by alice@example.com",
+    );
+    expect(
+      screen.getByText(
+        /external agent alice-self for alice@example\.com · agent · from codex-cli\/0\.9\.2 session=sess-42/,
+      ),
+    ).toBeInTheDocument();
+  });
+});

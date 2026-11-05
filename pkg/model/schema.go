@@ -537,10 +537,14 @@ import "strconv"
 // whose read-only access is auto-granted when a task names them as a
 // committed-context repository (`-design owner/name:path@rev`).
 //
-// 113 adds `external_ref` to `task` (model.Task.ExternalRef) and the
+// 113 adds `task`.`owner` and `task`.`proposer_*` (model.Task.Owner and
+// model.Task.Proposer), backfills every existing task's owner and proposer
+// attribution, and enforces that no task row can be stored with an empty owner.
+//
+// 114 adds `external_ref` to `task` (model.Task.ExternalRef) and the
 // `task_external_ref`, `github_ci_job_repo_ref` and `ci_run_repo_ref`
 // indexes that back external-reference filtering and GET /api/refs/{ref}/summary.
-const SchemaVersion = 113
+const SchemaVersion = 114
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
@@ -896,6 +900,15 @@ var Tables = []string{
   ` + "`priority`" + `              INTEGER  NOT NULL DEFAULT 5,
   ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
   ` + "`filed_via`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`owner`" + `                 TEXT     NOT NULL DEFAULT '',
+  ` + "`proposer_actor_kind`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`proposer_actor_id`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`proposer_actor_source`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`proposer_behalf_kind`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`proposer_behalf_id`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`proposer_behalf_source`" + ` TEXT    NOT NULL DEFAULT '',
+  ` + "`proposer_task_id`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`proposer_run_id`" + `       TEXT     NOT NULL DEFAULT '',
   ` + "`external_ref`" + `          TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,

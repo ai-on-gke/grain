@@ -47,6 +47,7 @@ import (
 // taskListQuery is GET /api/tasks' narrowing.
 type taskListQuery struct {
 	repo    string
+	owner   string
 	states  []string
 	search  string
 	limit   int
@@ -129,6 +130,10 @@ func parseTaskListQuery(q url.Values) (taskListQuery, bool) {
 		narrowed = true
 		out.externalRef = extRef
 	}
+	if q.Has("owner") {
+		narrowed = true
+		out.owner = strings.TrimSpace(q.Get("owner"))
+	}
 	if q.Has("closedSince") {
 		narrowed = true
 		out.closedSince = parseListTime(q.Get("closedSince"))
@@ -210,6 +215,9 @@ func (q taskListQuery) matches(t Task) bool {
 		return false
 	}
 	if q.externalRef != "" && t.ExternalRef != q.externalRef {
+		return false
+	}
+	if q.owner != "" && !strings.EqualFold(t.Owner, q.owner) {
 		return false
 	}
 	return true

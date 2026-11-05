@@ -228,8 +228,11 @@ type TaskComment struct {
 	// operator-attribution spec §4.3); "" from a caller that sets none,
 	// which Who falls back to Author for.
 	AuthorLabel string
-	Body        string
-	CreatedAt   time.Time
+	// FiledVia is the sanitized X-Grain-Client label of the client that
+	// posted this comment (#XC-15), "" when none was sent.
+	FiledVia  string
+	Body      string
+	CreatedAt time.Time
 	// Handover marks the comment a run wrote as the task's standing
 	// summary of its own older conversation (model.Comment.Handover). A
 	// run reading another task's record to work out why it is behaving
@@ -268,7 +271,10 @@ type TaskRecord struct {
 	Author      string
 	AuthorKind  string
 	// AuthorLabel is ui.Task.AuthorLabel: how whoever filed it reads.
-	AuthorLabel  string
+	AuthorLabel string
+	// Provenance is ui.Task.Provenance: "filed from <filed_via> by <owner>"
+	// when filed_via was recorded (#XC-15).
+	Provenance   string
 	Base         string
 	Capabilities []string
 	PullRequest  string
@@ -844,6 +850,9 @@ func renderTaskRecord(t TaskRecord, now time.Time) string {
 			fmt.Fprintf(&b, "Filed by: %s (%s)\n", t.Author, t.AuthorKind)
 		}
 	}
+	if t.Provenance != "" {
+		fmt.Fprintf(&b, "Provenance: %s\n", t.Provenance)
+	}
 	if t.CreatedAt != nil {
 		fmt.Fprintf(&b, "Filed at: %s\n", t.CreatedAt.UTC().Format(time.RFC3339))
 	}
@@ -941,7 +950,11 @@ func renderTaskRecord(t TaskRecord, now time.Time) string {
 			kind += ", this task's handover: the summary grain carries into its later " +
 				"prompts when this thread is too long to quote whole"
 		}
-		fmt.Fprintf(&b, "  [%s] %s (%s):\n", c.CreatedAt.UTC().Format(time.RFC3339), c.Author, kind)
+		from := ""
+		if c.FiledVia != "" {
+			from = fmt.Sprintf(" (from %s)", c.FiledVia)
+		}
+		fmt.Fprintf(&b, "  [%s] %s (%s)%s:\n", c.CreatedAt.UTC().Format(time.RFC3339), c.Who(), kind, from)
 		b.WriteString(indent(c.Body))
 	}
 	return strings.TrimRight(b.String(), "\n")
