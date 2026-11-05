@@ -2051,6 +2051,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   );
   const showExternalRef = useCallback(
     (ref) => {
+      closeDetail();
       setStateFilter("all");
       setViewAndCloseOpen("tasks");
       narrow({
@@ -2058,7 +2059,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
         filters: [{ attr: "externalRef", op: "any", values: [ref] }],
       });
     },
-    [narrow, setViewAndCloseOpen],
+    [closeDetail, narrow, setViewAndCloseOpen],
   );
   // A named run opens over whichever page named it. With no run id this
   // remains the trip to the deployment-wide listing, optionally narrowed
