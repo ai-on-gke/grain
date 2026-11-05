@@ -340,6 +340,24 @@ type StoreCheck struct {
 	Message string
 }
 
+// storeTableExists reports whether db already holds task_sequence, so
+// CheckStore (which opens db raw, without Init) reads an uninitialized
+// database as empty rather than failing on a missing table.
+func storeTableExists(ctx context.Context, db *sql.DB, driver string) (bool, error) {
+	if driver == "postgres" {
+		var exists bool
+		err := db.QueryRowContext(ctx,
+			"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'task_sequence')").
+			Scan(&exists)
+		return exists, err
+	}
+	var count int
+	err := db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'task_sequence'").
+		Scan(&count)
+	return count > 0, err
+}
+
 // CheckStore is CheckStoreHighWater without the writes: what `grain db
 // check` and setup.sh ask before a daemon is started on db.
 func CheckStore(ctx context.Context, db *sql.DB, driver, dsn, dataDir string) (*StoreCheck, error) {
@@ -347,9 +365,16 @@ func CheckStore(ctx context.Context, db *sql.DB, driver, dsn, dataDir string) (*
 	if err != nil {
 		return nil, err
 	}
-	store, err := readStoreMarks(ctx, db)
+	var store StoreHighWater
+	hasTable, err := storeTableExists(ctx, db, driver)
 	if err != nil {
 		return nil, err
+	}
+	if hasTable {
+		store, err = readStoreMarks(ctx, db)
+		if err != nil {
+			return nil, err
+		}
 	}
 	out := &StoreCheck{Store: StoreDescription(driver, dsn, dataDir), Marks: store, Mark: mark, Others: otherStores(driver, dsn, dataDir)}
 	if mark != nil {

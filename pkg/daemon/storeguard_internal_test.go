@@ -190,6 +190,25 @@ func TestAStartBehindTheHighWaterMarkIsRefused(t *testing.T) {
 	if err != nil || len(check.Behind) == 0 || check.Message == "" {
 		t.Errorf("CheckStore = %+v, %v; want it behind", check, err)
 	}
+
+	// And an uninitialized database (opened raw, before Init creates
+	// task_sequence, as setup.sh's grain db check sees a newly provisioned
+	// cluster) reads as empty and behind the mark rather than a SQL error.
+	uninitDir := t.TempDir()
+	uninitDB, err := OpenRawDB(uninitDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer uninitDB.Close()
+	if check, err := CheckStore(ctx, uninitDB, "sqlite", "", uninitDir); err != nil || len(check.Behind) != 0 {
+		t.Errorf("CheckStore on an uninitialized store with no mark = %+v, %v", check, err)
+	}
+	if err := writeStoreHighWater(uninitDir, *mark); err != nil {
+		t.Fatal(err)
+	}
+	if check, err := CheckStore(ctx, uninitDB, "sqlite", "", uninitDir); err != nil || !strings.Contains(check.Message, "is behind the writes") {
+		t.Errorf("CheckStore on an uninitialized store behind the mark = %+v, %v", check, err)
+	}
 }
 
 func TestTheTaskIDSequenceNeverGoesBackwards(t *testing.T) {
