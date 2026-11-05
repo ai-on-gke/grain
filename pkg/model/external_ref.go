@@ -555,8 +555,8 @@ func BuildRefSummary(externalRef string, rows []RefTaskRollupRow, readable func(
 		// when no LinkFixes row is present.
 		if r.FixesTarget != "" {
 			probe := Task{ID: r.TaskID, Target: r.Target}
-			if !LinkOffTarget(probe, Link{Kind: LinkFixes, Target: r.FixesTarget}) {
-				recordPR("pr:"+strings.ToLower(strings.TrimSpace(r.FixesTarget)), r.PRMergedAt != nil, r.PRClosedAt != nil)
+			if prRef, err := ParsePullRequestRef(r.FixesTarget); err == nil && !PullRequestOffTarget(probe, prRef) {
+				recordPR("pr:"+strings.ToLower(prRef.String()), r.PRMergedAt != nil, r.PRClosedAt != nil)
 			}
 		} else if r.PROpenedAt != nil || r.PRMergedAt != nil {
 			recordPR("task:"+r.TaskID, r.PRMergedAt != nil, r.PRClosedAt != nil)
@@ -586,11 +586,14 @@ func isPassingCIConclusion(c string) bool {
 
 func refQuestionSummary(r RefTaskRollupRow) (string, bool) {
 	if r.PendingQuestionSet {
-		if r.PendingQuestionBody == TurnStoppedComment {
-			return "", false
-		}
 		if s := strings.TrimSpace(r.PendingQuestionSummary); s != "" {
 			return s, true
+		}
+		if sec := strings.TrimSpace(r.PendingSecret); sec != "" && r.PendingQuestionBody == TurnStoppedComment {
+			return "set " + sec + " in the encrypted secret input", true
+		}
+		if r.PendingQuestionBody == TurnStoppedComment {
+			return "", false
 		}
 		if s := DeriveQuestionSummary(r.PendingQuestionBody); s != "" {
 			return s, true
