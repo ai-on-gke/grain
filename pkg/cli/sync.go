@@ -374,6 +374,7 @@ var settingsDiffRows = []settingsDiffRow{
 	{"autoUpgradeTime", "automatic upgrade time", func(s ui.Settings) any { return s.AutoUpgradeTime }},
 	{"autoUpgradeOn", "automatic upgrade mode", func(s ui.Settings) any { return s.AutoUpgradeOn }},
 	{"ownerTrust", "owner-trust proposal policy", func(s ui.Settings) any { return ownerTrustRows(s.OwnerTrust) }},
+	{"autoGrantContextReads", "auto-grant context reads", func(s ui.Settings) any { return strings.Join(s.AutoGrantContextReads, ", ") }},
 	{"timeZone", "time zone", func(s ui.Settings) any { return s.TimeZone }},
 	{"settingsLocked", "settings locked", func(s ui.Settings) any { return s.SettingsLocked }},
 	{"registry", "registry connection", func(s ui.Settings) any {

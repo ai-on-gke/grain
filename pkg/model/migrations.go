@@ -769,6 +769,13 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     112,
+		Description: "add grain_config.auto_grant_context_reads (operator-configured repositories auto-granted -read for committed context)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `auto_grant_context_reads` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     113,
 		Description: "add grain_config.registry for connected-entry self-registration and heartbeat settings (design/design/registry.design.md)",
 		Statements: []string{
 			"ALTER TABLE `grain_config` ADD COLUMN `registry` TEXT NOT NULL DEFAULT ''",

@@ -235,7 +235,8 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 					return
 				}
 				agent := model.Principal{Kind: model.PrincipalAgent, ID: call.principalID(), Source: call.source()}
-				r = r.WithContext(withAgentCall(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call))
+				callCtx := withAgentCall(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call)
+				r = r.WithContext(model.WithEventActor(callCtx, RequestActor(callCtx)))
 				s.serveAgentCall(w, r, next, call)
 				return
 			}
@@ -252,7 +253,8 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 			return
 		}
 		agent := model.Principal{Kind: model.PrincipalAgent, ID: taskID, Source: call.source()}
-		r = r.WithContext(withAgentCall(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call))
+		callCtx := withAgentCall(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call)
+		r = r.WithContext(model.WithEventActor(callCtx, RequestActor(callCtx)))
 		s.serveAgentCall(w, r, next, call)
 	}
 }
@@ -340,9 +342,10 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	if err != nil {
 		return call, err
 	}
-	if _, fs := fsRoutes[pattern]; fs && call.repo == "" && set.Has(scope) {
-		// A namespace read naming no repository is narrowed to the
-		// ones the grant reaches by fsScope, not refused for naming none.
+	if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events") && call.repo == "" && set.Has(scope) {
+		// A namespace read or event stream naming no repository is narrowed
+		// to the ones the grant reaches by fsScope / eventsReadable, not
+		// refused for naming none.
 		capAllowed = true
 	}
 	if ciCap && !capAllowed && !set.Allows(scope, call.repo) && call.repo != "" && agentMayRead(acting, call.repo) {
@@ -1077,6 +1080,12 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 					return fmt.Errorf("an agent cannot grant read access to %s, which its own task cannot read", r)
 				}
 			}
+		case "designs", "context":
+			for _, r := range contextReposInBody(gateKey(key), raw) {
+				if !agentMayRead(acting, r) {
+					return fmt.Errorf("an agent cannot reference committed context in %s, which its own task cannot read", r)
+				}
+			}
 		case "readsall", "reads_all":
 			// A console session's opt-in to reading every repository
 			// this deployment works in (model.ConsoleSessionAutoReads):
@@ -1654,11 +1663,12 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	}
 	call.grants = set
 	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
-	// GET /api/inbox without ?repo= answers only the repositories the
-	// token reads (Server.inboxReadable), so a token held to some of
-	// them is let through to it rather than refused for naming none.
+	// GET /api/inbox and GET /api/events without ?repo= answer only the
+	// repositories the token reads (Server.inboxReadable,
+	// Server.eventsReadable), so a token held to some of them is let
+	// through rather than refused for naming none.
 	fsAllowed := fsMergeQueueByCI(set, pattern, r) ||
-		(pattern == "GET /api/inbox" && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "")
+		((pattern == "GET /api/inbox" || pattern == "GET /api/events") && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "")
 	if !set.Has(scope) && !adminPatch && !fsAllowed {
 		return call, fmt.Errorf("%s holds no api grant for scope %s, which %s needs", principal, scope, pattern)
 	}
@@ -1982,6 +1992,12 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 			for _, r := range repos {
 				if !allowedRepo(r) {
 					return fmt.Errorf("external agent %q cannot grant read access to %s, which its credential does not cover", tok.Name, r)
+				}
+			}
+		case "designs", "context":
+			for _, r := range contextReposInBody(gateKey(key), raw) {
+				if !allowedRepo(r) {
+					return fmt.Errorf("external agent %q cannot reference committed context in %s, which its credential does not cover", tok.Name, r)
 				}
 			}
 		case "automerge":
@@ -2480,6 +2496,8 @@ func editedPatchResponseKeys(body []byte) []string {
 	add(req.Reads != nil, "reads")
 	add(req.Writes != nil, "writes")
 	add(req.GoogleChatSpace != nil, "googleChatSpace")
+	add(req.Designs != nil, "designs")
+	add(req.Context != nil, "context")
 	return keys
 }
 

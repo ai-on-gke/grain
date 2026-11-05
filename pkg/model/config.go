@@ -937,6 +937,13 @@ type Config struct {
 	// OwnerTrustPrincipal on behalf of the owner. Empty -- the default --
 	// leaves every such filing proposed. Stored as JSON in one column.
 	OwnerTrust []OwnerTrustRule
+	// AutoGrantContextReads lists committed-context repositories ("*" or
+	// owner/name) for which filing or updating a task with a repo-qualified
+	// context reference (`owner/name:path@rev`) automatically adds the
+	// required -read grant instead of refusing when -read was omitted. Empty
+	// -- the default -- requires an explicit -read grant for any non-target
+	// context repository. Stored as JSON in one column.
+	AutoGrantContextReads []string
 	// Registry configures self-registration and periodic heartbeating with a
 	// grain registry as a connected entry (design/design/registry.design.md).
 	// Empty -- the default -- disables registry connection. Stored as JSON in

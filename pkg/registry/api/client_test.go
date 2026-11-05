@@ -88,12 +88,16 @@ func TestClientCreateHeartbeatGetAndDelete(t *testing.T) {
 	t.Parallel()
 
 	var gotAuth string
+	var gotGrainAuth string
+	var gotRegistryToken string
 	var gotHeartbeat api.HeartbeatRequest
 	var deletedConfirm string
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/entries", func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
+		gotGrainAuth = r.Header.Get("X-Grain-Auth")
+		gotRegistryToken = r.Header.Get("X-Grain-Registry-Token")
 		var req api.CreateEntryRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -113,6 +117,8 @@ func TestClientCreateHeartbeatGetAndDelete(t *testing.T) {
 	})
 	mux.HandleFunc("PUT /api/entries/team-k8s/heartbeat", func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
+		gotGrainAuth = r.Header.Get("X-Grain-Auth")
+		gotRegistryToken = r.Header.Get("X-Grain-Registry-Token")
 		if err := json.NewDecoder(r.Body).Decode(&gotHeartbeat); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -162,8 +168,8 @@ func TestClientCreateHeartbeatGetAndDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}
-	if gotAuth != "Bearer oidc-jwt-1" {
-		t.Errorf("Authorization = %q, want Bearer oidc-jwt-1", gotAuth)
+	if gotAuth != "Bearer oidc-jwt-1" || gotGrainAuth != "" || gotRegistryToken != "" {
+		t.Errorf("OIDC headers = Auth:%q X-Grain-Auth:%q X-Grain-Registry-Token:%q", gotAuth, gotGrainAuth, gotRegistryToken)
 	}
 	if created.Name != "team-k8s" || created.Token != "grc_testtoken123" {
 		t.Errorf("CreateEntry response = %+v", created)
@@ -187,8 +193,8 @@ func TestClientCreateHeartbeatGetAndDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Heartbeat: %v", err)
 	}
-	if gotAuth != "Bearer grc_testtoken123" {
-		t.Errorf("Heartbeat Authorization = %q, want Bearer grc_testtoken123", gotAuth)
+	if gotAuth != "Bearer grc_testtoken123" || gotGrainAuth != "token" || gotRegistryToken != "grc_testtoken123" {
+		t.Errorf("Heartbeat headers = Auth:%q X-Grain-Auth:%q X-Grain-Registry-Token:%q", gotAuth, gotGrainAuth, gotRegistryToken)
 	}
 	if gotHeartbeat.GrainVersion != "v2.4.0" || gotHeartbeat.ActiveTasks != 3 || gotHeartbeat.AwaitingReplyTasks != 1 {
 		t.Errorf("Heartbeat body = %+v", gotHeartbeat)

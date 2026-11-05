@@ -47,11 +47,14 @@ var registryAllowedModuleImports = []string{
 	"pkg/registry/...",
 
 	// Neutral leaf helpers holding no grain controller state.
+	"pkg/apierror",
 	"pkg/jwks",
 	"pkg/redact",
 	"pkg/tunnel",
 	"pkg/tunnel/...",
 	"pkg/version",
+	"pkg/webauth",
+	"pkg/webauth/...",
 }
 
 // grainControllerPackages are explicitly forbidden inside cmd/grain-registry
@@ -189,11 +192,20 @@ func registryDepsViolations(deps map[string][]string) []string {
 	return bad
 }
 
+// apiAllowedModuleImports are the stdlib-only leaf packages pkg/registry/api
+// may import (design/design/registry.design.md, "Package layout and boundary rules" #3).
+var apiAllowedModuleImports = []string{
+	"pkg/registry/api",
+	"pkg/tunnel/wsupgrade",
+	"pkg/tunnel/mux",
+	"pkg/apierror",
+}
+
 func apiImportsViolations(allDeps []string) []string {
 	var bad []string
 	for _, dep := range allDeps {
 		if rel, ok := strings.CutPrefix(dep, module); ok {
-			if rel != "pkg/registry/api" {
+			if !matches(rel, apiAllowedModuleImports) {
 				bad = append(bad, dep)
 			}
 			continue

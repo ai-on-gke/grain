@@ -868,6 +868,17 @@ func defaultOIDCTokenSource(ctx context.Context, audience string) (string, time.
 	}
 	if gcloudPath, lookErr := exec.LookPath("gcloud"); lookErr == nil {
 		cmd := exec.CommandContext(ctx, gcloudPath, "auth", "print-identity-token", "--audiences="+audience)
+		var env []string
+		for _, k := range []string{
+			"PATH", "HOME", "USER", "TMPDIR",
+			"CLOUDSDK_CONFIG", "GOOGLE_APPLICATION_CREDENTIALS",
+			"HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "SSL_CERT_FILE",
+		} {
+			if v, ok := os.LookupEnv(k); ok {
+				env = append(env, k+"="+v)
+			}
+		}
+		cmd.Env = env
 		if out, cmdErr := cmd.Output(); cmdErr == nil {
 			if tok := strings.TrimSpace(string(out)); tok != "" {
 				return tok, time.Time{}, nil

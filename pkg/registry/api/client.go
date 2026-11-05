@@ -369,7 +369,13 @@ func (c *Client) doJSON(ctx context.Context, method, path string, reqBody any, r
 		if token == "" {
 			return fmt.Errorf("obtaining registry credential: empty token")
 		}
-		req.Header.Set("Authorization", "Bearer "+token)
+		if strings.HasPrefix(token, "grc_") {
+			req.Header.Set("X-Grain-Auth", "token")
+			req.Header.Set("X-Grain-Registry-Token", token)
+		}
+		if req.Header.Get("Authorization") == "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
 	}
 
 	resp, err := c.httpClient.Do(req)

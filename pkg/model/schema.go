@@ -532,11 +532,16 @@ import "strconv"
 // server's (protocol.ServerConfig.Hostd), never a task's. `task_run_hostd`
 // stays, the read-only record of where each run's agent CLI ran.
 //
-// 112 adds `grain_config`.`registry` (model.Config.Registry): the connected
+// 112 adds `grain_config`.`auto_grant_context_reads`
+// (model.Config.AutoGrantContextReads): the repositories ("*" or owner/name)
+// whose read-only access is auto-granted when a task names them as a
+// committed-context repository (`-design owner/name:path@rev`).
+//
+// 113 adds `grain_config`.`registry` (model.Config.Registry): the connected
 // entry settings (registry URL, entry name, auth mode, catalog metadata, and
 // scope overrides) for daemon self-registration and heartbeating
 // (design/design/registry.design.md).
-const SchemaVersion = 112
+const SchemaVersion = 113
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
@@ -603,6 +608,38 @@ const taskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
   ` + "`behalf_source`" + ` TEXT  NOT NULL DEFAULT '',
   ` + "`reason`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`detail`" + `     TEXT     NOT NULL DEFAULT ''
+)`
+
+// integrationEventTable backs GET /api/events (model.IntegrationEvent,
+// design/design/integration-events.design.md): ordered task state changes,
+// questions, comments, and CI verdicts resumable from an integer cursor.
+// Needs no SchemaVersion bump and no migration rung, for taskEventTable's
+// own reason above.
+const integrationEventTable = `CREATE TABLE IF NOT EXISTS ` + "`integration_event`" + ` (
+  ` + "`id`" + `               INTEGER  PRIMARY KEY AUTOINCREMENT,
+  ` + "`type`" + `             TEXT     NOT NULL,
+  ` + "`at`" + `               DATETIME NOT NULL,
+  ` + "`task_id`" + `          TEXT     NOT NULL,
+  ` + "`repo`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`previous_state`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`state`" + `            TEXT     NOT NULL DEFAULT '',
+  ` + "`question_summary`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`comment_id`" + `       INTEGER  NOT NULL DEFAULT 0,
+  ` + "`external_ref`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`origin`" + `           TEXT     NOT NULL DEFAULT '',
+  ` + "`pull_request`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`filed_via`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`ci_provider`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`ci_run_id`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`ci_commit`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`ci_conclusion`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`ci_detail`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_kind`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_id`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_source`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`behalf_kind`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`behalf_id`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`behalf_source`" + `    TEXT     NOT NULL DEFAULT ''
 )`
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
@@ -2438,6 +2475,7 @@ var Tables = []string{
   ` + "`new_task_form`" + `                TEXT    NOT NULL DEFAULT '',
   ` + "`auto_upgrade_on`" + `              TEXT    NOT NULL DEFAULT '',
   ` + "`owner_trust`" + `                  TEXT    NOT NULL DEFAULT '',
+  ` + "`auto_grant_context_reads`" + `     TEXT    NOT NULL DEFAULT '',
   ` + "`registry`" + `                     TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
@@ -4112,6 +4150,12 @@ var Tables = []string{
 	configAuditTable,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_event_task`" + ` ON ` + "`task_event`" + ` (` + "`task_id`" + `)`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_event_at`" + ` ON ` + "`task_event`" + ` (` + "`at`" + `)`,
+
+	// Resumable task state, comment/question, and CI verdict stream for
+	// external integrations (model.IntegrationEvent, GET /api/events).
+	integrationEventTable,
+	`CREATE INDEX IF NOT EXISTS ` + "`integration_event_task`" + ` ON ` + "`integration_event`" + ` (` + "`task_id`" + `, ` + "`id`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`integration_event_repo`" + ` ON ` + "`integration_event`" + ` (` + "`repo`" + `, ` + "`id`" + `)`,
 
 	// Verified-identity sign-in allowlist (`user:<email>` and `group:<email>`)
 	// and its one-time startup migration off `-ui-allowed-principals`.
