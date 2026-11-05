@@ -345,6 +345,9 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 		// ones the grant reaches by fsScope, not refused for naming none.
 		capAllowed = true
 	}
+	if isRepoNarrowedTasksRead(pattern, r) && call.repo == "" && set.Has(scope) {
+		capAllowed = true
+	}
 	if ciCap && !capAllowed && !set.Allows(scope, call.repo) && call.repo != "" && agentMayRead(acting, call.repo) {
 		// grain-ci reads CI of the repositories the task's runs may
 		// read, as it does over /fs/ci/ and /cli/ci/.
@@ -1331,6 +1334,14 @@ func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, ta
 		})
 		return repo, nil
 	}
+	if pattern == refSummaryRoute {
+		if repo, ok, err := s.queryCallRepo(r, pattern, func(c string) bool {
+			return set.Allows(scope, c)
+		}); ok {
+			return repo, err
+		}
+		return "", nil
+	}
 	if pathParam.MatchString(pathOf(pattern)) && !agentRepoDefaultRoutes[pattern] {
 		return "", nil
 	}
@@ -1658,7 +1669,8 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	// token reads (Server.inboxReadable), so a token held to some of
 	// them is let through to it rather than refused for naming none.
 	fsAllowed := fsMergeQueueByCI(set, pattern, r) ||
-		(pattern == "GET /api/inbox" && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "")
+		(pattern == "GET /api/inbox" && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "") ||
+		(isRepoNarrowedTasksRead(pattern, r) && set.Has(scope))
 	if !set.Has(scope) && !adminPatch && !fsAllowed {
 		return call, fmt.Errorf("%s holds no api grant for scope %s, which %s needs", principal, scope, pattern)
 	}
@@ -1799,6 +1811,14 @@ func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pat
 			canonical, err := s.agentCanonicalRepo(repo)
 			return canonical, nil, err
 		}
+	}
+	if pattern == refSummaryRoute {
+		if repo, ok, err := s.queryCallRepo(r, pattern, func(c string) bool {
+			return set.Allows(scope, c)
+		}); ok {
+			return repo, nil, err
+		}
+		return "", nil, nil
 	}
 	if pathParam.MatchString(pathOf(pattern)) {
 		return "", nil, nil
@@ -2431,17 +2451,21 @@ func (s *Server) redactAgentTaskResponse(ctx context.Context, call agentCall, ki
 }
 
 // createDrawsOnOtherText reports whether a POST /api/tasks body names a
-// template, a task to supersede, or a proposalKey, any of which can populate
-// or resolve the response from an existing record rather than only what the
-// caller sent.
+// template, a task to supersede, a proposalKey, or a parent task from which an
+// empty externalRef would be inherited, any of which can populate or resolve
+// the response from an existing record rather than only what the caller sent.
 func createDrawsOnOtherText(body []byte) bool {
 	var req CreateTaskRequest
 	if len(body) == 0 || json.Unmarshal(body, &req) != nil {
 		return true
 	}
+	inheritsExternalRef := strings.TrimSpace(req.ExternalRef) == "" &&
+		(strings.TrimSpace(req.ProposedBy) != "" ||
+			strings.HasPrefix(strings.TrimSpace(req.Origin), "task:"))
 	return strings.TrimSpace(req.TemplateID) != "" ||
 		strings.TrimSpace(req.Supersedes) != "" ||
-		strings.TrimSpace(req.ProposalKey) != ""
+		strings.TrimSpace(req.ProposalKey) != "" ||
+		inheritsExternalRef
 }
 
 func editedPatchResponseKeys(body []byte) []string {
@@ -2459,6 +2483,7 @@ func editedPatchResponseKeys(body []byte) []string {
 	add(req.Description != nil, "description")
 	add(req.Repo != nil, "repo")
 	add(req.Base != nil, "base")
+	add(req.ExternalRef != nil, "externalRef")
 	add(req.Priority != nil, "priority")
 	add(req.PriorityDispatch != nil, "priorityDispatch")
 	add(req.Issue != nil, "issue")

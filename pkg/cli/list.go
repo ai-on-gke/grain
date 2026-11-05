@@ -315,13 +315,14 @@ func (l *conditionList) Set(raw string) error {
 // FlagSet.Visit, which is the only thing that can tell a flag left at
 // its default from one explicitly set to it.
 type listFlags struct {
-	state      string
-	repo       string
-	base       string
-	capability string
-	author     string
-	origin     string
-	search     string
+	state       string
+	repo        string
+	base        string
+	capability  string
+	author      string
+	origin      string
+	externalRef string
+	search      string
 
 	blocked     *bool
 	autoMerge   *bool
@@ -355,6 +356,7 @@ func (f listFlags) query(attrs attributeSet) (taskQuery, error) {
 		{flag: "capability", attr: "capability", value: f.capability},
 		{flag: "author", attr: "author", value: f.author},
 		{flag: "origin", attr: "origin", value: f.origin},
+		{flag: "external-ref", attr: "externalRef", value: f.externalRef},
 		{flag: "blocked", attr: "blocked", value: pickValue(f.blocked, "yes", "no")},
 		{flag: "auto-merge", attr: "autoMerge", value: pickValue(f.autoMerge, "on", "off")},
 		{flag: "interactive", attr: "kind", value: pickValue(f.interactive, "interactive", "background")},
@@ -445,6 +447,7 @@ func cmdList(ctx context.Context, c *ui.HTTPClient, out *printer, args []string)
 	fs.StringVar(&f.capability, "capability", "", `shorthand for -filter capability:any:VALUE (or "none" for the tasks carrying none)`)
 	fs.StringVar(&f.author, "author", "", "shorthand for -filter author:any:VALUE")
 	fs.StringVar(&f.origin, "origin", "", "shorthand for -filter origin:any:VALUE ("+strings.Join(taskOrigins, ", ")+")")
+	fs.StringVar(&f.externalRef, "external-ref", "", `shorthand for -filter externalRef:any:VALUE (e.g. CA-204, or "none" for tasks with no external reference)`)
 	// The three tri-state flags. Each asks for the tasks that have the
 	// attribute; "=false" asks for the ones that don't; leaving it off
 	// asks nothing -- which is why Visit, rather than the values

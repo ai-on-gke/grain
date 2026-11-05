@@ -767,6 +767,16 @@ var Migrations = []Migration{
 			"ALTER TABLE `repo_config` DROP COLUMN `default_hostd`",
 		},
 	},
+	{
+		Version:     112,
+		Description: "add task.external_ref and indexes for external-reference filtering and per-reference rollups",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `external_ref` TEXT NOT NULL DEFAULT ''",
+			"CREATE INDEX IF NOT EXISTS `task_external_ref` ON `task` (`external_ref`, `id`)",
+			"CREATE INDEX IF NOT EXISTS `github_ci_job_repo_ref` ON `github_ci_job` (`repo`, `ref`)",
+			"CREATE INDEX IF NOT EXISTS `ci_run_repo_ref` ON `ci_run` (`repo`, `ref`, `started_at`)",
+		},
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as

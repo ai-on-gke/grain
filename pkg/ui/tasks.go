@@ -343,6 +343,9 @@ type Task struct {
 	// GoogleChatSpace is the Google Chat space linked to this task
 	// (LinkGoogleChat), or "" when unlinked.
 	GoogleChatSpace string `json:"googleChatSpace,omitempty"`
+	// ExternalRef is the optional external work reference (e.g. "CA-204")
+	// carried by this task and inherited by tasks spawned from it.
+	ExternalRef string `json:"externalRef,omitempty"`
 	// Changelists are the changelists (CLs) that are this task's work, as
 	// cl/<number> (model.LinkChangelist).
 	Changelists []string `json:"changelists,omitempty"`
@@ -1093,6 +1096,7 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		ReviewTemplateName:   reviewTemplateName,
 		Creator:              t.Creator,
 		FiledVia:             t.FiledVia,
+		ExternalRef:          t.ExternalRef,
 		Provenance:           provenanceLabel(t.FiledVia, cmp.Or(attributedPerson(t.Origin.Attribution), t.Creator)),
 		Capabilities:         []string{},
 		CustomFields:         customFieldValues(t.CustomFields),

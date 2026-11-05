@@ -531,7 +531,11 @@ import "strconv"
 // the model connection's (model.AgentBackend.Hostd) or the capability
 // server's (protocol.ServerConfig.Hostd), never a task's. `task_run_hostd`
 // stays, the read-only record of where each run's agent CLI ran.
-const SchemaVersion = 111
+//
+// 112 adds `external_ref` to `task` (model.Task.ExternalRef) and the
+// `task_external_ref`, `github_ci_job_repo_ref` and `ci_run_repo_ref`
+// indexes that back external-reference filtering and GET /api/refs/{ref}/summary.
+const SchemaVersion = 112
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
@@ -840,8 +844,10 @@ var Tables = []string{
   ` + "`priority`" + `              INTEGER  NOT NULL DEFAULT 5,
   ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
   ` + "`filed_via`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`external_ref`" + `          TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_external_ref`" + ` ON ` + "`task`" + ` (` + "`external_ref`" + `, ` + "`id`" + `)`,
 
 	// The one progress comment grain keeps on a GitHub origin -- the pull
 	// request or issue a tree of tasks came from (model.WorkOrigin) --
@@ -2088,6 +2094,7 @@ var Tables = []string{
 	// from webhooks and from check-run reads the pull request sync already
 	// makes; never a verdict grain reuses.
 	gitHubCIJobTable,
+	`CREATE INDEX IF NOT EXISTS ` + "`github_ci_job_repo_ref`" + ` ON ` + "`github_ci_job`" + ` (` + "`repo`" + `, ` + "`ref`" + `)`,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`grain_schema`" + ` (
   ` + "`id`" + `      INTEGER NOT NULL,
@@ -3852,6 +3859,7 @@ var Tables = []string{
 	// the listing's own newest-first order.
 	`CREATE INDEX IF NOT EXISTS ` + "`ci_run_key`" + ` ON ` + "`ci_run`" + ` (` + "`run_key`" + `, ` + "`conclusion`" + `)`,
 	`CREATE INDEX IF NOT EXISTS ` + "`ci_run_started`" + ` ON ` + "`ci_run`" + ` (` + "`started_at`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`ci_run_repo_ref`" + ` ON ` + "`ci_run`" + ` (` + "`repo`" + `, ` + "`ref`" + `, ` + "`started_at`" + `)`,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`ci_job`" + ` (
   ` + "`run_id`" + `        TEXT     NOT NULL,

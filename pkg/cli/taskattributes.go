@@ -478,6 +478,12 @@ var builtinAttributes = attributeSet{
 			return []string{strconv.Itoa(p)}
 		},
 	},
+	{
+		id:        "externalRef",
+		typ:       typeEnum,
+		values:    one(func(t ui.Task) string { return t.ExternalRef }),
+		noneLabel: "No external reference",
+	},
 }
 
 // customPrefix namespaces every deployment-defined attribute, so

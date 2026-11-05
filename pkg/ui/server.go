@@ -281,6 +281,7 @@ func (s *Server) routes() {
 	s.route("GET /api/tasks/states", s.handleTaskStates)
 	s.route("GET /api/tasks/wait", s.handleTasksWait)
 	s.route("GET /api/inbox", s.handleInbox)
+	s.route("GET /api/refs/{ref}/summary", s.handleRefSummary)
 	s.route("GET /api/states", s.handleTaskStates)
 	s.route("POST /api/tasks", s.handleCreateTask)
 	s.route("POST /api/tasks/from-template", s.handleCreateTaskFromTemplate)

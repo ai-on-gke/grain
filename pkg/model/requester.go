@@ -49,4 +49,7 @@ func (t Task) DerivedFrom() string {
 // that task, and a derived task of an external requester needs its own.
 func InheritRequester(derived *Task, source Task) {
 	derived.Creator = strings.TrimSpace(source.Creator)
+	if strings.TrimSpace(derived.ExternalRef) == "" {
+		derived.ExternalRef = strings.TrimSpace(source.ExternalRef)
+	}
 }

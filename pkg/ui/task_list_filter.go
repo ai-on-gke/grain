@@ -56,6 +56,7 @@ type taskListQuery struct {
 	// ?filed_via=<substring>.
 	derivedFrom string
 	filedVia    string
+	externalRef string
 	// list leaves descriptions out, as the live list does (fields=list).
 	list bool
 	// paged answers a taskListPage, newest-closed first, starting after
@@ -123,6 +124,10 @@ func parseTaskListQuery(q url.Values) (taskListQuery, bool) {
 	if q.Has("filed_via") {
 		narrowed = true
 		out.filedVia = strings.TrimSpace(q.Get("filed_via"))
+	}
+	if q.Has("externalRef") {
+		narrowed = true
+		out.externalRef = strings.TrimSpace(q.Get("externalRef"))
 	}
 	if q.Has("closedSince") {
 		narrowed = true
@@ -204,6 +209,9 @@ func (q taskListQuery) matches(t Task) bool {
 	if q.filedVia != "" && !strings.Contains(strings.ToLower(t.FiledVia), strings.ToLower(q.filedVia)) {
 		return false
 	}
+	if q.externalRef != "" && t.ExternalRef != q.externalRef {
+		return false
+	}
 	return true
 }
 
@@ -240,13 +248,14 @@ func TaskDerivedFrom(t Task, ref string) bool {
 // taskListSummary is one task under fields=summary: what picks a row out
 // of a list, and none of what is only worth reading once it is picked.
 type taskListSummary struct {
-	ID        string      `json:"id"`
-	Title     string      `json:"title"`
-	State     model.State `json:"state"`
-	Repo      string      `json:"repo,omitempty"`
-	CreatedAt *time.Time  `json:"createdAt,omitempty"`
-	BlockedBy []string    `json:"blockedBy,omitempty"`
-	Stall     string      `json:"stall,omitempty"`
+	ID          string      `json:"id"`
+	Title       string      `json:"title"`
+	State       model.State `json:"state"`
+	Repo        string      `json:"repo,omitempty"`
+	ExternalRef string      `json:"externalRef,omitempty"`
+	CreatedAt   *time.Time  `json:"createdAt,omitempty"`
+	BlockedBy   []string    `json:"blockedBy,omitempty"`
+	Stall       string      `json:"stall,omitempty"`
 }
 
 // handleFilteredTaskList answers a narrowed GET /api/tasks: the matching
@@ -257,9 +266,10 @@ func (s *Server) handleFilteredTaskList(w http.ResponseWriter, r *http.Request, 
 		writeClientError(w, err)
 		return
 	}
+	readable := s.taskReadable(r)
 	matched := make([]Task, 0, len(all))
 	for _, t := range all {
-		if q.matches(t) {
+		if readable(t.Repo) && q.matches(t) {
 			matched = append(matched, t)
 		}
 	}
@@ -284,7 +294,7 @@ func (s *Server) handleFilteredTaskList(w http.ResponseWriter, r *http.Request, 
 	out := make([]taskListSummary, 0, len(matched))
 	for _, t := range matched {
 		out = append(out, taskListSummary{
-			ID: t.ID, Title: t.Title, State: t.State, Repo: t.Repo,
+			ID: t.ID, Title: t.Title, State: t.State, Repo: t.Repo, ExternalRef: t.ExternalRef,
 			CreatedAt: t.CreatedAt, BlockedBy: t.BlockedBy, Stall: t.Stall,
 		})
 	}
