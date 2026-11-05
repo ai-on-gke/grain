@@ -1,0 +1,265 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Package agentd is grain-agentd: a lightweight, rootless grain hostd for a
+// machine that is not the daemon's. It runs the agent CLIs a grain daemon
+// asks for (agy, claude, codex), as the user who starts it, with no root
+// and no capabilities.
+//
+// It differs from `grain hostd` in four ways:
+//
+//   - It runs no capability servers. It registers no built-in entries, and
+//     it refuses an allowlist whose capabilities: section names anything.
+//   - It is configured entirely as the user. Its allowlist may be owned by
+//     the user running it (not only root), and every default path is under
+//     the user's home or runtime directory.
+//   - It dials the daemon itself, directly or through IAP (-iap-audience),
+//     as `grain hostd -server` does -- or through a transport a build
+//     registers (RegisterTransport) for a daemon behind a proxy core grain
+//     knows nothing about.
+//   - It also answers the agent hooks the CLIs it starts fork
+//     (agy-tool-hook, claude-stop-hook), since a remote run names hostd's
+//     own binary for them (agent.HookBinary).
+//
+// A user-owned allowlist is weaker than a root-owned one: anything running
+// as the user can edit it. That is acceptable here only because the
+// allowlist can name agent CLIs and nothing else, and an agent CLI already
+// runs as the user with the user's shell.
+//
+// `grain-agentd install -server URL [-name NAME]` sets it up for the user
+// running it (install.go): the binary in ~/.local/bin, the token (prompted
+// for, or $GRAIN_HOSTD_TOKEN) in ~/.config/grain, an allowlist with agy,
+// and a systemd --user unit, started.
+//
+// The package stays small on purpose: it links pkg/hostd and the leaf hook
+// packages and nothing of the daemon's (no pkg/ui, pkg/daemon, pkg/model
+// or store package), which deps_test.go enforces, so a build that vendors
+// it -- or adds its own transport and hook registrations around Main --
+// carries little.
+package agentd
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"maps"
+	"net/url"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"slices"
+	"strings"
+	"syscall"
+
+	"github.com/ai-on-gke/grain/pkg/agent/antigravity/hook"
+	"github.com/ai-on-gke/grain/pkg/agent/claude/stophook"
+	"github.com/ai-on-gke/grain/pkg/hostd"
+	"github.com/ai-on-gke/grain/pkg/version"
+)
+
+// Program is the command's name, in messages, paths and the unit.
+const Program = "grain-agentd"
+
+// TokenEnv is the environment variable a hostd token is read from when
+// the token file has none, and install takes one from instead of asking.
+const TokenEnv = "GRAIN_HOSTD_TOKEN"
+
+// Main is the whole of cmd/grain-agentd: args is os.Args, and the result
+// is the process's exit status. A build that adds its own transports or
+// host-tool grants registers them from init() and calls this.
+func Main(args []string) int {
+	if len(args) > 1 {
+		switch args[1] {
+		case hook.Subcommand:
+			hook.Run(args[2:], os.Stdin, os.Stdout, os.Stderr)
+			return 0
+		case stophook.Subcommand:
+			stophook.Run(args[2:], os.Stdin, os.Stdout, os.Stderr)
+			return 0
+		case "install":
+			return install(args[2:], os.Stdout, os.Stderr)
+		case "hostd":
+			// Accepted for symmetry with `grain hostd`.
+			return run(args[2:], os.Stdout, os.Stderr)
+		}
+	}
+	var rest []string
+	if len(args) > 1 {
+		rest = args[1:]
+	}
+	return run(rest, os.Stdout, os.Stderr)
+}
+
+// paths is where grain-agentd keeps everything, under the user's home.
+type paths struct {
+	Bin, Token, Allowlist, StateDir, Stage, UnitDir string
+}
+
+func pathsFor(home string) paths {
+	return paths{
+		Bin:       filepath.Join(home, ".local", "bin", Program),
+		Token:     filepath.Join(home, ".config", "grain", "agentd-token"),
+		Allowlist: filepath.Join(home, ".config", "grain", "agentd.yaml"),
+		StateDir:  filepath.Join(home, ".local", "state", Program),
+		Stage:     filepath.Join(home, ".grain", "hostd-stage"),
+		UnitDir:   filepath.Join(home, ".config", "systemd", "user"),
+	}
+}
+
+// owners are the uids grain-agentd accepts as its allowlist's owner: the
+// user running it, and root.
+func owners() []uint32 { return []uint32{uint32(os.Getuid()), 0} }
+
+// geteuid is os.Geteuid; a seam so tests can stand in for root.
+var geteuid = os.Geteuid
+
+func run(args []string, stdout, stderr io.Writer) int {
+	home, _ := os.UserHomeDir()
+	p := pathsFor(home)
+	fs := flag.NewFlagSet(Program, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	server := fs.String("server", "", "the grain daemon's URL as this machine reaches it: https://grain.example.com, an IAP URL, or http://127.0.0.1:4242")
+	tokenFile := fs.String("token-file", p.Token, "the file holding this hostd's token (Settings -> Hostds); $"+TokenEnv+" is read when it is absent")
+	name := fs.String("name", "", "the registry name this hostd expects to be; optional, the daemon names it from its token")
+	allowlist := fs.String("allowlist", p.Allowlist, "the agent CLIs this hostd may run (clis: only); owned by you or root, and not group- or world-writable")
+	socket := fs.String("socket", defaultSocket(), "the local unix socket hostd also listens on (mode 0600)")
+	stateDir := fs.String("state-dir", p.StateDir, "where hostd records the process groups it started")
+	iapAudience := fs.String("iap-audience", "", "the OAuth client ID of the IAP in front of the daemon, for an IAP URL")
+	build := fs.Bool("build", false, "print this binary's build and exit")
+	check := fs.Bool("check", false, "check the allowlist, print the agent CLIs it offers, and exit")
+	registerTransportFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	if *build {
+		fmt.Fprintln(stdout, version.Get().Release)
+		return 0
+	}
+	if geteuid() == 0 {
+		fmt.Fprintln(stderr, Program+": refusing to run as root; run it as the user whose agent CLIs it starts")
+		return 2
+	}
+	if err := checkAgentsOnly(*allowlist, owners()); err != nil {
+		fmt.Fprintln(stderr, Program+": "+err.Error())
+		return 2
+	}
+	if *check {
+		a, _ := hostd.LoadAllowlist(*allowlist, owners())
+		for _, o := range a.Offers() {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\n", o.Kind, o.Name, o.Path)
+		}
+		return 0
+	}
+	if *server == "" {
+		fmt.Fprintln(stderr, Program+": -server is required: the grain daemon's URL as this machine reaches it")
+		return 2
+	}
+	token, err := readToken(*tokenFile)
+	if err != nil {
+		fmt.Fprintln(stderr, Program+": "+err.Error())
+		return 2
+	}
+	u, err := parseServer(*server)
+	if err != nil {
+		fmt.Fprintln(stderr, Program+": "+err.Error())
+		return 2
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+	defer stop()
+
+	host, _ := os.Hostname()
+	cfg := DialConfig{
+		Server: u, Token: token, Name: *name, Host: host, Build: version.Get().Release,
+		IAPAudience: *iapAudience, StateDir: *stateDir, Home: home,
+	}
+	dial, closeDial, err := dialerFor(ctx, cfg)
+	if err != nil {
+		fmt.Fprintln(stderr, Program+": "+err.Error())
+		return 2
+	}
+	defer closeDial()
+	srv := &hostd.Server{
+		Socket:          *socket,
+		Allowlist:       *allowlist,
+		AllowlistOwners: owners(),
+		StateDir:        *stateDir,
+		Build:           version.Get().Release,
+		Remote:          dial,
+		// No CurrentLink: there is no installer's versions directory, so a
+		// remote run's hooks name this binary itself (Hello.Grain falls back
+		// to os.Executable). No Builtins: agent CLIs and nothing else.
+	}
+	if err := srv.Serve(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		fmt.Fprintln(stderr, Program+": "+err.Error())
+		return 1
+	}
+	return 0
+}
+
+// parseServer reads -server: an http or https URL with a host.
+func parseServer(server string) (*url.URL, error) {
+	u, err := url.Parse(server)
+	if server == "" || err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+		return nil, fmt.Errorf("-server %q is not a URL like https://grain.example.com", server)
+	}
+	return u, nil
+}
+
+// checkAgentsOnly loads the allowlist as hostd will and refuses one that
+// offers anything but agent CLIs. hostd re-reads the file on every request,
+// so this is checked again by the same rule only at the next start; the
+// file can only be changed by its owner (you), never by the daemon.
+func checkAgentsOnly(path string, owners []uint32) error {
+	a, err := hostd.LoadAllowlist(path, owners)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("no allowlist at %s: write one with a clis: entry for each agent CLI this machine runs (capabilities: stays empty)", path)
+		}
+		return err
+	}
+	if len(a.Capabilities) > 0 {
+		names := slices.Sorted(maps.Keys(a.Capabilities))
+		return fmt.Errorf("%s names capabilities (%s): %s runs agent CLIs only; remove them, or use `grain hostd`", path, strings.Join(names, ", "), Program)
+	}
+	if len(a.CLIs) == 0 {
+		return fmt.Errorf("%s offers no agent CLIs: add a clis: entry (agy, claude or codex)", path)
+	}
+	return nil
+}
+
+// readToken is the hostd token: the token file's, else $GRAIN_HOSTD_TOKEN.
+func readToken(path string) (string, error) {
+	if b, err := os.ReadFile(path); err == nil {
+		if t := strings.TrimSpace(string(b)); t != "" {
+			return t, nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("reading -token-file: %w", err)
+	}
+	if t := strings.TrimSpace(os.Getenv(TokenEnv)); t != "" {
+		return t, nil
+	}
+	return "", fmt.Errorf("no hostd token: put it in %s (mode 0600) or $%s", path, TokenEnv)
+}
+
+func defaultSocket() string {
+	if d := os.Getenv("XDG_RUNTIME_DIR"); d != "" {
+		return filepath.Join(d, Program, "agentd.sock")
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("%s-%d", Program, os.Getuid()), "agentd.sock")
+}

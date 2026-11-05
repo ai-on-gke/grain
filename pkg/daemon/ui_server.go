@@ -684,14 +684,13 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 	// (startGitProxy), which comes up after this server does.
 	srv.SetNamespace(liveNamespace.Load)
 
-	// Loopback listener without HostGuard for capability servers (host-script
-	// approve: true) to request, wait on, and expire per-call approvals under
-	// their minted task-scoped ghsa_ bearer tokens.
-	callbackLn, err := net.Listen("tcp", "127.0.0.1:0")
+	// Loopback listener for capability servers (host-script approve: true)
+	// to request, wait on, and expire per-call approvals under their minted
+	// task-scoped ghsa_ bearer tokens (localScriptCallbackServer).
+	callbackSrv, callbackLn, err := localScriptCallbackServer(srv)
 	if err != nil {
-		return nil, fmt.Errorf("listening for local-script approval callbacks: %w", err)
+		return nil, err
 	}
-	callbackSrv := &http.Server{Handler: srv, ReadHeaderTimeout: 30 * time.Second}
 	localScriptApprovalURL.Store("http://" + callbackLn.Addr().String())
 	go func() {
 		_ = callbackSrv.Serve(callbackLn)
@@ -779,6 +778,27 @@ func lastRestart(store *model.Store, upgrader *upgrade.Upgrader,
 		}
 		return restartAdoption(orchestrator.UpgradeAdoption(ctx, store, adoption, status, time.Now().UTC()))
 	}
+}
+
+// localScriptCallbackAddr is where the local-script approval callback
+// listener binds: loopback only, on a port the kernel picks.
+const localScriptCallbackAddr = "127.0.0.1:0"
+
+// localScriptCallbackServer opens the second listener startUIServer runs:
+// a loopback one whose address is published as the approval-callback base
+// URL (localScriptApprovalURL) that localexec.HTTPApprover dials. It
+// serves the whole UI handler, so it is guarded the way the -ui-addr
+// listener is: HostGuard refuses a Host naming a domain this daemon does
+// not answer to with 421, which is what keeps a DNS-rebound page that
+// found the port by scanning from reaching it (grain#2380). HTTPApprover
+// sends the IP-literal Host of that URL, which HostGuard always allows.
+func localScriptCallbackServer(handler http.Handler) (*http.Server, net.Listener, error) {
+	ln, err := net.Listen("tcp", localScriptCallbackAddr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("listening for local-script approval callbacks: %w", err)
+	}
+	srv := &http.Server{Handler: ui.HostGuard(handler, localScriptCallbackAddr, nil), ReadHeaderTimeout: 30 * time.Second}
+	return srv, ln, nil
 }
 
 // restartAdoption is report in the shape the upgrade pane reads, or nil.

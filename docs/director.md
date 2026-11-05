@@ -54,10 +54,10 @@ the chat is in:
 
 | setting | shipped as | what it decides |
 |---|---|---|
-| `Capabilities` | self-debug, grain-log, deployment-health, bootstrap-playbooks (plus any capability a wrapper distribution registers as on by default) | what the agent may reach |
+| `Capabilities` | `self-debug`, `https://grain.dev/capabilities/grain#journal` (formerly `grain-log`), `api:deployment:read` and `…/grain#health` (formerly `deployment-health`), `bootstrap-playbooks` (plus any capability a wrapper distribution registers as on by default) | what the agent may reach |
 | `ReadsAll` | true (every session) | whether it reads every repository this deployment works in |
 | `DeclinedDefaults` | none | which of the defaults every session holds (`api:ci-read`) it opts out of |
-| `NetworkAccess` | none | whether its sandbox reaches the internet |
+| `NetworkAccess` | open (`model.DefaultConsoleSessions`; `none` is the target, `director-capabilities.spec.md` G3) | whether its sandbox reaches the internet |
 | `TasksApproved` | false | whether the tasks it files are queued or wait for a person |
 | `Title` | "Director" | what the rail calls it |
 

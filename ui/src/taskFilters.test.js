@@ -1835,4 +1835,36 @@ describe("defaultSortFor", () => {
     expect(hit({ prMergedAt: "2026-09-05T00:00:00Z" })).toBe(false);
     expect(hit({ closedAt: "2026-10-05T00:00:00Z" })).toBe(false);
   });
+
+  it("filters tasks by externalRef and empty externalRef", () => {
+    const matchRef = { attr: "externalRef", op: "any", values: ["CA-204"] };
+    const emptyRef = { attr: "externalRef", op: "empty", values: [] };
+    expect(
+      matchesFilters(
+        task({ externalRef: "CA-204" }),
+        conditions(matchRef),
+        "",
+        config,
+      ),
+    ).toBe(true);
+    expect(
+      matchesFilters(
+        task({ externalRef: "CA-999" }),
+        conditions(matchRef),
+        "",
+        config,
+      ),
+    ).toBe(false);
+    expect(matchesFilters(task({}), conditions(emptyRef), "", config)).toBe(
+      true,
+    );
+    expect(
+      matchesFilters(
+        task({ externalRef: "CA-204" }),
+        conditions(emptyRef),
+        "",
+        config,
+      ),
+    ).toBe(false);
+  });
 });

@@ -84,6 +84,7 @@ With `-json` it prints the `ui.Task` array.
 | `-capability` | string |  |  | shorthand for -filter capability:any:VALUE (or "none" for the tasks carrying none) |
 | `-closed` | bool |  |  | list closed tasks too (-closed=false to leave them out where the deployment shows them by default) |
 | `-deferred` | bool |  |  | list deferred tasks too |
+| `-external-ref` | string |  |  | shorthand for -filter externalRef:any:VALUE (e.g. CA-204, or "none" for tasks with no external reference) |
 | `-filter` | value |  |  | only tasks matching this condition, written attribute:comparison:value -- repeatable, and every one of them has to hold |
 | `-interactive` | bool |  |  | only live chats (-interactive=false for only background tasks) |
 | `-origin` | string |  |  | shorthand for -filter origin:any:VALUE (hand, external, proposed, schedule, suite, fix, review) |
@@ -137,6 +138,7 @@ Calls `POST /api/tasks` (`HTTPClient.CreateTask`) and prints the new task.
 | `-capability` | value |  |  | capability to attach (repeatable): a capability ID, a capability reference (https://...[#method]), or a reference with its arguments as ref={json} |
 | `-depends-on` | value |  |  | task this one must wait on before it is dispatched -- 12, #12, task-12, grain/task-12 or the task's page URL (repeatable) |
 | `-design` | value |  |  | committed-context path ([owner/name:]path[@rev]) this task implements, pinned to a commit SHA (repeatable) |
+| `-external-ref` | string |  |  | external work reference (e.g. CA-204), inherited by tasks spawned from this one |
 | `-field` | value |  |  | name=value for one of the fields this deployment declares (repeatable; "name=" clears it, and a field holding a set takes the flag more than once or a comma-separated list) |
 | `-interactive` | bool |  |  | file this as a live chat rather than a change to run unattended (bwsalmon/agents#539); implies -approve and dispatches ahead of the backlog |
 | `-issue` | int |  |  | GitHub issue number associated with this task |
@@ -168,6 +170,7 @@ Calls `PATCH /api/tasks/{id}` (`UpdateTask`) and prints the task the `PATCH` ret
 | `-connection` | string |  |  | ID of the one connection this task's next run must use -- empty takes the pin off; pass it with -model when the pinned connection does not serve the new model |
 | `-depends-on` | value |  |  | task this one must wait on before it is dispatched -- 12, #12, task-12, grain/task-12 or the task's page URL (repeatable) |
 | `-design` | value |  |  | committed-context path ([owner/name:]path[@rev]) this task implements (repeatable) -- replaces the whole set; pass -design "" to clear |
+| `-external-ref` | string |  |  | new external work reference (e.g. CA-204) -- empty clears it |
 | `-field` | value |  |  | name=value for one of the fields this deployment declares (repeatable; "name=" clears it, and a field holding a set takes the flag more than once or a comma-separated list) |
 | `-issue` | int |  |  | new associated GitHub issue number |
 | `-model` | string |  |  | model this task's next run asks for (Settings -> Models) -- empty takes the deployment's default |
