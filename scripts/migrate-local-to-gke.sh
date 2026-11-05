@@ -540,7 +540,7 @@ render_manifest() {
     -v selector="${NODE_SELECTOR}" -v replicas="${replicas}" -v secret="${SECRET_NAME}" \
     -v mount="${SECRET_MOUNT}" -v owner="${HOSTD_OWNER}" '
     /^  replicas: [0-9]+$/ { print "  replicas: " replicas; next }
-    /^          image: ghcr\.io\/.*\/grain:/ { sub(/image: .*/, "image: " image) }
+    /^          image: (docker\.io|ghcr\.io)\/.*\/grain:/ { sub(/image: .*/, "image: " image) }
     /^            - -k8s-granule-image=CHANGEME$/ { sub(/CHANGEME/, sandbox) }
     /^            - -default-target-repo=CHANGEME\/CHANGEME$/ { sub(/CHANGEME\/CHANGEME/, repo) }
     /^            # - -k8s-node-selector=CHANGEME=CHANGEME$/ {

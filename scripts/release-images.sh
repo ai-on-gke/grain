@@ -1675,7 +1675,7 @@ rebuild_release_grain() {
   go_version="$(sed -n 's/^toolchain[[:space:]]\{1,\}go//p' "$work/go.mod")"
   [ -n "$go_version" ] || go_version="$(sed -n 's/^go[[:space:]]\{1,\}//p' "$work/go.mod")"
   local source_label=()
-  if [ "$registry" = "ghcr.io" ]; then
+  if [ -n "$source_github_repo" ] && { [ "$registry" = "docker.io" ] || [ "$registry" = "index.docker.io" ] || [ "$registry" = "ghcr.io" ]; }; then
     source_label=(--label org.opencontainers.image.source="https://github.com/${source_github_repo}")
   fi
   (
