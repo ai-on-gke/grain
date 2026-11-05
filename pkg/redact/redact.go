@@ -262,7 +262,7 @@ var patterns = []pattern{
 	// A token minted for a CI job's api grants (pkg/capability/ciapi),
 	// the release gate's before it (rg_), and external agent tokens (gma_).
 	{"ci api token", regexp.MustCompile(`\b(?:ga|rg)_[0-9a-f]{16}_[0-9a-f]{64}\b`), "[redacted: ci api token]"},
-	{"external agent token", regexp.MustCompile(`\bgma_[0-9a-f]{64}\b`), "[redacted: external agent token]"},
+	{"external agent token", regexp.MustCompile(`\bgma_[0-9a-f]{32,}\b`), "[redacted: external agent token]"},
 	// A signed token, which carries its own claims and is worth cutting
 	// whether or not this host minted it.
 	{"jwt", regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`), "[redacted: jwt]"},

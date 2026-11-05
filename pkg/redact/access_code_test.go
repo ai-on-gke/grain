@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/redact"
 )
 
@@ -36,13 +37,22 @@ func TestTextRedactsAccessCodeHeader(t *testing.T) {
 }
 
 func TestTextRedactsBareExternalAgentToken(t *testing.T) {
-	tok := "gma_" + strings.Repeat("a1b2c3d4", 8)
-	line := "leaked external agent token " + tok + " in output\n"
-	got, n := (*redact.Redactor)(nil).Text(line)
-	if strings.Contains(got, tok) {
-		t.Fatalf("Text left gma_ token in:\n%s", got)
+	minted, _, prefix, err := model.GenerateExternalAgentToken()
+	if err != nil {
+		t.Fatalf("GenerateExternalAgentToken: %v", err)
 	}
-	if !strings.Contains(got, "[redacted: external agent token]") || n != 1 {
-		t.Errorf("Text(%q) = %q, %d; want [redacted: external agent token] with n=1", line, got, n)
+	longTok := "gma_" + strings.Repeat("a1b2c3d4", 8)
+	line := "leaked " + minted + " and " + longTok + " (prefix " + prefix + ")\n"
+	got, n := (*redact.Redactor)(nil).Text(line)
+	for _, secret := range []string{minted, longTok} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("Text left gma_ token %q in:\n%s", secret, got)
+		}
+	}
+	if !strings.Contains(got, "prefix "+prefix) {
+		t.Errorf("Text redacted non-secret display prefix %q in:\n%s", prefix, got)
+	}
+	if !strings.Contains(got, "[redacted: external agent token]") || n != 2 {
+		t.Errorf("Text(%q) = %q, %d; want [redacted: external agent token] with n=2", line, got, n)
 	}
 }
