@@ -245,6 +245,8 @@ var knownBoundaryFiles = []string{
 	"pkg/model/hostd.go", "pkg/ui/messages.go", "pkg/daemon/mcpserver_hostexec.go",
 	"pkg/daemon/capability_servers.go", "pkg/daemon/capability_servers_hostd.go",
 	"pkg/ui/capability_servers.go",
+	"pkg/ui/access_roles.go", "pkg/model/api_scope_set.go", "pkg/ui/external_cli.go",
+	"pkg/ui/local_script_approvals.go", "pkg/daemon/ui_server.go",
 	"pkg/model/repo_access.go", "pkg/daemon/ci.go", "pkg/daemon/ci_policy.go",
 	"pkg/daemon/ci_capability_pass.go", "pkg/daemon/capabilities.go",
 }
@@ -488,6 +490,53 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 		"anybody but a person", "RELEASE_MAJOR"} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("release-machinery's review brief does not mention %s:\n%s", want, brief)
+		}
+	}
+}
+
+// One path per file v17 added (2026-11-05 security review finding 2, task
+// 3168): the role gate, the built-in scope sets, the gma_ token's inbox
+// reach, the approval-callback tokens and the daemon's UI listeners. v16
+// classified none of them, so a change to any merged itself.
+func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
+	if Version != "trust-boundary/v17" {
+		t.Errorf("Version = %q, want trust-boundary/v17", Version)
+	}
+	for _, p := range []string{
+		"pkg/ui/access_roles.go",
+		"pkg/model/api_scope_set.go",
+		"pkg/ui/external_cli.go",
+		"pkg/ui/local_script_approvals.go",
+		"pkg/daemon/ui_server.go",
+	} {
+		if got := categoryIDs(Classify([]string{p})); !reflect.DeepEqual(got, []string{"auth-routes"}) {
+			t.Errorf("Classify(%q) = %v, want [auth-routes]", p, got)
+		}
+	}
+
+	// The gates by name, as in TestHostdAndCIRepoAccessGatesAreClassified.
+	gates := map[string][]string{
+		"pkg/model": {"APIScopeSetNamed"},
+		"pkg/ui": {
+			"resolveAccessRoles", "roleDenies", "roleGate", "roleScopeOf", "authorizeRoleCall",
+			"admitVerifiedPrincipal",
+			"MintToken", "RevokeToken", "CheckToken", "approvalCallbackRouteTask",
+			"authenticateApprovalCallback", "handleAnswerLocalScriptApproval",
+			"inboxReadable", "CheckReply", "handleReplyTask",
+		},
+		"pkg/daemon": {"startUIServer", "localScriptCallbackServer"},
+	}
+	for dir, names := range gates {
+		defined := funcFiles(t, dir)
+		for _, name := range names {
+			file, ok := defined[name]
+			if !ok {
+				t.Errorf("%s: no func or method %s -- update this test to where it went", dir, name)
+				continue
+			}
+			if Classify([]string{file}) == nil {
+				t.Errorf("%s is defined in %s, which Classify leaves unclassified", name, file)
+			}
 		}
 	}
 }
