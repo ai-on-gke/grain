@@ -312,6 +312,9 @@ func (w *WriterLock) watch(keepAlive, reacquireWindow time.Duration) {
 				}
 				return
 			}
+			if w.isStopping() {
+				return
+			}
 			w.logf("grain daemon: re-acquired PostgreSQL single-writer advisory lock (schema=%s)", w.schema)
 		}
 	}
@@ -501,6 +504,7 @@ func describeAdvisoryLockHolder(ctx context.Context, conn *pgx.Conn, key int64) 
 		FROM pg_locks l
 		LEFT JOIN pg_stat_activity a ON a.pid = l.pid
 		WHERE l.locktype = 'advisory'
+		  AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
 		  AND l.granted
 		  AND l.objsubid = 1
 		  AND l.classid = $1::bigint::oid

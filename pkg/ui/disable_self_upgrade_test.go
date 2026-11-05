@@ -100,6 +100,8 @@ func TestDisableSelfUpgradeBlocksUpgradeAndDatabaseCutoverRoutes(t *testing.T) {
 		{http.MethodPut, "/api/upgrade/source", `{"mode":"registry"}`},
 		{http.MethodPost, "/api/database/test", `{"dsn":"postgres://localhost:5432/grain"}`},
 		{http.MethodPost, "/api/database/upgrade", `{"dsn":"postgres://localhost:5432/grain"}`},
+		{http.MethodPost, "/api/upgrade/postgres", `{"dsn":"postgres://localhost:5432/grain"}`},
+		{http.MethodPost, "/api/settings/db/migrate-to-postgres", `{"dsn":"postgres://localhost:5432/grain"}`},
 	}
 	for _, tc := range blocked {
 		r := do(t, srv, tc.method, tc.path, tc.body)
@@ -117,24 +119,47 @@ func TestDisableSelfUpgradeSanitizesUnsafeManagementURL(t *testing.T) {
 	if err := store.PutConfig(ctx, model.DefaultConfig()); err != nil {
 		t.Fatal(err)
 	}
+	for _, unsafeURL := range []string{
+		"javascript:alert(1)",
+		"https://:8080/entries/alice",
+		"https://user:secret@grain.example.com/entries/alice",
+	} {
+		srv := ui.NewServer(ui.Config{
+			Actor:              ui.DefaultActor("alice"),
+			DisableSelfUpgrade: true,
+			ManagementURL:      unsafeURL,
+		}, store)
+
+		cfgRec := do(t, srv, http.MethodGet, "/api/config", "")
+		if cfgRec.Code != http.StatusOK {
+			t.Fatalf("GET /api/config (%q) = %d: %s", unsafeURL, cfgRec.Code, cfgRec.Body)
+		}
+		cfgBody := decode[struct {
+			SelfUpgradeDisabled bool   `json:"selfUpgradeDisabled"`
+			ManagementURL       string `json:"managementUrl"`
+		}](t, cfgRec)
+		if !cfgBody.SelfUpgradeDisabled || cfgBody.ManagementURL != "" {
+			t.Fatalf("GET /api/config (%q) = %+v, want selfUpgradeDisabled=true and sanitized empty managementUrl", unsafeURL, cfgBody)
+		}
+
+		upRec := do(t, srv, http.MethodGet, "/api/upgrade", "")
+		if upRec.Code != http.StatusOK {
+			t.Fatalf("GET /api/upgrade (%q) = %d: %s", unsafeURL, upRec.Code, upRec.Body)
+		}
+		upBody := decode[struct {
+			SelfUpgradeDisabled bool   `json:"selfUpgradeDisabled"`
+			ManagementURL       string `json:"managementUrl"`
+		}](t, upRec)
+		if !upBody.SelfUpgradeDisabled || upBody.ManagementURL != "" {
+			t.Fatalf("GET /api/upgrade (%q) = %+v, want selfUpgradeDisabled=true and sanitized empty managementUrl", unsafeURL, upBody)
+		}
+	}
+
 	srv := ui.NewServer(ui.Config{
 		Actor:              ui.DefaultActor("alice"),
 		DisableSelfUpgrade: true,
-		ManagementURL:      "javascript:alert(1)",
+		ManagementURL:      "https://grain.example.com/entries/alice",
 	}, store)
-
-	cfgRec := do(t, srv, http.MethodGet, "/api/config", "")
-	if cfgRec.Code != http.StatusOK {
-		t.Fatalf("GET /api/config = %d: %s", cfgRec.Code, cfgRec.Body)
-	}
-	cfgBody := decode[struct {
-		SelfUpgradeDisabled bool   `json:"selfUpgradeDisabled"`
-		ManagementURL       string `json:"managementUrl"`
-	}](t, cfgRec)
-	if !cfgBody.SelfUpgradeDisabled || cfgBody.ManagementURL != "" {
-		t.Fatalf("GET /api/config = %+v, want selfUpgradeDisabled=true and sanitized empty managementUrl", cfgBody)
-	}
-
 	unauthReq := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	unauthReq.RemoteAddr = "203.0.113.10:54321"
 	unauthRec := httptest.NewRecorder()

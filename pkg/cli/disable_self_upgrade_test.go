@@ -85,7 +85,13 @@ func TestDaemonDisableSelfUpgradeFlagsAndEnv(t *testing.T) {
 	t.Run("invalid management url refused", func(t *testing.T) {
 		t.Setenv("GRAIN_DISABLE_SELF_UPGRADE", "")
 		t.Setenv("GRAIN_MANAGEMENT_URL", "")
-		for _, bad := range []string{"javascript:alert(1)", "/entries/alice", "https://"} {
+		for _, bad := range []string{
+			"javascript:alert(1)",
+			"/entries/alice",
+			"https://",
+			"https://:8080/entries/alice",
+			"https://user:super-secret-token@grain.example.com/entries/alice",
+		} {
 			cfg, _, _, err := parseDaemonArgs([]string{
 				"-data-dir", t.TempDir(),
 				"-disable-native-sandboxes",
@@ -94,8 +100,12 @@ func TestDaemonDisableSelfUpgradeFlagsAndEnv(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parseDaemonArgs(%q): %v", bad, err)
 			}
-			if err := checkConfig(cfg); err == nil || !strings.Contains(err.Error(), "-management-url") {
+			err = checkConfig(cfg)
+			if err == nil || !strings.Contains(err.Error(), "-management-url") {
 				t.Fatalf("checkConfig(%q) = %v, want -management-url error", bad, err)
+			}
+			if strings.Contains(err.Error(), "super-secret-token") {
+				t.Fatalf("checkConfig(%q) error leaked embedded credential: %v", bad, err)
 			}
 		}
 	})

@@ -92,15 +92,22 @@ func latestRelease(upgrader *upgrade.Upgrader) func(context.Context) (string, er
 
 // ValidateManagementURL validates an optional external management URL
 // (-management-url / $GRAIN_MANAGEMENT_URL), accepting either the empty string
-// or an absolute http:// or https:// URL with a non-empty host.
+// or an absolute http:// or https:// URL with a non-empty hostname and no
+// embedded user credentials.
 func ValidateManagementURL(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return "", nil
 	}
 	u, err := url.Parse(trimmed)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return "", fmt.Errorf("-management-url must be an absolute http:// or https:// URL, got %q", raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
+		redacted := trimmed
+		if u != nil && u.User != nil {
+			uCopy := *u
+			uCopy.User = nil
+			redacted = uCopy.String()
+		}
+		return "", fmt.Errorf("-management-url must be an absolute http:// or https:// URL without user credentials, got %q", redacted)
 	}
 	return u.String(), nil
 }

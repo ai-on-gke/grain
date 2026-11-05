@@ -16,6 +16,7 @@ package daemon
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -108,6 +109,8 @@ func Run(ctx context.Context, cfg Config) error {
 	ctx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 	var writerLockLost atomic.Pointer[error]
+	var fencedDB atomic.Pointer[sql.DB]
+	var fencedStateManager atomic.Pointer[StateManager]
 
 	// Before anything binds: how long the restart that started this
 	// process left each listener unreachable is measured from the times
@@ -157,7 +160,13 @@ func Run(ctx context.Context, cfg Config) error {
 	writerLock, err := acquireDaemonWriterLock(ctx, cfg, func(lockErr error) {
 		wrapped := fmt.Errorf("PostgreSQL single-writer advisory lock lost: %w", lockErr)
 		if writerLockLost.CompareAndSwap(nil, &wrapped) {
-			log.Printf("grain daemon: %v; stopping immediately to prevent split-brain writes", wrapped)
+			log.Printf("grain daemon: %v; fencing database pool and stopping immediately to prevent split-brain writes", wrapped)
+			if sm := fencedStateManager.Load(); sm != nil {
+				sm.fence()
+			}
+			if liveDB := fencedDB.Load(); liveDB != nil {
+				_ = liveDB.Close()
+			}
 			cancelRun()
 		}
 	})
@@ -185,6 +194,11 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer db.Close()
+	fencedDB.Store(db)
+	if lost := writerLockLost.Load(); lost != nil {
+		_ = db.Close()
+		return *lost
+	}
 	// Recorded once the store has opened, so a mistyped DSN never replaces
 	// a good one: a daemon started with -postgres-url (or the environment)
 	// otherwise leaves nothing in its data dir saying where its store is.
@@ -290,6 +304,12 @@ func Run(ctx context.Context, cfg Config) error {
 	// so without this no run's resolution was ever recorded (task 3140).
 	secretStore.SetAuditLogger(store)
 	stateManager := NewStateManager(cfg.DataDir, db, stateRepo, secretStore, secretsRepo, forbidden)
+	fencedStateManager.Store(stateManager)
+	if lost := writerLockLost.Load(); lost != nil {
+		stateManager.fence()
+		_ = db.Close()
+		return *lost
+	}
 	stateManager.noteLoadFailure(loadErr)
 	stateManager.loadAPIScopeSets(ctx)
 	stopStateSync := startStateSync(ctx, stateManager.sync, stateManager.syncAll, stateManager.nudge)

@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import UpgradePanel, {
   AutoUpgradeSettings,
   resolvedImage,
+  safeManagementUrl,
 } from "./UpgradePanel.jsx";
 import api from "../api.js";
 import { optionValues } from "../searchSelectTesting.js";
@@ -2395,5 +2396,14 @@ describe("ImageSourceSettings on UpgradePanel", () => {
       screen.queryByTestId("upgrade-management-link"),
     ).not.toBeInTheDocument();
     expect(screen.getByText(/PostgreSQL/)).toBeInTheDocument();
+
+    expect(safeManagementUrl("https://grain.example.com/entries/alice")).toBe(
+      "https://grain.example.com/entries/alice",
+    );
+    expect(safeManagementUrl("javascript:alert(1)")).toBe("");
+    expect(
+      safeManagementUrl("https://user:secret@grain.example.com/entries/alice"),
+    ).toBe("");
+    expect(safeManagementUrl("https://:8080/entries/alice")).toBe("");
   });
 });

@@ -53,7 +53,7 @@ func sanitizeManagementURL(raw string) string {
 		return ""
 	}
 	u, err := url.Parse(trimmed)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
 		return ""
 	}
 	return u.String()

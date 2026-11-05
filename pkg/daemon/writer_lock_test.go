@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -199,13 +201,14 @@ func TestDaemonWriterLockFencesSecondDaemonAndTransfersOnShutdown(t *testing.T) 
 
 func TestDaemonWriterLockStopsOnSplitBrainTakeover(t *testing.T) {
 	dsn, schema, admin, _ := daemonPostgresTestSchemaDSN(t)
+	dataDir := t.TempDir()
 
 	uiAddrCh := make(chan string, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	runErr := make(chan error, 1)
 	go func() {
 		runErr <- Run(ctx, Config{
-			DataDir:                   t.TempDir(),
+			DataDir:                   dataDir,
 			SandboxDir:                t.TempDir(),
 			DbDriver:                  "postgres",
 			DbDSN:                     dsn,
@@ -233,7 +236,7 @@ func TestDaemonWriterLockStopsOnSplitBrainTakeover(t *testing.T) {
 
 	var lockPID int
 	err := admin.QueryRow(
-		`SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted AND classid = ?::bigint::oid AND objid = ?::bigint::oid AND objsubid = 1 LIMIT 1`,
+		`SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND database = (SELECT oid FROM pg_database WHERE datname = current_database()) AND granted AND classid = ?::bigint::oid AND objid = ?::bigint::oid AND objsubid = 1 LIMIT 1`,
 		objid, objsubid,
 	).Scan(&lockPID)
 	if err != nil {
@@ -263,7 +266,7 @@ func TestDaemonWriterLockStopsOnSplitBrainTakeover(t *testing.T) {
 	for {
 		var waiting int
 		_ = admin.QueryRow(
-			`SELECT COUNT(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted AND classid = ?::bigint::oid AND objid = ?::bigint::oid AND objsubid = 1`,
+			`SELECT COUNT(*) FROM pg_locks WHERE locktype = 'advisory' AND database = (SELECT oid FROM pg_database WHERE datname = current_database()) AND NOT granted AND classid = ?::bigint::oid AND objid = ?::bigint::oid AND objsubid = 1`,
 			objid, objsubid,
 		).Scan(&waiting)
 		if waiting > 0 || time.Now().After(waitDeadline) {
@@ -279,6 +282,15 @@ func TestDaemonWriterLockStopsOnSplitBrainTakeover(t *testing.T) {
 		t.Fatalf("rival pg_advisory_lock failed: %v", err)
 	}
 
+	// Simulate the replacement writer recording new state immediately after
+	// taking the lock, before the old daemon's keepalive notices lock loss.
+	if _, err := rivalConn.ExecContext(
+		context.Background(),
+		fmt.Sprintf(`INSERT INTO "%s".github_webhook_cursor (id, last_acked_seq, updated_at) VALUES ('rival', 42, '2026-11-05T18:00:00Z')`, schema),
+	); err != nil {
+		t.Fatalf("inserting rival webhook cursor row: %v", err)
+	}
+
 	select {
 	case daemonErr := <-runErr:
 		// Put nil back so the deferred cleanup does not block.
@@ -288,5 +300,19 @@ func TestDaemonWriterLockStopsOnSplitBrainTakeover(t *testing.T) {
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("daemon did not exit within 15s after losing PostgreSQL single-writer advisory lock")
+	}
+
+	// Verify the split-brain fence stopped detached shutdown paths (such as
+	// stopStateSync's final syncAll) from touching PostgreSQL or exporting the
+	// replacement writer's post-takeover rows into the old VM's state repo.
+	var gotSeq int64
+	if err := admin.QueryRow(
+		fmt.Sprintf(`SELECT last_acked_seq FROM "%s".github_webhook_cursor WHERE id = 'rival'`, schema),
+	).Scan(&gotSeq); err != nil || gotSeq != 42 {
+		t.Fatalf("rival webhook cursor after old daemon exit = %d, err = %v; want 42", gotSeq, err)
+	}
+	cursorExport, err := os.ReadFile(filepath.Join(StateRepoDir(dataDir), "github_webhook_cursor.jsonl"))
+	if err == nil && strings.Contains(string(cursorExport), "rival") {
+		t.Fatalf("fenced old daemon exported post-takeover rival state during shutdown: %s", string(cursorExport))
 	}
 }
