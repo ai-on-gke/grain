@@ -16,6 +16,7 @@
 # Single source of truth for Grain's published open-source OCI image
 # registry, namespace, leaf repository names, and legacy GHCR <-> Docker Hub
 # aliases. Keep in sync with pkg/installtrack/installtrack.go.
+# shellcheck disable=SC2034
 
 RELEASE_IMAGE_REGISTRY_DEFAULT="docker.io"
 RELEASE_IMAGE_REPO_DEFAULT="grainai"
@@ -118,7 +119,9 @@ legacy_ghcr_image_repo() {
   local lowered="${repo,,}"
   local role oss_leaf legacy_leaf extra_legacy ns_leaf
   while IFS='|' read -r role oss_leaf legacy_leaf extra_legacy; do
-    [ -n "${oss_leaf:-}" ] && [ -n "${legacy_leaf:-}" ] || continue
+    if [ -z "${oss_leaf:-}" ] || [ -z "${legacy_leaf:-}" ]; then
+      continue
+    fi
     ns_leaf="${RELEASE_IMAGE_REPO_DEFAULT}/${oss_leaf}"
     case "$lowered" in
       "${RELEASE_IMAGE_REGISTRY_DEFAULT}/${ns_leaf}" | "index.docker.io/${ns_leaf}" | "${ns_leaf}")

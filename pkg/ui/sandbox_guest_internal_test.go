@@ -26,8 +26,8 @@ func TestGuestImageCommitReadsThroughADigest(t *testing.T) {
 		"docker.io/grainai/sandbox:sha-7746d62@" + digest: "7746d62",
 		"docker.io/grainai/sandbox@" + digest:             "",
 		"docker.io/grainai/sandbox:main@" + digest:        "",
-		"localhost:5000/bwsalmon/grain/guest:sha-abc1234":    "abc1234",
-		"localhost:5000/bwsalmon/grain/guest@" + digest:      "",
+		"localhost:5000/bwsalmon/grain/guest:sha-abc1234": "abc1234",
+		"localhost:5000/bwsalmon/grain/guest@" + digest:   "",
 	} {
 		if got := guestImageCommit(image); got != want {
 			t.Errorf("guestImageCommit(%q) = %q, want %q", image, got, want)

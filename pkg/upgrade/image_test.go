@@ -1608,8 +1608,8 @@ func TestRepositoryOf(t *testing.T) {
 		"docker.io/grainai/grain:main":             "docker.io/grainai/grain",
 		"docker.io/grainai/grain@sha256:abcd":      "docker.io/grainai/grain",
 		"docker.io/grainai/grain:main@sha256:abcd": "docker.io/grainai/grain",
-		"localhost:5000/grain":                          "localhost:5000/grain",
-		"localhost:5000/grain:main@sha256:abcd":         "localhost:5000/grain",
+		"localhost:5000/grain":                     "localhost:5000/grain",
+		"localhost:5000/grain:main@sha256:abcd":    "localhost:5000/grain",
 	} {
 		if got := repositoryOf(ref); got != want {
 			t.Errorf("repositoryOf(%q) = %q, want %q", ref, got, want)

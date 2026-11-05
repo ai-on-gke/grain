@@ -269,8 +269,8 @@ esac
 
 func publishEnv(answers string) map[string]string {
 	return map[string]string{
-		"GRAIN_CI":        "true",
-		"DOCKER_PAT":      "a-token",
+		"GRAIN_CI":            "true",
+		"DOCKER_PAT":          "a-token",
 		"DOCKER_STUB_ANSWERS": answers,
 		// No signing key: the release goes ahead unsigned, as it does
 		// wherever image-signing is not granted.

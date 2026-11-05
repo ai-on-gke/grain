@@ -40,10 +40,10 @@ func TestChannelForRef(t *testing.T) {
 		"docker.io/grainai/grain:release..2.1":           "release/2.1",
 		"docker.io/grainai/grain:sha-1234567":            "",
 		"docker.io/grainai/grain@sha256:0123abcd":        "",
-		"localhost:5000/grain":                                "",
-		"localhost:5000/grain:candidate":                      "candidate",
-		"localhost:5000/grain:rc":                             "candidate",
-		"":                                                    "",
+		"localhost:5000/grain":                           "",
+		"localhost:5000/grain:candidate":                 "candidate",
+		"localhost:5000/grain:rc":                        "candidate",
+		"":                                               "",
 	} {
 		if got := ChannelForRef(ref); got != want {
 			t.Errorf("ChannelForRef(%q) = %q, want %q", ref, got, want)

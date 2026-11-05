@@ -236,8 +236,8 @@ func TestManifestK8sSandboxImageReadsTheShippedManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(image, "k8s-sandbox") {
-		t.Fatalf("ManifestK8sSandboxImage(grain.yaml) = %q, want the k8s-sandbox image it runs", image)
+	if !strings.Contains(image, "sandbox-k8s") {
+		t.Fatalf("ManifestK8sSandboxImage(grain.yaml) = %q, want the sandbox-k8s image it runs", image)
 	}
 }
 

@@ -203,11 +203,11 @@ func TestImageRepositoryStripsTagsAndDigestsAndNothingElse(t *testing.T) {
 	for ref, want := range map[string]string{
 		"docker.io/grainai/sandbox:sha-2f89890": "docker.io/grainai/sandbox",
 		"docker.io/grainai/sandbox":             "docker.io/grainai/sandbox",
-		"127.0.0.1:5000/grain-sandbox:old":         "127.0.0.1:5000/grain-sandbox",
-		"127.0.0.1:5000/grain-sandbox":             "127.0.0.1:5000/grain-sandbox",
+		"127.0.0.1:5000/grain-sandbox:old":      "127.0.0.1:5000/grain-sandbox",
+		"127.0.0.1:5000/grain-sandbox":          "127.0.0.1:5000/grain-sandbox",
 		"docker.io/grainai/sandbox@sha256:0000000000000000000000000000000000000000000000000000000000000000":             "docker.io/grainai/sandbox",
 		"docker.io/grainai/sandbox:sha-2f89890@sha256:0000000000000000000000000000000000000000000000000000000000000000": "docker.io/grainai/sandbox",
-		"127.0.0.1:5000/grain-sandbox:old@sha256:0000000000000000000000000000000000000000000000000000000000000000":         "127.0.0.1:5000/grain-sandbox",
+		"127.0.0.1:5000/grain-sandbox:old@sha256:0000000000000000000000000000000000000000000000000000000000000000":      "127.0.0.1:5000/grain-sandbox",
 	} {
 		if got := imageRepository(ref); got != want {
 			t.Errorf("imageRepository(%q) = %q, want %q", ref, got, want)

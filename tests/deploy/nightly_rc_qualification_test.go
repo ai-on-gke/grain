@@ -232,7 +232,8 @@ func TestReleasesContainerSuiteNamesThePublishedReleases(t *testing.T) {
 		step = step[:end+1]
 	}
 	for _, want := range []string{
-		`export GRAIN_UPGRADE_RELEASE_IMAGE="$(release_image_repo_for daemon)"`,
+		`GRAIN_UPGRADE_RELEASE_IMAGE="$(release_image_repo_for daemon)"`,
+		"export GRAIN_UPGRADE_RELEASE_IMAGE",
 		"go test ./tests/container/...",
 		"--- SKIP",
 	} {

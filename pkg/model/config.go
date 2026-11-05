@@ -978,10 +978,10 @@ type Config struct {
 
 // Default Kubernetes sandbox configuration values.
 const (
-	DefaultK8sNamespace        = "grain"
-	DefaultK8sKubectl          = "kubectl"
-	DefaultK8sDeployment       = "grain"
-	DefaultK8sContainer        = "grain"
+	DefaultK8sNamespace          = "grain"
+	DefaultK8sKubectl            = "kubectl"
+	DefaultK8sDeployment         = "grain"
+	DefaultK8sContainer          = "grain"
 	DefaultK8sWorkspace          = "/home/agent"
 	DefaultK8sGranuleWorkspace   = "/home/debian"
 	DefaultK8sSandboxImage       = "docker.io/grainai/sandbox-k8s:latest"

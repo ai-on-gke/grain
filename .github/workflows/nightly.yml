@@ -1442,7 +1442,8 @@ jobs:
           set +e
           # shellcheck source=scripts/release-image-repos.sh
           . ./scripts/release-image-repos.sh
-          export GRAIN_UPGRADE_RELEASE_IMAGE="$(release_image_repo_for daemon)"
+          GRAIN_UPGRADE_RELEASE_IMAGE="$(release_image_repo_for daemon)"
+          export GRAIN_UPGRADE_RELEASE_IMAGE
           if [ "$REF_TYPE" = tag ]; then
             export GRAIN_UPGRADE_TARGET="$REF_NAME"
           fi

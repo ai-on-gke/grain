@@ -255,7 +255,8 @@ jobs:
           # fails this step.
           # shellcheck source=scripts/release-image-repos.sh
           . ./scripts/release-image-repos.sh
-          export GRAIN_UPGRADE_RELEASE_IMAGE="$(release_image_repo_for daemon)"
+          GRAIN_UPGRADE_RELEASE_IMAGE="$(release_image_repo_for daemon)"
+          export GRAIN_UPGRADE_RELEASE_IMAGE
           go test ./tests/container/... -count=1 -v -timeout 30m 2>&1 | tee /tmp/container.log
           if grep -q -- "--- SKIP" /tmp/container.log; then
             grep -- "--- SKIP" /tmp/container.log >&2
