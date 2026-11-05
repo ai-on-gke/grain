@@ -76,7 +76,7 @@ DRY_RUN=false
 ROLLBACK=false
 PRINT_MANIFEST=false
 
-DEFAULT_IMAGE="ghcr.io/bwsalmon/grain/grain:main"
+DEFAULT_IMAGE="docker.io/grainai/grain:main"
 DAEMON_UNIT=grain-daemon.service
 # Where Stage 2 moves DAEMON_UNIT's file so that it can be masked:
 # systemctl mask refuses ("File ... already exists") a unit whose own
@@ -114,7 +114,7 @@ Where the cluster is:
 What runs there:
   --image <ref>             grain controller image (default: the image the
                             local grain-daemon.service runs, else
-                            ghcr.io/bwsalmon/grain/grain:main)
+                            docker.io/grainai/grain:main)
   --sandbox-image <ref>     Packed guest image for -k8s-granule-image (default:
                             the local daemon's -sandbox-image)
   --target-repo <owner/name>

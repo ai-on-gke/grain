@@ -7,7 +7,7 @@
 # expose the UI and API to the public internet.
 #
 # Instead, this manifest deploys `github-webhook` (/usr/local/bin/github-webhook,
-# shipped inside the same ghcr.io/bwsalmon/grain/grain image) as a separate
+# shipped inside the same docker.io/grainai/grain image) as a separate
 # unprivileged pod with zero GitHub credentials and zero access to grain-data.
 # On GKE Ingress, route `/webhooks/github` to `Service/grain-webhook` (whose
 # BackendConfig explicitly keeps IAP disabled) and `/*` to `Service/grain`
@@ -66,7 +66,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: github-webhook
-          image: ghcr.io/bwsalmon/grain/grain:CHANGEME
+          image: docker.io/grainai/grain:CHANGEME
           command: ["/usr/local/bin/github-webhook"]
           args:
             - "serve"
