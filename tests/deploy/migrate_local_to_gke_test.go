@@ -54,7 +54,7 @@ func renderedMigrationManifest(t *testing.T) ([]k8sObject, []*yaml.Node) {
 	root := repoRoot(t)
 	scratch := t.TempDir()
 	cmd := exec.Command("bash", filepath.Join(root, "scripts", "migrate-local-to-gke.sh"), "--print-manifest",
-		"--image=ghcr.io/bwsalmon/grain/grain:v9.9.9", "--sandbox-image=ghcr.io/bwsalmon/grain/guest:v9.9.9",
+		"--image=docker.io/grainai/grain:v9.9.9", "--sandbox-image=docker.io/grainai/sandbox:v9.9.9",
 		"--target-repo=ai-on-gke/grain", "--node-selector=cloud.google.com/gke-nodepool=granule",
 		"--data-dir="+scratch)
 	cmd.Env = append(os.Environ(), "GRAIN_ETC_DIR="+scratch, "GRAIN_SYSTEMD_DIR="+scratch)
@@ -105,12 +105,12 @@ func TestMigrateLocalToGKERendersAControllerHostdCanDialInTo(t *testing.T) {
 
 	dep := grainDeploymentFromDocs(t, objects, nodes)
 	c := grainContainer(t, dep)
-	if c.Image != "ghcr.io/bwsalmon/grain/grain:v9.9.9" {
+	if c.Image != "docker.io/grainai/grain:v9.9.9" {
 		t.Errorf("the controller runs %q, not --image", c.Image)
 	}
 	flags := daemonArgs(t, c)
 	for name, want := range map[string]string{
-		"k8s-granule-image":   "ghcr.io/bwsalmon/grain/guest:v9.9.9",
+		"k8s-granule-image":   "docker.io/grainai/sandbox:v9.9.9",
 		"default-target-repo": "ai-on-gke/grain",
 		"k8s-node-selector":   "cloud.google.com/gke-nodepool=granule",
 		"hostd-token-file":    "/etc/grain-secrets/hostd-token",

@@ -24,13 +24,13 @@ import (
 
 func TestSourceAnswersTheCustomImageOverTheStockOne(t *testing.T) {
 	var s Source
-	if image, changed := s.Set("ghcr.io/bwsalmon/grain/guest:sha-1", ""); image != "ghcr.io/bwsalmon/grain/guest:sha-1" || !changed {
+	if image, changed := s.Set("docker.io/grainai/sandbox:sha-1", ""); image != "docker.io/grainai/sandbox:sha-1" || !changed {
 		t.Fatalf("Set(stock, \"\") = %q, %v; want the stock image, changed", image, changed)
 	}
 	if s.Custom() {
 		t.Error("Custom() with nothing configured, want false")
 	}
-	image, changed := s.Set("ghcr.io/bwsalmon/grain/guest:sha-1", " registry.example/team/guest:v3 ")
+	image, changed := s.Set("docker.io/grainai/sandbox:sha-1", " registry.example/team/guest:v3 ")
 	if image != "registry.example/team/guest:v3" || !changed {
 		t.Fatalf("Set(stock, custom) = %q, %v; want the custom image, changed", image, changed)
 	}
@@ -42,20 +42,27 @@ func TestSourceAnswersTheCustomImageOverTheStockOne(t *testing.T) {
 	}
 	// An upgrade moves the stock image; the custom one stays in force,
 	// which is what a custom image built FROM a base is for.
-	if image, changed := s.Set("ghcr.io/bwsalmon/grain/guest:sha-2", "registry.example/team/guest:v3"); image != "registry.example/team/guest:v3" || changed {
+	if image, changed := s.Set("docker.io/grainai/sandbox:sha-2", "registry.example/team/guest:v3"); image != "registry.example/team/guest:v3" || changed {
 		t.Fatalf("Set after an upgrade = %q, %v; want the same custom image, unchanged", image, changed)
 	}
-	if image, _ := s.Set("ghcr.io/bwsalmon/grain/guest:sha-2", ""); image != "ghcr.io/bwsalmon/grain/guest:sha-2" {
+	if image, _ := s.Set("docker.io/grainai/sandbox:sha-2", ""); image != "docker.io/grainai/sandbox:sha-2" {
 		t.Fatalf("clearing the custom image answers %q, want the stock one", image)
 	}
 }
 
 func TestBaseImageForBackendNamesTheMinimalBaseOfTheStockTag(t *testing.T) {
-	if got, want := BaseImageForBackend("granule", "ghcr.io/bwsalmon/grain/guest:sha-abc"), "ghcr.io/bwsalmon/grain/guest-base:sha-abc"; got != want {
+	if got, want := BaseImageForBackend("granule", "docker.io/grainai/sandbox:sha-abc"), "docker.io/grainai/sandbox-base:sha-abc"; got != want {
 		t.Errorf("granule base = %q, want %q", got, want)
 	}
-	if got, want := BaseImageForBackend("kubernetes", "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-abc"), "ghcr.io/bwsalmon/grain/k8s-sandbox-base:sha-abc"; got != want {
+	if got, want := BaseImageForBackend("kubernetes", "docker.io/grainai/sandbox-k8s:sha-abc"), "docker.io/grainai/sandbox-k8s-base:sha-abc"; got != want {
 		t.Errorf("kubernetes base = %q, want %q", got, want)
+	}
+	// Custom mirror / legacy layout with /guest and /k8s-sandbox leaves preserves that registry's leaf convention.
+	if got, want := BaseImageForBackend("granule", "us-docker.pkg.dev/proj/grain/guest:sha-abc"), "us-docker.pkg.dev/proj/grain/guest-base:sha-abc"; got != want {
+		t.Errorf("mirror granule base = %q, want %q", got, want)
+	}
+	if got, want := BaseImageForBackend("kubernetes", "us-docker.pkg.dev/proj/grain/k8s-sandbox:sha-abc"), "us-docker.pkg.dev/proj/grain/k8s-sandbox-base:sha-abc"; got != want {
+		t.Errorf("mirror kubernetes base = %q, want %q", got, want)
 	}
 }
 
@@ -76,11 +83,11 @@ func TestACustomImageAtTheCurrentContractIsNotWarnedAbout(t *testing.T) {
 }
 
 func TestACustomImageWithNoContractLabelSaysWhenTheBaseHasToChange(t *testing.T) {
-	got := CheckCustomImage("registry.example/team/img:v1", "kubernetes", "ghcr.io/bwsalmon/grain/k8s-sandbox-base:sha-1", "", map[string]string{}, nil)
+	got := CheckCustomImage("registry.example/team/img:v1", "kubernetes", "docker.io/grainai/sandbox-k8s-base:sha-1", "", map[string]string{}, nil)
 	if !got.Contract.NeedsBaseRebuild {
 		t.Fatalf("an undeclared contract does not need a base rebuild: %+v", got.Contract)
 	}
-	for _, want := range []string{"needs rebuilding FROM ghcr.io/bwsalmon/grain/k8s-sandbox-base:sha-1", ContractLabel, "does not need rebuilding on other grain upgrades"} {
+	for _, want := range []string{"needs rebuilding FROM docker.io/grainai/sandbox-k8s-base:sha-1", ContractLabel, "does not need rebuilding on other grain upgrades"} {
 		if !strings.Contains(got.Warning, want) {
 			t.Errorf("warning does not say %q:\n%s", want, got.Warning)
 		}
@@ -168,7 +175,7 @@ func TestValidateReferenceRefusesWhatIsNotOneImageReference(t *testing.T) {
 }
 
 func TestStaleStockPin(t *testing.T) {
-	const stamped = "ghcr.io/bwsalmon/grain/guest:sha-e5544d6"
+	const stamped = "docker.io/grainai/sandbox:sha-e5544d6"
 	rev := func(r string) map[string]string { return map[string]string{RevisionLabel: r} }
 	for _, tc := range []struct {
 		name, image, stamped string
@@ -176,18 +183,18 @@ func TestStaleStockPin(t *testing.T) {
 		stale                bool
 	}{
 		{"older commit mirrored elsewhere", "us-docker.pkg.dev/example-project/grain/guest:sha-31d0973", stamped, nil, true},
-		{"older commit pinned by digest", "ghcr.io/bwsalmon/grain/guest:sha-31d0973@sha256:0123", stamped, nil, true},
-		{"release tag against a commit stamp", "ghcr.io/bwsalmon/grain/guest:v2.1.0", stamped, nil, true},
-		{"older release", "ghcr.io/bwsalmon/grain/k8s-sandbox:v2.1.0", "ghcr.io/bwsalmon/grain/k8s-sandbox:v2.2.0", nil, true},
+		{"older commit pinned by digest", "docker.io/grainai/sandbox:sha-31d0973@sha256:0123", stamped, nil, true},
+		{"release tag against a commit stamp", "docker.io/grainai/sandbox:v2.1.0", stamped, nil, true},
+		{"older release", "docker.io/grainai/sandbox-k8s:v2.1.0", "docker.io/grainai/sandbox-k8s:v2.2.0", nil, true},
 		{"moving tag whose revision is another build", "us-docker.pkg.dev/p/grain/guest:latest", stamped, rev("31d0973aa0b1c2d3"), true},
 		{"the stamped build in a mirror", "us-docker.pkg.dev/p/grain/guest:sha-e5544d6", stamped, nil, false},
 		{"moving tag at the stamped revision", "us-docker.pkg.dev/p/grain/guest:latest", stamped, rev("e5544d6aa0b1c2d3"), false},
 		{"moving tag with no revision", "us-docker.pkg.dev/p/grain/guest:latest", stamped, nil, false},
 		{"a team's own image", "registry.example/team/guest:sha-31d0973", stamped, nil, false},
-		{"another flavour", "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-31d0973", stamped, nil, false},
-		{"dev build stamped latest", "ghcr.io/bwsalmon/grain/guest:sha-31d0973", "ghcr.io/bwsalmon/grain/guest:latest", nil, false},
+		{"another flavour", "docker.io/grainai/sandbox-k8s:sha-31d0973", stamped, nil, false},
+		{"dev build stamped latest", "docker.io/grainai/sandbox:sha-31d0973", "docker.io/grainai/sandbox:latest", nil, false},
 		{"nothing configured", "", stamped, nil, false},
-		{"nothing stamped", "ghcr.io/bwsalmon/grain/guest:sha-31d0973", "", nil, false},
+		{"nothing stamped", "docker.io/grainai/sandbox:sha-31d0973", "", nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := StaleStockPin(tc.image, tc.stamped, tc.labels)
@@ -206,12 +213,12 @@ func TestStaleStockPin(t *testing.T) {
 func TestCheckCustomImageFlagsAStaleStockPinWhateverItsContract(t *testing.T) {
 	labels := map[string]string{ContractLabel: ContractValue(), GranuleContractLabel: strconv.Itoa(GranuleContract)}
 	got := CheckCustomImage("us-docker.pkg.dev/p/grain/guest:sha-31d0973", "granule", "base",
-		"ghcr.io/bwsalmon/grain/guest:sha-e5544d6", labels, nil)
+		"docker.io/grainai/sandbox:sha-e5544d6", labels, nil)
 	if !got.Contract.OK || got.Stale == "" || got.Warning != got.Stale {
 		t.Errorf("CheckCustomImage = %+v, want a contract-OK verdict whose warning is the stale pin", got)
 	}
 	got = CheckCustomImage("us-docker.pkg.dev/p/grain/guest:sha-e5544d6", "granule", "base",
-		"ghcr.io/bwsalmon/grain/guest:sha-e5544d6", labels, nil)
+		"docker.io/grainai/sandbox:sha-e5544d6", labels, nil)
 	if got.Stale != "" || got.Warning != "" {
 		t.Errorf("CheckCustomImage(mirror of the stamp) = %+v, want no warning", got)
 	}

@@ -57,7 +57,7 @@ permissions:
 
 env:
   GOFLAGS: -mod=readonly
-  RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO || 'bwsalmon/grain' }}
+  RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO }}
 
 jobs:
   train:
@@ -154,38 +154,20 @@ jobs:
       - name: Configure package-publish credentials
         if: env.DRY_RUN != 'true'
         env:
+          DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
           GHCR_PAT: ${{ secrets.GHCR_TOKEN }}
-          FALLBACK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY || 'ghcr.io' }}
-          PUBLISH_USERNAME: ${{ vars.GHCR_USERNAME || 'bwsalmon' }}
+          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY }}
         run: |
           set -euo pipefail
-          token="${GHCR_PAT:-}"
-          username="${PUBLISH_USERNAME}"
-          if [ -z "$token" ]; then
-            case "${RELEASE_IMAGE_REPO}" in
-              bwsalmon/*)
-                token=""
-                ;;
-              *)
-                token="${FALLBACK_TOKEN}"
-                username="${GITHUB_ACTOR}"
-                ;;
-            esac
-          fi
-          if [ -n "$token" ]; then
-            echo "::add-mask::${token}"
-            {
-              echo "PACKAGE_PUBLISH_REGISTRY=${PUBLISH_REGISTRY}"
-              echo "PACKAGE_PUBLISH_USERNAME=${username}"
-              echo "PACKAGE_PUBLISH_TOKEN=${token}"
-            } >> "$GITHUB_ENV"
-            sudo mkdir -p /home/debian
-            printf '%s\n' "${PUBLISH_REGISTRY}" | sudo tee /home/debian/.package-publish-registry >/dev/null
-            printf '%s\n' "${username}" | sudo tee /home/debian/.package-publish-username >/dev/null
-            printf '%s\n' "${token}" | sudo tee /home/debian/.package-publish-token >/dev/null
-            sudo chmod 600 /home/debian/.package-publish-token
-          fi
+          bash ./scripts/configure-dockerhub-auth.sh
+          sudo mkdir -p /home/debian
+          # shellcheck source=scripts/release-image-repos.sh
+          . ./scripts/release-image-repos.sh
+          printf '%s\n' "${PUBLISH_REGISTRY:-$RELEASE_IMAGE_REGISTRY_DEFAULT}" | sudo tee /home/debian/.package-publish-registry >/dev/null
+          printf '%s\n' "${DOCKERHUB_USERNAME:-$DOCKERHUB_USERNAME_DEFAULT}" | sudo tee /home/debian/.package-publish-username >/dev/null
+          printf '%s\n' "${DOCKER_PAT:-${GHCR_PAT:-}}" | sudo tee /home/debian/.package-publish-token >/dev/null
+          sudo chmod 600 /home/debian/.package-publish-token
 
       - name: Configure optional image-signing key
         if: env.DRY_RUN != 'true'
@@ -225,7 +207,7 @@ jobs:
           fi
           if [ -z "${PACKAGE_PUBLISH_TOKEN:-}" ] && [ ! -s /home/debian/.package-publish-token ] && [ "${RELEASE_IMAGES:-}" != off ]; then
             echo "release-train: no package-publish credential reached this ${GRAIN_CI_EVENT:-} run, so the rc and pending images could not be published; nothing was tagged." >&2
-            echo "release-train: configure the GHCR_TOKEN secret (see docs/github-actions-ci.md)." >&2
+            echo "release-train: configure the DOCKER_PAT secret (see docs/github-actions-ci.md)." >&2
             exit 1
           fi
 

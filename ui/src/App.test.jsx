@@ -1621,7 +1621,7 @@ describe("App", () => {
     expect(screen.queryByText("auth-user@example.com")).toBeNull();
   });
 
-  it("shows the signed-in IAP email in the header and redirects logout to /_gcp_iap/clear_login_cookie", async () => {
+  it("shows the signed-in IAP email in the sidebar footer (not the header) and redirects logout to /_gcp_iap/clear_login_cookie", async () => {
     const assignSpy = vi.fn();
     const origLocation = window.location;
     delete window.location;
@@ -1651,11 +1651,12 @@ describe("App", () => {
       const user = userEvent.setup();
       render(<App />);
 
-      const badge = await screen.findByTestId("top-bar-user");
-      expect(badge).toHaveTextContent("iap-user@example.com");
+      const tile = await screen.findByTestId("user-tile");
+      expect(tile).toHaveTextContent("iap-user@example.com");
+      expect(screen.queryByTestId("top-bar-user")).toBeNull();
 
-      await user.click(badge);
-      await user.click(screen.getByRole("menuitem", { name: "Log out" }));
+      const logoutBtn = screen.getByTestId("sidebar-logout");
+      await user.click(logoutBtn);
       expect(assignSpy).toHaveBeenCalledWith("/_gcp_iap/clear_login_cookie");
     } finally {
       window.location = origLocation;

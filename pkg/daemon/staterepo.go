@@ -136,6 +136,46 @@ func SecretsConfig(dataDir string) secrets.Config {
 	}
 }
 
+// CheckSecretsConfig validates -secrets-backend and -secrets-sm-prefix.
+// An empty backend means the default encrypted-file backend ("file").
+func CheckSecretsConfig(backend, smPrefix string) error {
+	switch backend {
+	case "", secrets.BackendFile:
+		if smPrefix != "" {
+			return errors.New("-secrets-sm-prefix requires -secrets-backend=secretmanager")
+		}
+		return nil
+	case secrets.BackendSecretManager:
+		if smPrefix == "" {
+			return errors.New("-secrets-sm-prefix is required when -secrets-backend is secretmanager")
+		}
+		return secrets.ValidateSecretManagerPrefix(smPrefix)
+	default:
+		return fmt.Errorf("-secrets-backend must be %q or %q, got %q",
+			secrets.BackendFile, secrets.BackendSecretManager, backend)
+	}
+}
+
+// OpenSecretsForConfig opens the secret store configured on cfg: either the
+// local encrypted-file store under cfg.DataDir or Google Cloud Secret Manager
+// indexed by catalogue (secret_entries).
+func OpenSecretsForConfig(cfg Config, catalogue secrets.Catalogue) (*secrets.Store, error) {
+	if err := CheckSecretsConfig(cfg.SecretsBackend, cfg.SecretsSMPrefix); err != nil {
+		return nil, err
+	}
+	if cfg.SecretsBackend == secrets.BackendSecretManager {
+		store := secrets.OpenSecretManager(secrets.SecretManagerConfig{
+			Prefix:    cfg.SecretsSMPrefix,
+			Catalogue: catalogue,
+		})
+		if err := store.Check(); err != nil {
+			return nil, err
+		}
+		return store, nil
+	}
+	return OpenSecrets(cfg.DataDir), nil
+}
+
 // openSecrets opens this deployment's secret store, reporting once if it
 // had to mint the key -- the one thing about a fresh install that is
 // urgent, since a key nobody has copied anywhere is a key one disk

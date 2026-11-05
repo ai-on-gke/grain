@@ -146,6 +146,10 @@ func TestUpgradeStatusNamesTheCLIsAnUpgradeInterrupts(t *testing.T) {
 				{"framework": "codex", "location": "container", "upgradeInterrupts": "A daemon upgrade interrupts codex runs."},
 			}
 		},
+		HostExecutor: func(context.Context) any {
+			t.Error("GET /api/upgrade queried HostExecutorStatus, which it does not use")
+			return nil
+		},
 	}, store)
 	rec := do(t, srv, http.MethodGet, "/api/upgrade", "")
 	if rec.Code != http.StatusOK {

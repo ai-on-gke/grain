@@ -53,10 +53,15 @@ test("folds the rail to icons, navigates from them and widens the page", async (
 
   const collapse = aside.getByRole("button", { name: "Collapse sidebar" });
   await expect(collapse).toHaveAttribute("aria-expanded", "true");
+  await expect(collapse.locator('svg[data-icon="sidebar"]')).toBeVisible();
   await collapse.click();
 
-  const expand = aside.getByRole("button", { name: "Expand sidebar" });
+  await expect(aside.getByTestId("sidebar-toggle")).toHaveCount(0);
+  const expand = page
+    .getByTestId("page-header")
+    .getByRole("button", { name: "Expand sidebar" });
   await expect(expand).toHaveAttribute("aria-expanded", "false");
+  await expect(expand.locator('svg[data-icon="sidebar"]')).toBeVisible();
   await expect(aside).toHaveAttribute("data-collapsed", "true");
   await expect
     .poll(async () => (await aside.boundingBox()).width)

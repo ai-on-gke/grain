@@ -120,7 +120,7 @@ At every start, before the capability servers start, the daemon
   under a directory (up to the declaration's folder) writable by group
   or others, as the per-run snapshot did. Its `cwd` is the
   declaration's `workdir`, its `timeout` the script's timeout rounded
-  up to whole seconds, and its `max_output` the declaration's
+  up to whole seconds, its `approve` flag is preserved, and its `max_output` is the declaration's
   `output_cap`. `max_calls` is unlimited. Each `env` secret becomes
   `$env:GRAIN_LOCAL_SCRIPTS_<SECRET>`, and the server's own `env` binds
   that variable to `$secret:<name>`.
@@ -129,16 +129,16 @@ At every start, before the capability servers start, the daemon
   the daemon first removes every script with that first line, and every
   `GRAIN_LOCAL_SCRIPTS_*` binding no remaining script uses, then
   converts the declarations as they are now. A script since removed, a
-  declaration since deleted or given an `approve: true` script, and a
-  changed `workdir`, timeout, output cap or `env` therefore stop running
+  declaration since deleted, and a
+  changed `workdir`, timeout, `approve` flag, output cap or `env` therefore stop running
   as they were. A host-script grant of a script that is gone is refused.
   A declaration's new scripts are added at the next start. Granting
   them is a separate step: a grant names one script. When nothing
   changed, the config row is not written.
 - **Leaves the operator's own scripts alone.** A script without that
   first line is the operator's, and is kept as it is. If it has the
-  name a declaration's script would take, the declaration stays on
-  local-scripts and the daemon logs why, so a `local-scripts:<name>`
+  name a declaration's script would take, the declaration is skipped
+  and the daemon logs why, so a `local-scripts:<name>`
   grant never becomes a grant of a script the declaration did not
   declare.
 - **Rewrites stored grants.** Every stored `local-scripts:<name>` is
@@ -147,25 +147,27 @@ At every start, before the capability servers start, the daemon
   capabilities, and console sessions.
 - **Keeps the old name working.** `local-scripts:<name>` stays an alias
   for the same grants wherever it is still written
-  (`model.SetRuntimeGrantExpansions`).
+  (`model.SetRuntimeGrantExpansions`), and grants expanded from
+  `local-scripts:<name>` remain withheld from scheduled runs and refused
+  to CI jobs (`localscripts.MigratedFrom`).
 
-The `pkg/capability/intree` fidelity test runs one declaration both
-ways. Both give the same stdout, stderr, exit status, working directory
-and secret.
+The `pkg/capability/intree` fidelity test runs one declaration (including
+`approve: true` and stdin) both ways. Both give the same stdout, stderr,
+exit status, working directory, approval preview/hash and secret.
 
 What host-script does differently:
 
-- It does not forward stdin.
-- A secret is resolved when the server starts, not per run as the
-  task's team.
-- A script is reached as `grain host-script <name>`, not as an MCP tool.
-- A changed script file is picked up on its next call, not refused
-  until the next run.
+- A script is reached in the sandbox as `grain host-script <name> [args...]`
+  (or `grain host-script --stdin <name> [args...]` when forwarding stdin),
+  not as an MCP tool on `grain mcpserver`.
+- A secret is resolved when the capability server starts (as the
+  `capability-servers` principal), rather than per run as the task's team.
+- A changed script file on disk is picked up on its next call rather than
+  refused until the next run; ownership, mode, regular-file, and directory
+  permission checks still run before every call.
 
-**What does not move yet.** A declaration with an `approve: true` script
-is left on local-scripts, and served as before, because host-script has
-no per-call approval. The daemon logs why. The provider and the run's
-local-scripts tools stay until host-script can approve calls.
+The `local-scripts:<name>` dynamic provider and `grain mcpserver`'s
+`-local-scripts` / `-local-scripts-env-file` flags have been retired.
 
 ## Wiring
 
@@ -197,48 +199,47 @@ refused it too, whatever the event: a CI job has no MCP server, and its
 steps are whatever the pushed branch says
 (`pkg/capability/localscripts`).
 
-**Serving the tools.** The run's forked `grain mcpserver` runs on the
-node host, beside the agent CLI. Once the daemon has checked the
-capability, it passes that process `-local-scripts <name>=<path>` for
-each declaration. It also passes `-local-scripts-env-file`, a 0600 JSON
-file of the secrets the scripts' `env` entries name, resolved from the
-secret store as the task's team and removed when the run ends. That is
-the same pattern as `RunConfig.SandboxEnvFile`: only the path is in
-argv. Both travel with the run's grants (`agent.GrantArgs`), so claude,
-codex and antigravity all pass them. The server checks
-again that the task holds each capability, snapshots the scripts when it
-starts, and registers each executor's `Tools()` beside its other tools.
-When the run ends it closes them, killing anything still running. A
-declaration that fails its snapshot is reported on the server's stderr
-and nothing from it is served. Each call is recorded in the run's
-tool-call record like any other.
+**Serving the scripts.** At daemon startup, `migrateLocalScripts` converts
+each declaration onto the deployment's `host-script` capability server as
+scripts named `<decl>-<script>`. When a run is granted one, `host-script`
+places its descriptor in the sandbox for `grain host-script [--stdin] <name>`,
+forwards its data-plane port through the capability port relay, and binds
+the script's secrets from the capability server's environment. When the
+attempt ends, releasing the grant revokes its token, kills anything still
+running, and collects the call audit onto the run record.
 
-**Approval.** For each `approve: true` call, the server's Approver posts
+**Approval.** When minting a grant on a server method that accepts approval
+callbacks, the orchestrator hands over the daemon's loopback approval URL
+and a per-task `ghsa_` bearer token (`protocol.ApprovalCallback`), which
+is revoked when the capability pass is released. For each `approve: true`
+call, `host-script`'s `localexec.HTTPApprover` posts
 `POST /api/tasks/{id}/local-script-approvals` to the daemon. It then
 long-polls `.../{approval}/wait` until somebody answers or the script's
 timeout passes; at that point it posts `.../expire` and the call is
 refused. While the call waits, the task shows it with Approve and Deny:
 in the task pane, in the chat for an interactive task, and in the inbox
 under "Local scripts waiting for approval" (`GET
-/api/local-script-approvals`). Each shows the script and every argument,
-quoted. An answer (`.../answer`, `{"approve": true|false}`) is
+/api/local-script-approvals`). Each shows the script, every argument
+quoted, and (when `--stdin` was passed) the stdin byte count, SHA-256 and
+first 4 KiB preview. An answer (`.../answer`, `{"approve": true|false}`) is
 authorized like any other write to the task, and a run's own principal
-is refused, so a run can never approve its own call. The answer is
-recorded on the task as a comment by whoever gave it, and the waiting
-call receives it. Waiting approvals live in the daemon's memory, because
-a call waits only as long as its run.
+(including its `ghsa_` callback token) is refused, so a run can never
+approve its own call. The answer is recorded on the task as a comment by
+whoever gave it, and the waiting call receives it. Waiting approvals live
+in the daemon's memory, because a call waits only as long as its run.
 
 ## Code
 
 | File | What |
 | --- | --- |
 | `pkg/localexec/snapshot.go` | The declaration, `Resolve`, `Snapshot` and its refusals, `Verify`, `Check` |
-| `pkg/localexec/exec.go` | `Executor`: the tools, argument parsing, running one script with no shell, the timeout and kill, the environment |
+| `pkg/localexec/exec.go` | `Executor`: argument parsing, running one script with no shell, the timeout and kill, the environment |
 | `pkg/localexec/warn.go` | `Warnings`: the static argument-to-code checks |
-| `pkg/localexec/approve.go` | `Approver`, `ApproverFunc`, `Queue` |
+| `pkg/localexec/approve.go` | `Request`, `Approver`, `ApproverFunc`, `Queue` |
+| `pkg/localexec/http_approve.go` | `HTTPApprover`: posting, waiting on, and expiring per-call approvals over HTTP |
 | `pkg/localexec/headtail.go` | The bounded output buffer |
-| `pkg/capability/localscripts` | The `local-scripts:<name>` capability: where declarations are found, the untrusted-run refusals, the credentials file, `Open` |
-| `pkg/daemon/localscripts_mcp.go` | The mcpserver's `-local-scripts` flags, serving the tools, and the Approver that asks the daemon |
-| `pkg/ui/local_script_approvals.go` | The daemon's approval registry and its routes |
+| `pkg/capability/localscripts` | Converting `local-scripts:<name>` declarations and grants onto `host-script` (`ConvertToHostScripts`, `MigrateToHostScript`, `MigratedFrom`) |
+| `pkg/capability/intree/hostscript.go` | `host-script` capability server: `--stdin`, `approve: true`, execution, and call audit |
+| `pkg/ui/local_script_approvals.go` | The daemon's approval registry, scoped callback tokens, and routes |
 | `ui/src/components/detail/LocalScriptApprovals.jsx` | Approve and Deny, in the task pane, the chat and the inbox |
 | `ui/e2e/local-scripts-approval-walkthrough.spec.js` | The walkthrough against `grain demo` |

@@ -1133,7 +1133,7 @@ func (u *Upgrader) description() string {
 	switch u.Mode() {
 	case ModeKube:
 		return fmt.Sprintf("checking an image from %s and repointing deployment/%s at it",
-			u.cfg.Kube.Repository, u.cfg.Kube.Deployment)
+			u.EffectiveKubeRepository(), u.cfg.Kube.Deployment)
 	case ModeImage:
 		if u.EffectiveImageSource() == ImageSourceReleaseAssets && !u.shouldBypassDefaultReleaseAssets() {
 			if repo := strings.TrimSpace(u.EffectiveReleaseAssets().Repository); repo != "" {
@@ -1246,8 +1246,8 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 	// is recorded under need not say which build it is.
 	same := u.sameImageVersion(prevRef, branch, tag, ref)
 	if override != "" {
-		prevDigest, okPrev := digestRef(prevRef)
-		newDigest, okNew := digestRef(ref)
+		prevDigest, okPrev := kubeDigestRef(prevRef)
+		newDigest, okNew := kubeDigestRef(ref)
 		same = okPrev && okNew && prevDigest == newDigest
 	} else if !same && u.discardedRCUnchangedDetail(ctx, branch) != "" {
 		same = true

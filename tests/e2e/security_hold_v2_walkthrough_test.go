@@ -130,9 +130,10 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// qualification housekeeping workflow and its Actions helper to
 	// release-machinery, grain/task-2584; v15 only adds the controller MCP
 	// endpoint, allowlist, access-decision, CI grant rule, auto-merge guard
-	// and hostd install files to existing categories, task 2977).
-	if trustboundary.Version != "trust-boundary/v15" {
-		w.t.Fatalf("this walkthrough is about trust-boundary/v15, the build has %s", trustboundary.Version)
+	// and hostd install files to existing categories, task 2977; v16 only adds connection_hostd
+	// and capability server hostd placement, grain/task-2165).
+	if trustboundary.Version != "trust-boundary/v16" {
+		w.t.Fatalf("this walkthrough is about trust-boundary/v16, the build has %s", trustboundary.Version)
 	}
 	if w.merged(branch) {
 		w.t.Fatal("merged before the pull request read mergeable")

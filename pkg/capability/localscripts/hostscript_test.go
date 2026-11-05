@@ -28,15 +28,18 @@ import (
 
 const showScript = "#!/bin/sh\n# grain: Show it.\necho hi\n"
 
-func TestConvertToHostScriptsRefusesApproval(t *testing.T) {
+func TestConvertToHostScriptsPreservesApproval(t *testing.T) {
 	root := stateRepo(t, "ops", `scripts:
   list:
     - path: scripts/show
       approve: true
 `, map[string]string{"show": showScript})
-	_, err := ConvertToHostScripts(Config{StateDir: root}, "ops")
-	if err == nil || !strings.Contains(err.Error(), "approve") {
-		t.Fatalf("err %v: want a declaration with an approved script refused", err)
+	h, err := ConvertToHostScripts(Config{StateDir: root}, "ops")
+	if err != nil {
+		t.Fatalf("ConvertToHostScripts: %v", err)
+	}
+	if len(h.Scripts) != 1 || h.Scripts[0]["approve"] != true {
+		t.Fatalf("scripts %+v: want approve: true preserved on converted script", h.Scripts)
 	}
 }
 
@@ -312,7 +315,7 @@ func TestMigrateToHostScriptFollowsTheDeclaration(t *testing.T) {
 		t.Fatalf("env %v: want ops.token unbound and the operator's own binding kept", env)
 	}
 
-	// show now waits for approval: none of ops runs through host-script.
+	// show now waits for approval: re-conversion updates its entry with approve: true.
 	if err := os.WriteFile(decl, []byte("scripts:\n  list:\n    - path: scripts/show\n      approve: true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -320,8 +323,23 @@ func TestMigrateToHostScriptFollowsTheDeclaration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := names(); !reflect.DeepEqual(got, []string{"mine"}) || len(renames) != 0 || len(skipped) != 1 {
-		t.Fatalf("scripts %v, renames %v, skipped %v: want ops off host-script", got, renames, skipped)
+	if got := names(); !reflect.DeepEqual(got, []string{"mine", "ops-show"}) || len(renames["local-scripts:ops"]) != 1 || len(skipped) != 0 {
+		t.Fatalf("scripts %v, renames %v, skipped %v: want ops-show converted with approve: true", got, renames, skipped)
+	}
+	if second := servers[HostScriptServerID].Config["scripts"].([]any)[1].(map[string]any); second["approve"] != true {
+		t.Fatalf("ops-show entry %+v: want approve: true", second)
+	}
+
+	// Removing the declaration removes its converted scripts, leaving mine.
+	if err := os.RemoveAll(filepath.Join(root, StateRepoDir, "ops")); err != nil {
+		t.Fatal(err)
+	}
+	renames, skipped, err = MigrateToHostScript(cfg, servers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := names(); !reflect.DeepEqual(got, []string{"mine"}) || len(renames) != 0 || len(skipped) != 0 {
+		t.Fatalf("scripts %v, renames %v, skipped %v: want ops off host-script after deletion", got, renames, skipped)
 	}
 }
 

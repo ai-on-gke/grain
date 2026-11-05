@@ -3433,7 +3433,6 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const sidebar = (
     <Sidebar
       pinFooter={isPhone}
-      hideCreateButton={!isPhone}
       collapsed={sidebarCollapsed}
       onToggleCollapsed={isPhone ? undefined : toggleSidebarCollapsed}
       config={config}
@@ -3554,11 +3553,6 @@ function AppContent({ onReload = () => window.location.reload() }) {
       config={config}
       onOpenSystem={() => openSystem("")}
       onOpenSettings={() => openSettings()}
-      onOpenAccess={() => openSettings("access")}
-      onLogout={handleLogout}
-      onOpenNewTask={openNewTask}
-      onNewSession={openNewSession}
-      onNewBoard={openNewBoardTask}
     />
   );
 
@@ -3651,6 +3645,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
                     icon={pageIcon}
                     globals={globalButtons}
                     onSlot={setPageHeaderSlot}
+                    onExpandSidebar={
+                      sidebarCollapsed ? toggleSidebarCollapsed : undefined
+                    }
                   />
                 )}
                 <div className="page-frame-body">

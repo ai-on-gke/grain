@@ -189,7 +189,6 @@ type CompositionSources struct {
 	Approved             CompositionLayer
 	Interactive          CompositionLayer
 	KeepRunning          CompositionLayer
-	Hostd                CompositionLayer
 }
 
 // Composition is one task a firing will file, resolved: every value it
@@ -254,11 +253,6 @@ type Composition struct {
 	// KeepRunning is whether the task immediately restarts when its run
 	// exits (Task.KeepRunning).
 	KeepRunning bool
-	// Hostd is the hostd pin or label selector the task starts with
-	// (Store.SetTaskHostd), empty for the default hostd. It is not a
-	// Task field -- the pin lives in its own table -- so whoever files
-	// the task writes it beside it (PutTaskHostd).
-	Hostd string
 	// Priority is the resolved numeric priority for the task (DefaultTaskPriority = 5).
 	Priority int
 
@@ -431,7 +425,6 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 		Approved:             approved,
 		Interactive:          tmpl.Interactive,
 		KeepRunning:          tmpl.KeepRunning,
-		Hostd:                tmpl.Hostd,
 		Priority:             priority,
 		TemplateID:           tmpl.ID,
 		TemplateName:         tmpl.Name,
@@ -452,7 +445,6 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 			Approved:             approvedBy,
 			Interactive:          LayerTemplate,
 			KeepRunning:          LayerTemplate,
-			Hostd:                LayerTemplate,
 		},
 	}
 }
@@ -784,9 +776,6 @@ func (s *Store) composeScheduleTask(ctx context.Context, sched Schedule, stateRe
 			return Composition{}, nil, err
 		}
 		applyGrainCIGrant(&comp, usesGrainCI)
-		if err := applyRepoDefaultHostd(ctx, s.db, &comp); err != nil {
-			return Composition{}, nil, err
-		}
 		if !usesGrainCI {
 			if from, ok := scheduleReviewsWorkflowRun(sched, tmpl); ok {
 				applyWorkflowReviewCIReadGrant(&comp, from)
@@ -823,9 +812,6 @@ func composeSuitePass(ctx context.Context, q querier, items []SuiteItem, templat
 				return nil, err
 			}
 			applyGrainCIGrant(&comp, usesGrainCI)
-			if err := applyRepoDefaultHostd(ctx, q, &comp); err != nil {
-				return nil, err
-			}
 		}
 		out = append(out, comp)
 	}
@@ -897,9 +883,6 @@ func (s *Store) TemplateComposition(ctx context.Context, tmpl Template, values m
 			return Composition{}, err
 		}
 		applyGrainCIGrant(&comp, usesGrainCI)
-		if err := applyRepoDefaultHostd(ctx, s.db, &comp); err != nil {
-			return Composition{}, err
-		}
 	}
 	return comp, nil
 }

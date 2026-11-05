@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -30,6 +31,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/cifault"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -144,6 +146,9 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := checkStateRepoBaseline(cfg.DataDir); err != nil {
 		return err
 	}
+	if err := CheckSecretsConfig(cfg.SecretsBackend, cfg.SecretsSMPrefix); err != nil {
+		return err
+	}
 
 	// openStore, plus the one recovery a store this build cannot open has:
 	// the note an in-place upgrade leaves when it cut over to a build with
@@ -159,7 +164,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// Recorded once the store has opened, so a mistyped DSN never replaces
 	// a good one: a daemon started with -postgres-url (or the environment)
 	// otherwise leaves nothing in its data dir saying where its store is.
-	if err := RecordDatabaseConfig(cfg.DataDir, cfg.DbDriver, cfg.DbDSN); err != nil {
+	if err := recordDatabaseConfigForDaemon(cfg); err != nil {
 		log.Printf("grain daemon: recording the database in %s: %v", cfg.DataDir, err)
 	}
 	// The hostd registry: the co-located hostd is always in it as local,
@@ -215,7 +220,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// -- and a store opened first would have minted a key over the
 	// absence of one. Nothing is configured on most deployments and
 	// nothing happens then.
-	secretsRepo := StartupSecretsRepoSync(ctx, cfg.DataDir)
+	secretsRepo := startupSecretsRepoSyncFor(ctx, cfg)
 	loadErr := loadStateRepo(ctx, cfg.DataDir, stateRepo, db, schemaMigrated)
 	if fatalStateRepoLoad(loadErr) {
 		return fmt.Errorf("loading the config repository: %w", loadErr)
@@ -250,7 +255,10 @@ func Run(ctx context.Context, cfg Config) error {
 	// The secrets database is opened once, here, and shared: the state
 	// manager syncs it, and the model proxies below and runDaemon's own
 	// dispatches resolve agent credentials through it.
-	secretStore := OpenSecrets(cfg.DataDir)
+	secretStore, err := OpenSecretsForConfig(cfg, store)
+	if err != nil {
+		return err
+	}
 	LogIgnoredRelaySettings(cfg.DataDir, secretStore, log.Printf)
 	// Every secret a run resolves through it is audited against its team
 	// (the Audit / Security tab). ui.NewServer attaches the store only to
@@ -861,7 +869,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// run() itself only returns once ctx is actually cancelled.
 	if cfg.UiAddr != "" {
 		stopUI, err := startUIServer(cfg, store, db, transcriptDir, sandboxes, live, pkgCache, actionsCache,
-			stateManager, stateManager.settingsRepo, upgrader)
+			stateManager, stateManager.settingsRepo, upgrader, secretStore)
 		if err != nil {
 			return fmt.Errorf("starting the UI/API server: %w", err)
 		}
@@ -994,7 +1002,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		},
 	}))
 
-	proxyURL, proxyHandler, stopProxy, err := startGitProxy(cfg.DataDir, store, cfg.GithubHost, cfg.GithubInsecureHTTP, fabric, forbidden, cfg.shutdownStarted)
+	proxyURL, proxyHandler, stopProxy, err := startGitProxy(cfg.DataDir, store, secretStore, cfg.GithubHost, cfg.GithubInsecureHTTP, fabric, forbidden, cfg.shutdownStarted)
 	if err != nil {
 		// Fatal to this loop, and only to it: every dispatch and every CI
 		// job clones through this proxy, so there is nothing to reconcile
@@ -1165,7 +1173,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	// After the proxy above, necessarily: every job's checkout is a
 	// clone from it, and it is where the read-only scope a CI sandbox
 	// holds is enforced (pkg/cli/ci.go).
-	registry := newCapabilityRegistryWithStore(store, cfg.LocalScriptsConfig(), CapabilityProviders(cfg, store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
+	registry := newCapabilityRegistryWithStore(store, CapabilityProviders(cfg, store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
 
 	// Recovering any run a previous process left running (bwsalmon/agents#425)
 	// has to happen here, once, before reconcile's first tick -- see
@@ -1210,7 +1218,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			log.Printf("grain daemon: grain CI is wired to remote grit server at %s (EXPERIMENTAL, -grit-experimental: it runs no repository's workflows yet)", cfg.GritURL)
 		} else {
 			ciProviders := func() *model.CapabilityRegistry {
-				return newCapabilityRegistryWithStore(store, live.Current().LocalScriptsConfig(), CapabilityProviders(live.Current(), store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
+				return newCapabilityRegistryWithStore(store, CapabilityProviders(live.Current(), store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
 			}
 			ciService := BuildCIService(ctx, cfg, LimitsWithDisk(live.limits, disks), live.ciRetention, live.ciStorageBounds, store, sandboxes, credentials, proxyURL, tokens, stateHooks.CheckImage, forbidden, ciProviders, secretStore, pkgCache.sandboxURL(live), pkgCache.sandboxCA(live), pkgCache.SandboxDNS(live), actionsCache.grantFor(live))
 			ciService.SandboxImage = live.CurrentSandboxImage
@@ -1340,8 +1348,23 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		// references are minted through at admission.
 		CapabilityServers: capabilityServerLookup(live),
 		CapabilityHostd:   capabilityHostdName(cfg),
-		Policy:            localPolicy,
-		Store:             store, Client: githubClient, Sandboxes: sandboxes,
+		ApprovalCallback: func(taskID string, deadline time.Time) (protocol.ApprovalCallback, func(), error) {
+			baseURL, _ := localScriptApprovalURL.Load().(string)
+			if baseURL == "" {
+				return protocol.ApprovalCallback{}, nil, nil
+			}
+			tok, err := localScriptApprovals.MintToken(taskID, deadline)
+			if err != nil {
+				return protocol.ApprovalCallback{}, nil, err
+			}
+			cb := protocol.ApprovalCallback{
+				URL:   baseURL + "/api/tasks/" + url.PathEscape(taskID) + "/local-script-approvals",
+				Token: tok,
+			}
+			return cb, func() { localScriptApprovals.RevokeToken(tok) }, nil
+		},
+		Policy: localPolicy,
+		Store:  store, Client: githubClient, Sandboxes: sandboxes,
 		// Sandbox reconciliation sweeps the run hosts no live run
 		// claims through it every tick.
 		RunHost:   cfg.RunHost,
@@ -1396,7 +1419,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// registered for the proxy's /cap/ (grain cap).
 			CapabilitySandboxServers: SandboxCapabilities,
 			ControllerMCP:            controllerMCPProxy(cfg),
-			GrantTools:               grantTools(grainSrcDir, SecretsDir(cfg.DataDir)),
+			GrantTools:               grantTools(grainSrcDir, SecretsDir(cfg.DataDir), secretStore),
 			// Where a sandbox reaches this deployment's package
 			// cache -- asked per dispatch, and answering "" while the
 			// setting is off, so the switch in Settings reaches the next
@@ -1423,9 +1446,6 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// pkg/capability/grainlog).
 			GrainSecretsDir: SecretsDir(cfg.DataDir),
 			GrainStateDir:   filepath.Join(cfg.DataDir, "state-repo"),
-			// Where a run granted local-scripts:<name> finds that
-			// declaration (pkg/capability/localscripts).
-			LocalScripts: cfg.LocalScriptsConfig(),
 			// The image this deployment's sandboxes are really built
 			// from, asked of chooseSandboxImage exactly as the sandbox
 			// health pane asks (uiSandboxImage), so that the one

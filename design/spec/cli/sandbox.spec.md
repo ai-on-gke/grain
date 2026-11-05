@@ -560,6 +560,7 @@ Usage: `grain task propose --title <t> (--body <b> | --file <f>) [flags]`
 | `--keep-running` | bool |
 | `--origin` | string |
 | `--read` | string |
+| `--design` | string |
 | `--custom-field` | string |
 | `--not-before` | string |
 | `--priority` | string |

@@ -208,11 +208,11 @@ describe("DetailOverlay timeline", () => {
     const lines = document.querySelectorAll(".timeline-attempt-hostd");
     expect(lines).toHaveLength(1);
     expect(lines[0].textContent).toBe(
-      "hostd ws-a on cloudtop · alice@example.com",
+      "ran on hostd ws-a on cloudtop · alice@example.com",
     );
     expect(lines[0]).toHaveAttribute(
       "title",
-      "Host work on grain hostd ws-a, on cloudtop, owned by alice@example.com",
+      "The agent CLI ran on grain hostd ws-a, on cloudtop, owned by alice@example.com",
     );
   });
 

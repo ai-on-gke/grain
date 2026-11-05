@@ -536,6 +536,7 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 		reviewTask.Links = append(reviewTask.Links, model.Link{Kind: model.LinkPushesReviewedBranch, Target: task.ID})
 	}
 	model.InheritRequester(&reviewTask, task)
+	model.InheritContext(&reviewTask, task)
 	return reviewTask, nil
 }
 

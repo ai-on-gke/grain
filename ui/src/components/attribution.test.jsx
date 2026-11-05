@@ -82,14 +82,16 @@ const sidebarProps = {
 };
 
 describe("the sidebar user tile", () => {
-  it("shows a verified sign-in's email, and opens Settings -> Access", async () => {
+  it("shows a verified sign-in's email, opens Settings -> Access, and offers Log out when provided", async () => {
     const onOpenAccess = vi.fn();
+    const onLogout = vi.fn();
     render(
       <Sidebar
         {...sidebarProps}
         config={{}}
         whoami={VERIFIED}
         onOpenAccess={onOpenAccess}
+        onLogout={onLogout}
       />,
     );
     const tile = screen.getByTestId("user-tile");
@@ -99,6 +101,10 @@ describe("the sidebar user tile", () => {
     expect(within(tile).queryByTestId("user-tile-qualifier")).toBeNull();
     await userEvent.click(tile);
     expect(onOpenAccess).toHaveBeenCalled();
+
+    const logout = screen.getByTestId("sidebar-logout");
+    await userEvent.click(logout);
+    expect(onLogout).toHaveBeenCalledTimes(1);
   });
 
   it("shows the operator with a muted (access code)", () => {

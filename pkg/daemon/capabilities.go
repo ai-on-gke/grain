@@ -35,7 +35,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
-	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
@@ -44,13 +43,13 @@ import (
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-func newCapabilityRegistryWithStore(_ *model.Store, local localscripts.Config, providers ...model.CapabilityProvider) *model.CapabilityRegistry {
+func newCapabilityRegistryWithStore(_ *model.Store, providers ...model.CapabilityProvider) *model.CapabilityRegistry {
 	reg := model.NewCapabilityRegistry(providers...)
-	reg.RegisterDynamic(
-		localscripts.DynamicProvider(local), ui.AgentAPIDynamicProvider)
+	reg.RegisterDynamic(ui.AgentAPIDynamicProvider)
 	// A CI job's api grants are a token for CIAPI rather than routes an
 	// agent may call (pkg/capability/ciapi).
 	reg.RegisterCIDynamic(ciapi.DynamicProvider(CIAPI, ciapi.Config{}))
@@ -248,7 +247,7 @@ func sourceDir(flagged string) string {
 // run's forked mcpserver, which confirms each command over the daemon
 // (daemonHostExecConfirm), and an entry here would only build a second
 // copy no framework reads.
-func grantTools(srcDir, secretsDir string) map[string]func(store *model.Store, taskID string) []mcp.Tool {
+func grantTools(srcDir, secretsDir string, secretStore *secrets.Store) map[string]func(store *model.Store, taskID string) []mcp.Tool {
 	return map[string]func(store *model.Store, taskID string) []mcp.Tool{
 		// Built per run rather than once here, so that a secret set
 		// since this process started is redacted by the next run that
@@ -256,13 +255,13 @@ func grantTools(srcDir, secretsDir string) map[string]func(store *model.Store, t
 		grainlog.CapabilityName: func(_ *model.Store, taskID string) []mcp.Tool {
 			return grainlog.Tools(grainlog.Config{
 				TaskID:   taskID,
-				Redactor: grainLogRedactor(secretsDir),
+				Redactor: grainLogRedactorFor(secretsDir, secretStore),
 			})
 		},
 		grainserver.JournalGrant: func(_ *model.Store, taskID string) []mcp.Tool {
 			return grainlog.Tools(grainlog.Config{
 				TaskID:   taskID,
-				Redactor: grainLogRedactor(secretsDir),
+				Redactor: grainLogRedactorFor(secretsDir, secretStore),
 			})
 		},
 		bootstrap.CapabilityName: func(*model.Store, string) []mcp.Tool {
@@ -396,6 +395,28 @@ func (c credentialTokenSource) GitBranches(owner, repo string) ([]string, bool, 
 	}
 	names, err := gitproxy.RemoteBranches(host, cred, ref.Owner, ref.Name)
 	return names, true, err
+}
+
+// GitRefSHA resolves ref in owner/repo over smart-HTTP git when its host has
+// no forge API, returning ok false when it has one so the caller asks the API.
+func (c credentialTokenSource) GitRefSHA(owner, repo, rev string) (string, bool, error) {
+	if c.credentials == nil {
+		return "", false, nil
+	}
+	ref := c.ref(owner, repo)
+	cred, found := c.selectGitCredential(owner, repo)
+	var host gitproxy.CredentialHost
+	if found {
+		host = c.credentials.HostOf(cred.Name)
+	} else {
+		host = c.credentials.HostOf(ref.GitHost())
+		cred = gitproxy.Credential{Name: "anonymous"}
+	}
+	if _, _, hasAPI := host.APIBase(); hasAPI {
+		return "", false, nil
+	}
+	sha, err := gitproxy.RemoteRefSHA(host, cred, ref.Owner, ref.Name, rev)
+	return sha, true, err
 }
 
 // selectGitCredential is the credential owner/repo is cloned and pushed

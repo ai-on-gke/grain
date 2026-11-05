@@ -26,6 +26,7 @@ import {
 } from "@mui/material";
 import api from "../api.js";
 import ConnectionModelsField from "./ConnectionModelsField.jsx";
+import ConnectionHostdField from "./settings/ConnectionHostdField.jsx";
 import CodexAuthFields from "./CodexAuthFields.jsx";
 import Overlay from "./Overlay.jsx";
 import SearchSelect from "./SearchSelect.jsx";
@@ -658,6 +659,7 @@ export default function ModelBackendPage({
                         helperText="Maximum number of concurrent agents on this connection (4 by default)"
                         fullWidth
                       />
+                      <ConnectionHostdField backend={draft} onChange={change} />
                       {cliBinary && (
                         <TextField
                           label="CLI path (optional)"

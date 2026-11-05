@@ -654,12 +654,12 @@ jobs:
             ./pkg/hosttop/... ./pkg/iapreconciler/... ./pkg/installtrack/... ./pkg/jwks/... \
             ./pkg/k8s/... ./pkg/kubectlgate/... ./pkg/lifecycle/... ./pkg/localexec/... ./pkg/mcp/... \
             ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/pkgcache/... \
-            ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/registryauth/... \
+            ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/registry/... ./pkg/registryauth/... \
             ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
             ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \
             ./pkg/secretsrepo/... ./pkg/statemachine/... ./pkg/sysstat/... \
             ./pkg/systemlog/... ./pkg/treeid/... ./pkg/trustboundary/... ./pkg/tunnel/... ./pkg/upgrade/... \
-            ./pkg/version/... ./tests/bench/...
+            ./pkg/version/... ./pkg/webauth/... ./tests/bench/...
 
   # The vendored granule tree's own tests. third_party/granule is a module
   # of its own (github.com/gke-labs/granule), so none of the four shards
@@ -1210,13 +1210,6 @@ jobs:
     steps:
       - &assemble-installer-image
         name: Assemble the image to install
-        # Nothing is published under ghcr.io/ai-on-gke/grain yet: until the
-        # image workflows publish there, install on top of the images
-        # bwsalmon/grain publishes, the registry every grain image still
-        # names.
-        env:
-          GRAIN_INSTALLER_BASE_IMAGE: ghcr.io/bwsalmon/grain/grain:main
-          GRAIN_INSTALLER_SANDBOX_IMAGE: ghcr.io/bwsalmon/grain/k8s-sandbox:main
         run: ./scripts/installer-test-image.sh grain-installer:test
 
       - &configure-installer-package-cache

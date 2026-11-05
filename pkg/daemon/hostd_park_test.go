@@ -97,21 +97,23 @@ func parkedHostdSetup(t *testing.T, reattach time.Duration) (Config, *AgentPool,
 	t.Cleanup(f.drop)
 	startDialingHostd(t, ctl.URL, tok, offersAgy)
 	waitFor(t, func() bool { return cfg.HostdHub.HostdStatus("ws-a").Connected })
-	if err := store.SetTaskHostd(ctx, "pinned", "ws-a"); err != nil {
-		t.Fatal(err)
-	}
+	cfg.AgentBackends = []model.AgentBackend{pinnedConnection}
 	return cfg, NewAgentPool(cfg, store, nil), f
 }
 
-// pinnedHost is the agent.Host the pinned task's run starts its CLI on.
+// pinnedConnection is the connection placed on ws-a whose runs the
+// parking tests start.
+var pinnedConnection = model.AgentBackend{ID: "pinned", Framework: model.AgentFrameworkAntigravity, Models: []string{"m"}, Hostd: "ws-a"}
+
+// pinnedHost is the agent.Host a run on pinnedConnection starts its CLI on.
 func pinnedHost(t *testing.T, cfg Config, pool *AgentPool) agent.Host {
 	t.Helper()
 	ctx := context.Background()
-	route, err := pool.routeHostd(ctx, cfg, "pinned")
+	route, err := connectionHostdRoute(ctx, cfg, pool.Store, pinnedConnection)
 	if err != nil {
 		t.Fatal(err)
 	}
-	live := route.apply(cfg)
+	live := route.apply(cfg, pinnedConnection.Framework)
 	r := live.ResolveCLIRun(ctx, model.AgentFrameworkAntigravity)
 	if r.Via != ViaHostd || r.Err != "" {
 		t.Fatalf("agy resolves to %+v, want through ws-a", r)
@@ -167,7 +169,7 @@ func (l *lockedTee) String() string {
 func TestARunWaitsForItsDisconnectedHostdAndItsCLIIsReattached(t *testing.T) {
 	cfg, pool, ws := parkedHostdSetup(t, time.Minute)
 	ctx := context.Background()
-	choice := orchestrator.AgentChoice{TaskID: "pinned", Framework: model.AgentFrameworkAntigravity}
+	choice := orchestrator.AgentChoice{TaskID: "pinned", BackendID: pinnedConnection.ID, Model: "m", Framework: model.AgentFrameworkAntigravity}
 	if why := pool.Availability(ctx, choice); why != "" {
 		t.Fatalf("ws-a connected: availability %q, want none", why)
 	}
@@ -184,7 +186,7 @@ func TestARunWaitsForItsDisconnectedHostdAndItsCLIIsReattached(t *testing.T) {
 	ws.away.Store(true)
 	ws.drop()
 	waitFor(t, func() bool { return !cfg.HostdHub.HostdStatus("ws-a").Connected })
-	if why := pool.Availability(ctx, choice); why != "waiting for hostd ws-a" {
+	if why := pool.Availability(ctx, choice); !strings.Contains(why, "waiting for hostd ws-a") {
 		t.Errorf("ws-a away: availability %q, want the task parked waiting for hostd ws-a", why)
 	}
 	select {
@@ -244,8 +246,8 @@ func TestARunFailsAsLostWhenItsHostdIsAwayPastTheReattachTimeout(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("the run kept waiting for ws-a past the reattach timeout")
 	}
-	choice := orchestrator.AgentChoice{TaskID: "pinned", Framework: model.AgentFrameworkAntigravity}
-	if why := pool.Availability(context.Background(), choice); why != "waiting for hostd ws-a" {
+	choice := orchestrator.AgentChoice{TaskID: "pinned", BackendID: pinnedConnection.ID, Model: "m", Framework: model.AgentFrameworkAntigravity}
+	if why := pool.Availability(context.Background(), choice); !strings.Contains(why, "waiting for hostd ws-a") {
 		t.Errorf("after the lost run: availability %q, want the task parked waiting for hostd ws-a", why)
 	}
 }

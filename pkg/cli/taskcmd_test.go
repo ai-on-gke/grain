@@ -84,3 +84,73 @@ func TestCreateBodyFileStdinConflictAndDesignLink(t *testing.T) {
 		t.Errorf("a refused create still filed a task")
 	}
 }
+
+func TestCreateAndUpdateRepoQualifiedDesignAndTaskBlock(t *testing.T) {
+	_, c := externalCLIServer(t)
+	ctx := context.Background()
+	sha1 := "1111111111111111111111111111111111111111"
+	sha2 := "2222222222222222222222222222222222222222"
+
+	out := &printer{json: true}
+	captureStdout(t, func() {
+		if err := cmdCreate(ctx, c, out, []string{
+			"-title", "[PLC] context cli",
+			"-repo", "acme/widgets",
+			"-read", "acme/specs",
+			"-design", "design/plc/042@" + sha1,
+			"-design", "acme/specs:plc/shared@" + sha2,
+			"-body", "Implement spec",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	tasks, err := c.ListTasks(ctx)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("ListTasks: len=%d err=%v", len(tasks), err)
+	}
+	created := tasks[0]
+	if len(created.Context) != 2 {
+		t.Fatalf("created.Context = %+v, want 2 items", created.Context)
+	}
+	rendered := taskBlock(created)
+	for _, want := range []string{
+		"context:    ",
+		"design/plc/042@111111111111",
+		"acme/specs:plc/shared@222222222222",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("taskBlock missing %q:\n%s", want, rendered)
+		}
+	}
+
+	// Update replaces the set; -design "" clears it.
+	captureStdout(t, func() {
+		if err := cmdUpdate(ctx, c, out, []string{
+			"-design", "acme/specs:plc/shared@" + sha2,
+			created.ID,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	updated, err := c.GetTask(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Context) != 1 || updated.Context[0].Repo != "acme/specs" {
+		t.Fatalf("updated.Context = %+v, want single acme/specs ref", updated.Context)
+	}
+
+	captureStdout(t, func() {
+		if err := cmdUpdate(ctx, c, out, []string{"-design", "", created.ID}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	cleared, err := c.GetTask(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cleared.Context) != 0 {
+		t.Fatalf("cleared.Context = %+v, want empty", cleared.Context)
+	}
+}

@@ -1433,54 +1433,11 @@ describe("RepoPage", () => {
     expect(onRefreshConfig).toHaveBeenCalled();
   });
 
-  it("saves the repo's default hostd through its settings and says where its tasks run", async () => {
+  it("offers no default hostd: a repo's tasks have none", async () => {
     routeApi();
-    const user = userEvent.setup();
     renderPage();
-
-    const input = await screen.findByLabelText(
-      /Default hostd for acme\/widgets/,
-    );
-    expect(screen.getByTestId("repo-default-hostd-summary")).toHaveTextContent(
-      /the default hostd, unless it or its template names one/,
-    );
-    answerOnce(
-      (path, opts) => !!opts && /\/settings$/.test(path),
-      () => Promise.resolve({ ...noCaps, defaultHostd: "gpu=yes,zone=b" }),
-    );
-    await user.type(input, " zone=b, gpu=yes ");
-    await user.tab();
-
-    expect(api).toHaveBeenCalledWith("/api/repos/acme/widgets/settings", {
-      method: "PUT",
-      body: JSON.stringify({ defaultHostd: "zone=b, gpu=yes" }),
-    });
-    await waitFor(() => expect(input).toHaveValue("gpu=yes,zone=b"));
-    expect(screen.getByTestId("repo-default-hostd-summary")).toHaveTextContent(
-      /on hostd gpu=yes,zone=b, unless it or its template names another/,
-    );
-  });
-
-  it("puts the default hostd back when the server refuses it", async () => {
-    routeApi({ caps: { ...noCaps, defaultHostd: "laptop" } });
-    const showError = vi.fn();
-    const user = userEvent.setup();
-    renderPage({ showError });
-
-    const input = await screen.findByLabelText(
-      /Default hostd for acme\/widgets/,
-    );
-    await waitFor(() => expect(input).toHaveValue("laptop"));
-    answerOnce(
-      (path, opts) => !!opts && /\/settings$/.test(path),
-      () => Promise.reject(new Error("hostd nowhere is not in the registry")),
-    );
-    await user.clear(input);
-    await user.type(input, "nowhere");
-    await user.tab();
-
-    await waitFor(() => expect(showError).toHaveBeenCalled());
-    expect(input).toHaveValue("laptop");
+    await screen.findByLabelText(/Setup command for acme\/widgets/);
+    expect(screen.queryByLabelText(/Default hostd/)).toBeNull();
   });
 
   it("reports the error when saving the repo's setup command fails", async () => {
