@@ -304,6 +304,7 @@ tag_may_move() (
 dry_run=false
 phase="all"
 promote_request=""
+promote_predates_dockerhub=false
 rc_request=""
 pending_request=""
 retract_request=""
@@ -737,10 +738,12 @@ fetch_promote_tag_into() {
 # shallow fetch of the tag since this job's checkout is main or
 # candidate's head rather than the release. Also sets
 # promote_is_root_commit (whether the tag is a root or initial cutover
-# commit).
+# commit) and promote_predates_dockerhub (whether the release's own tree
+# is from before the switch to Docker Hub: see adopt_legacy_ghcr_release).
 release_takes_main_grain() {
   local work answer=1
   promote_is_root_commit=false
+  promote_predates_dockerhub=false
   work="$(mktemp -d)"
   if ! fetch_promote_tag_into "$work" 2; then
     rm -rf "$work"
@@ -753,6 +756,12 @@ release_takes_main_grain() {
   if ! git -C "$work" rev-parse --verify -q "FETCH_HEAD^" >/dev/null 2>&1 ||
      ! git -C "$work" cat-file -e "FETCH_HEAD^:Dockerfile" 2>/dev/null; then
     promote_is_root_commit=true
+  fi
+  # scripts/release-image-repos.sh arrived with the switch to Docker Hub
+  # (a8c313d5, #739): a release whose tree lacks it had a release job
+  # that published to ghcr.io/bwsalmon/grain/* and nowhere else.
+  if ! git -C "$work" cat-file -e "FETCH_HEAD:scripts/release-image-repos.sh" 2>/dev/null; then
+    promote_predates_dockerhub=true
   fi
   rm -rf "$work"
   return "$answer"
@@ -803,6 +812,9 @@ if [ "$dry_run" = true ]; then
         echo "release-images.sh: [dry-run] and rebuild $root/grain:sha-${promote_commit:0:7} from $promote_commit with RELEASE=$promote_tag as $targets, unless $root/grain:$promote_tag already reports $promote_tag"
       fi
       echo "release-images.sh: [dry-run] and point $root/grain:sha-${promote_commit:0:7} at the stamped $root/grain:$promote_tag"
+      if [ "$promote_predates_dockerhub" = true ]; then
+        echo "release-images.sh: [dry-run] $promote_tag predates the switch to Docker Hub (#739), so first copy by digest whichever of those images $root lacks from $GRAIN_LEGACY_GHCR_PREFIX/{guest,k8s-sandbox,guest-base,k8s-sandbox-base}:sha-${promote_commit:0:7} and $GRAIN_LEGACY_GHCR_PREFIX/grain:$promote_tag (its stamped build) or :sha-${promote_commit:0:7}"
+      fi
       if [ "$promote_latest" != true ]; then
         echo "release-images.sh: [dry-run] latest stays put: the git tag latest names ${latest_commit:-nothing}, not $promote_tag"
       fi
@@ -1399,6 +1411,79 @@ rc_images() {
   publish_release
 }
 
+# The registry digest $1 names, asked of the registry: an index's digest
+# for a multi-platform image, the manifest's for a single one.
+registry_digest() {
+  registry_env docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}' 2>/dev/null
+}
+
+# Copy $1 (a tag) to $2 by digest, registry-side, and refuse a copy whose
+# digest differs from the source's: the copy has to be the image that was
+# tested, byte for byte, not a re-encoding of it.
+copy_by_digest() {
+  local source="$1" target="$2" want got
+  if ! want="$(registry_digest "$source")" || [[ "$want" != sha256:* ]]; then
+    echo "release-images.sh: could not read the digest of $source" >&2
+    return 1
+  fi
+  retag_image "${source%:*}@$want" "$target" || return 1
+  got="$(registry_digest "$target" || true)"
+  if [ "$got" != "$want" ]; then
+    echo "release-images.sh: copied $source ($want) to $target, but $target is ${got:-unreadable}: the copy is not the image that was tested" >&2
+    return 1
+  fi
+  echo "release-images.sh: copied $source to $target by digest ($want)"
+  sign_image "$target" "${target%:*}@$want"
+}
+
+# A one-time bridge for releases cut before the switch to Docker Hub
+# (a8c313d5, #739, task 3174) -- v3.1.0 and v3.1.1 among them. Their
+# release jobs published to ghcr.io/bwsalmon/grain/{grain,guest,
+# k8s-sandbox,...} and nothing else, so promoting one to Docker Hub found
+# none of its sha- images there and failed (task 3249). Re-running the
+# release at such a commit does not help: it runs that commit's own
+# workflow and scripts, which publish to GHCR under the old names again.
+#
+# So before publish_release looks for them, the images it needs and
+# Docker Hub lacks are copied from GHCR by digest (copy_by_digest), and
+# the copy is refused unless its digest equals the source's. What reaches
+# Docker Hub is then exactly what that release job built and tested -- and,
+# for the grain image, the build GHCR's own promotion already stamped,
+# which publish_release then finds stamped and does not rebuild. The
+# copies name their sandbox images on GHCR by digest, as they did when
+# they were tested. Nothing is copied for a release whose tree has
+# scripts/release-image-repos.sh (promote_predates_dockerhub), whose
+# release job published to Docker Hub itself.
+adopt_legacy_ghcr_release() {
+  local promoted_short="${promote_commit:0:7}" image tag legacy legacy_tag target stamp="${stamp_tag:-$promote_tag}"
+  local wanted=()
+  for image in sandbox sandbox-k8s sandbox-base sandbox-k8s-base; do
+    wanted+=("$image sha-$promoted_short sha-$promoted_short")
+  done
+  legacy="$(legacy_ghcr_image_repo "$root/grain")"
+  if [ -n "$legacy" ] && stamped_build "$legacy:$promote_tag" "$stamp"; then
+    wanted+=("grain $promote_tag $promote_tag")
+  else
+    wanted+=("grain sha-$promoted_short sha-$promoted_short")
+  fi
+  for target in "${wanted[@]}"; do
+    read -r image tag legacy_tag <<< "$target"
+    legacy="$(legacy_ghcr_image_repo "$root/$image")"
+    [ -n "$legacy" ] || continue
+    if image_exists "$root/$image:$tag" 2>/dev/null; then
+      continue
+    fi
+    if ! image_exists "$legacy:$legacy_tag" 2>/dev/null; then
+      continue
+    fi
+    if ! docker buildx version >/dev/null 2>&1; then
+      echo "release-images.sh: $promote_tag predates Docker Hub and $root/$image:$tag is only on GHCR ($legacy:$legacy_tag); copying it by digest needs docker buildx, which is not here" >&2
+      return 1
+    fi
+    copy_by_digest "$legacy:$legacy_tag" "$root/$image:$tag" || return 1
+  done
+}
+
 # What promote_images and rc_images share: publish $promote_commit's
 # images as each of targets, the first of which is the name stamped into
 # the daemon image ($promote_tag) and the rest the moving tags that go
@@ -1422,6 +1507,9 @@ publish_release() {
   # version with vX.Y.Z, so prune keeps them, and they are what is
   # retagged here on every tick.
   local stamped=() stamp="${stamp_tag:-$promote_tag}"
+  if [ "$promote_predates_dockerhub" = true ]; then
+    adopt_legacy_ghcr_release || return 1
+  fi
   for daemon in "${daemons[@]}"; do
     read -r image main <<< "$daemon"
     if [ -n "$stamp_tag" ]; then
@@ -1469,6 +1557,13 @@ publish_release() {
   done
   if [ "${#missing[@]}" -gt 0 ]; then
     echo "release-images.sh: $promote_tag is $promote_commit, and the release job never published ${missing[*]} for it." >&2
+    if [ "$promote_predates_dockerhub" = true ]; then
+      # Re-running such a release publishes to GHCR again, so the
+      # generic advice below would send an operator round in a circle.
+      echo "release-images.sh: $promote_tag predates the switch to Docker Hub (#739): its release job published only to $GRAIN_LEGACY_GHCR_PREFIX/{grain,guest,k8s-sandbox}, and what promotion needs is not there either, so there was nothing to copy by digest and nothing was moved." >&2
+      echo "release-images.sh: publish $promote_tag's images to $GRAIN_LEGACY_GHCR_PREFIX/* (re-running that commit's release does exactly that) and promote again: they are then copied here by digest. Or promote a release cut after the switch." >&2
+      return 1
+    fi
     echo "release-images.sh: promotion publishes what was built and tested for that commit, so nothing was moved. Re-run that commit's release (POST /api/repos/$GRAIN_CI_REPO/release-runs) and promote again." >&2
     return 1
   fi
