@@ -17,7 +17,6 @@ package daemon
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -84,43 +83,6 @@ func (d daemonNamespaceCIStore) Live(key ci.Key) (ci.Run, bool) {
 	return ci.Run{}, false
 }
 
-type daemonNamespaceArtifacts struct{}
-
-func (daemonNamespaceArtifacts) active() ci.ArtifactStore {
-	if svc := LiveCI.embedded(); svc != nil && svc.Engine != nil {
-		return svc.Engine.Artifacts
-	}
-	return nil
-}
-
-func (a daemonNamespaceArtifacts) Save(ctx context.Context, ref ci.ArtifactRef, body []byte) (ci.Artifact, error) {
-	if s := a.active(); s != nil {
-		return s.Save(ctx, ref, body)
-	}
-	return ci.Artifact{}, os.ErrNotExist
-}
-
-func (a daemonNamespaceArtifacts) List(ctx context.Context, runID string) ([]ci.Artifact, error) {
-	if s := a.active(); s != nil {
-		return s.List(ctx, runID)
-	}
-	return nil, nil
-}
-
-func (a daemonNamespaceArtifacts) Open(ctx context.Context, ref ci.ArtifactRef) (io.ReadCloser, ci.Artifact, error) {
-	if s := a.active(); s != nil {
-		return s.Open(ctx, ref)
-	}
-	return nil, ci.Artifact{}, os.ErrNotExist
-}
-
-func (a daemonNamespaceArtifacts) MaxArtifactBytes() int64 {
-	if s := a.active(); s != nil {
-		return s.MaxArtifactBytes()
-	}
-	return 0
-}
-
 // BuildNamespaceRedactor builds a Redactor loaded with known secret values and
 // GitHub credentials from dataDir/secrets.
 func BuildNamespaceRedactor(dataDir string) *redact.Redactor {
@@ -183,10 +145,10 @@ func buildNamespaceRedactor(dataDir string) *redact.Redactor {
 // in when the process started. A nil set is a caller with nothing that
 // can change that answer, which gets one of its own.
 func StartGitProxy(dataDir string, store *model.Store, githubHost string, insecureHTTP bool, fabric Fabric, forbidden *gitproxy.ForbiddenSet) (url string, handler http.Handler, stop func(context.Context) error, err error) {
-	return startGitProxy(dataDir, store, githubHost, insecureHTTP, fabric, forbidden, nil)
+	return startGitProxy(dataDir, store, githubHost, insecureHTTP, fabric, forbidden, nil, nil)
 }
 
-func startGitProxy(dataDir string, store *model.Store, githubHost string, insecureHTTP bool, fabric Fabric, forbidden *gitproxy.ForbiddenSet, shutdownStarted <-chan struct{}) (url string, handler http.Handler, stop func(context.Context) error, err error) {
+func startGitProxy(dataDir string, store *model.Store, githubHost string, insecureHTTP bool, fabric Fabric, forbidden *gitproxy.ForbiddenSet, shutdownStarted <-chan struct{}, artifacts ci.ArtifactStore) (url string, handler http.Handler, stop func(context.Context) error, err error) {
 	repos, err := ForbiddenRepos(context.Background(), dataDir)
 	if err != nil {
 		return "", nil, nil, err
@@ -205,7 +167,7 @@ func startGitProxy(dataDir string, store *model.Store, githubHost string, insecu
 		CIStore:     daemonNamespaceCIStore{fallback: fallbackCI},
 		ExternalCI:  sandboxExternalCI{},
 		ArtifactDir: ciArtifactDir(dataDir),
-		Artifacts:   daemonNamespaceArtifacts{},
+		Artifacts:   artifacts,
 		SrcDir:      srcDir,
 		CoreSrcDir:  coreSrcDir,
 		CoreModule:  coreModule,

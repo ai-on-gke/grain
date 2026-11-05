@@ -711,6 +711,9 @@ func Run(ctx context.Context, cfg Config) error {
 		WithSandboxImages(sandboxImages, stockSandboxImage, sandboxImageLabels()).
 		WithCapabilityServers(capabilityServers).
 		withHostdCapabilityServers(hostdCapabilityServers)
+	if cfg.ObjectStore != nil && cfg.ciArtifacts == nil {
+		cfg.ciArtifacts = CiArtifactStore(cfg, live.ciStorageBounds)
+	}
 	if cfg.Overcommit != nil {
 		go runOvercommit(ctx, live, cfg.Overcommit)
 	}
@@ -1032,7 +1035,10 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		},
 	}))
 
-	proxyURL, proxyHandler, stopProxy, err := startGitProxy(cfg.DataDir, store, cfg.GithubHost, cfg.GithubInsecureHTTP, fabric, forbidden, cfg.shutdownStarted)
+	if cfg.ObjectStore != nil && cfg.ciArtifacts == nil {
+		cfg.ciArtifacts = CiArtifactStore(cfg, live.ciStorageBounds)
+	}
+	proxyURL, proxyHandler, stopProxy, err := startGitProxy(cfg.DataDir, store, cfg.GithubHost, cfg.GithubInsecureHTTP, fabric, forbidden, cfg.shutdownStarted, cfg.ciArtifacts)
 	if err != nil {
 		// Fatal to this loop, and only to it: every dispatch and every CI
 		// job clones through this proxy, so there is nothing to reconcile
@@ -1738,11 +1744,19 @@ func flushObjectStoreState(ctx context.Context, cfg Config) {
 			log.Printf("grain daemon: flushing transcripts to object store: %v", err)
 		}
 	}
-	if svc := LiveCI.embedded(); svc != nil && svc.Engine != nil {
-		if objArt, ok := svc.Engine.Artifacts.(*ci.ObjectArtifacts); ok {
-			if err := objArt.FlushLocal(ctx); err != nil {
-				log.Printf("grain daemon: flushing CI artifacts to object store: %v", err)
-			}
+	var objArt *ci.ObjectArtifacts
+	if a, ok := cfg.ciArtifacts.(*ci.ObjectArtifacts); ok {
+		objArt = a
+	} else if cfg.ObjectStore != nil && cfg.DataDir != "" {
+		objArt, _ = ci.OpenObjectArtifacts(
+			objectstore.WithPrefix(cfg.ObjectStore, "ci-artifacts"),
+			ciArtifactDir(cfg.DataDir),
+			ci.DirArtifactsOptions{},
+		)
+	}
+	if objArt != nil {
+		if err := objArt.FlushLocal(ctx); err != nil {
+			log.Printf("grain daemon: flushing CI artifacts to object store: %v", err)
 		}
 	}
 	if s := agentSessionStoreFor(cfg); s != nil {

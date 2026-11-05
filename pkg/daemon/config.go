@@ -48,6 +48,10 @@ type Config struct {
 	// transcriptObjects is the live/read-through transcript object store
 	// opened by run() when ObjectStore or ObjectStoreURI is configured.
 	transcriptObjects *TranscriptObjectStore
+	// ciArtifacts is the object-backed CI artifact store opened by run()
+	// when ObjectStore or ObjectStoreURI is configured, shared by the
+	// namespace server and embedded CI.
+	ciArtifacts ci.ArtifactStore
 	// unitFlags are the names of the flags this process was actually
 	// started with, undefined ones included -- which on a deployment
 	// scripts/setup.sh installed is what grain-daemon.service's ExecStart

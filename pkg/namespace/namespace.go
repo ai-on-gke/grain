@@ -188,7 +188,7 @@ type Server struct {
 	ExternalCI  ci.ExternalRuns
 	ArtifactDir string
 	// Artifacts, when set, opens stored CI artifacts (including read-through
-	// object-store caches) before falling back to ArtifactDir.
+	// object-store caches) when ArtifactDir does not hold the file directly.
 	Artifacts ci.ArtifactStore
 	SrcDir    string
 	// CoreSrcDir, when set, is the source of github.com/ai-on-gke/grain
@@ -877,6 +877,24 @@ func (s *Server) resolveCIArtifacts(run ci.Run, relPath string, rem []string) (*
 			if artJob == "" {
 				artJob = jobName
 			}
+			if s.ArtifactDir != "" {
+				target, err := safepath.Within(s.ArtifactDir, filepath.Join(run.ID, artJob, filepath.FromSlash(a.Name)))
+				if err != nil {
+					return nil, fmt.Errorf("%w: %v", ErrBadRequest, err)
+				}
+				if info, statErr := os.Stat(target); statErr == nil {
+					return &ResolvedNode{
+						Scheme:  "ci",
+						Path:    relPath,
+						IsDir:   false,
+						Size:    info.Size(),
+						Growing: false,
+						Open: func() (io.ReadCloser, error) {
+							return os.Open(target)
+						},
+					}, nil
+				}
+			}
 			if s.Artifacts != nil {
 				ref := ci.ArtifactRef{Run: run.ID, Job: artJob, Name: a.Name}
 				rc, opened, err := s.Artifacts.Open(context.Background(), ref)
@@ -898,31 +916,12 @@ func (s *Server) resolveCIArtifacts(run ci.Run, relPath string, rem []string) (*
 						},
 					}, nil
 				}
-				if s.ArtifactDir == "" {
-					return nil, fmt.Errorf("%w: artifact %s", ErrNotFound, artName)
-				}
+				return nil, fmt.Errorf("%w: artifact %s", ErrNotFound, artName)
 			}
 			if s.ArtifactDir == "" {
 				return nil, fmt.Errorf("%w: artifact storage directory is not configured", ErrNotFound)
 			}
-			target, err := safepath.Within(s.ArtifactDir, filepath.Join(run.ID, artJob, filepath.FromSlash(a.Name)))
-			if err != nil {
-				return nil, fmt.Errorf("%w: %v", ErrBadRequest, err)
-			}
-			info, err := os.Stat(target)
-			if err != nil {
-				return nil, fmt.Errorf("%w: artifact %s", ErrNotFound, artName)
-			}
-			return &ResolvedNode{
-				Scheme:  "ci",
-				Path:    relPath,
-				IsDir:   false,
-				Size:    info.Size(),
-				Growing: false,
-				Open: func() (io.ReadCloser, error) {
-					return os.Open(target)
-				},
-			}, nil
+			return nil, fmt.Errorf("%w: artifact %s", ErrNotFound, artName)
 		}
 	}
 	return nil, fmt.Errorf("%w: artifact %q", ErrNotFound, artName)

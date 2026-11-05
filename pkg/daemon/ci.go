@@ -3296,6 +3296,9 @@ func ciArtifactDir(dataDir string) string {
 // way -- on every Save, including the per-artifact cap a job's sandbox is
 // told before it copies anything out, and on every sweep.
 func CiArtifactStore(cfg Config, bounds func() ci.StorageBounds) ci.ArtifactStore {
+	if cfg.ciArtifacts != nil {
+		return cfg.ciArtifacts
+	}
 	dir := ciArtifactDir(cfg.DataDir)
 	if cfg.ObjectStore != nil {
 		objStore, err := ci.OpenObjectArtifacts(
