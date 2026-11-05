@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { useState } from "react";
-import { Alert, Button } from "@mui/material";
+import { Alert, Button, Stack, TextField } from "@mui/material";
 import api from "../../api.js";
 import {
   connectionLabel,
@@ -69,7 +69,32 @@ export default function Declared({ t, config, act }) {
   // nothing while it is working, so a slow request cannot be clicked
   // twice.
   const [clearing, setClearing] = useState(false);
+  const [editingOwner, setEditingOwner] = useState(false);
+  const [ownerDraft, setOwnerDraft] = useState("");
+  const [savingOwner, setSavingOwner] = useState(false);
   const rows = [];
+
+  const saveOwner = async () => {
+    const next = ownerDraft.trim();
+    if (!next || next === t.owner || !act) {
+      setEditingOwner(false);
+      return;
+    }
+    setSavingOwner(true);
+    try {
+      const ok = await act(
+        () =>
+          api(`/api/tasks/${t.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ owner: next }),
+          }),
+        t.id,
+      );
+      if (ok) setEditingOwner(false);
+    } finally {
+      setSavingOwner(false);
+    }
+  };
   // The deployment's own settings (config.deployment), whose
   // framework, pinned connection and default model a task that names
   // none of its own runs on.
@@ -263,6 +288,78 @@ export default function Declared({ t, config, act }) {
   // them (operator-attribution spec §4.1): the verified email of the
   // person signed in, "operator (access code)" for the shared code, "task
   // 42" for a run -- never a bare kind and id.
+  if (t.owner) {
+    rows.push([
+      "Owner",
+      editingOwner ? (
+        <Stack
+          key="owner-editor"
+          direction="row"
+          spacing={0.5}
+          alignItems="center"
+          useFlexGap
+          flexWrap="wrap"
+        >
+          <TextField
+            size="small"
+            inputProps={{ "aria-label": "New owner" }}
+            placeholder="alice@example.com"
+            value={ownerDraft}
+            disabled={savingOwner}
+            onChange={(e) => setOwnerDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                saveOwner();
+              } else if (e.key === "Escape") {
+                setEditingOwner(false);
+              }
+            }}
+            sx={{ minWidth: 160 }}
+          />
+          <Button
+            size="small"
+            variant="contained"
+            disabled={savingOwner || !ownerDraft.trim()}
+            onClick={saveOwner}
+          >
+            Save
+          </Button>
+          <Button
+            size="small"
+            disabled={savingOwner}
+            onClick={() => setEditingOwner(false)}
+          >
+            Cancel
+          </Button>
+        </Stack>
+      ) : (
+        <Stack
+          key="owner-display"
+          direction="row"
+          spacing={1}
+          alignItems="center"
+          useFlexGap
+          flexWrap="wrap"
+        >
+          <span data-testid="task-owner">{t.owner}</span>
+          {act && (
+            <Button
+              size="small"
+              aria-label="Change owner"
+              onClick={() => {
+                setOwnerDraft(t.owner || "");
+                setEditingOwner(true);
+              }}
+              sx={{ minWidth: 0, px: 0.75, py: 0, fontSize: "0.75rem" }}
+            >
+              Change
+            </Button>
+          )}
+        </Stack>
+      ),
+    ]);
+  }
   if (isExternalAgent(t.author)) {
     rows.push([
       "Filed by",

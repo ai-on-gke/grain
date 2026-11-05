@@ -227,7 +227,7 @@ func processResult(ctx context.Context, store *model.Store, reach *gitproxy.Reac
 func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.Reach, client github.Client,
 	appBot AppBotIdentityFunc, task model.Task, result *agent.Result, runID, preRunBranchSHA string, now time.Time) error {
 
-	if err := relayProposedTasks(ctx, store, reach, client, task, result, now); err != nil {
+	if err := relayProposedTasks(withRelayingRunID(ctx, runID), store, reach, client, task, result, now); err != nil {
 		return err
 	}
 
@@ -1575,6 +1575,34 @@ func proposalConnection(ctx context.Context, store *model.Store, name string) *m
 // task filed since the backlog started, so a proposal an agent split out
 // as an afterthought was dispatched, once approved, before work that had
 // been waiting for it.
+type relayingRunIDKey struct{}
+
+func withRelayingRunID(ctx context.Context, runID string) context.Context {
+	return context.WithValue(ctx, relayingRunIDKey{}, strings.TrimSpace(runID))
+}
+
+func relayingRunIDFrom(ctx context.Context) string {
+	v, _ := ctx.Value(relayingRunIDKey{}).(string)
+	return v
+}
+
+func consoleSessionSender(ctx context.Context, store *model.Store, sessionTaskID string) *model.Principal {
+	comments, err := store.Comments(ctx, sessionTaskID)
+	if err != nil {
+		return nil
+	}
+	for i := len(comments) - 1; i >= 0; i-- {
+		actor := comments[i].Author.Actor
+		if (actor.Kind == model.PrincipalHuman || actor.Kind == model.PrincipalService) && strings.TrimSpace(actor.ID) != "" {
+			if _, nerr := model.NormalizeTaskOwner(actor.ID); nerr == nil {
+				cp := actor
+				return &cp
+			}
+		}
+	}
+	return nil
+}
+
 func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy.Reach, client github.Client,
 	task model.Task, result *agent.Result, now time.Time) error {
 
@@ -1989,6 +2017,31 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// The proposing task's root requester's work, as ui.CreateTask
 		// records the identical call filed live.
 		model.InheritRequester(&proposal, task)
+		var proposerBehalf *model.Principal
+		isSession := task.Origin.Reason == model.ReasonConsoleSession
+		if isSession {
+			if sender := consoleSessionSender(ctx, store, task.ID); sender != nil {
+				if norm, nerr := model.NormalizeTaskOwner(sender.ID); nerr == nil {
+					proposal.Owner = norm
+					proposerBehalf = sender
+				}
+			}
+		}
+		if proposerBehalf == nil && strings.TrimSpace(proposal.Owner) != "" {
+			proposerBehalf = &model.Principal{Kind: model.PrincipalHuman, ID: proposal.Owner}
+		}
+		proposerSrc := model.SourceSandbox
+		if isSession {
+			proposerSrc = model.SourceSession
+		}
+		proposal.Proposer = model.TaskProposer{
+			Attribution: model.Attribution{
+				Actor:      model.Principal{Kind: model.PrincipalAgent, ID: task.ID, Source: proposerSrc},
+				OnBehalfOf: proposerBehalf,
+			},
+			TaskID: task.ID,
+			RunID:  relayingRunIDFrom(ctx),
+		}
 		// Marked as fixing its red base branch (model.FixesBaseBranch,
 		// baserepairlink.go): a proposal with no repo has no base to fix,
 		// and is filed unmarked rather than not at all.

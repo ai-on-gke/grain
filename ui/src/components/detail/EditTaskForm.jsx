@@ -68,6 +68,8 @@ export default function EditTaskForm({
   );
   const savedReviewers = (t.reviewers || []).join(", ");
   const [reviewers, setReviewers] = useState(savedReviewers);
+  const savedOwner = t.owner || "";
+  const [owner, setOwner] = useState(savedOwner);
   const reviewFiled = Boolean(t.reviewTask);
   // Which model this task's next run is driven by (grain/task-110),
   // editable here for the reason the review above is: the decision is
@@ -137,6 +139,7 @@ export default function EditTaskForm({
     if (description !== (t.description || "")) return true;
     if (reviewTemplateId !== (t.reviewTemplateId || "")) return true;
     if (reviewers !== savedReviewers) return true;
+    if (owner.trim() !== savedOwner) return true;
     if (nothingNeededAction !== savedNothingNeeded) return true;
     if (keepRunning !== savedKeepRunning) return true;
     if (String(priority).trim() !== String(savedPriority)) return true;
@@ -176,6 +179,9 @@ export default function EditTaskForm({
             reviewTemplateId,
             ...(reviewers !== savedReviewers
               ? { reviewers: parsedReviewers }
+              : {}),
+            ...(owner.trim() && owner.trim() !== savedOwner
+              ? { owner: owner.trim() }
               : {}),
             ...(nothingNeededAction !== savedNothingNeeded
               ? { nothingNeededAction }
@@ -218,6 +224,15 @@ export default function EditTaskForm({
         onChange={(e) => setDescription(e.target.value)}
         multiline
         minRows={5}
+        fullWidth
+        size="small"
+      />
+      <TextField
+        label="Owner"
+        placeholder="alice@example.com"
+        value={owner}
+        onChange={(e) => setOwner(e.target.value)}
+        helperText="account responsible for this task (transfers are audited)"
         fullWidth
         size="small"
       />

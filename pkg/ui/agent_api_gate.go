@@ -1116,6 +1116,10 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 			if json.Unmarshal(raw, &on) == nil && on && !set.Allows("tasks:admin", repo) {
 				return errors.New("an agent files work unapproved: approving it needs tasks:admin")
 			}
+		case "owner":
+			if hasTaskOwnerField(pattern, raw) {
+				return errAgentTaskOwner
+			}
 		case "author", "proposedby":
 			var who string
 			if json.Unmarshal(raw, &who) == nil && strings.TrimSpace(who) != "" {
@@ -1225,6 +1229,16 @@ var errAgentChangeReview = errors.New("an agent cannot mail a CL, publish its re
 
 var errAgentReviewers = errors.New("an agent cannot set reviewers: " +
 	"who reviews a change is a person's decision (changelists.md §5)")
+
+func hasTaskOwnerField(pattern string, raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return false
+	}
+	return pattern == "POST /api/tasks" ||
+		pattern == "PATCH /api/tasks/{id}" ||
+		pattern == "POST /api/tasks/from-template"
+}
 
 func hasReviewersField(pattern string, raw json.RawMessage) bool {
 	if strings.TrimSpace(string(raw)) == "null" {
@@ -2040,6 +2054,10 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 			if json.Unmarshal(raw, &on) == nil && on && !set.Allows("tasks:admin", repo) {
 				return errors.New("an agent files work unapproved: approving it needs tasks:admin")
 			}
+		case "owner":
+			if hasTaskOwnerField(pattern, raw) {
+				return errAgentTaskOwner
+			}
 		case "author", "creator", "proposedby":
 			var who string
 			if json.Unmarshal(raw, &who) == nil && strings.TrimSpace(who) != "" {
@@ -2473,6 +2491,7 @@ func editedPatchResponseKeys(body []byte) []string {
 	}
 	add(req.Title != nil, "title")
 	add(req.Description != nil, "description")
+	add(req.Owner != nil, "owner")
 	add(req.Repo != nil, "repo")
 	add(req.Base != nil, "base")
 	add(req.Priority != nil, "priority")
