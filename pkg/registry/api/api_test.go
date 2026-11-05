@@ -80,7 +80,7 @@ func TestValidationAndScopeHelpers(t *testing.T) {
 	if ok, spec := api.PathMatchesPrefix("services/payments/handler.go", "services/payments"); !ok || spec != len("services/payments") {
 		t.Fatalf("PathMatchesPrefix = (%v, %d), want (true, %d)", ok, spec, len("services/payments"))
 	}
-	if ok, _ := api.PathMatchesPrefix("services/payments-v2/handler.go", "services/payments"); ok {
+	if ok, _ := api.PathMatchesPrefix("services/payments-billing/handler.go", "services/payments"); ok {
 		t.Fatal("PathMatchesPrefix must enforce path-segment boundaries")
 	}
 	if !api.PrimaryPrefixesOverlap("services", "services/payments") {
