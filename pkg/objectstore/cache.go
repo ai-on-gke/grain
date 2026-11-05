@@ -102,15 +102,17 @@ func (c *ReadThroughCache) Open(ctx context.Context, key string) (*os.File, Obje
 	if err != nil {
 		return nil, ObjectInfo{}, err
 	}
-	if f, err := os.Open(target); err == nil {
-		if info, statErr := f.Stat(); statErr == nil && !info.IsDir() {
-			return f, ObjectInfo{
-				Key:     key,
-				Size:    info.Size(),
-				Updated: info.ModTime().UTC(),
-			}, nil
+	if linfo, lerr := os.Lstat(target); lerr == nil && linfo.Mode().IsRegular() {
+		if f, err := os.Open(target); err == nil {
+			if info, statErr := f.Stat(); statErr == nil && info.Mode().IsRegular() {
+				return f, ObjectInfo{
+					Key:     key,
+					Size:    info.Size(),
+					Updated: info.ModTime().UTC(),
+				}, nil
+			}
+			f.Close()
 		}
-		f.Close()
 	}
 
 	rc, remoteInfo, err := c.store.Get(ctx, key)

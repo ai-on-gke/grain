@@ -16,9 +16,11 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +32,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/redact"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -258,5 +262,149 @@ func TestObjectStoreEndToEndTranscriptsArtifactsAndSessions(t *testing.T) {
 	rollout, err := os.ReadFile(filepath.Join(home2, "rollout.jsonl"))
 	if err != nil || string(rollout) != `{"turn":1}`+"\n" {
 		t.Fatalf("restored codex session on VM2 = %q (err=%v)", rollout, err)
+	}
+}
+
+func TestTranscriptObjectStoreRedactsJSONLAndNarrativeAndFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	mem := objectstore.NewMemory()
+
+	dataDir := t.TempDir()
+	liveDir := filepath.Join(dataDir, "state", "transcripts")
+	if err := os.MkdirAll(liveDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := filepath.Join(dataDir, "cache", "object-store", "transcripts")
+
+	secretsDir := SecretsDir(dataDir)
+	if err := os.MkdirAll(secretsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	secStore := secrets.Open(secrets.Config{
+		File:    filepath.Join(secretsDir, secrets.DefaultFileName),
+		KeyFile: filepath.Join(secretsDir, secrets.DefaultKeyFileName),
+	})
+	const deploySecret = "deploy-webhook-secret-9876543210"
+	if err := secStore.Set("webhook-hmac", "key", []byte(deploySecret)); err != nil {
+		t.Fatal(err)
+	}
+	const hostEnvSecret = "operator-proxy-secret-1122334455"
+	t.Setenv("ACME_OPERATOR_TOKEN", hostEnvSecret)
+	const ghShapeToken = "ghp_1234567890abcdef1234567890abcdef1234"
+	const pemBodyLine = "MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC7"
+
+	cfg := Config{
+		DataDir:        dataDir,
+		HostSandboxEnv: []string{"ACME_OPERATOR_TOKEN"},
+	}
+	tStore, err := NewTranscriptObjectStore(mem, cacheDir, liveDir, transcriptObjectRedactor(cfg, secStore))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rawJSONL := `{"type":"assistant","message":{"content":[{"type":"text","text":"found ` +
+		deploySecret + ` and ` + hostEnvSecret + ` and ` + ghShapeToken +
+		` and key:\n-----BEGIN PRIVATE KEY-----\n` + pemBodyLine + `\n-----END PRIVATE KEY-----\ndone"}]}}` + "\n"
+	rawFile := filepath.Join(liveDir, "run-sec")
+	if err := os.WriteFile(rawFile, []byte(rawJSONL), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := tStore.SyncChanged(ctx); err != nil {
+		t.Fatalf("SyncChanged: %v", err)
+	}
+
+	storedJSONL, ok := mem.Bytes("transcripts/run-sec.jsonl")
+	if !ok {
+		t.Fatal("expected transcripts/run-sec.jsonl in object store")
+	}
+	for _, secretVal := range []string{deploySecret, hostEnvSecret, ghShapeToken, pemBodyLine} {
+		if strings.Contains(string(storedJSONL), secretVal) {
+			t.Fatalf("stored .jsonl leaked %q: %s", secretVal, storedJSONL)
+		}
+	}
+
+	tailed, ok, err := tStore.TailRemoteRaw(ctx, "run-sec")
+	if err != nil || !ok {
+		t.Fatalf("TailRemoteRaw = (%q, %v, %v)", tailed, ok, err)
+	}
+	if !strings.Contains(tailed, "[redacted:") {
+		t.Fatalf("TailRemoteRaw missing redaction marker: %q", tailed)
+	}
+
+	narrative := "Final report: " + deploySecret + " / " + hostEnvSecret + " / " + ghShapeToken
+	saved, err := tStore.FlushRunEnd(ctx, "run-sec", rawFile, narrative)
+	if err != nil || !saved {
+		t.Fatalf("FlushRunEnd = (%v, %v), want (true, nil)", saved, err)
+	}
+	storedMD, ok := mem.Bytes("transcripts/run-sec.md")
+	if !ok {
+		t.Fatal("expected transcripts/run-sec.md in object store")
+	}
+	for _, secretVal := range []string{deploySecret, hostEnvSecret, ghShapeToken} {
+		if strings.Contains(string(storedMD), secretVal) {
+			t.Fatalf("stored .md leaked %q: %s", secretVal, storedMD)
+		}
+	}
+
+	// Verify fail-closed behavior when the secret store cannot be read.
+	brokenStore, err := NewTranscriptObjectStore(mem, t.TempDir(), liveDir, func() (*redact.Redactor, error) {
+		return nil, errors.New("secret store unavailable")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unredactedPath := filepath.Join(liveDir, "run-failclosed")
+	if err := os.WriteFile(unredactedPath, []byte(`{"type":"assistant","message":{"content":[{"type":"text","text":"`+deploySecret+`"}]}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := brokenStore.SyncChanged(ctx); err == nil {
+		t.Fatal("expected SyncChanged to fail closed when redactor errors")
+	}
+	if _, exists := mem.Bytes("transcripts/run-failclosed.jsonl"); exists {
+		t.Fatal("brokenStore uploaded unredacted .jsonl despite redactor error")
+	}
+	if saved, err := brokenStore.FlushRunEnd(ctx, "run-failclosed", unredactedPath, deploySecret); err == nil || saved {
+		t.Fatalf("FlushRunEnd on broken redactor = (%v, %v), want (false, err)", saved, err)
+	}
+	if _, exists := mem.Bytes("transcripts/run-failclosed.md"); exists {
+		t.Fatal("brokenStore uploaded unredacted .md despite redactor error")
+	}
+
+	// Seed a raw stream and ensure Read/TailRemoteRaw also fail closed without caching.
+	_ = mem.Put(ctx, "transcripts/run-crashed.jsonl", strings.NewReader(`{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}`+"\n"))
+	if text, ok, err := brokenStore.Read(ctx, "run-crashed"); err == nil || ok || text != "" {
+		t.Fatalf("brokenStore.Read = (%q, %v, %v), want fail-closed error", text, ok, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(brokenStore.Cache().Dir(), "run-crashed.md")); !os.IsNotExist(statErr) {
+		t.Fatalf("brokenStore cached fallback .md despite redactor failure: %v", statErr)
+	}
+}
+
+func TestHostSandboxHiddenPathsIncludesFileObjectStore(t *testing.T) {
+	stubHostConfinement(t, nil)
+	dataDir := t.TempDir()
+	extObjDir := t.TempDir()
+	nestedObjDir := filepath.Join(dataDir, "nested-obj")
+
+	got, err := hostSandboxHiddenPaths(context.Background(), Config{
+		DataDir:        dataDir,
+		ObjectStoreURI: "file://" + extObjDir,
+	})
+	if err != nil {
+		t.Fatalf("hostSandboxHiddenPaths external file store: %v", err)
+	}
+	if !slices.Equal(got, []string{dataDir, extObjDir}) {
+		t.Fatalf("hostSandboxHiddenPaths = %v, want [%s %s]", got, dataDir, extObjDir)
+	}
+
+	gotNested, err := hostSandboxHiddenPaths(context.Background(), Config{
+		DataDir:        dataDir,
+		ObjectStoreURI: "file://" + nestedObjDir,
+	})
+	if err != nil {
+		t.Fatalf("hostSandboxHiddenPaths nested file store: %v", err)
+	}
+	if !slices.Equal(gotNested, []string{dataDir}) {
+		t.Fatalf("hostSandboxHiddenPaths nested = %v, want [%s]", gotNested, dataDir)
 	}
 }

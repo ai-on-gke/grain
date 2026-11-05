@@ -194,3 +194,37 @@ func TestObjectArtifactsFlushLocal(t *testing.T) {
 		t.Fatalf("flushed bytes = %q (ok=%v), keys=%v", got, ok, mem.Keys())
 	}
 }
+
+func TestObjectArtifactsIgnoresSymlinks(t *testing.T) {
+	ctx := context.Background()
+	outside := filepath.Join(t.TempDir(), "host-secret")
+	if err := os.WriteFile(outside, []byte("do-not-upload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cacheDir := filepath.Join(t.TempDir(), "artifacts")
+	runDir := filepath.Join(cacheDir, "run888")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ref := workflows.ArtifactRef{Run: "run888", Job: "build", Name: "secret"}
+	linkPath := filepath.Join(runDir, artifactFileName(ref))
+	if err := os.Symlink(outside, linkPath); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	mem := objectstore.NewMemory()
+	objStore, err := OpenObjectArtifacts(objectstore.WithPrefix(mem, "ci-artifacts"), cacheDir, DirArtifactsOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := objStore.FlushLocal(ctx); err != nil {
+		t.Fatalf("FlushLocal: %v", err)
+	}
+	if len(mem.Keys()) != 0 {
+		t.Fatalf("FlushLocal uploaded symlink target: %v", mem.Keys())
+	}
+	if _, _, err := objStore.Open(ctx, ref); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Open on local symlink with missing remote = %v, want fs.ErrNotExist", err)
+	}
+}

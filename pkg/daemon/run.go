@@ -686,15 +686,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	if cfg.ObjectStore != nil {
 		transcriptCacheDir := filepath.Join(cfg.DataDir, "cache", "object-store", "transcripts")
-		redactText := func(s string) string {
-			r, err := logRedactor(SecretsDir(cfg.DataDir), secretStore)()
-			if err != nil || r == nil {
-				return s
-			}
-			out, _ := r.Text(s)
-			return out
-		}
-		tStore, err := NewTranscriptObjectStore(cfg.ObjectStore, transcriptCacheDir, transcriptDir, redactText)
+		tStore, err := NewTranscriptObjectStore(cfg.ObjectStore, transcriptCacheDir, transcriptDir, transcriptObjectRedactor(cfg, secretStore))
 		if err != nil {
 			return fmt.Errorf("preparing transcript object store: %w", err)
 		}

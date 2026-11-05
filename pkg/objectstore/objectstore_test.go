@@ -479,3 +479,45 @@ func TestGCSStoreFakeServer(t *testing.T) {
 		return s
 	})
 }
+
+func TestDirStoreAndCacheRejectSymlinks(t *testing.T) {
+	ctx := context.Background()
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("top-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dirRoot := t.TempDir()
+	ds, err := NewDir(dirRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dirRoot, "escape.txt")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	if _, _, err := ds.Get(ctx, "escape.txt"); !errors.Is(err, ErrNotExist) {
+		t.Fatalf("DirStore.Get on symlink = %v, want ErrNotExist", err)
+	}
+	if _, err := ds.Stat(ctx, "escape.txt"); !errors.Is(err, ErrNotExist) {
+		t.Fatalf("DirStore.Stat on symlink = %v, want ErrNotExist", err)
+	}
+	items, err := ds.List(ctx, "")
+	if err != nil || len(items) != 0 {
+		t.Fatalf("DirStore.List with symlink = (%v, %v), want empty", items, err)
+	}
+
+	mem := NewMemory()
+	_ = mem.Put(ctx, "item.txt", strings.NewReader("clean-remote"))
+	cacheDir := t.TempDir()
+	cache, err := NewReadThroughCache(mem, cacheDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(cacheDir, "item.txt")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := cache.GetBytes(ctx, "item.txt")
+	if err != nil || string(got) != "clean-remote" {
+		t.Fatalf("ReadThroughCache.GetBytes over symlink = (%q, %v), want clean-remote", got, err)
+	}
+}

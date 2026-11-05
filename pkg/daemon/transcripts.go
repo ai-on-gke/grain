@@ -35,6 +35,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/objectstore"
+	"github.com/ai-on-gke/grain/pkg/redact"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -95,14 +97,29 @@ func (l liveTranscripts) Tail(runID string) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
+	var (
+		rendered string
+		ok       bool
+	)
 	switch transcriptFramework(string(data)) {
 	case model.AgentFrameworkClaude:
-		return l.claude.Tail(runID)
+		rendered, ok, err = l.claude.Tail(runID)
 	case model.AgentFrameworkCodex:
-		return l.codex.Tail(runID)
+		rendered, ok, err = l.codex.Tail(runID)
 	default:
-		return l.antigravity.Tail(runID)
+		rendered, ok, err = l.antigravity.Tail(runID)
 	}
+	if err != nil || !ok {
+		return rendered, ok, err
+	}
+	if l.remote != nil {
+		r, redactErr := l.remote.resolveRedactor()
+		if redactErr != nil {
+			return "", false, redactErr
+		}
+		rendered, _ = r.Text(rendered)
+	}
+	return rendered, rendered != "", nil
 }
 
 func renderRawTranscript(raw string) string {
@@ -147,14 +164,15 @@ func transcriptFramework(data string) string {
 	return ""
 }
 
-// TranscriptObjectStore flushes live run event streams (<runID>.jsonl) and
-// finished redacted narrative transcripts (<runID>.md) to an objectstore.Store
-// under "transcripts/", serving reads through a local read-through cache.
+// TranscriptObjectStore flushes redacted live run event streams (<runID>.jsonl)
+// and finished redacted narrative transcripts (<runID>.md) to an
+// objectstore.Store under "transcripts/", serving reads through a local
+// read-through cache.
 type TranscriptObjectStore struct {
-	scoped  objectstore.Store
-	cache   *objectstore.ReadThroughCache
-	liveDir string
-	redact  func(string) string
+	scoped   objectstore.Store
+	cache    *objectstore.ReadThroughCache
+	liveDir  string
+	redactor func() (*redact.Redactor, error)
 
 	mu         sync.Mutex
 	lastSynced map[string]transcriptFileStamp
@@ -168,7 +186,11 @@ type transcriptFileStamp struct {
 // NewTranscriptObjectStore constructs a TranscriptObjectStore scoped under
 // "transcripts/" inside baseStore, caching finished transcripts locally in
 // cacheDir and syncing live streams from liveDir.
-func NewTranscriptObjectStore(baseStore objectstore.Store, cacheDir, liveDir string, redact func(string) string) (*TranscriptObjectStore, error) {
+//
+// When redactor is non-nil, it is called before any object-store write or
+// remote tail read and fails closed if it returns an error; when nil (in unit
+// tests without a secret store), shape-based credential redaction still runs.
+func NewTranscriptObjectStore(baseStore objectstore.Store, cacheDir, liveDir string, redactor func() (*redact.Redactor, error)) (*TranscriptObjectStore, error) {
 	if baseStore == nil {
 		return nil, errors.New("daemon: transcript object store is nil")
 	}
@@ -181,9 +203,135 @@ func NewTranscriptObjectStore(baseStore objectstore.Store, cacheDir, liveDir str
 		scoped:     scoped,
 		cache:      cache,
 		liveDir:    liveDir,
-		redact:     redact,
+		redactor:   redactor,
 		lastSynced: make(map[string]transcriptFileStamp),
 	}, nil
+}
+
+func (t *TranscriptObjectStore) resolveRedactor() (*redact.Redactor, error) {
+	if t == nil || t.redactor == nil {
+		return nil, nil
+	}
+	return t.redactor()
+}
+
+func transcriptObjectRedactor(cfg Config, secretStore *secrets.Store) func() (*redact.Redactor, error) {
+	secretsDir := SecretsDir(cfg.DataDir)
+	return func() (*redact.Redactor, error) {
+		var known []redact.KnownValue
+		if secretStore != nil {
+			vals, err := KnownSecretValuesFromStore(context.Background(), secretStore)
+			if err != nil {
+				return nil, fmt.Errorf("reading secret store for transcript redaction: %w", err)
+			}
+			known = append(known, vals...)
+		} else if secretsDir != "" {
+			if _, statErr := os.Stat(filepath.Join(secretsDir, secrets.DefaultKeyFileName)); statErr == nil {
+				vals, err := KnownSecretValues(secretsDir)
+				if err != nil {
+					return nil, fmt.Errorf("reading secrets directory for transcript redaction: %w", err)
+				}
+				known = append(known, vals...)
+			}
+		}
+		if secretsDir != "" {
+			known = append(known, knownGitHubTokens(secretsDir)...)
+		}
+		if len(cfg.HostSandboxEnv) > 0 {
+			env, _, err := ResolveHostSandboxEnv(cfg.HostSandboxEnv, os.LookupEnv)
+			if err != nil {
+				return nil, fmt.Errorf("resolving host sandbox env for transcript redaction: %w", err)
+			}
+			for _, kv := range env {
+				if name, val, ok := strings.Cut(kv, "="); ok {
+					known = append(known, redact.KnownValue{Label: "sandbox env " + name, Value: val})
+				}
+			}
+		}
+		return redact.New(known), nil
+	}
+}
+
+func redactJSONL(r *redact.Redactor, raw []byte) []byte {
+	if len(raw) == 0 {
+		return raw
+	}
+	lines := strings.Split(string(raw), "\n")
+	anyChanged := false
+	for i, line := range lines {
+		if line == "" {
+			continue
+		}
+		redactedLine, changed := redactJSONLLine(r, line)
+		if changed {
+			lines[i] = redactedLine
+			anyChanged = true
+		}
+	}
+	if !anyChanged {
+		return raw
+	}
+	return []byte(strings.Join(lines, "\n"))
+}
+
+func redactJSONLLine(r *redact.Redactor, line string) (string, bool) {
+	dec := json.NewDecoder(strings.NewReader(line))
+	dec.UseNumber()
+	var val any
+	if err := dec.Decode(&val); err != nil || dec.More() {
+		out, n := r.Text(line)
+		return out, n > 0
+	}
+	var extra any
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		out, n := r.Text(line)
+		return out, n > 0
+	}
+	redactedVal, changed := redactJSONValue(r, val)
+	if !changed {
+		return line, false
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(redactedVal); err != nil {
+		out, _ := r.Text(line)
+		return out, true
+	}
+	return strings.TrimSuffix(buf.String(), "\n"), true
+}
+
+func redactJSONValue(r *redact.Redactor, v any) (any, bool) {
+	switch x := v.(type) {
+	case string:
+		out, n := r.Text(x)
+		return out, n > 0
+	case []any:
+		changed := false
+		out := make([]any, len(x))
+		for i, elem := range x {
+			re, c := redactJSONValue(r, elem)
+			out[i] = re
+			if c {
+				changed = true
+			}
+		}
+		return out, changed
+	case map[string]any:
+		changed := false
+		out := make(map[string]any, len(x))
+		for k, elem := range x {
+			rk, kc := r.Text(k)
+			re, vc := redactJSONValue(r, elem)
+			out[rk] = re
+			if kc > 0 || vc {
+				changed = true
+			}
+		}
+		return out, changed
+	default:
+		return v, false
+	}
 }
 
 // Cache returns the local read-through cache for finished transcripts.
@@ -269,9 +417,13 @@ func (t *TranscriptObjectStore) syncLiveDir(ctx context.Context, force bool) err
 		return err
 	}
 	present := make(map[string]bool, len(entries))
-	var firstErr error
+	var (
+		firstErr       error
+		redactorLoaded bool
+		redactor       *redact.Redactor
+	)
 	for _, e := range entries {
-		if e.IsDir() || !validTranscriptRunID(e.Name()) {
+		if !e.Type().IsRegular() || !validTranscriptRunID(e.Name()) {
 			continue
 		}
 		runID := e.Name()
@@ -291,7 +443,16 @@ func (t *TranscriptObjectStore) syncLiveDir(ctx context.Context, force bool) err
 		if err != nil || len(data) == 0 {
 			continue
 		}
-		if err := t.scoped.Put(ctx, runID+".jsonl", bytes.NewReader(data)); err != nil {
+		if !redactorLoaded {
+			r, redactErr := t.resolveRedactor()
+			if redactErr != nil {
+				return redactErr
+			}
+			redactor = r
+			redactorLoaded = true
+		}
+		redactedData := redactJSONL(redactor, data)
+		if err := t.scoped.Put(ctx, runID+".jsonl", bytes.NewReader(redactedData)); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -316,11 +477,18 @@ func (t *TranscriptObjectStore) FlushRunEnd(ctx context.Context, runID, rawPath,
 	if t == nil || !validTranscriptRunID(runID) {
 		return false, nil
 	}
+	r, redactErr := t.resolveRedactor()
+	if redactErr != nil {
+		return false, redactErr
+	}
 	var errs []error
 	if rawPath != "" {
-		if data, readErr := os.ReadFile(rawPath); readErr == nil && len(data) > 0 {
-			if putErr := t.scoped.Put(ctx, runID+".jsonl", bytes.NewReader(data)); putErr != nil {
-				errs = append(errs, putErr)
+		if linfo, statErr := os.Lstat(rawPath); statErr == nil && linfo.Mode().IsRegular() {
+			if data, readErr := os.ReadFile(rawPath); readErr == nil && len(data) > 0 {
+				redactedData := redactJSONL(r, data)
+				if putErr := t.scoped.Put(ctx, runID+".jsonl", bytes.NewReader(redactedData)); putErr != nil {
+					errs = append(errs, putErr)
+				}
 			}
 		}
 		t.mu.Lock()
@@ -328,7 +496,8 @@ func (t *TranscriptObjectStore) FlushRunEnd(ctx context.Context, runID, rawPath,
 		t.mu.Unlock()
 	}
 	if narrative != "" {
-		if putErr := t.cache.PutBytes(ctx, runID+".md", []byte(narrative)); putErr != nil {
+		redactedNarrative, _ := r.Text(narrative)
+		if putErr := t.cache.PutBytes(ctx, runID+".md", []byte(redactedNarrative)); putErr != nil {
 			errs = append(errs, putErr)
 		} else {
 			savedNarrative = true
@@ -379,6 +548,10 @@ func (t *TranscriptObjectStore) TailRemoteRaw(ctx context.Context, runID string)
 	if t == nil || !validTranscriptRunID(runID) {
 		return "", false, nil
 	}
+	r, redactErr := t.resolveRedactor()
+	if redactErr != nil {
+		return "", false, redactErr
+	}
 	rc, _, err := t.scoped.Get(ctx, runID+".jsonl")
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", false, nil
@@ -392,8 +565,8 @@ func (t *TranscriptObjectStore) TailRemoteRaw(ctx context.Context, runID string)
 		return "", false, readErr
 	}
 	rendered := renderRawTranscript(string(raw))
-	if rendered != "" && t.redact != nil {
-		rendered = t.redact(rendered)
+	if rendered != "" {
+		rendered, _ = r.Text(rendered)
 	}
 	return rendered, rendered != "", nil
 }

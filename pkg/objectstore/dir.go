@@ -82,6 +82,16 @@ func (d *DirStore) Get(ctx context.Context, key string) (io.ReadCloser, ObjectIn
 	if err != nil {
 		return nil, ObjectInfo{}, err
 	}
+	linfo, err := os.Lstat(target)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, ObjectInfo{}, fmt.Errorf("objectstore: %q: %w", key, ErrNotExist)
+		}
+		return nil, ObjectInfo{}, fmt.Errorf("objectstore: stat %q: %w", key, err)
+	}
+	if !linfo.Mode().IsRegular() {
+		return nil, ObjectInfo{}, fmt.Errorf("objectstore: %q: %w", key, ErrNotExist)
+	}
 	f, err := os.Open(target)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -90,9 +100,9 @@ func (d *DirStore) Get(ctx context.Context, key string) (io.ReadCloser, ObjectIn
 		return nil, ObjectInfo{}, fmt.Errorf("objectstore: opening %q: %w", key, err)
 	}
 	info, err := f.Stat()
-	if err != nil || info.IsDir() {
+	if err != nil || !info.Mode().IsRegular() {
 		f.Close()
-		if info != nil && info.IsDir() {
+		if info != nil && !info.Mode().IsRegular() {
 			return nil, ObjectInfo{}, fmt.Errorf("objectstore: %q: %w", key, ErrNotExist)
 		}
 		return nil, ObjectInfo{}, fmt.Errorf("objectstore: stat %q: %w", key, err)
@@ -113,14 +123,14 @@ func (d *DirStore) Stat(ctx context.Context, key string) (ObjectInfo, error) {
 	if err != nil {
 		return ObjectInfo{}, err
 	}
-	info, err := os.Stat(target)
+	info, err := os.Lstat(target)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return ObjectInfo{}, fmt.Errorf("objectstore: %q: %w", key, ErrNotExist)
 		}
 		return ObjectInfo{}, fmt.Errorf("objectstore: stat %q: %w", key, err)
 	}
-	if info.IsDir() {
+	if !info.Mode().IsRegular() {
 		return ObjectInfo{}, fmt.Errorf("objectstore: %q: %w", key, ErrNotExist)
 	}
 	return ObjectInfo{
@@ -165,7 +175,7 @@ func (d *DirStore) List(ctx context.Context, prefix string) ([]ObjectInfo, error
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if entry.IsDir() {
+		if entry.IsDir() || !entry.Type().IsRegular() {
 			return nil
 		}
 		if strings.HasPrefix(entry.Name(), ".tmp-") {

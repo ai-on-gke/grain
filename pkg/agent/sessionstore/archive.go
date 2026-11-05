@@ -31,9 +31,9 @@ import (
 	"github.com/ai-on-gke/grain/pkg/objectstore"
 )
 
-// ephemeralCacheDirNames are CLI tool cache, temporary, and crash/log
-// directories inside a per-task home that stay local to the VM and are left out
-// of durable agent-session archives.
+// ephemeralCacheDirNames are CLI tool cache, temporary, per-run scratch, and
+// crash/log directories inside a per-task home that stay local to the VM and
+// are left out of durable agent-session archives.
 var ephemeralCacheDirNames = map[string]bool{
 	".cache":       true,
 	"cache":        true,
@@ -47,6 +47,23 @@ var ephemeralCacheDirNames = map[string]bool{
 	"Code Cache":   true,
 	"CachedData":   true,
 	"blob_storage": true,
+	"grain-run":    true,
+}
+
+// perRunSessionRelPaths are per-run configuration, MCP endpoint/bearer-token,
+// and credential files written into a task's HOME by grain's agent frameworks
+// before launching the CLI and removed on normal cleanup. Excluding them here
+// ensures a daemon killed mid-run cannot flush per-run credentials or sandbox
+// bindings into the durable session archive on startup.
+var perRunSessionRelPaths = map[string]bool{
+	"config.toml":                           true,
+	"environments.toml":                     true,
+	"model-catalog.json":                    true,
+	"auth.json":                             true,
+	"mcpserver.json":                        true,
+	".gemini/config/mcp_config.json":        true,
+	".gemini/antigravity-cli/settings.json": true,
+	".gemini/config/hooks.json":             true,
 }
 
 // WithObjectStore attaches a backing objectstore.Store (typically scoped under
@@ -440,14 +457,18 @@ func packDirTarGz(root string, maxBytes int64) ([]byte, int, error) {
 		if err != nil || !info.Mode().IsRegular() {
 			return nil
 		}
-		if maxBytes > 0 && totalBytes+info.Size() > maxBytes {
-			return errArchiveTooLarge
-		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return nil
 		}
-		if err := writeTarFile(tw, path, filepath.ToSlash(rel), info); err != nil {
+		relSlash := filepath.ToSlash(rel)
+		if perRunSessionRelPaths[relSlash] {
+			return nil
+		}
+		if maxBytes > 0 && totalBytes+info.Size() > maxBytes {
+			return errArchiveTooLarge
+		}
+		if err := writeTarFile(tw, path, relSlash, info); err != nil {
 			return err
 		}
 		totalBytes += info.Size()

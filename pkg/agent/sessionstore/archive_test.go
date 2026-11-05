@@ -208,3 +208,59 @@ func TestExtractSafeTarGzRejectsTraversalAndSymlinks(t *testing.T) {
 		t.Fatal("expected oversized tar entry to be rejected")
 	}
 }
+
+func TestStoreFlushAllExcludesPerRunCredentialsAndScratch(t *testing.T) {
+	ctx := context.Background()
+	mem := objectstore.NewMemory()
+	scoped := objectstore.WithPrefix(mem, "agent-sessions")
+
+	root1 := t.TempDir()
+	taskDir := filepath.Join(root1, "codex", "task-crash")
+	for _, rel := range []string{
+		"sessions/rollout-1.jsonl",
+		"config.toml",
+		"auth.json",
+		"mcpserver.json",
+		".gemini/config/mcp_config.json",
+		".gemini/antigravity-cli/settings.json",
+		".gemini/config/hooks.json",
+		"grain-run/host-tool-calls.jsonl",
+	} {
+		full := filepath.Join(taskDir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte("secret-bearer-token"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s1 := New(root1).WithObjectStore(scoped)
+	if err := s1.FlushAll(ctx); err != nil {
+		t.Fatalf("FlushAll: %v", err)
+	}
+
+	s2 := New(t.TempDir()).WithObjectStore(scoped)
+	restored, release, ok := s2.Open("codex", "task-crash")
+	if !ok {
+		t.Fatal("Open on VM2 failed")
+	}
+	defer release()
+
+	if _, err := os.Stat(filepath.Join(restored, "sessions", "rollout-1.jsonl")); err != nil {
+		t.Fatalf("expected conversation file to be preserved: %v", err)
+	}
+	for _, excluded := range []string{
+		"config.toml",
+		"auth.json",
+		"mcpserver.json",
+		".gemini/config/mcp_config.json",
+		".gemini/antigravity-cli/settings.json",
+		".gemini/config/hooks.json",
+		"grain-run/host-tool-calls.jsonl",
+	} {
+		if _, err := os.Stat(filepath.Join(restored, filepath.FromSlash(excluded))); !os.IsNotExist(err) {
+			t.Errorf("per-run file %q was archived and restored across crash: err=%v", excluded, err)
+		}
+	}
+}

@@ -211,21 +211,23 @@ func (a *ObjectArtifacts) Open(ctx context.Context, ref workflows.ArtifactRef) (
 
 	// Fast path: check local read-through cache first.
 	localPath := filepath.Join(a.cache.dir, ref.Run, artifactFileName(ref))
-	if f, err := os.Open(localPath); err == nil {
-		if info, statErr := f.Stat(); statErr == nil && !info.IsDir() {
-			mod := info.ModTime()
-			if bounds.MaxAge <= 0 || now.Sub(mod) <= bounds.MaxAge {
-				return f, workflows.Artifact{
-					Run:         ref.Run,
-					Job:         ref.Job,
-					Name:        ref.Name,
-					Stored:      true,
-					Bytes:       info.Size(),
-					CollectedAt: &mod,
-				}, nil
+	if linfo, lerr := os.Lstat(localPath); lerr == nil && linfo.Mode().IsRegular() {
+		if f, err := os.Open(localPath); err == nil {
+			if info, statErr := f.Stat(); statErr == nil && info.Mode().IsRegular() {
+				mod := info.ModTime()
+				if bounds.MaxAge <= 0 || now.Sub(mod) <= bounds.MaxAge {
+					return f, workflows.Artifact{
+						Run:         ref.Run,
+						Job:         ref.Job,
+						Name:        ref.Name,
+						Stored:      true,
+						Bytes:       info.Size(),
+						CollectedAt: &mod,
+					}, nil
+				}
 			}
+			f.Close()
 		}
-		f.Close()
 	}
 
 	rc, info, err := a.store.Get(ctx, artifactObjectKey(ref))
@@ -347,7 +349,7 @@ func (a *ObjectArtifacts) FlushLocal(ctx context.Context) error {
 			continue
 		}
 		for _, e := range entries {
-			if e.IsDir() {
+			if !e.Type().IsRegular() {
 				continue
 			}
 			job, name, ok := parseArtifactFileName(e.Name())
@@ -359,7 +361,11 @@ func (a *ObjectArtifacts) FlushLocal(ctx context.Context) error {
 			if _, statErr := a.store.Stat(ctx, key); statErr == nil {
 				continue
 			}
-			f, err := os.Open(filepath.Join(runDir, e.Name()))
+			localFile := filepath.Join(runDir, e.Name())
+			if linfo, statErr := os.Lstat(localFile); statErr != nil || !linfo.Mode().IsRegular() {
+				continue
+			}
+			f, err := os.Open(localFile)
 			if err != nil {
 				continue
 			}
