@@ -201,15 +201,6 @@ func composedTaskFrom(c model.Composition, modelFallbackSource string, modelFall
 			Name: "priority", Values: []string{strconv.Itoa(c.Priority)}, Source: string(model.LayerTemplate),
 		})
 	}
-	// Hostd, like keepRunning and priority, is shown when a template or
-	// repository default sets a hostd selector: default-hostd filings say
-	// nothing on the task pane either, while a template or repo pin must be
-	// visible in preview with the layer that chose it.
-	if c.Hostd != "" {
-		fields = append(fields, ComposedField{
-			Name: "hostd", Values: []string{c.Hostd}, Source: string(c.Sources.Hostd),
-		})
-	}
 	return ComposedTask{
 		TemplateID:   c.TemplateID,
 		TemplateName: c.TemplateName,

@@ -72,7 +72,6 @@ const LABELS = {
   keepRunning: "Keep running",
   approval: "Approval",
   priority: "Task priority",
-  hostd: "Hostd",
 };
 
 // EMPTY is what an empty value *means*, per field -- the whole reason

@@ -346,26 +346,4 @@ describe("CompositionPanel", () => {
       ).toBeInTheDocument(),
     );
   });
-
-  it("renders the Hostd row and its layer when a template or repo sets one", async () => {
-    api.mockResolvedValue({
-      kind: "template",
-      tasks: [
-        {
-          templateId: "template-1",
-          templateName: "GPU check",
-          title: "GPU check",
-          fields: [
-            field("title", "template", ["GPU check"]),
-            field("hostd", "repo", ["zone=b"]),
-          ],
-        },
-      ],
-    });
-    render(<CompositionPanel path="/api/templates/template-1/composition" />);
-
-    expect(await screen.findByText("Hostd")).toBeInTheDocument();
-    expect(screen.getByText("zone=b")).toBeInTheDocument();
-    expect(screen.getByText("from the repo")).toBeInTheDocument();
-  });
 });
