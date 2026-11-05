@@ -48,12 +48,19 @@ network listener takes depends on two settings:
   refuses to start with `-ui-require-iap` and no IAP audience.
   `grain access-code` still prints the code, and says the server takes
   it over loopback only.
+- **Another verifier required.** `-ui-require-verifier=<name>` (or
+  `GRAIN_REQUIRE_VERIFIER=<name>`) is the general form of the flag above:
+  `-ui-require-iap` is an alias for `-ui-require-verifier=iap`, and the
+  two together with a name other than `iap` are refused. It closes the
+  network listener to the access code the same way, and the daemon
+  refuses to start unless an `IdentityVerifier` of that name is active
+  (for `iap`, an IAP audience; otherwise one a wrapper build registered).
+  Any active verifier's assertion still signs its caller in.
 
-`-ui-require-iap` governs IAP only. A wrapper build's own
-`IdentityVerifier` that declares the access code wins over it
-(`AccessCodeWins()`, as a verifier behind an identity-aware proxy may) keeps
-taking the code over its proxy, so break-glass through that proxy still
-works with the flag set.
+Neither flag stops a wrapper build's own `IdentityVerifier` that declares
+the access code wins over it (`AccessCodeWins()`, as a verifier behind an
+identity-aware proxy may): it keeps taking the code over its proxy, so
+break-glass through that proxy still works with the flag set.
 
 In every mode the executor routes stay open
 ([Remote executors](#remote-executors)), and calls from inside a

@@ -669,6 +669,12 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 	writable := !c.configRepoOnly(ctx)
 	var stateRepo model.RepoRef
 	var autoReads []model.RepoRef
+	// checkedCaps are the session capabilities vetted below against the
+	// task as read before the config write; the task update re-vets any
+	// other capability the task no longer holds by the time it runs, so
+	// a grant removed concurrently cannot come back unchecked.
+	checkedCaps := map[string]bool{}
+	var checkNewCapability func(t model.Task, capID string) error
 	if openTask != nil {
 		stateRepo = c.stateRepoRef()
 		if req.Reads != nil || req.ReadsAll != nil {
@@ -686,19 +692,23 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 			if err != nil {
 				return nil, err
 			}
+			checkNewCapability = func(t model.Task, capID string) error {
+				if model.IsCapabilityRef(capID) {
+					subject := model.CapabilitySubject{Repo: t.Target, Kind: model.CapabilityRunTask}
+					if err := policy.Permits(capID, subject, configured); err != nil {
+						return validationErrorf("%v", err)
+					}
+				}
+				return c.catalogueEditRefusal(ctx, t, capID)
+			}
 			for _, capID := range session.Capabilities {
 				if capID == "" || existingByCap[capID] {
 					continue
 				}
-				if model.IsCapabilityRef(capID) {
-					subject := model.CapabilitySubject{Repo: openTask.Target, Kind: model.CapabilityRunTask}
-					if err := policy.Permits(capID, subject, configured); err != nil {
-						return nil, validationErrorf("%v", err)
-					}
-				}
-				if err := c.catalogueEditRefusal(ctx, *openTask, capID); err != nil {
+				if err := checkNewCapability(*openTask, capID); err != nil {
 					return nil, err
 				}
+				checkedCaps[capID] = true
 			}
 		}
 	}
@@ -714,6 +724,18 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				t.Title = model.ConsoleSessionTitle(session)
 			}
 			if req.Capabilities != nil {
+				held := make(map[string]bool, len(t.Grants))
+				for _, g := range t.Grants {
+					held[g.Capability] = true
+				}
+				for _, capID := range session.Capabilities {
+					if capID == "" || held[capID] || checkedCaps[capID] {
+						continue
+					}
+					if err := checkNewCapability(*t, capID); err != nil {
+						return err
+					}
+				}
 				newGrants := make([]model.Grant, 0, len(session.Capabilities)+1)
 				newGrants = append(newGrants, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
 				seen := map[string]bool{model.DurableCapability: true}
