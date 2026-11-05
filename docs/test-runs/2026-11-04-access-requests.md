@@ -132,3 +132,34 @@ go test -race ./pkg/orchestrator -run 'TestProcessResultParksOnAnAccessRequest|T
 cd ui && npx vitest run src/state.test.js src/components/detail/PendingAccess.test.jsx
 cd ui && SHOTS_DIR=/home/debian/work/docs/test-runs/2026-11-04-access-requests PLAYWRIGHT_BROWSERS_PATH=/var/cache/playwright npx playwright test e2e/access-request-walkthrough.spec.js e2e/access-request-card.spec.js
 ```
+
+---
+
+## Repair run (task 3072, attempt 5, 2026-11-05)
+
+The merge queue sent this branch back because `ui e2e` was red at
+`f6529bd1`. That same failure showed up on another branch at the same time
+(`task-3070-walkthrough-external-agent`), so it was a shared fault on the base
+and not something this branch caused. This run had no GitHub repository
+configured, so `wait_for_checks` and `pull_request_status` had nothing to
+report, and `grain pr status` / `grain ci` returned `forbidden` because the run
+lacks the `grain#ci` capability. Instead, the run merged `origin/main`, which
+was 45 commits ahead and merged cleanly, and reran every CI job this branch
+touches in the sandbox (7 cores, Go 1.26.10, Node 20.19.0, chromium-1234 from
+`/var/cache/playwright`):
+
+| CI job | Local command | Result |
+| --- | --- | --- |
+| go (touched packages) | `go build ./... && go vet ./pkg/ui ./pkg/orchestrator ./ui/e2e/consolerestserver && go test ./pkg/ui/ ./pkg/orchestrator/ ./ui/e2e/consolerestserver/ ./tests/hygiene/` | ok; `gofmt -l pkg ui/e2e` clean |
+| frontend | `make frontend && npm run format:check && npm test -- --maxWorkers=4` | 249 files / 3875 tests passed |
+| ui e2e | `npx playwright test --project=chromium` (the whole suite, as `make test-e2e-suite` runs it) | 934 passed (22.7m), 0 failed, 0 flaky |
+
+The walkthrough spec on its own
+(`npx playwright test e2e/access-request-walkthrough.spec.js --project=chromium`)
+passed in 46.6s.
+
+One trap in the environment: `make frontend` runs `npm ci --omit=dev`, which
+deletes `@playwright/test` from `ui/node_modules`. Run `npm ci` again in `ui/`
+before running Playwright locally. CI is not affected because it runs
+`make test-e2e-suite`, which reinstalls the dev dependencies when they are
+missing.
