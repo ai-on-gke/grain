@@ -1385,7 +1385,7 @@ func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, ta
 	// reaches it on some repositories only lists the one it reaches --
 	// the single repository its grant names, or its own -- rather than
 	// being refused for naming none.
-	if r.Method == http.MethodGet && agentRepoDefaultRoutes[pattern] && !set.Allows(scope, "") {
+	if r.Method == http.MethodGet && agentRepoDefaultRoutes[pattern] && !isRepoNarrowedTasksRead(pattern, r) && !set.Allows(scope, "") {
 		repo := agentDefaultRepo(acting, set.Repos(scope), ciCap)
 		if repo != "" {
 			q := r.URL.Query()
@@ -1679,8 +1679,7 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	// Server.eventsReadable), so a token held to some of them is let
 	// through rather than refused for naming none.
 	fsAllowed := fsMergeQueueByCI(set, pattern, r) ||
-		((pattern == "GET /api/inbox" || pattern == "GET /api/events") && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "") ||
-		(isRepoNarrowedTasksRead(pattern, r) && set.Has(scope))
+		((pattern == "GET /api/inbox" || pattern == "GET /api/events") && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "")
 	if !set.Has(scope) && !adminPatch && !fsAllowed {
 		return call, fmt.Errorf("%s holds no api grant for scope %s, which %s needs", principal, scope, pattern)
 	}
@@ -1709,6 +1708,9 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	adminPatchAllowed := false
 	if _, fs := fsRoutes[pattern]; fs && call.repo == "" && set.Has(scope) {
 		// As for a task's call: fsScope narrows it.
+		fsAllowed = true
+	}
+	if isRepoNarrowedTasksRead(pattern, r) && call.repo == "" && set.Has(scope) {
 		fsAllowed = true
 	}
 	if adminPatch && !set.Allows(scope, call.repo) && set.Allows("tasks:admin", call.repo) {
@@ -1886,7 +1888,7 @@ func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pat
 	// If the credential is restricted to a single repository and calls a
 	// read-only collection endpoint that accepts ?repo=, default the filter
 	// to that repository so listing works without repeating the repo parameter.
-	if r.Method == http.MethodGet && len(tok.Repos) == 1 {
+	if r.Method == http.MethodGet && len(tok.Repos) == 1 && !isRepoNarrowedTasksRead(pattern, r) {
 		switch pattern {
 		case "GET /api/tasks", "GET /api/ci/runs", "GET /api/ci/workflows",
 			"GET /api/merge-batches", "GET /api/pipeline/changes", "GET /api/memory/documents/{name}":
@@ -2467,17 +2469,20 @@ func (s *Server) redactAgentTaskResponse(ctx context.Context, call agentCall, ki
 }
 
 // createDrawsOnOtherText reports whether a POST /api/tasks body names a
-// template, a task to supersede, a proposalKey, or a parent task from which an
-// empty externalRef would be inherited, any of which can populate or resolve
-// the response from an existing record rather than only what the caller sent.
+// template, a task to supersede, a proposalKey, or a parent/source task from
+// which an empty externalRef would be inherited, any of which can populate or
+// resolve the response from an existing record rather than only what the caller sent.
 func createDrawsOnOtherText(body []byte) bool {
 	var req CreateTaskRequest
 	if len(body) == 0 || json.Unmarshal(body, &req) != nil {
 		return true
 	}
+	parsedOrigin, originErr := model.ParseWorkOrigin(req.Origin, nil)
 	inheritsExternalRef := strings.TrimSpace(req.ExternalRef) == "" &&
 		(strings.TrimSpace(req.ProposedBy) != "" ||
-			strings.HasPrefix(strings.TrimSpace(req.Origin), "task:"))
+			model.NormalizeTaskID(req.Reverts) != "" ||
+			originErr != nil ||
+			parsedOrigin.Task() != "")
 	return strings.TrimSpace(req.TemplateID) != "" ||
 		strings.TrimSpace(req.Supersedes) != "" ||
 		strings.TrimSpace(req.ProposalKey) != "" ||

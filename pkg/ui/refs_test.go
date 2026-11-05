@@ -284,15 +284,136 @@ func TestRefSummaryAndTaskFilterVisibility(t *testing.T) {
 		t.Errorf("limited human ?repo=acme/secret = %d, want 403", hRec.Code)
 	}
 
-	// 4. Write-only agent creating a task with origin=task:101 gets a redacted
-	// response so it cannot probe 101's externalRef without tasks:read.
+	// 4. Write-only agent creating a task with origin=task:101, "task 101", or
+	// reverts=101 gets a redacted response and does not stamp 101's externalRef
+	// onto the new task without tasks:read.
 	seedAPITask(t, client, "writer-only", "acme/widgets", "api:tasks:write@acme/widgets")
-	code, createResp := asAgent(t, srv, "writer-only", http.MethodPost, "/api/tasks",
-		`{"repo":"acme/widgets","title":"probe","origin":"task:101"}`, "filing follow-up")
-	if code != http.StatusCreated && code != http.StatusOK {
-		t.Fatalf("writer-only POST /api/tasks = %d: %s", code, createResp)
+	for _, payload := range []string{
+		`{"repo":"acme/widgets","title":"probe-colon","origin":"task:101"}`,
+		`{"repo":"acme/widgets","title":"probe-space","origin":"task 100"}`,
+		`{"repo":"acme/widgets","title":"probe-revert","reverts":"100"}`,
+	} {
+		code, createResp := asAgent(t, srv, "writer-only", http.MethodPost, "/api/tasks", payload, "filing follow-up")
+		if code != http.StatusCreated && code != http.StatusOK {
+			t.Fatalf("writer-only POST /api/tasks (%s) = %d: %s", payload, code, createResp)
+		}
+		if strings.Contains(createResp, "CA-204") {
+			t.Errorf("writer-only POST /api/tasks (%s) leaked externalRef without tasks:read: %s", payload, createResp)
+		}
+		var stub struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(createResp), &stub); err != nil || stub.ID == "" {
+			t.Fatalf("unmarshal created stub (%s): %v (%s)", payload, err, createResp)
+		}
+		if stored, err := client.Store.GetTask(ctx, stub.ID); err != nil || stored.ExternalRef != "" {
+			t.Errorf("writer-only stored task %s ExternalRef = %q (err=%v), want empty", stub.ID, stored.ExternalRef, err)
+		}
 	}
-	if strings.Contains(createResp, "CA-204") {
-		t.Errorf("writer-only POST /api/tasks leaked inherited externalRef without tasks:read: %s", createResp)
+
+	// 5. Cross-repo exfiltration check: an agent holding BOTH tasks:read and
+	// tasks:write on acme/widgets (so its own repo's POST /api/tasks response is
+	// unredacted) cannot copy acme/secret's externalRef via origin or reverts,
+	// while still inheriting from a readable task in acme/widgets.
+	if err := client.Store.PutTask(ctx, model.Task{
+		ID: "102", Intent: model.IntentImplement, Title: "Secret exclusive", Target: &secret, ExternalRef: "SEC-ONLY",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seedAPITask(t, client, "rw-widgets", "acme/widgets", "api:tasks:read@acme/widgets", "api:tasks:write@acme/widgets")
+	for _, payload := range []string{
+		`{"repo":"acme/widgets","title":"xrepo-colon","origin":"task:102"}`,
+		`{"repo":"acme/widgets","title":"xrepo-space","origin":"task 102"}`,
+		`{"repo":"acme/widgets","title":"xrepo-revert","reverts":"102"}`,
+	} {
+		code, createResp := asAgent(t, srv, "rw-widgets", http.MethodPost, "/api/tasks", payload, "filing follow-up")
+		if code != http.StatusCreated && code != http.StatusOK {
+			t.Fatalf("rw-widgets POST /api/tasks (%s) = %d: %s", payload, code, createResp)
+		}
+		if strings.Contains(createResp, "SEC-ONLY") {
+			t.Errorf("rw-widgets POST /api/tasks (%s) leaked acme/secret externalRef: %s", payload, createResp)
+		}
+	}
+	if secSum, err := client.RefSummary(ctx, "SEC-ONLY", nil); err != nil || secSum.Total != 1 {
+		t.Errorf("SEC-ONLY summary = %+v (err=%v), want Total=1 (unpolluted by acme/widgets)", secSum, err)
+	}
+	code, sameRepoResp := asAgent(t, srv, "rw-widgets", http.MethodPost, "/api/tasks",
+		`{"repo":"acme/widgets","title":"same-repo-origin","origin":"task:100"}`, "filing follow-up")
+	if code != http.StatusCreated || !strings.Contains(sameRepoResp, `"externalRef":"CA-204"`) {
+		t.Errorf("rw-widgets same-repo origin inheritance = %d: %s", code, sameRepoResp)
+	}
+
+	// 6. Limited-role human cannot pass daemon-internal proposedBy on POST /api/tasks
+	// or inherit externalRef across unreadable repositories.
+	if err := client.PutAPIScopeSet(ctx, model.APIScopeSet{
+		Name:        "plc/widgets-rw",
+		Description: "Read/write tasks in acme/widgets only",
+		Scopes:      []string{"tasks:read", "tasks:write"},
+		Repos:       []string{"acme/widgets"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.allow(t, "user:rwlimited@example.com", "plc/widgets-rw")
+	if propRec := doWithHeaders(t, srv, http.MethodPost, "/api/tasks",
+		`{"repo":"acme/widgets","title":"forged-prop","proposedBy":"102"}`, h.as("rwlimited@example.com")); propRec.Code != http.StatusForbidden {
+		t.Errorf("signed-in user proposedBy = %d (%s), want 403", propRec.Code, propRec.Body.String())
+	}
+	xrepoHumanRec := doWithHeaders(t, srv, http.MethodPost, "/api/tasks",
+		`{"repo":"acme/widgets","title":"human-xrepo","origin":"task:102"}`, h.as("rwlimited@example.com"))
+	if xrepoHumanRec.Code != http.StatusCreated || strings.Contains(xrepoHumanRec.Body.String(), "SEC-ONLY") {
+		t.Errorf("limited human cross-repo origin = %d: %s", xrepoHumanRec.Code, xrepoHumanRec.Body.String())
+	}
+
+	// 7. Repeated ?repo=&repo=acme/secret and empty ?externalRef= query parameter
+	// guards, plus multi-repo GET /api/tasks?externalRef=CA-204 visibility.
+	for _, badPath := range []string{
+		"/api/refs/CA-204/summary?repo=&repo=acme/secret",
+		"/api/tasks?externalRef=CA-204&repo=&repo=acme/secret",
+	} {
+		if c, _ := asAgent(t, srv, "caller-widgets", http.MethodGet, badPath, "", ""); c != http.StatusForbidden {
+			t.Errorf("sandbox agent %s = %d, want 403", badPath, c)
+		}
+		if r := callExt(widgetsTok.Token, badPath); r.Code != http.StatusForbidden {
+			t.Errorf("external agent %s = %d, want 403", badPath, r.Code)
+		}
+		if r := doWithHeaders(t, srv, http.MethodGet, badPath, "", h.as("limited@example.com")); r.Code != http.StatusForbidden {
+			t.Errorf("limited human %s = %d, want 403", badPath, r.Code)
+		}
+	}
+
+	gadgets, _ := model.ParseRepo("acme/gadgets")
+	if err := client.Store.PutTask(ctx, model.Task{
+		ID: "103", Intent: model.IntentImplement, Title: "Gadgets task", Target: &gadgets, ExternalRef: "CA-204",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seedAPITask(t, client, "caller-multi", "acme/widgets", "api:tasks:read@acme/widgets", "api:tasks:read@acme/gadgets")
+	code, multiList := asAgent(t, srv, "caller-multi", http.MethodGet, "/api/tasks?externalRef=CA-204", "", "")
+	if code != http.StatusOK || !strings.Contains(multiList, "Widgets task") || !strings.Contains(multiList, "Gadgets task") || strings.Contains(multiList, "Secret task") {
+		t.Errorf("multi-repo sandbox agent filtered task list = %d: %s", code, multiList)
+	}
+	if err := client.PutAPIScopeSet(ctx, model.APIScopeSet{
+		Name:        "plc/multi-read",
+		Description: "Read tasks in widgets and gadgets",
+		Scopes:      []string{"tasks:read"},
+		Repos:       []string{"acme/widgets", "acme/gadgets"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	multiTok, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name: "plc-multi", ScopeSet: "plc/multi-read", Owner: "admin@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if emptyRefRec := callExt(multiTok.Token, "/api/tasks?externalRef="); emptyRefRec.Code != http.StatusForbidden {
+		t.Errorf("multi-repo external agent empty ?externalRef= = %d, want 403", emptyRefRec.Code)
+	}
+	h.allow(t, "user:admin@example.com", "grain/operator")
+	if dupRepoRec := doWithHeaders(t, srv, http.MethodGet, "/api/refs/CA-204/summary?repo=acme/widgets&repo=acme/gadgets", "", h.as("admin@example.com")); dupRepoRec.Code != http.StatusBadRequest {
+		t.Errorf("operator repeated ?repo= on summary = %d, want 400", dupRepoRec.Code)
+	}
+	if dupExtRec := callExt(multiTok.Token, "/api/refs/CA-204/summary?repo=acme/widgets&repo=acme/gadgets"); dupExtRec.Code != http.StatusBadRequest {
+		t.Errorf("multi-repo external agent repeated ?repo= on summary = %d, want 400", dupExtRec.Code)
 	}
 }

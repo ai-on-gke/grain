@@ -597,6 +597,7 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 		return err
 	}
 
+	explicitWorkOrigin := t.WorkOrigin
 	if t.WorkOrigin == "" {
 		origin, err := originForNewTask(ctx, tx, t)
 		if err != nil {
@@ -612,7 +613,7 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 	}
 	t.ExternalRef = strings.TrimSpace(t.ExternalRef)
 	if existing == 0 && t.ExternalRef == "" {
-		extRef, err := externalRefForNewTask(ctx, tx, t)
+		extRef, err := externalRefForNewTask(ctx, tx, t, explicitWorkOrigin)
 		if err != nil {
 			return err
 		}

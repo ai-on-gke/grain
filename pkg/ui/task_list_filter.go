@@ -125,9 +125,9 @@ func parseTaskListQuery(q url.Values) (taskListQuery, bool) {
 		narrowed = true
 		out.filedVia = strings.TrimSpace(q.Get("filed_via"))
 	}
-	if q.Has("externalRef") {
+	if extRef := strings.TrimSpace(q.Get("externalRef")); extRef != "" {
 		narrowed = true
-		out.externalRef = strings.TrimSpace(q.Get("externalRef"))
+		out.externalRef = extRef
 	}
 	if q.Has("closedSince") {
 		narrowed = true

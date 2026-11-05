@@ -2431,6 +2431,10 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, fmt.Errorf("a signed-in user files tasks as themselves, not as %q", author))
 		return
 	}
+	if requestPerson(r.Context()) != "" && (strings.TrimSpace(req.ProposedBy) != "" || strings.TrimSpace(req.ProposalKey) != "") {
+		writeError(w, http.StatusForbidden, errors.New("proposedBy and proposalKey are daemon-internal fields"))
+		return
+	}
 	// An external agent credential files as the person who owns it
 	// (#XC-14): its requester is the owner, whatever the body says --
 	// agentAPIGate has already refused a body naming an author.
@@ -2454,7 +2458,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	task, err := s.tasks.CreateTask(r.Context(), req)
+	task, err := s.tasks.CreateTask(s.taskReadableContext(r), req)
 	if err != nil {
 		writeClientError(w, err)
 		return

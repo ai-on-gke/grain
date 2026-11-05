@@ -62,6 +62,10 @@ func (s *Server) handleRefSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	readable := s.taskReadable(r)
 	q := r.URL.Query()
+	if len(q["repo"]) > 1 {
+		writeClientError(w, validationErrorf("at most one repo query parameter may be given"))
+		return
+	}
 	if rawRepo := strings.TrimSpace(q.Get("repo")); rawRepo != "" {
 		parsed, err := s.tasks.parseRepo(rawRepo)
 		if err != nil {
@@ -105,6 +109,9 @@ func (s *Server) taskReadable(r *http.Request) func(string) bool {
 		hasTok = true
 	}
 	if !isAgent && !hasTok && role == nil {
+		if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
+			return func(string) bool { return false }
+		}
 		return func(string) bool { return true }
 	}
 	return func(repo string) bool {
@@ -121,19 +128,39 @@ func (s *Server) taskReadable(r *http.Request) func(string) bool {
 	}
 }
 
+// taskReadableContext attaches s.taskReadable(r) as a lineage-inheritance
+// guard on ctx whenever r is made by a scoped principal (an agent, an
+// external-agent token, or a limited verified-identity RBAC role), leaving
+// unrestricted operator and full-role callers untouched.
+func (s *Server) taskReadableContext(r *http.Request) context.Context {
+	ctx := r.Context()
+	_, isAgent := agentCallFromContext(ctx)
+	tok := externalTokenFromContext(ctx)
+	role := accessRoleFromContext(ctx)
+	if role != nil && role.Full {
+		role = nil
+	}
+	p, hasP := PrincipalFromContext(ctx)
+	if !isAgent && tok == nil && role == nil && (!hasP || p.Kind != model.PrincipalAgent) {
+		return ctx
+	}
+	return model.WithExternalRefReadable(ctx, s.taskReadable(r))
+}
+
 // isRepoNarrowedTasksRead reports whether pattern's handler narrows its
 // answer to s.taskReadable(r) when no ?repo= is given, so a caller holding
 // tasks:read on a subset of repositories may call it without naming one.
 func isRepoNarrowedTasksRead(pattern string, r *http.Request) bool {
 	q := r.URL.Query()
-	if strings.TrimSpace(q.Get("repo")) != "" {
+	if repos := q["repo"]; len(repos) > 1 || (len(repos) == 1 && strings.TrimSpace(repos[0]) != "") {
 		return false
 	}
 	switch pattern {
 	case refSummaryRoute:
 		return true
 	case "GET /api/tasks":
-		return q.Has("externalRef")
+		refs := q["externalRef"]
+		return len(refs) == 1 && strings.TrimSpace(refs[0]) != ""
 	default:
 		return false
 	}

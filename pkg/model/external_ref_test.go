@@ -149,6 +149,107 @@ func TestExternalRefInheritanceAndClearing(t *testing.T) {
 	if got, _ := store.GetTask(ctx, "child"); got.ExternalRef != "" {
 		t.Errorf("cleared child ExternalRef = %q, want empty", got.ExternalRef)
 	}
+
+	// 3. Scoped inheritance guards: WithExternalRefReadable blocks inheriting
+	// directly or transitively from unreadable repositories, and explicit
+	// WorkOrigin=task:<id> on a proposed task requires tasks:read on that task's
+	// repository when the proposing parent itself carries no ExternalRef.
+	secretRepo, _ := model.ParseRepo("acme/secret")
+	if err := store.PutTask(ctx, model.Task{
+		ID:          "secret-root",
+		Intent:      model.IntentImplement,
+		Title:       "secret-root",
+		Target:      &secretRepo,
+		ExternalRef: "SEC-777",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	scopedCtx := model.WithExternalRefReadable(ctx, func(repo string) bool {
+		return repo == "acme/widgets"
+	})
+	if err := store.PutTask(scopedCtx, model.Task{
+		ID:         "blocked-cross-repo",
+		Intent:     model.IntentImplement,
+		Title:      "blocked-cross-repo",
+		Target:     &widgets,
+		WorkOrigin: model.TaskOrigin("secret-root"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := store.GetTask(ctx, "blocked-cross-repo"); got.ExternalRef != "" {
+		t.Errorf("blocked-cross-repo ExternalRef = %q, want empty", got.ExternalRef)
+	}
+
+	if err := store.PutTask(ctx, model.Task{
+		ID:     "unreferenced-proposer",
+		Intent: model.IntentImplement,
+		Title:  "unreferenced-proposer",
+		Target: &widgets,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTask(ctx, model.Task{
+		ID:         "proposal-probing-secret",
+		Intent:     model.IntentImplement,
+		Title:      "proposal-probing-secret",
+		Target:     &widgets,
+		Links:      []model.Link{{Kind: model.LinkProposedBy, Target: "unreferenced-proposer"}},
+		WorkOrigin: model.TaskOrigin("secret-root"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := store.GetTask(ctx, "proposal-probing-secret"); got.ExternalRef != "" {
+		t.Errorf("proposal-probing-secret ExternalRef = %q, want empty", got.ExternalRef)
+	}
+
+	// Even when the proposer holds tasks:read on acme/widgets, an explicit
+	// origin=task:<widgets-bridge> must not walk through a non-ExternalRef
+	// bridge task in acme/widgets into an unreadable ancestor in acme/secret.
+	if err := store.PutTask(ctx, model.Task{
+		ID:     "secret-late-ref",
+		Intent: model.IntentImplement,
+		Title:  "secret-late-ref",
+		Target: &secretRepo,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTask(ctx, model.Task{
+		ID:     "widgets-bridge",
+		Intent: model.IntentImplement,
+		Title:  "widgets-bridge",
+		Target: &widgets,
+		Links:  []model.Link{{Kind: model.LinkReverts, Target: "secret-late-ref"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateTask(ctx, "secret-late-ref", func(t *model.Task) error {
+		t.ExternalRef = "SEC-LATE-999"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTask(ctx, model.Task{
+		ID:     "widgets-reader-proposer",
+		Intent: model.IntentImplement,
+		Title:  "widgets-reader-proposer",
+		Target: &widgets,
+		Grants: []model.Grant{{Capability: "api:tasks:read@acme/widgets", Via: model.GrantByLabel}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTask(ctx, model.Task{
+		ID:         "proposal-transitive-bounce",
+		Intent:     model.IntentImplement,
+		Title:      "proposal-transitive-bounce",
+		Target:     &widgets,
+		Links:      []model.Link{{Kind: model.LinkProposedBy, Target: "widgets-reader-proposer"}},
+		WorkOrigin: model.TaskOrigin("widgets-bridge"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := store.GetTask(ctx, "proposal-transitive-bounce"); got.ExternalRef != "" {
+		t.Errorf("proposal-transitive-bounce ExternalRef = %q, want empty", got.ExternalRef)
+	}
 }
 
 func TestRefTaskRollupRowsAndSummary(t *testing.T) {
