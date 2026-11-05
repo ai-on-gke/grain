@@ -49,6 +49,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent/sessionstore"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
@@ -165,7 +166,14 @@ type Framework struct {
 	// agent/retry.go's own policy, which every framework that re-execs
 	// its CLI shares. A test overrides its Sleep so the retry loop costs
 	// the suite no wall clock.
-	retry agent.RetryPolicy
+	retry          agent.RetryPolicy
+	sessionArchive *sessionstore.ClaudeArchive
+}
+
+// WithSessionArchive syncs resumable Claude session transcripts to and from
+// archive at turn boundaries.
+func WithSessionArchive(archive *sessionstore.ClaudeArchive) Option {
+	return func(f *Framework) { f.sessionArchive = archive }
 }
 
 // Option configures a Framework at construction time.
@@ -940,6 +948,9 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 	// prompt -- rather than costing a dispatch and a fresh clone. See
 	// retry.go, including what happens on a build that will not take the
 	// flag.
+	if f.sessionArchive != nil && cfg.ResumeSession != "" {
+		_ = f.sessionArchive.RestoreSession(ctx, cfg.ResumeSession)
+	}
 	attempts := f.runAttempts(ctx, attemptSetup{
 		args:          args,
 		env:           env,
@@ -964,6 +975,11 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 	if errors.Is(runErr, agent.ErrDetached) {
 		detached = true
 		return nil, runErr
+	}
+	if f.sessionArchive != nil && attempts.session != "" {
+		syncCtx, cancelSync := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+		_ = f.sessionArchive.SaveSession(syncCtx, attempts.session)
+		cancelSync()
 	}
 	// The last attempt's own events, not a parse of the whole capture:
 	// one capture holds a stream per exec, and what the run ended as is
