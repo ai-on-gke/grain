@@ -699,6 +699,7 @@ func (s *Server) routes() {
 	s.route("GET /api/hostds", s.handleListHostds)
 	s.route("POST /api/hostds", s.handleCreateHostd)
 	s.route("PATCH /api/hostds/{name}", s.handleUpdateHostd)
+	s.route("GET /api/hostds/{name}/install", s.handleHostdInstall)
 	s.route("POST /api/hostds/{name}/rotate", s.handleRotateHostdToken)
 	s.route("POST /api/hostds/{name}/revoke", s.handleRevokeHostd)
 

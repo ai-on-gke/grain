@@ -642,11 +642,12 @@ _No flags._
 
 **Pinned by:** *untested*.
 
-### 4.7 `grain hostds list|register|set-owner` {#CLI-36}
+### 4.7 `grain hostds list|register|install|set-owner` {#CLI-36}
 
 This is the hostd registry. A hostd is registered with its owner, the identity it dials in as through IAP.
 - `list` (`ls`) calls `GET /api/hostds`.
-- `register` (`create`) calls `POST /api/hostds`.
+- `register` (`create`) calls `POST /api/hostds`. It prints the token once, then the install instructions the daemon rendered (`install.lines`, `install.note`; `ui.RegisterHostdInstall`), which never carry the token.
+- `install <name>` calls `GET /api/hostds/{name}/install` and prints the same instructions again, without rotating the token.
 - `set-owner <name> <owner>` calls `PATCH /api/hostds/{name}`.
 
 **Scope:** admin.
@@ -2043,3 +2044,11 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/sandboximage_test.go`: `TestSandboxImageCommandPrintsDefaultAndBase`, `TestSandboxImageContractSubcommand`, `TestSandboxImageCheckSubcommand`.
+
+## Unplaced commands
+
+### `grain hostds install`
+
+<!-- BEGIN GENERATED FLAGS: grain hostds install -->
+_No flags._
+<!-- END GENERATED FLAGS -->
