@@ -744,4 +744,8 @@ func TestTaskRecordAndConversationShowOwnerAttributionAndFiledVia(t *testing.T) 
 	if !strings.Contains(gotConv, wantConv) {
 		t.Errorf("renderTaskConversation missing %q in:\n%s", wantConv, gotConv)
 	}
+	gotConvFile := renderTaskConversationFile(record)
+	if !strings.Contains(gotConvFile, wantConv) {
+		t.Errorf("renderTaskConversationFile missing %q in:\n%s", wantConv, gotConvFile)
+	}
 }
