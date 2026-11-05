@@ -177,6 +177,9 @@ func GrainReviewBlockers(task model.Task) []string {
 			out = append(out, "a grain review left questions open")
 		}
 	}
+	if model.HumanReviewHeld(task) {
+		out = append(out, "a person must decide: "+model.HumanReviewSummary(task))
+	}
 	for _, a := range model.PendingApprovals(task) {
 		out = append(out, "approval pending: "+a.Rule)
 	}

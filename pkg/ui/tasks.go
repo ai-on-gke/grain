@@ -242,8 +242,13 @@ type Task struct {
 	// PathTriggerHold is the strictest `human` setting of the gating
 	// triggers holding this change (model.LinkPathTriggerHold), and
 	// PathTriggerTasks the tasks they filed, as "<trigger>=<task>".
-	PathTriggerHold  string   `json:"pathTriggerHold,omitempty"`
-	PathTriggerTasks []string `json:"pathTriggerTasks,omitempty"`
+	PathTriggerHold string `json:"pathTriggerHold,omitempty"`
+	// HumanReviewHold is every reason this change waits for a person's
+	// decision (model.LinkHumanReviewHold): a review's
+	// request_human_review, a security review's findings, a path only a
+	// human may release. Only Submit or Release hold ends it.
+	HumanReviewHold  []HumanReviewView `json:"humanReviewHold,omitempty"`
+	PathTriggerTasks []string          `json:"pathTriggerTasks,omitempty"`
 	// ReviewQuestions is the review task whose open questions this change
 	// waits on its owner's decision about (model.LinkReviewQuestions):
 	// a reply sends another run to carry the decision out, and Submit
@@ -1213,6 +1218,9 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		}
 		if l.Kind == model.LinkSecurityHold {
 			out.SecurityHold = l.Target
+		}
+		if l.Kind == model.LinkHumanReviewHold && out.HumanReviewHold == nil {
+			out.HumanReviewHold = humanReviewViews(model.HumanReviewReasons(t))
 		}
 		if l.Kind == model.LinkSecurityReviewTask {
 			out.SecurityReviewTask = l.Target

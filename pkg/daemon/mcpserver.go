@@ -616,6 +616,28 @@ func (d daemonSessionRenamer) RenameSession(ctx context.Context, title string) (
 	return mcp.SessionRenameReport{Title: renamed.Title}, nil
 }
 
+// daemonHumanReview implements mcp.HumanReviewRequester by asking a
+// running "grain daemon" to hold the change this review run reviews
+// (pkg/ui's POST /api/tasks/{id}/human-review) -- daemonStatus's REST hop,
+// for daemonStatus's reason. Which review asks is fixed by -task.
+type daemonHumanReview struct {
+	client *ui.HTTPClient
+	taskID string
+}
+
+func (d daemonHumanReview) RequestHumanReview(ctx context.Context, reason, details, category string) (mcp.HumanReviewReport, error) {
+	res, err := d.client.RequestHumanReview(ctx, d.taskID, ui.HumanReviewRequestBody{
+		Reason: reason, Details: details, Category: category})
+	if err != nil {
+		return mcp.HumanReviewReport{}, err
+	}
+	out := mcp.HumanReviewReport{Task: res.Task, Added: res.Added}
+	for _, r := range res.Reasons {
+		out.Reasons = append(out.Reasons, r.Reason)
+	}
+	return out, nil
+}
+
 // daemonStagedAttachments holds a file this run attached by path in the
 // daemon's store (pkg/ui's POST /api/tasks/{id}/staged-attachments) until
 // its finish relays it -- another of the REST hops daemonStatus makes, for
@@ -2205,6 +2227,13 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 		if taskDetail.Task.ConsoleSession != "" && taskDetail.Task.Interactive {
 			registry.Register(mcp.NewRenameSessionTools(
 				daemonSessionRenamer{client: client, taskID: *taskID})...)
+		}
+		// request_human_review is a reviewer's: a security review's or a
+		// template review's run (ui.Task.Review). The daemon checks the
+		// same on the write (ui.Client.RequestHumanReview).
+		if taskDetail.Task.Review {
+			registry.Register(mcp.NewHumanReviewTools(
+				daemonHumanReview{client: client, taskID: *taskID})...)
 		}
 		// wait_for_task asks the daemon about other tasks, and parks
 		// this one on them, as -task: a run can only ever make its own
