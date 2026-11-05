@@ -7565,31 +7565,49 @@ write_hostd_upgrade_script() {
 # Written by scripts/setup.sh (write_hostd_upgrade_script); run by
 # grain-hostd-upgrade.service when ${HOSTD_VERSIONS_DIR}/current moves.
 set -uo pipefail
-# The extractor holds this lock from making a new version's directory
-# (a change that starts this script) until it has moved current
-# (install_hostd_version): read current under it, or this run can see
-# the link before it moves and miss the upgrade.
-if command -v flock >/dev/null 2>&1; then
-  exec 9>"${HOSTD_VERSIONS_DIR}.lock" && flock 9
-fi
-current="\$(readlink -f "${HOSTD_VERSIONS_DIR}/current/grain")"
-exec 9>&-
-# The new build's own capabilities entries first, whether or not hostd
-# needs draining onto it (write_hostd_allowlist_unit).
-systemctl start grain-hostd-allowlist.service || true
-pid="\$(systemctl show -p MainPID --value grain-hostd.service)"
-if [ -z "\$pid" ] || [ "\$pid" = 0 ]; then
-  exit 0
-fi
-running="\$(readlink "/proc/\$pid/exe" 2>/dev/null || true)"
-if [ "\$running" = "\$current" ]; then
-  exit 0
-fi
-echo "grain hostd (pid \$pid) runs \${running:-an unknown binary}; draining it onto \$current"
-if ! runuser -u "${GRAIN_USER}" -- "\$current" hostd -drain -socket "${HOSTD_SOCKET}"; then
-  echo "grain hostd did not take a drain (it predates draining); restarting it onto \$current"
-  systemctl restart grain-hostd.service
-fi
+# The binary current names. The extractor holds this lock from making a
+# new version's directory (a change that starts this script) until it
+# has moved current (install_hostd_version): read current under it, or
+# this run can see the link before it moves and miss the upgrade. Called
+# in a command substitution, so the lock goes with its subshell. (Its
+# closing brace is indented: the tests read setup.sh's own functions up
+# to the first one that is not.)
+current_binary() {
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"${HOSTD_VERSIONS_DIR}.lock" && flock 9
+  fi
+  readlink -f "${HOSTD_VERSIONS_DIR}/current/grain"
+  }
+current="\$(current_binary)"
+while :; do
+  # The new build's own capabilities entries first, whether or not hostd
+  # needs draining onto it (write_hostd_allowlist_unit).
+  systemctl start grain-hostd-allowlist.service || true
+  pid="\$(systemctl show -p MainPID --value grain-hostd.service)"
+  if [ -z "\$pid" ] || [ "\$pid" = 0 ]; then
+    exit 0
+  fi
+  running="\$(readlink "/proc/\$pid/exe" 2>/dev/null || true)"
+  if [ "\$running" != "\$current" ]; then
+    echo "grain hostd (pid \$pid) runs \${running:-an unknown binary}; draining it onto \$current"
+    if ! runuser -u "${GRAIN_USER}" -- "\$current" hostd -drain -socket "${HOSTD_SOCKET}"; then
+      echo "grain hostd did not take a drain (it predates draining); restarting it onto \$current"
+      systemctl restart grain-hostd.service
+    fi
+  fi
+  # A move of current while this ran starts no run of its own: the
+  # path unit's change and the extractor's start both merge into this
+  # one, which may have read current before it moved and found hostd
+  # already on it. So look again before exiting, and go round for a
+  # move that landed meanwhile. A second drain of a hostd already
+  # draining changes nothing (pkg/hostd's Server.Cutover).
+  moved="\$(current_binary)"
+  if [ "\$moved" = "\$current" ]; then
+    exit 0
+  fi
+  echo "${HOSTD_VERSIONS_DIR}/current moved to \$moved while this ran; looking again"
+  current="\$moved"
+done
 SCRIPT
   chmod 0755 "$HOSTD_UPGRADE_SCRIPT"
 }
