@@ -316,11 +316,11 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
   const transitionEvents = shownTransitions.map((tr, i) => {
     const at = timelineTime(tr.at);
     const actorNode =
-      tr.state === "proposed"
-        ? renderProposedAttribution(tr, onOpenTask)
-        : transitionActor(tr)
-          ? <>by {transitionActor(tr)}</>
-          : null;
+      tr.state === "proposed" ? (
+        renderProposedAttribution(tr, onOpenTask)
+      ) : transitionActor(tr) ? (
+        <>by {transitionActor(tr)}</>
+      ) : null;
     const ownerTransferDetail =
       tr.state === "owner_changed" && (tr.oldOwner || tr.newOwner)
         ? `from ${tr.oldOwner || "?"} to ${tr.newOwner || "?"}`

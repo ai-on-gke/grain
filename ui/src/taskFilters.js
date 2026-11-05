@@ -242,15 +242,13 @@ export function optionsFor(attr, tasks, config, picked = []) {
         // it is filterable rather than invisible.
         ...[...seen].filter((v) => !order.includes(v)).sort(),
       ].map(option)
-    : [...seen]
-        .map(option)
-        .sort((a, b) => {
-          if (attr.id === "owner") {
-            if (a.value === "me" && b.value !== "me") return -1;
-            if (b.value === "me" && a.value !== "me") return 1;
-          }
-          return String(a.label).localeCompare(String(b.label));
-        });
+    : [...seen].map(option).sort((a, b) => {
+        if (attr.id === "owner") {
+          if (a.value === "me" && b.value !== "me") return -1;
+          if (b.value === "me" && a.value !== "me") return 1;
+        }
+        return String(a.label).localeCompare(String(b.label));
+      });
   if (none && (attr.noneLabel || attr.type !== TYPE_ENUM))
     options.push({
       ...option(NONE),

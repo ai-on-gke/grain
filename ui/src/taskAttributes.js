@@ -181,7 +181,11 @@ function expandOwnerFilterValue(value, config) {
 }
 
 function ownerValueLabel(value, config) {
-  if (String(value || "").trim().toLowerCase() === "me") {
+  if (
+    String(value || "")
+      .trim()
+      .toLowerCase() === "me"
+  ) {
     const me = viewerOwnerOf(config);
     return me ? `me (${me})` : "me";
   }

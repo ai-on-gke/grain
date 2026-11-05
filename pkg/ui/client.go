@@ -1942,8 +1942,8 @@ type CreateTaskRequest struct {
 	// Owner names the account responsible for this task (model.Task.Owner,
 	// attribution.design.md). Left out, it defaults from the filer, verified
 	// OnBehalfOf, parent task, or deployment operator. Agents cannot set it.
-	Owner      string   `json:"owner,omitempty"`
-	Reviewers  []string `json:"reviewers,omitempty"`
+	Owner     string   `json:"owner,omitempty"`
+	Reviewers []string `json:"reviewers,omitempty"`
 	// ProposalKey and ProposedBy are daemon-internal fields used by an
 	// interactive propose_task call. ProposalKey makes retries and the
 	// end-of-run replay idempotent; ProposedBy records provenance -- and,
