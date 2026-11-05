@@ -808,11 +808,27 @@ func requireRealDockerSandbox(t *testing.T) {
 	if out, err := exec.Command("sudo", "-n", "true").CombinedOutput(); err != nil {
 		t.Skipf("this account has no passwordless sudo, which is how a sandbox's /etc is written: %v\n%s", err, out)
 	}
-	if out, err := exec.Command("sudo", "-n", "systemctl", "is-active", "docker").CombinedOutput(); err != nil {
-		t.Skipf("docker is not running under systemd here, so there is no reload to observe: %v\n%s", err, out)
+	var activeOut []byte
+	var activeErr error
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		activeOut, activeErr = exec.Command("sudo", "-n", "systemctl", "is-active", "docker").CombinedOutput()
+		if activeErr == nil {
+			break
+		}
 	}
-	if out, err := exec.Command("docker", "version").CombinedOutput(); err != nil {
-		t.Skipf("docker does not answer: %v\n%s", err, out)
+	if activeErr != nil {
+		t.Skipf("docker is not running under systemd here, so there is no reload to observe: %v\n%s", activeErr, activeOut)
+	}
+	var verOut []byte
+	var verErr error
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		verOut, verErr = exec.Command("docker", "version").CombinedOutput()
+		if verErr == nil {
+			break
+		}
+	}
+	if verErr != nil {
+		t.Skipf("docker does not answer: %v\n%s", verErr, verOut)
 	}
 }
 
@@ -952,11 +968,23 @@ func toolConfigPaths(t *testing.T, host *thisMachine) []string {
 func restartDocker(t *testing.T) {
 	t.Helper()
 	_ = exec.Command("sudo", "-n", "systemctl", "reset-failed", "docker.service", "docker.socket").Run()
-	for _, unit := range []string{"docker.socket", "docker"} {
-		if out, err := exec.Command("sudo", "-n", "systemctl", "restart", unit).CombinedOutput(); err != nil {
-			t.Errorf("restarting %s on the configuration this test found: %v\n%s", unit, err, out)
+	if out, err := exec.Command("sudo", "-n", "systemctl", "start", "docker.socket").CombinedOutput(); err != nil {
+		t.Errorf("starting docker.socket on the configuration this test found: %v\n%s", err, out)
+	}
+	_ = exec.Command("sudo", "-n", "systemctl", "reset-failed", "docker.service", "docker.socket").Run()
+	if out, err := exec.Command("sudo", "-n", "systemctl", "restart", "docker").CombinedOutput(); err != nil {
+		t.Errorf("restarting docker on the configuration this test found: %v\n%s", err, out)
+		return
+	}
+	var lastOut string
+	var lastErr error
+	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		lastOut, lastErr = dockerCLI(t, 5*time.Second, "version")
+		if lastErr == nil {
+			return
 		}
 	}
+	t.Errorf("waiting for docker to answer after restart: %v\n%s", lastErr, lastOut)
 }
 
 // readAsRoot is the sandbox's own read path, which answers empty for a
@@ -1057,35 +1085,43 @@ const cacheAddressMarker = "127.0.0.1:"
 // start would read is no use to a sandbox that lives for one run.
 func assertDockerdUsesTheMirror(t *testing.T, base string) {
 	t.Helper()
-	out, err := dockerCLI(t, time.Minute, "info")
+	var out string
+	var err error
+	var mirrors []string
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		out, err = dockerCLI(t, time.Minute, "info")
+		if err != nil {
+			continue
+		}
+		mirrors = nil
+		inSection := false
+		for _, line := range strings.Split(out, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "Registry Mirrors:") {
+				inSection = true
+				continue
+			}
+			if !inSection {
+				continue
+			}
+			// The section ends at the next line indented no further than the
+			// heading was -- `docker info` puts its mirrors one level in.
+			if !strings.HasPrefix(line, "  ") || strings.HasSuffix(strings.TrimSpace(line), ":") {
+				break
+			}
+			mirrors = append(mirrors, strings.TrimSpace(line))
+		}
+		// dockerd prints a mirror as a URL with a trailing slash.
+		for _, mirror := range mirrors {
+			if strings.TrimSuffix(mirror, "/") == base {
+				return
+			}
+		}
+	}
 	if err != nil {
 		t.Fatalf("docker info: %v\n%s", err, out)
 	}
-	var mirrors []string
-	inSection := false
-	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "Registry Mirrors:") {
-			inSection = true
-			continue
-		}
-		if !inSection {
-			continue
-		}
-		// The section ends at the next line indented no further than the
-		// heading was -- `docker info` puts its mirrors one level in.
-		if !strings.HasPrefix(line, "  ") || strings.HasSuffix(strings.TrimSpace(line), ":") {
-			break
-		}
-		mirrors = append(mirrors, strings.TrimSpace(line))
-	}
 	if len(mirrors) == 0 {
 		t.Fatalf("`docker info` lists no registry mirror at all, so the reload did not reach the running daemon:\n%s", out)
-	}
-	// dockerd prints a mirror as a URL with a trailing slash.
-	for _, mirror := range mirrors {
-		if strings.TrimSuffix(mirror, "/") == base {
-			return
-		}
 	}
 	t.Fatalf("`docker info` lists %v under Registry Mirrors, want %s among them", mirrors, base)
 }

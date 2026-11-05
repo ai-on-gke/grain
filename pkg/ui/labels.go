@@ -582,6 +582,10 @@ type Config struct {
 	// attempt is read the way bwsalmon/agents#446 originally left it,
 	// nothing to show until it finishes (bwsalmon/agents#467).
 	LiveTranscripts LiveTranscript
+	// ArchivedTranscripts, when set, reads finished run transcripts from an
+	// object store (via a local read-through cache) when Store.RunTranscript
+	// holds none.
+	ArchivedTranscripts ArchivedTranscript
 	// Sandboxes, when set, is what GET /api/sandboxes calls to report
 	// every live run's own sandbox status -- pkg/cli/daemon.go's
 	// sandboxHealthAdapter over whichever of orchestrator.GranuleSandboxes/
@@ -1368,6 +1372,19 @@ type LiveTranscript interface {
 	// should fall back to the store the same way it would if
 	// LiveTranscripts were nil.
 	Tail(runID string) (text string, ok bool, err error)
+}
+
+// ArchivedTranscript reads finished run transcripts stored outside model.Store
+// (for example in gs://<bucket>/instances/<name>/transcripts/ behind a local
+// read-through disk cache).
+type ArchivedTranscript interface {
+	Read(ctx context.Context, runID string) (text string, ok bool, err error)
+}
+
+// ArchivedTranscriptSizes is an optional extension of ArchivedTranscript that
+// reports byte sizes of stored transcripts for the metrics report.
+type ArchivedTranscriptSizes interface {
+	Sizes(ctx context.Context) ([]model.RunTranscript, error)
 }
 
 // Upgrader is the subset of *upgrade.Upgrader the UI needs -- an

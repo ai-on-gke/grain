@@ -87,6 +87,9 @@ func CheckDaemonFlags(cfg Config, hasLocalSandboxes bool, checkPackageCache func
 	if err := CheckSecretsConfig(cfg.SecretsBackend, cfg.SecretsSMPrefix); err != nil {
 		return err
 	}
+	if err := CheckObjectStoreURI(cfg); err != nil {
+		return err
+	}
 	if err := CheckSandboxBackend(cfg, hasLocalSandboxes); err != nil {
 		return err
 	}

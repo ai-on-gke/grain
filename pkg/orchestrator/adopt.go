@@ -273,6 +273,11 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 	var tee io.Writer
 	if cfg.TranscriptDir != "" {
 		transcriptPath = filepath.Join(cfg.TranscriptDir, runID)
+		if cfg.TranscriptSink != nil {
+			if _, err := os.Stat(transcriptPath); os.IsNotExist(err) {
+				_ = cfg.TranscriptSink.RestoreRaw(ctx, runID, transcriptPath)
+			}
+		}
 		live, _ = os.ReadFile(transcriptPath)
 		if f, err := os.OpenFile(transcriptPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err != nil {
 			log.Printf("orchestrator: adopted run %s: reopening its live transcript: %v", runID, err)

@@ -153,6 +153,24 @@
 set -euo pipefail
 trap 'echo "release-images.sh: aborting: line $LINENO: $BASH_COMMAND" >&2' ERR
 
+# registry_docker_config holds an isolated DOCKER_CONFIG directory when logging
+# in to Docker Hub with an explicit publishing token. A Docker Hub Organization
+# Access Token (dckr_oat_...) scoped to grainai/* without "Public Repo Read-Only"
+# passes `docker login docker.io` and pushes/pulls grainai/*, yet causes
+# Docker/BuildKit to fail pulling upstream library/* base images (golang,
+# debian, docker) with HTTP 401 ("access token has insufficient scopes") if
+# written to ~/.docker/config.json. Isolating the publishing login keeps
+# `docker build` and subsequent e2e suites unauthenticated against library/*.
+registry_docker_config=""
+
+registry_env() {
+  if [ -n "${registry_docker_config:-}" ]; then
+    DOCKER_CONFIG="$registry_docker_config" "$@"
+  else
+    "$@"
+  fi
+}
+
 # tag_may_move <image:branch-tag> <commit> <branch>: whether a release may
 # move a branch's moving tag onto the commit it released -- forward only
 # (grain/task-4432). It returns 0 when the tag may move onto <commit> and
@@ -223,7 +241,7 @@ tag_may_move() (
     tip_rule "no docker buildx here to read which commit $target holds"
   fi
 
-  if ! answer="$(docker buildx imagetools inspect "$target" \
+  if ! answer="$(registry_env docker buildx imagetools inspect "$target" \
       --format '{{index .Image.Config.Labels "org.opencontainers.image.revision"}}' 2>&1)"; then
     case "$answer" in
       *"not found"* | *"manifest unknown"* | *MANIFEST_UNKNOWN* | *NAME_UNKNOWN*)
@@ -469,7 +487,14 @@ state="${RELEASE_IMAGES_STATE:-/tmp/release-images.env}"
 
 # shellcheck source=scripts/grain-ci-host.sh
 . "$scripts_dir/grain-ci-host.sh"
-trap cleanup_ca EXIT INT TERM
+cleanup_release_images() {
+  cleanup_ca
+  if [ -n "${registry_docker_config:-}" ] && command -v rm >/dev/null 2>&1; then
+    rm -rf "$registry_docker_config" 2>/dev/null || true
+    registry_docker_config=""
+  fi
+}
+trap cleanup_release_images EXIT INT TERM
 
 ensure_direct_registry_route() {
   tune_host || return 0
@@ -853,7 +878,20 @@ check_ghcr_token_scopes() {
 
 if [ -n "$token" ]; then
   check_ghcr_token_scopes
-  if ! printf '%s' "$token" | docker login "$registry" -u "$username" --password-stdin; then
+  if { [ "$registry" = "docker.io" ] || [ "$registry" = "index.docker.io" ]; } && command -v mktemp >/dev/null 2>&1; then
+    registry_docker_config="$(mktemp -d)"
+    if command -v chmod >/dev/null 2>&1; then
+      chmod 700 "$registry_docker_config"
+    fi
+    existing_docker_cfg="${DOCKER_CONFIG:-${HOME:-/root}/.docker}/config.json"
+    if [ -f "$existing_docker_cfg" ] && command -v cp >/dev/null 2>&1; then
+      cp "$existing_docker_cfg" "$registry_docker_config/config.json" 2>/dev/null || true
+      if command -v chmod >/dev/null 2>&1; then
+        chmod 600 "$registry_docker_config/config.json" 2>/dev/null || true
+      fi
+    fi
+  fi
+  if ! printf '%s' "$token" | registry_env docker login "$registry" -u "$username" --password-stdin; then
     echo "release-images.sh: docker login to $registry as '$username' failed; stopping before building or pushing any release images." >&2
     exit 1
   fi
@@ -889,7 +927,7 @@ push_image() {
   local image="$1" attempt log
   log="$(mktemp)"
   for attempt in 1 2 3; do
-    if docker push "$image" 2>&1 | tee "$log"; then
+    if (if [ -n "${registry_docker_config:-}" ]; then DOCKER_CONFIG="$registry_docker_config" docker push "$image"; else docker push "$image"; fi) 2>&1 | tee "$log"; then
       rm -f "$log"
       return 0
     fi
@@ -926,7 +964,7 @@ push_pinned() {
   pinned=""
   log="$(mktemp)"
   for attempt in 1 2 3; do
-    if docker push "$image" 2>&1 | tee "$log"; then
+    if (if [ -n "${registry_docker_config:-}" ]; then DOCKER_CONFIG="$registry_docker_config" docker push "$image"; else docker push "$image"; fi) 2>&1 | tee "$log"; then
       digest="$(grep -oE 'digest: sha256:[0-9a-f]{64}' "$log" | tail -n 1 || true)"
       rm -f "$log"
       digest="${digest#digest: }"
@@ -971,7 +1009,7 @@ resolve_guest() {
   guest_key="$(git rev-parse "${guest_inputs[@]/#/HEAD:}" | sha256sum | cut -c1-32)"
   guest_cache="$root/sandbox:inputs-$guest_key"
   local guest_hit=false
-  if docker pull "$guest_cache"; then
+  if registry_env docker pull "$guest_cache"; then
     docker tag "$guest_cache" "$guest"
     echo "release-images.sh: sandbox guest cache hit $guest_cache; nothing to build"
     if [ "$phase" = guest-cache ]; then
@@ -993,7 +1031,7 @@ resolve_guest() {
   mapfile -t base_inputs < <(./scripts/granule/guest-inputs.sh base)
   base_key="$(git rev-parse "${base_inputs[@]/#/HEAD:}" | sha256sum | cut -c1-32)"
   base_cache="$root/sandbox-base:$base_key"
-  if docker pull "$base_cache"; then
+  if registry_env docker pull "$base_cache"; then
     docker tag "$base_cache" granule-guest-base:vendored
     docker tag "$base_cache" "$guest_base"
   else
@@ -1261,7 +1299,7 @@ sign_image() {
   fi
   for attempt in 1 2 3; do
     if COSIGN_PASSWORD="$(cat "$signing_password_file" 2>/dev/null || true)" \
-      cosign sign --yes --key "$signing_key" --tlog-upload=false "$digest_ref"; then
+      registry_env cosign sign --yes --key "$signing_key" --tlog-upload=false "$digest_ref"; then
       echo "release-images.sh: signed $digest_ref ($image)"
       return 0
     fi
@@ -1569,10 +1607,10 @@ retract_release() {
 published_release() {
   local ref="$1" label=""
   if docker buildx version >/dev/null 2>&1; then
-    label="$(docker buildx imagetools inspect "$ref" \
+    label="$(registry_env docker buildx imagetools inspect "$ref" \
       --format '{{ index .Image.Config.Labels "org.opencontainers.image.version" }}' 2>/dev/null || true)"
   fi
-  if [ -z "$label" ] && docker pull -q "$ref" >/dev/null 2>&1; then
+  if [ -z "$label" ] && registry_env docker pull -q "$ref" >/dev/null 2>&1; then
     label="$(docker image inspect \
       --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$ref" 2>/dev/null || true)"
   fi
@@ -1588,7 +1626,7 @@ stamped_build() {
   local ref="$1" want="$2" revision=""
   [ "$(published_release "$ref")" = "$want" ] || return 1
   if docker buildx version >/dev/null 2>&1; then
-    revision="$(docker buildx imagetools inspect "$ref" \
+    revision="$(registry_env docker buildx imagetools inspect "$ref" \
       --format '{{ index .Image.Config.Labels "org.opencontainers.image.revision" }}' 2>/dev/null || true)"
   fi
   if [ -z "$revision" ] || [ "$revision" = "<no value>" ]; then
@@ -1618,7 +1656,7 @@ check_release_stamp() {
 rebuild_release_grain() {
   local source="$1" target="$2" main="${3:-}" question want answered work go_version
   local guest_ref k8s_ref image_ref
-  docker pull "$source"
+  registry_env docker pull "$source"
   # What the candidate's build stamped, so the rebuild stamps the same.
   guest_ref="$(docker run --rm "$source" sandbox-image)"
   k8s_ref="$(docker run --rm "$source" k8s-sandbox-image)"
@@ -1725,9 +1763,9 @@ rebuild_release_grain() {
 # by pulling it.
 image_exists() {
   if docker buildx version >/dev/null 2>&1; then
-    docker buildx imagetools inspect "$1" >/dev/null
+    registry_env docker buildx imagetools inspect "$1" >/dev/null
   else
-    docker manifest inspect "$1" >/dev/null
+    registry_env docker manifest inspect "$1" >/dev/null
   fi
 }
 
@@ -1737,7 +1775,7 @@ retag_image() {
   local attempt
   if docker buildx version >/dev/null 2>&1; then
     for attempt in 1 2 3; do
-      if docker buildx imagetools create --tag "$2" "$1"; then
+      if registry_env docker buildx imagetools create --tag "$2" "$1"; then
         return 0
       fi
       if [ "$attempt" -lt 3 ]; then
@@ -1747,7 +1785,7 @@ retag_image() {
     echo "could not retag $1 as $2 in three attempts" >&2
     return 1
   fi
-  docker pull "$1"
+  registry_env docker pull "$1"
   docker tag "$1" "$2"
   push_image "$2"
 }
