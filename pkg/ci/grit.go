@@ -48,10 +48,12 @@ var (
 type (
 	DirArtifacts        = gritartifacts.DirArtifacts
 	DirArtifactsOptions = gritartifacts.DirArtifactsOptions
+	ObjectArtifacts     = gritartifacts.ObjectArtifacts
 )
 
 var (
-	OpenDirArtifacts = gritartifacts.OpenDirArtifacts
+	OpenDirArtifacts    = gritartifacts.OpenDirArtifacts
+	OpenObjectArtifacts = gritartifacts.OpenObjectArtifacts
 )
 
 var humanBytes = workflows.HumanBytes

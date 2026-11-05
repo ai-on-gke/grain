@@ -50,6 +50,25 @@ func TestIntegrationEventExternalRefResolutionOrder(t *testing.T) {
 		wantRef string
 	}{
 		{
+			id: "ref-explicit",
+			task: model.Task{
+				Target:       &repo,
+				ExternalRef:  "CA-204",
+				Links:        []model.Link{{Kind: model.LinkGoogleChat, Target: "spaces/CHAT0"}},
+				CustomFields: map[string][]string{"external_ref": {"JIRA-0"}},
+				Issue:        1,
+			},
+			wantRef: "CA-204",
+		},
+		{
+			id: "ref-explicit-child",
+			task: model.Task{
+				Target: &repo,
+				Links:  []model.Link{{Kind: model.LinkProposedBy, Target: "ref-explicit"}},
+			},
+			wantRef: "CA-204",
+		},
+		{
 			id: "ref-chat",
 			task: model.Task{
 				Target:       &repo,

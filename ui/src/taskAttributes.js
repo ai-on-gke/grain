@@ -515,6 +515,13 @@ export const ATTRIBUTES = [
     type: TYPE_NUMBER,
     values: (t) => [String(t.priority ?? 5)],
   },
+  {
+    id: "externalRef",
+    label: "External ref",
+    type: TYPE_ENUM,
+    values: one((t) => t.externalRef),
+    noneLabel: "No external reference",
+  },
 ];
 
 // CUSTOM_PREFIX namespaces every deployment-defined attribute, so

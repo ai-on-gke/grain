@@ -19,7 +19,7 @@ import ClChip from "./ClChip.jsx";
 import PresubmitBadge from "./PresubmitBadge.jsx";
 import ReviewBadge from "./ClReview.jsx";
 import { BehindBadge } from "./ClSubmit.jsx";
-import { processPath } from "../paths.js";
+import { buildPath, processPath } from "../paths.js";
 import LinkedNote from "../linkedNote.jsx";
 import {
   Alert,
@@ -181,6 +181,7 @@ export default function DetailOverlay({
   // pane. Optional, like onOpenCIRun: without it the link's href still
   // reaches the run by a page load.
   onOpenSuiteRun: rawOpenSuiteRun,
+  onFilterExternalRef: rawFilterExternalRef,
   act,
   showError,
   // animate: false when this pane takes the place of one already on
@@ -257,6 +258,14 @@ export default function DetailOverlay({
           return;
         }
         rawOpenSuiteRun(runId);
+      }
+    : undefined;
+  const onFilterExternalRef = rawFilterExternalRef
+    ? (ref) => {
+        if (isDirty() && !window.confirm(DISCARD_PROMPT)) {
+          return;
+        }
+        rawFilterExternalRef(ref);
       }
     : undefined;
   const activeAttempt =
@@ -410,6 +419,45 @@ export default function DetailOverlay({
                       )}
                   </Fragment>
                 ))}
+                {t.externalRef && (
+                  <>
+                    {" "}
+                    · ref{" "}
+                    <Link
+                      href={buildPath({
+                        view: "tasks",
+                        stateFilter: "all",
+                        narrowing: {
+                          search: "",
+                          sort: [],
+                          filters: [
+                            {
+                              attr: "externalRef",
+                              op: "any",
+                              values: [t.externalRef],
+                            },
+                          ],
+                        },
+                      })}
+                      onClick={(e) => {
+                        if (!onFilterExternalRef) return;
+                        if (
+                          e.button !== 0 ||
+                          e.metaKey ||
+                          e.ctrlKey ||
+                          e.shiftKey ||
+                          e.altKey
+                        ) {
+                          return;
+                        }
+                        e.preventDefault();
+                        onFilterExternalRef(t.externalRef);
+                      }}
+                    >
+                      {t.externalRef}
+                    </Link>
+                  </>
+                )}
                 {/* Provenance links and the tree of work this task belongs
                     to (docs/work-trees.md) fold under a compact disclosure
                     that starts collapsed by default so long work trees do

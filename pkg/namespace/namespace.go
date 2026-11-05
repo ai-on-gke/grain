@@ -191,7 +191,10 @@ type Server struct {
 	// a run's jobs as its directories, and each job's log as job.log.
 	ExternalCI  ci.ExternalRuns
 	ArtifactDir string
-	SrcDir      string
+	// Artifacts, when set, opens stored CI artifacts (including read-through
+	// object-store caches) when ArtifactDir does not hold the file directly.
+	Artifacts ci.ArtifactStore
+	SrcDir    string
 	// CoreSrcDir, when set, is the source of github.com/ai-on-gke/grain
 	// on a daemon whose own module (SrcDir) builds on it rather than
 	// being it: served under src://core/..., and beneath SrcDir for a
@@ -874,31 +877,55 @@ func (s *Server) resolveCIArtifacts(run ci.Run, relPath string, rem []string) (*
 	artName := strings.Join(rem[1:], "/")
 	for _, a := range matching {
 		if a.Name == artName {
-			if s.ArtifactDir == "" {
-				return nil, fmt.Errorf("%w: artifact storage directory is not configured", ErrNotFound)
-			}
 			artJob := a.Job
 			if artJob == "" {
 				artJob = jobName
 			}
-			target, err := safepath.Within(s.ArtifactDir, filepath.Join(run.ID, artJob, filepath.FromSlash(a.Name)))
-			if err != nil {
-				return nil, fmt.Errorf("%w: %v", ErrBadRequest, err)
+			if s.ArtifactDir != "" {
+				target, err := safepath.Within(s.ArtifactDir, filepath.Join(run.ID, artJob, filepath.FromSlash(a.Name)))
+				if err != nil {
+					return nil, fmt.Errorf("%w: %v", ErrBadRequest, err)
+				}
+				if info, statErr := os.Stat(target); statErr == nil {
+					return &ResolvedNode{
+						Scheme:  "ci",
+						Path:    relPath,
+						IsDir:   false,
+						Size:    info.Size(),
+						Growing: false,
+						Open: func() (io.ReadCloser, error) {
+							return os.Open(target)
+						},
+					}, nil
+				}
 			}
-			info, err := os.Stat(target)
-			if err != nil {
+			if s.Artifacts != nil {
+				ref := ci.ArtifactRef{Run: run.ID, Job: artJob, Name: a.Name}
+				rc, opened, err := s.Artifacts.Open(context.Background(), ref)
+				if err == nil {
+					rc.Close()
+					size := opened.Bytes
+					if size == 0 {
+						size = a.Bytes
+					}
+					return &ResolvedNode{
+						Scheme:  "ci",
+						Path:    relPath,
+						IsDir:   false,
+						Size:    size,
+						Growing: false,
+						Open: func() (io.ReadCloser, error) {
+							r, _, openErr := s.Artifacts.Open(context.Background(), ref)
+							return r, openErr
+						},
+					}, nil
+				}
 				return nil, fmt.Errorf("%w: artifact %s", ErrNotFound, artName)
 			}
-			return &ResolvedNode{
-				Scheme:  "ci",
-				Path:    relPath,
-				IsDir:   false,
-				Size:    info.Size(),
-				Growing: false,
-				Open: func() (io.ReadCloser, error) {
-					return os.Open(target)
-				},
-			}, nil
+			if s.ArtifactDir == "" {
+				return nil, fmt.Errorf("%w: artifact storage directory is not configured", ErrNotFound)
+			}
+			return nil, fmt.Errorf("%w: artifact %s", ErrNotFound, artName)
 		}
 	}
 	return nil, fmt.Errorf("%w: artifact %q", ErrNotFound, artName)

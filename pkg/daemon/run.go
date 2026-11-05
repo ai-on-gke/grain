@@ -33,11 +33,13 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
+	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/cifault"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
 	"github.com/ai-on-gke/grain/pkg/policy"
@@ -716,6 +718,67 @@ func Run(ctx context.Context, cfg Config) error {
 	if _, err := migrateLocalScripts(ctx, store, cfg.LocalScriptsConfig()); err != nil {
 		log.Printf("daemon: local-scripts: moving declarations to host-script: %v", err)
 	}
+	// transcriptDir is where a run's own agent.Framework may mirror its
+	// transcript-in-progress live, and where the UI server below reads one
+	// back from for a still-running attempt -- the two sides of
+	// bwsalmon/agents#467's live tailing (agent/gemini's own share of it
+	// added by bwsalmon/agents#513), agreeing on this
+	// directory (and, within it, the run-ID-named file
+	// orchestrator.RunDispatch and each framework's LiveTranscriptDir
+	// independently compute) is what lets them talk to each other without
+	// either package importing the other. It must exist before any run
+	// can write into it.
+	//
+	// 0700, and chmodded too so a directory an older grain made 0755 is
+	// tightened: each file in it is a run's raw tool output, and nothing
+	// outside this process reads them (the frameworks open them 0600).
+	transcriptDir := filepath.Join(cfg.DataDir, "state", "transcripts")
+	if err := os.MkdirAll(transcriptDir, 0o700); err != nil {
+		return fmt.Errorf("creating transcript directory: %w", err)
+	}
+	if err := os.Chmod(transcriptDir, 0o700); err != nil {
+		return fmt.Errorf("restricting transcript directory: %w", err)
+	}
+	if cfg.ObjectStore == nil && cfg.ObjectStoreURI != "" {
+		openedStore, err := objectstore.Open(ctx, cfg.ObjectStoreURI)
+		if err != nil {
+			return fmt.Errorf("opening -object-store %q: %w", cfg.ObjectStoreURI, err)
+		}
+		cfg.ObjectStore = openedStore
+	}
+	if cfg.ObjectStore != nil {
+		transcriptCacheDir := filepath.Join(cfg.DataDir, "cache", "object-store", "transcripts")
+		tStore, err := NewTranscriptObjectStore(cfg.ObjectStore, transcriptCacheDir, transcriptDir, transcriptObjectRedactor(cfg, secretStore))
+		if err != nil {
+			return fmt.Errorf("preparing transcript object store: %w", err)
+		}
+		cfg.transcriptObjects = tStore
+		stopTranscriptSync := tStore.StartPeriodicSync(ctx, DefaultTranscriptSyncInterval)
+		defer stopTranscriptSync()
+		flushObjectStoreState(ctx, cfg)
+		defer func() {
+			flushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			flushObjectStoreState(flushCtx, cfg)
+		}()
+		if cfg.ObjectStoreURI != "" {
+			log.Printf("grain daemon: syncing transcripts, CI artifacts, and agent-sessions to %s with local read-through caching", cfg.ObjectStoreURI)
+		}
+	}
+
+	var uiLn net.Listener
+	if cfg.UiAddr != "" {
+		uiLn, err = net.Listen("tcp", cfg.UiAddr)
+		if err != nil {
+			return fmt.Errorf("starting the UI/API server: listening on %s: %w", cfg.UiAddr, err)
+		}
+		defer func() {
+			if uiLn != nil {
+				_ = uiLn.Close()
+			}
+		}()
+	}
+
 	capabilityServers, hostdCapabilityServers := startCapabilityServers(ctx, store, secretStore, cfg.DataDir, cfg.capabilityHostd(), gcpKeyPool(cfg))
 	live := NewLiveConfig(store, sandboxes, cfg, githubCredentials).
 		WithSandboxImages(sandboxImages, stockSandboxImage, sandboxImageLabels()).
@@ -739,30 +802,11 @@ func Run(ctx context.Context, cfg Config) error {
 	})
 	live.WithRegistry(registryMgr)
 	go registryMgr.Run(ctx)
+	if cfg.ObjectStore != nil && cfg.ciArtifacts == nil {
+		cfg.ciArtifacts = CiArtifactStore(cfg, live.ciStorageBounds)
+	}
 	if cfg.Overcommit != nil {
 		go runOvercommit(ctx, live, cfg.Overcommit)
-	}
-
-	// transcriptDir is where a run's own agent.Framework may mirror its
-	// transcript-in-progress live, and where the UI server below reads one
-	// back from for a still-running attempt -- the two sides of
-	// bwsalmon/agents#467's live tailing (agent/gemini's own share of it
-	// added by bwsalmon/agents#513), agreeing on this
-	// directory (and, within it, the run-ID-named file
-	// orchestrator.RunDispatch and each framework's LiveTranscriptDir
-	// independently compute) is what lets them talk to each other without
-	// either package importing the other. It must exist before any run
-	// can write into it.
-	//
-	// 0700, and chmodded too so a directory an older grain made 0755 is
-	// tightened: each file in it is a run's raw tool output, and nothing
-	// outside this process reads them (the frameworks open them 0600).
-	transcriptDir := filepath.Join(cfg.DataDir, "state", "transcripts")
-	if err := os.MkdirAll(transcriptDir, 0o700); err != nil {
-		return fmt.Errorf("creating transcript directory: %w", err)
-	}
-	if err := os.Chmod(transcriptDir, 0o700); err != nil {
-		return fmt.Errorf("restricting transcript directory: %w", err)
 	}
 
 	// The package cache (pkg/cli/packagecache.go), started here rather
@@ -948,7 +992,9 @@ func Run(ctx context.Context, cfg Config) error {
 	// longer happens: runDaemon's own failure is logged, not fatal, and
 	// run() itself only returns once ctx is actually cancelled.
 	if cfg.UiAddr != "" {
-		stopUI, err := startUIServer(cfg, store, db, transcriptDir, sandboxes, live, pkgCache, actionsCache,
+		preboundUI := uiLn
+		uiLn = nil
+		stopUI, err := startUIServer(cfg, preboundUI, store, db, transcriptDir, sandboxes, live, pkgCache, actionsCache,
 			stateManager, stateManager.settingsRepo, forbidden, upgrader, secretStore)
 		if err != nil {
 			return fmt.Errorf("starting the UI/API server: %w", err)
@@ -1082,7 +1128,10 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		},
 	}))
 
-	proxyURL, proxyHandler, stopProxy, err := startGitProxy(cfg.DataDir, store, secretStore, cfg.GithubHost, cfg.GithubInsecureHTTP, fabric, forbidden, cfg.shutdownStarted)
+	if cfg.ObjectStore != nil && cfg.ciArtifacts == nil {
+		cfg.ciArtifacts = CiArtifactStore(cfg, live.ciStorageBounds)
+	}
+	proxyURL, proxyHandler, stopProxy, err := startGitProxy(cfg.DataDir, store, secretStore, cfg.GithubHost, cfg.GithubInsecureHTTP, fabric, forbidden, cfg.shutdownStarted, cfg.ciArtifacts)
 	if err != nil {
 		// Fatal to this loop, and only to it: every dispatch and every CI
 		// job clones through this proxy, so there is nothing to reconcile
@@ -1490,6 +1539,12 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			Credentials:   secretStore,
 			MaxAgentTurns: cfg.MaxAgentTurns,
 			TranscriptDir: transcriptDir,
+			TranscriptSink: func() orchestrator.TranscriptSink {
+				if cfg.transcriptObjects == nil {
+					return nil
+				}
+				return cfg.transcriptObjects
+			}(),
 			// The same proxy URL the credential files above are written
 			// for, now also the address each dispatched run's own
 			// checkout is cloned from (orchestrator.prepareCheckout).
@@ -1771,7 +1826,45 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	// every live run to wind up -- so this is the shutdown drain, not a
 	// wait for work still to be done.
 	DrainInFlight(inFlight)
+	if cfg.ObjectStore != nil {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		flushObjectStoreState(flushCtx, cfg)
+		cancel()
+	}
 	return nil
+}
+
+func flushObjectStoreState(ctx context.Context, cfg Config) {
+	if cfg.transcriptObjects != nil {
+		if err := cfg.transcriptObjects.FlushAll(ctx); err != nil {
+			log.Printf("grain daemon: flushing transcripts to object store: %v", err)
+		}
+	}
+	var objArt *ci.ObjectArtifacts
+	if a, ok := cfg.ciArtifacts.(*ci.ObjectArtifacts); ok {
+		objArt = a
+	} else if cfg.ObjectStore != nil && cfg.DataDir != "" {
+		objArt, _ = ci.OpenObjectArtifacts(
+			objectstore.WithPrefix(cfg.ObjectStore, "ci-artifacts"),
+			ciArtifactDir(cfg.DataDir),
+			ci.DirArtifactsOptions{},
+		)
+	}
+	if objArt != nil {
+		if err := objArt.FlushLocal(ctx); err != nil {
+			log.Printf("grain daemon: flushing CI artifacts to object store: %v", err)
+		}
+	}
+	if s := agentSessionStoreFor(cfg); s != nil {
+		if err := s.FlushAll(ctx); err != nil {
+			log.Printf("grain daemon: flushing agent-sessions to object store: %v", err)
+		}
+	}
+	if arch := claudeSessionArchiveFor(cfg); arch != nil {
+		if err := arch.FlushAll(ctx); err != nil {
+			log.Printf("grain daemon: flushing claude sessions to object store: %v", err)
+		}
+	}
 }
 
 // shutdownServerGrace bounds how long a deferred HTTP listener shutdown

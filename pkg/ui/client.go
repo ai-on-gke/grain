@@ -1454,6 +1454,11 @@ func (c *Client) AttemptTranscript(ctx context.Context, taskID string, number in
 	if !ok {
 		return "", &NotFoundError{message: fmt.Sprintf("no attempt %d for task %s", number, taskID)}
 	}
+	if transcript == "" && c.Config.ArchivedTranscripts != nil {
+		if archived, found, archErr := c.Config.ArchivedTranscripts.Read(ctx, run.ID); archErr == nil && found {
+			return archived, nil
+		}
+	}
 	return transcript, nil
 }
 
@@ -1675,7 +1680,11 @@ type CreateTaskRequest struct {
 	NewBranch     bool   `json:"newBranch,omitempty"`
 	NewBranchFrom string `json:"newBranchFrom,omitempty"`
 	Issue         int    `json:"issue,omitempty"`
-	AutoMerge     bool   `json:"autoMerge"`
+	// ExternalRef is an optional external work reference (for example
+	// "CA-204"), inherited by tasks grain spawns from this task when
+	// omitted on the child.
+	ExternalRef string `json:"externalRef,omitempty"`
+	AutoMerge   bool   `json:"autoMerge"`
 	// DeclineAutoMerge is the filer saying auto_merge: false out loud
 	// (propose_task's explicit false), rather than leaving it to the
 	// proposer's permission or a default -- which AutoMerge alone, always
@@ -2311,6 +2320,10 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err != nil {
 		return Task{}, err
 	}
+	externalRef, err := model.NormalizeExternalRef(req.ExternalRef)
+	if err != nil {
+		return Task{}, validationErrorf("%v", err)
+	}
 	if req.Goal != nil {
 		if err := req.Goal.Normalize(); err != nil {
 			return Task{}, validationErrorf("%v", err)
@@ -2405,6 +2418,15 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	explicitOrigin, err := model.ExplicitOrigin(req.Origin, target, proposedBy)
 	if err != nil {
 		return Task{}, validationErrorf("%v", err)
+	}
+	if proposedBy == nil && explicitOrigin.Task() != "" && model.HasExternalRefReadable(ctx) {
+		origTask, err := c.Store.GetTask(ctx, explicitOrigin.Task())
+		if err != nil {
+			return Task{}, err
+		}
+		if origTask == nil || !model.ExternalRefReadable(ctx, taskRepo(origTask)) {
+			explicitOrigin = ""
+		}
 	}
 	// A task names no team. One filed against a team's config repo is
 	// judged as that team's, and every other task as the default team's.
@@ -2518,6 +2540,15 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		links = append(links, model.Link{Kind: model.LinkSupersedes, Target: supersedes})
 	}
 	revertsID := model.NormalizeTaskID(req.Reverts)
+	if revertsID != "" && model.HasExternalRefReadable(ctx) {
+		revTask, err := c.Store.GetTask(ctx, revertsID)
+		if err != nil {
+			return Task{}, err
+		}
+		if revTask == nil || !model.ExternalRefReadable(ctx, taskRepo(revTask)) {
+			revertsID = ""
+		}
+	}
 	if revertsID != "" {
 		links = append(links, model.Link{Kind: model.LinkReverts, Target: revertsID})
 	}
@@ -2840,6 +2871,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		CreatedAt:            &now,
 		OrderKey:             orderKey,
 		FiledVia:             filedViaFromContext(ctx),
+		ExternalRef:          externalRef,
 	}
 	// A proposal is its proposer's root requester's work, whoever the
 	// request names: an agent's propose_task call cannot file as anybody,
@@ -4164,6 +4196,7 @@ type UpdateTaskRequest struct {
 	Base                 *string `json:"base,omitempty"`
 	Priority             *int    `json:"priority,omitempty"` // 1 or more; see errPriorityNotPositive
 	Issue                *int    `json:"issue,omitempty"`
+	ExternalRef          *string `json:"externalRef,omitempty"`
 	AutoMerge            *bool   `json:"autoMerge,omitempty"`
 	AutoApproveProposals *bool   `json:"autoApproveProposals,omitempty"`
 	// SandboxCPUs, SandboxMemoryMB and SandboxDiskGB
@@ -4418,6 +4451,14 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	}
 	if req.Priority != nil && *req.Priority < 1 {
 		return Task{}, validationErrorf(errPriorityNotPositive)
+	}
+	var externalRef string
+	if req.ExternalRef != nil {
+		var err error
+		externalRef, err = model.NormalizeExternalRef(*req.ExternalRef)
+		if err != nil {
+			return Task{}, validationErrorf("%v", err)
+		}
 	}
 	// A fork head label is resolved to the pull request it heads the way
 	// CreateTask resolves one (forkhead.go): the edit stores that pull
@@ -4834,6 +4875,9 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		}
 		if req.Issue != nil {
 			task.Issue = *req.Issue
+		}
+		if req.ExternalRef != nil {
+			task.ExternalRef = externalRef
 		}
 		if req.AutoMerge != nil {
 			// A change target's change is a CL, with no pull request

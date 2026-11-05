@@ -1,6 +1,11 @@
 # Director capabilities and session envelope
 
-**Status:** draft for review. Normative.
+**Status:** draft for review. Normative. Ground truth (§1.4) and the gap
+table (§5) checked against `main` on 2026-11-05.
+
+**Specifies:** [`director.design.md`](../../design/director.design.md);
+the capability model it builds on is
+[`capabilities.design.md`](../../design/capabilities.design.md).
 
 This specification turns the workflows (`W1`–`W5`) and trust boundaries of
 [`director.design.md`](../../design/director.design.md) into the exact
@@ -69,10 +74,13 @@ refused without it. The reason is written to the controller log
 
 - `model.DefaultConsoleSessions()` returns one session:
   - `ID: "director"`, `Title: "Director"`, `Team: DefaultTeamID`.
-  - `Capabilities`: `self-debug`, `grain-log`, `deployment-health` and
-    `bootstrap-playbooks`, plus every build `DefaultOn` registration
-    (`RegisterDefaultConsoleSessionCapability`, e.g. `corp-research` on
-    the wrapper distribution's build).
+  - `Capabilities`: `self-debug`, `…/grain#journal={}` (formerly
+    `grain-log`), `api:deployment:read` and `…/grain#health={}`
+    (together formerly `deployment-health`) and `bootstrap-playbooks`,
+    plus every build `DefaultOn` registration
+    (`RegisterDefaultConsoleSessionCapability`, which `capability.Register`
+    calls for a `DefaultOn` method, e.g. `…/corp#research={}` on the
+    wrapper distribution's build, formerly `corp-research`).
   - `NetworkAccess: NetworkOpen`. This is **not** `none`, which
     `docs/director.md` and the task that filed this spec both say. Its
     doc comment explains why: the host-directory sandbox cannot honour
@@ -110,8 +118,8 @@ to. *Implicit* means the grant comes with the task rather than from
 | Surface (tool / CLI / route) | Current grant | Canonical reference | Tier |
 |---|---|---|---|
 | Source checkout, metrics tools, `grain task list\|read\|prompt\|transcript`, `task://`, `src://` | `self-debug` (alias → `api:self-debug` = `tasks:read` + `deployment:read`) | `…/api#self-debug` + `…/grain#source` *(proposed)* | 1 |
-| Daemon journal (`grain-log`) | `grain-log` | `…/grain#journal` *(proposed)* | 1 |
-| Host / sandbox probes; `GET /api/deployment/*` reads | `deployment-health` | `…/api#deployment:read` + `…/grain#health` *(proposed)* | 1 |
+| Daemon journal (formerly `grain-log`) | `…/grain#journal` | `…/grain#journal` | 1 |
+| Host / sandbox probes; `GET /api/deployment/*` reads | `api:deployment:read` + `…/grain#health` (formerly `deployment-health`) | `…/api#deployment:read` + `…/grain#health` | 1 |
 | Bring-up runbooks | `bootstrap-playbooks` | `…/skill#skill` `{dir: bootstrap}` | 1 |
 | `request_secret` (write-only intake into `<data-dir>/secrets`) | none (a turn-ending tool that every task holds) | — | 1 |
 | `GET /api/tasks`, `GET /api/tasks/{id}`, `GET /api/states` | `api:tasks:read` (via `api:self-debug`) | `…/api#tasks:read` | 1 |
@@ -122,7 +130,7 @@ to. *Implicit* means the grant comes with the task rather than from
 | Dispatch pause state | `api:dispatch:read` | `…/api#dispatch:read` | 1 |
 | `GET /api/config`, `GET /api/state-repo*` | `api:settings:read` | `…/api#settings:read` | 1 |
 | `/home/debian/grain-state` (`tables/`, `settings/`, `memory/`) | implicit `Reads: [<state repo>]` | `…/repo#read` `{repo: grain/config}` | 1 (implicit) |
-| Edition defaults (`corp-research` on wrapper distribution builds) | build `DefaultOn` registration | `…/corp#research` *(proposed)* | 1 (build) |
+| Edition defaults (`…/corp#research` on wrapper distribution builds, formerly `corp-research`) | build `DefaultOn` registration (`capability.Register`) | `…/corp#research` | 1 (build) |
 
 ### 2.2 W3 — Backlog and lifecycle management
 
@@ -183,7 +191,7 @@ default, and §5 says how existing deployments are offered it.
 
 | Field | Value | Rationale |
 |---|---|---|
-| `Capabilities` | `self-debug`, `grain-log`, `deployment-health`, `bootstrap-playbooks`, `api:task-admin`, `api:capabilities:read`, `api:settings:read`, `api:repos:read`, `api:releases:read`, `api:schedules:read`, `api:templates:read`, `api:suites:read`, `api:dispatch:read`, plus build `DefaultOn` ids | W1–W5 day-to-day. None of these is dangerous, so none needs a person's grant under `IsPersonOnlyGrant`. |
+| `Capabilities` | `self-debug`, `…/grain#journal`, `api:deployment:read`, `…/grain#health`, `bootstrap-playbooks`, `api:task-admin`, `api:capabilities:read`, `api:settings:read`, `api:repos:read`, `api:releases:read`, `api:schedules:read`, `api:templates:read`, `api:suites:read`, `api:dispatch:read`, plus build `DefaultOn` ids | W1–W5 day-to-day. None of these is dangerous, so none needs a person's grant under `IsPersonOnlyGrant`. |
 | (implicit) `durable` | always, via `ConsoleSessionGrants` | Priority admission (§3.1.4). |
 | `Reads` | `[]` in the row; the state repository is added at filing (`FileConsoleSessionOptions.StateRepo`) | Config is always readable without the operator naming a repo (§3.1.3). |
 | `Writes` | `[]` | The director has no target and lands no code. Config writes go through §3.1.3. |
@@ -336,7 +344,7 @@ director MUST NOT be able to obtain any of them itself:
 | `api:test-quarantine` (`tests:write`) | Quarantine a test and file its repair | Hides a failing signal from every branch. |
 | `api:secrets:read` | List secret, key and token names and the secret audit log | Names and audit trails are reconnaissance. W1 intake is write-only and does not need them. |
 | `api:memory` | Write standing instructions every later run is given | Persistent prompt injection surface (`DefaultConsoleSessions` doc comment). |
-| `self-repair` | Run commands on grain's host, each confirmed in chat | Can break the deployment it is talking from. |
+| `…/grain#host-exec` (formerly `self-repair`) | Run commands on grain's host, each confirmed in chat | Can break the deployment it is talking from. Person-only (`protocol.RequirePersonGrant`), and only added to an Interactive task's run. |
 | `api:teams:broadcast` | Comment on every active task | MCP-only; un-parks every waiting task. |
 | `api:sessions:write` | Edit or restart other standing sessions | Conflicts with design §3.4 unless the operator decides otherwise. |
 
@@ -453,7 +461,7 @@ holds them.
 
 | # | Area | `main` today | This spec | Change |
 |---|---|---|---|---|
-| G1 | `DefaultConsoleSessions().Capabilities` | 4 ids + build `DefaultOn` | Tier 1 list (§3.1) | Append the api grants in `pkg/model/console_session.go`, and update its doc comment and `docs/director.md`. Existing deployments keep their saved row: surface the new defaults as a one-click "adopt shipped defaults" in the session pane, not a silent rewrite (grain/task-2126 keeps operator removals sticky). |
+| G1 | `DefaultConsoleSessions().Capabilities` | 5 grants (§1.4) + build `DefaultOn` | Tier 1 list (§3.1) | Append the api grants in `pkg/model/console_session.go`, and update its doc comment and `docs/director.md`. Existing deployments keep their saved row: surface the new defaults as a one-click "adopt shipped defaults" in the session pane, not a silent rewrite (grain/task-2126 keeps operator removals sticky). |
 | G2 | `TasksApproved` | `false` | `true` | Set in `DefaultConsoleSessions`. `ConsoleSessionTasksApprovedTag` / its opposite keep an operator's override. Add tests in `pkg/model`. |
 | G3 | `NetworkAccess` | `NetworkOpen` | `NetworkNone` with the `ConsoleSessionNetworkAccess` fallback | Change the default. First verify on granule that the state-repo clone, `grain` CLI and `api_*` tools work under `none`, and that no build `DefaultOn` capability needs sandbox egress. |
 | G4 | State repo read | implicit via `StateRepo`, read-only checkout | Unchanged | None; pin the behaviour with a test that the director task's `Reads` contains the state repo. |
@@ -463,7 +471,7 @@ holds them.
 | G8 | Self-approval | relies on `tasks:admin` being person-granted | Gate refuses `POST /api/tasks/{id}/approve` on a task in the actor's proposal subtree or held for a person | Add to `agentRails` in `pkg/ui/agent_api_gate.go`, with tests. |
 | G9 | Seeded repo defaults on director proposals | held as "seeded" escalations | Admitted under §4.2 | Change `EscalatedCapabilities` / `AutoApprovalRefusal` (`pkg/model/auto_submit.go`, `hold_for_approval.go`) to take the seeding source; tests for each excluded case. |
 | G10 | `DirectorSessionBody` | — | Tells the director to use `expect` on stop/close, `hold_for_approval` for destructive proposals, and give reasons | Update the reviewed body text. |
-| G11 | Docs | `docs/director.md` lists 4 capabilities and claims `none` | Matches §3 | Update with G1–G3. |
+| G11 | Docs | `docs/director.md` lists the retired names `grain-log` and `deployment-health` and claims `none` | Matches §3 | Update with G1–G3. |
 | G12 | Capacity bound on session-queued proposals | session-queued proposals skip `AutoSubmitLimits` | Per-turn fan-out bound; over it, filed for a person (§3.1.5) | Add the check beside `ExceededAutoSubmitLimit` in `ui.Client.CreateTask` and `orchestrator.relayProposedTasks`, with tests. |
 
 Ordering: G4 and G10 are independent. G6 precedes the detach part of

@@ -194,6 +194,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	postgresURL := fs.String("postgres-url", "", "PostgreSQL connection URL (alias for -db-driver=postgres -db-dsn=URL)")
 	secretsBackend := fs.String("secrets-backend", secrets.BackendFile, "secret store backend (\"file\" or \"secretmanager\"); defaults to $GRAIN_SECRETS_BACKEND, then \"file\"")
 	secretsSMPrefix := fs.String("secrets-sm-prefix", "", "Secret Manager resource prefix (projects/<project>/secrets/<id-prefix>) when -secrets-backend=secretmanager; defaults to $GRAIN_SECRETS_SM_PREFIX")
+	objectStoreURI := fs.String("object-store", "", "object store URI (gs://<bucket>/instances/<name>/ or file:///abs/dir) for flushing run transcripts, uploaded CI artifacts, and durable agent-sessions archives with local read-through caching (defaults to $GRAIN_OBJECT_STORE)")
 	sandboxDir := fs.String("sandbox-dir", "", "root directory for this deployment's disposable scratch space -- host-sandbox run directories, "+
 		"and the package and Actions caches default under it, and the UI reports its disk as the sandboxes' own (scripts/setup.sh installs it "+
 		"at /var/lib/grain/scratch, beside -data-dir's /var/lib/grain/data). Deliberately a separate flag from -data-dir rather than a "+
@@ -1092,6 +1093,11 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			*uiRequireIAP = v
 		}
 	}
+	if !passed["object-store"] {
+		if env := strings.TrimSpace(os.Getenv("GRAIN_OBJECT_STORE")); env != "" {
+			*objectStoreURI = env
+		}
+	}
 	if !passed["db-dsn"] {
 		if env := os.Getenv("GRAIN_DB_DSN"); env != "" {
 			*dbDSN = env
@@ -1168,38 +1174,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		}
 		log.Printf("grain daemon: -kontur-git-proxy-host is legacy alias for -granule-git-proxy-host; using -granule-git-proxy-host=%s", *granuleGitProxyHost)
 	}
-	// -granule-net, -granule-base-ip and -granule-base-port describe a
-	// granule that no longer exists: the vendored third_party/granule
-	// deprecates all three ("only the former flat behaviour exists now, and
-	// it is the default"; -ip and -port "deprecated and ignored"), so
-	// nothing has reached granule from them for some time. They are
-	// accepted and ignored rather than rejected, because a deployment's own
-	// systemd unit carries whatever the installer wrote when it was set up
-	// and a start that refuses over inert configuration is worse than one
-	// that says so -- but they are said loudly, once, because the operator
-	// who set them believed they did something.
-	//
-	// Warned on rather than silently dropped, and warned on only when
-	// actually passed, so the line means "this deployment asked for
-	// something it is not getting" rather than appearing on every start.
-	// They are removed in a later release; see orchestrator.GranuleConfig's
-	// NetMode/IP/Port, and pkg/sandboxaddr for how assigning an address is
-	// coming back.
-	if passed["granule-net"] || passed["kontur-net"] {
-		log.Printf("grain daemon: -granule-net=%s is ignored: the granule this build vendors has only "+
-			"the former \"flat\" behaviour, and it is the default. Remove the flag; it goes away in a "+
-			"later release", *granuleNet)
-	}
-	if passed["granule-base-ip"] || passed["kontur-base-ip"] {
-		log.Printf("grain daemon: -granule-base-ip=%s is ignored: granule assigns a guest the address "+
-			"the container runtime gave its container, and its own -ip is deprecated and ignored. "+
-			"Remove the flag; it goes away in a later release", *granuleBaseIP)
-	}
-	if passed["granule-base-port"] || passed["kontur-base-port"] {
-		log.Printf("grain daemon: -granule-base-port=%d is ignored: granule publishes ports on the "+
-			"sandbox itself rather than forwarding one per VM, and its own -port is deprecated and "+
-			"ignored. Remove the flag; it goes away in a later release", *granuleBasePort)
-	}
+	logDeprecatedGranuleFlags(passed, *granuleNet, *granuleBaseIP, *granuleBasePort)
 
 	if err := removedTunnelGatewaySettings(passed); err != nil {
 		return daemon.Config{}, fs, unknownFlags, err
@@ -1216,7 +1191,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UnitFlags: unitFlags, UnknownFlags: unknownFlags,
 		DataDir: *dataDir, DbDriver: *dbDriver, DbDSN: *dbDSN,
 		SecretsBackend: *secretsBackend, SecretsSMPrefix: *secretsSMPrefix,
-		SandboxDir: *sandboxDir, DockerRootDir: *dockerRootDir,
+		ObjectStoreURI: *objectStoreURI,
+		SandboxDir:     *sandboxDir, DockerRootDir: *dockerRootDir,
 		MaxWorkers: *maxWorkers, MaxMergers: *maxMergers, MaxCIJobs: model.DefaultMaxCIJobs,
 		Ledger:        &model.Ledger{},
 		CpuOvercommit: *cpuOvercommit, MemoryOvercommit: *memoryOvercommit, MemoryReserveMB: *memoryReserveMB,
@@ -1371,6 +1347,9 @@ func checkConfig(cfg daemon.Config) error {
 		return fmt.Errorf("-db-driver must be \"sqlite\" or \"postgres\", got %q", cfg.DbDriver)
 	}
 	if err := daemon.CheckSecretsConfig(cfg.SecretsBackend, cfg.SecretsSMPrefix); err != nil {
+		return err
+	}
+	if err := daemon.CheckObjectStoreURI(cfg); err != nil {
 		return err
 	}
 	if err := daemon.CheckSandboxBackend(cfg, daemon.LocalSandboxes != nil); err != nil {

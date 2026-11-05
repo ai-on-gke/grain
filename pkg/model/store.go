@@ -606,6 +606,7 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 		return err
 	}
 
+	explicitWorkOrigin := t.WorkOrigin
 	if t.WorkOrigin == "" {
 		origin, err := originForNewTask(ctx, tx, t)
 		if err != nil {
@@ -618,6 +619,14 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 			return err
 		}
 		t.WorkOrigin = origin
+	}
+	t.ExternalRef = strings.TrimSpace(t.ExternalRef)
+	if existing == 0 && t.ExternalRef == "" {
+		extRef, err := externalRefForNewTask(ctx, tx, t, explicitWorkOrigin)
+		if err != nil {
+			return err
+		}
+		t.ExternalRef = extRef
 	}
 
 	oActor, oBehalf := t.Origin.Attribution.Actor, t.Origin.Attribution.OnBehalfOf
@@ -649,8 +658,8 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
   `+"`target_owner`, `target_name`, `binding`, `base`, `folder`"+`,
   `+"`auto_merge`, `auto_approve_proposals`, `created_at`, `order_key`, `sandbox_cpus`, `sandbox_memory_mb`, `sandbox_disk_gb`, `interactive`, `agent_framework`, `agent_backend_id`, `agent_model`, `prompt_extension`, `review_template_id`, `network_access`, `nothing_needed_action`, `creator`, `time_zone`, `issue`, `no_port`, `agent_model_source`, `origin_ref`, `resume_on_deadline`, `change_target_kind`, `change_target_spec`, `reviewers`, `priority`, `keep_running`"+`,
   `+"`origin_actor_source`, `origin_behalf_source`, `approval_actor_source`, `approval_behalf_source`, `filed_via`"+`,
-  `+"`owner`, `proposer_actor_kind`, `proposer_actor_id`, `proposer_actor_source`, `proposer_behalf_kind`, `proposer_behalf_id`, `proposer_behalf_source`, `proposer_task_id`, `proposer_run_id`"+`
-) VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?)`,
+  `+"`owner`, `proposer_actor_kind`, `proposer_actor_id`, `proposer_actor_source`, `proposer_behalf_kind`, `proposer_behalf_id`, `proposer_behalf_source`, `proposer_task_id`, `proposer_run_id`, `external_ref`"+`
+) VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Branch, string(t.Intent), t.Title, t.Body,
 		string(oActor.Kind), oActor.ID, kindOf(oBehalf), idOf(oBehalf), string(t.Origin.Reason),
 		aActorKind, aActorID, aBehalfKind, aBehalfID, timeOf(t.ApprovedAt), timeOf(t.DeferredAt), timeOf(t.DeferredUntil),
@@ -660,7 +669,7 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 		t.AgentFramework, t.AgentBackendID, t.Model, t.PromptExtension, t.ReviewTemplateID, string(t.NetworkAccess), string(t.NothingNeededAction), t.Creator, t.TimeZone, t.Issue, t.NoPort, string(t.ModelSource), string(t.WorkOrigin), t.ResumeOnDeadline,
 		changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(), joinCSV(NormalizeReviewers(t.Reviewers)), priority, t.KeepRunning,
 		string(oActor.Source), sourceOf(oBehalf), aActorSource, aBehalfSource, t.FiledVia,
-		t.Owner, string(pActor.Kind), pActor.ID, string(pActor.Source), pbKind, pbID, pbSource, t.Proposer.TaskID, t.Proposer.RunID,
+		t.Owner, string(pActor.Kind), pActor.ID, string(pActor.Source), pbKind, pbID, pbSource, t.Proposer.TaskID, t.Proposer.RunID, t.ExternalRef,
 	); err != nil {
 		return fmt.Errorf("writing task %s: %w", t.ID, err)
 	}
@@ -1218,7 +1227,7 @@ const taskColumns = "`id`,`branch`,`intent`,`title`,`body`," +
 	"`auto_merge`,`auto_approve_proposals`,`created_at`,`order_key`,`sandbox_cpus`,`sandbox_memory_mb`,`sandbox_disk_gb`,`interactive`," +
 	"`agent_framework`,`agent_backend_id`,`agent_model`,`prompt_extension`,`review_template_id`,`network_access`,`nothing_needed_action`,`creator`,`time_zone`,`issue`,`no_port`,`agent_model_source`,`origin_ref`,`resume_on_deadline`,`change_target_kind`,`change_target_spec`,`reviewers`,`priority`,`keep_running`," +
 	"`origin_actor_source`,`origin_behalf_source`,`approval_actor_source`,`approval_behalf_source`,`filed_via`," +
-	"`owner`,`proposer_actor_kind`,`proposer_actor_id`,`proposer_actor_source`,`proposer_behalf_kind`,`proposer_behalf_id`,`proposer_behalf_source`,`proposer_task_id`,`proposer_run_id`"
+	"`owner`,`proposer_actor_kind`,`proposer_actor_id`,`proposer_actor_source`,`proposer_behalf_kind`,`proposer_behalf_id`,`proposer_behalf_source`,`proposer_task_id`,`proposer_run_id`,`external_ref`"
 
 // scanTask reads one task row. It takes the Scan method rather than a
 // *sql.Row or *sql.Rows so one function serves both the single-row and
@@ -1240,7 +1249,7 @@ func scanTask(scan func(...any) error) (Task, error) {
 		&t.AutoMerge, &t.AutoApproveProposals, &createdAt, &t.OrderKey, &t.SandboxCPUs, &t.SandboxMemoryMB, &t.SandboxDiskGB, &t.Interactive,
 		&t.AgentFramework, &t.AgentBackendID, &t.Model, &t.PromptExtension, &t.ReviewTemplateID, &networkAccess, &nothingNeeded, &t.Creator, &t.TimeZone, &t.Issue, &t.NoPort, &modelSource, &workOrigin, &t.ResumeOnDeadline, &ctKind, &ctSpec, &reviewers, &t.Priority, &t.KeepRunning,
 		&oaSource, &obSource, &aaSource, &abSource, &t.FiledVia,
-		&t.Owner, &paKind, &paID, &paSource, &pbKind, &pbID, &pbSource, &pTaskID, &pRunID); err != nil {
+		&t.Owner, &paKind, &paID, &paSource, &pbKind, &pbID, &pbSource, &pTaskID, &pRunID, &t.ExternalRef); err != nil {
 		return Task{}, err
 	}
 	if paKind != "" || paID != "" || pTaskID != "" || pRunID != "" {
