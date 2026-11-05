@@ -4703,18 +4703,21 @@ install_hostd_version() {
   # (Its closing brace is indented: the tests read setup.sh's own
   # functions up to the first one that is not.)
   local version="\$1" stage="\${2:-}" dir="${HOSTD_VERSIONS_DIR}" previous="" name
-  # Held until current has moved: the new version's directory is itself
-  # a change grain-hostd-upgrade.path sees, and the upgrade script it
-  # starts takes this lock before reading current. Without it that run
-  # could read the old link, find hostd already on it and exit, while the
-  # rename's own trigger and the start below merge into the same run and
-  # are lost: hostd would stay on the old binary. Beside the versions
-  # directory rather than in it, so taking it is not a change there.
-  install -d -m0755 "\$dir"
+  # Held until current has moved: touching \$dir (install -d fires
+  # IN_ATTRIB even when \$dir already exists) or making the new version's
+  # directory is itself a change grain-hostd-upgrade.path sees, and the
+  # upgrade script it starts takes this lock before reading current.
+  # Without it that run could read the old link, find hostd already on it
+  # and exit, while the rename's own trigger and the start below merge
+  # into the same run and are lost: hostd would stay on the old binary.
+  # Beside the versions directory rather than in it, so taking it is not
+  # a change there.
+  install -d -m0755 "\$(dirname "\$dir")"
   if command -v flock >/dev/null 2>&1; then
     exec 9>"\$dir.lock"
     flock 9
   fi
+  install -d -m0755 "\$dir"
   # A version already here -- the one a rollback returns to -- is the
   # same image's grain, and may be the file a hostd is running: it is
   # pointed at again, never written over.
@@ -7579,31 +7582,42 @@ write_hostd_upgrade_script() {
 # Written by scripts/setup.sh (write_hostd_upgrade_script); run by
 # grain-hostd-upgrade.service when ${HOSTD_VERSIONS_DIR}/current moves.
 set -uo pipefail
-# The extractor holds this lock from making a new version's directory
-# (a change that starts this script) until it has moved current
-# (install_hostd_version): read current under it, or this run can see
-# the link before it moves and miss the upgrade.
-if command -v flock >/dev/null 2>&1; then
-  exec 9>"${HOSTD_VERSIONS_DIR}.lock" && flock 9
-fi
-current="\$(readlink -f "${HOSTD_VERSIONS_DIR}/current/grain")"
-exec 9>&-
-# The new build's own capabilities entries first, whether or not hostd
-# needs draining onto it (write_hostd_allowlist_unit).
-systemctl start grain-hostd-allowlist.service || true
-pid="\$(systemctl show -p MainPID --value grain-hostd.service)"
-if [ -z "\$pid" ] || [ "\$pid" = 0 ]; then
-  exit 0
-fi
-running="\$(readlink "/proc/\$pid/exe" 2>/dev/null || true)"
-if [ "\$running" = "\$current" ]; then
-  exit 0
-fi
-echo "grain hostd (pid \$pid) runs \${running:-an unknown binary}; draining it onto \$current"
-if ! runuser -u "${GRAIN_USER}" -- "\$current" hostd -drain -socket "${HOSTD_SOCKET}"; then
-  echo "grain hostd did not take a drain (it predates draining); restarting it onto \$current"
-  systemctl restart grain-hostd.service
-fi
+# Re-read current on each pass: if current moves while this oneshot unit
+# is running grain-hostd-allowlist.service or draining hostd, systemd
+# folds both grain-hostd-upgrade.path's trigger and the extractor's
+# systemctl start --no-block into this already-activating run. Looping
+# until current settles keeps that second move from being lost.
+seen=""
+while :; do
+  # The extractor holds this lock from touching the versions directory
+  # until it has moved current (install_hostd_version): read current
+  # under it, or this run can see the link before it moves.
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"${HOSTD_VERSIONS_DIR}.lock" && flock 9
+  fi
+  current="\$(readlink -f "${HOSTD_VERSIONS_DIR}/current/grain")"
+  exec 9>&-
+  if [ -z "\$current" ] || [ "\$current" = "\$seen" ]; then
+    exit 0
+  fi
+  seen="\$current"
+  # The new build's own capabilities entries first, whether or not hostd
+  # needs draining onto it (write_hostd_allowlist_unit).
+  systemctl start grain-hostd-allowlist.service || true
+  pid="\$(systemctl show -p MainPID --value grain-hostd.service)"
+  if [ -z "\$pid" ] || [ "\$pid" = 0 ]; then
+    continue
+  fi
+  running="\$(readlink "/proc/\$pid/exe" 2>/dev/null || true)"
+  if [ "\$running" = "\$current" ]; then
+    continue
+  fi
+  echo "grain hostd (pid \$pid) runs \${running:-an unknown binary}; draining it onto \$current"
+  if ! runuser -u "${GRAIN_USER}" -- "\$current" hostd -drain -socket "${HOSTD_SOCKET}"; then
+    echo "grain hostd did not take a drain (it predates draining); restarting it onto \$current"
+    systemctl restart grain-hostd.service
+  fi
+done
 SCRIPT
   chmod 0755 "$HOSTD_UPGRADE_SCRIPT"
 }

@@ -107,13 +107,17 @@ type Scope struct {
 	TaskReadRepos     map[string]bool
 	MayReadFullConfig bool
 	MayReadAllMemory  bool
-	MayReadMetrics    bool
-	MayReadPipeline   bool
-	MayReadHealth     bool
-	MayReadGrainLog   bool
-	MayReadPlaybooks  bool
-	MayReadIssues     bool
-	MayReadDB         bool
+	// MemoryReadRepos are the repositories whose memory layers this scope
+	// may read under memory://repos/ without MayReadAllMemory: the ones an
+	// api:memory:read@owner/repo grant names.
+	MemoryReadRepos  map[string]bool
+	MayReadMetrics   bool
+	MayReadPipeline  bool
+	MayReadHealth    bool
+	MayReadGrainLog  bool
+	MayReadPlaybooks bool
+	MayReadIssues    bool
+	MayReadDB        bool
 	// MergeQueueByCI limits deploy://merge-queue to the repositories
 	// PermitsCI allows: a caller reaching it under ci:read rather than
 	// deployment:read (GET /api/fs/deploy/merge-queue).
