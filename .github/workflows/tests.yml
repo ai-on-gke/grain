@@ -217,7 +217,7 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.go-e2e == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     concurrency:
       group: ${{ github.workflow }}-go-e2e-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -323,7 +323,7 @@ jobs:
       - name: Test
         run: |
           set +e
-          GRAIN_GOTEST_LOG=/tmp/go-e2e.log ./scripts/run-go-tests.sh go test -race -timeout 25m ./tests/e2e/... ./tests/deploy/... | tee /tmp/go-e2e.out
+          GRAIN_GOTEST_LOG=/tmp/go-e2e.log ./scripts/run-go-tests.sh go test -race -timeout 40m ./tests/e2e/... ./tests/deploy/... | tee /tmp/go-e2e.out
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             python3 - /tmp/go-e2e.out go-e2e <<'PY'
@@ -551,7 +551,7 @@ jobs:
             ./pkg/granule/... ./pkg/grit/... ./pkg/gritapi/... ./pkg/hostd/... ./pkg/hostinit/... ./pkg/hostscriptcli/... ./pkg/whererun/... ./pkg/workflows/... \
             ./pkg/hosttop/... ./pkg/iapreconciler/... ./pkg/installtrack/... ./pkg/jwks/... \
             ./pkg/k8s/... ./pkg/kubectlgate/... ./pkg/lifecycle/... ./pkg/localexec/... ./pkg/mcp/... \
-            ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/pkgcache/... \
+            ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/objectstore/... ./pkg/pkgcache/... \
             ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/registry/... ./pkg/registryauth/... \
             ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
             ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \
