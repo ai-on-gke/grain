@@ -55,6 +55,8 @@ export default function EditTaskForm({
 }) {
   const [title, setTitle] = useState(t.title);
   const [description, setDescription] = useState(t.description || "");
+  const savedExternalRef = t.externalRef || "";
+  const [externalRef, setExternalRef] = useState(savedExternalRef);
   // The review attached to this task (grain/task-284). Editable here and
   // not only on the new-task form because this is where the decision
   // usually gets made: a task is filed, and somewhere between queued and
@@ -137,6 +139,7 @@ export default function EditTaskForm({
   const isDirty = () => {
     if (title !== t.title) return true;
     if (description !== (t.description || "")) return true;
+    if (externalRef.trim() !== savedExternalRef) return true;
     if (reviewTemplateId !== (t.reviewTemplateId || "")) return true;
     if (reviewers !== savedReviewers) return true;
     if (owner.trim() !== savedOwner) return true;
@@ -176,6 +179,9 @@ export default function EditTaskForm({
           body: JSON.stringify({
             title,
             description,
+            ...(externalRef.trim() !== savedExternalRef
+              ? { externalRef: externalRef.trim() }
+              : {}),
             reviewTemplateId,
             ...(reviewers !== savedReviewers
               ? { reviewers: parsedReviewers }
@@ -224,6 +230,15 @@ export default function EditTaskForm({
         onChange={(e) => setDescription(e.target.value)}
         multiline
         minRows={5}
+        fullWidth
+        size="small"
+      />
+      <TextField
+        label="External ref"
+        placeholder="CA-204"
+        value={externalRef}
+        onChange={(e) => setExternalRef(e.target.value)}
+        helperText="work identifier from an external planning tool, inherited by spawned tasks"
         fullWidth
         size="small"
       />

@@ -94,7 +94,12 @@ func CheckUIRequireIAP(cfg Config) error {
 // mode is gone -- see this file's own doc comment), it always has that
 // directory to hand; there is no longer a cross-process case where it
 // would not.
-func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir string, sandboxes orchestrator.Sandboxes, live *LiveConfig, pkgCache *PackageCache, actionsCache *ActionsCache, stateRepo ui.StateRepoManager, settingsRepo func() model.RepoRef, forbidden *gitproxy.ForbiddenSet, upgrader *upgrade.Upgrader, secretStore *secrets.Store) (stop func(context.Context) error, err error) {
+func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB, transcriptDir string, sandboxes orchestrator.Sandboxes, live *LiveConfig, pkgCache *PackageCache, actionsCache *ActionsCache, stateRepo ui.StateRepoManager, settingsRepo func() model.RepoRef, forbidden *gitproxy.ForbiddenSet, upgrader *upgrade.Upgrader, secretStore *secrets.Store) (stop func(context.Context) error, err error) {
+	defer func() {
+		if err != nil && uiLn != nil {
+			_ = uiLn.Close()
+		}
+	}()
 	// The credential ladder run() already loaded, not a second copy of
 	// it: this is the one Settings checks targetRepos against to flag
 	// bwsalmon/agents#427's drift before a push ever reaches the proxy
@@ -318,7 +323,13 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// able to override this deployment's framework both formats can
 		// be in this one directory at once -- so the reader wired here
 		// picks between them per file rather than per deployment.
-		LiveTranscripts: LiveTranscriptDir(transcriptDir),
+		LiveTranscripts: LiveTranscriptDirWithStore(transcriptDir, cfg.transcriptObjects),
+		ArchivedTranscripts: func() ui.ArchivedTranscript {
+			if cfg.transcriptObjects == nil {
+				return nil
+			}
+			return cfg.transcriptObjects
+		}(),
 		// orchestrator.ChecksUnavailable reads process-lifetime state
 		// RunCycle's own reconcile loop sets the first time GitHub 403s a
 		// check-runs read against this deployment's credential -- see its
@@ -673,14 +684,13 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	// (startGitProxy), which comes up after this server does.
 	srv.SetNamespace(liveNamespace.Load)
 
-	// Loopback listener without HostGuard for capability servers (host-script
-	// approve: true) to request, wait on, and expire per-call approvals under
-	// their minted task-scoped ghsa_ bearer tokens.
-	callbackLn, err := net.Listen("tcp", "127.0.0.1:0")
+	// Loopback listener for capability servers (host-script approve: true)
+	// to request, wait on, and expire per-call approvals under their minted
+	// task-scoped ghsa_ bearer tokens (localScriptCallbackServer).
+	callbackSrv, callbackLn, err := localScriptCallbackServer(srv)
 	if err != nil {
-		return nil, fmt.Errorf("listening for local-script approval callbacks: %w", err)
+		return nil, err
 	}
-	callbackSrv := &http.Server{Handler: srv, ReadHeaderTimeout: 30 * time.Second}
 	localScriptApprovalURL.Store("http://" + callbackLn.Addr().String())
 	go func() {
 		_ = callbackSrv.Serve(callbackLn)
@@ -688,11 +698,15 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 
 	var httpSrv *http.Server
 	if cfg.UiAddr != "" {
-		ln, err := net.Listen("tcp", cfg.UiAddr)
-		if err != nil {
-			localScriptApprovalURL.Store("")
-			_ = callbackSrv.Close()
-			return nil, fmt.Errorf("listening on %s: %w", cfg.UiAddr, err)
+		ln := uiLn
+		uiLn = nil
+		if ln == nil {
+			ln, err = net.Listen("tcp", cfg.UiAddr)
+			if err != nil {
+				localScriptApprovalURL.Store("")
+				_ = callbackSrv.Close()
+				return nil, fmt.Errorf("listening on %s: %w", cfg.UiAddr, err)
+			}
 		}
 		url := "http://" + ln.Addr().String()
 		log.Printf("grain daemon: serving the UI/API on %s as %s", url, uiCfg.Actor.ID)
@@ -764,6 +778,27 @@ func lastRestart(store *model.Store, upgrader *upgrade.Upgrader,
 		}
 		return restartAdoption(orchestrator.UpgradeAdoption(ctx, store, adoption, status, time.Now().UTC()))
 	}
+}
+
+// localScriptCallbackAddr is where the local-script approval callback
+// listener binds: loopback only, on a port the kernel picks.
+const localScriptCallbackAddr = "127.0.0.1:0"
+
+// localScriptCallbackServer opens the second listener startUIServer runs:
+// a loopback one whose address is published as the approval-callback base
+// URL (localScriptApprovalURL) that localexec.HTTPApprover dials. It
+// serves the whole UI handler, so it is guarded the way the -ui-addr
+// listener is: HostGuard refuses a Host naming a domain this daemon does
+// not answer to with 421, which is what keeps a DNS-rebound page that
+// found the port by scanning from reaching it (grain#2380). HTTPApprover
+// sends the IP-literal Host of that URL, which HostGuard always allows.
+func localScriptCallbackServer(handler http.Handler) (*http.Server, net.Listener, error) {
+	ln, err := net.Listen("tcp", localScriptCallbackAddr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("listening for local-script approval callbacks: %w", err)
+	}
+	srv := &http.Server{Handler: ui.HostGuard(handler, localScriptCallbackAddr, nil), ReadHeaderTimeout: 30 * time.Second}
+	return srv, ln, nil
 }
 
 // restartAdoption is report in the shape the upgrade pane reads, or nil.

@@ -16,27 +16,38 @@ credential decides whether it holds. See
 The equivalent CLI is:
 
 ```sh
-grain repo ci-capabilities -set gcp-key,github-sandbox bwsalmon/grain
+grain repo ci-capabilities -set github-sandbox bwsalmon/grain
 grain repo ci-capabilities bwsalmon/grain
 grain repo ci-capabilities -set '' bwsalmon/grain
 ```
 
 The API is `GET` / `PUT /api/repos/{owner}/{name}/ci-capabilities`, with a PUT
-body such as `{"ciCapabilities":["gcp-key","github-sandbox"]}`. The database
+body such as `{"ciCapabilities":["github-sandbox"]}`. The database
 stores the list in `repo_config.ci_capabilities`; existing databases migrate to
 an empty list. State/settings exports preserve it with the other repo settings.
 
-CI supports capabilities that mint leased sandbox material (GCP keys, Gemini
-keys, temporary GitHub repositories, and Claude/OpenAI/Gemini proxies) and the
-release-only publishing credentials described below.
+What this list grants today is the legacy in-process providers that remain
+(`github-sandbox`, a temporary GitHub repository) and the release-only
+publishing credentials of grain's in-process release server described below
+(`model.CIGrantRule.RepoGranted`). Capability references are not granted
+here: GCP keys (`https://grain.dev/capabilities/gcp#gcp-key`), Gemini keys
+(`…/gcp#gemini-key`) and the model proxies
+(`https://grain.dev/capabilities/model-proxy#model-proxy` `{vendor}`) are
+references since schema migrations 97, 100 and 103, and a job gets one only by
+declaring it, with the deployment's capability policy deciding
+([Capability servers](#capability-servers)). Those migrations rewrote the
+retired bare names in this list too. A reference here is not handed to a job
+that does not declare it, so such an entry can be removed.
 Agent-only MCP tools and named Git credential selectors are not offered.
 Configure the providers in Settings first. Missing or refused providers fail
 job preparation and report the capability's error before workflow steps run.
 
-A job that needs GCP access in a project other than the deployment
-pool's is granted one of the deployment's named GCP keys,
-`gcp-key:<name>`, here instead. See [GCP keys](team-gcp-keys.md) for the
-setup.
+A job that needs GCP access in a particular project declares the gcp
+server's method with the permission set for it,
+`{capability: "https://grain.dev/capabilities/gcp#gcp-key", with: {permission_set: <name>}}`.
+Migration 97 turned each of the deployment's named GCP keys (the retired
+`gcp-key:<name>`) into a permission set of that name. See
+[gcp-key-permission-sets.md](gcp-key-permission-sets.md) for the setup.
 
 `image-signing`, `registry-push` and `package-publish` are methods of grain's
 in-process release server, `https://grain.dev/capabilities/release#<name>`
@@ -81,18 +92,21 @@ the same:
 | --- | --- |
 | no `capabilities:` key | **everything** this list grants the repository -- what every job got before the key existed |
 | `capabilities: []` | **nothing** from this list (only what it names under `optional-capabilities:` and is granted) |
-| `capabilities: [gcp-key]` | exactly what it names; a name this list does not grant means the job does not run, and says which |
+| `capabilities: [github-sandbox]` | exactly what it names; a name this list does not grant means the job does not run, and says which |
 
-A job given a capability mints its material at admission -- a GCP
-service-account key, a Gemini key -- and queues for it where the provider's
-pool is finite, whether or not its steps ever read it. So a job that uses no
+The table is about this list. Capability references, repository access and
+`api:` grants are granted by being declared, whichever case applies, and a job
+that does not declare one never gets it. A job given a capability mints its
+material at admission and queues for it where the pool is finite, whether or
+not its steps ever read it. So a job that uses no
 credential should say `capabilities: []`: on 2026-10-23 every job of
 `.grain/workflows/tests.yml` omitted the key and minted a `gcp-key` and a
 `gemini-key` per job, which exhausted the GCP key pool and IAM's write quota.
-This repository's own workflows now declare `capabilities: []` on every job
-that uses none, and `gcp-smoke.yml`'s `smoke` job is the one that asks for
-a GCP key -- as the gcp server's reference
-`https://grain.dev/capabilities/gcp#gcp-key`, not the legacy `gcp-key`.
+That was before `gcp-key` and `gemini-key` became references, which a job now
+has to declare. This repository's own workflows declare `capabilities: []` on
+every job that uses none, and `gcp-smoke.yml`'s `smoke` job is the one that
+asks for a GCP key, as the gcp server's reference
+`https://grain.dev/capabilities/gcp#gcp-key`.
 
 Repository access (`repo#read` / `repo#write` `{repo}`, or `repo-read:` /
 `repo-write:`) and capability references
@@ -103,18 +117,33 @@ absent key and hands the job the whole set, as before.
 
 ## Capability servers
 
-The providers on this page are the in-process ones in `pkg/capability/`, and
-CI keeps using them until runs are moved over to capability servers
-([design/spec/capabilities/capabilities.spec.md](../design/spec/capabilities/capabilities.spec.md)). Their capability-server
-equivalents are already in the binary, served by `grain capability <name>`:
-`gcp` (`#gcp-key`, for `gcp-key` and `gcp-key:<name>`), `git`
-(`#git-repo`, for repository access), `self-debug` and `skill`. In a
-`.grain/workflows` job they will be granted as references such as
-`https://github.com/ai-on-gke/grain/capabilities/gcp#gcp-key` with `with:`
-arguments; the arguments, the environment each server reads its credential
-from, and what each mint places are in
+A job's capability references are minted through capability servers
+([design/design/capabilities.design.md](../design/design/capabilities.design.md),
+[design/spec/capabilities/capabilities.spec.md](../design/spec/capabilities/capabilities.spec.md)):
+the built-in stdio servers (`https://grain.dev/capabilities/gcp#gcp-key` and
+`#gemini-key`, `…/git#git-repo`, `…/config-map#config-map`,
+`…/host-script#host-script`; a CI job is refused host-script grants converted
+from `local-scripts`), grain's in-process servers (`…/model-proxy`,
+`…/release`, `…/repo`, `…/grain`), and any server an operator attached. A job
+names them with `with:` arguments, as a reference string or a
+`{capability, with}` object:
+
+```yaml
+jobs:
+  smoke:
+    capabilities:
+      - https://grain.dev/capabilities/gcp#gcp-key
+      - capability: https://grain.dev/capabilities/model-proxy#model-proxy
+        with: {vendor: openai}
+```
+
+The arguments, the environment each built-in reads its credential from, and
+what each mint places are in
 [docs/capabilities.md](capabilities.md#in-tree-capability-servers-grain-capability-name).
-A job naming a reference already has it minted before its sandbox is
+The few providers still in `pkg/capability/` (`github-sandbox`, the
+`release-gate-read` alias) are granted the older way, from this repository's
+list or by declaring the alias.
+A job naming a reference has it minted before its sandbox is
 built, through the server attached for it in `mcpServers`: the reference
 need not be in the repository's CI capabilities, the deployment's
 `capability_policy` decides instead (as run kind `ci`, with the run's
@@ -123,7 +152,7 @@ and the grants are released when the job ends. What a mint returns is
 carried into the job's sandbox after its checkout and before its first
 step: ports forwarded, placements written, setup commands run (a failing
 one concludes the job `errored`, quoting its output as the server's), and
-each `mcp_endpoint` (`self-debug`) proxied, forwarded into the sandbox over
+each `mcp_endpoint` (a per-attempt MCP toolset) proxied, forwarded into the sandbox over
 the capability port relay and listed in `/home/debian/.grain/mcp.json`
 (spec §5.2.4) as `{"mcpServers": {"<name>": {"type": "http", "url":
 "http://127.0.0.1:<port>/<secret>/mcp"}}}`. Ports and endpoints both reach
@@ -137,8 +166,9 @@ The model proxies are retired onto grain's in-process
 `https://grain.dev/capabilities/model-proxy#model-proxy` `{vendor}`
 (schema migration 100 rewrote stored `claude-proxy`, `openai-proxy` and
 `gemini-proxy`, `repo_config.ci_capabilities` included). It forwards with
-the run's own team connection, as the in-process providers did; the bare
-names remain one-release aliases.
+the run's own team connection, as the retired providers did. The bare
+names remain one-release aliases, and as references they reach only a job
+that declares them.
 
 ## Which trees are trusted with them
 
@@ -349,11 +379,14 @@ jobs:
   those it is granted and nothing else, not the repository's whole set.
 - A job that declares nothing still gets the repository's whole set, **except**
   the scarce capabilities -- those whose provider mints a finite external
-  credential at admission (`model.ScarceResourceProvider`: `gcp-key`,
-  `gcp-key:<name>`, `gemini-key`). A job gets one of those only by naming it
-  under `capabilities:` or `optional-capabilities:`. Handing them to every
-  undeclared job minted and deleted a service-account key per job of every
-  run, which exhausted IAM's per-minute write quota (grain/task-281).
+  credential at admission (`model.ScarceResourceProvider`). A job gets one of
+  those only by naming it under `capabilities:` or `optional-capabilities:`.
+  Handing them to every undeclared job minted and deleted a service-account
+  key per job of every run, which exhausted IAM's per-minute write quota
+  (grain/task-281). The providers that were scarce, `gcp-key`, `gcp-key:<name>`
+  and `gemini-key`, have been retired onto `…/gcp` references, which are
+  declared-only anyway. No registered provider is scarce today, but the rule
+  stays for any that marks itself.
 - A name cannot be in both lists, and `repo-read:`/`repo-write:` cannot be
   optional: declaring repository access is what grants it, so it belongs under
   `capabilities:`.
@@ -418,7 +451,7 @@ grain repo ci-capabilities -set registry-push bwsalmon/grain
 ```
 
 Each job gets separate material at the same paths used by agent runs. For
-example, a workflow using the OpenAI proxy can run:
+example, a workflow that declares the OpenAI model proxy (above) can run:
 
 ```yaml
 steps:
@@ -433,11 +466,13 @@ Other paths are `/home/debian/.gcp-service-account.json`,
 `/home/debian/.github-sandbox-repo`. On the host backend these absolute guest
 paths are placed relative to the sandbox root, as for agent runs.
 
-`/home/debian/.gcp-service-account.json` is the deployment `gcp-key`'s key
-only. A named key, `gcp-key:<name>`, lands at
-`/home/debian/.gcp-service-account-<name>.json` (`gcpkey.KeyPath`), so a job
-granted `gcp-key` and `gcp-key:deploy`, or two named keys, gets every key in a
-file of its own rather than only whichever was placed last.
+`/home/debian/.gcp-service-account.json` is the primary `…/gcp#gcp-key`
+grant's key. A grant with `primary: false` lands at
+`/home/debian/.gcp-keys/<set>.json`, and a permission set migration 97 made
+from a named key keeps that key's old path,
+`/home/debian/.gcp-service-account-<name>.json` (`gcpkey.KeyPath`). So a job
+holding several sets gets every key in a file of its own rather than only
+whichever was placed last.
 
 Workflow YAML, a caller's task capabilities and the repository's own files
 cannot widen the set. The set is an operator's, as above, and only an
@@ -499,8 +534,9 @@ Like repository access, a job gets api grants by declaring them
 (`capabilities: [release-gate-read]`), and they are not granted from this
 list. They are CI-only in this form. Like `repo-write`, they are released
 only to a `release`, a `workflow_dispatch` and a cron grain fires itself.
-They are honoured only for jobs of `bwsalmon/grain`, since the state they
-read belongs to the whole deployment, and a dangerous scope is refused
+They are honoured only for jobs of grain's own repository
+(`model.GrainSourceRepo`, `ai-on-gke/grain`, unless the provider is configured
+with others), since the state they read belongs to the whole deployment, and a dangerous scope is refused
 outright.
 
 ## Repository access: declared in the repository, enforced by the team's credential
@@ -602,7 +638,8 @@ Both are gone:
 - A job that relied on such an entry without declaring it must now
   declare it in its workflow file. Its team must also have a credential
   that can reach the repository.
-- Everything else in this list, such as `gcp-key`, `gemini-key`,
+- Everything else in this list, such as `github-sandbox`,
   `package-publish`, `registry-push` and release secrets, is a
   deployment-owned credential that belongs to no team. Those are still
-  the operator's to grant here.
+  the operator's to grant here. (`gcp-key` and `gemini-key` were here too,
+  until they became `…/gcp` references that a job declares.)

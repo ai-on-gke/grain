@@ -2049,6 +2049,18 @@ function AppContent({ onReload = () => window.location.reload() }) {
     },
     [narrow, setViewAndCloseOpen],
   );
+  const showExternalRef = useCallback(
+    (ref) => {
+      closeDetail();
+      setStateFilter("all");
+      setViewAndCloseOpen("tasks");
+      narrow({
+        search: "",
+        filters: [{ attr: "externalRef", op: "any", values: [ref] }],
+      });
+    },
+    [closeDetail, narrow, setViewAndCloseOpen],
+  );
   // A named run opens over whichever page named it. With no run id this
   // remains the trip to the deployment-wide listing, optionally narrowed
   // to a repo for RepoRuns' "All runs" link.
@@ -4039,6 +4051,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
               onClose={closeDetail}
               onOpenTask={openTask}
               onNewTaskFrom={openNewTaskWithFields}
+              onFilterExternalRef={showExternalRef}
               onOpenCIRun={openCIRun}
               onOpenSuiteRun={openSuiteRun}
               act={act}

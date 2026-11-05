@@ -84,6 +84,7 @@ With `-json` it prints the `ui.Task` array.
 | `-capability` | string |  |  | shorthand for -filter capability:any:VALUE (or "none" for the tasks carrying none) |
 | `-closed` | bool |  |  | list closed tasks too (-closed=false to leave them out where the deployment shows them by default) |
 | `-deferred` | bool |  |  | list deferred tasks too |
+| `-external-ref` | string |  |  | shorthand for -filter externalRef:any:VALUE (e.g. CA-204, or "none" for tasks with no external reference) |
 | `-filter` | value |  |  | only tasks matching this condition, written attribute:comparison:value -- repeatable, and every one of them has to hold |
 | `-interactive` | bool |  |  | only live chats (-interactive=false for only background tasks) |
 | `-origin` | string |  |  | shorthand for -filter origin:any:VALUE (hand, external, proposed, schedule, suite, fix, review) |
@@ -137,6 +138,7 @@ Calls `POST /api/tasks` (`HTTPClient.CreateTask`) and prints the new task.
 | `-capability` | value |  |  | capability to attach (repeatable): a capability ID, a capability reference (https://...[#method]), or a reference with its arguments as ref={json} |
 | `-depends-on` | value |  |  | task this one must wait on before it is dispatched -- 12, #12, task-12, grain/task-12 or the task's page URL (repeatable) |
 | `-design` | value |  |  | committed-context path ([owner/name:]path[@rev]) this task implements, pinned to a commit SHA (repeatable) |
+| `-external-ref` | string |  |  | external work reference (e.g. CA-204), inherited by tasks spawned from this one |
 | `-field` | value |  |  | name=value for one of the fields this deployment declares (repeatable; "name=" clears it, and a field holding a set takes the flag more than once or a comma-separated list) |
 | `-interactive` | bool |  |  | file this as a live chat rather than a change to run unattended (bwsalmon/agents#539); implies -approve and dispatches ahead of the backlog |
 | `-issue` | int |  |  | GitHub issue number associated with this task |
@@ -168,6 +170,7 @@ Calls `PATCH /api/tasks/{id}` (`UpdateTask`) and prints the task the `PATCH` ret
 | `-connection` | string |  |  | ID of the one connection this task's next run must use -- empty takes the pin off; pass it with -model when the pinned connection does not serve the new model |
 | `-depends-on` | value |  |  | task this one must wait on before it is dispatched -- 12, #12, task-12, grain/task-12 or the task's page URL (repeatable) |
 | `-design` | value |  |  | committed-context path ([owner/name:]path[@rev]) this task implements (repeatable) -- replaces the whole set; pass -design "" to clear |
+| `-external-ref` | string |  |  | new external work reference (e.g. CA-204) -- empty clears it |
 | `-field` | value |  |  | name=value for one of the fields this deployment declares (repeatable; "name=" clears it, and a field holding a set takes the flag more than once or a comma-separated list) |
 | `-issue` | int |  |  | new associated GitHub issue number |
 | `-model` | string |  |  | model this task's next run asks for (Settings -> Models) -- empty takes the deployment's default |
@@ -1276,6 +1279,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-model-proxy-slot-wait` | duration | `1m0s` |  | how long a request over -model-proxy-max-concurrent waits for a slot before its 429, so stock vendor clients ride out the cap. 0 means the default; a negative duration, such as -1s, refuses at once |
 | `-model-proxy-unrestricted` | bool |  |  | let the model proxies forward every method, path and query parameter of a vendor's API with this deployment's credential, rather than only its model-inference endpoints (messages, responses, chat completions, generateContent and the model listings). Off by default: a sandbox token then cannot reach a vendor's files, batch, fine-tuning or organization APIs. Turn it on only for a deployment whose runs deliberately need those |
 | `-native-sandboxes` | bool | `true` |  | enable native sandboxes on this host; set to false to disable native sandboxes |
+| `-object-store` | string |  | $GRAIN_OBJECT_STORE | object store URI (gs://<bucket>/instances/<name>/ or file:///abs/dir) for flushing run transcripts, uploaded CI artifacts, and durable agent-sessions archives with local read-through caching (defaults to $GRAIN_OBJECT_STORE) |
 | `-openai-api-key-file` | string |  |  | file holding the OpenAI API key the agent authenticates as, passed to the codex subprocess as OPENAI_API_KEY. Optional, and the exact counterpart of the two files above: the UI stores one as the "openai-api-key" secret and that wins over this file |
 | `-package-cache-apt-upstream` | value |  |  | fetch one intercepted archive from a mirror instead of from itself, as "archive-host=base-url" (deb.debian.org=http://mirror.internal/debian) -- repeat for each. The host is one this cache already serves, and is what sandboxes go on asking for; the URL is what this service fetches from, with the request's own path appended. An archive not named here is fetched from itself |
 | `-package-cache-dir` | string |  |  | root directory for the package cache -- defaults to <sandbox-dir>/cache/packages when -sandbox-dir is set, and <data-dir>/cache/packages otherwise |

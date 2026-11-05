@@ -126,6 +126,7 @@ func cmdCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	resolveChangeTarget := bindChangeTargetFlags(fs)
 	base := fs.String("base", "", "base branch, if not the target repo's default")
 	issue := fs.Int("issue", 0, "GitHub issue number associated with this task")
+	externalRef := fs.String("external-ref", "", "external work reference (e.g. CA-204), inherited by tasks spawned from this one")
 	var autoMerge bool
 	fs.BoolVar(&autoMerge, "auto-merge", false, "merge this task's pull request automatically once it reads clean")
 	var capabilities stringList
@@ -218,8 +219,9 @@ func cmdCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	req := ui.CreateTaskRequest{
 		ChangeTarget: changeTarget,
 		Title:        *title, Description: description, Repo: *repo, NoRepo: *noRepo, Base: *base,
-		Issue:     *issue,
-		AutoMerge: autoMerge, Reads: reads, Writes: writeTargets, Approved: *approve, AtFront: atFront,
+		Issue:       *issue,
+		ExternalRef: strings.TrimSpace(*externalRef),
+		AutoMerge:   autoMerge, Reads: reads, Writes: writeTargets, Approved: *approve, AtFront: atFront,
 		Priority:    priorityOpt,
 		Interactive: *interactive, Attachments: attachments,
 		ReviewTemplateID: *reviewTemplate, CustomFields: customFields,
@@ -303,6 +305,7 @@ func cmdUpdate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	owner := fs.String("owner", "", "transfer task ownership to this account")
 	base := fs.String("base", "", "new base branch")
 	issue := fs.Int("issue", 0, "new associated GitHub issue number")
+	externalRef := fs.String("external-ref", "", "new external work reference (e.g. CA-204) -- empty clears it")
 	var autoMerge bool
 	fs.BoolVar(&autoMerge, "auto-merge", false, "whether the task auto-merges once clean")
 	var reads stringList
@@ -397,6 +400,9 @@ func cmdUpdate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		case "issue":
 			v := *issue
 			req.Issue = &v
+		case "external-ref":
+			v := strings.TrimSpace(*externalRef)
+			req.ExternalRef = &v
 		case "auto-merge":
 			v := autoMerge
 			req.AutoMerge = &v

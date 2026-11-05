@@ -5009,20 +5009,37 @@ func recordRunEnd(ctx, finishCtx context.Context, store *model.Store, cfg Config
 			log.Printf("orchestrator: run %s: re-recording it as paused by a refusal burst: %v", runID, err)
 		}
 	}
-	if finishErr == nil && result != nil && result.Transcript != "" {
-		// A separate write, after FinishRun's own -- see
-		// Store.SetRunTranscript's own doc comment on why (bwsalmon/
-		// agents#446). Skipped once finishErr is already non-nil: a run
-		// whose own outcome failed to record is not worth a second write
-		// attempt on top of it.
-		//
+	var rawTranscriptPath string
+	if cfg.TranscriptDir != "" {
+		rawTranscriptPath = filepath.Join(cfg.TranscriptDir, runID)
+	}
+	var transcript string
+	if result != nil && result.Transcript != "" {
 		// Redacted first, of the values this run's sandbox carried from
 		// its operator's environment and of every recognizable token
 		// shape: run_command already cut them from what it returned, but
 		// the transcript also holds what the agent wrote itself and what
 		// every other tool returned, and this is the copy that outlives
 		// the run (GSA1-12).
-		transcript, _ := mcp.SandboxEnvRedactor(cfg.sandboxEnv).Text(result.Transcript)
+		transcript, _ = mcp.SandboxEnvRedactor(cfg.sandboxEnv).Text(result.Transcript)
+	}
+	savedToObjectStore := false
+	if cfg.TranscriptSink != nil && (rawTranscriptPath != "" || (finishErr == nil && transcript != "")) {
+		narrative := ""
+		if finishErr == nil {
+			narrative = transcript
+		}
+		saved, sinkErr := cfg.TranscriptSink.FlushRunEnd(finishCtx, runID, rawTranscriptPath, narrative)
+		if sinkErr != nil {
+			log.Printf("orchestrator: run %s: flushing transcript to object store: %v", runID, sinkErr)
+		}
+		savedToObjectStore = saved
+	}
+	if finishErr == nil && transcript != "" && !savedToObjectStore {
+		// A separate write, after FinishRun's own -- see
+		// Store.SetRunTranscript's own doc comment on why (bwsalmon/
+		// agents#446). Skipped once finishErr is already non-nil, or when
+		// TranscriptSink already persisted the narrative to the object store.
 		finishErr = store.SetRunTranscript(finishCtx, runID, transcript)
 	}
 	// The run's own census, from the one place it exists: agent.Result,

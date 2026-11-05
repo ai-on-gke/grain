@@ -101,6 +101,15 @@ var (
 	// falls back to a registry; the next check tries again.
 	errReleaseMidUpdate = errors.New("moving release is mid-update")
 
+	// errReleaseNotPublished marks an immutable release (vX.Y.Z,
+	// sha-<short>) that was tagged without its image assets -- its
+	// publisher writes every tag, and an empty release whose body says
+	// "tagged, not published", while asset publishing is off -- on a
+	// deployment that loads release assets with no registry to fall back
+	// to. It always travels with errNoReleaseImageAssets and names the
+	// newest release that was published.
+	errReleaseNotPublished = errors.New("release is not published")
+
 	// ErrImageSourceLocked is returned when SetImageSource is called on an
 	// Upgrader whose image source was locked by a daemon flag or environment variable.
 	ErrImageSourceLocked = errors.New("upgrade image source is set by a daemon flag or environment variable and cannot be modified")
@@ -489,10 +498,13 @@ type ReleaseManifestRole struct {
 }
 
 type githubRelease struct {
+	ID              int64                `json:"id"`
 	TagName         string               `json:"tag_name"`
 	TargetCommitish string               `json:"target_commitish"`
 	Draft           bool                 `json:"draft"`
 	Prerelease      bool                 `json:"prerelease"`
+	CreatedAt       string               `json:"created_at"`
+	Body            string               `json:"body"`
 	Assets          []githubReleaseAsset `json:"assets"`
 }
 
@@ -1070,6 +1082,11 @@ func (u *Upgrader) resolveRelease(ctx context.Context, branch string) (*resolved
 	}
 
 	var found bool
+	// moving is whether branch names a release re-pointed in place
+	// (channel-<branch>, latest) rather than one published once; only a
+	// moving target may resolve to another release when its own has
+	// nothing to load.
+	moving := isMovingReleaseTag(candidates[0])
 	for _, tag := range candidates {
 		endpoint := fmt.Sprintf("%s/repos/%s/%s/releases/tags/%s",
 			apiBase, url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(tag))
@@ -1110,11 +1127,38 @@ func (u *Upgrader) resolveRelease(ctx context.Context, branch string) (*resolved
 	}
 	if !found {
 		tried := strings.Join(candidates, ", ")
+		var notFound error
 		if hc != nil && hc.Token == "" && !usesCommandForge(hc.Client) && hc.MissingHint != "" {
-			return nil, fmt.Errorf("%w: release %s not found on %s/%s/%s (HTTP 404; if the repository is private, %s)",
+			notFound = fmt.Errorf("%w: release %s not found on %s/%s/%s (HTTP 404; if the repository is private, %s)",
 				errNoReleaseImageAssets, tried, host, owner, repo, hc.MissingHint)
+		} else {
+			notFound = fmt.Errorf("%w: no release tagged %s on %s/%s/%s", errNoReleaseImageAssets, tried, host, owner, repo)
 		}
-		return nil, fmt.Errorf("%w: no release tagged %s on %s/%s/%s", errNoReleaseImageAssets, tried, host, owner, repo)
+		if !u.releaseAssetsOnly() || strings.TrimSpace(cfg.Asset) != "" {
+			return nil, notFound
+		}
+		newest, ok := u.newestPublishedRelease(ctx, res, cfg, candidates[0])
+		if !ok {
+			return nil, notFound
+		}
+		if !moving {
+			return nil, notPublishedError(candidates[0], res, newest)
+		}
+		res.tag, res.release = newest.TagName, newest
+	} else if _, ok := res.findAsset(cfg.ManifestAsset); !ok && strings.TrimSpace(cfg.Asset) == "" {
+		// A release with no manifest: a moving one mid-swap (images.json.next
+		// is up and images.json not yet back), or a release that was tagged
+		// without being published. A deployment that loads release assets
+		// and nothing else stays on the last release that was published.
+		swapping := isMovingReleaseTag(res.tag) && countAssets(res.release, cfg.ManifestAsset+".next") > 0
+		if !swapping && u.releaseAssetsOnly() {
+			if newest, ok := u.newestPublishedRelease(ctx, res, cfg, candidates[0]); ok {
+				if !moving {
+					return nil, notPublishedError(res.tag, res, newest)
+				}
+				res.tag, res.release = newest.TagName, newest
+			}
+		}
 	}
 
 	// Load images.json when present on the release unless an explicit single
@@ -1135,7 +1179,7 @@ func (u *Upgrader) resolveRelease(ctx context.Context, branch string) (*resolved
 		}
 		res.manifest = manifest
 	} else if strings.TrimSpace(cfg.Asset) == "" {
-		if isMovingReleaseTag(res.tag) {
+		if isMovingReleaseTag(res.tag) && !releaseSaysNotPublished(res.release) {
 			return nil, fmt.Errorf("%w: release %s on %s/%s/%s has no %s yet (its publisher uploads it last); try again later",
 				errReleaseMidUpdate, res.tag, host, owner, repo, cfg.ManifestAsset)
 		}
@@ -1154,6 +1198,147 @@ func isMovingReleaseTag(tag string) bool {
 		return true
 	}
 	return !strings.HasPrefix(tag, "sha-") && !versionTag.MatchString(tag) && !candidateTag.MatchString(tag)
+}
+
+// notPublishedMarker is what the publisher writes in the body of a release
+// it tagged without uploading image assets (asset publishing switched off).
+const notPublishedMarker = "tagged, not published"
+
+// releaseSaysNotPublished reports whether rel's body carries the
+// publisher's "tagged, not published" marker.
+func releaseSaysNotPublished(rel githubRelease) bool {
+	return strings.Contains(strings.ToLower(rel.Body), notPublishedMarker)
+}
+
+// releaseAssetsOnly reports whether this deployment loads images from
+// release assets with no registry to fall back to, so that a release
+// without image assets can only be skipped (or refused), never pulled
+// some other way.
+func (u *Upgrader) releaseAssetsOnly() bool {
+	return u.cfg.Image != nil && u.EffectiveImageSource() == ImageSourceReleaseAssets && u.EffectiveImageFallback() == ""
+}
+
+// maxReleasePages bounds how many pages of 100 releases a listing reads.
+const maxReleasePages = 10
+
+// listReleases pages through GET /repos/{owner}/{repo}/releases, newest
+// first as the forge answers, reading at most maxReleasePages pages.
+// stop, when non-nil, is asked after each page whether what has been read
+// so far is enough.
+func (r *resolvedRelease) listReleases(ctx context.Context, stop func([]githubRelease) bool) ([]githubRelease, error) {
+	var all []githubRelease
+	for page := 1; page <= maxReleasePages; page++ {
+		endpoint := fmt.Sprintf("%s/repos/%s/%s/releases?per_page=100&page=%d",
+			r.apiBase, url.PathEscape(r.owner), url.PathEscape(r.repo), page)
+		body, status, err := r.doAPI(ctx, endpoint, "application/vnd.github+json")
+		if err != nil {
+			return nil, err
+		}
+		if status == http.StatusUnauthorized || status == http.StatusForbidden {
+			return nil, formatReleaseAuthError(r.host, r.owner, r.repo, status, nil, r.hostClient)
+		}
+		if status != http.StatusOK {
+			return nil, fmt.Errorf("listing releases on %s/%s/%s: HTTP %d: %s",
+				r.host, r.owner, r.repo, status, truncate(strings.TrimSpace(string(body)), 200))
+		}
+		var batch []githubRelease
+		if err := json.Unmarshal(body, &batch); err != nil {
+			return nil, fmt.Errorf("parsing releases on %s/%s/%s: %w", r.host, r.owner, r.repo, err)
+		}
+		all = append(all, batch...)
+		if len(batch) < 100 || (stop != nil && stop(all)) {
+			break
+		}
+	}
+	return all, nil
+}
+
+// publishedReleases filters releases to the ones an upgrade can load: not
+// drafts, not moving pointers (channel-<branch>, latest, a legacy bare
+// branch tag), and carrying manifest -- sorted newest first by created_at,
+// then id.
+func publishedReleases(releases []githubRelease, manifest string) []githubRelease {
+	var out []githubRelease
+	for _, rel := range releases {
+		tag := strings.TrimSpace(rel.TagName)
+		if rel.Draft || tag == "" || isMovingReleaseTag(tag) || countAssets(rel, manifest) == 0 {
+			continue
+		}
+		out = append(out, rel)
+	}
+	slices.SortStableFunc(out, func(a, b githubRelease) int {
+		ta, errA := time.Parse(time.RFC3339, strings.TrimSpace(a.CreatedAt))
+		tb, errB := time.Parse(time.RFC3339, strings.TrimSpace(b.CreatedAt))
+		switch {
+		case errA == nil && errB == nil && !ta.Equal(tb):
+			return tb.Compare(ta)
+		case errA != nil && errB == nil:
+			return 1
+		case errA == nil && errB != nil:
+			return -1
+		}
+		switch {
+		case a.ID > b.ID:
+			return -1
+		case a.ID < b.ID:
+			return 1
+		}
+		return 0
+	})
+	return out
+}
+
+// pickPublishedRelease returns the newest of published (already sorted
+// newest first): the newest non-prerelease vX.Y.Z when preferVersion and
+// there is one, else the newest of all.
+func pickPublishedRelease(published []githubRelease, preferVersion bool) (githubRelease, bool) {
+	if len(published) == 0 {
+		return githubRelease{}, false
+	}
+	if preferVersion {
+		for _, rel := range published {
+			if !rel.Prerelease && versionTag.MatchString(strings.TrimSpace(rel.TagName)) {
+				return rel, true
+			}
+		}
+	}
+	return published[0], true
+}
+
+// newestPublishedRelease is the release a target with nothing to load
+// falls back to (a moving one) or is refused in favour of (an immutable
+// one): the newest published release on the repository, preferring a
+// promoted, non-prerelease vX.Y.Z when target is latest or itself a
+// version. false when the releases cannot be listed or none is published.
+func (u *Upgrader) newestPublishedRelease(ctx context.Context, res *resolvedRelease, cfg ReleaseAssetsConfig, target string) (githubRelease, bool) {
+	preferVersion := target == "latest" || versionTag.MatchString(target)
+	releases, err := res.listReleases(ctx, func(read []githubRelease) bool {
+		// The forge lists newest first: stop paging once what has been
+		// read holds the release this would pick.
+		rel, ok := pickPublishedRelease(publishedReleases(read, cfg.ManifestAsset), preferVersion)
+		return ok && (!preferVersion || !rel.Prerelease && versionTag.MatchString(rel.TagName))
+	})
+	if err != nil {
+		log.Printf("upgrade: listing published releases on %s/%s/%s: %v", res.host, res.owner, res.repo, err)
+		return githubRelease{}, false
+	}
+	return pickPublishedRelease(publishedReleases(releases, cfg.ManifestAsset), preferVersion)
+}
+
+// notPublishedError refuses an immutable release that carries no image
+// assets, naming the newest one that does. It matches both
+// errReleaseNotPublished and errNoReleaseImageAssets under errors.Is.
+func notPublishedError(tag string, res *resolvedRelease, newest githubRelease) error {
+	return &releaseNotPublishedError{msg: fmt.Sprintf("release %s on %s/%s/%s is not published; the newest published release is %s",
+		tag, res.host, res.owner, res.repo, newest.TagName)}
+}
+
+type releaseNotPublishedError struct{ msg string }
+
+func (e *releaseNotPublishedError) Error() string { return e.msg }
+
+func (e *releaseNotPublishedError) Is(target error) bool {
+	return target == errReleaseNotPublished || target == errNoReleaseImageAssets
 }
 
 func usesCommandForge(c *http.Client) bool {
@@ -1593,6 +1778,12 @@ func (u *Upgrader) stageReleaseDaemon(ctx context.Context, p *progress, branch, 
 		}
 	}
 
+	// Every tarball the release names is checked before the first one is
+	// loaded, so a missing or mismatched sandbox asset is refused here
+	// rather than after the daemon image is already in Docker.
+	if err := r.verifyManifestImages(cfg); err != nil {
+		return nil, false, err
+	}
 	tmpPath, err := u.streamAndVerifyAsset(ctx, p, stepPull, r, cfg, tarball, expectedSHA)
 	if err != nil {
 		return nil, false, err
@@ -1656,6 +1847,26 @@ func (u *Upgrader) stageReleaseDaemon(ctx context.Context, p *progress, branch, 
 		assetSHA:  expectedSHA,
 		commit:    commit,
 	}, false, nil
+}
+
+// verifyManifestImages checks that every sandbox image r's manifest lists
+// (guest, k8s-sandbox) has its tarball and a .sha256 sidecar on the
+// release that holds it, agreeing with the manifest's sha256. The daemon
+// image's own spec is checked by its caller; the tarball bytes are hashed
+// as they stream, before `docker load` sees them.
+func (r *resolvedRelease) verifyManifestImages(cfg ReleaseAssetsConfig) error {
+	if r == nil || r.manifest == nil {
+		return nil
+	}
+	for _, role := range []string{ReleaseRoleGuest, ReleaseRoleK8sSandbox} {
+		if _, ok := r.manifest.Images[role]; !ok {
+			continue
+		}
+		if _, _, _, _, err := r.expectedAssetSpec(cfg, role, "", ""); err != nil {
+			return fmt.Errorf("%s image: %w", role, err)
+		}
+	}
+	return nil
 }
 
 // stageReleaseSandbox loads the candidate daemon's expected sandbox image from
@@ -1799,23 +2010,15 @@ func (u *Upgrader) listReleaseTags(ctx context.Context) ([]string, error) {
 		apiBase:    apiBase,
 		hostClient: hc,
 	}
-	endpoint := fmt.Sprintf("%s/repos/%s/%s/releases?per_page=100",
-		apiBase, url.PathEscape(owner), url.PathEscape(repo))
-	body, status, err := res.doAPI(ctx, endpoint, "application/vnd.github+json")
+	releases, err := res.listReleases(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	if status == http.StatusUnauthorized || status == http.StatusForbidden {
-		return nil, formatReleaseAuthError(host, owner, repo, status, nil, hc)
-	}
-	if status != http.StatusOK {
-		return nil, fmt.Errorf("listing releases on %s/%s/%s: HTTP %d: %s",
-			host, owner, repo, status, truncate(strings.TrimSpace(string(body)), 200))
-	}
-	var releases []githubRelease
-	if err := json.Unmarshal(body, &releases); err != nil {
-		return nil, fmt.Errorf("parsing releases on %s/%s/%s: %w", host, owner, repo, err)
-	}
+	// A deployment that loads release assets and nothing else is never
+	// offered a version (or candidate) its publisher tagged without
+	// publishing: Targets, LatestRelease and the automatic upgrade all
+	// read this list.
+	publishedOnly := u.releaseAssetsOnly()
 	var tags []string
 	seen := map[string]bool{}
 	add := func(t string) {
@@ -1829,6 +2032,9 @@ func (u *Upgrader) listReleaseTags(ctx context.Context) ([]string, error) {
 			continue
 		}
 		tag := strings.TrimSpace(rel.TagName)
+		if publishedOnly && (versionTag.MatchString(tag) || candidateTag.MatchString(tag)) && countAssets(rel, cfg.ManifestAsset) == 0 {
+			continue
+		}
 		if ch, ok := strings.CutPrefix(tag, "channel-"); ok && ch != "" {
 			add(ch)
 		}

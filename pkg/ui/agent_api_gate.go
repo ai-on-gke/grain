@@ -362,6 +362,9 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 		// refused for naming none.
 		capAllowed = true
 	}
+	if isRepoNarrowedTasksRead(pattern, r) && call.repo == "" && set.Has(scope) {
+		capAllowed = true
+	}
 	if ciCap && !capAllowed && !set.Allows(scope, call.repo) && call.repo != "" && agentMayRead(acting, call.repo) {
 		// grain-ci reads CI of the repositories the task's runs may
 		// read, as it does over /fs/ci/ and /cli/ci/.
@@ -1368,6 +1371,14 @@ func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, ta
 		})
 		return repo, nil
 	}
+	if pattern == refSummaryRoute {
+		if repo, ok, err := s.queryCallRepo(r, pattern, func(c string) bool {
+			return set.Allows(scope, c)
+		}); ok {
+			return repo, err
+		}
+		return "", nil
+	}
 	if pathParam.MatchString(pathOf(pattern)) && !agentRepoDefaultRoutes[pattern] {
 		return "", nil
 	}
@@ -1402,7 +1413,7 @@ func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, ta
 	// reaches it on some repositories only lists the one it reaches --
 	// the single repository its grant names, or its own -- rather than
 	// being refused for naming none.
-	if r.Method == http.MethodGet && agentRepoDefaultRoutes[pattern] && !set.Allows(scope, "") {
+	if r.Method == http.MethodGet && agentRepoDefaultRoutes[pattern] && !isRepoNarrowedTasksRead(pattern, r) && !set.Allows(scope, "") {
 		repo := agentDefaultRepo(acting, set.Repos(scope), ciCap)
 		if repo != "" {
 			q := r.URL.Query()
@@ -1729,6 +1740,9 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 		// As for a task's call: fsScope narrows it.
 		fsAllowed = true
 	}
+	if isRepoNarrowedTasksRead(pattern, r) && call.repo == "" && set.Has(scope) {
+		fsAllowed = true
+	}
 	if adminPatch && !set.Allows(scope, call.repo) && set.Allows("tasks:admin", call.repo) {
 		if err := tasksAdminTaskPatchBodyAllowed(body); err != nil {
 			return call, err
@@ -1840,6 +1854,14 @@ func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pat
 			return canonical, nil, err
 		}
 	}
+	if pattern == refSummaryRoute {
+		if repo, ok, err := s.queryCallRepo(r, pattern, func(c string) bool {
+			return set.Allows(scope, c)
+		}); ok {
+			return repo, nil, err
+		}
+		return "", nil, nil
+	}
 	if pathParam.MatchString(pathOf(pattern)) {
 		return "", nil, nil
 	}
@@ -1896,7 +1918,7 @@ func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pat
 	// If the credential is restricted to a single repository and calls a
 	// read-only collection endpoint that accepts ?repo=, default the filter
 	// to that repository so listing works without repeating the repo parameter.
-	if r.Method == http.MethodGet && len(tok.Repos) == 1 {
+	if r.Method == http.MethodGet && len(tok.Repos) == 1 && !isRepoNarrowedTasksRead(pattern, r) {
 		switch pattern {
 		case "GET /api/tasks", "GET /api/ci/runs", "GET /api/ci/workflows",
 			"GET /api/merge-batches", "GET /api/pipeline/changes", "GET /api/memory/documents/{name}":
@@ -2481,17 +2503,24 @@ func (s *Server) redactAgentTaskResponse(ctx context.Context, call agentCall, ki
 }
 
 // createDrawsOnOtherText reports whether a POST /api/tasks body names a
-// template, a task to supersede, or a proposalKey, any of which can populate
-// or resolve the response from an existing record rather than only what the
-// caller sent.
+// template, a task to supersede, a proposalKey, or a parent/source task from
+// which an empty externalRef would be inherited, any of which can populate or
+// resolve the response from an existing record rather than only what the caller sent.
 func createDrawsOnOtherText(body []byte) bool {
 	var req CreateTaskRequest
 	if len(body) == 0 || json.Unmarshal(body, &req) != nil {
 		return true
 	}
+	parsedOrigin, originErr := model.ParseWorkOrigin(req.Origin, nil)
+	inheritsExternalRef := strings.TrimSpace(req.ExternalRef) == "" &&
+		(strings.TrimSpace(req.ProposedBy) != "" ||
+			model.NormalizeTaskID(req.Reverts) != "" ||
+			originErr != nil ||
+			parsedOrigin.Task() != "")
 	return strings.TrimSpace(req.TemplateID) != "" ||
 		strings.TrimSpace(req.Supersedes) != "" ||
-		strings.TrimSpace(req.ProposalKey) != ""
+		strings.TrimSpace(req.ProposalKey) != "" ||
+		inheritsExternalRef
 }
 
 func editedPatchResponseKeys(body []byte) []string {
@@ -2510,6 +2539,7 @@ func editedPatchResponseKeys(body []byte) []string {
 	add(req.Owner != nil, "owner")
 	add(req.Repo != nil, "repo")
 	add(req.Base != nil, "base")
+	add(req.ExternalRef != nil, "externalRef")
 	add(req.Priority != nil, "priority")
 	add(req.PriorityDispatch != nil, "priorityDispatch")
 	add(req.Issue != nil, "issue")

@@ -15,14 +15,12 @@
 package claude
 
 import (
-	"bytes"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent/claude/stophook"
 )
 
 // sessionLines is a Claude Code session transcript: the same assistant
@@ -54,93 +52,6 @@ func hookAssistantTool(id, name string, input map[string]any) map[string]any {
 func hookToolResult(id, text string, isError bool) map[string]any {
 	return map[string]any{"type": "user", "message": map[string]any{
 		"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "content": text, "is_error": isError}}}}
-}
-
-func TestStopHookDecision(t *testing.T) {
-	read := func(lines string) func(string) string {
-		return func(string) string { return lines }
-	}
-	pushed := sessionLines(t,
-		hookAssistantTool("t1", "mcp__grain-sandbox__run_command", map[string]any{"command": "git push origin b"}),
-		hookToolResult("t1", "pushed", false),
-		hookAssistantText("Pushed the fix."))
-	readOnly := sessionLines(t,
-		hookAssistantTool("t1", "mcp__grain-sandbox__read_file", map[string]any{"file_path": "x"}),
-		hookToolResult("t1", "contents", false),
-		hookAssistantText("Checking the CI log now, back in a minute."))
-	answered := sessionLines(t, hookAssistantText("The queue is clear; nothing is waiting."))
-
-	cases := []struct {
-		name        string
-		in          stopHookInput
-		interactive bool
-		session     string
-		block       bool
-		reason      string
-	}{
-		{"session answer", stopHookInput{HookEventName: "Stop", TranscriptPath: "t"}, true, answered, false, ""},
-		{"session promise, read from the transcript", stopHookInput{HookEventName: "Stop", TranscriptPath: "t"}, true, readOnly, true, agent.SessionContinueReason},
-		{"session promise, from last_assistant_message", stopHookInput{HookEventName: "Stop", LastAssistantMessage: "Let me look at that."}, true, "", true, agent.SessionContinueReason},
-		{"session promise, already continued", stopHookInput{HookEventName: "Stop", StopHookActive: true, TranscriptPath: "t"}, true, readOnly, false, ""},
-		{"background with no closing move", stopHookInput{HookEventName: "Stop", TranscriptPath: "t"}, false, answered, true, agent.BackgroundContinueReason},
-		{"background that pushed", stopHookInput{HookEventName: "Stop", TranscriptPath: "t"}, false, pushed, false, ""},
-		{"background, already continued", stopHookInput{HookEventName: "Stop", StopHookActive: true, TranscriptPath: "t"}, false, answered, false, ""},
-		{"another event", stopHookInput{HookEventName: "SubagentStop", TranscriptPath: "t"}, false, answered, false, ""},
-	}
-	for _, c := range cases {
-		d, block := stopHookDecision(c.in, c.interactive, read(c.session))
-		if block != c.block || d.Reason != c.reason {
-			t.Errorf("%s: got block=%v reason=%q, want block=%v reason=%q", c.name, block, d.Reason, c.block, c.reason)
-		}
-	}
-}
-
-// TestServeStopHook is the subcommand end to end: payload in, decision
-// out, block recorded -- and nothing at all written for a stop it allows.
-func TestServeStopHook(t *testing.T) {
-	dir := t.TempDir()
-	transcript := filepath.Join(dir, "session.jsonl")
-	if err := os.WriteFile(transcript, []byte(sessionLines(t, hookAssistantText("I'll keep going."))), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	record := filepath.Join(dir, "record.jsonl")
-	if err := os.WriteFile(record, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	payload, _ := json.Marshal(map[string]any{"hook_event_name": "Stop", "stop_hook_active": false, "transcript_path": transcript})
-
-	var out, errOut bytes.Buffer
-	ServeStopHook([]string{"-interactive", "-record", record}, bytes.NewReader(payload), &out, &errOut)
-	var got stopHookOutput
-	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
-		t.Fatalf("output %q: %v", out.String(), err)
-	}
-	if got.Decision != "block" || got.Reason != agent.SessionContinueReason {
-		t.Errorf("output = %+v", got)
-	}
-	recorded, _ := os.ReadFile(record)
-	var b agent.StopBlock
-	if err := json.Unmarshal(bytes.TrimSpace(recorded), &b); err != nil || b.Via != agent.StopViaHook || b.Reason != agent.SessionContinueReason {
-		t.Errorf("record = %q (%v)", recorded, err)
-	}
-
-	// The continuation's own stop: allowed, silently, and not recorded.
-	payload, _ = json.Marshal(map[string]any{"hook_event_name": "Stop", "stop_hook_active": true, "transcript_path": transcript})
-	out.Reset()
-	ServeStopHook([]string{"-interactive", "-record", record}, bytes.NewReader(payload), &out, &errOut)
-	if out.Len() != 0 {
-		t.Errorf("stop_hook_active wrote %q, want nothing", out.String())
-	}
-	if again, _ := os.ReadFile(record); !bytes.Equal(again, recorded) {
-		t.Errorf("record grew on an allowed stop: %q", again)
-	}
-
-	// Garbage in: nothing out, never a block.
-	out.Reset()
-	ServeStopHook(nil, strings.NewReader("not json"), &out, &errOut)
-	if out.Len() != 0 {
-		t.Errorf("bad payload wrote %q", out.String())
-	}
 }
 
 func TestStopHookSettings(t *testing.T) {
@@ -179,4 +90,49 @@ func TestWithStopBlocks(t *testing.T) {
 		t.Errorf("result = %+v", r)
 	}
 	withStopBlocks(nil, []agent.StopBlock{b}) // must not panic
+}
+
+// TestStopHookParsesSessionsAsParseEventsDoes holds the leaf hook's own
+// session reader (stophook.ParseSession) to this package's parser: the
+// same tool calls, by the same bare names, with the same error flags, and
+// the same last text. The hook keeps its own copy so grain-agentd need not
+// link this package; this is what keeps the copy honest.
+func TestStopHookParsesSessionsAsParseEventsDoes(t *testing.T) {
+	session := sessionLines(t,
+		map[string]any{"type": "system", "subtype": "init"},
+		hookAssistantTool("t1", "mcp__grain-sandbox__run_command", map[string]any{"command": "git push origin b"}),
+		hookToolResult("t1", "rejected", true),
+		hookAssistantTool("t2", "mcp_grain-sandbox_comment_on_issue", map[string]any{"comment": "done"}),
+		hookToolResult("t2", "ok", false),
+		hookAssistantTool("t3", "Bash", map[string]any{"command": "ls"}),
+		map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "a plain string turn"}},
+		hookAssistantText("Pushed the fix."),
+	) + "not json\n"
+	calls, last := stophook.ParseSession(session)
+	p := parseEvents(session)
+	if want := lastAssistantText(p); last != want {
+		t.Errorf("last text = %q, parseEvents says %q", last, want)
+	}
+	if len(calls) != len(p.result.ToolCalls) {
+		t.Fatalf("ParseSession found %d calls, parseEvents %d", len(calls), len(p.result.ToolCalls))
+	}
+	for i, c := range calls {
+		w := p.result.ToolCalls[i]
+		if c.Name != w.Name || c.IsError != w.IsError || len(c.Arguments) != len(w.Arguments) {
+			t.Errorf("call %d = %+v, parseEvents says %+v", i, c, w)
+		}
+	}
+	if stophook.Subcommand != StopHookSubcommand {
+		t.Errorf("stophook.Subcommand = %q, want %q", stophook.Subcommand, StopHookSubcommand)
+	}
+}
+
+// lastAssistantText is the last text block of a parsed session.
+func lastAssistantText(p *parsedEvents) string {
+	for i := len(p.items) - 1; i >= 0; i-- {
+		if p.items[i].Kind == agent.ItemText {
+			return p.items[i].Text
+		}
+	}
+	return ""
 }

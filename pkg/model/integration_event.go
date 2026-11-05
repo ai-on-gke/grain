@@ -164,13 +164,13 @@ func taskStateTx(ctx context.Context, q querier, taskID string) (State, bool, er
 func taskEventMetaTx(ctx context.Context, q querier, taskID string) (taskEventMeta, bool, error) {
 	var targetOwner, targetName sql.NullString
 	var issue int
-	var originRef, filedVia, stateText string
+	var originRef, filedVia, taskExternalRef, stateText string
 	err := q.QueryRowContext(ctx,
-		"SELECT `t`.`target_owner`, `t`.`target_name`, `t`.`issue`, `t`.`origin_ref`, `t`.`filed_via`, `s`.`state` "+
+		"SELECT `t`.`target_owner`, `t`.`target_name`, `t`.`issue`, `t`.`origin_ref`, `t`.`filed_via`, `t`.`external_ref`, `s`.`state` "+
 			"FROM `task` AS `t` JOIN `task_state` AS `s` ON `s`.`task_id` = `t`.`id` "+
 			"WHERE `t`.`id` = ?",
 		taskID,
-	).Scan(&targetOwner, &targetName, &issue, &originRef, &filedVia, &stateText)
+	).Scan(&targetOwner, &targetName, &issue, &originRef, &filedVia, &taskExternalRef, &stateText)
 	if errors.Is(err, sql.ErrNoRows) {
 		return taskEventMeta{}, false, nil
 	}
@@ -281,6 +281,7 @@ func taskEventMetaTx(ctx context.Context, q querier, taskID string) (taskEventMe
 	}
 
 	for _, candidate := range []string{
+		strings.TrimSpace(taskExternalRef),
 		chatRef,
 		customExternalRef,
 		issueRef,
