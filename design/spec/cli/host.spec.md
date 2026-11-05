@@ -87,6 +87,7 @@ With `-json` it prints the `ui.Task` array.
 | `-filter` | value |  |  | only tasks matching this condition, written attribute:comparison:value -- repeatable, and every one of them has to hold |
 | `-interactive` | bool |  |  | only live chats (-interactive=false for only background tasks) |
 | `-origin` | string |  |  | shorthand for -filter origin:any:VALUE (hand, external, proposed, schedule, suite, fix, review) |
+| `-owner` | string |  |  | shorthand for -filter owner:any:VALUE (or "me" for your own tasks) |
 | `-repo` | string |  |  | shorthand for -filter repo:any:VALUE (owner/name, or "none" for the tasks with no target repo) |
 | `-search` | string |  |  | only tasks whose title or id contains this text, case-insensitively |
 | `-sort` | value |  |  | print in this order: attribute:asc or attribute:desc keys, comma-separated, the first deciding and the rest breaking its ties |
@@ -95,11 +96,17 @@ With `-json` it prints the `ui.Task` array.
 
 **Pinned by:** `pkg/cli/list_test.go`: `TestConditionsNarrowTheListing`, `TestShorthandFlagsAreConditions`, `TestSortKeysOrderTheListing`, `TestConditionsRejectWhatNobodyCanActOn`; `pkg/cli/list_hidden_test.go`: `TestListHidesClosedAndDeferredTasksUnlessAsked`; `pkg/cli/list_declared_test.go`: `TestListHelpNamesTheDeclaredFields`; `pkg/cli/list_vocabulary_test.go`; `pkg/cli/list_test.go`: `TestListDerivedFromAndFiledViaFiltersAndGetCommentsSince`.
 
-### 3.2 `grain get <id>` {#CLI-23}
+### 3.2 `grain get <id>` / `grain show <id>` {#CLI-23}
 
-Calls `GET /api/tasks/{id}` and prints the task block, the failure streak, a pending credential request and the conversation. `-json` prints `ui.TaskDetail`. `-comments-since <RFC3339>` (`?comments_since=`) keeps only the conversation items created strictly after that time, for a polling loop ([external-cli #XC-18](../external-cli/external-cli.spec.md#XC-18)).
+Calls `GET /api/tasks/{id}` and prints the task block (including `owner:`), the failure streak, a pending credential request and the conversation. `grain show` is an alias for `grain get`. `-json` prints `ui.TaskDetail`. `-comments-since <RFC3339>` (`?comments_since=`) keeps only the conversation items created strictly after that time, for a polling loop ([external-cli #XC-18](../external-cli/external-cli.spec.md#XC-18)).
 
 <!-- BEGIN GENERATED FLAGS: grain get -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-comments-since` | string |  |  | only the conversation items created strictly after this RFC 3339 time -- a polling loop's cursor |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain show -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-comments-since` | string |  |  | only the conversation items created strictly after this RFC 3339 time -- a polling loop's cursor |
@@ -136,6 +143,7 @@ Calls `POST /api/tasks` (`HTTPClient.CreateTask`) and prints the new task.
 | `-model` | string |  |  | ID of the model this task runs on (Settings -> Models), disabled ones included -- unset takes whichever model the rotation reaches |
 | `-network-access` | string |  |  | how much of the internet this task's sandbox may reach: "open" or "none" -- unset takes the deployment's own default |
 | `-no-repo` | bool |  |  | file this task with no repo at all, rather than falling back to the deployment default |
+| `-owner` | string |  |  | account responsible for this task (defaults to the caller) |
 | `-position` | string |  |  | which end of the backlog to file it at: "front" to run ahead of everything already queued, "end" to queue behind it. Unset files it wherever the last task added chose, and leaves that choice alone |
 | `-priority` | value |  |  | task priority, 1 or more (default 5; higher numbers mean higher priority) (default 5) |
 | `-read` | value |  |  | owner/name of a repo this task's run may read but never push to (repeatable) |
@@ -164,6 +172,7 @@ Calls `PATCH /api/tasks/{id}` (`UpdateTask`) and prints the task the `PATCH` ret
 | `-issue` | int |  |  | new associated GitHub issue number |
 | `-model` | string |  |  | model this task's next run asks for (Settings -> Models) -- empty takes the deployment's default |
 | `-no-depends-on` | value |  |  | task this one should no longer wait on, in any form -depends-on takes (repeatable) |
+| `-owner` | string |  |  | transfer task ownership to this account |
 | `-priority` | value |  |  | new task priority, 1 or more (default 5; higher numbers mean higher priority) (default 5) |
 | `-read` | value |  |  | owner/name of a repo this task's run may read but never push to (repeatable) -- replaces the whole set |
 | `-repo` | string |  |  | new target repo (owner/name) |

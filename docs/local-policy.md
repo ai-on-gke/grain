@@ -7,6 +7,7 @@ Every task carries claims about it:
 | Claim                  | Task field                      |
 |------------------------|---------------------------------|
 | `requester`            | `Task.Creator`                  |
+| `owner`                | `Task.Owner` (steward account)  |
 | `approved_by`          | `Task.Approval` (a human actor) |
 | `granted_capabilities` | `Task.Grants`                   |
 | network permission     | `Task.NetworkAccess`            |
@@ -176,6 +177,48 @@ A re-run keeps an existing policy file. A workstation set up by an older
 hand and restart the daemon, or re-run init with `-force` to rewrite the
 file. `-force` loses your edits.
 
+## Task owner and proposer attribution
+
+Every task has a non-empty **owner** (`Task.Owner`: a person's email address,
+`"serviceAccount:<email>"`, or `"operator"` on a single-tenant deployment;
+`"user:<email>"` and `"human:<email>"` are accepted as input shorthands and
+normalised).
+
+- **Default:** `Owner` defaults from the account that created the task: a
+  signed-in human or service account, the verified `OnBehalfOf` human on a
+  console session (the latest human sender) or an external agent token's owner,
+  `Task.Creator` when set, or `"operator"`.
+- **Derived tasks:** `model.InheritRequester` carries `Owner` alongside
+  `Creator` and `TeamID`, so proposals (`propose_task`), ports, reviews,
+  pull-request triggers and base-branch repairs inherit the owner of their
+  source task (or schedule/trigger) — never `"grain"` or a run/agent.
+- **Explicit owner & transfer:** a human operator or service account with
+  `tasks:write` can set `owner` at creation (`POST /api/tasks`,
+  `grain create -owner <account>`, or the New Task form) and transfer ownership
+  later (`PATCH /api/tasks/{id}`, `grain update -owner <account>`, or **Owner →
+  Change** / **Edit** on the task page). Agents and external tokens cannot set
+  or transfer `owner` (`403`). Every transfer records an `owner-changed` audit
+  event (`TaskEventOwnerChanged`) with the old owner, new owner, and who
+  changed it.
+- **Visibility & filtering:** `owner` is returned on task JSON, printed by
+  `grain get` / `grain show`, and shown on task detail pages and list rows.
+  `grain list -owner <account>` (`?owner=` on `GET /api/tasks`, and the UI
+  `owner:` filter) filters by owner, with `me` as a shorthand for the caller's
+  own account.
+- **Why `Owner` is distinct from `Creator`:** `Creator` remains the historical
+  requester claim checked by `policy.RequesterOf` (where an empty `Creator` on
+  a root task marks grain's own schedules and suites as local rather than an
+  external request) and written into `Requested-by:` commit trailers, whereas
+  `Owner` is always non-empty and can be reassigned without rewriting who
+  originally requested the change.
+- **Timeline "Proposed" attribution (`Task.Proposer`):** grain records who or
+  what proposed each task when it is created, so the timeline's **Proposed**
+  item attributes the actor: the person (or `operator (access code)` /
+  `operator (local)`) for UI/CLI/API tasks; the proposing task and run (linked
+  to `/tasks/<id>`) plus `on behalf of <owner>` for run-proposed tasks; or the
+  automation principal (`schedule`, `trigger`, `review`, `auto-submit`,
+  `issue-import`, …) for automation-filed tasks.
+
 ## Derived tasks
 
 A task filed from another one is judged as its root requester's, never
@@ -183,7 +226,7 @@ as grain's own just because it names nobody. That covers an agent's
 `propose_task` proposal (filed live or at the end of a run), a port, a
 stacked or pull-request-trigger review, a pull-request trigger's task
 and a base-branch repair of the change that turned the branch red. Each
-is filed with its source's requester and team
+is filed with its source's requester, owner and team
 (`model.InheritRequester`).
 
 At dispatch, grain walks the chain a task was derived from

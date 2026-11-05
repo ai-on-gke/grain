@@ -294,6 +294,12 @@ type Transition struct {
 	OnBehalfOf *Principal
 	Reason     string
 	Detail     string
+	// ProposingTaskID and ProposingRunID name the proposing task and run on
+	// the StateProposed step when a run filed this task.
+	ProposingTaskID string
+	ProposingRunID  string
+	// OnBehalfOfOwner names the task owner on whose behalf a run proposed it.
+	OnBehalfOfOwner string
 }
 
 // Transitions reconstructs, as far as the record allows, when a task
@@ -337,7 +343,23 @@ func Transitions(task Task, obs *Observation, runs []Run, streak *FailureStreak,
 		}
 	}
 
-	add(StateProposed, task.CreatedAt)
+	if task.CreatedAt != nil {
+		proposed := Transition{State: StateProposed, At: *task.CreatedAt}
+		if !task.Proposer.IsZero() {
+			by := task.Proposer.Attribution.Actor
+			proposed.By = &by
+			if task.Proposer.Attribution.OnBehalfOf != nil {
+				b := *task.Proposer.Attribution.OnBehalfOf
+				proposed.OnBehalfOf = &b
+			}
+			proposed.ProposingTaskID = task.Proposer.TaskID
+			proposed.ProposingRunID = task.Proposer.RunID
+			if task.Proposer.TaskID != "" {
+				proposed.OnBehalfOfOwner = task.Owner
+			}
+		}
+		out = append(out, proposed)
+	}
 	add(StateQueued, task.ApprovedAt)
 
 	// requeue adds the requeue that followed an attempt finishing at

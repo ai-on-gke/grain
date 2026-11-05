@@ -56,6 +56,14 @@ const (
 	// cadence moves on (suppressStandingWorkOff), so this is reported
 	// whether or not the schedule is due, for as long as it is true.
 	SuppressedByStandingWork ScheduleSuppressionReason = "standingWork"
+	// SuppressedByWatchedRepoOffTarget is a git_ref schedule whose watched
+	// repository is not in Config.TargetRepos (or is a repository-declared
+	// schedule naming grain/config). reconcileGitRefSchedules refuses to
+	// poll it until the repository is added to targetRepos; because a
+	// git_ref schedule carries a placeholder NextRunAt in the future, it
+	// must be reported ahead of the due-time check so Processes does not
+	// render it as actively polling ("on ref move").
+	SuppressedByWatchedRepoOffTarget ScheduleSuppressionReason = "watchedRepoOffTarget"
 )
 
 // ScheduleSuppression is a firing that has come due and is not
@@ -136,6 +144,26 @@ func (s *Store) SuppressedFiring(ctx context.Context, sched Schedule, now time.T
 			Reason: SuppressedByStandingWork,
 			Detail: "skipped: " + StandingWorkOffReason(sched.Target),
 		}, nil
+	}
+	if sched.Recurrence.Kind == RecurrenceGitRef && sched.Recurrence.GitRef != nil {
+		if watched, err := ParseRepo(sched.Recurrence.GitRef.Repo); err == nil {
+			if IsConfigRepo(watched) && IsRepoDeclaredID(sched.ID) {
+				return &ScheduleSuppression{
+					Reason: SuppressedByWatchedRepoOffTarget,
+					Detail: fmt.Sprintf("watches %s, which a repository-declared schedule may not read", watched),
+				}, nil
+			}
+			targets, err := s.TargetRepos(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("reading target repos for git_ref suppression: %w", err)
+			}
+			if len(targets) > 0 && !RepoAllowed(targets, watched) {
+				return &ScheduleSuppression{
+					Reason: SuppressedByWatchedRepoOffTarget,
+					Detail: fmt.Sprintf("watches %s, which is not on this deployment's target repo list", watched),
+				}, nil
+			}
+		}
 	}
 	if sched.Overlap.Allows() || sched.NextRunAt.After(now) {
 		return nil, nil

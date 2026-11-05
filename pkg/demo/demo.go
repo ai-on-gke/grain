@@ -1344,6 +1344,13 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		},
 		Reason: model.ReasonProposal,
 	}
+	st.Proposer = model.TaskProposer{
+		Attribution: model.Attribution{
+			Actor: model.Principal{Kind: model.PrincipalAgent, ID: firstRun},
+		},
+		TaskID: repairing.ID,
+		RunID:  firstRun,
+	}
 	st.Links = append(st.Links,
 		model.Link{Kind: model.LinkChildOf, Target: repairing.ID},
 		model.Link{Kind: model.LinkDependsOn, Target: repairing.ID},
@@ -1351,6 +1358,14 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	)
 	if err := store.PutTask(ctx, *st); err != nil {
 		return err
+	}
+	if err := store.UpdateTask(model.WithOwnerChange(ctx, model.Attribution{
+		Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator", Source: model.SourceAccessCode},
+	}), subtask.ID, func(t *model.Task) error {
+		t.Owner = "dana@example.com"
+		return nil
+	}); err != nil {
+		return fmt.Errorf("seeding subtask owner transfer: %w", err)
 	}
 
 	// An open GitHub issue the issue importer filed and nobody has
@@ -1368,6 +1383,11 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		t.Origin = model.Origin{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "issue-import"}},
 			Reason:      model.ReasonImported,
+		}
+		t.Proposer = model.TaskProposer{
+			Attribution: model.Attribution{
+				Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "issue-import"},
+			},
 		}
 		if t.Target != nil {
 			t.Issue = 42
@@ -1471,6 +1491,12 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		}
 		if t.Parent() == "" {
 			t.Links = append(t.Links, model.Link{Kind: model.LinkProposedBy, Target: directorTask.ID})
+			t.Proposer = model.TaskProposer{
+				Attribution: model.Attribution{
+					Actor: model.Principal{Kind: model.PrincipalAgent, ID: "director-agent", Source: "session"},
+				},
+				TaskID: directorTask.ID,
+			}
 		}
 		t.WorkOrigin = treeOrigin
 		if err := store.PutTask(ctx, *t); err != nil {

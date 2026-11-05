@@ -690,7 +690,11 @@ function ProcessRow({
               size="small"
               color="warning"
               variant="outlined"
-              label="Not firing"
+              label={
+                s.suppressed.reason === "watchedRepoOffTarget"
+                  ? "Suppressed"
+                  : "Not firing"
+              }
             />
           )}
           {r.kind === "template" && s.title && (
@@ -713,7 +717,9 @@ function ProcessRow({
         </span>
         {isSchedule && s.suppressed && (
           <span className="schedule-overdue hint">
-            not firing: {describeSuppression(s.suppressed)}
+            {s.suppressed.reason === "watchedRepoOffTarget"
+              ? `suppressed: ${describeSuppression(s.suppressed)}`
+              : `not firing: ${describeSuppression(s.suppressed)}`}
             {s.suppressed.taskId && (
               <>
                 {", "}
@@ -758,7 +764,15 @@ function ProcessRow({
       </span>
       <span className="process-next hint">
         {r.nextLabel ? (
-          r.nextLabel
+          <span
+            className={
+              isSchedule && s.suppressed?.reason === "watchedRepoOffTarget"
+                ? "schedule-overdue"
+                : null
+            }
+          >
+            {r.nextLabel}
+          </span>
         ) : isSchedule && !r.enabled ? (
           // A paused schedule does not fire at its next run; it keeps the
           // time, and resuming fires it then, or at once if that has gone

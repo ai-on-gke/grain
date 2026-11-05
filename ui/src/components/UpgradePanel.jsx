@@ -2030,8 +2030,8 @@ export function DatabaseBackend({
           sx={{ mb: 2 }}
           className="database-backend-offline"
         >
-          The store is moved only with the daemon stopped, never from here: a copy
-          taken while grain is running loses everything written after it.
+          The store is moved only with the daemon stopped, never from here: a
+          copy taken while grain is running loses everything written after it.
           {postgres
             ? " To move this PostgreSQL store to another server, stop the daemon, dump and restore it, check it with grain db check, and start the daemon again."
             : " To move this SQLite store into PostgreSQL, run these on the daemon's host. setup.sh stops the daemon, migrates the store and starts it again once grain db check finds nothing missing."}{" "}
