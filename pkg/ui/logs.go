@@ -121,6 +121,5 @@ func (s *Server) handleGetLogLines(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	lines, _ = redactor.Redact(lines)
-	lines = redactDatabaseConfirmTokens(lines)
 	writeJSON(w, http.StatusOK, logLinesResponse{Lines: lines})
 }

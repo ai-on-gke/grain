@@ -84,19 +84,25 @@ func runBackup(ctx context.Context, args []string, out io.Writer) error {
 		fs.Usage()
 		return errors.New("-data-dir is required")
 	}
+	if err := daemon.RefuseWhileDaemonAttached(ctx, "grain backup", *dataDir, nil, false); err != nil {
+		return err
+	}
 	var db *sql.DB
+	isPostgres := false
 	if os.Getenv("GRAIN_DB_DRIVER") == "postgres" || os.Getenv("GRAIN_POSTGRES_URL") != "" || os.Getenv("DATABASE_URL") != "" {
 		var err error
 		db, err = daemon.OpenRawDB(*dataDir)
 		if err != nil {
 			return fmt.Errorf("opening database: %w", err)
 		}
+		isPostgres = true
 	} else if saved, _ := postgres.ReadDatabaseConfig(*dataDir); saved != nil && saved.Driver == "postgres" {
 		var err error
 		db, err = daemon.OpenRawDB(*dataDir)
 		if err != nil {
 			return fmt.Errorf("opening database: %w", err)
 		}
+		isPostgres = true
 	} else {
 		databasePath := filepath.Join(*dataDir, "store", "grain.db")
 		if _, err := os.Stat(databasePath); err != nil {
@@ -109,6 +115,9 @@ func runBackup(ctx context.Context, args []string, out io.Writer) error {
 		}
 	}
 	defer db.Close()
+	if err := daemon.RefuseWhileDaemonAttached(ctx, "grain backup", "", db, isPostgres); err != nil {
+		return err
+	}
 	service, destination, err := daemon.BackupService(ctx, *gcsBucket, *folderID, *credentialsFile)
 	if err != nil {
 		return err

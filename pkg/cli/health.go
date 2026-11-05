@@ -51,6 +51,9 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		p.encode(h)
 		return
 	}
+	if h.Daemon != nil && h.Daemon.StoreSwitch != nil {
+		fmt.Printf("ALERT (since %s): %s\n\n", h.Daemon.StoreSwitch.Since.UTC().Format("2006-01-02 15:04:05Z"), h.Daemon.StoreSwitch.Message)
+	}
 	if len(h.Counters) == 0 {
 		fmt.Println("no counters: nothing on this daemon registers any")
 		return

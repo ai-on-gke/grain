@@ -1545,6 +1545,10 @@ type configResponse struct {
 	// rather than an operator having to notice tasks have stopped moving
 	// and go searching logs to learn why (bwsalmon/agents#576).
 	ReconcilerDown bool `json:"reconcilerDown,omitempty"`
+	// StoreSwitch is Config.StoreSwitch: the data directory now selects a
+	// store other than the one this daemon writes to, and nothing is
+	// dispatched until it restarts. Absent when there is nothing to say.
+	StoreSwitch *StoreSwitch `json:"storeSwitch,omitempty"`
 	// InstallNotice is Config.InstallNotice: how this deployment is
 	// installed is something its operator has to fix. The frontend shows
 	// it as a standing banner and in System → Health. Absent when there
@@ -2163,6 +2167,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.tasks.Config.ReconcilerDown != nil {
 		resp.ReconcilerDown = s.tasks.Config.ReconcilerDown()
+	}
+	if s.tasks.Config.StoreSwitch != nil {
+		resp.StoreSwitch = s.tasks.Config.StoreSwitch()
 	}
 	if s.tasks.Config.InstallNotice != nil {
 		resp.InstallNotice = s.tasks.Config.InstallNotice()

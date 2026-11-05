@@ -136,7 +136,7 @@ already built and tested.
 | NetworkPolicy for `network: none` | `deploy/kubernetes/networkpolicy.yaml` | Exists. Egress only to grain pods; no ingress. Assumes nothing dials a sandbox. |
 | GitHub webhook gateway behind IAP | `deploy/kubernetes/github-webhook.yaml`, README §"standalone GitHub App bot" | Exists. `/webhooks/github` goes to a non-IAP backend and `/*` goes to `Service/grain` behind IAP. |
 | IAP backend reconciliation | `pkg/iapreconciler` | Exists. |
-| Postgres store | `-db-driver=postgres`, `docs/cloudsql-postgres.md` | Exists, including Cloud SQL Auth Proxy, startup retries, and `POST /api/database/upgrade`, which migrates a running SQLite store into Postgres (`pkg/ui/database.go`). |
+| Postgres store | `-db-driver=postgres`, `docs/cloudsql-postgres.md` | Exists, including Cloud SQL Auth Proxy and startup retries. A store moves into Postgres only offline, with the daemon stopped (`grain upgrade-postgres`, `docs/database.md`); the online `POST /api/database/upgrade` was removed after it forked a store on 2026-11-04. |
 | State repo dump and restore | `pkg/staterepo` (`Export`, `Import`, `ImportMigrated`) | Exists. A whole-database text dump to grain/config, and a destructive restore into an empty store. |
 | Secrets | `pkg/secrets` | An encrypted file in the secrets repo. The private key is one file on the daemon's disk and is never in a repo. |
 | Remote executors | `pkg/modelexec`, `/api/executors/connect` and `/stream`, executor tokens, `install.sh` | Exists. The executor dials grain, says hello with a token, stages files and runs CLIs through `RemoteHost` (an `agent.Host`), tunnels MCP back (`mcpGrants`), carries capability MCP streams (`capabilitymcp.go`), and can authenticate to IAP (`iap_auth.go`). |
@@ -219,8 +219,8 @@ Why Cloud SQL rather than in-cluster Postgres (CloudNativePG, which
 grit-split chose for grit's own store):
 
 1. **It is reachable from both sides of the cutover.** The workstation
-   daemon can move onto Cloud SQL first, with the existing
-   `POST /api/database/upgrade`, while it is still on the workstation
+   daemon can move onto Cloud SQL first, offline with
+   `grain upgrade-postgres` (`docs/database.md`), while it is still on the workstation
    (GKE-1). The cutover then moves only the process, not the data. The
    rollback is the reverse move, with no data copy in either direction
    (*Migration*). An in-cluster database could not serve the workstation
@@ -928,9 +928,9 @@ own, and no step runs two daemons at once.
    the database.
 2. Run the Cloud SQL Auth Proxy on the workstation (`docs/cloudsql-postgres.md`
    §1) under the workstation's own credentials.
-3. Settings → Database → upgrade to Postgres with **migrate data**
-   (`POST /api/database/upgrade`). This exists today. It copies the
-   SQLite store across, switches `db-config.json`, and restarts.
+3. Stop the daemon, run `grain upgrade-postgres -dsn …` (it copies the
+   SQLite store across and switches `db-config.json`), check it with
+   `grain db check`, and start the daemon (`docs/database.md`).
 4. The fence (advisory lock) ships in this stage, so it is live from the
    first Postgres boot.
 
@@ -1141,8 +1141,8 @@ Depends on: nothing.
 - Terraform the Cloud SQL instance, database, IAM user and backups,
   beside the existing `terraform` job.
 - Document and run step 1 of *Migration* on this deployment: the
-  workstation daemon moves to Cloud SQL through the Auth Proxy with
-  `POST /api/database/upgrade`.
+  workstation daemon moves to Cloud SQL through the Auth Proxy, offline,
+  with `grain upgrade-postgres`.
 - Tests: two daemons against one Postgres (the second waits, then
   exits); the lock connection killed mid-run (dispatch stops and the
   process exits); the `postgres` CI job runs the fence tests.

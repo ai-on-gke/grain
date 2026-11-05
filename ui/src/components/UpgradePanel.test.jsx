@@ -17,6 +17,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import UpgradePanel, {
   AutoUpgradeSettings,
+  OFFLINE_MIGRATION_COMMANDS,
   resolvedImage,
 } from "./UpgradePanel.jsx";
 import api from "../api.js";
@@ -1693,391 +1694,63 @@ describe("UpgradeCheckSettings", () => {
   });
 });
 
-describe("PostgresDatabaseUpgrade", () => {
+describe("DatabaseBackend", () => {
   afterEach(() => {
     api.mockReset();
   });
 
-  it("shows postgres active state when running on postgres", async () => {
+  const mockStore = (database) =>
     api.mockImplementation((path) => {
       if (path === "/api/upgrade") {
-        return Promise.resolve({
-          enabled: false,
-          database: {
-            driver: "postgres",
-            dsn: "postgres://user:******@localhost:5432/grain",
-            isSqlite: false,
-            postgresAvailable: true,
-          },
-        });
+        return Promise.resolve({ enabled: false, database });
       }
-      if (path === "/api/database") {
-        return Promise.resolve({
-          driver: "postgres",
-          dsn: "postgres://user:******@localhost:5432/grain",
-          isSqlite: false,
-          postgresAvailable: true,
-        });
-      }
+      if (path === "/api/database") return Promise.resolve(database);
       return Promise.resolve({ enabled: false });
     });
 
+  it("names the PostgreSQL store it runs on and offers no move", async () => {
+    mockStore({
+      driver: "postgres",
+      dsn: "postgres://user:******@localhost:5432/grain",
+      isSqlite: false,
+      postgresAvailable: true,
+    });
     render(<UpgradePanel showError={() => {}} />);
     expect(
-      await screen.findByText(/This deployment is running on/i),
+      await screen.findByText(/This deployment runs on/i),
     ).toBeInTheDocument();
-    expect(screen.getByText(/PostgreSQL/)).toBeInTheDocument();
+    expect(screen.getByText("PostgreSQL")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Migrate/i }),
+    ).not.toBeInTheDocument();
   });
 
-  it("allows testing postgres connection and upgrading from sqlite", async () => {
-    api.mockImplementation((path) => {
-      if (path === "/api/database") {
-        return Promise.resolve({
-          driver: "sqlite",
-          dsn: "/var/lib/grain/data/store",
-          isSqlite: true,
-          postgresAvailable: true,
-        });
-      }
-      if (path === "/api/database/test") {
-        return Promise.resolve({ ok: true, message: "Connection successful" });
-      }
-      if (path === "/api/database/upgrade") {
-        return Promise.resolve({
-          ok: true,
-          message: "Successfully migrated database to PostgreSQL",
-          tablesMigrated: 12,
-        });
-      }
-      return Promise.resolve({ enabled: false });
-    });
-
-    const user = userEvent.setup();
-    render(<UpgradePanel showError={() => {}} />);
-
-    expect(
-      await screen.findByText(/Currently running on/i),
-    ).toBeInTheDocument();
-
-    const dsnInput = screen.getByLabelText(/PostgreSQL DSN/i);
-    await user.type(dsnInput, "postgres://user:pass@localhost:5432/graindb");
-
-    const testBtn = screen.getByRole("button", { name: /Test Connection/i });
-    await user.click(testBtn);
-
-    expect(api).toHaveBeenCalledWith("/api/database/test", {
-      method: "POST",
-      body: JSON.stringify({
-        dsn: "postgres://user:pass@localhost:5432/graindb",
-      }),
-    });
-    expect(
-      await screen.findByText(/Connection successful/i),
-    ).toBeInTheDocument();
-
-    const upgradeBtn = screen.getByRole("button", {
-      name: /Migrate Database to PostgreSQL/i,
-    });
-    await user.click(upgradeBtn);
-
-    expect(api).toHaveBeenCalledWith("/api/database/upgrade", {
-      method: "POST",
-      body: JSON.stringify({
-        dsn: "postgres://user:pass@localhost:5432/graindb",
-        migrateData: true,
-      }),
-    });
-  });
-
-  it("allows migrating to local embedded postgres when no DSN is provided", async () => {
-    let dbStatus = {
+  // A store moves only with the daemon stopped (pkg/ui/database.go): the
+  // pane shows the commands and has nothing that would call a route to
+  // move it.
+  it("shows the offline commands on SQLite and calls no migration route", async () => {
+    mockStore({
       driver: "sqlite",
       dsn: "/var/lib/grain/data/store",
       isSqlite: true,
-      postgresAvailable: true,
-    };
-    api.mockImplementation((path) => {
-      if (path === "/api/database") {
-        return Promise.resolve(dbStatus);
-      }
-      if (path === "/api/database/test") {
-        return Promise.resolve({ ok: true, message: "Connection successful" });
-      }
-      if (path === "/api/database/upgrade") {
-        dbStatus = {
-          driver: "postgres",
-          dsn: "",
-          isSqlite: false,
-          postgresAvailable: true,
-        };
-        return Promise.resolve({
-          ok: true,
-          message: "Successfully migrated database to PostgreSQL",
-          tablesMigrated: 12,
-          driver: "postgres",
-          dsn: "",
-        });
-      }
-      return Promise.resolve({ enabled: false });
+      postgresAvailable: false,
     });
-
-    const user = userEvent.setup();
     render(<UpgradePanel showError={() => {}} />);
-
+    expect(await screen.findByText("SQLite")).toBeInTheDocument();
+    const commands = document.querySelector(".database-backend-commands");
+    expect(commands?.textContent).toBe(OFFLINE_MIGRATION_COMMANDS);
+    expect(commands?.textContent).toMatch(
+      /^sudo systemctl stop grain-daemon\.service\n/,
+    );
+    expect(screen.queryByLabelText(/DSN/i)).not.toBeInTheDocument();
     expect(
-      await screen.findByText(/Currently running on/i),
-    ).toBeInTheDocument();
-
-    const upgradeBtn = screen.getByRole("button", {
-      name: /Migrate Database to PostgreSQL/i,
-    });
-    // Click without entering any DSN (uses local embedded postgres)
-    await user.click(upgradeBtn);
-
-    expect(api).toHaveBeenCalledWith("/api/database/upgrade", {
-      method: "POST",
-      body: JSON.stringify({
-        dsn: "",
-        migrateData: true,
-      }),
-    });
-
-    expect(
-      await screen.findByText(/This deployment is running on/i),
-    ).toBeInTheDocument();
-  });
-
-  // The route answers a first request with 202 confirmationRequired and
-  // writes a single-use token to the daemon log (pkg/ui/
-  // database_confirm.go). The form has to take that token and send the
-  // same request back with it; it once showed the 202 as a red error
-  // with nowhere to type the token (2026-10-02 §6 walkthrough).
-  it("asks for the daemon-log confirmation token and resends the request with it", async () => {
-    const bodies = [];
-    api.mockImplementation((path, opts) => {
-      if (path === "/api/database") {
-        return Promise.resolve({
-          driver: "sqlite",
-          isSqlite: true,
-          postgresAvailable: false,
-        });
-      }
-      if (path === "/api/database/upgrade") {
-        const body = JSON.parse(opts.body);
-        bodies.push(body);
-        if (!body.confirmationToken) {
-          return Promise.resolve({
-            confirmationRequired: true,
-            message:
-              "Nothing has been changed yet. A confirmation token has been written to the daemon log.",
-            expiresAt: "2026-10-03T01:16:10Z",
-          });
-        }
-        return Promise.resolve({
-          ok: true,
-          message: "Successfully migrated SQLite database to PostgreSQL",
-          tablesMigrated: 88,
-        });
-      }
-      return Promise.resolve({ enabled: false });
-    });
-
-    const user = userEvent.setup();
-    render(<UpgradePanel showError={() => {}} />);
-    expect(
-      await screen.findByText(/Currently running on/i),
-    ).toBeInTheDocument();
-    const dsn = "postgres://user:pass@db:5432/grain";
-    await user.type(screen.getByLabelText(/PostgreSQL DSN/i), dsn);
-    expect(
-      screen.queryByLabelText(/Confirmation token/i),
+      screen.queryByRole("button", { name: /Migrate|Test connection/i }),
     ).not.toBeInTheDocument();
-
-    await user.click(
-      screen.getByRole("button", { name: /Migrate Database to PostgreSQL/i }),
-    );
-    expect(
-      await screen.findByText(/Nothing has been changed yet/i),
-    ).toBeInTheDocument();
-    expect(screen.queryByText(/Migration failed/i)).not.toBeInTheDocument();
-
-    // Editing the DSN drops the token: it was issued for the old one.
-    await user.type(screen.getByLabelText(/PostgreSQL DSN/i), "x");
-    expect(
-      screen.queryByLabelText(/Confirmation token/i),
-    ).not.toBeInTheDocument();
-    await user.type(screen.getByLabelText(/PostgreSQL DSN/i), "{Backspace}");
-    await user.click(
-      screen.getByRole("button", { name: /Migrate Database to PostgreSQL/i }),
-    );
-
-    await user.type(
-      await screen.findByLabelText(/Confirmation token/i),
-      "  abcdefghijklmnopqrstuvwx ",
-    );
-    await user.click(
-      screen.getByRole("button", { name: /Confirm Migration/i }),
-    );
-
-    expect(
-      await screen.findByText(/Successfully migrated SQLite database/i),
-    ).toBeInTheDocument();
-    expect(bodies).toEqual([
-      { dsn, migrateData: true },
-      { dsn, migrateData: true },
-      { dsn, migrateData: true, confirmationToken: "abcdefghijklmnopqrstuvwx" },
-    ]);
-    expect(
-      screen.queryByLabelText(/Confirmation token/i),
-    ).not.toBeInTheDocument();
-  });
-
-  it("displays error alert when migration fails", async () => {
-    api.mockImplementation((path) => {
-      if (path === "/api/database") {
-        return Promise.resolve({
-          driver: "sqlite",
-          dsn: "/var/lib/grain/data/store",
-          isSqlite: true,
-          postgresAvailable: true,
-        });
-      }
-      if (path === "/api/database/upgrade") {
-        return Promise.reject(
-          new Error(
-            "could not look up effective user ID 1000: user does not exist",
-          ),
-        );
-      }
-      return Promise.resolve({ enabled: false });
-    });
-
-    const user = userEvent.setup();
-    render(<UpgradePanel />);
-
-    expect(
-      await screen.findByText(/Currently running on/i),
-    ).toBeInTheDocument();
-
-    const upgradeBtn = screen.getByRole("button", {
-      name: /Migrate Database to PostgreSQL/i,
-    });
-    await user.click(upgradeBtn);
-
-    expect(
-      await screen.findByText(
-        /could not look up effective user ID 1000: user does not exist/i,
-      ),
-    ).toBeInTheDocument();
-  });
-  // grain/task-543: a track defaulted to a
-  // repository hosts could not pull from, and nothing on the pane said
-  // which image the button would pull or let an operator pick another.
-  describe("choosing the image", () => {
-    const GHCR = "registry.example/acme/acme-grain";
-    const AR = "mirror.example/acme/grain";
-    const imageStatus = {
-      enabled: true,
-      mode: "image",
-      channel: "main",
-      running: { image: `${AR}:main@sha256:0123` },
-      phase: "ok",
-      branch: "main",
-      imageRepo: AR,
-      defaultImageRepo: GHCR,
-      defaultImageRef: `${AR}:main`,
-      imageRepos: [GHCR, AR],
-    };
-
-    it("resolves the reference an upgrade would pull", () => {
-      expect(resolvedImage("", AR, "main")).toBe(`${AR}:main`);
-      expect(resolvedImage(GHCR, AR, "grain/task-1")).toBe(
-        `${GHCR}:grain..task-1`,
+    for (const [path] of api.mock.calls) {
+      expect(path).not.toMatch(
+        /database\/(upgrade|test)|upgrade\/postgres|migrate-to-postgres/,
       );
-      expect(resolvedImage(`${GHCR}:v2.1.0`, AR, "main")).toBe(
-        `${GHCR}:v2.1.0`,
-      );
-      expect(resolvedImage(`${GHCR}@sha256:abc`, AR, "main")).toBe(
-        `${GHCR}@sha256:abc`,
-      );
-      expect(resolvedImage("", AR, "")).toBe(AR);
-    });
-
-    it("shows what will be pulled and posts the repository chosen", async () => {
-      api.mockImplementation((url, opts) => {
-        if (String(url).includes("/api/upgrade/release-notes")) {
-          return Promise.resolve({ notes: [] });
-        }
-        if (opts?.method === "POST") {
-          return Promise.resolve({
-            ...imageStatus,
-            phase: "running",
-            branch: "main",
-          });
-        }
-        return Promise.resolve(imageStatus);
-      });
-      const user = userEvent.setup();
-      render(<UpgradePanel showError={() => {}} />);
-
-      expect(
-        await screen.findByText(`${AR}:main`, { selector: "code" }),
-      ).toBeInTheDocument();
-      await user.click(screen.getByText(`${GHCR} (default)`));
-      expect(screen.getByLabelText(/Image \(optional\)/)).toHaveValue(GHCR);
-      expect(
-        screen.getByText(`${GHCR}:main`, { selector: "code" }),
-      ).toBeInTheDocument();
-
-      await user.click(screen.getByRole("button", { name: "Upgrade" }));
-      expect(api).toHaveBeenLastCalledWith("/api/upgrade", {
-        method: "POST",
-        body: JSON.stringify({
-          branch: "main",
-          image: GHCR,
-          afterTasksFinish: false,
-        }),
-      });
-    });
-
-    it("takes an explicit reference as typed", async () => {
-      api.mockImplementation((url, opts) => {
-        if (String(url).includes("/api/upgrade/release-notes")) {
-          return Promise.resolve({ notes: [] });
-        }
-        if (opts?.method === "POST") {
-          return Promise.resolve({ ...imageStatus, phase: "running" });
-        }
-        return Promise.resolve(imageStatus);
-      });
-      const user = userEvent.setup();
-      render(<UpgradePanel showError={() => {}} />);
-
-      const field = await screen.findByLabelText(/Image \(optional\)/);
-      await user.type(field, `${GHCR}:candidate`);
-      expect(
-        screen.getByText(`${GHCR}:candidate`, { selector: "code" }),
-      ).toBeInTheDocument();
-      await user.click(screen.getByRole("button", { name: "Upgrade" }));
-      expect(api).toHaveBeenLastCalledWith("/api/upgrade", {
-        method: "POST",
-        body: JSON.stringify({
-          branch: "main",
-          image: `${GHCR}:candidate`,
-          afterTasksFinish: false,
-        }),
-      });
-    });
-
-    it("offers no image field on a deployment that does not pull images", async () => {
-      api.mockResolvedValue({ enabled: true, mode: "source", phase: "" });
-      render(<UpgradePanel showError={() => {}} />);
-
-      await screen.findByLabelText(/Branch/);
-      expect(
-        screen.queryByLabelText(/Image \(optional\)/),
-      ).not.toBeInTheDocument();
-    });
+    }
   });
 });
 
