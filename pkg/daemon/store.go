@@ -28,6 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/postgres"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // ResolveDatabase says which database a tool handed only dataDir should
@@ -87,7 +88,28 @@ func RecordDatabaseConfig(dataDir, driver, dsn string) error {
 	if saved, err := LoadDatabaseConfig(dataDir); err == nil && saved != nil && saved.Driver == driver && saved.DSN == dsn {
 		return nil
 	}
-	return postgres.SaveDatabaseConfig(dataDir, driver, dsn, OpenSecrets(dataDir))
+	var passwords postgres.PasswordStore
+	if _, _, hasPassword := postgres.SplitDSNPassword(dsn); hasPassword {
+		passwords = OpenSecrets(dataDir)
+	}
+	return postgres.SaveDatabaseConfig(dataDir, driver, dsn, passwords)
+}
+
+func recordDatabaseConfigForDaemon(cfg Config) error {
+	if cfg.SecretsBackend == secrets.BackendSecretManager {
+		if cfg.DataDir == "" || cfg.DbDriver != "postgres" {
+			return nil
+		}
+		if saved, err := postgres.ReadDatabaseConfig(cfg.DataDir); err == nil && saved != nil && saved.Driver == cfg.DbDriver && saved.DSN == cfg.DbDSN {
+			return nil
+		}
+		// Under -secrets-backend=secretmanager, secret_entries lives inside
+		// PostgreSQL itself, so a database password cannot be bootstrapped out
+		// of the secret store; passwordless IAM DSNs (cloud-sql-proxy) record
+		// cleanly without touching <data-dir>/secrets.
+		return postgres.SaveDatabaseConfig(cfg.DataDir, cfg.DbDriver, cfg.DbDSN, nil)
+	}
+	return RecordDatabaseConfig(cfg.DataDir, cfg.DbDriver, cfg.DbDSN)
 }
 
 func OpenRawDB(dataDir string) (*sql.DB, error) {

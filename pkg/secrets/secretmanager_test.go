@@ -572,9 +572,9 @@ func TestSecretManagerDestroysSupersededVersionsOnUpdate(t *testing.T) {
 		t.Fatalf("after v1: %v", got)
 	}
 
-	// Version 2: v2 enabled, v1 destroyed.
-	if err := store.Set(OpenAIAPIKeySecret, AgentCredentialKey, []byte("v2")); err != nil {
-		t.Fatalf("Set v2: %v", err)
+	// Version 2: version 2 enabled, version 1 destroyed.
+	if err := store.Set(OpenAIAPIKeySecret, AgentCredentialKey, []byte("val-2")); err != nil {
+		t.Fatalf("Set val-2: %v", err)
 	}
 	if got := fake.versionStates(resName); !reflect.DeepEqual(got, []string{"1:DESTROYED", "2:ENABLED"}) {
 		t.Fatalf("after v2: %v", got)
@@ -900,7 +900,7 @@ func TestSecretManagerMetadataServerTokenCaching(t *testing.T) {
 		Catalogue: NewMemoryCatalogue(),
 		CacheTTL:  -1,
 	})
-	if err := storeEnvTok.Set("k2", "value", []byte("v2")); err != nil {
+	if err := storeEnvTok.Set("k2", "value", []byte("val-2")); err != nil {
 		t.Fatalf("Set with env token: %v", err)
 	}
 	if metaCalls != 1 {

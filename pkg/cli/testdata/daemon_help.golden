@@ -337,6 +337,10 @@ Usage of grain daemon:
     	memory kept back from that budget for everything on this host that is not a sandbox -- this daemon, the container runtime, each VM's own qemu overhead and the page cache they all read through. Taken off the top, before the overcommit ratio, so raising the ratio never eats into it. -1 takes an eighth of the machine, never less than 8 GiB and never more than half of it (model.DefaultReserveMemoryMB) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default -1)
   -sandbox-port-base int
     	first port of the block every sandbox-facing service binds in: the git proxy, the model proxies, the package cache and the Actions cache each take a reserved offset within it (sandboxnet.go's own sandboxPortOffsets). It is one aligned range of 256 ports, so what has to reach these services -- a firewall rule, a security group, a VPN ACL -- is one rule that a seventh service does not change. Must be a multiple of 256, and should stay below the ephemeral range this host allocates from (/proc/sys/net/ipv4/ip_local_port_range, 32768 by default) so the block cannot collide with this daemon's own outbound connections. 0 restores the behaviour before the block existed: every service on whatever ephemeral port the kernel gives it, renumbered on every restart -- which is why a sandbox that outlives a restart holds addresses that have moved. Not used by the package cache's interception listeners or its resolver, whose ports (443, 80, 53) are fixed by their protocols. (default 9728)
+  -secrets-backend string
+    	secret store backend ("file" or "secretmanager"); defaults to $GRAIN_SECRETS_BACKEND, then "file" (default "file")
+  -secrets-sm-prefix string
+    	Secret Manager resource prefix (projects/<project>/secrets/<id-prefix>) when -secrets-backend=secretmanager; defaults to $GRAIN_SECRETS_SM_PREFIX
   -shutdown-cmd sudo systemctl poweroff
     	one argument of the command the UI's shut-down-host button runs -- repeat for every argument. Defaults to sudo systemctl poweroff.
   -tunnel-gateway-url string
