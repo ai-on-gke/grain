@@ -466,6 +466,11 @@ and walkthroughs; see
   together.
 - [Agent ergonomics](docs/agent-ergonomics.md) covers the execution environment
   presented to coding agents.
+- [Capabilities](design/design/capabilities.design.md) is the one-page design
+  of what a task or CI job is granted and how: capability servers, grants,
+  policy and CI grant rules. The [author's guide](docs/capabilities.md), the
+  [Settings walkthrough](docs/capability-servers-ui.md) and the
+  [spec](design/spec/capabilities/capabilities.spec.md) sit beside it.
 - [CI capabilities](docs/ci-capabilities.md) describes Grain's built-in CI
   model and sandbox requirements.
 - [The proxy cache](docs/package-cache.md) explains the apt, PyPI, Docker

@@ -345,6 +345,9 @@ type Task struct {
 	// GoogleChatSpace is the Google Chat space linked to this task
 	// (LinkGoogleChat), or "" when unlinked.
 	GoogleChatSpace string `json:"googleChatSpace,omitempty"`
+	// ExternalRef is the optional external work reference (e.g. "CA-204")
+	// carried by this task and inherited by tasks spawned from it.
+	ExternalRef string `json:"externalRef,omitempty"`
 	// Changelists are the changelists (CLs) that are this task's work, as
 	// cl/<number> (model.LinkChangelist).
 	Changelists []string `json:"changelists,omitempty"`
@@ -1132,6 +1135,7 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		Owner:                cmp.Or(strings.TrimSpace(t.Owner), strings.TrimSpace(t.Creator), model.DefaultTaskOwner),
 		Creator:              t.Creator,
 		FiledVia:             t.FiledVia,
+		ExternalRef:          t.ExternalRef,
 		Provenance:           provenanceLabel(t.FiledVia, cmp.Or(attributedPerson(t.Origin.Attribution), t.Creator)),
 		Capabilities:         []string{},
 		CustomFields:         customFieldValues(t.CustomFields),
@@ -2482,6 +2486,10 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, fmt.Errorf("a signed-in user files tasks as themselves, not as %q", author))
 		return
 	}
+	if requestPerson(r.Context()) != "" && (strings.TrimSpace(req.ProposedBy) != "" || strings.TrimSpace(req.ProposalKey) != "") {
+		writeError(w, http.StatusForbidden, errors.New("proposedBy and proposalKey are daemon-internal fields"))
+		return
+	}
 	// An external agent credential files as the person who owns it
 	// (#XC-14): its requester is the owner, whatever the body says --
 	// agentAPIGate has already refused a body naming an author.
@@ -2505,7 +2513,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	task, err := s.tasks.CreateTask(r.Context(), req)
+	task, err := s.tasks.CreateTask(s.taskReadableContext(r), req)
 	if err != nil {
 		writeClientError(w, err)
 		return
