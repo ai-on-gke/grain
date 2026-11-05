@@ -115,6 +115,10 @@ var errDatabaseConnectionFailed = apierror.Public("could not connect to PostgreS
 // handleTestDatabaseConnection answers POST /api/database/test. It dials
 // whatever DSN it is given, so only a system administrator may call it.
 func (s *Server) handleTestDatabaseConnection(w http.ResponseWriter, r *http.Request) {
+	if s.isSelfUpgradeDisabled() {
+		writeError(w, http.StatusNotFound, errSelfUpgradeDisabled)
+		return
+	}
 	var req testDatabaseRequest
 	if !readJSON(w, r, &req) {
 		return
@@ -154,6 +158,10 @@ func (s *Server) handleTestDatabaseConnection(w http.ResponseWriter, r *http.Req
 // with a confirmation token the daemon wrote to its log in answer to an
 // earlier request for exactly the same thing (databaseConfirmations).
 func (s *Server) handleUpgradeDatabase(w http.ResponseWriter, r *http.Request) {
+	if s.isSelfUpgradeDisabled() {
+		writeError(w, http.StatusNotFound, errSelfUpgradeDisabled)
+		return
+	}
 	var req upgradeDatabaseRequest
 	req.MigrateData = true
 	if r.Body != nil && r.ContentLength > 0 {

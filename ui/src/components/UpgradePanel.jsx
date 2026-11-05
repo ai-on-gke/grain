@@ -1163,8 +1163,57 @@ function isSameRunningVersion(target, status, version, preview) {
   return false;
 }
 
+export function safeManagementUrl(raw) {
+  if (typeof raw !== "string") return "";
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  try {
+    const parsed = new URL(trimmed);
+    if (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      parsed.hostname
+    ) {
+      return parsed.toString();
+    }
+  } catch {
+    // Reject malformed or relative URLs.
+  }
+  return "";
+}
+
+export function ExternallyManagedUpgradeNotice({
+  managementUrl,
+  testId = "upgrade-externally-managed",
+  linkTestId = "upgrade-management-link",
+  sx,
+}) {
+  const href = safeManagementUrl(managementUrl);
+  return (
+    <Alert severity="info" data-testid={testId} sx={sx}>
+      In-VM self-upgrade is disabled on this deployment; upgrades and instance
+      lifecycle are managed externally.
+      {href && (
+        <Box sx={{ mt: 1.25 }}>
+          <Button
+            component="a"
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            size="small"
+            variant="outlined"
+            data-testid={linkTestId}
+          >
+            Manage instance
+          </Button>
+        </Box>
+      )}
+    </Alert>
+  );
+}
+
 export default function UpgradePanel({
   showError = defaultShowError,
+  config,
   settings,
   onSaveSettings,
   version,
@@ -1370,17 +1419,41 @@ export default function UpgradePanel({
   const progress = upgradeProgress(status.steps);
   const unchangedTarget =
     unchangedBranch || (!running && status.unchanged ? status.branch : "");
+  const selfUpgradeDisabled = Boolean(
+    status.selfUpgradeDisabled || config?.selfUpgradeDisabled,
+  );
+  const managementUrl = status.managementUrl || config?.managementUrl || "";
+  const fallbackRunning =
+    status.running ||
+    (version?.commit || (!version?.unversioned && version?.release)
+      ? {
+          release: version?.unversioned ? "" : version?.release || "",
+          commit: version?.commit || "",
+          modified: Boolean(version?.modified),
+        }
+      : null);
 
   return (
     <>
-      {!status.enabled && (
+      {selfUpgradeDisabled && (
+        <>
+          <RunningNow running={fallbackRunning} />
+          <ExternallyManagedUpgradeNotice
+            managementUrl={managementUrl}
+            testId="upgrade-externally-managed"
+            linkTestId="upgrade-management-link"
+            sx={{ mb: 2 }}
+          />
+        </>
+      )}
+      {!selfUpgradeDisabled && !status.enabled && (
         <Alert severity="info" sx={{ mb: 2 }}>
           Not available: this deployment was started with neither -upgrade-image
           nor -upgrade-src-dir configured (bwsalmon/agents#396, #645), so there
           is nothing here that can cut it over to another branch.
         </Alert>
       )}
-      {status.enabled && (
+      {!selfUpgradeDisabled && status.enabled && (
         <>
           <Typography
             variant="body2"
@@ -1573,7 +1646,7 @@ export default function UpgradePanel({
           )}
         </>
       )}
-      {settings && onSaveSettings && (
+      {!selfUpgradeDisabled && settings && onSaveSettings && (
         <UpgradeCheckSettings
           settings={settings}
           onSave={(payload) => onSaveSettings(payload, { close: false })}
@@ -1582,6 +1655,7 @@ export default function UpgradePanel({
       <PostgresDatabaseUpgrade
         showError={showError}
         databaseStatus={status?.database}
+        selfUpgradeDisabled={selfUpgradeDisabled}
       />
     </>
   );
@@ -1914,6 +1988,7 @@ function UpgradeSteps({ steps, progress, now }) {
 export function PostgresDatabaseUpgrade({
   showError = defaultShowError,
   databaseStatus,
+  selfUpgradeDisabled = false,
 }) {
   const reportError =
     typeof showError === "function" ? showError : defaultShowError;
@@ -2025,6 +2100,11 @@ export function PostgresDatabaseUpgrade({
     isSqlite: true,
     postgresAvailable: false,
   };
+  const onPostgres =
+    !currentStatus.isSqlite && currentStatus.driver === "postgres";
+  if (selfUpgradeDisabled && !onPostgres) {
+    return null;
+  }
 
   return (
     <Box sx={{ mt: 4 }} className="database-upgrade-section">
@@ -2032,7 +2112,7 @@ export function PostgresDatabaseUpgrade({
         Database Backend
       </Typography>
 
-      {!currentStatus.isSqlite && currentStatus.driver === "postgres" ? (
+      {onPostgres ? (
         <Alert
           severity="success"
           sx={{ mb: 2 }}

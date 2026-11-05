@@ -17,7 +17,9 @@ package daemon
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -88,6 +90,27 @@ func latestRelease(upgrader *upgrade.Upgrader) func(context.Context) (string, er
 	return upgrader.LatestRelease
 }
 
+// ValidateManagementURL validates an optional external management URL
+// (-management-url / $GRAIN_MANAGEMENT_URL), accepting either the empty string
+// or an absolute http:// or https:// URL with a non-empty host.
+func ValidateManagementURL(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", nil
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("-management-url must be an absolute http:// or https:// URL, got %q", raw)
+	}
+	return u.String(), nil
+}
+
+// CheckManagementURL validates cfg.ManagementURL for checkConfig.
+func CheckManagementURL(cfg Config) error {
+	_, err := ValidateManagementURL(cfg.ManagementURL)
+	return err
+}
+
 // SplitBranchPatterns reads -upgrade-allowed-branches: comma-separated,
 // with blanks around and between the commas ignored.
 func SplitBranchPatterns(s string) []string {
@@ -140,6 +163,9 @@ func deploymentMode(cfg Config) upgrade.Mode {
 // and it is what an upgrade holds the queue with while it runs
 // (orchestrator.UpgradeHold). Nil takes no hold.
 func newUpgrader(cfg Config, db *sql.DB, store *model.Store, creds ...*gitproxy.CredentialSet) *upgrade.Upgrader {
+	if cfg.DisableSelfUpgrade {
+		return nil
+	}
 	var credentials *gitproxy.CredentialSet
 	if len(creds) > 0 {
 		credentials = creds[0]

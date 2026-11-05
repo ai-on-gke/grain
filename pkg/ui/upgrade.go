@@ -21,12 +21,15 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 // errUpgradeUnavailable is what every upgrade handler reports when
@@ -38,6 +41,34 @@ import (
 // there is no upgrade resource here to act on.
 var errUpgradeUnavailable = errors.New(
 	"upgrading is not available: this deployment has neither -upgrade-image nor -upgrade-src-dir configured")
+
+// errSelfUpgradeDisabled is reported by every mutating or target-fetching
+// upgrade route when Config.DisableSelfUpgrade is true (-disable-self-upgrade).
+var errSelfUpgradeDisabled = apierror.Public(
+	"in-VM self-upgrade is disabled on this deployment (-disable-self-upgrade); upgrades are managed externally")
+
+func sanitizeManagementURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return ""
+	}
+	return u.String()
+}
+
+func (s *Server) isSelfUpgradeDisabled() bool {
+	return s.tasks.Config.DisableSelfUpgrade
+}
+
+func (s *Server) upgradeUnavailableErr() error {
+	if s.isSelfUpgradeDisabled() {
+		return errSelfUpgradeDisabled
+	}
+	return errUpgradeUnavailable
+}
 
 // upgradeStatusResponse is both GET /api/upgrade's whole body and what
 // POST /api/upgrade returns once it has kicked an upgrade off. Enabled
@@ -143,6 +174,11 @@ type upgradeStatusResponse struct {
 	// been retracted since it upgraded onto it: the pane tells the
 	// operator to move.
 	RetractedRelease *upgrade.RetractedRelease `json:"retractedRelease,omitempty"`
+	// SelfUpgradeDisabled is true when -disable-self-upgrade is set, so the
+	// UI hides in-VM self-upgrade actions in favour of external lifecycle
+	// management (optionally linking to ManagementURL).
+	SelfUpgradeDisabled bool   `json:"selfUpgradeDisabled,omitempty"`
+	ManagementURL       string `json:"managementUrl,omitempty"`
 }
 
 // upgradeScheduledResponse is the pending schedule and how close it is
@@ -566,6 +602,29 @@ func (s *Server) scheduledUpgrade(r *http.Request) *upgradeScheduledResponse {
 // is running, how it upgrades and what its store is are a system
 // administrator's to read, as starting an upgrade is theirs to do.
 func (s *Server) handleGetUpgradeStatus(w http.ResponseWriter, r *http.Request) {
+	if s.isSelfUpgradeDisabled() {
+		var running *upgradeRunningResponse
+		if s.tasks.Config.Upgrader != nil {
+			if cur, err := s.tasks.Config.Upgrader.Running(); err == nil {
+				running = upgradeRunningResponseFrom(cur)
+			}
+		}
+		if running == nil {
+			info := version.Get()
+			if info.Unversioned {
+				info.Release = ""
+			}
+			running = upgradeRunningResponseFrom(upgrade.Running{Build: info})
+		}
+		writeJSON(w, http.StatusOK, upgradeStatusResponse{
+			Enabled:             false,
+			SelfUpgradeDisabled: true,
+			ManagementURL:       sanitizeManagementURL(s.tasks.Config.ManagementURL),
+			Running:             running,
+			Database:            s.databaseStatus(),
+		})
+		return
+	}
 	if s.tasks.Config.Upgrader == nil {
 		writeJSON(w, http.StatusOK, upgradeStatusResponse{
 			Enabled:  false,
@@ -600,8 +659,8 @@ type upgradeTargeter interface {
 // listing versions asks the image registry, and that status is polled
 // every few seconds while an upgrade runs.
 func (s *Server) handleGetUpgradeTargets(w http.ResponseWriter, r *http.Request) {
-	if s.tasks.Config.Upgrader == nil {
-		writeError(w, http.StatusNotFound, errUpgradeUnavailable)
+	if s.isSelfUpgradeDisabled() || s.tasks.Config.Upgrader == nil {
+		writeError(w, http.StatusNotFound, s.upgradeUnavailableErr())
 		return
 	}
 	targeter, ok := s.tasks.Config.Upgrader.(upgradeTargeter)
@@ -682,8 +741,8 @@ func deploymentChannel(up Upgrader) string {
 // applies it once nothing is running (orchestrator's
 // reconcileScheduledUpgrade). The same GET reports it either way.
 func (s *Server) handleStartUpgrade(w http.ResponseWriter, r *http.Request) {
-	if s.tasks.Config.Upgrader == nil {
-		writeError(w, http.StatusNotFound, errUpgradeUnavailable)
+	if s.isSelfUpgradeDisabled() || s.tasks.Config.Upgrader == nil {
+		writeError(w, http.StatusNotFound, s.upgradeUnavailableErr())
 		return
 	}
 	var req startUpgradeRequest
@@ -782,8 +841,8 @@ func (s *Server) scheduleUpgrade(r *http.Request, req startUpgradeRequest) error
 // wanted a deployment with no upgrade pending, and it has none. It says
 // which of the two happened.
 func (s *Server) handleCancelScheduledUpgrade(w http.ResponseWriter, r *http.Request) {
-	if s.tasks.Config.Upgrader == nil {
-		writeError(w, http.StatusNotFound, errUpgradeUnavailable)
+	if s.isSelfUpgradeDisabled() || s.tasks.Config.Upgrader == nil {
+		writeError(w, http.StatusNotFound, s.upgradeUnavailableErr())
 		return
 	}
 	cancelled, err := s.tasks.Store.ClearScheduledUpgrade(r.Context())
@@ -838,8 +897,8 @@ type updateUpgradeSourceRequest struct {
 }
 
 func (s *Server) handleUpdateUpgradeSource(w http.ResponseWriter, r *http.Request) {
-	if s.tasks.Config.Upgrader == nil {
-		writeError(w, http.StatusNotFound, errUpgradeUnavailable)
+	if s.isSelfUpgradeDisabled() || s.tasks.Config.Upgrader == nil {
+		writeError(w, http.StatusNotFound, s.upgradeUnavailableErr())
 		return
 	}
 	updater, ok := s.tasks.Config.Upgrader.(imageSourceUpdater)

@@ -483,6 +483,14 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			"(docs/image-signing.md). The image is appended (by digest on a host, by tag in a cluster, where the "+
 			"command must print cosign's JSON); a non-zero exit refuses the upgrade. Omitted, upgrades go ahead "+
 			"unverified and say so.")
+	disableSelfUpgrade := fs.Bool("disable-self-upgrade", false,
+		"disable in-VM self-upgrade actions (pkg/upgrade, automatic/scheduled upgrades, and SQLite-to-PostgreSQL cutover) "+
+			"and hide in-VM upgrade controls in the UI in favour of external lifecycle management "+
+			"($GRAIN_DISABLE_SELF_UPGRADE when unset)")
+	managementURL := fs.String("management-url", "",
+		"optional external http:// or https:// URL where this deployment's lifecycle and upgrades are managed "+
+			"(for example its registry entry page), shown in place of in-VM self-upgrade controls when "+
+			"-disable-self-upgrade is set ($GRAIN_MANAGEMENT_URL when unset)")
 
 	// How the UI's "reboot host" button reboots (pkg/ui/host.go). The
 	// default is the `sudo systemctl reboot` this always ran, which is
@@ -1070,6 +1078,20 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			*uiRequireIAP = v
 		}
 	}
+	if !passed["disable-self-upgrade"] {
+		if env := strings.TrimSpace(os.Getenv("GRAIN_DISABLE_SELF_UPGRADE")); env != "" {
+			v, err := strconv.ParseBool(env)
+			if err != nil {
+				return daemon.Config{}, fs, unknownFlags, fmt.Errorf("GRAIN_DISABLE_SELF_UPGRADE=%q is not a boolean", env)
+			}
+			*disableSelfUpgrade = v
+		}
+	}
+	if !passed["management-url"] {
+		if env := strings.TrimSpace(os.Getenv("GRAIN_MANAGEMENT_URL")); env != "" {
+			*managementURL = env
+		}
+	}
 	if !passed["db-dsn"] {
 		if env := os.Getenv("GRAIN_DB_DSN"); env != "" {
 			*dbDSN = env
@@ -1229,6 +1251,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UpgradeImageRefFile:    *upgradeImageRefFile,
 		UpgradeAllowedBranches: daemon.SplitBranchPatterns(*upgradeAllowedBranches),
 		UpgradeDrainWindow:     *upgradeDrainWindow,
+		DisableSelfUpgrade:     *disableSelfUpgrade,
+		ManagementURL:          strings.TrimSpace(*managementURL),
 		RebootCmd:              rebootCmd,
 		ShutdownCmd:            shutdownCmd,
 		RestartCmd:             restartCmd,
@@ -1429,7 +1453,7 @@ func checkConfig(cfg daemon.Config) error {
 			return errors.New("-k8s-git-proxy-host is required with -k8s-granule-sandboxes (in-cluster, set " +
 				"GRAIN_POD_IP from the downward API instead and it is taken from there)")
 		}
-		if cfg.UpgradeImage != "" && cfg.UpgradeImageRefFile == "" {
+		if !cfg.DisableSelfUpgrade && cfg.UpgradeImage != "" && cfg.UpgradeImageRefFile == "" {
 			return errors.New("-upgrade-image is not supported yet with -k8s-granule-sandboxes: this backend's " +
 				"self-upgrade would need a privileged, /dev/kvm-mounted health-check pod rather than the plain " +
 				"one -k8s-sandboxes checks a candidate image with, and nothing here builds that yet -- repoint " +
@@ -1440,25 +1464,27 @@ func checkConfig(cfg daemon.Config) error {
 	if err := checkPackageCacheUpstreams(cfg); err != nil {
 		return err
 	}
-	if cfg.UpgradeSrcDir != "" && cfg.UpgradeInstallPath == "" && cfg.UpgradeImage == "" {
-		return errors.New("-upgrade-install-path is required with -upgrade-src-dir")
-	}
-	// A ref file is how a *host* deployment tells its unit which image to
-	// start, so an -upgrade-image with nowhere to record its answer
-	// upgrades nothing. A Kubernetes deployment has no unit and no such
-	// file: the Deployment's own spec is the record, and repointing it is
-	// the upgrade (upgrade.ModeKube).
-	if cfg.UpgradeImage != "" && cfg.UpgradeImageRefFile == "" && !cfg.K8sSandboxes {
-		return errors.New("-upgrade-image-ref-file is required with -upgrade-image (except with -k8s-sandboxes, " +
-			"where an upgrade repoints this deployment's own Deployment instead of writing a file)")
-	}
-	if cfg.K8sSandboxes && cfg.UpgradeImage != "" {
-		if cfg.K8sDeployment == "" {
-			return errors.New("-k8s-deployment is required with -k8s-sandboxes and -upgrade-image: an upgrade " +
-				"has to know which Deployment to repoint")
+	if !cfg.DisableSelfUpgrade {
+		if cfg.UpgradeSrcDir != "" && cfg.UpgradeInstallPath == "" && cfg.UpgradeImage == "" {
+			return errors.New("-upgrade-install-path is required with -upgrade-src-dir")
 		}
-		if cfg.K8sContainer == "" {
-			return errors.New("-k8s-container is required with -k8s-sandboxes and -upgrade-image")
+		// A ref file is how a *host* deployment tells its unit which image to
+		// start, so an -upgrade-image with nowhere to record its answer
+		// upgrades nothing. A Kubernetes deployment has no unit and no such
+		// file: the Deployment's own spec is the record, and repointing it is
+		// the upgrade (upgrade.ModeKube).
+		if cfg.UpgradeImage != "" && cfg.UpgradeImageRefFile == "" && !cfg.K8sSandboxes {
+			return errors.New("-upgrade-image-ref-file is required with -upgrade-image (except with -k8s-sandboxes, " +
+				"where an upgrade repoints this deployment's own Deployment instead of writing a file)")
+		}
+		if cfg.K8sSandboxes && cfg.UpgradeImage != "" {
+			if cfg.K8sDeployment == "" {
+				return errors.New("-k8s-deployment is required with -k8s-sandboxes and -upgrade-image: an upgrade " +
+					"has to know which Deployment to repoint")
+			}
+			if cfg.K8sContainer == "" {
+				return errors.New("-k8s-container is required with -k8s-sandboxes and -upgrade-image")
+			}
 		}
 	}
 	if cfg.GranuleSandboxes {
@@ -1502,6 +1528,9 @@ func checkConfig(cfg daemon.Config) error {
 		return err
 	}
 	if err := daemon.CheckCICacheBounds(cfg); err != nil {
+		return err
+	}
+	if err := daemon.CheckManagementURL(cfg); err != nil {
 		return err
 	}
 	return daemon.CheckGritURL(cfg)

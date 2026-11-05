@@ -432,6 +432,15 @@ type Config struct {
 	// UpgradeDrainWindow bounds how long a scheduled upgrade waits for active
 	// runs to finish before proceeding with the upgrade anyway.
 	UpgradeDrainWindow time.Duration
+	// DisableSelfUpgrade disables in-VM self-upgrade actions (pkg/upgrade,
+	// automatic/scheduled upgrades, and in-VM SQLite-to-PostgreSQL cutover)
+	// and hides in-VM upgrade controls in the UI in favour of an optional
+	// external management URL (-disable-self-upgrade / $GRAIN_DISABLE_SELF_UPGRADE).
+	DisableSelfUpgrade bool
+	// ManagementURL is an optional http:// or https:// URL where this
+	// deployment's lifecycle and upgrades are managed externally
+	// (-management-url / $GRAIN_MANAGEMENT_URL).
+	ManagementURL string
 
 	// rebootCmd is what the UI's reboot-host button runs; empty means
 	// rebootHost's own `sudo systemctl reboot` default.
