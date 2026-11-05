@@ -29,6 +29,9 @@ import (
 func TestCheckConfigRefusesRequireIAPWithoutAnAudience(t *testing.T) {
 	t.Setenv("GRAIN_IAP_AUDIENCE", "")
 	t.Setenv("GRAIN_REQUIRE_IAP", "")
+	t.Setenv("GRAIN_REQUIRE_VERIFIER", "")
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
 	cfg, _, _, err := parseDaemonArgs([]string{"-data-dir=/var/lib/grain/data", "-ui-require-iap"})
 	if err != nil {
 		t.Fatal(err)
@@ -60,6 +63,7 @@ func TestCheckConfigRefusesRequireIAPWithoutAnAudience(t *testing.T) {
 }
 
 func TestRequireIAPFromTheEnvironment(t *testing.T) {
+	t.Setenv("GRAIN_REQUIRE_VERIFIER", "")
 	t.Setenv("GRAIN_REQUIRE_IAP", "true")
 	cfg, _, _, err := parseDaemonArgs([]string{"-data-dir=/var/lib/grain/data"})
 	if err != nil {
@@ -236,12 +240,13 @@ func TestRequireVerifierFromTheEnvironment(t *testing.T) {
 }
 
 func TestAccessCodeNotesAServerThatRequiresVerifier(t *testing.T) {
+	verifierPayload := `"registry"`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/auth/access-code" {
 			http.NotFound(w, r)
 			return
 		}
-		w.Write([]byte(`{"authenticated":false,"requireVerifier":"registry","accessCodeAccepted":true}`))
+		w.Write([]byte(`{"authenticated":false,"requireVerifier":` + verifierPayload + `,"accessCodeAccepted":true}`))
 	}))
 	defer srv.Close()
 	t.Setenv(serverEnvVar, srv.URL)
@@ -262,5 +267,20 @@ func TestAccessCodeNotesAServerThatRequiresVerifier(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "-ui-require-verifier=registry") || !strings.Contains(errOut.String(), "not accepted over the network") {
 		t.Errorf("stderr = %q, want the require-verifier=registry note", errOut.String())
+	}
+
+	// Control/ANSI escape sequences from an untrusted server must never be
+	// written to the operator's terminal alongside the printed access code.
+	verifierPayload = `"\u001b]52;c;dGVzdA==\u0007"`
+	out.Reset()
+	errOut.Reset()
+	if err := runAccessCode(nil, &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(errOut.String(), "\x1b\x07") {
+		t.Errorf("stderr leaked terminal escape characters: %q", errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "(-ui-require-verifier)") || !strings.Contains(errOut.String(), "not accepted over the network") {
+		t.Errorf("stderr = %q, want generic safe require-verifier note", errOut.String())
 	}
 }
