@@ -105,8 +105,8 @@ tails are recorded in `github_ci_job` and then acts on the concluded run:
    just as it does for grain-CI release runs: a failure increments `Failures`
    and sets `FailingSince` (raising `pipeline.not-publishing` in the UI and
    metrics) and files a release-triage task with the run's failure details, while
-   a subsequent passing release run resets `Failures` and closes any open
-   release-triage task as superseded.
+   a passing release run at or after the failing commit on that branch resets
+   `Failures` and closes the open release-triage task as superseded.
 3. **Reading GitHub run logs (`grain ci log`).** `StoredRunStore.Get` and
    `GET /api/ci/runs/{id}` fall back to synthesizing a `ci.Run` from the
    `github_ci_job` rows for `{id}` (`ci.GitHubCIRun`), so a review or triage
