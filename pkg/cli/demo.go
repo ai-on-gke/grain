@@ -81,6 +81,7 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	mechanicalPort := fs.Bool("mechanical-port", false, "seed a change merged onto main and the port grain cherry-picked to candidate itself, with no agent run")
 	qualification := fs.Bool("qualification", false, "seed a release candidate of -default-target-repo whose qualification run is waiting for approval")
 	secretsStore := fs.Bool("secrets-store", false, "wire a real secrets store in the demo's throwaway directory, so secrets and release secrets can be set and removed")
+	humanReview := fs.Bool("human-review", false, "seed a change a review held for a person's decision (request_human_review), waiting for Submit or Release hold")
 	reviewQuestions := fs.Bool("review-questions", false, "seed a change whose review left questions for its owner, held on their decision, and send it back to the queue once they reply, as a daemon would")
 	externalConfigRepo := fs.String("external-config-repo", "", "serve a deployment whose configuration is managed in this external config repository (a remote URL): every configuration write is refused with 409 and the exact edit to commit there instead (docs/external-config-repo.md)")
 	externalConfigBranch := fs.String("external-config-branch", "main", "with -external-config-repo, the branch of that repository configuration is read from")
@@ -195,6 +196,7 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		MergeRules:             *mergeRules,
 		SensitiveHold:          *sensitiveHold,
 		ReviewQuestions:        *reviewQuestions,
+		HumanReview:            *humanReview,
 		ExternalConfigRepo:     *externalConfigRepo,
 		ExternalConfigBranch:   *externalConfigBranch,
 		MechanicalPort:         *mechanicalPort,

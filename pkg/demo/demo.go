@@ -126,6 +126,9 @@ type Options struct {
 	// so an owner's reply sends that change back to the queue as a
 	// daemon's cycle would.
 	ReviewQuestions bool
+	// HumanReview is -human-review (demo_human_review.go): a change a
+	// review held for a person's decision (model.LinkHumanReviewHold).
+	HumanReview bool
 	// ExternalConfigRepo is -external-config-repo
 	// (demo_external_config.go): the remote of an external config
 	// repository this deployment's configuration is managed in, so every
@@ -545,6 +548,11 @@ func Run(opts Options) error {
 	if opts.ReviewQuestions {
 		if err := seedReviewQuestionsDemo(ctx, store, cfg, repo, githubSimRepo); err != nil {
 			return fmt.Errorf("grain demo: -review-questions: %v", err)
+		}
+	}
+	if opts.HumanReview {
+		if err := seedHumanReviewDemo(ctx, store, cfg, repo); err != nil {
+			return fmt.Errorf("grain demo: -human-review: %v", err)
 		}
 	}
 	if opts.MechanicalPort {

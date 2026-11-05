@@ -154,6 +154,10 @@ const AUTO_MERGE_STEPS = {
   auto_merge_on: "Auto-merge turned on",
   auto_merge_off: "Auto-merge turned off",
   auto_merge_kept_off: "Auto-merge kept off",
+  // A human-review hold raised and released (model.LinkHumanReviewHold):
+  // who raised it is the review task, who released it the person.
+  human_review_requested: "Held for a person's review",
+  human_review_released: "Human-review hold released",
 };
 
 function isSettingOrAuditStep(state) {
