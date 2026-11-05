@@ -521,11 +521,7 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `POST /api/state-repo/import-key` | `secrets:write` | `admin` | Imports state-repo secrets encryption key. |
 | `POST /api/state-repo/secrets-repo` | `secrets:write` | `admin` | Configures encrypted secrets backup repository. |
 | `POST /api/state-repo/reset-notice` | `settings:write` | `admin` | Clears state-repo warning notice. |
-| `GET /api/database` | `settings:read` | `admin` | Reads database backend/migration status. |
-| `POST /api/database/test` | `settings:write` | `admin` | Tests target PostgreSQL connection. |
-| `POST /api/database/upgrade` | `deployment:upgrade` | `admin` | Migrates SQLite database to PostgreSQL. |
-| `POST /api/upgrade/postgres` | `deployment:upgrade` | `admin` | Legacy PostgreSQL upgrade alias. |
-| `POST /api/settings/db/migrate-to-postgres` | `settings:write` | `admin` | Settings PostgreSQL migration endpoint. |
+| `GET /api/database` | `settings:read` | `admin` | Reads which database backend is in use. No route migrates it: store moves are offline only (docs/database.md). |
 | `DELETE /api/ci/cache` | `caches:write` | `admin` | Flushes CI cache. |
 | `POST /api/package-cache/flush` | `caches:write` | `admin` | Flushes package cache. |
 | `POST /api/actions-cache/flush` | `caches:write` | `admin` | Flushes GitHub Actions cache. |

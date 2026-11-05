@@ -776,6 +776,22 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     113,
+		Description: "add task.owner and task.proposer_*, backfill existing tasks, and enforce non-empty task owner",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `owner` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_actor_kind` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_actor_id` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_actor_source` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_behalf_kind` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_behalf_id` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_behalf_source` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_task_id` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_run_id` TEXT NOT NULL DEFAULT ''",
+		},
+		Up: MigrateTaskOwnerAndProposer,
+	},
+	{
+		Version:     114,
 		Description: "add grain_config.registry for connected-entry self-registration and heartbeat settings (design/design/registry.design.md)",
 		Statements: []string{
 			"ALTER TABLE `grain_config` ADD COLUMN `registry` TEXT NOT NULL DEFAULT ''",

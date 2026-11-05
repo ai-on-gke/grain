@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/redact"
 )
 
@@ -32,5 +33,26 @@ func TestTextRedactsAccessCodeHeader(t *testing.T) {
 	}
 	if n != 2 {
 		t.Errorf("Text counted %d redactions, want 2:\n%s", n, got)
+	}
+}
+
+func TestTextRedactsBareExternalAgentToken(t *testing.T) {
+	minted, _, prefix, err := model.GenerateExternalAgentToken()
+	if err != nil {
+		t.Fatalf("GenerateExternalAgentToken: %v", err)
+	}
+	longTok := "gma_" + strings.Repeat("a1b2c3d4", 8)
+	line := "leaked " + minted + " and " + longTok + " (prefix " + prefix + ")\n"
+	got, n := (*redact.Redactor)(nil).Text(line)
+	for _, secret := range []string{minted, longTok} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("Text left gma_ token %q in:\n%s", secret, got)
+		}
+	}
+	if !strings.Contains(got, "prefix "+prefix) {
+		t.Errorf("Text redacted non-secret display prefix %q in:\n%s", prefix, got)
+	}
+	if !strings.Contains(got, "[redacted: external agent token]") || n != 2 {
+		t.Errorf("Text(%q) = %q, %d; want [redacted: external agent token] with n=2", line, got, n)
 	}
 }

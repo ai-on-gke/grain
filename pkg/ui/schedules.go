@@ -23,7 +23,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secretsrepo"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 // scheduleNotFoundError marks a schedule ID with no schedule behind it --
@@ -760,11 +763,23 @@ type CreateScheduleRequest struct {
 // as this schedule's display title, re-read by fireSuiteSchedule on every
 // firing rather than trusted from here.
 func (c *Client) CreateSchedule(ctx context.Context, req CreateScheduleRequest) (Schedule, error) {
+	if req.Recurrence.Kind == string(model.RecurrenceGitRef) {
+		r, err := parseRecurrence(req.Recurrence)
+		if err != nil {
+			return Schedule{}, err
+		}
+		if err := c.validateGitRefRecurrence(ctx, r); err != nil {
+			return Schedule{}, err
+		}
+	}
 	if err := c.checkSettingsWritable(ctx, "schedule"); err != nil {
 		return Schedule{}, err
 	}
 	recurrence, err := parseRecurrence(req.Recurrence)
 	if err != nil {
+		return Schedule{}, err
+	}
+	if err := c.validateGitRefRecurrence(ctx, recurrence); err != nil {
 		return Schedule{}, err
 	}
 	overlap, err := parseOverlap(req.Overlap)
@@ -870,7 +885,91 @@ func (c *Client) CreateSchedule(ctx context.Context, req CreateScheduleRequest) 
 	if err := c.Store.PutSchedule(ctx, sched); err != nil {
 		return Schedule{}, err
 	}
-	return scheduleFrom(sched, templateName, suiteName), nil
+	out := scheduleFrom(sched, templateName, suiteName)
+	if suppressed, err := c.Store.SuppressedFiring(ctx, sched, now, sched.Location()); err == nil {
+		out.Suppressed = suppressionFrom(suppressed)
+	}
+	return out, nil
+}
+
+// validateGitRefRecurrence refuses a git_ref schedule whose watched
+// repository this deployment forbids polling at all: the encrypted secrets
+// backup repository (and any other repository in ForbiddenRepos), a retired
+// per-team grain/config-<team> alias, or grain/config when an external
+// config repository disables the controller-local one.
+func (c *Client) validateGitRefRecurrence(ctx context.Context, r model.Recurrence) error {
+	if r.Kind != model.RecurrenceGitRef || r.GitRef == nil {
+		return nil
+	}
+	watched, err := model.ParseRepo(r.GitRef.Repo)
+	if err != nil {
+		return validationErrorf("recurrence.gitRef.repo: %v", err)
+	}
+	if gitproxy.RetiredConfigRepo(watched.Host, watched.Owner, watched.Name) {
+		return validationErrorf("recurrence.gitRef.repo: %s",
+			gitproxy.RetiredConfigRepoReason(watched.Owner, watched.Name))
+	}
+	if model.IsConfigRepo(watched) {
+		if remote := c.externalStateRepoRemote(ctx); remote != "" {
+			return validationErrorf(
+				"recurrence.gitRef.repo: %s cannot be watched because local %s is disabled when configuration is managed in external repository %s",
+				watched, model.ConfigRepo(), remote)
+		}
+	}
+	if reason, forbidden := c.forbidsWatchedRepo(ctx, watched); forbidden {
+		return validationErrorf("recurrence.gitRef.repo: %s cannot be watched: %s", watched, reason)
+	}
+	return nil
+}
+
+func (c *Client) externalStateRepoRemote(ctx context.Context) string {
+	if c.Config.StateRepo != nil {
+		if status, err := c.Config.StateRepo.Status(ctx); err == nil {
+			if remote := strings.TrimSpace(status.Remote); remote != "" {
+				return remote
+			}
+		}
+	}
+	if c.Config.DataDir != "" {
+		if settings, err := staterepo.LoadSettings(c.Config.DataDir); err == nil {
+			if remote := strings.TrimSpace(settings.Remote); remote != "" {
+				return remote
+			}
+		}
+	}
+	return ""
+}
+
+func (c *Client) forbidsWatchedRepo(ctx context.Context, watched model.RepoRef) (string, bool) {
+	if c.Config.ForbiddenRepos != nil {
+		if c.Config.ForbiddenRepos.Forbids(watched.StoredOwner(), watched.Name) ||
+			(watched.Host != "" && c.Config.ForbiddenRepos.Forbids(watched.Owner, watched.Name)) {
+			return "it is in this deployment's forbidden repository set (encrypted secrets backup repository): " + gitproxy.ForbiddenReason, true
+		}
+	}
+	if c.Config.StateRepo != nil {
+		if status, err := c.Config.StateRepo.Status(ctx); err == nil && remoteNamesRepo(status.SecretsRepo, watched) {
+			return "it is this deployment's encrypted secrets backup repository: " + gitproxy.ForbiddenReason, true
+		}
+	}
+	if c.Config.DataDir != "" {
+		if settings, err := secretsrepo.LoadSettings(c.Config.DataDir); err == nil && remoteNamesRepo(settings.Remote, watched) {
+			return "it is this deployment's encrypted secrets backup repository: " + gitproxy.ForbiddenReason, true
+		}
+	}
+	return "", false
+}
+
+func remoteNamesRepo(remote string, repo model.RepoRef) bool {
+	slug := strings.TrimSpace(repoSlugFromRemote(remote))
+	if slug == "" {
+		return false
+	}
+	owner, name, ok := strings.Cut(slug, "/")
+	if !ok || owner == "" || name == "" {
+		return false
+	}
+	return strings.EqualFold(owner, repo.Owner) && strings.EqualFold(strings.TrimSuffix(name, ".git"), repo.Name)
 }
 
 // scheduleFromRequest is the schedule req describes: the content a
@@ -1494,6 +1593,15 @@ type UpdateScheduleRequest struct {
 // (Enabled is not a cadence), which is what makes a pause a pause
 // rather than a reset.
 func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateScheduleRequest) (Schedule, error) {
+	if req.Recurrence != nil && req.Recurrence.Kind == string(model.RecurrenceGitRef) && !(req.Enabled != nil && !*req.Enabled) {
+		r, err := parseRecurrence(*req.Recurrence)
+		if err != nil {
+			return Schedule{}, err
+		}
+		if err := c.validateGitRefRecurrence(ctx, r); err != nil {
+			return Schedule{}, err
+		}
+	}
 	if err := c.checkSettingsWritable(ctx, "schedule"); err != nil {
 		return Schedule{}, err
 	}
@@ -1736,7 +1844,23 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 		if err != nil {
 			return Schedule{}, err
 		}
+		// Pausing an existing schedule from a form that resends the whole
+		// payload keeps the refusal out of the operator's way when gitRef.repo
+		// did not change; any other edit or re-enable validates the watched repo.
+		pausingSameGitRef := req.Enabled != nil && !*req.Enabled &&
+			existing.Recurrence.Kind == model.RecurrenceGitRef && existing.Recurrence.GitRef != nil &&
+			r.Kind == model.RecurrenceGitRef && r.GitRef != nil &&
+			strings.EqualFold(strings.TrimSpace(existing.Recurrence.GitRef.Repo), strings.TrimSpace(r.GitRef.Repo))
+		if !pausingSameGitRef {
+			if err := c.validateGitRefRecurrence(ctx, r); err != nil {
+				return Schedule{}, err
+			}
+		}
 		recurrence = &r
+	} else if req.Enabled != nil && *req.Enabled && !existing.Enabled {
+		if err := c.validateGitRefRecurrence(ctx, existing.Recurrence); err != nil {
+			return Schedule{}, err
+		}
 	}
 	var timeZone *string
 	if req.TimeZone != nil {
@@ -1934,7 +2058,11 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 			suiteName = suite.Name
 		}
 	}
-	return scheduleFrom(*updated, templateName, suiteName), nil
+	out := scheduleFrom(*updated, templateName, suiteName)
+	if suppressed, err := c.Store.SuppressedFiring(ctx, *updated, now, updated.Location()); err == nil {
+		out.Suppressed = suppressionFrom(suppressed)
+	}
+	return out, nil
 }
 
 // ScheduleRun is what one firing somebody asked for by hand actually

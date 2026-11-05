@@ -1531,16 +1531,20 @@ func taskDetailToMCPRecord(detail TaskDetail) mcp.TaskRecord {
 		ChangedAt: latest,
 	}
 	rec := mcp.TaskRecord{
-		TaskSummary:       summary,
-		Description:       detail.Description,
-		Author:            detail.Author,
-		AuthorKind:        detail.AuthorKind,
-		Base:              detail.Base,
-		Capabilities:      detail.Capabilities,
-		PullRequest:       detail.PullRequest,
-		FailedAttempts:    detail.FailedAttempts,
-		LastFailureAt:     detail.LastFailureAt,
-		LastFailureReason: detail.LastFailureReason,
+		TaskSummary:         summary,
+		Description:         detail.Description,
+		Author:              detail.Author,
+		AuthorKind:          detail.AuthorKind,
+		AuthorLabel:         detail.AuthorLabel,
+		Provenance:          detail.Provenance,
+		Base:                detail.Base,
+		Capabilities:        detail.Capabilities,
+		PullRequest:         detail.PullRequest,
+		PullRequestMergedAt: detail.PrMergedAt,
+		PullRequestClosedAt: detail.PrClosedAt,
+		FailedAttempts:      detail.FailedAttempts,
+		LastFailureAt:       detail.LastFailureAt,
+		LastFailureReason:   detail.LastFailureReason,
 		Activity: mcp.TaskActivity{
 			Note:    detail.Activity,
 			At:      detail.ActivityAt,
@@ -1572,12 +1576,14 @@ func taskDetailToMCPRecord(detail TaskDetail) mcp.TaskRecord {
 	}
 	for _, c := range detail.Comments {
 		rec.Comments = append(rec.Comments, mcp.TaskComment{
-			ID:         c.ID,
-			Author:     c.Author,
-			AuthorKind: c.AuthorKind,
-			Body:       c.Body,
-			CreatedAt:  c.CreatedAt,
-			Handover:   c.Handover,
+			ID:          c.ID,
+			Author:      c.Author,
+			AuthorKind:  c.AuthorKind,
+			AuthorLabel: c.Who(),
+			FiledVia:    c.FiledVia,
+			Body:        c.Body,
+			CreatedAt:   c.CreatedAt,
+			Handover:    c.Handover,
 		})
 	}
 	return rec

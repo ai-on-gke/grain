@@ -125,6 +125,7 @@ func NewStateManager(dataDir string, db *sql.DB, repo *staterepo.Repo, secretSto
 	// notice already waiting on disk is exactly the one nobody has read
 	// it on yet.
 	m.refreshResetNotice(context.Background())
+	m.refreshForbidden(context.Background())
 	return m
 }
 
@@ -176,6 +177,9 @@ func (m *StateManager) Nudge() {
 // m.repo safe here; the store is an atomic so that the poll on the other
 // side needs neither.
 func (m *StateManager) refreshResetNotice(ctx context.Context) {
+	if m.repo == nil {
+		return
+	}
 	_, pending := m.repo.UndeliveredResets(ctx)
 	m.resetNotice.Store(pending)
 }

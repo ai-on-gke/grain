@@ -265,9 +265,10 @@ var patterns = []pattern{
 	// (pkg/secrets' key file), the one value whose loss is unrecoverable.
 	{"age secret key", regexp.MustCompile(`\bAGE-SECRET-KEY-1[0-9A-Za-z]{20,}`), "[redacted: age secret key]"},
 	// A token minted for a CI job's api grants (pkg/capability/ciapi),
-	// and the release gate's before it (rg_), plus per-entry connected
-	// registry tokens (grc_).
+	// the release gate's before it (rg_), external agent tokens (gma_), and
+	// per-entry connected registry tokens (grc_).
 	{"ci api token", regexp.MustCompile(`\b(?:ga|rg)_[0-9a-f]{16}_[0-9a-f]{64}\b`), "[redacted: ci api token]"},
+	{"external agent token", regexp.MustCompile(`\bgma_[0-9a-f]{32,}\b`), "[redacted: external agent token]"},
 	{"registry token", regexp.MustCompile(`\bgrc_[A-Za-z0-9_-]{16,}`), "[redacted: registry token]"},
 	// A signed token, which carries its own claims and is worth cutting
 	// whether or not this host minted it.

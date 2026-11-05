@@ -312,6 +312,18 @@ type HostPressure struct {
 	NestedVirtDetail string `json:"nestedVirtDetail,omitempty"`
 }
 
+// StoreSwitch is the alert a daemon raises when its data directory
+// starts selecting a store other than the one it opened: Opened is the
+// store it writes to, Selected the one a restart would open, and
+// Message what to do about it. It stands until the daemon restarts, and
+// nothing is dispatched while it does.
+type StoreSwitch struct {
+	Since    time.Time `json:"since"`
+	Opened   string    `json:"opened"`
+	Selected string    `json:"selected"`
+	Message  string    `json:"message"`
+}
+
 // DaemonHealth is what the process serving this API can say about its
 // own life, as GET /api/sandboxes' own "daemon" object -- reported
 // beside the host reading because a restart loop is a fact about this
@@ -339,6 +351,9 @@ type HostPressure struct {
 // daemon is ignoring is `scripts/setup.sh` on one shape and an edit and
 // an apply on the other, and only the server knows which shape it is.
 type DaemonHealth struct {
+	// StoreSwitch is Config.StoreSwitch's alert, carried here too so
+	// `grain health` reports it beside the restart count.
+	StoreSwitch *StoreSwitch `json:"storeSwitch,omitempty"`
 	// StartedAt is when this process started. The pane turns it into an
 	// uptime, which is the form that reads as a restart loop: a
 	// deployment that has been up for four seconds at three in the
@@ -1066,6 +1081,14 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 	if s.tasks.Config.Daemon != nil {
 		daemon := s.tasks.Config.Daemon()
 		resp.Daemon = &daemon
+	}
+	if s.tasks.Config.StoreSwitch != nil {
+		if sw := s.tasks.Config.StoreSwitch(); sw != nil {
+			if resp.Daemon == nil {
+				resp.Daemon = &DaemonHealth{}
+			}
+			resp.Daemon.StoreSwitch = sw
+		}
 	}
 	if s.tasks.Config.Sandboxes != nil {
 		resp.Sandboxes, resp.SandboxReading = s.tasks.sandboxHealth(r.Context())

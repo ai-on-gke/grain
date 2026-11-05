@@ -213,3 +213,69 @@ func TestADueTaskScheduleNamesTheOpenTaskHoldingIt(t *testing.T) {
 		t.Errorf("SuppressedFiring after the task was closed = %+v, want nil", got)
 	}
 }
+
+func TestSuppressedFiringReportsGitRefWatchedRepoOffTarget(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	if err := store.SetTargetRepos(ctx, []string{"acme/widgets"}); err != nil {
+		t.Fatalf("saving target repos: %v", err)
+	}
+
+	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	sched := model.Schedule{
+		ID:     "sched-git-ref",
+		Title:  "Track upstream release tag",
+		Body:   "Pick up the new release.",
+		Target: model.RepoRef{Owner: "acme", Name: "widgets"},
+		Recurrence: model.Recurrence{
+			Kind:   model.RecurrenceGitRef,
+			GitRef: &model.GitRefTrigger{Repo: "external/upstream", Ref: "refs/tags/latest"},
+		},
+		Overlap:   model.OverlapAllow,
+		Enabled:   true,
+		NextRunAt: now.Add(365 * 24 * time.Hour),
+		CreatedAt: now,
+	}
+	if err := store.PutSchedule(ctx, sched); err != nil {
+		t.Fatalf("writing git_ref schedule: %v", err)
+	}
+
+	got := suppression(t, store, ctx, sched, now)
+	if got == nil {
+		t.Fatal("SuppressedFiring = nil for off-target git_ref schedule, want watchedRepoOffTarget")
+	}
+	wantDetail := "watches external/upstream, which is not on this deployment's target repo list"
+	if got.Reason != model.SuppressedByWatchedRepoOffTarget || got.Detail != wantDetail {
+		t.Errorf("suppression = %+v, want reason %q and detail %q",
+			got, model.SuppressedByWatchedRepoOffTarget, wantDetail)
+	}
+
+	// A paused schedule reports no suppression.
+	paused := sched
+	paused.Enabled = false
+	if got := suppression(t, store, ctx, paused, now); got != nil {
+		t.Errorf("SuppressedFiring on paused git_ref schedule = %+v, want nil", got)
+	}
+
+	// Adding the watched repo to TargetRepos clears the suppression immediately.
+	if err := store.SetTargetRepos(ctx, []string{"acme/widgets", "external/upstream"}); err != nil {
+		t.Fatalf("widening target repos: %v", err)
+	}
+	if got := suppression(t, store, ctx, sched, now); got != nil {
+		t.Errorf("SuppressedFiring once watched repo is on TargetRepos = %+v, want nil", got)
+	}
+
+	// A repository-declared schedule watching grain/config is also reported as suppressed.
+	declared := sched
+	declared.ID = "repo:schedule:acme:widgets:watch-config"
+	declared.Recurrence = model.Recurrence{
+		Kind:   model.RecurrenceGitRef,
+		GitRef: &model.GitRefTrigger{Repo: "grain/config", Ref: "refs/heads/main"},
+	}
+	if got := suppression(t, store, ctx, declared, now); got == nil || got.Reason != model.SuppressedByWatchedRepoOffTarget {
+		t.Errorf("SuppressedFiring on repo-declared grain/config git_ref = %+v, want %q",
+			got, model.SuppressedByWatchedRepoOffTarget)
+	}
+}

@@ -1588,6 +1588,7 @@ func (s *Server) GlobEntries(ctx context.Context, scope Scope, scheme, relPath, 
 			pattern = "*"
 		}
 	}
+	ctx = withMemoryWalkCache(ctx)
 	node, err := s.Resolve(ctx, scope, scheme, relPath)
 	if err != nil {
 		return GlobResult{}, err
@@ -1874,6 +1875,7 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 		ctxLines = MaxGrepContextLines
 	}
 
+	ctx = withMemoryWalkCache(ctx)
 	node, err := s.Resolve(ctx, scope, scheme, relPath)
 	if err != nil {
 		return GrepResult{}, err
@@ -1962,6 +1964,7 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 	// that a pattern matching only the "[redacted: ...]" placeholder no
 	// longer finds a line this pass would have redacted.
 	redactor := s.redactor()
+	scanBuf := make([]byte, 64*1024)
 
 	for _, tf := range files {
 		if totalMatches >= maxMatches {
@@ -1973,7 +1976,7 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 			continue
 		}
 		scanner := bufio.NewScanner(rc)
-		scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+		scanner.Buffer(scanBuf, 4*1024*1024)
 
 		type numberedLine struct {
 			num  int

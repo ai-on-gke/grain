@@ -108,6 +108,28 @@ describe("collectAlerts (grain/task-4008)", () => {
     ]);
   });
 
+  // The store switched under a running daemon (pkg/daemon/storeswitch.go)
+  // is critical: nothing dispatches until a restart, and the sentence is
+  // the server's own, naming both stores.
+  it("raises a critical alert when the store is switched underneath the daemon", () => {
+    const alerts = collectAlerts({
+      ...base,
+      storeSwitch: {
+        since: "2026-11-04T03:32:00Z",
+        opened: "SQLite at /var/lib/grain/data/store",
+        selected: "PostgreSQL at postgres://grain@127.0.0.1:5432/grain",
+        message:
+          "the store this daemon writes to is no longer the one db-config.json selects",
+      },
+    });
+    const a = byId(alerts, "store-switched");
+    expect(a.severity).toBe("critical");
+    expect(scopeLabel(a.scope)).toBe("Deployment");
+    expect(a.sentence).toMatch(/db-config\.json selects\.$/);
+    expect(a.impact).toMatch(/No task is dispatched/);
+    expect(a.since).toBe("2026-11-04T03:32:00Z");
+  });
+
   // One row per pause the server reports, so a per-connection pause
   // gets its own row, scope and Resume.
   it("makes one alert per paused connection, each with its own actions", () => {

@@ -537,11 +537,15 @@ import "strconv"
 // whose read-only access is auto-granted when a task names them as a
 // committed-context repository (`-design owner/name:path@rev`).
 //
-// 113 adds `grain_config`.`registry` (model.Config.Registry): the connected
+// 113 adds `task`.`owner` and `task`.`proposer_*` (model.Task.Owner and
+// model.Task.Proposer), backfills every existing task's owner and proposer
+// attribution, and enforces that no task row can be stored with an empty owner.
+//
+// 114 adds `grain_config`.`registry` (model.Config.Registry): the connected
 // entry settings (registry URL, entry name, auth mode, catalog metadata, and
 // scope overrides) for daemon self-registration and heartbeating
 // (design/design/registry.design.md).
-const SchemaVersion = 113
+const SchemaVersion = 114
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
@@ -897,6 +901,15 @@ var Tables = []string{
   ` + "`priority`" + `              INTEGER  NOT NULL DEFAULT 5,
   ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
   ` + "`filed_via`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`owner`" + `                 TEXT     NOT NULL DEFAULT '',
+  ` + "`proposer_actor_kind`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`proposer_actor_id`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`proposer_actor_source`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`proposer_behalf_kind`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`proposer_behalf_id`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`proposer_behalf_source`" + ` TEXT    NOT NULL DEFAULT '',
+  ` + "`proposer_task_id`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`proposer_run_id`" + `       TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

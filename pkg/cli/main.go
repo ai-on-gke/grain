@@ -358,6 +358,7 @@ Commands:
                                        as shorthands; -sort attribute:asc orders it. "grain list -h"
                                        prints the attributes and comparisons -- see list.go)
   get <id> [-comments-since T]         show one task and its conversation (only what came after T)
+  show <id> [-comments-since T]        alias for get
   create -title T [flags]              file a new task (-position front|end picks which end of
                                        the backlog it joins, and is remembered for the next one;
                                        -field name=value sets one of the fields this deployment
@@ -614,7 +615,7 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return dispatchSignIn(ctx, c, out, sel, cmd, cmdArgs)
 	case "list":
 		return cmdList(ctx, c, out, cmdArgs)
-	case "get":
+	case "get", "show":
 		return cmdGet(ctx, c, out, cmdArgs)
 	case "create":
 		return cmdCreate(ctx, c, out, cmdArgs)

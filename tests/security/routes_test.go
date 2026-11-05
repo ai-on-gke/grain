@@ -418,9 +418,6 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/upgrade/targets":           trusted,
 	"GET /api/upgrade/release-notes":     trusted,
 	"GET /api/database":                  trusted,
-	"POST /api/database/test":            trusted,
-	"POST /api/database/upgrade":         trusted,
-	"POST /api/upgrade/postgres":         trusted,
 	"GET /api/logs":                      trusted,
 	"GET /api/logs/{source}":             trusted,
 
@@ -901,11 +898,10 @@ func newRouteFixtureWith(t *testing.T, singleTenant, withProxy bool, configure .
 		Secrets:       secrets.New(secDir),
 		Credentials:   credentials,
 		CodexAuthFile: filepath.Join(root, "codex-auth.json"),
-		// Where the embedded PostgreSQL goes when a
-		// POST /api/database/test or /upgrade names no DSN and the
-		// binaries are installed. Left empty, EnsureRunning initdb's a
-		// cluster in ./postgres -- tests/security/postgres/, which
-		// `git add -A` once committed.
+		// The data directory, under the test's own temporary root.
+		// Left empty, anything that falls back to the embedded
+		// PostgreSQL initdb's a cluster in ./postgres --
+		// tests/security/postgres/, which `git add -A` once committed.
 		DataDir:       dataDir,
 		LocalAPIToken: testAccessCode,
 	}

@@ -51,6 +51,9 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		p.encode(h)
 		return
 	}
+	if h.Daemon != nil && h.Daemon.StoreSwitch != nil {
+		fmt.Printf("ALERT (since %s): %s\n\n", h.Daemon.StoreSwitch.Since.UTC().Format("2006-01-02 15:04:05Z"), h.Daemon.StoreSwitch.Message)
+	}
 	hasRegistryIssue := h.Registry != nil && (h.Registry.LastError != "" || len(h.Registry.ScopeConflicts) > 0)
 	if hasRegistryIssue {
 		fmt.Printf("registry (%s @ %s): %s\n", h.Registry.Entry, h.Registry.URL, h.Registry.State)
