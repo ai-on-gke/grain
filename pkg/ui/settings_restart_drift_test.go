@@ -126,8 +126,9 @@ var settingsAppliedLive = map[string]string{
 	"taskBranchTemplate": "model.Store.PutTask reads the current grain_config row when it freezes a new task's branch name",
 	"deploymentId":       "model.Store.PutTask reads the current grain_config row when it freezes a new task's branch name",
 	"externalAgentApi":   "pkg/ui, which reads grain_config per request (authenticateExternalAgent)",
-	"ownerTrust":         "Client.CreateTask, which reads grain_config as each external agent filing is made (ownerTrustApproves)",
-	"settingsLocked":     "pkg/ui, which reads grain_config per request (settingsLocked)",
+	"ownerTrust":            "Client.CreateTask, which reads grain_config as each external agent filing is made (ownerTrustApproves)",
+	"autoGrantContextReads": "Client.CreateTask and Client.UpdateTask, which read grain_config on each task filing or edit (resolveContextLinksAndReads)",
+	"settingsLocked":        "pkg/ui, which reads grain_config per request (settingsLocked)",
 }
 
 func TestEverySettingIsEitherAppliedLiveOrRestartOnly(t *testing.T) {
