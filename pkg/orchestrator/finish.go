@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1635,8 +1636,10 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		return fmt.Errorf("orchestrator: reading the capability catalogue for proposed tasks: %w", err)
 	}
 	var catalogue *model.CapabilityCatalogue
+	var autoGrantContextReads []string
 	if catalogueCfg != nil {
 		catalogue = catalogueCfg.CapabilityPolicy.Catalogue
+		autoGrantContextReads = catalogueCfg.AutoGrantContextReads
 	}
 	for _, p := range proposals {
 		title, _ := p["title"].(string)
@@ -2025,6 +2028,14 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		if why := resolveProposedForkHead(client, &proposal); why != "" {
 			needsPersonWhy = why
 			proposal.Body += fmt.Sprintf("\n\n_Filed for a person to approve: %s._", why)
+		}
+		if why := applyProposedCommittedContext(ctx, reach, client, &proposal, task, p, autoGrantContextReads); why != "" {
+			proposal.Body += fmt.Sprintf("\n\n_Filed for a person to approve: %s._", why)
+			if needsPersonWhy == "" {
+				needsPersonWhy = why
+			} else {
+				needsPersonWhy += "; " + why
+			}
 		}
 		// keep_running, or a priority above this task's own: settings only
 		// a person may give a task (model.PersonOnlyProposalSettings), so
@@ -3973,4 +3984,91 @@ func resolveProposedForkHead(client github.Client, proposal *model.Task) string 
 	proposal.Links = append(proposal.Links, r.Link())
 	proposal.Body += r.Note()
 	return ""
+}
+
+func applyProposedCommittedContext(_ context.Context, reach *gitproxy.Reach, client github.Client,
+	proposal *model.Task, parent model.Task, args map[string]any, autoGrant []string) string {
+
+	var rawDesigns []string
+	for _, raw := range argStrings(args["designs"]) {
+		if trimmed := strings.TrimSpace(raw); trimmed != "" {
+			rawDesigns = append(rawDesigns, trimmed)
+		}
+	}
+	if len(rawDesigns) == 0 {
+		model.InheritContext(proposal, parent)
+		return ""
+	}
+	seen := map[string]bool{}
+	var whys []string
+	for _, raw := range rawDesigns {
+		ref, err := model.ParseContextRef(raw)
+		if err != nil {
+			whys = append(whys, fmt.Sprintf("committed context %q is invalid (%v)", raw, err))
+			continue
+		}
+		repo, ok := ref.ResolvedRepo(proposal.Target)
+		if !ok {
+			whys = append(whys, fmt.Sprintf("committed context %q has no repository and the proposal has no target repo", raw))
+			continue
+		}
+		if ref.Rev != "" && !model.IsFullCommitSHA(ref.Rev) {
+			sha, err := resolveContextCommitSHA(reach, client, repo, ref.Rev)
+			if err == nil && sha != "" {
+				ref.Rev = sha
+			} else if !model.IsCommitSHA(ref.Rev) {
+				whys = append(whys, fmt.Sprintf("could not resolve committed context revision %q in %s (%v)", ref.Rev, repo, err))
+				continue
+			} else {
+				ref.Rev = strings.ToLower(ref.Rev)
+			}
+		}
+		if ref.TargetsOtherRepo(proposal.Target) {
+			hasRead := slices.ContainsFunc(proposal.Reads, repo.Same)
+			if !hasRead {
+				proposal.Reads = append(proposal.Reads, repo)
+				if !model.ContextReadAutoGranted(autoGrant, repo) {
+					whys = append(whys, fmt.Sprintf("committed context %q reads %s without reads: [%q]", raw, repo, repo))
+				}
+			}
+		}
+		key := ref.CanonicalKey(proposal.Target)
+		if !seen[key] {
+			seen[key] = true
+			proposal.Links = append(proposal.Links, model.Link{
+				Kind:   model.LinkDesign,
+				Target: ref.StringRelativeTo(proposal.Target),
+			})
+		}
+	}
+	return strings.Join(whys, "; ")
+}
+
+func resolveContextCommitSHA(reach *gitproxy.Reach, client github.Client, repo model.RepoRef, ref string) (string, error) {
+	type shaResolver interface {
+		ResolveCommitSHA(owner, repo, ref string) (string, error)
+	}
+	if r, ok := client.(shaResolver); ok {
+		if sha, err := r.ResolveCommitSHA(repo.Owner, repo.Name, ref); err == nil && model.IsFullCommitSHA(sha) {
+			return strings.ToLower(sha), nil
+		}
+	}
+	if client != nil {
+		lookup := ref
+		if lookup == "HEAD" {
+			if def, err := client.DefaultBranch(repo.Owner, repo.Name); err == nil && def != "" {
+				lookup = def
+			}
+		}
+		if head, err := client.GetBranchHead(repo.Owner, repo.Name, lookup); err == nil && head != nil && model.IsFullCommitSHA(head.SHA) {
+			return strings.ToLower(head.SHA), nil
+		}
+	}
+	if reach != nil && reach.Credentials != nil {
+		host := reach.Credentials.HostOf(repo.GitHost())
+		if sha, err := gitproxy.RemoteRefSHA(host, gitproxy.Credential{Name: "anonymous"}, repo.Owner, repo.Name, ref); err == nil && model.IsFullCommitSHA(sha) {
+			return strings.ToLower(sha), nil
+		}
+	}
+	return "", fmt.Errorf("no commit SHA resolved for %s@%s", repo, ref)
 }

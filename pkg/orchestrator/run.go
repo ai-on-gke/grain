@@ -379,6 +379,7 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	prompt += timezoneSection(task)
 	prompt += issueSection(task)
 	prompt += setupSection(setup)
+	prompt += committedContextSection(task, checkoutDir, sandboxRoot, history.CommittedContext)
 	prompt += sessionSandboxSection(task, history)
 	// The two history sections, together and in that order: what the
 	// attempts before this one did, then what has been said about the
@@ -651,6 +652,7 @@ func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 	prompt += timezoneSection(task)
 	prompt += issueSection(task)
 	prompt += setupSection(setup)
+	prompt += committedContextSection(task, checkoutDir, sandboxRoot, history.CommittedContext)
 	prompt += sessionSandboxSection(task, history)
 	if resumed := parkedResumeSection(history); resumed != "" {
 		prompt += "\n\n" + strings.TrimRight(resumed, "\n")
@@ -2331,6 +2333,9 @@ type History struct {
 	// SandboxReclaimed is true when a session task had a warm sandbox that was
 	// reclaimed (TTL expiry or capacity eviction) before this turn started.
 	SandboxReclaimed bool
+	// CommittedContext is the committed-context references verified in ./work
+	// or cloned into ./repos/<owner>/<repo> detached at their pinned SHA.
+	CommittedContext []ResolvedContextCheckout
 }
 
 func sessionSandboxSection(task model.Task, h History) string {
@@ -3071,6 +3076,10 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 				placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &prepared, cfg.sandboxReused)
 			}
 		}
+		if checkoutErr == nil && len(prepared.Context) > 0 {
+			persistCommittedContextManifests(ctx, store, &task, prepared.Context)
+			cc.Task = task
+		}
 	}
 
 	// The commits those earlier attempts pushed, read out of the checkout
@@ -3086,6 +3095,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		UpstreamRepo:     upstreamRepo,
 		SandboxReused:    cfg.sandboxReused,
 		SandboxReclaimed: cfg.sandboxReclaimed,
+		CommittedContext: prepared.Context,
 	}
 	history.BaseIncident = baseIncidentNote(ctx, store, task)
 	history.Resumed = ResumedFrom(ctx, store, previous)

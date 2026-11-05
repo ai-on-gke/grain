@@ -228,6 +228,11 @@ type RepoRef struct {
 	Host string
 }
 
+// IsZero reports whether r names no repository.
+func (r RepoRef) IsZero() bool {
+	return r.Owner == "" && r.Name == "" && r.Host == ""
+}
+
 // String is r's one written form: owner/name, or host/owner/name off the
 // default host.
 func (r RepoRef) String() string {
@@ -1246,10 +1251,15 @@ const (
 	// derived_from:eq:<owner/name#pr>` (external-cli spec #XC-18).
 	// Provenance only: it blocks nothing.
 	LinkDerivedFrom LinkKind = "derived-from"
-	// LinkDesign records a design or spec file (a design/... path) the
-	// task implements, `grain create --design` (#XC-19), so reviews and
-	// commits downstream inherit the design/spec chain. Provenance only.
+	// LinkDesign records a committed-context specification folder or file
+	// (`[owner/name:]path[@rev]`, `grain create -design`, #XC-19) the task
+	// implements, either in its target repository or in a -read context
+	// repository, inherited by child tasks and reviews. Provenance only.
 	LinkDesign LinkKind = "design"
+	// LinkContextManifest records a parsed context.yml manifest discovered in
+	// one of a task's LinkDesign directories (model.ContextManifest). Display
+	// and prompt metadata only: it never blocks dispatch or enforces gates.
+	LinkContextManifest LinkKind = "context-manifest"
 	// LinkTakeover marks a shepherd task filed by the GitHub bot's
 	// "@<slug> take over" command (-> the pull request it took over,
 	// "owner/repo#number"). The task's own pull request is its LinkFixes

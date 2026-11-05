@@ -396,6 +396,28 @@ func (c credentialTokenSource) GitBranches(owner, repo string) ([]string, bool, 
 	return names, true, err
 }
 
+// GitRefSHA resolves ref in owner/repo over smart-HTTP git when its host has
+// no forge API, returning ok false when it has one so the caller asks the API.
+func (c credentialTokenSource) GitRefSHA(owner, repo, rev string) (string, bool, error) {
+	if c.credentials == nil {
+		return "", false, nil
+	}
+	ref := c.ref(owner, repo)
+	cred, found := c.selectGitCredential(owner, repo)
+	var host gitproxy.CredentialHost
+	if found {
+		host = c.credentials.HostOf(cred.Name)
+	} else {
+		host = c.credentials.HostOf(ref.GitHost())
+		cred = gitproxy.Credential{Name: "anonymous"}
+	}
+	if _, _, hasAPI := host.APIBase(); hasAPI {
+		return "", false, nil
+	}
+	sha, err := gitproxy.RemoteRefSHA(host, cred, ref.Owner, ref.Name, rev)
+	return sha, true, err
+}
+
 // selectGitCredential is the credential owner/repo is cloned and pushed
 // with: the deployment's git connection for it (teamCredential), or none.
 // The credentials.json ladder is not asked (docs/single-tenant-reset.md,
