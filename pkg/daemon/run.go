@@ -1148,7 +1148,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			cfg.CheckpostURL, len(verdicts.Expect))
 	}
 
-	webhookConsumer, err := newGitHubWebhookConsumer(cfg, credentials)
+	webhookConsumer, err := newGitHubWebhookConsumer(ctx, cfg, credentials, store)
 	if err != nil {
 		return err
 	}

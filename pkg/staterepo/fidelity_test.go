@@ -747,6 +747,9 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	}); err != nil {
 		t.Fatalf("recording a git_ref schedule's cursor: %v", err)
 	}
+	if err := store.SetGitHubWebhookCursor(ctx, 4242, sub); err != nil {
+		t.Fatalf("recording GitHub webhook cursor: %v", err)
+	}
 	// The grain CI workflows this deployment declares for a repo it does
 	// not control (model.RepoWorkflow). Two of them, since the table's
 	// key is (repo, path) and a repository with one workflow would not
