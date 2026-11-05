@@ -72,55 +72,78 @@ func (c *Client) redactRegistryText(text string) string {
 	return redacted
 }
 
-func registryAuthTarget(cfg model.RegistryConfig) (string, model.RegistryAuthMode, string) {
-	mode, _ := model.NormalizeRegistryAuthMode(cfg.AuthMode)
-	return strings.TrimSpace(cfg.URL), mode, strings.TrimSpace(cfg.OIDCAudience)
+// registryTarget is the part of a RegistryConfig that decides where the
+// daemon's registry credential goes and what it acts on there: the registry
+// URL, the auth mode and OIDC audience it presents (and mints host identity
+// tokens for), the entry name the credential is presented for -- in OIDC
+// mode the host identity PATCHes or creates whatever entry is named -- and the
+// owner_group it pushes onto that entry, whose members the registry lets
+// manage the entry like its owner (rotate its grc_ credential, take over its
+// tunnel). Catalog-only fields (displayName, purpose, listed, tags, hostKind,
+// scopes) are not part of it.
+type registryTarget struct {
+	URL          string
+	Entry        string
+	AuthMode     model.RegistryAuthMode
+	OIDCAudience string
+	OwnerGroup   string
 }
 
-func registryAuthTargetChanged(before *model.Config, after model.Config) bool {
+func registryAuthTarget(cfg model.RegistryConfig) registryTarget {
+	mode, _ := model.NormalizeRegistryAuthMode(cfg.AuthMode)
+	return registryTarget{
+		URL:          strings.TrimSpace(cfg.URL),
+		Entry:        strings.ToLower(strings.TrimSpace(cfg.Entry)),
+		AuthMode:     mode,
+		OIDCAudience: strings.TrimSpace(cfg.OIDCAudience),
+		OwnerGroup:   strings.TrimSpace(cfg.OwnerGroup),
+	}
+}
+
+func registryTargets(before *model.Config, after model.Config) (registryTarget, registryTarget) {
 	var prev model.RegistryConfig
 	if before != nil {
 		prev = before.Registry
 	}
-	bURL, bMode, bAud := registryAuthTarget(prev)
-	aURL, aMode, aAud := registryAuthTarget(after.Registry)
-	return bURL != aURL || bMode != aMode || bAud != aAud
+	return registryAuthTarget(prev), registryAuthTarget(after.Registry)
+}
+
+func registryAuthTargetChanged(before *model.Config, after model.Config) bool {
+	b, a := registryTargets(before, after)
+	return b != a
 }
 
 // checkRegistryAuthTargetWrite holds changes to where the daemon sends its
 // registry registration token or mints host OIDC identity tokens for (URL,
-// authMode, oidcAudience) to a human principal with secrets:write.
+// authMode, oidcAudience), which entry it presents them for (entry), and who
+// it hands management of that entry to (ownerGroup) to a human principal with
+// secrets:write.
 func (c *Client) checkRegistryAuthTargetWrite(ctx context.Context, before *model.Config, after model.Config) error {
 	if !registryAuthTargetChanged(before, after) {
 		return nil
 	}
 	if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
-		return forbiddenErrorf("%q is not a person, so it may not change registry URL or authentication settings", p.ID)
+		return forbiddenErrorf("%q is not a person, so it may not change registry URL, entry, owner group or authentication settings", p.ID)
 	}
 	if role := accessRoleFromContext(ctx); role != nil && !role.allows("secrets:write", "") {
-		return forbiddenErrorf("%s holds no scope secrets:write, which changing registry URL or authentication settings needs", role.label())
+		return forbiddenErrorf("%s holds no scope secrets:write, which changing registry URL, entry, owner group or authentication settings needs", role.label())
 	}
 	return nil
 }
 
-// auditRegistryChanges records changes to registry URL, authMode, or
-// oidcAudience in the credential-access audit log.
+// auditRegistryChanges records changes to registry URL, entry, authMode,
+// oidcAudience or ownerGroup in the credential-access audit log.
 func (c *Client) auditRegistryChanges(ctx context.Context, before *model.Config, after model.Config) {
 	if c == nil || c.Store == nil || !registryAuthTargetChanged(before, after) {
 		return
 	}
-	var prev model.RegistryConfig
-	if before != nil {
-		prev = before.Registry
-	}
-	bURL, bMode, bAud := registryAuthTarget(prev)
-	aURL, aMode, aAud := registryAuthTarget(after.Registry)
+	b, a := registryTargets(before, after)
 	action := "set registry target"
-	if aURL == "" {
+	if a.URL == "" {
 		action = "clear registry target"
 	}
-	outcome := fmt.Sprintf("url %q -> %q, authMode %q -> %q, oidcAudience %q -> %q",
-		bURL, aURL, bMode, aMode, bAud, aAud)
+	outcome := fmt.Sprintf("url %q -> %q, entry %q -> %q, authMode %q -> %q, oidcAudience %q -> %q, ownerGroup %q -> %q",
+		b.URL, a.URL, b.Entry, a.Entry, b.AuthMode, a.AuthMode, b.OIDCAudience, a.OIDCAudience, b.OwnerGroup, a.OwnerGroup)
 	if user := c.requestActor(ctx).Actor.ID; user != "" {
 		outcome += " by " + user
 	}

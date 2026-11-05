@@ -27,7 +27,10 @@ import (
 // credential targets (url, authMode, oidcAudience) to a human principal -- an
 // agent's request is refused so a run cannot redirect the daemon's registration
 // secret or mint host OIDC tokens for an attacker-chosen audience -- and
-// records an authorized change in the credential-access audit log.
+// records an authorized change in the credential-access audit log. The entry
+// name and ownerGroup are held the same way: in OIDC mode the daemon acts on
+// whichever entry is named with the host's identity, and ownerGroup members may
+// manage the entry like its owner.
 func TestRegistryTargetSettingsAreAPersonsAndAudited(t *testing.T) {
 	ui.ResetIAPConfig()
 	t.Cleanup(ui.ResetIAPConfig)
@@ -88,6 +91,31 @@ func TestRegistryTargetSettingsAreAPersonsAndAudited(t *testing.T) {
 	redirectBody := `{"registry":{"url":"https://attacker.example.com","entry":"grain-dev","authMode":"oidc","oidcAudience":"https://registry.example.com"}}`
 	if rec := serveAsAgent(t, f, http.MethodPut, "/api/settings", redirectBody); rec.code != http.StatusForbidden {
 		t.Errorf("agent redirecting configured registry URL got %d %s, want 403", rec.code, rec.excerpt())
+	}
+	// Nor may it point the host's identity at another entry, or hand
+	// management of this entry (credential rotation, the tunnel) to a group
+	// of its choosing by changing ownerGroup.
+	for _, attempt := range []struct {
+		name string
+		body string
+	}{
+		{
+			name: "retarget the entry name",
+			body: `{"registry":{"url":"https://registry.example.com","entry":"someone-elses","authMode":"oidc","oidcAudience":"https://registry.example.com"}}`,
+		},
+		{
+			name: "set ownerGroup",
+			body: `{"registry":{"url":"https://registry.example.com","entry":"grain-dev","authMode":"oidc","oidcAudience":"https://registry.example.com","ownerGroup":"group:attackers@example.com"}}`,
+		},
+	} {
+		if rec := serveAsAgent(t, f, http.MethodPut, "/api/settings", attempt.body); rec.code != http.StatusForbidden {
+			t.Errorf("agent %s got %d %s, want 403", attempt.name, rec.code, rec.excerpt())
+		}
+	}
+	if cfg, err := f.store.GetConfig(context.Background()); err != nil {
+		t.Fatal(err)
+	} else if cfg.Registry.Entry != "grain-dev" || cfg.Registry.OwnerGroup != "" {
+		t.Fatalf("refused agent saves persisted registry entry/ownerGroup: %+v", cfg.Registry)
 	}
 	metaBody := `{"registry":{"url":"https://registry.example.com","entry":"grain-dev","authMode":"oidc","oidcAudience":"https://registry.example.com","purpose":"Updated purpose","listed":true}}`
 	if rec := serveAsAgent(t, f, http.MethodPut, "/api/settings", metaBody); rec.code != http.StatusOK {
