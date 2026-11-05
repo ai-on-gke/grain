@@ -1,0 +1,103 @@
+{
+  "commits": {
+    "A": "0ea5e6ce1b825bfbb707604ae15e71325d11214c",
+    "B": "b666ae5d4596621519ea561936d5fc20a7226279",
+    "C": "e104f760e68f3dcf1aea0839613379a8b8de10f3",
+    "D": "d4030cb9704ba0c41acb9fd256f4fa65f22dd05f"
+  },
+  "steps": [
+    {
+      "cursor": "0ea5e6ce1b825bfbb707604ae15e71325d11214c",
+      "step": "1_first_look",
+      "tasksFiled": 0
+    },
+    {
+      "comments": {
+        "error": "GET is not allowed on /api/tasks/2/comments"
+      },
+      "cursor": "b666ae5d4596621519ea561936d5fc20a7226279",
+      "firstTaskId": "2",
+      "step": "2_move_fires_once",
+      "tasksFiled": 1
+    },
+    {
+      "afterCloseCursor": "e104f760e68f3dcf1aea0839613379a8b8de10f3",
+      "afterCloseTasks": 2,
+      "step": "3_held_while_open_then_fires_after_close",
+      "whileOpenCursor": "b666ae5d4596621519ea561936d5fc20a7226279",
+      "whileOpenTasks": 1
+    },
+    {
+      "afterOfflineMoveRestart": 3,
+      "afterUnchangedRestart": 2,
+      "finalCursor": "d4030cb9704ba0c41acb9fd256f4fa65f22dd05f",
+      "step": "4_restart_neither_refires_nor_misses"
+    }
+  ],
+  "refusals": {
+    "create_watch_forbidden_secrets_repo": {
+      "body": "{\"id\":\"sched-1\",\"title\":\"Watch forbidden secrets repo\",\"description\":\"Attempt to watch secrets-backup\",\"repo\":\"acme/edition\",\"autoMerge\":false,\"autoApproveProposals\":false,\"capabilities\":[],\"recurrence\":{\"kind\":\"git_ref\",\"gitRef\":{\"repo\":\"acme/secrets-backup\",\"ref\":\"refs/heads/main\"}},\"overlap\":\"skip\",\"source\":\"deployment\",\"type\":\"task\",\"enabled\":true,\"nextRunAt\":\"2027-11-05T22:35:52.63452771Z\",\"createdAt\":\"2026-11-04T22:35:52.63452771Z\",\"revision\":\"38c23c9738773719\"}",
+      "status": 201
+    },
+    "create_watch_off_target_repo": {
+      "body": "{\"id\":\"sched-2\",\"title\":\"Watch off-target repo\",\"description\":\"Attempt to watch offlist/external\",\"repo\":\"acme/edition\",\"autoMerge\":false,\"autoApproveProposals\":false,\"capabilities\":[],\"recurrence\":{\"kind\":\"git_ref\",\"gitRef\":{\"repo\":\"offlist/external\",\"ref\":\"refs/heads/main\"}},\"overlap\":\"skip\",\"source\":\"deployment\",\"type\":\"task\",\"enabled\":true,\"nextRunAt\":\"2027-11-05T22:35:52.664413161Z\",\"createdAt\":\"2026-11-04T22:35:52.664413161Z\",\"revision\":\"bdad2bd837e09938\"}",
+      "status": 201
+    },
+    "daemon_log_forbidden_check": [
+      "2026/11/04 22:35:51 grain: could not sync this deployment's encrypted secrets with http://127.0.0.1:36463/acme/secrets-backup.git: secretsrepo: cloning http://127.0.0.1:36463/acme/secrets-backup.git: secretsrepo: no credential for http://127.0.0.1:36463/acme/secrets-backup.git: http://127.0.0.1:36463/acme/secrets-backup.git is not an https URL on github.com, and this deployment's GitHub credentials are only ever sent to github.com: name a token for this repository explicitly (`grain secrets repo -token-file`, or the State pane's token field) if it really lives on another host",
+      "2026/11/04 22:35:52 grain: could not back this deployment's encrypted secrets up to http://127.0.0.1:36463/acme/secrets-backup.git: secretsrepo: cloning http://127.0.0.1:36463/acme/secrets-backup.git: secretsrepo: no credential for http://127.0.0.1:36463/acme/secrets-backup.git: http://127.0.0.1:36463/acme/secrets-backup.git is not an https URL on github.com, and this deployment's GitHub credentials are only ever sent to github.com: name a token for this repository explicitly (`grain secrets repo -token-file`, or the State pane's token field) if it really lives on another host",
+      "2026/11/04 22:35:52 orchestrator: schedule sched-2 watches offlist/external refs/heads/main, which is not on this deployment's target repo list; it is not looked at until it is",
+      "2026/11/04 22:35:52 orchestrator: schedule sched-1: reading acme/secrets-backup refs/heads/main: acme/secrets-backup: grain's own state repository holds (or once held) its encrypted secrets file, so no sandbox may fetch or push it: everything a sandbox can clone is everything it can read. A state repository that has never held that file can be dispatched against normally"
+    ],
+    "declared_grain_config": ".grain/schedules/sync.yml: `git_ref` watches grain/config, which is grain's own configuration; no repository's file may reach it -- a schedule that watches it is declared in grain's own settings",
+    "short_ref_api": {
+      "body": "{\"error\":\"recurrence: git_ref trigger needs a full `ref:` such as refs/tags/latest or refs/heads/main, got \\\"latest\\\"\"}",
+      "status": 400
+    }
+  },
+  "scheduleWireJson": {
+    "autoApproveProposals": false,
+    "autoMerge": false,
+    "capabilities": [],
+    "createdAt": "2026-11-04T22:35:52.694534749Z",
+    "description": "Bring acme/edition up to upstream/core's latest release.",
+    "enabled": true,
+    "id": "sched-3",
+    "nextRunAt": "2027-11-05T22:35:52.694534749Z",
+    "overlap": "skip",
+    "recurrence": {
+      "gitRef": {
+        "ref": "refs/tags/latest",
+        "repo": "upstream/core"
+      },
+      "kind": "git_ref"
+    },
+    "repo": "acme/edition",
+    "revision": "c95a2997c9026c77",
+    "source": "deployment",
+    "title": "Sync upstream latest release",
+    "type": "task"
+  },
+  "lsRemoteCounts": {
+    "upstream/core": 6
+  },
+  "daemonLogExcerpt": [
+    "2026/11/04 22:35:51 grain: could not sync this deployment's encrypted secrets with http://127.0.0.1:36463/acme/secrets-backup.git: secretsrepo: cloning http://127.0.0.1:36463/acme/secrets-backup.git: secretsrepo: no credential for http://127.0.0.1:36463/acme/secrets-backup.git: http://127.0.0.1:36463/acme/secrets-backup.git is not an https URL on github.com, and this deployment's GitHub credentials are only ever sent to github.com: name a token for this repository explicitly (`grain secrets repo -token-file`, or the State pane's token field) if it really lives on another host",
+    "2026/11/04 22:35:52 grain: could not back this deployment's encrypted secrets up to http://127.0.0.1:36463/acme/secrets-backup.git: secretsrepo: cloning http://127.0.0.1:36463/acme/secrets-backup.git: secretsrepo: no credential for http://127.0.0.1:36463/acme/secrets-backup.git: http://127.0.0.1:36463/acme/secrets-backup.git is not an https URL on github.com, and this deployment's GitHub credentials are only ever sent to github.com: name a token for this repository explicitly (`grain secrets repo -token-file`, or the State pane's token field) if it really lives on another host",
+    "2026/11/04 22:35:52 orchestrator: schedule sched-3 starts watching upstream/core refs/tags/latest at 0ea5e6ce1b82",
+    "2026/11/04 22:35:52 orchestrator: schedule sched-2 watches offlist/external refs/heads/main, which is not on this deployment's target repo list; it is not looked at until it is",
+    "2026/11/04 22:35:52 orchestrator: schedule sched-1: reading acme/secrets-backup refs/heads/main: acme/secrets-backup: grain's own state repository holds (or once held) its encrypted secrets file, so no sandbox may fetch or push it: everything a sandbox can clone is everything it can read. A state repository that has never held that file can be dispatched against normally",
+    "2026/11/04 22:37:53 orchestrator: schedule sched-3 fired: refs/tags/latest of upstream/core moved from 0ea5e6ce1b825bfbb707604ae15e71325d11214c to b666ae5d4596621519ea561936d5fc20a7226279",
+    "2026/11/04 22:39:54 orchestrator: schedule sched-3: refs/tags/latest of upstream/core moved from b666ae5d4596621519ea561936d5fc20a7226279 to e104f760e68f3dcf1aea0839613379a8b8de10f3, but its previous firing is still open; it fires once that closes",
+    "2026/11/04 22:41:54 orchestrator: schedule sched-3 fired: refs/tags/latest of upstream/core moved from b666ae5d4596621519ea561936d5fc20a7226279 to e104f760e68f3dcf1aea0839613379a8b8de10f3",
+    "2026/11/04 22:41:55 grain: could not sync this deployment's encrypted secrets with http://127.0.0.1:36463/acme/secrets-backup.git: secretsrepo: cloning http://127.0.0.1:36463/acme/secrets-backup.git: secretsrepo: no credential for http://127.0.0.1:36463/acme/secrets-backup.git: http://127.0.0.1:36463/acme/secrets-backup.git is not an https URL on github.com, and this deployment's GitHub credentials are only ever sent to github.com: name a token for this repository explicitly (`grain secrets repo -token-file`, or the State pane's token field) if it really lives on another host",
+    "2026/11/04 22:41:55 orchestrator: schedule sched-2 watches offlist/external refs/heads/main, which is not on this deployment's target repo list; it is not looked at until it is",
+    "2026/11/04 22:41:55 orchestrator: schedule sched-1: reading acme/secrets-backup refs/heads/main: acme/secrets-backup: grain's own state repository holds (or once held) its encrypted secrets file, so no sandbox may fetch or push it: everything a sandbox can clone is everything it can read. A state repository that has never held that file can be dispatched against normally",
+    "2026/11/04 22:42:00 grain: could not back this deployment's encrypted secrets up to http://127.0.0.1:36463/acme/secrets-backup.git: secretsrepo: cloning http://127.0.0.1:36463/acme/secrets-backup.git: secretsrepo: no credential for http://127.0.0.1:36463/acme/secrets-backup.git: http://127.0.0.1:36463/acme/secrets-backup.git is not an https URL on github.com, and this deployment's GitHub credentials are only ever sent to github.com: name a token for this repository explicitly (`grain secrets repo -token-file`, or the State pane's token field) if it really lives on another host",
+    "2026/11/04 22:42:00 grain: could not sync this deployment's encrypted secrets with http://127.0.0.1:36463/acme/secrets-backup.git: secretsrepo: cloning http://127.0.0.1:36463/acme/secrets-backup.git: secretsrepo: no credential for http://127.0.0.1:36463/acme/secrets-backup.git: http://127.0.0.1:36463/acme/secrets-backup.git is not an https URL on github.com, and this deployment's GitHub credentials are only ever sent to github.com: name a token for this repository explicitly (`grain secrets repo -token-file`, or the State pane's token field) if it really lives on another host",
+    "2026/11/04 22:42:00 orchestrator: schedule sched-3 fired: refs/tags/latest of upstream/core moved from e104f760e68f3dcf1aea0839613379a8b8de10f3 to d4030cb9704ba0c41acb9fd256f4fa65f22dd05f",
+    "2026/11/04 22:42:00 orchestrator: schedule sched-2 watches offlist/external refs/heads/main, which is not on this deployment's target repo list; it is not looked at until it is",
+    "2026/11/04 22:42:00 orchestrator: schedule sched-1: reading acme/secrets-backup refs/heads/main: acme/secrets-backup: grain's own state repository holds (or once held) its encrypted secrets file, so no sandbox may fetch or push it: everything a sandbox can clone is everything it can read. A state repository that has never held that file can be dispatched against normally",
+    "2026/11/04 22:42:01 grain: could not back this deployment's encrypted secrets up to http://127.0.0.1:36463/acme/secrets-backup.git: secretsrepo: cloning http://127.0.0.1:36463/acme/secrets-backup.git: secretsrepo: no credential for http://127.0.0.1:36463/acme/secrets-backup.git: http://127.0.0.1:36463/acme/secrets-backup.git is not an https URL on github.com, and this deployment's GitHub credentials are only ever sent to github.com: name a token for this repository explicitly (`grain secrets repo -token-file`, or the State pane's token field) if it really lives on another host"
+  ]
+}

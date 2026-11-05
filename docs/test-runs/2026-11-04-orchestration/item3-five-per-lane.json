@@ -1,0 +1,71 @@
+{
+  "defaultMaxMergesPerRepo": 5,
+  "scenario3a_sixCleanPRs": {
+    "cycle1Merged": 5,
+    "cycle1States": {
+      "301": "closed",
+      "302": "closed",
+      "303": "closed",
+      "304": "closed",
+      "305": "closed",
+      "306": "completed"
+    },
+    "cycle2Merged": 6
+  },
+  "scenario3b_putMerge405ConflictAfterThird": {
+    "cycle1Err": "\u003cnil\u003e",
+    "prMerged": {
+      "401": true,
+      "402": true,
+      "403": true,
+      "404": false,
+      "405": true
+    },
+    "states": {
+      "401": "closed",
+      "402": "closed",
+      "403": "closed",
+      "404": "completed",
+      "405": "closed"
+    }
+  },
+  "scenario3b_reReadMergeableFalseAfterThird": {
+    "cycle1Err": "\u003cnil\u003e",
+    "prMerged": {
+      "401": true,
+      "402": true,
+      "403": true,
+      "404": false,
+      "405": true
+    },
+    "states": {
+      "401": "closed",
+      "402": "closed",
+      "403": "closed",
+      "404": "proposed",
+      "405": "closed"
+    }
+  },
+  "scenario3b_server502AfterThirdClosesLane": {
+    "cycle1Err": "sync: orchestrator: auto-merging acme/error-lane#9003 (head \"c08b0466ab1c8d6cbd8ebf6b5f2bd2066524a83c\"): GitHub API error 502: \"{\\\"message\\\":\\\"Bad Gateway\\\"}\"",
+    "cycle1PRMerged": {
+      "451": true,
+      "452": true,
+      "453": true,
+      "454": false,
+      "455": false
+    },
+    "cycle2PRMerged": {
+      "451": true,
+      "452": true,
+      "453": true,
+      "454": true,
+      "455": true
+    }
+  },
+  "scenario3c_storeHolding1": {
+    "cycle1Merged": 1,
+    "keptValue": 1,
+    "totalQueuedPR": 3
+  }
+}
