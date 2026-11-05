@@ -20,8 +20,9 @@ Every normative requirement below is derived from the implementation on `main` a
 - [8. `grain hostd` Connection Identity and Owner Matching](#8-grain-hostd-connection-identity-and-owner-matching)
 - [9. Diagnostic Logging of Refused Assertions and Principals](#9-diagnostic-logging-of-refused-assertions-and-principals)
 - [10. Plaintext Identity Headers and Sandbox Isolation](#10-plaintext-identity-headers-and-sandbox-isolation)
-- [11. Requirement Traceability Summary](#11-requirement-traceability-summary)
-- [12. Sources](#12-sources)
+- [11. Delegated (On-Behalf-Of) Identity via the Registry](#11-delegated-on-behalf-of-identity-via-the-registry)
+- [12. Requirement Traceability Summary](#12-requirement-traceability-summary)
+- [13. Sources](#13-sources)
 
 ---
 
@@ -324,7 +325,90 @@ Every normative requirement below is derived from the implementation on `main` a
 
 ---
 
-## 11. Requirement Traceability Summary
+## 11. Delegated (On-Behalf-Of) Identity via the Registry
+
+**Status: proposed (task 3130).** Nothing in this section is on `main` yet. Every clause is **untested**, and the named tests are the ones the implementation (`registry.design.md` implementation plan step 19) MUST add. Design: [`authentication.design.md`](../../design/authentication.design.md) §6 and [`registry.design.md`](../../design/registry.design.md) *Delegated identity*.
+
+### 11.1 `act` claim parsing and `VerifiedIdentity.Via` {#AU-22}
+
+1. `ui.VerifiedIdentity` MUST gain `Via *DelegatingApp` (`Email`, `Name`, `Grant`, `Access`). Only a verifier that carries delegation (core: `registry`) MAY set it. `NewIAPVerifier` MUST leave it nil.
+2. The `registry` verifier MUST accept an `act` claim only when:
+   - it is a JSON object with a non-empty `sub` that `verifiedIdentityForEmail` classifies as `model.PrincipalService`;
+   - `act.kind == "service"`;
+   - `act.access` is `read` or `write`;
+   - `act` contains no nested `act`; and
+   - the top-level `kind == "human"`, with a top-level `sub`/`email` that classifies as `model.PrincipalHuman`.
+3. Any other present `act` MUST fail verification with `401` (`writeAssertionRefused`), with no fallback to the access code, a `gma_…` token, a session cookie or an open route (`AU-2`).
+4. All other `registry` verifier checks MUST be unchanged for delegated assertions: `iss`, a single `aud` equal to `-ui-registry-audience`, `ES256`, `exp - iat <= 5 min` and 30 s skew.
+
+**Pinned by (proposed):** `pkg/ui/registry_verifier_test.go`: `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestRegistryVerifierRefusesMalformedOrNestedAct`.
+
+### 11.2 `delegate:` allowlist entries {#AU-23}
+
+1. `allowed_principal` MUST accept a third prefix, `delegate:<email>`, extending `AU-6`'s grammar.
+   - `<email>` MUST be a lower-cased service-account email (`.gserviceaccount.com`, or the wrapper verifier's service classification).
+   - The entry MAY carry a `label` matching `[a-z][a-z0-9-]{0,31}`.
+   - It MUST carry a non-empty `reason`, stored in `allowed_principal.reason` and `config_audit`.
+2. A `delegate:` entry MUST match only `VerifiedIdentity.Via.Email`. It MUST NOT admit a direct caller, and a `serviceAccount:`, `user:`, `group:` or `domain:` entry MUST NOT satisfy the delegate check.
+3. Adding or changing a `delegate:` entry MUST be refused (`403`) to every agent, console session and `gma_…` token (`AU-6.4`) and to every delegated request (`AU-25`). Only a verified human caller holding `access:write`, or an access-code admin, may do it.
+4. A `delegate:` entry's role MUST NOT resolve to any scope for which `model.IsDangerousAPIScope` is true, to `access:write`, or to an admin-only permission (`422` on `POST`/`PATCH /api/access/principals`).
+5. `MigrateAllowedPrincipals` MUST never import `delegate:` entries from `-ui-allowed-principals`.
+6. A `delegate:` entry naming a `gcp-key` pool account MUST be refused (`422`) and never match (`AU-8`).
+
+**Pinned by (proposed):** `pkg/ui/access_principals_test.go`: `TestDelegateEntriesNeedAReasonAndAPerson`, `TestDelegateEntryRoleRefusesDangerousScopes`, `TestDelegateEntryNeverAdmitsADirectCaller`; `pkg/cli/access_test.go`: `TestAccessAllowDelegateCLI`.
+
+### 11.3 Dual admission and refusals {#AU-24}
+
+1. For a request whose `VerifiedIdentity.Via != nil`, `singleTenantGate` MUST admit only when both checks pass:
+   - `checkAllowedPrincipal` admits `{Email, Kind}` (the person) under `AU-6`–`AU-9`; and
+   - a `delegate:` entry matches `Via.Email`.
+2. When the person is refused, the response MUST be the existing `AU-15` refusal naming the person.
+3. When the person passes but no `delegate:` entry matches, the response MUST be `403`. A browser navigation gets a page stating that `<label>` is not allowed to act for people on this grain. JSON callers get `{"code": "delegate_not_allowed", "delegatingApp": "<email>"}`.
+4. A refused delegated request MUST be logged once per `(person, app)` under the `AU-19` bound.
+
+**Pinned by (proposed):** `pkg/ui/delegation_test.go`: `TestDelegatedRequestNeedsPersonAndDelegateEntry`, `TestDelegateNotAllowedRefusalNamesTheApp`.
+
+### 11.4 Role intersection and person-only operations {#AU-25}
+
+1. A delegated request's effective scopes MUST be, on every route and on every request, the intersection of:
+   - the person's current role (`AU-6.5`; `rbac.spec.md` `RB-4`); and
+   - the matching `delegate:` entry's role.
+   This uses the `RB-13` path with `OnBehalfOf` set to the person. A denial MUST include `delegatedFrom: <person>` and `delegatingApp: <app email>`.
+2. When `Via.Access == "read"`, every method other than `GET` and `HEAD` MUST be refused with `403` (`code: "read_only_delegation"`).
+3. The following MUST be refused with `403` (`code: "requires_person"`) for every delegated request, whatever both roles allow:
+   - `POST`, `PATCH` and `DELETE /api/access/principals`;
+   - minting or rotating a `gma_…` token that grants a dangerous or `requires_person` scope (`AU-11`);
+   - approving a task or proposal that holds an `IsAdminOnlyGrant` grant;
+   - `POST /api/hostds`.
+4. `hostdConnectIdentity` MUST refuse with `403` any connection whose verified identity has `Via != nil` (`AU-17`, `AU-18`).
+
+**Pinned by (proposed):** `pkg/ui/delegation_test.go`: `TestDelegatedRoleIsPersonIntersectDelegate`, `TestDemotingThePersonStopsDelegatedWrites`, `TestReadOnlyDelegationRefusesWrites`, `TestPersonOnlyOperationsRefuseDelegation`; `pkg/hostd/connect_identity_test.go`: `TestDelegatedIdentityNeverOwnsAHostd`.
+
+### 11.5 Attribution, labels, and trailers {#AU-26}
+
+1. For a delegated request, `ui.RequestActor(ctx)` MUST return `model.Attribution` with:
+   - `Actor = {Kind: PrincipalService, ID: Via.Email, Source: "registry"}`;
+   - `OnBehalfOf = &{Kind: PrincipalHuman, ID: Email, Source: "registry"}`.
+   Every mutating route MUST store both (`TestEveryMutatingRouteIsAttributed` extended).
+2. `ui.PrincipalLabel` MUST render that pair as `<person email> (via <label>)`. `<label>` is the matching `delegate:` entry's `label`, or else the local part of `Via.Email`.
+3. `identityTrailers` MUST write the person's email in `Requested-by:` for a delegated task filing and in `Approved-by:` for a delegated approval. It MUST NOT write a service principal as a person.
+4. `GET /api/auth/user` (and `GET /api/whoami` when it ships) MUST report `actor: "service:<app email>"`, `onBehalfOf: "user:<person>"` and `via: "<label>"`.
+5. The grain's request log MUST record `registry_rid`, `registry_jti` and `delegation_grant` (`act.grant`) for each delegated request.
+
+**Pinned by (proposed):** `pkg/ui/principal_label_test.go`: `TestPrincipalLabelRendersPersonViaApp`; `pkg/ui/delegation_test.go`: `TestDelegatedWriteRecordsAppAndPerson`; `pkg/orchestrator/worktree_test.go`: `TestDelegatedTaskTrailersNameThePerson`.
+
+### 11.6 Unchanged CSRF, access-code, break-glass, and plain-service rules {#AU-27}
+
+1. `checkCrossOrigin` and `checkVerifiedIdentityCSRF` (`AU-14`) MUST apply to delegated requests unchanged.
+2. The `registry` verifier MUST keep `AccessCodeWins() == false` (`AU-10`). A request carrying a delegated assertion MUST NOT be admitted by an access code or a `gma_…` token instead of the assertion.
+3. Unproxied-loopback break-glass (`AU-13`) and the mandatory tunnel-ingress gate on `connected` grains MUST be unchanged. The latter requires a valid assertion on every tunnelled request and never accepts access codes over the tunnel.
+4. A `registry` assertion with `kind: "service"` and no `act` MUST be admitted only by an explicit `serviceAccount:` entry (`AU-6`, `AU-7`), and MUST be attributed to the service principal alone with no `OnBehalfOf`.
+
+**Pinned by (proposed):** `pkg/ui/delegation_test.go`: `TestDelegationLeavesCSRFAndBreakGlassUnchanged`, `TestPlainRegistryServicePrincipalNeedsServiceAccountEntry`.
+
+---
+
+## 12. Requirement Traceability Summary
 
 | ID | Requirement | Status on `main` | Primary tests / coverage notes |
 | --- | --- | --- | --- |
@@ -349,12 +433,18 @@ Every normative requirement below is derived from the implementation on `main` a
 | `AU-19` | Bounded deduplicated logging of refused assertions and principals | Implemented | `TestRefusedAssertionLoggedOncePerKindNotOncePerAudience`, `TestRefusedAssertionForOwnAudienceDoesNotSayToSetTheAudience`, `TestRefusedPrincipalsAreLoggedOnce` (*64-cap saturation, unconfigured-audience warning, and `logRefusedVerifierHeader` untested*) |
 | `AU-20` | Plaintext identity headers never trusted | Implemented | `TestExtractPrincipalNamesNobodyFromAnIdentityHeader`, `TestPlaintextIdentityHeadersIgnoredFromUntrustedSource`, `TestIAPModeIgnoresPlaintextIdentityHeaders`, `TestASingleTenantDaemonRefusesWhoeverAProxyNames` (*`logIgnoredIdentityHeader` dedup untested*) |
 | `AU-21` | In-sandbox listeners isolated from proxy assertions | Implemented | `TestGitProxyScopesEachSandboxToItsOwnRepositories`, `TestSandboxGrainLogReadIsAuditedAsItsTask`, `TestSandboxTokenMintedAfterGitProxyStartsAuthenticates` |
+| `AU-22` | Registry `act` claim parsing and `VerifiedIdentity.Via` | Proposed (task 3130) | *untested*: `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestRegistryVerifierRefusesMalformedOrNestedAct` |
+| `AU-23` | `delegate:` allowlist entries (reason, person-only, no dangerous scopes) | Proposed (task 3130) | *untested*: `TestDelegateEntriesNeedAReasonAndAPerson`, `TestDelegateEntryRoleRefusesDangerousScopes`, `TestDelegateEntryNeverAdmitsADirectCaller`, `TestAccessAllowDelegateCLI` |
+| `AU-24` | Dual admission (person and `delegate:` entry) and refusals | Proposed (task 3130) | *untested*: `TestDelegatedRequestNeedsPersonAndDelegateEntry`, `TestDelegateNotAllowedRefusalNamesTheApp` |
+| `AU-25` | Person ∩ delegate role intersection, read-only grants, person-only operations, `hostd` refusal | Proposed (task 3130) | *untested*: `TestDelegatedRoleIsPersonIntersectDelegate`, `TestDemotingThePersonStopsDelegatedWrites`, `TestReadOnlyDelegationRefusesWrites`, `TestPersonOnlyOperationsRefuseDelegation`, `TestDelegatedIdentityNeverOwnsAHostd` |
+| `AU-26` | `Actor` = app, `OnBehalfOf` = person, `(via <app>)` label, trailers, request log | Proposed (task 3130) | *untested*: `TestPrincipalLabelRendersPersonViaApp`, `TestDelegatedWriteRecordsAppAndPerson`, `TestDelegatedTaskTrailersNameThePerson` |
+| `AU-27` | CSRF, access-code, break-glass, and plain-service rules unchanged under delegation | Proposed (task 3130) | *untested*: `TestDelegationLeavesCSRFAndBreakGlassUnchanged`, `TestPlainRegistryServicePrincipalNeedsServiceAccountEntry` |
 
 ---
 
-## 12. Sources
+## 13. Sources
 
-- Design document: [`design/design/authentication.design.md`](../../design/authentication.design.md)
+- Design document: [`design/design/authentication.design.md`](../../design/authentication.design.md) (§6 for `AU-22`–`AU-27`, with [`design/design/registry.design.md`](../../design/registry.design.md) *Delegated identity*)
 - Companion designs & specs: [`design/design/operator-attribution.design.md`](../../design/operator-attribution.design.md), [`design/spec/operator-attribution/operator-attribution.spec.md`](../operator-attribution/operator-attribution.spec.md), [`design/design/registry.design.md`](../../design/registry.design.md), [`design/design/simple-config.design.md`](../../design/simple-config.design.md), [`docs/access-code.md`](../../../docs/access-code.md)
 - Walkthrough evidence: [`docs/test-runs/2026-11-02-verified-identity.md`](../../../docs/test-runs/2026-11-02-verified-identity.md), [`docs/test-runs/2026-11-02-iap-end-to-end.md`](../../../docs/test-runs/2026-11-02-iap-end-to-end.md), [`docs/test-runs/2026-11-03-iap-deployment.md`](../../../docs/test-runs/2026-11-03-iap-deployment.md)
 - Implementation packages: `pkg/ui` (`verifier.go`, `principal.go`, `assertion_diagnostics.go`, `allowlist.go`, `accesscode.go`, `csrf.go`, `principalrefusal.go`, `auth.go`, `server.go`, `request_actor.go`, `principal_label.go`, `external_agents.go`, `httpclient.go`, `hostd_connect.go`, `hostds.go`), `pkg/model/task.go`, `pkg/hostd` (`connect_identity.go`, `remote.go`, `dialout.go`, `iap_auth.go`), `pkg/daemon/ui_server.go`, `pkg/cli` (`daemon.go`, `cliconn.go`, `accesscode.go`, `hostd.go`, `hostds.go`)

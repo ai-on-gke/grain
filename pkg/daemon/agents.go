@@ -36,6 +36,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
 	"github.com/ai-on-gke/grain/pkg/agent/sessionstore"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 )
@@ -1471,13 +1472,13 @@ func BuildAntigravityFramework(ctx context.Context, cfg Config, secretStore *sec
 			return backendCredential(ctx, cfg, secretStore, secrets.GeminiAPIKeySecret, cfg.GeminiAPIKeyFile)
 		}))
 	}
-	if dir := agentSessionsDir(cfg.DataDir); dir != "" {
+	if s := agentSessionStoreFor(cfg); s != nil {
 		// The per-task HOME that lets a run pick up the conversation the
 		// task's last run left -- what agent/claude has always had for
 		// free, its sessions living in the controller's own ~/.claude.
 		// See agentSessionsDir, and pkg/agent/sessionstore for what is
 		// kept there and what bounds it.
-		opts = append(opts, antigravity.WithSessionStore(sessionstore.New(dir)))
+		opts = append(opts, antigravity.WithSessionStore(s))
 	}
 	if cfg.GranuleSandboxes {
 		// Only meaningful with -granule-sandboxes, exactly as for
@@ -1617,6 +1618,11 @@ func BuildClaudeFramework(ctx context.Context, cfg Config, secretStore *secrets.
 		// daemon's sandbox access and GitHub credentials, and the
 		// container is given neither.
 		opts = append(opts, claude.WithHost(container), claude.WithHostMCP())
+	}
+	if cfg.RunHost == nil && container == nil {
+		if arch := claudeSessionArchiveFor(cfg); arch != nil {
+			opts = append(opts, claude.WithSessionArchive(arch))
+		}
 	}
 	if isVertex {
 		opts = append(opts, claude.WithVertex(true))
@@ -1825,11 +1831,11 @@ func buildCodexFramework(ctx context.Context, cfg Config, secretStore *secrets.S
 	} else {
 		opts = append(opts, codex.WithAuthFile(authFile))
 	}
-	if dir := agentSessionsDir(cfg.DataDir); dir != "" {
+	if s := agentSessionStoreFor(cfg); s != nil {
 		// The per-task CODEX_HOME that lets a run pick up the thread the
 		// task's last run left -- see the identical line in
 		// buildAntigravityFramework, and agentSessionsDir.
-		opts = append(opts, codex.WithSessionStore(sessionstore.New(dir)))
+		opts = append(opts, codex.WithSessionStore(s))
 	}
 	if cfg.GranuleSandboxes {
 		opts = append(opts, codex.WithGranuleSSH(cfg.GranuleSSHUser, cfg.GranuleExecKey, cfg.GranuleWorkspace))
@@ -1840,6 +1846,29 @@ func buildCodexFramework(ctx context.Context, cfg Config, secretStore *secrets.S
 		opts = append(opts, codex.WithGrainServer(url))
 	}
 	return codex.New(codexPath, grainBinaryPath, opts...), nil
+}
+
+func agentSessionStoreFor(cfg Config) *sessionstore.Store {
+	dir := agentSessionsDir(cfg.DataDir)
+	if dir == "" {
+		return nil
+	}
+	s := sessionstore.New(dir)
+	if cfg.ObjectStore != nil {
+		s.WithObjectStore(objectstore.WithPrefix(cfg.ObjectStore, "agent-sessions"))
+	}
+	return s
+}
+
+func claudeSessionArchiveFor(cfg Config) *sessionstore.ClaudeArchive {
+	if cfg.ObjectStore == nil {
+		return nil
+	}
+	claudeDir := sessionstore.ResolveClaudeConfigDir(os.Getenv)
+	if claudeDir == "" {
+		return nil
+	}
+	return sessionstore.NewClaudeArchive(objectstore.WithPrefix(cfg.ObjectStore, "agent-sessions"), claudeDir)
 }
 
 // daemonServerURL is the base URL this same process's own UI/API server
