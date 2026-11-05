@@ -367,6 +367,14 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+case "${BASH_SOURCE[0]}" in
+  */*) scripts_dir="${BASH_SOURCE[0]%/*}" ;;
+  *) scripts_dir=. ;;
+esac
+repo_root="$(cd "$scripts_dir/.." && pwd)"
+# shellcheck source=scripts/release-image-repos.sh
+. "$scripts_dir/release-image-repos.sh"
+
 setting() {
   local variable="$1"
   local file="$2"
@@ -387,7 +395,7 @@ token="$(setting PACKAGE_PUBLISH_TOKEN /home/debian/.package-publish-token)"
 # deployment still granting it goes on releasing while it is switched over.
 # Its registry replaces the one named above only if it names one: an
 # operator who set PACKAGE_PUBLISH_REGISTRY and relies on an existing
-# `docker login` (no token) publishes there, not to ghcr.io.
+# `docker login` (no token) publishes there, not to docker.io.
 if [ -z "$token" ]; then
   legacy_registry="$(setting REGISTRY_PUSH_REGISTRY /home/debian/.registry-push-registry)"
   registry="${legacy_registry:-$registry}"
@@ -395,11 +403,16 @@ if [ -z "$token" ]; then
   token="$(setting REGISTRY_PUSH_TOKEN /home/debian/.registry-push-token)"
 fi
 
-# A direct bootstrap normally has only `gh auth login`; Grain CI supplies
-# the three files above. Prefer either explicit source, then let gh provide
-# the same username/token. An existing `docker login` needs neither.
-registry="${registry:-ghcr.io}"
-if [ -z "$username" ] && [ -z "$token" ] &&
+if [ -z "$token" ] && [ -n "${DOCKER_PAT:-}" ]; then
+  token="$DOCKER_PAT"
+fi
+
+registry="${registry:-$RELEASE_IMAGE_REGISTRY_DEFAULT}"
+if [ -n "$token" ] && [ -z "$username" ] && { [ "$registry" = "docker.io" ] || [ "$registry" = "index.docker.io" ]; }; then
+  username="${DOCKERHUB_USERNAME:-$DOCKERHUB_USERNAME_DEFAULT}"
+fi
+# A direct bootstrap targeting ghcr.io may have only `gh auth login`.
+if [ "$registry" = "ghcr.io" ] && [ -z "$username" ] && [ -z "$token" ] &&
     command -v gh >/dev/null 2>&1 && gh auth status -h github.com >/dev/null 2>&1; then
   username="$(gh api user --jq .login)"
   token="$(gh auth token -h github.com)"
@@ -423,22 +436,26 @@ if [ -z "$GRAIN_CI_REPO" ] || [ -z "$GRAIN_CI_REF" ]; then
 fi
 export GRAIN_CI_REPO GRAIN_CI_COMMIT GRAIN_CI_REF
 
-RELEASE_IMAGE_REPO="${RELEASE_IMAGE_REPO:-bwsalmon/grain}"
+RELEASE_IMAGE_REPO="${RELEASE_IMAGE_REPO:-$RELEASE_IMAGE_REPO_DEFAULT}"
 repo="${RELEASE_IMAGE_REPO,,}"
+source_github_repo="${GRAIN_CI_REPO,,}"
+if [[ "$repo" == */* ]]; then
+  source_github_repo="$repo"
+fi
 commit="$GRAIN_CI_COMMIT"
 # The branch's moving tag: '/' becomes '..', exactly as pkg/upgrade's
 # TagForBranch resolves it (see there for why '..' and not '-', #2386).
 branch="${GRAIN_CI_REF//\//..}"
 short="${commit:0:7}"
 root="$registry/${RELEASE_IMAGE_REPO,,}"
-guest_base="$root/guest-base:sha-$short"
-guest="$root/guest:sha-$short"
+guest_base="$root/sandbox-base:sha-$short"
+guest="$root/sandbox:sha-$short"
 # The granule image the guest builds below are packed onto, built out of
 # third_party/granule by scripts/granule/build-granule-image.sh -- which
 # names the same default, and is where the whole of why lives.
 granule_image="granule:vendored"
-k8s_sandbox_base="$root/k8s-sandbox-base:sha-$short"
-k8s_sandbox="$root/k8s-sandbox:sha-$short"
+k8s_sandbox_base="$root/sandbox-k8s-base:sha-$short"
+k8s_sandbox="$root/sandbox-k8s:sha-$short"
 # The daemon image, built from ./cmd/grain alongside the guest and the
 # Kubernetes sandbox image.
 grain="$root/grain:sha-$short"
@@ -450,11 +467,6 @@ core_main=./cmd/grain
 # drive, and tells the push which images to publish.
 state="${RELEASE_IMAGES_STATE:-/tmp/release-images.env}"
 
-case "${BASH_SOURCE[0]}" in
-  */*) scripts_dir="${BASH_SOURCE[0]%/*}" ;;
-  *) scripts_dir=. ;;
-esac
-repo_root="$(cd "$scripts_dir/.." && pwd)"
 # shellcheck source=scripts/grain-ci-host.sh
 . "$scripts_dir/grain-ci-host.sh"
 trap cleanup_ca EXIT INT TERM
@@ -759,7 +771,7 @@ if [ "$dry_run" = true ]; then
       select_promotion "$promote_request"
       targets="$promote_tag"
       [ "$promote_latest" = true ] && targets="$targets and latest"
-      echo "release-images.sh: [dry-run] phase 'promote': would retag $root/{guest,k8s-sandbox}:sha-${promote_commit:0:7} as $targets"
+      echo "release-images.sh: [dry-run] phase 'promote': would retag $root/{sandbox,sandbox-k8s}:sha-${promote_commit:0:7} as $targets"
       if release_takes_main_grain; then
         echo "release-images.sh: [dry-run] and rebuild $root/grain:sha-${promote_commit:0:7} from $promote_commit ($core_main) with RELEASE=$promote_tag as $targets, unless $root/grain:$promote_tag already reports $promote_tag"
       else
@@ -774,7 +786,7 @@ if [ "$dry_run" = true ]; then
       select_rc "$rc_request"
       targets="$promote_tag"
       [ "${#moving[@]}" -eq 0 ] || targets="$targets, ${moving[*]}"
-      echo "release-images.sh: [dry-run] phase 'rc': would retag $root/{guest,k8s-sandbox}:sha-${promote_commit:0:7} as $targets"
+      echo "release-images.sh: [dry-run] phase 'rc': would retag $root/{sandbox,sandbox-k8s}:sha-${promote_commit:0:7} as $targets"
       echo "release-images.sh: [dry-run] and rebuild $root/grain:sha-${promote_commit:0:7} from $promote_commit ($core_main) with RELEASE=$promote_tag as $targets, unless $root/grain:$promote_tag already reports $promote_tag"
       if [ "${#moving[@]}" -eq 0 ]; then
         echo "release-images.sh: [dry-run] candidate and rc stay put"
@@ -782,24 +794,24 @@ if [ "$dry_run" = true ]; then
       ;;
     pending)
       select_pending "$pending_request"
-      echo "release-images.sh: [dry-run] phase 'pending': would retag $root/{guest,k8s-sandbox}:sha-${promote_commit:0:7} as $promote_tag, and rebuild $root/grain:sha-${promote_commit:0:7} from $promote_commit with RELEASE=$stamp_tag as $promote_tag, unless it already reports $stamp_tag at $promote_commit; $stamp_tag and latest stay put"
+      echo "release-images.sh: [dry-run] phase 'pending': would retag $root/{sandbox,sandbox-k8s}:sha-${promote_commit:0:7} as $promote_tag, and rebuild $root/grain:sha-${promote_commit:0:7} from $promote_commit with RELEASE=$stamp_tag as $promote_tag, unless it already reports $stamp_tag at $promote_commit; $stamp_tag and latest stay put"
       ;;
     discard-pending)
-      echo "release-images.sh: [dry-run] phase 'discard-pending': would tag $root/{grain,guest,k8s-sandbox}:$pending_request-pending as $pending_request-rejected"
+      echo "release-images.sh: [dry-run] phase 'discard-pending': would tag $root/{grain,sandbox,sandbox-k8s}:$pending_request-pending as $pending_request-rejected"
       ;;
     discard-rc)
       if ! [[ "$rc_request" =~ $rc_tag_pattern ]]; then
         echo "release-images.sh: $rc_request is not a release candidate tag (vX.Y.0-rc.N)" >&2
         exit 1
       fi
-      echo "release-images.sh: [dry-run] phase 'discard-rc': would tag $root/{grain,guest,k8s-sandbox}:$rc_request as $rc_request-discarded, and leave candidate and rc where they are"
+      echo "release-images.sh: [dry-run] phase 'discard-rc': would tag $root/{grain,sandbox,sandbox-k8s}:$rc_request as $rc_request-discarded, and leave candidate and rc where they are"
       ;;
     retract)
       if ! [[ "$retract_request" =~ $release_tag_pattern ]]; then
         echo "release-images.sh: $retract_request is not a release tag (vX.Y.Z)" >&2
         exit 1
       fi
-      echo "release-images.sh: [dry-run] phase 'retract': would tag $root/{grain,guest,k8s-sandbox}:$retract_request as $retract_request-retracted, and leave $retract_request where it is"
+      echo "release-images.sh: [dry-run] phase 'retract': would tag $root/{grain,sandbox,sandbox-k8s}:$retract_request as $retract_request-retracted, and leave $retract_request where it is"
       ;;
   esac
   exit 0
@@ -841,7 +853,10 @@ check_ghcr_token_scopes() {
 
 if [ -n "$token" ]; then
   check_ghcr_token_scopes
-  printf '%s' "$token" | docker login "$registry" -u "$username" --password-stdin
+  if ! printf '%s' "$token" | docker login "$registry" -u "$username" --password-stdin; then
+    echo "release-images.sh: docker login to $registry as '$username' failed; stopping before building or pushing any release images." >&2
+    exit 1
+  fi
 else
   # Nothing above supplied a login, so the only thing that could publish is
   # a `docker login` somebody already did. In Grain CI nobody did: a job's
@@ -954,7 +969,7 @@ granulefile_build() {
 resolve_guest() {
   mapfile -t guest_inputs < <(./scripts/granule/guest-inputs.sh guest)
   guest_key="$(git rev-parse "${guest_inputs[@]/#/HEAD:}" | sha256sum | cut -c1-32)"
-  guest_cache="$root/guest:inputs-$guest_key"
+  guest_cache="$root/sandbox:inputs-$guest_key"
   local guest_hit=false
   if docker pull "$guest_cache"; then
     docker tag "$guest_cache" "$guest"
@@ -971,19 +986,19 @@ resolve_guest() {
     # as this repository's, because everything built on it inherits the
     # vendored Dockerfile's org.opencontainers.image.source and GHCR files
     # a package by that label alone -- these images are pushed.
-    IMAGE="$granule_image" GUEST_SOURCE_REPO="https://github.com/${RELEASE_IMAGE_REPO,,}" \
+    IMAGE="$granule_image" GUEST_SOURCE_REPO="https://github.com/${source_github_repo}" \
       ./scripts/granule/build-granule-image.sh
   fi
 
   mapfile -t base_inputs < <(./scripts/granule/guest-inputs.sh base)
   base_key="$(git rev-parse "${base_inputs[@]/#/HEAD:}" | sha256sum | cut -c1-32)"
-  base_cache="$root/guest-base:$base_key"
+  base_cache="$root/sandbox-base:$base_key"
   if docker pull "$base_cache"; then
     docker tag "$base_cache" granule-guest-base:vendored
     docker tag "$base_cache" "$guest_base"
   else
     if [ "$guest_hit" = true ]; then
-      IMAGE="$granule_image" GUEST_SOURCE_REPO="https://github.com/${RELEASE_IMAGE_REPO,,}" \
+      IMAGE="$granule_image" GUEST_SOURCE_REPO="https://github.com/${source_github_repo}" \
         ./scripts/granule/build-granule-image.sh
     fi
     granulefile_build -f Granulefile.guest-base -t granule-guest-base:vendored
@@ -1234,8 +1249,12 @@ sign_image() {
   fi
   ensure_cosign || return 1
   repo="${image%:*}"
-  [ -n "$digest_ref" ] || digest_ref="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image" \
-    | awk -v repo="$repo" 'index($0, repo "@sha256:") == 1 {print; exit}')"
+  if [ -z "$digest_ref" ]; then
+    local short_repo="${repo#docker.io/}" raw_digest
+    raw_digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image" \
+      | awk -v repo="$repo" -v short="$short_repo" 'index($0, repo "@sha256:") == 1 || index($0, short "@sha256:") == 1 {sub(/^.*@/, ""); print; exit}')"
+    [ -n "$raw_digest" ] && digest_ref="$repo@$raw_digest"
+  fi
   if [ -z "$digest_ref" ]; then
     echo "release-images.sh: $image has no digest from $repo after its push, so there is nothing to sign" >&2
     return 1
@@ -1291,10 +1310,10 @@ publish_images() {
   fi
 
   for pair in \
-    "$guest_base $root/guest-base:$branch" \
-    "$guest $root/guest:$branch" \
-    "$k8s_sandbox_base $root/k8s-sandbox-base:$branch" \
-    "$k8s_sandbox $root/k8s-sandbox:$branch" \
+    "$guest_base $root/sandbox-base:$branch" \
+    "$guest $root/sandbox:$branch" \
+    "$k8s_sandbox_base $root/sandbox-k8s-base:$branch" \
+    "$k8s_sandbox $root/sandbox-k8s:$branch" \
     "$grain $root/grain:$branch"; do
     read -r source target <<< "$pair"
     docker tag "$source" "$target"
@@ -1385,23 +1404,23 @@ publish_release() {
     fi
   done
   if [ "$promote_is_root_commit" = true ] &&
-      { ! image_exists "$root/guest:sha-$promoted_short" ||
-        ! image_exists "$root/k8s-sandbox:sha-$promoted_short" ||
+      { ! image_exists "$root/sandbox:sha-$promoted_short" ||
+        ! image_exists "$root/sandbox-k8s:sha-$promoted_short" ||
         { [[ " ${stamped[*]} " != *" grain "* ]] && ! image_exists "$root/grain:sha-$promoted_short"; }; } &&
-      image_exists "$root/guest:main" &&
-      image_exists "$root/k8s-sandbox:main" &&
+      image_exists "$root/sandbox:main" &&
+      image_exists "$root/sandbox-k8s:main" &&
       image_exists "$root/grain:main"; then
     echo "release-images.sh: $promote_tag ($promote_commit) is the initial cutover commit and has no sha-$promoted_short images; seeding from :main"
-    for image in guest k8s-sandbox grain; do
+    for image in sandbox sandbox-k8s grain; do
       retag_image "$root/$image:main" "$root/$image:sha-$promoted_short"
     done
-    for image in guest-base k8s-sandbox-base; do
+    for image in sandbox-base sandbox-k8s-base; do
       if image_exists "$root/$image:main"; then
         retag_image "$root/$image:main" "$root/$image:sha-$promoted_short"
       fi
     done
   fi
-  for image in guest k8s-sandbox "${daemons[@]%% *}"; do
+  for image in sandbox sandbox-k8s "${daemons[@]%% *}"; do
     if [[ " ${stamped[*]} " == *" $image "* ]]; then
       continue
     fi
@@ -1427,13 +1446,13 @@ publish_release() {
     fi
   done
 
-  for image in guest k8s-sandbox; do
+  for image in sandbox sandbox-k8s; do
     source="$root/$image:sha-$promoted_short"
     for tag in "${targets[@]}"; do
       retag_image "$source" "$root/$image:$tag"
     done
   done
-  for image in guest-base k8s-sandbox-base; do
+  for image in sandbox-base sandbox-k8s-base; do
     source="$root/$image:sha-$promoted_short"
     if image_exists "$source"; then
       for tag in "${targets[@]}"; do
@@ -1460,7 +1479,7 @@ publish_release() {
     # string they report differs.
     retag_image "$root/$image:$promote_tag" "$root/$image:sha-$promoted_short"
   done
-  echo "release-images.sh: $root/{guest,k8s-sandbox}:sha-$promoted_short are now also ${targets[*]}, and $root/grain:$promote_tag is $promote_commit stamped $promote_tag, as is its sha-$promoted_short$([ "${#targets[@]}" -le 1 ] || echo " and ${targets[*]:1}")"
+  echo "release-images.sh: $root/{sandbox,sandbox-k8s}:sha-$promoted_short are now also ${targets[*]}, and $root/grain:$promote_tag is $promote_commit stamped $promote_tag, as is its sha-$promoted_short$([ "${#targets[@]}" -le 1 ] || echo " and ${targets[*]:1}")"
 }
 
 # Stage a pending release: the commit vX.Y.0-pending names, published as
@@ -1476,7 +1495,7 @@ pending_images() {
 # Mark a pending release a person rejected: <image>:vX.Y.0-rejected
 # beside every image it was staged as. Nothing that resolves moves.
 discard_pending() {
-  local image images=(grain guest k8s-sandbox) marked=()
+  local image images=(grain sandbox sandbox-k8s) marked=()
   if ! [[ "$pending_request" =~ $release_tag_pattern ]]; then
     echo "release-images.sh: $pending_request is not a release tag (vX.Y.Z)" >&2
     return 1
@@ -1496,7 +1515,7 @@ discard_pending() {
 # touched. An image the rc was never published as has nothing to mark,
 # and is said so; a deployment never ran it.
 discard_rc() {
-  local image images=(grain guest k8s-sandbox) marked=() unpublished=()
+  local image images=(grain sandbox sandbox-k8s) marked=() unpublished=()
   if ! [[ "$rc_request" =~ $rc_tag_pattern ]]; then
     echo "release-images.sh: $rc_request is not a release candidate tag (vX.Y.0-rc.N)" >&2
     return 1
@@ -1520,7 +1539,7 @@ discard_rc() {
 # beside every image it was published as. :vX.Y.Z is never deleted or
 # moved; `promote` of the earlier release moves :latest back.
 retract_release() {
-  local image images=(grain guest k8s-sandbox) marked=() unpublished=()
+  local image images=(grain sandbox sandbox-k8s) marked=() unpublished=()
   if ! [[ "$retract_request" =~ $release_tag_pattern ]]; then
     echo "release-images.sh: $retract_request is not a release tag (vX.Y.Z)" >&2
     return 1
@@ -1657,7 +1676,7 @@ rebuild_release_grain() {
   [ -n "$go_version" ] || go_version="$(sed -n 's/^go[[:space:]]\{1,\}//p' "$work/go.mod")"
   local source_label=()
   if [ "$registry" = "ghcr.io" ]; then
-    source_label=(--label org.opencontainers.image.source="https://github.com/${RELEASE_IMAGE_REPO,,}")
+    source_label=(--label org.opencontainers.image.source="https://github.com/${source_github_repo}")
   fi
   (
     cd "$work"

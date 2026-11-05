@@ -33,8 +33,8 @@
 #
 # Options:
 #   --image IMAGE       Container image to deploy (default: current RC tag or
-#                       ghcr.io/bwsalmon/grain/grain:main)
-#   --rc-tag TAG        Shorthand for ghcr.io/${RELEASE_IMAGE_REPO}/grain:TAG
+#                       docker.io/grainai/grain:main)
+#   --rc-tag TAG        Shorthand for ${PACKAGE_PUBLISH_REGISTRY}/${RELEASE_IMAGE_REPO}/grain:TAG
 #   --project PROJECT   GCP project ID (default: $GCP_PROJECT, gcloud default,
 #                       or bsalmon-sandbox)
 #   --region REGION     Cloud Run region (default: us-central1)
@@ -56,7 +56,10 @@ if [[ -f "${REPO_ROOT}/scripts/release.conf" ]]; then
   # shellcheck disable=SC1091
   source "${REPO_ROOT}/scripts/release.conf"
 fi
-IMAGE_REPO="${RELEASE_IMAGE_REPO:-bwsalmon/grain}"
+# shellcheck source=scripts/release-image-repos.sh
+source "${REPO_ROOT}/scripts/release-image-repos.sh"
+IMAGE_REGISTRY="${PACKAGE_PUBLISH_REGISTRY:-$RELEASE_IMAGE_REGISTRY_DEFAULT}"
+IMAGE_REPO="${RELEASE_IMAGE_REPO:-$RELEASE_IMAGE_REPO_DEFAULT}"
 
 usage() {
   sed -n '16,45s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"
@@ -69,11 +72,11 @@ resolve_default_image() {
     local base_ver="${latest_rc%%-rc.*}"
     latest_rel="$(git -C "$REPO_ROOT" tag -l "$base_ver" 2>/dev/null || true)"
     if [[ -z "$latest_rel" ]]; then
-      printf 'ghcr.io/%s/grain:%s\n' "$IMAGE_REPO" "$latest_rc"
+      printf '%s/%s/grain:%s\n' "$IMAGE_REGISTRY" "$IMAGE_REPO" "$latest_rc"
       return
     fi
   fi
-  printf 'ghcr.io/%s/grain:main\n' "$IMAGE_REPO"
+  printf '%s/%s/grain:main\n' "$IMAGE_REGISTRY" "$IMAGE_REPO"
 }
 
 IMAGE=""
@@ -145,7 +148,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -n "$RC_TAG" && -z "$IMAGE" ]]; then
-  IMAGE="ghcr.io/${IMAGE_REPO}/grain:${RC_TAG}"
+  IMAGE="${IMAGE_REGISTRY}/${IMAGE_REPO}/grain:${RC_TAG}"
 fi
 if [[ -z "$IMAGE" ]]; then
   IMAGE="$(resolve_default_image)"
