@@ -17,6 +17,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -201,5 +202,27 @@ func TestGrainFsLsCatReadGrepSharesClientWithSandboxCLI(t *testing.T) {
 		t.Error("grain fs rm was taken")
 	} else if exit, _, _ := classifyError(err); exit != exitUsage {
 		t.Errorf("grain fs rm: exit %d, want %d", exit, exitUsage)
+	}
+}
+
+func TestGrainFsMissingSubcommandJSONKeepsStdoutEmpty(t *testing.T) {
+	var stdout, held, stderr bytes.Buffer
+	err := runFS(context.Background(), ui.NewHTTPClient("http://127.0.0.1:0"), nil, true, &stdout, &held)
+	code := reportError(&stderr, err, true)
+	if code != exitUsage {
+		t.Fatalf("grain fs -json: exit %d, want %d (stderr=%q)", code, exitUsage, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("grain fs -json wrote to stdout on error: %q", stdout.String())
+	}
+	var doc jsonError
+	if err := json.Unmarshal(stderr.Bytes(), &doc); err != nil || doc.Error.Code != "usage" {
+		t.Errorf("grain fs -json stderr = %q, want valid usage jsonError (err=%v)", stderr.String(), err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := runFS(context.Background(), ui.NewHTTPClient("http://127.0.0.1:0"), []string{"-h"}, false, &stdout, &stderr); err != nil || !strings.Contains(stdout.String(), "usage: grain fs") {
+		t.Errorf("grain fs -h: err=%v, stdout=%q, stderr=%q", err, stdout.String(), stderr.String())
 	}
 }

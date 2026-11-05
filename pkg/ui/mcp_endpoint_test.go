@@ -759,3 +759,73 @@ func TestControllerMCPInvokeRecordsConfigWritesAsTheActingTask(t *testing.T) {
 		t.Fatalf("config audit row = %+v, want it to name acme/widgets' settings", audit[0])
 	}
 }
+
+func TestControllerMCPGetTaskPreservesOwnerAttributionAndFiledVia(t *testing.T) {
+	t.Parallel()
+	srv, client, _ := newSingleTenantControllerMCPServer(t)
+	enableExternalAgentAPI(t, client.Store)
+	if _, err := client.AddTargetRepo(context.Background(), "acme/widgets"); err != nil {
+		t.Fatal(err)
+	}
+
+	humanCtx := ui.WithPrincipal(context.Background(), model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:     "alice-mcp",
+		ScopeSet: "grain/external-dev",
+		Repos:    []string{"acme/widgets"},
+		Owner:    "alice@example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateExternalAgentToken: %v", err)
+	}
+
+	extHeaders := map[string]string{
+		"Authorization":         "Bearer " + issued.Token,
+		model.GrainClientHeader: "codex-cli/0.9.2 session=mcp-99",
+	}
+	subText, isErr := callControllerTool(t, srv, extHeaders, ui.ToolGrainSubmitTask, map[string]any{
+		"repo":  "acme/widgets",
+		"title": "Check owner attribution on /api/mcp",
+		"body":  "Verify grain_get_task summary and conversation views preserve owner and filedVia.",
+	})
+	if isErr {
+		t.Fatalf("grain_submit_task failed: %s", subText)
+	}
+	var submitted struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(subText), &submitted); err != nil || submitted.ID == "" {
+		t.Fatalf("decoding submitted task: %v (%s)", err, subText)
+	}
+
+	if text, isErr := callControllerTool(t, srv, extHeaders, ui.ToolGrainInvoke, map[string]any{
+		"tool": "api_add_comment",
+		"arguments": map[string]any{
+			"id":   submitted.ID,
+			"body": map[string]any{"body": "Follow-up from external MCP client."},
+		},
+	}); isErr {
+		t.Fatalf("api_add_comment failed: %s", text)
+	}
+
+	summaryView, isErr := callControllerTool(t, srv, extHeaders, ui.ToolGrainGetTask, map[string]any{
+		"id": submitted.ID,
+	})
+	if isErr {
+		t.Fatalf("grain_get_task summary failed: %s", summaryView)
+	}
+	if want := "external agent alice-mcp for alice@example.com (agent)"; !strings.Contains(summaryView, want) {
+		t.Errorf("grain_get_task summary missing %q:\n%s", want, summaryView)
+	}
+
+	convView, isErr := callControllerTool(t, srv, extHeaders, ui.ToolGrainGetTask, map[string]any{
+		"id":   submitted.ID,
+		"view": "conversation",
+	})
+	if isErr {
+		t.Fatalf("grain_get_task conversation failed: %s", convView)
+	}
+	if want := "external agent alice-mcp for alice@example.com (agent) (from codex-cli/0.9.2 session=mcp-99):"; !strings.Contains(convView, want) {
+		t.Errorf("grain_get_task conversation missing %q:\n%s", want, convView)
+	}
+}

@@ -661,3 +661,58 @@ func TestRunCompletesWhenResumedConversationStillReportsEarlierErrorStep(t *test
 		t.Errorf("ToolCalls = %+v, want comment_on_issue call preserved", result.ToolCalls)
 	}
 }
+
+// A mid-run hostd loss (agent.ErrHostdLost) or drain refusal
+// (agent.ErrHostdDraining) returns the run to the queue at once: agy does not
+// sleep a retry backoff, try to read the lost host's diagnostic log, or drop a
+// carried conversation on an unopened stream.
+func TestHostdStopReturnsImmediatelyWithoutRetryOrDiagnosticNoise(t *testing.T) {
+	noSleep := func(f *Framework) {
+		f.retry.Sleep = func(_ context.Context, d time.Duration) error {
+			t.Fatalf("unexpected retry backoff %s on a hostd stop", d)
+			return nil
+		}
+	}
+
+	lost := &attemptRunner{replies: []attemptReply{
+		{
+			stdout: stream(conversationInit("conv-lost"), agentTurn(1, "halfway through")),
+			err:    fmt.Errorf("hostd h1: %w", agent.ErrHostdLost),
+		},
+		{stdout: okStream()},
+	}}
+	f := newFramework(lost, "/usr/local/bin/grain", noSleep, withSessionsIn(t.TempDir()))
+	result, err := f.Run(context.Background(), agent.RunConfig{
+		Prompt: "do the thing", SandboxRoot: t.TempDir(), TaskID: "701",
+	})
+	if !errors.Is(err, agent.ErrHostdLost) {
+		t.Fatalf("Run err = %v, want agent.ErrHostdLost", err)
+	}
+	if strings.Contains(err.Error(), "AGY diagnostic log") {
+		t.Errorf("Run err = %q, want no diagnostic-log failure noise from a lost hostd", err)
+	}
+	if len(lost.calls) != 1 {
+		t.Fatalf("agy was exec'd %d time(s), want 1", len(lost.calls))
+	}
+	if result == nil || result.ResumableSession != "conv-lost" || !strings.Contains(result.Transcript, "halfway through") {
+		t.Fatalf("result = %+v, want partial transcript and conv-lost preserved", result)
+	}
+
+	draining := &attemptRunner{replies: []attemptReply{
+		{stdout: "", err: fmt.Errorf("hostd h1: %w", agent.ErrHostdDraining)},
+		{stdout: okStream()},
+	}}
+	f = newFramework(draining, "/usr/local/bin/grain", noSleep, withSessionsIn(t.TempDir()))
+	result, err = f.Run(context.Background(), agent.RunConfig{
+		Prompt: "do the thing", SandboxRoot: t.TempDir(), TaskID: "702", ResumeSession: "conv-carried",
+	})
+	if !errors.Is(err, agent.ErrHostdDraining) {
+		t.Fatalf("Run err = %v, want agent.ErrHostdDraining", err)
+	}
+	if len(draining.calls) != 1 {
+		t.Fatalf("agy was exec'd %d time(s) on a draining hostd, want 1", len(draining.calls))
+	}
+	if result != nil {
+		t.Fatalf("result on an unstarted draining hostd = %+v, want nil so the task's stored session stays untouched", result)
+	}
+}

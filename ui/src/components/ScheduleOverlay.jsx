@@ -78,6 +78,7 @@ const WEEKDAYS = [
 // clock, so they take no time of day. Minutes have a floor
 // (model.MinEveryNMinutes) so nobody schedules a sandbox every minute.
 const INTERVAL_KINDS = ["everyNHours", "everyNMinutes"];
+const EVENT_KINDS = ["git_ref", "github_workflow_run"];
 const MIN_EVERY_N_MINUTES = 10;
 
 function capitalize(s) {
@@ -126,8 +127,37 @@ function RecurrenceFields({
           <MenuItem value="daily">Daily, at a time</MenuItem>
           <MenuItem value="weekly">Weekly, on a day and time</MenuItem>
           <MenuItem value="monthly">Monthly, on a day and time</MenuItem>
+          <MenuItem value="git_ref">When a git ref moves</MenuItem>
+          {kind === "github_workflow_run" && (
+            <MenuItem value="github_workflow_run">
+              When a GitHub workflow finishes
+            </MenuItem>
+          )}
         </Select>
       </FormControl>
+      {kind === "git_ref" && (
+        <>
+          <TextField
+            name="gitRefRepo"
+            label="Watched repository"
+            defaultValue={defaultValue?.gitRef?.repo || ""}
+            placeholder="owner/repo"
+            required
+            fullWidth
+            margin="dense"
+          />
+          <TextField
+            name="gitRefName"
+            label="Watched git ref"
+            defaultValue={defaultValue?.gitRef?.ref || "refs/heads/main"}
+            placeholder="refs/heads/main"
+            required
+            fullWidth
+            margin="dense"
+            helperText="Full ref name under refs/ (for example refs/heads/main or refs/tags/latest)"
+          />
+        </>
+      )}
       {kind === "everyNHours" && (
         <TextField
           name="everyNHours"
@@ -153,7 +183,7 @@ function RecurrenceFields({
           helperText={`At least ${MIN_EVERY_N_MINUTES}; counted from the last firing`}
         />
       )}
-      {!INTERVAL_KINDS.includes(kind) && (
+      {!INTERVAL_KINDS.includes(kind) && !EVENT_KINDS.includes(kind) && (
         <TextField
           name="timeOfDay"
           label={timeLabel}
@@ -195,7 +225,7 @@ function RecurrenceFields({
           helperText="1-31; a shorter month fires on its last day"
         />
       )}
-      {setTimeZone && (
+      {setTimeZone && !EVENT_KINDS.includes(kind) && (
         <SearchSelect
           label="Time zone"
           name="timeZone"
@@ -509,6 +539,15 @@ function ScheduleOverlay({
       recurrence.everyNHours = Number(data.get("everyNHours"));
     } else if (kind === "everyNMinutes") {
       recurrence.everyNMinutes = Number(data.get("everyNMinutes"));
+    } else if (kind === "git_ref") {
+      recurrence.gitRef = {
+        repo: String(data.get("gitRefRepo") || "").trim(),
+        ref: String(data.get("gitRefName") || "").trim(),
+      };
+    } else if (kind === "github_workflow_run") {
+      if (schedule?.recurrence?.githubWorkflowRun) {
+        recurrence.githubWorkflowRun = schedule.recurrence.githubWorkflowRun;
+      }
     } else {
       recurrence.timeOfDay = data.get("timeOfDay");
       if (kind === "weekly") recurrence.weekday = weekday;
@@ -704,49 +743,60 @@ function ScheduleOverlay({
           className="schedule-overdue"
           sx={{ mt: 1, mb: 1 }}
         >
-          This schedule has come due and is not firing:{" "}
-          {describeSuppression(schedule.suppressed)}
-          {schedule.suppressed.taskId && (
+          {schedule.suppressed.reason === "watchedRepoOffTarget" ? (
             <>
-              {" ("}
-              <a
-                href={`/tasks/${schedule.suppressed.taskId}`}
-                onClick={(e) => {
-                  if (
-                    e.button !== 0 ||
-                    e.metaKey ||
-                    e.ctrlKey ||
-                    e.shiftKey ||
-                    e.altKey
-                  ) {
-                    return;
-                  }
-                  if (isDirty()) {
-                    if (!window.confirm(DISCARD_PROMPT)) {
-                      e.preventDefault();
-                      return;
-                    }
-                    discarded.current = true;
-                  }
-                  if (onOpenTask) {
-                    e.preventDefault();
-                    onClose?.();
-                    onOpenTask(schedule.suppressed.taskId);
-                  }
-                }}
-              >
-                task {schedule.suppressed.taskId}
-              </a>
-              {")"}
+              This schedule is suppressed and is not polling its watched ref:{" "}
+              {describeSuppression(schedule.suppressed)}. Add that repository to{" "}
+              <code>targetRepos</code> under Settings so grain polls it.
             </>
-          )}
-          . It is set to skip a firing that would overlap the last one, so the
-          next run below has not moved: it fires as soon as that finishes.
-          {schedule.suppressed.until && (
+          ) : (
             <>
-              {" "}
-              If nothing closes it first, grain stops waiting and fires anyway
-              at {formatDateTime(schedule.suppressed.until, zone)}.
+              This schedule has come due and is not firing:{" "}
+              {describeSuppression(schedule.suppressed)}
+              {schedule.suppressed.taskId && (
+                <>
+                  {" ("}
+                  <a
+                    href={`/tasks/${schedule.suppressed.taskId}`}
+                    onClick={(e) => {
+                      if (
+                        e.button !== 0 ||
+                        e.metaKey ||
+                        e.ctrlKey ||
+                        e.shiftKey ||
+                        e.altKey
+                      ) {
+                        return;
+                      }
+                      if (isDirty()) {
+                        if (!window.confirm(DISCARD_PROMPT)) {
+                          e.preventDefault();
+                          return;
+                        }
+                        discarded.current = true;
+                      }
+                      if (onOpenTask) {
+                        e.preventDefault();
+                        onClose?.();
+                        onOpenTask(schedule.suppressed.taskId);
+                      }
+                    }}
+                  >
+                    task {schedule.suppressed.taskId}
+                  </a>
+                  {")"}
+                </>
+              )}
+              . It is set to skip a firing that would overlap the last one, so
+              the next run below has not moved: it fires as soon as that
+              finishes.
+              {schedule.suppressed.until && (
+                <>
+                  {" "}
+                  If nothing closes it first, grain stops waiting and fires
+                  anyway at {formatDateTime(schedule.suppressed.until, zone)}.
+                </>
+              )}
             </>
           )}
         </Typography>

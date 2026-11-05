@@ -67,11 +67,12 @@ func fsClient(c *ui.HTTPClient, stdout, stderr io.Writer) *nsclient.Client {
 }
 
 func runFS(ctx context.Context, c *ui.HTTPClient, args []string, asJSON bool, stdout, stderr io.Writer) error {
-	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
+	if len(args) == 0 {
+		fmt.Fprint(stderr, fsUsage)
+		return usageErrorf("grain fs needs a command: ls, cat, read or grep")
+	}
+	if args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
 		fmt.Fprint(stdout, fsUsage)
-		if len(args) == 0 {
-			return usageErrorf("grain fs needs a command: ls, cat, read or grep")
-		}
 		return nil
 	}
 	sub, args := args[0], args[1:]

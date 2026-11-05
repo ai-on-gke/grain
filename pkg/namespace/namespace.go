@@ -107,13 +107,17 @@ type Scope struct {
 	TaskReadRepos     map[string]bool
 	MayReadFullConfig bool
 	MayReadAllMemory  bool
-	MayReadMetrics    bool
-	MayReadPipeline   bool
-	MayReadHealth     bool
-	MayReadGrainLog   bool
-	MayReadPlaybooks  bool
-	MayReadIssues     bool
-	MayReadDB         bool
+	// MemoryReadRepos are the repositories whose memory layers this scope
+	// may read under memory://repos/ without MayReadAllMemory: the ones an
+	// api:memory:read@owner/repo grant names.
+	MemoryReadRepos  map[string]bool
+	MayReadMetrics   bool
+	MayReadPipeline  bool
+	MayReadHealth    bool
+	MayReadGrainLog  bool
+	MayReadPlaybooks bool
+	MayReadIssues    bool
+	MayReadDB        bool
 	// MergeQueueByCI limits deploy://merge-queue to the repositories
 	// PermitsCI allows: a caller reaching it under ci:read rather than
 	// deployment:read (GET /api/fs/deploy/merge-queue).
@@ -1611,6 +1615,7 @@ func (s *Server) GlobEntries(ctx context.Context, scope Scope, scheme, relPath, 
 			pattern = "*"
 		}
 	}
+	ctx = withMemoryWalkCache(ctx)
 	node, err := s.Resolve(ctx, scope, scheme, relPath)
 	if err != nil {
 		return GlobResult{}, err
@@ -1897,6 +1902,7 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 		ctxLines = MaxGrepContextLines
 	}
 
+	ctx = withMemoryWalkCache(ctx)
 	node, err := s.Resolve(ctx, scope, scheme, relPath)
 	if err != nil {
 		return GrepResult{}, err
@@ -1985,6 +1991,7 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 	// that a pattern matching only the "[redacted: ...]" placeholder no
 	// longer finds a line this pass would have redacted.
 	redactor := s.redactor()
+	scanBuf := make([]byte, 64*1024)
 
 	for _, tf := range files {
 		if totalMatches >= maxMatches {
@@ -1996,7 +2003,7 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 			continue
 		}
 		scanner := bufio.NewScanner(rc)
-		scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+		scanner.Buffer(scanBuf, 4*1024*1024)
 
 		type numberedLine struct {
 			num  int

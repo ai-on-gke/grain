@@ -578,6 +578,7 @@ export default function NewTaskOverlay({
       ? draft.reviewers.join(", ")
       : (draft?.reviewers ?? ""),
   );
+  const [owner, setOwner] = useState(() => String(draft?.owner ?? ""));
   const [promptExtension, setPromptExtension] = useState(
     () => draft?.promptExtension ?? String(openingDefault("promptExtension")),
   );
@@ -962,6 +963,7 @@ export default function NewTaskOverlay({
     setNothingNeededAction(String(openingDefault("nothingNeededAction")));
     setReviewTemplateId(String(openingDefault("reviewTemplateId")));
     setReviewers("");
+    setOwner("");
     setPromptExtension(String(openingDefault("promptExtension")));
     setSandboxCpus(openingShape.cpus);
     setSandboxMemoryMb(openingShape.memoryMb);
@@ -1057,6 +1059,7 @@ export default function NewTaskOverlay({
       noRepo: none && !ct,
       ...(ct ? { changeTarget: { kind: ct } } : {}),
       ...(parsedReviewers.length > 0 ? { reviewers: parsedReviewers } : {}),
+      ...(owner.trim() ? { owner: owner.trim() } : {}),
       ...(creating
         ? {
             base: newBranchName.trim(),
@@ -1524,6 +1527,17 @@ export default function NewTaskOverlay({
   );
   const reviewersNode = (
     <>
+      <TextField
+        name="owner"
+        label="Owner"
+        placeholder="defaults to you"
+        helperText="optional -- account responsible for this task (defaults to the caller)"
+        fullWidth
+        margin="normal"
+        size="small"
+        value={owner}
+        onChange={(e) => setOwner(e.target.value)}
+      />
       <TextField
         name="reviewers"
         label="Reviewers"

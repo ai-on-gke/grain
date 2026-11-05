@@ -189,11 +189,15 @@ trigger:
 	transport.UseTLS = false
 	client := github.NewClient(transport, nil)
 
+	head1, err := client.GetBranchHead("acme", "widgets", "main")
+	if err != nil || head1 == nil {
+		t.Fatalf("GetBranchHead(main) = %+v, %v", head1, err)
+	}
 	now := time.Now().UTC().Truncate(time.Second)
 	started, done := now.Add(-10*time.Minute), now.Add(-2*time.Minute)
 	release := githubsim.WorkflowRun{
 		ID: 1201, Name: "release", Path: ".github/workflows/release.yml",
-		HeadBranch: "main", HeadSHA: "deadbeef12345678", Event: "push",
+		HeadBranch: "main", HeadSHA: head1.SHA, Event: "push",
 		Status: "completed", Conclusion: "failure", RunAttempt: 1,
 		Jobs: []githubsim.WorkflowJob{{
 			Name: "publish-image", Conclusion: "failure", FailingStep: "ko publish",
@@ -342,11 +346,17 @@ trigger:
 		t.Fatalf("an unchanged poll filed again")
 	}
 
-	// A later green release closes triage, and a success is not one of
-	// the schedule's conclusions.
+	// A later green release at a descendant commit on main closes triage,
+	// and a success is not one of the schedule's conclusions.
+	run(t, w.seed, "git", "commit", "-q", "--allow-empty", "-m", "fix release")
+	run(t, w.seed, "git", "push", "-q", "origin", "main")
+	head2, err := client.GetBranchHead("acme", "widgets", "main")
+	if err != nil || head2 == nil {
+		t.Fatalf("GetBranchHead(main) after fix = %+v, %v", head2, err)
+	}
 	w.sim.WorkflowRuns = append(w.sim.WorkflowRuns, githubsim.WorkflowRun{
 		ID: 1202, Name: "release", Path: ".github/workflows/release.yml",
-		HeadBranch: "main", HeadSHA: "feedface87654321", Event: "push",
+		HeadBranch: "main", HeadSHA: head2.SHA, Event: "push",
 		Status: "completed", Conclusion: "success", RunAttempt: 1,
 		Jobs: []githubsim.WorkflowJob{{Name: "publish-image", Conclusion: "success"}},
 	})

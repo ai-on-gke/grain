@@ -68,13 +68,15 @@ test("a task an external agent filed names that agent on its page", async ({
     const created = JSON.parse(rpc.result.content[0].text);
     expect(created.author).toBe("external:widgets-writer");
 
+    const expectedFiledBy = issued.owner
+      ? `external agent widgets-writer for ${issued.owner} (external:widgets-writer)`
+      : "external agent widgets-writer (external:widgets-writer)";
+
     for (const viewport of VIEWPORTS) {
       await page.setViewportSize(viewport);
       await page.goto(`/tasks/${created.id}`);
       const filedBy = page.locator(".declared-row", { hasText: "Filed by" });
-      await expect(filedBy).toContainText(
-        "external agent widgets-writer (external:widgets-writer)",
-      );
+      await expect(filedBy).toContainText(expectedFiledBy);
       // The creator is still named, after the agent.
       const creator = page.locator(".declared-row", { hasText: "Creator" });
       await expect(creator).toBeVisible();

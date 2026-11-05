@@ -1,0 +1,2918 @@
+{
+  "bearerGma": {
+    "error": "",
+    "steps": [
+      {
+        "step": "bearer-gma/initialize",
+        "detail": {
+          "instructionsLen": 1845,
+          "protocolVersion": "2025-03-26",
+          "serverInfo": {
+            "name": "grain-controller",
+            "version": "0.1.0"
+          }
+        }
+      },
+      {
+        "step": "bearer-gma/tools/list",
+        "detail": {
+          "count": 6,
+          "tools": [
+            {
+              "alwaysLoad": true,
+              "name": "grain_explore_scope"
+            },
+            {
+              "alwaysLoad": true,
+              "name": "grain_invoke"
+            },
+            {
+              "alwaysLoad": true,
+              "name": "grain_filing_context"
+            },
+            {
+              "alwaysLoad": true,
+              "name": "grain_submit_task"
+            },
+            {
+              "alwaysLoad": true,
+              "name": "grain_list_tasks"
+            },
+            {
+              "alwaysLoad": true,
+              "name": "grain_get_task"
+            }
+          ]
+        }
+      },
+      {
+        "step": "bearer-gma/grain_explore_scope(overview)",
+        "payloadBytes": 2557,
+        "detail": {
+          "groups": [
+            {
+              "group": "ci",
+              "guidance": "Grain CI workflows, runs, logs, faults, and artifacts. Filter list calls by repo/branch when possible before fetching full job logs.",
+              "scopes": [
+                {
+                  "description": "Read grain CI runs, their job logs and artifacts, merge batches and base-branch gates",
+                  "routeCount": 11,
+                  "scope": "ci:read"
+                },
+                {
+                  "description": "Start, re-run and cancel grain CI runs, base-branch and release runs",
+                  "routeCount": 4,
+                  "scope": "ci:write"
+                }
+              ],
+              "totalRoutes": 15
+            },
+            {
+              "group": "deployment",
+              "guidance": "Host diagnostics, logs, active sandboxes, metrics, upgrades, and daemon restart/reboot controls.",
+              "scopes": [
+                {
+                  "description": "Read host, sandbox, log, metric and upgrade status",
+                  "routeCount": 13,
+                  "scope": "deployment:read"
+                }
+              ],
+              "totalRoutes": 13
+            },
+            {
+              "group": "merge",
+              "guidance": "Pull request creation, merge-queue retries, and force-merges. Force-merge requires merge:force and an explicit reason.",
+              "scopes": [
+                {
+                  "description": "Open pull requests for tasks and retry their merges",
+                  "routeCount": 3,
+                  "scope": "merge:write"
+                }
+              ],
+              "totalRoutes": 3
+            },
+            {
+              "group": "repos",
+              "guidance": "Target repository onboarding, branch configuration, CI mode, merge settings, and declarations.",
+              "scopes": [
+                {
+                  "description": "Read repository settings, branches and declarations",
+                  "routeCount": 20,
+                  "scope": "repos:read"
+                }
+              ],
+              "totalRoutes": 20
+            },
+            {
+              "group": "sandboxes",
+              "scopes": [
+                {
+                  "description": "Read the status of persistent sandboxes (implied by deployment:read)",
+                  "routeCount": 1,
+                  "scope": "sandboxes:read"
+                }
+              ],
+              "totalRoutes": 1
+            },
+            {
+              "group": "tasks",
+              "guidance": "Task lifecycle \u0026 mutations. Prefer grain_list_tasks, grain_get_task, grain_filing_context, and grain_submit_task for common reads/filing; use grain_invoke for comments, state transitions, dependencies, approvals, and task-admin edits. Pass arguments.expect on admin mutations to avoid clobbering concurrent changes.",
+              "scopes": [
+                {
+                  "description": "Read tasks, their conversations, transcripts and trees",
+                  "routeCount": 15,
+                  "scope": "tasks:read"
+                },
+                {
+                  "description": "File, edit, comment on, reorder, defer, retry, stop, close and reopen tasks",
+                  "routeCount": 29,
+                  "scope": "tasks:write"
+                }
+              ],
+              "totalRoutes": 44
+            },
+            {
+              "group": "templates",
+              "guidance": "Reusable task templates and template composition previews.",
+              "scopes": [
+                {
+                  "description": "Read task templates",
+                  "routeCount": 2,
+                  "scope": "templates:read"
+                }
+              ],
+              "totalRoutes": 2
+            }
+          ],
+          "hint": "Call grain_explore_scope(scope='\u003cgroup\u003e', tool='\u003cword\u003e') to view matching route tool names and JSON input schemas (scope alone lists a whole group, which is much larger), then grain_invoke(tool, arguments, reason?) to execute.",
+          "totalAuthorizedRoutes": 98
+        }
+      },
+      {
+        "step": "bearer-gma/grain_explore_scope(tasks,comment)",
+        "payloadBytes": 1998,
+        "detail": {
+          "guidance": "Task lifecycle \u0026 mutations. Prefer grain_list_tasks, grain_get_task, grain_filing_context, and grain_submit_task for common reads/filing; use grain_invoke for comments, state transitions, dependencies, approvals, and task-admin edits. Pass arguments.expect on admin mutations to avoid clobbering concurrent changes.",
+          "routeCount": 1,
+          "routes": [
+            {
+              "description": "Comment on a task's conversation. Calls POST /api/tasks/{id}/comments through the same handler grain's UI uses (agent API scope tasks:write).",
+              "inputSchema": {
+                "properties": {
+                  "body": {
+                    "description": "The JSON request body.",
+                    "properties": {
+                      "attachments": {
+                        "items": {
+                          "properties": {
+                            "content": {
+                              "type": "string"
+                            },
+                            "contentType": {
+                              "type": "string"
+                            },
+                            "filename": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "author": {
+                        "type": "string"
+                      },
+                      "body": {
+                        "type": "string"
+                      },
+                      "reviewers": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "expect": {
+                    "additionalProperties": false,
+                    "description": "What you believe about task {id} before changing it. The call reads the task first and refuses, changing nothing, if any field given here disagrees with the record.",
+                    "properties": {
+                      "kind": {
+                        "description": "A kind tag it must carry: port, repair, session, proposal, durable, imported, or none for a task with no tag.",
+                        "type": "string"
+                      },
+                      "state": {
+                        "description": "The state it must be in (queued, running, completed, ...).",
+                        "type": "string"
+                      },
+                      "title_prefix": {
+                        "description": "What its title must start with (case-insensitive).",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "id": {
+                    "description": "The {id} of /api/tasks/{id}/comments",
+                    "type": "string"
+                  },
+                  "query": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Query parameters, as the UI would send them.",
+                    "type": "object"
+                  },
+                  "reason": {
+                    "description": "Why this call is being made; recorded with it, and required for a destructive call.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              },
+              "method": "POST",
+              "path": "/api/tasks/{id}/comments",
+              "scope": "tasks:write",
+              "tool": "api_add_comment"
+            }
+          ],
+          "scope": "tasks",
+          "tool": "comment"
+        }
+      },
+      {
+        "step": "bearer-gma/grain_explore_scope(settings-unauthorized)",
+        "isError": true,
+        "payloadBytes": 102,
+        "detail": "Scope \"settings\" is not authorized for this caller (requires grant for settings:read, settings:write)."
+      },
+      {
+        "step": "bearer-gma/grain_filing_context",
+        "payloadBytes": 2216,
+        "detail": {
+          "boards": null,
+          "customFields": null,
+          "submitDefaults": {
+            "approve": false,
+            "note": "grain_submit_task defaults approve=false so tasks land in 'proposed' state awaiting human approval unless approve=true is explicitly passed."
+          },
+          "targetRepos": null,
+          "templates": [
+            {
+              "description": "Walk me through setting up a GKE Standard sandbox cluster for this grain deployment and attaching it, so its task sandboxes run as Granule VMs on GKE.\n\nWhat I filled in when I filed this (a blank means I have not decided yet):\n\n- GCP sandbox project: {{project}}\n- Zone or region: {{location}}\n- Cluster name: {{cluster}}\n- Machine type: {{machine_type}}\n\nFollow the `gke-sandbox-cluster` bootstrap playbook (read it with read_bootstrap_playbook before you do anything else), in this order:\n\n1. In one message, confirm the four values above, ask for any that are blank, and ask for the node pool name and pool size the playbook also needs. Do not run anything until I have answered.\n2. Run the playbook's credential, API, quota and org-policy checks.\n3. Run `grain init -platform=gke-sandboxes -dry-run` with those values and show me the plan it prints.\n4. Once I say go, run the same command without `-dry-run`, then the playbook's verification steps.\n5. Ask me to switch [Settings → Sandboxes](/settings/sandboxes) to `kubernetes-granule`, with the namespace and kubeconfig the playbook gives, and help me confirm a smoke task's sandbox lands on the cluster.\n\nEvery host command goes through run_host_command, which waits for my approval in this chat: say in one line what you are about to run and why before each one. If a step fails, stop and show me the output rather than working around it, and use the playbook's rollback section if I ask to undo what was created.\n",
+              "fields": [
+                {
+                  "label": "GCP sandbox project ID",
+                  "name": "project"
+                },
+                {
+                  "default": "us-central1-a",
+                  "label": "Zone or region",
+                  "name": "location"
+                },
+                {
+                  "default": "grain-sandboxes",
+                  "label": "Cluster name",
+                  "name": "cluster"
+                },
+                {
+                  "default": "n2-standard-8",
+                  "label": "Machine type",
+                  "name": "machine_type",
+                  "options": [
+                    "c4-standard-96-lssd",
+                    "n2-standard-8",
+                    "n2-standard-16",
+                    "n2-standard-32"
+                  ]
+                }
+              ],
+              "id": "system:gke-sandbox-cluster",
+              "interactive": true,
+              "name": "Set up a GKE sandbox cluster"
+            }
+          ]
+        }
+      },
+      {
+        "step": "bearer-gma/grain_submit_task",
+        "payloadBytes": 165,
+        "detail": {
+          "approved": false,
+          "base": "",
+          "id": "3",
+          "interactive": false,
+          "repo": "acme/app",
+          "state": "proposed",
+          "title": "MCP SDK task via Authorization: Bearer gma_",
+          "url": "/tasks/3"
+        }
+      },
+      {
+        "step": "bearer-gma/grain_get_task(summary)",
+        "payloadBytes": 201,
+        "detail": "Task 3: MCP SDK task via Authorization: Bearer gma_\nState: proposed\nPriority: 5\nKind: proposal\nRepo: acme/app (base default branch)\n(view \"full\" for the whole record, \"conversation\" to page the thread)"
+      },
+      {
+        "step": "bearer-gma/grain_get_task(full)",
+        "payloadBytes": 3430,
+        "detail": {
+          "author": "external:alice-mcp",
+          "authorKind": "agent",
+          "authorLabel": "external agent alice-mcp for alice@example.com",
+          "authorSource": "external-token",
+          "autoApproveProposals": false,
+          "autoMerge": false,
+          "blocked": false,
+          "branch": "grain/a8a14655/task-3-mcp-sdk-task-via-authorization",
+          "capabilities": [],
+          "comments": [],
+          "createdAt": "2026-11-04T21:54:15.45518284Z",
+          "creator": "alice@example.com",
+          "description": "Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. ",
+          "filedVia": "mcp-go-sdk/1.8.0 session=item1-bearer",
+          "id": "3",
+          "interactive": false,
+          "priority": 5,
+          "provenance": "filed from mcp-go-sdk/1.8.0 session=item1-bearer by alice@example.com",
+          "reason": {
+            "class": "awaiting a person",
+            "control": "Approve",
+            "reason": "proposed/unapproved"
+          },
+          "repo": "acme/app",
+          "state": "proposed",
+          "title": "MCP SDK task via Authorization: Bearer gma_",
+          "transitions": [
+            {
+              "at": "2026-11-04T21:54:15.45518284Z",
+              "state": "proposed"
+            }
+          ]
+        }
+      },
+      {
+        "step": "bearer-gma/grain_invoke(allowed:api_add_comment)",
+        "payloadBytes": 3343,
+        "detail": {
+          "author": "external:alice-mcp",
+          "authorKind": "agent",
+          "authorLabel": "external agent alice-mcp for alice@example.com",
+          "authorSource": "external-token",
+          "autoApproveProposals": false,
+          "autoMerge": false,
+          "blocked": false,
+          "branch": "grain/a8a14655/task-3-mcp-sdk-task-via-authorization",
+          "capabilities": [],
+          "createdAt": "2026-11-04T21:54:15.45518284Z",
+          "creator": "alice@example.com",
+          "description": "Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. ",
+          "filedVia": "mcp-go-sdk/1.8.0 session=item1-bearer",
+          "id": "3",
+          "interactive": false,
+          "priority": 5,
+          "provenance": "filed from mcp-go-sdk/1.8.0 session=item1-bearer by alice@example.com",
+          "reason": {
+            "class": "awaiting a person",
+            "control": "Approve",
+            "reason": "proposed/unapproved"
+          },
+          "repo": "acme/app",
+          "state": "proposed",
+          "title": "MCP SDK task via Authorization: Bearer gma_"
+        }
+      },
+      {
+        "step": "bearer-gma/grain_invoke(refused-scope:api_get_settings)",
+        "isError": true,
+        "payloadBytes": 100,
+        "detail": "api_get_settings failed: HTTP 403: caller holds no grant for scope settings:read (GET /api/settings)"
+      },
+      {
+        "step": "bearer-gma/grain_invoke(refused-repo:acme/other)",
+        "isError": true,
+        "payloadBytes": 93,
+        "detail": "api_create_task failed: HTTP 403: external:alice-mcp holds tasks:write, but not on acme/other"
+      },
+      {
+        "step": "bearer-gma/grain_list_tasks",
+        "payloadBytes": 300,
+        "detail": [
+          {
+            "createdAt": "2026-11-04T21:54:14.726269688Z",
+            "id": "2",
+            "repo": "acme/app",
+            "state": "proposed",
+            "title": "Narrow API task for X-Grain-Access-Code MCP test"
+          },
+          {
+            "createdAt": "2026-11-04T21:54:15.45518284Z",
+            "id": "3",
+            "repo": "acme/app",
+            "state": "proposed",
+            "title": "MCP SDK task via Authorization: Bearer gma_"
+          }
+        ]
+      }
+    ]
+  },
+  "exchanges": [
+    {
+      "seq": 1,
+      "phase": "bearer-gma: connect (initialize + notifications/initialized)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer \u003cREDACTED_GMA_TOKEN\u003e",
+        "Content-Type": "application/json",
+        "Mcp-Method": "server/discover",
+        "Mcp-Protocol-Version": "2026-07-28",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-bearer"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "server/discover",
+        "params": {
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {
+              "roots": {
+                "listChanged": true
+              }
+            },
+            "io.modelcontextprotocol/clientInfo": {
+              "name": "grain-walkthrough-mcp-sdk",
+              "version": "1.0.0"
+            },
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+          "code": -32601,
+          "message": "unknown method server/discover"
+        }
+      },
+      "durationMs": 3
+    },
+    {
+      "seq": 2,
+      "phase": "bearer-gma: connect (initialize + notifications/initialized)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer \u003cREDACTED_GMA_TOKEN\u003e",
+        "Content-Type": "application/json",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-bearer"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "initialize",
+        "params": {
+          "clientInfo": {
+            "name": "grain-walkthrough-mcp-sdk",
+            "version": "1.0.0"
+          },
+          "protocolVersion": "2025-11-25",
+          "capabilities": {
+            "roots": {
+              "listChanged": true
+            }
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "capabilities": {
+            "tools": {}
+          },
+          "instructions": "Grain Controller MCP workflow guide:\n1. Everyday task operations have dedicated compact tools -- prefer these first:\n   - grain_list_tasks(repo?, state?, q?, limit?, summary?) to browse tasks (compact summary rows by default).\n   - grain_get_task(id, view?) to inspect one task (~1 KB \"summary\" by default, \"conversation\" to page comments, \"full\" for raw JSON).\n   - grain_filing_context(repo?) to read target repositories, templates, boards, custom fields, and grantable capabilities before filing work.\n   - grain_submit_task(...) to file a task. approve defaults to false (filed as \"proposed\" awaiting human approval); only set approve=true when explicitly authorized.\n2. All other Grain controller operations (a few hundred routes across CI, merge queue, repos, releases, schedules, templates, settings, secrets, capabilities, deployment) use progressive discovery:\n   - Call grain_explore_scope() with no arguments to list the scope groups you are authorized to use.\n   - Call grain_explore_scope(scope=\"\u003cgroup\u003e\", tool=\"\u003cword\u003e\") (e.g. scope=\"tasks\", tool=\"comment\") to get the exact JSON input schemas of just the routes you need; a whole group (scope alone) can run to tens of KB, so name the tool whenever you know what you are after.\n   - Call grain_invoke(tool=\"api_...\", arguments={...}, reason?=\"...\") to execute an authorized route.\n3. Safety \u0026 authorization rules:\n   - Destructive (DELETE) and dangerous-scope routes require a non-empty reason explaining why the change is being made.\n   - Task mutations accept arguments.expect ({state?, title_prefix?, kind?}): the call reads the task first and refuses, changing nothing, if the record disagrees.\n   - Calls run under your authenticated identity (and X-Grain-Acting-Task grants when present); if a scope is refused, ask a human to grant api:\u003cscope\u003e rather than working around it.",
+          "protocolVersion": "2025-03-26",
+          "serverInfo": {
+            "name": "grain-controller",
+            "version": "0.1.0"
+          }
+        }
+      },
+      "durationMs": 2
+    },
+    {
+      "seq": 3,
+      "phase": "bearer-gma: connect (initialize + notifications/initialized)",
+      "method": "GET",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "text/event-stream",
+        "Authorization": "Bearer \u003cREDACTED_GMA_TOKEN\u003e",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-bearer"
+      },
+      "statusCode": 405,
+      "responseHeaders": {
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "error": "GET is not allowed on /api/mcp"
+      },
+      "durationMs": 1
+    },
+    {
+      "seq": 4,
+      "phase": "bearer-gma: connect (initialize + notifications/initialized)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer \u003cREDACTED_GMA_TOKEN\u003e",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-bearer"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized",
+        "params": {}
+      },
+      "statusCode": 202,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Length": "0",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "durationMs": 1
+    },
+    {
+      "seq": 5,
+      "phase": "bearer-gma: tools/list",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer \u003cREDACTED_GMA_TOKEN\u003e",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-bearer"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/list",
+        "params": {}
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "tools": [
+            {
+              "_meta": {
+                "antigravity/alwaysLoad": true
+              },
+              "description": "List authorized Grain controller API scope groups, or return domain guidance and JSON input schemas for one scope group or scope -- narrowed to the routes whose tool name or path matches tool, when given.",
+              "inputSchema": {
+                "properties": {
+                  "scope": {
+                    "description": "Optional scope group (e.g. 'tasks', 'ci', 'merge', 'repos', 'settings') or exact scope (e.g. 'ci:read'). Omit to list all authorized scope groups.",
+                    "type": "string"
+                  },
+                  "tool": {
+                    "description": "Optional route tool name (e.g. 'api_add_comment') or a word of it or of its path (e.g. 'comment'): only matching routes' schemas are returned, which is far cheaper than a whole group's. With scope, searches that group; alone, every authorized route.",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "name": "grain_explore_scope"
+            },
+            {
+              "_meta": {
+                "antigravity/alwaysLoad": true
+              },
+              "description": "Execute an authorized Grain controller API route discovered via grain_explore_scope.",
+              "inputSchema": {
+                "properties": {
+                  "arguments": {
+                    "description": "Route arguments: path parameters by name, optional 'query' object, optional 'body' object (or flat body fields), and optional 'expect' task-state guard.",
+                    "type": "object"
+                  },
+                  "reason": {
+                    "description": "Audit reason required for destructive (DELETE) and dangerous-scope routes.",
+                    "type": "string"
+                  },
+                  "tool": {
+                    "description": "Route tool name from grain_explore_scope (e.g. 'api_list_ci_runs').",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "tool"
+                ],
+                "type": "object"
+              },
+              "name": "grain_invoke"
+            },
+            {
+              "_meta": {
+                "antigravity/alwaysLoad": true
+              },
+              "description": "Return target repositories, templates, boards, custom fields, and grantable capabilities needed before calling grain_submit_task.",
+              "inputSchema": {
+                "properties": {
+                  "repo": {
+                    "description": "Optional owner/name repository filter for templates and repo details.",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "name": "grain_filing_context"
+            },
+            {
+              "_meta": {
+                "antigravity/alwaysLoad": true
+              },
+              "description": "File a new Grain task through POST /api/tasks. approve defaults to false (files as 'proposed' awaiting human approval).",
+              "inputSchema": {
+                "properties": {
+                  "approve": {
+                    "description": "When true, queue the task immediately for dispatch (requires human caller or tasks:admin). Defaults to false ('proposed').",
+                    "type": "boolean"
+                  },
+                  "auto_merge": {
+                    "description": "Enable auto-merge on green CI (person callers only; agents cannot enable auto-merge).",
+                    "type": "boolean"
+                  },
+                  "base": {
+                    "description": "Base branch to work from (defaults to the repository's default branch).",
+                    "type": "string"
+                  },
+                  "board_id": {
+                    "description": "Optional board ID context.",
+                    "type": "string"
+                  },
+                  "capabilities": {
+                    "description": "Explicit capability IDs for the task (omit to use deployment defaults).",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "custom_fields": {
+                    "description": "Declared custom field values keyed by field name.",
+                    "type": "object"
+                  },
+                  "depends_on": {
+                    "description": "Task IDs that must finish before this task dispatches.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "description": {
+                    "description": "Detailed task specification with enough context for an unattended sandbox run.",
+                    "type": "string"
+                  },
+                  "fields": {
+                    "description": "Template input field values keyed by field name.",
+                    "type": "object"
+                  },
+                  "interactive": {
+                    "description": "File as a live interactive chat task.",
+                    "type": "boolean"
+                  },
+                  "model": {
+                    "description": "Optional model ID override from grain_filing_context.",
+                    "type": "string"
+                  },
+                  "network_access": {
+                    "description": "Per-task sandbox network override (e.g. 'open', 'none').",
+                    "type": "string"
+                  },
+                  "no_repo": {
+                    "description": "Set true to explicitly file a standalone task with no repository.",
+                    "type": "boolean"
+                  },
+                  "priority": {
+                    "description": "Positive dispatch priority (default 5; higher numbers dispatch first).",
+                    "type": "integer"
+                  },
+                  "reads": {
+                    "description": "Additional owner/name repositories the task may read.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "reason": {
+                    "description": "Optional audit reason when filing with dangerous/admin escalations.",
+                    "type": "string"
+                  },
+                  "repo": {
+                    "description": "Target repository in owner/name form.",
+                    "type": "string"
+                  },
+                  "template_id": {
+                    "description": "Optional template ID from grain_filing_context.",
+                    "type": "string"
+                  },
+                  "title": {
+                    "description": "Short imperative task title (required unless template_id supplies one).",
+                    "type": "string"
+                  },
+                  "writes": {
+                    "description": "Additional {repo, base} write targets for follow-up proposals.",
+                    "items": {
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              },
+              "name": "grain_submit_task"
+            },
+            {
+              "_meta": {
+                "antigravity/alwaysLoad": true
+              },
+              "description": "List Grain tasks via GET /api/tasks with compact summary rows by default.",
+              "inputSchema": {
+                "properties": {
+                  "limit": {
+                    "description": "Maximum number of tasks to return (default 50).",
+                    "type": "integer"
+                  },
+                  "q": {
+                    "description": "Optional case-insensitive title substring filter.",
+                    "type": "string"
+                  },
+                  "repo": {
+                    "description": "Optional owner/name repository filter.",
+                    "type": "string"
+                  },
+                  "state": {
+                    "description": "Optional comma-separated states (e.g. 'running,queued,proposed,awaiting_reply').",
+                    "type": "string"
+                  },
+                  "summary": {
+                    "description": "Return compact summary rows without full descriptions (default true).",
+                    "type": "boolean"
+                  }
+                },
+                "type": "object"
+              },
+              "name": "grain_list_tasks"
+            },
+            {
+              "_meta": {
+                "antigravity/alwaysLoad": true
+              },
+              "description": "Read one Grain task via GET /api/tasks/{id}. Defaults to a compact ~1 KB 'summary' view; pass view='conversation' to page comments or view='full' for raw TaskDetail JSON.",
+              "inputSchema": {
+                "properties": {
+                  "after": {
+                    "description": "For view='conversation': return comments with ID \u003e after (omit or -1 for the first page).",
+                    "type": "integer"
+                  },
+                  "id": {
+                    "description": "Task ID (e.g. '42').",
+                    "type": "string"
+                  },
+                  "view": {
+                    "description": "Output view: 'summary' (~1 KB default), 'conversation' (paged comments), or 'full' (complete JSON).",
+                    "enum": [
+                      "summary",
+                      "conversation",
+                      "full"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              },
+              "name": "grain_get_task"
+            }
+          ]
+        }
+      },
+      "durationMs": 1
+    },
+    {
+      "seq": 6,
+      "phase": "bearer-gma: grain_explore_scope(overview)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer \u003cREDACTED_GMA_TOKEN\u003e",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-bearer"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_explore_scope",
+          "arguments": {}
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "content": [
+            {
+              "text": "{\"groups\":[{\"group\":\"ci\",\"guidance\":\"Grain CI workflows, runs, logs, faults, and artifacts. Filter list calls by repo/branch when possible before fetching full job logs.\",\"totalRoutes\":15,\"scopes\":[{\"scope\":\"ci:read\",\"description\":\"Read grain CI runs, their job logs and artifacts, merge batches and base-branch gates\",\"routeCount\":11},{\"scope\":\"ci:write\",\"description\":\"Start, re-run and cancel grain CI runs, base-branch and release runs\",\"routeCount\":4}]},{\"group\":\"deployment\",\"guidance\":\"Host diagnostics, logs, active sandboxes, metrics, upgrades, and daemon restart/reboot controls.\",\"totalRoutes\":13,\"scopes\":[{\"scope\":\"deployment:read\",\"description\":\"Read host, sandbox, log, metric and upgrade status\",\"routeCount\":13}]},{\"group\":\"merge\",\"guidance\":\"Pull request creation, merge-queue retries, and force-merges. Force-merge requires merge:force and an explicit reason.\",\"totalRoutes\":3,\"scopes\":[{\"scope\":\"merge:write\",\"description\":\"Open pull requests for tasks and retry their merges\",\"routeCount\":3}]},{\"group\":\"repos\",\"guidance\":\"Target repository onboarding, branch configuration, CI mode, merge settings, and declarations.\",\"totalRoutes\":20,\"scopes\":[{\"scope\":\"repos:read\",\"description\":\"Read repository settings, branches and declarations\",\"routeCount\":20}]},{\"group\":\"sandboxes\",\"totalRoutes\":1,\"scopes\":[{\"scope\":\"sandboxes:read\",\"description\":\"Read the status of persistent sandboxes (implied by deployment:read)\",\"routeCount\":1}]},{\"group\":\"tasks\",\"guidance\":\"Task lifecycle \\u0026 mutations. Prefer grain_list_tasks, grain_get_task, grain_filing_context, and grain_submit_task for common reads/filing; use grain_invoke for comments, state transitions, dependencies, approvals, and task-admin edits. Pass arguments.expect on admin mutations to avoid clobbering concurrent changes.\",\"totalRoutes\":44,\"scopes\":[{\"scope\":\"tasks:read\",\"description\":\"Read tasks, their conversations, transcripts and trees\",\"routeCount\":15},{\"scope\":\"tasks:write\",\"description\":\"File, edit, comment on, reorder, defer, retry, stop, close and reopen tasks\",\"routeCount\":29}]},{\"group\":\"templates\",\"guidance\":\"Reusable task templates and template composition previews.\",\"totalRoutes\":2,\"scopes\":[{\"scope\":\"templates:read\",\"description\":\"Read task templates\",\"routeCount\":2}]}],\"hint\":\"Call grain_explore_scope(scope='\\u003cgroup\\u003e', tool='\\u003cword\\u003e') to view matching route tool names and JSON input schemas (scope alone lists a whole group, which is much larger), then grain_invoke(tool, arguments, reason?) to execute.\",\"totalAuthorizedRoutes\":98}",
+              "type": "text"
+            }
+          ],
+          "isError": false
+        }
+      },
+      "durationMs": 12
+    },
+    {
+      "seq": 7,
+      "phase": "bearer-gma: grain_explore_scope(tasks,comment)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer \u003cREDACTED_GMA_TOKEN\u003e",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-bearer"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_explore_scope",
+          "arguments": {
+            "scope": "tasks",
+            "tool": "comment"
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+          "content": [
+            {
+              "text": "{\"guidance\":\"Task lifecycle \\u0026 mutations. Prefer grain_list_tasks, grain_get_task, grain_filing_context, and grain_submit_task for common reads/filing; use grain_invoke for comments, state transitions, dependencies, approvals, and task-admin edits. Pass arguments.expect on admin mutations to avoid clobbering concurrent changes.\",\"routeCount\":1,\"routes\":[{\"tool\":\"api_add_comment\",\"method\":\"POST\",\"path\":\"/api/tasks/{id}/comments\",\"scope\":\"tasks:write\",\"description\":\"Comment on a task's conversation. Calls POST /api/tasks/{id}/comments through the same handler grain's UI uses (agent API scope tasks:write).\",\"inputSchema\":{\"properties\":{\"body\":{\"description\":\"The JSON request body.\",\"properties\":{\"attachments\":{\"items\":{\"properties\":{\"content\":{\"type\":\"string\"},\"contentType\":{\"type\":\"string\"},\"filename\":{\"type\":\"string\"}},\"type\":\"object\"},\"type\":\"array\"},\"author\":{\"type\":\"string\"},\"body\":{\"type\":\"string\"},\"reviewers\":{\"items\":{\"type\":\"string\"},\"type\":\"array\"}},\"type\":\"object\"},\"expect\":{\"additionalProperties\":false,\"description\":\"What you believe about task {id} before changing it. The call reads the task first and refuses, changing nothing, if any field given here disagrees with the record.\",\"properties\":{\"kind\":{\"description\":\"A kind tag it must carry: port, repair, session, proposal, durable, imported, or none for a task with no tag.\",\"type\":\"string\"},\"state\":{\"description\":\"The state it must be in (queued, running, completed, ...).\",\"type\":\"string\"},\"title_prefix\":{\"description\":\"What its title must start with (case-insensitive).\",\"type\":\"string\"}},\"type\":\"object\"},\"id\":{\"description\":\"The {id} of /api/tasks/{id}/comments\",\"type\":\"string\"},\"query\":{\"additionalProperties\":{\"type\":\"string\"},\"description\":\"Query parameters, as the UI would send them.\",\"type\":\"object\"},\"reason\":{\"description\":\"Why this call is being made; recorded with it, and required for a destructive call.\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}}],\"scope\":\"tasks\",\"tool\":\"comment\"}",
+              "type": "text"
+            }
+          ],
+          "isError": false
+        }
+      },
+      "durationMs": 2
+    },
+    {
+      "seq": 8,
+      "phase": "bearer-gma: grain_explore_scope(settings-unauthorized)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer \u003cREDACTED_GMA_TOKEN\u003e",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-bearer"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_explore_scope",
+          "arguments": {
+            "scope": "settings"
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "result": {
+          "content": [
+            {
+              "text": "Scope \"settings\" is not authorized for this caller (requires grant for settings:read, settings:write).",
+              "type": "text"
+            }
+          ],
+          "isError": true
+        }
+      },
+      "durationMs": 1
+    },
+    {
+      "seq": 9,
+      "phase": "bearer-gma: grain_filing_context",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer \u003cREDACTED_GMA_TOKEN\u003e",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-bearer"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_filing_context",
+          "arguments": {}
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {
+          "content": [
+            {
+              "text": "{\"boards\":null,\"customFields\":null,\"submitDefaults\":{\"approve\":false,\"note\":\"grain_submit_task defaults approve=false so tasks land in 'proposed' state awaiting human approval unless approve=true is explicitly passed.\"},\"targetRepos\":null,\"templates\":[{\"id\":\"system:gke-sandbox-cluster\",\"name\":\"Set up a GKE sandbox cluster\",\"description\":\"Walk me through setting up a GKE Standard sandbox cluster for this grain deployment and attaching it, so its task sandboxes run as Granule VMs on GKE.\\n\\nWhat I filled in when I filed this (a blank means I have not decided yet):\\n\\n- GCP sandbox project: {{project}}\\n- Zone or region: {{location}}\\n- Cluster name: {{cluster}}\\n- Machine type: {{machine_type}}\\n\\nFollow the `gke-sandbox-cluster` bootstrap playbook (read it with read_bootstrap_playbook before you do anything else), in this order:\\n\\n1. In one message, confirm the four values above, ask for any that are blank, and ask for the node pool name and pool size the playbook also needs. Do not run anything until I have answered.\\n2. Run the playbook's credential, API, quota and org-policy checks.\\n3. Run `grain init -platform=gke-sandboxes -dry-run` with those values and show me the plan it prints.\\n4. Once I say go, run the same command without `-dry-run`, then the playbook's verification steps.\\n5. Ask me to switch [Settings → Sandboxes](/settings/sandboxes) to `kubernetes-granule`, with the namespace and kubeconfig the playbook gives, and help me confirm a smoke task's sandbox lands on the cluster.\\n\\nEvery host command goes through run_host_command, which waits for my approval in this chat: say in one line what you are about to run and why before each one. If a step fails, stop and show me the output rather than working around it, and use the playbook's rollback section if I ask to undo what was created.\\n\",\"interactive\":true,\"fields\":[{\"name\":\"project\",\"label\":\"GCP sandbox project ID\"},{\"name\":\"location\",\"label\":\"Zone or region\",\"default\":\"us-central1-a\"},{\"name\":\"cluster\",\"label\":\"Cluster name\",\"default\":\"grain-sandboxes\"},{\"name\":\"machine_type\",\"label\":\"Machine type\",\"default\":\"n2-standard-8\",\"options\":[\"c4-standard-96-lssd\",\"n2-standard-8\",\"n2-standard-16\",\"n2-standard-32\"]}]}]}",
+              "type": "text"
+            }
+          ],
+          "isError": false
+        }
+      },
+      "durationMs": 5
+    },
+    {
+      "seq": 10,
+      "phase": "bearer-gma: grain_submit_task",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer \u003cREDACTED_GMA_TOKEN\u003e",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-bearer"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_submit_task",
+          "arguments": {
+            "description": "Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. ",
+            "repo": "acme/app",
+            "title": "MCP SDK task via Authorization: Bearer gma_"
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "result": {
+          "content": [
+            {
+              "text": "{\"approved\":false,\"base\":\"\",\"id\":\"3\",\"interactive\":false,\"repo\":\"acme/app\",\"state\":\"proposed\",\"title\":\"MCP SDK task via Authorization: Bearer gma_\",\"url\":\"/tasks/3\"}",
+              "type": "text"
+            }
+          ],
+          "isError": false
+        }
+      },
+      "durationMs": 12
+    },
+    {
+      "seq": 11,
+      "phase": "bearer-gma: grain_get_task(summary)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer \u003cREDACTED_GMA_TOKEN\u003e",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-bearer"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_get_task",
+          "arguments": {
+            "id": "3"
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "result": {
+          "content": [
+            {
+              "text": "Task 3: MCP SDK task via Authorization: Bearer gma_\nState: proposed\nPriority: 5\nKind: proposal\nRepo: acme/app (base default branch)\n(view \"full\" for the whole record, \"conversation\" to page the thread)",
+              "type": "text"
+            }
+          ],
+          "isError": false
+        }
+      },
+      "durationMs": 16
+    },
+    {
+      "seq": 12,
+      "phase": "bearer-gma: grain_get_task(full)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer \u003cREDACTED_GMA_TOKEN\u003e",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-bearer"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_get_task",
+          "arguments": {
+            "id": "3",
+            "view": "full"
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "result": {
+          "content": [
+            {
+              "text": "{\"id\":\"3\",\"title\":\"MCP SDK task via Authorization: Bearer gma_\",\"description\":\"Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. \",\"author\":\"external:alice-mcp\",\"authorKind\":\"agent\",\"authorSource\":\"external-token\",\"authorLabel\":\"external agent alice-mcp for alice@example.com\",\"state\":\"proposed\",\"repo\":\"acme/app\",\"branch\":\"grain/a8a14655/task-3-mcp-sdk-task-via-authorization\",\"priority\":5,\"autoMerge\":false,\"autoApproveProposals\":false,\"interactive\":false,\"creator\":\"alice@example.com\",\"filedVia\":\"mcp-go-sdk/1.8.0 session=item1-bearer\",\"provenance\":\"filed from mcp-go-sdk/1.8.0 session=item1-bearer by alice@example.com\",\"capabilities\":[],\"createdAt\":\"2026-11-04T21:54:15.45518284Z\",\"blocked\":false,\"reason\":{\"reason\":\"proposed/unapproved\",\"class\":\"awaiting a person\",\"control\":\"Approve\"},\"comments\":[],\"transitions\":[{\"state\":\"proposed\",\"at\":\"2026-11-04T21:54:15.45518284Z\"}]}",
+              "type": "text"
+            }
+          ],
+          "isError": false
+        }
+      },
+      "durationMs": 6
+    },
+    {
+      "seq": 13,
+      "phase": "bearer-gma: grain_invoke(allowed:api_add_comment)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer \u003cREDACTED_GMA_TOKEN\u003e",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-bearer"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_invoke",
+          "arguments": {
+            "arguments": {
+              "body": {
+                "body": "Comment posted via grain_invoke (bearer-gma)"
+              },
+              "id": "3"
+            },
+            "tool": "api_add_comment"
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 11,
+        "result": {
+          "content": [
+            {
+              "text": "{\"id\":\"3\",\"title\":\"MCP SDK task via Authorization: Bearer gma_\",\"description\":\"Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. \",\"author\":\"external:alice-mcp\",\"authorKind\":\"agent\",\"authorSource\":\"external-token\",\"authorLabel\":\"external agent alice-mcp for alice@example.com\",\"state\":\"proposed\",\"repo\":\"acme/app\",\"branch\":\"grain/a8a14655/task-3-mcp-sdk-task-via-authorization\",\"priority\":5,\"autoMerge\":false,\"autoApproveProposals\":false,\"interactive\":false,\"creator\":\"alice@example.com\",\"filedVia\":\"mcp-go-sdk/1.8.0 session=item1-bearer\",\"provenance\":\"filed from mcp-go-sdk/1.8.0 session=item1-bearer by alice@example.com\",\"capabilities\":[],\"createdAt\":\"2026-11-04T21:54:15.45518284Z\",\"blocked\":false,\"reason\":{\"reason\":\"proposed/unapproved\",\"class\":\"awaiting a person\",\"control\":\"Approve\"}}\n",
+              "type": "text"
+            }
+          ],
+          "isError": false
+        }
+      },
+      "durationMs": 8
+    },
+    {
+      "seq": 14,
+      "phase": "bearer-gma: grain_invoke(refused-scope:api_get_settings)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer \u003cREDACTED_GMA_TOKEN\u003e",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-bearer"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 12,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_invoke",
+          "arguments": {
+            "arguments": {},
+            "tool": "api_get_settings"
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 12,
+        "result": {
+          "content": [
+            {
+              "text": "api_get_settings failed: HTTP 403: caller holds no grant for scope settings:read (GET /api/settings)",
+              "type": "text"
+            }
+          ],
+          "isError": true
+        }
+      },
+      "durationMs": 2
+    },
+    {
+      "seq": 15,
+      "phase": "bearer-gma: grain_invoke(refused-repo:acme/other)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer \u003cREDACTED_GMA_TOKEN\u003e",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-bearer"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 13,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_invoke",
+          "arguments": {
+            "arguments": {
+              "body": {
+                "repo": "acme/other",
+                "title": "Off-allowlist repo attempt"
+              }
+            },
+            "tool": "api_create_task"
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 13,
+        "result": {
+          "content": [
+            {
+              "text": "api_create_task failed: HTTP 403: external:alice-mcp holds tasks:write, but not on acme/other",
+              "type": "text"
+            }
+          ],
+          "isError": true
+        }
+      },
+      "durationMs": 1
+    },
+    {
+      "seq": 16,
+      "phase": "bearer-gma: grain_list_tasks",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer \u003cREDACTED_GMA_TOKEN\u003e",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-bearer"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 14,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_list_tasks",
+          "arguments": {
+            "repo": "acme/app"
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 14,
+        "result": {
+          "content": [
+            {
+              "text": "[{\"id\":\"2\",\"title\":\"Narrow API task for X-Grain-Access-Code MCP test\",\"state\":\"proposed\",\"repo\":\"acme/app\",\"createdAt\":\"2026-11-04T21:54:14.726269688Z\"},{\"id\":\"3\",\"title\":\"MCP SDK task via Authorization: Bearer gma_\",\"state\":\"proposed\",\"repo\":\"acme/app\",\"createdAt\":\"2026-11-04T21:54:15.45518284Z\"}]\n",
+              "type": "text"
+            }
+          ],
+          "isError": false
+        }
+      },
+      "durationMs": 3
+    },
+    {
+      "seq": 17,
+      "phase": "x-grain-access-code-with-gma: connect (initialize + notifications/initialized)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.upstream-proxy.sig",
+        "Content-Type": "application/json",
+        "Mcp-Method": "server/discover",
+        "Mcp-Protocol-Version": "2026-07-28",
+        "X-Grain-Access-Code": "\u003cREDACTED_GMA_TOKEN\u003e",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-xgac-gma"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "server/discover",
+        "params": {
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {
+              "roots": {
+                "listChanged": true
+              }
+            },
+            "io.modelcontextprotocol/clientInfo": {
+              "name": "grain-walkthrough-mcp-sdk",
+              "version": "1.0.0"
+            },
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+          }
+        }
+      },
+      "statusCode": 401,
+      "responseHeaders": {
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "error": "this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's \"Enter access code\" page, or send it as a bearer token (`grain access-code` prints it, to the account grain runs as and root)"
+      },
+      "durationMs": 0
+    },
+    {
+      "seq": 18,
+      "phase": "x-grain-access-code-with-gma: connect (initialize + notifications/initialized)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.upstream-proxy.sig",
+        "Content-Type": "application/json",
+        "X-Grain-Access-Code": "\u003cREDACTED_GMA_TOKEN\u003e",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-xgac-gma"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "initialize",
+        "params": {
+          "clientInfo": {
+            "name": "grain-walkthrough-mcp-sdk",
+            "version": "1.0.0"
+          },
+          "protocolVersion": "2025-11-25",
+          "capabilities": {
+            "roots": {
+              "listChanged": true
+            }
+          }
+        }
+      },
+      "statusCode": 401,
+      "responseHeaders": {
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "error": "this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's \"Enter access code\" page, or send it as a bearer token (`grain access-code` prints it, to the account grain runs as and root)"
+      },
+      "durationMs": 0
+    },
+    {
+      "seq": 19,
+      "phase": "x-grain-access-code: connect (initialize + notifications/initialized)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.upstream-proxy.sig",
+        "Content-Type": "application/json",
+        "Mcp-Method": "server/discover",
+        "Mcp-Protocol-Version": "2026-07-28",
+        "X-Grain-Access-Code": "\u003cREDACTED_ACCESS_CODE\u003e",
+        "X-Grain-Acting-Task": "2",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-xgac-code"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "server/discover",
+        "params": {
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {
+              "roots": {
+                "listChanged": true
+              }
+            },
+            "io.modelcontextprotocol/clientInfo": {
+              "name": "grain-walkthrough-mcp-sdk",
+              "version": "1.0.0"
+            },
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+          "code": -32601,
+          "message": "unknown method server/discover"
+        }
+      },
+      "durationMs": 0
+    },
+    {
+      "seq": 20,
+      "phase": "x-grain-access-code: connect (initialize + notifications/initialized)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.upstream-proxy.sig",
+        "Content-Type": "application/json",
+        "X-Grain-Access-Code": "\u003cREDACTED_ACCESS_CODE\u003e",
+        "X-Grain-Acting-Task": "2",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-xgac-code"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "initialize",
+        "params": {
+          "clientInfo": {
+            "name": "grain-walkthrough-mcp-sdk",
+            "version": "1.0.0"
+          },
+          "protocolVersion": "2025-11-25",
+          "capabilities": {
+            "roots": {
+              "listChanged": true
+            }
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "capabilities": {
+            "tools": {}
+          },
+          "instructions": "Grain Controller MCP workflow guide:\n1. Everyday task operations have dedicated compact tools -- prefer these first:\n   - grain_list_tasks(repo?, state?, q?, limit?, summary?) to browse tasks (compact summary rows by default).\n   - grain_get_task(id, view?) to inspect one task (~1 KB \"summary\" by default, \"conversation\" to page comments, \"full\" for raw JSON).\n   - grain_filing_context(repo?) to read target repositories, templates, boards, custom fields, and grantable capabilities before filing work.\n   - grain_submit_task(...) to file a task. approve defaults to false (filed as \"proposed\" awaiting human approval); only set approve=true when explicitly authorized.\n2. All other Grain controller operations (a few hundred routes across CI, merge queue, repos, releases, schedules, templates, settings, secrets, capabilities, deployment) use progressive discovery:\n   - Call grain_explore_scope() with no arguments to list the scope groups you are authorized to use.\n   - Call grain_explore_scope(scope=\"\u003cgroup\u003e\", tool=\"\u003cword\u003e\") (e.g. scope=\"tasks\", tool=\"comment\") to get the exact JSON input schemas of just the routes you need; a whole group (scope alone) can run to tens of KB, so name the tool whenever you know what you are after.\n   - Call grain_invoke(tool=\"api_...\", arguments={...}, reason?=\"...\") to execute an authorized route.\n3. Safety \u0026 authorization rules:\n   - Destructive (DELETE) and dangerous-scope routes require a non-empty reason explaining why the change is being made.\n   - Task mutations accept arguments.expect ({state?, title_prefix?, kind?}): the call reads the task first and refuses, changing nothing, if the record disagrees.\n   - Calls run under your authenticated identity (and X-Grain-Acting-Task grants when present); if a scope is refused, ask a human to grant api:\u003cscope\u003e rather than working around it.",
+          "protocolVersion": "2025-03-26",
+          "serverInfo": {
+            "name": "grain-controller",
+            "version": "0.1.0"
+          }
+        }
+      },
+      "durationMs": 0
+    },
+    {
+      "seq": 21,
+      "phase": "x-grain-access-code: connect (initialize + notifications/initialized)",
+      "method": "GET",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "text/event-stream",
+        "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.upstream-proxy.sig",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Access-Code": "\u003cREDACTED_ACCESS_CODE\u003e",
+        "X-Grain-Acting-Task": "2",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-xgac-code"
+      },
+      "statusCode": 405,
+      "responseHeaders": {
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "error": "GET is not allowed on /api/mcp"
+      },
+      "durationMs": 0
+    },
+    {
+      "seq": 22,
+      "phase": "x-grain-access-code: connect (initialize + notifications/initialized)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.upstream-proxy.sig",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Access-Code": "\u003cREDACTED_ACCESS_CODE\u003e",
+        "X-Grain-Acting-Task": "2",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-xgac-code"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized",
+        "params": {}
+      },
+      "statusCode": 202,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Length": "0",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "durationMs": 0
+    },
+    {
+      "seq": 23,
+      "phase": "x-grain-access-code: tools/list",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.upstream-proxy.sig",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Access-Code": "\u003cREDACTED_ACCESS_CODE\u003e",
+        "X-Grain-Acting-Task": "2",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-xgac-code"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/list",
+        "params": {}
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "tools": [
+            {
+              "_meta": {
+                "antigravity/alwaysLoad": true
+              },
+              "description": "List authorized Grain controller API scope groups, or return domain guidance and JSON input schemas for one scope group or scope -- narrowed to the routes whose tool name or path matches tool, when given.",
+              "inputSchema": {
+                "properties": {
+                  "scope": {
+                    "description": "Optional scope group (e.g. 'tasks', 'ci', 'merge', 'repos', 'settings') or exact scope (e.g. 'ci:read'). Omit to list all authorized scope groups.",
+                    "type": "string"
+                  },
+                  "tool": {
+                    "description": "Optional route tool name (e.g. 'api_add_comment') or a word of it or of its path (e.g. 'comment'): only matching routes' schemas are returned, which is far cheaper than a whole group's. With scope, searches that group; alone, every authorized route.",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "name": "grain_explore_scope"
+            },
+            {
+              "_meta": {
+                "antigravity/alwaysLoad": true
+              },
+              "description": "Execute an authorized Grain controller API route discovered via grain_explore_scope.",
+              "inputSchema": {
+                "properties": {
+                  "arguments": {
+                    "description": "Route arguments: path parameters by name, optional 'query' object, optional 'body' object (or flat body fields), and optional 'expect' task-state guard.",
+                    "type": "object"
+                  },
+                  "reason": {
+                    "description": "Audit reason required for destructive (DELETE) and dangerous-scope routes.",
+                    "type": "string"
+                  },
+                  "tool": {
+                    "description": "Route tool name from grain_explore_scope (e.g. 'api_list_ci_runs').",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "tool"
+                ],
+                "type": "object"
+              },
+              "name": "grain_invoke"
+            },
+            {
+              "_meta": {
+                "antigravity/alwaysLoad": true
+              },
+              "description": "Return target repositories, templates, boards, custom fields, and grantable capabilities needed before calling grain_submit_task.",
+              "inputSchema": {
+                "properties": {
+                  "repo": {
+                    "description": "Optional owner/name repository filter for templates and repo details.",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "name": "grain_filing_context"
+            },
+            {
+              "_meta": {
+                "antigravity/alwaysLoad": true
+              },
+              "description": "File a new Grain task through POST /api/tasks. approve defaults to false (files as 'proposed' awaiting human approval).",
+              "inputSchema": {
+                "properties": {
+                  "approve": {
+                    "description": "When true, queue the task immediately for dispatch (requires human caller or tasks:admin). Defaults to false ('proposed').",
+                    "type": "boolean"
+                  },
+                  "auto_merge": {
+                    "description": "Enable auto-merge on green CI (person callers only; agents cannot enable auto-merge).",
+                    "type": "boolean"
+                  },
+                  "base": {
+                    "description": "Base branch to work from (defaults to the repository's default branch).",
+                    "type": "string"
+                  },
+                  "board_id": {
+                    "description": "Optional board ID context.",
+                    "type": "string"
+                  },
+                  "capabilities": {
+                    "description": "Explicit capability IDs for the task (omit to use deployment defaults).",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "custom_fields": {
+                    "description": "Declared custom field values keyed by field name.",
+                    "type": "object"
+                  },
+                  "depends_on": {
+                    "description": "Task IDs that must finish before this task dispatches.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "description": {
+                    "description": "Detailed task specification with enough context for an unattended sandbox run.",
+                    "type": "string"
+                  },
+                  "fields": {
+                    "description": "Template input field values keyed by field name.",
+                    "type": "object"
+                  },
+                  "interactive": {
+                    "description": "File as a live interactive chat task.",
+                    "type": "boolean"
+                  },
+                  "model": {
+                    "description": "Optional model ID override from grain_filing_context.",
+                    "type": "string"
+                  },
+                  "network_access": {
+                    "description": "Per-task sandbox network override (e.g. 'open', 'none').",
+                    "type": "string"
+                  },
+                  "no_repo": {
+                    "description": "Set true to explicitly file a standalone task with no repository.",
+                    "type": "boolean"
+                  },
+                  "priority": {
+                    "description": "Positive dispatch priority (default 5; higher numbers dispatch first).",
+                    "type": "integer"
+                  },
+                  "reads": {
+                    "description": "Additional owner/name repositories the task may read.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "reason": {
+                    "description": "Optional audit reason when filing with dangerous/admin escalations.",
+                    "type": "string"
+                  },
+                  "repo": {
+                    "description": "Target repository in owner/name form.",
+                    "type": "string"
+                  },
+                  "template_id": {
+                    "description": "Optional template ID from grain_filing_context.",
+                    "type": "string"
+                  },
+                  "title": {
+                    "description": "Short imperative task title (required unless template_id supplies one).",
+                    "type": "string"
+                  },
+                  "writes": {
+                    "description": "Additional {repo, base} write targets for follow-up proposals.",
+                    "items": {
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              },
+              "name": "grain_submit_task"
+            },
+            {
+              "_meta": {
+                "antigravity/alwaysLoad": true
+              },
+              "description": "List Grain tasks via GET /api/tasks with compact summary rows by default.",
+              "inputSchema": {
+                "properties": {
+                  "limit": {
+                    "description": "Maximum number of tasks to return (default 50).",
+                    "type": "integer"
+                  },
+                  "q": {
+                    "description": "Optional case-insensitive title substring filter.",
+                    "type": "string"
+                  },
+                  "repo": {
+                    "description": "Optional owner/name repository filter.",
+                    "type": "string"
+                  },
+                  "state": {
+                    "description": "Optional comma-separated states (e.g. 'running,queued,proposed,awaiting_reply').",
+                    "type": "string"
+                  },
+                  "summary": {
+                    "description": "Return compact summary rows without full descriptions (default true).",
+                    "type": "boolean"
+                  }
+                },
+                "type": "object"
+              },
+              "name": "grain_list_tasks"
+            },
+            {
+              "_meta": {
+                "antigravity/alwaysLoad": true
+              },
+              "description": "Read one Grain task via GET /api/tasks/{id}. Defaults to a compact ~1 KB 'summary' view; pass view='conversation' to page comments or view='full' for raw TaskDetail JSON.",
+              "inputSchema": {
+                "properties": {
+                  "after": {
+                    "description": "For view='conversation': return comments with ID \u003e after (omit or -1 for the first page).",
+                    "type": "integer"
+                  },
+                  "id": {
+                    "description": "Task ID (e.g. '42').",
+                    "type": "string"
+                  },
+                  "view": {
+                    "description": "Output view: 'summary' (~1 KB default), 'conversation' (paged comments), or 'full' (complete JSON).",
+                    "enum": [
+                      "summary",
+                      "conversation",
+                      "full"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              },
+              "name": "grain_get_task"
+            }
+          ]
+        }
+      },
+      "durationMs": 0
+    },
+    {
+      "seq": 24,
+      "phase": "x-grain-access-code: grain_explore_scope(overview)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.upstream-proxy.sig",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Access-Code": "\u003cREDACTED_ACCESS_CODE\u003e",
+        "X-Grain-Acting-Task": "2",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-xgac-code"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_explore_scope",
+          "arguments": {}
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "content": [
+            {
+              "text": "{\"groups\":[{\"group\":\"tasks\",\"guidance\":\"Task lifecycle \\u0026 mutations. Prefer grain_list_tasks, grain_get_task, grain_filing_context, and grain_submit_task for common reads/filing; use grain_invoke for comments, state transitions, dependencies, approvals, and task-admin edits. Pass arguments.expect on admin mutations to avoid clobbering concurrent changes.\",\"totalRoutes\":45,\"scopes\":[{\"scope\":\"tasks:read\",\"description\":\"Read tasks, their conversations, transcripts and trees\",\"routeCount\":15},{\"scope\":\"tasks:write\",\"description\":\"File, edit, comment on, reorder, defer, retry, stop, close and reopen tasks\",\"routeCount\":30}]}],\"hint\":\"Call grain_explore_scope(scope='\\u003cgroup\\u003e', tool='\\u003cword\\u003e') to view matching route tool names and JSON input schemas (scope alone lists a whole group, which is much larger), then grain_invoke(tool, arguments, reason?) to execute.\",\"totalAuthorizedRoutes\":45}",
+              "type": "text"
+            }
+          ],
+          "isError": false
+        }
+      },
+      "durationMs": 3
+    },
+    {
+      "seq": 25,
+      "phase": "x-grain-access-code: grain_explore_scope(tasks,comment)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.upstream-proxy.sig",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Access-Code": "\u003cREDACTED_ACCESS_CODE\u003e",
+        "X-Grain-Acting-Task": "2",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-xgac-code"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_explore_scope",
+          "arguments": {
+            "scope": "tasks",
+            "tool": "comment"
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+          "content": [
+            {
+              "text": "{\"guidance\":\"Task lifecycle \\u0026 mutations. Prefer grain_list_tasks, grain_get_task, grain_filing_context, and grain_submit_task for common reads/filing; use grain_invoke for comments, state transitions, dependencies, approvals, and task-admin edits. Pass arguments.expect on admin mutations to avoid clobbering concurrent changes.\",\"routeCount\":1,\"routes\":[{\"tool\":\"api_add_comment\",\"method\":\"POST\",\"path\":\"/api/tasks/{id}/comments\",\"scope\":\"tasks:write\",\"description\":\"Comment on a task's conversation. Calls POST /api/tasks/{id}/comments through the same handler grain's UI uses (agent API scope tasks:write).\",\"inputSchema\":{\"properties\":{\"body\":{\"description\":\"The JSON request body.\",\"properties\":{\"attachments\":{\"items\":{\"properties\":{\"content\":{\"type\":\"string\"},\"contentType\":{\"type\":\"string\"},\"filename\":{\"type\":\"string\"}},\"type\":\"object\"},\"type\":\"array\"},\"author\":{\"type\":\"string\"},\"body\":{\"type\":\"string\"},\"reviewers\":{\"items\":{\"type\":\"string\"},\"type\":\"array\"}},\"type\":\"object\"},\"expect\":{\"additionalProperties\":false,\"description\":\"What you believe about task {id} before changing it. The call reads the task first and refuses, changing nothing, if any field given here disagrees with the record.\",\"properties\":{\"kind\":{\"description\":\"A kind tag it must carry: port, repair, session, proposal, durable, imported, or none for a task with no tag.\",\"type\":\"string\"},\"state\":{\"description\":\"The state it must be in (queued, running, completed, ...).\",\"type\":\"string\"},\"title_prefix\":{\"description\":\"What its title must start with (case-insensitive).\",\"type\":\"string\"}},\"type\":\"object\"},\"id\":{\"description\":\"The {id} of /api/tasks/{id}/comments\",\"type\":\"string\"},\"query\":{\"additionalProperties\":{\"type\":\"string\"},\"description\":\"Query parameters, as the UI would send them.\",\"type\":\"object\"},\"reason\":{\"description\":\"Why this call is being made; recorded with it, and required for a destructive call.\",\"type\":\"string\"}},\"required\":[\"id\"],\"type\":\"object\"}}],\"scope\":\"tasks\",\"tool\":\"comment\"}",
+              "type": "text"
+            }
+          ],
+          "isError": false
+        }
+      },
+      "durationMs": 3
+    },
+    {
+      "seq": 26,
+      "phase": "x-grain-access-code: grain_explore_scope(settings-unauthorized)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.upstream-proxy.sig",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Access-Code": "\u003cREDACTED_ACCESS_CODE\u003e",
+        "X-Grain-Acting-Task": "2",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-xgac-code"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_explore_scope",
+          "arguments": {
+            "scope": "settings"
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "result": {
+          "content": [
+            {
+              "text": "Scope \"settings\" is not authorized for this caller (requires grant for settings:read, settings:write).",
+              "type": "text"
+            }
+          ],
+          "isError": true
+        }
+      },
+      "durationMs": 1
+    },
+    {
+      "seq": 27,
+      "phase": "x-grain-access-code: grain_filing_context",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.upstream-proxy.sig",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Access-Code": "\u003cREDACTED_ACCESS_CODE\u003e",
+        "X-Grain-Acting-Task": "2",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-xgac-code"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_filing_context",
+          "arguments": {}
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {
+          "content": [
+            {
+              "text": "{\"boards\":null,\"customFields\":null,\"submitDefaults\":{\"approve\":false,\"note\":\"grain_submit_task defaults approve=false so tasks land in 'proposed' state awaiting human approval unless approve=true is explicitly passed.\"},\"targetRepos\":null,\"templates\":null}",
+              "type": "text"
+            }
+          ],
+          "isError": false
+        }
+      },
+      "durationMs": 4
+    },
+    {
+      "seq": 28,
+      "phase": "x-grain-access-code: grain_submit_task",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.upstream-proxy.sig",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Access-Code": "\u003cREDACTED_ACCESS_CODE\u003e",
+        "X-Grain-Acting-Task": "2",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-xgac-code"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_submit_task",
+          "arguments": {
+            "description": "Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. ",
+            "repo": "acme/app",
+            "title": "MCP SDK task via X-Grain-Access-Code"
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "result": {
+          "content": [
+            {
+              "text": "{\"approved\":false,\"base\":\"\",\"id\":\"4\",\"interactive\":false,\"repo\":\"acme/app\",\"state\":\"proposed\",\"title\":\"MCP SDK task via X-Grain-Access-Code\",\"url\":\"/tasks/4\"}",
+              "type": "text"
+            }
+          ],
+          "isError": false
+        }
+      },
+      "durationMs": 11
+    },
+    {
+      "seq": 29,
+      "phase": "x-grain-access-code: grain_get_task(summary)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.upstream-proxy.sig",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Access-Code": "\u003cREDACTED_ACCESS_CODE\u003e",
+        "X-Grain-Acting-Task": "2",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-xgac-code"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_get_task",
+          "arguments": {
+            "id": "4"
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "result": {
+          "content": [
+            {
+              "text": "Task 4: MCP SDK task via X-Grain-Access-Code\nState: proposed\nPriority: 5\nKind: proposal\nRepo: acme/app (base default branch)\n(view \"full\" for the whole record, \"conversation\" to page the thread)",
+              "type": "text"
+            }
+          ],
+          "isError": false
+        }
+      },
+      "durationMs": 4
+    },
+    {
+      "seq": 30,
+      "phase": "x-grain-access-code: grain_get_task(full)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.upstream-proxy.sig",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Access-Code": "\u003cREDACTED_ACCESS_CODE\u003e",
+        "X-Grain-Acting-Task": "2",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-xgac-code"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_get_task",
+          "arguments": {
+            "id": "4",
+            "view": "full"
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "result": {
+          "content": [
+            {
+              "text": "{\"id\":\"4\",\"title\":\"MCP SDK task via X-Grain-Access-Code\",\"description\":\"Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. \",\"author\":\"2\",\"authorKind\":\"agent\",\"authorSource\":\"sandbox\",\"authorLabel\":\"task 2\",\"state\":\"proposed\",\"repo\":\"acme/app\",\"branch\":\"grain/a8a14655/task-4-mcp-sdk-task-via-x-grain\",\"priority\":5,\"autoMerge\":false,\"autoApproveProposals\":false,\"interactive\":false,\"creator\":\"operator@example.com\",\"filedVia\":\"mcp-go-sdk/1.8.0 session=item1-xgac-code\",\"provenance\":\"filed from mcp-go-sdk/1.8.0 session=item1-xgac-code by operator@example.com\",\"capabilities\":[],\"createdAt\":\"2026-11-04T21:54:15.535007623Z\",\"blocked\":false,\"reason\":{\"reason\":\"proposed/unapproved\",\"class\":\"awaiting a person\",\"control\":\"Approve\"},\"comments\":[],\"transitions\":[{\"state\":\"proposed\",\"at\":\"2026-11-04T21:54:15.535007623Z\"}]}",
+              "type": "text"
+            }
+          ],
+          "isError": false
+        }
+      },
+      "durationMs": 2
+    },
+    {
+      "seq": 31,
+      "phase": "x-grain-access-code: grain_invoke(allowed:api_add_comment)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.upstream-proxy.sig",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Access-Code": "\u003cREDACTED_ACCESS_CODE\u003e",
+        "X-Grain-Acting-Task": "2",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-xgac-code"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_invoke",
+          "arguments": {
+            "arguments": {
+              "body": {
+                "body": "Comment posted via grain_invoke (x-grain-access-code)"
+              },
+              "id": "4"
+            },
+            "tool": "api_add_comment"
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 11,
+        "result": {
+          "content": [
+            {
+              "text": "{\"id\":\"4\",\"title\":\"MCP SDK task via X-Grain-Access-Code\",\"description\":\"Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. \",\"author\":\"2\",\"authorKind\":\"agent\",\"authorSource\":\"sandbox\",\"authorLabel\":\"task 2\",\"state\":\"proposed\",\"repo\":\"acme/app\",\"branch\":\"grain/a8a14655/task-4-mcp-sdk-task-via-x-grain\",\"priority\":5,\"autoMerge\":false,\"autoApproveProposals\":false,\"interactive\":false,\"creator\":\"operator@example.com\",\"filedVia\":\"mcp-go-sdk/1.8.0 session=item1-xgac-code\",\"provenance\":\"filed from mcp-go-sdk/1.8.0 session=item1-xgac-code by operator@example.com\",\"capabilities\":[],\"createdAt\":\"2026-11-04T21:54:15.535007623Z\",\"blocked\":false,\"reason\":{\"reason\":\"proposed/unapproved\",\"class\":\"awaiting a person\",\"control\":\"Approve\"}}\n",
+              "type": "text"
+            }
+          ],
+          "isError": false
+        }
+      },
+      "durationMs": 10
+    },
+    {
+      "seq": 32,
+      "phase": "x-grain-access-code: grain_invoke(refused-scope:api_get_settings)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.upstream-proxy.sig",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Access-Code": "\u003cREDACTED_ACCESS_CODE\u003e",
+        "X-Grain-Acting-Task": "2",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-xgac-code"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 12,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_invoke",
+          "arguments": {
+            "arguments": {},
+            "tool": "api_get_settings"
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 12,
+        "result": {
+          "content": [
+            {
+              "text": "api_get_settings failed: HTTP 403: caller holds no grant for scope settings:read (GET /api/settings)",
+              "type": "text"
+            }
+          ],
+          "isError": true
+        }
+      },
+      "durationMs": 1
+    },
+    {
+      "seq": 33,
+      "phase": "x-grain-access-code: grain_invoke(refused-repo:acme/other)",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.upstream-proxy.sig",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Access-Code": "\u003cREDACTED_ACCESS_CODE\u003e",
+        "X-Grain-Acting-Task": "2",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-xgac-code"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 13,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_invoke",
+          "arguments": {
+            "arguments": {
+              "body": {
+                "repo": "acme/other",
+                "title": "Off-allowlist repo attempt"
+              }
+            },
+            "tool": "api_create_task"
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 13,
+        "result": {
+          "content": [
+            {
+              "text": "api_create_task failed: HTTP 403: task 2 holds tasks:write, but not on acme/other",
+              "type": "text"
+            }
+          ],
+          "isError": true
+        }
+      },
+      "durationMs": 2
+    },
+    {
+      "seq": 34,
+      "phase": "x-grain-access-code: grain_list_tasks",
+      "method": "POST",
+      "url": "http://127.0.0.1:14300/api/mcp",
+      "requestHeaders": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.upstream-proxy.sig",
+        "Content-Type": "application/json",
+        "Mcp-Protocol-Version": "2025-03-26",
+        "X-Grain-Access-Code": "\u003cREDACTED_ACCESS_CODE\u003e",
+        "X-Grain-Acting-Task": "2",
+        "X-Grain-Client": "mcp-go-sdk/1.8.0 session=item1-xgac-code"
+      },
+      "requestBody": {
+        "jsonrpc": "2.0",
+        "id": 14,
+        "method": "tools/call",
+        "params": {
+          "name": "grain_list_tasks",
+          "arguments": {
+            "repo": "acme/app"
+          }
+        }
+      },
+      "statusCode": 200,
+      "responseHeaders": {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 04 Nov 2026 21:54:15 GMT",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "responseBody": {
+        "jsonrpc": "2.0",
+        "id": 14,
+        "result": {
+          "content": [
+            {
+              "text": "[{\"id\":\"2\",\"title\":\"Narrow API task for X-Grain-Access-Code MCP test\",\"state\":\"proposed\",\"repo\":\"acme/app\",\"createdAt\":\"2026-11-04T21:54:14.726269688Z\"},{\"id\":\"3\",\"title\":\"MCP SDK task via Authorization: Bearer gma_\",\"state\":\"proposed\",\"repo\":\"acme/app\",\"createdAt\":\"2026-11-04T21:54:15.45518284Z\"},{\"id\":\"4\",\"title\":\"MCP SDK task via X-Grain-Access-Code\",\"state\":\"proposed\",\"repo\":\"acme/app\",\"createdAt\":\"2026-11-04T21:54:15.535007623Z\"}]\n",
+              "type": "text"
+            }
+          ],
+          "isError": false
+        }
+      },
+      "durationMs": 4
+    }
+  ],
+  "xGrainAccessCode": {
+    "error": "",
+    "steps": [
+      {
+        "step": "x-grain-access-code/initialize",
+        "detail": {
+          "instructionsLen": 1845,
+          "protocolVersion": "2025-03-26",
+          "serverInfo": {
+            "name": "grain-controller",
+            "version": "0.1.0"
+          }
+        }
+      },
+      {
+        "step": "x-grain-access-code/tools/list",
+        "detail": {
+          "count": 6,
+          "tools": [
+            {
+              "alwaysLoad": true,
+              "name": "grain_explore_scope"
+            },
+            {
+              "alwaysLoad": true,
+              "name": "grain_invoke"
+            },
+            {
+              "alwaysLoad": true,
+              "name": "grain_filing_context"
+            },
+            {
+              "alwaysLoad": true,
+              "name": "grain_submit_task"
+            },
+            {
+              "alwaysLoad": true,
+              "name": "grain_list_tasks"
+            },
+            {
+              "alwaysLoad": true,
+              "name": "grain_get_task"
+            }
+          ]
+        }
+      },
+      {
+        "step": "x-grain-access-code/grain_explore_scope(overview)",
+        "payloadBytes": 917,
+        "detail": {
+          "groups": [
+            {
+              "group": "tasks",
+              "guidance": "Task lifecycle \u0026 mutations. Prefer grain_list_tasks, grain_get_task, grain_filing_context, and grain_submit_task for common reads/filing; use grain_invoke for comments, state transitions, dependencies, approvals, and task-admin edits. Pass arguments.expect on admin mutations to avoid clobbering concurrent changes.",
+              "scopes": [
+                {
+                  "description": "Read tasks, their conversations, transcripts and trees",
+                  "routeCount": 15,
+                  "scope": "tasks:read"
+                },
+                {
+                  "description": "File, edit, comment on, reorder, defer, retry, stop, close and reopen tasks",
+                  "routeCount": 30,
+                  "scope": "tasks:write"
+                }
+              ],
+              "totalRoutes": 45
+            }
+          ],
+          "hint": "Call grain_explore_scope(scope='\u003cgroup\u003e', tool='\u003cword\u003e') to view matching route tool names and JSON input schemas (scope alone lists a whole group, which is much larger), then grain_invoke(tool, arguments, reason?) to execute.",
+          "totalAuthorizedRoutes": 45
+        }
+      },
+      {
+        "step": "x-grain-access-code/grain_explore_scope(tasks,comment)",
+        "payloadBytes": 1998,
+        "detail": {
+          "guidance": "Task lifecycle \u0026 mutations. Prefer grain_list_tasks, grain_get_task, grain_filing_context, and grain_submit_task for common reads/filing; use grain_invoke for comments, state transitions, dependencies, approvals, and task-admin edits. Pass arguments.expect on admin mutations to avoid clobbering concurrent changes.",
+          "routeCount": 1,
+          "routes": [
+            {
+              "description": "Comment on a task's conversation. Calls POST /api/tasks/{id}/comments through the same handler grain's UI uses (agent API scope tasks:write).",
+              "inputSchema": {
+                "properties": {
+                  "body": {
+                    "description": "The JSON request body.",
+                    "properties": {
+                      "attachments": {
+                        "items": {
+                          "properties": {
+                            "content": {
+                              "type": "string"
+                            },
+                            "contentType": {
+                              "type": "string"
+                            },
+                            "filename": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "author": {
+                        "type": "string"
+                      },
+                      "body": {
+                        "type": "string"
+                      },
+                      "reviewers": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "expect": {
+                    "additionalProperties": false,
+                    "description": "What you believe about task {id} before changing it. The call reads the task first and refuses, changing nothing, if any field given here disagrees with the record.",
+                    "properties": {
+                      "kind": {
+                        "description": "A kind tag it must carry: port, repair, session, proposal, durable, imported, or none for a task with no tag.",
+                        "type": "string"
+                      },
+                      "state": {
+                        "description": "The state it must be in (queued, running, completed, ...).",
+                        "type": "string"
+                      },
+                      "title_prefix": {
+                        "description": "What its title must start with (case-insensitive).",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "id": {
+                    "description": "The {id} of /api/tasks/{id}/comments",
+                    "type": "string"
+                  },
+                  "query": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Query parameters, as the UI would send them.",
+                    "type": "object"
+                  },
+                  "reason": {
+                    "description": "Why this call is being made; recorded with it, and required for a destructive call.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              },
+              "method": "POST",
+              "path": "/api/tasks/{id}/comments",
+              "scope": "tasks:write",
+              "tool": "api_add_comment"
+            }
+          ],
+          "scope": "tasks",
+          "tool": "comment"
+        }
+      },
+      {
+        "step": "x-grain-access-code/grain_explore_scope(settings-unauthorized)",
+        "isError": true,
+        "payloadBytes": 102,
+        "detail": "Scope \"settings\" is not authorized for this caller (requires grant for settings:read, settings:write)."
+      },
+      {
+        "step": "x-grain-access-code/grain_filing_context",
+        "payloadBytes": 256,
+        "detail": {
+          "boards": null,
+          "customFields": null,
+          "submitDefaults": {
+            "approve": false,
+            "note": "grain_submit_task defaults approve=false so tasks land in 'proposed' state awaiting human approval unless approve=true is explicitly passed."
+          },
+          "targetRepos": null,
+          "templates": null
+        }
+      },
+      {
+        "step": "x-grain-access-code/grain_submit_task",
+        "payloadBytes": 158,
+        "detail": {
+          "approved": false,
+          "base": "",
+          "id": "4",
+          "interactive": false,
+          "repo": "acme/app",
+          "state": "proposed",
+          "title": "MCP SDK task via X-Grain-Access-Code",
+          "url": "/tasks/4"
+        }
+      },
+      {
+        "step": "x-grain-access-code/grain_get_task(summary)",
+        "payloadBytes": 194,
+        "detail": "Task 4: MCP SDK task via X-Grain-Access-Code\nState: proposed\nPriority: 5\nKind: proposal\nRepo: acme/app (base default branch)\n(view \"full\" for the whole record, \"conversation\" to page the thread)"
+      },
+      {
+        "step": "x-grain-access-code/grain_get_task(full)",
+        "payloadBytes": 3367,
+        "detail": {
+          "author": "2",
+          "authorKind": "agent",
+          "authorLabel": "task 2",
+          "authorSource": "sandbox",
+          "autoApproveProposals": false,
+          "autoMerge": false,
+          "blocked": false,
+          "branch": "grain/a8a14655/task-4-mcp-sdk-task-via-x-grain",
+          "capabilities": [],
+          "comments": [],
+          "createdAt": "2026-11-04T21:54:15.535007623Z",
+          "creator": "operator@example.com",
+          "description": "Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. ",
+          "filedVia": "mcp-go-sdk/1.8.0 session=item1-xgac-code",
+          "id": "4",
+          "interactive": false,
+          "priority": 5,
+          "provenance": "filed from mcp-go-sdk/1.8.0 session=item1-xgac-code by operator@example.com",
+          "reason": {
+            "class": "awaiting a person",
+            "control": "Approve",
+            "reason": "proposed/unapproved"
+          },
+          "repo": "acme/app",
+          "state": "proposed",
+          "title": "MCP SDK task via X-Grain-Access-Code",
+          "transitions": [
+            {
+              "at": "2026-11-04T21:54:15.535007623Z",
+              "state": "proposed"
+            }
+          ]
+        }
+      },
+      {
+        "step": "x-grain-access-code/grain_invoke(allowed:api_add_comment)",
+        "payloadBytes": 3279,
+        "detail": {
+          "author": "2",
+          "authorKind": "agent",
+          "authorLabel": "task 2",
+          "authorSource": "sandbox",
+          "autoApproveProposals": false,
+          "autoMerge": false,
+          "blocked": false,
+          "branch": "grain/a8a14655/task-4-mcp-sdk-task-via-x-grain",
+          "capabilities": [],
+          "createdAt": "2026-11-04T21:54:15.535007623Z",
+          "creator": "operator@example.com",
+          "description": "Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. Detailed acceptance criteria and context for unattended execution so full view exceeds compact summary. ",
+          "filedVia": "mcp-go-sdk/1.8.0 session=item1-xgac-code",
+          "id": "4",
+          "interactive": false,
+          "priority": 5,
+          "provenance": "filed from mcp-go-sdk/1.8.0 session=item1-xgac-code by operator@example.com",
+          "reason": {
+            "class": "awaiting a person",
+            "control": "Approve",
+            "reason": "proposed/unapproved"
+          },
+          "repo": "acme/app",
+          "state": "proposed",
+          "title": "MCP SDK task via X-Grain-Access-Code"
+        }
+      },
+      {
+        "step": "x-grain-access-code/grain_invoke(refused-scope:api_get_settings)",
+        "isError": true,
+        "payloadBytes": 100,
+        "detail": "api_get_settings failed: HTTP 403: caller holds no grant for scope settings:read (GET /api/settings)"
+      },
+      {
+        "step": "x-grain-access-code/grain_invoke(refused-repo:acme/other)",
+        "isError": true,
+        "payloadBytes": 81,
+        "detail": "api_create_task failed: HTTP 403: task 2 holds tasks:write, but not on acme/other"
+      },
+      {
+        "step": "x-grain-access-code/grain_list_tasks",
+        "payloadBytes": 440,
+        "detail": [
+          {
+            "createdAt": "2026-11-04T21:54:14.726269688Z",
+            "id": "2",
+            "repo": "acme/app",
+            "state": "proposed",
+            "title": "Narrow API task for X-Grain-Access-Code MCP test"
+          },
+          {
+            "createdAt": "2026-11-04T21:54:15.45518284Z",
+            "id": "3",
+            "repo": "acme/app",
+            "state": "proposed",
+            "title": "MCP SDK task via Authorization: Bearer gma_"
+          },
+          {
+            "createdAt": "2026-11-04T21:54:15.535007623Z",
+            "id": "4",
+            "repo": "acme/app",
+            "state": "proposed",
+            "title": "MCP SDK task via X-Grain-Access-Code"
+          }
+        ]
+      }
+    ]
+  },
+  "xGrainAccessCodeWithGma": {
+    "error": "calling \"initialize\": sending \"initialize\": Unauthorized",
+    "steps": [
+      {
+        "step": "x-grain-access-code-with-gma/connect",
+        "error": "calling \"initialize\": sending \"initialize\": Unauthorized"
+      }
+    ]
+  }
+}

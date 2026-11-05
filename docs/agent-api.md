@@ -587,8 +587,9 @@ Actions job's log when given a `gha:` run id. `grain ci wait` and
   `autoMerge` can't be turned on, and `POST /api/tasks/{id}/submit` is
   refused, because letting a change merge unreviewed is a person's
   decision; `autoApproveProposals` may be turned on only by a task that
-  has it; `approved` needs `tasks:admin`; `author` and
-  `proposedBy` can't be set; and a `templateId` is refused when the
+  has it; `approved` needs `tasks:admin`; `author`, `owner` and
+  `proposedBy` can't be set (an agent's or external token's task inherits the
+  owner of the acting task or token, and agents cannot transfer ownership); and a `templateId` is refused when the
   template grants, writes or reads beyond the acting task, is auto-merge,
   or files against a repository the scope does not reach. A
   `reviewTemplateId` is held to the same grants, writes and reads

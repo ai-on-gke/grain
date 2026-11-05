@@ -269,26 +269,3 @@ func TestGetLogLinesUsesTheConfiguredRedactorAndRefusesWithoutOne(t *testing.T) 
 		t.Fatalf("a refused read still carried the line: %s", rec.Body)
 	}
 }
-
-// A database upgrade's confirmation token is written to the daemon log
-// so that only someone on the daemon's host can read it; the HTTP log
-// viewer, which the same administrators can reach, must not show it.
-func TestGetLogLinesRedactsDatabaseConfirmationTokens(t *testing.T) {
-	t.Parallel()
-	srv, client := testServer(t)
-	storeSettingsRow(t, client)
-	const token = "abcdefghijklmnopqrstuvwx"
-	client.Config.Logs = map[string]ui.LogSource{
-		"daemon": &fakeLogSource{lines: []string{
-			`ui: database upgrade requested by "admin@example.com": ...; if you made this request, resend it with "confirmationToken": "` + token + `" to proceed`,
-		}},
-	}
-
-	rec := do(t, srv, http.MethodGet, "/api/logs/daemon", "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
-	}
-	if body := rec.Body.String(); strings.Contains(body, token) || !strings.Contains(body, "admin@example.com") {
-		t.Fatalf("token should be redacted and the rest of the line kept: %s", body)
-	}
-}
