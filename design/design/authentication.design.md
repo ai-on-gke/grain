@@ -6,7 +6,7 @@
 
 **The core rule:** A cryptographic assertion verified by a registered `IdentityVerifier` authenticates the caller directly as a named human or service principal; a present assertion that fails verification refuses the request with `401` and never falls back to the access code, plaintext identity headers name nobody, and deployments with no active verifier keep the single-tenant access code unchanged.
 
-A grain controller on GKE sits behind Google Cloud Identity-Aware Proxy ([`grain-on-gke.design.md`](grain-on-gke.design.md), *UI and API ingress*). When IAP is configured (`-ui-iap-audience` / `$GRAIN_IAP_AUDIENCE`), `singleTenantGate` (`pkg/ui/accesscode.go`) admits verified, allowlisted callers directly from `X-Goog-IAP-JWT-Assertion` as named principals—for the browser UI, the `grain` CLI, external agents, and remote `grain hostd` instances—without a shared access code. Wrapper distributions fronted by a different signed-header proxy plug into the same gate through `ui.RegisterIdentityVerifier` (`pkg/ui/verifier.go`). Companion designs cover how verified principals are recorded on mutations ([`operator-attribution.design.md`](operator-attribution.design.md)), how multi-instance registry proxies sign assertions for replaceable VMs ([`registry.design.md`](registry.design.md)), how simplified configuration layers database-backed allowed users on top ([`simple-config.design.md`](simple-config.design.md)), and how fine-grained authorization roles (`admin`, `writer`, `reader`) layer on top (`rbac.design.md`, task 2764).
+A grain controller on GKE sits behind Google Cloud Identity-Aware Proxy ([`grain-on-gke.design.md`](grain-on-gke.design.md), *UI and API ingress*). When IAP is configured (`-ui-iap-audience` / `$GRAIN_IAP_AUDIENCE`), `singleTenantGate` (`pkg/ui/accesscode.go`) admits verified, allowlisted callers directly from `X-Goog-IAP-JWT-Assertion` as named principals—for the browser UI, the `grain` CLI, external agents, and remote `grain hostd` instances—without a shared access code. Wrapper distributions fronted by a different signed-header proxy plug into the same gate through `ui.RegisterIdentityVerifier` (`pkg/ui/verifier.go`). Companion designs cover how verified principals are recorded on mutations ([`operator-attribution.design.md`](operator-attribution.design.md)), how multi-instance registry proxies sign assertions for replaceable VMs, including delegated assertions in which an application acts for a signed-in person ([`registry.design.md`](registry.design.md); §6 here), how simplified configuration layers database-backed allowed users on top ([`simple-config.design.md`](simple-config.design.md)), and how fine-grained authorization roles (`admin`, `writer`, `reader`) layer on top (`rbac.design.md`, task 2764).
 
 ## 1. Verified assertions and the `IdentityVerifier` seam
 
@@ -166,7 +166,103 @@ Although `/api/hostd/connect` is in `singleTenantOpenRoute` (requiring no deploy
 
 Agent calls from inside a task sandbox never traverse IAP and never carry a person's identity. Both the sandbox git/API proxy (`127.0.0.1:9728`) and `grain mcpserver` (`X-Grain-Acting-Task`) run off the Gateway using per-attempt scoped sandbox tokens, and proxy assertion headers never authenticate them.
 
-## 6. Rollout status
+## 6. Delegated identity through the registry (proposed)
+
+**Status: proposed (task 3130), not built.** Specified by [`authentication.spec.md`](../spec/authentication/authentication.spec.md) `{#AU-22}`–`{#AU-27}`. The registry side, covering which apps may delegate, people's consent grants, revocation and registry audit, is in [`registry.design.md`](registry.design.md) *Delegated identity*.
+
+A **delegating app** is a service principal registered with the registry, such as a planning board or a chat app. When a person has granted it consent, the app may send a request to `https://<name>.<instance-domain>/…` that names that person in `X-Grain-On-Behalf-Of`. The registry checks the registration and the grant, strips the header, and forwards the request with a registry JWT whose `sub` is the person (`kind: human`) and whose `act` is the app:
+
+```json
+"act": {"sub": "planning-app@example-prod.iam.gserviceaccount.com", "kind": "service", "app": "planning-app", "grant": "dlg_4f9c2a7e1b", "access": "write"}
+```
+
+The grain never trusts a header to name the person. It learns about delegation only from the signed `act`.
+
+### The verifier exposes both identities
+
+```go
+type VerifiedIdentity struct {
+	Email string              // the person (or the direct caller)
+	Kind  model.PrincipalKind
+	Via   *DelegatingApp      // set only by a verifier that carries delegation
+}
+
+// DelegatingApp is the application acting for VerifiedIdentity.Email.
+type DelegatingApp struct {
+	Email  string // act.sub, a service-account email; Kind is always PrincipalService
+	Name   string // act.app, informational (logs); labels come from the delegate: entry
+	Grant  string // act.grant, for joining grain and registry audit
+	Access string // act.access: "read" or "write"
+}
+```
+
+Only the `registry` verifier sets `Via`. IAP and wrapper verifiers leave it nil unless they adopt the same claim. A present `act` that is malformed refuses the request with `401` (`writeAssertionRefused`), with no fallback (§1). Malformed means any of:
+
+- a nested `act`;
+- `act.kind` other than `service`;
+- a top-level `kind` other than `human`;
+- an empty `act.sub`;
+- an `act.sub` that is not a service-account email.
+
+### Admission: the person, and an app allowed to delegate here
+
+1. **The person** must pass `allowed_principal` exactly as a direct caller would (§3: `user:` and `group:` entries, plus `domain:` once RBAC lands; group lookup; `gcp-key` pool exclusion), on `VerifiedIdentity.Email`.
+2. **The app** must match a **`delegate:<service-account-email>`** entry on the same allowlist.
+   - This is a new third prefix. It matches only `Via.Email`, never a direct caller.
+   - A `serviceAccount:` entry for the same account does not let it delegate, and a `delegate:` entry does not admit it as a plain caller.
+   - Like a service-account entry, a `delegate:` entry is added only explicitly, with a required reason (`grain access allow delegate:<email> --role <set> --reason "…" [--label planning-app]`). Only a verified human admin or an access-code admin may add it. Every agent, console session and `gma_…` token is refused, whatever it holds.
+   - It is never imported from `-ui-allowed-principals`, and stays outside `staterepo.SettingsTables` like the rest of `allowed_principal`.
+3. **Neither check alone is enough.** If the person is not allowed, the existing `403` *"Not allowed on this grain"* page names the person. If the app has no `delegate:` entry, a `403` names the app: *"planning-app is not allowed to act for people on this grain"*. The JSON form is `code: "delegate_not_allowed"`.
+
+### Roles: the person's, capped by the app's
+
+The request holds the **intersection** of two roles:
+
+- the person's current role: the union of their matching entries' scope sets (§3), or `rbac.design.md`'s `admin`/`writer`/`reader`;
+- the `delegate:` entry's role.
+
+This is the rule `rbac.design.md` §3 already applies to agents acting `OnBehalfOf` a person (`RB-13`), evaluated on every request, so demoting or removing the person stops their delegated writes at once.
+
+- A `delegate:` entry's role MUST NOT contain a dangerous scope (`model.IsDangerousAPIScope`), `access:write`, or an admin-only permission (`422` on add).
+- Core ships a `grain/delegated` scope set covering what integrations do for people: read what a writer reads, file and edit tasks, comment and reply, approve non-admin-only grants, and start or resume work.
+- When `Via.Access == "read"`, every method other than `GET` and `HEAD` is refused with `403`, as defence in depth behind the registry's own check.
+
+**Person-only operations.** Some operations require `Actor.Kind == human` and are refused to every delegated request with `403` (`requires_person`), whatever the roles allow:
+
+- `POST`/`PATCH`/`DELETE /api/access/principals`;
+- minting or rotating `gma_…` tokens with dangerous or `requires_person` scopes (§3, `AU-11`);
+- approving `IsAdminOnlyGrant` grants;
+- `POST /api/hostds`.
+
+A delegated identity never satisfies remote `hostd` owner matching (§5), and the registry refuses delegated protocol upgrades before they reach the grain.
+
+### Attribution: "Roman (via planning-app)"
+
+`ui.RequestActor(ctx)` returns:
+
+```go
+model.Attribution{
+	Actor:      model.Principal{Kind: model.PrincipalService, ID: "planning-app@example-prod.iam.gserviceaccount.com", Source: "registry"},
+	OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: "roman@example.com", Source: "registry"},
+}
+```
+
+This follows [`operator-attribution.design.md`](operator-attribution.design.md)'s rule that whoever made the call is the actor and says who it acts for. It is stored in the existing actor and on-behalf-of columns, with no new schema.
+
+- **Label.** `ui.PrincipalLabel` renders a verified `service` actor with a verified `human` on-behalf-of, both from the `registry` source, as **`roman@example.com (via planning-app)`**. That puts the person first, because the person is who the grain authorized. The app's label is the `delegate:` entry's `label`, or else the local part of its email. Agents acting for a person keep `<agent> for <person>`.
+- **Trailers.** `Requested-by:` (task creator) and `Approved-by:` (a delegated approval) name the person's email. A plain service principal never fills them with a person.
+- **Who am I.** `GET /api/auth/user` and `GET /api/whoami` report `actor: service:<app-email>`, `onBehalfOf: user:<email>` and `via: <label>`.
+- **Request log.** Each delegated request records `registry_rid`, `registry_jti` and `delegation_grant` in the grain's request log, joining the registry's `delegated_write` audit row.
+- **Settings → Access** lists `delegate:` entries with `added_by`, reason, role and last use.
+
+### What does not change
+
+- **CSRF (§4).** Delegated calls are server-to-server and cookie-less, so `checkVerifiedIdentityCSRF` passes them as programmatic callers, unchanged. The registry refuses `X-Grain-On-Behalf-Of` arriving with a `Cookie`, `Origin` or `Sec-Fetch-Site` header, so a browser cannot trigger delegation.
+- **Access code and break-glass (§4).** `registry` keeps `AccessCodeWins() == false`. The access code and delegation never combine. Unproxied-loopback break-glass under `-ui-require-verifier` / `-ui-require-iap` is untouched. The mandatory tunnel-ingress gate on `connected` grains applies to delegated assertions exactly as to direct ones.
+- **Plain service principals.** A `kind: service` assertion with no `act` is admitted only by an explicit `serviceAccount:` entry with a reason (§3) and attributed to the account alone. The recommended role for one is read-only (status, tasks, CI). Writes that represent a person's intent should arrive delegated.
+- **In-sandbox calls (§5).** These never carry a person's identity, delegated or not.
+
+## 7. Rollout status
 
 ### Done
 
@@ -184,3 +280,4 @@ Agent calls from inside a task sandbox never traverse IAP and never carry a pers
 - **Remaining operator-attribution items** ([`operator-attribution.design.md`](operator-attribution.design.md)): `GET /api/whoami` (`OA-5`) and `OnBehalfOf` dual-identity recording when an external or in-grain agent acts on a verified person's behalf (`OA-13`).
 - **Registry verifier and generalised verifier requirement** ([`registry.design.md`](registry.design.md)): core `registry` `IdentityVerifier` (`X-Grain-Registry-Assertion`) and generalising `-ui-require-iap` to `-ui-require-verifier`.
 - **Role-based access control** (`rbac.design.md`, task 2764): roles and scoped permissions beyond single-tenant operator equivalence.
+- **Delegated identity through the registry** (§6, `AU-22`–`AU-27`, task 3130; `registry.design.md` implementation plan step 19): `VerifiedIdentity.Via` from the registry JWT's `act` claim, `delegate:` allowlist entries, dual admission, person ∩ delegate role intersection, `requires_person` refusals, and `roman@example.com (via planning-app)` attribution. Depends on the `registry` verifier.

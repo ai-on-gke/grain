@@ -104,6 +104,7 @@ same thing:
 | agent, `external-token` | `external agent <name>` |
 | automation | `grain` |
 | any of the above with a verified on-behalf-of | `<label> for <on-behalf-of label>` |
+| verified `service` actor with a verified `human` on-behalf-of, both `registry` (a delegated request, [`authentication.spec.md`](../authentication/authentication.spec.md) `AU-26`, proposed) | `<on-behalf-of label> (via <app label>)` |
 
 A display-name map (design, *Open questions*) would only change this
 function.
