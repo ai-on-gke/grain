@@ -226,7 +226,7 @@ Settings → Executors and its executor tokens were removed with remote executor
 
 | Setting / entity | UI (unlocked) | Config repo | Locked: server / UI | External | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Upgrade now / scheduled / Postgres upgrade | Action — `POST /api/upgrade`, `DELETE /api/upgrade/scheduled`, `POST /api/upgrade/postgres` | No — action | Unlocked (Action) | No | `deployment:upgrade`. Never read-only (`NOT_CONFIG`). |
+| Upgrade now / scheduled | Action — `POST /api/upgrade`, `DELETE /api/upgrade/scheduled` | No — action | Unlocked (Action) | No | `deployment:upgrade`. Never read-only (`NOT_CONFIG`). |
 | `upgradeCheckMode`, `upgradeCheckPausesPipeline`, `autoUpgradeChannel`, `autoUpgradeTime` | Yes — General → Updates; `PUT /api/settings` | Yes — `tables/grain_config.json` | Locked (G) / read-only | Yes | |
 | Power (restart, reboot, shutdown) | Action — System → Power; `POST /api/host/{restart,reboot,shutdown}` | No — action | Unlocked (Action) | No | |
 
@@ -245,7 +245,6 @@ Settings → Executors and its executor tokens were removed with remote executor
 | `pollInterval`, `maxMergesPerRepo`, `mergeBatchSize`, `mergeGatherWindow` | Yes — Engine; `PUT /api/settings` | Yes — `tables/grain_config.json` | **Locked** (G) / **read-only** | Yes | D-1 (fixed). |
 | `maxMergers`, `maxCIJobs`, `baseCIRedStreak`, `agentFramework`, `defaultFilters` | No | Yes — `tables/grain_config.json` | Locked (no route) | — | Retired or config-only columns. |
 | Pipeline pause | Action — System → Pipeline; `POST`/`DELETE /api/pipeline-pause`, `DELETE /api/pause` | No — action | Unlocked (Action) | No | `dispatch:write`. |
-| Database migrate / test | Action — `POST /api/settings/db/migrate-to-postgres`, `POST /api/database/{test,upgrade}` | No — action | Unlocked (Action) | No | `settings:write`. |
 
 ### 3.10 Config repo (`/settings/config-repo`)
 

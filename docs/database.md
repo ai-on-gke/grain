@@ -26,7 +26,8 @@ Keep SQLite when:
   SQLite. Move to PostgreSQL when it suits you, not because a newer
   installer came out.
 - **You rely on `grain backup`.** It snapshots SQLite with `VACUUM INTO`
-  and refuses a PostgreSQL store. On PostgreSQL, use `pg_dump` (see
+  and refuses a PostgreSQL store. Run by hand, it also refuses while the
+  daemon is running. The daemon's own scheduled backups run while it is up. On PostgreSQL, use `pg_dump` (see
   [Backups](#backups)).
 
 To get SQLite on a new install, pass `--db-driver sqlite` (or set
@@ -40,7 +41,7 @@ To get SQLite on a new install, pass `--db-driver sqlite` (or set
 | `GRAIN_DB_DSN` / `--db-dsn` naming a server (`postgres://…`, or a `host=… dbname=…` DSN) | That server. No local server is provisioned. |
 | A host that `setup.sh` provisioned before | The same server, with the same image, port and password. |
 | An existing install: a `grain-daemon.service`, `store/grain.db`, or a `db-config.json` | Unchanged. A SQLite store stays SQLite, and the installer prints a one-line hint about moving it. |
-| `--db-driver postgres` on a SQLite install | Provisions the local server and migrates the store into it (see [Moving a SQLite install](#moving-a-sqlite-install-to-postgresql)). |
+| `--db-driver postgres` on a SQLite install | Provisions the local server and migrates the store into it (see [Moving a store](#moving-a-store)). |
 | A fresh install (none of the above) | Provisions the local server. |
 
 ## The local server
@@ -163,15 +164,62 @@ use one of these:
   A disk snapshot of the data disk taken while both are stopped works the
   same way.
 
-To restore a cold copy, put the data directory back in place and re-run
-`setup.sh`. The installer finds the password and the cluster and keeps
+To restore a cold copy, stop the daemon, put the data directory back in
+place and re-run `setup.sh`. The installer finds the password and the cluster and keeps
 using them. To restore a dump, run `pg_restore` into the running server
 (`--clean --if-exists`) with the daemon stopped.
 
 `grain backup` (the README's [Backups](../README.md#backups)) supports
 SQLite only.
 
-## Moving a SQLite install to PostgreSQL
+## Moving a store
+
+A store is moved only **offline**: stop the daemon, move the store, check
+it, start the daemon. There is no online path. The UI's Database pane only
+shows which store is in use and these commands. No API route copies,
+migrates or switches a running daemon's store.
+
+The reason is what happens when a store is copied under a running daemon.
+The daemon keeps writing to the store it opened, and the copy stops at the
+moment it was taken. Rewriting `db-config.json` doesn't move a running
+daemon either. It only changes which store the *next* start opens. Either
+way the next start opens a store that is missing everything written since
+the copy, and it hands those task ids out again, though branches, pull
+requests and messages already name them.
+
+### What enforces it
+
+- **The daemon's lock.** A running daemon holds an exclusive lock on
+  `$GRAIN_DATA_DIR/daemon.lock`. On PostgreSQL it also holds a session
+  advisory lock on the store itself, which a tool on another host can see.
+  `grain upgrade-postgres` and `grain backup` refuse while either is held,
+  and the error gives the command to run first:
+  `sudo systemctl stop grain-daemon.service`. They never stop the daemon
+  themselves. `setup.sh --db-driver postgres` does stop it, because that
+  is the offline procedure. A second daemon on the same data directory or
+  store waits 90 seconds for the first to exit, then refuses to start.
+- **The high-water mark.** The daemon keeps
+  `$GRAIN_DATA_DIR/store-highwater.json` up to date as it writes. The file
+  holds the last task id it handed out, the last run it started and when
+  the mark last moved. The mark only moves forward. A daemon refuses to
+  start on a store behind it. The refusal names the store it opened, how
+  far behind it is (tasks and runs), and the other stores on the host
+  (the SQLite `store`, every `postgres*` cluster). It also says how to
+  recover.
+- **The switch alert.** A running daemon checks every ten seconds which
+  store its data directory selects (`db-config.json`, `GRAIN_DB_DRIVER`,
+  `GRAIN_DB_DSN`). If that stops being the store it opened, the daemon
+  logs an error and raises a critical alert. The alert shows in the UI's
+  alerts and in `grain health`. The daemon then dispatches nothing more
+  until it is restarted.
+- **`grain db check`** only reads, and is safe beside a running daemon.
+  It prints the store a start would open, what that store holds, the
+  mark, and any other store. It exits 1 when the store is behind the
+  mark. A `setup.sh` re-run runs it before restarting the daemon on a
+  host with more than one store. If the store is behind, the re-run stops
+  and leaves the running daemon alone.
+
+### SQLite to the local PostgreSQL server
 
 ```bash
 sudo ./scripts/setup.sh --db-driver postgres
@@ -183,15 +231,61 @@ On a host with a SQLite store, this does the following:
 2. Provisions `grain-postgres.service`.
 3. Runs `grain upgrade-postgres -data-dir … -dsn …` into the new server.
    This copies every table and writes `db-config.json`.
-4. Starts the daemon on PostgreSQL.
+4. Checks the new store against the high-water mark (`grain db check`).
+5. Starts the daemon on PostgreSQL.
 
 The SQLite store in `$GRAIN_DATA_DIR/store` is left where it is. If the
 migration fails, re-running the same command tries it again.
 `$GRAIN_DATA_DIR/.postgres-migrated` marks a migration as finished.
 
-To migrate into a server of your own instead, run `grain upgrade-postgres
--dsn …` yourself with the daemon stopped, then re-run `setup.sh` with
-`--db-dsn` set to that server.
+### By hand, into any server
+
+```bash
+# 1. Stop the daemon. Everything below refuses while it runs.
+sudo systemctl stop grain-daemon.service
+
+# 2. Migrate. This writes db-config.json to select the new store.
+sudo grain upgrade-postgres -data-dir /var/lib/grain/data -dsn "postgres://grain:…@db.internal:5432/grain"
+
+# 3. Verify: the new store must be at or past the high-water mark.
+sudo grain db check -data-dir /var/lib/grain/data
+
+# 4. Start it, or re-run setup.sh with --db-dsn set to that server.
+sudo systemctl start grain-daemon.service
+```
+
+To move a PostgreSQL store to another server, the steps are the same, with
+`pg_dump` and `pg_restore` in step 2 (see [Upgrading the PostgreSQL
+image](#upgrading-the-postgresql-image)), and with the daemon pointed at
+the new server before step 3.
+
+### The Google edition
+
+The Google edition's installer supplies its own commands for moving the
+store, for example moving PostgreSQL into or out of its container. They
+follow the same offline procedure, and the same locks and checks refuse
+them while a daemon is attached:
+
+1. `sudo systemctl stop grain-daemon.service`
+2. Run the edition's move or migration with the daemon stopped.
+3. `sudo grain db check -data-dir /var/lib/grain/data`
+4. `sudo systemctl start grain-daemon.service`
+
+### When a start refuses a store behind the mark
+
+Don't delete the mark to get past the refusal. Find the newer store
+first. The refusal and `grain db check` list the other stores on the
+host. Then do one of these:
+
+- Point the daemon back at the newer store (`db-config.json`, or
+  `GRAIN_DB_DRIVER`/`GRAIN_DB_DSN`).
+- With the daemon stopped, copy the newer store into the one it opens, as
+  above.
+
+If the newer store is gone for good, start once with
+`GRAIN_ACCEPT_STORE_BEHIND=1`. The daemon logs what was lost and seeds the
+task id sequence past the mark, so ids continue from the last one ever
+handed out and none is reused.
 
 ## An external server
 

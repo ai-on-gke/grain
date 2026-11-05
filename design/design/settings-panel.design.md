@@ -100,7 +100,7 @@ Kinds:
 | Pipeline pause | `pipeline`, `PipelineControl` | `/admin/pipeline` | `GET`/`POST`/`DELETE /api/pipeline-pause` | S |
 | Power: restart, reboot, shut down | `power` | `/admin/power` | `POST /api/host/{restart,reboot,shutdown}` | S |
 | Upgrade: targets, release notes, run, schedule | `upgrade`, `UpgradePanel` | `/admin/upgrade` | `GET`/`POST /api/upgrade`, `GET /api/upgrade/{targets,release-notes}`, `DELETE /api/upgrade/scheduled`, `GET /api/restart-watch` | S |
-| Database (SQLite → Postgres) | `upgrade`, `UpgradePanel` "Database" | `/admin/upgrade` | `GET /api/database`, `POST /api/database/{test,upgrade}`, `POST /api/upgrade/postgres` | S |
+| Database (read-only; moves are offline) | `upgrade`, `UpgradePanel` "Database" | `/admin/upgrade` | `GET /api/database` | S |
 | Metrics, release notes | `MetricsOverlay` (+ `ReleaseNotesPanel`), sidebar footer | `/metrics` | `GET /api/metrics`, `/api/release-notes*` | S |
 | Health (standing alerts) | `AlertsButton` in the page header rail (`alerts.js` `collectAlerts`) | none | `GET /api/config` and what it carries | S |
 | Merge re-checks, CI | the CI view | `/ci`, `/ci/<run>` | `/api/ci/*`, `/api/merge-batches` | S, unchanged by this design |
