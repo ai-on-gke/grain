@@ -1,16 +1,16 @@
 # grain-agentd: agent CLIs on a machine that is not the daemon's
 
-`grain-agentd` is a small, rootless grain hostd that runs **agent CLIs and
+`grain-agentd` is a small, rootless host agent that runs **agent CLIs and
 nothing else** (agy, claude, codex) for a grain daemon somewhere else: a
 workstation whose agy login a model connection should use, say, while the
 daemon runs on a server or in Kubernetes. It runs as the user who starts it,
 dials out to the daemon, and starts the CLIs the daemon asks for, as that
 user, under its allowlist.
 
-It is `grain hostd -server` cut down to that one job (`cmd/grain-agentd`,
+It is `grain host -server` cut down to that one job (`cmd/grain-agentd`,
 `pkg/agentd`):
 
-| | `grain hostd` | `grain-agentd` |
+| | `grain host` | `grain-agentd` |
 | --- | --- | --- |
 | Runs as | root, or the daemon's user | the user who starts it; refuses root |
 | Capability servers | yes (`capabilities:`, built-ins) | none: an allowlist naming any is refused |
@@ -34,20 +34,20 @@ make grain-agentd        # bin/grain-agentd, static
 
 ## Register it
 
-On the daemon, register a hostd for the machine and keep its token: **Settings
-→ Hostds**, or
+On the daemon, register a host for the machine and keep its token: **Settings
+→ Hosts**, or
 
 ```sh
-grain hostds register ws-1                       # a daemon reached directly
-grain hostds register -owner you@example.com ws-1   # a daemon behind IAP
+grain host register ws-1                       # a daemon reached directly
+grain host register -owner you@example.com ws-1   # a daemon behind IAP
 ```
 
-A hostd that dials in through IAP or another identity-verifying proxy must be
+A host that dials in through IAP or another identity-verifying proxy must be
 registered with its owner, the identity it dials in as; see
 [access-code.md](access-code.md#a-grain-hostd-dialing-in).
 
 Then point a model connection at it (Settings → Models → the connection →
-**Run on** `ws-1`); see [hostd-placement.md](hostd-placement.md).
+**Run on host** `ws-1`); see [host-placement.md](host-placement.md).
 
 ## Install it
 
@@ -85,8 +85,8 @@ Running `install` again replaces the binary and the unit and keeps the token
 
 `-server` is the daemon's URL as this machine reaches it --
 `https://grain.example.com`, or `http://127.0.0.1:4242` through a
-`kubectl port-forward` or an SSH tunnel. The hostd token alone names the
-hostd.
+`kubectl port-forward` or an SSH tunnel. The host token alone names the
+host.
 
 ### A daemon behind IAP
 
@@ -99,8 +99,8 @@ grain-agentd install -server https://grain.example.com -name ws-1 \
 
 grain-agentd then sends an ID token for that audience from your Application
 Default Credentials (`gcloud auth application-default login`) or the
-machine's service account, with the hostd token beside it, exactly as
-`grain hostd -server -iap-audience` does. The identity must be the hostd's
+machine's service account, with the host token beside it, exactly as
+`grain host -server -iap-audience` does. The identity must be the host's
 registered owner.
 
 ## Run it by hand
@@ -120,7 +120,7 @@ grain-agentd -server https://grain.example.com -name ws-1 \
 
 ## The allowlist
 
-The same format as `grain hostd`'s, with `clis:` only:
+The same format as `grain host`'s, with `clis:` only:
 
 ```yaml
 clis:
@@ -134,14 +134,14 @@ capabilities: {}
 ```
 
 grain-agentd refuses to start on an allowlist that names a capability, has no
-CLI, is missing, or is writable by anyone but its owner. hostd re-reads it on
+CLI, is missing, or is writable by anyone but its owner. The host agent re-reads it on
 every request.
 
 ## Hooks
 
 A run's agent CLI forks hooks -- agy's pre-tool hook (`agy-tool-hook`) and
-Claude Code's Stop hook (`claude-stop-hook`) -- and a run on a remote hostd
-names that hostd's own binary for them. grain-agentd answers both, from the
+Claude Code's Stop hook (`claude-stop-hook`) -- and a run on a remote host
+names that host's own binary for them. grain-agentd answers both, from the
 leaf packages `pkg/agent/antigravity/hook` and `pkg/agent/claude/stophook`
 that `cmd/grain` uses too, so the hook decides the same way wherever the CLI
 runs.

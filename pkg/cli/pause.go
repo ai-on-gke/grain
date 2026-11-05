@@ -279,9 +279,9 @@ func pauseEntryName(entry ui.AgentPauseEntry) string {
 		}
 		return fmt.Sprintf("team %s's %s runs (no connection)", entry.Team, entry.Framework)
 	}
-	name := entry.Connection
+	name := pauseConnectionLabel(entry.Connection)
 	if entry.ConnectionName != "" && entry.ConnectionName != entry.Connection {
-		name = fmt.Sprintf("%s (%s)", entry.ConnectionName, entry.Connection)
+		name = fmt.Sprintf("%s (%s)", entry.ConnectionName, pauseConnectionLabel(entry.Connection))
 	}
 	if entry.Model != "" {
 		return fmt.Sprintf("model %s on connection %s of team %s (its other models keep dispatching)", entry.Model, name, entry.Team)
@@ -290,6 +290,17 @@ func pauseEntryName(entry ui.AgentPauseEntry) string {
 		return fmt.Sprintf("connection %s of team %s, every model (escalated: %s)", name, entry.Team, entry.Escalated)
 	}
 	return fmt.Sprintf("connection %s of team %s", name, entry.Team)
+}
+
+// pauseConnectionLabel is a pause's connection key as a person reads it:
+// a pause scoped to one host is keyed "<connection>@hostd/<host>" on the
+// wire (pkg/daemon's hostdPauseOwner), and reads "<connection> on host
+// <host>".
+func pauseConnectionLabel(key string) string {
+	if conn, host, ok := strings.Cut(key, "@hostd/"); ok {
+		return conn + " on host " + host
+	}
+	return key
 }
 
 // pipelinePause renders one reading of the deliberate gate, and what a

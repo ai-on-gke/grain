@@ -320,7 +320,7 @@ func hostdAdoptionTargets(ctx context.Context, store *model.Store, hd *hostdRunS
 	for _, name := range sorted {
 		host, ok := hd.named(name)
 		if !ok {
-			errs = append(errs, fmt.Errorf("grain hostd %s, which a live run ran on, cannot be reached from this daemon; its runs are recovered as any other", name))
+			errs = append(errs, fmt.Errorf("the host agent %s, which a live run ran on, cannot be reached from this daemon; its runs are recovered as any other", name))
 			continue
 		}
 		if hd.wait != nil && hasOwned(owner, name) {
@@ -355,7 +355,7 @@ func hasOwned(owner map[string]string, name string) bool {
 func liveRunHostds(ctx context.Context, store *model.Store, defaultName string) (map[string]string, error) {
 	cursors, err := store.HostdCursors(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("reading hostd cursors: %w", err)
+		return nil, fmt.Errorf("reading host cursors: %w", err)
 	}
 	runs, err := store.LiveRuns(ctx)
 	if err != nil {
@@ -401,7 +401,7 @@ func adoptHostd(ctx context.Context, store *model.Store, client github.Client, t
 			return true
 		})
 	if err != nil {
-		err = fmt.Errorf("recovering grain hostd %s's host CLIs: %w", t.name, err)
+		err = fmt.Errorf("recovering the host agent %s's host CLIs: %w", t.name, err)
 	}
 	report := orchestrator.NewAdoptionReport(now, plan, took)
 	log.Printf("grain daemon: grain hostd %s adoption: %d adopted, %d lost, %d unclaimed process(es) released",

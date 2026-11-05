@@ -112,7 +112,7 @@ func TestDetectHostExecutorOffTheBareMachine(t *testing.T) {
 		t.Errorf("on the host: %+v, want local", e)
 	}
 	if e := DetectHostExecutor(Config{}, inContainer, func(string) bool { return false }); e.Kind != HostExecutorNone ||
-		!strings.Contains(e.Reason, "no grain hostd") {
+		!strings.Contains(e.Reason, "no host agent") {
 		t.Errorf("in a container with no hostd: %+v, want none, saying there is no hostd", e)
 	}
 	var asked string

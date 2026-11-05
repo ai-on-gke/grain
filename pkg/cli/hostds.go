@@ -30,28 +30,29 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-const hostdsUsage = `usage: grain hostds <list|register|install|set-owner> [args]
+const hostRegistryUsage = `usage: grain host <list|register|install|set-owner> [args]
 
   list
   register [-owner <email>] [-label k=v]... [-token-file <path>] <name>
   install <name>
   set-owner <name> <email|"">
 
-The hostd registry (Settings -> Hostds): the grain hostds this daemon
-takes host work through. register prints the new hostd's token once, or
-writes it to -token-file (mode 0600) for grain hostd -server -token-file,
+The host registry (Settings -> Hosts): the hosts this daemon
+takes host work through. register prints the new host's token once, or
+writes it to -token-file (mode 0600) for grain host -server -token-file,
 and then how to install it on its machine. install prints those
-instructions again for a hostd already registered; they never carry its
+instructions again for a host already registered; they never carry its
 token, which the installer asks for or reads from $GRAIN_HOSTD_TOKEN.
 
-A hostd's owner is the person or service account answerable for it. A
-hostd that dials in through IAP or another identity verifier's proxy
-must be verified as its owner, so give a remote hostd the identity it
+A host's owner is the person or service account answerable for it. A
+host that dials in through IAP or another identity verifier's proxy
+must be verified as its owner, so give a remote host the identity it
 connects as: its service account (Workload Identity or a key), or the
-login of the person it runs as. A hostd over loopback is named by its
+login of the person it runs as. A host over loopback is named by its
 token alone and needs no owner.`
 
-// cmdHostds is `grain hostds`: the hostd registry, through /api/hostds.
+// cmdHostds is `grain host list|register|install|set-owner` (hidden alias
+// `grain hostds`): the host registry, through /api/hostds.
 func cmdHostds(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	if len(args) == 0 {
 		args = []string{"list"}
@@ -59,7 +60,7 @@ func cmdHostds(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	sub, subArgs := args[0], args[1:]
 	switch sub {
 	case "-h", "-help", "--help", "help":
-		fmt.Println(hostdsUsage)
+		fmt.Println(hostRegistryUsage)
 		return nil
 	case "list", "ls":
 		list, err := c.ListHostds(ctx)
@@ -71,13 +72,13 @@ func cmdHostds(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	case "register", "create":
 		return cmdHostdsRegister(ctx, c, out, subArgs)
 	case "install":
-		fs := flag.NewFlagSet("grain hostds install", flag.ContinueOnError)
+		fs := flag.NewFlagSet("grain host install", flag.ContinueOnError)
 		rest, err := parseArgs(fs, subArgs)
 		if err != nil {
 			return err
 		}
 		if len(rest) != 1 {
-			return errors.New("usage: grain hostds install <name>")
+			return errors.New("usage: grain host install <name>")
 		}
 		inst, err := c.HostdInstall(ctx, rest[0])
 		if err != nil {
@@ -88,18 +89,18 @@ func cmdHostds(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 			return nil
 		}
 		if len(inst.Lines) == 0 {
-			return fmt.Errorf("the daemon sent no install instructions for hostd %s", rest[0])
+			return fmt.Errorf("the daemon sent no install instructions for host %s", rest[0])
 		}
 		printHostdInstall(&inst)
 		return nil
 	case "set-owner":
-		fs := flag.NewFlagSet("grain hostds set-owner", flag.ContinueOnError)
+		fs := flag.NewFlagSet("grain host set-owner", flag.ContinueOnError)
 		rest, err := parseArgs(fs, subArgs)
 		if err != nil {
 			return err
 		}
 		if len(rest) != 2 {
-			return errors.New(`usage: grain hostds set-owner <name> <email|"">`)
+			return errors.New(`usage: grain host set-owner <name> <email|"">`)
 		}
 		owner := rest[1]
 		h, err := c.UpdateHostd(ctx, rest[0], ui.UpdateHostdRequest{Owner: &owner})
@@ -110,25 +111,25 @@ func cmdHostds(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 			out.encode(h)
 			return nil
 		}
-		fmt.Printf("hostd %s: owner %s\n", h.Name, ownerOrNone(h.Owner))
+		fmt.Printf("host %s: owner %s\n", h.Name, ownerOrNone(h.Owner))
 		return nil
 	default:
-		return fmt.Errorf("unknown hostds subcommand %q\n%s", sub, hostdsUsage)
+		return fmt.Errorf("unknown host subcommand %q\n%s", sub, hostRegistryUsage)
 	}
 }
 
 func cmdHostdsRegister(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
-	fs := flag.NewFlagSet("grain hostds register", flag.ContinueOnError)
-	owner := fs.String("owner", "", "the hostd's owner: the email or service account it connects as through IAP")
-	tokenFile := fs.String("token-file", "", "write the hostd's token to this file (mode 0600) rather than print it")
+	fs := flag.NewFlagSet("grain host register", flag.ContinueOnError)
+	owner := fs.String("owner", "", "the host's owner: the email or service account it connects as through IAP")
+	tokenFile := fs.String("token-file", "", "write the host's token to this file (mode 0600) rather than print it")
 	var labels stringList
-	fs.Var(&labels, "label", "k=v the hostd is selected by (repeatable)")
+	fs.Var(&labels, "label", "k=v the host is selected by (repeatable)")
 	rest, err := parseArgs(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(rest) != 1 {
-		return errors.New(hostdsUsage)
+		return errors.New(hostRegistryUsage)
 	}
 	req := ui.CreateHostdRequest{Name: rest[0], Owner: *owner}
 	if req.Labels, err = pairs("-label", labels); err != nil {
@@ -150,14 +151,14 @@ func cmdHostdsRegister(ctx context.Context, c *ui.HTTPClient, out *printer, args
 		out.encode(issued)
 		return nil
 	}
-	fmt.Printf("registered hostd %s, owner %s\n", issued.Hostd.Name, ownerOrNone(issued.Hostd.Owner))
+	fmt.Printf("registered host %s, owner %s\n", issued.Hostd.Name, ownerOrNone(issued.Hostd.Owner))
 	if *tokenFile != "" {
-		fmt.Printf("its token is in %s: grain hostd -server <this daemon's URL> -token-file %s\n", *tokenFile, *tokenFile)
+		fmt.Printf("its token is in %s: grain host -server <this daemon's URL> -token-file %s\n", *tokenFile, *tokenFile)
 	} else {
 		fmt.Printf("its token, shown this once: %s\n", issued.Token)
 	}
 	if issued.Hostd.Owner == "" {
-		fmt.Println("it has no owner: it can dial in over loopback, but not through IAP until `grain hostds set-owner` gives it one")
+		fmt.Println("it has no owner: it can dial in over loopback, but not through IAP until `grain host set-owner` gives it one")
 	}
 	printHostdInstall(issued.Install)
 	return nil
@@ -192,7 +193,7 @@ func printHostds(out *printer, list []ui.HostdView) {
 		return
 	}
 	if len(list) == 0 {
-		fmt.Println("No hostds registered.")
+		fmt.Println("No hosts registered.")
 		return
 	}
 	for _, h := range list {
@@ -260,7 +261,7 @@ func hostdRemote(tokenFile, name, owner string) (*hostd.Remote, error) {
 		return nil, fmt.Errorf("-hostd-token-name: %w", err)
 	}
 	if name == model.LocalHostd {
-		return nil, fmt.Errorf("-hostd-token-name: %q is the co-located hostd's name", name)
+		return nil, fmt.Errorf("-hostd-token-name: %q is the co-located host's name", name)
 	}
 	owner, err := model.NormalizeHostdOwner(owner)
 	if err != nil {

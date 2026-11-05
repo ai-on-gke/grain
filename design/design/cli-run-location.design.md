@@ -479,7 +479,7 @@ repositories had a hostd selector from schema 93 to 110 (`task_hostd`,
 request that still names one is refused. `task_run_hostd` stays, recording
 where each run's CLI ran. A `run: hostd` capability server names its own
 hostd (`protocol.ServerConfig.Hostd`). See
-[docs/hostd-placement.md](../../docs/hostd-placement.md).
+[docs/host-placement.md](../../docs/host-placement.md).
 
 ## Trust levels
 

@@ -236,7 +236,7 @@ func TestRunHostIsCheckedAgainstTheHostdAllowlist(t *testing.T) {
 
 	_, hc, _, _ := configTestServer(t, &fakeProber{noHostd: true})
 	entries, err := hc.CapabilityServerHostEntries(ctx)
-	if err != nil || entries.Available || !strings.Contains(entries.Reason, "hostd") {
+	if err != nil || entries.Available || !strings.Contains(entries.Reason, "host agent") {
 		t.Errorf("no hostd: entries = %+v, %v", entries, err)
 	}
 	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: host}); err == nil || !strings.Contains(err.Error(), "Kubernetes") {
@@ -295,7 +295,7 @@ func TestPlacedCapabilityServerChecksRegistryAndTargetHostdAllowlist(t *testing.
 
 	// A connected placed hostd lacking the allowlist entry is refused.
 	missing := protocol.ServerConfig{Command: "not-offered", Run: protocol.RunHostd, Hostd: "ws-a"}
-	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: missing}); err == nil || !strings.Contains(err.Error(), "on hostd ws-a") {
+	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: missing}); err == nil || !strings.Contains(err.Error(), "on host ws-a") {
 		t.Errorf("missing allowlist entry on ws-a: err = %v", err)
 	}
 

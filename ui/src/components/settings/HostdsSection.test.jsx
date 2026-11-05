@@ -124,7 +124,7 @@ describe("HostdsSection", () => {
       { ...WS, name: "ws-3", connection: null },
     ]);
     await userEvent.type(screen.getByLabelText("Name"), "ws-3");
-    await userEvent.click(screen.getByText("Add hostd"));
+    await userEvent.click(screen.getByText("Add host"));
     const issued = await screen.findByTestId("hostd-issued-token");
     expect(issued).toHaveTextContent("ghd_secret");
     // The lines are one block, in order, with nothing of the root
@@ -185,7 +185,7 @@ describe("HostdsSection", () => {
     ]);
     await userEvent.type(screen.getByLabelText("Name"), "ws-2");
     await userEvent.type(screen.getByLabelText("Labels"), "gpu=yes");
-    await userEvent.click(screen.getByText("Add hostd"));
+    await userEvent.click(screen.getByText("Add host"));
     expect(await screen.findByTestId("hostd-issued-token")).toHaveTextContent(
       "ghd_secret",
     );

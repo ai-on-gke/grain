@@ -91,9 +91,9 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	modelCatalog := fs.String("model-catalog", "", "host:port of an Anthropic model listing stub (GET /v1/models) on loopback: Claude connections that advertise no models are given what it lists, as a deployment's are given what Anthropic lists")
 	modelDiscoveryInterval := fs.Duration("model-discovery-interval", 0, "how often -model-catalog's discovery asks the provider again (default the deployment's 10m)")
 	hostExecutor := fs.String("host-executor", "", "resolve Settings' run locations (Models and Capability servers) as this deployment would: "+
-		"empty for a development daemon on the bare machine, \"kubernetes\" (no host executor), \"none\" (a container with no grain hostd), "+
-		"\"hostd-down\" (a container whose grain hostd is configured but not answering), \"hostd\" (a container with a real grain hostd "+
-		"on a throwaway allowlist offering agy and corp-search), \"hostd-remote\" (a Kubernetes daemon with a real grain hostd dialed in) "+
+		"empty for a development daemon on the bare machine, \"kubernetes\" (no host executor), \"none\" (a container with no host agent), "+
+		"\"hostd-down\" (a container whose host agent is configured but not answering), \"hostd\" (a container with a real host agent "+
+		"on a throwaway allowlist offering agy and corp-search), \"hostd-remote\" (a Kubernetes daemon with a real host agent dialed in) "+
 		"or \"hostd-remote-down\" (none dialed in)")
 	hostModeInstall := fs.Bool("host-mode-install", false, "show the notice an unmigrated host-mode install shows (banner, System -> Health, Upgrade), with the CLIs the default bare-machine run locations leave nowhere to run")
 	notifications := fs.Bool("notifications", false, "run the reconcile loop's notification sweep every -reconcile interval (default 2s), so an open notification whose clears_when (task, base-green or ttl) has come true is cleared on its own, as on a daemon's cycle")

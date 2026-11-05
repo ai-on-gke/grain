@@ -350,7 +350,7 @@ function inFlightSentence(count, atRisk) {
   if (atRisk.survive) {
     parts.push(
       `${atRisk.survive} ${atRisk.survive === 1 ? "is" : "are"} in a run ` +
-        "host or grain hostd and would be adopted by the new daemon.",
+        "host or the host agent and would be adopted by the new daemon.",
     );
   }
   return parts.join(" ");

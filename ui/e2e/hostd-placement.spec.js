@@ -16,7 +16,7 @@ import { expect, test } from "./fixtures.js";
 
 // Which grain hostd host work runs on is a model connection's (Settings
 // -> Models -> the connection -> Run on) or a capability server's, never
-// a task's (docs/hostd-placement.md). The connection's picker lists the
+// a task's (docs/host-placement.md). The connection's picker lists the
 // registry -- each hostd with whether it is connected and its owner, and
 // no revoked one -- sits inside the connection's form at desktop and
 // phone widths, and offers a fallback list only once a hostd is picked.

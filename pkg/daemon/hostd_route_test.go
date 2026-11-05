@@ -129,7 +129,7 @@ func TestRunsRouteToTheirConnectionsHostdWithCapacityAndPerHostdPauses(t *testin
 	pinned := func(id string) orchestrator.AgentChoice {
 		return orchestrator.AgentChoice{BackendID: id, Model: "m", Framework: model.AgentFrameworkAntigravity}
 	}
-	if why := pool.Availability(ctx, pinned("waits")); !strings.Contains(why, "waiting for hostd ws-off") {
+	if why := pool.Availability(ctx, pinned("waits")); !strings.Contains(why, "waiting for host ws-off") {
 		t.Errorf("a run on a connection placed on a disconnected hostd: availability %q, want it to wait for ws-off", why)
 	}
 	if _, err := pool.Build(ctx, pinned("waits")); !errors.Is(err, agent.ErrHostdWaiting) {
@@ -152,7 +152,7 @@ func TestRunsRouteToTheirConnectionsHostdWithCapacityAndPerHostdPauses(t *testin
 	pool.inflight[lease.id] = append(pool.inflight[lease.id], lease)
 	pool.mu.Unlock()
 	lease.start()
-	if why := pool.Availability(ctx, pinned("by-name")); !strings.Contains(why, "hostd ws-a is at its capacity (1 of 1 runs)") {
+	if why := pool.Availability(ctx, pinned("by-name")); !strings.Contains(why, "host ws-a is at its capacity (1 of 1 runs)") {
 		t.Errorf("ws-a full: availability %q, want it to wait for ws-a's capacity", why)
 	}
 	if why := pool.Availability(ctx, pinned("by-label")); why != "" {
@@ -187,7 +187,7 @@ func TestRunsRouteToTheirConnectionsHostdWithCapacityAndPerHostdPauses(t *testin
 		t.Errorf("the default hostd's connection pauses %q, want its bare key", got)
 	}
 	// And a task waiting on such a pause says whose it is.
-	if got := req.pausedConnection(cfg, ambient); got != `connection "by-name" on hostd ws-a` {
+	if got := req.pausedConnection(cfg, ambient); got != `connection "by-name" on host ws-a` {
 		t.Errorf("ambient on ws-a is named %q, want the hostd named beside the connection", got)
 	}
 	if got := req.pausedConnection(cfg, keyed); got != `connection "by-name"` {
