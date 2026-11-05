@@ -375,6 +375,9 @@ func Blocked() []BlockedKind {
 	defer healthMu.Unlock()
 	out := make([]BlockedKind, 0, len(health))
 	for k, h := range health {
+		if h.Blocked == "" {
+			continue
+		}
 		out = append(out, BlockedKind{Kind: k, HealthState: h})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Kind < out[j].Kind })

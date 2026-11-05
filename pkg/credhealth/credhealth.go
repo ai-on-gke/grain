@@ -175,11 +175,17 @@ func RunChecks(ctx context.Context, now time.Time) {
 	mu.Unlock()
 	sort.Strings(names)
 	for _, name := range names {
+		if ctx.Err() != nil {
+			return
+		}
 		c := cs[name]
 		if c.Run == nil {
 			continue
 		}
 		if err := c.Run(ctx); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			Fail(ctx, "check:"+name, c.Title, err.Error(), now)
 		} else {
 			Clear(ctx, "check:"+name)

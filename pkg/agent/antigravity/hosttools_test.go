@@ -259,6 +259,9 @@ func TestReportHostToolCalls(t *testing.T) {
 	if !slices.Equal(notes, want) {
 		t.Errorf("notes = %q, want %q", notes, want)
 	}
+	if f := credhealth.Failures(); len(f) != 1 || f[0].Source != "host-tool:"+madeUpGrant {
+		t.Errorf("failures = %+v, want %s still failing despite the cut-short doc_lookup", f, madeUpGrant)
+	}
 	if notes := reportHostToolCalls(&agent.Result{}, nil, "h"); len(notes) != 0 {
 		t.Errorf("a run with no host calls got notes %q", notes)
 	}
@@ -320,6 +323,13 @@ func TestHostToolAuthFailureRaisesOneNotification(t *testing.T) {
 	}
 	if f := credhealth.Failures(); len(f) != 1 || f[0].Count != 2 {
 		t.Errorf("failures = %+v, want one spell seen twice", f)
+	}
+
+	// An in-flight call cut off with no result text says nothing about
+	// the credential and must not clear the open notification.
+	reportHostToolCalls(&agent.Result{ToolCalls: []agent.ToolCall{{Name: "doc_lookup"}}}, nil, "ctl-1")
+	if len(n.cleared) != 0 || len(credhealth.Failures()) != 1 {
+		t.Errorf("cut-off call cleared notification: cleared=%q failures=%+v", n.cleared, credhealth.Failures())
 	}
 
 	reportHostToolCalls(&agent.Result{ToolCalls: []agent.ToolCall{{Name: "doc_lookup", Text: "ok"}}}, nil, "ctl-1")

@@ -96,4 +96,16 @@ func TestRunChecks(t *testing.T) {
 	if len(n.raised) != 1 || len(n.cleared) != 1 {
 		t.Errorf("raised %q, cleared %q; want one each", n.raised, n.cleared)
 	}
+
+	// Context cancellation on daemon shutdown is not a credential failure.
+	ctx, cancel := context.WithCancel(context.Background())
+	err = context.Canceled
+	cancel()
+	credhealth.RunChecks(ctx, time.Now())
+	if f := credhealth.Failures(); len(f) != 0 {
+		t.Errorf("failures after cancelled check = %+v, want none", f)
+	}
+	if len(n.raised) != 1 {
+		t.Errorf("raised after cancelled check = %q, want no new raise", n.raised)
+	}
 }

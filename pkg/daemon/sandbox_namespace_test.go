@@ -27,6 +27,8 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
+	"github.com/ai-on-gke/grain/pkg/change"
+	"github.com/ai-on-gke/grain/pkg/credhealth"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
@@ -236,6 +238,8 @@ func TestSandboxProxyServesTheStage2Roots(t *testing.T) {
 
 		// deploy://
 		{token: "own", path: "/fs/deploy/merge-queue", status: 200, want: []string{"Merge Queue Status"}},
+		{token: "own", path: "/fs/deploy/state", status: 403},
+		{token: "debug", path: "/fs/deploy/state", status: 200, want: []string{"tables/task.json"}, not: []string{"credentials"}},
 		{token: "debug", path: "/fs/deploy/state/tables?list", status: 200, want: []string{"task.json"}},
 		{token: "debug", path: "/fs/deploy/state/tables/task.json", status: 200, want: []string{`"t-7"`, "[redacted:"}, not: []string{"s3cret-value"}},
 		{token: "own", path: "/fs/deploy/state/tables/task.json", status: 403},
@@ -321,5 +325,65 @@ func TestGrainLogArgsCarryTheQuery(t *testing.T) {
 		if got[k] != v {
 			t.Errorf("grainLogArgs[%q] = %v, want %v", k, got[k], v)
 		}
+	}
+}
+
+// deploy://state's listing carries the deployment's credentials section
+// when credentials have lapsed, redacts any secret value inside its
+// detail, and omits the section again once cleared.
+func TestDeployStateRedactsCredentialsSection(t *testing.T) {
+	srv, store, dataDir := stage2Proxy(t, stage2Scopes{
+		"debug": {TaskID: "t-9", RunID: "run-9", MayReadHealth: true},
+	})
+	t.Cleanup(credhealth.Reset)
+	t.Cleanup(func() { change.ClearBlocked("fakestatecl") })
+
+	state := StateRepoDir(dataDir)
+	if err := os.MkdirAll(filepath.Join(state, "tables"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "tables", "task.json"), []byte(`[]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := secrets.Open(SecretsConfig(dataDir)).Set("corp-auth", "token", []byte("s3cret-cred-token")); err != nil {
+		t.Fatal(err)
+	}
+
+	since := time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
+	change.MarkBlocked("fakestatecl", change.BlockedCredentials, "expired using s3cret-cred-token", since)
+	credhealth.Fail(context.Background(), "host-tool:made-up", "Host tools failing", "renew https://user:pass@corp.example/auth", since)
+
+	// Direct DeployProvider.ReadState call must already be redacted,
+	// without relying on namespace.Server's HTTP stream redactor.
+	api := &inProcessAPI{}
+	api.Set(ui.NewServer(ui.Config{Actor: ui.DefaultActor("deployment")}, store))
+	direct, err := (sandboxDeploy{
+		client:     inProcessAPIClient(api),
+		stateDir:   state,
+		secretsDir: SecretsDir(dataDir),
+	}).ReadState(context.Background(), "")
+	if err != nil {
+		t.Fatalf("ReadState: %v", err)
+	}
+	if !strings.Contains(direct, `"credentials"`) || !strings.Contains(direct, `"fakestatecl"`) {
+		t.Errorf("ReadState missing credentials section:\n%s", direct)
+	}
+	if strings.Contains(direct, "s3cret-cred-token") || strings.Contains(direct, "user:pass") {
+		t.Errorf("ReadState leaked unredacted secret or userinfo:\n%s", direct)
+	}
+	if !strings.HasSuffix(direct, "\n") {
+		t.Errorf("ReadState missing trailing newline: %q", direct)
+	}
+
+	status, body := stage2Get(t, srv, "debug", "/fs/deploy/state")
+	if status != 200 || !strings.Contains(body, `"credentials"`) || strings.Contains(body, "s3cret-cred-token") || strings.Contains(body, "user:pass") {
+		t.Errorf("GET /fs/deploy/state = %d:\n%s", status, body)
+	}
+
+	change.ClearBlocked("fakestatecl")
+	credhealth.Clear(context.Background(), "host-tool:made-up")
+	status, body = stage2Get(t, srv, "debug", "/fs/deploy/state")
+	if status != 200 || strings.Contains(body, `"credentials"`) {
+		t.Errorf("GET /fs/deploy/state after clear = %d:\n%s", status, body)
 	}
 }

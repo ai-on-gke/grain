@@ -2462,8 +2462,9 @@ func hostName(h agent.Host) string {
 // that is the operator's to fix on the host rather than the run's.
 func reportHostToolCalls(r *agent.Result, calls []HostToolCall, fallbackHost string) []string {
 	var notes []string
+	completed := r.ToolCalls
 	seen := map[string]int{}
-	for _, tc := range r.ToolCalls {
+	for _, tc := range completed {
 		if _, ok := hostToolGrantFor(tc.Name); ok {
 			seen[tc.Name]++
 		}
@@ -2500,27 +2501,31 @@ func reportHostToolCalls(r *agent.Result, calls []HostToolCall, fallbackHost str
 		}
 	}
 	// authFailed is each grant's last word in this run: true for a call
-	// that failed on auth, false for one that succeeded. A call that
-	// failed some other way says nothing about the credential.
+	// that failed on auth, false for one that completed without error.
+	// Calls the hook recorded after the stream stopped, in-flight calls
+	// with no result text, and calls that failed some other way say
+	// nothing about the credential.
 	authFailed := map[string]bool{}
 	hints := map[string]string{}
-	noted := false
-	for _, tc := range r.ToolCalls {
+	noted := map[string]bool{}
+	for _, tc := range completed {
 		g, ok := hostToolGrantFor(tc.Name)
 		if !ok {
 			continue
 		}
 		if !tc.IsError {
-			authFailed[g.Capability] = false
+			if tc.Text != "" {
+				authFailed[g.Capability] = false
+			}
 			continue
 		}
 		if g.IsAuthFailure != nil && g.AuthHint != nil && g.IsAuthFailure(tc.Text) {
 			hint := g.AuthHint(host)
 			authFailed[g.Capability], hints[g.Capability] = true, hint
-			if !noted {
+			if !noted[g.Capability] {
 				log.Printf("antigravity: %s failed on auth: %s", tc.Name, hint)
 				notes = append(notes, "grain: "+tc.Name+" failed on auth -- "+hint)
-				noted = true
+				noted[g.Capability] = true
 			}
 		}
 	}

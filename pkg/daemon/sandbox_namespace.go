@@ -252,16 +252,20 @@ func (d sandboxDeploy) ReadPipelineChanges(ctx context.Context) (string, error) 
 	return toolText(tool.Handler(ctx, map[string]any{}))
 }
 
+func (d sandboxDeploy) redact() func(string) string {
+	redactor := grainLogRedactor(d.secretsDir)
+	if redactor == nil {
+		return nil
+	}
+	return func(s string) string { lines, _ := redactor.Redact([]string{s}); return lines[0] }
+}
+
 // health is read_deployment_health and read_deployment_state, built per
 // read so that a secret set since the daemon started is redacted by the
 // next read (grainLogRedactor reads the store each time).
 func (d sandboxDeploy) health() []mcp.Tool {
-	var redactFn func(string) string
-	if redactor := grainLogRedactor(d.secretsDir); redactor != nil {
-		redactFn = func(s string) string { lines, _ := redactor.Redact([]string{s}); return lines[0] }
-	}
 	return deploymenthealth.Tools(deploymenthealth.Config{
-		StateDir: d.stateDir, Reader: daemonDeploymentHealth{client: d.client}, Redact: redactFn,
+		StateDir: d.stateDir, Reader: daemonDeploymentHealth{client: d.client}, Redact: d.redact(),
 	})
 }
 
@@ -293,6 +297,10 @@ func (d sandboxDeploy) withCredentials(ctx context.Context, listing string) stri
 	if d.client == nil {
 		return listing
 	}
+	redact := d.redact()
+	if redact == nil {
+		return listing
+	}
 	health, err := d.client.SandboxHealth(ctx)
 	if err != nil || health.Credentials == nil {
 		return listing
@@ -306,7 +314,7 @@ func (d sandboxDeploy) withCredentials(ctx context.Context, listing string) stri
 	if err != nil {
 		return listing
 	}
-	return string(b)
+	return redact(string(b)) + "\n"
 }
 
 func (d sandboxDeploy) ListStateTables(ctx context.Context) ([]string, error) {
