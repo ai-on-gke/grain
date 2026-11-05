@@ -107,6 +107,12 @@ func (u *Upgrader) AlreadyRunning(ctx context.Context, branch string) (bool, err
 				// swap is nothing to install yet: the next poll retries.
 				return true, nil
 			}
+			if errors.Is(relErr, errReleaseNotPublished) {
+				// A version tagged without its image assets, on a
+				// deployment with no registry to pull it from, is nothing
+				// to install either: the upgrade would only refuse it.
+				return true, nil
+			}
 			if ok, _ := u.shouldFallbackToRegistry(relErr); ok {
 				return checkRegistry()
 			}
