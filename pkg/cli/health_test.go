@@ -15,12 +15,15 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest"
+	"github.com/ai-on-gke/grain/pkg/registry/api"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -81,5 +84,45 @@ func TestGrainHealthShowsRegisteredCountersUntilUnregistered(t *testing.T) {
 	}
 	if strings.Contains(out, name) {
 		t.Errorf("grain health still shows %q after unregister:\n%s", name, out)
+	}
+}
+
+func TestGrainHealthSurfacesRegistryFailuresAndScopeConflicts(t *testing.T) {
+	const code = "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567"
+	store, _ := sqlitetest.Open(t)
+	srv := ui.NewServer(ui.Config{
+		Actor:         ui.DefaultActor("operator@example.com"),
+		LocalAPIToken: code,
+		RegistryStatus: func(_ context.Context) (model.RegistrySnapshot, error) {
+			return model.RegistrySnapshot{
+				Enabled: true,
+				State:   model.RegistryStateError,
+				Config: model.RegistryConfig{
+					URL:   "https://registry.example.com",
+					Entry: "grain-west",
+				},
+				ConsecutiveFailures: 3,
+				LastError:           "registry API PUT /api/entries/grain-west/heartbeat returned 503: upstream unavailable",
+				ScopeConflicts: []api.ScopeConflict{
+					{Repo: "acme/widgets", PathPrefix: "pkg/autoscaler", ConflictWith: "grain-east", Owner: "east@example.com"},
+				},
+			}, nil
+		},
+	}, store)
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	out, err := runAccessCLI(t, ts.URL, code, "health")
+	if err != nil {
+		t.Fatalf("grain health: %v", err)
+	}
+	for _, want := range []string{
+		"registry (grain-west @ https://registry.example.com): error",
+		"last error (3 failure(s)): registry API PUT /api/entries/grain-west/heartbeat returned 503",
+		"scope conflict on acme/widgets/pkg/autoscaler: claimed by grain-east (east@example.com)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("grain health output missing %q:\n%s", want, out)
+		}
 	}
 }

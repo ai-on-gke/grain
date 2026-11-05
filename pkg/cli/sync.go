@@ -376,6 +376,10 @@ var settingsDiffRows = []settingsDiffRow{
 	{"ownerTrust", "owner-trust proposal policy", func(s ui.Settings) any { return ownerTrustRows(s.OwnerTrust) }},
 	{"timeZone", "time zone", func(s ui.Settings) any { return s.TimeZone }},
 	{"settingsLocked", "settings locked", func(s ui.Settings) any { return s.SettingsLocked }},
+	{"registry", "registry connection", func(s ui.Settings) any {
+		b, _ := json.Marshal(s.Registry)
+		return string(b)
+	}},
 }
 
 // settingsDiffExceptions names any ui.UpdateSettingsRequest field that

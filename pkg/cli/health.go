@@ -51,8 +51,35 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		p.encode(h)
 		return
 	}
+	hasRegistryIssue := h.Registry != nil && (h.Registry.LastError != "" || len(h.Registry.ScopeConflicts) > 0)
+	if hasRegistryIssue {
+		fmt.Printf("registry (%s @ %s): %s\n", h.Registry.Entry, h.Registry.URL, h.Registry.State)
+		if h.Registry.LastError != "" {
+			if h.Registry.ConsecutiveFailures > 0 {
+				fmt.Printf("  last error (%d failure(s)): %s\n", h.Registry.ConsecutiveFailures, h.Registry.LastError)
+			} else {
+				fmt.Printf("  last error: %s\n", h.Registry.LastError)
+			}
+		}
+		for _, c := range h.Registry.ScopeConflicts {
+			scope := c.Repo
+			if c.PathPrefix != "" {
+				scope += "/" + c.PathPrefix
+			}
+			if c.Owner != "" {
+				fmt.Printf("  scope conflict on %s: claimed by %s (%s)\n", scope, c.ConflictWith, c.Owner)
+			} else {
+				fmt.Printf("  scope conflict on %s: claimed by %s\n", scope, c.ConflictWith)
+			}
+		}
+		if len(h.Counters) > 0 {
+			fmt.Println()
+		}
+	}
 	if len(h.Counters) == 0 {
-		fmt.Println("no counters: nothing on this daemon registers any")
+		if !hasRegistryIssue {
+			fmt.Println("no counters: nothing on this daemon registers any")
+		}
 		return
 	}
 	fmt.Println("counters since the daemon started:")

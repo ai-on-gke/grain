@@ -242,6 +242,14 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		DeploymentID:                ptr("prod"),
 		DefaultCapabilities:         ptr([]string{ui.OfferedCapabilities()[0].ID}),
 		SettingsLocked:              ptr(true),
+		Registry: &model.RegistryConfig{
+			URL:         "https://registry.example.com",
+			Entry:       "grain-dev",
+			DisplayName: "Dev Grain",
+			Purpose:     "Development queue",
+			HostKind:    "workstation",
+			Listed:      true,
+		},
 	}
 }
 

@@ -77,6 +77,7 @@ var routeDocs = map[string]string{
 	"POST /api/settings":                                                   "Change deployment settings, as PUT /api/settings does: only the fields given are changed.",
 	"POST /api/settings/plan":                                              "Preview a settings change without saving it: what the given fields would change, and what it would take to apply.",
 	"PUT /api/settings/cli-run":                                            "Set the per-framework settings for agent CLI runs, keyed by framework.",
+	"POST /api/registry/heartbeat":                                         "Trigger an immediate registration and heartbeat step against the configured grain registry, returning the updated registry snapshot.",
 	"POST /api/capabilities/{id}/check":                                    "Check that a capability's credential works, by making one request to the service it is for; stores nothing.",
 	"GET /api/tasks":                                                       "List tasks, with their state, position in the queue and pull request: with no parameters, every task that is not closed, without descriptions; narrow with state, q, limit and fields=summary, and page closed tasks with state=closed&cursor=.",
 	"GET /api/pipeline/changes":                                            "Read what changed in the pipeline since a cursor: task transitions, merge-queue states, stalls, base-branch verdicts and merge-batch results, oldest first, with the cursor to read on from.",

@@ -1132,6 +1132,64 @@ _No flags._
 
 ---
 
+### 4.17 `grain registry status|register|unregister` {#CLI-109}
+
+Self-registers a grain deployment as a `connected` entry in a grain registry (`design/design/registry.design.md`) and inspects its background heartbeats and self-reported scopes.
+- `status` (also bare `grain registry`) calls `GET /api/registry` and prints connection state, registry URL, entry metadata, last heartbeat, active and awaiting-reply task counts, any heartbeat error or scope conflicts, and advertised `(repo, path_prefix, role)` scopes.
+- `register` creates or updates the `connected` entry on the registry (`POST /api/entries` or `PATCH /api/entries/{name}` / `POST /api/entries/{name}/credentials/rotate`), stores any minted `grc_...` registration credential in the daemon's secret store under `registry-registration-token` (`POST /api/secrets/registry-registration-token/value`), updates `Registry` in `POST /api/settings`, and runs an immediate heartbeat via `POST /api/registry/heartbeat`. `-standalone` registers on the registry without contacting a local daemon.
+- `unregister` deletes the entry on the registry (`DELETE /api/entries/{name}` unless `-keep-remote` is given), clears `Registry` in `POST /api/settings`, and deletes `registry-registration-token` from the daemon's secret store.
+
+**Scope:** `status` requires `api:read`; `register` and `unregister` require `admin` (unless `-standalone` is set).
+
+<!-- BEGIN GENERATED FLAGS: grain registry -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry status`
+
+<!-- BEGIN GENERATED FLAGS: grain registry status -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry register`
+
+<!-- BEGIN GENERATED FLAGS: grain registry register -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-display-name` | string |  |  | human-readable display name in the registry directory |
+| `-entry` | string |  | $GRAIN_REGISTRY_ENTRY | entry name in the grain registry ($GRAIN_REGISTRY_ENTRY; or positional <entry>) |
+| `-external-url` | string |  |  | optional https:// URL where operators reach this daemon directly |
+| `-host-kind` | string |  |  | connected entry host kind: "workstation", "kubernetes", or "other" |
+| `-listed` | bool | `true` |  | include this entry in default registry directory listings |
+| `-oidc` | bool |  |  | use OIDC ID tokens for registration and daemon heartbeats instead of minting a grc_... token |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-owner-group` | string |  |  | optional group principal that co-owns this entry |
+| `-purpose` | string |  |  | short description of this grain's purpose |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+| `-rotate-token` | bool |  |  | rotate an existing connected entry's grc_... registration credential |
+| `-standalone` | bool |  |  | register on the registry without writing settings or secrets to a local grain daemon |
+| `-token-file` | string |  |  | with -standalone, write a minted grc_... token to this file (mode 0600) instead of printing it |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry unregister`
+
+<!-- BEGIN GENERATED FLAGS: grain registry unregister -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-entry` | string |  | $GRAIN_REGISTRY_ENTRY | entry name in the grain registry ($GRAIN_REGISTRY_ENTRY; or positional <entry>) |
+| `-keep-remote` | bool |  |  | clear the daemon's local registry settings and credential without deleting the entry on the registry |
+| `-oidc` | bool |  |  | authenticate remote entry deletion with an OIDC ID token |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for deleting the entry on the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+| `-standalone` | bool |  |  | delete the entry on the registry without contacting a local grain daemon |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/registry_test.go`: `TestRegistryCLIRegisterStatusUnregister`, `TestDaemonRegistryFlags`.
+
+---
+
 ## 5. Service modes
 
 ### 5.1 `grain daemon [flags]` {#CLI-43}
@@ -1280,6 +1338,16 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-poll-interval` | duration | `10s` |  | how often to run a reconcile cycle (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
 | `-postgres-url` | string |  |  | PostgreSQL connection URL (alias for -db-driver=postgres -db-dsn=URL) |
 | `-reboot-cmd` | value |  |  | one argument of the command the UI's reboot-host button runs -- repeat for every argument. Defaults to sudo systemctl reboot. |
+| `-registry-auth-mode` | string |  | $GRAIN_REGISTRY_TOKEN | credential mode for registry heartbeats: "token" (secret registry-registration-token, -registry-token-file, or $GRAIN_REGISTRY_TOKEN) or "oidc" (ID token for -registry-oidc-audience) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
+| `-registry-display-name` | string |  |  | human-readable display name advertised in the registry directory (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
+| `-registry-entry` | string |  | $GRAIN_REGISTRY_ENTRY | entry name this daemon registers and heartbeats as in the grain registry ($GRAIN_REGISTRY_ENTRY) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
+| `-registry-external-url` | string |  |  | optional https:// URL where operators reach this daemon directly (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
+| `-registry-host-kind` | string |  |  | connected entry host kind advertised to the registry: "workstation", "kubernetes", or "other" (defaults to the active sandbox backend) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
+| `-registry-listed` | bool | `true` |  | include this connected entry in default registry directory listings (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
+| `-registry-oidc-audience` | string |  |  | OIDC ID token audience when -registry-auth-mode=oidc (defaults to -registry-url) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
+| `-registry-purpose` | string |  |  | short description of this grain deployment's purpose in the registry directory (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
+| `-registry-token-file` | string |  | $GRAIN_REGISTRY_TOKEN | fallback file holding a grc_... registration credential when secret registry-registration-token is unset ($GRAIN_REGISTRY_TOKEN is also consulted) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry this daemon self-registers with ($GRAIN_REGISTRY_URL; empty disables heartbeats) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
 | `-relay-audience` | string |  |  | removed: the rendezvous relay is gone. The daemon refuses to start with this set |
 | `-relay-auth-token-file` | string |  |  | removed: the rendezvous relay is gone. The daemon refuses to start with this set |
 | `-relay-iap-jwt-audience` | string |  |  | removed: the rendezvous relay is gone. The daemon refuses to start with this set |

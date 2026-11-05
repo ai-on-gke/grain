@@ -767,6 +767,13 @@ var Migrations = []Migration{
 			"ALTER TABLE `repo_config` DROP COLUMN `default_hostd`",
 		},
 	},
+	{
+		Version:     112,
+		Description: "add grain_config.registry for connected-entry self-registration and heartbeat settings (design/design/registry.design.md)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `registry` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as

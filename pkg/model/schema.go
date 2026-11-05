@@ -531,7 +531,12 @@ import "strconv"
 // the model connection's (model.AgentBackend.Hostd) or the capability
 // server's (protocol.ServerConfig.Hostd), never a task's. `task_run_hostd`
 // stays, the read-only record of where each run's agent CLI ran.
-const SchemaVersion = 111
+//
+// 112 adds `grain_config`.`registry` (model.Config.Registry): the connected
+// entry settings (registry URL, entry name, auth mode, catalog metadata, and
+// scope overrides) for daemon self-registration and heartbeating
+// (design/design/registry.design.md).
+const SchemaVersion = 112
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
@@ -2433,6 +2438,7 @@ var Tables = []string{
   ` + "`new_task_form`" + `                TEXT    NOT NULL DEFAULT '',
   ` + "`auto_upgrade_on`" + `              TEXT    NOT NULL DEFAULT '',
   ` + "`owner_trust`" + `                  TEXT    NOT NULL DEFAULT '',
+  ` + "`registry`" + `                     TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

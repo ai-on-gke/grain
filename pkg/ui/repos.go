@@ -121,6 +121,7 @@ func (c *Client) AddTargetRepoForTeam(ctx context.Context, teamID, repo, cloneUR
 			return Settings{}, err
 		}
 	}
+	c.triggerRegistrySync()
 
 	return c.GetSettings(ctx)
 }
@@ -276,6 +277,7 @@ func (c *Client) RemoveTargetRepoForTeam(ctx context.Context, teamID, repo strin
 	}); err != nil {
 		return Settings{}, err
 	}
+	c.triggerRegistrySync()
 	return c.GetSettings(ctx)
 }
 
@@ -1415,6 +1417,7 @@ func (c *Client) putRepoConfig(ctx context.Context, repo model.RepoRef, edit fun
 	if err := c.Store.PutRepoConfig(ctx, cfg); err != nil {
 		return RepoDefaults{}, err
 	}
+	c.triggerRegistrySync()
 	return c.repoDefaults(ctx, repo)
 }
 
