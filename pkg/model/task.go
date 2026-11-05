@@ -1931,8 +1931,14 @@ type Task struct {
 	// may push (Store.GitDeclaredPush). Never inherited by a proposal: an
 	// agent cannot hand its own push set on to work it files.
 	TemplateID string
-	Creator    string
-	TimeZone   string
+	// Owner is the account responsible for this task (attribution.design.md):
+	// fixed at creation from the filer / on-behalf-of / schedule owner /
+	// deployment fallback, inherited along DerivedFrom, and reassignable by
+	// a person with task-edit access without altering historical Creator.
+	Owner    string
+	Creator  string
+	Proposer TaskProposer
+	TimeZone string
 	// Issue is the GitHub issue number associated with this task, or 0 if unassociated.
 	Issue int
 	// WorkOrigin is the pull request, issue or grain task this task's
