@@ -159,7 +159,9 @@ func (c *sandboxCLI) screenshotCacheDir() string {
 // global root.
 func (c *sandboxCLI) screenshotModulePaths(cache string) []string {
 	paths := []string{filepath.Join(cache, "node_modules")}
-	if out, err := exec.Command("npm", "root", "-g").Output(); err == nil {
+	root := exec.Command("npm", "root", "-g")
+	root.Env = os.Environ()
+	if out, err := root.Output(); err == nil {
 		if root := strings.TrimSpace(string(out)); root != "" {
 			paths = append(paths, root)
 		}
