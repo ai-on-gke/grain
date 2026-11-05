@@ -1413,6 +1413,7 @@ func attemptStartupFrom(r model.Run) *AttemptStartup {
 type configResponse struct {
 	Actor         string `json:"actor"`
 	ActorKind     string `json:"actorKind"`
+	ViewerOwner   string `json:"viewerOwner,omitempty"`
 	Authenticated bool   `json:"authenticated"`
 	// AuthMethod is AuthUserResponse's, so the frontend knows without a
 	// second request how the caller is signed in.
@@ -2040,6 +2041,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	actor := s.tasks.requestActor(r.Context()).Actor
 	_, authenticated := PrincipalFromContext(r.Context())
+	viewerOwner := ""
+	if authenticated || singleTenantTrusted(r) {
+		viewerOwner = s.tasks.resolveOwnerFilter(r.Context(), "me")
+	}
 	// /api/config is served to callers nobody has vouched for, since it
 	// is what the sign-in page reads. Only a trusted source runs as the
 	// deployment's own actor (serveHTTP); anybody else who has not
@@ -2060,6 +2065,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		AuthMethod:          authMethod,
 		Actor:               actor.ID,
 		ActorKind:           string(actor.Kind),
+		ViewerOwner:         viewerOwner,
 		Authenticated:       authenticated,
 		Allowed:             true,
 		IdentityNotAccepted: identityNotAccepted(r, authenticated),

@@ -302,6 +302,12 @@ var builtinAttributes = attributeSet{
 		noneLabel: "No other writeable repos",
 	},
 	{
+		id:     "owner",
+		typ:    typeEnum,
+		values: one(func(t ui.Task) string { return t.Owner }),
+		people: true,
+	},
+	{
 		id:     "author",
 		typ:    typeEnum,
 		values: one(func(t ui.Task) string { return t.Author }),

@@ -69,6 +69,7 @@ import {
   attributeById,
   attributesFor,
   valueLabel,
+  viewerOwnerOf,
 } from "./taskAttributes.js";
 // The zone reading behind "which day is this?" lives with the rest of
 // the zone handling (time.js) rather than here: the timeline asks the
@@ -224,6 +225,9 @@ export function optionsFor(attr, tasks, config, picked = []) {
     if (v === NONE) none = true;
     else seen.add(v);
   }
+  if (attr.id === "owner" && viewerOwnerOf(config)) {
+    seen.add("me");
+  }
   const option = (v) => ({
     value: v,
     label: valueLabel(attr, v, config),
@@ -240,7 +244,13 @@ export function optionsFor(attr, tasks, config, picked = []) {
       ].map(option)
     : [...seen]
         .map(option)
-        .sort((a, b) => String(a.label).localeCompare(String(b.label)));
+        .sort((a, b) => {
+          if (attr.id === "owner") {
+            if (a.value === "me" && b.value !== "me") return -1;
+            if (b.value === "me" && a.value !== "me") return 1;
+          }
+          return String(a.label).localeCompare(String(b.label));
+        });
   if (none && (attr.noneLabel || attr.type !== TYPE_ENUM))
     options.push({
       ...option(NONE),
@@ -262,9 +272,11 @@ const lower = (v) => String(v).toLowerCase();
 function matchesCondition(attr, cond, t, config) {
   if (needsValue(cond)) return true;
   const values = attr.values(t);
-  // A value that stands for several (the state attribute's "asked") is
-  // matched as all of them.
-  const wanted = attr.expand ? cond.values.flatMap(attr.expand) : cond.values;
+  // A value that stands for several (the state attribute's "asked") or
+  // resolves against the viewer ("owner"'s "me") is expanded first.
+  const wanted = attr.expand
+    ? cond.values.flatMap((v) => attr.expand(v, config))
+    : cond.values;
   switch (cond.op) {
     case "any":
       return values.length === 0

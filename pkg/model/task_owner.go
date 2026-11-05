@@ -91,6 +91,19 @@ func NormalizeTaskOwner(raw string) (string, error) {
 			return "", fmt.Errorf("task owner %q must be an account, not an agent or automation principal", raw)
 		}
 	}
+	if lower == DefaultTaskOwner {
+		return DefaultTaskOwner, nil
+	}
+	if rest, ok := cutPrefixFold(s, "serviceAccount:"); ok {
+		rest = strings.TrimSpace(rest)
+		if rest == "" {
+			return "", errors.New("serviceAccount owner cannot be empty")
+		}
+		return "serviceAccount:" + strings.ToLower(rest), nil
+	}
+	if strings.Contains(s, "@") {
+		return lower, nil
+	}
 	return s, nil
 }
 
@@ -129,17 +142,9 @@ func ParseOwnerChangeReason(reason string) (oldOwner, newOwner string, ok bool) 
 	return oldOwner, newOwner, oldOwner != "" && newOwner != ""
 }
 
-func deploymentOwnerTx(ctx context.Context, q interface {
+func deploymentOwnerTx(_ context.Context, _ interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }) string {
-	var kind, id string
-	err := q.QueryRowContext(ctx,
-		"SELECT `actor_kind`, `actor_id` FROM `grain_config` WHERE `id` = 1").Scan(&kind, &id)
-	if err == nil && (PrincipalKind(kind) == PrincipalHuman || PrincipalKind(kind) == PrincipalService) {
-		if norm, nerr := NormalizeTaskOwner(id); nerr == nil {
-			return norm
-		}
-	}
 	return DefaultTaskOwner
 }
 
