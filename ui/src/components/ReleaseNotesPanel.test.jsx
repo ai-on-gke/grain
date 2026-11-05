@@ -464,4 +464,43 @@ describe("ReleaseNotesPanel", () => {
       ),
     ).toBeInTheDocument();
   });
+
+  it("opens a direction's root task in-app on unmodified click", async () => {
+    const onOpenTask = vi.fn();
+    answers({
+      weeks: [{ period: "2026-W44", title: "Week 44", length: 20 }],
+      counts: {
+        default: stats("2026-W44", {
+          directions: [
+            {
+              taskId: "100",
+              title: "Migrate storage layer",
+              author: "alice@example.com",
+              pullRequestsMerged: 2,
+              pullRequestsMeasured: 2,
+              linesAdded: 275,
+              linesDeleted: 52,
+              tasksCompleted: 2,
+              tasksFiled: 2,
+              tasksSpawned: 1,
+              runs: 2,
+            },
+          ],
+        }),
+      },
+      notes: {
+        "2026-W44": { period: "2026-W44", title: "Week 44", text: "Summary." },
+      },
+    });
+
+    const user = userEvent.setup();
+    render(<ReleaseNotesPanel showError={() => {}} onOpenTask={onOpenTask} />);
+
+    const dirBox = await screen.findByTestId("direction-rollup");
+    const link = within(dirBox).getByRole("link", { name: "#100" });
+    expect(link).toHaveAttribute("href", "/tasks/100");
+
+    await user.click(link);
+    expect(onOpenTask).toHaveBeenCalledWith("100");
+  });
 });

@@ -226,10 +226,7 @@ func (c *Client) PutReleaseNote(ctx context.Context, period, title, text string,
 // calendar window however long after it either is read
 // (model.StatsPeriodRange).
 func (c *Client) ClusterStats(ctx context.Context, period string) (ClusterStats, error) {
-	loc, err := c.scheduleLocation(ctx)
-	if err != nil {
-		return ClusterStats{}, err
-	}
+	loc := c.deploymentLocation(ctx)
 	period, since, until, err := c.statsPeriod(period, loc)
 	if err != nil {
 		return ClusterStats{}, err
@@ -334,16 +331,24 @@ func (c *Client) statsPeriod(period string, loc *time.Location) (string, time.Ti
 func (c *Client) releaseNotePeriod(ctx context.Context, period string) (string, error) {
 	period = strings.TrimSpace(period)
 	if period == "" {
-		loc, err := c.scheduleLocation(ctx)
-		if err != nil {
-			return "", err
-		}
-		return model.LastCompleteReleaseNotePeriod(c.now(), loc), nil
+		return model.LastCompleteReleaseNotePeriod(c.now(), c.deploymentLocation(ctx)), nil
 	}
 	if err := model.ValidateReleaseNotePeriod(period); err != nil {
 		return "", validationErrorf("%s", err)
 	}
 	return period, nil
+}
+
+// deploymentLocation is the deployment's configured wall clock
+// (Config.TimeZone), or UTC when none is configured.
+func (c *Client) deploymentLocation(ctx context.Context) *time.Location {
+	zone := ""
+	if c.Store != nil {
+		if cfg, err := c.Store.GetConfig(ctx); err == nil && cfg != nil {
+			zone = cfg.TimeZone
+		}
+	}
+	return model.LoadLocation(model.TimeZoneOrDefault(zone))
 }
 
 func releaseNoteFrom(n model.ReleaseNote) ReleaseNote {
