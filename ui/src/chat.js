@@ -54,12 +54,13 @@ export function chatEntries(t) {
   const entries = [];
 
   if (t.description) {
+    const baseSender = t.authorLabel || t.creator || t.author || "unknown";
     entries.push({
       key: "description",
       kind: "message",
       at: t.createdAt ? new Date(t.createdAt) : null,
       direction: t.authorKind === "human" ? "outgoing" : "incoming",
-      sender: t.authorLabel || t.creator || t.author || "unknown",
+      sender: t.filedVia ? `${baseSender} (from ${t.filedVia})` : baseSender,
       body: t.description,
       attachments: t.attachments || [],
     });
@@ -99,8 +100,11 @@ export function chatEntries(t) {
       // question from a dispatched run is grain speaking for an agent,
       // and the chat says so rather than putting grain's name on the
       // agent's sentence.
-      sender:
-        commentAuthor(c) || (c.authorKind === "human" ? "human" : "grain"),
+      sender: (() => {
+        const base =
+          commentAuthor(c) || (c.authorKind === "human" ? "human" : "grain");
+        return c.filedVia ? `${base} (from ${c.filedVia})` : base;
+      })(),
       body: c.body || "",
       attachments: c.attachments || [],
     });

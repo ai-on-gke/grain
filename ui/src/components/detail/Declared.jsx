@@ -361,9 +361,13 @@ export default function Declared({ t, config, act }) {
     ]);
   }
   if (isExternalAgent(t.author)) {
+    const name = t.author.slice(EXTERNAL_AGENT_PREFIX.length);
+    const label = t.authorLabel || `external agent ${name}`;
     rows.push([
       "Filed by",
-      `external agent ${t.author.slice(EXTERNAL_AGENT_PREFIX.length)} (${t.author})`,
+      <span data-testid="filed-by" key="filed-by">
+        {label.includes(`(${t.author})`) ? label : `${label} (${t.author})`}
+      </span>,
     ]);
   } else if (t.authorLabel) {
     rows.push([
@@ -377,6 +381,14 @@ export default function Declared({ t, config, act }) {
   // Filed by row does not.
   if (t.creator && !(t.authorLabel && t.creator === t.author)) {
     rows.push(["Creator", t.creator]);
+  }
+  if (t.filedVia) {
+    rows.push([
+      "Filed via",
+      <span data-testid="filed-via" key="filed-via">
+        {t.filedVia}
+      </span>,
+    ]);
   }
   if (t.reviewers?.length) {
     rows.push(["Reviewers", t.reviewers.join(", ")]);

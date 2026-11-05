@@ -607,6 +607,7 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
           <div className="timeline-meta timeline-comment-header">
             <span>
               {who} · {c.authorKind}
+              {c.filedVia ? ` · from ${c.filedVia}` : ""}
               {c.handover ? " · handover" : ""}
             </span>
             {c.body && (
