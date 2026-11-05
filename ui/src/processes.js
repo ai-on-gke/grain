@@ -131,7 +131,11 @@ export function buildProcessRows({
 
   const eventNextLabel = (s) => {
     const kind = s?.recurrence?.kind;
-    if (kind === "git_ref") return "on ref move";
+    if (kind === "git_ref") {
+      return s?.suppressed?.reason === "watchedRepoOffTarget"
+        ? "suppressed"
+        : "on ref move";
+    }
     if (kind === "github_workflow_run") return "on workflow run";
     return null;
   };

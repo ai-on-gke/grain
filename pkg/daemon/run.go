@@ -869,7 +869,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// run() itself only returns once ctx is actually cancelled.
 	if cfg.UiAddr != "" {
 		stopUI, err := startUIServer(cfg, store, db, transcriptDir, sandboxes, live, pkgCache, actionsCache,
-			stateManager, stateManager.settingsRepo, upgrader, secretStore)
+			stateManager, stateManager.settingsRepo, forbidden, upgrader, secretStore)
 		if err != nil {
 			return fmt.Errorf("starting the UI/API server: %w", err)
 		}

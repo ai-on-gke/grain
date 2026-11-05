@@ -515,6 +515,11 @@ type Config struct {
 	// there is none -- an honest answer for a deployment whose state is
 	// local-only, and for any UI not colocated with a daemon at all.
 	StateRepoRef func() model.RepoRef
+	// ForbiddenRepos is the live set of external repositories this
+	// deployment never reads or serves (such as the encrypted secrets backup
+	// repository), shared with the git proxy and declaration poller so
+	// schedule writes refuse forbidden git_ref watched repositories up front.
+	ForbiddenRepos *gitproxy.ForbiddenSet
 	// HostdRemote, when set, takes the upgrades of a grain hostd on
 	// another machine dialing in to /api/hostd/connect (hostd.Remote,
 	// which checks the hostd token itself); nil refuses them.
