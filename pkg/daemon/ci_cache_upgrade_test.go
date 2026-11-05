@@ -40,6 +40,25 @@ func timePtr(t time.Time) *time.Time {
 	return &t
 }
 
+func stepRunnerStarted(homeDir, marker string) bool {
+	matches, _ := filepath.Glob(filepath.Join(homeDir, ".grain-ci-step", "*", "started"))
+	for _, startedPath := range matches {
+		stepDir := filepath.Dir(startedPath)
+		pidBytes, err := os.ReadFile(filepath.Join(stepDir, "pid"))
+		if err != nil || strings.TrimSpace(string(pidBytes)) == "" {
+			continue
+		}
+		outBytes, err := os.ReadFile(filepath.Join(stepDir, "out"))
+		if err != nil {
+			continue
+		}
+		if marker == "" || strings.Contains(string(outBytes), marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func testJobRun(name string, conclusion ci.Conclusion, output string) ci.JobRun {
 	started := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 	finished := started.Add(time.Minute)
@@ -391,7 +410,7 @@ jobs:
 				}
 				if j.JobID == "slow" && !j.Conclusion.Done() && j.StartedAt != nil && j.Sandbox != "" {
 					slowHome = filepath.Join(sandboxRoot, j.Sandbox)
-					if matches, _ := filepath.Glob(filepath.Join(slowHome, ".grain-ci-step", "*", "out")); len(matches) > 0 {
+					if stepRunnerStarted(slowHome, "slow-started") {
 						slowRunning = true
 					}
 				}
@@ -516,7 +535,7 @@ jobs:
 			}
 		}
 		if slowDir != "" {
-			if matches, _ := filepath.Glob(filepath.Join(slowDir, ".grain-ci-step", "*", "out")); len(matches) > 0 {
+			if stepRunnerStarted(slowDir, "slow-started") {
 				break
 			}
 		}
@@ -720,7 +739,7 @@ jobs:
 				}
 			}
 			if fastDone && slowPodHome != "" {
-				if matches, _ := filepath.Glob(filepath.Join(slowPodHome, ".grain-ci-step", "*", "out")); len(matches) > 0 {
+				if stepRunnerStarted(slowPodHome, "slow-started") {
 					break
 				}
 			}

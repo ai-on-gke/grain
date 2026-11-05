@@ -310,6 +310,10 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	uiRequireIAP := fs.Bool("ui-require-iap", false, "accept the access code (bearer or grain_access cookie) only from loopback with no forwarding "+
 		"or proxy headers, and serve no \"Enter access code\" page, so network callers sign in through IAP alone (docs/access-code.md); "+
 		"needs -ui-iap-audience or $GRAIN_IAP_AUDIENCE. Defaults to $GRAIN_REQUIRE_IAP")
+	uiRequireVerifier := fs.String("ui-require-verifier", "", "require network callers to sign in through the named IdentityVerifier (e.g. \"iap\", \"registry\", "+
+		"or a registered verifier): accept the access code (bearer or grain_access cookie) only from loopback with no forwarding or proxy headers "+
+		"(or through a verifier that declares AccessCodeWins), and serve no \"Enter access code\" page (-ui-require-iap is an alias for -ui-require-verifier=iap). "+
+		"Defaults to $GRAIN_REQUIRE_VERIFIER")
 	uiAllowedPrincipals := fs.String("ui-allowed-principals", "", ui.AllowedPrincipalsUsage)
 	uiOpen := fs.Bool("ui-open", false, "open the UI in the system's default browser once it's listening")
 	actor := fs.String("as", "", "principal the UI/API attributes tasks and comments it creates to (defaults to the OS user)")
@@ -1084,7 +1088,12 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			}
 		}
 	}
-	if !passed["ui-require-iap"] {
+	if !passed["ui-require-verifier"] && !(passed["ui-require-iap"] && *uiRequireIAP) {
+		if env := strings.TrimSpace(os.Getenv("GRAIN_REQUIRE_VERIFIER")); env != "" {
+			*uiRequireVerifier = env
+		}
+	}
+	if !passed["ui-require-iap"] && !passed["ui-require-verifier"] {
 		if env := strings.TrimSpace(os.Getenv("GRAIN_REQUIRE_IAP")); env != "" {
 			v, err := strconv.ParseBool(env)
 			if err != nil {
@@ -1208,6 +1217,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UiIAPAudience:           *uiIAPAudience,
 		UiIAPIssuer:             *uiIAPIssuer,
 		UiIAPKeysURL:            *uiIAPKeysURL,
+		UiRequireVerifier:       strings.TrimSpace(*uiRequireVerifier),
 		UiRequireIAP:            *uiRequireIAP,
 		UiAllowedPrincipals:     ui.SplitAllowedPrincipals(*uiAllowedPrincipals),
 		GeminiAPIKeyFile:        *geminiAPIKeyFile,
@@ -1473,7 +1483,7 @@ func checkConfig(cfg daemon.Config) error {
 	if err := daemon.CheckUIAllowedPrincipals(cfg); err != nil {
 		return err
 	}
-	if err := daemon.CheckUIRequireIAP(cfg); err != nil {
+	if err := daemon.CheckUIRequireVerifier(cfg); err != nil {
 		return err
 	}
 	if err := daemon.CheckCICacheBounds(cfg); err != nil {

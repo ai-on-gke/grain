@@ -454,8 +454,9 @@ Commands:
   gcp-key list|get|set|delete          manage this deployment's GCP service-account keys
   capability-servers list|add|remove|enable|disable|bind-secret
                                        manage this deployment's capability servers (mcpServers)
-  hostds list|register|set-owner       the hostd registry: register a hostd with its owner, the identity
-                                       it dials in through IAP as
+  hostds list|register|install|set-owner
+                                       the hostd registry: register a hostd with its owner, the identity
+                                       it dials in through IAP as, and print how to install it
   registry status|register|unregister  self-register this deployment with a grain registry and inspect
                                        heartbeats and self-reported scopes (Settings -> Registry)
   access list|allow|deny               the allowed users and groups list (Settings -> Access): who may

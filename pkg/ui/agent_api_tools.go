@@ -211,6 +211,7 @@ var routeDocs = map[string]string{
 	"POST /api/deployment/broadcast":                                       "Post a comment to every active task (running_only: only those with a run in flight).",
 	"POST /api/hostds":                                                     "Register a remote grain hostd; its token is shown once, in the answer.",
 	"PATCH /api/hostds/{name}":                                             "Set a hostd's owner or labels.",
+	"GET /api/hostds/{name}/install":                                       "Show how to install a registered hostd on its machine again; never its token.",
 	"POST /api/hostds/{name}/rotate":                                       "Retire a hostd's token and mint a new one, shown once in the answer.",
 	"POST /api/hostds/{name}/revoke":                                       "Revoke a hostd and every token it has.",
 	"PUT /api/agent-keys/{framework}":                                      "Set an agent framework's credential.",

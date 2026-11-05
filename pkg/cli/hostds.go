@@ -30,15 +30,19 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-const hostdsUsage = `usage: grain hostds <list|register|set-owner> [args]
+const hostdsUsage = `usage: grain hostds <list|register|install|set-owner> [args]
 
   list
   register [-owner <email>] [-label k=v]... [-token-file <path>] <name>
+  install <name>
   set-owner <name> <email|"">
 
 The hostd registry (Settings -> Hostds): the grain hostds this daemon
 takes host work through. register prints the new hostd's token once, or
-writes it to -token-file (mode 0600) for grain hostd -server -token-file.
+writes it to -token-file (mode 0600) for grain hostd -server -token-file,
+and then how to install it on its machine. install prints those
+instructions again for a hostd already registered; they never carry its
+token, which the installer asks for or reads from $GRAIN_HOSTD_TOKEN.
 
 A hostd's owner is the person or service account answerable for it. A
 hostd that dials in through IAP or another identity verifier's proxy
@@ -66,6 +70,28 @@ func cmdHostds(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		return nil
 	case "register", "create":
 		return cmdHostdsRegister(ctx, c, out, subArgs)
+	case "install":
+		fs := flag.NewFlagSet("grain hostds install", flag.ContinueOnError)
+		rest, err := parseArgs(fs, subArgs)
+		if err != nil {
+			return err
+		}
+		if len(rest) != 1 {
+			return errors.New("usage: grain hostds install <name>")
+		}
+		inst, err := c.HostdInstall(ctx, rest[0])
+		if err != nil {
+			return err
+		}
+		if out.json {
+			out.encode(inst)
+			return nil
+		}
+		if len(inst.Lines) == 0 {
+			return fmt.Errorf("the daemon sent no install instructions for hostd %s", rest[0])
+		}
+		printHostdInstall(&inst)
+		return nil
 	case "set-owner":
 		fs := flag.NewFlagSet("grain hostds set-owner", flag.ContinueOnError)
 		rest, err := parseArgs(fs, subArgs)
@@ -133,7 +159,24 @@ func cmdHostdsRegister(ctx context.Context, c *ui.HTTPClient, out *printer, args
 	if issued.Hostd.Owner == "" {
 		fmt.Println("it has no owner: it can dial in over loopback, but not through IAP until `grain hostds set-owner` gives it one")
 	}
+	printHostdInstall(issued.Install)
 	return nil
+}
+
+// printHostdInstall prints how to install a hostd on its machine, as the
+// daemon rendered it (ui.RegisterHostdInstall): its note, then its lines
+// indented as one block. Nothing when the daemon sent none.
+func printHostdInstall(inst *ui.HostdInstall) {
+	if inst == nil || len(inst.Lines) == 0 {
+		return
+	}
+	fmt.Println("to install it on its machine, run:")
+	for _, l := range inst.Lines {
+		fmt.Println("    " + l)
+	}
+	if inst.Note != "" {
+		fmt.Println(inst.Note)
+	}
 }
 
 func ownerOrNone(owner string) string {

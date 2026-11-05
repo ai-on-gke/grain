@@ -10,7 +10,11 @@ daemon's own machine, and a hostd on another machine dials in to
 more release, with the shared token the daemon was started with
 (`grain daemon -hostd-token-file`). `GET /api/hostd/install.sh`, which
 Settings → Hostds offers beside a new token, installs such a hostd as
-`grain-hostd.service`, where the executor install scripts used to.
+`grain-hostd.service`, where the executor install scripts used to. The
+daemon renders those instructions itself (`install.lines` and
+`install.note` on create and rotate, `GET /api/hostds/{name}/install`,
+`grain hostds install`), and a build that installs hostds another way
+replaces them with `ui.RegisterHostdInstall`; they never carry the token.
 
 The removal took out:
 
