@@ -219,6 +219,10 @@ var notSettings = []string{
 	// Who closed or reopened a task (model.TaskEvent): grain's record of
 	// what somebody did, written in the same breath as the closure.
 	"task_event",
+	// Ordered task state, comment/question, and CI verdict log backing
+	// GET /api/events (model.IntegrationEvent): runtime event history
+	// written by Store transactions, never settings a PR applies.
+	"integration_event",
 	// config_audit is the record of who changed the configuration
 	// (operator-attribution spec §4.4): grain's own history, not settings
 	// a merged pull request applies.

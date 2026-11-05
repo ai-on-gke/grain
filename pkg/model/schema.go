@@ -605,6 +605,38 @@ const taskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
   ` + "`detail`" + `     TEXT     NOT NULL DEFAULT ''
 )`
 
+// integrationEventTable backs GET /api/events (model.IntegrationEvent,
+// design/design/integration-events.design.md): ordered task state changes,
+// questions, comments, and CI verdicts resumable from an integer cursor.
+// Needs no SchemaVersion bump and no migration rung, for taskEventTable's
+// own reason above.
+const integrationEventTable = `CREATE TABLE IF NOT EXISTS ` + "`integration_event`" + ` (
+  ` + "`id`" + `               INTEGER  PRIMARY KEY AUTOINCREMENT,
+  ` + "`type`" + `             TEXT     NOT NULL,
+  ` + "`at`" + `               DATETIME NOT NULL,
+  ` + "`task_id`" + `          TEXT     NOT NULL,
+  ` + "`repo`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`previous_state`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`state`" + `            TEXT     NOT NULL DEFAULT '',
+  ` + "`question_summary`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`comment_id`" + `       INTEGER  NOT NULL DEFAULT 0,
+  ` + "`external_ref`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`origin`" + `           TEXT     NOT NULL DEFAULT '',
+  ` + "`pull_request`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`filed_via`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`ci_provider`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`ci_run_id`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`ci_commit`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`ci_conclusion`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`ci_detail`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_kind`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_id`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_source`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`behalf_kind`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`behalf_id`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`behalf_source`" + `    TEXT     NOT NULL DEFAULT ''
+)`
+
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
 const ciStepAttachmentTable = `CREATE TABLE IF NOT EXISTS ` + "`ci_step_attachment`" + ` (
@@ -4112,6 +4144,12 @@ var Tables = []string{
 	configAuditTable,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_event_task`" + ` ON ` + "`task_event`" + ` (` + "`task_id`" + `)`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_event_at`" + ` ON ` + "`task_event`" + ` (` + "`at`" + `)`,
+
+	// Resumable task state, comment/question, and CI verdict stream for
+	// external integrations (model.IntegrationEvent, GET /api/events).
+	integrationEventTable,
+	`CREATE INDEX IF NOT EXISTS ` + "`integration_event_task`" + ` ON ` + "`integration_event`" + ` (` + "`task_id`" + `, ` + "`id`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`integration_event_repo`" + ` ON ` + "`integration_event`" + ` (` + "`repo`" + `, ` + "`id`" + `)`,
 
 	// Verified-identity sign-in allowlist (`user:<email>` and `group:<email>`)
 	// and its one-time startup migration off `-ui-allowed-principals`.
