@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v16"
+const Version = "trust-boundary/v17"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +81,16 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v17 added the authorization-bearing files the 2026-11-05 nightly
+// security review found unclassified (finding 2, task 3168) to
+// auth-routes: the role gate for verified-identity sessions
+// (access_roles.go), the built-in scope sets every role and api:<set>
+// grant expands through (api_scope_set.go), the inbox reach of a gma_
+// token (external_cli.go), the approval-callback bearer tokens and the
+// recording of a person's host-script approval
+// (local_script_approvals.go), and the daemon's UI listeners and their
+// guards (ui_server.go).
 //
 // v16 added connection_hostd.go to auth-routes and capability server
 // hostd placement (capability_servers.go, capability_servers_hostd.go,
@@ -219,6 +229,28 @@ var Categories = []Category{
 			"pkg/model/allowed_principals.go", "pkg/ui/access_principals.go",
 			// That only a person applies a run's requested grants.
 			"pkg/ui/task_access_request.go",
+			// The role gate for verified-identity sessions: whether a
+			// session is gated at all (resolveAccessRoles' Full), which
+			// routes a limited role reaches (humanRouteScopes,
+			// operatorOnlyRoutes) and the per-call check (roleGate,
+			// authorizeRoleCall).
+			"pkg/ui/access_roles.go",
+			// The built-in roles (grain/operator, viewer, contributor) and
+			// the deny/includes resolution every role and every agent's
+			// api:<set> grant expands through.
+			"pkg/model/api_scope_set.go",
+			// Which repositories' parked questions, secret requests,
+			// proposals and notifications a gma_ token reads through
+			// GET /api/inbox (inboxReadable), and its replies (CheckReply).
+			"pkg/ui/external_cli.go",
+			// The ghsa_ approval-callback bearer tokens: mint, expiry and
+			// lookup, their scoping to their task's callback routes, and
+			// where a person's approval of a host-script call is recorded.
+			"pkg/ui/local_script_approvals.go",
+			// Which listeners the daemon opens for the UI/API -- the
+			// -ui-addr one and the loopback approval-callback one -- and
+			// the HostGuard in front of each.
+			"pkg/daemon/ui_server.go",
 		},
 	},
 	{

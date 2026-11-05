@@ -353,6 +353,9 @@ func (s *Server) authorizeRoleCall(r *http.Request, pattern string, a *accessRol
 		// agent's is.
 		return nil
 	}
+	if (pattern == "GET /api/inbox" && strings.TrimSpace(r.URL.Query().Get("repo")) == "") || (isRepoNarrowedTasksRead(pattern, r) && repo == "") {
+		return nil
+	}
 	if a.allows(scope, repo) {
 		return nil
 	}

@@ -1833,4 +1833,25 @@ describe("DetailOverlay", () => {
       body: JSON.stringify({ model: "claude-opus-5" }),
     });
   });
+
+  it("renders externalRef as a link that filters the task list", async () => {
+    const onFilterExternalRef = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, externalRef: "CA-204" }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        onFilterExternalRef={onFilterExternalRef}
+        act={vi.fn()}
+      />,
+    );
+
+    const link = screen.getByRole("link", { name: "CA-204" });
+    expect(link).toHaveAttribute("href", "/?f=externalRef:any:CA-204");
+    await user.click(link);
+    expect(onFilterExternalRef).toHaveBeenCalledWith("CA-204");
+  });
 });

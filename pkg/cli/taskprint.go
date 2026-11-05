@@ -297,6 +297,9 @@ func taskBlock(t ui.Task) string {
 	if t.Issue > 0 {
 		fmt.Fprintf(&b, "issue:      #%d\n", t.Issue)
 	}
+	if t.ExternalRef != "" {
+		fmt.Fprintf(&b, "external ref: %s\n", t.ExternalRef)
+	}
 	if t.PullRequest != "" {
 		fmt.Fprintf(&b, "pull request: %s\n", t.PullRequest)
 	}

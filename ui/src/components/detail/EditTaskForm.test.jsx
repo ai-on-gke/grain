@@ -628,4 +628,28 @@ describe("DetailOverlay edit form", () => {
       expect(JSON.parse(api.mock.calls[0][1].body).priority).toBe(3);
     },
   );
+
+  it("edits and clears externalRef via the PATCH endpoint", async () => {
+    const act = vi.fn().mockResolvedValue(true);
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, externalRef: "CA-204" }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const refInput = screen.getByLabelText("External ref");
+    expect(refInput).toHaveValue("CA-204");
+    await user.clear(refInput);
+    await user.paste("CA-205");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    act.mock.calls[0][0]();
+    expect(JSON.parse(api.mock.calls[0][1].body).externalRef).toBe("CA-205");
+  });
 });
