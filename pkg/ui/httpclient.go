@@ -690,6 +690,12 @@ func (c *HTTPClient) statusError(resp *http.Response, plainText bool) error {
 	if resp.StatusCode == http.StatusUnauthorized && IsLoopbackURL(c.BaseURL) {
 		message += loopbackUnauthorizedHint()
 	}
+	if resp.StatusCode == http.StatusBadRequest {
+		lower := strings.ToLower(string(body))
+		if strings.Contains(lower, "http request") && strings.Contains(lower, "https") {
+			return fmt.Errorf("tls: %s", strings.TrimSpace(string(body)))
+		}
+	}
 	switch resp.StatusCode {
 	case http.StatusNotFound:
 		return &NotFoundError{message: message}

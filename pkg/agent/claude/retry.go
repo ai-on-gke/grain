@@ -414,6 +414,14 @@ func (f *Framework) runAttempts(ctx context.Context, s attemptSetup) attemptsRes
 		if p.sessionID != "" {
 			session = p.sessionID
 		}
+		if agent.IsHostdStop(runErr) {
+			// The hostd running claude is draining or disconnected past the
+			// reattach timeout: return the run to the queue with any
+			// carried or opened session intact rather than treating an
+			// unopened resume as a bad flag or retrying into the lost hostd.
+			out.events = p
+			break
+		}
 
 		// A resumed exec claude never opened a session for: it died with
 		// no "system"/"init" event, which is the first line of every

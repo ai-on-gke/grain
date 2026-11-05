@@ -182,12 +182,16 @@ func (h HostdHost) ReadTail(ctx context.Context, path string, limit int64) ([]by
 	return r.Data, r.Truncated, nil
 }
 
-// RemoveAll implements Host.
+// RemoveAll implements Host. On a dialing-in hostd that is not connected
+// right now (for instance, right after -hostd-reattach-timeout gave up with
+// ErrHostdLost), cleanup returns at once rather than waiting out Client.dial's
+// 30s retry window per file; the next run clears its own per-run files before
+// starting and PruneDir sweeps stale homes.
 func (h HostdHost) RemoveAll(ctx context.Context, path string) error {
 	if !h.remote() {
 		return h.LocalHost.RemoveAll(ctx, path)
 	}
-	_, err := h.stage(ctx, hostd.StageOp{Op: hostd.StageRemoveAll, Path: path})
+	_, err := h.stage(hostd.ForDisplay(ctx), hostd.StageOp{Op: hostd.StageRemoveAll, Path: path})
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}

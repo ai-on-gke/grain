@@ -2399,6 +2399,7 @@ type CapabilityAuditEntry struct {
 	Grant     string          `json:"grant"`
 	AttemptID string          `json:"attemptId"`
 	At        time.Time       `json:"at"`
+	Hostd     string          `json:"hostd,omitempty"`
 	Record    json.RawMessage `json:"record,omitempty"`
 	Note      string          `json:"note,omitempty"`
 }

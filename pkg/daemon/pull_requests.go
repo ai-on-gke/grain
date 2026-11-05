@@ -254,6 +254,38 @@ func (PullRequestGate) Close(ctx context.Context, ref string) error {
 	return opener.Close(ctx, ref)
 }
 
+func (PullRequestGate) AdoptPullRequest(ctx context.Context, in model.AdoptPullRequestInput) (model.PullRequestAdoption, error) {
+	opener := LivePullRequests.Load()
+	if opener == nil {
+		return model.PullRequestAdoption{}, errors.New(
+			"this daemon has no GitHub client yet: " +
+				"its reconcile loop has not started (or has failed -- check the daemon log)")
+	}
+	return opener.AdoptPullRequest(ctx, in)
+}
+
+func (PullRequestGate) ReviewPullRequest(ctx context.Context, in model.ReviewPullRequestInput) (model.PullRequestReviewFiling, error) {
+	opener := LivePullRequests.Load()
+	if opener == nil {
+		return model.PullRequestReviewFiling{}, errors.New(
+			"this daemon has no GitHub client yet: " +
+				"its reconcile loop has not started (or has failed -- check the daemon log)")
+	}
+	return opener.ReviewPullRequest(ctx, in)
+}
+
+func (PullRequestGate) PullRequestStatus(ctx context.Context, ref model.PullRequestRef, threads bool) (model.PullRequestReport, error) {
+	opener := LivePullRequests.Load()
+	if opener == nil {
+		return model.PullRequestReport{}, errors.New(
+			"this daemon has no GitHub client yet: " +
+				"its reconcile loop has not started (or has failed -- check the daemon log)")
+	}
+	return opener.PullRequestStatus(ctx, ref, threads)
+}
+
+var _ ui.PullRequestAdopter = PullRequestGate{}
+
 // AdoptPullRequest, ReviewPullRequest and PullRequestStatus make this a
 // ui.PullRequestAdopter: POST /api/pull-requests/adopt and /review and
 // GET /api/pull-requests/status (#XC-28, #XC-29), over orchestrator's

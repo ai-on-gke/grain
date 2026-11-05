@@ -1325,6 +1325,8 @@ func (f *Framework) endRun(stdout string, runErr error, notes []string, thread s
 		capacity = capacityFailure(events.failureText(), runErr)
 	}
 	switch {
+	case agent.IsHostdStop(runErr):
+		return annotate(partialResult(result, stdout)), agent.RunFailure("codex", "codex", nil, runErr)
 	case capped:
 		// The cap cancelled the subprocess, so runErr is that
 		// cancellation rather than a fault of codex's -- report the cap.
