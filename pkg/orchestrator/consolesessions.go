@@ -676,6 +676,7 @@ func undeliveredHumanComment(comments []model.Comment, obs *model.Observation, r
 func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.ConsoleSession,
 	task model.Task, now time.Time) error {
 
+	origSession := session
 	goal, err := deps.Store.TaskGoal(ctx, task.ID)
 	if err != nil {
 		return err
@@ -782,20 +783,38 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 	// between the two -- would leave a snapshot without an entry the task
 	// still carries, which every later sync would then keep as an
 	// operator's own edit.
+	offeredDefaults := model.ConsoleSessionDefaultGrants()
+	for _, id := range prev.OfferedDefaults {
+		if !slices.Contains(offeredDefaults, id) {
+			offeredDefaults = append(offeredDefaults, id)
+		}
+	}
+	snap := model.ConsoleSessionConfigSnapshot{
+		Capabilities:    session.Capabilities,
+		Reads:           session.Reads,
+		Writes:          session.Writes,
+		NetworkAccess:   configNetwork,
+		Model:           configModel,
+		Title:           configTitle,
+		TasksApproved:   session.TasksApproved,
+		KeepRunning:     session.KeepRunning,
+		GoogleChatSpace: session.GoogleChatSpace,
+		OfferedDefaults: offeredDefaults,
+		AutoReads:       autoReads,
+	}
+	sessionStale := func() (bool, error) {
+		latest, ok, err := storedConsoleSession(ctx, deps.Store, origSession.ID)
+		if err != nil {
+			return false, err
+		}
+		return !ok || !consoleSessionEqual(latest, origSession), nil
+	}
 	record := func() error {
-		return model.RecordSyncedConsoleSession(ctx, deps.Store, task.ID, model.ConsoleSessionConfigSnapshot{
-			Capabilities:    session.Capabilities,
-			Reads:           session.Reads,
-			Writes:          session.Writes,
-			NetworkAccess:   configNetwork,
-			Model:           configModel,
-			Title:           configTitle,
-			TasksApproved:   session.TasksApproved,
-			KeepRunning:     session.KeepRunning,
-			GoogleChatSpace: session.GoogleChatSpace,
-			OfferedDefaults: model.ConsoleSessionDefaultGrants(),
-			AutoReads:       autoReads,
-		})
+		stale, err := sessionStale()
+		if err != nil || stale {
+			return err
+		}
+		return model.RecordSyncedConsoleSession(ctx, deps.Store, task.ID, snap)
 	}
 
 	taskWrites := task.Writes
@@ -816,7 +835,13 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		slices.Equal(taskReads, reads) &&
 		slices.Equal(taskWrites, writes) &&
 		slices.Equal(taskLinks, links) {
+		if hasPrev && consoleSessionSnapshotEqual(prev, snap) {
+			return nil
+		}
 		return record()
+	}
+	if stale, err := sessionStale(); err != nil || stale {
+		return err
 	}
 	if err := deps.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
 		t.Title = title
@@ -836,6 +861,62 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		return err
 	}
 	return record()
+}
+
+func storedConsoleSession(ctx context.Context, store *model.Store, id string) (model.ConsoleSession, bool, error) {
+	stored, err := store.GetConfig(ctx)
+	if err != nil {
+		return model.ConsoleSession{}, false, err
+	}
+	cfg := model.DefaultConfig()
+	if stored != nil {
+		cfg = *stored
+	}
+	for _, s := range model.ConsoleSessionsOr(cfg.ConsoleSessions) {
+		if s.ID == id {
+			return s, true, nil
+		}
+	}
+	return model.ConsoleSession{}, false, nil
+}
+
+func consoleSessionEqual(a, b model.ConsoleSession) bool {
+	var readsAllA, readsAllB bool
+	if a.ReadsAll != nil {
+		readsAllA = *a.ReadsAll
+	}
+	if b.ReadsAll != nil {
+		readsAllB = *b.ReadsAll
+	}
+	return a.ID == b.ID &&
+		a.Title == b.Title &&
+		a.TitleSource == b.TitleSource &&
+		a.Team == b.Team &&
+		a.NetworkAccess == b.NetworkAccess &&
+		a.TasksApproved == b.TasksApproved &&
+		a.KeepRunning == b.KeepRunning &&
+		a.GoogleChatSpace == b.GoogleChatSpace &&
+		a.Model == b.Model &&
+		(a.ReadsAll == nil) == (b.ReadsAll == nil) &&
+		readsAllA == readsAllB &&
+		slices.Equal(a.Capabilities, b.Capabilities) &&
+		slices.Equal(a.DeclinedDefaults, b.DeclinedDefaults) &&
+		slices.Equal(a.Reads, b.Reads) &&
+		slices.Equal(a.Writes, b.Writes)
+}
+
+func consoleSessionSnapshotEqual(a, b model.ConsoleSessionConfigSnapshot) bool {
+	return a.NetworkAccess == b.NetworkAccess &&
+		a.Model == b.Model &&
+		a.Title == b.Title &&
+		a.TasksApproved == b.TasksApproved &&
+		a.KeepRunning == b.KeepRunning &&
+		a.GoogleChatSpace == b.GoogleChatSpace &&
+		slices.Equal(a.Capabilities, b.Capabilities) &&
+		slices.Equal(a.Reads, b.Reads) &&
+		slices.Equal(a.Writes, b.Writes) &&
+		slices.Equal(a.OfferedDefaults, b.OfferedDefaults) &&
+		slices.Equal(a.AutoReads, b.AutoReads)
 }
 
 func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSession,

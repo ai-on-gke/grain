@@ -667,42 +667,53 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 		return nil, validationErrorf("%v", err)
 	}
 	writable := !c.configRepoOnly(ctx)
+	var stateRepo model.RepoRef
+	var autoReads []model.RepoRef
 	if openTask != nil {
-		stateRepo := c.stateRepoRef()
-		var autoReads []model.RepoRef
+		stateRepo = c.stateRepoRef()
 		if req.Reads != nil || req.ReadsAll != nil {
 			autoReads, err = model.ConsoleSessionAutoReads(ctx, c.Store, session, stateRepo)
 			if err != nil {
 				return nil, err
 			}
 		}
+		if req.Capabilities != nil {
+			existingByCap := make(map[string]bool, len(openTask.Grants))
+			for _, g := range openTask.Grants {
+				existingByCap[g.Capability] = true
+			}
+			policy, configured, err := c.capabilityPolicyFor(ctx)
+			if err != nil {
+				return nil, err
+			}
+			for _, capID := range session.Capabilities {
+				if capID == "" || existingByCap[capID] {
+					continue
+				}
+				if model.IsCapabilityRef(capID) {
+					subject := model.CapabilitySubject{Repo: openTask.Target, Kind: model.CapabilityRunTask}
+					if err := policy.Permits(capID, subject, configured); err != nil {
+						return nil, validationErrorf("%v", err)
+					}
+				}
+				if err := c.catalogueEditRefusal(ctx, *openTask, capID); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	if writable {
+		cfg.ConsoleSessions = sessions
+		if err := c.Store.PutConfig(ctx, cfg); err != nil {
+			return nil, err
+		}
+	}
+	if openTask != nil {
 		if err := c.Store.UpdateTask(ctx, openTask.ID, func(t *model.Task) error {
 			if req.Title != nil {
 				t.Title = model.ConsoleSessionTitle(session)
 			}
 			if req.Capabilities != nil {
-				existingByCap := make(map[string]bool, len(t.Grants))
-				for _, g := range t.Grants {
-					existingByCap[g.Capability] = true
-				}
-				policy, configured, err := c.capabilityPolicyFor(ctx)
-				if err != nil {
-					return err
-				}
-				for _, capID := range session.Capabilities {
-					if capID == "" || existingByCap[capID] {
-						continue
-					}
-					if model.IsCapabilityRef(capID) {
-						subject := model.CapabilitySubject{Repo: t.Target, Kind: model.CapabilityRunTask}
-						if err := policy.Permits(capID, subject, configured); err != nil {
-							return validationErrorf("%v", err)
-						}
-					}
-					if err := c.catalogueEditRefusal(ctx, *t, capID); err != nil {
-						return err
-					}
-				}
 				newGrants := make([]model.Grant, 0, len(session.Capabilities)+1)
 				newGrants = append(newGrants, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
 				seen := map[string]bool{model.DurableCapability: true}
@@ -788,6 +799,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				TasksApproved:   session.TasksApproved,
 				KeepRunning:     session.KeepRunning,
 				GoogleChatSpace: session.GoogleChatSpace,
+				OfferedDefaults: model.ConsoleSessionDefaultGrants(),
 				AutoReads:       autoReads,
 			}); err != nil {
 				return nil, err
@@ -827,12 +839,6 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 			}); err != nil {
 				return nil, err
 			}
-		}
-	}
-	if writable {
-		cfg.ConsoleSessions = sessions
-		if err := c.Store.PutConfig(ctx, cfg); err != nil {
-			return nil, err
 		}
 	}
 	// An open session's edit went to its task without the settings guard
