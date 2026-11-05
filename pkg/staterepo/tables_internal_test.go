@@ -428,6 +428,12 @@ var notSettings = []string{
 	// declarative settings.
 	"secret_resolution_audit",
 	"credential_access_audit",
+	// Non-secret catalogue of secret names and keys stored in Google Cloud
+	// Secret Manager (-secrets-backend=secretmanager, design/design/registry.design.md):
+	// written live by secrets.Store alongside Secret Manager mutations, and
+	// kept out of grain/config so a config-repo merge never overwrites or
+	// erases the instance's secret catalogue.
+	"secret_entries",
 	// Operator notifications (model.Notification) and the subscriptions
 	// that wake durable tasks on them: grain's own running record of
 	// what it raised and who has seen it, rewritten every cycle, and
