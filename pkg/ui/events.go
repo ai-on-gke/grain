@@ -53,30 +53,30 @@ const (
 // attribution only -- never secret values, raw comment bodies, prompts,
 // transcripts, or CI failure logs.
 type IntegrationEvent struct {
-	ID              string                    `json:"id"`
+	ID              string                     `json:"id"`
 	Type            model.IntegrationEventType `json:"type"`
-	At              time.Time                 `json:"at"`
-	TaskID          string                    `json:"taskId"`
-	Repo            string                    `json:"repo,omitempty"`
-	PreviousState   model.State               `json:"previousState,omitempty"`
-	State           model.State               `json:"state,omitempty"`
-	QuestionSummary string                    `json:"questionSummary,omitempty"`
-	CommentID       int64                     `json:"commentId,omitempty"`
-	ExternalRef     string                    `json:"externalRef,omitempty"`
-	Origin          string                    `json:"origin,omitempty"`
-	PullRequest     string                    `json:"pullRequest,omitempty"`
-	FiledVia        string                    `json:"filedVia,omitempty"`
-	CIProvider      string                    `json:"ciProvider,omitempty"`
-	CIRunID         string                    `json:"ciRunId,omitempty"`
-	CICommit        string                    `json:"ciCommit,omitempty"`
-	CIConclusion    string                    `json:"ciConclusion,omitempty"`
-	CIDetail        string                    `json:"ciDetail,omitempty"`
-	Actor           string                    `json:"actor,omitempty"`
-	ActorKind       model.PrincipalKind       `json:"actorKind,omitempty"`
-	ActorSource     model.AuthSource          `json:"actorSource,omitempty"`
-	ActorLabel      string                    `json:"actorLabel,omitempty"`
-	OnBehalfOf      string                    `json:"onBehalfOf,omitempty"`
-	OnBehalfOfKind  model.PrincipalKind       `json:"onBehalfOfKind,omitempty"`
+	At              time.Time                  `json:"at"`
+	TaskID          string                     `json:"taskId"`
+	Repo            string                     `json:"repo,omitempty"`
+	PreviousState   model.State                `json:"previousState,omitempty"`
+	State           model.State                `json:"state,omitempty"`
+	QuestionSummary string                     `json:"questionSummary,omitempty"`
+	CommentID       int64                      `json:"commentId,omitempty"`
+	ExternalRef     string                     `json:"externalRef,omitempty"`
+	Origin          string                     `json:"origin,omitempty"`
+	PullRequest     string                     `json:"pullRequest,omitempty"`
+	FiledVia        string                     `json:"filedVia,omitempty"`
+	CIProvider      string                     `json:"ciProvider,omitempty"`
+	CIRunID         string                     `json:"ciRunId,omitempty"`
+	CICommit        string                     `json:"ciCommit,omitempty"`
+	CIConclusion    string                     `json:"ciConclusion,omitempty"`
+	CIDetail        string                     `json:"ciDetail,omitempty"`
+	Actor           string                     `json:"actor,omitempty"`
+	ActorKind       model.PrincipalKind        `json:"actorKind,omitempty"`
+	ActorSource     model.AuthSource           `json:"actorSource,omitempty"`
+	ActorLabel      string                     `json:"actorLabel,omitempty"`
+	OnBehalfOf      string                     `json:"onBehalfOf,omitempty"`
+	OnBehalfOfKind  model.PrincipalKind        `json:"onBehalfOfKind,omitempty"`
 }
 
 // EventsResponse is GET /api/events's JSON envelope for immediate and
