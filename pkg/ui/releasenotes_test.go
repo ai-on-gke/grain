@@ -316,3 +316,41 @@ func TestReleaseNotesRefuseWhatIsNoLongerNotes(t *testing.T) {
 		t.Error("a week filed under a period nothing else spells that way was accepted")
 	}
 }
+
+func TestClusterStatsAndReleaseNotePeriodReadDeploymentTimeZone(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	if err := store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		cfg.TimeZone = "America/Los_Angeles"
+		return nil
+	}); err != nil {
+		t.Fatalf("setting Config.TimeZone: %v", err)
+	}
+	// 2026-11-04T02:30:00Z is Tuesday 2026-11-03 18:30 PST in America/Los_Angeles.
+	c.Now = func() time.Time { return time.Date(2026, 11, 4, 2, 30, 0, 0, time.UTC) }
+
+	today, err := c.ClusterStats(ctx, "today")
+	if err != nil {
+		t.Fatalf("ClusterStats(today): %v", err)
+	}
+	if today.Period != "2026-11-03" {
+		t.Errorf("today Period = %q, want 2026-11-03 on America/Los_Angeles clock", today.Period)
+	}
+
+	// 2026-11-02T03:00:00Z is Sunday 2026-11-01 19:00 PST (still ISO week W44 in LA, though Monday W45 in UTC).
+	c.Now = func() time.Time { return time.Date(2026, 11, 2, 3, 0, 0, 0, time.UTC) }
+	defStats, err := c.ClusterStats(ctx, "")
+	if err != nil {
+		t.Fatalf("ClusterStats(\"\"): %v", err)
+	}
+	if defStats.Period != "2026-W43" {
+		t.Errorf("default ClusterStats Period = %q, want 2026-W43 while W44 is still Sunday evening in LA", defStats.Period)
+	}
+	note, err := c.PutReleaseNote(ctx, "", "Week 43", "Summary.", model.Principal{})
+	if err != nil {
+		t.Fatalf("PutReleaseNote(\"\"): %v", err)
+	}
+	if note.Period != defStats.Period {
+		t.Errorf("PutReleaseNote Period = %q, want %q matching ClusterStats", note.Period, defStats.Period)
+	}
+}

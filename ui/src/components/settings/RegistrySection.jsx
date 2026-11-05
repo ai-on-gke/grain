@@ -247,7 +247,7 @@ export default function RegistrySection({ s }) {
             {conflicts
               .map(
                 (c) =>
-                  `${c.repo}${c.path_prefix ? ` (${c.path_prefix})` : ""} already claimed as primary by ${c.conflict_with}`,
+                  `${c.repo}${c.path_prefix ? ` (${c.path_prefix})` : ""} already claimed as primary by ${c.conflicting_entry || "another entry"}`,
               )
               .join("; ")}
           </Alert>
@@ -446,21 +446,6 @@ export default function RegistrySection({ s }) {
             onBlur={onRegistryTextBlur("purpose")}
             onKeyDown={onEnterKey}
             autoComplete="off"
-            fullWidth
-            margin="normal"
-          />
-
-          <TextField
-            key={`registryExternalUrl-${reg.externalUrl || ""}`}
-            name="registryExternalUrl"
-            data-setting-id="registryExternalUrl"
-            label="External URL"
-            helperText="Optional https:// URL where operators open this grain directly from the registry directory."
-            defaultValue={reg.externalUrl || ""}
-            onBlur={onRegistryTextBlur("externalUrl")}
-            onKeyDown={onEnterKey}
-            autoComplete="off"
-            inputProps={identifierField}
             fullWidth
             margin="normal"
           />

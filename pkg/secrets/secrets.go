@@ -215,10 +215,13 @@ type Config struct {
 	KeyFile string
 }
 
-// Store resolves a name to secret material held in an encrypted file.
-// The zero value is not useful; build one with Open or New.
+// Store resolves a name to secret material held in an encrypted file or in
+// Google Cloud Secret Manager. The zero value is not useful; build one with
+// Open, New, or OpenSecretManager.
 type Store struct {
+	backend string
 	cfg     Config
+	sm      *smBackend
 	openErr error // set instead of a usable store when Open could not prepare one
 	// created records that Open minted the key itself, which the daemon
 	// reports once at startup: a key nobody has backed up yet is the one
@@ -232,6 +235,15 @@ type Store struct {
 	// ensureMu makes Ensure's check-then-set one step, so two attaches
 	// of the same server never generate two values.
 	ensureMu sync.Mutex
+}
+
+// Backend reports which storage backend this Store uses (BackendFile or
+// BackendSecretManager).
+func (s *Store) Backend() string {
+	if s.backend == BackendSecretManager {
+		return BackendSecretManager
+	}
+	return BackendFile
 }
 
 // SetAuditLogger sets the audit logger for secret resolution events.
@@ -255,7 +267,7 @@ func (s *Store) SetAuditLogger(l AuditLogger) {
 // storage and a key on disk, and the operator can go and put that key
 // somewhere safe whenever they like.
 func Open(cfg Config) *Store {
-	s := &Store{cfg: cfg}
+	s := &Store{backend: BackendFile, cfg: cfg}
 	if cfg.File == "" || cfg.KeyFile == "" {
 		s.openErr = errors.New("secrets: both a file and a key file are required")
 		return s
@@ -316,6 +328,9 @@ func (s *Store) PublicKey() (string, error) {
 	if err := s.ready(); err != nil {
 		return "", err
 	}
+	if s.backend == BackendSecretManager {
+		return "", nil
+	}
 	key, err := ReadKeyFile(s.cfg.KeyFile)
 	if err != nil {
 		return "", err
@@ -339,6 +354,9 @@ func (s *Store) PublicKey() (string, error) {
 // regenerated, and an operator who pastes yesterday's key over today's
 // must be able to get today's back.
 func (s *Store) ImportKey(k Key) error {
+	if s.backend == BackendSecretManager {
+		return errors.New("secrets: key import applies only to the encrypted-file backend, not secretmanager")
+	}
 	if k.priv == nil {
 		return errors.New("secrets: no key to import")
 	}
@@ -386,6 +404,12 @@ func (s *Store) ImportKey(k Key) error {
 // where they can fix it, rather than something they discover when a run
 // fails to resolve a credential.
 func (s *Store) Check() error {
+	if s.backend == BackendSecretManager {
+		if err := s.ready(); err != nil {
+			return err
+		}
+		return s.sm.check(context.Background())
+	}
 	_, err := s.load()
 	return err
 }
@@ -533,38 +557,50 @@ func (s *Store) Resolve(ctx context.Context, name string) (string, error) {
 	if explicit && !validComponent(key) {
 		return "", fmt.Errorf("secrets: %q names no valid key after %q/", name, secret)
 	}
-	c, err := s.load()
-	if err != nil {
-		return "", err
-	}
-	keys, ok := c.Secrets[secret]
-	if !ok || len(keys) == 0 {
-		return "", fmt.Errorf("%w named %q", ErrNoSecret, secret)
-	}
-	if !explicit {
-		if len(keys) != 1 {
-			names := make([]string, 0, len(keys))
-			for k := range keys {
-				names = append(names, k)
+	var resolvedVal string
+	if s.backend == BackendSecretManager {
+		if err := s.ready(); err != nil {
+			return "", err
+		}
+		var err error
+		key, resolvedVal, err = s.sm.resolve(ctx, secret, key, explicit)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		c, err := s.load()
+		if err != nil {
+			return "", err
+		}
+		keys, ok := c.Secrets[secret]
+		if !ok || len(keys) == 0 {
+			return "", fmt.Errorf("%w named %q", ErrNoSecret, secret)
+		}
+		if !explicit {
+			if len(keys) != 1 {
+				names := make([]string, 0, len(keys))
+				for k := range keys {
+					names = append(names, k)
+				}
+				sort.Strings(names)
+				return "", fmt.Errorf(
+					"secrets: secret %q has %d keys (%s), name one explicitly as %q",
+					secret, len(keys), strings.Join(names, ", "), secret+"/<key>")
 			}
-			sort.Strings(names)
-			return "", fmt.Errorf(
-				"secrets: secret %q has %d keys (%s), name one explicitly as %q",
-				secret, len(keys), strings.Join(names, ", "), secret+"/<key>")
+			for k := range keys {
+				key = k
+			}
 		}
-		for k := range keys {
-			key = k
+		encoded, ok := keys[key]
+		if !ok {
+			return "", fmt.Errorf("secrets: no key %q in secret %q", key, secret)
 		}
+		value, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return "", fmt.Errorf("secrets: %q in secret %q is corrupt: %w", key, secret, err)
+		}
+		resolvedVal = string(value)
 	}
-	encoded, ok := keys[key]
-	if !ok {
-		return "", fmt.Errorf("secrets: no key %q in secret %q", key, secret)
-	}
-	value, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return "", fmt.Errorf("secrets: %q in secret %q is corrupt: %w", key, secret, err)
-	}
-	resolvedVal := string(value)
 	s.mu.Lock()
 	logger := s.auditLogger
 	s.mu.Unlock()
@@ -581,6 +617,52 @@ func (s *Store) Resolve(ctx context.Context, name string) (string, error) {
 	return resolvedVal, nil
 }
 
+// SecretValue holds one stored key's resolved value, returned by KnownValues
+// for journal and namespace output redaction without emitting a secret
+// resolution audit event.
+type SecretValue struct {
+	SecretName string
+	Key        string
+	Value      string
+}
+
+// KnownValues reads every stored secret key and value for redaction, without
+// recording an AuditEntry on the configured AuditLogger.
+func (s *Store) KnownValues(ctx context.Context) ([]SecretValue, error) {
+	if s.backend == BackendSecretManager {
+		if err := s.ready(); err != nil {
+			return nil, err
+		}
+		return s.sm.knownValues(ctx)
+	}
+	c, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(c.Secrets))
+	for name := range c.Secrets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var out []SecretValue
+	for _, name := range names {
+		keysMap := c.Secrets[name]
+		keys := make([]string, 0, len(keysMap))
+		for k := range keysMap {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			val, err := base64.StdEncoding.DecodeString(keysMap[k])
+			if err != nil {
+				return nil, fmt.Errorf("secrets: %q in secret %q is corrupt: %w", k, name, err)
+			}
+			out = append(out, SecretValue{SecretName: name, Key: k, Value: string(val)})
+		}
+	}
+	return out, nil
+}
+
 // SecretInfo names one secret and the keys it currently holds.
 type SecretInfo struct {
 	Name string   `json:"name"`
@@ -590,6 +672,12 @@ type SecretInfo struct {
 // List reports every secret currently stored, the keys each one
 // holds, sorted by name for a stable, diffable rendering.
 func (s *Store) List() ([]SecretInfo, error) {
+	if s.backend == BackendSecretManager {
+		if err := s.ready(); err != nil {
+			return nil, err
+		}
+		return s.sm.list(context.Background())
+	}
 	c, err := s.load()
 	if err != nil {
 		return nil, err
@@ -617,6 +705,12 @@ func (s *Store) Set(secret, key string, value []byte) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.backend == BackendSecretManager {
+		if err := s.ready(); err != nil {
+			return err
+		}
+		return s.sm.set(context.Background(), secret, key, value)
+	}
 	c, err := s.load()
 	if err != nil {
 		return err
@@ -632,6 +726,12 @@ func (s *Store) Set(secret, key string, value []byte) error {
 func (s *Store) Has(secret, key string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.backend == BackendSecretManager {
+		if err := s.ready(); err != nil {
+			return false, err
+		}
+		return s.sm.has(context.Background(), secret, key)
+	}
 	c, err := s.load()
 	if err != nil {
 		return false, err
@@ -650,6 +750,12 @@ func (s *Store) DeleteKey(secret, key string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.backend == BackendSecretManager {
+		if err := s.ready(); err != nil {
+			return err
+		}
+		return s.sm.deleteKey(context.Background(), secret, key)
+	}
 	c, err := s.load()
 	if err != nil {
 		return err
@@ -671,6 +777,12 @@ func (s *Store) DeleteSecret(secret string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.backend == BackendSecretManager {
+		if err := s.ready(); err != nil {
+			return err
+		}
+		return s.sm.deleteSecret(context.Background(), secret)
+	}
 	c, err := s.load()
 	if err != nil {
 		return err

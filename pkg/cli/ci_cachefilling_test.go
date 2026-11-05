@@ -37,8 +37,8 @@ import (
 func TestCacheFillingJobsIncludeTheOneGrainAddsForItself(t *testing.T) {
 	t.Parallel()
 	store := testStore(t)
-	repo := model.RepoRef{Owner: "bwsalmon", Name: "grain"}
-	const ourGuest = "ghcr.io/bwsalmon/grain/guest:latest"
+	repo := model.RepoRef{Owner: "ai-on-gke", Name: "grain"}
+	const ourGuest = "docker.io/grainai/sandbox:latest"
 
 	// Releases off and nothing named: the state pressing one button
 	// leaves behind, and the branch warm has to know about it too.
@@ -49,7 +49,7 @@ func TestCacheFillingJobsIncludeTheOneGrainAddsForItself(t *testing.T) {
 		t.Fatal(err)
 	}
 	jobs := daemon.CiCacheFillingJobs(store, ourGuest)
-	if got := jobs("bwsalmon/grain"); !slices.Equal(got, []string{model.SandboxGuestCacheJob}) {
+	if got := jobs("ai-on-gke/grain"); !slices.Equal(got, []string{model.SandboxGuestCacheJob}) {
 		t.Fatalf("the branch warm may dispatch %v, want %s: the base branch and the branches have "+
 			"to agree about one repository, or the cache follows main and nothing else",
 			got, model.SandboxGuestCacheJob)
@@ -58,7 +58,7 @@ func TestCacheFillingJobsIncludeTheOneGrainAddsForItself(t *testing.T) {
 	// And a deployment running somebody else's guest reads the stored
 	// list and nothing more, which is every other deployment.
 	elsewhere := daemon.CiCacheFillingJobs(store, "ghcr.io/other/project/guest:latest")
-	if got := elsewhere("bwsalmon/grain"); len(got) != 0 {
+	if got := elsewhere("ai-on-gke/grain"); len(got) != 0 {
 		t.Fatalf("the branch warm may dispatch %v for a repository this deployment depends on "+
 			"nothing of", got)
 	}

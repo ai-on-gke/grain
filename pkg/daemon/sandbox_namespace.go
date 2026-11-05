@@ -57,6 +57,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -79,6 +80,15 @@ type inProcessAPI struct {
 	handler atomic.Pointer[http.Handler]
 }
 
+// cancelOnlyContext propagates cancellation and deadlines from parent while
+// hiding outer request context values (such as externalToken or agentCall) so
+// in-process subrequests authenticate independently as the deployment actor.
+type cancelOnlyContext struct {
+	context.Context
+}
+
+func (cancelOnlyContext) Value(any) any { return nil }
+
 // Set publishes h as the handler requests are answered by.
 func (a *inProcessAPI) Set(h http.Handler) { a.handler.Store(&h) }
 
@@ -90,7 +100,7 @@ func (a *inProcessAPI) RoundTrip(req *http.Request) (*http.Response, error) {
 	if h == nil {
 		return nil, errors.New("grain's API is not serving yet")
 	}
-	in := req.Clone(req.Context())
+	in := req.Clone(cancelOnlyContext{req.Context()})
 	in.RequestURI = in.URL.RequestURI()
 	in.RemoteAddr = ""
 	in.Host = "localhost"
@@ -134,7 +144,7 @@ func (a *inProcessAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "grain's API is not serving yet", http.StatusServiceUnavailable)
 		return
 	}
-	in := r.Clone(r.Context())
+	in := r.Clone(cancelOnlyContext{r.Context()})
 	in.RequestURI = in.URL.RequestURI()
 	in.RemoteAddr = ""
 	in.Host = "localhost"
@@ -161,6 +171,7 @@ func inProcessAPIClient(api http.RoundTripper) *ui.HTTPClient {
 type SandboxNamespaceConfig struct {
 	DataDir      string
 	Store        *model.Store
+	SecretStore  *secrets.Store
 	GithubHost   string
 	InsecureHTTP bool
 	// API is what the readers' requests are answered by; LiveAPI in
@@ -184,7 +195,7 @@ func WireSandboxNamespace(ns *namespace.Server, cfg SandboxNamespaceConfig) *San
 func wireSandboxNamespace(ns *namespace.Server, cfg sandboxNamespaceConfig) *sandboxCLIBackend {
 	client := inProcessAPIClient(cfg.API)
 	ns.Tasks = mcp.NamespaceTasks{Reader: namespaceTaskReader{DaemonTasks: DaemonTasks{Client: client}, store: cfg.Store}}
-	ns.Deploy = sandboxDeploy{client: client, stateDir: StateRepoDir(cfg.DataDir), secretsDir: SecretsDir(cfg.DataDir), logSources: cfg.GrainLogSources}
+	ns.Deploy = sandboxDeploy{client: client, stateDir: StateRepoDir(cfg.DataDir), secretsDir: SecretsDir(cfg.DataDir), secretStore: cfg.SecretStore, logSources: cfg.GrainLogSources}
 	if cfg.Store != nil {
 		ns.Memory = sandboxMemory{store: cfg.Store}
 		ns.Config = sandboxRepoConfig{store: cfg.Store}
@@ -226,6 +237,7 @@ func (r namespaceTaskReader) AttemptPrompt(ctx context.Context, id string, attem
 type sandboxDeploy struct {
 	client               *ui.HTTPClient
 	stateDir, secretsDir string
+	secretStore          *secrets.Store
 	logSources           []grainlog.Source
 }
 
@@ -339,7 +351,7 @@ func pipelineChangesReadCommand(cursor string, limit int) string {
 // next read (grainLogRedactor reads the store each time).
 func (d sandboxDeploy) health() []mcp.Tool {
 	var redactFn func(string) string
-	if redactor := grainLogRedactor(d.secretsDir); redactor != nil {
+	if redactor := grainLogRedactorFor(d.secretsDir, d.secretStore); redactor != nil {
 		redactFn = func(s string) string { lines, _ := redactor.Redact([]string{s}); return lines[0] }
 	}
 	return deploymenthealth.Tools(deploymenthealth.Config{
@@ -385,7 +397,7 @@ func (d sandboxDeploy) ListStateTables(ctx context.Context) ([]string, error) {
 // only ever seeing it -- and the reading task named on the tool's audit
 // line, which said "(no task)" for every `grain log` before.
 func (d sandboxDeploy) ReadGrainLog(ctx context.Context, source string, q namespace.GrainLogQuery) (string, error) {
-	tool := grainlog.Tools(grainlog.Config{TaskID: q.TaskID, Redactor: grainLogRedactor(d.secretsDir), Sources: d.logSources})[0]
+	tool := grainlog.Tools(grainlog.Config{TaskID: q.TaskID, Redactor: grainLogRedactorFor(d.secretsDir, d.secretStore), Sources: d.logSources})[0]
 	return toolText(tool.Handler(ctx, grainLogArgs(source, q)))
 }
 

@@ -76,6 +76,12 @@ func (c Config) InferRegistryHostKind() api.HostKind {
 // its expiration time (or zero time if the JWT's own exp claim should be read).
 type OIDCTokenFunc func(ctx context.Context, audience string) (string, time.Time, error)
 
+// RegistryTunnelConnector is the seam for the outbound multiplexed proxy tunnel
+// (`/api/entries/<name>/connect` via api.ConnectMux).
+type RegistryTunnelConnector interface {
+	RunTunnel(ctx context.Context, cfg api.ConnectConfig) error
+}
+
 // RegistryManagerOptions configures a RegistryManager.
 type RegistryManagerOptions struct {
 	Store             *model.Store
@@ -88,7 +94,7 @@ type RegistryManagerOptions struct {
 	HTTPClient        *http.Client
 	AllowInsecureHTTP bool
 	OIDCTokenSource   OIDCTokenFunc
-	TunnelConnector   api.TunnelConnector
+	TunnelConnector   RegistryTunnelConnector
 
 	BaseInterval   time.Duration
 	MinInterval    time.Duration
@@ -138,7 +144,7 @@ type RegistryManager struct {
 	cachedOIDCExpiry       time.Time
 
 	tunnelMu        sync.Mutex
-	tunnelConnector api.TunnelConnector
+	tunnelConnector RegistryTunnelConnector
 	tunnelKey       string
 	tunnelCancel    context.CancelFunc
 	tunnelDone      chan struct{}
@@ -204,8 +210,8 @@ func defaultRegistryHealth() (api.HealthState, string) {
 }
 
 // SetTunnelConnector attaches or replaces the outbound proxy tunnel connector
-// seam reserved for connect_mode = 'tunnel' (design/design/registry.design.md).
-func (m *RegistryManager) SetTunnelConnector(tc api.TunnelConnector) {
+// seam reserved for `/api/entries/<name>/connect` (design/design/registry.design.md).
+func (m *RegistryManager) SetTunnelConnector(tc RegistryTunnelConnector) {
 	if m == nil {
 		return
 	}
@@ -495,29 +501,35 @@ func (m *RegistryManager) step(parentCtx context.Context) (time.Duration, error)
 		return m.recordFailure(credErr), credErr
 	}
 
-	client, err := api.NewClient(
-		inputs.regCfg.URL,
-		api.WithHTTPClient(m.opts.HTTPClient),
-		api.WithAllowInsecureHTTP(m.opts.AllowInsecureHTTP),
-		api.WithTokenSource(tokenSource),
-		api.WithUserAgent(registryUserAgent(inputs.grainVersion)),
-	)
+	clientCfg := api.ClientConfig{
+		BaseURL:           inputs.regCfg.URL,
+		HTTPClient:        m.opts.HTTPClient,
+		AllowInsecureHTTP: m.opts.AllowInsecureHTTP,
+		UserAgent:         registryUserAgent(inputs.grainVersion),
+	}
+	if strings.HasPrefix(initialTok, api.RegistrationTokenPrefix) {
+		clientCfg.RegistrationToken = initialTok
+	} else {
+		clientCfg.IDToken = tokenSource
+	}
+	client, err := api.NewClient(clientCfg)
 	if err != nil {
 		return m.recordFailure(err), err
 	}
 
-	apiScopes := model.ToAPIScopes(inputs.scopes)
+	scopeInputs := model.ToScopeInputs(inputs.scopes)
+	hbScopes := model.ToHeartbeatScopes(inputs.scopes)
 	metaKey := metadataFingerprint(inputs.regCfg, inputs.hostKind)
 
 	// In OIDC mode, ensure the connected entry exists and keep owner-managed
-	// catalog metadata (display_name, purpose, host_kind, listed, external_url,
-	// owner_group, tags) in sync via PATCH / POST /api/entries.
+	// catalog metadata (display_name, purpose, host_kind, listed, owner_group,
+	// tags) in sync via PATCH / POST /api/entries.
 	if inputs.regCfg.EffectiveAuthMode() == model.RegistryAuthOIDC {
 		m.mu.Lock()
 		alreadySynced := m.syncedMetaKey == metaKey
 		m.mu.Unlock()
 		if !alreadySynced {
-			if syncErr := m.syncConnectedEntryMetadata(reqCtx, client, inputs.regCfg, inputs.hostKind, apiScopes); syncErr != nil {
+			if syncErr := m.syncConnectedEntryMetadata(reqCtx, client, inputs.regCfg, inputs.hostKind, scopeInputs); syncErr != nil {
 				if api.IsUnauthorized(syncErr) {
 					m.invalidateOIDCCache()
 				}
@@ -533,22 +545,19 @@ func (m *RegistryManager) step(parentCtx context.Context) (time.Duration, error)
 	hbReq := api.HeartbeatRequest{
 		GrainVersion:       inputs.grainVersion,
 		GrainCommit:        inputs.grainCommit,
+		HostKind:           inputs.hostKind,
 		Health:             inputs.health,
 		HealthDetail:       inputs.healthDetail,
 		ActiveTasks:        inputs.activeTasks,
 		AwaitingReplyTasks: inputs.awaitingReplyTasks,
-		HostKind:           inputs.hostKind,
-		ExternalURL:        inputs.regCfg.ExternalURL,
-		DisplayName:        inputs.regCfg.DisplayName,
-		Purpose:            inputs.regCfg.Purpose,
-		Scopes:             apiScopes,
+		Scopes:             hbScopes,
 	}
 
 	resp, err := client.Heartbeat(reqCtx, inputs.regCfg.Entry, hbReq)
 	if err != nil && api.IsNotFound(err) && !strings.HasPrefix(initialTok, api.RegistrationTokenPrefix) {
 		// Entry was missing or recreated on the registry while authenticating with
 		// a creator/OIDC token: self-register as a connected entry and retry once.
-		if createErr := m.createConnectedEntry(reqCtx, client, inputs.regCfg, inputs.hostKind, apiScopes); createErr == nil {
+		if createErr := m.createConnectedEntry(reqCtx, client, inputs.regCfg, inputs.hostKind, scopeInputs); createErr == nil {
 			m.mu.Lock()
 			m.syncedMetaKey = metaKey
 			m.registered = true
@@ -565,7 +574,7 @@ func (m *RegistryManager) step(parentCtx context.Context) (time.Duration, error)
 		return m.recordFailure(err), err
 	}
 
-	interval := m.clampInterval(resp.Interval())
+	interval := m.clampInterval(time.Duration(resp.NextIntervalSeconds) * time.Second)
 	delay := m.jitter(interval)
 	now := m.opts.Now().UTC()
 	next := now.Add(delay)
@@ -583,21 +592,20 @@ func (m *RegistryManager) step(parentCtx context.Context) (time.Duration, error)
 	m.heartbeatIntervalSeconds = int(interval / time.Second)
 	m.consecutiveFailures = 0
 	m.lastError = ""
-	m.scopeConflicts = slices.Clone(resp.ScopeConflicts)
+	m.scopeConflicts = slices.Clone(resp.Conflicts)
 	m.mu.Unlock()
 
 	if wasFailing {
 		m.opts.Logf("grain daemon: registry heartbeat to %s (%s) recovered", inputs.regCfg.URL, inputs.regCfg.Entry)
 	}
 
-	m.ensureTunnel(parentCtx, client, inputs.regCfg)
+	m.ensureTunnel(parentCtx, inputs, initialTok, tokenSource)
 	return delay, nil
 }
 
-func (m *RegistryManager) syncConnectedEntryMetadata(ctx context.Context, client *api.Client, cfg model.RegistryConfig, hostKind api.HostKind, scopes []api.Scope) error {
+func (m *RegistryManager) syncConnectedEntryMetadata(ctx context.Context, client *api.Client, cfg model.RegistryConfig, hostKind api.HostKind, scopes []api.ScopeInput) error {
 	dn := cfg.DisplayName
 	purpose := cfg.Purpose
-	extURL := cfg.ExternalURL
 	ownerGroup := cfg.OwnerGroup
 	listed := cfg.Listed
 	tags := slices.Clone(cfg.Tags)
@@ -608,7 +616,6 @@ func (m *RegistryManager) syncConnectedEntryMetadata(ctx context.Context, client
 		DisplayName: &dn,
 		Purpose:     &purpose,
 		HostKind:    &hostKind,
-		ExternalURL: &extURL,
 		OwnerGroup:  &ownerGroup,
 		Listed:      &listed,
 		Tags:        &tags,
@@ -622,20 +629,18 @@ func (m *RegistryManager) syncConnectedEntryMetadata(ctx context.Context, client
 	return err
 }
 
-func (m *RegistryManager) createConnectedEntry(ctx context.Context, client *api.Client, cfg model.RegistryConfig, hostKind api.HostKind, scopes []api.Scope) error {
+func (m *RegistryManager) createConnectedEntry(ctx context.Context, client *api.Client, cfg model.RegistryConfig, hostKind api.HostKind, scopes []api.ScopeInput) error {
 	listed := cfg.Listed
 	_, err := client.CreateEntry(ctx, api.CreateEntryRequest{
 		Name:        cfg.Entry,
 		Kind:        api.KindConnected,
 		HostKind:    hostKind,
-		ExternalURL: cfg.ExternalURL,
 		DisplayName: cfg.DisplayName,
 		Purpose:     cfg.Purpose,
 		OwnerGroup:  cfg.OwnerGroup,
 		Listed:      &listed,
 		Tags:        slices.Clone(cfg.Tags),
 		Scopes:      scopes,
-		MintToken:   false,
 	})
 	if err != nil && api.IsConflict(err) {
 		// Concurrent creation by another replica or CLI: check whether our
@@ -654,8 +659,8 @@ func (m *RegistryManager) recordFailure(err error) time.Duration {
 	failures := m.consecutiveFailures
 	m.lastError = redactedErr
 	var apiErr *api.APIError
-	if errors.As(err, &apiErr) && len(apiErr.Conflicts) > 0 {
-		m.scopeConflicts = slices.Clone(apiErr.Conflicts)
+	if errors.As(err, &apiErr) && apiErr.Conflict != nil {
+		m.scopeConflicts = []api.ScopeConflict{*apiErr.Conflict}
 	}
 	backoff := m.computeBackoff(failures, apiErr)
 	next := now.Add(backoff)
@@ -818,8 +823,16 @@ func (m *RegistryManager) resolveRegistrationSecret(ctx context.Context) (string
 
 	val, err := m.opts.Secrets.Resolve(
 		secrets.WithPrincipal(ctx, "daemon/registry"),
-		secrets.RegistryRegistrationTokenSecret,
+		secrets.RegistryRegistrationTokenSecret+"/"+secrets.AgentCredentialKey,
 	)
+	if err != nil {
+		if altVal, altErr := m.opts.Secrets.Resolve(
+			secrets.WithPrincipal(ctx, "daemon/registry"),
+			secrets.RegistryRegistrationTokenSecret,
+		); altErr == nil {
+			val, err = altVal, nil
+		}
+	}
 	return strings.TrimSpace(val), err
 }
 
@@ -915,7 +928,7 @@ func parseJWTExpiry(token string) time.Time {
 	return time.Unix(claims.Exp, 0)
 }
 
-func (m *RegistryManager) ensureTunnel(parentCtx context.Context, client *api.Client, cfg model.RegistryConfig) {
+func (m *RegistryManager) ensureTunnel(parentCtx context.Context, inputs registryStepInputs, initialTok string, tokenSource func(context.Context) (string, error)) {
 	m.tunnelMu.Lock()
 	tc := m.tunnelConnector
 	if tc == nil {
@@ -923,6 +936,7 @@ func (m *RegistryManager) ensureTunnel(parentCtx context.Context, client *api.Cl
 		m.stopTunnel()
 		return
 	}
+	cfg := inputs.regCfg
 	key := fmt.Sprintf("%s|%s|%s", cfg.URL, cfg.Entry, cfg.EffectiveAuthMode())
 	if m.tunnelCancel != nil && m.tunnelKey == key {
 		select {
@@ -948,12 +962,26 @@ func (m *RegistryManager) ensureTunnel(parentCtx context.Context, client *api.Cl
 		<-prevDone
 	}
 
-	go func(entry string) {
+	connCfg := api.ConnectConfig{
+		BaseURL:           cfg.URL,
+		Entry:             cfg.Entry,
+		GrainVersion:      inputs.grainVersion,
+		GrainCommit:       inputs.grainCommit,
+		HostKind:          inputs.hostKind,
+		AllowInsecureHTTP: m.opts.AllowInsecureHTTP,
+	}
+	if strings.HasPrefix(initialTok, api.RegistrationTokenPrefix) {
+		connCfg.RegistrationToken = initialTok
+	} else {
+		connCfg.IDToken = tokenSource
+	}
+
+	go func(c api.ConnectConfig) {
 		defer close(done)
-		if err := tc.RunTunnel(tunCtx, client, entry); err != nil && !errors.Is(err, context.Canceled) {
-			m.opts.Logf("grain daemon: registry tunnel (%s) stopped: %v", entry, err)
+		if err := tc.RunTunnel(tunCtx, c); err != nil && !errors.Is(err, context.Canceled) {
+			m.opts.Logf("grain daemon: registry tunnel (%s) stopped: %v", c.Entry, err)
 		}
-	}(cfg.Entry)
+	}(connCfg)
 }
 
 func (m *RegistryManager) stopTunnel() {
@@ -979,7 +1007,6 @@ func metadataFingerprint(cfg model.RegistryConfig, hostKind api.HostKind) string
 		Purpose     string       `json:"p"`
 		HostKind    api.HostKind `json:"hk"`
 		Listed      bool         `json:"l"`
-		ExternalURL string       `json:"ext"`
 		OwnerGroup  string       `json:"og"`
 		Tags        []string     `json:"t"`
 	}{
@@ -989,7 +1016,6 @@ func metadataFingerprint(cfg model.RegistryConfig, hostKind api.HostKind) string
 		Purpose:     cfg.Purpose,
 		HostKind:    hostKind,
 		Listed:      cfg.Listed,
-		ExternalURL: cfg.ExternalURL,
 		OwnerGroup:  cfg.OwnerGroup,
 		Tags:        cfg.Tags,
 	})

@@ -399,6 +399,9 @@ func stateRepoSyncFailure(stateRepo ui.StateRepoManager) func() *ui.StateRepoSyn
 // that is one push behind for thirty seconds rather than one that is
 // wrong.
 func (m *StateManager) syncSecrets(ctx context.Context) {
+	if m.secrets != nil && m.secrets.Backend() == secrets.BackendSecretManager {
+		return
+	}
 	repo, err := m.currentSecretsRepo(ctx)
 	if err == nil && repo != nil {
 		err = syncOpenSecretsRepo(ctx, repo)

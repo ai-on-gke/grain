@@ -12,22 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package registry holds the import-boundary enforcement tests for the grain
-// registry (design/design/registry.design.md, "Package layout and boundary rules"):
-//
-//   - Packages outside cmd/grain-registry and pkg/registry/... may import only
-//     pkg/registry/api, never pkg/registry/server, pkg/registry/reconciler,
-//     pkg/registry/store, or pkg/registry/gcp.
-//   - cmd/grain-registry and pkg/registry/... never import pkg/daemon,
-//     pkg/orchestrator, pkg/agent, pkg/model, pkg/ui, or pkg/cli.
-//   - pkg/registry/api imports no sibling pkg/registry/... packages and no
-//     external cloud SDKs.
-package registry
+package registry_test
 
 import (
-	"bufio"
-	"bytes"
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,247 +24,299 @@ import (
 	"testing"
 )
 
-const module = "github.com/ai-on-gke/grain/"
+const modulePrefix = "github.com/ai-on-gke/grain/"
 
-// registryAllowedModuleImports are the only in-module packages that
-// cmd/grain-registry and pkg/registry/... may import.
-var registryAllowedModuleImports = []string{
+// registryAllowed lists the only packages in this Go module that
+// cmd/grain-registry, pkg/registry/..., and pkg/webauth may import (directly
+// or transitively). Everything else in the grain daemon, sandbox, agent, and
+// orchestrator trees is off-limits by default (registry.design.md §Import-boundary test).
+var registryAllowed = []string{
 	"cmd/grain-registry",
+	"cmd/grain-registry/...",
 	"pkg/registry",
 	"pkg/registry/...",
-
-	// Neutral leaf helpers holding no grain controller state.
-	"pkg/apierror",
+	"pkg/webauth",
+	"pkg/webauth/...",
 	"pkg/jwks",
-	"pkg/redact",
 	"pkg/tunnel",
 	"pkg/tunnel/...",
 	"pkg/version",
-	"pkg/webauth",
-	"pkg/webauth/...",
+	"pkg/redact",
+	"pkg/apierror",
 }
 
-// grainControllerPackages are explicitly forbidden inside cmd/grain-registry
-// and pkg/registry/... even if someone were tempted to add one to the allowlist.
-var grainControllerPackages = []string{
-	"pkg/daemon",
-	"pkg/daemon/...",
-	"pkg/orchestrator",
-	"pkg/orchestrator/...",
-	"pkg/agent",
-	"pkg/agent/...",
-	"pkg/model",
-	"pkg/model/...",
-	"pkg/ui",
-	"pkg/ui/...",
-	"pkg/cli",
-	"pkg/cli/...",
-}
-
-func matches(pkg string, patterns []string) bool {
-	for _, p := range patterns {
-		if base, ok := strings.CutSuffix(p, "/..."); ok {
-			if pkg == base || strings.HasPrefix(pkg, base+"/") {
-				return true
-			}
-		} else if pkg == p {
-			return true
-		}
-	}
-	return false
-}
-
-func isRegistryPackage(pkg string) bool {
-	return pkg == "cmd/grain-registry" ||
-		strings.HasPrefix(pkg, "cmd/grain-registry/") ||
-		pkg == "pkg/registry" ||
-		strings.HasPrefix(pkg, "pkg/registry/")
-}
-
-func repoRoot(t *testing.T) string {
-	t.Helper()
-	_, file, _, _ := runtime.Caller(0)
-	return filepath.Join(filepath.Dir(file), "..", "..")
-}
-
-// allImports runs a single `go list` over ./... returning each in-module
-// package mapped to its direct imports (both stdlib/external and in-module).
-func allImports(t *testing.T) map[string][]string {
-	t.Helper()
-	cmd := exec.Command("go", "list", "-f", `{{.ImportPath}} {{join .Imports ","}}`, "./...")
-	cmd.Dir = repoRoot(t)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	b, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("go list ./...: %v\n%s", err, stderr.String())
-	}
-	out := map[string][]string{}
-	sc := bufio.NewScanner(bytes.NewReader(b))
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		pkg, rawImports, _ := strings.Cut(line, " ")
-		rel, ok := strings.CutPrefix(pkg, module)
-		if !ok {
-			continue
-		}
-		var imps []string
-		if rawImports != "" {
-			imps = strings.Split(rawImports, ",")
-		}
-		out[rel] = imps
-	}
-	return out
-}
-
-// transitiveRegistryDeps lists all in-module dependencies of cmd/grain-registry
-// and pkg/registry/... that currently exist in the tree.
-func transitiveRegistryDeps(t *testing.T) map[string][]string {
-	t.Helper()
-	root := repoRoot(t)
-	out := map[string][]string{}
-	for _, p := range []string{"cmd/grain-registry", "pkg/registry/..."} {
-		if _, err := os.Stat(filepath.Join(root, strings.TrimSuffix(p, "/..."))); errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		cmd := exec.Command("go", "list", "-deps", "-test=false", "./"+p)
-		cmd.Dir = root
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		b, err := cmd.Output()
-		if err != nil {
-			t.Fatalf("go list -deps ./%s: %v\n%s", p, err, stderr.String())
-		}
-		sc := bufio.NewScanner(bytes.NewReader(b))
-		for sc.Scan() {
-			if rel, ok := strings.CutPrefix(sc.Text(), module); ok {
-				out[rel] = append(out[rel], p)
-			}
-		}
-	}
-	return out
-}
-
-func nonRegistryViolations(importsByPkg map[string][]string) []string {
-	var bad []string
-	for pkg, imps := range importsByPkg {
-		if isRegistryPackage(pkg) {
-			continue
-		}
-		for _, imp := range imps {
-			rel, ok := strings.CutPrefix(imp, module)
-			if !ok {
-				continue
-			}
-			if isRegistryPackage(rel) && rel != "pkg/registry/api" {
-				bad = append(bad, pkg+" imports "+rel)
-			}
-		}
-	}
-	sort.Strings(bad)
-	return bad
-}
-
-func registryDepsViolations(deps map[string][]string) []string {
-	var bad []string
-	for pkg, from := range deps {
-		if matches(pkg, grainControllerPackages) || !matches(pkg, registryAllowedModuleImports) {
-			bad = append(bad, pkg+" (via "+strings.Join(from, ", ")+")")
-		}
-	}
-	sort.Strings(bad)
-	return bad
-}
-
-// apiAllowedModuleImports are the stdlib-only leaf packages pkg/registry/api
-// may import (design/design/registry.design.md, "Package layout and boundary rules" #3).
-var apiAllowedModuleImports = []string{
+// registryAPIAllowed lists the only packages in this module that
+// pkg/registry/api may import (directly or transitively). External non-stdlib
+// modules are also forbidden in pkg/registry/api.
+var registryAPIAllowed = []string{
 	"pkg/registry/api",
 	"pkg/tunnel/wsupgrade",
 	"pkg/tunnel/mux",
 	"pkg/apierror",
 }
 
-func apiImportsViolations(allDeps []string) []string {
-	var bad []string
-	for _, dep := range allDeps {
-		if rel, ok := strings.CutPrefix(dep, module); ok {
-			if !matches(rel, apiAllowedModuleImports) {
-				bad = append(bad, dep)
+func repoRootDir(t *testing.T) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
+}
+
+func runGoList(t *testing.T, args ...string) []string {
+	t.Helper()
+	cmd := exec.Command("go", append([]string{"list"}, args...)...)
+	cmd.Dir = repoRootDir(t)
+	cmd.Env = os.Environ()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+func matchesPattern(rel string, patterns []string) bool {
+	for _, pat := range patterns {
+		if pat == rel {
+			return true
+		}
+		if root, ok := strings.CutSuffix(pat, "/..."); ok {
+			if rel == root || strings.HasPrefix(rel, root+"/") {
+				return true
 			}
+		}
+	}
+	return false
+}
+
+func isRegistryOwnedPackage(rel string) bool {
+	return matchesPattern(rel, []string{
+		"cmd/grain-registry",
+		"cmd/grain-registry/...",
+		"pkg/registry",
+		"pkg/registry/...",
+	})
+}
+
+func checkRegistryIsolation(deps []string) []string {
+	var forbidden []string
+	seen := map[string]bool{}
+	for _, pkg := range deps {
+		rel, ok := strings.CutPrefix(pkg, modulePrefix)
+		if !ok {
 			continue
 		}
-		// Any external module dependency has a dot in its first path element
-		// (unlike Go stdlib packages such as net/http, crypto/tls, encoding/json).
-		first, _, _ := strings.Cut(dep, "/")
-		if strings.Contains(first, ".") {
-			bad = append(bad, dep)
+		if !matchesPattern(rel, registryAllowed) && !seen[rel] {
+			seen[rel] = true
+			forbidden = append(forbidden, rel)
 		}
 	}
-	sort.Strings(bad)
-	return bad
+	sort.Strings(forbidden)
+	return forbidden
 }
 
-func TestOutsidePackagesImportOnlyRegistryAPI(t *testing.T) {
-	for _, b := range nonRegistryViolations(allImports(t)) {
-		t.Errorf("%s: packages outside cmd/grain-registry and pkg/registry/... may import only pkg/registry/api (design/design/registry.design.md)", b)
+type pkgImports struct {
+	importPath string
+	imports    []string
+}
+
+func checkNonRegistryPackagesOnlyImportAPI(pkgs []pkgImports) []string {
+	var violations []string
+	for _, p := range pkgs {
+		callerRel, ok := strings.CutPrefix(p.importPath, modulePrefix)
+		if !ok || isRegistryOwnedPackage(callerRel) {
+			continue
+		}
+		for _, imp := range p.imports {
+			impRel, ok := strings.CutPrefix(imp, modulePrefix)
+			if !ok {
+				continue
+			}
+			if isRegistryOwnedPackage(impRel) && impRel != "pkg/registry/api" {
+				violations = append(violations, callerRel+" -> "+impRel)
+			}
+		}
+	}
+	sort.Strings(violations)
+	return violations
+}
+
+type depInfo struct {
+	importPath string
+	standard   bool
+}
+
+func checkRegistryAPIPurity(deps []depInfo) []string {
+	var forbidden []string
+	for _, d := range deps {
+		if d.standard {
+			continue
+		}
+		rel, ok := strings.CutPrefix(d.importPath, modulePrefix)
+		if !ok {
+			// Third-party module dependency (cloud SDK, jwt, oauth2, etc.).
+			forbidden = append(forbidden, d.importPath)
+			continue
+		}
+		if !matchesPattern(rel, registryAPIAllowed) {
+			forbidden = append(forbidden, rel)
+		}
+	}
+	sort.Strings(forbidden)
+	return forbidden
+}
+
+func TestRegistryDoesNotImportDaemonPackages(t *testing.T) {
+	roots := []string{"./pkg/registry/...", "./pkg/webauth/..."}
+	if info, err := os.Stat(filepath.Join(repoRootDir(t), "cmd", "grain-registry")); err == nil && info.IsDir() {
+		roots = append(roots, "./cmd/grain-registry/...")
+	}
+	args := append([]string{"-deps", "-test=false"}, roots...)
+	deps := runGoList(t, args...)
+	if bad := checkRegistryIsolation(deps); len(bad) > 0 {
+		t.Fatalf("registry/webauth packages transitively import forbidden grain packages:\n\t%s\n\n"+
+			"cmd/grain-registry, pkg/registry/..., and pkg/webauth must remain isolated from daemon/sandbox/model packages "+
+			"(design/design/registry.design.md §Import-boundary test).",
+			strings.Join(bad, "\n\t"))
 	}
 }
 
-func TestRegistryNeverImportsGrainController(t *testing.T) {
-	for _, b := range registryDepsViolations(transitiveRegistryDeps(t)) {
-		t.Errorf("registry links %s: cmd/grain-registry and pkg/registry/... must not import grain controller packages (design/design/registry.design.md)", b)
+func TestNonRegistryPackagesImportOnlyRegistryAPI(t *testing.T) {
+	lines := runGoList(t, "-f", `{{.ImportPath}}|{{join .Imports ","}},{{join .TestImports ","}},{{join .XTestImports ","}}`, "./...")
+	var pkgs []pkgImports
+	for _, line := range lines {
+		pkgPath, rest, ok := strings.Cut(line, "|")
+		if !ok {
+			continue
+		}
+		var imps []string
+		seen := map[string]bool{}
+		for _, imp := range strings.Split(rest, ",") {
+			imp = strings.TrimSpace(imp)
+			if imp != "" && !seen[imp] {
+				seen[imp] = true
+				imps = append(imps, imp)
+			}
+		}
+		pkgs = append(pkgs, pkgImports{importPath: pkgPath, imports: imps})
+	}
+	if bad := checkNonRegistryPackagesOnlyImportAPI(pkgs); len(bad) > 0 {
+		t.Fatalf("packages outside cmd/grain-registry and pkg/registry/... import internal registry packages:\n\t%s\n\n"+
+			"Daemon and CLI packages may import pkg/registry/api only.",
+			strings.Join(bad, "\n\t"))
 	}
 }
 
-func TestRegistryAPIStaysPureStdlib(t *testing.T) {
-	cmd := exec.Command("go", "list", "-deps", "-test=false", "./pkg/registry/api")
-	cmd.Dir = repoRoot(t)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	b, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("go list -deps ./pkg/registry/api: %v\n%s", err, stderr.String())
+func TestRegistryAPIDependsOnlyOnStdlibAndLeafPackages(t *testing.T) {
+	lines := runGoList(t, "-deps", "-test=false", "-f", "{{.ImportPath}} {{.Standard}}", "./pkg/registry/api")
+	var deps []depInfo
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			t.Fatalf("unexpected go list output line %q", line)
+		}
+		deps = append(deps, depInfo{
+			importPath: fields[0],
+			standard:   fields[1] == "true",
+		})
 	}
-	var deps []string
-	sc := bufio.NewScanner(bytes.NewReader(b))
-	for sc.Scan() {
-		deps = append(deps, strings.TrimSpace(sc.Text()))
-	}
-	for _, bad := range apiImportsViolations(deps) {
-		t.Errorf("pkg/registry/api depends on %s; it must depend only on the Go standard library", bad)
+	if bad := checkRegistryAPIPurity(deps); len(bad) > 0 {
+		t.Fatalf("pkg/registry/api depends on forbidden non-stdlib or sibling packages:\n\t%s\n\n"+
+			"pkg/registry/api must depend only on stdlib, pkg/tunnel/wsupgrade, pkg/tunnel/mux, and pkg/apierror.",
+			strings.Join(bad, "\n\t"))
 	}
 }
 
-func TestBoundaryChecksCatchViolations(t *testing.T) {
-	outside := map[string][]string{
-		"pkg/daemon":      {module + "pkg/registry/api", module + "pkg/registry/server"},
-		"pkg/cli":         {module + "pkg/registry/api"},
-		"pkg/registry/db": {module + "pkg/registry/store"},
-	}
-	if got := nonRegistryViolations(outside); len(got) != 1 || got[0] != "pkg/daemon imports pkg/registry/server" {
-		t.Errorf("nonRegistryViolations = %v, want [pkg/daemon imports pkg/registry/server]", got)
+func TestBoundaryCheckersCatchViolations(t *testing.T) {
+	// 1. Registry -> daemon isolation catches every forbidden daemon subtree and prefix lookalikes.
+	for _, forbidden := range []string{
+		"pkg/orchestrator",
+		"pkg/agent/loop",
+		"pkg/dispatch",
+		"pkg/sandboxaccess",
+		"pkg/sandboxaddr",
+		"pkg/sandboxcli",
+		"pkg/sandboximage",
+		"pkg/granule/vmm",
+		"pkg/hostd",
+		"pkg/modelproxy",
+		"pkg/ui",
+		"pkg/daemon",
+		"pkg/ci/runner",
+		"pkg/mcp",
+		"pkg/capability/gcpkey",
+		"pkg/model",
+		"pkg/webauth2",
+		"pkg/tunnelvision",
+		"pkg/registry2",
+	} {
+		got := checkRegistryIsolation([]string{modulePrefix + "pkg/registry/server", modulePrefix + forbidden})
+		if len(got) != 1 || got[0] != forbidden {
+			t.Errorf("checkRegistryIsolation(%q) = %v, want [%s]", forbidden, got, forbidden)
+		}
 	}
 
-	regDeps := map[string][]string{
-		"pkg/registry/api": {"pkg/registry/..."},
-		"pkg/model":        {"pkg/registry/..."},
-		"pkg/daemon":       {"cmd/grain-registry"},
+	// 2. Non-registry -> registry internals catches server/store/reconcile/providers/root while allowing pkg/registry/api.
+	reverse := checkNonRegistryPackagesOnlyImportAPI([]pkgImports{
+		{
+			importPath: modulePrefix + "pkg/daemon",
+			imports: []string{
+				modulePrefix + "pkg/registry/api",
+				modulePrefix + "pkg/registry/server",
+			},
+		},
+		{
+			importPath: modulePrefix + "pkg/cli",
+			imports: []string{
+				modulePrefix + "pkg/registry",
+				modulePrefix + "pkg/registry/store",
+				modulePrefix + "pkg/registry/providers/gcp",
+				modulePrefix + "cmd/grain-registry",
+			},
+		},
+		{
+			// Internal registry package importing sibling registry packages is allowed here.
+			importPath: modulePrefix + "pkg/registry/server",
+			imports: []string{
+				modulePrefix + "pkg/registry/store",
+				modulePrefix + "pkg/registry/api",
+			},
+		},
+	})
+	wantReverse := []string{
+		"pkg/cli -> cmd/grain-registry",
+		"pkg/cli -> pkg/registry",
+		"pkg/cli -> pkg/registry/providers/gcp",
+		"pkg/cli -> pkg/registry/store",
+		"pkg/daemon -> pkg/registry/server",
 	}
-	if got := registryDepsViolations(regDeps); len(got) != 2 {
-		t.Errorf("registryDepsViolations = %v, want 2 violations", got)
+	if strings.Join(reverse, ",") != strings.Join(wantReverse, ",") {
+		t.Fatalf("reverse violations = %v, want %v", reverse, wantReverse)
 	}
 
-	apiDeps := []string{
-		"net/http",
-		module + "pkg/registry/api",
-		module + "pkg/registry/store",
+	// 3. pkg/registry/api purity catches sibling packages, pkg/webauth, and external modules.
+	purity := checkRegistryAPIPurity([]depInfo{
+		{importPath: "net/http", standard: true},
+		{importPath: modulePrefix + "pkg/tunnel/mux", standard: false},
+		{importPath: modulePrefix + "pkg/tunnel/wsupgrade", standard: false},
+		{importPath: modulePrefix + "pkg/apierror", standard: false},
+		{importPath: modulePrefix + "pkg/webauth", standard: false},
+		{importPath: modulePrefix + "pkg/registry/store", standard: false},
+		{importPath: "cloud.google.com/go/compute/apiv1", standard: false},
+	})
+	wantPurity := []string{
 		"cloud.google.com/go/compute/apiv1",
+		"pkg/registry/store",
+		"pkg/webauth",
 	}
-	if got := apiImportsViolations(apiDeps); len(got) != 2 {
-		t.Errorf("apiImportsViolations = %v, want sibling and external SDK rejected", got)
+	if strings.Join(purity, ",") != strings.Join(wantPurity, ",") {
+		t.Fatalf("purity violations = %v, want %v", purity, wantPurity)
 	}
 }

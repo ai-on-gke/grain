@@ -46,7 +46,7 @@ describe("RegistrySection", () => {
             {
               repo: "acme/shared",
               path_prefix: "docs",
-              conflict_with: "other-grain",
+              conflicting_entry: "other-grain",
             },
           ],
         });

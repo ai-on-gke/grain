@@ -82,7 +82,6 @@ type RegistryConfig struct {
 	Purpose      string              `json:"purpose,omitempty"`
 	HostKind     api.HostKind        `json:"hostKind,omitempty"`
 	Listed       bool                `json:"listed,omitempty"`
-	ExternalURL  string              `json:"externalUrl,omitempty"`
 	OwnerGroup   string              `json:"ownerGroup,omitempty"`
 	Tags         []string            `json:"tags,omitempty"`
 	Scopes       []RegistryScopeRule `json:"scopes,omitempty"`
@@ -103,7 +102,6 @@ func (c RegistryConfig) Empty() bool {
 		strings.TrimSpace(c.Purpose) == "" &&
 		c.HostKind == "" &&
 		!c.Listed &&
-		strings.TrimSpace(c.ExternalURL) == "" &&
 		strings.TrimSpace(c.OwnerGroup) == "" &&
 		len(c.Tags) == 0 &&
 		len(c.Scopes) == 0
@@ -172,8 +170,8 @@ func NormalizeRegistryConfig(cfg RegistryConfig, allowInsecureHTTP bool) (Regist
 	}
 
 	if dn := strings.TrimSpace(cfg.DisplayName); dn != "" {
-		if utf8.RuneCountInString(dn) > 120 {
-			return RegistryConfig{}, fmt.Errorf("registry displayName must be at most 120 characters")
+		if utf8.RuneCountInString(dn) > api.MaxDisplayNameRunes {
+			return RegistryConfig{}, fmt.Errorf("registry displayName must be at most %d characters", api.MaxDisplayNameRunes)
 		}
 		if hasControlChars(dn, false) {
 			return RegistryConfig{}, fmt.Errorf("registry displayName must not contain control characters")
@@ -182,8 +180,8 @@ func NormalizeRegistryConfig(cfg RegistryConfig, allowInsecureHTTP bool) (Regist
 	}
 
 	if purpose := strings.TrimSpace(cfg.Purpose); purpose != "" {
-		if utf8.RuneCountInString(purpose) > 500 {
-			return RegistryConfig{}, fmt.Errorf("registry purpose must be at most 500 characters")
+		if utf8.RuneCountInString(purpose) > api.MaxPurposeRunes {
+			return RegistryConfig{}, fmt.Errorf("registry purpose must be at most %d characters", api.MaxPurposeRunes)
 		}
 		if hasControlChars(purpose, true) {
 			return RegistryConfig{}, fmt.Errorf("registry purpose must not contain control characters")
@@ -191,23 +189,17 @@ func NormalizeRegistryConfig(cfg RegistryConfig, allowInsecureHTTP bool) (Regist
 		out.Purpose = purpose
 	}
 
-	if hk := strings.TrimSpace(string(cfg.HostKind)); hk != "" {
-		normHK, err := api.NormalizeConnectedHostKind(api.HostKind(hk))
-		if err != nil {
-			return RegistryConfig{}, fmt.Errorf("registry hostKind: %w", err)
+	if hk := strings.ToLower(strings.TrimSpace(string(cfg.HostKind))); hk != "" {
+		normHK := api.HostKind(hk)
+		switch normHK {
+		case api.HostKindWorkstation, api.HostKindKubernetes, api.HostKindOther:
+			out.HostKind = normHK
+		default:
+			return RegistryConfig{}, fmt.Errorf("registry hostKind %q must be workstation, kubernetes, or other", cfg.HostKind)
 		}
-		out.HostKind = normHK
 	}
 
 	out.Listed = cfg.Listed
-
-	if ext := strings.TrimSpace(cfg.ExternalURL); ext != "" {
-		normExt, err := api.ValidateExternalURL(ext)
-		if err != nil {
-			return RegistryConfig{}, fmt.Errorf("registry externalUrl: %w", err)
-		}
-		out.ExternalURL = normExt
-	}
 
 	if og := strings.TrimSpace(cfg.OwnerGroup); og != "" {
 		if containsSpaceOrControl(og) || len(og) > 256 {
@@ -216,9 +208,20 @@ func NormalizeRegistryConfig(cfg RegistryConfig, allowInsecureHTTP bool) (Regist
 		out.OwnerGroup = og
 	}
 
-	tags, err := api.NormalizeTags(cfg.Tags)
-	if err != nil {
-		return RegistryConfig{}, fmt.Errorf("registry tags: %w", err)
+	var tags []string
+	if len(cfg.Tags) > 0 {
+		seenTag := make(map[string]bool, len(cfg.Tags))
+		for _, rawTag := range cfg.Tags {
+			t := strings.ToLower(strings.TrimSpace(rawTag))
+			if t == "" || seenTag[t] {
+				continue
+			}
+			seenTag[t] = true
+			tags = append(tags, t)
+		}
+	}
+	if err := api.ValidateCatalogMetadata(out.DisplayName, out.Purpose, tags); err != nil {
+		return RegistryConfig{}, fmt.Errorf("registry metadata: %w", err)
 	}
 	out.Tags = tags
 
@@ -252,10 +255,8 @@ func NormalizeRegistryScopeRules(rules []RegistryScopeRule) ([]RegistryScopeRule
 			return nil, fmt.Errorf("registry scopes[%d]: %w", i, err)
 		}
 		role := api.ScopeRole(strings.ToLower(strings.TrimSpace(string(r.Role))))
-		if role != "" {
-			if err := api.ValidateScopeRole(role); err != nil {
-				return nil, fmt.Errorf("registry scopes[%d]: %w", i, err)
-			}
+		if role != "" && !role.Valid() {
+			return nil, fmt.Errorf("registry scopes[%d]: invalid role %q (must be primary or secondary)", i, r.Role)
 		}
 		if r.Exclude {
 			role = ""
@@ -357,9 +358,9 @@ func DeriveRegistryScopes(
 			continue
 		}
 		if rc.Work.RunsByDefault() {
-			roleByRepo[norm] = api.ScopeRolePrimary
+			roleByRepo[norm] = api.RolePrimary
 		} else {
-			roleByRepo[norm] = api.ScopeRoleSecondary
+			roleByRepo[norm] = api.RoleSecondary
 		}
 	}
 
@@ -414,7 +415,7 @@ func DeriveRegistryScopes(
 		if role, ok := roleByRepo[repo]; ok {
 			return role
 		}
-		return api.ScopeRolePrimary
+		return api.RolePrimary
 	}
 
 	var out []RegistryAdvertisedScope
@@ -476,12 +477,26 @@ func DeriveRegistryScopes(
 	return out
 }
 
-// ToAPIScopes converts advertised scopes into wire api.Scope items for
-// registration and heartbeat requests.
-func ToAPIScopes(scopes []RegistryAdvertisedScope) []api.Scope {
-	out := make([]api.Scope, len(scopes))
+// ToScopeInputs converts advertised scopes into wire api.ScopeInput items for
+// entry creation and scope-declaration requests.
+func ToScopeInputs(scopes []RegistryAdvertisedScope) []api.ScopeInput {
+	out := make([]api.ScopeInput, len(scopes))
 	for i, s := range scopes {
-		out[i] = api.Scope{
+		out[i] = api.ScopeInput{
+			Repo:       s.Repo,
+			PathPrefix: s.PathPrefix,
+			Role:       s.Role,
+		}
+	}
+	return out
+}
+
+// ToHeartbeatScopes converts advertised scopes into wire api.HeartbeatScope
+// items for connected-entry heartbeats and instance status probes.
+func ToHeartbeatScopes(scopes []RegistryAdvertisedScope) []api.HeartbeatScope {
+	out := make([]api.HeartbeatScope, len(scopes))
+	for i, s := range scopes {
+		out[i] = api.HeartbeatScope{
 			Repo:       s.Repo,
 			PathPrefix: s.PathPrefix,
 			Role:       s.Role,

@@ -114,14 +114,18 @@ func newFakeRegistryServer(t *testing.T) (*fakeRegistryServer, *httptest.Server)
 		_ = json.NewEncoder(w).Encode(api.Entry{Name: name, Kind: api.KindConnected})
 	})
 
-	mux.HandleFunc("PUT /api/entries/{name}/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/entries/{name}/heartbeat", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		f.mu.Lock()
 		f.authHeaders = append(f.authHeaders, r.Header.Get("Authorization"))
 		if f.nextStatus >= 400 {
 			code := f.nextStatus
 			retryAfter := f.nextRetryAfter
-			conflicts := append([]api.ScopeConflict(nil), f.nextConflicts...)
+			var conflict *api.ScopeConflict
+			if len(f.nextConflicts) > 0 {
+				c := f.nextConflicts[0]
+				conflict = &c
+			}
 			f.mu.Unlock()
 			if retryAfter != "" {
 				w.Header().Set("Retry-After", retryAfter)
@@ -129,8 +133,8 @@ func newFakeRegistryServer(t *testing.T) (*fakeRegistryServer, *httptest.Server)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(code)
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"error":     "heartbeat rejected",
-				"conflicts": conflicts,
+				"error":    "heartbeat rejected",
+				"conflict": conflict,
 			})
 			return
 		}
@@ -158,9 +162,9 @@ func newFakeRegistryServer(t *testing.T) (*fakeRegistryServer, *httptest.Server)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(api.HeartbeatResponse{
-			Status:               status,
-			NextHeartbeatSeconds: interval,
-			ScopeConflicts:       conflicts,
+			Status:              status,
+			NextIntervalSeconds: interval,
+			Conflicts:           conflicts,
 		})
 	})
 
@@ -231,7 +235,6 @@ func TestRegistryManagerOIDCSelfRegistersAndSendsHeartbeatPayload(t *testing.T) 
 		Purpose:     "Autoscaler development",
 		HostKind:    api.HostKindWorkstation,
 		Listed:      true,
-		ExternalURL: "https://grain-dev.example.com",
 		Tags:        []string{"autoscaler", "team-infra"},
 		Scopes: []model.RegistryScopeRule{
 			{Repo: "acme/widgets", PathPrefix: "pkg/autoscaler"},
@@ -296,9 +299,9 @@ func TestRegistryManagerOIDCSelfRegistersAndSendsHeartbeatPayload(t *testing.T) 
 	if hb.Health != api.HealthOK || hb.ActiveTasks != 1 || hb.AwaitingReplyTasks != 1 {
 		t.Errorf("heartbeat health/counts = %q active=%d awaiting=%d, want ok/1/1", hb.Health, hb.ActiveTasks, hb.AwaitingReplyTasks)
 	}
-	wantScopes := []api.Scope{
-		{Repo: "acme/docs", PathPrefix: "", Role: api.ScopeRoleSecondary},
-		{Repo: "acme/widgets", PathPrefix: "pkg/autoscaler", Role: api.ScopeRolePrimary},
+	wantScopes := []api.HeartbeatScope{
+		{Repo: "acme/docs", PathPrefix: "", Role: api.RoleSecondary},
+		{Repo: "acme/widgets", PathPrefix: "pkg/autoscaler", Role: api.RolePrimary},
 	}
 	if len(hb.Scopes) != len(wantScopes) {
 		t.Fatalf("heartbeat scopes = %+v, want %+v", hb.Scopes, wantScopes)
@@ -424,7 +427,7 @@ func TestRegistryManagerTokenSecretRefreshBackoffAndConflicts(t *testing.T) {
 	// 4. Scope conflicts mark state degraded and surface in Snapshot.
 	fake.mu.Lock()
 	fake.nextConflicts = []api.ScopeConflict{
-		{Repo: "acme/runner", PathPrefix: "", ConflictWith: "other-grain", Owner: "alice@example.com"},
+		{Repo: "acme/runner", PathPrefix: "", ConflictingEntry: "other-grain", ConflictingOwner: "alice@example.com"},
 	}
 	fake.mu.Unlock()
 	snap, err = mgr.TriggerHeartbeat(ctx)
@@ -475,13 +478,17 @@ type fakeTunnelConnector struct {
 	stopped chan struct{}
 }
 
-func (f *fakeTunnelConnector) RunTunnel(ctx context.Context, client *api.Client, entryName string) error {
-	tok, err := client.BearerToken(ctx)
-	if err != nil {
-		return err
+func (f *fakeTunnelConnector) RunTunnel(ctx context.Context, cfg api.ConnectConfig) error {
+	tok := cfg.RegistrationToken
+	if tok == "" && cfg.IDToken != nil {
+		var err error
+		tok, err = cfg.IDToken(ctx)
+		if err != nil {
+			return err
+		}
 	}
 	select {
-	case f.started <- entryName + ":" + tok:
+	case f.started <- cfg.Entry + ":" + tok:
 	default:
 	}
 	<-ctx.Done()
@@ -596,14 +603,13 @@ func TestRegistryManagerValidatesStoredConfigAndRedactsFailureLogs(t *testing.T)
 	defer db.Close()
 	ctx := context.Background()
 
-	// 1. Unnormalized/invalid ExternalURL stored directly in grain_config is
+	// 1. Unnormalized/invalid Registry URL stored directly in grain_config is
 	// rejected before any network call.
 	cfg := model.DefaultConfig()
 	cfg.Registry = model.RegistryConfig{
-		URL:         errSrv.URL,
-		Entry:       "edge-grain",
-		AuthMode:    model.RegistryAuthToken,
-		ExternalURL: "http://insecure.example.com",
+		URL:      "http://insecure.example.com",
+		Entry:    "edge-grain",
+		AuthMode: model.RegistryAuthToken,
 	}
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatalf("PutConfig: %v", err)
@@ -628,13 +634,13 @@ func TestRegistryManagerValidatesStoredConfigAndRedactsFailureLogs(t *testing.T)
 		},
 	})
 
-	if _, err := mgr.TriggerHeartbeat(ctx); err == nil || !strings.Contains(err.Error(), "external_url") {
-		t.Fatalf("expected invalid external_url error from stored config, got %v", err)
+	if _, err := mgr.TriggerHeartbeat(ctx); err == nil || !strings.Contains(err.Error(), "insecure http://") {
+		t.Fatalf("expected insecure http:// error from stored config, got %v", err)
 	}
 
 	// 2. When the remote server echoes a grc_ token in its error body, both
 	// Snapshot().LastError and daemon logs shape-redact the token.
-	cfg.Registry.ExternalURL = ""
+	cfg.Registry.URL = errSrv.URL
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatalf("PutConfig valid: %v", err)
 	}

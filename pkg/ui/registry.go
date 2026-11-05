@@ -265,23 +265,24 @@ func (c *Client) TriggerRegistryHeartbeat(ctx context.Context) (model.RegistrySn
 }
 
 // GetRegistryInstanceStatus answers GET /api/registry/status with the wire
-// api.InstanceStatus payload (design/design/registry.design.md).
-func (c *Client) GetRegistryInstanceStatus(ctx context.Context) (api.InstanceStatus, error) {
+// api.InstanceStatusResponse payload (design/design/registry.design.md).
+func (c *Client) GetRegistryInstanceStatus(ctx context.Context) (api.InstanceStatusResponse, error) {
 	snap, err := c.GetRegistrySnapshot(ctx)
 	if err != nil {
-		return api.InstanceStatus{}, err
+		return api.InstanceStatusResponse{}, err
 	}
-	scopes := model.ToAPIScopes(snap.AdvertisedScopes)
+	scopes := model.ToHeartbeatScopes(snap.AdvertisedScopes)
 	if scopes == nil {
-		scopes = []api.Scope{}
+		scopes = []api.HeartbeatScope{}
 	}
 	health := snap.Health
 	if health == "" {
 		health = api.HealthOK
 	}
-	return api.InstanceStatus{
+	return api.InstanceStatusResponse{
 		GrainVersion:       snap.GrainVersion,
 		GrainCommit:        snap.GrainCommit,
+		HostKind:           snap.EffectiveHostKind,
 		Health:             health,
 		HealthDetail:       snap.HealthDetail,
 		ActiveTasks:        snap.ActiveTasks,

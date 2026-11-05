@@ -153,18 +153,24 @@ func (c Config) hostExecutor() HostExecutor {
 	if KubernetesMode(c) {
 		return HostExecutor{Kind: HostExecutorNone, Reason: kubernetesNoHost}
 	}
+	if c.HostdSocket != "" {
+		return HostExecutor{Kind: HostExecutorHostd, Socket: c.HostdSocket,
+			Reason: "host CLIs run through grain hostd at " + c.HostdSocket}
+	}
 	return HostExecutor{Kind: HostExecutorLocal, Reason: "the daemon runs on this machine"}
 }
 
 // DetectHostExecutor is cfg's host executor, read once at start. A
 // daemon taking a dialing-in hostd (-hostd-token-file) has that one.
 // Kubernetes is decided from cfg alone, before anything about the
-// process or a hostd socket is looked at. A daemon on the bare machine
-// (whererun) runs host CLIs itself. A containerised one has hostd when
-// -hostd-socket names its socket, or when hostd's default socket
-// directory is mounted into the container -- configured, whether or not
-// hostd is up right now -- and otherwise has no host executor.
-// socketDirExists is os.Stat's answer unless a test says otherwise.
+// process or a hostd socket is looked at. An explicit -hostd-socket
+// selects that grain hostd whether the daemon is in a container or on
+// the machine itself; otherwise a daemon on the bare machine (whererun)
+// runs host CLIs itself, and a containerised one has hostd when hostd's
+// default socket directory is mounted into the container -- configured,
+// whether or not hostd is up right now -- and otherwise has no host
+// executor. socketDirExists is os.Stat's answer unless a test says
+// otherwise.
 func DetectHostExecutor(cfg Config, where whererun.Detection, socketDirExists func(string) bool) HostExecutor {
 	if cfg.HostdRemote != nil {
 		// A hostd that dials in is the host executor wherever the daemon
@@ -176,12 +182,16 @@ func DetectHostExecutor(cfg Config, where whererun.Detection, socketDirExists fu
 	if KubernetesMode(cfg) {
 		return HostExecutor{Kind: HostExecutorNone, Reason: kubernetesNoHost}
 	}
+	if cfg.HostdSocket != "" {
+		whereAt := "in a container"
+		if where.Host {
+			whereAt = "on this machine"
+		}
+		return HostExecutor{Kind: HostExecutorHostd, Socket: cfg.HostdSocket,
+			Reason: "the daemon runs " + whereAt + " (" + where.Signal + "), and host CLIs run through grain hostd at " + cfg.HostdSocket}
+	}
 	if where.Host {
 		return HostExecutor{Kind: HostExecutorLocal, Reason: "the daemon runs on this machine (" + where.Signal + ")"}
-	}
-	if cfg.HostdSocket != "" {
-		return HostExecutor{Kind: HostExecutorHostd, Socket: cfg.HostdSocket,
-			Reason: "the daemon runs in a container (" + where.Signal + "), and host CLIs run through grain hostd at " + cfg.HostdSocket}
 	}
 	if socketDirExists == nil {
 		socketDirExists = func(p string) bool { fi, err := os.Stat(p); return err == nil && fi.IsDir() }

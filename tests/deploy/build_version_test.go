@@ -344,7 +344,7 @@ func TestReleaseImagesDryRunNamesTheBuildVersionOfEachBranch(t *testing.T) {
 			short := tc.commit[:7]
 			containsRun(t, out, "[dry-run] version: "+tc.want+", stamped into the daemon binary as "+
 				"-X github.com/ai-on-gke/grain/pkg/version.Release="+tc.want+
-				" and labelled onto ghcr.io/bwsalmon/grain/grain:sha-"+short+
+				" and labelled onto docker.io/grainai/grain:sha-"+short+
 				" as org.opencontainers.image.version="+tc.want)
 		})
 	}

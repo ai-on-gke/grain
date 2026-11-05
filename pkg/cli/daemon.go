@@ -192,6 +192,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	dbDriver := fs.String("db-driver", "sqlite", "database backend driver (\"sqlite\" or \"postgres\"); defaults to sqlite")
 	dbDSN := fs.String("db-dsn", "", "database connection string / DSN or path; for sqlite defaults to <data-dir>/store")
 	postgresURL := fs.String("postgres-url", "", "PostgreSQL connection URL (alias for -db-driver=postgres -db-dsn=URL)")
+	secretsBackend := fs.String("secrets-backend", secrets.BackendFile, "secret store backend (\"file\" or \"secretmanager\"); defaults to $GRAIN_SECRETS_BACKEND, then \"file\"")
+	secretsSMPrefix := fs.String("secrets-sm-prefix", "", "Secret Manager resource prefix (projects/<project>/secrets/<id-prefix>) when -secrets-backend=secretmanager; defaults to $GRAIN_SECRETS_SM_PREFIX")
 	sandboxDir := fs.String("sandbox-dir", "", "root directory for this deployment's disposable scratch space -- host-sandbox run directories, "+
 		"and the package and Actions caches default under it, and the UI reports its disk as the sandboxes' own (scripts/setup.sh installs it "+
 		"at /var/lib/grain/scratch, beside -data-dir's /var/lib/grain/data). Deliberately a separate flag from -data-dir rather than a "+
@@ -1048,17 +1050,36 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	unitFlags := append([]string{}, unknownFlags...)
 	fs.Visit(func(f *flag.Flag) { unitFlags = append(unitFlags, "-"+f.Name) })
 	slices.Sort(unitFlags)
+	if !passed["secrets-backend"] {
+		if env := strings.TrimSpace(os.Getenv("GRAIN_SECRETS_BACKEND")); env != "" {
+			*secretsBackend = env
+		}
+	}
+	if !passed["secrets-sm-prefix"] {
+		if env := strings.TrimSpace(os.Getenv("GRAIN_SECRETS_SM_PREFIX")); env != "" {
+			*secretsSMPrefix = env
+		}
+	}
 	if !passed["db-driver"] {
 		if env := os.Getenv("GRAIN_DB_DRIVER"); env != "" {
 			*dbDriver = env
 		} else if passed["postgres-url"] || os.Getenv("GRAIN_POSTGRES_URL") != "" || os.Getenv("DATABASE_URL") != "" {
 			*dbDriver = "postgres"
-		} else if saved, err := daemon.LoadDatabaseConfig(*dataDir); err != nil {
-			return daemon.Config{}, fs, unknownFlags, err
-		} else if saved != nil && saved.Driver != "" {
-			*dbDriver = saved.Driver
-			if !passed["db-dsn"] && saved.DSN != "" {
-				*dbDSN = saved.DSN
+		} else {
+			var saved *postgres.DatabaseConfig
+			if *secretsBackend == secrets.BackendSecretManager {
+				saved, err = postgres.ReadDatabaseConfig(*dataDir)
+			} else {
+				saved, err = daemon.LoadDatabaseConfig(*dataDir)
+			}
+			if err != nil {
+				return daemon.Config{}, fs, unknownFlags, err
+			}
+			if saved != nil && saved.Driver != "" {
+				*dbDriver = saved.Driver
+				if !passed["db-dsn"] && saved.DSN != "" {
+					*dbDSN = saved.DSN
+				}
 			}
 		}
 	}
@@ -1193,7 +1214,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 
 	cfg := daemon.Config{
 		UnitFlags: unitFlags, UnknownFlags: unknownFlags,
-		DataDir: *dataDir, DbDriver: *dbDriver, DbDSN: *dbDSN, SandboxDir: *sandboxDir, DockerRootDir: *dockerRootDir,
+		DataDir: *dataDir, DbDriver: *dbDriver, DbDSN: *dbDSN,
+		SecretsBackend: *secretsBackend, SecretsSMPrefix: *secretsSMPrefix,
+		SandboxDir: *sandboxDir, DockerRootDir: *dockerRootDir,
 		MaxWorkers: *maxWorkers, MaxMergers: *maxMergers, MaxCIJobs: model.DefaultMaxCIJobs,
 		Ledger:        &model.Ledger{},
 		CpuOvercommit: *cpuOvercommit, MemoryOvercommit: *memoryOvercommit, MemoryReserveMB: *memoryReserveMB,
@@ -1319,38 +1342,6 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	return cfg, fs, unknownFlags, err
 }
 
-// hostdRemote is the acceptor for a grain hostd dialing in with the token
-// in tokenFile, or $GRAIN_HOSTD_TOKEN, as hostd name owned by owner; nil
-// when neither names a token.
-func hostdRemote(tokenFile, name, owner string) (*hostd.Remote, error) {
-	token := strings.TrimSpace(os.Getenv("GRAIN_HOSTD_TOKEN"))
-	if tokenFile != "" {
-		t, err := daemon.ReadTokenFile(tokenFile)
-		if err != nil {
-			return nil, fmt.Errorf("reading -hostd-token-file: %w", err)
-		}
-		token = t
-	}
-	if token == "" {
-		return nil, nil
-	}
-	if name == "" {
-		name = hostd.DefaultSharedName
-	}
-	if err := model.ValidateHostdName(name); err != nil {
-		return nil, fmt.Errorf("-hostd-token-name: %w", err)
-	}
-	if name == model.LocalHostd {
-		return nil, fmt.Errorf("-hostd-token-name: %q is the co-located hostd's name", name)
-	}
-	owner, err := model.NormalizeHostdOwner(owner)
-	if err != nil {
-		return nil, fmt.Errorf("-hostd-token-owner: %w", err)
-	}
-	log.Printf("grain daemon: -hostd-token-file is deprecated and goes in the next release: register hostd %s in the hostd registry (POST /api/hostds) and give it the token it answers with", name)
-	return &hostd.Remote{Token: token, SharedName: name, SharedOwner: owner, Logf: log.Printf}, nil
-}
-
 // checkConfig is every "these flags cannot be started with" rule daemon()
 // has, over the config they were parsed into rather than over the flag
 // pointers themselves -- so the rules are a function a test can call
@@ -1378,6 +1369,9 @@ func checkConfig(cfg daemon.Config) error {
 		}
 	default:
 		return fmt.Errorf("-db-driver must be \"sqlite\" or \"postgres\", got %q", cfg.DbDriver)
+	}
+	if err := daemon.CheckSecretsConfig(cfg.SecretsBackend, cfg.SecretsSMPrefix); err != nil {
+		return err
 	}
 	if err := daemon.CheckSandboxBackend(cfg, daemon.LocalSandboxes != nil); err != nil {
 		return err

@@ -3392,7 +3392,12 @@ fieldset legend {
   font-weight: 600;
   color: var(--text-secondary);
 }
+.capability-audit-hostd {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
 .capability-audit-time {
+  margin-left: auto;
   color: var(--text-tertiary);
 }
 .capability-audit-note {

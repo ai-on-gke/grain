@@ -139,22 +139,22 @@ func TestRegistrySettingsAndEndpoints(t *testing.T) {
 		t.Fatalf("StartRun: %v", err)
 	}
 
-	// GET /api/registry/status returns wire api.InstanceStatus with derived scopes.
+	// GET /api/registry/status returns wire api.InstanceStatusResponse with derived scopes.
 	statusRec := do(t, srv, http.MethodGet, "/api/registry/status", "")
 	if statusRec.Code != http.StatusOK {
 		t.Fatalf("GET /api/registry/status = %d: %s", statusRec.Code, statusRec.Body.String())
 	}
-	inst := decode[api.InstanceStatus](t, statusRec)
+	inst := decode[api.InstanceStatusResponse](t, statusRec)
 	if inst.ActiveTasks != 1 {
-		t.Errorf("InstanceStatus.ActiveTasks = %d, want 1", inst.ActiveTasks)
+		t.Errorf("InstanceStatusResponse.ActiveTasks = %d, want 1", inst.ActiveTasks)
 	}
 	if len(inst.Scopes) != 2 {
-		t.Fatalf("InstanceStatus.Scopes = %+v, want 2 scopes", inst.Scopes)
+		t.Fatalf("InstanceStatusResponse.Scopes = %+v, want 2 scopes", inst.Scopes)
 	}
-	if inst.Scopes[0].Repo != "acme/docs" || inst.Scopes[0].Role != api.ScopeRoleSecondary {
+	if inst.Scopes[0].Repo != "acme/docs" || inst.Scopes[0].Role != api.RoleSecondary {
 		t.Errorf("Scopes[0] = %+v, want acme/docs secondary", inst.Scopes[0])
 	}
-	if inst.Scopes[1].Repo != "acme/widgets" || inst.Scopes[1].PathPrefix != "pkg/autoscaler" || inst.Scopes[1].Role != api.ScopeRolePrimary {
+	if inst.Scopes[1].Repo != "acme/widgets" || inst.Scopes[1].PathPrefix != "pkg/autoscaler" || inst.Scopes[1].Role != api.RolePrimary {
 		t.Errorf("Scopes[1] = %+v, want acme/widgets pkg/autoscaler primary", inst.Scopes[1])
 	}
 

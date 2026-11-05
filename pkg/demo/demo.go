@@ -46,6 +46,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/namespace"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/systemlog"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -643,7 +644,20 @@ func Run(opts Options) error {
 		}
 		go runDemoReviewQuestions(context.Background(), store, interval)
 	}
-	var srv http.Handler = ui.NewServerWithClient(client)
+	uiSrv := ui.NewServerWithClient(client)
+	var srv http.Handler = uiSrv
+	var (
+		demoNS    *namespace.Server
+		demoNSCLI *daemon.SandboxCLIBackend
+		demoNSAPI *daemon.InProcessAPI
+	)
+	if gitProxy != nil {
+		ns := gitProxy.ns
+		uiSrv.SetNamespace(func() *namespace.Server { return ns })
+	} else {
+		demoNS, demoNSCLI, demoNSAPI = newDemoNamespace(dir, store)
+		uiSrv.SetNamespace(func() *namespace.Server { return demoNS })
+	}
 	defer ui.RegisterHealthCounters("sign-in verification (demo)", demoHealthCounters(time.Now()))()
 	if fakeCI, ok := cfg.CI.(*demoFakeCI); ok {
 		srv = scheduledWorkflowsDemoHandler(srv, fakeCI, githubSimRepo)
@@ -662,6 +676,9 @@ func Run(opts Options) error {
 		if simClient, ok := cfg.GitHubBranches.(github.Client); ok {
 			srv = githubSimDemoHandler(srv, simClient)
 		}
+	}
+	if demoNS != nil {
+		wireDemoNamespace(demoNS, demoNSCLI, demoNSAPI, srv, client, cfg, store)
 	}
 	ln, err := net.Listen("tcp", opts.Addr)
 	if err != nil {

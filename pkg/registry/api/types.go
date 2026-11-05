@@ -12,42 +12,111 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package api defines the wire types and HTTP client shared between
-// cmd/grain-registry and grain's daemon and CLI (design/design/registry.design.md).
+// Package api defines the wire data transfer objects, validation rules, typed
+// HTTP client, and outbound WebSocket-mux tunnel client for grain-registry.
 //
-// Packages outside cmd/grain-registry and pkg/registry/... may import only
-// pkg/registry/api, and this package imports neither sibling pkg/registry/...
-// packages nor grain core packages (enforced by pkg/registry/independence_test.go).
+// It intentionally depends only on the Go standard library and leaf internal
+// packages (pkg/apierror, pkg/tunnel/wsupgrade, pkg/tunnel/mux) so both the
+// grain daemon/CLI and cmd/grain-registry can import it without coupling.
 package api
 
 import (
+	"errors"
 	"fmt"
-	"net/netip"
-	"net/url"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
-// DefaultHeartbeatInterval is the nominal cadence at which a connected grain
-// sends heartbeats when the registry has not specified a custom interval.
-const DefaultHeartbeatInterval = 15 * time.Second
-
-// RegistrationTokenPrefix is the distinguishing prefix on per-entry connected
-// registration credentials ("grc_<base64url>").
-const RegistrationTokenPrefix = "grc_"
-
-// EntryKind classifies a registry entry (design/design/registry.design.md).
+// EntryKind classifies how grain-registry routes traffic to an entry.
+// Note: v1 supports hosted VM instances ("instance") and outbound-tunnel
+// connected daemons ("connected"); redirect entries are intentionally omitted.
 type EntryKind string
 
 const (
-	KindInstance  EntryKind = "instance"
+	// KindInstance is a registry-provisioned GCE VM reached over VPC HTTP.
+	KindInstance EntryKind = "instance"
+	// KindConnected is a self-hosted daemon reached over an outbound grain connect tunnel.
 	KindConnected EntryKind = "connected"
-	KindRedirect  EntryKind = "redirect"
 )
 
-// HostKind identifies where an entry's grain process runs.
+// Valid reports whether k is a supported v1 EntryKind.
+func (k EntryKind) Valid() bool {
+	return k == KindInstance || k == KindConnected
+}
+
+// EntryState is the persisted lifecycle state of an entry.
+type EntryState string
+
+const (
+	StateCreating  EntryState = "creating"
+	StateRunning   EntryState = "running"
+	StateReplacing EntryState = "replacing"
+	StateDeleting  EntryState = "deleting"
+	StateDeleted   EntryState = "deleted"
+	StateFailed    EntryState = "failed"
+)
+
+// Valid reports whether s is a known EntryState.
+func (s EntryState) Valid() bool {
+	switch s {
+	case StateCreating, StateRunning, StateReplacing, StateDeleting, StateDeleted, StateFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// ReplaceStep tracks sub-progress while an instance entry is in StateReplacing.
+type ReplaceStep string
+
+const (
+	ReplaceStepDraining   ReplaceStep = "draining"
+	ReplaceStepDeletingVM ReplaceStep = "deleting_vm"
+	ReplaceStepCreatingVM ReplaceStep = "creating_vm"
+	ReplaceStepProbing    ReplaceStep = "probing"
+)
+
+// EntryStatus is the derived runtime reachability status of an entry.
+type EntryStatus string
+
+const (
+	StatusOnline   EntryStatus = "online"
+	StatusDegraded EntryStatus = "degraded"
+	StatusOffline  EntryStatus = "offline"
+)
+
+// Valid reports whether s is a known EntryStatus.
+func (s EntryStatus) Valid() bool {
+	switch s {
+	case StatusOnline, StatusDegraded, StatusOffline:
+		return true
+	default:
+		return false
+	}
+}
+
+// HealthState is the self-reported daemon health state on heartbeats and status probes.
+type HealthState string
+
+const (
+	HealthOK        HealthState = "ok"
+	HealthDegraded  HealthState = "degraded"
+	HealthUnhealthy HealthState = "unhealthy"
+)
+
+// Valid reports whether h is a known HealthState.
+func (h HealthState) Valid() bool {
+	switch h {
+	case HealthOK, HealthDegraded, HealthUnhealthy:
+		return true
+	default:
+		return false
+	}
+}
+
+// HostKind describes where a connected or hosted grain daemon is running.
 type HostKind string
 
 const (
@@ -57,573 +126,600 @@ const (
 	HostKindOther       HostKind = "other"
 )
 
-// ConnectedHostKinds lists the valid host_kind values for connected entries.
-func ConnectedHostKinds() []HostKind {
-	return []HostKind{HostKindWorkstation, HostKindKubernetes, HostKindOther}
-}
-
-// ValidateConnectedHostKind checks that hk is valid for a connected entry.
-// Empty defaults to HostKindOther via NormalizeConnectedHostKind.
-func ValidateConnectedHostKind(hk HostKind) error {
-	switch hk {
-	case "", HostKindWorkstation, HostKindKubernetes, HostKindOther:
-		return nil
-	case HostKindRegistryVM:
-		return fmt.Errorf("host_kind %q is reserved for registry-managed VM instances", hk)
+// Valid reports whether k is a known HostKind.
+func (k HostKind) Valid() bool {
+	switch k {
+	case HostKindRegistryVM, HostKindWorkstation, HostKindKubernetes, HostKindOther:
+		return true
 	default:
-		return fmt.Errorf("unknown host_kind %q (must be workstation, kubernetes, or other)", hk)
+		return false
 	}
 }
 
-// NormalizeConnectedHostKind trims hk and defaults empty to HostKindOther.
-func NormalizeConnectedHostKind(hk HostKind) (HostKind, error) {
-	trimmed := HostKind(strings.ToLower(strings.TrimSpace(string(hk))))
-	if err := ValidateConnectedHostKind(trimmed); err != nil {
-		return "", err
-	}
-	if trimmed == "" {
-		return HostKindOther, nil
-	}
-	return trimmed, nil
-}
-
-// EntryState is an entry's lifecycle state in the registry store.
-type EntryState string
-
-const (
-	StateCreating  EntryState = "creating"
-	StateRunning   EntryState = "running"
-	StateReplacing EntryState = "replacing"
-	StateStopping  EntryState = "stopping"
-	StateStopped   EntryState = "stopped"
-	StateDeleting  EntryState = "deleting"
-	StateDeleted   EntryState = "deleted"
-	StateFailed    EntryState = "failed"
-)
-
-// EntryStatus is an entry's derived runtime liveness status.
-type EntryStatus string
-
-const (
-	StatusOnline   EntryStatus = "online"
-	StatusDegraded EntryStatus = "degraded"
-	StatusOffline  EntryStatus = "offline"
-	StatusUnknown  EntryStatus = "unknown"
-)
-
-// HealthState is the self-reported health of a grain controller.
-type HealthState string
-
-const (
-	HealthOK        HealthState = "ok"
-	HealthDegraded  HealthState = "degraded"
-	HealthUnhealthy HealthState = "unhealthy"
-)
-
-// ValidateHealthState verifies h is one of ok, degraded, or unhealthy.
-func ValidateHealthState(h HealthState) error {
-	switch h {
-	case HealthOK, HealthDegraded, HealthUnhealthy:
-		return nil
-	default:
-		return fmt.Errorf("unknown health state %q (must be ok, degraded, or unhealthy)", h)
-	}
-}
-
-// ConnectMode describes how browser visits reach a connected entry.
-// ConnectModeTunnel is reserved as the seam for the outbound proxy tunnel design.
-type ConnectMode string
-
-const (
-	ConnectModeNone     ConnectMode = "none"
-	ConnectModeRedirect ConnectMode = "redirect"
-	ConnectModeTunnel   ConnectMode = "tunnel"
-)
-
-// ScopeRole declares whether a grain holds primary standing-work ownership or
-// secondary (manual/delegated) capacity for a repository and path prefix.
+// ScopeRole distinguishes primary claim ownership from secondary/experimental coverage.
 type ScopeRole string
 
 const (
-	ScopeRolePrimary   ScopeRole = "primary"
-	ScopeRoleSecondary ScopeRole = "secondary"
+	RolePrimary   ScopeRole = "primary"
+	RoleSecondary ScopeRole = "secondary"
 )
 
-// ValidateScopeRole checks that r is primary or secondary.
-func ValidateScopeRole(r ScopeRole) error {
-	switch r {
-	case ScopeRolePrimary, ScopeRoleSecondary:
-		return nil
-	default:
-		return fmt.Errorf("unknown scope role %q (must be primary or secondary)", r)
-	}
+// Valid reports whether r is a known ScopeRole.
+func (r ScopeRole) Valid() bool {
+	return r == RolePrimary || r == RoleSecondary
 }
 
-// ScopeSource distinguishes instance-reported scopes from registry-declared overrides.
+// ScopeSource records whether a scope came from live daemon reporting or operator declaration.
 type ScopeSource string
 
 const (
-	ScopeSourceReported ScopeSource = "reported"
-	ScopeSourceDeclared ScopeSource = "declared"
+	SourceReported ScopeSource = "reported"
+	SourceDeclared ScopeSource = "declared"
 )
 
-// Scope represents a (repo, path_prefix, role) claim on a registry entry.
+// Valid reports whether s is a known ScopeSource.
+func (s ScopeSource) Valid() bool {
+	return s == SourceReported || s == SourceDeclared
+}
+
+// InactiveReason explains why a declared or reported scope is currently inactive.
+type InactiveReason string
+
+const (
+	InactiveOverriddenByNarrower  InactiveReason = "overridden_by_narrower"
+	InactiveNotReportedByInstance InactiveReason = "not_reported_by_instance"
+	InactivePrimaryConflict       InactiveReason = "primary_conflict"
+)
+
+// NameStatus reports whether a candidate entry name can be registered.
+type NameStatus string
+
+const (
+	NameFree     NameStatus = "free"
+	NameTaken    NameStatus = "taken"
+	NameReserved NameStatus = "reserved"
+	NameInvalid  NameStatus = "invalid"
+)
+
+const (
+	// MaxDisplayNameRunes bounds catalog DisplayName length.
+	MaxDisplayNameRunes = 80
+	// MaxPurposeRunes bounds catalog Purpose length.
+	MaxPurposeRunes = 280
+	// MaxTagsPerEntry bounds the number of catalog tags on an entry.
+	MaxTagsPerEntry = 10
+	// DefaultHeartbeatInterval is the default connected-entry heartbeat cadence (~15s).
+	DefaultHeartbeatInterval = 15 * time.Second
+	// RegistrationTokenPrefix identifies registry-minted connected-entry credentials.
+	RegistrationTokenPrefix = "grc_"
+)
+
+var (
+	entryNameRe = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}[a-z0-9]$`)
+	tagRe       = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+)
+
+var reservedEntryNames = map[string]bool{
+	"admin":     true,
+	"api":       true,
+	"assets":    true,
+	"auth":      true,
+	"connect":   true,
+	"docs":      true,
+	"ftp":       true,
+	"health":    true,
+	"healthz":   true,
+	"help":      true,
+	"imap":      true,
+	"internal":  true,
+	"localhost": true,
+	"login":     true,
+	"logout":    true,
+	"mail":      true,
+	"metrics":   true,
+	"null":      true,
+	"oauth":     true,
+	"proxy":     true,
+	"registry":  true,
+	"root":      true,
+	"smtp":      true,
+	"ssh":       true,
+	"static":    true,
+	"status":    true,
+	"support":   true,
+	"system":    true,
+	"tunnel":    true,
+	"undefined": true,
+	"vpn":       true,
+	"www":       true,
+}
+
+// IsReservedEntryName reports whether name is a system-reserved subdomain label.
+func IsReservedEntryName(name string) bool {
+	return reservedEntryNames[strings.ToLower(strings.TrimSpace(name))]
+}
+
+// ValidateEntryName checks that name is a valid, unreserved 3..32 character DNS
+// subdomain label matching [a-z][a-z0-9-]{1,30}[a-z0-9].
+func ValidateEntryName(name string) error {
+	if !entryNameRe.MatchString(name) {
+		return fmt.Errorf("invalid entry name %q: must be 3..32 lowercase ASCII letters, digits, or hyphens, starting with a letter and ending with a letter or digit", name)
+	}
+	if reservedEntryNames[name] {
+		return fmt.Errorf("entry name %q is reserved", name)
+	}
+	return nil
+}
+
+// ValidateCatalogMetadata validates optional DisplayName, Purpose, and Tags fields.
+func ValidateCatalogMetadata(displayName, purpose string, tags []string) error {
+	if utf8.RuneCountInString(displayName) > MaxDisplayNameRunes {
+		return fmt.Errorf("display_name exceeds %d characters", MaxDisplayNameRunes)
+	}
+	if utf8.RuneCountInString(purpose) > MaxPurposeRunes {
+		return fmt.Errorf("purpose exceeds %d characters", MaxPurposeRunes)
+	}
+	if len(tags) > MaxTagsPerEntry {
+		return fmt.Errorf("at most %d tags are allowed", MaxTagsPerEntry)
+	}
+	seen := make(map[string]bool, len(tags))
+	for _, tag := range tags {
+		if !tagRe.MatchString(tag) {
+			return fmt.Errorf("invalid tag %q: must match [a-z0-9][a-z0-9-]{0,31}", tag)
+		}
+		if seen[tag] {
+			return fmt.Errorf("duplicate tag %q", tag)
+		}
+		seen[tag] = true
+	}
+	return nil
+}
+
+// NormalizeRepo canonicalizes a repository identifier (for example
+// "https://GitHub.com/Org/Repo.git/" -> "github.com/org/repo").
+func NormalizeRepo(repo string) (string, error) {
+	r := strings.TrimSpace(repo)
+	if r == "" {
+		return "", errors.New("repo is required")
+	}
+	for _, scheme := range []string{"https://", "http://", "ssh://"} {
+		if strings.HasPrefix(strings.ToLower(r), scheme) {
+			r = r[len(scheme):]
+			break
+		}
+	}
+	r = strings.TrimRight(r, "/")
+	if strings.HasSuffix(strings.ToLower(r), ".git") {
+		r = r[:len(r)-len(".git")]
+	}
+	r = strings.ToLower(strings.Trim(r, "/"))
+	if r == "" {
+		return "", fmt.Errorf("invalid repo %q", repo)
+	}
+	if strings.ContainsAny(r, " \t\r\n?#\\") {
+		return "", fmt.Errorf("invalid repo %q: contains forbidden characters", repo)
+	}
+	parts := strings.Split(r, "/")
+	if len(parts) < 2 {
+		return "", fmt.Errorf("invalid repo %q: expected host/path or owner/repo", repo)
+	}
+	for _, p := range parts {
+		if p == "" || p == "." || p == ".." {
+			return "", fmt.Errorf("invalid repo %q: invalid path segment %q", repo, p)
+		}
+	}
+	return r, nil
+}
+
+// NormalizePathPrefix canonicalizes a repository path prefix. Both "" and "/"
+// normalize to "" (meaning the entire repository). Leading and trailing slashes
+// are stripped, and ".", "..", backslashes, or empty internal segments are rejected.
+func NormalizePathPrefix(prefix string) (string, error) {
+	p := strings.TrimSpace(prefix)
+	if p == "" || p == "/" {
+		return "", nil
+	}
+	if strings.ContainsAny(p, "\\\r\n") {
+		return "", fmt.Errorf("invalid path_prefix %q: contains forbidden characters", prefix)
+	}
+	p = strings.Trim(p, "/")
+	if p == "" {
+		return "", nil
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return "", fmt.Errorf("invalid path_prefix %q: invalid path segment %q", prefix, seg)
+		}
+	}
+	return p, nil
+}
+
+// PathMatchesPrefix reports whether filePath falls under normalized prefix on a
+// path-segment boundary, returning the match specificity (0 for whole-repo "",
+// len(prefix) for a non-empty prefix).
+func PathMatchesPrefix(filePath, prefix string) (matched bool, specificity int) {
+	cleanPrefix := strings.Trim(prefix, "/")
+	if cleanPrefix == "" {
+		return true, 0
+	}
+	cleanPath := strings.Trim(filePath, "/")
+	if cleanPath == cleanPrefix {
+		return true, len(cleanPrefix)
+	}
+	if strings.HasPrefix(cleanPath, cleanPrefix+"/") {
+		return true, len(cleanPrefix)
+	}
+	return false, 0
+}
+
+// PrimaryPrefixesOverlap reports whether two normalized path prefixes within
+// the same repository overlap along path-segment boundaries (one is equal to or
+// a directory ancestor of the other).
+func PrimaryPrefixesOverlap(prefixA, prefixB string) bool {
+	a := strings.Trim(prefixA, "/")
+	b := strings.Trim(prefixB, "/")
+	if a == "" || b == "" || a == b {
+		return true
+	}
+	return strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
+}
+
+// ScopeInput is an operator-supplied scope declaration on create or set-scopes.
+type ScopeInput struct {
+	Repo       string    `json:"repo"`
+	PathPrefix string    `json:"path_prefix,omitempty"`
+	Role       ScopeRole `json:"role,omitempty"`
+}
+
+// Scope is an entry's repository/path claim as stored and returned by the registry.
 type Scope struct {
-	Repo           string      `json:"repo"`
-	PathPrefix     string      `json:"path_prefix"`
-	Role           ScopeRole   `json:"role"`
-	EffectiveRole  ScopeRole   `json:"effective_role,omitempty"`
-	Source         ScopeSource `json:"source,omitempty"`
-	Active         *bool       `json:"active,omitempty"`
-	ConflictWith   string      `json:"conflict_with,omitempty"`
-	InactiveReason string      `json:"inactive_reason,omitempty"`
+	Repo           string         `json:"repo"`
+	PathPrefix     string         `json:"path_prefix"`
+	Role           ScopeRole      `json:"role"`
+	Source         ScopeSource    `json:"source"`
+	Branch         string         `json:"branch,omitempty"`
+	Active         bool           `json:"active"`
+	InactiveReason InactiveReason `json:"inactive_reason,omitempty"`
+	UpdatedAt      time.Time      `json:"updated_at,omitempty"`
 }
 
-// ScopeConflict describes a primary-scope collision with an existing listed entry.
+// ScopeConflict describes why a primary scope claim was rejected or marked inactive.
 type ScopeConflict struct {
-	Repo         string `json:"repo"`
-	PathPrefix   string `json:"path_prefix"`
-	ConflictWith string `json:"conflict_with"`
-	Owner        string `json:"owner,omitempty"`
-	OwnerGroup   string `json:"owner_group,omitempty"`
+	Repo                  string `json:"repo"`
+	PathPrefix            string `json:"path_prefix"`
+	ConflictingEntry      string `json:"conflicting_entry,omitempty"`
+	ConflictingOwner      string `json:"conflicting_owner,omitempty"`
+	ConflictingOwnerGroup string `json:"conflicting_owner_group,omitempty"`
+	ConflictingPrefix     string `json:"conflicting_prefix,omitempty"`
+	ConflictingListed     bool   `json:"conflicting_listed"`
 }
 
-// CredentialInfo summarizes a connected entry's hashed registration token
-// without exposing secret material.
-type CredentialInfo struct {
-	ID         string     `json:"id"`
-	Prefix     string     `json:"prefix"`
-	Label      string     `json:"label,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
-	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
-	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
+// CredentialMeta describes a grc_... registration credential without exposing its secret.
+type CredentialMeta struct {
+	CredentialID string     `json:"credential_id"`
+	Label        string     `json:"label,omitempty"`
+	CreatedBy    string     `json:"created_by,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	LastUsedAt   *time.Time `json:"last_used_at,omitempty"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	RevokedAt    *time.Time `json:"revoked_at,omitempty"`
 }
 
-// Entry is the registry's representation of an instance, connected, or redirect entry.
+// Entry is the full wire representation of a registry entry.
 type Entry struct {
-	Name                string           `json:"name"`
-	Kind                EntryKind        `json:"kind"`
-	State               EntryState       `json:"state,omitempty"`
-	Status              EntryStatus      `json:"status,omitempty"`
-	Owner               string           `json:"owner,omitempty"`
-	OwnerGroup          string           `json:"owner_group,omitempty"`
-	DisplayName         string           `json:"display_name,omitempty"`
-	Purpose             string           `json:"purpose,omitempty"`
-	HostKind            HostKind         `json:"host_kind,omitempty"`
-	Listed              bool             `json:"listed"`
-	Tags                []string         `json:"tags,omitempty"`
-	URL                 string           `json:"url,omitempty"`
-	ExternalURL         string           `json:"external_url,omitempty"`
-	TargetURL           string           `json:"target_url,omitempty"`
-	AppendPath          *bool            `json:"append_path,omitempty"`
-	ConnectedPrincipal  string           `json:"connected_principal,omitempty"`
-	ConnectMode         ConnectMode      `json:"connect_mode,omitempty"`
-	Shape               string           `json:"shape,omitempty"`
-	GrainVersion        string           `json:"grain_version,omitempty"`
-	GrainCommit         string           `json:"grain_commit,omitempty"`
-	Health              HealthState      `json:"health,omitempty"`
-	HealthDetail        string           `json:"health_detail,omitempty"`
-	ActiveTasks         *int             `json:"active_tasks,omitempty"`
-	AwaitingReplyTasks  *int             `json:"awaiting_reply_tasks,omitempty"`
-	LastHeartbeatAt     *time.Time       `json:"last_heartbeat_at,omitempty"`
-	HeartbeatAgeSeconds *int64           `json:"heartbeat_age_seconds,omitempty"`
-	HasReportedScopes   bool             `json:"has_reported_scopes,omitempty"`
-	Scopes              []Scope          `json:"scopes,omitempty"`
-	ScopeConflicts      []ScopeConflict  `json:"scope_conflicts,omitempty"`
-	Credentials         []CredentialInfo `json:"credentials,omitempty"`
-	CreatedAt           *time.Time       `json:"created_at,omitempty"`
-	UpdatedAt           *time.Time       `json:"updated_at,omitempty"`
+	Name            string           `json:"name"`
+	URL             string           `json:"url"`
+	Kind            EntryKind        `json:"kind"`
+	State           EntryState       `json:"state"`
+	Status          EntryStatus      `json:"status"`
+	StatusDetail    string           `json:"status_detail,omitempty"`
+	ReplaceStep     ReplaceStep      `json:"replace_step,omitempty"`
+	DisplayName     string           `json:"display_name,omitempty"`
+	Purpose         string           `json:"purpose,omitempty"`
+	Owner           string           `json:"owner"`
+	OwnerGroup      string           `json:"owner_group,omitempty"`
+	PendingOwner    string           `json:"pending_owner,omitempty"`
+	Listed          bool             `json:"listed"`
+	Tags            []string         `json:"tags,omitempty"`
+	Shape           string           `json:"shape,omitempty"`
+	Zone            string           `json:"zone,omitempty"`
+	MachineType     string           `json:"machine_type,omitempty"`
+	BootDiskGB      int              `json:"boot_disk_gb,omitempty"`
+	DataDiskGB      int              `json:"data_disk_gb,omitempty"`
+	AllowSSH        bool             `json:"allow_ssh"`
+	ShipLogs        bool             `json:"ship_logs"`
+	BackendURL      string           `json:"backend_url,omitempty"`
+	GrainVersion    string           `json:"grain_version,omitempty"`
+	GrainCommit     string           `json:"grain_commit,omitempty"`
+	TargetVersion   string           `json:"target_version,omitempty"`
+	HostKind        HostKind         `json:"host_kind,omitempty"`
+	ActiveTasks     int              `json:"active_tasks"`
+	QueueDepth      int              `json:"queue_depth"`
+	ActiveSessions  int              `json:"active_sessions"`
+	ConnectedSince  *time.Time       `json:"connected_since,omitempty"`
+	TunnelSessionID string           `json:"tunnel_session_id,omitempty"`
+	LastHeartbeatAt *time.Time       `json:"last_heartbeat_at,omitempty"`
+	Scopes          []Scope          `json:"scopes,omitempty"`
+	Credentials     []CredentialMeta `json:"credentials,omitempty"`
+	CreatedAt       time.Time        `json:"created_at"`
+	UpdatedAt       time.Time        `json:"updated_at"`
+	DeletedAt       *time.Time       `json:"deleted_at,omitempty"`
 }
 
-// CreateEntryRequest is the body of POST /api/entries.
+// CreateEntryRequest is the request body for POST /api/entries.
 type CreateEntryRequest struct {
-	Name               string      `json:"name,omitempty"`
-	Kind               EntryKind   `json:"kind"`
-	Shape              string      `json:"shape,omitempty"`
-	HostKind           HostKind    `json:"host_kind,omitempty"`
-	ExternalURL        string      `json:"external_url,omitempty"`
-	TargetURL          string      `json:"target_url,omitempty"`
-	AppendPath         *bool       `json:"append_path,omitempty"`
-	ConnectedPrincipal string      `json:"connected_principal,omitempty"`
-	ConnectMode        ConnectMode `json:"connect_mode,omitempty"`
-	DisplayName        string      `json:"display_name,omitempty"`
-	Purpose            string      `json:"purpose,omitempty"`
-	OwnerGroup         string      `json:"owner_group,omitempty"`
-	Listed             *bool       `json:"listed,omitempty"`
-	Tags               []string    `json:"tags,omitempty"`
-	Scopes             []Scope     `json:"scopes,omitempty"`
-	MintToken          bool        `json:"mint_token,omitempty"`
+	Name               string       `json:"name"`
+	Kind               EntryKind    `json:"kind"`
+	HostKind           HostKind     `json:"host_kind,omitempty"`
+	ConnectedPrincipal string       `json:"connected_principal,omitempty"`
+	DisplayName        string       `json:"display_name,omitempty"`
+	Purpose            string       `json:"purpose,omitempty"`
+	OwnerGroup         string       `json:"owner_group,omitempty"`
+	Listed             *bool        `json:"listed,omitempty"`
+	Tags               []string     `json:"tags,omitempty"`
+	Shape              string       `json:"shape,omitempty"`
+	Zone               string       `json:"zone,omitempty"`
+	AllowSSH           *bool        `json:"allow_ssh,omitempty"`
+	ShipLogs           *bool        `json:"ship_logs,omitempty"`
+	Scopes             []ScopeInput `json:"scopes,omitempty"`
+	CredentialLabel    string       `json:"credential_label,omitempty"`
 }
 
-// CreateEntryResponse is returned by POST /api/entries and
-// POST /api/entries/{name}/promote-connected. Token is populated at most once,
-// when a connected registration credential ("grc_...") was minted.
+// CreateEntryResponse is returned by POST /api/entries. RegistrationToken is
+// populated once when creating a connected entry and is never returned again.
 type CreateEntryResponse struct {
-	Entry
-	Token string `json:"token,omitempty"`
+	Entry             Entry           `json:"entry"`
+	RegistrationToken string          `json:"registration_token,omitempty"`
+	Credential        *CredentialMeta `json:"credential,omitempty"`
 }
 
-// UpdateEntryRequest is the body of PATCH /api/entries/{name}.
+// UpdateEntryRequest is the PATCH /api/entries/<name> payload for mutable catalog and VM flags.
 type UpdateEntryRequest struct {
-	DisplayName        *string     `json:"display_name,omitempty"`
-	Purpose            *string     `json:"purpose,omitempty"`
-	HostKind           *HostKind   `json:"host_kind,omitempty"`
-	ExternalURL        *string     `json:"external_url,omitempty"`
-	TargetURL          *string     `json:"target_url,omitempty"`
-	AppendPath         *bool       `json:"append_path,omitempty"`
-	ConnectedPrincipal *string     `json:"connected_principal,omitempty"`
-	ConnectMode        ConnectMode `json:"connect_mode,omitempty"`
-	OwnerGroup         *string     `json:"owner_group,omitempty"`
-	Listed             *bool       `json:"listed,omitempty"`
-	Tags               *[]string   `json:"tags,omitempty"`
+	DisplayName        *string   `json:"display_name,omitempty"`
+	Purpose            *string   `json:"purpose,omitempty"`
+	HostKind           *HostKind `json:"host_kind,omitempty"`
+	ConnectedPrincipal *string   `json:"connected_principal,omitempty"`
+	OwnerGroup         *string   `json:"owner_group,omitempty"`
+	Listed             *bool     `json:"listed,omitempty"`
+	Tags               *[]string `json:"tags,omitempty"`
+	AllowSSH           *bool     `json:"allow_ssh,omitempty"`
+	ShipLogs           *bool     `json:"ship_logs,omitempty"`
 }
 
-// DeleteEntryRequest is the body of DELETE /api/entries/{name}.
-type DeleteEntryRequest struct {
-	Confirm string `json:"confirm"`
+// SetScopesRequest replaces an entry's declared scopes via PUT /api/entries/<name>/scopes.
+type SetScopesRequest struct {
+	Scopes []ScopeInput `json:"scopes"`
 }
 
-// HeartbeatRequest is the body of PUT /api/entries/{name}/heartbeat.
+// SetScopesResponse returns the resulting scopes after PUT /api/entries/<name>/scopes.
+type SetScopesResponse struct {
+	Scopes    []Scope         `json:"scopes"`
+	Conflicts []ScopeConflict `json:"conflicts,omitempty"`
+}
+
+// HeartbeatScope is a single repository checkout or workspace reported by a running daemon.
+type HeartbeatScope struct {
+	Repo       string    `json:"repo"`
+	PathPrefix string    `json:"path_prefix,omitempty"`
+	Role       ScopeRole `json:"role,omitempty"`
+	Branch     string    `json:"branch,omitempty"`
+}
+
+// HeartbeatRequest is sent to POST /api/entries/<name>/heartbeat by a connected daemon.
 type HeartbeatRequest struct {
-	GrainVersion       string      `json:"grain_version"`
-	GrainCommit        string      `json:"grain_commit"`
-	Health             HealthState `json:"health"`
-	HealthDetail       string      `json:"health_detail,omitempty"`
-	ActiveTasks        int         `json:"active_tasks"`
-	AwaitingReplyTasks int         `json:"awaiting_reply_tasks"`
-	HostKind           HostKind    `json:"host_kind,omitempty"`
-	ExternalURL        string      `json:"external_url,omitempty"`
-	DisplayName        string      `json:"display_name,omitempty"`
-	Purpose            string      `json:"purpose,omitempty"`
-	Scopes             []Scope     `json:"scopes"`
+	GrainVersion       string           `json:"grain_version,omitempty"`
+	GrainCommit        string           `json:"grain_commit,omitempty"`
+	HostKind           HostKind         `json:"host_kind,omitempty"`
+	Health             HealthState      `json:"health,omitempty"`
+	HealthDetail       string           `json:"health_detail,omitempty"`
+	ActiveTasks        int              `json:"active_tasks"`
+	AwaitingReplyTasks int              `json:"awaiting_reply_tasks"`
+	QueueDepth         int              `json:"queue_depth"`
+	ActiveSessions     int              `json:"active_sessions"`
+	Scopes             []HeartbeatScope `json:"scopes,omitempty"`
 }
 
-// HeartbeatResponse is returned by PUT /api/entries/{name}/heartbeat.
+// HeartbeatResponse is returned by POST /api/entries/<name>/heartbeat.
 type HeartbeatResponse struct {
-	Status                   EntryStatus     `json:"status,omitempty"`
-	NextHeartbeatSeconds     int             `json:"next_heartbeat_seconds,omitempty"`
-	HeartbeatIntervalSeconds int             `json:"heartbeat_interval_seconds,omitempty"`
-	ScopeConflicts           []ScopeConflict `json:"scope_conflicts,omitempty"`
+	Status              EntryStatus     `json:"status"`
+	ActiveScopes        []Scope         `json:"active_scopes,omitempty"`
+	Conflicts           []ScopeConflict `json:"conflicts,omitempty"`
+	NextIntervalSeconds int             `json:"next_interval_seconds,omitempty"`
 }
 
-// Interval returns the server-advised heartbeat cadence, or 0 if unspecified.
-func (r HeartbeatResponse) Interval() time.Duration {
-	if r.NextHeartbeatSeconds > 0 {
-		return time.Duration(r.NextHeartbeatSeconds) * time.Second
-	}
-	if r.HeartbeatIntervalSeconds > 0 {
-		return time.Duration(r.HeartbeatIntervalSeconds) * time.Second
-	}
-	return 0
+// InstanceStatusResponse is the read-only payload served by a hosted daemon's
+// GET /api/registry/status endpoint when probed by the registry reconciler.
+type InstanceStatusResponse struct {
+	GrainVersion       string           `json:"grain_version"`
+	GrainCommit        string           `json:"grain_commit,omitempty"`
+	HostKind           HostKind         `json:"host_kind,omitempty"`
+	Health             HealthState      `json:"health"`
+	HealthDetail       string           `json:"health_detail,omitempty"`
+	ActiveTasks        int              `json:"active_tasks"`
+	AwaitingReplyTasks int              `json:"awaiting_reply_tasks"`
+	QueueDepth         int              `json:"queue_depth"`
+	ActiveSessions     int              `json:"active_sessions"`
+	Scopes             []HeartbeatScope `json:"scopes,omitempty"`
 }
 
-// PromoteConnectedRequest is the body of POST /api/entries/{name}/promote-connected.
-type PromoteConnectedRequest struct {
-	HostKind           HostKind `json:"host_kind,omitempty"`
-	ConnectedPrincipal string   `json:"connected_principal,omitempty"`
-	MintToken          bool     `json:"mint_token,omitempty"`
-}
-
-// RotateCredentialRequest is the body of POST /api/entries/{name}/credentials/rotate.
+// RotateCredentialRequest is the request body for POST /api/entries/<name>/credentials/rotate.
 type RotateCredentialRequest struct {
-	Label          string     `json:"label,omitempty"`
-	RevokePrevious bool       `json:"revoke_previous,omitempty"`
-	RevokeCredID   string     `json:"revoke_cred_id,omitempty"`
-	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
+	Label          string `json:"label,omitempty"`
+	RevokePrevious bool   `json:"revoke_previous,omitempty"`
 }
 
-// RotateCredentialResponse returns the newly minted registration credential.
+// RotateCredentialResponse returns the newly minted grc_... token once.
 type RotateCredentialResponse struct {
-	Credential CredentialInfo `json:"credential"`
-	Token      string         `json:"token"`
+	RegistrationToken string         `json:"registration_token"`
+	Credential        CredentialMeta `json:"credential"`
 }
 
-// InstanceStatus is the read-only payload served by a grain controller on
-// GET /api/registry/status so hosted instances and local diagnostics share
-// the exact status vocabulary connected heartbeats push.
-type InstanceStatus struct {
-	GrainVersion       string      `json:"grain_version"`
-	GrainCommit        string      `json:"grain_commit"`
-	Health             HealthState `json:"health"`
-	HealthDetail       string      `json:"health_detail,omitempty"`
-	ActiveTasks        int         `json:"active_tasks"`
-	AwaitingReplyTasks int         `json:"awaiting_reply_tasks"`
-	Scopes             []Scope     `json:"scopes"`
+// UpgradeEntryRequest triggers an image/binary upgrade on a hosted instance entry.
+type UpgradeEntryRequest struct {
+	TargetVersion string `json:"target_version,omitempty"`
+}
+
+// ReplaceEntryRequest triggers a shape or image replacement on a hosted instance entry.
+type ReplaceEntryRequest struct {
+	Shape         string `json:"shape,omitempty"`
+	TargetVersion string `json:"target_version,omitempty"`
+}
+
+// DeleteEntryRequest deletes an entry via DELETE /api/entries/<name>.
+type DeleteEntryRequest struct {
+	ConfirmName string `json:"confirm_name,omitempty"`
+	DeleteDisk  bool   `json:"delete_disk,omitempty"`
+}
+
+// TransferRequest offers ownership transfer via POST /api/entries/<name>/transfer.
+type TransferRequest struct {
+	NewOwner   string `json:"new_owner"`
+	OwnerGroup string `json:"owner_group,omitempty"`
+}
+
+// ListEntriesQuery filters GET /api/entries.
+type ListEntriesQuery struct {
+	Owner          string
+	Kind           EntryKind
+	Status         EntryStatus
+	IncludeDeleted bool
+}
+
+// ListEntriesResponse wraps the entries returned by GET /api/entries.
+type ListEntriesResponse struct {
+	Entries []Entry `json:"entries"`
 }
 
 // DirectoryQuery filters GET /api/directory.
 type DirectoryQuery struct {
-	Query    string
-	Repo     string
-	Tags     []string
-	Statuses []EntryStatus
-	HostKind HostKind
-	Owner    string
+	Query  string
+	Repo   string
+	Tag    string
+	Status EntryStatus
+	Kind   EntryKind
+	Owner  string
+	Limit  int
+	Cursor string
 }
 
-// DirectoryEntry is a public catalog projection returned by GET /api/directory.
+// DirectoryEntry is the public catalog summary returned for listed entries (and
+// entries owned by the caller) on GET /api/directory. Internal infrastructure
+// fields (VM IPs, disk sizes, credentials, tunnel session IDs) are omitted.
 type DirectoryEntry struct {
-	Name                string      `json:"name"`
-	DisplayName         string      `json:"display_name,omitempty"`
-	URL                 string      `json:"url,omitempty"`
-	ExternalURL         string      `json:"external_url,omitempty"`
-	Kind                EntryKind   `json:"kind"`
-	HostKind            HostKind    `json:"host_kind"`
-	Owner               string      `json:"owner,omitempty"`
-	OwnerGroup          string      `json:"owner_group,omitempty"`
-	Purpose             string      `json:"purpose,omitempty"`
-	Tags                []string    `json:"tags,omitempty"`
-	Scopes              []Scope     `json:"scopes,omitempty"`
-	Status              EntryStatus `json:"status"`
-	State               EntryState  `json:"state,omitempty"`
-	HeartbeatAgeSeconds *int64      `json:"heartbeat_age_seconds,omitempty"`
-	GrainVersion        string      `json:"grain_version,omitempty"`
-	GrainCommit         string      `json:"grain_commit,omitempty"`
-	ActiveTasks         *int        `json:"active_tasks,omitempty"`
-	AwaitingReplyTasks  *int        `json:"awaiting_reply_tasks,omitempty"`
+	Name         string      `json:"name"`
+	URL          string      `json:"url"`
+	Kind         EntryKind   `json:"kind"`
+	Status       EntryStatus `json:"status"`
+	DisplayName  string      `json:"display_name,omitempty"`
+	Purpose      string      `json:"purpose,omitempty"`
+	Owner        string      `json:"owner"`
+	OwnerGroup   string      `json:"owner_group,omitempty"`
+	Tags         []string    `json:"tags,omitempty"`
+	GrainVersion string      `json:"grain_version,omitempty"`
+	HostKind     HostKind    `json:"host_kind,omitempty"`
+	Scopes       []Scope     `json:"scopes,omitempty"`
+	ActiveTasks  int         `json:"active_tasks"`
+	QueueDepth   int         `json:"queue_depth"`
+	UpdatedAt    time.Time   `json:"updated_at"`
 }
 
-// RouteQuery parameterizes GET /api/route.
+// DirectoryResponse is returned by GET /api/directory.
+type DirectoryResponse struct {
+	Entries    []DirectoryEntry `json:"entries"`
+	NextCursor string           `json:"next_cursor,omitempty"`
+}
+
+// RouteQuery queries GET /api/route for which entry owns a repository and path.
 type RouteQuery struct {
 	Repo           string
 	Path           string
 	IncludeOffline bool
 }
 
-// RouteCandidate is one ranked grain returned by GET /api/route.
+// MatchedScope summarizes the scope that matched a RouteQuery.
+type MatchedScope struct {
+	Repo        string      `json:"repo"`
+	PathPrefix  string      `json:"path_prefix"`
+	Role        ScopeRole   `json:"role"`
+	Source      ScopeSource `json:"source"`
+	Specificity int         `json:"specificity"`
+}
+
+// RouteCandidate is one matching entry returned by GET /api/route.
 type RouteCandidate struct {
-	DirectoryEntry
-	MatchedPrefix string    `json:"matched_prefix"`
-	EffectiveRole ScopeRole `json:"effective_role"`
+	Name         string       `json:"name"`
+	URL          string       `json:"url"`
+	Kind         EntryKind    `json:"kind"`
+	Status       EntryStatus  `json:"status"`
+	DisplayName  string       `json:"display_name,omitempty"`
+	Purpose      string       `json:"purpose,omitempty"`
+	Owner        string       `json:"owner"`
+	OwnerGroup   string       `json:"owner_group,omitempty"`
+	MatchedScope MatchedScope `json:"matched_scope"`
 }
 
-var (
-	entryNameRe   = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}[a-z0-9]$`)
-	tagRe         = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
-	reservedNames = []string{
-		"api", "admin", "www", "static", "status", "healthz",
-		"login", "logout", "auth", "mail", "well-known", "directory", "route",
-	}
-)
-
-// ValidateEntryName checks that name is a valid lowercase DNS label of length
-// 3..32 and is not one of the registry's reserved names.
-func ValidateEntryName(name string) error {
-	if !entryNameRe.MatchString(name) {
-		return fmt.Errorf("entry name %q must be 3..32 lowercase letters, digits, or hyphens, starting with a letter and ending with a letter or digit", name)
-	}
-	if slices.Contains(reservedNames, name) {
-		return fmt.Errorf("entry name %q is reserved", name)
-	}
-	return nil
+// RouteResponse is returned by GET /api/route.
+type RouteResponse struct {
+	Repo       string           `json:"repo"`
+	Path       string           `json:"path"`
+	Primary    *RouteCandidate  `json:"primary,omitempty"`
+	Candidates []RouteCandidate `json:"candidates"`
 }
 
-// NormalizeRepo validates and lowercases an "<owner>/<name>" repository slug.
-func NormalizeRepo(raw string) (string, error) {
-	s := strings.ToLower(strings.TrimSpace(raw))
-	owner, name, ok := strings.Cut(s, "/")
-	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
-		return "", fmt.Errorf("repository %q must have the form <owner>/<name>", raw)
-	}
-	if !validRepoSegment(owner) || !validRepoSegment(name) {
-		return "", fmt.Errorf("repository %q contains invalid path characters", raw)
-	}
-	return owner + "/" + name, nil
+// Shape describes an operator-configured VM shape available for hosted instances.
+type Shape struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	Description string `json:"description,omitempty"`
+	MachineType string `json:"machine_type"`
+	VCPU        int    `json:"vcpu"`
+	MemoryGB    int    `json:"memory_gb"`
+	BootDiskGB  int    `json:"boot_disk_gb"`
+	DataDiskGB  int    `json:"data_disk_gb"`
+	QuotaUnits  int    `json:"quota_units"`
+	Default     bool   `json:"default,omitempty"`
 }
 
-func validRepoSegment(seg string) bool {
-	if seg == "." || seg == ".." {
-		return false
-	}
-	for _, r := range seg {
-		switch {
-		case r >= 'a' && r <= 'z':
-		case r >= '0' && r <= '9':
-		case r == '-' || r == '_' || r == '.':
-		default:
-			return false
-		}
-	}
-	return true
+// ShapesResponse is returned by GET /api/shapes.
+type ShapesResponse struct {
+	Shapes []Shape `json:"shapes"`
 }
 
-// NormalizePathPrefix trims surrounding whitespace and slashes from prefix and
-// validates that it is either "" (entire repository) or clean slash-separated
-// relative directory segments with no "." or ".." elements.
-func NormalizePathPrefix(raw string) (string, error) {
-	s := strings.TrimSpace(raw)
-	if s == "" || s == "/" {
-		return "", nil
-	}
-	if strings.Contains(s, `\`) {
-		return "", fmt.Errorf("path_prefix %q must use forward slashes", raw)
-	}
-	for _, r := range s {
-		if r < 0x20 || r == 0x7f {
-			return "", fmt.Errorf("path_prefix %q contains control characters", raw)
-		}
-	}
-	s = strings.Trim(s, "/")
-	if s == "" {
-		return "", nil
-	}
-	parts := strings.Split(s, "/")
-	for _, part := range parts {
-		if part == "" || part == "." || part == ".." {
-			return "", fmt.Errorf("path_prefix %q contains empty or dot path segments", raw)
-		}
-	}
-	return s, nil
+// QuotaUsage summarizes a caller's current vs permitted VM quota units and connected entries.
+type QuotaUsage struct {
+	QuotaUnitsUsed  int `json:"quota_units_used"`
+	QuotaUnitsLimit int `json:"quota_units_limit"`
+	ConnectedUsed   int `json:"connected_used"`
+	ConnectedLimit  int `json:"connected_limit"`
 }
 
-// NormalizeScope validates and normalizes repo, path_prefix, and role.
-// If s.Role is empty, it defaults to ScopeRolePrimary.
-func NormalizeScope(s Scope) (Scope, error) {
-	repo, err := NormalizeRepo(s.Repo)
-	if err != nil {
-		return Scope{}, err
-	}
-	prefix, err := NormalizePathPrefix(s.PathPrefix)
-	if err != nil {
-		return Scope{}, err
-	}
-	role := ScopeRole(strings.ToLower(strings.TrimSpace(string(s.Role))))
-	if role == "" {
-		role = ScopeRolePrimary
-	}
-	if err := ValidateScopeRole(role); err != nil {
-		return Scope{}, err
-	}
-	out := s
-	out.Repo = repo
-	out.PathPrefix = prefix
-	out.Role = role
-	return out, nil
+// MeResponse is returned by GET /api/me.
+type MeResponse struct {
+	Email           string     `json:"email"`
+	Kind            string     `json:"kind"`
+	IsRegistryAdmin bool       `json:"is_registry_admin"`
+	CanCreate       bool       `json:"can_create"`
+	Groups          []string   `json:"groups,omitempty"`
+	Quota           QuotaUsage `json:"quota"`
 }
 
-// NormalizeTags validates, lowercases, and deduplicates entry tags (max 16).
-func NormalizeTags(tags []string) ([]string, error) {
-	if len(tags) == 0 {
-		return nil, nil
-	}
-	var out []string
-	seen := make(map[string]bool, len(tags))
-	for _, raw := range tags {
-		t := strings.ToLower(strings.TrimSpace(raw))
-		if t == "" {
-			continue
-		}
-		if !tagRe.MatchString(t) {
-			return nil, fmt.Errorf("tag %q must match [a-z0-9][a-z0-9-]{0,31}", raw)
-		}
-		if !seen[t] {
-			seen[t] = true
-			out = append(out, t)
-		}
-	}
-	if len(out) > 16 {
-		return nil, fmt.Errorf("at most 16 tags are permitted (got %d)", len(out))
-	}
-	return out, nil
+// NameAvailabilityResponse is returned by GET /api/entries/<name>/availability.
+type NameAvailabilityResponse struct {
+	Name          string     `json:"name"`
+	Status        NameStatus `json:"status"`
+	Reason        string     `json:"reason,omitempty"`
+	ReservedUntil *time.Time `json:"reserved_until,omitempty"`
 }
 
-// ValidateRegistryURL validates and normalizes a registry base URL.
-// HTTPS is required for non-loopback hosts unless allowInsecureHTTP is true.
-// Link-local/cloud-metadata addresses, userinfo credentials, queries, and
-// fragments are always rejected.
-func ValidateRegistryURL(raw string, allowInsecureHTTP bool) (string, error) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return "", fmt.Errorf("registry URL is empty")
-	}
-	if len(trimmed) > 2048 {
-		return "", fmt.Errorf("registry URL exceeds 2048 bytes")
-	}
-	u, err := url.Parse(trimmed)
-	if err != nil {
-		return "", fmt.Errorf("invalid registry URL %q: %w", raw, err)
-	}
-	if u.User != nil {
-		return "", fmt.Errorf("registry URL must not include userinfo credentials")
-	}
-	if u.RawQuery != "" || u.Fragment != "" {
-		return "", fmt.Errorf("registry URL must not include query parameters or fragments")
-	}
-	host := u.Hostname()
-	if host == "" {
-		return "", fmt.Errorf("registry URL %q has no host", raw)
-	}
-	if isForbiddenMetadataHost(host) {
-		return "", fmt.Errorf("registry URL host %q is not permitted", host)
-	}
-	switch u.Scheme {
-	case "https":
-	case "http":
-		if !allowInsecureHTTP && !isLoopbackHost(host) {
-			return "", fmt.Errorf("registry URL %q must use https:// (http:// is allowed only for loopback addresses)", raw)
-		}
-	default:
-		return "", fmt.Errorf("registry URL %q must use https://", raw)
-	}
-	u.Path = strings.TrimRight(u.Path, "/")
-	u.RawPath = ""
-	return u.String(), nil
-}
-
-// ValidateExternalURL validates an optional browser external_url for a
-// connected entry (https:// only, no userinfo, <= 2048 bytes).
-func ValidateExternalURL(raw string) (string, error) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return "", nil
-	}
-	if len(trimmed) > 2048 {
-		return "", fmt.Errorf("external_url exceeds 2048 bytes")
-	}
-	u, err := url.Parse(trimmed)
-	if err != nil {
-		return "", fmt.Errorf("invalid external_url %q: %w", raw, err)
-	}
-	if u.Scheme != "https" {
-		return "", fmt.Errorf("external_url %q must use https://", raw)
-	}
-	if u.User != nil {
-		return "", fmt.Errorf("external_url must not include userinfo credentials")
-	}
-	if u.Fragment != "" {
-		return "", fmt.Errorf("external_url must not include a URL fragment")
-	}
-	host := u.Hostname()
-	if host == "" {
-		return "", fmt.Errorf("external_url %q has no host", raw)
-	}
-	if isForbiddenMetadataHost(host) {
-		return "", fmt.Errorf("external_url host %q is not permitted", host)
-	}
-	return u.String(), nil
-}
-
-func isLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	if addr, err := netip.ParseAddr(host); err == nil {
-		return addr.Unmap().IsLoopback()
-	}
-	return false
-}
-
-func isForbiddenMetadataHost(host string) bool {
-	lower := strings.ToLower(strings.TrimSuffix(host, "."))
-	if lower == "metadata" || strings.HasSuffix(lower, ".internal") && strings.HasPrefix(lower, "metadata.") {
-		return true
-	}
-	if addr, err := netip.ParseAddr(host); err == nil {
-		unmapped := addr.Unmap()
-		if unmapped.IsLinkLocalUnicast() || unmapped.IsLinkLocalMulticast() || unmapped.IsUnspecified() {
-			return true
-		}
-	}
-	return false
+// OfflineErrorResponse is the structured 502/503 payload returned when a routed
+// entry's tunnel or hosted VM is offline.
+type OfflineErrorResponse struct {
+	Error      string      `json:"error"`
+	Entry      string      `json:"entry"`
+	Kind       EntryKind   `json:"kind"`
+	Status     EntryStatus `json:"status"`
+	Owner      string      `json:"owner,omitempty"`
+	OwnerGroup string      `json:"owner_group,omitempty"`
+	LastSeenAt *time.Time  `json:"last_seen_at,omitempty"`
+	Hint       string      `json:"hint,omitempty"`
 }

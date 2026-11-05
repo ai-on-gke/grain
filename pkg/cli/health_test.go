@@ -104,7 +104,7 @@ func TestGrainHealthSurfacesRegistryFailuresAndScopeConflicts(t *testing.T) {
 				ConsecutiveFailures: 3,
 				LastError:           "registry API PUT /api/entries/grain-west/heartbeat returned 503: upstream unavailable",
 				ScopeConflicts: []api.ScopeConflict{
-					{Repo: "acme/widgets", PathPrefix: "pkg/autoscaler", ConflictWith: "grain-east", Owner: "east@example.com"},
+					{Repo: "acme/widgets", PathPrefix: "pkg/autoscaler", ConflictingEntry: "grain-east", ConflictingOwner: "east@example.com"},
 				},
 			}, nil
 		},

@@ -1,0 +1,67 @@
+{
+  "behindUpstreamWithRequireUpToDate": {
+    "commentsCount": 0,
+    "syncErr": "\u003cnil\u003e",
+    "task2State": "closed"
+  },
+  "cycle1PR": {
+    "head": "grain/task-1",
+    "headRepo": "sackheads/kube-agents",
+    "number": 9000,
+    "repo": "gke-labs/kube-agents",
+    "state": "open"
+  },
+  "cycle2Merged": {
+    "prMergedAt": "2026-11-04T22:47:51Z",
+    "taskState": "closed",
+    "upstreamMainSHA": "0c10a6f20227cf63bd9ac528884a6a606dc9787e"
+  },
+  "fetchUpstreamSucceeded": true,
+  "headSHA": "0de8f72f7129c709fd3933c46a1a128d0da29811",
+  "initialUpstreamSHA": "d72c02dc57a4d9fa6f64c55ed2588b9c50e0fb3f",
+  "promptMentionsFork": true,
+  "pullRequestStatusGreen": "Branch grain/task-1 is at 0de8f72 (\"feat: add controller loop\").\nPull request #9000 (https://github.example/gke-labs/kube-agents/pull/9000) is open and merges cleanly into main.\n\nChecks against 0de8f72:\n  ok        Tests / unit (success)\n\n0 failing, 0 not finished, 1 otherwise done.\nEvery check that reported against 0de8f72 is done and none of them failed.",
+  "pullRequestStatusRed": "Branch grain/task-1 is at 0de8f72 (\"feat: add controller loop\").\nPull request #9000 (https://github.example/gke-labs/kube-agents/pull/9000) is open and merges cleanly into main.\n\nChecks against 0de8f72:\n  FAILING   Tests / unit (failure)\n\n1 failing, 0 not finished, 0 otherwise done.\nFix those failures, commit, `git push origin grain/task-1` -- each push reruns CI -- and call this again to see whether the fix took. If this may have been broken before you started, call base_branch_status: it reports CI on the branch you merge into, which tells a failure you caused from one you inherited.\n\nThe end of each failing job's log:\n\n### Tests / unit\n\nhttps://github.example/gke-labs/kube-agents/actions/runs/5010/job/5010000\n\nFailure summary:\n  Failed tests:\n    • TestController (controller_test.go:19): expected ready\n\n````\n=== RUN   TestController\n    controller_test.go:19: expected ready\n--- FAIL: TestController\n````",
+  "pushToForkSucceeded": true,
+  "pushToUpstreamRefusal": "remote: gke-labs/kube-agents is read-only for this sandbox: it may fetch it but not push to it\nfatal: unable to access 'http://127.0.0.1:37605/gke-labs/kube-agents.git/': The requested URL returned error: 403",
+  "pushedBranch": "grain/task-1",
+  "repoSettings": {
+    "repo": "sackheads/kube-agents",
+    "ciCapabilities": null,
+    "availableCICapabilities": [
+      "github-sandbox",
+      "https://grain.dev/capabilities/release#registry-push={}",
+      "https://grain.dev/capabilities/release#package-publish={}",
+      "https://grain.dev/capabilities/release#image-signing={}"
+    ],
+    "defaultCapabilities": null,
+    "deploymentDefaultCapabilities": null,
+    "effectiveDefaultCapabilities": [],
+    "promptExtension": "",
+    "deploymentPromptExtension": "",
+    "effectivePromptExtension": "",
+    "setupCommand": "",
+    "declarations": false,
+    "requireBranchUpToDate": false,
+    "ignoreGitHubCI": false,
+    "ciMode": "github",
+    "watchDefaultBranch": false,
+    "mergeOnGreen": false,
+    "baseRepairBypassesHumanGates": false,
+    "mergeRecheck": "enforce",
+    "issueImport": {
+      "enabled": false,
+      "repo": "",
+      "label": "",
+      "approved": false,
+      "intervalSeconds": 0,
+      "effectiveIntervalSeconds": 600
+    },
+    "unfixableChecks": null,
+    "grainCICheckName": "grain CI",
+    "defaultHostd": "",
+    "upstreamRepo": "gke-labs/kube-agents"
+  },
+  "runConfigUpstreamRepo": "gke-labs/kube-agents",
+  "stateExportContainsUpstreamRepo": true
+}

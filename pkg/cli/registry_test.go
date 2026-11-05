@@ -94,18 +94,14 @@ func TestRegistryCLIRegisterStatusUnregister(t *testing.T) {
 				HostKind:    req.HostKind,
 				DisplayName: req.DisplayName,
 				Purpose:     req.Purpose,
-				ExternalURL: req.ExternalURL,
 				Listed:      listed,
-				Status:      api.StatusUnknown,
+				Status:      api.StatusOffline,
 			}
 			entries[req.Name] = e
-			tok := ""
-			if req.MintToken {
-				tok = "grc_minted_initial_token"
-				activeTokens[req.Name] = tok
-			}
+			tok := "grc_minted_initial_token"
+			activeTokens[req.Name] = tok
 			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(api.CreateEntryResponse{Entry: e, Token: tok})
+			_ = json.NewEncoder(w).Encode(api.CreateEntryResponse{Entry: e, RegistrationToken: tok})
 		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/entries/"):
 			name := strings.TrimPrefix(r.URL.Path, "/api/entries/")
 			e := entries[name]
@@ -130,8 +126,8 @@ func TestRegistryCLIRegisterStatusUnregister(t *testing.T) {
 			rotateCount++
 			tok := "grc_rotated_token"
 			activeTokens[name] = tok
-			_ = json.NewEncoder(w).Encode(api.RotateCredentialResponse{Token: tok})
-		case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/heartbeat"):
+			_ = json.NewEncoder(w).Encode(api.RotateCredentialResponse{RegistrationToken: tok})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/heartbeat"):
 			name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/entries/"), "/heartbeat")
 			if want := activeTokens[name]; want != "" && auth != want {
 				w.WriteHeader(http.StatusUnauthorized)
@@ -141,8 +137,8 @@ func TestRegistryCLIRegisterStatusUnregister(t *testing.T) {
 			_ = json.NewDecoder(r.Body).Decode(&lastHeartbeat)
 			heartbeatCount++
 			_ = json.NewEncoder(w).Encode(api.HeartbeatResponse{
-				Status:                   api.StatusOnline,
-				HeartbeatIntervalSeconds: 15,
+				Status:              api.StatusOnline,
+				NextIntervalSeconds: 15,
 			})
 		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/entries/"):
 			if auth != "oidc-creator-jwt" {
@@ -336,7 +332,6 @@ func TestDaemonRegistryFlags(t *testing.T) {
 		"-registry-purpose", "Core backend services",
 		"-registry-host-kind", "kubernetes",
 		"-registry-listed=false",
-		"-registry-external-url", "https://alpha.grain.example.com",
 		"-registry-token-file", "/etc/grain/reg.token",
 	})
 	if err != nil || len(unknown) != 0 {
@@ -375,7 +370,7 @@ func TestDaemonRegistryFlags(t *testing.T) {
 	// Non-HTTPS non-loopback URL is rejected by checkConfig.
 	badURL := cfg
 	badURL.Registry.URL = "http://registry.example.com"
-	if err := checkConfig(badURL); err == nil || !strings.Contains(err.Error(), "https://") {
-		t.Fatalf("checkConfig(http url) = %v, want https error", err)
+	if err := checkConfig(badURL); err == nil || !strings.Contains(err.Error(), "insecure http://") {
+		t.Fatalf("checkConfig(http url) = %v, want insecure http:// error", err)
 	}
 }

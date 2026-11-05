@@ -370,6 +370,8 @@ export const SETTINGS_INDEX = [
       "image",
       "oci",
       "dockerfile",
+      "sandbox-base",
+      "sandbox-k8s-base",
       "guest-base",
       "k8s-sandbox-base",
       "contract",
@@ -599,13 +601,6 @@ export const SETTINGS_INDEX = [
     anchor: "registry-config",
     label: "Purpose",
     keywords: ["registry", "catalog", "description"],
-  },
-  {
-    id: "registryExternalUrl",
-    section: "registry",
-    anchor: "registry-config",
-    label: "External URL",
-    keywords: ["registry", "url"],
   },
   {
     id: "registryListed",

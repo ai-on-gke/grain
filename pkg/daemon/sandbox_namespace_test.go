@@ -421,3 +421,108 @@ func TestSandboxProxyPagesPipelineChanges(t *testing.T) {
 		t.Errorf("?page=lots: status=%d, want 400; body=%q", status, body)
 	}
 }
+
+func TestInProcessAPIDetachesExternalTokenContextOnMergeQueue(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := sqlite.Open(sqlite.DefaultConfig(dataDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := model.New(db)
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		id, repo, pr string
+	}{
+		{"1", "acme/widgets", "acme/widgets#11"},
+		{"2", "acme/secret", "acme/secret#22"},
+	} {
+		parts := strings.Split(tc.repo, "/")
+		ref := model.RepoRef{Owner: parts[0], Name: parts[1]}
+		if err := store.PutTask(ctx, model.Task{
+			ID:         tc.id,
+			Intent:     model.IntentImplement,
+			Title:      "Task " + tc.id,
+			Body:       "Task " + tc.id,
+			Target:     &ref,
+			Base:       "main",
+			Branch:     "grain/task-" + tc.id,
+			CreatedAt:  &now,
+			AutoMerge:  true,
+			Approval:   &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "op"}},
+			ApprovedAt: &now,
+			Links:      []model.Link{{Kind: model.LinkFixes, Target: tc.pr}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.ObserveField(ctx, tc.id, now, func(o *model.Observation) {
+			o.CompletedAt = &now
+			o.MergeQueueState = "waiting_ci"
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	api := &inProcessAPI{}
+	ns := &namespace.Server{
+		NewRedactor: func() *redact.Redactor { return BuildNamespaceRedactor(dataDir) },
+	}
+	WireSandboxNamespace(ns, SandboxNamespaceConfig{
+		DataDir:      dataDir,
+		Store:        store,
+		InsecureHTTP: true,
+		API:          api,
+	})
+	client := ui.NewClient(ui.Config{
+		DataDir:      dataDir,
+		Actor:        ui.DefaultActor("op"),
+		Capabilities: ui.OfferedCapabilities(),
+		PullRequests: PullRequestGate{},
+	}, store)
+	cfgRow, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfgRow == nil {
+		cfgRow = &model.Config{}
+	}
+	cfgRow.ExternalAgentAPI = true
+	if err := store.PutConfig(ctx, *cfgRow); err != nil {
+		t.Fatal(err)
+	}
+	uiSrv := ui.NewServerWithClient(client)
+	uiSrv.SetNamespace(func() *namespace.Server { return ns })
+	api.Set(uiSrv)
+
+	person := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "op@example.com"})
+	issued, err := client.CreateExternalAgentToken(person, ui.CreateExternalAgentTokenRequest{
+		Name:   "ci-widgets",
+		Scopes: []string{"ci:read"},
+		Repos:  []string{"acme/widgets"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/fs/deploy/merge-queue", nil)
+	req.Header.Set("Authorization", "Bearer "+issued.Token)
+	rec := httptest.NewRecorder()
+	uiSrv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/fs/deploy/merge-queue with ci:read token = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "acme/widgets") || strings.Contains(body, "acme/secret") {
+		t.Errorf("ci:read@acme/widgets merge-queue body = %q, want acme/widgets and no acme/secret", body)
+	}
+
+	// PullRequestGate implements ui.PullRequestAdopter and reports unavailable cleanly before LivePullRequests is set.
+	var adopter ui.PullRequestAdopter = PullRequestGate{}
+	if _, err := adopter.PullRequestStatus(ctx, model.PullRequestRef{Repo: model.RepoRef{Owner: "acme", Name: "widgets"}, Number: 11}, false); err == nil {
+		t.Error("PullRequestGate.PullRequestStatus without LivePullRequests succeeded, want error")
+	}
+}

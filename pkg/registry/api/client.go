@@ -21,342 +21,300 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ai-on-gke/grain/pkg/apierror"
 )
 
-const maxResponseBytes = 4 << 20 // 4 MiB
+const (
+	defaultHTTPTimeout = 30 * time.Second
+	maxResponseBytes   = 4 << 20 // 4 MiB response body cap
+	maxErrorBytes      = 64 << 10
+)
 
-// TokenSource returns the bearer credential (either a "grc_..." registration
-// token or an OIDC ID token) to attach to a registry request.
-type TokenSource func(ctx context.Context) (string, error)
-
-// StaticTokenSource returns a TokenSource that always yields token.
-func StaticTokenSource(token string) TokenSource {
-	trimmed := strings.TrimSpace(token)
-	return func(context.Context) (string, error) {
-		if trimmed == "" {
-			return "", fmt.Errorf("empty registry credential")
-		}
-		return trimmed, nil
-	}
-}
-
-// TunnelConnector is the outbound-tunnel seam reserved for the follow-up
-// connected-proxy design (connect_mode = 'tunnel', design/design/registry.design.md).
-// A connection manager can share the Client's base URL, HTTP transport, and
-// TokenSource when attaching a persistent reverse-proxy session.
-type TunnelConnector interface {
-	RunTunnel(ctx context.Context, client *Client, entryName string) error
-}
-
-// ClientOption configures a Client.
-type ClientOption func(*Client)
-
-// WithHTTPClient overrides the HTTP client used by Client.
-func WithHTTPClient(hc *http.Client) ClientOption {
-	return func(c *Client) {
-		if hc != nil {
-			c.httpClient = hc
-		}
-	}
-}
-
-// WithTokenSource configures bearer authentication for outgoing requests.
-func WithTokenSource(ts TokenSource) ClientOption {
-	return func(c *Client) {
-		c.tokenSource = ts
-	}
-}
-
-// WithAllowInsecureHTTP allows plain http:// registry URLs on non-loopback
-// hosts (intended strictly for isolated unit-test environments).
-func WithAllowInsecureHTTP(allow bool) ClientOption {
-	return func(c *Client) {
-		c.allowInsecureHTTP = allow
-	}
-}
-
-// WithUserAgent overrides the User-Agent header sent on registry requests.
-func WithUserAgent(ua string) ClientOption {
-	return func(c *Client) {
-		c.userAgent = strings.TrimSpace(ua)
-	}
-}
-
-// Client is a typed HTTP client for the grain registry API.
-type Client struct {
-	baseURL           string
-	httpClient        *http.Client
-	tokenSource       TokenSource
-	allowInsecureHTTP bool
-	userAgent         string
-}
-
-// NewClient validates baseURL and constructs a registry API Client.
-func NewClient(baseURL string, opts ...ClientOption) (*Client, error) {
-	c := &Client{
-		httpClient: &http.Client{Timeout: 15 * time.Second},
-		userAgent:  "grain-registry-client/1.0",
-	}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(c)
-		}
-	}
-	norm, err := ValidateRegistryURL(baseURL, c.allowInsecureHTTP)
-	if err != nil {
-		return nil, err
-	}
-	clonedHTTP := *c.httpClient
-	clonedHTTP.CheckRedirect = func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
-	}
-	c.httpClient = &clonedHTTP
-	c.baseURL = norm
-	return c, nil
-}
-
-// BaseURL returns the normalized registry base URL.
-func (c *Client) BaseURL() string {
-	return c.baseURL
-}
-
-// HTTPClient returns the underlying *http.Client (used by future tunnel transports).
-func (c *Client) HTTPClient() *http.Client {
-	return c.httpClient
-}
-
-// BearerToken resolves the current bearer token from the configured TokenSource,
-// or "" if no TokenSource is configured.
-func (c *Client) BearerToken(ctx context.Context) (string, error) {
-	if c.tokenSource == nil {
-		return "", nil
-	}
-	tok, err := c.tokenSource(ctx)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(tok), nil
-}
-
-// APIError represents a non-2xx HTTP response from the registry.
+// APIError represents a non-2xx HTTP response returned by grain-registry.
 type APIError struct {
-	Method     string          `json:"-"`
-	Path       string          `json:"-"`
-	StatusCode int             `json:"status_code"`
-	Message    string          `json:"error"`
-	RetryAfter time.Duration   `json:"-"`
-	Conflicts  []ScopeConflict `json:"conflicts,omitempty"`
+	StatusCode int            `json:"-"`
+	Message    string         `json:"error"`
+	Code       string         `json:"code,omitempty"`
+	Ref        string         `json:"ref,omitempty"`
+	Conflict   *ScopeConflict `json:"conflict,omitempty"`
+	RetryAfter time.Duration  `json:"-"`
 }
 
 func (e *APIError) Error() string {
-	if e.Message != "" {
-		return fmt.Sprintf("registry %s %s: HTTP %d: %s", e.Method, e.Path, e.StatusCode, e.Message)
+	msg := strings.TrimSpace(e.Message)
+	if msg == "" {
+		msg = http.StatusText(e.StatusCode)
 	}
-	return fmt.Sprintf("registry %s %s: HTTP %d (%s)", e.Method, e.Path, e.StatusCode, http.StatusText(e.StatusCode))
+	if e.Ref != "" {
+		return fmt.Sprintf("registry API %d (%s, ref %s): %s", e.StatusCode, e.Code, e.Ref, msg)
+	}
+	if e.Code != "" {
+		return fmt.Sprintf("registry API %d (%s): %s", e.StatusCode, e.Code, msg)
+	}
+	return fmt.Sprintf("registry API %d: %s", e.StatusCode, msg)
 }
 
-// IsNotFound reports whether err is a 404 Not Found from the registry.
+// IsNotFound reports whether err is an HTTP 404 APIError.
 func IsNotFound(err error) bool {
-	var apiErr *APIError
-	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
+	var ae *APIError
+	return errors.As(err, &ae) && ae.StatusCode == http.StatusNotFound
 }
 
-// IsConflict reports whether err is a 409 Conflict from the registry.
+// IsConflict reports whether err is an HTTP 409 APIError.
 func IsConflict(err error) bool {
-	var apiErr *APIError
-	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusConflict
+	var ae *APIError
+	return errors.As(err, &ae) && ae.StatusCode == http.StatusConflict
 }
 
-// IsUnauthorized reports whether err is a 401 Unauthorized or 403 Forbidden.
+// IsUnauthorized reports whether err is an HTTP 401 APIError.
 func IsUnauthorized(err error) bool {
-	var apiErr *APIError
-	return errors.As(err, &apiErr) &&
-		(apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden)
+	var ae *APIError
+	return errors.As(err, &ae) && ae.StatusCode == http.StatusUnauthorized
 }
 
-// IsRetryable reports whether err is transient (network failure, 429, or 5xx).
-func IsRetryable(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, context.Canceled) {
-		return false
-	}
-	var apiErr *APIError
-	if errors.As(err, &apiErr) {
-		return apiErr.StatusCode == http.StatusTooManyRequests || apiErr.StatusCode >= 500
-	}
-	return true
+// IsForbidden reports whether err is an HTTP 403 APIError.
+func IsForbidden(err error) bool {
+	var ae *APIError
+	return errors.As(err, &ae) && ae.StatusCode == http.StatusForbidden
 }
 
-// CreateEntry reserves or creates an entry via POST /api/entries.
-func (c *Client) CreateEntry(ctx context.Context, req CreateEntryRequest) (CreateEntryResponse, error) {
-	var resp CreateEntryResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/api/entries", req, &resp); err != nil {
-		return CreateEntryResponse{}, err
-	}
-	return resp, nil
+// IsRateLimited reports whether err is an HTTP 429 APIError.
+func IsRateLimited(err error) bool {
+	var ae *APIError
+	return errors.As(err, &ae) && ae.StatusCode == http.StatusTooManyRequests
 }
 
-// GetEntry fetches an entry via GET /api/entries/{name}.
-func (c *Client) GetEntry(ctx context.Context, name string) (Entry, error) {
-	if err := ValidateEntryName(name); err != nil {
-		return Entry{}, err
+func parseAPIError(resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBytes))
+	ae := &APIError{
+		StatusCode: resp.StatusCode,
+		RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
 	}
-	var entry Entry
-	if err := c.doJSON(ctx, http.MethodGet, "/api/entries/"+url.PathEscape(name), nil, &entry); err != nil {
-		return Entry{}, err
+	var wire struct {
+		apierror.Response
+		Conflict *ScopeConflict `json:"conflict,omitempty"`
 	}
-	return entry, nil
+	if len(bytes.TrimSpace(body)) > 0 && json.Unmarshal(body, &wire) == nil && (wire.Error != "" || wire.Code != "" || wire.Conflict != nil) {
+		ae.Message = wire.Error
+		ae.Code = wire.Code
+		ae.Ref = wire.Ref
+		ae.Conflict = wire.Conflict
+		return ae
+	}
+	ae.Message = strings.TrimSpace(string(body))
+	return ae
 }
 
-// ListEntries lists entries managed by the caller (or all entries for admins when all is true).
-func (c *Client) ListEntries(ctx context.Context, all bool) ([]Entry, error) {
-	path := "/api/entries"
-	if all {
-		path += "?all=true"
+func parseRetryAfter(raw string) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
 	}
-	var entries []Entry
-	if err := c.doJSON(ctx, http.MethodGet, path, nil, &entries); err != nil {
-		return nil, err
+	if secs, err := strconv.Atoi(raw); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
 	}
-	return entries, nil
-}
-
-// UpdateEntry patches mutable catalog fields via PATCH /api/entries/{name}.
-func (c *Client) UpdateEntry(ctx context.Context, name string, req UpdateEntryRequest) (Entry, error) {
-	if err := ValidateEntryName(name); err != nil {
-		return Entry{}, err
-	}
-	var entry Entry
-	if err := c.doJSON(ctx, http.MethodPatch, "/api/entries/"+url.PathEscape(name), req, &entry); err != nil {
-		return Entry{}, err
-	}
-	return entry, nil
-}
-
-// DeleteEntry deletes or unregisters an entry via DELETE /api/entries/{name}.
-func (c *Client) DeleteEntry(ctx context.Context, name string) error {
-	if err := ValidateEntryName(name); err != nil {
-		return err
-	}
-	return c.doJSON(ctx, http.MethodDelete, "/api/entries/"+url.PathEscape(name), DeleteEntryRequest{Confirm: name}, nil)
-}
-
-// Heartbeat pushes a connected entry's liveness, build info, task counts, and
-// self-reported scopes via PUT /api/entries/{name}/heartbeat.
-func (c *Client) Heartbeat(ctx context.Context, name string, req HeartbeatRequest) (HeartbeatResponse, error) {
-	if err := ValidateEntryName(name); err != nil {
-		return HeartbeatResponse{}, err
-	}
-	if req.Scopes == nil {
-		req.Scopes = []Scope{}
-	}
-	var resp HeartbeatResponse
-	if err := c.doJSON(ctx, http.MethodPut, "/api/entries/"+url.PathEscape(name)+"/heartbeat", req, &resp); err != nil {
-		return HeartbeatResponse{}, err
-	}
-	return resp, nil
-}
-
-// PromoteConnected converts a redirect entry into a connected entry in place
-// via POST /api/entries/{name}/promote-connected.
-func (c *Client) PromoteConnected(ctx context.Context, name string, req PromoteConnectedRequest) (CreateEntryResponse, error) {
-	if err := ValidateEntryName(name); err != nil {
-		return CreateEntryResponse{}, err
-	}
-	var resp CreateEntryResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/api/entries/"+url.PathEscape(name)+"/promote-connected", req, &resp); err != nil {
-		return CreateEntryResponse{}, err
-	}
-	return resp, nil
-}
-
-// RotateCredential mints a replacement registration token via
-// POST /api/entries/{name}/credentials/rotate.
-func (c *Client) RotateCredential(ctx context.Context, name string, req RotateCredentialRequest) (RotateCredentialResponse, error) {
-	if err := ValidateEntryName(name); err != nil {
-		return RotateCredentialResponse{}, err
-	}
-	var resp RotateCredentialResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/api/entries/"+url.PathEscape(name)+"/credentials/rotate", req, &resp); err != nil {
-		return RotateCredentialResponse{}, err
-	}
-	return resp, nil
-}
-
-// Directory queries public listed entries via GET /api/directory.
-func (c *Client) Directory(ctx context.Context, q DirectoryQuery) ([]DirectoryEntry, error) {
-	vals := url.Values{}
-	if q.Query != "" {
-		vals.Set("q", q.Query)
-	}
-	if q.Repo != "" {
-		vals.Set("repo", q.Repo)
-	}
-	for _, t := range q.Tags {
-		if t != "" {
-			vals.Add("tag", t)
+	if t, err := http.ParseTime(raw); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
 		}
 	}
-	if len(q.Statuses) > 0 {
-		parts := make([]string, 0, len(q.Statuses))
-		for _, s := range q.Statuses {
-			parts = append(parts, string(s))
+	return 0
+}
+
+func isLoopbackHost(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return addr.Unmap().IsLoopback()
+	}
+	return false
+}
+
+func isForbiddenMetadataHost(host string) bool {
+	lower := strings.ToLower(strings.TrimSuffix(host, "."))
+	if lower == "metadata" || (strings.HasSuffix(lower, ".internal") && strings.HasPrefix(lower, "metadata.")) {
+		return true
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		unmapped := addr.Unmap()
+		if unmapped.IsLinkLocalUnicast() || unmapped.IsLinkLocalMulticast() || unmapped.IsUnspecified() {
+			return true
 		}
-		vals.Set("status", strings.Join(parts, ","))
 	}
-	if q.HostKind != "" {
-		vals.Set("host_kind", string(q.HostKind))
-	}
-	if q.Owner != "" {
-		vals.Set("owner", q.Owner)
-	}
-	path := "/api/directory"
-	if enc := vals.Encode(); enc != "" {
-		path += "?" + enc
-	}
-	var out []DirectoryEntry
-	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return false
 }
 
-// Route resolves candidate grains for a repository and path via GET /api/route.
-func (c *Client) Route(ctx context.Context, q RouteQuery) ([]RouteCandidate, error) {
-	vals := url.Values{}
-	vals.Set("repo", q.Repo)
-	if q.Path != "" {
-		vals.Set("path", q.Path)
+func validateBaseURL(raw string, allowInsecureHTTP bool) (*url.URL, error) {
+	trimmed := strings.TrimSpace(raw)
+	if len(trimmed) > 2048 {
+		return nil, fmt.Errorf("registry URL exceeds 2048 bytes")
 	}
-	if q.IncludeOffline {
-		vals.Set("include_offline", "true")
+	u, err := url.Parse(trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("invalid registry URL %q: %w", raw, err)
 	}
-	var out []RouteCandidate
-	if err := c.doJSON(ctx, http.MethodGet, "/api/route?"+vals.Encode(), nil, &out); err != nil {
-		return nil, err
+	if u.User != nil {
+		return nil, fmt.Errorf("registry URL must not include userinfo credentials")
 	}
-	return out, nil
+	if u.RawQuery != "" || u.Fragment != "" {
+		return nil, fmt.Errorf("registry URL must not include query parameters or fragments")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	switch scheme {
+	case "https":
+	case "http":
+		if !allowInsecureHTTP && !isLoopbackHost(u.Host) {
+			return nil, fmt.Errorf("refusing insecure http:// registry URL %q for non-loopback host", u.Redacted())
+		}
+	default:
+		return nil, fmt.Errorf("registry URL %q must use https:// (or http:// on loopback)", raw)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return nil, fmt.Errorf("registry URL %q is missing host", raw)
+	}
+	if isForbiddenMetadataHost(host) {
+		return nil, fmt.Errorf("registry URL host %q is not permitted", host)
+	}
+	u.Scheme = scheme
+	u.Path = strings.TrimRight(u.Path, "/")
+	u.RawPath = ""
+	return u, nil
 }
 
-func (c *Client) doJSON(ctx context.Context, method, path string, reqBody any, respBody any) error {
+// ValidateRegistryURL validates and normalizes a grain-registry base URL,
+// requiring https:// except on loopback hosts (or when allowInsecureHTTP is true).
+func ValidateRegistryURL(raw string, allowInsecureHTTP bool) (string, error) {
+	u, err := validateBaseURL(raw, allowInsecureHTTP)
+	if err != nil {
+		return "", err
+	}
+	return u.String(), nil
+}
+
+// ClientConfig configures a typed grain-registry HTTP Client.
+type ClientConfig struct {
+	// BaseURL is the registry root URL (for example "https://grain.example.com").
+	BaseURL string
+	// RegistrationToken is a grc_... entry credential for self-service calls
+	// (heartbeats, tunnel setup, status updates). When set, requests carry
+	// X-Grain-Auth: token and X-Grain-Registry-Token, plus Authorization: Bearer
+	// when no BearerToken or IDToken callback occupies Authorization.
+	RegistrationToken string
+	// BearerToken is an optional static OIDC/IAP bearer token sent in
+	// Authorization: Bearer.
+	BearerToken string
+	// IDToken optionally mints a fresh OIDC/IAP bearer token per request for
+	// proxy traversal or CLI authentication.
+	IDToken func(ctx context.Context) (string, error)
+	// ExtraHeaders are optional additional headers attached to every request.
+	ExtraHeaders http.Header
+	// HTTPClient is the underlying HTTP client; defaults to a 30s-timeout client.
+	HTTPClient *http.Client
+	// UserAgent sets the User-Agent header when non-empty.
+	UserAgent string
+	// AllowInsecureHTTP permits plain http:// to non-loopback hosts (for tests).
+	AllowInsecureHTTP bool
+}
+
+// Client is a typed HTTP client for the grain-registry REST API.
+type Client struct {
+	baseURL           *url.URL
+	registrationToken string
+	bearerToken       string
+	idToken           func(ctx context.Context) (string, error)
+	extraHeaders      http.Header
+	httpClient        *http.Client
+	userAgent         string
+}
+
+// NewClient validates cfg and returns a configured registry HTTP Client.
+func NewClient(cfg ClientConfig) (*Client, error) {
+	u, err := validateBaseURL(cfg.BaseURL, cfg.AllowInsecureHTTP)
+	if err != nil {
+		return nil, err
+	}
+	hc := cfg.HTTPClient
+	if hc == nil {
+		hc = &http.Client{Timeout: defaultHTTPTimeout}
+	}
+	clonedHTTP := *hc
+	clonedHTTP.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &Client{
+		baseURL:           u,
+		registrationToken: strings.TrimSpace(cfg.RegistrationToken),
+		bearerToken:       strings.TrimSpace(cfg.BearerToken),
+		idToken:           cfg.IDToken,
+		extraHeaders:      cfg.ExtraHeaders.Clone(),
+		httpClient:        &clonedHTTP,
+		userAgent:         strings.TrimSpace(cfg.UserAgent),
+	}, nil
+}
+
+func applyAuthHeaders(ctx context.Context, h http.Header, regToken, bearerToken string, idTokenFn func(context.Context) (string, error)) error {
+	var proxyBearer string
+	if idTokenFn != nil {
+		tok, err := idTokenFn(ctx)
+		if err != nil {
+			return fmt.Errorf("obtaining registry ID token: %w", err)
+		}
+		proxyBearer = strings.TrimSpace(tok)
+	} else if bearerToken != "" {
+		proxyBearer = bearerToken
+	}
+
+	if regToken != "" {
+		h.Set(HeaderAuth, AuthModeToken)
+		h.Set(HeaderRegistryToken, regToken)
+	}
+	if proxyBearer != "" {
+		h.Set("Authorization", "Bearer "+proxyBearer)
+	} else if regToken != "" {
+		h.Set("Authorization", "Bearer "+regToken)
+	}
+	return nil
+}
+
+func (c *Client) doJSON(ctx context.Context, method, relPath string, query url.Values, reqBody any, respOut any) error {
 	var bodyReader io.Reader
 	if reqBody != nil {
-		encoded, err := json.Marshal(reqBody)
+		buf, err := json.Marshal(reqBody)
 		if err != nil {
-			return fmt.Errorf("encoding request body for %s %s: %w", method, path, err)
+			return fmt.Errorf("encoding request body: %w", err)
 		}
-		bodyReader = bytes.NewReader(encoded)
+		bodyReader = bytes.NewReader(buf)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bodyReader)
+
+	u := *c.baseURL
+	u.Path = c.baseURL.Path + relPath
+	if len(query) > 0 {
+		u.RawQuery = query.Encode()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), bodyReader)
 	if err != nil {
-		return fmt.Errorf("building request %s %s: %w", method, path, err)
+		return err
+	}
+	for k, vals := range c.extraHeaders {
+		for _, val := range vals {
+			req.Header.Add(k, val)
+		}
 	}
 	req.Header.Set("Accept", "application/json")
 	if reqBody != nil {
@@ -365,100 +323,248 @@ func (c *Client) doJSON(ctx context.Context, method, path string, reqBody any, r
 	if c.userAgent != "" {
 		req.Header.Set("User-Agent", c.userAgent)
 	}
-	if c.tokenSource != nil {
-		token, err := c.tokenSource(ctx)
-		if err != nil {
-			return fmt.Errorf("obtaining registry credential: %w", err)
-		}
-		token = strings.TrimSpace(token)
-		if token == "" {
-			return fmt.Errorf("obtaining registry credential: empty token")
-		}
-		if strings.HasPrefix(token, "grc_") {
-			req.Header.Set("X-Grain-Auth", "token")
-			req.Header.Set("X-Grain-Registry-Token", token)
-		}
-		if req.Header.Get("Authorization") == "" {
-			req.Header.Set("Authorization", "Bearer "+token)
-		}
+	if err := applyAuthHeaders(ctx, req.Header, c.registrationToken, c.bearerToken, c.idToken); err != nil {
+		return err
 	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("registry %s %s: %w", method, path, err)
+		return err
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
-	if err != nil {
-		return fmt.Errorf("reading registry %s %s response: %w", method, path, err)
-	}
-	if len(data) > maxResponseBytes {
-		return fmt.Errorf("registry %s %s response exceeded %d bytes", method, path, maxResponseBytes)
-	}
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return parseAPIError(method, path, resp.StatusCode, resp.Header, data)
+		return parseAPIError(resp)
 	}
-
-	if respBody != nil && len(bytes.TrimSpace(data)) > 0 {
-		if err := json.Unmarshal(data, respBody); err != nil {
-			return fmt.Errorf("decoding registry %s %s response: %w", method, path, err)
-		}
+	if respOut == nil || resp.StatusCode == http.StatusNoContent {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBytes))
+		return nil
+	}
+	dec := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes))
+	if err := dec.Decode(respOut); err != nil {
+		return fmt.Errorf("decoding %s %s response: %w", method, relPath, err)
 	}
 	return nil
 }
 
-func parseAPIError(method, path string, statusCode int, hdr http.Header, body []byte) error {
-	apiErr := &APIError{
-		Method:     method,
-		Path:       path,
-		StatusCode: statusCode,
-		RetryAfter: parseRetryAfter(hdr.Get("Retry-After")),
+// Me fetches GET /api/me (authenticated principal, groups, and quota usage).
+func (c *Client) Me(ctx context.Context) (*MeResponse, error) {
+	var out MeResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/me", nil, nil, &out); err != nil {
+		return nil, err
 	}
-	var payload struct {
-		Error          string          `json:"error"`
-		Message        string          `json:"message"`
-		Conflicts      []ScopeConflict `json:"conflicts"`
-		ScopeConflicts []ScopeConflict `json:"scope_conflicts"`
-	}
-	if len(bytes.TrimSpace(body)) > 0 {
-		if err := json.Unmarshal(body, &payload); err == nil {
-			switch {
-			case payload.Error != "":
-				apiErr.Message = payload.Error
-			case payload.Message != "":
-				apiErr.Message = payload.Message
-			}
-			if len(payload.Conflicts) > 0 {
-				apiErr.Conflicts = payload.Conflicts
-			} else if len(payload.ScopeConflicts) > 0 {
-				apiErr.Conflicts = payload.ScopeConflicts
-			}
-		}
-		if apiErr.Message == "" {
-			msg := strings.TrimSpace(string(body))
-			if len(msg) > 512 {
-				msg = msg[:512] + "..."
-			}
-			apiErr.Message = msg
-		}
-	}
-	return apiErr
+	return &out, nil
 }
 
-func parseRetryAfter(val string) time.Duration {
-	val = strings.TrimSpace(val)
-	if val == "" {
-		return 0
+// Shapes fetches GET /api/shapes (available hosted VM shapes).
+func (c *Client) Shapes(ctx context.Context) ([]Shape, error) {
+	var out ShapesResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/shapes", nil, nil, &out); err != nil {
+		return nil, err
 	}
-	if secs, err := strconv.Atoi(val); err == nil && secs > 0 {
-		return time.Duration(secs) * time.Second
+	return out.Shapes, nil
+}
+
+// CheckName fetches GET /api/entries/<name>/availability.
+func (c *Client) CheckName(ctx context.Context, name string) (*NameAvailabilityResponse, error) {
+	var out NameAvailabilityResponse
+	path := "/api/entries/" + url.PathEscape(name) + "/availability"
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
+		return nil, err
 	}
-	if t, err := http.ParseTime(val); err == nil {
-		if d := time.Until(t); d > 0 {
-			return d
-		}
+	return &out, nil
+}
+
+// Directory fetches GET /api/directory with optional catalog search/filter parameters.
+func (c *Client) Directory(ctx context.Context, q DirectoryQuery) (*DirectoryResponse, error) {
+	vals := url.Values{}
+	if q.Query != "" {
+		vals.Set("q", q.Query)
 	}
-	return 0
+	if q.Repo != "" {
+		vals.Set("repo", q.Repo)
+	}
+	if q.Tag != "" {
+		vals.Set("tag", q.Tag)
+	}
+	if q.Status != "" {
+		vals.Set("status", string(q.Status))
+	}
+	if q.Kind != "" {
+		vals.Set("kind", string(q.Kind))
+	}
+	if q.Owner != "" {
+		vals.Set("owner", q.Owner)
+	}
+	if q.Limit > 0 {
+		vals.Set("limit", strconv.Itoa(q.Limit))
+	}
+	if q.Cursor != "" {
+		vals.Set("cursor", q.Cursor)
+	}
+	var out DirectoryResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/directory", vals, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Route fetches GET /api/route to resolve which entry covers a repository and path.
+func (c *Client) Route(ctx context.Context, q RouteQuery) (*RouteResponse, error) {
+	vals := url.Values{}
+	vals.Set("repo", q.Repo)
+	if q.Path != "" {
+		vals.Set("path", q.Path)
+	}
+	if q.IncludeOffline {
+		vals.Set("include_offline", "true")
+	}
+	var out RouteResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/route", vals, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListEntries fetches GET /api/entries for the caller (or admin filter).
+func (c *Client) ListEntries(ctx context.Context, q ListEntriesQuery) ([]Entry, error) {
+	vals := url.Values{}
+	if q.Owner != "" {
+		vals.Set("owner", q.Owner)
+	}
+	if q.Kind != "" {
+		vals.Set("kind", string(q.Kind))
+	}
+	if q.Status != "" {
+		vals.Set("status", string(q.Status))
+	}
+	if q.IncludeDeleted {
+		vals.Set("include_deleted", "true")
+	}
+	var out ListEntriesResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/entries", vals, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Entries, nil
+}
+
+// CreateEntry sends POST /api/entries to create an instance or connected entry.
+func (c *Client) CreateEntry(ctx context.Context, req CreateEntryRequest) (*CreateEntryResponse, error) {
+	var out CreateEntryResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/api/entries", nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GetEntry fetches GET /api/entries/<name>.
+func (c *Client) GetEntry(ctx context.Context, name string) (*Entry, error) {
+	var out Entry
+	path := "/api/entries/" + url.PathEscape(name)
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// UpdateEntry sends PATCH /api/entries/<name>.
+func (c *Client) UpdateEntry(ctx context.Context, name string, req UpdateEntryRequest) (*Entry, error) {
+	var out Entry
+	path := "/api/entries/" + url.PathEscape(name)
+	if err := c.doJSON(ctx, http.MethodPatch, path, nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SetScopes sends PUT /api/entries/<name>/scopes to replace declared scopes.
+func (c *Client) SetScopes(ctx context.Context, name string, scopes []ScopeInput) (*SetScopesResponse, error) {
+	var out SetScopesResponse
+	path := "/api/entries/" + url.PathEscape(name) + "/scopes"
+	if err := c.doJSON(ctx, http.MethodPut, path, nil, SetScopesRequest{Scopes: scopes}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Heartbeat sends POST /api/entries/<name>/heartbeat.
+func (c *Client) Heartbeat(ctx context.Context, name string, req HeartbeatRequest) (*HeartbeatResponse, error) {
+	var out HeartbeatResponse
+	path := "/api/entries/" + url.PathEscape(name) + "/heartbeat"
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// RotateCredential sends POST /api/entries/<name>/credentials/rotate.
+func (c *Client) RotateCredential(ctx context.Context, name string, req RotateCredentialRequest) (*RotateCredentialResponse, error) {
+	var out RotateCredentialResponse
+	path := "/api/entries/" + url.PathEscape(name) + "/credentials/rotate"
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// RevokeCredential sends DELETE /api/entries/<name>/credentials/<credentialID>.
+func (c *Client) RevokeCredential(ctx context.Context, name, credentialID string) error {
+	path := "/api/entries/" + url.PathEscape(name) + "/credentials/" + url.PathEscape(credentialID)
+	return c.doJSON(ctx, http.MethodDelete, path, nil, nil, nil)
+}
+
+// UpgradeEntry sends POST /api/entries/<name>/upgrade.
+func (c *Client) UpgradeEntry(ctx context.Context, name string, req UpgradeEntryRequest) (*Entry, error) {
+	var out Entry
+	path := "/api/entries/" + url.PathEscape(name) + "/upgrade"
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ReplaceEntry sends POST /api/entries/<name>/replace.
+func (c *Client) ReplaceEntry(ctx context.Context, name string, req ReplaceEntryRequest) (*Entry, error) {
+	var out Entry
+	path := "/api/entries/" + url.PathEscape(name) + "/replace"
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// RestoreEntry sends POST /api/entries/<name>/restore.
+func (c *Client) RestoreEntry(ctx context.Context, name string) (*Entry, error) {
+	var out Entry
+	path := "/api/entries/" + url.PathEscape(name) + "/restore"
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, struct{}{}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DeleteEntry sends DELETE /api/entries/<name>.
+func (c *Client) DeleteEntry(ctx context.Context, name string, req DeleteEntryRequest) error {
+	path := "/api/entries/" + url.PathEscape(name)
+	return c.doJSON(ctx, http.MethodDelete, path, nil, req, nil)
+}
+
+// OfferTransfer sends POST /api/entries/<name>/transfer.
+func (c *Client) OfferTransfer(ctx context.Context, name string, req TransferRequest) (*Entry, error) {
+	var out Entry
+	path := "/api/entries/" + url.PathEscape(name) + "/transfer"
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// AcceptTransfer sends POST /api/entries/<name>/transfer/accept.
+func (c *Client) AcceptTransfer(ctx context.Context, name string) (*Entry, error) {
+	var out Entry
+	path := "/api/entries/" + url.PathEscape(name) + "/transfer/accept"
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, struct{}{}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }

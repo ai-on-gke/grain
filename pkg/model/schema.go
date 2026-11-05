@@ -642,6 +642,21 @@ const integrationEventTable = `CREATE TABLE IF NOT EXISTS ` + "`integration_even
   ` + "`behalf_source`" + `    TEXT     NOT NULL DEFAULT ''
 )`
 
+// secretEntriesTable is the `secret_entries` catalogue for
+// -secrets-backend=secretmanager (design/design/registry.design.md, "Secrets in
+// Secret Manager"): non-secret metadata (secret name, key name, Secret Manager
+// secret ID, and active version number) so List, Has, and bare-name Resolve
+// never call project-wide secretmanager.secrets.list. Secret values are never
+// stored here. Needs no SchemaVersion bump, for taskEventTable's own reason.
+const secretEntriesTable = `CREATE TABLE IF NOT EXISTS ` + "`secret_entries`" + ` (
+  ` + "`secret_name`" + ` TEXT     NOT NULL,
+  ` + "`key`" + `         TEXT     NOT NULL,
+  ` + "`sm_secret`" + `   TEXT     NOT NULL,
+  ` + "`version`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`updated_at`" + `  DATETIME NOT NULL,
+  PRIMARY KEY (` + "`secret_name`" + `, ` + "`key`" + `)
+)`
+
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
 const ciStepAttachmentTable = `CREATE TABLE IF NOT EXISTS ` + "`ci_step_attachment`" + ` (
@@ -4161,6 +4176,10 @@ var Tables = []string{
 	// and its one-time startup migration off `-ui-allowed-principals`.
 	allowedPrincipalTable,
 	allowedPrincipalMigrationTable,
+
+	// Non-secret catalogue of names and keys stored in Google Cloud Secret
+	// Manager (-secrets-backend=secretmanager).
+	secretEntriesTable,
 }
 
 // Views is the derivations, each a (name, DDL) pair so Init can drop and

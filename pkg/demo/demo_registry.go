@@ -34,7 +34,6 @@ func configureRegistryDemo(storedCfg *model.Config, store *model.Store, cfg *ui.
 		Purpose:     "Primary grain controller for acme/widgets engineering tasks and CI",
 		HostKind:    api.HostKindWorkstation,
 		Listed:      true,
-		ExternalURL: "https://widgets.grain.example.com",
 	}
 
 	var mu sync.Mutex

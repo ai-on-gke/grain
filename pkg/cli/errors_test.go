@@ -162,6 +162,7 @@ func TestExitCodeMappingCovers0Through5(t *testing.T) {
 		{"reset", fmt.Errorf("read: %w", syscall.ECONNRESET), 4},
 		{"dns", &net.DNSError{Err: "no such host", Name: "grain.invalid"}, 4},
 		{"daemon down", &ui.DaemonUnavailableError{BaseURL: "http://x", Err: errors.New("eof")}, 4},
+		{"https client to http server", errors.New(`Get "https://127.0.0.1:9000/api/tasks": http: server gave HTTP response to HTTPS client`), 4},
 		{"call timeout", fmt.Errorf("get: %w", context.DeadlineExceeded), 4},
 		{"explained refusal", explainDaemonError(fmt.Errorf("dial: %w", syscall.ECONNREFUSED), cliTarget{server: "http://x", source: "-server"}), 4},
 		{"wait timeout", waitResult(ctx, fmt.Errorf("stopped waiting: %w", ctx.Err())), 5},
@@ -179,6 +180,17 @@ func TestExitCodeMappingCovers0Through5(t *testing.T) {
 	wrapped := explainDaemonError(waitResult(ctx, fmt.Errorf("x: %w", ctx.Err())), cliTarget{server: "http://x"})
 	if got, _, _ := classifyError(wrapped); got != exitWaitTimedOut {
 		t.Errorf("explained wait timeout = exit %d, want 5", got)
+	}
+
+	// Plain HTTP sent to an HTTPS port returns Go's 400 "Client sent an HTTP
+	// request to an HTTPS server."; classify it as exit 4 (unreachable/TLS mismatch).
+	tlsMismatchSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "Client sent an HTTP request to an HTTPS server.", http.StatusBadRequest)
+	}))
+	defer tlsMismatchSrv.Close()
+	_, tlsErr := ui.NewHTTPClient(tlsMismatchSrv.URL).ListTasks(ctx)
+	if got, code, _ := classifyError(tlsErr); got != exitUnreachable || code != "daemon_unreachable" {
+		t.Errorf("HTTP-to-HTTPS 400 = exit %d (%s), err=%v, want 4 (daemon_unreachable)", got, code, tlsErr)
 	}
 }
 

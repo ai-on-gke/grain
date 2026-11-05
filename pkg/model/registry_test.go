@@ -35,11 +35,10 @@ func TestNormalizeAndDeriveRegistryScopes(t *testing.T) {
 		Purpose:     "Autoscaler control-loop heuristics and scale-down simulations",
 		HostKind:    api.HostKindKubernetes,
 		Listed:      true,
-		ExternalURL: "https://autoscaler-grain.example.com",
 		Tags:        []string{"Autoscaler", "K8S", "autoscaler"},
 		Scopes: []model.RegistryScopeRule{
 			{Repo: "Acme/Monorepo", PathPrefix: "/pkg/autoscaler/"},
-			{Repo: "acme/companion", PathPrefix: "", Role: api.ScopeRoleSecondary},
+			{Repo: "acme/companion", PathPrefix: "", Role: api.RoleSecondary},
 		},
 	}, false)
 	if err != nil {
@@ -86,16 +85,16 @@ func TestNormalizeAndDeriveRegistryScopes(t *testing.T) {
 			// Inherits secondary role from acme/monorepo's Work.Default = off!
 			{Repo: "acme/monorepo", PathPrefix: "pkg/autoscaler"},
 			{Repo: "acme/excluded", Exclude: true},
-			{Repo: "acme/extra", PathPrefix: "services/api", Role: api.ScopeRoleSecondary},
+			{Repo: "acme/extra", PathPrefix: "services/api", Role: api.RoleSecondary},
 		},
 	)
 
 	want := []model.RegistryAdvertisedScope{
-		{Repo: "acme/extra", PathPrefix: "services/api", Role: api.ScopeRoleSecondary, Origin: model.RegistryScopeAdded},
-		{Repo: "acme/local-only", PathPrefix: "", Role: api.ScopeRolePrimary, Origin: model.RegistryScopeFromRepoConfig},
-		{Repo: "acme/monorepo", PathPrefix: "pkg/autoscaler", Role: api.ScopeRoleSecondary, Origin: model.RegistryScopeOverridden},
-		{Repo: "acme/primary-repo", PathPrefix: "", Role: api.ScopeRolePrimary, Origin: model.RegistryScopeFromRepoConfig},
-		{Repo: "acme/secondary-repo", PathPrefix: "", Role: api.ScopeRoleSecondary, Origin: model.RegistryScopeFromRepoConfig},
+		{Repo: "acme/extra", PathPrefix: "services/api", Role: api.RoleSecondary, Origin: model.RegistryScopeAdded},
+		{Repo: "acme/local-only", PathPrefix: "", Role: api.RolePrimary, Origin: model.RegistryScopeFromRepoConfig},
+		{Repo: "acme/monorepo", PathPrefix: "pkg/autoscaler", Role: api.RoleSecondary, Origin: model.RegistryScopeOverridden},
+		{Repo: "acme/primary-repo", PathPrefix: "", Role: api.RolePrimary, Origin: model.RegistryScopeFromRepoConfig},
+		{Repo: "acme/secondary-repo", PathPrefix: "", Role: api.RoleSecondary, Origin: model.RegistryScopeFromRepoConfig},
 	}
 	if len(advertised) != len(want) {
 		t.Fatalf("DeriveRegistryScopes = %+v, want %+v", advertised, want)
@@ -120,7 +119,7 @@ func TestStoreRegistryConfigAndTaskCounts(t *testing.T) {
 		HostKind:    api.HostKindWorkstation,
 		Listed:      true,
 		Scopes: []model.RegistryScopeRule{
-			{Repo: "acme/widgets", PathPrefix: "cmd/server", Role: api.ScopeRolePrimary},
+			{Repo: "acme/widgets", PathPrefix: "cmd/server", Role: api.RolePrimary},
 		},
 	}
 	if err := store.UpdateConfig(ctx, func(c *model.Config) error {

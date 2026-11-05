@@ -969,9 +969,11 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 	// one capture holds a stream per exec, and what the run ended as is
 	// what its last attempt said. See attemptsResult.events.
 	result, err := endRun(stdout, attempts.events, runErr, notes, attempts.session, maxTurns)
-	readCtx, cancelRead := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
-	defer cancelRead()
-	withStopBlocks(result, readStopBlocks(readCtx, f.host, stopRecord))
+	if !agent.IsHostdStop(runErr) {
+		readCtx, cancelRead := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+		defer cancelRead()
+		withStopBlocks(result, readStopBlocks(readCtx, f.host, stopRecord))
+	}
 	return result, err
 }
 
@@ -1119,6 +1121,8 @@ func runFailure(p *parsedEvents, maxTurns int, runErr error) error {
 	// but "come back in a moment, we are overloaded". See capacity.go.
 	capacity := capacityFailure(p.resultText, runErr)
 	switch {
+	case agent.IsHostdStop(runErr):
+		return agent.RunFailure("claude", "claude", nil, runErr)
 	case p.resultSubtype == maxTurnsSubtype && maxTurns > 0:
 		// Named in plain words rather than passed through as a subtype:
 		// this is not a fault of claude or of the model but a configured

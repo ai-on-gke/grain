@@ -38,7 +38,7 @@ const registryUsage = `usage: grain registry <status|register|unregister> [args]
   register [-registry-url <url>] [-entry <name>] [-registry-token <tok>]
            [-oidc] [-oidc-audience <aud>] [-rotate-token]
            [-display-name <name>] [-purpose <text>] [-host-kind <kind>]
-           [-listed] [-external-url <url>] [-owner-group <group>]
+           [-listed] [-owner-group <group>]
            [-standalone] [-token-file <path>] [<entry>]
   unregister [-registry-url <url>] [-entry <name>] [-registry-token <tok>]
              [-oidc] [-oidc-audience <aud>] [-keep-remote] [-standalone] [<entry>]
@@ -68,7 +68,6 @@ type registryDaemonFlags struct {
 	purpose      *string
 	hostKind     *string
 	listed       *bool
-	externalURL  *string
 }
 
 func registerRegistryFlags(fs *flag.FlagSet) registryDaemonFlags {
@@ -92,8 +91,6 @@ func registerRegistryFlags(fs *flag.FlagSet) registryDaemonFlags {
 			"connected entry host kind advertised to the registry: \"workstation\", \"kubernetes\", or \"other\" (defaults to the active sandbox backend)"+seedNote),
 		listed: fs.Bool("registry-listed", true,
 			"include this connected entry in default registry directory listings"+seedNote),
-		externalURL: fs.String("registry-external-url", "",
-			"optional https:// URL where operators reach this daemon directly"+seedNote),
 	}
 }
 
@@ -116,7 +113,6 @@ func (f registryDaemonFlags) apply(cfg *daemon.Config, passed map[string]bool) {
 		Purpose:      strings.TrimSpace(*f.purpose),
 		HostKind:     api.HostKind(strings.TrimSpace(*f.hostKind)),
 		Listed:       *f.listed,
-		ExternalURL:  strings.TrimSpace(*f.externalURL),
 	}
 }
 
@@ -130,7 +126,7 @@ func checkDaemonTail(cfg daemon.Config) error {
 func checkRegistryConfig(cfg daemon.Config) error {
 	r := cfg.Registry
 	anySet := r.URL != "" || r.Entry != "" || r.AuthMode != "" || r.OIDCAudience != "" ||
-		r.DisplayName != "" || r.Purpose != "" || r.HostKind != "" || r.ExternalURL != ""
+		r.DisplayName != "" || r.Purpose != "" || r.HostKind != ""
 	if !anySet {
 		return nil
 	}
@@ -193,7 +189,6 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 	purpose := fs.String("purpose", "", "short description of this grain's purpose")
 	hostKind := fs.String("host-kind", "", "connected entry host kind: \"workstation\", \"kubernetes\", or \"other\"")
 	listed := fs.Bool("listed", true, "include this entry in default registry directory listings")
-	externalURL := fs.String("external-url", "", "optional https:// URL where operators reach this daemon directly")
 	ownerGroup := fs.String("owner-group", "", "optional group principal that co-owns this entry")
 	standalone := fs.Bool("standalone", false, "register on the registry without writing settings or secrets to a local grain daemon")
 	tokenFile := fs.String("token-file", "", "with -standalone, write a minted grc_... token to this file (mode 0600) instead of printing it")
@@ -261,9 +256,6 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 	if passed["listed"] || existingCfg.Entry == "" {
 		newCfg.Listed = *listed
 	}
-	if passed["external-url"] {
-		newCfg.ExternalURL = strings.TrimSpace(*externalURL)
-	}
 	if passed["owner-group"] {
 		newCfg.OwnerGroup = strings.TrimSpace(*ownerGroup)
 	}
@@ -301,7 +293,7 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 		if clientErr != nil {
 			return clientErr
 		}
-		scopes := model.ToAPIScopes(existingSnap.AdvertisedScopes)
+		scopes := model.ToScopeInputs(existingSnap.AdvertisedScopes)
 		wantMint := normCfg.EffectiveAuthMode() == model.RegistryAuthToken
 		remoteEntry, mintedToken, err = upsertConnectedEntry(ctx, regClient, normCfg, effectiveHostKind, scopes, wantMint, *rotateToken || *standalone || !daemonHasSecret)
 		if err != nil {
@@ -355,49 +347,42 @@ func upsertConnectedEntry(
 	client *api.Client,
 	cfg model.RegistryConfig,
 	hostKind api.HostKind,
-	scopes []api.Scope,
+	scopes []api.ScopeInput,
 	wantToken bool,
 	needFreshToken bool,
 ) (*api.Entry, string, error) {
-	existing, err := client.GetEntry(ctx, cfg.Entry)
+	_, err := client.GetEntry(ctx, cfg.Entry)
 	if err != nil && !api.IsNotFound(err) {
 		return nil, "", err
 	}
 	listed := cfg.Listed
 	if api.IsNotFound(err) {
+		credLabel := ""
+		if wantToken {
+			credLabel = "grain-cli"
+		}
 		created, createErr := client.CreateEntry(ctx, api.CreateEntryRequest{
-			Name:        cfg.Entry,
-			Kind:        api.KindConnected,
-			HostKind:    hostKind,
-			ExternalURL: cfg.ExternalURL,
-			DisplayName: cfg.DisplayName,
-			Purpose:     cfg.Purpose,
-			OwnerGroup:  cfg.OwnerGroup,
-			Listed:      &listed,
-			Tags:        slices.Clone(cfg.Tags),
-			Scopes:      scopes,
-			MintToken:   wantToken,
+			Name:            cfg.Entry,
+			Kind:            api.KindConnected,
+			HostKind:        hostKind,
+			DisplayName:     cfg.DisplayName,
+			Purpose:         cfg.Purpose,
+			OwnerGroup:      cfg.OwnerGroup,
+			Listed:          &listed,
+			Tags:            slices.Clone(cfg.Tags),
+			Scopes:          scopes,
+			CredentialLabel: credLabel,
 		})
 		if createErr != nil {
 			return nil, "", createErr
 		}
-		return &created.Entry, created.Token, nil
-	}
-
-	var minted string
-	if existing.Kind == api.KindRedirect {
-		promoted, promErr := client.PromoteConnected(ctx, cfg.Entry, api.PromoteConnectedRequest{
-			HostKind:  hostKind,
-			MintToken: wantToken,
-		})
-		if promErr != nil {
-			return nil, "", promErr
+		tok := ""
+		if wantToken {
+			tok = created.RegistrationToken
 		}
-		existing = promoted.Entry
-		minted = promoted.Token
+		return &created.Entry, tok, nil
 	}
 
-	extURL := cfg.ExternalURL
 	disp := cfg.DisplayName
 	purp := cfg.Purpose
 	group := cfg.OwnerGroup
@@ -406,7 +391,6 @@ func upsertConnectedEntry(
 		DisplayName: &disp,
 		Purpose:     &purp,
 		HostKind:    &hk,
-		ExternalURL: &extURL,
 		OwnerGroup:  &group,
 		Listed:      &listed,
 		Tags:        &cfg.Tags,
@@ -414,14 +398,15 @@ func upsertConnectedEntry(
 	if updErr != nil {
 		return nil, "", updErr
 	}
-	if wantToken && minted == "" && needFreshToken {
-		rot, rotErr := client.RotateCredential(ctx, cfg.Entry, api.RotateCredentialRequest{})
+	var minted string
+	if wantToken && needFreshToken {
+		rot, rotErr := client.RotateCredential(ctx, cfg.Entry, api.RotateCredentialRequest{Label: "grain-cli"})
 		if rotErr != nil {
 			return nil, "", rotErr
 		}
-		minted = rot.Token
+		minted = rot.RegistrationToken
 	}
-	return &updated, minted, nil
+	return updated, minted, nil
 }
 
 func cmdRegistryUnregister(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
@@ -473,7 +458,7 @@ func cmdRegistryUnregister(ctx context.Context, c *ui.HTTPClient, out *printer, 
 			if cErr != nil {
 				return cErr
 			}
-			if delErr := regClient.DeleteEntry(ctx, entryName); delErr != nil && !api.IsNotFound(delErr) {
+			if delErr := regClient.DeleteEntry(ctx, entryName, api.DeleteEntryRequest{ConfirmName: entryName}); delErr != nil && !api.IsNotFound(delErr) {
 				return fmt.Errorf("deleting %s on registry %s (pass -keep-remote to clear local daemon settings only): %w", entryName, regURL, delErr)
 			}
 			remoteDeleted = true
@@ -528,14 +513,16 @@ func resolveRegistryCLIBearer(ctx context.Context, registryURL, audience, flagTo
 }
 
 func newRegistryAPIClient(registryURL, bearer string) (*api.Client, error) {
-	var opts []api.ClientOption
-	if registryHTTPClient != nil {
-		opts = append(opts, api.WithHTTPClient(registryHTTPClient))
+	cfg := api.ClientConfig{
+		BaseURL:    registryURL,
+		HTTPClient: registryHTTPClient,
 	}
-	if bearer != "" {
-		opts = append(opts, api.WithTokenSource(api.StaticTokenSource(bearer)))
+	if strings.HasPrefix(bearer, api.RegistrationTokenPrefix) {
+		cfg.RegistrationToken = bearer
+	} else {
+		cfg.BearerToken = bearer
 	}
-	return api.NewClient(registryURL, opts...)
+	return api.NewClient(cfg)
 }
 
 func printRegistrySnapshot(out *printer, snap model.RegistrySnapshot) {
@@ -555,9 +542,6 @@ func printRegistrySnapshot(out *printer, snap model.RegistrySnapshot) {
 	}
 	if snap.Config.Purpose != "" {
 		fmt.Printf("Purpose:     %s\n", snap.Config.Purpose)
-	}
-	if snap.Config.ExternalURL != "" {
-		fmt.Printf("External:    %s\n", snap.Config.ExternalURL)
 	}
 	cred := string(snap.Config.EffectiveAuthMode())
 	if snap.CredentialSource != "" && snap.CredentialSource != cred {
@@ -584,7 +568,7 @@ func printRegistrySnapshot(out *printer, snap model.RegistrySnapshot) {
 		if prefix == "" {
 			prefix = "(repo root)"
 		}
-		fmt.Printf("Conflict:    %s %s conflicts with %s\n", c.Repo, prefix, c.ConflictWith)
+		fmt.Printf("Conflict:    %s %s conflicts with %s\n", c.Repo, prefix, c.ConflictingEntry)
 	}
 	if len(snap.AdvertisedScopes) == 0 {
 		fmt.Println("Scopes:      (none)")

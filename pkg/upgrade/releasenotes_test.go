@@ -60,7 +60,7 @@ func imageNotesUpgrader(t *testing.T, answer string) (*Upgrader, string) {
 	ran := filepath.Join(dir, "ran")
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			PullCmd:    []string{"true"},
 			RunCmd:     []string{"sh", "-c", `printf '%s\n' "$*" >> ` + ran + "; " + answer, "sh"},
 		},
@@ -91,7 +91,7 @@ func TestReleaseNotesAsksThePulledImageFromTheRunningVersion(t *testing.T) {
 	if got.NotInThisBuild || got.Missing != "" || got.From != "v1.6.0" || got.Version != "v1.8.0" {
 		t.Errorf("preview = %+v", got)
 	}
-	const pinned = "ghcr.io/bwsalmon/grain/grain:v1.8.0@" + testDigest
+	const pinned = "docker.io/grainai/grain:v1.8.0@" + testDigest
 	if asked := readFile(t, ran); asked != pinned+" release-notes --json --from v1.6.0\n" {
 		t.Errorf("asked %q, want the pinned image asked from v1.6.0", asked)
 	}
@@ -154,7 +154,7 @@ func TestReleaseNotesReportsAnImageThatCouldNotBeRun(t *testing.T) {
 	}
 	dir := t.TempDir()
 	failing := newUpgrader(t, Config{
-		Image:            &ImageConfig{Repository: "ghcr.io/bwsalmon/grain/grain", PullCmd: []string{"false"}, RunCmd: []string{"true"}},
+		Image:            &ImageConfig{Repository: "docker.io/grainai/grain", PullCmd: []string{"false"}, RunCmd: []string{"true"}},
 		ReleaseNotesArgs: []string{"release-notes", "--json"},
 		StatusFile:       filepath.Join(dir, "upgrade-status.json"),
 	})

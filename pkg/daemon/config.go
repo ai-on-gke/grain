@@ -39,9 +39,11 @@ import (
 )
 
 type Config struct {
-	DataDir  string
-	DbDriver string
-	DbDSN    string
+	DataDir         string
+	DbDriver        string
+	DbDSN           string
+	SecretsBackend  string
+	SecretsSMPrefix string
 	// unitFlags are the names of the flags this process was actually
 	// started with, undefined ones included -- which on a deployment
 	// scripts/setup.sh installed is what grain-daemon.service's ExecStart
@@ -1504,10 +1506,10 @@ func (c Config) ToModelConfig() model.Config {
 		mc.K8sKubectl = c.K8sKubectl
 	}
 	sandboxImg := firstNonEmpty(c.K8sSandboxImage, c.K8sImage)
-	if sandboxImg != DefaultK8sSandboxImage && sandboxImg != model.DefaultK8sSandboxImage {
+	if sandboxImg != DefaultK8sSandboxImage && !isUnpinnedDefaultK8sSandboxImage(sandboxImg) {
 		mc.K8sSandboxImage = sandboxImg
 	}
-	if c.K8sGranuleImage != DefaultSandboxImage && c.K8sGranuleImage != model.DefaultSandboxImage {
+	if c.K8sGranuleImage != DefaultSandboxImage && !isUnpinnedDefaultSandboxImage(c.K8sGranuleImage) {
 		mc.K8sGranuleImage = c.K8sGranuleImage
 	}
 	mc.SandboxImage = c.CustomSandboxImage

@@ -66,10 +66,10 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 			if c.PathPrefix != "" {
 				scope += "/" + c.PathPrefix
 			}
-			if c.Owner != "" {
-				fmt.Printf("  scope conflict on %s: claimed by %s (%s)\n", scope, c.ConflictWith, c.Owner)
+			if c.ConflictingOwner != "" {
+				fmt.Printf("  scope conflict on %s: claimed by %s (%s)\n", scope, c.ConflictingEntry, c.ConflictingOwner)
 			} else {
-				fmt.Printf("  scope conflict on %s: claimed by %s\n", scope, c.ConflictWith)
+				fmt.Printf("  scope conflict on %s: claimed by %s\n", scope, c.ConflictingEntry)
 			}
 		}
 		if len(h.Counters) > 0 {

@@ -222,7 +222,7 @@ standalone at any time:
    `/dev/kvm`, and verifies `granule ready` and `granule exec -- uname -r`:
    ```sh
    KUBECONFIG=/var/lib/grain/kubeconfig \
-     IMAGE=ghcr.io/bwsalmon/grain/guest:main \
+     IMAGE=docker.io/grainai/sandbox:main \
      ./scripts/platform-verify/k8s-granule.sh --keep
    ```
 2. **Throwaway sandbox git-proxy clone and package-cache fetch (~30–60s)**:
@@ -256,7 +256,7 @@ Once verification passes and `/var/lib/grain/kubeconfig` is in place:
    - **Namespace**: `grain`
    - **Kubeconfig**: `/var/lib/grain/kubeconfig` (picked up automatically
      by `daemon.DefaultKubeconfigPath` when left blank)
-   - **Guest image**: `ghcr.io/bwsalmon/grain/guest:main` (or the
+   - **Guest image**: `docker.io/grainai/sandbox:main` (or the
      deployment's stamped guest image)
 3. Dispatch a lightweight smoke task and confirm in **[System](/system)**
    or with `kubectl --kubeconfig=/var/lib/grain/kubeconfig -n grain get pods`

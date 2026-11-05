@@ -146,7 +146,6 @@ const SETTING_LABELS = {
   registryOidcAudience: "OIDC audience",
   registryDisplayName: "Display name",
   registryPurpose: "Purpose",
-  registryExternalUrl: "External URL",
   registryListed: "Listed in registry directory",
 };
 

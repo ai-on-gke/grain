@@ -84,7 +84,7 @@ func TestDecodeCLIRunDropsTheRemovedCustomFramework(t *testing.T) {
 // only the per-run docker launcher those releases had ever used -- is
 // not kept.
 func TestDecodeCLIRunDropsWhatOlderReleasesStored(t *testing.T) {
-	got, err := model.DecodeCLIRun(`{"claude":{"location":"auto","image":"ghcr.io/bwsalmon/grain/grain:v2.1.0"},` +
+	got, err := model.DecodeCLIRun(`{"claude":{"location":"auto","image":"docker.io/grainai/grain:v2.1.0"},` +
 		`"codex":{"location":"container","image":"mine:1"},"antigravity":{"location":"auto"}}`)
 	if err != nil {
 		t.Fatal(err)
