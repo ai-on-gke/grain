@@ -228,6 +228,7 @@ func fileBaseRepairReviewFollowUp(ctx context.Context, store *model.Store, clien
 		OrderKey:   orderKey,
 	}
 	model.InheritRequester(&followUp, reviewed)
+	model.InheritContext(&followUp, reviewed)
 	if err := store.PutTask(ctx, followUp); err != nil {
 		return fmt.Errorf("orchestrator: filing follow-up task %s for %s's review findings: %w", followUp.ID, reviewed.ID, err)
 	}

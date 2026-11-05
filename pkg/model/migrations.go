@@ -767,6 +767,13 @@ var Migrations = []Migration{
 			"ALTER TABLE `repo_config` DROP COLUMN `default_hostd`",
 		},
 	},
+	{
+		Version:     112,
+		Description: "add grain_config.auto_grant_context_reads (operator-configured repositories auto-granted -read for committed context)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `auto_grant_context_reads` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as

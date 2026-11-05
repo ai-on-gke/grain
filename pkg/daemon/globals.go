@@ -187,6 +187,41 @@ func (g repoBranchGate) RepoBranches(ctx context.Context, repo model.RepoRef) ([
 	return g.remote.GitBranches(repo.StoredOwner(), repo.Name)
 }
 
+type configRepoRevResolver interface {
+	ResolveRev(ctx context.Context, rev string) (string, error)
+}
+
+// repoRevGate is ui.Config.RepoRevs: resolves committed-context git refs to
+// commit SHAs across grain/config, plain git hosts, and GitHub.
+type repoRevGate struct {
+	local  configRepoRevResolver
+	remote interface {
+		GitRefSHA(owner, repo, rev string) (string, bool, error)
+	}
+}
+
+func (g repoRevGate) ResolveRepoRev(ctx context.Context, repo model.RepoRef, rev string) (string, bool, error) {
+	if model.IsConfigRepo(repo) {
+		if g.local == nil {
+			return "", true, errors.New("the config repository is not available")
+		}
+		sha, err := g.local.ResolveRev(ctx, rev)
+		return sha, true, err
+	}
+	if g.remote != nil {
+		sha, ok, err := g.remote.GitRefSHA(repo.StoredOwner(), repo.Name, rev)
+		if ok {
+			return sha, true, err
+		}
+	}
+	client := liveRepoNames.Load()
+	if client == nil {
+		return "", false, nil
+	}
+	sha, err := client.ResolveCommitSHA(repo.Owner, repo.Name, rev)
+	return sha, true, err
+}
+
 // GitHubRepoComparer is the GitHub-backed half of repoComparisonGate: the
 // task UI's internal pull-request view drawn from one REST client's
 // compare endpoint. It is exported so `grain demo -github-sim` can put the

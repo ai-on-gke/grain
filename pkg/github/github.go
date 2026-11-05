@@ -2006,6 +2006,43 @@ func (c *RESTClient) GetBranchHead(owner, repo, branch string) (*BranchHead, err
 	return &BranchHead{SHA: data.Commit.SHA, Message: data.Commit.Commit.Message}, nil
 }
 
+// ResolveCommitSHA resolves ref (a branch name, tag, abbreviated SHA, full SHA,
+// or "" / "HEAD" for the repository's default branch) in owner/repo to its full
+// commit SHA via GET /repos/{owner}/{repo}/commits/{ref}. It returns ("", nil)
+// when the repository or ref does not exist (404 / 422).
+func (c *RESTClient) ResolveCommitSHA(owner, repo, ref string) (string, error) {
+	lookup := strings.TrimSpace(ref)
+	if lookup == "" {
+		lookup = "HEAD"
+	}
+	resp, err := c.get(owner, repo, fmt.Sprintf("/repos/%s/%s/commits/%s", owner, repo, quoteAll(lookup)))
+	if err != nil {
+		return "", err
+	}
+	if (resp.Status == 404 || resp.Status == 422) && strings.TrimSpace(ref) == "" {
+		def, defErr := c.DefaultBranch(owner, repo)
+		if defErr == nil && def != "" {
+			resp, err = c.get(owner, repo, fmt.Sprintf("/repos/%s/%s/commits/%s", owner, repo, quoteAll(def)))
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+	if resp.Status == 404 || resp.Status == 422 {
+		return "", nil
+	}
+	if resp.Status != 200 {
+		return "", &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	var data struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.Unmarshal(resp.Body, &data); err != nil {
+		return "", err
+	}
+	return strings.ToLower(strings.TrimSpace(data.SHA)), nil
+}
+
 // CompareCommits returns the commits head carries that base does not,
 // oldest first -- git's own `base..head`, which is exactly the set of
 // commits a pull request from head into base would contain, and so
