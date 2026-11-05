@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/registry/store"
 	"github.com/ai-on-gke/grain/pkg/webauth"
 )
 
@@ -385,5 +386,121 @@ func TestServerEndToEndInRegistryPackage(t *testing.T) {
 	srv.JWKSHandler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK from JWKSHandler, got %d", rec.Code)
+	}
+}
+
+type staticTestGroups map[string][]string
+
+func (g staticTestGroups) IsMember(_ context.Context, group, member string) (bool, error) {
+	for _, m := range g[group] {
+		if m == member {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (staticTestGroups) NormalizeGroup(raw string) (string, error) { return raw, nil }
+
+// Service principals read the catalog and nothing else: GET /api/entries
+// and GET /api/shapes are control plane and refuse them, while people
+// still reach both.
+func TestServicePrincipalsReachOnlyTheCatalog(t *testing.T) {
+	signer, err := NewEphemeralLocalSigner("reg-test-sp")
+	if err != nil {
+		t.Fatalf("NewEphemeralLocalSigner: %v", err)
+	}
+	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
+		Verifier:          fakeFrontIdentity{},
+		AllowedDomains:    []string{"example.com"},
+		ServicePrincipals: []string{"serviceAccount:board@proj.iam.gserviceaccount.com"},
+	})
+	if err != nil {
+		t.Fatalf("NewAdmitter: %v", err)
+	}
+	cfg, err := ParseConfig([]byte(validTestYAML()))
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	srv, err := NewServer(ServerOptions{Config: *cfg, Admitter: admitter, Signer: signer, Metrics: NewMetrics()})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	h := srv.Handler()
+	get := func(path, email string) int {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "https://"+cfg.Host+path, nil)
+		req.Host = cfg.Host
+		req.Header.Set("X-Test-Email", email)
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	const sp = "board@proj.iam.gserviceaccount.com"
+	for path, want := range map[string]int{
+		"/api/directory":      http.StatusOK,
+		"/api/route?repo=a/b": http.StatusOK,
+		"/api/entries":        http.StatusForbidden,
+		"/api/shapes":         http.StatusForbidden,
+	} {
+		if got := get(path, sp); got != want {
+			t.Errorf("service principal GET %s = %d, want %d", path, got, want)
+		}
+	}
+	for _, path := range []string{"/api/directory", "/api/entries", "/api/shapes"} {
+		if got := get(path, "alice@example.com"); got != http.StatusOK {
+			t.Errorf("person GET %s = %d, want 200", path, got)
+		}
+	}
+}
+
+// The catalog holds listed entries only, for every caller; GET
+// /api/entries holds the caller's own entries (owner or owner_group), or
+// every entry for an admin -- never another owner's entry merely because
+// it is listed, public or shared.
+func TestCatalogAndEntryListFilters(t *testing.T) {
+	now := time.Now()
+	listed := &store.EntryRow{Name: "listed", OwnerEmail: "bob@example.com", Listed: true}
+	unlistedPublic := &store.EntryRow{Name: "pub", OwnerEmail: "bob@example.com", Visibility: store.VisibilityPublic}
+	shared := &store.EntryRow{Name: "shared", OwnerEmail: "bob@example.com", Visibility: store.VisibilityShared, AccessList: []string{"user:alice@example.com"}}
+	own := &store.EntryRow{Name: "own", OwnerEmail: "alice@example.com"}
+	team := &store.EntryRow{Name: "team", OwnerEmail: "bob@example.com", OwnerGroup: "group:team@example.com"}
+	deleted := &store.EntryRow{Name: "gone", OwnerEmail: "bob@example.com", Listed: true, DeletedAt: &now}
+
+	for _, c := range []struct {
+		e    *store.EntryRow
+		want bool
+	}{{listed, true}, {unlistedPublic, false}, {shared, false}, {own, false}, {team, false}, {deleted, false}} {
+		if got := inCatalog(c.e); got != c.want {
+			t.Errorf("inCatalog(%s) = %v, want %v", c.e.Name, got, c.want)
+		}
+	}
+
+	srv := &Server{groups: staticTestGroups{"team@example.com": {"alice@example.com"}}}
+	ctx := context.Background()
+	alice := &webauth.AdmittedCaller{Email: "alice@example.com", Kind: webauth.PrincipalHuman}
+	admin := &webauth.AdmittedCaller{Email: "root@example.com", Kind: webauth.PrincipalHuman, IsAdmin: true}
+	sp := &webauth.AdmittedCaller{Email: "board@proj.iam.gserviceaccount.com", Kind: webauth.PrincipalService}
+	for _, c := range []struct {
+		caller *webauth.AdmittedCaller
+		e      *store.EntryRow
+		want   bool
+	}{
+		{alice, own, true},
+		{alice, team, true},
+		{alice, listed, false},
+		{alice, unlistedPublic, false},
+		{alice, shared, false},
+		{admin, listed, true},
+		{admin, unlistedPublic, true},
+		{sp, listed, false},
+		{sp, unlistedPublic, false},
+	} {
+		got, err := srv.canCallerListEntry(ctx, c.caller, c.e)
+		if err != nil {
+			t.Fatalf("canCallerListEntry(%s, %s): %v", c.caller.Email, c.e.Name, err)
+		}
+		if got != c.want {
+			t.Errorf("canCallerListEntry(%s, %s) = %v, want %v", c.caller.Email, c.e.Name, got, c.want)
+		}
 	}
 }

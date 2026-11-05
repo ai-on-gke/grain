@@ -110,10 +110,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /.well-known/jwks.json", s.handleJWKS)
 	mux.HandleFunc("POST /api/internal/heartbeat", s.handleInternalHeartbeat)
 
+	// Service principals may read the catalog -- /api/directory and
+	// /api/route -- and nothing else: entries, shapes and the rest of the
+	// control plane are for people (registry.design.md, "Plain service
+	// calls").
 	mux.Handle("GET /api/me", s.admitter.RequireHuman(http.HandlerFunc(s.handleGetMe)))
-	mux.Handle("GET /api/shapes", s.admitter.RequireAdmitted(http.HandlerFunc(s.handleGetShapes)))
+	mux.Handle("GET /api/shapes", s.admitter.RequireHuman(http.HandlerFunc(s.handleGetShapes)))
 	mux.Handle("GET /api/directory", s.admitter.RequireAdmitted(http.HandlerFunc(s.handleGetDirectory)))
-	mux.Handle("GET /api/entries", s.admitter.RequireAdmitted(http.HandlerFunc(s.handleGetEntries)))
+	mux.Handle("GET /api/entries", s.admitter.RequireHuman(http.HandlerFunc(s.handleGetEntries)))
 	mux.Handle("GET /api/entries/{name}/availability", s.admitter.RequireHuman(http.HandlerFunc(s.handleGetEntryAvailability)))
 	mux.Handle("GET /api/route", s.admitter.RequireAdmitted(http.HandlerFunc(s.handleGetRoute)))
 	mux.Handle("/", s.admitter.RequireHuman(s.static))
@@ -259,13 +263,7 @@ func (s *Server) handleGetDirectory(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]api.DirectoryEntry, 0, len(entries))
 	for _, e := range entries {
-		ok, err := s.canCallerViewEntry(r.Context(), caller, e)
-		if err != nil {
-			w.Header().Set("Retry-After", "5")
-			writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "authorization lookup temporarily unavailable")
-			return
-		}
-		if !ok {
+		if !inCatalog(e) {
 			continue
 		}
 		out = append(out, s.store.ToDirectoryEntry(e, s.cfg.InstanceDomain))
@@ -290,7 +288,7 @@ func (s *Server) handleGetEntries(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]api.Entry, 0, len(entries))
 	for _, e := range entries {
-		ok, err := s.canCallerViewEntry(r.Context(), caller, e)
+		ok, err := s.canCallerListEntry(r.Context(), caller, e)
 		if err != nil {
 			w.Header().Set("Retry-After", "5")
 			writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "authorization lookup temporarily unavailable")
@@ -343,20 +341,7 @@ func (s *Server) handleGetRoute(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, api.RouteResponse{Repo: repo, Path: filePath, Candidates: []api.RouteCandidate{}})
 		return
 	}
-	var groupErr error
-	res, err := s.store.RouteRepoPath(r.Context(), repo, filePath, s.cfg.InstanceDomain, func(e *store.EntryRow) bool {
-		ok, err := s.canCallerViewEntry(r.Context(), caller, e)
-		if err != nil {
-			groupErr = err
-			return false
-		}
-		return ok
-	})
-	if groupErr != nil {
-		w.Header().Set("Retry-After", "5")
-		writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "authorization lookup temporarily unavailable")
-		return
-	}
+	res, err := s.store.RouteRepoPath(r.Context(), repo, filePath, s.cfg.InstanceDomain, inCatalog)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
@@ -445,18 +430,34 @@ func (s *Server) serveEntrySubdomain(w http.ResponseWriter, r *http.Request, ent
 	writeJSONError(w, http.StatusServiceUnavailable, "entry_not_ready", fmt.Sprintf("entry %q (%s) backend proxy is not yet active", entry.Name, entry.Kind))
 }
 
-func (s *Server) canCallerViewEntry(ctx context.Context, caller *webauth.AdmittedCaller, e *store.EntryRow) (bool, error) {
-	if caller == nil {
+// inCatalog reports whether e belongs in catalog discovery (/api/directory
+// and /api/route). The catalog is the same for every admitted caller --
+// person, admin or service principal -- and holds listed entries only:
+// an unlisted entry never appears there, whoever owns it, whatever its
+// visibility, and however it is shared (registry.design.md: "Catalog
+// discovery exposes only entries explicitly marked listed").
+func inCatalog(e *store.EntryRow) bool {
+	return e != nil && e.Listed && e.DeletedAt == nil && e.LifecycleState != api.StateDeleted
+}
+
+// canCallerListEntry reports whether e is one of the caller's own entries
+// for GET /api/entries: one they own, one whose owner_group they are in,
+// or -- for a registry admin -- any entry. Being listed in the catalog,
+// public, or shared with the caller does not put an entry here: this
+// projection carries internal fields (backend_url, zone, shape) that the
+// catalog never shows.
+func (s *Server) canCallerListEntry(ctx context.Context, caller *webauth.AdmittedCaller, e *store.EntryRow) (bool, error) {
+	if caller == nil || caller.Kind != webauth.PrincipalHuman || e == nil {
 		return false, nil
 	}
-	if caller.Kind == webauth.PrincipalService {
-		return e.Visibility == store.VisibilityPublic || e.Listed, nil
-	}
-	if caller.IsAdmin || e.Visibility == store.VisibilityPublic || e.Listed || strings.EqualFold(e.OwnerEmail, caller.Email) {
+	if caller.IsAdmin || strings.EqualFold(e.OwnerEmail, caller.Email) {
 		return true, nil
 	}
-	if e.Visibility == store.VisibilityShared {
-		return s.matchesAccessList(ctx, caller.Email, e.AccessList)
+	if g := strings.TrimSpace(e.OwnerGroup); g != "" {
+		if s.groups == nil {
+			return false, errors.New("group resolver not configured")
+		}
+		return s.groups.IsMember(ctx, strings.TrimPrefix(strings.ToLower(g), "group:"), strings.ToLower(strings.TrimSpace(caller.Email)))
 	}
 	return false, nil
 }
