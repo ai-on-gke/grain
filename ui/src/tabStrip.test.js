@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
+  REVEAL_AFTER_MUI_MS,
   REVEAL_AGAIN_MS,
   revealFocusedTab,
   revealSelectedTab,
+  useRevealSelectedTab,
 } from "./tabStrip.js";
 
 describe("revealFocusedTab", () => {
@@ -118,5 +121,42 @@ describe("revealSelectedTab", () => {
     expect(() =>
       revealSelectedTab(document.createElement("div")),
     ).not.toThrow();
+  });
+
+  it("re-reveals the selected tab when a delayed MUI scroll lands after REVEAL_AFTER_MUI_MS", () => {
+    vi.useFakeTimers();
+    const OrigResizeObserver = globalThis.ResizeObserver;
+    let resizeCallback = null;
+    globalThis.ResizeObserver = class {
+      constructor(cb) {
+        resizeCallback = cb;
+      }
+      observe() {}
+      disconnect() {}
+    };
+    try {
+      const { root, scroller } = strip(
+        { left: 56, right: 334 },
+        { left: 322, right: 414 },
+        299,
+      );
+      const { result } = renderHook(() => useRevealSelectedTab());
+      result.current(root);
+
+      resizeCallback();
+      expect(scroller.scrollLeft).toBe(379);
+
+      // Advance past the initial 400ms timer, then simulate a delayed MUI
+      // requestAnimationFrame frame overwriting scrollLeft back to 299.
+      vi.advanceTimersByTime(REVEAL_AFTER_MUI_MS + 150);
+      scroller.scrollLeft = 299;
+      scroller.dispatchEvent(new Event("scroll"));
+      expect(scroller.scrollLeft).toBe(379);
+
+      result.current(null);
+    } finally {
+      globalThis.ResizeObserver = OrigResizeObserver;
+      vi.useRealTimers();
+    }
   });
 });
