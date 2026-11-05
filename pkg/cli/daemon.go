@@ -105,7 +105,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/postgres"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
-	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -1317,43 +1316,11 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	if err = upgradeSource.apply(&cfg, passed); err != nil {
 		return cfg, fs, unknownFlags, err
 	}
-	if cfg.HostdRemote, err = hostdRemote(*hostdTokenFile, *hostdTokenName, *hostdTokenOwner); err != nil {
+	if cfg.HostdRemote, err = daemon.HostdRemoteFromFlags(*hostdTokenFile, *hostdTokenName, *hostdTokenOwner); err != nil {
 		return cfg, fs, unknownFlags, err
 	}
 	cfg, err = local(cfg, passed)
 	return cfg, fs, unknownFlags, err
-}
-
-// hostdRemote is the acceptor for a grain hostd dialing in with the token
-// in tokenFile, or $GRAIN_HOSTD_TOKEN, as hostd name owned by owner; nil
-// when neither names a token.
-func hostdRemote(tokenFile, name, owner string) (*hostd.Remote, error) {
-	token := strings.TrimSpace(os.Getenv("GRAIN_HOSTD_TOKEN"))
-	if tokenFile != "" {
-		t, err := daemon.ReadTokenFile(tokenFile)
-		if err != nil {
-			return nil, fmt.Errorf("reading -hostd-token-file: %w", err)
-		}
-		token = t
-	}
-	if token == "" {
-		return nil, nil
-	}
-	if name == "" {
-		name = hostd.DefaultSharedName
-	}
-	if err := model.ValidateHostdName(name); err != nil {
-		return nil, fmt.Errorf("-hostd-token-name: %w", err)
-	}
-	if name == model.LocalHostd {
-		return nil, fmt.Errorf("-hostd-token-name: %q is the co-located hostd's name", name)
-	}
-	owner, err := model.NormalizeHostdOwner(owner)
-	if err != nil {
-		return nil, fmt.Errorf("-hostd-token-owner: %w", err)
-	}
-	log.Printf("grain daemon: -hostd-token-file is deprecated and goes in the next release: register hostd %s in the hostd registry (POST /api/hostds) and give it the token it answers with", name)
-	return &hostd.Remote{Token: token, SharedName: name, SharedOwner: owner, Logf: log.Printf}, nil
 }
 
 // checkConfig is every "these flags cannot be started with" rule daemon()
@@ -1384,10 +1351,8 @@ func checkConfig(cfg daemon.Config) error {
 	default:
 		return fmt.Errorf("-db-driver must be \"sqlite\" or \"postgres\", got %q", cfg.DbDriver)
 	}
-	if cfg.ObjectStoreURI != "" {
-		if err := objectstore.ValidateURI(cfg.ObjectStoreURI); err != nil {
-			return fmt.Errorf("-object-store: %w", err)
-		}
+	if err := daemon.CheckObjectStoreURI(cfg); err != nil {
+		return err
 	}
 	if err := daemon.CheckSandboxBackend(cfg, daemon.LocalSandboxes != nil); err != nil {
 		return err

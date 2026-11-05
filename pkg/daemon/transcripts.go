@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
@@ -458,4 +459,15 @@ func (t *TranscriptObjectStore) Sizes(ctx context.Context) ([]model.RunTranscrip
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].RunID < out[j].RunID })
 	return out, nil
+}
+
+// CheckObjectStoreURI validates cfg.ObjectStoreURI when set.
+func CheckObjectStoreURI(cfg Config) error {
+	if cfg.ObjectStoreURI == "" {
+		return nil
+	}
+	if err := objectstore.ValidateURI(cfg.ObjectStoreURI); err != nil {
+		return fmt.Errorf("-object-store: %w", err)
+	}
+	return nil
 }

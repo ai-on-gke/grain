@@ -16,6 +16,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
 	"github.com/ai-on-gke/grain/pkg/redact"
@@ -270,4 +272,36 @@ func startGitProxy(dataDir string, store *model.Store, githubHost string, insecu
 	}
 	log.Printf("grain daemon: the git proxy is serving at %s (bound %s)", endpoint.URL, endpoint.Bound)
 	return endpoint.URL, proxyHandler, stopServer, nil
+}
+
+// HostdRemoteFromFlags constructs the acceptor for a grain hostd dialing in
+// with the token in tokenFile or $GRAIN_HOSTD_TOKEN, or nil when neither names
+// a token.
+func HostdRemoteFromFlags(tokenFile, name, owner string) (*hostd.Remote, error) {
+	token := strings.TrimSpace(os.Getenv("GRAIN_HOSTD_TOKEN"))
+	if tokenFile != "" {
+		t, err := ReadTokenFile(tokenFile)
+		if err != nil {
+			return nil, fmt.Errorf("reading -hostd-token-file: %w", err)
+		}
+		token = t
+	}
+	if token == "" {
+		return nil, nil
+	}
+	if name == "" {
+		name = hostd.DefaultSharedName
+	}
+	if err := model.ValidateHostdName(name); err != nil {
+		return nil, fmt.Errorf("-hostd-token-name: %w", err)
+	}
+	if name == model.LocalHostd {
+		return nil, fmt.Errorf("-hostd-token-name: %q is the co-located hostd's name", name)
+	}
+	owner, err := model.NormalizeHostdOwner(owner)
+	if err != nil {
+		return nil, fmt.Errorf("-hostd-token-owner: %w", err)
+	}
+	log.Printf("grain daemon: -hostd-token-file is deprecated and goes in the next release: register hostd %s in the hostd registry (POST /api/hostds) and give it the token it answers with", name)
+	return &hostd.Remote{Token: token, SharedName: name, SharedOwner: owner, Logf: log.Printf}, nil
 }
