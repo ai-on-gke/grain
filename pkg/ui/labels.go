@@ -1190,12 +1190,15 @@ type Config struct {
 	// nil uses CloudIdentityGroupChecker lazily when at least one group: entry
 	// is configured.
 	GroupChecker GroupMemberChecker
-	// RequireIAP is -ui-require-iap: the access code, as a bearer token
-	// or the grain_access cookie, is accepted only from loopback with no
-	// forwarding or proxy headers (accessCodeAccepted), and the "Enter
-	// access code" page is not served, so a network caller signs in
-	// through IAP alone. A registered IdentityVerifier that declares
-	// AccessCodeWins still takes the code over its own proxy.
+	// RequireVerifier is -ui-require-verifier: when non-empty, names the
+	// IdentityVerifier (e.g. "iap", "registry", or a registered verifier)
+	// that network callers must sign in through. The access code, as a
+	// bearer token or the grain_access cookie, is accepted only from
+	// loopback with no forwarding or proxy headers (accessCodeAccepted),
+	// or through a registered IdentityVerifier that declares
+	// AccessCodeWins, and the "Enter access code" page is not served.
+	RequireVerifier string
+	// RequireIAP is -ui-require-iap, an alias for RequireVerifier = "iap".
 	RequireIAP bool
 	// LocalAPIToken is the secret in -data-dir/local-api-token
 	// (EnsureLocalAPIToken) that a loopback request presents as a bearer

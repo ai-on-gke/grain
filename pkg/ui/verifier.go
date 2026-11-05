@@ -127,6 +127,22 @@ func registeredVerifiersSnapshot() []IdentityVerifier {
 	return out
 }
 
+// HasActiveVerifier reports whether an IdentityVerifier with Name() == name
+// is active for ctx (either built-in IAP when an IAP audience is configured,
+// or an IdentityVerifier registered via RegisterIdentityVerifier).
+func HasActiveVerifier(ctx context.Context, name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	for _, v := range activeVerifiers(ctx) {
+		if v.Name() == name {
+			return true
+		}
+	}
+	return false
+}
+
 // activeVerifiers returns the verifiers active for ctx in evaluation order.
 // IAP is registered first by default whenever an IAP audience is configured
 // (-ui-iap-audience / $GRAIN_IAP_AUDIENCE / Config.IAPAudience), unless an

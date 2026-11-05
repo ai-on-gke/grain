@@ -18,7 +18,21 @@
 import "@testing-library/jest-dom/vitest";
 
 import { afterEach } from "vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
+
+// Vitest's per-test bound is 20s (vitest.config.js) because a whole-App
+// render plus userEvent clicks takes several seconds on a loaded 4-worker
+// CI runner. Testing Library's default asyncUtilTimeout is 1000ms, which
+// sits inside the spread of a single App render and accessible-name walk
+// on a busy runner and fails findBy* / waitFor before the render settles;
+// 10s stays well under the 20s test bound so a stuck query still names
+// the assertion rather than the test, and costs a green run nothing
+// because waitFor resolves the moment its condition holds.
+//
+// Cap prettyDOM dumps so a failing query does not fill CI's 4 KB log tail
+// with 7 KB of Sidebar SVG markup and push the assertion line out of sight.
+process.env.DEBUG_PRINT_LIMIT ??= "1000";
+configure({ asyncUtilTimeout: 10000 });
 
 // Testing Library only registers its cleanup itself when it finds Jest's
 // global afterEach; without `test.globals` this project leaves off
