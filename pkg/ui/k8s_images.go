@@ -113,7 +113,7 @@ func isHexString(s string) bool {
 }
 
 // ImageRepositoryPrefix returns the container registry/repository prefix
-// (e.g. "ghcr.io/bwsalmon/grain") for the given install track, derived
+// (e.g. "docker.io/grainai") for the given install track, derived
 // from installtrack.ImageRepository, which honours the track's image
 // repository override (GRAIN_OSS_IMAGE_REPO for core's).
 func ImageRepositoryPrefix(track installtrack.Track) string {
@@ -135,21 +135,33 @@ func repositoryPrefixFromDaemonRepo(daemonRepo string) string {
 		return repo[:slash]
 	}
 	if repo == "" {
-		return "ghcr.io/bwsalmon/grain"
+		return "docker.io/grainai"
 	}
 	return repo
 }
 
+func isLegacyGHCRPrefix(prefix string) bool {
+	return prefix == "ghcr.io/bwsalmon/grain" || prefix == "ghcr.io/ai-on-gke/grain"
+}
+
 // DefaultK8sSandboxImageFor returns the build-pinned, track-aware default
-// k8s-sandbox image reference for track and info.
+// sandbox-k8s image reference for track and info.
 func DefaultK8sSandboxImageFor(track installtrack.Track, info version.Info) string {
-	return ImageRepositoryPrefix(track) + "/k8s-sandbox:" + ImageTagForVersion(info)
+	prefix := ImageRepositoryPrefix(track)
+	if isLegacyGHCRPrefix(prefix) {
+		return prefix + "/k8s-sandbox:" + ImageTagForVersion(info)
+	}
+	return prefix + "/sandbox-k8s:" + ImageTagForVersion(info)
 }
 
 // DefaultSandboxImageFor returns the build-pinned, track-aware default
-// guest (Granule VM) image reference for track and info.
+// sandbox (Granule VM guest) image reference for track and info.
 func DefaultSandboxImageFor(track installtrack.Track, info version.Info) string {
-	return ImageRepositoryPrefix(track) + "/guest:" + ImageTagForVersion(info)
+	prefix := ImageRepositoryPrefix(track)
+	if isLegacyGHCRPrefix(prefix) {
+		return prefix + "/guest:" + ImageTagForVersion(info)
+	}
+	return prefix + "/sandbox:" + ImageTagForVersion(info)
 }
 
 // ResolveDefaultK8sSandboxImage returns the default k8s-sandbox image for track
@@ -308,6 +320,12 @@ func parseOCIImageReference(imageRef string) (host, repo, ref string, err error)
 	} else {
 		host = first
 		repo = s[slash+1:]
+		if host == "docker.io" || host == "index.docker.io" {
+			host = "registry-1.docker.io"
+			if !strings.Contains(repo, "/") {
+				repo = "library/" + repo
+			}
+		}
 	}
 	if ref == "" {
 		ref = "latest"

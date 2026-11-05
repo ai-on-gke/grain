@@ -444,7 +444,7 @@ func TestTheGuestIsPublishedFromGrainCIAndNotFromActionsAlone(t *testing.T) {
 	// build stamped with nothing -- is the last promoted release's, and
 	// the promote phase moves it (promote_images_test.go).
 	contains(t, script, `push_pinned "$guest"`)
-	contains(t, script, `"$guest $root/guest:$branch"`)
+	contains(t, script, `"$guest $root/sandbox:$branch"`)
 
 	// Retried, for the reason build-artifacts.yml's own push step gives
 	// at length: GHCR loses this race on its own about once in a hundred
@@ -531,7 +531,7 @@ func TestABranchCanWarmTheGuestCacheWithoutPublishingAnythingElse(t *testing.T) 
 	}
 	published := publishImagesBody(t, script)
 	for _, moving := range []string{
-		`"$guest $root/guest:$branch"`,
+		`"$guest $root/sandbox:$branch"`,
 	} {
 		if !strings.Contains(published, moving) {
 			t.Errorf("scripts/release-images.sh moves %s outside publish_images, so `guest-cache` would move it from a branch", moving)

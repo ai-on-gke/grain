@@ -196,28 +196,39 @@ func TestRunResolvesRepoAndTokenFromEnvironmentAndPlacements(t *testing.T) {
 	sandboxTokenPath = filepath.Join(tempDir, ".github-sandbox-token")
 	publishTokenPath = filepath.Join(tempDir, ".package-publish-token")
 
-	t.Run("fails when RELEASE_IMAGE_REPO is malformed and flags missing", func(t *testing.T) {
+	t.Run("fails when RELEASE_IMAGE_REPO is malformed and flags missing on ghcr.io", func(t *testing.T) {
 		t.Setenv("RELEASE_IMAGE_REPO", "invalid-no-slash")
 		t.Setenv("GITHUB_TOKEN", "fake-token")
 		var out bytes.Buffer
-		err := run([]string{"-apply=false"}, &out)
+		err := run([]string{"-registry=ghcr.io", "-apply=false"}, &out)
 		if err == nil || !strings.Contains(err.Error(), "are required") {
 			t.Fatalf("expected missing repo error, got: %v", err)
 		}
 	})
 
-	t.Run("fails when token missing", func(t *testing.T) {
+	t.Run("fails when token missing on ghcr.io", func(t *testing.T) {
 		t.Setenv("RELEASE_IMAGE_REPO", "")
 		t.Setenv("GRAIN_CI_REPO", "ai-on-gke/grain")
 		t.Setenv("GITHUB_TOKEN", "")
 		var out bytes.Buffer
-		err := run([]string{"-apply=false"}, &out)
+		err := run([]string{"-registry=ghcr.io", "-apply=false"}, &out)
 		if err == nil || !strings.Contains(err.Error(), "GITHUB_TOKEN is empty") {
 			t.Fatalf("expected missing token error, got: %v", err)
 		}
 	})
 
-	t.Run("defaults repo to bwsalmon/grain and resolves token from sandboxTokenPath", func(t *testing.T) {
+	t.Run("fails when DOCKER_PAT missing on docker.io with -apply=true", func(t *testing.T) {
+		t.Setenv("PACKAGE_PUBLISH_REGISTRY", "")
+		t.Setenv("DOCKER_PAT", "")
+		t.Setenv("PACKAGE_PUBLISH_TOKEN", "")
+		var out bytes.Buffer
+		err := run([]string{"-apply=true"}, &out)
+		if err == nil || !strings.Contains(err.Error(), "DOCKER_PAT") {
+			t.Fatalf("expected missing DOCKER_PAT error, got: %v", err)
+		}
+	})
+
+	t.Run("defaults repo to bwsalmon/grain and resolves token from sandboxTokenPath on ghcr.io", func(t *testing.T) {
 		t.Setenv("RELEASE_IMAGE_REPO", "")
 		t.Setenv("GRAIN_CI_REPO", "ai-on-gke/grain")
 		t.Setenv("GITHUB_TOKEN", "")
@@ -226,13 +237,13 @@ func TestRunResolvesRepoAndTokenFromEnvironmentAndPlacements(t *testing.T) {
 		}
 		var out bytes.Buffer
 		// run will attempt API call and fail on network/unauthorized, but repo/token parsing succeeded
-		err := run([]string{"-apply=false"}, &out)
+		err := run([]string{"-registry=ghcr.io", "-apply=false"}, &out)
 		if err != nil && (strings.Contains(err.Error(), "are required") || strings.Contains(err.Error(), "GITHUB_TOKEN is empty")) {
 			t.Fatalf("repo/token resolution failed unexpectedly: %v", err)
 		}
 	})
 
-	t.Run("resolves repo from RELEASE_IMAGE_REPO and token from publishTokenPath", func(t *testing.T) {
+	t.Run("resolves repo from RELEASE_IMAGE_REPO and token from publishTokenPath on ghcr.io", func(t *testing.T) {
 		t.Setenv("RELEASE_IMAGE_REPO", "Acme/Grain-Test")
 		t.Setenv("GRAIN_CI_REPO", "ai-on-gke/grain")
 		t.Setenv("GITHUB_TOKEN", "")
@@ -243,7 +254,7 @@ func TestRunResolvesRepoAndTokenFromEnvironmentAndPlacements(t *testing.T) {
 			t.Fatal(err)
 		}
 		var out bytes.Buffer
-		err := run([]string{"-apply=false"}, &out)
+		err := run([]string{"-registry=ghcr.io", "-apply=false"}, &out)
 		if err != nil && (strings.Contains(err.Error(), "are required") || strings.Contains(err.Error(), "GITHUB_TOKEN is empty")) {
 			t.Fatalf("repo/token resolution failed unexpectedly: %v", err)
 		}

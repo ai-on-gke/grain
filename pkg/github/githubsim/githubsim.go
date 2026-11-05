@@ -76,6 +76,7 @@ var (
 	// (github.RESTClient.MergedPullRequestForCommit), answered from
 	// MergedPullRequestForCommit.
 	commitPullsRe  = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/commits/([^/]+)/pulls$`)
+	commitRe       = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/commits/([^/]+)$`)
 	issueCommentRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/issues/comments/(\d+)$`)
 	// repoRe: the target repo's own default branch, read once per
 	// dispatch so the PR base comes from the repo itself rather than a
@@ -1548,6 +1549,29 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 				ref = m[3]
 			}
 			return jsonResponse(200, checkRunsJSON(s.checkRunsFor(ref))), nil
+		}
+		if m := commitRe.FindStringSubmatch(p); m != nil {
+			if m[1] != s.Owner || m[2] != s.Repo {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			ref := unescapeRef(m[3])
+			if s.BareRepo == "" {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			if ref == "HEAD" {
+				_ = s.defaultBranch()
+			}
+			sha := ""
+			for _, candidate := range []string{ref, "refs/heads/" + ref, "refs/tags/" + ref} {
+				if got := s.revSHA(candidate); got != "" {
+					sha = got
+					break
+				}
+			}
+			if sha == "" {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"No commit found"}`)}, nil
+			}
+			return jsonResponse(200, map[string]any{"sha": sha}), nil
 		}
 		if m := actionsRunsRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])

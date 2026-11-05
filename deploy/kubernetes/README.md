@@ -45,7 +45,7 @@ cluster's rather than a number an operator sized by hand.
 
 Three things have to exist first.
 
-**A sandbox image.** CI publishes `ghcr.io/bwsalmon/grain/k8s-sandbox`
+**A sandbox image.** CI publishes `docker.io/grainai/sandbox-k8s`
 with all three supported agent CLIs (`claude`, `agy`, and `codex`), `git`,
 `bash`, `curl`, and a non-root user with a writable home. Each grain build
 has its same-commit image stamped in as the `-k8s-sandbox-image` default;
@@ -140,7 +140,7 @@ spec:
         runAsUser: 0
       containers:
         - name: chown
-          image: ghcr.io/bwsalmon/grain/grain:main
+          image: docker.io/grainai/grain:main
           command: ["/bin/sh", "-c", "chown -R 1000:1000 /data"]
           volumeMounts:
             - name: data
@@ -516,7 +516,7 @@ the granule runtime image either.** It names a self-contained image with
 its own guest disk and kernel already baked in — built from
 `third_party/granule`'s own `Dockerfile` (`docker build -t granule .` is
 the whole recipe; see `third_party/granule/deploy/k8s/gke.md`) — not
-`ghcr.io/bwsalmon/grain/k8s-sandbox`, which has no guest to boot at all,
+`docker.io/grainai/sandbox-k8s`, which has no guest to boot at all,
 and not `granule:vendored` either (`-granule-runtime-image`'s own
 default, what `scripts/granule/build-granule-image.sh` produces): that
 image carries no guest disk, so a pod running it exits immediately with

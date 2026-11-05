@@ -69,10 +69,15 @@ func TestMigrateLocalScriptsRewritesStoredGrants(t *testing.T) {
 	}
 	t.Cleanup(restore)
 
-	want := []string{
+	wantOps := []string{
 		localscripts.HostScriptServerID + `#host-script={"script":"ops-deploy"}`,
 		localscripts.HostScriptServerID + `#host-script={"script":"ops-status"}`,
 	}
+	wantGuarded := []string{
+		localscripts.HostScriptServerID + `#host-script={"script":"guarded-wipe"}`,
+	}
+	wantAll := append(slices.Clone(wantGuarded), wantOps...)
+	slices.Sort(wantAll)
 	task, err := store.GetTask(ctx, "1")
 	if err != nil {
 		t.Fatal(err)
@@ -82,14 +87,14 @@ func TestMigrateLocalScriptsRewritesStoredGrants(t *testing.T) {
 		got = append(got, g.Capability)
 	}
 	slices.Sort(got)
-	if !slices.Equal(got, append(slices.Clone(want), "local-scripts:guarded")) {
-		t.Fatalf("task grants %v: want ops's two host-script grants and guarded left alone", got)
+	if !slices.Equal(got, wantAll) {
+		t.Fatalf("task grants %v: want %v", got, wantAll)
 	}
-	if exp := model.CanonicalLegacyGrants("local-scripts:ops"); !slices.Equal(exp, want) {
-		t.Errorf("local-scripts:ops still written somewhere expands to %v, want %v", exp, want)
+	if exp := model.CanonicalLegacyGrants("local-scripts:ops"); !slices.Equal(exp, wantOps) {
+		t.Errorf("local-scripts:ops still written somewhere expands to %v, want %v", exp, wantOps)
 	}
-	if exp := model.CanonicalLegacyGrants("local-scripts:guarded"); !slices.Equal(exp, []string{"local-scripts:guarded"}) {
-		t.Errorf("local-scripts:guarded expands to %v", exp)
+	if exp := model.CanonicalLegacyGrants("local-scripts:guarded"); !slices.Equal(exp, wantGuarded) {
+		t.Errorf("local-scripts:guarded expands to %v, want %v", exp, wantGuarded)
 	}
 
 	cfg, err := store.GetConfig(ctx)
@@ -100,8 +105,19 @@ func TestMigrateLocalScriptsRewritesStoredGrants(t *testing.T) {
 	if !ok || !localscripts.IsHostScriptServer(server) {
 		t.Fatalf("mcp_servers %v: want the host-script server added", cfg.MCPServers)
 	}
-	if n := len(server.Config["scripts"].([]any)); n != 2 {
-		t.Fatalf("%d scripts configured, want 2", n)
+	scripts := server.Config["scripts"].([]any)
+	if len(scripts) != 3 {
+		t.Fatalf("%d scripts configured, want 3", len(scripts))
+	}
+	foundApproved := false
+	for _, raw := range scripts {
+		m := raw.(map[string]any)
+		if m["name"] == "guarded-wipe" && m["approve"] == true {
+			foundApproved = true
+		}
+	}
+	if !foundApproved {
+		t.Fatalf("scripts %+v: want guarded-wipe configured with approve: true", scripts)
 	}
 
 	// The next start: nothing more.
@@ -111,8 +127,8 @@ func TestMigrateLocalScriptsRewritesStoredGrants(t *testing.T) {
 	}
 	t.Cleanup(restore2)
 	cfg, _ = store.GetConfig(ctx)
-	if n := len(cfg.MCPServers[localscripts.HostScriptServerID].Config["scripts"].([]any)); n != 2 {
-		t.Fatalf("%d scripts configured after a second start, want 2", n)
+	if n := len(cfg.MCPServers[localscripts.HostScriptServerID].Config["scripts"].([]any)); n != 3 {
+		t.Fatalf("%d scripts configured after a second start, want 3", n)
 	}
 	task, _ = store.GetTask(ctx, "1")
 	if len(task.Grants) != 3 {

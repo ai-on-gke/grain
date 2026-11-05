@@ -204,15 +204,15 @@ commit to grain (`Dockerfile`). Three variables decide which one:
 - **`grain_image`** is the repository, for a mirror or a private copy.
   A registry needing credentials takes `grain_image_pull_user` here and
   a `GRAIN_IMAGE_PULL_TOKEN` through `push-secrets.sh`;
-  `ghcr.io/bwsalmon/grain`'s own package is public and pulls
-  anonymously.
+  `docker.io/grainai`'s own repositories are public and pull
+  anonymously (subject to Docker Hub's anonymous rate limits).
 
 Two consequences worth knowing before a first deploy. A deploy no longer
 compiles anything on this host, so `grain_ref` pointing at a tag or a
 commit SHA -- fine for the checkout -- has no image published under that
 name, and needs `grain_image_tag` set alongside it. And the host now
 needs to reach the registry: an egress policy that allowed GitHub and a
-Debian mirror also needs `ghcr.io`.
+Debian mirror also needs Docker Hub (`registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com`).
 
 For the container's own shape -- what it is given, what it deliberately
 is not, and the two systemd path units that let it reboot the host and

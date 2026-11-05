@@ -31,13 +31,13 @@ function section(settings) {
 }
 
 describe("CustomSandboxImageCard", () => {
-  it("guides a VM backend to guest-base and both contracts, and saves the image", () => {
+  it("guides a VM backend to sandbox-base and both contracts, and saves the image", () => {
     const { s, saveChoice } = section({
       sandboxBackend: "granule",
       sandboxImageBackend: "granule",
       sandboxImage: "",
-      sandboxImageDefault: "ghcr.io/bwsalmon/grain/guest:sha-abc",
-      sandboxBaseImage: "ghcr.io/bwsalmon/grain/guest-base:sha-abc",
+      sandboxImageDefault: "docker.io/grainai/sandbox:sha-abc",
+      sandboxBaseImage: "docker.io/grainai/sandbox-base:sha-abc",
       sandboxContractVersion: 1,
       sandboxMinimumContractVersion: 1,
       sandboxGranuleContractVersion: 1,
@@ -47,10 +47,10 @@ describe("CustomSandboxImageCard", () => {
     const box = screen.getByLabelText("Custom sandbox image (OCI reference)");
     expect(box).toHaveAttribute(
       "placeholder",
-      "ghcr.io/bwsalmon/grain/guest:sha-abc",
+      "docker.io/grainai/sandbox:sha-abc",
     );
     expect(screen.getByTestId("sandbox-image-dockerfile")).toHaveTextContent(
-      "FROM ghcr.io/bwsalmon/grain/guest-base:sha-abc",
+      "FROM docker.io/grainai/sandbox-base:sha-abc",
     );
     const versions = screen.getByTestId("sandbox-contract-versions");
     expect(versions).toHaveTextContent("dev.grain.sandbox.contract = 1");
@@ -59,7 +59,7 @@ describe("CustomSandboxImageCard", () => {
     expect(screen.queryByText(/must carry/i)).toBeNull();
     const inherits = screen.getByTestId("sandbox-image-inherits");
     expect(inherits).toHaveTextContent(
-      "guest-base already satisfies the entire sandbox contract",
+      "sandbox-base already satisfies the entire sandbox contract",
     );
     expect(inherits).toHaveTextContent("grain-connect");
     expect(screen.getByTestId("sandbox-image-todo")).toHaveTextContent(
@@ -87,13 +87,13 @@ describe("CustomSandboxImageCard", () => {
     });
   });
 
-  it("guides a pod backend to k8s-sandbox-base and shows the contract warning", () => {
+  it("guides a pod backend to sandbox-k8s-base and shows the contract warning", () => {
     const { s } = section({
       sandboxBackend: "kubernetes",
       sandboxImage: "registry.example/team/sandbox:v1",
-      sandboxBaseImage: "ghcr.io/bwsalmon/grain/k8s-sandbox-base:sha-abc",
+      sandboxBaseImage: "docker.io/grainai/sandbox-k8s-base:sha-abc",
       sandboxImageWarning:
-        "Custom sandbox image registry.example/team/sandbox:v1 needs rebuilding FROM ghcr.io/bwsalmon/grain/k8s-sandbox-base:sha-abc",
+        "Custom sandbox image registry.example/team/sandbox:v1 needs rebuilding FROM docker.io/grainai/sandbox-k8s-base:sha-abc",
       sandboxContractVersion: 1,
       sandboxMinimumContractVersion: 1,
     });
@@ -103,7 +103,7 @@ describe("CustomSandboxImageCard", () => {
       "needs rebuilding FROM",
     );
     expect(screen.getByTestId("sandbox-image-dockerfile")).toHaveTextContent(
-      "FROM ghcr.io/bwsalmon/grain/k8s-sandbox-base:sha-abc",
+      "FROM docker.io/grainai/sandbox-k8s-base:sha-abc",
     );
     expect(
       screen.getByTestId("sandbox-contract-versions"),
@@ -111,7 +111,7 @@ describe("CustomSandboxImageCard", () => {
     expect(screen.queryByTestId("sandbox-contract-checklist")).toBeNull();
     const inherits = screen.getByTestId("sandbox-image-inherits");
     expect(inherits).toHaveTextContent(
-      "k8s-sandbox-base already satisfies the entire sandbox contract",
+      "sandbox-k8s-base already satisfies the entire sandbox contract",
     );
     expect(inherits).not.toHaveTextContent("grain-connect");
   });
@@ -135,7 +135,7 @@ describe("CustomSandboxImageCard", () => {
     const { s, saveChoice } = section({
       sandboxBackend: "kubernetes-granule",
       sandboxImage: "registry.example/team/guest:v1",
-      sandboxImageDefault: "ghcr.io/bwsalmon/grain/guest:sha-abc",
+      sandboxImageDefault: "docker.io/grainai/sandbox:sha-abc",
       sandboxImageWarning: "Custom sandbox image warning",
     });
     const { rerender } = render(<CustomSandboxImageCard s={s} />);
@@ -156,7 +156,7 @@ describe("CustomSandboxImageCard", () => {
     const cleared = section({
       sandboxBackend: "kubernetes-granule",
       sandboxImage: "",
-      sandboxImageDefault: "ghcr.io/bwsalmon/grain/guest:sha-abc",
+      sandboxImageDefault: "docker.io/grainai/sandbox:sha-abc",
       sandboxImageWarning: "",
       sandboxImageCheck: null,
     });

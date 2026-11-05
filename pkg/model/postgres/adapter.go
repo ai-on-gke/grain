@@ -156,6 +156,8 @@ var tablePrimaryKeys = map[string][]string{
 	"ci_step_attachment":             {"run_id", "job_id", "step_id"},
 	"allowed_principal":              {"entry"},
 	"allowed_principal_migration":    {"id"},
+	"integration_event":              {"id"},
+	"secret_entries":                 {"secret_name", "key"},
 }
 
 // Auto-increment primary key column for tables that use sequences or SERIAL.
@@ -194,6 +196,7 @@ var autoIncrementTables = map[string]string{
 	"secret_resolution_audit":       "id",
 	"credential_access_audit":       "id",
 	"notification":                  "id",
+	"integration_event":             "id",
 }
 
 type adaptedConnector struct {

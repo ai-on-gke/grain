@@ -55,7 +55,7 @@ type ImageOverride struct {
 }
 
 // ParseImageOverride takes apart image, which is a repository
-// ("ghcr.io/bwsalmon/grain/grain"), a tagged reference
+// ("docker.io/grainai/grain"), a tagged reference
 // ("...grain:main"), a pinned one ("...grain@sha256:..."),
 // or both ("...grain:main@sha256:...").
 func ParseImageOverride(image string) (ImageOverride, error) {

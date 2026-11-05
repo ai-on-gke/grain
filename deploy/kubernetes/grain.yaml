@@ -548,7 +548,7 @@ spec:
           # pulls one image rather than two; it runs `mkdir` and nothing
           # else, so a deployment pinning an immutable sha- tag above can
           # leave this one on the branch tag without changing what runs.
-          image: ghcr.io/bwsalmon/grain/grain:main
+          image: docker.io/grainai/grain:main
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "mkdir -p /data/home && chmod 0700 /data/home"]
           resources:
@@ -570,7 +570,7 @@ spec:
           # per commit; ":main" is what the branch tip is kept at, and a
           # deployment that wants to be sure what it is running pins the
           # immutable sha- tag instead.
-          image: ghcr.io/bwsalmon/grain/grain:main
+          image: docker.io/grainai/grain:main
           imagePullPolicy: IfNotPresent
           args:
             - daemon
@@ -593,7 +593,7 @@ spec:
             # CI publishes this unprivileged image with all three agent
             # CLIs; a build also carries its same-commit immutable tag as
             # the flag default.
-            - -k8s-sandbox-image=ghcr.io/bwsalmon/grain/k8s-sandbox:main
+            - -k8s-sandbox-image=docker.io/grainai/sandbox-k8s:main
             # Where sandboxes reach the git proxy and the model proxies:
             # the grain-sandbox Service at the end of this file, whose
             # cluster IP outlives this pod, rather than this pod's own IP,
@@ -637,7 +637,7 @@ spec:
             # the securityContext below changes what an upgrade candidate
             # has to survive, with no second copy of the uid to keep in
             # step.
-            - -upgrade-image=ghcr.io/bwsalmon/grain/grain
+            - -upgrade-image=docker.io/grainai/grain
             - -k8s-deployment=grain
             - -k8s-container=grain
             # Who published what an upgrade pulls: `cosign verify` (the

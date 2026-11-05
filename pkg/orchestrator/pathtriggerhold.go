@@ -292,6 +292,7 @@ func filePullRequestTrigger(ctx context.Context, store *model.Store, task model.
 			filed.Tags = tags
 			filed.Links = append(filed.Links, model.Link{Kind: model.LinkProposedBy, Target: task.ID})
 			model.InheritRequester(&filed, task)
+			model.InheritContext(&filed, task)
 			return filed, nil
 		}
 

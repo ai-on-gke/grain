@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/k8s"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/registryauth"
@@ -143,7 +144,7 @@ func chooseSandboxImage(cfg Config) sandboxImageChoice {
 			log: fmt.Sprintf("grain daemon: sandbox image %s (named by -granule-create-arg, and the same one this build is stamped for)",
 				pinned),
 		}
-	case pinned != "" && imageRepository(pinned) == imageRepository(DefaultSandboxImage):
+	case pinned != "" && installtrack.ResolveLegacyRepository(imageRepository(pinned)) == installtrack.ResolveLegacyRepository(imageRepository(DefaultSandboxImage)):
 		return sandboxImageChoice{
 			image:  DefaultSandboxImage,
 			source: sandboxImageAdopted,
@@ -201,7 +202,7 @@ func withSandboxImageArg(args []string, image string) []string {
 }
 
 // imageRepository is an image reference without its tag or digest --
-// "ghcr.io/bwsalmon/grain/guest" for both of that repository's sha- tags.
+// "docker.io/grainai/sandbox" for both of that repository's sha- tags.
 // It is how chooseSandboxImage tells "another tag of the image this build
 // is stamped for" from "an image published somewhere else entirely".
 //
@@ -363,7 +364,7 @@ func uiSandboxImage(cfg Config) *ui.SandboxImage {
 		return &ui.SandboxImage{
 			Image:    firstNonEmpty(custom, stock),
 			Expected: DefaultK8sSandboxImage,
-			Pinned:   custom == "" && cfg.ContainerImage != "" && cfg.ContainerImage != DefaultK8sSandboxImage && cfg.ContainerImage != model.DefaultK8sSandboxImage,
+			Pinned:   custom == "" && cfg.ContainerImage != "" && cfg.ContainerImage != DefaultK8sSandboxImage && cfg.ContainerImage != model.DefaultK8sSandboxImage && cfg.ContainerImage != model.LegacyDefaultK8sSandboxImage,
 		}
 	default:
 		return nil
@@ -426,6 +427,9 @@ func stockSandboxImageFor(cfg Config) string {
 	case cfg.GranuleSandboxes:
 		return chooseSandboxImage(cfg).image
 	case cfg.ContainerSandboxes:
+		if cfg.ContainerImage == model.LegacyDefaultK8sSandboxImage {
+			return DefaultK8sSandboxImage
+		}
 		return firstNonEmpty(cfg.ContainerImage, DefaultK8sSandboxImage)
 	case cfg.K8sSandboxes:
 		return EffectiveK8sSandboxImage(cfg)
@@ -465,7 +469,7 @@ func customSandboxImageFor(cfg Config) string {
 			return ""
 		}
 	case cfg.ContainerSandboxes:
-		if cfg.ContainerImage != "" && cfg.ContainerImage != DefaultK8sSandboxImage && cfg.ContainerImage != model.DefaultK8sSandboxImage {
+		if cfg.ContainerImage != "" && cfg.ContainerImage != DefaultK8sSandboxImage && cfg.ContainerImage != model.DefaultK8sSandboxImage && cfg.ContainerImage != model.LegacyDefaultK8sSandboxImage {
 			return ""
 		}
 	case cfg.K8sSandboxes, cfg.K8sGranuleSandboxes:

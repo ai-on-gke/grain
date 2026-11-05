@@ -54,6 +54,7 @@ test("hiding Boards in Customize sidebar survives a reload and leaves /boards re
   try {
     const aside = page.locator("aside");
     await expect(aside.getByRole("button", { name: /^Boards/ })).toBeVisible();
+    await expect(aside.getByRole("button", { name: /^CI/ })).toHaveCount(0);
 
     await aside.getByRole("button", { name: "Customize sidebar" }).click();
     const dialog = page.getByRole("dialog");
@@ -83,7 +84,10 @@ test("hiding Boards in Customize sidebar survives a reload and leaves /boards re
     await expect(
       aside.getByRole("button", { name: "Customize sidebar" }),
     ).toBeVisible();
-    await aside.getByRole("button", { name: "Expand sidebar" }).click();
+    await page
+      .getByTestId("page-header")
+      .getByRole("button", { name: "Expand sidebar" })
+      .click();
 
     // The route still opens by URL.
     await page.goto("/boards");

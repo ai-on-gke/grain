@@ -113,7 +113,7 @@ func TestKubernetesUpgradeNeedsNoRefFile(t *testing.T) {
 	// start. A Deployment's own spec is that record here, so demanding
 	// one would refuse a perfectly configured cluster deployment.
 	cfg := kubeConfig()
-	cfg.UpgradeImage = "ghcr.io/bwsalmon/grain/grain"
+	cfg.UpgradeImage = "docker.io/grainai/grain"
 	if err := checkConfig(cfg); err != nil {
 		t.Fatalf("checkConfig on a Kubernetes deployment with -upgrade-image: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestHostSandboxDeploymentStillNeedsARefFile(t *testing.T) {
 	cfg := daemon.Config{
 		DataDir: "/data", SandboxDir: "/sandbox", MaxWorkers: 1,
 		PollInterval: 30 * time.Second, AgentFramework: "claude",
-		UpgradeImage: "ghcr.io/bwsalmon/grain/grain",
+		UpgradeImage: "docker.io/grainai/grain",
 	}
 	if err := checkConfig(cfg); err == nil {
 		t.Error("checkConfig accepted -upgrade-image with no ref file on a non-Kubernetes deployment")

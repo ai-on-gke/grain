@@ -113,8 +113,9 @@ type heldPass struct {
 	deadline time.Time
 	// servers are what the pass was minted through, and hostd the grain
 	// hostd their run: host servers started on.
-	servers CapabilityServers
-	hostd   string
+	servers        CapabilityServers
+	hostd          string
+	revokeApproval func()
 }
 
 type passBackoff struct {
@@ -139,10 +140,10 @@ func (d Deps) capabilityPasses() *CapabilityPasses {
 	return defaultCapabilityPasses
 }
 
-func (h *CapabilityPasses) hold(taskID, runID string, p *protocol.Pass, deadline time.Time, servers CapabilityServers, hostd string) {
+func (h *CapabilityPasses) hold(taskID, runID string, p *protocol.Pass, deadline time.Time, servers CapabilityServers, hostd string, revokeApproval func()) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.passes[runID] = &heldPass{taskID: taskID, pass: p, deadline: deadline, servers: servers, hostd: hostd}
+	h.passes[runID] = &heldPass{taskID: taskID, pass: p, deadline: deadline, servers: servers, hostd: hostd, revokeApproval: revokeApproval}
 }
 
 // grantHostd returns the grain hostd capabilityID ran on for this pass,
@@ -268,6 +269,9 @@ func (h *CapabilityPasses) release(ctx context.Context, runID string) ([]protoco
 	held := h.take(runID)
 	if held == nil {
 		return nil, "", nil
+	}
+	if held.revokeApproval != nil {
+		held.revokeApproval()
 	}
 	audits, rest, err := held.pass.ReleaseReachable(ctx)
 	if err != nil {
@@ -622,15 +626,27 @@ func capabilityAdmitterFor(deps Deps, admit dispatch.Admitter, connectionOf func
 		if connectionOf != nil {
 			mintCtx = model.WithRunConnection(mintCtx, connectionOf(candidate.RunID))
 		}
+		var revokeApproval func()
+		if deps.ApprovalCallback != nil {
+			cb, revoke, err := deps.ApprovalCallback(task.ID, deadline.Add(protocol.DefaultGrace))
+			if err != nil {
+				return decline("capability pass", err.Error())
+			}
+			revokeApproval = revoke
+			mintCtx = protocol.WithApprovalCallback(mintCtx, cb)
+		}
 		p, err := mintCapabilityPass(mintCtx, mintDeps, *task, candidate, at, deadline)
 		if err != nil {
+			if revokeApproval != nil {
+				revokeApproval()
+			}
 			if serr := admissionMintFailed(ctx, deps, passes, *task, err, at); serr != nil {
 				log.Printf("orchestrator: task %s: recording its failed capability admission: %v", task.ID, serr)
 			}
 			return decline("capability pass", err.Error())
 		}
 		passes.clearBackoff(task.ID)
-		passes.hold(candidate.TaskID, candidate.RunID, p, deadline, servers, hostd)
+		passes.hold(candidate.TaskID, candidate.RunID, p, deadline, servers, hostd, revokeApproval)
 		release := adm.Release
 		adm.Release = func() {
 			passes.Release(context.Background(), candidate.RunID)
@@ -732,10 +748,10 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 			return nil, &grainRefusalError{Grant: g.Ref.String(), Reason: err.Error()}
 		}
 	}
-	// What a local-scripts declaration became on host-script is served
-	// to no run local-scripts would not serve (localscripts.Untrusted),
-	// as localScriptsFor serves such a run none of its declarations.
-	if why := localscripts.Untrusted(task); why != "" {
+	// What a local-scripts declaration became on host-script stays withheld
+	// from scheduled runs, whose prompt can come from an untrusted source.
+	if task.Origin.Reason == model.ReasonSchedule {
+		const why = "a scheduled run cannot verify the prompt it runs on"
 		kept := grants[:0]
 		for _, g := range grants {
 			if from, ok := localscripts.MigratedFrom(model.RecordedCapabilityGrant(g)); ok {

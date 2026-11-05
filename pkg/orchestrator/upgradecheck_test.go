@@ -1135,7 +1135,7 @@ func TestUpgradeCheckBodyRecordsImageSourceAndFallback(t *testing.T) {
 	finished := baseTime.Add(-2 * time.Minute)
 	status := upgradeDone("main", finished)
 	status.Source = string(upgrade.ImageSourceRegistry)
-	status.FallbackNote = "release has no image assets; pulled from ghcr.io/bwsalmon/grain/grain"
+	status.FallbackNote = "release has no image assets; pulled from docker.io/grainai/grain"
 	deps := orchestrator.Deps{
 		Store: store,
 		Config: orchestrator.Config{
@@ -1153,7 +1153,7 @@ func TestUpgradeCheckBodyRecordsImageSourceAndFallback(t *testing.T) {
 	}
 	for _, want := range []string{
 		"- Image source: registry",
-		"- Fallback: release has no image assets; pulled from ghcr.io/bwsalmon/grain/grain",
+		"- Fallback: release has no image assets; pulled from docker.io/grainai/grain",
 	} {
 		if !strings.Contains(checks[0].Body, want) {
 			t.Fatalf("upgrade check body missing %q:\n%s", want, checks[0].Body)

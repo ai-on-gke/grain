@@ -49,7 +49,7 @@ permissions:
 
 env:
   GOFLAGS: -mod=readonly
-  RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO || 'bwsalmon/grain' }}
+  RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO }}
 
 jobs:
   publish:
@@ -124,32 +124,11 @@ jobs:
       - name: Configure package-publish credentials
         if: steps.verify.outputs.train == 'true'
         env:
+          DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
           GHCR_PAT: ${{ secrets.GHCR_TOKEN }}
-          FALLBACK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY || 'ghcr.io' }}
-          PUBLISH_USERNAME: ${{ vars.GHCR_USERNAME || 'bwsalmon' }}
-        run: |
-          set -euo pipefail
-          token="${GHCR_PAT:-}"
-          username="${PUBLISH_USERNAME}"
-          if [ -z "$token" ]; then
-            case "${RELEASE_IMAGE_REPO}" in
-              bwsalmon/*)
-                echo "::error::GHCR_TOKEN secret is required to publish packages under ghcr.io/${RELEASE_IMAGE_REPO} from ${GITHUB_REPOSITORY}" >&2
-                exit 1
-                ;;
-              *)
-                token="${FALLBACK_TOKEN}"
-                username="${GITHUB_ACTOR}"
-                ;;
-            esac
-          fi
-          echo "::add-mask::${token}"
-          {
-            echo "PACKAGE_PUBLISH_REGISTRY=${PUBLISH_REGISTRY}"
-            echo "PACKAGE_PUBLISH_USERNAME=${username}"
-            echo "PACKAGE_PUBLISH_TOKEN=${token}"
-          } >> "$GITHUB_ENV"
+          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY }}
+        run: bash ./scripts/configure-dockerhub-auth.sh
 
       - name: Configure optional image-signing key
         if: steps.verify.outputs.train == 'true'

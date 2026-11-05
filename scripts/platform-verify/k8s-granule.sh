@@ -47,7 +47,7 @@
 # cloud-hypervisor too. That self-containment is why an older packed guest is
 # fine here: the granule inside it and the guest contract it declares are one
 # build, so they agree with each other whatever this repository's vendored
-# granule has moved on to. (ghcr.io/bwsalmon/grain/guest:main declares
+# granule has moved on to. (docker.io/grainai/sandbox:main declares
 # `dev.granule.guest.contract=1` where the current vendored granule implements
 # 3; that is not a mismatch, because nothing outside the image reads it.)
 #
@@ -75,7 +75,7 @@ PROJECT="${PROJECT:-grain-host}"
 MACHINE_TYPE="${MACHINE_TYPE:-n2-standard-8}"
 IMAGE_TYPE="${IMAGE_TYPE:-UBUNTU_CONTAINERD}"
 NAMESPACE="${NAMESPACE:-grain}"
-GUEST_IMAGE="${GUEST_IMAGE:-ghcr.io/bwsalmon/grain/guest:main}"
+GUEST_IMAGE="${GUEST_IMAGE:-docker.io/grainai/sandbox:main}"
 GRAIN="${GRAIN:-}"
 UI_ADDR="${UI_ADDR:-127.0.0.1:8440}"
 # The repository this verifies is the one this script lives in, so the

@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -29,12 +30,15 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/hostscriptcli"
+	"github.com/ai-on-gke/grain/pkg/localexec"
 )
 
 // hostScriptEnviron is the server's own environment in these tests.
@@ -776,6 +780,213 @@ func TestHostScriptBindsDataPlaneOnlyOnceAScriptIsConfigured(t *testing.T) {
 	}
 	if !s.hostScripts.listening || s.hostScripts.port == 0 {
 		t.Fatalf("configured host-script did not bind data plane: listening=%v port=%d", s.hostScripts.listening, s.hostScripts.port)
+	}
+}
+
+func (c hostScriptCmd) commandWithStdin(args ...string) *exec.Cmd {
+	argv := append([]string{"host-script", "--stdin", c.name}, args...)
+	var cmd *exec.Cmd
+	if c.fallback {
+		cmd = exec.Command("sh", append([]string{filepath.Join(c.dir, "grain")}, argv...)...)
+	} else {
+		exe, err := os.Executable()
+		if err != nil {
+			panic(err)
+		}
+		cmd = exec.Command(exe, argv...)
+		cmd.Env = append(os.Environ(), grainHelperEnv+"=1")
+	}
+	cmd.Env = append(cmd.Environ(), hostscriptcli.DirEnv+"="+c.dir)
+	return cmd
+}
+
+func callStdin(t *testing.T, cmd hostScriptCmd, forward bool, stdin []byte, args ...string) callResult {
+	t.Helper()
+	var c *exec.Cmd
+	if forward {
+		c = cmd.commandWithStdin(args...)
+	} else {
+		c = cmd.command(args...)
+	}
+	c.Stdin = bytes.NewReader(stdin)
+	var out, errb bytes.Buffer
+	c.Stdout, c.Stderr = &out, &errb
+	err := c.Run()
+	code := 0
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		code = ee.ExitCode()
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	return callResult{out.String(), errb.String(), code}
+}
+
+func TestHostScriptStdinForwardingAndLimit(t *testing.T) {
+	f := newHostScriptFixture(t,
+		script("catargs", `for a in "$@"; do printf '<%s>\n' "$a"; done; cat`),
+		script("smallin", `cat`, "max_stdin", 8),
+	)
+	cmd, _ := f.grant("e1-42-1-0", "catargs")
+	payload := []byte("line1\n---\n\x00\xffend")
+	sum := sha256.Sum256(payload)
+	wantSHA := hex.EncodeToString(sum[:])
+
+	for client, cmd := range bothClients(cmd) {
+		// Without --stdin before <name>, stdin is not forwarded; --stdin after <name> is a literal argument.
+		noFlag := callStdin(t, cmd, false, payload, "--stdin", "x")
+		if noFlag.code != 0 || noFlag.stdout != "<--stdin>\n<x>\n" {
+			t.Fatalf("%s without --stdin: got %+v, want literal args and empty stdin", client, noFlag)
+		}
+
+		// With --stdin before <name>, raw stdin bytes and argv pass through verbatim.
+		got := callStdin(t, cmd, true, payload, "arg one", "arg\ntwo")
+		want := "<arg one>\n<arg\ntwo>\n" + string(payload)
+		if got.code != 0 || got.stdout != want {
+			t.Fatalf("%s with --stdin: got code=%d stdout=%q stderr=%q, want %q", client, got.code, got.stdout, got.stderr, want)
+		}
+	}
+
+	recs := f.s.hostScripts.Audit("e1-42-1-0")
+	var withStdin int
+	for _, r := range recs {
+		if r.StdinBytes > 0 {
+			withStdin++
+			if r.StdinBytes != len(payload) || r.StdinSHA256 != wantSHA {
+				t.Errorf("audit stdin = (%d, %q), want (%d, %q)", r.StdinBytes, r.StdinSHA256, len(payload), wantSHA)
+			}
+		}
+	}
+	if withStdin != 2 {
+		t.Errorf("audit recorded %d calls with stdin, want 2 (grain + fallback): %+v", withStdin, recs)
+	}
+
+	small, _ := f.grant("e1-42-1-1", "smallin")
+	for client, small := range bothClients(small) {
+		ok := callStdin(t, small, true, []byte("12345678"))
+		if ok.code != 0 || ok.stdout != "12345678" {
+			t.Errorf("%s within max_stdin: %+v", client, ok)
+		}
+		over := callStdin(t, small, true, []byte("123456789"))
+		if over.code != 125 || !strings.Contains(over.stderr, "limit of 8") {
+			t.Errorf("%s over max_stdin: %+v, want exit 125 naming limit of 8", client, over)
+		}
+	}
+}
+
+func TestHostScriptPerCallApproval(t *testing.T) {
+	// 1. Fails closed when approve: true has neither Approver nor ApprovalCallback.
+	closedFixture := newHostScriptFixture(t, script("guarded", "echo should-not-run", "approve", true))
+	closedCmd, closedResp := closedFixture.grant("e1-42-1-0", "guarded")
+	if !strings.Contains(closedResp.PromptSection, "Each call waits for a person's approval before it runs.") {
+		t.Errorf("prompt section %q lacks approval notice", closedResp.PromptSection)
+	}
+	for client, c := range bothClients(closedCmd) {
+		help := call(t, c, "--grain-help")
+		if help.code != 0 || !strings.Contains(help.stdout, "Each call waits for a person's approval before it runs.") {
+			t.Errorf("%s --grain-help = %+v, want approval notice", client, help)
+		}
+		got := call(t, c, "prod")
+		if got.code != 125 || !strings.Contains(got.stderr, "approval") || strings.Contains(got.stdout, "should-not-run") {
+			t.Errorf("%s without approver = %+v, want exit 125 refusal", client, got)
+		}
+	}
+	// Settings' Test button is clicked by a person directly and runs without queuing.
+	if testRes := closedFixture.testScript("guarded", "prod"); testRes.Refused != "" || testRes.ExitCode != 0 || testRes.Stdout != "should-not-run\n" {
+		t.Errorf("test_script on approve: true = %+v, want direct run", testRes)
+	}
+
+	// 2. With Approver: approved forwards stdin & records preview/hash, denied refuses, release cancels in-flight wait.
+	var mu sync.Mutex
+	var seen []localexec.Request
+	decisionCh := make(chan bool, 4)
+	waitingCh := make(chan struct{}, 4)
+	data := t.TempDir()
+	s, err := NewHostScript(HostScriptConfig{
+		Listen:  "127.0.0.1:0",
+		DataDir: data,
+		Environ: func() []string { return hostScriptEnviron },
+		Approver: localexec.ApproverFunc(func(ctx context.Context, r localexec.Request) (bool, error) {
+			mu.Lock()
+			seen = append(seen, r)
+			mu.Unlock()
+			waitingCh <- struct{}{}
+			select {
+			case ok := <-decisionCh:
+				return ok, nil
+			case <-ctx.Done():
+				return false, ctx.Err()
+			}
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps, err := attachConfigured(t, s, map[string]any{"scripts": []any{
+		script("apply", `printf 'env=%s bytes=%d\n' "$1" "$(wc -c)"`, "approve", true, "max_calls", 2),
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &hostScriptFixture{t: t, s: s, ps: ps, data: data}
+	cmd, _ := f.grant("e1-42-1-0", "apply")
+
+	// Multi-byte UTF-8 rune ("é" = 2 bytes) straddling StdinPreviewMax (4096) boundary.
+	longStdin := []byte(strings.Repeat("a", localexec.StdinPreviewMax-1) + "é-after")
+	sum := sha256.Sum256(longStdin)
+	wantSHA := hex.EncodeToString(sum[:])
+
+	decisionCh <- true
+	approved := callStdin(t, cmd, true, longStdin, "prod")
+	if approved.code != 0 || approved.stdout != fmt.Sprintf("env=prod bytes=%d\n", len(longStdin)) {
+		t.Fatalf("approved call = %+v", approved)
+	}
+	mu.Lock()
+	if len(seen) != 1 {
+		t.Fatalf("seen = %d requests, want 1", len(seen))
+	}
+	req0 := seen[0]
+	mu.Unlock()
+	if req0.Tool != "grain host-script apply" || req0.Script != "apply" || len(req0.Args) != 1 || req0.Args[0] != "prod" {
+		t.Errorf("request metadata = %+v", req0)
+	}
+	if req0.Stdin != len(longStdin) || req0.StdinSHA256 != wantSHA || !req0.StdinTruncated ||
+		len(req0.StdinPreview) != localexec.StdinPreviewMax-1 || !utf8.ValidString(req0.StdinPreview) {
+		t.Errorf("request stdin = (%d, %q, truncated=%v, preview len=%d valid=%v)",
+			req0.Stdin, req0.StdinSHA256, req0.StdinTruncated, len(req0.StdinPreview), utf8.ValidString(req0.StdinPreview))
+	}
+
+	// Denied call returns exit 125 with "the call was denied" and does not consume max_calls.
+	decisionCh <- false
+	denied := call(t, cmd, "staging")
+	if denied.code != 125 || !strings.Contains(denied.stderr, "the call was denied") || denied.stdout != "" {
+		t.Fatalf("denied call = %+v, want exit 125 saying denied", denied)
+	}
+
+	// Start a call that blocks waiting for approval; while it waits, max_calls (1 used + 1 approving = 2)
+	// refuses a concurrent call immediately before prompting a person, and Release cancels the waiting call.
+	for len(waitingCh) > 0 {
+		<-waitingCh
+	}
+	inflightRes := make(chan callResult, 1)
+	go func() { inflightRes <- call(t, cmd, "canary") }()
+	<-waitingCh
+
+	overLimit := call(t, cmd, "extra")
+	if overLimit.code != 125 || !strings.Contains(overLimit.stderr, "all 2 calls") {
+		t.Errorf("concurrent call at max_calls while approving = %+v, want immediate max_calls refusal", overLimit)
+	}
+
+	rel, err := ps.Release(context.Background(), "host-script", "e1-42-1-0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled := <-inflightRes
+	if cancelled.code != 125 {
+		t.Errorf("released while waiting for approval = %+v, want exit 125", cancelled)
+	}
+	if len(rel.Audit) != 4 {
+		t.Errorf("release audit has %d records, want 4 (approved, denied, over-limit, cancelled)", len(rel.Audit))
 	}
 }
 

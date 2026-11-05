@@ -158,12 +158,10 @@ func TestAReleasePushWithNoPublishingCredentialStopsBeforeTheRegistry(t *testing
 // nothing else.
 func TestAReleaseWithAPublishingCredentialLogsInAndCarriesOn(t *testing.T) {
 	out, docker, err := releaseImagesRun(t, "push", map[string]string{
-		"GRAIN_CI":                 "true",
-		"PACKAGE_PUBLISH_REGISTRY": "ghcr.io",
-		"PACKAGE_PUBLISH_USERNAME": "x-access-token",
-		"PACKAGE_PUBLISH_TOKEN":    "a-token",
+		"GRAIN_CI":   "true",
+		"DOCKER_PAT": "dckr_pat_token",
 	})
-	containsRun(t, docker, "login ghcr.io -u x-access-token --password-stdin")
+	containsRun(t, docker, "login docker.io -u grainai --password-stdin")
 	// It got past the login and stopped where a `push` with no `build` in
 	// front of it is supposed to stop, which is the next thing that can
 	// go wrong rather than the credential.
@@ -178,7 +176,7 @@ func TestAReleaseWithAPublishingCredentialLogsInAndCarriesOn(t *testing.T) {
 // this script has always had.
 func TestAHandRunStillUsesDockersOwnCredentials(t *testing.T) {
 	out, _, err := releaseImagesRun(t, "push", nil)
-	containsRun(t, out, "using Docker's existing credentials for ghcr.io")
+	containsRun(t, out, "using Docker's existing credentials for docker.io")
 	if err == nil {
 		t.Fatalf("a push with no state file from a build should have failed:\n%s", out)
 	}
@@ -203,11 +201,9 @@ func TestTheGuestCachePhaseOnAHitPullsRatherThanBuilding(t *testing.T) {
 		// git, sha256sum and the guest-inputs script are what derive the
 		// key, and they are real: the phase is being asked which tag it
 		// looks for, and that answer comes out of this checkout.
-		"PATH":                     realToolPath(t),
-		"GRAIN_CI":                 "true",
-		"PACKAGE_PUBLISH_REGISTRY": "ghcr.io",
-		"PACKAGE_PUBLISH_USERNAME": "x-access-token",
-		"PACKAGE_PUBLISH_TOKEN":    "a-token",
+		"PATH":       realToolPath(t),
+		"GRAIN_CI":   "true",
+		"DOCKER_PAT": "a-token",
 	})
 	if err != nil {
 		output := out
@@ -218,7 +214,7 @@ func TestTheGuestCachePhaseOnAHitPullsRatherThanBuilding(t *testing.T) {
 	}
 	containsRun(t, out, "sandbox guest cache hit")
 	containsRun(t, out, "nothing to build")
-	if !strings.Contains(docker, "pull ghcr.io/bwsalmon/grain/guest:inputs-") {
+	if !strings.Contains(docker, "pull docker.io/grainai/sandbox:inputs-") {
 		t.Errorf("the phase pulled no guest cache tag:\n%s", docker)
 	}
 	for _, forbidden := range []string{"build", "push"} {
@@ -309,8 +305,8 @@ func TestReleaseImagesDryRun(t *testing.T) {
 			containsRun(t, out, "[dry-run]")
 			containsRun(t, out, "repository: bwsalmon/grain")
 			containsRun(t, out, "phase 'all': would build and publish")
-			containsRun(t, out, "grain=ghcr.io/bwsalmon/grain/grain:sha-0123456")
-			containsRun(t, out, "ghcr.io/bwsalmon/grain/grain:sha-0123456 from ./cmd/grain (install track oss)")
+			containsRun(t, out, "grain=docker.io/grainai/grain:sha-0123456")
+			containsRun(t, out, "docker.io/grainai/grain:sha-0123456 from ./cmd/grain (install track oss)")
 			if strings.Contains(out, "google-grain") {
 				t.Errorf("dry-run mentioned google-grain:\n%s", out)
 			}
@@ -319,7 +315,7 @@ func TestReleaseImagesDryRun(t *testing.T) {
 			}
 		})
 	}
-	t.Run("GRAIN_CI_REPO=ai-on-gke/grain publishes under ghcr.io/bwsalmon/grain", func(t *testing.T) {
+	t.Run("GRAIN_CI_REPO=ai-on-gke/grain publishes under docker.io/grainai", func(t *testing.T) {
 		out, docker, err := releaseImagesRun(t, "--dry-run", map[string]string{
 			"GRAIN_CI":      "true",
 			"GRAIN_CI_REPO": "ai-on-gke/grain",
@@ -328,8 +324,9 @@ func TestReleaseImagesDryRun(t *testing.T) {
 			t.Fatalf("release-images.sh --dry-run failed: %v\nOutput:\n%s", err, out)
 		}
 		containsRun(t, out, "repository: ai-on-gke/grain")
-		containsRun(t, out, "registry: ghcr.io, root: ghcr.io/bwsalmon/grain")
-		containsRun(t, out, "guest=ghcr.io/bwsalmon/grain/guest:sha-0123456, k8s_sandbox=ghcr.io/bwsalmon/grain/k8s-sandbox:sha-0123456, grain=ghcr.io/bwsalmon/grain/grain:sha-0123456")
+		containsRun(t, out, "registry: docker.io, root: docker.io/grainai")
+		containsRun(t, out, "guest=docker.io/grainai/sandbox:sha-0123456, k8s_sandbox=docker.io/grainai/sandbox-k8s:sha-0123456, grain=docker.io/grainai/grain:sha-0123456")
+		containsRun(t, out, "base images: guest_base=docker.io/grainai/sandbox-base:sha-0123456, k8s_sandbox_base=docker.io/grainai/sandbox-k8s-base:sha-0123456")
 		if docker != "" {
 			t.Errorf("docker was asked to do something during dry-run:\n%s", docker)
 		}
@@ -346,8 +343,8 @@ func TestAHandRunPublishesToTheRegistryItWasGiven(t *testing.T) {
 		"PACKAGE_PUBLISH_REGISTRY": "localhost:5000",
 	})
 	containsRun(t, out, "using Docker's existing credentials for localhost:5000")
-	if strings.Contains(out, "ghcr.io") {
-		t.Errorf("a run naming localhost:5000 still talked about ghcr.io:\n%s", out)
+	if strings.Contains(out, "docker.io") || strings.Contains(out, "ghcr.io") {
+		t.Errorf("a run naming localhost:5000 still talked about docker.io or ghcr.io:\n%s", out)
 	}
 }
 
@@ -529,8 +526,8 @@ func mapKeys(m map[string]string) []string {
 // three.
 func TestReleaseImagesDryRunPushNamesDaemonAndSandboxImages(t *testing.T) {
 	for phase, want := range map[string]string{
-		"build": "would build ghcr.io/bwsalmon/grain/guest:sha-0123456, ghcr.io/bwsalmon/grain/k8s-sandbox:sha-0123456 and ghcr.io/bwsalmon/grain/grain:sha-0123456",
-		"push":  "would publish and sign ghcr.io/bwsalmon/grain/grain:sha-0123456 to ghcr.io, and move the main tags of all three",
+		"build": "would build docker.io/grainai/sandbox:sha-0123456, docker.io/grainai/sandbox-k8s:sha-0123456 and docker.io/grainai/grain:sha-0123456",
+		"push":  "would publish and sign docker.io/grainai/grain:sha-0123456 to docker.io, and move the main tags of all three",
 	} {
 		t.Run(phase, func(t *testing.T) {
 			out, docker, err := releaseImagesRunArgs(t, []string{"--dry-run", phase}, map[string]string{"GRAIN_CI": "true"})
@@ -630,5 +627,28 @@ func TestAReleaseWithAGHCRTokenLackingWritePackagesStopsBeforeTheBuild(t *testin
 			t.Fatalf("a push with no state file from a build should have failed:\n%s", out)
 		}
 		containsRun(t, out, "`push` publishes what `build` built")
+	})
+
+	t.Run("DOCKERHUB_USERNAME override and login failure stops before build", func(t *testing.T) {
+		answers := filepath.Join(t.TempDir(), "login-fail.sh")
+		if err := os.WriteFile(answers, []byte("if [ \"$1\" = login ]; then echo 'Error response from daemon: Get \"https://registry-1.docker.io/v2/\": unauthorized: incorrect username or password' >&2; exit 1; fi\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out, docker, err := releaseImagesRun(t, "build", map[string]string{
+			"GRAIN_CI":            "true",
+			"DOCKERHUB_USERNAME":  "grainai-bot",
+			"DOCKER_PAT":          "dckr_pat_bad",
+			"DOCKER_STUB_ANSWERS": answers,
+		})
+		if err == nil {
+			t.Fatalf("release-images.sh build succeeded despite docker login failure:\n%s", out)
+		}
+		containsRun(t, docker, "login docker.io -u grainai-bot --password-stdin")
+		containsRun(t, out, "docker login to docker.io as 'grainai-bot' failed; stopping before building or pushing any release images.")
+		for _, line := range strings.Split(docker, "\n") {
+			if strings.HasPrefix(line, "build ") || strings.HasPrefix(line, "push ") || strings.HasPrefix(line, "pull ") {
+				t.Errorf("build ran `docker %s` after a failed login:\n%s", line, docker)
+			}
+		}
 	})
 }

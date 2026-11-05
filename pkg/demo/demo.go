@@ -771,6 +771,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	darkMode, err := create(ago(4*time.Hour), ui.CreateTaskRequest{
 		Title:       "Add a dark mode toggle",
 		Description: "Settings page needs a theme switch; several people have asked for it.",
+		Designs:     []string{"design/ui/theme-toggle@9f4c2b81e7a03d5f6c8912a4b0e3f7d81c2e5a90"},
 		// The one task with every field filled in, so the detail pane has
 		// a row of each kind to show.
 		CustomFields: map[string]ui.CustomFieldValue{
@@ -783,6 +784,32 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		},
 	})
 	if err != nil {
+		return err
+	}
+	if err := store.UpdateTask(ctx, darkMode.ID, func(t *model.Task) error {
+		ref, err := model.ParseContextRef("design/ui/theme-toggle@9f4c2b81e7a03d5f6c8912a4b0e3f7d81c2e5a90")
+		if err != nil {
+			return err
+		}
+		model.SetTaskContextManifest(t, ref, &model.ContextManifest{
+			Title:       "Theme Switcher Spec",
+			Description: "Approved product brief, contrast tokens, and settings mock",
+			Files: []model.ContextManifestFile{
+				{
+					Path:      "spec.md",
+					Kind:      "spec",
+					Title:     "Theme switch product brief",
+					SourceURL: "https://example.com/specs/theme-toggle",
+				},
+				{
+					Path:  "settings-mock.html",
+					Kind:  "mock",
+					Title: "Settings pane layout mock",
+				},
+			},
+		})
+		return nil
+	}); err != nil {
 		return err
 	}
 

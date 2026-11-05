@@ -32,7 +32,7 @@ package cli
 //
 //	go test -c -o /tmp/grain.test ./cmd/grain
 //	sudo env PATH=/path/to/granule:$PATH GRAIN_ISOLATION_PROBE=1 \
-//	  GRAIN_ISOLATION_PROBE_IMAGE=ghcr.io/bwsalmon/grain/guest:latest \
+//	  GRAIN_ISOLATION_PROBE_IMAGE=docker.io/grainai/sandbox:latest \
 //	  GRAIN_ISOLATION_PROBE_GATEWAY=<docker0 address> \
 //	  /tmp/grain.test -test.run TestSandboxIsolationProbes -test.v -test.timeout 20m
 

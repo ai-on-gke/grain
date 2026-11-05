@@ -345,19 +345,19 @@ GRAIN_HOSTD="${GRAIN_HOSTD:-auto}"
 # .grain/workflows/promote.yml) -- never main's head. A release is also
 # published under its own name, so GRAIN_IMAGE_TAG=v1.5.0 pins one.
 GRAIN_LEGACY_IMAGE_REPO="${GRAIN_LEGACY_IMAGE_REPO:-ghcr.io/bwsalmon/grain/grain}"
-GRAIN_OSS_IMAGE_REPO="${GRAIN_OSS_IMAGE_REPO:-$GRAIN_LEGACY_IMAGE_REPO}"
+GRAIN_OSS_IMAGE_REPO="${GRAIN_OSS_IMAGE_REPO:-docker.io/grainai/grain}"
 GRAIN_ALLOWED_IMAGE_REPOS="${GRAIN_ALLOWED_IMAGE_REPOS:-}"
 GRAIN_INSTALL_TRACK="${GRAIN_INSTALL_TRACK:-}"
 GRAIN_IMAGE_EXPLICIT="${GRAIN_IMAGE:-}"
-GRAIN_IMAGE="${GRAIN_IMAGE:-ghcr.io/bwsalmon/grain/grain}"
+GRAIN_IMAGE="${GRAIN_IMAGE:-docker.io/grainai/grain}"
 GRAIN_IMAGE_TAG="${GRAIN_IMAGE_TAG:-}"
 # Credentials for `docker login` against the image's registry, needed
-# only if the package is private -- bwsalmon/grain and its packages are
-# public, so an ordinary deployment sets neither and pulls anonymously.
-# A GitHub PAT with read:packages is what these want when they are
-# needed; GRAIN_GITHUB_TOKEN is deliberately *not* reused by default,
-# since the credential grain clones repositories with and the credential
-# it pulls images with are not the same decision.
+# only if the package is private or if a shared NAT IP hits Docker Hub's
+# anonymous pull rate limit (100 pulls per 6 hours per IPv4) --
+# docker.io/grainai/* repositories are public, so an ordinary deployment
+# sets neither and pulls anonymously. GRAIN_GITHUB_TOKEN is deliberately
+# *not* reused by default, since the credential grain clones repositories
+# with and the credential it pulls images with are not the same decision.
 GRAIN_IMAGE_PULL_USER="${GRAIN_IMAGE_PULL_USER:-}"
 # The cosign public key the images this host pulls must be signed with
 # (docs/image-signing.md). Set, the grain image and its sandbox image are
@@ -1071,7 +1071,7 @@ Recognized variables:
                              runs so token refreshes persist; used only
                              when no OpenAI API key is configured
   GRAIN_IMAGE               image repository the deployment runs, with no tag
-                             (default ghcr.io/bwsalmon/grain/grain -- what CI
+                             (default docker.io/grainai/grain -- what CI
                              publishes on every commit)
   GRAIN_IMAGE_TAG           which tag of it to run; always wins when set.
                              Default: GRAIN_CHANNEL's tag, else the tag
@@ -1083,8 +1083,9 @@ Recognized variables:
                              last promoted release), candidate (the current
                              candidate), main (head of main)
   GRAIN_IMAGE_PULL_USER     credentials for `docker login` against that
-  GRAIN_IMAGE_PULL_TOKEN     registry -- only needed for a private package;
-                             bwsalmon/grain's is public and pulls anonymously
+  GRAIN_IMAGE_PULL_TOKEN     registry -- only needed for a private package or
+                             to avoid Docker Hub anonymous pull rate limits;
+                             docker.io/grainai/* are public and pull anonymously
   GRAIN_IMAGE_VERIFY_KEY    a cosign public key (a file on this host) the grain
                              and sandbox images must be signed with; needs
                              cosign on PATH. Copied to /etc/grain/cosign.pub,
@@ -2786,7 +2787,12 @@ fi
 #             on GRAIN_POSTGRES_PORT (default 5432).
 #   password  generated once into $GRAIN_DATA_DIR/secrets/postgres-password,
 #             never replaced; the server reads it at initdb only
-#             (POSTGRES_PASSWORD_FILE).
+#             (POSTGRES_PASSWORD_FILE). POSTGRES_INITDB_ARGS=--auth=scram-sha-256
+#             replaces initdb's default `trust` lines for local, 127.0.0.1/32
+#             and ::1/128 in pg_hba.conf, which on --network host would let
+#             any process on the machine connect as `grain` with no password;
+#             a cluster initialised before that was set has its `trust` lines
+#             rewritten to scram-sha-256 on the next run.
 #   DSN       $POSTGRES_ENV_FILE, root's and 0600. grain-daemon.service reads
 #             it as an EnvironmentFile and passes GRAIN_DB_DRIVER and
 #             GRAIN_DB_DSN into the container by name, so the password is
@@ -3014,7 +3020,7 @@ Type=simple
 Environment=GRAIN_POSTGRES_IMAGE=${GRAIN_POSTGRES_IMAGE}
 Environment=GRAIN_POSTGRES_PORT=${GRAIN_POSTGRES_PORT}
 ExecStartPre=-${DOCKER_BIN:-docker} rm -f ${POSTGRES_CONTAINER}
-ExecStart=${DOCKER_BIN:-docker} run --name ${POSTGRES_CONTAINER} --rm --network host --user ${uid}:${gid} --shm-size 256m --env PGDATA=/var/lib/postgresql/data --env POSTGRES_USER=grain --env POSTGRES_DB=grain --env POSTGRES_PASSWORD_FILE=/run/grain/postgres-password --volume ${data}:/var/lib/postgresql/data --volume ${GRAIN_DATA_DIR}/secrets/postgres-password:/run/grain/postgres-password:ro ${GRAIN_POSTGRES_IMAGE} postgres -c listen_addresses=127.0.0.1 -c port=${GRAIN_POSTGRES_PORT}
+ExecStart=${DOCKER_BIN:-docker} run --name ${POSTGRES_CONTAINER} --rm --network host --user ${uid}:${gid} --shm-size 256m --env PGDATA=/var/lib/postgresql/data --env POSTGRES_USER=grain --env POSTGRES_DB=grain --env POSTGRES_PASSWORD_FILE=/run/grain/postgres-password --env POSTGRES_INITDB_ARGS=--auth=scram-sha-256 --volume ${data}:/var/lib/postgresql/data --volume ${GRAIN_DATA_DIR}/secrets/postgres-password:/run/grain/postgres-password:ro ${GRAIN_POSTGRES_IMAGE} postgres -c listen_addresses=127.0.0.1 -c port=${GRAIN_POSTGRES_PORT}
 ExecStartPost=/bin/sh -c 'for i in \$\$(seq 1 120); do ${DOCKER_BIN:-docker} exec ${POSTGRES_CONTAINER} pg_isready -q -h 127.0.0.1 -p ${GRAIN_POSTGRES_PORT} -U grain -d grain && exit 0; sleep 1; done; echo "${POSTGRES_CONTAINER} did not accept connections within 120s" >&2; exit 1'
 ExecStop=-${DOCKER_BIN:-docker} stop --time 120 ${POSTGRES_CONTAINER}
 Restart=on-failure
@@ -3034,13 +3040,30 @@ UNIT
   return 0
 }
 
+# postgres_hba_require_password rewrites initdb's default `trust` lines in
+# an existing cluster's pg_hba.conf to scram-sha-256, as $GRAIN_USER, and
+# says (status 0) whether that changed the file. Clusters initialised before
+# POSTGRES_INITDB_ARGS=--auth=scram-sha-256 was set already gave the `grain`
+# role its SCRAM password from POSTGRES_PASSWORD_FILE, so rewriting
+# pg_hba.conf and reloading is all they need.
+postgres_hba_require_password() {
+  local hba="$GRAIN_DATA_DIR/postgres/pg_hba.conf" before after
+  as_grain test -f "$hba" && ! as_grain test -L "$hba" || return 1
+  before="$(as_grain cat "$hba")"
+  after="$(printf '%s\n' "$before" | sed -E 's/^([[:space:]]*(local|host(ssl|nossl|gssenc|nogssenc)?)[[:space:]][^#]*[[:space:]])trust([[:space:]]*(#.*)?)$/\1scram-sha-256\4/')"
+  [ "$after" != "$before" ] || return 1
+  printf '%s\n' "$after" | grain_write 0600 "$hba"
+  log "  PostgreSQL: replaced trust with scram-sha-256 in $hba"
+  return 0
+}
+
 # ensure_local_postgres provisions the server resolve_database chose, if
 # it chose one, and leaves it running and taking connections.
 ensure_local_postgres() {
   [ "$GRAIN_POSTGRES_PROVISION" = 1 ] || return 0
   step_start "Provisioning PostgreSQL (grain-postgres.service, $GRAIN_POSTGRES_IMAGE)"
   grain_dir 0700 "$GRAIN_DATA_DIR/postgres"
-  local password changed=0
+  local password changed=0 hba_changed=0 was_active=0
   password="$(postgres_password)"
   if ! docker image inspect "$GRAIN_POSTGRES_IMAGE" >/dev/null 2>&1 &&
      ! docker pull "$GRAIN_POSTGRES_IMAGE" >/dev/null; then
@@ -3052,15 +3075,24 @@ ensure_local_postgres() {
   if write_postgres_unit; then
     changed=1
   fi
+  if postgres_hba_require_password; then
+    hba_changed=1
+  fi
   systemctl daemon-reload
   systemctl enable "$(basename "$POSTGRES_UNIT")" >/dev/null 2>&1
-  if [ "$changed" = 1 ] && systemctl is-active --quiet "$(basename "$POSTGRES_UNIT")"; then
-    # Its unit changed (a new image, a new port): the one time a re-run
-    # restarts it. grain-daemon.service, which Requires= it, goes with
-    # it, and enable_services starts that again.
+  if systemctl is-active --quiet "$(basename "$POSTGRES_UNIT")"; then
+    was_active=1
+  fi
+  if [ "$changed" = 1 ] && [ "$was_active" = 1 ]; then
+    # Its unit changed (a new image, a new port, new initdb args): the
+    # one time a re-run restarts it. grain-daemon.service, which
+    # Requires= it, goes with it, and enable_services starts that again.
     systemctl restart "$(basename "$POSTGRES_UNIT")"
   else
     systemctl start "$(basename "$POSTGRES_UNIT")"
+    if [ "$hba_changed" = 1 ] && [ "$was_active" = 1 ]; then
+      docker exec "$POSTGRES_CONTAINER" pg_ctl reload -D /var/lib/postgresql/data >/dev/null
+    fi
   fi
   step_done "listening on 127.0.0.1:$GRAIN_POSTGRES_PORT"
   if [ "$GRAIN_POSTGRES_MIGRATE" = 1 ]; then
@@ -3269,10 +3301,17 @@ report_image_revision() {
     return 0 # a release, release candidate or one build: there is no branch head to be behind
   fi
   branch="${tag//..//}"
-  # ghcr.io/<owner>/<repo>/grain is published from github.com/<owner>/<repo>.
-  repo="${GRAIN_IMAGE#*/}"
-  repo="${repo%/*}"
-  case "$repo" in */*) ;; *) return 0 ;; esac
+  case "$GRAIN_IMAGE" in
+    docker.io/grainai/grain | index.docker.io/grainai/grain | grainai/grain | ghcr.io/bwsalmon/grain/grain | ghcr.io/ai-on-gke/grain/grain)
+      repo="ai-on-gke/grain"
+      ;;
+    *)
+      # ghcr.io/<owner>/<repo>/grain is published from github.com/<owner>/<repo>.
+      repo="${GRAIN_IMAGE#*/}"
+      repo="${repo%/*}"
+      case "$repo" in */*) ;; *) return 0 ;; esac
+      ;;
+  esac
   api="${GRAIN_GITHUB_API:-https://api.github.com}"
   # The image's own curl, as every other tool this script reaches for
   # (image_run): the host is promised docker and systemd and nothing else.
@@ -3307,7 +3346,7 @@ detect_install_track() {
 
 # default_image_for_track returns the default image repository for track $1.
 default_image_for_track() {
-  printf '%s\n' "${GRAIN_OSS_IMAGE_REPO:-${GRAIN_LEGACY_IMAGE_REPO:-ghcr.io/bwsalmon/grain/grain}}"
+  printf '%s\n' "${GRAIN_OSS_IMAGE_REPO:-docker.io/grainai/grain}"
 }
 
 # image_repo_can_transition is whether a deployment whose ref file names
@@ -3319,9 +3358,11 @@ image_repo_can_transition() {
   [ -n "$from" ] && [ -n "$to" ] || return 1
   [ "$from" = "$to" ] && return 0
   local known=(
+    "docker.io/grainai/grain"
     "ghcr.io/bwsalmon/grain/grain"
+    "ghcr.io/ai-on-gke/grain/grain"
     "${GRAIN_LEGACY_IMAGE_REPO:-ghcr.io/bwsalmon/grain/grain}"
-    "${GRAIN_OSS_IMAGE_REPO:-ghcr.io/bwsalmon/grain/grain}"
+    "${GRAIN_OSS_IMAGE_REPO:-docker.io/grainai/grain}"
   )
   local allowed_list="${GRAIN_ALLOWED_IMAGE_REPOS:-}"
   for repo in ${allowed_list//,/ }; do
@@ -3725,9 +3766,11 @@ image_ref_from() {
     [ -n "$r" ] && repos+=("$r")
   done
   case "$repo" in
-    "ghcr.io/bwsalmon/grain/grain" | "${GRAIN_LEGACY_IMAGE_REPO:-}" | "${GRAIN_OSS_IMAGE_REPO:-}")
+    "docker.io/grainai/grain" | "ghcr.io/bwsalmon/grain/grain" | "ghcr.io/ai-on-gke/grain/grain" | "${GRAIN_LEGACY_IMAGE_REPO:-}" | "${GRAIN_OSS_IMAGE_REPO:-}")
       repos+=(
+        "docker.io/grainai/grain"
         "ghcr.io/bwsalmon/grain/grain"
+        "ghcr.io/ai-on-gke/grain/grain"
       )
       [ -n "${GRAIN_LEGACY_IMAGE_REPO:-}" ] && repos+=("$GRAIN_LEGACY_IMAGE_REPO")
       [ -n "${GRAIN_OSS_IMAGE_REPO:-}" ] && repos+=("$GRAIN_OSS_IMAGE_REPO")
@@ -3828,7 +3871,7 @@ image_run() {
 
 # registry_login authenticates to the image's registry, if this
 # deployment was given a credential for it. Nothing to do in the ordinary
-# case: bwsalmon/grain's GHCR package is public, and an anonymous pull
+# case: docker.io/grainai/* repositories are public, and an anonymous pull
 # works. Never fatal on its own -- a failed login is reported here and
 # then simply becomes whatever the pull below reports.
 #
@@ -3844,7 +3887,9 @@ registry_login() {
   local registry="${GRAIN_IMAGE%%/*}" target user token="$GRAIN_IMAGE_PULL_TOKEN"
   target="$registry"
   user="${GRAIN_IMAGE_PULL_USER:-x-access-token}"
-  if [[ "$GRAIN_IMAGE" == */* ]] && google_registry_host "$registry"; then
+  if [ "$registry" = "docker.io" ] || [ "$registry" = "index.docker.io" ]; then
+    user="${GRAIN_IMAGE_PULL_USER:-grainai}"
+  elif [[ "$GRAIN_IMAGE" == */* ]] && google_registry_host "$registry"; then
     target="https://${registry}"
     user="${GRAIN_IMAGE_PULL_USER:-oauth2accesstoken}"
     if [ -z "$token" ]; then

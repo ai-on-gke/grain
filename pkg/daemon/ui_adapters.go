@@ -327,7 +327,7 @@ type CapabilityCheckAdapter struct {
 
 func (a CapabilityCheckAdapter) CheckCapability(ctx context.Context, id string) (ui.CapabilityCheckResult, error) {
 	registry := newCapabilityRegistryWithStore(
-		a.Live.store, a.Live.Current().LocalScriptsConfig(),
+		a.Live.store,
 		CapabilityProviders(a.Live.Current(), a.Live.store, ModelProxies, a.Live.GitHubTokens(), a.Live.gitHubCredentialSource())...)
 	provider, ok := registry.Lookup(id)
 	if !ok {
@@ -377,7 +377,7 @@ func (a CapabilityCheckAdapter) CheckCapability(ctx context.Context, id string) 
 func (a CapabilityCheckAdapter) unregistered(ctx context.Context, id string) error {
 	if stored, ok := a.Live.storedConfig(ctx); ok {
 		registry := newCapabilityRegistryWithStore(
-			a.Live.store, stored.LocalScriptsConfig(),
+			a.Live.store,
 			CapabilityProviders(stored, a.Live.store, ModelProxies, a.Live.GitHubTokens(), a.Live.gitHubCredentialSource())...)
 		if _, found := registry.Lookup(id); found {
 			return fmt.Errorf(

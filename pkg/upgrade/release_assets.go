@@ -615,6 +615,9 @@ func ReleaseTagsForBranch(branch string) ([]string, error) {
 func ReleaseRepositoryForImage(imageRepo string) string {
 	repo := strings.TrimSpace(repositoryOf(strings.TrimSpace(imageRepo)))
 	if repo == installtrack.DefaultOSSGrainRepository ||
+		repo == "index.docker.io/grainai/grain" ||
+		repo == "registry-1.docker.io/grainai/grain" ||
+		repo == "grainai/grain" ||
 		repo == installtrack.LegacyGrainRepository ||
 		repo == "ghcr.io/ai-on-gke/grain/grain" ||
 		repo == "ghcr.io/ai-on-gke/grain" {
@@ -1487,7 +1490,7 @@ func (u *Upgrader) isReleaseDaemonUnchanged(ctx context.Context, currentRef, tar
 	if currentRef == "" {
 		return false
 	}
-	if repositoryOf(currentRef) != repositoryOf(targetTag) {
+	if !sameRepository(repositoryOf(currentRef), repositoryOf(targetTag)) {
 		return false
 	}
 	// 1. Compare local Docker image ID of currentRef against manifest's imageId.
@@ -1764,11 +1767,12 @@ func (u *Upgrader) stageReleaseSandbox(ctx context.Context, p *progress, r *reso
 
 func inferSandboxRole(args []string, sandboxRef string) string {
 	for _, a := range args {
-		if strings.Contains(a, "k8s-sandbox") {
+		if strings.Contains(a, "k8s-sandbox") || strings.Contains(a, "sandbox-k8s") {
 			return ReleaseRoleK8sSandbox
 		}
 	}
-	if strings.Contains(repositoryOf(sandboxRef), "k8s-sandbox") {
+	repo := repositoryOf(sandboxRef)
+	if strings.Contains(repo, "k8s-sandbox") || strings.Contains(repo, "sandbox-k8s") {
 		return ReleaseRoleK8sSandbox
 	}
 	return ReleaseRoleGuest

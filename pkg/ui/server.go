@@ -77,13 +77,15 @@ type Server struct {
 	accessCode        atomic.Pointer[accessCodeFile]
 	externalLimiter   *externalAgentLimiter
 	defaultGroupsOnce sync.Once
-	defaultGroups     *CloudIdentityGroupChecker
+	defaultGroups     GroupMemberChecker
 	// controllerMCPHandler serves POST /api/mcp (mcp_endpoint.go), built
 	// once on first use.
 	controllerMCPOnce    sync.Once
 	controllerMCPHandler http.Handler
 	// fsNamespace is the namespace GET /api/fs/ serves (api_fs.go).
 	fsNamespace func() *namespace.Server
+	// eventsKeepalive overrides defaultEventsKeepalive in tests (events.go).
+	eventsKeepalive time.Duration
 }
 
 // NewServer builds a Server over a store.
@@ -151,6 +153,21 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		writeAssertionRefused(w, r, cv.err)
 		return
 	}
+	if presentsApprovalCallbackToken(r) {
+		taskID, ok := s.authenticateApprovalCallback(w, r)
+		if !ok {
+			return
+		}
+		r.Header.Del(ActingTaskHeader)
+		ctx := r.Context()
+		if s.tasks != nil {
+			ctx = s.tasks.withOperatorActor(ctx)
+		}
+		agent := model.Principal{Kind: model.PrincipalAgent, ID: taskID, Source: model.SourceInternal}
+		r = r.WithContext(withAuthMethod(WithPrincipal(ctx, agent), AuthMethodTrusted))
+		s.mux.ServeHTTP(w, r)
+		return
+	}
 	if externalTokenFromContext(r.Context()) == nil && presentsExternalAgentToken(r) {
 		tok, release, ok := s.authenticateExternalAgent(w, r)
 		if !ok {
@@ -196,6 +213,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			r = r.WithContext(withRequestSource(r.Context(), trustedRequestSource(r)))
 		}
 	}
+	r = r.WithContext(model.WithEventActor(r.Context(), RequestActor(r.Context())))
 	// Unarmed until a configuration write's guard finds the deployment
 	// managed by an external config repository (checkSettingsWritable).
 	rehearsal := &configWriteRehearsal{}
@@ -266,6 +284,7 @@ func (s *Server) routes() {
 	s.route("GET /api/tasks/states", s.handleTaskStates)
 	s.route("GET /api/tasks/wait", s.handleTasksWait)
 	s.route("GET /api/inbox", s.handleInbox)
+	s.route("GET /api/events", s.handleEvents)
 	s.route("GET /api/states", s.handleTaskStates)
 	s.route("POST /api/tasks", s.handleCreateTask)
 	s.route("POST /api/tasks/from-template", s.handleCreateTaskFromTemplate)

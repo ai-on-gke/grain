@@ -40,7 +40,7 @@ func testSpec() Spec {
 	deadline := time.Date(2026, 10, 13, 6, 0, 0, 0, time.UTC)
 	return Spec{
 		Name:  "abc-runhost-run-r1-123",
-		Image: "ghcr.io/bwsalmon/grain/grain:main",
+		Image: "docker.io/grainai/grain:main",
 		Labels: Labels{Deployment: "abc", Task: "grain/task-7", Run: "r1", Generation: "v1.2.3+dirty",
 			Protocol: Protocol, Deadline: deadline, Spool: "/data/runhosts/spool/run-r1-123"},
 		Mounts: []Mount{

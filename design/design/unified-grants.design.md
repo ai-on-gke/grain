@@ -178,7 +178,7 @@ per-capability list, with what each one becomes:
 | `github-credential:<name>` | `…/git#git-repo` `{credential: <name>, repo}` | existing server, gains an argument |
 | `github-sandbox` | `…/github#sandbox-repo` | new method on existing `github` server |
 | `git-push-any-ref` | `…/repo#write` `{refs: ["refs/heads/*", "refs/tags/*"], force: true}` | **done** (task 1063): provider removed, `https://grain.dev/capabilities/repo#write` added on a new in-process `…/repo` server (`grainserver.RepoServer`); its schema validates only that one `refs`/`force` value (beside `{repo}`, a CI job's write access, since task 2365), the one the git proxy honours (`model.IsGitPushAnyRefGrant`), so a narrower task-level `refs` is refused rather than recorded as doing something (Q3). It stays a team grant, not dangerous, as `git-push-any-ref` was. `repo` is not an argument yet: like the bare grant it applies to every repository the task may write. Stored grants rewritten to `https://grain.dev/capabilities/repo#write={"force":true,"refs":["refs/heads/*","refs/tags/*"]}` by schema migration 85 |
-| `local-scripts:<name>` | `…/host-script#host-script` `{script}`, one grant per script of the declaration | **in progress** (task 2366): the operator chose to make each declaration host-script configuration (not a sibling server), with no scheduled-run or CI refusal carried over. At each start the daemon converts every declaration it can read (`localscripts.ConvertToHostScripts`) into scripts `<declaration>-<script>` on the in-daemon host-script server, which it creates as `https://grain.dev/capabilities/host-script` when there is none. The scripts exec the declaration's own files with the same cwd, timeout, output cap and secrets (bound as `$env:GRAIN_LOCAL_SCRIPTS_<SECRET>` → `$secret:<name>`). It rewrites stored grants with `Store.RewriteRetiredGrants` and keeps `local-scripts:<name>` as a runtime alias (`model.SetRuntimeGrantExpansions`). Not a schema migration: what a grant becomes depends on files on the node host. Still to do: per-call approval (and stdin) on host-script, so `approve: true` declarations can move too; then removing the `DynamicProvider` and the run's local-scripts MCP serving |
+| `local-scripts:<name>` | `…/host-script#host-script` `{script}`, one grant per script of the declaration | **done** (tasks 2366, 3077): at each start the daemon converts every declaration it can read (`localscripts.ConvertToHostScripts`, including `approve: true` scripts) into scripts `<declaration>-<script>` on the in-daemon host-script server (`https://grain.dev/capabilities/host-script`), binding secrets as `$env:GRAIN_LOCAL_SCRIPTS_<SECRET>` → `$secret:<name>`, rewriting stored grants (`Store.RewriteRetiredGrants`), and keeping `local-scripts:<name>` as a runtime alias (`model.SetRuntimeGrantExpansions`) whose expanded grants remain withheld from scheduled runs and refused to CI jobs (`localscripts.MigratedFrom`). `host-script` supports optional stdin (`grain host-script --stdin <name>`) and per-call `approve: true` via a per-task callback URL + scoped `ghsa_` token handed over at mint (`localexec.HTTPApprover`). `localscripts.DynamicProvider` and `grain mcpserver`'s local-scripts MCP serving are removed |
 | `repo-read:<repo>`, `repo-write:<repo>` (CI) | `…/repo#read` / `…/repo#write` `{repo}` | **done** (task 2365): `reporead` / `repowrite` providers removed; `https://grain.dev/capabilities/repo#read` `{repo}` added and `#write` widened to take `{repo}` beside the any-ref value (`model.IsGitPushAnyRefGrant` still means only the latter). What the providers decided rides on the grant (`model.IsRepoAccessGrant`): it is CI-only (a task holding one is refused with `CIOnlyRefusal`), and `model.RepoAccessAdmitsCIEvent` is write's event gate (release, workflow_dispatch, grain's own trusted schedule). `daemon/ci.go` widens the proxy's scopes from the job's declared ids through that gate. The bare `repo-read:`/`repo-write:` are read as the same grants indefinitely (a repository's own `.grain/workflows`), and the local policy matches either spelling. Stored grants, `repo_config.ci_capabilities` included, rewritten by schema migration 88 |
 | `self-debug` | `…/api#self-debug` preset (already an alias) plus a new `…/grain#source` method for the source checkout and metrics tools | api scope + new in-process server `…/grain` |
 | `grain-log` | `…/grain#journal` | **done** (task 2037): provider removed, `https://grain.dev/capabilities/grain#journal` added on the in-process `…/grain` server (redaction kept, deliberately in no api preset), stored grants rewritten to `https://grain.dev/capabilities/grain#journal={}` by schema migration 80 |
@@ -193,11 +193,13 @@ per-capability list, with what each one becomes:
 | `memory` | `…/api#memory` preset (`memory:read` + `memory:write`) | **done** (task 2035): provider and its tools removed, stored grants rewritten to `api:memory` by schema migration 71 |
 | `team-broadcast` | `…/api#teams:broadcast` (new scope), preset `team-broadcast` | **done** (task 2004): provider and `broadcast_team_message` removed, stored grants rewritten to `api:team-broadcast` by schema migration 67 |
 | `bootstrap-playbooks` | `…/skill#skill` `{dir: bootstrap}` | existing server method |
-| `console` | stays a task setting, not a grant (it changes how the run is hosted, not what it may reach) | moved out of grants (Q8) |
+| `console` | task setting `hosting: unattended \| console` (§4.1) | **decided** (Q8, 2026-11-04): moved out of grants. Not started |
+| `priority-dispatch` | task setting `admission: standard \| bypass` (§4.1) | **decided** (Q8, 2026-11-04): moved out of grants. Not started |
+| `durable` | task setting `admission: durable` (§4.1) | **decided** (Q8, 2026-11-04): moved out of grants. Not started |
 | `db-read`, `db-write` | `…/grain#sql` `{write: bool}` | **done** (task 2037): providers removed, `https://grain.dev/capabilities/grain#sql` (`{write: bool}`, with `write: true` dangerous) added on the in-process `…/grain` server, stored grants rewritten to `https://grain.dev/capabilities/grain#sql={"write":false}` / `{"write":true}` by schema migration 82 |
 | `grain-ci` | `…/grain#ci` | **done** (task 2364): provider removed, `https://grain.dev/capabilities/grain#ci` added on the in-process `…/grain` server (still granted solely from a repository's CI Mode and refused when attached by hand), stored grants rewritten to `https://grain.dev/capabilities/grain#ci={}` by schema migration 96 (repo_config.ci_capabilities included) |
 | `image-signing`, `registry-push`, `package-publish` (CI) | `…/release#image-signing`, `…/release#registry-push`, `…/release#package-publish` | **done** (task 2432): the three providers removed from the daemon's registry; `…/release` is an in-process server (`pkg/capability/release`) whose mints are the retired providers' own Resolve and Materialize for the CI job in the mint's context (`model.WithCIMint`). The CI-only, event (image-signing: `release`; the others: `release`, `workflow_dispatch`, and package-publish grain's trusted schedule) and repository-list rules are declared by the server (`capability.Method.CI`, `model.CIGrantRule`) and enforced ahead of `capability_policy`, which can only narrow them. Stored grants rewritten to `…#<name>={}` by schema migration 101; the bare names remain one-release aliases |
-| `corp-research` (wrapper distribution build) | a `…/corp#research` method registered by the wrapper distribution's build through the same `capability.Register` seam | **seam landed, wrapper half pending** (task 2377): core's `capability.Register` takes an in-process server ID, a `protocol.MethodSpec`, `RunGrant`, `DefaultOn`, display name, description and legacy bare `Aliases`; `grainserver.Lookup`/`IsInProcessGrant`/`Statuses` (and so admission, `GET /api/capability-methods` and the mcpserver allowlist) resolve the server built from registered methods, `capability.RunGrants` forwards the method's ref, grant and aliases to the run, aliases go through `model.RegisterLegacyGrantAlias` into `CanonicalLegacyGrant(s)`, and antigravity matches a host-tool grant by method. Stored grants are rewritten to `https://grain.dev/capabilities/corp#research={}` by schema migration 86 (repo_config.ci_capabilities included). The wrapper distribution's build still has to register the method with `corp-research` as its alias and delete its `corpresearch` provider |
+| `corp-research` (wrapper distribution build) | a `…/corp#research` method registered by the wrapper distribution's build through the same `capability.Register` seam | **done** (task 2377): core's `capability.Register` takes an in-process server ID, a `protocol.MethodSpec`, `RunGrant`, `DefaultOn`, display name, description and legacy bare `Aliases`; `grainserver.Lookup`/`IsInProcessGrant`/`Statuses` (and so admission, `GET /api/capability-methods` and the mcpserver allowlist) resolve the server built from registered methods, `capability.RunGrants` forwards the method's ref, grant and aliases to the run, aliases go through `model.RegisterLegacyGrantAlias` into `CanonicalLegacyGrant(s)`, and antigravity matches a host-tool grant by method. Stored grants are rewritten to `https://grain.dev/capabilities/corp#research={}` by schema migration 86 (repo_config.ci_capabilities included). The wrapper distribution's build now registers the method (`capability.Register(Method())` in its `capability/corpresearch`) with `corp-research` as its alias, and its `corpresearch` provider is gone |
 
 How `self-debug`, `grain-log` and `deployment-health` style grants fit:
 they are grain reading itself. Each becomes either api scopes (anything
@@ -210,6 +212,101 @@ exposure. Converting one capability is one task. It adds the
 method, makes `CanonicalGrant` map the bare id to it, migrates its rows,
 and deletes the provider. Until then, the bare id keeps working and
 stays in the legacy checklist.
+
+### 4.1 Admission and hosting are task settings, not grants
+
+`console`, `priority-dispatch` and `durable` are grants in name only.
+None of them mints, places or reaches anything: each provider is a bare
+`Spec` over `model.BaseCapability`, and `pkg/capability/durable` says it
+"exists so the grant is offered, listed and audited like any other
+capability". What they really change is how the task is scheduled and
+hosted, and the grant table is only where that is stored:
+`Task.HasPriorityDispatch` and `Task.IsDurable` loop over `t.Grants`, and
+dispatch asks `priorityDispatchTaskSQL`, an `EXISTS` over `task_grant`, in
+`StartRun`'s own transaction. They move out of grants into two task
+settings (operator decision, 2026-11-04, Q8).
+
+**`admission: standard | bypass | durable`** replaces `priority-dispatch`
+and `durable`. The values are ordered, and each one includes the one
+before it, which is how the grants already behave (`durable` implies
+`priority-dispatch` in two hand-kept places, `HasPriorityDispatch` and
+the SQL's `IN (?, ?)`):
+
+| Value | What a run of it gets | Today |
+|---|---|---|
+| `standard` | ordinary admission: worker and merger counts, pipeline pause, base-repair parking, per-connection concurrency limit, CI preemption | neither grant |
+| `bypass` | admitted outside the worker and merger counts, ordered ahead of mergers and ordinary work, passes a pipeline pause other than an upgrade's own hold, never parked behind a red base branch's repair, not held by a connection's concurrency limit, never preempted by CI; still charged to the sandbox budget under the priority policy | `priority-dispatch` |
+| `durable` | `bypass`, plus no wall-clock deadline and no wait-credit cap, suspended by the idle watchdog instead, counted under `Limits.Durable` rather than `max_workers`, setup failures suspended rather than counted | `durable` |
+
+The name is chosen to avoid "priority" on purpose. The numeric
+`task.priority` column (schema migration 73) is a different thing and is
+unchanged: it orders the queue (`taskQueueOrderSQL`) and nothing else.
+It goes on ordering tasks within an admission level. In the UI the
+setting reads **Admission: Standard / Bypass queue / Durable**.
+
+**`hosting: unattended | console`** replaces `console`: whether dispatch
+starts the agent CLI on a pseudo-terminal for somebody to type into
+(`pkg/console`), or hands it a prompt and reads the answer back. It
+stays separate from `admission` because it says who drives the run, not
+when it is let in. Every console session is `admission: durable` by
+construction (`model.ConsoleSessionGrants` adds `durable` today), and it
+is `hosting: console` only if it holds `console` today. `hosting` is
+also still not `Interactive`, which marks a task filed as a live chat
+and changes nothing about how the run is driven.
+
+What carries over:
+
+- **Only a person may raise `admission`** above `standard`, as
+  `IsPersonOnlyGrant` does for the two grants today. A task an agent
+  files, or a proposal, that asks for more waits for a person the way
+  `EscalatedCapabilities` makes a grant wait today. Two places set it
+  by construction and stay exempt: `pipelineStewardTemplate` (`bypass`)
+  and `model.ConsoleSessionGrants` (`durable`). `hosting` has
+  no such rule, because `console` has none today.
+- **Same places as today.** Both settings are columns on tasks,
+  templates and schedules. Repositories and the deployment can set
+  defaults for them, which replaces naming `console` (or either
+  admission grant) in `DefaultCapabilities`.
+- **Audit.** A change to either setting is recorded as a task event
+  with the old value, the new value and the actor, the way grant attach
+  and detach are recorded today.
+- **One predicate.** `HasPriorityDispatch` becomes `t.Admission >=
+  AdmissionBypass`, `IsDurable` becomes `t.Admission == AdmissionDurable`,
+  and `priorityDispatchTaskSQL` / `durableTaskSQL` become
+  `t.admission IN ('bypass', 'durable')` / `t.admission = 'durable'`: a
+  column read in place of a subquery.
+- **Who may hold it.** `catalogueEditRefusal` checks
+  `priority-dispatch` against the catalogue's `CatalogueInProcess`
+  restrictions (repos, templates, kinds) today. No deployment narrows
+  them (Q10), so nothing replaces that check. The person-only rule and
+  `Limits.Durable` are the only gates.
+
+Migration, like the other conversions:
+
+1. One schema migration moves `console`, `priority-dispatch` and
+   `durable` rows into the new columns, from wherever grants are stored:
+   tasks, templates, schedules, deployment and repository default
+   capability lists, console sessions, the catalogue and the policy. It
+   then deletes the rows. A task holding both admission grants becomes
+   `durable`. Catalogue and policy entries for the three names are
+   dropped, not converted (Q10).
+2. For one release the bare names are still accepted on input (API,
+   `-grant`, declarations, grain/config import) and turned into the
+   setting with a deprecation warning. They are never written.
+3. `pkg/capability/console`, `pkg/capability/durable` and
+   `pkg/capability/prioritydispatch` are deleted, along with their
+   entries in `daemon.CapabilityProviders`. The task pane's
+   `PriorityDispatch` toggle, which today adds and removes the grant,
+   becomes the Admission select. All three leave the Legacy
+   capabilities checklist.
+4. The docs that describe them as grants are updated:
+   [durable-tasks.design.md](durable-tasks.design.md) (DT-1, DT-7, and the sessions
+   section's "a task with the `durable` grant") and
+   [capabilities.md](../../docs/capabilities.md).
+
+This is two tasks, not three. `admission` is one task because
+`priority-dispatch` and `durable` share every predicate. `hosting` is
+the other.
 
 ## 5. The UI
 
@@ -308,6 +405,18 @@ should adopt `GrantsPicker` once 885 lands, which is a follow-up there.
   Interactive-only rule are what keep it safe, and both stay.
 - **Q8.** `console` is how a run is hosted, not access. Should it move out
   of grants into a task setting?
+  **Answered (2026-11-04, operator): yes, and `priority-dispatch` and
+  `durable` with it.** None of the three reaches anything. They become
+  the `hosting` and `admission` task settings (§4.1).
 - **Q9.** Retirement order for §4. Proposed: the api-alias ones first
   (no new code), then the model proxies and `gcp-key` (servers exist),
   then the new `…/grain` server.
+- **Q10.** Does `admission` need its own "who may set it" restriction?
+  Today the catalogue can limit `priority-dispatch` and `durable` to
+  certain repos, templates and kinds (`CatalogueInProcess`, checked by
+  `catalogueEditRefusal`).
+  **Answered (2026-11-04, operator): no.** No deployment sets anything
+  but the default for these. The person-only rule and `Limits.Durable`
+  are enough, no `admission:` allowlist is built, and the migration
+  drops the catalogue and policy entries for the three names instead of
+  converting them.

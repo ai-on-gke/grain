@@ -62,7 +62,12 @@ unit style: a `docker run` under systemd.
   nothing else, on `GRAIN_POSTGRES_PORT` (default 5432). Nothing on
   another interface can reach it.
 - **Password:** generated once into
-  `$GRAIN_DATA_DIR/secrets/postgres-password` and never replaced.
+  `$GRAIN_DATA_DIR/secrets/postgres-password` and never replaced. `initdb`
+  runs with `--auth=scram-sha-256`, so loopback and local-socket connections
+  require this password too (the official image's default `pg_hba.conf`
+  trusts `127.0.0.1`, `::1` and the local socket). Re-running `setup.sh`
+  rewrites any `trust` lines in an existing cluster's `pg_hba.conf` to
+  `scram-sha-256` and reloads the server.
 - **DSN:** `/etc/grain/postgres.env`, owned by root, mode 0600.
   `grain-daemon.service` reads it as an `EnvironmentFile` and passes
   `GRAIN_DB_DRIVER` and `GRAIN_DB_DSN` into its container by name. The
@@ -106,7 +111,7 @@ restore it into a fresh cluster:
 ```bash
 # 1. Dump, with the old server still running.
 sudo systemctl stop grain-daemon.service
-sudo docker exec grain-postgres pg_dump -U grain -d grain -Fc > /root/grain.dump
+sudo docker exec grain-postgres sh -c 'PGPASSWORD=$(cat /run/grain/postgres-password) exec pg_dump -U grain -d grain -Fc' > /root/grain.dump
 
 # 2. Set the old cluster aside.
 sudo systemctl stop grain-postgres.service
@@ -121,7 +126,7 @@ sudo sed -i "s|$old|mirror.gcr.io/library/postgres:17-bookworm|g" /etc/systemd/s
 sudo systemctl daemon-reload && sudo systemctl start grain-postgres.service
 
 # 4. Restore into it.
-sudo docker exec -i grain-postgres pg_restore -U grain -d grain --no-owner < /root/grain.dump
+sudo docker exec -i grain-postgres sh -c 'PGPASSWORD=$(cat /run/grain/postgres-password) exec pg_restore -U grain -d grain --no-owner' < /root/grain.dump
 
 # 5. Record the image the way setup.sh does. The unit already matches, so
 #    the server is not restarted. Then start the daemon.
@@ -142,7 +147,7 @@ use one of these:
   with `pg_restore`.
 
   ```bash
-  sudo docker exec grain-postgres pg_dump -U grain -d grain -Fc > grain-$(date -u +%Y%m%dT%H%M%SZ).dump
+  sudo docker exec grain-postgres sh -c 'PGPASSWORD=$(cat /run/grain/postgres-password) exec pg_dump -U grain -d grain -Fc' > grain-$(date -u +%Y%m%dT%H%M%SZ).dump
   ```
 
   The dump has the store only. Also back up the rest of `$GRAIN_DATA_DIR`,

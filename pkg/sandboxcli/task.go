@@ -209,6 +209,7 @@ func (c *sandboxCLI) taskPropose(p sandboxArgs) error {
 		KeepRunning:     p.has("keep-running"),
 		Origin:          strings.TrimSpace(p.get("origin")),
 		Reads:           splitMultiFlag(p, "read"),
+		Designs:         splitMultiFlag(p, "design"),
 		HoldForApproval: &hold,
 		AutoMerge:       &auto,
 	}
