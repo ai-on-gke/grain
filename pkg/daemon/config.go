@@ -35,13 +35,19 @@ import (
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/iapreconciler"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 type Config struct {
-	DataDir  string
-	DbDriver string
-	DbDSN    string
+	DataDir        string
+	DbDriver       string
+	DbDSN          string
+	ObjectStoreURI string
+	ObjectStore    objectstore.Store
+	// transcriptObjects is the live/read-through transcript object store
+	// opened by run() when ObjectStore or ObjectStoreURI is configured.
+	transcriptObjects *TranscriptObjectStore
 	// unitFlags are the names of the flags this process was actually
 	// started with, undefined ones included -- which on a deployment
 	// scripts/setup.sh installed is what grain-daemon.service's ExecStart

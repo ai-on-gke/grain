@@ -16,8 +16,10 @@ package daemon
 
 import (
 	"context"
+	"io"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -78,6 +80,43 @@ func (d daemonNamespaceCIStore) Live(key ci.Key) (ci.Run, bool) {
 		return s.Live(key)
 	}
 	return ci.Run{}, false
+}
+
+type daemonNamespaceArtifacts struct{}
+
+func (daemonNamespaceArtifacts) active() ci.ArtifactStore {
+	if svc := LiveCI.embedded(); svc != nil && svc.Engine != nil {
+		return svc.Engine.Artifacts
+	}
+	return nil
+}
+
+func (a daemonNamespaceArtifacts) Save(ctx context.Context, ref ci.ArtifactRef, body []byte) (ci.Artifact, error) {
+	if s := a.active(); s != nil {
+		return s.Save(ctx, ref, body)
+	}
+	return ci.Artifact{}, os.ErrNotExist
+}
+
+func (a daemonNamespaceArtifacts) List(ctx context.Context, runID string) ([]ci.Artifact, error) {
+	if s := a.active(); s != nil {
+		return s.List(ctx, runID)
+	}
+	return nil, nil
+}
+
+func (a daemonNamespaceArtifacts) Open(ctx context.Context, ref ci.ArtifactRef) (io.ReadCloser, ci.Artifact, error) {
+	if s := a.active(); s != nil {
+		return s.Open(ctx, ref)
+	}
+	return nil, ci.Artifact{}, os.ErrNotExist
+}
+
+func (a daemonNamespaceArtifacts) MaxArtifactBytes() int64 {
+	if s := a.active(); s != nil {
+		return s.MaxArtifactBytes()
+	}
+	return 0
 }
 
 // BuildNamespaceRedactor builds a Redactor loaded with known secret values and
@@ -164,6 +203,7 @@ func startGitProxy(dataDir string, store *model.Store, githubHost string, insecu
 		CIStore:     daemonNamespaceCIStore{fallback: fallbackCI},
 		ExternalCI:  sandboxExternalCI{},
 		ArtifactDir: ciArtifactDir(dataDir),
+		Artifacts:   daemonNamespaceArtifacts{},
 		SrcDir:      srcDir,
 		CoreSrcDir:  coreSrcDir,
 		CoreModule:  coreModule,

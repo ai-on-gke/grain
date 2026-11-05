@@ -105,6 +105,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/postgres"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -192,6 +193,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	dbDriver := fs.String("db-driver", "sqlite", "database backend driver (\"sqlite\" or \"postgres\"); defaults to sqlite")
 	dbDSN := fs.String("db-dsn", "", "database connection string / DSN or path; for sqlite defaults to <data-dir>/store")
 	postgresURL := fs.String("postgres-url", "", "PostgreSQL connection URL (alias for -db-driver=postgres -db-dsn=URL)")
+	objectStoreURI := fs.String("object-store", "", "object store URI (gs://<bucket>/instances/<name>/ or file:///abs/dir) for flushing run transcripts, uploaded CI artifacts, and durable agent-sessions archives with local read-through caching (defaults to $GRAIN_OBJECT_STORE)")
 	sandboxDir := fs.String("sandbox-dir", "", "root directory for this deployment's disposable scratch space -- host-sandbox run directories, "+
 		"and the package and Actions caches default under it, and the UI reports its disk as the sandboxes' own (scripts/setup.sh installs it "+
 		"at /var/lib/grain/scratch, beside -data-dir's /var/lib/grain/data). Deliberately a separate flag from -data-dir rather than a "+
@@ -1070,6 +1072,11 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			*uiRequireIAP = v
 		}
 	}
+	if !passed["object-store"] {
+		if env := strings.TrimSpace(os.Getenv("GRAIN_OBJECT_STORE")); env != "" {
+			*objectStoreURI = env
+		}
+	}
 	if !passed["db-dsn"] {
 		if env := os.Getenv("GRAIN_DB_DSN"); env != "" {
 			*dbDSN = env
@@ -1192,7 +1199,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 
 	cfg := daemon.Config{
 		UnitFlags: unitFlags, UnknownFlags: unknownFlags,
-		DataDir: *dataDir, DbDriver: *dbDriver, DbDSN: *dbDSN, SandboxDir: *sandboxDir, DockerRootDir: *dockerRootDir,
+		DataDir: *dataDir, DbDriver: *dbDriver, DbDSN: *dbDSN, ObjectStoreURI: *objectStoreURI, SandboxDir: *sandboxDir, DockerRootDir: *dockerRootDir,
 		MaxWorkers: *maxWorkers, MaxMergers: *maxMergers, MaxCIJobs: model.DefaultMaxCIJobs,
 		Ledger:        &model.Ledger{},
 		CpuOvercommit: *cpuOvercommit, MemoryOvercommit: *memoryOvercommit, MemoryReserveMB: *memoryReserveMB,
@@ -1376,6 +1383,11 @@ func checkConfig(cfg daemon.Config) error {
 		}
 	default:
 		return fmt.Errorf("-db-driver must be \"sqlite\" or \"postgres\", got %q", cfg.DbDriver)
+	}
+	if cfg.ObjectStoreURI != "" {
+		if err := objectstore.ValidateURI(cfg.ObjectStoreURI); err != nil {
+			return fmt.Errorf("-object-store: %w", err)
+		}
 	}
 	if err := daemon.CheckSandboxBackend(cfg, daemon.LocalSandboxes != nil); err != nil {
 		return err

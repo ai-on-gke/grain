@@ -313,7 +313,13 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// able to override this deployment's framework both formats can
 		// be in this one directory at once -- so the reader wired here
 		// picks between them per file rather than per deployment.
-		LiveTranscripts: LiveTranscriptDir(transcriptDir),
+		LiveTranscripts: LiveTranscriptDirWithStore(transcriptDir, cfg.transcriptObjects),
+		ArchivedTranscripts: func() ui.ArchivedTranscript {
+			if cfg.transcriptObjects == nil {
+				return nil
+			}
+			return cfg.transcriptObjects
+		}(),
 		// orchestrator.ChecksUnavailable reads process-lifetime state
 		// RunCycle's own reconcile loop sets the first time GitHub 403s a
 		// check-runs read against this deployment's credential -- see its

@@ -1443,6 +1443,11 @@ func (c *Client) AttemptTranscript(ctx context.Context, taskID string, number in
 	if !ok {
 		return "", &NotFoundError{message: fmt.Sprintf("no attempt %d for task %s", number, taskID)}
 	}
+	if transcript == "" && c.Config.ArchivedTranscripts != nil {
+		if archived, found, archErr := c.Config.ArchivedTranscripts.Read(ctx, run.ID); archErr == nil && found {
+			return archived, nil
+		}
+	}
 	return transcript, nil
 }
 
