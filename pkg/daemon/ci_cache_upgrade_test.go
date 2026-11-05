@@ -72,7 +72,7 @@ func TestCIJobCacheKeysOnSandboxImageWithoutWipingOnUpgrade(t *testing.T) {
 	cfg1 := Config{
 		DataDir:          dataDir,
 		GranuleSandboxes: true,
-		SandboxImage:     "ghcr.io/bwsalmon/grain/guest:sha-66c5a15@" + digest1,
+		SandboxImage:     "docker.io/grainai/sandbox:sha-66c5a15@" + digest1,
 	}
 	cache1 := CiJobCache(cfg1, nil)
 	if cache1 == nil {
@@ -93,7 +93,7 @@ func TestCIJobCacheKeysOnSandboxImageWithoutWipingOnUpgrade(t *testing.T) {
 	cfgSameDigest := Config{
 		DataDir:          dataDir,
 		GranuleSandboxes: true,
-		SandboxImage:     "ghcr.io/bwsalmon/grain/guest:sha-dc5b5a1@" + digest1,
+		SandboxImage:     "docker.io/grainai/sandbox:sha-dc5b5a1@" + digest1,
 	}
 	cacheSameDigest := CiJobCache(cfgSameDigest, nil)
 	reqSameDigest := baseReq
@@ -111,7 +111,7 @@ func TestCIJobCacheKeysOnSandboxImageWithoutWipingOnUpgrade(t *testing.T) {
 	cfgNewDigest := Config{
 		DataDir:          dataDir,
 		GranuleSandboxes: true,
-		SandboxImage:     "ghcr.io/bwsalmon/grain/guest:sha-9999999@" + digest2,
+		SandboxImage:     "docker.io/grainai/sandbox:sha-9999999@" + digest2,
 	}
 	cacheNewDigest := CiJobCache(cfgNewDigest, nil)
 	reqNewDigest := baseReq
@@ -205,7 +205,7 @@ func (f *fakeImageBackend) CurrentImage() string  { return f.image }
 
 func TestApplySandboxImageReachesAPodBackend(t *testing.T) {
 	ctx := context.Background()
-	cfg := Config{K8sSandboxes: true, K8sSandboxImage: "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-1"}
+	cfg := Config{K8sSandboxes: true, K8sSandboxImage: "docker.io/grainai/sandbox-k8s:sha-1"}
 	backend := &fakeImageBackend{image: cfg.K8sSandboxImage}
 	live := (&LiveConfig{sandboxes: backend}).WithSandboxImages(nil, stockSandboxImageFor(cfg), nil)
 
@@ -216,7 +216,7 @@ func TestApplySandboxImageReachesAPodBackend(t *testing.T) {
 	}
 	cfg.CustomSandboxImage = ""
 	live.applySandboxImage(ctx, cfg)
-	if backend.image != "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-1" {
+	if backend.image != "docker.io/grainai/sandbox-k8s:sha-1" {
 		t.Fatalf("pod image = %q after clearing, want the stock one back", backend.image)
 	}
 }
@@ -591,7 +591,7 @@ for ((i=0; i<${#args[@]}; i++)); do
         if [[ "$joined" == *"DisruptionTarget"* ]] || [[ "$joined" == *"lastState.terminated"* ]]; then
           exit 0
         fi
-        printf 'Running|True|ghcr.io/bwsalmon/grain/guest@sha256:6b2003bc1c0cfbb39c62a68421ab9fa9d4fc82183ab8f3775c4892cf54e02203|\n'
+        printf 'Running|True|docker.io/grainai/sandbox@sha256:6b2003bc1c0cfbb39c62a68421ab9fa9d4fc82183ab8f3775c4892cf54e02203|\n'
         exit 0
       elif [ "$sub" = "pods" ]; then
         for f in "$d/pods"/*; do
@@ -658,7 +658,7 @@ jobs:
 		return orchestrator.NewK8sGranuleSandboxes(orchestrator.K8sGranuleConfig{
 			Namespace:    "default",
 			Kubectl:      kubectlPath,
-			Image:        "ghcr.io/bwsalmon/grain/guest:sha-111@sha256:6b2003bc1c0cfbb39c62a68421ab9fa9d4fc82183ab8f3775c4892cf54e02203",
+			Image:        "docker.io/grainai/sandbox:sha-111@sha256:6b2003bc1c0cfbb39c62a68421ab9fa9d4fc82183ab8f3775c4892cf54e02203",
 			ReadyTimeout: 5 * time.Second,
 			Workspace:    ".",
 		})
@@ -686,7 +686,7 @@ jobs:
 		Runs:    runStore1,
 		PlanDir: filepath.Join(dataDir, "state", "ci-plans"),
 		SandboxImage: func() string {
-			return "ghcr.io/bwsalmon/grain/guest:sha-111@sha256:6b2003bc1c0cfbb39c62a68421ab9fa9d4fc82183ab8f3775c4892cf54e02203"
+			return "docker.io/grainai/sandbox:sha-111@sha256:6b2003bc1c0cfbb39c62a68421ab9fa9d4fc82183ab8f3775c4892cf54e02203"
 		},
 	}
 
@@ -745,7 +745,7 @@ jobs:
 		Runs:    runStore2,
 		PlanDir: filepath.Join(dataDir, "state", "ci-plans"),
 		SandboxImage: func() string {
-			return "ghcr.io/bwsalmon/grain/guest:sha-222@sha256:6b2003bc1c0cfbb39c62a68421ab9fa9d4fc82183ab8f3775c4892cf54e02203"
+			return "docker.io/grainai/sandbox:sha-222@sha256:6b2003bc1c0cfbb39c62a68421ab9fa9d4fc82183ab8f3775c4892cf54e02203"
 		},
 	}
 

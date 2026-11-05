@@ -45,7 +45,6 @@ const BUILTIN = {
   nothingNeededAction: { visibility: "more", order: 220 },
   reviewTemplateId: { visibility: "more", order: 230 },
   promptExtension: { visibility: "more", order: 235 },
-  hostd: { visibility: "more", order: 237 },
   sandboxShape: { visibility: "more", order: 240 },
   approved: { visibility: "shown", order: 300 },
   atFront: { visibility: "shown", order: 310 },

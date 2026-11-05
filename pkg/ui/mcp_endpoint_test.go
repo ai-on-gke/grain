@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -423,6 +424,13 @@ func TestControllerMCPFilingContextIsGatedPerSection(t *testing.T) {
 			t.Errorf("a person's filing context has no %q: %s", key, human)
 		}
 	}
+	// What a person may read and that has nothing in it is an empty
+	// list, never null: null would read as "not yours to read".
+	for _, key := range []string{"boards", "customFields", "models", "apiPresets"} {
+		if v, ok := decode(human)[key].([]any); !ok || v == nil {
+			t.Errorf("a person's filing context %s = %v, want an empty list: %s", key, decode(human)[key], human)
+		}
+	}
 
 	writer, isErr := callControllerTool(t, srv, map[string]string{ui.AccessCodeHeader: code, ui.ActingTaskHeader: "40"}, ui.ToolGrainFilingContext, map[string]any{})
 	if isErr {
@@ -432,13 +440,253 @@ func TestControllerMCPFilingContextIsGatedPerSection(t *testing.T) {
 	if repos, _ := got["targetRepos"].([]any); len(repos) != 1 {
 		t.Errorf("tasks:write filing context targetRepos = %v, want acme/widgets", got["targetRepos"])
 	}
-	for _, key := range []string{"capabilities", "apiPresets", "defaultModel", "models", "defaultNetwork", "defaultCapabilities"} {
+	for _, key := range []string{"capabilities", "apiPresets", "defaultModel", "models", "defaultNetwork", "defaultCapabilities", "boards"} {
 		if _, ok := got[key]; ok {
-			t.Errorf("a task holding only api:tasks:write was served %q, which capabilities:read / settings:read gate: %s", key, writer)
+			t.Errorf("a task holding only api:tasks:write was served %q, which capabilities:read / settings:read / boards:read gate: %s", key, writer)
 		}
 	}
-	if boards, ok := got["boards"]; !ok || boards != nil {
-		t.Errorf("a task holding only api:tasks:write was served boards %v, which boards:read gates", boards)
+}
+
+// grain_filing_context names the one repository a deployment works in
+// even when nothing restricts it to that repository: Config.TargetRepos
+// empty means any owner/name is accepted, and before this the tool
+// answered targetRepos: null, so a caller had to read api_config's
+// defaultTarget to learn the name the deployment files into by default.
+func TestControllerMCPFilingContextListsTheDefaultRepo(t *testing.T) {
+	t.Parallel()
+	srv, client, code := newSingleTenantControllerMCPServer(t)
+	if client.Config.DefaultTarget == nil || client.Config.DefaultTarget.String() != "acme/widgets" {
+		t.Fatalf("test client default target = %v, want acme/widgets", client.Config.DefaultTarget)
+	}
+	headers := map[string]string{ui.AccessCodeHeader: code}
+	decode := func(text string) map[string]any {
+		var out map[string]any
+		if err := json.Unmarshal([]byte(text), &out); err != nil {
+			t.Fatalf("decoding filing context: %v (%s)", err, text)
+		}
+		return out
+	}
+
+	text, isErr := callControllerTool(t, srv, headers, ui.ToolGrainFilingContext, map[string]any{})
+	if isErr {
+		t.Fatalf("filing context failed: %s", text)
+	}
+	got := decode(text)
+	if repos, _ := got["targetRepos"].([]any); len(repos) != 1 || repos[0] != "acme/widgets" {
+		t.Errorf("targetRepos = %v (%T), want [acme/widgets] from the deployment's default target", got["targetRepos"], got["targetRepos"])
+	}
+	if got["anyRepoAllowed"] != true {
+		t.Errorf("anyRepoAllowed = %v, want true with no target repos configured", got["anyRepoAllowed"])
+	}
+	if got["defaultRepo"] != "acme/widgets" {
+		t.Errorf("defaultRepo = %v, want acme/widgets", got["defaultRepo"])
+	}
+
+	// Restricting the deployment to a repository makes the list a bound.
+	if _, err := client.AddTargetRepo(context.Background(), "acme/gadgets"); err != nil {
+		t.Fatal(err)
+	}
+	text, isErr = callControllerTool(t, srv, headers, ui.ToolGrainFilingContext, map[string]any{})
+	if isErr {
+		t.Fatalf("filing context failed: %s", text)
+	}
+	got = decode(text)
+	if repos, _ := got["targetRepos"].([]any); len(repos) != 1 || repos[0] != "acme/gadgets" {
+		t.Errorf("targetRepos = %v, want [acme/gadgets] once the deployment targets it", got["targetRepos"])
+	}
+	if got["anyRepoAllowed"] != false {
+		t.Errorf("anyRepoAllowed = %v, want false with a target repo configured", got["anyRepoAllowed"])
+	}
+	// A filter that matches nothing is an empty list, not null.
+	text, isErr = callControllerTool(t, srv, headers, ui.ToolGrainFilingContext, map[string]any{"repo": "other/repo"})
+	if isErr {
+		t.Fatalf("filing context failed: %s", text)
+	}
+	if repos, ok := decode(text)["targetRepos"].([]any); !ok || repos == nil || len(repos) != 0 {
+		t.Errorf("targetRepos filtered to a repo the deployment lacks = %v, want []", decode(text)["targetRepos"])
+	}
+}
+
+// grain_invoke answers a tool name that does not exist with the nearest
+// of the names the caller may use, so a guess costs one call rather than
+// a failure and two explores.
+func TestControllerMCPInvokeSuggestsNearestToolNames(t *testing.T) {
+	t.Parallel()
+	srv, client, code := newSingleTenantControllerMCPServer(t)
+	seedAPITask(t, client, "50", "acme/widgets", "api:ci:read")
+	headers := map[string]string{ui.AccessCodeHeader: code}
+
+	text, isErr := callControllerTool(t, srv, headers, ui.ToolGrainInvoke, map[string]any{"tool": "api_get_logs"})
+	if !isErr || !strings.Contains(text, "did you mean") || !strings.Contains(text, "api_get_log_lines") {
+		t.Errorf("api_get_logs: isError=%v %s, want a suggestion of api_get_log_lines", isErr, text)
+	}
+	text, isErr = callControllerTool(t, srv, headers, ui.ToolGrainInvoke, map[string]any{"tool": "api_lits_tasks"})
+	if !isErr || !strings.Contains(text, "did you mean api_list_tasks") {
+		t.Errorf("api_lits_tasks: isError=%v %s, want api_list_tasks suggested first", isErr, text)
+	}
+	// Suggestions come from what the caller can see: a ci:read task is
+	// not told about task routes it could not call anyway.
+	text, isErr = callControllerTool(t, srv, map[string]string{ui.AccessCodeHeader: code, ui.ActingTaskHeader: "50"}, ui.ToolGrainInvoke, map[string]any{"tool": "api_lits_tasks"})
+	if !isErr || strings.Contains(text, "api_list_tasks") || !strings.Contains(text, "unknown route tool") {
+		t.Errorf("api_lits_tasks as a ci:read task: isError=%v %s, want no suggestion of a tasks route", isErr, text)
+	}
+}
+
+// grain_explore_scope's tool filter finds a route by a word of its
+// description or path, not only of its tool name, and a word that finds
+// nothing is answered with the nearest tool names rather than a dead end.
+func TestControllerMCPExploreMatchesWordsAndSuggests(t *testing.T) {
+	t.Parallel()
+	srv, _, code := newSingleTenantControllerMCPServer(t)
+	headers := map[string]string{ui.AccessCodeHeader: code}
+	tools := func(args map[string]any) ([]string, string, bool) {
+		text, isErr := callControllerTool(t, srv, headers, ui.ToolGrainExploreScope, args)
+		var out struct {
+			Routes []struct {
+				Tool    string `json:"tool"`
+				AliasOf string `json:"aliasOf"`
+			} `json:"routes"`
+		}
+		_ = json.Unmarshal([]byte(text), &out)
+		var names []string
+		for _, rt := range out.Routes {
+			names = append(names, rt.Tool)
+		}
+		return names, text, isErr
+	}
+
+	// A path segment.
+	if names, text, isErr := tools(map[string]any{"tool": "access"}); isErr || !slices.Contains(names, "api_list_access_principals") {
+		t.Errorf("tool=access: isError=%v routes=%v (%s)", isErr, names, text)
+	}
+	// Two words, found across a tool name and its description.
+	if names, text, isErr := tools(map[string]any{"tool": "git connection"}); isErr || !slices.Contains(names, "api_check_deployment_git_connection") {
+		t.Errorf("tool='git connection': isError=%v routes=%v (%s)", isErr, names, text)
+	}
+	// A phrase only the description carries.
+	if names, text, isErr := tools(map[string]any{"tool": "merge queue"}); isErr || !slices.Contains(names, "api_submit") {
+		t.Errorf("tool='merge queue': isError=%v routes=%v (%s)", isErr, names, text)
+	}
+	// A misspelling.
+	if _, text, isErr := tools(map[string]any{"tool": "coment"}); !isErr || !strings.Contains(text, "Did you mean") || !strings.Contains(text, "api_add_comment") {
+		t.Errorf("tool=coment: isError=%v %s, want api_add_comment suggested", isErr, text)
+	}
+	// A near-miss on a group name.
+	if _, text, isErr := tools(map[string]any{"scope": "task"}); !isErr || !strings.Contains(text, "Did you mean tasks") {
+		t.Errorf("scope=task: isError=%v %s, want tasks suggested", isErr, text)
+	}
+}
+
+// grain_explore_scope answers a whole group, and the whole API, in one
+// readable page: schemas when they fit, compact lines when they do not,
+// and an index of tool names for everything at once. Per-field aliases
+// of the repository settings routes are folded out of a listing unless
+// asked for, and found by a search regardless.
+func TestControllerMCPExploreViewsFitOneAnswer(t *testing.T) {
+	t.Parallel()
+	srv, _, code := newSingleTenantControllerMCPServer(t)
+	headers := map[string]string{ui.AccessCodeHeader: code}
+	const cap = 10 << 10
+	explore := func(args map[string]any) (map[string]any, string) {
+		text, isErr := callControllerTool(t, srv, headers, ui.ToolGrainExploreScope, args)
+		if isErr {
+			t.Fatalf("explore %v failed: %s", args, text)
+		}
+		var out map[string]any
+		if err := json.Unmarshal([]byte(text), &out); err != nil {
+			t.Fatalf("explore %v: %v (%d bytes: %.200s)", args, err, len(text), text)
+		}
+		return out, text
+	}
+
+	// Every route, in one call, under the cap.
+	all, text := explore(map[string]any{"scope": "all"})
+	if all["view"] != "index" || len(text) > cap {
+		t.Errorf("explore(all) = view %v in %d bytes, want the index under %d", all["view"], len(text), cap)
+	}
+	index, _ := all["index"].(map[string]any)
+	listed := 0
+	for _, names := range index {
+		listed += len(names.([]any))
+	}
+	authorized := 0
+	for _, rt := range ui.AgentAPIRoutes() {
+		if rt.Scope != "" && rt.Scope != "internal" && rt.AliasOf == "" {
+			authorized++
+		}
+	}
+	if listed != authorized || int(all["routeCount"].(float64)) != authorized {
+		t.Errorf("explore(all) indexes %d tools (routeCount %v), want every one of the %d non-alias routes", listed, all["routeCount"], authorized)
+	}
+	if note, _ := all["aliases"].(string); !strings.Contains(note, "includeAliases") {
+		t.Errorf("explore(all) aliases note = %q, want how to list them", note)
+	}
+	if _, isErr := callControllerTool(t, srv, headers, ui.ToolGrainExploreScope, map[string]any{"view": "index"}); isErr {
+		t.Errorf("explore(view=index) with no scope failed")
+	}
+
+	// A big group drops to compact lines that fit; a route named in
+	// tool still gets its schema.
+	for _, group := range []string{"repos", "tasks", "deployment", "capabilities", "secrets"} {
+		got, text := explore(map[string]any{"scope": group})
+		if len(text) > cap {
+			t.Errorf("explore(%s) = %d bytes in view %v, want under %d", group, len(text), got["view"], cap)
+		}
+		routes, _ := got["routes"].([]any)
+		if len(routes) == 0 {
+			t.Errorf("explore(%s) lists no routes: %.300s", group, text)
+			continue
+		}
+		first, _ := routes[0].(map[string]any)
+		if got["view"] == "compact" {
+			if _, has := first["inputSchema"]; has || first["summary"] == "" || first["path"] == "" {
+				t.Errorf("explore(%s) compact route = %v, want tool, method, path and summary without inputSchema", group, first)
+			}
+			if hint, _ := got["hint"].(string); !strings.Contains(hint, "tool=") {
+				t.Errorf("explore(%s) compact hint = %q, want how to get one route's schema", group, hint)
+			}
+		}
+	}
+	one, _ := explore(map[string]any{"tool": "api_set_repo_settings"})
+	if routes, _ := one["routes"].([]any); len(routes) != 1 || routes[0].(map[string]any)["inputSchema"] == nil {
+		t.Errorf("explore(tool=api_set_repo_settings) = %v, want its one route with inputSchema", one)
+	}
+	full, _ := explore(map[string]any{"scope": "repos", "view": "full"})
+	if full["view"] != "full" || full["routes"].([]any)[0].(map[string]any)["inputSchema"] == nil {
+		t.Errorf("explore(repos, view=full) did not give schemas: %v", full["view"])
+	}
+	if _, isErr := callControllerTool(t, srv, headers, ui.ToolGrainExploreScope, map[string]any{"scope": "repos", "view": "brief"}); !isErr {
+		t.Errorf("explore(view=brief) succeeded, want a refusal naming the views")
+	}
+
+	// Aliases: folded out of the repos listing with a note, listed on
+	// request and marked, and found by a word that names one.
+	names := func(got map[string]any) map[string]string {
+		out := map[string]string{}
+		routes, _ := got["routes"].([]any)
+		for _, r := range routes {
+			rt := r.(map[string]any)
+			alias, _ := rt["aliasOf"].(string)
+			out[rt["tool"].(string)] = alias
+		}
+		return out
+	}
+	repos, _ := explore(map[string]any{"scope": "repos"})
+	if n := names(repos); n["api_set_repo_settings"] != "" || slices.Contains(slices.Collect(maps.Keys(n)), "api_set_repo_ci_mode") {
+		t.Errorf("explore(repos) lists %v, want api_set_repo_settings and no api_set_repo_ci_mode", n)
+	} else if _, has := n["api_set_repo_settings"]; !has {
+		t.Errorf("explore(repos) lists %v, want api_set_repo_settings", n)
+	}
+	if note, _ := repos["aliases"].(string); !strings.Contains(note, "ci-mode") || !strings.Contains(note, "api_set_repo_settings") {
+		t.Errorf("explore(repos) aliases note = %q, want the fields and the route they alias", note)
+	}
+	withAliases, _ := explore(map[string]any{"scope": "repos", "includeAliases": true})
+	if n := names(withAliases); n["api_set_repo_ci_mode"] != "api_set_repo_settings" || n["api_get_repo_ci_mode"] != "api_get_repo_settings" {
+		t.Errorf("explore(repos, includeAliases) lists %v, want api_set_repo_ci_mode marked as an alias of api_set_repo_settings", n)
+	}
+	searched, _ := explore(map[string]any{"tool": "ci_mode"})
+	if n := names(searched); n["api_set_repo_ci_mode"] != "api_set_repo_settings" {
+		t.Errorf("explore(tool=ci_mode) lists %v, want the alias it names", n)
 	}
 }
 

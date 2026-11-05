@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v15"
+const Version = "trust-boundary/v16"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +81,12 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v16 added connection_hostd.go to auth-routes and capability server
+// hostd placement (capability_servers.go, capability_servers_hostd.go,
+// pkg/ui/capability_servers.go) to capabilities-secrets (grain/task-2165):
+// where run: hostd capability servers start and receive their resolved
+// secrets.
 //
 // v15 added the authorization-bearing files the 2026-11-04 nightly
 // security review found unclassified (finding 2, task 2977): the
@@ -197,7 +203,7 @@ var Categories = []Category{
 			// The hostd registry: whether a dialing hostd is local or must
 			// present its owner's identity, token -> hostd/owner, revocation,
 			// and which hostd a run is routed to.
-			"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/taskhostd.go",
+			"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/connection_hostd.go",
 			"pkg/daemon/hostd_registry.go", "pkg/daemon/hostd_route.go",
 			"pkg/daemon/hostexec.go", "pkg/model/hostd.go",
 			// messagesSince's human-only filter is what makes the answer a
@@ -222,6 +228,11 @@ var Categories = []Category{
 		files: []string{
 			// Running a command on grain's own host once a person approves.
 			"pkg/daemon/mcpserver_hostexec.go",
+			// Which grain hostd starts a run: hostd capability server and
+			// receives its resolved secrets, and the Settings routes that
+			// write and probe mcpServers entries.
+			"pkg/daemon/capability_servers.go", "pkg/daemon/capability_servers_hostd.go",
+			"pkg/ui/capability_servers.go",
 			// What a CI sandbox is handed on other repositories, on which
 			// events, and the refusal of untrusted pull-request runs.
 			"pkg/model/repo_access.go", "pkg/daemon/ci.go", "pkg/daemon/ci_policy.go",

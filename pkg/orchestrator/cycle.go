@@ -27,6 +27,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/cifault"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
@@ -61,6 +62,11 @@ type Deps struct {
 	// CapabilityPasses holds the passes minted for running attempts;
 	// nil shares one holder across the process.
 	CapabilityPasses *CapabilityPasses
+	// ApprovalCallback, when set, mints a task-scoped approval callback
+	// URL and bearer token for an attempt's capability grants (host-script
+	// approve: true) and returns a revoke function called when the pass is
+	// released.
+	ApprovalCallback func(taskID string, deadline time.Time) (protocol.ApprovalCallback, func(), error)
 	Store            *model.Store
 	Client           github.Client
 	Sandboxes        Sandboxes
@@ -642,8 +648,7 @@ type AgentChoice struct {
 	// back to the rest of the rotation only when unavailable or paused.
 	PreferFramework string
 	PreferModel     string
-	// TaskID is the task the run is for, whose hostd pin or selector
-	// (model.Store.TaskHostd) routes its host work.
+	// TaskID is the task the run is for.
 	TaskID string
 }
 

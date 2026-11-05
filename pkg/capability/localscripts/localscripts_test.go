@@ -17,14 +17,11 @@ package localscripts
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/localexec"
-	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // stateRepo writes a declaration named name into a new state repository
@@ -45,74 +42,6 @@ func stateRepo(t *testing.T, name, decl string, scripts map[string]string) strin
 		}
 	}
 	return root
-}
-
-type secrets map[string]string
-
-func (s secrets) Resolve(_ context.Context, name string) (string, error) {
-	if v, ok := s[name]; ok {
-		return v, nil
-	}
-	return "", errors.New("no such secret")
-}
-
-func resolve(t *testing.T, reg *model.CapabilityRegistry, cc model.CapabilityContext) model.Resolution {
-	t.Helper()
-	out, err := model.ResolveGrants(context.Background(), reg, cc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(out) != 1 {
-		t.Fatalf("resolutions %+v: want one", out)
-	}
-	return out[0].Resolution
-}
-
-func TestCapabilityGrantedToATaskAPersonAskedFor(t *testing.T) {
-	root := stateRepo(t, "ops", "scripts: {}\n", map[string]string{"hello": "#!/bin/sh\necho hi\n"})
-	reg := model.NewCapabilityRegistry()
-	reg.RegisterDynamic(DynamicProvider(Config{StateDir: root}))
-	task := model.Task{
-		Origin: model.Origin{Reason: model.ReasonDirect},
-		Grants: []model.Grant{{Capability: "local-scripts:ops", Via: model.GrantByDefault}},
-	}
-	if res := resolve(t, reg, model.CapabilityContext{Task: task}); res.Refused {
-		t.Fatalf("resolution %+v: want a directly filed task granted local-scripts:ops", res)
-	}
-	if got := Granted(task); len(got) != 1 || got[0] != "ops" {
-		t.Fatalf("Granted = %v, want [ops]", got)
-	}
-}
-
-func TestCapabilityRefusedToUntrustedRuns(t *testing.T) {
-	root := stateRepo(t, "ops", "scripts: {}\n", map[string]string{"hello": "#!/bin/sh\necho hi\n"})
-	reg := model.NewCapabilityRegistry()
-	reg.RegisterDynamic(DynamicProvider(Config{StateDir: root}))
-	grants := []model.Grant{{Capability: "local-scripts:ops", Via: model.GrantByDefault}}
-	for _, tc := range []struct {
-		name string
-		cc   model.CapabilityContext
-		want string
-	}{
-		{"scheduled run", model.CapabilityContext{Task: model.Task{
-			Origin: model.Origin{Reason: model.ReasonSchedule}, Grants: grants}}, "scheduled run"},
-		{"CI job", model.CapabilityContext{CI: true, Task: model.Task{Grants: grants}}, "CI job"},
-		{"missing declaration", model.CapabilityContext{Task: model.Task{
-			Grants: []model.Grant{{Capability: "local-scripts:nope", Via: model.GrantByDefault}}}}, "no declaration"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			res := resolve(t, reg, tc.cc)
-			if !res.Refused || !strings.Contains(res.Reason, tc.want) {
-				t.Fatalf("resolution %+v: want refused, naming %q", res, tc.want)
-			}
-		})
-	}
-	p, _ := DynamicProvider(Config{StateDir: root})("local-scripts:ops")
-	for _, event := range []string{"push", "pull_request", "schedule", "release", "workflow_dispatch"} {
-		if p.(*Provider).SupportsCIEvent(event) {
-			t.Errorf("SupportsCIEvent(%q) = true: no CI event may hold local scripts", event)
-		}
-	}
 }
 
 func TestNameRefusesPaths(t *testing.T) {
@@ -145,7 +74,7 @@ func TestPathPrefersHostManaged(t *testing.T) {
 	}
 }
 
-func TestCredentialsFileRoundTripAndServing(t *testing.T) {
+func TestOpenDeliversDeclaredSecrets(t *testing.T) {
 	root := stateRepo(t, "ops", `scripts:
   list:
     - path: scripts/show
@@ -155,26 +84,7 @@ func TestCredentialsFileRoundTripAndServing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	creds, err := ResolveCredentials(context.Background(), secrets{"ops-token": "s3cret"}, []string{decl})
-	if err != nil {
-		t.Fatal(err)
-	}
-	path, err := WriteCredentialsFile(t.TempDir(), creds)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
-		t.Fatalf("credentials file mode %v, want 0600", info.Mode().Perm())
-	}
-	back, err := ReadCredentialsFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.Chmod(path, 0o644)
-	if _, err := ReadCredentialsFile(path); err == nil {
-		t.Error("ReadCredentialsFile accepted a world-readable file")
-	}
-	execs, err := Open([]string{decl}, back, nil)
+	execs, err := Open([]string{decl}, Credentials{"ops-token": "s3cret"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

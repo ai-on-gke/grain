@@ -96,3 +96,29 @@ func TestRegistryReadsSendAGoogleTokenOnlyToTheRegistry(t *testing.T) {
 		t.Errorf("the redirected blob read was reached=%v with Authorization %q, want reached with none", ok, got)
 	}
 }
+
+func TestParseOCIImageReferenceDockerHub(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		in       string
+		wantHost string
+		wantRepo string
+		wantRef  string
+	}{
+		{"docker.io/grainai/grain:v3.0.0", "registry-1.docker.io", "grainai/grain", "v3.0.0"},
+		{"docker.io/grainai/sandbox:sha-8e1a209", "registry-1.docker.io", "grainai/sandbox", "sha-8e1a209"},
+		{"index.docker.io/grainai/sandbox-k8s:latest", "registry-1.docker.io", "grainai/sandbox-k8s", "latest"},
+		{"grainai/sandbox:latest", "registry-1.docker.io", "grainai/sandbox", "latest"},
+		{"docker.io/ubuntu:24.04", "registry-1.docker.io", "library/ubuntu", "24.04"},
+		{"ghcr.io/bwsalmon/grain/guest:v2.2.0", "ghcr.io", "bwsalmon/grain/guest", "v2.2.0"},
+	} {
+		host, repo, ref, err := parseOCIImageReference(tc.in)
+		if err != nil {
+			t.Fatalf("parseOCIImageReference(%q) error = %v", tc.in, err)
+		}
+		if host != tc.wantHost || repo != tc.wantRepo || ref != tc.wantRef {
+			t.Errorf("parseOCIImageReference(%q) = (%q, %q, %q), want (%q, %q, %q)",
+				tc.in, host, repo, ref, tc.wantHost, tc.wantRepo, tc.wantRef)
+		}
+	}
+}

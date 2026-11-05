@@ -79,7 +79,7 @@ func TestKubernetesGranuleConfigRefusesWhatItCannotRunWithout(t *testing.T) {
 func TestKubernetesGranuleRefusesUpgradeImage(t *testing.T) {
 	t.Parallel()
 	cfg := kubeGranuleConfig()
-	cfg.UpgradeImage = "ghcr.io/bwsalmon/grain/grain"
+	cfg.UpgradeImage = "docker.io/grainai/grain"
 	err := checkConfig(cfg)
 	if err == nil {
 		t.Fatal("checkConfig accepted -upgrade-image with -k8s-granule-sandboxes")
@@ -164,7 +164,7 @@ func TestKubernetesGranuleImageFlagDefaultsToDefaultSandboxImage(t *testing.T) {
 func TestKubernetesGranuleAcceptsUpgradeImageWithRefFile(t *testing.T) {
 	t.Parallel()
 	cfg := kubeGranuleConfig()
-	cfg.UpgradeImage = "ghcr.io/bwsalmon/grain/grain"
+	cfg.UpgradeImage = "docker.io/grainai/grain"
 	cfg.UpgradeImageRefFile = "/var/lib/grain/data/image-ref"
 	if err := checkConfig(cfg); err != nil {
 		t.Fatalf("checkConfig with -k8s-granule-sandboxes and -upgrade-image-ref-file: %v", err)

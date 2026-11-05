@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -34,11 +35,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/hostscriptcli"
+	"github.com/ai-on-gke/grain/pkg/localexec"
 )
 
 // The host-script server (docs/capabilities.md, "Host scripts") runs
@@ -91,6 +94,7 @@ exit 0
 // Defaults and ceilings of a script's limits.
 const (
 	DefaultHostScriptMaxOutput = 1 << 20
+	DefaultHostScriptMaxStdin  = 10 << 20
 	DefaultHostScriptMaxCalls  = 1000
 	DefaultHostScriptMaxArgs   = 256
 	DefaultHostScriptMaxArgLen = 64 << 10
@@ -136,8 +140,12 @@ type HostScript struct {
 	Env map[string]string
 	// Cwd is where the script runs; empty is the grant's own scratch
 	// directory under the server's data directory.
-	Cwd       string
+	Cwd string
+	// Approve makes each sandbox call wait for a person's approval before
+	// running.
+	Approve   bool
 	MaxOutput int
+	MaxStdin  int
 	MaxCalls  int
 	MaxArgs   int
 	MaxArgLen int
@@ -150,10 +158,12 @@ type HostScriptAudit struct {
 	Script    string    `json:"script"`
 	// Argv is logged verbatim: a caller must never pass a secret as an
 	// argument.
-	Argv       []string `json:"argv"`
-	ExitCode   int      `json:"exit_code"`
-	DurationMS int64    `json:"duration_ms"`
-	Caller     string   `json:"caller"`
+	Argv        []string `json:"argv"`
+	StdinBytes  int      `json:"stdin_bytes,omitempty"`
+	StdinSHA256 string   `json:"stdin_sha256,omitempty"`
+	ExitCode    int      `json:"exit_code"`
+	DurationMS  int64    `json:"duration_ms"`
+	Caller      string   `json:"caller"`
 	// ArgvTruncated says Argv was cut to auditMaxArgs arguments of
 	// auditMaxArgBytes each, so one call cannot write megabytes.
 	ArgvTruncated bool   `json:"argv_truncated,omitempty"`
@@ -173,8 +183,11 @@ type HostScriptConfig struct {
 	// Environ is the server's own environment, which ambient identity
 	// and $env: references come from; os.Environ unless a test says.
 	Environ func() []string
-	Now     func() time.Time
-	Log     *log.Logger
+	// Approver answers approve: true scripts' calls when a mint did not
+	// hand over its own approval callback (in-process tests).
+	Approver localexec.Approver
+	Now      func() time.Time
+	Log      *log.Logger
 }
 
 // hostScriptConfigSchema is the server's configure schema (§4.5).
@@ -202,7 +215,9 @@ var hostScriptConfigSchema = map[string]any{
 						"additionalProperties": map[string]any{"type": "string", "examples": []any{"$env:DEPLOY_TOKEN"}},
 					},
 					"cwd":         map[string]any{"type": "string", "pattern": "^/", "description": "Absolute working directory; defaults to a per-grant scratch directory."},
+					"approve":     map[string]any{"type": "boolean", "description": "Wait for a person to approve each sandbox call before running it."},
 					"max_output":  map[string]any{"type": "integer", "minimum": 1, "description": "Bytes of stdout, and of stderr, returned before a truncation marker."},
+					"max_stdin":   map[string]any{"type": "integer", "minimum": 0, "description": "Bytes of standard input one --stdin call may pass."},
 					"max_calls":   map[string]any{"type": "integer", "minimum": 1, "description": "Calls one grant may make."},
 					"max_args":    map[string]any{"type": "integer", "minimum": 0, "description": "Arguments one call may pass."},
 					"max_arg_len": map[string]any{"type": "integer", "minimum": 1, "description": "Bytes one argument may hold."},
@@ -229,6 +244,7 @@ func parseHostScripts(config map[string]any, environ []string) ([]HostScript, er
 		m, _ := item.(map[string]any)
 		s := HostScript{
 			MaxOutput: DefaultHostScriptMaxOutput,
+			MaxStdin:  DefaultHostScriptMaxStdin,
 			MaxCalls:  DefaultHostScriptMaxCalls,
 			MaxArgs:   DefaultHostScriptMaxArgs,
 			MaxArgLen: DefaultHostScriptMaxArgLen,
@@ -238,6 +254,7 @@ func parseHostScripts(config map[string]any, environ []string) ([]HostScript, er
 		s.Usage, _ = m["usage"].(string)
 		s.Script, _ = m["script"].(string)
 		s.Cwd, _ = m["cwd"].(string)
+		s.Approve, _ = m["approve"].(bool)
 		if !hostScriptName.MatchString(s.Name) {
 			return nil, fmt.Errorf("host-script: scripts[%d]: name %q does not match %s", i, s.Name, hostScriptName)
 		}
@@ -262,9 +279,9 @@ func parseHostScripts(config map[string]any, environ []string) ([]HostScript, er
 			return nil, fmt.Errorf("host-script: %s: timeout must be a whole number of seconds from 1 to 86400", s.Name)
 		}
 		s.Timeout = time.Duration(secs) * time.Second
-		for key, dst := range map[string]*int{"max_output": &s.MaxOutput, "max_calls": &s.MaxCalls, "max_args": &s.MaxArgs, "max_arg_len": &s.MaxArgLen} {
+		for key, dst := range map[string]*int{"max_output": &s.MaxOutput, "max_stdin": &s.MaxStdin, "max_calls": &s.MaxCalls, "max_args": &s.MaxArgs, "max_arg_len": &s.MaxArgLen} {
 			if v, ok := configNumber(m[key]); ok {
-				if v < 0 || v != float64(int(v)) || (v == 0 && key != "max_args") {
+				if v < 0 || v != float64(int(v)) || (v == 0 && key != "max_args" && key != "max_stdin") {
 					return nil, fmt.Errorf("host-script: %s: %s must be a positive whole number", s.Name, key)
 				}
 				*dst = int(v)
@@ -308,18 +325,20 @@ func configNumber(v any) (float64, bool) {
 
 // hostScriptAttempt is one live grant.
 type hostScriptAttempt struct {
-	id      string
-	script  HostScript
-	token   string
-	dir     string // private: the script file and the scratch directory
-	file    string
-	scratch string
+	id       string
+	script   HostScript
+	token    string
+	approver localexec.Approver
+	dir      string // private: the script file and the scratch directory
+	file     string
+	scratch  string
 
 	ctx    context.Context // cancelled at release, killing calls in flight
 	cancel context.CancelFunc
 
-	mu    sync.Mutex
-	calls int
+	mu        sync.Mutex
+	calls     int
+	approving int
 	// refusals counts refused calls, which max_calls does not: past
 	// the same number they are refused unrecorded (record).
 	refusals int
@@ -359,6 +378,7 @@ type hostScripts struct {
 	srv       *Server
 	port      int
 	listening bool
+	seq       atomic.Int64
 
 	mu       sync.Mutex
 	attempts map[string]*hostScriptAttempt
@@ -404,9 +424,13 @@ func (a *hostScriptAttempt) records() []HostScriptAudit {
 	return append([]HostScriptAudit(nil), a.audit...)
 }
 
-func (h *hostScripts) mint(attemptID string, s HostScript) (*protocol.MintResponse, error) {
+func (h *hostScripts) mint(mintCtx context.Context, attemptID string, s HostScript) (*protocol.MintResponse, error) {
 	if !pathSafe(attemptID) {
 		return refusedResponse("attempt_id " + attemptID + " cannot name a directory"), nil
+	}
+	if s.MaxStdin == 0 && s.MaxOutput == 0 && s.MaxCalls == 0 && s.MaxArgLen == 0 {
+		// Direct struct literal in tests: fill in unset defaults.
+		s.MaxStdin = DefaultHostScriptMaxStdin
 	}
 	token, err := randomToken()
 	if err != nil {
@@ -426,8 +450,19 @@ func (h *hostScripts) mint(attemptID string, s HostScript) (*protocol.MintRespon
 		os.RemoveAll(dir)
 		return nil, err
 	}
+	approver := h.cfg.Approver
+	if cb, ok := protocol.ApprovalCallbackFrom(mintCtx); ok {
+		taskID := ""
+		if !strings.Contains(cb.URL, "/local-script-approvals") {
+			taskID = taskOf(attemptID)
+		}
+		approver = localexec.HTTPApprover{BaseURL: cb.URL, TaskID: taskID, Token: cb.Token}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &hostScriptAttempt{id: attemptID, script: s, token: token, dir: dir, file: file, scratch: scratch, ctx: ctx, cancel: cancel, drained: make(chan struct{})}
+	a := &hostScriptAttempt{
+		id: attemptID, script: s, token: token, approver: approver,
+		dir: dir, file: file, scratch: scratch, ctx: ctx, cancel: cancel, drained: make(chan struct{}),
+	}
 	h.mu.Lock()
 	if old := h.attempts[attemptID]; old != nil {
 		old.cancel()
@@ -436,7 +471,7 @@ func (h *hostScripts) mint(attemptID string, s HostScript) (*protocol.MintRespon
 	h.mu.Unlock()
 
 	descriptor, err := hostscriptcli.Marshal(hostscriptcli.Descriptor{
-		Name: s.Name, Description: s.Description, Usage: s.Usage,
+		Name: s.Name, Description: s.Description, Usage: s.Usage, Approve: s.Approve,
 		Port: h.port, AttemptID: attemptID, Token: token,
 	})
 	if err != nil {
@@ -508,9 +543,12 @@ func (h *hostScripts) closeAll() error {
 func hostScriptPrompt(s HostScript) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Host script `%s` is granted to this sandbox: %s\n", s.Name, s.Description)
-	fmt.Fprintf(&b, "Run it with `grain host-script %s [arguments...]`; `grain host-script %s --grain-help` prints its usage, and `grain host-script --list` lists every host script granted here. ", s.Name, s.Name)
-	b.WriteString("It runs outside this sandbox, on grain's side, with the arguments you pass exactly as given -- literally, never through a shell; stdout, stderr and its exit status come back as a local command's would. Stdin is not forwarded. ")
+	fmt.Fprintf(&b, "Run it with `grain host-script %s [arguments...]` (or `grain host-script --stdin %s [arguments...]` to forward standard input); `grain host-script %s --grain-help` prints its usage, and `grain host-script --list` lists every host script granted here. ", s.Name, s.Name, s.Name)
+	b.WriteString("It runs outside this sandbox, on grain's side, with the arguments you pass exactly as given -- literally, never through a shell; stdout, stderr and its exit status come back as a local command's would. Stdin is not forwarded unless `--stdin` is passed before the script name. ")
 	b.WriteString("Every call is logged with its arguments, so never pass a secret as one.\n")
+	if s.Approve {
+		b.WriteString("Each call waits for a person's approval before it runs.\n")
+	}
 	if s.Usage != "" {
 		usage := s.Usage
 		if len(usage) > 2048 {
@@ -620,36 +658,55 @@ func fail(w http.ResponseWriter, status int, reason string) {
 	o.exit(125)
 }
 
-// decodeArgv reads an exec body: one hex-encoded argument per line.
-func decodeArgv(body []byte, s HostScript) ([]string, string) {
-	if len(body) == 0 {
-		return nil, ""
-	}
-	text := string(body)
-	if !strings.HasSuffix(text, "\n") {
-		return nil, "the request body is not newline-terminated argument lines"
-	}
-	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
-	if len(lines) > s.MaxArgs {
-		return nil, fmt.Sprintf("%d arguments exceed %s's limit of %d", len(lines), s.Name, s.MaxArgs)
-	}
-	argv := make([]string, len(lines))
-	for i, l := range lines {
-		b, err := hex.DecodeString(l)
+// decodeExecBody reads an exec body: one hex-encoded argument per line,
+// optionally followed by a StdinSeparator ("---") line and raw stdin bytes.
+func decodeExecBody(body []byte, s HostScript) (argv []string, stdin []byte, hasStdin bool, refusal string) {
+	rest := body
+	for len(rest) > 0 {
+		nl := bytes.IndexByte(rest, '\n')
+		if nl < 0 {
+			return argv, nil, false, "the request body is not newline-terminated argument lines"
+		}
+		line := string(rest[:nl])
+		rest = rest[nl+1:]
+		if line == hostscriptcli.StdinSeparator {
+			if len(rest) > s.MaxStdin {
+				return argv, nil, true, fmt.Sprintf("stdin is %d bytes, over %s's limit of %d", len(rest), s.Name, s.MaxStdin)
+			}
+			return argv, rest, true, ""
+		}
+		if len(argv) >= s.MaxArgs {
+			// Count remaining non-separator lines if possible for a clear message,
+			// or report the limit exceeded.
+			n := len(argv) + 1
+			for len(rest) > 0 {
+				next := bytes.IndexByte(rest, '\n')
+				if next < 0 {
+					break
+				}
+				if string(rest[:next]) == hostscriptcli.StdinSeparator {
+					break
+				}
+				n++
+				rest = rest[next+1:]
+			}
+			return argv, nil, false, fmt.Sprintf("%d arguments exceed %s's limit of %d", n, s.Name, s.MaxArgs)
+		}
+		b, err := hex.DecodeString(line)
 		if err != nil {
-			return nil, fmt.Sprintf("argument %d is not hex-encoded", i+1)
+			return argv, nil, false, fmt.Sprintf("argument %d is not hex-encoded", len(argv)+1)
 		}
 		if len(b) > s.MaxArgLen {
-			return nil, fmt.Sprintf("argument %d is %d bytes, over %s's limit of %d", i+1, len(b), s.Name, s.MaxArgLen)
+			return argv, nil, false, fmt.Sprintf("argument %d is %d bytes, over %s's limit of %d", len(argv)+1, len(b), s.Name, s.MaxArgLen)
 		}
 		for _, c := range b {
 			if c == 0 {
-				return nil, fmt.Sprintf("argument %d holds a NUL byte", i+1)
+				return argv, nil, false, fmt.Sprintf("argument %d holds a NUL byte", len(argv)+1)
 			}
 		}
-		argv[i] = string(b)
+		argv = append(argv, string(b))
 	}
-	return argv, ""
+	return argv, nil, false, ""
 }
 
 // taskOf is the task segment of an attempt_id
@@ -718,7 +775,8 @@ func (h *hostScripts) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s := a.script
-	limit := int64(s.MaxArgs)*(2*int64(s.MaxArgLen)+1) + 1
+	argLimit := int64(s.MaxArgs)*(2*int64(s.MaxArgLen)+1) + int64(len(hostscriptcli.StdinSeparator)) + 2
+	limit := argLimit + int64(s.MaxStdin)
 	body, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
 	if err != nil {
 		fail(w, http.StatusBadRequest, "reading the arguments: "+err.Error())
@@ -727,23 +785,36 @@ func (h *hostScripts) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := h.cfg.Now()
 	rec := HostScriptAudit{Time: start.UTC(), AttemptID: id, Script: s.Name, Caller: "sandbox", ExitCode: 125}
 	if int64(len(body)) > limit {
-		rec.Refused = "the arguments exceed the script's limits"
+		rec.Refused = "the request exceeds the script's argument and stdin limits"
 		h.record(a, rec)
 		fail(w, http.StatusRequestEntityTooLarge, rec.Refused)
 		return
 	}
-	argv, refusal := decodeArgv(body, s)
+	argv, stdin, hasStdin, refusal := decodeExecBody(body, s)
 	rec.Argv = argv
+	if hasStdin && len(stdin) > 0 {
+		sum := sha256.Sum256(stdin)
+		rec.StdinBytes = len(stdin)
+		rec.StdinSHA256 = hex.EncodeToString(sum[:])
+	}
 	if refusal != "" {
 		rec.Refused = refusal
 		h.record(a, rec)
-		fail(w, http.StatusBadRequest, refusal)
+		status := http.StatusBadRequest
+		if hasStdin {
+			status = http.StatusRequestEntityTooLarge
+		}
+		fail(w, status, refusal)
 		return
 	}
 	a.mu.Lock()
-	over := a.calls >= s.MaxCalls
+	over := a.calls+a.approving >= s.MaxCalls
 	if !over {
-		a.calls++
+		if s.Approve {
+			a.approving++
+		} else {
+			a.calls++
+		}
 	}
 	a.mu.Unlock()
 	if over {
@@ -752,13 +823,35 @@ func (h *hostScripts) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusTooManyRequests, rec.Refused)
 		return
 	}
+	if s.Approve {
+		approveErr := h.approve(r.Context(), a, argv, stdin, hasStdin)
+		a.mu.Lock()
+		a.approving--
+		if approveErr == nil {
+			a.calls++
+		}
+		a.mu.Unlock()
+		if approveErr != nil {
+			rec.Refused = approveErr.Error()
+			rec.DurationMS = h.cfg.Now().Sub(start).Milliseconds()
+			h.record(a, rec)
+			fail(w, http.StatusForbidden, rec.Refused)
+			return
+		}
+		// Approval wait does not eat into the script's run duration.
+		start = h.cfg.Now()
+	}
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
 	out := &frameOut{w: w, f: flusher}
-	code, timedOut, truncated := h.run(r.Context(), a, argv, out)
+	var stdinReader io.Reader
+	if hasStdin {
+		stdinReader = bytes.NewReader(stdin)
+	}
+	code, timedOut, truncated := h.run(r.Context(), a, argv, stdinReader, out)
 	rec.ExitCode, rec.TimedOut, rec.Truncated = code, timedOut, truncated
 	rec.DurationMS = h.cfg.Now().Sub(start).Milliseconds()
 	// Recorded before the exit frame goes out, so a caller that has its
@@ -767,9 +860,50 @@ func (h *hostScripts) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	out.exit(code)
 }
 
+func (h *hostScripts) approve(reqCtx context.Context, a *hostScriptAttempt, argv []string, stdin []byte, hasStdin bool) error {
+	s := a.script
+	if a.approver == nil {
+		return fmt.Errorf("%s needs a person's approval, and this grant has no way to ask for it", s.Name)
+	}
+	approveCtx, cancel := context.WithTimeout(reqCtx, s.Timeout)
+	stopOnRelease := context.AfterFunc(a.ctx, cancel)
+	defer func() {
+		stopOnRelease()
+		cancel()
+	}()
+	dl, _ := approveCtx.Deadline()
+	req := localexec.Request{
+		ID:       strconv.FormatInt(h.seq.Add(1), 10),
+		Tool:     "grain host-script " + s.Name,
+		Script:   s.Name,
+		Args:     argv,
+		Deadline: dl,
+	}
+	if req.Args == nil {
+		req.Args = []string{}
+	}
+	if hasStdin {
+		req.SetStdin(stdin)
+	}
+	ok, err := a.approver.Approve(approveCtx, req)
+	switch {
+	case err != nil && a.ctx.Err() != nil:
+		return fmt.Errorf("%s was stopped while waiting for approval: the grant was released", s.Name)
+	case err != nil && reqCtx.Err() != nil:
+		return fmt.Errorf("%s was cancelled while waiting for approval (call %s)", s.Name, req.ID)
+	case err != nil && approveCtx.Err() == context.DeadlineExceeded:
+		return fmt.Errorf("%s was not approved within %s (call %s), so it did not run", s.Name, s.Timeout, req.ID)
+	case err != nil:
+		return fmt.Errorf("%s was not approved (call %s): %w", s.Name, req.ID, err)
+	case !ok:
+		return fmt.Errorf("%s did not run (call %s): %w", s.Name, req.ID, localexec.ErrDenied)
+	}
+	return nil
+}
+
 // run runs the script with argv, streaming its output to out, and
 // returns its exit status: 128+n for a signal, 124 for a timeout.
-func (h *hostScripts) run(reqCtx context.Context, a *hostScriptAttempt, argv []string, out *frameOut) (code int, timedOut, truncated bool) {
+func (h *hostScripts) run(reqCtx context.Context, a *hostScriptAttempt, argv []string, stdin io.Reader, out *frameOut) (code int, timedOut, truncated bool) {
 	s := a.script
 	cwd := s.Cwd
 	if cwd == "" {
@@ -780,7 +914,7 @@ func (h *hostScripts) run(reqCtx context.Context, a *hostScriptAttempt, argv []s
 	cmd := exec.Command("bash", append([]string{a.file}, argv...)...)
 	cmd.Dir = cwd
 	cmd.Env = scriptEnv(h.cfg.Environ(), s, a.id)
-	cmd.Stdin = nil
+	cmd.Stdin = stdin
 	stdout := &cappedStream{out: out, tag: 'o', limit: s.MaxOutput}
 	stderr := &cappedStream{out: out, tag: 'e', limit: s.MaxOutput}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
@@ -985,7 +1119,7 @@ func (h *hostScripts) testScript(ctx context.Context, args map[string]any) ([]by
 		return nil, err
 	}
 	id := hostScriptTestCaller + "-" + suffix[:16]
-	if _, err := h.mint(id, s); err != nil {
+	if _, err := h.mint(ctx, id, s); err != nil {
 		return nil, err
 	}
 	// No release_ reply reads this grant's records back, so they are
@@ -1019,7 +1153,7 @@ func (h *hostScripts) testScript(ctx context.Context, args map[string]any) ([]by
 		return json.Marshal(HostScriptTestResult{ExitCode: 125, Refused: refusal})
 	}
 	out := &frameOut{collect: true}
-	code, timedOut, truncated := h.run(ctx, a, argv, out)
+	code, timedOut, truncated := h.run(ctx, a, argv, nil, out)
 	rec.ExitCode, rec.TimedOut, rec.Truncated = code, timedOut, truncated
 	rec.DurationMS = h.cfg.Now().Sub(start).Milliseconds()
 	h.record(a, rec)
@@ -1063,14 +1197,15 @@ func newHostScriptMethod(h *hostScripts, scripts []HostScript) (*protocol.Method
 				"script": map[string]any{"type": "string", "enum": names, "description": "The configured script to install."},
 			},
 		},
-		Now: h.cfg.Now,
-		Mint: func(_ context.Context, attemptID string, _ time.Time, args map[string]any) (*protocol.MintResponse, error) {
+		Now:            h.cfg.Now,
+		AcceptApproval: true,
+		Mint: func(ctx context.Context, attemptID string, _ time.Time, args map[string]any) (*protocol.MintResponse, error) {
 			name, _ := args["script"].(string)
 			s, ok := byName[name]
 			if !ok {
 				return refusedResponse("unknown script " + name), nil
 			}
-			return h.mint(attemptID, s)
+			return h.mint(ctx, attemptID, s)
 		},
 		Release: func(_ context.Context, attemptID string) error {
 			h.release(attemptID)
@@ -1115,8 +1250,15 @@ func NewHostScript(cfg HostScriptConfig) (*Server, error) {
 		return nil, fmt.Errorf("host-script: data directory: %w", err)
 	}
 	h := &hostScripts{cfg: cfg, attempts: map[string]*hostScriptAttempt{}, retired: map[string]*hostScriptAttempt{}}
+	initial := make([]HostScript, len(cfg.Scripts))
+	copy(initial, cfg.Scripts)
+	for i := range initial {
+		if initial[i].MaxStdin <= 0 {
+			initial[i].MaxStdin = DefaultHostScriptMaxStdin
+		}
+	}
 	var methods []*protocol.Method
-	m, err := newHostScriptMethod(h, cfg.Scripts)
+	m, err := newHostScriptMethod(h, initial)
 	if err != nil {
 		return nil, err
 	}

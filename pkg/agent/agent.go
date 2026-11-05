@@ -285,18 +285,7 @@ type RunConfig struct {
 	GrainSecretsDir string
 	// GrainStateDir is the controller's synchronized state checkout, passed only with deployment-health.
 	GrainStateDir string
-	// LocalScripts is the local-scripts declarations this run is served
-	// (pkg/capability/localscripts, docs/local-scripts.md), each one
-	// only after the daemon has checked the run's task holds its
-	// local-scripts:<name> capability. The forked mcpserver snapshots
-	// each and serves its scripts as local_<name> tools.
-	LocalScripts []LocalScripts
-	// LocalScriptsEnvFile is a 0600 file (localscripts.WriteCredentialsFile)
-	// of the secrets those declarations' scripts are delivered, named to
-	// the forked mcpserver as -local-scripts-env-file, never the values in
-	// argv, for SandboxEnvFile's reason. "" when they name none.
-	LocalScriptsEnvFile string
-	Tools               []mcp.Tool
+	Tools         []mcp.Tool
 	// MaxTurns caps the number of model-response/tool-call round trips
 	// before Run gives up and returns an error, guarding against a run
 	// that never stops asking for tools. Zero means the framework's own
@@ -708,18 +697,6 @@ func GrantArgs(cfg RunConfig) []string {
 			args = append(args, "-grain-state-dir", cfg.GrainStateDir)
 		}
 	}
-	// Local scripts travel here too, rather than in a function of their
-	// own, so that every Framework that forks the mcpserver -- the custom
-	// backends' included -- passes them the moment it passes its grants.
-	for _, l := range cfg.LocalScripts {
-		if l.Name == "" || l.Path == "" {
-			continue
-		}
-		args = append(args, "-local-scripts", l.Name+"="+l.Path)
-	}
-	if len(cfg.LocalScripts) > 0 && cfg.LocalScriptsEnvFile != "" {
-		args = append(args, "-local-scripts-env-file", cfg.LocalScriptsEnvFile)
-	}
 	// And the tool budget, which is what a judgement task's grants mean
 	// for the process serving its tools, so it travels with them.
 	if cfg.ToolBudget {
@@ -729,13 +706,6 @@ func GrantArgs(cfg RunConfig) []string {
 		}
 	}
 	return args
-}
-
-// LocalScripts is one local-scripts declaration a run is served: the
-// name its local-scripts:<name> capability grants, and its file on the
-// node host.
-type LocalScripts struct {
-	Name, Path string
 }
 
 // ProposeRepoArgs is the "-propose-repo <owner/name>" set a Framework

@@ -545,7 +545,8 @@ type externalReview struct {
 	// the review carries model.LinkTakeoverReviewOf back to it, and
 	// files no grain/review check run of its own, since the shepherd
 	// keeps the one check for the whole gate.
-	shepherdID string
+	shepherdID   string
+	shepherdTask *model.Task
 	// security files the security review (model.SecurityReviewTemplateID)
 	// rather than a code review.
 	security bool
@@ -712,6 +713,9 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 		Links:      links,
 		CreatedAt:  &now,
 		OrderKey:   orderKey,
+	}
+	if r.shepherdTask != nil {
+		model.InheritContext(&task, *r.shepherdTask)
 	}
 	if err := deps.Store.PutTask(ctx, task); err != nil {
 		return "", fmt.Errorf("filing external PR review task %s: %w", task.ID, err)

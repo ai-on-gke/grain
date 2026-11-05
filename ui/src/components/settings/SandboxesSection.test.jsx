@@ -32,8 +32,8 @@ describe("SandboxesSection", () => {
         ],
         k8sNamespace: "grain",
         k8sNamespaceDefault: "grain",
-        k8sSandboxImageDefault: "ghcr.io/bwsalmon/grain/k8s-sandbox:latest",
-        k8sGranuleImageDefault: "ghcr.io/bwsalmon/grain/guest:latest",
+        k8sSandboxImageDefault: "docker.io/grainai/sandbox-k8s:latest",
+        k8sGranuleImageDefault: "docker.io/grainai/sandbox:latest",
         k8sWorkspaceDefault: "/home/debian",
         k8sNodeSelector: ["pool=kvm"],
         k8sPrivileged: false,
@@ -155,10 +155,9 @@ describe("SandboxesSection", () => {
         k8sNamespace: "",
         k8sNamespaceDefault: "grain",
         k8sSandboxImage: "",
-        k8sSandboxImageDefault:
-          "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-8e1a209",
+        k8sSandboxImageDefault: "docker.io/grainai/sandbox-k8s:sha-8e1a209",
         k8sGranuleImage: "",
-        k8sGranuleImageDefault: "ghcr.io/bwsalmon/grain/guest:sha-8e1a209",
+        k8sGranuleImageDefault: "docker.io/grainai/sandbox:sha-8e1a209",
         k8sWorkspace: "",
         k8sWorkspaceDefault: "/home/agent",
         k8sDeployment: "",
@@ -205,10 +204,10 @@ describe("SandboxesSection", () => {
 
     expect(nsInput).toHaveValue("grain");
     expect(sandboxImgInput).toHaveValue(
-      "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-8e1a209",
+      "docker.io/grainai/sandbox-k8s:sha-8e1a209",
     );
     expect(granuleImgInput).toHaveValue(
-      "ghcr.io/bwsalmon/grain/guest:sha-8e1a209",
+      "docker.io/grainai/sandbox:sha-8e1a209",
     );
     expect(workspaceInput).toHaveValue("/home/agent");
     expect(deploymentInput).toHaveValue("grain");
@@ -264,7 +263,7 @@ describe("SandboxesSection", () => {
         sandboxBackend: "kubernetes",
         sandboxBackends: ["kubernetes"],
         k8sSandboxImageWarning:
-          'Sandbox pod image "ghcr.io/bwsalmon/grain/k8s-sandbox:missing" did not resolve: image manifest not found',
+          'Sandbox pod image "docker.io/grainai/sandbox-k8s:missing" did not resolve: image manifest not found',
       },
       saveChoice: vi.fn(),
       onTextBlur: () => () => {},
@@ -279,7 +278,7 @@ describe("SandboxesSection", () => {
     const alert = screen.getByTestId("k8s-image-warning");
     expect(alert).toBeInTheDocument();
     expect(alert).toHaveTextContent(
-      'Sandbox pod image "ghcr.io/bwsalmon/grain/k8s-sandbox:missing" did not resolve',
+      'Sandbox pod image "docker.io/grainai/sandbox-k8s:missing" did not resolve',
     );
   });
 

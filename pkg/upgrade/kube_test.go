@@ -22,6 +22,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/installtrack"
 )
 
 func kubeUpgrader(t *testing.T, kubectl string, healthCheck []string) *Upgrader {
@@ -277,14 +279,16 @@ func TestKubePin(t *testing.T) {
 		ref, imageID, want string
 	}{
 		{"example/grain:main", "docker-pullable://docker.io/example/grain@sha256:abc", "example/grain:main@sha256:abc"},
-		{"ghcr.io/bwsalmon/grain/grain:main", "ghcr.io/bwsalmon/grain/grain@sha256:abc", "ghcr.io/bwsalmon/grain/grain:main@sha256:abc"},
+		{"docker.io/grainai/grain:main", "docker.io/grainai/grain@sha256:abc", "docker.io/grainai/grain:main@sha256:abc"},
+		{"docker.io/grainai/grain:main", "docker-pullable://grainai/grain@sha256:abc", "docker.io/grainai/grain:main@sha256:abc"},
+		{"docker.io/grainai/grain:main", "index.docker.io/grainai/grain@sha256:abc", "docker.io/grainai/grain:main@sha256:abc"},
 		{"grain:main", "docker.io/library/grain@sha256:abc", "grain:main@sha256:abc"},
 		{"localhost:5000/grain:main", "localhost:5000/grain@sha256:abc", "localhost:5000/grain:main@sha256:abc"},
 		// An image's own ID, not a registry digest.
 		{"example/grain:main", "sha256:abc", ""},
 		{"example/grain:main", "docker://sha256:abc", ""},
 		// Some other repository's digest says nothing about this one.
-		{"ghcr.io/bwsalmon/grain/grain:main", "docker.io/bwsalmon/grain/grain@sha256:abc", ""},
+		{"ghcr.io/example/grain:main", "docker.io/example/grain@sha256:abc", ""},
 		{"example/grain:main", "", ""},
 		{"example/grain:main", "example/grain@sha256:", ""},
 	} {
@@ -670,5 +674,19 @@ func TestKubeUpgradeDoesNotRollOutWhenImageHasNotChanged(t *testing.T) {
 	}
 	if !held || !released {
 		t.Errorf("hold: held=%v released=%v, want the queue hold taken and released since no rollout starts", held, released)
+	}
+}
+
+func TestEffectiveKubeRepositoryTransitionsLegacyOSS(t *testing.T) {
+	t.Setenv(installtrack.OSSImageRepoEnv, "")
+	u := New(Config{
+		Kube: &KubeConfig{
+			Repository: installtrack.LegacyGrainRepository,
+			Track:      installtrack.TrackOSS,
+			Deployment: "grain",
+		},
+	})
+	if got := u.EffectiveKubeRepository(); got != installtrack.DefaultOSSGrainRepository {
+		t.Fatalf("EffectiveKubeRepository() = %q, want %q", got, installtrack.DefaultOSSGrainRepository)
 	}
 }

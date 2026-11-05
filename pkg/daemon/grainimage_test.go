@@ -60,7 +60,7 @@ func TestAnUnstampedBuildStillNamesARealImage(t *testing.T) {
 // an operator has pointed that somewhere else.
 func TestDeployedImagesNameTheBuildAndTheCheckImage(t *testing.T) {
 	previous := DefaultGrainImage
-	DefaultGrainImage = "ghcr.io/bwsalmon/grain/grain:sha-7781f61"
+	DefaultGrainImage = "docker.io/grainai/grain:sha-7781f61"
 	t.Cleanup(func() { DefaultGrainImage = previous })
 
 	for _, tc := range []struct {

@@ -240,9 +240,11 @@ var knownBoundaryFiles = []string{
 	"pkg/daemon/run.go", "pkg/daemon/sandboxnet.go",
 	"pkg/ui/server.go", "pkg/ui/auth.go", "pkg/orchestrator/securityhold.go",
 	"pkg/gitproxy/", "pkg/secrets/", "pkg/ci/", "pkg/workflows/", "deploy/kubernetes/",
-	"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/taskhostd.go",
+	"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/connection_hostd.go",
 	"pkg/daemon/hostd_registry.go", "pkg/daemon/hostd_route.go", "pkg/daemon/hostexec.go",
 	"pkg/model/hostd.go", "pkg/ui/messages.go", "pkg/daemon/mcpserver_hostexec.go",
+	"pkg/daemon/capability_servers.go", "pkg/daemon/capability_servers_hostd.go",
+	"pkg/ui/capability_servers.go",
 	"pkg/model/repo_access.go", "pkg/daemon/ci.go", "pkg/daemon/ci_policy.go",
 	"pkg/daemon/ci_capability_pass.go", "pkg/daemon/capabilities.go",
 }
@@ -292,20 +294,23 @@ func TestEveryKnownBoundaryFileIsClassified(t *testing.T) {
 // of which v10 held, so a change to who may do what there merged itself.
 func TestHostdAndCIRepoAccessGatesAreClassified(t *testing.T) {
 	cases := map[string]string{
-		"pkg/ui/hostd_connect.go":          "auth-routes",
-		"pkg/ui/hostds.go":                 "auth-routes",
-		"pkg/ui/taskhostd.go":              "auth-routes",
-		"pkg/daemon/hostd_registry.go":     "auth-routes",
-		"pkg/daemon/hostd_route.go":        "auth-routes",
-		"pkg/daemon/hostexec.go":           "auth-routes",
-		"pkg/model/hostd.go":               "auth-routes",
-		"pkg/ui/messages.go":               "auth-routes",
-		"pkg/daemon/mcpserver_hostexec.go": "capabilities-secrets",
-		"pkg/model/repo_access.go":         "capabilities-secrets",
-		"pkg/daemon/ci.go":                 "capabilities-secrets",
-		"pkg/daemon/ci_policy.go":          "capabilities-secrets",
-		"pkg/daemon/ci_capability_pass.go": "capabilities-secrets",
-		"pkg/daemon/capabilities.go":       "capabilities-secrets",
+		"pkg/ui/hostd_connect.go":                "auth-routes",
+		"pkg/ui/hostds.go":                       "auth-routes",
+		"pkg/ui/connection_hostd.go":             "auth-routes",
+		"pkg/daemon/hostd_registry.go":           "auth-routes",
+		"pkg/daemon/hostd_route.go":              "auth-routes",
+		"pkg/daemon/hostexec.go":                 "auth-routes",
+		"pkg/model/hostd.go":                     "auth-routes",
+		"pkg/ui/messages.go":                     "auth-routes",
+		"pkg/daemon/mcpserver_hostexec.go":       "capabilities-secrets",
+		"pkg/daemon/capability_servers.go":       "capabilities-secrets",
+		"pkg/daemon/capability_servers_hostd.go": "capabilities-secrets",
+		"pkg/ui/capability_servers.go":           "capabilities-secrets",
+		"pkg/model/repo_access.go":               "capabilities-secrets",
+		"pkg/daemon/ci.go":                       "capabilities-secrets",
+		"pkg/daemon/ci_policy.go":                "capabilities-secrets",
+		"pkg/daemon/ci_capability_pass.go":       "capabilities-secrets",
+		"pkg/daemon/capabilities.go":             "capabilities-secrets",
 	}
 	for p, want := range cases {
 		got := categoryIDs(Classify([]string{p}))
@@ -322,8 +327,8 @@ func TestHostdAndCIRepoAccessGatesAreClassified(t *testing.T) {
 			"RepoAccessAdmitsCIEvent", "RepoReadTarget", "RepoWriteTarget", "IsGitPushAnyRefGrant",
 			"HostdForToken", "CreateHostd", "RotateHostdToken", "NormalizeHostdOwner",
 		},
-		"pkg/ui":     {"hostdConnectIdentity", "messagesSince"},
-		"pkg/daemon": {"registryResolver", "SelectHostd", "grantRepoAccess", "ciRepoAccessAdmitted", "CheckCIJobRepoAccessPolicy"},
+		"pkg/ui":     {"hostdConnectIdentity", "normalizeConnectionHostd", "normalizeServerHostd", "messagesSince"},
+		"pkg/daemon": {"registryResolver", "SelectHostd", "placedOn", "grantRepoAccess", "ciRepoAccessAdmitted", "CheckCIJobRepoAccessPolicy"},
 	}
 	for dir, names := range gates {
 		defined := funcFiles(t, dir)

@@ -39,7 +39,7 @@ package orchestrator_test
 // rather than part of the real-vm job:
 //
 //	GRAIN_BACKENDS_WALKTHROUGH=1 \
-//	  GRAIN_BACKENDS_WALKTHROUGH_IMAGE=ghcr.io/bwsalmon/grain/guest:main \
+//	  GRAIN_BACKENDS_WALKTHROUGH_IMAGE=docker.io/grainai/sandbox:main \
 //	  go test ./pkg/orchestrator -run TestGranuleBackendsWalkthroughOnRealVMs -v -timeout 30m
 
 import (

@@ -158,8 +158,8 @@ These apply to the `kubernetes` and `kubernetes-granule` backends. Every field e
 | --- | --- | --- | --- | --- |
 | Kubernetes namespace | `k8sNamespace` | `k8s_namespace` | `grain`. A DNS-1123 label (≤ 63 characters: lowercase letters, digits, `-`). | restart |
 | Kubectl binary | `k8sKubectl` | `k8s_kubectl` | `kubectl` | restart |
-| Kubernetes sandbox pod image | `k8sSandboxImage` | `k8s_sandbox_image` | `ghcr.io/bwsalmon/grain/k8s-sandbox:latest` (or the build stamp) | restart |
-| Kubernetes Granule VM pod image | `k8sGranuleImage` | `k8s_granule_image` | `ghcr.io/bwsalmon/grain/guest:latest` (or the build stamp) | restart |
+| Kubernetes sandbox pod image | `k8sSandboxImage` | `k8s_sandbox_image` | `docker.io/grainai/sandbox-k8s:latest` (or the build stamp) | restart |
+| Kubernetes Granule VM pod image | `k8sGranuleImage` | `k8s_granule_image` | `docker.io/grainai/sandbox:latest` (or the build stamp) | restart |
 | Kubernetes workspace directory | `k8sWorkspace` | `k8s_workspace` | `/home/agent` (`kubernetes`) or `/home/debian` (`kubernetes-granule`) | restart |
 | Kubernetes git & model proxy host | `k8sGitProxyHost` | `k8s_git_proxy_host` | Empty, or a host name or IP | restart |
 | Kubernetes sandbox Service | `k8sSandboxService` | `k8s_sandbox_service` | A Kubernetes object name | restart |

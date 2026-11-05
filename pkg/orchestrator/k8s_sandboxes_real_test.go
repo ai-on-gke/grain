@@ -163,7 +163,7 @@ func realKubectl(t *testing.T, args ...string) string {
 // (a first Acquire whose pod came back "Missing", a tool call into a pod
 // that had gone, an isolated sandbox that never came up), and whether it
 // landed at all came down to whether several hundred megabytes of
-// ghcr.io/bwsalmon/grain/grain:main finished pulling before the suite
+// docker.io/grainai/grain:main finished pulling before the suite
 // finished running -- which is why this job was intermittent rather than
 // simply red.
 //

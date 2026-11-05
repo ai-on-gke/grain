@@ -183,7 +183,7 @@ type upgradeScheduledResponse struct {
 // source one answering with a commit and no ref.
 type upgradeRunningResponse struct {
 	// Image is the fully qualified reference the deployment's service
-	// runs -- "ghcr.io/bwsalmon/grain/grain:main". Image path only.
+	// runs -- "docker.io/grainai/grain:main". Image path only.
 	Image string `json:"image,omitempty"`
 	// Release, Commit, CommittedAt and Modified are the installed binary's build
 	// stamp on the source path, in the same shape and for the same
@@ -480,12 +480,12 @@ func (s *Server) upgradeInterrupts(r *http.Request) []CLIUpgradeNote {
 	if s.tasks.Config.CLIRuns == nil {
 		return nil
 	}
-	settings, err := s.tasks.cliRunSettings(r.Context())
+	resolved, err := s.tasks.resolvedCLIRuns(r.Context())
 	if err != nil {
 		log.Printf("ui: reading which agent CLIs an upgrade interrupts: %v", err)
 		return nil
 	}
-	return cliUpgradeNotes(settings.Resolved)
+	return cliUpgradeNotes(resolved)
 }
 
 // cliUpgradeNotes is the CLIs in resolved (daemon.ResolveCLIRuns'
@@ -621,7 +621,7 @@ type startUpgradeRequest struct {
 	Branch string `json:"branch"`
 	// Image, when set, is the image to pull instead of the branch's tag
 	// in the configured repository: a repository the branch's tag is
-	// pulled from ("ghcr.io/bwsalmon/grain/grain"), or a full
+	// pulled from ("docker.io/grainai/grain"), or a full
 	// `repo:tag` or `repo@sha256:...` reference. It must be in a
 	// repository this deployment may upgrade onto
 	// (installtrack.ValidateTargetRepository); a tag in it names the

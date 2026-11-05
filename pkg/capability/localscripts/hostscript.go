@@ -100,10 +100,8 @@ func HostScriptName(decl, file string) (string, error) {
 }
 
 // ConvertToHostScripts reads the declaration name from cfg and returns
-// it as host-script configuration. It refuses, rather than weakens, a
-// declaration host-script cannot serve as it is served today: one with
-// a script that waits for a person's approval (approve: true), which
-// host-script has no step for.
+// it as host-script configuration, preserving each script's approve: true
+// setting on the converted host-script entry.
 func ConvertToHostScripts(cfg Config, name string) (HostScripts, error) {
 	path, err := cfg.Path(name)
 	if err != nil {
@@ -120,10 +118,6 @@ func ConvertToHostScripts(cfg Config, name string) (HostScripts, error) {
 	out := HostScripts{Declaration: name, Env: map[string]string{}}
 	boundBy := map[string]string{} // server variable -> secret
 	for _, s := range snap {
-		if s.Approve {
-			return HostScripts{}, fmt.Errorf("local-scripts %s: script %s waits for a person to approve each call (approve: true), "+
-				"which host-script cannot do; it stays a local-scripts declaration", name, s.Name)
-		}
 		scriptName, err := HostScriptName(name, s.Name)
 		if err != nil {
 			return HostScripts{}, err
@@ -149,6 +143,9 @@ func ConvertToHostScripts(cfg Config, name string) (HostScripts, error) {
 			// local-scripts never limited a run's calls; host-script's
 			// default would.
 			"max_calls": math.MaxInt32,
+		}
+		if s.Approve {
+			entry["approve"] = true
 		}
 		if len(s.Env) > 0 {
 			env := map[string]any{}

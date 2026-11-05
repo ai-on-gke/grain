@@ -34,10 +34,10 @@ import (
 // already done it leaves alone, so a declaration the state repository
 // gains later is picked up by the next start, and the scripts an earlier
 // start converted are converted again from the declarations as they are
-// now, so one removed or given approve: true stops running through
-// host-script. A declaration that cannot
-// move -- one with an approve: true script -- stays a local-scripts
-// declaration, served as before, and the reason is logged.
+// now, so one removed or edited in the declaration updates on host-script.
+// A declaration that cannot move -- such as one that cannot be read or
+// whose target name collides with a hand-configured script -- is skipped
+// and the reason is logged.
 func migrateLocalScripts(ctx context.Context, store *model.Store, local localscripts.Config) (restore func(), err error) {
 	// No early return when local finds no declaration: scripts an
 	// earlier start converted are still pruned (MigrateToHostScript).

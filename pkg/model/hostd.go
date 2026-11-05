@@ -148,7 +148,7 @@ func ParseHostdLabels(s string) (map[string]string, error) {
 	for _, part := range strings.Split(s, ",") {
 		k, v, ok := strings.Cut(strings.TrimSpace(part), "=")
 		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
-		if !ok || k == "" || strings.ContainsAny(k+v, ",= ") {
+		if !ok || k == "" || v == "" || strings.ContainsAny(k+v, ",= \t\n\r") {
 			return nil, fmt.Errorf("hostd label %q must be key=value", part)
 		}
 		out[k] = v
@@ -159,7 +159,7 @@ func ParseHostdLabels(s string) (map[string]string, error) {
 // ValidateHostdLabels refuses labels encodeHostdLabels cannot round-trip.
 func ValidateHostdLabels(labels map[string]string) error {
 	for k, v := range labels {
-		if k == "" || strings.ContainsAny(k+v, ",= ") {
+		if k == "" || v == "" || strings.ContainsAny(k+v, ",= \t\n\r") {
 			return fmt.Errorf("hostd label %q=%q: keys and values may not be empty or hold ',', '=' or spaces", k, v)
 		}
 	}
