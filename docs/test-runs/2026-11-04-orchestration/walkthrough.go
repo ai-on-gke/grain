@@ -69,7 +69,7 @@ func main() {
 	mode := flag.String("mode", "fast", "which walkthrough items to run: fast (2,3,4,5), item1, item2, item3, item4, item5, serve, all")
 	outDir := flag.String("out", "docs/test-runs/2026-11-04-orchestration", "directory for JSON and log artifacts")
 	grainBin := flag.String("grain-bin", "/home/debian/bin/grain", "path to built grain binary")
-	serveAddr := flag.String("serve-addr", "127.0.0.1:4391", "listen address in -mode=serve")
+	serveAddr := flag.String("serve-addr", "127.0.0.1:4291", "listen address in -mode=serve")
 	accessCode := flag.String("access-code", "walkthrough-3075-secret-code", "UI access code in -mode=serve")
 	flag.Parse()
 

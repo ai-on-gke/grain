@@ -1813,8 +1813,10 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			prefix := "refs/" + unescapeRef(m[3])
 			out := make([]map[string]any, 0)
 			if s.BareRepo != "" {
-				raw, err := exec.Command("git", "--git-dir", s.BareRepo,
-					"for-each-ref", "--format=%(refname) %(objectname) %(objecttype)", "refs/").Output()
+				cmd := exec.Command("git", "--git-dir", s.BareRepo,
+					"for-each-ref", "--format=%(refname) %(objectname) %(objecttype)", "refs/")
+				cmd.Env = os.Environ()
+				raw, err := cmd.Output()
 				if err == nil {
 					for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
 						fields := strings.Fields(line)
@@ -1838,11 +1840,15 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			if s.BareRepo == "" {
 				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
 			}
-			typOut, err := exec.Command("git", "--git-dir", s.BareRepo, "cat-file", "-t", sha).Output()
+			typCmd := exec.Command("git", "--git-dir", s.BareRepo, "cat-file", "-t", "--end-of-options", sha)
+			typCmd.Env = os.Environ()
+			typOut, err := typCmd.Output()
 			if err != nil || strings.TrimSpace(string(typOut)) != "tag" {
 				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
 			}
-			raw, err := exec.Command("git", "--git-dir", s.BareRepo, "cat-file", "tag", sha).Output()
+			tagCmd := exec.Command("git", "--git-dir", s.BareRepo, "cat-file", "tag", "--end-of-options", sha)
+			tagCmd.Env = os.Environ()
+			raw, err := tagCmd.Output()
 			if err != nil {
 				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
 			}
