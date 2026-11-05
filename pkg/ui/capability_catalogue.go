@@ -106,6 +106,19 @@ func (c *Client) markCatalogueRefusals(ctx context.Context, checks []GrantCheck,
 	return checks, nil
 }
 
+// taskGrantContext is the GrantContext an existing task's grant edit or
+// access request is judged in, with its template's name resolved.
+func (c *Client) taskGrantContext(ctx context.Context, task model.Task, grants []string) model.GrantContext {
+	gc := model.TaskGrantContext(task)
+	gc.Grants = grants
+	if gc.TemplateID != "" {
+		if tmpl, err := c.Store.GetTemplate(ctx, gc.TemplateID); err == nil && tmpl != nil {
+			gc.TemplateName = tmpl.Name
+		}
+	}
+	return gc
+}
+
 // catalogueEditRefusal judges one grant being attached to an existing
 // task: 400 for one the catalogue refuses the task, 403 for an agent
 // attaching one the catalogue says is a person's decision.
@@ -114,14 +127,7 @@ func (c *Client) catalogueEditRefusal(ctx context.Context, task model.Task, gran
 	if err != nil || cat == nil {
 		return err
 	}
-	gc := model.TaskGrantContext(task)
-	gc.Grants = []string{grant}
-	if gc.TemplateID != "" {
-		if tmpl, err := c.Store.GetTemplate(ctx, gc.TemplateID); err == nil && tmpl != nil {
-			gc.TemplateName = tmpl.Name
-		}
-	}
-	verdict, err := cat.ValidateGrants(gc)
+	verdict, err := cat.ValidateGrants(c.taskGrantContext(ctx, task, []string{grant}))
 	if err != nil {
 		return validationErrorf("%v", err)
 	}

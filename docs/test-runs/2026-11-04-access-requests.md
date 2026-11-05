@@ -4,7 +4,7 @@ Walkthrough execution of `docs/test-plans/2026-11-04.md` §6 ("Agent access requ
 
 ## Summary of Findings and Fixes
 
-Four bugs were uncovered during the walkthrough, reproduced deterministically (`docs/test-runs/2026-11-04-access-requests/repro-before.txt` → `repro-after.txt`), fixed in-branch, and covered with Go, Vitest, and Playwright regression tests:
+Six bugs were uncovered during the walkthrough, reproduced deterministically (`docs/test-runs/2026-11-04-access-requests/repro-before.txt` → `repro-after.txt`), fixed in-branch, and covered with Go, Vitest, and Playwright regression tests:
 
 1. **Second `request_access` after a partial grant hid the earlier answer (`pkg/ui/task_access_request.go`, `ui/src/components/detail/PendingAccess.jsx`).**
    - **Root cause:** `CheckAccessRequest` rejects items a task already holds (`"task <id> holds this already"`). After a person granted 2 of 3 items in Request 1, a follow-up `request_access` asking again for the declined 3rd item had a different request key (`1 item` vs `3 items`), so `pendingAccessFor`'s exact `d.Request.Key() == req.Key()` check left `pendingAccess.earlier` empty (`null`). In addition, `PendingAccess.jsx` styled `access-earlier` as `"info"` for partial grants and did not name the declined items.
@@ -26,11 +26,21 @@ Four bugs were uncovered during the walkthrough, reproduced deterministically (`
    - **Fix:** Updated `PendingAccess.jsx` to read `const who = d.by?.id || d.by?.ID;`.
    - **Regression tests:** `PendingAccess.test.jsx` (using Go's serialized `{ Kind: "human", ID: "alice", Source: "access-code" }`) and `ui/e2e/access-request-walkthrough.spec.js`.
 
+5. **Nil-pointer panic in `salvagePushedBranch` when `deps.GitHub == nil` (`pkg/orchestrator/finish.go`).**
+   - **Root cause:** `salvagePushedBranch` checked `if task.Target == nil` without `|| client == nil`, so finishing a run on a task with a target repository when `deps.GitHub == nil` (as in `consolerestserver` or git-only deployments) dereferenced a nil `github.Client` (`client.BranchExists(...)`) and panicked.
+   - **Fix:** Guarded `if task.Target == nil || client == nil { return false, nil }` in `salvagePushedBranch`.
+   - **Regression test:** `TestProcessResultTargetRepoWithNilGitHubClientCompletesCleanly` (`pkg/orchestrator/access_request_park_test.go`).
+
+6. **`CheckAccessRequest` evaluated template- and session-restricted capabilities without the task's template or session context (`pkg/ui/task_access_request.go`, `pkg/ui/capability_catalogue.go`).**
+   - **Root cause:** `checkAccessItem` called `markCatalogueRefusals` directly, which passes `templateID = ""` and `Kind = CatalogueKindTask`, falsely refusing template-restricted capabilities on tasks filed from that template and session-only capabilities on console-session tasks during `request_access` pre-park validation.
+   - **Fix:** Extracted `(c *Client) taskGrantContext(ctx, task)` in `pkg/ui/capability_catalogue.go` (populating `Kind: CatalogueKindSession` for console sessions and resolving the task's `TemplateID` / `TemplateName`) and used it in both `catalogueEditRefusal` and `checkAccessItem`.
+   - **Regression test:** `TestCheckAccessRequestHonorsTemplateAndSessionCatalogueContext` (`pkg/ui/task_access_request_test.go`).
+
 ---
 
 ## Commit and Environment
 
-- **Base commit tested:** `3e1d55bf` (`origin/main`, fast-forwarded onto `grain/049f1e09/task-3072-walkthrough-request-access`).
+- **Base commit tested:** `8722e9b8` (`origin/main`, merged onto `grain/049f1e09/task-3072-walkthrough-request-access`).
 - **Build:**
   - `cd ui && npm run build` (Vite production bundle into `pkg/ui/static`).
   - `go build -o /home/debian/bin/grain ./cmd/grain` and Playwright `e2e/global-setup.js` (`-tags grain_e2e`).
@@ -49,9 +59,9 @@ Four bugs were uncovered during the walkthrough, reproduced deterministically (`
 Executed in `ui/e2e/access-request-walkthrough.spec.js` over `consolerestserver` + `grain mcpserver`:
 
 1. **In-turn validation refusal & recovery (Turn 1):**
-   - Configured `targetRepos: ["acme/widgets", "acme/docs", "acme/lib"]` and `work-ownership: {"default": "on"}`.
+   - Configured `PUT /api/deployment` `targetRepos: ["acme/widgets", "acme/docs", "acme/lib"]` and `work-ownership: {"default": "on"}`.
    - Filed task on `acme/widgets` with `networkAccess: "none"`.
-   - Turn 1 called `request_access` first with `{ kind: "grant", capability: "nonexistent-cap" }`: `POST /api/tasks/{id}/access-request/check` refused it live (`isError: true`, `"This request cannot be relayed as it stands: requests[0] (nonexistent-cap): nonexistent-cap is not a registered capability... Fix it and call request_access again."`).
+   - Turn 1 called `request_access` first with `{ kind: "read", repo: "acme/unknown-repo" }` and `{ kind: "grant", capability: "nonexistent-cap" }`: `POST /api/tasks/{id}/access-request/check` refused both items live (`isError: true`, `"This request cannot be relayed as it stands..."` naming both `acme/unknown-repo` and `nonexistent-cap`).
    - In the same turn, the run called `request_access` with 3 valid items:
      - `0`: `{ kind: "read", repo: "acme/docs" }`
      - `1`: `{ kind: "network", access: "open" }`
@@ -87,8 +97,8 @@ Verified across `ui/e2e/access-request-walkthrough.spec.js`, `pkg/ui/task_access
 ### 3. Interactive Chat Card and Persistent Session Turn Loop
 
 - **Interactive chat (`ui/e2e/access-request-walkthrough.spec.js`):**
-  - Filed `interactive: true` task on `acme/widgets`; Turn 1 called `request_access` for `read acme/lib` + `grant api:tasks:admin`.
-  - Confirmed the parked interactive task surfaced in `/inbox` with `"Asked for access"` (not hidden as `"Waiting for your message"`), rendered `<PendingAccess>` inside `<TaskChat>` with zero horizontal overflow at `1440×900` and `390×844`, and resumed holding `reads: ["acme/lib"]` after `Grant 1 of 2`.
+  - Filed `interactive: true` task on `acme/widgets`; Turn 1 called `request_access` for `read acme/lib` + `grant api:memory` + `grant api:tasks:admin`.
+  - Confirmed the parked interactive task surfaced in `/inbox` with `"Asked for access"` (not hidden as `"Waiting for your message"`), rendered `<PendingAccess>` inside `<TaskChat>` with zero horizontal overflow at `1440×900` and `390×844`, and resumed holding `reads: ["acme/lib"]` and `grants: ["api:memory"]` (without `api:tasks:admin`) after `Grant 2 of 3`.
 - **Persistent session turn loop (`pkg/orchestrator/access_request_park_test.go`):**
   - Added `TestPersistentSessionTurnLoopStopsOnAccessRequest`:
     1. `in-process continuation loop` (`WaitForSessionReply: true`, `SessionSandboxIdleTTL: 5s`): verified `continueSessionTurns` broke immediately (`< 2s`, 1 agent call) on `request_access` with `StateAwaitingReply` and `PendingAccessRequest` set, rather than waiting out `SessionSandboxIdleTTL` or spinning.
@@ -96,9 +106,9 @@ Verified across `ui/e2e/access-request-walkthrough.spec.js`, `pkg/ui/task_access
 
 ### 4. Console Session Reach
 
-Verified via Go integration tests (`go test -race ./pkg/ui -run TestConsoleSession` and `go test -race ./pkg/orchestrator -run TestConsoleSession`):
+Verified via Go integration tests (`TestConsoleSessionReadsEveryWorkingRepoAndHoldsCIRead`, `TestConsoleSessionReadsAllOptOutSticks`, `TestConsoleSessionCIReadReachesExistingSessionsAndRemovalSticks`, `TestConsoleSessionCIReadUntickedInThePaneStaysOffAcrossRestart` in `pkg/orchestrator/consolesession_reach_test.go`, `TestSessionRunCannotTurnOnReadsAll` in `pkg/ui/agent_api_test.go`, and `pkg/sandboxcli/actions_ci_test.go`):
 
-- Console sessions default to `readsAll: true` and `model.ConsoleSessionCIReadGrant` (`api:ci:read`), automatically syncing newly added working repositories (`repo_config` / `ConsoleSessionAutoReads`) onto the Director session's open task on the next cycle so `grain ci list` can read their CI runs, dropping retired repositories (`work_ownership: off`) on the next cycle, preserving `readsAll: false` across cycles when opted out, and refusing `403` when an agent holding `api:sessions:write` (without deployment-wide read access) attempts to set `readsAll: true` (`readsAll`, `reads_all`, or `ReadsAll`).
+- Console sessions default to `readsAll: true` and `model.ConsoleSessionCIReadGrant` (`https://grain.dev/capabilities/grain#ci={}` / `api:ci-read`), automatically syncing newly added working repositories (`repo_config` / `ConsoleSessionAutoReads`, e.g. adding `acme/infra` with `work_ownership: on`) onto the session's open task on the next cycle (`Reads: [acme/docs acme/infra]`) so `grain ci list --repo <owner/name>` can read their CI runs, dropping retired repositories (`work_ownership: off`, e.g. retiring `acme/widgets`) on the next cycle, preserving `readsAll: false` across cycles when opted out (keeping only explicitly declared `reads` even when new repos are added), and refusing `403 Forbidden` (`"cannot turn on readsAll"`) when an agent holding `api:sessions:write` (without deployment-wide read access) attempts to set `readsAll: true` (`readsAll`, `reads_all`, or `ReadsAll`).
 
 ### 5. UI Screenshots and Layout Checks
 

@@ -45,6 +45,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -273,6 +274,7 @@ func (s *scriptedSession) runScriptedTurn(ctx context.Context, cfg agent.RunConf
 	_ = cmd.Wait()
 
 	var reads, writes []string
+	grants := append([]string(nil), cfg.Grants...)
 	var netAccess string
 	if tk, err := s.store.GetTask(ctx, cfg.TaskID); err == nil && tk != nil {
 		for _, r := range tk.Reads {
@@ -280,6 +282,11 @@ func (s *scriptedSession) runScriptedTurn(ctx context.Context, cfg agent.RunConf
 		}
 		for _, w := range tk.Writes {
 			writes = append(writes, w.Repo.String())
+		}
+		for _, g := range tk.Grants {
+			if !slices.Contains(grants, g.Capability) {
+				grants = append(grants, g.Capability)
+			}
 		}
 		netAccess = string(tk.NetworkAccess)
 	}
@@ -296,7 +303,7 @@ func (s *scriptedSession) runScriptedTurn(ctx context.Context, cfg agent.RunConf
 		Prompt:        cfg.Prompt,
 		Reads:         reads,
 		Writes:        writes,
-		Grants:        append([]string(nil), cfg.Grants...),
+		Grants:        grants,
 		NetworkAccess: netAccess,
 		ToolCalls:     recorded,
 	})

@@ -252,3 +252,27 @@ func TestPersistentSessionTurnLoopStopsOnAccessRequest(t *testing.T) {
 		}
 	})
 }
+
+// TestProcessResultTargetRepoWithNilGitHubClientCompletesCleanly guards
+// salvagePushedBranch when deps.GitHub is nil (e.g., git-only or
+// consolerestserver runs): finishing a repo-targeted task with comment_on_issue
+// must mark the task completed rather than panicking on client.BranchExists.
+func TestProcessResultTargetRepoWithNilGitHubClientCompletesCleanly(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	task := filedTask(t, ctx, store, "t-nil-gh", model.RepoRef{Owner: "acme", Name: "widgets"})
+	result := toolResult(agent.ToolCall{
+		Name:      "comment_on_issue",
+		Arguments: map[string]any{"comment": "Completed verification without GitHub API."},
+	})
+	if err := orchestrator.ProcessResult(ctx, store, nil, task, result, "t-nil-gh-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult with nil GitHub client: %v", err)
+	}
+	obs, err := store.GetObservation(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obs == nil || obs.CompletedAt == nil {
+		t.Fatalf("Observation = %+v, want CompletedAt set", obs)
+	}
+}

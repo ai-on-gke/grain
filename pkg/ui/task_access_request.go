@@ -153,17 +153,17 @@ func (c *Client) checkAccessItem(ctx context.Context, task model.Task, it model.
 			return fail(fmt.Errorf("%s", check.Error))
 		}
 		view.Grant = check.Recorded
-		if marked, err := c.markCatalogueRefusals(ctx, checks, task.Target); err == nil && marked[0].CatalogueRefusal != "" {
-			return fail(fmt.Errorf("%s", marked[0].CatalogueRefusal))
+		if ciOnlyCapability(view.Grant) {
+			return fail(fmt.Errorf("%s", model.CIOnlyRefusal(view.Grant)))
+		}
+		if cat, err := c.capabilityCatalogue(ctx); err == nil && cat != nil {
+			verdict, err := cat.ValidateGrants(c.taskGrantContext(ctx, task, []string{view.Grant}))
+			if err != nil {
+				return fail(err)
+			}
+			view.RequiresPerson = len(verdict.RequiresPerson) > 0
 		}
 		view.Dangerous = model.IsDangerousGrant(view.Grant)
-		if cat, err := c.capabilityCatalogue(ctx); err == nil && cat != nil {
-			gc := model.TaskGrantContext(task)
-			gc.Grants = []string{view.Grant}
-			if verdict, err := cat.ValidateGrants(gc); err == nil && len(verdict.RequiresPerson) > 0 {
-				view.RequiresPerson = true
-			}
-		}
 		view.Held = slices.ContainsFunc(task.Grants, func(g model.Grant) bool { return g.Capability == view.Grant })
 		return view
 	}

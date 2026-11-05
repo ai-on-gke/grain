@@ -314,3 +314,68 @@ func TestSecondAccessRequestAfterPartialGrantShowsEarlierAnswer(t *testing.T) {
 		t.Fatalf("unrelated request Earlier = %+v, want none", detail.PendingAccess)
 	}
 }
+
+func TestCheckAccessRequestHonorsTemplateAndSessionCatalogueContext(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	now := time.Now().UTC()
+	if err := store.PutTemplate(ctx, model.Template{
+		ID: "tmpl-release", Name: "release-audit", Title: "Audit", Body: "Check", CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		cfg.CapabilityPolicy.Catalogue = &model.CapabilityCatalogue{
+			InProcess: map[string]model.CatalogueInProcess{
+				"read-issues": {
+					Restrictions: &model.CapabilityRestrictions{
+						Templates:      model.Patterns{"release-audit"},
+						RequiresPerson: true,
+					},
+				},
+				"self-debug": {
+					Restrictions: &model.CapabilityRestrictions{
+						Kinds: model.Patterns{model.CatalogueKindSession},
+					},
+				},
+			},
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	adhoc := create(t, c, ctx)
+	if _, err := c.CheckAccessRequest(ctx, adhoc.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: "read-issues"}}); err == nil {
+		t.Fatal("ad-hoc task admitted template-restricted capability in CheckAccessRequest")
+	}
+
+	fromTemplate := model.Task{
+		ID: "tmpl-task", Title: "Audit", Body: "Check",
+		Target: &model.RepoRef{Owner: "acme", Name: "widgets"},
+		TemplateID: "tmpl-release", ApprovedAt: &now, CreatedAt: &now,
+	}
+	if err := store.PutTask(ctx, fromTemplate); err != nil {
+		t.Fatal(err)
+	}
+	views, err := c.CheckAccessRequest(ctx, fromTemplate.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: "read-issues"}})
+	if err != nil {
+		t.Fatalf("template task CheckAccessRequest: %v", err)
+	}
+	if len(views) != 1 || !views[0].RequiresPerson {
+		t.Fatalf("views = %+v, want RequiresPerson=true on template-matched capability", views)
+	}
+
+	sessionTask := model.Task{
+		ID: "sess-task", Title: "Console", Body: "Session",
+		Interactive: true, Tags: []string{model.ConsoleSessionTag("ops")},
+		Origin: model.Origin{Reason: model.ReasonConsoleSession},
+		ApprovedAt: &now, CreatedAt: &now,
+	}
+	if err := store.PutTask(ctx, sessionTask); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.CheckAccessRequest(ctx, sessionTask.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: "self-debug"}}); err != nil {
+		t.Fatalf("session task CheckAccessRequest for session-restricted capability: %v", err)
+	}
+}

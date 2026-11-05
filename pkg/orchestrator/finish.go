@@ -829,7 +829,7 @@ func retireStaleBranch(ctx context.Context, store *model.Store, task model.Task,
 func salvagePushedBranch(ctx context.Context, store *model.Store, client github.Client,
 	task model.Task, now time.Time) (bool, error) {
 
-	if task.Target == nil {
+	if task.Target == nil || client == nil {
 		return false, nil
 	}
 	if _, inPlace := reviewsInPlace(task); inPlace {
