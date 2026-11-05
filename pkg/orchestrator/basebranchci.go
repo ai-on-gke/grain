@@ -2128,6 +2128,7 @@ func fileBaseBranchRepair(ctx context.Context, deps Deps, row model.BaseBranchCI
 	// but it is that task's work being fixed with that task's access.
 	if merged != nil {
 		model.InheritRequester(&repair, *merged)
+		model.InheritContext(&repair, *merged)
 	}
 	if err := deps.Store.PutTask(ctx, repair); err != nil {
 		return fmt.Errorf("orchestrator: filing the repair of %s %s: %w", repo, row.Branch, err)

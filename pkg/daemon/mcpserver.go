@@ -1727,7 +1727,7 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		DeclineAutoMerge: p.AutoMerge != nil && !*p.AutoMerge,
 		TemplateID:       p.TemplateID, Fields: p.TemplateFields, AtFront: p.AtFront,
 		DependsOn: deps, CustomFields: fields, Supersedes: supersedes,
-		Reads: p.Reads, Writes: writes, ReviewTemplateID: p.ReviewTemplateID,
+		Reads: p.Reads, Designs: p.Designs, Writes: writes, ReviewTemplateID: p.ReviewTemplateID,
 		ProposedBy: f.parent, ProposalKey: key, Capabilities: caps,
 		Model: p.Model, AgentBackendID: p.Model, AgentFramework: p.AgentFramework,
 		SandboxCPUs: p.SandboxCPUs, SandboxMemoryMB: p.SandboxMemoryMB,

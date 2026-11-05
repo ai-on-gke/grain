@@ -1580,13 +1580,13 @@ type UpdateSettingsRequest struct {
 	// list turns auto-granting off.
 	AutoGrantContextReads *[]string             `json:"autoGrantContextReads"`
 	AgentBackends         *[]model.AgentBackend `json:"agentBackends"`
-	DefaultModel        *string                 `json:"defaultModel"`
-	PromptExtension     *string                 `json:"promptExtension"`
-	RepairTemplateID    *string                 `json:"repairTemplateID"`
-	TaskBranchTemplate  *string                 `json:"taskBranchTemplate"`
-	DeploymentID        *string                 `json:"deploymentId"`
-	DefaultCapabilities *[]string               `json:"defaultCapabilities"`
-	SettingsLocked      *bool                   `json:"settingsLocked"`
+	DefaultModel          *string               `json:"defaultModel"`
+	PromptExtension       *string               `json:"promptExtension"`
+	RepairTemplateID      *string               `json:"repairTemplateID"`
+	TaskBranchTemplate    *string               `json:"taskBranchTemplate"`
+	DeploymentID          *string               `json:"deploymentId"`
+	DefaultCapabilities   *[]string             `json:"defaultCapabilities"`
+	SettingsLocked        *bool                 `json:"settingsLocked"`
 }
 
 func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {

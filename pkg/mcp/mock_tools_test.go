@@ -255,6 +255,36 @@ func TestProposeTaskParsesReadsWritesReviewTemplateID(t *testing.T) {
 	}
 }
 
+func TestProposeTaskParsesAndValidatesDesigns(t *testing.T) {
+	sink := &MockSink{}
+	tool := toolNamed(t, NewMockTools(sink, nil), "propose_task")
+
+	bad := tool.Handler(context.Background(), map[string]any{
+		"title":   "[PLC] child",
+		"body":    "implement slice",
+		"designs": []any{"../escape"},
+	})
+	if !bad.IsError {
+		t.Fatalf("expected error on escaping design path, got %+v", bad)
+	}
+	if len(sink.ProposedTasks()) != 0 {
+		t.Fatalf("invalid proposal should not be recorded")
+	}
+
+	ok := tool.Handler(context.Background(), map[string]any{
+		"title":   "[PLC] child",
+		"body":    "implement slice",
+		"designs": []any{"design/plc/042@abcdef1", "acme/specs:plc/042@0123456789abcdef0123456789abcdef01234567"},
+	})
+	if ok.IsError {
+		t.Fatalf("unexpected error: %s", ok.Text)
+	}
+	got := sink.ProposedTasks()
+	if len(got) != 1 || len(got[0].Designs) != 2 {
+		t.Fatalf("ProposedTasks = %+v, want 1 task with 2 designs", got)
+	}
+}
+
 // argumentDescription digs one argument's own description out of a
 // tool's input schema -- where an agent reads it, and where these tools
 // put everything they say about a single argument.
