@@ -229,14 +229,22 @@ func EffectiveK8sGitProxyHost(cfg Config) string {
 	return cfg.ContainerGitProxyHost
 }
 
+func isUnpinnedDefaultK8sSandboxImage(ref string) bool {
+	return ref == model.DefaultK8sSandboxImage || ref == model.LegacyDefaultK8sSandboxImage
+}
+
+func isUnpinnedDefaultSandboxImage(ref string) bool {
+	return ref == model.DefaultSandboxImage || ref == model.LegacyDefaultSandboxImage
+}
+
 // EffectiveK8sSandboxImage resolves the container image for kubernetes sandbox
 // pods, falling back to DefaultK8sSandboxImage (or the version-pinned default)
 // when unset.
 func EffectiveK8sSandboxImage(cfg Config) string {
-	if cfg.K8sSandboxImage != "" && (cfg.K8sSandboxImage != model.DefaultK8sSandboxImage || DefaultK8sSandboxImage == model.DefaultK8sSandboxImage) {
+	if cfg.K8sSandboxImage != "" && (!isUnpinnedDefaultK8sSandboxImage(cfg.K8sSandboxImage) || (DefaultK8sSandboxImage == model.DefaultK8sSandboxImage && cfg.K8sSandboxImage != model.LegacyDefaultK8sSandboxImage)) {
 		return cfg.K8sSandboxImage
 	}
-	if cfg.K8sImage != "" && (cfg.K8sImage != model.DefaultK8sSandboxImage || DefaultK8sSandboxImage == model.DefaultK8sSandboxImage) {
+	if cfg.K8sImage != "" && (!isUnpinnedDefaultK8sSandboxImage(cfg.K8sImage) || (DefaultK8sSandboxImage == model.DefaultK8sSandboxImage && cfg.K8sImage != model.LegacyDefaultK8sSandboxImage)) {
 		return cfg.K8sImage
 	}
 	if DefaultK8sSandboxImage != model.DefaultK8sSandboxImage {
@@ -289,7 +297,7 @@ func effectiveK8sGranuleImage(cfg Config, mirror func(base, mirrorRepo string) s
 		// own arrives here with the stamp in K8sGranuleImage: that is
 		// the image to mirror, not a pin that opts out of the mirror.
 		pinned := cfg.K8sGranuleImage
-		if pinned == DefaultSandboxImage || pinned == model.DefaultSandboxImage || pinned == base {
+		if pinned == DefaultSandboxImage || isUnpinnedDefaultSandboxImage(pinned) || pinned == base {
 			pinned = ""
 		}
 		if pinned != "" && !isMirroredGuestRef(pinned, mirrorRepo) {
@@ -297,7 +305,7 @@ func effectiveK8sGranuleImage(cfg Config, mirror func(base, mirrorRepo string) s
 		}
 		return mirror(base, mirrorRepo)
 	}
-	if cfg.K8sGranuleImage != "" && (cfg.K8sGranuleImage != model.DefaultSandboxImage || DefaultSandboxImage == model.DefaultSandboxImage) {
+	if cfg.K8sGranuleImage != "" && (!isUnpinnedDefaultSandboxImage(cfg.K8sGranuleImage) || (DefaultSandboxImage == model.DefaultSandboxImage && cfg.K8sGranuleImage != model.LegacyDefaultSandboxImage)) {
 		return cfg.K8sGranuleImage
 	}
 	return base

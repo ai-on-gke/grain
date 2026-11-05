@@ -21,9 +21,9 @@ import { test, expect } from "./fixtures.js";
 
 // Core grain's own repository, the one repository core knows to offer
 // (pkg/installtrack's KnownSuccessorRepositories).
-const GHCR = "ghcr.io/bwsalmon/grain/grain";
+const DOCKERHUB = "docker.io/grainai/grain";
 
-test.use({ demoArgs: [`-upgrade-image=${GHCR}`] });
+test.use({ demoArgs: [`-upgrade-image=${DOCKERHUB}`] });
 
 test.describe("the upgrade image chooser", () => {
   for (const [name, viewport] of [
@@ -42,7 +42,7 @@ test.describe("the upgrade image chooser", () => {
       // The ref an upgrade installs; the line may also name the release
       // repository it loads from in a code element of its own.
       const willPull = page.locator(".upgrade-image-ref code.upgrade-will-ref");
-      await expect(willPull).toHaveText(`${GHCR}:main`);
+      await expect(willPull).toHaveText(`${DOCKERHUB}:main`);
 
       // Same column as the branch field, below it.
       // The outlined boxes, not the inputs: an Autocomplete pads its own

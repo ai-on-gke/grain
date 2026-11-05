@@ -38,7 +38,7 @@ import (
 const (
 	channelBegin = "# --- the image channel (GRAIN_CHANNEL)"
 	channelEnd   = "# --- end of the image channel"
-	channelImage = "ghcr.io/bwsalmon/grain/grain"
+	channelImage = "docker.io/grainai/grain"
 )
 
 // channelShell runs script after sourcing setup.sh's channel functions,
@@ -346,19 +346,20 @@ func TestSetupResolvesRepositoryForInstallTrackAndShiftsCleanly(t *testing.T) {
 		return out, image, tag, track, ok
 	}
 
-	// Deployment on ghcr.io/bwsalmon/grain/grain:candidate stays on candidate.
+	// Deployment on ghcr.io/bwsalmon/grain/grain:candidate shifts to Docker Hub and stays on candidate.
 	legacyCandidate := refFile(t, "ghcr.io/bwsalmon/grain/grain:candidate")
 	out, image, tag, track, ok := resolveRepoAndTag(nil, legacyCandidate, legacyCandidate)
 	if !ok {
 		t.Fatalf("resolve failed:\n%s", out)
 	}
-	if track != "oss" || image != "ghcr.io/bwsalmon/grain/grain" || tag != "candidate" {
-		t.Errorf("default repository resolution settled on track=%q image=%q tag=%q, want oss, ghcr.io/bwsalmon/grain/grain, candidate:\n%s",
+	if track != "oss" || image != "docker.io/grainai/grain" || tag != "candidate" {
+		t.Errorf("default repository resolution settled on track=%q image=%q tag=%q, want oss, docker.io/grainai/grain, candidate:\n%s",
 			track, image, tag, out)
 	}
+	contains(t, out, "kept across repository shift (ghcr.io/bwsalmon/grain/grain -> docker.io/grainai/grain)")
 
 	// Deployment on an allowed edition repository shifting back onto core
-	// ghcr.io/bwsalmon/grain/grain keeps its channel.
+	// docker.io/grainai/grain keeps its channel.
 	editionCandidate := refFile(t, installtracktest.Repository+":candidate")
 	out, image, tag, track, ok = resolveRepoAndTag([]string{
 		"GRAIN_ALLOWED_IMAGE_REPOS=" + installtracktest.Repository + "," + installtracktest.MovedRepository,
@@ -366,11 +367,11 @@ func TestSetupResolvesRepositoryForInstallTrackAndShiftsCleanly(t *testing.T) {
 	if !ok {
 		t.Fatalf("resolve failed:\n%s", out)
 	}
-	if track != "oss" || image != "ghcr.io/bwsalmon/grain/grain" || tag != "candidate" {
-		t.Errorf("edition repository shift settled on track=%q image=%q tag=%q, want oss, ghcr.io/bwsalmon/grain/grain, candidate:\n%s",
+	if track != "oss" || image != "docker.io/grainai/grain" || tag != "candidate" {
+		t.Errorf("edition repository shift settled on track=%q image=%q tag=%q, want oss, docker.io/grainai/grain, candidate:\n%s",
 			track, image, tag, out)
 	}
-	contains(t, out, "kept across repository shift ("+installtracktest.Repository+" -> ghcr.io/bwsalmon/grain/grain)")
+	contains(t, out, "kept across repository shift ("+installtracktest.Repository+" -> docker.io/grainai/grain)")
 
 	// Pre-v2.0 deployment shifting to a configured new OSS repository.
 	out, image, tag, track, ok = resolveRepoAndTag([]string{

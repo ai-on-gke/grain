@@ -171,7 +171,7 @@ func TestStateRepoSectionSaysTheRecordIsNotExported(t *testing.T) {
 // `command not found` before it finds the image (grain/task-277).
 func TestStateRepoSectionNamesACheckTheSandboxCanRun(t *testing.T) {
 	t.Parallel()
-	image := "ghcr.io/bwsalmon/grain/grain:sha-abc123"
+	image := "docker.io/grainai/grain:sha-abc123"
 	got := stateRepoSection(checkout{Dir: CheckoutDir, Root: "/home/debian", StateRepo: true}, image)
 	want := "docker run --rm -v /home/debian/work:/state:ro " + image + " state check /state"
 	if !strings.Contains(got, want) {
@@ -215,7 +215,7 @@ func TestConfigCheckImageReadsTheLiveAnswer(t *testing.T) {
 	if got := cfg.checkImage(); got != staterepo.DefaultCheckImage {
 		t.Fatalf("a Config with no CheckImage answered %q, want %q", got, staterepo.DefaultCheckImage)
 	}
-	current := "ghcr.io/bwsalmon/grain/grain:sha-abc123"
+	current := "docker.io/grainai/grain:sha-abc123"
 	cfg.CheckImage = func() string { return current }
 	if got := cfg.checkImage(); got != current {
 		t.Fatalf("checkImage() = %q, want %q", got, current)

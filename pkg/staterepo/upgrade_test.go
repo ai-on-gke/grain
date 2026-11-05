@@ -49,12 +49,12 @@ func message(t *testing.T, dir string) string {
 }
 
 const (
-	buildBefore = "ghcr.io/bwsalmon/grain/grain:sha-0000000 (built from 000000000000)"
-	buildAfter  = "ghcr.io/bwsalmon/grain/grain:sha-abc1234 (built from abc123456789)"
+	buildBefore = "docker.io/grainai/grain:sha-0000000 (built from 000000000000)"
+	buildAfter  = "docker.io/grainai/grain:sha-abc1234 (built from abc123456789)"
 	// The image the check runs is held still across these tests unless a
 	// test is about it, so that the export is the only commit a sync
 	// makes and HEAD is the commit being read.
-	pinnedImage = "ghcr.io/bwsalmon/grain/grain:sha-0000000"
+	pinnedImage = "docker.io/grainai/grain:sha-0000000"
 )
 
 func TestTheFirstExportByAnUpgradedBuildNamesBothBuilds(t *testing.T) {
@@ -201,7 +201,7 @@ func TestTheCheckRepointCommitNamesTheImageItLeftAndTheOneItRuns(t *testing.T) {
 	store, db := openRealDB(t)
 	remote := bareRemote(t)
 	dir := filepath.Join(t.TempDir(), "state")
-	const was = "ghcr.io/bwsalmon/grain/grain:sha-0000000"
+	const was = "docker.io/grainai/grain:sha-0000000"
 	repo, err := staterepo.Open(ctx, staterepo.Config{Dir: dir, Remote: remote, CheckImage: was})
 	if err != nil {
 		t.Fatalf("opening: %v", err)
@@ -209,7 +209,7 @@ func TestTheCheckRepointCommitNamesTheImageItLeftAndTheOneItRuns(t *testing.T) {
 	if err := staterepo.Load(ctx, repo, db, model.SchemaVersion); err != nil {
 		t.Fatalf("loading: %v", err)
 	}
-	const runs = "ghcr.io/bwsalmon/grain/grain:sha-abc1234"
+	const runs = "docker.io/grainai/grain:sha-abc1234"
 	upgraded, err := staterepo.Open(ctx, staterepo.Config{Dir: dir, Remote: remote, CheckImage: runs})
 	if err != nil {
 		t.Fatalf("reopening: %v", err)

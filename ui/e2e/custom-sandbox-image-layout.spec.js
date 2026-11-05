@@ -41,7 +41,7 @@ for (const [name, viewport] of [
 
     const dockerfile = page.getByTestId("sandbox-image-dockerfile");
     await expect(dockerfile).toContainText(
-      /FROM \S+(guest-base|k8s-sandbox-base)/,
+      /FROM \S+(sandbox-base|sandbox-k8s-base)/,
     );
     await expect(page.getByTestId("sandbox-contract-versions")).toContainText(
       "dev.grain.sandbox.contract = ",
@@ -50,7 +50,7 @@ for (const [name, viewport] of [
     // rather than listing it as a checklist for the user to set up.
     await expect(page.getByTestId("sandbox-contract-checklist")).toHaveCount(0);
     await expect(page.getByTestId("sandbox-image-inherits")).toContainText(
-      /(guest-base|k8s-sandbox-base) already satisfies the entire sandbox contract/,
+      /(sandbox-base|sandbox-k8s-base) already satisfies the entire sandbox contract/,
     );
     await expect(page.getByTestId("sandbox-image-todo")).toContainText(
       "start FROM it",

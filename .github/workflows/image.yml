@@ -37,7 +37,7 @@ permissions:
 
 env:
   GOFLAGS: -mod=readonly
-  RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO || 'bwsalmon/grain' }}
+  RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO }}
 
 jobs:
   container-e2e:
@@ -240,40 +240,17 @@ jobs:
 
       - name: Configure package-publish credentials
         env:
+          DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
           GHCR_PAT: ${{ secrets.GHCR_TOKEN }}
-          FALLBACK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY || 'ghcr.io' }}
-          PUBLISH_USERNAME: ${{ vars.GHCR_USERNAME || 'bwsalmon' }}
+          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY }}
         run: |
           set -euo pipefail
           if [ "${DRY_RUN}" = "true" ]; then
-            {
-              echo "PACKAGE_PUBLISH_REGISTRY=${PUBLISH_REGISTRY}"
-              echo "PACKAGE_PUBLISH_USERNAME=${PUBLISH_USERNAME}"
-              echo "PACKAGE_PUBLISH_TOKEN=dry-run-token"
-            } >> "$GITHUB_ENV"
-            exit 0
+            bash ./scripts/configure-dockerhub-auth.sh --dry-run
+          else
+            bash ./scripts/configure-dockerhub-auth.sh
           fi
-          token="${GHCR_PAT:-}"
-          username="${PUBLISH_USERNAME}"
-          if [ -z "$token" ]; then
-            case "${RELEASE_IMAGE_REPO}" in
-              bwsalmon/*)
-                echo "::error::GHCR_TOKEN secret is required to publish packages under ghcr.io/${RELEASE_IMAGE_REPO} from ${GITHUB_REPOSITORY}" >&2
-                exit 1
-                ;;
-              *)
-                token="${FALLBACK_TOKEN}"
-                username="${GITHUB_ACTOR}"
-                ;;
-            esac
-          fi
-          echo "::add-mask::${token}"
-          {
-            echo "PACKAGE_PUBLISH_REGISTRY=${PUBLISH_REGISTRY}"
-            echo "PACKAGE_PUBLISH_USERNAME=${username}"
-            echo "PACKAGE_PUBLISH_TOKEN=${token}"
-          } >> "$GITHUB_ENV"
 
       - name: Publish the sandbox guest for this commit's inputs
         run: |

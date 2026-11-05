@@ -1124,10 +1124,13 @@ jobs:
           git config --global user.email "grain-ci@example.com"
           ./scripts/warm-npm-cache.sh ui
 
-      - name: Assemble the image to install
+      - name: Configure authenticated Docker Hub pulls
         env:
-          GRAIN_INSTALLER_BASE_IMAGE: ghcr.io/bwsalmon/grain/grain:main
-          GRAIN_INSTALLER_SANDBOX_IMAGE: ghcr.io/bwsalmon/grain/k8s-sandbox:main
+          DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+        run: ./scripts/configure-dockerhub-auth.sh --pull-only
+
+      - name: Assemble the image to install
         run: |
           set +e
           ./scripts/installer-test-image.sh grain-installer:test 2>&1 | tee /tmp/installer-image.log

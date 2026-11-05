@@ -50,7 +50,7 @@ import (
 
 // The one name three files have to agree on: setup.sh's default, the
 // repository CI pushes to, and the daemon's own -upgrade-image.
-const image = "ghcr.io/bwsalmon/grain/grain"
+const image = "docker.io/grainai/grain"
 
 func TestSetupIsSyntacticallyValidBash(t *testing.T) {
 	out, err := exec.Command("bash", "-n", filepath.Join(repoRoot(t), "scripts", "setup.sh")).CombinedOutput()
@@ -1725,14 +1725,14 @@ func TestTheSandboxReferenceIsStampedIntoTheGrainImage(t *testing.T) {
 func TestTheGrainReleasePublishesDockerAndKubernetesSandboxImages(t *testing.T) {
 	script := read(t, "scripts", "release-images.sh")
 
-	contains(t, script, `guest="$root/guest:sha-$short"`)
-	contains(t, script, `k8s_sandbox="$root/k8s-sandbox:sha-$short"`)
+	contains(t, script, `guest="$root/sandbox:sha-$short"`)
+	contains(t, script, `k8s_sandbox="$root/sandbox-k8s:sha-$short"`)
 	contains(t, script, `docker build -f Dockerfile.k8s-sandbox -t "$k8s_sandbox" .`)
 	contains(t, script, `push_pinned "$guest"`)
 	contains(t, script, `push_pinned "$k8s_sandbox"`)
 	contains(t, script, `SANDBOX_IMAGE="$guest_pinned"`)
 	contains(t, script, `K8S_SANDBOX_IMAGE="$k8s_sandbox_pinned"`)
-	contains(t, script, `"$k8s_sandbox $root/k8s-sandbox:$branch"`)
+	contains(t, script, `"$k8s_sandbox $root/sandbox-k8s:$branch"`)
 
 	executable(t, "scripts", "release-images.sh")
 	out, err := exec.Command("bash", "-n", filepath.Join(repoRoot(t), "scripts", "release-images.sh")).CombinedOutput()
@@ -3221,13 +3221,13 @@ func TestSandboxBaseImagesAreMinimalAndCarryTheVersionedContract(t *testing.T) {
 	// full sandbox images.
 	releaseScript := read(t, "scripts", "release-images.sh")
 	for _, want := range []string{
-		`guest_base="$root/guest-base:sha-$short"`,
-		`k8s_sandbox_base="$root/k8s-sandbox-base:sha-$short"`,
+		`guest_base="$root/sandbox-base:sha-$short"`,
+		`k8s_sandbox_base="$root/sandbox-k8s-base:sha-$short"`,
 		`docker build --target k8s-sandbox-base -f Dockerfile.k8s-sandbox -t "$k8s_sandbox_base" .`,
 		`push_pinned "$guest_base"`,
 		`push_pinned "$k8s_sandbox_base"`,
-		`"$guest_base $root/guest-base:$branch"`,
-		`"$k8s_sandbox_base $root/k8s-sandbox-base:$branch"`,
+		`"$guest_base $root/sandbox-base:$branch"`,
+		`"$k8s_sandbox_base $root/sandbox-k8s-base:$branch"`,
 	} {
 		contains(t, releaseScript, want)
 	}
@@ -3238,8 +3238,8 @@ func TestSandboxBaseImagesAreMinimalAndCarryTheVersionedContract(t *testing.T) {
 		sandboximage.ContractLabel,
 		sandboximage.ContractFile,
 		sandboximage.GranuleContractLabel,
-		"ghcr.io/bwsalmon/grain/guest-base",
-		"ghcr.io/bwsalmon/grain/k8s-sandbox-base",
+		"docker.io/grainai/sandbox-base",
+		"docker.io/grainai/sandbox-k8s-base",
 		"grain sandbox-image contract",
 		"grain sandbox-image check",
 	} {
@@ -3681,11 +3681,11 @@ func TestTheKVMSuiteReusesThePublishedGuestRatherThanRebuildingIt(t *testing.T) 
 	// characters of the same hash.
 	contains(t, release, "mapfile -t guest_inputs < <(./scripts/granule/guest-inputs.sh guest)")
 	contains(t, release, `guest_key="$(git rev-parse "${guest_inputs[@]/#/HEAD:}" | sha256sum | cut -c1-32)"`)
-	contains(t, release, `guest_cache="$root/guest:inputs-$guest_key"`)
+	contains(t, release, `guest_cache="$root/sandbox:inputs-$guest_key"`)
 
 	contains(t, resolve, "mapfile -t inputs < <(./scripts/granule/guest-inputs.sh guest)")
 	contains(t, resolve, `key="$(git rev-parse "${inputs[@]/#/HEAD:}" | sha256sum | cut -c1-32)"`)
-	contains(t, resolve, `cached="ghcr.io/${RELEASE_IMAGE_REPO,,}/guest:inputs-${key}"`)
+	contains(t, resolve, `cached="${PACKAGE_PUBLISH_REGISTRY,,}/${RELEASE_IMAGE_REPO,,}/sandbox:inputs-${key}"`)
 
 	// Two: a miss still builds one, and a hit reaches the suite under the
 	// local tag pkg/orchestrator/granule_docker_real_test.go expects.
@@ -4037,10 +4037,10 @@ func TestThePruneRuleKnowsTheTagsCIActuallyPushes(t *testing.T) {
 func TestABranchTagAndItsCommitTagAreOneManifest(t *testing.T) {
 	script := stripComments(read(t, "scripts", "release-images.sh"))
 	for _, pair := range []string{
-		`"$guest_base $root/guest-base:$branch"`,
-		`"$guest $root/guest:$branch"`,
-		`"$k8s_sandbox_base $root/k8s-sandbox-base:$branch"`,
-		`"$k8s_sandbox $root/k8s-sandbox:$branch"`,
+		`"$guest_base $root/sandbox-base:$branch"`,
+		`"$guest $root/sandbox:$branch"`,
+		`"$k8s_sandbox_base $root/sandbox-k8s-base:$branch"`,
+		`"$k8s_sandbox $root/sandbox-k8s:$branch"`,
 		`"$grain $root/grain:$branch"`,
 	} {
 		contains(t, script, pair)
