@@ -1094,6 +1094,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		Title:       "Add pagination to the tasks API",
 		Description: "GET /api/tasks returns everything at once; needs a page size and a cursor.",
 		Approved:    true,
+		ExternalRef: "CA-204",
 		CustomFields: map[string]ui.CustomFieldValue{
 			"priority":     {"low"},
 			"area":         {"backend"},
@@ -1276,6 +1277,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		Title:       "Extract pagination query helper",
 		Description: "Decomposed sub-task: extract reusable cursor pagination builder for SQL queries.",
 		Approved:    true,
+		ProposedBy:  repairing.ID,
 		CustomFields: map[string]ui.CustomFieldValue{
 			"priority": {"low"},
 			"area":     {"backend"},
@@ -1299,7 +1301,6 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	st.Links = append(st.Links,
 		model.Link{Kind: model.LinkChildOf, Target: repairing.ID},
 		model.Link{Kind: model.LinkDependsOn, Target: repairing.ID},
-		model.Link{Kind: model.LinkProposedBy, Target: repairing.ID},
 	)
 	if err := store.PutTask(ctx, *st); err != nil {
 		return err
