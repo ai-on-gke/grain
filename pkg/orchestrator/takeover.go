@@ -656,7 +656,7 @@ func fileTakeoverReviews(ctx context.Context, deps Deps, task model.Task, own mo
 	r := externalReview{
 		repo: repo, number: own.Number, prTitle: detail.Title, prBody: detail.Body,
 		headRef: detail.HeadRef, headSHA: detail.HeadSHA, baseRef: detail.BaseRef,
-		sender: originSender(task), trusted: true, shepherdID: task.ID,
+		sender: originSender(task), trusted: true, shepherdID: task.ID, shepherdTask: &task,
 		eventKey: "takeover-review:" + task.ID + "@" + detail.HeadSHA,
 		spec:     linkTarget(task, model.LinkImplementsSpec),
 		design:   linkTarget(task, model.LinkDesignDoc),

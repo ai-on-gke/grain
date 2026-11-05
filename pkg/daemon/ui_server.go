@@ -599,6 +599,11 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		branchGate.local = lister
 	}
 	uiCfg.RepoBranches = branchGate
+	revGate := repoRevGate{remote: githubTokens}
+	if resolver, ok := stateRepo.(configRepoRevResolver); ok {
+		revGate.local = resolver
+	}
+	uiCfg.RepoRevs = revGate
 	// grain's own CI, behind the same kind of gate PullRequests above is
 	// behind and for the same reason: the engine belongs to runDaemon
 	// (it needs the git proxy every job clones through), and this server
