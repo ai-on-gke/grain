@@ -347,9 +347,10 @@ func (s *Server) authorizeRoleCall(r *http.Request, pattern string, a *accessRol
 	if err != nil {
 		return err
 	}
-	if _, fs := fsRoutes[pattern]; fs && repo == "" {
-		// A namespace read naming no repository is narrowed to the ones
-		// the role reaches by fsScope, as an agent's is.
+	if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events") && repo == "" {
+		// A namespace read or event stream naming no repository is narrowed
+		// to the ones the role reaches by fsScope / eventsReadable, as an
+		// agent's is.
 		return nil
 	}
 	if (pattern == "GET /api/inbox" && strings.TrimSpace(r.URL.Query().Get("repo")) == "") || (isRepoNarrowedTasksRead(pattern, r) && repo == "") {

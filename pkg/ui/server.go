@@ -84,6 +84,8 @@ type Server struct {
 	controllerMCPHandler http.Handler
 	// fsNamespace is the namespace GET /api/fs/ serves (api_fs.go).
 	fsNamespace func() *namespace.Server
+	// eventsKeepalive overrides defaultEventsKeepalive in tests (events.go).
+	eventsKeepalive time.Duration
 }
 
 // NewServer builds a Server over a store.
@@ -211,6 +213,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			r = r.WithContext(withRequestSource(r.Context(), trustedRequestSource(r)))
 		}
 	}
+	r = r.WithContext(model.WithEventActor(r.Context(), RequestActor(r.Context())))
 	// Unarmed until a configuration write's guard finds the deployment
 	// managed by an external config repository (checkSettingsWritable).
 	rehearsal := &configWriteRehearsal{}
@@ -282,6 +285,7 @@ func (s *Server) routes() {
 	s.route("GET /api/tasks/wait", s.handleTasksWait)
 	s.route("GET /api/inbox", s.handleInbox)
 	s.route("GET /api/refs/{ref}/summary", s.handleRefSummary)
+	s.route("GET /api/events", s.handleEvents)
 	s.route("GET /api/states", s.handleTaskStates)
 	s.route("POST /api/tasks", s.handleCreateTask)
 	s.route("POST /api/tasks/from-template", s.handleCreateTaskFromTemplate)
