@@ -52,4 +52,7 @@ func InheritRequester(derived *Task, source Task) {
 	if owner := strings.TrimSpace(source.Owner); owner != "" {
 		derived.Owner = owner
 	}
+	if strings.TrimSpace(derived.ExternalRef) == "" {
+		derived.ExternalRef = strings.TrimSpace(source.ExternalRef)
+	}
 }

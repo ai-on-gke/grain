@@ -1757,6 +1757,14 @@ type Task struct {
 	// caller's own word about itself and grants nothing
 	// (design/spec/external-cli/external-cli.spec.md#XC-15).
 	FiledVia string
+	// ExternalRef is an optional free-text work reference owned by an
+	// external planning layer (for example "CA-204"), "" when unset. It is
+	// inherited automatically by tasks grain spawns from a task carrying
+	// one (proposals, reviews, fixes, ports, triggers and work-tree
+	// children) unless the child explicitly sets its own, and indexed so
+	// task listing and GET /api/refs/{ref}/summary aggregate all tasks
+	// behind one reference in a single indexed query.
+	ExternalRef string
 	// SandboxCPUs, SandboxMemoryMB and SandboxDiskGB
 	// (bwsalmon/agents#534, grain/task-41) override
 	// Config.SandboxCPUs/SandboxMemoryMB/SandboxDiskGB for this task's
