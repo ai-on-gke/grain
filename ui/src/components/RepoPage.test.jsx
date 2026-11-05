@@ -1433,6 +1433,13 @@ describe("RepoPage", () => {
     expect(onRefreshConfig).toHaveBeenCalled();
   });
 
+  it("offers no default hostd: a repo's tasks have none", async () => {
+    routeApi();
+    renderPage();
+    await screen.findByLabelText(/Setup command for acme\/widgets/);
+    expect(screen.queryByLabelText(/Default hostd/)).toBeNull();
+  });
+
   it("reports the error when saving the repo's setup command fails", async () => {
     routeApi();
     const showError = vi.fn();
@@ -1451,6 +1458,52 @@ describe("RepoPage", () => {
     expect(showError).toHaveBeenCalledWith(
       expect.objectContaining({ message: "store is down" }),
     );
+  });
+
+  // The banner a refusal goes to stays up for five seconds whatever
+  // happens next, so a box fixed and saved a second later still read as
+  // refused (the 2026-11-04 repository walkthrough). The good save takes
+  // down its own box's refusal -- and only that one.
+  it("takes a box's refusal down once that box saves, and leaves another box's alone", async () => {
+    routeApi();
+    const showError = vi.fn();
+    const dismissError = vi.fn();
+    const user = userEvent.setup();
+    renderPage({ showError, dismissError });
+    const setup = await screen.findByLabelText(
+      /Setup command for acme\/widgets/,
+    );
+    const prompt = await screen.findByLabelText(
+      /Prompt extension for acme\/widgets/,
+    );
+
+    answerOnce(savingSetupCommand, () =>
+      Promise.reject(new Error("setupCommand: too long")),
+    );
+    await user.type(setup, "make deps");
+    await user.tab();
+    await waitFor(() => expect(showError).toHaveBeenCalled());
+
+    // Another box saving does not take the setup command's refusal down.
+    await user.type(prompt, "Be brief.");
+    await user.tab();
+    await waitFor(() =>
+      expect(
+        api.mock.calls.some(
+          ([path, opts]) =>
+            /\/prompt-extension$/.test(path) && opts?.method === "PUT",
+        ),
+      ).toBe(true),
+    );
+    expect(dismissError).not.toHaveBeenCalled();
+
+    await user.clear(setup);
+    await user.type(setup, "make d");
+    await user.tab();
+    await waitFor(() =>
+      expect(dismissError).toHaveBeenCalledWith("setupCommand: too long"),
+    );
+    expect(dismissError).toHaveBeenCalledTimes(1);
   });
 
   // The CI workflows grain declares for this repo (grain/task-245).
@@ -1556,7 +1609,7 @@ describe("RepoPage", () => {
 
     // Opening one run opens an overlay over RepoPage without unmounting it,
     // so it does not ask.
-    await user.click(screen.getByRole("button", { name: "main" }));
+    await user.click(screen.getByRole("button", { name: /^main, / }));
     expect(confirm).toHaveBeenCalledTimes(3);
     expect(props.onOpenCIRun).toHaveBeenCalledWith("run-1", "acme/widgets");
     confirm.mockRestore();
@@ -1838,11 +1891,13 @@ describe("RepoPage", () => {
     const { onOpenCIRun } = renderPage();
 
     expect(
-      await screen.findByRole("button", { name: "grain/task-1" }),
+      await screen.findByRole("button", { name: /^grain\/task-1, / }),
     ).toBeInTheDocument();
     expect(api).toHaveBeenCalledWith("/api/ci/runs?repo=acme%2Fwidgets");
 
-    await userEvent.click(screen.getByRole("button", { name: "grain/task-1" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /^grain\/task-1, / }),
+    );
     expect(onOpenCIRun).toHaveBeenCalledWith("9f2c1a", "acme/widgets");
   });
 
@@ -2044,6 +2099,42 @@ describe("RepoPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("switching issue import on saves the label typed before it", async () => {
+    // The first pass runs on the next cycle, so a label typed but not
+    // saved has to go with the switch, or that pass reads every open
+    // issue (docs/test-runs/2026-10-31-github-issue-import.md, F2).
+    routeApi({
+      upToDate: {
+        repo: "acme/widgets",
+        issueImport: {
+          enabled: false,
+          approved: false,
+          repo: "",
+          label: "",
+          intervalSeconds: 0,
+          effectiveIntervalSeconds: 600,
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderPage({ tab: "agents" });
+
+    const enable = await screen.findByLabelText(
+      "Import open GitHub issues as tasks in acme/widgets",
+    );
+    await user.type(screen.getByLabelText("Label"), "grain-agent");
+    await user.click(enable);
+    expect(api).toHaveBeenCalledWith("/api/repos/acme/widgets/settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        issueImportEnabled: true,
+        issueImportRepo: "",
+        issueImportLabel: "grain-agent",
+        issueImportIntervalSeconds: 0,
+      }),
+    });
+  });
+
   it("shows merge when green as on for a repo that has it on", async () => {
     routeApi({
       upToDate: { repo: "acme/widgets", mergeOnGreen: true },
@@ -2059,6 +2150,9 @@ describe("RepoPage", () => {
 
   it("turns on base-branch repair human-gate bypass and explains the risk", async () => {
     routeApi();
+    const confirm = vi.fn().mockReturnValue(true);
+    vi.stubGlobal("confirm", confirm);
+    onTestFinished(() => vi.unstubAllGlobals());
     const user = userEvent.setup();
     const props = renderPage();
 
@@ -2080,8 +2174,62 @@ describe("RepoPage", () => {
         body: JSON.stringify({ baseRepairBypassesHumanGates: true }),
       },
     );
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /acme\/widgets.*trust-boundary code with no human sign-off/,
+      ),
+    );
     expect(props.onRefreshConfig).toHaveBeenCalled();
     expect(box).toBeChecked();
+  });
+
+  it("leaves the base-branch repair bypass off when the confirmation is declined", async () => {
+    routeApi();
+    const confirm = vi.fn().mockReturnValue(false);
+    vi.stubGlobal("confirm", confirm);
+    onTestFinished(() => vi.unstubAllGlobals());
+    const user = userEvent.setup();
+    const props = renderPage();
+
+    const box = await screen.findByLabelText(
+      "Base-branch repair PRs in acme/widgets may merge without a human when their CI is green",
+    );
+    await user.click(box);
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(api).not.toHaveBeenCalledWith(
+      "/api/repos/acme/widgets/base-repair-bypasses-human-gates",
+      expect.anything(),
+    );
+    expect(props.onRefreshConfig).not.toHaveBeenCalled();
+    expect(box).not.toBeChecked();
+  });
+
+  it("turns the base-branch repair bypass off without asking", async () => {
+    routeApi({
+      upToDate: { ...noUpToDate, baseRepairBypassesHumanGates: true },
+    });
+    const confirm = vi.fn();
+    vi.stubGlobal("confirm", confirm);
+    onTestFinished(() => vi.unstubAllGlobals());
+    const user = userEvent.setup();
+    renderPage();
+
+    const box = await screen.findByLabelText(
+      "Base-branch repair PRs in acme/widgets may merge without a human when their CI is green",
+    );
+    await waitFor(() => expect(box).toBeChecked());
+    await user.click(box);
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(api).toHaveBeenCalledWith(
+      "/api/repos/acme/widgets/base-repair-bypasses-human-gates",
+      {
+        method: "PUT",
+        body: JSON.stringify({ baseRepairBypassesHumanGates: false }),
+      },
+    );
   });
 
   it("declares grain CI this repo's gate and reports the save", async () => {
@@ -2737,7 +2885,7 @@ describe("RepoPage", () => {
     );
   });
 
-  // docs/design/config-repo-settings.md §2.1, §7.4: when the API sends
+  // design/design/config-repo-settings.design.md §2.1, §7.4: when the API sends
   // a repo's settings to the config repo (configRepoOnly), even an admin
   // sees them read-only, with the files to change them in, and the
   // default and CI grants as chips; the operational actions stay theirs.

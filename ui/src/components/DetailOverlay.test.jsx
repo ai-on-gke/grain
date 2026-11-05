@@ -1344,6 +1344,79 @@ describe("DetailOverlay", () => {
     expect(screen.getByText(/build error/)).toBeInTheDocument();
   });
 
+  it("shows blocking task links and states beneath the Blocked badge and navigates on click", async () => {
+    const user = userEvent.setup();
+    const onOpenTask = vi.fn();
+    const { rerender } = render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          state: "queued",
+          blocked: true,
+          blockedBy: ["11", "10"],
+        }}
+        tasks={[
+          {
+            id: "11",
+            title: "Suggest what to tune for throughput and reliability",
+            state: "awaiting_reply",
+          },
+          {
+            id: "10",
+            title: "Prepare benchmark dataset",
+            state: "running",
+          },
+        ]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={onOpenTask}
+        act={vi.fn()}
+      />,
+    );
+
+    expect(document.querySelector(".detail-state .badge")).toHaveTextContent(
+      "Blocked",
+    );
+    const blockedBlock = document.querySelector(".detail-blocked");
+    expect(blockedBlock).toHaveTextContent(
+      "Blocked on #11 Suggest what to tune for throughput and reliability (asked), #10 Prepare benchmark dataset (running)",
+    );
+
+    const link = within(blockedBlock).getByRole("link", {
+      name: "#11 Suggest what to tune for throughput and reliability",
+    });
+    expect(link).toHaveAttribute("href", "/tasks/11");
+    await user.click(link);
+    expect(onOpenTask).toHaveBeenCalledWith("11");
+
+    rerender(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          state: "queued",
+          blocked: true,
+          parked: true,
+          blockedBy: ["11"],
+        }}
+        tasks={[
+          {
+            id: "11",
+            title: "Suggest what to tune for throughput and reliability",
+            state: "running",
+          },
+        ]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={onOpenTask}
+        act={vi.fn()}
+      />,
+    );
+
+    expect(document.querySelector(".detail-blocked")).toHaveTextContent(
+      "Waiting on #11 Suggest what to tune for throughput and reliability (running)",
+    );
+  });
+
   // A description is markdown for the same reason a comment body is: a
   // proposed task's own body is written by the run that proposed it
   // (propose_task), in the same syntax.
@@ -1708,6 +1781,56 @@ describe("DetailOverlay", () => {
 
       await user.click(link);
       expect(onOpenTask).toHaveBeenCalledWith("91");
+    });
+  });
+
+  it("lets an operator edit model and network access directly in the sidebar on an active console session task", async () => {
+    const user = userEvent.setup();
+    const act = vi.fn((fn) => fn().then(() => true));
+    const sessionTask = {
+      ...baseTask,
+      interactive: true,
+      consoleSession: "director",
+      model: "",
+      networkAccess: "open",
+    };
+    const sessionConfig = {
+      ...config,
+      deployment: { id: "default", defaultModel: "gpt-5.6-sol" },
+      agentBackends: [
+        {
+          id: "claude-deep",
+          framework: "claude",
+          models: ["claude-opus-5"],
+        },
+      ],
+    };
+
+    render(
+      <DetailOverlay
+        task={sessionTask}
+        tasks={[]}
+        config={sessionConfig}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    const netSelect = screen.getByLabelText("Network access");
+    expect(netSelect).toHaveValue("open");
+    await user.selectOptions(netSelect, "none");
+    expect(api).toHaveBeenCalledWith("/api/tasks/12", {
+      method: "PATCH",
+      body: JSON.stringify({ networkAccess: "none" }),
+    });
+
+    const picker = screen.getByRole("combobox", { name: "Model" });
+    await user.click(picker);
+    await user.click(screen.getByRole("option", { name: "claude-opus-5" }));
+    expect(api).toHaveBeenCalledWith("/api/tasks/12", {
+      method: "PATCH",
+      body: JSON.stringify({ model: "claude-opus-5" }),
     });
   });
 });

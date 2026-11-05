@@ -1,0 +1,92 @@
+[
+ {
+  "mode": "internal",
+  "width": 1440,
+  "from": "/system/health",
+  "text": "Kubernetes namespace",
+  "href": "/settings/sandboxes#k8sNamespace",
+  "landed": "/settings/sandboxes#k8sNamespace",
+  "check": {
+   "target": "#k8sNamespace",
+   "found": true,
+   "visible": true,
+   "top": 439
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "internal",
+  "width": 1440,
+  "from": "/system/health",
+  "text": "Priority class for CI jobs",
+  "href": "/settings/sandboxes#k8sPriorityClassCi",
+  "landed": "/settings/sandboxes#k8sPriorityClassCi",
+  "check": {
+   "target": "#k8sPriorityClassCi",
+   "found": true,
+   "visible": true,
+   "top": 429
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "internal",
+  "width": 1440,
+  "from": "/settings/agents",
+  "text": "Settings → Git",
+  "href": "/settings/git",
+  "landed": "/settings/git",
+  "check": {
+   "target": "grain",
+   "found": true,
+   "visible": true,
+   "notFound": false
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "internal",
+  "width": 390,
+  "from": "/system/health",
+  "text": "Kubernetes namespace",
+  "href": "/settings/sandboxes#k8sNamespace",
+  "landed": "/settings/sandboxes#k8sNamespace",
+  "check": {
+   "target": "#k8sNamespace",
+   "found": true,
+   "visible": true,
+   "top": 389
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "internal",
+  "width": 390,
+  "from": "/system/health",
+  "text": "Priority class for CI jobs",
+  "href": "/settings/sandboxes#k8sPriorityClassCi",
+  "landed": "/settings/sandboxes#k8sPriorityClassCi",
+  "check": {
+   "target": "#k8sPriorityClassCi",
+   "found": true,
+   "visible": true,
+   "top": 360
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "internal",
+  "width": 390,
+  "from": "/settings/agents",
+  "text": "Settings → Git",
+  "href": "/settings/git",
+  "landed": "/settings/git",
+  "check": {
+   "target": "grain",
+   "found": true,
+   "visible": true,
+   "notFound": false
+  },
+  "result": "ok"
+ }
+]

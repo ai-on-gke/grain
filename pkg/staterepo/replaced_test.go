@@ -22,7 +22,7 @@ package staterepo_test
 // last export wrote, so every row of it replaces whatever this database
 // has done to that row since -- and until now the only visible trace of
 // that on a tick was the setting somebody changed on purpose. The case
-// that was driven end to end is in docs/hand-runs/2026-09-07-repo-case.md
+// that was driven end to end is in the 2026-09-07 repo-case hand run
 // (finding 2): a reconciliation of every divergent repo-name spelling in
 // the database, half undone by the next settings import, silently.
 

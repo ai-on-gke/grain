@@ -28,7 +28,7 @@ import (
 // in front of a browser: each seeded task reads back a stall note and
 // the control its sub-case names, and the ordinary demo, with no stall
 // deadlines, reads back none.
-func TestStalledTasksDemoSeedsAStuckQueuedTaskAndRun(t *testing.T) {
+func TestStalledTasksDemoSeedsAStuckQueuedTaskRunAndDeferral(t *testing.T) {
 	t.Parallel()
 	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
 	if err != nil {
@@ -59,6 +59,7 @@ func TestStalledTasksDemoSeedsAStuckQueuedTaskAndRun(t *testing.T) {
 	want := map[string]struct{ state, control string }{
 		demoStalledQueuedTitle:  {"queued", "Run now"},
 		demoStalledRunningTitle: {"running", "Cancel"},
+		demoStalledDeferTitle:   {"deferred", "Undefer"},
 	}
 	for _, task := range tasks {
 		w, ok := want[task.Title]

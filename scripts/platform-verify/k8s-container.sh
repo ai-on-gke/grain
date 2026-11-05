@@ -43,11 +43,13 @@
 #     hand; the apply does it, and the preflight skips the check while the
 #     namespace does not exist yet.
 #   - Only one CHANGEME actually needs rendering. The grain image and
-#     -k8s-sandbox-image already carry real values in the file, and the
-#     cosign.pub ConfigMap is deliberately left a placeholder: the file's own
+#     -k8s-sandbox-image already carry real values in the file, the
+#     cosign.pub ConfigMap is deliberately left a placeholder (the file's own
 #     comment says that means "every upgrade is refused at its signature
 #     step -- the daemon itself starts and runs whatever image it was applied
-#     with", which is exactly what this run wants.
+#     with", which is exactly what this run wants), and
+#     GRAIN_ALLOWED_PRINCIPALS's user:CHANGEME@example.com placeholder admits
+#     nobody over IAP while leaving the access code working over a tunnel.
 #   - `-k8s-sandbox-image` is required by Options.validate for this platform,
 #     where the granule row's image flag is not.
 #
@@ -71,7 +73,7 @@ ZONE="${ZONE:-us-east1-b}"
 PROJECT="${PROJECT:-grain-host}"
 MACHINE_TYPE="${MACHINE_TYPE:-e2-standard-4}"
 NAMESPACE="${NAMESPACE:-grain}"
-SANDBOX_IMAGE="${SANDBOX_IMAGE:-ghcr.io/bwsalmon/grain/k8s-sandbox:main}"
+SANDBOX_IMAGE="${SANDBOX_IMAGE:-docker.io/grainai/sandbox-k8s:main}"
 TARGET_REPO="${TARGET_REPO:-bwsalmon/grain}"
 # The repository this verifies is the one this script lives in, so the
 # root is two directories up rather than a sibling checkout. These ran
@@ -170,10 +172,12 @@ src="$SRC/deploy/kubernetes/grain.yaml"
 rendered="$DATA_DIR/grain.rendered.yaml"
 sed -e "s|-default-target-repo=CHANGEME/CHANGEME|-default-target-repo=$TARGET_REPO|" \
     "$src" > "$rendered"
-# The cosign.pub placeholder stays: grain.yaml says leaving it means every
-# upgrade is refused at its signature step while the daemon itself starts
-# normally. Anything else uncommented would be a real gap.
-left="$(grep -n 'CHANGEME' "$rendered" | grep -vE ':\s*#' | grep -v 'cosign.pub\|CHANGEME: replace this whole value' || true)"
+# The cosign.pub and GRAIN_ALLOWED_PRINCIPALS placeholders stay: grain.yaml
+# says leaving cosign.pub means every upgrade is refused at its signature step
+# while the daemon starts normally, and leaving user:CHANGEME@example.com
+# admits nobody over IAP while keeping the access code working over a tunnel.
+# Anything else uncommented would be a real gap.
+left="$(grep -n 'CHANGEME' "$rendered" | grep -vE ':\s*#' | grep -v 'cosign.pub\|CHANGEME: replace this whole value\|value: user:CHANGEME@example.com' || true)"
 if [ -n "$left" ]; then
   bad "an uncommented CHANGEME survived rendering:"; printf '%s\n' "$left" | head -5; exit 1
 fi

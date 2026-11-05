@@ -41,6 +41,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -70,8 +71,8 @@ type BranchLookup interface {
 }
 
 // AnyRefLookup is the optional half of BranchLookup that answers whether
-// a sandbox's live run holds model.GitPushAnyRefCapability, the team
-// grant that lifts the one-branch rule. model.Store implements it; a
+// a sandbox's live run holds model.GitPushAnyRefGrant (or the retired
+// bare git-push-any-ref it replaced), the team grant that lifts the one-branch rule. model.Store implements it; a
 // lookup that does not is read as nobody holding it.
 type AnyRefLookup interface {
 	GitPushAnyRef(ctx context.Context, sandbox string) (bool, error)
@@ -99,6 +100,19 @@ var _ FastForwardOnlyLookup = (*model.Store)(nil)
 type DeclaredPushLookup interface {
 	GitDeclaredPush(ctx context.Context, sandbox string) (*model.DeclaredPush, error)
 }
+
+// ConfigProposalLookup is the optional half of BranchLookup that answers
+// which grain/config branches a sandbox's live run may push beyond its
+// own: the proposal branches propose_config_change pushes, under
+// model.ConfigProposalBranchPrefix, for a run whose task holds
+// grain/config in its Writes (model.Store.GitConfigProposalPrefix). ""
+// is a run with none. A lookup that does not implement it is read as no
+// run having any.
+type ConfigProposalLookup interface {
+	GitConfigProposalPrefix(ctx context.Context, sandbox string) (string, error)
+}
+
+var _ ConfigProposalLookup = (*model.Store)(nil)
 
 // RefGrant is one update of a ref other than the run's own branch that
 // AuthorizeRefUpdates let through, and on whose say-so -- what the audit
@@ -129,9 +143,14 @@ type pushCheck struct {
 	// reachable from wants and not from have: where a walk that leaves
 	// the pack carries on (ancestry.go). Nil when there is nobody to ask.
 	upstream func(wants []string, have string, hashLen int) (packCommits, error)
-	grants   []RefGrant
+	// refs reads the repository's ref advertisement and the branch its
+	// HEAD names (ancestry.go's upstreamRefs). Nil when there is nobody
+	// to ask.
+	refs   func() (map[string]string, string, error)
+	grants []RefGrant
 
 	commits    packCommits
+	tags       packTags
 	commitsErr error
 	read       bool
 }
@@ -158,7 +177,7 @@ func (c *pushCheck) packCommits(hashLen int) (packCommits, error) {
 		if err == nil {
 			r := bufio.NewReaderSize(body, 64<<10)
 			if err = skipToPack(r); err == nil {
-				c.commits, err = readPackStream(r, hashLen)
+				c.commits, c.tags, err = readPackObjects(r, hashLen)
 			}
 		}
 		c.commitsErr = err
@@ -200,6 +219,123 @@ func (c *pushCheck) fastForward(newTip, oldTip string) (ok bool, why string) {
 		}
 	}
 	return false, ""
+}
+
+// onHistory reports whether id -- a commit, or an annotated tag this push
+// carries, peeled to the commit it names -- is already in the history of
+// one of tips, commits the remote already has: the tip itself, or an
+// ancestor of one -- or in the history of landing, the default branch's
+// new tip in this same push (whose own update is shown a fast-forward).
+// Any other commit the push carries is new to the remote, so it never is.
+// why says what stopped a proof that was not made.
+func (c *pushCheck) onHistory(id string, tips []string, landing string) (ok bool, why string) {
+	if c == nil {
+		return false, "there is no push in hand to check it against"
+	}
+	hashLen := len(id) / 2
+	commits, err := c.packCommits(hashLen)
+	switch {
+	case err == nil:
+	case errors.Is(err, errNoPack) || c.body == nil:
+		commits = packCommits{}
+	default:
+		return false, "the push's pack could not be read: " + err.Error()
+	}
+	for i := 0; i < 8; i++ {
+		target, ok := c.tags[id]
+		if !ok {
+			break
+		}
+		id = target
+	}
+	if landing != "" && commits.descends(landing, id) {
+		// The same push fast-forwards the default branch onto it.
+		return true, ""
+	}
+	if _, carried := commits[id]; carried {
+		return false, shortCommit(id) + " is a commit this push carries, new to the repository"
+	}
+	if slices.Contains(tips, id) {
+		return true, ""
+	}
+	if c.upstream == nil || len(tips) == 0 {
+		return false, ""
+	}
+	fetched, err := c.upstream(tips, id, hashLen)
+	if err != nil {
+		return false, "asking the repository for the commits it already has: " + err.Error()
+	}
+	for _, tip := range tips {
+		if fetched.descends(tip, id) {
+			return true, ""
+		}
+	}
+	return false, ""
+}
+
+// declaredHistory is where a declared push's new tips have to be found
+// already (onHistory): the tips of the repository's default branch and of
+// every branch set declares, as the repository advertises them -- and
+// the default branch's ref, whose own updates are exempt. The run's own
+// branch is never among them: a run cannot make history by pushing it
+// there first.
+func (c *pushCheck) declaredHistory(set model.RefPushSet, own string) (tips []string, defaultRef, why string) {
+	if c == nil || c.refs == nil {
+		return nil, "", "there is no repository to ask which commits it already has"
+	}
+	refs, head, err := c.refs()
+	if err != nil {
+		return nil, "", "reading the repository's branches: " + err.Error()
+	}
+	if head == "" {
+		head = inferredHead(refs)
+	}
+	if head == "" || refs[head] == "" {
+		return nil, "", "the repository did not say which branch is its default"
+	}
+	seen := map[string]bool{}
+	add := func(id string) {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			tips = append(tips, id)
+		}
+	}
+	add(refs[head])
+	names := make([]string, 0, len(refs))
+	for ref := range refs {
+		names = append(names, ref)
+	}
+	slices.Sort(names)
+	for _, ref := range names {
+		if ref == own || !strings.HasPrefix(ref, "refs/heads/") {
+			continue
+		}
+		if matched, _, _ := set.Allows(ref); matched {
+			add(refs[ref])
+		}
+	}
+	return tips, head, ""
+}
+
+// inferredHead is the default branch of a repository that advertised no
+// symref for HEAD (a detached HEAD, in a working repository): main, or
+// else master, or else the one branch whose tip HEAD is.
+func inferredHead(refs map[string]string) string {
+	for _, preferred := range []string{"refs/heads/main", "refs/heads/master"} {
+		if refs[preferred] != "" {
+			return preferred
+		}
+	}
+	var at []string
+	for ref, tip := range refs {
+		if tip == refs["HEAD"] && tip != "" && strings.HasPrefix(ref, "refs/heads/") {
+			at = append(at, ref)
+		}
+	}
+	if len(at) == 1 {
+		return at[0]
+	}
+	return ""
 }
 
 func (c *pushCheck) grant(g ...RefGrant) {
@@ -250,7 +386,9 @@ func (a *ModelAuthorizer) branches() BranchLookup {
 //     matching entry says `delete: true`, and a tag moved or a branch
 //     moved anywhere the pack does not show is a fast-forward only where
 //     it says `force: true`;
-//   - git-push-any-ref (AnyRefLookup), a team grant for ad-hoc work.
+//   - model.GitPushAnyRefGrant, the https://grain.dev/capabilities/repo#write
+//     grant formerly named git-push-any-ref (AnyRefLookup), a team grant
+//     for ad-hoc work.
 //
 // No team policy and no admin grant sits behind either: the team's own
 // git credential, which every push is forwarded with, is the only other
@@ -281,6 +419,10 @@ func (a *ModelAuthorizer) AuthorizeRefUpdates(ctx context.Context, sandbox, owne
 		return "", nil
 	}
 	check := pushCheckFrom(ctx)
+	var proposals string
+	if others, proposals, err = a.configProposalUpdates(ctx, sandbox, owner, repo, others, check); err != nil || len(others) == 0 {
+		return "", err
+	}
 	if anyRef, ok := lookup.(AnyRefLookup); ok {
 		held, err := anyRef.GitPushAnyRef(ctx, sandbox)
 		if err != nil {
@@ -288,7 +430,7 @@ func (a *ModelAuthorizer) AuthorizeRefUpdates(ctx context.Context, sandbox, owne
 		}
 		if held {
 			for _, u := range others {
-				check.grant(RefGrant{Ref: u.Ref, Kind: updateKind(u), Via: model.GitPushAnyRefCapability})
+				check.grant(RefGrant{Ref: u.Ref, Kind: updateKind(u), Via: model.RepoWriteRef})
 			}
 			return "", nil
 		}
@@ -309,6 +451,10 @@ func (a *ModelAuthorizer) AuthorizeRefUpdates(ctx context.Context, sandbox, owne
 		reason := fmt.Sprintf("refusing to update %s in %s/%s: a sandbox may push only its own task's branch, %s "+
 			"(push with `git push origin %s`)", strings.Join(refs, ", "), owner, repo, own, branch)
 		switch {
+		case proposals != "":
+			reason += fmt.Sprintf(", and its own config proposal branches, refs/heads/%s<name>. "+
+				"A change reaches %s's main only through propose_config_change and a person's approval",
+				proposals, model.ConfigRepo())
 		case declared != nil:
 			reason += fmt.Sprintf(". This task's template, %s, declares a push set for %s only",
 				declared.Declaration.Path, declared.Declaration.Repo)
@@ -321,11 +467,46 @@ func (a *ModelAuthorizer) AuthorizeRefUpdates(ctx context.Context, sandbox, owne
 
 	var problems []string
 	var grants []RefGrant
+	var history []string
+	var defaultRef, historyWhy, landing string
+	historyRead := false
 	for _, u := range others {
 		kind, problem := declaredUpdate(declared.Push, u, check)
 		if problem != "" {
 			problems = append(problems, problem)
 			continue
+		}
+		// A declared push moves refs onto what the repository already
+		// has; it does not publish new code. Its new tip has to be on the
+		// default branch or a branch the set declares already -- the
+		// workflows a release ref starts run from the commit it names --
+		// except on the default branch itself, whose fast-forward was
+		// shown above.
+		if kind != "delete" {
+			if !historyRead {
+				historyRead = true
+				history, defaultRef, historyWhy = check.declaredHistory(declared.Push, own)
+				for _, d := range others {
+					if d.Ref == defaultRef && defaultRef != "" && !isZeroID(d.New) {
+						landing = d.New
+					}
+				}
+			}
+			if u.Ref != defaultRef || defaultRef == "" {
+				ok, why := false, historyWhy
+				if historyWhy == "" {
+					ok, why = check.onHistory(u.New, history, landing)
+				}
+				if !ok {
+					if why != "" {
+						why = " (" + why + ")"
+					}
+					problems = append(problems, fmt.Sprintf("%s: could not show %s is already on the default branch "+
+						"or a declared branch%s, and a declared push only moves refs onto commits the repository has",
+						u.Ref, shortCommit(u.New), why))
+					continue
+				}
+			}
 		}
 		grants = append(grants, RefGrant{
 			Ref: u.Ref, Kind: kind, Via: "declared push", TaskID: declared.TaskID,
@@ -344,6 +525,42 @@ func (a *ModelAuthorizer) AuthorizeRefUpdates(ctx context.Context, sandbox, owne
 	}
 	check.grant(grants...)
 	return "", nil
+}
+
+// configProposalUpdates is others less the updates to the run's own
+// grain/config proposal branches (ConfigProposalLookup), which are
+// granted -- created, moved, force-moved or deleted, as its own branch
+// may be -- and the branch prefix those are under ("" for a run with
+// none, which the refusal of the rest names). Only refs strictly under
+// the prefix qualify, and only in grain/config: main, and every other
+// task's branches, stay refused.
+func (a *ModelAuthorizer) configProposalUpdates(ctx context.Context, sandbox, owner, repo string,
+	others []RefUpdate, check *pushCheck) ([]RefUpdate, string, error) {
+	lookup, ok := a.branches().(ConfigProposalLookup)
+	if !ok {
+		return others, "", nil
+	}
+	cOwner, cRepo := canonicalizeRepo(owner, repo)
+	if !canonicalMatches(model.ConfigRepo(), cOwner, cRepo) {
+		return others, "", nil
+	}
+	prefix, err := lookup.GitConfigProposalPrefix(ctx, sandbox)
+	if err != nil {
+		return nil, "", fmt.Errorf("gitproxy: resolving config proposal branches for %s: %w", sandbox, err)
+	}
+	if prefix == "" {
+		return others, "", nil
+	}
+	refPrefix := "refs/heads/" + prefix
+	var rest []RefUpdate
+	for _, u := range others {
+		if strings.HasPrefix(u.Ref, refPrefix) && len(u.Ref) > len(refPrefix) {
+			check.grant(RefGrant{Ref: u.Ref, Kind: updateKind(u), Via: "config proposal"})
+			continue
+		}
+		rest = append(rest, u)
+	}
+	return rest, prefix, nil
 }
 
 // refuseBorrowedBranchRewrite is the one bound on a run's own branch: a

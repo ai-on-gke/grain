@@ -585,7 +585,7 @@ func templateSchema() Schema {
 			// filing team already has.
 			{Model: "Model", Keys: carried("model"), Columns: []string{"agent_model"}},
 			// The goal every task it files is declared with
-			// (model.Template.Goal, docs/design/durable-tasks.md#DT-4): JSON
+			// (model.Template.Goal, design/design/durable-tasks.design.md#DT-4): JSON
 			// model.GoalDecl. Settings only: a goal decides when grain
 			// closes the work, which is the deployment's to say.
 			{Model: "Goal", Keys: []Key{settingsOnly("goal", Inline)}, Columns: []string{"goal"}},
@@ -594,6 +594,12 @@ func templateSchema() Schema {
 			// decides who the agent talks to while it works, not what the
 			// work may touch.
 			{Model: "Interactive", Keys: carried("interactive"), Columns: []string{"interactive"}},
+			{Model: "KeepRunning", Keys: carried("keep-running"), Columns: []string{"keep_running"}},
+			// `hostd`, which a template once carried (schema 94 to 110):
+			// which grain hostd host work runs on is a model connection's
+			// or a capability server's, never what a template files, so
+			// the key is answered and kept nowhere.
+			{Keys: []Key{nowhere("hostd", Authority)}},
 			{Model: "CustomFields", Keys: carried("custom-fields"), Table: "template_custom_field"},
 
 			// The refusals. Each of these would be perfectly natural to
@@ -619,6 +625,11 @@ func templateSchema() Schema {
 				Model:   "Reviewers",
 				Keys:    []Key{settingsOnly("reviewers", Reach)},
 				Columns: []string{"reviewers"},
+			},
+			{
+				Model:   "Priority",
+				Keys:    carried("priority"),
+				Columns: []string{"priority"},
 			},
 			{Model: "Reads", Keys: []Key{settingsOnly("reads", Reach)}, Table: "template_read"},
 			{Model: "Writes", Keys: []Key{settingsOnly("writes", Reach)}, Table: "template_write"},
@@ -793,6 +804,11 @@ func scheduleSchema() Schema {
 				Model:   "NothingNeededAction",
 				Keys:    []Key{settingsOnly("nothing-needed", Inline)},
 				Columns: []string{"nothing_needed_action"},
+			},
+			{
+				Model:   "KeepRunning",
+				Keys:    []Key{settingsOnly("keep-running", Inline)},
+				Columns: []string{"keep_running"},
 			},
 			{
 				Model: "CustomFields",
@@ -1130,6 +1146,22 @@ func RepoSettingsSchema() Schema {
 				Model:   "GitCredential",
 				Keys:    []Key{settingsOnly("git-credential", Authority)},
 				Columns: []string{"git_credential"},
+			},
+
+			// `default-hostd`, a repository's tasks' hostd until schema
+			// 111: answered and kept nowhere, for the template `hostd`
+			// key's reason.
+			{Keys: []Key{nowhere("default-hostd", Authority)}},
+
+			// The upstream repository pull requests are opened against when
+			// tasks push branches to this fork repository
+			// (model.RepoConfig.UpstreamRepo). Authority, because a
+			// repository cannot redirect where this deployment opens pull
+			// requests or which upstream repository its runs fetch from.
+			{
+				Model:   "UpstreamRepo",
+				Keys:    []Key{settingsOnly("upstream-repo", Authority)},
+				Columns: []string{"upstream_repo"},
 			},
 
 			// Which repository these settings are about. Grain read the

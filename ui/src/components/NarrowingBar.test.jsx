@@ -17,6 +17,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import NarrowingBar from "./NarrowingBar.jsx";
+import { chooseOption, optionValues } from "../searchSelectTesting.js";
 import {
   NO_NARROWING,
   defaultFilters,
@@ -179,18 +180,16 @@ describe("NarrowingBar", () => {
     await user.click(screen.getByTitle(FILTER_BUTTON));
     await user.click(screen.getByRole("button", { name: "Filter by…" }));
     await user.click(await screen.findByRole("menuitem", { name: "Priority" }));
-    await user.click(screen.getByLabelText("Value for filter 1"));
+    const valueInput = screen.getByLabelText("Value for filter 1");
+    await user.click(valueInput);
 
     // The declared order rather than the alphabetical one, and only the
     // two values the tasks in view carry -- "medium" is declared but
     // nothing here has it, and a choice that would come back empty is
     // not offered.
-    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "low",
-      "high",
-    ]);
+    expect(optionValues(valueInput)).toEqual(["low", "high"]);
 
-    await user.click(screen.getByRole("option", { name: "high" }));
+    await chooseOption(user, valueInput, "high");
     await user.keyboard("{Escape}");
     await user.click(screen.getByTitle(FILTER_BUTTON));
 
@@ -232,6 +231,30 @@ describe("NarrowingBar", () => {
     expect(screen.getByTitle(SORT_BUTTON)).toHaveTextContent(
       "Priority First to last, then Due Newest first",
     );
+  });
+
+  // A link's sort key naming no attribute here orders nothing and has no
+  // row in the editor, so the button says the view's own order rather
+  // than nothing at all, and the editor offers "Sort by…" with the note.
+  it("labels the sort by the keys it knows, not by a link's unknown one", async () => {
+    const user = userEvent.setup();
+    render(
+      <Narrowed
+        narrowing={{ ...NO_NARROWING, sort: [{ attr: "bogus", dir: "asc" }] }}
+      />,
+    );
+
+    expect(screen.getByTitle(SORT_BUTTON)).toHaveTextContent("Backlog order");
+    await user.click(screen.getByTitle(SORT_BUTTON));
+    expect(screen.queryByLabelText("Attribute for sort 1")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Sort by…" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "The backlog's own order, which is the one a drag changes.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("adds a condition, and takes it away again", async () => {
@@ -414,5 +437,102 @@ describe("NarrowingBar", () => {
         .getByRole("button", { name: "Columns" })
         .closest(".task-list-toolbar"),
     ).not.toBeNull();
+  });
+
+  // grain/task-2912: filter attributes, sort attributes and choice values
+  // are SearchSelects, so a repo, capability or label can be found from
+  // the middle of its name or by fuzzy match, multiple picks accumulate,
+  // "No repo" stays on offer, and Escape closes an open list without
+  // bubbling out to an enclosing overlay.
+  it("searches filter attributes, sort attributes and multi-value choices, keeping No repo and Escape rules", async () => {
+    const user = userEvent.setup();
+    let escaped = 0;
+    const manyRepoTasks = [
+      ...tasks,
+      {
+        id: "3",
+        title: "Host-prefixed repo",
+        state: "queued",
+        repo: "depot.example.dev/experimental/grain",
+        capabilities: [],
+        blocked: false,
+      },
+      {
+        id: "4",
+        title: "Unscoped note",
+        state: "queued",
+        repo: "",
+        capabilities: [],
+        blocked: false,
+      },
+    ];
+    render(
+      <div onKeyDown={(e) => e.key === "Escape" && escaped++}>
+        <Narrowed narrowing={NO_NARROWING} tasks={manyRepoTasks} />
+      </div>,
+    );
+
+    await user.click(screen.getByTitle(FILTER_BUTTON));
+    await user.click(screen.getByRole("button", { name: "Filter by…" }));
+    await user.click(await screen.findByRole("menuitem", { name: "State" }));
+
+    // Switch the row's attribute via SearchSelect by mid-word typing + Enter.
+    const attrBox = screen.getByLabelText("Attribute for filter 1");
+    await user.click(attrBox);
+    await user.clear(attrBox);
+    await user.type(attrBox, "epo{Enter}");
+    expect(attrBox).toHaveValue("Repo");
+
+    // Empty selection shows the "Any" placeholder, and opening offers "No repo" ("__none__").
+    const valBox = screen.getByLabelText("Value for filter 1");
+    expect(valBox).toHaveAttribute("placeholder", "Any");
+    await user.click(valBox);
+    expect(optionValues(valBox)).toEqual([
+      "acme/gadgets",
+      "acme/widgets",
+      "depot.example.dev/experimental/grain",
+      "__none__",
+    ]);
+
+    // Typing "grain" narrows to depot.example.dev/experimental/grain and bolds the hit.
+    await user.type(valBox, "grain");
+    expect(optionValues(valBox)).toEqual([
+      "depot.example.dev/experimental/grain",
+    ]);
+    expect(document.querySelector(".search-select-hit")?.textContent).toBe(
+      "grain",
+    );
+    await user.keyboard("{ArrowDown}{Enter}");
+
+    // Fuzzy search ("acwgt") finds acme/widgets as a second multi-select choice.
+    await user.type(valBox, "acwgt");
+    expect(optionValues(valBox)).toEqual(["acme/widgets"]);
+    await user.keyboard("{ArrowDown}{Enter}");
+
+    // Escape closes the open value list without bubbling to the outer div,
+    // and a second Escape on the closed list bubbles.
+    expect(valBox).toHaveAttribute("aria-expanded", "true");
+    await user.keyboard("{Escape}");
+    expect(valBox).toHaveAttribute("aria-expanded", "false");
+    expect(escaped).toBe(0);
+    await user.keyboard("{Escape}");
+    expect(escaped).toBe(1);
+
+    await user.click(screen.getByTitle(FILTER_BUTTON));
+    expect(
+      screen.getByText(
+        "Repo is any of depot.example.dev/experimental/grain, acme/widgets",
+      ),
+    ).toBeInTheDocument();
+
+    // Sort attribute picker searches too.
+    await user.click(screen.getByTitle(SORT_BUTTON));
+    await user.click(screen.getByRole("button", { name: "Sort by…" }));
+    await user.click(await screen.findByRole("menuitem", { name: "State" }));
+    const sortAttr = screen.getByLabelText("Attribute for sort 1");
+    await chooseOption(user, sortAttr, "Created");
+    expect(screen.getByTitle(SORT_BUTTON)).toHaveTextContent(
+      "Created Oldest first",
+    );
   });
 });

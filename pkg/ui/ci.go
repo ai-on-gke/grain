@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -35,7 +36,7 @@ import (
 )
 
 // Config.CI is grain CI as these routes take it: ci.Runner, the whole of
-// what the CI service answers (docs/design/grit-split.md#GS-1) --
+// what the CI service answers (design/design/grit-split.design.md#GS-1) --
 // cmd/grain's ciGate in a real deployment.
 //
 // An interface so a test can drive these routes with no sandbox
@@ -162,7 +163,7 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 		return ci.Run{}, validationErrorf("task %s has no target repository", id)
 	}
 	if !grainci.Granted(task.Grants) {
-		return ci.Run{}, forbiddenErrorf("task %s does not hold the %q capability", id, grainci.CapabilityName)
+		return ci.Run{}, forbiddenErrorf("task %s does not hold the %q grant", id, grainci.Grant)
 	}
 	// A review working on the reviewed change's own branch owns no CI of
 	// its own (model.Task.CIOwner): what it asks for is asked as the
@@ -185,6 +186,22 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 	}
 	resetPullRequestPolls(*task)
 	full := len(opt.Jobs) == 0 && opt.Workflow == "" && !opt.Recheck
+	if full && !grainci.RequiredFor(*task.Target) && c.Store != nil {
+		repoCfg, err := c.Store.GetRepoConfig(ctx, *task.Target)
+		if err != nil {
+			return ci.Run{}, err
+		}
+		if !grainci.RepoUsesGrainCI(repoCfg, *task.Target) {
+			rulesRequire := false
+			if rules, rerr := c.Store.MergeRulesOf(ctx, *task.Target); rerr == nil && !rules.Empty() {
+				rulesRequire = rules.Effective(nil, false, model.CIModeGitHub).Mode.Grain()
+			}
+			explicitDisabled := repoCfg != nil && (repoCfg.CIMode == model.CIModeGitHub || repoCfg.CIMode == model.CIModeNone)
+			if !rulesRequire && (explicitDisabled || !grainci.GrantedExplicitly(task.Grants)) {
+				return ci.Run{}, forbiddenErrorf("%s", ciNotEnabledMessage(*task.Target))
+			}
+		}
+	}
 	previous, err := c.Store.GetObservation(ctx, id)
 	if err != nil {
 		return ci.Run{}, err
@@ -239,7 +256,10 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 		// A daemon still starting is not a fact about the request: left
 		// as the ErrNotUp it is, so it is served as 503 and a waiting
 		// caller asks again rather than giving up on a 400.
-		if errors.Is(err, ci.ErrNotUp) {
+		// Nor is a start queued for a grit server that cannot be reached
+		// (ci.ErrStartQueued): it runs once grit is back, so it is served
+		// as 503 too, and asking again joins it.
+		if errors.Is(err, ci.ErrNotUp) || errors.Is(err, ci.ErrStartQueued) {
 			return ci.Run{}, err
 		}
 		// A fact about the request, as handleStartCIRun says of the same
@@ -512,7 +532,7 @@ func taskCIJobName(job ci.JobRun) string {
 }
 
 func taskCIDetail(run ci.Run) string {
-	if strings.TrimSpace(run.Error) != "" || strings.TrimSpace(run.CancelReason) != "" || run.CancelledBy == ci.CancelByOperator {
+	if strings.TrimSpace(run.Error) != "" || strings.TrimSpace(run.CancelReason) != "" || run.CancelledBy.ByHand() {
 		return ""
 	}
 	var failed []string
@@ -700,7 +720,7 @@ func (c *Client) resolveRecheckTarget(task *model.Task, previous *model.Observat
 	if first.Commit != run.Commit || first.RunID == "" || first.RunID == run.ID {
 		return model.CIStatus{}, false
 	}
-	if first.CancelledBy == string(ci.CancelByOperator) || !isRecheckableConclusion(first.Conclusion) {
+	if ci.CancelSource(first.CancelledBy).ByHand() || !isRecheckableConclusion(first.Conclusion) {
 		return model.CIStatus{}, false
 	}
 	if !rechecksAnyOf(run, opt.Jobs, first.Detail) {
@@ -715,7 +735,7 @@ func (c *Client) hydrateRecheckTarget(st model.CIStatus) model.CIStatus {
 		return st
 	}
 	if prior, ok := c.Config.CI.Get(st.RunID); ok {
-		if prior.Interrupted || strings.TrimSpace(prior.CancelReason) != "" || prior.CancelledBy == ci.CancelByOperator {
+		if prior.Interrupted || strings.TrimSpace(prior.CancelReason) != "" || prior.CancelledBy.ByHand() {
 			st.CancelledBy = string(ci.CancelByOperator)
 			return st
 		}
@@ -812,6 +832,11 @@ type CIRunsResponse struct {
 	// failing this way" cannot be asked of one branch's runs alone, and a
 	// pane narrowed to one branch is exactly where it is worth asking.
 	Faults []CIFault `json:"faults,omitempty"`
+	// ActionsNote says why a repository's GitHub Actions rows came from
+	// grain's own record of them rather than the forge, or are missing:
+	// no forge connection that reads Actions, a low API budget, or a
+	// forge read that failed (ci_actions.go).
+	ActionsNote string `json:"actionsNote,omitempty"`
 }
 
 // CIFaultsResponse is what GET /api/ci/faults answers with: the same
@@ -977,14 +1002,14 @@ func (c *Client) ciEnabledFor(ctx context.Context, repo model.RepoRef) (bool, er
 
 // ciNotEnabledMessage is the refusal for a repo ciEnabledFor says no
 // to. It names the switch that does turn grain CI on -- the repo's CI
-// mode -- and says outright that the grain-ci capability does not: this
+// mode -- and says outright that the grain#ci grant does not: this
 // message once told operators to attach it, and somebody remembering
 // that advice should not be sent round the same loop again. Every
 // picker refuses the capability itself with grainci.Refusal.
 func ciNotEnabledMessage(repo model.RepoRef) string {
 	return fmt.Sprintf("grain CI is not enabled for %s: set its CI Mode to \"Use Grain CI\" on the repo's page (Settings, Repos). "+
-		"Attaching the %q capability does not turn it on by itself: the CI mode decides that, and grants %q to the repo's tasks",
-		repo, grainci.CapabilityName, grainci.CapabilityName)
+		"Attaching the %q grant does not turn it on by itself: the CI mode decides that, and grants it to the repo's tasks",
+		repo, model.GrainCIRef)
 }
 
 // ciEnabledAnywhere is the same question ciEnabledFor asks, for an
@@ -1087,7 +1112,7 @@ func (s *Server) handleStartCIRun(w http.ResponseWriter, r *http.Request) {
 		Ref:                    strings.TrimSpace(ref),
 		Commit:                 strings.TrimSpace(req.Commit),
 		Event:                  event,
-		RequestedBy:            s.tasks.actor(r.Context()).ID,
+		RequestedBy:            s.tasks.requestActor(r.Context()).Actor.ID,
 		Workflow:               strings.TrimSpace(req.Workflow),
 		Jobs:                   req.Jobs,
 		Recheck:                req.Recheck,
@@ -1097,6 +1122,10 @@ func (s *Server) handleStartCIRun(w http.ResponseWriter, r *http.Request) {
 	})
 	if errors.Is(err, ci.ErrNotUp) {
 		writeCINotUp(w)
+		return
+	}
+	if errors.Is(err, ci.ErrStartQueued) {
+		writeCIStartQueued(w, err)
 		return
 	}
 	if err != nil {
@@ -1128,7 +1157,7 @@ func (c *Client) withholdReleaseSecrets(ctx context.Context, repo model.RepoRef,
 	if event != ci.EventManual && event != ci.EventRelease {
 		return "", nil
 	}
-	if c.actor(ctx).Kind == model.PrincipalHuman {
+	if c.requestActor(ctx).Actor.Kind == model.PrincipalHuman {
 		return "", nil
 	}
 	return fmt.Sprintf("a %s run of %s started by a caller that is not a person places no capabilities or release secrets",
@@ -1170,11 +1199,34 @@ func (s *Server) handleListCIWorkflows(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 	runner := s.tasks.Config.CI
+	if filter, err := ciRunFilterFrom(r.URL.Query(), time.Now()); err == nil {
+		if repo, ok := s.wantsActions(r, filter); ok && (runner == nil || !ci.IsUp(runner) ||
+			strings.EqualFold(filter.Provider, ci.ProviderGitHubActions)) {
+			// No grain CI to merge with: Actions alone.
+			limit, err := ciRunLimitFrom(r.URL.Query())
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			s.writeCIRuns(w, r, ci.RunPage{}, filter, limit, repo)
+			return
+		}
+	}
 	if runner == nil {
 		writeJSON(w, http.StatusOK, CIRunsResponse{
 			Enabled: false,
 			Faults:  s.tasks.CISharedFaults(r.Context()),
 		})
+		return
+	}
+	// A daemon whose CI service is not up yet (ci.ErrNotUp) has an
+	// engine that cannot answer, not one with no runs: Find on it is an
+	// empty page, which /ci showed as "No CI runs yet" and which blanked
+	// a table already on screen at its next poll. It is the same 503
+	// GET /api/ci/runs/{id} answers, so the pane keeps what it had and
+	// says why it cannot read more.
+	if !ci.IsUp(runner) {
+		writeCINotUp(w)
 		return
 	}
 	filter, err := ciRunFilterFrom(r.URL.Query(), time.Now())
@@ -1196,6 +1248,18 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 	// answered with: a narrowed question is asked of the whole history
 	// this deployment keeps, not of the newest ci.MaxListedRuns of it
 	// (ci.RunStore.Find, grain/task-289).
+	if repo, ok := s.wantsActions(r, filter); ok {
+		grainFilter := filter
+		grainFilter.Provider = ""
+		s.writeCIRuns(w, r, runner.Find(grainFilter, limit), filter, limit, repo)
+		return
+	}
+	if filter.Provider != "" && !strings.EqualFold(filter.Provider, ci.ProviderGrain) {
+		// A provider no run of this answer is from.
+		writeJSON(w, http.StatusOK, CIRunsResponse{Enabled: true, Runs: []ci.Run{}})
+		return
+	}
+	filter.Provider = ""
 	page := runner.Find(filter, limit)
 	var faults []CIFault
 	if canShareFaultRuns(filter, limit) {
@@ -1217,6 +1281,63 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 		Matched: page.Matched,
 		Stored:  page.Stored,
 		Faults:  faults,
+	})
+}
+
+// writeCIRuns answers GET /api/ci/runs with grain's page merged with
+// repo's GitHub Actions runs (ci_actions.go), newest first, every row
+// labelled with its provider.
+func (s *Server) writeCIRuns(w http.ResponseWriter, r *http.Request, page ci.RunPage, filter ci.RunFilter, limit int, repo model.RepoRef) {
+	compact, err := ciRunViewFrom(r.URL.Query())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.EqualFold(filter.Provider, ci.ProviderGitHubActions) {
+		page = ci.RunPage{}
+	}
+	var actions []ci.Run
+	var actionsMatched int
+	var note string
+	if filter.Provider == "" || strings.EqualFold(filter.Provider, ci.ProviderGitHubActions) {
+		actions, actionsMatched, note = s.tasks.listActionsRunsCounted(r.Context(), repo, filter, limit)
+	}
+	merged := make([]ci.Run, 0, len(page.Runs)+len(actions))
+	for _, run := range page.Runs {
+		if run.Provider == "" {
+			run.Provider = ci.ProviderGrain
+		}
+		merged = append(merged, run)
+	}
+	merged = append(merged, actions...)
+	sortRunsNewestFirst(merged)
+	if limit <= 0 {
+		limit = ci.MaxListedRuns
+	}
+	if len(merged) > limit {
+		merged = merged[:limit]
+	}
+	page.Runs = merged
+	page.Matched += actionsMatched
+	page.Stored += actionsMatched
+	faults := s.tasks.CISharedFaults(r.Context())
+	if compact {
+		resp := ciCompactRuns(page, faults)
+		resp.ActionsNote = note
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	listed := make([]ci.Run, 0, len(page.Runs))
+	for _, run := range page.Runs {
+		listed = append(listed, ciListSummary(run))
+	}
+	writeJSON(w, http.StatusOK, CIRunsResponse{
+		Enabled:     true,
+		Runs:        listed,
+		Matched:     page.Matched,
+		Stored:      page.Stored,
+		Faults:      faults,
+		ActionsNote: note,
 	})
 }
 
@@ -1306,6 +1427,7 @@ func ciRunFilterFrom(query url.Values, now time.Time) (ci.RunFilter, error) {
 		Repo:       strings.TrimSpace(query.Get("repo")),
 		Ref:        strings.TrimSpace(query.Get("ref")),
 		Job:        strings.TrimSpace(query.Get("job")),
+		Workflow:   strings.TrimSpace(query.Get("workflow")),
 		Descending: true,
 	}
 	for _, value := range query["conclusion"] {
@@ -1334,6 +1456,13 @@ func ciRunFilterFrom(query url.Values, now time.Time) (ci.RunFilter, error) {
 		}
 		filter.Until = at
 	}
+	switch provider := strings.ToLower(strings.TrimSpace(query.Get("provider"))); provider {
+	case "", ci.ProviderGrain, ci.ProviderGitHubActions:
+		filter.Provider = provider
+	default:
+		return ci.RunFilter{}, fmt.Errorf("%q is not a CI provider: use %s or %s", query.Get("provider"),
+			ci.ProviderGrain, ci.ProviderGitHubActions)
+	}
 	if word := strings.TrimSpace(query.Get("sort")); word != "" {
 		key, err := ci.ParseRunSortKey(word)
 		if err != nil {
@@ -1358,8 +1487,28 @@ func writeCINotUp(w http.ResponseWriter) {
 	writeError(w, http.StatusServiceUnavailable, apierror.Public(ci.ErrNotUp.Error()))
 }
 
+// writeCIStartQueued answers a start the remote grit server could not
+// take yet (ci.ErrStartQueued) with 503, not the 400 a refused request
+// gets: the run is in the durable outbox and is submitted once grit is
+// back, and asking for the same run again joins it rather than queueing
+// another. What the attempt met -- a transport error naming grit's
+// address -- stays in the daemon's log.
+func writeCIStartQueued(w http.ResponseWriter, err error) {
+	msg := ci.ErrStartQueued.Error()
+	var queued *ci.StartQueuedError
+	if errors.As(err, &queued) {
+		log.Printf("ci: start %s queued for grit: %v", queued.RequestID, queued.Err)
+		msg = fmt.Sprintf("%s (request %s); asking for the same run again joins it rather than starting a second", msg, queued.RequestID)
+	}
+	writeError(w, http.StatusServiceUnavailable, apierror.Public(msg))
+}
+
 func (s *Server) handleGetCIRun(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if IsActionsRunID(id) {
+		s.handleGetActionsRun(w, r, id)
+		return
+	}
 	runner := s.tasks.Config.CI
 	if runner != nil {
 		if run, ok := runner.Get(id); ok {
@@ -1404,6 +1553,10 @@ func (s *Server) handleGetCIRun(w http.ResponseWriter, r *http.Request) {
 // the route below, are gated the same way -- an artifact is the run's
 // own build output, as much the run's team's as its step output is.
 func (s *Server) handleListCIRunArtifacts(w http.ResponseWriter, r *http.Request) {
+	if id := r.PathValue("id"); IsActionsRunID(id) {
+		s.handleListActionsArtifacts(w, r, id)
+		return
+	}
 	runner := s.tasks.Config.CI
 	if runner == nil {
 		writeJSON(w, http.StatusOK, CIRunArtifactsResponse{Artifacts: []ci.Artifact{}})
@@ -1434,6 +1587,10 @@ func (s *Server) handleListCIRunArtifacts(w http.ResponseWriter, r *http.Request
 // out of, because the thing people do with these is download three of
 // them and then work out which is which.
 func (s *Server) handleGetCIArtifact(w http.ResponseWriter, r *http.Request) {
+	if IsActionsRunID(r.PathValue("id")) {
+		writeError(w, http.StatusNotImplemented, errors.New(actionsArtifactNote))
+		return
+	}
 	runner := s.tasks.Config.CI
 	if runner == nil {
 		writeError(w, http.StatusNotFound, fmt.Errorf("this deployment has no grain CI wired"))
@@ -1520,8 +1677,7 @@ func (s *Server) handleClearCICache(w http.ResponseWriter, r *http.Request) {
 	}
 	if !enabled {
 		writeError(w, http.StatusForbidden, fmt.Errorf(
-			"grain CI is not enabled anywhere on this deployment, so there is no job cache to clear: attach the %q capability to a repo (Settings, Repos) or to this deployment's default capabilities",
-			grainci.CapabilityName))
+			"grain CI is not enabled anywhere on this deployment, so there is no job cache to clear: set a repo's CI Mode to \"Use Grain CI\" (Settings, Repos)"))
 		return
 	}
 	removed, ok, err := runner.ClearCache(r.Context())
@@ -1567,14 +1723,13 @@ func (s *Server) handleCancelCIRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	// The one door a person cancels through, and therefore the one place
-	// ci.CancelByOperator is said, so the run records whose hand was on
-	// it. It stops this run, not the task: the merge queue's reconciler
+	// The one door a person cancels a run alone through, so the run
+	// records whose hand was on it: their ID (ci.CancelByPrincipal). It stops this run, not the task: the merge queue's reconciler
 	// replaces it with another run for the same commit after
 	// ciRetryDelay, as it does any cancellation (orchestrator's
 	// ciReplacementFor). Stopping the task is withdrawing auto-merge or
 	// closing it.
-	if !runner.Cancel(id, strings.TrimSpace(req.Reason), ci.CancelByOperator) {
+	if !runner.Cancel(id, strings.TrimSpace(req.Reason), ci.CancelByPrincipal(s.tasks.requestActor(r.Context()).Actor.ID)) {
 		// Either it finished or it never existed; both are "there is
 		// nothing here to cancel", and telling them apart would mean
 		// reporting a 200 for a run that ignored the request.

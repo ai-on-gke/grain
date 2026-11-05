@@ -131,8 +131,8 @@ func TestUpgradeCheckFilesOneApprovedTaskAtTheHeadOfTheBacklog(t *testing.T) {
 	// both, which is exactly why the second is not folded into the first
 	// -- every other self-debug task keeps only the source.
 	slices.Sort(grants)
-	if !slices.Equal(grants, []string{"grain-log", "self-debug"}) {
-		t.Errorf("Grants = %v, want self-debug and grain-log", grants)
+	if !slices.Equal(grants, []string{model.GrainJournalGrant, "self-debug"}) {
+		t.Errorf("Grants = %v, want self-debug and %s", grants, model.GrainJournalGrant)
 	}
 	if len(check.Reads) != 1 || check.Reads[0].Name != "grain-home" {
 		t.Errorf("Reads = %v, want the state repository", check.Reads)
@@ -743,7 +743,7 @@ func TestUpgradeCheckReportsTheRestartGap(t *testing.T) {
 }
 
 // The check reports how many runs the restart's adoption pass adopted,
-// how many it lost, and why (docs/non-disruptive-upgrade.md, piece 6
+// how many it lost, and why (design/design/non-disruptive-upgrade.design.md, piece 6
 // step 6) -- when this process is the one that restart started.
 func TestUpgradeCheckReportsAdoptedAndLostRuns(t *testing.T) {
 	t.Parallel()
@@ -1073,5 +1073,90 @@ func TestUpgradeCheckIgnoresUnchangedUpgrade(t *testing.T) {
 	}
 	if pause, err := store.GetPipelinePause(ctx); err != nil || pause != nil {
 		t.Errorf("GetPipelinePause = (%+v, %v), want no pause for an unchanged upgrade", pause, err)
+	}
+}
+
+// An upgrade with a restart to come is the next process's to check: a
+// cycle on the outgoing daemon -- one that ticks between the upgrade
+// staging the new build and the restart replacing this process, while
+// in-flight runs are flushed -- files nothing, because the build hash,
+// the restart gap and the adoption it would report do not exist yet
+// (task 1937). The daemon the restart brings up files it.
+func TestUpgradeCheckWaitsForTheRestartToComplete(t *testing.T) {
+	t.Parallel()
+	finished := baseTime.Add(-time.Minute)
+	restartAt := baseTime.Add(-30 * time.Second)
+	restarting := func(state upgrade.StepState, at *time.Time) upgrade.Status {
+		status := upgradeDone("main", finished)
+		status.Steps = []upgrade.Step{
+			{Name: "install", State: upgrade.StepDone},
+			{Name: "restart", State: state, StartedAt: at},
+		}
+		return status
+	}
+	outgoing := baseTime.Add(-24 * time.Hour)
+	incoming := baseTime.Add(-10 * time.Second)
+
+	for _, c := range []struct {
+		name    string
+		status  upgrade.Status
+		process time.Time
+		want    int
+	}{
+		{"outgoing daemon, restart not yet started", restarting(upgrade.StepPending, nil), outgoing, 0},
+		{"outgoing daemon, restart command running", restarting(upgrade.StepRunning, &restartAt), outgoing, 0},
+		{"outgoing kube pod, rollout under way", upgradeDone("main", finished), outgoing, 0},
+		{"daemon the restart brought up", restarting(upgrade.StepRunning, &restartAt), incoming, 1},
+		{"pod the rollout brought up", upgradeDone("main", finished), incoming, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			store, _ := openStore(t)
+			status := c.status
+			deps := orchestrator.Deps{
+				Store: store,
+				Config: orchestrator.Config{
+					UpgradeStatus:    func() (upgrade.Status, error) { return status, nil },
+					ProcessStartedAt: c.process,
+					StateRepo:        func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+				},
+			}
+			if err := orchestrator.RunCycle(t.Context(), deps, baseTime); err != nil {
+				t.Fatalf("cycle: %v", err)
+			}
+			if got := upgradeChecks(t, store); len(got) != c.want {
+				t.Fatalf("filed %d upgrade checks, want %d", len(got), c.want)
+			}
+		})
+	}
+}
+
+func TestUpgradeCheckBodyRecordsImageSourceAndFallback(t *testing.T) {
+	store, _ := openStore(t)
+	finished := baseTime.Add(-2 * time.Minute)
+	status := upgradeDone("main", finished)
+	status.Source = string(upgrade.ImageSourceRegistry)
+	status.FallbackNote = "release has no image assets; pulled from docker.io/grainai/grain"
+	deps := orchestrator.Deps{
+		Store: store,
+		Config: orchestrator.Config{
+			UpgradeStatus:    func() (upgrade.Status, error) { return status, nil },
+			ProcessStartedAt: finished.Add(10 * time.Second),
+			StateRepo:        func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+		},
+	}
+	if err := orchestrator.RunCycle(t.Context(), deps, baseTime); err != nil {
+		t.Fatalf("cycle: %v", err)
+	}
+	checks := upgradeChecks(t, store)
+	if len(checks) != 1 {
+		t.Fatalf("filed %d upgrade checks, want 1", len(checks))
+	}
+	for _, want := range []string{
+		"- Image source: registry",
+		"- Fallback: release has no image assets; pulled from docker.io/grainai/grain",
+	} {
+		if !strings.Contains(checks[0].Body, want) {
+			t.Fatalf("upgrade check body missing %q:\n%s", want, checks[0].Body)
+		}
 	}
 }

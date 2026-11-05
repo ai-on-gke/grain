@@ -14,6 +14,11 @@
 
 import { expect, test } from "./fixtures.js";
 
+// package-publish is recorded as the release server's method it was
+// retired onto (schema migration 101).
+const PACKAGE_PUBLISH =
+  "https://grain.dev/capabilities/release#package-publish={}";
+
 test("walkthrough: RepoPage CI-only capability selection, persistence, and workflow generation (docs/test-plans/2026-09-22.md §3)", async ({
   page,
   request,
@@ -38,13 +43,13 @@ test("walkthrough: RepoPage CI-only capability selection, persistence, and workf
   const registryPushOption = page.getByRole("option", {
     name: /Registry push/i,
   });
-  const gcpKeyOption = page.getByRole("option", {
-    name: /GCP key/i,
+  const sandboxOption = page.getByRole("option", {
+    name: /GitHub sandbox/i,
   });
 
   await expect(packagePublishOption).toBeVisible();
   await expect(registryPushOption).toBeVisible();
-  await expect(gcpKeyOption).toBeVisible();
+  await expect(sandboxOption).toBeVisible();
 
   // Verify readiness/description details on CI-only capability options
   await expect(packagePublishOption).toContainText("Package publish");
@@ -77,7 +82,7 @@ test("walkthrough: RepoPage CI-only capability selection, persistence, and workf
       const apiData = await apiRes.json();
       return apiData.ciCapabilities || [];
     })
-    .toContain("package-publish");
+    .toContain(PACKAGE_PUBLISH);
 
   // Step 6: Perform hard page reload / direct URL navigation to /repo/bwsalmon/grain
   await page.goto("/repo/bwsalmon/grain#ci");
@@ -96,7 +101,7 @@ test("walkthrough: RepoPage CI-only capability selection, persistence, and workf
   const capsRes = await request.get("/api/repos/bwsalmon/grain/capabilities");
   expect(capsRes.ok()).toBeTruthy();
   const capsData = await capsRes.json();
-  expect(capsData.ciCapabilities).toContain("package-publish");
+  expect(capsData.ciCapabilities).toContain(PACKAGE_PUBLISH);
 
   // Also select Registry push alongside Package publish to verify multiple selection
   await page.getByRole("combobox", { name: "CI capabilities" }).click();

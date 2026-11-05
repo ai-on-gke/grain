@@ -49,12 +49,10 @@ func TestCheckHostSandboxesRefusesADaemonOthersCanReach(t *testing.T) {
 		mutate func(*Config)
 		names  string
 	}{
-		"default ui-addr":  {func(c *Config) { c.UiAddr = "0.0.0.0:4242" }, "-ui-addr 0.0.0.0:4242"},
-		"any interface":    {func(c *Config) { c.UiAddr = ":4242" }, "-ui-addr :4242"},
-		"lan address":      {func(c *Config) { c.UiAddr = "10.1.2.3:4242" }, "-ui-addr 10.1.2.3:4242"},
-		"remote executors": {func(c *Config) { c.ExecutorAddr = ":8422" }, "-executor-addr"},
-		"iap":              {func(c *Config) { c.IapBackendService = "grain-backend" }, "IAP"},
-		"run hosts":        {func(c *Config) { c.RunHostImage = "example/grain" }, "-run-host-image"},
+		"default ui-addr": {func(c *Config) { c.UiAddr = "0.0.0.0:4242" }, "-ui-addr 0.0.0.0:4242"},
+		"any interface":   {func(c *Config) { c.UiAddr = ":4242" }, "-ui-addr :4242"},
+		"lan address":     {func(c *Config) { c.UiAddr = "10.1.2.3:4242" }, "-ui-addr 10.1.2.3:4242"},
+		"iap":             {func(c *Config) { c.IapBackendService = "grain-backend" }, "IAP"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -70,6 +68,54 @@ func TestCheckHostSandboxesRefusesADaemonOthersCanReach(t *testing.T) {
 				t.Fatalf("with -allow-unisolated-host-sandboxes: %v, want it to start", err)
 			}
 		})
+	}
+}
+
+// Run hosts are refused with host sandboxes outright, and
+// -allow-unisolated-host-sandboxes does not lift it: a run host is not
+// given the sandbox directory, and a host sandbox's commands would run in
+// the run host beside the credential directory and every other run's
+// spool and home (CheckRunHostBackend).
+func TestCheckRunHostBackendRefusesHostSandboxes(t *testing.T) {
+	t.Parallel()
+	for _, allow := range []bool{false, true} {
+		cfg := workstation()
+		cfg.RunHostImage = "example/grain"
+		cfg.AllowUnisolatedHostSandboxes = allow
+		err := CheckSandboxBackend(cfg, false)
+		if err == nil || !strings.Contains(err.Error(), "-run-host-image") || !strings.Contains(err.Error(), "-host-sandboxes") {
+			t.Fatalf("CheckSandboxBackend(-run-host-image with -host-sandboxes, allow-unisolated=%v) = %v, "+
+				"want a refusal naming both flags", allow, err)
+		}
+	}
+}
+
+// A stored host backend on a daemon with run hosts is not offered and
+// falls back to the flags' backend with a note, as a stored container
+// one does (TestRunHostsAreNotOfferedTheContainerBackend).
+func TestRunHostsAreNotOfferedTheHostBackend(t *testing.T) {
+	t.Parallel()
+	cfg := Config{
+		GranuleSandboxes:    true,
+		GranuleSSHUser:      "root",
+		GranuleWorkspace:    "/home/debian",
+		GranuleGitProxyHost: "172.18.0.1",
+		SandboxDir:          "/var/lib/grain/sandboxes",
+		RunHostImage:        "example/grain",
+	}
+	cfg.startupHostSandboxes = true
+	if ok, reason := cfg.sandboxBackendAvailability(model.SandboxBackendHost); ok || !strings.Contains(reason, "-run-host-image") {
+		t.Fatalf("host backend availability with run hosts = %v, %q; want unavailable, naming -run-host-image", ok, reason)
+	}
+	runnable, notes := cfg.RunnableStoredConfig(model.Config{SandboxBackend: model.SandboxBackendHost})
+	if runnable.SandboxBackend != model.SandboxBackendGranule {
+		t.Fatalf("runnable backend = %q, want granule", runnable.SandboxBackend)
+	}
+	if len(notes) == 0 {
+		t.Fatal("a stored host backend was replaced without a note")
+	}
+	if started := cfg.WithModelConfig(runnable); started.HostSandboxes {
+		t.Fatal("a stored host backend was selected for a daemon with run hosts")
 	}
 }
 

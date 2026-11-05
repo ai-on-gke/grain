@@ -2132,6 +2132,107 @@ func TestNewTaskBranchesCarryTheDeploymentID(t *testing.T) {
 	}
 }
 
+// A deployment seeded before grain/task-56 has UnsluggedTaskBranchTemplate
+// ("grain/{deployment}/task-{id}") stored in grain_config. Migration 78
+// upgrades that stored default to DefaultTaskBranchTemplate
+// ("grain/{deployment}/task-{id}-{slug}") so newly created tasks include
+// a portion of the task's title in their branch name in addition to the
+// deployment and task-id uniquifiers, while keeping existing tasks'
+// branches untouched and leaving custom or empty templates alone.
+func TestMigrationUpgradesUnsluggedDefaultTaskBranchTemplate(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+
+	cfg := model.DefaultConfig()
+	cfg.DeploymentID = "prod"
+	cfg.TaskBranchTemplate = model.UnsluggedTaskBranchTemplate
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTask(ctx, task("7", true)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 77 WHERE `id` = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("migrating a version-77 store: %v", err)
+	}
+
+	after, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.TaskBranchTemplate != model.DefaultTaskBranchTemplate {
+		t.Fatalf("migrated template = %q, want %q", after.TaskBranchTemplate, model.DefaultTaskBranchTemplate)
+	}
+	// Existing task keeps its pre-migration branch.
+	if got, err := store.GetTask(ctx, "7"); err != nil || got.BranchName() != "grain/prod/task-7" {
+		t.Fatalf("existing task branch = %v, %v; want grain/prod/task-7", got, err)
+	}
+	// Newly created task gets the title slug in addition to the uniquifiers.
+	if err := store.PutTask(ctx, task("8", true)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.GetTask(ctx, "8"); err != nil || got.BranchName() != "grain/prod/task-8-rename-the-endpoint" {
+		t.Fatalf("new task branch = %v, %v; want grain/prod/task-8-rename-the-endpoint", got, err)
+	}
+	// Very long task titles (multi-kilobyte sentence and unbroken token) round-trip
+	// intact on the task row while producing bounded, valid branch names.
+	for _, tc := range []struct {
+		id, title, wantBranch string
+	}{
+		{
+			id:         "9",
+			title:      strings.Repeat("Fix intermittent streaming timeout across multi-region clusters ", 80),
+			wantBranch: "grain/prod/task-9-fix-intermittent-streaming",
+		},
+		{
+			id:         "10",
+			title:      strings.Repeat("supercalifragilisticexpialidocious", 60),
+			wantBranch: "grain/prod/task-10-" + strings.Repeat("supercalifragilisticexpialidocious", 60)[:model.MaxBranchSlugLen],
+		},
+	} {
+		longTask := task(tc.id, true)
+		longTask.Title = tc.title
+		if err := store.PutTask(ctx, longTask); err != nil {
+			t.Fatalf("PutTask(%s) with %d-char title: %v", tc.id, len(tc.title), err)
+		}
+		got, err := store.GetTask(ctx, tc.id)
+		if err != nil {
+			t.Fatalf("GetTask(%s): %v", tc.id, err)
+		}
+		if got.Title != tc.title {
+			t.Fatalf("GetTask(%s).Title length = %d, want %d", tc.id, len(got.Title), len(tc.title))
+		}
+		if got.BranchName() != tc.wantBranch || !model.ValidBranchName(got.BranchName()) {
+			t.Fatalf("GetTask(%s).BranchName() = %q, want valid %q", tc.id, got.BranchName(), tc.wantBranch)
+		}
+	}
+
+	// Custom and empty templates are left untouched by the migration.
+	for _, custom := range []string{"", "alice/{deployment}/task-{id}"} {
+		after.TaskBranchTemplate = custom
+		if err := store.PutConfig(ctx, *after); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 74 WHERE `id` = 1"); err != nil {
+			t.Fatal(err)
+		}
+		if err := model.New(db).Init(ctx); err != nil {
+			t.Fatalf("migrating a version-74 store with template %q: %v", custom, err)
+		}
+		got, err := store.GetConfig(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.TaskBranchTemplate != custom {
+			t.Fatalf("migrated custom template %q = %q, want it left alone", custom, got.TaskBranchTemplate)
+		}
+	}
+}
+
 func TestNewTaskIDAllocatesDistinctIncreasingIDs(t *testing.T) {
 	t.Parallel()
 	store, _, ctx := openStore(t)
@@ -3494,6 +3595,47 @@ func TestStartRunRejectsASecondLiveRunOnTheSameTask(t *testing.T) {
 	}
 }
 
+// TestStartRunNeverRefusesAConsoleSessionAtFullCapacity is the store's
+// half of the session admission guarantee (docs/sandbox-budget.md): the
+// in-transaction capacity check that refuses ordinary work at a full pool,
+// and a merger at a full merger pool, never refuses a console session or a
+// task holding priority-dispatch.
+func TestStartRunNeverRefusesAConsoleSessionAtFullCapacity(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	session := task("sess1", true)
+	session.Origin.Reason = model.ReasonConsoleSession
+	session.Interactive = true
+	session.Tags = []string{model.ConsoleSessionTag(model.DirectorSessionID)}
+	session.Grants = model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID})
+	steward := task("stew1", true)
+	steward.Grants = []model.Grant{{Capability: model.PriorityDispatchCapability, Via: model.GrantByLabel}}
+	for _, tk := range []model.Task{task("w0rk", true), task("w1rk", true), session, steward} {
+		if err := store.PutTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	limits := model.Limits{Workers: 1}
+	start := func(id string) error {
+		return store.StartRun(ctx, model.Run{ID: id + "-1", TaskID: id, Sandbox: id + "-1", Attempt: 1, StartedAt: now}, limits)
+	}
+	if err := start("w0rk"); err != nil {
+		t.Fatalf("filling the worker pool: %v", err)
+	}
+	if err := start("w1rk"); !errors.Is(err, model.ErrAtCapacity) {
+		t.Fatalf("an ordinary task at full capacity = %v, want ErrAtCapacity", err)
+	}
+	if err := start("sess1"); err != nil {
+		t.Fatalf("a console session at full capacity was refused: %v", err)
+	}
+	if err := start("stew1"); err != nil {
+		t.Fatalf("a priority-dispatch task at full capacity was refused: %v", err)
+	}
+	if live, err := store.LiveRunCounts(ctx); err != nil || live != (model.RunCounts{Workers: 1, Directors: 2}) {
+		t.Fatalf("live = %+v (%v), want one worker and both priority runs counted apart", live, err)
+	}
+}
+
 // TestStartRunRefusesToExceedTheConcurrencyLimit pins the guard that
 // replaced the one-run-per-slot index as the thing keeping two
 // overlapping dispatch.Cycle callers from over-dispatching. Cycle reads
@@ -4526,6 +4668,131 @@ func TestReorderRebalancesWhenNeighboursAreCrowded(t *testing.T) {
 	}
 }
 
+// putPrioritized files each task at the priority and OrderKey given, so a
+// test can lay out a backlog whose OrderKey order disagrees with the
+// order it lists in.
+func putPrioritized(t *testing.T, store *model.Store, ctx context.Context, tasks map[string][2]float64) {
+	t.Helper()
+	for id, pk := range tasks {
+		tk := task(id, true)
+		tk.Priority = int(pk[0])
+		tk.OrderKey = pk[1]
+		if err := store.PutTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestReorderAtAPriorityBoundary is grain/task-2339's own case: a P9 task
+// filed between two P5 ones lists first, so dragging the later P5 task
+// to the head of the P5 tasks names a P9 neighbour whose OrderKey is
+// larger than the P5 one it lands above. It has to land above it anyway.
+func TestReorderAtAPriorityBoundary(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	putPrioritized(t, store, ctx, map[string][2]float64{"a": {5, 10}, "b": {9, 20}, "c": {5, 30}})
+	if got := listedIDs(t, store, ctx); !reflect.DeepEqual(got, []string{"b", "a", "c"}) {
+		t.Fatalf("starting backlog = %v, want [b a c]", got)
+	}
+	if err := store.Reorder(ctx, []string{"c"}, ptr("b"), ptr("a")); err != nil {
+		t.Fatal(err)
+	}
+	if got := listedIDs(t, store, ctx); !reflect.DeepEqual(got, []string{"b", "c", "a"}) {
+		t.Fatalf("after dropping c between b and a: %v, want [b c a]", got)
+	}
+
+	// And back to the tail of the P5 tasks, the list's own bottom.
+	if err := store.Reorder(ctx, []string{"c"}, ptr("a"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := listedIDs(t, store, ctx); !reflect.DeepEqual(got, []string{"b", "a", "c"}) {
+		t.Fatalf("after dropping c at the tail: %v, want [b a c]", got)
+	}
+}
+
+// TestReorderMultiSelectAtAPriorityBoundary is the same drop with two
+// tasks dragged as a block: they land at the head of their own priority
+// and keep their own relative order rather than coming out reversed.
+func TestReorderMultiSelectAtAPriorityBoundary(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	putPrioritized(t, store, ctx, map[string][2]float64{
+		"a": {5, 10}, "b": {9, 20}, "c": {5, 30}, "d": {5, 40},
+	})
+	if err := store.Reorder(ctx, []string{"d", "c"}, ptr("b"), ptr("a")); err != nil {
+		t.Fatal(err)
+	}
+	if got := listedIDs(t, store, ctx); !reflect.DeepEqual(got, []string{"b", "c", "d", "a"}) {
+		t.Fatalf("after dropping c and d between b and a: %v, want [b c d a]", got)
+	}
+}
+
+// TestReorderAcrossPrioritiesStaysInItsOwnPriority drops tasks among
+// tasks of another priority. Reorder never changes a task's priority, so
+// a P5 task dropped among P9 ones goes to the head of the P5 tasks, and a
+// P9 task dropped among P5 ones to the tail of the P9 tasks -- as far as
+// the drop asked, rather than at whatever its key lands next to.
+func TestReorderAcrossPrioritiesStaysInItsOwnPriority(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	putPrioritized(t, store, ctx, map[string][2]float64{
+		"hi1": {9, 10}, "lo1": {5, 20}, "hi2": {9, 30}, "lo2": {5, 40},
+	})
+	if got := listedIDs(t, store, ctx); !reflect.DeepEqual(got, []string{"hi1", "hi2", "lo1", "lo2"}) {
+		t.Fatalf("starting backlog = %v, want [hi1 hi2 lo1 lo2]", got)
+	}
+
+	// lo2 dropped between the two P9 tasks.
+	if err := store.Reorder(ctx, []string{"lo2"}, ptr("hi1"), ptr("hi2")); err != nil {
+		t.Fatal(err)
+	}
+	if got := listedIDs(t, store, ctx); !reflect.DeepEqual(got, []string{"hi1", "hi2", "lo2", "lo1"}) {
+		t.Fatalf("after dropping lo2 among the P9 tasks: %v, want [hi1 hi2 lo2 lo1]", got)
+	}
+
+	// hi1 dropped between the two P5 tasks.
+	if err := store.Reorder(ctx, []string{"hi1"}, ptr("lo2"), ptr("lo1")); err != nil {
+		t.Fatal(err)
+	}
+	if got := listedIDs(t, store, ctx); !reflect.DeepEqual(got, []string{"hi2", "hi1", "lo2", "lo1"}) {
+		t.Fatalf("after dropping hi1 among the P5 tasks: %v, want [hi2 hi1 lo2 lo1]", got)
+	}
+
+	// A block spanning both priorities dropped at the very head: each
+	// goes to the head of its own priority.
+	if err := store.Reorder(ctx, []string{"hi1", "lo1"}, nil, ptr("hi2")); err != nil {
+		t.Fatal(err)
+	}
+	if got := listedIDs(t, store, ctx); !reflect.DeepEqual(got, []string{"hi1", "hi2", "lo1", "lo2"}) {
+		t.Fatalf("after dropping hi1 and lo1 at the head: %v, want [hi1 hi2 lo1 lo2]", got)
+	}
+}
+
+// TestReorderRebalanceKeepsTheListedOrder crowds two P5 neighbours so
+// the drop has to rebalance, in a backlog whose OrderKey order disagrees
+// with its listed one across priorities. The rebalance renumbers in the
+// listed order, so nothing but the dropped task moves.
+func TestReorderRebalanceKeepsTheListedOrder(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+	putPrioritized(t, store, ctx, map[string][2]float64{
+		"a": {5, 10}, "b": {5, 11}, "hi": {9, 50}, "c": {5, 60},
+	})
+	if _, err := db.ExecContext(ctx, "UPDATE `task` SET `order_key` = 10.0000001 WHERE `id` = 'b'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Reorder(ctx, []string{"c"}, ptr("a"), ptr("b")); err != nil {
+		t.Fatal(err)
+	}
+	if got := listedIDs(t, store, ctx); !reflect.DeepEqual(got, []string{"hi", "a", "c", "b"}) {
+		t.Fatalf("after dropping c into a crowded gap: %v, want [hi a c b]", got)
+	}
+	keys := orderKeys(t, store, ctx)
+	if !(keys["hi"] < keys["a"] && keys["a"] < keys["c"] && keys["c"] < keys["b"]) {
+		t.Fatalf("OrderKeys after rebalance = %v, want ascending in listed order", keys)
+	}
+}
+
 func ptr[T any](v T) *T { return &v }
 
 // --- the merge queue at the front of the backlog -------------------------
@@ -5218,8 +5485,8 @@ func TestAChangelistIsTheTasksChangeLikeAPullRequest(t *testing.T) {
 // TaskCIRef names the repository a task works in and the branch fixed
 // on it, which is what `grain ci list --task` and `grain pr status --task`
 // read CI under; and a live run's scope may read the task:// records of
-// tasks in its own repository, the ones it reads, and any an
-// api:tasks:read@repo grant names.
+// other tasks only in the repositories an api:tasks:read@repo grant
+// names -- not its own target or the ones it reads.
 func TestTaskCIRefAndTaskReadRepos(t *testing.T) {
 	t.Parallel()
 	store, _, ctx := openStore(t)
@@ -5250,12 +5517,132 @@ func TestTaskCIRefAndTaskReadRepos(t *testing.T) {
 	if scope.MayReadAllTasks {
 		t.Errorf("a repository-limited tasks:read reads every task: %+v", scope)
 	}
-	for _, r := range []string{tk.Target.String(), "owner/shared-lib", "other/repo"} {
-		if !scope.TaskReadRepos[r] {
-			t.Errorf("%s not in TaskReadRepos %v", r, scope.TaskReadRepos)
+	if !scope.TaskReadRepos["other/repo"] {
+		t.Errorf("other/repo not in TaskReadRepos %v", scope.TaskReadRepos)
+	}
+	for r := range scope.TaskReadRepos {
+		if r != "other/repo" {
+			t.Errorf("TaskReadRepos %v holds %s, which no api:tasks:read grant names", scope.TaskReadRepos, r)
 		}
 	}
-	if scope.TaskReadRepos["unrelated/repo"] {
-		t.Errorf("TaskReadRepos %v holds a repository nothing granted", scope.TaskReadRepos)
+}
+
+// A live run of a task with a target, reads and writes but no api: grant
+// reads no other task's task:// record: its repositories are its git and
+// CI scope, not a grant to read the tasks working in them.
+func TestSandboxNamespaceScopeReadsNoSiblingTasksWithoutAGrant(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	tk := task("f1e3", true)
+	tk.Reads = []model.RepoRef{{Owner: "owner", Name: "shared-lib"}}
+	tk.Writes = []model.WriteTarget{{Repo: model.RepoRef{Owner: "owner", Name: "deploy-config"}, Base: "deploy"}}
+	if err := store.PutTask(ctx, tk); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartRun(ctx, model.Run{
+		ID: "f1e3-r1", TaskID: "f1e3", Sandbox: "sandbox-nogrant", Attempt: 1, StartedAt: now,
+	}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	scope, live, err := store.SandboxNamespaceScope(ctx, "sandbox-nogrant")
+	if err != nil || !live {
+		t.Fatalf("SandboxNamespaceScope = (live %v, %v)", live, err)
+	}
+	if scope.MayReadAllTasks || len(scope.TaskReadRepos) != 0 {
+		t.Errorf("a run with no tasks:read grant reads other tasks: MayReadAllTasks %v, TaskReadRepos %v",
+			scope.MayReadAllTasks, scope.TaskReadRepos)
+	}
+	// Its repositories are still its git and CI scope.
+	for _, r := range []string{tk.Target.String(), "owner/shared-lib", "owner/deploy-config"} {
+		if !scope.AllowedRepos[r] {
+			t.Errorf("%s not in AllowedRepos %v", r, scope.AllowedRepos)
+		}
+	}
+}
+
+func TestTaskPriorityDefaultUpdateAndQueueOrdering(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+
+	defaultTask := task("prio-default", true)
+	defaultTask.CreatedAt = &now
+	if err := store.PutTask(ctx, defaultTask); err != nil {
+		t.Fatal(err)
+	}
+	gotDefault, err := store.GetTask(ctx, "prio-default")
+	if err != nil || gotDefault == nil {
+		t.Fatalf("GetTask prio-default: %v", err)
+	}
+	if gotDefault.Priority != model.DefaultTaskPriority {
+		t.Errorf("Priority = %d, want default %d", gotDefault.Priority, model.DefaultTaskPriority)
+	}
+
+	lowTask := task("prio-low", true)
+	lowTask.Priority = 2
+	t1 := now.Add(time.Minute)
+	lowTask.CreatedAt = &t1
+	if err := store.PutTask(ctx, lowTask); err != nil {
+		t.Fatal(err)
+	}
+
+	highTask := task("prio-high", true)
+	highTask.Priority = 8
+	t2 := now.Add(2 * time.Minute)
+	highTask.CreatedAt = &t2
+	if err := store.PutTask(ctx, highTask); err != nil {
+		t.Fatal(err)
+	}
+
+	midFrontTask := task("prio-mid-front", true)
+	midFrontTask.Priority = 5
+	t3 := now.Add(3 * time.Minute)
+	midFrontTask.CreatedAt = &t3
+	if err := store.PutTask(ctx, midFrontTask); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MoveToFrontOfBacklog(ctx, []string{"prio-mid-front"}); err != nil {
+		t.Fatal(err)
+	}
+
+	midFixesBase := task("prio-mid-fixes-base", true)
+	midFixesBase.Priority = 5
+	model.SetFixesBaseBranch(&midFixesBase, true)
+	t4 := now.Add(4 * time.Minute)
+	midFixesBase.CreatedAt = &t4
+	if err := store.PutTask(ctx, midFixesBase); err != nil {
+		t.Fatal(err)
+	}
+
+	ready, err := store.Ready(ctx)
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	wantIDs := []string{"prio-high", "prio-mid-fixes-base", "prio-mid-front", "prio-default", "prio-low"}
+	if !slices.Equal(ready, wantIDs) {
+		t.Errorf("Ready order = %v, want %v", ready, wantIDs)
+	}
+
+	// Updating priority moves lowTask ahead of highTask.
+	lowStored, err := store.GetTask(ctx, "prio-low")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowStored.Priority = 10
+	if err := store.PutTask(ctx, *lowStored); err != nil {
+		t.Fatal(err)
+	}
+	updatedLow, err := store.GetTask(ctx, "prio-low")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedLow.Priority != 10 {
+		t.Errorf("updated Priority = %d, want 10", updatedLow.Priority)
+	}
+	readyAfter, err := store.Ready(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(readyAfter) == 0 || readyAfter[0] != "prio-low" {
+		t.Errorf("Ready after priority update first = %v, want prio-low", readyAfter)
 	}
 }

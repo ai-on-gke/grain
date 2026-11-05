@@ -33,11 +33,11 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/bwsalmon/granule/pkg/sandbox"
+	"github.com/gke-labs/granule/pkg/sandbox"
 )
 
 // This file materializes a minted pass (capability_pass.go) into the
-// run's sandbox, in the order docs/capabilities-spec.md §5 sets, before
+// run's sandbox, in the order design/spec/capabilities/capabilities.spec.md §5 sets, before
 // RunDispatch starts anything: every grant's ports forwarded (§5.3), then
 // every placement written (§5.1), then the one setup_root and each
 // grant's setup run (§5.5); then every mcp_endpoint is proxied and every
@@ -218,6 +218,9 @@ type sandboxBatchFilePlacer interface {
 // then every placement, then the setup commands -- at dispatch, and again
 // into the fresh VM of a recreate_sandbox (§5.5.5).
 func (m *passMaterialization) apply(ctx context.Context, sb Sandbox) error {
+	if len(m.forwards) == 0 && len(m.pass.Placements()) == 0 && len(m.pass.SetupCommands()) == 0 {
+		return nil
+	}
 	commander, ok := sandboxRunsCommands(sb)
 	if !ok {
 		return fmt.Errorf("this sandbox backend (%T) cannot run commands in its sandbox, so it cannot materialize capability grants", sb)

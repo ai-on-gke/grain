@@ -22,7 +22,7 @@ import (
 )
 
 // The workflow parser and planner moved to pkg/workflows, the neutral
-// library grain and grit both link (docs/design/grit-split.md, GS-2).
+// library grain and grit both link (design/design/grit-split.design.md, GS-2).
 // These aliases keep this package's own callers and its importers
 // compiling while they move over in their own time.
 
@@ -49,31 +49,35 @@ type (
 )
 
 const (
-	DefaultJobTimeout       = workflows.DefaultJobTimeout
-	DeployedImagesEnv       = workflows.DeployedImagesEnv
-	EventManual             = workflows.EventManual
-	EventPullRequest        = workflows.EventPullRequest
-	EventPush               = workflows.EventPush
-	EventRelease            = workflows.EventRelease
-	EventSchedule           = workflows.EventSchedule
-	GitHubRunnerLabel       = workflows.GitHubRunnerLabel
-	GitHubWorkflowDir       = workflows.GitHubWorkflowDir
-	NoWorkflowAnswersPrefix = workflows.NoWorkflowAnswersPrefix
-	PriorityMergeHead       = workflows.PriorityMergeHead
-	PriorityNormal          = workflows.PriorityNormal
-	PriorityReleaseGate     = workflows.PriorityReleaseGate
-	PriorityRepair          = workflows.PriorityRepair
-	PriorityUnderway        = workflows.PriorityUnderway
-	RecurrenceDaily         = workflows.RecurrenceDaily
-	RecurrenceEveryNHours   = workflows.RecurrenceEveryNHours
-	RecurrenceEveryNMinutes = workflows.RecurrenceEveryNMinutes
-	RecurrenceMonthly       = workflows.RecurrenceMonthly
-	RecurrenceWeekly        = workflows.RecurrenceWeekly
-	ReleaseVersionEnv       = workflows.ReleaseVersionEnv
-	RequestedByEnv          = workflows.RequestedByEnv
-	RequestedByKindEnv      = workflows.RequestedByKindEnv
-	RunnerLabel             = workflows.RunnerLabel
-	WorkflowDir             = workflows.WorkflowDir
+	DefaultJobTimeout        = workflows.DefaultJobTimeout
+	DeployedImagesEnv        = workflows.DeployedImagesEnv
+	EventManual              = workflows.EventManual
+	EventPullRequest         = workflows.EventPullRequest
+	EventPush                = workflows.EventPush
+	EventRelease             = workflows.EventRelease
+	EventSchedule            = workflows.EventSchedule
+	GitHubRunnerLabel        = workflows.GitHubRunnerLabel
+	GitHubWorkflowDir        = workflows.GitHubWorkflowDir
+	NoWorkflowAnswersPrefix  = workflows.NoWorkflowAnswersPrefix
+	PriorityMergeHead        = workflows.PriorityMergeHead
+	PriorityNormal           = workflows.PriorityNormal
+	PriorityReleaseGate      = workflows.PriorityReleaseGate
+	PriorityRepair           = workflows.PriorityRepair
+	PriorityUnderway         = workflows.PriorityUnderway
+	RecurrenceDaily          = workflows.RecurrenceDaily
+	RecurrenceEveryNHours    = workflows.RecurrenceEveryNHours
+	RecurrenceEveryNMinutes  = workflows.RecurrenceEveryNMinutes
+	RecurrenceMonthly        = workflows.RecurrenceMonthly
+	RecurrenceWeekly         = workflows.RecurrenceWeekly
+	ReleaseAllowBreakingEnv  = workflows.ReleaseAllowBreakingEnv
+	ReleaseRollbackReasonEnv = workflows.ReleaseRollbackReasonEnv
+	ReleaseRollbackToEnv     = workflows.ReleaseRollbackToEnv
+	ReleaseShortSoakOKEnv    = workflows.ReleaseShortSoakOKEnv
+	ReleaseVersionEnv        = workflows.ReleaseVersionEnv
+	RequestedByEnv           = workflows.RequestedByEnv
+	RequestedByKindEnv       = workflows.RequestedByKindEnv
+	RunnerLabel              = workflows.RunnerLabel
+	WorkflowDir              = workflows.WorkflowDir
 )
 
 var (
@@ -112,7 +116,9 @@ func init() {
 			return list, nil
 		},
 		IsRepoAccess: IsRepoAccessCapability,
+		IsRepoRead:   IsRepoReadCapability,
 		DeclaredOnly: declaredOnly,
+		Canonical:    model.CanonicalLegacyGrant,
 	}
 }
 

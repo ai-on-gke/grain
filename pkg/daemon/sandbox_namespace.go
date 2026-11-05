@@ -18,7 +18,7 @@ package daemon
 // (pkg/namespace) and /cli/ reads (pkg/gitproxy's cli.go) answer from,
 // beyond grain CI's records: the task://, memory://, deploy:// and
 // config:// roots, and GitHub issues and grain's database. Stage 2 of
-// docs/design/sandbox-first-agent-surface.md.
+// design/design/sandbox-first-agent-surface.design.md.
 //
 // Each is the backend of the MCP tool it replaces, asked the same way:
 // read_grain_task* (DaemonTasks), query_merge_queue (daemonMergeQueue),
@@ -57,6 +57,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -67,6 +68,10 @@ import (
 // daemon that never builds one -- every request fails, saying so.
 var LiveAPI = &InProcessAPI{}
 
+// liveNamespace is the namespace the sandbox proxy serves at /fs/, which
+// grain's API serves at /api/fs/ too once the proxy has built it.
+var liveNamespace atomic.Pointer[namespace.Server]
+
 // InProcessAPI is an http.RoundTripper and http.Handler backed by an
 // atomically published http.Handler.
 type InProcessAPI = inProcessAPI
@@ -74,6 +79,15 @@ type InProcessAPI = inProcessAPI
 type inProcessAPI struct {
 	handler atomic.Pointer[http.Handler]
 }
+
+// cancelOnlyContext propagates cancellation and deadlines from parent while
+// hiding outer request context values (such as externalToken or agentCall) so
+// in-process subrequests authenticate independently as the deployment actor.
+type cancelOnlyContext struct {
+	context.Context
+}
+
+func (cancelOnlyContext) Value(any) any { return nil }
 
 // Set publishes h as the handler requests are answered by.
 func (a *inProcessAPI) Set(h http.Handler) { a.handler.Store(&h) }
@@ -86,12 +100,34 @@ func (a *inProcessAPI) RoundTrip(req *http.Request) (*http.Response, error) {
 	if h == nil {
 		return nil, errors.New("grain's API is not serving yet")
 	}
-	in := req.Clone(req.Context())
+	in := req.Clone(cancelOnlyContext{req.Context()})
 	in.RequestURI = in.URL.RequestURI()
 	in.RemoteAddr = ""
 	in.Host = "localhost"
 	in.Header.Del("Authorization")
 	in.Header.Del("X-Grain-Tunnel-Token")
+	if in.Body == nil {
+		in.Body = http.NoBody
+	}
+	rec := httptest.NewRecorder()
+	(*h).ServeHTTP(rec, in)
+	return rec.Result(), nil
+}
+
+// LoopbackRoundTrip answers req with the published handler as an authenticated
+// loopback HTTP request rather than an owner-trusted in-process one:
+// RemoteAddr is 127.0.0.1:0 and request headers (including X-Grain-Access-Code
+// and X-Grain-Acting-Task) are preserved so singleTenantGate, extractPrincipal
+// and agentAPIGate all run identically to the TCP listener.
+func (a *inProcessAPI) LoopbackRoundTrip(req *http.Request) (*http.Response, error) {
+	h := a.handler.Load()
+	if h == nil {
+		return nil, errors.New("grain's API is not serving yet")
+	}
+	in := req.Clone(req.Context())
+	in.RequestURI = in.URL.RequestURI()
+	in.RemoteAddr = "127.0.0.1:0"
+	in.Host = "127.0.0.1"
 	if in.Body == nil {
 		in.Body = http.NoBody
 	}
@@ -108,7 +144,7 @@ func (a *inProcessAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "grain's API is not serving yet", http.StatusServiceUnavailable)
 		return
 	}
-	in := r.Clone(r.Context())
+	in := r.Clone(cancelOnlyContext{r.Context()})
 	in.RequestURI = in.URL.RequestURI()
 	in.RemoteAddr = ""
 	in.Host = "localhost"
@@ -135,6 +171,7 @@ func inProcessAPIClient(api http.RoundTripper) *ui.HTTPClient {
 type SandboxNamespaceConfig struct {
 	DataDir      string
 	Store        *model.Store
+	SecretStore  *secrets.Store
 	GithubHost   string
 	InsecureHTTP bool
 	// API is what the readers' requests are answered by; LiveAPI in
@@ -158,7 +195,7 @@ func WireSandboxNamespace(ns *namespace.Server, cfg SandboxNamespaceConfig) *San
 func wireSandboxNamespace(ns *namespace.Server, cfg sandboxNamespaceConfig) *sandboxCLIBackend {
 	client := inProcessAPIClient(cfg.API)
 	ns.Tasks = mcp.NamespaceTasks{Reader: namespaceTaskReader{DaemonTasks: DaemonTasks{Client: client}, store: cfg.Store}}
-	ns.Deploy = sandboxDeploy{client: client, stateDir: StateRepoDir(cfg.DataDir), secretsDir: SecretsDir(cfg.DataDir), logSources: cfg.GrainLogSources}
+	ns.Deploy = sandboxDeploy{client: client, stateDir: StateRepoDir(cfg.DataDir), secretsDir: SecretsDir(cfg.DataDir), secretStore: cfg.SecretStore, logSources: cfg.GrainLogSources}
 	if cfg.Store != nil {
 		ns.Memory = sandboxMemory{store: cfg.Store}
 		ns.Config = sandboxRepoConfig{store: cfg.Store}
@@ -200,12 +237,15 @@ func (r namespaceTaskReader) AttemptPrompt(ctx context.Context, id string, attem
 type sandboxDeploy struct {
 	client               *ui.HTTPClient
 	stateDir, secretsDir string
+	secretStore          *secrets.Store
 	logSources           []grainlog.Source
 }
 
 var (
-	_ namespace.DeployProvider       = sandboxDeploy{}
-	_ namespace.MetricsSectionLister = sandboxDeploy{}
+	_ namespace.DeployProvider        = sandboxDeploy{}
+	_ namespace.MetricsSectionLister  = sandboxDeploy{}
+	_ namespace.MergeQueueRepoReader  = sandboxDeploy{}
+	_ namespace.MergeQueueQueryReader = sandboxDeploy{}
 )
 
 // toolText is a tool's answer as a file's content, or its refusal as an
@@ -228,6 +268,43 @@ func (d sandboxDeploy) ReadMergeQueue(ctx context.Context) (string, error) {
 	return toolText(tool.Handler(ctx, map[string]any{"view": "full"}))
 }
 
+// ReadMergeQueueFor is ReadMergeQueue for a caller reaching it under
+// ci:read alone (GET /api/fs/deploy/merge-queue): only the repositories
+// permits allows.
+func (d sandboxDeploy) ReadMergeQueueFor(ctx context.Context, permits func(repo string) bool) (string, error) {
+	reader := mcp.RepoFilteredMergeQueue{Reader: daemonMergeQueue{client: d.client}, Permits: permits}
+	tool := mcp.NewMergeQueueTools(reader)[0]
+	return toolText(tool.Handler(ctx, map[string]any{"view": "full"}))
+}
+
+// ReadMergeQueueQuery is the merge queue narrowed to q.Repo, limited to
+// the repositories q.Permits allows when it is set, and as JSON (the
+// mcp.MergeQueueReport the text is rendered from) under q.JSON -- what
+// the external `grain merge-queue [--repo] [--json]` reads over GET
+// /api/fs/deploy/merge-queue.
+func (d sandboxDeploy) ReadMergeQueueQuery(ctx context.Context, q namespace.MergeQueueQuery) (string, error) {
+	var reader mcp.MergeQueueReader = daemonMergeQueue{client: d.client}
+	if q.Permits != nil {
+		reader = mcp.RepoFilteredMergeQueue{Reader: reader, Permits: q.Permits}
+	}
+	if !q.JSON {
+		args := map[string]any{"view": "full"}
+		if q.Repo != "" {
+			args["repo"] = q.Repo
+		}
+		return toolText(mcp.NewMergeQueueTools(reader)[0].Handler(ctx, args))
+	}
+	report, err := reader.QueryMergeQueue(ctx, q.Repo, "")
+	if err != nil {
+		return "", fmt.Errorf("reading the merge queue: %w", err)
+	}
+	raw, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(raw) + "\n", nil
+}
+
 func (d sandboxDeploy) ReadMetrics(ctx context.Context, section string, q namespace.MetricsQuery) (string, error) {
 	if section == "all" {
 		section = ""
@@ -247,13 +324,30 @@ func (d sandboxDeploy) ReadMetrics(ctx context.Context, section string, q namesp
 
 func (d sandboxDeploy) ListMetricsSections() []string { return slices.Clone(mcp.MetricsSections) }
 
-func (d sandboxDeploy) ReadPipelineChanges(ctx context.Context) (string, error) {
-	tool := mcp.NewPipelineTools(DaemonPipeline{Client: d.client})[0]
-	return toolText(tool.Handler(ctx, map[string]any{}))
+// ReadPipelineChanges ends its page with the `grain read` command that
+// reads the next one, so a sandbox run pages on by running that line.
+func (d sandboxDeploy) ReadPipelineChanges(ctx context.Context, cursor string, limit int) (string, error) {
+	text, err := mcp.ReadPipelineChangesText(ctx, DaemonPipeline{Client: d.client}, cursor, limit, func(next string) string {
+		return pipelineChangesReadCommand(next, limit)
+	})
+	if err != nil {
+		return "", fmt.Errorf("reading pipeline changes: %w", err)
+	}
+	return toolText(mcp.Result{Text: text})
+}
+
+// pipelineChangesReadCommand is the `grain read` that reads the page after
+// cursor, carrying the page size the last read asked for.
+func pipelineChangesReadCommand(cursor string, limit int) string {
+	cmd := "grain read deploy://pipeline-changes --cursor " + cursor
+	if limit > 0 {
+		cmd += fmt.Sprintf(" --page %d", limit)
+	}
+	return cmd
 }
 
 func (d sandboxDeploy) redact() func(string) string {
-	redactor := grainLogRedactor(d.secretsDir)
+	redactor := grainLogRedactorFor(d.secretsDir, d.secretStore)
 	if redactor == nil {
 		return nil
 	}
@@ -262,7 +356,7 @@ func (d sandboxDeploy) redact() func(string) string {
 
 // health is read_deployment_health and read_deployment_state, built per
 // read so that a secret set since the daemon started is redacted by the
-// next read (grainLogRedactor reads the store each time).
+// next read (grainLogRedactorFor reads the store each time).
 func (d sandboxDeploy) health() []mcp.Tool {
 	return deploymenthealth.Tools(deploymenthealth.Config{
 		StateDir: d.stateDir, Reader: daemonDeploymentHealth{client: d.client}, Redact: d.redact(),
@@ -338,9 +432,10 @@ func (d sandboxDeploy) ListStateTables(ctx context.Context) ([]string, error) {
 // ReadGrainLog is read_grain_log's answer for one source, with every
 // window and filter `grain log` was given passed on as that tool's own
 // arguments -- so a read can reach past the tool's default tail instead of
-// only ever seeing it.
+// only ever seeing it -- and the reading task named on the tool's audit
+// line, which said "(no task)" for every `grain log` before.
 func (d sandboxDeploy) ReadGrainLog(ctx context.Context, source string, q namespace.GrainLogQuery) (string, error) {
-	tool := grainlog.Tools(grainlog.Config{Redactor: grainLogRedactor(d.secretsDir), Sources: d.logSources})[0]
+	tool := grainlog.Tools(grainlog.Config{TaskID: q.TaskID, Redactor: grainLogRedactorFor(d.secretsDir, d.secretStore), Sources: d.logSources})[0]
 	return toolText(tool.Handler(ctx, grainLogArgs(source, q)))
 }
 

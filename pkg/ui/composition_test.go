@@ -500,7 +500,7 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 		t.Fatalf("composing draft schedule: %v", err)
 	}
 	caps := field(t, draft.Tasks[0], "capabilities")
-	if !slices.Equal(caps.Values, []string{"self-debug", "grain-ci"}) {
+	if !slices.Equal(caps.Values, []string{"self-debug", model.GrainCIGrant}) {
 		t.Errorf("values = %v, want [self-debug grain-ci]", caps.Values)
 	}
 	if !slices.Equal(caps.Sources, []string{"schedule", "repo"}) {
@@ -516,7 +516,7 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("composing plain draft schedule: %v", err)
 	}
-	wantField(t, plainDraft.Tasks[0], "capabilities", "repo", "grain-ci")
+	wantField(t, plainDraft.Tasks[0], "capabilities", "repo", model.GrainCIGrant)
 
 	// Template with its own capability, previewed directly, through a
 	// schedule, and through a suite.
@@ -530,8 +530,8 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 		t.Fatalf("composing template: %v", err)
 	}
 	tmplCaps := field(t, tmplComp.Tasks[0], "capabilities")
-	if !slices.Equal(tmplCaps.Values, []string{"gcp-key", "grain-ci"}) {
-		t.Errorf("template values = %v, want [gcp-key grain-ci]", tmplCaps.Values)
+	if !slices.Equal(tmplCaps.Values, []string{model.GCPKeySandboxAgentGrant, model.GrainCIGrant}) {
+		t.Errorf("template values = %v, want [%s grain-ci]", tmplCaps.Values, model.GCPKeySandboxAgentGrant)
 	}
 	if !slices.Equal(tmplCaps.Sources, []string{"template", "repo"}) {
 		t.Errorf("template sources = %v, want [template repo]", tmplCaps.Sources)
@@ -548,8 +548,8 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 		t.Fatalf("composing schedule: %v", err)
 	}
 	schedCaps := field(t, schedComp.Tasks[0], "capabilities")
-	if !slices.Equal(schedCaps.Values, []string{"gcp-key", "grain-ci"}) {
-		t.Errorf("schedule values = %v, want [gcp-key grain-ci]", schedCaps.Values)
+	if !slices.Equal(schedCaps.Values, []string{model.GCPKeySandboxAgentGrant, model.GrainCIGrant}) {
+		t.Errorf("schedule values = %v, want [%s grain-ci]", schedCaps.Values, model.GCPKeySandboxAgentGrant)
 	}
 	if !slices.Equal(schedCaps.Sources, []string{"template", "repo"}) {
 		t.Errorf("schedule sources = %v, want [template repo]", schedCaps.Sources)
@@ -566,10 +566,86 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 		t.Fatalf("composing suite: %v", err)
 	}
 	suiteCaps := field(t, suiteComp.Tasks[0], "capabilities")
-	if !slices.Equal(suiteCaps.Values, []string{"gcp-key", "grain-ci"}) {
-		t.Errorf("suite values = %v, want [gcp-key grain-ci]", suiteCaps.Values)
+	if !slices.Equal(suiteCaps.Values, []string{model.GCPKeySandboxAgentGrant, model.GrainCIGrant}) {
+		t.Errorf("suite values = %v, want [%s grain-ci]", suiteCaps.Values, model.GCPKeySandboxAgentGrant)
 	}
 	if !slices.Equal(suiteCaps.Sources, []string{"template", "repo"}) {
 		t.Errorf("suite sources = %v, want [template repo]", suiteCaps.Sources)
+	}
+}
+
+// A template's own priority is what every task filed from it starts at
+// (model.Template.Priority), so the preview of a filing names it -- once
+// it says anything other than the default every task gets anyway.
+func TestCompositionShowsATemplatesOwnPriority(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	nine := 9
+	tmpl := templateForComposition(t, c, ctx, ui.CreateTemplateRequest{
+		Name: "Urgent", Title: "Urgent work", Repo: "acme/widgets", Priority: &nine,
+	})
+	plain := templateForComposition(t, c, ctx, ui.CreateTemplateRequest{
+		Name: "Plain", Title: "Plain work", Repo: "acme/widgets",
+	})
+
+	got, err := c.TemplateComposition(ctx, tmpl.ID, "acme/widgets", "main", nil, true)
+	if err != nil {
+		t.Fatalf("composing the template: %v", err)
+	}
+	wantField(t, got.Tasks[0], "priority", "template", "9")
+
+	sched, err := c.CreateSchedule(ctx, ui.CreateScheduleRequest{TemplateID: tmpl.ID, Recurrence: everyDay})
+	if err != nil {
+		t.Fatalf("creating a schedule: %v", err)
+	}
+	fired, err := c.ScheduleComposition(ctx, sched.ID)
+	if err != nil {
+		t.Fatalf("composing the schedule: %v", err)
+	}
+	wantField(t, fired.Tasks[0], "priority", "template", "9")
+
+	other, err := c.TemplateComposition(ctx, plain.ID, "acme/widgets", "main", nil, true)
+	if err != nil {
+		t.Fatalf("composing the plain template: %v", err)
+	}
+	for _, f := range other.Tasks[0].Fields {
+		if f.Name == "priority" {
+			t.Errorf("a template with no priority of its own previews %+v; want no priority row", f)
+		}
+	}
+}
+
+func TestCompositionShowsKeepRunningWhereItIsOn(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	tmpl := templateForComposition(t, c, ctx, ui.CreateTemplateRequest{
+		Name: "Standing", Title: "Standing work", Repo: "acme/widgets", KeepRunning: true,
+	})
+	plain := templateForComposition(t, c, ctx, ui.CreateTemplateRequest{
+		Name: "Plain", Title: "Plain work", Repo: "acme/widgets",
+	})
+
+	got, err := c.TemplateComposition(ctx, tmpl.ID, "acme/widgets", "main", nil, true)
+	if err != nil {
+		t.Fatalf("composing the template: %v", err)
+	}
+	wantField(t, got.Tasks[0], "keepRunning", "template", "on")
+
+	inline, err := c.DraftScheduleComposition(ctx, ui.CreateScheduleRequest{
+		Title: "Inline standing work", Repo: "acme/widgets", KeepRunning: true, Recurrence: everyDay,
+	})
+	if err != nil {
+		t.Fatalf("composing a draft schedule: %v", err)
+	}
+	wantField(t, inline.Tasks[0], "keepRunning", "schedule", "on")
+
+	other, err := c.TemplateComposition(ctx, plain.ID, "acme/widgets", "main", nil, true)
+	if err != nil {
+		t.Fatalf("composing the plain template: %v", err)
+	}
+	for _, f := range other.Tasks[0].Fields {
+		if f.Name == "keepRunning" {
+			t.Errorf("a template that does not keep running previews %+v; want no keepRunning row", f)
+		}
 	}
 }

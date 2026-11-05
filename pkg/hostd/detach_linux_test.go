@@ -151,8 +151,20 @@ func TestADetachedProcessIsKilledAtItsOwnDeadlineWhileNoDaemonIsAttached(t *test
 	cancel()
 	<-done
 	waitGone(t, st.PID, 10*time.Second)
-	p := listed(t, ts, st.ID)
-	if !p.Exited || p.Exit == nil || !p.Exit.Deadline {
+	// waitGone sees the zombie in /proc before hostd's cmd.Wait goroutine
+	// writes exit.json and records Exited; poll listed as the restart test
+	// below does.
+	var p Process
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		p = listed(t, ts, st.ID)
+		if p.Exited {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("listing 5s after pid %d exited = %+v, want Exited", st.PID, p)
+		}
+	}
+	if p.Exit == nil || !p.Exit.Deadline {
 		t.Fatalf("listing after the deadline = %+v, want exited at its deadline", p)
 	}
 	// exit.json is a run host's: code, error, finished_at.
@@ -261,11 +273,23 @@ func TestARestartedHostdKeepsAFinishedSpoolForTheDaemon(t *testing.T) {
 	started := make(chan Started, 1)
 	c := detachedClient(ts, started)
 	ctx, cancel := context.WithCancel(context.Background())
+	// The process finishes only once the daemon has detached from it. One
+	// that exits at once can race the cancel below, deliver its exit to the
+	// still-attached daemon, and have its spool released as read -- the
+	// opposite of what this test is about.
+	goAhead := filepath.Join(ts.dir, "go-ahead")
+	script := "while [ ! -e go-ahead ]; do sleep 0.01; done; echo done; exit 7"
+	ran := make(chan struct{})
 	go func() {
-		_, _ = c.Run(ctx, Request{Kind: KindCLI, Name: "sh", Args: []string{"-c", "echo done; exit 7"}, Detach: true, Run: "r"}, nil, nil, nil)
+		defer close(ran)
+		_, _ = c.Run(ctx, Request{Kind: KindCLI, Name: "sh", Args: []string{"-c", script}, Dir: ts.dir, Detach: true, Run: "r"}, nil, nil, nil)
 	}()
 	st := <-started
 	cancel()
+	<-ran
+	if err := os.WriteFile(goAhead, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	waitGone(t, st.PID, 10*time.Second)
 	for !listed(t, ts, st.ID).Exited {
 		time.Sleep(20 * time.Millisecond)
@@ -579,6 +603,51 @@ func TestCutoverDrainsWhenNothingStopsWithinTheCap(t *testing.T) {
 		t.Fatal("hostd did not exit at the drain's own cap")
 	}
 	waitGone(t, st.PID, 10*time.Second)
+}
+
+// drain_cap is read on every pass of a drain, not once as it starts: a
+// drain that began on an allowlist it could not read, or one that set no
+// cap, takes the cap the file holds as soon as it holds one, rather than
+// waiting DefaultDrainCap on a run that never ends.
+func TestCutoverTakesADrainCapTheAllowlistGainsAfterItStarted(t *testing.T) {
+	ts := startServer(t, "", nil)
+	started := make(chan Started, 1)
+	c := detachedClient(ts, started)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		_, _ = c.Run(ctx, Request{Kind: KindCLI, Name: "sh", Args: []string{"-c", "sleep 60"}, Detach: true, Run: "stuck"}, nil, nil, nil)
+	}()
+	st := <-started
+	good, err := os.ReadFile(ts.srv.Allowlist)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The file as an in-place edit leaves it for a moment: cut short.
+	if err := os.WriteFile(ts.srv.Allowlist, []byte("clis:\n  sh:\n    path: [\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ts.srv.Cutover()
+	for deadline := time.Now().Add(10 * time.Second); !strings.Contains(ts.logs.String(), "using "+DefaultDrainCap.String()); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the drain did not start on the unreadable allowlist:\n%s", ts.logs.String())
+		}
+	}
+	if err := os.WriteFile(ts.srv.Allowlist, append(good, "drain_cap: 300ms\n"...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-ts.done:
+		ts.done <- err
+	case <-time.After(15 * time.Second):
+		t.Fatalf("hostd did not exit at the drain_cap the allowlist gained:\n%s", ts.logs.String())
+	}
+	waitGone(t, st.PID, 10*time.Second)
+	for _, want := range []string{"drain_cap is now 300ms", "drain cap 300ms reached: cancelling cli \"sh\""} {
+		if !strings.Contains(ts.logs.String(), want) {
+			t.Errorf("no %q line:\n%s", want, ts.logs.String())
+		}
+	}
 }
 
 func TestAProtocol1StartIsListedButNotAttachable(t *testing.T) {

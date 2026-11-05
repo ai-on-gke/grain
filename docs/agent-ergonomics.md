@@ -224,8 +224,7 @@ also antigravity's own per-result default, and `agy` is the default
 framework — which is what settles one cap rather than one per tool, a
 framework's limit being per result. It is still a `var`: one
 deployment's distribution is not two deployments disagreeing. The
-numbers are quoted under "No single answer may eat the run's context" in
-docs/implementation-notes.md and in `pkg/mcp/result_size.go`.
+numbers are quoted in `pkg/mcp/result_size.go`'s doc comment.
 
 **Extended** (grain/task-155) to every tool rather than the two. Nothing
 else had been capped here on the reading that the other big answers bound
@@ -240,7 +239,7 @@ whatever its own server said. `Registry.handleCall` now elides every
 answer at `maxResultTextBytes`, a quarter above the per-tool cap so a
 tool that caps itself is not cut twice, and `Tool.ElisionAdvice` is how
 each tool names the call that returns less. See "No single answer may eat
-the run's context" in docs/implementation-notes.md.
+the run's context" (`pkg/mcp/result_size.go`).
 
 **Measured** (grain/task-181). Both of the moves above were argued from
 the size percentiles, and the cap they set censors them: every recorded
@@ -488,6 +487,19 @@ and `force`, and works in two modes:
   (`parkedResumeSection`). The sandbox does not survive a park, so a park
   with unpushed commits or uncommitted changes is refused unless
   `force: true` is set.
+- **`until: merged` past a close with the PR still open** (task 2757).
+  A task can be closed while its pull request is still open, for example
+  after the merge queue gave up on it, and a person can then merge that
+  PR by hand. `syncClosedPullRequests` reads such a PR for
+  `model.ClosedPullRequestWindow` (30 days) after the close. While it does,
+  the target reads `PullRequestOpen` and `WaitTarget.Settled(true)` is not
+  settled: a blocking wait keeps waiting. A park records `until_merged` in
+  its suspension's `ResumeOn`, and the dispatch hold
+  `untilMergedParkHold` keeps the parked task back past the close
+  (`Store.UntilMergedParkWaitsOn`). The wait ends when the PR merges
+  (met) or closes (unmet), when the window lapses, when the dependency is
+  removed, or when a person asks to run the task now. `until: closed` is
+  unchanged.
 - **Park until a time** when the hold is only a clock ("hold off for 1
   hour while we do repairs"): `resume_at`, a duration (`"1h"`) or an RFC
   3339 time at most a week away, with no `task_id`. The daemon defers the

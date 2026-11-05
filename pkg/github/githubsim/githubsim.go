@@ -53,6 +53,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -75,6 +76,7 @@ var (
 	// (github.RESTClient.MergedPullRequestForCommit), answered from
 	// MergedPullRequestForCommit.
 	commitPullsRe  = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/commits/([^/]+)/pulls$`)
+	commitRe       = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/commits/([^/]+)$`)
 	issueCommentRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/issues/comments/(\d+)$`)
 	// repoRe: the target repo's own default branch, read once per
 	// dispatch so the PR base comes from the repo itself rather than a
@@ -123,8 +125,16 @@ var (
 	// job's log. actionsRunsRe is also what ListWorkflowRuns reads when a
 	// credential cannot reach the Checks API.
 	actionsRunsRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs$`)
-	runJobsRe     = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs/(\d+)/jobs$`)
-	jobLogsRe     = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/jobs/(\d+)/logs$`)
+	actionsRunRe  = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs/(\d+)$`)
+	// workflowRunsRe is GET .../actions/workflows/{workflow_id}/runs, the
+	// per-workflow listing (github.RESTClient.ListActionsRunsPage with a
+	// Workflow): seeded WorkflowRuns whose Path is that file.
+	workflowRunsRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/workflows/([^/]+)/runs$`)
+	runJobsRe      = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs/(\d+)/jobs$`)
+	jobLogsRe      = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/jobs/(\d+)/logs$`)
+	// rerunFailedJobsRe is POST .../actions/runs/{id}/rerun-failed-jobs
+	// (github.RESTClient.RerunFailedJobs).
+	rerunFailedJobsRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs/(\d+)/rerun-failed-jobs$`)
 	// And the fourth read hung off that walk, for a run whose jobs served
 	// no log: the check run behind one of them, which is where GitHub
 	// writes why a job it never started did not start. Its annotations
@@ -138,8 +148,10 @@ var (
 	// gitObjectsRe and gitOtherRefRe: the rest of the git-database API
 	// github.RESTClient.PublishFiles writes through -- blobs, a tree and a
 	// commit, and a ref outside refs/heads to keep the commit alive.
-	gitObjectsRe  = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/git/(blobs|trees|commits)$`)
-	gitOtherRefRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/git/(refs/.+)$`)
+	gitObjectsRe      = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/git/(blobs|trees|commits)$`)
+	gitOtherRefRe     = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/git/(refs/.+)$`)
+	gitMatchingRefsRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/git/matching-refs/(.*)$`)
+	gitTagObjectRe    = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/git/tags/([0-9a-f]+)$`)
 	// mergesRe: the branch-into-branch merge the merge queue makes to
 	// bring a stale head up to date with its base
 	// (github.RESTClient.MergeBranch, orchestrator.refreshStaleHead).
@@ -151,6 +163,8 @@ var (
 	pullCommentReactionsRe   = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/pulls/comments/(\d+)/reactions$`)
 	createCheckRunsRe        = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/check-runs$`)
 	updateCheckRunRe         = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/check-runs/(\d+)$`)
+	rerequestCheckRunRe      = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/check-runs/(\d+)/rerequest$`)
+	rerequestCheckSuiteRe    = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/check-suites/(\d+)/rerequest$`)
 	contentsRe               = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/contents/(.+)$`)
 )
 
@@ -322,11 +336,16 @@ type WorkflowRun struct {
 	Path       string
 	HeadBranch string
 	HeadSHA    string
+	HeadRepo   string
 	Event      string
 	Status     string
 	Conclusion string
 	RunAttempt int
-	Jobs       []WorkflowJob
+	HTMLURL    string
+	// CreatedAt, when set, is served as created_at and run_started_at and
+	// is what ?created=>=... filters on; a run without one always matches.
+	CreatedAt time.Time
+	Jobs      []WorkflowJob
 }
 
 // Sim is a github.Transport backed by an in-memory set of issues and pull
@@ -341,6 +360,11 @@ type Sim struct {
 	Repo          string
 	BareRepo      string
 	DefaultBranch string
+	// Forks maps a fork owner ("sackheads") or "owner/repo" ("sackheads/kube-agents")
+	// to the Sim standing in for that fork repository, so a client backed by
+	// the upstream Sim can resolve cross-repository pull request heads and
+	// route fork repository requests to the fork Sim.
+	Forks map[string]*Sim
 
 	// PullRequestBase is the number the first pull request opened on this
 	// sim gets, the next one base+1 and so on. Zero means 9000. A test
@@ -379,6 +403,14 @@ type Sim struct {
 	// by resolve to one commit here the same way they do on GitHub (see
 	// checkRunsFor).
 	CheckRuns map[string][]github.CheckRun
+	// RerequestedCheckSuites and RerequestedCheckRuns record every
+	// POST .../check-suites/{id}/rerequest and .../check-runs/{id}/rerequest
+	// call the sim accepted. DisableCheckRerequest makes both endpoints
+	// refuse with 422, matching a third-party check provider or forge that
+	// does not support re-requesting checks in place.
+	RerequestedCheckSuites []int64
+	RerequestedCheckRuns   []int64
+	DisableCheckRerequest  bool
 	// WorkflowJobs is the CI behind those check runs: the GitHub Actions
 	// jobs, and their logs, that github.RESTClient.FailedJobLogs reaches
 	// through a commit's workflow runs. Keyed like CheckRuns, except that
@@ -394,6 +426,13 @@ type Sim struct {
 	// WorkflowRuns is explicit workflow runs seeded for GET .../actions/runs
 	// and GET .../actions/runs/{id}/jobs.
 	WorkflowRuns []WorkflowRun
+	// RerunFailedJobs is every run id POST .../rerun-failed-jobs was
+	// asked about, in order. The sim starts no new attempt: a test that
+	// wants one moves the seeded run's RunAttempt and Jobs on itself.
+	RerunFailedJobs []int64
+	// RerunRefused, when non-zero, is the status that endpoint answers
+	// with instead of 201 -- 403 for a credential without `actions: write`.
+	RerunRefused int
 	// StartupFailures marks the commits (keyed exactly like WorkflowJobs)
 	// whose workflow run GitHub concluded before any job of it started:
 	// the run is there, it is `startup_failure`, and its jobs endpoint
@@ -595,9 +634,63 @@ func (s *Sim) now() time.Time {
 	return time.Now()
 }
 
+func (s *Sim) forkByOwner(owner string) *Sim {
+	if s.Forks == nil || owner == "" {
+		return nil
+	}
+	for k, f := range s.Forks {
+		if f == nil {
+			continue
+		}
+		if strings.EqualFold(k, owner) || strings.EqualFold(k, owner+"/"+s.Repo) || strings.EqualFold(f.Owner, owner) {
+			return f
+		}
+	}
+	return nil
+}
+
+func (s *Sim) forkSim(owner, repo string) *Sim {
+	if s.Forks == nil {
+		return nil
+	}
+	if f, ok := s.Forks[owner+"/"+repo]; ok && f != nil {
+		return f
+	}
+	for k, f := range s.Forks {
+		if f == nil {
+			continue
+		}
+		if strings.EqualFold(k, owner+"/"+repo) || (strings.EqualFold(f.Owner, owner) && strings.EqualFold(f.Repo, repo)) {
+			return f
+		}
+		if strings.EqualFold(k, owner) && (f.Repo == "" || strings.EqualFold(f.Repo, repo)) {
+			return f
+		}
+	}
+	return nil
+}
+
 // compareRev is what the compare endpoint accepts on either side of its
-// "...": a branch name, or -- as on GitHub -- a commit SHA.
+// "...": a branch name, a "<fork-owner>:<branch>" label, or -- as on
+// GitHub -- a commit SHA.
 func (s *Sim) compareRev(ref string) (string, bool) {
+	if headOwner, branch, ok := strings.Cut(ref, ":"); ok && branch != "" {
+		if !strings.EqualFold(headOwner, s.Owner) {
+			if fork := s.forkByOwner(headOwner); fork != nil && fork.BareRepo != "" && fork.BareRepo != s.BareRepo {
+				if fork.branchExists(branch) {
+					remoteRef := "refs/remotes/fork/" + headOwner + "/" + branch
+					cmd := exec.Command("git", "--git-dir", s.BareRepo, "fetch", "--quiet",
+						"--end-of-options", fork.BareRepo, "+refs/heads/"+branch+":"+remoteRef)
+					cmd.Env = os.Environ()
+					if cmd.Run() == nil {
+						return remoteRef, true
+					}
+				}
+				return "", false
+			}
+		}
+		ref = branch
+	}
 	if s.branchExists(ref) {
 		return "refs/heads/" + ref, true
 	}
@@ -611,6 +704,22 @@ func (s *Sim) compareRev(ref string) (string, bool) {
 		return "", false
 	}
 	return ref, true
+}
+
+func (s *Sim) prHeadRef(pr PullRequest) string {
+	if pr.HeadRepo != "" {
+		if forkOwner, _, ok := strings.Cut(pr.HeadRepo, "/"); ok && forkOwner != "" && !strings.EqualFold(forkOwner, s.Owner) {
+			return forkOwner + ":" + pr.Head
+		}
+	}
+	return pr.Head
+}
+
+func (s *Sim) prHeadSHA(pr PullRequest) string {
+	if rev, ok := s.compareRev(s.prHeadRef(pr)); ok {
+		return s.revSHA(rev)
+	}
+	return s.branchSHA(pr.Head)
 }
 
 // revSHA is the commit a compareRev answer names, or "" where it names
@@ -892,11 +1001,13 @@ func (s *Sim) readFileAt(ref, filePath string) ([]byte, bool) {
 // ok is false when either branch is missing, which is real GitHub's own
 // 404 here.
 func (s *Sim) filesChangedIn(pr PullRequest) ([]map[string]any, bool) {
-	if !s.branchExists(pr.Base) || !s.branchExists(pr.Head) {
+	baseRev, okBase := s.compareRev(pr.Base)
+	headRev, okHead := s.compareRev(s.prHeadRef(pr))
+	if !okBase || !okHead {
 		return nil, false
 	}
 	out, err := exec.Command("git", "--git-dir", s.BareRepo, "diff", "--name-status", "-M", "-z",
-		"refs/heads/"+pr.Base+"...refs/heads/"+pr.Head).Output()
+		"--end-of-options", baseRev+"..."+headRev).Output()
 	if err != nil {
 		return nil, false
 	}
@@ -944,12 +1055,28 @@ func fileStatus(status string) string {
 // own answers both questions in one, and a load test reading a pull
 // request in a loop pays that difference.
 func (s *Sim) branchSHA(branch string) string {
+	if headOwner, b, ok := strings.Cut(branch, ":"); ok && b != "" {
+		if fork := s.forkByOwner(headOwner); fork != nil && fork != s {
+			if sha := fork.branchSHA(b); sha != "" {
+				return sha
+			}
+		}
+		branch = b
+	}
 	out, err := exec.Command("git", "--git-dir", s.BareRepo,
 		"rev-parse", "-q", "--verify", "refs/heads/"+branch).Output()
-	if err != nil {
-		return ""
+	if err == nil {
+		return strings.TrimSpace(string(out))
 	}
-	return strings.TrimSpace(string(out))
+	for _, fork := range s.Forks {
+		if fork == nil || fork == s || fork.BareRepo == "" {
+			continue
+		}
+		if sha := fork.refSHA("refs/heads/" + branch); sha != "" {
+			return sha
+		}
+	}
+	return ""
 }
 
 // refSHA is what ref -- a full ref name, inside refs/heads or not --
@@ -1063,6 +1190,10 @@ func (s *Sim) deleteBranch(branch string) error {
 // auto-merge path, where nothing else performs the git side of the merge
 // on grain's behalf.
 func (s *Sim) mergeIntoBase(pr PullRequest, message string) error {
+	headRev, ok := s.compareRev(s.prHeadRef(pr))
+	if !ok {
+		headRev = pr.Head
+	}
 	dir, err := os.MkdirTemp("", "githubsim-merge-*")
 	if err != nil {
 		return err
@@ -1075,9 +1206,9 @@ func (s *Sim) mergeIntoBase(pr PullRequest, message string) error {
 	for _, args := range [][]string{
 		{"git", "config", "user.email", "github@example.com"},
 		{"git", "config", "user.name", "github (simulated merge)"},
-		{"git", "fetch", "-q", "origin", pr.Head},
+		{"git", "fetch", "-q", "origin", "+" + headRev + ":refs/remotes/origin/pr-head"},
 		{"git", "checkout", "-q", pr.Base},
-		{"git", "merge", "--no-ff", "origin/" + pr.Head, "-m", message},
+		{"git", "merge", "--no-ff", "refs/remotes/origin/pr-head", "-m", message},
 		{"git", "push", "-q", "origin", pr.Base},
 	} {
 		if err := runGit(wd, args[0], args[1:]...); err != nil {
@@ -1107,8 +1238,13 @@ func (s *Sim) closeLinkedIssues(pr PullRequest) {
 // actually behind" is precisely what a caller of that endpoint is
 // relying on it for.
 func (s *Sim) containsBranch(base, head string) bool {
+	baseRev, okBase := s.compareRev(base)
+	headRev, okHead := s.compareRev(head)
+	if !okBase || !okHead {
+		return false
+	}
 	return exec.Command("git", "--git-dir", s.BareRepo, "merge-base", "--is-ancestor",
-		"refs/heads/"+head, "refs/heads/"+base).Run() == nil
+		"--end-of-options", headRev, baseRev).Run() == nil
 }
 
 // mergeBranches merges head into base for real, against BareRepo, the
@@ -1268,10 +1404,18 @@ func jsonResponse(status int, v any) github.ApiResponse {
 // answer for should fail loudly, not silently get back a default "[]".
 func (s *Sim) Request(method, path string, headers map[string]string, body []byte) (github.ApiResponse, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	s.Calls = append(s.Calls, Call{Method: method, Path: path})
 	p, qs := splitPathQuery(path)
+	if strings.HasPrefix(p, "/repos/") {
+		parts := strings.SplitN(strings.TrimPrefix(p, "/repos/"), "/", 3)
+		if len(parts) >= 2 && (parts[0] != s.Owner || parts[1] != s.Repo) {
+			if fork := s.forkSim(parts[0], parts[1]); fork != nil {
+				s.mu.Unlock()
+				return fork.Request(method, path, headers, body)
+			}
+		}
+	}
+	defer s.mu.Unlock()
 
 	if method == "GET" && s.FailReads != nil {
 		// Counted as a call, above, because it is one: what a test
@@ -1359,14 +1503,14 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			if headers["Accept"] == diffMediaType {
 				diff, ok := pr.mergedDiff, pr.merged
 				if !ok {
-					diff, ok = s.diffBetween(pr.Base, pr.Head)
+					diff, ok = s.diffBetween(pr.Base, s.prHeadRef(pr))
 				}
 				if !ok {
 					return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
 				}
 				return github.ApiResponse{Status: 200, Body: []byte(diff)}, nil
 			}
-			return jsonResponse(200, pullRequestDetailJSON(pr, s.branchSHA(pr.Head))), nil
+			return jsonResponse(200, pullRequestDetailJSON(pr, s.prHeadSHA(pr))), nil
 		}
 		if m := pullCommentsRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
@@ -1394,7 +1538,7 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			if pr.mergedCommits != nil {
 				return jsonResponse(200, pr.mergedCommits), nil
 			}
-			commits, ok := s.commitsBetween(pr.Base, pr.Head)
+			commits, ok := s.commitsBetween(pr.Base, s.prHeadRef(pr))
 			if !ok {
 				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
 			}
@@ -1408,6 +1552,29 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			}
 			return jsonResponse(200, checkRunsJSON(s.checkRunsFor(ref))), nil
 		}
+		if m := commitRe.FindStringSubmatch(p); m != nil {
+			if m[1] != s.Owner || m[2] != s.Repo {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			ref := unescapeRef(m[3])
+			if s.BareRepo == "" {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			if ref == "HEAD" {
+				_ = s.defaultBranch()
+			}
+			sha := ""
+			for _, candidate := range []string{ref, "refs/heads/" + ref, "refs/tags/" + ref} {
+				if got := s.revSHA(candidate); got != "" {
+					sha = got
+					break
+				}
+			}
+			if sha == "" {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"No commit found"}`)}, nil
+			}
+			return jsonResponse(200, map[string]any{"sha": sha}), nil
+		}
 		if m := actionsRunsRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
 			key := qs.Get("head_sha")
@@ -1415,7 +1582,7 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			// (github.RESTClient.RecentRunStarts / CompletedWorkflowRuns):
 			// everything this repository has run lately, rather than one commit's runs.
 			if key == "" {
-				payload := s.repoRunsJSON(m[1], m[2])
+				payload, link := pageRuns(p, qs, s.repoRunsJSON(m[1], m[2]), "")
 				rawBytes, _ := json.Marshal(payload)
 				var h uint64 = 14695981039346656037
 				for _, b := range rawBytes {
@@ -1428,13 +1595,56 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 				}
 				resp := jsonResponse(200, payload)
 				resp.Headers = map[string]string{"ETag": etag}
+				if link != "" {
+					resp.Headers["Link"] = link
+				}
 				return resp, nil
 			}
 			if s.startupFailureFor(key) {
 				return jsonResponse(200, startupFailureRunJSON(m[1], m[2], s.runIDFor(key))), nil
 			}
+			if len(s.WorkflowRuns) > 0 {
+				if allRuns, ok := s.repoRunsJSON(m[1], m[2])["workflow_runs"].([]map[string]any); ok {
+					var matched []map[string]any
+					for _, wr := range allRuns[:len(s.WorkflowRuns)] {
+						if sha, _ := wr["head_sha"].(string); sha != "" && strings.EqualFold(sha, key) {
+							matched = append(matched, wr)
+						}
+					}
+					if len(matched) > 0 {
+						return jsonResponse(200, map[string]any{
+							"total_count":   len(matched),
+							"workflow_runs": matched,
+						}), nil
+					}
+				}
+			}
 			jobs := s.workflowJobsFor(key)
 			return jsonResponse(200, workflowRunsJSON(m[1], m[2], s.runIDFor(key), jobs)), nil
+		}
+		if m := actionsRunRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			runID := int64(mustAtoi(m[3]))
+			runs, _ := s.repoRunsJSON(m[1], m[2])["workflow_runs"].([]map[string]any)
+			for _, run := range runs {
+				if id, _ := run["id"].(int64); id == runID {
+					return jsonResponse(200, run), nil
+				}
+			}
+			return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+		}
+		if m := workflowRunsRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			workflow, _ := url.PathUnescape(m[3])
+			if !s.hasWorkflowFile(workflow) {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			payload, link := pageRuns(p, qs, s.repoRunsJSON(m[1], m[2]), workflow)
+			resp := jsonResponse(200, payload)
+			if link != "" {
+				resp.Headers = map[string]string{"Link": link}
+			}
+			return resp, nil
 		}
 		if m := runJobsRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
@@ -1510,21 +1720,52 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 		}
 		if m := issuesRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
+			// GitHub's own filters: state (open unless asked otherwise --
+			// a closed issue is not in the default listing) and labels.
+			// The listing also carries the repository's pull requests,
+			// each marked by a pull_request key, as GitHub's does: a
+			// reader that wants only issues has to skip them itself.
 			label := qs.Get("labels")
-			numbers := make([]int, 0, len(s.Issues))
-			for n := range s.Issues {
-				numbers = append(numbers, n)
+			state := qs.Get("state")
+			if state == "" {
+				state = "open"
 			}
-			sort.Ints(numbers)
-			items := make([]map[string]any, 0, len(numbers))
-			for _, n := range numbers {
-				issue := s.Issues[n]
+			wanted := func(itemState string, labels map[string]struct{}) bool {
+				if itemState == "" {
+					itemState = "open"
+				}
+				if state != "all" && itemState != state {
+					return false
+				}
 				if label != "" {
-					if _, ok := issue.Labels[label]; !ok {
-						continue
+					if _, ok := labels[label]; !ok {
+						return false
 					}
 				}
-				items = append(items, issueJSON(n, s.Owner, s.Repo, issue))
+				return true
+			}
+			type listed struct {
+				number int
+				item   map[string]any
+			}
+			var all []listed
+			for n, issue := range s.Issues {
+				if wanted(issue.State, issue.Labels) {
+					all = append(all, listed{n, issueJSON(n, s.Owner, s.Repo, issue)})
+				}
+			}
+			for _, pr := range s.PullRequests {
+				if !wanted(pr.State, pr.Labels) {
+					continue
+				}
+				item := issueJSON(pr.Number, s.Owner, s.Repo, &Issue{Title: pr.Title, Body: pr.Body, Labels: pr.Labels, State: pr.State})
+				item["pull_request"] = map[string]string{"html_url": pr.HTMLURL}
+				all = append(all, listed{pr.Number, item})
+			}
+			sort.Slice(all, func(i, j int) bool { return all[i].number < all[j].number })
+			items := make([]map[string]any, 0, len(all))
+			for _, l := range all {
+				items = append(items, l.item)
 			}
 			return jsonResponse(200, items), nil
 		}
@@ -1603,12 +1844,82 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 				"content":  base64.StdEncoding.EncodeToString(data),
 			}), nil
 		}
+		if m := gitMatchingRefsRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			prefix := "refs/" + unescapeRef(m[3])
+			out := make([]map[string]any, 0)
+			if s.BareRepo != "" {
+				cmd := exec.Command("git", "--git-dir", s.BareRepo,
+					"for-each-ref", "--format=%(refname) %(objectname) %(objecttype)", "refs/")
+				cmd.Env = os.Environ()
+				raw, err := cmd.Output()
+				if err == nil {
+					for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+						fields := strings.Fields(line)
+						if len(fields) == 3 && strings.HasPrefix(fields[0], prefix) {
+							out = append(out, map[string]any{
+								"ref": fields[0],
+								"object": map[string]string{
+									"sha":  fields[1],
+									"type": fields[2],
+								},
+							})
+						}
+					}
+				}
+			}
+			return jsonResponse(200, out), nil
+		}
+		if m := gitTagObjectRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			sha := m[3]
+			if s.BareRepo == "" {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			typCmd := exec.Command("git", "--git-dir", s.BareRepo, "cat-file", "-t", "--end-of-options", sha)
+			typCmd.Env = os.Environ()
+			typOut, err := typCmd.Output()
+			if err != nil || strings.TrimSpace(string(typOut)) != "tag" {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			tagCmd := exec.Command("git", "--git-dir", s.BareRepo, "cat-file", "tag", "--end-of-options", sha)
+			tagCmd.Env = os.Environ()
+			raw, err := tagCmd.Output()
+			if err != nil {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			header, msg, _ := strings.Cut(string(raw), "\n\n")
+			var objSHA, objType string
+			for _, line := range strings.Split(header, "\n") {
+				if v, ok := strings.CutPrefix(line, "object "); ok {
+					objSHA = strings.TrimSpace(v)
+				} else if v, ok := strings.CutPrefix(line, "type "); ok {
+					objType = strings.TrimSpace(v)
+				}
+			}
+			return jsonResponse(200, map[string]any{
+				"sha":     sha,
+				"message": msg,
+				"object": map[string]string{
+					"sha":  objSHA,
+					"type": objType,
+				},
+			}), nil
+		}
 	}
 
 	if method == "POST" && p == "/graphql" {
 		return s.graphql(body)
 	}
 	if method == "POST" {
+		if m := rerunFailedJobsRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			if s.RerunRefused != 0 {
+				return jsonResponse(s.RerunRefused, map[string]string{"message": "Resource not accessible by integration"}), nil
+			}
+			s.RerunFailedJobs = append(s.RerunFailedJobs, int64(mustAtoi(m[3])))
+			return jsonResponse(201, map[string]any{}), nil
+		}
 		if m := pullCommentRepliesRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
 			number, to := mustAtoi(m[3]), mustAtoi(m[4])
@@ -1751,9 +2062,20 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 				base = 9000
 			}
 			number := base + len(s.PullRequests)
+			headBranch := payload.Head
+			headRepo := ""
+			if headOwner, branch, ok := strings.Cut(payload.Head, ":"); ok && branch != "" {
+				headBranch = branch
+				if !strings.EqualFold(headOwner, s.Owner) {
+					headRepo = headOwner + "/" + s.Repo
+					if fork := s.forkByOwner(headOwner); fork != nil && fork.Repo != "" {
+						headRepo = fork.Owner + "/" + fork.Repo
+					}
+				}
+			}
 			pr := PullRequest{
 				Number: number, Title: payload.Title, Body: payload.Body,
-				Head: payload.Head, Base: payload.Base, State: "open",
+				Head: headBranch, HeadRepo: headRepo, Base: payload.Base, State: "open",
 				HTMLURL:   fmt.Sprintf("https://github.example/%s/%s/pull/%d", s.Owner, s.Repo, number),
 				CreatedAt: s.now(),
 			}
@@ -1837,6 +2159,7 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			var payload struct {
 				Name       string `json:"name"`
 				HeadSHA    string `json:"head_sha"`
+				ExternalID string `json:"external_id"`
 				Status     string `json:"status"`
 				Conclusion string `json:"conclusion"`
 				DetailsURL string `json:"details_url"`
@@ -1850,9 +2173,11 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 				s.CheckRuns = map[string][]github.CheckRun{}
 			}
 			cr := github.CheckRun{
-				Name:    payload.Name,
-				Status:  payload.Status,
-				HTMLURL: payload.DetailsURL,
+				ID:         id,
+				Name:       payload.Name,
+				ExternalID: payload.ExternalID,
+				Status:     payload.Status,
+				HTMLURL:    payload.DetailsURL,
 			}
 			if cr.Status == "" {
 				cr.Status = "queued"
@@ -1863,6 +2188,24 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			}
 			s.CheckRuns[payload.HeadSHA] = append(s.CheckRuns[payload.HeadSHA], cr)
 			return jsonResponse(201, map[string]any{"id": id}), nil
+		}
+		if m := rerequestCheckSuiteRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			if s.DisableCheckRerequest {
+				return github.ApiResponse{Status: 422, Body: []byte(`{"message":"Check suite cannot be rerequested"}`)}, nil
+			}
+			id := int64(mustAtoi(m[3]))
+			s.RerequestedCheckSuites = append(s.RerequestedCheckSuites, id)
+			return jsonResponse(201, map[string]any{}), nil
+		}
+		if m := rerequestCheckRunRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			if s.DisableCheckRerequest {
+				return github.ApiResponse{Status: 422, Body: []byte(`{"message":"Check run cannot be rerequested"}`)}, nil
+			}
+			id := int64(mustAtoi(m[3]))
+			s.RerequestedCheckRuns = append(s.RerequestedCheckRuns, id)
+			return jsonResponse(201, map[string]any{}), nil
 		}
 		if m := mergesRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
@@ -1938,10 +2281,30 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 	}
 
 	if method == "PATCH" {
+		// Closing or reopening an issue (PATCH .../issues/N with a
+		// state), the one edit to an issue anything here makes.
+		if m := issueRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			issue, ok := s.Issues[mustAtoi(m[3])]
+			if !ok {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			var payload struct {
+				State string `json:"state"`
+			}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				return github.ApiResponse{}, err
+			}
+			if payload.State != "" {
+				issue.State = payload.State
+			}
+			return jsonResponse(200, issueJSON(mustAtoi(m[3]), s.Owner, s.Repo, issue)), nil
+		}
 		if m := updateCheckRunRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
 			var payload struct {
 				Name       string `json:"name"`
+				ExternalID string `json:"external_id"`
 				Status     string `json:"status"`
 				Conclusion string `json:"conclusion"`
 				DetailsURL string `json:"details_url"`
@@ -1952,6 +2315,9 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			for sha, runs := range s.CheckRuns {
 				for i := range runs {
 					if payload.Name == "" || runs[i].Name == payload.Name {
+						if payload.ExternalID != "" {
+							s.CheckRuns[sha][i].ExternalID = payload.ExternalID
+						}
 						if payload.Status != "" {
 							s.CheckRuns[sha][i].Status = payload.Status
 						}
@@ -2026,7 +2392,7 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 						s.PullRequests[i].State = *payload.State
 					}
 					return jsonResponse(200, pullRequestDetailJSON(
-						s.PullRequests[i], s.branchSHA(s.PullRequests[i].Head))), nil
+						s.PullRequests[i], s.prHeadSHA(s.PullRequests[i]))), nil
 				}
 				return github.ApiResponse{Status: 404, Body: []byte("{}")}, nil
 			}
@@ -2126,7 +2492,7 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 					// (orchestrator.syncEntry), and a branch that moved
 					// since then has to be refused here rather than
 					// merged, or a test can never tell the two apart.
-					if payload.SHA != "" && payload.SHA != s.branchSHA(s.PullRequests[i].Head) {
+					if payload.SHA != "" && payload.SHA != s.prHeadSHA(s.PullRequests[i]) {
 						return github.ApiResponse{Status: 409, Body: []byte(
 							`{"message":"Head branch was modified. Review and try the merge again."}`)}, nil
 					}
@@ -2246,8 +2612,9 @@ func (s *Sim) checkRunsFor(ref string) []github.CheckRun {
 // land merges s.PullRequests[i] into its base with message, as GitHub
 // does on a merge it has agreed to.
 func (s *Sim) land(i int, message string) error {
-	own, _ := s.commitsBetween(s.PullRequests[i].Base, s.PullRequests[i].Head)
-	diff, _ := s.diffBetween(s.PullRequests[i].Base, s.PullRequests[i].Head)
+	headRef := s.prHeadRef(s.PullRequests[i])
+	own, _ := s.commitsBetween(s.PullRequests[i].Base, headRef)
+	diff, _ := s.diffBetween(s.PullRequests[i].Base, headRef)
 	if err := s.mergeIntoBase(s.PullRequests[i], message); err != nil {
 		return err
 	}
@@ -2466,7 +2833,7 @@ func (s *Sim) graphql(body []byte) (github.ApiResponse, error) {
 		}
 		return jsonResponse(200, map[string]any{"data": map[string]any{
 			"repository": map[string]any{"pullRequest": map[string]any{
-				"id": fmt.Sprintf("PR_%d", pr.Number), "headRefOid": s.branchSHA(pr.Head), "merged": pr.Merged,
+				"id": fmt.Sprintf("PR_%d", pr.Number), "headRefOid": s.prHeadSHA(pr), "merged": pr.Merged,
 				"isInMergeQueue": position > 0, "mergeQueueEntry": entry,
 			}}}}), nil
 	case strings.Contains(req.Query, "resolveReviewThread"):
@@ -2654,6 +3021,13 @@ func jobID(runID, index int) int { return runID*1000 + index }
 // more thing to invert and GitHub's real ids are opaque to a test either
 // way.
 func (s *Sim) jobByID(id int) (WorkflowJob, bool) {
+	if wr, ok := s.workflowRunByID(int64(id / 1000)); ok {
+		index := id % 1000
+		if index >= len(wr.Jobs) {
+			return WorkflowJob{}, false
+		}
+		return wr.Jobs[index], true
+	}
 	key, ok := s.runKeyFor(id / 1000)
 	if !ok {
 		return WorkflowJob{}, false
@@ -2707,8 +3081,86 @@ func workflowRunsJSON(owner, repo string, runID int, jobs []WorkflowJob) map[str
 // otherwise the run its jobs imply. Run ids come from runIDFor, the same
 // as every other answer here, so the jobs endpoint can be asked about
 // anything named in this list.
+// AddWorkflowRun appends r to WorkflowRuns under Sim's mutex, filling in
+// the defaults repoRunsJSON serves (an unused run ID, status "completed",
+// conclusion from r.Jobs, attempt 1, HeadSHA from HeadBranch and HeadRepo
+// from Owner/Repo) and returning the stored WorkflowRun. Posting a later
+// attempt of an existing run ID replaces the earlier entry so the runs
+// listing and jobs endpoint serve the latest attempt.
+func (s *Sim) AddWorkflowRun(r WorkflowRun) WorkflowRun {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r.ID <= 0 {
+		id := int64(runIDBase + 500 + len(s.WorkflowRuns))
+		for {
+			if _, taken := s.workflowRunByID(id); !taken {
+				break
+			}
+			id++
+		}
+		r.ID = id
+	}
+	if r.Status == "" {
+		r.Status = "completed"
+	}
+	if r.Conclusion == "" && r.Status == "completed" {
+		r.Conclusion = "success"
+		for _, job := range r.Jobs {
+			switch jobConclusion(job) {
+			case "failure", "timed_out", "startup_failure":
+				r.Conclusion = "failure"
+			}
+		}
+	}
+	if r.RunAttempt <= 0 {
+		r.RunAttempt = 1
+	}
+	if r.Name == "" {
+		if r.Path != "" {
+			base := filepath.Base(r.Path)
+			r.Name = strings.TrimSuffix(strings.TrimSuffix(base, ".yml"), ".yaml")
+		}
+		if r.Name == "" {
+			r.Name = "tests"
+		}
+	}
+	if r.HeadBranch == "" {
+		r.HeadBranch = s.defaultBranch()
+	}
+	if r.HeadSHA == "" && r.HeadBranch != "" {
+		r.HeadSHA = s.branchSHA(r.HeadBranch)
+	}
+	if r.HeadRepo == "" {
+		r.HeadRepo = s.Owner + "/" + s.Repo
+	}
+	if r.Event == "" {
+		r.Event = "push"
+	}
+	if r.HTMLURL == "" {
+		r.HTMLURL = fmt.Sprintf("https://github.example/%s/%s/actions/runs/%d", s.Owner, s.Repo, r.ID)
+	}
+	if len(r.Jobs) > 0 {
+		jobs := make([]WorkflowJob, len(r.Jobs))
+		copy(jobs, r.Jobs)
+		r.Jobs = jobs
+	}
+	kept := s.WorkflowRuns[:0]
+	for i, existing := range s.WorkflowRuns {
+		existingID := existing.ID
+		if existingID <= 0 {
+			existingID = int64(runIDBase + 500 + i)
+		}
+		if existingID != r.ID {
+			kept = append(kept, existing)
+		}
+	}
+	s.WorkflowRuns = append(kept, r)
+	return r
+}
+
 func (s *Sim) workflowRunByID(id int64) (WorkflowRun, bool) {
-	for i, r := range s.WorkflowRuns {
+	for i := len(s.WorkflowRuns) - 1; i >= 0; i-- {
+		r := s.WorkflowRuns[i]
 		runID := r.ID
 		if runID <= 0 {
 			runID = int64(runIDBase + 500 + i)
@@ -2754,18 +3206,32 @@ func (s *Sim) repoRunsJSON(owner, repo string) map[string]any {
 		if headSHA == "" && wr.HeadBranch != "" {
 			headSHA = s.branchSHA(wr.HeadBranch)
 		}
+		headRepo := wr.HeadRepo
+		if headRepo == "" {
+			headRepo = owner + "/" + repo
+		}
+		htmlURL := wr.HTMLURL
+		if htmlURL == "" {
+			htmlURL = fmt.Sprintf("https://github.example/%s/%s/actions/runs/%d", owner, repo, runID)
+		}
 		runs = append(runs, map[string]any{
-			"id":          runID,
-			"name":        name,
-			"path":        wr.Path,
-			"head_branch": wr.HeadBranch,
-			"head_sha":    headSHA,
-			"event":       wr.Event,
-			"status":      status,
-			"conclusion":  conclusion,
-			"run_attempt": attempt,
-			"html_url":    fmt.Sprintf("https://github.example/%s/%s/actions/runs/%d", owner, repo, runID),
+			"id":              runID,
+			"name":            name,
+			"path":            wr.Path,
+			"head_branch":     wr.HeadBranch,
+			"head_sha":        headSHA,
+			"head_repository": map[string]string{"full_name": headRepo},
+			"event":           wr.Event,
+			"status":          status,
+			"conclusion":      conclusion,
+			"run_attempt":     attempt,
+			"html_url":        htmlURL,
 		})
+		if !wr.CreatedAt.IsZero() {
+			at := wr.CreatedAt.UTC().Format(time.RFC3339)
+			runs[len(runs)-1]["created_at"] = at
+			runs[len(runs)-1]["run_started_at"] = at
+		}
 	}
 	for _, key := range s.runCommits() {
 		id := s.runIDFor(key)
@@ -2897,8 +3363,14 @@ func checkRunsJSON(runs []github.CheckRun) map[string]any {
 		if r.ID != 0 {
 			item["id"] = r.ID
 		}
+		if r.CheckSuiteID != 0 {
+			item["check_suite"] = map[string]any{"id": r.CheckSuiteID}
+		}
 		if r.HeadSHA != "" {
 			item["head_sha"] = r.HeadSHA
+		}
+		if r.ExternalID != "" {
+			item["external_id"] = r.ExternalID
 		}
 		if r.App != "" {
 			item["app"] = map[string]any{"slug": r.App}
@@ -2951,4 +3423,78 @@ func mustAtoi(s string) int {
 		n = n*10 + int(c-'0')
 	}
 	return n
+}
+
+// hasWorkflowFile reports whether a seeded run comes from workflow, a file
+// name (or numeric id) the way GitHub's workflow_id takes one: the
+// per-workflow endpoint is a 404 for a workflow the repository lacks.
+func (s *Sim) hasWorkflowFile(workflow string) bool {
+	for _, wr := range s.WorkflowRuns {
+		if workflowFileMatches(wr.Path, wr.ID, workflow) {
+			return true
+		}
+	}
+	return false
+}
+
+func workflowFileMatches(runPath string, id int64, workflow string) bool {
+	return workflow != "" && (path.Base(runPath) == workflow || strconv.FormatInt(id, 10) == workflow)
+}
+
+// pageRuns narrows a runs listing the way GitHub's own query does --
+// ?branch=, ?created=>=..., the workflow a per-workflow listing is for --
+// and cuts it to ?per_page= (default 30, at most 100) at ?page=, with
+// total_count the whole match and a Link header naming the next page
+// when there is one. Runs are served in the order they were seeded, so a
+// test wanting GitHub's newest-first seeds newest first.
+func pageRuns(reqPath string, qs url.Values, payload map[string]any, workflow string) (map[string]any, string) {
+	all, _ := payload["workflow_runs"].([]map[string]any)
+	branch := qs.Get("branch")
+	var since time.Time
+	if c, ok := strings.CutPrefix(qs.Get("created"), ">="); ok {
+		since, _ = time.Parse(time.RFC3339, c)
+	}
+	matched := []map[string]any{}
+	for _, r := range all {
+		if workflow != "" {
+			p, _ := r["path"].(string)
+			id, _ := r["id"].(int64)
+			if !workflowFileMatches(p, id, workflow) {
+				continue
+			}
+		}
+		if branch != "" && r["head_branch"] != branch {
+			continue
+		}
+		if at, ok := r["created_at"].(string); ok && !since.IsZero() {
+			if t, err := time.Parse(time.RFC3339, at); err == nil && t.Before(since) {
+				continue
+			}
+		}
+		matched = append(matched, r)
+	}
+	perPage, page := 30, 1
+	if n, err := strconv.Atoi(qs.Get("per_page")); err == nil && n > 0 {
+		perPage = min(n, 100)
+	}
+	if n, err := strconv.Atoi(qs.Get("page")); err == nil && n > 0 {
+		page = n
+	}
+	// A listing that fits one page is served whole, as it always was: the
+	// callers that never asked for a page size read every seeded run.
+	if qs.Get("per_page") == "" && qs.Get("page") == "" {
+		perPage = max(perPage, len(matched))
+	}
+	start, end := min((page-1)*perPage, len(matched)), min(page*perPage, len(matched))
+	link := ""
+	if end < len(matched) {
+		next := url.Values{}
+		for k, v := range qs {
+			next[k] = v
+		}
+		next.Set("page", strconv.Itoa(page+1))
+		next.Set("per_page", strconv.Itoa(perPage))
+		link = fmt.Sprintf(`<https://api.github.example%s?%s>; rel="next"`, reqPath, next.Encode())
+	}
+	return map[string]any{"total_count": len(matched), "workflow_runs": matched[start:end]}, link
 }

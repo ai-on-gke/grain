@@ -47,17 +47,24 @@ func JobSecrets(job Job, provided []string) []string { return jobSecrets(job, pr
 // workflow that declares it runs on grain's own repository whether or
 // not an operator has listed anything for it.
 func declaredOnly(id string) bool {
-	return IsRepoAccessCapability(id) || model.IsCapabilityRef(id) || id == model.ReleaseGateReadCapability ||
+	return IsRepoAccessCapability(id) || (model.IsCapabilityRef(id) && !model.IsRepoGrantedCIGrant(id)) || id == model.ReleaseGateReadCapability ||
 		strings.HasPrefix(strings.TrimSpace(id), model.APIGrantPrefix)
 }
 
+// IsRepoReadCapability reports whether id is read-only repository access
+// (`repo-read:<owner>/<repo>` or `repo#read` `{repo}`).
+func IsRepoReadCapability(id string) bool {
+	_, ok := model.RepoReadTarget(id)
+	return ok
+}
+
 // IsRepoAccessCapability reports whether id is a repository access
-// capability -- `repo-read:<owner>/<repo>` or `repo-write:<owner>/<repo>`
-// -- which a job's own declaration allows and its team's GitHub
-// credential enforces, rather than one the deployment grants
-// (grain/task-1654).
+// capability -- `repo-read:<owner>/<repo>` / `repo-write:<owner>/<repo>` or
+// `repo#read` / `repo#write` `{repo}` -- which a job's own declaration
+// allows and its team's GitHub credential enforces, rather than one the
+// deployment grants (grain/task-1654).
 func IsRepoAccessCapability(id string) bool {
-	if _, ok := model.RepoReadTarget(id); ok {
+	if IsRepoReadCapability(id) {
 		return true
 	}
 	_, ok := model.RepoWriteTarget(id)

@@ -11,9 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/config"
-	"github.com/bwsalmon/granule/pkg/extents"
-	"github.com/bwsalmon/granule/pkg/qcow2"
+	"github.com/gke-labs/granule/pkg/cgroupmem"
+	"github.com/gke-labs/granule/pkg/config"
+	"github.com/gke-labs/granule/pkg/extents"
+	"github.com/gke-labs/granule/pkg/qcow2"
 )
 
 // fakechvPath is built once per test run from testdata/fakechv, which
@@ -614,5 +615,56 @@ func TestRunner_ExtentBackendAndSnapshotRestore(t *testing.T) {
 	}
 	if string(buf) != "EXTENT-OVERLAY-DATA" {
 		t.Errorf("restored extent data = %q, want EXTENT-OVERLAY-DATA", buf)
+	}
+}
+
+// A VMM the OOM killer ends says so in Wait's error, rather than only
+// "signal: killed", and still unwraps to the *exec.ExitError the shim
+// takes its exit status from.
+func TestRunner_ReportsACgroupOOMKill(t *testing.T) {
+	root := t.TempDir()
+	events := filepath.Join(root, "memory.events")
+	if err := os.WriteFile(events, []byte("oom 0\noom_kill 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "memory.max"), []byte("2684354560\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := cgroupmem.Root
+	cgroupmem.Root = root
+	t.Cleanup(func() { cgroupmem.Root = old })
+
+	for _, tc := range []struct {
+		name   string
+		script string
+		oom    bool
+	}{
+		{"oom-killed", "printf 'oom 1\\noom_kill 1\\n' > " + events + "; kill -KILL $$", true},
+		{"killed otherwise", "kill -KILL $$", false},
+		{"oom elsewhere, clean exit", "printf 'oom 2\\noom_kill 2\\n' > " + events + "; exit 3", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := filepath.Join(t.TempDir(), "vmm")
+			if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+tc.script+"\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			cfg := testConfig(t)
+			cfg.BinaryPath = bin
+			r := New(cfg)
+			if err := r.Start(io.Discard, io.Discard); err != nil {
+				t.Fatal(err)
+			}
+			err := r.Wait()
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) {
+				t.Errorf("Wait() = %v, want it to unwrap to an *exec.ExitError", err)
+			}
+			if got := errors.Is(err, cgroupmem.ErrOOMKilled); got != tc.oom {
+				t.Errorf("Wait() = %v; reported as an OOM kill: %v, want %v", err, got, tc.oom)
+			}
+			if tc.oom && !strings.Contains(err.Error(), "2560 MiB") {
+				t.Errorf("Wait() = %v, does not name the limit", err)
+			}
+		})
 	}
 }

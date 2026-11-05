@@ -24,27 +24,56 @@ import (
 )
 
 // rewriteLegacyGrants is the Up of a migration retiring the in-process
-// capabilities named in renames (docs/design/unified-grants.md §4): every
+// capabilities named in renames (design/design/unified-grants.design.md §4): every
 // stored grant of one is rewritten to the api grant it became. That is
 // the three grant tables (a row whose new name the same owner already
 // holds is dropped rather than duplicated, keeping the one already
 // there), the deployment's and each repository's default_capabilities,
 // and the capabilities of grain_config.console_sessions -- the standing
-// director and steward among them. ci_capabilities is left alone: an api
-// grant in a CI job's list is a token for CIAPI (pkg/capability/ciapi),
-// which none of these ever were.
+// director and steward among them. Migrations 67-82 left
+// repo_config.ci_capabilities alone, and migration 83 rewrites past
+// retirements there via rewriteCapabilityListColumnMulti (a retirement
+// after it, such as migration 84's self-repair or 86's corp-research, rewrites that column
+// itself); earlier
+// migrations do not change, since stores already past them will not
+// re-run them.
 //
 // renames is the migration's own copy rather than legacyGrantReplacements,
 // so a later conversion adding to that table never changes what an
 // earlier migration did.
 func rewriteLegacyGrants(renames map[string]string) func(ctx context.Context, tx *sql.Tx) error {
+	multi := make(map[string][]string, len(renames))
+	for from, to := range renames {
+		multi[from] = []string{to}
+	}
+	return rewriteLegacyGrantsMulti(multi)
+}
+
+// rewriteLegacyGrantsMulti is rewriteLegacyGrants for retirements where one
+// legacy capability splits into one or more canonical grants (such as
+// deployment-health -> [api:deployment:read, grain#health={}]).
+func rewriteLegacyGrantsMulti(renames map[string][]string) func(ctx context.Context, tx *sql.Tx) error {
 	return func(ctx context.Context, tx *sql.Tx) error {
 		for _, t := range []struct{ table, owner string }{
 			{"task_grant", "task_id"},
 			{"template_grant", "template_id"},
 			{"schedule_grant", "schedule_id"},
 		} {
-			for from, to := range renames {
+			for from, tos := range renames {
+				if len(tos) == 0 {
+					continue
+				}
+				for _, extra := range tos[1:] {
+					if _, err := tx.ExecContext(ctx,
+						"INSERT INTO `"+t.table+"` (`"+t.owner+"`, `capability`, `via`, `folder`) "+
+							"SELECT `"+t.owner+"`, ?, `via`, `folder` FROM `"+t.table+"` "+
+							"WHERE `capability` = ? AND `"+t.owner+"` NOT IN "+
+							"(SELECT `"+t.owner+"` FROM `"+t.table+"` WHERE `capability` = ?)",
+						extra, from, extra); err != nil {
+						return fmt.Errorf("%s: inserting %s for %s: %w", t.table, extra, from, err)
+					}
+				}
+				to := tos[0]
 				if _, err := tx.ExecContext(ctx, "DELETE FROM `"+t.table+"` WHERE `capability` = ? AND `"+t.owner+"` IN "+
 					"(SELECT `"+t.owner+"` FROM `"+t.table+"` WHERE `capability` = ?)", from, to); err != nil {
 					return fmt.Errorf("%s: dropping %s where %s is already held: %w", t.table, from, to, err)
@@ -54,23 +83,29 @@ func rewriteLegacyGrants(renames map[string]string) func(ctx context.Context, tx
 				}
 			}
 		}
-		if err := rewriteCapabilityListColumn(ctx, tx, "grain_config", []string{"id"}, "default_capabilities", renames); err != nil {
+		if err := rewriteCapabilityListColumnMulti(ctx, tx, "grain_config", []string{"id"}, "default_capabilities", renames); err != nil {
 			return err
 		}
-		if err := rewriteCapabilityListColumn(ctx, tx, "repo_config", []string{"owner", "name"}, "default_capabilities", renames); err != nil {
+		if err := rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "default_capabilities", renames); err != nil {
 			return err
 		}
-		return rewriteConsoleSessionGrants(ctx, tx, renames)
+		return rewriteConsoleSessionGrantsMulti(ctx, tx, renames)
 	}
 }
 
-// renameCapabilityList is names with every entry of renames rewritten,
-// and each name kept once, where it first appears. changed is false when
+// renameCapabilityListMulti is names with every entry of renames expanded in
+// place and each name kept once, where it first appears. changed is false when
 // nothing was renamed.
-func renameCapabilityList(names []string, renames map[string]string) (out []string, changed bool) {
+func renameCapabilityListMulti(names []string, renames map[string][]string) (out []string, changed bool) {
 	for _, name := range names {
-		if to, ok := renames[name]; ok {
-			name, changed = to, true
+		if tos, ok := renames[name]; ok {
+			changed = true
+			for _, to := range tos {
+				if !slices.Contains(out, to) {
+					out = append(out, to)
+				}
+			}
+			continue
 		}
 		if !slices.Contains(out, name) {
 			out = append(out, name)
@@ -79,10 +114,10 @@ func renameCapabilityList(names []string, renames map[string]string) (out []stri
 	return out, changed
 }
 
-// rewriteCapabilityListColumn rewrites a column holding a stored
+// rewriteCapabilityListColumnMulti rewrites a column holding a stored
 // capability list (joinCapabilities' text) in every row of table, each
 // row named by its key columns.
-func rewriteCapabilityListColumn(ctx context.Context, tx *sql.Tx, table string, keys []string, column string, renames map[string]string) error {
+func rewriteCapabilityListColumnMulti(ctx context.Context, tx *sql.Tx, table string, keys []string, column string, renames map[string][]string) error {
 	var cols, where []string
 	for _, k := range keys {
 		cols = append(cols, "`"+k+"`")
@@ -109,7 +144,7 @@ func rewriteCapabilityListColumn(ctx context.Context, tx *sql.Tx, table string, 
 			rows.Close()
 			return fmt.Errorf("%s.%s: reading: %w", table, column, err)
 		}
-		if names, changed := renameCapabilityList(splitCapabilities(stored), renames); changed {
+		if names, changed := renameCapabilityListMulti(splitCapabilities(stored), renames); changed {
 			updates = append(updates, update{key, joinCapabilities(names)})
 		}
 	}
@@ -129,12 +164,12 @@ func rewriteCapabilityListColumn(ctx context.Context, tx *sql.Tx, table string, 
 	return nil
 }
 
-// rewriteConsoleSessionGrants rewrites the Capabilities of each standing
+// rewriteConsoleSessionGrantsMulti rewrites the Capabilities of each standing
 // session in grain_config.console_sessions. The JSON is edited as JSON,
 // every other field passed through exactly as stored, so the migration
 // does not depend on what ConsoleSession looks like in whichever build
 // runs it.
-func rewriteConsoleSessionGrants(ctx context.Context, tx *sql.Tx, renames map[string]string) error {
+func rewriteConsoleSessionGrantsMulti(ctx context.Context, tx *sql.Tx, renames map[string][]string) error {
 	var stored string
 	err := tx.QueryRowContext(ctx, "SELECT `console_sessions` FROM `grain_config` WHERE `id` = 1").Scan(&stored)
 	if err == sql.ErrNoRows || (err == nil && stored == "") {
@@ -159,7 +194,7 @@ func rewriteConsoleSessionGrants(ctx context.Context, tx *sql.Tx, renames map[st
 		if err := json.Unmarshal(raw, &names); err != nil {
 			continue
 		}
-		renamed, did := renameCapabilityList(names, renames)
+		renamed, did := renameCapabilityListMulti(names, renames)
 		if !did {
 			continue
 		}
@@ -180,4 +215,121 @@ func rewriteConsoleSessionGrants(ctx context.Context, tx *sql.Tx, renames map[st
 		return fmt.Errorf("grain_config.console_sessions: rewriting: %w", err)
 	}
 	return nil
+}
+
+// foldRetiredCatalogueInProcess is migration 90's Up: it moves retired 1-to-1
+// preset capability entries in grain_config.capability_policy's catalogue from
+// inProcess[<retired>] into apiScopes.presets[<preset>], merging restrictions
+// conservatively when both exist, and rewrites retired task defaults in the
+// catalogue's own defaults section.
+func foldRetiredCatalogueInProcess(retiredPresets map[string]string, defaultRenames map[string][]string) func(ctx context.Context, tx *sql.Tx) error {
+	return func(ctx context.Context, tx *sql.Tx) error {
+		var stored string
+		err := tx.QueryRowContext(ctx, "SELECT `capability_policy` FROM `grain_config` WHERE `id` = 1").Scan(&stored)
+		if err == sql.ErrNoRows || (err == nil && strings.TrimSpace(stored) == "") {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("grain_config.capability_policy: reading: %w", err)
+		}
+		policy, err := DecodeCapabilityPolicy(stored)
+		if err != nil || policy.Catalogue == nil {
+			return nil
+		}
+		cat := policy.Catalogue
+		changed := cat.foldRetiredInProcessMap(retiredPresets)
+		if len(defaultRenames) > 0 {
+			if next, did := renameCapabilityListMulti(cat.Defaults.Task, defaultRenames); did {
+				cat.Defaults.Task = next
+				changed = true
+			}
+			for repo, rd := range cat.Defaults.Repos {
+				if next, did := renameCapabilityListMulti(rd.Task, defaultRenames); did {
+					rd.Task = next
+					cat.Defaults.Repos[repo] = rd
+					changed = true
+				}
+			}
+		}
+		if !changed {
+			return nil
+		}
+		encoded, err := EncodeCapabilityPolicy(policy)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE `grain_config` SET `capability_policy` = ? WHERE `id` = 1", encoded); err != nil {
+			return fmt.Errorf("grain_config.capability_policy: rewriting: %w", err)
+		}
+		return nil
+	}
+}
+
+// legacyRepoAccessRenames is migration 88's renames: every retired
+// repo-read:<repo> and repo-write:<repo> stored anywhere a retirement
+// rewrites, each to the repo#read / repo#write grant naming that
+// repository (RepoReadGrant, RepoWriteGrant). The names are parameterized,
+// so unlike every earlier retirement the table is read off the store
+// rather than written out. A name whose repository does not parse is left
+// alone, as it granted nothing before either.
+func legacyRepoAccessRenames(ctx context.Context, tx *sql.Tx) (map[string][]string, error) {
+	renames := map[string][]string{}
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if !strings.HasPrefix(name, RepoReadCapabilityPrefix) && !strings.HasPrefix(name, RepoWriteCapabilityPrefix) {
+			return
+		}
+		if repo, ok := RepoReadTarget(name); ok {
+			renames[name] = []string{RepoReadGrant(repo)}
+		} else if repo, ok := RepoWriteTarget(name); ok {
+			renames[name] = []string{RepoWriteGrant(repo)}
+		}
+	}
+	scan := func(query string, each func(string)) error {
+		rows, err := tx.QueryContext(ctx, query)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var v sql.NullString
+			if err := rows.Scan(&v); err != nil {
+				return err
+			}
+			each(v.String)
+		}
+		return rows.Err()
+	}
+	list := func(stored string) {
+		for _, name := range splitCapabilities(stored) {
+			add(name)
+		}
+	}
+	for _, q := range []struct {
+		query string
+		each  func(string)
+	}{
+		{"SELECT DISTINCT `capability` FROM `task_grant`", add},
+		{"SELECT DISTINCT `capability` FROM `template_grant`", add},
+		{"SELECT DISTINCT `capability` FROM `schedule_grant`", add},
+		{"SELECT `default_capabilities` FROM `grain_config`", list},
+		{"SELECT `default_capabilities` FROM `repo_config`", list},
+		{"SELECT `ci_capabilities` FROM `repo_config`", list},
+		{"SELECT `console_sessions` FROM `grain_config`", func(stored string) {
+			var sessions []struct{ Capabilities []string }
+			if json.Unmarshal([]byte(stored), &sessions) != nil {
+				return
+			}
+			for _, s := range sessions {
+				for _, name := range s.Capabilities {
+					add(name)
+				}
+			}
+		}},
+	} {
+		if err := scan(q.query, q.each); err != nil {
+			return nil, fmt.Errorf("finding retired repository access grants: %w", err)
+		}
+	}
+	return renames, nil
 }

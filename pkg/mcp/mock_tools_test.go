@@ -28,8 +28,10 @@ import (
 func escapeHatchText(t *testing.T) map[string]struct{ description, confirmation string } {
 	t.Helper()
 	args := map[string]map[string]any{
-		"ask_question":       {"question": "which config file?"},
-		"request_secret":     {"secret": "stripe-api-key", "reason": "the deploy script authenticates with it"},
+		"ask_question":   {"question": "which config file?"},
+		"request_secret": {"secret": "stripe-api-key", "reason": "the deploy script authenticates with it"},
+		"request_access": {"summary": "Grant read of acme/lib", "reason": "the fix spans both repos",
+			"requests": []any{map[string]any{"kind": "read", "repo": "acme/lib"}}},
 		"comment_on_issue":   {"comment": "the answer is 4"},
 		"nothing_needed":     {"reason": "the flag is already off on main"},
 		"write_handover":     {"handover": "the merge lane may only ever hold one branch"},
@@ -253,6 +255,36 @@ func TestProposeTaskParsesReadsWritesReviewTemplateID(t *testing.T) {
 	}
 }
 
+func TestProposeTaskParsesAndValidatesDesigns(t *testing.T) {
+	sink := &MockSink{}
+	tool := toolNamed(t, NewMockTools(sink, nil), "propose_task")
+
+	bad := tool.Handler(context.Background(), map[string]any{
+		"title":   "[PLC] child",
+		"body":    "implement slice",
+		"designs": []any{"../escape"},
+	})
+	if !bad.IsError {
+		t.Fatalf("expected error on escaping design path, got %+v", bad)
+	}
+	if len(sink.ProposedTasks()) != 0 {
+		t.Fatalf("invalid proposal should not be recorded")
+	}
+
+	ok := tool.Handler(context.Background(), map[string]any{
+		"title":   "[PLC] child",
+		"body":    "implement slice",
+		"designs": []any{"design/plc/042@abcdef1", "acme/specs:plc/042@0123456789abcdef0123456789abcdef01234567"},
+	})
+	if ok.IsError {
+		t.Fatalf("unexpected error: %s", ok.Text)
+	}
+	got := sink.ProposedTasks()
+	if len(got) != 1 || len(got[0].Designs) != 2 {
+		t.Fatalf("ProposedTasks = %+v, want 1 task with 2 designs", got)
+	}
+}
+
 // argumentDescription digs one argument's own description out of a
 // tool's input schema -- where an agent reads it, and where these tools
 // put everything they say about a single argument.
@@ -380,6 +412,81 @@ func TestProposeTaskHandlerRecordsSandboxShapeAndNetworkAccess(t *testing.T) {
 	}
 	if p.NetworkAccess != "none" {
 		t.Errorf("network_access = %q, want none", p.NetworkAccess)
+	}
+}
+
+func TestProposeTaskAcceptsAndValidatesPriority(t *testing.T) {
+	sink := &MockSink{}
+	tool := toolNamed(t, NewMockTools(sink, nil), "propose_task")
+	props, ok := tool.InputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("InputSchema has no properties map")
+	}
+	priSpec, ok := props["priority"].(map[string]any)
+	if !ok {
+		t.Fatal("propose_task InputSchema is missing priority property")
+	}
+	if typ, _ := priSpec["type"].(string); typ != "integer" {
+		t.Errorf("priority type = %q, want integer", typ)
+	}
+
+	res := tool.Handler(context.Background(), map[string]any{
+		"title":    "urgent follow-up",
+		"body":     "fix first",
+		"priority": float64(8),
+	})
+	if res.IsError {
+		t.Fatalf("Handler errored: %s", res.Text)
+	}
+	tasks := sink.ProposedTasks()
+	if len(tasks) != 1 || tasks[0].Priority != 8 {
+		t.Fatalf("ProposedTasks() = %+v, want priority=8", tasks)
+	}
+
+	negRes := tool.Handler(context.Background(), map[string]any{
+		"title":    "bad priority",
+		"body":     "nope",
+		"priority": float64(-1),
+	})
+	if !negRes.IsError {
+		t.Errorf("propose_task with priority=-1 succeeded, want error")
+	}
+	zeroRes := tool.Handler(context.Background(), map[string]any{
+		"title":    "zero priority",
+		"body":     "nope",
+		"priority": float64(0),
+	})
+	if !zeroRes.IsError || !strings.Contains(zeroRes.Text, "positive integer") {
+		t.Errorf("propose_task with priority=0 = %+v, want a positive-integer error", zeroRes)
+	}
+	// Not whole, past what a JSON number holds exactly, or not a number
+	// at all: refused in the same words, never filed as some other
+	// priority (1.5 used to file 1, and "8" the default 5).
+	for _, bad := range []any{1.5, float64(1e20), float64(1<<53 + 2), "8", true} {
+		res := tool.Handler(context.Background(), map[string]any{
+			"title":    "odd priority",
+			"body":     "nope",
+			"priority": bad,
+		})
+		if !res.IsError || !strings.Contains(res.Text, "positive integer") {
+			t.Errorf("propose_task with priority=%v = %+v, want a positive-integer error", bad, res)
+		}
+	}
+	if got := len(sink.ProposedTasks()); got != 1 {
+		t.Errorf("ProposedTasks() after refused calls = %d, want 1", got)
+	}
+	// A whole number written with an exponent is that number, as it is
+	// on New task, Edit, Bulk edit, the template form and the REST API:
+	// decoded from the arguments' own JSON, as the MCP server does.
+	var exponent map[string]any
+	if err := json.Unmarshal([]byte(`{"title": "exponent priority", "body": "fine", "priority": 1e3}`), &exponent); err != nil {
+		t.Fatal(err)
+	}
+	if res := tool.Handler(context.Background(), exponent); res.IsError {
+		t.Fatalf("propose_task with priority=1e3 errored: %s", res.Text)
+	}
+	if tasks := sink.ProposedTasks(); len(tasks) != 2 || tasks[1].Priority != 1000 {
+		t.Errorf("ProposedTasks() = %+v, want a second task at priority 1000", tasks)
 	}
 }
 

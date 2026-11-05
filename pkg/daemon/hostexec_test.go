@@ -15,7 +15,6 @@
 package daemon
 
 import (
-	"bytes"
 	"context"
 	"log"
 	"path/filepath"
@@ -49,11 +48,14 @@ func withExecutor(cfg Config, where whererun.Detection, socketDirExists func(str
 
 // captureDaemonLog collects the daemon log for one test and forgets which
 // stored host settings have already been warned about, on both sides.
-func captureDaemonLog(t *testing.T) *bytes.Buffer {
+// captureDaemonLog points the package logger at a buffer for the test.
+// The buffer is locked: a goroutine an earlier test started (a hostd
+// notifier, say) may still log while this test reads it.
+func captureDaemonLog(t *testing.T) *lockedBuffer {
 	t.Helper()
-	var buf bytes.Buffer
+	buf := &lockedBuffer{}
 	prevOut, prevFlags := log.Writer(), log.Flags()
-	log.SetOutput(&buf)
+	log.SetOutput(buf)
 	log.SetFlags(0)
 	forget := func() { storedHostWarned.Range(func(k, _ any) bool { storedHostWarned.Delete(k); return true }) }
 	forget()
@@ -62,7 +64,7 @@ func captureDaemonLog(t *testing.T) *bytes.Buffer {
 		log.SetFlags(prevFlags)
 		forget()
 	})
-	return &buf
+	return buf
 }
 
 func TestKubernetesHasNoHostExecutorAndNeverLooksForHostd(t *testing.T) {
@@ -121,6 +123,20 @@ func TestDetectHostExecutorOffTheBareMachine(t *testing.T) {
 	e = DetectHostExecutor(Config{HostdSocket: "/srv/hostd.sock"}, inContainer, func(string) bool { return false })
 	if e.Kind != HostExecutorHostd || e.Socket != "/srv/hostd.sock" {
 		t.Errorf("with -hostd-socket: %+v, want hostd at that socket", e)
+	}
+	// An explicit -hostd-socket on the bare machine is honoured too rather
+	// than silently discarded for HostExecutorLocal, so co-located hostd
+	// routing and run: host capability servers work when grain daemon is
+	// started outside a container with -hostd-socket.
+	onHost := whererun.Detection{Host: true, Signal: "no container marker found"}
+	e = DetectHostExecutor(Config{HostdSocket: "/srv/hostd.sock"}, onHost, noHostdLookup(t))
+	if e.Kind != HostExecutorHostd || e.Socket != "/srv/hostd.sock" {
+		t.Errorf("on the host with explicit -hostd-socket: %+v, want hostd at that socket", e)
+	}
+	cfg := Config{HostdSocket: "/srv/hostd.sock", HostExec: &e}
+	if cfg.capabilityHostd() == nil || capabilityHostdName(cfg) != model.LocalHostd {
+		t.Errorf("capabilityHostd with explicit -hostd-socket on host: client=%v name=%q, want non-nil %q",
+			cfg.capabilityHostd(), capabilityHostdName(cfg), model.LocalHostd)
 	}
 }
 
@@ -229,8 +245,8 @@ func TestHostdConfiguredButDownStillOffersHostAndFailsTheRunClearly(t *testing.T
 	if err := cfg.CheckCLIRunSettings(map[string]model.CLIRunSetting{model.AgentFrameworkClaude: {Location: model.CLIRunHost}}); err != nil {
 		t.Errorf("saving host for claude with hostd configured: %v", err)
 	}
-	if err := cfg.CheckCLIRunSettings(map[string]model.CLIRunSetting{model.AgentFrameworkCustom: {Location: model.CLIRunHost}}); err == nil {
-		t.Error("saving host for custom commands under hostd was accepted; they have no allowlist entry to run as")
+	if err := cfg.CheckCLIRunSettings(map[string]model.CLIRunSetting{model.RemovedAgentFrameworkCustom: {Location: model.CLIRunHost}}); err == nil {
+		t.Error("saving host for the removed custom command framework was accepted")
 	}
 	if err := CheckCLIRunFlags(cfg); err != nil {
 		t.Errorf("-agy-run=host with hostd configured refused at start: %v", err)

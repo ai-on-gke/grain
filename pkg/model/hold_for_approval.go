@@ -105,3 +105,41 @@ func AutoApprovalRefusal(child, parent Task, sessionQueues bool) string {
 	return "it is not work of the shape your task may queue unreviewed: the same branch your " +
 		"task lands on, holding no capability your task lacks"
 }
+
+// PersonOnlyProposalSettings is why child, a proposal parent filed, asks
+// for something only a person may give it, phrased to finish "filed for
+// a person to approve: ..." -- "" when it asks for nothing of the kind.
+//
+// Two settings a person may give any task they file, and a run may not
+// give the work it files on its own permission:
+//
+//   - KeepRunning, which requeues the task every time its run exits and so
+//     holds a sandbox for as long as the deployment runs. Editing a task
+//     treats it as a grant of `durable` that no agent may make
+//     (ui.agentGrantRefusal); filing one is the same decision.
+//   - A Priority above both its proposer's own and DefaultTaskPriority,
+//     which sorts it ahead of base-branch repairs and of the work people
+//     put at the front of the queue (Store's taskQueueOrderSQL). Filing at
+//     the default is not an escalation even below a low-priority proposer:
+//     it is what every proposal that names no priority gets.
+//
+// Neither is refused: the run may know its follow-up should run forever
+// or jump the queue, and a person can agree. Both keep the proposal from
+// being queued on its proposer's permission, so somebody does.
+//
+// Here rather than in either package that files a proposal, so the
+// end-of-run relay (orchestrator.relayProposedTasks) and the live call
+// (ui.CreateTask) apply it the same way.
+func PersonOnlyProposalSettings(child, parent Task) string {
+	var why []string
+	if child.KeepRunning {
+		why = append(why, "it asks to keep running (keep_running), restarting every time its run exits, "+
+			"which only a person may ask of a task")
+	}
+	if ceiling := max(parent.Priority, DefaultTaskPriority); child.Priority > ceiling {
+		why = append(why, fmt.Sprintf("it asks for priority %d, above the %d its proposer may give it "+
+			"(the higher of its proposer's own priority and the default), which would dispatch it ahead "+
+			"of work a person queued", child.Priority, ceiling))
+	}
+	return strings.Join(why, "; and ")
+}

@@ -61,7 +61,7 @@ describe("a failing settings sync", () => {
       />,
     );
 
-  // The access code is owner access (docs/design/settings-panel.md §6.1):
+  // The access code is owner access (design/design/settings-panel.design.md §6.1):
   // whoever reads the inbox is the one who can fix the sync.
   it("is an inbox item, saying what the alert says, and opens Config repo", () => {
     const onOpenConfigRepo = vi.fn();

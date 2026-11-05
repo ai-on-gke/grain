@@ -23,8 +23,8 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { Box, IconButton, Tooltip, Typography } from "@mui/material";
-import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
-import ItemGlyph from "./ItemGlyph.jsx";
+import { SIDEBAR_TOGGLE_KEY } from "../sidebarCollapse.js";
+import AppIcon, { NavGlyph } from "./AppIcon.jsx";
 import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
 
 // crumbSx is the one type style of the page title: every crumb and the
@@ -98,7 +98,7 @@ export function PageHeaderActions({ children }) {
 // are drawn after everything else the page put there and pushed to the
 // right-hand end of the slot, just before the global buttons, whatever
 // order the page's header and toolbar portalled them in
-// (docs/design/settings-panel.md §4.1). Out of the rail it is a plain
+// (design/design/settings-panel.design.md §4.1). Out of the rail it is a plain
 // inline row of them.
 export function PageHeaderPageActions({ children }) {
   return (
@@ -129,7 +129,7 @@ export function PageHeaderProvider({ slot, children }) {
 }
 
 // GlobalButtons is the far-right cluster every page's rail ends in
-// (docs/design/settings-panel.md §4.1): the alerts bell, System with the
+// (design/design/settings-panel.design.md §4.1): the alerts bell, System with the
 // unbacked-config-repo dot, and the Settings gear -- the only way into
 // Settings. Each reads as selected while its view is showing. The test
 // ids are the ones the old top bar's buttons had, so a test that clicks
@@ -149,20 +149,21 @@ export function GlobalButtons({
     <Box
       data-testid="page-header-globals"
       className="page-header-globals"
-      sx={{ display: "flex", alignItems: "center", gap: 0.5, flex: "none" }}
+      sx={{ display: "flex", alignItems: "center", gap: 1, flex: "none" }}
     >
       {alerts}
       {onOpenSystem && (
         <Tooltip title="System">
           <IconButton
             size="small"
+            className="header-control-icon"
             aria-label="System"
             aria-pressed={view === "system"}
             data-testid="top-bar-system"
             onClick={onOpenSystem}
             sx={selectedSx(view === "system")}
           >
-            <ItemGlyph kind="system" size={18} />
+            <AppIcon name="system" size={18} />
             {stateDot(config) ? (
               <UnbackedStateDot {...stateDot(config)} />
             ) : null}
@@ -173,13 +174,14 @@ export function GlobalButtons({
         <Tooltip title="Settings">
           <IconButton
             size="small"
+            className="header-control-icon"
             aria-label="Settings"
             aria-pressed={view === "settings"}
             data-testid="top-bar-settings"
             onClick={onOpenSettings}
             sx={selectedSx(view === "settings")}
           >
-            <ItemGlyph kind="settings" size={18} />
+            <AppIcon name="settings" size={18} />
           </IconButton>
         </Tooltip>
       )}
@@ -214,6 +216,7 @@ export default function PageHeader({
   icon = undefined,
   globals = null,
   onSlot = null,
+  onExpandSidebar = null,
   variant = "page",
   children = null,
 }) {
@@ -245,7 +248,43 @@ export default function PageHeader({
       setOverflowing((was) => (was === clipped ? was : clipped));
     };
     measure();
-    if (typeof ResizeObserver === "undefined") return undefined;
+    // The slot clips with overflow, which a browser still scrolls to
+    // show what is focused in it: Tab onto an action wrapped behind
+    // "more" scrolled the rail to that row and left it there, the
+    // search box and count gone from it until a reload. A keyboard stop
+    // on a wrapped row opens the menu instead, with focus left where it
+    // landed, and the slot is back on its first line when it closes. A
+    // pointer cannot reach a clipped row, so only a Tab counts.
+    let tabbed = false;
+    const onKeyDown = (event) => {
+      tabbed = event.key === "Tab";
+    };
+    const onPointerDown = () => {
+      tabbed = false;
+    };
+    const onFocusIn = (event) => {
+      if (node.classList.contains("page-header-slot-expanded")) return;
+      if (!tabbed) return;
+      const top =
+        event.target.getBoundingClientRect().top -
+        node.getBoundingClientRect().top +
+        node.scrollTop;
+      if (top >= node.clientHeight) {
+        node.scrollTop = 0;
+        setExpanded(true);
+      }
+    };
+    node.addEventListener("focusin", onFocusIn);
+    document.addEventListener("keydown", onKeyDown, true);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    const stopFocus = () => {
+      node.removeEventListener("focusin", onFocusIn);
+      document.removeEventListener("keydown", onKeyDown, true);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+    };
+    if (typeof ResizeObserver === "undefined") {
+      return stopFocus;
+    }
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     const watchChildren = new MutationObserver(() => {
@@ -255,6 +294,7 @@ export default function PageHeader({
     watchChildren.observe(node, { childList: true, subtree: true });
     for (const child of node.children) observer.observe(child);
     return () => {
+      stopFocus();
       observer.disconnect();
       watchChildren.disconnect();
     };
@@ -273,6 +313,7 @@ export default function PageHeader({
   const moreRef = useRef(null);
   useEffect(() => {
     const header = headerRef.current;
+    if (!expanded && slotRef.current) slotRef.current.scrollTop = 0;
     if (!expanded || !header) return undefined;
     const onPointerDown = (event) => {
       const target = event.target;
@@ -288,11 +329,22 @@ export default function PageHeader({
       setExpanded(false);
       moreRef.current?.focus();
     };
+    // Tab on past the rail closes it too, rather than leaving the menu
+    // over the page the keyboard has moved on to.
+    const onFocusOut = (event) => {
+      const next = event.relatedTarget;
+      if (!(next instanceof Element) || header.contains(next)) return;
+      if (next.closest(".MuiPopover-root, .MuiModal-root, .MuiPopper-root"))
+        return;
+      setExpanded(false);
+    };
     document.addEventListener("pointerdown", onPointerDown);
     header.addEventListener("keydown", onKeyDown);
+    header.addEventListener("focusout", onFocusOut);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown);
       header.removeEventListener("keydown", onKeyDown);
+      header.removeEventListener("focusout", onFocusOut);
     };
   }, [expanded]);
 
@@ -301,14 +353,14 @@ export default function PageHeader({
   const resolvedIcon =
     icon !== undefined ? (
       typeof icon === "string" ? (
-        <ItemGlyph kind={icon} size={20} />
+        <NavGlyph kind={icon} size={20} />
       ) : (
         icon
       )
     ) : segments ? (
       (() => {
         const kind = glyphForSegments(segments);
-        return kind ? <ItemGlyph kind={kind} size={20} /> : null;
+        return kind ? <NavGlyph kind={kind} size={20} /> : null;
       })()
     ) : null;
 
@@ -319,6 +371,23 @@ export default function PageHeader({
       className={`page-header page-header-${variant}`}
       ref={headerRef}
     >
+      {onExpandSidebar && (
+        <Tooltip title={`Expand sidebar (${SIDEBAR_TOGGLE_KEY})`} describeChild>
+          <IconButton
+            size="small"
+            className="header-control-icon"
+            aria-label="Expand sidebar"
+            aria-expanded={false}
+            aria-controls="sidebar-rail"
+            aria-keyshortcuts={SIDEBAR_TOGGLE_KEY}
+            data-testid="sidebar-toggle"
+            onClick={onExpandSidebar}
+            sx={{ flex: "none", color: "text.secondary" }}
+          >
+            <AppIcon name="sidebar" size={18} />
+          </IconButton>
+        </Tooltip>
+      )}
       {resolvedIcon ? (
         <span className="header-icon">{resolvedIcon}</span>
       ) : null}
@@ -371,6 +440,7 @@ export default function PageHeader({
         <Tooltip title={expanded ? "Fewer" : "More"}>
           <IconButton
             size="small"
+            className="header-control-icon"
             ref={moreRef}
             aria-label="More page actions"
             aria-expanded={expanded}
@@ -382,7 +452,7 @@ export default function PageHeader({
               ml: expanded ? "auto" : undefined,
             }}
           >
-            <MoreHorizIcon fontSize="small" />
+            <AppIcon name="more" size={18} />
           </IconButton>
         </Tooltip>
       )}

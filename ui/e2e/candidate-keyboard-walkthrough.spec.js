@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { expect, test } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // docs/test-plans/2026-10-02.md §8, on `candidate`: the keyboard row
 // opening and the 2026-10-01 walkthrough fixes, run together. Findings
@@ -230,14 +231,14 @@ test("task, schedule and template forms say what is wrong with an unusable base 
   await page.goto("/");
   await page.getByRole("button", { name: "+ New task" }).click();
   await page.getByLabel("Title").fill(`KW base ${stamp}`);
-  await page.getByLabel(/^Repos/).selectOption("acme/widgets");
+  await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
   await page.getByLabel("Base branch").fill("no-such-branch");
   let res = await submit("/api/tasks", "Create task");
   expect(res.status()).toBe(201);
   seeded.push(`/api/tasks/${(await res.json()).id}`);
   await page.getByRole("button", { name: "+ New task" }).click();
   await page.getByLabel("Title").fill(`KW base ${stamp}`);
-  await page.getByLabel(/^Repos/).selectOption("acme/widgets");
+  await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
   await page.getByLabel("Base branch").fill(bad);
   res = await submit("/api/tasks", "Create task");
   expect(res.status()).toBe(400);
@@ -272,10 +273,12 @@ test("task, schedule and template forms say what is wrong with an unusable base 
   const form = page.getByRole("dialog");
   await form.getByLabel(/^Name/).fill(`kw-base-${stamp}`);
   await form.getByLabel("Task title").fill("Bump the toolchain");
-  await form
-    .locator('select[name="repo"]')
-    .first()
-    .selectOption("acme/widgets");
+  await chooseOption(
+    form
+      .locator('.repo-field:has(input[name="repo"]) [role="combobox"]')
+      .first(),
+    "acme/widgets",
+  );
   await form.getByLabel("Base branch").fill(bad);
   res = await submit("/api/templates", "Add template");
   expect(res.status()).toBe(400);

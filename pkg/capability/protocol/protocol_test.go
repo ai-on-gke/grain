@@ -682,7 +682,7 @@ func TestAssignServerNames(t *testing.T) {
 	if want := []string{"tools", "", "tools-3", "tools-2", "tools-4"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("AssignServerNames = %v, want %v", got, want)
 	}
-	for _, bad := range []string{"grain-sandbox", "Tools", "a b"} {
+	for _, bad := range []string{"grain-sandbox", "grain-controller", "Tools", "a b"} {
 		if _, err := AssignServerNames([]string{bad}); err == nil {
 			t.Errorf("server name %q accepted", bad)
 		}
@@ -724,5 +724,36 @@ func TestPersonGrantedIsNeverCovered(t *testing.T) {
 	}
 	if u := Uncovered(parent, parent); len(u) != 1 || u[0].Ref != ref {
 		t.Errorf("Uncovered = %v, want only %s", u, ref)
+	}
+}
+
+// An argument a grant leaves out is its schema default, so a bare
+// reference whose default value is reserved to a person is person-granted
+// too: a grant string's args are judged as written, before ValidateArgs
+// fills the default in.
+func TestPersonGrantedArgDefaultIsReserved(t *testing.T) {
+	id := "https://example.test/capabilities/person-granted-arg-test"
+	ref := Ref{CapabilityID: id, Method: "key"}
+	t.Cleanup(func() { personGrantedArgs.Delete(id + "#key") })
+	schema := func(def string) map[string]*MethodInfo {
+		return map[string]*MethodInfo{"key": {ArgsSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"set": map[string]any{"type": "string", "enum": []any{"org", "ci"}, "default": def, PersonGrantedArgKey: []any{"org"}},
+			},
+		}}}
+	}
+	NotePersonGrantedArgs(id, schema("org"))
+	for _, args := range []map[string]any{nil, {}, {"set": "org"}} {
+		if GrantKindOf(Grant{Ref: ref, Args: args}) != GrantByPerson {
+			t.Errorf("args %v: the reserved default is not person-granted", args)
+		}
+	}
+	if GrantKindOf(Grant{Ref: ref, Args: map[string]any{"set": "ci"}}) != GrantCovered {
+		t.Error("an unreserved value is person-granted")
+	}
+	NotePersonGrantedArgs(id, schema("ci"))
+	if GrantKindOf(Grant{Ref: ref}) != GrantCovered {
+		t.Error("a bare reference whose default is unreserved is person-granted")
 	}
 }

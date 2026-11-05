@@ -18,7 +18,7 @@ import { test } from "./fixtures.js";
 test.setTimeout(120_000);
 
 const DESKTOP = { width: 1440, height: 900 };
-const RUNNING_IMAGE = "ghcr.io/bwsalmon/grain/grain:main";
+const RUNNING_IMAGE = "docker.io/grainai/grain:main";
 
 test.describe("UI Navigation, Sidebar Split-Button Intake & In-App Upgrade Dialog (§4)", () => {
   test("1. Sidebar Split-Button renders and triggers creation dropdown actions", async ({
@@ -32,6 +32,11 @@ test.describe("UI Navigation, Sidebar Split-Button Intake & In-App Upgrade Dialo
     await expect(aside).toBeVisible();
 
     // 1. Verify '+ New task' primary button and dropdown chevron trigger
+    // in the left sidebar just below .sidebar-header (and not in globals).
+    const globals = page.getByTestId("page-header-globals");
+    await expect(
+      globals.getByRole("button", { name: "+ New task" }),
+    ).toHaveCount(0);
     const newTaskMainBtn = aside.getByRole("button", { name: "+ New task" });
     const createOptionsBtn = aside.getByRole("button", {
       name: "Create options",
@@ -259,7 +264,7 @@ test.describe("UI Navigation, Sidebar Split-Button Intake & In-App Upgrade Dialo
     await expect(page.locator(".merged-pattern-row")).toHaveCount(0);
   });
 
-  test("5. Eigenmode icons for suites and metrics display properly in sidebar navigation", async ({
+  test("5. Item Chladni glyph for processes and standard icon for System display in navigation", async ({
     page,
   }) => {
     await page.setViewportSize(DESKTOP);
@@ -268,24 +273,29 @@ test.describe("UI Navigation, Sidebar Split-Button Intake & In-App Upgrade Dialo
 
     const aside = page.locator("aside");
 
-    // Check Suites glyph
+    // Processes keeps its Chladni item glyph in the sidebar
     const suitesBtn = aside.getByRole("button", { name: /^Processes/i });
     await expect(suitesBtn).toBeVisible();
-    const suitesSvg = suitesBtn.locator("svg");
+    const suitesSvg = suitesBtn.locator('svg[data-glyph="processes"]');
     await expect(suitesSvg).toBeVisible();
 
-    // Metrics is a System tab now; the System glyph is on the page header rail's
-    // button (docs/design/settings-panel.md §4.1).
-    const metricsBtn = page.getByTestId("top-bar-system");
-    await expect(metricsBtn).toBeVisible();
-    const metricsSvg = metricsBtn.locator("svg");
-    await expect(metricsSvg).toBeVisible();
+    // System uses its standard health/pulse icon on the page header rail's
+    // button (design/design/settings-panel.design.md §4.1).
+    const systemBtn = page.getByTestId("top-bar-system");
+    await expect(systemBtn).toBeVisible();
+    const systemSvg = systemBtn.locator('svg[data-icon="system"]');
+    await expect(systemSvg).toBeVisible();
 
-    // Verify SVG paths match distinct eigenmode figures
-    const suitesPath = await suitesSvg.locator("path").getAttribute("d");
-    const metricsPath = await metricsSvg.locator("path").getAttribute("d");
+    const suitesPath = await suitesSvg
+      .locator("path")
+      .first()
+      .getAttribute("d");
+    const systemPath = await systemSvg
+      .locator("path")
+      .first()
+      .getAttribute("d");
     expect(suitesPath).toBeTruthy();
-    expect(metricsPath).toBeTruthy();
-    expect(suitesPath).not.toEqual(metricsPath);
+    expect(systemPath).toBeTruthy();
+    expect(suitesPath).not.toEqual(systemPath);
   });
 });

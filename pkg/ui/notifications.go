@@ -28,7 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// Operator notifications over the API (docs/design/durable-tasks.md,
+// Operator notifications over the API (design/design/durable-tasks.design.md,
 // DT-5): raise, list, acknowledge, clear and investigate, plus the
 // sandbox's two hops -- notify_operator (POST /api/tasks/{id}/notify)
 // and message_task (POST /api/tasks/{id}/notes, DT-10).
@@ -122,7 +122,7 @@ func AgentNamespace(taskID string) string { return "agent." + taskID + ":" }
 // RaiseNotification raises req as whoever ctx's actor is. A run's agent
 // principal is held to notify_operator's rules (AgentNotify).
 func (c *Client) RaiseNotification(ctx context.Context, req RaiseNotificationRequest) (NotificationRaiseResponse, error) {
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
 	if actor.Kind == model.PrincipalAgent {
 		return c.AgentNotify(ctx, actor.ID, req)
 	}
@@ -259,7 +259,7 @@ func (c *Client) notification(ctx context.Context, id int64) (*model.Notificatio
 // AckNotification acknowledges id: it leaves the Alerts count and stays
 // in the Inbox until it clears. A person's act: a run is refused.
 func (c *Client) AckNotification(ctx context.Context, id int64) (model.Notification, error) {
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
 	if actor.Kind == model.PrincipalAgent {
 		return model.Notification{}, forbiddenErrorf("acknowledging a notification is a person's act")
 	}
@@ -279,7 +279,7 @@ func (c *Client) AckNotification(ctx context.Context, id int64) (model.Notificat
 // ClearNotification clears id. A run whose task does not hold
 // api:task-admin may only clear what its own task raised.
 func (c *Client) ClearNotification(ctx context.Context, id int64) (model.Notification, error) {
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
 	n, err := c.notification(ctx, id)
 	if err != nil {
 		return model.Notification{}, err
@@ -316,7 +316,7 @@ type InvestigateResponse struct {
 // act, and records it on the notification so a second click opens the
 // same task. A person's act: a run is refused.
 func (c *Client) InvestigateNotification(ctx context.Context, id int64) (InvestigateResponse, error) {
-	if c.actor(ctx).Kind == model.PrincipalAgent {
+	if c.requestActor(ctx).Actor.Kind == model.PrincipalAgent {
 		return InvestigateResponse{}, forbiddenErrorf("investigating a notification files an approved task, which is a person's act")
 	}
 	n, err := c.notification(ctx, id)

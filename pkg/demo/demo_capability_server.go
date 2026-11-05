@@ -31,11 +31,12 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // DemoCapabilityID is the demo's one capability server
-// (docs/capabilities-spec.md §3.1): a real protocol.CapabilityServer over
+// (design/spec/capabilities/capabilities.spec.md §3.1): a real protocol.CapabilityServer over
 // Streamable HTTP on a loopback port, attached by a real servers.Registry,
 // so the UI's grant forms, the task capabilities API and Settings →
 // Capability servers all read a server the way a deployment's are read.
@@ -46,7 +47,7 @@ const DemoCapabilityID = "https://capabilities.demo.grain.example/cloud"
 // capability (admin accounts and permission sets), over gcpfake's
 // in-memory IAM rather than GCP -- the one external boundary it stubs --
 // so Settings can add admins and sets, Test them, and grant a set.
-const DemoGCPCapabilityID = "https://capabilities.demo.grain.example/gcp"
+const DemoGCPCapabilityID = "https://grain.dev/capabilities/gcp"
 
 // The demo's gchat server is grain's own built-in, registered under its
 // canonical capability_id with nothing configured, so Settings shows it
@@ -89,13 +90,19 @@ func (f *fakeChat) RoundTrip(req *http.Request) (*http.Response, error) {
 	}, nil
 }
 
-// demoGCPConfig is the demo gcp server's starting configuration: one
-// permission set using the default ambient admin.
+// demoGCPExistingAccount is the existing service account the demo's
+// org-deploy set acts as.
+const demoGCPExistingAccount = "deployer@demo-project.iam.gserviceaccount.com"
+
+// demoGCPConfig is the demo gcp server's starting configuration, using
+// the default ambient admin: a set whose accounts grain creates, and one
+// over an existing service account, impersonated for short-lived tokens.
 func demoGCPConfig() map[string]any {
 	return map[string]any{
-		"permission_sets": []any{map[string]any{
-			"name": "sandbox-agent", "project": "demo-project", "roles": []any{"roles/logging.viewer"},
-		}},
+		"permission_sets": []any{
+			map[string]any{"name": "sandbox-agent", "project": "demo-project", "roles": []any{"roles/logging.viewer"}},
+			map[string]any{"name": "org-deploy", "service_account": demoGCPExistingAccount, "roles": []any{"roles/run.admin"}},
+		},
 	}
 }
 
@@ -199,7 +206,7 @@ func demoCapabilityMethods() ([]*protocol.Method, error) {
 }
 
 // demoCapabilityConfigSchema is the demo server's configuration
-// (docs/capabilities-spec.md §4.5): a pattern-checked project, an enum
+// (design/spec/capabilities/capabilities.spec.md §4.5): a pattern-checked project, an enum
 // region, and apiToken, a secret field Settings shows write-only. None
 // is required, so the server attaches before anyone has configured it.
 var demoCapabilityConfigSchema = map[string]any{
@@ -226,8 +233,10 @@ var demoCapabilityConfigSchema = map[string]any{
 // configureCapabilityServerDemo starts the demo's capability server on a
 // loopback port, records it in stored's mcpServers, and returns the
 // registry that attaches it, already running until ctx ends. lookup
-// resolves the $secret: references a saved configuration holds.
-func configureCapabilityServerDemo(ctx context.Context, stored *model.Config, lookup protocol.SecretLookup, identity servers.IdentitySource) (*servers.Registry, error) {
+// resolves the $secret: references a saved configuration holds; hostdClient,
+// when set (-host-executor=hostd or hostd-remote), lets Settings list and
+// probe run: host capability servers against the demo's grain hostd.
+func configureCapabilityServerDemo(ctx context.Context, stored *model.Config, lookup protocol.SecretLookup, identity servers.IdentitySource, hostdClient *hostd.Client) (*servers.Registry, error) {
 	methods, err := demoCapabilityMethods()
 	if err != nil {
 		return nil, err
@@ -252,7 +261,9 @@ func configureCapabilityServerDemo(ctx context.Context, stored *model.Config, lo
 
 	cloud := gcpfake.New()
 	cloud.DefaultIdentity = "you@demo.grain.example"
-	gcp, err := intree.NewConfigurableGCP(intree.GCPConfig{Connector: cloud})
+	cloud.AddAccount("demo-project", demoGCPExistingAccount, "made by hand")
+	cloud.Bind("projects/demo-project", "roles/run.admin", "serviceAccount:"+demoGCPExistingAccount)
+	gcp, err := intree.NewConfigurableGCP(intree.GCPConfig{Connector: cloud, Listen: "127.0.0.1:0"})
 	if err != nil {
 		return nil, err
 	}
@@ -260,6 +271,7 @@ func configureCapabilityServerDemo(ctx context.Context, stored *model.Config, lo
 	if err != nil {
 		return nil, err
 	}
+	gcpEntry.Builtin = "gcp"
 	gcpEntry.Config = demoGCPConfig()
 	stored.MCPServers[DemoGCPCapabilityID] = gcpEntry
 
@@ -283,7 +295,7 @@ func configureCapabilityServerDemo(ctx context.Context, stored *model.Config, lo
 	}
 	gchatEntry.Builtin = "gchat"
 	stored.MCPServers[intree.CanonicalID("gchat")] = gchatEntry
-	opts := servers.Options{Secrets: lookup}
+	opts := servers.Options{Secrets: lookup, Hostd: hostdClient}
 	if identity != nil {
 		opts.Identity = servers.StoreIdentity(identity, nil)
 	}

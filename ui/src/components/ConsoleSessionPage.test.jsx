@@ -396,6 +396,30 @@ describe("ConsoleSessionPage", () => {
     expect(JSON.parse(options.body)).toEqual({ tasksApproved: true });
   });
 
+  it("toggles keepRunning on a console session from the capabilities pane", async () => {
+    render(
+      <ConsoleSessionPage
+        session={session()}
+        task={task()}
+        capabilities={capabilities}
+        act={vi.fn()}
+        onSaved={vi.fn()}
+        showError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /Director capabilities/ }),
+    );
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /Keep running/ }),
+    );
+
+    await waitFor(() => expect(api).toHaveBeenCalled());
+    const [, options] = api.mock.calls.at(-1);
+    expect(JSON.parse(options.body)).toEqual({ keepRunning: true });
+  });
+
   it("offers a member of the session's team every control", () => {
     render(
       <ConsoleSessionPage
@@ -629,6 +653,37 @@ describe("ConsoleSessionPage", () => {
 
     expect(screen.getByText("acme/docs")).toBeInTheDocument();
     expect(screen.getByText("acme/deploy")).toBeInTheDocument();
+  });
+
+  it("lists the repositories every session reads apart from its own reads", async () => {
+    render(
+      <ConsoleSessionPage
+        session={session({
+          reads: ["acme/docs", "acme/widgets"],
+          readsAll: true,
+          autoReads: ["acme/widgets"],
+        })}
+        task={task()}
+        config={{ targetRepos: ["acme/widgets", "acme/docs"] }}
+        tasks={[]}
+        capabilities={capabilities}
+        act={vi.fn()}
+        onSaved={vi.fn()}
+        showError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /Director capabilities/ }),
+    );
+
+    expect(screen.getByText("acme/docs")).toBeInTheDocument();
+    expect(screen.getByTestId("session-auto-reads")).toHaveTextContent(
+      "Also reads, by default: acme/widgets",
+    );
+    expect(
+      screen.getByText(/every repository this deployment works in/),
+    ).toBeInTheDocument();
   });
 
   it("edits google chat space from the same pane", async () => {

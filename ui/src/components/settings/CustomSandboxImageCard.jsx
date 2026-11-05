@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Alert, Box, Link, TextField, Typography } from "@mui/material";
+import { Alert, Box, Button, Link, TextField, Typography } from "@mui/material";
+import { useState } from "react";
 import SettingsCard from "./SettingsCard.jsx";
 
 export const SANDBOX_CONTRACT_DOC =
@@ -47,12 +48,27 @@ export default function CustomSandboxImageCard({ s }) {
   const baseImage =
     settings.sandboxBaseImage ||
     (vm
-      ? contract.guestBaseImage || "ghcr.io/bwsalmon/grain/guest-base:latest"
+      ? contract.guestBaseImage || "docker.io/grainai/sandbox-base:latest"
       : contract.k8sSandboxBaseImage ||
-        "ghcr.io/bwsalmon/grain/k8s-sandbox-base:latest");
+        "docker.io/grainai/sandbox-k8s-base:latest");
   const defaultImage = settings.sandboxImageDefault || "";
   const range = minimum === current ? `v${current}` : `v${minimum}–v${current}`;
   const check = settings.sandboxImageCheck;
+  // The reference this card last cleared, so that a k8s_granule_image
+  // holding the same one is still offered for clearing once the custom
+  // image itself is gone (one 2026-10-29 save set both; clearing here
+  // left the other behind, unseen).
+  const [cleared, setCleared] = useState("");
+  const granulePin = (settings.k8sGranuleImage || "").trim();
+  const custom = (settings.sandboxImage || "").trim();
+  const samePin =
+    backend === "kubernetes-granule" &&
+    granulePin !== "" &&
+    (granulePin === custom || granulePin === cleared);
+  const clearCustom = () => {
+    setCleared(custom);
+    s.saveChoice?.({ sandboxImage: "" });
+  };
 
   return (
     <SettingsCard title="Custom sandbox image" anchor="custom-sandbox-image">
@@ -75,8 +91,29 @@ export default function CustomSandboxImageCard({ s }) {
         fullWidth
         margin="normal"
         inputProps={{ style: mono }}
+        InputProps={
+          settings.sandboxImage
+            ? {
+                endAdornment: (
+                  <Button
+                    size="small"
+                    onMouseDown={(evt) => evt.preventDefault()}
+                    onClick={clearCustom}
+                    data-testid="sandboxImage-reset"
+                    sx={{
+                      whiteSpace: "nowrap",
+                      textTransform: "none",
+                      flexShrink: 0,
+                    }}
+                  >
+                    Reset to default
+                  </Button>
+                ),
+              }
+            : undefined
+        }
       />
-      {settings.sandboxImageWarning ? (
+      {settings.sandboxImage && settings.sandboxImageWarning ? (
         <Alert
           severity="warning"
           data-testid="sandbox-image-warning"
@@ -98,6 +135,43 @@ export default function CustomSandboxImageCard({ s }) {
         )
       )}
 
+      {samePin && (
+        <Alert
+          severity="info"
+          data-testid="sandbox-image-k8s-granule-pin"
+          sx={{ mt: 1, "& .MuiAlert-message": { minWidth: 0 } }}
+          action={
+            <Button
+              size="small"
+              color="inherit"
+              onClick={() => {
+                setCleared("");
+                s.saveChoice?.(
+                  custom === granulePin
+                    ? { sandboxImage: "", k8sGranuleImage: "" }
+                    : { k8sGranuleImage: "" },
+                );
+              }}
+              data-testid="sandbox-image-k8s-granule-pin-clear"
+              sx={{ whiteSpace: "nowrap", textTransform: "none" }}
+            >
+              {custom === granulePin ? "Clear both" : "Clear it too"}
+            </Button>
+          }
+        >
+          The Kubernetes Granule VM pod image (k8s_granule_image) holds the same
+          reference
+          {custom === granulePin ? "" : " this card just cleared"}:{" "}
+          <Box component="code" sx={{ ...mono, overflowWrap: "anywhere" }}>
+            {granulePin}
+          </Box>
+          .{" "}
+          {settings.k8sGranuleImageMirror
+            ? `It is read as mirror repository ${settings.k8sGranuleImageMirror}, not booted; clearing it keeps that mirror as sandbox_image_mirror.`
+            : "Clearing only the custom image leaves that pin in place, and the change takes a restart."}
+        </Alert>
+      )}
+
       <Typography variant="subtitle2" sx={{ mt: 2 }}>
         Build it FROM grain's minimal base image
       </Typography>
@@ -107,8 +181,8 @@ export default function CustomSandboxImageCard({ s }) {
         data-testid="sandbox-image-inherits"
       >
         {vm
-          ? "Granule VM backends boot a packed guest. guest-base already satisfies the entire sandbox contract: user debian (uid 1000) with the /home/agent symlink, git, curl, ca-certificates, python3-minimal for port forwarding, passwordless sudo, systemd, grain-connect, the sandbox grain CLI at /usr/local/bin/grain and the contract version stamps."
-          : "Container and Kubernetes pod backends run a container image. k8s-sandbox-base already satisfies the entire sandbox contract: user debian (uid 1000) with the /home/agent symlink, git, curl, ca-certificates, python3-minimal for port forwarding, the sandbox grain CLI at /usr/local/bin/grain and the contract version stamps."}
+          ? "Granule VM backends boot a packed guest. sandbox-base already satisfies the entire sandbox contract: user debian (uid 1000) with the /home/agent symlink, git, curl, ca-certificates, python3-minimal for port forwarding, passwordless sudo, systemd, grain-connect, the sandbox grain CLI at /usr/local/bin/grain and the contract version stamps."
+          : "Container and Kubernetes pod backends run a container image. sandbox-k8s-base already satisfies the entire sandbox contract: user debian (uid 1000) with the /home/agent symlink, git, curl, ca-certificates, python3-minimal for port forwarding, the sandbox grain CLI at /usr/local/bin/grain and the contract version stamps."}
       </Typography>
       <Typography
         variant="body2"
@@ -163,7 +237,7 @@ export default function CustomSandboxImageCard({ s }) {
               {granuleLabel} = {granuleContract}
             </Box>{" "}
             <Typography component="span" variant="body2" color="text.secondary">
-              (Granule's own guest contract, carried by guest-base)
+              (Granule's own guest contract, carried by sandbox-base)
             </Typography>
           </li>
         )}

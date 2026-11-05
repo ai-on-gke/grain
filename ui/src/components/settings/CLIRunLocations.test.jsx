@@ -170,7 +170,6 @@ describe("CLIRunLocations with no host executor", () => {
             "A daemon upgrade interrupts codex runs: codex runs in the daemon's own container, so the restart finishes each run in flight as interrupted and queues its task again.",
         }),
         inPod("antigravity"),
-        inPod("custom"),
       ],
     });
   });

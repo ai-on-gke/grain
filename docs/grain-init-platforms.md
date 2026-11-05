@@ -49,7 +49,7 @@ up and provisioned, **10** means manual or refused steps remain
 below.
 
 The runs are repeatable:
-[`scripts/platform-verify/`](../scripts/platform-verify/) holds one
+[`scripts/platform-verify/`](../scripts/platform-verify) holds one
 script per platform, each of which builds its host or cluster from
 nothing, asserts the exit code and tears everything down again. A row
 here that has gone stale is re-earned by running the matching script,
@@ -147,17 +147,16 @@ GKE. A local install is `linux-kvm` or `linux-container`, set up by
 cluster on the `k8s-granule` backend
 (`deploy/kubernetes/grain-granule.yaml`), and `grain hostd` keeps
 running on the host and dials out to it. So does a `grain
-model-server`, for host-bound CLIs such as `agy` on a Cloudtop. It is
+model-server`, for host-bound CLIs such as `agy` on a workstation. It is
 the same deployment, with the same store, history, secrets key,
 installation id and state repository; only the place the controller
 runs has changed.
 
-It differs from [`scripts/deploy-gke.sh`](deploy-gke.md), which builds a
-new deployment behind Cloud SQL, a Gateway and IAP. This script keeps
-the store the local daemon already has: SQLite moves onto the
-`grain-data` PVC, and a Postgres recorded in `db-config.json` is reached
-from the cluster instead. It also copies the whole data directory,
-where `deploy-gke.sh` copies only part of it.
+This script keeps the store the local daemon already has: SQLite moves
+onto the `grain-data` PVC, and a Postgres recorded in `db-config.json`
+is reached from the cluster instead. It copies the whole data directory
+so the in-cluster controller comes up with all existing checkouts,
+history and configuration intact.
 
 ```sh
 sudo scripts/migrate-local-to-gke.sh --dry-run \

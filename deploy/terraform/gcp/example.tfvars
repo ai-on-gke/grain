@@ -36,6 +36,17 @@ iap_members = [
   # "group:CHANGE-ME@example.com",
 ]
 
+# -- Who grain admits as themselves once IAP has let them in ------------
+#
+# A different list from iap_members: those reach the daemon, these are
+# signed in without the access code. Left unset, it is [deployer_member]
+# when that is a "user:" -- set it when deployer_member is a service
+# account. See variables.tf's own allowed_principals.
+#
+# allowed_principals = [
+#   "user:CHANGE-ME@example.com",
+# ]
+
 # See variables.tf's own create_iap_brand: false (the default) needs an
 # OAuth client created by hand once; true creates one via Terraform,
 # which the provider itself currently warns may not work for a genuinely

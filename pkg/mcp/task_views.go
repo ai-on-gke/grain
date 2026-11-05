@@ -16,7 +16,7 @@ package mcp
 
 // task_views.go is read_grain_task's two compact views -- summary and
 // conversation -- and the kind vocabulary list_grain_tasks filters by
-// (docs/design/durable-tasks.md#DT-13). The full record is
+// (design/design/durable-tasks.design.md#DT-13). The full record is
 // renderTaskRecord's, in task_tools.go.
 
 import (
@@ -42,6 +42,17 @@ const (
 	maxConversationBodyBytes = 2 << 10
 )
 
+// RenderTaskSummary renders the compact ~1 KB summary view of t at now.
+func RenderTaskSummary(t TaskRecord, now time.Time) string {
+	return renderTaskSummary(t, now)
+}
+
+// RenderTaskConversation renders one bounded page of t's conversation after
+// the given comment id (after < 0 starts from the beginning).
+func RenderTaskConversation(t TaskRecord, after int64) string {
+	return renderTaskConversation(t, after)
+}
+
 // renderTaskSummary is the summary view: what the task is and what last
 // happened to it, in about a kilobyte.
 func renderTaskSummary(t TaskRecord, now time.Time) string {
@@ -51,6 +62,11 @@ func renderTaskSummary(t TaskRecord, now time.Time) string {
 	if t.Stall != "" {
 		fmt.Fprintf(&b, "  Stalled: %s\n", clipWords(singleLine(t.Stall), maxSummaryEventBytes*2))
 	}
+	priority := t.Priority
+	if priority <= 0 {
+		priority = 5
+	}
+	fmt.Fprintf(&b, "Priority: %d\n", priority)
 	fmt.Fprintf(&b, "Kind: %s\n", kindWords(t.Kinds))
 	if t.Repo != "" {
 		fmt.Fprintf(&b, "Repo: %s (base %s)\n", t.Repo, blankAsNone(t.Base, "default branch"))
@@ -104,7 +120,8 @@ type taskEvent struct {
 }
 
 // lastTaskEvents is the n latest things the record says happened to the
-// task: attempts starting and ending, and comments.
+// task: attempts starting and ending, recorded closes and reopens, and
+// comments.
 func lastTaskEvents(t TaskRecord, n int) []taskEvent {
 	var events []taskEvent
 	for _, a := range t.Attempts {
@@ -118,11 +135,27 @@ func lastTaskEvents(t TaskRecord, n int) []taskEvent {
 			events = append(events, taskEvent{at: a.StartedAt, text: fmt.Sprintf("attempt #%d started, still running", a.Number)})
 		}
 	}
+	for _, tr := range t.Transitions {
+		if (tr.State != "closed" && tr.State != "reopened") || (tr.By == "" && tr.Reason == "" && tr.Detail == "") {
+			continue
+		}
+		text := tr.State
+		if tr.By != "" {
+			text += " by " + tr.By
+		}
+		if tr.Reason != "" {
+			text += " (" + singleLine(tr.Reason) + ")"
+		}
+		if tr.Detail != "" {
+			text += "; " + singleLine(tr.Detail)
+		}
+		events = append(events, taskEvent{at: tr.At, text: text})
+	}
 	for _, c := range t.Comments {
-		text := fmt.Sprintf("comment #%d by %s (%s): %s", c.ID, c.Author, c.AuthorKind, singleLine(c.Body))
+		text := fmt.Sprintf("comment #%d by %s (%s): %s", c.ID, c.Who(), c.AuthorKind, singleLine(c.Body))
 		if c.Handover {
 			// Its head is quoted below the events, line by line.
-			text = fmt.Sprintf("handover #%d written by %s (%s)", c.ID, c.Author, c.AuthorKind)
+			text = fmt.Sprintf("handover #%d written by %s (%s)", c.ID, c.Who(), c.AuthorKind)
 		}
 		events = append(events, taskEvent{at: c.CreatedAt, text: text})
 	}
@@ -174,7 +207,7 @@ func renderTaskConversation(t TaskRecord, after int64) string {
 		if c.Handover {
 			kind += ", handover"
 		}
-		fmt.Fprintf(&b, "  #%d [%s] %s (%s):\n", c.ID, c.CreatedAt.UTC().Format(time.RFC3339), c.Author, kind)
+		fmt.Fprintf(&b, "  #%d [%s] %s (%s):\n", c.ID, c.CreatedAt.UTC().Format(time.RFC3339), c.Who(), kind)
 		b.WriteString(indent(clipNote(c.Body, maxConversationBodyBytes)))
 	}
 	if more {

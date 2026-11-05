@@ -1,7 +1,7 @@
 # A real upgrade adopts a live claude run (2026-10-15)
 
 Task 3606, the hand run of stage 2c of
-[`non-disruptive-upgrade.md`](../non-disruptive-upgrade.md) (item 3 of
+[`non-disruptive-upgrade.md`](../../design/design/non-disruptive-upgrade.design.md) (item 3 of
 task 3282). It follows
 [`2026-10-13-daemon-restart-adoption.md`](2026-10-13-daemon-restart-adoption.md),
 the in-process acceptance test with a stub agent, and

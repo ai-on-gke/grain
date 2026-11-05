@@ -94,7 +94,7 @@ type testJournal struct {
 // String.
 type testClaim struct {
 	journal *testJournal
-	t       *testing.T
+	t       testing.TB
 	sb      strings.Builder // guarded by journal.mu
 }
 
@@ -137,7 +137,7 @@ func (c *testClaim) String() string {
 // claim is t's hold on the log, made if it does not already have one --
 // the second return says which, so that only the call that made it
 // registers the release.
-func (j *testJournal) claim(t *testing.T) (*testClaim, bool) {
+func (j *testJournal) claim(t testing.TB) (*testClaim, bool) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	for _, c := range j.claims {
@@ -173,7 +173,7 @@ func (j *testJournal) release(c *testClaim) {
 // Calling it twice for the same test is a no-op beyond returning the
 // claim again, so a test that wants to read the lines can ask for them
 // whether or not a helper it called already claimed them.
-func logToTest(t *testing.T) *testClaim {
+func logToTest(t testing.TB) *testClaim {
 	t.Helper()
 	c, fresh := testLog.claim(t)
 	if fresh {
@@ -188,4 +188,16 @@ func logToTest(t *testing.T) *testClaim {
 func LogToTest(t *testing.T) {
 	t.Helper()
 	logToTest(t)
+}
+
+// LogToBenchmark is LogToTest for a benchmark, which otherwise has the
+// package's log lines printed between its own result lines.
+func LogToBenchmark(b *testing.B) {
+	b.Helper()
+	logToTest(b)
+}
+
+func LogBufferForTest(t *testing.T) interface{ String() string } {
+	t.Helper()
+	return logToTest(t)
 }

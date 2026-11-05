@@ -1099,8 +1099,8 @@ func TestCancelCIRun(t *testing.T) {
 	// merge queue's reconciler would start again behind them
 	// (orchestrator's ciReplacementFor). The note cannot carry that --
 	// there is no note here at all.
-	if len(runner.sources) != 1 || runner.sources[0] != ci.CancelByOperator {
-		t.Errorf("sources %q, want a person's own cancellation", runner.sources)
+	if len(runner.sources) != 1 || runner.sources[0] != ci.CancelByPrincipal("alice") || !runner.sources[0].ByHand() {
+		t.Errorf("sources %q, want alice's own cancellation", runner.sources)
 	}
 
 	// And one with a note carries it through to the runner, trimmed.
@@ -1433,13 +1433,13 @@ func TestCloseCancelsInFlightTaskCIRuns(t *testing.T) {
 		t.Fatalf("cancelled = %v, want [run-recorded run-selective]", runner.cancelled)
 	}
 	for i, reason := range runner.reasons {
-		if reason != "task 11 was closed" {
-			t.Errorf("reason[%d] = %q, want %q", i, reason, "task 11 was closed")
+		if reason != "task 11 was closed by human alice" {
+			t.Errorf("reason[%d] = %q, want %q", i, reason, "task 11 was closed by human alice")
 		}
 	}
 	for i, source := range runner.sources {
-		if source != ci.CancelByOperator {
-			t.Errorf("source[%d] = %q, want %q", i, source, ci.CancelByOperator)
+		if source != ci.CancelByPrincipal("alice") {
+			t.Errorf("source[%d] = %q, want alice, who closed the task", i, source)
 		}
 	}
 
@@ -1564,5 +1564,41 @@ func TestTaskScopedCIRunRetargetedReviewLosesAutoMerge(t *testing.T) {
 	}
 	if updated.AutoMerge {
 		t.Fatal("review retargeted onto candidate kept AutoMerge; want it cleared")
+	}
+}
+
+func TestStartTaskCIRunOptRefusesFullSuiteWhenRepoUsesGitHubCIMode(t *testing.T) {
+	t.Parallel()
+	runner := &fakeCIRunner{
+		run: ci.Run{ID: "run-1", Repo: "acme/widgets", Ref: "grain/task-21"},
+	}
+	srv, store := ciServer(t, runner)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	ctx := context.Background()
+
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:   repo,
+		CIMode: model.CIModeGitHub,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTask(ctx, model.Task{
+		ID:     "21",
+		Branch: "grain/task-21",
+		Intent: model.IntentImplement,
+		Title:  "pre-existing task with default grant",
+		Target: &repo,
+		Base:   "main",
+		Grants: []model.Grant{{Capability: "grain-ci", Via: model.GrantByDefault}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := do(t, srv, http.MethodPost, "/api/ci/runs", `{"taskId":"21"}`)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("POST /api/ci/runs on CIModeGitHub repo: status = %d, want 403: %s", rec.Code, rec.Body)
+	}
+	if len(runner.started) != 0 {
+		t.Fatalf("started %d Grain CI runs on CIModeGitHub repo, want 0", len(runner.started))
 	}
 }

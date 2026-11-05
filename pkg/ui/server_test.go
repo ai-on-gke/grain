@@ -377,7 +377,7 @@ func TestMutatingRoutesRespondWithTheTask(t *testing.T) {
 		// rather than among the proposals.
 		{name: "defer", path: "/defer", want: model.StateDeferred},
 		{name: "undefer", path: "/undefer", want: model.StateQueued},
-		{name: "capability", path: "/capabilities", body: `{"id":"gemini-key","attach":true}`, want: model.StateQueued},
+		{name: "capability", path: "/capabilities", body: `{"id":"read-issues","attach":true}`, want: model.StateQueued},
 		// Asking for a run leaves the task queued -- the run itself is a
 		// dispatch cycle's to start (ui.Client.RunNow) -- so this row
 		// proves the wiring rather than a transition.
@@ -930,7 +930,7 @@ func TestConfigEndpointReportsDefaultCapabilities(t *testing.T) {
 	srv, client := testServer(t)
 
 	cfg := model.DefaultConfig()
-	cfg.DefaultCapabilities = []string{"gcp-key", "scratch-repo"}
+	cfg.DefaultCapabilities = []string{"read-issues", "scratch-repo"}
 	if err := client.Store.PutConfig(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -942,8 +942,8 @@ func TestConfigEndpointReportsDefaultCapabilities(t *testing.T) {
 	got := decode[struct {
 		DefaultCapabilities []string `json:"defaultCapabilities"`
 	}](t, rec)
-	if !reflect.DeepEqual(got.DefaultCapabilities, []string{"gcp-key"}) {
-		t.Fatalf("defaultCapabilities = %v, want [gcp-key]", got.DefaultCapabilities)
+	if !reflect.DeepEqual(got.DefaultCapabilities, []string{"read-issues"}) {
+		t.Fatalf("defaultCapabilities = %v, want [gemini-key]", got.DefaultCapabilities)
 	}
 }
 
@@ -959,7 +959,7 @@ func TestConfigEndpointReportsRepoDefaultCapabilities(t *testing.T) {
 
 	if err := client.Store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:                model.RepoRef{Owner: "acme", Name: "widgets"},
-		DefaultCapabilities: []string{"gcp-key", "scratch-repo"},
+		DefaultCapabilities: []string{"read-issues", "scratch-repo"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -979,7 +979,7 @@ func TestConfigEndpointReportsRepoDefaultCapabilities(t *testing.T) {
 	got := decode[struct {
 		RepoDefaultCapabilities map[string][]string `json:"repoDefaultCapabilities"`
 	}](t, rec)
-	want := map[string][]string{"acme/widgets": {"gcp-key"}}
+	want := map[string][]string{"acme/widgets": {"read-issues"}}
 	if !reflect.DeepEqual(got.RepoDefaultCapabilities, want) {
 		t.Fatalf("repoDefaultCapabilities = %v, want %v", got.RepoDefaultCapabilities, want)
 	}
@@ -1096,7 +1096,7 @@ func TestModelsSettingsCatalogsBackendsAndCredentialsRoundTrip(t *testing.T) {
 
 	for id, credential := range map[string]string{
 		"codex-preview": "sk-preview",
-		"gemini-fast":   "gemini-key",
+		"gemini-fast":   "read-issues",
 	} {
 		rec := do(t, srv, http.MethodPut, "/api/agent-backends/"+id+"/credential",
 			`{"value":"  `+credential+`  "}`)
@@ -1126,6 +1126,29 @@ func TestSettingsRejectionsAre400(t *testing.T) {
 	rec := do(t, srv, http.MethodPut, "/api/settings", `{"pollInterval":"not-a-duration"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body)
+	}
+}
+
+// A cleared Poll interval box (Settings → Engine) is grain's default,
+// the one its placeholder shows, not the 400 `time: invalid duration ""`
+// it was (2026-11-02 walkthrough).
+func TestSettingsBlankPollIntervalIsTheDefault(t *testing.T) {
+	t.Parallel()
+	srv, _ := testServer(t)
+	if rec := do(t, srv, http.MethodPut, "/api/settings", `{"pollInterval":"25s","githubHost":"github.com"}`); rec.Code != http.StatusOK {
+		t.Fatalf("set 25s: status = %d: %s", rec.Code, rec.Body)
+	}
+	rec := do(t, srv, http.MethodPut, "/api/settings", `{"pollInterval":"  "}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear: status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	got := decode[ui.Settings](t, do(t, srv, http.MethodGet, "/api/settings", ""))
+	want := model.DefaultPollInterval.String()
+	if got.PollInterval != want || got.PollIntervalDefault != want {
+		t.Fatalf("pollInterval = %q (default %q), want both %q", got.PollInterval, got.PollIntervalDefault, want)
+	}
+	if rec := do(t, srv, http.MethodPut, "/api/settings", `{"pollInterval":"0s"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("0s: status = %d, want 400: %s", rec.Code, rec.Body)
 	}
 }
 
@@ -1496,7 +1519,7 @@ func TestReconcilerDownReportsConfiguredFunc(t *testing.T) {
 
 // A daemon on its way down for a restart says so on the call the UI
 // polls, so the banner for the gap that follows can say "restarting"
-// (docs/non-disruptive-upgrade.md, Stage 1).
+// (design/design/non-disruptive-upgrade.design.md, Stage 1).
 func TestConfigReportsRestarting(t *testing.T) {
 	t.Parallel()
 	srv, _ := testServer(t)
@@ -1604,6 +1627,30 @@ func TestRestartWatchAnswersAtOnceWhenItHasNothingToWaitFor(t *testing.T) {
 	rec = do(t, srv, http.MethodGet, "/api/restart-watch", "")
 	if got := decode[map[string]any](t, rec); got["restarting"] != true {
 		t.Fatalf("restarting = %v while restarting, want true", got["restarting"])
+	}
+}
+
+// ?quick=1 is the frontend asking whether grain is answering again after
+// an ask of its own failed: it is answered at once even where the watch
+// would otherwise be held (grain/task-2258).
+func TestRestartWatchQuickDoesNotHold(t *testing.T) {
+	t.Parallel()
+	client, _, _ := testClient(t)
+	client.Config.Restarting = func() bool { return false }
+	client.Config.ShutdownStarted = make(chan struct{})
+	srv := ui.NewServerWithClient(client)
+	done := make(chan map[string]any, 1)
+	go func() {
+		rec := do(t, srv, http.MethodGet, "/api/restart-watch?quick=1", "")
+		done <- decode[map[string]any](t, rec)
+	}()
+	select {
+	case got := <-done:
+		if got["restarting"] != false {
+			t.Fatalf("restarting = %v, want false", got["restarting"])
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("?quick=1 was held, want an answer at once")
 	}
 }
 

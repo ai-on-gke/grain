@@ -14,7 +14,7 @@
 
 package orchestrator
 
-// Capability changes mid-task (docs/design/durable-tasks.md#DT-2).
+// Capability changes mid-task (design/design/durable-tasks.design.md#DT-2).
 //
 // A grant added to or removed from a task with a live run used to reach
 // only its next run. Now the run is told -- an addendum, which is how a
@@ -25,12 +25,13 @@ package orchestrator
 // with a sandbox for the grants it now holds.
 //
 // A change no sandbox needs to see is applied in place instead: an
-// `api:*` grant is checked per request by the agent-API gate, so a route
-// the sandbox's `grain api` may call takes effect at once
-// (capabilityNeedsSandbox). The run is told which grants changed, since
-// its `api_*` tools are still the ones its mcpserver was started with.
-// An added scope whose routes no sandbox process may call is served only
-// as those tools, so it does need a restart (toolOnlyScopesAdded).
+// `api:*` grant is checked per request by the agent-API gate and by
+// `POST /api/mcp`, so when `grain-controller` is already attached (or the
+// route is reachable via `grain api` in the sandbox) it takes effect at
+// once (capabilityNeedsSandbox). An added scope whose routes no sandbox
+// process may call needs a restart only when the run started with no
+// `api:*` grant at all and so has no `grain-controller` MCP server
+// attached yet (controllerOnlyScopesAdded).
 //
 // An interactive run blocked in chat on a person is different twice
 // over. Its chat wait reads only what a person says, so no addendum can
@@ -97,8 +98,8 @@ func NewCapabilityRestarts() *CapabilityRestarts {
 // grants in old has to be restarted for its task to hold those in now:
 // whether any capability was added or removed other than an `api:*`
 // grant, which the agent-API gate reads per request, or an added `api:*`
-// grant reaches a route the run could only call as an `api_*` tool it
-// was not started with.
+// grant reaches a model-only route on a run that started without
+// `grain-controller` attached.
 func capabilityNeedsSandbox(old, now []string) bool {
 	for _, c := range old {
 		if !slices.Contains(now, c) && !strings.HasPrefix(c, model.APIGrantPrefix) {
@@ -110,23 +111,30 @@ func capabilityNeedsSandbox(old, now []string) bool {
 			return true
 		}
 	}
-	return len(toolOnlyScopesAdded(old, now)) > 0
+	return len(controllerOnlyScopesAdded(old, now)) > 0
 }
 
-// toolOnlyScopesAdded is every scope the grants in now reach that those
-// in old did not, and that the sandbox channel refuses
-// (model.IsSandboxDeniedAPIScope, or a scope set only a person may
-// grant): a route of one is served only as an `api_*` tool, and a run's
-// tools are built once, when its mcpserver starts (ui.AgentAPITools).
+// controllerOnlyScopesAdded is every scope the grants in now reach that
+// the sandbox channel refuses (model.IsSandboxDeniedAPIScope, or a scope
+// set only a person may grant) -- reachable only through
+// `grain-controller` -- when the run started with no `api:*` grant at
+// all, and so without `grain-controller` attached (wireControllerMCP).
+// Once a run starts with any `api:*` grant, `grain-controller`
+// (/api/mcp) is attached and evaluates the task's live grants per
+// request, so nothing added later needs a restart. (A run adopted from
+// a build that served `api_*` tools on grain-sandbox is the one
+// exception, and lasts only until it ends.)
 //
 // A scope removed needs nothing of the kind: the gate refuses a call the
 // task no longer holds, whichever way the call arrives.
-func toolOnlyScopesAdded(old, now []string) []model.APIScope {
-	before := model.APIGrantsOf(old)
+func controllerOnlyScopesAdded(old, now []string) []model.APIScope {
+	if !model.APIGrantsOf(old).Empty() {
+		return nil
+	}
 	sandbox := model.SandboxAPIGrantsOf(now)
 	var added []model.APIScope
 	for _, scope := range model.APIGrantsOf(now).Scopes() {
-		if !before.Has(scope) && !sandbox.Has(scope) {
+		if !sandbox.Has(scope) {
 			added = append(added, scope)
 		}
 	}
@@ -280,12 +288,17 @@ func (r *CapabilityRestarts) noteAPIChange(ctx context.Context, store *model.Sto
 		b.WriteString("This task's `api:*` grants changed while run " + run.ID + " was live; nothing restarts for it.")
 	}
 	if len(added) > 0 {
-		fmt.Fprintf(&b, " Added: %s -- call their routes with `grain api` from the sandbox now; "+
-			"the `api_*` tools for them arrive only with the next run.", strings.Join(added, ", "))
+		if len(was) > 0 {
+			fmt.Fprintf(&b, " Added: %s -- call their routes now through `grain-controller` "+
+				"(`grain_explore_scope` / `grain_invoke`) or `grain api` in the sandbox.", strings.Join(added, ", "))
+		} else {
+			fmt.Fprintf(&b, " Added: %s -- call their routes with `grain api` from the sandbox now; "+
+				"the `grain-controller` MCP server arrives with the next run.", strings.Join(added, ", "))
+		}
 	}
 	if len(removed) > 0 {
 		fmt.Fprintf(&b, " Removed: %s -- their routes are refused from now on, "+
-			"whether called with `grain api` or as an `api_*` tool.", strings.Join(removed, ", "))
+			"whether called with `grain api` or through `grain-controller`.", strings.Join(removed, ", "))
 	}
 	if err := postCapabilityNotice(ctx, store, task.ID, b.String(), at); err != nil {
 		return fmt.Errorf("orchestrator: telling run %s its api grants changed: %w", run.ID, err)

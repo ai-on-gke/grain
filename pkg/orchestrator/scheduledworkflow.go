@@ -284,6 +284,13 @@ func startScheduledWorkflowRun(ctx context.Context, deps Deps, row model.Schedul
 			row.ScheduleID, row.Stem, model.StandingWorkOffReason(row.Repo))
 		return deps.Store.DeleteScheduledWorkflowRun(ctx, row.ScheduleID)
 	}
+	if disabled, mode, err := repoExplicitlyDisablesGrainCI(ctx, deps.Store, row.Repo); err != nil {
+		return err
+	} else if disabled {
+		log.Printf("orchestrator: schedule %s's firing of %s skipped: %s",
+			row.ScheduleID, row.Stem, cancelReasonForCIMode(mode))
+		return deps.Store.DeleteScheduledWorkflowRun(ctx, row.ScheduleID)
+	}
 	ref, err := scheduledWorkflowRef(deps, row)
 	if err != nil {
 		return failedScheduledWorkflowStart(ctx, deps, row, now, err)
@@ -340,7 +347,7 @@ func scheduledWorkflowRequester(row model.ScheduledWorkflowRun) string {
 // trunk release is selected on (releaseGateWorkflowStems) and runs on
 // the repository's default branch: the firings that rank as release
 // gates and whose `infra` verdicts are re-run before they are reviewed
-// (docs/design/release-from-trunk.md, RFT-2). The advisory live-provider
+// (design/design/release-from-trunk.design.md, RFT-2). The advisory live-provider
 // suites are deliberately not among them -- their reds are mostly the
 // deployment's credentials and quota already, and re-running a suite
 // that is failing on an IAM 429 spends the quota it is short of.
@@ -466,6 +473,15 @@ func collectScheduledWorkflowRun(ctx context.Context, deps Deps, row model.Sched
 		return concludeScheduledWorkflowRun(ctx, deps, row, now, ci.ConclusionErrored,
 			"this deployment no longer runs CI of its own, so the run cannot be read")
 	}
+	if disabled, mode, err := repoExplicitlyDisablesGrainCI(ctx, deps.Store, row.Repo); err != nil {
+		return err
+	} else if disabled {
+		reason := cancelReasonForCIMode(mode)
+		deps.CI.Cancel(row.RunID, reason, ci.CancelBySystem)
+		log.Printf("orchestrator: schedule %s's grain CI run %s on %s cancelled: %s",
+			row.ScheduleID, row.RunID, row.Repo, reason)
+		return deps.Store.DeleteScheduledWorkflowRun(ctx, row.ScheduleID)
+	}
 	run, ok := deps.CI.Get(row.RunID)
 	if ok && (run.Interrupted || run.Conclusion.Done()) {
 		// A release gate's verdict about nothing is re-run before it is
@@ -516,7 +532,7 @@ func collectScheduledWorkflowRun(ctx context.Context, deps Deps, row model.Sched
 
 // releaseTrainStem is the scheduled workflow that cuts, soaks and stages
 // trunk releases (.grain/workflows/release-train.yml,
-// docs/design/release-from-trunk.md §6), and promoteWorkflowPath the one
+// design/design/release-from-trunk.design.md §6), and promoteWorkflowPath the one
 // that publishes a promoted release's images as vX.Y.0 and `latest`.
 const (
 	releaseTrainStem    = "release-train"
@@ -528,7 +544,7 @@ const (
 // `latest` image matches the git `latest` tag without waiting for the
 // next merge to fire promote.yml's own `release` trigger. The train
 // itself stops at vX.Y.0-pending and never moves `latest`
-// (docs/design/release-from-trunk.md RFT-8): a person's approval does,
+// (design/design/release-from-trunk.design.md RFT-8): a person's approval does,
 // through promote-release.yml, whose own promote job publishes it. What
 // this start adds is a republish of the release `latest` already names. It is a release rather than the
 // schedule's own event because that is what package-publish and
@@ -716,6 +732,10 @@ func workflowReviewSchedule(ctx context.Context, deps Deps,
 		return *sched, nil
 	}
 	templateID := model.WorkflowReviewTemplateID(row.Stem)
+	if strings.HasPrefix(row.Workflow, ".github/") {
+		// A run GitHub Actions made (fireGitHubWorkflowRunSchedules's row).
+		templateID = model.GitHubWorkflowReviewTemplateID(row.Stem)
+	}
 	return model.Schedule{
 		ID:                   row.ScheduleID,
 		Target:               row.Repo,
@@ -885,6 +905,9 @@ func fireOneGitHubWorkflowRunSchedule(ctx context.Context, deps Deps, sched mode
 	if trig == nil {
 		return nil
 	}
+	if isGitHubWorkflowRunForeignHead(run.Repo, run.HeadRepo) || !isGitHubBranchWorkflowEvent(run.Event) {
+		return nil
+	}
 	if !trig.MatchesWorkflow(run.WorkflowName, run.WorkflowPath) {
 		return nil
 	}
@@ -892,7 +915,17 @@ func fireOneGitHubWorkflowRunSchedule(ctx context.Context, deps Deps, sched mode
 		return nil
 	}
 	branch := strings.TrimPrefix(run.Ref, "refs/heads/")
-	if !trig.MatchesBranch(branch, sched.Base) {
+	fallbackBase := strings.TrimSpace(sched.Base)
+	if len(trig.Branches) == 0 && fallbackBase == "" {
+		def, err := scheduledWorkflowRef(deps, model.ScheduledWorkflowRun{Repo: run.Repo})
+		if err != nil {
+			sayOnce("github-workflow-run-default-branch:"+sched.ID,
+				"orchestrator: schedule %s: %v", sched.ID, err)
+			return nil
+		}
+		fallbackBase = def
+	}
+	if !trig.MatchesBranch(branch, fallbackBase) {
 		return nil
 	}
 
@@ -926,8 +959,11 @@ func fireOneGitHubWorkflowRunSchedule(ctx context.Context, deps Deps, sched mode
 	if sched.TemplateID != nil {
 		tmplID = *sched.TemplateID
 	}
+	// The legacy grain-CI id is still accepted for a schedule stored
+	// before GitHub runs had a template of their own.
 	usesWorkflowReviewTemplate := !hasSuite &&
-		(tmplID == "" || tmplID == model.WorkflowReviewTemplateID(stem))
+		(tmplID == "" || tmplID == model.GitHubWorkflowReviewTemplateID(stem) ||
+			tmplID == model.WorkflowReviewTemplateID(stem))
 
 	// When a schedule uses the default workflow-review template and has no
 	// explicit conclusions filter on the trigger, respect sched.WorkflowReview
@@ -1005,7 +1041,7 @@ func fireOneGitHubWorkflowRunSchedule(ctx context.Context, deps Deps, sched mode
 	summarySection := gitHubWorkflowRunSummarySection(run, jobs)
 	schedForFiling := sched
 	if usesWorkflowReviewTemplate && tmplID == "" && schedForFiling.Title == "" && schedForFiling.Body == "" {
-		defaultTmpl := model.WorkflowReviewTemplateID(stem)
+		defaultTmpl := model.GitHubWorkflowReviewTemplateID(stem)
 		schedForFiling.TemplateID = &defaultTmpl
 	}
 

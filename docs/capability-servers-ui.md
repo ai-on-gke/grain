@@ -5,7 +5,7 @@ servers** and **Capability policy**: adding a capability server, trying it
 before trusting it, configuring it, editing it, deciding who may use it, and
 removing it. What a capability server is, and the `mcpServers` shape these
 pages edit, is in [capabilities.md](capabilities.md#expose-it-in-grain-grainconfig-mcpservers--settings-ui--cli);
-the protocol is [capabilities-spec.md](capabilities-spec.md) (§3.1 entries,
+the protocol is [capabilities-spec.md](../design/spec/capabilities/capabilities.spec.md) (§3.1 entries,
 §4.2.2 policy, §4.5 configuration).
 
 Everything on these pages is stored in `grain_config` and exported to
@@ -82,6 +82,16 @@ with its canonical ID, `https://grain.dev/capabilities/<name>`.
 - On the gcp server, **Test** warns when one of its permission sets mints
   from accounts the in-process `gcp-key` also uses
   ([gcp-key-permission-sets.md](gcp-key-permission-sets.md#running-alongside-the-built-in-gcp-key)).
+
+After them come grain's **in-process** servers, which run inside the daemon
+rather than as a subprocess and have no `mcpServers` entry:
+`https://grain.dev/capabilities/grain` (`#health`, `#host-exec`, `#journal`,
+`#sql`) and `https://grain.dev/capabilities/repo` (`#read`, `#write`). Each row
+carries the **built-in** and **in-process** chips. Its page lists its methods
+and what grants them, and offers no connection, settings, **Test**,
+**Disable** or **Remove**: there is nothing to configure, and the
+Capability policy decides who may hold its methods. This is where to check
+who holds a dangerous grant such as `grain#host-exec` or `repo#write`.
 
 Your own servers follow in the list as **custom** rows.
 
@@ -188,8 +198,9 @@ Rules match the method reference, not its `with:` arguments.
 
 ## 6. Usage, and removing a server
 
-Each row and page shows **granted by N**, counting grants of any alias the entry carries: the open tasks, templates, schedules and
-Settings-declared workflow jobs that grant one of its methods
+Each row and page shows **granted by N**, counting grants of any alias the entry carries: the open tasks, templates, schedules,
+Settings-declared workflow jobs and default grants (the deployment's, on
+Settings → Tasks, and each repository's) that grant one of its methods
 (`GET /api/capability-servers/usage`). **Remove** (not offered on a built-in) lists them before it
 detaches the server; once removed, those grants are refused at admission
 until they are changed or the server is added back under the same ID.

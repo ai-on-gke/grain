@@ -31,7 +31,22 @@ import (
 
 func (p *printer) config(cfg ui.Config) {
 	if p.json {
-		p.encode(cfg)
+		// ui.Config itself does not marshal (it holds an IssueImporter),
+		// so -json printed nothing at all; this is /api/config's own
+		// field names for what the CLI read from it.
+		wire := struct {
+			Actor         string          `json:"actor"`
+			ActorKind     string          `json:"actorKind"`
+			DefaultTarget string          `json:"defaultTarget,omitempty"`
+			Capabilities  []ui.Capability `json:"capabilities"`
+		}{Actor: cfg.Actor.ID, ActorKind: string(cfg.Actor.Kind), Capabilities: cfg.Capabilities}
+		if cfg.DefaultTarget != nil {
+			wire.DefaultTarget = cfg.DefaultTarget.String()
+		}
+		if wire.Capabilities == nil {
+			wire.Capabilities = []ui.Capability{}
+		}
+		p.encode(wire)
 		return
 	}
 	fmt.Printf("acting as: %s (%s)\n", cfg.Actor.ID, cfg.Actor.Kind)
@@ -65,8 +80,6 @@ func (p *printer) settings(s ui.Settings) {
 	fmt.Printf("poll interval:  %s\n", s.PollInterval)
 	fmt.Printf("max workers:    %d\n", s.MaxWorkers)
 	fmt.Printf("max merges/repo: %d\n", s.MaxMergesPerRepo)
-	fmt.Printf("merge batch size: %d\n", s.MergeBatchSize)
-	fmt.Printf("merge gather window: %s\n", orDefaultValue(s.MergeGatherWindow, s.MergeGatherWindowDefault))
 	fmt.Printf("max agent turns: %d\n", s.MaxAgentTurns)
 	fmt.Printf("github host:    %s\n", s.GitHubHost)
 	fmt.Printf("github insecure http: %t\n", s.GitHubInsecureHTTP)

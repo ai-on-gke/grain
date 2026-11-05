@@ -15,11 +15,15 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,6 +32,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/pkgcache"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
 )
 
@@ -67,7 +72,7 @@ func TestCIJobCacheKeysOnSandboxImageWithoutWipingOnUpgrade(t *testing.T) {
 	cfg1 := Config{
 		DataDir:          dataDir,
 		GranuleSandboxes: true,
-		SandboxImage:     "ghcr.io/bwsalmon/grain/guest:sha-66c5a15@" + digest1,
+		SandboxImage:     "docker.io/grainai/sandbox:sha-66c5a15@" + digest1,
 	}
 	cache1 := CiJobCache(cfg1, nil)
 	if cache1 == nil {
@@ -88,7 +93,7 @@ func TestCIJobCacheKeysOnSandboxImageWithoutWipingOnUpgrade(t *testing.T) {
 	cfgSameDigest := Config{
 		DataDir:          dataDir,
 		GranuleSandboxes: true,
-		SandboxImage:     "ghcr.io/bwsalmon/grain/guest:sha-dc5b5a1@" + digest1,
+		SandboxImage:     "docker.io/grainai/sandbox:sha-dc5b5a1@" + digest1,
 	}
 	cacheSameDigest := CiJobCache(cfgSameDigest, nil)
 	reqSameDigest := baseReq
@@ -106,7 +111,7 @@ func TestCIJobCacheKeysOnSandboxImageWithoutWipingOnUpgrade(t *testing.T) {
 	cfgNewDigest := Config{
 		DataDir:          dataDir,
 		GranuleSandboxes: true,
-		SandboxImage:     "ghcr.io/bwsalmon/grain/guest:sha-9999999@" + digest2,
+		SandboxImage:     "docker.io/grainai/sandbox:sha-9999999@" + digest2,
 	}
 	cacheNewDigest := CiJobCache(cfgNewDigest, nil)
 	reqNewDigest := baseReq
@@ -200,7 +205,7 @@ func (f *fakeImageBackend) CurrentImage() string  { return f.image }
 
 func TestApplySandboxImageReachesAPodBackend(t *testing.T) {
 	ctx := context.Background()
-	cfg := Config{K8sSandboxes: true, K8sSandboxImage: "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-1"}
+	cfg := Config{K8sSandboxes: true, K8sSandboxImage: "docker.io/grainai/sandbox-k8s:sha-1"}
 	backend := &fakeImageBackend{image: cfg.K8sSandboxImage}
 	live := (&LiveConfig{sandboxes: backend}).WithSandboxImages(nil, stockSandboxImageFor(cfg), nil)
 
@@ -211,7 +216,7 @@ func TestApplySandboxImageReachesAPodBackend(t *testing.T) {
 	}
 	cfg.CustomSandboxImage = ""
 	live.applySandboxImage(ctx, cfg)
-	if backend.image != "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-1" {
+	if backend.image != "docker.io/grainai/sandbox-k8s:sha-1" {
 		t.Fatalf("pod image = %q after clearing, want the stock one back", backend.image)
 	}
 }
@@ -586,7 +591,7 @@ for ((i=0; i<${#args[@]}; i++)); do
         if [[ "$joined" == *"DisruptionTarget"* ]] || [[ "$joined" == *"lastState.terminated"* ]]; then
           exit 0
         fi
-        printf 'Running|True|ghcr.io/bwsalmon/grain/guest@sha256:6b2003bc1c0cfbb39c62a68421ab9fa9d4fc82183ab8f3775c4892cf54e02203|\n'
+        printf 'Running|True|docker.io/grainai/sandbox@sha256:6b2003bc1c0cfbb39c62a68421ab9fa9d4fc82183ab8f3775c4892cf54e02203|\n'
         exit 0
       elif [ "$sub" = "pods" ]; then
         for f in "$d/pods"/*; do
@@ -653,7 +658,7 @@ jobs:
 		return orchestrator.NewK8sGranuleSandboxes(orchestrator.K8sGranuleConfig{
 			Namespace:    "default",
 			Kubectl:      kubectlPath,
-			Image:        "ghcr.io/bwsalmon/grain/guest:sha-111@sha256:6b2003bc1c0cfbb39c62a68421ab9fa9d4fc82183ab8f3775c4892cf54e02203",
+			Image:        "docker.io/grainai/sandbox:sha-111@sha256:6b2003bc1c0cfbb39c62a68421ab9fa9d4fc82183ab8f3775c4892cf54e02203",
 			ReadyTimeout: 5 * time.Second,
 			Workspace:    ".",
 		})
@@ -681,7 +686,7 @@ jobs:
 		Runs:    runStore1,
 		PlanDir: filepath.Join(dataDir, "state", "ci-plans"),
 		SandboxImage: func() string {
-			return "ghcr.io/bwsalmon/grain/guest:sha-111@sha256:6b2003bc1c0cfbb39c62a68421ab9fa9d4fc82183ab8f3775c4892cf54e02203"
+			return "docker.io/grainai/sandbox:sha-111@sha256:6b2003bc1c0cfbb39c62a68421ab9fa9d4fc82183ab8f3775c4892cf54e02203"
 		},
 	}
 
@@ -740,7 +745,7 @@ jobs:
 		Runs:    runStore2,
 		PlanDir: filepath.Join(dataDir, "state", "ci-plans"),
 		SandboxImage: func() string {
-			return "ghcr.io/bwsalmon/grain/guest:sha-222@sha256:6b2003bc1c0cfbb39c62a68421ab9fa9d4fc82183ab8f3775c4892cf54e02203"
+			return "docker.io/grainai/sandbox:sha-222@sha256:6b2003bc1c0cfbb39c62a68421ab9fa9d4fc82183ab8f3775c4892cf54e02203"
 		},
 	}
 
@@ -971,5 +976,609 @@ jobs:
 			t.Fatalf("timed out waiting for daemon 2 re-run; run=%+v", r2)
 		}
 		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// trustRootSandboxes wraps HostSandboxes with a per-sandbox rootfs so
+// PrepareSandbox and RefreshAdoptedSandbox exercise the real CA installation,
+// update-ca-certificates, resolv.conf, and go env -w scripts without touching
+// the test host's /etc.
+type trustRootSandboxes struct {
+	inner        *orchestrator.HostSandboxes
+	sandboxRoot  string
+	fakeBinDir   string
+	failCAUpdate *atomic.Bool
+}
+
+func newTrustRootSandboxes(t *testing.T, sandboxRoot string, failCAUpdate *atomic.Bool) *trustRootSandboxes {
+	t.Helper()
+	binDir := t.TempDir()
+	writeExec := func(name, body string) {
+		p := filepath.Join(binDir, name)
+		if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+			t.Fatalf("writing %s: %v", p, err)
+		}
+	}
+	writeExec("id", "#!/bin/sh\nif [ \"${1:-}\" = \"-u\" ]; then echo 0; exit 0; fi\nexec /usr/bin/id \"$@\"\n")
+	writeExec("update-ca-certificates", "#!/bin/sh\nset -eu\nif [ \"${GRAIN_TEST_FAIL_CA_UPDATE:-}\" = \"1\" ]; then echo \"simulated update-ca-certificates failure\" >&2; exit 1; fi\nmkdir -p \"$GRAIN_TEST_ROOTFS/etc/ssl/certs\"\ncat \"$GRAIN_TEST_ROOTFS\"/usr/local/share/ca-certificates/*.crt > \"$GRAIN_TEST_ROOTFS/etc/ssl/certs/ca-certificates.crt\"\n")
+	writeExec("systemctl", "#!/bin/sh\nexit 0\n")
+	writeExec("npm", "#!/bin/sh\nexit 0\n")
+	return &trustRootSandboxes{
+		inner:        orchestrator.NewHostSandboxes(sandboxRoot),
+		sandboxRoot:  sandboxRoot,
+		fakeBinDir:   binDir,
+		failCAUpdate: failCAUpdate,
+	}
+}
+
+func (b *trustRootSandboxes) Acquire(ctx context.Context, name string, shape orchestrator.Shape) (orchestrator.Sandbox, error) {
+	sb, err := b.inner.Acquire(ctx, name, shape)
+	if err != nil {
+		return nil, err
+	}
+	return &trustRootSandbox{Sandbox: sb, owner: b, home: filepath.Join(b.sandboxRoot, name)}, nil
+}
+
+func (b *trustRootSandboxes) Readopt(ctx context.Context, name string) (orchestrator.Sandbox, error) {
+	sb, err := b.inner.Readopt(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return &trustRootSandbox{Sandbox: sb, owner: b, home: filepath.Join(b.sandboxRoot, name)}, nil
+}
+
+type trustRootSandbox struct {
+	orchestrator.Sandbox
+	owner *trustRootSandboxes
+	home  string
+}
+
+func (s *trustRootSandbox) RunShell(ctx context.Context, req orchestrator.ShellRequest) (orchestrator.ShellResult, error) {
+	return s.Sandbox.(orchestrator.SandboxShell).RunShell(ctx, req)
+}
+
+func (s *trustRootSandbox) RunInSandbox(ctx context.Context, argv []string, stdin string) (string, string, int) {
+	rootfs := filepath.Join(s.home, "rootfs")
+	if err := os.MkdirAll(filepath.Join(rootfs, "etc"), 0o755); err != nil {
+		return "", err.Error(), 1
+	}
+	rewritten := make([]string, len(argv))
+	for i, arg := range argv {
+		switch {
+		case strings.HasPrefix(arg, "/etc/"), strings.HasPrefix(arg, "/usr/local/share/ca-certificates/"):
+			rewritten[i] = filepath.Join(rootfs, strings.TrimPrefix(arg, "/"))
+		default:
+			rewritten[i] = arg
+		}
+	}
+	cmd := exec.CommandContext(ctx, rewritten[0], rewritten[1:]...)
+	cmd.Dir = s.home
+	cmd.Stdin = strings.NewReader(stdin)
+	failFlag := "0"
+	if s.owner.failCAUpdate != nil && s.owner.failCAUpdate.Load() {
+		failFlag = "1"
+	}
+	env := []string{
+		"HOME=" + s.home,
+		"PATH=" + s.owner.fakeBinDir + ":" + os.Getenv("PATH"),
+		"TMPDIR=" + os.TempDir(),
+		"GRAIN_TEST_ROOTFS=" + rootfs,
+		"GRAIN_TEST_FAIL_CA_UPDATE=" + failFlag,
+		"GRAIN_SKIP_GOCACHEPROG_BUILD=1",
+	}
+	for _, key := range []string{"LANG", "LC_ALL", "USER", "LOGNAME"} {
+		if val, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+val)
+		}
+	}
+	cmd.Env = env
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	code := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			code = exitErr.ExitCode()
+		} else {
+			code = 1
+		}
+	}
+	return stdout.String(), stderr.String(), code
+}
+
+const httpsProbeSource = `package main
+
+import (
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+)
+
+func main() {
+	if len(os.Args) != 5 {
+		fmt.Fprintf(os.Stderr, "usage: %s <ca-bundle> <addr> <sni-host> <path>\n", os.Args[0])
+		os.Exit(2)
+	}
+	caPEM, err := os.ReadFile(os.Args[1])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reading CA bundle: %v\n", err)
+		os.Exit(1)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		fmt.Fprintln(os.Stderr, "no certificates parsed from CA bundle")
+		os.Exit(1)
+	}
+	addr, host, reqPath := os.Args[2], os.Args[3], os.Args[4]
+	tr := &http.Transport{
+		DisableKeepAlives: true,
+		TLSClientConfig: &tls.Config{
+			RootCAs:    pool,
+			ServerName: host,
+		},
+	}
+	client := &http.Client{Transport: tr}
+	var reqURL string
+	if addr == "http" {
+		reqURL = host + reqPath
+	} else {
+		reqURL = "https://" + addr + reqPath
+	}
+	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "building request: %v\n", err)
+		os.Exit(1)
+	}
+	if addr != "http" {
+		req.Host = host
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "request failed: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "HTTP %d: %s\n", resp.StatusCode, string(body))
+		os.Exit(1)
+	}
+	fmt.Print(string(body))
+}
+`
+
+func buildHTTPSProbeBinary(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "probe.go")
+	bin := filepath.Join(dir, "httpsprobe")
+	if err := os.WriteFile(src, []byte(httpsProbeSource), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "build", "-o", bin, src)
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("compiling httpsprobe: %v\n%s", err, string(out))
+	}
+	return bin
+}
+
+func startStandInPackageProxy(t *testing.T, dataDir, goUpstream, ghcrUpstream string) (*PackageCache, *transparentServers, func(context.Context) error) {
+	t.Helper()
+	cfg := Config{
+		DataDir:             dataDir,
+		PackageCacheGB:      1,
+		PackageCacheEnabled: true,
+	}
+	upstreams := packageCacheUpstreams{
+		GoProxy:      goUpstream,
+		GHCRRegistry: ghcrUpstream,
+	}
+	pc, stopPC, err := startPackageCacheFrom(cfg, NewDirect(""), upstreams, nil)
+	if err != nil {
+		t.Fatalf("startPackageCacheFrom: %v", err)
+	}
+	cache, err := pkgcache.NewCache(pc.dir, 1<<30)
+	if err != nil {
+		_ = stopPC(context.Background())
+		t.Fatalf("opening pkgcache handler store: %v", err)
+	}
+	handler := pkgcache.NewServer(pkgcache.Config{
+		Cache:        cache,
+		GoProxy:      goUpstream,
+		GHCRRegistry: ghcrUpstream,
+	})
+	ts, err := StartTransparentServers("127.0.0.1:0", "127.0.0.1:0", handler, pc.Ca)
+	if err != nil {
+		_ = stopPC(context.Background())
+		t.Fatalf("StartTransparentServers: %v", err)
+	}
+	stopAll := func(ctx context.Context) error {
+		_ = ts.Shutdown(ctx)
+		return stopPC(ctx)
+	}
+	return pc, ts, stopAll
+}
+
+func TestAdoptedCISandboxFetchesThroughPackageProxyAfterDaemonRestart(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	sandboxRoot := t.TempDir()
+	flagDir := t.TempDir()
+	probeBin := buildHTTPSProbeBinary(t)
+
+	goUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/github.com/acme/mod/@v/v1.0.0.info" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Version":"v1.0.0"}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer goUpstream.Close()
+
+	ghcrUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v2/" {
+			w.Header().Set("Docker-Distribution-Api-Version", "registry/2.0")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer ghcrUpstream.Close()
+
+	pc1, ts1, stopPC1 := startStandInPackageProxy(t, dataDir, goUpstream.URL, ghcrUpstream.URL)
+	defer func() { _ = stopPC1(ctx) }()
+
+	if err := os.WriteFile(filepath.Join(flagDir, "https-addr"), []byte(ts1.HttpsAddr), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	workflowYAML := `name: tests
+on: push
+jobs:
+  fetch:
+    steps:
+      - name: fetch-across-restart
+        run: |
+          set -eu
+          ca="$HOME/rootfs/etc/ssl/certs/ca-certificates.crt"
+          addr=$(cat "` + flagDir + `/https-addr")
+          "` + probeBin + `" "$ca" "$addr" proxy.golang.org /github.com/acme/mod/@v/v1.0.0.info
+          echo pre-restart-ok > "` + flagDir + `/pre-ok"
+          while [ ! -f "` + flagDir + `/release" ]; do sleep 0.05; done
+          addr2=$(cat "` + flagDir + `/https-addr")
+          "` + probeBin + `" "$ca" "$addr2" proxy.golang.org /github.com/acme/mod/@v/v1.0.0.info
+          "` + probeBin + `" "$ca" "$addr2" ghcr.io /v2/
+          goproxy=$(go env GOPROXY | cut -d, -f1)
+          "` + probeBin + `" "$ca" http "$goproxy" /github.com/acme/mod/@v/v1.0.0.info
+          echo post-restart-ok > "` + flagDir + `/post-ok"
+`
+	bareRepoRoot, commitSHA, source := setupTestCIRepo(t, workflowYAML)
+
+	store1, closeStore1 := openTestStore(t, dataDir)
+	defer closeStore1()
+
+	sb1 := newTrustRootSandboxes(t, sandboxRoot, nil)
+	ciSb1 := newTestCiSandboxes(sb1, bareRepoRoot)
+	ciSb1.PackageCache = func(context.Context) string { return pc1.Url }
+	ciSb1.PackageCacheCA = func(context.Context) []byte { return pc1.Ca.RootCertPEM() }
+	ciSb1.PackageCacheDNS = func(context.Context) string { return "127.0.0.1" }
+	svc1 := &ci.Service{
+		Source:  source,
+		Engine:  &ci.Engine{Sandboxes: ciSb1, Cache: CiJobCache(Config{DataDir: dataDir}, nil)},
+		Runs:    ci.NewStoredRunStore(store1, ci.StoredRunStoreOptions{}),
+		PlanDir: filepath.Join(dataDir, "state", "ci-plans"),
+	}
+
+	started, err := svc1.Start(ctx, ci.Request{
+		Repo:   "acme/widgets",
+		Ref:    "main",
+		Commit: commitSHA,
+		Event:  ci.EventPush,
+	})
+	if err != nil {
+		t.Fatalf("starting CI run: %v", err)
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(flagDir, "pre-ok")); err == nil {
+			break
+		}
+		if r, ok := svc1.Get(started.ID); ok && r.Conclusion.Done() {
+			t.Fatalf("CI run finished before daemon restart (%s): %+v", r.Conclusion, r)
+		}
+		if time.Now().After(deadline) {
+			r, _ := svc1.Get(started.ID)
+			t.Fatalf("timed out waiting for pre-restart proxy fetch; run=%+v", r)
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+
+	// Simulate daemon 1 shutdown: detach CI and stop daemon 1's package proxy.
+	svc1.Detach()
+	_ = stopPC1(ctx)
+	closeStore1()
+
+	// Daemon 2 starts on the same dataDir, reloading the persisted Root CA.
+	pc2, ts2, stopPC2 := startStandInPackageProxy(t, dataDir, goUpstream.URL, ghcrUpstream.URL)
+	defer func() { _ = stopPC2(ctx) }()
+
+	if !bytes.Equal(pc1.Ca.RootCertPEM(), pc2.Ca.RootCertPEM()) {
+		t.Fatal("daemon 2 did not reuse daemon 1's persisted package-cache Root CA")
+	}
+	if err := os.WriteFile(filepath.Join(flagDir, "https-addr"), []byte(ts2.HttpsAddr), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store2, closeStore2 := openTestStore(t, dataDir)
+	defer closeStore2()
+
+	sb2 := newTrustRootSandboxes(t, sandboxRoot, nil)
+	ciSb2 := newTestCiSandboxes(sb2, bareRepoRoot)
+	ciSb2.PackageCache = func(context.Context) string { return pc2.Url }
+	ciSb2.PackageCacheCA = func(context.Context) []byte { return pc2.Ca.RootCertPEM() }
+	ciSb2.PackageCacheDNS = func(context.Context) string { return "127.0.0.1" }
+	svc2 := &ci.Service{
+		Source:  source,
+		Engine:  &ci.Engine{Sandboxes: ciSb2, Cache: CiJobCache(Config{DataDir: dataDir}, nil)},
+		Runs:    ci.NewStoredRunStore(store2, ci.StoredRunStoreOptions{}),
+		PlanDir: filepath.Join(dataDir, "state", "ci-plans"),
+	}
+
+	adopted, lost := AdoptCIRuns(ctx, svc2)
+	if len(adopted) != 1 || len(lost) != 0 {
+		t.Fatalf("AdoptCIRuns = (%+v, %+v), want 1 adopted and 0 lost", adopted, lost)
+	}
+
+	if err := os.WriteFile(filepath.Join(flagDir, "release"), []byte("ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline = time.Now().Add(15 * time.Second)
+	for {
+		r, ok := svc2.Get(started.ID)
+		if ok && r.Conclusion.Done() {
+			if r.Conclusion != ci.ConclusionSuccess {
+				t.Fatalf("adopted CI run failed after daemon restart (%s): %+v", r.Conclusion, r)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			r, _ := svc2.Get(started.ID)
+			t.Fatalf("timed out waiting for adopted CI run to complete; run=%+v", r)
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	if _, err := os.Stat(filepath.Join(flagDir, "post-ok")); err != nil {
+		t.Fatalf("post-restart proxy fetches did not complete: %v", err)
+	}
+}
+
+func TestAdoptedCISandboxFetchesAfterCARotationAcrossRestart(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	sandboxRoot := t.TempDir()
+	flagDir := t.TempDir()
+	probeBin := buildHTTPSProbeBinary(t)
+
+	goUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"Version":"v1.0.0"}`))
+	}))
+	defer goUpstream.Close()
+
+	ghcrUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer ghcrUpstream.Close()
+
+	pc1, ts1, stopPC1 := startStandInPackageProxy(t, dataDir, goUpstream.URL, ghcrUpstream.URL)
+	defer func() { _ = stopPC1(ctx) }()
+
+	if err := os.WriteFile(filepath.Join(flagDir, "https-addr"), []byte(ts1.HttpsAddr), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	workflowYAML := `name: tests
+on: push
+jobs:
+  fetch:
+    steps:
+      - name: fetch-across-ca-rotation
+        run: |
+          set -eu
+          ca="$HOME/rootfs/etc/ssl/certs/ca-certificates.crt"
+          "` + probeBin + `" "$ca" "$(cat "` + flagDir + `/https-addr")" proxy.golang.org /github.com/acme/mod/@v/v1.0.0.info
+          echo pre-ok > "` + flagDir + `/pre-ok"
+          while [ ! -f "` + flagDir + `/release" ]; do sleep 0.05; done
+          "` + probeBin + `" "$ca" "$(cat "` + flagDir + `/https-addr")" proxy.golang.org /github.com/acme/mod/@v/v1.0.0.info
+          "` + probeBin + `" "$ca" "$(cat "` + flagDir + `/https-addr")" ghcr.io /v2/
+`
+	bareRepoRoot, commitSHA, source := setupTestCIRepo(t, workflowYAML)
+
+	store1, closeStore1 := openTestStore(t, dataDir)
+	defer closeStore1()
+
+	sb1 := newTrustRootSandboxes(t, sandboxRoot, nil)
+	ciSb1 := newTestCiSandboxes(sb1, bareRepoRoot)
+	ciSb1.PackageCache = func(context.Context) string { return pc1.Url }
+	ciSb1.PackageCacheCA = func(context.Context) []byte { return pc1.Ca.RootCertPEM() }
+	ciSb1.PackageCacheDNS = func(context.Context) string { return "127.0.0.1" }
+	svc1 := &ci.Service{
+		Source:  source,
+		Engine:  &ci.Engine{Sandboxes: ciSb1, Cache: CiJobCache(Config{DataDir: dataDir}, nil)},
+		Runs:    ci.NewStoredRunStore(store1, ci.StoredRunStoreOptions{}),
+		PlanDir: filepath.Join(dataDir, "state", "ci-plans"),
+	}
+
+	started, err := svc1.Start(ctx, ci.Request{Repo: "acme/widgets", Ref: "main", Commit: commitSHA, Event: ci.EventPush})
+	if err != nil {
+		t.Fatalf("starting CI run: %v", err)
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(flagDir, "pre-ok")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for pre-restart fetch")
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+
+	svc1.Detach()
+	_ = stopPC1(ctx)
+	closeStore1()
+
+	// Remove the persisted CA file to simulate upgrading from a daemon that had
+	// an in-memory-only CA (or an explicit CA rotation).
+	if err := os.Remove(packageCacheCAPath(Config{DataDir: dataDir})); err != nil {
+		t.Fatal(err)
+	}
+
+	pc2, ts2, stopPC2 := startStandInPackageProxy(t, dataDir, goUpstream.URL, ghcrUpstream.URL)
+	defer func() { _ = stopPC2(ctx) }()
+
+	if bytes.Equal(pc1.Ca.RootCertPEM(), pc2.Ca.RootCertPEM()) {
+		t.Fatal("expected a newly generated CA after removing persisted CA file")
+	}
+	if err := os.WriteFile(filepath.Join(flagDir, "https-addr"), []byte(ts2.HttpsAddr), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store2, closeStore2 := openTestStore(t, dataDir)
+	defer closeStore2()
+
+	sb2 := newTrustRootSandboxes(t, sandboxRoot, nil)
+	ciSb2 := newTestCiSandboxes(sb2, bareRepoRoot)
+	ciSb2.PackageCache = func(context.Context) string { return pc2.Url }
+	ciSb2.PackageCacheCA = func(context.Context) []byte { return pc2.Ca.RootCertPEM() }
+	ciSb2.PackageCacheDNS = func(context.Context) string { return "127.0.0.1" }
+	svc2 := &ci.Service{
+		Source:  source,
+		Engine:  &ci.Engine{Sandboxes: ciSb2, Cache: CiJobCache(Config{DataDir: dataDir}, nil)},
+		Runs:    ci.NewStoredRunStore(store2, ci.StoredRunStoreOptions{}),
+		PlanDir: filepath.Join(dataDir, "state", "ci-plans"),
+	}
+
+	adopted, lost := AdoptCIRuns(ctx, svc2)
+	if len(adopted) != 1 || len(lost) != 0 {
+		t.Fatalf("AdoptCIRuns = (%+v, %+v), want 1 adopted and 0 lost", adopted, lost)
+	}
+
+	if err := os.WriteFile(filepath.Join(flagDir, "release"), []byte("ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline = time.Now().Add(15 * time.Second)
+	for {
+		r, ok := svc2.Get(started.ID)
+		if ok && r.Conclusion.Done() {
+			if r.Conclusion != ci.ConclusionSuccess {
+				t.Fatalf("adopted CI run failed after CA rotation (%s): %+v", r.Conclusion, r)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			r, _ := svc2.Get(started.ID)
+			t.Fatalf("timed out waiting for adopted CI run; run=%+v", r)
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+}
+
+func TestAdoptedCISandboxFailsAdoptionWhenRotatedCACannotBeInstalled(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	sandboxRoot := t.TempDir()
+	flagDir := t.TempDir()
+
+	ca1, err := pkgcache.NewCA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca2, err := pkgcache.NewCA()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	workflowYAML := `name: tests
+on: push
+jobs:
+  slow:
+    steps:
+      - name: wait
+        run: |
+          echo started > "` + flagDir + `/started"
+          while [ ! -f "` + flagDir + `/release" ]; do sleep 0.05; done
+`
+	bareRepoRoot, commitSHA, source := setupTestCIRepo(t, workflowYAML)
+
+	store1, closeStore1 := openTestStore(t, dataDir)
+	defer closeStore1()
+
+	sb1 := newTrustRootSandboxes(t, sandboxRoot, nil)
+	ciSb1 := newTestCiSandboxes(sb1, bareRepoRoot)
+	ciSb1.PackageCacheCA = func(context.Context) []byte { return ca1.RootCertPEM() }
+	ciSb1.PackageCacheDNS = func(context.Context) string { return "127.0.0.1" }
+	svc1 := &ci.Service{
+		Source:  source,
+		Engine:  &ci.Engine{Sandboxes: ciSb1, Cache: CiJobCache(Config{DataDir: dataDir}, nil)},
+		Runs:    ci.NewStoredRunStore(store1, ci.StoredRunStoreOptions{}),
+		PlanDir: filepath.Join(dataDir, "state", "ci-plans"),
+	}
+
+	started, err := svc1.Start(ctx, ci.Request{Repo: "acme/widgets", Ref: "main", Commit: commitSHA, Event: ci.EventPush})
+	if err != nil {
+		t.Fatalf("starting CI run: %v", err)
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(flagDir, "started")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for job step to start")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	svc1.Detach()
+	closeStore1()
+	t.Cleanup(func() { _ = os.WriteFile(filepath.Join(flagDir, "release"), []byte("1\n"), 0o644) })
+
+	store2, closeStore2 := openTestStore(t, dataDir)
+	defer closeStore2()
+
+	var failCAUpdate atomic.Bool
+	failCAUpdate.Store(true)
+	sb2 := newTrustRootSandboxes(t, sandboxRoot, &failCAUpdate)
+	ciSb2 := newTestCiSandboxes(sb2, bareRepoRoot)
+	ciSb2.PackageCacheCA = func(context.Context) []byte { return ca2.RootCertPEM() }
+	ciSb2.PackageCacheDNS = func(context.Context) string { return "127.0.0.1" }
+	svc2 := &ci.Service{
+		Source:  source,
+		Engine:  &ci.Engine{Sandboxes: ciSb2, Cache: CiJobCache(Config{DataDir: dataDir}, nil)},
+		Runs:    ci.NewStoredRunStore(store2, ci.StoredRunStoreOptions{}),
+		PlanDir: filepath.Join(dataDir, "state", "ci-plans"),
+	}
+
+	adopted, lost := AdoptCIRuns(ctx, svc2)
+	if len(adopted) != 0 || len(lost) != 1 {
+		t.Fatalf("AdoptCIRuns = (%+v, %+v), want 0 adopted and 1 lost when rotated CA cannot be installed", adopted, lost)
+	}
+	r, ok := svc2.Get(started.ID)
+	if !ok || !r.Interrupted || r.Conclusion != ci.ConclusionCancelled {
+		t.Fatalf("run after declined adoption = %+v, want Interrupted=true Conclusion=cancelled", r)
 	}
 }

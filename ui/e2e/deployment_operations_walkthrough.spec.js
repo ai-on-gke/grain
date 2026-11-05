@@ -14,6 +14,7 @@
 
 import { test, expect } from "./fixtures.js";
 import { alertsBell } from "./alerts.js";
+import { chooseOption } from "./searchSelect.js";
 
 test.use({ demoArgs: ["-observability"] });
 
@@ -111,11 +112,10 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
     ).toBeVisible();
 
     // The sections that took Team settings' over
-    // (docs/design/settings-panel.md §3.2).
+    // (design/design/settings-panel.design.md §3.2).
     for (const [id, name] of [
       ["models", "Models"],
       ["git", "Git"],
-      ["executors", "Executors"],
       ["tasks", "Tasks"],
     ]) {
       // At 700px the nav is the Section select (§3.6).
@@ -310,7 +310,7 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
             json: {
               enabled: true,
               mode: "image",
-              running: { image: "ghcr.io/bwsalmon/grain/grain:main" },
+              running: { image: "docker.io/grainai/grain:main" },
               scheduled: upgradeScheduled,
             },
           });
@@ -320,7 +320,7 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
             json: {
               enabled: true,
               mode: "image",
-              running: { image: "ghcr.io/bwsalmon/grain/grain:main" },
+              running: { image: "docker.io/grainai/grain:main" },
               branch: body.branch,
               phase: "running",
             },
@@ -332,7 +332,7 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
           json: {
             enabled: true,
             mode: "image",
-            running: { image: "ghcr.io/bwsalmon/grain/grain:main" },
+            running: { image: "docker.io/grainai/grain:main" },
             scheduled: upgradeScheduled,
           },
         });
@@ -347,7 +347,7 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
           json: {
             enabled: true,
             mode: "image",
-            running: { image: "ghcr.io/bwsalmon/grain/grain:main" },
+            running: { image: "docker.io/grainai/grain:main" },
             cancelled: true,
           },
         });
@@ -466,9 +466,11 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
         .first(),
     ).toBeVisible();
     await page.getByRole("button", { name: "Start a run" }).click();
-    const repoSelect = page.locator('select[name="repo"]');
+    const repoSelect = page.locator(
+      '.repo-field:has(input[name="repo"]) [role="combobox"]',
+    );
     await expect(repoSelect).toBeVisible();
-    await repoSelect.selectOption("acme/widgets");
+    await chooseOption(repoSelect, "acme/widgets");
     await page.getByLabel("Branch").fill("ops-walkthrough/cancel");
     await page.getByRole("button", { name: "Load workflows" }).click();
     await expect(page.getByLabel("Workflow")).toBeVisible();

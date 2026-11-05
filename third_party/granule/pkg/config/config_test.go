@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/containerspec"
-	"github.com/bwsalmon/granule/pkg/extents"
-	"github.com/bwsalmon/granule/pkg/guestimage"
-	"github.com/bwsalmon/granule/pkg/qcow2"
+	"github.com/gke-labs/granule/pkg/containerspec"
+	"github.com/gke-labs/granule/pkg/extents"
+	"github.com/gke-labs/granule/pkg/guestimage"
+	"github.com/gke-labs/granule/pkg/qcow2"
 )
 
 // clearEnv resets every env var this package reads, so tests don't leak
@@ -24,11 +24,11 @@ func clearEnv(t *testing.T) {
 	for _, k := range []string{
 		envDiskImage, envDiskReadonly, envDiskMode, envDiskOverlayPath, envDiskSizeMB, envExtentSizeMB, envDiskExtentSizeMB, envStorageBackend, envExtraDisks, envKernel, envInitramfs,
 		envFirmware, envCmdline, envCPUs, envCPUsMax, envMemoryMB, envMemoryMaxMB,
-		envMemoryHotplug, envMemoryShared, envNet,
+		envMemoryHotplug, envMemoryShared, envBalloon, envDiskDirect, envNet,
 		envAPISocket, envBinaryPath, envExtraArgs, envShutdownTimeout,
 		envSetupScript, envSnapshotPath,
 		envMemAgent, envMemAgentAddr, envMemAgentToken, envMemAgentStepMB, envMemAgentCooldown,
-		envGuestContractMin, envContainerOverride, envWorkloadStdout, envWorkloadStderr,
+		envGuestContractMin, envContainerOverride, envWorkloadEnv, envWorkloadStdout, envWorkloadStderr,
 		envWorkloadExitFile, envWorkloadStdin, envWorkloadTTY, envWorkloadResize,
 	} {
 		os.Unsetenv(k)
@@ -1744,6 +1744,52 @@ func TestFromEnv_ContainerOverride(t *testing.T) {
 	}
 }
 
+// GRANULE_WORKLOAD_ENV passes the named variables of the VM container's
+// own environment into the workload's, through the override, and lets an
+// env entry CHV_CONTAINER_OVERRIDE gives for the same name win.
+func TestFromEnv_WorkloadEnv(t *testing.T) {
+	clearEnv(t)
+	t.Setenv(envDiskImage, writeTempFile(t, "disk.img"))
+	t.Setenv(envFirmware, writeTempFile(t, "fw"))
+	os.Unsetenv("GRANULE_TEST_UNSET")
+
+	t.Setenv(envWorkloadEnv, "GRANULE_TEST_UNSET")
+	cfg, err := FromEnv()
+	if err != nil || cfg.ContainerOverride != nil {
+		t.Fatalf("only unset names: override=%+v err=%v", cfg.ContainerOverride, err)
+	}
+
+	t.Setenv("GRANULE_TEST_TOKEN", "abc=def")
+	t.Setenv("GRANULE_TEST_EMPTY", "")
+	t.Setenv(envWorkloadEnv, " GRANULE_TEST_TOKEN, GRANULE_TEST_UNSET,GRANULE_TEST_EMPTY ")
+	cfg, err = FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if cfg.ContainerOverride == nil || cfg.ContainerOverrideDisk != defaultContainerOverrideDisk {
+		t.Fatalf("ContainerOverride = %+v at %q", cfg.ContainerOverride, cfg.ContainerOverrideDisk)
+	}
+	if got, want := strings.Join(cfg.ContainerOverride.Env, " "), "GRANULE_TEST_TOKEN=abc=def GRANULE_TEST_EMPTY="; got != want {
+		t.Errorf("Env = %q, want %q", got, want)
+	}
+
+	t.Setenv(envContainerOverride, `{"cmd":["x"],"env":["GRANULE_TEST_TOKEN=explicit"]}`)
+	cfg, err = FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if got, want := strings.Join(cfg.ContainerOverride.Env, " "), "GRANULE_TEST_TOKEN=abc=def GRANULE_TEST_EMPTY= GRANULE_TEST_TOKEN=explicit"; got != want || cfg.ContainerOverride.Cmd[0] != "x" {
+		t.Errorf("Env = %q (cmd %q), want %q", got, cfg.ContainerOverride.Cmd, want)
+	}
+
+	for _, bad := range []string{"1ABC", "A-B", "A=B"} {
+		t.Setenv(envWorkloadEnv, bad)
+		if _, err := FromEnv(); err == nil || !strings.Contains(err.Error(), envWorkloadEnv) {
+			t.Errorf("%s=%s: err = %v, want it refused naming the variable", envWorkloadEnv, bad, err)
+		}
+	}
+}
+
 // GRANULE_WORKLOAD_STDIN and GRANULE_WORKLOAD_TTY open the container's
 // stdin and terminal through the override, merged into whatever
 // CHV_CONTAINER_OVERRIDE already says, and GRANULE_WORKLOAD_RESIZE needs
@@ -1902,5 +1948,41 @@ func TestFromEnv_FilesystemsWithoutDestinationLeaveNoOverride(t *testing.T) {
 	}
 	if cfg.ContainerOverride != nil {
 		t.Errorf("ContainerOverride = %+v, want none", cfg.ContainerOverride)
+	}
+}
+
+func TestFromEnv_BalloonAndDiskDirect(t *testing.T) {
+	for _, tc := range []struct {
+		balloon, direct string
+		wantBalloon     bool
+		wantDirect      string
+		wantErr         bool
+	}{
+		{"", "", true, DiskDirectAuto, false},
+		{"off", "off", false, DiskDirectOff, false},
+		{"on", "on", true, DiskDirectOn, false},
+		{"false", "TRUE", false, DiskDirectOn, false},
+		{"", "AUTO", true, DiskDirectAuto, false},
+		{"", "sometimes", false, "", true},
+		{"maybe", "", false, "", true},
+	} {
+		clearEnv(t)
+		t.Setenv(envDiskImage, writeTempFile(t, "disk.img"))
+		t.Setenv(envKernel, writeTempFile(t, "vmlinux"))
+		t.Setenv(envBalloon, tc.balloon)
+		t.Setenv(envDiskDirect, tc.direct)
+		cfg, err := FromEnv()
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("%s=%q %s=%q: FromEnv succeeded, want an error", envBalloon, tc.balloon, envDiskDirect, tc.direct)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s=%q %s=%q: %v", envBalloon, tc.balloon, envDiskDirect, tc.direct, err)
+		}
+		if cfg.Balloon != tc.wantBalloon || cfg.DiskDirect != tc.wantDirect {
+			t.Errorf("%s=%q %s=%q: Balloon=%v DiskDirect=%q, want %v %q", envBalloon, tc.balloon, envDiskDirect, tc.direct, cfg.Balloon, cfg.DiskDirect, tc.wantBalloon, tc.wantDirect)
+		}
 	}
 }

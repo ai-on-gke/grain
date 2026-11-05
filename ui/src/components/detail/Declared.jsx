@@ -250,18 +250,37 @@ export default function Declared({ t, config, act }) {
       "Leave for acknowledgement",
     ]);
   }
+  if (t.priority != null && t.priority !== 5) {
+    rows.push(["Task priority", `${t.priority} (default 5)`]);
+  }
   // A task an external agent filed (over /mcp or the agent API) has the
   // deployment's person who vouches for that credential as its creator
   // -- the requester policy and credentials are chosen by -- so the
   // Creator row alone would say that person filed it. Name the agent
   // ahead of it, the way messages.go signs what one says on a task.
+  //
+  // Everyone else who filed a task is named by the server's label for
+  // them (operator-attribution spec §4.1): the verified email of the
+  // person signed in, "operator (access code)" for the shared code, "task
+  // 42" for a run -- never a bare kind and id.
   if (isExternalAgent(t.author)) {
     rows.push([
       "Filed by",
       `external agent ${t.author.slice(EXTERNAL_AGENT_PREFIX.length)} (${t.author})`,
     ]);
+  } else if (t.authorLabel) {
+    rows.push([
+      "Filed by",
+      <span data-testid="filed-by" key="filed-by">
+        {t.authorLabel}
+      </span>,
+    ]);
   }
-  if (t.creator) rows.push(["Creator", t.creator]);
+  // The Creator row says something only when it names somebody the
+  // Filed by row does not.
+  if (t.creator && !(t.authorLabel && t.creator === t.author)) {
+    rows.push(["Creator", t.creator]);
+  }
   if (t.reviewers?.length) {
     rows.push(["Reviewers", t.reviewers.join(", ")]);
   }

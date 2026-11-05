@@ -295,14 +295,10 @@ test("lists the built-in capability servers first, full width, badged and disabl
   const rows = list.locator("[data-capability-server-row]");
   await expect(rows.first()).toHaveAttribute("data-builtin-row", /.+/);
 
-  for (const name of [
-    "config-map",
-    "gchat",
-    "gcp",
-    "git",
-    "host-script",
-    "model-proxy",
-  ]) {
+  // model-proxy is grain's own in-process server now, not a built-in
+  // `grain capability` entry.
+  await expect(list.locator('[data-builtin-row="model-proxy"]')).toHaveCount(0);
+  for (const name of ["config-map", "gchat", "gcp", "git", "host-script"]) {
     const row = list.locator(`[data-builtin-row="${name}"]`);
     await expect(row).toHaveAttribute(
       "data-capability-server-row",
@@ -340,10 +336,16 @@ test("lists the built-in capability servers first, full width, badged and disabl
     await page.getByTestId("capability-servers-back").click();
   }
 
-  // The operator's own servers follow the built-ins.
+  // The operator's own servers follow the built-ins (configured, then
+  // in-process: capability-in-process-servers.spec.js).
   const allRows = await rows.all();
   const builtinFlags = await Promise.all(
-    allRows.map(async (r) => Boolean(await r.getAttribute("data-builtin-row"))),
+    allRows.map(async (r) =>
+      Boolean(
+        (await r.getAttribute("data-builtin-row")) ||
+        (await r.getAttribute("data-in-process-row")),
+      ),
+    ),
   );
   const firstCustomIdx = builtinFlags.indexOf(false);
   expect(firstCustomIdx).toBeGreaterThan(0);

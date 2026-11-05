@@ -19,11 +19,13 @@ import (
 	"fmt"
 	"log"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/repodecl"
 	"github.com/ai-on-gke/grain/pkg/trustboundary"
 )
 
@@ -185,6 +187,66 @@ func guardTriggerTemplates(repo model.RepoRef, triggers []model.RepoPathTrigger,
 		},
 		Paths: matched,
 	}, true
+}
+
+// guardTemplatePush matches the changed `.grain/templates/*.yml` files
+// whose `push:` list differs between repo's default branch and headSHA
+// (trustboundary.TemplatePush): a push set is a grant the declaration
+// sync honours as soon as it merges, so it is a person's to make or
+// widen, not a review's. It fails closed: a template it cannot read on
+// either side, or whose push set does not parse, is held as if its set
+// changed -- and so is every changed template when there is no head to
+// read or no way to read files at all.
+func guardTemplatePush(client github.Client, repo model.RepoRef, headSHA string, files []string) (trustboundary.Match, bool) {
+	var templates []string
+	for _, f := range files {
+		f = strings.TrimPrefix(path.Clean("/"+f), "/")
+		dir, base := path.Split(f)
+		if strings.TrimSuffix(dir, "/") != model.TemplateDeclarationDir {
+			continue
+		}
+		// The declaration sync reads the extension case-insensitively
+		// (repodecl.readDir), so `x.YML` is a template too.
+		if ext := strings.ToLower(path.Ext(base)); ext == ".yml" || ext == ".yaml" {
+			templates = append(templates, f)
+		}
+	}
+	if len(templates) == 0 {
+		return trustboundary.Match{}, false
+	}
+	reader, ok := client.(github.FileReader)
+	if !ok || headSHA == "" {
+		return trustboundary.Match{Category: trustboundary.TemplatePush, Paths: templates}, true
+	}
+	baseRef := "main"
+	if def, err := client.DefaultBranch(repo.Owner, repo.Name); err == nil && strings.TrimSpace(def) != "" {
+		baseRef = strings.TrimSpace(def)
+	}
+	pushAt := func(ref, f string) (model.RefPushSet, error) {
+		data, exists, err := reader.ReadFile(repo.Owner, repo.Name, ref, f)
+		if err != nil || !exists {
+			return nil, err
+		}
+		return repodecl.TemplatePush(f, data)
+	}
+	var changed []string
+	for _, f := range templates {
+		before, errBefore := pushAt(baseRef, f)
+		after, errAfter := pushAt(headSHA, f)
+		if errBefore != nil || errAfter != nil {
+			log.Printf("orchestrator: reading %s's push set in %s (%s and %s): %v %v -- holding it for a person "+
+				"as if it changed", f, repo, baseRef, headSHA, errBefore, errAfter)
+			changed = append(changed, f)
+			continue
+		}
+		if !slices.Equal(before, after) {
+			changed = append(changed, f)
+		}
+	}
+	if len(changed) == 0 {
+		return trustboundary.Match{}, false
+	}
+	return trustboundary.Match{Category: trustboundary.TemplatePush, Paths: changed}, true
 }
 
 func everyPath(files []string, known bool) []string {
@@ -389,12 +451,13 @@ func releaseFixedRulesHold(ctx context.Context, store *model.Store, client githu
 	reviewID := ""
 	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
 		released, waiting, reviewID = false, false, ""
-		if t.AutoMerge || linkTarget(*t, model.LinkTrustBoundaryCleared) != cleared || hasSecurityHold(*t) {
-			// Held again under the fixed rules, which said so itself, or
-			// already decided by somebody else.
+		if linkTarget(*t, model.LinkTrustBoundaryCleared) != cleared || hasSecurityHold(*t) {
+			// Held again under the fixed rules, which said so itself.
 			return nil
 		}
-		if hasPathTriggerHold(*t) || heldForHuman(*t) || len(model.PendingApprovals(*t)) > 0 {
+		// Already on: the classification above dropped the last hold,
+		// which hands auto-merge back by itself (model.restoreAfterHolds).
+		if !t.AutoMerge && (hasPathTriggerHold(*t) || heldForHuman(*t) || len(model.PendingApprovals(*t)) > 0) {
 			waiting = true
 			return nil
 		}
@@ -472,7 +535,8 @@ func closeLiftedHoldReview(ctx context.Context, store *model.Store, reviewID, ta
 	if state == "" || state.Settled() || state == model.StateRunning {
 		return nil
 	}
-	if err := observeField(ctx, store, reviewID, now, func(o *model.Observation) {
+	reason := fmt.Sprintf("task %s's broken-rules hold was lifted", taskID)
+	if err := closeTask(ctx, store, reviewID, now, reason, func(o *model.Observation) {
 		o.ClosedAt = &now
 	}); err != nil {
 		return fmt.Errorf("orchestrator: closing security review %s: %w", reviewID, err)

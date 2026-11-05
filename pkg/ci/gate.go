@@ -17,6 +17,7 @@ package ci
 import (
 	"context"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -211,6 +212,8 @@ type gateWaiter struct {
 	// ledger: unique across every gate in the process, so a release gives
 	// back its own entry and nobody else's.
 	id string
+	// job is GateRequest.Job, when the caller named it, for daemon log lines.
+	job string
 	// rank is what the caller last said this job was worth. Refreshed at
 	// the top of each of this waiter's own attempts, and stored here
 	// rather than re-asked, so that ordering never calls another job's
@@ -226,6 +229,13 @@ type gateWaiter struct {
 	// room, and the zero time when the thing holding it is not the
 	// budget. It is what ReserveAfter is measured from.
 	short time.Time
+}
+
+func (w *gateWaiter) subject() string {
+	if w.job != "" {
+		return "job " + w.job
+	}
+	return "this job"
 }
 
 func (g *SharedGate) poll() time.Duration {
@@ -295,7 +305,7 @@ func (g *SharedGate) log(format string, args ...any) {
 // this gate would rather admit (take).
 func (g *SharedGate) Acquire(ctx context.Context, req GateRequest) (func(), error) {
 	charge := g.charge(req.Want)
-	w := g.join(charge)
+	w := g.joinNamed(charge, req.Job)
 	if req.Assigned != nil {
 		req.Assigned(w.id)
 	}
@@ -318,26 +328,35 @@ func (g *SharedGate) Acquire(ctx context.Context, req GateRequest) (func(), erro
 		return rel, nil
 	}
 	waited, last := false, Wait{}
+	logged := make(map[string]bool)
 	for {
 		wake := g.subscribe()
 		ledgerWake := g.ledger().Change()
-		release, why, ok := g.take(w, rankOf(req.Priority))
+		release, why, logKey, ok := g.takeAttempt(w, rankOf(req.Priority))
 		if ok {
 			if waited {
-				g.log("ci: a job sandbox came free (%d in use)", g.inUse())
+				if w.job != "" {
+					g.log("ci: job %s: a job sandbox came free (%d in use)", w.job, g.inUse())
+				} else {
+					g.log("ci: a job sandbox came free (%d in use)", g.inUse())
+				}
 				if req.Wait != nil {
 					req.Wait(Wait{})
 				}
 			}
 			return release, nil
 		}
+		if !logged[logKey] {
+			// Said once per underlying *reason*, not once per attempt or
+			// live ledger snapshot: a job held first by the count and then
+			// by memory has two different things to tell whoever is
+			// watching, and a job held by one thing for forty minutes while
+			// other sandboxes come and go in the ledger has one.
+			logged[logKey] = true
+			g.log("ci: %s is waiting -- %s", w.subject(), why.Reason)
+		}
 		if why != last {
-			// Said once per *reason*, not once per attempt: a job held
-			// first by the count and then by memory has two different
-			// things to tell whoever is watching, and a job held by one
-			// thing for forty minutes has one.
 			waited, last = true, why
-			g.log("ci: this job is waiting -- %s", why.Reason)
 			if req.Wait != nil {
 				req.Wait(why)
 			}
@@ -387,6 +406,10 @@ var ledgerSeq atomic.Uint64
 // without ever being visible as a candidate is a job the ordering could
 // not have held back.
 func (g *SharedGate) join(charge model.Commitment) *gateWaiter {
+	return g.joinNamed(charge, "")
+}
+
+func (g *SharedGate) joinNamed(charge model.Commitment, job string) *gateWaiter {
 	now := g.now()
 	id := "job-" + strconv.FormatUint(ledgerSeq.Add(1), 10)
 	g.mu.Lock()
@@ -395,7 +418,7 @@ func (g *SharedGate) join(charge model.Commitment) *gateWaiter {
 		g.waiters = map[*gateWaiter]struct{}{}
 	}
 	g.joined++
-	w := &gateWaiter{charge: charge, id: id, since: now, seq: g.joined}
+	w := &gateWaiter{charge: charge, id: id, job: job, since: now, seq: g.joined}
 	g.waiters[w] = struct{}{}
 	return w
 }
@@ -436,6 +459,11 @@ func (g *SharedGate) leave(w *gateWaiter) {
 // and charges under one lock. Between the two an agent run may take the
 // capacity this job was about to, and the second ask is what notices.
 func (g *SharedGate) take(w *gateWaiter, rank Priority) (release func(), why Wait, ok bool) {
+	release, why, _, ok = g.takeAttempt(w, rank)
+	return release, why, ok
+}
+
+func (g *SharedGate) takeAttempt(w *gateWaiter, rank Priority) (release func(), why Wait, logKey string, ok bool) {
 	limit, counted := g.limit()
 	var budget model.Budget
 	if g.Budget != nil {
@@ -457,12 +485,22 @@ func (g *SharedGate) take(w *gateWaiter, rank Priority) (release func(), why Wai
 		// below) -- a deployment that keeps going count-full for a moment
 		// between releases would otherwise reset the reservation clock of
 		// the very job the reservation is for.
-		return nil, g.countWait(g.held, limit), false
+		why = g.countWait(g.held, limit)
+		return nil, why, string(why.Cause), false
 	}
 	live := g.live(ledger)
 	repair := rank.MaySpendReserve()
 	verdict := budget.AdmitsAs(live, w.charge, repair)
 	if !verdict.OK {
+		// aboutShape is whether this refusal is about this job's own
+		// *shape* at all, as against one every waiter gets alike (a
+		// volume under its free-space floor). short, below, only runs on
+		// the first kind, and Stuck is only ever asked on it too: no
+		// amount of capacity held back for this waiter, and no amount of
+		// work elsewhere finishing on its own, makes a byte of disk
+		// appear.
+		aboutShape := budget.Admits(live, model.Commitment{}).OK
+		logKey = budgetReasonKey(verdict.Reason, aboutShape)
 		// Two things the budget's own refusal cannot say, both of which
 		// cost real time to work out from the outside.
 		//
@@ -481,14 +519,6 @@ func (g *SharedGate) take(w *gateWaiter, rank Priority) (release func(), why Wai
 		// capacity is coming. Said here instead, on the refusal, where
 		// somebody reading it still has a decision to make.
 		verdict.Reason = g.annotate(verdict.Reason, budget, ledger, w.charge)
-		// aboutShape is whether this refusal is about this job's own
-		// *shape* at all, as against one every waiter gets alike (a
-		// volume under its free-space floor). short, below, only runs on
-		// the first kind, and Stuck is only ever asked on it too: no
-		// amount of capacity held back for this waiter, and no amount of
-		// work elsewhere finishing on its own, makes a byte of disk
-		// appear.
-		aboutShape := budget.Admits(live, model.Commitment{}).OK
 		if !aboutShape {
 			w.short = time.Time{}
 		} else if w.short.IsZero() {
@@ -502,40 +532,41 @@ func (g *SharedGate) take(w *gateWaiter, rank Priority) (release func(), why Wai
 		// gate does not, answers that for one specific refusal.
 		if aboutShape && g.Stuck != nil && budget.AdmitsException(live, w.charge).OK {
 			if stuck, reason := g.Stuck(w.id); stuck {
-				if release, why, ok := g.commit(w, ledger, budget, true); ok {
-					g.log("ci: this job is waiting on capacity that cannot be released -- %s -- "+
-						"running it anyway rather than waiting for a release that is not coming", reason)
-					return release, why, true
+				if release, why, _, ok := g.commit(w, ledger, budget, true); ok {
+					g.log("ci: %s is waiting on capacity that cannot be released -- %s -- "+
+						"running it anyway rather than waiting for a release that is not coming", w.subject(), reason)
+					return release, why, "", true
 				}
 			}
 		}
 		if g.reserving(w, now, windows.reserve) {
-			return nil, holeWait(w.charge, verdict.Reason), false
+			return nil, holeWait(w.charge, verdict.Reason), logKey, false
 		}
-		return nil, roomWait(verdict.Reason), false
+		return nil, roomWait(verdict.Reason), logKey, false
 	}
 	w.short = time.Time{}
 	if !g.OneRun && !repair && (agentWaiting || ledger.AgentWaiting()) {
 		if g.Stuck != nil && (agentShape.IsZero() || !budget.Admits(live, agentShape).OK) && budget.AdmitsException(live, w.charge).OK {
 			if stuck, reason := g.Stuck(w.id); stuck {
-				if release, why, ok := g.commit(w, ledger, budget, true); ok {
-					g.log("ci: this job is waiting on capacity that cannot be released -- %s -- "+
-						"running it anyway rather than waiting for a release that is not coming", reason)
-					return release, why, true
+				if release, why, _, ok := g.commit(w, ledger, budget, true); ok {
+					g.log("ci: %s is waiting on capacity that cannot be released -- %s -- "+
+						"running it anyway rather than waiting for a release that is not coming", w.subject(), reason)
+					return release, why, "", true
 				}
 			}
 		}
-		return nil, agentWait(), false
+		return nil, agentWait(), "agent", false
 	}
 	// This job fits. Whether it goes is the other question an ordered
 	// gate asks: is it the candidate this deployment would rather admit?
 	if ahead := g.aheadOf(w, budget, live, now, windows); ahead > 0 {
-		return nil, g.orderWait(ahead, limit), false
+		why = g.orderWait(ahead, limit)
+		return nil, why, string(why.Cause), false
 	}
 	if verdict.Sole {
-		g.log("ci: this job asks for %s, which is more than this deployment's whole sandbox budget (%s) -- "+
+		g.log("ci: %s asks for %s, which is more than this deployment's whole sandbox budget (%s) -- "+
 			"running it alone rather than holding it for capacity that is not coming",
-			w.charge, budget.Summary())
+			w.subject(), w.charge, budget.Summary())
 	}
 	// And the charge itself, against the ledger every other sandbox on
 	// this host is charged to. A refusal here is the race the read above
@@ -543,6 +574,20 @@ func (g *SharedGate) take(w *gateWaiter, rank Priority) (release func(), why Wai
 	// job waits for the next release exactly as if the budget had refused
 	// it the first time.
 	return g.commit(w, ledger, budget, false)
+}
+
+// budgetReasonKey extracts the stable budget dimension ("budget:memory",
+// "budget:cpu", "budget:disk", "budget:disk-floor", "budget:cluster") from an
+// un-annotated BudgetVerdict.Reason before live commitment figures or ledger
+// holder breakdowns are compared for daemon log deduplication.
+func budgetReasonKey(raw string, aboutShape bool) string {
+	if !aboutShape && strings.HasPrefix(raw, "disk:") {
+		return "budget:disk-floor"
+	}
+	if kind, _, ok := strings.Cut(raw, ":"); ok {
+		return "budget:" + kind
+	}
+	return "budget:" + raw
 }
 
 // commit finishes an admission take has already decided to make: the
@@ -554,7 +599,7 @@ func (g *SharedGate) take(w *gateWaiter, rank Priority) (release func(), why Wai
 // (model.Ledger.AdmitException) rather than ordinary Admit, so a
 // deadlock-breaking job may exceed the budget by at most one sandbox
 // while existing commitments are within the cap.
-func (g *SharedGate) commit(w *gateWaiter, ledger *model.Ledger, budget model.Budget, force bool) (func(), Wait, bool) {
+func (g *SharedGate) commit(w *gateWaiter, ledger *model.Ledger, budget model.Budget, force bool) (func(), Wait, string, bool) {
 	w.short = time.Time{}
 	var giveBack func()
 	if ledger != nil {
@@ -566,14 +611,15 @@ func (g *SharedGate) commit(w *gateWaiter, ledger *model.Ledger, budget model.Bu
 			taken, release = ledger.AdmitAs(budget, model.PoolCI, w.id, w.charge, w.rank.MaySpendReserve())
 		}
 		if !taken.OK {
-			return nil, roomWait(taken.Reason), false
+			aboutShape := !strings.Contains(taken.Reason, "is free on")
+			return nil, roomWait(g.annotate(taken.Reason, budget, ledger, w.charge)), budgetReasonKey(taken.Reason, aboutShape), false
 		}
 		giveBack = release
 	} else {
 		g.committed = g.committed.Plus(w.charge)
 	}
 	g.held++
-	return g.releaser(w, giveBack), Wait{}, true
+	return g.releaser(w, giveBack), Wait{}, "", true
 }
 
 // annotate adds to a budget refusal the two things the budget could not

@@ -31,7 +31,7 @@ import (
 const (
 	// ExternalAgentTokenPrefix prefixes every minted external-agent bearer
 	// token, so it is distinguishable in logs and never mistaken for an
-	// executor join token (gxt_) or an access code.
+	// access code.
 	ExternalAgentTokenPrefix = "gma_"
 
 	// ExternalAgentPrincipalPrefix is the prefix before the credential's
@@ -56,7 +56,7 @@ const (
 var ErrExternalAgentTokenRevoked = errors.New("external agent credential is revoked")
 
 // ExternalAgentToken is a scoped bearer credential issued to an external
-// agent (docs/agent-api.md, "External agents"). Like ExecutorToken, only
+// agent (docs/agent-api.md, "External agents"). Only
 // the SHA-256 hash of the secret is stored; the raw token is returned once
 // at issue or rotation and never shown again.
 type ExternalAgentToken struct {
@@ -74,6 +74,13 @@ type ExternalAgentToken struct {
 	RevokedAt     *time.Time `json:"revokedAt,omitempty"`
 	LastUsedAt    *time.Time `json:"lastUsedAt,omitempty"`
 	CreatedBy     string     `json:"createdBy,omitempty"`
+	// Owner is the person the credential belongs to (a PrincipalHuman
+	// ID such as jane@example.com): calls it makes are recorded as
+	// external:<name> on behalf of Owner, and tasks it files name Owner
+	// as their requester (design/spec/external-cli/external-cli.spec.md#XC-14).
+	// "" for a credential issued before owners existed, which acts on
+	// behalf of nobody.
+	Owner string `json:"owner,omitempty"`
 }
 
 // PrincipalID returns the external principal identifier ("external:<name>")
@@ -85,6 +92,18 @@ func (t ExternalAgentToken) PrincipalID() string {
 // Principal returns the model.Principal for this external agent credential.
 func (t ExternalAgentToken) Principal() Principal {
 	return Principal{Kind: PrincipalAgent, ID: t.PrincipalID()}
+}
+
+// OwnerPrincipal is the person this credential acts on behalf of, or nil
+// for a credential with no Owner. Its source is SourceToken: the owner
+// was vouched for when a person issued the credential, not by the agent
+// presenting it.
+func (t ExternalAgentToken) OwnerPrincipal() *Principal {
+	owner := strings.TrimSpace(t.Owner)
+	if owner == "" {
+		return nil
+	}
+	return &Principal{Kind: PrincipalHuman, ID: owner, Source: SourceToken}
 }
 
 // Active reports whether the credential is neither revoked nor expired at now.
@@ -361,7 +380,7 @@ func IsExternalAgentToken(raw string) bool {
 	return strings.HasPrefix(strings.TrimSpace(raw), ExternalAgentTokenPrefix)
 }
 
-const externalAgentTokenColumns = "`id`, `name`, `token_hash`, `prefix`, `scope_set`, `scopes`, `repos`, `rate_limit`, `max_concurrent`, `created_at`, `expires_at`, `revoked_at`, `last_used_at`, `created_by`"
+const externalAgentTokenColumns = "`id`, `name`, `token_hash`, `prefix`, `scope_set`, `scopes`, `repos`, `rate_limit`, `max_concurrent`, `created_at`, `expires_at`, `revoked_at`, `last_used_at`, `created_by`, `owner`"
 
 func scanExternalAgentToken(scan func(dest ...any) error) (ExternalAgentToken, error) {
 	var t ExternalAgentToken
@@ -371,7 +390,7 @@ func scanExternalAgentToken(scan func(dest ...any) error) (ExternalAgentToken, e
 		&t.ID, &t.Name, &t.TokenHash, &t.Prefix,
 		&t.ScopeSet, &scopes, &repos,
 		&t.RateLimit, &t.MaxConcurrent,
-		&t.CreatedAt, &expiresAt, &revokedAt, &lastUsedAt, &t.CreatedBy,
+		&t.CreatedAt, &expiresAt, &revokedAt, &lastUsedAt, &t.CreatedBy, &t.Owner,
 	); err != nil {
 		return ExternalAgentToken{}, err
 	}
@@ -424,11 +443,11 @@ func (s *Store) CreateExternalAgentToken(ctx context.Context, t ExternalAgentTok
 			lastUsedAt = sql.NullTime{Time: t.LastUsedAt.UTC(), Valid: true}
 		}
 		_, err := tx.ExecContext(ctx,
-			"INSERT INTO `external_agent_token` ("+externalAgentTokenColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			"INSERT INTO `external_agent_token` ("+externalAgentTokenColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			t.ID, t.Name, t.TokenHash, t.Prefix,
 			t.ScopeSet, joinCSV(t.Scopes), joinCSV(t.Repos),
 			t.RateLimit, t.MaxConcurrent,
-			t.CreatedAt, expiresAt, revokedAt, lastUsedAt, t.CreatedBy,
+			t.CreatedAt, expiresAt, revokedAt, lastUsedAt, t.CreatedBy, strings.TrimSpace(t.Owner),
 		)
 		return err
 	})

@@ -32,8 +32,8 @@ describe("SandboxesSection", () => {
         ],
         k8sNamespace: "grain",
         k8sNamespaceDefault: "grain",
-        k8sSandboxImageDefault: "ghcr.io/bwsalmon/grain/k8s-sandbox:latest",
-        k8sGranuleImageDefault: "ghcr.io/bwsalmon/grain/guest:latest",
+        k8sSandboxImageDefault: "docker.io/grainai/sandbox-k8s:latest",
+        k8sGranuleImageDefault: "docker.io/grainai/sandbox:latest",
         k8sWorkspaceDefault: "/home/debian",
         k8sNodeSelector: ["pool=kvm"],
         k8sPrivileged: false,
@@ -155,10 +155,9 @@ describe("SandboxesSection", () => {
         k8sNamespace: "",
         k8sNamespaceDefault: "grain",
         k8sSandboxImage: "",
-        k8sSandboxImageDefault:
-          "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-8e1a209",
+        k8sSandboxImageDefault: "docker.io/grainai/sandbox-k8s:sha-8e1a209",
         k8sGranuleImage: "",
-        k8sGranuleImageDefault: "ghcr.io/bwsalmon/grain/guest:sha-8e1a209",
+        k8sGranuleImageDefault: "docker.io/grainai/sandbox:sha-8e1a209",
         k8sWorkspace: "",
         k8sWorkspaceDefault: "/home/agent",
         k8sDeployment: "",
@@ -205,10 +204,10 @@ describe("SandboxesSection", () => {
 
     expect(nsInput).toHaveValue("grain");
     expect(sandboxImgInput).toHaveValue(
-      "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-8e1a209",
+      "docker.io/grainai/sandbox-k8s:sha-8e1a209",
     );
     expect(granuleImgInput).toHaveValue(
-      "ghcr.io/bwsalmon/grain/guest:sha-8e1a209",
+      "docker.io/grainai/sandbox:sha-8e1a209",
     );
     expect(workspaceInput).toHaveValue("/home/agent");
     expect(deploymentInput).toHaveValue("grain");
@@ -264,7 +263,7 @@ describe("SandboxesSection", () => {
         sandboxBackend: "kubernetes",
         sandboxBackends: ["kubernetes"],
         k8sSandboxImageWarning:
-          'Sandbox pod image "ghcr.io/bwsalmon/grain/k8s-sandbox:missing" did not resolve: image manifest not found',
+          'Sandbox pod image "docker.io/grainai/sandbox-k8s:missing" did not resolve: image manifest not found',
       },
       saveChoice: vi.fn(),
       onTextBlur: () => () => {},
@@ -279,7 +278,48 @@ describe("SandboxesSection", () => {
     const alert = screen.getByTestId("k8s-image-warning");
     expect(alert).toBeInTheDocument();
     expect(alert).toHaveTextContent(
-      'Sandbox pod image "ghcr.io/bwsalmon/grain/k8s-sandbox:missing" did not resolve',
+      'Sandbox pod image "docker.io/grainai/sandbox-k8s:missing" did not resolve',
+    );
+  });
+
+  it("says when k8s_granule_image is read as the mirror repository and names the image sandboxes boot", () => {
+    const repo = "us-docker.pkg.dev/example-project/grain/guest";
+    const s = {
+      settings: {
+        sandboxBackend: "kubernetes-granule",
+        sandboxBackends: ["kubernetes-granule"],
+        k8sGranuleImage: `${repo}:sha-31d0973@sha256:d210`,
+        k8sGranuleImageMirror: repo,
+        k8sGranuleImageEffective: `${repo}:sha-e5544d6`,
+        sandboxImageMirrorEffective: repo,
+        sandboxImageMirrorDerivedFrom: "k8s_granule_image",
+      },
+      saveChoice: vi.fn(),
+      onTextBlur: () => () => {},
+      onIntBlur: () => () => {},
+      onFloatBlur: () => () => {},
+      onEnterKey: () => {},
+      markDirty: () => {},
+    };
+    const { rerender } = render(<SandboxesSection s={s} />);
+    const note = screen.getByTestId("k8s-granule-image-mirror");
+    expect(note).toHaveTextContent(`Treated as mirror repository ${repo}`);
+    expect(note).toHaveTextContent(`sandboxes boot ${repo}:sha-e5544d6`);
+
+    // Cleared, with the mirror kept explicitly: the effective image stays
+    // named, and where its mirror comes from.
+    s.settings = {
+      ...s.settings,
+      k8sGranuleImage: "",
+      k8sGranuleImageMirror: "",
+      sandboxImageMirror: repo,
+      sandboxImageMirrorDerivedFrom: "",
+    };
+    rerender(<SandboxesSection s={{ ...s }} />);
+    expect(screen.queryByTestId("k8s-granule-image-mirror")).toBeNull();
+    const effective = screen.getByTestId("k8s-granule-image-effective");
+    expect(effective).toHaveTextContent(
+      `Sandboxes boot ${repo}:sha-e5544d6, mirrored into ${repo} (sandbox_image_mirror).`,
     );
   });
 
@@ -352,6 +392,14 @@ describe("SandboxesSection", () => {
       name: "Kubernetes — Granule VM per run",
     });
     expect(k8sGranuleOpt).not.toBeDisabled();
+
+    // "none" is a control-plane-only daemon now that remote executors
+    // are gone, and is labelled as one.
+    expect(
+      screen.getByRole("option", {
+        name: "None (control plane only) — unavailable (needs -disable-native-sandboxes at daemon startup)",
+      }),
+    ).toBeDisabled();
 
     expect(
       screen.getByText(

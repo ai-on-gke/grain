@@ -19,11 +19,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -63,13 +66,37 @@ func TestDetectSandboxProxy(t *testing.T) {
 			base: "http://127.0.0.1:9728", token: "tok-1", ok: true},
 		{name: "git credential-store percent-encoded colon", creds: "http://sandbox:tok-escaped@127.0.0.1%3a9728\n",
 			base: "http://127.0.0.1:9728", token: "tok-escaped", ok: true},
+		{name: "git credential-store upper-case percent-encoded colon", creds: "http://sandbox:tok-upper@127.0.0.1%3A9728\n",
+			base: "http://127.0.0.1:9728", token: "tok-upper", ok: true},
+		{name: "percent-encoded userinfo survives the port unescape", creds: "http://sandbox:tok%2Fa%3Ab%40c%25d@192.168.9.1%3a9728\n",
+			base: "http://192.168.9.1:9728", token: "tok/a:b@c%d", ok: true},
+		{name: "blank lines and github before the escaped proxy", creds: "\n  \nhttps://x-access-token:ghs_x@github.com\n\nhttp://sandbox:tok-blank@192.168.9.1%3a9728\n\n",
+			base: "http://192.168.9.1:9728", token: "tok-blank", ok: true},
+		{name: "bracketed ipv6 loopback percent-encoded colon", creds: "http://sandbox:tok-v6@[::1]%3a9728\n",
+			base: "http://[::1]:9728", token: "tok-v6", ok: true},
+		{name: "env proxy, token from escaped credentials", vars: map[string]string{"GRAIN_SANDBOX_PROXY": "http://192.168.9.1:9728"},
+			creds: "http://sandbox:tok-env-esc@192.168.9.1%3a9728\n", base: "http://192.168.9.1:9728", token: "tok-env-esc", ok: true},
 		{name: "sandbox user on ephemeral loopback port", creds: "http://sandbox:tok-ephem@127.0.0.1:43115\n",
 			base: "http://127.0.0.1:43115", token: "tok-ephem", ok: true},
+		{name: "granule vm bridge gateway x-access-token", creds: "https://x-access-token:ghs_x@github.com\nhttp://x-access-token:tok-gw@192.168.9.1:9728\n",
+			base: "http://192.168.9.1:9728", token: "tok-gw", ok: true},
+		{name: "granule vm bridge gateway sandbox percent-encoded colon", creds: "http://sandbox:tok-gw-esc@192.168.9.1%3a9728\n",
+			base: "http://192.168.9.1:9728", token: "tok-gw-esc", ok: true},
+		{name: "granule vm bridge gateway custom port block", creds: "http://sandbox:tok-gw-block@192.168.9.1:10240\n",
+			base: "http://192.168.9.1:10240", token: "tok-gw-block", ok: true},
+		{name: "docker bridge gateway", creds: "http://x-access-token:tok-docker@172.17.0.1:9728\n",
+			base: "http://172.17.0.1:9728", token: "tok-docker", ok: true},
+		{name: "kubernetes service proxy", creds: "http://sandbox:tok-k8s@grain-sandbox:9728\n",
+			base: "http://grain-sandbox:9728", token: "tok-k8s", ok: true},
+		{name: "localhost proxy", creds: "http://x-access-token:tok-local@localhost:9728\n",
+			base: "http://localhost:9728", token: "tok-local", ok: true},
 		{name: "env names the proxy", vars: map[string]string{"GRAIN_SANDBOX_PROXY": "http://127.0.0.1:9728/", "GRAIN_SANDBOX_TOKEN": "tok-2"},
 			base: "http://127.0.0.1:9728", token: "tok-2", ok: true},
 		{name: "env proxy, token from credentials", vars: map[string]string{"GRAIN_SANDBOX_PROXY": "http://127.0.0.1:9728"},
 			creds: "http://x-access-token:tok-3@127.0.0.1:9728\n", base: "http://127.0.0.1:9728", token: "tok-3", ok: true},
 		{name: "not a sandbox", creds: "https://x-access-token:ghs_x@github.com\n"},
+		{name: "private forge on unrelated port with non-sandbox user", creds: "http://alice:pat@192.168.1.50:3000\n"},
+		{name: "public forge with sandbox username", creds: "https://sandbox:ghp_x@github.com\n"},
 		{name: "turned off", vars: map[string]string{"GRAIN_SANDBOX_CLI": "0"}, creds: "http://x:t@127.0.0.1:9728\n"},
 		{name: "pointed at a daemon", vars: map[string]string{"GRAIN_SERVER": "http://localhost:8080"}, creds: "http://x:t@127.0.0.1:9728\n"},
 	} {
@@ -83,12 +110,15 @@ func TestDetectSandboxProxy(t *testing.T) {
 }
 
 func TestIsSandboxCommandLeavesOtherModesAlone(t *testing.T) {
-	for _, args := range [][]string{{"ls", "ci://a/b"}, {"ci", "log"}, {"task", "read", "1"}, {"db", "query", "SELECT 1"}, {"help"}, {"pr", "--help"}} {
+	// A sandbox command's unknown subcommand is the sandbox CLI's to
+	// refuse, never the host CLI's to answer.
+	for _, args := range [][]string{{"ls", "ci://a/b"}, {"ci", "log"}, {"task", "read", "1"}, {"db", "query", "SELECT 1"}, {"help"}, {"pr", "--help"},
+		{"ci", "run"}, {"task", "lsit"}} {
 		if !isSandboxCommand(args) {
 			t.Errorf("%q should be a sandbox command", args)
 		}
 	}
-	for _, args := range [][]string{{}, {"mcpserver"}, {"capability", "serve"}, {"db", "upgrade-postgres"}, {"ci", "run"}, {"task", "create"}, {"daemon"}} {
+	for _, args := range [][]string{{}, {"mcpserver"}, {"capability", "serve"}, {"daemon"}, {"frobnicate"}} {
 		if isSandboxCommand(args) {
 			t.Errorf("%q should not be a sandbox command", args)
 		}
@@ -107,7 +137,7 @@ func (s cliTestScopes) SandboxNamespaceScope(_ context.Context, sb string) (mode
 func TestSandboxCLIAgainstTheProxy(t *testing.T) {
 	store := ci.NewRunStore(10)
 	at := time.Now()
-	store.Put(ci.Run{ID: "run-1", Repo: "bwsalmon/grain", Ref: "grain/task-7", Conclusion: ci.ConclusionFailure, StartedAt: &at,
+	store.Put(ci.Run{ID: "run-1", Repo: "ai-on-gke/grain", Ref: "grain/task-7", Conclusion: ci.ConclusionFailure, StartedAt: &at,
 		Jobs: []ci.JobRun{{Name: "go", Conclusion: ci.ConclusionFailure, Steps: []ci.StepRun{
 			{Name: "Test", Conclusion: ci.ConclusionFailure, Output: "--- FAIL: TestWidget (0.01s)\nFAIL\n"}}}}})
 	// No playbooks/ here: src://playbooks is the binary's embedded copy.
@@ -128,8 +158,8 @@ func TestSandboxCLIAgainstTheProxy(t *testing.T) {
 	proxy := &gitproxy.GitProxy{
 		Tokens:    tokens,
 		Namespace: &namespace.Server{CIStore: store, SrcDir: src, Redactor: redact.New(nil)},
-		NamespaceScopes: cliTestScopes{"sb": {TaskID: "7", RunID: "r", TaskRepo: "bwsalmon/grain", TaskBranch: "grain/task-7",
-			MayReadCI: true, AllowedRepos: map[string]bool{"bwsalmon/grain": true}, MayReadPlaybooks: true}},
+		NamespaceScopes: cliTestScopes{"sb": {TaskID: "7", RunID: "r", TaskRepo: "ai-on-gke/grain", TaskBranch: "grain/task-7",
+			MayReadCI: true, AllowedRepos: map[string]bool{"ai-on-gke/grain": true}, MayReadPlaybooks: true}},
 	}
 	srv := httptest.NewServer(gitproxy.NewHandler(proxy))
 	defer srv.Close()
@@ -150,16 +180,16 @@ func TestSandboxCLIAgainstTheProxy(t *testing.T) {
 	if out, _, code := run("ci", "log", "--help"); code != 0 || !strings.HasPrefix(out, "grain ci log") {
 		t.Errorf("ci log --help: %d %s", code, out)
 	}
-	if out, errOut, code := run("ls", "ci://bwsalmon/grain"); code != 0 || strings.TrimSpace(out) != "run-1/" {
+	if out, errOut, code := run("ls", "ci://ai-on-gke/grain"); code != 0 || strings.TrimSpace(out) != "run-1/" {
 		t.Errorf("ls: %d %q %s", code, out, errOut)
 	}
 	if out, errOut, code := run("ci", "log", "--job", "go", "--step", "Test"); code != 0 || !strings.Contains(out, "--- FAIL: TestWidget") {
 		t.Errorf("ci log: %d %q %s", code, out, errOut)
 	}
-	if out, errOut, code := run("grep", "--", "--- FAIL", "ci://bwsalmon/grain/run-1/go/Test.log"); code != 0 || !strings.Contains(out, "TestWidget") {
+	if out, errOut, code := run("grep", "--", "--- FAIL", "ci://ai-on-gke/grain/run-1/go/Test.log"); code != 0 || !strings.Contains(out, "TestWidget") {
 		t.Errorf("grep: %d %q %s", code, out, errOut)
 	}
-	if out, errOut, code := run("ci", "list", "--conclusion", "failure"); code != 0 || !strings.Contains(out, "run-1 grain/task-7") {
+	if out, errOut, code := run("ci", "list", "--conclusion", "failure"); code != 0 || !strings.Contains(out, "run-1 grain grain/task-7") {
 		t.Errorf("ci list: %d %q %s", code, out, errOut)
 	}
 	if out, errOut, code := run("pr", "status"); code != 0 || !strings.Contains(out, "go: failure") {
@@ -185,8 +215,8 @@ func TestSandboxCLIAgainstTheProxy(t *testing.T) {
 		t.Errorf("src without self-debug: %d %s", code, errOut)
 	}
 	_, errOut, code = run("db", "query", "SELECT 1")
-	if code != 1 || !strings.Contains(errOut, `"db-read"`) {
-		t.Errorf("db query without db-read: %d %s", code, errOut)
+	if code != 1 || !strings.Contains(errOut, `"https://grain.dev/capabilities/grain#sql"`) {
+		t.Errorf("db query without grain#sql: %d %s", code, errOut)
 	}
 }
 
@@ -266,8 +296,8 @@ func TestSandboxCLIIssuesAndDBAgainstTheProxy(t *testing.T) {
 		Tokens:    tokens,
 		Namespace: &namespace.Server{Redactor: redact.New(nil)},
 		NamespaceScopes: cliTestScopes{
-			"sb":   {TaskID: "7", RunID: "r", TaskRepo: "bwsalmon/grain", MayReadIssues: true, MayReadDB: true},
-			"bare": {TaskID: "8", RunID: "r8", TaskRepo: "bwsalmon/grain"},
+			"sb":   {TaskID: "7", RunID: "r", TaskRepo: "ai-on-gke/grain", MayReadIssues: true, MayReadDB: true},
+			"bare": {TaskID: "8", RunID: "r8", TaskRepo: "ai-on-gke/grain"},
 		},
 		CLI: cliTestBackend{db: cliTestDB{queries: &queries}},
 	}
@@ -284,7 +314,7 @@ func TestSandboxCLIIssuesAndDBAgainstTheProxy(t *testing.T) {
 	}
 
 	if out, errOut, code := runAs("tok", "issue", "list"); code != 0 ||
-		!strings.Contains(out, "Open issues for bwsalmon/grain (1)") || !strings.Contains(out, "#5 [open] Widget wobbles (by @octo) -- labels: bug") {
+		!strings.Contains(out, "Open issues for ai-on-gke/grain (1)") || !strings.Contains(out, "#5 [open] Widget wobbles (by @octo) -- labels: bug") {
 		t.Errorf("issue list: %d %q %s", code, out, errOut)
 	}
 	if out, errOut, code := runAs("tok", "issue", "read", "5", "--repo", "acme/widgets"); code != 0 ||
@@ -317,9 +347,31 @@ func TestSandboxLogAndMetricsFlagsBecomeTheirQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := grainLogQuery(p).Encode(), "contains=dispatch+failed&max_lines=900&min_priority=err"+
+	if got, want := grainLogQuery(p, time.Now()).Encode(), "contains=dispatch+failed&max_lines=900&min_priority=err"+
 		"&since=2026-10-29T00%3A00%3A00Z&tail=40&until=2026-10-29T06%3A00%3A00Z"; got != want {
 		t.Errorf("grain log query = %s, want %s", got, want)
+	}
+	p, err = parseSandboxArgs([]string{"--source", "dmesg", "--priority", "warning", "--max-lines", "50"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A span back from now, as ci list --since takes, becomes the
+	// instant it names; something the CLI cannot read goes as given, for
+	// read_grain_log to refuse.
+	p, err = parseSandboxArgs([]string{"--since", "10m", "--until", "1d", "--contains", "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 1, 8, 44, 0, 0, time.UTC)
+	if got, want := grainLogQuery(p, now).Encode(), "contains=x&since=2026-11-01T08%3A34%3A00Z&until=2026-10-31T08%3A44%3A00Z"; got != want {
+		t.Errorf("grain log --since 10m --until 1d query = %s, want %s", got, want)
+	}
+	p, err = parseSandboxArgs([]string{"--since", "yesterday"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := grainLogQuery(p, now).Encode(), "since=yesterday"; got != want {
+		t.Errorf("grain log --since yesterday query = %s, want %s", got, want)
 	}
 	p, err = parseSandboxArgs([]string{"--source", "dmesg", "--priority", "warning", "--max-lines", "50"})
 	if err != nil {
@@ -328,7 +380,7 @@ func TestSandboxLogAndMetricsFlagsBecomeTheirQuery(t *testing.T) {
 	if got := grainLogSource(p); got != "dmesg" {
 		t.Errorf("grain log --source dmesg reads source %q", got)
 	}
-	if got, want := grainLogQuery(p).Encode(), "max_lines=50&min_priority=warning"; got != want {
+	if got, want := grainLogQuery(p, time.Now()).Encode(), "max_lines=50&min_priority=warning"; got != want {
 		t.Errorf("grain log query = %s, want %s", got, want)
 	}
 	p, err = parseSandboxArgs([]string{"summary", "--since", "2026-10-28", "--until", "2026-10-29"})
@@ -401,7 +453,7 @@ func TestSandboxCLIReadsOtherTasksCI(t *testing.T) {
 		return out.String(), errOut.String(), code
 	}
 
-	if out, errOut, code := run("ci", "list", "--task", "19"); code != 0 || !strings.Contains(out, "run-sib grain/dep/task-19") {
+	if out, errOut, code := run("ci", "list", "--task", "19"); code != 0 || !strings.Contains(out, "run-sib grain grain/dep/task-19") {
 		t.Errorf("ci list --task: %d %q %s", code, out, errOut)
 	}
 	if out, errOut, code := run("pr", "status", "--task", "19"); code != 0 || !strings.Contains(out, "go: success") {
@@ -418,5 +470,228 @@ func TestSandboxCLIReadsOtherTasksCI(t *testing.T) {
 	}
 	if out, errOut, code := run("ci", "log", "--task", "19", "--job", "go", "--step", "Test"); code != 0 || !strings.Contains(out, "ok sibling") {
 		t.Errorf("ci log --task: %d %q %s", code, out, errOut)
+	}
+}
+
+// A no_repo task's scope still names a branch, but no repository has it:
+// nothing about "this task's branch" is reported, and an unfiltered list
+// names each run's repository.
+func TestSandboxCLIOnANoRepoTask(t *testing.T) {
+	store := ci.NewRunStore(10)
+	at := time.Now()
+	store.Put(ci.Run{ID: "run-w", Repo: "acme/widgets", Ref: "main", Commit: "abc1234567890", Conclusion: ci.ConclusionSuccess, StartedAt: &at,
+		Jobs: []ci.JobRun{{Name: "go", Conclusion: ci.ConclusionSuccess, Steps: []ci.StepRun{
+			{Name: "Test", Conclusion: ci.ConclusionSuccess, Output: "--- PASS: TestThing (0.1s)\n"}}}}})
+	store.Put(ci.Run{ID: "run-l", Repo: "acme/library", Ref: "grain/dep/task-7", Commit: "def4567890123", Conclusion: ci.ConclusionSuccess, StartedAt: &at,
+		Jobs: []ci.JobRun{{Name: "test", Conclusion: ci.ConclusionSuccess, Steps: []ci.StepRun{
+			{Name: "Unit", Conclusion: ci.ConclusionSuccess, Output: "--- PASS: TestThing (0.2s)\n"}}}}})
+	tokenFile := filepath.Join(t.TempDir(), "tokens.json")
+	raw, _ := json.Marshal(map[string]string{"sb": "tok"})
+	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := &gitproxy.GitProxy{
+		Tokens:    tokens,
+		Namespace: &namespace.Server{CIStore: store, Redactor: redact.New(nil)},
+		NamespaceScopes: cliTestScopes{"sb": {TaskID: "7", RunID: "r", TaskBranch: "grain/dep/task-7",
+			MayReadCI: true, MayReadAllCI: true}},
+		// Refused before any action is taken, so none is implemented.
+		CLIActions: unimplementedCLIActions{},
+	}
+	srv := httptest.NewServer(gitproxy.NewHandler(proxy))
+	defer srv.Close()
+	env := fakeSandboxEnv(map[string]string{"GRAIN_SANDBOX_PROXY": srv.URL, "GRAIN_SANDBOX_TOKEN": "tok"}, "")
+	run := func(args ...string) (string, string, int) {
+		var out, errOut bytes.Buffer
+		code, handled := maybeRunSandboxCLI(args, env, &out, &errOut)
+		if !handled {
+			t.Fatalf("%q not handled in sandbox mode", args)
+		}
+		return out.String(), errOut.String(), code
+	}
+
+	for _, args := range [][]string{
+		{"pr", "status"}, {"pr", "base-status"}, {"pr", "status", "--ref", "main"},
+		{"ci", "wait"}, {"ci", "run-job", "go"}, {"ci", "retrigger"},
+	} {
+		out, errOut, code := run(args...)
+		if code == 0 || !strings.Contains(errOut, "this task has no repository or branch") || !strings.Contains(errOut, "--repo") ||
+			strings.Contains(out+errOut, "grain/dep/task-7") || strings.Contains(out+errOut, " in  ") {
+			t.Errorf("%q on a no-repo task: %d %q %q", args, code, out, errOut)
+		}
+	}
+	for _, args := range [][]string{{"ci", "log"}, {"ci", "artifact", "go", "x"}} {
+		out, errOut, code := run(args...)
+		if code == 0 || !strings.Contains(errOut, "no repository or branch") || !strings.Contains(errOut, "run id") ||
+			strings.Contains(errOut, "this task's branch") {
+			t.Errorf("%q on a no-repo task: %d %q %q", args, code, out, errOut)
+		}
+	}
+	if out, errOut, code := run("pr", "status", "--ref", "main", "--repo", "acme/widgets"); code != 0 || !strings.Contains(out, "main (branch) in acme/widgets") {
+		t.Errorf("pr status --ref --repo on a no-repo task: %d %q %s", code, out, errOut)
+	}
+	out, errOut, code := run("ci", "list")
+	if code != 0 || !strings.Contains(out, "across all readable repos") ||
+		!strings.Contains(out, "acme/widgets run-w grain main") || !strings.Contains(out, "acme/library run-l grain grain/dep/task-7") {
+		t.Errorf("ci list on a no-repo task: %d %q %s", code, out, errOut)
+	}
+	if out, errOut, code := run("ci", "list", "--repo", "acme/widgets"); code != 0 || !strings.Contains(out, "in acme/widgets") || strings.Contains(out, "acme/widgets run-w") {
+		t.Errorf("ci list --repo on a no-repo task: %d %q %s", code, out, errOut)
+	}
+	out, errOut, code = run("ci", "test-history", "TestThing")
+	if code != 0 || !strings.Contains(out, "across all readable repos") ||
+		!strings.Contains(out, "(acme/widgets main") || !strings.Contains(out, "(acme/library grain/dep/task-7") {
+		t.Errorf("ci test-history on a no-repo task: %d %q %s", code, out, errOut)
+	}
+	if out, errOut, code := run("ci", "log", "run-l", "--job", "test", "--step", "Unit"); code != 0 || !strings.Contains(out, "TestThing") {
+		t.Errorf("ci log <run-id> on a no-repo task: %d %q %s", code, out, errOut)
+	}
+}
+
+type unimplementedCLIActions struct{ gitproxy.CLIActions }
+
+// --tail is a byte count wherever the namespace serves it
+// (namespace.Server's tail parameter), so `grain log --tail 2` prints
+// the last two bytes of the answer, not its last two entries -- which is
+// what the help said when a walkthrough read ".\n" back from it
+// (docs/test-runs/2026-10-31-sandbox-grain-cli.md, F1).
+func TestTailHelpSaysBytes(t *testing.T) {
+	for _, command := range []string{"read", "ci log", "log"} {
+		help := sandboxCommandHelp[command]
+		var tail string
+		for _, line := range strings.Split(help, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "--tail N") {
+				tail = line
+			}
+		}
+		if tail == "" {
+			t.Errorf("grain %s's help does not describe --tail:\n%s", command, help)
+		} else if !strings.Contains(strings.ToLower(tail), "bytes") {
+			t.Errorf("grain %s's help does not say --tail counts bytes: %q", command, tail)
+		}
+	}
+}
+
+// Every flag of grain log and grain metrics narrows the answer, so one
+// they do not know is refused before anything is read. A walkthrough
+// found `grain log --repo other/repo` accepted, and a misspelt
+// --min-prority answered with every priority
+// (docs/test-runs/2026-10-31-sandbox-grain-cli.md, F3).
+func TestSandboxLogAndMetricsRefuseUnknownFlags(t *testing.T) {
+	var reads atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reads.Add(1)
+		w.Write([]byte("an answer\n"))
+	}))
+	defer srv.Close()
+	env := fakeSandboxEnv(map[string]string{"GRAIN_SANDBOX_PROXY": srv.URL, "GRAIN_SANDBOX_TOKEN": "tok"}, "")
+	run := func(args ...string) (string, int) {
+		var out, errOut bytes.Buffer
+		code, handled := maybeRunSandboxCLI(args, env, &out, &errOut)
+		if !handled {
+			t.Fatalf("%q not handled in sandbox mode", args)
+		}
+		return errOut.String(), code
+	}
+	for _, args := range [][]string{
+		{"log", "--min-prority", "err"},
+		{"log", "--repo", "other/repo"},
+		{"metrics", "--windows", "7d"},
+		{"metrics", "summary", "--repos", "acme/a"},
+	} {
+		if errOut, code := run(args...); code == 0 || !strings.Contains(errOut, "unknown flag") {
+			t.Errorf("grain %s: exit %d, stderr %q; want it refused as an unknown flag", strings.Join(args, " "), code, errOut)
+		}
+	}
+	if n := reads.Load(); n != 0 {
+		t.Errorf("refused commands made %d reads, want none", n)
+	}
+	for _, args := range [][]string{
+		{"log", "daemon", "--since", "2026-10-29T00:00:00Z", "--until", "2026-10-29T06:00:00Z", "--priority", "err",
+			"--min-priority", "err", "--contains", "x", "--max-lines", "5", "--lines", "5", "--tail", "40"},
+		{"log", "--source", "dmesg"},
+		{"log", "-n", "5"},
+		{"metrics", "summary", "--window", "7d", "--repo", "acme/a", "--author", "task"},
+		{"metrics", "--since", "2026-10-28", "--until", "2026-10-29"},
+	} {
+		if errOut, code := run(args...); code != 0 {
+			t.Errorf("grain %s: exit %d, stderr %q; want it read", strings.Join(args, " "), code, errOut)
+		}
+	}
+}
+
+// A grep whose walk the namespace cut short before it found anything
+// exits 1, saying so, rather than 0 with nothing but the truncation line:
+// the part it never searched may hold the match.
+func TestGrepExitsNonZeroWhenATruncatedWalkFoundNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		headers map[string]string
+		code    int
+	}{
+		{name: "truncated, no match", headers: map[string]string{"X-Grain-Walk-Truncated": "true", "X-Grain-Matches": "0"}, code: 1},
+		{name: "truncated, a match", headers: map[string]string{"X-Grain-Walk-Truncated": "true", "X-Grain-Matches": "1"}, code: 0},
+		{name: "whole walk, no match", headers: map[string]string{"X-Grain-Matches": "0"}, code: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				for k, v := range tc.headers {
+					w.Header().Set(k, v)
+				}
+				fmt.Fprint(w, "[truncated: walked 2000 entries and stopped at pkg/orchestrator/]\n")
+			}))
+			defer srv.Close()
+			env := fakeSandboxEnv(map[string]string{"GRAIN_SANDBOX_PROXY": srv.URL, "GRAIN_SANDBOX_TOKEN": "tok"}, "")
+			var out, errOut bytes.Buffer
+			code, _ := maybeRunSandboxCLI([]string{"grep", "func CoreSource", "src://pkg"}, env, &out, &errOut)
+			if code != tc.code || !strings.Contains(out.String(), "stopped at pkg/orchestrator/") {
+				t.Errorf("exit %d, want %d; out %q err %q", code, tc.code, out.String(), errOut.String())
+			}
+			if (tc.code != 0) != strings.Contains(errOut.String(), "the rest was not searched") {
+				t.Errorf("stderr = %q", errOut.String())
+			}
+		})
+	}
+}
+
+// TestSandboxCLIDisambiguatesExplicitServerAndContext is
+// external-cli.spec.md#XC-3.4: inside a sandbox, a command that names a
+// daemon -- -server/--server, -context/--context, $GRAIN_SERVER or
+// $GRAIN_CONTEXT -- is pkg/cli's, and GRAIN_SANDBOX_CLI=0 turns the
+// sandbox CLI off whatever the command.
+func TestSandboxCLIDisambiguatesExplicitServerAndContext(t *testing.T) {
+	const creds = "http://x:t@127.0.0.1:9728\n"
+	for _, tc := range []struct {
+		name string
+		vars map[string]string
+		args []string
+	}{
+		{"-server", nil, []string{"ls", "-server", "http://d:1", "ci://a/b"}},
+		{"--server=", nil, []string{"ls", "--server=http://d:1", "ci://a/b"}},
+		{"-context", nil, []string{"-context", "team", "ls", "ci://a/b"}},
+		{"--context after the verb", nil, []string{"ci", "list", "--context", "team"}},
+		{"$GRAIN_SERVER", map[string]string{"GRAIN_SERVER": "http://d:1"}, []string{"ls", "ci://a/b"}},
+		{"$GRAIN_CONTEXT", map[string]string{"GRAIN_CONTEXT": "team"}, []string{"ls", "ci://a/b"}},
+		{"GRAIN_SANDBOX_CLI=0", map[string]string{"GRAIN_SANDBOX_CLI": "0"}, []string{"ls", "ci://a/b"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errOut strings.Builder
+			if code, handled := maybeRunSandboxCLI(tc.args, fakeSandboxEnv(tc.vars, creds), &out, &errOut); handled {
+				t.Fatalf("sandbox CLI answered %q (exit %d, %s); pkg/cli should have", tc.args, code, errOut.String())
+			}
+			if _, handled := unknownCommand(append([]string{"frobnicate"}, tc.args...), fakeSandboxEnv(tc.vars, creds), &errOut); handled {
+				t.Fatalf("sandbox CLI's help answered an unknown command naming a daemon (%q)", tc.args)
+			}
+		})
+	}
+	// Nothing naming a daemon, and a "--server" after "--" is an
+	// argument: the sandbox CLI still answers its own unknown command.
+	var errOut strings.Builder
+	if _, handled := unknownCommand([]string{"frobnicate", "--", "--server"}, fakeSandboxEnv(nil, creds), &errOut); !handled {
+		t.Fatal("sandbox CLI should still answer an unknown command that names no daemon")
 	}
 }

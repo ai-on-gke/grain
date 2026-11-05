@@ -1,0 +1,66 @@
+# grain's schedules, in the format a repository writes one in
+# (.grain/schedules/<name>.yml, docs/declarations.md), with the keys a
+# repository is not allowed to write as well. Edit it in a pull request:
+# a merged change is live on the next tick.
+
+# `id` is the identity and is grain's to allocate -- it is what history
+# and the other settings refer this schedule by, so changing one is a
+# delete and a create rather than a rename. Everything else is yours.
+schedules:
+  - id: sch-daily
+    title: Daily triage
+    body: triage the inbox
+    template: null
+    suite: null
+    daily:
+      at: "03:00"
+    overlap: skip
+    timezone: ""
+    enabled: true
+    base: main
+    review: ""
+    auto-approve-proposals: false
+    model: ""
+    auto-merge: false
+    network: ""
+    nothing-needed: ""
+    target: acme/widgets
+    grants:
+      - capability: db-read
+        via: schedule
+        folder: null
+      - capability: dispatch-control
+        via: schedule
+        folder: null
+      - capability: test-quarantine
+        via: schedule
+        folder: null
+    next-run-at: "2026-11-02T03:00:00Z"
+    last-run-at: null
+    created-at: "2026-10-31T10:00:00Z"
+  - id: sch-tpl
+    title: Nightly via template
+    body: ""
+    template: tpl-nightly
+    suite: null
+    recurrence:
+      recurrence-kind: every_n_hours
+      every-n-hours: 6
+      every-n-minutes: null
+      time-of-day-minutes: null
+      weekday: null
+      day-of-month: null
+    overlap: skip
+    timezone: ""
+    enabled: false
+    base: main
+    review: ""
+    auto-approve-proposals: false
+    model: ""
+    auto-merge: false
+    network: ""
+    nothing-needed: ""
+    target: acme/widgets
+    next-run-at: "2026-11-01T12:00:00Z"
+    last-run-at: null
+    created-at: "2026-10-31T10:00:00Z"

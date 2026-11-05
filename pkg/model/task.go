@@ -56,12 +56,13 @@ const (
 	PrincipalAutomation PrincipalKind = "automation" // the controller loop
 	PrincipalAgent      PrincipalKind = "agent"      // one dispatched run
 	PrincipalHuman      PrincipalKind = "human"      // a person
+	PrincipalService    PrincipalKind = "service"    // a service account
 )
 
-// Valid reports whether k is one of the three kinds above.
+// Valid reports whether k is one of the known principal kinds above.
 func (k PrincipalKind) Valid() bool {
 	switch k {
-	case PrincipalAutomation, PrincipalAgent, PrincipalHuman:
+	case PrincipalAutomation, PrincipalAgent, PrincipalHuman, PrincipalService:
 		return true
 	}
 	return false
@@ -71,9 +72,64 @@ func (k PrincipalKind) Valid() bool {
 // for an agent, the deployment name for automation — opaque here on
 // purpose, since this model records which principal acted and never
 // resolves one to an account.
+//
+// Source is how ID was established (operator-attribution spec §1.1): the
+// verifier that vouched for a person, the access code an operator
+// presented, the session or sandbox an agent called from. It is "" on
+// rows written before the column existed, which render as §1.2.2 says.
 type Principal struct {
-	Kind PrincipalKind
-	ID   string
+	Kind   PrincipalKind
+	ID     string
+	Source AuthSource
+}
+
+// Same reports whether p and o name the same actor, whatever each says
+// about how it was established: a row written before Source existed
+// names the same operator as one written after.
+func (p Principal) Same(o Principal) bool {
+	return p.Kind == o.Kind && p.ID == o.ID
+}
+
+// AuthSource is how a Principal's ID was established
+// (operator-attribution spec §1.1.3). A registered IdentityVerifier's
+// Name() is a valid source too.
+type AuthSource string
+
+const (
+	SourceIAP           AuthSource = "iap"            // a verified IAP assertion
+	SourceToken         AuthSource = "token"          // a per-user API token (future)
+	SourceAccessCode    AuthSource = "access-code"    // the shared access code or its session
+	SourceLoopback      AuthSource = "loopback"       // break-glass over loopback
+	SourceInProcess     AuthSource = "in-process"     // a caller with no RemoteAddr
+	SourceSession       AuthSource = "session"        // a console session's grants
+	SourceSandbox       AuthSource = "sandbox"        // a dispatched run's API grants
+	SourceExternalToken AuthSource = "external-token" // an external agent token (gma_…)
+	SourceInternal      AuthSource = "internal"       // grain itself
+)
+
+// unverifiedSources are the sources that establish nobody in particular:
+// the operator fallback and the agent and automation sources.
+var unverifiedSources = map[AuthSource]bool{
+	"":                  true,
+	SourceAccessCode:    true,
+	SourceLoopback:      true,
+	SourceInProcess:     true,
+	SourceSession:       true,
+	SourceSandbox:       true,
+	SourceExternalToken: true,
+	SourceInternal:      true,
+}
+
+// Verified reports whether p is a person or service account a verifier
+// vouched for (§1.1.4): only one of those may be shown as a person or
+// written into a Requested-by: / Approved-by: trailer. Any source that is
+// not one of the fallback, agent or automation sources is a verifier's
+// name, iap and token included.
+func (p Principal) Verified() bool {
+	if p.Kind != PrincipalHuman && p.Kind != PrincipalService {
+		return false
+	}
+	return !unverifiedSources[p.Source]
 }
 
 // Attribution is who performed an action and whose output they relayed.
@@ -170,6 +226,11 @@ type RepoRef struct {
 	// hosts existed, so their RepoRefs, and every form they are written
 	// down in, are unchanged.
 	Host string
+}
+
+// IsZero reports whether r names no repository.
+func (r RepoRef) IsZero() bool {
+	return r.Owner == "" && r.Name == "" && r.Host == ""
 }
 
 // String is r's one written form: owner/name, or host/owner/name off the
@@ -549,7 +610,7 @@ type Grant struct {
 //
 // A capability reference is covered only by a reference with the same
 // canonical capability and deep-equal normalized args
-// (UncoveredCapabilityRefs, docs/capabilities-spec.md §2.3.4).
+// (UncoveredCapabilityRefs, design/spec/capabilities/capabilities.spec.md §2.3.4).
 func GrantsSubsetOf(grants, allowed []Grant) bool {
 	have := make(map[string]bool, len(allowed))
 	for _, g := range allowed {
@@ -809,11 +870,6 @@ func GitCredentialName(capability string) (name string, ok bool) {
 	return name, ok && name != ""
 }
 
-// GitPushAnyRefCapability is the admin-only grant that lets a task's run
-// push any ref of the repositories it may write, not only its own task
-// branch (pkg/capability/gitpushanyref, Store.GitPushAnyRef).
-const GitPushAnyRefCapability = "git-push-any-ref"
-
 // ReleaseGateReadCapability is the CI capability a release workflow's job
 // reads CI runs, persistent sandboxes and tasks through, and files its
 // release-notes task with: an alias, in a CI job's `capabilities:`, for
@@ -837,33 +893,9 @@ const SelfDebugCapability = "self-debug"
 // names it in its reads or a repo-read: grant like any other.
 func GrainSourceRepo() RepoRef { return RepoRef{Owner: "ai-on-gke", Name: "grain"} }
 
-// RepoReadCapabilityPrefix marks a capability id as a cross-repository
-// read grant for CI.
-const RepoReadCapabilityPrefix = "repo-read:"
-
-// RepoReadCapability is the capability id standing for "grant CI read
-// access to repo".
-func RepoReadCapability(repo RepoRef) string {
-	return RepoReadCapabilityPrefix + repo.String()
-}
-
-// RepoReadTarget returns the repository a RepoReadCapability id names,
-// and false for any other capability id.
-func RepoReadTarget(capability string) (RepoRef, bool) {
-	name, ok := strings.CutPrefix(capability, RepoReadCapabilityPrefix)
-	if !ok || name == "" {
-		return RepoRef{}, false
-	}
-	repo, err := ParseRepo(name)
-	if err != nil {
-		return RepoRef{}, false
-	}
-	return repo, true
-}
-
 // CapabilityRepos returns the repositories a grant of capability lets a
 // run reach beyond its task's own Target, Writes and Reads: the
-// repository a RepoReadCapability or RepoWriteCapability names. Nil for
+// repository a repository access grant (IsRepoAccessGrant) names. Nil for
 // any other capability -- SelfDebugCapability included, whose grain-src/
 // is the deployment's baked-in copy rather than a clone, so a local
 // policy never refuses a self-debug task over bwsalmon/grain. Anything
@@ -877,30 +909,6 @@ func CapabilityRepos(capability string) []RepoRef {
 		return []RepoRef{repo}
 	}
 	return nil
-}
-
-// RepoWriteCapabilityPrefix marks a capability id as a cross-repository
-// write grant for CI.
-const RepoWriteCapabilityPrefix = "repo-write:"
-
-// RepoWriteCapability is the capability id standing for "grant CI write
-// access to repo".
-func RepoWriteCapability(repo RepoRef) string {
-	return RepoWriteCapabilityPrefix + repo.String()
-}
-
-// RepoWriteTarget returns the repository a RepoWriteCapability id names,
-// and false for any other capability id.
-func RepoWriteTarget(capability string) (RepoRef, bool) {
-	name, ok := strings.CutPrefix(capability, RepoWriteCapabilityPrefix)
-	if !ok || name == "" {
-		return RepoRef{}, false
-	}
-	repo, err := ParseRepo(name)
-	if err != nil {
-		return RepoRef{}, false
-	}
-	return repo, true
 }
 
 // GitCredentialGrant is the Grant attaching a GitCredentialCapability to
@@ -1185,7 +1193,7 @@ const (
 	// that ended on another one (-> that task's ID). One writer: a
 	// standing console session filed again after its own task was
 	// closed, which is how a chat that never ends gets a fresh thread
-	// (orchestrator.fileConsoleSession, docs/implementation-notes.md's
+	// (orchestrator.fileConsoleSession, grain's former implementation notes'
 	// "A chat that never ends is not split for you").
 	//
 	// LinkProposedBy's shape -- provenance, the timeline, and nothing
@@ -1237,6 +1245,21 @@ const (
 	// itself (unlike LinkFixes). Provenance and PR-tool scoping only; never
 	// blocks dispatch and never places a task in awaiting_submit.
 	LinkExternalPR LinkKind = "external-pr"
+	// LinkDerivedFrom records the pull request ("owner/repo#number") a
+	// task's work was derived from -- the provenance an external
+	// orchestrator filters on with `grain list -filter
+	// derived_from:eq:<owner/name#pr>` (external-cli spec #XC-18).
+	// Provenance only: it blocks nothing.
+	LinkDerivedFrom LinkKind = "derived-from"
+	// LinkDesign records a committed-context specification folder or file
+	// (`[owner/name:]path[@rev]`, `grain create -design`, #XC-19) the task
+	// implements, either in its target repository or in a -read context
+	// repository, inherited by child tasks and reviews. Provenance only.
+	LinkDesign LinkKind = "design"
+	// LinkContextManifest records a parsed context.yml manifest discovered in
+	// one of a task's LinkDesign directories (model.ContextManifest). Display
+	// and prompt metadata only: it never blocks dispatch or enforces gates.
+	LinkContextManifest LinkKind = "context-manifest"
 	// LinkTakeover marks a shepherd task filed by the GitHub bot's
 	// "@<slug> take over" command (-> the pull request it took over,
 	// "owner/repo#number"). The task's own pull request is its LinkFixes
@@ -1510,10 +1533,16 @@ func NeverEndingDependencyNote(refs []string) string {
 		"`"+strings.Join(refs, "`, `")+"`")
 }
 
+// DefaultTaskPriority is the priority assigned to a task when none is specified
+// (or when Priority is 0). Higher numbers mean higher priority.
+const DefaultTaskPriority = 5
+
 // Task is the declared half: what a human, or grain proposing, asked for.
 // No State field and no StateSince — see StateOf.
 type Task struct {
 	ID string
+	// Priority is the numeric task priority (DefaultTaskPriority = 5; higher = higher priority).
+	Priority int `json:"priority"`
 	// Branch is the resolved branch this task owns. It is fixed when the
 	// task is first written so changing the deployment's naming template
 	// cannot strand work already pushed under an earlier name. Empty is a
@@ -1689,7 +1718,7 @@ type Task struct {
 	NoPort bool
 	// ResumeOnDeadline makes a run of this task that runs out of wall
 	// clock a SuspendDeadline suspension rather than a failure, at most
-	// MaxDeadlineResumes times in a row (docs/design/durable-tasks.md#DT-2):
+	// MaxDeadlineResumes times in a row (design/design/durable-tasks.design.md#DT-2):
 	// the cheap "not done, keep going" for work that is merely large,
 	// which is not the durable grant.
 	ResumeOnDeadline bool
@@ -1717,6 +1746,17 @@ type Task struct {
 	// presentation of this flag -- what a run does, and how, is
 	// unchanged by it.
 	Interactive bool
+	// KeepRunning restarts this task immediately when its run exits
+	// without asking a question or requesting a secret, re-queueing it
+	// instead of completing, closing on nothing_needed, or resting on a
+	// goal.
+	KeepRunning bool
+	// FiledVia is the sanitized X-Grain-Client label of the tool that
+	// filed this task ("jetski/1.4 session=abc"), "" when none was sent
+	// (SanitizeGrainClient). A label for provenance only: it is the
+	// caller's own word about itself and grants nothing
+	// (design/spec/external-cli/external-cli.spec.md#XC-15).
+	FiledVia string
 	// SandboxCPUs, SandboxMemoryMB and SandboxDiskGB
 	// (bwsalmon/agents#534, grain/task-41) override
 	// Config.SandboxCPUs/SandboxMemoryMB/SandboxDiskGB for this task's
@@ -1993,6 +2033,24 @@ type Observation struct {
 	// waiting to hear from would be an offer to write a value nothing
 	// asked for.
 	PendingSecret string
+	// PendingConfigChange is the grain/config change a parked session
+	// proposed with propose_config_change, waiting for a person to
+	// approve or reject it in the chat (PendingConfigChange's own doc).
+	// Like PendingSecret it sits beside PendingQuestionCommentID, which
+	// is what parks the task; unlike it, a reply in words leaves it
+	// offered, since the branch it pins is still there to approve.
+	// Cleared by the approval or the rejection.
+	PendingConfigChange *PendingConfigChange
+	// PendingAccess is the access a parked run asked a person for with
+	// request_access (PendingAccessRequest's own doc). Like PendingSecret
+	// it sits beside PendingQuestionCommentID, which is what parks the
+	// task, and like it it is cleared when the task un-parks: by the
+	// person's grant or denial, or by a reply in words instead.
+	PendingAccess *PendingAccessRequest
+	// AccessDecisions are the answers people gave this task's access
+	// requests, latest last, so a request repeating one already denied
+	// shows the denial on its card.
+	AccessDecisions []AccessDecision
 	// MergeQueueBlockedAt is set once the merge queue has stopped driving
 	// this task, for any of the three reasons it ever does: the repair
 	// run it asked for finished and the PR is still conflicted or
@@ -2568,7 +2626,27 @@ type Run struct {
 	// *finished* run it is the only record of how far setup got before it
 	// broke (ui.Attempt.SetupNote, which is exactly that pairing).
 	AgentStartedAt *time.Time
-	Leases         []Lease
+	// QueuedAt, SandboxAcquiredAt, SandboxPreparedAt, and FirstTurnAt record
+	// the per-phase startup breakdown of this attempt (task_run_startup):
+	//   - QueuedAt -> StartedAt: queued -> dispatched
+	//   - StartedAt -> SandboxAcquiredAt: sandbox acquire
+	//   - SandboxAcquiredAt -> SandboxPreparedAt (or AgentStartedAt): prepare sandbox
+	//   - SandboxPreparedAt (or AgentStartedAt) -> FirstTurnAt: agent launch -> first turn
+	QueuedAt          *time.Time
+	SandboxAcquiredAt *time.Time
+	SandboxPreparedAt *time.Time
+	FirstTurnAt       *time.Time
+	Leases            []Lease
+}
+
+// RunStartup holds the per-phase startup timestamps for one attempt
+// (task_run_startup).
+type RunStartup struct {
+	RunID             string
+	QueuedAt          *time.Time
+	SandboxAcquiredAt *time.Time
+	SandboxPreparedAt *time.Time
+	FirstTurnAt       *time.Time
 }
 
 // RunActivity is Run.Activity and Run.ActivityAt on their own -- what a
@@ -2658,6 +2736,9 @@ type Comment struct {
 	// column existed, which a reader derives one for instead
 	// (DeriveQuestionSummary).
 	Summary string
+	// FiledVia is the sanitized X-Grain-Client label of the tool the
+	// comment was posted from, as Task.FiledVia is the task's.
+	FiledVia string
 }
 
 // Attachment is one file carried alongside a task -- bwsalmon/agents#522's
@@ -2736,10 +2817,17 @@ func FormatBranchName(template, instanceID, deploymentID, taskID string) (string
 // {slug} may only end the template, after {id} and a hyphen
 // (checkSlugPlacement), so the name is unique whatever the title says. A
 // title with nothing usable in it expands {slug} to nothing, taking the
-// hyphen in front of it along so the name does not end in a stray one.
+// hyphen in front of it along so the name does not end in a stray one;
+// when a long custom template leaves fewer than MaxBranchSlugLen bytes
+// below MaxBranchNameLen, {slug} is trimmed (or omitted) to fit so adding
+// the title never pushes a valid branch past its allowed length.
 func FormatTaskBranchName(template, instanceID, deploymentID, taskID, title string) (string, error) {
 	if template == "" {
-		return BranchName(taskID), nil
+		name := BranchName(taskID)
+		if !ValidBranchName(name) {
+			return "", fmt.Errorf("branch template produces invalid branch name %q", name)
+		}
+		return name, nil
 	}
 	if !strings.Contains(template, "{id}") {
 		return "", fmt.Errorf("branch template must contain {id}")
@@ -2747,12 +2835,28 @@ func FormatTaskBranchName(template, instanceID, deploymentID, taskID, title stri
 	if err := checkSlugPlacement(template); err != nil {
 		return "", err
 	}
-	template = expandSlug(template, BranchSlug(title))
-	name := strings.NewReplacer("{instance}", instanceID, "{deployment}", deploymentID, "{id}", taskID).Replace(template)
-	if strings.ContainsAny(name, "{}") {
-		return "", fmt.Errorf("branch template contains an unknown placeholder")
+	replacer := strings.NewReplacer("{instance}", instanceID, "{deployment}", deploymentID, "{id}", taskID)
+	var name string
+	if baseTpl, hasSlug := strings.CutSuffix(template, "-{slug}"); hasSlug {
+		base := replacer.Replace(baseTpl)
+		if strings.ContainsAny(base, "{}") {
+			return "", fmt.Errorf("branch template contains an unknown placeholder")
+		}
+		if slug := branchSlug(title, min(MaxBranchSlugLen, MaxBranchNameLen-len(base)-1)); slug != "" {
+			name = base + "-" + slug
+		} else {
+			name = base
+		}
+	} else {
+		name = replacer.Replace(template)
+		if strings.ContainsAny(name, "{}") {
+			return "", fmt.Errorf("branch template contains an unknown placeholder")
+		}
 	}
 	if !ValidBranchName(name) {
+		if len(name) > MaxBranchNameLen {
+			return "", fmt.Errorf("branch template produces %d-character branch name, over the %d-character limit", len(name), MaxBranchNameLen)
+		}
 		return "", fmt.Errorf("branch template produces invalid branch name %q", name)
 	}
 	return name, nil
@@ -2770,6 +2874,13 @@ const MaxBranchSlugLen = 30
 // in the header parser" is "fix-the-off-by-one-in-the". Empty when the
 // title has no ASCII letter or digit in it at all.
 func BranchSlug(title string) string {
+	return branchSlug(title, MaxBranchSlugLen)
+}
+
+func branchSlug(title string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
 	var words []string
 	var cur strings.Builder
 	flush := func() {
@@ -2792,11 +2903,11 @@ func BranchSlug(title string) string {
 		if n > 0 {
 			n++
 		}
-		if n+len(w) > MaxBranchSlugLen {
+		if n+len(w) > limit {
 			if slug.Len() == 0 {
 				// One word longer than the whole budget: keep what
 				// fits of it rather than nothing.
-				slug.WriteString(w[:MaxBranchSlugLen])
+				slug.WriteString(w[:limit])
 			}
 			break
 		}
@@ -2856,26 +2967,6 @@ func checkSlugPlacement(template string) error {
 			"(as in grain/{deployment}/task-{id}-{slug}), so a task's title can never make another deployment's branch name")
 	}
 	return nil
-}
-
-// expandSlug replaces {slug} in a branch template that checkSlugPlacement
-// accepted with slug. An empty slug takes the hyphen in front of the
-// placeholder with it, so task-{id}-{slug} for an untitled task is
-// task-{id}, not task-{id}-.
-func expandSlug(template, slug string) string {
-	const placeholder = "{slug}"
-	i := strings.Index(template, placeholder)
-	if i < 0 {
-		return template
-	}
-	if slug != "" {
-		return template[:i] + slug + template[i+len(placeholder):]
-	}
-	start := i
-	if start > 0 && template[start-1] == '-' {
-		start--
-	}
-	return template[:start] + template[i+len(placeholder):]
 }
 
 // deploymentIDDefaultLen is how much of the installation id the default

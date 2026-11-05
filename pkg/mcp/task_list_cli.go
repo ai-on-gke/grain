@@ -105,14 +105,19 @@ func ListTaskPage(tasks []TaskSummary, q TaskListQuery) TaskListPage {
 }
 
 // Lines is the page one line per task -- id, state, repo ("-" for none)
-// and title, then "(stalled)" and "blocked on <ids>" where they apply --
+// and title, then "(stopped by operator)" or "(stalled)" and "blocked on <ids>" where they apply --
 // with nothing else in it, so that a count of lines is a count of tasks.
 // What the list leaves out is Note's to say.
 func (p TaskListPage) Lines() string {
 	var b strings.Builder
 	for _, t := range p.Tasks {
 		fmt.Fprintf(&b, "%s  %s  %s  %s", t.ID, t.State, blankAsNone(t.Repo, "-"), singleLine(t.Title))
-		if taskStalled(t) {
+		if t.Priority > 0 && t.Priority != 5 {
+			fmt.Fprintf(&b, "  (priority %d)", t.Priority)
+		}
+		if t.TurnStopped {
+			b.WriteString("  (stopped by operator)")
+		} else if taskStalled(t) {
 			b.WriteString("  (stalled)")
 		}
 		if len(t.BlockedBy) > 0 {
@@ -142,26 +147,35 @@ func (p TaskListPage) Note() string {
 
 // TaskListEntry is one task as `grain task list --json` prints it.
 type TaskListEntry struct {
-	ID         string     `json:"id"`
-	State      string     `json:"state"`
-	Repo       string     `json:"repo,omitempty"`
-	Title      string     `json:"title"`
-	Kinds      []string   `json:"kinds,omitempty"`
-	BlockedBy  []string   `json:"blockedBy,omitempty"`
-	Stalled    bool       `json:"stalled,omitempty"`
-	MergeQueue string     `json:"mergeQueue,omitempty"`
-	CreatedAt  *time.Time `json:"createdAt,omitempty"`
-	ChangedAt  *time.Time `json:"changedAt,omitempty"`
+	ID        string   `json:"id"`
+	State     string   `json:"state"`
+	Repo      string   `json:"repo,omitempty"`
+	Title     string   `json:"title"`
+	Priority  int      `json:"priority,omitempty"`
+	Kinds     []string `json:"kinds,omitempty"`
+	BlockedBy []string `json:"blockedBy,omitempty"`
+	Stalled   bool     `json:"stalled,omitempty"`
+	// StoppedByOperator is TaskSummary.TurnStopped.
+	StoppedByOperator bool       `json:"stoppedByOperator,omitempty"`
+	MergeQueue        string     `json:"mergeQueue,omitempty"`
+	CreatedAt         *time.Time `json:"createdAt,omitempty"`
+	ChangedAt         *time.Time `json:"changedAt,omitempty"`
 }
 
 // Entries is the page as TaskListEntry values, never nil.
 func (p TaskListPage) Entries() []TaskListEntry {
 	out := make([]TaskListEntry, 0, len(p.Tasks))
 	for _, t := range p.Tasks {
+		priority := t.Priority
+		if priority <= 0 {
+			priority = 5
+		}
 		e := TaskListEntry{
 			ID: t.ID, State: t.State, Repo: t.Repo, Title: t.Title,
-			Kinds: t.Kinds, BlockedBy: t.BlockedBy, Stalled: taskStalled(t),
-			CreatedAt: t.CreatedAt, ChangedAt: t.ChangedAt,
+			Priority: priority,
+			Kinds:    t.Kinds, BlockedBy: t.BlockedBy, Stalled: taskStalled(t),
+			StoppedByOperator: t.TurnStopped,
+			CreatedAt:         t.CreatedAt, ChangedAt: t.ChangedAt,
 		}
 		if !strings.EqualFold(t.State, "closed") {
 			e.MergeQueue = t.MergeQueue.State

@@ -82,6 +82,13 @@ type Ledger struct {
 	// shared budget -- so the reconcile loop runs a dispatch cycle
 	// immediately rather than waiting out its poll interval.
 	Wake func()
+	// VMMHeadroom is what each VM sandbox's cgroup is allowed beyond its
+	// guest's RAM (DefaultVMMHeadroom on a granule backend, zero
+	// elsewhere). Charges are filed at the shape asked for and every live
+	// sum adds it per entry, so what admission is held against is the
+	// memory a VM can really take rather than its guest's alone. Set once,
+	// before the ledger is shared; Budget.VMMHeadroom is its other half.
+	VMMHeadroom VMMHeadroom
 
 	mu             sync.Mutex
 	held           map[ledgerKey]ledgerEntry
@@ -135,7 +142,7 @@ func (l *Ledger) Live() Commitment {
 func (l *Ledger) live() Commitment {
 	var out Commitment
 	for _, e := range l.held {
-		out = out.Plus(e.Shape)
+		out = out.Plus(l.VMMHeadroom.Charge(e.Shape))
 	}
 	return out
 }
@@ -148,7 +155,7 @@ func (l *Ledger) nonIdleLive() Commitment {
 		if e.Idle {
 			continue
 		}
-		out = out.Plus(e.Shape)
+		out = out.Plus(l.VMMHeadroom.Charge(e.Shape))
 	}
 	return out
 }
@@ -163,7 +170,7 @@ func (l *Ledger) liveWithout(pool, id string) Commitment {
 		if k == skip {
 			continue
 		}
-		out = out.Plus(e.Shape)
+		out = out.Plus(l.VMMHeadroom.Charge(e.Shape))
 	}
 	return out
 }
@@ -176,7 +183,7 @@ func (l *Ledger) nonIdleLiveWithout(pool, id string) Commitment {
 		if k == skip || e.Idle {
 			continue
 		}
-		out = out.Plus(e.Shape)
+		out = out.Plus(l.VMMHeadroom.Charge(e.Shape))
 	}
 	return out
 }
@@ -193,7 +200,7 @@ func (l *Ledger) LiveIn(pool string) Commitment {
 	var out Commitment
 	for k, e := range l.held {
 		if k.Pool == pool {
-			out = out.Plus(e.Shape)
+			out = out.Plus(l.VMMHeadroom.Charge(e.Shape))
 		}
 	}
 	return out
@@ -319,6 +326,46 @@ func (l *Ledger) VerdictException(budget Budget, want Commitment) BudgetVerdict 
 		}
 	}
 	return v
+}
+
+// VerdictPriority is Verdict for a run with priority dispatch
+// (Budget.AdmitsPriority): refused only by the disk floor or the
+// cluster, never by the budget's ceilings or what CI holds.
+func (l *Ledger) VerdictPriority(budget Budget, want Commitment) BudgetVerdict {
+	if l == nil {
+		return budget.AdmitsPriority(Commitment{}, want)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return budget.AdmitsPriority(l.live(), want)
+}
+
+// AdmitPriority is Admit for a run with priority dispatch
+// (Budget.AdmitsPriority). Idle session sandboxes are still evicted
+// first when that makes room inside the budget, so a session's own warm
+// neighbours are what it displaces before it over-commits the host.
+func (l *Ledger) AdmitPriority(budget Budget, pool, id string, want Commitment) (BudgetVerdict, func()) {
+	if l == nil {
+		return budget.AdmitsPriority(Commitment{}, want), func() {}
+	}
+	l.mu.Lock()
+	_, evicts := l.evictIdleForLocked(pool, id, func(committed Commitment) BudgetVerdict {
+		return budget.Admits(committed, want)
+	})
+	verdict := budget.AdmitsPriority(l.liveWithout(pool, id), want)
+	if !verdict.OK {
+		l.mu.Unlock()
+		for _, evict := range evicts {
+			evict()
+		}
+		return verdict, nil
+	}
+	l.charge(pool, id, want)
+	l.mu.Unlock()
+	for _, evict := range evicts {
+		evict()
+	}
+	return verdict, l.releaser(pool, id)
 }
 
 // AdmitsException is VerdictException's boolean.
@@ -855,7 +902,7 @@ func (l *Ledger) Describe() string {
 			sums[k.Pool] = s
 		}
 		s.n++
-		s.shape = s.shape.Plus(e.Shape)
+		s.shape = s.shape.Plus(l.VMMHeadroom.Charge(e.Shape))
 	}
 	ordered := make([]*poolSum, 0, len(sums))
 	for _, s := range sums {

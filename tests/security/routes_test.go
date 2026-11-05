@@ -45,7 +45,7 @@ type authLevel int
 
 const (
 	// public answers anybody: the frontend, the access-code sign-in,
-	// and the executor bootstrap that authenticates in its own protocol.
+	// and a grain hostd dialing in, which authenticates in its own protocol.
 	public authLevel = iota
 	// trusted answers only a caller the daemon trusts as itself -- one
 	// presenting its access code (a bearer token, or the access session
@@ -90,10 +90,19 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/auth/logout":               public,
 	"GET /api/auth/user":                 public,
 	"GET /api/auth/status":               public,
+	"GET /api/auth/whoami":               public,
+	"GET /api/whoami":                    trusted,
 
 	// The long poll that tells a signed-in page the daemon is going down
 	// for a restart before it stops answering (grain/task-3543).
 	"GET /api/restart-watch": trusted,
+	// grain's namespace (pkg/ui/api_fs.go): grain fs and external agents.
+	"GET /api/fs/ci/{path...}":     trusted,
+	"GET /api/fs/task/{path...}":   trusted,
+	"GET /api/fs/deploy/{path...}": trusted,
+	"GET /api/fs/config/{path...}": trusted,
+	"GET /api/fs/memory/{path...}": trusted,
+	"GET /api/fs/src/{path...}":    trusted,
 
 	"GET /api/settings":                         trusted,
 	"PUT /api/settings":                         trusted,
@@ -107,6 +116,9 @@ var routeAuthorization = map[string]authLevel{
 	// Tasks.
 	"GET /api/tasks":                                                trusted,
 	"GET /api/tasks/states":                                         trusted,
+	"GET /api/tasks/wait":                                           trusted,
+	"GET /api/inbox":                                                trusted,
+	"GET /api/events":                                               trusted,
 	"GET /api/states":                                               trusted,
 	"POST /api/tasks":                                               trusted,
 	"POST /api/tasks/from-template":                                 trusted,
@@ -121,13 +133,21 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/tasks/{id}/undefer":                                  trusted,
 	"POST /api/tasks/{id}/submit":                                   trusted,
 	"POST /api/tasks/{id}/comments":                                 trusted,
+	"POST /api/tasks/{id}/reply":                                    trusted,
 	"PUT /api/tasks/{id}/secret":                                    trusted,
+	"POST /api/tasks/{id}/config-change":                            trusted,
+	"POST /api/tasks/{id}/config-change/approve":                    trusted,
+	"POST /api/tasks/{id}/config-change/reject":                     trusted,
+	"POST /api/tasks/{id}/access-request/check":                     trusted,
+	"POST /api/tasks/{id}/access-request/grant":                     trusted,
+	"POST /api/tasks/{id}/access-request/deny":                      trusted,
 	"GET /api/tasks/{id}/attachments/{attachmentId}":                trusted,
 	"POST /api/tasks/{id}/close":                                    trusted,
 	"POST /api/tasks/{id}/stop":                                     trusted,
 	"POST /api/tasks/{id}/pause":                                    trusted,
 	"POST /api/tasks/{id}/resume":                                   trusted,
 	"PUT /api/tasks/{id}/goal":                                      trusted,
+	"PUT /api/tasks/{id}/hostd":                                     trusted,
 	"DELETE /api/tasks/{id}/goal":                                   trusted,
 	"POST /api/tasks/{id}/reopen":                                   trusted,
 	"POST /api/tasks/{id}/retry":                                    trusted,
@@ -135,6 +155,9 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/tasks/{id}/force-merge":                              trusted,
 	"POST /api/tasks/{id}/run-now":                                  trusted,
 	"POST /api/tasks/{id}/pull-request":                             trusted,
+	"POST /api/pull-requests/adopt":                                 trusted,
+	"POST /api/pull-requests/review":                                trusted,
+	"GET /api/pull-requests/status":                                 trusted,
 	"POST /api/tasks/{id}/sandbox/recreate":                         trusted,
 	"POST /api/tasks/{id}/activity":                                 trusted,
 	"PUT /api/tasks/{id}/session-title":                             trusted,
@@ -236,6 +259,8 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/repos/{owner}/{name}/releases/{release}/candidates/promote": trusted,
 	"POST /api/repos/{owner}/{name}/pending-releases/{version}/approve":    trusted,
 	"POST /api/repos/{owner}/{name}/pending-releases/{version}/reject":     trusted,
+	"POST /api/releases/{version}/rollback":                                trusted,
+	"GET /api/release-approval-key":                                        trusted,
 	"GET /api/repos/{owner}/{name}/branches":                               trusted,
 	"POST /api/repos/{owner}/{name}/branches":                              trusted,
 	"GET /api/repos/{owner}/{name}/github-branches":                        trusted,
@@ -292,27 +317,33 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/deployment/broadcast":   trusted,
 	"GET /api/deployment/secret-audit": trusted,
 	"GET /api/deployment/audit-logs":   trusted,
+	"GET /api/deployment/config-audit": trusted,
 
 	"GET /api/agent-models": trusted,
 
-	// Deployment-wide credentials: executor tokens, model keys, GitHub
+	// Deployment-wide credentials: external agent tokens, model keys, GitHub
 	// tokens, secrets.
-	"GET /api/executors/tokens":                    trusted,
-	"POST /api/executors/tokens":                   trusted,
-	"POST /api/executors/tokens/{id}/revoke":       trusted,
-	"DELETE /api/executors/tokens/{id}":            trusted,
-	"DELETE /api/executors/tokens/{id}/revoke":     trusted,
 	"GET /api/external-agents/tokens":              trusted,
 	"POST /api/external-agents/tokens":             trusted,
+	"GET /api/hostds":                              trusted,
+	"POST /api/hostds":                             trusted,
+	"PATCH /api/hostds/{name}":                     trusted,
+	"POST /api/hostds/{name}/rotate":               trusted,
+	"POST /api/hostds/{name}/revoke":               trusted,
+	"GET /api/access/principals":                   trusted,
+	"POST /api/access/principals":                  trusted,
+	"PATCH /api/access/principals/{entry}":         trusted,
+	"DELETE /api/access/principals/{entry}":        trusted,
 	"POST /api/external-agents/tokens/{id}/rotate": trusted,
 	"POST /api/external-agents/tokens/{id}/revoke": trusted,
 	"DELETE /api/external-agents/tokens/{id}":      trusted,
 	"POST /api/external-agents/tokens/revoke-all":  trusted,
-	"POST /mcp":                              trusted,
-	"GET /api/agent-keys":                    trusted,
-	"PUT /api/agent-keys/{framework}":        trusted,
-	"DELETE /api/agent-keys/{framework}":     trusted,
-	"POST /api/agent-keys/{framework}/check": trusted,
+	"POST /api/mcp":                                trusted,
+	"POST /mcp":                                    trusted,
+	"GET /api/agent-keys":                          trusted,
+	"PUT /api/agent-keys/{framework}":              trusted,
+	"DELETE /api/agent-keys/{framework}":           trusted,
+	"POST /api/agent-keys/{framework}/check":       trusted,
 	// A connection's key (grain/task-1601).
 	"PUT /api/agent-backends/{id}/credential":    trusted,
 	"DELETE /api/agent-backends/{id}/credential": trusted,
@@ -380,6 +411,7 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/upgrade":                   trusted,
 	"POST /api/upgrade":                  trusted,
 	"DELETE /api/upgrade/scheduled":      trusted,
+	"PUT /api/upgrade/source":            trusted,
 	"GET /api/upgrade/targets":           trusted,
 	"GET /api/upgrade/release-notes":     trusted,
 	"GET /api/database":                  trusted,
@@ -418,10 +450,12 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/ci/faults":                           trusted,
 	"GET /api/ci/runs/{id}":                        trusted,
 	"DELETE /api/ci/runs/{id}":                     trusted,
+	"GET /api/ci/runs/{id}/log":                    trusted,
 	"GET /api/ci/runs/{id}/artifacts":              trusted,
 	"GET /api/ci/runs/{id}/artifacts/{job}/{name}": trusted,
 	"GET /api/ci/cache":                            trusted,
 	"DELETE /api/ci/cache":                         trusted,
+	"POST /api/tests/quarantine":                   trusted,
 	"GET /api/merge-batches":                       trusted,
 	"GET /api/pipeline/changes":                    trusted,
 	"GET /api/base-branch-gates":                   trusted,
@@ -433,22 +467,12 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/pipeline-pause":                     trusted,
 	"DELETE /api/pipeline-pause":                   trusted,
 
-	// Remote executors: the list is anybody's; the bootstrap script and
-	// binaries are fetched by a machine with nothing but curl, and the
-	// connection authenticates with an executor token in its own
-	// handshake, after the upgrade -- not with a principal.
-	"GET /api/executors":                trusted,
-	"GET /api/model-servers/install.sh": public,
-	"GET /api/executors/install.sh":     public,
-	"GET /install-executor.sh":          public,
-	"GET /api/executors/bin/{binary}":   public,
-	"GET /install/{os}/{arch}":          public,
-	"GET /_grain/executor":              public,
-	"GET /api/executors/connect":        public,
-	"GET /api/executors/stream":         public,
 	// A grain hostd dialing in authenticates with the hostd token in
 	// its upgrade (hostd.Remote.ServeHTTP), not with a principal.
 	"GET /api/hostd/connect": public,
+	// The script that installs one: grain's own, with no token in it
+	// (TestHostdInstallScriptIsPublicAndHoldsNoSecret).
+	"GET /api/hostd/install.sh": public,
 }
 
 // The people the fixtures name. On the single-tenant daemon

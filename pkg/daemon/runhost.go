@@ -59,9 +59,25 @@ const RunHostImageSelf = "self"
 // Granule sandboxes are reached through the exec key NewRunHost mounts,
 // and Kubernetes ones through the API, so neither is refused.
 //
-// A Settings choice of the container backend is not refused here: it is
-// not offered while run hosts are on (sandboxBackendAvailable), and a
-// stored one falls back to the flags' backend with a note (LoadConfig).
+// It refuses -host-sandboxes with it too. A run host's `grain mcpserver
+// -sandbox-root <dir>` finds no such directory, since no run host is
+// given the sandbox directory (docs/test-runs/2026-11-02-session-lifecycle-soak.md,
+// finding F3). Mounting each run's own directory would not fix that
+// safely: a host sandbox's run_command runs wherever its mcpserver does,
+// which in a run host is the run host itself -- beside the shared
+// credential directory every run host has read-write, and the spool and
+// staging roots holding every other run's spool and home. On the daemon's
+// own host, bubblewrap hides the data directory those live under
+// (hostSandboxHiddenPaths), and the deployment image has no bubblewrap.
+// So the agent's commands would reach every other run's credentials.
+// -allow-unisolated-host-sandboxes does not lift this: it says who may
+// run commands on this host, not that one run may tamper with another's
+// agent.
+//
+// A Settings choice of the container or host backend is not refused
+// here: neither is offered while run hosts are on
+// (sandboxBackendAvailability), and a stored one falls back to the
+// flags' backend with a note (LoadConfig).
 func CheckRunHostBackend(cfg Config) error {
 	if cfg.RunHostImage != "" && cfg.ContainerSandboxes {
 		return errors.New("-run-host-image cannot be used with -container-sandboxes: a run host's mcpserver " +
@@ -69,11 +85,18 @@ func CheckRunHostBackend(cfg Config) error {
 			"sandbox tool would fail -- drop -run-host-image to run agents as children of the daemon, or use " +
 			"-granule-sandboxes or -k8s-sandboxes, whose sandboxes a run host can reach")
 	}
+	if cfg.RunHostImage != "" && cfg.HostSandboxes {
+		return errors.New("-run-host-image cannot be used with -host-sandboxes: a run host is not given the " +
+			"sandbox directory, so its mcpserver has no sandbox to work in, and a host sandbox's commands would " +
+			"run in the run host itself, beside the credential directory and every other run's spool and home " +
+			"-- drop -run-host-image to run agents as children of the daemon, or use -granule-sandboxes or " +
+			"-k8s-sandboxes, whose sandboxes a run host can reach")
+	}
 	return nil
 }
 
 // NewRunHost builds the runhost.Host a deployment with -run-host-image
-// drives its claude runs in (docs/non-disruptive-upgrade.md, Stage 2),
+// drives its claude runs in (design/design/non-disruptive-upgrade.design.md, Stage 2),
 // or nil when the flag is unset, which leaves every run a child of the
 // daemon under agent.LocalHost exactly as before.
 //
@@ -166,7 +189,7 @@ func NewRunHost(ctx context.Context, cfg Config, store *model.Store) (*runhost.H
 }
 
 // newKubeRunHostDriver is the run-pod driver for a daemon under
-// -k8s-sandboxes (docs/non-disruptive-upgrade.md, "The shared credential
+// -k8s-sandboxes (design/design/non-disruptive-upgrade.design.md, "The shared credential
 // directory", Kubernetes). Each -k8s-run-host-volume claim is checked
 // before any run is dispatched onto it: a gcsfuse-backed claim, a
 // ReadWriteOncePod one, or (under -k8s-run-host-rwx) one that is not

@@ -15,7 +15,6 @@
 import { useState } from "react";
 import {
   Button,
-  Checkbox,
   Chip,
   IconButton,
   ListItemText,
@@ -31,6 +30,7 @@ import SwapVertIcon from "@mui/icons-material/SwapVert";
 import {
   NONE_LABEL_FALLBACK,
   TYPE_DATE,
+  attributeById,
   attributesFor,
   valueLabel,
 } from "../taskAttributes.js";
@@ -48,9 +48,11 @@ import {
   optionsFor,
   resolveConditions,
   unknownConditions,
+  unknownValues,
 } from "../taskFilters.js";
 import { GlyphLabel } from "./ItemGlyph.jsx";
 import { ListSearchField, ListToolbar } from "./ListPrimitives.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import { identifierField } from "../identifierField.js";
 
 // NarrowingBar is the toolbar every task view narrows itself with: the
@@ -126,6 +128,13 @@ export default function NarrowingBar({
 }) {
   const attributes = ownAttributes || attributesFor(config);
   const { search, sort, filters } = narrowing;
+  // The sort keys this view has an attribute for. A key naming none --
+  // a stale or mistyped link's `?sort=bogus` -- has no row in the
+  // editor (SortRow) and no words in describeSort, so the button and
+  // the editor go by these: going by `sort` itself drew the sort button
+  // with no label at all and an editor offering "Then by…" under
+  // nothing (found in the 2026-11-01 Processes walkthrough).
+  const knownSort = sort.filter((key) => attributeById(attributes, key.attr));
   const conditions = resolveConditions(filters, attributes);
   // The conditions resolveConditions dropped, which get a chip of their
   // own saying so (taskFilters.js's unknownConditions). Not until the
@@ -200,7 +209,7 @@ export default function NarrowingBar({
           title="Choose the order this list is shown in"
           onClick={() => setEditingSort((open) => !open)}
         >
-          {sort.length > 0 ? describeSort(sort, attributes) : orderLabel}
+          {knownSort.length > 0 ? describeSort(sort, attributes) : orderLabel}
         </Button>
         {isNarrowed(narrowing, defaults) && (
           <Button
@@ -226,15 +235,23 @@ export default function NarrowingBar({
       {((!editingFilters && conditions.length > 0) || unknown.length > 0) && (
         <div className="narrowing-chips">
           {!editingFilters &&
-            conditions.map(({ attr, cond, index }) => (
-              <Chip
-                key={index}
-                size="small"
-                label={describeCondition(attr, cond, config)}
-                onClick={() => setEditingFilters(true)}
-                onDelete={() => removeCondition(index)}
-              />
-            ))}
+            conditions.map(({ attr, cond, index }) => {
+              const bad = unknownValues(attr, cond);
+              return (
+                <Chip
+                  key={index}
+                  size="small"
+                  label={describeCondition(attr, cond, config)}
+                  {...(bad.length > 0 && {
+                    color: "warning",
+                    variant: "outlined",
+                    title: `${bad.map((v) => `“${v}”`).join(", ")} ${bad.length === 1 ? "is not a value" : "are not values"} ${attr.label} has, so ${bad.length === 1 ? "it matches" : "they match"} no task`,
+                  })}
+                  onClick={() => setEditingFilters(true)}
+                  onDelete={() => removeCondition(index)}
+                />
+              );
+            })}
           {unknown.map(({ cond, index, badOp }) => (
             <Chip
               key={`unknown-${index}`}
@@ -287,11 +304,11 @@ export default function NarrowingBar({
             />
           ))}
           <AttributeMenu
-            label={sort.length > 0 ? "Then by…" : "Sort by…"}
+            label={knownSort.length > 0 ? "Then by…" : "Sort by…"}
             attributes={attributes}
             onPick={addSortKey}
           />
-          {sort.length === 0 && (
+          {knownSort.length === 0 && (
             <span className="narrowing-note">{orderNote}</span>
           )}
         </div>
@@ -357,21 +374,17 @@ function ConditionRow({
   const ops = operatorsFor(attr);
   return (
     <div className="narrowing-row">
-      <Select
-        size="small"
+      <SearchSelect
+        className="narrowing-attr"
+        fullWidth={false}
         value={attr.id}
+        options={attributes.map((a) => ({ value: a.id, label: a.label }))}
         inputProps={{ "aria-label": `Attribute for filter ${row}` }}
-        onChange={(e) => {
-          const next = attributes.find((a) => a.id === e.target.value);
+        onChange={(nextId) => {
+          const next = attributes.find((a) => a.id === nextId);
           if (next) onChange(conditionFor(next, cond));
         }}
-      >
-        {attributes.map((a) => (
-          <MenuItem key={a.id} value={a.id}>
-            {a.label}
-          </MenuItem>
-        ))}
-      </Select>
+      />
       <Select
         size="small"
         value={cond.op}
@@ -424,50 +437,53 @@ function ConditionValue({ row, attr, cond, tasks, config, onChange }) {
   const input = OPERATORS[cond.op]?.input;
   if (input === "none") return null;
   if (input === "choices") {
-    const options = optionsFor(attr, tasks, config, cond.values);
-    const glyphed = options.some((o) => o.glyph);
+    const rawOptions = optionsFor(attr, tasks, config, cond.values);
+    const glyphed = rawOptions.some((o) => o.glyph);
+    const seen = new Set(rawOptions.map((o) => o.value));
+    const fullOptions = [
+      ...rawOptions,
+      ...cond.values
+        .filter((v) => !seen.has(v))
+        .map((v) => ({
+          value: v,
+          label:
+            v === NONE
+              ? attr.noneLabel || NONE_LABEL_FALLBACK
+              : valueLabel(attr, v, config),
+          glyph: null,
+        })),
+    ];
     return (
-      <Select
-        size="small"
+      <SearchSelect
         multiple
-        displayEmpty
+        fullWidth={false}
         className="narrowing-values"
         value={cond.values}
+        placeholder="Any"
         inputProps={{ "aria-label": label }}
-        onChange={(e) => onChange(e.target.value)}
-        renderValue={(picked) =>
-          picked.length === 0
-            ? "Any"
-            : picked
-                .map((v) =>
-                  v === NONE
-                    ? attr.noneLabel || NONE_LABEL_FALLBACK
-                    : valueLabel(attr, v, config),
-                )
-                .join(", ")
+        noOptionsText={
+          rawOptions.length === 0 ? "No values to choose from" : "No matches"
         }
-      >
-        {options.length === 0 && (
-          <MenuItem disabled value="">
-            No values to choose from
-          </MenuItem>
-        )}
-        {options.map((o) => (
-          <MenuItem key={o.value} value={o.value}>
-            <Checkbox size="small" checked={cond.values.includes(o.value)} />
-            {/* The figure of the kind this value names, where it names
-                one -- a repo, a schedule, a suite (ItemGlyph.jsx,
-                grain/task-38). One glyphed option glyphs the whole menu,
-                so "No repo" holds the slot open and empty rather than
-                starting its label a figure's width to the left. */}
-            {glyphed ? (
-              <GlyphLabel kind={o.glyph || null}>{o.label}</GlyphLabel>
-            ) : (
-              <ListItemText primary={o.label} />
-            )}
-          </MenuItem>
-        ))}
-      </Select>
+        options={fullOptions.map((o) => ({
+          value: o.value,
+          label: o.label,
+          renderRow: (text) => (
+            <>
+              {/* The figure of the kind this value names, where it names
+                  one -- a repo, a schedule, a suite (ItemGlyph.jsx,
+                  grain/task-38). One glyphed option glyphs the whole menu,
+                  so "No repo" holds the slot open and empty rather than
+                  starting its label a figure's width to the left. */}
+              {glyphed ? (
+                <GlyphLabel kind={o.glyph || null}>{text}</GlyphLabel>
+              ) : (
+                <ListItemText primary={text} />
+              )}
+            </>
+          ),
+        }))}
+        onChange={onChange}
+      />
     );
   }
   const type = input === "date" ? "date" : input === "text" ? "text" : "number";
@@ -499,18 +515,16 @@ function SortRow({ row, sortKey, attributes, onChange, onRemove }) {
   const labels = directionLabels(attr);
   return (
     <div className="narrowing-row">
-      <Select
-        size="small"
+      <SearchSelect
+        className="narrowing-attr"
+        fullWidth={false}
         value={attr.id}
+        options={attributes.map((a) => ({ value: a.id, label: a.label }))}
         inputProps={{ "aria-label": `Attribute for sort ${row}` }}
-        onChange={(e) => onChange({ ...sortKey, attr: e.target.value })}
-      >
-        {attributes.map((a) => (
-          <MenuItem key={a.id} value={a.id}>
-            {a.label}
-          </MenuItem>
-        ))}
-      </Select>
+        onChange={(nextId) => {
+          if (nextId) onChange({ ...sortKey, attr: nextId });
+        }}
+      />
       <Select
         size="small"
         value={sortKey.dir}

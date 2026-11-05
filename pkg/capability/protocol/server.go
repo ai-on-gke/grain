@@ -192,6 +192,9 @@ func (s *Server) Refresh(ctx context.Context) error {
 		}
 	}
 	s.Methods, s.ConfigSchema, s.ControlTools = methods, schema, control
+	if s.ID != "" {
+		NotePersonGrantedArgs(s.ID, methods)
+	}
 	return nil
 }
 
@@ -360,11 +363,17 @@ func (s *Server) Mint(ctx context.Context, method, attemptID string, deadline ti
 	defer s.lock(attemptID)()
 	ctx, cancel := context.WithTimeout(ctx, s.MintTimeout)
 	defer cancel()
-	raw, err := s.caller.CallTool(ctx, mintPrefix+method, map[string]any{
+	callArgs := map[string]any{
 		"attempt_id": attemptID,
 		"deadline":   deadline.UTC().Format(time.RFC3339),
 		"args":       args,
-	})
+	}
+	if m := s.Methods[method]; m != nil && m.AcceptsApproval {
+		if cb, ok := ApprovalCallbackFrom(ctx); ok {
+			callArgs["approval"] = map[string]any{"url": cb.URL, "token": cb.Token}
+		}
+	}
+	raw, err := s.caller.CallTool(ctx, mintPrefix+method, callArgs)
 	if err != nil {
 		return nil, err
 	}

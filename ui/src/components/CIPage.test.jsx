@@ -29,6 +29,8 @@ import CIPage, {
   requesterLabel,
   retryRequest,
   RunDetail,
+  RunList,
+  runOpenLabel,
   SHARED_FAULTS_STORAGE_KEY,
   newSharedFaults,
   sharedFaultKey,
@@ -39,6 +41,7 @@ import CIRunOverlay from "./CIRunOverlay.jsx";
 import { formatDateTime } from "../time.js";
 import { RUN_POLL_LIMIT, WINDOWED_RUN_POLL_LIMIT } from "../ciFilters.js";
 import api from "../api.js";
+import { chooseOption, optionValues } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", async (importOriginal) => {
   const actual = await importOriginal();
@@ -431,10 +434,12 @@ describe("CIPage", () => {
     expect(
       screen.getByText("acme/widgets").closest(".standalone-page"),
     ).toBeInTheDocument();
-    expect(container.querySelector('svg[data-glyph="ci"]')).toBeInTheDocument();
+    expect(container.querySelector('svg[data-icon="ci"]')).toBeInTheDocument();
     expect(container.querySelector('svg[data-glyph="branches"]')).toBeNull();
 
-    await userEvent.click(screen.getByRole("button", { name: "acme/widgets" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /^acme\/widgets / }),
+    );
 
     expect(
       (await screen.findByText("← Back")).closest("div"),
@@ -471,7 +476,7 @@ describe("CIPage", () => {
     render(<CIPane showError={() => {}} />);
 
     await userEvent.click(
-      await screen.findByRole("button", { name: "acme/widgets" }),
+      await screen.findByRole("button", { name: /^acme\/widgets / }),
     );
 
     expect(await screen.findByText("go test")).toBeInTheDocument();
@@ -549,7 +554,7 @@ describe("CIPage", () => {
     render(<CIPane showError={() => {}} />);
 
     await userEvent.click(
-      await screen.findByRole("button", { name: "acme/widgets" }),
+      await screen.findByRole("button", { name: /^acme\/widgets / }),
     );
 
     expect(
@@ -588,7 +593,7 @@ describe("CIPage", () => {
     render(<CIPane showError={() => {}} />);
 
     await userEvent.click(
-      await screen.findByRole("button", { name: "acme/widgets" }),
+      await screen.findByRole("button", { name: /^acme\/widgets / }),
     );
 
     // The link goes where the bytes are, which is the one route that
@@ -679,7 +684,7 @@ describe("CIPage", () => {
     render(<CIPane showError={() => {}} />);
 
     await userEvent.click(
-      await screen.findByRole("button", { name: "acme/widgets" }),
+      await screen.findByRole("button", { name: /^acme\/widgets / }),
     );
     expect(await screen.findByText(/was interrupted/)).toBeInTheDocument();
     expect(screen.getByText(/put through CI again/)).toBeInTheDocument();
@@ -710,7 +715,7 @@ describe("CIPage", () => {
     );
     render(<CIPane showError={() => {}} />);
     await userEvent.click(
-      await screen.findByRole("button", { name: "acme/widgets" }),
+      await screen.findByRole("button", { name: /^acme\/widgets / }),
     );
 
     // A run with no conclusion is still going and says so rather than
@@ -754,7 +759,7 @@ describe("CIPage", () => {
     );
     render(<CIPane showError={() => {}} />);
     await userEvent.click(
-      await screen.findByRole("button", { name: "acme/widgets" }),
+      await screen.findByRole("button", { name: /^acme\/widgets / }),
     );
     expect(await screen.findAllByText("Running")).not.toHaveLength(0);
 
@@ -796,7 +801,7 @@ describe("CIPage", () => {
     );
     render(<CIPane showError={() => {}} />);
     await userEvent.click(
-      await screen.findByRole("button", { name: "acme/widgets" }),
+      await screen.findByRole("button", { name: /^acme\/widgets / }),
     );
 
     expect(
@@ -824,7 +829,7 @@ describe("CIPage", () => {
     );
     const { unmount } = render(<CIPane showError={() => {}} />);
     await userEvent.click(
-      await screen.findByRole("button", { name: "acme/widgets" }),
+      await screen.findByRole("button", { name: /^acme\/widgets / }),
     );
     expect(
       await screen.findByText(/grain build acc97d35b0f1/),
@@ -849,7 +854,7 @@ describe("CIPage", () => {
     );
     render(<CIPane showError={() => {}} />);
     await userEvent.click(
-      await screen.findByRole("button", { name: "acme/widgets" }),
+      await screen.findByRole("button", { name: /^acme\/widgets / }),
     );
     expect(await screen.findByText(/asked by alice/)).toBeInTheDocument();
     expect(screen.queryByText(/grain build/)).not.toBeInTheDocument();
@@ -872,7 +877,7 @@ describe("CIPage", () => {
     );
     render(<CIPane showError={() => {}} />);
     await userEvent.click(
-      await screen.findByRole("button", { name: "acme/widgets" }),
+      await screen.findByRole("button", { name: /^acme\/widgets / }),
     );
     expect(await screen.findByText(/asked by task 3214/)).toBeInTheDocument();
   });
@@ -1062,14 +1067,12 @@ describe("CIPage", () => {
     await userEvent.click(
       await screen.findByRole("menuitem", { name: "Repo" }),
     );
-    await userEvent.click(screen.getByLabelText("Value for filter 1"));
+    const repoVal = screen.getByLabelText("Value for filter 1");
+    await userEvent.click(repoVal);
     // Both repositories are on offer, including the one about to be
     // filtered out -- the menu is built from everything fetched.
-    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "acme/gadgets",
-      "acme/widgets",
-    ]);
-    await userEvent.click(screen.getByRole("option", { name: "acme/gadgets" }));
+    expect(optionValues(repoVal)).toEqual(["acme/gadgets", "acme/widgets"]);
+    await chooseOption(userEvent, repoVal, "acme/gadgets");
     await userEvent.keyboard("{Escape}");
     await userEvent.click(screen.getByTitle(CI_FILTER_BUTTON));
 
@@ -1185,9 +1188,10 @@ describe("CIPage", () => {
     // The pane opens sorted by Started, newest first, so this is the one
     // sort key changed rather than a second one added.
     await userEvent.click(screen.getByTitle(CI_SORT_BUTTON));
-    await userEvent.click(screen.getByLabelText("Attribute for sort 1"));
-    await userEvent.click(
-      await screen.findByRole("option", { name: "Duration (minutes)" }),
+    await chooseOption(
+      userEvent,
+      screen.getByLabelText("Attribute for sort 1"),
+      "Duration (minutes)",
     );
 
     await waitFor(() => {
@@ -1236,8 +1240,11 @@ describe("CIPage", () => {
     await userEvent.click(screen.getByTitle(CI_FILTER_BUTTON));
     await userEvent.click(screen.getByRole("button", { name: "Filter by…" }));
     await userEvent.click(await screen.findByRole("menuitem", { name: "Job" }));
-    await userEvent.click(screen.getByLabelText("Value for filter 1"));
-    await userEvent.click(screen.getByRole("option", { name: "ui e2e" }));
+    await chooseOption(
+      userEvent,
+      screen.getByLabelText("Value for filter 1"),
+      "ui e2e",
+    );
     await userEvent.keyboard("{Escape}");
 
     expect(
@@ -1278,7 +1285,8 @@ describe("CIPage", () => {
     await userEvent.click(
       await screen.findByRole("button", { name: "Start a run" }),
     );
-    await userEvent.selectOptions(
+    await chooseOption(
+      userEvent,
       screen.getByLabelText(/^Repo$/),
       "acme/widgets",
     );
@@ -1286,8 +1294,11 @@ describe("CIPage", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Load workflows" }),
     );
-    await userEvent.click(await screen.findByLabelText("Workflow"));
-    await userEvent.click(screen.getByRole("option", { name: /CI —/ }));
+    await chooseOption(
+      userEvent,
+      await screen.findByLabelText("Workflow"),
+      ".github/workflows/ci.yml",
+    );
     await userEvent.click(screen.getByRole("button", { name: "Start run" }));
 
     await waitFor(() =>
@@ -1336,7 +1347,8 @@ describe("CIPage", () => {
     await userEvent.click(
       await screen.findByRole("button", { name: "Start a run" }),
     );
-    await userEvent.selectOptions(
+    await chooseOption(
+      userEvent,
       screen.getByLabelText(/^Repo$/),
       "acme/widgets",
     );
@@ -1344,8 +1356,11 @@ describe("CIPage", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Load workflows" }),
     );
-    await userEvent.click(await screen.findByLabelText("Workflow"));
-    await userEvent.click(screen.getByRole("option", { name: /CI —/ }));
+    await chooseOption(
+      userEvent,
+      await screen.findByLabelText("Workflow"),
+      ".github/workflows/ci.yml",
+    );
     await userEvent.click(screen.getByLabelText("Bypass cache"));
     await userEvent.click(screen.getByRole("button", { name: "Start run" }));
 
@@ -1385,7 +1400,8 @@ describe("CIPage", () => {
     await userEvent.click(
       await screen.findByRole("button", { name: "Start a run" }),
     );
-    await userEvent.selectOptions(
+    await chooseOption(
+      userEvent,
       screen.getByLabelText(/^Repo$/),
       "acme/widgets",
     );
@@ -1496,7 +1512,9 @@ describe("CIPage", () => {
     expect(listCalls()).toBeGreaterThan(before);
 
     // An open, unfinished run polls while the listing stays fresh below it.
-    await userEvent.click(screen.getByRole("button", { name: "acme/widgets" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /^acme\/widgets / }),
+    );
     const listAtOpen = listCalls();
     const runCalls = () =>
       api.mock.calls.filter(([path]) => path === "/api/ci/runs/abc").length;
@@ -1579,7 +1597,8 @@ describe("CIPage", () => {
     await userEvent.click(
       await screen.findByRole("button", { name: "Start a run" }),
     );
-    await userEvent.selectOptions(
+    await chooseOption(
+      userEvent,
       screen.getByLabelText(/^Repo$/),
       "acme/widgets",
     );
@@ -1588,8 +1607,11 @@ describe("CIPage", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Load workflows" }),
     );
-    await userEvent.click(await screen.findByLabelText("Workflow"));
-    await userEvent.click(screen.getByRole("option", { name: /CI —/ }));
+    await chooseOption(
+      userEvent,
+      await screen.findByLabelText("Workflow"),
+      ".github/workflows/ci.yml",
+    );
     await userEvent.click(screen.getByRole("button", { name: "Start run" }));
 
     await waitFor(() =>
@@ -1603,9 +1625,101 @@ describe("CIPage", () => {
       }),
     );
   });
+
+  it("searches workflows anywhere in their name or path without submitting on Enter", async () => {
+    const user = userEvent.setup();
+    api.mockImplementation((path) => {
+      if (path.startsWith("/api/ci/workflows?"))
+        return Promise.resolve({
+          workflows: [
+            { path: ".github/workflows/ci.yml", name: "CI" },
+            {
+              path: ".github/workflows/release-nightly.yml",
+              name: "Nightly Release",
+            },
+          ],
+        });
+      if (isRunListing(path))
+        return Promise.resolve({ enabled: true, runs: [] });
+      return Promise.resolve({});
+    });
+    render(
+      <CIPane
+        config={{ targetRepos: ["acme/widgets"] }}
+        showError={() => {}}
+      />,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "Start a run" }),
+    );
+    await chooseOption(user, screen.getByLabelText(/^Repo$/), "acme/widgets");
+    await user.type(screen.getByLabelText("Branch"), "main");
+    await user.click(screen.getByRole("button", { name: "Load workflows" }));
+
+    const workflowBox = await screen.findByLabelText("Workflow");
+    await user.click(workflowBox);
+    await user.type(workflowBox, "nightly");
+    expect(optionValues(workflowBox)).toEqual([
+      ".github/workflows/release-nightly.yml",
+    ]);
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(workflowBox).toHaveValue(
+      "Nightly Release — .github/workflows/release-nightly.yml",
+    );
+    // Enter on the open list chose the workflow without firing POST /api/ci/runs.
+    expect(
+      api.mock.calls.filter(
+        ([p, o]) => p === "/api/ci/runs" && o?.method === "POST",
+      ),
+    ).toEqual([]);
+  });
 });
 
 describe("CI helpers", () => {
+  it("names each run's open control by its branch, result and start, not its repo alone", async () => {
+    // Every row's visible link is the repo, so before this a screen reader
+    // heard "acme/widgets" once per run with nothing to tell them apart
+    // (docs/test-runs/2026-11-02-deployment-operations.md).
+    const at = "2026-11-02T09:04:16Z";
+    const runs = [
+      {
+        id: "r1",
+        repo: "acme/widgets",
+        ref: "main",
+        startedAt: at,
+        conclusion: "success",
+        jobs: [],
+      },
+      {
+        id: "r2",
+        repo: "acme/widgets",
+        ref: "walk/held-1",
+        startedAt: at,
+        conclusion: "failure",
+        jobs: [],
+      },
+    ];
+    const onOpen = vi.fn();
+    render(<RunList runs={runs} zone="UTC" onOpen={onOpen} />);
+    const started = formatDateTime(at, "UTC");
+    const held = screen.getByRole("button", {
+      name: `acme/widgets walk/held-1, failure, started ${started}`,
+    });
+    expect(held).toHaveTextContent(/^acme\/widgets$/);
+    expect(
+      screen.getByRole("button", {
+        name: `acme/widgets main, success, started ${started}`,
+      }),
+    ).toBeInTheDocument();
+    await userEvent.click(held);
+    expect(onOpen).toHaveBeenCalledWith("r2");
+    // On a repo's own page the visible link is the branch, and leads.
+    expect(runOpenLabel(runs[0], "Success", "UTC", false)).toBe(
+      `main, success, started ${started}`,
+    );
+  });
+
   it("puts failures first and leaves the rest in plan order", () => {
     const jobs = [
       { jobId: "a", conclusion: "success" },

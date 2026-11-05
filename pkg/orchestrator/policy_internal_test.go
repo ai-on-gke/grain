@@ -97,6 +97,47 @@ func TestLineageTrailersCarryTheRequesterAndApprover(t *testing.T) {
 	}
 }
 
+// TestIdentityTrailersNameOnlyVerifiedPeopleOrTheOperator is
+// operator-attribution spec §7.5: a verified creator and approver are
+// named by email, the operator fallback keeps `operator`, and a
+// requester the operator only typed (`grain create -author`) is no
+// verified identity and gets no Requested-by:.
+func TestIdentityTrailersNameOnlyVerifiedPeopleOrTheOperator(t *testing.T) {
+	alice := model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceIAP}
+	bob := model.Principal{Kind: model.PrincipalHuman, ID: "bob@example.com", Source: "fake"}
+	operator := model.Principal{Kind: model.PrincipalHuman, ID: "operator", Source: model.SourceAccessCode}
+	filedBy := func(p model.Principal) model.Origin {
+		return model.Origin{Attribution: model.Attribution{Actor: p}}
+	}
+	for _, c := range []struct {
+		name string
+		task model.Task
+		want string
+	}{
+		{"a verified creator and approver", model.Task{
+			Creator: "alice@example.com", Origin: filedBy(alice), Approval: &model.Attribution{Actor: bob},
+		}, "Requested-by: alice@example.com\nApproved-by: bob@example.com"},
+		{"the operator fallback", model.Task{
+			Creator: "operator", Origin: filedBy(operator), Approval: &model.Attribution{Actor: operator},
+		}, "Requested-by: operator\nApproved-by: operator"},
+		{"an unverified grain create -author creator", model.Task{
+			Creator: "carol@example.com", Origin: filedBy(model.Principal{Kind: model.PrincipalHuman, ID: "operator", Source: model.SourceInProcess}),
+			Approval: &model.Attribution{Actor: alice},
+		}, "Approved-by: alice@example.com"},
+		{"an agent approver", model.Task{
+			Creator: "alice@example.com", Origin: filedBy(alice),
+			Approval: &model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: "12", Source: model.SourceSession}},
+		}, "Requested-by: alice@example.com"},
+		{"a task an agent filed for alice", model.Task{
+			Creator: "alice@example.com", Origin: filedBy(model.Principal{Kind: model.PrincipalAgent, ID: "12", Source: model.SourceSandbox}),
+		}, "Requested-by: alice@example.com"},
+	} {
+		if got := strings.Join(identityTrailers(c.task), "\n"); got != c.want {
+			t.Errorf("%s: trailers = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 func TestIdentityTrailersRideOnlyWithLineageOnTheMergeCommit(t *testing.T) {
 	store, ctx, _ := plantTree(t)
 	approval := &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "lead@example.com"}}
@@ -237,7 +278,7 @@ func TestLocalPolicyHoldsATaskOnTheGrainCIGrantTheAdmitterAdds(t *testing.T) {
 	if admitOnce(t, ctx, deps, "1").Admitted {
 		t.Error("a task granted grain-ci by default was admitted under a policy that does not allow it")
 	}
-	wantPolicyWait(t, ctx, store, "1", grainci.CapabilityName)
+	wantPolicyWait(t, ctx, store, "1", grainci.Grant)
 }
 
 // The admitter clears the waits it owns and leaves a hold's own reason
@@ -269,5 +310,60 @@ func TestGrantAdmitterClearsOnlyTheWaitsItOwns(t *testing.T) {
 		if !owned && (wait == nil || wait.Capability != capability) {
 			t.Errorf("the admitter cleared a hold's %s wait: %+v", capability, wait)
 		}
+	}
+}
+
+// A queued task local policy refused at dispatch (heldByPolicy's wait,
+// written by recordPolicyRefusal) reads as held by that policy, naming the
+// refused claim and the file to edit -- not as queued/ready, whose "Run
+// now" cannot help it.
+func TestTaskReasonReadsALocalPolicyHoldOffItsWait(t *testing.T) {
+	store, ctx := openTreeStore(t)
+	task := model.Task{ID: "3", Title: "t", Target: &model.RepoRef{Owner: "grain", Name: "config"}}
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	p, err := policy.Parse([]byte("repos: [acme/widgets]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := Deps{Store: store, Policy: p}
+	if why := policyHold(ctx, deps)("3"); why == "" {
+		t.Fatal("local policy allows a task targeting a repository it does not list")
+	}
+	wait, err := store.GrantWaitOf(ctx, "3")
+	if err != nil || wait == nil {
+		t.Fatalf("GrantWaitOf after a policy hold = %+v, %v; want the local-policy wait", wait, err)
+	}
+	const file = "/home/someone/.config/grain/grain_policy.yml"
+	got := TaskReason(task, model.StateQueued, nil, nil, wait, file)
+	if got.Reason != taskReasonLocalPolicy || got.Class != string(livenessAwaitingExternal) || got.Control != "" {
+		t.Errorf("TaskReason(queued, policy wait) = %+v, want %s, awaiting an external answer, with no control",
+			got, taskReasonLocalPolicy)
+	}
+	for _, want := range []string{"repository grain/config", file} {
+		if !strings.Contains(got.Resource, want) {
+			t.Errorf("TaskReason(queued, policy wait).Resource = %q, want it to name %q", got.Resource, want)
+		}
+	}
+	if got := TaskReason(task, model.StateQueued, nil, nil, wait, ""); !strings.Contains(got.Resource, "-policy") {
+		t.Errorf("TaskReason with no -policy file = %q, want it to point at the -policy flag", got.Resource)
+	}
+
+	// A policy that allows the task again clears the wait, and with it
+	// the hold: the task is ready.
+	deps.Policy, err = policy.Parse([]byte("repos: [grain/config]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if why := policyHold(ctx, deps)("3"); why != "" {
+		t.Fatalf("policy listing the repository still holds the task: %s", why)
+	}
+	wait, err = store.GrantWaitOf(ctx, "3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := TaskReason(task, model.StateQueued, nil, nil, wait, file).Reason; got != taskReasonReady {
+		t.Errorf("TaskReason once policy allows the task = %q, want %q", got, taskReasonReady)
 	}
 }

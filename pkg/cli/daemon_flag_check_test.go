@@ -99,7 +99,7 @@ func TestCheckConfigRefusesWhatCannotBeRepairedWithoutARestart(t *testing.T) {
 			c.UpgradeSrcDir = "/src"
 		}, "-upgrade-install-path is required"},
 		{"upgrade to an image with nowhere to record it", func(c *daemon.Config) {
-			c.UpgradeImage = "ghcr.io/bwsalmon/grain:latest"
+			c.UpgradeImage = "docker.io/grainai/grain:latest"
 		}, "-upgrade-image-ref-file is required"},
 		{"no workers", func(c *daemon.Config) { c.MaxWorkers = 0 }, "-max-workers must be at least 1"},
 		// Not merely a silly number: it is the value loadConfig falls
@@ -122,6 +122,9 @@ func TestCheckConfigRefusesWhatCannotBeRepairedWithoutARestart(t *testing.T) {
 		{"negative CI cache entry size", func(c *daemon.Config) {
 			c.CiCacheMaxEntryBytes = -1
 		}, "-ci-cache-max-entry-bytes cannot be negative"},
+		// Until GS-3 to GS-5 are built, a remote grit runs none of a
+		// repository's workflows (task 1829).
+		{"grit-url with no opt-in", func(c *daemon.Config) { c.GritURL = "http://127.0.0.1:4244" }, "-grit-url is experimental and refused without -grit-experimental"},
 		{"unsupported db driver", func(c *daemon.Config) { c.DbDriver = "mysql" }, "-db-driver must be \"sqlite\" or \"postgres\""},
 	}
 	if !postgres.IsAvailable() {
@@ -274,6 +277,21 @@ func TestCheckConfigRefusesRunHostsWithContainerSandboxes(t *testing.T) {
 	}
 }
 
+func TestCheckConfigRefusesRunHostsWithHostSandboxes(t *testing.T) {
+	t.Parallel()
+	cfg, _, unknown, err := parseDaemonArgs([]string{
+		"-data-dir", "/var/lib/grain/data", "-sandbox-dir", "/var/lib/grain/data/scratches",
+		"-host-sandboxes", "-allow-unisolated-host-sandboxes", "-run-host-image", "example/grain",
+	})
+	if err != nil || len(unknown) > 0 {
+		t.Fatalf("parseDaemonArgs = %v, unknown %v", err, unknown)
+	}
+	err = checkConfig(cfg)
+	if err == nil || !strings.Contains(err.Error(), "-run-host-image") || !strings.Contains(err.Error(), "-host-sandboxes") {
+		t.Fatalf("checkConfig(-run-host-image with -host-sandboxes) = %v, want a refusal naming both flags", err)
+	}
+}
+
 // -host-sandboxes is a backend of its own again, for a single-user
 // workstation: the flag parses, selects it, and starts on a loopback UI,
 // and the guard refuses the default (every-interface) UI without the
@@ -336,11 +354,23 @@ func TestParseDaemonArgsGritFlags(t *testing.T) {
 		"-disable-native-sandboxes",
 		"-grit-url", "http://127.0.0.1:4244",
 		"-grit-client-token", "grain-main.secret123",
+		"-grit-experimental",
 	})
 	if err != nil || len(unknown) != 0 {
 		t.Fatalf("parseDaemonArgs with grit flags = %v, unknown %v", err, unknown)
 	}
-	if cfg.GritURL != "http://127.0.0.1:4244" || cfg.GritClientToken != "grain-main.secret123" {
-		t.Fatalf("got GritURL=%q GritClientToken=%q", cfg.GritURL, cfg.GritClientToken)
+	if cfg.GritURL != "http://127.0.0.1:4244" || cfg.GritClientToken != "grain-main.secret123" || !cfg.GritExperimental {
+		t.Fatalf("got GritURL=%q GritClientToken=%q GritExperimental=%v", cfg.GritURL, cfg.GritClientToken, cfg.GritExperimental)
+	}
+}
+
+// -grit-experimental is what lets -grit-url through, for whoever is
+// developing the split itself.
+func TestCheckConfigAllowsGritURLWithTheExperimentalOptIn(t *testing.T) {
+	t.Parallel()
+	cfg := startable()
+	cfg.GritURL, cfg.GritExperimental = "http://127.0.0.1:4244", true
+	if err := checkConfig(cfg); err != nil {
+		t.Fatalf("checkConfig with -grit-url -grit-experimental = %v, want nil", err)
 	}
 }

@@ -135,7 +135,7 @@ func TestConfigRepoInternalAndExternalModes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening state repo: %v", err)
 	}
-	if err := loadStateRepo(ctx, dataDir, repo, db, false); err != nil {
+	if err := loadStateRepo(ctx, dataDir, repo, db, storeMigration{}); err != nil {
 		t.Fatalf("loading state repo: %v", err)
 	}
 	manager := NewStateManager(dataDir, db, repo, OpenSecrets(dataDir), nil, nil)
@@ -334,7 +334,7 @@ func TestConfigRepoInternalAndExternalModes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening fresh state repo: %v", err)
 	}
-	if err := loadStateRepo(ctx, freshDir, freshRepo, freshDB, false); err != nil {
+	if err := loadStateRepo(ctx, freshDir, freshRepo, freshDB, storeMigration{}); err != nil {
 		t.Fatalf("loading fresh state repo from external remote: %v", err)
 	}
 	freshTemplates, err := freshStore.ListTemplates(ctx)

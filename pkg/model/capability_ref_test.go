@@ -235,6 +235,8 @@ func TestCapabilityPolicyDenyRuleRefusesWhatItCovers(t *testing.T) {
 	}
 	if err := p.Permits(g, CapabilitySubject{Repo: acme, Kind: CapabilityRunCI, Event: "push"}); err == nil {
 		t.Error("a CI run a deny rule covers was granted the reference an allow rule also names")
+	} else if !strings.Contains(err.Error(), "to this CI job on acme/widgets (push) (rule 1:") {
+		t.Errorf("refusal = %q, want it to name the CI job, its repo and event, and the rule", err)
 	}
 	if err := p.Permits(g, CapabilitySubject{Repo: acme, Kind: CapabilityRunTask}); err != nil {
 		t.Errorf("a task the deny rule does not cover was refused: %v", err)
@@ -310,5 +312,56 @@ func TestCapabilityPolicyVerdictsByRunKind(t *testing.T) {
 	}
 	if got := repoDependent.Verdicts(ref); !reflect.DeepEqual(got, wantRepoDependent) {
 		t.Errorf("repoDependent.Verdicts = %v, want %v", got, wantRepoDependent)
+	}
+}
+
+func TestCapabilityPolicyEnforcesCIOnlyForRepoAccessGrants(t *testing.T) {
+	acme := &RepoRef{Owner: "acme", Name: "widgets"}
+	readGrant := RepoReadGrant(*acme)
+	writeRepoGrant := RepoWriteGrant(*acme)
+	branchPushGrant := RepoWriteRef + `={"refs":["refs/tags/v*"]}`
+
+	p := CapabilityPolicy{}
+	for _, kind := range []string{CapabilityRunTask, CapabilityRunProcess} {
+		for _, g := range []string{RepoReadRef, readGrant, writeRepoGrant} {
+			if err := p.Permits(g, CapabilitySubject{Repo: acme, Kind: kind}); err == nil || !strings.Contains(err.Error(), "CI capability") {
+				t.Errorf("Permits(%q, kind=%s) = %v, want CI-only refusal", g, kind, err)
+			}
+		}
+		if err := p.Permits(branchPushGrant, CapabilitySubject{Repo: acme, Kind: kind}); err != nil {
+			t.Errorf("Permits(branchPushGrant, kind=%s) = %v, want nil", kind, err)
+		}
+		if got := p.VerdictForKind(RepoReadRef, kind); got != CapabilityPolicyCIOnly {
+			t.Errorf("VerdictForKind(RepoReadRef, %s) = %q, want ci_only", kind, got)
+		}
+	}
+	// A read grant's refusal says it reads; only the write grant's says
+	// it writes to the repository.
+	for _, g := range []string{RepoReadRef, readGrant} {
+		if got := CIOnlyRefusal(g); strings.Contains(got, "writes") || !strings.Contains(got, "read access") {
+			t.Errorf("CIOnlyRefusal(%q) = %q, want the read wording", g, got)
+		}
+	}
+	if got := CIOnlyRefusal(writeRepoGrant); !strings.Contains(got, "push access to another repository") {
+		t.Errorf("CIOnlyRefusal(%q) = %q, want the write wording", writeRepoGrant, got)
+	}
+	// Repository access is declared in the job's workflow file, not
+	// granted from the repos page's CI capabilities list (where the
+	// other CI-only capabilities' refusal points): a walk that followed
+	// the old advice put repo#read there, and the job still could not
+	// clone (docs/test-runs/2026-11-03-capabilities-ci-repo.md, F1).
+	for _, g := range []string{RepoReadRef, readGrant, writeRepoGrant, "repo-read:acme/other", "repo-write:acme/other"} {
+		got := CIOnlyRefusal(g)
+		if !strings.Contains(got, ".grain/workflows") || strings.Contains(got, "under CI capabilities") {
+			t.Errorf("CIOnlyRefusal(%q) = %q, want it to point at the workflow's capabilities:, not the repos page", g, got)
+		}
+	}
+	if got := CIOnlyRefusal("package-publish"); !strings.Contains(got, "under CI capabilities") {
+		t.Errorf("CIOnlyRefusal(package-publish) = %q, want the repos page", got)
+	}
+	for _, g := range []string{readGrant, writeRepoGrant} {
+		if err := p.Permits(g, CapabilitySubject{Repo: acme, Kind: CapabilityRunCI, Event: "release"}); err != nil {
+			t.Errorf("Permits(%q, ci) = %v, want nil", g, err)
+		}
 	}
 }

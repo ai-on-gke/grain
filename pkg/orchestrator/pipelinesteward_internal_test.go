@@ -20,7 +20,7 @@ package orchestrator
 // it, that what it is granted is exactly the api presets it is
 // documented to hold and nothing else a person alone may grant, and that
 // it is a durable judgement task: a goal, pipeline.* subscriptions, the
-// judgement model (docs/design/durable-tasks.md#DT-6, DT-11).
+// judgement model (design/design/durable-tasks.design.md#DT-6, DT-11).
 
 import (
 	"context"
@@ -134,7 +134,7 @@ func TestThePipelineStewardHoldsTheDocumentedPresetsAndNothingDangerous(t *testi
 		t.Errorf("subscriptions = %v, want [pipeline.*]", subs)
 	}
 	// The prompt holds the four rules (DT-12) and files no repairs.
-	for _, want := range []string{"/api/pipeline/changes", "grain task read <id>", "record-disagrees",
+	for _, want := range []string{"grain read deploy://pipeline-changes --cursor <cursor>", "grain task read <id>", "record-disagrees",
 		"at most 15", "grain task message", "grain notify", "Never file a repair"} {
 		if !strings.Contains(tmpl.Body, want) {
 			t.Errorf("the prompt does not say %q", want)

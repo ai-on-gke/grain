@@ -13,9 +13,10 @@
 // limitations under the License.
 
 import { expect, test } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // Layout of the Grants section (GrantsPicker.jsx,
-// docs/design/unified-grants.md) on the task pane, at desktop and phone
+// design/design/unified-grants.design.md) on the task pane, at desktop and phone
 // widths: the held grants are one stack of sections inside it -- a grant
 // with nothing to set on a single line -- "Add grant…" sits under it,
 // the legacy checklist above it, and the menu stays on screen.
@@ -122,7 +123,7 @@ test("one search on the new task overlay reaches both an API scope and a server 
 }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "+ New task" }).click();
-  await page.getByLabel(/^Repos/).selectOption("none");
+  await chooseOption(page.getByLabel(/^Repos/), "none");
   const section = page.getByTestId("new-task-grants");
   await section.getByRole("button", { name: "Add grant…" }).click();
   await page.getByLabel("Search grants").fill("ci:read");

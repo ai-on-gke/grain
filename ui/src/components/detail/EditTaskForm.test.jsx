@@ -17,6 +17,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import DetailOverlay from "../DetailOverlay.jsx";
 import api from "../../api.js";
+import { optionValues } from "../../searchSelectTesting.js";
 import { resetDetailMocks, baseTask, config } from "./testFixtures.js";
 
 vi.mock("../../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
@@ -169,6 +170,32 @@ describe("DetailOverlay edit form", () => {
     );
   });
 
+  it("toggles keepRunning from the edit form", async () => {
+    const act = vi.fn().mockResolvedValue(true);
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={baseTask}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /Keep running \(immediately restart when a run exits\)/,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    act.mock.calls[0][0]();
+    expect(JSON.parse(api.mock.calls[0][1].body).keepRunning).toBe(true);
+  });
+
   // grain/task-110: the same form moves a task that is already filed
   // onto one particular model -- the case this is for, since "this one
   // needs the expensive model" is usually learned after a run. The model
@@ -286,8 +313,8 @@ describe("DetailOverlay edit form", () => {
     await openEdit(user, { ...baseTask, agentBackendId: "claude-day" }, act);
 
     expect(
-      screen.getByText("Claude day · Claude (does not serve gpt-5.1)"),
-    ).toBeInTheDocument();
+      screen.getByRole("combobox", { name: "Specific connection" }),
+    ).toHaveValue("Claude day · Claude (does not serve gpt-5.1)");
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     act.mock.calls[0][0]();
@@ -321,6 +348,35 @@ describe("DetailOverlay edit form", () => {
       .closest(".MuiFormControl-root")
       .querySelector("label");
     expect(label).toHaveAttribute("data-shrink", "true");
+  });
+
+  // grain/task-2910: the review picker is searched rather than scrolled,
+  // so a word from anywhere in a template's name finds it.
+  it("finds a review template by any word of its name", async () => {
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={baseTask}
+        tasks={[]}
+        config={config}
+        templates={[
+          { id: "7", name: "Security pass" },
+          { id: "8", name: "Docs pass" },
+        ]}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const review = screen.getByRole("combobox", { name: "Review" });
+    await user.click(review);
+    await user.clear(review);
+    await user.type(review, "secur");
+    expect(optionValues(review)).toEqual(["7"]);
+    await user.keyboard("{Enter}");
+    expect(review).toHaveValue("Security pass");
   });
 
   // Once the review task exists there is nothing left to choose: exactly
@@ -478,4 +534,98 @@ describe("DetailOverlay edit form", () => {
       confirm.mockRestore();
     });
   });
+
+  it("shows the priority badge and edits Task priority via PATCH", async () => {
+    const act = vi.fn().mockResolvedValue(true);
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, priority: 7 }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    expect(screen.getByTestId("detail-priority-badge")).toHaveTextContent(
+      "priority: 7",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const priorityInput = screen.getByLabelText("Task priority");
+    expect(priorityInput).toHaveValue(7);
+
+    await user.clear(priorityInput);
+    await user.type(priorityInput, "9");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    act.mock.calls[0][0]();
+    expect(JSON.parse(api.mock.calls[0][1].body).priority).toBe(9);
+  });
+
+  // As New task, Bulk edit, the template form, propose_task and the API
+  // read it: a whole number written with an exponent is that number.
+  it("saves a Task priority of 1e3 as 1000", async () => {
+    const act = vi.fn().mockResolvedValue(true);
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, priority: 7 }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const priorityInput = screen.getByLabelText("Task priority");
+    await user.clear(priorityInput);
+    await user.type(priorityInput, "1e3");
+
+    expect(priorityInput).not.toHaveAttribute("aria-invalid", "true");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    act.mock.calls[0][0]();
+    expect(JSON.parse(api.mock.calls[0][1].body).priority).toBe(1000);
+  });
+
+  // The box's min and step are not enforced on Save (this is not a
+  // <form>): a 0 used to save as the default 5 and a 2.5 as 2, silently.
+  it.each(["0", "2.5", "-2", "1e-1", "1e20"])(
+    "refuses a Task priority of %s rather than saving another",
+    async (typed) => {
+      const act = vi.fn().mockResolvedValue(true);
+      const user = userEvent.setup();
+      render(
+        <DetailOverlay
+          task={{ ...baseTask, priority: 7 }}
+          tasks={[]}
+          config={config}
+          onClose={() => {}}
+          onOpenTask={() => {}}
+          act={act}
+        />,
+      );
+
+      await user.click(screen.getByRole("button", { name: "Edit" }));
+      const priorityInput = screen.getByLabelText("Task priority");
+      await user.clear(priorityInput);
+      await user.type(priorityInput, typed);
+
+      expect(priorityInput).toHaveAttribute("aria-invalid", "true");
+      expect(screen.getByText(/a whole number, 1 or more/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+      expect(act).not.toHaveBeenCalled();
+
+      await user.clear(priorityInput);
+      await user.type(priorityInput, "3");
+      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      act.mock.calls[0][0]();
+      expect(JSON.parse(api.mock.calls[0][1].body).priority).toBe(3);
+    },
+  );
 });

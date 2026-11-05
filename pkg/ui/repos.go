@@ -483,6 +483,11 @@ type RepoDefaults struct {
 	// renamed. It is never covered by a declaration, whatever is stored
 	// (forge.Unfixable.Covers), and SetRepoUnfixableChecks refuses it.
 	GrainCICheckName string `json:"grainCICheckName"`
+	// UpstreamRepo is the upstream owner/name repository that pull
+	// requests are opened and tracked against when tasks target this fork
+	// repository (model.RepoConfig.UpstreamRepo), "" when pull requests
+	// open against this repository itself.
+	UpstreamRepo string `json:"upstreamRepo"`
 }
 
 // RepoDeclarationsStatus is what grain has made of one repository's
@@ -602,6 +607,9 @@ type SetRepoSettingsRequest struct {
 	RepairTemplateID    *string   `json:"repairTemplateID,omitempty"`
 	SetupCommand        *string   `json:"setupCommand,omitempty"`
 	UnfixableChecks     *[]string `json:"unfixableChecks,omitempty"`
+	// DefaultHostd is read only to be refused (TaskHostdRefusal): a
+	// repository's tasks have no hostd of their own any more.
+	DefaultHostd *string `json:"defaultHostd,omitempty"`
 	// The GitHub issue importer's settings (model.RepoConfig.IssueImport),
 	// each left alone when omitted. IssueImportRepo is owner/name, "" for
 	// this repository; IssueImportIntervalSeconds 0 is the default.
@@ -610,6 +618,11 @@ type SetRepoSettingsRequest struct {
 	IssueImportLabel           *string `json:"issueImportLabel,omitempty"`
 	IssueImportApproved        *bool   `json:"issueImportApproved,omitempty"`
 	IssueImportIntervalSeconds *int    `json:"issueImportIntervalSeconds,omitempty"`
+	// UpstreamRepo sets model.RepoConfig.UpstreamRepo: the upstream
+	// owner/name repository that pull requests for this fork repository
+	// are opened and tracked against, or "" to open pull requests on this
+	// repository itself.
+	UpstreamRepo *string `json:"upstreamRepo,omitempty"`
 }
 
 // SetRepoWatchDefaultBranchRequest is PUT /api/repos/{owner}/{name}/
@@ -723,6 +736,7 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 		out.MergeOnGreen = stored.MergeOnGreen
 		out.BaseRepairBypassesHumanGates = stored.BaseRepairBypassesHumanGates
 		out.UnfixableChecks = stored.UnfixableChecks
+		out.UpstreamRepo = stored.UpstreamRepo
 		out.PortBranches = stored.PortBranches
 		out.DeclaredPortBranches = stored.DeclaredPortBranches
 		out.PairedBranches = stored.PairedBranches()
@@ -815,25 +829,27 @@ func (c *Client) SetRepoDefaultCapabilities(ctx context.Context, repo string, id
 func (c *Client) cleanRepoDefaultCapabilities(ids []string) ([]string, error) {
 	seen := make(map[string]bool, len(ids))
 	clean := make([]string, 0, len(ids))
-	for _, id := range ids {
-		id, err := c.normalizeCapabilityID(id)
+	for _, rawID := range ids {
+		normalizedIDs, err := c.normalizeCapabilityIDs(rawID)
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := c.capabilityByID(id); !ok {
-			// The same refusal UpdateSettings gives the deployment-wide
-			// set, for the same reason: this one seeds every task filed
-			// against this repo, so a CI-only id here would break the
-			// whole repository's tasks rather than one of them. The CI
-			// grant an operator reaching for it actually wants is the
-			// next field along (SetRepoCICapabilities).
-			return nil, validationErrorf("defaultCapabilities: %s", capabilityRefusal(id))
+		for _, id := range normalizedIDs {
+			if _, ok := c.capabilityByID(id); !ok {
+				// The same refusal UpdateSettings gives the deployment-wide
+				// set, for the same reason: this one seeds every task filed
+				// against this repo, so a CI-only id here would break the
+				// whole repository's tasks rather than one of them. The CI
+				// grant an operator reaching for it actually wants is the
+				// next field along (SetRepoCICapabilities).
+				return nil, validationErrorf("defaultCapabilities: %s", capabilityRefusal(id))
+			}
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			clean = append(clean, id)
 		}
-		if seen[id] {
-			continue
-		}
-		seen[id] = true
-		clean = append(clean, id)
 	}
 	return clean, nil
 }
@@ -1078,10 +1094,28 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 			return RepoDefaults{}, err
 		}
 	}
+	if req.DefaultHostd != nil {
+		if err := refuseTaskHostd("defaultHostd", *req.DefaultHostd); err != nil {
+			return RepoDefaults{}, err
+		}
+	}
 	var importRepo string
 	if req.IssueImportRepo != nil {
 		if importRepo, err = c.cleanIssueImportRepo(*req.IssueImportRepo); err != nil {
 			return RepoDefaults{}, err
+		}
+	}
+	var upstreamRepo string
+	if req.UpstreamRepo != nil {
+		raw := strings.TrimSpace(*req.UpstreamRepo)
+		if raw != "" {
+			up, err := model.ParseRepo(raw)
+			if err != nil {
+				return RepoDefaults{}, validationErrorf("upstreamRepo: %v", err)
+			}
+			if !up.Same(parsed) {
+				upstreamRepo = up.String()
+			}
 		}
 	}
 	if req.IssueImportIntervalSeconds != nil {
@@ -1153,6 +1187,9 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		}
 		if req.SetupCommand != nil {
 			rc.SetupCommand = strings.TrimSpace(*req.SetupCommand)
+		}
+		if req.UpstreamRepo != nil {
+			rc.UpstreamRepo = upstreamRepo
 		}
 	})
 }
@@ -1316,7 +1353,7 @@ func repoPortDirections(rc model.RepoConfig) []RepoPortDirection {
 // no settings row yet refuses nobody. A refusal is a ForbiddenError, so
 // it reaches the API as a 403 rather than as a malformed request.
 func (c *Client) checkRepoPerson(ctx context.Context, repo model.RepoRef) error {
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
 	if actor.ID == "" || c.Store == nil {
 		return forbiddenErrorf("user %q does not have permission to modify repository %s", actor.ID, repo)
 	}
@@ -1623,6 +1660,13 @@ func (c *Client) ciCapabilityIDs() []string {
 			continue
 		}
 		if _, offered := c.capabilityByID(spec.Name); offered || spec.CIOnly {
+			// A provider retired onto a method with a CI rule (the
+			// release server's) is offered as the grant it became,
+			// which is what its stored rows were rewritten to.
+			if _, ok := model.CIGrantRuleFor(spec.Name); ok {
+				ids = append(ids, model.CanonicalLegacyGrant(spec.Name))
+				continue
+			}
 			ids = append(ids, spec.Name)
 		}
 	}
@@ -1647,7 +1691,15 @@ func (c *Client) cleanRepoCICapabilities(ids []string) ([]string, error) {
 	clean := []string{}
 	for _, id := range ids {
 		canonicalID := id
-		if model.IsCapabilityRef(id) {
+		if _, ok := model.CIGrantRuleFor(id); ok {
+			// The release server's methods, in either spelling: granted
+			// by this list, recorded as the method (schema 101).
+			canonicalID = model.CanonicalLegacyGrant(strings.TrimSpace(id))
+		} else if target, ok := model.RepoReadTarget(id); ok {
+			canonicalID = model.RepoReadCapability(target)
+		} else if target, ok := model.RepoWriteTarget(id); ok {
+			canonicalID = model.RepoWriteCapability(target)
+		} else if model.IsCapabilityRef(id) || id == "gcp-key" || strings.HasPrefix(id, "gcp-key:") {
 			// A capability server method, with its with: arguments: a
 			// CI job's grant admission mints it through its server
 			// (daemon.CiGrantReservations), so the repo may grant it
@@ -1661,10 +1713,6 @@ func (c *Client) cleanRepoCICapabilities(ids []string) ([]string, error) {
 				return nil, validationErrorf("ciCapabilities: %s", capabilityRefusal(normalized))
 			}
 			canonicalID = normalized
-		} else if target, ok := model.RepoReadTarget(id); ok {
-			canonicalID = model.RepoReadCapability(target)
-		} else if target, ok := model.RepoWriteTarget(id); ok {
-			canonicalID = model.RepoWriteCapability(target)
 		} else if !slices.Contains(allowed, id) {
 			return nil, validationErrorf("ciCapabilities: capability %q is not supported for CI", id)
 		}

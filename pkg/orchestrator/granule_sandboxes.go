@@ -200,6 +200,10 @@ type GranuleConfig struct {
 	DefaultCPUs     int
 	DefaultMemoryMB int
 	DefaultDiskGB   int
+	// HostMemoryMB is this host's total memory, the cap on every VM's
+	// cgroup memory limit (GranuleMemoryLimitMB). Zero is unknown and
+	// caps nothing.
+	HostMemoryMB int
 	// DefaultNetworkAccess seeds the deployment-wide network a run that
 	// asked for none of its own gets (model.Config.NetworkAccess,
 	// grain/task-269), exactly as the three defaults above seed the
@@ -339,10 +343,22 @@ func (c GranuleConfig) readyPollInterval() time.Duration {
 // so the conversion lives at the one place they meet (createArgs).
 const mibPerGiB = 1024
 
-// GranuleVMMMemoryOverheadMB is the host cgroup memory headroom (in MiB)
-// added to a sandbox's guest MemoryMB for cloud-hypervisor / qemu overhead
-// when sizing the VM container's cgroup memory limit (-memory-limit-mb).
-const GranuleVMMMemoryOverheadMB = 512
+// GranuleMemoryLimitMB is the cgroup memory limit (-memory-limit-mb, or
+// a kubernetes-granule pod's memory limit) for a VM whose guest has
+// guestMB of RAM: the guest plus model.DefaultVMMHeadroom -- the larger
+// of a quarter of the guest and 1 GiB -- capped at capMB, the host's or
+// the largest node's memory, when that is known (zero is unknown).
+//
+// It used to be the guest plus a flat 512 MiB, granule's default then,
+// and an IO-heavy guest that filled its RAM with page cache and then
+// wrote a multi-GB file had its VMM OOM-killed from the host: the VMM's
+// disk writes go through host page cache charged to the same cgroup,
+// and there is no balloon to give guest memory back. The budget charges
+// the same headroom (model.Budget.VMMHeadroom), so the larger limit
+// never oversubscribes a host.
+func GranuleMemoryLimitMB(guestMB, capMB int) int {
+	return model.DefaultVMMHeadroom().LimitMB(guestMB, capMB)
+}
 
 // GranuleOOMScoreAdj is the positive oom_score_adj passed on every
 // `granule vm create` so the kernel OOM killer picks a sandbox VM
@@ -456,7 +472,7 @@ func (c GranuleConfig) createArgs(shape Shape) []string {
 	// shrink one, so a VM never comes up smaller than this.
 	args = append(args,
 		"-disk-size-mb", strconv.Itoa(shape.DiskGB*mibPerGiB),
-		"-memory-limit-mb", strconv.Itoa(shape.MemoryMB+GranuleVMMMemoryOverheadMB),
+		"-memory-limit-mb", strconv.Itoa(GranuleMemoryLimitMB(shape.MemoryMB, c.HostMemoryMB)),
 		"-oom-score-adj", strconv.Itoa(GranuleOOMScoreAdj),
 	)
 	return args
@@ -584,6 +600,7 @@ type GranuleSandboxes struct {
 	// piece of a GranuleSandboxes' configuration that changes after
 	// construction, so it is the only one that needs mu.
 	defaults Shape
+	image    string
 	// breakers is what the last health probe of each live sandbox found,
 	// keyed by sandbox name, so that a guest which has stopped answering
 	// is not re-probed at full price by every sweep for as long as it
@@ -613,6 +630,9 @@ type GranuleSandboxes struct {
 	// granule.DockerContainerExit and granule.DockerContainerLogTail.
 	vmExit     func(ctx context.Context, vmName string) (granule.ContainerExit, error)
 	consoleLog func(ctx context.Context, vmName string) (string, error)
+	// cgroupOOMKills reads a VM container's memory.events oom_kill count
+	// for SandboxOOM; nil is granule.DockerContainerOOMKills.
+	cgroupOOMKills func(ctx context.Context, vmName string) (int, error)
 }
 
 // now is the clock the health breaker's own intervals are measured
@@ -656,6 +676,44 @@ func (k *GranuleSandboxes) SetDefaultShape(shape Shape) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.defaults = shape
+}
+
+// SetImage implements SandboxImageSetter: the guest image the next VM is
+// created from when GranuleConfig.SandboxImage is not wired.
+func (k *GranuleSandboxes) SetImage(image string) {
+	k.mu.Lock()
+	k.image = strings.TrimSpace(image)
+	k.mu.Unlock()
+}
+
+// CurrentImage implements SandboxImageSetter: the guest image new VMs are
+// created from right now, consulting GranuleConfig.SandboxImage when wired and
+// falling back to SetImage or any -kontur-image flag in CreateArgs.
+func (k *GranuleSandboxes) CurrentImage() string {
+	if k == nil {
+		return ""
+	}
+	if k.cfg.SandboxImage != nil {
+		if img, err := k.cfg.SandboxImage(context.Background()); err == nil && strings.TrimSpace(img) != "" {
+			return strings.TrimSpace(img)
+		}
+	}
+	k.mu.Lock()
+	img := k.image
+	k.mu.Unlock()
+	if img != "" {
+		return img
+	}
+	for i := 0; i < len(k.cfg.CreateArgs); i++ {
+		arg := k.cfg.CreateArgs[i]
+		if strings.HasPrefix(arg, granuleImageFlag+"=") {
+			return strings.TrimSpace(strings.TrimPrefix(arg, granuleImageFlag+"="))
+		}
+		if arg == granuleImageFlag && i+1 < len(k.cfg.CreateArgs) {
+			return strings.TrimSpace(k.cfg.CreateArgs[i+1])
+		}
+	}
+	return ""
 }
 
 // DefaultShape reads back the deployment-wide default VM shape currently in
@@ -734,7 +792,7 @@ func (k *GranuleSandboxes) VMNameFor(sandbox string) (string, error) {
 func (k *GranuleSandboxes) IsolatesNetwork() bool { return true }
 
 // ReservedGuestPorts are the guest loopback ports a capability grant may
-// not forward into (docs/capabilities-spec.md §5.3.1): the guest's sshd,
+// not forward into (design/spec/capabilities/capabilities.spec.md §5.3.1): the guest's sshd,
 // which a granule guest image runs for grain's own transport.
 func (k *GranuleSandboxes) ReservedGuestPorts() []int { return []int{22} }
 
@@ -768,7 +826,7 @@ func (k *GranuleSandboxes) Acquire(ctx context.Context, sandbox string, shape Sh
 // so the startup reap destroys whatever was created beneath it. Whatever
 // adds that route also has to make children readoptable: label each
 // child's container with its parent, and reserve each child at the
-// address it holds (docs/non-disruptive-upgrade.md, stage 2d).
+// address it holds (design/design/non-disruptive-upgrade.design.md, stage 2d).
 //
 // A deployment that allocates no addresses (nil Addresses) has no families
 // to put one in, so the parent is recorded nowhere and this is Acquire with
@@ -902,7 +960,13 @@ func (k *GranuleSandboxes) create(ctx context.Context, name string, shape Shape,
 	// Before the stale VM is torn down, not after: this is the step that
 	// can wait minutes for a guest build, and a delete followed by a
 	// long wait would leave the slot with nothing in it for no reason.
-	args, err := k.cfg.createArgsWithImage(ctx, shape.orDefault(k.defaultShape()), image)
+	override := image
+	if override == "" && k.cfg.SandboxImage == nil {
+		k.mu.Lock()
+		override = k.image
+		k.mu.Unlock()
+	}
+	args, err := k.cfg.createArgsWithImage(ctx, shape.orDefault(k.defaultShape()), override)
 	if err != nil {
 		return err
 	}
@@ -987,8 +1051,7 @@ func (k *GranuleSandboxes) networkVanished(ctx context.Context) bool {
 // for this daemon's model-provider keys, GitHub tokens or cloud
 // credentials, and a child started with a nil Env inherits every one of
 // them -- which is what tests/security's exec-env-implicit ratchet exists
-// to stop. The same set pkg/agent/custom's mcpServerEnv names, for the same
-// reason and with the same property: none of them is a key.
+// to stop. None of them is a key.
 // dockerCommand builds a docker invocation with that environment, so a new
 // docker call in this package cannot forget it by being written the obvious
 // way.
@@ -1722,8 +1785,11 @@ esac`
 // fails the Acquire that called it if it cannot.
 //
 // model.NetworkOpen -- and an unset access, which reads as open -- is
-// nothing to do: a guest comes up with the network its image and
-// granule's own networking gave it, which is what "open" means here.
+// the host's firewall alone, told to fence the guest off this host, the
+// networks it is on and link-local (openFence): a guest keeps the route
+// its image and granule's own networking gave it, which is what "open"
+// means here, and loses only what "open" never meant -- the metadata
+// server, the host's own listeners and its neighbours.
 // model.NetworkNone is three things: the sandbox resolver told to stop
 // forwarding this guest's queries (restrictGuestDNS), the host's
 // firewall told to drop everything from this guest -- forwarded, bridged
@@ -1751,6 +1817,13 @@ esac`
 // race the units that install it.
 func (k *GranuleSandboxes) enforceGuestNetwork(ctx context.Context, name string, runner sandboxRunner, shape Shape, addr netip.Addr) error {
 	if model.NormalizeNetworkAccess(shape.NetworkAccess) != model.NetworkNone {
+		if err := k.enforceGranuleHostIsolation(ctx, name, addr, true); err != nil {
+			return fmt.Errorf("orchestrator: granule VM %q has open network access, and this host's firewall "+
+				"could not be set to keep it off this host's own services, its networks and the metadata server "+
+				"(%v) -- refusing to hand over a sandbox whose untrusted code could reach them. Every granule "+
+				"sandbox needs nft on this host, and this daemon able to run it as root (directly, with "+
+				"CAP_NET_ADMIN, or through `sudo -n nft`)", name, err)
+		}
 		return nil
 	}
 	if err := k.restrictGuestDNS(ctx, name); err != nil {
@@ -1758,7 +1831,7 @@ func (k *GranuleSandboxes) enforceGuestNetwork(ctx context.Context, name string,
 			"sandbox resolver could not be told to stop forwarding its queries upstream (%v) -- refusing to "+
 			"hand over a sandbox that could still reach any nameserver on the internet through it", name, err)
 	}
-	if err := k.enforceGranuleHostIsolation(ctx, name, addr); err != nil {
+	if err := k.enforceGranuleHostIsolation(ctx, name, addr, false); err != nil {
 		return fmt.Errorf("orchestrator: granule VM %q was to have no network access, and this host's firewall "+
 			"could not be set to drop its traffic (%v) -- refusing to hand over a sandbox whose only isolation "+
 			"would be a default route its own guest has root enough to put back. NetworkNone on granule needs "+

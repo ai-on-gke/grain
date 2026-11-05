@@ -16,12 +16,7 @@ package daemon
 
 import (
 	"context"
-	"crypto/tls"
-	"errors"
-	"fmt"
-	"io"
 	"log"
-	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -29,9 +24,9 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/modelexec"
 	"github.com/ai-on-gke/grain/pkg/namespace"
 	"github.com/ai-on-gke/grain/pkg/redact"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
@@ -93,12 +88,23 @@ func BuildNamespaceRedactor(dataDir string) *redact.Redactor {
 }
 
 func buildNamespaceRedactor(dataDir string) *redact.Redactor {
+	return buildNamespaceRedactorFor(dataDir, nil)
+}
+
+func buildNamespaceRedactorFor(dataDir string, secretStore *secrets.Store) *redact.Redactor {
 	var known []redact.KnownValue
-	if dataDir != "" {
+	if secretStore != nil {
+		if vals, err := KnownSecretValuesFromStore(context.Background(), secretStore); err == nil {
+			known = append(known, vals...)
+		}
+	} else if dataDir != "" {
 		secretsDir := filepath.Join(dataDir, "secrets")
 		if vals, err := KnownSecretValues(secretsDir); err == nil {
 			known = append(known, vals...)
 		}
+	}
+	if dataDir != "" {
+		secretsDir := filepath.Join(dataDir, "secrets")
 		if set, err := gitproxy.LoadCredentialSet(filepath.Join(secretsDir, "github")); err == nil {
 			for _, name := range set.Names() {
 				if set.IsApp(name) {
@@ -148,10 +154,10 @@ func buildNamespaceRedactor(dataDir string) *redact.Redactor {
 // in when the process started. A nil set is a caller with nothing that
 // can change that answer, which gets one of its own.
 func StartGitProxy(dataDir string, store *model.Store, githubHost string, insecureHTTP bool, fabric Fabric, forbidden *gitproxy.ForbiddenSet) (url string, handler http.Handler, stop func(context.Context) error, err error) {
-	return startGitProxy(dataDir, store, githubHost, insecureHTTP, fabric, forbidden, nil)
+	return startGitProxy(dataDir, store, nil, githubHost, insecureHTTP, fabric, forbidden, nil)
 }
 
-func startGitProxy(dataDir string, store *model.Store, githubHost string, insecureHTTP bool, fabric Fabric, forbidden *gitproxy.ForbiddenSet, shutdownStarted <-chan struct{}) (url string, handler http.Handler, stop func(context.Context) error, err error) {
+func startGitProxy(dataDir string, store *model.Store, secretStore *secrets.Store, githubHost string, insecureHTTP bool, fabric Fabric, forbidden *gitproxy.ForbiddenSet, shutdownStarted <-chan struct{}) (url string, handler http.Handler, stop func(context.Context) error, err error) {
 	repos, err := ForbiddenRepos(context.Background(), dataDir)
 	if err != nil {
 		return "", nil, nil, err
@@ -164,20 +170,28 @@ func startGitProxy(dataDir string, store *model.Store, githubHost string, insecu
 	if store != nil {
 		fallbackCI = ci.NewStoredRunStore(store, ci.StoredRunStoreOptions{})
 	}
+	srcDir := sourceDir("")
+	coreSrcDir, coreModule := namespace.CoreSource(srcDir, defaultCoreSourceDir)
 	nsServer := &namespace.Server{
 		CIStore:     daemonNamespaceCIStore{fallback: fallbackCI},
+		ExternalCI:  sandboxExternalCI{},
 		ArtifactDir: ciArtifactDir(dataDir),
-		SrcDir:      sourceDir(""),
+		SrcDir:      srcDir,
+		CoreSrcDir:  coreSrcDir,
+		CoreModule:  coreModule,
 		// Rebuilt per request, as grainlog's redactor is per run
 		// (capabilities.go), so a secret set after the daemon started
 		// is redacted over /fs/ without waiting for a restart.
-		NewRedactor: func() *redact.Redactor { return buildNamespaceRedactor(dataDir) },
+		NewRedactor: func() *redact.Redactor { return buildNamespaceRedactorFor(dataDir, secretStore) },
 	}
+	// The same namespace answers GET /api/fs/ on grain's own API
+	// (ui.Server.SetNamespace), for grain fs and external agents.
+	liveNamespace.Store(nsServer)
 	// task://, memory://, deploy:// and config://, and the /cli/ issue
 	// and database reads, answered by the backends of the MCP tools they
 	// stand in for (sandbox_namespace.go).
 	cliBackend := wireSandboxNamespace(nsServer, sandboxNamespaceConfig{
-		DataDir: dataDir, Store: store, GithubHost: githubHost, InsecureHTTP: insecureHTTP, API: LiveAPI,
+		DataDir: dataDir, Store: store, SecretStore: secretStore, GithubHost: githubHost, InsecureHTTP: insecureHTTP, API: LiveAPI,
 	})
 	proxy, err := gitproxy.BuildProxy(gitproxy.BuildConfig{
 		DataDir: dataDir, Store: store, ForwardHost: githubHost, ForwardTLS: !insecureHTTP,
@@ -228,105 +242,4 @@ func startGitProxy(dataDir string, store *model.Store, githubHost string, insecu
 	}
 	log.Printf("grain daemon: the git proxy is serving at %s (bound %s)", endpoint.URL, endpoint.Bound)
 	return endpoint.URL, proxyHandler, stopServer, nil
-}
-
-func StartExecutorServer(cfg Config, store *model.Store) (*modelexec.Server, func(context.Context) error, error) {
-	srv, _, stop, err := startExecutorServer(cfg, store)
-	return srv, stop, err
-}
-
-// startExecutorServer is StartExecutorServer that also says where the
-// listener bound: "" when -executor-addr is unset, since then nothing
-// listens on its own TCP port for a worker to dial even when the server
-// runs for HTTP-upgraded executors.
-func startExecutorServer(cfg Config, store *model.Store) (*modelexec.Server, string, func(context.Context) error, error) {
-	srv, ln, stop, err := startExecutorListener(cfg, store)
-	if err != nil || ln == nil {
-		return srv, "", stop, err
-	}
-	return srv, ln.Addr().String(), stop, nil
-}
-
-func startExecutorListener(cfg Config, store *model.Store) (*modelexec.Server, net.Listener, func(context.Context) error, error) {
-	if cfg.ExecutorAddr == "" && cfg.ExecutorTokenFile == "" && store == nil {
-		return nil, nil, func(context.Context) error { return nil }, nil
-	}
-	var token string
-	if cfg.ExecutorTokenFile != "" {
-		var err error
-		token, err = ReadTokenFile(cfg.ExecutorTokenFile)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("reading -executor-token-file: %w", err)
-		}
-	} else if store == nil && cfg.ExecutorAddr != "" {
-		return nil, nil, nil, errors.New("-executor-token-file (or -model-exec-token-file) is required with -executor-addr")
-	}
-
-	if token == "" && store == nil && cfg.ExecutorAddr == "" {
-		return nil, nil, func(context.Context) error { return nil }, nil
-	}
-
-	var tlsCfg *tls.Config
-	if cfg.ExecutorCertFile != "" || cfg.ExecutorKeyFile != "" {
-		if cfg.ExecutorCertFile == "" || cfg.ExecutorKeyFile == "" {
-			return nil, nil, nil, errors.New("both -executor-cert-file and -executor-key-file are required for TLS")
-		}
-		cert, err := tls.LoadX509KeyPair(cfg.ExecutorCertFile, cfg.ExecutorKeyFile)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("loading executor TLS keypair: %w", err)
-		}
-		tlsCfg = &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			MinVersion:   tls.VersionTLS12,
-		}
-	}
-
-	srv, err := modelexec.NewServer(modelexec.Config{
-		Token: token,
-		Store: store,
-		Wait:  cfg.ExecutorWait,
-		Logf:  log.Printf,
-		TLS:   tlsCfg,
-		// The tunnel's args come from the executor, not from this daemon,
-		// so the flags that decide where the GitHub credential goes are
-		// held to this daemon's own config (mcpGitHubPins).
-		ServeMCP: func(rwc io.ReadWriteCloser, args []string) error {
-			return ServeMCPServerPinned(rwc, rwc, args, &mcpGitHubPins{
-				dataDir:            cfg.DataDir,
-				githubHost:         cfg.GithubHost,
-				githubInsecureHTTP: cfg.GithubInsecureHTTP,
-			})
-		},
-		GitProxy: cfg.gitProxyHandler,
-	})
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	var ln net.Listener
-	ctx, cancel := context.WithCancel(context.Background())
-	if cfg.ExecutorAddr != "" {
-		var err error
-		ln, err = net.Listen("tcp", cfg.ExecutorAddr)
-		if err != nil {
-			cancel()
-			return nil, nil, nil, fmt.Errorf("listening on -executor-addr %s: %w", cfg.ExecutorAddr, err)
-		}
-		log.Printf("grain daemon: the remote executor listener is serving at %s", ln.Addr().String())
-
-		go func() {
-			if err := srv.Serve(ctx, ln); err != nil && ctx.Err() == nil {
-				log.Printf("grain daemon: executor server error: %v", err)
-			}
-		}()
-	}
-
-	stop := func(shutdownCtx context.Context) error {
-		cancel()
-		if ln != nil {
-			return ln.Close()
-		}
-		return nil
-	}
-	return srv, ln, stop, nil
 }

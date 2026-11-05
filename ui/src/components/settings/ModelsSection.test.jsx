@@ -80,6 +80,29 @@ describe("ModelsSection", () => {
     );
   });
 
+  // A config pull request disabling every connection is refused as
+  // locking dispatch; the same change made here is written, so the page
+  // says what it did (the 2026-10-31 config-repo write-path test run).
+  it("warns when every connection is disabled", async () => {
+    backends[0].disabled = true;
+    try {
+      render(<ModelsSection config={{}} showError={vi.fn()} />);
+      expect(
+        await screen.findByTestId("all-connections-disabled"),
+      ).toHaveTextContent("Every provider connection is disabled");
+    } finally {
+      delete backends[0].disabled;
+    }
+  });
+
+  it("does not warn while a connection is enabled", async () => {
+    render(<ModelsSection config={{}} showError={vi.fn()} />);
+    await screen.findByText("Primary Antigravity");
+    expect(
+      screen.queryByTestId("all-connections-disabled"),
+    ).not.toBeInTheDocument();
+  });
+
   it("removes a connection through the deployment's agent-backends route", async () => {
     const user = userEvent.setup();
     vi.spyOn(window, "confirm").mockReturnValue(true);
@@ -93,6 +116,46 @@ describe("ModelsSection", () => {
         { method: "DELETE" },
       ),
     );
+  });
+
+  // A custom command connection, a type grain no longer runs, is kept
+  // disabled until somebody deletes it: shown as removed, saying why, with
+  // Delete and nothing that would edit or enable it.
+  it("shows a removed custom command connection with Delete only", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    backends.push({
+      id: "house",
+      name: "House agent",
+      framework: "custom",
+      command: "agents/run.sh",
+      disabled: true,
+      disabledReason:
+        "custom command connections were removed in v3.2.0; replace it with an Antigravity, Claude or Codex connection",
+    });
+    try {
+      render(<ModelsSection config={{}} showError={vi.fn()} />);
+      const name = await screen.findByText("House agent");
+      const row = name.closest(".MuiBox-root").parentElement.parentElement;
+      expect(row).toHaveTextContent("Custom command");
+      expect(row).toHaveTextContent("Removed");
+      expect(row).toHaveTextContent(
+        "custom command connections were removed in v3.2.0",
+      );
+      const buttons = [...row.querySelectorAll("button")].map(
+        (b) => b.textContent,
+      );
+      expect(buttons).toEqual(["Delete"]);
+      await user.click(screen.getByRole("button", { name: "Delete" }));
+      await waitFor(() =>
+        expect(api).toHaveBeenCalledWith(
+          "/api/deployment/agent-backends/house",
+          { method: "DELETE" },
+        ),
+      );
+    } finally {
+      backends.pop();
+    }
   });
 
   // Remove deletes the credential stored with the connection, so it asks
@@ -186,7 +249,6 @@ describe("ModelsSection", () => {
     render(<ModelsSection config={{}} showError={vi.fn()} />);
     expect(await screen.findByText("Primary Antigravity")).toBeVisible();
     expect(screen.getByText("Legacy")).toBeVisible();
-    expect(screen.getByText(/Model servers/i)).toBeVisible();
-    expect(screen.getByText("grain model-server")).toBeVisible();
+    expect(screen.getByText("grain hostd -server")).toBeVisible();
   });
 });

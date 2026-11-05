@@ -192,7 +192,7 @@ func TestStateRepoPullRequestClientDiffsTheLocalConfigRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening state repo: %v", err)
 	}
-	if err := loadStateRepo(ctx, dataDir, repo, db, false); err != nil {
+	if err := loadStateRepo(ctx, dataDir, repo, db, storeMigration{}); err != nil {
 		t.Fatalf("loading state repo: %v", err)
 	}
 	manager := NewStateManager(dataDir, db, repo, OpenSecrets(dataDir), nil, nil)
@@ -239,7 +239,7 @@ func TestStateRepoPullRequestClientReadsConfigPolicyFromBaseBranch(t *testing.T)
 	if err != nil {
 		t.Fatalf("opening state repo: %v", err)
 	}
-	if err := loadStateRepo(ctx, dataDir, repo, db, false); err != nil {
+	if err := loadStateRepo(ctx, dataDir, repo, db, storeMigration{}); err != nil {
 		t.Fatalf("loading state repo: %v", err)
 	}
 	manager := NewStateManager(dataDir, db, repo, OpenSecrets(dataDir), nil, nil)

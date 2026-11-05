@@ -146,7 +146,7 @@ func (s *Server) handleListGCPKeys(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetGCPKey(w http.ResponseWriter, r *http.Request) {
-	key, err := s.tasks.GetGCPKeyWithUser(r.Context(), r.PathValue("name"), requestUser(r))
+	key, err := s.tasks.GetGCPKeyWithUser(r.Context(), r.PathValue("name"), requestPerson(r.Context()))
 	if err != nil {
 		writeClientError(w, err)
 		return
@@ -162,7 +162,7 @@ func (s *Server) handleSetGCPKey(w http.ResponseWriter, r *http.Request) {
 	if name := r.PathValue("name"); name != "" {
 		req.Name = name
 	}
-	key, err := s.tasks.SetGCPKeyWithUser(r.Context(), req, actingUser(r, req.User))
+	key, err := s.tasks.SetGCPKeyWithUser(r.Context(), req, requestPerson(r.Context()))
 	if err != nil {
 		writeClientError(w, err)
 		return
@@ -171,7 +171,7 @@ func (s *Server) handleSetGCPKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteGCPKey(w http.ResponseWriter, r *http.Request) {
-	if err := s.tasks.DeleteGCPKeyWithUser(r.Context(), r.PathValue("name"), requestUser(r)); err != nil {
+	if err := s.tasks.DeleteGCPKeyWithUser(r.Context(), r.PathValue("name"), requestPerson(r.Context())); err != nil {
 		writeClientError(w, err)
 		return
 	}

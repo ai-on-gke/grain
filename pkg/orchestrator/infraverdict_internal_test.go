@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 func TestInfraVerdictTellsTheDeploymentsRedFromTheTrees(t *testing.T) {
@@ -85,5 +86,93 @@ func TestInfraRetriesAreCountedOnTheRequester(t *testing.T) {
 	}
 	if got := infraRetriesOf("workflow-schedule:x#infra-retry-nope"); got != 0 {
 		t.Fatalf("a malformed count reads as %d, want 0", got)
+	}
+}
+
+// git's own words for a forge 5xx are infra only out of the step that
+// checks the tree out -- the first step, or one named for a checkout --
+// and never out of a step that tests it.
+func TestInfraSignatureReadsGitFiveHundredsOnlyFromACheckout(t *testing.T) {
+	t.Parallel()
+	step := func(name, out string) ci.StepRun {
+		return ci.StepRun{Name: name, Conclusion: ci.ConclusionFailure, Output: out}
+	}
+	passed := ci.StepRun{Name: "Set up", Conclusion: ci.ConclusionSuccess}
+	for _, tc := range []struct {
+		name  string
+		steps []ci.StepRun
+		want  string
+	}{
+		{"502 in the first step", []ci.StepRun{step("prepare",
+			"fatal: unable to access 'https://forge.example/acme/widgets/': The requested URL returned error: 502")},
+			"the requested url returned error: 502"},
+		{"503 in a checkout step", []ci.StepRun{passed, step("Checkout",
+			"error: The requested URL returned error: 503\nfatal: expected flush after ref listing")},
+			"the requested url returned error: 503"},
+		{"504 in a git fetch", []ci.StepRun{passed, step("git fetch --tags origin",
+			"The requested URL returned error: 504")}, "the requested url returned error: 504"},
+		{"RPC failed", []ci.StepRun{passed, step("actions/checkout",
+			"error: RPC failed; HTTP 502 curl 22 The requested URL returned error: 502")}, "the requested url returned error: 502"},
+		{"RPC failed alone", []ci.StepRun{step("clone", "error: RPC failed; HTTP 504 curl 22")}, "rpc failed; http 504"},
+		{"502 printed by a test", []ci.StepRun{passed, step("go test",
+			"--- FAIL: TestProxy: The requested URL returned error: 502")}, ""},
+		{"500 is not one", []ci.StepRun{step("Checkout", "The requested URL returned error: 500")}, ""},
+		{"a runner that went away", []ci.StepRun{passed, step("Build the images",
+			"The hosted runner lost communication with the server.")}, "lost communication with the server"},
+		{"a sandbox that died", []ci.StepRun{passed, {Name: "Publish", Conclusion: ci.ConclusionFailure,
+			Error: "infra: sandbox lost: running a step in ci-7: EOF"}}, "infra: sandbox lost"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			job := ci.JobRun{JobID: "images", Conclusion: ci.ConclusionFailure, Steps: tc.steps}
+			if got := infraSignature(job); got != tc.want {
+				t.Fatalf("infraSignature = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A job whose sandbox died concludes errored with the sandbox-lost fault
+// (pkg/grit/engine), and a run of nothing but those is an infra verdict.
+func TestASandboxThatDiedIsAnInfraVerdict(t *testing.T) {
+	t.Parallel()
+	run := ci.Run{Conclusion: ci.ConclusionErrored, Jobs: []ci.JobRun{{JobID: "images",
+		Conclusion: ci.ConclusionErrored, Error: "infra: sandbox lost: running a step in ci-7: connection reset by peer"}}}
+	if why, infra := infraVerdict(run); !infra || why == "" {
+		t.Fatalf("infraVerdict = %v (%q), want an infra verdict", infra, why)
+	}
+	if sig := infraSignature(run.Jobs[0]); sig != "infra: sandbox lost" {
+		t.Fatalf("infraSignature = %q, want the sandbox-lost fault", sig)
+	}
+}
+
+func TestGitHubInfraVerdictReadsTheLatestAttemptsFailingSteps(t *testing.T) {
+	t.Parallel()
+	checkout := model.GitHubCIJob{JobName: "release images", Conclusion: "failure", RunAttempt: 1,
+		FailingStep: "Checkout", FailureTail: "remote: Internal error\nfatal: unable to access: The requested URL returned error: 502\n"}
+	inTest := model.GitHubCIJob{JobName: "release images", Conclusion: "failure", RunAttempt: 1,
+		FailingStep: "Run the container e2e suite", FailureTail: "The requested URL returned error: 502\n--- FAIL"}
+	runner := model.GitHubCIJob{JobName: "release images", Conclusion: "failure", RunAttempt: 1,
+		FailingStep: "Build the images", Output: "The hosted runner lost communication with the server."}
+	passed := model.GitHubCIJob{JobName: "lint", Conclusion: "success", RunAttempt: 1}
+	for _, tc := range []struct {
+		name    string
+		jobs    []model.GitHubCIJob
+		attempt int
+		infra   bool
+	}{
+		{"checkout 502", []model.GitHubCIJob{checkout, passed}, 1, true},
+		{"502 in a test step", []model.GitHubCIJob{inTest}, 1, false},
+		{"runner lost", []model.GitHubCIJob{runner}, 1, true},
+		{"checkout beside a test failure", []model.GitHubCIJob{checkout, inTest}, 1, false},
+		{"an earlier attempt's test failure does not count",
+			[]model.GitHubCIJob{inTest, func() model.GitHubCIJob { j := checkout; j.RunAttempt = 2; return j }()}, 2, true},
+		{"nothing failed", []model.GitHubCIJob{passed}, 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			why, infra := gitHubInfraVerdict(tc.jobs, tc.attempt)
+			if infra != tc.infra {
+				t.Fatalf("gitHubInfraVerdict = %v (%q), want %v", infra, why, tc.infra)
+			}
+		})
 	}
 }

@@ -12,32 +12,102 @@ body: |
   - Check the latest commits on `main` against the latest successful release commit.
   - Check whether any release run has failed, errored, timed out, or stalled.
 
-  ## 2. Check release-candidate progress on `main`
+  ## 2. Check release-candidate qualification
 
-  Releases are cut from `main` (`docs/design/release-from-trunk.md`): there is no
-  daily agent cut, no `candidate -> main` back-merge and no port tasks between the
-  two branches any more, and `candidate` is never the base of a pull request.
-  `.grain/workflows/release.yml` runs on every merge to `main`, so a green, current
-  release run there says nothing about whether a release candidate is advancing.
-  Check that from git:
+  Releases go out continuously from `main` (`design/playbook/releases.playbook.md`):
+  the release train cuts `vX.Y.0-rc.N` from the newest known-good commit, qualifies
+  it in two stages -- Stage 1 `nightly.yml` on the rc, then Stage 2, the
+  `release-qualification` suite, whose verdict is check run
+  `grain/release-qualification` on the rc's commit -- and then releases it itself
+  (tags `vX.Y.0` and moves `latest`, in a tick of `.grain/schedules/release-train.yml`
+  every 20 minutes), or stages `vX.Y.0-pending` for a person's Approve when it
+  may not (a major bump, breaking changes, `RELEASE_AUTO_PROMOTE=false`).
+  There is no staging soak and no 24-hour wait: a healthy
+  rc is qualified in about 60-90 minutes. `.grain/workflows/release.yml` runs on
+  every merge to `main`, so a green, current release run there says nothing about
+  whether a release candidate is advancing. Check that from git and the rc's runs:
 
-  - `git fetch origin --tags`, then find the newest `v*.*.0-rc.*` tag and its date
-    (`git for-each-ref --sort=-creatordate --count=1 --format='%(refname:short) %(creatordate:iso)' 'refs/tags/v*.*.0-rc.*'`)
+  - `git fetch origin --tags`, then list the newest rc, discarded, pending,
+    retracted and release tags with their dates
+    (`git for-each-ref --sort=-creatordate --count=10 --format='%(refname:short) %(creatordate:iso) %(objectname:short)' 'refs/tags/v*'`)
     and the commit `latest` points at.
-  - Report the newest rc tag, its age, and how far `origin/main` is ahead of it
-    (`git rev-list --count <tag>..origin/main`). An rc tag more than 30 hours old
-    while `main` has moved means release candidates are not advancing: say so, and
-    propose a task (`branch: "main"`) to find out why, unless one is already open.
+  - For the newest `vX.Y.0-rc.N` with no `-discarded` marker, no `vX.Y.0-pending`
+    and no `vX.Y.0`, it is still qualifying (or, once both stages passed,
+    waiting out `RELEASE_MIN_INTERVAL_MINUTES`: the train says `promotion_waits=`). Report how long it has been since
+    it was cut, and where it is:
+    - Stage 1: the `nightly.yml` run on the rc tag (`list_ci_runs` with
+      `provider: github-actions`, `workflow: nightly.yml` and `ref: <rc tag>`),
+      its conclusion, and whether a job was re-run.
+    - Stage 2: `grain ci checks <rc sha> --name grain/release-qualification`
+      (status, conclusion and when it started and finished).
+  - **Qualification lead time.** An rc qualifying for more than 4 hours, or one
+    whose Stage 1 or Stage 2 has not started 30 minutes after the stage before
+    it finished, is stalled: say which stage it is in and why, and propose a task
+    (`branch: "main"`) to find out, unless one is already open or the reconciler
+    has already raised `pipeline.release-infra-stalled:<rc tag>` for it.
+  - **No rc while `main` moves.** With nothing qualifying, nothing pending, and
+    `origin/main` more than `RELEASE_MIN_INTERVAL_MINUTES` (`scripts/release.conf`)
+    plus 2 hours past the newest release with `feat:` or `fix:` commits since
+    (`git log --oneline <latest>..origin/main`), the train is not cutting: check
+    the newest `release-train.yml` runs and say what they reported
+    (`release_waits=`, `rc_held=`, no LKG commit).
+  - **A red rc.** For each `vX.Y.0-rc.N-discarded` in the last 24 hours, report
+    the attempt number and whether `pipeline.rc-failed:<rc tag>` triage or
+    `[rc-blocker <rc tag>]` tasks exist; three failed attempts on one version
+    should already have raised `pipeline.release-escalated:<version>`. The
+    pipeline steward owns red rcs (`docs/pipeline-steward.md`): report, do not
+    file fixes for them here.
+  - **Flake retries.** Count the rc qualification jobs and items that failed once
+    and passed on their one retry in the last 24 hours (Stage 1 jobs with a second
+    attempt, Stage 2 items run twice). Two or more is over the flake budget
+    (playbook section 3): name them, and check that `pipeline.flake-budget` has
+    been raised for each and that a de-flake or quarantine task is open.
+  - **A new release** (`vX.Y.0` in the last 24 hours): check that
+    `publish-release.yml` ran on its tag and succeeded (images promoted, GitHub
+    Release written). A train-made `vX.Y.0` with no published release is a fault.
+  - **A pending release** (`vX.Y.0-pending` with no `vX.Y.0`) waits on a person's
+    Approve, because the train may not release it. Report its age and why it was
+    staged; it is not a fault.
+  - **A retracted release** (`vX.Y.Z-retracted`) is a rollback a person made.
+    Report any from the last 7 days, and check that `latest` does not point at a
+    retracted release and that a fix-forward task exists for it.
 
   ## 2b. Check `main`'s nightly and live suites
 
-  A release candidate is only picked from a `main` commit whose suites are green.
-  For each of `nightly`, `gcp-smoke`, `live-agent`, `live-frameworks` and
-  `live-secrets-repo`, find the newest concluded grain CI run on `main`
-  (`list_ci_runs` with `ref: main`, `since: 36h` and a job only that workflow has:
-  `go-long`, `smoke`, `live-agy`, `live-claude`, `live-secrets-repo`), and report
-  each verdict. A workflow with no run on `main` for more than 30 hours means its
-  schedule is not firing; that is a fault to report.
+  A release candidate is only cut from a `main` commit whose `tests.yml` and
+  `release.yml` are green, and `nightly.yml` is the first stage of its
+  qualification, so a `nightly.yml` that is red or not running on `main` is a
+  red rc waiting to happen.
+  This repository's CI is GitHub Actions (`ci_mode: github`), so `nightly` and
+  `gcp-smoke` are GitHub Actions workflows, not grain CI runs: their list rows
+  carry no YAML job ids, and a `job:` filter such as `go-long` never matches them.
+  Query them by workflow file instead:
+
+  - `list_ci_runs` with `repo: ai-on-gke/grain`, `ref: main`,
+    `provider: github-actions`, `workflow: nightly.yml` and `since: 26h`
+    (`grain ci list --repo ai-on-gke/grain --ref main --provider github-actions --workflow nightly.yml --since 26h`),
+    and the same with `workflow: gcp-smoke.yml`. Report the newest run's
+    conclusion and URL for each.
+  - **If `nightly.yml` has no run on `main` in the last 26 hours**, its schedule has
+    stopped firing (or the workflow was disabled). Raise it, whatever else you find:
+
+        grain notify --subject pipeline.nightly-missing:ai-on-gke/grain --severity warning \
+          --title "nightly.yml has not run on main in 26h" \
+          --body "<the newest nightly.yml run you could find, its date, and what you checked>"
+
+    The `pipeline.*` subject also wakes the pipeline steward. Do the same for
+    `gcp-smoke.yml` with subject `pipeline.gcp-smoke-missing:ai-on-gke/grain`.
+  - A red, `timed_out` or `startup_failure` `nightly.yml` run is triaged by the
+    `nightly-ci-review` schedule (`.grain/schedules/nightly-ci-review.yml`), which
+    files a review task for every such run; check that one exists for the newest
+    red run rather than filing another.
+
+  For `live-agent`, `live-frameworks` and `live-secrets-repo`, which still run in
+  grain CI, find the newest concluded grain CI run on `main` (`list_ci_runs` with
+  `ref: main`, `provider: grain`, `since: 36h` and a job only that workflow has:
+  `live-agy`, `live-claude`, `live-secrets-repo`), and report each verdict. A
+  workflow with no run on `main` for more than 30 hours means its schedule is not
+  firing; that is a fault to report.
 
   - Do not repair a red suite here unless it is a release pipeline fault: its own
     review task owns it. Propose a task (`branch: "main"`) only for a `regression`
@@ -55,5 +125,6 @@ body: |
 
   ## 4. Verify and report
 
-  - If everything is healthy and releases are up-to-date, leave a closing note confirming the pipeline health.
+  - If everything is healthy and releases are up-to-date, leave a closing note confirming the pipeline health:
+    the newest release and rc, the rc's stage and age, and the flake retries and retractions you counted.
   - If fixes were applied, commit with descriptive messages, push the branch, and wait for CI checks to pass.

@@ -1,0 +1,88 @@
+{
+  "suite": "cloud-run-direct-iap-e2e",
+  "mode": "cloud-run-iap",
+  "overall": "PASS",
+  "passed": 8,
+  "failed": 0,
+  "startedAt": "2026-11-04T04:14:05Z",
+  "completedAt": "2026-11-04T04:17:42Z",
+  "durationSeconds": 217,
+  "target": {
+    "project": "bsalmon-sandbox",
+    "projectNumber": "112895876707",
+    "region": "us-central1",
+    "service": "grain-iap-e2e",
+    "image": "ghcr.io/bwsalmon/grain/grain:main",
+    "serviceURL": "https://grain-iap-e2e-v3tesd4k5q-uc.a.run.app",
+    "callerJWTAAudience": "https://grain-iap-e2e-v3tesd4k5q-uc.a.run.app/*",
+    "iapAssertionAudience": "/projects/112895876707/locations/us-central1/services/grain-iap-e2e",
+    "saA": "grain-iap-e2e-sa-a@bsalmon-sandbox.iam.gserviceaccount.com",
+    "saB": "grain-iap-e2e-sa-b@bsalmon-sandbox.iam.gserviceaccount.com"
+  },
+  "cost": {
+    "cloudRunInstanceSeconds": 199,
+    "vcpuSeconds": 199,
+    "gibSeconds": 199,
+    "estimatedUSD": 0.005274,
+    "note": "1 vCPU + 1 GiB Cloud Run min-instance for ~199s in us-central1 (~$0.0053 USD list rate, <$0.01)"
+  },
+  "teardown": "clean (Cloud Run service, IAP bindings, service accounts, and local keys deleted)",
+  "cases": [
+    {
+      "case": 1,
+      "id": "sa-a-admitted",
+      "title": "SA-A admitted to API and CLI through IAP with no access code",
+      "status": "PASS",
+      "evidence": "GET /api/auth/user -> 200 (authenticated=true, user=grain-iap-e2e-sa-a@bsalmon-sandbox.iam.gserviceaccount.com, authMethod=iap);GET /api/whoami -> 200 (principal=grain-iap-e2e-sa-a@bsalmon-sandbox.iam.gserviceaccount.com, kind=service, source=iap);grain CLI (-server https://grain-iap-e2e-v3tesd4k5q-uc.a.run.app, GRAIN_AUDIENCE=https://grain-iap-e2e-v3tesd4k5q-uc.a.run.app/*, no access code) -> exit 0, JSON array"
+    },
+    {
+      "case": 2,
+      "id": "sa-b-refused-by-grain",
+      "title": "SA-B admitted by IAP and refused by grain (403 JSON + HTML refusal page)",
+      "status": "PASS",
+      "evidence": "GET /api/tasks as SA-B -> 403 JSON from grain naming grain-iap-e2e-sa-b@bsalmon-sandbox.iam.gserviceaccount.com;GET / (Accept: text/html) as SA-B -> 403 HTML refusal page ('Signed in as grain-iap-e2e-sa-b@bsalmon-sandbox.iam.gserviceaccount.com (verified by iap)')"
+    },
+    {
+      "case": 3,
+      "id": "no-token-refused-by-iap",
+      "title": "Unauthenticated requests refused at IAP edge before reaching grain",
+      "status": "PASS",
+      "evidence": "GET /api/tasks (no token) -> 302 with X-Goog-IAP-Generated-Response: true;GET / HTML (no token) -> 302 with X-Goog-IAP-Generated-Response: true (Location: https://accounts.google.com/o/oauth2/v2/auth)"
+    },
+    {
+      "case": 4,
+      "id": "bad-token-refused",
+      "title": "Expired and wrong-audience tokens refused with 401",
+      "status": "PASS",
+      "evidence": "expired SA-A JWT (exp=now-600s) -> 401 at IAP edge;wrong-audience SA-A JWT (aud=https://wrong-audience.example.com/*) -> 401 at IAP edge;missing-wildcard SA-A JWT (aud=https://grain-iap-e2e-v3tesd4k5q-uc.a.run.app) -> 401 at IAP edge"
+    },
+    {
+      "case": 5,
+      "id": "forged-iap-assertion-rejected",
+      "title": "Forged X-Goog-IAP-JWT-Assertion stripped by IAP and rejected by grain",
+      "status": "PASS",
+      "evidence": "unauthenticated + forged X-Goog-IAP-JWT-Assertion -> 302 at IAP edge;SA-B + forged X-Goog-IAP-JWT-Assertion claiming SA-A -> stripped by IAP, refused 403 as grain-iap-e2e-sa-b@bsalmon-sandbox.iam.gserviceaccount.com;direct-to-grain forged X-Goog-IAP-JWT-Assertion -> 401 signature rejected by grain verifier"
+    },
+    {
+      "case": 6,
+      "id": "require-iap-refuses-access-code",
+      "title": "Redeploy with -ui-require-iap refuses access code over the network",
+      "status": "PASS",
+      "evidence": "baseline without -ui-require-iap accepted seeded access code (200 + grain_access cookie);GET /api/auth/access-code -> 200 (requireIAP=true, accessCodeAccepted=false);POST /api/auth/access-code with valid code -> 403 (-ui-require-iap);SA-B + valid grain_access cookie -> 403 (cookie ignored under -ui-require-iap);direct network Bearer <access-code> -> 401 at Cloud Run ingress (never reaches grain);direct network X-Grain-Access-Code -> 401 (-ui-require-iap);direct network Cookie grain_access -> 401 (-ui-require-iap);direct network GET / HTML -> 401 IAP-required page (no access-code form);loopback break-glass covered by the simulated suite (task 2510)"
+    },
+    {
+      "case": 7,
+      "id": "csrf-cross-origin-refused",
+      "title": "Cross-origin state-changing requests refused with 403",
+      "status": "PASS",
+      "evidence": "POST /api/tasks with Origin: https://evil.example -> 403;Sec-Fetch-Site: cross-site -> 403;Origin: null -> 403;Cookie-bearing POST with no Origin/Sec-Fetch-Site -> 403;same-origin POST (Origin: https://grain-iap-e2e-v3tesd4k5q-uc.a.run.app) -> 201"
+    },
+    {
+      "case": 8,
+      "id": "attribution-sa-a",
+      "title": "Task filed by SA-A recorded as service SA-A, not operator",
+      "status": "PASS",
+      "evidence": "task #3: author=grain-iap-e2e-sa-a@bsalmon-sandbox.iam.gserviceaccount.com (authorKind=service), comment.author=grain-iap-e2e-sa-a@bsalmon-sandbox.iam.gserviceaccount.com (service), close transition.by='service grain-iap-e2e-sa-a@bsalmon-sandbox.iam.gserviceaccount.com' (daemon -as=operator@example.com not used)"
+    }
+  ]
+}

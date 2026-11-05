@@ -16,6 +16,7 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -102,6 +103,10 @@ type ConsoleSession struct {
 	// capacity on a misunderstanding. An operator who trusts theirs can
 	// turn it on.
 	TasksApproved bool
+	// KeepRunning restarts the session's underlying task immediately when
+	// its run exits without asking a question, rather than parking it to
+	// wait for the next message.
+	KeepRunning bool `json:"keepRunning,omitempty"`
 	// Reads is the repos this session is granted read-only access to
 	// (Task.Reads). The session's sandbox may clone or fetch from them,
 	// but never push commits directly.
@@ -110,6 +115,16 @@ type ConsoleSession struct {
 	// (Task.Writes). The session's sandbox may clone, fetch, and push
 	// commits to them.
 	Writes []WriteTarget `json:"writes,omitempty"`
+	// ReadsAll is whether the session also reads every repository this
+	// deployment works in (ConsoleSessionWorkingRepos), resolved each
+	// cycle: nil, the default, and true say it does; false opts the
+	// session out, leaving it the state repository and Reads alone.
+	ReadsAll *bool `json:"readsAll,omitempty"`
+	// DeclinedDefaults is the default grants (ConsoleSessionDefaultGrants)
+	// this session is not to hold. An operator removing one from the
+	// session's own capabilities records it here, so it stays removed
+	// when the session's task is filed again.
+	DeclinedDefaults []string `json:"declinedDefaults,omitempty"`
 	// GoogleChatSpace is the Google Chat space resource name or URL
 	// linked to this session (Task.Links with LinkGoogleChat).
 	GoogleChatSpace string `json:"googleChatSpace,omitempty"`
@@ -121,6 +136,30 @@ type ConsoleSession struct {
 	// next cycle (orchestrator.syncConsoleSessionTask), so a change here
 	// is what the session's next exchange runs on.
 	Model string `json:"model,omitempty"`
+}
+
+func (s *ConsoleSession) UnmarshalJSON(data []byte) error {
+	type alias ConsoleSession
+	var raw struct {
+		alias
+		KeepRunningSnake      *bool    `json:"keep_running,omitempty"`
+		ReadsAllSnake         *bool    `json:"reads_all,omitempty"`
+		DeclinedDefaultsSnake []string `json:"declined_defaults,omitempty"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*s = ConsoleSession(raw.alias)
+	if !s.KeepRunning && raw.KeepRunningSnake != nil {
+		s.KeepRunning = *raw.KeepRunningSnake
+	}
+	if s.ReadsAll == nil && raw.ReadsAllSnake != nil {
+		s.ReadsAll = raw.ReadsAllSnake
+	}
+	if s.DeclinedDefaults == nil && raw.DeclinedDefaultsSnake != nil {
+		s.DeclinedDefaults = raw.DeclinedDefaultsSnake
+	}
+	return nil
 }
 
 // ConsoleSessionPrincipal is who grain approves a session's own
@@ -177,8 +216,28 @@ func ConsoleSessionQueuesProposals(sessions []ConsoleSession, task Task) bool {
 		return false
 	}
 	session, ok := ConsoleSessionByID(sessions, id)
-	return ok && session.QueuesProposals()
+	if !ok {
+		return false
+	}
+	if slices.Contains(task.Tags, ConsoleSessionTasksApprovedTag) {
+		return true
+	}
+	if slices.Contains(task.Tags, ConsoleSessionTasksUnapprovedTag) {
+		return false
+	}
+	return session.QueuesProposals() || task.AutoApproveProposals
 }
+
+const (
+	// ConsoleSessionTasksApprovedTag records an operator's explicit decision on
+	// an active console-session task to queue its proposed tasks without waiting
+	// for approval, overriding the static ConsoleSession.TasksApproved template.
+	ConsoleSessionTasksApprovedTag = "console-session-tasks-approved"
+	// ConsoleSessionTasksUnapprovedTag records an operator's explicit decision on
+	// an active console-session task to hold its proposed tasks for approval,
+	// overriding the static ConsoleSession.TasksApproved template.
+	ConsoleSessionTasksUnapprovedTag = "console-session-tasks-unapproved"
+)
 
 // DirectorSessionID names the director: the standing session grain
 // ships, and the one a deployment gets if it has never chosen otherwise.
@@ -291,7 +350,10 @@ func defaultConsoleSessionCapabilities() []string {
 // repository comes with
 // the task rather than from a grant (orchestrator.consoleSessionTask),
 // since that is grain's own database as text and it is what "what is
-// this deployment actually doing" is answered out of.
+// this deployment actually doing" is answered out of. So, for every
+// session and not only this one, does read access to every repository
+// the deployment works in, and CI read (ConsoleSessionDefaultGrants) --
+// see console_session_reach.go.
 //
 // Deliberately not granted, and both are one tick away in the UI for an
 // operator who wants them: self-repair, which lets a run change things
@@ -305,7 +367,7 @@ func defaultConsoleSessionCapabilities() []string {
 // isolating backend can close the director in the same pane the
 // capabilities are in.
 func DefaultConsoleSessions() []ConsoleSession {
-	caps := []string{"self-debug", "grain-log", "deployment-health", "bootstrap-playbooks"}
+	caps := []string{"self-debug", GrainJournalGrant, "api:deployment:read", GrainHealthGrant, "bootstrap-playbooks"}
 	for _, id := range defaultConsoleSessionCapabilities() {
 		if !slices.Contains(caps, id) {
 			caps = append(caps, id)
@@ -720,19 +782,36 @@ func DirectorSessionBody(stateRepo RepoRef, session ConsoleSession) string {
 	b.WriteString("Whatever else you hold is on this task's capabilities, and the person you " +
 		"are talking to can change them in the same pane this chat is in. Not every change " +
 		"reaches you at the same moment: repositories added to or removed from this " +
-		"session's reads and writes, and `api:*` scopes called through `grain api`, take " +
-		"effect at once; everything else -- a new or removed capability, and an `api:*` " +
-		"route served only as an `api_*` tool -- takes effect when grain restarts this " +
+		"session's reads and writes, and `api:*` scopes (once `grain-controller` is attached, " +
+		"or when called through `grain api`), take effect at once; everything else -- a new or " +
+		"removed sandbox capability, or a model-only `api:*` scope added when this session " +
+		"started with no `api:*` grant at all -- takes effect when grain restarts this " +
 		"session to pick it up, which it says in this chat and which loses nothing said " +
 		"here. Check what you " +
 		"actually have before promising anything: if you are asked to do something you have no " +
 		"capability for, say which one it would need rather than working around it.\n\n")
 
+	if session.ReadsAllRepos() {
+		b.WriteString("This session reads every repository this deployment works in: clone or " +
+			"fetch any of them through grain's git proxy, the way you would the state repository, " +
+			"rather than from anywhere else. ")
+		if !session.DeclinesDefault(ConsoleSessionCIReadGrant) {
+			b.WriteString("Unless it has been removed from this task, `" + ConsoleSessionCIReadGrant + "` also " +
+				"lets `grain ci list/show/log` and `grain pr status --task/--ref` read CI for all of them. ")
+		}
+		b.WriteString("Try a clone before saying a repository is out of reach.\n\n")
+	} else if !session.DeclinesDefault(ConsoleSessionCIReadGrant) {
+		b.WriteString("Unless it has been removed from this task, `" + ConsoleSessionCIReadGrant + "` lets " +
+			"`grain ci list/show/log` and `grain pr status --task/--ref` read CI for every repository.\n\n")
+	}
+
 	b.WriteString("Anything a person can do in grain's UI you can do through grain's own API, if " +
 		"you are granted its scope: an `api:<scope>` or `api:<preset>` capability on this task " +
-		"serves you its routes (docs/agent-api.md): `grain api routes` lists them and `grain api <METHOD> " +
-		"<path>` calls one from your sandbox, while a route no sandbox process may call stays an " +
-		"`api_*` tool call -- `api:task-admin` " +
+		"attaches the `grain-controller` MCP server (`grain_explore_scope` to list authorized " +
+		"scopes and inspect route schemas, `grain_invoke` to execute any authorized route, plus " +
+		"`grain_list_tasks`, `grain_get_task`, `grain_filing_context`, and `grain_submit_task`) " +
+		"and serves sandbox-allowed routes to `grain api routes` / `grain api <METHOD> <path>` " +
+		"(docs/agent-api.md) -- `api:task-admin` " +
 		"to edit, reorder, retry and close tasks and re-run their CI, `api:ci-read` to read CI " +
 		"logs, `api:release-manager` to run schedules and cut and promote release candidates. " +
 		"When you need one you do not hold, ask the person for that grant by name; never try to " +
@@ -798,49 +877,39 @@ type FileConsoleSessionOptions struct {
 }
 
 // ConsoleSessionGrants returns the session's configured capabilities as
-// GrantByGrain grants, always including DurableCapability, followed by
-// defaults -- this deployment's Config.DefaultCapabilities -- as
-// GrantByDefault for any the session does not already name.
+// GrantByGrain grants, always including DurableCapability.
 //
-// The defaults are there because every task a session files is seeded
-// with them (ui.Client.defaultCapabilities), and a capability reference
-// its proposer does not hold is an escalation however it came to be on
-// the proposal (EscalatedCapabilities, docs/capabilities-spec.md
-// §2.3.4). A session left without them could never queue anything on a
-// deployment whose defaults name a reference, whatever TasksApproved
-// says (grain/task-1983): holding what its own proposals are seeded with
-// is what lets a session's approval mean what it says.
-func ConsoleSessionGrants(session ConsoleSession, defaults ...string) []Grant {
-	grants := make([]Grant, 0, len(session.Capabilities)+len(defaults)+1)
+// session.Capabilities is the single source of truth for what capabilities a
+// standing session holds: build-level DefaultOn capabilities seed
+// DefaultConsoleSessions, and newly created sessions also seed the
+// deployment's Config.DefaultCapabilities into session.Capabilities at
+// creation time (ui.Client.CreateConsoleSession), so an operator who removes a
+// default capability from a session keeps it out across reconciles and
+// restarts (grain/task-2126).
+//
+// The one exception is ConsoleSessionDefaultGrants, which every session
+// holds GrantByDefault without its Capabilities naming them, unless it
+// declines them (ConsoleSession.DeclinedDefaults).
+func ConsoleSessionGrants(session ConsoleSession) []Grant {
+	grants := make([]Grant, 0, len(session.Capabilities)+1+len(consoleSessionDefaultGrants))
 	grants = append(grants, Grant{Capability: DurableCapability, Via: GrantByGrain})
 	seen := map[string]bool{DurableCapability: true}
 	for _, name := range session.Capabilities {
+		name = strings.TrimSpace(name)
 		if name == "" || seen[name] {
 			continue
 		}
 		seen[name] = true
 		grants = append(grants, Grant{Capability: name, Via: GrantByGrain})
 	}
-	for _, name := range defaults {
-		name = strings.TrimSpace(name)
-		if name == "" || seen[name] {
+	for _, name := range consoleSessionDefaultGrantsFor(session) {
+		if seen[name] {
 			continue
 		}
 		seen[name] = true
 		grants = append(grants, Grant{Capability: name, Via: GrantByDefault})
 	}
 	return grants
-}
-
-// DeploymentDefaultCapabilities is this deployment's
-// Config.DefaultCapabilities as stored, or none when there is no config
-// row yet: what ConsoleSessionGrants seeds a standing session with.
-func DeploymentDefaultCapabilities(ctx context.Context, store *Store) ([]string, error) {
-	cfg, err := store.GetConfig(ctx)
-	if err != nil || cfg == nil {
-		return nil, err
-	}
-	return cfg.DefaultCapabilities, nil
 }
 
 // ConsoleSessionNetworkAccess resolves the network access for a console
@@ -850,6 +919,84 @@ func ConsoleSessionNetworkAccess(session ConsoleSession, networkIsolates bool) N
 		return session.NetworkAccess
 	}
 	return NetworkOpen
+}
+
+// ConsoleSessionConfigSnapshot records the static ConsoleSession config values
+// last applied to a console session task, so syncConsoleSessionTask can distinguish
+// config changes in grain_config from operator edits made directly on the active
+// session task.
+type ConsoleSessionConfigSnapshot struct {
+	Capabilities    []string
+	Reads           []RepoRef
+	Writes          []WriteTarget
+	NetworkAccess   NetworkAccess
+	Model           string
+	Title           string
+	TasksApproved   bool
+	KeepRunning     bool
+	GoogleChatSpace string
+	// OfferedDefaults is the ConsoleSessionDefaultGrants this task has
+	// already been given once. A default named here that the task no
+	// longer holds was removed from it, and is not given back. It only
+	// grows: RecordSyncedConsoleSession keeps every id an earlier
+	// snapshot named.
+	OfferedDefaults []string `json:",omitempty"`
+	// AutoReads is the repositories the task was last given because the
+	// session reads every working repository (ConsoleSessionAutoReads),
+	// so a sync can tell them from reads an operator added to the task
+	// and drop one that is retired or that the session stopped reading.
+	// Nil carries the previous snapshot's (RecordSyncedConsoleSession).
+	AutoReads []RepoRef `json:",omitempty"`
+}
+
+// LastSyncedConsoleSession returns the ConsoleSessionConfigSnapshot last synced
+// onto taskID in store, if any. It is read from the store's
+// console_session_sync table, so it survives a daemon restart; a task with
+// no row, or one whose row cannot be read, reports none -- which the sync
+// treats as the declaration being authoritative.
+func LastSyncedConsoleSession(ctx context.Context, store *Store, taskID string) (ConsoleSessionConfigSnapshot, bool) {
+	var raw string
+	err := store.db.QueryRowContext(ctx,
+		"SELECT `snapshot` FROM `console_session_sync` WHERE `task_id` = ?", taskID).Scan(&raw)
+	if err != nil {
+		return ConsoleSessionConfigSnapshot{}, false
+	}
+	var snap ConsoleSessionConfigSnapshot
+	if err := json.Unmarshal([]byte(raw), &snap); err != nil {
+		return ConsoleSessionConfigSnapshot{}, false
+	}
+	return snap, true
+}
+
+// RecordSyncedConsoleSession stores the ConsoleSessionConfigSnapshot last synced
+// onto taskID in store.
+//
+// What an earlier snapshot recorded of OfferedDefaults is kept, and its
+// AutoReads are carried when snap has none of its own (nil), so a caller
+// recording only the declaration -- ui.Client.UpdateConsoleSession --
+// does not forget what the reconciler applied.
+func RecordSyncedConsoleSession(ctx context.Context, store *Store, taskID string, snap ConsoleSessionConfigSnapshot) error {
+	if prev, ok := LastSyncedConsoleSession(ctx, store, taskID); ok {
+		for _, id := range prev.OfferedDefaults {
+			if !slices.Contains(snap.OfferedDefaults, id) {
+				snap.OfferedDefaults = append(snap.OfferedDefaults, id)
+			}
+		}
+		if snap.AutoReads == nil {
+			snap.AutoReads = prev.AutoReads
+		}
+	}
+	raw, err := json.Marshal(snap)
+	if err != nil {
+		return err
+	}
+	return store.write(ctx, "record console session sync for "+taskID, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			"INSERT INTO `console_session_sync` (`task_id`, `snapshot`) VALUES (?, ?) "+
+				"ON CONFLICT (`task_id`) DO UPDATE SET `snapshot` = excluded.`snapshot`",
+			taskID, string(raw))
+		return err
+	})
 }
 
 // FileConsoleSessionTask files a new underlying task for session, optionally
@@ -870,10 +1017,6 @@ func FileConsoleSessionTask(ctx context.Context, store *Store, session ConsoleSe
 		return "", err
 	}
 	stateRepo := opts.StateRepo
-	defaults, err := DeploymentDefaultCapabilities(ctx, store)
-	if err != nil {
-		return "", err
-	}
 	task := Task{
 		ID:     id,
 		Intent: IntentAnalyze,
@@ -884,9 +1027,10 @@ func FileConsoleSessionTask(ctx context.Context, store *Store, session ConsoleSe
 			Reason:      ReasonConsoleSession,
 		},
 		Binding:       BindingDirective,
-		Grants:        ConsoleSessionGrants(session, defaults...),
+		Grants:        ConsoleSessionGrants(session),
 		Tags:          []string{ConsoleSessionTag(session.ID)},
 		Interactive:   true,
+		KeepRunning:   session.KeepRunning,
 		NetworkAccess: ConsoleSessionNetworkAccess(session, opts.NetworkIsolates),
 		Model:         strings.TrimSpace(session.Model),
 		CreatedAt:     &now,
@@ -902,6 +1046,15 @@ func FileConsoleSessionTask(ctx context.Context, store *Store, session ConsoleSe
 			task.Reads = append(task.Reads, r)
 		}
 	}
+	autoReads, err := ConsoleSessionAutoReads(ctx, store, session, stateRepo)
+	if err != nil {
+		return "", err
+	}
+	for _, r := range autoReads {
+		if !slices.ContainsFunc(task.Reads, func(e RepoRef) bool { return e.Same(r) }) {
+			task.Reads = append(task.Reads, r)
+		}
+	}
 	task.Writes = append([]WriteTarget{}, session.Writes...)
 	if opts.PreviousTaskID != "" {
 		task.Links = []Link{{Kind: LinkContinues, Target: opts.PreviousTaskID}}
@@ -910,6 +1063,21 @@ func FileConsoleSessionTask(ctx context.Context, store *Store, session ConsoleSe
 		task.Links = append(task.Links, Link{Kind: LinkGoogleChat, Target: session.GoogleChatSpace})
 	}
 	if err := store.PutTask(ctx, task); err != nil {
+		return "", err
+	}
+	if err := RecordSyncedConsoleSession(ctx, store, id, ConsoleSessionConfigSnapshot{
+		Capabilities:    session.Capabilities,
+		Reads:           session.Reads,
+		Writes:          session.Writes,
+		NetworkAccess:   task.NetworkAccess,
+		Model:           task.Model,
+		Title:           task.Title,
+		TasksApproved:   session.TasksApproved,
+		KeepRunning:     session.KeepRunning,
+		GoogleChatSpace: session.GoogleChatSpace,
+		OfferedDefaults: ConsoleSessionDefaultGrants(),
+		AutoReads:       autoReads,
+	}); err != nil {
 		return "", err
 	}
 	if err := store.SetTaskGoal(ctx, id, GoalDecl{Kind: GoalPersonCloses}, PrincipalString(ConsoleSessionPrincipal), now); err != nil {
@@ -984,6 +1152,7 @@ func ParkConsoleSessionTask(ctx context.Context, store *Store, taskID, note stri
 	if err := store.ObserveField(ctx, taskID, now, func(o *Observation) {
 		o.PendingQuestionCommentID = &commentID
 		o.PendingSecret = ""
+		o.PendingAccess = nil
 	}); err != nil {
 		return err
 	}

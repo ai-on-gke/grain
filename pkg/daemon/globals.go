@@ -187,6 +187,41 @@ func (g repoBranchGate) RepoBranches(ctx context.Context, repo model.RepoRef) ([
 	return g.remote.GitBranches(repo.StoredOwner(), repo.Name)
 }
 
+type configRepoRevResolver interface {
+	ResolveRev(ctx context.Context, rev string) (string, error)
+}
+
+// repoRevGate is ui.Config.RepoRevs: resolves committed-context git refs to
+// commit SHAs across grain/config, plain git hosts, and GitHub.
+type repoRevGate struct {
+	local  configRepoRevResolver
+	remote interface {
+		GitRefSHA(owner, repo, rev string) (string, bool, error)
+	}
+}
+
+func (g repoRevGate) ResolveRepoRev(ctx context.Context, repo model.RepoRef, rev string) (string, bool, error) {
+	if model.IsConfigRepo(repo) {
+		if g.local == nil {
+			return "", true, errors.New("the config repository is not available")
+		}
+		sha, err := g.local.ResolveRev(ctx, rev)
+		return sha, true, err
+	}
+	if g.remote != nil {
+		sha, ok, err := g.remote.GitRefSHA(repo.StoredOwner(), repo.Name, rev)
+		if ok {
+			return sha, true, err
+		}
+	}
+	client := liveRepoNames.Load()
+	if client == nil {
+		return "", false, nil
+	}
+	sha, err := client.ResolveCommitSHA(repo.Owner, repo.Name, rev)
+	return sha, true, err
+}
+
 // GitHubRepoComparer is the GitHub-backed half of repoComparisonGate: the
 // task UI's internal pull-request view drawn from one REST client's
 // compare endpoint. It is exported so `grain demo -github-sim` can put the
@@ -370,7 +405,7 @@ func sampleHostLoad(ctx context.Context, into *sysstat.History) {
 // 29.6-29.9s of the 29.9s a measured director exchange took at the
 // shipped 30s, against 0.04-0.44s for everything grain itself does
 // between the dispatch decision and the agent's first turn
-// (docs/hand-runs/2026-09-08-director-latency.md). It is the largest
+// (the 2026-09-08 director-latency hand run). It is the largest
 // single term in the wait and the only one that buys nothing: the tick
 // is a poll for work nobody has announced, and a reply is an
 // announcement.
@@ -414,6 +449,15 @@ func wakeCycle() {
 // finds no live run, which is exactly true of a deployment that has
 // dispatched nothing.
 var sandboxRecreations = orchestrator.NewSandboxRecreations()
+
+// localScriptApprovals is the shared approval queue for host-script
+// (approve: true), handed to startUIServer and minted callback tokens
+// from in runDaemon. localScriptApprovalURL holds the loopback HTTP base
+// URL startUIServer serves callbacks on.
+var (
+	localScriptApprovals   = &ui.LocalScriptApprovals{}
+	localScriptApprovalURL atomic.Value
+)
 
 // standingSandboxes supervises this deployment's standing sandboxes (the
 // grain/config standing_sandbox tables): the reconcile loop's

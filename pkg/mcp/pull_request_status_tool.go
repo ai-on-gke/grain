@@ -33,7 +33,7 @@ func annotateChecksWithAttribution(client PullRequestReader, scope PullRequestSc
 		return nil
 	}
 
-	baseHead, err := client.GetBranchHead(scope.Owner, scope.Repo, base)
+	baseHead, err := client.GetBranchHead(scope.prOwner(), scope.prRepo(), base)
 	if err != nil || baseHead == nil {
 		return nil
 	}

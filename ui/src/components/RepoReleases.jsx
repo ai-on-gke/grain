@@ -40,9 +40,11 @@ import {
   isTaskRepairing,
 } from "../state.js";
 import ItemGlyph, { GlyphLabel } from "./ItemGlyph.jsx";
+import SearchSelect, { HighlightedText } from "./SearchSelect.jsx";
 import StateDot from "./StateDot.jsx";
 import { identifierField } from "../identifierField.js";
 import { repoApiRoot } from "../repoApi.js";
+import { templateLabeler } from "../templateLabels.js";
 
 // POLL_INTERVAL_MS mirrors App.jsx's own poll: a candidate can move
 // through "cutting"/"promoting", a release through
@@ -124,7 +126,8 @@ export function releaseActionReasons({
 // reload, Back, or a link somebody sent opens the release that was on
 // screen rather than whichever is newest. A pane opened without one shows
 // the newest and leaves the address alone. One naming a release this
-// repo does not have shows the newest too, and calls
+// repo does not have shows the newest too, says so in place above the
+// picker until another release is picked, and calls
 // onSelectRelease(null, name) so the address stops naming it.
 export default function RepoReleases({
   repo,
@@ -164,6 +167,13 @@ export default function RepoReleases({
   // of "Loading releases…" when there is nothing loaded to show instead.
   // The poll keeps retrying, and the next read that lands clears it.
   const [loadError, setLoadError] = useState(null);
+  // missingRelease is a release the address named that this repo does
+  // not have. The pane falls back to the newest and the address drops
+  // the name, so without this notice a stale bookmark or a deleted
+  // release's link read as the release on screen
+  // (docs/test-runs/2026-11-03-repository-release-memory-ui.md, 4). It
+  // stays until the reader dismisses it or picks a release.
+  const [missingRelease, setMissingRelease] = useState(null);
   const polling = useRef(false);
   const refreshSeq = useRef(0);
   const selectedRef = useRef(release);
@@ -206,6 +216,7 @@ export default function RepoReleases({
       if (asked && current !== asked) {
         shownRelease.current = null;
         if (fromUrl) {
+          setMissingRelease(asked);
           onSelectReleaseRef.current(null, asked);
         } else {
           onSelectReleaseRef.current(null);
@@ -247,6 +258,7 @@ export default function RepoReleases({
   useEffect(() => {
     if (shownRelease.current === release) return;
     shownRelease.current = release;
+    setMissingRelease(null);
     if (release !== null && release === selectedRef.current) return;
     urlReleaseRef.current = release;
     const next = release ?? releasesRef.current?.[0]?.name ?? null;
@@ -281,6 +293,13 @@ export default function RepoReleases({
     };
   }, [refresh]);
 
+  // createRefusal is why the server refused the last name typed, shown
+  // on the name box itself and cleared by the next edit or a create that
+  // succeeds. As the app's toast it outlived the fix: a valid name
+  // created the release with "invalid release name" still on screen for
+  // a few seconds more (docs/test-runs/2026-11-03-repository-release-memory-ui.md).
+  const [createRefusal, setCreateRefusal] = useState("");
+
   const createRelease = async (evt) => {
     evt.preventDefault();
     const form = evt.target;
@@ -291,13 +310,18 @@ export default function RepoReleases({
         method: "POST",
         body: JSON.stringify({ name: releaseName }),
       });
+      setCreateRefusal("");
+      setMissingRelease(null);
       form.reset();
       selectedRef.current = created.name;
       setSelected(created.name);
       onSelectRelease(created.name);
       await refresh();
     } catch (err) {
-      showError(err);
+      // A refusal (400) is about the name, and belongs beside it; any
+      // other failure is the app's to report.
+      if (err?.status === 400) setCreateRefusal(String(err.message || err));
+      else showError(err);
     }
   };
 
@@ -521,6 +545,19 @@ export default function RepoReleases({
           </Alert>
         ))}
 
+        {missingRelease !== null && (
+          <Alert
+            severity="warning"
+            sx={{ mt: 1, overflowWrap: "anywhere" }}
+            onClose={() => setMissingRelease(null)}
+          >
+            {repo} has no release named &ldquo;{missingRelease}&rdquo;
+            {current
+              ? ` -- showing ${current.name} instead. The link may be stale, or the release deleted; pick another below.`
+              : " -- the link may be stale, or the release deleted."}
+          </Alert>
+        )}
+
         {creationRefused ? (
           <Alert severity="warning" sx={{ mt: 1 }}>
             {creation.reason}
@@ -537,7 +574,11 @@ export default function RepoReleases({
                 name="releaseName"
                 label="New release name"
                 placeholder="myfeat, or 2.1"
-                helperText="Gives myfeat.latest, myfeat.rc.N and myfeat"
+                helperText={
+                  createRefusal || "Gives myfeat.latest, myfeat.rc.N and myfeat"
+                }
+                error={Boolean(createRefusal)}
+                onChange={() => setCreateRefusal("")}
                 autoComplete="off"
                 inputProps={identifierField}
                 required
@@ -560,31 +601,24 @@ export default function RepoReleases({
 
         {releases.length > 0 && (
           // maxWidth: release names have no length cap, and a long one
-          // would otherwise widen the picker past a phone's screen; the
-          // Select ellipsizes what no longer fits.
-          <FormControl
-            size="small"
+          // would otherwise widen the picker past a phone's screen.
+          <SearchSelect
+            label="Release"
+            fullWidth={false}
+            value={selected || ""}
             sx={{ mt: 2, minWidth: 240, maxWidth: "100%" }}
-          >
-            <InputLabel id="release-picker-label">Release</InputLabel>
-            <Select
-              labelId="release-picker-label"
-              label="Release"
-              value={selected || ""}
-              onChange={(e) => {
-                selectedRef.current = e.target.value;
-                setSelected(e.target.value);
-                onSelectRelease(e.target.value);
-                refresh();
-              }}
-            >
-              {releases.map((r) => (
-                <MenuItem key={r.name} value={r.name}>
-                  {r.name} -- {RELEASE_STATUS_LABELS[r.status] || r.status}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
+            options={releases.map((r) => ({
+              value: r.name,
+              label: `${r.name} -- ${RELEASE_STATUS_LABELS[r.status] || r.status}`,
+            }))}
+            onChange={(next) => {
+              selectedRef.current = next;
+              setSelected(next);
+              setMissingRelease(null);
+              onSelectRelease(next);
+              refresh();
+            }}
+          />
         )}
 
         {current && (
@@ -960,8 +994,11 @@ function QualificationPlanEditor({ plan, templates, onSave }) {
     await onSave(payload);
   };
 
-  const templateName = (id) =>
-    (templates.find((tmpl) => tmpl.id === id) || {}).name || id;
+  const templateLabel = templateLabeler(templates);
+  const templateName = (id) => {
+    const found = templates.find((tmpl) => tmpl.id === id);
+    return found ? templateLabel(found) : id;
+  };
 
   return (
     <form onSubmit={submit}>
@@ -1010,33 +1047,33 @@ function QualificationPlanEditor({ plan, templates, onSave }) {
             }}
           >
             <Stack direction="row" spacing={1} alignItems="flex-start">
-              <FormControl size="small" sx={{ flex: 2 }}>
-                <InputLabel id={`qualification-template-label-${i}`}>
-                  Template
-                </InputLabel>
-                <Select
-                  labelId={`qualification-template-label-${i}`}
-                  label="Template"
-                  value={it.templateId}
-                  onChange={(e) =>
-                    updateItem(i, { templateId: e.target.value })
-                  }
-                >
-                  {/* A qualification plan is a list of templates, so
-                      this picker carries their figure the way every
-                      other template picker does (ItemGlyph.jsx). The
-                      placeholder names no template and holds the slot
-                      open instead. */}
-                  <MenuItem value="" disabled>
-                    <GlyphLabel kind={null}>Choose a template</GlyphLabel>
-                  </MenuItem>
-                  {templates.map((tmpl) => (
-                    <MenuItem key={tmpl.id} value={tmpl.id}>
-                      <GlyphLabel kind="templates">{tmpl.name}</GlyphLabel>
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
+              {/* A qualification plan is a list of templates, so this
+                  picker carries their figure the way every other template
+                  picker does (ItemGlyph.jsx). The placeholder names no
+                  template and holds the slot open instead. */}
+              <SearchSelect
+                label="Template"
+                shrinkLabel
+                placeholder="Choose a template"
+                value={it.templateId}
+                sx={{ flex: 2 }}
+                onChange={(next) => updateItem(i, { templateId: next })}
+                options={[
+                  { value: "", label: "Choose a template", disabled: true },
+                  ...templates.map((tmpl) => ({
+                    value: tmpl.id,
+                    label: templateLabel(tmpl),
+                  })),
+                ]}
+                renderRow={(option) => (
+                  <GlyphLabel kind={option.value === "" ? null : "templates"}>
+                    <HighlightedText
+                      text={option.label}
+                      ranges={option.ranges}
+                    />
+                  </GlyphLabel>
+                )}
+              />
               <TextField
                 label="Repeat"
                 type="number"

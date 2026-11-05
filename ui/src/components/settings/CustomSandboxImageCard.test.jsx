@@ -31,13 +31,13 @@ function section(settings) {
 }
 
 describe("CustomSandboxImageCard", () => {
-  it("guides a VM backend to guest-base and both contracts, and saves the image", () => {
+  it("guides a VM backend to sandbox-base and both contracts, and saves the image", () => {
     const { s, saveChoice } = section({
       sandboxBackend: "granule",
       sandboxImageBackend: "granule",
       sandboxImage: "",
-      sandboxImageDefault: "ghcr.io/bwsalmon/grain/guest:sha-abc",
-      sandboxBaseImage: "ghcr.io/bwsalmon/grain/guest-base:sha-abc",
+      sandboxImageDefault: "docker.io/grainai/sandbox:sha-abc",
+      sandboxBaseImage: "docker.io/grainai/sandbox-base:sha-abc",
       sandboxContractVersion: 1,
       sandboxMinimumContractVersion: 1,
       sandboxGranuleContractVersion: 1,
@@ -47,10 +47,10 @@ describe("CustomSandboxImageCard", () => {
     const box = screen.getByLabelText("Custom sandbox image (OCI reference)");
     expect(box).toHaveAttribute(
       "placeholder",
-      "ghcr.io/bwsalmon/grain/guest:sha-abc",
+      "docker.io/grainai/sandbox:sha-abc",
     );
     expect(screen.getByTestId("sandbox-image-dockerfile")).toHaveTextContent(
-      "FROM ghcr.io/bwsalmon/grain/guest-base:sha-abc",
+      "FROM docker.io/grainai/sandbox-base:sha-abc",
     );
     const versions = screen.getByTestId("sandbox-contract-versions");
     expect(versions).toHaveTextContent("dev.grain.sandbox.contract = 1");
@@ -59,7 +59,7 @@ describe("CustomSandboxImageCard", () => {
     expect(screen.queryByText(/must carry/i)).toBeNull();
     const inherits = screen.getByTestId("sandbox-image-inherits");
     expect(inherits).toHaveTextContent(
-      "guest-base already satisfies the entire sandbox contract",
+      "sandbox-base already satisfies the entire sandbox contract",
     );
     expect(inherits).toHaveTextContent("grain-connect");
     expect(screen.getByTestId("sandbox-image-todo")).toHaveTextContent(
@@ -87,13 +87,13 @@ describe("CustomSandboxImageCard", () => {
     });
   });
 
-  it("guides a pod backend to k8s-sandbox-base and shows the contract warning", () => {
+  it("guides a pod backend to sandbox-k8s-base and shows the contract warning", () => {
     const { s } = section({
       sandboxBackend: "kubernetes",
       sandboxImage: "registry.example/team/sandbox:v1",
-      sandboxBaseImage: "ghcr.io/bwsalmon/grain/k8s-sandbox-base:sha-abc",
+      sandboxBaseImage: "docker.io/grainai/sandbox-k8s-base:sha-abc",
       sandboxImageWarning:
-        "Custom sandbox image registry.example/team/sandbox:v1 needs rebuilding FROM ghcr.io/bwsalmon/grain/k8s-sandbox-base:sha-abc",
+        "Custom sandbox image registry.example/team/sandbox:v1 needs rebuilding FROM docker.io/grainai/sandbox-k8s-base:sha-abc",
       sandboxContractVersion: 1,
       sandboxMinimumContractVersion: 1,
     });
@@ -103,7 +103,7 @@ describe("CustomSandboxImageCard", () => {
       "needs rebuilding FROM",
     );
     expect(screen.getByTestId("sandbox-image-dockerfile")).toHaveTextContent(
-      "FROM ghcr.io/bwsalmon/grain/k8s-sandbox-base:sha-abc",
+      "FROM docker.io/grainai/sandbox-k8s-base:sha-abc",
     );
     expect(
       screen.getByTestId("sandbox-contract-versions"),
@@ -111,7 +111,7 @@ describe("CustomSandboxImageCard", () => {
     expect(screen.queryByTestId("sandbox-contract-checklist")).toBeNull();
     const inherits = screen.getByTestId("sandbox-image-inherits");
     expect(inherits).toHaveTextContent(
-      "k8s-sandbox-base already satisfies the entire sandbox contract",
+      "sandbox-k8s-base already satisfies the entire sandbox contract",
     );
     expect(inherits).not.toHaveTextContent("grain-connect");
   });
@@ -129,5 +129,81 @@ describe("CustomSandboxImageCard", () => {
     expect(screen.getByTestId("sandbox-image-contract-ok")).toHaveTextContent(
       "v1 (current)",
     );
+  });
+
+  it("reverts to the default image when cleared or reset", () => {
+    const { s, saveChoice } = section({
+      sandboxBackend: "kubernetes-granule",
+      sandboxImage: "registry.example/team/guest:v1",
+      sandboxImageDefault: "docker.io/grainai/sandbox:sha-abc",
+      sandboxImageWarning: "Custom sandbox image warning",
+    });
+    const { rerender } = render(<CustomSandboxImageCard s={s} />);
+
+    const resetBtn = screen.getByTestId("sandboxImage-reset");
+    expect(resetBtn).toHaveTextContent("Reset to default");
+    fireEvent.click(resetBtn);
+    expect(saveChoice).toHaveBeenCalledWith({ sandboxImage: "" });
+
+    // Clearing the text input and blurring also saves "".
+    saveChoice.mockClear();
+    const box = screen.getByLabelText("Custom sandbox image (OCI reference)");
+    fireEvent.change(box, { target: { value: "   " } });
+    fireEvent.blur(box);
+    expect(saveChoice).toHaveBeenCalledWith({ sandboxImage: "" });
+
+    // Once sandboxImage is empty, the reset button and stale warnings are hidden.
+    const cleared = section({
+      sandboxBackend: "kubernetes-granule",
+      sandboxImage: "",
+      sandboxImageDefault: "docker.io/grainai/sandbox:sha-abc",
+      sandboxImageWarning: "",
+      sandboxImageCheck: null,
+    });
+    rerender(<CustomSandboxImageCard s={cleared.s} />);
+    expect(screen.queryByTestId("sandboxImage-reset")).toBeNull();
+    expect(screen.queryByTestId("sandbox-image-warning")).toBeNull();
+    expect(screen.queryByTestId("sandbox-image-contract-ok")).toBeNull();
+  });
+
+  it("offers to clear a k8s_granule_image holding the custom image's reference on kubernetes-granule", () => {
+    const ref = "us-docker.pkg.dev/example-project/grain/guest:sha-31d0973";
+    const settings = {
+      sandboxBackend: "kubernetes-granule",
+      sandboxImageBackend: "kubernetes-granule",
+      sandboxImage: ref,
+      k8sGranuleImage: ref,
+      k8sGranuleImageMirror: "us-docker.pkg.dev/example-project/grain/guest",
+    };
+    const { s, saveChoice } = section(settings);
+    const { rerender } = render(<CustomSandboxImageCard s={s} />);
+    const pin = screen.getByTestId("sandbox-image-k8s-granule-pin");
+    expect(pin).toHaveTextContent("k8s_granule_image");
+    expect(pin).toHaveTextContent(ref);
+    expect(pin).toHaveTextContent("read as mirror repository");
+
+    // Resetting the custom image alone leaves the pin, and the card still
+    // says so, now offering to clear just the pin.
+    fireEvent.click(screen.getByTestId("sandboxImage-reset"));
+    expect(saveChoice).toHaveBeenLastCalledWith({ sandboxImage: "" });
+    s.settings = { ...settings, sandboxImage: "" };
+    rerender(<CustomSandboxImageCard s={{ ...s }} />);
+    expect(
+      screen.getByTestId("sandbox-image-k8s-granule-pin"),
+    ).toHaveTextContent("this card just cleared");
+    fireEvent.click(screen.getByTestId("sandbox-image-k8s-granule-pin-clear"));
+    expect(saveChoice).toHaveBeenLastCalledWith({ k8sGranuleImage: "" });
+  });
+
+  it("says nothing of k8s_granule_image on other backends or when it differs", () => {
+    const ref = "us-docker.pkg.dev/example-project/grain/guest:sha-31d0973";
+    const { s } = section({
+      sandboxBackend: "kubernetes-granule",
+      sandboxImageBackend: "kubernetes-granule",
+      sandboxImage: "registry.example/team/guest:v1",
+      k8sGranuleImage: ref,
+    });
+    render(<CustomSandboxImageCard s={s} />);
+    expect(screen.queryByTestId("sandbox-image-k8s-granule-pin")).toBeNull();
   });
 });

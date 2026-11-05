@@ -16,17 +16,15 @@ import { isApiGrant, withoutApiRows } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   Box,
   Button,
   Checkbox,
-  Chip,
   FormControl,
   FormControlLabel,
   FormHelperText,
   InputLabel,
-  ListItemText,
   MenuItem,
   Select,
   Stack,
@@ -53,6 +51,7 @@ import { DeclaredFields, DeclaredNotice } from "./Declared.jsx";
 import ReadOnlyReposField from "./ReadOnlyReposField.jsx";
 import BranchField from "./BranchField.jsx";
 import RepoField from "./RepoField.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import WriteReposField from "./WriteReposField.jsx";
 import LastWorkflowRun from "./LastWorkflowRun.jsx";
 import { useUnsavedEdits } from "../unsavedEdits.js";
@@ -197,31 +196,22 @@ function RecurrenceFields({
         />
       )}
       {setTimeZone && (
-        <FormControl fullWidth margin="dense" size="small">
-          <InputLabel id="schedule-timezone-label" shrink>
-            Time zone
-          </InputLabel>
-          <Select
-            labelId="schedule-timezone-label"
-            label="Time zone"
-            name="timeZone"
-            value={timeZone || ""}
-            onChange={(e) => setTimeZone(e.target.value)}
-            displayEmpty
-            notched
-          >
-            <MenuItem value="">UTC (default)</MenuItem>
-            {timeZoneOptions(timeZone).map((z) => (
-              <MenuItem key={z} value={z}>
-                {z}
-                {z === browserZone ? " (this browser)" : ""}
-              </MenuItem>
-            ))}
-          </Select>
-          <FormHelperText>
-            The timezone this schedule fires in. Defaults to UTC if left unset.
-          </FormHelperText>
-        </FormControl>
+        <SearchSelect
+          label="Time zone"
+          name="timeZone"
+          value={timeZone || ""}
+          onChange={setTimeZone}
+          InputLabelProps={{ shrink: true }}
+          margin="dense"
+          helperText="The timezone this schedule fires in. Defaults to UTC if left unset."
+          options={[
+            { value: "", label: "UTC (default)" },
+            ...timeZoneOptions(timeZone).map((z) => ({
+              value: z,
+              label: z === browserZone ? `${z} (this browser)` : z,
+            })),
+          ]}
+        />
       )}
       {/* What to do when the cadence comes round again and the last
           firing is still going (model.OverlapPolicy). It sits with the
@@ -386,6 +376,7 @@ function ScheduleOverlay({
   const [title, setTitle] = useState(schedule?.title || "");
   const [description, setDescription] = useState(schedule?.description || "");
   const [autoMerge, setAutoMerge] = useState(!!schedule?.autoMerge);
+  const [keepRunning, setKeepRunning] = useState(!!schedule?.keepRunning);
   const [networkAccess, setNetworkAccess] = useState(
     schedule?.networkAccess || "",
   );
@@ -467,6 +458,7 @@ function ScheduleOverlay({
       req.title = title;
       req.description = description;
       req.autoMerge = autoMerge;
+      req.keepRunning = keepRunning;
       req.networkAccess = networkAccess;
       req.nothingNeededAction = nothingNeededAction;
       req.reads = reads;
@@ -477,10 +469,21 @@ function ScheduleOverlay({
     return req;
   };
 
+  // previewRequest is scheduleRequest as the draft endpoint must see it.
+  // That endpoint composes a CreateScheduleRequest and has no saved row to
+  // fall back on, so a model left out because it did not change would be
+  // previewed as no model at all -- an edit pane on a schedule that asks
+  // for gemini-2.5-flash said "the deployment's default model". The model
+  // in force is always sent here; the save still sends it only on a change.
+  const previewRequest = () =>
+    firesSuite
+      ? scheduleRequest()
+      : { ...scheduleRequest(), model: chosenModel };
+
   // Whether leaving now would lose an edit: the form's own fields (the
   // cadence's number and time boxes are read off it, not state) plus
   // everything submit takes from state instead.
-  const { formRef, isDirty } = useUnsavedEdits({
+  const { formRef, isDirty: formIsDirty } = useUnsavedEdits({
     request: scheduleRequest(),
     kind,
     weekday,
@@ -488,6 +491,13 @@ function ScheduleOverlay({
     timeZone,
     fires,
   });
+  // Once somebody has said "discard" on the way out through a link drawn
+  // here (the suppressing task's), the pane is still mounted for a moment
+  // while it closes and the task opens -- and every guard asked in that
+  // moment (the pane's own, App's) reads this one. Without this the
+  // question already answered could be put a second time.
+  const discarded = useRef(false);
+  const isDirty = () => !discarded.current && formIsDirty();
 
   const submit = async (evt) => {
     evt.preventDefault();
@@ -602,7 +612,7 @@ function ScheduleOverlay({
     const what = schedule.suiteId
       ? `a run of the suite "${schedule.suiteName || schedule.suiteId}"`
       : schedule.templateId?.startsWith("system:workflow-review:")
-        ? `a CI run of the workflow it was declared in, to be reviewed when it finishes`
+        ? `a CI run of the workflow it was declared in`
         : schedule.templateId
           ? // Titled by the template, not by this schedule: a declared
             // schedule's own name ("Nightly Repo Maintenance Sweep")
@@ -611,11 +621,17 @@ function ScheduleOverlay({
             // the one that was never going to appear.
             `a task from the template "${schedule.templateName || schedule.templateId}"`
           : `the task "${schedule.title}"`;
+    // What happens after the start, said after "straight away" so that
+    // it is the start that is immediate: tacked onto `what`, the
+    // sentence read "to be reviewed when it finishes straight away".
+    const then = schedule.templateId?.startsWith("system:workflow-review:")
+      ? ", to be reviewed when it finishes"
+      : "";
     // One question rather than two: the run's own, with the edit it
     // would throw away named in it.
     if (
       !confirm(
-        `Run "${schedule.title}" now? It starts ${what} straight away; ` +
+        `Run "${schedule.title}" now? It starts ${what} straight away${then}; ` +
           `the schedule's own next run is unchanged.` +
           (isDirty()
             ? ` Your unsaved changes here are discarded, not run.`
@@ -705,9 +721,12 @@ function ScheduleOverlay({
                   ) {
                     return;
                   }
-                  if (isDirty() && !window.confirm(DISCARD_PROMPT)) {
-                    e.preventDefault();
-                    return;
+                  if (isDirty()) {
+                    if (!window.confirm(DISCARD_PROMPT)) {
+                      e.preventDefault();
+                      return;
+                    }
+                    discarded.current = true;
                   }
                   if (onOpenTask) {
                     e.preventDefault();
@@ -809,46 +828,47 @@ function ScheduleOverlay({
                 : "You can change how often it runs, what it does when a firing overlaps the last one, and whether it runs at all."}
             </Typography>
           ) : firesSuite ? (
-            <FormControl fullWidth margin="normal" size="small">
-              <InputLabel id="schedule-suite-label">Suite</InputLabel>
-              <Select
-                labelId="schedule-suite-label"
-                label="Suite"
-                value={suiteId}
-                onChange={(e) => setSuiteId(e.target.value)}
-              >
-                {suites.map((s) => (
-                  <MenuItem key={s.id} value={s.id}>
-                    <GlyphLabel kind="suites">{s.name}</GlyphLabel>
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+            <SearchSelect
+              label="Suite"
+              value={suiteId}
+              onChange={setSuiteId}
+              margin="normal"
+              options={suites.map((s) => ({
+                value: s.id,
+                label: s.name,
+                row: <GlyphLabel kind="suites">{s.name}</GlyphLabel>,
+              }))}
+            />
           ) : (
-            <FormControl fullWidth margin="normal" size="small">
-              <InputLabel id="schedule-template-label">Template</InputLabel>
-              <Select
-                labelId="schedule-template-label"
-                label="Template"
-                value={templateId}
-                onChange={(e) => setTemplateId(e.target.value)}
-              >
-                {/* "None" holds the glyph slot open rather than carrying
-                  one: it is the absence of a template, and starting its
-                  label a figure's width left of every other row's would
-                  read as a fifth kind. */}
-                <MenuItem value="">
-                  <GlyphLabel kind={null}>
-                    None -- fill in the fields below
-                  </GlyphLabel>
-                </MenuItem>
-                {templates.map((t) => (
-                  <MenuItem key={t.id} value={t.id}>
+            <SearchSelect
+              label="Template"
+              value={templateId}
+              onChange={setTemplateId}
+              InputLabelProps={{ shrink: true }}
+              margin="normal"
+              options={[
+                // "None" holds the glyph slot open rather than carrying
+                // one: it is the absence of a template, and starting its
+                // row a figure's width left of every other row's would
+                // read as a fifth kind.
+                {
+                  value: "",
+                  label: "None -- fill in the fields below",
+                  row: (
+                    <GlyphLabel kind={null}>
+                      None -- fill in the fields below
+                    </GlyphLabel>
+                  ),
+                },
+                ...templates.map((t) => ({
+                  value: t.id,
+                  label: templateLabel(t),
+                  row: (
                     <GlyphLabel kind="templates">{templateLabel(t)}</GlyphLabel>
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+                  ),
+                })),
+              ]}
+            />
           )}
           {isSystem ? null : boundTemplate ? (
             <Typography
@@ -990,6 +1010,18 @@ function ScheduleOverlay({
                 label="Auto-merge once checks pass"
                 sx={{ display: "flex", mt: 1 }}
               />
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    name="keepRunning"
+                    defaultChecked={schedule?.keepRunning}
+                    onChange={(e) => setKeepRunning(e.target.checked)}
+                  />
+                }
+                label="Keep running"
+                title="Immediately restart every task this schedule files when its run exits, instead of completing or parking it."
+                sx={{ display: "flex" }}
+              />
               <TextField
                 select
                 name="networkAccess"
@@ -1024,47 +1056,24 @@ function ScheduleOverlay({
                 <MenuItem value="ack">Leave for acknowledgement</MenuItem>
               </TextField>
               <FormControl fullWidth margin="normal" size="small">
-                <InputLabel id="schedule-capabilities-label">
-                  Legacy capabilities
-                </InputLabel>
-                <Select
-                  labelId="schedule-capabilities-label"
-                  label="Legacy capabilities"
+                <SearchSelect
                   multiple
+                  label="Legacy capabilities"
                   value={capabilityIds}
-                  onChange={(e) =>
-                    setCapabilities([
-                      ...e.target.value,
-                      ...apiIds,
-                      ...capabilityRefs,
-                    ])
+                  onChange={(next) =>
+                    setCapabilities([...next, ...apiIds, ...capabilityRefs])
                   }
-                  renderValue={(selected) => (
-                    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-                      {selected.map((id) => {
-                        const c = (config?.capabilities || []).find(
-                          (cap) => cap.id === id,
-                        );
-                        return (
-                          <Chip key={id} size="small" label={c ? c.name : id} />
-                        );
-                      })}
-                    </Box>
-                  )}
-                >
-                  {capabilityOptions.length === 0 && (
-                    <MenuItem disabled>{NO_CAPABILITIES_HINT}</MenuItem>
-                  )}
-                  {capabilityOptions.map((c) => (
-                    <MenuItem key={c.id} value={c.id} title={c.description}>
-                      <Checkbox
-                        checked={capabilityIds.includes(c.id)}
-                        size="small"
-                      />
-                      <ListItemText primary={c.name} />
-                    </MenuItem>
-                  ))}
-                </Select>
+                  noOptionsText={
+                    capabilityOptions.length === 0
+                      ? NO_CAPABILITIES_HINT
+                      : "No matches"
+                  }
+                  options={capabilityOptions.map((c) => ({
+                    value: c.id,
+                    label: c.name,
+                    title: c.description,
+                  }))}
+                />
                 <FormHelperText>{LEGACY_CAPABILITIES_HINT}</FormHelperText>
               </FormControl>
               <GrantsPicker
@@ -1158,7 +1167,7 @@ function ScheduleOverlay({
       ) : (
         <CompositionPanel
           path="/api/schedules/composition"
-          body={scheduleRequest()}
+          body={previewRequest()}
           heading="What this schedule files"
           note={isNew ? "as filled in above" : "as edited above, not as saved"}
         />

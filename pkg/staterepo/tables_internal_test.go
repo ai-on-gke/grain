@@ -136,6 +136,10 @@ var notSettings = []string{
 	// (model.TaskGoal): declared with the task and rewritten by
 	// reconcileTaskGoals every cycle.
 	"task_goal",
+	// The standing-session declaration last synced onto a session's task
+	// (model.ConsoleSessionConfigSnapshot): rewritten by every console
+	// session sync, grain's record of what it applied.
+	"console_session_sync",
 	"task_observation",
 	"task_run",
 	"task_run_tool",
@@ -156,6 +160,10 @@ var notSettings = []string{
 	// on (model.Store.RecordRelayedCalls): runtime bookkeeping deleted
 	// when the run finishes.
 	"task_run_relayed_call",
+	// A live run's CI wait time per source, left by a stopping daemon
+	// for the one that adopts the run (model.Store.SetRunWaitLedger):
+	// runtime bookkeeping deleted when the run finishes.
+	"task_run_wait_ledger",
 	// What a run said when it failed for a reason grain could not name
 	// (model.UnmatchedFailure). grain's own record of what happened to
 	// it, written after the run finished, and nothing a pull request
@@ -170,6 +178,11 @@ var notSettings = []string{
 	// reported it at release (model.CapabilityAuditRecord): grain's
 	// record of what happened, written after the run finished.
 	"task_run_capability_audit",
+	"task_run_startup",
+	// Which hostd each run went to (model.TaskRunHostd), written with the
+	// task like task_tag.
+	"task_run_hostd",
+	"task_run_sandbox_key",
 	// A run's suspension (model.Suspension): grain's record of how a run
 	// stopped, written in the transaction that finished it.
 	"task_suspension",
@@ -203,6 +216,17 @@ var notSettings = []string{
 	// would race the daemon writing new ones.
 	"task_comment",
 	"task_attachment",
+	// Who closed or reopened a task (model.TaskEvent): grain's record of
+	// what somebody did, written in the same breath as the closure.
+	"task_event",
+	// Ordered task state, comment/question, and CI verdict log backing
+	// GET /api/events (model.IntegrationEvent): runtime event history
+	// written by Store transactions, never settings a PR applies.
+	"integration_event",
+	// config_audit is the record of who changed the configuration
+	// (operator-attribution spec §4.4): grain's own history, not settings
+	// a merged pull request applies.
+	"config_audit",
 	// Runs, as against the settings they were run from. A qualification
 	// plan and a suite are settings (they are on SettingsTables); a run
 	// of one is grain's record of having run it.
@@ -317,6 +341,10 @@ var notSettings = []string{
 	// reason: importing an older one would have a deployment schedule a
 	// day's upgrade it has already applied.
 	"auto_upgrade_run",
+	// What the release-triggered automatic upgrade has seen and
+	// scheduled (model.AutoUpgradeRelease), for auto_upgrade_run's
+	// reason.
+	"auto_upgrade_release",
 	// The usage-limit pauses in force (model.StoredUsageLimitPause,
 	// grain/task-1259): runtime state, a provider's refusal of one
 	// credential as this deployment met it. Importing one would stop a
@@ -367,6 +395,9 @@ var notSettings = []string{
 	// along a branch it has fired them, base_branch_release's reason.
 	"repo_path_trigger",
 	"path_trigger_cursor",
+	// Where each git_ref schedule last saw its ref
+	// (model.ScheduleRefCursor), for path_trigger_cursor's reason.
+	"git_ref_cursor",
 	// And its merge rules (grain/task-1659), the same kind of row again.
 	"repo_merge_rules",
 	// The schema's own bookkeeping. Nothing proposes a change to the
@@ -375,17 +406,34 @@ var notSettings = []string{
 	// this table live would tell a running database it is at a different
 	// schema than it is.
 	"grain_schema",
-	// Dynamic executor authentication tokens and their sequence allocator.
+	// External agents' authentication tokens and their sequence allocator.
 	// Generated and revoked dynamically through the UI/API, not via state
 	// repo declarative settings.
-	"executor_token",
-	"executor_token_sequence",
 	"external_agent_token",
 	"external_agent_token_sequence",
+	// The hostd registry (model.Hostd) and its tokens' digests: hostds
+	// are created, rotated and revoked in Settings -> Hostds and minted
+	// a token there, not declared; hostd_token is never exported at all
+	// (LocalTables).
+	"hostd",
+	"hostd_token",
+	// Verified-identity sign-in access (model.AllowedPrincipal) and its
+	// one-time flag migration record: managed live in Settings -> Access
+	// and `grain access`, and intentionally kept out of `grain/config` so
+	// a bad or compromised config-repo pull request can neither lock
+	// operators out nor grant sign-in access (design/design/settings.design.md §1).
+	"allowed_principal",
+	"allowed_principal_migration",
 	// Security audit log. Dynamic runtime records, not state repo
 	// declarative settings.
 	"secret_resolution_audit",
 	"credential_access_audit",
+	// Non-secret catalogue of secret names and keys stored in Google Cloud
+	// Secret Manager (-secrets-backend=secretmanager, design/design/registry.design.md):
+	// written live by secrets.Store alongside Secret Manager mutations, and
+	// kept out of grain/config so a config-repo merge never overwrites or
+	// erases the instance's secret catalogue.
+	"secret_entries",
 	// Operator notifications (model.Notification) and the subscriptions
 	// that wake durable tasks on them: grain's own running record of
 	// what it raised and who has seen it, rewritten every cycle, and

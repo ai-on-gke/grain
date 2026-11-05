@@ -75,9 +75,7 @@ func TestContainerAcquireRemovesContainerOnFailedCreate(t *testing.T) {
 	logPath := filepath.Join(dir, "calls")
 	docker := filepath.Join(dir, "docker")
 	script := "#!/bin/sh\necho \"$*\" >> " + logPath + "\n[ \"$1\" = run ] && exit 1\nexit 0\n"
-	if err := os.WriteFile(docker, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutableStub(t, docker, script)
 	c := NewContainerSandboxes(ContainerConfig{Docker: docker, Image: "img", Workspace: "/w", Network: "mine"})
 	if _, err := c.Acquire(t.Context(), "1-1", Shape{}); err == nil {
 		t.Fatal("Acquire succeeded though docker run failed")
@@ -118,9 +116,9 @@ func TestContainerSandboxesGetNoAccessCode(t *testing.T) {
 }
 
 func TestSetImageReplacesTheContainerImageForTheNextCreate(t *testing.T) {
-	c := NewContainerSandboxes(ContainerConfig{Image: "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-1", Workspace: "/home/agent"})
+	c := NewContainerSandboxes(ContainerConfig{Image: "docker.io/grainai/sandbox-k8s:sha-1", Workspace: "/home/agent"})
 	c.SetImage("")
-	if got := c.CurrentImage(); got != "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-1" {
+	if got := c.CurrentImage(); got != "docker.io/grainai/sandbox-k8s:sha-1" {
 		t.Fatalf("SetImage(\"\") left %q, want the configured image kept", got)
 	}
 	c.SetImage("registry.example/team/sandbox:v2")

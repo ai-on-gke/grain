@@ -688,6 +688,11 @@ var repoKeyColumns = [][2]string{
 	{"target_owner", "target_name"},
 }
 
+// notRepoKeyed is the tables whose columns look like a repository key and
+// are not one: `hostd`'s (`owner`, `name`) are a person and a hostd, and
+// `external_agent_token`'s a person and the credential's name.
+var notRepoKeyed = map[string]bool{"hostd": true, "external_agent_token": true}
+
 // The claim repoCaseTables' own doc comment makes -- "every repo-keyed
 // table in schema.go is here" -- checked against the schema rather than
 // against the list's own reading of itself.
@@ -697,7 +702,7 @@ var repoKeyColumns = [][2]string{
 // nobody adds to the list is left in the old spelling by -apply, is
 // never mentioned in the report, and a second run then tells the
 // operator their store is clean while it is not (grain/task-314, and
-// docs/hand-runs/2026-09-07-repo-case.md for the six tables that were in
+// the 2026-09-07 repo-case hand run for the six tables that were in
 // exactly that state). Nothing about writing a new table reminds anybody
 // to come here, so the schema has to do the reminding.
 //
@@ -710,6 +715,9 @@ func TestRepoCaseNamesEveryRepoKeyedTable(t *testing.T) {
 	_, db, ctx := openStore(t)
 	named := model.RepoCaseTables()
 	for _, table := range schemaTables(t, ctx, db) {
+		if notRepoKeyed[table] {
+			continue
+		}
 		cols := schemaColumns(t, ctx, db, table)
 		pair, ok := repoKeyIn(cols)
 		if !ok {

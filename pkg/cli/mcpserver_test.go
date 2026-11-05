@@ -32,6 +32,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/daemon"
 
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
+	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -153,6 +154,12 @@ func TestCIRepoScopeFollowsTheRunsOwnRepositoryAndTheWideGrant(t *testing.T) {
 		{"a task with no repository", "", daemon.GrantNames{"grain-ci"}, nil, mcp.CIRepoScope{}},
 		{"no repository, but the wide grant", "", daemon.GrantNames{selfdebug.CapabilityName},
 			[]string{selfdebug.CapabilityName}, mcp.CIRepoScope{AllRepos: true}},
+		{"grain-ci plus repo-scoped api:ci-read", "acme/widgets",
+			daemon.GrantNames{"grain-ci", "api:ci-read@acme/other"}, nil,
+			mcp.CIRepoScope{Repo: "acme/widgets", Reads: []string{"acme/other"}}},
+		{"grain-ci plus unscoped api:ci-read", "acme/widgets",
+			daemon.GrantNames{"grain-ci", "api:ci-read"}, nil,
+			mcp.CIRepoScope{Repo: "acme/widgets", AllRepos: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := daemon.CiRepoScope(tc.repo, tc.grants, tc.wide); !reflect.DeepEqual(got, tc.want) {
@@ -364,5 +371,206 @@ func TestServeMCPServerValidatesGrantsAgainstTaskStore(t *testing.T) {
 	})
 	if errValid != nil && !errors.Is(errValid, io.EOF) {
 		t.Fatalf("unexpected error for valid task: %v", errValid)
+	}
+}
+
+func TestServeMCPServerRegistersReadOnlyCIToolsForRepoScopedCIReadGrant(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tasks/task-review":
+			_ = json.NewEncoder(w).Encode(ui.TaskDetail{
+				Task: ui.Task{
+					ID:           "task-review",
+					Repo:         "acme/widgets",
+					Capabilities: []string{"api:ci-read@acme/widgets"},
+				},
+			})
+		case "/api/ci/runs/1201":
+			_ = json.NewEncoder(w).Encode(ci.Run{
+				ID:         "1201",
+				Repo:       "acme/widgets",
+				Ref:        "main",
+				Commit:     "deadbeef12345678",
+				Conclusion: ci.ConclusionFailure,
+				Jobs: []ci.JobRun{{
+					JobID:      "publish-image",
+					Name:       "publish-image",
+					Conclusion: ci.ConclusionFailure,
+					Steps: []ci.StepRun{{
+						Name:       "docker push",
+						Conclusion: ci.ConclusionFailure,
+						ExitCode:   1,
+						Output:     "pushing image to registry: 500 Internal Server Error\n",
+					}},
+				}},
+			})
+		case "/api/ci/runs/9999":
+			_ = json.NewEncoder(w).Encode(ci.Run{
+				ID:         "9999",
+				Repo:       "acme/other",
+				Conclusion: ci.ConclusionFailure,
+			})
+		case "/api/ci/runs":
+			if got := r.URL.Query().Get("repo"); got != "acme/widgets" {
+				http.Error(w, "unscoped or wrong repo query: "+got, http.StatusForbidden)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(ui.CIRunsResponse{
+				Runs: []ci.Run{{
+					ID:         "1201",
+					Repo:       "acme/widgets",
+					Ref:        "main",
+					Conclusion: ci.ConclusionFailure,
+				}},
+				Matched: 1,
+				Stored:  2,
+			})
+		case "/api/ci/faults":
+			_ = json.NewEncoder(w).Encode([]any{})
+		default:
+			if strings.HasSuffix(r.URL.Path, "/status") {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	requests := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_ci_log","arguments":{"run_id":"1201"}}}`,
+		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_ci_log","arguments":{"run_id":"9999"}}}`,
+		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_ci_runs","arguments":{}}}`,
+	}, "\n") + "\n"
+
+	// 1. On the full surface, get_ci_log and list_ci_runs are registered
+	// and scoped to acme/widgets (even when -pr-repo is acme/app), while
+	// wait_for_checks remains GitHub's and run_ci_job / retrigger_ci stay absent.
+	var out bytes.Buffer
+	err := serveMCPServer(strings.NewReader(requests), &out, []string{
+		"-mcp-surface", daemon.MCPSurfaceFull,
+		"-sandbox-root", tmpDir,
+		"-server", ts.URL,
+		"-task", "task-review",
+		"-pr-repo", "acme/app",
+		"-pr-branch", "grain/task-review",
+	})
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("serveMCPServer (full): %v", err)
+	}
+
+	type rpcResp struct {
+		ID     int             `json:"id"`
+		Result json.RawMessage `json:"result"`
+	}
+	parseResponses := func(raw string) map[int]json.RawMessage {
+		byID := map[int]json.RawMessage{}
+		for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
+			if line == "" {
+				continue
+			}
+			var resp rpcResp
+			if err := json.Unmarshal([]byte(line), &resp); err != nil {
+				t.Fatalf("unmarshalling response %q: %v", line, err)
+			}
+			byID[resp.ID] = resp.Result
+		}
+		return byID
+	}
+	byID := parseResponses(out.String())
+
+	var listed struct {
+		Tools []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(byID[2], &listed); err != nil {
+		t.Fatalf("tools/list: %v", err)
+	}
+	toolDesc := map[string]string{}
+	for _, tool := range listed.Tools {
+		toolDesc[tool.Name] = tool.Description
+	}
+	for _, want := range []string{"get_ci_log", "list_ci_runs", "get_ci_artifact", "wait_for_checks"} {
+		if _, ok := toolDesc[want]; !ok {
+			t.Errorf("tools/list missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{"run_ci_job", "retrigger_ci"} {
+		if _, ok := toolDesc[unwanted]; ok {
+			t.Errorf("tools/list unexpectedly registered %q without grain-ci grant", unwanted)
+		}
+	}
+	if strings.HasPrefix(toolDesc["wait_for_checks"], "Start grain CI") {
+		t.Errorf("wait_for_checks was overwritten with grain CI's tool: %s", toolDesc["wait_for_checks"])
+	}
+
+	type callResult struct {
+		IsError bool `json:"isError"`
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	var allowed callResult
+	if err := json.Unmarshal(byID[3], &allowed); err != nil {
+		t.Fatalf("get_ci_log 1201: %v", err)
+	}
+	if allowed.IsError || len(allowed.Content) == 0 || !strings.Contains(allowed.Content[0].Text, "500 Internal Server Error") {
+		t.Errorf("get_ci_log 1201 = %+v, want log output", allowed)
+	}
+
+	var refused callResult
+	if err := json.Unmarshal(byID[4], &refused); err != nil {
+		t.Fatalf("get_ci_log 9999: %v", err)
+	}
+	if !refused.IsError || len(refused.Content) == 0 || !strings.Contains(refused.Content[0].Text, "acme/other") {
+		t.Errorf("get_ci_log 9999 = %+v, want scope refusal naming acme/other", refused)
+	}
+
+	var listedRuns callResult
+	if err := json.Unmarshal(byID[5], &listedRuns); err != nil {
+		t.Fatalf("list_ci_runs: %v", err)
+	}
+	if listedRuns.IsError || len(listedRuns.Content) == 0 || !strings.Contains(listedRuns.Content[0].Text, "1201") {
+		t.Errorf("list_ci_runs = %+v, want run 1201 from pinned acme/widgets query", listedRuns)
+	}
+
+	// 2. On the control surface, GitHub's pull_request_status,
+	// wait_for_checks and base_branch_status stay available (a grain-ci
+	// grant would have hidden them on a ci_mode: github repository).
+	controlRequests := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`,
+	}, "\n") + "\n"
+	var controlOut bytes.Buffer
+	err = serveMCPServer(strings.NewReader(controlRequests), &controlOut, []string{
+		"-mcp-surface", daemon.MCPSurfaceControl,
+		"-sandbox-root", tmpDir,
+		"-server", ts.URL,
+		"-task", "task-review",
+		"-pr-repo", "acme/widgets",
+		"-pr-branch", "grain/task-review",
+	})
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("serveMCPServer (control): %v", err)
+	}
+	controlByID := parseResponses(controlOut.String())
+	if err := json.Unmarshal(controlByID[2], &listed); err != nil {
+		t.Fatalf("control tools/list: %v", err)
+	}
+	controlNames := map[string]bool{}
+	for _, tool := range listed.Tools {
+		controlNames[tool.Name] = true
+	}
+	for _, want := range []string{"pull_request_status", "wait_for_checks", "base_branch_status"} {
+		if !controlNames[want] {
+			t.Errorf("control tools/list missing %q", want)
+		}
 	}
 }

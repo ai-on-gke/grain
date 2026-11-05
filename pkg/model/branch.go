@@ -79,16 +79,24 @@ const (
 // path segment.
 var branchNameSafe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
 
+// MaxBranchNameLen bounds a branch Name in bytes: GitHub caps full ref
+// names (refs/heads/<branch>) at 255 bytes (255 - len("refs/heads/") =
+// 244), and Linux filesystems cap each loose-ref path segment plus
+// ".lock" (.git/refs/heads/.../<segment>.lock) at 255 bytes (250 per
+// segment).
+const MaxBranchNameLen = 244
+
 // ValidBranchName reports whether name is safe to create on GitHub as a
-// ref -- non-empty, drawn from branchNameSafe's own charset, and free of
-// what a git ref itself refuses (git check-ref-format) within that
-// charset: "..", a leading, trailing or doubled "/", a trailing ".", and
-// a path component that starts with "." or ends in ".lock". The last
-// three were let through until 2026-10-30, when Settings → Agents saved
-// the branch name template grain/task-{id}.lock, every branch of which
-// git would have refused at the first push.
+// ref -- non-empty, at most MaxBranchNameLen bytes, drawn from
+// branchNameSafe's own charset, and free of what a git ref itself refuses
+// (git check-ref-format) within that charset: "..", a leading, trailing or
+// doubled "/", a trailing ".", and a path component that starts with "."
+// or ends in ".lock". The last three were let through until 2026-10-30,
+// when Settings → Agents saved the branch name template
+// grain/task-{id}.lock, every branch of which git would have refused at
+// the first push.
 func ValidBranchName(name string) bool {
-	if !branchNameSafe.MatchString(name) {
+	if len(name) > MaxBranchNameLen || !branchNameSafe.MatchString(name) {
 		return false
 	}
 	if strings.Contains(name, "..") || strings.Contains(name, "//") ||

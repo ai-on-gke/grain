@@ -20,6 +20,7 @@ import {
   Button,
   Checkbox,
   Chip,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -41,7 +42,9 @@ import {
   upgradeProgress,
 } from "../upgradeProgress.js";
 import { identifierField } from "../identifierField.js";
+import { searchFilter } from "../fuzzy.js";
 import { fetchUpgradeTargets } from "../upgradeTargets.js";
+import { HighlightedText } from "./SearchSelect.jsx";
 
 // STATUS_POLL_MS is how often this panel re-fetches /api/upgrade while
 // an upgrade is running -- fast enough that a restart landing (the
@@ -123,8 +126,27 @@ const MARK_SIZE = 96;
 // absent mode -- an older daemon serving this UI, or the shape a test
 // stubs -- gets the one sentence that is true of both rather than a
 // confident description of the wrong one.
-function ModeDescription({ mode }) {
+function ModeDescription({ mode, imageSource }) {
   if (mode === "image") {
+    if (imageSource?.source === "release-assets") {
+      const repoLabel =
+        imageSource.releaseRepository || "this deployment's release repository";
+      return (
+        <>
+          Loads the release-asset image tarball published on{" "}
+          <code>{repoLabel}</code> releases for the branch below
+          {imageSource.sourceDefault && imageSource.fallback === "registry"
+            ? " (falling back to pulling from the container registry if that release has no image assets)"
+            : imageSource.fallback === "registry"
+              ? " (with fallback to the container registry configured)"
+              : ""}
+          , verifies its SHA-256 checksum, runs it once to prove it works, and
+          then points this deployment at it and restarts. An image that fails
+          verification or the health check changes nothing, leaving this
+          deployment on the image it is already running.
+        </>
+      );
+    }
     return (
       <>
         Pulls the image CI published for the branch below, runs it once to prove
@@ -577,6 +599,77 @@ function DiscardedRCAlert({ discardedRc, onSelectBranch, disabled }) {
   );
 }
 
+// RetractedReleaseAlert says the promoted release this deployment runs has
+// been retracted (<running>-retracted in the registry; scripts/
+// release-from-trunk.sh rollback, design/playbook/releases.playbook.md
+// section 11), and offers the two ways off it: forward to the release
+// that carries the fix, once one is published, or back to latest. Back is
+// only safe when the schema has not changed between the two, which is why
+// the deployment never makes that move by itself.
+function RetractedReleaseAlert({ retractedRelease, onSelectBranch, disabled }) {
+  if (!retractedRelease?.running) return null;
+  const { running, latest, newer } = retractedRelease;
+  const latestLabel = latest ? `latest (${latest})` : "latest";
+  return (
+    <Alert
+      severity="warning"
+      className="upgrade-retracted-release"
+      sx={{ mb: 2 }}
+    >
+      <Box>
+        <strong>Release {running} was retracted.</strong>{" "}
+        {newer ? (
+          <>
+            <strong>{newer}</strong> has been published to fix forward from it.
+          </>
+        ) : (
+          <>No release after it has been published yet.</>
+        )}{" "}
+        This deployment is staying on <code>{running}</code>: it will never
+        downgrade on its own. Moving back to <strong>latest</strong>
+        {latest ? (
+          <>
+            {" "}
+            (<code>{latest}</code>)
+          </>
+        ) : null}{" "}
+        is only safe if the database schema has not changed since then &mdash;
+        an older release may not read a schema {running} migrated to.
+        {newer
+          ? " Upgrading forward is the safe move."
+          : " If it has changed, wait for the fix-forward release instead."}
+      </Box>
+      <Stack
+        direction="row"
+        spacing={1}
+        useFlexGap
+        sx={{ mt: 1, flexWrap: "wrap", alignItems: "center" }}
+      >
+        {newer && (
+          <Button
+            color="inherit"
+            size="small"
+            variant="outlined"
+            disabled={disabled}
+            onClick={() => onSelectBranch(newer)}
+          >
+            {`Upgrade to ${newer}`}
+          </Button>
+        )}
+        <Button
+          color="inherit"
+          size="small"
+          variant={newer ? "text" : "outlined"}
+          disabled={disabled}
+          onClick={() => onSelectBranch("latest")}
+        >
+          {`Move back to ${latestLabel}`}
+        </Button>
+      </Stack>
+    </Alert>
+  );
+}
+
 // targetName is an Autocomplete value's branch, whether it is one of
 // the listed targets or a branch typed by hand (freeSolo hands over the
 // bare string for those).
@@ -676,7 +769,18 @@ function BranchPicker({
         if (q === "" || opts.some((o) => o.name.toLowerCase() === q)) {
           return opts;
         }
-        return opts.filter((o) => o.name.toLowerCase().includes(q));
+        const groupOrder = [];
+        for (const o of opts) {
+          const g = TARGET_GROUPS[o.kind] || "";
+          if (!groupOrder.includes(g)) groupOrder.push(g);
+        }
+        return searchFilter(opts, inputValue, (o) => o.name)
+          .map(({ item, ranges }) => ({ ...item, ranges }))
+          .sort(
+            (a, b) =>
+              groupOrder.indexOf(TARGET_GROUPS[a.kind] || "") -
+              groupOrder.indexOf(TARGET_GROUPS[b.kind] || ""),
+          );
       }}
       renderOption={(props, option) => {
         const { key, ...rest } = props;
@@ -684,9 +788,9 @@ function BranchPicker({
           ? "not allowed on this deployment"
           : CHANNEL_NOTES[option.name];
         return (
-          <li key={key} {...rest}>
+          <li key={key} {...rest} data-value={option.name}>
             <Box component="span" sx={{ fontFamily: "monospace" }}>
-              {option.name}
+              <HighlightedText text={option.name} ranges={option.ranges} />
             </Box>
             {note && (
               <Typography
@@ -818,8 +922,177 @@ function ImageChooser({
           className="upgrade-image-ref"
           sx={{ mt: 1, overflowWrap: "anywhere" }}
         >
-          Will pull <code>{will}</code>
+          {status.imageSource?.source === "release-assets" &&
+          !image.trim() &&
+          status.imageSource.releaseRepository ? (
+            <>
+              Will load release assets from{" "}
+              <code>{status.imageSource.releaseRepository}</code> as{" "}
+              <code className="upgrade-will-ref">{will}</code>
+              {status.imageSource.sourceDefault &&
+              status.imageSource.fallback === "registry"
+                ? " (or pull from the container registry if the release has no image assets)"
+                : ""}
+            </>
+          ) : (
+            <>
+              Will pull <code className="upgrade-will-ref">{will}</code>
+            </>
+          )}
         </Typography>
+      )}
+    </Box>
+  );
+}
+
+const IMAGE_SOURCE_MODE_OPTIONS = [
+  [
+    "default",
+    "Release assets (fall back to registry when release has no image assets)",
+  ],
+  ["release-assets", "Release assets only"],
+  ["registry", "Container registry only (docker pull)"],
+];
+
+function currentImageSourceMode(imageSource) {
+  if (!imageSource) return "default";
+  if (imageSource.sourceDefault) return "default";
+  if (imageSource.source === "registry") return "registry";
+  return "release-assets";
+}
+
+export function ImageSourceSettings({
+  status,
+  disabled,
+  onUpdated,
+  showError,
+}) {
+  const imageSource = status?.imageSource;
+  const [saving, setSaving] = useState(false);
+  const [repoDraft, setRepoDraft] = useState(
+    imageSource?.releaseRepository || "",
+  );
+
+  useEffect(() => {
+    setRepoDraft(imageSource?.releaseRepository || "");
+  }, [imageSource?.releaseRepository]);
+
+  if (status?.mode !== "image" || !imageSource) return null;
+
+  const modeValue = currentImageSourceMode(imageSource);
+  const locked = !!imageSource.locked;
+  const manifestSummary = imageSource.releaseAsset
+    ? `${imageSource.releaseAsset} (${imageSource.checksumAsset || `${imageSource.releaseAsset}${imageSource.checksumSuffix || ".sha256"}`})`
+    : `${imageSource.manifestAsset || "images.json"} (${imageSource.checksumSuffix || ".sha256"} checksums)`;
+
+  const saveSource = async (payload) => {
+    if (locked) return;
+    setSaving(true);
+    try {
+      const next = await api("/api/upgrade/source", {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+      if (onUpdated) onUpdated(next);
+    } catch (err) {
+      if (showError) showError(err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Box
+      className="upgrade-image-source"
+      data-testid="upgrade-image-source"
+      sx={{
+        mb: 2,
+        p: 1.5,
+        border: 1,
+        borderColor: "divider",
+        borderRadius: 1,
+      }}
+    >
+      <Stack
+        direction="row"
+        alignItems="center"
+        justifyContent="space-between"
+        spacing={1}
+        sx={{ mb: 1 }}
+      >
+        <Typography variant="subtitle2">Image source</Typography>
+        {locked && (
+          <Chip
+            size="small"
+            variant="outlined"
+            label="Read-only (set by flag/env)"
+          />
+        )}
+      </Stack>
+      {status.fallbackNote && status.phase !== "running" && (
+        <Alert
+          severity="info"
+          className="upgrade-fallback-note"
+          sx={{ mb: 1.5 }}
+        >
+          Last upgrade: {status.fallbackNote}
+        </Alert>
+      )}
+      <TextField
+        select
+        name="upgradeImageSourceMode"
+        label="Source"
+        value={modeValue}
+        disabled={disabled || locked || saving}
+        onChange={(e) => {
+          const nextMode = e.target.value;
+          saveSource({
+            mode: nextMode,
+            releaseRepository: nextMode === "registry" ? "" : repoDraft.trim(),
+          });
+        }}
+        fullWidth
+        size="small"
+        margin="dense"
+        helperText={
+          locked
+            ? "Configured via -upgrade-image-source or GRAIN_UPGRADE_IMAGE_SOURCE; edit the daemon flags or environment to change it."
+            : modeValue === "default"
+              ? "Loads tarballs from repository releases when images.json is attached, and falls back to pulling from the container registry otherwise."
+              : modeValue === "release-assets"
+                ? `Loads release-asset tarballs verified against ${manifestSummary}${imageSource.fallback === "registry" ? " (with registry fallback enabled)" : ""}.`
+                : `Pulls ${status.imageRepo || "container images"} directly with docker pull.`
+        }
+      >
+        {IMAGE_SOURCE_MODE_OPTIONS.map(([val, label]) => (
+          <MenuItem key={val} value={val}>
+            {label}
+          </MenuItem>
+        ))}
+      </TextField>
+      {imageSource.source === "release-assets" && (
+        <TextField
+          name="upgradeReleaseRepository"
+          label="Release repository"
+          value={repoDraft}
+          disabled={disabled || locked || saving}
+          onChange={(e) => setRepoDraft(e.target.value)}
+          onBlur={() => {
+            const trimmed = repoDraft.trim();
+            if (!locked && trimmed !== (imageSource.releaseRepository || "")) {
+              saveSource({
+                mode: modeValue,
+                releaseRepository: trimmed,
+              });
+            }
+          }}
+          placeholder="github.com/ai-on-gke/grain"
+          inputProps={{ ...identifierField, autoComplete: "off" }}
+          fullWidth
+          size="small"
+          margin="dense"
+          helperText={`Manifest / checksums: ${manifestSummary}`}
+        />
       )}
     </Box>
   );
@@ -1075,13 +1348,22 @@ export default function UpgradePanel({
     }
   };
 
+  // Until the first read answers there is nothing to draw but that it is
+  // being read: GET /api/upgrade resolves every CLI's run location, which
+  // asks grain hostd what it offers, so behind an unreachable hostd it
+  // takes seconds, and a blank pane in the meantime reads as an empty one
+  // (2026-11-04 deployment-operations walkthrough).
   if (status === null) {
     return loadError ? (
       <Alert severity="error">
         This deployment&apos;s upgrade status could not be read ({loadError}).
         Reopen this tab to try again.
       </Alert>
-    ) : null;
+    ) : (
+      <Box sx={{ display: "flex", justifyContent: "center", py: 3 }}>
+        <CircularProgress size={28} aria-label="Reading the upgrade status" />
+      </Box>
+    );
   }
 
   const running = status.phase === "running";
@@ -1105,21 +1387,35 @@ export default function UpgradePanel({
             color="text.secondary"
             sx={{ mt: -1, mb: 2 }}
           >
-            <ModeDescription mode={status.mode} /> One upgrade at a time; each
-            step below reports itself as it goes. A release that changes the
-            database schema is carried across rather than refused: this
-            deployment&rsquo;s rows are written out, the arriving build is asked
-            to import them before anything cuts over, and it rebuilds the store
-            from them at its first start &mdash; keeping the old one, moved
-            aside, for whatever the new schema has nowhere to put. The queue is
-            held for the duration &mdash; the banner will say this deployment is
-            paused, and the restart, or the upgrade failing, lifts it &mdash;
-            since a run started now would only be discarded by the restart this
-            ends in.
+            <ModeDescription
+              mode={status.mode}
+              imageSource={status.imageSource}
+            />{" "}
+            One upgrade at a time; each step below reports itself as it goes. A
+            release that changes the database schema is carried across rather
+            than refused: this deployment&rsquo;s rows are written out, the
+            arriving build is asked to import them before anything cuts over,
+            and it rebuilds the store from them at its first start &mdash;
+            keeping the old one, moved aside, for whatever the new schema has
+            nowhere to put. The queue is held for the duration &mdash; the
+            banner will say this deployment is paused, and the restart, or the
+            upgrade failing, lifts it &mdash; since a run started now would only
+            be discarded by the restart this ends in.
           </Typography>
           <RunningNow running={status.running} />
           <DiscardedRCAlert
             discardedRc={status.discardedRc || targetsData?.discardedRc}
+            disabled={running}
+            onSelectBranch={(next) => {
+              setBranch(next);
+              setUnchangedBranch("");
+              setChosen(true);
+            }}
+          />
+          <RetractedReleaseAlert
+            retractedRelease={
+              status.retractedRelease || targetsData?.retractedRelease
+            }
             disabled={running}
             onSelectBranch={(next) => {
               setBranch(next);
@@ -1137,6 +1433,12 @@ export default function UpgradePanel({
             <InFlightRuns count={status.inFlightRuns} atRisk={status.atRisk} />
           )}
           <UpgradeInterrupts notes={status.upgradeInterrupts} />
+          <ImageSourceSettings
+            status={status}
+            disabled={running}
+            onUpdated={setStatus}
+            showError={reportError}
+          />
           <Dialog
             open={confirmOpen}
             onClose={() => setConfirmOpen(false)}
@@ -1246,6 +1548,18 @@ export default function UpgradePanel({
               <dd className={`upgrade-phase upgrade-phase-${status.phase}`}>
                 {status.phase}
               </dd>
+              {status.source && (
+                <>
+                  <dt>Image source</dt>
+                  <dd>{status.source}</dd>
+                </>
+              )}
+              {status.fallbackNote && (
+                <>
+                  <dt>Fallback</dt>
+                  <dd>{status.fallbackNote}</dd>
+                </>
+              )}
               {status.detail && (
                 <>
                   <dt>Detail</dt>
@@ -1358,17 +1672,36 @@ export function UpgradeCheckSettings({ settings, onSave }) {
 // -- pkg/upgrade/targets.go's standardChannels, in the same order.
 const AUTO_UPGRADE_CHANNELS = ["latest", "candidate", "main"];
 
-// AutoUpgradeSettings is the daily automatic upgrade: a channel to
-// follow, or Off, and the time of day on this deployment's own clock at
-// which grain schedules the upgrade onto it (orchestrator's
-// reconcileAutoUpgrade). The upgrade is a scheduled one -- the queue is
-// held and the runs in flight finish before the restart -- so the time
-// is when that starts, not when the restart happens.
+// AUTO_UPGRADE_MODES are model.AutoUpgradeModes' labels, in the order the
+// picker offers them: the recommended one first after Off.
+const AUTO_UPGRADE_MODES = [
+  ["off", "Off (manual only)"],
+  ["release", "On each release (recommended)"],
+  ["daily", "Once a day"],
+];
+
+// autoUpgradeMode is the mode settings are in. A server that predates
+// autoUpgradeOn sends none, and its rule applies: daily when a channel is
+// set, off when not.
+function autoUpgradeMode(settings) {
+  if (settings.autoUpgradeOn) return settings.autoUpgradeOn;
+  return settings.autoUpgradeChannel ? "daily" : "off";
+}
+
+// AutoUpgradeSettings is how this deployment upgrades itself
+// (model.Config.AutoUpgradeOn): not at all, when a release is published
+// (orchestrator's reconcileReleaseUpgrade), or once a day onto a channel
+// at a time of day on this deployment's own clock (reconcileAutoUpgrade).
+// Either way the upgrade is a scheduled one -- the queue is held and the
+// runs in flight finish before the restart.
 //
-// A channel saved some other way (the CLI, a settings import) that is
-// not one of the three is offered too, so the picker can show what is
+// In release mode the channel says what is scheduled: "latest", or the
+// exact release tag when it is anything else (saved as ""). In daily
+// mode a channel saved some other way (the CLI, a settings import) that
+// is not one of the three is offered too, so the picker can show what is
 // actually set.
 export function AutoUpgradeSettings({ settings, onSave }) {
+  const [mode, setMode] = useState(autoUpgradeMode(settings));
   const [channel, setChannel] = useState(settings.autoUpgradeChannel || "");
   const [time, setTime] = useState(settings.autoUpgradeTime || "03:00");
   const zone = settings.timeZone || "UTC";
@@ -1376,66 +1709,131 @@ export function AutoUpgradeSettings({ settings, onSave }) {
     AUTO_UPGRADE_CHANNELS.includes(channel) || !channel
       ? AUTO_UPGRADE_CHANNELS
       : [...AUTO_UPGRADE_CHANNELS, channel];
+  const releaseTarget = channel === "latest" ? "latest" : "exact";
+
+  const chooseMode = (next) => {
+    setMode(next);
+    if (next === "daily") {
+      const daily = channel || "latest";
+      setChannel(daily);
+      onSave({
+        autoUpgradeOn: "daily",
+        autoUpgradeChannel: daily,
+        autoUpgradeTime: time,
+      });
+    } else if (next === "release") {
+      const target = channel === "latest" || !channel ? "latest" : "";
+      setChannel(target);
+      onSave({ autoUpgradeOn: "release", autoUpgradeChannel: target });
+    } else {
+      onSave({ autoUpgradeOn: "off" });
+    }
+  };
 
   return (
     <Box className="auto-upgrade-settings">
       <Typography variant="subtitle2" sx={{ mt: 3 }}>
         Automatic upgrades
       </Typography>
-      <Stack direction={{ xs: "column", sm: "row" }} spacing={{ xs: 0, sm: 2 }}>
+      <TextField
+        select
+        name="autoUpgradeOn"
+        data-setting-id="autoUpgradeOn"
+        label="Upgrade automatically"
+        value={mode}
+        onChange={(e) => chooseMode(e.target.value)}
+        fullWidth
+        margin="normal"
+        slotProps={{ inputLabel: { shrink: true } }}
+        helperText={
+          mode === "release"
+            ? "Within about an hour of a new release appearing on this " +
+              "deployment's image channel, grain holds the queue, lets the work " +
+              "in flight finish, and upgrades. Release candidates are never " +
+              "followed. A failed upgrade is reported in the Inbox and is not " +
+              "retried until the next release."
+            : mode === "daily"
+              ? `Upgrade onto ${channel || "latest"} once a day, after the work in flight finishes.`
+              : "grain upgrades only when somebody presses Upgrade. " +
+                "Upgrading when a release is published is recommended."
+        }
+      >
+        {AUTO_UPGRADE_MODES.map(([value, label]) => (
+          <MenuItem key={value} value={value}>
+            {label}
+          </MenuItem>
+        ))}
+      </TextField>
+      {mode === "release" && (
         <TextField
           select
-          name="autoUpgradeChannel"
+          name="autoUpgradeTarget"
           data-setting-id="autoUpgradeChannel"
-          label="Channel"
-          value={channel}
-          slotProps={{
-            select: { displayEmpty: true },
-            inputLabel: { shrink: true },
-          }}
+          label="Upgrade to"
+          value={releaseTarget}
           onChange={(e) => {
-            const next = e.target.value;
+            const next = e.target.value === "latest" ? "latest" : "";
             setChannel(next);
-            onSave(
-              next
-                ? { autoUpgradeChannel: next, autoUpgradeTime: time }
-                : { autoUpgradeChannel: "" },
-            );
+            onSave({ autoUpgradeChannel: next });
           }}
           fullWidth
           margin="normal"
+          slotProps={{ inputLabel: { shrink: true } }}
           helperText={
-            channel
-              ? `Upgrade onto ${channel} once a day, after the work in flight finishes.`
-              : "grain upgrades only when somebody presses Upgrade."
+            releaseTarget === "latest"
+              ? "Follows the latest tag, which moves with each release."
+              : "Pins the exact release tag (vX.Y.Z) each upgrade lands on."
           }
         >
-          <MenuItem value="">Off (manual only)</MenuItem>
-          {channels.map((c) => (
-            <MenuItem key={c} value={c}>
-              {c}
-            </MenuItem>
-          ))}
+          <MenuItem value="latest">latest</MenuItem>
+          <MenuItem value="exact">The exact release tag</MenuItem>
         </TextField>
-        <TextField
-          type="time"
-          name="autoUpgradeTime"
-          data-setting-id="autoUpgradeTime"
-          label="Time of day"
-          value={time}
-          disabled={!channel}
-          onChange={(e) => setTime(e.target.value)}
-          onBlur={() => {
-            if (channel && time && time !== settings.autoUpgradeTime) {
-              onSave({ autoUpgradeTime: time });
-            }
-          }}
-          fullWidth
-          margin="normal"
-          slotProps={{ inputLabel: { shrink: true }, htmlInput: { step: 60 } }}
-          helperText={`24-hour, ${zone}. A day whose time has already passed upgrades at once.`}
-        />
-      </Stack>
+      )}
+      {mode === "daily" && (
+        <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+          <TextField
+            select
+            name="autoUpgradeChannel"
+            data-setting-id="autoUpgradeChannel"
+            label="Channel"
+            value={channel || "latest"}
+            slotProps={{ inputLabel: { shrink: true } }}
+            onChange={(e) => {
+              const next = e.target.value;
+              setChannel(next);
+              onSave({ autoUpgradeChannel: next, autoUpgradeTime: time });
+            }}
+            fullWidth
+            margin="normal"
+          >
+            {channels.map((c) => (
+              <MenuItem key={c} value={c}>
+                {c}
+              </MenuItem>
+            ))}
+          </TextField>
+          <TextField
+            type="time"
+            name="autoUpgradeTime"
+            data-setting-id="autoUpgradeTime"
+            label="Time of day"
+            value={time}
+            onChange={(e) => setTime(e.target.value)}
+            onBlur={() => {
+              if (time && time !== settings.autoUpgradeTime) {
+                onSave({ autoUpgradeTime: time });
+              }
+            }}
+            fullWidth
+            margin="normal"
+            slotProps={{
+              inputLabel: { shrink: true },
+              htmlInput: { step: 60 },
+            }}
+            helperText={`24-hour, ${zone}. A day whose time has already passed upgrades at once.`}
+          />
+        </Stack>
+      )}
     </Box>
   );
 }

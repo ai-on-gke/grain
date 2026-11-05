@@ -17,8 +17,7 @@
 // of this shape, Claude, hardcoded throughout grain/automation/dispatch.py
 // -- there is no equivalent interface there to reuse. This is that
 // interface's first appearance. The built-in implementations drive real
-// CLIs as subprocesses; pkg/agent/custom also adapts an executable from a
-// deployment's state repository through a versioned JSON protocol.
+// CLIs as subprocesses.
 // pkg/cli/daemon.go's agentFrameworks chooses between them per run.
 package agent
 
@@ -30,8 +29,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
-	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -130,6 +127,14 @@ type RunConfig struct {
 	// itself.
 	Repo   string
 	Branch string
+	// UpstreamRepo ("owner/name"), when non-empty and distinct from Repo,
+	// is the upstream repository pull requests for Repo are opened against
+	// (model.RepoConfig.UpstreamRepo). Passed to the forked "mcpserver"
+	// subprocess as "-pr-upstream-repo" so pull_request_status,
+	// wait_for_checks, base_branch_status and review tools read the
+	// upstream pull request (<fork-owner>:<branch>) while still reading
+	// the pushed branch head from Repo.
+	UpstreamRepo string
 	// Base is the branch Branch merges into -- model.Task's own Base --
 	// passed to the same subprocess as its -pr-base, so pkg/mcp's
 	// base_branch_status can read CI for the branch this work is aimed
@@ -224,6 +229,11 @@ type RunConfig struct {
 	// tool budget (mcp's tool_budget.go): its forked mcpserver is passed
 	// -tool-budget (GrantArgs) and every result past the budget says so.
 	ToolBudget bool
+	// ToolBudgetPipelineCursor is a pipeline steward wake under that
+	// budget, whose hard-line notice asks for the pipeline-changes cursor
+	// in its handover (-tool-budget-pipeline-cursor); a director's chat
+	// session reads no feed and is not asked for one.
+	ToolBudgetPipelineCursor bool
 	// ProposeRepos are the repositories this deployment works in, which a
 	// propose_task call may ask its proposal to be filed against
 	// (model.Store.WorkRepos, resolved by orchestrator.RunDispatch), most
@@ -275,18 +285,7 @@ type RunConfig struct {
 	GrainSecretsDir string
 	// GrainStateDir is the controller's synchronized state checkout, passed only with deployment-health.
 	GrainStateDir string
-	// LocalScripts is the local-scripts declarations this run is served
-	// (pkg/capability/localscripts, docs/local-scripts.md), each one
-	// only after the daemon has checked the run's task holds its
-	// local-scripts:<name> capability. The forked mcpserver snapshots
-	// each and serves its scripts as local_<name> tools.
-	LocalScripts []LocalScripts
-	// LocalScriptsEnvFile is a 0600 file (localscripts.WriteCredentialsFile)
-	// of the secrets those declarations' scripts are delivered, named to
-	// the forked mcpserver as -local-scripts-env-file, never the values in
-	// argv, for SandboxEnvFile's reason. "" when they name none.
-	LocalScriptsEnvFile string
-	Tools               []mcp.Tool
+	Tools         []mcp.Tool
 	// MaxTurns caps the number of model-response/tool-call round trips
 	// before Run gives up and returns an error, guarding against a run
 	// that never stops asking for tools. Zero means the framework's own
@@ -466,7 +465,7 @@ type RunConfig struct {
 	OnResumableSession func(session string)
 
 	// CapabilityMCPServers are the MCP servers this run's capability
-	// grants expose (docs/capabilities-spec.md §5.2.4), each a loopback
+	// grants expose (design/spec/capabilities/capabilities.spec.md §5.2.4), each a loopback
 	// proxy on grain's own host, in grant order. A Framework passes them
 	// through CarryCapabilityServers for the host its CLI runs on, then
 	// registers every one beside grain-sandbox, under its Name, and
@@ -491,14 +490,14 @@ type CapabilityMCPServer struct {
 
 // CapabilityServerCarrier is a Host whose CLI cannot reach grain's
 // loopback, but which can host a listener of its own and carry what
-// arrives there back to grain (§5.2.4, last paragraph): a remote
-// executor, over its authenticated stream.
+// arrives there back to grain (§5.2.4, last paragraph), over a stream of
+// its own.
 //
 // CarryCapabilityServers returns servers with each URL replaced by one
 // the CLI reaches on its own machine, whose requests grain serves with
 // that server's Handler, and release, which stops carrying them. The
 // rules of §5.2.2 are the Handler's, applied on grain's side, so nothing
-// the executor does to a request can widen them.
+// the far end does to a request can widen them.
 type CapabilityServerCarrier interface {
 	CarryCapabilityServers(servers []CapabilityMCPServer) (carried []CapabilityMCPServer, release func(), err error)
 }
@@ -534,7 +533,7 @@ func CarryCapabilityServers(h Host, servers []CapabilityMCPServer) (carried []Ca
 		}
 		return carried, release, nil
 	}
-	return nil, nil, fmt.Errorf("this run's capability grants expose MCP servers, which grain proxies on its own host, and its agent CLI runs where it cannot reach them (%T)", h)
+	return nil, nil, hostSetup(fmt.Errorf("this run's capability grants expose MCP servers, which grain proxies on its own host, and its agent CLI runs where it cannot reach them (%T)", h))
 }
 
 // InteractiveArgs is the "-interactive" flag a Framework passes its
@@ -691,38 +690,22 @@ func GrantArgs(cfg RunConfig) []string {
 		if grant == selfdebug.CapabilityName && cfg.GrainSourceDir != "" {
 			args = append(args, "-grain-src-dir", cfg.GrainSourceDir)
 		}
-		if (grant == grainlog.CapabilityName || grant == deploymenthealth.CapabilityName) && cfg.GrainSecretsDir != "" {
+		if (model.IsGrainJournalGrant(grant) || model.IsGrainHealthGrant(grant)) && cfg.GrainSecretsDir != "" {
 			args = append(args, "-grain-secrets-dir", cfg.GrainSecretsDir)
 		}
-		if grant == deploymenthealth.CapabilityName && cfg.GrainStateDir != "" {
+		if model.IsGrainHealthGrant(grant) && cfg.GrainStateDir != "" {
 			args = append(args, "-grain-state-dir", cfg.GrainStateDir)
 		}
-	}
-	// Local scripts travel here too, rather than in a function of their
-	// own, so that every Framework that forks the mcpserver -- the custom
-	// backends' included -- passes them the moment it passes its grants.
-	for _, l := range cfg.LocalScripts {
-		if l.Name == "" || l.Path == "" {
-			continue
-		}
-		args = append(args, "-local-scripts", l.Name+"="+l.Path)
-	}
-	if len(cfg.LocalScripts) > 0 && cfg.LocalScriptsEnvFile != "" {
-		args = append(args, "-local-scripts-env-file", cfg.LocalScriptsEnvFile)
 	}
 	// And the tool budget, which is what a judgement task's grants mean
 	// for the process serving its tools, so it travels with them.
 	if cfg.ToolBudget {
 		args = append(args, "-tool-budget")
+		if cfg.ToolBudgetPipelineCursor {
+			args = append(args, "-tool-budget-pipeline-cursor")
+		}
 	}
 	return args
-}
-
-// LocalScripts is one local-scripts declaration a run is served: the
-// name its local-scripts:<name> capability grants, and its file on the
-// node host.
-type LocalScripts struct {
-	Name, Path string
 }
 
 // ProposeRepoArgs is the "-propose-repo <owner/name>" set a Framework
@@ -880,7 +863,7 @@ type Framework interface {
 var ErrDetached = errors.New("agent: the daemon stopped; the run continues in its run host for the next daemon to adopt")
 
 // ResultParser is the optional half of Framework an adopting daemon needs
-// (docs/non-disruptive-upgrade.md, Stage 2): it turns the whole stdout of
+// (design/design/non-disruptive-upgrade.design.md, Stage 2): it turns the whole stdout of
 // a run another process started -- read back from a run host's spool --
 // and the way it ended into the Result and error Run would have returned
 // for it, so the run's outcome is read by the same rules whichever daemon

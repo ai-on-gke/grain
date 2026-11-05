@@ -141,6 +141,12 @@ type rawTemplate struct {
 	// Interactive is model.Template.Interactive: every task filed from
 	// this template is a live chat.
 	Interactive bool `yaml:"interactive"`
+	// KeepRunning is model.Template.KeepRunning: every task filed from
+	// this template immediately restarts when its run exits.
+	KeepRunning bool `yaml:"keep-running"`
+	// Priority is model.Template.Priority: optional default priority for
+	// tasks filed from this template.
+	Priority *int `yaml:"priority"`
 	// NothingNeeded is model.Template.NothingNeededAction: "close" (what
 	// empty means) or "ack".
 	NothingNeeded string              `yaml:"nothing-needed"`
@@ -270,6 +276,16 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 	if err := checkTeam(f, raw.Team); err != nil {
 		return model.Template{}, raw, err
 	}
+	var priority *int
+	if raw.Priority != nil {
+		if *raw.Priority < 0 {
+			return model.Template{}, raw, fmt.Errorf("%s: priority must be a positive integer, got %d", f.path, *raw.Priority)
+		}
+		if *raw.Priority > 0 {
+			p := *raw.Priority
+			priority = &p
+		}
+	}
 	target := repo
 	tmpl := model.Template{
 		ID:            model.RepoDeclaredID(model.DeclaredTemplate, repo, f.stem),
@@ -287,12 +303,31 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 		Grants:        grants,
 
 		Interactive:         raw.Interactive,
+		KeepRunning:         raw.KeepRunning,
+		Priority:            priority,
 		NothingNeededAction: nothingNeeded,
 	}
 	if raw.AutoMerge != nil {
 		tmpl.AutoMerge = *raw.AutoMerge
 	}
 	return tmpl, raw, nil
+}
+
+// TemplatePush is the push set the template file at filePath declares, as
+// the declaration sync would read it: nil for a template with no `push:`
+// (or an empty file), and an error for one whose `push:` does not parse.
+// Nothing else in the file is checked. It is what the security hold
+// compares a pull request's base and head with, so a change to any
+// template's push set waits for a person (orchestrator's
+// guardTemplatePush, trustboundary.TemplatePush).
+func TemplatePush(filePath string, text []byte) (model.RefPushSet, error) {
+	var raw struct {
+		Push []rawPush `yaml:"push"`
+	}
+	if err := yaml.NewDecoder(bytes.NewReader(text)).Decode(&raw); err != nil && !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("%s: %w", filePath, err)
+	}
+	return parsePush(file{path: filePath, text: text}, raw.Push)
 }
 
 // parsePush is a declared template's `push:` (grain/task-2536): the
@@ -385,13 +420,29 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 				continue
 			}
 			target, write = r, true
+		case model.IsRepoAccessGrant(c):
+			// The repo server's spelling of the same access
+			// (https://grain.dev/capabilities/repo#read / #write
+			// {repo}), held to the same rules as the bare names above.
+			if r, ok := model.RepoReadTarget(c); ok {
+				target = r
+			} else {
+				target, _ = model.RepoWriteTarget(c)
+				write = true
+			}
 		case model.IsCapabilityRef(c):
-			// A capability reference (docs/capabilities-spec.md §2.2):
+			// A capability reference (design/spec/capabilities/capabilities.spec.md §2.2):
 			// its grammar is checked here; its with: arguments against
 			// its server's schema when a task is filed from it, and
 			// again at admission.
 			if err := model.CheckCapabilityGrantSyntax(c); err != nil {
 				errs = append(errs, fmt.Errorf("%s: capabilities: %v", f.path, err))
+				continue
+			}
+			ref := model.CapabilityGrantRef(c)
+			if ref == model.RepoReadRef || (ref == model.RepoWriteRef && !model.IsGitPushAnyRefGrant(c)) {
+				errs = append(errs, fmt.Errorf("%s: capabilities: %q does not name a repository -- "+
+					"pass repo: <owner>/<repo> (or refs/force for branch push)", f.path, c))
 				continue
 			}
 			if !seenGrants[c] {
@@ -562,6 +613,8 @@ type rawSchedule struct {
 type rawScheduleTrigger struct {
 	GitHubWorkflowRun     *model.GitHubWorkflowRunTrigger `yaml:"github_workflow_run"`
 	GitHubWorkflowRunDash *model.GitHubWorkflowRunTrigger `yaml:"github-workflow-run"`
+	GitRef                *model.GitRefTrigger            `yaml:"git_ref"`
+	GitRefDash            *model.GitRefTrigger            `yaml:"git-ref"`
 }
 
 type rawEvery struct {
@@ -668,6 +721,10 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 				"repository declares, named by file (%s/%s.yml)",
 				f.path, suite, model.SuiteDeclarationDir, suite)
 		}
+		if sched.Base == "" {
+			return model.Schedule{}, fmt.Errorf("%s: a schedule that runs a suite needs `base:` -- "+
+				"a suite run has no default branch to fall back to", f.path)
+		}
 		id := model.RepoDeclaredID(model.DeclaredSuite, repo, suite)
 		sched.SuiteID = &id
 		sched.Title = displayName(raw.Name, f.stem)
@@ -680,7 +737,10 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 		if err := model.ValidateDeclarationStem(stem); err != nil {
 			return model.Schedule{}, fmt.Errorf("%s: github_workflow_run workflow %q: %w", f.path, gh.Workflow, err)
 		}
-		id := model.WorkflowReviewTemplateID(stem)
+		// GitHub's run, not grain CI's: its own prompt
+		// (model.GitHubWorkflowReviewTemplateID), which sends the agent to
+		// `.github/workflows` rather than `.grain/workflows`.
+		id := model.GitHubWorkflowReviewTemplateID(stem)
 		review := model.SystemTemplate(id, model.RepoRef{})
 		if review == nil {
 			return model.Schedule{}, fmt.Errorf("%s: grain has no template to review a workflow with (%s)",
@@ -828,7 +888,8 @@ func parseRecurrence(f file, raw rawSchedule) (model.Recurrence, error) {
 	if len(found) != 1 {
 		return model.Recurrence{}, fmt.Errorf("%s: a schedule needs exactly one cadence -- "+
 			"`every: {hours: N}`, `every: {minutes: N}`, `daily: {at: \"09:00\"}`, `weekly: {day: monday, at: \"09:00\"}`, "+
-			"`monthly: {day: 1, at: \"09:00\"}` or `trigger: {github_workflow_run: ...}` -- and this one has %d", f.path, len(found))
+			"`monthly: {day: 1, at: \"09:00\"}`, `trigger: {github_workflow_run: ...}` or `trigger: {git_ref: ...}` -- "+
+			"and this one has %d", f.path, len(found))
 	}
 	tz := strings.TrimSpace(raw.TimeZone)
 	var r model.Recurrence
@@ -838,11 +899,30 @@ func parseRecurrence(f file, raw rawSchedule) (model.Recurrence, error) {
 		if gh == nil {
 			gh = raw.Trigger.GitHubWorkflowRunDash
 		}
-		if gh == nil {
-			return model.Recurrence{}, fmt.Errorf("%s: `trigger` needs `github_workflow_run`", f.path)
+		ref := raw.Trigger.GitRef
+		if ref == nil {
+			ref = raw.Trigger.GitRefDash
 		}
-		cp := *gh
-		r = model.Recurrence{Kind: model.RecurrenceGitHubWorkflowRun, GitHubWorkflowRun: &cp, TimeZone: tz}
+		switch {
+		case gh != nil && ref != nil:
+			return model.Recurrence{}, fmt.Errorf("%s: `trigger` takes `github_workflow_run` or `git_ref`, not both", f.path)
+		case ref != nil:
+			cp := model.GitRefTrigger{Repo: strings.TrimSpace(ref.Repo), Ref: strings.TrimSpace(ref.Ref)}
+			// grain/config is read off grain's own disk with no credential
+			// in front of it, and no repository's file may reach it
+			// (parseCapabilities): not even to learn where its refs are.
+			if watched, err := model.ParseRepo(cp.Repo); err == nil && model.IsConfigRepo(watched) {
+				return model.Recurrence{}, fmt.Errorf("%s: `git_ref` watches %s, which is grain's own "+
+					"configuration; no repository's file may reach it -- a schedule that watches it is "+
+					"declared in grain's own settings", f.path, watched)
+			}
+			r = model.Recurrence{Kind: model.RecurrenceGitRef, GitRef: &cp, TimeZone: tz}
+		case gh != nil:
+			cp := *gh
+			r = model.Recurrence{Kind: model.RecurrenceGitHubWorkflowRun, GitHubWorkflowRun: &cp, TimeZone: tz}
+		default:
+			return model.Recurrence{}, fmt.Errorf("%s: `trigger` needs `github_workflow_run` or `git_ref`", f.path)
+		}
 	case "every":
 		switch {
 		case raw.Every.Hours != 0 && raw.Every.Minutes != 0:

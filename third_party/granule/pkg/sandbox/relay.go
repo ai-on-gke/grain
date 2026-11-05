@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/guestforward"
+	"github.com/gke-labs/granule/pkg/guestforward"
 )
 
 // RelayProtocolVersion identifies the handshake between RelayClient and

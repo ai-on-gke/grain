@@ -316,7 +316,7 @@ var repoCaseTables = []repoCaseTable{
 		// repository are folded together, which is how clone_url,
 		// unfixable_checks and base_branch_ci_jobs came to be missing
 		// from it before grain/task-340 noticed.
-		values: []string{"default_capabilities", "prompt_extension", "setup_command", "ci_capabilities", "release_workflows_disabled", "release_secrets", "declarations", "require_branch_up_to_date", "ignore_github_ci", "watch_default_branch", "clone_url", "unfixable_checks", "base_branch_ci_jobs", "declared_prompt_extension", "declared_setup_command", "post_merge_dispatch_jobs", "work_ownership", "work_overrides", "ci_mode", "repair_template_id", "port_branches", "declared_port_branches", "port_types", "declared_port_types", "git_credential", "merge_on_green", "base_repair_bypasses_human_gates", "merge_recheck", "issue_import_enabled", "issue_import_repo", "issue_import_label", "issue_import_approved", "issue_import_interval_seconds"},
+		values: []string{"default_capabilities", "prompt_extension", "setup_command", "ci_capabilities", "release_workflows_disabled", "release_secrets", "declarations", "require_branch_up_to_date", "ignore_github_ci", "watch_default_branch", "clone_url", "unfixable_checks", "base_branch_ci_jobs", "declared_prompt_extension", "declared_setup_command", "post_merge_dispatch_jobs", "work_ownership", "work_overrides", "ci_mode", "repair_template_id", "port_branches", "declared_port_branches", "port_types", "declared_port_types", "git_credential", "merge_on_green", "base_repair_bypasses_human_gates", "merge_recheck", "issue_import_enabled", "issue_import_repo", "issue_import_label", "issue_import_approved", "issue_import_interval_seconds", "upstream_repo"},
 		merge:  mergeRepoConfigRow,
 	},
 	// What grain CI last made of a branch things merge into
@@ -371,7 +371,7 @@ var repoCaseTables = []repoCaseTable{
 	// cycle.
 	{
 		name: "merge_batch", owner: "owner", repo: "name", keyed: true,
-		rest: []string{"branch"},
+		rest: []string{"branch", "task_id"},
 		values: []string{"ref", "base_commit", "commit", "members", "run_id", "started_at",
 			"finished_at", "conclusion", "detail", "splits"},
 		merge: mergeDeclarationSyncRow,
@@ -957,6 +957,14 @@ func mergeRepoConfigRow(canonical, divergent []string) ([]string, string) {
 		}
 		out[28+i] = canonical[28+i]
 	}
+	// Which upstream repository pull requests open against
+	// (RepoConfig.UpstreamRepo): authority, so two different repositories
+	// are an operator's choice and an empty side takes the other's.
+	upstream, ok := pickText(canonical[33], divergent[33])
+	if !ok {
+		return nil, "both spellings set different upstream_repo"
+	}
+	out[33] = upstream
 	return out, ""
 }
 

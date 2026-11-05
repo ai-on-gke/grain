@@ -77,7 +77,7 @@ func TestCLIRoutesScopeNarrateAndAnswer(t *testing.T) {
 		t.Errorf("unauthenticated /cli/: %d", rec.Code)
 	}
 	rec := get("tok-ci", "/cli/ci/runs?conclusion=failure")
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "run-task grain/task-7") ||
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "run-task grain grain/task-7") ||
 		!strings.Contains(rec.Body.String(), "failing: go") || strings.Contains(rec.Body.String(), "run-main") {
 		t.Errorf("ci runs: %d %s", rec.Code, rec.Body)
 	}
@@ -90,11 +90,11 @@ func TestCLIRoutesScopeNarrateAndAnswer(t *testing.T) {
 		t.Errorf("base status: %d %s", rec.Code, rec.Body)
 	}
 	rec = get("tok-plain", "/cli/ci/runs")
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `does not hold the "grain-ci" capability`) {
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `does not hold the "https://grain.dev/capabilities/grain#ci" capability`) {
 		t.Errorf("ci runs without grain-ci: %d %s", rec.Code, rec.Body)
 	}
 	rec = get("tok-plain", "/cli/db/query")
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"db-read"`) ||
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"https://grain.dev/capabilities/grain#sql"`) ||
 		!strings.Contains(rec.Body.String(), "a human attaches it to the task") {
 		t.Errorf("db query without db-read: %d %s", rec.Code, rec.Body)
 	}

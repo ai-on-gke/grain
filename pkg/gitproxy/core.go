@@ -322,6 +322,19 @@ func (p *GitProxy) HandleRequest(ctx context.Context, method, path, query string
 		})
 		return Denial(500, "authorization check failed")
 	}
+	if !allowed {
+		if withholder, ok := p.Authorizer.(interface {
+			WithheldReason(sandbox, owner, repo string) (string, bool)
+		}); ok {
+			if reason, withheld := withholder.WithheldReason(sandbox, scopeOwner, req.Repo); withheld {
+				p.audit().Record(AuditEntry{
+					Time: p.now(), Sandbox: sandbox, Host: req.Host, Owner: req.Owner, Repo: req.Repo,
+					Action: req.Action, Outcome: "denied: withheld capability",
+				})
+				return Denial(403, fmt.Sprintf("%s/%s: %s", scopeOwner, req.Repo, reason))
+			}
+		}
+	}
 	if !allowed && push {
 		// Refused as a push: say so when the repository is one this
 		// sandbox may fetch, rather than calling it out of scope.
@@ -539,6 +552,11 @@ func (p *GitProxy) HandleRequest(ctx context.Context, method, path, query string
 		}
 		return refusal
 	}
+	if req.Action == "git-receive-pack" && upstream.Status == 200 {
+		// A ref the host rejected is still a 200; its source may know
+		// the fix the host's own words leave out (pushhint.go).
+		upstream = withPushRefusedHint(credential, upstream)
+	}
 	return ProxyResponse(upstream)
 }
 
@@ -595,6 +613,9 @@ func (p *GitProxy) refuseRefUpdates(ctx context.Context, sandbox string, req Git
 				body: func() (io.Reader, error) { return decodedPush(body(), contentEncoding) },
 				upstream: func(wants []string, have string, hashLen int) (packCommits, error) {
 					return p.upstreamCommits(ctx, sandbox, req, wants, have, hashLen)
+				},
+				refs: func() (map[string]string, string, error) {
+					return p.upstreamRefs(ctx, sandbox, req)
 				},
 			}
 			reason, err := refs.AuthorizeRefUpdates(withPushCheck(ctx, check), sandbox, req.ScopeOwner(), req.Repo, updates)

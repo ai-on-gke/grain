@@ -83,6 +83,11 @@ const (
 // plan is all this asks for -- no sandbox, no credential, no run.
 func planSelf(t *testing.T, event Event) Plan {
 	t.Helper()
+	return planSelfWorkflow(t, event, "")
+}
+
+func planSelfWorkflow(t *testing.T, event Event, workflow string) Plan {
+	t.Helper()
 	workflows, err := LoadNativeDir(os.DirFS(selfRepoRoot))
 	if err != nil {
 		t.Fatalf("this repository's own %s does not load: %v", WorkflowDir, err)
@@ -92,6 +97,7 @@ func planSelf(t *testing.T, event Event) Plan {
 	}
 	plan, err := PlanRun(Request{
 		Repo: selfRepo, Ref: selfBranch, Event: event,
+		Workflow:       workflow,
 		TrustedRelease: event == EventRelease,
 	}, workflows)
 	if err != nil {
@@ -109,24 +115,19 @@ func planIDs(plan Plan) map[string]bool {
 	return out
 }
 
-// TestTheBaseBranchRunOfThisRepositoryRunsItsTests is the property
-// grain/task-355 was filed about, stated against the event that judges a
-// base branch today: the run that judges `main` has to contain the jobs
-// that judge a commit.
-//
-// It reads weaker than it did -- the judging event is `push` and
-// tests.yml answers `push`, so what is left to go wrong is a `branches:`
-// filter that stops matching `main`, a job that narrows its own trigger,
-// or somebody moving the suite into a workflow that answers something
-// else. Those are exactly the quiet narrowings this file exists to catch,
-// and a base-branch run planning none of this repository's tests is the
-// state that cost it 33 hours of unjudged merges (grain/task-458).
-//
-// It is asserted against every job of tests.yml rather than against a
-// list written here, so a job added to that file is covered the day it
-// lands.
+// TestTheBaseBranchRunOfThisRepositoryRunsItsTests checks that once
+// ai-on-gke/grain switched to ci_mode: "github", no native .grain/workflows
+// job runs automatically on push or pull_request, while a manual dispatch of
+// .grain/workflows/tests.yml still plans every job in that file.
 func TestTheBaseBranchRunOfThisRepositoryRunsItsTests(t *testing.T) {
-	judging := planIDs(planSelf(t, baseBranchJudgingEvent))
+	for _, event := range []Event{EventPush, EventPullRequest} {
+		if got := planSelf(t, event); len(got.Jobs) != 0 {
+			t.Errorf("an automatic %s run of %s planned %v; expected no native .grain/workflows jobs now that CI runs on GitHub Actions",
+				event, selfBranch, planIDs(got))
+		}
+	}
+
+	judging := planIDs(planSelfWorkflow(t, EventManual, selfTestsWorkflow))
 
 	declared, err := LoadNativeDir(os.DirFS(selfRepoRoot))
 	if err != nil {
@@ -151,35 +152,33 @@ func TestTheBaseBranchRunOfThisRepositoryRunsItsTests(t *testing.T) {
 			"judge a commit", selfTestsWorkflow)
 	}
 	if len(missing) > 0 {
-		t.Errorf("a base-branch run of %s is planned under %s, and these jobs of %s are not in it: %s.\n"+
-			"That run is the merge queue's whole answer to not requiring a branch to be up to date "+
-			"before it merges (docs/merge-queue-behind.md): jobs that are not in it never judge the "+
-			"tree merges land on. Check that file's `on:` block and the job's own triggers.",
-			selfBranch, baseBranchJudgingEvent, selfTestsWorkflow, strings.Join(missing, ", "))
+		t.Errorf("a manual run of %s on %s is missing these jobs: %s.\n"+
+			"Check that file's `on:` block and the job's own triggers.",
+			selfTestsWorkflow, selfBranch, strings.Join(missing, ", "))
 	}
 }
 
-// TestTheBaseBranchRunOfThisRepositoryDoesNotPublish is the other half of
-// the same rule, and since grain/task-461 it is the sharper half: the
-// judging run and the publishing run are two runs, and the whole point of
-// that is that a publisher which fails cannot hold the merge queue. If
-// the publish job ever appeared in the judging plan, its failure would be
-// a red base branch again -- and it would be one carrying this
-// repository's release credentials into the run every merge waits on.
+// TestTheBaseBranchRunOfThisRepositoryDoesNotPublish checks that neither a
+// base-branch push nor an automatic release event triggers native
+// .grain/workflows publishing jobs, while manual dispatch of
+// .grain/workflows/release.yml still plans the image publish job and is kept
+// separate from tests.yml.
 func TestTheBaseBranchRunOfThisRepositoryDoesNotPublish(t *testing.T) {
 	if planIDs(planSelf(t, baseBranchJudgingEvent))[selfPublishJob] {
 		t.Errorf("%s is in the %s plan of %s, which is the run the merge queue gates on: a failed "+
 			"publish would stop every merge into %s again, which is what grain/task-461 took apart",
 			selfPublishJob, baseBranchJudgingEvent, selfBranch, selfBranch)
 	}
-	// And the release plan still has it, because a merge is still what
-	// publishes this deployment's images -- what changed is which run is
-	// the verdict, not whether there is a release
-	// (orchestrator.reconcileBaseBranchRelease).
-	if !planIDs(planSelf(t, EventRelease))[selfPublishJob] {
-		t.Errorf("no %s in a %s plan of %s: a merge into %s would publish nothing, and this "+
-			"deployment's images are what a release run is for",
-			selfPublishJob, EventRelease, selfBranch, selfBranch)
+	if planIDs(planSelf(t, EventRelease))[selfPublishJob] {
+		t.Errorf("%s is still in the automatic %s plan of %s; release publishing moved to .github/workflows/release.yml",
+			selfPublishJob, EventRelease, selfBranch)
+	}
+	if planIDs(planSelfWorkflow(t, EventManual, selfTestsWorkflow))[selfPublishJob] {
+		t.Errorf("%s is in the manual plan of %s", selfPublishJob, selfTestsWorkflow)
+	}
+	if !planIDs(planSelfWorkflow(t, EventManual, WorkflowDir+"/release.yml"))[selfPublishJob] {
+		t.Errorf("no %s in a manual dispatch of %s/release.yml on %s",
+			selfPublishJob, WorkflowDir, selfBranch)
 	}
 }
 

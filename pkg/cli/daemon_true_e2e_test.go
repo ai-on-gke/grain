@@ -121,7 +121,7 @@ exec)
   cd %[1]q && HOME=%[1]q exec "$@"
   ;;
 inspect)
-  echo running
+`+fakeDockerInspect+`
   ;;
 *)
   echo "fake docker: unexpected subcommand: $*" >&2
@@ -129,6 +129,9 @@ inspect)
   ;;
 esac
 `, homeDir, fakeGuestSudoDir(t)))
+	// Every granule VM's host firewall chain is written through whatever
+	// nft is on PATH -- the host's own, under sudo, without this.
+	install(t, dir, "nft", "#!/bin/sh\nexit 0\n")
 }
 
 // awaitFinishedAttempt is daemon_live_test.go's awaitFinishedRun read
@@ -289,7 +292,7 @@ func TestRunLiveWithARealIsolatedSandboxAndRESTAPIOpensAPullRequest(t *testing.T
 				t.Fatalf("GRAIN_LIVE_SANDBOX_TEST=granule requires /dev/kvm: %v", err)
 			}
 			granuleBin := filepath.Join(t.TempDir(), "granule")
-			cmd := exec.Command("go", "build", "-o", granuleBin, "github.com/bwsalmon/granule/cmd/granule")
+			cmd := exec.Command("go", "build", "-o", granuleBin, "github.com/gke-labs/granule/cmd/granule")
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("building granule for the live sandbox test: %v\n%s", err, out)
 			}

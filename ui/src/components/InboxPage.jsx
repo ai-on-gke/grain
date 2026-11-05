@@ -32,7 +32,7 @@ import {
 } from "../state.js";
 import { forceMergeOffered, promptForceMerge } from "../taskWrites.js";
 import { useNotificationSetting } from "../inboxNotifications.js";
-import ItemGlyph from "./ItemGlyph.jsx";
+import { NavGlyph } from "./AppIcon.jsx";
 import ClChip from "./ClChip.jsx";
 import PresubmitBadge from "./PresubmitBadge.jsx";
 import ReviewBadge from "./ClReview.jsx";
@@ -54,6 +54,7 @@ import { formatTime } from "../time.js";
 import { useTimeZone } from "../TimeZoneContext.jsx";
 import { ListEmpty, ListHeader } from "./ListPrimitives.jsx";
 import Markdown from "./Markdown.jsx";
+import PendingAccess from "./detail/PendingAccess.jsx";
 import QuestionDisclosure from "./QuestionDisclosure.jsx";
 import { TaskRow } from "./TaskList.jsx";
 import {
@@ -319,8 +320,8 @@ const GROUPS = [
     hint: "A run stopped to ask something, you stopped its turn, or it answered on the task itself and opened no pull request. Reply to run it again, or acknowledge to close it.",
     match: (t) => t.state === "awaiting_reply",
     // Which of "Asked"'s cases this is (state.js's askedCase): a
-    // question, a stopped turn, or a conversation waiting for its next
-    // message.
+    // question, an answer, a stopped turn, or a conversation waiting for
+    // its next message.
     note: (t) => askedCase(t)?.title || null,
     // The one group whose response can be prose rather than a verb, so it
     // opens Responder below in addition to offering Acknowledge.
@@ -552,8 +553,9 @@ const GROUPS = [
   // on the queue longer than the whole of that queue's own deadlines.
   //
   // t.stall is the whole of the test, and it is only ever set for the
-  // three states grain itself drives (model.StateTimes.Since), so the
-  // only tasks this can take from a group above are completed ones --
+  // three states grain itself drives and for a deferral whose wake time
+  // has passed (model.StateTimes.Since, orchestrator's deferredWake), so
+  // the only tasks this can take from a group above are completed ones --
   // which merge_blocked and merge_stalled both claim first, and rightly:
   // where this says only "'completed' has stood too long", they say
   // which state of the merge cycle it is standing in and offer the pull
@@ -704,8 +706,30 @@ function StateSyncGroup({ failure, onOpenConfigRepo }) {
   );
 }
 
+// ReleaseSoak is what a soak-era pending release's Approve needs said
+// beside it: how long it soaked, and when that was under the minimum,
+// the SHORT SOAK warning -- approving it then accepts the short soak
+// (short_soak_ok), which the approve job otherwise refuses. Releases the
+// qualification-driven train stages (vX.Y.Z, minor or patch) write
+// "Qualification: PASS" instead, so release.soak and release.shortSoak
+// are null and nothing is rendered beside Approve.
+function ReleaseSoak({ release }) {
+  if (!release.soak && !release.shortSoak) return null;
+  return (
+    <span
+      className="inbox-release-soak"
+      data-testid="inbox-release-soak"
+      title={release.shortSoak || undefined}
+    >
+      {release.shortSoak && (
+        <span className="inbox-release-short-soak">SHORT SOAK</span>
+      )}
+      {release.soak || "no recorded soak"}
+    </span>
+  );
+}
 // NotificationsGroup is the open operator notifications
-// (notifications.js, docs/design/durable-tasks.md DT-5), above the task
+// (notifications.js, design/design/durable-tasks.design.md DT-5), above the task
 // rows: one row each, with what a person can do about it. An
 // acknowledged one stays here, marked, until whatever raised it clears
 // it; acknowledging only takes it out of the alerts bell's count.
@@ -768,13 +792,19 @@ function NotificationsGroup({
               <div className="inbox-actions">
                 {pendingReleaseOf(n) && (
                   <>
+                    <ReleaseSoak release={pendingReleaseOf(n)} />
                     <Button
                       size="small"
                       variant="contained"
+                      color={
+                        pendingReleaseOf(n).shortSoak ? "warning" : "primary"
+                      }
                       disabled={busy !== null}
                       onClick={() => act(n, "approve")}
                     >
-                      Approve
+                      {pendingReleaseOf(n).shortSoak
+                        ? "Approve short soak"
+                        : "Approve"}
                     </Button>
                     <Button
                       size="small"
@@ -901,6 +931,7 @@ function NotificationSwitch() {
 
 export default function InboxPage({
   tasks,
+  tasksLoaded = true,
   config,
   onOpenTask,
   onAct,
@@ -960,13 +991,23 @@ export default function InboxPage({
           notifications.length +
           (syncFailure ? 1 : 0)
         }
-        icon={<ItemGlyph kind="inbox" size={20} />}
+        icon={<NavGlyph kind="inbox" size={20} />}
         action={<NotificationSwitch />}
       />
       {/* Deliberately the same sentence it always was, and about tasks
           only: a line promising that every base branch is tested is the
           exact reassurance this page was extended to stop giving. */}
-      {groups.length === 0 &&
+      {/* A task list that has never been read is not an empty one: say
+          so rather than promise nothing is waiting (2026-11-03
+          walkthrough, with GET /api/tasks failing on a cold load). */}
+      {!tasksLoaded && (
+        <ListEmpty>
+          The task list could not be read, so this page cannot show what is
+          waiting on you yet. It tries again on its own.
+        </ListEmpty>
+      )}
+      {tasksLoaded &&
+        groups.length === 0 &&
         localScripts.length === 0 &&
         notifications.length === 0 &&
         !syncFailure && (
@@ -1270,7 +1311,8 @@ function Responder({ t, open, onAct, onOpenTask, onSent, showError }) {
   // questions, a report waiting to be read) is grain's own text with no
   // summary of its own to stand in for it, so it is shown whole.
   const shown = (expanded) =>
-    effectiveDetail?.state === "awaiting_reply" ? (
+    effectiveDetail?.state === "awaiting_reply" &&
+    Boolean(effectiveDetail?.questionSummary || question?.summary) ? (
       <QuestionDisclosure
         t={effectiveDetail}
         question={question}
@@ -1305,6 +1347,22 @@ function Responder({ t, open, onAct, onOpenTask, onSent, showError }) {
     return (
       <div className="inbox-responder">
         <CircularProgress size={16} />
+      </div>
+    );
+  }
+  // An access request is answered with Grant or Deny on its own card,
+  // not with a reply: a reply grants nothing.
+  if (effectiveDetail.pendingAccess) {
+    return (
+      <div className="inbox-responder" onClick={handleQuestionClick}>
+        <PendingAccess
+          t={effectiveDetail}
+          act={async (fn) => {
+            const done = await onAct(fn);
+            if (done) onSent();
+            return done;
+          }}
+        />
       </div>
     );
   }

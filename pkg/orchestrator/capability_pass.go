@@ -26,7 +26,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
+	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
@@ -34,7 +36,7 @@ import (
 )
 
 // This file is admission minting for capability references
-// (docs/capabilities-spec.md §4.2.2-§4.2.4, §4.4.1): a task holding a
+// (design/spec/capabilities/capabilities.spec.md §4.2.2-§4.2.4, §4.4.1): a task holding a
 // reference (model.IsCapabilityRef) has every one of them resolved,
 // checked against the deployment's capability policy and minted, as one
 // pass, once the rest of admission has admitted it and before its
@@ -46,6 +48,34 @@ import (
 // attached capability servers (servers.Registry).
 type CapabilityServers interface {
 	Lookup(capabilityID string) (*protocol.Server, error)
+}
+
+// TaskCapabilityServers is CapabilityServers whose run: host servers are
+// started on the grain hostd each task's run is routed to: ForTask is
+// what taskID's run mints through, and the name of that hostd, recorded
+// on the run's capability audit (model.CapabilityAuditRecord.Hostd).
+// CapabilityServers that do not implement it start every run's on
+// Deps.CapabilityHostd.
+type TaskCapabilityServers interface {
+	ForTask(ctx context.Context, taskID string) (CapabilityServers, string, error)
+}
+
+// CapabilityHostdOf is what a run's CapabilityServers implement when its
+// servers are placed on more than one grain hostd: the hostd
+// capabilityID was reached on for the run, and whether it was one of
+// those placed, so each capability audit record names its own server's
+// hostd rather than the run's default.
+type CapabilityHostdOf interface {
+	HostdOf(capabilityID string) (string, bool)
+}
+
+// capabilityServersFor is the servers taskID's run mints through, and
+// the hostd their run: host servers started on.
+func (d Deps) capabilityServersFor(ctx context.Context, taskID string) (CapabilityServers, string, error) {
+	if routed, ok := d.CapabilityServers.(TaskCapabilityServers); ok {
+		return routed.ForTask(ctx, taskID)
+	}
+	return d.CapabilityServers, d.CapabilityHostd, nil
 }
 
 const (
@@ -64,13 +94,28 @@ const (
 // Nothing here is persisted: a pass carries leased secrets.
 type CapabilityPasses struct {
 	mu      sync.Mutex
+	retryMu sync.Mutex
 	passes  map[string]*heldPass
 	backoff map[string]*passBackoff
+	// unreleased are the grants of ended runs whose release could not
+	// reach their server -- needs-config or failed -- by run id, kept to
+	// be released once it attaches again (RetryReleases) rather than
+	// left to the server's reaper.
+	unreleased map[string]*heldPass
+	// now is the clock unreleased grants' deadlines are read against;
+	// nil is time.Now.
+	now func() time.Time
 }
 
 type heldPass struct {
+	taskID   string
 	pass     *protocol.Pass
 	deadline time.Time
+	// servers are what the pass was minted through, and hostd the grain
+	// hostd their run: host servers started on.
+	servers        CapabilityServers
+	hostd          string
+	revokeApproval func()
 }
 
 type passBackoff struct {
@@ -82,7 +127,7 @@ type passBackoff struct {
 
 // NewCapabilityPasses returns an empty holder.
 func NewCapabilityPasses() *CapabilityPasses {
-	return &CapabilityPasses{passes: map[string]*heldPass{}, backoff: map[string]*passBackoff{}}
+	return &CapabilityPasses{passes: map[string]*heldPass{}, backoff: map[string]*passBackoff{}, unreleased: map[string]*heldPass{}}
 }
 
 // defaultCapabilityPasses serves a Deps that names none.
@@ -95,10 +140,112 @@ func (d Deps) capabilityPasses() *CapabilityPasses {
 	return defaultCapabilityPasses
 }
 
-func (h *CapabilityPasses) hold(runID string, p *protocol.Pass, deadline time.Time) {
+func (h *CapabilityPasses) hold(taskID, runID string, p *protocol.Pass, deadline time.Time, servers CapabilityServers, hostd string, revokeApproval func()) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.passes[runID] = &heldPass{pass: p, deadline: deadline}
+	h.passes[runID] = &heldPass{taskID: taskID, pass: p, deadline: deadline, servers: servers, hostd: hostd, revokeApproval: revokeApproval}
+}
+
+// grantHostd returns the grain hostd capabilityID ran on for this pass,
+// and whether it was a server placed on a hostd of its own
+// (CapabilityHostdOf) rather than the deployment's registry.
+func grantHostd(servers CapabilityServers, defaultHostd, capabilityID string) (string, bool) {
+	if placed, ok := servers.(CapabilityHostdOf); ok {
+		if name, ok := placed.HostdOf(capabilityID); ok {
+			return name, true
+		}
+	}
+	return defaultHostd, false
+}
+
+// setAuditRecordHostds stamps each audit record with the hostd its
+// grant's server ran on: its own placement's (CapabilityHostdOf), or
+// defaultHostd.
+func setAuditRecordHostds(records []model.CapabilityAuditRecord, defaultHostd string, servers CapabilityServers) {
+	for i := range records {
+		id, _, _ := strings.Cut(records[i].Grant, "#")
+		records[i].Hostd, _ = grantHostd(servers, defaultHostd, id)
+	}
+}
+
+// holding is every live run whose pass holds a grant capabilityID
+// minted (on hostd, when hostd is non-empty; on the deployment's own
+// registry rather than a placed server's hostd, when hostd is empty):
+// run id to its task id and those grants.
+func (h *CapabilityPasses) holding(capabilityID, hostd string) map[string]heldGrants {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := map[string]heldGrants{}
+	for runID, held := range h.passes {
+		gh, placed := grantHostd(held.servers, held.hostd, capabilityID)
+		if hostd != "" {
+			if gh != hostd {
+				continue
+			}
+		} else if placed {
+			continue
+		}
+		for _, g := range held.pass.Grants {
+			if g.Ref.CapabilityID != capabilityID {
+				continue
+			}
+			hg := out[runID]
+			hg.taskID = held.taskID
+			hg.grants = append(hg.grants, g.Ref.String())
+			out[runID] = hg
+		}
+	}
+	return out
+}
+
+type heldGrants struct {
+	taskID string
+	grants []string
+}
+
+// NoteCapabilityServerDropped tells every live run holding a grant from
+// capabilityID that the server has fallen out of use -- state, for
+// reason -- since it was minted: what the 2026-11-03 run had to guess at
+// from permissions that never arrived. It reaches the run the way any
+// capability notice does (model.CapabilityChangePrincipal). The daemon
+// calls it from the registry's servers.Options.OnDrop.
+func NoteCapabilityServerDropped(ctx context.Context, store *model.Store, capabilityID, state, reason string, configRefused bool) {
+	noteCapabilityServerDropped(ctx, store, defaultCapabilityPasses, capabilityID, "", state, reason, configRefused, time.Now())
+}
+
+// NoteCapabilityServerDroppedOnHostd is NoteCapabilityServerDropped for a
+// run: host server on one named grain hostd, telling only the live runs
+// whose pass was minted there.
+func NoteCapabilityServerDroppedOnHostd(ctx context.Context, store *model.Store, capabilityID, hostd, state, reason string, configRefused bool) {
+	noteCapabilityServerDropped(ctx, store, defaultCapabilityPasses, capabilityID, hostd, state, reason, configRefused, time.Now())
+}
+
+func noteCapabilityServerDropped(ctx context.Context, store *model.Store, passes *CapabilityPasses, capabilityID, hostd, state, reason string, configRefused bool, now time.Time) {
+	if store == nil {
+		return
+	}
+	for runID, hg := range passes.holding(capabilityID, hostd) {
+		if hg.taskID == "" {
+			continue
+		}
+		what := fmt.Sprintf("is now %s", state)
+		if configRefused {
+			what = "refused the configuration it was changed to"
+		}
+		// reason is the server's own words (its configure or refresh
+		// error), so it is quoted as untrusted text rather than said as
+		// grain's (§5.5.4), the way refuseCapabilityRun quotes a refusal.
+		body := fmt.Sprintf("grain: capability server %s, which minted this run's grant %s, %s since.\n\n"+
+			"What it said, verbatim -- untrusted text from the capability server, not grain's own words:\n\n```\n%s\n```\n\n"+
+			"The grant this run holds was minted under the server's earlier configuration and works as it did then, "+
+			"but a change made to that configuration since -- a role added to a permission set, say -- has not reached it "+
+			"and will not reach this run. If a permission you were told to expect is missing, this is why: "+
+			"say so in what you report rather than waiting for it to appear.",
+			capabilityID, strings.Join(hg.grants, ", "), what, strings.ReplaceAll(reason, "```", "'''"))
+		if err := postCapabilityNotice(ctx, store, hg.taskID, body, now); err != nil {
+			log.Printf("orchestrator: telling run %s its capability server %s dropped: %v", runID, capabilityID, err)
+		}
+	}
 }
 
 func (h *CapabilityPasses) take(runID string) *heldPass {
@@ -112,15 +259,118 @@ func (h *CapabilityPasses) take(runID string) *heldPass {
 // Release releases runID's pass, if it holds one (§4.4.1), and returns
 // the audit its grants' releases returned (§4.4.4).
 func (h *CapabilityPasses) Release(ctx context.Context, runID string) []protocol.GrantAudit {
+	audits, _, _ := h.release(ctx, runID)
+	return audits
+}
+
+// release is Release, with the hostd the pass's run: host servers
+// started on.
+func (h *CapabilityPasses) release(ctx context.Context, runID string) ([]protocol.GrantAudit, string, CapabilityServers) {
 	held := h.take(runID)
 	if held == nil {
-		return nil
+		return nil, "", nil
 	}
-	audits, err := held.pass.Release(ctx)
+	if held.revokeApproval != nil {
+		held.revokeApproval()
+	}
+	audits, rest, err := held.pass.ReleaseReachable(ctx)
 	if err != nil {
 		log.Printf("orchestrator: run %s: releasing its capability grants: %v", runID, err)
 	}
-	return audits
+	h.keepUnreleased(runID, held, rest, h.clock())
+	return audits, held.hostd, held.servers
+}
+
+func (h *CapabilityPasses) clock() time.Time {
+	if h.now != nil {
+		return h.now()
+	}
+	return time.Now()
+}
+
+// keepUnreleased keeps rest, the grants of runID's pass that release
+// could not reach, for RetryReleases -- or, once the pass's deadline has
+// passed and the server's own reaper has them, says so and drops them.
+func (h *CapabilityPasses) keepUnreleased(runID string, held *heldPass, rest *protocol.Pass, now time.Time) {
+	if rest == nil {
+		return
+	}
+	grants := make([]string, 0, len(rest.Grants))
+	for _, g := range rest.Grants {
+		grants = append(grants, fmt.Sprintf("%s (%s)", g.Ref, g.AttemptID))
+	}
+	if !held.deadline.IsZero() && !now.Before(held.deadline) {
+		log.Printf("orchestrator: run %s: grants %s were never released: their server is not attached and their lease has run out, so they wait on its reaper",
+			runID, strings.Join(grants, ", "))
+		return
+	}
+	log.Printf("orchestrator: run %s: grants %s could not be released while their server is not attached: kept, to be released when it attaches again (else by its reaper after %s)",
+		runID, strings.Join(grants, ", "), held.deadline.UTC().Format(time.RFC3339))
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.unreleased[runID] = &heldPass{taskID: held.taskID, pass: rest, deadline: held.deadline, servers: held.servers, hostd: held.hostd}
+}
+
+// RetryReleases releases again every pass kept because its server was
+// not attached when its run ended (keepUnreleased) -- called when a
+// capability server attaches -- and returns, by run id, the audits the
+// releases that now went through returned. Grants still unreachable are
+// kept for the next call, until their deadline hands them to the reaper.
+func (h *CapabilityPasses) RetryReleases(ctx context.Context) map[string]RetriedRelease {
+	h.retryMu.Lock()
+	defer h.retryMu.Unlock()
+	h.mu.Lock()
+	pending := h.unreleased
+	h.unreleased = map[string]*heldPass{}
+	h.mu.Unlock()
+	out := map[string]RetriedRelease{}
+	for runID, held := range pending {
+		audits, rest, err := held.pass.ReleaseReachable(ctx)
+		if err != nil {
+			log.Printf("orchestrator: run %s: releasing its kept capability grants again: %v", runID, err)
+		}
+		released := len(held.pass.Grants)
+		if rest != nil {
+			released -= len(rest.Grants)
+		}
+		if released > 0 {
+			log.Printf("orchestrator: run %s: released %d kept capability grant(s) now that their server is attached", runID, released)
+		}
+		h.keepUnreleased(runID, held, rest, h.clock())
+		if len(audits) > 0 {
+			out[runID] = RetriedRelease{TaskID: held.taskID, Audits: audits, Hostd: held.hostd, Servers: held.servers}
+		}
+	}
+	return out
+}
+
+// RetriedRelease is what one run's kept grants returned when
+// RetryReleases released them.
+type RetriedRelease struct {
+	TaskID  string
+	Audits  []protocol.GrantAudit
+	Hostd   string
+	Servers CapabilityServers
+}
+
+// RetryCapabilityReleases is RetryReleases on the passes of a daemon
+// whose Deps name no holder of their own, recording each run's audit the
+// way releaseRunCapabilities does. The daemon calls it whenever a
+// capability server attaches.
+func RetryCapabilityReleases(ctx context.Context, store *model.Store) {
+	for runID, r := range defaultCapabilityPasses.RetryReleases(ctx) {
+		records := capabilityAuditRecords(r.Audits, time.Now())
+		if len(records) == 0 || store == nil {
+			continue
+		}
+		setAuditRecordHostds(records, r.Hostd, r.Servers)
+		if err := store.AppendRunCapabilityAudit(ctx, runID, records); err != nil {
+			log.Printf("orchestrator: run %s: recording its capability audit: %v", runID, err)
+		}
+		if err := recordTaskChangelists(ctx, store, r.TaskID, records); err != nil {
+			log.Printf("orchestrator: run %s: linking task %s to its CLs: %v", runID, r.TaskID, err)
+		}
+	}
 }
 
 // releaseRunCapabilities releases the pass runID ran with and records
@@ -132,11 +382,12 @@ func (h *CapabilityPasses) Release(ctx context.Context, runID string) []protocol
 // task's own are linked to taskID (recordTaskChangelists).
 func releaseRunCapabilities(ctx context.Context, deps Deps, taskID, runID string) {
 	publishRunReplies(ctx, deps, taskID, runID)
-	audits := deps.capabilityPasses().Release(ctx, runID)
+	audits, hostd, servers := deps.capabilityPasses().release(ctx, runID)
 	records := capabilityAuditRecords(audits, deps.Config.now())
 	if len(records) == 0 || deps.Store == nil {
 		return
 	}
+	setAuditRecordHostds(records, hostd, servers)
 	if err := deps.Store.AppendRunCapabilityAudit(ctx, runID, records); err != nil {
 		log.Printf("orchestrator: run %s: recording its capability audit: %v", runID, err)
 	}
@@ -248,6 +499,17 @@ func (h *CapabilityPasses) held(runID string) (*protocol.Pass, time.Time) {
 	return nil, time.Time{}
 }
 
+// heldDeps is deps with the servers runID's pass was minted through, so
+// its ports and endpoints are those of the servers that granted them.
+func (h *CapabilityPasses) heldDeps(runID string, deps Deps) Deps {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if held := h.passes[runID]; held != nil {
+		deps.CapabilityServers = held.servers
+	}
+	return deps
+}
+
 // Extend renews runID's pass when deadline is later than the one it was
 // minted for (§4.3.5): an attempt whose budget was extended past what
 // admission minted for.
@@ -314,6 +576,18 @@ func (h *CapabilityPasses) exhausted(taskID, grant string, retryAt, now time.Tim
 // be started. A pass that cannot be minted gives back whatever admit
 // reserved and leaves the candidate queued, backing off, or refused.
 func capabilityAdmitter(deps Deps, admit dispatch.Admitter) dispatch.Admitter {
+	return capabilityAdmitterFor(deps, admit, nil)
+}
+
+// capabilityAdmitterFor is capabilityAdmitter told, by connectionOf, the
+// connection each admitted run's own agent spends (the framework admit
+// reserved for it, as RunDispatch reads CredentialConnection). The pass is
+// minted with it in its context (model.WithRunConnection), so an
+// in-process method spending a model credential on the run's behalf --
+// model-proxy -- forwards with the run's own team connection exactly as
+// the retired in-process <vendor>-proxy providers did. A nil connectionOf
+// is a run on no connection.
+func capabilityAdmitterFor(deps Deps, admit dispatch.Admitter, connectionOf func(runID string) string) dispatch.Admitter {
 	passes := deps.capabilityPasses()
 	return func(ctx context.Context, candidate dispatch.Candidate) (dispatch.Admission, error) {
 		// Read before admit rather than after it, so that nothing admit
@@ -326,28 +600,53 @@ func capabilityAdmitter(deps Deps, admit dispatch.Admitter) dispatch.Admitter {
 		if err != nil || !adm.Admitted {
 			return adm, err
 		}
-		decline := func() (dispatch.Admission, error) {
+		decline := func(gate, reason string) (dispatch.Admission, error) {
 			if adm.Release != nil {
 				adm.Release()
 			}
-			return dispatch.Admission{}, nil
+			return dispatch.Admission{Gate: gate, Reason: reason}, nil
 		}
 		at := deps.Config.now()
 		if b, wait := passes.waiting(task.ID, at); wait {
 			_ = deps.Store.SetGrantWait(ctx, model.GrantWait{TaskID: task.ID, Capability: b.grant,
 				Resource: b.reason, WaitingAt: at})
-			return decline()
+			return decline("capability pass "+b.grant, "backing off: "+b.reason)
 		}
-		deadline := capabilityDeadline(at, deps.Config.maxRunRuntime())
-		p, err := mintCapabilityPass(ctx, deps, *task, candidate, at, deadline)
+		// The servers this task's run mints through: run: host ones on
+		// the hostd its run is routed to. One that cannot be reached now
+		// leaves the candidate queued, as its framework's route does.
+		servers, hostd, err := deps.capabilityServersFor(ctx, task.ID)
 		if err != nil {
+			return decline("capability pass", err.Error())
+		}
+		mintDeps := deps
+		mintDeps.CapabilityServers = servers
+		deadline := capabilityDeadline(at, deps.Config.maxRunRuntime())
+		mintCtx := model.WithMintRunID(ctx, candidate.RunID)
+		if connectionOf != nil {
+			mintCtx = model.WithRunConnection(mintCtx, connectionOf(candidate.RunID))
+		}
+		var revokeApproval func()
+		if deps.ApprovalCallback != nil {
+			cb, revoke, err := deps.ApprovalCallback(task.ID, deadline.Add(protocol.DefaultGrace))
+			if err != nil {
+				return decline("capability pass", err.Error())
+			}
+			revokeApproval = revoke
+			mintCtx = protocol.WithApprovalCallback(mintCtx, cb)
+		}
+		p, err := mintCapabilityPass(mintCtx, mintDeps, *task, candidate, at, deadline)
+		if err != nil {
+			if revokeApproval != nil {
+				revokeApproval()
+			}
 			if serr := admissionMintFailed(ctx, deps, passes, *task, err, at); serr != nil {
 				log.Printf("orchestrator: task %s: recording its failed capability admission: %v", task.ID, serr)
 			}
-			return decline()
+			return decline("capability pass", err.Error())
 		}
 		passes.clearBackoff(task.ID)
-		passes.hold(candidate.RunID, p, deadline)
+		passes.hold(candidate.TaskID, candidate.RunID, p, deadline, servers, hostd, revokeApproval)
 		release := adm.Release
 		adm.Release = func() {
 			passes.Release(context.Background(), candidate.RunID)
@@ -359,22 +658,59 @@ func capabilityAdmitter(deps Deps, admit dispatch.Admitter) dispatch.Admitter {
 	}
 }
 
+// hasExternalCapabilityRef reports whether any grant in grants is a capability
+// reference targeting an external/subprocess capability server rather than the
+// in-process grain server (which opens no control- or data-plane listener).
+func hasExternalCapabilityRef(grants []model.Grant) bool {
+	for _, g := range grants {
+		if model.IsCapabilityRef(g.Capability) && !grainserver.IsInProcessGrant(g.Capability) {
+			return true
+		}
+	}
+	return false
+}
+
 // mintCapabilityPass resolves task's references against their servers,
 // records the normalized args on the task (§2.3.1), checks each against
 // the capability policy (§4.2.2) and mints the pass (§4.2.3).
 func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candidate dispatch.Candidate,
 	at, deadline time.Time) (*protocol.Pass, error) {
 
-	if deps.CapabilityServers == nil {
-		return nil, &protocol.RefusedError{Reason: "this deployment attaches no capability servers, so it cannot grant a capability reference"}
+	// Repository access (repo#read, repo#write {repo}) is a CI job's,
+	// and a task is not an event its gate could admit
+	// (model.IsRepoAccessGrant): refused, as ResolveGrants refuses it,
+	// before anything is minted.
+	for _, g := range task.Grants {
+		if model.IsRepoAccessGrant(g.Capability) {
+			return nil, &grainRefusalError{Reason: model.CIOnlyRefusal(g.Capability)}
+		}
+		if rule, ok := model.CIGrantRuleFor(g.Capability); ok {
+			return nil, &grainRefusalError{Reason: model.CIGrantRuleCIOnlyRefusal(g.Capability, rule)}
+		}
+	}
+	external := hasExternalCapabilityRef(task.Grants)
+	if external && deps.CapabilityServers == nil {
+		return nil, &grainRefusalError{Reason: "this deployment attaches no capability servers, so it cannot grant a capability reference"}
 	}
 	// A sandbox that is a directory on the daemon's own host shares its
 	// network namespace and can reach every capability server's control
 	// plane and data-plane listener directly (§3.2.4).
-	if isUnisolated(deps.Sandboxes) {
-		return nil, &protocol.RefusedError{Reason: "this deployment's sandboxes are directories on grain's own host, which cannot keep a capability server's control plane out of a sandbox's reach, so it runs no attempt holding a capability grant"}
+	if external && isUnisolated(deps.Sandboxes) {
+		return nil, &grainRefusalError{Reason: "this deployment's sandboxes are directories on grain's own host, which cannot keep a capability server's control plane out of a sandbox's reach, so it runs no attempt holding a capability grant"}
 	}
-	lookup := deps.CapabilityServers.Lookup
+	// So can a container left unfenced on this host's own bridge
+	// (ContainerConfig.Fence): refused the same way, saying why it is
+	// unfenced.
+	if external {
+		if why := openNetworkUnfenced(ctx, deps.Sandboxes); why != "" {
+			return nil, &grainRefusalError{Reason: why + ", so it runs no attempt holding a capability grant"}
+		}
+	}
+	var baseLookup protocol.Lookup
+	if deps.CapabilityServers != nil {
+		baseLookup = deps.CapabilityServers.Lookup
+	}
+	lookup := grainserver.Lookup(baseLookup)
 	recorded, err := model.NormalizeCapabilityGrants(task.Grants, lookup)
 	if err != nil {
 		return nil, &protocol.TransientError{Grant: "capabilities", Err: err}
@@ -409,8 +745,22 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 	subject := model.CapabilitySubject{Repo: task.Target, Kind: model.CapabilityRunTask}
 	for _, g := range grants {
 		if err := policy.Permits(model.RecordedCapabilityGrant(g), subject, configured); err != nil {
-			return nil, &protocol.RefusedError{Grant: g.Ref.String(), Reason: err.Error()}
+			return nil, &grainRefusalError{Grant: g.Ref.String(), Reason: err.Error()}
 		}
+	}
+	// What a local-scripts declaration became on host-script stays withheld
+	// from scheduled runs, whose prompt can come from an untrusted source.
+	if task.Origin.Reason == model.ReasonSchedule {
+		const why = "a scheduled run cannot verify the prompt it runs on"
+		kept := grants[:0]
+		for _, g := range grants {
+			if from, ok := localscripts.MigratedFrom(model.RecordedCapabilityGrant(g)); ok {
+				log.Printf("orchestrator: task %s: not granting %s (from %s): %s", task.ID, model.RecordedCapabilityGrant(g), from, why)
+				continue
+			}
+			kept = append(kept, g)
+		}
+		grants = kept
 	}
 	if len(task.Reviewers) > 0 {
 		for i := range grants {
@@ -479,16 +829,38 @@ func sameGrantNames(a, b []model.Grant) bool {
 	return true
 }
 
+// grainRefusalError is a grant grain itself refused before asking any
+// capability server: the capability policy (and its catalogue) denying
+// it, or this deployment having no way to serve one. Reason is grain's
+// own words, so refuseCapabilityRun says it as grain rather than
+// quoting it as a server's untrusted text the way it does a
+// protocol.RefusedError.
+type grainRefusalError struct {
+	Grant  string
+	Reason string
+}
+
+func (e *grainRefusalError) Error() string {
+	if e.Grant == "" {
+		return "capability grants refused: " + e.Reason
+	}
+	return fmt.Sprintf("capability %s refused: %s", e.Grant, e.Reason)
+}
+
 // admissionMintFailed records why task's pass was not minted: at
 // capacity keeps it queued until its server's retry_after (§4.2.3 item
 // 3), a transient failure backs it off exponentially and refuses it on
 // the third in a row of one grant (§4.2.4), and a refusal parks it with
-// the server's reason posted on it (§4.3.4).
+// the reason posted on it (§4.3.4) -- grain's own, or the server's.
 func admissionMintFailed(ctx context.Context, deps Deps, passes *CapabilityPasses, task model.Task, err error, at time.Time) error {
 	var exhausted *protocol.ExhaustedError
 	var transient *protocol.TransientError
 	var refused *protocol.RefusedError
+	var byGrain *grainRefusalError
 	switch {
+	case errors.As(err, &byGrain):
+		passes.clearBackoff(task.ID)
+		return refuseCapabilityRunByGrain(ctx, deps, task, byGrain.Grant, byGrain.Reason, at)
 	case errors.As(err, &exhausted):
 		passes.exhausted(task.ID, exhausted.Grant, exhausted.RetryAt, at)
 		return deps.Store.SetGrantWait(ctx, model.GrantWait{TaskID: task.ID, Capability: exhausted.Grant,
@@ -526,12 +898,35 @@ func refuseCapabilityRun(ctx context.Context, deps Deps, task model.Task, grant,
 		"What was said, verbatim -- untrusted text from %s, not grain's own words:\n\n```\n%s\n```\n\n"+
 		"Change the task's capabilities, or close whatever gap the refusal names, and reply here to have it dispatched again.",
 		what, source, strings.ReplaceAll(reason, "```", "'''"))
+	return parkOnCapabilityRefusal(ctx, deps, task, model.Attribution{
+		Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
+		OnBehalfOf: &model.Principal{Kind: model.PrincipalAutomation, ID: source},
+	}, body, at)
+}
+
+// refuseCapabilityRunByGrain parks task the way refuseCapabilityRun
+// does, for a refusal that is grain's own (grainRefusalError): reason is
+// said as grain's, with nobody else's name on it, since no capability
+// server was asked.
+func refuseCapabilityRunByGrain(ctx context.Context, deps Deps, task model.Task, grant, reason string, at time.Time) error {
+	what := "its capability grants"
+	if grant != "" {
+		what = "the capability `" + grant + "`"
+	}
+	body := fmt.Sprintf("This task could not be dispatched: grain refused %s, so no sandbox was built for it: %s.\n\n"+
+		"Change the task's capabilities, or close whatever gap the refusal names, and reply here to have it dispatched again.",
+		what, strings.TrimSuffix(reason, "."))
+	return parkOnCapabilityRefusal(ctx, deps, task, model.Attribution{
+		Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
+	}, body, at)
+}
+
+// parkOnCapabilityRefusal posts body on task as author and parks the
+// task on it.
+func parkOnCapabilityRefusal(ctx context.Context, deps Deps, task model.Task, author model.Attribution, body string, at time.Time) error {
 	commentID, err := deps.Store.AddComment(ctx, model.Comment{
-		TaskID: task.ID,
-		Author: model.Attribution{
-			Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
-			OnBehalfOf: &model.Principal{Kind: model.PrincipalAutomation, ID: source},
-		},
+		TaskID:    task.ID,
+		Author:    author,
 		Body:      body,
 		CreatedAt: at,
 	})

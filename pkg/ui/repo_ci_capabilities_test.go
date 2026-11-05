@@ -46,7 +46,7 @@ func TestRepoCICapabilitiesAPIKeepsTaskDefaultsIndependent(t *testing.T) {
 	// package-publish is here beside gcp-key because it is the grant a
 	// release workflow is turned on with, and a capability the picker
 	// does not offer is one SetRepoCICapabilities refuses to save.
-	for _, id := range []string{"gcp-key", "package-publish"} {
+	for _, id := range []string{"github-sandbox", model.PackagePublishRef + "={}"} {
 		if !slices.Contains(got.AvailableCICapabilities, id) {
 			t.Fatalf("CI picker does not offer %q: %v", id, got.AvailableCICapabilities)
 		}
@@ -63,7 +63,7 @@ func TestRepoCICapabilitiesAPIKeepsTaskDefaultsIndependent(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT repo-read/write: %d %s", rec.Code, rec.Body)
 	}
-	if gotRepoReadWrite := decode[ui.RepoDefaults](t, rec); !reflect.DeepEqual(gotRepoReadWrite.CICapabilities, []string{"repo-read:acme/tools", "repo-write:acme/tools"}) {
+	if gotRepoReadWrite := decode[ui.RepoDefaults](t, rec); !reflect.DeepEqual(gotRepoReadWrite.CICapabilities, []string{model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"}), model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "tools"})}) {
 		t.Fatalf("saved repo-read/write: %+v", gotRepoReadWrite)
 	}
 	for _, id := range []string{"self-debug", "unknown", "github-credential:default", "repo-read:invalid", "repo-write:invalid"} {
@@ -113,7 +113,7 @@ func TestConfigIncludesCICapabilitiesCatalogWithCIOnlyCapabilities(t *testing.T)
 	}
 
 	// CI capabilities catalog must include CI-only capabilities with their names and descriptions
-	for _, id := range []string{"package-publish", "registry-push"} {
+	for _, id := range []string{model.PackagePublishRef + "={}", model.RegistryPushRef + "={}"} {
 		idx := slices.IndexFunc(cfg.CICapabilities, func(c ui.Capability) bool { return c.ID == id })
 		if idx < 0 {
 			t.Fatalf("ciCapabilities does not offer %q: %+v", id, cfg.CICapabilities)

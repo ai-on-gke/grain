@@ -20,7 +20,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import RepositoriesSection, { connectionText } from "./RepositoriesSection.jsx";
 import api from "../../api.js";
 
@@ -147,6 +147,9 @@ describe("RepositoriesSection", () => {
 
   it("toggles base-branch repair human-gate bypass and explains the risk", async () => {
     routeApi();
+    const confirm = vi.fn().mockReturnValue(true);
+    vi.stubGlobal("confirm", confirm);
+    onTestFinished(() => vi.unstubAllGlobals());
     const user = userEvent.setup();
     render(<RepositoriesSection config={config} tasks={[]} />);
     const box = await screen.findByLabelText(
@@ -167,7 +170,45 @@ describe("RepositoriesSection", () => {
         body: JSON.stringify({ baseRepairBypassesHumanGates: true }),
       },
     );
-    expect(box).toBeChecked();
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /acme\/widgets.*trust-boundary code with no human sign-off/,
+      ),
+    );
+    await waitFor(() => expect(box).toBeChecked());
+
+    // Turning it back off does not ask.
+    await user.click(box);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(api).toHaveBeenCalledWith(
+      "/api/repos/acme/widgets/base-repair-bypasses-human-gates",
+      {
+        method: "PUT",
+        body: JSON.stringify({ baseRepairBypassesHumanGates: false }),
+      },
+    );
+    await waitFor(() => expect(box).not.toBeChecked());
+  });
+
+  it("leaves the base-branch repair bypass off when the confirmation is declined", async () => {
+    routeApi();
+    const confirm = vi.fn().mockReturnValue(false);
+    vi.stubGlobal("confirm", confirm);
+    onTestFinished(() => vi.unstubAllGlobals());
+    const user = userEvent.setup();
+    render(<RepositoriesSection config={config} tasks={[]} />);
+    const box = await screen.findByLabelText(
+      "acme/widgets: Base-branch repair PRs may merge without a human when their CI is green",
+    );
+    await waitFor(() => expect(box).not.toBeDisabled());
+    await user.click(box);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(api).not.toHaveBeenCalledWith(
+      "/api/repos/acme/widgets/base-repair-bypasses-human-gates",
+      expect.anything(),
+    );
+    expect(box).not.toBeChecked();
   });
 
   it("says when no connection lists the repository", () => {

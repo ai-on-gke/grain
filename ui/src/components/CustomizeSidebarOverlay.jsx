@@ -41,8 +41,10 @@ import AddIcon from "@mui/icons-material/Add";
 import PaletteOutlinedIcon from "@mui/icons-material/PaletteOutlined";
 import CheckIcon from "@mui/icons-material/Check";
 import FormatColorResetIcon from "@mui/icons-material/FormatColorReset";
+import { NavGlyph } from "./AppIcon.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
 import Overlay from "./Overlay.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import {
   CHLADNI_ICONS,
   DEFAULT_PINNED_ITEMS,
@@ -55,6 +57,7 @@ import {
 } from "../pinnedNav.js";
 import { usePinnedNav } from "../PinnedNavContext.jsx";
 import {
+  DEFAULT_HIDDEN_SECTIONS,
   SIDEBAR_SECTIONS,
   saveHiddenSections,
   useHiddenSections,
@@ -110,6 +113,33 @@ export default function CustomizeSidebarOverlay({
     }
     return [];
   }, [addKind, sessions, boards]);
+
+  const iconOptions = useMemo(
+    () => [
+      {
+        value: "",
+        label: "Default icon",
+        renderRow: (text) => (
+          <Typography variant="body2" color="text.secondary" component="span">
+            {text}
+          </Typography>
+        ),
+      },
+      ...CHLADNI_ICONS.map((chladni) => ({
+        value: chladni.id,
+        label: chladni.label,
+        renderRow: (text) => (
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <ItemGlyph kind={chladni.id} size={16} />
+            <Typography variant="body2" component="span">
+              {text}
+            </Typography>
+          </Box>
+        ),
+      })),
+    ],
+    [],
+  );
 
   const moveItem = (index, delta) => {
     const toIndex = index + delta;
@@ -194,7 +224,7 @@ export default function CustomizeSidebarOverlay({
 
   const handleReset = () => {
     setDraft(DEFAULT_PINNED_ITEMS);
-    setDraftHidden([]);
+    setDraftHidden(DEFAULT_HIDDEN_SECTIONS);
     setEditingIndex(null);
   };
 
@@ -362,7 +392,11 @@ export default function CustomizeSidebarOverlay({
                   >
                     <span className="nav-icon" style={iconStyle}>
                       {info.glyph ? (
-                        <ItemGlyph kind={info.glyph} />
+                        item.icon || item.glyph ? (
+                          <ItemGlyph kind={info.glyph} />
+                        ) : (
+                          <NavGlyph kind={info.glyph} />
+                        )
                       ) : (
                         <span
                           className="dot dot-all"
@@ -427,42 +461,14 @@ export default function CustomizeSidebarOverlay({
                         flexWrap: "wrap",
                       }}
                     >
-                      <FormControl size="small" sx={{ minWidth: 220, flex: 1 }}>
-                        <InputLabel id={`item-icon-label-${index}`}>
-                          Icon
-                        </InputLabel>
-                        <Select
-                          labelId={`item-icon-label-${index}`}
-                          id={`item-icon-select-${index}`}
-                          value={pickerIconId(item.icon || item.glyph || "")}
-                          label="Icon"
-                          onChange={(e) =>
-                            updateItem(index, { icon: e.target.value })
-                          }
-                        >
-                          <MenuItem value="">
-                            <Typography variant="body2" color="text.secondary">
-                              Default icon
-                            </Typography>
-                          </MenuItem>
-                          {CHLADNI_ICONS.map((chladni) => (
-                            <MenuItem key={chladni.id} value={chladni.id}>
-                              <Box
-                                sx={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: 1,
-                                }}
-                              >
-                                <ItemGlyph kind={chladni.id} size={16} />
-                                <Typography variant="body2">
-                                  {chladni.label}
-                                </Typography>
-                              </Box>
-                            </MenuItem>
-                          ))}
-                        </Select>
-                      </FormControl>
+                      <SearchSelect
+                        id={`item-icon-select-${index}`}
+                        label="Icon"
+                        sx={{ minWidth: 220, flex: 1 }}
+                        value={pickerIconId(item.icon || item.glyph || "")}
+                        options={iconOptions}
+                        onChange={(next) => updateItem(index, { icon: next })}
+                      />
                     </Box>
 
                     <Box>
@@ -624,43 +630,27 @@ export default function CustomizeSidebarOverlay({
           </Select>
         </FormControl>
 
-        <FormControl size="small" sx={{ minWidth: 160, flex: 1 }}>
-          <InputLabel id="add-item-label">Item</InputLabel>
-          <Select
-            labelId="add-item-label"
-            id="add-item-select"
-            value={addId}
-            label="Item"
-            onChange={(e) => setAddId(e.target.value)}
-          >
-            {availableOptions.map((opt) => (
-              <MenuItem key={opt.id} value={opt.id}>
-                {opt.label}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+        <SearchSelect
+          id="add-item-select"
+          label="Item"
+          sx={{ minWidth: 160, flex: 1 }}
+          value={addId}
+          options={availableOptions.map((opt) => ({
+            value: opt.id,
+            label: opt.label,
+          }))}
+          onChange={setAddId}
+        />
 
-        <FormControl size="small" sx={{ minWidth: 150 }}>
-          <InputLabel id="add-icon-label">Icon (optional)</InputLabel>
-          <Select
-            labelId="add-icon-label"
-            id="add-icon-select"
-            value={addIcon}
-            label="Icon (optional)"
-            onChange={(e) => setAddIcon(e.target.value)}
-          >
-            <MenuItem value="">Default icon</MenuItem>
-            {CHLADNI_ICONS.map((chladni) => (
-              <MenuItem key={chladni.id} value={chladni.id}>
-                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                  <ItemGlyph kind={chladni.id} size={16} />
-                  <Typography variant="body2">{chladni.label}</Typography>
-                </Box>
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+        <SearchSelect
+          id="add-icon-select"
+          label="Icon (optional)"
+          fullWidth={false}
+          sx={{ minWidth: 180, flex: "0 1 220px" }}
+          value={addIcon}
+          options={iconOptions}
+          onChange={setAddIcon}
+        />
 
         <Button
           variant="outlined"

@@ -27,7 +27,7 @@ In **Settings → Capabilities → Capability servers**, add a stdio server:
 
   Scripts then run with your ambient identity: your uid, plus the `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG` and `TZ` hostd passes to every entry. Anything else of yours a script needs, such as `KUBECONFIG` or `SSH_AUTH_SOCK`, must be listed in `pass_env`.
 
-  Scripts also run at `oom_score_adj` +500. `grain-hostd.service` itself runs at `OOMScoreAdjust=-900`, as the daemon does, so that under memory pressure the kernel kills the work and not the controller ([design/auto-overcommit.md](design/auto-overcommit.md)).
+  Scripts also run at `oom_score_adj` +500. `grain-hostd.service` itself runs at `OOMScoreAdjust=-900`, as the daemon does, so that under memory pressure the kernel kills the work and not the controller ([design/auto-overcommit.md](../design/design/auto-overcommit.design.md)).
 - **Run in the daemon's container** by leaving `run` unset. Scripts then run with the container's identity.
 
 The server listens on `127.0.0.1:9733` (`-listen` to change it). It keeps each grant's private script file, its scratch directory and `audit.jsonl` under `-data-dir`, which defaults to `~/.cache/grain/host-script`.
@@ -82,8 +82,9 @@ Things to know when writing one:
 - **Arguments are passed straight through.** The command's argv reaches the script as `"$@"`, exactly as given: spaces, quotes, `$(…)`, newlines and a leading `--` are all literal, and grain never runs them through a shell. Your script parses and validates them. Any process in a granted sandbox can call the command with any arguments, so treat every argument as hostile. Use `"$1"`, never `eval`, and never paste an argument into another shell string.
 - **Fixed values belong in the script or its `env`, not in arguments.** A grant can't add to or change the script text.
 - **Secrets go in through the server's environment.** Bind them in the server entry's `env` as `$secret:<name>`, then name them in a script's `env` as `$env:<NAME>`. A script sees only its own `env`, `GRAIN_TASK_ID`, `GRAIN_ATTEMPT_ID` and the ambient identity variables (`HOME`, `USER`, `PATH`, `KUBECONFIG`, …). It never sees the rest of the server's environment.
-- **Arguments are logged.** Every call's argv is in the audit log, so never ask callers to pass a secret as an argument.
-- **Limits.** `timeout` (seconds) kills the script's whole process group, and the call exits 124. `max_output` caps stdout and stderr each, with a truncation marker. `max_calls` caps calls per grant. `max_args` and `max_arg_len` cap the argv, and an argument holding a NUL byte is refused.
+- **Arguments are logged.** Every call's argv (and, when `--stdin` is passed, the stdin byte count and SHA-256) is in the audit log, so never ask callers to pass a secret as an argument.
+- **Per-call approval (`approve: true`).** Setting `"approve": true` holds each call in the task's approval queue (task pane, interactive chat, and inbox) until a person clicks **Approve** or **Deny**, showing the script name, quoted arguments, and (when `--stdin` is passed) the stdin byte count, SHA-256 and first 4 KiB preview. A denied or unanswered call exits 125 without running the script.
+- **Limits.** `timeout` (seconds) bounds any approval wait and kills the script's whole process group if execution runs past it (exiting 124). `max_output` caps stdout and stderr each, with a truncation marker. `max_stdin` (default 10 MiB) caps forwarded stdin. `max_calls` caps calls per grant. `max_args` and `max_arg_len` cap the argv, and an argument holding a NUL byte is refused.
 - **Working directory.** `cwd` defaults to a scratch directory private to the grant, which is removed at release.
 
 ## 3. Try it
@@ -101,6 +102,7 @@ $ grain host-script --list
 deploy	Deploy one service to staging or prod.
 $ grain host-script deploy --grain-help
 Usage: grain host-script deploy [arguments...]
+       grain host-script --stdin deploy [arguments...]
 
 Deploy one service to staging or prod.
 
@@ -113,4 +115,4 @@ $ echo $?
 0
 ```
 
-The agent's prompt has a section for each granted script with its description and usage, and says how to call it. Repository scripts and tests can call `grain host-script deploy` too: `grain` is on the `PATH` of `run_command` and of a grain CI step, either the sandbox image's own `/usr/local/bin/grain` or, in an image built without one, the stand-in the grant's setup installs at `/home/debian/.grain/bin/grain`. Arguments are passed literally, never through a shell, and every call is logged with them, so never pass a secret as one. Output streams back as it is produced, and the exit status is the script's. Stdin is not forwarded. When the attempt ends, the grant is released and the command exits 125, saying so.
+The agent's prompt has a section for each granted script with its description and usage, and says how to call it. Repository scripts and tests can call `grain host-script deploy` too: `grain` is on the `PATH` of `run_command` and of a grain CI step, either the sandbox image's own `/usr/local/bin/grain` or, in an image built without one, the stand-in the grant's setup installs at `/home/debian/.grain/bin/grain`. Arguments are passed literally, never through a shell, and every call is logged with them, so never pass a secret as one. Output streams back as it is produced, and the exit status is the script's. Stdin is not forwarded unless `--stdin` is passed before the script name (`grain host-script --stdin <name> [args...]`). When the attempt ends, the grant is released and the command exits 125, saying so.

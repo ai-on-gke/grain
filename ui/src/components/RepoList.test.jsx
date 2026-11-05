@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import RepoList from "./RepoList.jsx";
 import api from "../api.js";
+import { chooseOption, optionValues } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 
@@ -112,6 +113,19 @@ describe("RepoList", () => {
     expect(screen.getByText("Blocked 1")).toBeInTheDocument();
     expect(screen.getByText("3 tasks")).toBeInTheDocument();
     expect(screen.getByText("1 task")).toBeInTheDocument();
+  });
+
+  // ChipStrip hides a row's last chips first when they do not fit, so a
+  // Blocked chip behind the state counts was the first one a busy repo
+  // lost (grain/task-2235): it leads the strip instead.
+  it("puts the Blocked chip ahead of the state counts", () => {
+    renderList();
+    const row = screen.getByText("acme/widgets").closest(".repo-list-row");
+    const chips = [...row.querySelectorAll(".chips > *")].map(
+      (c) => c.textContent,
+    );
+    expect(chips[0]).toBe("Blocked 1");
+    expect(chips).toContain("Waiting 2");
   });
 
   it("omits tasks with no target repo", () => {
@@ -599,6 +613,183 @@ describe("RepoList", () => {
     vi.unstubAllGlobals();
   });
 
+  // The add takes a round trip to the host and a config commit, and the
+  // form used to sit unchanged for all of it (grain/task-55): a click
+  // that looked like nothing invited a second one. The whole form is
+  // locked and says so from the click until the config refresh lands.
+  describe("while an add is in flight", () => {
+    const postsTo = (path) => api.mock.calls.filter(([p]) => p === path);
+    const addButton = () => screen.getByRole("button", { name: "Add repo" });
+    // The button in its loading state: disabled, saying so, with the
+    // spinner MUI draws over its (kept, so same-width) label.
+    const expectAdding = (button) => {
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute("aria-busy", "true");
+      expect(within(button).getByRole("progressbar")).toBeInTheDocument();
+    };
+    const expectIdle = (button) => {
+      expect(button).toBeEnabled();
+      expect(button).toHaveAttribute("aria-busy", "false");
+      expect(within(button).queryByRole("progressbar")).toBeNull();
+    };
+
+    it("locks the form, says what it is adding, and unlocks it cleared once the add lands", async () => {
+      let resolveAdd;
+      api.mockImplementation((path) =>
+        path === "/api/repos"
+          ? new Promise((resolve) => {
+              resolveAdd = resolve;
+            })
+          : Promise.resolve({}),
+      );
+      let resolveRefresh;
+      const onRefreshConfig = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveRefresh = resolve;
+          }),
+      );
+      const user = userEvent.setup();
+      renderList({
+        tasks: [],
+        config: { targetRepos: ["acme/gadgets"] },
+        onRefreshConfig,
+      });
+
+      const field = screen.getByRole("combobox", { name: "Repo to add" });
+      await user.type(field, "acme/widgets");
+      await user.click(addButton());
+
+      expectAdding(addButton());
+      expect(field).toBeDisabled();
+      expect(field).toHaveValue("acme/widgets");
+      const status = screen.getByTestId("repo-discovery-status");
+      expect(status).toHaveAttribute("role", "status");
+      expect(status).toHaveAttribute("data-status", "adding");
+      expect(status).toHaveTextContent("Adding acme/widgets…");
+
+      // A second submit during the wait -- Enter in the field, say --
+      // does not issue a second POST.
+      fireEvent.submit(screen.getByRole("form", { name: "Add repo" }));
+      expect(postsTo("/api/repos")).toHaveLength(1);
+
+      // The POST resolving is not the end of it: the page is still
+      // re-reading config, and the form stays locked until that lands.
+      await act(async () => {
+        resolveAdd({});
+      });
+      expect(onRefreshConfig).toHaveBeenCalledTimes(1);
+      expectAdding(addButton());
+      expect(field).toBeDisabled();
+
+      await act(async () => {
+        resolveRefresh();
+      });
+      expectIdle(addButton());
+      expect(field).toBeEnabled();
+      expect(field).toHaveValue("");
+      expect(status).toHaveAttribute("data-status", "added");
+      expect(status).toHaveTextContent("Added acme/widgets");
+      expect(postsTo("/api/repos")).toHaveLength(1);
+
+      // The note is for the moment after the click: the next keystroke
+      // puts the discovery line back.
+      await user.type(field, "a");
+      expect(status).not.toHaveTextContent("Added acme/widgets");
+    });
+
+    it("unlocks the form with what was typed still in it when the add fails", async () => {
+      let rejectAdd;
+      api.mockImplementation((path) =>
+        path === "/api/repos"
+          ? new Promise((_resolve, reject) => {
+              rejectAdd = reject;
+            })
+          : Promise.resolve({}),
+      );
+      const onRefreshConfig = vi.fn();
+      const showError = vi.fn();
+      const user = userEvent.setup();
+      renderList({
+        tasks: [],
+        config: { targetRepos: ["acme/gadgets"] },
+        onRefreshConfig,
+        showError,
+      });
+
+      const field = screen.getByRole("combobox", { name: "Repo to add" });
+      await user.click(field);
+      await user.click(await screen.findByRole("option", { name: "Other…" }));
+      await user.type(field, "acme/widgets");
+      const clone = screen.getByLabelText("Clone URL");
+      await user.type(clone, "git@gitlab.example.com:acme/widgets.git");
+      await user.click(addButton());
+
+      expectAdding(addButton());
+      expect(field).toBeDisabled();
+      expect(clone).toBeDisabled();
+
+      await act(async () => {
+        rejectAdd(new Error("acme/widgets: not found on github.com"));
+      });
+
+      expect(showError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "acme/widgets: not found on github.com",
+        }),
+      );
+      expect(onRefreshConfig).not.toHaveBeenCalled();
+      expectIdle(addButton());
+      expect(field).toBeEnabled();
+      expect(field).toHaveValue("acme/widgets");
+      expect(clone).toBeEnabled();
+      expect(clone).toHaveValue("git@gitlab.example.com:acme/widgets.git");
+      const status = screen.getByTestId("repo-discovery-status");
+      expect(status).not.toHaveAttribute("data-status", "adding");
+      expect(status).not.toHaveTextContent("Added");
+    });
+
+    // The first add waits on POST /api/settings/plan before its
+    // confirmation can even appear (grain/task-411): that wait was the
+    // most silent of all, so it is inside the pending window too, and a
+    // declined confirmation hands the form back as it was.
+    it("is already in progress while the first add's confirmation waits on the plan", async () => {
+      let resolvePlan;
+      api.mockImplementation((path) =>
+        path === "/api/settings/plan"
+          ? new Promise((resolve) => {
+              resolvePlan = resolve;
+            })
+          : Promise.resolve({}),
+      );
+      const confirmFn = vi.fn().mockReturnValue(false);
+      vi.stubGlobal("confirm", confirmFn);
+      const user = userEvent.setup();
+      renderList({ tasks: [] });
+
+      const field = screen.getByRole("combobox", { name: "Repo to add" });
+      await user.type(field, "acme/widgets");
+      await user.click(addButton());
+
+      expect(confirmFn).not.toHaveBeenCalled();
+      expectAdding(addButton());
+      expect(field).toBeDisabled();
+      expect(screen.getByTestId("repo-discovery-status")).toHaveTextContent(
+        "Adding acme/widgets…",
+      );
+
+      await act(async () => {
+        resolvePlan({});
+      });
+      expect(confirmFn).toHaveBeenCalledTimes(1);
+      expect(postsTo("/api/repos")).toHaveLength(0);
+      expectIdle(addButton());
+      expect(field).toBeEnabled();
+      expect(field).toHaveValue("acme/widgets");
+      vi.unstubAllGlobals();
+    });
+  });
+
   it("populates autocomplete with reachable repos and submits canonical identifier", async () => {
     api.mockImplementation((path) => {
       if (path === "/api/deployment/reachable-repos") {
@@ -660,9 +851,7 @@ describe("RepoList", () => {
     renderList({ tasks: [], onRefreshConfig });
 
     const input = await screen.findByPlaceholderText("owner/name");
-    await user.click(input);
-    const otherOption = await screen.findByRole("option", { name: "Other…" });
-    await user.click(otherOption);
+    await chooseOption(user, input, "Other…");
     await user.type(input, "custom/private-repo");
     await user.click(screen.getByRole("button", { name: "Add repo" }));
 
@@ -672,6 +861,27 @@ describe("RepoList", () => {
     });
     expect(onRefreshConfig).toHaveBeenCalledTimes(1);
     vi.unstubAllGlobals();
+  });
+
+  it("matches discovered repos by words in any order and keeps Other… pinned", async () => {
+    api.mockImplementation((path) =>
+      path === "/api/deployment/reachable-repos"
+        ? Promise.resolve({
+            available: true,
+            repos: [
+              { repo: "ai-on-gke/grain", push: true },
+              { repo: "acme/widgets", push: true },
+            ],
+          })
+        : Promise.resolve({}),
+    );
+    const user = userEvent.setup();
+    renderList({ tasks: [] });
+
+    const input = await screen.findByPlaceholderText("owner/name");
+    await user.click(input);
+    await user.type(input, "grain gke");
+    expect(optionValues(input)).toEqual(["ai-on-gke/grain", "Other…"]);
   });
 
   // grain/task-45: an empty targetRepos means unrestricted, so the first

@@ -65,7 +65,7 @@ The file is YAML (JSON is YAML too):
       token_file: /run/bot.token  # optional; stored as secrets/github/bot.token
   models:                         # model connections, matched by id
     - id: gemini
-      framework: antigravity      # antigravity, claude, codex or custom
+      framework: antigravity      # antigravity, claude or codex
       models: [gemini-3.1-pro]    # optional pin; empty means discover
       credential_file: /run/key   # optional; stored as this connection's key
   default_model: gemini-3.1-pro   # optional; the deployment's default model
@@ -127,7 +127,6 @@ type modelConnectionSeed struct {
 	Models         []string `yaml:"models"`
 	ExcludedModels []string `yaml:"excluded_models"`
 	AuthMode       string   `yaml:"auth_mode"`
-	Command        string   `yaml:"command"`
 	CLIPath        string   `yaml:"cli_path"`
 	Concurrency    int      `yaml:"concurrency"`
 	Disabled       bool     `yaml:"disabled"`
@@ -236,11 +235,12 @@ func parseConnectionSeed(raw []byte) (connectionSeed, error) {
 			return seed, fmt.Errorf("models: id %q is listed twice", m.ID)
 		}
 		seen[m.ID] = true
+		if m.Framework == model.RemovedAgentFrameworkCustom {
+			return seed, fmt.Errorf("models[%d].framework: custom command connections were removed in v3.2.0; use one of %s",
+				i, model.AgentFrameworkNames())
+		}
 		if !model.ValidAgentFramework(m.Framework) {
 			return seed, fmt.Errorf("models[%d].framework must be %s", i, model.AgentFrameworkNames())
-		}
-		if m.Framework == model.AgentFrameworkCustom && strings.TrimSpace(m.Command) == "" {
-			return seed, fmt.Errorf("models[%d].command is required for a custom connection", i)
 		}
 		seed.Models[i] = m
 	}
@@ -333,7 +333,7 @@ func importConnections(ctx context.Context, store *model.Store, dataDir string, 
 		}
 	}
 	if seed.Relay != nil || seed.RelaySettings != nil {
-		fmt.Fprintln(out, "note: skipping relay settings (the rendezvous relay has been removed; see docs/relay-removed.md)")
+		fmt.Fprintln(out, "note: skipping relay settings (the rendezvous relay has been removed)")
 	}
 	fmt.Fprintf(out, "imported %d git and %d model connections\n", len(seed.Git), len(seed.Models))
 	return nil
@@ -375,7 +375,6 @@ func mergeModelConnections(have []model.AgentBackend, seed []modelConnectionSeed
 			Models:         m.Models,
 			ExcludedModels: m.ExcludedModels,
 			AuthMode:       strings.TrimSpace(m.AuthMode),
-			Command:        strings.TrimSpace(m.Command),
 			CLIPath:        strings.TrimSpace(m.CLIPath),
 			Concurrency:    m.Concurrency,
 			Disabled:       m.Disabled,

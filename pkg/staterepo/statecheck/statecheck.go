@@ -35,6 +35,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/sandboximage"
 )
 
 // CustomFields is the one thing this command asks of a dump beyond
@@ -343,11 +344,43 @@ func UnrunnableSettings(ctx context.Context, db *sql.DB) ([]string, error) {
 	return out, nil
 }
 
+// ImplicitSandboxImageMirror warns about a settings row whose mirror
+// repository is derived from its k8s_granule_image rather than named by
+// sandbox_image_mirror (sandboximage.DerivedMirror). Such a pin is
+// ignored as an image -- kubernetes-granule pods boot this build's own
+// guest, mirrored into the pin's repository -- and is the only thing
+// keeping that mirror: a pull request clearing it, which is what anyone
+// reading an old sha in it would write, stops the mirror at the next
+// restart without a word. The Settings pane moves it into
+// sandbox_image_mirror when it clears such a pin; an import does not go
+// through the pane, so this says the same thing to the reviewer.
+//
+// The daemon's -sandbox-image flag can derive one too, but no dump
+// carries a flag, so this judges the row alone, against the stamp grain
+// ships as its default guest.
+func ImplicitSandboxImageMirror(ctx context.Context, db *sql.DB) ([]string, error) {
+	cfg, err := model.New(db).GetConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reading the settings this dump carries: %w", err)
+	}
+	if cfg == nil || cfg.SandboxBackend != model.SandboxBackendKubernetesGranule || strings.TrimSpace(cfg.SandboxImageMirror) != "" {
+		return nil, nil
+	}
+	hint, ok := sandboximage.DerivedMirror(cfg.K8sGranuleImage, "", sandboximage.ImageRepository(model.DefaultSandboxImage))
+	if !ok {
+		return nil, nil
+	}
+	return []string{fmt.Sprintf("the settings row's %s %q is read as mirror repository %s, not booted: "+
+		"kubernetes-granule sandboxes boot this build's guest mirrored there, and clearing it stops that mirror "+
+		"at the next restart -- set sandbox_image_mirror to %q to make the mirror explicit",
+		hint.Field, hint.Image, hint.Repository, hint.Repository)}, nil
+}
+
 // mcpServerWarnings checks the settings row's capability servers
 // (model.Config.MCPServers): an entry protocol.ServerConfig.Validate
 // refuses is one the daemon will not attach, and an env or headers value
 // that looks like a credential but is not a $secret:<name> reference is
-// one this repository is carrying in cleartext (docs/capabilities-spec.md
+// one this repository is carrying in cleartext (design/spec/capabilities/capabilities.spec.md
 // §3.1.2). Neither value is ever repeated in the warning.
 func mcpServerWarnings(servers map[string]protocol.ServerConfig) []string {
 	ids := make([]string, 0, len(servers))

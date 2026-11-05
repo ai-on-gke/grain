@@ -223,7 +223,34 @@ func (p *progress) stop() {
 // logf writes one line to the daemon log, prefixed with this upgrade's
 // branch.
 func (p *progress) logf(format string, args ...any) {
+	if p == nil {
+		return
+	}
 	log.Printf(p.prefix+format, args...)
+}
+
+// setSource records which image source ("registry" or "release-assets") this
+// upgrade used on Status.Source.
+func (p *progress) setSource(source ImageSource) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.status.Source = string(source)
+	p.dirty = true
+}
+
+// setFallbackNote records why this upgrade fell back from its primary image
+// source (for example "release has no image assets; pulled from <registry>").
+func (p *progress) setFallbackNote(note string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.status.FallbackNote = note
+	p.dirty = true
 }
 
 // start marks a step running. The step must be in the plan -- a
@@ -244,10 +271,10 @@ func (p *progress) start(name string) {
 	p.current = i
 	// The pane's own Detail line, for the sake of anything (an older
 	// UI, curl) that reads the status without understanding steps --
-	// but only while the upgrade is still running: the restart step
-	// starts *after* succeed has already written what the upgrade
-	// achieved, and overwriting that with "step 5 of 5" would throw
-	// away the one line that says which image is now installed.
+	// but only while the upgrade is still running: once succeed has
+	// written what the upgrade achieved, overwriting that with "step 5
+	// of 5" would throw away the one line that says which image is now
+	// installed.
 	if p.status.Phase == PhaseRunning {
 		p.status.Detail = fmt.Sprintf("step %d of %d: %s", i+1, len(p.status.Steps), name)
 	}
@@ -301,6 +328,9 @@ func (p *progress) skip(name, why string) {
 // persist rather than rewriting the status file for every line of a
 // docker build. Every other transition here flushes immediately.
 func (p *progress) note(line string) {
+	if p == nil {
+		return
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.current < 0 {

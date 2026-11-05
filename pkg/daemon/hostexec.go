@@ -14,7 +14,7 @@
 
 package daemon
 
-// What "host" can mean for this deployment (docs/design/cli-run-location.md,
+// What "host" can mean for this deployment (design/design/cli-run-location.design.md,
 // "Deployments with no host executor").
 //
 // A daemon on the bare machine starts a host CLI as its own child. A
@@ -87,6 +87,10 @@ type HostExecutor struct {
 	// so for the UI.
 	Remote      *hostd.Remote `json:"-"`
 	RemoteHostd bool          `json:"remote,omitempty"`
+	// Hostd is the registry name of the hostd this executor reaches over
+	// Remote (model.Hostd); "" is Remote's default (the deprecated shared
+	// token's hostd).
+	Hostd string `json:"hostd,omitempty"`
 }
 
 // remoteHostExecutor is HostExecutorHostd through the hostd dialing in
@@ -101,6 +105,9 @@ func (e HostExecutor) hostdClient() hostd.Client {
 	c := hostd.Client{Socket: e.Socket, Build: daemonBuild()}
 	if e.Remote != nil {
 		c.Dial = e.Remote.Dial
+		if e.Hostd != "" {
+			c.Dial = e.Remote.Dialer(e.Hostd)
+		}
 	}
 	return c
 }
@@ -146,18 +153,24 @@ func (c Config) hostExecutor() HostExecutor {
 	if KubernetesMode(c) {
 		return HostExecutor{Kind: HostExecutorNone, Reason: kubernetesNoHost}
 	}
+	if c.HostdSocket != "" {
+		return HostExecutor{Kind: HostExecutorHostd, Socket: c.HostdSocket,
+			Reason: "host CLIs run through grain hostd at " + c.HostdSocket}
+	}
 	return HostExecutor{Kind: HostExecutorLocal, Reason: "the daemon runs on this machine"}
 }
 
 // DetectHostExecutor is cfg's host executor, read once at start. A
 // daemon taking a dialing-in hostd (-hostd-token-file) has that one.
 // Kubernetes is decided from cfg alone, before anything about the
-// process or a hostd socket is looked at. A daemon on the bare machine
-// (whererun) runs host CLIs itself. A containerised one has hostd when
-// -hostd-socket names its socket, or when hostd's default socket
-// directory is mounted into the container -- configured, whether or not
-// hostd is up right now -- and otherwise has no host executor.
-// socketDirExists is os.Stat's answer unless a test says otherwise.
+// process or a hostd socket is looked at. An explicit -hostd-socket
+// selects that grain hostd whether the daemon is in a container or on
+// the machine itself; otherwise a daemon on the bare machine (whererun)
+// runs host CLIs itself, and a containerised one has hostd when hostd's
+// default socket directory is mounted into the container -- configured,
+// whether or not hostd is up right now -- and otherwise has no host
+// executor. socketDirExists is os.Stat's answer unless a test says
+// otherwise.
 func DetectHostExecutor(cfg Config, where whererun.Detection, socketDirExists func(string) bool) HostExecutor {
 	if cfg.HostdRemote != nil {
 		// A hostd that dials in is the host executor wherever the daemon
@@ -169,12 +182,16 @@ func DetectHostExecutor(cfg Config, where whererun.Detection, socketDirExists fu
 	if KubernetesMode(cfg) {
 		return HostExecutor{Kind: HostExecutorNone, Reason: kubernetesNoHost}
 	}
+	if cfg.HostdSocket != "" {
+		whereAt := "in a container"
+		if where.Host {
+			whereAt = "on this machine"
+		}
+		return HostExecutor{Kind: HostExecutorHostd, Socket: cfg.HostdSocket,
+			Reason: "the daemon runs " + whereAt + " (" + where.Signal + "), and host CLIs run through grain hostd at " + cfg.HostdSocket}
+	}
 	if where.Host {
 		return HostExecutor{Kind: HostExecutorLocal, Reason: "the daemon runs on this machine (" + where.Signal + ")"}
-	}
-	if cfg.HostdSocket != "" {
-		return HostExecutor{Kind: HostExecutorHostd, Socket: cfg.HostdSocket,
-			Reason: "the daemon runs in a container (" + where.Signal + "), and host CLIs run through grain hostd at " + cfg.HostdSocket}
 	}
 	if socketDirExists == nil {
 		socketDirExists = func(p string) bool { fi, err := os.Stat(p); return err == nil && fi.IsDir() }
@@ -240,14 +257,10 @@ func (c Config) CheckCLIRunSettings(m map[string]model.CLIRunSetting) error {
 }
 
 // runsOnHost reports whether framework can be run at "host" under e, and
-// says why not. A custom command is each connection's own, so it has no
-// hostd allowlist entry to name.
+// says why not.
 func (e HostExecutor) runsOnHost(framework string) (bool, string) {
-	switch {
-	case !e.HostAvailable():
+	if !e.HostAvailable() {
 		return false, e.Reason
-	case e.Kind == HostExecutorHostd && framework == model.AgentFrameworkCustom:
-		return false, "custom commands have no grain hostd allowlist entry, so they run in the daemon's own container"
 	}
 	return true, ""
 }
@@ -442,9 +455,8 @@ func (c Config) HostExecutorStatus(ctx context.Context) HostExecutorStatus {
 	}
 	// A dialing-in hostd that is not connected is said at once, not
 	// after hostdStatusTimeout of waiting for it (hostd.ForDisplay).
-	hctx, cancel := context.WithTimeout(hostd.ForDisplay(ctx), hostdStatusTimeout)
-	defer cancel()
-	offers, err := exec.hostdClient().Offers(hctx)
+	dctx := hostd.ForDisplay(ctx)
+	offers, err := queryHostdOffers(dctx, exec, hostdStatusTimeout)
 	out.Hostd = &HostdStatus{Reachable: err == nil}
 	if exec.Remote != nil {
 		st := exec.Remote.Status()
@@ -454,6 +466,8 @@ func (c Config) HostExecutorStatus(ctx context.Context) HostExecutorStatus {
 		out.Hostd.Error = err.Error()
 		return out
 	}
+	hctx, cancel := context.WithTimeout(dctx, hostdStatusTimeout)
+	defer cancel()
 	for _, o := range offers {
 		out.Hostd.Offers = append(out.Hostd.Offers, string(o.Kind)+" "+o.Name)
 	}
@@ -519,25 +533,187 @@ func (c Config) cliHostdHost(r CLIRunResolution) (agent.Host, error) {
 	if entry == "" {
 		entry = cliBinaryName(r.Framework)
 	}
+	var h agent.HostdHost
 	if c.hostdRuns != nil {
 		// A run's CLI starts detached, and outlives a daemon upgrade
 		// (hostdruns.go).
-		h := c.hostdRuns.Host(agent.LocalHost{}, entry)
-		h.Path = r.HostPath
-		return h, nil
+		h = c.hostdRuns.Host(agent.LocalHost{}, entry)
+	} else {
+		h = agent.HostdHost{Client: c.hostExecutor().hostdClient(), Entry: entry}
 	}
-	return agent.HostdHost{Client: c.hostExecutor().hostdClient(), Entry: entry, Path: r.HostPath}, nil
+	h.Path = r.HostPath
+	if exec := c.hostExecutor(); exec.Remote != nil {
+		if err := remoteHostdHost(&h, exec.Remote.Carrier(exec.Hostd)); err != nil {
+			return nil, fmt.Errorf("%s is set to run on the host, through the grain hostd that dials in: %w", cliBinaryName(r.Framework), err)
+		}
+	}
+	return h, nil
+}
+
+// remoteHostdHostTimeout bounds the hello remoteHostdHost asks.
+const remoteHostdHostTimeout = 10 * time.Second
+
+// remoteHostdHost makes h a host on the machine of the grain hostd that
+// dialed in over remote: one that shares neither this daemon's
+// filesystem nor its loopback, so h stages there and carries grain's
+// endpoints there (agent/hostd_remote.go). Its hello says where. remote
+// is bound to the hostd h's Client reaches, so the carried endpoints
+// listen on the machine the CLI runs on, not the default hostd's.
+func remoteHostdHost(h *agent.HostdHost, remote *hostd.HostdCarrier) error {
+	ctx, cancel := context.WithTimeout(context.Background(), remoteHostdHostTimeout)
+	defer cancel()
+	hello, err := h.Client.Hello(ctx)
+	if err != nil {
+		return err
+	}
+	if !hello.SupportsCarry() || !hello.Remote {
+		return fmt.Errorf("it speaks hostd protocol %d (build %s), which cannot stage a run's files on its machine or carry grain's endpoints there; update grain hostd to this daemon's build", hello.Protocol, hello.Build)
+	}
+	h.Remote = remote
+	h.Grain = hello.Grain
+	h.StageRoot = hello.StageRoot
+	h.CodexAuth = hello.CodexAuth
+	return nil
 }
 
 // hostdOffersTimeout bounds asking hostd what it offers before a run, so
 // a wedged hostd costs a resolution seconds rather than a dispatch.
 const hostdOffersTimeout = 3 * time.Second
 
+// hostdUnreachableTTL bounds how long a failed Offers dial is remembered
+// across resolutions while the socket or remote session is unchanged, so
+// polling GET /api/upgrade or Settings behind an unreachable grain hostd
+// waits out the dial timeout at most once per interval rather than on
+// every read.
+const hostdUnreachableTTL = 15 * time.Second
+
+var hostdOffersNow = time.Now
+
 type hostdOffersCacheKey struct{}
 
 type hostdCacheTarget struct {
 	socket string
 	remote *hostd.Remote
+	name   string
+}
+
+type hostdTargetState struct {
+	socketPresent   bool
+	socketModUnixNs int64
+	remoteConnected bool
+	remoteSessions  int
+}
+
+func currentHostdTargetState(exec HostExecutor) hostdTargetState {
+	if exec.Remote != nil {
+		var st hostd.RemoteStatus
+		if exec.Hostd != "" {
+			st = exec.Remote.HostdStatus(exec.Hostd)
+		} else {
+			st = exec.Remote.Status()
+		}
+		return hostdTargetState{
+			remoteConnected: st.Connected,
+			remoteSessions:  st.Sessions,
+		}
+	}
+	var out hostdTargetState
+	if info, err := os.Stat(exec.Socket); err == nil {
+		out.socketPresent = true
+		out.socketModUnixNs = info.ModTime().UnixNano()
+	}
+	return out
+}
+
+type hostdOffersProbe struct {
+	state   hostdTargetState
+	done    chan struct{}
+	offers  []hostd.Offer
+	err     error
+	aborted bool
+	at      time.Time
+}
+
+type hostdUnreachableCache struct {
+	mu      sync.Mutex
+	targets map[hostdCacheTarget]*hostdOffersProbe
+}
+
+var sharedHostdUnreachableCache = &hostdUnreachableCache{
+	targets: map[hostdCacheTarget]*hostdOffersProbe{},
+}
+
+func resetHostdUnreachableCache() {
+	sharedHostdUnreachableCache.mu.Lock()
+	sharedHostdUnreachableCache.targets = map[hostdCacheTarget]*hostdOffersProbe{}
+	sharedHostdUnreachableCache.mu.Unlock()
+}
+
+// queryHostdOffers asks exec's hostd what it offers, coalescing concurrent
+// probes and reusing an unreachable answer for hostdUnreachableTTL until
+// the socket file or remote session changes. A reachable hostd is not
+// cached across calls, so edits to /etc/grain/hostd.yaml show up at once.
+func queryHostdOffers(ctx context.Context, exec HostExecutor, timeout time.Duration) ([]hostd.Offer, error) {
+	target := hostdCacheTarget{socket: exec.Socket, remote: exec.Remote, name: exec.Hostd}
+	cache := sharedHostdUnreachableCache
+	for {
+		curState := currentHostdTargetState(exec)
+		now := hostdOffersNow()
+
+		cache.mu.Lock()
+		probe, ok := cache.targets[target]
+		reuse := false
+		if ok && probe.state == curState {
+			select {
+			case <-probe.done:
+				reuse = probe.err != nil && !probe.aborted && now.Sub(probe.at) < hostdUnreachableTTL
+			default:
+				reuse = true
+			}
+		}
+		leader := false
+		if !reuse {
+			probe = &hostdOffersProbe{
+				state: curState,
+				done:  make(chan struct{}),
+			}
+			cache.targets[target] = probe
+			leader = true
+		}
+		cache.mu.Unlock()
+
+		if leader {
+			octx, cancel := context.WithTimeout(ctx, timeout)
+			offers, err := exec.hostdClient().Offers(octx)
+			cancel()
+			aborted := err != nil && ctx.Err() != nil
+			if err == nil || aborted {
+				cache.mu.Lock()
+				if cache.targets[target] == probe {
+					delete(cache.targets, target)
+				}
+				cache.mu.Unlock()
+			}
+			probe.offers, probe.err = offers, err
+			probe.aborted = aborted
+			probe.at = hostdOffersNow()
+			close(probe.done)
+			return offers, err
+		}
+
+		select {
+		case <-probe.done:
+			if probe.aborted {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			return probe.offers, probe.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 }
 
 type hostdSocketEntry struct {
@@ -575,7 +751,7 @@ func hostdOffersCLI(ctx context.Context, exec HostExecutor, entry string) (path,
 // hostdOffers is hostdOffersCLI for an entry of any kind.
 func hostdOffers(ctx context.Context, exec HostExecutor, kind hostd.Kind, entry string) (path, why string) {
 	if cache, ok := ctx.Value(hostdOffersCacheKey{}).(*hostdOffersCache); ok && cache != nil {
-		target := hostdCacheTarget{socket: exec.Socket, remote: exec.Remote}
+		target := hostdCacheTarget{socket: exec.Socket, remote: exec.Remote, name: exec.Hostd}
 		cache.mu.Lock()
 		se, ok := cache.sockets[target]
 		if !ok {
@@ -584,9 +760,7 @@ func hostdOffers(ctx context.Context, exec HostExecutor, kind hostd.Kind, entry 
 		}
 		cache.mu.Unlock()
 		se.once.Do(func() {
-			octx, cancel := context.WithTimeout(ctx, hostdOffersTimeout)
-			defer cancel()
-			se.offers, se.err = exec.hostdClient().Offers(octx)
+			se.offers, se.err = queryHostdOffers(ctx, exec, hostdOffersTimeout)
 		})
 		if se.err != nil {
 			return "", se.err.Error()
@@ -612,9 +786,7 @@ func hostdOffers(ctx context.Context, exec HostExecutor, kind hostd.Kind, entry 
 		}
 		return "", fmt.Sprintf("grain hostd answers, but its allowlist (%s) offers no %s entry %q", hostd.DefaultAllowlistPath, kind, entry)
 	}
-	octx, cancel := context.WithTimeout(ctx, hostdOffersTimeout)
-	defer cancel()
-	offers, err := exec.hostdClient().Offers(octx)
+	offers, err := queryHostdOffers(ctx, exec, hostdOffersTimeout)
 	if err != nil {
 		return "", err.Error()
 	}
@@ -626,6 +798,8 @@ func hostdOffers(ctx context.Context, exec HostExecutor, kind hostd.Kind, entry 
 			// An incompatible hostd starts no new host runs, and says
 			// which protocols differ. A draining one is left to the
 			// start, which re-queues the run rather than failing it.
+			octx, cancel := context.WithTimeout(ctx, hostdOffersTimeout)
+			defer cancel()
 			var st HostdStatus
 			if why := hostdHello(octx, exec, &st); st.Mismatch != "" {
 				return o.Path, why
@@ -646,6 +820,15 @@ func (c Config) capabilityHostd() *hostd.Client {
 	}
 	client := exec.hostdClient()
 	return &client
+}
+
+// capabilityHostdName is the registry name of the hostd capabilityHostd
+// reaches, "" where there is none.
+func capabilityHostdName(c Config) string {
+	if c.capabilityHostd() == nil {
+		return ""
+	}
+	return c.DefaultHostd()
 }
 
 // storedHostWarned is the CLIs whose stored "host" this process has

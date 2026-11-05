@@ -118,6 +118,20 @@ func TestCredentialTokenSourceTokenFor(t *testing.T) {
 		}
 	})
 
+	t.Run("a token that is no GitHub App's names no app", func(t *testing.T) {
+		set := writeCredentials(t, t.TempDir(), map[string]string{"acme/*": "bot"}, map[string]string{"bot": "sekret\n"})
+		src := credentialTokenSource{credentials: set,
+			teamCredential: func(_, owner, _ string) (string, bool) { return "bot", owner == "acme" }}
+		for _, repo := range [][2]string{{"acme", "widgets"}, {"other", "repo"}} {
+			if app, err := src.AppSlugFor(repo[0], repo[1]); app != "" || err != nil {
+				t.Fatalf("AppSlugFor(%s/%s) = (%q, %v), want no app", repo[0], repo[1], app, err)
+			}
+		}
+		if app, err := (credentialTokenSource{}).AppSlugFor("acme", "widgets"); app != "" || err != nil {
+			t.Fatalf("AppSlugFor with no credentials = (%q, %v), want no app", app, err)
+		}
+	})
+
 	t.Run("a named credential resolves its token file", func(t *testing.T) {
 		set := writeCredentials(t, t.TempDir(), map[string]string{"acme/*": "bot"}, map[string]string{"bot": "sekret\n"})
 		// The ladder above is not read: the deployment's git connection
@@ -145,24 +159,24 @@ func TestCapabilityProviders(t *testing.T) {
 		want []string
 	}{
 		{
-			name: "no gcp project configured still registers the built-in capabilities and the three model proxies",
+			name: "no gcp project configured still registers the built-in capabilities",
 			cfg:  Config{},
-			want: []string{"github-sandbox", "self-debug", "grain-log", "deployment-health", "self-repair", "self-upgrade", "db-read", "db-write", "memory", "git-push-any-ref", "bootstrap-playbooks", "grain-ci", "registry-push", "release-notes", "console", "test-quarantine", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read", "claude-proxy", "openai-proxy", "gemini-proxy"},
+			want: []string{"github-sandbox", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
 		},
 		{
 			name: "an agent service account without a gcp project does not add either gcp capability",
 			cfg:  Config{GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"},
-			want: []string{"github-sandbox", "self-debug", "grain-log", "deployment-health", "self-repair", "self-upgrade", "db-read", "db-write", "memory", "git-push-any-ref", "bootstrap-playbooks", "grain-ci", "registry-push", "release-notes", "console", "test-quarantine", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read", "claude-proxy", "openai-proxy", "gemini-proxy"},
+			want: []string{"github-sandbox", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
 		},
 		{
-			name: "a gcp project with no agent service account only adds gemini-key to the built-in capabilities",
+			name: "a gcp project adds nothing: gemini-key is served by the gcp capability server",
 			cfg:  Config{GcpProject: "proj"},
-			want: []string{"gemini-key", "github-sandbox", "self-debug", "grain-log", "deployment-health", "self-repair", "self-upgrade", "db-read", "db-write", "memory", "git-push-any-ref", "bootstrap-playbooks", "grain-ci", "registry-push", "release-notes", "console", "test-quarantine", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read", "claude-proxy", "openai-proxy", "gemini-proxy"},
+			want: []string{"github-sandbox", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
 		},
 		{
-			name: "a gcp project with an agent service account adds both gcp capabilities to the built-in capabilities",
+			name: "a gcp project with an agent service account adds nothing either (gcp-key and gemini-key are served by the gcp capability server)",
 			cfg:  Config{GcpProject: "proj", GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"},
-			want: []string{"gcp-key", "gemini-key", "github-sandbox", "self-debug", "grain-log", "deployment-health", "self-repair", "self-upgrade", "db-read", "db-write", "memory", "git-push-any-ref", "bootstrap-playbooks", "grain-ci", "registry-push", "release-notes", "console", "test-quarantine", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read", "claude-proxy", "openai-proxy", "gemini-proxy"},
+			want: []string{"github-sandbox", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
 		},
 	}
 	for _, tc := range cases {
@@ -188,10 +202,11 @@ func TestCapabilityProviders(t *testing.T) {
 // no caller outside a test, so a key minted for a run whose controller
 // died before the lease was written was never deleted by anything.
 //
-// The three named here each mint a bearer resource GCP or GitHub will
-// never expire on its own; a future MINT provider whose resource does
-// expire by itself needs no Reap, which is why this lists names rather
-// than asserting over every model.ProvisionMint spec.
+// The in-process provider named here mints a bearer resource GitHub will
+// never expire on its own (gcp#gcp-key and gcp#gemini-key reap inside the
+// gcp capability server, gemini keys older than 24h); a future MINT provider whose resource does expire by
+// itself needs no Reap, which is why this lists names rather than asserting
+// over every model.ProvisionMint spec.
 func TestEveryLeakableCapabilityIsReaped(t *testing.T) {
 	t.Parallel()
 	cfg := Config{GcpProject: "proj", GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"}
@@ -201,7 +216,7 @@ func TestEveryLeakableCapabilityIsReaped(t *testing.T) {
 			reaped[p.Spec().Name] = true
 		}
 	}
-	for _, name := range []string{"gcp-key", "gemini-key", "github-sandbox"} {
+	for _, name := range []string{"github-sandbox"} {
 		if !reaped[name] {
 			t.Errorf("capability %q is registered but does not implement model.Reaper: "+
 				"reapCapabilities skips it entirely, so a resource it minted for a run whose record was "+
@@ -285,10 +300,10 @@ func TestCapabilityProvidersRegistersEachNamedGitHubToken(t *testing.T) {
 // to the catalog of providers grain ships; this ties it to the registry
 // a real daemon actually builds, which is the pair the gap was in.
 //
-// The config is fully populated on purpose: capabilityProviders gates
-// gcp-key and gemini-key on it (TestCapabilityProviders above covers
-// the gated cases), and gating one off is a deployment being
-// unconfigured, not the picker and the registry disagreeing.
+// The config is fully populated on purpose: capabilityProviders once
+// gated gcp-key and gemini-key on it, and a provider gated on it again
+// would be a deployment being unconfigured, not the picker and the
+// registry disagreeing.
 func TestEveryRegisteredCapabilityIsGrantable(t *testing.T) {
 	t.Parallel()
 	cfg := Config{GcpProject: "proj", GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"}
@@ -320,7 +335,7 @@ func TestEveryRegisteredCapabilityIsGrantable(t *testing.T) {
 		// task 2015, after 6172e1205 removed an uncommented exclusion
 		// here). TestGrainCIIsNotOfferedAndIsRefusedByName in pkg/ui
 		// is the half of this that holds it to that.
-		if name == grainci.CapabilityName {
+		if name == grainci.Grant {
 			continue
 		}
 		if !slices.Contains(offered, name) {
@@ -556,7 +571,7 @@ func TestLoadConfigLogsEveryOverriddenFlag(t *testing.T) {
 		GcpProject: stored.GCPProject, GcpServiceAccountEmail: stored.GCPServiceAccountEmail,
 	}
 
-	var logs strings.Builder
+	var logs lockedBuffer
 	prevLog := log.Writer()
 	log.SetOutput(&logs)
 	defer log.SetOutput(prevLog)

@@ -22,7 +22,7 @@ import (
 )
 
 // Agents groups per-wake tool use, re-reads, and steward report checks by
-// template over the report's window (docs/design/durable-tasks.md#DT-14).
+// template over the report's window (design/design/durable-tasks.design.md#DT-14).
 type Agents struct {
 	Templates   []AgentTemplate
 	ReportCheck AgentReportCheck
@@ -78,7 +78,8 @@ func isReadToolForAgents(tool string) bool {
 		"list_grain_tasks", "read_pipeline_changes", "query_merge_queue",
 		"list_ci_runs", "get_ci_log", "pull_request_status", "base_branch_status",
 		"query_test_history", "grain_read", "grain_ls", "grain_grep",
-		"api_get_task", "api_list_tasks", "api_get_ci_run", "api_list_ci_runs":
+		"api_get_task", "api_list_tasks", "api_get_ci_run", "api_list_ci_runs",
+		"grain_get_task", "grain_list_tasks":
 		return true
 	}
 	return false

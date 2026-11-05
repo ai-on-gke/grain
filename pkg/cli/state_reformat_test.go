@@ -25,8 +25,11 @@ package cli
 // offer: a store this build can open, and a reachable remote.
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
@@ -56,7 +59,8 @@ func TestStateReformatWritesTheNoteTheNextStartReads(t *testing.T) {
 	dataDir := t.TempDir()
 	dumpAt(t, dataDir, model.SchemaVersion-1)
 
-	if err := stateReformat(dataDir); err != nil {
+	var out bytes.Buffer
+	if err := stateReformatTo(dataDir, &out); err != nil {
 		t.Fatalf("reformat: %v", err)
 	}
 	stamp := daemon.StateRepoReformatStamp(dataDir)
@@ -66,6 +70,14 @@ func TestStateReformatWritesTheNoteTheNextStartReads(t *testing.T) {
 	}
 	if len(body) == 0 {
 		t.Fatalf("%s is empty; whoever finds it has nothing to go on", stamp)
+	}
+	printed := out.String()
+	wantBaseline := "schema " + strconv.Itoa(model.V2BaselineSchemaVersion) + " or newer migrates in place"
+	if !strings.Contains(printed, wantBaseline) {
+		t.Errorf("reformat output = %q, want it to say a store at %s", printed, wantBaseline)
+	}
+	if strings.Contains(printed, "If the store is at the old schema too") {
+		t.Errorf("reformat output still gives the pre-2.0 move-aside advice:\n%s", printed)
 	}
 }
 

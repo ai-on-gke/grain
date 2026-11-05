@@ -32,16 +32,9 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
-	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
-	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
-	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	"github.com/ai-on-gke/grain/pkg/capability/memory"
-	"github.com/ai-on-gke/grain/pkg/capability/quarantine"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
-	"github.com/ai-on-gke/grain/pkg/capability/releasenotes"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
-	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -74,7 +67,7 @@ var everyRunTool = map[string]string{
 	// Escape hatches: each is relayed to a person after the run, and
 	// grants nothing itself. request_secret is one of them -- what a
 	// person types goes to the secret store and never back to the agent.
-	"ask_question": "escape hatch", "request_secret": "escape hatch", "comment_on_issue": "escape hatch",
+	"ask_question": "escape hatch", "request_secret": "escape hatch", "request_access": "escape hatch", "comment_on_issue": "escape hatch",
 	"nothing_needed": "escape hatch",
 	"write_handover": "escape hatch", "propose_task": "escape hatch", "add_review_comment": "escape hatch",
 	// The run's own branch's CI, which it cannot leave.
@@ -133,10 +126,7 @@ var interactiveRunTool = map[string]string{
 
 // daemonToolGrants is toolGrants plus the grants whose tools exist only
 // with a daemon to ask.
-var daemonToolGrants = append(slices.Clone(toolGrants),
-	releasenotes.CapabilityName,
-	quarantine.CapabilityName,
-)
+var daemonToolGrants = slices.Clone(toolGrants)
 
 // knownUngatedTools are tools every run is offered today that act beyond
 // its own task with no grant. Remove each from here when it is gated;
@@ -149,21 +139,19 @@ var knownUngatedTools = map[string]bool{}
 // daemon -- tests/e2e's everyToolGrant.
 var toolGrants = []string{
 	selfdebug.CapabilityName,
-	grainlog.CapabilityName,
-	deploymenthealth.CapabilityName,
+	"https://grain.dev/capabilities/grain#journal",
+	"https://grain.dev/capabilities/grain#health",
 	bootstrap.CapabilityName,
-	selfupgrade.CapabilityName,
-	memory.CapabilityName,
-	grainci.CapabilityName,
+	grainci.Grant,
 	readissues.CapabilityName,
-	dbaccess.CapabilityDBRead,
-	dbaccess.CapabilityDBWrite,
+	`https://grain.dev/capabilities/grain#sql={"write":false}`,
+	`https://grain.dev/capabilities/grain#sql={"write":true}`,
 }
 
 // grantImplies is the one grant that carries another's tools: write
 // access to grain's database includes reading it.
 var grantImplies = map[string]string{
-	dbaccess.CapabilityDBWrite: dbaccess.CapabilityDBRead,
+	`https://grain.dev/capabilities/grain#sql={"write":true}`: `https://grain.dev/capabilities/grain#sql={"write":false}`,
 }
 
 var (
@@ -563,7 +551,7 @@ func TestGetCIArtifactRefusesARepositoryOutsideTheTask(t *testing.T) {
 }
 
 // TestControlRoster is the roster every production run is served
-// (docs/design/sandbox-first-agent-surface.md §6): with a sandbox and no
+// (design/design/sandbox-first-agent-surface.design.md §6): with a sandbox and no
 // -mcp-surface, the sandbox tools and the run-ending, parking and
 // escalation tools, plus the tools of grants no sandbox process may
 // reach -- and nothing the `grain` CLI serves instead.
@@ -582,7 +570,7 @@ func TestControlRoster(t *testing.T) {
 		return listTools(t, args, grants)
 	}
 	want := []string{"run_command", "read_file", "write_file", "edit_file",
-		"ask_question", "request_secret", "comment_on_issue", "nothing_needed",
+		"ask_question", "request_secret", "request_access", "comment_on_issue", "nothing_needed",
 		"propose_task", "wait_for_task", "resume_later", "recreate_sandbox"}
 	got := control(false, "grain-ci", "self-debug", "memory")
 	for _, name := range want {
@@ -605,7 +593,7 @@ func TestControlRoster(t *testing.T) {
 	if !control(true, "grain-ci")["chat"] {
 		t.Errorf("an interactive run's control roster has no chat")
 	}
-	if !control(false, "grain-ci", "self-upgrade")["upgrade_deployment"] {
-		t.Errorf("self-upgrade's tools are model-only, and missing from the control roster")
+	if up := control(false, "grain-ci", "api:self-upgrade"); up["api_start_upgrade"] || up["api_cancel_scheduled_upgrade"] || up["api_get_upgrade_status"] {
+		t.Errorf("grain-sandbox serves no api_* tools (api:* grants are served on grain-controller /api/mcp); got %v", up)
 	}
 }

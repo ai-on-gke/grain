@@ -15,7 +15,6 @@
 package daemon
 
 import (
-	"bytes"
 	"context"
 	"log"
 	"os"
@@ -124,7 +123,7 @@ func TestWithHostCapacityPopulatesBudgetFromClusterNodesOnKubernetes(t *testing.
 }
 
 func TestLogSandboxBudgetReportsClusterBudgetWhenKnownAndSchedulerFallbackWhenUnknown(t *testing.T) {
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	origOut := log.Writer()
 	origFlags := log.Flags()
 	log.SetOutput(&buf)
@@ -354,4 +353,28 @@ func writeFakeKubectlFailing(t *testing.T) string {
 		t.Fatalf("writing fake kubectl: %v", err)
 	}
 	return bin
+}
+
+func TestOnlyGranuleBackendsChargeVMMHeadroom(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		sandboxes orchestrator.Sandboxes
+		want      model.VMMHeadroom
+	}{
+		{"GranuleSandboxes", orchestrator.NewGranuleSandboxes(orchestrator.GranuleConfig{}), model.DefaultVMMHeadroom()},
+		{"K8sGranuleSandboxes", orchestrator.NewK8sGranuleSandboxes(orchestrator.K8sGranuleConfig{Image: "example/granule"}), model.DefaultVMMHeadroom()},
+		{"K8sSandboxes", orchestrator.NewK8sSandboxes(orchestrator.K8sConfig{Image: "example/sandbox"}), model.VMMHeadroom{}},
+		{"HostSandboxes", &orchestrator.HostSandboxes{}, model.VMMHeadroom{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sandboxVMMHeadroom(tc.sandboxes); got != tc.want {
+				t.Errorf("sandboxVMMHeadroom = %+v, want %+v", got, tc.want)
+			}
+			cfg := Config{VMMHeadroom: sandboxVMMHeadroom(tc.sandboxes)}
+			if got := cfg.Budget().VMMHeadroom; got != tc.want {
+				t.Errorf("Budget().VMMHeadroom = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
 }

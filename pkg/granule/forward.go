@@ -17,14 +17,18 @@ package granule
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 
-	"github.com/bwsalmon/granule/pkg/forward"
+	"github.com/gke-labs/granule/pkg/guestforward"
 )
 
 // ForwardSpec describes a single TCP port forward between the host/controller
@@ -49,22 +53,28 @@ func (s ForwardSpec) String() string {
 	return fmt.Sprintf("%s:%d:%s:%d", bindHost, s.BindPort, targetHost, s.TargetPort)
 }
 
-func (s ForwardSpec) toInternal(dir forward.Direction) forward.Spec {
-	bindHost := s.BindHost
-	if bindHost == "" {
-		bindHost = "127.0.0.1"
+// addr renders host:port, defaulting an empty host to loopback.
+func addr(host string, port int) string {
+	if host == "" {
+		host = "127.0.0.1"
 	}
-	targetHost := s.TargetHost
-	if targetHost == "" {
-		targetHost = "127.0.0.1"
-	}
-	return forward.Spec{
-		Direction:  dir,
-		BindHost:   bindHost,
-		BindPort:   s.BindPort,
-		TargetHost: targetHost,
-		TargetPort: s.TargetPort,
-	}
+	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+// remoteForward maps s, a guest-to-controller (-R) spec, onto
+// guestforward's shape: the agent listens on the bind address inside the
+// guest and each connection to it is dialed to the target here. The guest
+// only ever names which of these listeners took a connection, never where
+// to dial, so it cannot reach anything on the controller beyond the
+// targets listed here.
+func (s ForwardSpec) remoteForward() guestforward.RemoteForward {
+	return guestforward.RemoteForward{Guest: addr(s.BindHost, s.BindPort), Target: addr(s.TargetHost, s.TargetPort)}
+}
+
+// localForward maps s, a controller-to-guest (-L) spec, onto
+// guestforward's shape.
+func (s ForwardSpec) localForward() guestforward.LocalForward {
+	return guestforward.LocalForward{Listen: addr(s.BindHost, s.BindPort), Guest: addr(s.TargetHost, s.TargetPort)}
 }
 
 // LoopbackRemoteSpecs builds deduplicated, sorted guest-to-controller (-R)
@@ -141,53 +151,51 @@ func (cfg KubectlForwardConfig) resolvedRemotes() []ForwardSpec {
 	return out
 }
 
-func (cfg KubectlForwardConfig) internalSpecs() []forward.Spec {
-	remotes := cfg.resolvedRemotes()
-	specs := make([]forward.Spec, 0, len(cfg.Locals)+len(remotes))
+func (cfg KubectlForwardConfig) resolvedLocals() []ForwardSpec {
+	var out []ForwardSpec
 	for _, s := range cfg.Locals {
 		if s.BindPort > 0 && s.TargetPort > 0 {
-			specs = append(specs, s.toInternal(forward.LocalToRemote))
+			out = append(out, s)
 		}
 	}
-	for _, s := range remotes {
-		specs = append(specs, s.toInternal(forward.RemoteToLocal))
-	}
-	return specs
+	return out
 }
 
 // ForwardArgs returns the arguments to pass to the operator `granule` CLI for
-// `granule forward -kube ...`.
+// `granule forward pod/<pod> ...`. That CLI runs kubectl from PATH, so
+// cfg.Kubectl is not passed on.
 func (c Command) ForwardArgs(cfg KubectlForwardConfig) []string {
-	args := []string{"forward", "-kube"}
-	if cfg.Kubectl != "" {
-		args = append(args, "-kubectl", cfg.Kubectl)
-	}
+	args := []string{"forward", "pod/" + cfg.Pod}
 	if cfg.Kubeconfig != "" {
 		args = append(args, "-kubeconfig", cfg.Kubeconfig)
 	}
-	ns := cfg.Namespace
-	if ns == "" {
-		ns = "default"
-	}
-	args = append(args, "-n", ns)
-	container := cfg.Container
-	if container == "" {
-		container = "sandbox"
-	}
-	args = append(args, "-c", container)
-	for _, s := range cfg.Locals {
-		if s.BindPort > 0 && s.TargetPort > 0 {
-			args = append(args, "-L", s.String())
-		}
+	args = append(args, "-n", cfg.namespace(), "-c", cfg.container())
+	for _, s := range cfg.resolvedLocals() {
+		l := s.localForward()
+		args = append(args, "-L", l.Listen+"="+l.Guest)
 	}
 	for _, s := range cfg.resolvedRemotes() {
-		args = append(args, "-R", s.String())
+		r := s.remoteForward()
+		args = append(args, "-R", r.Guest+"="+r.Target)
 	}
-	args = append(args, cfg.Pod)
 	return args
 }
 
-// Forward runs `granule forward -kube` through c.
+func (cfg KubectlForwardConfig) namespace() string {
+	if cfg.Namespace == "" {
+		return "default"
+	}
+	return cfg.Namespace
+}
+
+func (cfg KubectlForwardConfig) container() string {
+	if cfg.Container == "" {
+		return "sandbox"
+	}
+	return cfg.Container
+}
+
+// Forward runs `granule forward pod/<pod>` through c.
 func (c Command) Forward(ctx context.Context, cfg KubectlForwardConfig) error {
 	cmd := c.command(ctx, c.ForwardArgs(cfg)...)
 	var output bytes.Buffer
@@ -199,44 +207,29 @@ func (c Command) Forward(ctx context.Context, cfg KubectlForwardConfig) error {
 	return nil
 }
 
-// Forward runs `granule forward -kube` through Local.
+// Forward runs `granule forward pod/<pod>` through Local.
 func Forward(ctx context.Context, cfg KubectlForwardConfig) error {
 	return Local.Forward(ctx, cfg)
 }
 
-// KubectlForwardArgs renders the `kubectl` command-line arguments that invoke
-// `granule forward` inside a Kubernetes sandbox pod over `kubectl exec -i`.
+// KubectlForwardArgs renders the `kubectl` command-line arguments that reach
+// the guest agent's forwarding session inside a Kubernetes sandbox pod: the
+// shim's `granule forward-stdio` mode over `kubectl exec -i`. The mappings
+// themselves travel inside the session rather than on this command line.
 func KubectlForwardArgs(cfg KubectlForwardConfig) []string {
 	var argv []string
 	if cfg.Kubeconfig != "" {
 		argv = append(argv, "--kubeconfig", cfg.Kubeconfig)
 	}
-	ns := cfg.Namespace
-	if ns == "" {
-		ns = "default"
-	}
-	argv = append(argv, "-n", ns, "exec", "-i")
-	container := cfg.Container
-	if container == "" {
-		container = "sandbox"
-	}
-	argv = append(argv, "-c", container, cfg.Pod, "--", "granule", "forward")
-	for _, s := range cfg.Locals {
-		if s.BindPort > 0 && s.TargetPort > 0 {
-			argv = append(argv, "-L", s.String())
-		}
-	}
-	for _, s := range cfg.resolvedRemotes() {
-		argv = append(argv, "-R", s.String())
-	}
-	return argv
+	return append(argv, "-n", cfg.namespace(), "exec", "-i",
+		"-c", cfg.container(), cfg.Pod, "--", "granule", guestforward.ShimMode)
 }
 
-func kubectlForwardCommand(ctx context.Context, bin string, args ...string) *exec.Cmd {
+func kubectlForwardCommand(bin string, args ...string) *exec.Cmd {
 	if bin == "" {
 		bin = "kubectl"
 	}
-	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd := exec.Command(bin, args...)
 	for _, name := range []string{
 		"PATH", "HOME", "KUBECONFIG",
 		"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy",
@@ -253,70 +246,150 @@ func kubectlForwardCommand(ctx context.Context, bin string, args ...string) *exe
 	return cmd
 }
 
-// ForwardKubectl starts `kubectl exec -i ... -- granule forward` against
-// cfg.Pod and serves the controller side of the multiplexed port-forward
-// session until ctx is cancelled or the stream closes.
+// ForwardKubectl starts `kubectl exec -i ... -- granule forward-stdio`
+// against cfg.Pod and serves the controller side of the guestforward session
+// until ctx is cancelled or the stream closes.
 func ForwardKubectl(ctx context.Context, cfg KubectlForwardConfig) error {
-	specs := cfg.internalSpecs()
-	if len(specs) == 0 {
+	remotes, locals := cfg.resolvedRemotes(), cfg.resolvedLocals()
+	if len(remotes)+len(locals) == 0 {
 		return nil
 	}
 	argv := KubectlForwardArgs(cfg)
-	cmd := kubectlForwardCommand(ctx, cfg.Kubectl, argv...)
-	stdinPipe, err := cmd.StdinPipe()
-	if err != nil {
-		return fmt.Errorf("granule: forward stdin pipe for %s: %w", cfg.Pod, err)
+	transport := func(context.Context) (io.ReadWriteCloser, error) {
+		return startCommandConn(kubectlForwardCommand(cfg.Kubectl, argv...))
 	}
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("granule: forward stdout pipe for %s: %w", cfg.Pod, err)
+	if err := serveForward(ctx, transport, remotes, locals, cfg.OnReady); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("granule: forward %s: %w", cfg.Pod, err)
 	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("granule: starting kubectl exec forward for %s: %w", cfg.Pod, err)
-	}
+	return ctx.Err()
+}
 
-	runErr := forward.RunClient(ctx, stdoutPipe, stdinPipe, specs, cfg.OnReady)
-	_ = stdinPipe.Close()
-	waitErr := cmd.Wait()
-	if ctx.Err() != nil {
-		return ctx.Err()
+// serveForward runs one guestforward session over transport, calls onReady
+// once every guest listener is bound, and returns when the session ends.
+// It does not reconnect: callers supervise and restart it themselves.
+func serveForward(ctx context.Context, transport guestforward.Transport, remotes, locals []ForwardSpec, onReady func()) error {
+	opts := guestforward.Options{Transport: transport}
+	for _, s := range remotes {
+		opts.Remote = append(opts.Remote, s.remoteForward())
 	}
-	if runErr != nil {
-		if said := strings.TrimSpace(stderr.String()); said != "" {
-			return fmt.Errorf("granule: forward %s: %w: %s", cfg.Pod, runErr, said)
-		}
-		return fmt.Errorf("granule: forward %s: %w", cfg.Pod, runErr)
+	for _, s := range locals {
+		opts.Local = append(opts.Local, s.localForward())
 	}
-	if waitErr != nil {
-		if said := strings.TrimSpace(stderr.String()); said != "" {
-			return fmt.Errorf("granule: forward %s: %w: %s", cfg.Pod, waitErr, said)
+	f, err := guestforward.Start(ctx, opts)
+	if err != nil {
+		return err
+	}
+	if onReady != nil {
+		onReady()
+	}
+	return f.Wait()
+}
+
+// commandConn is a running command's stdout and stdin as one stream.
+// Closing it kills the command; once its stdout ends, a read reports the
+// command's exit status and the tail of its stderr, which is how "pod not
+// found" or "the guest is not reachable" reaches the caller rather than a
+// bare EOF.
+type commandConn struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout io.ReadCloser
+	stderr bytes.Buffer
+
+	waitOnce sync.Once
+	waitErr  error
+}
+
+func startCommandConn(cmd *exec.Cmd) (*commandConn, error) {
+	c := &commandConn{cmd: cmd}
+	var err error
+	if c.stdin, err = cmd.StdinPipe(); err != nil {
+		return nil, err
+	}
+	if c.stdout, err = cmd.StdoutPipe(); err != nil {
+		return nil, err
+	}
+	cmd.Stderr = &c.stderr
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("starting %s: %w", cmd.Path, err)
+	}
+	return c, nil
+}
+
+func (c *commandConn) wait() error {
+	c.waitOnce.Do(func() { c.waitErr = c.cmd.Wait() })
+	return c.waitErr
+}
+
+func (c *commandConn) Read(p []byte) (int, error) {
+	n, err := c.stdout.Read(p)
+	if err == nil {
+		return n, nil
+	}
+	werr := c.wait()
+	said := c.stderr.String()
+	if len(said) > 4<<10 {
+		said = said[len(said)-4<<10:]
+	}
+	if said = strings.TrimSpace(said); said != "" {
+		if werr == nil {
+			werr = err
 		}
-		return fmt.Errorf("granule: forward %s: %w", cfg.Pod, waitErr)
+		return n, fmt.Errorf("%w: %s", werr, said)
+	}
+	if werr != nil {
+		return n, werr
+	}
+	return n, err
+}
+
+func (c *commandConn) Write(p []byte) (int, error) { return c.stdin.Write(p) }
+
+func (c *commandConn) Close() error {
+	_ = c.stdin.Close()
+	if c.cmd.Process != nil {
+		_ = c.cmd.Process.Kill()
+	}
+	_ = c.wait()
+	return nil
+}
+
+// pipeConn joins a reader and a writer into one stream.
+type pipeConn struct {
+	io.Reader
+	io.Writer
+}
+
+func (p pipeConn) Close() error {
+	if c, ok := p.Reader.(io.Closer); ok {
+		_ = c.Close()
+	}
+	if c, ok := p.Writer.(io.Closer); ok {
+		_ = c.Close()
 	}
 	return nil
 }
 
 // ServeForwardClient runs the controller side of a port-forward session over r
-// and w.
+// and w, asking the guest end to bind remotes and listening here on locals.
 func ServeForwardClient(ctx context.Context, r io.Reader, w io.Writer, remotes, locals []ForwardSpec, onReady func()) error {
-	specs := make([]forward.Spec, 0, len(locals)+len(remotes))
-	for _, s := range locals {
-		specs = append(specs, s.toInternal(forward.LocalToRemote))
+	used := false
+	transport := func(context.Context) (io.ReadWriteCloser, error) {
+		if used {
+			return nil, errors.New("granule: forward stream already used")
+		}
+		used = true
+		return pipeConn{r, w}, nil
 	}
-	for _, s := range remotes {
-		specs = append(specs, s.toInternal(forward.RemoteToLocal))
-	}
-	return forward.RunClient(ctx, r, w, specs, onReady)
+	return serveForward(ctx, transport, remotes, locals, onReady)
 }
 
-// ServeForwardGuest binds remotes inside the guest and serves the guest side of
-// a port-forward session over r and w.
+// ServeForwardGuest serves the guest side of a port-forward session over r
+// and w, binding the listeners the controller asks for. remotes is kept for
+// compatibility: the controller end names its own listeners.
 func ServeForwardGuest(ctx context.Context, r io.Reader, w io.Writer, remotes []ForwardSpec) error {
-	specs := make([]forward.Spec, 0, len(remotes))
-	for _, s := range remotes {
-		specs = append(specs, s.toInternal(forward.RemoteToLocal))
-	}
-	return forward.ServeGuest(ctx, r, w, specs)
+	return guestforward.ServeAgent(ctx, pipeConn{r, w}, guestforward.AgentOptions{})
 }

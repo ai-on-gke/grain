@@ -213,7 +213,7 @@ func (r *SandboxRecreations) setMaterialized(taskID string, materialized []model
 
 // setCapabilityPass records the pass materialized into taskID's run's
 // sandbox, so a rebuild can apply it to the new one without minting
-// again (docs/capabilities-spec.md §4.4.3).
+// again (design/spec/capabilities/capabilities.spec.md §4.4.3).
 func (r *SandboxRecreations) setCapabilityPass(taskID string, pass *passMaterialization) {
 	rec := r.lookup(taskID)
 	if rec == nil {
@@ -308,6 +308,7 @@ type sandboxRecreation struct {
 	// run's sandbox is never released out from under a rebuild.
 	mu           sync.Mutex
 	closed       bool
+	recreated    bool
 	materialized []model.Materialized
 	// capabilityPass is the attempt's minted pass as runOne materialized
 	// it, nil for a run holding no capability references.
@@ -329,6 +330,12 @@ func (s *sandboxRecreation) close() {
 	s.closed = true
 }
 
+func (s *sandboxRecreation) wasRecreated() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.recreated
+}
+
 func (s *sandboxRecreation) recreate(ctx context.Context) (SandboxRecreation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -342,6 +349,7 @@ func (s *sandboxRecreation) recreate(ctx context.Context) (SandboxRecreation, er
 			"orchestrator: run %s's sandbox (%T) has no way to destroy and rebuild itself",
 			s.sandbox.Name(), s.sandbox)
 	}
+	s.recreated = true
 	if err := rebuilder.Rebuild(ctx); err != nil {
 		return SandboxRecreation{}, fmt.Errorf(
 			"orchestrator: rebuilding run %s's sandbox: %w", s.sandbox.Name(), err)
@@ -549,7 +557,8 @@ func (s *sandboxRecreation) restoreCheckout(ctx context.Context, out *SandboxRec
 	// mis-attributed if it did -- agent_started_at is long since stamped,
 	// which is precisely what makes a note read as the run's own
 	// (model.RunActivity.BySetup).
-	prepared, err := prepareCheckoutFrom(ctx, s.tools, s.cfg.GitRemoteBase, cloneURL, s.task, setup, setupNotes{}, s.cfg.settingsRepo())
+	upstreamRepo, _, _ := resolveUpstreamRepo(ctx, s.store, s.task)
+	prepared, err := prepareCheckoutWithUpstream(ctx, s.tools, s.cfg.GitRemoteBase, cloneURL, upstreamRepo, s.task, setup, false, setupNotes{}, s.cfg.settingsRepo())
 	if err != nil {
 		out.Warnings = append(out.Warnings,
 			fmt.Sprintf("this task's repo could not be cloned again: %v", err))

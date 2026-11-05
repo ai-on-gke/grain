@@ -15,6 +15,9 @@
 package trustboundary
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -152,6 +155,20 @@ func TestTheListAndItsHoldNeedAHuman(t *testing.T) {
 	}
 }
 
+// The GitHub CI path filter decides which of the Tests workflow's jobs run,
+// and a skipped job does not fail a pull request, so an edit to it could
+// skip the jobs that would have caught the rest of its change
+// (2026-11-01 security review, finding 2). It waits for a person.
+func TestTheGitHubCIPathFilterNeedsAHuman(t *testing.T) {
+	got := Classify([]string{"scripts/github-ci-changes.sh"})
+	if ids := categoryIDs(got); !reflect.DeepEqual(ids, []string{"ci-suppressions"}) {
+		t.Errorf("Classify(scripts/github-ci-changes.sh) = %v, want [ci-suppressions]", ids)
+	}
+	if !RequiresHuman(got) {
+		t.Error("a change to scripts/github-ci-changes.sh must require a human")
+	}
+}
+
 // The merge rules decide what CI and whose Submit every other change
 // needs, so an edit to them is released only by the repository's owners
 // (grain/task-1659) -- under either of the file's names.
@@ -177,6 +194,10 @@ func TestClassifyWhatThe24AuditFoundOutsideV5(t *testing.T) {
 		"pkg/model/agent_api.go":                 "auth-routes",
 		"pkg/ui/config_refusal.go":               "auth-routes",
 		"pkg/ui/persistent_sandboxes.go":         "auth-routes",
+		"pkg/ui/accesscode.go":                   "auth-routes",
+		"pkg/ui/single_tenant.go":                "auth-routes",
+		"pkg/ui/allowlist.go":                    "auth-routes",
+		"pkg/ui/verifier.go":                     "auth-routes",
 		"pkg/policy/policy.go":                   "auth-routes",
 		"pkg/jwks/jwks.go":                       "auth-routes",
 		"pkg/redact/redact.go":                   "capabilities-secrets",
@@ -206,9 +227,12 @@ func TestClassifyWhatThe24AuditFoundOutsideV5(t *testing.T) {
 // the boundary without a list entry fails here rather than being found by
 // the next audit -- add it to this list when it lands, and to Categories.
 var knownBoundaryFiles = []string{
+	"pkg/ui/accesscode.go", "pkg/ui/single_tenant.go",
+	"pkg/ui/allowlist.go", "pkg/ui/verifier.go",
 	"pkg/ui/agent_api_gate.go", "pkg/ui/route_scopes.go", "pkg/ui/agent_api.go",
 	"pkg/ui/agent_api_tools.go", "pkg/model/agent_api.go",
 	"pkg/ui/config_refusal.go", "pkg/ui/persistent_sandboxes.go",
+	"scripts/github-ci-changes.sh",
 	"pkg/policy/", "pkg/jwks/", "pkg/hostd/", "pkg/localexec/", "pkg/runhost/",
 	"pkg/k8s/", "pkg/sandboximage/", "pkg/staterepo/", "pkg/redact/",
 	"third_party/granule/pkg/agent/", "third_party/granule/pkg/execwire/",
@@ -216,6 +240,13 @@ var knownBoundaryFiles = []string{
 	"pkg/daemon/run.go", "pkg/daemon/sandboxnet.go",
 	"pkg/ui/server.go", "pkg/ui/auth.go", "pkg/orchestrator/securityhold.go",
 	"pkg/gitproxy/", "pkg/secrets/", "pkg/ci/", "pkg/workflows/", "deploy/kubernetes/",
+	"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/connection_hostd.go",
+	"pkg/daemon/hostd_registry.go", "pkg/daemon/hostd_route.go", "pkg/daemon/hostexec.go",
+	"pkg/model/hostd.go", "pkg/ui/messages.go", "pkg/daemon/mcpserver_hostexec.go",
+	"pkg/daemon/capability_servers.go", "pkg/daemon/capability_servers_hostd.go",
+	"pkg/ui/capability_servers.go",
+	"pkg/model/repo_access.go", "pkg/daemon/ci.go", "pkg/daemon/ci_policy.go",
+	"pkg/daemon/ci_capability_pass.go", "pkg/daemon/capabilities.go",
 }
 
 // Entries ending in "/" are directories: every .go file under them, as it
@@ -254,6 +285,209 @@ func TestEveryKnownBoundaryFileIsClassified(t *testing.T) {
 			if Classify([]string{p}) == nil {
 				t.Errorf("Classify(%q) = nothing, but it is a known trust-boundary file", p)
 			}
+		}
+	}
+}
+
+// One path per place v11 added (2026-11-03 security review finding 2): the
+// hostd registry, the host-exec confirmation and CI repository access, none
+// of which v10 held, so a change to who may do what there merged itself.
+func TestHostdAndCIRepoAccessGatesAreClassified(t *testing.T) {
+	cases := map[string]string{
+		"pkg/ui/hostd_connect.go":                "auth-routes",
+		"pkg/ui/hostds.go":                       "auth-routes",
+		"pkg/ui/connection_hostd.go":             "auth-routes",
+		"pkg/daemon/hostd_registry.go":           "auth-routes",
+		"pkg/daemon/hostd_route.go":              "auth-routes",
+		"pkg/daemon/hostexec.go":                 "auth-routes",
+		"pkg/model/hostd.go":                     "auth-routes",
+		"pkg/ui/messages.go":                     "auth-routes",
+		"pkg/daemon/mcpserver_hostexec.go":       "capabilities-secrets",
+		"pkg/daemon/capability_servers.go":       "capabilities-secrets",
+		"pkg/daemon/capability_servers_hostd.go": "capabilities-secrets",
+		"pkg/ui/capability_servers.go":           "capabilities-secrets",
+		"pkg/model/repo_access.go":               "capabilities-secrets",
+		"pkg/daemon/ci.go":                       "capabilities-secrets",
+		"pkg/daemon/ci_policy.go":                "capabilities-secrets",
+		"pkg/daemon/ci_capability_pass.go":       "capabilities-secrets",
+		"pkg/daemon/capabilities.go":             "capabilities-secrets",
+	}
+	for p, want := range cases {
+		got := categoryIDs(Classify([]string{p}))
+		if !reflect.DeepEqual(got, []string{want}) {
+			t.Errorf("Classify(%q) = %v, want [%s]", p, got, want)
+		}
+	}
+
+	// The gates themselves, found by name rather than by path, so moving
+	// one into a file the list does not name fails here instead of
+	// silently unclassifying it again.
+	gates := map[string][]string{
+		"pkg/model": {
+			"RepoAccessAdmitsCIEvent", "RepoReadTarget", "RepoWriteTarget", "IsGitPushAnyRefGrant",
+			"HostdForToken", "CreateHostd", "RotateHostdToken", "NormalizeHostdOwner",
+		},
+		"pkg/ui":     {"hostdConnectIdentity", "normalizeConnectionHostd", "normalizeServerHostd", "messagesSince"},
+		"pkg/daemon": {"registryResolver", "SelectHostd", "placedOn", "grantRepoAccess", "ciRepoAccessAdmitted", "CheckCIJobRepoAccessPolicy"},
+	}
+	for dir, names := range gates {
+		defined := funcFiles(t, dir)
+		for _, name := range names {
+			file, ok := defined[name]
+			if !ok {
+				t.Errorf("%s: no func or method %s -- update this test to where it went", dir, name)
+				continue
+			}
+			if Classify([]string{file}) == nil {
+				t.Errorf("%s is defined in %s, which Classify leaves unclassified", name, file)
+			}
+		}
+	}
+}
+
+// One path per file v15 added (2026-11-04 security review finding 2): each
+// decides who may do what -- the controller MCP endpoint's caller access,
+// the hostd install script run as root, the CI grant rule, the auto-merge
+// guard, the sign-in allowlist's refusals and the person-only access
+// decision -- and v14 classified none of them, so a change to any merged
+// itself.
+func TestNewAuthorizationFilesAreClassified(t *testing.T) {
+	cases := map[string]string{
+		"pkg/ui/mcp_endpoint.go":          "auth-routes",
+		"pkg/model/allowed_principals.go": "auth-routes",
+		"pkg/ui/access_principals.go":     "auth-routes",
+		"pkg/ui/task_access_request.go":   "auth-routes",
+		"pkg/model/ci_grant_rule.go":      "capabilities-secrets",
+		"pkg/model/task_auto_merge.go":    "hold-policy",
+		"pkg/ui/hostd_install.sh":         "setup-scripts",
+		"pkg/ui/hostd_install.go":         "setup-scripts",
+	}
+	for p, want := range cases {
+		got := categoryIDs(Classify([]string{p}))
+		if !reflect.DeepEqual(got, []string{want}) {
+			t.Errorf("Classify(%q) = %v, want [%s]", p, got, want)
+		}
+	}
+	// Control: an ordinary pkg/ui file is still nothing.
+	if got := Classify([]string{"pkg/ui/actionscache.go"}); got != nil {
+		t.Errorf("Classify(pkg/ui/actionscache.go) = %v, want nothing", categoryIDs(got))
+	}
+
+	// The gates by name, as in TestHostdAndCIRepoAccessGatesAreClassified.
+	gates := map[string][]string{
+		"pkg/model": {
+			"NormalizeAllowedPrincipalEntry", "RegisterCIGrantRule", "CIGrantRuleFor",
+			"guardAutoMerge", "restoreAfterHolds",
+		},
+		"pkg/ui": {
+			"resolveMCPCallerAccess", "allowsRoute", "dispatchSubrequest", "filingContextTool",
+			"hostdInstallRoute", "hostdInstallCallerHasAccess", "renderHostdInstallScript",
+			"pendingAccessToDecide", "refuseAgentAccessDecision",
+		},
+	}
+	for dir, names := range gates {
+		defined := funcFiles(t, dir)
+		for _, name := range names {
+			file, ok := defined[name]
+			if !ok {
+				t.Errorf("%s: no func or method %s -- update this test to where it went", dir, name)
+				continue
+			}
+			if Classify([]string{file}) == nil {
+				t.Errorf("%s is defined in %s, which Classify leaves unclassified", name, file)
+			}
+		}
+	}
+}
+
+// funcFiles maps each func and method name declared in dir's non-test Go
+// files (dir relative to the repository root) to the repository path of
+// the file declaring it.
+func funcFiles(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join("../..", dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	fset := token.NewFileSet()
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join("../..", dir, name), nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range f.Decls {
+			if fn, ok := d.(*ast.FuncDecl); ok {
+				out[fn.Name.Name] = dir + "/" + name
+			}
+		}
+	}
+	return out
+}
+
+// v12 (design/playbook/releases.playbook.md §0.3): the approval and what
+// decides who may act without it wait for a person; the release jobs and
+// scripts, which cannot reach the approval, are released by a clean review
+// that is told what to check on them.
+func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
+	human := map[string]string{
+		".grain/workflows/promote-release.yml":  "release-promotion",
+		".github/workflows/promote-release.yml": "release-promotion",
+		"pkg/ui/release_approval.go":            "release-promotion",
+		".grain/templates/release-train.yml":    "release-promotion",
+		"scripts/release-from-trunk.sh":         "release-promotion",
+		"scripts/release.conf":                  "release-promotion",
+		"scripts/release-train-task.sh":         "release-promotion",
+		".grain/schedules/release-train.yml":    "release-promotion",
+		".github/workflows/publish-release.yml": "release-promotion",
+		"pkg/trustboundary/trustboundary.go":    "hold-policy",
+		".grain/triggers/release-promotion.yml": "path-triggers",
+		".grain/triggers/release-machinery.yml": "path-triggers",
+		".grain/merge-rules.yml":                "merge-rules",
+	}
+	for p, want := range human {
+		got := Classify([]string{p})
+		if ids := categoryIDs(got); !reflect.DeepEqual(ids, []string{want}) {
+			t.Errorf("Classify(%q) = %v, want [%s]", p, ids, want)
+		}
+		if !RequiresHuman(got) {
+			t.Errorf("%s no longer waits for a person", p)
+		}
+	}
+
+	reviewed := []string{
+		"scripts/release-images.sh",
+		"scripts/release-notes.sh", "scripts/candidate-gate.sh",
+		"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
+		".grain/workflows/release.yml", ".github/workflows/release.yml",
+		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
+		".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
+	}
+	for _, p := range reviewed {
+		got := Classify([]string{p})
+		if ids := categoryIDs(got); !reflect.DeepEqual(ids, []string{"release-machinery"}) {
+			t.Errorf("Classify(%q) = %v, want [release-machinery]", p, ids)
+		}
+		if RequiresHuman(got) {
+			t.Errorf("%s waits for a person; a clean security review should release it", p)
+		}
+	}
+
+	var machinery Category
+	for _, c := range Categories {
+		if c.ID == "release-machinery" {
+			machinery = c
+		}
+	}
+	brief := strings.Join(machinery.Review, "\n")
+	for _, want := range []string{"`vX.Y.Z` or `latest`", "`permissions:`", "secrets", "dispatch",
+		"anybody but a person", "RELEASE_MAJOR"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("release-machinery's review brief does not mention %s:\n%s", want, brief)
 		}
 	}
 }

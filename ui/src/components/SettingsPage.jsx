@@ -25,15 +25,19 @@ import {
   ListItemButton,
   ListItemText,
   ListSubheader,
-  MenuItem,
   TextField,
   Typography,
   useMediaQuery,
 } from "@mui/material";
+import AppIcon from "./AppIcon.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import { DISCARD_PROMPT } from "./Overlay.jsx";
+import { keepInView } from "../keepInView.js";
 import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
 import GeneralSection from "./settings/GeneralSection.jsx";
 import AccessSection from "./settings/AccessSection.jsx";
+import HostdsSection from "./settings/HostdsSection.jsx";
+import AuditSection from "./settings/AuditSection.jsx";
 import ConfigRepoSection from "./settings/ConfigRepoSection.jsx";
 import ModelsSection from "./settings/ModelsSection.jsx";
 import AgentsSection from "./settings/AgentsSection.jsx";
@@ -43,7 +47,6 @@ import RepositoriesSection from "./settings/RepositoriesSection.jsx";
 import GitSection from "./settings/GitSection.jsx";
 import CapabilitiesSection from "./settings/CapabilitiesSection.jsx";
 import CredentialsSection from "./settings/CredentialsSection.jsx";
-import ExecutorsSection from "./settings/ExecutorsSection.jsx";
 import EngineSection from "./settings/EngineSection.jsx";
 import CISection from "./settings/CISection.jsx";
 import SandboxesSection from "./settings/SandboxesSection.jsx";
@@ -74,11 +77,21 @@ import { useIsPhone } from "../phone.js";
 export { SETTINGS_SECTIONS, SETTINGS_GROUPS };
 
 // Sections that hold no saved settings of their own -- this browser's
-// preferences, and Upgrade, which is an action -- so they are never
-// read-only under an external config repo. Upgrade has no save state
-// either, so its header leaves the "All changes saved" line off.
-const NOT_CONFIG = new Set(["config-repo", "preferences", "upgrade"]);
-const NO_SAVE_STATE = new Set(["upgrade"]);
+// preferences, Access's sign-in (design/design/config-repo-settings.design.md
+// §1 invariant 7: it stays outside the config repo so a bad config PR can
+// never lock the operator out), Upgrade, which is an action, and Audit,
+// which only reads logs -- so they are never read-only under an external
+// config repo. Upgrade and Audit have no save state either, so their
+// headers leave the "All changes saved" line off.
+const NOT_CONFIG = new Set([
+  "config-repo",
+  "preferences",
+  "upgrade",
+  "access",
+  "hostds",
+  "audit",
+]);
+const NO_SAVE_STATE = new Set(["upgrade", "audit"]);
 
 // Sections that read GET /api/settings, and so wait for it.
 const READS_SETTINGS = new Set([
@@ -94,7 +107,7 @@ const READS_SETTINGS = new Set([
   "caches",
 ]);
 
-// SettingsPage is the Settings view (docs/design/settings-panel.md §3):
+// SettingsPage is the Settings view (design/design/settings-panel.design.md §3):
 // every deployment setting, this browser's preferences and Memory, in
 // one view beside the sidebar, opened from the gear in the top bar. A
 // section nav with a filter on the left, the open section's cards on
@@ -102,12 +115,14 @@ const READS_SETTINGS = new Set([
 // list then a section on a phone.
 //
 // `section` is the open section's id ("" for the bare /settings: the
-// list on a phone, General elsewhere -- App fills that in), and
+// list on a phone, Models elsewhere -- App fills that in), and
 // onSection picks another. One useSettingsSection() holds the save and
 // dirty state for every section, so the nav can mark a dirty one and
 // leaving one asks first.
 export default function SettingsPage({
   config,
+  // GET /api/whoami's answer, for Settings -> Access (App.jsx).
+  whoami = null,
   section,
   anchor = "",
   item = "",
@@ -142,18 +157,31 @@ export default function SettingsPage({
     (settings ? settings.externalConfigBranch : config?.externalConfigBranch) ||
     "main";
   // A config-repo-only section is read-only whichever repository holds
-  // the configuration (docs/design/config-repo-settings.md §2.1): what it
+  // the configuration (design/design/config-repo-settings.design.md §2.1): what it
   // draws is what the config repo says, and changing it is a pull
   // request.
   const external = Boolean(externalConfigRepo) && !NOT_CONFIG.has(current);
   // GET /api/config's configRepoOnly: the API refuses these sections'
-  // writes in favour of a config pull request. Without a config repo
-  // (`grain demo`) they stay editable -- there is nowhere else to.
-  const configRepoOnly =
-    Boolean(config?.configRepoOnly) || Boolean(externalConfigRepo);
+  // writes in favour of a config pull request when settings are locked.
+  // By default (settingsLocked: false) they stay editable in the UI, and
+  // so they do under the directConfigWrites opt-out, which the server
+  // folds into configRepoOnly: the loaded settings carry the same answer
+  // for the row they last wrote, so toggling the lock redraws at once.
+  const lockedInUI =
+    settings && typeof settings.configRepoOnly === "boolean"
+      ? settings.configRepoOnly
+      : Boolean(config?.configRepoOnly);
+  const configRepoOnly = lockedInUI || Boolean(externalConfigRepo);
   const configManaged = configRepoOnly && isConfigRepoSection(current);
   const readOnly = external || configManaged;
   s.readOnly = readOnly;
+  // configLocked is for the sections that mix bootstrap settings with
+  // config-managed ones (Engine, Sandboxes, Legacy capabilities): the
+  // API refuses a change to the config-managed fields while this is on
+  // (settings-mutability.spec.md D-1, D-2), so those fields are drawn
+  // read-only one by one and the bootstrap ones beside them stay
+  // editable.
+  s.configLocked = configRepoOnly;
 
   useEffect(() => {
     if (READS_SETTINGS.has(current) && !settings) reloadSettings();
@@ -184,14 +212,26 @@ export default function SettingsPage({
   useEffect(() => {
     if (anchor) setFocusTarget(anchor);
   }, [anchor]);
+  // What still holds the last revealed card in view while the section
+  // around it draws (keepInView); revealing another, or leaving, lets go.
+  const settling = useRef(null);
+  useEffect(() => () => settling.current?.(), []);
   useEffect(() => {
     if (!focusTarget) return;
-    const timer = setTimeout(() => {
+    const reveal = () => {
       const el =
         document.querySelector(`[data-setting-id="${focusTarget}"]`) ||
         document.getElementById(focusTarget);
-      if (!el) return;
-      el.scrollIntoView?.({ block: "center" });
+      if (!el) return false;
+      // Centre a field or a short card; a card taller than the screen
+      // (Sandboxes → Kubernetes) is aligned to its top instead, since
+      // centring it scrolls past its heading and the first field, which is
+      // the one focused below without scrolling.
+      const tall = el.getBoundingClientRect?.().height > window.innerHeight;
+      const scrollOptions = { block: tall ? "start" : "center" };
+      el.scrollIntoView?.(scrollOptions);
+      settling.current?.();
+      settling.current = keepInView(el, scrollOptions);
       const input = el.matches?.("input,textarea,select,button")
         ? el
         : el.querySelector?.("input:not([type=hidden]),textarea,select,button");
@@ -199,8 +239,14 @@ export default function SettingsPage({
       el.classList.add("setting-highlight");
       setTimeout(() => el.classList.remove("setting-highlight"), 2000);
       setFocusTarget("");
-    }, 50);
-    return () => clearTimeout(timer);
+      return true;
+    };
+    if (reveal()) return;
+    const observer = new MutationObserver(() => {
+      if (reveal()) observer.disconnect();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
   }, [focusTarget, current, settings]);
 
   const go = (next) => {
@@ -235,12 +281,20 @@ export default function SettingsPage({
       onChange={(evt) => setFilter(evt.target.value)}
       onKeyDown={(evt) => {
         if (evt.key === "Escape") setFilter("");
-        if (evt.key === "Enter" && matches[0]) pick(matches[0]);
+        if (evt.key === "Enter" && matches[0]) {
+          evt.preventDefault();
+          pick(matches[0]);
+        }
       }}
       inputProps={{ "aria-label": "Filter settings" }}
       data-testid="settings-filter"
-      InputProps={
-        filter
+      InputProps={{
+        startAdornment: (
+          <InputAdornment position="start" sx={{ color: "text.secondary" }}>
+            <AppIcon name="search" size={16} />
+          </InputAdornment>
+        ),
+        ...(filter
           ? {
               endAdornment: (
                 <InputAdornment position="end">
@@ -249,13 +303,13 @@ export default function SettingsPage({
                     aria-label="Clear filter"
                     onClick={() => setFilter("")}
                   >
-                    ×
+                    <AppIcon name="close" size={16} />
                   </IconButton>
                 </InputAdornment>
               ),
             }
-          : undefined
-      }
+          : {}),
+      }}
     />
   );
 
@@ -379,7 +433,7 @@ export default function SettingsPage({
                   sx={isPhone ? { minHeight: 40 } : undefined}
                 >
                   <ListItemText primary={navLabel(sec)} />
-                  {isPhone && <span aria-hidden="true">›</span>}
+                  {isPhone && <AppIcon name="chevronRight" size={18} />}
                 </ListItemButton>
               </ListItem>
             ))}
@@ -417,7 +471,7 @@ export default function SettingsPage({
           data-testid="settings-back"
           edge="start"
         >
-          ←
+          <AppIcon name="back" size={18} />
         </IconButton>
       )}
       <Typography variant="h5" component="h1">
@@ -451,24 +505,25 @@ export default function SettingsPage({
         Settings
       </Typography>
       <Box sx={{ display: "flex", gap: 1, mb: 2, alignItems: "flex-start" }}>
-        <TextField
-          select
-          size="small"
+        <SearchSelect
           label="Section"
+          fullWidth={false}
           value={current}
-          onChange={(evt) => go(evt.target.value)}
+          onChange={(next) => {
+            if (next) go(next);
+          }}
           sx={{ minWidth: 200 }}
-          SelectProps={{ "data-testid": "settings-section-select" }}
-        >
-          {SETTINGS_GROUPS.flatMap((group) => [
-            <ListSubheader key={`g-${group.id}`}>{group.label}</ListSubheader>,
-            ...group.sections.map((sec) => (
-              <MenuItem key={sec.id} value={sec.id}>
-                {sec.label}
-              </MenuItem>
-            )),
-          ])}
-        </TextField>
+          data-testid="settings-section-select"
+          groupBy={(o) => o.group}
+          options={SETTINGS_GROUPS.flatMap((group) =>
+            group.sections.map((sec) => ({
+              value: sec.id,
+              label: sec.label,
+              group: group.label,
+              match: `${sec.label} ${group.label}`,
+            })),
+          )}
+        />
         <Box sx={{ flex: 1, position: "relative" }}>
           {filterBox}
           {results && (
@@ -513,7 +568,20 @@ export default function SettingsPage({
         body = <GeneralSection s={s} config={config} />;
         break;
       case "access":
-        body = <AccessSection s={s} {...common} onLogout={onLogout} />;
+        body = (
+          <AccessSection
+            s={s}
+            {...common}
+            whoami={whoami}
+            onLogout={onLogout}
+          />
+        );
+        break;
+      case "hostds":
+        body = <HostdsSection {...common} />;
+        break;
+      case "audit":
+        body = <AuditSection />;
         break;
       case "config-repo":
         body = (
@@ -578,11 +646,6 @@ export default function SettingsPage({
               ),
             ]}
           />
-        );
-        break;
-      case "executors":
-        body = (
-          <ExecutorsSection showError={showError} onOpenSystem={onOpenSystem} />
         );
         break;
       case "engine":

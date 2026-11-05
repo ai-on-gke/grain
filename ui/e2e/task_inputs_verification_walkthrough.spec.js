@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 test.describe.configure({ mode: "serial" });
 test.setTimeout(120_000);
@@ -72,7 +73,7 @@ test.describe("Task Intake, Detail Edit, and Filter Inputs Verification Walkthro
     const repoSelect = page.getByLabel(/^Repos/);
     await expect(repoSelect).toBeVisible();
     // Choose "none" ("No repo")
-    await repoSelect.selectOption("none");
+    await chooseOption(repoSelect, "none");
 
     // 1.5 Title & Description inputs: typing, keyboard focus, tab ordering
     const titleInput = page.getByLabel("Title");
@@ -104,12 +105,12 @@ test.describe("Task Intake, Detail Edit, and Filter Inputs Verification Walkthro
     await descInput.fill(taskDesc);
 
     // Switch repo to custom or select 'none' to enable Create task
-    await repoSelect.selectOption("none");
+    await chooseOption(repoSelect, "none");
     await expect(createBtn).toBeEnabled();
 
     // Now test repo selection with repo branch
     // Switch repo to 'acme/widgets' (seeded in demo)
-    await repoSelect.selectOption("acme/widgets");
+    await chooseOption(repoSelect, "acme/widgets");
     const baseBranchInput = page.getByLabel("Base branch");
     await expect(baseBranchInput).toBeVisible();
     await baseBranchInput.fill("main");
@@ -452,11 +453,11 @@ test.describe("Task Intake, Detail Edit, and Filter Inputs Verification Walkthro
     // A task names no team, so there is no Team attribute to filter by.
     await expect(page.getByRole("menuitem", { name: "Team" })).toHaveCount(0);
     await expect(
-      page.getByRole("menuitem", { name: "Priority" }),
+      page.getByRole("menuitem", { name: "Priority", exact: true }),
     ).toBeVisible();
 
     // Pick "Priority" attribute
-    await page.getByRole("menuitem", { name: "Priority" }).click();
+    await page.getByRole("menuitem", { name: "Priority", exact: true }).click();
 
     // Select comparison value "high"
     const valuePicker = page.getByLabel(/^Value for filter \d+$/).last();

@@ -104,6 +104,14 @@ export function useRevealSelectedTab() {
       again = setTimeout(reveal, REVEAL_AFTER_MUI_MS);
     });
     observer.observe(scroller);
+    // The tabs themselves can change width after the strip has settled
+    // -- a label or badge rendered once its data arrives -- and MUI
+    // scrolls again when they do, with the scroller's own width
+    // unchanged. Watch the row of tabs too, so that scroll is followed
+    // by a reveal as well (a slow CI runner lost the Advanced tab this
+    // way).
+    const list = scroller.querySelector(".MuiTabs-flexContainer");
+    if (list) observer.observe(list);
     stop.current = () => {
       observer.disconnect();
       clearTimeout(again);

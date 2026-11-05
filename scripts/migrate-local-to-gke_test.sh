@@ -196,7 +196,6 @@ case "$url" in
     else
       echo '[{"id":"gcp","status":{"id":"gcp","state":"attached","run":"host"}},{"id":"github","status":{"state":"pending"}}]'
     fi ;;
-  */api/executors) printf '[{"host":"%s"}]\n' "$(hostname -s 2>/dev/null || hostname)" ;;
   */api/pipeline-pause) echo '{}' ;;
   *) exit 22 ;;
 esac
@@ -260,7 +259,7 @@ YAML
 [Service]
 User=grain
 ExecStart=/usr/local/bin/grain daemon -data-dir /var/lib/grain/data \
-  -granule-sandboxes -sandbox-image ghcr.io/bwsalmon/grain/guest:v2.1.0 \
+  -granule-sandboxes -sandbox-image docker.io/grainai/sandbox:v2.1.0 \
   -default-target-repo ai-on-gke/grain
 UNIT
   cat >"$h/etc/systemd/system/grain-hostd.service" <<'UNIT'
@@ -295,14 +294,14 @@ sysd="$work/host/etc/systemd/system"
 fresh
 migrate --help
 check "help names every mode and flag" 0 --dry-run --rollback --kubeconfig --cluster --project --location \
-  --provision --server-url --model-server --no-sync-back --print-manifest
+  --provision --server-url --no-sync-back --print-manifest
 
 fresh
 migrate --dry-run
 check "a dry run walks every stage" 0 "dry run" "Stage 1: preflight" "Stage 2: drain" "Stage 3: migrate" \
   "Stage 4: start" "Stage 5: point this host" "Stage 5b: readiness" \
   "+ systemctl stop grain-daemon.service" "+ systemctl mask grain-daemon.service" \
-  "sandbox image:    ghcr.io/bwsalmon/grain/guest:v2.1.0" "target repo:      ai-on-gke/grain" \
+  "sandbox image:    docker.io/grainai/sandbox:v2.1.0" "target repo:      ai-on-gke/grain" \
   "tar -C" "-server http://127.0.0.1:4280 -token-file" "sandboxBackend"
 lacks "a dry run stops nothing" "$(calls)" "systemctl stop"
 lacks "a dry run applies nothing" "$(calls)" "kubectl apply"
@@ -359,7 +358,7 @@ applied="$(cat "$work"/stub/cluster/applied-*.yaml)"
 holds "the Secret carries secrets.key and the token" "$c" "--from-file=secrets.key=$work/host/var/lib/grain/data/secrets/secrets.key --from-file=hostd-token=$work/host/etc/grain/hostd.token"
 holds "the manifest is applied at replicas 0 first" "$applied" "  replicas: 0"
 holds "with the hostd token flag" "$applied" "- -hostd-token-file=/etc/grain-secrets/hostd-token"
-holds "with the sandbox image" "$applied" "- -k8s-granule-image=ghcr.io/bwsalmon/grain/guest:v2.1.0"
+holds "with the sandbox image" "$applied" "- -k8s-granule-image=docker.io/grainai/sandbox:v2.1.0"
 holds "with the target repo" "$applied" "- -default-target-repo=ai-on-gke/grain"
 lacks "with no CHANGEME left in an arg" "$(grep -E '^ +- -' <<<"$applied")" "CHANGEME"
 holds "the transfer pod runs as uid 1000" "$applied" "runAsUser: 1000"
@@ -370,7 +369,7 @@ holds "after the forward" "$dropin" "After=grain-gke-forward.service"
 holds "the forward runs as hostd's user" "$(cat "$sysd/grain-gke-forward.service")" "User=alice"
 holds "and port-forwards svc/grain" "$(cat "$sysd/grain-gke-forward.service")" "port-forward --address 127.0.0.1 svc/grain 4280:80"
 truth "hostd was restarted" test -f "$work/stub/units/grain-hostd.service.active"
-truth "no model server without agy" test ! -e "$sysd/grain-model-server.service"
+truth "no model server is set up" test ! -e "$sysd/grain-model-server.service"
 holds "the API is called with the migrated local-api-token" "$c" "Authorization: Bearer local-token"
 holds "the backend is set" "$c" '{"sandboxBackend":"kubernetes-granule"}'
 holds "dispatch is resumed on the controller" "$c" "-X DELETE"
@@ -385,30 +384,42 @@ migrate --recopy
 check "--recopy over a running controller is refused" 1 "--recopy while Deployment/grain runs"
 
 fresh
-echo '#!/bin/sh' >"$work/agy" && chmod +x "$work/agy"
-migrate --agy "$work/agy" --server-url https://grain.example.com/
-check "a model server is set up beside hostd" 0 "model server:     yes" "model-server" "connected" "Done."
-model="$(cat "$sysd/grain-model-server.service")"
-holds "it runs grain model-server against the controller" "$model" "/var/lib/grain-hostd/versions/current/grain model-server -server https://grain.example.com -token-file $work/host/etc/grain/hostd.token"
-holds "with agy" "$model" "-binary agy=$work/agy"
-holds "as hostd's user" "$model" "User=alice"
-truth "and is started" test -f "$work/stub/units/grain-model-server.service.active"
+migrate --server-url https://grain.example.com/
+check "a --server-url migration needs the identity hostd connects as" 1 "--server-url needs --hostd-owner"
+
+fresh
+migrate --server-url https://grain.example.com/ --hostd-owner 'a\nb@example.com'
+check "an owner with a backslash escape is refused" 1 "--hostd-owner takes a full email address"
+
+fresh
+migrate --server-url https://grain.example.com/ --hostd-owner a@example.com --iap-audience 'id -x'
+check "an audience with whitespace is refused" 1 "--iap-audience takes an IAP OAuth client ID"
+
+fresh
+migrate --server-url https://grain.example.com/ --hostd-owner Hostd@Proj.iam.gserviceaccount.com --iap-audience iap-client.apps.example.com
+check "a --server-url migration completes" 0 "Done." "hostd owner: hostd@proj.iam.gserviceaccount.com"
+lacks "and sets up no model server" "$out" "model-server"
 truth "a --server-url needs no forward" test ! -e "$sysd/grain-gke-forward.service"
 holds "hostd dials the URL" "$(cat "$sysd/grain-hostd.service.d/gke.conf")" "-server https://grain.example.com -token-file"
+holds "hostd gets an IAP token" "$(cat "$sysd/grain-hostd.service.d/gke.conf")" "-iap-audience iap-client.apps.example.com"
+holds "the controller records the owner" "$(cat "$work"/stub/cluster/applied-*.yaml)" "- -hostd-token-owner=hostd@proj.iam.gserviceaccount.com"
 
 fresh
 STUB_CAPS='[{"id":"gcp","status":{"state":"failed","run":"host"}}]' migrate --verify-timeout 0
 check "a capability server that never attaches fails the check" 1 "did not all attach" "gcp=failed"
 
 # Rollback, after a migration: what the controller wrote comes back.
+# The grain model-server unit an earlier version of this script set up
+# is removed with the rest.
 fresh
-migrate --agy "$work/agy"
+migrate
+printf '[Service]\nExecStart=/bin/true\n' >"$sysd/grain-model-server.service"
 echo "written in the cluster" >"$work/stub/cluster/pvc/from-gke"
 status=0
 out="$(env PATH="$stubs:$PATH" STUB="$work/stub" GRAIN_ROOT_DIR="$work/host/var/lib/grain" \
   GRAIN_ETC_DIR="$work/host/etc/grain" GRAIN_SYSTEMD_DIR="$sysd" GRAIN_MIGRATE_SKIP_ROOT_CHECK=1 \
   bash "$script" --kubeconfig "$work/host/etc/grain/admin.kubeconfig" --rollback --dry-run 2>&1)" || status=$?
-check "a rollback dry run names the transfer pod's image" 0 "pod/grain-data-transfer (ghcr.io/bwsalmon/grain/grain:main, uid 1000)" \
+check "a rollback dry run names the transfer pod's image" 0 "pod/grain-data-transfer (docker.io/grainai/grain:main, uid 1000)" \
   "+ mv $sysd/grain-daemon.service.pre-gke $sysd/grain-daemon.service"
 lacks "and every kubectl it prints names the kubeconfig" "$(grep -E '(^[+] |[|] )kubectl' <<<"$out" | grep -v -- 'kubectl --kubeconfig=' || true)" "kubectl"
 migrate --rollback
@@ -436,7 +447,7 @@ truth "nothing is moved aside" test -z "$(ls -d "$work/host/var/lib/grain/data.p
 fresh
 migrate --print-manifest --node-selector cloud.google.com/gke-nodepool=granule
 check "--print-manifest renders the manifest" 0 "kind: Deployment" "- -k8s-node-selector=cloud.google.com/gke-nodepool=granule" \
-  "secretName: grain-migration" "- -executor-token-file=/etc/grain-secrets/hostd-token"
+  "secretName: grain-migration" "- -hostd-token-file=/etc/grain-secrets/hostd-token"
 
 echo
 if [ "$failures" -gt 0 ]; then

@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/bwsalmon/granule/pkg/workloadio"
+	"github.com/gke-labs/granule/pkg/workloadio"
 )
 
 // exitReporter tells the host that the container has started and, once

@@ -47,7 +47,86 @@ import (
 // buildpack-deps' curl variant is the smallest official image with the
 // same Debian userland Dockerfile.k8s-sandbox is built on, plus the wget
 // the NetworkPolicy assertions at the end of this test reach for.
-const realK8sImage = "buildpack-deps:bookworm-curl"
+const (
+	realK8sImage      = "buildpack-deps:bookworm-curl"
+	realK8sProxyImage = "nginx:1.27-alpine"
+)
+
+// trimCalicoManifest writes a copy of the pinned Calico manifest with
+// calico-node's 250m CPU request lowered to 50m so system pods leave budget
+// for sandbox pods on 2- to 4-vCPU CI runners.
+func trimCalicoManifest(t *testing.T, manifestPath string) (string, []string) {
+	t.Helper()
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("reading GRAIN_CALICO_MANIFEST %q: %v", manifestPath, err)
+	}
+	trimmed := strings.ReplaceAll(string(raw), "cpu: 250m", "cpu: 50m")
+	outPath := filepath.Join(t.TempDir(), "calico-trimmed.yaml")
+	if err := os.WriteFile(outPath, []byte(trimmed), 0o600); err != nil {
+		t.Fatalf("writing trimmed Calico manifest: %v", err)
+	}
+	seen := map[string]bool{}
+	var images []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == "image:" {
+			img := strings.Trim(fields[1], `"'`)
+			if img != "" && !seen[img] {
+				seen[img] = true
+				images = append(images, img)
+			}
+		}
+	}
+	return outPath, images
+}
+
+// loadRealK8sImages loads pre-pulled or cached workload images into the kind
+// cluster so kubelet uses containerd's local store (imagePullPolicy:
+// IfNotPresent) instead of pulling over the network.
+//
+// Exporting with `docker save --platform linux/<arch>` + `kind load
+// image-archive` avoids `kind load docker-image` failing under Docker's
+// containerd snapshotter when only the host architecture's layers were pulled
+// from a multi-arch manifest index.
+func loadRealK8sImages(t *testing.T, cluster string, calicoImages []string) {
+	t.Helper()
+	if archive := strings.TrimSpace(os.Getenv("GRAIN_K8S_IMAGE_ARCHIVE")); archive != "" {
+		out, err := exec.Command("kind", "load", "image-archive", archive, "--name", cluster).CombinedOutput()
+		if err != nil {
+			t.Fatalf("kind load image-archive %s: %v\n%s", archive, err, out)
+		}
+		return
+	}
+	candidates := append([]string{}, calicoImages...)
+	candidates = append(candidates, realK8sImage, realK8sProxyImage)
+	var present []string
+	seen := map[string]bool{}
+	for _, img := range candidates {
+		if seen[img] {
+			continue
+		}
+		seen[img] = true
+		if exec.Command("docker", "image", "inspect", img).Run() == nil {
+			present = append(present, img)
+		}
+	}
+	if len(present) == 0 {
+		return
+	}
+	archive := filepath.Join(t.TempDir(), "k8s-workload-images.tar")
+	saveArgs := append([]string{"save", "--platform", "linux/" + runtime.GOARCH, "-o", archive}, present...)
+	if out, err := exec.Command("docker", saveArgs...).CombinedOutput(); err != nil {
+		fallbackArgs := append([]string{"save", "-o", archive}, present...)
+		if out2, err2 := exec.Command("docker", fallbackArgs...).CombinedOutput(); err2 != nil {
+			t.Fatalf("docker save %v: %v\n%s\nfallback: %v\n%s", present, err, out, err2, out2)
+		}
+	}
+	if out, err := exec.Command("kind", "load", "image-archive", archive, "--name", cluster).CombinedOutput(); err != nil {
+		t.Fatalf("kind load image-archive: %v\n%s", err, out)
+	}
+	_ = os.Remove(archive)
+}
 
 func realK8sPrereqs(t *testing.T) {
 	t.Helper()
@@ -84,7 +163,7 @@ func realKubectl(t *testing.T, args ...string) string {
 // (a first Acquire whose pod came back "Missing", a tool call into a pod
 // that had gone, an isolated sandbox that never came up), and whether it
 // landed at all came down to whether several hundred megabytes of
-// ghcr.io/bwsalmon/grain/grain:main finished pulling before the suite
+// docker.io/grainai/grain:main finished pulling before the suite
 // finished running -- which is why this job was intermittent rather than
 // simply red.
 //
@@ -138,25 +217,52 @@ func realTool(t *testing.T, sb orchestrator.Sandbox, name string) *mcp.Tool {
 	return nil
 }
 
+func writeKindControlPlanePatches(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, cpu := range map[string]string{
+		"kube-apiserver":          "50m",
+		"kube-controller-manager": "50m",
+		"kube-scheduler":          "25m",
+		"etcd":                    "50m",
+	} {
+		patch := fmt.Sprintf("apiVersion: v1\nkind: Pod\nmetadata:\n  name: %s\n  namespace: kube-system\nspec:\n  containers:\n    - name: %s\n      resources:\n        requests:\n          cpu: %s\n", name, name, cpu)
+		if err := os.WriteFile(filepath.Join(dir, name+"+strategic.yaml"), []byte(patch), 0o600); err != nil {
+			t.Fatalf("writing kubeadm patch for %s: %v", name, err)
+		}
+	}
+	return dir
+}
+
 // TestK8sSandboxesAgainstARealKindCluster is the Kubernetes counterpart
 // to TestGranuleSandboxesAgainstARealDockerBackedVM: manifests, selectors,
 // exec stdin and kubelet status all meet a real API server and runtime.
 func TestK8sSandboxesAgainstARealKindCluster(t *testing.T) {
 	t.Parallel()
 	realK8sPrereqs(t)
+	calico := os.Getenv("GRAIN_CALICO_MANIFEST")
+	if calico == "" {
+		t.Fatal("GRAIN_CALICO_MANIFEST must name the pinned Calico manifest")
+	}
+	trimmedCalico, calicoImages := trimCalicoManifest(t, calico)
+
 	cluster := fmt.Sprintf("grain-k8s-%d", os.Getpid())
-	create := exec.Command("kind", "create", "cluster", "--name", cluster, "--config", "-")
-	create.Stdin = strings.NewReader("kind: Cluster\napiVersion: kind.x-k8s.io/v1alpha4\nnetworking:\n  disableDefaultCNI: true\n")
+	patchDir := writeKindControlPlanePatches(t)
+	kindConfig := fmt.Sprintf("kind: Cluster\napiVersion: kind.x-k8s.io/v1alpha4\nnetworking:\n  disableDefaultCNI: true\nkubeadmConfigPatches:\n  - |\n    kind: InitConfiguration\n    patches:\n      directory: /etc/kubeadm/patches\nnodes:\n  - role: control-plane\n    extraMounts:\n      - hostPath: %s\n        containerPath: /etc/kubeadm/patches\n        readOnly: true\n", patchDir)
+	createArgs := []string{"create", "cluster", "--name", cluster, "--config", "-"}
+	if nodeImg := strings.TrimSpace(os.Getenv("GRAIN_KIND_NODE_IMAGE")); nodeImg != "" {
+		createArgs = append(createArgs, "--image", nodeImg)
+	}
+	create := exec.Command("kind", createArgs...)
+	create.Stdin = strings.NewReader(kindConfig)
 	if out, err := create.CombinedOutput(); err != nil {
 		t.Fatalf("creating kind cluster: %v\n%s", err, out)
 	}
 	t.Cleanup(func() { _ = exec.Command("kind", "delete", "cluster", "--name", cluster).Run() })
 
-	calico := os.Getenv("GRAIN_CALICO_MANIFEST")
-	if calico == "" {
-		t.Fatal("GRAIN_CALICO_MANIFEST must name the pinned Calico manifest")
-	}
-	realKubectl(t, "apply", "-f", calico)
+	loadRealK8sImages(t, cluster, calicoImages)
+	realKubectl(t, "scale", "deployment/coredns", "-n", "kube-system", "--replicas=1")
+	realKubectl(t, "apply", "-f", trimmedCalico)
 	// `kubectl rollout status` rather than `kubectl wait --for=condition=Ready
 	// pod -l k8s-app=calico-node`, which was here and is a race: the apply
 	// above creates the DaemonSet, not its pod, and `kubectl wait` against a
@@ -202,7 +308,8 @@ func TestK8sSandboxesAgainstARealKindCluster(t *testing.T) {
 	// failure to be quick and gets its own short deadline.
 	k := orchestrator.NewK8sSandboxes(orchestrator.K8sConfig{
 		Namespace: "grain", Image: realK8sImage, Workspace: "/tmp",
-		ReadyTimeout: 3 * time.Minute, ReadyPollInterval: time.Second,
+		CPUOvercommit: 4,
+		ReadyTimeout:  3 * time.Minute, ReadyPollInterval: time.Second,
 	})
 	sb, err := k.Acquire(context.Background(), "real-1", shape)
 	if err != nil {
@@ -275,11 +382,12 @@ func TestK8sSandboxesAgainstARealKindCluster(t *testing.T) {
 	// of the pod.
 	realKubectl(t, "wait", "--for=delete", "pod/grain-sandbox-bad-image", "-n", "grain", "--timeout=2m")
 
-	realKubectl(t, "run", "grain-proxy", "-n", "grain", "--image=nginx:1.27-alpine", "--labels=app.kubernetes.io/name=grain")
+	realKubectl(t, "run", "grain-proxy", "-n", "grain", "--image="+realK8sProxyImage, "--image-pull-policy=IfNotPresent", "--labels=app.kubernetes.io/name=grain")
 	realKubectl(t, "wait", "pod/grain-proxy", "-n", "grain", "--for=condition=Ready", "--timeout=2m")
 	proxyIP := realKubectl(t, "get", "pod/grain-proxy", "-n", "grain", "-o", "jsonpath={.status.podIP}")
 	isolated := orchestrator.NewK8sSandboxes(orchestrator.K8sConfig{
 		Namespace: "grain", Image: realK8sImage, Workspace: "/tmp",
+		CPUOvercommit: 4,
 		// Three minutes for the reason the first Acquire above has three:
 		// the image is in the node by now, but this pod is asking for a
 		// whole CPU on a node that is still finishing with the pods
@@ -313,7 +421,8 @@ func realK8sPackageCache(t *testing.T, shape orchestrator.Shape) {
 	caPEM := realTestCA(t)
 	k := orchestrator.NewK8sSandboxes(orchestrator.K8sConfig{
 		Namespace: "grain", Image: realK8sImage, Workspace: "/tmp",
-		ReadyTimeout: 3 * time.Minute, ReadyPollInterval: time.Second,
+		CPUOvercommit: 4,
+		ReadyTimeout:  3 * time.Minute, ReadyPollInterval: time.Second,
 	})
 	k.SetPackageCache(func(context.Context) string { return base }, func(context.Context) []byte { return caPEM })
 	sb, err := k.Acquire(context.Background(), "cached-1", shape)

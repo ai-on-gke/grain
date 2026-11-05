@@ -45,8 +45,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/containerspec"
-	"github.com/bwsalmon/granule/pkg/workloadio"
+	"github.com/gke-labs/granule/pkg/containerspec"
+	"github.com/gke-labs/granule/pkg/workloadio"
 )
 
 func main() {

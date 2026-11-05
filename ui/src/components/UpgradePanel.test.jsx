@@ -20,6 +20,7 @@ import UpgradePanel, {
   resolvedImage,
 } from "./UpgradePanel.jsx";
 import api from "../api.js";
+import { optionValues } from "../searchSelectTesting.js";
 import { fetchUpgradeTargets } from "../upgradeTargets.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
@@ -51,6 +52,27 @@ describe("UpgradePanel", () => {
     ).toBeInTheDocument();
   });
 
+  // 2026-11-04 deployment-operations walkthrough: behind an unreachable
+  // hostd the first read takes seconds, and the tab stayed blank for all
+  // of them.
+  it("shows that the upgrade status is being read until the first read answers", async () => {
+    let answer;
+    api.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    render(<UpgradePanel showError={() => {}} />);
+
+    expect(
+      screen.getByRole("progressbar", { name: "Reading the upgrade status" }),
+    ).toBeInTheDocument();
+    answer({ enabled: false });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("progressbar", {
+          name: "Reading the upgrade status",
+        }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
   // grain/task-3689: the box starts on the channel the deployment
   // follows, so a deployment installed on latest is offered the next
   // release rather than main's head -- even when its last upgrade
@@ -64,7 +86,7 @@ describe("UpgradePanel", () => {
         enabled: true,
         mode: "image",
         channel: "latest",
-        running: { image: "ghcr.io/bwsalmon/grain/grain:latest@sha256:0123" },
+        running: { image: "docker.io/grainai/grain:latest@sha256:0123" },
         phase: "ok",
         branch: "main",
       });
@@ -137,7 +159,7 @@ describe("UpgradePanel", () => {
         enabled: true,
         mode: "image",
         channel: "candidate",
-        running: { image: "ghcr.io/bwsalmon/grain/grain:v2.3.0-rc.1" },
+        running: { image: "docker.io/grainai/grain:v2.3.0-rc.1" },
         discardedRc: {
           running: "v2.3.0-rc.1",
           latest: "v2.1.1",
@@ -183,7 +205,7 @@ describe("UpgradePanel", () => {
         enabled: true,
         mode: "image",
         channel: "candidate",
-        running: { image: "ghcr.io/bwsalmon/grain/grain:v2.3.0-rc.1" },
+        running: { image: "docker.io/grainai/grain:v2.3.0-rc.1" },
         discardedRc: {
           running: "v2.3.0-rc.1",
           latest: "v2.1.1",
@@ -210,6 +232,103 @@ describe("UpgradePanel", () => {
         "/api/upgrade/release-notes?branch=candidate",
       ),
     );
+  });
+
+  // grain/task-2656: a release rolled back with release-from-trunk.sh
+  // rollback carries <running>-retracted in the registry. The deployment
+  // stays put -- going back is only safe when the schema has not moved --
+  // and the pane offers both ways off it.
+  it("warns when the running release was retracted and offers the fix-forward release or latest", async () => {
+    api.mockImplementation((path) => {
+      if (String(path).startsWith("/api/upgrade/release-notes")) {
+        return Promise.resolve({ branch: "v3.6.0", notes: [] });
+      }
+      return Promise.resolve({
+        enabled: true,
+        mode: "image",
+        channel: "latest",
+        running: { image: "docker.io/grainai/grain:v3.5.0" },
+        retractedRelease: {
+          running: "v3.5.0",
+          latest: "v3.4.0",
+          newer: "v3.6.0",
+        },
+        phase: "",
+      });
+    });
+    const user = userEvent.setup();
+    render(<UpgradePanel showError={() => {}} />);
+
+    expect(
+      await screen.findByText(/Release v3\.5\.0 was retracted\./),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/it will never downgrade on its own/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/only safe if the database schema has not changed/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Move back to latest (v3.4.0)" }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Upgrade to v3.6.0" }));
+    expect(screen.getByLabelText(/Branch/)).toHaveValue("v3.6.0");
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith(
+        "/api/upgrade/release-notes?branch=v3.6.0",
+      ),
+    );
+  });
+
+  it("offers only latest for a retracted release when no fix-forward has been published, reading it from the targets", async () => {
+    fetchUpgradeTargets.mockResolvedValue({
+      targets: [],
+      allowedBranches: ["main"],
+      retractedRelease: { running: "v3.5.0", latest: "v3.4.0" },
+    });
+    api.mockImplementation((path) => {
+      if (String(path).startsWith("/api/upgrade/release-notes")) {
+        return Promise.resolve({ branch: "latest", notes: [] });
+      }
+      return Promise.resolve({
+        enabled: true,
+        mode: "image",
+        channel: "latest",
+        running: { image: "docker.io/grainai/grain:v3.5.0" },
+        phase: "",
+      });
+    });
+    const user = userEvent.setup();
+    try {
+      render(<UpgradePanel showError={() => {}} />);
+
+      // The targets are read when the list is first opened.
+      expect(
+        screen.queryByText(/Release v3\.5\.0 was retracted\./),
+      ).not.toBeInTheDocument();
+      await user.click(await screen.findByLabelText(/Branch/));
+      expect(
+        await screen.findByText(/Release v3\.5\.0 was retracted\./),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/No release after it has been published yet\./),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /^Upgrade to v/ }),
+      ).not.toBeInTheDocument();
+
+      await user.click(
+        screen.getByRole("button", { name: "Move back to latest (v3.4.0)" }),
+      );
+      expect(screen.getByLabelText(/Branch/)).toHaveValue("latest");
+    } finally {
+      fetchUpgradeTargets.mockReset();
+      fetchUpgradeTargets.mockImplementation(async () => ({
+        targets: [],
+        allowedBranches: ["main"],
+      }));
+    }
   });
 
   // grain/task-1914: the standard places to upgrade to are a pick from a
@@ -391,6 +510,27 @@ describe("UpgradePanel", () => {
     expect(within(list).getByText("latest")).toBeInTheDocument();
   });
 
+  it("filters upgrade targets with searchFilter while keeping groups contiguous", async () => {
+    fetchUpgradeTargets.mockResolvedValueOnce({
+      targets: [
+        { name: "latest", kind: "channel", allowed: true },
+        { name: "candidate", kind: "channel", allowed: true },
+        { name: "release/v1.8", kind: "branch", allowed: true },
+        { name: "v1.8.0", kind: "version", allowed: true },
+        { name: "v1.7.0", kind: "version", allowed: true },
+      ],
+      allowedBranches: ["**"],
+    });
+    api.mockResolvedValue({ enabled: true, phase: "ok", branch: "" });
+    const user = userEvent.setup();
+    render(<UpgradePanel showError={() => {}} />);
+
+    const input = await screen.findByLabelText(/Branch/);
+    await user.click(input);
+    await user.type(input, "1.8");
+    expect(optionValues(input)).toEqual(["release/v1.8", "v1.8.0"]);
+  });
+
   it("claims neither pipeline when the API names no mode", async () => {
     // An older daemon serving this UI: better one sentence true of both
     // than a confident description of the wrong one.
@@ -415,12 +555,12 @@ describe("UpgradePanel", () => {
       enabled: true,
       mode: "image",
       phase: "",
-      running: { image: "ghcr.io/bwsalmon/grain/grain:main" },
+      running: { image: "docker.io/grainai/grain:main" },
     });
     render(<UpgradePanel showError={() => {}} />);
 
     expect(await screen.findByText(/Now running/)).toHaveTextContent(
-      "Now running ghcr.io/bwsalmon/grain/grain:main",
+      "Now running docker.io/grainai/grain:main",
     );
   });
 
@@ -860,7 +1000,7 @@ describe("UpgradePanel", () => {
       enabled: true,
       phase: "ok",
       branch: "main",
-      detail: "pulled ghcr.io/bwsalmon/grain/grain:main; restarting",
+      detail: "pulled docker.io/grainai/grain:main; restarting",
     });
     render(<UpgradePanel showError={() => {}} />);
 
@@ -884,7 +1024,7 @@ describe("UpgradePanel", () => {
         enabled: true,
         phase: "ok",
         branch: "main",
-        detail: "pulled ghcr.io/bwsalmon/grain/grain:main; restarting",
+        detail: "pulled docker.io/grainai/grain:main; restarting",
       });
     // act() around each step, so the re-render an answer causes has
     // happened by the time the assertions below read the DOM. The fake
@@ -909,9 +1049,7 @@ describe("UpgradePanel", () => {
       await poll();
       expect(screen.getByText("ok")).toBeInTheDocument();
       expect(
-        screen.getByText(
-          "pulled ghcr.io/bwsalmon/grain/grain:main; restarting",
-        ),
+        screen.getByText("pulled docker.io/grainai/grain:main; restarting"),
       ).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Upgrade" })).toBeEnabled();
 
@@ -1334,7 +1472,7 @@ describe("UpgradePanel scheduling", () => {
       phase: "",
       branch: "",
       running: {
-        image: "ghcr.io/bwsalmon/grain/grain:v1.7.0",
+        image: "docker.io/grainai/grain:v1.7.0",
         release: "v1.7.0",
       },
       inFlightRuns: 2,
@@ -1378,7 +1516,7 @@ describe("UpgradePanel scheduling", () => {
         phase: "",
         branch: "",
         running: {
-          image: "ghcr.io/bwsalmon/grain/grain:v1.7.0",
+          image: "docker.io/grainai/grain:v1.7.0",
           release: "v1.7.0",
         },
       });
@@ -1416,7 +1554,7 @@ describe("UpgradePanel scheduling", () => {
         phase: "",
         branch: "",
         running: {
-          image: "ghcr.io/bwsalmon/grain/grain:latest@sha256:abc",
+          image: "docker.io/grainai/grain:latest@sha256:abc",
         },
       })
       .mockResolvedValueOnce({
@@ -1435,7 +1573,7 @@ describe("UpgradePanel scheduling", () => {
         unchanged: true,
         branch: "latest",
         detail:
-          "the version on latest has not changed (already running ghcr.io/bwsalmon/grain/grain:latest@sha256:abc)",
+          "the version on latest has not changed (already running docker.io/grainai/grain:latest@sha256:abc)",
       });
 
     try {
@@ -1464,7 +1602,7 @@ describe("UpgradePanel scheduling", () => {
       ).toBeInTheDocument();
       expect(
         screen.getByText(
-          /already running ghcr\.io\/bwsalmon\/grain\/grain:latest@sha256:abc/,
+          /already running docker\.io\/grainai\/grain:latest@sha256:abc/,
         ),
       ).toBeInTheDocument();
 
@@ -1943,29 +2081,87 @@ describe("PostgresDatabaseUpgrade", () => {
   });
 });
 
-// The daily automatic upgrade: a channel, or Off, and a time of day on
-// the deployment's own clock, each saved through PUT /api/settings.
+// The automatic upgrade: Off, when a release is published, or once a day
+// onto a channel at a time of day on the deployment's own clock, each
+// saved through PUT /api/settings.
 describe("AutoUpgradeSettings", () => {
   const settings = {
+    autoUpgradeOn: "off",
     autoUpgradeChannel: "",
     autoUpgradeTime: "03:00",
     timeZone: "America/New_York",
   };
+  const modePicker = () =>
+    screen.getByRole("combobox", { name: /upgrade automatically/i });
 
-  it("is off, with the time disabled, until a channel is chosen", () => {
+  it("is off by default, recommending release mode", async () => {
+    const user = userEvent.setup();
     render(<AutoUpgradeSettings settings={settings} onSave={vi.fn()} />);
 
+    expect(modePicker()).toHaveTextContent(/off \(manual only\)/i);
+    expect(screen.queryByLabelText(/time of day/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/recommended/i)).toBeInTheDocument();
+    await user.click(modePicker());
     expect(
-      screen.getByRole("combobox", { name: /channel/i }),
-    ).toHaveTextContent(/off \(manual only\)/i);
-    expect(screen.getByLabelText(/time of day/i)).toBeDisabled();
+      screen.getByRole("option", {
+        name: "On each release (recommended)",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("reads a server without autoUpgradeOn as daily when a channel is set", () => {
+    render(
+      <AutoUpgradeSettings
+        settings={{
+          autoUpgradeChannel: "candidate",
+          autoUpgradeTime: "03:00",
+          timeZone: "America/New_York",
+        }}
+        onSave={vi.fn()}
+      />,
+    );
+    expect(modePicker()).toHaveTextContent(/once a day/i);
     expect(screen.getByText(/America\/New_York/)).toBeInTheDocument();
   });
 
-  it("saves a channel with its time, and turning it off saves only that", async () => {
+  it("turns on release mode following latest, and can pin the exact tag", async () => {
     const onSave = vi.fn();
     const user = userEvent.setup();
     render(<AutoUpgradeSettings settings={settings} onSave={onSave} />);
+
+    await user.click(modePicker());
+    await user.click(screen.getByRole("option", { name: /on each release/i }));
+    expect(onSave).toHaveBeenLastCalledWith({
+      autoUpgradeOn: "release",
+      autoUpgradeChannel: "latest",
+    });
+    expect(
+      screen.getByText(/release candidates are never followed/i),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("combobox", { name: /upgrade to/i }));
+    await user.click(
+      screen.getByRole("option", { name: /exact release tag/i }),
+    );
+    expect(onSave).toHaveBeenLastCalledWith({ autoUpgradeChannel: "" });
+
+    await user.click(modePicker());
+    await user.click(screen.getByRole("option", { name: /off/i }));
+    expect(onSave).toHaveBeenLastCalledWith({ autoUpgradeOn: "off" });
+  });
+
+  it("saves a daily channel with its time", async () => {
+    const onSave = vi.fn();
+    const user = userEvent.setup();
+    render(<AutoUpgradeSettings settings={settings} onSave={onSave} />);
+
+    await user.click(modePicker());
+    await user.click(screen.getByRole("option", { name: /once a day/i }));
+    expect(onSave).toHaveBeenLastCalledWith({
+      autoUpgradeOn: "daily",
+      autoUpgradeChannel: "latest",
+      autoUpgradeTime: "03:00",
+    });
 
     await user.click(screen.getByRole("combobox", { name: /channel/i }));
     for (const name of ["latest", "candidate", "main"]) {
@@ -1976,11 +2172,6 @@ describe("AutoUpgradeSettings", () => {
       autoUpgradeChannel: "candidate",
       autoUpgradeTime: "03:00",
     });
-    expect(screen.getByLabelText(/time of day/i)).toBeEnabled();
-
-    await user.click(screen.getByRole("combobox", { name: /channel/i }));
-    await user.click(screen.getByRole("option", { name: /off/i }));
-    expect(onSave).toHaveBeenLastCalledWith({ autoUpgradeChannel: "" });
   });
 
   it("saves a new time of day once the field is left", async () => {
@@ -1988,7 +2179,11 @@ describe("AutoUpgradeSettings", () => {
     const user = userEvent.setup();
     render(
       <AutoUpgradeSettings
-        settings={{ ...settings, autoUpgradeChannel: "latest" }}
+        settings={{
+          ...settings,
+          autoUpgradeOn: "daily",
+          autoUpgradeChannel: "latest",
+        }}
         onSave={onSave}
       />,
     );
@@ -2005,7 +2200,11 @@ describe("AutoUpgradeSettings", () => {
     const user = userEvent.setup();
     render(
       <AutoUpgradeSettings
-        settings={{ ...settings, autoUpgradeChannel: "release-2026" }}
+        settings={{
+          ...settings,
+          autoUpgradeOn: "daily",
+          autoUpgradeChannel: "release-2026",
+        }}
         onSave={vi.fn()}
       />,
     );
@@ -2014,5 +2213,117 @@ describe("AutoUpgradeSettings", () => {
     expect(
       screen.getByRole("option", { name: "release-2026" }),
     ).toBeInTheDocument();
+  });
+});
+
+describe("ImageSourceSettings on UpgradePanel", () => {
+  it("shows release-asset source, fallback note, and saves source changes when unlocked", async () => {
+    const baseStatus = {
+      enabled: true,
+      mode: "image",
+      channel: "main",
+      running: { image: "docker.io/grainai/grain:main" },
+      phase: "done",
+      branch: "main",
+      source: "registry",
+      fallbackNote:
+        "release has no image assets; pulled from docker.io/grainai/grain",
+      detail:
+        "release has no image assets; pulled from docker.io/grainai/grain",
+      imageRepo: "docker.io/grainai/grain",
+      defaultImageRepo: "docker.io/grainai/grain",
+      imageRepos: ["docker.io/grainai/grain"],
+      imageSource: {
+        source: "release-assets",
+        sourceDefault: true,
+        locked: false,
+        fallback: "registry",
+        releaseRepository: "github.com/ai-on-gke/grain",
+        manifestAsset: "images.json",
+        checksumSuffix: ".sha256",
+      },
+    };
+
+    let putBody = null;
+    api.mockImplementation((url, opts) => {
+      if (
+        String(url).includes("/api/upgrade/source") &&
+        opts?.method === "PUT"
+      ) {
+        putBody = JSON.parse(opts.body);
+        return Promise.resolve({
+          ...baseStatus,
+          imageSource: {
+            source: "registry",
+            sourceDefault: false,
+            locked: false,
+          },
+        });
+      }
+      if (String(url).includes("/api/upgrade/targets")) {
+        return Promise.resolve({
+          targets: [{ name: "main", kind: "channel", allowed: true }],
+          default: "main",
+        });
+      }
+      return Promise.resolve(baseStatus);
+    });
+
+    const user = userEvent.setup();
+    render(<UpgradePanel showError={() => {}} />);
+
+    expect(
+      await screen.findByText(/Last upgrade: release has no image assets/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByDisplayValue("github.com/ai-on-gke/grain"),
+    ).not.toBeDisabled();
+
+    await user.click(screen.getByRole("combobox", { name: /^source$/i }));
+    await user.click(
+      screen.getByRole("option", { name: /Container registry only/i }),
+    );
+    expect(putBody).toEqual({ mode: "registry", releaseRepository: "" });
+  });
+
+  it("renders read-only when locked by a daemon flag or environment variable", async () => {
+    const lockedStatus = {
+      enabled: true,
+      mode: "image",
+      channel: "main",
+      running: { image: "docker.io/grainai/grain:main" },
+      phase: "done",
+      branch: "main",
+      source: "release-assets",
+      detail: "loaded grain-image.tar.gz",
+      imageRepo: "docker.io/grainai/grain",
+      imageSource: {
+        source: "release-assets",
+        sourceDefault: false,
+        locked: true,
+        releaseRepository: "ghe.internal.example/platform/grain",
+        manifestAsset: "images.json",
+        checksumSuffix: ".sha256",
+      },
+    };
+
+    api.mockImplementation((url) => {
+      if (String(url).includes("/api/upgrade/targets")) {
+        return Promise.resolve({
+          targets: [{ name: "main", kind: "channel", allowed: true }],
+          default: "main",
+        });
+      }
+      return Promise.resolve(lockedStatus);
+    });
+
+    render(<UpgradePanel showError={() => {}} />);
+
+    expect(
+      await screen.findByText("Read-only (set by flag/env)"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByDisplayValue("ghe.internal.example/platform/grain"),
+    ).toBeDisabled();
   });
 });

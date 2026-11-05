@@ -2,19 +2,19 @@
 
 Grain publishes two tiers of sandbox images for both Granule microVMs and container/Kubernetes pod sandboxes:
 
-1. **Minimal base images** (`ghcr.io/bwsalmon/grain/guest-base:<tag>` and `ghcr.io/bwsalmon/grain/k8s-sandbox-base:<tag>`) carrying **only** what stock Granule and Grain's own runtime boundary need to boot and drive a sandbox.
-2. **Full default images** (`ghcr.io/bwsalmon/grain/guest:<tag>` and `ghcr.io/bwsalmon/grain/k8s-sandbox:<tag>`) layered `FROM` those minimal bases with language toolchains, Docker, OCR/attachment packages, and agent CLIs.
+1. **Minimal base images** (`docker.io/grainai/sandbox-base:<tag>` and `docker.io/grainai/sandbox-k8s-base:<tag>`) carrying **only** what stock Granule and Grain's own runtime boundary need to boot and drive a sandbox.
+2. **Full default images** (`docker.io/grainai/sandbox:<tag>` and `docker.io/grainai/sandbox-k8s:<tag>`) layered `FROM` those minimal bases with language toolchains, Docker, OCR/attachment packages, and agent CLIs.
 
 Every base and full sandbox image carries an explicit integer contract version (`dev.grain.sandbox.contract` OCI label and `/etc/grain/sandbox-contract` file, modeled directly on Granule's `dev.granule.guest.contract` / `/etc/granule/guest-contract` in `third_party/granule/pkg/guestimage/contract.go`).
 
-If you maintain a custom sandbox image `FROM ghcr.io/bwsalmon/grain/guest-base:<tag>` or `FROM ghcr.io/bwsalmon/grain/k8s-sandbox-base:<tag>`, **you do not need to rebuild your image on every Grain commit** — you only need to update your base image when `dev.grain.sandbox.contract` (or, for Granule VMs, `dev.granule.guest.contract`) bumps.
+If you maintain a custom sandbox image `FROM docker.io/grainai/sandbox-base:<tag>` or `FROM docker.io/grainai/sandbox-k8s-base:<tag>`, **you do not need to rebuild your image on every Grain commit** — you only need to update your base image when `dev.grain.sandbox.contract` (or, for Granule VMs, `dev.granule.guest.contract`) bumps.
 
 ---
 
 ## 1. Minimal Base Images vs Full Default Images
 
-> **What you inherit:** `ghcr.io/bwsalmon/grain/guest-base:<tag>` and
-> `ghcr.io/bwsalmon/grain/k8s-sandbox-base:<tag>` **already satisfy every
+> **What you inherit:** `docker.io/grainai/sandbox-base:<tag>` and
+> `docker.io/grainai/sandbox-k8s-base:<tag>` **already satisfy every
 > requirement of the sandbox contract** — the `debian` user (`uid 1000`),
 > the `/home/agent` symlink, `git`, `curl`, `ca-certificates`,
 > `python3-minimal` for port forwarding, the contract version stamps and,
@@ -30,22 +30,22 @@ If you maintain a custom sandbox image `FROM ghcr.io/bwsalmon/grain/guest-base:<
 
 | Layer | Image / Stage | Contents |
 | :--- | :--- | :--- |
-| **Minimal Base** | `ghcr.io/bwsalmon/grain/guest-base:<tag>` (`Granulefile.guest-base`) | Stock Granule Debian Bookworm VM base (`systemd-sysv`, `udev`, `kmod`, `iproute2`, `acpid`, `e2fsprogs`, `linux-image-$(dpkg --print-architecture)` with `RESUME=none`, `klibc-utils`, `libnss-myhostname`, `00-eth0.link`, `/tmp` tmpfs, `grain-growfs`, `VM PACK --variant=debian` with `granule-agent`, `granule-mem-agent`, `granule-growfs`, and `/etc/granule/guest-contract`) **plus** Grain's minimal boundary: user `debian` (`uid 1000`, `/home/debian`, `/bin/bash`), `/home/agent -> /home/debian`, passwordless `sudo`, `kvm` group, `git`, `curl`, `ca-certificates`, `python3-minimal` (`os, socket, sys, threading` for `GuestForwarder`), `/usr/local/bin/grain-connect` (`/run/grain` tmpfiles.d), core POSIX utilities (`procps`, `findutils`, `grep`, `sed`, `gawk`, `tar`, `coreutils`), and `/etc/grain/sandbox-contract`. |
-| **Default Full** | `ghcr.io/bwsalmon/grain/guest:<tag>` (`Granulefile`) | `FROM guest_base_rootfs` + developer convenience packages (`build-essential`, `python3`, `python3-venv`, `pipx`, `jq`, `ripgrep`, `fd-find`, `shellcheck`, `file`, `openssh-client`, `tmux`, `unzip`, `xz-utils`, `bubblewrap`, `gnupg`), OCR & attachment tools (`tesseract-ocr`, `tesseract-ocr-eng`, `imagemagick`, `poppler-utils`, `fonts-urw-base35`, `fonts-dejavu-core`), Docker CE & containerd, `kind`, `kubectl`, `google-cloud-cli`, `terraform`, Go, Node.js, Playwright browser cache, `act`, and `actionlint`. |
+| **Minimal Base** | `docker.io/grainai/sandbox-base:<tag>` (`Granulefile.guest-base`) | Stock Granule Debian Bookworm VM base (`systemd-sysv`, `udev`, `kmod`, `iproute2`, `acpid`, `e2fsprogs`, `linux-image-$(dpkg --print-architecture)` with `RESUME=none`, `klibc-utils`, `libnss-myhostname`, `00-eth0.link`, `/tmp` tmpfs, `grain-growfs`, `VM PACK --variant=debian` with `granule-agent`, `granule-mem-agent`, `granule-growfs`, and `/etc/granule/guest-contract`) **plus** Grain's minimal boundary: user `debian` (`uid 1000`, `/home/debian`, `/bin/bash`), `/home/agent -> /home/debian`, passwordless `sudo`, `kvm` group, `git`, `curl`, `ca-certificates`, `python3-minimal` (`os, socket, sys, threading` for `GuestForwarder`), `/usr/local/bin/grain-connect` (`/run/grain` tmpfiles.d), core POSIX utilities (`procps`, `findutils`, `grep`, `sed`, `gawk`, `tar`, `coreutils`), and `/etc/grain/sandbox-contract`. |
+| **Default Full** | `docker.io/grainai/sandbox:<tag>` (`Granulefile`) | `FROM guest_base_rootfs` + developer convenience packages (`build-essential`, `python3`, `python3-venv`, `pipx`, `jq`, `ripgrep`, `fd-find`, `shellcheck`, `file`, `openssh-client`, `tmux`, `unzip`, `xz-utils`, `bubblewrap`, `gnupg`), OCR & attachment tools (`tesseract-ocr`, `tesseract-ocr-eng`, `imagemagick`, `poppler-utils`, `fonts-urw-base35`, `fonts-dejavu-core`), Docker CE & containerd, `kind`, `kubectl`, `google-cloud-cli`, `terraform`, Go, Node.js, Playwright browser cache, `act`, and `actionlint`. |
 
 ### Container & Kubernetes Pod (`k8s-sandbox-base` vs `k8s-sandbox`)
 
 | Layer | Image / Stage | Contents |
 | :--- | :--- | :--- |
-| **Minimal Base** | `ghcr.io/bwsalmon/grain/k8s-sandbox-base:<tag>` (`Dockerfile.k8s-sandbox` `--target k8s-sandbox-base`) | `debian:bookworm-slim` + `bash`, `ca-certificates`, `curl`, `findutils`, `git`, `tar`, `python3-minimal` (`os, socket, sys, threading` for `GuestForwarder`), user `debian` (`uid 1000`, `/home/debian`, `/bin/bash`), symlink `/home/agent -> /home/debian`, and `/etc/grain/sandbox-contract`. |
-| **Default Full** | `ghcr.io/bwsalmon/grain/k8s-sandbox:<tag>` (`Dockerfile.k8s-sandbox`) | `FROM k8s-sandbox-base` + OCR & attachment tools (`tesseract-ocr`, `tesseract-ocr-eng`, `imagemagick`, `poppler-utils`, `fonts-urw-base35`, `fonts-dejavu-core`) + the three pinned agent CLIs (`claude`, `agy`, `codex`). |
+| **Minimal Base** | `docker.io/grainai/sandbox-k8s-base:<tag>` (`Dockerfile.k8s-sandbox` `--target k8s-sandbox-base`) | `debian:bookworm-slim` + `bash`, `ca-certificates`, `curl`, `findutils`, `git`, `tar`, `python3-minimal` (`os, socket, sys, threading` for `GuestForwarder`), user `debian` (`uid 1000`, `/home/debian`, `/bin/bash`), symlink `/home/agent -> /home/debian`, and `/etc/grain/sandbox-contract`. |
+| **Default Full** | `docker.io/grainai/sandbox-k8s:<tag>` (`Dockerfile.k8s-sandbox`) | `FROM k8s-sandbox-base` + OCR & attachment tools (`tesseract-ocr`, `tesseract-ocr-eng`, `imagemagick`, `poppler-utils`, `fonts-urw-base35`, `fonts-dejavu-core`) + the three pinned agent CLIs (`claude`, `agy`, `codex`). |
 
 ---
 
 ## 2. Building a Custom Sandbox Image
 
-Starting `FROM ghcr.io/bwsalmon/grain/guest-base:<tag>` or
-`FROM ghcr.io/bwsalmon/grain/k8s-sandbox-base:<tag>` **already satisfies
+Starting `FROM docker.io/grainai/sandbox-base:<tag>` or
+`FROM docker.io/grainai/sandbox-k8s-base:<tag>` **already satisfies
 every requirement of the contract**. The only steps you add are your own
 `RUN apt-get install ...` lines (or other toolchain installs). Do not
 remove or replace anything the base image carries — see
@@ -57,7 +57,7 @@ list — and run `grain sandbox-image check <image>` before you use it.
 Because `guest-base` is a packed Granule VM image that already includes the kernel, `systemd`, Granule guest agents, `debian` user (`uid 1000`), `python3-minimal`, and `/usr/local/bin/grain-connect`, a custom `Granulefile` unpacks `guest-base`, installs only the packages your repository needs, and re-packs:
 
 ```dockerfile
-FROM ghcr.io/bwsalmon/grain/guest-base:latest AS rootfs
+FROM docker.io/grainai/sandbox-base:latest AS rootfs
 VM UNPACK
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -79,10 +79,10 @@ grain sandbox-image check --backend granule my-registry.example.com/team/sandbox
 
 ### Custom Container / Kubernetes Sandbox Image (`FROM k8s-sandbox-base`)
 
-Start `FROM ghcr.io/bwsalmon/grain/k8s-sandbox-base:<tag>`, switch to `USER root` to install packages or agent CLIs, and switch back to `USER debian` (`WORKDIR /home/debian`):
+Start `FROM docker.io/grainai/sandbox-k8s-base:<tag>`, switch to `USER root` to install packages or agent CLIs, and switch back to `USER debian` (`WORKDIR /home/debian`):
 
 ```dockerfile
-FROM ghcr.io/bwsalmon/grain/k8s-sandbox-base:latest
+FROM docker.io/grainai/sandbox-k8s-base:latest
 USER root
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -189,7 +189,7 @@ same list for the running build of grain.
 | `curl` | Reaches the in-sandbox namespace and git proxy at `127.0.0.1:9728`. |
 | `ca-certificates` (`/etc/ssl/certs/ca-certificates.crt`) | TLS to registries, package mirrors and model APIs. |
 | `python3-minimal` (`os`, `socket`, `sys`, `threading`) | `GuestForwarder`, the capability port forwarder. |
-| `/usr/local/bin/grain` (`cmd/grain-sandbox`) offering `grain ls`, `read`, `grep`, `ci`, `pr`, `task`, `api` and `host-script` | The sandbox CLI agents reach their deployment, CI and pull request through (`docs/design/sandbox-first-agent-surface.md`); the orchestrator no longer offers those as MCP tools. `grain sandbox-image check -probe` runs `GRAIN_SANDBOX_CLI=0 /usr/local/bin/grain help` and fails an image whose `grain` does not list them. |
+| `/usr/local/bin/grain` (`cmd/grain-sandbox`) offering `grain ls`, `read`, `grep`, `ci`, `pr`, `task`, `api` and `host-script` | The sandbox CLI agents reach their deployment, CI and pull request through (`design/design/sandbox-first-agent-surface.design.md`); the orchestrator no longer offers those as MCP tools. `grain sandbox-image check -probe` runs `GRAIN_SANDBOX_CLI=0 /usr/local/bin/grain help` and fails an image whose `grain` does not list them. |
 | `dev.grain.sandbox.contract` label and `/etc/grain/sandbox-contract` | The contract version grain checks the image against. |
 
 ### Granule microVM backends only (`guest-base`)
@@ -231,5 +231,5 @@ grain sandbox-image check -json <image>
 
 | Version | `MinimumContract` | `dev.granule.guest.contract` | Summary & Required Action for Custom Images |
 | :--- | :--- | :--- | :--- |
-| **1** | **1** | **1** | Initial versioned Grain sandbox contract. Base images `ghcr.io/bwsalmon/grain/guest-base` and `ghcr.io/bwsalmon/grain/k8s-sandbox-base` carry `dev.grain.sandbox.contract="1"` and `/etc/grain/sandbox-contract` (`"1\n"`), user `debian` (`uid 1000`, `/home/debian`), `/home/agent -> /home/debian`, `git`, `curl`, `ca-certificates`, `python3-minimal` (`os, socket, sys, threading` for `GuestForwarder`), and on Granule microVMs `systemd`, passwordless `sudo`, and `/usr/local/bin/grain-connect`. |
+| **1** | **1** | **1** | Initial versioned Grain sandbox contract. Base images `docker.io/grainai/sandbox-base` and `docker.io/grainai/sandbox-k8s-base` carry `dev.grain.sandbox.contract="1"` and `/etc/grain/sandbox-contract` (`"1\n"`), user `debian` (`uid 1000`, `/home/debian`), `/home/agent -> /home/debian`, `git`, `curl`, `ca-certificates`, `python3-minimal` (`os, socket, sys, threading` for `GuestForwarder`), and on Granule microVMs `systemd`, passwordless `sudo`, and `/usr/local/bin/grain-connect`. |
 | **2** | **2** | **1** | In-sandbox grain CLI. Every base image carries `/usr/local/bin/grain` (`cmd/grain-sandbox`) with the sandbox CLI (`grain ls`, `read`, `grep`, `ci`, `pr`, `task`, `api`) beside `grain host-script`, because the orchestrator now strips those tools from MCP and has agents run them in the sandbox. `MinimumContract` rises to 2: a v1 image may carry a `host-script`-only `grain`, which leaves an agent unable to read its own CI or pull request. **Rebuild custom images `FROM` a current `guest-base` or `k8s-sandbox-base`.** |

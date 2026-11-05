@@ -159,4 +159,84 @@ test.describe("Repository Management and Configuration Workflows", () => {
     await settingsLink.click();
     await expect(page).toHaveURL(/\/settings\/git$/);
   });
+
+  // Clicking Add repo used to change nothing on the form until the add
+  // had been resolved against the host, committed to the config and the
+  // page had re-read it (grain/task-55): the click looked like nothing
+  // and invited a second one. The POST is held here so the window is
+  // long enough to look at: the button is in its loading state (a
+  // spinner over a label kept the same width, since a wider one tipped
+  // the header slot into "More page actions") and, with the picker,
+  // disabled; the caption says which repo is being added; a second
+  // submit issues no second POST; and once the add lands the form is
+  // back, cleared, and says what it added. The held request is answered
+  // here rather than by the daemon, so the demo's allowlist is left as
+  // it was.
+  test("Add repo shows the add in progress and locks the form until it lands", async ({
+    page,
+  }) => {
+    let releaseAdd;
+    const held = new Promise((resolve) => {
+      releaseAdd = resolve;
+    });
+    let posts = 0;
+    await page.route(/\/api\/repos$/, async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      posts += 1;
+      await held;
+      await route.fulfill({
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+    });
+
+    await page.goto("/repos");
+    await expect(page.getByRole("heading", { name: "Repos" })).toBeVisible();
+
+    const form = page.getByRole("form", { name: "Add repo" });
+    const picker = form.getByRole("combobox", { name: "Repo to add" });
+    const status = page.getByTestId("repo-discovery-status");
+    const add = form.getByRole("button", { name: "Add repo", exact: true });
+    const idleBox = await add.boundingBox();
+    await picker.fill("acme/new-thing");
+    await add.click();
+
+    await expect(add).toBeDisabled();
+    await expect(add).toHaveAttribute("aria-busy", "true");
+    await expect(add.getByRole("progressbar")).toBeVisible();
+    // Same button, same width: the slot it sits in has not been given a
+    // reason to wrap it away. (Width rather than place: at this
+    // viewport the demo's header already holds the form on the slot's
+    // wrapped row, and clicking it scrolls it into view.)
+    const size = ({ width, height }) => ({ width, height });
+    expect(size(await add.boundingBox())).toEqual(size(idleBox));
+    await expect(picker).toBeDisabled();
+    await expect(picker).toHaveValue("acme/new-thing");
+    await expect(status).toHaveAttribute("data-status", "adding");
+    await expect(status).toHaveText("Adding acme/new-thing…");
+
+    // Enter in the (disabled) field, a click on the (disabled) button and
+    // a submit of the form itself: none of them is a second add.
+    await page.keyboard.press("Enter");
+    await add.click({ force: true });
+    await form.evaluate((f) => f.requestSubmit());
+    expect(posts).toBe(1);
+
+    releaseAdd();
+    await expect(add).toBeEnabled();
+    await expect(add).toHaveAttribute("aria-busy", "false");
+    await expect(add.getByRole("progressbar")).toHaveCount(0);
+    expect(size(await add.boundingBox())).toEqual(size(idleBox));
+    await expect(picker).toBeEnabled();
+    await expect(picker).toHaveValue("");
+    await expect(status).toHaveAttribute("data-status", "added");
+    await expect(status).toHaveText("Added acme/new-thing");
+    expect(posts).toBe(1);
+
+    // The note is for the moment after the click: typing again puts the
+    // discovery line back under the picker.
+    await picker.fill("a");
+    await expect(status).toHaveAttribute("data-status", "none");
+  });
 });

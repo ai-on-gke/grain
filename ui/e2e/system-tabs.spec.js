@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // Walkthrough: System's sandboxes and caches tabs (docs/test-plans/2026-09-25.md §3)
 // Exercises System overlay tab navigation, Sandboxes live metrics and sparklines,
@@ -24,9 +25,11 @@ async function startRun(page) {
   await page.getByRole("button", { name: /^CI \d+$/ }).click();
   await expect(page.getByRole("heading", { name: "CI" })).toBeVisible();
   await page.getByRole("button", { name: "Start a run" }).click();
-  const repoSelect = page.locator('select[name="repo"]');
+  const repoSelect = page.locator(
+    '.repo-field:has(input[name="repo"]) [role="combobox"]',
+  );
   await expect(repoSelect).toBeVisible();
-  await repoSelect.selectOption("acme/widgets");
+  await chooseOption(repoSelect, "acme/widgets");
   await page.getByLabel("Branch").fill("main");
   await page.getByRole("button", { name: "Load workflows" }).click();
   await expect(page.getByLabel("Workflow")).toBeVisible();
@@ -39,6 +42,9 @@ test("system sandboxes and caches tabs walkthrough", async ({ page }) => {
   test.setTimeout(90_000);
 
   // 1. Navigate to dashboard and initiate a background CI job to populate active sandbox metrics
+  await page.addInitScript(() =>
+    localStorage.setItem("grain.sidebar.hidden", "[]"),
+  );
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
 
@@ -237,7 +243,7 @@ test("system sandboxes and caches tabs walkthrough", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Caches" })).toBeVisible();
   await expect(page.getByText(/Total space consumed: 0 B/)).toBeVisible();
 
-  // 7. System is a view (docs/design/settings-panel.md §2.1): the rail
+  // 7. System is a view (design/design/settings-panel.design.md §2.1): the rail
   // leaves it, and Back returns to the tab that was open.
   await page.getByRole("button", { name: /^Tasks \d+/ }).click();
   await expect(
@@ -252,4 +258,32 @@ test("system sandboxes and caches tabs walkthrough", async ({ page }) => {
 
   // Cleanly complete CI step
   await page.request.post("/api/e2e/ci/finish");
+});
+
+// Each tab's content sits in a tabpanel that tab names and controls, so a
+// screen reader leaving the tab strip lands in a region tied to it. Before
+// the 2026-11-03 deployment-operations walkthrough System's tabs named no
+// panel at all, unlike a repository's.
+test("each System tab opens a tabpanel named after it", async ({ page }) => {
+  await page.goto("/system");
+  for (const name of [
+    "Health",
+    "Logs",
+    "Sandboxes",
+    "Caches",
+    "Top",
+    "Pipeline",
+    "Metrics",
+    "Power",
+  ]) {
+    const tab = page.getByRole("tab", { name, exact: true });
+    await tab.click();
+    await expect(tab).toHaveAttribute("aria-selected", "true");
+    const panel = page.getByRole("tabpanel", { name, exact: true });
+    await expect(panel).toBeVisible();
+    await expect(tab).toHaveAttribute(
+      "aria-controls",
+      await panel.getAttribute("id"),
+    );
+  }
 });

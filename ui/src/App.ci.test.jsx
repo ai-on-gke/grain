@@ -70,7 +70,8 @@ const withCI = (runs, tasks = initialTasks) =>
 describe("App", () => {
   afterEach(resetAppTestState);
 
-  it("opens grain CI from the rail, sandboxes first, at a path of its own", async () => {
+  it("opens grain CI from the rail when enabled, sandboxes first, at a path of its own", async () => {
+    localStorage.setItem("grain.sidebar.hidden", "[]");
     withCI([liveRun]);
     const user = userEvent.setup();
     render(<App />);
@@ -90,6 +91,7 @@ describe("App", () => {
   });
 
   it("opens one run at its own path, and back out to the list", async () => {
+    localStorage.setItem("grain.sidebar.hidden", "[]");
     withCI([liveRun]);
     const user = userEvent.setup();
     render(<App />);
@@ -97,7 +99,7 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: /^CI/ }));
 
     await user.click(
-      (await screen.findAllByRole("button", { name: "acme/widgets" }))[0],
+      (await screen.findAllByRole("button", { name: /^acme\/widgets / }))[0],
     );
 
     expect(

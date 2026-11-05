@@ -192,6 +192,43 @@ type CapabilityContext struct {
 	Connection string
 }
 
+type runConnectionKey struct{}
+
+// WithRunConnection is ctx carrying connection, the run's own
+// CapabilityContext.Connection, to a method of an in-process capability
+// server minting for it: the orchestrator mints a capability pass with it
+// once the run's framework is chosen, so the model-proxy server spends
+// the same connection its retired in-process providers did.
+func WithRunConnection(ctx context.Context, connection string) context.Context {
+	return context.WithValue(ctx, runConnectionKey{}, connection)
+}
+
+// RunConnection is the connection WithRunConnection put in ctx, or "".
+func RunConnection(ctx context.Context) string {
+	c, _ := ctx.Value(runConnectionKey{}).(string)
+	return c
+}
+
+type mintRunIDKey struct{}
+
+// WithMintRunID is ctx carrying runID, the run a capability pass is
+// minted for, to a method of an in-process capability server minting for
+// it: the model-proxy server records it as its token's owner, as its
+// retired in-process providers did (CapabilityContext.Run.ID), so the
+// proxy's per-run limits and audit name the run, and a restarted daemon
+// revokes the tokens of runs that ended with the previous process
+// (daemon.revokeFinishedRunTokens) -- a pass, and the leases its release
+// would have revoked, are not persisted.
+func WithMintRunID(ctx context.Context, runID string) context.Context {
+	return context.WithValue(ctx, mintRunIDKey{}, runID)
+}
+
+// MintRunID is the run WithMintRunID put in ctx, or "".
+func MintRunID(ctx context.Context) string {
+	id, _ := ctx.Value(mintRunIDKey{}).(string)
+	return id
+}
+
 // CapabilitySpec is a capability's fixed identity: what a grant of it
 // means, before any particular task holds one.
 type CapabilitySpec struct {
@@ -247,7 +284,7 @@ type CapabilitySpec struct {
 // shell. Agent tool grants and agent Git credential selectors require an agent
 // run and are not offered for CI.
 func (s CapabilitySpec) SupportsCI() bool {
-	return s.Provision == ProvisionMint || s.Provision == ProvisionPlace || s.Name == "grain-ci"
+	return s.Provision == ProvisionMint || s.Provision == ProvisionPlace
 }
 
 // SupportsTask is SupportsCI's converse: whether a task may hold this
@@ -549,7 +586,27 @@ func secretsContext(ctx context.Context, cc CapabilityContext) context.Context {
 func ResolveGrants(ctx context.Context, reg *CapabilityRegistry, cc CapabilityContext) ([]GrantResolution, error) {
 	ctx = secretsContext(ctx, cc)
 	granted := make(map[string]Grant, len(cc.Task.Grants))
+	var out []GrantResolution
 	for _, g := range cc.Task.Grants {
+		// Repository access has no provider: the reference carries
+		// what one decided (IsRepoAccessGrant). It is CI-only, and a CI
+		// job's is honoured by the scope it widens rather than here.
+		if IsRepoAccessGrant(g.Capability) {
+			if !cc.CI {
+				out = append(out, GrantResolution{Grant: g, Resolution: RefusedBecause(CIOnlyRefusal(g.Capability))})
+			}
+			continue
+		}
+		// So is a reference whose server declared a CI rule
+		// (CIGrantRule), and a retired name rewritten to one that no
+		// provider in reg still answers: its CI job's event gate is the
+		// pass's.
+		if rule, ok := CIGrantRuleFor(g.Capability); ok && (IsCapabilityRef(g.Capability) || !registered(reg, g.Capability)) {
+			if !cc.CI {
+				out = append(out, GrantResolution{Grant: g, Resolution: RefusedBecause(CIGrantRuleCIOnlyRefusal(g.Capability, rule))})
+			}
+			continue
+		}
 		// A capability reference is a capability server's to mint, at
 		// admission (protocol.MintPass), not an in-process provider's.
 		if IsCapabilityRef(g.Capability) {
@@ -558,7 +615,6 @@ func ResolveGrants(ctx context.Context, reg *CapabilityRegistry, cc CapabilityCo
 		granted[g.Capability] = g
 	}
 
-	var out []GrantResolution
 	seen := make(map[string]bool, len(granted))
 	for _, p := range reg.Providers() {
 		g, ok := granted[p.Spec().Name]
@@ -627,7 +683,27 @@ func MissingGCPKeyRefusal(capability string) string {
 // grant it is, and where the setting that does work actually lives --
 // because the operator this was written for had ticked the box on a
 // task and had no way to find out why the task then failed.
+//
+// A read grant (repo#read, or a repo#read grant naming a repository) is
+// worded on its own: its material writes nothing and CI hands it to every
+// event, so the sentence the publishing credentials get would misstate it.
+//
+// Repository access, read or write, also says where it does work: a job
+// declares it in its own workflow file (IsRepoAccessGrant), and the repos
+// page's CI capabilities list, which the other CI-only capabilities point
+// to, does not grant it.
 func CIOnlyRefusal(capability string) string {
+	const declare = " Take it off this task. A CI job that needs it declares it in its own `capabilities:` " +
+		"in the repository's .grain/workflows file; the repos page's CI capabilities list does not grant it."
+	if _, ok := RepoReadTarget(capability); ok || CapabilityGrantRef(capability) == RepoReadRef {
+		return fmt.Sprintf("%s is a CI capability, not a task grant: it gives a CI job read access to "+
+			"another repository, and only a CI job is handed it -- a task run is not one."+declare, capability)
+	}
+	if _, ok := RepoWriteTarget(capability); ok {
+		return fmt.Sprintf("%s is a CI capability, not a task grant: it gives a CI job push access to "+
+			"another repository, released only to a release, a workflow_dispatch or grain's own scheduled "+
+			"run -- a task run is none of them."+declare, capability)
+	}
 	return fmt.Sprintf("%s is a CI capability, not a task grant: its material is a credential that "+
 		"writes to the repository itself, so it is released only to a trusted post-merge release or "+
 		"to a run an operator asked for by hand, and a task run is neither. Take it off this task, and "+

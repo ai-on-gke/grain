@@ -16,8 +16,19 @@
 
 package gitproxy
 
-import "os"
+import (
+	"errors"
+	"os"
+)
 
 // ownedByUs has no owner to compare off unix, so it never vouches for a
 // directory.
 func ownedByUs(os.FileInfo) bool { return false }
+
+// singleLink cannot count links off unix, so it never vouches for a file.
+func singleLink(os.FileInfo) bool { return false }
+
+// openNoFollow cannot refuse a symlink off unix, so it opens nothing.
+func openNoFollow(string) (*os.File, error) {
+	return nil, errors.New("staging placeholders are only opened on unix")
+}

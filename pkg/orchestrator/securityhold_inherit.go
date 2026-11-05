@@ -507,8 +507,9 @@ func keepClearance(ctx context.Context, store *model.Store, client github.Client
 		}
 		// A port carrying its source's clearance touches nothing only a
 		// human may release (carryable), so a human-only hold an earlier
-		// head was put on no longer applies. Auto-merge stays as the
-		// human left it.
+		// head was put on no longer applies: dropping it is that hold
+		// clearing, and the store hands back the auto-merge it took
+		// (model.restoreAfterHolds).
 		t.Links = withoutLinks(t.Links, model.LinkSecurityHold, model.LinkSecurityReviewTask,
 			model.LinkTrustBoundaryCleared, model.LinkBrokenRulesHold, model.LinkClearanceInheritedFrom,
 			model.LinkHumanSubmitted, model.LinkHumanOnlyHold)
@@ -574,7 +575,8 @@ func closeUnneededSecurityReview(ctx context.Context, store *model.Store, review
 	if state == "" || state.Settled() || state == model.StateRunning {
 		return nil
 	}
-	if err := observeField(ctx, store, reviewID, now, func(o *model.Observation) {
+	reason := fmt.Sprintf("task %s inherited task %s's security clearance", taskID, sourceID)
+	if err := closeTask(ctx, store, reviewID, now, reason, func(o *model.Observation) {
 		o.ClosedAt = &now
 	}); err != nil {
 		return fmt.Errorf("orchestrator: closing security review %s: %w", reviewID, err)

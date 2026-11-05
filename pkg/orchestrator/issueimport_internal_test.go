@@ -363,3 +363,33 @@ func TestImportedIssueBodyBoundsWhatItCarries(t *testing.T) {
 		t.Errorf("body starts %q", body[:60])
 	}
 }
+
+// An import from an upstream source: its pull request names no issue to
+// close (Task.Issue is unset, so the body says no "Fixes #N" about an
+// unrelated number in the fork), and nothing is posted on the upstream
+// issue while the task waits unapproved
+// (docs/test-runs/2026-10-31-github-issue-import.md, gap 3).
+func TestUpstreamImportSaysNothingUpstreamAndFixesNothing(t *testing.T) {
+	store, ctx := openTreeStore(t)
+	client := &issueClient{issues: map[string][]github.Issue{"kubernetes/autoscaler": {openIssue(12, "Upstream bug")}}}
+	putImportConfig(t, ctx, store, model.IssueImport{Enabled: true, Repo: "kubernetes/autoscaler"})
+	now := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+	deps := Deps{Store: store, Client: client}
+	if err := reconcileIssueImports(ctx, deps, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileWorkTrees(ctx, deps, now); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.created) != 0 {
+		t.Fatalf("posted %d progress comments upstream on an import nobody approved", len(client.created))
+	}
+	imported := tasksByReason(t, ctx, store, model.ReasonImported)
+	if len(imported) != 1 {
+		t.Fatalf("imported %d tasks, want 1", len(imported))
+	}
+	task := imported[0]
+	if body := pullRequestBody("Fix the upstream bug.", task.ID, task.Issue); strings.Contains(body, "Fixes #") {
+		t.Fatalf("an upstream import's pull request body closes an issue in the fork:\n%s", body)
+	}
+}

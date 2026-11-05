@@ -41,7 +41,7 @@ func (f *fakeCI) finishAt(id string, conclusion ci.Conclusion, at time.Time, job
 // A release of trunk that ends with an `infra` verdict is re-run -- the
 // jobs that did not pass, uncached, after the retry delay -- before it is
 // counted as a failed release or anybody is filed to triage it
-// (docs/design/release-from-trunk.md, RFT-2). Once the re-runs are spent
+// (design/design/release-from-trunk.design.md, RFT-2). Once the re-runs are spent
 // it is the failed release it always was.
 func TestAnInfraReleaseIsReRunBeforeItIsTriaged(t *testing.T) {
 	t.Parallel()
@@ -123,6 +123,14 @@ func TestAnInfraReleaseIsReRunBeforeItIsTriaged(t *testing.T) {
 	}
 	if !triaged() {
 		t.Fatal("no triage was filed for a release whose re-runs were spent")
+	}
+	ids, err := store.OpenTasksWithTag(ctx, orchestrator.BaseReleaseTriageBranchTag(repo, "main"))
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("triage = %v (%v), want one task", ids, err)
+	}
+	if task, err := store.GetTask(ctx, ids[0]); err != nil || task == nil ||
+		!strings.Contains(task.Body, fmt.Sprintf("infra, retried %d times", orchestrator.MaxInfraRetries)) {
+		t.Fatalf("triage %+v (%v) does not say it was infra, retried %d times", task, err, orchestrator.MaxInfraRetries)
 	}
 }
 

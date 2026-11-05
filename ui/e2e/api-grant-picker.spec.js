@@ -13,13 +13,14 @@
 // limitations under the License.
 
 import { expect, test } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // The grain API half of the task pane's Grants picker (GrantsPicker.jsx)
 // over grain demo's real /api/config, whose capability rows carry the
 // agent API's presets and scopes (ui.APICapabilities, docs/agent-api.md).
 // They are one "Add grant…" menu with the capability server methods,
 // grouped by kind -- presets first, then scopes by area -- and every
-// grant held is one section in one list (docs/design/unified-grants.md).
+// grant held is one section in one list (design/design/unified-grants.design.md).
 
 async function fileTask(request, capabilities) {
   const created = await request.post("/api/tasks", {
@@ -247,7 +248,10 @@ test("exercises Grain API picker across NewTaskOverlay, ConsoleSessionPage, Sche
   const menu = page.getByTestId("new-process-kind");
   await menu.getByRole("menuitem", { name: "Schedule" }).click();
   await page.getByLabel("Title", { exact: true }).fill(schedTitle);
-  await page.locator("select[name='repo']").selectOption("acme/widgets");
+  await chooseOption(
+    page.locator(".repo-field:has(input[name='repo']) [role='combobox']"),
+    "acme/widgets",
+  );
 
   const schedGroup = page.getByTestId("schedule-grants");
   await grantSelfDebugAndRepoCIWrite(page, schedGroup);

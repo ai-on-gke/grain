@@ -1,7 +1,7 @@
 # The pipeline steward
 
 grain/task-461: a standing job that keeps this deployment's merge
-pipeline moving. Since DT-S9 (`docs/design/durable-tasks.md#DT-6`) it is
+pipeline moving. Since DT-S9 (`design/design/durable-tasks.design.md#DT-6`) it is
 one durable judgement task, woken by `pipeline.*` notifications.
 Reconcilers do the mechanical work -- filing repairs, parking work behind
 them, retriggering flakes, re-running CI, raising stalls and stale ports
@@ -89,6 +89,7 @@ This describes what is implemented, not a proposal:
 | Re-run CI a person cancelled under a time-bound hold | `reconcileTaskCI` leaves a person's cancellation alone while the task is deferred until a time that has not come (`operatorCIHold`); once the hold expires the usual replacement re-runs it. |
 | Retry or nudge stalled tasks | A task past its state's patience (`TaskStallNote`) raises `pipeline.task-stalled:<task>`, cleared when it moves on. |
 | Nudge owed ports | An open port with no progress for 24h, or past its state's patience, raises `pipeline.port-stale:<task>`. |
+| Watch a release candidate's qualification | Stage 2's reconciler (`orchestrator/releasequalification.go`, `releaseredrc.go`) re-runs a first failure once and an infrastructure casualty up to three times. On a confirmed red it raises `pipeline.rc-failed:<rc_tag>`, and after `RELEASE_MAX_RC_ATTEMPTS` (3) red candidates `pipeline.release-escalated:<version>`. It raises `pipeline.release-infra-stalled:<rc_tag>` when an item is out of infrastructure re-runs or has been blocked for 2h, and `pipeline.flake-budget:<repo>:<item>` for 2 flake retries of one item in 24h. It keeps the `grain/rc-hold` check run on a red candidate's commit while its blockers are open. |
 
 ## When it actually runs
 
@@ -157,11 +158,13 @@ enforces this list.
 ### Compact reads and the tool budget
 
 A wake is meant to fit in context with no compaction
-(docs/design/durable-tasks.md#DT-13). The tools it reads with answer
+(design/design/durable-tasks.design.md#DT-13). The tools it reads with answer
 compactly by default: `read_pipeline_changes(after, limit)` is one line per
 change since a cursor (task transitions, merge-queue moves, stalls,
 base-branch verdicts, merge-batch results; `GET /api/pipeline/changes`) and
-ends with the next cursor; `read_grain_task` answers in a ~1 KB `summary`
+ends with the next cursor -- in a sandbox, `grain read deploy://pipeline-changes
+[--cursor <c>] [--page N]`, whose last line is the `grain read` that reads
+the next page; `read_grain_task` answers in a ~1 KB `summary`
 unless asked for `full` or `conversation`; `list_grain_tasks` filters by
 `changed_since`, `stalled` and `kind`; `list_ci_runs` is one line per run
 with `after` paging; `query_merge_queue` is `compact` with `changed_since`.
@@ -169,7 +172,13 @@ with `after` paging; `query_merge_queue` is `compact` with `changed_since`.
 Its runs are under a per-wake tool budget (`model.UsesToolBudget`, the
 mcpserver's `-tool-budget`): past 40 calls or 150 KB of tool output each
 result says so, and past 60 calls or 300 KB each result asks it to write
-its handover and end the wake. Ending in `resume_later()` rather than a
+its handover and end the wake. The notice names what the run can call:
+`grain handover write` and `grain read deploy://pipeline-changes` on the
+control surface, `write_handover` and `read_pipeline_changes` on the full
+one. It asks for the pipeline cursor only of a steward wake
+(`-tool-budget-pipeline-cursor`), not of a director's chat session, and on
+the control surface it says that each `run_command` result counts at the
+size it reaches the run (up to about 20 KB after elision). Ending in `resume_later()` rather than a
 plain end arrives with DT-S4. `TestAStewardWakeFitsItsToolBudget` (pkg/mcp)
 replays a wake's reads through these tools and holds them to the budget.
 
@@ -193,7 +202,7 @@ other task. The steward's template carries it by construction, and a
 standing task filed before the template did is given it at its next
 wake.
 
-### Releases are not its job
+### Releases are not its job, but a red candidate is
 
 The steward does not cut, promote or port releases, and nothing in its
 prompt asks it to. Releases are made from `main` by the daily release train
@@ -213,13 +222,61 @@ does see is the train's own scheduled workflow. A red `release-train` run is
 reviewed like any other scheduled workflow run, and a stalled train is the
 release watchdog's to report (`.grain/templates/release-watchdog.yml`).
 
+A red release candidate is split the way
+[`design/playbook/releases.playbook.md`](../design/playbook/releases.playbook.md)
+§12 splits it. What a rule can decide is the reconciler's. It judges the
+candidate red after its one flake retry, raises the notifications above,
+counts the attempts, and holds the next candidate while blockers are open.
+What takes judgement is the steward's. Woken by
+`pipeline.rc-failed:vX.Y.Z-rc.N`, it:
+
+1. **Triages `<floor>..<rc_sha>`.** The notification gives the range,
+   from the newest promoted release (and, from `rc.2` on, the range new
+   since the previous candidate), and the failing items. The steward
+   names the suspect merge and its evidence, and files nothing for a
+   failure that reads as infrastructure or a flake.
+2. **Files the fix or the revert at the front of the queue**
+   (`propose_task` with `at_front: true` and a `main` target; a priority
+   above its own would wait for a person). Every such task's title starts
+   `[rc-blocker vX.Y.Z-rc.N]` (`model.RCBlockerMarker`). That title links
+   it to the hold. While any task with it is open, the reconciler keeps
+   check run `grain/rc-hold` in progress on the red candidate's commit,
+   which is the floor the train cuts `rc.(N+1)` after; Phase 2 reads that
+   check run and cuts nothing (`rc_held=vX.Y.Z-rc.(N+1)`) until it
+   completes. The reconciler completes the check once every blocker has
+   landed, so the steward has no hold to lift. If `main` is red too, the
+   base-branch repair is the fix and the steward files no other: the train
+   cuts only known-good commits, so a red `main` already holds it.
+3. **Converges `rc.3` on `release/vX.Y.Z` when trunk churn broke `rc.2`.**
+   The train makes `release/vX.Y.Z` from `rc.2`'s commit and cuts `rc.3`
+   from it (playbook §5). When `rc.2` failed on a regression `rc.1` did not
+   have, the steward files the fix on `main` first. It then files a
+   cherry-pick of it onto `release/vX.Y.Z` (`branch: release/vX.Y.Z`,
+   `Backported-from: <main_sha>`, `depends_on` the fix) under the same
+   blocker title. When `rc.2` failed the way `rc.1` did, the steward says
+   that `rc.1`'s fix did not work.
+4. **Escalates after three red candidates.** When `rc.3` is red, the
+   reconciler raises `pipeline.release-escalated:vX.Y.Z` (critical) to the
+   person's Inbox. It carries each red candidate's summary, and the train
+   cuts no more of the version. The steward files no more blockers. It
+   adds its triage as `agent.<task>:release-escalated:vX.Y.Z`: the suspect
+   commits of each candidate, whether they share a cause, and whether to
+   reset or advance. A person decides. The escalation clears once a
+   candidate is cut past it or the version is promoted.
+
+On `pipeline.flake-budget` it proposes one de-flake task for the item. On
+`pipeline.release-infra-stalled` it names the failing runner, quota or
+credential in a notification a person can act on. The candidate stays
+qualifying, and an infrastructure verdict never counts against it.
+
 ## What it is told
 
 The prompt is `pipelineStewardBody`, written around the four rules of
-`docs/design/durable-tasks.md#DT-12`:
+`design/design/durable-tasks.design.md#DT-12`:
 
-1. **Work from deltas.** Read the handover's cursor and call
-   `read_pipeline_changes(after: <cursor>)`. Read nothing else unless a
+1. **Work from deltas.** Read the handover's cursor and run
+   `grain read deploy://pipeline-changes --cursor <cursor>`, paging on with
+   the command each page ends with. Read nothing else unless a
    change, or the note that woke it, names it.
 2. **Re-read before acting or naming.** Call `read_grain_task(id,
    view: "summary")` immediately before acting on a task or naming it,
@@ -233,7 +290,7 @@ The prompt is `pipelineStewardBody`, written around the four rules of
 
 Its actions are comment, reorder, retry, `notify_operator`,
 `message_task` (to another task's agent; it never parks that task) and
-`propose_task` for a revert -- at most five per wake
+`propose_task` for a revert or a red release candidate's blocker -- at most five per wake
 (`model.PipelineStewardMaxActions`). It never files a repair and never
 re-raises a `pipeline.*` notification. Force-merges and reverts of a
 person's change are escalated as `request.force-merge:<task>` and

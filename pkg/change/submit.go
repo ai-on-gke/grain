@@ -190,6 +190,26 @@ type Store interface {
 	AddComment(ctx context.Context, c model.Comment) (int64, error)
 }
 
+// closer is a Store that records who closed a task beside the stamp
+// (model.Store.ObserveClose). It is not part of Store so that a Store
+// standing in for model.Store need not carry it; one that does not is
+// only stamped.
+type closer interface {
+	ObserveClose(ctx context.Context, taskID string, now time.Time, by model.Principal, reason string,
+		set func(*model.Observation)) error
+}
+
+// observeClose stamps a close through st, recorded as by's for reason
+// where st can record it.
+func observeClose(ctx context.Context, st Store, taskID string, now time.Time, by model.Principal, reason string,
+	set func(*model.Observation)) error {
+
+	if c, ok := st.(closer); ok {
+		return c.ObserveClose(ctx, taskID, now, by, reason, set)
+	}
+	return st.ObserveField(ctx, taskID, now, set)
+}
+
 // SubmitPrincipal is who writes the notes a Submit's outcome leaves.
 var SubmitPrincipal = model.Principal{Kind: model.PrincipalAutomation, ID: "cl-submit"}
 
@@ -259,7 +279,11 @@ func RecordSubmitted(ctx context.Context, st Store, task model.Task, from, to, m
 		return fmt.Errorf("recording %s submitted: %w", from, err)
 	}
 	if last {
-		if err := st.ObserveField(ctx, task.ID, now, func(o *model.Observation) {
+		reason := "change submitted"
+		if outside {
+			reason = "change submitted outside grain"
+		}
+		if err := observeClose(ctx, st, task.ID, now, SubmitPrincipal, reason, func(o *model.Observation) {
 			if o.ClosedAt == nil {
 				o.ClosedAt = &now
 			}

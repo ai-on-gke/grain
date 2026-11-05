@@ -166,7 +166,7 @@ func TestCheckCapabilityRejectsOneWithNoStandingCredential(t *testing.T) {
 	t.Parallel()
 	checker := &fakeChecker{}
 	srv := testServerWithChecker(t, checker)
-	rec := do(t, srv, http.MethodPost, "/api/capabilities/self-repair/check", "")
+	rec := do(t, srv, http.MethodPost, "/api/capabilities/bootstrap-playbooks/check", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body)
 	}
@@ -199,12 +199,12 @@ func TestCapabilityStatusReportsWhichCapabilitiesCanBeChecked(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	settings := decode[ui.Settings](t, rec)
-	for _, id := range []string{"gcp-key", "gemini-key", "github-sandbox"} {
+	for _, id := range []string{"github-sandbox"} {
 		if !capabilityStatus(t, settings.Capabilities, id).Checkable {
 			t.Errorf("%s: Checkable = false, but it holds a standing credential that can go stale", id)
 		}
 	}
-	for _, id := range []string{"self-debug", "self-repair", "bootstrap-playbooks"} {
+	for _, id := range []string{"self-debug", "bootstrap-playbooks"} {
 		if capabilityStatus(t, settings.Capabilities, id).Checkable {
 			t.Errorf("%s: Checkable = true, but it holds no standing credential", id)
 		}
@@ -219,8 +219,8 @@ func TestCapabilityStatusIsUncheckableWithNoCheckerWired(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	settings := decode[ui.Settings](t, rec)
-	if capabilityStatus(t, settings.Capabilities, "gcp-key").Checkable {
-		t.Error("gcp-key: Checkable = true on a UI with nothing to run a check through")
+	if capabilityStatus(t, settings.Capabilities, "github-sandbox").Checkable {
+		t.Error("github-sandbox: Checkable = true on a UI with nothing to run a check through")
 	}
 }
 

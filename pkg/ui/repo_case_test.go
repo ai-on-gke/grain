@@ -120,7 +120,7 @@ func TestCreateTaskGetsRepoDefaultsHoweverTheRepoIsSpelled(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
 	setDefaultTeamTargetRepos(t, store, ctx, []string{"acme/widgets"})
-	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "gcp-key")
+	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "read-issues")
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "fix the thing", Repo: "ACME/WIDGETS", Approved: true,
@@ -128,8 +128,8 @@ func TestCreateTaskGetsRepoDefaultsHoweverTheRepoIsSpelled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{"gcp-key"}) {
-		t.Fatalf("capabilities = %v, want [gcp-key]: the repo's own defaults", task.Capabilities)
+	if !reflect.DeepEqual(task.Capabilities, []string{"read-issues"}) {
+		t.Fatalf("capabilities = %v, want [gemini-key]: the repo's own defaults", task.Capabilities)
 	}
 }
 

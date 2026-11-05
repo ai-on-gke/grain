@@ -16,8 +16,11 @@ package hostd
 
 import (
 	"fmt"
+	"maps"
+	"reflect"
 	"slices"
 	"strings"
+	"time"
 )
 
 // DefaultGrainCommand is where the installer puts the grain binary on the
@@ -30,27 +33,66 @@ const DefaultGrainCommand = "/usr/local/bin/grain"
 var ProxyVars = []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"}
 
 // BuiltinEntry is one capabilities entry grain itself ships in the
-// allowlist: one of its own servers, run as `<grain> <args...>`. The list
-// a build carries (intree.HostdBuiltins: core, plus what its edition
-// registers) is the one source of truth both scripts/setup.sh's heredocs
-// (a test holds them equal) and EnsureBuiltins write from.
+// allowlist, run as `<grain> <args...>`: one of its own capability
+// servers, or another grain subcommand an edition registers
+// (intree.RegisterHostdEntry). The list a build carries
+// (intree.HostdBuiltins: core, plus what its edition registers) is the
+// one source of truth both scripts/setup.sh's heredocs (a test holds them
+// equal; CheckInstallerEntries) and EnsureBuiltins write from.
 type BuiltinEntry struct {
 	Name string
 	Args []string
 	// ExtraArgs entries take the daemon's -listen, and admit
 	// GRAIN_CAPABILITY_PROBE so a probe binds an ephemeral port.
 	ExtraArgs bool
+	// Env are further variable names the daemon may set, after
+	// GRAIN_CAPABILITY_PROBE when ExtraArgs is set.
+	Env []string
+	// PassEnv, when set, replaces ProxyVars as what the entry passes
+	// from hostd's environment.
+	PassEnv []string
+	// MaxDuration, when set, is the entry's max_duration: the cap on
+	// one process's life (DefaultMaxDuration when unset).
+	MaxDuration time.Duration
+}
+
+// env is the entry's env: list.
+func (b BuiltinEntry) env() []string {
+	var out []string
+	if b.ExtraArgs {
+		out = append(out, "GRAIN_CAPABILITY_PROBE")
+	}
+	return append(out, b.Env...)
+}
+
+// passEnv is the entry's pass_env: list.
+func (b BuiltinEntry) passEnv() []string {
+	if b.PassEnv != nil {
+		return slices.Clone(b.PassEnv)
+	}
+	return slices.Clone(ProxyVars)
 }
 
 // Entry is b as an allowlist entry running command.
 func (b BuiltinEntry) Entry(command string) *Entry {
-	e := &Entry{Command: command, Args: slices.Clone(b.Args), PassEnv: slices.Clone(ProxyVars)}
+	e := &Entry{Command: command, Args: slices.Clone(b.Args), Env: b.env(), PassEnv: b.passEnv(), MaxDuration: b.MaxDuration}
 	if b.ExtraArgs {
 		yes := true
 		e.ExtraArgs = &yes
-		e.Env = []string{"GRAIN_CAPABILITY_PROBE"}
 	}
 	return e
+}
+
+// formatDuration is d as an allowlist writes it: 1m rather than 1m0s.
+func formatDuration(d time.Duration) string {
+	s := d.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
 }
 
 // YAML is b's entry as the installer writes it: the name at indent, its
@@ -63,9 +105,14 @@ func (b BuiltinEntry) YAML(command, indent, step string) string {
 	fmt.Fprintf(&s, "%sargs: [%s]\n", in, strings.Join(b.Args, ", "))
 	if b.ExtraArgs {
 		fmt.Fprintf(&s, "%sextra_args: true\n", in)
-		fmt.Fprintf(&s, "%senv: [GRAIN_CAPABILITY_PROBE]\n", in)
 	}
-	fmt.Fprintf(&s, "%spass_env: [%s]\n", in, strings.Join(ProxyVars, ", "))
+	if env := b.env(); len(env) > 0 {
+		fmt.Fprintf(&s, "%senv: [%s]\n", in, strings.Join(env, ", "))
+	}
+	fmt.Fprintf(&s, "%spass_env: [%s]\n", in, strings.Join(b.passEnv(), ", "))
+	if b.MaxDuration > 0 {
+		fmt.Fprintf(&s, "%smax_duration: %s\n", in, formatDuration(b.MaxDuration))
+	}
 	return s.String()
 }
 
@@ -83,10 +130,15 @@ type EnsureResult struct {
 	Manual string
 }
 
-// differences says how have differs from want, the fields grain's own
-// entry sets; "" when it does not.
+// differences says how have differs from want, in every field an entry
+// has -- those grain's own entry sets, and those it leaves unset, which an
+// operator setting is as much a difference to be told of; "" when it does
+// not.
 func differences(have, want *Entry) string {
 	var out []string
+	if have.Path != want.Path {
+		out = append(out, fmt.Sprintf("path %q (default %q)", have.Path, want.Path))
+	}
 	if have.Command != want.Command {
 		out = append(out, fmt.Sprintf("command %q (default %q)", have.Command, want.Command))
 	}
@@ -101,6 +153,19 @@ func differences(have, want *Entry) string {
 	}
 	if !slices.Equal(have.PassEnv, want.PassEnv) {
 		out = append(out, fmt.Sprintf("pass_env %v (default %v)", have.PassEnv, want.PassEnv))
+	}
+	if !maps.Equal(have.SetEnv, want.SetEnv) {
+		keys := slices.Sorted(maps.Keys(have.SetEnv))
+		out = append(out, fmt.Sprintf("set_env %v (default %v)", keys, slices.Sorted(maps.Keys(want.SetEnv))))
+	}
+	if !slices.Equal(have.PathsUnder, want.PathsUnder) {
+		out = append(out, fmt.Sprintf("paths_under %v (default %v)", have.PathsUnder, want.PathsUnder))
+	}
+	if !slices.Equal(have.CwdUnder, want.CwdUnder) {
+		out = append(out, fmt.Sprintf("cwd_under %v (default %v)", have.CwdUnder, want.CwdUnder))
+	}
+	if have.maxDuration() != want.maxDuration() {
+		out = append(out, fmt.Sprintf("max_duration %v (default %v)", have.maxDuration(), want.maxDuration()))
 	}
 	return strings.Join(out, ", ")
 }
@@ -161,4 +226,35 @@ func (a *Allowlist) withBuiltins(builtins []BuiltinEntry, command string) []stri
 		added = append(added, b.Name)
 	}
 	return added
+}
+
+// CheckInstallerEntries holds an installer's allowlist text (what
+// scripts/setup.sh, or an edition's installer, writes) to builtins, the
+// list the binary's -ensure-builtins adds from: each entry must be there,
+// parse to exactly b.Entry(command), and be written as b.YAML writes it,
+// so what an operator is told to copy is the same whichever wrote it. It
+// returns one line per disagreement; none when they agree. core's
+// tests/deploy runs it against scripts/setup.sh, and an edition that
+// registers its own entries (intree.RegisterHostdEntry) runs it against
+// its own installer.
+func CheckInstallerEntries(content, command string, builtins []BuiltinEntry) []string {
+	a, err := ParseAllowlist([]byte(content))
+	if err != nil {
+		return []string{fmt.Sprintf("hostd refuses the installer's allowlist: %v", err)}
+	}
+	var out []string
+	for _, b := range builtins {
+		have, want := a.Capabilities[b.Name], b.Entry(command)
+		switch {
+		case have == nil:
+			out = append(out, fmt.Sprintf("%s: the installer writes no entry; the binary adds %+v", b.Name, want))
+			continue
+		case !reflect.DeepEqual(have, want):
+			out = append(out, fmt.Sprintf("%s: the installer writes %+v, the binary %+v", b.Name, have, want))
+		}
+		if text := b.YAML(command, "  ", "  "); !strings.Contains(content, text) {
+			out = append(out, fmt.Sprintf("%s: the installer's text differs from the binary's, which is:\n%s", b.Name, text))
+		}
+	}
+	return out
 }

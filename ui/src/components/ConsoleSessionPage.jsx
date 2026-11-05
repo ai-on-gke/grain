@@ -221,12 +221,14 @@ export default function ConsoleSessionPage({
   const restart = async (carryHandover = false) => {
     setRestarting(true);
     try {
-      await api(`/api/console-sessions/${session.id}/restart`, {
+      const res = await api(`/api/console-sessions/${session.id}/restart`, {
         method: "POST",
         body: JSON.stringify({ carryHandover: Boolean(carryHandover) }),
       });
       setRestartOpen(false);
-      await onSaved();
+      // The answer lists the session on its replacement task: handed on,
+      // so the shell stops pointing at the closed one before re-reading.
+      await onSaved(res?.sessions);
     } catch (err) {
       showError(err);
     } finally {
@@ -436,13 +438,28 @@ export default function ConsoleSessionPage({
           component="p"
           sx={{ mb: 1 }}
         >
-          Repositories this session may clone or fetch.
+          {session.readsAll === false
+            ? "Repositories this session may clone or fetch. It does not read the rest of this deployment's repositories (readsAll is off)."
+            : "Repositories this session may clone or fetch, besides every repository this deployment works in, which every session reads by default."}
         </Typography>
         <ReadOnlyReposField
           options={knownRepos(config, tasks)}
-          value={session.reads || []}
+          value={(session.reads || []).filter(
+            (r) => !(session.autoReads || []).includes(r),
+          )}
           onChange={(next) => save({ reads: next }, "reads")}
         />
+        {(session.autoReads || []).length > 0 && (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            component="p"
+            sx={{ mt: 1, overflowWrap: "anywhere" }}
+            data-testid="session-auto-reads"
+          >
+            Also reads, by default: {session.autoReads.join(", ")}
+          </Typography>
+        )}
       </Box>
 
       <Box sx={{ mt: 2 }}>
@@ -594,6 +611,35 @@ export default function ConsoleSessionPage({
             </span>
           }
           sx={{ display: "flex", alignItems: "flex-start" }}
+        />
+        <FormControlLabel
+          control={
+            <Checkbox
+              size="small"
+              name="keepRunning"
+              checked={Boolean(session.keepRunning)}
+              disabled={saving === "keepRunning"}
+              onChange={() =>
+                save({ keepRunning: !session.keepRunning }, "keepRunning")
+              }
+            />
+          }
+          label={
+            <span>
+              Keep running
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                component="span"
+                sx={{ display: "block" }}
+              >
+                Off, the session rests when a turn ends and waits for your next
+                message. On, it immediately starts a new turn whenever a run
+                exits.
+              </Typography>
+            </span>
+          }
+          sx={{ display: "flex", alignItems: "flex-start", mt: 0.5 }}
         />
       </Box>
     </Box>

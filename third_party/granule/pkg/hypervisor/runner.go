@@ -13,9 +13,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/config"
-	"github.com/bwsalmon/granule/pkg/extents"
-	"github.com/bwsalmon/granule/pkg/guestimage"
+	"github.com/gke-labs/granule/pkg/cgroupmem"
+	"github.com/gke-labs/granule/pkg/config"
+	"github.com/gke-labs/granule/pkg/extents"
+	"github.com/gke-labs/granule/pkg/guestimage"
 )
 
 // killGrace bounds how long the runtime waits after a forced vmm.shutdown
@@ -82,6 +83,10 @@ func (r *Runner) Start(stdout, stderr io.Writer) error {
 	}
 	log.Printf("starting: %s", String(r.cfg.BinaryPath, args))
 
+	// Taken before the VMM starts, so an OOM kill during its lifetime is
+	// told apart from one some earlier process in this container had.
+	oomKilled := cgroupmem.Watch()
+
 	cmd := exec.Command(r.cfg.BinaryPath, args...)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
@@ -95,7 +100,17 @@ func (r *Runner) Start(stdout, stderr io.Writer) error {
 	r.done = make(chan struct{})
 
 	go func() {
-		r.exitErr = cmd.Wait()
+		err := cmd.Wait()
+		if killedBySIGKILL(err) {
+			// The guest has no say in this and logs nothing, so this is
+			// the only place the cause of the VM's death is recorded --
+			// see pkg/cgroupmem.
+			if oom := oomKilled(); oom != nil {
+				log.Printf("%v", oom)
+				err = fmt.Errorf("%w (%w)", oom, err)
+			}
+		}
+		r.exitErr = err
 		r.closeExtentServers()
 		close(r.done)
 	}()
@@ -397,6 +412,17 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return out.Close()
+}
+
+// killedBySIGKILL reports whether err is a process having died of
+// SIGKILL, which is the only way the OOM killer ends one.
+func killedBySIGKILL(err error) bool {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	ws, ok := exitErr.Sys().(syscall.WaitStatus)
+	return ok && ws.Signaled() && ws.Signal() == syscall.SIGKILL
 }
 
 // Wait blocks until the VMM process exits and returns its error, following

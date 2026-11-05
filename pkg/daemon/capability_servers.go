@@ -16,11 +16,11 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/credhealth"
 	"log"
 
-	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
@@ -39,7 +39,7 @@ const capabilityServerPrincipal = "capability-servers"
 
 // startCapabilityServers builds the registry of the deployment's
 // attached capability servers (pkg/capability/servers,
-// docs/capabilities-spec.md §3.1-§3.2) and starts the loop that keeps it
+// design/spec/capabilities/capabilities.spec.md §3.1-§3.2) and starts the loop that keeps it
 // in step with grain_config.mcp_servers until ctx ends.
 //
 // A server whose configure schema declares grain's identity fields
@@ -57,7 +57,10 @@ const capabilityServerPrincipal = "capability-servers"
 //
 // A stdio server set to run: host is started through grain hostd where
 // that is this deployment's host executor (hostdClient non-nil,
-// Config.capabilityHostd), and refused anywhere else.
+// Config.capabilityHostd), and refused anywhere else. A run: hostd server
+// that names a hostd of its own (protocol.ServerConfig.Hostd) is started
+// on that hostd instead, through the hostdCapabilityServers returned
+// beside the registry, which LiveConfig.Refresh keeps in step with it.
 //
 // The first configuration is handed over from the stored row here; after
 // that LiveConfig.Refresh hands over each one it reads, so a merged
@@ -68,7 +71,7 @@ const capabilityServerPrincipal = "capability-servers"
 // gcpPool is the accounts the in-process gcp-key provider mints from
 // (gcpkey.PoolEmails of the deployment's gcp settings): Test on a gcp
 // server warns when one of its permission sets shares them.
-func startCapabilityServers(ctx context.Context, store *model.Store, secretStore *secrets.Store, dataDir string, hostdClient *hostd.Client, gcpPool []string) *servers.Registry {
+func startCapabilityServers(ctx context.Context, store *model.Store, secretStore *secrets.Store, dataDir string, hostdClient *hostd.Client, gcpPool []string) (*servers.Registry, *hostdCapabilityServers) {
 	var lookup func(name string) (string, bool)
 	if secretStore != nil {
 		auditCtx := secrets.WithPrincipal(context.Background(), capabilityServerPrincipal)
@@ -93,6 +96,27 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 		},
 	}
 	if store != nil {
+		// A server that falls out of use says so where people look, not
+		// only in this log: the 2026-11-03 role-ceiling refusal sat in
+		// needs-config with nobody told.
+		raiseDrop, clearDrop := capabilityServerAlerts(ctx, store)
+		opts.OnDrop = func(st servers.Status) {
+			raiseDrop(st)
+			// Runs holding a grant it minted are told, rather than left
+			// to infer it from permissions that never arrive.
+			reason := st.Reason
+			if reason == "" {
+				reason = st.Error
+			}
+			orchestrator.NoteCapabilityServerDropped(ctx, store, st.ID, string(st.State), reason, st.ConfigRefused)
+		}
+		opts.OnAttach = func(id string) {
+			clearDrop(id)
+			// Grants whose release found their server out of use are
+			// released now it is back (orchestrator.CapabilityPasses).
+			go orchestrator.RetryCapabilityReleases(ctx, store)
+		}
+		opts.OnClear = clearDrop
 		// A server declaring grain's identity fields is sent the same
 		// deployment id the branch names carry (§4.5.7).
 		opts.Identity = servers.StoreIdentity(store, logf)
@@ -103,6 +127,7 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 		opts.Managed = secretStore
 	}
 	reg := servers.New(opts)
+	onHostd := newHostdCapabilityServers(ctx, reg, opts, store)
 	if store != nil {
 		if stored, err := store.GetConfig(ctx); err != nil {
 			log.Printf("grain daemon: reading capability servers: %v", err)
@@ -111,19 +136,22 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 			if stored != nil {
 				configured = stored.MCPServers
 			}
-			reg.Update(registerBuiltinCapabilityServers(ctx, store, dataDir, configured))
+			configured = registerBuiltinCapabilityServers(ctx, store, dataDir, configured)
+			reg.Update(deploymentCapabilityServers(configured))
+			onHostd.update(configured)
 		}
 	}
 	go reg.Run(ctx, 0)
 	if store != nil {
+		combined := placedStatusRegistry{Registry: reg, placed: onHostd}
 		// Task workspaces any agent may create (RegisterWorkspaceJanitorTools)
 		// are deleted once their tasks have closed and the server's retention has passed.
-		go runWorkspaceJanitor(ctx, reg, storeClosedAt(store), workspaceJanitorInterval)
+		go runWorkspaceJanitor(ctx, combined, storeClosedAt(store), workspaceJanitorInterval)
 		// Non-PR change providers (pkg/change: workspace changelists) reach their
-		// capability server's daemon-only control tools through reg, and
+		// capability server's daemon-only control tools through combined, and
 		// a kind blocked on expired credentials is checked again every
 		// 5 minutes until it clears.
-		change.Bind(changeControl{reg: reg})
+		change.Bind(changeControl{reg: combined})
 		go change.Watch(ctx, store)
 		// Host tools failing on auth, and any proactive credential check a
 		// deployment layer registers (credhealth.RegisterCheck), raise and
@@ -133,7 +161,7 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 		// for the task view's presubmit badge (changelists.md §3).
 		go orchestrator.PollChanges(ctx, store)
 	}
-	return reg
+	return reg, onHostd
 }
 
 // registerBuiltinCapabilityServers is configured with an entry for every
@@ -173,19 +201,20 @@ func externalConfigRepo(dataDir string) bool {
 	return err == nil && settings.Remote != ""
 }
 
-// gcpKeyPool is the accounts the in-process gcp-key provider mints from,
-// or none where it is not registered.
-func gcpKeyPool(cfg Config) []string {
-	if len(missingCapabilityProviderConfig(cfg, "gcp-key")) > 0 {
-		return nil
-	}
-	return gcpkey.PoolEmails(cfg.GcpServiceAccountEmail, cfg.GcpServiceAccountCount, cfg.GcpProject)
+// gcpKeyPool returns nil now that the in-process gcp-key provider is retired
+// onto https://grain.dev/capabilities/gcp#gcp-key.
+func gcpKeyPool(_ Config) []string {
+	return nil
 }
 
 // capabilityServerStatuses is live's registry as the UI reads it: a nil
 // interface, not a typed nil, when there is none.
 func capabilityServerStatuses(live *LiveConfig) ui.CapabilityServerStatuses {
 	if reg := live.CapabilityServers(); reg != nil {
+		// With the rows of the servers placed on hostds of their own.
+		if live.hostdCapabilityServers != nil {
+			return placedStatusRegistry{Registry: reg, placed: live.hostdCapabilityServers}
+		}
 		return reg
 	}
 	return nil
@@ -194,8 +223,72 @@ func capabilityServerStatuses(live *LiveConfig) ui.CapabilityServerStatuses {
 // capabilityServerLookup is live's registry as admission mints through
 // it: a nil interface, not a typed nil, when there is none.
 func capabilityServerLookup(live *LiveConfig) orchestrator.CapabilityServers {
-	if reg := live.CapabilityServers(); reg != nil {
-		return reg
+	reg := live.CapabilityServers()
+	if reg == nil {
+		return nil
 	}
-	return nil
+	// Each run's run: host servers on the hostd it is routed to.
+	if live.hostdCapabilityServers != nil {
+		return live.hostdCapabilityServers
+	}
+	return reg
+}
+
+// capabilityServerAlerts raises model.FamilyCapabilityServerDown for a
+// server the registry reports dropped (servers.Options.OnDrop), naming it
+// and why, and clears it when the server attaches again.
+func capabilityServerAlerts(ctx context.Context, store *model.Store) (func(servers.Status), func(string)) {
+	return capabilityServerAlertsOnHostd(ctx, store, "")
+}
+
+// capabilityServerAlertsOnHostd is capabilityServerAlerts scoped to one
+// named grain hostd when hostdName is non-empty, so a secondary hostd's
+// registry cannot raise over or clear the deployment registry's own alert.
+func capabilityServerAlertsOnHostd(ctx context.Context, store *model.Store, hostdName string) (func(servers.Status), func(string)) {
+	subjectFor := func(id string) string {
+		if hostdName == "" {
+			return model.NotificationSubject(model.FamilyCapabilityServerDown, id)
+		}
+		return model.NotificationSubject(model.FamilyCapabilityServerDown, id+"@"+hostdName)
+	}
+	labelFor := func(id string) string {
+		if hostdName == "" {
+			return id
+		}
+		return id + " on grain hostd " + hostdName
+	}
+	onDrop := func(st servers.Status) {
+		reason := st.Reason
+		if reason == "" {
+			reason = st.Error
+		}
+		label := labelFor(st.ID)
+		title := fmt.Sprintf("Capability server %s is %s", label, st.State)
+		body := fmt.Sprintf("Capability server %s is no longer attached (%s): %s\n\n", label, st.State, reason)
+		if st.ConfigRefused {
+			title = fmt.Sprintf("Capability server %s refused its configuration", label)
+			body += "Its configuration was saved but the server will not run under it. "
+		}
+		body += "No new grant can be minted from it until it attaches again, and grants it issued earlier cannot be released meanwhile. " +
+			"Fix it in Settings → Capability servers; this clears itself once the server attaches."
+		if _, err := store.RaiseNotification(ctx, model.Notification{
+			Subject:  subjectFor(st.ID),
+			Severity: model.NotificationWarning,
+			Title:    title,
+			Body:     body,
+			RaisedBy: "automation:" + capabilityServerPrincipal,
+		}); err != nil {
+			log.Printf("grain daemon: raising capability server %s's drop: %v", label, err)
+		}
+	}
+	onAttach := func(id string) {
+		subject := subjectFor(id)
+		if n, err := store.OpenNotification(ctx, subject); err != nil || n == nil {
+			return
+		}
+		if _, err := store.ClearNotification(ctx, subject, "automation:"+capabilityServerPrincipal); err != nil {
+			log.Printf("grain daemon: clearing capability server %s's drop: %v", labelFor(id), err)
+		}
+	}
+	return onDrop, onAttach
 }

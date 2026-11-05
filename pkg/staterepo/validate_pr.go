@@ -28,7 +28,7 @@ import (
 )
 
 // The pre-review validation of a config pull request
-// (docs/design/config-repo-settings.md, section 4.4): what a candidate
+// (design/design/config-repo-settings.design.md, section 4.4): what a candidate
 // grain/config tree has to pass before a person is asked to look at it,
 // let alone merge it. Each stage answers one question:
 //
@@ -44,6 +44,14 @@ import (
 //  4. RehearseApply -- does the change apply to the deployment as it
 //     runs now, the way a merge applies it, rather than to an empty
 //     database.
+//
+// And one warning that is about the deployment rather than the tree: an
+// edit to the content of one of grain's own schedules
+// (systemschedules.go), which merges and is then undone by the next
+// reconcile cycle. A warning rather than a refusal, so the card and the
+// proposal's result say it before a person approves -- the same
+// sentence the import writes afterwards, said while it can still change
+// the decision.
 
 // CandidateReport is what ValidateCandidateConfig found.
 type CandidateReport struct {
@@ -81,6 +89,18 @@ func ValidateCandidateConfig(ctx context.Context, liveDB *sql.DB, candidateDir s
 	report.Check, err = Check(ctx, checkDB, candidateDir, model.SchemaVersion)
 	if err != nil {
 		return report, fmt.Errorf("checking the candidate configuration: %w", err)
+	}
+	// Against liveDB, which only reads it: checkDB already holds the
+	// candidate, so there would be nothing left to compare.
+	edits, err := systemScheduleEditsFromApplying(ctx, liveDB, candidateDir)
+	if err != nil {
+		return report, err
+	}
+	for _, e := range edits {
+		report.Check.Warnings = append(report.Check.Warnings, fmt.Sprintf(
+			"%s edits content grain owns on its own schedule; those columns are a cache of the "+
+				"template this build ships, so the next reconcile cycle writes the template back and "+
+				"the change is undone rather than kept -- change the template in grain's source instead", e))
 	}
 	// 3.
 	report.Liveness, err = CheckDispatchLiveness(ctx, checkDB)

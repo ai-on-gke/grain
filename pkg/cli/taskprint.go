@@ -50,6 +50,16 @@ func (p *printer) detail(d ui.TaskDetail) {
 		return
 	}
 	fmt.Print(taskBlock(d.Task))
+	// Who filed it, as PrincipalLabel reads them (operator-attribution
+	// spec §4.3) -- never the raw kind and id.
+	if d.AuthorLabel != "" {
+		fmt.Printf("filed by:        %s\n", d.AuthorLabel)
+	}
+	// The tool an external agent filed this from (X-Grain-Client), a
+	// label only.
+	if d.Provenance != "" {
+		fmt.Printf("provenance:      %s\n", d.Provenance)
+	}
 	if d.FailedAttempts > 0 {
 		fmt.Printf("failed attempts: %d in a row", d.FailedAttempts)
 		if d.LastFailureAt != nil {
@@ -103,7 +113,17 @@ func (p *printer) detail(d ui.TaskDetail) {
 	if len(d.Transitions) > 0 {
 		fmt.Println("\nhistory:")
 		for _, tr := range d.Transitions {
-			fmt.Printf("  -> %-*s %s\n", stateColumn, tr.State, tr.At.Format(time.RFC3339))
+			line := fmt.Sprintf("  -> %-*s %s", stateColumn, tr.State, tr.At.Format(time.RFC3339))
+			if tr.By != "" {
+				line += " by " + tr.By
+			}
+			if tr.Reason != "" {
+				line += fmt.Sprintf(" (%s)", tr.Reason)
+			}
+			if tr.Detail != "" {
+				line += "; " + tr.Detail
+			}
+			fmt.Println(line)
 		}
 	}
 	// Each attempt, with the model it actually ran on: a task left to
@@ -116,11 +136,11 @@ func (p *printer) detail(d ui.TaskDetail) {
 		}
 	}
 	for _, cm := range d.Comments {
-		who := cm.Author
-		if cm.OnBehalfOf != "" {
-			// Grain relaying somebody else's words -- the distinction
-			// model.Attribution exists to carry.
-			who = fmt.Sprintf("%s on behalf of %s", cm.Author, cm.OnBehalfOf)
+		// Who names grain relaying somebody else's words too -- the
+		// distinction model.Attribution exists to carry.
+		who := cm.Who()
+		if cm.FiledVia != "" {
+			who += " (from " + cm.FiledVia + ")"
 		}
 		fmt.Printf("\n--- comment #%d by %s ---\n%s\n", cm.ID, who, cm.Body)
 	}
@@ -171,7 +191,7 @@ func taskBlock(t ui.Task) string {
 	fmt.Fprintf(&b, "%s %s\n", t.ID, t.Title)
 	fmt.Fprintf(&b, "state:      %s\n", t.State)
 	if t.Paused != nil {
-		paused := fmt.Sprintf("by %s at %s (was %s)", t.Paused.By, t.Paused.At.Format(time.RFC3339), t.Paused.FromState)
+		paused := fmt.Sprintf("by %s at %s (was %s)", pausedBy(t.Paused), t.Paused.At.Format(time.RFC3339), t.Paused.FromState)
 		switch {
 		case t.Paused.Immediate:
 			paused += ", immediate"
@@ -191,6 +211,24 @@ func taskBlock(t ui.Task) string {
 	}
 	if len(t.Reads) > 0 {
 		fmt.Fprintf(&b, "reads:      %s\n", strings.Join(t.Reads, ", "))
+	}
+	if len(t.Context) > 0 {
+		items := make([]string, 0, len(t.Context))
+		for _, c := range t.Context {
+			label := c.Path
+			if c.Placement == "read" && c.Repo != "" {
+				label = c.Repo + ":" + c.Path
+			}
+			if c.Rev != "" {
+				rev := c.Rev
+				if len(rev) > 12 {
+					rev = rev[:12]
+				}
+				label += "@" + rev
+			}
+			items = append(items, label)
+		}
+		fmt.Fprintf(&b, "context:    %s\n", strings.Join(items, ", "))
 	}
 	if len(t.Writes) > 0 {
 		// The branch beside each repo, since it is half of what the
@@ -214,6 +252,11 @@ func taskBlock(t ui.Task) string {
 	if t.DeferredUntil != nil {
 		fmt.Fprintf(&b, "deferred until: %s\n", t.DeferredUntil.Format(time.RFC3339))
 	}
+	priority := t.Priority
+	if priority <= 0 {
+		priority = 5
+	}
+	fmt.Fprintf(&b, "priority:   %d\n", priority)
 	fmt.Fprintf(&b, "auto-merge: %t\n", t.AutoMerge)
 	if len(t.Capabilities) > 0 {
 		fmt.Fprintf(&b, "capabilities: %s\n", strings.Join(t.Capabilities, ", "))
@@ -257,4 +300,13 @@ func taskBlock(t ui.Task) string {
 		fmt.Fprintf(&b, "\n%s\n", t.Description)
 	}
 	return b.String()
+}
+
+// pausedBy is who paused a task as PrincipalLabel reads them, or the raw
+// id from a daemon too old to send a label.
+func pausedBy(p *ui.TaskPaused) string {
+	if p.ByLabel != "" {
+		return p.ByLabel
+	}
+	return p.By
 }

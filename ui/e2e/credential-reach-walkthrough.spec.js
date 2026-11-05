@@ -19,6 +19,7 @@ import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { startGitHubStub } from "./githubstub.js";
 import { signIn, writeAccessCode } from "./accesscode.js";
+import { chooseOption, optionValues } from "./searchSelect.js";
 
 // §4 of docs/test-plans/2026-10-05.md: a GitHub credential decides what
 // tasks can reach (grain/task-1995). Since stage 1 of the single-tenant
@@ -330,11 +331,10 @@ test.describe("the deployment's GitHub credential reach (§4)", () => {
     await page.getByRole("button", { name: "+ New task" }).click();
     await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
     await expect(page.getByLabel("Target team")).toHaveCount(0);
-    const repoSelect = page.locator('select[name="repo"]');
-    await expect(
-      repoSelect.locator("option", { hasText: "acme/app" }),
-    ).toHaveCount(1);
-    const targets = await repoSelect.locator("option").allTextContents();
+    const repoSelect = page.locator(
+      '.repo-field:has(input[name="repo"]) [role="combobox"]',
+    );
+    const targets = await optionValues(repoSelect);
     console.log(`target picker: ${JSON.stringify(targets)}`);
     for (const pushable of ["acme/app", "acme/widgets"]) {
       expect(targets).toContain(pushable);
@@ -357,7 +357,7 @@ test.describe("the deployment's GitHub credential reach (§4)", () => {
     await page.keyboard.press("Escape");
 
     // A typed repo the team cannot push to: the warning, then the 400.
-    await repoSelect.selectOption({ label: "Other…" });
+    await chooseOption(repoSelect, { label: "Other…" });
     const typed = page.locator('input[name="repo"]');
     await typed.fill("acme/lib");
     await expect(page.getByTestId("repo-unreachable")).toContainText(

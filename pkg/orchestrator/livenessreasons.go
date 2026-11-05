@@ -15,6 +15,7 @@
 package orchestrator
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
@@ -27,7 +28,7 @@ import (
 // when one of them outlives its state's patience.
 //
 // liveness.go classifies states. A state is too coarse to be the unit of
-// the rule (docs/design/task-liveness.md): waiting_ci is driven by
+// the rule (design/design/task-liveness.design.md): waiting_ci is driven by
 // reconcileTaskCI while a run is owed, by GitHub while GitHub's checks are
 // pending, and -- before grain/task-418 -- by nothing at all once a person
 // cancelled the run, all under one word and one row. Tasks 335, 351, 360
@@ -237,6 +238,7 @@ const (
 	taskReasonReady          = "queued/ready"
 	taskReasonBlocked        = "queued/blocked_on_task"
 	taskReasonUsagePaused    = "queued/usage_limit_paused"
+	taskReasonLocalPolicy    = "queued/held_by_local_policy"
 	taskReasonRunLive        = "running/live_run"
 	taskReasonOnMergeQueue   = "completed/on_merge_queue"
 	taskReasonMergeGaveUp    = "completed/merge_failed"
@@ -285,6 +287,17 @@ var taskReasons = map[string]reasonLiveness{
 	taskReasonUsagePaused: {class: livenessDriven, driver: "reconcileDispatch",
 		resource:   "the model connection's usage-limit window ending",
 		escalation: stallToPerson, control: "Run now"},
+	// Refused by this machine's local policy (heldByPolicy): dispatch
+	// asks again every cycle, but nothing it or a run does changes the
+	// answer -- an edit to the policy file, outside grain, and a daemon
+	// restart do -- so "Run now" is not offered. One policy refuses
+	// every task it refuses for the same reason, and the daemon log
+	// says so every cycle, so the escalation is the resource's. The
+	// resource TaskReason gives names the refusal and the file, off the
+	// wait dispatch recorded.
+	taskReasonLocalPolicy: {class: livenessAwaitingExternal,
+		resource:   "an edit to this machine's local policy file allowing it",
+		escalation: stallToResource},
 	taskReasonRunLive: {class: livenessDriven, driver: "ProcessResult",
 		resource:   "the run in flight",
 		escalation: stallToPerson, control: "Cancel"},
@@ -435,21 +448,25 @@ func mergeReasonOfState(state string) string {
 // It reads only what a row already has to hand, so the UI can ask it on
 // every read (TaskReason): the task itself for DeferredUntil, its
 // observation for what the merge queue last said about it, the tasks it
-// is still waiting on, and whether a usage-limit pause covers the
+// is still waiting on, and what dispatch last held it back for (hold,
+// queuedHoldOf its grant wait): a usage-limit pause covering the
 // connection it would be dispatched onto (Pause's Coverage, as
-// gatedByPause asks it). obs may be nil.
+// gatedByPause asks it), or this machine's local policy refusing it
+// (heldByPolicy). obs may be nil.
 //
-// Of the queued sub-cases, an open dependency outranks a pause: the
+// Of the queued sub-cases, an open dependency outranks a hold: the
 // pause ends on a clock, and a task still waiting on another would not
 // be dispatched when it did.
-func taskReasonOf(t model.Task, state model.State, obs *model.Observation, openDeps []string, paused bool) string {
+func taskReasonOf(t model.Task, state model.State, obs *model.Observation, openDeps []string, hold queuedHold) string {
 	switch state {
 	case model.StateQueued:
 		switch {
 		case len(openDeps) > 0:
 			return taskReasonBlocked
-		case paused:
+		case hold == holdUsagePaused:
 			return taskReasonUsagePaused
+		case hold == holdLocalPolicy:
+			return taskReasonLocalPolicy
 		}
 		return taskReasonReady
 	case model.StateRunning:
@@ -519,14 +536,58 @@ func reasonLivenessOf(reasons map[string]reasonLiveness, reason string) ReasonLi
 // TaskStallNote, for the same layering reason -- which sub-cases a state
 // has and what ends each is this package's, and the UI draws it.
 //
-// The pause coverage is read off the task's grant wait (wait, nil for
-// none) rather than asked of the Pause: dispatch records what held the
-// task back on the cycle that held it (gatedByPause), against the
-// connection, model and framework the task would actually have run on,
-// which a reader outside the cycle cannot resolve for itself.
+// The pause coverage and the local-policy refusal are read off the
+// task's grant wait (wait, nil for none) rather than asked of the Pause
+// or the policy: dispatch records what held the task back on the cycle
+// that held it (gatedByPause, heldByPolicy), against the connection,
+// model and framework the task would actually have run on and the
+// requester policy judged it as, which a reader outside the cycle cannot
+// resolve for itself.
+//
+// A task local policy holds names the refusal -- the repository,
+// capability, network access or approval it broke, in policy.CheckAs's
+// words -- and policyFile, the -policy file to edit ("" for a daemon
+// started without one, whose only refusal is checkUnisolated's).
 func TaskReason(t model.Task, state model.State, obs *model.Observation, openDeps []string,
-	wait *model.GrantWait) ReasonLiveness {
-	return reasonLivenessOf(taskReasons, taskReasonOf(t, state, obs, openDeps, usageLimitWait(wait)))
+	wait *model.GrantWait, policyFile string) ReasonLiveness {
+	r := reasonLivenessOf(taskReasons, taskReasonOf(t, state, obs, openDeps, queuedHoldOf(wait)))
+	if r.Reason == taskReasonLocalPolicy {
+		r.Resource = localPolicyResource(wait.Resource, policyFile)
+	}
+	return r
+}
+
+// queuedHold is what dispatch last held a queued task back for, as its
+// grant wait records it, where that is a sub-case of its own.
+type queuedHold int
+
+const (
+	holdNone queuedHold = iota
+	holdUsagePaused
+	holdLocalPolicy
+)
+
+// queuedHoldOf is the hold wait records: a usage-limit pause
+// (usageLimitWait), a local-policy refusal (model.PolicyWaitCapability,
+// which heldByPolicy clears once the policy allows the task), or neither.
+func queuedHoldOf(wait *model.GrantWait) queuedHold {
+	switch {
+	case usageLimitWait(wait):
+		return holdUsagePaused
+	case wait != nil && wait.Capability == model.PolicyWaitCapability:
+		return holdLocalPolicy
+	}
+	return holdNone
+}
+
+// localPolicyResource is what a task local policy refused waits on: an
+// edit to the policy file allowing what refusal names.
+func localPolicyResource(refusal, policyFile string) string {
+	file := "this machine's local policy file (the daemon's -policy flag)"
+	if policyFile != "" {
+		file = policyFile
+	}
+	return fmt.Sprintf("an edit to %s allowing it, and a daemon restart -- %s", file, refusal)
 }
 
 // usageLimitWait reports whether wait is the one dispatch records for a

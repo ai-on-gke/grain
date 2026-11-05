@@ -21,6 +21,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/servers"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -511,9 +512,20 @@ type SandboxHealthResponse struct {
 	// host warning above, and host tools or proactive checks failing on
 	// auth. Absent on the ordinary day.
 	Credentials *CredentialsHealth `json:"credentials,omitempty"`
+	// CapabilityServers is every capability server out of use for a
+	// reason somebody has to act on: one that failed, or one whose
+	// configure refused the config it was saved with
+	// (capabilityServersDown). Absent while every server is attached or
+	// only waiting to be configured for the first time.
+	CapabilityServers []CapabilityServerDown `json:"capabilityServers,omitempty"`
 	// Daemon is the health of the process answering this request
 	// (Config.Daemon). Absent where nothing can speak for it.
 	Daemon *DaemonHealth `json:"daemon,omitempty"`
+	// Counters is every section a layer built on grain registered with
+	// RegisterHealthCounters (health_counters.go): its own in-process
+	// counts since this daemon started, which grain stores nowhere.
+	// Absent where nothing is registered, which in core is always.
+	Counters []HealthCounters `json:"counters,omitempty"`
 	// HostError carries Config.HostStats' own error (e.g. this process is
 	// not running on Linux, see pkg/sysstat's doc comment) without taking
 	// the rest of the pane down with it -- a caller with a configured
@@ -997,6 +1009,15 @@ func (c *Client) readSandboxHealth(entry *sandboxHealthEntry, stale bool) ([]San
 }
 
 func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) {
+	// ?section=counters is only the layers' counters, which System →
+	// Health re-reads while it is open: an in-memory read that must not
+	// cost a sandbox sweep each time, as the rest of this response does.
+	if r.URL.Query().Get("section") == "counters" {
+		writeJSON(w, http.StatusOK, struct {
+			Counters []HealthCounters `json:"counters"`
+		}{Counters: healthCounterSections()})
+		return
+	}
 	// Config.Daemon counts here too: a deployment whose sandbox pool and
 	// host readings are both unavailable can still be one that has
 	// restarted forty times this hour, and that is the pane's most
@@ -1014,7 +1035,8 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 	// and says so whether or not a pool is wired to report on.
 	if s.tasks.Config.Sandboxes == nil && s.tasks.Config.HostStats == nil && s.tasks.Config.Daemon == nil && s.tasks.Config.StandingSandboxes == nil && s.tasks.Config.PersistentSandboxes == nil && s.tasks.Config.Overcommit == nil {
 		writeJSON(w, http.StatusOK, SandboxHealthResponse{Enabled: false, StateRepoSync: syncFailure, HostCredentials: hostCredentials, Credentials: credentials,
-			SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context())})
+			SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()), Counters: healthCounterSections(),
+			CapabilityServers: s.tasks.capabilityServersDown()})
 		return
 	}
 	resp := SandboxHealthResponse{
@@ -1022,7 +1044,7 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		StateRepoSync:        syncFailure,
 		HostCredentials:      hostCredentials,
 		Credentials:          credentials,
-		SandboxImage:         s.tasks.Config.SandboxImage,
+		SandboxImage:         s.tasks.sandboxImage(),
 		SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()),
 		SandboxGuest:         s.tasks.sandboxGuestPublishing(r.Context()),
 		BaseBranchGates:      s.tasks.baseBranchGates(r.Context()),
@@ -1031,6 +1053,8 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		CIHistory:            s.tasks.ciHistoryStorage(r.Context()),
 		Lifetime:             s.tasks.sandboxLifetime(r.Context()),
 		StandingSandboxes:    s.tasks.standingSandboxes(),
+		Counters:             healthCounterSections(),
+		CapabilityServers:    s.tasks.capabilityServersDown(),
 	}
 	if ps := s.tasks.Config.PersistentSandboxes; ps != nil {
 		if list, err := ps.List(r.Context()); err == nil {
@@ -1091,4 +1115,37 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// CapabilityServerDown is one capability server SandboxHealthResponse
+// reports out of use.
+type CapabilityServerDown struct {
+	ID    string        `json:"id"`
+	State servers.State `json:"state"`
+	// ConfigRefused is the server refusing its saved config
+	// (servers.Status.ConfigRefused).
+	ConfigRefused bool   `json:"configRefused,omitempty"`
+	Reason        string `json:"reason"`
+}
+
+// capabilityServersDown is every capability server that failed, or
+// whose configure refused its saved config: what `grain health` lists
+// beside the alert the daemon raises for it. A built-in nobody has
+// configured yet is not among them.
+func (c *Client) capabilityServersDown() []CapabilityServerDown {
+	if c.Config.CapabilityServers == nil {
+		return nil
+	}
+	var out []CapabilityServerDown
+	for _, st := range c.Config.CapabilityServers.Statuses() {
+		if st.State != servers.Failed && !(st.State == servers.NeedsConfig && st.ConfigRefused) {
+			continue
+		}
+		reason := st.Error
+		if reason == "" {
+			reason = st.Reason
+		}
+		out = append(out, CapabilityServerDown{ID: st.ID, State: st.State, ConfigRefused: st.ConfigRefused, Reason: reason})
+	}
+	return out
 }

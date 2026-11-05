@@ -16,9 +16,14 @@ package model
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
+
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 // The agent API's scope vocabulary (docs/agent-api.md). pkg/ui holds
@@ -34,8 +39,8 @@ type APIScope string
 const APIGrantPrefix = "api:"
 
 // APIScopeInternal marks a route that is grain's own plumbing rather than
-// something a person does in the UI -- the access-code login, the
-// executor bootstrap, the endpoints the mcpserver's own built-in tools
+// something a person does in the UI -- the access-code login, a grain
+// hostd dialing in, the endpoints the mcpserver's own built-in tools
 // call. It is in the route table so the table stays total, and it is
 // never grantable, so no generated tool ever reaches one.
 const APIScopeInternal APIScope = "internal"
@@ -62,6 +67,7 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "merge:force", Description: "Force-merge a task's pull request past its gate", Dangerous: true},
 	{Scope: "ci:read", Description: "Read grain CI runs, their job logs and artifacts, merge batches and base-branch gates"},
 	{Scope: "ci:write", Description: "Start, re-run and cancel grain CI runs, base-branch and release runs"},
+	{Scope: "tests:write", Description: "Quarantine flaky or failing tests and file their follow-up repair tasks"},
 	{Scope: "notifications:write", Description: "Raise and clear operator notifications"},
 	{Scope: "teams:broadcast", Description: "Post a comment to every active task of the deployment"},
 	{Scope: "dispatch:read", Description: "Read whether dispatch is paused"},
@@ -78,14 +84,18 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "repos:write", Description: "Add and remove repositories, change their settings, create branches"},
 	{Scope: "boards:read", Description: "Read boards"},
 	{Scope: "boards:write", Description: "Create, edit and delete boards"},
-	{Scope: "memory:read", Description: "Read memory documents and release notes"},
-	{Scope: "memory:write", Description: "Write memory documents and release notes"},
+	{Scope: "memory:read", Description: "Read memory and memory documents"},
+	{Scope: "memory:write", Description: "Write memory and memory documents"},
+	{Scope: "release-notes:read", Description: "Read weekly release notes, cluster stats and release versions"},
+	{Scope: "release-notes:write", Description: "Write weekly release notes"},
 	{Scope: "sessions:read", Description: "Read standing sessions and live consoles"},
 	{Scope: "sessions:write", Description: "Create, edit and restart standing sessions, and type into consoles"},
 	{Scope: "caches:read", Description: "Read the CI, package and actions caches"},
 	{Scope: "caches:write", Description: "Flush the CI, package and actions caches"},
 	{Scope: "settings:read", Description: "Read deployment settings and configuration"},
 	{Scope: "settings:write", Description: "Change deployment settings, the database and the state repository", Dangerous: true},
+	{Scope: "access:read", Description: "Read the allowed users and groups list"},
+	{Scope: "access:write", Description: "Add and remove allowed users and groups", Dangerous: true},
 	{Scope: "connections:read", Description: "Read git connections and model backends"},
 	{Scope: "connections:write", Description: "Change git connections and model backends", Dangerous: true},
 	{Scope: "capabilities:read", Description: "Read capability servers and policy, and check grants"},
@@ -94,6 +104,7 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "secrets:write", Description: "Set and delete secrets, keys and tokens", Dangerous: true},
 	{Scope: "deployment:read", Description: "Read host, sandbox, log, metric and upgrade status"},
 	{Scope: "sandboxes:read", Description: "Read the status of persistent sandboxes (implied by deployment:read)"},
+	{Scope: "deployment:src", Description: "Read grain's own source under src:// over GET /api/fs/src, which an external agent token is refused without even when it holds deployment:read"},
 	{Scope: "deployment:upgrade", Description: "Upgrade grain and its database, or cancel a scheduled upgrade", Dangerous: true},
 	{Scope: "deployment:restart", Description: "Restart grain, act on persistent sandboxes, and run sandbox probes", Dangerous: true},
 	{Scope: "deployment:reboot", Description: "Reboot or shut down grain's host", Dangerous: true},
@@ -121,9 +132,7 @@ type APIPreset struct {
 // apiPresets are the bundles a picker offers first. Each is what one of
 // the per-ability capabilities that used to be filed one at a time asked
 // for (tasks 399, 420, 421, 422, 425), plus the older capabilities
-// whose own tools are kept for compatibility (self-debug, self-upgrade
-// and pipeline-control, which now also grant their preset's routes -- see
-// apiAliasCapabilities).
+// that now also grant their preset's routes (see apiAliasCapabilities).
 var apiPresets = []APIPreset{
 	{Name: "task-admin", Description: "Edit, reorder, retry and close tasks, open and retry their merges, and re-run CI",
 		Scopes: []APIScope{"tasks:read", "tasks:write", "merge:write", "ci:read", "ci:write", "notifications:write"}},
@@ -138,16 +147,31 @@ var apiPresets = []APIPreset{
 			"schedules:read", "schedules:write", "releases:read", "releases:write", "repos:read"}},
 	{Name: "self-debug", Description: "What the self-debug capability grants: read tasks, runs and deployment status",
 		Scopes: []APIScope{"tasks:read", "deployment:read"}},
-	{Name: "self-upgrade", Description: "What the self-upgrade capability grants: read and start upgrades",
+	{Name: "self-upgrade", Description: "What the self-upgrade capability granted: read and start upgrades",
 		Scopes: []APIScope{"deployment:read", "deployment:upgrade"}},
 	{Name: "pipeline-control", Description: "What the pipeline-control capability granted: pause and resume dispatch",
 		Scopes: []APIScope{"dispatch:read", "dispatch:write"}},
 	{Name: "team-broadcast", Description: "What the team-broadcast capability granted: post a comment to every active task",
 		Scopes: []APIScope{"teams:broadcast"}},
+	{Name: "memory", Description: "What the memory capability granted: read and write memory and memory documents",
+		Scopes: []APIScope{"memory:read", "memory:write"}},
+	{Name: "release-notes", Description: "What the release-notes capability granted: read cluster stats and weekly release notes, and publish weekly release notes",
+		Scopes: []APIScope{"release-notes:read", "release-notes:write"}},
+	{Name: "test-quarantine", Description: "What the test-quarantine capability granted: quarantine flaky or failing tests and file follow-up repair tasks",
+		Scopes: []APIScope{"tests:write"}},
 	{Name: ReleaseGateReadCapability, Description: "What a release workflow reads and files: its repository's CI runs " +
 		"and tasks, the persistent sandboxes' status, and its release-notes task",
 		Scopes:    []APIScope{"ci:read", "tasks:read", "sandboxes:read", "tasks:from-template"},
 		Templates: []string{"release-notes"}},
+	// The two sets an external agent credential is issued with
+	// (design/spec/external-cli/external-cli.spec.md#XC-16): neither
+	// holds a dangerous scope, so neither needs a person to issue.
+	{Name: "external-dev", Description: "What a workstation coding agent needs: file and follow tasks, " +
+		"drive their CI and merges, and read repositories, templates and deployment status",
+		Scopes: []APIScope{"tasks:read", "tasks:write", "ci:read", "ci:write", "merge:write",
+			"repos:read", "templates:read", "deployment:read"}},
+	{Name: "external-read", Description: "Read-only observer: read tasks, CI, repositories, templates and deployment status",
+		Scopes: []APIScope{"tasks:read", "ci:read", "repos:read", "templates:read", "deployment:read"}},
 }
 
 // apiAliasCapabilities are the older capabilities that are now aliases
@@ -155,34 +179,438 @@ var apiPresets = []APIPreset{
 // well as whatever tools it still has under their old names (none, for
 // one legacyGrantReplacements retires).
 var apiAliasCapabilities = map[string]string{
-	"self-debug":       "self-debug",
-	"self-upgrade":     "self-upgrade",
-	"pipeline-control": "pipeline-control",
-	"team-broadcast":   "team-broadcast",
-	"dispatch-control": "dispatch-control",
+	"self-debug":        "self-debug",
+	"self-upgrade":      "self-upgrade",
+	"deployment-health": "deployment:read",
+	"pipeline-control":  "pipeline-control",
+	"team-broadcast":    "team-broadcast",
+	"dispatch-control":  "dispatch-control",
+	"memory":            "memory",
+	"release-notes":     "release-notes",
+	"test-quarantine":   "test-quarantine",
 }
 
-// legacyGrantReplacements are the bare capabilities converted to api
-// grants (docs/design/unified-grants.md §4) whose in-process provider is
-// gone: each is written as its api preset wherever a grant is recorded
-// (CanonicalLegacyGrant), and the store migration that retired it
-// rewrote the rows already stored. The bare name stays in
-// apiAliasCapabilities as well, so a grant nothing rewrote -- a
-// repository's own .grain declaration, an older grain/config -- keeps
-// granting what it did.
+// GrainCapabilityServerID is the canonical capability_id of the in-process
+// grain server (design/design/unified-grants.design.md §1, §4).
+const GrainCapabilityServerID = "https://grain.dev/capabilities/grain"
+
+// Recorded canonical grants on the in-process grain server.
+const (
+	GrainJournalRef   = GrainCapabilityServerID + "#journal"
+	GrainJournalGrant = GrainJournalRef + "={}"
+
+	GrainHealthRef   = GrainCapabilityServerID + "#health"
+	GrainHealthGrant = GrainHealthRef + "={}"
+
+	GrainSQLMethod     = "sql"
+	GrainSQLRef        = GrainCapabilityServerID + "#" + GrainSQLMethod
+	GrainSQLReadGrant  = GrainSQLRef + `={"write":false}`
+	GrainSQLWriteGrant = GrainSQLRef + `={"write":true}`
+
+	// GrainHostExecMethod runs shell commands on grain's own host, each
+	// one only after a live reply in the task's chat (formerly
+	// self-repair). Dangerous: only a person may grant it.
+	GrainHostExecMethod = "host-exec"
+	GrainHostExecRef    = GrainCapabilityServerID + "#" + GrainHostExecMethod
+	GrainHostExecGrant  = GrainHostExecRef + "={}"
+
+	// GCPCapabilityServerID is the canonical capability_id of the in-tree gcp
+	// server (design/design/unified-grants.design.md §1, §4).
+	GCPCapabilityServerID      = "https://grain.dev/capabilities/gcp"
+	GCPKeyMethod               = "gcp-key"
+	GCPKeyRef                  = GCPCapabilityServerID + "#" + GCPKeyMethod
+	GCPKeyDefaultPermissionSet = "sandbox-agent"
+	GCPKeySandboxAgentGrant    = GCPKeyRef + `={"permission_set":"` + GCPKeyDefaultPermissionSet + `","primary":true}`
+
+	// GCPGeminiKeyMethod mints a per-attempt Gemini API key on the gcp
+	// server, placed as the in-process gemini-key places one.
+	GCPGeminiKeyMethod = "gemini-key"
+	GCPGeminiKeyRef    = GCPCapabilityServerID + "#" + GCPGeminiKeyMethod
+	GCPGeminiKeyGrant  = GCPGeminiKeyRef + "={}"
+
+	// GrainCIMethod runs a repository's own .grain/workflows in grain's
+	// sandboxes for the branches a task pushes, and holds the merge
+	// queue until they pass (formerly grain-ci). grain grants it from a
+	// repository's CI Mode (adjustGrainCIGrant); nobody attaches it by
+	// hand.
+	GrainCIMethod = "ci"
+	GrainCIRef    = GrainCapabilityServerID + "#" + GrainCIMethod
+	GrainCIGrant  = GrainCIRef + "={}"
+
+	// GrainCICapability is the retired bare name of GrainCIGrant. It is
+	// still read as that grant wherever it was not rewritten (a
+	// repository's own .grain declaration, an older grain/config);
+	// schema migration 96 rewrote the stored rows.
+	GrainCICapability = "grain-ci"
+
+	// ModelProxyCapabilityServerID is the canonical capability_id of the
+	// in-process model-proxy server: a per-run token on grain's own proxy
+	// to one model vendor, forwarding with the run's team connection
+	// (formerly claude-proxy, openai-proxy and gemini-proxy).
+	ModelProxyCapabilityServerID = "https://grain.dev/capabilities/model-proxy"
+	ModelProxyMethod             = "model-proxy"
+	ModelProxyRef                = ModelProxyCapabilityServerID + "#" + ModelProxyMethod
+)
+
+// ModelProxyVendors are the vendors the model-proxy server proxies, in
+// pkg/modelproxy's Vendors order (which pkg/capability/modelproxy's tests
+// hold this to). Each one's retired bare grant is "<vendor>-proxy".
+var ModelProxyVendors = []string{"claude", "openai", "gemini"}
+
+// ModelProxyGrant is the recorded model-proxy grant for vendor.
+func ModelProxyGrant(vendor string) string {
+	return ModelProxyRef + `={"vendor":` + strconv.Quote(vendor) + `}`
+}
+
+// LegacyModelProxyCapability is the retired bare capability name of
+// vendor's model-proxy grant, such as claude-proxy.
+func LegacyModelProxyCapability(vendor string) string { return vendor + "-proxy" }
+
+// ModelProxyGrantVendor is the vendor a model-proxy grant names --
+// recorded or the retired bare <vendor>-proxy -- and false for any other
+// grant.
+func ModelProxyGrantVendor(grant string) (string, bool) {
+	grant = strings.TrimSpace(grant)
+	for _, v := range ModelProxyVendors {
+		if grant == LegacyModelProxyCapability(v) {
+			return v, true
+		}
+	}
+	spec, err := CapabilityGrantSpec(grant)
+	if err != nil || spec.Capability != ModelProxyRef {
+		return "", false
+	}
+	v, _ := spec.With["vendor"].(string)
+	return v, v != ""
+}
+
+// GCPKeyServerGrant returns the recorded gcp#gcp-key grant for the named
+// permission set (with primary: true, matching protocol.Normalize).
+func GCPKeyServerGrant(permissionSet string) string {
+	set := strings.TrimSpace(permissionSet)
+	if set == "" || set == "default" {
+		set = GCPKeyDefaultPermissionSet
+	}
+	s, err := EncodeCapabilityGrant(protocol.GrantSpec{
+		Capability: GCPKeyRef,
+		With:       map[string]any{"permission_set": set, "primary": true},
+	})
+	if err != nil {
+		panic(fmt.Sprintf("model: encoding gcp-key grant for %q: %v", set, err))
+	}
+	return s
+}
+
+func validLegacyGCPKeyParam(name string) bool {
+	return name != "" && !strings.ContainsAny(name, " \t\n\r/\\:*?[")
+}
+
+// ParseGCPKeyServerGrant reports whether grant names gcp#gcp-key (or a
+// retired gcp-key / gcp-key:<name> alias) and returns its permission set.
+func ParseGCPKeyServerGrant(grant string) (permissionSet string, ok bool) {
+	s := strings.TrimSpace(grant)
+	if keyName, isKey := GCPKeyName(s); isKey {
+		if keyName == "" || keyName == "default" {
+			return GCPKeyDefaultPermissionSet, true
+		}
+		if validLegacyGCPKeyParam(keyName) {
+			return keyName, true
+		}
+		return "", false
+	}
+	if !IsCapabilityRef(s) {
+		return "", false
+	}
+	spec, err := CapabilityGrantSpec(s)
+	if err != nil || spec.Capability != GCPKeyRef {
+		return "", false
+	}
+	if err := CheckGCPKeyGrantArgs(spec, ""); err != nil {
+		return "", false
+	}
+	set, _ := spec.With["permission_set"].(string)
+	if set == "" {
+		set = GCPKeyDefaultPermissionSet
+	}
+	return set, true
+}
+
+// GCPKeySetUnnamed reports whether grant is a gcp#gcp-key capability-server
+// grant that leaves its permission set to the server's first configured set
+// (no permission_set). (Bare "gcp-key" is false: CanonicalLegacyGrant rewrites
+// it to GCPKeySandboxAgentGrant.)
+func GCPKeySetUnnamed(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if !IsCapabilityRef(s) {
+		return false
+	}
+	spec, err := CapabilityGrantSpec(s)
+	if err != nil || spec.Capability != GCPKeyRef {
+		return false
+	}
+	if err := CheckGCPKeyGrantArgs(spec, ""); err != nil {
+		return false
+	}
+	set, _ := spec.With["permission_set"].(string)
+	return set == ""
+}
+
+func init() {
+	protocol.SetGrantPolicy(GrainCapabilityServerID, GrainSQLMethod, func(args map[string]any) protocol.GrantKind {
+		if w, _ := args["write"].(bool); w {
+			return protocol.GrantByPerson
+		}
+		return protocol.GrantCovered
+	})
+	protocol.RequirePersonGrant(GrainCapabilityServerID, GrainHostExecMethod)
+}
+
+// IsGrainJournalGrant reports whether grant names grain#journal (recorded or
+// bare) or the retired bare grain-log alias.
+func IsGrainJournalGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if s == "grain-log" {
+		return true
+	}
+	return CapabilityGrantRef(s) == GrainJournalRef
+}
+
+// HasGrainJournal reports whether any grant in grants opens grain#journal.
+func HasGrainJournal(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGrainJournalGrant)
+}
+
+// IsGrainHealthGrant reports whether grant names grain#health (recorded or
+// bare) or the retired bare deployment-health alias.
+func IsGrainHealthGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if s == "deployment-health" {
+		return true
+	}
+	return CapabilityGrantRef(s) == GrainHealthRef
+}
+
+// HasGrainHealth reports whether any grant in grants opens grain#health.
+func HasGrainHealth(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGrainHealthGrant)
+}
+
+// IsGrainHostExecGrant reports whether grant names grain#host-exec
+// (recorded or bare) or the retired bare self-repair alias.
+func IsGrainHostExecGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if s == "self-repair" {
+		return true
+	}
+	return CapabilityGrantRef(s) == GrainHostExecRef
+}
+
+// HasGrainHostExec reports whether any grant in grants opens grain#host-exec.
+func HasGrainHostExec(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGrainHostExecGrant)
+}
+
+// IsGrainCIGrant reports whether grant names grain#ci (recorded or bare)
+// or the retired bare grain-ci alias.
+func IsGrainCIGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if s == GrainCICapability {
+		return true
+	}
+	return CapabilityGrantRef(s) == GrainCIRef
+}
+
+// HasGrainCI reports whether any grant in grants opens grain#ci.
+func HasGrainCI(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGrainCIGrant)
+}
+
+// ParseGrainSQLGrant reports whether grant names grain#sql (recorded or bare)
+// or the retired bare db-read / db-write aliases, and whether it allows writes.
+func ParseGrainSQLGrant(grant string) (ok bool, write bool) {
+	s := strings.TrimSpace(grant)
+	switch s {
+	case "db-read":
+		return true, false
+	case "db-write":
+		return true, true
+	}
+	if !IsCapabilityRef(s) {
+		return false, false
+	}
+	spec, err := CapabilityGrantSpec(s)
+	if err != nil || spec.Capability != GrainSQLRef {
+		return false, false
+	}
+	w, _ := spec.With["write"].(bool)
+	return true, w
+}
+
+// IsGrainSQLGrant reports whether grant names grain#sql (read or write) or a
+// retired db-read / db-write alias.
+func IsGrainSQLGrant(grant string) bool {
+	ok, _ := ParseGrainSQLGrant(grant)
+	return ok
+}
+
+// IsGrainSQLWriteGrant reports whether grant names grain#sql with write: true
+// or the retired db-write alias.
+func IsGrainSQLWriteGrant(grant string) bool {
+	ok, write := ParseGrainSQLGrant(grant)
+	return ok && write
+}
+
+// HasGrainSQL reports whether any grant in grants opens grain#sql (read or write).
+func HasGrainSQL(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGrainSQLGrant)
+}
+
+// HasGrainSQLWrite reports whether any grant in grants opens grain#sql with write: true.
+func HasGrainSQLWrite(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGrainSQLWriteGrant)
+}
+
+// legacyGrantReplacements are the bare capabilities converted to api or
+// capability-server grants (design/design/unified-grants.design.md §4) whose
+// in-process provider is gone: each is written as its replacement wherever a
+// grant is recorded (CanonicalLegacyGrant / CanonicalLegacyGrants), and the
+// store migration that retired it rewrote the rows already stored. The bare
+// name keeps granting what it did so a grant nothing rewrote -- a
+// repository's own .grain declaration, an older grain/config -- keeps working.
 var legacyGrantReplacements = map[string]string{
 	"team-broadcast":   APIGrantPrefix + "team-broadcast",
 	"dispatch-control": APIGrantPrefix + "dispatch-control",
 	"pipeline-control": APIGrantPrefix + "pipeline-control",
+	"memory":           APIGrantPrefix + "memory",
+	"release-notes":    APIGrantPrefix + "release-notes",
+	"grain-log":        GrainJournalGrant,
+	"db-read":          GrainSQLReadGrant,
+	"db-write":         GrainSQLWriteGrant,
+	"self-upgrade":     APIGrantPrefix + "self-upgrade",
+	"test-quarantine":  APIGrantPrefix + "test-quarantine",
+	"self-repair":      GrainHostExecGrant,
+	"git-push-any-ref": GitPushAnyRefGrant,
+	"gcp-key":          GCPKeySandboxAgentGrant,
+	GrainCICapability:  GrainCIGrant,
+	// Retired by schema migration 100 onto the in-process model-proxy
+	// server, which forwards with the same team connection.
+	"claude-proxy": ModelProxyGrant("claude"),
+	"openai-proxy": ModelProxyGrant("openai"),
+	"gemini-proxy": ModelProxyGrant("gemini"),
+	// Retired by schema migration 101 onto the in-process release
+	// server, which places what the providers placed on the same events.
+	"image-signing":          ImageSigningRef + "={}",
+	"registry-push":          RegistryPushRef + "={}",
+	CapabilityPackagePublish: PackagePublishRef + "={}",
+	// Retired by schema migration 103 onto the gcp server's gemini-key,
+	// which mints with the same gcp-key-minter secret.
+	"gemini-key": GCPGeminiKeyGrant,
 }
 
-// CanonicalLegacyGrant is name, or the api grant a retired in-process
-// capability of that name became.
+// legacyGrantMultiReplacements maps retired bare capabilities that split into
+// multiple canonical grants (for example an api scope plus an in-process
+// grain server method).
+var legacyGrantMultiReplacements = map[string][]string{
+	"deployment-health": {APIGrantPrefix + "deployment:read", GrainHealthGrant},
+}
+
+var (
+	registeredLegacyAliasesMu sync.RWMutex
+	registeredLegacyAliases   = map[string]string{}
+)
+
+// RegisterLegacyGrantAlias makes the bare capability name from an alias
+// for the grant to until the returned func is called: CanonicalLegacyGrant
+// rewrites it as it does a name in legacyGrantReplacements. It is the seam
+// a build outside core retires one of its own in-process capabilities
+// through (capability.Register's Aliases), so core need not name it. It
+// panics on an empty name or one already an alias, core's or registered.
+func RegisterLegacyGrantAlias(from, to string) (unregister func()) {
+	from, to = strings.TrimSpace(from), strings.TrimSpace(to)
+	if from == "" || to == "" {
+		panic(fmt.Sprintf("model: RegisterLegacyGrantAlias(%q, %q): an alias needs both names", from, to))
+	}
+	registeredLegacyAliasesMu.Lock()
+	defer registeredLegacyAliasesMu.Unlock()
+	_, core := legacyGrantReplacements[from]
+	_, coreMulti := legacyGrantMultiReplacements[from]
+	if _, ok := registeredLegacyAliases[from]; ok || core || coreMulti {
+		panic(fmt.Sprintf("model: RegisterLegacyGrantAlias(%q): already an alias", from))
+	}
+	registeredLegacyAliases[from] = to
+	return func() {
+		registeredLegacyAliasesMu.Lock()
+		defer registeredLegacyAliasesMu.Unlock()
+		delete(registeredLegacyAliases, from)
+	}
+}
+
+// legacyGrantReplacement is what the retired bare name became, from core's
+// table or a registered alias.
+func legacyGrantReplacement(name string) (string, bool) {
+	if to, ok := legacyGrantReplacements[name]; ok {
+		return to, true
+	}
+	if keyName, ok := GCPKeyName(name); ok {
+		if keyName == "" || keyName == "default" {
+			return GCPKeySandboxAgentGrant, true
+		}
+		if validLegacyGCPKeyParam(keyName) {
+			return GCPKeyServerGrant(keyName), true
+		}
+	}
+	registeredLegacyAliasesMu.RLock()
+	defer registeredLegacyAliasesMu.RUnlock()
+	to, ok := registeredLegacyAliases[name]
+	return to, ok
+}
+
+// allLegacyGrantReplacements is legacyGrantReplacements with every
+// registered alias added.
+func allLegacyGrantReplacements() map[string]string {
+	out := maps.Clone(legacyGrantReplacements)
+	registeredLegacyAliasesMu.RLock()
+	defer registeredLegacyAliasesMu.RUnlock()
+	maps.Copy(out, registeredLegacyAliases)
+	return out
+}
+
+// CanonicalLegacyGrant is name, or the single grant a retired 1-to-1
+// in-process capability of that name became. Callers recording a capability
+// list should use CanonicalLegacyGrants so 1-to-many retirements (such as
+// deployment-health) expand to every grant they became.
 func CanonicalLegacyGrant(name string) string {
-	if to, ok := legacyGrantReplacements[strings.TrimSpace(name)]; ok {
+	trimmed := strings.TrimSpace(name)
+	if to, ok := legacyGrantReplacement(trimmed); ok {
 		return to
 	}
 	return name
+}
+
+// CanonicalLegacyGrants returns the canonical grant(s) a retired in-process
+// capability became, or []string{name} when name is not retired.
+func CanonicalLegacyGrants(name string) []string {
+	trimmed := strings.TrimSpace(name)
+	if many, ok := legacyGrantMultiReplacements[trimmed]; ok {
+		return slices.Clone(many)
+	}
+	if many, ok := runtimeExpansion(trimmed); ok {
+		return many
+	}
+	return []string{CanonicalLegacyGrant(name)}
+}
+
+// RetiredGrantNames is every retired bare capability name
+// CanonicalLegacyGrants rewrites, in no particular order.
+func RetiredGrantNames() []string {
+	names := make([]string, 0, len(legacyGrantReplacements)+len(legacyGrantMultiReplacements))
+	for name := range legacyGrantReplacements {
+		names = append(names, name)
+	}
+	for name := range legacyGrantMultiReplacements {
+		names = append(names, name)
+	}
+	return append(names, runtimeExpansionNames()...)
 }
 
 // APIAliasPreset returns the preset name that a bare capability name aliases,

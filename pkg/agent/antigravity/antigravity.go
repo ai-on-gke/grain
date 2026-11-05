@@ -450,7 +450,7 @@ func (f *Framework) TurnLimits() (turnTimeout, retryCutoff time.Duration, connec
 }
 
 // WithRemoteSessionRoot configures the root directory for session stores
-// when running against a remote executor host (defaulting to "~/.grain/sessions").
+// when running against a Host that is not local (defaulting to "~/.grain/sessions").
 func WithRemoteSessionRoot(dir string) Option {
 	return func(f *Framework) { f.remoteSessionRoot = dir }
 }
@@ -649,7 +649,6 @@ func (f *Framework) mcpServerArgs(ctx context.Context, cfg agent.RunConfig) ([]s
 	args = append(args, agent.InteractiveArgs(cfg)...)
 	args = append(args, agent.AddendaArgs(cfg)...)
 	args = append(args, agent.RunDeadlineArgs(ctx, cfg)...)
-	agent.AuthorizeMCPArgs(f.host, args)
 	return args, nil
 }
 
@@ -704,6 +703,9 @@ func (f *Framework) pullRequestArgs(cfg agent.RunConfig) []string {
 	}
 	if cfg.PullRequestNumber > 0 {
 		args = append(args, "-pr-number", fmt.Sprintf("%d", cfg.PullRequestNumber))
+	}
+	if cfg.UpstreamRepo != "" {
+		args = append(args, "-pr-upstream-repo", cfg.UpstreamRepo)
 	}
 	// And the credential the branch is pushed with, by name, so the
 	// subprocess's own GitHub reads are made as the same account rather
@@ -857,18 +859,32 @@ func eagerToolsConfig() map[string]any {
 // asymmetry to hold on to is that an unknown key here is safe and a known
 // key of the wrong type costs a run every tool it has.
 //
-// Each capability MCP server (docs/capabilities-spec.md §5.2.4) is an
+// Each capability MCP server (design/spec/capabilities/capabilities.spec.md §5.2.4) is an
 // entry beside grain-sandbox, its serverUrl grain's proxy and every tool
 // its tools/list reported registered eagerly the same way.
 func mcpConfigJSON(grainBinaryPath string, mcpArgs []string, servers ...agent.CapabilityMCPServer) ([]byte, error) {
-	all := map[string]any{
-		mcpServerName: map[string]any{
-			"command":        grainBinaryPath,
-			"args":           mcpArgs,
+	return mcpConfigJSONFor(grainBinaryPath, "", mcpArgs, servers...)
+}
+
+// mcpConfigJSONFor is mcpConfigJSON, with grain-sandbox at mcpURL
+// rather than forked when mcpURL is set: the endpoint grain serves it
+// from, carried to the machine of an agy that cannot fork grain's
+// mcpserver itself (agent.ServesMCPOverHTTP, startCarriedMCP).
+func mcpConfigJSONFor(grainBinaryPath, mcpURL string, mcpArgs []string, servers ...agent.CapabilityMCPServer) ([]byte, error) {
+	sandbox := map[string]any{
+		"command":        grainBinaryPath,
+		"args":           mcpArgs,
+		"timeoutSeconds": mcpToolTimeoutSeconds(),
+		"tools":          eagerToolsConfig(),
+	}
+	if mcpURL != "" {
+		sandbox = map[string]any{
+			"serverUrl":      mcpURL,
 			"timeoutSeconds": mcpToolTimeoutSeconds(),
 			"tools":          eagerToolsConfig(),
-		},
+		}
 	}
+	all := map[string]any{mcpServerName: sandbox}
 	for _, s := range servers {
 		tools := map[string]any{}
 		for _, tool := range s.Tools {
@@ -1368,7 +1384,7 @@ func HookDecisionFor(opts HookOptions, payload []byte) []byte {
 		// machine: agy refuses edits until it is called, so denying it
 		// traps a run that started in plan mode in a read-only loop. It
 		// was 100% of its calls failing before this
-		// (docs/design/sandbox-first-agent-surface.md §5).
+		// (design/design/sandbox-first-agent-surface.design.md §5).
 		return noOpinion
 	case "enter_plan_mode":
 		return denyReason("Plan mode is off in headless grain runs, and entering it would stop " +
@@ -1473,6 +1489,12 @@ func providerFor(apiKey string) string {
 // which it turned out to be, and is what Run reads before it asks to
 // resume anything or reports a conversation back -- see openAgyHome.
 func writeAgyHome(ctx context.Context, host agent.Host, store *sessionstore.Store, remoteSessionRoot, taskID, grainBinaryPath string, mcpArgs []string, provider string, cfg ...agent.RunConfig) (home string, persistent bool, cleanup func(), err error) {
+	return writeAgyHomeFor(ctx, host, store, remoteSessionRoot, taskID, grainBinaryPath, "", mcpArgs, provider, cfg...)
+}
+
+// writeAgyHomeFor is writeAgyHome with grain-sandbox at mcpURL when it
+// is set (mcpConfigJSONFor).
+func writeAgyHomeFor(ctx context.Context, host agent.Host, store *sessionstore.Store, remoteSessionRoot, taskID, grainBinaryPath, mcpURL string, mcpArgs []string, provider string, cfg ...agent.RunConfig) (home string, persistent bool, cleanup func(), err error) {
 	home, persistent, cleanup, err = openAgyHome(ctx, host, store, remoteSessionRoot, taskID)
 	if err != nil {
 		return "", false, nil, err
@@ -1488,7 +1510,7 @@ func writeAgyHome(ctx context.Context, host agent.Host, store *sessionstore.Stor
 		runHookArgs = hookArgs(cfg[0], home)
 		servers = cfg[0].CapabilityMCPServers
 	}
-	files, err := agyHomeFilesWith(grainBinaryPath, runMcpArgs, provider, isUnconfined(host), servers, runHookArgs...)
+	files, err := agyHomeFilesFor(agent.HookBinary(host, grainBinaryPath), mcpURL, runMcpArgs, provider, isUnconfined(host), servers, runHookArgs...)
 	if err != nil {
 		cleanup()
 		return "", false, nil, err
@@ -1521,7 +1543,13 @@ func agyHomeFiles(grainBinaryPath string, mcpArgs []string, provider string, isU
 // agyHomeFilesWith is agyHomeFiles for a run whose capability grants
 // expose MCP servers (agent.RunConfig.CapabilityMCPServers).
 func agyHomeFilesWith(grainBinaryPath string, mcpArgs []string, provider string, isUnc bool, servers []agent.CapabilityMCPServer, hookArgs ...string) (map[string][]byte, error) {
-	mcpConfig, err := mcpConfigJSON(grainBinaryPath, mcpArgs, servers...)
+	return agyHomeFilesFor(grainBinaryPath, "", mcpArgs, provider, isUnc, servers, hookArgs...)
+}
+
+// agyHomeFilesFor is agyHomeFilesWith with grain-sandbox at mcpURL when
+// it is set (mcpConfigJSONFor). grainBinaryPath is then only the hooks'.
+func agyHomeFilesFor(grainBinaryPath, mcpURL string, mcpArgs []string, provider string, isUnc bool, servers []agent.CapabilityMCPServer, hookArgs ...string) (map[string][]byte, error) {
+	mcpConfig, err := mcpConfigJSONFor(grainBinaryPath, mcpURL, mcpArgs, servers...)
 	if err != nil {
 		return nil, fmt.Errorf("antigravity: building agy's mcp config: %w", err)
 	}
@@ -1563,6 +1591,12 @@ func agyHomeFilesWith(grainBinaryPath string, mcpArgs []string, provider string,
 // tests/e2e/live_hook_config_test.go is where agy's own behaviour here
 // is measured.
 func refreshAgyHome(ctx context.Context, host agent.Host, home, grainBinaryPath string, mcpArgs []string, provider string, cfg ...agent.RunConfig) error {
+	return refreshAgyHomeFor(ctx, host, home, grainBinaryPath, "", mcpArgs, provider, cfg...)
+}
+
+// refreshAgyHomeFor is refreshAgyHome with grain-sandbox at mcpURL when
+// it is set (mcpConfigJSONFor).
+func refreshAgyHomeFor(ctx context.Context, host agent.Host, home, grainBinaryPath, mcpURL string, mcpArgs []string, provider string, cfg ...agent.RunConfig) error {
 	recordedToolsPath := filepath.Join(runScratchDir(home), recordedToolsFilename)
 	runMcpArgs := append(slices.Clone(mcpArgs), "-recorded-tools", recordedToolsPath)
 	var runHookArgs []string
@@ -1571,7 +1605,7 @@ func refreshAgyHome(ctx context.Context, host agent.Host, home, grainBinaryPath 
 		runHookArgs = hookArgs(cfg[0], home)
 		servers = cfg[0].CapabilityMCPServers
 	}
-	files, err := agyHomeFilesWith(grainBinaryPath, runMcpArgs, provider, isUnconfined(host), servers, runHookArgs...)
+	files, err := agyHomeFilesFor(agent.HookBinary(host, grainBinaryPath), mcpURL, runMcpArgs, provider, isUnconfined(host), servers, runHookArgs...)
 	if err != nil {
 		return err
 	}
@@ -1620,7 +1654,7 @@ func openAgyHome(ctx context.Context, host agent.Host, store *sessionstore.Store
 			remove(removeCtx)
 		}
 	}
-	if store != nil && taskID != "" {
+	if store != nil && sessionstore.ValidName(taskID) {
 		if isRemoteHost(host) {
 			root := remoteSessionRoot
 			if root == "" {
@@ -1655,6 +1689,14 @@ func openAgyHome(ctx context.Context, host agent.Host, store *sessionstore.Store
 // All errors are ignored, matching sessionstore.Store's prune contract.
 func pruneRemoteSessions(ctx context.Context, host agent.Host, base string) {
 	if host == nil || base == "" {
+		return
+	}
+	if p, ok := host.(agent.DirPruner); ok {
+		// A host that runs only allowlisted CLIs (a grain hostd) has no
+		// shell to run the script below with, and prunes itself.
+		pruneCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = p.PruneDir(pruneCtx, base, 7*24*time.Hour, 64)
 		return
 	}
 	cmdStr := fmt.Sprintf(`BASE=%q
@@ -1780,6 +1822,13 @@ func workDir(cfg agent.RunConfig, home string) string {
 		return cfg.SandboxRoot
 	}
 	return agyWorkspaceDir(home)
+}
+
+func (f *Framework) workDir(cfg agent.RunConfig, home string) string {
+	if agent.ServesMCPOverHTTP(f.host) {
+		return agyWorkspaceDir(home)
+	}
+	return workDir(cfg, home)
 }
 
 // withheldNativeTools names the AGY built-ins called out in the prompt as
@@ -1976,10 +2025,11 @@ func (f *Framework) agyArgs(ctx context.Context, cfg agent.RunConfig, conversati
 		args = append(args, "--effort", effort)
 	}
 	// --add-dir names the one directory this run may touch. It is only
-	// meaningful for a host-rooted sandbox; a granule run reaches its
-	// workspace through the forked mcpserver's SSH transport instead, and
-	// there is no local path here to name.
-	if cfg.SandboxRoot != "" {
+	// meaningful when agy shares the sandbox's filesystem; a granule run,
+	// or one on another machine reaching grain's MCP server over HTTP,
+	// reaches its workspace through the mcpserver instead, and has no
+	// local path here to name.
+	if cfg.SandboxRoot != "" && !agent.ServesMCPOverHTTP(f.host) {
 		args = append(args, "--add-dir", cfg.SandboxRoot)
 	}
 	if conversationID != "" {
@@ -2077,9 +2127,17 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 	}
 	defer releaseServers()
 	cfg.CapabilityMCPServers = servers
-	home, persistent, cleanup, err := writeAgyHome(ctx, f.host, f.sessions, f.effectiveRemoteSessionRoot(), cfg.TaskID, f.grainBinaryPath, mcpArgs, providerFor(apiKey), cfg)
+	mcpURL, recordedToolsPath, stopMCP, err := f.startCarriedMCP(ctx, mcpArgs)
 	if err != nil {
 		return nil, err
+	}
+	defer stopMCP()
+	home, persistent, cleanup, err := writeAgyHomeFor(ctx, f.host, f.sessions, f.effectiveRemoteSessionRoot(), cfg.TaskID, f.grainBinaryPath, mcpURL, mcpArgs, providerFor(apiKey), cfg)
+	if err != nil {
+		return nil, err
+	}
+	if recordedToolsPath == "" {
+		recordedToolsPath = filepath.Join(runScratchDir(home), recordedToolsFilename)
 	}
 	// Kept for a run this daemon detached from as it stopped
 	// (agent.ErrDetached): agy is still running in grain hostd against
@@ -2191,7 +2249,7 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 		diagnosticHome:     runScratchDir(home),
 		diagnosticSecrets:  diagnosticSecrets,
 		env:                env,
-		dir:                workDir(cfg, home),
+		dir:                f.workDir(cfg, home),
 		firstTurn:          firstTurn,
 		nextTurn:           nextTurn,
 		interruptedTurn:    interruptedTurn,
@@ -2209,7 +2267,7 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 		cap:              capWatch,
 		deadline:         deadlineWatch,
 		refresh: func() error {
-			return refreshAgyHome(ctx, f.host, home, f.grainBinaryPath, mcpArgs, providerFor(apiKey), cfg)
+			return refreshAgyHomeFor(ctx, f.host, home, f.grainBinaryPath, mcpURL, mcpArgs, providerFor(apiKey), cfg)
 		},
 	})
 	stdout, runErr, diagnostic, notes := attempts.capture, attempts.runErr, attempts.diagnostic, attempts.notes
@@ -2220,7 +2278,7 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 	turnTimedOut := attempts.turnTimedOut
 	turnVerdict := attempts.turnVerdict
 
-	recordedTools := loadRecordedTools(filepath.Join(runScratchDir(home), recordedToolsFilename))
+	recordedTools := loadRecordedTools(recordedToolsPath)
 	hostCalls := loadHostToolCalls(filepath.Join(runScratchDir(home), hostToolCallsFilename))
 	result, parseErr := parseTranscriptWithRecorded(stdout, recordedTools)
 	// Whatever the retry loop had to say about itself travels back with
@@ -2268,6 +2326,8 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 	// "come back in a moment, the model is overloaded". See capacity.go.
 	capacity := capacityFailure(events.resultText+"\n"+diagnostic, runErr)
 	switch {
+	case agent.IsHostdStop(runErr):
+		return annotate(partialResult(result, stdout, recordedTools)), agent.RunFailure("antigravity", "agy", nil, runErr)
 	case capWatch.tripped():
 		// The cap cancelled the subprocess, so runErr is that
 		// cancellation rather than a fault of agy's -- report the cap.
@@ -2339,7 +2399,7 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 // ParseResult implements agent.ResultParser: the Result and error Run
 // would have returned for a run whose stream is stdout and which ended
 // with runErr, for a daemon adopting a host run another daemon started
-// detached in grain hostd (docs/design/cli-run-location.md, "Upgrades and
+// detached in grain hostd (design/design/cli-run-location.design.md, "Upgrades and
 // host runs"). stdout is the one exec hostd held. What Run reads from the
 // run's HOME -- the recorded tool calls, the diagnostic log -- the
 // adopting daemon does not have, so the stream alone decides.
@@ -2347,6 +2407,8 @@ func (f *Framework) ParseResult(stdout string, runErr error) (*agent.Result, err
 	result, parseErr := parseTranscriptWithRecorded(stdout, nil)
 	events := parseEvents(stdout)
 	switch {
+	case agent.IsHostdStop(runErr):
+		return partialResult(result, stdout, nil), agent.RunFailure("antigravity", "agy", nil, runErr)
 	case runErr != nil && (!events.sawResult || events.resultErr != nil):
 		return partialResult(result, stdout, nil), agent.RunFailure("antigravity", "agy", events.resultErr, runErr)
 	case parseErr != nil:
@@ -2613,4 +2675,43 @@ func appendRosterNote(transcript, note string) string {
 		return note
 	}
 	return transcript + "\n\n" + note
+}
+
+// startCarriedMCP starts the run's grain-sandbox server as grain's own
+// HTTP endpoint and carries it to the agy's machine, for a host whose
+// agy cannot fork grain's mcpserver itself (agent.ServesMCPOverHTTP): a
+// grain hostd on another machine, which holds none of the sandbox access
+// or credentials that server works with. The server records its calls
+// in a file on this machine, recordedTools, since that is where it runs.
+//
+// For any other host it does nothing and returns "" for both: agy forks
+// the server, which records its calls in the run's HOME.
+func (f *Framework) startCarriedMCP(ctx context.Context, mcpArgs []string) (mcpURL, recordedTools string, stop func(), err error) {
+	if !agent.ServesMCPOverHTTP(f.host) {
+		return "", "", func() {}, nil
+	}
+	dir, err := os.MkdirTemp("", "grain-agy-mcp-")
+	if err != nil {
+		return "", "", nil, fmt.Errorf("antigravity: %w", err)
+	}
+	recordedTools = filepath.Join(dir, recordedToolsFilename)
+	args := append(slices.Clone(mcpArgs), "-recorded-tools", recordedTools)
+	endpoint, err := mcp.StartCommandHTTP(ctx, f.grainBinaryPath, args)
+	if err != nil {
+		os.RemoveAll(dir)
+		return "", "", nil, fmt.Errorf("antigravity: starting the MCP endpoint: %w", err)
+	}
+	mcpURL, release, err := agent.CarryMCPEndpoint(f.host, endpoint.URL, endpoint.Token)
+	if err != nil {
+		endpoint.Close()
+		os.RemoveAll(dir)
+		return "", "", nil, fmt.Errorf("antigravity: %w", err)
+	}
+	return mcpURL, recordedTools, func() {
+		release()
+		endpoint.Close()
+		// After loadRecordedTools has read it: Run defers this before
+		// anything that reads the record.
+		os.RemoveAll(dir)
+	}, nil
 }

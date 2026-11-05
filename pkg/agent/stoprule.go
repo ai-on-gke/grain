@@ -64,7 +64,7 @@ const SessionContinueReason = "You said you would continue. Do it now, or use `c
 const BackgroundContinueReason = "A reply without a tool call ends your run, and this run has not finished: " +
 	"nothing has been pushed and nothing has been reported. Before you stop, do one of these: push your " +
 	"branch, leave your findings with `comment_on_issue`, ask with `ask_question`, request a credential with " +
-	"`request_secret`, park on another task with `wait_for_task`, or say no change is needed with " +
+	"`request_secret`, ask for more access with `request_access`, park on another task with `wait_for_task`, or say no change is needed with " +
 	"`nothing_needed`. If you meant to keep working, keep working now."
 
 // StopRuleFramework is the optional half of Framework that says its CLI
@@ -139,12 +139,14 @@ func DecideStop(interactive bool, finalText string, calls []ToolCall) StopDecisi
 // that has been pushed. add_review_comment is how a run reviewing
 // another task's change says what it found, and counts for that reason.
 var closingTools = map[string]bool{
-	"comment_on_issue":   true,
-	"ask_question":       true,
-	"nothing_needed":     true,
-	"request_secret":     true,
-	"open_pull_request":  true,
-	"add_review_comment": true,
+	"comment_on_issue":      true,
+	"ask_question":          true,
+	"nothing_needed":        true,
+	"request_secret":        true,
+	"request_access":        true,
+	"propose_config_change": true,
+	"open_pull_request":     true,
+	"add_review_comment":    true,
 }
 
 // MadeClosingMove reports whether calls include a move a background run

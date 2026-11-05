@@ -178,6 +178,9 @@ func SystemTemplate(id string, stateRepo RepoRef) *Template {
 	if stem, ok := WorkflowReviewStem(id); ok {
 		return workflowReviewTemplate(stem)
 	}
+	if stem, ok := GitHubWorkflowReviewStem(id); ok {
+		return gitHubWorkflowReviewTemplate(stem)
+	}
 	return nil
 }
 
@@ -307,11 +310,7 @@ func memoryAgentTemplate(stateRepo RepoRef) *Template {
 		Body:          memoryAgentBody(stateRepo),
 		NetworkAccess: NetworkOpen,
 		Grants: []Grant{
-			// Named as strings rather than through
-			// pkg/capability/memory and pkg/capability/selfdebug's own
-			// CapabilityName constants: those packages import this one,
-			// so this one cannot import them.
-			{Capability: "memory", Via: GrantByGrain},
+			{Capability: "api:memory", Via: GrantByGrain},
 			{Capability: "self-debug", Via: GrantByGrain},
 		},
 	}
@@ -539,11 +538,7 @@ func releaseNotesTemplate(stateRepo RepoRef) *Template {
 		Body:          releaseNotesBody(stateRepo),
 		NetworkAccess: NetworkOpen,
 		Grants: []Grant{
-			// Named as strings rather than through
-			// pkg/capability/releasenotes and pkg/capability/selfdebug's
-			// own CapabilityName constants: those packages import this
-			// one, so this one cannot import them.
-			{Capability: "release-notes", Via: GrantByGrain},
+			{Capability: "api:release-notes", Via: GrantByGrain},
 			{Capability: "self-debug", Via: GrantByGrain},
 		},
 	}
@@ -808,7 +803,7 @@ func infraReviewTemplate(stateRepo RepoRef) *Template {
 			// CapabilityName constants: those packages import this one,
 			// so this one cannot import them.
 			{Capability: "self-debug", Via: GrantByGrain},
-			{Capability: "grain-ci", Via: GrantByGrain},
+			{Capability: GrainCIGrant, Via: GrantByGrain},
 		},
 	}
 	if stateRepo.Owner != "" {
@@ -999,7 +994,7 @@ func infraReviewBody(stateRepo RepoRef) string {
 
 	b.WriteString("## What is in scope, and what is emphatically not\n\n")
 	b.WriteString("In scope: this deployment's concurrency and sizing dials. `max_ci_jobs`, " +
-		"`max_workers`, `max_mergers`, `max_merges_per_repo` and `merge_batch_size`; " +
+		"`max_workers`, `max_mergers` and `max_merges_per_repo`; " +
 		"`sandbox_cpus`, `sandbox_memory_mb`, `sandbox_disk_gb` and the overcommit factors " +
 		"beside them; the cache ceilings (`package_cache_size_gb`, `actions_cache_size_gb`) " +
 		"and the retention bounds (`ci_run_history`, `ci_step_output_mb`, " +
@@ -1099,7 +1094,7 @@ func baseRepairTemplate(stateRepo RepoRef) *Template {
 		},
 		AutoMerge: true,
 		Grants: []Grant{
-			{Capability: "grain-ci", Via: GrantByGrain},
+			{Capability: GrainCIGrant, Via: GrantByGrain},
 		},
 	}
 }

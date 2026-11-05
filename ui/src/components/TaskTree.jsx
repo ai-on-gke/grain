@@ -25,84 +25,96 @@ import { pullRequestUrl } from "../state.js";
 // its status as the state badge every other view of the backlog shows;
 // one without (the daemon's, in the progress comment's own words) shows
 // the comment's own checkbox beside the word.
+//
+// The task being read (currentId) is already the page open -- a task's
+// own detail, or the standing session that task backs, which is where
+// opening a session's task resolves to -- so its id is drawn as text
+// rather than a link that would go nowhere (grain/task-2546).
 export default function TaskTree({ nodes, currentId, onOpenTask }) {
   if (!nodes || nodes.length === 0) return null;
   return (
     <ul className="task-tree">
-      {nodes.map((n) => (
-        <li key={n.id} data-task-id={n.id}>
-          <div
-            className={`task-tree-row${n.id === currentId ? " task-tree-current" : ""}${n.done ? " task-tree-done" : ""}`}
-            aria-current={n.id === currentId ? "true" : undefined}
-            style={onOpenTask ? { cursor: "pointer" } : undefined}
-            onClick={
-              onOpenTask
-                ? (e) => {
-                    if (e.target.closest("a")) return;
-                    e.currentTarget
-                      .querySelector(".task-tree-id")
-                      ?.focus({ preventScroll: true });
-                    onOpenTask(n.id);
-                  }
-                : undefined
-            }
-          >
-            {!n.state && (
-              <span
-                className="task-tree-check"
-                aria-label={n.done ? "done" : "not done"}
-              >
-                {n.done ? "☑" : "☐"}
-              </span>
-            )}
-            <Link
-              href={`/tasks/${n.id}`}
-              className="task-tree-id"
-              onClick={(e) => {
-                // A modified click is the browser's own (a new tab, a
-                // new window), as it is on every other task row
-                // (ListPrimitives.jsx's RowLink).
-                if (
-                  !onOpenTask ||
-                  e.button !== 0 ||
-                  e.metaKey ||
-                  e.ctrlKey ||
-                  e.shiftKey ||
-                  e.altKey
-                )
-                  return;
-                e.preventDefault();
-                onOpenTask(n.id);
-              }}
+      {nodes.map((n) => {
+        const current = currentId != null && n.id === currentId;
+        return (
+          <li key={n.id} data-task-id={n.id}>
+            <div
+              className={`task-tree-row${current ? " task-tree-current" : ""}${n.done ? " task-tree-done" : ""}`}
+              aria-current={current ? "true" : undefined}
+              style={onOpenTask && !current ? { cursor: "pointer" } : undefined}
+              onClick={
+                onOpenTask && !current
+                  ? (e) => {
+                      if (e.target.closest("a")) return;
+                      e.currentTarget
+                        .querySelector(".task-tree-id")
+                        ?.focus({ preventScroll: true });
+                      onOpenTask(n.id);
+                    }
+                  : undefined
+              }
             >
-              {n.id}
-            </Link>
-            <span className="task-tree-title">{n.title}</span>
-            {n.state ? (
-              <span className={`badge badge-${n.state} task-tree-status`}>
-                {n.status}
-              </span>
-            ) : (
-              <span className="task-tree-status">{n.status}</span>
-            )}
-            {n.pullRequest && (
-              <Link
-                className="task-tree-pr"
-                href={pullRequestUrl(n.pullRequest)}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                {n.pullRequest}
-              </Link>
-            )}
-          </div>
-          <TaskTree
-            nodes={n.children}
-            currentId={currentId}
-            onOpenTask={onOpenTask}
-          />
-        </li>
-      ))}
+              {!n.state && (
+                <span
+                  className="task-tree-check"
+                  aria-label={n.done ? "done" : "not done"}
+                >
+                  {n.done ? "☑" : "☐"}
+                </span>
+              )}
+              {current ? (
+                <span className="task-tree-id">{n.id}</span>
+              ) : (
+                <Link
+                  href={`/tasks/${n.id}`}
+                  className="task-tree-id"
+                  onClick={(e) => {
+                    // A modified click is the browser's own (a new tab, a
+                    // new window), as it is on every other task row
+                    // (ListPrimitives.jsx's RowLink).
+                    if (
+                      !onOpenTask ||
+                      e.button !== 0 ||
+                      e.metaKey ||
+                      e.ctrlKey ||
+                      e.shiftKey ||
+                      e.altKey
+                    )
+                      return;
+                    e.preventDefault();
+                    onOpenTask(n.id);
+                  }}
+                >
+                  {n.id}
+                </Link>
+              )}
+              <span className="task-tree-title">{n.title}</span>
+              {n.state ? (
+                <span className={`badge badge-${n.state} task-tree-status`}>
+                  {n.status}
+                </span>
+              ) : (
+                <span className="task-tree-status">{n.status}</span>
+              )}
+              {n.pullRequest && (
+                <Link
+                  className="task-tree-pr"
+                  href={pullRequestUrl(n.pullRequest)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {n.pullRequest}
+                </Link>
+              )}
+            </div>
+            <TaskTree
+              nodes={n.children}
+              currentId={currentId}
+              onOpenTask={onOpenTask}
+            />
+          </li>
+        );
+      })}
     </ul>
   );
 }

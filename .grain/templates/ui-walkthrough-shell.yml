@@ -20,23 +20,28 @@ body: |
     `settings / <section>`, `system / <tab>`, `task <id>`), then the
     page's own count, search and filters on the left and its actions
     ("New", "Add repo", "New board") at the right, then the global
-    alerts bell, System and Settings buttons at the very end, none of
-    them hidden or clipped. When the page's row does not fit, the
-    "More page actions" button opens the rest as a menu rather than the
-    rail growing a second row; counts sit level with the title. There is
-    no team, team switcher, user tile, Admin mode switch or "All teams"
-    anywhere, and an old `/t/<team>/...` link opens its team-less page.
-  - On a phone: the bar (menu, page title, alerts bell, Settings) and
-    the navigation drawer, a modal dialog that keeps itself open for the
-    create menu and Customize pinned items and closes on navigation,
+    alerts bell, System and Settings buttons (plus the signed-in email
+    badge and its Access settings / Log out menu when behind verified
+    identity) at the very end, none of them hidden or clipped. When the
+    page's row does not fit, the "More page actions" button opens the
+    rest as a menu (closing on Escape and outside presses) rather than
+    the rail growing a second row; counts sit level with the title. There
+    is no team, team switcher, Admin mode switch or "All teams" anywhere,
+    and an old `/t/<team>/...` link opens its team-less page.
+  - On a phone: the bar (menu, grain mark, alerts bell, Settings and New
+    task, with the page title heading below the bar) and the navigation
+    drawer, a modal dialog that keeps itself open for the create menu,
+    staging-pin taps and Customize pinned items and closes on navigation,
     with the System row and the build stamp at its foot.
-  - The rail: the create menu (New task, New session, New board),
-    pinned items and Customize, Tasks with its Merged and Blocked
-    counts, Boards and Sessions with their own entries, Processes and
-    Repos with their counts, CI, the Staging list of staging
-    environments (each linked to its host port or `/staging/` sub-path,
-    pinnable, and marked when the port is not reachable through this
-    proxy), and the build stamp linked to Settings → Upgrade.
+  - The rail: Collapse sidebar / Expand sidebar and the `[` keyboard
+    shortcut (persisted across reloads, and ignored while typing into a
+    field), the create menu (New task, New session, New board), pinned
+    items and Customize, Tasks with its active state views and Blocked
+    counts, Boards and pinned Sessions (with `/sessions` opening the full
+    list), Processes and Repos with their counts, CI, the Staging list of
+    staging environments (each linked to its host port or `/staging/`
+    sub-path, pinnable, and marked when the port is not reachable through
+    this proxy), and the build stamp linked to Settings → Upgrade.
   - Verify rail and drawer behaviour, selected state and counts, the
     banners (the disconnected banner and the host-mode install notice
     together, and the error snackbar above them) and the alerts panel
@@ -51,18 +56,22 @@ body: |
     (including when a declined discard prompt hands focus back), Escape
     and back behaviour, accessible names, confirmation dialogs, and
     reduced-motion, dark and light rendering.
-  - Sessions (`/sessions`): New session (from the create menu and the
-    Sessions page) opens an empty chat with the composer focused, a
-    Session name field, the model to run on and Pin to sidebar; send
-    the first message and confirm the session is named, pinned if
-    asked, and lit in the rail. Open and direct-link sessions (`/director`
-    included, and a deep link to a deleted session, which lists the
-    sessions rather than another's chat), send and render messages and
-    markdown, inspect status/reconnect/exit behaviour and the work tree
-    of what the session filed, Pause and Resume (absent before the
-    session has started), Restart (with and without carrying the
-    handover) and Delete with its confirmation, resize the terminal of
-    a task-bound interactive console, switch sessions, and verify that
+  - Sessions (`/sessions`) and interactive task chat: New session (from
+    the create menu and the Sessions page) opens an empty chat with the
+    composer focused, a Session name field, the model to run on and Pin
+    to sidebar; send the first message and confirm the session is named,
+    pinned if asked, and lit in the rail. Open and direct-link sessions
+    (`/director` included, and a deep link to a deleted session, which
+    lists the sessions rather than another's chat), send and render
+    messages and markdown (confirming optimistic sending bubbles,
+    back-to-back queued sends, failed-send retry, and inline config-repo
+    change approval cards), inspect status/reconnect/exit behaviour and
+    the work tree of what the session filed, edit a standing session's
+    live capabilities/repos/network/model controls (confirming the
+    next-run notice and stop-open-run offer when a run is in flight),
+    exercise Start a fresh chat (with and without summary handover when
+    offered) and Delete with its confirmation, exercise Pause and Resume
+    on a task-bound interactive chat, switch sessions, and verify that
     the rail updates.
   - The demo may not provide session managers, live streams, banners or
     device metrics. Intercept only those external or live boundaries,

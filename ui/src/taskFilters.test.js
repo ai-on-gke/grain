@@ -33,6 +33,7 @@ import {
   describeCondition,
   describeSort,
   describeUnknownConditions,
+  unknownValues,
   directionLabels,
   isDefaultSort,
   isSessionTask,
@@ -496,6 +497,38 @@ describe("sortTasks", () => {
     ).toEqual(["proposed", "running", "closed"]);
   });
 
+  it("keeps the two asked states together, ahead of failed", () => {
+    // The sidebar and the Kanban board show both asked states as one
+    // Asked, before Failed; model.StateOf's precedence (STATE_ORDER)
+    // puts failed between them, and a list ordered by state used to
+    // follow it and split the asked tasks in two.
+    const tasks = [
+      named("a", { state: "awaiting_submit" }),
+      named("b", { state: "failed" }),
+      named("c", { state: "completed" }),
+      named("d", { state: "awaiting_reply" }),
+      named("e", { state: "running" }),
+    ];
+    const by = (dir) =>
+      sortTasks(tasks, [{ attr: "state", dir }], attrs, config).map(
+        (t) => t.state,
+      );
+    expect(by("asc")).toEqual([
+      "running",
+      "awaiting_reply",
+      "awaiting_submit",
+      "failed",
+      "completed",
+    ]);
+    expect(by("desc")).toEqual([
+      "completed",
+      "failed",
+      "awaiting_submit",
+      "awaiting_reply",
+      "running",
+    ]);
+  });
+
   it("orders tasks by started and completed times", () => {
     const t1 = named("first", {
       startedAt: "2026-02-10T10:00:00Z",
@@ -794,6 +827,51 @@ describe("describing a narrowing", () => {
         values: [],
       }),
     ).toBe("Repo is empty");
+  });
+
+  it("marks a value its attribute does not have, which matches nothing", () => {
+    // state:any:waiting is the label "Waiting" written for the state
+    // queued. It read "State is any of waiting", as state:any:queued
+    // does, over an empty list.
+    const waiting = {
+      attr: "state",
+      op: "any",
+      values: ["running", "waiting"],
+    };
+    expect(describeCondition(attr("state"), waiting, config)).toBe(
+      "State is any of Running, “waiting” (unknown)",
+    );
+    expect(unknownValues(attr("state"), waiting)).toEqual(["waiting"]);
+    expect(
+      describeCondition(
+        attr("state"),
+        { attr: "state", op: "any", values: ["queued", "asked"] },
+        config,
+      ),
+    ).toBe("State is any of Waiting, Asked");
+    expect(
+      unknownValues(attr("state"), {
+        attr: "state",
+        op: "any",
+        values: ["asked", "awaiting_reply", NONE],
+      }),
+    ).toEqual([]);
+    // An origin's order is only how it sorts ("imported" is not in it),
+    // and an open vocabulary takes any value.
+    expect(
+      unknownValues(attr("origin"), {
+        attr: "origin",
+        op: "any",
+        values: ["imported"],
+      }),
+    ).toEqual([]);
+    expect(
+      unknownValues(attr("repo"), {
+        attr: "repo",
+        op: "any",
+        values: ["nope/nope"],
+      }),
+    ).toEqual([]);
   });
 
   it("says a condition is still waiting rather than reading as a filter", () => {

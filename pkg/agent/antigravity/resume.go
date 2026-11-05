@@ -53,7 +53,7 @@ import (
 // without executing a live agy at all.
 //
 // It has now been measured, and it holds. live_resume_stub_test.go is the
-// measurement, docs/hand-runs/2026-09-17-agy-resume.md the run it was
+// measurement, the 2026-09-17 agy-resume hand run the run it was
 // written from, and the shape is the one agent/claude and agent/codex
 // each use: a real agy, the argv Framework.Run builds, the private HOME
 // writeAgyHome writes, and the model behind a stub of Gemini's own
@@ -139,7 +139,7 @@ import (
 //     the whole of it. The cwd does not enter into resolving a
 //     conversation named by id, which is what codex's own measurement
 //     found for `codex exec resume`
-//     (docs/hand-runs/2026-09-07-codex-resume.md §3).
+//     (the 2026-09-07 codex-resume hand run §3).
 //   - the HOME carries a conversation_summaries.db, a
 //     jetbox_summaries_proto.pb, a cache/last_conversations.json and a
 //     brain/<id>/ tree beside the conversations directory, and what a
@@ -184,7 +184,7 @@ import (
 // stub and the argv/private HOME a dispatch builds, saw ten requests and
 // was still inside agy after five minutes. There remains no retry flag,
 // environment variable or settings key to turn down. The full schedule and
-// the remeasurement are in docs/hand-runs/2026-09-08-agy-retry.md.
+// the remeasurement are in the 2026-09-08 agy-retry hand run.
 //
 // turnDeadline therefore enforces the 100-second boundary the live probe
 // had already recorded as the point where this package must reconsider.
@@ -526,6 +526,19 @@ func (f *Framework) runAttempts(ctx context.Context, cfg agent.RunConfig, s atte
 
 		events := parseEvents(stdout)
 		appendCapture(&capture, stdout)
+		if id := events.conversationID; id != "" {
+			conversation = id
+		}
+		if agent.IsHostdStop(runErr) {
+			// The hostd running agy is draining for its own upgrade or
+			// disconnected past -hostd-reattach-timeout: the run goes back
+			// to the queue without a strike, so nothing here reads the lost
+			// host's diagnostic log, treats an unopened resume as a bad
+			// flag, or sleeps a retry backoff before trying the same hostd.
+			out.runErr = runErr
+			out.events = events
+			break
+		}
 		if runErr != nil || events.resultErr != nil || !events.sawResult {
 			if logPath != "" {
 				diagnostic = readDiagnosticLog(ctx, f.host, logPath, s.diagnosticSecrets)
@@ -535,9 +548,6 @@ func (f *Framework) runAttempts(ctx context.Context, cfg agent.RunConfig, s atte
 		out.runErr = runErr
 		out.diagnostic = diagnostic
 		out.turnVerdict, out.turnTimedOut = s.deadline.trippedVerdict()
-		if id := events.conversationID; id != "" {
-			conversation = id
-		}
 
 		// A conversation carried in from a previous dispatch that agy did
 		// not join. Neither measured build refuses this invocation for a

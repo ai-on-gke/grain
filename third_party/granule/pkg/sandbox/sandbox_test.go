@@ -25,9 +25,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/agent"
-	"github.com/bwsalmon/granule/pkg/execwire"
-	"github.com/bwsalmon/granule/pkg/guestexec"
+	"github.com/gke-labs/granule/pkg/agent"
+	"github.com/gke-labs/granule/pkg/execwire"
+	"github.com/gke-labs/granule/pkg/guestexec"
 )
 
 func currentUsername(t *testing.T) string {
@@ -216,6 +216,100 @@ func TestFraming_ExitCodeDistinguishableFromTransportCut(t *testing.T) {
 	}
 
 	// 2. Abrupt guest connection drop without TypeExit must return ErrTransportCut.
+	out.Reset()
+	_, err = cli.Exec(ctx, ExecRequest{Line: "CUT"}, nil, &out, nil)
+	if !errors.Is(err, ErrTransportCut) {
+		t.Fatalf("Exec(CUT) error = %v, want errors.Is(..., ErrTransportCut)", err)
+	}
+}
+
+type failPostHandshakeWriteConn struct {
+	net.Conn
+	mu            sync.Mutex
+	handshakeDone bool
+}
+
+func (c *failPostHandshakeWriteConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	done := c.handshakeDone
+	c.mu.Unlock()
+	if done {
+		return 0, io.ErrClosedPipe
+	}
+	return c.Conn.Write(p)
+}
+
+func TestFraming_StdinWriteErrorBeforeGuestExitDoesNotOrphanStream(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Simulates the scheduler race where writing TypeStdinClose to guestConn
+	// fails with EPIPE/ErrClosedPipe (because the guest command exited/closed)
+	// before managedExec.readLoop has observed TypeExit or EOF. The server must
+	// not treat a guestConn write failure as a client stream detach.
+	dialer := func(dialCtx context.Context) (net.Conn, error) {
+		c1, c2 := net.Pipe()
+		wrapped := &failPostHandshakeWriteConn{Conn: c1}
+		go func() {
+			defer c2.Close()
+			br := bufio.NewReader(c2)
+			req, err := execwire.ReadRequest(br)
+			if err != nil {
+				return
+			}
+			wrapped.mu.Lock()
+			wrapped.handshakeDone = true
+			wrapped.mu.Unlock()
+
+			_ = execwire.WriteResponse(c2, execwire.Response{OK: true, Features: execwire.Features})
+			time.Sleep(25 * time.Millisecond)
+			if strings.Contains(req.Line, "CUT") {
+				_ = execwire.WriteFrame(c2, execwire.TypeStdout, []byte("partial\n"))
+				return
+			}
+			_ = execwire.WriteFrame(c2, execwire.TypeStdout, []byte("ok\n"))
+			_ = execwire.WriteFrame(c2, execwire.TypeExit, execwire.EncodeExit(77))
+		}()
+		return wrapped, nil
+	}
+
+	srv := NewServer(ServerConfig{
+		SandboxID: "sbx-stdin-race",
+		Guest:     guestexec.Config{User: currentUsername(t)},
+		DialGuest: dialer,
+	})
+
+	sockDir := t.TempDir()
+	sockPath := filepath.Join(sockDir, "access.sock")
+	go func() {
+		_ = srv.ListenAndServe(ctx, "unix:"+sockPath)
+	}()
+
+	var (
+		cli *Client
+		err error
+	)
+	for range 50 {
+		cli, err = Dial(ctx, "unix:"+sockPath, DialOptions{})
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer cli.Close()
+
+	var out bytes.Buffer
+	code, err := cli.Exec(ctx, ExecRequest{Line: "exit 77"}, nil, &out, nil)
+	if err != nil {
+		t.Fatalf("Exec(exit 77) unexpected error: %v", err)
+	}
+	if code != 77 || out.String() != "ok\n" {
+		t.Fatalf("Exec(exit 77) = (%d, %q), want (77, %q)", code, out.String(), "ok\n")
+	}
+
 	out.Reset()
 	_, err = cli.Exec(ctx, ExecRequest{Line: "CUT"}, nil, &out, nil)
 	if !errors.Is(err, ErrTransportCut) {
@@ -643,10 +737,24 @@ func TestAcceptor_AuthRefusalsAndMTLS(t *testing.T) {
 		if clientCert != nil {
 			tlsCfg.Certificates = []tls.Certificate{*clientCert}
 		}
-		dctx, dcancel := context.WithTimeout(ctx, 2*time.Second)
+		before := acceptor.Refusals()
+		dctx, dcancel := context.WithTimeout(ctx, 5*time.Second)
 		defer dcancel()
+		go func() {
+			for acceptor.Refusals() < before+2 {
+				select {
+				case <-dctx.Done():
+					return
+				case <-time.After(2 * time.Millisecond):
+				}
+			}
+			dcancel()
+		}()
 		return srv.DialOut(dctx, "tls://"+acceptor.Addr().String(), DialOutOptions{
-			TLSConfig: tlsCfg,
+			TLSConfig:      tlsCfg,
+			MinBackoff:     5 * time.Millisecond,
+			MaxBackoff:     20 * time.Millisecond,
+			AuthMaxBackoff: 40 * time.Millisecond,
 		})
 	}
 
@@ -707,8 +815,159 @@ func TestAcceptor_AuthRefusalsAndMTLS(t *testing.T) {
 	if err != nil || !info.Ready {
 		t.Fatalf("Health on mTLS sandbox-a: info=%+v, err=%v", info, err)
 	}
-	if acceptor.Refusals() < 6 {
-		t.Fatalf("Acceptor.Refusals() = %d, want >= 6", acceptor.Refusals())
+	if acceptor.Refusals() < 12 {
+		t.Fatalf("Acceptor.Refusals() = %d, want >= 12 (retries across 6 refusal cases)", acceptor.Refusals())
+	}
+}
+
+func TestDialOutMode_SurvivesTransientControllerAuthRefusal(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	pki := newTestPKI(t)
+	acceptor, err := ListenTLS("127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{pki.serverCert},
+	})
+	if err != nil {
+		t.Fatalf("ListenTLS: %v", err)
+	}
+	defer acceptor.Close()
+	go func() {
+		_ = acceptor.Serve(ctx)
+	}()
+
+	const (
+		sandboxID = "sbx-controller-restart"
+		token     = "pre-shared-sandbox-token"
+	)
+
+	srv := NewServer(ServerConfig{
+		SandboxID:      sandboxID,
+		Token:          token,
+		WrapperVersion: "test-1.0",
+		Guest:          guestexec.Config{User: currentUsername(t)},
+		DialGuest:      inProcessGuestDialer(ctx),
+	})
+
+	dialDone := make(chan error, 1)
+	go func() {
+		dialDone <- srv.DialOut(ctx, "tls://"+acceptor.Addr().String(), DialOutOptions{
+			TLSConfig:      &tls.Config{RootCAs: pki.caPool, ServerName: "controller.local"},
+			MinBackoff:     15 * time.Millisecond,
+			MaxBackoff:     40 * time.Millisecond,
+			AuthMaxBackoff: 80 * time.Millisecond,
+		})
+	}()
+
+	// 1. Before the controller registers the sandbox's token, DialOut hits
+	// ErrAuthFailed ("unknown sandbox") repeatedly without exiting.
+	waitForRefusals := func(minRefusals uint64) {
+		t.Helper()
+		for acceptor.Refusals() < minRefusals {
+			select {
+			case err := <-dialDone:
+				t.Fatalf("DialOut exited early on auth refusal: %v", err)
+			case <-ctx.Done():
+				t.Fatalf("timed out waiting for Acceptor.Refusals() >= %d (got %d)", minRefusals, acceptor.Refusals())
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}
+	waitForRefusals(2)
+
+	// 2. Controller finishes startup restoration and registers the token;
+	// DialOut connects on its next retry.
+	if err := acceptor.RegisterToken(sandboxID, token, time.Now().Add(5*time.Minute)); err != nil {
+		t.Fatalf("RegisterToken: %v", err)
+	}
+	cli, err := acceptor.WaitClient(ctx, sandboxID)
+	if err != nil {
+		t.Fatalf("WaitClient after late registration: %v", err)
+	}
+	info, err := cli.Health(ctx)
+	if err != nil || !info.Ready {
+		t.Fatalf("Health after late registration: info=%+v, err=%v", info, err)
+	}
+
+	// 3. Start an exec command, then simulate a controller restart where the
+	// active connection drops and the sandbox slot is temporarily absent
+	// (Acceptor.Revoke) while the wrapper reconnects.
+	gateFile := filepath.Join(t.TempDir(), "gate")
+	proc, err := cli.StartExec(ctx, ExecRequest{
+		Line: fmt.Sprintf(
+			`echo "before-restart"; while [ ! -f %s ]; do sleep 0.02; done; echo "after-restart"; exit 19`,
+			shellQuote(gateFile),
+		),
+	})
+	if err != nil {
+		t.Fatalf("StartExec: %v", err)
+	}
+	_ = proc.Stdin().Close()
+
+	var combinedOut syncBuffer
+	firstLineReady := make(chan struct{})
+	var once sync.Once
+	writer := &notifyWriter{
+		onWrite: func(p []byte) {
+			combinedOut.Write(p)
+			if strings.Contains(combinedOut.String(), "before-restart\n") {
+				once.Do(func() { close(firstLineReady) })
+			}
+		},
+	}
+
+	waitDone := make(chan struct {
+		code int
+		n    int64
+		err  error
+	}, 1)
+	go func() {
+		c, n, werr := proc.Wait(writer, io.Discard)
+		waitDone <- struct {
+			code int
+			n    int64
+			err  error
+		}{c, n, werr}
+	}()
+
+	select {
+	case <-firstLineReady:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for before-restart output")
+	}
+
+	refusalsBefore := acceptor.Refusals()
+	acceptor.Revoke(sandboxID)
+
+	firstRes := <-waitDone
+	if !errors.Is(firstRes.err, ErrTransportCut) {
+		t.Fatalf("Wait across controller restart returned err = %v, want ErrTransportCut", firstRes.err)
+	}
+
+	// Ensure the wrapper attempts to reconnect during the window before the
+	// controller re-registers the sandbox and survives the auth refusals.
+	waitForRefusals(refusalsBefore + 2)
+
+	if err := os.WriteFile(gateFile, []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := acceptor.RegisterToken(sandboxID, token, time.Now().Add(5*time.Minute)); err != nil {
+		t.Fatalf("RegisterToken after restart: %v", err)
+	}
+
+	cli2, err := acceptor.WaitClient(ctx, sandboxID)
+	if err != nil {
+		t.Fatalf("WaitClient after re-registration: %v", err)
+	}
+	code, err := cli2.Reattach(ctx, proc.ID(), firstRes.n, writer, io.Discard)
+	if err != nil {
+		t.Fatalf("Reattach after controller restart: %v", err)
+	}
+	if code != 19 {
+		t.Fatalf("Reattach exit code = %d, want 19", code)
+	}
+	if got, want := combinedOut.String(), "before-restart\nafter-restart\n"; got != want {
+		t.Fatalf("combined output = %q, want %q", got, want)
 	}
 }
 

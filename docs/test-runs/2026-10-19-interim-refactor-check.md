@@ -9,7 +9,7 @@ still in progress. Task 4716 does the full qualification after them.
 | | |
 |---|---|
 | Commit | `main` at **f851da576** (merge of task 4684, stage 5). Re-fetched before reporting: unchanged |
-| Builds | **Google**: `go build ./google/cmd/grain`. **Core**: `go build ./cmd/grain`. There is no `nogoogle` build tag. The split is by main package (`google/README.md`), so `-tags nogoogle` builds the same core binary as a plain `go build ./cmd/grain` |
+| Builds | **Google**: `go build a wrapper distribution's `cmd/grain`. **Core**: `go build ./cmd/grain`. There is no `nogoogle` build tag. The split is by main package (`google/README.md`), so `-tags nogoogle` builds the same core binary as a plain `go build ./cmd/grain` |
 | Daemons | `grain daemon -data-dir <fresh> -sandbox-backend none`, each on its own `-sandbox-port-base`. Google on SQLite, core on SQLite, Google on PostgreSQL 15 (Debian package, local) |
 | Pre-reset data | Written by a build of `3e5b6c386`, the commit before stage 1 (4680): one dir `-tenancy multi` (plus a team `eng` and a user `alice`), one dir `-tenancy single`, and one multi-tenant Postgres database |
 | Stubs | **forgecli**: a shell script on the daemon's `PATH` that logs its calls, prints a token for `auth token`, and answers `api … user` and `api … user/repos` with an HTTP header block and canned JSON (`walker`; `walk-org/service-a`, `walk-org/service-b`). **GitHub**: `pkg/github/githubsim`, inside the e2e harness. The github.com PAT in the seed file is fake. Nothing of grain's own was stubbed |
@@ -38,7 +38,7 @@ the guard *has* landed (bugs 1 and 2 below).
 
 | # | Flow | Result |
 |---|---|---|
-| 1 | Build both mains; boot on fresh dirs (SQLite: Google and core; Postgres: Google) | **PASS**. A fresh dir resolves to `tenancy: single (a new installation…)`. The Google build advertises `forgecli` in `/api/git-ambient-sources`; core advertises nothing |
+| 1 | Build both mains; boot on fresh dirs (SQLite: Google and core; Postgres: Google) | **PASS**. A fresh dir resolves to `tenancy: single (a new installation…)`. The wrapper distribution's build advertises `forgecli` in `/api/git-ambient-sources`; core advertises nothing |
 | 2 | Access-code sign-in, no username/password | **PASS** (both builds and Postgres). `/` without the code returns 401 and a page with a single masked `code` field and no username field. A wrong code is refused. The right code, typed lower-case with spaces, lands on `/t/default/tasks`. `/api/auth/login`, `/register` and `/google/login` return 404 "this daemon is single-tenant" |
 | 3 | No team UI anywhere | **FAIL, expected: 3e not landed**. The sidebar has Team home, Team settings (with members) and User settings. The team switcher says "Teams own their repositories, credentials and model connections; switch teams here", and `/admin` lists "all teams" and "all users". There is no New team button (removed by 4b). Not filed: this is 3e's scope |
 | 4 | No leftover team/admin routes | **FAIL, expected: 3d/3e not landed**. Still served: `/api/teams` (GET/POST/PUT/DELETE), `/api/teams/{id}/…` (git connections, agent backends, GCP keys, audit logs, repo config), `/api/users` (CRUD), `/api/repos/{o}/{n}/admins`, `/api/auth/change-password`. `/api/config` and `/api/settings` still carry `passwordAuthEnabled`, `openRegistration`, `googleOAuth*` and `adminAccounts`. **`POST /api/teams` works on a single-tenant daemon, and that data dir then won't start (bug 1)** |
@@ -49,7 +49,7 @@ the guard *has* landed (bugs 1 and 2 below).
 | 9 | `grain connections import` from a JSON seed | **PASS**. Two git entries (github.com PAT `bot` with `token_file`, anonymous `git.example.test` scope `acme`) and one antigravity model connection with a key file: `imported 2 git and 1 model connections`. A second run is a no-op. After restart, the connections are listed at deployment level and `secrets/github/bot.token` is 0600 |
 | 10 | Gemini discovery (live) | **PASS**. The imported connection discovered 11 models (gemini-3.8/3.7/3.6-flash at high/medium/low, gemini-3.1-pro high/low). **Known, still open:** the seed's `default_model: gemini-3.1-pro` (also the example in `grain connections import -h`) names no discovered model, so the daemon logs "the default agent framework is not ready". This is bug 1 of the 10-18 candidate qualification |
 | 11 | PAT / GitHub App against the fake GitHub | **PASS (e2e harness)**. `TestGitHostsPhase5EndToEnd`, `TestTeamOwnedGitHubPATScopingAndGitProxyIsolationWalkthrough`, `connections_seed_test.go`, `credential_refusal_test.go`, `ambient_credential_remote_test.go`; and `pkg/gitproxy`'s App/PAT tests (43 matched and passed) |
-| 12 | Command-backed forge via fake `forgecli`, Google build | **PASS**. Adding `depot.code.corp.example` with ambient source `forgecli` makes the daemon run `GH_HOST=depot.code.corp.example forgecli auth token` and `forgecli api --include … user`. The connection shows "pushes and API calls act as walker", and reachable repos lists `depot.code.corp.example/walk-org/service-a` and `service-b` (push) |
+| 12 | Command-backed forge via fake `forgecli`, wrapper distribution build | **PASS**. Adding `git.example.com` with ambient source `forgecli` makes the daemon run `GH_HOST=git.example.com forgecli auth token` and `forgecli api --include … user`. The connection shows "pushes and API calls act as walker", and reachable repos lists `git.example.com/walk-org/service-a` and `service-b` (push) |
 | 13 | `forgecli` in the core build | **PASS**. With the same `forgecli` on `PATH`, `source: forgecli` gets a 400 "unknown ambient source \"forgecli\": gh, git, auto", and `forgecli` is never executed |
 | 14 | Per-model pause | **PASS (tests)**. A pause trips only when a model reports a quota, which no run here hit. `pkg/cli` `connection_pause_walkthrough_test.go` and `pkg/orchestrator` `pause_model_test.go` pass (29 orchestrator Pause tests), as does `TestWalkthroughAShortPauseExpiresAndTheQueuedTaskDispatches` |
 | 15 | Task lifecycle: create (CLI) → approve → dispatch | **PASS (live)**. On the core daemon `grain create` filed task 2 (proposed), and `grain approve 2` queued it. With `-sandbox-backend none` it was not dispatched |
@@ -108,6 +108,6 @@ before a release is cut from `main`.
 ## Brief vs. tree
 
 - "`-tags nogoogle` core build": there is no such tag. Core is
-  `./cmd/grain` and Google is `./google/cmd/grain`.
+  `./cmd/grain` and Google is a wrapper distribution's `cmd/grain`.
 - "Stage 3 … accounts, sessions, RBAC … multi-tenant UI removed": only 3a–3c
   have landed (see above). Stage 4 has landed 4a–4b.

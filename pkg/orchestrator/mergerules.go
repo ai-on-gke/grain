@@ -53,7 +53,8 @@ func mergePolicyFor(ctx context.Context, store *model.Store, client github.Clien
 	if e.rules.Empty() {
 		return nil
 	}
-	if p, ok := model.MergePolicyOf(e.task); ok && p.Head == headSHA && headSHA != "" && p.Rules == e.rules.Commit {
+	if p, ok := model.MergePolicyOf(e.task); ok && p.Head == headSHA && headSHA != "" && p.Rules == e.rules.Commit &&
+		(!e.explicitDisablesGrainCI || !policyHasRepoGrainMode(p)) {
 		return &p
 	}
 	files, err := client.ListPullRequestFiles(e.ref.Repo.Owner, e.ref.Repo.Name, e.ref.Number)
@@ -353,4 +354,55 @@ func portRefusal(task model.Task) string {
 		return ""
 	}
 	return "its merge rules say `port: false` (from " + describeRuleSources(p.SourcesOf("port")) + ")"
+}
+
+// policyHasRepoGrainMode reports whether p recorded "grain" as the repository's
+// own CI mode (from model.PolicySourceRepo).
+func policyHasRepoGrainMode(p model.EffectiveMergePolicy) bool {
+	for _, r := range p.Requirements {
+		if r.Field != "ci.mode" || r.Value != string(model.CIGateGrain) {
+			continue
+		}
+		for _, from := range r.From {
+			if from == model.PolicySourceRepo {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// policyRuleRequiresGrainCI reports whether a merge rule (or defaults, rather
+// than repository settings alone) requires Grain CI in p.
+func policyRuleRequiresGrainCI(p model.EffectiveMergePolicy) bool {
+	for _, r := range p.Requirements {
+		if r.Field != "ci.mode" || !model.CIGateMode(r.Value).Grain() {
+			continue
+		}
+		for _, from := range r.From {
+			if from != model.PolicySourceRepo {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// mergeRulesRequireGrainCI reports whether repo's declared merge rules require
+// Grain CI for task (or for any rule in repo when task has not been classified).
+func mergeRulesRequireGrainCI(ctx context.Context, store *model.Store, task model.Task, repo model.RepoRef) (bool, error) {
+	if store == nil {
+		return false, nil
+	}
+	rules, err := store.MergeRulesOf(ctx, repo)
+	if err != nil {
+		return false, err
+	}
+	if rules.Empty() {
+		return false, nil
+	}
+	if p, ok := model.MergePolicyOf(task); ok && p.Rules == rules.Commit {
+		return policyRuleRequiresGrainCI(p), nil
+	}
+	return rules.Effective(nil, false, model.CIModeGitHub).Mode.Grain(), nil
 }

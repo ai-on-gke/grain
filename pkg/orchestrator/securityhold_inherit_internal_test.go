@@ -14,7 +14,13 @@
 
 package orchestrator
 
-import "testing"
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/ai-on-gke/grain/pkg/model"
+)
 
 // The same change made on two branches reads the same once line numbers
 // and blob ids are gone, and reads differently the moment a line of it
@@ -101,5 +107,29 @@ func TestFilePatchesRefusesWhatItCannotCompare(t *testing.T) {
 		if _, ok := filePatches(diff); ok {
 			t.Errorf("%s: compared as if its text said what changed", name)
 		}
+	}
+}
+
+// A task with two open pull requests has one security hold, about the one
+// model.TaskPullRequest names. The other is neither merged on that hold's
+// clearance nor classified in its place, which would overwrite it.
+func TestSecurityHoldIsKeyedToTheTasksOwnPullRequest(t *testing.T) {
+	repo := model.RepoRef{Owner: "ai-on-gke", Name: "grain"}
+	task := model.Task{ID: "t1", Target: &repo, AutoMerge: true, Links: []model.Link{
+		{Kind: model.LinkFixes, Target: "ai-on-gke/grain#100"},
+		{Kind: model.LinkFixes, Target: "ai-on-gke/grain#99"},
+		{Kind: model.LinkTrustBoundaryCleared, Target: clearedTarget("abc", model.RepoRules{})},
+	}}
+	own := model.PullRequestRef{Repo: repo, Number: 100}
+	stale := model.PullRequestRef{Repo: repo, Number: 99}
+	if !holdIsAbout(task, own) || holdIsAbout(task, stale) {
+		t.Fatalf("holdIsAbout(#100, #99) = %v, %v; want true, false", holdIsAbout(task, own), holdIsAbout(task, stale))
+	}
+	cleared, err := clearedForHead(context.Background(), nil, nil, task, stale, "def", time.Time{})
+	if err != nil || cleared {
+		t.Fatalf("clearedForHead(#99) = %v, %v; want false, nil", cleared, err)
+	}
+	if !holdIsAbout(model.Task{ID: "t2", Target: &repo}, stale) {
+		t.Fatal("a task with no pull request linked yet refused the one being classified")
 	}
 }

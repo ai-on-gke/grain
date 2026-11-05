@@ -31,13 +31,29 @@ func requestIsHTTPS(r *http.Request) bool {
 	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 }
 
-// handleAuthLogout ends a single-tenant daemon's access session. There is
-// no other session to end: grain keeps no sign-in accounts.
+// IAPClearLoginCookiePath is Google Cloud IAP's sign-out endpoint, which clears
+// IAP's browser login cookie.
+const IAPClearLoginCookiePath = "/_gcp_iap/clear_login_cookie"
+
+// handleAuthLogout ends a single-tenant daemon's access session, and for a
+// caller signed in through IAP directs the browser to IAP's own cookie-clearing
+// endpoint.
 func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	clearAccessCookie(w, r)
 
+	_, method, ok := identifyCaller(r)
+	viaIAP := ok && method == AuthMethodIAP
+
 	if r.Method == http.MethodPost || strings.Contains(r.Header.Get("Accept"), "application/json") {
-		writeJSON(w, http.StatusOK, map[string]any{"loggedOut": true})
+		resp := map[string]any{"loggedOut": true}
+		if viaIAP {
+			resp["redirect"] = IAPClearLoginCookiePath
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	if viaIAP {
+		http.Redirect(w, r, IAPClearLoginCookiePath, http.StatusFound)
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusFound)
@@ -56,6 +72,8 @@ type AuthUserResponse struct {
 	// "iap", "header", or "trusted" for nobody signed in from a source
 	// this daemon trusts as itself. Empty for anybody else.
 	AuthMethod AuthMethod `json:"authMethod,omitempty"`
+	// Access is configResponse.Access.
+	Access *AccessRoleInfo `json:"access,omitempty"`
 }
 
 // identityNotAccepted is, for a request that is not authenticated, the
@@ -85,7 +103,7 @@ func (s *Server) authMethod(r *http.Request) (method AuthMethod, user string) {
 	} else {
 		p, method, ok = extractPrincipal(r)
 	}
-	if !ok || p.Kind != model.PrincipalHuman {
+	if !ok || (p.Kind != model.PrincipalHuman && p.Kind != model.PrincipalService) {
 		if !ok && singleTenantTrusted(r) {
 			return AuthMethodTrusted, ""
 		}
@@ -101,6 +119,7 @@ func (s *Server) handleAuthUser(w http.ResponseWriter, r *http.Request) {
 	resp.IdentityNotAccepted = identityNotAccepted(r, resp.Authenticated)
 
 	resp.Tenancy = "single"
+	resp.Access = accessRoleInfo(r.Context())
 
 	writeJSON(w, http.StatusOK, resp)
 }

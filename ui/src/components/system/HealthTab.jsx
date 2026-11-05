@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Alert, Box, Button, Link } from "@mui/material";
 import api from "../../api.js";
 import { AlertsPanel } from "../AlertsButton.jsx";
@@ -20,11 +20,12 @@ import { InstallNoticeAlert } from "../InstallNotice.jsx";
 import { SandboxOvercommitStatus } from "../SandboxHealthPage.jsx";
 import UnbackedStateDot, { stateDot } from "../UnbackedStateDot.jsx";
 import GitHubBudgetPanel from "./GitHubBudgetPanel.jsx";
+import HealthCountersPanel from "./HealthCountersPanel.jsx";
 import { HostdHealthNote } from "../HostdMissingNote.jsx";
-import { settingLabel } from "../../settingsPlan.js";
+import { settingLabel, settingLocation } from "../../settingsPlan.js";
 
 // HealthTab is System → Health, System's default tab
-// (docs/design/settings-panel.md §2.1): is anything wrong? It is the
+// (design/design/settings-panel.design.md §2.1): is anything wrong? It is the
 // alerts the bell already lists, each with the link it already carries,
 // and the two settings states that used to sit at the top of every
 // settings tab -- saved but not applied until a restart, and stored but
@@ -57,10 +58,33 @@ export default function HealthTab({
       live = false;
     };
   }, []);
-  const pending = (settings?.pendingRestart || []).map(settingLabel);
-  const unrunnable = (settings?.unrunnable || []).map(
-    (u) => `${settingLabel(u.key)} (stored ${u.stored}, running ${u.running})`,
-  );
+  const pending = settings?.pendingRestart || [];
+  const unrunnable = settings?.unrunnable || [];
+  const settingLink = (key) => {
+    const label = settingLabel(key);
+    const loc = settingLocation(key);
+    if (!loc) return label;
+    return (
+      <Link
+        href={loc.href}
+        onClick={(evt) => {
+          if (
+            !onOpenSettings ||
+            evt.button !== 0 ||
+            evt.metaKey ||
+            evt.ctrlKey ||
+            evt.shiftKey ||
+            evt.altKey
+          )
+            return;
+          evt.preventDefault();
+          onOpenSettings(loc.section, loc.target);
+        }}
+      >
+        {label}
+      </Link>
+    );
+  };
   return (
     <Box data-testid="system-health">
       <InstallNoticeAlert
@@ -98,7 +122,14 @@ export default function HealthTab({
             </Button>
           }
         >
-          Saved, not applied until restart: {pending.join(", ")}.
+          Saved, not applied until restart:{" "}
+          {pending.map((key, idx) => (
+            <Fragment key={key}>
+              {idx > 0 && ", "}
+              {settingLink(key)}
+            </Fragment>
+          ))}
+          .
         </Alert>
       )}
       {unrunnable.length > 0 && (
@@ -107,16 +138,15 @@ export default function HealthTab({
           sx={{ mb: 1 }}
           data-testid="health-unrunnable"
         >
-          Stored, but not runnable: {unrunnable.join(", ")}. grain is running
-          with a value it can use instead; save it in{" "}
-          <Link
-            component="button"
-            type="button"
-            onClick={() => onOpenSettings?.("engine")}
-          >
-            Settings → Engine
-          </Link>{" "}
-          to store it.
+          Stored, but not runnable:{" "}
+          {unrunnable.map((u, idx) => (
+            <Fragment key={u.key}>
+              {idx > 0 && ", "}
+              {settingLink(u.key)} (stored {u.stored}, running {u.running})
+            </Fragment>
+          ))}
+          . grain is running with a value it can use instead; save it in
+          Settings to store it.
         </Alert>
       )}
       <SandboxOvercommitStatus
@@ -128,6 +158,7 @@ export default function HealthTab({
         sx={{ mb: 1.5 }}
       />
       <GitHubBudgetPanel sx={{ mb: 1.5 }} />
+      <HealthCountersPanel sx={{ mb: 1.5 }} />
       <AlertsPanel
         alerts={alerts}
         onChanged={onChanged}

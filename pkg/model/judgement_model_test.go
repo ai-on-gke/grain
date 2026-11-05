@@ -18,11 +18,14 @@ import "testing"
 
 // The judgement model resolves to the deployment's own choice when it has
 // one, and otherwise to the strongest model its enabled connections offer,
-// whatever each connection calls it (docs/design/durable-tasks.md#DT-11).
+// whatever each connection calls it (design/design/durable-tasks.design.md#DT-11).
 func TestTheJudgementModelResolvesToTheStrongestOfferedModel(t *testing.T) {
 	t.Parallel()
 	gemini := AgentBackend{ID: "agy", Framework: AgentFrameworkAntigravity, Models: []string{"gemini-pro-coordinator", "opus-5.5-medium"}}
 	opus := AgentBackend{ID: "agy2", Framework: AgentFrameworkAntigravity, Models: []string{"opus-5.5"}}
+	agyCatalog := AgentBackend{ID: "agy-catalog", Framework: AgentFrameworkAntigravity, Models: []string{"gemini-3.8-flash-high", "gemini-4-argon-medium", "gemini-4-argon-high", "gemini-3.1-pro-high"}}
+	agyMedium := AgentBackend{ID: "agy-medium", Framework: AgentFrameworkAntigravity, Models: []string{"gemini-3.8-flash-high", "gemini-4-argon-medium", "gemini-3.1-pro-high"}}
+	agyPro := AgentBackend{ID: "agy-pro", Framework: AgentFrameworkAntigravity, Models: []string{"gemini-3.8-flash-high", "gemini-3.1-pro-high", "gemini-3.1-pro-low"}}
 	off := AgentBackend{ID: "claude", Framework: AgentFrameworkClaude, Models: []string{"claude-opus-5-5"}, Disabled: true}
 
 	for _, tc := range []struct {
@@ -34,6 +37,9 @@ func TestTheJudgementModelResolvesToTheStrongestOfferedModel(t *testing.T) {
 	}{
 		{"Opus 5.5 first", Config{}, []AgentBackend{gemini, opus}, "opus-5.5", true},
 		{"medium effort beats the rotation's other half", Config{}, []AgentBackend{gemini}, "opus-5.5-medium", true},
+		{"Antigravity catalog resolves argon high before medium and 3.1 pro", Config{}, []AgentBackend{agyCatalog}, "gemini-4-argon-high", true},
+		{"Antigravity catalog resolves argon medium before 3.1 pro", Config{}, []AgentBackend{agyMedium}, "gemini-4-argon-medium", true},
+		{"Antigravity catalog resolves 3.1 pro high over flash", Config{}, []AgentBackend{agyPro}, "gemini-3.1-pro-high", true},
 		{"a disabled connection offers nothing", Config{}, []AgentBackend{off}, "", false},
 		{"the deployment's own choice wins", Config{JudgementModel: "claude-sonnet-5-5"}, []AgentBackend{opus}, "claude-sonnet-5-5", true},
 		{"nothing ranked", Config{}, []AgentBackend{{ID: "x", Models: []string{"mystery"}}}, "", false},

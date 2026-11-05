@@ -31,7 +31,6 @@ export const CLI_RUN_CLIS = [
   { framework: "claude", label: "claude" },
   { framework: "codex", label: "codex" },
   { framework: "antigravity", label: "agy (Antigravity)" },
-  { framework: "custom", label: "custom commands" },
 ];
 
 const LOCATIONS = [
@@ -40,7 +39,7 @@ const LOCATIONS = [
   { value: "container", label: "Container" },
   // The image's CLI with the deployment's login, as a container run, but
   // started detached through grain hostd so a daemon upgrade does not
-  // interrupt it (docs/non-disruptive-upgrade.md). Only offered where the
+  // interrupt it (design/design/non-disruptive-upgrade.design.md). Only offered where the
   // daemon says so: claude, behind hostd.
   { value: "detached", label: "Detached in grain hostd" },
 ];
@@ -60,7 +59,6 @@ export function resolvedLine(r) {
       ? `host (${r.hostPath}, through grain hostd)`
       : "host (through grain hostd)";
   }
-  if (r.framework === "custom") return "host (each connection's own command)";
   return `host (${r.hostPath || "not found on PATH"})`;
 }
 
@@ -339,9 +337,13 @@ export function HostdProcesses({ hostd }) {
 // /api/settings/cli-run and applied to that CLI's next run. Each row
 // shows where the daemon will run it and why (GET /api/settings/cli-run's
 // resolved list).
-export default function CLIRunLocations({ showError, onSaved }) {
-  const [loaded, setLoaded] = useState(null);
-  const [draft, setDraft] = useState({});
+export default function CLIRunLocations({
+  showError,
+  onSaved,
+  initialLoaded = undefined,
+}) {
+  const [loaded, setLoaded] = useState(() => initialLoaded ?? null);
+  const [draft, setDraft] = useState(() => initialLoaded?.settings || {});
   const [saving, setSaving] = useState(false);
 
   const reload = useCallback(async () => {
@@ -354,8 +356,9 @@ export default function CLIRunLocations({ showError, onSaved }) {
     }
   }, [showError]);
   useEffect(() => {
+    if (initialLoaded !== undefined) return;
     reload();
-  }, [reload]);
+  }, [initialLoaded, reload]);
 
   if (!loaded) return null;
   const resolved = Object.fromEntries(
@@ -482,7 +485,7 @@ export default function CLIRunLocations({ showError, onSaved }) {
               {r?.upgradeInterrupts && (
                 // Where this CLI runs now, a daemon upgrade finishes its
                 // runs as interrupted rather than carrying them across
-                // the restart (docs/non-disruptive-upgrade.md). Said
+                // the restart (design/design/non-disruptive-upgrade.design.md). Said
                 // here rather than discovered on the upgrade pane.
                 // A standing fact rather than news, so a note and not an
                 // alert: nothing for a screen reader to interrupt with.

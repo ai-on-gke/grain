@@ -161,8 +161,6 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		PollInterval:            ptr("1m"),
 		MaxWorkers:              ptr(4),
 		MaxMergesPerRepo:        ptr(2),
-		MergeBatchSize:          ptr(4),
-		MergeGatherWindow:       ptr("3m"),
 		MaxAutoSubmitDepth:      ptr(3),
 		MaxAutoSubmitFanOut:     ptr(4),
 		MaxAgentTurns:           ptr(42),
@@ -191,8 +189,8 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		SandboxImageMirror:      ptr("us-docker.pkg.dev/acme-project/grain/guest"),
 		K8sNamespace:            ptr("grain-sandboxes"),
 		K8sKubectl:              ptr("/usr/local/bin/kubectl"),
-		K8sSandboxImage:         ptr("ghcr.io/bwsalmon/grain-k8s-sandbox:v1"),
-		K8sGranuleImage:         ptr("ghcr.io/bwsalmon/grain-sandbox:v1"),
+		K8sSandboxImage:         ptr("docker.io/acme/grain-sandbox-k8s:v1"),
+		K8sGranuleImage:         ptr("docker.io/acme/grain-sandbox:v1"),
 		K8sWorkspace:            ptr("/home/agent"),
 		K8sGitProxyHost:         ptr("10.0.0.5"),
 		K8sSandboxService:       ptr("grain-sandbox-proxy"),
@@ -234,6 +232,9 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		UpgradeCheckPausesPipeline:  ptr(true),
 		AutoUpgradeChannel:          ptr("main"),
 		AutoUpgradeTime:             ptr("04:30"),
+		AutoUpgradeOn:               ptr("release"),
+		OwnerTrust:                  ptr([]model.OwnerTrustRule{{Owner: "jane@example.com", Repo: "acme/widgets"}}),
+		AutoGrantContextReads:       ptr([]string{"acme/specs"}),
 		AgentBackends:               ptr([]model.AgentBackend{{ID: "backend-1", Name: "Primary", Framework: model.AgentFrameworks()[0], Models: []string{"gemini-3.1-pro"}}}),
 		DefaultModel:                ptr("gemini-3.1-pro"),
 		PromptExtension:             ptr("be brief"),
@@ -241,6 +242,7 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		TaskBranchTemplate:          ptr("alice/grain/task-{id}"),
 		DeploymentID:                ptr("prod"),
 		DefaultCapabilities:         ptr([]string{ui.OfferedCapabilities()[0].ID}),
+		SettingsLocked:              ptr(true),
 	}
 }
 

@@ -177,9 +177,7 @@ if [ "$1" = "vm" ] && { [ "$2" = "create" ] || [ "$2" = "delete" ]; }; then
 fi
 `, argvLog, delay.Seconds(), timesLog, port)
 	path := filepath.Join(dir, "granule")
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	orchestrator.WriteExecutableStub(t, path, script)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 

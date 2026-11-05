@@ -44,7 +44,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
+	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
@@ -93,6 +93,7 @@ func PublishedToolNames() []string {
 	// named here too.
 	add(mcp.NewPullRequestTools(nil, nil, mcp.PullRequestScope{}))
 	add(mcp.NewGrainCIWaitTools(nil, mcp.CIRepoScope{}))
+	add(mcp.NewGrainCIReadTools(nil, mcp.CIRepoScope{}))
 	add(mcp.NewRunCIJobTools(nil, mcp.CIRepoScope{}))
 	add(mcp.NewGrainCIArtifactTools(nil, mcp.CIRepoScope{}, ""))
 	add(mcp.NewNamespaceTools(mcp.NamespaceToolsConfig{}))
@@ -110,14 +111,12 @@ func PublishedToolNames() []string {
 	// chat session, and listed unconditionally for the reason every
 	// daemon-gated tool above is.
 	add(mcp.NewRenameSessionTools(nil))
+	add(mcp.NewProposeConfigChangeTools(nil, "", nil))
 	add(mcp.NewWaitForTaskTools(nil, nil))
 	add(mcp.NewResumeLaterTools(nil, nil))
 	add(mcp.NewNotifyTools(nil))
 	add(mcp.NewMergeQueueTools(nil))
 	add(mcp.NewRevertTools(nil))
-	add(mcp.NewMemoryTools(nil))
-	add(mcp.NewReleaseNotesTools(nil))
-	add(mcp.NewQuarantineTools(mcp.QuarantineToolConfig{}))
 
 	// chat needs that daemon and a task somebody is sitting with; the
 	// live proposal tools need the daemon and register propose_task over
@@ -138,35 +137,15 @@ func PublishedToolNames() []string {
 	// wants: the names.
 	add(grainlog.Tools(grainlog.Config{}))
 	add(deploymenthealth.Tools(deploymenthealth.Config{}))
-	add(selfupgrade.Tools(selfupgrade.Config{}))
 	add(bootstrap.PlaybookTools())
 	add(dbaccess.Tools(dbaccess.Config{AllowWrite: true}))
+	add(selfrepair.ConfirmedHostCommandTools(nil))
 
-	// The agent API's generated tools, one per scoped route, which the
-	// package that owns the route table registers (pkg/ui imports this
-	// one, so it cannot be called from here).
-	publishedMu.RLock()
-	for _, more := range publishedToolNames {
-		names = append(names, more()...)
-	}
-	publishedMu.RUnlock()
-
+	// The agent API's routes are not here: a run holding api:* grants
+	// reaches them through the grain-controller MCP server (pkg/ui's
+	// POST /api/mcp), which is attached beside grain-sandbox as a
+	// capability server and carries its own fixed tool names.
 	return dedupeToolNames(names)
-}
-
-var (
-	publishedMu        sync.RWMutex
-	publishedToolNames []func() []string
-)
-
-// RegisterPublishedToolNames adds names to PublishedToolNames: for tools
-// a package this one cannot import registers -- the agent API's, which
-// are generated from pkg/ui's route table (ui.AgentAPIToolNames). It is
-// meant to be called from init().
-func RegisterPublishedToolNames(names func() []string) {
-	publishedMu.Lock()
-	defer publishedMu.Unlock()
-	publishedToolNames = append(publishedToolNames, names)
 }
 
 // dedupeToolNames keeps the first appearance of each name and drops the
@@ -190,7 +169,7 @@ func dedupeToolNames(names []string) []string {
 }
 
 // The two surfaces of a run with a sandbox
-// (docs/design/sandbox-first-agent-surface.md §4-§6).
+// (design/design/sandbox-first-agent-surface.design.md §4-§6).
 //
 // `grain mcpserver` serves the model only its control set: the four
 // sandbox tools, the tools that end, park or escalate a run, and the
@@ -206,16 +185,18 @@ func dedupeToolNames(names []string) []string {
 // add_review_comment are NewMockTools' too, and are not here: they are
 // `grain handover write` and `grain pr review-comment`.
 var controlTools = map[string]bool{
-	"ask_question":     true,
-	"request_secret":   true,
-	"comment_on_issue": true,
-	"nothing_needed":   true,
-	"propose_task":     true,
-	"wait_for_task":    true,
-	"resume_later":     true,
-	"recreate_sandbox": true,
-	"chat":             true,
-	"rename_session":   true,
+	"ask_question":          true,
+	"request_secret":        true,
+	"request_access":        true,
+	"propose_config_change": true,
+	"comment_on_issue":      true,
+	"nothing_needed":        true,
+	"propose_task":          true,
+	"wait_for_task":         true,
+	"resume_later":          true,
+	"recreate_sandbox":      true,
+	"chat":                  true,
+	"rename_session":        true,
 }
 
 // SandboxToolNames is the four tools that cross from the agent CLI into
@@ -236,40 +217,21 @@ func SandboxToolNames() []string {
 func IsControlTool(name string) bool { return controlTools[name] }
 
 // ModelOnlyGrantToolNames is the tools of the grants a sandbox process
-// must never reach -- self-upgrade and db-write -- which stay on the MCP
-// roster of a run holding them. (dispatch-control's, pipeline-control's
-// and team-broadcast's are api tools now, kept off the sandbox by their
-// scopes, dispatch:write and teams:broadcast: model.IsSandboxDeniedAPIScope.) db-read's query_grain_db is `grain db query`, so only
-// execute_grain_db is here.
+// must never reach -- db-write and host-exec -- which stay on the MCP
+// roster of a run holding them. (self-upgrade's, dispatch-control's,
+// pipeline-control's and team-broadcast's are agent API routes now,
+// served by grain-controller and kept off the sandbox by their scopes,
+// deployment:upgrade, dispatch:write and teams:broadcast:
+// model.IsSandboxDeniedAPIScope.) db-read's query_grain_db is `grain db
+// query`, so only execute_grain_db is here; run_host_command runs on
+// grain's own host, which a sandbox process must never reach.
 func ModelOnlyGrantToolNames() []string {
-	var names []string
-	add := func(tools []mcp.Tool) {
-		for _, t := range tools {
-			names = append(names, t.Name)
-		}
-	}
-	add(selfupgrade.Tools(selfupgrade.Config{}))
-	names = append(names, "execute_grain_db")
-	return dedupeToolNames(names)
-}
-
-var (
-	publishedControlMu    sync.RWMutex
-	publishedControlNames []func() []string
-)
-
-// RegisterPublishedControlToolNames adds names to PublishedControlToolNames,
-// for the model-only tools a package this one cannot import generates --
-// the agent API routes the sandbox channel refuses (pkg/ui).
-func RegisterPublishedControlToolNames(names func() []string) {
-	publishedControlMu.Lock()
-	defer publishedControlMu.Unlock()
-	publishedControlNames = append(publishedControlNames, names)
+	return []string{"execute_grain_db", "run_host_command"}
 }
 
 // PublishedControlToolNames is every name `grain mcpserver` may serve on
-// its control roster: the sandbox tools, the control tools, the
-// model-only grants' tools and the model-only agent API routes.
+// its control roster: the sandbox tools, the control tools and the
+// model-only grants' tools.
 func PublishedControlToolNames() []string {
 	names := SandboxToolNames()
 	for _, name := range PublishedToolNames() {
@@ -278,11 +240,6 @@ func PublishedControlToolNames() []string {
 		}
 	}
 	names = append(names, ModelOnlyGrantToolNames()...)
-	publishedControlMu.RLock()
-	for _, more := range publishedControlNames {
-		names = append(names, more()...)
-	}
-	publishedControlMu.RUnlock()
 	return dedupeToolNames(names)
 }
 

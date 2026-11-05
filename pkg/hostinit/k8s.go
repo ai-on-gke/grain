@@ -704,7 +704,7 @@ func checkK8sStorageClassRWO(k K8sOptions, dataDir string, timeout time.Duration
 
 // checkK8sRunHostRWXClass reads the provisioner of the class
 // RunHostRWXClass names and refuses one backed by gcsfuse
-// (docs/non-disruptive-upgrade.md, "The shared credential directory"):
+// (design/design/non-disruptive-upgrade.design.md, "The shared credential directory"):
 // the spool's exit.json and a refreshing CLI's login are both written by
 // rename, and a rename there is not atomic. It does not bind a scratch
 // claim, as the ReadWriteOnce check does: the daemon checks the bound
@@ -869,7 +869,7 @@ spec:
         runAsUser: 0
       containers:
         - name: chown
-          image: ghcr.io/bwsalmon/grain/grain:main
+          image: docker.io/grainai/grain:main
           command: ["/bin/sh", "-c", "chown -R 1000:1000 /data"]
           volumeMounts:
             - name: data
@@ -1039,7 +1039,10 @@ func ensureK8sNetworkPolicyManifest(ctx context.Context, sys System, opts Option
 		r.add(Step{Name: name, Status: StepWould, Detail: fmt.Sprintf("would apply %s", k.NetworkPolicyManifest), Command: cmd})
 		return false
 	}
-	if _, err := runKubectl(ctx, sys, k, "get", "networkpolicy", "grain-sandbox-network-none", "-n", k.Namespace); err == nil {
+	// The newest policy in the file is the one asked after, so a cluster
+	// that applied it before grain-sandbox-egress existed is applied
+	// again rather than skipped as done.
+	if _, err := runKubectl(ctx, sys, k, "get", "networkpolicy", "grain-sandbox-egress", "-n", k.Namespace); err == nil {
 		r.add(Step{Name: name, Status: StepSkipped, Detail: "already applied"})
 		return true
 	}

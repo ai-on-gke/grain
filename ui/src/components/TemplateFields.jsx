@@ -23,6 +23,8 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
+import AppIcon from "./AppIcon.jsx";
+import SearchSelect, { SHORT_LIST } from "./SearchSelect.jsx";
 
 // The inputs a template asks for (model.TemplateField, grain/task-58),
 // in the two shapes a frontend ever needs them: the rows that *declare*
@@ -98,6 +100,39 @@ function TemplateFieldInput({ field, value, onChange, onCommit }) {
     fullWidth: true,
     size: "small",
   };
+  // A long list of choices is searched rather than scrolled; up to
+  // SHORT_LIST of them stay a plain select, quicker to open.
+  if ((field.options || []).length > SHORT_LIST) {
+    return (
+      <SearchSelect
+        label={common.label}
+        value={value}
+        // A pick is settled at once: the form's onChange commits a
+        // picker's answer itself (UseTemplateOverlay.jsx).
+        onChange={onChange}
+        required={field.required}
+        helperText={common.helperText}
+        InputLabelProps={{ shrink: true }}
+        options={[
+          // The empty choice, for the reason the plain select's gives.
+          ...(field.required
+            ? []
+            : [
+                {
+                  value: "",
+                  label: field.default ? `default (${field.default})` : "none",
+                  row: (
+                    <em>
+                      {field.default ? `default (${field.default})` : "none"}
+                    </em>
+                  ),
+                },
+              ]),
+          ...field.options.map((o) => ({ value: o, label: o })),
+        ]}
+      />
+    );
+  }
   if ((field.options || []).length > 0) {
     return (
       <TextField {...common} select InputLabelProps={{ shrink: true }}>
@@ -253,7 +288,7 @@ export function TemplateFieldsEditor({ fields, onChange }) {
               onClick={() => remove(i)}
               sx={{ mt: 0.5 }}
             >
-              ×
+              <AppIcon name="close" size={16} />
             </IconButton>
           </Stack>
         ))}

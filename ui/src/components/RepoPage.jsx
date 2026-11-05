@@ -69,6 +69,7 @@ import {
   repoUrl,
   unionCapabilities,
 } from "../state.js";
+import AppIcon from "./AppIcon.jsx";
 import BranchField from "./BranchField.jsx";
 import ItemGlyph, { GlyphLabel } from "./ItemGlyph.jsx";
 import MergeBatchPanel from "./MergeBatchPanel.jsx";
@@ -174,7 +175,7 @@ function latestPerName(branches) {
 const CI_MODE_ID = "repo-ci-mode";
 
 // REPO_CONFIG_PATHS are the config repo files a repository's settings
-// on this page are kept in (docs/design/config-repo-settings.md §2.1).
+// on this page are kept in (design/design/config-repo-settings.design.md §2.1).
 const REPO_CONFIG_PATHS = [
   "tables/repo_config.json",
   "settings/capabilities.yml",
@@ -187,7 +188,7 @@ const REPO_CONFIG_PATHS = [
 // healthy (Overview), how is it tested (CI), how does work land (Merge
 // queue), what does an agent here get (Agents), and what happens after
 // merge (Releases). The selected tab is in the page's path
-// (/repos/acme/widgets/settings/ci, docs/design/settings-panel.md §2.3,
+// (/repos/acme/widgets/settings/ci, design/design/settings-panel.design.md §2.3,
 // paths.js's REPO_TAB_IDS), so a tab is a link somebody can share and
 // Settings → Repositories can point at. It used to ride in the hash
 // (/repos/acme/widgets#ci), and a link from then still opens its tab.
@@ -252,6 +253,19 @@ export const CI_MODE_LABELS = {
 export function repoCIMode(defaults) {
   if (!defaults) return null;
   return defaults.ciMode || (defaults.ignoreGitHubCI ? "grain" : "github");
+}
+
+// confirmBaseRepairBypass asks before repo's base-branch repair PRs may
+// merge past human gates, naming the repo and the risk, as Promote and
+// Delete do. Both places that offer the switch ask the same question;
+// turning it off never asks.
+export function confirmBaseRepairBypass(repo) {
+  return window.confirm(
+    `Let base-branch repair PRs in ${repo} merge without a human when their CI is green? ` +
+      `While ${repo}'s base branch is red, an agent's repair pull request can then land changes to ` +
+      `.grain/workflows/** or trust-boundary code with no human sign-off before the merge. ` +
+      `Review tasks are still filed afterwards.`,
+  );
 }
 
 // RepoOverview is the at-a-glance strip at the top of the Overview tab:
@@ -371,8 +385,30 @@ export default function RepoPage({
   repoTab = null,
   onShowTab,
   showError,
+  // dismissError takes the shell's error banner down if it still says the
+  // message given (App's dismissError), so a refusal can go the moment the
+  // save that answers it succeeds.
+  dismissError = () => {},
 }) {
   const root = repoApiRoot(repo);
+  // refuseSave and settleSave pair each box's refusal with its next good
+  // save. A refused value is put back or kept in the box, and the reason
+  // goes to the shell's banner, which stays up for five seconds whatever
+  // happens next -- so a workflow fixed and saved a second later still
+  // read, under the file that had just saved, as refused. Keyed by the
+  // box, so a save that succeeds takes down only its own refusal and never
+  // an unrelated one shown since.
+  const refusals = useRef(new Map());
+  const refuseSave = (key, err) => {
+    refusals.current.set(key, String(err?.message || err));
+    showError(err);
+  };
+  const settleSave = (key) => {
+    const message = refusals.current.get(key);
+    if (message === undefined) return;
+    refusals.current.delete(key);
+    dismissError(message);
+  };
   // gateCheck counts the saves here that can change whether this repo's
   // base branch is judged; the release pane re-reads its own copy of
   // the gate when it moves.
@@ -410,6 +446,7 @@ export default function RepoPage({
   const [caps, setCaps] = useState(null);
   const [capsSelection, setCapsSelection] = useState([]);
   const [ciCapsSelection, setCICapsSelection] = useState([]);
+  const [upstreamRepoText, setUpstreamRepoText] = useState("");
   // prompt/promptText are that same shape again, for this repo's own
   // prompt extension (grain/task-114): what GET /api/repos/{owner}/
   // {name}/prompt-extension last said -- the repo's own text, the
@@ -488,13 +525,17 @@ export default function RepoPage({
     ? `you can read ${repo}'s settings but not change them: that needs a repository admin`
     : null;
   // configRepoOnly is GET /api/config's word that a repo's settings are
-  // config-repo only (docs/design/config-repo-settings.md §2.1): kept in
+  // config-repo only (design/design/config-repo-settings.design.md §2.1): kept in
   // tables/repo_config.json and settings/capabilities.yml, and refused by
   // the API in favour of a config pull request. Then every configuration
   // control here is drawn with its current value, read-only, under a
   // notice linking to those files. The operational actions -- adding a
   // branch, importing issues now, a manual release, a base branch's
   // check -- are not settings, and stay a repo admin's (adminReadOnly).
+  // configRepoOnly alone, not settingsLocked: with directConfigWrites in
+  // state-repo.json the lock is on but the API still takes the write, and
+  // the server folds both into configRepoOnly
+  // (design/spec/settings/settings-mutability.spec.md D-10).
   const configRepoOnly = Boolean(config?.configRepoOnly);
   const readOnly = adminReadOnly || configRepoOnly;
   // The same sentence is each disabled control's own accessible
@@ -560,6 +601,7 @@ export default function RepoPage({
       setCaps(loaded);
       setCapsSelection(loaded.defaultCapabilities || []);
       setCICapsSelection(loaded.ciCapabilities || []);
+      setUpstreamRepoText(loaded.upstreamRepo || "");
     } catch (err) {
       showError(err);
     }
@@ -654,6 +696,7 @@ export default function RepoPage({
   // a blur that changed something from one that did not.
   const storedPromptText = prompt?.promptExtension || "";
   const storedSetupText = setup?.setupCommand || "";
+  const storedUpstreamRepo = caps?.upstreamRepo || "";
 
   // capsEffective is what a task filed against this repo would actually
   // start out holding -- the line the capabilities form ends on. The
@@ -697,8 +740,16 @@ export default function RepoPage({
   });
   // A CI job holds no agent API grant -- there is no agent in it -- so
   // CI's own GrantsPicker is offered capability server methods alone.
-  const ciCapsLegacy = ciCapsSelection.filter((id) => !isCapabilityRef(id));
-  const ciCapsRefs = ciCapsSelection.filter(isCapabilityRef);
+  // A reference the CI picker itself offers (the release server's
+  // methods, which retired package-publish, registry-push and
+  // image-signing) is picked there, like a bare name; any other
+  // reference is a CI grant, edited below the picker.
+  const ciPickerIDs = (caps?.availableCICapabilities || []).map((a) =>
+    typeof a === "string" ? a : a?.id,
+  );
+  const inCIPicker = (id) => !isCapabilityRef(id) || ciPickerIDs.includes(id);
+  const ciCapsLegacy = ciCapsSelection.filter(inCIPicker);
+  const ciCapsRefs = ciCapsSelection.filter((id) => !inCIPicker(id));
   const ciCapsMethods = localGrantHandlers(ciCapsRefs, (refs) => {
     const next = [...ciCapsLegacy, ...refs];
     setCICapsSelection(next);
@@ -791,6 +842,7 @@ export default function RepoPage({
         method: "POST",
         body: JSON.stringify({ name: branchName }),
       });
+      settleSave("branch");
       setBranchNote(
         added && added.alreadyRequested
           ? `${branchName} is already on this repo's list (${added.status}); nothing new was added.`
@@ -799,7 +851,7 @@ export default function RepoPage({
       form.reset();
       await loadBranches();
     } catch (err) {
-      showError(err);
+      refuseSave("branch", err);
     }
   };
 
@@ -818,11 +870,12 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ ciCapabilities: toSave }),
       });
+      settleSave("ciCapabilities");
       setCaps(updated);
       setCICapsSelection(updated.ciCapabilities || []);
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
+      refuseSave("ciCapabilities", err);
     }
   };
 
@@ -836,11 +889,28 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ defaultCapabilities: toSave }),
       });
+      settleSave("capabilities");
       setCaps(updated);
       setCapsSelection(updated.defaultCapabilities || []);
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
+      refuseSave("capabilities", err);
+    }
+  };
+
+  const saveUpstreamRepo = async (upstream) => {
+    try {
+      const updated = await api(`${root}/settings`, {
+        method: "PUT",
+        body: JSON.stringify({ upstreamRepo: upstream }),
+      });
+      settleSave("upstream");
+      setCaps(updated);
+      setUpstreamRepoText(updated.upstreamRepo || "");
+      await onRefreshConfig();
+    } catch (err) {
+      setUpstreamRepoText(storedUpstreamRepo);
+      refuseSave("upstream", err);
     }
   };
 
@@ -864,11 +934,12 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ promptExtension: val }),
       });
+      settleSave("prompt");
       setPrompt(updated);
       setPromptText(updated.promptExtension || "");
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
+      refuseSave("prompt", err);
     }
   };
 
@@ -886,11 +957,12 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ setupCommand: val }),
       });
+      settleSave("setup");
       setSetup(updated);
       setSetupText(updated.setupCommand || "");
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
+      refuseSave("setup", err);
     }
   };
 
@@ -961,10 +1033,11 @@ export default function RepoPage({
           body: JSON.stringify(fields),
         }),
       );
+      settleSave("issueImport");
       setImportDraft(null);
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
+      refuseSave("issueImport", err);
     }
   };
 
@@ -988,6 +1061,7 @@ export default function RepoPage({
   };
 
   const saveBaseRepairBypassesHumanGates = async (on) => {
+    if (on && !confirmBaseRepairBypass(repo)) return;
     try {
       setUpToDate(
         await api(`${root}/base-repair-bypasses-human-gates`, {
@@ -1062,12 +1136,13 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ unfixableChecks: checks }),
       });
+      settleSave("unfixable");
       setUnfixable(updated);
       setUnfixableError("");
       await onRefreshConfig();
       return true;
     } catch (err) {
-      showError(err);
+      refuseSave("unfixable", err);
       return false;
     }
   };
@@ -1157,6 +1232,7 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ workflows: body }),
       });
+      settleSave("workflows");
       setWorkflows(updated);
       setWorkflowEdits((current) =>
         settleWorkflowEdits(current, sent, updated.workflows || []),
@@ -1164,7 +1240,7 @@ export default function RepoPage({
       await onRefreshConfig();
       return true;
     } catch (err) {
-      showError(err);
+      refuseSave("workflows", err);
       return false;
     }
   };
@@ -1839,14 +1915,27 @@ export default function RepoPage({
                     }}
                     renderValue={(chosen) => (
                       <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-                        {chosen.map((id) => (
-                          <GrantChip
-                            key={id}
-                            grant={id}
-                            config={config}
-                            tabIndex={-1}
-                          />
-                        ))}
+                        {chosen.map((id) => {
+                          const row = isCapabilityRef(id)
+                            ? ciCapsRows.find((r) => r.id === id)
+                            : null;
+                          return row ? (
+                            <Chip
+                              key={id}
+                              label={row.name}
+                              size="small"
+                              title={id}
+                              tabIndex={-1}
+                            />
+                          ) : (
+                            <GrantChip
+                              key={id}
+                              grant={id}
+                              config={config}
+                              tabIndex={-1}
+                            />
+                          );
+                        })}
                       </Box>
                     )}
                   >
@@ -1896,6 +1985,7 @@ export default function RepoPage({
                       disabled={readOnly}
                       idPrefix="repo-ci"
                       runKind="ci"
+                      policyRepo={repo}
                     />
                   )}
                 </Box>
@@ -1951,12 +2041,12 @@ export default function RepoPage({
                     }}
                   />
                   <Typography variant="body2" color="text.secondary">
-                    Merge when green and clean. A pull request whose required
-                    checks have passed and that merges cleanly with its target
-                    branch merges straight away, instead of waiting behind pull
-                    requests ahead of it whose CI is still running. Those keep
-                    their place and merge once their own checks pass. With it
-                    off, {repo}&rsquo;s queue merges strictly in order.
+                    Merge when green and clean. The merge queue no longer keeps
+                    an order, so this no longer changes anything: on or off,
+                    every pull request into {repo} whose required checks have
+                    passed and that merges cleanly merges straight away, up to
+                    this deployment&rsquo;s merges per branch per cycle, and one
+                    still in CI holds only itself.
                   </Typography>
                 </Stack>
                 <Stack direction="row" alignItems="flex-start" spacing={1}>
@@ -2050,8 +2140,14 @@ export default function RepoPage({
                                     )
                             }
                             deleteIcon={
-                              <span title={`Stop declaring ${check} unfixable`}>
-                                ×
+                              <span
+                                title={`Stop declaring ${check} unfixable`}
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                }}
+                              >
+                                <AppIcon name="close" size={14} />
                               </span>
                             }
                             sx={{ fontFamily: "monospace" }}
@@ -2261,6 +2357,62 @@ export default function RepoPage({
             )}
           </Box>
 
+          <Box data-testid="repo-upstream-repo">
+            <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+              Upstream pull-request repository
+            </Typography>
+            {caps === null ? (
+              <Typography variant="body2" color="text.secondary">
+                Loading upstream repository…
+              </Typography>
+            ) : (
+              <Stack spacing={1}>
+                <TextField
+                  id={`${refusalId}-upstream-repo`}
+                  name="repoUpstreamRepo"
+                  label={`Upstream repository for ${repo}`}
+                  placeholder="upstream-owner/repo"
+                  helperText="When set (owner/name), tasks targeting this fork push branches to this repository while grain fetches base refs from and opens cross-repository pull requests against the upstream repository. Leave empty to open pull requests on this repository itself."
+                  value={upstreamRepoText}
+                  onChange={(e) => setUpstreamRepoText(e.target.value)}
+                  onBlur={(e) => {
+                    const trimmed = e.target.value.trim();
+                    if (trimmed !== storedUpstreamRepo) {
+                      saveUpstreamRepo(trimmed);
+                    }
+                  }}
+                  autoComplete="off"
+                  inputProps={{
+                    ...identifierField,
+                    "data-testid": "repo-upstream-repo-input",
+                    "aria-describedby": refusedBy(
+                      readOnly,
+                      `${refusalId}-upstream-repo-helper-text`,
+                    ),
+                  }}
+                  fullWidth
+                  size="small"
+                  disabled={readOnly}
+                />
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  data-testid="repo-upstream-repo-summary"
+                >
+                  Pull requests for tasks targeting {repo} open against{" "}
+                  {storedUpstreamRepo ? (
+                    <code style={{ overflowWrap: "anywhere" }}>
+                      {storedUpstreamRepo}
+                    </code>
+                  ) : (
+                    <code style={{ overflowWrap: "anywhere" }}>{repo}</code>
+                  )}
+                  .
+                </Typography>
+              </Stack>
+            )}
+          </Box>
+
           <Box>
             <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
               Prompt extension
@@ -2449,6 +2601,17 @@ export default function RepoPage({
                         : ""));
                 const edit = (field) => (e) =>
                   setImportDraft({ ...draft, [field]: e.target.value });
+                // The fields as typed, in the shape PUT .../settings takes.
+                const draftFields = () => {
+                  const minutes = draft.interval.trim();
+                  return {
+                    issueImportRepo: draft.repo.trim(),
+                    issueImportLabel: draft.label.trim(),
+                    issueImportIntervalSeconds: minutes
+                      ? Math.round(Number(minutes) * 60)
+                      : 0,
+                  };
+                };
                 return (
                   <Stack spacing={1.5} data-testid="repo-issue-import">
                     <Stack direction="row" alignItems="flex-start" spacing={1}>
@@ -2457,8 +2620,14 @@ export default function RepoPage({
                         sx={{ mt: -0.5 }}
                         checked={Boolean(imp.enabled)}
                         onChange={(e) =>
+                          // Switching on saves whatever source, label and
+                          // interval are typed but not yet saved with it:
+                          // the first pass runs on the next cycle, and
+                          // would otherwise read every open issue with
+                          // the label the person had just typed unsaved.
                           saveIssueImport({
                             issueImportEnabled: e.target.checked,
+                            ...(e.target.checked && dirty ? draftFields() : {}),
                           })
                         }
                         disabled={readOnly}
@@ -2508,14 +2677,7 @@ export default function RepoPage({
                       alignItems={{ sm: "flex-start" }}
                       onSubmit={(e) => {
                         e.preventDefault();
-                        const minutes = draft.interval.trim();
-                        saveIssueImport({
-                          issueImportRepo: draft.repo.trim(),
-                          issueImportLabel: draft.label.trim(),
-                          issueImportIntervalSeconds: minutes
-                            ? Math.round(Number(minutes) * 60)
-                            : 0,
-                        });
+                        saveIssueImport(draftFields());
                       }}
                     >
                       <TextField

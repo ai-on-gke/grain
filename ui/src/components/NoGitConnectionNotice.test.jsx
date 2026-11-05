@@ -38,6 +38,12 @@ describe("NoGitConnectionNotice", () => {
     expect(notice).toHaveTextContent(
       "a GitHub token or GitHub App for github.com",
     );
+    // A plain git host takes a token or an SSH key as well as an ambient
+    // login; the notice named only the last (2026-10-30 and 11-01
+    // walkthroughs).
+    expect(notice).toHaveTextContent(
+      "a token, SSH key or ambient login for another git host",
+    );
     const link = screen.getByRole("link", {
       name: "Settings → Git",
     });

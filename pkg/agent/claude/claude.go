@@ -374,7 +374,7 @@ func isUnconfined(h agent.Host) bool {
 // to, exactly as an omitted one is.
 //
 // Each capability MCP server's tools are admitted too, spelled
-// mcp__<name>__<tool> (docs/capabilities-spec.md §5.2.4).
+// mcp__<name>__<tool> (design/spec/capabilities/capabilities.spec.md §5.2.4).
 func allowedTools(servers ...agent.CapabilityMCPServer) []string {
 	names := agent.PublishedToolNames()
 	for i, name := range names {
@@ -524,7 +524,7 @@ func disableAutoMemory() []string {
 // ANTHROPIC_BASE_URL, HTTPS_PROXY and the like describe the daemon's
 // network rather than the container's, so a deployment that wants them
 // in a run host sets them in its run-host image
-// (docs/non-disruptive-upgrade.md, "Run hosts").
+// (design/design/non-disruptive-upgrade.design.md, "Run hosts").
 var operatorVars = []string{
 	mcpToolTimeoutVar, mcpToolIdleTimeoutVar, autoMemoryVar, maxRetriesVar,
 }
@@ -663,7 +663,6 @@ func (f *Framework) mcpServerArgs(ctx context.Context, cfg agent.RunConfig) ([]s
 	args = append(args, agent.InteractiveArgs(cfg)...)
 	args = append(args, agent.AddendaArgs(cfg)...)
 	args = append(args, agent.RunDeadlineArgs(ctx, cfg)...)
-	agent.AuthorizeMCPArgs(f.host, args)
 	return args, nil
 }
 
@@ -718,6 +717,9 @@ func (f *Framework) pullRequestArgs(cfg agent.RunConfig) []string {
 	}
 	if cfg.PullRequestNumber > 0 {
 		args = append(args, "-pr-number", fmt.Sprintf("%d", cfg.PullRequestNumber))
+	}
+	if cfg.UpstreamRepo != "" {
+		args = append(args, "-pr-upstream-repo", cfg.UpstreamRepo)
 	}
 	// And the credential the branch is pushed with, by name, so the
 	// subprocess's own GitHub reads are made as the same account rather
@@ -792,7 +794,14 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 			return nil, fmt.Errorf("claude: starting the MCP endpoint: %w", err)
 		}
 		defer endpoint.Close()
-		configPath, err = writeMCPConfigJSON(ctx, f.host, httpMCPConfigJSON(endpoint.URL, endpoint.Token, servers...))
+		// A CLI on another machine reaches it carried to its own
+		// loopback (agent.CarryMCPEndpoint); any other, where it is.
+		mcpURL, releaseMCP, err := agent.CarryMCPEndpoint(f.host, endpoint.URL, endpoint.Token)
+		if err != nil {
+			return nil, fmt.Errorf("claude: %w", err)
+		}
+		defer releaseMCP()
+		configPath, err = writeMCPConfigJSON(ctx, f.host, httpMCPConfigJSON(mcpURL, endpoint.Token, servers...))
 		if err != nil {
 			return nil, err
 		}
@@ -866,7 +875,8 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 	if err != nil {
 		stopRecord = ""
 	}
-	stopSettings, err := writeStopSettings(ctx, f.host, f.grainBinaryPath, cfg.Interactive, stopRecord)
+	// The hook is forked by claude, on claude's machine.
+	stopSettings, err := writeStopSettings(ctx, f.host, agent.HookBinary(f.host, f.grainBinaryPath), cfg.Interactive, stopRecord)
 	if err != nil {
 		stopSettings = ""
 	} else {
@@ -959,16 +969,18 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 	// one capture holds a stream per exec, and what the run ended as is
 	// what its last attempt said. See attemptsResult.events.
 	result, err := endRun(stdout, attempts.events, runErr, notes, attempts.session, maxTurns)
-	readCtx, cancelRead := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
-	defer cancelRead()
-	withStopBlocks(result, readStopBlocks(readCtx, f.host, stopRecord))
+	if !agent.IsHostdStop(runErr) {
+		readCtx, cancelRead := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+		defer cancelRead()
+		withStopBlocks(result, readStopBlocks(readCtx, f.host, stopRecord))
+	}
 	return result, err
 }
 
 // ParseResult implements agent.ResultParser: the Result and error Run
 // would have returned for a run whose stream is stdout and which ended
 // with runErr, for a daemon adopting a run another daemon started in a
-// run host (docs/non-disruptive-upgrade.md, Stage 2). stdout is one
+// run host (design/design/non-disruptive-upgrade.design.md, Stage 2). stdout is one
 // exec's stream -- a run host holds one -- so it is its own last attempt,
 // and the session it names is the one the run leaves resumable.
 func (f *Framework) ParseResult(stdout string, runErr error) (*agent.Result, error) {
@@ -1109,6 +1121,8 @@ func runFailure(p *parsedEvents, maxTurns int, runErr error) error {
 	// but "come back in a moment, we are overloaded". See capacity.go.
 	capacity := capacityFailure(p.resultText, runErr)
 	switch {
+	case agent.IsHostdStop(runErr):
+		return agent.RunFailure("claude", "claude", nil, runErr)
 	case p.resultSubtype == maxTurnsSubtype && maxTurns > 0:
 		// Named in plain words rather than passed through as a subtype:
 		// this is not a fault of claude or of the model but a configured

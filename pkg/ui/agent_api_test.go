@@ -30,6 +30,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -166,6 +167,21 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 			}
 		}
 	}
+	// Even for capabilities task 1 holds, or empty lists / false flags that
+	// strip grants, PATCH /api/tasks/2 touching grants requires
+	// capabilities:admin.
+	for _, body := range []string{
+		`{"capabilities":[]}`,
+		`{"capabilities":["api:tasks:read"]}`,
+		`{"grants":[{"capability":"api:tasks:read"}]}`,
+		`{"priority":false}`,
+		`{"keepRunning":false}`,
+		`{"keep_running":false}`,
+	} {
+		if code, resp := asAgent(t, srv, "1", http.MethodPatch, "/api/tasks/2", body, "testing"); code != http.StatusForbidden {
+			t.Errorf("PATCH /api/tasks/2 without capabilities:admin with %s answered %d: %s", body, code, resp)
+		}
+	}
 
 	// Holding capabilities:admin itself -- a dangerous scope a person
 	// granted, with a reason -- is the power to attach grants, not to
@@ -188,6 +204,29 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 			t.Errorf("POST /api/tasks/2/capabilities with %s answered an agent %d: %s", body, code, resp)
 		}
 	}
+	seedAPITask(t, client, "4", "acme/widgets", "api:capabilities:admin", "api:tasks:write", "api:tasks:read", "gcp-key")
+	for _, body := range []string{
+		`{"capabilities":["self-debug"]}`,
+		`{"grants":[{"capability":"self-debug"}]}`,
+		`{"priority":true}`,
+		`{"priority":false}`,
+		`{"keepRunning":true}`,
+		`{"keepRunning":false}`,
+		`{"keep_running":true}`,
+	} {
+		if code, resp := asAgent(t, srv, "4", http.MethodPatch, "/api/tasks/2", body, "testing"); code != http.StatusForbidden {
+			t.Errorf("PATCH /api/tasks/2 with %s answered an agent %d: %s", body, code, resp)
+		}
+	}
+	for _, body := range []string{
+		`{"grants":[{"capability":"self-debug","via":"label"}]}`,
+		`{"grants":[{"Capability":"self-debug"}]}`,
+		`{"capabilities":[{"capability":"api:secrets:write","via":"label"}]}`,
+	} {
+		if code, resp := asAgent(t, srv, "4", http.MethodPatch, "/api/tasks/2", body, "testing"); code != http.StatusBadRequest && code != http.StatusForbidden {
+			t.Errorf("PATCH /api/tasks/2 with %s answered an agent %d: %s", body, code, resp)
+		}
+	}
 	for _, body := range []string{
 		`{"id":"api:tasks:read","attach":true}`,
 		`{"grant":"api:tasks:read@acme/widgets","attach":true}`,
@@ -202,9 +241,52 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, g := range task.Grants {
-		if !slices.Contains([]string{"api:tasks:read", "api:tasks:read@acme/widgets", "gcp-key"}, g.Capability) {
+		if !slices.Contains([]string{"api:tasks:read", "api:tasks:read@acme/widgets", model.GCPKeySandboxAgentGrant}, g.Capability) {
 			t.Errorf("task 2 was granted %s by an agent", g.Capability)
 		}
+	}
+}
+
+// TestAgentAPICapabilitiesAdminMayDetachUnheldCapability verifies that an
+// agent holding api:capabilities:admin can detach (attach: false) a capability
+// from a task even when the acting task does not hold that capability, while
+// still refusing attach: true or replace: <unheld>.
+func TestAgentAPICapabilitiesAdminMayDetachUnheldCapability(t *testing.T) {
+	srv, client := testServer(t)
+	seedAPITask(t, client, "1", "acme/widgets", "api:capabilities:admin")
+	capRef := `https://github.com/acme/caps/gcp#key={"project":"p"}`
+	seedAPITask(t, client, "2", "acme/widgets", model.GrainCIGrant, "self-debug", capRef)
+
+	for _, body := range []string{
+		`{"id":"grain-ci","attach":true}`,
+		`{"capability":"https://grain.dev/capabilities/grain#ci","attach":true}`,
+		`{"grant":"self-debug","attach":true}`,
+		`{"capability":"https://github.com/acme/caps/gcp#key","with":{"project":"p"},"attach":true}`,
+		`{"id":"grain-ci","attach":false,"replace":"self-debug"}`,
+		`{"grant":"grain-ci","attach":false,"replace":"self-debug"}`,
+		`{"capability":"https://grain.dev/capabilities/grain#ci","attach":false,"replace":"self-debug"}`,
+	} {
+		if code, resp := asAgent(t, srv, "1", http.MethodPost, "/api/tasks/2/capabilities", body, "testing"); code != http.StatusForbidden {
+			t.Errorf("POST /api/tasks/2/capabilities with %s answered an agent %d, want 403: %s", body, code, resp)
+		}
+	}
+
+	for _, body := range []string{
+		`{"grant":"https://grain.dev/capabilities/grain#ci={}","attach":false}`,
+		`{"grant":"self-debug","attach":false}`,
+		`{"capability":"https://github.com/acme/caps/gcp#key","with":{"project":"p"},"attach":false}`,
+	} {
+		if code, resp := asAgent(t, srv, "1", http.MethodPost, "/api/tasks/2/capabilities", body, "testing"); code != http.StatusOK {
+			t.Errorf("POST /api/tasks/2/capabilities detach with %s answered %d, want 200: %s", body, code, resp)
+		}
+	}
+
+	task, err := client.Store.GetTask(context.Background(), "2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(task.Grants) != 0 {
+		t.Errorf("task 2 grants after detach = %v, want empty", task.Grants)
 	}
 }
 
@@ -234,6 +316,8 @@ func TestAgentAPICannotFileAroundTheProposalGate(t *testing.T) {
 		{http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets","author":"admin@example.com"}`},
 		{http.MethodPost, "/api/tasks", `{"title":"x","templateId":"tpl-key"}`},
 		{http.MethodPatch, "/api/tasks/2", `{"autoMerge":true}`},
+		{http.MethodPatch, "/api/tasks/2", `{"autoApproveProposals":true}`},
+		{http.MethodPatch, "/api/tasks/2", `{"auto_approve_proposals":true}`},
 		{http.MethodPost, "/api/tasks/2/submit", `{}`},
 		// Mailing a CL and publishing its replies are a person's.
 		{http.MethodPost, "/api/tasks/2/change-mail", `{"reviewers":["alice"]}`},
@@ -336,6 +420,54 @@ func TestAgentAPIRails(t *testing.T) {
 	}
 }
 
+// TestAgentAPIChildNotesItsDirector: the standing-session rail lets a
+// director's child leave it a note (message_task) through the agent API,
+// as the CLI and MCP hops already do, and nothing else: a task that is
+// not the director's parent or child is still refused, and so is any
+// other call the child makes on the director.
+func TestAgentAPIChildNotesItsDirector(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	directorID, err := model.FileConsoleSessionTask(ctx, client.Store, model.DefaultConsoleSessions()[0],
+		model.FileConsoleSessionOptions{Now: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedAPITask(t, client, "101", "acme/widgets", "api:tasks:write")
+	child, err := client.Store.GetTask(ctx, "101")
+	if err != nil || child == nil {
+		t.Fatalf("GetTask(101) = %v, %v", child, err)
+	}
+	child.Links = append(child.Links, model.Link{Kind: model.LinkProposedBy, Target: directorID})
+	if err := client.Store.PutTask(ctx, *child); err != nil {
+		t.Fatal(err)
+	}
+	seedAPITask(t, client, "102", "acme/widgets", "api:tasks:write")
+
+	notes := "/api/tasks/" + directorID + "/notes"
+	if code, body := asAgent(t, srv, "101", http.MethodPost, notes, `{"body":"finished the check"}`, "testing"); code != http.StatusOK {
+		t.Fatalf("the director's child noting it answered %d: %s", code, body)
+	}
+	comments, err := client.Store.Comments(ctx, directorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(comments, func(c model.Comment) bool {
+		return c.Body == "finished the check" && c.Author.Actor == model.Principal{Kind: model.PrincipalAgent, ID: "101"}
+	}) {
+		t.Errorf("director comments = %+v, want the child's note", comments)
+	}
+
+	if code, body := asAgent(t, srv, "102", http.MethodPost, notes, `{"body":"do it my way"}`, "testing"); code != http.StatusForbidden ||
+		!strings.Contains(body, "does not own") {
+		t.Errorf("an unrelated task noting the director answered %d: %s", code, body)
+	}
+	if code, body := asAgent(t, srv, "101", http.MethodPost, "/api/tasks/"+directorID+"/comments", `{"body":"hi"}`, "testing"); code != http.StatusForbidden ||
+		!strings.Contains(body, "does not own") {
+		t.Errorf("the director's child commenting on it answered %d: %s", code, body)
+	}
+}
+
 func TestAgentAPIAttributesTheCall(t *testing.T) {
 	srv, client := testServer(t)
 	seedAPITask(t, client, "1", "acme/widgets", "api:tasks:write")
@@ -349,7 +481,7 @@ func TestAgentAPIAttributesTheCall(t *testing.T) {
 	}
 	var sawComment, sawRecord bool
 	for _, c := range comments {
-		if c.Body == "from the director" && c.Author.Actor == (model.Principal{Kind: model.PrincipalAgent, ID: "1"}) {
+		if c.Body == "from the director" && c.Author.Actor == (model.Principal{Kind: model.PrincipalAgent, ID: "1", Source: model.SourceSandbox}) {
 			sawComment = true
 		}
 		if strings.Contains(c.Body, "Task 1 called") && strings.Contains(c.Body, "triage") &&
@@ -464,7 +596,7 @@ func TestAgentAPIPassesRepoPersonGateWhenConfigIsStored(t *testing.T) {
 
 // TestAgentAPIWriteRefusesAStaleExpectation is a task-admin write made
 // through the generated tool with an expect argument
-// (docs/design/durable-tasks.md#DT-13): the tool reads the task first and
+// (design/design/durable-tasks.design.md#DT-13): the tool reads the task first and
 // refuses, changing nothing, when the record disagrees.
 func TestAgentAPIWriteRefusesAStaleExpectation(t *testing.T) {
 	srv, client := testServer(t)
@@ -746,7 +878,7 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 	cfg.PollInterval = 30_000_000_000
 	cfg.GitHubHost = "github.com"
 	cfg.TargetRepos = []string{"acme/widgets", "git.forge.example/experimental/ggrain"}
-	cfg.DefaultCapabilities = []string{"gemini-key", "gcp-key"}
+	cfg.DefaultCapabilities = []string{"github-sandbox", "gcp-key"}
 	if err := client.Store.PutConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -754,15 +886,15 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := client.Store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:                widgets,
-		CICapabilities:      []string{"gemini-key", "gcp-key", "package-publish"},
-		DefaultCapabilities: []string{"gemini-key", "gcp-key"},
+		CICapabilities:      []string{"github-sandbox", "gcp-key", "package-publish"},
+		DefaultCapabilities: []string{"github-sandbox", "gcp-key"},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	ggrain := model.RepoRef{Host: "git.forge.example", Owner: "experimental", Name: "ggrain"}
 	if err := client.Store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:           ggrain,
-		CICapabilities: []string{"package-publish", "gemini-key", "gcp-key"},
+		CICapabilities: []string{"package-publish", "github-sandbox", "gcp-key"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -775,17 +907,17 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 	// 1. Narrowing ciCapabilities via PUT /api/repos/{owner}/{name}/settings
 	// succeeds even though gemini-key and CI-only package-publish remain.
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/repos/acme/widgets/settings",
-		`{"ciCapabilities":["gemini-key","package-publish"]}`, "remove gcp-key"); code != http.StatusOK {
+		`{"ciCapabilities":["github-sandbox","package-publish"]}`, "remove gcp-key"); code != http.StatusOK {
 		t.Fatalf("PUT /api/repos/acme/widgets/settings narrowing ciCapabilities: %d %s", code, resp)
 	}
 	rc, err := client.Store.GetRepoConfig(ctx, widgets)
-	if err != nil || rc == nil || !slices.Equal(rc.CICapabilities, []string{"gemini-key", "package-publish"}) {
-		t.Fatalf("stored ciCapabilities = %+v, %v, want [gemini-key package-publish]", rc, err)
+	if err != nil || rc == nil || !slices.Equal(rc.CICapabilities, []string{"github-sandbox", model.PackagePublishRef + "={}"}) {
+		t.Fatalf("stored ciCapabilities = %+v, %v, want [github-sandbox %s={}]", rc, err, model.PackagePublishRef)
 	}
 
 	// 2. Adding back gcp-key (which is no longer stored and not held by task 1) is refused.
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/repos/acme/widgets/settings",
-		`{"ciCapabilities":["gemini-key","package-publish","gcp-key"]}`, "re-add gcp-key"); code != http.StatusForbidden ||
+		`{"ciCapabilities":["github-sandbox","package-publish","gcp-key"]}`, "re-add gcp-key"); code != http.StatusForbidden ||
 		!strings.Contains(resp, "gcp-key") {
 		t.Fatalf("re-adding unheld gcp-key: got %d %s, want 403 naming gcp-key", code, resp)
 	}
@@ -793,11 +925,11 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 	// 3. Narrowing defaultCapabilities via PUT /api/repos/{owner}/{name}/settings,
 	// PUT /api/repos/{owner}/{name}/capabilities, and PUT /api/deployment/repos/{owner}/{name}/config.
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/repos/acme/widgets/settings",
-		`{"defaultCapabilities":["gemini-key"]}`, "remove gcp-key from defaultCapabilities"); code != http.StatusOK {
+		`{"defaultCapabilities":["github-sandbox"]}`, "remove gcp-key from defaultCapabilities"); code != http.StatusOK {
 		t.Fatalf("PUT /api/repos/acme/widgets/settings narrowing defaultCapabilities: %d %s", code, resp)
 	}
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/repos/acme/widgets/capabilities",
-		`{"defaultCapabilities":["gemini-key"]}`, "keep gemini-key"); code != http.StatusOK {
+		`{"defaultCapabilities":["github-sandbox"]}`, "keep gemini-key"); code != http.StatusOK {
 		t.Fatalf("PUT /api/repos/acme/widgets/capabilities keeping stored gemini-key: %d %s", code, resp)
 	}
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/deployment/repos/acme/widgets/config",
@@ -815,21 +947,21 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 	// 5. Host-qualified repo via PUT /api/repos/{owner}/{name}/ci-capabilities and /settings.
 	if code, resp := asAgent(t, srv, "1", http.MethodPut,
 		"/api/repos/git.forge.example%2Fexperimental/ggrain/ci-capabilities",
-		`{"ciCapabilities":["package-publish","gemini-key"]}`, "remove gcp-key"); code != http.StatusOK {
+		`{"ciCapabilities":["package-publish","github-sandbox"]}`, "remove gcp-key"); code != http.StatusOK {
 		t.Fatalf("PUT host-qualified /ci-capabilities narrowing: %d %s", code, resp)
 	}
 	rcGgrain, err := client.Store.GetRepoConfig(ctx, ggrain)
-	if err != nil || rcGgrain == nil || !slices.Equal(rcGgrain.CICapabilities, []string{"package-publish", "gemini-key"}) {
-		t.Fatalf("ggrain ciCapabilities = %+v, %v, want [package-publish gemini-key]", rcGgrain, err)
+	if err != nil || rcGgrain == nil || !slices.Equal(rcGgrain.CICapabilities, []string{model.PackagePublishRef + "={}", "github-sandbox"}) {
+		t.Fatalf("ggrain ciCapabilities = %+v, %v, want [%s={} github-sandbox]", rcGgrain, err, model.PackagePublishRef)
 	}
 
 	// 6. Deployment-wide defaultCapabilities via PUT /api/settings.
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/settings",
-		`{"defaultCapabilities":["gemini-key"]}`, "remove gcp-key from deployment defaults"); code != http.StatusOK {
+		`{"defaultCapabilities":["github-sandbox"]}`, "remove gcp-key from deployment defaults"); code != http.StatusOK {
 		t.Fatalf("PUT /api/settings narrowing defaultCapabilities: %d %s", code, resp)
 	}
 	if code, _ := asAgent(t, srv, "1", http.MethodPut, "/api/settings",
-		`{"defaultCapabilities":["gemini-key","gcp-key"]}`, "re-add gcp-key"); code != http.StatusForbidden {
+		`{"defaultCapabilities":["github-sandbox","gcp-key"]}`, "re-add gcp-key"); code != http.StatusForbidden {
 		t.Fatalf("PUT /api/settings re-adding unheld gcp-key answered %d, want 403", code)
 	}
 }
@@ -978,13 +1110,45 @@ func TestSandboxCLIChannelAllowsNonDangerousScopesAndRefusesDangerousAndEscalati
 	}
 }
 
+// TestSandboxCLIChannelRefusesModelOnlyControlRoutes pins
+// sandboxChannelGuard: speaking to an operator and parking a run are the
+// model's control tools, never the sandbox CLI's, even for a run whose
+// grants (api:tasks:admin among them) reach the route on any other task.
+func TestSandboxCLIChannelRefusesModelOnlyControlRoutes(t *testing.T) {
+	srv, client := testServer(t)
+	seedAPITask(t, client, "1", "acme/widgets", "api:tasks:read", "api:tasks:write", "api:tasks:admin")
+	seedAPITask(t, client, "2", "acme/widgets")
+	seedAPITask(t, client, "3", "acme/widgets")
+
+	for _, tc := range []struct {
+		path, body string
+	}{
+		{"/api/tasks/2/messages", `{"body":"hello from the sandbox"}`},
+		{"/api/tasks/2/park-until", `{"until":"2030-01-01T00:00:00Z"}`},
+		{"/api/tasks/2/resume-later", `{"when":{"at":"1h"}}`},
+		{"/api/tasks/2/wait-on", `{"ids":["3"],"park":true}`},
+	} {
+		code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPost, tc.path, tc.body, "testing sandbox guard")
+		if code != http.StatusForbidden || !strings.Contains(resp, "model-only control action") {
+			t.Errorf("POST %s %s over sandbox-cli: got %d %s, want 403 refusing a model-only control action", tc.path, tc.body, code, resp)
+		}
+	}
+	// A blocking wait is the CLI's own (grain task wait): only park is refused.
+	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPost, "/api/tasks/2/wait-on",
+		`{"ids":["3"]}`, ""); code != http.StatusOK {
+		t.Errorf("POST /api/tasks/2/wait-on without park over sandbox-cli: got %d %s, want 200", code, resp)
+	}
+}
+
 // TestAgentAPIReleasesWriteDoesNotWriteReleaseNotes pins that the
 // release-manager scope reads the deployment's weekly release notes but
-// cannot write them: writing stays with the release-notes capability
-// (and memory:write), on either channel.
+// cannot write them, and that memory:write cannot write them either:
+// writing stays with release-notes:write (and the api:release-notes preset),
+// on either channel.
 func TestAgentAPIReleasesWriteDoesNotWriteReleaseNotes(t *testing.T) {
 	srv, client := testServer(t)
 	seedAPITask(t, client, "1", "acme/widgets", "api:releases:read", "api:releases:write")
+	seedAPITask(t, client, "2", "acme/widgets", "api:memory")
 	body := `{"period":"2026-W43","title":"t","text":"x"}`
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/release-notes", body, ""); code != http.StatusForbidden {
 		t.Errorf("api:releases:write wrote release notes: %d %s, want 403", code, resp)
@@ -992,12 +1156,18 @@ func TestAgentAPIReleasesWriteDoesNotWriteReleaseNotes(t *testing.T) {
 	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPut, "/api/release-notes", body, ""); code != http.StatusForbidden {
 		t.Errorf("api:releases:write wrote release notes over sandbox-cli: %d %s, want 403", code, resp)
 	}
+	if code, resp := asAgent(t, srv, "2", http.MethodPut, "/api/release-notes", body, ""); code != http.StatusForbidden {
+		t.Errorf("api:memory wrote release notes: %d %s, want 403", code, resp)
+	}
+	if code, resp := asSandboxAgent(t, srv, "2", "run-1", http.MethodPut, "/api/release-notes", body, ""); code != http.StatusForbidden {
+		t.Errorf("api:memory wrote release notes over sandbox-cli: %d %s, want 403", code, resp)
+	}
 	if code, resp := asAgent(t, srv, "1", http.MethodGet, "/api/release-notes", "", ""); code == http.StatusForbidden {
 		t.Errorf("api:releases:read was refused reading release notes: %d %s", code, resp)
 	}
-	for _, r := range ui.SandboxAPIRoutes([]string{"api:releases:write"}, "") {
+	for _, r := range ui.SandboxAPIRoutes([]string{"api:releases:write", "api:memory"}, "") {
 		if r.Pattern == "PUT /api/release-notes" {
-			t.Errorf("SandboxAPIRoutes([api:releases:write]) lists PUT /api/release-notes")
+			t.Errorf("SandboxAPIRoutes([api:releases:write api:memory]) lists PUT /api/release-notes")
 		}
 	}
 }
@@ -1096,5 +1266,95 @@ func TestAgentAPIGrainCIReadsCIOfTheTasksRepositories(t *testing.T) {
 	}
 	if code, _ := asSandboxAgent(t, srv, "1", "", http.MethodDelete, "/api/ci/runs/run-w", "", "stop"); code != http.StatusForbidden {
 		t.Errorf("grain-ci cancelled a run: %d", code)
+	}
+}
+
+// settings/new-task-form.yml's hidden defaults are a person's form, not a
+// way around the proposal gate: an agent's POST /api/tasks is judged on
+// the body it sent, so the defaults are not put in after that gate.
+func TestAgentAPIFilingTakesNoHiddenFormDefaults(t *testing.T) {
+	srv, client := testServer(t)
+	seedAPITask(t, client, "1", "acme/widgets", "api:tasks:write")
+	var form model.NewTaskForm
+	if err := json.Unmarshal([]byte(`{"default": {"fields": {
+		"autoMerge": {"visibility": "hidden", "default": true},
+		"approved": {"visibility": "hidden", "default": true},
+		"writes": {"visibility": "hidden", "default": ["acme/gadgets"]},
+		"reads": {"visibility": "hidden", "default": ["acme/secret"]}
+	}}}`), &form); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Store.UpdateConfig(context.Background(), func(c *model.Config) error {
+		c.NewTaskForm = &form
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, body := asAgent(t, srv, "1", http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets"}`, "testing")
+	if code != http.StatusCreated {
+		t.Fatalf("agent filing answered %d: %s", code, body)
+	}
+	var created struct{ ID string }
+	if err := json.Unmarshal([]byte(body), &created); err != nil || created.ID == "" {
+		t.Fatalf("created = %s (%v)", body, err)
+	}
+	task, err := client.Store.GetTask(context.Background(), created.ID)
+	if err != nil || task == nil {
+		t.Fatalf("GetTask(%s) = %v, %v", created.ID, task, err)
+	}
+	if task.AutoMerge || task.Approval != nil || len(task.Writes) != 0 || len(task.Reads) != 0 {
+		t.Errorf("agent-filed task took the form's hidden defaults: autoMerge=%v approval=%v writes=%v reads=%v",
+			task.AutoMerge, task.Approval, task.Writes, task.Reads)
+	}
+}
+
+// TestSessionRunCannotTurnOnReadsAll: a standing session's run that may
+// edit its own session cannot turn readsAll back on after a person opted
+// the session out of reading every working repository. That reaches the
+// same repositories naming them in reads does, and is held to the same
+// rule; edits that grant nothing still go through.
+func TestSessionRunCannotTurnOnReadsAll(t *testing.T) {
+	_, store, _ := testClient(t)
+	ctx := context.Background()
+	off := false
+	session := model.DefaultConsoleSessions()[0]
+	session.Capabilities = []string{"self-debug", "api:sessions:write"}
+	session.ReadsAll = &off
+	cfg := model.DefaultConfig()
+	cfg.TargetRepos = []string{"acme/widgets", "acme/docs", "acme/secret-repo"}
+	cfg.ConsoleSessions = []model.ConsoleSession{session}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	taskID, err := model.FileConsoleSessionTask(ctx, store, session, model.FileConsoleSessionOptions{Now: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := ui.NewServer(ui.Config{
+		Actor:        ui.DefaultActor("alice"),
+		Capabilities: ui.OfferedCapabilities(),
+		Secrets:      secrets.New(t.TempDir()),
+	}, store)
+	path := "/api/console-sessions/" + session.ID
+
+	for _, body := range []string{`{"readsAll":true}`, `{"reads_all":true}`, `{"ReadsAll":true}`} {
+		if code, resp := asAgent(t, srv, taskID, http.MethodPut, path, body, "testing"); code != http.StatusForbidden ||
+			!strings.Contains(resp, "cannot turn on readsAll") {
+			t.Errorf("%s from the session's own run answered %d: %s", body, code, resp)
+		}
+	}
+	if code, resp := asAgent(t, srv, taskID, http.MethodPut, path, `{"reads":["acme/secret-repo"]}`, "testing"); code != http.StatusForbidden ||
+		!strings.Contains(resp, "cannot grant read access to acme/secret-repo") {
+		t.Errorf("reads of acme/secret-repo from the session's own run answered %d: %s", code, resp)
+	}
+	if code, resp := asAgent(t, srv, taskID, http.MethodPut, path, `{"title":"renamed","readsAll":false}`, "testing"); code != http.StatusOK {
+		t.Fatalf("an own-session edit granting nothing answered %d: %s", code, resp)
+	}
+	got, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, ok := model.ConsoleSessionByID(model.ConsoleSessionsOr(got.ConsoleSessions), session.ID); !ok || s.ReadsAllRepos() {
+		t.Errorf("session after the edits = %+v, want readsAll still off", s)
 	}
 }

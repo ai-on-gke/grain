@@ -99,6 +99,14 @@ type RealTransport struct {
 	// github.com (APIHost) and a test server serving the API at its root.
 	PathPrefix string
 
+	// GraphQLPath is where this transport's host serves GraphQL, as a
+	// path on Host taken whole rather than put under PathPrefix: the
+	// request a RESTClient makes to "/graphql" goes there. Empty works it
+	// out from PathPrefix (graphqlPath), which is right for github.com
+	// and for a GitHub Enterprise Server; a layer whose forge serves it
+	// somewhere else sets it.
+	GraphQLPath string
+
 	// Conditional has GETs revalidate against the ETag of the answer
 	// this transport last got for the same request, so an unchanged
 	// resource comes back 304 and costs nothing against the rate limit.
@@ -207,6 +215,27 @@ func (t *RealTransport) Request(method, path string, headers map[string]string, 
 	}
 }
 
+// graphqlRequestPath is the path a RESTClient hands its Transport for a
+// GraphQL request: the endpoint by name rather than by where any one host
+// serves it, which is the transport's business (graphqlPath). A Transport
+// that is not a RealTransport maps it to its own host's endpoint itself.
+const graphqlRequestPath = "/graphql"
+
+// graphqlPath is the path on Host GraphQL is posted to: GraphQLPath when
+// set, and otherwise beside the REST API rather than under it --
+// /graphql for api.github.com (no prefix), /api/graphql for a GitHub
+// Enterprise Server whose REST API is under /api/v3. A REST prefix that
+// is not a /v3 one has GraphQL put under it, as every other path is.
+func (t *RealTransport) graphqlPath() string {
+	if t.GraphQLPath != "" {
+		return t.GraphQLPath
+	}
+	if base, ok := strings.CutSuffix(t.PathPrefix, "/v3"); ok {
+		return base + graphqlRequestPath
+	}
+	return t.PathPrefix + graphqlRequestPath
+}
+
 // sendOnce is one attempt at a call: the gate, the conditional request,
 // the round trip and the bookkeeping that follows it. Everything in here
 // is per-attempt on purpose -- a retry re-asks the gate, so a throttle
@@ -235,10 +264,20 @@ func (t *RealTransport) sendOnce(method, path string, headers map[string]string,
 		bodyReader = bytes.NewReader(body)
 	}
 	fullPath := t.PathPrefix + path
-	if t.PathPrefix != "" && (path == t.PathPrefix || strings.HasPrefix(path, t.PathPrefix+"/")) {
+	switch {
+	case path == graphqlRequestPath:
+		fullPath = t.graphqlPath()
+	case t.PathPrefix != "" && (path == t.PathPrefix || strings.HasPrefix(path, t.PathPrefix+"/")):
 		fullPath = path
 	}
-	req, err := http.NewRequest(method, scheme+"://"+t.Host+fullPath, bodyReader)
+	target := scheme + "://" + t.Host + fullPath
+	if strings.HasPrefix(path, "https://") || strings.HasPrefix(path, "http://") {
+		// A whole URL -- a redirect a caller follows itself, such as a
+		// job log's blob URL -- goes where it says, with only the
+		// headers the caller gave it.
+		target = path
+	}
+	req, err := http.NewRequest(method, target, bodyReader)
 	if err != nil {
 		return ApiResponse{}, err
 	}
@@ -306,9 +345,19 @@ func (t *RealTransport) sendOnce(method, path string, headers map[string]string,
 	respHeaders := headerMap(resp.Header)
 	out := ApiResponse{Status: resp.StatusCode, Headers: respHeaders, Body: data,
 		URL: method + " " + req.URL.String()}
-	t.counts.record(endpointOf(path), false, out.Status >= 400)
+	if final := resp.Request; final != nil && final.URL != nil && final.URL.Host != req.URL.Host {
+		// Answered by wherever a redirect sent the request -- a job
+		// log's blob store, say -- so a refusal names that host too.
+		// Its path and query stay out: they are a signed URL.
+		out.URL += " -> " + final.URL.Scheme + "://" + final.URL.Host
+	}
+	// A caller that sent its own validator (CompletedWorkflowRuns keeps
+	// one per repository) and got a 304 back was revalidated all the
+	// same: GitHub does not charge it, so neither does Health's budget.
+	callerRevalidated := out.Status == http.StatusNotModified && headerValue(headers, "If-None-Match") != ""
+	t.counts.record(endpointOf(path), callerRevalidated, out.Status >= 400)
 	t.counts.noteLimit(respHeaders, now)
-	t.ledgerOf().record(caller, method, path, false, out.Status >= 400)
+	t.ledgerOf().record(caller, method, path, callerRevalidated, out.Status >= 400)
 	t.ledgerOf().noteLimit(headerValue(headers, "Authorization"), respHeaders, now)
 
 	if until, reason, throttled := throttledUntil(now, out); throttled {
@@ -407,6 +456,10 @@ type Error struct {
 	// URL is ApiResponse.URL: the method and URL that were refused, or
 	// empty when the transport does not say.
 	URL string
+	// Note is grain's own sentence about the refusal, when it knows more
+	// than GitHub said (graphql: which endpoint refused, and whether REST
+	// on the same connection still answers). Both renderings end with it.
+	Note string
 }
 
 func (e *Error) Error() string {
@@ -414,10 +467,16 @@ func (e *Error) Error() string {
 	if len(body) > 200 {
 		body = body[:200]
 	}
+	var out string
 	if e.URL != "" {
-		return fmt.Sprintf("GitHub API error %d from %s: %q", e.Status, e.URL, body)
+		out = fmt.Sprintf("GitHub API error %d from %s: %q", e.Status, e.URL, body)
+	} else {
+		out = fmt.Sprintf("GitHub API error %d: %q", e.Status, body)
 	}
-	return fmt.Sprintf("GitHub API error %d: %q", e.Status, body)
+	if e.Note != "" {
+		out += " (" + e.Note + ")"
+	}
+	return out
 }
 
 // Message is the same refusal written for somebody to read: the status
@@ -464,6 +523,9 @@ func Message(err error) string {
 		return err.Error()
 	}
 	if said := errorMessage(e.Body); said != "" {
+		if e.Note != "" {
+			return fmt.Sprintf("GitHub answered %d: %s (%s)", e.Status, said, e.Note)
+		}
 		return fmt.Sprintf("GitHub answered %d: %s", e.Status, said)
 	}
 	return e.Error()
@@ -1158,14 +1220,17 @@ type CheckRun struct {
 	// The rest is what recording this check as GitHub CI needs
 	// (orchestrator.recordPolledChecks, model.GitHubCIJob), and comes in
 	// the same response: ID is the check run's id (an Actions job's id),
-	// App the slug of the App that posted it, Output its whole output --
-	// title, summary and text -- bounded.
-	ID          int64
-	HeadSHA     string
-	App         string
-	StartedAt   *time.Time
-	CompletedAt *time.Time
-	Output      string
+	// App the slug of the App that posted it, ExternalID the caller-supplied
+	// identifier on CheckRunWrite, Output its whole output -- title, summary
+	// and text -- bounded.
+	ID           int64
+	CheckSuiteID int64
+	HeadSHA      string
+	App          string
+	ExternalID   string
+	StartedAt    *time.Time
+	CompletedAt  *time.Time
+	Output       string
 }
 
 // JobLog is one failed GitHub Actions job and the tail of what it
@@ -1548,6 +1613,8 @@ type Client interface {
 	ListPullRequestCommits(owner, repo string, number int) ([]Commit, error)
 	ListCheckRuns(owner, repo, ref string) ([]CheckRun, error)
 	ListWorkflowRuns(owner, repo, headSHA string) ([]CheckRun, error)
+	RerequestCheckSuite(owner, repo string, checkSuiteID int64) error
+	RerequestCheckRun(owner, repo string, checkRunID int64) error
 	FailedJobLogs(owner, repo, headSHA string) ([]JobLog, error)
 	ActionsState(owner, repo, headSHA string) (ActionsState, error)
 	RecentRunStarts(owner, repo string, limit int) (RunStarts, error)
@@ -1939,6 +2006,43 @@ func (c *RESTClient) GetBranchHead(owner, repo, branch string) (*BranchHead, err
 	return &BranchHead{SHA: data.Commit.SHA, Message: data.Commit.Commit.Message}, nil
 }
 
+// ResolveCommitSHA resolves ref (a branch name, tag, abbreviated SHA, full SHA,
+// or "" / "HEAD" for the repository's default branch) in owner/repo to its full
+// commit SHA via GET /repos/{owner}/{repo}/commits/{ref}. It returns ("", nil)
+// when the repository or ref does not exist (404 / 422).
+func (c *RESTClient) ResolveCommitSHA(owner, repo, ref string) (string, error) {
+	lookup := strings.TrimSpace(ref)
+	if lookup == "" {
+		lookup = "HEAD"
+	}
+	resp, err := c.get(owner, repo, fmt.Sprintf("/repos/%s/%s/commits/%s", owner, repo, quoteAll(lookup)))
+	if err != nil {
+		return "", err
+	}
+	if (resp.Status == 404 || resp.Status == 422) && strings.TrimSpace(ref) == "" {
+		def, defErr := c.DefaultBranch(owner, repo)
+		if defErr == nil && def != "" {
+			resp, err = c.get(owner, repo, fmt.Sprintf("/repos/%s/%s/commits/%s", owner, repo, quoteAll(def)))
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+	if resp.Status == 404 || resp.Status == 422 {
+		return "", nil
+	}
+	if resp.Status != 200 {
+		return "", &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	var data struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.Unmarshal(resp.Body, &data); err != nil {
+		return "", err
+	}
+	return strings.ToLower(strings.TrimSpace(data.SHA)), nil
+}
+
 // CompareCommits returns the commits head carries that base does not,
 // oldest first -- git's own `base..head`, which is exactly the set of
 // commits a pull request from head into base would contain, and so
@@ -2187,8 +2291,8 @@ func (c *RESTClient) UpdateBranch(owner, repo, branch, sha string, force bool) e
 
 // DeleteBranch removes branch entirely. It is for a ref grain owns and
 // nobody has a pull request against -- the merge queue's own throwaway
-// batch ref (model.MergeBatchRef), destroyed when the batch it stood for
-// is dropped part-way through merging (orchestrator.dropBatchRef).
+// re-check ref (model.MergeRecheckRef), destroyed when the re-check it
+// stood for ends (orchestrator.dropRecheckRef).
 //
 // A branch that is already gone is not an error: GitHub answers 422 for a
 // ref that does not exist, and "make sure this is not there" is what every
@@ -2214,6 +2318,7 @@ func (c *RESTClient) CreatePullRequest(owner, repo, head, base, title, body stri
 	if err := c.gitOnly(owner, repo); err != nil {
 		return PullRequest{}, err
 	}
+	body = c.signPullRequestBody(owner, repo, body)
 	payload, _ := json.Marshal(map[string]string{
 		"title": title, "head": head, "base": base, "body": body,
 	})
@@ -2248,6 +2353,7 @@ func (c *RESTClient) CreatePullRequest(owner, repo, head, base, title, body stri
 // then describes the commits that existed then, and the run's later
 // commits are the ones a reviewer needs to read about.
 func (c *RESTClient) UpdatePullRequestBody(owner, repo string, number int, body string) error {
+	body = c.signPullRequestBody(owner, repo, body)
 	payload, _ := json.Marshal(map[string]string{"body": body})
 	resp, err := c.request(
 		"PATCH", fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, number),
@@ -2332,10 +2438,13 @@ func (c *RESTClient) ClosePullRequest(owner, repo string, number int) error {
 // exists" after a CreatePullRequest 422, rather than failing a finish
 // that has in fact already succeeded.
 //
-// head is qualified owner:branch the way GitHub's own filter requires;
-// grain only ever pushes to branches in the target repo itself (never a
-// fork), so the head owner is always owner.
+// head is qualified owner:branch the way GitHub's own filter requires; when
+// branch already carries a "<fork-owner>:" prefix (for a cross-repository
+// pull request opened from a fork), that qualifier is preserved as given.
 func (c *RESTClient) FindOpenPullRequestForBranch(owner, repo, branch string) (*PullRequest, error) {
+	if strings.Contains(branch, ":") {
+		return c.FindOpenPullRequestForHead(owner, repo, branch)
+	}
 	return c.FindOpenPullRequestForHead(owner, repo, owner+":"+branch)
 }
 
@@ -2820,6 +2929,27 @@ func (c *RESTClient) ListPullRequestCommits(owner, repo string, number int) ([]C
 	return commits, nil
 }
 
+// AppSlugSource is a TokenSource that can say which GitHub App the token
+// it hands out for owner/repo belongs to: the slug check runs posted with
+// it carry (CheckRun.App), or "" when that token is not an App's.
+type AppSlugSource interface {
+	AppSlugFor(owner, repo string) (string, error)
+}
+
+// CheckRunApp is the slug of the GitHub App this client's check runs on
+// owner/repo are posted as, or "" when it cannot tell (its TokenSource is
+// no AppSlugSource, or the token is not an App's). A check run's name is
+// not an identity -- anything that can write check runs on a repository
+// can post one by any name -- so a caller that trusts its own check run
+// matches it on this.
+func (c *RESTClient) CheckRunApp(owner, repo string) (string, error) {
+	src, ok := c.Tokens.(AppSlugSource)
+	if !ok {
+		return "", nil
+	}
+	return src.AppSlugFor(owner, repo)
+}
+
 // ListCheckRuns returns the check runs against ref -- a branch name works
 // fine here, GitHub resolves it to that branch's current tip itself, so a
 // caller never needs a commit sha in hand. Paginates the same Link-header
@@ -2827,8 +2957,35 @@ func (c *RESTClient) ListPullRequestCommits(owner, repo string, number int) ([]C
 // is shaped differently -- {"total_count": N, "check_runs": [...]}, not a
 // bare array, which is GitHub's own shape for this one endpoint.
 func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) {
+	return c.listCheckRuns(owner, repo, ref, "")
+}
+
+// CheckRunAttemptsReader is the optional Client capability for every check
+// run named name against ref (GitHub's filter=all), where ListCheckRuns is
+// the latest of each alone, and for the App this client's own check
+// runs are posted as. It is what the release train's qualification gate
+// reads grain/release-qualification's attempts from.
+type CheckRunAttemptsReader interface {
+	ListCheckRunAttempts(owner, repo, ref, name string) ([]CheckRun, error)
+	CheckRunApp(owner, repo string) (string, error)
+}
+
+var _ CheckRunAttemptsReader = (*RESTClient)(nil)
+
+// ListCheckRunAttempts is GET
+// /repos/{owner}/{repo}/commits/{ref}/check-runs?check_name={name}&filter=all,
+// every check run of every name for "".
+func (c *RESTClient) ListCheckRunAttempts(owner, repo, ref, name string) ([]CheckRun, error) {
+	query := "&filter=all"
+	if name != "" {
+		query += "&check_name=" + url.QueryEscape(name)
+	}
+	return c.listCheckRuns(owner, repo, ref, query)
+}
+
+func (c *RESTClient) listCheckRuns(owner, repo, ref, query string) ([]CheckRun, error) {
 	var runs []CheckRun
-	path := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs?per_page=100", owner, repo, url.PathEscape(ref))
+	path := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs?per_page=100%s", owner, repo, url.PathEscape(ref), query)
 	for path != "" {
 		resp, err := c.get(owner, repo, path)
 		if err != nil {
@@ -2841,6 +2998,7 @@ func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) 
 			CheckRuns []struct {
 				ID          int64      `json:"id"`
 				HeadSHA     string     `json:"head_sha"`
+				ExternalID  string     `json:"external_id"`
 				Name        string     `json:"name"`
 				Status      string     `json:"status"`
 				Conclusion  *string    `json:"conclusion"`
@@ -2850,6 +3008,9 @@ func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) 
 				App         struct {
 					Slug string `json:"slug"`
 				} `json:"app"`
+				CheckSuite struct {
+					ID int64 `json:"id"`
+				} `json:"check_suite"`
 				Output struct {
 					Title   *string `json:"title"`
 					Summary *string `json:"summary"`
@@ -2880,8 +3041,10 @@ func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) 
 				FailureReason: reason,
 				StepsExecuted: len(item.Steps),
 				ID:            item.ID,
+				CheckSuiteID:  item.CheckSuite.ID,
 				HeadSHA:       item.HeadSHA,
 				App:           item.App.Slug,
+				ExternalID:    item.ExternalID,
 				StartedAt:     item.StartedAt,
 				CompletedAt:   item.CompletedAt,
 				Output:        checkOutput(item.Output.Title, item.Output.Summary, item.Output.Text),
@@ -2890,6 +3053,46 @@ func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) 
 		path = nextPagePath(resp.Headers["Link"])
 	}
 	return runs, nil
+}
+
+// RerequestCheckSuite asks GitHub to re-run a check suite in place on its
+// commit (POST /repos/{owner}/{repo}/check-suites/{check_suite_id}/rerequest).
+// GitHub answers 201 when the suite's app accepts re-requests and 403/404/422
+// when the credential or the app does not allow it.
+func (c *RESTClient) RerequestCheckSuite(owner, repo string, checkSuiteID int64) error {
+	if checkSuiteID <= 0 {
+		return &Error{Status: 422, Body: []byte(`{"message":"invalid check_suite_id"}`)}
+	}
+	resp, err := c.request(
+		"POST", fmt.Sprintf("/repos/%s/%s/check-suites/%d/rerequest", url.PathEscape(owner), url.PathEscape(repo), checkSuiteID),
+		c.headers(owner, repo, false), nil,
+	)
+	if err != nil {
+		return err
+	}
+	if resp.Status != 201 {
+		return &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	return nil
+}
+
+// RerequestCheckRun asks GitHub to re-run a single check run in place on its
+// commit (POST /repos/{owner}/{repo}/check-runs/{check_run_id}/rerequest).
+func (c *RESTClient) RerequestCheckRun(owner, repo string, checkRunID int64) error {
+	if checkRunID <= 0 {
+		return &Error{Status: 422, Body: []byte(`{"message":"invalid check_run_id"}`)}
+	}
+	resp, err := c.request(
+		"POST", fmt.Sprintf("/repos/%s/%s/check-runs/%d/rerequest", url.PathEscape(owner), url.PathEscape(repo), checkRunID),
+		c.headers(owner, repo, false), nil,
+	)
+	if err != nil {
+		return err
+	}
+	if resp.Status != 201 {
+		return &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	return nil
 }
 
 // ListWorkflowRuns returns the GitHub Actions workflow runs against one
@@ -3686,6 +3889,7 @@ type WorkflowRun struct {
 	Path       string     `json:"path"`
 	HeadBranch string     `json:"head_branch"`
 	HeadSHA    string     `json:"head_sha"`
+	HeadRepo   string     `json:"head_repo,omitempty"`
 	Event      string     `json:"event"`
 	Status     string     `json:"status"`
 	Conclusion string     `json:"conclusion"`
@@ -3717,6 +3921,35 @@ type WorkflowRunsReader interface {
 }
 
 var _ WorkflowRunsReader = (*RESTClient)(nil)
+
+// WorkflowRunRerunner is the optional Client capability for asking GitHub
+// Actions to run a concluded run's failed jobs again, as a new attempt of
+// the same run: POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs.
+// The credential needs `actions: write` on the repository; one without it
+// is answered 403, which the caller reads as "not re-run" rather than a
+// fault.
+type WorkflowRunRerunner interface {
+	RerunFailedJobs(owner, repo string, runID int64) error
+}
+
+var _ WorkflowRunRerunner = (*RESTClient)(nil)
+
+// RerunFailedJobs asks GitHub to re-run the failed jobs of runID (and the
+// jobs that depend on them) as the run's next attempt.
+func (c *RESTClient) RerunFailedJobs(owner, repo string, runID int64) error {
+	if runID <= 0 {
+		return fmt.Errorf("re-running the failed jobs of %s/%s: no run id", owner, repo)
+	}
+	resp, err := c.request("POST", fmt.Sprintf("/repos/%s/%s/actions/runs/%d/rerun-failed-jobs", owner, repo, runID),
+		c.headers(owner, repo, true), []byte("{}"))
+	if err != nil {
+		return err
+	}
+	if resp.Status != http.StatusCreated && resp.Status != http.StatusOK && resp.Status != http.StatusNoContent {
+		return &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	return nil
+}
 
 // completedRunsETags caches the last ETag seen per (Transport, owner, repo) for
 // CompletedWorkflowRuns so unchanged polls cost 304 Not Modified. Keyed in a
@@ -3755,17 +3988,28 @@ func (c *RESTClient) CompletedWorkflowRuns(owner, repo string, limit int) ([]Wor
 		completedRunsETags.Store(cacheKey, etag)
 	}
 	var data struct {
-		WorkflowRuns []WorkflowRun `json:"workflow_runs"`
+		WorkflowRuns []struct {
+			WorkflowRun
+			HeadRepository *struct {
+				FullName string `json:"full_name"`
+			} `json:"head_repository"`
+		} `json:"workflow_runs"`
 	}
 	if err := json.Unmarshal(resp.Body, &data); err != nil {
 		return nil, err
 	}
-	for i := range data.WorkflowRuns {
-		if data.WorkflowRuns[i].RunAttempt <= 0 {
-			data.WorkflowRuns[i].RunAttempt = 1
+	runs := make([]WorkflowRun, len(data.WorkflowRuns))
+	for i, item := range data.WorkflowRuns {
+		r := item.WorkflowRun
+		if r.RunAttempt <= 0 {
+			r.RunAttempt = 1
 		}
+		if item.HeadRepository != nil && r.HeadRepo == "" {
+			r.HeadRepo = strings.TrimSpace(item.HeadRepository.FullName)
+		}
+		runs[i] = r
 	}
-	return data.WorkflowRuns, nil
+	return runs, nil
 }
 
 // ListWorkflowRunJobs returns the jobs of one GitHub Actions workflow run.
@@ -4028,6 +4272,7 @@ func (c *RESTClient) ListComments(owner, repo string, number int) ([]Comment, er
 // trusted reply arrived after this," since a comment's own id is the one
 // thing that can't be spoofed by editing an earlier comment's body.
 func (c *RESTClient) CreateComment(owner, repo string, number int, body string) (int, error) {
+	body = c.signCommentBody(owner, repo, body)
 	payload, _ := json.Marshal(map[string]string{"body": body})
 	resp, err := c.request(
 		"POST", fmt.Sprintf("/repos/%s/%s/issues/%d/comments", owner, repo, number),
@@ -4054,6 +4299,7 @@ func (c *RESTClient) CreateComment(owner, repo string, number int, body string) 
 // files the reply under the thread's root either way. Returns the new
 // comment's id, as CreateComment does.
 func (c *RESTClient) ReplyToReviewComment(owner, repo string, pullNumber, commentID int, body string) (int, error) {
+	body = c.signCommentBody(owner, repo, body)
 	payload, _ := json.Marshal(map[string]string{"body": body})
 	resp, err := c.request(
 		"POST", fmt.Sprintf("/repos/%s/%s/pulls/%d/comments/%d/replies", owner, repo, pullNumber, commentID),
@@ -4074,25 +4320,53 @@ func (c *RESTClient) ReplyToReviewComment(owner, repo string, pullNumber, commen
 	return data.ID, nil
 }
 
+// graphqlRefusal is the Note on a 401 or 404 from the GraphQL endpoint:
+// which endpoint refused, and whether the REST API on the same transport
+// and credential answers for the same repository. "Bad credentials" alone
+// sends whoever reads it after the token, when a token that REST takes
+// and GraphQL refuses says the GraphQL request went somewhere it should
+// not have, or that this host's GraphQL wants something REST does not.
+func (c *RESTClient) graphqlRefusal(owner, repo, refused string) string {
+	endpoint := "the GraphQL endpoint"
+	if refused != "" {
+		endpoint += " (" + refused + ")"
+	}
+	note := endpoint + " refused the request"
+	if owner == "" || repo == "" {
+		return note
+	}
+	probe, err := c.get(owner, repo, fmt.Sprintf("/repos/%s/%s", owner, repo))
+	if err == nil && probe.Status == http.StatusOK {
+		note += fmt.Sprintf(", though the REST API on the same connection answers for %s/%s", owner, repo)
+	}
+	return note
+}
+
 // graphql posts one GraphQL document and decodes its data into out.
 // GitHub answers a GraphQL request it could not carry out with a 200 and
 // an "errors" array rather than a status, so those are turned into an
 // error here instead of leaving every caller to look.
 //
-// The path is /graphql, which is where api.github.com serves it. A GitHub
-// Enterprise Server transport with a /api/v3 PathPrefix would need
-// /api/graphql instead; nothing here reaches one today.
+// Every GraphQL call here comes through this one function, and it hands
+// the transport "/graphql" (graphqlRequestPath): where that is on the
+// host -- /graphql on api.github.com, /api/graphql beside a GitHub
+// Enterprise Server's /api/v3 -- is the transport's to say
+// (RealTransport.graphqlPath).
 func (c *RESTClient) graphql(owner, repo, query string, variables map[string]any, out any) error {
 	payload, err := json.Marshal(map[string]any{"query": query, "variables": variables})
 	if err != nil {
 		return err
 	}
-	resp, err := c.request("POST", "/graphql", c.headers(owner, repo, true), payload)
+	resp, err := c.request("POST", graphqlRequestPath, c.headers(owner, repo, true), payload)
 	if err != nil {
 		return err
 	}
 	if resp.Status != http.StatusOK {
-		return &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+		e := &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+		if resp.Status == http.StatusUnauthorized || resp.Status == http.StatusNotFound {
+			e.Note = c.graphqlRefusal(owner, repo, resp.URL)
+		}
+		return e
 	}
 	var envelope struct {
 		Data   json.RawMessage `json:"data"`
@@ -4217,6 +4491,7 @@ func (c *RESTClient) ResolveReviewThread(owner, repo, threadID string) error {
 // tree's origin (orchestrator.reconcileWorkTrees) rather than posting a
 // new one each time the tree moves.
 func (c *RESTClient) UpdateComment(owner, repo string, commentID int64, body string) error {
+	body = c.signCommentBody(owner, repo, body)
 	payload, _ := json.Marshal(map[string]string{"body": body})
 	resp, err := c.request(
 		"PATCH", fmt.Sprintf("/repos/%s/%s/issues/comments/%d", owner, repo, commentID),
@@ -4291,6 +4566,7 @@ func (c *RESTClient) MergePullRequestWithMessage(owner, repo string, number int,
 // review's id, kept for the same reason CreateComment returns one: cheap,
 // and the pattern every other creation call here already follows.
 func (c *RESTClient) CreateReview(owner, repo string, number int, body string, comments []NewReviewComment) (int, error) {
+	body = c.signCommentBody(owner, repo, body)
 	payloadComments := make([]map[string]any, len(comments))
 	for i, cm := range comments {
 		payloadComments[i] = map[string]any{"path": cm.Path, "line": cm.Line, "body": cm.Body}
@@ -4327,4 +4603,52 @@ func headerMap(h http.Header) map[string]string {
 		out[k] = h.Get(k)
 	}
 	return out
+}
+
+// Tag is one repository tag, peeled to the commit it names.
+type Tag struct {
+	Name string
+	SHA  string
+}
+
+// TagLister is the optional half of Client that lists a repository's
+// tags -- what the release-qualification reconciler reads to find a
+// `vX.Y.Z-rc.N` candidate (orchestrator/releasequalification.go).
+type TagLister interface {
+	ListTags(owner, repo string) ([]Tag, error)
+}
+
+var _ TagLister = (*RESTClient)(nil)
+
+// ListTags returns owner/repo's most recent tags, one page of them.
+//
+// GET /repos/{owner}/{repo}/tags answers each tag with the commit it
+// points at already peeled, which is the sha a check run is posted on,
+// so an annotated tag costs no second read. One page, deliberately: the
+// caller only ever wants the newest candidate, and this runs on a timer.
+func (c *RESTClient) ListTags(owner, repo string) ([]Tag, error) {
+	resp, err := c.get(owner, repo, fmt.Sprintf("/repos/%s/%s/tags?per_page=100", owner, repo))
+	if err != nil {
+		return nil, err
+	}
+	if resp.Status == 404 {
+		return nil, nil
+	}
+	if resp.Status != 200 {
+		return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	var data []struct {
+		Name   string `json:"name"`
+		Commit struct {
+			SHA string `json:"sha"`
+		} `json:"commit"`
+	}
+	if err := json.Unmarshal(resp.Body, &data); err != nil {
+		return nil, err
+	}
+	tags := make([]Tag, 0, len(data))
+	for _, t := range data {
+		tags = append(tags, Tag{Name: t.Name, SHA: t.Commit.SHA})
+	}
+	return tags, nil
 }

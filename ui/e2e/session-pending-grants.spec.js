@@ -115,3 +115,104 @@ for (const [name, size] of Object.entries(SIZES)) {
     await expect(banner).toHaveCount(0);
   });
 }
+
+test("active session parameters and permissions remain editable in ConsoleSessionPage and DetailOverlay when configRepoOnly is set", async ({
+  page,
+  request,
+}) => {
+  const taskID = await directorTaskID(request);
+  expect(taskID).toBeTruthy();
+  const initialSessions = (
+    await (await request.get("/api/console-sessions")).json()
+  ).sessions;
+  const initialDirector = initialSessions.find((s) => s.id === "director");
+  const createRes = await request.post("/api/tasks", {
+    data: {
+      title: "Interactive session parameter test",
+      body: "Verify session parameter controls in DetailOverlay.",
+      interactive: true,
+    },
+  });
+  expect(createRes.ok()).toBe(true);
+  const chatTask = await createRes.json();
+
+  await page.route("**/api/config", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    await route.fulfill({
+      response,
+      json: { ...body, configRepoOnly: true },
+    });
+  });
+
+  try {
+    await page.setViewportSize(SIZES.desktop);
+    await page.goto("/session/director");
+    await page.locator("#director-capabilities-header").click();
+    const panel = page.locator("#director-capabilities-content");
+    await expect(panel).toBeVisible();
+
+    const netSelect = panel.locator('select[name="networkAccess"]');
+    await expect(netSelect).toBeEnabled();
+    await netSelect.selectOption("none");
+    await expect
+      .poll(async () => {
+        const { sessions } = await (
+          await request.get("/api/console-sessions")
+        ).json();
+        return sessions.find((s) => s.id === "director")?.networkAccess;
+      })
+      .toBe("none");
+
+    // Check task detail sidebar for the interactive session task
+    await page.goto(`/tasks/${chatTask.id}`);
+    const fieldset = page.locator("fieldset", {
+      hasText: "Session parameters",
+    });
+    await expect(fieldset).toBeVisible();
+    const sidebarNet = fieldset.locator('select[name="networkAccess"]');
+    await expect(sidebarNet).toBeEnabled();
+    await sidebarNet.selectOption("none");
+    await expect
+      .poll(async () => {
+        const updated = await (
+          await request.get(`/api/tasks/${chatTask.id}`)
+        ).json();
+        return updated.networkAccess;
+      })
+      .toBe("none");
+
+    for (const vp of [SIZES.desktop, SIZES.phone]) {
+      await page.setViewportSize(vp);
+      const fsBox = await fieldset.boundingBox();
+      const netBox = await sidebarNet.boundingBox();
+      expect(netBox.x).toBeGreaterThanOrEqual(fsBox.x);
+      expect(netBox.x + netBox.width).toBeLessThanOrEqual(
+        fsBox.x + fsBox.width + 1,
+      );
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+      ).toBe(true);
+    }
+  } finally {
+    await request
+      .post(`/api/tasks/${chatTask.id}/close`, {
+        data: { reason: "test cleanup" },
+      })
+      .catch(() => {});
+    if (initialDirector) {
+      await request.put("/api/console-sessions/director", {
+        data: {
+          capabilities: initialDirector.capabilities,
+          networkAccess: initialDirector.networkAccess || "open",
+          reads: initialDirector.reads || [],
+          writes: initialDirector.writes || [],
+          model: initialDirector.model || "",
+          tasksApproved: Boolean(initialDirector.tasksApproved),
+        },
+      });
+    }
+  }
+});

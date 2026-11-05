@@ -39,7 +39,7 @@ import (
 // literal numbers rather than built from those constants, so that
 // changing the size of every sandbox grain builds means editing a test
 // that says what the new size is.
-const defaultShapeArgs = " -cpus 2 -memory-mb 8192 -disk-size-mb 30720 -memory-limit-mb 8704 -oom-score-adj 500"
+const defaultShapeArgs = " -cpus 2 -memory-mb 8192 -disk-size-mb 30720 -memory-limit-mb 10240 -oom-score-adj 500"
 
 // readyWaitDeadline is the ReadyTimeout a test here gives an Acquire
 // whose guest is expected to come up: how long the wait may take before
@@ -109,9 +109,7 @@ if [ "$1" = "vm" ] && { [ "$2" = "create" ] || [ "$2" = "delete" ]; }; then
 fi
 `, argvLog, port)
 	path := filepath.Join(dir, "granule")
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	orchestrator.WriteExecutableStub(t, path, script)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
@@ -820,7 +818,7 @@ func TestGranuleSandboxesCreateAppendsDefaultShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "vm create g-t1-1 -state-dir " + stateDir + " -backend docker -disk /images/current/disk.img -cpus 4 -memory-mb 8192 -disk-size-mb 40960 -memory-limit-mb 8704 -oom-score-adj 500" + stateDirLabelArgs(stateDir)
+	want := "vm create g-t1-1 -state-dir " + stateDir + " -backend docker -disk /images/current/disk.img -cpus 4 -memory-mb 8192 -disk-size-mb 40960 -memory-limit-mb 10240 -oom-score-adj 500" + stateDirLabelArgs(stateDir)
 	got := splitNonEmptyLines(string(data))
 	if len(got) != 1 || got[0] != want {
 		t.Errorf("granule invocations = %v, want [%q]", got, want)
@@ -866,8 +864,8 @@ func TestGranuleSandboxesSetDefaultShapeAppliesToTheNextCreate(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"vm create g-t1-1 -state-dir " + stateDir + " -backend docker -cpus 8 -memory-mb 16384 -disk-size-mb 40960 -memory-limit-mb 16896 -oom-score-adj 500" + stateDirLabelArgs(stateDir),
-		"vm create g-t2-1 -state-dir " + stateDir + " -backend docker -cpus 1 -memory-mb 16384 -disk-size-mb 40960 -memory-limit-mb 16896 -oom-score-adj 500" + stateDirLabelArgs(stateDir),
+		"vm create g-t1-1 -state-dir " + stateDir + " -backend docker -cpus 8 -memory-mb 16384 -disk-size-mb 40960 -memory-limit-mb 20480 -oom-score-adj 500" + stateDirLabelArgs(stateDir),
+		"vm create g-t2-1 -state-dir " + stateDir + " -backend docker -cpus 1 -memory-mb 16384 -disk-size-mb 40960 -memory-limit-mb 20480 -oom-score-adj 500" + stateDirLabelArgs(stateDir),
 	}
 	got := splitNonEmptyLines(string(data))
 	if len(got) != len(want) {
@@ -913,7 +911,7 @@ func TestGranuleSandboxesSetDefaultShapeClearsBackToGrainsOwnDefault(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "vm create g-t1-1 -state-dir " + stateDir + " -backend docker -cpus 2 -memory-mb 8192 -disk-size-mb 30720 -memory-limit-mb 8704 -oom-score-adj 500" + stateDirLabelArgs(stateDir)
+	want := "vm create g-t1-1 -state-dir " + stateDir + " -backend docker -cpus 2 -memory-mb 8192 -disk-size-mb 30720 -memory-limit-mb 10240 -oom-score-adj 500" + stateDirLabelArgs(stateDir)
 	got := splitNonEmptyLines(string(data))
 	if len(got) != 1 || got[0] != want {
 		t.Errorf("granule invocations = %v, want [%q]", got, want)
@@ -959,17 +957,44 @@ func TestGranuleSandboxesSetsPerVMCgroupMemoryLimitAndPositiveOOMScoreAdj(t *tes
 	if runLine == "" {
 		t.Fatalf("no `docker run` call recorded in:\n%s", data)
 	}
-	// 4096 MiB shape + 512 MiB VMM overhead = 4608 MiB cgroup memory limit,
-	// with --memory-swap equal to --memory (bounding memory.swap.max to 0)
-	// and --oom-score-adj 500.
+	// 4096 MiB shape + max(1 GiB, 25%) VMM headroom = 5120 MiB cgroup
+	// memory limit, with --memory-swap equal to --memory (bounding
+	// memory.swap.max to 0) and --oom-score-adj 500.
 	for _, want := range []string{
 		"--oom-score-adj 500",
-		"--memory 4608m",
-		"--memory-swap 4608m",
+		"--memory 5120m",
+		"--memory-swap 5120m",
 	} {
 		if !strings.Contains(runLine, want) {
 			t.Errorf("docker run line = %q, missing %q", runLine, want)
 		}
+	}
+}
+
+func TestGranuleSandboxesCapsTheMemoryLimitAtTheHost(t *testing.T) {
+	granuleBinDir := buildGranule(t)
+	dockerLog := filepath.Join(t.TempDir(), "docker-argv.log")
+	writeFakeDockerGuest(t, dockerLog, filepath.Join(t.TempDir(), "counter"), 0, "")
+	t.Setenv("PATH", granuleBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	stateDir := t.TempDir()
+	k := orchestrator.NewGranuleSandboxes(orchestrator.GranuleConfig{
+		StateDir:          stateDir,
+		SSHUser:           "debian",
+		Workspace:         "/workspace",
+		ReadyPollInterval: time.Millisecond,
+		HostMemoryMB:      18000,
+	})
+	if _, err := k.Acquire(context.Background(), "t1-1", orchestrator.Shape{MemoryMB: 16384}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(dockerLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 16384 + 4096 would be 20480 MiB, more than this 18000 MiB host has.
+	if !strings.Contains(string(data), "--memory 18000m") {
+		t.Errorf("docker calls = %q, want the VM container's limit capped at the host's 18000 MiB", data)
 	}
 }
 
@@ -1234,9 +1259,7 @@ inspect)
 esac
 `, argvLog, execBody, fakeGuestConsoleLine, status, filepath.Join(dir, "network-created"), guestBin)
 	path := filepath.Join(dir, "docker")
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	orchestrator.WriteExecutableStub(t, path, script)
 	warmUpFakeDocker(t, path)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
@@ -1258,9 +1281,7 @@ func fakeGuestBin(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	sudo := "#!/bin/sh\necho \"fake guest: sudo is refused, so a guest's root maintenance never runs on the test host: $*\" >&2\nexit 1\n"
-	if err := os.WriteFile(filepath.Join(dir, "sudo"), []byte(sudo), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	orchestrator.WriteExecutableStub(t, filepath.Join(dir, "sudo"), sudo)
 	return dir
 }
 
@@ -1771,9 +1792,7 @@ if [ "$1" = "vm" ] && [ "$2" = "delete" ]; then
 fi
 `, stateDir, stateDir)
 	path := filepath.Join(dir, "granule")
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	orchestrator.WriteExecutableStub(t, path, script)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	k := orchestrator.NewGranuleSandboxes(granuleTestConfig(stateDir))
@@ -1932,6 +1951,7 @@ func TestGranuleSandboxesGivesEachVMItsAllocatedAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(orchestrator.StubHostFirewallAddresses(pool.Addr))
 	k := orchestrator.NewGranuleSandboxes(orchestrator.GranuleConfig{
 		StateDir: stateDir, SSHUser: "debian", ExecKeyPath: "/images/key",
 		Workspace: "/workspace", ReadyPollInterval: time.Millisecond,
@@ -1988,6 +2008,7 @@ func TestReleasingAGranuleSandboxGivesBackItsAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(orchestrator.StubHostFirewallAddresses(pool.Addr))
 	k := orchestrator.NewGranuleSandboxes(orchestrator.GranuleConfig{
 		StateDir: stateDir, SSHUser: "debian", ExecKeyPath: "/images/key",
 		Workspace: "/workspace", ReadyPollInterval: time.Millisecond,
@@ -2046,6 +2067,7 @@ func TestAGranuleAcquireRecreatesARemovedSandboxNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(orchestrator.StubHostFirewallAddresses(pool.Addr))
 	k := orchestrator.NewGranuleSandboxes(orchestrator.GranuleConfig{
 		StateDir: stateDir, SSHUser: "debian", ExecKeyPath: "/images/key",
 		Workspace: "/workspace", ReadyPollInterval: time.Millisecond,
@@ -2083,9 +2105,7 @@ func TestAFailedAcquireDoesNotLeakAnAddress(t *testing.T) {
 	// A granule that refuses to create: Acquire fails before any guest.
 	dir := t.TempDir()
 	script := filepath.Join(dir, "granule")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'create refused' >&2\nexit 1\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	orchestrator.WriteExecutableStub(t, script, "#!/bin/sh\necho 'create refused' >&2\nexit 1\n")
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	pool, err := sandboxaddr.NewPool("10.128.0.0/16")

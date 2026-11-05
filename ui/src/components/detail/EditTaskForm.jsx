@@ -13,8 +13,16 @@
 // limitations under the License.
 
 import { useEffect, useRef, useState } from "react";
-import { Button, MenuItem, Stack, TextField } from "@mui/material";
+import {
+  Button,
+  Checkbox,
+  FormControlLabel,
+  MenuItem,
+  Stack,
+  TextField,
+} from "@mui/material";
 import api from "../../api.js";
+import { taskPriority, wholeNumber } from "../../wholeNumber.js";
 import {
   connectionLabel,
   connectionsServingModels,
@@ -25,6 +33,7 @@ import {
   teamDefaultLabel,
 } from "../../state.js";
 import ModelSelect from "../ModelSelect.jsx";
+import SearchSelect from "../SearchSelect.jsx";
 
 // EditTaskForm is the title/description editor DetailOverlay swaps its
 // header for (bwsalmon/agents#523) -- those two fields are the only ones
@@ -78,6 +87,20 @@ export default function EditTaskForm({
   const savedNothingNeeded = t.nothingNeededAction || "close";
   const [nothingNeededAction, setNothingNeededAction] =
     useState(savedNothingNeeded);
+  const savedKeepRunning = Boolean(t.keepRunning);
+  const [keepRunning, setKeepRunning] = useState(savedKeepRunning);
+  const savedPriority = t.priority ?? 5;
+  const [priority, setPriority] = useState(String(savedPriority));
+  // A whole number from 1 up, or empty for "leave it as it is". This
+  // form is not a <form>, so the box's own min and step are never
+  // enforced on Save: without this a 0 saved as the default 5 (the
+  // server reads 0 as unset) and a 2.5 saved as 2, both without a word
+  // (2026-11-01 intake walkthrough). Read with taskPriority, as New
+  // task reads it: "1e3" is the 1000 the number box takes it for, on
+  // every surface that takes a priority (2026-11-02 walkthrough).
+  const priorityText = String(priority).trim();
+  const priorityValid =
+    priorityText === "" || !Number.isNaN(taskPriority(priorityText));
   // The deployment's connections and default model: a task names no
   // team of its own.
   const connections = config?.agentBackends || [];
@@ -115,6 +138,8 @@ export default function EditTaskForm({
     if (reviewTemplateId !== (t.reviewTemplateId || "")) return true;
     if (reviewers !== savedReviewers) return true;
     if (nothingNeededAction !== savedNothingNeeded) return true;
+    if (keepRunning !== savedKeepRunning) return true;
+    if (String(priority).trim() !== String(savedPriority)) return true;
     if (model !== (t.model || "")) return true;
     if (agentBackendId !== (t.agentBackendId || "")) return true;
     return false;
@@ -135,11 +160,12 @@ export default function EditTaskForm({
   // what was typed, so the edit can be retried or copied out rather
   // than lost with the error (grain/task-1699).
   const save = async () => {
-    if (!title.trim()) return;
+    if (!title.trim() || !priorityValid) return;
     const parsedReviewers = reviewers
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
+    const parsedPriority = wholeNumber(priority);
     const saved = await act(
       () =>
         api(`/api/tasks/${t.id}`, {
@@ -153,6 +179,11 @@ export default function EditTaskForm({
               : {}),
             ...(nothingNeededAction !== savedNothingNeeded
               ? { nothingNeededAction }
+              : {}),
+            ...(keepRunning !== savedKeepRunning ? { keepRunning } : {}),
+            ...(!Number.isNaN(parsedPriority) &&
+            parsedPriority !== savedPriority
+              ? { priority: parsedPriority }
               : {}),
             // Sent on every save, like the review beside it: what the
             // pickers hold is this task's whole answer, and "" is the
@@ -199,18 +230,13 @@ export default function EditTaskForm({
         fullWidth
         size="small"
       />
-      <TextField
-        select
+      <SearchSelect
         label="Review"
         value={reviewTemplateId}
-        onChange={(e) => setReviewTemplateId(e.target.value)}
-        // displayEmpty: "" is a real choice (no review), not a blank --
-        // and the label has to shrink for it, since MUI only floats one
-        // out of a field it counts as filled and "" is not: left to
-        // itself the label sits on top of the "No review" displayEmpty
-        // draws inside the box.
+        onChange={setReviewTemplateId}
+        // Shrunk: "" is a real choice (no review), not a blank, and the
+        // label has to be out of the way of the "No review" it shows.
         InputLabelProps={{ shrink: true }}
-        SelectProps={{ displayEmpty: true }}
         disabled={reviewFiled || (templates || []).length === 0}
         helperText={
           reviewFiled
@@ -219,16 +245,14 @@ export default function EditTaskForm({
               ? "no templates yet -- write one in Templates to be able to attach a review here"
               : "run a second agent over this task's own code before it merges, with instructions from a template"
         }
-        fullWidth
-        size="small"
-      >
-        <MenuItem value="">No review</MenuItem>
-        {(templates || []).map((tmpl) => (
-          <MenuItem key={tmpl.id} value={tmpl.id}>
-            {tmpl.name}
-          </MenuItem>
-        ))}
-      </TextField>
+        options={[
+          { value: "", label: "No review" },
+          ...(templates || []).map((tmpl) => ({
+            value: tmpl.id,
+            label: tmpl.name,
+          })),
+        ]}
+      />
       {/* The model, then optionally one connection to run it on: the
           same two pickers NewTaskOverlay has. A model only disabled
           connections serve is still offered, and says so, because
@@ -264,39 +288,38 @@ export default function EditTaskForm({
         />
       )}
       {connections.length > 0 && (
-        <TextField
-          select
+        <SearchSelect
           label="Specific connection"
           value={
             pinChoices.some((c) => c.id === agentBackendId) || savedPin
               ? agentBackendId
               : ""
           }
-          onChange={(e) => setAgentBackendId(e.target.value)}
+          onChange={setAgentBackendId}
           InputLabelProps={{ shrink: true }}
-          SelectProps={{ displayEmpty: true }}
           helperText={
             effectiveModel
               ? `connections that serve ${effectiveModel} -- pin one only if this task needs that account`
               : "pin this task to one connection -- leave it on any connection unless it needs that account"
           }
-          fullWidth
-          size="small"
-        >
-          <MenuItem value="">Any enabled connection serving the model</MenuItem>
-          {pinChoices.map((backend) => (
-            <MenuItem key={backend.id} value={backend.id}>
-              {connectionLabel(backend)}
-            </MenuItem>
-          ))}
-          {savedPin && (
-            <MenuItem value={savedPin.id}>
-              {savedPin.missing
-                ? `${savedPin.id} (not one of the deployment's connections)`
-                : `${connectionLabel(savedPin)} (does not serve ${effectiveModel})`}
-            </MenuItem>
-          )}
-        </TextField>
+          options={[
+            { value: "", label: "Any enabled connection serving the model" },
+            ...pinChoices.map((backend) => ({
+              value: backend.id,
+              label: connectionLabel(backend),
+            })),
+            ...(savedPin
+              ? [
+                  {
+                    value: savedPin.id,
+                    label: savedPin.missing
+                      ? `${savedPin.id} (not one of the deployment's connections)`
+                      : `${connectionLabel(savedPin)} (does not serve ${effectiveModel})`,
+                  },
+                ]
+              : []),
+          ]}
+        />
       )}
       <TextField
         select
@@ -310,9 +333,41 @@ export default function EditTaskForm({
         <MenuItem value="close">Close</MenuItem>
         <MenuItem value="ack">Leave for acknowledgement</MenuItem>
       </TextField>
+      <FormControlLabel
+        control={
+          <Checkbox
+            size="small"
+            name="keepRunning"
+            checked={keepRunning}
+            onChange={(e) => setKeepRunning(e.target.checked)}
+          />
+        }
+        label="Keep running (immediately restart when a run exits)"
+        sx={{ display: "flex", m: 0 }}
+        slotProps={{ typography: { fontSize: "0.8rem" } }}
+      />
+      <TextField
+        label="Task priority"
+        type="number"
+        inputProps={{ min: 1, step: 1 }}
+        value={priority}
+        onChange={(e) => setPriority(e.target.value)}
+        error={!priorityValid}
+        helperText={
+          priorityValid
+            ? "default 5; higher numbers run first"
+            : "a whole number, 1 or more; default 5, higher numbers run first"
+        }
+        fullWidth
+        size="small"
+      />
       <Stack direction="row" spacing={1} justifyContent="flex-end">
         <Button onClick={onDone}>Cancel</Button>
-        <Button variant="contained" disabled={!title.trim()} onClick={save}>
+        <Button
+          variant="contained"
+          disabled={!title.trim() || !priorityValid}
+          onClick={save}
+        >
           Save
         </Button>
       </Stack>

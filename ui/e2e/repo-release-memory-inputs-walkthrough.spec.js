@@ -259,7 +259,7 @@ test.describe("Repository Settings, Releases, and Memory Views Inputs Walkthroug
     // Verify release picker combobox contains the release tag
     const releasePicker = page.getByRole("combobox", { name: "Release" });
     await expect(releasePicker).toBeVisible();
-    await expect(releasePicker).toContainText(releaseTag);
+    await expect(releasePicker).toHaveValue(new RegExp(`^${releaseTag} -- `));
 
     // 2.3 Qualification plan editor inputs
     const addPlanItemBtn = page.getByRole("button", { name: "Add item" });
@@ -295,9 +295,13 @@ test.describe("Repository Settings, Releases, and Memory Views Inputs Walkthroug
     const emptyAlert = page.getByText(
       new RegExp(`${repo} has no releases yet`, "i"),
     );
-    await expect(
-      emptyAlert.or(releasePicker.filter({ hasNotText: releaseTag })),
-    ).toBeVisible();
+    await expect
+      .poll(async () => {
+        if (await emptyAlert.isVisible()) return true;
+        if (!(await releasePicker.isVisible())) return false;
+        return !(await releasePicker.inputValue()).includes(releaseTag);
+      })
+      .toBe(true);
   });
 
   test("3. Repository Memory & Instructions: standing memory text, search filter, document editors, and dirty state tracking", async ({
@@ -385,7 +389,10 @@ test.describe("Repository Settings, Releases, and Memory Views Inputs Walkthroug
     });
 
     // Attempt to leave the Memory page from the rail
-    await page.getByRole("button", { name: /^CI\b/ }).first().click();
+    await page
+      .getByRole("button", { name: /^Inbox\b/ })
+      .first()
+      .click();
     await expect.poll(() => confirmDialogShown).toBe(true);
     await expect(page).toHaveURL(/\/memory$/);
 

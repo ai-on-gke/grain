@@ -49,7 +49,7 @@ describe("PageHeader", () => {
       "page",
     );
     const icon = container.querySelector(
-      '.header-icon svg[data-glyph="settings"]',
+      '.header-icon svg[data-icon="settings"]',
     );
     expect(icon).toBeInTheDocument();
     expect(icon).toHaveAttribute("width", "20");
@@ -244,5 +244,56 @@ describe("PageHeader", () => {
     } finally {
       scroll.mockRestore();
     }
+  });
+
+  it("omits any username pill or New task split button from GlobalButtons, and renders Expand sidebar at the leading edge of PageHeader when collapsed", () => {
+    const onExpandSidebar = vi.fn();
+    const { container, rerender } = render(
+      <PageHeader
+        title="tasks"
+        globals={
+          <GlobalButtons
+            config={{
+              authenticated: true,
+              authMethod: "iap",
+              actor: "user:alice@example.com",
+            }}
+            onOpenSystem={() => {}}
+            onOpenSettings={() => {}}
+          />
+        }
+      />,
+    );
+    expect(screen.queryByTestId("top-bar-user")).toBeNull();
+    expect(screen.queryByTestId("header-new-task-group")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Expand sidebar" })).toBeNull();
+
+    rerender(
+      <PageHeader
+        title="tasks"
+        onExpandSidebar={onExpandSidebar}
+        globals={
+          <GlobalButtons onOpenSystem={() => {}} onOpenSettings={() => {}} />
+        }
+      />,
+    );
+    const expand = screen.getByRole("button", { name: "Expand sidebar" });
+    expect(expand).toHaveAttribute("data-testid", "sidebar-toggle");
+    expect(expand).toHaveAttribute("aria-expanded", "false");
+    expect(expand).toHaveAttribute("aria-controls", "sidebar-rail");
+    expect(expand).toHaveAttribute("aria-keyshortcuts", "[");
+    expect(
+      expand.querySelector('svg[data-icon="sidebar"]'),
+    ).toBeInTheDocument();
+
+    // Leading edge: Expand sidebar precedes the section glyph and title.
+    const headerIcon = container.querySelector(".header-icon");
+    expect(
+      expand.compareDocumentPosition(headerIcon) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    fireEvent.click(expand);
+    expect(onExpandSidebar).toHaveBeenCalledTimes(1);
   });
 });

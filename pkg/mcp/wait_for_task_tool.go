@@ -39,7 +39,7 @@ package mcp
 // mechanism.
 //
 // Both parks are forms of resume_later (resume_later_tool.go,
-// docs/design/durable-tasks.md#DT-9): one TaskWaiter.ResumeLater call,
+// design/design/durable-tasks.design.md#DT-9): one TaskWaiter.ResumeLater call,
 // and a run recorded as a requested suspension when it ends.
 //
 // The sandbox does not survive a park, which is why parking with work not
@@ -167,8 +167,11 @@ func waitForTaskTool(waiter TaskWaiter, unpushed UnpushedWorkReader, poll time.D
 			"with unpushed commits or uncommitted changes is refused unless you set force: true. " +
 			"After a park, take no further actions. until: \"closed\" (the default) is met however " +
 			"the task ended -- merged, closed unmerged, cancelled, or stopped as failed -- and the " +
-			"result says which; \"merged\" is met only by a merge. A park resumes on closure " +
-			"either way, so check the outcome when you resume. You cannot wait on this task " +
+			"result says which; \"merged\" is met only by a merge. A task closed while its pull " +
+			"request is still open has not settled \"merged\" yet -- a person can still merge it " +
+			"by hand -- so a wait until \"merged\" goes on until that pull request merges or " +
+			"closes (grain reads it for 30 days after the close). Otherwise a park resumes on " +
+			"closure either way, so check the outcome when you resume. You cannot wait on this task " +
 			"itself, on a standing chat or director session, or on a task that already waits on " +
 			"this one. To wait out a hold that is only a time (\"hold off for 1 hour\"), set " +
 			"resume_at instead of a task: grain defers this task until then and ends your run, " +
@@ -282,6 +285,15 @@ func waitForTask(ctx context.Context, waiter TaskWaiter, unpushed UnpushedWorkRe
 		return parkOnTasks(ctx, waiter, unpushed, ids, force, autoNote)
 	}
 	return blockOnTasks(ctx, waiter, ids, untilMerged, timeout, poll)
+}
+
+// WaitForTaskUntilMerged reports whether a wait_for_task call asked for
+// until "merged" -- what a park on tasks it made records
+// (model.ResumeOn.UntilMerged), so the park is held past a closure that
+// left the target's pull request open.
+func WaitForTaskUntilMerged(args map[string]any) bool {
+	until, _ := args["until"].(string)
+	return until == "merged"
 }
 
 // WaitForTaskIDs is task_id and task_ids together, blanks and repeats

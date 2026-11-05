@@ -634,6 +634,152 @@ describe("GrantsPicker", () => {
     );
   });
 
+  // grain/task-2726: repo#read is refused every task and process by
+  // grain's own CI-only rule, not by the capability policy, so the
+  // picker says CI only and points at the repository's CI capabilities
+  // rather than at a policy with no rule to change.
+  it("words a CI-only method as CI only, not as denied by the policy", async () => {
+    const repoRead = {
+      ref: "https://grain.dev/capabilities/repo#read",
+      method: "read",
+      args: null,
+      policy: { task: "ci_only", process: "ci_only" },
+    };
+    const refusal = `${repoRead.ref} is a CI capability, not a task grant: it gives a CI job read access to another repository, and only a CI job is handed it -- a task run is not one.`;
+    api.mockImplementation(async (path, opts) => {
+      if (path === "/api/capability-methods?kind=task&repo=acme%2Fwidgets")
+        return [{ ...repoRead, policyRefusal: refusal }, gcpKey];
+      if (path.startsWith("/api/capability-methods")) return [repoRead];
+      if (path === "/api/capability-grants/check")
+        return JSON.parse(opts.body).grants.map(({ grant }) => ({
+          grant,
+          recorded: grant,
+        }));
+      throw new Error(`unexpected ${path}`);
+    });
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <GrantsPicker
+        grants={[]}
+        config={{ capabilityMethods: 1 }}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={vi.fn()}
+        runKind="process"
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Add grant…" }));
+    let menu = await screen.findByRole("menu", { name: "Grants to add" });
+    let row = (await within(menu).findByText("repo server › read")).closest(
+      '[role="menuitem"]',
+    );
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    expect(row).toHaveAttribute("data-policy-verdict", "ci_only");
+    expect(row).not.toHaveAttribute("data-policy-denied");
+    expect(row).toHaveTextContent(
+      "CI only: not a grant for processes; a CI job declares it in its workflow's capabilities:",
+    );
+    expect(row).not.toHaveTextContent("capability policy");
+    // The repository's CI capabilities list does not grant repository
+    // access (docs/test-runs/2026-11-03-capabilities-ci-repo.md, F1), so
+    // the row points at how a job declares it rather than at that list.
+    expect(row).not.toHaveTextContent("CI capabilities");
+    expect(
+      within(row).getByRole("link", { name: "Repository access docs" }),
+    ).toHaveAttribute(
+      "href",
+      expect.stringContaining("docs/ci-capabilities.md#repository-access"),
+    );
+    await user.keyboard("{Escape}");
+    unmount();
+
+    // A task on a known repo holding one: the line and the menu name the
+    // repo's own CI capabilities, and the refusal is the CI-only one.
+    render(
+      <GrantsPicker
+        grants={[repoRead.ref]}
+        config={{ capabilityMethods: 2 }}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={vi.fn()}
+        policyRepo="acme/widgets"
+      />,
+    );
+    const [line] = await screen.findAllByLabelText(/read \(CI only\)$/);
+    expect(line).not.toHaveTextContent("denied by policy");
+    await user.click(screen.getByRole("button", { name: "Add grant…" }));
+    menu = await screen.findByRole("menu", { name: "Grants to add" });
+    row = (await within(menu).findByText("repo server › read")).closest(
+      '[role="menuitem"]',
+    );
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    expect(row).toHaveAttribute("title", `${repoRead.ref} — ${refusal}`);
+    expect(row).not.toHaveTextContent("capability policy");
+    expect(
+      within(row).getByRole("link", { name: "Repository access docs" }),
+    ).toHaveAttribute(
+      "href",
+      expect.stringContaining("docs/ci-capabilities.md#repository-access"),
+    );
+  });
+
+  // A task's one run on a known repo is judged by the listing: a method
+  // a repo-conditional rule admits there is not "may be refused" because
+  // some other repo's task would be. A CI job's event is still unknown,
+  // so its picker keeps the kind's verdict.
+  it("drops the kind's verdict once the listing judged the task's repo", async () => {
+    const mayBe = {
+      ...hostScript,
+      policy: { task: "may_be_refused", ci: "may_be_refused" },
+    };
+    api.mockImplementation(async (path, opts) => {
+      if (path.startsWith("/api/capability-methods?kind=")) return [mayBe];
+      if (path === "/api/capability-grants/check")
+        return JSON.parse(opts.body).grants.map(({ grant }) => ({
+          grant,
+          recorded: grant,
+        }));
+      throw new Error(`unexpected ${path}`);
+    });
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <GrantsPicker
+        grants={[hostScript.ref]}
+        config={{ capabilityMethods: 1 }}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={vi.fn()}
+        policyRepo="acme/gadgets"
+      />,
+    );
+    const line = await screen.findByLabelText("example.com › host-script");
+    expect(line).not.toHaveTextContent("may be refused");
+    await user.click(screen.getByRole("button", { name: "Add grant…" }));
+    const item = await screen.findByRole("menuitem", { name: /host-script/ });
+    expect(item).not.toHaveTextContent("may be refused");
+    expect(item).not.toHaveAttribute("data-policy-verdict");
+    unmount();
+
+    render(
+      <GrantsPicker
+        grants={[]}
+        config={{ capabilityMethods: 1 }}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={vi.fn()}
+        runKind="ci"
+        policyRepo="acme/gadgets"
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Add grant…" }));
+    expect(
+      await screen.findByRole("menuitem", { name: /host-script/ }),
+    ).toHaveTextContent("may be refused by the capability policy for CI jobs");
+    expect(api).toHaveBeenCalledWith(
+      "/api/capability-methods?kind=ci&repo=acme%2Fgadgets",
+    );
+  });
+
   it("asks about no repo while the one typed is not owner/name", async () => {
     serve({ current: [hostScript] });
     render(

@@ -45,15 +45,26 @@ export function formSnapshot(form, state) {
 // because the form is drawn inside MUI's Dialog, whose portal mounts its
 // children a render after the pane itself: a mount effect would read a
 // form that is not there yet and call every pane edited.
+//
+// While its form is attached it can also be settled (settleEdits below):
+// the baseline moves to what the form says now, so the edit on screen
+// stops counting as one to lose.
+const settlers = new Set();
+
 export function useUnsavedEdits(state) {
   const form = useRef(null);
   const baseline = useRef(null);
   const snapshot = () => formSnapshot(form.current, state);
   const latest = useRef(snapshot);
   latest.current = snapshot;
+  const settle = useRef(() => {
+    if (form.current) baseline.current = latest.current();
+  });
   const formRef = useCallback((el) => {
     form.current = el;
     if (el && baseline.current === null) baseline.current = latest.current();
+    if (el) settlers.add(settle.current);
+    else settlers.delete(settle.current);
   }, []);
   const isDirty = useCallback(
     () =>
@@ -103,4 +114,14 @@ export function guardLeaving(isDirty) {
 export function leavingLosesEdits() {
   for (const isDirty of leaveGuards) if (isDirty()) return true;
   return false;
+}
+
+// settleEdits treats every form on screen as saved as it stands: for an
+// edit that has gone somewhere other than its own Save, such as a
+// refused write whose change a config pull request now carries
+// (ConfigRefusal.jsx). Leaving the editor behind it afterwards loses
+// nothing, so neither Back nor the pull request's task link asks
+// DISCARD_PROMPT -- while a further edit made after it still does.
+export function settleEdits() {
+  for (const settle of settlers) settle();
 }

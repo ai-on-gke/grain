@@ -44,7 +44,7 @@ func TestScheduledDeclarationsTargetMain(t *testing.T) {
 	root := repoRoot(t)
 	schedulesDir := filepath.Join(root, ".grain", "schedules")
 
-	// Every change lands on main (docs/design/release-from-trunk.md,
+	// Every change lands on main (design/design/release-from-trunk.design.md,
 	// RFT-1): these schedules used to run on candidate.
 	for _, filename := range []string{
 		"nightly-features-test-plan.yml",
@@ -115,8 +115,10 @@ func TestDeepRCQualificationTemplates(t *testing.T) {
 		if !strings.Contains(content, "qualification/<this task id>") && filename != "qualification-system-smoke.yml" {
 			t.Errorf("Qualification template %s expected to stage its experiments on a qualification/<this task id> scratch branch", filename)
 		}
-		if !strings.Contains(content, "auto-merge: true") {
-			t.Errorf("Qualification template %s expected to declare 'auto-merge: true', content:\n%s", filename, content)
+		// A qualification run that opens a pull request fails Stage 2
+		// (design/playbook/releases.playbook.md §2), so none auto-merges.
+		if !strings.Contains(content, "auto-merge: false") {
+			t.Errorf("Qualification template %s expected to declare 'auto-merge: false', content:\n%s", filename, content)
 		}
 	}
 
@@ -241,7 +243,7 @@ func TestBranchSpecificSuitesSplit(t *testing.T) {
 
 // TestReleaseQualification verifies the release qualification templates
 // specified in docs/test-plans/2026-09-29.md §5. The cross-branch porting
-// that plan also covered is retired (docs/design/release-from-trunk.md,
+// that plan also covered is retired (design/design/release-from-trunk.design.md,
 // RFT-1), and TestScheduledDeclarationsTargetMain checks the schedules.
 func TestReleaseQualification(t *testing.T) {
 	templatesDir := filepath.Join(repoRoot(t), ".grain", "templates")
@@ -255,8 +257,47 @@ func TestReleaseQualification(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Qualification template %s not found: %v", filename, err)
 		}
-		if !strings.Contains(string(data), "auto-merge: true") {
-			t.Errorf("Qualification template %s expected 'auto-merge: true', got:\n%s", filename, data)
+		// Stage 2 is judged objectively (design/playbook/releases.playbook.md
+		// §2): a qualification run that opens a pull request fails, so none
+		// of them auto-merges, every one is filed for a candidate, and every
+		// one ends with the footer the reconciler reads.
+		for _, want := range []string{
+			"auto-merge: false",
+			"- name: rc_tag", "- name: rc_sha",
+			"Qualification-Verdict: PASS", "Qualified-Tag: {{rc_tag}}", "Qualified-Commit: {{rc_sha}}",
+		} {
+			if !strings.Contains(string(data), want) {
+				t.Errorf("Qualification template %s expected %q, got:\n%s", filename, want, data)
+			}
 		}
+		// Only {{name}} is filled in (model.SubstituteFields): a single-brace
+		// {rc_tag} reaches the run verbatim.
+		if m := regexp.MustCompile(`(^|[^{])\{rc_(tag|sha)\}`).Find(data); m != nil {
+			t.Errorf("Qualification template %s has a placeholder grain does not fill: %q", filename, m)
+		}
+		// nothing_needed closes the task, and a closed item fails
+		// (model.JudgeQualificationAttempt), so a template may not offer it.
+		if strings.Contains(string(data), "(or `nothing_needed`)") {
+			t.Errorf("Qualification template %s offers nothing_needed as a way to finish", filename)
+		}
+		if filename != "qualification-system-smoke.yml" &&
+			!strings.Contains(string(data), "git push origin :refs/heads/qualification/<this task id>") {
+			t.Errorf("Qualification template %s does not delete its scratch branch", filename)
+		}
+	}
+
+	suite, err := os.ReadFile(filepath.Join(repoRoot(t), ".grain", "suites", "release-qualification.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"mode: until_clean", "max-passes: 1", "auto-merge: false"} {
+		if !strings.Contains(string(suite), want) {
+			t.Errorf("release-qualification suite expected %q, got:\n%s", want, suite)
+		}
+	}
+	// The reconciler files the suite's last item only after the others pass.
+	if !regexp.MustCompile(`qualification-system-smoke\s*\n#`).Match(suite) &&
+		!regexp.MustCompile(`- qualification-system-smoke\s*\n[a-z#]`).Match(suite) {
+		t.Errorf("qualification-system-smoke must be the suite's last template, got:\n%s", suite)
 	}
 }

@@ -28,6 +28,12 @@ on:
   pull_request:
   merge_group:
   workflow_dispatch:
+    inputs:
+      jobs:
+        description: "Comma-separated job IDs to run (e.g. go-model,postgres); leave empty to run all jobs"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -44,8 +50,96 @@ env:
   npm_config_fetch_retry_maxtimeout: "120000"
 
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: ${{ github.workflow }}-changes-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    outputs:
+      go_program: ${{ steps.guard.outputs.go_program || steps.filter.outputs.go_program }}
+      go_backend: ${{ steps.guard.outputs.go_backend || steps.filter.outputs.go_backend }}
+      go_unit: ${{ steps.guard.outputs.go_unit || steps.filter.outputs.go_unit }}
+      granule: ${{ steps.guard.outputs.granule || steps.filter.outputs.granule }}
+      frontend: ${{ steps.guard.outputs.frontend || steps.filter.outputs.frontend }}
+      lint: ${{ steps.guard.outputs.lint || steps.filter.outputs.lint }}
+      terraform: ${{ steps.guard.outputs.terraform || steps.filter.outputs.terraform }}
+      go: ${{ steps.guard.outputs.go || steps.filter.outputs.go }}
+      go-e2e: ${{ steps.guard.outputs.go-e2e || steps.filter.outputs.go-e2e }}
+      go-orchestrator: ${{ steps.guard.outputs.go-orchestrator || steps.filter.outputs.go-orchestrator }}
+      go-model: ${{ steps.guard.outputs.go-model || steps.filter.outputs.go-model }}
+      go-unit: ${{ steps.guard.outputs.go-unit || steps.filter.outputs.go-unit }}
+      postgres: ${{ steps.guard.outputs.postgres || steps.filter.outputs.postgres }}
+      run-host: ${{ steps.guard.outputs.run-host || steps.filter.outputs.run-host }}
+      host-script-container: ${{ steps.guard.outputs.host-script-container || steps.filter.outputs.host-script-container }}
+      ui-e2e: ${{ steps.guard.outputs.ui-e2e || steps.filter.outputs.ui-e2e }}
+      installer-e2e: ${{ steps.guard.outputs.installer-e2e || steps.filter.outputs.installer-e2e }}
+      installer: ${{ steps.guard.outputs.installer || steps.filter.outputs.installer }}
+      package-cache: ${{ steps.guard.outputs.package-cache || steps.filter.outputs.package-cache }}
+      real-vm: ${{ steps.guard.outputs.real-vm || steps.filter.outputs.real-vm }}
+      real-kubernetes: ${{ steps.guard.outputs.real-kubernetes || steps.filter.outputs.real-kubernetes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The path filter is the code under test when a change edits it (or
+      # this workflow), so it must not decide what that change runs: a
+      # filter edited to say "nothing changed" would skip every job, and a
+      # skipped job does not fail the pull request. This step decides that
+      # case here, in the workflow file, before the script runs at all.
+      # push and merge_group run everything either way.
+      - name: Run every job when the path filter or this workflow changes
+        id: guard
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          run_all=false
+          case "$EVENT_NAME" in
+            pull_request)
+              if [[ -n "$BASE_SHA" && -n "$HEAD_SHA" ]] &&
+                changed="$(git diff --no-renames --name-only "$BASE_SHA...$HEAD_SHA")"; then
+                if grep -qxF -e scripts/github-ci-changes.sh -e .github/workflows/tests.yml <<< "$changed"; then
+                  echo "the path filter or the Tests workflow changed; running every job"
+                  run_all=true
+                fi
+              else
+                echo "could not diff $BASE_SHA...$HEAD_SHA; running every job"
+                run_all=true
+              fi
+              ;;
+            push|merge_group)
+              run_all=true
+              ;;
+          esac
+          echo "run_all=$run_all" >> "$GITHUB_OUTPUT"
+          if [[ "$run_all" == "true" ]]; then
+            for key in go_program go_backend go_unit granule frontend lint terraform go go-e2e go-orchestrator go-model go-unit postgres run-host host-script-container ui-e2e installer-e2e installer package-cache real-vm real-kubernetes; do
+              echo "$key=true" >> "$GITHUB_OUTPUT"
+            done
+          fi
+
+      - name: Classify changed paths and selected jobs
+        id: filter
+        if: steps.guard.outputs.run_all != 'true'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.base_ref }}
+          INPUT_JOBS: ${{ inputs.jobs }}
+        run: ./scripts/github-ci-changes.sh
+
   go:
     name: go
+    needs: [changes]
+    if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -120,6 +214,8 @@ jobs:
 
   go-e2e:
     name: go e2e
+    needs: [changes]
+    if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.go-e2e == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -176,6 +272,7 @@ jobs:
           package main
 
           import (
+          	"math"
           	"os"
           	"strconv"
           	"strings"
@@ -193,6 +290,14 @@ jobs:
           		}
           		s := strings.TrimSuffix(arg, "s")
           		if v, err := strconv.ParseFloat(s, 64); err == nil {
+          			// `sleep infinity` (a container kept alive) blocks for
+          			// good: +Inf seconds would overflow to a negative
+          			// Duration and return at once.
+          			if math.IsInf(v, 1) {
+          				for {
+          					time.Sleep(math.MaxInt64)
+          				}
+          			}
           			time.Sleep(time.Duration(v * float64(time.Second)))
           		}
           	}
@@ -247,6 +352,8 @@ jobs:
 
   go-orchestrator:
     name: go orchestrator
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.go-orchestrator == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -289,17 +396,37 @@ jobs:
       - name: Test
         run: |
           set +e
-          GRAIN_GOTEST_LOG=/tmp/go-orchestrator.log ./scripts/run-go-tests.sh go test -race -timeout 25m ./pkg/orchestrator/...
-          status=$?
+          GRAIN_GOTEST_LOG=/tmp/go-orchestrator.log ./scripts/run-go-tests.sh go test -race -timeout 25m ./pkg/orchestrator/... | tee /tmp/go-orchestrator.out
+          status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-orchestrator.log | tail -n 10 | while IFS= read -r line; do
-              echo "::error title=go-orchestrator::$line"
-            done
+            python3 - /tmp/go-orchestrator.out go-orchestrator <<'PY'
+          import sys
+          text = open(sys.argv[1], errors="replace").read()
+          title = sys.argv[2]
+          if "=== failing tests ===" in text:
+              sec = text.split("=== failing tests ===", 1)[1].split("=== per-package results ===", 1)[0]
+              blocks, cur = [], []
+              for line in sec.splitlines():
+                  if line.startswith("=== ") and line.endswith(" ==="):
+                      continue
+                  if line.startswith("--- FAIL:") or line.startswith("panic:") or line.startswith("WARNING: DATA RACE"):
+                      if cur:
+                          blocks.append(" | ".join(cur)[:900])
+                      cur = [line.strip()]
+                  elif line.strip():
+                      cur.append(line.strip())
+              if cur:
+                  blocks.append(" | ".join(cur)[:900])
+              for b in blocks[:9]:
+                  print(f"::error title={title}::{b}")
+          PY
             exit "$status"
           fi
 
   go-model:
     name: go model
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.go-model == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -369,6 +496,8 @@ jobs:
 
   go-unit:
     name: go unit
+    needs: [changes]
+    if: needs.changes.outputs.go_unit == 'true' && needs.changes.outputs.go-unit == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -422,23 +551,43 @@ jobs:
             ./pkg/granule/... ./pkg/grit/... ./pkg/gritapi/... ./pkg/hostd/... ./pkg/hostinit/... ./pkg/hostscriptcli/... ./pkg/whererun/... ./pkg/workflows/... \
             ./pkg/hosttop/... ./pkg/iapreconciler/... ./pkg/installtrack/... ./pkg/jwks/... \
             ./pkg/k8s/... ./pkg/kubectlgate/... ./pkg/lifecycle/... ./pkg/localexec/... ./pkg/mcp/... \
-            ./pkg/metrics/... ./pkg/modelexec/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/pkgcache/... \
-            ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/registryauth/... \
-            ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
+            ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/pkgcache/... \
+            ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/registry/... ./pkg/registryauth/... \
+            ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
             ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \
             ./pkg/secretsrepo/... ./pkg/statemachine/... ./pkg/sysstat/... \
             ./pkg/systemlog/... ./pkg/treeid/... ./pkg/trustboundary/... ./pkg/tunnel/... ./pkg/upgrade/... \
-            ./pkg/version/... ./tests/bench/...
-          status=$?
+            ./pkg/version/... ./pkg/webauth/... ./tests/bench/... | tee /tmp/go-unit.out
+          status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/go-unit.log | tail -n 10 | while IFS= read -r line; do
-              echo "::error title=go-unit::$line"
-            done
+            python3 - /tmp/go-unit.out go-unit <<'PY'
+          import sys
+          text = open(sys.argv[1], errors="replace").read()
+          title = sys.argv[2]
+          if "=== failing tests ===" in text:
+              sec = text.split("=== failing tests ===", 1)[1].split("=== per-package results ===", 1)[0]
+              blocks, cur = [], []
+              for line in sec.splitlines():
+                  if line.startswith("=== ") and line.endswith(" ==="):
+                      continue
+                  if line.startswith("--- FAIL:") or line.startswith("panic:") or line.startswith("WARNING: DATA RACE"):
+                      if cur:
+                          blocks.append(" | ".join(cur)[:900])
+                      cur = [line.strip()]
+                  elif line.strip():
+                      cur.append(line.strip())
+              if cur:
+                  blocks.append(" | ".join(cur)[:900])
+              for b in blocks[:9]:
+                  print(f"::error title={title}::{b}")
+          PY
             exit "$status"
           fi
 
   granule:
     name: granule
+    needs: [changes]
+    if: needs.changes.outputs.granule == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -538,6 +687,8 @@ jobs:
 
   postgres:
     name: postgres
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.postgres == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -602,8 +753,10 @@ jobs:
 
   run-host:
     name: run host
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.run-host == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     concurrency:
       group: ${{ github.workflow }}-run-host-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -640,10 +793,12 @@ jobs:
       - name: Daemon restart acceptance test
         env:
           GRAIN_RUNHOST_DOCKER: "1"
-        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 15m -run '^TestDaemonRestartAdoptsTheRunAndItOpensItsPullRequest$' -v ./pkg/cli/
+        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 20m -run '^(TestDaemonRestartAdoptsTheRunAndItOpensItsPullRequest|TestDaemonRestartKeepsAWarmSessionSandboxOnlyUnderItsRecordedKeys|TestRunHostAgentCannotReachAHostDirectorySandbox)$' -v ./pkg/cli/
 
   host-script-container:
     name: host-script container
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.host-script-container == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -692,6 +847,8 @@ jobs:
 
   frontend:
     name: frontend
+    needs: [changes]
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -733,8 +890,13 @@ jobs:
 
   ui-e2e:
     name: ui e2e
+    needs: [changes]
+    if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.ui-e2e == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # The suite alone runs about 32 minutes now (887 tests, one worker per
+    # two cores), and the frontend build and browser download come on top:
+    # at 35 a slow runner was cancelled mid-suite with no verdict at all.
+    timeout-minutes: 50
     concurrency:
       group: ${{ github.workflow }}-ui-e2e-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -821,6 +983,8 @@ jobs:
 
   lint:
     name: lint
+    needs: [changes]
+    if: needs.changes.outputs.lint == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -863,6 +1027,8 @@ jobs:
 
   terraform:
     name: terraform
+    needs: [changes]
+    if: needs.changes.outputs.terraform == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -884,21 +1050,11 @@ jobs:
         working-directory: deploy/terraform/gcp
         run: |
           terraform version
-          terraform fmt -check -recursive -diff ../..
+          terraform fmt -check -recursive -diff ..
 
       - name: Init
         working-directory: deploy/terraform/gcp
         run: |
-          for i in 1 2 3 4 5; do
-            if terraform init -backend=false -input=false; then
-              break
-            fi
-            if [ "$i" -eq 5 ]; then
-              exit 1
-            fi
-            sleep 2
-          done
-          cd ../../gke/terraform
           for i in 1 2 3 4 5; do
             if terraform init -backend=false -input=false; then
               exit 0
@@ -911,12 +1067,12 @@ jobs:
 
       - name: Validate
         working-directory: deploy/terraform/gcp
-        run: |
-          terraform validate
-          terraform -chdir=../../gke/terraform validate
+        run: terraform validate
 
   installer-e2e:
     name: installer
+    needs: [changes]
+    if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.installer-e2e == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -968,10 +1124,13 @@ jobs:
           git config --global user.email "grain-ci@example.com"
           ./scripts/warm-npm-cache.sh ui
 
-      - name: Assemble the image to install
+      - name: Configure authenticated Docker Hub pulls
         env:
-          GRAIN_INSTALLER_BASE_IMAGE: ghcr.io/bwsalmon/grain/grain:main
-          GRAIN_INSTALLER_SANDBOX_IMAGE: ghcr.io/bwsalmon/grain/k8s-sandbox:main
+          DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+        run: ./scripts/configure-dockerhub-auth.sh --pull-only
+
+      - name: Assemble the image to install
         run: |
           set +e
           ./scripts/installer-test-image.sh grain-installer:test 2>&1 | tee /tmp/installer-image.log
@@ -1010,6 +1169,8 @@ jobs:
 
   package-cache:
     name: package cache
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.package-cache == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -1188,21 +1349,12 @@ jobs:
             exit "$status"
           fi
 
-  # Disabled on GitHub-hosted ubuntu-latest runners:
-  #
-  # real-vm boots two concurrent Firecracker/Cloud-Hypervisor microVMs
-  # inside Docker containers (TestGranuleSandboxesAgainstARealDockerBackedVM,
-  # TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently, and
-  # TestTheModelProxiesAreReachableFromInsideARealGuest). It requires a
-  # pre-published guest VM image in GHCR matching ./scripts/granule/guest-inputs.sh
-  # (or ~45 minutes and >30 GB disk to build Granulefile from scratch), plus
-  # nested KVM with at least 16 GiB dedicated RAM and 60 GB disk. Move to a
-  # self-hosted runner with KVM and pre-warmed guest image cache to enable.
   real-vm:
     name: real vm
-    if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'
-    runs-on: ${{ vars.SELF_HOSTED_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 30
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.real-vm == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     concurrency:
       group: ${{ github.workflow }}-real-vm-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -1210,28 +1362,128 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Ensure sufficient runner disk space
+        run: |
+          avail_mb=$(df -BM --output=avail / | tail -1 | tr -dc '0-9')
+          if [ "${avail_mb:-0}" -lt 35000 ]; then
+            sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          fi
+          df -h /
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Configure /dev/kvm udev permissions
+        run: |
+          set -euo pipefail
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            iproute2 iptables nftables dnsmasq-base e2fsprogs socat openssh-client
+          if [ ! -e /dev/kvm ]; then
+            echo "/dev/kvm is not in this runner, so the suite below would skip rather than run. A green tick here would mean nothing." >&2
+            exit 1
+          fi
+          printf '%s\n' 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules || true
+          sudo udevadm trigger --name-match=kvm || true
+          sudo chmod 0666 /dev/kvm
+          sudo usermod -aG kvm "$USER" || true
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo git config --system user.name "grain-ci"
+          sudo git config --system user.email "grain-ci@example.com"
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
+          ls -l /dev/kvm
+          docker version
+          command -v ssh-keygen
+          sudo -n nft --version
+          nproc
+          free -m
+          df -h /
+
+      - name: Resolve the sandbox guest
+        timeout-minutes: 50
+        env:
+          IMAGE: grain-guest:e2e-test
+        run: ./scripts/granule-guest-resolve.sh
 
       - name: Real VM sandbox tests
         env:
           GRAIN_REAL_VM_TESTS: "1"
+          GRAIN_REAL_VM_CPUS: "2"
+          GRAIN_REAL_VM_MEMORY_MB: "2048"
         run: |
-          ./scripts/run-go-tests.sh go test -v -count=1 -timeout 20m \
+          set -uo pipefail
+          mkdir -p /tmp/consoles
+          (
+            while true; do
+              for c in $(docker ps -aq --filter 'name=granule-vm-' 2>/dev/null); do
+                if [ ! -e "/tmp/consoles/$c.started" ]; then
+                  touch "/tmp/consoles/$c.started"
+                  name="$(docker inspect -f '{{.Name}}' "$c" 2>/dev/null | tr -d /)"
+                  (docker logs -f "$c" > "/tmp/consoles/${name:-$c}.log" 2>&1 &)
+                fi
+              done
+              sleep 2
+            done
+          ) &
+          watcher=$!
+          failed=""
+          go test ./pkg/orchestrator/ \
             -run 'TestGranuleSandboxesAgainstARealDockerBackedVM|TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently|TestTheModelProxiesAreReachableFromInsideARealGuest' \
-            ./pkg/orchestrator/
+            -count=1 -v -timeout 25m 2>&1 | tee /tmp/granule-vm.log || failed="the suite"
+          kill "$watcher" 2>/dev/null || true
 
-  # Disabled on GitHub-hosted ubuntu-latest runners:
-  #
-  # real-kubernetes boots a multi-node kind cluster with Calico CNI to enforce
-  # NetworkPolicy egress isolation and tests real pod sandboxes and Kubernetes
-  # run-host handoffs (pkg/orchestrator and pkg/cli). Provisioning kind + Calico
-  # + building and loading the sandbox images exceeds standard hosted runner
-  # memory/disk budgets and belongs on a larger or self-hosted runner.
+          for t in TestGranuleSandboxesAgainstARealDockerBackedVM \
+                   TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently \
+                   TestTheModelProxiesAreReachableFromInsideARealGuest; do
+            if ! grep -q -- "--- PASS: $t" /tmp/granule-vm.log; then
+              echo "$t did not run and pass; this job only means something when all of them do" >&2
+              failed="${failed:-a test that did not run}"
+            fi
+          done
+          if [ -n "$failed" ]; then
+            echo "===== nproc / free -m / df -h / ====="
+            nproc; free -m; df -h /
+            echo "===== docker ps -a ====="
+            docker ps -a
+            echo "===== dmesg tail ====="
+            (sudo dmesg 2>/dev/null || dmesg 2>/dev/null || echo "no dmesg here") | tail -80
+            for f in /tmp/consoles/*.log; do
+              [ -e "$f" ] || continue
+              echo "===== guest console $f ====="
+              tail -200 "$f"
+            done
+            exit 1
+          fi
+
+  # Boots a single-node kind cluster with Calico CNI (v3.33.0) on ubuntu-latest
+  # to enforce NetworkPolicy egress isolation and exercise real Kubernetes pod
+  # sandboxes (TestK8sSandboxesAgainstARealKindCluster).
   real-kubernetes:
     name: real kubernetes
-    if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'
-    runs-on: ${{ vars.SELF_HOSTED_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 30
+    needs: [changes]
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.real-kubernetes == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
     concurrency:
       group: ${{ github.workflow }}-real-kubernetes-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -1241,8 +1493,98 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Free runner disk space
+        run: |
+          echo "=== Disk and memory before cleanup ==="
+          df -h /
+          free -m
+          for dir in \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost \
+            /opt/az; do
+            sudo rm -rf "$dir" &
+          done
+          wait || true
+          echo "=== Disk after cleanup ==="
+          df -h /
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Cache kind and Calico images
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/grain-k8s
+          key: k8s-images-${{ runner.os }}-${{ hashFiles('scripts/prepare-real-k8s-ci.sh') }}
+          restore-keys: |
+            k8s-images-${{ runner.os }}-
+
+      - name: Prepare kind and Calico images
+        run: ./scripts/prepare-real-k8s-ci.sh
+
       - name: Real Kubernetes sandbox tests
         env:
           GRAIN_REAL_K8S_TESTS: "1"
         run: |
-          ./scripts/run-go-tests.sh go test -v -count=1 -timeout 20m ./pkg/k8s/...
+          set +e
+          want=TestK8sSandboxesAgainstARealKindCluster
+          rm -f /tmp/k8s-metrics.csv /tmp/real-k8s.log
+          (
+            while true; do
+              ts="$(date +%s)"
+              mem="$(free -m | awk '/^Mem:/ {print $2 "," $3 "," $7}')"
+              dsk="$(df -BM / | awk 'NR==2 {gsub(/M/,""); print $2 "," $3 "," $4}')"
+              echo "${ts},${mem},${dsk}" >> /tmp/k8s-metrics.csv
+              sleep 2
+            done
+          ) >/dev/null 2>&1 &
+          sampler=$!
+          t0="$(date +%s)"
+          GRAIN_GOTEST_LOG=/tmp/real-k8s.log ./scripts/run-go-tests.sh \
+            go test -v -count=1 -timeout 18m -run "^${want}\$" ./pkg/orchestrator/
+          status=$?
+          t1="$(date +%s)"
+          kill "$sampler" 2>/dev/null || true
+          wait "$sampler" 2>/dev/null || true
+
+          echo "=== Real Kubernetes resource summary (elapsed $((t1 - t0))s) ==="
+          awk -F, '
+            BEGIN { max_mem=0; min_avail=999999; max_disk=0; min_free_disk=999999 }
+            NF==7 {
+              total_mem=$2; if ($3+0 > max_mem) max_mem=$3+0; if ($4+0 < min_avail) min_avail=$4+0;
+              total_disk=$5; if ($6+0 > max_disk) max_disk=$6+0; if ($7+0 < min_free_disk) min_free_disk=$7+0;
+            }
+            END {
+              printf "mem_total_mb=%s peak_mem_used_mb=%d min_mem_avail_mb=%d | disk_total_mb=%s peak_disk_used_mb=%d min_disk_free_mb=%d\n",
+                total_mem, max_mem, min_avail, total_disk, max_disk, min_free_disk
+            }
+          ' /tmp/k8s-metrics.csv
+          df -h /
+          free -m
+
+          if ! grep -q -- "--- PASS: ${want}" /tmp/real-k8s.log || grep -q -- "--- SKIP:" /tmp/real-k8s.log; then
+            echo "::error title=real-kubernetes::${want} did not run and pass"
+            status=1
+          fi
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- '--- FAIL:|--- SKIP:|_test\.go:[0-9]+:|^FAIL' /tmp/real-k8s.log | tail -n 10 | while IFS= read -r line; do
+              echo "::error title=real-kubernetes::$line"
+            done
+            exit "$status"
+          fi

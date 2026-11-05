@@ -157,6 +157,31 @@ type Request struct {
 	// set. Set only by grain's own callers, never from JSON, for
 	// RequestedByKind's reason.
 	ReleaseVersion string `json:"-"`
+	// ReleaseShortSoakOK is a person's explicit acceptance that the
+	// release they approve soaked under the minimum, handed to every step
+	// as GRAIN_CI_RELEASE_SHORT_SOAK_OK=true when set (promote-release.yml
+	// passes it on as RELEASE_SHORT_SOAK_OK). Set only by grain's own
+	// callers, never from JSON, for RequestedByKind's reason.
+	ReleaseShortSoakOK bool `json:"-"`
+	// ReleaseAllowBreaking is a person's explicit acceptance that the
+	// release they approve carries breaking changes without being the
+	// major release RELEASE_MAJOR asks for, handed to every step as
+	// GRAIN_CI_RELEASE_ALLOW_BREAKING=true when set (promote-release.yml
+	// passes it on as RELEASE_ALLOW_BREAKING=<the release>). Set only by
+	// grain's own callers, never from JSON, for RequestedByKind's reason.
+	ReleaseAllowBreaking bool `json:"-"`
+	// ReleaseRollbackTo is the earlier release (vA.B.C) a person's
+	// rollback re-points `latest` to, handed to every step as
+	// GRAIN_CI_RELEASE_ROLLBACK_TO when set (promote-release.yml passes it
+	// on as RELEASE_ROLLBACK_TO). Set only by grain's own callers, never
+	// from JSON, for RequestedByKind's reason.
+	ReleaseRollbackTo string `json:"-"`
+	// ReleaseRollbackReason is why a person rolled a release back, handed
+	// to every step as GRAIN_CI_RELEASE_ROLLBACK_REASON when set
+	// (promote-release.yml passes it on as RELEASE_ROLLBACK_REASON). Set
+	// only by grain's own callers, never from JSON, for RequestedByKind's
+	// reason.
+	ReleaseRollbackReason string `json:"-"`
 	// GateOnBase asks for this run to be refused when its head would run
 	// fewer jobs than BaseRef's workflows require for the same branch and
 	// event (basegate.go). BaseRef is the branch the change is going

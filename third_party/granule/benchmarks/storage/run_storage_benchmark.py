@@ -19,6 +19,10 @@ for the dedicated GCE VM this is meant to run on):
   extents_overlay_N      CHV_STORAGE_BACKEND=extents, CHV_DISK_MODE=overlay
                          (lazy O_RDONLY -> O_RDWR promotion per extent)
 
+Any VM backend can carry a +direct_on or +direct_off suffix (flat+direct_on,
+qcow_2m+direct_off, ...), which runs it with CHV_DISK_DIRECT set to that;
+without one it gets granule's default (auto).
+
 For every VM backend it measures:
 
   1. the fio suite (direct=1, libaio, numjobs=4, 4 GiB dataset as four 1 GiB
@@ -69,6 +73,28 @@ VARIANT_LABELS = {
 # never sees it at all).
 OCI_VARIANTS = ["flat", "qcow_2m", "extent_boot_64", "extents_persistent_16",
                 "extents_persistent_64", "extents_overlay_16", "extents_overlay_64"]
+
+
+def split_variant(variant):
+    """Splits "flat+direct_on" into ("flat", "on"); no suffix gives None."""
+    base, _, suffix = variant.partition("+")
+    if not suffix:
+        return base, None
+    if suffix not in ("direct_on", "direct_off"):
+        raise ValueError(f"unknown variant suffix in {variant!r}")
+    return base, suffix[len("direct_"):]
+
+
+def label(variant):
+    base, direct = split_variant(variant)
+    text = VARIANT_LABELS.get(base, base)
+    return f"{text}, direct={direct}" if direct else text
+
+
+def ordered(variants):
+    """Variants in VARIANT_LABELS order, each base's direct variants together."""
+    keys = list(VARIANT_LABELS)
+    return sorted(variants, key=lambda v: (keys.index(split_variant(v)[0]) if split_variant(v)[0] in keys else len(keys), v))
 
 
 def log(msg):
@@ -145,7 +171,10 @@ class Bench:
 
     def spec(self, variant):
         a = self.args
+        variant, direct = split_variant(variant)
         env = {"CHV_VCPUS": "4", "CHV_DISK_NUM_QUEUES": "4"}
+        if direct:
+            env["CHV_DISK_DIRECT"] = direct
         vols = []
         image = a.image_flat
         if variant == "flat":
@@ -176,7 +205,7 @@ class Bench:
 
     def start(self, variant, name):
         image, env, vols = self.spec(variant)
-        if variant == "qcow_64k":
+        if split_variant(variant)[0] == "qcow_64k":
             self.fresh_qcow64k()
         run(f"sudo docker rm -f {name} >/dev/null 2>&1 || true", quiet=True)
         envs = " ".join(f"-e {k}={v}" for k, v in env.items())
@@ -211,7 +240,7 @@ class Bench:
         return res
 
     def fio_guest(self, variant):
-        name = f"bench-{variant.replace('_', '-')}"
+        name = f"bench-{variant.replace('_', '-').replace('+', '-')}"
         res = {}
         try:
             ms = self.start(variant, name)
@@ -231,14 +260,14 @@ class Bench:
 
     def oci_and_startup(self, variant):
         a = self.args
-        name = f"oci-{variant.replace('_', '-')}"
-        tag = f"granule-bench-commit:{variant.replace('_', '-')}"
+        name = f"oci-{variant.replace('_', '-').replace('+', '-')}"
+        tag = f"granule-bench-commit:{variant.replace('_', '-').replace('+', '-')}"
         image, _, _ = self.spec(variant)
         st = self.summary["startup"].setdefault(variant, {})
         try:
             st["cold_ms"] = round(self.start(variant, name))
             log(f"{variant}: cold start {st['cold_ms']} ms")
-            if variant not in OCI_VARIANTS:
+            if split_variant(variant)[0] not in OCI_VARIANTS:
                 return
             gexec(name, f"dd if=/dev/urandom of=/root/bench-delta-1.bin bs=1M count={a.delta_mb // 2} conv=fsync 2>/dev/null && "
                         f"dd if=/dev/urandom of=/root/bench-delta-2.bin bs=1M count={a.delta_mb - a.delta_mb // 2} conv=fsync 2>/dev/null && sync")
@@ -277,12 +306,13 @@ class Bench:
             "host": run("uname -srm; nproc; free -g | awk '/Mem:/{print $2\"G\"}'; df -h / | tail -1", check=False, quiet=True).split("\n"),
         })
         for variant in a.variants:
-            log(f"===== {variant}: {VARIANT_LABELS.get(variant, variant)} =====")
+            log(f"===== {variant}: {label(variant)} =====")
             try:
                 if variant == "host":
                     self.summary["fio"]["host"] = self.fio_host()
                 else:
-                    self.oci_and_startup(variant)
+                    if not a.fio_only:
+                        self.oci_and_startup(variant)
                     self.summary["fio"][variant] = self.fio_guest(variant)
             except Exception as e:  # keep going: one broken backend should not cost the rest
                 log(f"{variant} FAILED: {e}")
@@ -303,7 +333,7 @@ def fmt(v, unit=""):
 
 def markdown(summary):
     fio = summary.get("fio", {})
-    variants = [v for v in VARIANT_LABELS if v in fio and fio[v]]
+    variants = ordered([v for v in fio if fio[v]])
     lines = []
     tests = [("seq_write", "Seq Write 1M", "write", "bw_mbs", "MB/s"),
              ("seq_read", "Seq Read 1M", "read", "bw_mbs", "MB/s"),
@@ -325,7 +355,7 @@ def markdown(summary):
                 cells.append(f"{fmt(r['read'][metric] + r['write'][metric])} ({fmt(r['read'][metric])} r / {fmt(r['write'][metric])} w)")
             else:
                 cells.append(fmt(r[side][metric]))
-        lines.append(f"| {VARIANT_LABELS[v]} | " + " | ".join(cells) + " |")
+        lines.append(f"| {label(v)} | " + " | ".join(cells) + " |")
 
     lines.append("")
     lines.append("### Completion latency p50 / p95 / p99 (µs) and guest CPU (usr / sys %)")
@@ -340,7 +370,7 @@ def markdown(summary):
                 continue
             sides = [side] if side else ["read", "write"]
             p = lambda k: " / ".join(fmt(r[s][k]) for s in sides)
-            lines.append(f"| {'**' + title + '**' if first else ''} | {VARIANT_LABELS[v]} | {p('p50_us')} | {p('p95_us')} | {p('p99_us')} | {fmt(r['usr_cpu'])} / {fmt(r['sys_cpu'])} |")
+            lines.append(f"| {'**' + title + '**' if first else ''} | {label(v)} | {p('p50_us')} | {p('p95_us')} | {p('p99_us')} | {fmt(r['usr_cpu'])} / {fmt(r['sys_cpu'])} |")
             first = False
 
     st = summary.get("startup", {})
@@ -350,10 +380,10 @@ def markdown(summary):
         lines.append("")
         lines.append("| Backend | Cold start | Cold start (2nd sample) | Warm restart (disk already prepared) |")
         lines.append("|:---|---:|---:|---:|")
-        for v in VARIANT_LABELS:
-            if v in st:
+        for v in ordered(st):
+            if st[v]:
                 s = st[v]
-                lines.append(f"| {VARIANT_LABELS[v]} | {fmt(s.get('cold_ms'))} | {fmt(s.get('cold_ms_2'))} | {fmt(s.get('warm_ms'))} |")
+                lines.append(f"| {label(v)} | {fmt(s.get('cold_ms'))} | {fmt(s.get('cold_ms_2'))} | {fmt(s.get('warm_ms'))} |")
 
     oci = summary.get("oci", {})
     if oci:
@@ -362,10 +392,10 @@ def markdown(summary):
         lines.append("")
         lines.append("| Backend | Guest write (MiB) | Committed layer (MiB) | `docker commit` (ms) | Files under /var/lib/granule in `docker diff` |")
         lines.append("|:---|---:|---:|---:|---:|")
-        for v in VARIANT_LABELS:
-            if v in oci:
+        for v in ordered(oci):
+            if oci[v]:
                 o = oci[v]
-                lines.append(f"| {VARIANT_LABELS[v]} | {o['guest_write_mib']} | {fmt(o['layer_mib'])} | {fmt(o['commit_ms'])} | {o['changed_files']} |")
+                lines.append(f"| {label(v)} | {o['guest_write_mib']} | {fmt(o['layer_mib'])} | {fmt(o['commit_ms'])} | {o['changed_files']} |")
 
     if summary.get("errors"):
         lines.append("")
@@ -384,6 +414,7 @@ def main():
     p.add_argument("--numjobs", type=int, default=4)
     p.add_argument("--size-per-job", default="1G", help="fio file size per job (4 jobs x 1G = 4 GiB dataset)")
     p.add_argument("--runtime", type=int, default=15, help="fio --runtime cap per workload in seconds")
+    p.add_argument("--fio-only", action="store_true", help="skip the start latency and OCI layer measurements")
     p.add_argument("--delta-mb", type=int, default=10, help="MiB the OCI-diff test writes in the guest")
     p.add_argument("--ready-timeout", type=int, default=600)
     p.add_argument("--image-flat", default="granule-bench:flat")
@@ -396,6 +427,8 @@ def main():
     p.add_argument("--summary", default=os.path.join(RESULTS_DIR, SUMMARY_NAME))
     args = p.parse_args()
     args.variants = [v for v in args.variants.split(",") if v]
+    for v in args.variants:
+        split_variant(v)
 
     if args.dry_run:
         tests, common = fio_tests(args.numjobs, args.size_per_job, args.runtime)
@@ -409,7 +442,7 @@ def main():
             print(markdown(json.load(f)))
         return
 
-    if "qcow_64k" in args.variants:
+    if any(split_variant(v)[0] == "qcow_64k" for v in args.variants):
         if args.disk_bytes <= 0:
             sys.exit("--disk-bytes is required for qcow_64k")
         os.makedirs(os.path.dirname(args.qcow64k_overlay), exist_ok=True)

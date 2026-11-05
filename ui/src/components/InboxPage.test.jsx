@@ -307,7 +307,7 @@ describe("InboxPage", () => {
   it("heads the pane with the inbox figure", () => {
     const { container } = renderInbox({ tasks });
     expect(
-      container.querySelector('.header-icon svg[data-glyph="inbox"]'),
+      container.querySelector('.header-icon svg[data-icon="inbox"]'),
     ).toBeInTheDocument();
   });
 
@@ -317,6 +317,17 @@ describe("InboxPage", () => {
     });
     expect(screen.getByText(/Nothing is waiting on you/)).toBeInTheDocument();
     expect(container.querySelectorAll(".inbox-item")).toHaveLength(0);
+  });
+
+  // 2026-11-03 walkthrough: with GET /api/tasks failing on a cold load the
+  // list App hands over is the empty one it started with, and the page
+  // promised that nothing was waiting.
+  it("does not say nothing is waiting before the task list has been read", () => {
+    renderInbox({ tasks: [], tasksLoaded: false });
+    expect(screen.queryByText(/Nothing is waiting on you/)).toBeNull();
+    expect(
+      screen.getByText(/The task list could not be read/),
+    ).toBeInTheDocument();
   });
 
   it("approves a proposal from its own row", async () => {
@@ -655,7 +666,7 @@ describe("InboxPage", () => {
   });
 
   // grain's own escalations are raised as notifications now
-  // (docs/design/durable-tasks.md, DT-5), but the rows they map keep
+  // (design/design/durable-tasks.design.md, DT-5), but the rows they map keep
   // appearing until they are removed: a stalled merge shows both its
   // pipeline.merge-stalled notification and its "Unblock a merge" row.
   it("keeps a stalled merge's row beside its merge-stalled notification", async () => {
@@ -1035,12 +1046,13 @@ describe("InboxPage", () => {
       expect(toggle).toHaveAttribute("aria-expanded", "false");
     });
 
-    it("falls back to the question's first line for a question asked without a summary", async () => {
+    it("falls back to the task's derived questionSummary for a question asked without a comment summary", async () => {
       api.mockImplementation(async (path) =>
         path === "/api/tasks/4"
           ? {
               id: "4",
               state: "awaiting_reply",
+              questionSummary: "Which base branch?",
               comments: [
                 {
                   id: 2,
@@ -1061,6 +1073,55 @@ describe("InboxPage", () => {
       expect(
         within(item).queryByText("The long version."),
       ).not.toBeInTheDocument();
+    });
+
+    it("renders a closing report whole without QuestionDisclosure when no question summary is present", async () => {
+      api.mockImplementation(async (path) =>
+        path === "/api/tasks/4"
+          ? {
+              id: "4",
+              state: "awaiting_reply",
+              comments: [
+                {
+                  id: 2,
+                  body: "## Infra review\n\nEverything is healthy.",
+                },
+              ],
+            }
+          : null,
+      );
+      renderInbox({
+        tasks: [
+          task({
+            id: "4",
+            title: "Investigate the stall",
+            state: "awaiting_reply",
+          }),
+          task({
+            id: "14",
+            title: "Parked on a question",
+            state: "awaiting_reply",
+            questionSummary: "Which base branch?",
+          }),
+        ],
+      });
+
+      const reportItem = row("Investigate the stall");
+      expect(reportItem.querySelector(".inbox-note")).toHaveTextContent(
+        "Answered in a comment",
+      );
+      expect(
+        await within(reportItem).findByText("Everything is healthy."),
+      ).toBeInTheDocument();
+      expect(within(reportItem).getByText("Infra review")).toBeInTheDocument();
+      expect(
+        within(reportItem).queryByRole("button", { name: /Show question/ }),
+      ).not.toBeInTheDocument();
+
+      const questionItem = row("Parked on a question");
+      expect(questionItem.querySelector(".inbox-note")).toHaveTextContent(
+        "Asked a question",
+      );
     });
 
     it("shows the question and posts the answer as a comment", async () => {
@@ -1283,6 +1344,7 @@ describe("InboxPage", () => {
       api.mockResolvedValue({
         id: "4",
         state: "awaiting_reply",
+        questionSummary: "Should this wait on task 91 first?",
         comments: [
           {
             id: 1,

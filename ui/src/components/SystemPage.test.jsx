@@ -21,7 +21,7 @@ import SystemPage, { SYSTEM_TABS } from "./SystemPage.jsx";
 
 vi.mock("../api.js", () => ({ default: vi.fn(() => Promise.resolve({})) }));
 
-// docs/design/settings-panel.md §2.1: status and operations only.
+// design/design/settings-panel.design.md §2.1: status and operations only.
 describe("SystemPage", () => {
   afterEach(() => api.mockClear());
 
@@ -45,6 +45,28 @@ describe("SystemPage", () => {
       "true",
     );
     expect(screen.getByTestId("system-health")).toBeInTheDocument();
+  });
+
+  it("puts the open tab in a tabpanel its tab names and controls", () => {
+    render(
+      <SystemPage
+        config={{ restartEnabled: true }}
+        tab="power"
+        onTab={() => {}}
+        showError={vi.fn()}
+      />,
+    );
+    const tab = screen.getByRole("tab", { name: "Power" });
+    const panel = screen.getByRole("tabpanel", { name: "Power" });
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(tab).toHaveAttribute("aria-controls", panel.id);
+    expect(
+      within(panel).getByRole("button", { name: "Restart grain" }),
+    ).toBeInTheDocument();
+    // A closed tab names no panel, since none of its is in the document.
+    expect(screen.getByRole("tab", { name: "Logs" })).not.toHaveAttribute(
+      "aria-controls",
+    );
   });
 
   it("reports a picked tab, and Health as the bare path", async () => {
@@ -106,6 +128,82 @@ describe("SystemPage", () => {
     expect(onOpenSettings).toHaveBeenCalledWith("config-repo");
   });
 
+  it("links each pending-restart and not-runnable setting on Health to its Settings section and card, while keeping Power", async () => {
+    api.mockImplementation((path) =>
+      Promise.resolve(
+        path === "/api/settings"
+          ? {
+              pendingRestart: ["pollInterval", "githubHost"],
+              unrunnable: [
+                { key: "pollInterval", stored: "0s", running: "30s" },
+                { key: "sandboxBackend", stored: "bogus", running: "docker" },
+              ],
+            }
+          : {},
+      ),
+    );
+    const onOpenSettings = vi.fn();
+    const onTab = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <SystemPage
+        config={{}}
+        alerts={[]}
+        tab=""
+        onTab={onTab}
+        showError={vi.fn()}
+        onOpenSettings={onOpenSettings}
+      />,
+    );
+    const pendingRow = await screen.findByTestId("health-pending-restart");
+    expect(pendingRow).toHaveTextContent(
+      "Saved, not applied until restart: Poll interval, GitHub host.",
+    );
+    const pollPendingLink = within(pendingRow).getByRole("link", {
+      name: "Poll interval",
+    });
+    expect(pollPendingLink).toHaveAttribute(
+      "href",
+      "/settings/engine#pollInterval",
+    );
+    const githubPendingLink = within(pendingRow).getByRole("link", {
+      name: "GitHub host",
+    });
+    expect(githubPendingLink).toHaveAttribute(
+      "href",
+      "/settings/credentials#githubHost",
+    );
+    await user.click(pollPendingLink);
+    expect(onOpenSettings).toHaveBeenCalledWith("engine", "pollInterval");
+    onOpenSettings.mockClear();
+    await user.click(githubPendingLink);
+    expect(onOpenSettings).toHaveBeenCalledWith("credentials", "githubHost");
+    await user.click(within(pendingRow).getByRole("button", { name: "Power" }));
+    expect(onTab).toHaveBeenCalledWith("power");
+
+    const unrunnableRow = screen.getByTestId("health-unrunnable");
+    expect(unrunnableRow).toHaveTextContent(
+      "Stored, but not runnable: Poll interval (stored 0s, running 30s), Sandbox backend (stored bogus, running docker). grain is running with a value it can use instead; save it in Settings to store it.",
+    );
+    const pollUnrunnableLink = within(unrunnableRow).getByRole("link", {
+      name: "Poll interval",
+    });
+    expect(pollUnrunnableLink).toHaveAttribute(
+      "href",
+      "/settings/engine#pollInterval",
+    );
+    const backendUnrunnableLink = within(unrunnableRow).getByRole("link", {
+      name: "Sandbox backend",
+    });
+    expect(backendUnrunnableLink).toHaveAttribute(
+      "href",
+      "/settings/sandboxes#sandboxBackend",
+    );
+    onOpenSettings.mockClear();
+    await user.click(backendUnrunnableLink);
+    expect(onOpenSettings).toHaveBeenCalledWith("sandboxes", "sandboxBackend");
+  });
+
   it("opens Config repo when clicking Config repo on a failing state-repo sync in Health", async () => {
     const onOpenSettings = vi.fn();
     const user = userEvent.setup();
@@ -128,40 +226,6 @@ describe("SystemPage", () => {
     );
     await user.click(screen.getByRole("button", { name: "Config repo" }));
     expect(onOpenSettings).toHaveBeenCalledWith("config-repo");
-  });
-
-  it("points ConnectedExecutors on Sandboxes to Settings → Executors and surfaces a load error instead of a false empty state", async () => {
-    api.mockImplementation((path) => {
-      if (path === "/api/executors") {
-        return Promise.reject(new Error("executor registry offline"));
-      }
-      return Promise.resolve({
-        enabled: true,
-        sandboxes: [],
-        host: null,
-      });
-    });
-    render(
-      <SystemPage
-        config={{}}
-        tab="sandboxes"
-        onTab={() => {}}
-        showError={vi.fn()}
-      />,
-    );
-    expect(
-      await screen.findByText(
-        /The tokens they connect with are on Settings → Executors\./,
-      ),
-    ).toBeInTheDocument();
-    expect(
-      await screen.findByText(
-        /Model servers could not be read \(executor registry offline\)\./,
-      ),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText("No model servers connected."),
-    ).not.toBeInTheDocument();
   });
 
   // Upgrade moved into Settings (/settings/upgrade): System no longer

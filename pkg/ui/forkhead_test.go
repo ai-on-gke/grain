@@ -15,6 +15,7 @@
 package ui_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -147,4 +148,66 @@ func hasExternalPR(task model.Task, ref string) bool {
 		}
 	}
 	return false
+}
+
+// Moving a task filed against a fork head to another repository takes the
+// pull request it resolved to off it -- the external-pr link, and the
+// guidance appended about fetching its head and following it up, which
+// the new repository has no pull request for -- and leaves the rest of
+// what the task says. A note a person has since reworded cannot be found
+// to take out, so the task is told instead that it no longer applies.
+func TestRetargetingAForkHeadTaskDropsItsPullRequestAndGuidance(t *testing.T) {
+	t.Parallel()
+	srv, client := forkHeadServer(t)
+
+	file := func(t *testing.T, base string) string {
+		t.Helper()
+		rec := do(t, srv, http.MethodPost, "/api/tasks",
+			`{"title":"t","description":"fix the readme","repo":"acme/widgets","base":"`+base+`"}`)
+		wantStatus(t, rec, http.StatusCreated)
+		return decode[ui.Task](t, rec).ID
+	}
+	move := func(t *testing.T, id string) model.Task {
+		t.Helper()
+		wantStatus(t, do(t, srv, http.MethodPatch, "/api/tasks/"+id, `{"repo":"acme/gizmos"}`), http.StatusOK)
+		got, err := client.Store.GetTask(t.Context(), id)
+		if err != nil || got == nil {
+			t.Fatalf("GetTask = %v, %v", got, err)
+		}
+		return *got
+	}
+
+	for _, tc := range []struct{ name, base, ref string }{
+		{"a fork's pull request", "andrzejfudro:chore/bump-agy-1.4.9", "acme/widgets#139"},
+		{"a pull request from the repository itself", "acme:feature/x", "acme/widgets#140"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := move(t, file(t, tc.base))
+			if hasExternalPR(got, tc.ref) {
+				t.Errorf("Links = %+v, want the external-pr link to %s dropped", got.Links, tc.ref)
+			}
+			if got.Body != "fix the readme" {
+				t.Errorf("Body = %q, want the appended note about %s taken out and the rest kept", got.Body, tc.ref)
+			}
+		})
+	}
+
+	t.Run("a reworded note is marked instead", func(t *testing.T) {
+		id := file(t, "andrzejfudro:chore/bump-agy-1.4.9")
+		task, _ := client.Store.GetTask(t.Context(), id)
+		edited := strings.Replace(task.Body, "in review comments.", "in a review.", 1)
+		body, err := json.Marshal(map[string]string{"description": edited})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantStatus(t, do(t, srv, http.MethodPatch, "/api/tasks/"+id,
+			string(body)), http.StatusOK)
+		got := move(t, id)
+		if hasExternalPR(got, "acme/widgets#139") {
+			t.Errorf("Links = %+v, want the external-pr link dropped", got.Links)
+		}
+		if !strings.HasPrefix(got.Body, edited) || !strings.Contains(got.Body[len(edited):], "no longer applies") {
+			t.Errorf("Body = %q, want the person's text kept and a note that acme/widgets#139 no longer applies", got.Body)
+		}
+	})
 }

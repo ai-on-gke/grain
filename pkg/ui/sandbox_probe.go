@@ -58,10 +58,9 @@ var errSandboxProbeUnavailable = errors.New(
 	"sandbox probes are not available: this deployment's UI is not wired to the daemon that owns its sandboxes")
 
 // handleSandboxProbe answers POST /api/sandbox-probe -- what `grain
-// sandbox probe` calls, and through it scripts/deploy-gke.sh --check's
-// dial-out step. It holds the request open for as long as the sandbox
-// takes to boot; a caller that gives up cancels the context, and the
-// backend deletes whatever it had built.
+// sandbox probe` calls. It holds the request open for as long as the
+// sandbox takes to boot; a caller that gives up cancels the context,
+// and the backend deletes whatever it had built.
 func (s *Server) handleSandboxProbe(w http.ResponseWriter, r *http.Request) {
 	prober := s.tasks.Config.SandboxProbe
 	if prober == nil {

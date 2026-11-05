@@ -54,7 +54,7 @@ func renderedMigrationManifest(t *testing.T) ([]k8sObject, []*yaml.Node) {
 	root := repoRoot(t)
 	scratch := t.TempDir()
 	cmd := exec.Command("bash", filepath.Join(root, "scripts", "migrate-local-to-gke.sh"), "--print-manifest",
-		"--image=ghcr.io/bwsalmon/grain/grain:v9.9.9", "--sandbox-image=ghcr.io/bwsalmon/grain/guest:v9.9.9",
+		"--image=docker.io/grainai/grain:v9.9.9", "--sandbox-image=docker.io/grainai/sandbox:v9.9.9",
 		"--target-repo=ai-on-gke/grain", "--node-selector=cloud.google.com/gke-nodepool=granule",
 		"--data-dir="+scratch)
 	cmd.Env = append(os.Environ(), "GRAIN_ETC_DIR="+scratch, "GRAIN_SYSTEMD_DIR="+scratch)
@@ -88,8 +88,8 @@ func renderedMigrationManifest(t *testing.T) ([]k8sObject, []*yaml.Node) {
 }
 
 // The manifest the migration applies is grain-granule.yaml with its
-// CHANGEMEs filled in and the shared hostd/model-server token wired to
-// the flags that take it -- and still the same objects, so nothing the
+// CHANGEMEs filled in and the shared hostd token wired to the flag
+// that takes it -- and still the same objects, so nothing the
 // manifest's own tests hold it to is lost in the rendering.
 func TestMigrateLocalToGKERendersAControllerHostdCanDialInTo(t *testing.T) {
 	objects, nodes := renderedMigrationManifest(t)
@@ -105,17 +105,15 @@ func TestMigrateLocalToGKERendersAControllerHostdCanDialInTo(t *testing.T) {
 
 	dep := grainDeploymentFromDocs(t, objects, nodes)
 	c := grainContainer(t, dep)
-	if c.Image != "ghcr.io/bwsalmon/grain/grain:v9.9.9" {
+	if c.Image != "docker.io/grainai/grain:v9.9.9" {
 		t.Errorf("the controller runs %q, not --image", c.Image)
 	}
 	flags := daemonArgs(t, c)
 	for name, want := range map[string]string{
-		"k8s-granule-image":   "ghcr.io/bwsalmon/grain/guest:v9.9.9",
+		"k8s-granule-image":   "docker.io/grainai/sandbox:v9.9.9",
 		"default-target-repo": "ai-on-gke/grain",
 		"k8s-node-selector":   "cloud.google.com/gke-nodepool=granule",
 		"hostd-token-file":    "/etc/grain-secrets/hostd-token",
-		"executor-addr":       ":4243",
-		"executor-token-file": "/etc/grain-secrets/hostd-token",
 	} {
 		if got := flags[name]; got != want {
 			t.Errorf("-%s=%q, want %q", name, got, want)
@@ -180,7 +178,7 @@ func TestMigrateLocalToGKERendersAControllerHostdCanDialInTo(t *testing.T) {
 // takes: a misspelled one is a pod that exits at start.
 func TestMigrateLocalToGKEPassesFlagsTheDaemonTakes(t *testing.T) {
 	help := read(t, "pkg", "cli", "testdata", "daemon_help.golden")
-	for _, flag := range []string{"-hostd-token-file", "-executor-addr", "-executor-token-file", "-k8s-granule-image",
+	for _, flag := range []string{"-hostd-token-file", "-k8s-granule-image",
 		"-default-target-repo", "-k8s-node-selector"} {
 		if !strings.Contains(help, "  "+flag+" ") && !strings.Contains(help, "  "+flag+"\n") {
 			t.Errorf("grain daemon -h lists no %s", flag)

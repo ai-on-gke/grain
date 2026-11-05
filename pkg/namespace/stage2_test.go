@@ -72,8 +72,9 @@ type stubDeployProvider struct {
 	grainLog        string
 	// gotMetrics and gotLog, when set, record the query each read was
 	// asked with.
-	gotMetrics *MetricsQuery
-	gotLog     *GrainLogQuery
+	gotMetrics  *MetricsQuery
+	gotLog      *GrainLogQuery
+	gotPipeline *pipelineRead
 }
 
 func (s stubDeployProvider) ReadMergeQueue(ctx context.Context) (string, error) {
@@ -90,8 +91,17 @@ func (s stubDeployProvider) ReadMetrics(ctx context.Context, section string, q M
 	return s.metrics["all"], nil
 }
 
-func (s stubDeployProvider) ReadPipelineChanges(ctx context.Context) (string, error) {
+func (s stubDeployProvider) ReadPipelineChanges(ctx context.Context, cursor string, limit int) (string, error) {
+	if s.gotPipeline != nil {
+		*s.gotPipeline = pipelineRead{cursor, limit}
+	}
 	return s.pipelineChanges, nil
+}
+
+// pipelineRead is what a deploy://pipeline-changes read asked its provider for.
+type pipelineRead struct {
+	cursor string
+	limit  int
 }
 
 func (s stubDeployProvider) ReadHealth(ctx context.Context) (string, error) {
@@ -247,10 +257,10 @@ func TestStage2NamespaceRootsAndScoping(t *testing.T) {
 	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/metrics", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"self-debug"`) {
 		t.Fatalf("deploy://metrics without grant: status=%d body=%q", rec.Code, rec.Body.String())
 	}
-	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/health", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"deployment-health"`) {
+	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/health", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"https://grain.dev/capabilities/grain#health"`) {
 		t.Fatalf("deploy://health without grant: status=%d body=%q", rec.Code, rec.Body.String())
 	}
-	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/grain.log", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"grain-log"`) {
+	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/grain.log", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"https://grain.dev/capabilities/grain#journal"`) {
 		t.Fatalf("deploy://grain.log without grant: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 
@@ -311,7 +321,7 @@ func TestDeployReadsForwardTheirQuery(t *testing.T) {
 		t.Fatalf("deploy://grain.log: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 	if want := (GrainLogQuery{Since: "2026-10-29T00:00:00Z", Until: "2026-10-29T06:00:00Z",
-		MinPriority: "err", Contains: "dispatch failed", MaxLines: 900}); gotLog != want {
+		MinPriority: "err", Contains: "dispatch failed", MaxLines: 900, TaskID: "1"}); gotLog != want {
 		t.Errorf("grain.log query = %+v, want %+v", gotLog, want)
 	}
 	if rec := serveRequest(srv, scope, http.MethodGet, "/fs/deploy/grain.log?lines=50", nil); rec.Code != http.StatusOK || gotLog.MaxLines != 50 {
@@ -330,6 +340,37 @@ func TestDeployReadsForwardTheirQuery(t *testing.T) {
 		Repos: []string{"acme/a", "acme/b", "acme/c"}, Authors: []string{"task"}}
 	if !reflect.DeepEqual(gotMetrics, want) {
 		t.Errorf("metrics query = %+v, want %+v", gotMetrics, want)
+	}
+}
+
+// deploy://pipeline-changes passes ?cursor= (or ?since=) and ?page= on, so
+// a read can page past the feed's first page.
+func TestPipelineChangesReadForwardsItsCursor(t *testing.T) {
+	t.Parallel()
+	var got pipelineRead
+	srv := &Server{Deploy: stubDeployProvider{pipelineChanges: "a change\n", gotPipeline: &got}}
+	scope := Scope{TaskID: 1, TaskIDStr: "1", MayReadPipeline: true}
+	for _, tc := range []struct {
+		query string
+		want  pipelineRead
+	}{
+		{"", pipelineRead{}},
+		{"?cursor=2026-10-29T11:50:43Z~1&page=20", pipelineRead{"2026-10-29T11:50:43Z~1", 20}},
+		{"?since=2026-10-29T11:50:43Z", pipelineRead{"2026-10-29T11:50:43Z", 0}},
+	} {
+		got = pipelineRead{}
+		rec := serveRequest(srv, scope, http.MethodGet, "/fs/deploy/pipeline-changes"+tc.query, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%q: status=%d body=%q", tc.query, rec.Code, rec.Body.String())
+		}
+		if got != tc.want {
+			t.Errorf("%q: provider asked for %+v, want %+v", tc.query, got, tc.want)
+		}
+	}
+	for _, q := range []string{"?page=0", "?page=lots"} {
+		if rec := serveRequest(srv, scope, http.MethodGet, "/fs/deploy/pipeline-changes"+q, nil); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status=%d, want 400; body=%q", q, rec.Code, rec.Body.String())
+		}
 	}
 }
 
@@ -487,5 +528,57 @@ func TestThreeSegmentHostQualifiedRepoConfigAndMemory(t *testing.T) {
 	}
 	if rec := serveRequest(srv, scope, http.MethodGet, "/fs/memory/repos/git.forge.example/experimental/other/MEMORY.md", nil); rec.Code != http.StatusForbidden {
 		t.Errorf("other 3-segment memory status = %d, want 403", rec.Code)
+	}
+}
+
+// queryMergeQueueDeploy answers deploy://merge-queue reads that carry a
+// query, recording what each was asked.
+type queryMergeQueueDeploy struct {
+	stubDeployProvider
+	got *MergeQueueQuery
+}
+
+func (d queryMergeQueueDeploy) ReadMergeQueueQuery(_ context.Context, q MergeQueueQuery) (string, error) {
+	*d.got = q
+	if q.JSON {
+		return `{"repo":"` + q.Repo + `"}` + "\n", nil
+	}
+	return "queue of " + q.Repo + "\n", nil
+}
+
+// deploy://merge-queue?repo=&format=json reaches a provider that answers
+// queries with the repository, the format and -- for a caller reaching
+// the queue under ci:read alone -- the scope's own repository limit; a
+// provider that cannot answer one refuses it rather than ignoring it.
+func TestMergeQueueQueryCarriesRepoFormatAndCIRepoLimit(t *testing.T) {
+	t.Parallel()
+	var got MergeQueueQuery
+	srv := &Server{Deploy: queryMergeQueueDeploy{stubDeployProvider: stubDeployProvider{mergeQueue: "whole queue\n"}, got: &got}}
+	byCI := Scope{MayReadCI: true, AllowedRepos: map[string]bool{"acme/widgets": true}, MergeQueueByCI: true}
+
+	rec := serveRequest(srv, byCI, http.MethodGet, "/fs/deploy/merge-queue?repo=acme/widgets&format=json", nil)
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"repo":"acme/widgets"}` {
+		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if got.Repo != "acme/widgets" || !got.JSON || got.Permits == nil {
+		t.Fatalf("query = %+v", got)
+	}
+	if got.Permits("acme/secret") || !got.Permits("acme/widgets") {
+		t.Error("a ci:read caller's query should carry its repository limit")
+	}
+
+	got = MergeQueueQuery{}
+	rec = serveRequest(srv, Scope{MayReadAllCI: true}, http.MethodGet, "/fs/deploy/merge-queue?repo=acme/widgets", nil)
+	if rec.Code != http.StatusOK || rec.Body.String() != "queue of acme/widgets\n" || got.JSON || got.Permits != nil {
+		t.Fatalf("status=%d body=%q query=%+v", rec.Code, rec.Body.String(), got)
+	}
+
+	plain := &Server{Deploy: stubDeployProvider{mergeQueue: "whole queue\n"}}
+	if rec := serveRequest(plain, Scope{MayReadAllCI: true}, http.MethodGet, "/fs/deploy/merge-queue", nil); rec.Code != http.StatusOK ||
+		rec.Body.String() != "whole queue\n" {
+		t.Fatalf("an unqueried read: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if rec := serveRequest(plain, Scope{MayReadAllCI: true}, http.MethodGet, "/fs/deploy/merge-queue?repo=acme/widgets", nil); rec.Code != http.StatusBadRequest {
+		t.Fatalf("a provider that cannot narrow the queue should refuse ?repo=: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 }

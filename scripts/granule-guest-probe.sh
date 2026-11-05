@@ -124,7 +124,7 @@ if [ -z "$granule" ]; then
   # the least useful failure here. Resolved from the repository root,
   # which is the .git `go build` consults for a module sitting inside it.
   vcs="$(cd "$repo_root" && ./scripts/buildvcs.sh "${BUILDVCS:-auto}")"
-  (cd "$repo_root" && go build -buildvcs="$vcs" -o "$workdir/granule" github.com/bwsalmon/granule/cmd/granule)
+  (cd "$repo_root" && go build -buildvcs="$vcs" -o "$workdir/granule" github.com/gke-labs/granule/cmd/granule)
   granule="$workdir/granule"
 fi
 

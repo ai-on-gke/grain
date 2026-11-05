@@ -246,6 +246,22 @@ describe("PanelBoard", () => {
     expect(within(waiting).getByText("1")).toBeInTheDocument();
   });
 
+  // 2026-11-04 boards walkthrough: the running column's grain mark is
+  // labelled "Running" for its tooltip, and read out beside the
+  // column's own title it named the count "2 Running Running".
+  it("names a running count by its column title alone", () => {
+    localStorage.setItem(
+      BOARD_STORAGE_KEY,
+      JSON.stringify([
+        { id: "c1", title: "Working", states: ["running"] },
+        { id: "c2", title: "Waiting", states: ["awaiting_reply"] },
+      ]),
+    );
+    draw({ board: board([{ kind: "states" }]) });
+    expect(screen.getByRole("link", { name: "2 Working" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "1 Waiting" })).toBeVisible();
+  });
+
   // Every panel is one click from the full view of the same kind asking
   // the same question -- as a real URL, so it can be copied and sent.
   // The full view of the tasks the panel is about, asking the panel's
@@ -408,7 +424,7 @@ describe("PanelBoard", () => {
   // -- and it is the browser's own last range it falls back to, so
   // there is not even one wrong answer to notice. A hand run measuring
   // this very dashboard was misled by exactly that
-  // (docs/hand-runs/2026-09-07-panel-dashboard.md, section 5).
+  // (the 2026-09-07 panel-dashboard hand run, section 5).
   it("says which range it could not use, and the span it drew instead", () => {
     localStorage.setItem(
       GANTT_STORAGE_KEY,
@@ -939,7 +955,7 @@ describe("PanelBoard", () => {
   // Six panels over 929 tasks were 1.0-1.2s of script on every
   // three-second poll and ten were 2.1-2.3s -- a saturated main thread
   // on a deployment where nothing was happening
-  // (docs/hand-runs/2026-09-07-panel-dashboard.md, section 5). The cause
+  // (the 2026-09-07 panel-dashboard hand run, section 5). The cause
   // was not the panels: it was one shared list sorted and filtered once
   // per panel, N answers to the question the dashboard asked once.
   // taskFilters.js's narrowTasks is where that is now answered once and

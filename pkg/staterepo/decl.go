@@ -163,7 +163,7 @@ const (
 	// written as the bare kind, or {kind, spec} when there is a spec.
 	shapeChangeTarget
 	// shapeRecurrence is the six cadence columns, written as one of the
-	// four blocks a declared schedule uses.
+	// cadence blocks a declared schedule uses (cadenceKeys).
 	shapeRecurrence
 	// shapeRepos is a companion table of (owner, name) -- `reads`.
 	shapeRepos
@@ -198,6 +198,7 @@ var booleanKeys = map[string]bool{
 	"enabled":                true,
 	"require-approval":       true,
 	"interactive":            true,
+	"keep-running":           true,
 }
 
 // declKinds is the three of them, built from pkg/declschema so the keys,
@@ -356,7 +357,7 @@ func dumpRowsOf(dir, table string) ([]map[string]any, bool, error) {
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			// settings/capabilities.yml may still speak for it.
-			return overlayCapabilities(dir, table, nil, false)
+			return overlaySettingsFiles(dir, table, nil, false)
 		}
 		return nil, false, fmt.Errorf("staterepo: reading %s: %w", path, err)
 	}
@@ -366,7 +367,18 @@ func dumpRowsOf(dir, table string) ([]map[string]any, bool, error) {
 	}
 	// The columns settings/capabilities.yml projects onto read as the
 	// file says (capabilities_file.go).
-	return overlayCapabilities(dir, table, rows, true)
+	return overlaySettingsFiles(dir, table, rows, true)
+}
+
+// overlaySettingsFiles puts the settings files that project onto
+// columns -- settings/capabilities.yml and settings/new-task-form.yml --
+// over the rows tables/ holds.
+func overlaySettingsFiles(dir, table string, rows []map[string]any, present bool) ([]map[string]any, bool, error) {
+	rows, present, err := overlayCapabilities(dir, table, rows, present)
+	if err != nil {
+		return nil, false, err
+	}
+	return overlayNewTaskForm(dir, table, rows, present)
 }
 
 // declDocument is one settings file, parsed: the entries in the order
@@ -443,9 +455,16 @@ func (d declDocument) entryID(k declKind, i int, entry map[string]*yaml.Node) (s
 	return node.Value, nil
 }
 
+// cadenceKeys is every key recurrenceNode writes a cadence under, and so
+// every key recurrenceNodeOf has to look for: a key written here and not
+// looked for there is a schedule that exports and then cannot be
+// imported, its recurrence_kind left NULL (a `trigger:` schedule was
+// exactly that until grain/task-2649).
+var cadenceKeys = []string{"every", "daily", "weekly", "monthly", "trigger", "recurrence"}
+
 // recurrenceNodeOf finds whichever of the cadence keys an entry carries.
 func recurrenceNodeOf(entry map[string]*yaml.Node) (*yaml.Node, bool) {
-	for _, key := range []string{"every", "daily", "weekly", "monthly", "recurrence"} {
+	for _, key := range cadenceKeys {
 		if node, ok := entry[key]; ok {
 			node = &yaml.Node{Kind: yaml.MappingNode, Content: append([]*yaml.Node{
 				{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
@@ -538,7 +557,10 @@ func exportDeclarations(ctx context.Context, db querier, dir string) error {
 			return err
 		}
 	}
-	return exportCapabilities(ctx, db, dir)
+	if err := exportCapabilities(ctx, db, dir); err != nil {
+		return err
+	}
+	return exportNewTaskForm(ctx, db, dir)
 }
 
 // declDocumentFor renders one kind's whole file.
@@ -662,6 +684,13 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 			out.Content = append(out.Content, key(f.key), node)
 			continue
 		}
+		if !hasColumn(f, row) {
+			// A store at an older schema has no such column (a schema-65
+			// schedule has no keep_running): leave the key out, so the
+			// import gives the column its default rather than a null its
+			// NOT NULL refuses.
+			continue
+		}
 		name, node, err := columnNode(f, row)
 		if err != nil {
 			return nil, err
@@ -672,6 +701,17 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 		out.Content = append(out.Content, key(name), node)
 	}
 	return out, nil
+}
+
+// hasColumn reports whether row was read from a table that has f's
+// column. Only a one-column field can be missing that way: the cadence,
+// target and change target are older than any schema this build migrates.
+func hasColumn(f declFieldShape, row map[string]any) bool {
+	if f.shape != shapeBool && f.shape != shapeScalar {
+		return true
+	}
+	_, ok := row[f.columns[0]]
+	return ok
 }
 
 // mine is the companion rows belonging to one parent.
@@ -687,7 +727,7 @@ func mine(rows []map[string]any, parent, id string) []map[string]any {
 
 // columnNode renders one field's columns, and reports the key it is
 // written under -- which is the field's own for every shape but the
-// cadence, where the key is which of the four blocks it is.
+// cadence, where the key is which of the cadence blocks (cadenceKeys) it is.
 func columnNode(f declFieldShape, row map[string]any) (string, *yaml.Node, error) {
 	switch f.shape {
 	case shapeTarget:
@@ -801,6 +841,10 @@ func recurrenceNode(row map[string]any) (string, *yaml.Node, error) {
 				inner.Content = append(inner.Content, key("branches"), seq)
 			}
 			return "trigger", block(key("github_workflow_run"), inner), nil
+		}
+		if refTrig := model.ParseStoredGitRefTrigger(kind); refTrig != nil &&
+			!hoursSet && !minutesSet && !atSet && !weekdaySet && !daySet {
+			return "trigger", block(key("git_ref"), block(key("repo"), str(refTrig.Repo), key("ref"), str(refTrig.Ref))), nil
 		}
 	}
 	out := block()
@@ -1192,7 +1236,7 @@ func decodeRecurrence(path, id string, node *yaml.Node, row map[string]any) erro
 		return fmt.Errorf("staterepo: %s, %s: %s", path, id, why)
 	}
 	if node.Kind != yaml.MappingNode || len(node.Content) != 2 {
-		return fail("a cadence is one of `every`, `daily`, `weekly`, `monthly` or `recurrence`")
+		return fail("a cadence is one of `every`, `daily`, `weekly`, `monthly`, `trigger` or `recurrence`")
 	}
 	block := node.Content[0].Value
 	body := node.Content[1]
@@ -1272,12 +1316,28 @@ func decodeRecurrence(path, id string, node *yaml.Node, row map[string]any) erro
 		}
 		return nil
 	case "trigger":
+		refNode, ok := inside["git_ref"]
+		if !ok {
+			refNode, ok = inside["git-ref"]
+		}
+		if ok {
+			if refNode.Kind != yaml.MappingNode {
+				return fail("`git_ref` needs `repo` and `ref`")
+			}
+			var trig model.GitRefTrigger
+			if err := refNode.Decode(&trig); err != nil {
+				return fail(err.Error())
+			}
+			r := model.Recurrence{Kind: model.RecurrenceGitRef, GitRef: &trig}
+			row["recurrence_kind"] = r.StoredKind()
+			return nil
+		}
 		ghNode, ok := inside["github_workflow_run"]
 		if !ok {
 			ghNode, ok = inside["github-workflow-run"]
 		}
 		if !ok || ghNode.Kind != yaml.MappingNode {
-			return fail("`trigger` needs `github_workflow_run`")
+			return fail("`trigger` needs `github_workflow_run` or `git_ref`")
 		}
 		var trig model.GitHubWorkflowRunTrigger
 		if err := ghNode.Decode(&trig); err != nil {
@@ -1348,12 +1408,13 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 		for _, entry := range node.Content {
 			row := map[string]any{parent: id, "via": string(model.GrantByLabel), "folder": nil}
 			if entry.Kind == yaml.ScalarNode {
-				// A retired in-process capability is read as the api
-				// grant it became (model.CanonicalLegacyGrant), so a
+				// A retired in-process capability is read as the canonical
+				// grant(s) it became (model.CanonicalLegacyGrants), so a
 				// grain/config exported before the store migration that
 				// rewrote it imports as what the store now holds.
-				row["capability"] = model.CanonicalLegacyGrant(entry.Value)
-				out = append(out, row)
+				for _, capID := range model.CanonicalLegacyGrants(entry.Value) {
+					out = append(out, map[string]any{parent: id, "capability": capID, "via": string(model.GrantByLabel), "folder": nil})
+				}
 				continue
 			}
 			v, err := nodeValue(entry)
@@ -1365,16 +1426,24 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 			if !ok {
 				return nil, fail("a grant is a capability, or {capability, via, folder}")
 			}
-			if name, isText := capability.(string); isText {
-				capability = model.CanonicalLegacyGrant(name)
-			}
-			row["capability"] = capability
 			if via, ok := named["via"]; ok {
 				row["via"] = via
 			}
 			if folder, ok := named["folder"]; ok {
 				row["folder"] = folder
 			}
+			if name, isText := capability.(string); isText {
+				for _, capID := range model.CanonicalLegacyGrants(name) {
+					out = append(out, map[string]any{
+						parent:       id,
+						"capability": capID,
+						"via":        row["via"],
+						"folder":     row["folder"],
+					})
+				}
+				continue
+			}
+			row["capability"] = capability
 			out = append(out, row)
 		}
 	case shapeInputs:

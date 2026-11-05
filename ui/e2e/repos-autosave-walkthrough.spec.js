@@ -84,15 +84,16 @@ test.describe("Walkthrough: Auto-Saving Repo Pane & Sidebar Release Stamp (docs/
       });
       await expect(capsSelect).toBeVisible();
       await capsSelect.click();
-      // Select "Grain log" from capabilities menu list. Not GCP key: the
-      // demo makes that a deployment default, which every repo has on
-      // whatever it says, so choosing it here would prove nothing saved.
-      const grainLogOption = page.getByRole("option", {
-        name: "Grain log",
+      // Select "Bootstrap playbooks" from capabilities menu list. Not GCP
+      // key or Self debug: the demo makes those deployment defaults, which
+      // every repo has on whatever it says, so choosing one here would
+      // prove nothing saved.
+      const playbooksOption = page.getByRole("option", {
+        name: "Bootstrap playbooks",
         exact: true,
       });
-      await expect(grainLogOption).toBeVisible();
-      await grainLogOption.click();
+      await expect(playbooksOption).toBeVisible();
+      await playbooksOption.click();
       await page.keyboard.press("Escape"); // Close select dropdown
 
       // 3. Modify Prompt Extension
@@ -148,7 +149,9 @@ test.describe("Walkthrough: Auto-Saving Repo Pane & Sidebar Release Stamp (docs/
         `/api/repos/${targetRepo}/capabilities`,
       );
       expect(capsRes.ok()).toBe(true);
-      expect((await capsRes.json()).defaultCapabilities).toContain("grain-log");
+      expect((await capsRes.json()).defaultCapabilities).toContain(
+        "bootstrap-playbooks",
+      );
     });
   });
 });

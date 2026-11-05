@@ -92,6 +92,25 @@ type DiscardedRC struct {
 	ReplacementRC string `json:"replacementRc,omitempty"`
 }
 
+// RetractedRelease reports when the promoted release this deployment
+// currently runs (e.g. "v3.5.0") has since been retracted
+// (scripts/release-from-trunk.sh rollback, design/playbook/releases.playbook.md
+// section 11): the registry carries <running>-retracted beside it and
+// latest has moved back. The deployment never downgrades by itself -- an
+// older release may not read the schema this one migrated to -- so it is
+// told to move instead: to Latest when that is safe, or to the next
+// release, which carries the fix, when it is not.
+type RetractedRelease struct {
+	// Running is the retracted release this deployment is on ("v3.5.0").
+	Running string `json:"running"`
+	// Latest is the newest release in the registry that is not
+	// retracted ("v3.4.0"), if any: where latest points again.
+	Latest string `json:"latest,omitempty"`
+	// Newer is the newest release after Running that is not retracted
+	// ("v3.6.0"), if one has been published yet: the fix-forward to move to.
+	Newer string `json:"newer,omitempty"`
+}
+
 // Targets is GET /api/upgrade/targets's answer.
 type Targets struct {
 	Targets []Target `json:"targets"`
@@ -114,6 +133,9 @@ type Targets struct {
 	// <running>-discarded tag or superseded by a newer vX.Y.Z-rc.M while
 	// vX.Y.Z has not been promoted).
 	DiscardedRC *DiscardedRC `json:"discardedRc,omitempty"`
+	// RetractedRelease is set when the release this deployment currently
+	// runs has been retracted: <running>-retracted is in the registry.
+	RetractedRelease *RetractedRelease `json:"retractedRelease,omitempty"`
 }
 
 // standardChannels is the order the selector offers the moving names in:
@@ -183,6 +205,9 @@ func (u *Upgrader) Targets(ctx context.Context) Targets {
 		if runningRC := u.runningCandidateRelease(); runningRC != "" {
 			out.DiscardedRC = discardedRCFromTags(runningRC, tags, ed)
 		}
+		if running := u.runningPromotedRelease(); running != "" {
+			out.RetractedRelease = retractedReleaseFromTags(running, tags, ed)
+		}
 	}
 	for _, pattern := range u.AllowedBranches() {
 		pattern = strings.TrimSpace(pattern)
@@ -231,8 +256,9 @@ func (u *Upgrader) CachedDiscardedRC(ctx context.Context) *DiscardedRC {
 		return nil
 	}
 	repository := u.registryRepository()
+	key := u.tagCacheKey(repository)
 	u.tags.mu.Lock()
-	cached := u.tags.repo == repository && !u.tags.fetched.IsZero() && time.Since(u.tags.fetched) < tagListTTL
+	cached := u.tags.repo == key && !u.tags.fetched.IsZero() && time.Since(u.tags.fetched) < tagListTTL
 	tags := u.tags.tags
 	u.tags.mu.Unlock()
 	if cached {
@@ -242,6 +268,99 @@ func (u *Upgrader) CachedDiscardedRC(ctx context.Context) *DiscardedRC {
 		return u.DiscardedRC(ctx)
 	}
 	return nil
+}
+
+// CachedRetractedRelease reports whether the release this deployment runs
+// has been retracted, from the cached registry tag list (or
+// Config.ListTags when a caller or test provides one), without starting a
+// live network fetch on an uncached registry. Nil when the deployment does
+// not run a promoted release, when that release stands, or when there is
+// no tag list to read.
+func (u *Upgrader) CachedRetractedRelease(ctx context.Context) *RetractedRelease {
+	running := u.runningPromotedRelease()
+	if running == "" {
+		return nil
+	}
+	repository := u.registryRepository()
+	key := u.tagCacheKey(repository)
+	u.tags.mu.Lock()
+	cached := u.tags.repo == key && !u.tags.fetched.IsZero() && time.Since(u.tags.fetched) < tagListTTL
+	tags := u.tags.tags
+	u.tags.mu.Unlock()
+	if !cached {
+		if u.cfg.ListTags == nil {
+			return nil
+		}
+		var err error
+		if tags, err = u.registryTags(ctx, repository); err != nil {
+			return nil
+		}
+	}
+	return retractedReleaseFromTags(running, tags, u.edition())
+}
+
+// runningPromotedRelease is the release (vX.Y.Z, or edition-qualified
+// vX.Y.Z-google) this deployment runs, or "" when it runs anything else:
+// a candidate, a branch build or a sha- pin.
+func (u *Upgrader) runningPromotedRelease() string {
+	if rel := strings.TrimSpace(u.runningRelease()); versionTag.MatchString(rel) {
+		return rel
+	}
+	if r, err := u.Running(); err == nil {
+		if rel := strings.TrimSpace(r.Build.Release); versionTag.MatchString(rel) {
+			return rel
+		}
+		ref, _, _ := strings.Cut(r.Ref, "@")
+		if slash, colon := strings.LastIndex(ref, "/"), strings.LastIndex(ref, ":"); colon > slash {
+			if tag := ref[colon+1:]; versionTag.MatchString(tag) {
+				return tag
+			}
+		}
+	}
+	return ""
+}
+
+// retractedReleaseFromTags is RetractedRelease for a deployment running
+// release running, given the registry's tags: nil unless the registry
+// carries running-retracted.
+func retractedReleaseFromTags(running string, tags []string, edition string) *RetractedRelease {
+	if !slices.Contains(tags, running+"-retracted") {
+		return nil
+	}
+	out := &RetractedRelease{Running: running}
+	rels := releasedVersions(tags, edition)
+	if len(rels) == 0 && edition == "" {
+		rels = releasedVersions(tags)
+	}
+	for _, v := range rels {
+		if v == running {
+			continue
+		}
+		if out.Latest == "" && !versionAfter(v, running) {
+			out.Latest = v
+		}
+		if out.Newer == "" && versionAfter(v, running) {
+			out.Newer = v
+		}
+	}
+	return out
+}
+
+// versionAfter is whether released version a is newer than b (both
+// vX.Y.Z, edition suffixes ignored).
+func versionAfter(a, b string) bool {
+	am, bm := versionTag.FindStringSubmatch(a), versionTag.FindStringSubmatch(b)
+	if am == nil || bm == nil {
+		return false
+	}
+	for i := 1; i <= 3; i++ {
+		x, _ := strconv.Atoi(am[i])
+		y, _ := strconv.Atoi(bm[i])
+		if x != y {
+			return x > y
+		}
+	}
+	return false
 }
 
 func (u *Upgrader) runningCandidateRelease() string {
@@ -331,35 +450,85 @@ func discardedRCFromTags(running string, tags []string, edition string) *Discard
 	}
 }
 
+// LatestRelease is the newest promoted release tag ("v3.6.0", or
+// "v3.6.0-google" on that edition) in the registry this deployment's
+// upgrades pull from, filtered to its own edition the way the selector's
+// versions are: what the release-triggered automatic upgrade follows
+// (orchestrator's reconcileReleaseUpgrade). Release candidates are not
+// releases, and a retracted release is never offered again
+// (releasedVersions), so neither is ever the answer. "" with no error is
+// a registry that has no release yet. The source pipeline has no
+// registry to watch, and says so.
+func (u *Upgrader) LatestRelease(ctx context.Context) (string, error) {
+	repository := u.registryRepository()
+	if repository == "" {
+		return "", errors.New("this deployment upgrades from source, which publishes no release tags to follow")
+	}
+	tags, err := u.registryTags(ctx, repository)
+	if err != nil {
+		return "", fmt.Errorf("listing released versions in %s: %w", repository, err)
+	}
+	if versions := releasedVersions(tags, u.edition()); len(versions) > 0 {
+		return versions[0], nil
+	}
+	return "", nil
+}
+
 // registryRepository is the image repository this deployment's upgrades
 // pull from, or "" on the source pipeline.
 func (u *Upgrader) registryRepository() string {
 	switch u.Mode() {
 	case ModeKube:
-		return u.cfg.Kube.Repository
+		return u.EffectiveKubeRepository()
 	case ModeImage:
 		return u.EffectiveRepository()
 	}
 	return ""
 }
 
+func (u *Upgrader) tagCacheKey(repository string) string {
+	if u.Mode() == ModeImage && u.cfg.ListTags == nil && u.EffectiveImageSource() == ImageSourceReleaseAssets {
+		return "release-assets:" + strings.TrimSpace(u.EffectiveReleaseAssets().Repository)
+	}
+	return repository
+}
+
 func (u *Upgrader) registryTags(ctx context.Context, repository string) ([]string, error) {
+	key := u.tagCacheKey(repository)
 	u.tags.mu.Lock()
 	defer u.tags.mu.Unlock()
-	if u.tags.repo == repository && time.Since(u.tags.fetched) < tagListTTL {
+	if u.tags.repo == key && time.Since(u.tags.fetched) < tagListTTL {
 		return u.tags.tags, nil
-	}
-	list := u.cfg.ListTags
-	if list == nil {
-		list = ListRegistryTags
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	tags, err := list(ctx, repository)
+	var (
+		tags []string
+		err  error
+	)
+	if u.Mode() == ModeImage && u.cfg.ListTags == nil && u.EffectiveImageSource() == ImageSourceReleaseAssets && !u.shouldBypassDefaultReleaseAssets() {
+		tags, err = u.listReleaseTags(ctx)
+		if u.EffectiveImageFallback() == ImageSourceRegistry && repository != "" && (err != nil || (!u.IsImageSourceExplicit() && len(tags) == 0)) {
+			if regTags, regErr := ListRegistryTags(ctx, repository); regErr == nil || err != nil {
+				tags, err = regTags, regErr
+			}
+		}
+	} else {
+		list := u.cfg.ListTags
+		if list == nil {
+			list = ListRegistryTags
+		}
+		tags, err = list(ctx, repository)
+		if err != nil && u.Mode() == ModeImage && u.cfg.ListTags == nil && u.EffectiveImageFallback() == ImageSourceReleaseAssets {
+			if relTags, relErr := u.listReleaseTags(ctx); relErr == nil {
+				tags, err = relTags, nil
+			}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
-	u.tags.repo, u.tags.tags, u.tags.fetched = repository, tags, time.Now()
+	u.tags.repo, u.tags.tags, u.tags.fetched = key, tags, time.Now()
 	return tags, nil
 }
 
@@ -413,6 +582,11 @@ func releasedVersions(tags []string, edition ...string) []string {
 		if m == nil {
 			continue
 		}
+		// A retracted release (scripts/release-from-trunk.sh rollback)
+		// is never offered as a target again.
+		if slices.Contains(tags, t+"-retracted") {
+			continue
+		}
 		tagEd := normalizeEdition(m[4])
 		if filterByEdition && tagEd != wantEd {
 			continue
@@ -445,7 +619,7 @@ func releasedVersions(tags []string, edition ...string) []string {
 // registryClient is what ListRegistryTags talks to the registry with.
 var registryClient = &http.Client{Timeout: 15 * time.Second}
 
-// ListRegistryTags lists repository's tags ("ghcr.io/bwsalmon/grain/grain")
+// ListRegistryTags lists repository's tags ("docker.io/grainai/grain")
 // through the registry's own v2 API, anonymously: a public package
 // answers a pull-scoped token to anybody, which is all a tag list needs,
 // and the pull credentials scripts/setup.sh gives docker are docker's,
@@ -501,9 +675,16 @@ func ListRegistryTags(ctx context.Context, repository string) ([]string, error) 
 func registryLocation(repository string) (host, name string) {
 	host, name, ok := strings.Cut(repository, "/")
 	if !ok || !strings.ContainsAny(host, ".:") && host != "localhost" {
-		// A Docker Hub short name ("library/grain", "grain"): its
+		// A Docker Hub short name ("grainai/grain", "grain"): its
 		// registry host is not in the name.
 		host, name = "registry-1.docker.io", repository
+		if !strings.Contains(name, "/") {
+			name = "library/" + name
+		}
+		return host, name
+	}
+	if host == "docker.io" || host == "index.docker.io" || host == "registry-1.docker.io" {
+		host = "registry-1.docker.io"
 		if !strings.Contains(name, "/") {
 			name = "library/" + name
 		}

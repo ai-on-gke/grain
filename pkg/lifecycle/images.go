@@ -71,7 +71,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/qcow2"
+	"github.com/gke-labs/granule/pkg/qcow2"
 )
 
 // GuestDir is the half of a kontur guest image a repository supplies, and

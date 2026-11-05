@@ -125,10 +125,14 @@ const maxBuckets = 200
 // caller that has neither still gets every throughput and latency number,
 // and gets a Backlog and a Utilization of zero.
 type Input struct {
-	Window        Window
-	Tasks         []model.TaskTiming
-	Runs          []model.RunTiming
-	States        map[string]model.State
+	Window Window
+	Tasks  []model.TaskTiming
+	Runs   []model.RunTiming
+	States map[string]model.State
+	// TurnsStopped is every open task parked on an operator's Stop
+	// (model.Store.TurnsStopped), counted apart in Backlog. Optional like
+	// States: a caller with none counts none.
+	TurnsStopped  map[string]bool
 	MaxConcurrent int
 	Buckets       int
 	// Cycles is what the daemon's own reconcile loop measured about
@@ -617,6 +621,22 @@ type Latency struct {
 	// filed a task actually waited. Every other stage above is an answer
 	// to "why is this number what it is".
 	LeadTime Distribution
+	// InteractiveStartup and BatchStartup break an attempt's startup down by
+	// phase (queued -> dispatched, sandbox acquire, prepare sandbox, agent
+	// launch -> first turn, and attempt started -> agent's first turn) for
+	// interactive sessions separately from batch tasks.
+	InteractiveStartup StartupBreakdown
+	BatchStartup       StartupBreakdown
+}
+
+// StartupBreakdown is the per-phase startup breakdown of attempts in the window
+// (model.RunStartup), computed separately for interactive and batch tasks.
+type StartupBreakdown struct {
+	QueuedToDispatched     Distribution
+	SandboxAcquire         Distribution
+	PrepareSandbox         Distribution
+	AgentLaunchToFirstTurn Distribution
+	StartedToFirstTurn     Distribution
 }
 
 // Runs is how the window's attempts turned out, and how much of the
@@ -712,10 +732,17 @@ type Backlog struct {
 	// still a queue of a kind -- of human clicks rather than of dispatch
 	// -- but not the one Utilization is read against, and counting it
 	// here would make a deployment that simply does not use auto-merge
-	// look permanently backed up. StateAwaitingAck is out for the same
+	// look permanently backed up. A finished StateAwaitingReply task
+	// (CompletedAt != nil, formerly StateAwaitingAck) is out for the same
 	// reason and would be worse: an answer nobody has read is a run
 	// already paid for, and a deployment that files investigations would
 	// otherwise look like one that cannot keep up with its own queue.
+	//
+	// Live chat sessions (TaskTiming.Interactive or TaskTiming.ConsoleSession)
+	// are left out too: they run outside the worker and merger limit, sit in
+	// awaiting_reply between exchanges (or queued before their first wake),
+	// and never appear in the task list each backlog count links to
+	// (ui/src/taskFilters.js's isSessionTask).
 	//
 	// StateDeferred is left out for the same last reason, from the other
 	// end of a task's life: work somebody has explicitly put aside is not
@@ -730,6 +757,12 @@ type Backlog struct {
 	// ByState gives, so read a deep queue beside an idle deployment as a
 	// question rather than as a verdict.
 	Queued int
+	// StoppedByOperator is how many of the tasks counted above are parked
+	// on an operator's Stop (Input.TurnsStopped): waiting on that person
+	// to reply or press Retry, and on no worker. Counted apart from
+	// Queued so a backlog that is really a handful of stopped turns does
+	// not read as work grain is failing to dispatch.
+	StoppedByOperator int
 	// OldestQueuedWait is how long the longest-queued task has been
 	// waiting at Until, and OldestQueuedTaskID is which one it is. A
 	// percentile over what finished cannot see a task that has never
@@ -900,7 +933,7 @@ type Report struct {
 	// sampler to ask.
 	Host Host
 	// Agents groups wake telemetry and steward report checks by template
-	// (agents.go, docs/design/durable-tasks.md#DT-14).
+	// (agents.go, design/design/durable-tasks.design.md#DT-14).
 	Agents Agents
 }
 
@@ -959,7 +992,11 @@ func Compute(in Input) Report {
 
 	// --- latency ------------------------------------------------------
 	var approval, queue, setup, agent, attempt, retry, toFinish, lead []time.Duration
+	interactiveTask := make(map[string]bool, len(in.Tasks))
 	for _, t := range in.Tasks {
+		if t.Interactive {
+			interactiveTask[t.TaskID] = true
+		}
 		// Approved strictly after being filed: a task a human filed
 		// directly is approved in the same instant, and nobody waited.
 		if t.CreatedAt != nil && w.holds(t.ApprovedAt) && t.ApprovedAt.After(*t.CreatedAt) {
@@ -979,6 +1016,10 @@ func Compute(in Input) Report {
 			lead = appendIfPositive(lead, t.CompletedAt.Sub(*t.CreatedAt))
 		}
 	}
+	type startupSamples struct {
+		queuedToDispatched, sandboxAcquire, prepareSandbox, agentLaunchToFirstTurn, startedToFirstTurn []time.Duration
+	}
+	var interactiveStartup, batchStartup startupSamples
 	for _, runs := range byTask {
 		for i, r := range runs {
 			if w.holds(r.AgentStartedAt) {
@@ -989,6 +1030,40 @@ func Compute(in Input) Report {
 				if r.AgentStartedAt != nil {
 					agent = appendIfPositive(agent, r.FinishedAt.Sub(*r.AgentStartedAt))
 				}
+			}
+			dst := &batchStartup
+			if interactiveTask[r.TaskID] {
+				dst = &interactiveStartup
+			}
+			startedAt := r.StartedAt
+			if r.QueuedAt != nil && w.holds(&startedAt) {
+				dst.queuedToDispatched = appendIfNonNegative(dst.queuedToDispatched, r.StartedAt.Sub(*r.QueuedAt))
+			}
+			if r.SandboxAcquiredAt != nil && w.holds(r.SandboxAcquiredAt) {
+				dst.sandboxAcquire = appendIfNonNegative(dst.sandboxAcquire, r.SandboxAcquiredAt.Sub(r.StartedAt))
+			}
+			prepEnd := r.SandboxPreparedAt
+			if prepEnd == nil {
+				prepEnd = r.AgentStartedAt
+			}
+			if w.holds(prepEnd) {
+				prepStart := r.StartedAt
+				if r.SandboxAcquiredAt != nil {
+					prepStart = *r.SandboxAcquiredAt
+				}
+				dst.prepareSandbox = appendIfNonNegative(dst.prepareSandbox, prepEnd.Sub(prepStart))
+			}
+			if w.holds(r.FirstTurnAt) {
+				launchStart := r.AgentStartedAt
+				if launchStart == nil {
+					launchStart = r.SandboxPreparedAt
+				}
+				if launchStart != nil {
+					dst.agentLaunchToFirstTurn = appendIfNonNegative(dst.agentLaunchToFirstTurn, r.FirstTurnAt.Sub(*launchStart))
+				}
+				dst.startedToFirstTurn = appendIfNonNegative(dst.startedToFirstTurn, r.FirstTurnAt.Sub(r.StartedAt))
+			} else if r.FirstTurnAt == nil && w.holds(r.AgentStartedAt) {
+				dst.startedToFirstTurn = appendIfNonNegative(dst.startedToFirstTurn, r.AgentStartedAt.Sub(r.StartedAt))
 			}
 			if i == 0 {
 				continue
@@ -1001,15 +1076,26 @@ func Compute(in Input) Report {
 			}
 		}
 	}
+	summarizeStartup := func(s startupSamples) StartupBreakdown {
+		return StartupBreakdown{
+			QueuedToDispatched:     summarize(s.queuedToDispatched),
+			SandboxAcquire:         summarize(s.sandboxAcquire),
+			PrepareSandbox:         summarize(s.prepareSandbox),
+			AgentLaunchToFirstTurn: summarize(s.agentLaunchToFirstTurn),
+			StartedToFirstTurn:     summarize(s.startedToFirstTurn),
+		}
+	}
 	rep.Latency = Latency{
-		ApprovalWait: summarize(approval),
-		QueueWait:    summarize(queue),
-		SandboxSetup: summarize(setup),
-		AgentWork:    summarize(agent),
-		Attempt:      summarize(attempt),
-		RetryWait:    summarize(retry),
-		TimeToFinish: summarize(toFinish),
-		LeadTime:     summarize(lead),
+		ApprovalWait:       summarize(approval),
+		QueueWait:          summarize(queue),
+		SandboxSetup:       summarize(setup),
+		AgentWork:          summarize(agent),
+		Attempt:            summarize(attempt),
+		RetryWait:          summarize(retry),
+		TimeToFinish:       summarize(toFinish),
+		LeadTime:           summarize(lead),
+		InteractiveStartup: summarizeStartup(interactiveStartup),
+		BatchStartup:       summarizeStartup(batchStartup),
 	}
 
 	// --- capacity -----------------------------------------------------
@@ -1047,7 +1133,7 @@ func Compute(in Input) Report {
 
 	// --- backlog ------------------------------------------------------
 	if in.States != nil {
-		rep.Backlog = backlogOf(in.Tasks, in.States, w.Until)
+		rep.Backlog = backlogOf(in.Tasks, in.States, in.TurnsStopped, w.Until)
 	}
 
 	// --- the inside of a run ------------------------------------------
@@ -1192,9 +1278,14 @@ func runsByTask(runs []model.RunTiming) map[string][]model.RunTiming {
 
 // backlogOf counts what was still in the system at until, by task_state's
 // own vocabulary, and finds the queued task that has been waiting longest.
-func backlogOf(tasks []model.TaskTiming, states map[string]model.State, until time.Time) Backlog {
+// Live chat sessions (Interactive or ConsoleSession) are excluded so the
+// counts and oldest-queued task agree with the non-session task lists.
+func backlogOf(tasks []model.TaskTiming, states map[string]model.State, stopped map[string]bool, until time.Time) Backlog {
 	b := Backlog{ByState: map[model.State]int{}}
 	for _, t := range tasks {
+		if t.Interactive || t.ConsoleSession {
+			continue
+		}
 		state, ok := states[t.TaskID]
 		if !ok || state == model.StateCompleted || state == model.StateAwaitingSubmit ||
 			(state == model.StateAwaitingReply && t.CompletedAt != nil) || state == model.StateDeferred ||
@@ -1202,6 +1293,9 @@ func backlogOf(tasks []model.TaskTiming, states map[string]model.State, until ti
 			continue
 		}
 		b.ByState[state]++
+		if stopped[t.TaskID] {
+			b.StoppedByOperator++
+		}
 		if state != model.StateQueued {
 			continue
 		}
@@ -1271,6 +1365,13 @@ func outcomeOf(r model.RunTiming) string {
 // by two different writers -- and neither is a latency worth reporting.
 func appendIfPositive(samples []time.Duration, d time.Duration) []time.Duration {
 	if d <= 0 {
+		return samples
+	}
+	return append(samples, d)
+}
+
+func appendIfNonNegative(samples []time.Duration, d time.Duration) []time.Duration {
+	if d < 0 {
 		return samples
 	}
 	return append(samples, d)

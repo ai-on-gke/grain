@@ -68,15 +68,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/config"
-	"github.com/bwsalmon/granule/pkg/extents"
-	"github.com/bwsalmon/granule/pkg/guestcp"
-	"github.com/bwsalmon/granule/pkg/guestexec"
-	"github.com/bwsalmon/granule/pkg/guestimage"
-	"github.com/bwsalmon/granule/pkg/hypervisor"
-	"github.com/bwsalmon/granule/pkg/memagent"
-	"github.com/bwsalmon/granule/pkg/netshim"
-	"github.com/bwsalmon/granule/pkg/workloadio"
+	"github.com/gke-labs/granule/pkg/config"
+	"github.com/gke-labs/granule/pkg/extents"
+	"github.com/gke-labs/granule/pkg/guestcp"
+	"github.com/gke-labs/granule/pkg/guestexec"
+	"github.com/gke-labs/granule/pkg/guestimage"
+	"github.com/gke-labs/granule/pkg/hypervisor"
+	"github.com/gke-labs/granule/pkg/memagent"
+	"github.com/gke-labs/granule/pkg/netshim"
+	"github.com/gke-labs/granule/pkg/workloadio"
 )
 
 func main() {
@@ -477,8 +477,8 @@ func forwardWorkloadOutput(ctx context.Context, vmExited <-chan struct{}, cfg co
 //
 // The stdin is read once, to its end: a FIFO is waited on for its writer,
 // and that writer closing it is the container's end-of-file. The resize
-// FIFO is opened again each time its writer closes it, so that a caller
-// may open it for each size; a regular file is read once.
+// FIFO is kept open until ctx is cancelled, so that a caller may open it
+// for each size, writing whole lines; a regular file is read once.
 func workloadInput(ctx context.Context, cfg config.Config) *workloadio.HostInput {
 	if cfg.WorkloadStdin == "" && cfg.WorkloadResize == "" {
 		return nil
@@ -501,24 +501,35 @@ func workloadInput(ctx context.Context, cfg config.Config) *workloadio.HostInput
 	}
 	if cfg.WorkloadResize != "" {
 		go func() {
-			for {
-				f, err := openInput(ctx, cfg.WorkloadResize)
-				if err != nil {
-					if ctx.Err() == nil {
-						log.Printf("cannot open the workload's terminal sizes: %v", err)
-					}
-					return
+			f, err := openInput(ctx, cfg.WorkloadResize)
+			if err != nil {
+				if ctx.Err() == nil {
+					log.Printf("cannot open the workload's terminal sizes: %v", err)
 				}
-				fifo := false
-				if st, err := f.Stat(); err == nil {
-					fifo = st.Mode()&os.ModeNamedPipe != 0
-				}
-				readSizes(f, in)
-				f.Close()
-				if !fifo || ctx.Err() != nil {
-					return
-				}
+				return
 			}
+			defer f.Close()
+			if st, err := f.Stat(); err == nil && st.Mode()&os.ModeNamedPipe != 0 {
+				// Hold a writer of our own on the FIFO, so that its
+				// writers closing it is no end-of-file and the pipe
+				// lasts from one writer to the next: closing and
+				// reopening the reader between them would lose what
+				// a writer that opened it meanwhile wrote, or fail
+				// its write with EPIPE. Closing both ends when ctx is
+				// cancelled ends the read.
+				w, err := os.OpenFile(cfg.WorkloadResize, os.O_WRONLY, 0)
+				if err != nil {
+					log.Printf("cannot hold the workload's terminal sizes open: %v", err)
+					return
+				}
+				defer w.Close()
+				stop := context.AfterFunc(ctx, func() {
+					w.Close()
+					f.Close()
+				})
+				defer stop()
+			}
+			readSizes(f, in)
 		}()
 	}
 	return in

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/granule/pkg/config"
-	"github.com/bwsalmon/granule/pkg/netshim"
+	"github.com/gke-labs/granule/pkg/config"
+	"github.com/gke-labs/granule/pkg/netshim"
 )
 
 func baseSpec() VMSpec {
@@ -995,5 +995,19 @@ func TestMemoryLimitAndOOMScoreAdj(t *testing.T) {
 	s.OOMScoreAdj = 1001
 	if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "oom-score-adj") {
 		t.Errorf("OOMScoreAdj > 1000: Validate() = %v, want oom-score-adj error", err)
+	}
+}
+
+func TestContainerMemoryLimitMBGrowsWithTheGuest(t *testing.T) {
+	for _, tc := range []struct{ guest, want int }{
+		{256, 768},
+		{2048, 2560},
+		{8192, 8704},
+		{16384, 17408},
+		{65536, 69632},
+	} {
+		if got := (VMSpec{MemoryMB: tc.guest}).ContainerMemoryLimitMB(); got != tc.want {
+			t.Errorf("ContainerMemoryLimitMB() for a %d MiB guest = %d, want %d", tc.guest, got, tc.want)
+		}
 	}
 }

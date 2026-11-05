@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
@@ -62,6 +63,19 @@ type AddTeamGitConnectionRequest struct {
 	Source     string `json:"source,omitempty"`
 	Credential string `json:"credential,omitempty"`
 	User       string `json:"user,omitempty"`
+	// Author is the human user's name to sign pull requests and comments
+	// with ("Signed by <Author> (via Grain)"). When SignAs is true and
+	// Author is empty, the daemon resolves the user's name from GitHub
+	// (GET /user) using the credential.
+	Author string `json:"author,omitempty"`
+	// SignAs enables signing new pull requests and comments with the
+	// credential owner's name (resolved from GET /user when Author is
+	// empty).
+	SignAs bool `json:"signAs,omitempty"`
+	// Replace removes any existing connection on the same (Host, Scope)
+	// before adding this one, so `grain git-login` cleanly updates the
+	// deployment's login on that host.
+	Replace bool `json:"replace,omitempty"`
 }
 
 // CheckTeamGitConnectionRequest is the body of POST /api/deployment/git-connections/check.
@@ -227,23 +241,25 @@ func (c *Client) AddTeamGitConnection(ctx context.Context, id string, req AddTea
 	if err != nil {
 		return Team{}, validationErrorf("invalid connection: %w", err)
 	}
-	for _, raw := range settings.EffectiveGitConnections() {
-		existing, err := model.NormalizeTeamGitConnection(raw)
-		if err != nil || existing.Credential == "anonymous" {
-			continue
-		}
-		if !model.SameGitHost(existing.Host, candidate.Host, model.DefaultGitHost) || existing.Scope != candidate.Scope {
-			continue
-		}
-		onHost, _ := model.ResolveGitHost(candidate.Host, model.DefaultGitHost)
-		if candidate.Scope == "" {
+	if !req.Replace {
+		for _, raw := range settings.EffectiveGitConnections() {
+			existing, err := model.NormalizeTeamGitConnection(raw)
+			if err != nil || existing.Credential == "anonymous" {
+				continue
+			}
+			if !model.SameGitHost(existing.Host, candidate.Host, model.DefaultGitHost) || existing.Scope != candidate.Scope {
+				continue
+			}
+			onHost, _ := model.ResolveGitHost(candidate.Host, model.DefaultGitHost)
+			if candidate.Scope == "" {
+				return Team{}, validationErrorf(
+					"this deployment already has a default git connection on %s (%s): remove it or edit its scope first",
+					onHost, existing.Credential)
+			}
 			return Team{}, validationErrorf(
-				"this deployment already has a default git connection on %s (%s): remove it or edit its scope first",
-				onHost, existing.Credential)
+				"this deployment already has a git connection on %s for scope %q (%s): remove it or edit its scope first",
+				onHost, candidate.Scope, existing.Credential)
 		}
-		return Team{}, validationErrorf(
-			"this deployment already has a git connection on %s for scope %q (%s): remove it or edit its scope first",
-			onHost, candidate.Scope, existing.Credential)
 	}
 
 	credName := strings.TrimSpace(req.Credential)
@@ -295,16 +311,37 @@ func (c *Client) AddTeamGitConnection(ctx context.Context, id string, req AddTea
 	// one already recorded for the same host (saveTypedCredential's,
 	// read from the forge's tool): rewriting the record must not drop it.
 	proxy := strings.TrimSpace(req.Proxy)
-	if rec := c.Config.Credentials.HostOf(credName); proxy == "" && rec.Recorded && model.SameGitHost(rec.Host, host, model.DefaultGitHost) {
-		proxy = rec.Proxy
+	author := strings.TrimSpace(req.Author)
+	if rec := c.Config.Credentials.HostOf(credName); rec.Recorded && model.SameGitHost(rec.Host, host, model.DefaultGitHost) {
+		if proxy == "" {
+			proxy = rec.Proxy
+		}
+		if author == "" && !req.SignAs {
+			author = rec.Author
+		}
 	}
 	if err := c.Config.Credentials.SetHost(credName, gitproxy.CredentialHost{
 		Host:    host,
 		Kind:    kind,
 		BaseURL: strings.TrimSpace(req.BaseURL),
 		Proxy:   proxy,
+		Author:  author,
 	}); err != nil {
 		return Team{}, fmt.Errorf("setting credential host: %w", err)
+	}
+	if req.SignAs && author == "" {
+		if id, pending, err := c.Config.Credentials.CredentialGitIdentityWithin(credName, 5*time.Second); err == nil && !pending {
+			if name := strings.TrimSpace(id.Name); name != "" && !strings.HasSuffix(name, "[bot]") {
+				author = name
+				_ = c.Config.Credentials.SetHost(credName, gitproxy.CredentialHost{
+					Host:    host,
+					Kind:    kind,
+					BaseURL: strings.TrimSpace(req.BaseURL),
+					Proxy:   proxy,
+					Author:  author,
+				})
+			}
+		}
 	}
 
 	normConn := candidate
@@ -312,25 +349,51 @@ func (c *Client) AddTeamGitConnection(ctx context.Context, id string, req AddTea
 
 	// Migrate legacy credential and append new connection
 	var updatedConns []model.TeamGitConnection
+	var replacedCreds []string
 	legacy := strings.TrimSpace(settings.GitCredential)
 	hasLegacy := false
 	for _, conn := range settings.GitConnections {
 		if legacy != "" && conn.Credential == legacy {
 			hasLegacy = true
 		}
+		if req.Replace {
+			if existingNorm, err := model.NormalizeTeamGitConnection(conn); err == nil &&
+				model.SameGitHost(existingNorm.Host, normConn.Host, model.DefaultGitHost) &&
+				existingNorm.Scope == normConn.Scope {
+				if conn.Credential != credName {
+					replacedCreds = append(replacedCreds, conn.Credential)
+				}
+				continue
+			}
+		}
 		updatedConns = append(updatedConns, conn)
 	}
 	if legacy != "" && !hasLegacy {
-		updatedConns = append([]model.TeamGitConnection{{Credential: legacy}}, updatedConns...)
+		if req.Replace && model.SameGitHost("", normConn.Host, model.DefaultGitHost) && normConn.Scope == "" {
+			if legacy != credName {
+				replacedCreds = append(replacedCreds, legacy)
+			}
+		} else {
+			updatedConns = append([]model.TeamGitConnection{{Credential: legacy}}, updatedConns...)
+		}
 	}
 	updatedConns = append(updatedConns, normConn)
 
 	emptyLegacy := ""
-	return c.UpdateTeam(ctx, id, UpdateTeamRequest{
+	updatedTeam, err := c.UpdateTeam(ctx, id, UpdateTeamRequest{
 		GitConnections: &updatedConns,
 		GitCredential:  &emptyLegacy,
 		User:           user,
 	})
+	if err != nil {
+		return Team{}, err
+	}
+	for _, oldCred := range replacedCreds {
+		if model.DeploymentOwnsGitCredential(oldCred) {
+			_ = c.Config.Credentials.Remove(oldCred)
+		}
+	}
+	return updatedTeam, nil
 }
 
 // DeleteTeamGitConnection removes a connection from the team.
@@ -480,16 +543,43 @@ func (c *Client) SetTeamRepoGitConnection(ctx context.Context, id, owner, repo s
 		}
 	}
 
-	var updated []model.TeamGitConnection
+	var updated, dropped []model.TeamGitConnection
 	if credName != "" {
 		updated = append(updated, model.TeamGitConnection{Credential: credName, Host: host, Scope: scoped.Scope})
 	}
 	for _, conn := range settings.GitConnections {
 		norm, err := model.NormalizeTeamGitConnection(conn)
 		if err == nil && norm.Scope == scoped.Scope && model.SameGitHost(norm.Host, host, model.DefaultGitHost) {
+			dropped = append(dropped, norm)
 			continue
 		}
 		updated = append(updated, conn)
+	}
+	// A connection added for this repository with a credential of its own
+	// -- a GitHub App, a token pasted for just this repository -- is not a
+	// choice to be replaced from a picker: dropping it here lost it, and
+	// left its stored credential behind, without the confirmation Remove
+	// asks for (2026-11-01 walkthrough). Only a credential some other
+	// connection still holds may be dropped this way.
+	for _, conn := range dropped {
+		if conn.Credential == credName || strings.TrimSpace(settings.GitCredential) == conn.Credential {
+			continue
+		}
+		heldElsewhere := false
+		for _, other := range updated {
+			if strings.TrimSpace(other.Credential) == conn.Credential {
+				heldElsewhere = true
+				break
+			}
+		}
+		if !heldElsewhere {
+			onHost := conn.Host
+			if onHost == "" {
+				onHost = model.DefaultGitHost
+			}
+			return Team{}, validationErrorf("%s/%s has a connection of its own on %s (%s), holding a credential no other connection does: remove it under Settings -> Git connections first, which asks before deleting that credential",
+				owner, repo, onHost, conn.Credential)
+		}
 	}
 	// The legacy team credential keeps its place: last, the default
 	// host's default (model.Config.EffectiveGitConnections).

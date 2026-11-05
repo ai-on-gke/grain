@@ -257,6 +257,12 @@ func TestKubernetesSandboxDefaultsAndModelConfigRoundTrip(t *testing.T) {
 	if got := EffectiveK8sGranuleImage(granuleCfg); got != DefaultSandboxImage {
 		t.Fatalf("EffectiveK8sGranuleImage = %q, want %q", got, DefaultSandboxImage)
 	}
+	if got := EffectiveK8sSandboxImage(Config{K8sSandboxes: true, K8sSandboxImage: model.LegacyDefaultK8sSandboxImage}); got != DefaultK8sSandboxImage {
+		t.Fatalf("EffectiveK8sSandboxImage(legacy GHCR default) = %q, want %q", got, DefaultK8sSandboxImage)
+	}
+	if got := EffectiveK8sGranuleImage(Config{K8sGranuleSandboxes: true, K8sGranuleImage: model.LegacyDefaultSandboxImage}); got != DefaultSandboxImage {
+		t.Fatalf("EffectiveK8sGranuleImage(legacy GHCR default) = %q, want %q", got, DefaultSandboxImage)
+	}
 	if got := EffectiveK8sGitProxyHost(granuleCfg); got != "127.0.0.1" {
 		t.Fatalf("EffectiveK8sGitProxyHost off-cluster k8s-granule = %q, want 127.0.0.1", got)
 	}
@@ -392,7 +398,7 @@ func TestSandboxBackendOptionsTable(t *testing.T) {
 			},
 		},
 		{
-			name: "run host image disables container and malformed node selector disables kubernetes backends",
+			name: "run host image disables container and host, and malformed node selector disables kubernetes backends",
 			cfg: Config{
 				ContainerImage:         "example/guest:latest",
 				ContainerGitProxyHost:  "172.17.0.1",
@@ -410,7 +416,7 @@ func TestSandboxBackendOptionsTable(t *testing.T) {
 				{Backend: model.SandboxBackendGranule, Available: true},
 				{Backend: model.SandboxBackendKubernetes, Available: false, Reason: "node selector entry 'x' is not key=value"},
 				{Backend: model.SandboxBackendKubernetesGranule, Available: false, Reason: "node selector entry 'x' is not key=value"},
-				{Backend: model.SandboxBackendHost, Available: true},
+				{Backend: model.SandboxBackendHost, Available: false, Reason: "not available when run hosts (-run-host-image) are enabled"},
 				{Backend: model.SandboxBackendNone, Available: true},
 			},
 		},
@@ -430,12 +436,12 @@ func TestKubernetesGranuleIsOfferedAndRunnableInImageMode(t *testing.T) {
 	t.Parallel()
 	cfg := Config{
 		ContainerSandboxes:    true,
-		ContainerImage:        "ghcr.io/bwsalmon/grain/guest:main",
+		ContainerImage:        "docker.io/grainai/sandbox:main",
 		ContainerGitProxyHost: "172.17.0.1",
 		GranuleSSHUser:        "debian",
 		GranuleWorkspace:      "/home/debian",
 		GranuleGitProxyHost:   "172.18.0.1",
-		UpgradeImage:          "ghcr.io/bwsalmon/grain/grain:main",
+		UpgradeImage:          "docker.io/grainai/grain:main",
 		UpgradeImageRefFile:   "/var/lib/grain/data/image-ref",
 	}
 
@@ -489,7 +495,7 @@ func TestKubernetesModeVsKubernetesSandboxesPredicateSplit(t *testing.T) {
 
 	cfg := Config{
 		K8sGranuleSandboxes: true,
-		UpgradeImage:        "ghcr.io/bwsalmon/grain/grain",
+		UpgradeImage:        "docker.io/grainai/grain",
 	}
 	if !KubernetesSandboxes(cfg) {
 		t.Fatal("KubernetesSandboxes(cfg) = false for off-cluster K8sGranuleSandboxes, want true")
@@ -519,7 +525,7 @@ func TestSandboxBackendAvailableWithUpgradeImageOffClusterVsInPod(t *testing.T) 
 	t.Setenv("KUBERNETES_SERVICE_HOST", "")
 
 	cfg := Config{
-		UpgradeImage: "ghcr.io/bwsalmon/grain/grain",
+		UpgradeImage: "docker.io/grainai/grain",
 	}
 	if !cfg.sandboxBackendAvailable(model.SandboxBackendKubernetesGranule) {
 		t.Fatal("sandboxBackendAvailable(kubernetes-granule) = false off-cluster with UpgradeImage set, want true")
@@ -602,5 +608,35 @@ func TestSandboxAdvertiseHostAndEndpointPortsForOffClusterK8sGranule(t *testing.
 	gotPorts := ports.EndpointPorts()
 	if len(gotPorts) != 1 || gotPorts[0] <= 0 {
 		t.Fatalf("ports.EndpointPorts() = %v, want 1 positive port", gotPorts)
+	}
+}
+
+// A stored Kubernetes image is live only on the backend that creates pods
+// from it; on any other backend it waits for the restart that adopts the
+// backend too, so Settings can go on reporting it as pending.
+func TestLiveModelConfigAdoptsK8sImagesOnlyOnTheirOwnBackend(t *testing.T) {
+	t.Parallel()
+	const startedPod, storedPod = "registry.test/k8s-sandbox:started", "registry.test/k8s-sandbox:stored"
+	const startedGuest, storedGuest = "registry.test/guest:started", "registry.test/guest:stored"
+	stored := model.Config{K8sSandboxImage: storedPod, K8sGranuleImage: storedGuest}
+
+	container := Config{ContainerSandboxes: true, ContainerImage: "example/guest", ContainerGitProxyHost: "172.17.0.1",
+		K8sSandboxImage: startedPod, K8sGranuleImage: startedGuest}
+	live := container.withLiveModelConfig(stored)
+	if live.K8sSandboxImage != startedPod || live.K8sGranuleImage != startedGuest {
+		t.Errorf("container backend: live k8s images = %q, %q, want the startup %q, %q until a restart",
+			live.K8sSandboxImage, live.K8sGranuleImage, startedPod, startedGuest)
+	}
+
+	k8s := Config{K8sSandboxes: true, K8sSandboxImage: startedPod, K8sGranuleImage: startedGuest}
+	if live := k8s.withLiveModelConfig(stored); live.K8sSandboxImage != storedPod || live.K8sGranuleImage != startedGuest {
+		t.Errorf("kubernetes backend: live k8s images = %q, %q, want %q, %q",
+			live.K8sSandboxImage, live.K8sGranuleImage, storedPod, startedGuest)
+	}
+
+	k8sGranule := Config{K8sGranuleSandboxes: true, K8sSandboxImage: startedPod, K8sGranuleImage: startedGuest}
+	if live := k8sGranule.withLiveModelConfig(stored); live.K8sSandboxImage != startedPod || live.K8sGranuleImage != storedGuest {
+		t.Errorf("kubernetes-granule backend: live k8s images = %q, %q, want %q, %q",
+			live.K8sSandboxImage, live.K8sGranuleImage, startedPod, storedGuest)
 	}
 }

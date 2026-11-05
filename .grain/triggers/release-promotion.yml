@@ -1,13 +1,33 @@
 # Path trigger protecting the person-only release promotion
-# (docs/design/release-from-trunk.md, §4): the workflow that pushes vX.Y.0
-# and `latest`, and the scripts it runs. A change to any of them could let
-# a release become official without a person, so it waits for one.
+# (design/playbook/releases.playbook.md §0.3): the approval workflow that
+# pushes vX.Y.0 and `latest` -- and, by the same person-only dispatch, rolls
+# a bad release back (vX.Y.Z-retracted, `latest` re-pointed) or overrides
+# the breaking-change gate for a major release -- in both its grain and
+# GitHub Actions copies, and the route that starts it. A change to either
+# could let a release become official, or `latest` move, without a person,
+# so it waits for one. So does the release train's own promotion
+# (playbook section 1): scripts/release-from-trunk.sh, which tags vX.Y.0
+# and moves `latest` onto an rc that qualified with no person's approval,
+# scripts/release-train-task.sh, which writes the CI verdicts it promotes on,
+# scripts/release.conf, whose RELEASE_AUTO_PROMOTE, RELEASE_NEVER_PROMOTE
+# and RELEASE_MAJOR are the operator's controls over it, the train's
+# schedule, and publish-release.yml, which publishes what it promotes.
+# (.grain/templates/release-train.yml, whose push: grant lets it, is
+# grain's built-in template-push category.) The release jobs and scripts
+# that cannot reach a promotion are release-machinery.yml's.
 on: pull_request
 paths:
   - .grain/workflows/promote-release.yml
-  - .grain/workflows/promote.yml
+  - .github/workflows/promote-release.yml
+  - pkg/ui/release_approval.go
+  - pkg/ui/release_approval_github.go
+  - pkg/releaseapproval/releaseapproval.go
+  - scripts/verify-release-approval.sh
   - scripts/release-from-trunk.sh
-  - scripts/release-images.sh
+  - scripts/release.conf
+  - scripts/release-train-task.sh
+  - .grain/schedules/release-train.yml
+  - .github/workflows/publish-release.yml
 gate: true
 human: required
 sensitive: true

@@ -281,7 +281,7 @@ func fileMergeTrigger(ctx context.Context, deps Deps, repo model.RepoRef, branch
 	rule model.RepoPathTrigger, group string, paths []string, from, to string, now time.Time) (model.Task, error) {
 
 	tag := model.PathTriggerTag(strings.ToLower(repo.String())+"@"+branch, rule.Trigger.Name, group)
-	return fileCoalesced(ctx, deps.Store, tag, now, func(prev *model.Task, superseding bool) (model.Task, error) {
+	filed, err := fileCoalesced(ctx, deps.Store, tag, now, func(prev *model.Task, superseding bool) (model.Task, error) {
 		if superseding {
 			// Keep the earliest commit the superseded task covered, and
 			// everything changed since then in this group.
@@ -332,6 +332,7 @@ func fileMergeTrigger(ctx context.Context, deps Deps, repo model.RepoRef, branch
 			pathTriggerRuleTag(rule.Commit)}
 		return task, nil
 	})
+	return filed, err
 }
 
 // mergeOrigin is the origin of a task a merge trigger files: the pull

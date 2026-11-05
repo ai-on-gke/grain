@@ -68,6 +68,7 @@ type TaskSummary struct {
 	Title         string
 	State         string
 	Repo          string
+	Priority      int
 	Interactive   bool
 	Configuration bool
 	CreatedAt     *time.Time
@@ -103,6 +104,11 @@ type TaskSummary struct {
 	// or one whose record cannot say when it began -- so empty is the
 	// ordinary reading and never means nothing was checked.
 	Stall string
+	// TurnStopped is a task parked on an operator's Stop (ui.Task.
+	// TurnStopped): it waits on a person -- a reply, or Retry -- and on
+	// nothing grain or a worker is doing, so a list says "stopped by
+	// operator" for it rather than "stalled".
+	TurnStopped bool
 	// Kinds is the task's kind tags (ui.TaskKindTags: port, repair,
 	// session, proposal, durable, imported) -- the fixed vocabulary a report about
 	// the task is held to, so a reader never has to infer "this is a port"
@@ -218,8 +224,12 @@ type TaskComment struct {
 	ID         int64
 	Author     string
 	AuthorKind string
-	Body       string
-	CreatedAt  time.Time
+	// AuthorLabel is how the author reads to a person (ui.Comment.Who,
+	// operator-attribution spec §4.3); "" from a caller that sets none,
+	// which Who falls back to Author for.
+	AuthorLabel string
+	Body        string
+	CreatedAt   time.Time
 	// Handover marks the comment a run wrote as the task's standing
 	// summary of its own older conversation (model.Comment.Handover). A
 	// run reading another task's record to work out why it is behaving
@@ -229,21 +239,53 @@ type TaskComment struct {
 	Handover bool
 }
 
+// Who is AuthorLabel, or Author for a comment that carries no label.
+func (c TaskComment) Who() string {
+	if c.AuthorLabel != "" {
+		return c.AuthorLabel
+	}
+	return c.Author
+}
+
+// TaskTransition is one step in a task's timeline (ui.Transition): when
+// it entered a state, or when somebody closed or reopened it
+// (model.TaskEvent), with who asked, the reason they gave and what a
+// close cancelled.
+type TaskTransition struct {
+	State    string
+	At       time.Time
+	Inferred bool
+	By       string
+	Reason   string
+	Detail   string
+}
+
 // TaskRecord is one task in full: the summary above, plus what it asked
 // for, what happened on every attempt, and everything said about it.
 type TaskRecord struct {
 	TaskSummary
-	Description       string
-	Author            string
-	AuthorKind        string
-	Base              string
-	Capabilities      []string
-	PullRequest       string
-	FailedAttempts    int
-	LastFailureAt     *time.Time
-	LastFailureReason string
-	Attempts          []TaskAttempt
-	Comments          []TaskComment
+	Description string
+	Author      string
+	AuthorKind  string
+	// AuthorLabel is ui.Task.AuthorLabel: how whoever filed it reads.
+	AuthorLabel  string
+	Base         string
+	Capabilities []string
+	PullRequest  string
+	// PullRequestMergedAt and PullRequestClosedAt are when grain saw that
+	// pull request merge, or close without merging (model.Observation's
+	// PrMergedAt and PrClosedAt): nil for both while it is open, or while
+	// grain has not read it settle. A task closed before its pull request
+	// merged says so here and nowhere else in the record -- its one close
+	// transition predates the merge (task 2350).
+	PullRequestMergedAt *time.Time
+	PullRequestClosedAt *time.Time
+	FailedAttempts      int
+	LastFailureAt       *time.Time
+	LastFailureReason   string
+	Attempts            []TaskAttempt
+	Transitions         []TaskTransition
+	Comments            []TaskComment
 	// Activity is what this task's live run is saying it is doing, for
 	// the reason the merge queue's own state is on the summary above: it
 	// is a question asked of a task that looks stuck, and until now the
@@ -356,7 +398,7 @@ var listTasksInputSchema = map[string]any{
 
 // taskListFilter is list_grain_tasks' narrowing beyond state: the filters
 // that let a judgement agent ask for what moved instead of sweeping the
-// whole list (docs/design/durable-tasks.md#DT-13).
+// whole list (design/design/durable-tasks.design.md#DT-13).
 //
 // State may name several states, comma-separated ("proposed,queued"),
 // and a task in any of them matches. Repo and Search are grain task
@@ -435,6 +477,9 @@ func (f taskListFilter) describe() string {
 // taskStalled is whether either lane has flagged the task: its own state
 // outliving its patience, or the merge queue stalled or blocked on it.
 func taskStalled(t TaskSummary) bool {
+	if t.TurnStopped {
+		return false
+	}
 	if t.Stall != "" {
 		return true
 	}
@@ -543,6 +588,9 @@ func renderFilteredTaskList(tasks []TaskSummary, filter taskListFilter, limit in
 		if t.Repo != "" {
 			fmt.Fprintf(&b, "  %s", t.Repo)
 		}
+		if t.Priority > 0 && t.Priority != 5 {
+			fmt.Fprintf(&b, "  priority %d", t.Priority)
+		}
 		if t.Configuration {
 			b.WriteString("  (configuration agent)")
 		} else if t.Interactive {
@@ -589,7 +637,9 @@ func renderFilteredTaskList(tasks []TaskSummary, filter taskListFilter, limit in
 		// read_grain_task is for. A reader scanning for "why is nothing
 		// happening" needs to see which rows to open, on rows that are
 		// otherwise one line each.
-		if t.Stall != "" {
+		if t.TurnStopped {
+			b.WriteString("  (stopped by operator)")
+		} else if t.Stall != "" {
 			b.WriteString("  (stalled)")
 		}
 		fmt.Fprintf(&b, "\n    %s\n", singleLine(t.Title))
@@ -673,7 +723,7 @@ var taskIDInputSchema = map[string]any{
 // The views read_grain_task answers in. Summary is the default: about a
 // kilobyte that says what the task is and what last happened to it, which
 // is what a judgement agent re-reads before acting on or naming a task
-// (docs/design/durable-tasks.md#DT-13). Full is the whole record, and
+// (design/design/durable-tasks.design.md#DT-13). Full is the whole record, and
 // conversation pages the thread by comment id.
 const (
 	TaskViewSummary      = "summary"
@@ -780,8 +830,19 @@ func renderTaskRecord(t TaskRecord, now time.Time) string {
 	if t.Stall != "" {
 		fmt.Fprintf(&b, "  %s\n", singleLine(t.Stall))
 	}
+	priority := t.Priority
+	if priority <= 0 {
+		priority = 5
+	}
+	fmt.Fprintf(&b, "Priority: %d\n", priority)
 	if t.Author != "" {
-		fmt.Fprintf(&b, "Filed by: %s (%s)\n", t.Author, t.AuthorKind)
+		if t.AuthorLabel != "" {
+			// How the server labels whoever filed it (operator-attribution
+			// spec §4.3), never the raw kind and id.
+			fmt.Fprintf(&b, "Filed by: %s\n", t.AuthorLabel)
+		} else {
+			fmt.Fprintf(&b, "Filed by: %s (%s)\n", t.Author, t.AuthorKind)
+		}
 	}
 	if t.CreatedAt != nil {
 		fmt.Fprintf(&b, "Filed at: %s\n", t.CreatedAt.UTC().Format(time.RFC3339))
@@ -802,7 +863,14 @@ func renderTaskRecord(t TaskRecord, now time.Time) string {
 		fmt.Fprintf(&b, "Capabilities: %s\n", strings.Join(t.Capabilities, ", "))
 	}
 	if t.PullRequest != "" {
-		fmt.Fprintf(&b, "Pull request: %s\n", t.PullRequest)
+		fmt.Fprintf(&b, "Pull request: %s", t.PullRequest)
+		switch {
+		case t.PullRequestMergedAt != nil:
+			b.WriteString(sinceWords(t.PullRequestMergedAt, now, " -- merged "))
+		case t.PullRequestClosedAt != nil:
+			b.WriteString(sinceWords(t.PullRequestClosedAt, now, " -- closed without merging "))
+		}
+		b.WriteByte('\n')
 	}
 	writeMergeQueue(&b, t.MergeQueue, t.State, now)
 	writeActivity(&b, t.Activity, now)
@@ -843,6 +911,26 @@ func renderTaskRecord(t TaskRecord, now time.Time) string {
 		b.WriteByte('\n')
 		if a.Detail != "" {
 			fmt.Fprintf(&b, "      %s\n", singleLine(a.Detail))
+		}
+	}
+
+	if len(t.Transitions) > 0 {
+		b.WriteString("\nTransitions:\n")
+		for _, tr := range t.Transitions {
+			line := fmt.Sprintf("  %s  %s", tr.At.UTC().Format(time.RFC3339), tr.State)
+			if tr.Inferred {
+				line += " (inferred)"
+			}
+			if tr.By != "" {
+				line += " by " + tr.By
+			}
+			if tr.Reason != "" {
+				line += fmt.Sprintf(" (%s)", singleLine(tr.Reason))
+			}
+			if tr.Detail != "" {
+				line += "; " + singleLine(tr.Detail)
+			}
+			b.WriteString(line + "\n")
 		}
 	}
 

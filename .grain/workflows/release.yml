@@ -135,8 +135,9 @@
 name: release
 
 on:
-  release:
-    branches: [main, candidate, "rc/v*", "release/v*"]
+  # Retired from automatic release triggering: ai-on-gke/grain runs image
+  # release publishing on GitHub Actions (.github/workflows/release.yml).
+  workflow_dispatch:
 
 jobs:
   images:
@@ -184,6 +185,13 @@ jobs:
       # schema-change upgrade, and the containers tests/installer boots.
       disk-gb: 100
     steps:
+      # A vX.Y.Z tag with Z >= 1 publishes only if it was cut on
+      # release/vX.Y.Z from vX.Y.<Z-1>, or carries nothing but fix:
+      # commits past vX.Y.0 (docs/release-candidate-management.md,
+      # section 9). v3.0.1 and v3.0.2 were main's head, feat: and all.
+      - name: Refuse a patch tag that did not come from its release branch
+        run: bash ./scripts/patch-tag-guard.sh "${GRAIN_CI_REF:-}"
+
       # Everything except the push: the guest (pulled from its
       # content-addressed cache on almost every commit), the Kubernetes
       # sandbox image, the daemon image (grain from ./cmd/grain), and the

@@ -739,7 +739,7 @@ func newPortTask(ctx context.Context, store *model.Store, source model.Task, ref
 	repo := ref.Repo
 	grants := slices.Clone(source.Grants)
 	if !grainci.Granted(grants) {
-		grants = append(grants, model.Grant{Capability: grainci.CapabilityName, Via: model.GrantByGrain})
+		grants = append(grants, model.Grant{Capability: grainci.Grant, Via: model.GrantByGrain})
 	}
 	title := source.Title
 	if title == "" {
@@ -775,6 +775,7 @@ func newPortTask(ctx context.Context, store *model.Store, source model.Task, ref
 	// local policy runs it: a port of an external request needs an
 	// approval of its own.
 	model.InheritRequester(&port, source)
+	model.InheritContext(&port, source)
 	return port, nil
 }
 

@@ -16,7 +16,7 @@
 // /usr/local/bin/grain (Granulefile.guest-base, Granulefile and
 // Dockerfile.k8s-sandbox): only the subcommands that run inside a
 // sandbox. That is `grain host-script` (pkg/hostscriptcli) and the
-// sandbox CLI of docs/design/sandbox-first-agent-surface.md §4 -- `grain
+// sandbox CLI of design/design/sandbox-first-agent-surface.design.md §4 -- `grain
 // ls`, `read`, `grep`, `ci`, `pr`, `task`, `log`, `metrics` and the rest
 // (pkg/sandboxcli), which answer over the sandbox's own scoped proxy. The
 // full grain binary answers every one of them the same way, through the
@@ -58,6 +58,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return hostscriptcli.Main(args[1:], stdout, stderr)
 	}
 	if code, handled := sandboxcli.Main(args, stdout, stderr); handled {
+		return code
+	}
+	if code, handled := sandboxcli.Unknown(args, stderr); handled {
+		// Inside a sandbox, a command it does not have gets the sandbox
+		// CLI's help.
 		return code
 	}
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {

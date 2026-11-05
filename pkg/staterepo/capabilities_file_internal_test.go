@@ -25,7 +25,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// designCapabilities is docs/design/config-repo-settings.md §3.2's
+// designCapabilities is design/design/config-repo-settings.design.md §3.2's
 // example, trimmed to what this build's vocabulary knows.
 const designCapabilities = `
 defaults:
@@ -60,6 +60,17 @@ servers:
           kinds: ["task", "ci", "session"]
           requires_person_when:
             project: ["grain-prod"]
+  - id: https://capabilities.internal/host-scripts-a
+    command: grain-host-scripts
+    run: hostd
+    hostd: ws-a
+  - id: https://capabilities.internal/host-scripts-gpu
+    command: grain-host-scripts
+    run: hostd
+    hostd:
+      labels:
+        zone: west
+        pool: gpu
 in_process:
   corp-research:
     enabled: true
@@ -174,6 +185,12 @@ func TestCapabilitiesFileImportsAndExports(t *testing.T) {
 	if !ok || srv.ServerURL != "https://capabilities.internal/gcp/mcp" || srv.Config["service_account"] != "$secret:gcp-keys/grain-deployer" {
 		t.Errorf("mcp_servers = %#v", cfg.MCPServers)
 	}
+	if a := cfg.MCPServers["https://capabilities.internal/host-scripts-a"]; a.Run != "hostd" || a.Hostd != "ws-a" {
+		t.Errorf("placed server by name = %+v, want run=hostd hostd=ws-a", a)
+	}
+	if g := cfg.MCPServers["https://capabilities.internal/host-scripts-gpu"]; g.Run != "hostd" || g.Hostd != "pool=gpu,zone=west" {
+		t.Errorf("placed server by labels = %+v, want run=hostd hostd=pool=gpu,zone=west", g)
+	}
 	cat := cfg.CapabilityPolicy.Catalogue
 	if cat == nil || cat.InProcess["self-debug"].Restrictions == nil {
 		t.Fatalf("catalogue not stored: %#v", cfg.CapabilityPolicy)
@@ -224,6 +241,12 @@ func TestCapabilitiesFileImportsAndExports(t *testing.T) {
 	if !slices.Equal(cfg3.DefaultCapabilities, cfg.DefaultCapabilities) || len(cfg3.MCPServers) != len(cfg.MCPServers) {
 		t.Errorf("re-import differs: %#v vs %#v", cfg3.DefaultCapabilities, cfg.DefaultCapabilities)
 	}
+	if a := cfg3.MCPServers["https://capabilities.internal/host-scripts-a"]; a.Run != "hostd" || a.Hostd != "ws-a" {
+		t.Errorf("export/re-import stripped placed server hostd: %+v", a)
+	}
+	if g := cfg3.MCPServers["https://capabilities.internal/host-scripts-gpu"]; g.Run != "hostd" || g.Hostd != "pool=gpu,zone=west" {
+		t.Errorf("export/re-import stripped label-selected server hostd: %+v", g)
+	}
 }
 
 // Check refuses a template whose grants the catalogue does not admit.
@@ -241,5 +264,156 @@ func TestCheckCapabilitiesJudgesTemplateGrants(t *testing.T) {
 	err := checkCapabilities(dir)
 	if err == nil || !strings.Contains(err.Error(), "template template-1 grants self-debug") {
 		t.Fatalf("checkCapabilities = %v", err)
+	}
+}
+
+func TestRetiredInProcessFoldsOnUpgradeAndWarnsInCheck(t *testing.T) {
+	ctx := context.Background()
+	db := openSchema(t)
+	store := model.New(db)
+	if err := store.PutConfig(ctx, model.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := ExportConfig(ctx, db, dir); err != nil {
+		t.Fatal(err)
+	}
+	writeCapabilities(t, dir, `
+in_process:
+  memory:
+    enabled: false
+  release-notes:
+    restrictions:
+      repos: ["acme/*"]
+      requires_person: true
+  self-debug:
+    restrictions:
+      kinds: ["task"]
+`)
+	if err := WriteSchemaVersion(dir, model.SchemaVersion); err != nil {
+		t.Fatal(err)
+	}
+
+	// At the current schema, `grain state check` warns about retired keys
+	// naming the api_scopes.presets.<name> entry to move them to.
+	checkDB := openSchema(t)
+	report, err := Check(ctx, checkDB, dir, model.SchemaVersion)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	joined := strings.Join(report.Warnings, "\n")
+	for _, want := range []string{"in_process.memory is retired", "api_scopes.presets.memory", "in_process.release-notes is retired", "api_scopes.presets.release-notes"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("Check warnings = %q, want %q", joined, want)
+		}
+	}
+	if strings.Contains(joined, "self-debug") {
+		t.Errorf("Check warned about active self-debug: %q", joined)
+	}
+
+	// Importing a pre-90 dump runs migration 90 and rewrites the export so
+	// the retired entries live under api_scopes.presets.<name> with zero
+	// warnings on the exported tree.
+	if err := WriteSchemaVersion(dir, 65); err != nil {
+		t.Fatal(err)
+	}
+	migratedDB := openSchema(t)
+	if _, err := CheckMigration(ctx, migratedDB, dir, t.TempDir(), model.SchemaVersion); err != nil {
+		t.Fatalf("CheckMigration from 65: %v", err)
+	}
+	out := t.TempDir()
+	if err := Export(ctx, migratedDB, out); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if err := WriteSchemaVersion(out, model.SchemaVersion); err != nil {
+		t.Fatal(err)
+	}
+	exported, err := os.ReadFile(filepath.Join(out, SettingsDir, CapabilitiesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(exported)
+	if strings.Contains(text, "  memory:\n    enabled: false\n  release-notes:") {
+		t.Errorf("exported capabilities.yml still carries retired in_process keys:\n%s", text)
+	}
+	cat, err := ValidateCapabilitiesFile(exported)
+	if err != nil {
+		t.Fatalf("ValidateCapabilitiesFile(exported): %v\n%s", err, text)
+	}
+	if _, ok := cat.InProcess["memory"]; ok {
+		t.Errorf("exported in_process still has memory:\n%s", text)
+	}
+	if p, ok := cat.APIScopes.Presets["memory"]; !ok || p.Enabled == nil || *p.Enabled {
+		t.Errorf("exported api_scopes.presets.memory = %+v, want enabled: false\n%s", p, text)
+	}
+	if p, ok := cat.APIScopes.Presets["release-notes"]; !ok || p.Restrictions == nil || !p.Restrictions.RequiresPerson {
+		t.Errorf("exported api_scopes.presets.release-notes = %+v\n%s", p, text)
+	}
+	recheckDB := openSchema(t)
+	recheck, err := Check(ctx, recheckDB, out, model.SchemaVersion)
+	if err != nil {
+		t.Fatalf("Check(exported): %v", err)
+	}
+	if len(recheck.Warnings) != 0 {
+		t.Errorf("exported dump produced warnings: %v", recheck.Warnings)
+	}
+
+	// A template still carrying a retired bare grant ("memory") must still be
+	// refused once the restriction lives under api_scopes.presets.memory.
+	if err := os.WriteFile(filepath.Join(out, SettingsDir, "templates.yml"), []byte(`templates:
+  - id: template-1
+    name: legacy-mem
+    grants: [memory]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkCapabilities(out); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Errorf("checkCapabilities with bare retired memory grant = %v, want disabled refusal", err)
+	}
+}
+
+func TestDisabledDeclaredScopeSetPreservesRequiresPersonOnExport(t *testing.T) {
+	ctx := context.Background()
+	db := openSchema(t)
+	store := model.New(db)
+	off := false
+	if err := store.PutConfig(ctx, model.Config{
+		CapabilityPolicy: model.CapabilityPolicy{
+			Catalogue: &model.CapabilityCatalogue{
+				APIScopes: model.CatalogueAPIScopes{
+					Presets: map[string]model.CataloguePreset{
+						"ops/triage": {Enabled: &off},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutAPIScopeSet(ctx, model.APIScopeSet{
+		Name:           "ops/triage",
+		Description:    "Declared set requiring human approval",
+		Scopes:         []string{"tasks:read"},
+		RequiresPerson: true,
+		Version:        1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out := t.TempDir()
+	if err := ExportConfig(ctx, db, out); err != nil {
+		t.Fatalf("ExportConfig: %v", err)
+	}
+	exported, err := os.ReadFile(filepath.Join(out, SettingsDir, CapabilitiesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat, err := ValidateCapabilitiesFile(exported)
+	if err != nil {
+		t.Fatalf("ValidateCapabilitiesFile: %v\n%s", err, string(exported))
+	}
+	p, ok := cat.APIScopes.Presets["ops/triage"]
+	if !ok || p.Enabled == nil || *p.Enabled || p.Restrictions == nil || !p.Restrictions.RequiresPerson {
+		t.Fatalf("exported ops/triage = %+v (restrictions %+v), want disabled and requires_person: true\n%s",
+			p, p.Restrictions, string(exported))
 	}
 }

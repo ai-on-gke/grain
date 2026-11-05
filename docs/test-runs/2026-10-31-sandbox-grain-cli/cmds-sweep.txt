@@ -1,0 +1,55 @@
+# --- setup: a commit on the task branch, its CI and pull request
+command -v grain; sha256sum $(command -v grain) /usr/local/bin/grain; ls /home/debian/grain-full
+cd /home/debian/work && git log --oneline -1 && echo walk >> README.md && git -c user.name=a -c user.email=a@x commit -qam "walk: touch README" && git push -q origin HEAD 2>&1 | tail -2; git log --oneline -1
+cd /home/debian/work && grain pr open 2>&1
+# --- ci
+timeout 300 grain ci wait 2>&1 | tail -15
+cd /home/debian/work && /home/debian/cmp.sh ci list
+cd /home/debian/work && /home/debian/cmp.sh ci log
+cd /home/debian/work && /home/debian/cmp.sh ci log --job test --step say --tail 1
+# --- pr
+cd /home/debian/work && /home/debian/cmp.sh pr status
+cd /home/debian/work && /home/debian/cmp.sh pr base-status
+# --- namespace
+/home/debian/cmp.sh ls ci://acme/widgets
+R=$(grain ls ci://acme/widgets | head -1 | tr -d /); echo run=$R; /home/debian/cmp.sh ls ci://acme/widgets/$R; /home/debian/cmp.sh ls ci://acme/widgets/$R/test
+R=$(grain ls ci://acme/widgets | head -1 | tr -d /); /home/debian/cmp.sh read ci://acme/widgets/$R/test/say.log
+/home/debian/cmp.sh grep MARKER ci://acme/widgets
+/home/debian/cmp.sh ls ci://other/repo
+/home/debian/cmp.sh ls task://
+/home/debian/cmp.sh ls task://2
+CMP_LINES=8 /home/debian/cmp.sh read task://2/description.md
+/home/debian/cmp.sh grep walkthrough task://2
+/home/debian/cmp.sh ls deploy://
+CMP_LINES=8 /home/debian/cmp.sh read deploy://health
+# --- task message
+/home/debian/cmp.sh task message 1 "walkthrough: hello from task 2's sandbox"
+# --- log filters
+/home/debian/cmp.sh log --max-lines 3
+/home/debian/cmp.sh log --lines 2
+/home/debian/cmp.sh log --since "$(date -u -d '-10 min' +%Y-%m-%dT%H:%M:%SZ)" --contains orchestrator --max-lines 5
+/home/debian/cmp.sh log --since 10m --contains orchestrator --max-lines 5
+/home/debian/cmp.sh log --since not-a-time
+/home/debian/cmp.sh log --since "$(date -u -d '-10 min' +%Y-%m-%dT%H:%M:%SZ)" --until "$(date -u -d '-9 min' +%Y-%m-%dT%H:%M:%SZ)" --max-lines 3
+/home/debian/cmp.sh log --until 2000-01-01T00:00:00Z --max-lines 3
+/home/debian/cmp.sh log --min-priority err --max-lines 3
+/home/debian/cmp.sh log --priority warning --max-lines 3
+/home/debian/cmp.sh log --min-priority bogus --max-lines 3
+/home/debian/cmp.sh log --max-lines 0
+/home/debian/cmp.sh log --max-lines 5000 --tail 1
+/home/debian/cmp.sh log --contains NO-SUCH-TEXT-xyz
+/home/debian/cmp.sh log --tail 2
+# --- metrics filters
+CMP_LINES=12 /home/debian/cmp.sh metrics --window 24h --repo acme/widgets
+CMP_LINES=6 /home/debian/cmp.sh metrics --window 7d
+CMP_LINES=6 /home/debian/cmp.sh metrics --window bogus
+CMP_LINES=6 /home/debian/cmp.sh metrics --since 2026-10-30 --until 2026-11-01
+CMP_LINES=6 /home/debian/cmp.sh metrics --since not-a-date
+CMP_LINES=6 /home/debian/cmp.sh metrics --window 24h --since 2026-10-30
+CMP_LINES=6 /home/debian/cmp.sh metrics --author debian
+CMP_LINES=6 /home/debian/cmp.sh metrics --repo other/repo
+CMP_LINES=6 /home/debian/cmp.sh metrics --repo acme/widgets,other/repo
+# --- host-script
+/home/debian/cmp.sh host-script --list
+/home/debian/cmp.sh host-script cluster-autoscaler --grain-help
+/home/debian/cmp.sh help

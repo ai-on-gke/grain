@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
+	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/ci"
@@ -30,7 +31,7 @@ import (
 )
 
 // This file is CI's half of capability-reference minting
-// (docs/capabilities-spec.md §4.2.2-§4.2.4, §4.4.1); the agent task's
+// (design/spec/capabilities/capabilities.spec.md §4.2.2-§4.2.4, §4.4.1); the agent task's
 // half is pkg/orchestrator/capability_pass.go. A job whose capabilities
 // name references has them resolved against the attached capability
 // servers, checked against the deployment's capability policy as a CI
@@ -69,7 +70,7 @@ type ciHeldPass struct {
 // WithCICapabilityPorts gives service's grant admission the daemon's
 // capability port relay and the URL a sandbox reaches it at, which a
 // job's grants' ports and mcp_endpoints are carried into its sandbox
-// over (docs/capabilities-spec.md §5.2.4, §5.3).
+// over (design/spec/capabilities/capabilities.spec.md §5.2.4, §5.3).
 func WithCICapabilityPorts(service *ci.Service, relay *portforward.Relay, relayURL string) {
 	if service == nil || service.Engine == nil {
 		return
@@ -93,11 +94,29 @@ func WithCICapabilityServers(service *ci.Service, servers func() orchestrator.Ca
 }
 
 // ciCapabilityRefs is the capability references among ids, as grants.
-func ciCapabilityRefs(ids []string) []model.Grant {
+// Neither grain#ci nor repository access (repo#read, repo#write {repo}) is
+// among them: grain#ci is every job's own and mints nothing
+// (ResolveCICapabilities adds it to the job's context), and repository
+// access mints nothing and is honoured, through its own event gate, by the
+// proxy scope CiSandbox.grantRepoAccess widens.
+//
+// A reference whose server declared a CI rule (model.CIGrantRule, the
+// release server's methods) is among them only on an event the rule
+// admits: on any other it is not handed to the job at all, as the
+// retired providers' event gate skipped them (ResolveCICapabilities),
+// rather than refusing the job; nor on a run that withholds event-gated
+// capabilities (ci.Request.WithholdEventGated), as the providers' gate
+// withheld them, even though ci.Service.Start already hands such a run
+// no capability list.
+func ciCapabilityRefs(ids []string, event ci.Event, trustedSchedule, withholdEventGated bool) []model.Grant {
 	var out []model.Grant
 	for _, id := range ids {
-		if model.IsCapabilityRef(id) {
-			out = append(out, model.Grant{Capability: id, Via: model.GrantByDefault})
+		c := model.CanonicalLegacyGrant(id)
+		if rule, ok := model.CIGrantRuleFor(c); ok && (withholdEventGated || !rule.Admits(string(event), trustedSchedule)) {
+			continue
+		}
+		if model.IsCapabilityRef(c) && !model.IsGrainCIGrant(c) && !model.IsRepoAccessGrant(c) {
+			out = append(out, model.Grant{Capability: c, Via: model.GrantByDefault})
 		}
 	}
 	return out
@@ -287,14 +306,26 @@ func (g *CiGrantReservations) mintCIPass(ctx context.Context, req ci.SandboxRequ
 		}
 	}
 	configured, _ = intree.EnsureBuiltins(configured)
-	subject := model.CapabilitySubject{Repo: &repo, Kind: model.CapabilityRunCI, Event: string(req.Event), Untrusted: req.Untrusted}
+	subject := model.CapabilitySubject{Repo: &repo, Kind: model.CapabilityRunCI, Event: string(req.Event), Untrusted: req.Untrusted,
+		TrustedSchedule: req.TrustedSchedule}
 	for _, grant := range grants {
 		if err := policy.Permits(model.RecordedCapabilityGrant(grant), subject, configured); err != nil {
 			return nil, time.Time{}, err
 		}
+		// local-scripts was never granted to a CI job, whose steps are
+		// whatever the pushed branch says; what a declaration became on
+		// host-script is not either.
+		if from, ok := localscripts.MigratedFrom(model.RecordedCapabilityGrant(grant)); ok {
+			return nil, time.Time{}, &protocol.RefusedError{Grant: grant.Ref.String(),
+				Reason: fmt.Sprintf("%s is what %s became, and local scripts are never granted to a CI job: they run on the node host", model.RecordedCapabilityGrant(grant), from)}
+		}
 	}
 	at := g.now()
 	deadline := ciPassDeadline(ctx, at)
+	// The job an in-process method (the release server's) mints for, as
+	// the retired providers read it off their CapabilityContext.
+	ctx = model.WithCIMint(ctx, model.CIMint{Repo: repo, RunID: req.Name, Credentials: g.Credentials,
+		Event: string(req.Event), TrustedSchedule: req.TrustedSchedule, WithholdEventGated: req.WithholdEventGated})
 	pass, err := protocol.MintPass(ctx, grants, func(id string) (protocol.Minter, error) {
 		srv, err := lookup(id)
 		if err != nil {

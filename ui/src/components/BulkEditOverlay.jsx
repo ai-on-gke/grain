@@ -39,9 +39,11 @@ import {
 } from "../state.js";
 import { CUSTOM_PREFIX } from "../taskAttributes.js";
 import ModelSelect from "./ModelSelect.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import Overlay from "./Overlay.jsx";
 import BranchField from "./BranchField.jsx";
 import RepoField from "./RepoField.jsx";
+import { taskPriority } from "../wholeNumber.js";
 import {
   CustomFieldInput,
   declaredFields,
@@ -138,6 +140,7 @@ export default function BulkEditOverlay({
     agentBackendId: shared(selection, (t) => t.agentBackendId || ""),
     review: shared(selection, (t) => t.reviewTemplateId || ""),
     promptExtension: shared(selection, (t) => t.promptExtension || ""),
+    priority: shared(selection, (t) => String(t.priority ?? 5)),
     fields: sharedFieldValues(selection, declared),
   }));
   const [repo, setRepo] = useState(initial.repo);
@@ -153,6 +156,9 @@ export default function BulkEditOverlay({
   const [promptExtension, setPromptExtension] = useState(
     initial.promptExtension,
   );
+  // The task priority (model.Task.Priority, 5 when unset), held as the
+  // box's text so a half-typed value is not rewritten under the cursor.
+  const [priority, setPriority] = useState(initial.priority ?? "");
   // The declared fields, by name, seeded the same way: what the whole
   // selection says about each, or null where it disagrees.
   const [fieldValues, setFieldValues] = useState(initial.fields);
@@ -183,8 +189,16 @@ export default function BulkEditOverlay({
   // dispatched"), so a ticked-but-empty repo would be a request that
   // could only ever fail, once per selected task.
   const repoMissing = Boolean(change.repo) && orEmpty(repo).trim() === "";
+  // A priority is a whole number from 1 up, as on the task pane's own
+  // form (EditTaskForm's priorityValid). Unlike there, an empty box is
+  // not "leave it as it is" -- the untick says that -- so a ticked row
+  // must hold a number, or Apply would send every task the server's
+  // reading of nothing.
+  const priorityText = String(priority).trim();
+  const priorityInvalid =
+    Boolean(change.priority) && Number.isNaN(taskPriority(priorityText));
   const fields = Object.keys(change).filter((f) => change[f]);
-  const applicable = fields.length > 0 && !repoMissing;
+  const applicable = fields.length > 0 && !repoMissing && !priorityInvalid;
 
   // A declared field's tick is namespaced, for the reason its filter id
   // is (taskAttributes.js's CUSTOM_PREFIX): a deployment may declare a
@@ -277,6 +291,7 @@ export default function BulkEditOverlay({
     }
     if (change.review) body.reviewTemplateId = orEmpty(review);
     if (change.promptExtension) body.promptExtension = orEmpty(promptExtension);
+    if (change.priority) body.priority = Number(priorityText);
     // One PATCH per task, through App's own runBatch: failures are
     // collected rather than aborting the rest, and the selection stands
     // unless every one of them landed, so a partial failure can be
@@ -442,30 +457,27 @@ export default function BulkEditOverlay({
                   )}
                   helperText="a run already dispatched keeps the model it started on"
                 />
-                <TextField
-                  select
+                <SearchSelect
                   label="Specific connection"
                   value={pinChoices.some((c) => c.id === pin) ? pin : ""}
-                  onChange={(e) => setAgentBackendId(e.target.value)}
+                  onChange={setAgentBackendId}
                   InputLabelProps={{ shrink: true }}
-                  SelectProps={{ displayEmpty: true }}
+                  options={[
+                    {
+                      value: "",
+                      label: "Any enabled connection serving the model",
+                    },
+                    ...pinChoices.map((backend) => ({
+                      value: backend.id,
+                      label: connectionLabel(backend),
+                    })),
+                  ]}
                   helperText={
                     effectiveModel
                       ? `connections that serve ${effectiveModel} -- pin one only if these tasks need that account`
                       : "pin these tasks to one connection -- leave them on any connection unless they need that account"
                   }
-                  fullWidth
-                  size="small"
-                >
-                  <MenuItem value="">
-                    Any enabled connection serving the model
-                  </MenuItem>
-                  {pinChoices.map((backend) => (
-                    <MenuItem key={backend.id} value={backend.id}>
-                      {connectionLabel(backend)}
-                    </MenuItem>
-                  ))}
-                </TextField>
+                />
               </Stack>
             </Row>
           );
@@ -502,7 +514,6 @@ export default function BulkEditOverlay({
             <MenuItem value="antigravity">Antigravity</MenuItem>
             <MenuItem value="claude">Claude</MenuItem>
             <MenuItem value="codex">Codex</MenuItem>
-            <MenuItem value="custom">Custom command</MenuItem>
           </TextField>
         </Row>
 
@@ -512,27 +523,22 @@ export default function BulkEditOverlay({
           onChange={tick("review")}
           mixed={mixed(initial.review)}
         >
-          <TextField
-            select
+          <SearchSelect
             label="Review"
             value={orEmpty(review)}
-            onChange={(e) => setReview(e.target.value)}
-            // displayEmpty and the shrink with it, for the reason above:
-            // "" is "no review", a line this select draws inside its own
-            // box, and the label has to be out of the way of it.
+            onChange={setReview}
+            // Shrunk: "" is "no review", a real choice with a name of its
+            // own, and the label has to be out of the way of it.
             InputLabelProps={{ shrink: true }}
-            SelectProps={{ displayEmpty: true }}
             helperText="attaching one reaches any review not yet filed; a task whose review task already exists keeps it"
-            fullWidth
-            size="small"
-          >
-            <MenuItem value="">No review</MenuItem>
-            {(templates || []).map((tmpl) => (
-              <MenuItem key={tmpl.id} value={tmpl.id}>
-                {tmpl.name}
-              </MenuItem>
-            ))}
-          </TextField>
+            options={[
+              { value: "", label: "No review" },
+              ...(templates || []).map((tmpl) => ({
+                value: tmpl.id,
+                label: tmpl.name,
+              })),
+            ]}
+          />
         </Row>
 
         <Row
@@ -548,6 +554,29 @@ export default function BulkEditOverlay({
             multiline
             rows={3}
             helperText="replaces what this deployment and the repo would otherwise tell these runs -- empty clears the override"
+            fullWidth
+            size="small"
+          />
+        </Row>
+
+        <Row
+          label="Task priority"
+          checked={Boolean(change.priority)}
+          onChange={tick("priority")}
+          mixed={mixed(initial.priority)}
+        >
+          <TextField
+            label="Task priority"
+            type="number"
+            inputProps={{ min: 1, step: 1 }}
+            value={priority}
+            onChange={(e) => setPriority(e.target.value)}
+            error={priorityInvalid}
+            helperText={
+              priorityInvalid
+                ? "a whole number, 1 or more; default 5, higher numbers run first"
+                : "default 5; higher numbers run first"
+            }
             fullWidth
             size="small"
           />

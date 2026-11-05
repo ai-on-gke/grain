@@ -53,7 +53,7 @@ import {
 } from "./ReorderPickup.jsx";
 import GanttChart from "./GanttChart.jsx";
 import Sparkline from "./Sparkline.jsx";
-import StateDot from "./StateDot.jsx";
+import StateDot, { isLiveRunning } from "./StateDot.jsx";
 import { ListEmpty } from "./ListPrimitives.jsx";
 import NarrowingBar from "./NarrowingBar.jsx";
 import { TaskRow } from "./TaskList.jsx";
@@ -186,7 +186,7 @@ import { rowFields } from "./CustomFields.jsx";
 // layout a phone already gets, which is the order itself with nothing
 // else in the way. It also makes the slots reachable: six panels on real
 // history are 2,500px of scrolling
-// (docs/hand-runs/2026-09-07-panel-dashboard.md section 6), and choosing
+// (the 2026-09-07 panel-dashboard hand run section 6), and choosing
 // between drop targets three screens apart is not choosing.
 //
 // A mouse dragging a panel gets neither: the grid stays exactly as it
@@ -333,11 +333,19 @@ function StatesPanel({ tasks, narrowing, onOpen }) {
               {/* The dot the rest of the UI draws for the first state
                   this column collects: a column is recognised by its
                   colour on the board, and a count that dropped it would
-                  be the same layout wearing a different face. */}
-              <StateDot
-                state={c.states[0]}
-                title={STATE_LABELS[c.states[0]] || c.states[0]}
-              />
+                  be the same layout wearing a different face. Hidden
+                  from assistive technology, though: the column's title
+                  beside it already says it in words, and the mark's own
+                  label read out as well made the Running count "2
+                  Running Running". */}
+              {isLiveRunning(c.states[0]) && (
+                <span className="panel-state-mark" aria-hidden="true">
+                  <StateDot
+                    state={c.states[0]}
+                    title={STATE_LABELS[c.states[0]] || c.states[0]}
+                  />
+                </span>
+              )}
               {c.title}
             </span>
           </a>

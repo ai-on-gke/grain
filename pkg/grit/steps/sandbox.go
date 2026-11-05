@@ -64,6 +64,11 @@ type SandboxRequest struct {
 	// (model.IsCapabilityRef) the job declares, which Admission mints
 	// subject to the deployment's capability policy (jobCapabilities).
 	Capabilities []string
+	// ImplicitCapabilities reports that the job declared neither
+	// `capabilities:` nor `optional-capabilities:`, so Capabilities holds
+	// the repository's default set rather than grants the job itself asked
+	// for (workflows.Job.ImplicitCapabilities).
+	ImplicitCapabilities bool
 	// RunID and JobAttempt name this attempt at the job for the
 	// capability grants minted for it: the attempt_ids of its pass are
 	// <deployment>-<RunID>-<JobAttempt>-<index>. JobAttempt is the job's
@@ -136,6 +141,14 @@ type Sandbox interface {
 	Release(ctx context.Context) error
 }
 
+// WarningSandbox is an optional Sandbox extension that reports non-fatal
+// job notes discovered when preparing the sandbox -- such as a declared
+// capability withheld by this run's event gate -- for JobRun.Warning.
+type WarningSandbox interface {
+	Sandbox
+	Warning() string
+}
+
 // StreamingSandbox is a Sandbox whose Exec can say what a command is
 // printing while it is still printing it, so a step that takes forty
 // minutes can be watched rather than only read afterwards (see live.go).
@@ -189,7 +202,7 @@ type Command struct {
 	// id and output cursor through it as the step runs, and when its
 	// ExecID is set the sandbox reattaches to that exec -- started by a
 	// grain that has since restarted -- instead of running Script again
-	// (docs/design/grain-on-gke.md#GKE-4). A sandbox with no channel
+	// (design/design/grain-on-gke.design.md#GKE-4). A sandbox with no channel
 	// ignores the reporting and refuses a reattach.
 	Attach *sandboxaccess.Attachment
 }

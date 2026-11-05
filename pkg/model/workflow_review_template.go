@@ -126,7 +126,7 @@ func workflowReviewTemplate(stem string) *Template {
 		Grants: []Grant{
 			// Named as a string rather than through
 			// pkg/capability/grainci, which imports this package.
-			{Capability: "grain-ci", Via: GrantByGrain},
+			{Capability: GrainCIGrant, Via: GrantByGrain},
 		},
 	}
 }
@@ -226,5 +226,143 @@ func workflowReviewBody(stem string) string {
 		"or an architectural decision is required, report it with `comment_on_issue` and let this close. If everything was fine " +
 		"or clear repository bugs were filed as tasks, finish cleanly without reporting to the user. Do not park on `ask_question`, " +
 		"which holds up the nights behind it.")
+	return b.String()
+}
+
+// GitHubWorkflowReviewTemplatePrefix is the workflow-review family's
+// counterpart for a run GitHub Actions made rather than grain CI: what a
+// `.grain/schedules` file with `trigger: github_workflow_run:` files when a
+// run of `.github/workflows/<stem>.yml` concludes (repodecl.parseSchedule,
+// orchestrator's GitHub workflow-run trigger).
+//
+// It is a family of its own rather than WorkflowReviewTemplatePrefix with a
+// flag, for two reasons. The prompt differs in nearly every claim it makes
+// -- grain did not start the run, did not bypass any cache, and the file is
+// `.github/workflows` rather than `.grain/workflows` -- and a template id is
+// the only thing a schedule carries that says what a firing is. And a stem
+// can name both a `.grain/workflows` cron and a GitHub workflow at once, so
+// the two need ids that cannot collide. The prefix is deliberately not an
+// extension of WorkflowReviewTemplatePrefix ("workflow-review-github:" does
+// not start with "workflow-review:"), so WorkflowReviewStem, which the
+// firing path asks to decide whether it has a grain CI run to start, never
+// mistakes one of these for one of those.
+const GitHubWorkflowReviewTemplatePrefix = SystemTemplatePrefix + "workflow-review-github:"
+
+// GitHubWorkflowReviewTemplateID is the template that reviews a GitHub
+// Actions run of `.github/workflows/<stem>.yml`.
+func GitHubWorkflowReviewTemplateID(stem string) string {
+	return GitHubWorkflowReviewTemplatePrefix + stem
+}
+
+// GitHubWorkflowReviewStem is the workflow stem a
+// GitHubWorkflowReviewTemplateID names, and false for an id that is not one.
+func GitHubWorkflowReviewStem(id string) (string, bool) {
+	stem, ok := strings.CutPrefix(id, GitHubWorkflowReviewTemplatePrefix)
+	if !ok || stem == "" {
+		return "", false
+	}
+	return stem, true
+}
+
+// IsWorkflowReviewTemplateID reports whether id is one of grain's templates
+// for reviewing a workflow run, of either family -- what an asker that only
+// wants to know "is this a review of a run" (a title with the branch on it,
+// the read-only CI grant, the review policy a schedule shows) asks, as
+// against WorkflowReviewStem, which is "is there a grain CI run to start".
+func IsWorkflowReviewTemplateID(id string) bool {
+	if _, ok := WorkflowReviewStem(id); ok {
+		return true
+	}
+	_, ok := GitHubWorkflowReviewStem(id)
+	return ok
+}
+
+// gitHubWorkflowReviewTemplate is workflowReviewTemplate for a run GitHub
+// Actions made. Code rather than a row for the same reason, with the same
+// grant: applyGrainCIGrant strips grain#ci on a repository grain CI does
+// not gate, and applyWorkflowReviewCIReadGrant puts back the read-only
+// api:ci-read@<repo> that `grain ci log` and `grain ci list` need to reach
+// GitHub's runs (ids `gha:<owner>:<name>:<run>`).
+func gitHubWorkflowReviewTemplate(stem string) *Template {
+	return &Template{
+		ID:    GitHubWorkflowReviewTemplateID(stem),
+		Name:  fmt.Sprintf("Review a GitHub Actions run of the %q workflow", stem),
+		Title: fmt.Sprintf("Review the %q GitHub Actions run", stem),
+		Body:  gitHubWorkflowReviewBody(stem),
+		Grants: []Grant{
+			{Capability: GrainCIGrant, Via: GrantByGrain},
+		},
+	}
+}
+
+func gitHubWorkflowReviewBody(stem string) string {
+	var b strings.Builder
+	b.WriteString("GitHub Actions has run this repository's `" + stem + "` workflow, and the run " +
+		"has concluded in a way a `.grain/schedules` file with a `github_workflow_run` trigger asked " +
+		"grain to have reviewed. grain did not start this run and does not run this workflow: " +
+		"GitHub did, on GitHub's runners, for whatever event the workflow answers (its own " +
+		"`on: schedule` cron, a push, a manual dispatch). Your job is to read the run and report on " +
+		"it. This is triage and judgement, not a fix-everything job: finish by saying what " +
+		"happened and by filing tasks for what needs doing, rather than by pushing a large " +
+		"speculative change.\n\n")
+
+	b.WriteString("**The run is on the branch this task is based on**, which the comment below also " +
+		"names; your checkout is that branch. When a repository runs the same workflow on more than one " +
+		"branch, say which one in your report and in any task you file, and file a fix against that branch.\n\n")
+
+	b.WriteString("**Read the workflow file first, in your own checkout.** It is `.github/workflows/" +
+		stem + ".yml` (or `.yaml`) -- the comment below names the exact path GitHub ran -- and it is " +
+		"the only trustworthy list of what this run consists of: which jobs there are, what each one " +
+		"runs, what it needs from the runner. Which jobs a workflow has changes week to week, so do not " +
+		"work from a memory of them, from a previous run's report, or from anything this prompt might " +
+		"have said about them -- this prompt deliberately names none. A grain CI workflow of the same " +
+		"name, if the repository has one, is a different workflow, and is not what this run is.\n\n")
+
+	b.WriteString("**Find the run.** grain has left a comment on this task naming the GitHub run, " +
+		"its attempt, how it ended and which jobs failed at which step. Read it before anything else. " +
+		"Then run `grain ci log <run>` with the run it names (add `--job <j>` for one job's output) " +
+		"to read the logs, and `grain ci list` (narrow with `--repo` and `--ref` to the branch the " +
+		"comment names) to see this workflow's earlier runs -- comparing a failing job against the " +
+		"same job on earlier runs says whether it is new. The conclusion is GitHub's, and the logs " +
+		"are what it means. A job GitHub cancelled, or one that never got a runner, is read for " +
+		"whatever ran before it stopped, and reported as machinery rather than as a verdict on the " +
+		"tree.\n\n")
+
+	b.WriteString("**Re-running is GitHub's, not grain's.** `grain ci retrigger` and `grain ci run-job` " +
+		"start grain CI jobs and cannot re-run this run. Whether a failure reproduces is a question " +
+		"for the next GitHub run, or for running the failing step yourself in your sandbox.\n\n")
+
+	b.WriteString("**For each job that did not pass, read its log and distinguish the cause.** " +
+		"Name the step, quote the error and the few lines around it, and classify whether the failure " +
+		"is a repository code bug or an infrastructure / capability omission:\n" +
+		"- **Secret or permission unavailability**: Repository or environment secrets the workflow " +
+		"reads that are unset or expired, or a token without the permission a step needs.\n" +
+		"- **Runner or infrastructure errors**: Jobs that never got a runner, jobs with duration `0s`, " +
+		"or jobs that errored before executing test steps.\n" +
+		"- **External cloud constraints**: Cloud quota exhaustion or organization policy refusals.\n" +
+		"- **Repository code bugs**: Actual test assertion failures, build compilation errors, or runtime " +
+		"lint check failures within an executed step.\n\n")
+
+	b.WriteString("**Automated Triage Guards for propose_task:**\n" +
+		"- Only file code repair tasks with `propose_task` when an actual test assertion, build compilation, " +
+		"or runtime lint check failed within an executed step in the repository code.\n" +
+		"- For infrastructure, secret and permission issues: **Do NOT file a code modification task via " +
+		"`propose_task`.** Instead, report them to the operator by leaving a closing note via " +
+		"`comment_on_issue` saying what configuration is missing.\n" +
+		"- One task per distinct repository code bug, with the error output and your diagnosis in it, grouping related " +
+		"failures with one cause into one task. A job that has failed once in a way that looks transient is not worth a task; " +
+		"one that has failed repeatedly on repository code is worth one.\n\n")
+
+	b.WriteString("**Only report things the user needs to address.**\n" +
+		"1) Everything is fine: Nothing needs to be fixed. File nothing and do not report to the user.\n" +
+		"2) Clear repository bugs exist: File new code repair tasks with `propose_task` to fix them. Do not report to the user.\n" +
+		"3) Infrastructure, secret or permission failures, or issues needing user intervention: Report them with " +
+		"`comment_on_issue` explaining what configuration or user intervention is required, and do not file code " +
+		"modification tasks.\n\n")
+
+	b.WriteString("**Finish, rather than parking.** While this task is open the schedule skips the " +
+		"runs that conclude after it, so they go unreviewed. If user intervention is required, report it " +
+		"with `comment_on_issue` and let this close. Do not park on `ask_question`, which holds up the " +
+		"reviews behind it.")
 	return b.String()
 }

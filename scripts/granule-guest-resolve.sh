@@ -206,10 +206,14 @@ mkdir -p "$logdir"
 # (scripts/release-images.sh) and every consumer to the same text,
 # because a key derived any other way misses for ever rather than
 # failing. GRAIN_CI_REPO is grain CI's spelling of GITHUB_REPOSITORY.
-RELEASE_IMAGE_REPO="${RELEASE_IMAGE_REPO:-bwsalmon/grain}"
+# shellcheck source=scripts/release-image-repos.sh
+. "$repo_root/scripts/release-image-repos.sh"
+PACKAGE_PUBLISH_REGISTRY="${PACKAGE_PUBLISH_REGISTRY:-$RELEASE_IMAGE_REGISTRY_DEFAULT}"
+RELEASE_IMAGE_REPO="${RELEASE_IMAGE_REPO:-$RELEASE_IMAGE_REPO_DEFAULT}"
 mapfile -t inputs < <(./scripts/granule/guest-inputs.sh guest)
 key="$(git rev-parse "${inputs[@]/#/HEAD:}" | sha256sum | cut -c1-32)"
-cached="ghcr.io/${RELEASE_IMAGE_REPO,,}/guest:inputs-${key}"
+cached="${PACKAGE_PUBLISH_REGISTRY,,}/${RELEASE_IMAGE_REPO,,}/sandbox:inputs-${key}"
+legacy_cached="$(legacy_ghcr_image_for "$cached")"
 
 # What a failed attempt left behind, printed small. Kept in a variable as
 # well as printed, so that it can be printed a second time at the end of
@@ -289,7 +293,7 @@ run_attempt() {
   if command -v granule >/dev/null 2>&1; then
     granule granulefile build -kontur-image "$granule_image" -f Granulefile -t "$IMAGE" > "$log" 2>&1 &
   else
-    go run github.com/bwsalmon/granule/cmd/granule granulefile build -kontur-image "$granule_image" -f Granulefile -t "$IMAGE" > "$log" 2>&1 &
+    go run github.com/gke-labs/granule/cmd/granule granulefile build -kontur-image "$granule_image" -f Granulefile -t "$IMAGE" > "$log" 2>&1 &
   fi
   local pid=$!
 
@@ -341,6 +345,9 @@ run_attempt() {
 if [ -z "${GRAIN_GUEST_BUILD_ALWAYS:-}" ] && docker pull "$cached"; then
   docker tag "$cached" "$IMAGE"
   echo "sandbox guest cache: hit ${cached}"
+elif [ -z "${GRAIN_GUEST_BUILD_ALWAYS:-}" ] && [ -n "$legacy_cached" ] && docker pull "$legacy_cached"; then
+  docker tag "$legacy_cached" "$IMAGE"
+  echo "sandbox guest cache: hit legacy ${legacy_cached} (for ${cached})"
 else
   if [ -n "${GRAIN_GUEST_BUILD_ALWAYS:-}" ]; then
     echo "sandbox guest cache: GRAIN_GUEST_BUILD_ALWAYS is set, so ${cached} is not consulted -- building the guest"

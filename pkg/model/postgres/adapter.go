@@ -42,9 +42,13 @@ var tablePrimaryKeys = map[string][]string{
 	"task_run_spool_cursor":          {"run_id"},
 	"task_run_staged_attachment":     {"run_id", "path"},
 	"task_run_relayed_call":          {"run_id", "fingerprint"},
+	"task_run_wait_ledger":           {"run_id", "source"},
 	"task_run_unmatched_failure":     {"run_id"},
 	"task_run_exec_failure":          {"run_id"},
 	"task_run_capability_audit":      {"run_id", "seq"},
+	"task_run_startup":               {"run_id"},
+	"task_run_hostd":                 {"run_id"},
+	"task_run_sandbox_key":           {"run_id"},
 	"task_suspension":                {"run_id"},
 	"task_goal":                      {"task_id"},
 	"task_link":                      {"task_id", "kind", "target"},
@@ -52,6 +56,8 @@ var tablePrimaryKeys = map[string][]string{
 	"task_tag":                       {"task_id", "tag"},
 	"work_origin_comment":            {"origin"},
 	"task_comment":                   {"id"},
+	"task_event":                     {"id"},
+	"config_audit":                   {"id"},
 	"task_attachment":                {"id"},
 	"task_custom_field":              {"task_id", "name", "value"},
 	"task_read":                      {"task_id", "owner", "name"},
@@ -60,6 +66,7 @@ var tablePrimaryKeys = map[string][]string{
 	"task_grant":                     {"task_id", "capability"},
 	"task_grant_wait":                {"task_id"},
 	"task_pause":                     {"task_id"},
+	"console_session_sync":           {"task_id"},
 	"custom_field":                   {"name"},
 	"api_scope_set":                  {"name"},
 	"lease":                          {"run_id", "capability", "resource"},
@@ -81,7 +88,7 @@ var tablePrimaryKeys = map[string][]string{
 	"base_branch_ci":                 {"owner", "name", "branch"},
 	"base_branch_dispatch":           {"owner", "name", "branch"},
 	"base_branch_release":            {"owner", "name", "branch"},
-	"merge_batch":                    {"owner", "name", "branch"},
+	"merge_batch":                    {"owner", "name", "branch", "task_id"},
 	"scheduled_workflow_run":         {"schedule_id"},
 	"merge_batch_history":            {"id"},
 	"merge_gather_history":           {"id"},
@@ -92,6 +99,7 @@ var tablePrimaryKeys = map[string][]string{
 	"force_merge_history":            {"id"},
 	"scheduled_upgrade":              {"id"},
 	"auto_upgrade_run":               {"id"},
+	"auto_upgrade_release":           {"id"},
 	"usage_limit_pause":              {"scope_key"},
 	"tuning_recommendation":          {"id"},
 	"release":                        {"id"},
@@ -105,6 +113,7 @@ var tablePrimaryKeys = map[string][]string{
 	"repo_path_trigger":              {"owner", "name", "trigger"},
 	"repo_merge_rules":               {"owner", "name"},
 	"path_trigger_cursor":            {"owner", "name", "branch"},
+	"git_ref_cursor":                 {"schedule_id"},
 	"memory":                         {"owner", "name"},
 	"memory_document":                {"owner", "name", "document"},
 	"release_note":                   {"period"},
@@ -134,9 +143,9 @@ var tablePrimaryKeys = map[string][]string{
 	"standing_sandbox_secret":        {"sandbox_name", "secret_name", "env_var", "file_path"},
 	"standing_sandbox_env":           {"sandbox_name", "name"},
 	"persistent_sandbox":             {"name"},
-	"executor_token":                 {"id"},
-	"executor_token_sequence":        {"id"},
 	"external_agent_token":           {"id"},
+	"hostd":                          {"name"},
+	"hostd_token":                    {"token_hash"},
 	"external_agent_token_sequence":  {"id"},
 	"gcp_key":                        {"name"},
 	"secret_resolution_audit":        {"id"},
@@ -145,6 +154,10 @@ var tablePrimaryKeys = map[string][]string{
 	"task_notification_subscription": {"task_id", "family"},
 	"sandbox_access":                 {"sandbox"},
 	"ci_step_attachment":             {"run_id", "job_id", "step_id"},
+	"allowed_principal":              {"entry"},
+	"allowed_principal_migration":    {"id"},
+	"integration_event":              {"id"},
+	"secret_entries":                 {"secret_name", "key"},
 }
 
 // Auto-increment primary key column for tables that use sequences or SERIAL.
@@ -155,9 +168,10 @@ var autoIncrementTables = map[string]string{
 	"suite_sequence":                "id",
 	"task_suite_sequence":           "id",
 	"board_sequence":                "id",
-	"executor_token_sequence":       "id",
 	"external_agent_token_sequence": "id",
 	"task_comment":                  "id",
+	"task_event":                    "id",
+	"config_audit":                  "id",
 	"task_attachment":               "id",
 	"branch":                        "id",
 	"release":                       "id",
@@ -182,6 +196,7 @@ var autoIncrementTables = map[string]string{
 	"secret_resolution_audit":       "id",
 	"credential_access_audit":       "id",
 	"notification":                  "id",
+	"integration_event":             "id",
 }
 
 type adaptedConnector struct {
@@ -249,11 +264,60 @@ func (c *adaptedConn) Begin() (driver.Tx, error) {
 	return c.inner.Begin()
 }
 
+// writerLockKey is the transaction-scoped advisory lock every read-write
+// transaction takes (takeWriterLock): one per store, because what it
+// stands in for is SQLite's one write lock. The store is the schema the
+// connection's search_path names, so its second key is that schema's.
+const writerLockKey = 0x67726169 // "grai"
+
+// writerLockTimeout is how long a writer waits its turn for that lock
+// before failing with lock_timeout (55P03), which Store.write retries:
+// the same five seconds pkg/model/sqlite gives busy_timeout.
+const writerLockTimeout = "5s"
+
 func (c *adaptedConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	var (
+		tx  driver.Tx
+		err error
+	)
 	if btx, ok := c.inner.(driver.ConnBeginTx); ok {
-		return btx.BeginTx(ctx, opts)
+		tx, err = btx.BeginTx(ctx, opts)
+	} else {
+		tx, err = c.inner.Begin()
 	}
-	return c.inner.Begin()
+	if err != nil || opts.ReadOnly {
+		return tx, err
+	}
+	if err := c.takeWriterLock(ctx); err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	return tx, nil
+}
+
+// takeWriterLock serialises read-write transactions the way
+// pkg/model/sqlite's _txlock=immediate does, at BEGIN: Store.write's
+// callers read a row and write it back whole (ObserveField and
+// everything built on it), which is only correct while no other writer
+// can commit in between. Postgres' default READ COMMITTED does not
+// promise that -- two such transactions both read the old row and the
+// later commit silently drops the earlier one's change (a task's close
+// lost to the orchestrator's next observation, in the installer e2e) --
+// so every read-write transaction first takes the same advisory lock,
+// held until it commits or rolls back. Read-only transactions take
+// nothing.
+func (c *adaptedConn) takeWriterLock(ctx context.Context) error {
+	execer, ok := c.inner.(driver.ExecerContext)
+	if !ok {
+		return fmt.Errorf("postgres: %T cannot execute statements, so it cannot take the writer lock", c.inner)
+	}
+	if _, err := execer.ExecContext(ctx, "SET LOCAL lock_timeout = '"+writerLockTimeout+"'", nil); err != nil {
+		return fmt.Errorf("postgres: setting the writer lock's timeout: %w", err)
+	}
+	if _, err := execer.ExecContext(ctx, fmt.Sprintf("SELECT pg_advisory_xact_lock(%d, hashtext(current_schema()))", writerLockKey), nil); err != nil {
+		return fmt.Errorf("postgres: taking the writer lock: %w", err)
+	}
+	return nil
 }
 
 func (c *adaptedConn) Ping(ctx context.Context) error {
@@ -549,7 +613,15 @@ ORDER BY c.ordinal_position`, tableName)
 	if strings.HasPrefix(strings.ToUpper(trimmed), "PRAGMA ") {
 		upper := strings.ToUpper(trimmed)
 		if strings.Contains(upper, "DATA_VERSION") {
-			return "SELECT (pg_stat_get_db_xact_commit(d.oid))::bigint AS data_version FROM pg_database d WHERE datname = current_database()"
+			// Store.ChangeToken's "nothing committed since": the current
+			// snapshot (xmin:xmax:in-progress ids) moves the moment any
+			// transaction is given an id or commits, so it is never behind
+			// a commit the way the statistics counter this used to read
+			// (pg_stat_get_db_xact_commit) is -- backends flush those at
+			// most once a second, which let the UI's response caches serve
+			// a task's detail from before a write that had already
+			// committed. Hashed to the bigint data_version is scanned as.
+			return "SELECT hashtextextended(txid_current_snapshot()::text, 0) AS data_version"
 		}
 		// Harmless no-op query for other PRAGMAs
 		return "SELECT 1"
@@ -619,6 +691,7 @@ var (
 		"blocks",
 		"auto_approve_proposals",
 		"interactive",
+		"keep_running",
 		"immediate",
 		"no_port",
 		"resume_on_deadline",
@@ -670,6 +743,7 @@ var (
 		"k8s_privileged",
 		"k8s_network_policy",
 		"external_agent_api",
+		"settings_locked",
 		// task_run_ci_habit (model.RunCIHabit).
 		"narrow_test_before_push",
 		"narrow_test_before_fix_push",

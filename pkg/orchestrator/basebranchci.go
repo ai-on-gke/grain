@@ -378,6 +378,15 @@ func reconcileBaseBranchCI(ctx context.Context, deps Deps, now time.Time) error 
 			}
 			continue
 		}
+		if disabled, mode, err := repoExplicitlyDisablesGrainCI(ctx, deps.Store, row.Repo); err != nil {
+			errs = append(errs, err)
+			continue
+		} else if disabled {
+			if err := standDownBaseBranchCIWithReason(ctx, deps, row, cancelReasonForCIMode(mode), now); err != nil {
+				errs = append(errs, err)
+			}
+			continue
+		}
 		if err := reconcileOneBaseBranchCI(ctx, deps, row, now); err != nil {
 			errs = append(errs, err)
 		}
@@ -763,7 +772,7 @@ func collectBaseBranchCI(ctx context.Context, deps Deps, row model.BaseBranchCI,
 		// unjudged for ever because of it is the same dead end (task 285).
 		// It is retried after the same ciRetryDelay as grain's own.
 		row.Conclusion = string(ci.ConclusionErrored)
-		if run.CancelledBy == ci.CancelByOperator {
+		if run.CancelledBy.ByHand() {
 			row.Detail = "a person stopped this run: " + ciDetail(run)
 		} else {
 			row.Detail = "grain stopped this run itself: " + ciDetail(run)
@@ -773,7 +782,7 @@ func collectBaseBranchCI(ctx context.Context, deps Deps, row model.BaseBranchCI,
 		// A failure whose every failing job failed on the deployment --
 		// a capability or credential grain could not hand over, a quota,
 		// a registry rate limit -- is an `infra` verdict, not a red tree
-		// (infraVerdict, docs/design/release-from-trunk.md RFT-2). While
+		// (infraVerdict, design/design/release-from-trunk.design.md RFT-2). While
 		// it has re-runs left it is recorded as errored, which holds no
 		// merge and earns no repair, and re-run like any other verdict
 		// about nothing (baseCIRetryDue). Once they are spent it stands
@@ -954,7 +963,7 @@ func branchTip(ctx context.Context, deps Deps, repo model.RepoRef, branch string
 	if deps.Client == nil {
 		return "", nil
 	}
-	head, err := deps.Client.GetBranchHead(repo.Owner, repo.Name, branch)
+	head, err := deps.Client.GetBranchHead(repo.StoredOwner(), repo.Name, branch)
 	if err != nil {
 		return "", fmt.Errorf("orchestrator: reading %s's head on %s: %w", branch, repo, err)
 	}
@@ -1258,7 +1267,7 @@ func baseBranchCIWanted(ctx context.Context, store *model.Store,
 // errored, since a daemon restart or an upgrade killing the run that was
 // judging `main` is a verdict about nothing and used to leave the branch
 // unjudged until somebody happened to merge again (grain/task-471). That
-// includes a run an operator cancelled (ci.CancelByOperator): for a while
+// includes a run somebody cancelled (CancelledBy.ByHand): for a while
 // it was left alone, which left a branch whose wedged run somebody stopped
 // unjudged for good (task 285).
 //
@@ -2078,7 +2087,7 @@ func fileBaseBranchRepair(ctx context.Context, deps Deps, row model.BaseBranchCI
 	}
 	if !grainci.Granted(grants) {
 		grants = append(grants, model.Grant{
-			Capability: grainci.CapabilityName,
+			Capability: grainci.Grant,
 			Via:        model.GrantByGrain,
 		})
 	}
@@ -2119,6 +2128,7 @@ func fileBaseBranchRepair(ctx context.Context, deps Deps, row model.BaseBranchCI
 	// but it is that task's work being fixed with that task's access.
 	if merged != nil {
 		model.InheritRequester(&repair, *merged)
+		model.InheritContext(&repair, *merged)
 	}
 	if err := deps.Store.PutTask(ctx, repair); err != nil {
 		return fmt.Errorf("orchestrator: filing the repair of %s %s: %w", repo, row.Branch, err)

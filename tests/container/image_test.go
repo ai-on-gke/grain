@@ -71,7 +71,7 @@ func TestTheImageCarriesEveryBinaryTheDaemonShellsOutTo(t *testing.T) {
 //
 // agy updates its own binary in the background during an ordinary run --
 // one dispatch-shaped exec of the pinned release replaced a writable copy
-// seven seconds later (docs/hand-runs/2026-09-17-agy-self-update.md) --
+// seven seconds later (the 2026-09-17 agy-self-update hand run) --
 // which would make the Dockerfile's verified `AGY_CLI_SHA256_AMD64`, the
 // `agy --version` check at the end of that install, and every measured
 // fact in pkg/agent/antigravity claims about a release this image stops
@@ -129,7 +129,7 @@ func TestTheImageNamesTheSandboxContainerItExpects(t *testing.T) {
 	requireImage(t)
 	out := strings.TrimSpace(docker(t, "run", "--rm", image, "sandbox-image"))
 
-	if !strings.Contains(out, "/guest:") {
+	if !strings.Contains(out, "/sandbox:") {
 		t.Fatalf("sandbox-image printed %q", out)
 	}
 	// A bare `make image` leaves the source default (the tag CI keeps
@@ -265,10 +265,11 @@ echo source-readable`
 }
 
 // sourceExportMaxMB is what that tree may weigh. grain's tracked source
-// is ~27MB, so this is roughly five times the room it needs; raise it
-// when the repository honestly grows into it, and keep
+// is ~118MB (2026-11-01), so this is roughly twice the room it needs
+// while the gigabytes of a leaked build cache still fail; raise it when
+// the repository honestly grows into it, and keep
 // scripts/export-source.sh's own ceiling in step.
-const sourceExportMaxMB = 128
+const sourceExportMaxMB = 256
 
 // ...and it carries nothing else.
 //

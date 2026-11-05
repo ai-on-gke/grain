@@ -903,3 +903,151 @@ func TestSharedGateStuckExceptionAdmitsAtMostOneJobOverBudget(t *testing.T) {
 	releaseFirst()
 	second.admitted(t, "second stuck job after first releases")()
 }
+
+// Unrelated sandboxes starting and finishing in the shared ledger wake every
+// waiting CI job and change both live commitments and Ledger.Describe's
+// "held by ..." breakdown. The UI callback (GateRequest.Wait) receives each
+// fresh snapshot, while the daemon log emits one line per underlying reason
+// and names which job is waiting.
+func TestSharedGateDeduplicatesWaitingLogsAcrossLedgerChanges(t *testing.T) {
+	ledger := &model.Ledger{}
+	clock := newTestClock()
+	budget := model.Budget{
+		Host:             model.Commitment{CPUs: 32, MemoryMB: 64 * 1024, DiskGB: 200},
+		CPUOvercommit:    1,
+		MemoryOvercommit: 1,
+		DiskOvercommit:   1,
+	}
+
+	var mu sync.Mutex
+	var logged []string
+	gate := &SharedGate{
+		Budget: func() model.Budget { return budget },
+		Ledger: func() *model.Ledger { return ledger },
+		Now:    clock.Now,
+		Poll:   time.Hour, // rely strictly on ledgerWake notifications
+		Log: func(format string, args ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			logged = append(logged, fmt.Sprintf(format, args...))
+		},
+	}
+
+	// Hold 170 GiB of the 200 GiB disk budget across two agent sandboxes so a
+	// 40 GiB CI job waits on disk while CPU and memory have plenty of room.
+	relA1 := ledger.Charge(model.PoolAgent, "agent-1", model.Commitment{CPUs: 4, MemoryMB: 8 * 1024, DiskGB: 150})
+	defer relA1()
+	relA2 := ledger.Charge(model.PoolAgent, "agent-2", model.Commitment{CPUs: 4, MemoryMB: 8 * 1024, DiskGB: 20})
+	defer relA2()
+
+	jobWant := model.Commitment{CPUs: 4, MemoryMB: 16 * 1024, DiskGB: 40}
+	waiter := queue(t, gate, GateRequest{
+		Job:  "ai-on-gke/grain/r-42/go",
+		Want: jobWant,
+	})
+	if why := waiter.heldBy(t, "disk:"); !strings.Contains(why, "2 agent sandboxes") {
+		t.Fatalf("initial wait should include live ledger breakdown, got %q", why)
+	}
+
+	// Start and finish unrelated sandboxes in the ledger that alter both live
+	// disk/CPU/memory totals and the "held by ..." pool breakdown, without
+	// freeing enough disk for jobWant.
+	relA3 := ledger.Charge(model.PoolAgent, "agent-3", model.Commitment{CPUs: 2, MemoryMB: 4 * 1024, DiskGB: 10})
+	waiter.heldBy(t, "3 agent sandboxes")
+	relA3()
+	waiter.heldBy(t, "2 agent sandboxes")
+
+	relPersist := ledger.Charge(model.PoolPersistent, "persist-1", model.Commitment{CPUs: 2, MemoryMB: 4 * 1024, DiskGB: 15})
+	waiter.heldBy(t, "persistent sandbox")
+
+	// Cross ReserveAfter so the waiter transitions from roomWait to holeWait on
+	// the same disk dimension; the UI banner updates, while daemon log stays quiet.
+	clock.advance(2 * DefaultReserveAfter)
+	relPersist()
+	waiter.heldBy(t, "hole big enough")
+
+	// Now shift the bottleneck to a genuinely different dimension (memory):
+	// occupy memory with another agent run and release agent-2's 20 GiB disk.
+	relMem := ledger.Charge(model.PoolAgent, "agent-mem", model.Commitment{CPUs: 4, MemoryMB: 48 * 1024})
+	relA2()
+	waiter.heldBy(t, "memory:")
+
+	// Release memory blocker so the job is admitted.
+	relMem()
+	waiter.admitted(t, "CI job once both disk and memory clear")()
+
+	mu.Lock()
+	defer mu.Unlock()
+	var waitingLines []string
+	for _, line := range logged {
+		if strings.Contains(line, "is waiting --") {
+			waitingLines = append(waitingLines, line)
+		}
+	}
+	if len(waitingLines) != 2 {
+		t.Fatalf("expected 2 waiting log lines (once for disk, once for memory), got %d:\n%s",
+			len(waitingLines), strings.Join(logged, "\n"))
+	}
+	const wantPrefix = "ci: job ai-on-gke/grain/r-42/go is waiting -- "
+	for i, line := range waitingLines {
+		if !strings.HasPrefix(line, wantPrefix) {
+			t.Errorf("waiting line %d = %q, want prefix %q", i, line, wantPrefix)
+		}
+	}
+	if !strings.Contains(waitingLines[0], "disk:") {
+		t.Errorf("first waiting line should report disk shortage, got %q", waitingLines[0])
+	}
+	if !strings.Contains(waitingLines[1], "memory:") {
+		t.Errorf("second waiting line should report memory shortage, got %q", waitingLines[1])
+	}
+}
+
+func TestEngineIncludesRepoRunAndJobInGateWaitingLogs(t *testing.T) {
+	var limit atomic.Int64
+	var mu sync.Mutex
+	var logged []string
+	gate := &SharedGate{
+		Limit: func() int { return int(limit.Load()) },
+		Poll:  time.Millisecond,
+		Log: func(format string, args ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			logged = append(logged, fmt.Sprintf(format, args...))
+		},
+	}
+	plan := planFor(t, Request{Repo: "ai-on-gke/grain", Ref: "main", Event: EventPush}, map[string]string{
+		".grain/workflows/tests.yml": "on: push\njobs:\n  unit:\n    steps:\n      - run: true\n",
+	})
+	engine := &Engine{
+		Sandboxes: &fakeSandboxes{},
+		Jobs:      gate,
+	}
+
+	waits := make(chan JobRun, 4)
+	done := make(chan Run, 1)
+	go func() {
+		done <- engine.Run(context.Background(), "run-99", plan, func(job JobRun) {
+			if job.Activity != "" {
+				signal(waits, job)
+			}
+		})
+	}()
+	awaitSignal(t, waits, "the job never reported waiting at the gate")
+	limit.Store(1)
+	if run := awaitSignal(t, done, "the run never completed"); run.Conclusion != ConclusionSuccess {
+		t.Fatalf("run conclusion = %q (%s), want success", run.Conclusion, run.Error)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	const wantPrefix = "ci: job ai-on-gke/grain/run-99/unit is waiting -- "
+	found := false
+	for _, line := range logged {
+		if strings.HasPrefix(line, wantPrefix) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected log line starting with %q, got:\n%s", wantPrefix, strings.Join(logged, "\n"))
+	}
+}

@@ -90,6 +90,15 @@ type Store struct {
 	commentMu    sync.Mutex
 	commentAdded map[string]chan struct{}
 
+	// changed is the channel Changed handed out, closed (and replaced)
+	// by the next write transaction that commits through this Store:
+	// the in-process broadcast GET /api/tasks/wait holds its callers on,
+	// so a waiter re-reads what it waits on once per change rather than
+	// polling the database on a timer of its own. Process-local, as
+	// commentAdded is.
+	changedMu sync.Mutex
+	changed   chan struct{}
+
 	// SettingsRepo is the deployment's own state repository, whose merged
 	// changes the daemon applies to itself on its next tick
 	// (staterepo.Apply) -- which is why the security hold judges a pull
@@ -441,7 +450,30 @@ func (s *Store) writeOnce(ctx context.Context, fn func(*sql.Tx) error) error {
 		return err
 	}
 	s.commits.Add(1)
+	s.signalChanged()
 	return nil
+}
+
+// Changed returns a channel closed the next time any write transaction
+// commits through this Store -- a task, its observation, a comment, a CI
+// run. Take the channel before reading what is waited on, so a commit
+// landing between the read and the wait is not missed.
+func (s *Store) Changed() <-chan struct{} {
+	s.changedMu.Lock()
+	defer s.changedMu.Unlock()
+	if s.changed == nil {
+		s.changed = make(chan struct{})
+	}
+	return s.changed
+}
+
+func (s *Store) signalChanged() {
+	s.changedMu.Lock()
+	defer s.changedMu.Unlock()
+	if s.changed != nil {
+		close(s.changed)
+		s.changed = nil
+	}
 }
 
 // isSerializationFailure reports whether the database is telling us this
@@ -533,6 +565,14 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM `task` WHERE `id` = ?", t.ID).Scan(&existing); err != nil {
 		return err
 	}
+	var prevState State
+	if existing > 0 {
+		st, _, err := taskStateTx(ctx, tx, t.ID)
+		if err != nil {
+			return err
+		}
+		prevState = st
+	}
 	if t.Branch == "" {
 		branch, err := branchForTask(ctx, tx, t.ID, t.Title)
 		if err != nil {
@@ -548,6 +588,12 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 	// task whose operator has just added the grant it was missing would go
 	// on displaying the wait for as long as the deployment stayed busy.
 	if err := invalidateStaleGrantWait(ctx, tx, t); err != nil {
+		return err
+	}
+	// Who changed auto-merge, and a declined task's kept off against a
+	// write that has not lifted the mark (task_auto_merge.go).
+	autoMergeEvent, err := guardAutoMerge(ctx, tx, &t)
+	if err != nil {
 		return err
 	}
 
@@ -567,23 +613,29 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 
 	oActor, oBehalf := t.Origin.Attribution.Actor, t.Origin.Attribution.OnBehalfOf
 	var aActorKind, aActorID, aBehalfKind, aBehalfID any
+	var aActorSource, aBehalfSource string
 	if t.Approval != nil {
-		aActorKind, aActorID = string(t.Approval.Actor.Kind), t.Approval.Actor.ID
+		aActorKind, aActorID, aActorSource = string(t.Approval.Actor.Kind), t.Approval.Actor.ID, string(t.Approval.Actor.Source)
 		if b := t.Approval.OnBehalfOf; b != nil {
-			aBehalfKind, aBehalfID = string(b.Kind), b.ID
+			aBehalfKind, aBehalfID, aBehalfSource = string(b.Kind), b.ID, string(b.Source)
 		}
 	}
 	var targetOwner, targetName any
 	if t.Target != nil {
 		targetOwner, targetName = t.Target.StoredOwner(), t.Target.Name
 	}
+	priority := t.Priority
+	if priority == 0 {
+		priority = DefaultTaskPriority
+	}
 	if _, err := tx.ExecContext(ctx, `REPLACE INTO `+"`task`"+` (
   `+"`id`, `branch`, `intent`, `title`, `body`"+`,
   `+"`origin_actor_kind`, `origin_actor_id`, `origin_behalf_kind`, `origin_behalf_id`, `origin_reason`"+`,
   `+"`approval_actor_kind`, `approval_actor_id`, `approval_behalf_kind`, `approval_behalf_id`, `approved_at`, `deferred_at`, `deferred_until`, `undeferred_at`"+`,
   `+"`target_owner`, `target_name`, `binding`, `base`, `folder`"+`,
-  `+"`auto_merge`, `auto_approve_proposals`, `created_at`, `order_key`, `sandbox_cpus`, `sandbox_memory_mb`, `sandbox_disk_gb`, `interactive`, `agent_framework`, `agent_backend_id`, `agent_model`, `prompt_extension`, `review_template_id`, `network_access`, `nothing_needed_action`, `creator`, `time_zone`, `issue`, `no_port`, `agent_model_source`, `origin_ref`, `resume_on_deadline`, `change_target_kind`, `change_target_spec`, `reviewers`"+`
-) VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  `+"`auto_merge`, `auto_approve_proposals`, `created_at`, `order_key`, `sandbox_cpus`, `sandbox_memory_mb`, `sandbox_disk_gb`, `interactive`, `agent_framework`, `agent_backend_id`, `agent_model`, `prompt_extension`, `review_template_id`, `network_access`, `nothing_needed_action`, `creator`, `time_zone`, `issue`, `no_port`, `agent_model_source`, `origin_ref`, `resume_on_deadline`, `change_target_kind`, `change_target_spec`, `reviewers`, `priority`, `keep_running`"+`,
+  `+"`origin_actor_source`, `origin_behalf_source`, `approval_actor_source`, `approval_behalf_source`, `filed_via`"+`
+) VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?)`,
 		t.ID, t.Branch, string(t.Intent), t.Title, t.Body,
 		string(oActor.Kind), oActor.ID, kindOf(oBehalf), idOf(oBehalf), string(t.Origin.Reason),
 		aActorKind, aActorID, aBehalfKind, aBehalfID, timeOf(t.ApprovedAt), timeOf(t.DeferredAt), timeOf(t.DeferredUntil),
@@ -591,9 +643,15 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 		targetOwner, targetName, string(t.Binding), nullable(t.Base), folderOf(t.Folder),
 		t.AutoMerge, t.AutoApproveProposals, timeOf(t.CreatedAt), t.OrderKey, t.SandboxCPUs, t.SandboxMemoryMB, t.SandboxDiskGB, t.Interactive,
 		t.AgentFramework, t.AgentBackendID, t.Model, t.PromptExtension, t.ReviewTemplateID, string(t.NetworkAccess), string(t.NothingNeededAction), t.Creator, t.TimeZone, t.Issue, t.NoPort, string(t.ModelSource), string(t.WorkOrigin), t.ResumeOnDeadline,
-		changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(), joinCSV(NormalizeReviewers(t.Reviewers)),
+		changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(), joinCSV(NormalizeReviewers(t.Reviewers)), priority, t.KeepRunning,
+		string(oActor.Source), sourceOf(oBehalf), aActorSource, aBehalfSource, t.FiledVia,
 	); err != nil {
 		return fmt.Errorf("writing task %s: %w", t.ID, err)
+	}
+	if autoMergeEvent != nil {
+		if _, err := insertTaskEvent(ctx, tx, *autoMergeEvent); err != nil {
+			return fmt.Errorf("recording %s's auto-merge change: %w", t.ID, err)
+		}
 	}
 
 	for _, table := range []string{"task_read", "task_write", "task_filed_template", "task_grant", "task_link", "task_tag", "task_custom_field"} {
@@ -679,7 +737,22 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 			}
 		}
 	}
-	return nil
+	var eventAt time.Time
+	if t.CreatedAt != nil {
+		eventAt = *t.CreatedAt
+	}
+	eventActor := eventActorOr(ctx, t.Origin.Attribution)
+	if existing > 0 {
+		eventAt = time.Now()
+		if a, ok := EventActorFromContext(ctx); ok {
+			eventActor = a
+		} else if prevState == StateProposed && t.Approval != nil {
+			eventActor = *t.Approval
+		} else {
+			eventActor = eventActorOrGrain(ctx)
+		}
+	}
+	return recordTaskStateChangeTx(ctx, tx, t.ID, prevState, eventAt, eventActor)
 }
 
 // invalidateStaleGrantWait drops t's admission wait when this write
@@ -820,14 +893,50 @@ func newTaskID(ctx context.Context, tx *sql.Tx) (string, error) {
 // question needs, since Observation.PendingQuestionCommentID names one of
 // these.
 func (s *Store) AddComment(ctx context.Context, c Comment) (id int64, err error) {
+	id, _, err = s.AddCommentWithAttachments(ctx, c, nil)
+	return id, err
+}
+
+// AddCommentWithAttachments commits c and its attachments in a single
+// transaction and signals CommentAdded only after both are durable, so a
+// long-polling /messages reader woken by CommentAdded never observes the
+// comment before its attachments have been written.
+func (s *Store) AddCommentWithAttachments(ctx context.Context, c Comment, attachments []Attachment) (id int64, attachmentIDs []int64, err error) {
 	err = s.write(ctx, "comment on task "+c.TaskID, func(tx *sql.Tx) error {
 		id, err = addComment(ctx, tx, c)
-		return err
+		if err != nil {
+			return err
+		}
+		if len(attachments) > 0 {
+			attachmentIDs = make([]int64, len(attachments))
+			for i := range attachments {
+				attachments[i].TaskID = c.TaskID
+				attachments[i].CommentID = &id
+				attID, err := addAttachment(ctx, tx, attachments[i])
+				if err != nil {
+					return err
+				}
+				attachmentIDs[i] = attID
+			}
+		}
+		if c.Author.Actor.Kind == PrincipalAgent || (c.Author.OnBehalfOf != nil && c.Author.OnBehalfOf.Kind == PrincipalAgent) {
+			stamp := c.CreatedAt
+			if stamp.IsZero() {
+				stamp = time.Now()
+			}
+			if _, err := tx.ExecContext(ctx,
+				"UPDATE `task_run_startup` SET `first_turn_at` = COALESCE(`first_turn_at`, ?) "+
+					"WHERE `run_id` IN (SELECT `id` FROM `task_run` WHERE `task_id` = ? AND `finished_at` IS NULL AND `agent_started_at` IS NOT NULL)",
+				stamp.UTC(), c.TaskID); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err == nil {
 		s.signalCommentAdded(c.TaskID)
 	}
-	return id, err
+	return id, attachmentIDs, err
 }
 
 // CommentAdded returns a channel closed the next time AddComment commits
@@ -871,15 +980,19 @@ func addComment(ctx context.Context, tx *sql.Tx, c Comment) (int64, error) {
 	behalf := c.Author.OnBehalfOf
 	res, err := tx.ExecContext(ctx, "INSERT INTO `task_comment` ("+
 		"`task_id`, `author_kind`, `author_id`, `author_behalf_kind`, `author_behalf_id`, "+
-		"`body`, `created_at`, `handover`, `summary`) VALUES (?,?,?,?,?,?,?,?,?)",
+		"`body`, `created_at`, `handover`, `summary`, `author_source`, `author_behalf_source`, `filed_via`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
 		c.TaskID, string(c.Author.Actor.Kind), c.Author.Actor.ID,
-		kindOf(behalf), idOf(behalf), c.Body, c.CreatedAt.UTC(), c.Handover, c.Summary)
+		kindOf(behalf), idOf(behalf), c.Body, c.CreatedAt.UTC(), c.Handover, c.Summary,
+		string(c.Author.Actor.Source), sourceOf(behalf), c.FiledVia)
 	if err != nil {
 		return 0, fmt.Errorf("commenting on task %s: %w", c.TaskID, err)
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
 		return 0, fmt.Errorf("reading the new comment's id on task %s: %w", c.TaskID, err)
+	}
+	if err := recordCommentEventTx(ctx, tx, c, id); err != nil {
+		return 0, err
 	}
 	return id, nil
 }
@@ -898,7 +1011,8 @@ func (s *Store) Comments(ctx context.Context, taskID string) ([]Comment, error) 
 func (s *Store) CommentsAfter(ctx context.Context, taskID string, after int64) ([]Comment, error) {
 	rows, err := s.db.QueryContext(ctx, "SELECT "+
 		"`id`, `author_kind`, `author_id`, `author_behalf_kind`, `author_behalf_id`, "+
-		"`body`, `created_at`, `handover`, `summary` FROM `task_comment` WHERE `task_id` = ? AND `id` > ? ORDER BY `id`",
+		"`body`, `created_at`, `handover`, `summary`, `author_source`, `author_behalf_source`, `filed_via` "+
+		"FROM `task_comment` WHERE `task_id` = ? AND `id` > ? ORDER BY `id`",
 		taskID, after)
 	if err != nil {
 		return nil, fmt.Errorf("reading comments on task %s: %w", taskID, err)
@@ -908,16 +1022,16 @@ func (s *Store) CommentsAfter(ctx context.Context, taskID string, after int64) (
 	var out []Comment
 	for rows.Next() {
 		c := Comment{TaskID: taskID}
-		var actorKind, actorID string
+		var actorKind, actorID, actorSource, behalfSource string
 		var behalfKind, behalfID sql.NullString
 		if err := rows.Scan(&c.ID, &actorKind, &actorID, &behalfKind, &behalfID,
-			&c.Body, &c.CreatedAt, &c.Handover, &c.Summary); err != nil {
+			&c.Body, &c.CreatedAt, &c.Handover, &c.Summary, &actorSource, &behalfSource, &c.FiledVia); err != nil {
 			return nil, err
 		}
-		c.Author.Actor = Principal{Kind: PrincipalKind(actorKind), ID: actorID}
+		c.Author.Actor = Principal{Kind: PrincipalKind(actorKind), ID: actorID, Source: AuthSource(actorSource)}
 		if behalfKind.Valid {
 			c.Author.OnBehalfOf = &Principal{
-				Kind: PrincipalKind(behalfKind.String), ID: behalfID.String,
+				Kind: PrincipalKind(behalfKind.String), ID: behalfID.String, Source: AuthSource(behalfSource),
 			}
 		}
 		out = append(out, c)
@@ -948,6 +1062,9 @@ func (s *Store) AddAttachment(ctx context.Context, a Attachment) (id int64, err 
 		id, err = addAttachment(ctx, tx, a)
 		return err
 	})
+	if err == nil {
+		s.signalCommentAdded(a.TaskID)
+	}
 	return id, err
 }
 
@@ -992,9 +1109,23 @@ func (s *Store) AttachmentMetas(ctx context.Context, taskID string) ([]Attachmen
 // included -- what a dispatched run needs to materialize them into its
 // sandbox (orchestrator.placeAttachments).
 func (s *Store) Attachments(ctx context.Context, taskID string) ([]Attachment, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+
-		"`id`, `comment_id`, `filename`, `content_type`, `size`, `content`, `created_at` "+
-		"FROM `task_attachment` WHERE `task_id` = ? ORDER BY `id`", taskID)
+	return s.queryAttachments(ctx, taskID,
+		"SELECT `id`, `comment_id`, `filename`, `content_type`, `size`, `content`, `created_at` "+
+			"FROM `task_attachment` WHERE `task_id` = ? ORDER BY `id`", taskID)
+}
+
+// CommentAttachmentsAfter is Attachments for only the comment attachments
+// whose comment_id is greater than after: what an in-process continuation or
+// mid-run addendum poll needs to materialize newly arrived comment files
+// without reading earlier attachments back out of the store.
+func (s *Store) CommentAttachmentsAfter(ctx context.Context, taskID string, after int64) ([]Attachment, error) {
+	return s.queryAttachments(ctx, taskID,
+		"SELECT `id`, `comment_id`, `filename`, `content_type`, `size`, `content`, `created_at` "+
+			"FROM `task_attachment` WHERE `task_id` = ? AND `comment_id` > ? ORDER BY `id`", taskID, after)
+}
+
+func (s *Store) queryAttachments(ctx context.Context, taskID, query string, args ...any) ([]Attachment, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("reading attachments on task %s: %w", taskID, err)
 	}
@@ -1064,7 +1195,8 @@ const taskColumns = "`id`,`branch`,`intent`,`title`,`body`," +
 	"`approval_actor_kind`,`approval_actor_id`,`approval_behalf_kind`,`approval_behalf_id`,`approved_at`,`deferred_at`,`deferred_until`,`undeferred_at`," +
 	"`target_owner`,`target_name`,`binding`,`base`,`folder`," +
 	"`auto_merge`,`auto_approve_proposals`,`created_at`,`order_key`,`sandbox_cpus`,`sandbox_memory_mb`,`sandbox_disk_gb`,`interactive`," +
-	"`agent_framework`,`agent_backend_id`,`agent_model`,`prompt_extension`,`review_template_id`,`network_access`,`nothing_needed_action`,`creator`,`time_zone`,`issue`,`no_port`,`agent_model_source`,`origin_ref`,`resume_on_deadline`,`change_target_kind`,`change_target_spec`,`reviewers`"
+	"`agent_framework`,`agent_backend_id`,`agent_model`,`prompt_extension`,`review_template_id`,`network_access`,`nothing_needed_action`,`creator`,`time_zone`,`issue`,`no_port`,`agent_model_source`,`origin_ref`,`resume_on_deadline`,`change_target_kind`,`change_target_spec`,`reviewers`,`priority`,`keep_running`," +
+	"`origin_actor_source`,`origin_behalf_source`,`approval_actor_source`,`approval_behalf_source`,`filed_via`"
 
 // scanTask reads one task row. It takes the Scan method rather than a
 // *sql.Row or *sql.Rows so one function serves both the single-row and
@@ -1074,6 +1206,7 @@ func scanTask(scan func(...any) error) (Task, error) {
 	var intent, binding, networkAccess, nothingNeeded, modelSource, workOrigin string
 	var ctKind, ctSpec, reviewers string
 	var oaKind, oaID, oReason string
+	var oaSource, obSource, aaSource, abSource string
 	var obKind, obID, aaKind, aaID, abKind, abID sql.NullString
 	var tOwner, tName, base, folder sql.NullString
 	var createdAt, approvedAt, deferredAt, deferredUntil, undeferredAt sql.NullTime
@@ -1082,8 +1215,12 @@ func scanTask(scan func(...any) error) (Task, error) {
 		&aaKind, &aaID, &abKind, &abID, &approvedAt, &deferredAt, &deferredUntil, &undeferredAt,
 		&tOwner, &tName, &binding, &base, &folder,
 		&t.AutoMerge, &t.AutoApproveProposals, &createdAt, &t.OrderKey, &t.SandboxCPUs, &t.SandboxMemoryMB, &t.SandboxDiskGB, &t.Interactive,
-		&t.AgentFramework, &t.AgentBackendID, &t.Model, &t.PromptExtension, &t.ReviewTemplateID, &networkAccess, &nothingNeeded, &t.Creator, &t.TimeZone, &t.Issue, &t.NoPort, &modelSource, &workOrigin, &t.ResumeOnDeadline, &ctKind, &ctSpec, &reviewers); err != nil {
+		&t.AgentFramework, &t.AgentBackendID, &t.Model, &t.PromptExtension, &t.ReviewTemplateID, &networkAccess, &nothingNeeded, &t.Creator, &t.TimeZone, &t.Issue, &t.NoPort, &modelSource, &workOrigin, &t.ResumeOnDeadline, &ctKind, &ctSpec, &reviewers, &t.Priority, &t.KeepRunning,
+		&oaSource, &obSource, &aaSource, &abSource, &t.FiledVia); err != nil {
 		return Task{}, err
+	}
+	if t.Priority == 0 {
+		t.Priority = DefaultTaskPriority
 	}
 	t.ChangeTarget = ChangeTargetFromStored(ctKind, ctSpec)
 	t.Reviewers = splitCSV(reviewers)
@@ -1104,15 +1241,15 @@ func scanTask(scan func(...any) error) (Task, error) {
 	t.WorkOrigin = WorkOrigin(workOrigin)
 	t.Origin = Origin{
 		Attribution: Attribution{
-			Actor:      Principal{Kind: PrincipalKind(oaKind), ID: oaID},
-			OnBehalfOf: principalFrom(obKind, obID),
+			Actor:      Principal{Kind: PrincipalKind(oaKind), ID: oaID, Source: AuthSource(oaSource)},
+			OnBehalfOf: principalFrom(obKind, obID, obSource),
 		},
 		Reason: OriginReason(oReason),
 	}
 	if aaKind.Valid {
 		t.Approval = &Attribution{
-			Actor:      Principal{Kind: PrincipalKind(aaKind.String), ID: aaID.String},
-			OnBehalfOf: principalFrom(abKind, abID),
+			Actor:      Principal{Kind: PrincipalKind(aaKind.String), ID: aaID.String, Source: AuthSource(aaSource)},
+			OnBehalfOf: principalFrom(abKind, abID, abSource),
 		}
 	}
 	t.ApprovedAt = timePtr(approvedAt)
@@ -1156,9 +1293,20 @@ func scanTask(scan func(...any) error) (Task, error) {
 // practice (Store.OrderKeyForNewTask and Store.Reorder both space new
 // values away from their neighbours) but nothing enforces it, so a tie
 // still needs a stable, deterministic break.
+// fixesBaseBranchOrderSQL sorts tasks marked as fixing a base branch
+// (BaseRepairBranchTag, "base-ci-repair:%") ahead of ordinary tasks within
+// the same priority band.
+const fixesBaseBranchOrderSQL = "CASE WHEN EXISTS (SELECT 1 FROM `task_tag` AS `rt` WHERE `rt`.`task_id` = `t`.`id` AND `rt`.`tag` LIKE '" + baseRepairBranchTagPrefix + "%') THEN 0 ELSE 1 END"
+
+// taskQueueOrderSQL is the canonical dispatch and queue order: higher numeric
+// priority first, then base-branch repairs, then backlog order_key (which
+// encodes at_front, MoveToFrontOfBacklog, manual Reorder, and FIFO creation
+// order), then FIFO approval/creation timestamps and task ID as tie-breakers.
+const taskQueueOrderSQL = "`t`.`priority` DESC, " + fixesBaseBranchOrderSQL + ", `t`.`order_key`, COALESCE(`t`.`approved_at`, `t`.`created_at`), `t`.`created_at`, `t`.`id`"
+
 func (s *Store) ListTasks(ctx context.Context) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT "+taskColumns+" FROM `task` ORDER BY `order_key`, `id`")
+		"SELECT "+taskColumns+" FROM `task` AS `t` ORDER BY "+taskQueueOrderSQL)
 	if err != nil {
 		return nil, fmt.Errorf("listing tasks: %w", err)
 	}
@@ -1198,7 +1346,7 @@ type TaskRepo struct {
 // more on a store of a few thousand tasks (grain/task-3903).
 func (s *Store) TaskRepos(ctx context.Context) ([]TaskRepo, error) {
 	var out []TaskRepo
-	err := each(ctx, s.db, "SELECT `id`,`target_owner`,`target_name` FROM `task` ORDER BY `order_key`, `id`", nil,
+	err := each(ctx, s.db, "SELECT `t`.`id`,`t`.`target_owner`,`t`.`target_name` FROM `task` AS `t` ORDER BY "+taskQueueOrderSQL, nil,
 		func(rows *sql.Rows) error {
 			var t TaskRepo
 			var owner, name sql.NullString
@@ -1350,6 +1498,24 @@ func (s *Store) TurnsStopped(ctx context.Context) (map[string]bool, error) {
 	return out, err
 }
 
+// TurnStopped is TurnsStopped for one task: whether it is open and
+// parked on the comment a person posts when they stop its turn.
+func (s *Store) TurnStopped(ctx context.Context, taskID string) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx,
+		"SELECT 1 FROM `task_observation` `o` JOIN `task_comment` `c` "+
+			"ON `c`.`id` = `o`.`pending_question_comment_id` "+
+			"WHERE `o`.`task_id` = ? AND `o`.`closed_at` IS NULL AND `c`.`body` = ?",
+		taskID, TurnStoppedComment).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // PendingQuestionSummaries is the one-line summary of the question every
 // open task is parked on (Comment.Summary), keyed by task -- one query for
 // a whole list, as TurnsStopped is, so a row can say what it was asked
@@ -1372,6 +1538,25 @@ func (s *Store) PendingQuestionSummaries(ctx context.Context) (map[string]string
 			if summary != "" {
 				out[id] = summary
 			}
+			return nil
+		})
+	return out, err
+}
+
+// PendingAccessRequests is every open task parked on a request_access
+// call (Observation.PendingAccess) -- one query for a whole list, so a
+// row can say it is waiting on a grant rather than on an answer.
+func (s *Store) PendingAccessRequests(ctx context.Context) (map[string]bool, error) {
+	out := map[string]bool{}
+	err := each(ctx, s.db,
+		"SELECT `task_id` FROM `task_observation` WHERE `pending_access_request` IS NOT NULL "+
+			"AND `pending_access_request` <> '' AND `pending_question_comment_id` IS NOT NULL AND `closed_at` IS NULL", nil,
+		func(rows *sql.Rows) error {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			out[id] = true
 			return nil
 		})
 	return out, err
@@ -1606,6 +1791,26 @@ func (s *Store) AdvanceDelivered(ctx context.Context, taskID string, through int
 	})
 }
 
+// AdvanceDeliveredFrom is AdvanceDelivered for a run that has just
+// finished a turn, through the last comment its prompt held -- 0 when
+// it held none, which is a delivered mark of its own: the run was shown
+// nothing, so every person's comment on the task is one it has not
+// seen. Without it a chat filed with only a body has no mark after its
+// first turn, and a message posted while that turn wrote its answer is
+// read as answered (undeliveredHumanComment). A mark already recorded is
+// never moved back.
+func (s *Store) AdvanceDeliveredFrom(ctx context.Context, taskID string, through int64, now time.Time) error {
+	if through > 0 {
+		return s.AdvanceDelivered(ctx, taskID, through, now)
+	}
+	return s.ObserveField(ctx, taskID, now, func(o *Observation) {
+		if o.DeliveredCommentID == nil {
+			zero := int64(0)
+			o.DeliveredCommentID = &zero
+		}
+	})
+}
+
 // SetSuspendedSession records the agent conversation this task's last
 // run left parked, or clears it -- the whole of the state
 // SuspendedSession describes, in one call, because it is one bit with
@@ -1646,11 +1851,22 @@ func (s *Store) Approve(ctx context.Context, taskID string, a Attribution, appro
 }
 
 func approve(ctx context.Context, tx *sql.Tx, taskID string, a Attribution, approvedAt time.Time) error {
-	_, err := tx.ExecContext(ctx,
+	prevState, ok, err := taskStateTx(ctx, tx, taskID)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
 		"UPDATE `task` SET `approval_actor_kind` = ?, `approval_actor_id` = ?, "+
-			"`approval_behalf_kind` = ?, `approval_behalf_id` = ?, `approved_at` = ? WHERE `id` = ?",
-		string(a.Actor.Kind), a.Actor.ID, kindOf(a.OnBehalfOf), idOf(a.OnBehalfOf), approvedAt.UTC(), taskID)
-	return err
+			"`approval_behalf_kind` = ?, `approval_behalf_id` = ?, `approved_at` = ?, "+
+			"`approval_actor_source` = ?, `approval_behalf_source` = ? WHERE `id` = ?",
+		string(a.Actor.Kind), a.Actor.ID, kindOf(a.OnBehalfOf), idOf(a.OnBehalfOf), approvedAt.UTC(),
+		string(a.Actor.Source), sourceOf(a.OnBehalfOf), taskID); err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	return recordTaskStateChangeTx(ctx, tx, taskID, prevState, approvedAt, eventActorOr(ctx, a))
 }
 
 // WithdrawApproval is approve's exact inverse, down to the columns it
@@ -1667,11 +1883,21 @@ func approve(ctx context.Context, tx *sql.Tx, taskID string, a Attribution, appr
 // task as having queued at an instant its approval no longer claims.
 func (s *Store) WithdrawApproval(ctx context.Context, taskID string) error {
 	return s.write(ctx, "withdraw approval from task "+taskID, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx,
+		prevState, ok, err := taskStateTx(ctx, tx, taskID)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
 			"UPDATE `task` SET `approval_actor_kind` = NULL, `approval_actor_id` = NULL, "+
-				"`approval_behalf_kind` = NULL, `approval_behalf_id` = NULL, `approved_at` = NULL "+
-				"WHERE `id` = ?", taskID)
-		return err
+				"`approval_behalf_kind` = NULL, `approval_behalf_id` = NULL, `approved_at` = NULL, "+
+				"`approval_actor_source` = '', `approval_behalf_source` = '' "+
+				"WHERE `id` = ?", taskID); err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		return recordTaskStateChangeTx(ctx, tx, taskID, prevState, time.Now(), eventActorOrGrain(ctx))
 	})
 }
 
@@ -1716,13 +1942,26 @@ func (s *Store) WithdrawApproval(ctx context.Context, taskID string) error {
 // place on the timeline for it.
 func (s *Store) SetDeferred(ctx context.Context, taskID string, deferredAt, deferredUntil *time.Time, now time.Time) error {
 	return s.write(ctx, "defer task "+taskID, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx,
+		prevState, ok, err := taskStateTx(ctx, tx, taskID)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
 			"UPDATE `task` SET "+
 				"`undeferred_at` = CASE WHEN ? IS NULL AND `deferred_at` IS NOT NULL THEN ? "+
 				"ELSE `undeferred_at` END, "+
 				"`deferred_at` = ?, `deferred_until` = ? WHERE `id` = ?",
-			timeOf(deferredAt), now.UTC(), timeOf(deferredAt), timeOf(deferredUntil), taskID)
-		return err
+			timeOf(deferredAt), now.UTC(), timeOf(deferredAt), timeOf(deferredUntil), taskID); err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		at := now
+		if deferredAt != nil && !deferredAt.IsZero() {
+			at = *deferredAt
+		}
+		return recordTaskStateChangeTx(ctx, tx, taskID, prevState, at, eventActorOrGrain(ctx))
 	})
 }
 
@@ -1784,6 +2023,30 @@ func observe(ctx context.Context, tx *sql.Tx, o Observation) error {
 	if session == nil {
 		session = &SuspendedSession{}
 	}
+	pendingConfigChange := any(nil)
+	if o.PendingConfigChange != nil {
+		data, err := json.Marshal(o.PendingConfigChange)
+		if err != nil {
+			return fmt.Errorf("writing pending config change of task %s: %w", o.TaskID, err)
+		}
+		pendingConfigChange = string(data)
+	}
+	pendingAccess := any(nil)
+	if o.PendingAccess != nil {
+		data, err := json.Marshal(o.PendingAccess)
+		if err != nil {
+			return fmt.Errorf("writing pending access request of task %s: %w", o.TaskID, err)
+		}
+		pendingAccess = string(data)
+	}
+	accessDecisions := any(nil)
+	if len(o.AccessDecisions) > 0 {
+		data, err := json.Marshal(o.AccessDecisions)
+		if err != nil {
+			return fmt.Errorf("writing access decisions of task %s: %w", o.TaskID, err)
+		}
+		accessDecisions = string(data)
+	}
 	sessionAt := any(nil)
 	if !session.At.IsZero() {
 		sessionAt = session.At.UTC()
@@ -1793,6 +2056,14 @@ func observe(ctx context.Context, tx *sql.Tx, o Observation) error {
 		o.StreakCount = streakCount
 		o.LastFailedAt = lastFailed
 		o.LastSucceededAt = lastSucceeded
+	}
+	prevState, hasPrev, err := taskStateTx(ctx, tx, o.TaskID)
+	if err != nil {
+		return err
+	}
+	prevObs, err := getObservation(ctx, tx, o.TaskID)
+	if err != nil {
+		return err
 	}
 	_, err = tx.ExecContext(ctx,
 		"REPLACE INTO `task_observation` (`task_id`,`closed_at`,`completed_at`,"+
@@ -1811,8 +2082,9 @@ func observe(ctx context.Context, tx *sql.Tx, o Observation) error {
 			"`suspended_session_at`,"+
 			"`force_merge_at`,`force_merge_reason`,`force_merge_by`,`force_merge_skipped`,`force_merge_head_sha`,"+
 			"`streak_count`,`last_failed_at`,`last_succeeded_at`,`delivered_comment_id`,"+
-			"`merge_queue_cancel_handoff_at`,`merge_queue_cancel_handoff_run`,`merge_queue_reason`"+
-			") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+			"`merge_queue_cancel_handoff_at`,`merge_queue_cancel_handoff_run`,`merge_queue_reason`,`pending_config_change`,"+
+			"`pending_access_request`,`access_decisions`"+
+			") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		o.TaskID, timeOf(o.ClosedAt), timeOf(o.CompletedAt),
 		int64Of(o.PendingQuestionCommentID), int64Of(o.BaselineCommentID), o.PendingSecret,
 		timeOf(o.MergeQueueBlockedAt), timeOf(o.MergeQueueRefreshedAt),
@@ -1832,8 +2104,12 @@ func observe(ctx context.Context, tx *sql.Tx, o Observation) error {
 		o.ForceMergeHeadSHA,
 		o.StreakCount, timeOf(o.LastFailedAt), timeOf(o.LastSucceededAt),
 		int64Of(o.DeliveredCommentID),
-		timeOf(o.MergeQueueCancelHandoffAt), o.MergeQueueCancelHandoffRun, o.MergeQueueReason)
-	return err
+		timeOf(o.MergeQueueCancelHandoffAt), o.MergeQueueCancelHandoffRun, o.MergeQueueReason,
+		pendingConfigChange, pendingAccess, accessDecisions)
+	if err != nil {
+		return err
+	}
+	return recordObservationEventsTx(ctx, tx, prevState, hasPrev, prevObs, o, eventActorOrGrain(ctx))
 }
 
 // GetObservation reads grain's observation row for taskID, nil with no
@@ -1861,7 +2137,8 @@ func getObservation(ctx context.Context, q querier, taskID string) (*Observation
 			"`suspended_session_at`,"+
 			"`force_merge_at`,`force_merge_reason`,`force_merge_by`,`force_merge_skipped`,`force_merge_head_sha`,"+
 			"`streak_count`,`last_failed_at`,`last_succeeded_at`,`delivered_comment_id`,"+
-			"`merge_queue_cancel_handoff_at`,`merge_queue_cancel_handoff_run`,`merge_queue_reason` "+
+			"`merge_queue_cancel_handoff_at`,`merge_queue_cancel_handoff_run`,`merge_queue_reason`,`pending_config_change`,"+
+			"`pending_access_request`,`access_decisions` "+
 			"FROM `task_observation` WHERE `task_id` = ?", taskID)
 	o := Observation{TaskID: taskID}
 	var closed, completed, blocked, refreshed, repaired, mergeQueueStateAt sql.NullTime
@@ -1903,6 +2180,7 @@ func getObservation(ctx context.Context, q querier, taskID string) (*Observation
 	// carries NULL there, which is the same "nothing pending" an empty
 	// string means (ensureTaskObservationPendingSecretColumn).
 	var pendingSecret sql.NullString
+	var pendingConfigChange, pendingAccess, accessDecisions sql.NullString
 	// The CI columns are NullString/NullTime for the same reason, and
 	// with more of it: every row written before
 	// ensureTaskObservationCIColumns ran carries NULL in all of them.
@@ -1937,7 +2215,8 @@ func getObservation(ctx context.Context, q querier, taskID string) (*Observation
 		&sessionToken, &sessionFramework, &sessionRunID, &sessionAt,
 		&forceMergeAt, &forceMergeReason, &forceMergeBy, &forceMergeSkipped, &forceMergeHeadSHA,
 		&streakCount, &lastFailedAt, &lastSucceededAt, &delivered,
-		&cancelHandoffAt, &cancelHandoffRun, &mergeQueueReason); err != nil {
+		&cancelHandoffAt, &cancelHandoffRun, &mergeQueueReason, &pendingConfigChange,
+		&pendingAccess, &accessDecisions); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -1982,6 +2261,25 @@ func getObservation(ctx context.Context, q querier, taskID string) (*Observation
 	o.PendingQuestionCommentID, o.BaselineCommentID = int64Ptr(pending), int64Ptr(baseline)
 	o.DeliveredCommentID = int64Ptr(delivered)
 	o.PendingSecret = pendingSecret.String
+	if pendingConfigChange.Valid && pendingConfigChange.String != "" {
+		var change PendingConfigChange
+		if err := json.Unmarshal([]byte(pendingConfigChange.String), &change); err != nil {
+			return nil, fmt.Errorf("reading pending config change of task %s: %w", taskID, err)
+		}
+		o.PendingConfigChange = &change
+	}
+	if pendingAccess.Valid && pendingAccess.String != "" {
+		var req PendingAccessRequest
+		if err := json.Unmarshal([]byte(pendingAccess.String), &req); err != nil {
+			return nil, fmt.Errorf("reading pending access request of task %s: %w", taskID, err)
+		}
+		o.PendingAccess = &req
+	}
+	if accessDecisions.Valid && accessDecisions.String != "" {
+		if err := json.Unmarshal([]byte(accessDecisions.String), &o.AccessDecisions); err != nil {
+			return nil, fmt.Errorf("reading access decisions of task %s: %w", taskID, err)
+		}
+	}
 	o.MergeQueueBlockedAt, o.MergeQueueRefreshedAt = timePtr(blocked), timePtr(refreshed)
 	o.MergeQueueRepairAt = timePtr(repaired)
 	o.MergeQueueState = mergeQueueState.String
@@ -2145,6 +2443,10 @@ func taskIsMerger(ctx context.Context, tx *sql.Tx, taskID string) (bool, error) 
 // specifically, the loud failure a second live run on one task should
 // produce instead of one run's row quietly clobbering the other's.
 func startRun(ctx context.Context, tx *sql.Tx, r Run) error {
+	prevState, hasPrev, err := taskStateTx(ctx, tx, r.TaskID)
+	if err != nil {
+		return err
+	}
 	// Admission has finished: the run row and the disappearance of its
 	// queued wait marker are one durable transition.
 	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_grant_wait` WHERE `task_id` = ?", r.TaskID); err != nil {
@@ -2203,7 +2505,10 @@ func startRun(ctx context.Context, tx *sql.Tx, r Run) error {
 			return err
 		}
 	}
-	return nil
+	if !hasPrev {
+		return nil
+	}
+	return recordTaskStateChangeTx(ctx, tx, r.TaskID, prevState, r.StartedAt, eventActorOrGrain(ctx))
 }
 
 func computeStreakForTask(ctx context.Context, q querier, taskID string, retryRequestedAt *time.Time) (int, *time.Time, *time.Time, error) {
@@ -2312,6 +2617,10 @@ func finishRunTx(ctx context.Context, tx *sql.Tx, runID string, at time.Time, ou
 	if err != nil {
 		return err
 	}
+	prevState, hasPrev, err := taskStateTx(ctx, tx, taskID)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx,
 		"UPDATE `task_run` SET `finished_at` = ?, `outcome` = ?, `detail` = ? WHERE `id` = ?",
 		at.UTC(), outcome, nullable(detail), runID); err != nil {
@@ -2327,14 +2636,27 @@ func finishRunTx(ctx context.Context, tx *sql.Tx, runID string, at time.Time, ou
 	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_relayed_call` WHERE `run_id` = ?", runID); err != nil {
 		return err
 	}
+	// Nor any wait time to carry into an adopting daemon's clock
+	// (RunWaitLedger).
+	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_wait_ledger` WHERE `run_id` = ?", runID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_run_sandbox_key` WHERE `run_id` = ?", runID); err != nil {
+		return err
+	}
 	if err := recordSuspensionTx(ctx, tx, runID, taskID, outcome, detail, at, susp); err != nil {
 		return err
 	}
 	if err := updateTaskStreakTx(ctx, tx, taskID); err != nil {
 		return err
 	}
-	_, err = settleRunNow(ctx, tx, runID, taskID)
-	return err
+	if _, err := settleRunNow(ctx, tx, runID, taskID); err != nil {
+		return err
+	}
+	if !hasPrev {
+		return nil
+	}
+	return recordTaskStateChangeTx(ctx, tx, taskID, prevState, at, eventActorOrGrain(ctx))
 }
 
 // SetRunOutcome overrides a run's outcome and detail after FinishRun has
@@ -2356,6 +2678,10 @@ func (s *Store) SetRunOutcome(ctx context.Context, runID, outcome, detail string
 		if err != nil {
 			return err
 		}
+		prevState, hasPrev, err := taskStateTx(ctx, tx, taskID)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx,
 			"UPDATE `task_run` SET `outcome` = ?, `detail` = ? WHERE `id` = ?",
 			outcome, nullable(detail), runID); err != nil {
@@ -2372,8 +2698,13 @@ func (s *Store) SetRunOutcome(ctx context.Context, runID, outcome, detail string
 		if err := updateTaskStreakTx(ctx, tx, taskID); err != nil {
 			return err
 		}
-		_, err = settleRunNow(ctx, tx, runID, taskID)
-		return err
+		if _, err := settleRunNow(ctx, tx, runID, taskID); err != nil {
+			return err
+		}
+		if !hasPrev {
+			return nil
+		}
+		return recordTaskStateChangeTx(ctx, tx, taskID, prevState, finished.Time, eventActorOrGrain(ctx))
 	})
 }
 
@@ -2418,6 +2749,38 @@ func (s *Store) SetRunSandbox(ctx context.Context, runID, sandbox string, target
 	})
 }
 
+// SetRunSandboxKeys records the sessionSandboxKey and sessionGrantsKey runID's
+// sandbox was built or reused under, so an adopting daemon after a restart
+// parks a warm session sandbox only under the exact isolation key it was
+// provisioned with.
+func (s *Store) SetRunSandboxKeys(ctx context.Context, runID, sandboxKey, grantsKey string) error {
+	return s.write(ctx, "set run "+runID+" sandbox keys", func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			"INSERT INTO `task_run_sandbox_key` (`run_id`, `sandbox_key`, `grants_key`) VALUES (?, ?, ?) "+
+				"ON CONFLICT (`run_id`) DO UPDATE SET `sandbox_key` = excluded.`sandbox_key`, `grants_key` = excluded.`grants_key`",
+			runID, sandboxKey, grantsKey)
+		return err
+	})
+}
+
+// RunSandboxKeys returns the sessionSandboxKey and sessionGrantsKey recorded
+// for runID, if any.
+func (s *Store) RunSandboxKeys(ctx context.Context, runID string) (sandboxKey, grantsKey string, ok bool, err error) {
+	if runID == "" {
+		return "", "", false, nil
+	}
+	err = s.db.QueryRowContext(ctx,
+		"SELECT `sandbox_key`, `grants_key` FROM `task_run_sandbox_key` WHERE `run_id` = ?",
+		runID).Scan(&sandboxKey, &grantsKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	return sandboxKey, grantsKey, true, nil
+}
+
 // SetRunAgentStarted records the moment a run's agent actually got its
 // first turn -- everything before it (a sandbox built, a repo cloned, a
 // capability minted) is this run's setup, and everything after it is the
@@ -2432,9 +2795,71 @@ func (s *Store) SetRunSandbox(ctx context.Context, runID, sandbox string, target
 // being measured.
 func (s *Store) SetRunAgentStarted(ctx context.Context, runID string, at time.Time) error {
 	return s.write(ctx, "set run "+runID+" agent start", func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE `task_run` SET `agent_started_at` = ? WHERE `id` = ?", at.UTC(), runID); err != nil {
+			return err
+		}
 		_, err := tx.ExecContext(ctx,
-			"UPDATE `task_run` SET `agent_started_at` = ? WHERE `id` = ?", at.UTC(), runID)
+			"UPDATE `task_run_startup` SET `sandbox_prepared_at` = COALESCE(`sandbox_prepared_at`, ?) WHERE `run_id` = ?",
+			at.UTC(), runID)
 		return err
+	})
+}
+
+// RecordRunStartup records or updates the per-phase startup timestamps for a
+// run in task_run_startup, preserving any non-null timestamps already recorded.
+func (s *Store) RecordRunStartup(ctx context.Context, st RunStartup) error {
+	return s.write(ctx, "record run "+st.RunID+" startup", func(tx *sql.Tx) error {
+		return upsertRunStartup(ctx, tx, st)
+	})
+}
+
+func upsertRunStartup(ctx context.Context, tx *sql.Tx, st RunStartup) error {
+	_, err := tx.ExecContext(ctx,
+		"INSERT INTO `task_run_startup` (`run_id`, `queued_at`, `sandbox_acquired_at`, `sandbox_prepared_at`, `first_turn_at`) "+
+			"VALUES (?, ?, ?, ?, ?) "+
+			"ON CONFLICT (`run_id`) DO UPDATE SET "+
+			"`queued_at` = COALESCE(`task_run_startup`.`queued_at`, excluded.`queued_at`), "+
+			"`sandbox_acquired_at` = COALESCE(`task_run_startup`.`sandbox_acquired_at`, excluded.`sandbox_acquired_at`), "+
+			"`sandbox_prepared_at` = COALESCE(`task_run_startup`.`sandbox_prepared_at`, excluded.`sandbox_prepared_at`), "+
+			"`first_turn_at` = COALESCE(`task_run_startup`.`first_turn_at`, excluded.`first_turn_at`)",
+		st.RunID, timeOf(st.QueuedAt), timeOf(st.SandboxAcquiredAt), timeOf(st.SandboxPreparedAt), timeOf(st.FirstTurnAt))
+	return err
+}
+
+// SetRunSandboxAcquired records when runID acquired its sandbox.
+func (s *Store) SetRunSandboxAcquired(ctx context.Context, runID string, at time.Time) error {
+	utc := at.UTC()
+	return s.RecordRunStartup(ctx, RunStartup{RunID: runID, SandboxAcquiredAt: &utc})
+}
+
+// SetRunSandboxPrepared records when runID finished preparing its sandbox.
+func (s *Store) SetRunSandboxPrepared(ctx context.Context, runID string, at time.Time) error {
+	utc := at.UTC()
+	return s.RecordRunStartup(ctx, RunStartup{RunID: runID, SandboxPreparedAt: &utc})
+}
+
+// SetRunFirstTurn records when runID's agent reached its first turn.
+func (s *Store) SetRunFirstTurn(ctx context.Context, runID string, at time.Time) error {
+	utc := at.UTC()
+	return s.RecordRunStartup(ctx, RunStartup{RunID: runID, FirstTurnAt: &utc})
+}
+
+// SetTaskFirstTurn records when taskID's currently live run reached its first turn.
+func (s *Store) SetTaskFirstTurn(ctx context.Context, taskID string, at time.Time) error {
+	utc := at.UTC()
+	return s.write(ctx, "set task "+taskID+" first turn", func(tx *sql.Tx) error {
+		var runID string
+		err := tx.QueryRowContext(ctx,
+			"SELECT `id` FROM `task_run` WHERE `task_id` = ? AND `finished_at` IS NULL",
+			taskID).Scan(&runID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return upsertRunStartup(ctx, tx, RunStartup{RunID: runID, FirstTurnAt: &utc})
 	})
 }
 
@@ -2650,6 +3075,14 @@ func (s *Store) SetTaskActivity(ctx context.Context, taskID, activity string, at
 			return err
 		}
 		live = n > 0
+		if live && activity != "" {
+			if _, err := tx.ExecContext(ctx,
+				"UPDATE `task_run_startup` SET `first_turn_at` = COALESCE(`first_turn_at`, ?) "+
+					"WHERE `run_id` IN (SELECT `id` FROM `task_run` WHERE `task_id` = ? AND `finished_at` IS NULL AND `agent_started_at` IS NOT NULL)",
+				at.UTC(), taskID); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	return live, err
@@ -2837,7 +3270,7 @@ func earlier(a, b *time.Time) *time.Time {
 func (s *Store) StateTimes(ctx context.Context) (map[string]StateTimes, error) {
 	out := map[string]StateTimes{}
 	err := each(ctx, s.db,
-		"SELECT `t`.`id`,`t`.`approved_at`,`t`.`undeferred_at`,"+
+		"SELECT `t`.`id`,`t`.`approved_at`,`t`.`undeferred_at`,`t`.`deferred_until`,"+
 			"`o`.`completed_at`,`o`.`retry_requested_at`,`o`.`run_now_at`,"+
 			"MAX(`r`.`finished_at`),`r`.`finished_at` "+
 			"FROM `task` AS `t` "+
@@ -2847,8 +3280,8 @@ func (s *Store) StateTimes(ctx context.Context) (map[string]StateTimes, error) {
 		func(rows *sql.Rows) error {
 			var id string
 			var max sql.NullString
-			var approved, undeferred, completed, retried, runNow, finished sql.NullTime
-			if err := rows.Scan(&id, &approved, &undeferred, &completed, &retried, &runNow, &max, &finished); err != nil {
+			var approved, undeferred, until, completed, retried, runNow, finished sql.NullTime
+			if err := rows.Scan(&id, &approved, &undeferred, &until, &completed, &retried, &runNow, &max, &finished); err != nil {
 				return err
 			}
 			out[id] = StateTimes{
@@ -2856,6 +3289,7 @@ func (s *Store) StateTimes(ctx context.Context) (map[string]StateTimes, error) {
 				RequeuedAt:        latest(timePtr(retried), timePtr(runNow), timePtr(undeferred)),
 				LastRunFinishedAt: timePtr(finished),
 				CompletedAt:       timePtr(completed),
+				DeferredUntil:     timePtr(until),
 			}
 			return nil
 		})
@@ -2956,16 +3390,21 @@ func (s *Store) Attempts(ctx context.Context, taskID string) (int, error) {
 func (s *Store) Runs(ctx context.Context, taskID string) ([]Run, error) {
 	var out []Run
 	err := each(ctx, s.db,
-		"SELECT `id`,`sandbox`,`unit`,`attempt`,`started_at`,`finished_at`,`outcome`,`detail`,"+
-			"`activity`,`activity_at`,`agent_started_at`,`suspend_kind`,`model`,`agent_framework` "+
-			"FROM `task_run` WHERE `task_id` = ? ORDER BY `attempt` ASC", taskID,
+		"SELECT `r`.`id`,`r`.`sandbox`,`r`.`unit`,`r`.`attempt`,`r`.`started_at`,`r`.`finished_at`,`r`.`outcome`,`r`.`detail`,"+
+			"`r`.`activity`,`r`.`activity_at`,`r`.`agent_started_at`,`r`.`suspend_kind`,`r`.`model`,`r`.`agent_framework`,"+
+			"`st`.`queued_at`,`st`.`sandbox_acquired_at`,`st`.`sandbox_prepared_at`,`st`.`first_turn_at` "+
+			"FROM `task_run` AS `r` "+
+			"LEFT JOIN `task_run_startup` AS `st` ON `st`.`run_id` = `r`.`id` "+
+			"WHERE `r`.`task_id` = ? ORDER BY `r`.`attempt` ASC", taskID,
 		func(rows *sql.Rows) error {
 			r := Run{TaskID: taskID}
 			var unit, outcome, detail, activity, suspended, runModel, runFramework sql.NullString
 			var finishedAt, activityAt, agentStartedAt sql.NullTime
+			var queuedAt, sandboxAcquiredAt, sandboxPreparedAt, firstTurnAt sql.NullTime
 			if err := rows.Scan(&r.ID, &r.Sandbox, &unit, &r.Attempt,
 				&r.StartedAt, &finishedAt, &outcome, &detail, &activity, &activityAt,
-				&agentStartedAt, &suspended, &runModel, &runFramework); err != nil {
+				&agentStartedAt, &suspended, &runModel, &runFramework,
+				&queuedAt, &sandboxAcquiredAt, &sandboxPreparedAt, &firstTurnAt); err != nil {
 				return err
 			}
 			r.Unit, r.Outcome, r.Detail = unit.String, outcome.String, detail.String
@@ -2978,6 +3417,10 @@ func (s *Store) Runs(ctx context.Context, taskID string) ([]Run, error) {
 			r.Activity, r.ActivityAt = activity.String, timePtr(activityAt)
 			r.AgentStartedAt = timePtr(agentStartedAt)
 			r.FinishedAt = timePtr(finishedAt)
+			r.QueuedAt = timePtr(queuedAt)
+			r.SandboxAcquiredAt = timePtr(sandboxAcquiredAt)
+			r.SandboxPreparedAt = timePtr(sandboxPreparedAt)
+			r.FirstTurnAt = timePtr(firstTurnAt)
 			out = append(out, r)
 			return nil
 		})
@@ -3316,7 +3759,7 @@ func (s *Store) Ready(ctx context.Context) ([]string, error) {
 	err := each(ctx, s.db,
 		"SELECT `r`.`task_id` FROM `task_ready` AS `r` "+
 			"JOIN `task` AS `t` ON `t`.`id` = `r`.`task_id` "+
-			"ORDER BY `t`.`order_key`, `r`.`task_id`",
+			"ORDER BY "+taskQueueOrderSQL,
 		nil,
 		func(rows *sql.Rows) error {
 			var id string
@@ -3417,7 +3860,7 @@ func (s *Store) ReadyTargets(ctx context.Context) ([]ReadyTarget, error) {
 	err := each(ctx, s.db,
 		"SELECT `r`.`task_id`, `t`.`target_owner`, `t`.`target_name` FROM `task_ready` AS `r` "+
 			"JOIN `task` AS `t` ON `t`.`id` = `r`.`task_id` "+
-			"ORDER BY `t`.`order_key`, `r`.`task_id`",
+			"ORDER BY "+taskQueueOrderSQL,
 		nil,
 		func(rows *sql.Rows) error {
 			var row ReadyTarget
@@ -3511,7 +3954,7 @@ func (s *Store) ReadyMergers(ctx context.Context) ([]string, error) {
 			"JOIN `task` AS `t` ON `t`.`id` = `r`.`task_id` "+
 			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `r`.`task_id` "+
 			"WHERE "+mergerTaskSQL+" "+
-			"ORDER BY `t`.`order_key`, `r`.`task_id`",
+			"ORDER BY "+taskQueueOrderSQL,
 		[]any{string(ReasonFix)},
 		func(rows *sql.Rows) error {
 			var id string
@@ -3538,7 +3981,7 @@ func (s *Store) ReadyPriorityDispatch(ctx context.Context) ([]string, error) {
 		"SELECT `r`.`task_id` FROM `task_ready` AS `r` "+
 			"JOIN `task` AS `t` ON `t`.`id` = `r`.`task_id` "+
 			"WHERE "+priorityDispatchTaskSQL+" "+
-			"ORDER BY `t`.`order_key`, `r`.`task_id`",
+			"ORDER BY "+taskQueueOrderSQL,
 		priorityDispatchArgs(),
 		func(rows *sql.Rows) error {
 			var id string
@@ -3608,6 +4051,15 @@ func (s *Store) OrderKeyForNewTask(ctx context.Context, atFront bool) (float64, 
 // rather than rejected. ids keep their relative order among themselves,
 // so dragging a multi-selection reorders it as a block rather than by id.
 //
+// The list sorts by priority and base-branch repair ahead of OrderKey
+// (taskQueueOrderSQL), and Reorder never changes either, so each moved
+// task is placed only against neighbours in its own slice of that order
+// (reorderBounds): a neighbour from another slice stands for "the head"
+// or "the tail" of this one, and a drop among another slice's tasks
+// takes the moved task as far that way as its own slice goes. Comparing
+// keys across slices is what used to invert the bounds at a priority
+// boundary and land the task on the wrong side (grain/task-2339).
+//
 // A neighbour named by afterID or beforeID that does not exist is an
 // error: both are read fresh from the store inside this call's own
 // transaction, so this can only mean the caller's own view was already
@@ -3629,26 +4081,227 @@ func (s *Store) Reorder(ctx context.Context, ids []string, afterID, beforeID *st
 		if err != nil {
 			return err
 		}
-		lower, upper, err := orderKeyBounds(ctx, tx, afterID, beforeID)
+		groups, err := groupByQueueSlice(ctx, tx, ordered)
 		if err != nil {
 			return err
 		}
-		if !orderKeysFitBetween(lower, upper, len(ordered)) {
+		bounds, fit, err := reorderBounds(ctx, tx, groups, afterID, beforeID)
+		if err != nil {
+			return err
+		}
+		if !fit {
 			if err := rebalanceOrderKeys(ctx, tx); err != nil {
 				return err
 			}
-			if lower, upper, err = orderKeyBounds(ctx, tx, afterID, beforeID); err != nil {
+			if bounds, _, err = reorderBounds(ctx, tx, groups, afterID, beforeID); err != nil {
 				return err
 			}
 		}
-		for i, key := range splitOrderKeys(lower, upper, len(ordered)) {
-			if _, err := tx.ExecContext(ctx,
-				"UPDATE `task` SET `order_key` = ? WHERE `id` = ?", key, ordered[i]); err != nil {
-				return err
+		for i, g := range groups {
+			if bounds[i].skip {
+				continue
+			}
+			for j, key := range splitOrderKeys(bounds[i].lower, bounds[i].upper, len(g.ids)) {
+				if _, err := tx.ExecContext(ctx,
+					"UPDATE `task` SET `order_key` = ? WHERE `id` = ?", key, g.ids[j]); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
 	})
+}
+
+// queueSlice is the part of taskQueueOrderSQL that sorts ahead of
+// order_key: a task's numeric priority and whether it fixes a base
+// branch. OrderKey only orders tasks within one slice -- a P5 task with
+// a smaller key than a P9 one still lists below it -- so Reorder has to
+// place each moved task against neighbours in its own slice, never
+// against the keys of tasks from another one (grain/task-2339).
+type queueSlice struct {
+	priority int
+	fixes    bool
+}
+
+// ahead reports whether slice a lists ahead of slice b in
+// taskQueueOrderSQL.
+func (a queueSlice) ahead(b queueSlice) bool {
+	if a.priority != b.priority {
+		return a.priority > b.priority
+	}
+	return a.fixes && !b.fixes
+}
+
+// sliceGroup is the moved ids that share one queueSlice, in their own
+// current OrderKey order.
+type sliceGroup struct {
+	slice queueSlice
+	ids   []string
+}
+
+// sliceBounds is where one sliceGroup lands: strictly between lower and
+// upper (either may be nil), or nowhere at all when skip says the drop
+// gives that slice no position to take.
+type sliceBounds struct {
+	lower, upper *float64
+	skip         bool
+}
+
+func queueSliceOf(ctx context.Context, tx querier, taskID string) (queueSlice, float64, error) {
+	var s queueSlice
+	var k float64
+	var fixesOrder int
+	err := tx.QueryRowContext(ctx,
+		"SELECT `t`.`priority`, "+fixesBaseBranchOrderSQL+", `t`.`order_key` FROM `task` AS `t` WHERE `t`.`id` = ?",
+		taskID).Scan(&s.priority, &fixesOrder, &k)
+	if errors.Is(err, sql.ErrNoRows) {
+		return s, 0, fmt.Errorf("reordering: no such task %s", taskID)
+	}
+	s.fixes = fixesOrder == 0
+	return s, k, err
+}
+
+// groupByQueueSlice splits ordered (already in OrderKey order) by
+// queueSlice, keeping that order within each group.
+func groupByQueueSlice(ctx context.Context, tx querier, ordered []string) ([]sliceGroup, error) {
+	var groups []sliceGroup
+	for _, id := range ordered {
+		s, _, err := queueSliceOf(ctx, tx, id)
+		if err != nil {
+			return nil, err
+		}
+		found := false
+		for i := range groups {
+			if groups[i].slice == s {
+				groups[i].ids = append(groups[i].ids, id)
+				found = true
+				break
+			}
+		}
+		if !found {
+			groups = append(groups, sliceGroup{slice: s, ids: []string{id}})
+		}
+	}
+	return groups, nil
+}
+
+// reorderBounds resolves afterID/beforeID into each group's own bounds,
+// read inside Reorder's own transaction, never trusted from an earlier
+// read -- the same "re-read, never pin" discipline IsBlocked's own doc
+// comment argues for. fit is false when any group's bounds are too
+// close together (or, from a tie, not ordered at all) to split, which is
+// Reorder's signal to rebalance first.
+func reorderBounds(ctx context.Context, tx querier, groups []sliceGroup, afterID, beforeID *string) ([]sliceBounds, bool, error) {
+	type neighbour struct {
+		slice queueSlice
+		key   float64
+	}
+	var after, before *neighbour
+	if afterID != nil {
+		s, k, err := queueSliceOf(ctx, tx, *afterID)
+		if err != nil {
+			return nil, false, err
+		}
+		after = &neighbour{s, k}
+	}
+	if beforeID != nil {
+		s, k, err := queueSliceOf(ctx, tx, *beforeID)
+		if err != nil {
+			return nil, false, err
+		}
+		before = &neighbour{s, k}
+	}
+	moved := map[string]bool{}
+	for _, g := range groups {
+		for _, id := range g.ids {
+			moved[id] = true
+		}
+	}
+	bounds := make([]sliceBounds, len(groups))
+	fit := true
+	for i, g := range groups {
+		afterIn := after != nil && after.slice == g.slice
+		beforeIn := before != nil && before.slice == g.slice
+		var b sliceBounds
+		var err error
+		switch {
+		case afterIn && beforeIn:
+			b.lower, b.upper = &after.key, &before.key
+		case afterIn:
+			// The next task in this slice is in another one, so the drop
+			// is at the tail of this slice's visible run: just after
+			// afterID, and still ahead of any later task of this slice a
+			// filter is hiding.
+			b.lower = &after.key
+			b.upper, err = sliceKeyBeyond(ctx, tx, g.slice, moved, after.key, true)
+		case beforeIn:
+			// Dropped at the head of this slice's visible run, below a
+			// task from a slice listed ahead of it: just before beforeID.
+			b.upper = &before.key
+			b.lower, err = sliceKeyBeyond(ctx, tx, g.slice, moved, before.key, false)
+		case after == nil && before == nil:
+			// An empty list: nothing to place against.
+		case before != nil && before.slice.ahead(g.slice):
+			// Dropped among tasks this slice lists below: Reorder never
+			// changes a task's priority, so as far up as it can go.
+			b.upper, err = sliceExtreme(ctx, tx, g.slice, moved, "MIN")
+		case after != nil && g.slice.ahead(after.slice):
+			// Dropped among tasks this slice lists ahead of: as far down
+			// as it can go.
+			b.lower, err = sliceExtreme(ctx, tx, g.slice, moved, "MAX")
+		default:
+			// Dropped between the slices around this one, where it already
+			// sits: there is nothing in its own slice to move it past.
+			b.skip = true
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		if !b.skip && !orderKeysFitBetween(b.lower, b.upper, len(g.ids)) {
+			fit = false
+		}
+		bounds[i] = b
+	}
+	return bounds, fit, nil
+}
+
+// sliceKeyBeyond is the OrderKey of the nearest task in slice s (other
+// than the ones being moved) past key -- above it when up, below it
+// otherwise -- or nil when there is none.
+func sliceKeyBeyond(ctx context.Context, tx querier, s queueSlice, moved map[string]bool, key float64, up bool) (*float64, error) {
+	agg, cmp := "MIN", ">"
+	if !up {
+		agg, cmp = "MAX", "<"
+	}
+	return sliceAggregate(ctx, tx, s, moved, agg, "`t`.`order_key` "+cmp+" ?", key)
+}
+
+// sliceExtreme is the smallest ("MIN") or largest ("MAX") OrderKey in
+// slice s among the tasks not being moved, or nil when there are none.
+func sliceExtreme(ctx context.Context, tx querier, s queueSlice, moved map[string]bool, agg string) (*float64, error) {
+	return sliceAggregate(ctx, tx, s, moved, agg, "1 = 1")
+}
+
+func sliceAggregate(ctx context.Context, tx querier, s queueSlice, moved map[string]bool, agg, cond string, args ...any) (*float64, error) {
+	fixesOrder := 1
+	if s.fixes {
+		fixesOrder = 0
+	}
+	q := "SELECT " + agg + "(`t`.`order_key`) FROM `task` AS `t` WHERE `t`.`priority` = ? AND " +
+		fixesBaseBranchOrderSQL + " = ? AND " + cond
+	all := append([]any{s.priority, fixesOrder}, args...)
+	for id := range moved {
+		q += " AND `t`.`id` <> ?"
+		all = append(all, id)
+	}
+	var k sql.NullFloat64
+	if err := tx.QueryRowContext(ctx, q, all...).Scan(&k); err != nil {
+		return nil, err
+	}
+	if !k.Valid {
+		return nil, nil
+	}
+	return &k.Float64, nil
 }
 
 // MoveToFrontOfBacklog places ids at the front of the backlog: ahead of
@@ -3826,28 +4479,6 @@ func sortByOrderKey(ctx context.Context, tx querier, ids []string) ([]string, ma
 	return ordered, keys, nil
 }
 
-// orderKeyBounds resolves Reorder's afterID/beforeID to the OrderKey
-// values already in the store -- read inside Reorder's own transaction,
-// never trusted from an earlier read, the same "re-read, never pin"
-// discipline IsBlocked's own doc comment argues for.
-func orderKeyBounds(ctx context.Context, tx querier, afterID, beforeID *string) (lower, upper *float64, err error) {
-	if afterID != nil {
-		k, err := orderKeyOf(ctx, tx, *afterID)
-		if err != nil {
-			return nil, nil, err
-		}
-		lower = &k
-	}
-	if beforeID != nil {
-		k, err := orderKeyOf(ctx, tx, *beforeID)
-		if err != nil {
-			return nil, nil, err
-		}
-		upper = &k
-	}
-	return lower, upper, nil
-}
-
 func orderKeyOf(ctx context.Context, tx querier, taskID string) (float64, error) {
 	var k float64
 	err := tx.QueryRowContext(ctx, "SELECT `order_key` FROM `task` WHERE `id` = ?", taskID).Scan(&k)
@@ -3868,6 +4499,9 @@ func orderKeysFitBetween(lower, upper *float64, n int) bool {
 	if lower == nil || upper == nil {
 		return true
 	}
+	// An inverted or tied pair -- neighbours whose keys disagree with the
+	// order they list in -- leaves no room at all; the queue-ordered
+	// rebalance puts them back in line.
 	return (*upper-*lower)/float64(n+1) >= minOrderKeyGap
 }
 
@@ -3900,14 +4534,16 @@ func splitOrderKeys(lower, upper *float64, n int) []float64 {
 }
 
 // rebalanceOrderKeys renumbers every task's OrderKey, ascending and
-// spaced by orderKeySpacing, without changing their relative order --
+// spaced by orderKeySpacing, in taskQueueOrderSQL's own order -- so the
+// list keeps exactly the order it shows, and afterwards OrderKey agrees
+// with it across priority slices too, not only within one --
 // Reorder's own backstop against minOrderKeyGap, restoring room to split
 // between two neighbours that repeated drops have crowded together. It
 // runs inside Reorder's own transaction, so the renumbering and the move
 // that triggered it land together or not at all.
 func rebalanceOrderKeys(ctx context.Context, tx *sql.Tx) error {
 	var ids []string
-	if err := each(ctx, tx, "SELECT `id` FROM `task` ORDER BY `order_key`, `id`", nil,
+	if err := each(ctx, tx, "SELECT `t`.`id` FROM `task` AS `t` ORDER BY "+taskQueueOrderSQL, nil,
 		func(rows *sql.Rows) error {
 			var id string
 			if err := rows.Scan(&id); err != nil {
@@ -4204,6 +4840,23 @@ func (s *Store) GitScope(ctx context.Context, sandbox string) (target *RepoRef, 
 		return nil, nil, nil, fmt.Errorf("reading write targets of task %s: %w", taskID, err)
 	}
 
+	if target != nil && target.Owner != "" {
+		if rc, err := s.GetRepoConfig(ctx, *target); err == nil && rc != nil {
+			if up, cross, err := rc.PullRequestRepo(*target); err == nil && cross {
+				hasRead := false
+				for _, r := range reads {
+					if r.Same(up) {
+						hasRead = true
+						break
+					}
+				}
+				if !hasRead {
+					reads = append(reads, up)
+				}
+			}
+		}
+	}
+
 	return target, reads, writes, nil
 }
 
@@ -4266,7 +4919,7 @@ func (s *Store) GitPushFastForwardOnly(ctx context.Context, sandbox string) (boo
 }
 
 // GitPushAnyRef reports whether a sandbox's currently live run holds
-// GitPushAnyRefCapability, which lifts the one-branch rule GitPushBranch
+// GitPushAnyRefGrant (IsGitPushAnyRefGrant), which lifts the one-branch rule GitPushBranch
 // feeds: the git proxy then lets it update any ref of a repository it may
 // push. false, with a nil error, for a sandbox with nothing live.
 func (s *Store) GitPushAnyRef(ctx context.Context, sandbox string) (bool, error) {
@@ -4279,7 +4932,7 @@ func (s *Store) GitPushAnyRef(ctx context.Context, sandbox string) (bool, error)
 		return false, fmt.Errorf("reading grants of task %s: %w", taskID, err)
 	}
 	for _, g := range grants {
-		if g.Capability == GitPushAnyRefCapability {
+		if IsGitPushAnyRefGrant(g.Capability) {
 			return true, nil
 		}
 	}
@@ -4303,8 +4956,10 @@ type NamespaceScope struct {
 	MayReadSrc      bool
 	MayReadAllTasks bool
 	// TaskReadRepos are the repositories whose tasks the run may read
-	// under task:// without MayReadAllTasks: its task's target, reads
-	// and writes, and any api:tasks:read@owner/repo names.
+	// under task:// without MayReadAllTasks: the ones its
+	// api:tasks:read@owner/repo grants name, and nothing else. A task's
+	// own target, reads and writes are not among them -- a run with no
+	// grant reads only its own task.
 	TaskReadRepos     map[string]bool
 	MayReadFullConfig bool
 	MayReadAllMemory  bool
@@ -4387,15 +5042,12 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 	if target != nil {
 		taskRepo = target.String()
 		addRepo(taskRepo)
-		addTaskRepo(taskRepo)
 	}
 	for _, r := range reads {
 		addRepo(r.String())
-		addTaskRepo(r.String())
 	}
 	for _, w := range writes {
 		addRepo(w.String())
-		addTaskRepo(w.String())
 	}
 
 	cfgRepo := ConfigRepo()
@@ -4425,14 +5077,12 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		name := strings.TrimSpace(g.Capability)
 		grantNames = append(grantNames, name)
 		switch name {
-		case "grain-ci":
-			mayReadCI = true
 		case "self-debug":
 			mayReadCI = true
 			mayReadAllCI = true
 			mayReadSrc = true
 			// What self-debug opens and no more
-			// (docs/design/sandbox-first-agent-surface.md, and the
+			// (design/design/sandbox-first-agent-surface.design.md, and the
 			// tools pkg/mcp/toolnames.go gates on it): memory,
 			// issues and SQL each keep a grant of their own, as their
 			// MCP tools do. Health comes with its api:self-debug
@@ -4441,18 +5091,22 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 			mayReadFullConfig = true
 			mayReadMetrics = true
 			mayReadPipeline = true
-		case "grain-log":
+		case "grain-log", GrainJournalRef, GrainJournalGrant:
 			mayReadGrainLog = true
-		case "deployment-health":
+		case "deployment-health", GrainHealthRef, GrainHealthGrant:
 			mayReadHealth = true
 		case "bootstrap-playbooks":
 			mayReadPlaybooks = true
-		case "memory":
-			mayReadAllMemory = true
 		case "read-issues":
 			mayReadIssues = true
 		case "db-read", "db-write":
 			mayReadDB = true
+		}
+		if IsGrainSQLGrant(name) {
+			mayReadDB = true
+		}
+		if IsGrainCIGrant(name) {
+			mayReadCI = true
 		}
 		// An api grant limited to one repository is spelt
 		// api:<scope-or-preset>@owner/repo (ParseAPIGrant); a name that
@@ -4888,6 +5542,43 @@ func (s *Store) PruneOffTargetPullRequestLinks(ctx context.Context) ([]TaskPullR
 // openPullRequestLinks is OpenPullRequestLinks' query, split into the
 // links it returns and those it leaves out for being off target.
 func (s *Store) openPullRequestLinks(ctx context.Context) (kept, off []TaskPullRequestLink, err error) {
+	return s.pullRequestLinksWhere(ctx,
+		"JOIN `task_state` AS `st` ON `st`.`task_id` = `l`.`task_id` "+
+			"LEFT JOIN `task` AS `t` ON `t`.`id` = `l`.`task_id` "+
+			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `l`.`task_id` "+
+			"WHERE `l`.`kind` = ? AND (`st`.`state` IN (?, ?) OR ("+
+			"`o`.`merge_queue_repair_at` IS NOT NULL AND `o`.`completed_at` IS NULL "+
+			"AND `o`.`closed_at` IS NULL))",
+		string(LinkFixes), string(StateCompleted), string(StateAwaitingSubmit))
+}
+
+// ClosedUnsettledPullRequestLinks returns the fixes-links of every task
+// that closed at or after since while grain still had no word of its pull
+// request merging or closing (Observation.PrMergedAt and PrClosedAt both
+// unset) -- the pull requests OpenPullRequestLinks stops returning the
+// moment their task closes, and which can still merge afterwards: a
+// person who closes the task, resolves what the merge queue gave up on,
+// and merges the pull request by hand (task 2350's PR #47). The merge
+// queue never acts on these; orchestrator.syncClosedPullRequests only
+// reads them, to record the merge or close when it comes. since bounds
+// the list, so a task closed long ago over a pull request nobody will
+// ever merge is not read forever. Off-target links are left out, as
+// OpenPullRequestLinks leaves them out.
+func (s *Store) ClosedUnsettledPullRequestLinks(ctx context.Context, since time.Time) ([]TaskPullRequestLink, error) {
+	kept, _, err := s.pullRequestLinksWhere(ctx,
+		"JOIN `task_observation` AS `o` ON `o`.`task_id` = `l`.`task_id` "+
+			"LEFT JOIN `task` AS `t` ON `t`.`id` = `l`.`task_id` "+
+			"WHERE `l`.`kind` = ? AND `o`.`closed_at` IS NOT NULL AND `o`.`closed_at` >= ? "+
+			"AND `o`.`pr_merged_at` IS NULL AND `o`.`pr_closed_at` IS NULL",
+		string(LinkFixes), since.UTC())
+	return kept, err
+}
+
+// pullRequestLinksWhere is the query both of the above share: from, the
+// joins and WHERE clause over task_link AS l (which must join task AS t),
+// split into the links it returns and those it leaves out for being off
+// target.
+func (s *Store) pullRequestLinksWhere(ctx context.Context, from string, args ...any) (kept, off []TaskPullRequestLink, err error) {
 	type row struct {
 		link   TaskPullRequestLink
 		target *RepoRef
@@ -4895,13 +5586,8 @@ func (s *Store) openPullRequestLinks(ctx context.Context) (kept, off []TaskPullR
 	var rows []row
 	err = each(ctx, s.db,
 		"SELECT `l`.`task_id`, `l`.`target`, `t`.`target_owner`, `t`.`target_name` FROM `task_link` AS `l` "+
-			"JOIN `task_state` AS `st` ON `st`.`task_id` = `l`.`task_id` "+
-			"LEFT JOIN `task` AS `t` ON `t`.`id` = `l`.`task_id` "+
-			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `l`.`task_id` "+
-			"WHERE `l`.`kind` = ? AND (`st`.`state` IN (?, ?) OR ("+
-			"`o`.`merge_queue_repair_at` IS NOT NULL AND `o`.`completed_at` IS NULL "+
-			"AND `o`.`closed_at` IS NULL)) ORDER BY `l`.`task_id`",
-		[]any{string(LinkFixes), string(StateCompleted), string(StateAwaitingSubmit)},
+			from+" ORDER BY `l`.`task_id`",
+		args,
 		func(r *sql.Rows) error {
 			var l TaskPullRequestLink
 			var owner, name sql.NullString
@@ -4926,6 +5612,12 @@ func (s *Store) openPullRequestLinks(ctx context.Context) (kept, off []TaskPullR
 			// readers to report as they always have.
 			kept = append(kept, r.link)
 			continue
+		}
+		if rc, err := s.GetRepoConfig(ctx, *r.target); err == nil && rc != nil {
+			if up, cross, err := rc.PullRequestRepo(*r.target); err == nil && cross && ref.Repo.Same(up) {
+				kept = append(kept, r.link)
+				continue
+			}
 		}
 		// Rare -- only a pull request outside the task's own target
 		// gets here -- so its write targets are read one task at a
@@ -5004,7 +5696,7 @@ const configColumns = "`poll_interval_ms`,`max_workers`,`max_mergers`,`max_merge
 	"`k8s_privileged`,`k8s_network_policy`,`k8s_deployment`,`k8s_container`," +
 	"`mcp_servers`,`capability_policy`,`cli_run`,`sandbox_overcommit`,`base_ci_red_streak`," +
 	"`k8s_priority_class_interactive`,`k8s_priority_class_agent`,`k8s_priority_class_ci`,`sandbox_disk_overcommit`," +
-	"`auto_upgrade_channel`,`auto_upgrade_time`,`judgement_model`,`external_agent_api`,`sandbox_image_mirror`,`session_sandbox_idle_ttl_ms`"
+	"`auto_upgrade_channel`,`auto_upgrade_time`,`judgement_model`,`external_agent_api`,`sandbox_image_mirror`,`session_sandbox_idle_ttl_ms`,`settings_locked`,`new_task_form`,`auto_upgrade_on`,`owner_trust`,`auto_grant_context_reads`"
 
 func scanConfig(scan func(...any) error) (Config, error) {
 	var c Config
@@ -5028,6 +5720,9 @@ func scanConfig(scan func(...any) error) (Config, error) {
 	var k8sNodeSelector string
 	var mcpServers string
 	var capabilityPolicy string
+	var newTaskForm string
+	var ownerTrust string
+	var autoGrantContextReads string
 	var cliRun string
 	var sandboxOvercommit string
 	// The sign-in settings (password_auth_enabled, open_registration,
@@ -5063,7 +5758,7 @@ func scanConfig(scan func(...any) error) (Config, error) {
 		&c.K8sPrivileged, &c.K8sNetworkPolicy, &c.K8sDeployment, &c.K8sContainer,
 		&mcpServers, &capabilityPolicy, &cliRun, &sandboxOvercommit, &c.BaseCIRedStreak,
 		&c.K8sPriorityClassInteractive, &c.K8sPriorityClassAgent, &c.K8sPriorityClassCI, &c.SandboxDiskOvercommit,
-		&c.AutoUpgradeChannel, &c.AutoUpgradeTime, &c.JudgementModel, &c.ExternalAgentAPI, &c.SandboxImageMirror, &sessionIdleTTLMS); err != nil {
+		&c.AutoUpgradeChannel, &c.AutoUpgradeTime, &c.JudgementModel, &c.ExternalAgentAPI, &c.SandboxImageMirror, &sessionIdleTTLMS, &c.SettingsLocked, &newTaskForm, &c.AutoUpgradeOn, &ownerTrust, &autoGrantContextReads); err != nil {
 		return Config{}, err
 	}
 	backends, err := DecodeAgentBackends(agentBackends)
@@ -5088,6 +5783,15 @@ func scanConfig(scan func(...any) error) (Config, error) {
 	}
 	c.MCPServers = servers
 	if c.CapabilityPolicy, err = DecodeCapabilityPolicy(capabilityPolicy); err != nil {
+		return Config{}, err
+	}
+	if c.NewTaskForm, err = DecodeNewTaskForm(newTaskForm); err != nil {
+		return Config{}, err
+	}
+	if c.OwnerTrust, err = DecodeOwnerTrust(ownerTrust); err != nil {
+		return Config{}, err
+	}
+	if c.AutoGrantContextReads, err = DecodeAutoGrantContextReads(autoGrantContextReads); err != nil {
 		return Config{}, err
 	}
 	if c.CLIRun, err = DecodeCLIRun(cliRun); err != nil {
@@ -5164,6 +5868,14 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 	if err != nil {
 		return err
 	}
+	newTaskForm, err := EncodeNewTaskForm(c.NewTaskForm)
+	if err != nil {
+		return err
+	}
+	ownerTrust, err := EncodeOwnerTrust(c.OwnerTrust)
+	if err != nil {
+		return err
+	}
 	cliRun, err := EncodeCLIRun(c.CLIRun)
 	if err != nil {
 		return err
@@ -5172,8 +5884,12 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 	if err != nil {
 		return err
 	}
+	autoGrantContextReads, err := EncodeAutoGrantContextReads(c.AutoGrantContextReads)
+	if err != nil {
+		return err
+	}
 	_, err = tx.ExecContext(ctx,
-		"REPLACE INTO `grain_config` (`id`, "+configColumns+") VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		"REPLACE INTO `grain_config` (`id`, "+configColumns+") VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		c.PollInterval.Milliseconds(), c.MaxWorkers, c.MaxMergers, c.MaxMergesPerRepo, c.MergeBatchSize,
 		c.MergeGatherWindow.Milliseconds(), c.MaxCIJobs, c.MaxAgentTurns,
 		c.GitHubHost, c.GitHubInsecureHTTP, c.GCPProject, c.GCPServiceAccountEmail,
@@ -5209,7 +5925,7 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 		strings.TrimSpace(c.K8sPriorityClassCI), c.SandboxDiskOvercommit,
 		strings.TrimSpace(c.AutoUpgradeChannel), strings.TrimSpace(c.AutoUpgradeTime),
 		strings.TrimSpace(c.JudgementModel), c.ExternalAgentAPI, strings.TrimSpace(c.SandboxImageMirror),
-		c.SessionSandboxIdleTTL.Milliseconds())
+		c.SessionSandboxIdleTTL.Milliseconds(), c.SettingsLocked, newTaskForm, strings.TrimSpace(c.AutoUpgradeOn), ownerTrust, autoGrantContextReads)
 	return err
 }
 
@@ -5288,7 +6004,7 @@ func newScheduleID(ctx context.Context, tx *sql.Tx) (string, error) {
 
 const scheduleColumns = "`id`,`title`,`body`,`target_owner`,`target_name`,`base`," +
 	"`auto_merge`,`auto_approve_proposals`,`template_id`,`suite_id`,`recurrence_kind`,`every_n_hours`,`time_of_day_minutes`,`weekday`,`day_of_month`," +
-	"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`"
+	"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`"
 
 func scanSchedule(scan func(...any) error) (Schedule, error) {
 	var t Schedule
@@ -5299,7 +6015,7 @@ func scanSchedule(scan func(...any) error) (Schedule, error) {
 	if err := scan(&t.ID, &t.Title, &t.Body, &t.Target.Owner, &t.Target.Name, &base,
 		&t.AutoMerge, &t.AutoApproveProposals, &templateID, &suiteID, &kind, &everyNHours, &timeOfDay, &weekday, &dayOfMonth,
 		&overlap, &networkAccess, &nothingNeeded, &t.Model, &t.Enabled, &t.NextRunAt, &lastRun, &t.CreatedAt, &timeZone,
-		&workflowReview, &everyNMinutes); err != nil {
+		&workflowReview, &everyNMinutes, &t.KeepRunning); err != nil {
 		return Schedule{}, err
 	}
 	t.Target = RepoFromStored(t.Target.Owner, t.Target.Name)
@@ -5325,6 +6041,7 @@ func scanSchedule(scan func(...any) error) (Schedule, error) {
 		DayOfMonth:        int(dayOfMonth.Int64),
 		TimeZone:          timeZone,
 		GitHubWorkflowRun: ghTrigger,
+		GitRef:            ParseStoredGitRefTrigger(kind),
 	}
 	t.LastRunAt = timePtr(lastRun)
 	return t, nil
@@ -5368,12 +6085,12 @@ func putSchedule(ctx context.Context, tx *sql.Tx, t Schedule) error {
 	_, err := tx.ExecContext(ctx, `REPLACE INTO `+"`schedule`"+` (
   `+"`id`,`title`,`body`,`target_owner`,`target_name`,`base`,"+
 		"`auto_merge`,`auto_approve_proposals`,`template_id`,`suite_id`,`recurrence_kind`,`every_n_hours`,`time_of_day_minutes`,`weekday`,`day_of_month`,"+
-		"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`"+`
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`"+`
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Title, t.Body, t.Target.StoredOwner(), t.Target.Name, nullable(t.Base),
 		t.AutoMerge, t.AutoApproveProposals, stringOf(t.TemplateID), stringOf(t.SuiteID), r.StoredKind(), everyNHours, timeOfDay, weekday, dayOfMonth,
 		string(overlap), string(t.NetworkAccess), string(t.NothingNeededAction), t.Model, t.Enabled, t.NextRunAt.UTC(), timeOf(t.LastRunAt), t.CreatedAt.UTC(), timeZone,
-		string(t.WorkflowReview), everyNMinutes)
+		string(t.WorkflowReview), everyNMinutes, t.KeepRunning)
 	if err != nil {
 		return fmt.Errorf("writing schedule %s: %w", t.ID, err)
 	}
@@ -5605,7 +6322,7 @@ func (s *Store) ListSchedules(ctx context.Context) ([]Schedule, error) {
 func (s *Store) DueSchedules(ctx context.Context, now time.Time) ([]Schedule, error) {
 	rows, err := s.db.QueryContext(ctx,
 		"SELECT "+scheduleColumns+" FROM `schedule` "+
-			"WHERE `enabled` = 1 AND `next_run_at` <= ? AND `recurrence_kind` NOT LIKE 'github_workflow_run%' ORDER BY `id`", now.UTC())
+			"WHERE `enabled` = 1 AND `next_run_at` <= ? AND `recurrence_kind` NOT LIKE 'github_workflow_run%' AND `recurrence_kind` NOT LIKE 'git_ref%' ORDER BY `id`", now.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("listing due schedules: %w", err)
 	}
@@ -5800,6 +6517,34 @@ func (s *Store) OpenTasksWithLink(ctx context.Context, kind LinkKind) ([]string,
 	return out, nil
 }
 
+// TasksWithLinkTarget is every task carrying a link of kind to target,
+// whatever state it is in, oldest first -- OpenTasksWithLinkTarget
+// without the closed filter, for a caller that must also see the ones
+// already finished (the release-qualification reconciler, telling a
+// qualification task's own scratch fixtures from the defects it filed).
+func (s *Store) TasksWithLinkTarget(ctx context.Context, kind LinkKind, target string) ([]string, error) {
+	var out []string
+	err := each(ctx, s.db,
+		"SELECT DISTINCT `l`.`task_id`, `t`.`created_at` FROM `task_link` AS `l` "+
+			"JOIN `task` AS `t` ON `t`.`id` = `l`.`task_id` "+
+			"WHERE `l`.`kind` = ? AND `l`.`target` = ? "+
+			"ORDER BY `t`.`created_at`, `l`.`task_id`",
+		[]any{string(kind), target},
+		func(rows *sql.Rows) error {
+			var id string
+			var created any
+			if err := rows.Scan(&id, &created); err != nil {
+				return err
+			}
+			out = append(out, id)
+			return nil
+		})
+	if err != nil {
+		return nil, fmt.Errorf("listing the tasks linked %s to %s: %w", kind, target, err)
+	}
+	return out, nil
+}
+
 // OpenTasksWithLinkTarget is every open task carrying a link of kind to
 // target (the open tasks whose own pull request is "owner/name#7", say),
 // oldest first.
@@ -5955,17 +6700,21 @@ func newTemplateID(ctx context.Context, tx *sql.Tx) (string, error) {
 }
 
 const templateColumns = "`id`,`name`,`title`,`body`," +
-	"`target_owner`,`target_name`,`base`,`auto_merge`,`created_at`,`network_access`,`nothing_needed_action`,`agent_model`,`interactive`,`goal`,`change_target_kind`,`change_target_spec`,`reviewers`"
+	"`target_owner`,`target_name`,`base`,`auto_merge`,`created_at`,`network_access`,`nothing_needed_action`,`agent_model`,`interactive`,`goal`,`change_target_kind`,`change_target_spec`,`reviewers`,`priority`,`keep_running`"
 
 func scanTemplate(scan func(...any) error) (Template, error) {
 	var t Template
 	var target RepoRef
 	var base sql.NullString
 	var networkAccess, nothingNeeded, goal, ctKind, ctSpec, reviewers string
+	var priority int
 	if err := scan(&t.ID, &t.Name, &t.Title, &t.Body,
 		&target.Owner, &target.Name, &base, &t.AutoMerge, &t.CreatedAt, &networkAccess, &nothingNeeded, &t.Model, &t.Interactive,
-		&goal, &ctKind, &ctSpec, &reviewers); err != nil {
+		&goal, &ctKind, &ctSpec, &reviewers, &priority, &t.KeepRunning); err != nil {
 		return Template{}, err
+	}
+	if priority != 0 {
+		t.Priority = &priority
 	}
 	t.ChangeTarget = ChangeTargetFromStored(ctKind, ctSpec)
 	t.Reviewers = splitCSV(reviewers)
@@ -5997,12 +6746,16 @@ func putTemplate(ctx context.Context, tx *sql.Tx, t Template) error {
 	if t.Target != nil {
 		targetOwner, targetName = t.Target.StoredOwner(), t.Target.Name
 	}
+	var priority int
+	if t.Priority != nil {
+		priority = *t.Priority
+	}
 	_, err := tx.ExecContext(ctx, `REPLACE INTO `+"`template`"+` (
   `+templateColumns+`
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Name, t.Title, t.Body,
 		targetOwner, targetName, t.Base, t.AutoMerge, t.CreatedAt.UTC(), string(t.NetworkAccess), string(t.NothingNeededAction), t.Model, t.Interactive,
-		t.Goal.JSON(), changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(), joinCSV(NormalizeReviewers(t.Reviewers)))
+		t.Goal.JSON(), changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(), joinCSV(NormalizeReviewers(t.Reviewers)), priority, t.KeepRunning)
 	if err != nil {
 		return fmt.Errorf("writing template %s: %w", t.ID, err)
 	}
@@ -6441,11 +7194,20 @@ func each(ctx context.Context, q querier, query string, args any,
 	return rows.Err()
 }
 
-func principalFrom(kind, id sql.NullString) *Principal {
+func principalFrom(kind, id sql.NullString, source string) *Principal {
 	if !kind.Valid || kind.String == "" {
 		return nil
 	}
-	return &Principal{Kind: PrincipalKind(kind.String), ID: id.String}
+	return &Principal{Kind: PrincipalKind(kind.String), ID: id.String, Source: AuthSource(source)}
+}
+
+// sourceOf is the `*_source` column for an optional principal: "" for
+// none, as the column's default is.
+func sourceOf(p *Principal) string {
+	if p == nil {
+		return ""
+	}
+	return string(p.Source)
 }
 
 func kindOf(p *Principal) any {

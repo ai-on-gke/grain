@@ -25,22 +25,24 @@ import (
 
 const sessionDefaultRef = `https://capabilities.example.com/host-script#host-script={"script":"autoscaler"}`
 
-// grain/task-1983: a deployment whose default capabilities name a
-// capability reference seeds every proposal with it, and a reference the
-// proposer does not hold is an escalation (model.EscalatedCapabilities).
-// A standing session filed holding this deployment's defaults as well can
-// still queue the work it files; one left without them is told the
-// reference is a seeded default, not something it asked for.
+// grain/task-1983, grain/task-2126: a deployment whose default capabilities
+// name a capability reference seeds every proposal with it, and a reference
+// the proposer does not hold is an escalation (model.EscalatedCapabilities).
+// A console session created with unset capabilities is seeded with the
+// deployment's defaults in session.Capabilities so its proposals queue; one
+// whose Capabilities do not hold the default (including after an operator
+// removes it via UpdateConsoleSession) keeps it out of the session's grants
+// and reports the reference on proposals as a seeded default, not asked for.
 func TestSessionHoldingDeploymentDefaultsQueuesItsProposals(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name       string
-		seeded     bool
-		wantState  model.State
-		wantInBody string
+		name          string
+		removeDefault bool
+		wantState     model.State
+		wantInBody    string
 	}{
-		{name: "session filed with the defaults", seeded: true, wantState: model.StateQueued},
-		{name: "session without them", seeded: false, wantState: model.StateProposed,
+		{name: "session created with the deployment defaults", removeDefault: false, wantState: model.StateQueued},
+		{name: "session after operator removes the default", removeDefault: true, wantState: model.StateProposed,
 			wantInBody: "default capability"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -48,27 +50,49 @@ func TestSessionHoldingDeploymentDefaultsQueuesItsProposals(t *testing.T) {
 			client, store, ctx := testClient(t)
 			cfg := model.DefaultConfig()
 			cfg.DefaultCapabilities = []string{sessionDefaultRef}
-			director := model.ConsoleSession{ID: model.DirectorSessionID, Title: "Director", TasksApproved: true}
-			cfg.ConsoleSessions = []model.ConsoleSession{director}
 			if err := store.PutConfig(ctx, cfg); err != nil {
 				t.Fatal(err)
 			}
-			sessionID, err := model.FileConsoleSessionTask(ctx, store, director, model.FileConsoleSessionOptions{})
+			sessions, err := client.CreateConsoleSession(ctx, ui.CreateConsoleSessionRequest{
+				ID:            "ops-chat",
+				Title:         "Ops Chat",
+				TasksApproved: true,
+			})
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("CreateConsoleSession: %v", err)
 			}
-			if !tc.seeded {
-				// As a session filed before sessions held the defaults.
-				if err := store.UpdateTask(ctx, sessionID, func(tk *model.Task) error {
-					tk.Grants = model.ConsoleSessionGrants(director)
-					return nil
+			var sessionTaskID string
+			var createdCaps []string
+			for _, s := range sessions {
+				if s.ID == "ops-chat" {
+					sessionTaskID = s.TaskID
+					createdCaps = s.Capabilities
+				}
+			}
+			if sessionTaskID == "" {
+				t.Fatalf("created session missing taskId in %+v", sessions)
+			}
+			if !slices.ContainsFunc(createdCaps, model.IsCapabilityRef) {
+				t.Fatalf("created session capabilities = %v, want deployment default reference seeded", createdCaps)
+			}
+
+			if tc.removeDefault {
+				empty := []string{}
+				if _, err := client.UpdateConsoleSession(ctx, "ops-chat", ui.UpdateConsoleSessionRequest{
+					Capabilities: &empty,
 				}); err != nil {
-					t.Fatal(err)
+					t.Fatalf("UpdateConsoleSession: %v", err)
+				}
+				sessionTask := mustGetTask(t, ctx, store, sessionTaskID)
+				if slices.ContainsFunc(sessionTask.Grants, func(g model.Grant) bool {
+					return model.IsCapabilityRef(g.Capability)
+				}) {
+					t.Fatalf("updated session grants = %+v, want removed default absent", sessionTask.Grants)
 				}
 			}
 
 			filed, err := client.CreateTask(ctx, ui.CreateTaskRequest{
-				Title: "follow-up", Description: "d", ProposedBy: sessionID,
+				Title: "follow-up", Description: "d", ProposedBy: sessionTaskID,
 			})
 			if err != nil {
 				t.Fatal(err)

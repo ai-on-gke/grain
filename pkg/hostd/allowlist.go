@@ -39,7 +39,7 @@
 // write it there. Anything else not on the allowlist, or not accepted by
 // its entry, is refused and logged. Nothing here runs as root, and nothing here forwards the
 // daemon's own environment: a child's environment is built from the entry.
-// docs/design/cli-run-location.md ("Host CLIs through grain hostd") is the
+// design/design/cli-run-location.design.md ("Host CLIs through grain hostd") is the
 // design and its security argument.
 package hostd
 
@@ -105,6 +105,15 @@ type Allowlist struct {
 	// still running (Server.Drain); DefaultDrainCap when unset. At the cap
 	// they are cancelled.
 	DrainCap time.Duration `yaml:"drain_cap"`
+	// Capacity is how many agent CLI runs at once this hostd takes host
+	// work for; 0 is no limit of its own. The daemon holds runs past it
+	// rather than starting them (Hello.Capacity).
+	Capacity int `yaml:"capacity"`
+	// Labels describe this hostd to the daemon in its hello, for display
+	// only. They never select it for host work: a label selector matches
+	// the registry's labels for the hostd, which an admin sets, and not
+	// what the hostd says about itself.
+	Labels map[string]string `yaml:"labels"`
 }
 
 // DefaultDrainCap is the allowlist's drain_cap when it sets none.
@@ -148,7 +157,7 @@ type Entry struct {
 	// does a name set_env or pass_env already supplies. PATH, HOME, the
 	// other identity variables and LD_* are admitted only by their exact
 	// name, never by a pattern; listing one hands the daemon what the child
-	// runs, loads or reads its config from (docs/design/cli-run-location.md).
+	// runs, loads or reads its config from (design/design/cli-run-location.design.md).
 	// A value that looks like a path must sit under PathsUnder.
 	Env []string `yaml:"env"`
 	// PassEnv are names copied from hostd's own environment -- the corp
@@ -185,6 +194,14 @@ func ParseAllowlist(data []byte) (*Allowlist, error) {
 	// An empty file is an empty allowlist, which refuses everything.
 	if err := dec.Decode(&a); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("hostd allowlist: %w", err)
+	}
+	if a.Capacity < 0 {
+		return nil, fmt.Errorf("hostd allowlist: capacity %d is negative; 0 is no limit", a.Capacity)
+	}
+	for k, v := range a.Labels {
+		if k == "" || strings.ContainsAny(k+v, ",= ") {
+			return nil, fmt.Errorf("hostd allowlist: label %q=%q: keys and values may not be empty or hold ',', '=' or spaces", k, v)
+		}
 	}
 	for name, e := range a.CLIs {
 		if err := e.validate(KindCLI, name); err != nil {

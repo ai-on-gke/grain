@@ -133,12 +133,41 @@ type MemoryProvider interface {
 type DeployProvider interface {
 	ReadMergeQueue(ctx context.Context) (string, error)
 	ReadMetrics(ctx context.Context, section string, q MetricsQuery) (string, error)
-	ReadPipelineChanges(ctx context.Context) (string, error)
+	// ReadPipelineChanges is one page of the pipeline feed after cursor
+	// ("" for the provider's lookback), at most limit entries (0 for its
+	// default page).
+	ReadPipelineChanges(ctx context.Context, cursor string, limit int) (string, error)
 	ReadHealth(ctx context.Context) (string, error)
 	ReadState(ctx context.Context, table string) (string, error)
 	ListStateTables(ctx context.Context) ([]string, error)
 	ReadGrainLog(ctx context.Context, source string, q GrainLogQuery) (string, error)
 	ListGrainLogSources(ctx context.Context) ([]string, error)
+}
+
+// MergeQueueRepoReader is what a DeployProvider also implements to
+// answer deploy://merge-queue for a scope with MergeQueueByCI: the queue
+// with every gate, batch and change of a repository permits refuses left
+// out. A provider without it answers such a scope nothing.
+type MergeQueueRepoReader interface {
+	ReadMergeQueueFor(ctx context.Context, permits func(repo string) bool) (string, error)
+}
+
+// MergeQueueQuery is deploy://merge-queue read with a query: ?repo=
+// narrows it to one repository and ?format=json asks for the report as
+// JSON rather than text (the external `grain merge-queue [--repo] [--json]`).
+// Permits is nil for a caller that may read every repository's queue,
+// and otherwise the scope's PermitsCI.
+type MergeQueueQuery struct {
+	Repo    string
+	JSON    bool
+	Permits func(repo string) bool
+}
+
+// MergeQueueQueryReader is what a DeployProvider also implements to
+// answer a deploy://merge-queue read that carries ?repo= or
+// ?format=json. A provider without it answers such a read 400.
+type MergeQueueQueryReader interface {
+	ReadMergeQueueQuery(ctx context.Context, q MergeQueueQuery) (string, error)
 }
 
 // MetricsSectionLister is what a DeployProvider also implements to name
@@ -169,9 +198,11 @@ func (s Scope) PermitsTask(taskID string) bool {
 }
 
 // PermitsTaskRepo reports whether this scope may read the task:// record
-// of a task working in repo: one in the scope's own repository, or one
-// it reads or writes, or one an api:tasks:read@repo grant names. A task
-// with no repository is only MayReadAllTasks'.
+// of another task working in repo: only one an api:tasks:read@repo grant
+// names. Working in, reading or writing a repository does not open its
+// other tasks -- their prompts, conversations and transcripts are no more
+// this run's than the agent API's GET /api/tasks/{id} is. A task with no
+// repository is only MayReadAllTasks'.
 func (s Scope) PermitsTaskRepo(repo string) bool {
 	if s.MayReadAllTasks {
 		return true
@@ -180,16 +211,23 @@ func (s Scope) PermitsTaskRepo(repo string) bool {
 	if repo == "" {
 		return false
 	}
-	if s.TaskRepo != "" && strings.EqualFold(s.TaskRepo, repo) {
-		return true
-	}
 	return s.TaskReadRepos[repo] || s.TaskReadRepos[strings.ToLower(repo)]
 }
 
 // mayReadRepoTasks reports whether this scope may read some other tasks'
 // records, by their repository.
 func (s Scope) mayReadRepoTasks() bool {
-	return s.TaskRepo != "" || len(s.TaskReadRepos) > 0
+	return len(s.TaskReadRepos) > 0
+}
+
+// refuseTaskRead refuses task://<relPath> for a task other than the run's
+// own, naming both ways in: the self-debug capability, or an
+// api:tasks:read@<repo> grant.
+func refuseTaskRead(relPath string) error {
+	return fmt.Errorf(
+		"%w: task://%s: another task's record needs the %q capability or an %q grant naming its repository, and this run holds neither. "+
+			"Nothing you can do from inside this run will add one -- a human attaches it to the task.",
+		ErrForbidden, relPath, "self-debug", "api:tasks:read@<owner/repo>")
 }
 
 // PermitsConfig reports whether this scope may read config://<relPath>.
@@ -228,13 +266,22 @@ func (s Scope) PermitsMemory(relPath string) bool {
 	if relPath == "" || relPath == "global" || relPath == "global.md" || strings.HasPrefix(relPath, "global/") || relPath == "repos" {
 		return true
 	}
-	if s.TaskRepo != "" {
-		repoPrefix := "repos/" + strings.ToLower(s.TaskRepo)
-		lower := strings.ToLower(relPath)
-		if strings.HasPrefix(repoPrefix, lower+"/") ||
+	lower := strings.ToLower(relPath)
+	permitsRepo := func(repo string) bool {
+		if repo == "" {
+			return false
+		}
+		repoPrefix := "repos/" + strings.ToLower(repo)
+		return strings.HasPrefix(repoPrefix, lower+"/") ||
 			lower == repoPrefix ||
 			lower == repoPrefix+".md" ||
-			strings.HasPrefix(lower, repoPrefix+"/") {
+			strings.HasPrefix(lower, repoPrefix+"/")
+	}
+	if permitsRepo(s.TaskRepo) {
+		return true
+	}
+	for repo, ok := range s.MemoryReadRepos {
+		if ok && permitsRepo(repo) {
 			return true
 		}
 	}
@@ -280,17 +327,17 @@ func (s *Server) resolveTask(ctx context.Context, scope Scope, relPath string) (
 	taskID := strings.TrimPrefix(parts[0], "#")
 	own := scope.PermitsTask(taskID)
 	if !own && !scope.mayReadRepoTasks() {
-		return nil, RefuseCapability("task://"+relPath, "self-debug")
+		return nil, refuseTaskRead(relPath)
 	}
 	if s == nil || s.Tasks == nil {
 		return nil, fmt.Errorf("%w: task:// is not configured on this daemon", ErrNotFound)
 	}
 	tv, err := s.Tasks.ReadTaskView(ctx, taskID)
 	if !own && (err != nil || tv == nil || !scope.PermitsTaskRepo(tv.Repo)) {
-		// Another task is readable where it works in a repository this
-		// scope reaches; anything else -- including a task that does not
+		// Another task is readable where an api:tasks:read grant names
+		// its repository; anything else -- including a task that does not
 		// exist -- is refused alike, so the refusal says nothing about it.
-		return nil, RefuseCapability("task://"+relPath, "self-debug")
+		return nil, refuseTaskRead(relPath)
 	}
 	if err != nil || tv == nil {
 		if err != nil && !errors.Is(err, ErrNotFound) {
@@ -917,7 +964,32 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 		if len(parts) > 1 {
 			return nil, fmt.Errorf("%w: deploy://%s", ErrNotFound, relPath)
 		}
-		text, err := s.Deploy.ReadMergeQueue(ctx)
+		var text string
+		var err error
+		q := queryFrom(ctx)
+		mq := MergeQueueQuery{Repo: strings.TrimSpace(q.Get("repo")), JSON: q.Get("format") == "json"}
+		if mq.Repo != "" || mq.JSON {
+			reader, ok := s.Deploy.(MergeQueueQueryReader)
+			if !ok {
+				return nil, fmt.Errorf("%w: deploy://%s: this daemon does not answer ?repo= or ?format=json on the merge queue", ErrBadRequest, relPath)
+			}
+			if scope.MergeQueueByCI {
+				mq.Permits = scope.PermitsCI
+			}
+			if text, err = reader.ReadMergeQueueQuery(ctx, mq); err != nil {
+				return nil, err
+			}
+			return stringNode("deploy", relPath, text, false), nil
+		}
+		if scope.MergeQueueByCI {
+			limited, ok := s.Deploy.(MergeQueueRepoReader)
+			if !ok {
+				return nil, fmt.Errorf("%w: deploy://%s: this daemon cannot narrow the merge queue to the repositories this caller may read", ErrForbidden, relPath)
+			}
+			text, err = limited.ReadMergeQueueFor(ctx, scope.PermitsCI)
+		} else {
+			text, err = s.Deploy.ReadMergeQueue(ctx)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -925,7 +997,7 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 
 	case "grain.log":
 		if !scope.MayReadGrainLog {
-			return nil, RefuseCapability("deploy://"+relPath, "grain-log")
+			return nil, RefuseCapability("deploy://"+relPath, "https://grain.dev/capabilities/grain#journal")
 		}
 		if s == nil || s.Deploy == nil {
 			return nil, fmt.Errorf("%w: deploy://grain.log is not configured on this daemon", ErrNotFound)
@@ -940,6 +1012,7 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 		if err != nil {
 			return nil, err
 		}
+		q.TaskID = scope.TaskIDStr
 		text, err := s.Deploy.ReadGrainLog(ctx, source, q)
 		if err != nil {
 			return nil, fmt.Errorf("%w: deploy://%s: %v", ErrNotFound, relPath, err)
@@ -948,7 +1021,7 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 
 	case "health", "health.json":
 		if !scope.MayReadHealth {
-			return nil, RefuseCapability("deploy://"+relPath, "deployment-health")
+			return nil, RefuseCapability("deploy://"+relPath, "https://grain.dev/capabilities/grain#health")
 		}
 		if s == nil || s.Deploy == nil {
 			return nil, fmt.Errorf("%w: deploy://health is not configured on this daemon", ErrNotFound)
@@ -964,7 +1037,7 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 
 	case "state", "state.json":
 		if !scope.MayReadHealth {
-			return nil, RefuseCapability("deploy://"+relPath, "deployment-health")
+			return nil, RefuseCapability("deploy://"+relPath, "https://grain.dev/capabilities/grain#health")
 		}
 		if s == nil || s.Deploy == nil {
 			return nil, fmt.Errorf("%w: deploy://state is not configured on this daemon", ErrNotFound)
@@ -1045,7 +1118,11 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 		if len(parts) > 1 {
 			return nil, fmt.Errorf("%w: deploy://%s", ErrNotFound, relPath)
 		}
-		text, err := s.Deploy.ReadPipelineChanges(ctx)
+		cursor, limit, err := pipelineQueryFrom(ctx)
+		if err != nil {
+			return nil, err
+		}
+		text, err := s.Deploy.ReadPipelineChanges(ctx, cursor, limit)
 		if err != nil {
 			return nil, err
 		}

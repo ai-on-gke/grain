@@ -358,8 +358,8 @@ type Config struct {
 	// deployment, and what a task needs installed in it is not the same
 	// everywhere: one deployment's agents work on Rust, another's need a
 	// private CA. Such an image is built FROM one of grain's minimal base
-	// images (ghcr.io/bwsalmon/grain/guest-base for VM backends,
-	// ghcr.io/bwsalmon/grain/k8s-sandbox-base for pods and containers),
+	// images (docker.io/grainai/sandbox-base for VM backends,
+	// docker.io/grainai/sandbox-k8s-base for pods and containers),
 	// which carry only what grain itself needs inside a sandbox -- and
 	// that boundary is versioned (pkg/sandboximage.Contract), so a custom
 	// image needs rebuilding only when the contract it was built at falls
@@ -848,9 +848,17 @@ type Config struct {
 	// reconcileAutoUpgrade), so this is when the queue shuts, not
 	// necessarily when the restart happens.
 	AutoUpgradeTime string
+	// AutoUpgradeOn is what makes this deployment upgrade itself:
+	// AutoUpgradeOff, AutoUpgradeDaily (AutoUpgradeChannel at
+	// AutoUpgradeTime each day) or AutoUpgradeOnRelease (as soon as its
+	// image channel publishes a new release tag, orchestrator's
+	// reconcileReleaseUpgrade). "" is a row written before the setting
+	// existed, which AutoUpgradeMode reads the way that grain did: daily
+	// when a channel is set, off when not.
+	AutoUpgradeOn string
 	// JudgementModel is the model the symbolic model JudgementModelName
 	// ("judgement") resolves to: the model a durable judgement agent --
-	// the pipeline steward -- runs on (docs/design/durable-tasks.md#DT-11,
+	// the pipeline steward -- runs on (design/design/durable-tasks.design.md#DT-11,
 	// ResolveJudgementModel). Empty, the default, resolves it to the
 	// strongest model this deployment's connections offer, by
 	// JudgementModelRanking.
@@ -900,7 +908,7 @@ type Config struct {
 	K8sPriorityClassCI          string
 	// MCPServers are the capability servers this deployment attaches,
 	// keyed by capability_id, in the shape of an Antigravity mcpServers
-	// object (protocol.ServerConfig, docs/capabilities-spec.md §3.1).
+	// object (protocol.ServerConfig, design/spec/capabilities/capabilities.spec.md §3.1).
 	// Stored as JSON in one column and exported to grain/config with
 	// the rest of this row, so it is plain text: a sensitive env or
 	// headers value is a $secret:<name> reference into pkg/secrets, and
@@ -917,10 +925,29 @@ type Config struct {
 	// admission before anything is minted. Stored as JSON in one column
 	// and exported to grain/config with the rest of this row.
 	CapabilityPolicy CapabilityPolicy
+	// NewTaskForm is the New Task form's configuration
+	// (settings/new-task-form.yml, new_task_form.go); nil when the
+	// deployment has none, and the form is drawn as it always was.
+	// Stored as JSON in one column.
+	NewTaskForm *NewTaskForm
+	// OwnerTrust is the owner-trust proposal policy
+	// (design/spec/external-cli/external-cli.spec.md#XC-17): the
+	// (owner, repo) pairs whose external agent credentials' unapproved
+	// filings queue without waiting for a person, approved by
+	// OwnerTrustPrincipal on behalf of the owner. Empty -- the default --
+	// leaves every such filing proposed. Stored as JSON in one column.
+	OwnerTrust []OwnerTrustRule
+	// AutoGrantContextReads lists committed-context repositories ("*" or
+	// owner/name) for which filing or updating a task with a repo-qualified
+	// context reference (`owner/name:path@rev`) automatically adds the
+	// required -read grant instead of refusing when -read was omitted. Empty
+	// -- the default -- requires an explicit -read grant for any non-target
+	// context repository. Stored as JSON in one column.
+	AutoGrantContextReads []string
 	// CLIRun is where each agent CLI runs, keyed by framework name
-	// (claude, codex, antigravity, custom): on the host, in a per-run
+	// (claude, codex, antigravity): on the host, in a per-run
 	// container of an image, or whichever of those the host allows
-	// (cli_run.go, docs/design/cli-run-location.md). A framework with no
+	// (cli_run.go, design/design/cli-run-location.design.md). A framework with no
 	// entry runs where the daemon's flags, and then its built-in default,
 	// say.
 	CLIRun map[string]CLIRunSetting
@@ -942,18 +969,25 @@ type Config struct {
 	// SessionSandboxIdleTTLOr; a negative duration turns warm retention off
 	// so the sandbox is released as soon as the turn ends.
 	SessionSandboxIdleTTL time.Duration
+	// SettingsLocked opts into locking non-bootstrap settings in the UI
+	// and REST API when an internal config repository (grain/config) is
+	// configured, requiring changes to go through config pull requests.
+	// False by default so settings remain editable from the UI and API.
+	SettingsLocked bool `json:"settings_locked"`
 }
 
 // Default Kubernetes sandbox configuration values.
 const (
-	DefaultK8sNamespace        = "grain"
-	DefaultK8sKubectl          = "kubectl"
-	DefaultK8sDeployment       = "grain"
-	DefaultK8sContainer        = "grain"
-	DefaultK8sWorkspace        = "/home/agent"
-	DefaultK8sGranuleWorkspace = "/home/debian"
-	DefaultK8sSandboxImage     = "ghcr.io/bwsalmon/grain/k8s-sandbox:latest"
-	DefaultSandboxImage        = "ghcr.io/bwsalmon/grain/guest:latest"
+	DefaultK8sNamespace          = "grain"
+	DefaultK8sKubectl            = "kubectl"
+	DefaultK8sDeployment         = "grain"
+	DefaultK8sContainer          = "grain"
+	DefaultK8sWorkspace          = "/home/agent"
+	DefaultK8sGranuleWorkspace   = "/home/debian"
+	DefaultK8sSandboxImage       = "docker.io/grainai/sandbox-k8s:latest"
+	DefaultSandboxImage          = "docker.io/grainai/sandbox:latest"
+	LegacyDefaultK8sSandboxImage = "ghcr.io/bwsalmon/grain/k8s-sandbox:latest"
+	LegacyDefaultSandboxImage    = "ghcr.io/bwsalmon/grain/guest:latest"
 
 	// The PriorityClasses deploy/kubernetes/ ships, highest first --
 	// k8s.PriorityClassInteractive and its siblings, restated here
@@ -1004,6 +1038,55 @@ func ParseAutoUpgradeTime(hhmm string) (hour, minute int, err error) {
 		return 0, 0, fmt.Errorf("auto-upgrade time %q is not a time of day between 00:00 and 23:59", hhmm)
 	}
 	return h, m, nil
+}
+
+// The values of Config.AutoUpgradeOn.
+const (
+	// AutoUpgradeOff upgrades only when somebody presses Upgrade.
+	AutoUpgradeOff = "off"
+	// AutoUpgradeDaily schedules an upgrade onto AutoUpgradeChannel
+	// once a day, at AutoUpgradeTime (orchestrator's reconcileAutoUpgrade).
+	AutoUpgradeDaily = "daily"
+	// AutoUpgradeOnRelease schedules an upgrade once the deployment's
+	// image channel publishes a new release tag (orchestrator's
+	// reconcileReleaseUpgrade): onto "latest" when AutoUpgradeChannel is
+	// "latest", onto the exact vX.Y.Z otherwise.
+	AutoUpgradeOnRelease = "release"
+)
+
+// AutoUpgradeModes is Config.AutoUpgradeOn's vocabulary, in the order a
+// picker offers it.
+func AutoUpgradeModes() []string {
+	return []string{AutoUpgradeOff, AutoUpgradeDaily, AutoUpgradeOnRelease}
+}
+
+// AutoUpgradeMode is the mode c is in, one of AutoUpgradeModes. A row
+// with no AutoUpgradeOn is read as the grain before the setting read it:
+// daily when it names a channel, off when it does not. An unknown value
+// -- a hand-edited row -- is off.
+func (c Config) AutoUpgradeMode() string {
+	switch on := strings.ToLower(strings.TrimSpace(c.AutoUpgradeOn)); on {
+	case AutoUpgradeOff, AutoUpgradeDaily, AutoUpgradeOnRelease:
+		return on
+	case "":
+		if strings.TrimSpace(c.AutoUpgradeChannel) != "" {
+			return AutoUpgradeDaily
+		}
+	}
+	return AutoUpgradeOff
+}
+
+// ParseAutoUpgradeOn reads a Config.AutoUpgradeOn a person typed:
+// one of AutoUpgradeModes, any case, or "" for AutoUpgradeOff.
+func ParseAutoUpgradeOn(raw string) (string, error) {
+	on := strings.ToLower(strings.TrimSpace(raw))
+	if on == "" {
+		return AutoUpgradeOff, nil
+	}
+	if slices.Contains(AutoUpgradeModes(), on) {
+		return on, nil
+	}
+	return "", fmt.Errorf("auto-upgrade mode %q: want one of %s", raw, strings.Join(AutoUpgradeModes(), ", "))
 }
 
 // UpgradeCheckModes is the vocabulary as a list, in the order a picker
@@ -1121,6 +1204,14 @@ func NewDeploymentConfig() Config {
 // what they are about rather than only which task they are.
 const DefaultTaskBranchTemplate = "grain/{deployment}/task-{id}-{slug}"
 
+// UnsluggedTaskBranchTemplate is the DefaultTaskBranchTemplate
+// NewDeploymentConfig seeded before grain/task-56 added {slug} to it.
+// Schema migration 78 upgrades a stored grain_config row still holding
+// this template to DefaultTaskBranchTemplate so existing deployments
+// include a slug of the task's title on new task branches in addition
+// to the deployment and task-id uniquifiers.
+const UnsluggedTaskBranchTemplate = "grain/{deployment}/task-{id}"
+
 // DefaultPollInterval is Config.PollInterval for a deployment that has
 // never chosen one -- named here rather than repeated at each of the
 // places that have to agree on it: DefaultConfig above, cmd/grain
@@ -1173,8 +1264,11 @@ const DefaultAgentBackendConcurrency = 4
 // grain_config.default_filters.
 const DefaultTaskFilters = "f=state:none:deferred|closed&f=kind:none:interactive"
 
-// DefaultMaxMergesPerRepo preserves the merge queue's original behavior.
-const DefaultMaxMergesPerRepo = 1
+// DefaultMaxMergesPerRepo is how many queue members may land in one lane
+// per cycle where nobody chose. It was 1, the merge queue's original
+// behavior, until schema 95; each merge is still judged on its own read of
+// the pull request, taken after the merge before it moved the base.
+const DefaultMaxMergesPerRepo = 5
 
 // DefaultBaseCIRedStreak is Config.BaseCIRedStreak where nothing has
 // been chosen: two consecutive red tips on the same job, which is the
@@ -1244,10 +1338,14 @@ const (
 	AgentFrameworkAntigravity = "antigravity"
 	AgentFrameworkClaude      = "claude"
 	AgentFrameworkCodex       = "codex"
-	// AgentFrameworkCustom runs a deployment-owned executable from the
-	// checked-out state repository using docs/custom-agent-backends.md's
-	// versioned JSON protocol.
-	AgentFrameworkCustom = "custom"
+	// RemovedAgentFrameworkCustom is the framework of the retired
+	// "Custom command" connection type, which ran a deployment-owned
+	// executable as the agent. It is not a framework anyone can select
+	// or dispatch onto any more: migration 104 disables every stored
+	// connection that names it (RemovedCustomConnectionReason), and the
+	// name survives only so that row can be recognized, shown as removed
+	// and deleted.
+	RemovedAgentFrameworkCustom = "custom"
 
 	// LegacyAgentFrameworkGemini is what AgentFrameworkAntigravity used
 	// to be called, back when it named a home-grown in-process Gemini
@@ -1293,17 +1391,21 @@ type AgentBackend struct {
 	// Disabled keeps the backend configured but removes it from dispatch
 	// rotation. False is deliberately the default for existing configs.
 	Disabled bool `json:"disabled,omitempty"`
-	// Command is the executable for a custom backend. Relative paths are
-	// resolved from the deployment's checked-out state repository.
+	// DisabledReason says why grain itself disabled the connection, for
+	// one it can no longer run (RemovedCustomConnectionReason). It is ""
+	// for a connection an operator disabled.
+	DisabledReason string `json:"disabledReason,omitempty"`
+	// Command is the executable a retired custom command connection
+	// (RemovedAgentFrameworkCustom) ran. Nothing reads it; it is kept so
+	// such a connection round-trips unchanged until it is deleted.
 	Command string `json:"command,omitempty"`
 	// CLIPath is the executable a claude, codex or antigravity connection
 	// runs, overriding the deployment's -claude-path / -codex-path /
-	// -agy-path for this connection alone. It is a separate field from
-	// Command, which belongs to a custom backend and is read relative to
-	// the state repository; this one is an absolute path, or a bare name
-	// resolved on the daemon's own PATH, on the machine (or inside the
-	// container) the daemon runs in. Empty means the deployment flag, then
-	// PATH -- what every connection did before the field existed.
+	// -agy-path for this connection alone. It is an absolute path, or a
+	// bare name resolved on the daemon's own PATH, on the machine (or
+	// inside the container) the daemon runs in. Empty means the
+	// deployment flag, then PATH -- what every connection did before the
+	// field existed.
 	//
 	// Setting it is effectively "run this binary as the daemon": the
 	// daemon execs it with its own account and hands it the connection's
@@ -1331,6 +1433,38 @@ type AgentBackend struct {
 	// that is legitimately slow is what the first is for.
 	ModelTurnTimeout string `json:"modelTurnTimeout,omitempty"`
 	ModelRetryCutoff string `json:"modelRetryCutoff,omitempty"`
+	// Hostd is the grain hostd this connection's agent CLI runs on: a
+	// registered hostd's name, or a label selector "k=v[,k=v]" any
+	// connected hostd carrying every label satisfies
+	// (ParseHostdSelector). Empty leaves it where the framework's run
+	// location says (container, or the deployment's default hostd). A
+	// pinned connection's runs start their CLI on that hostd, count
+	// against its capacity, and key a usage limit on an ambient
+	// credential to it; while it is not connected the connection is
+	// unavailable and its runs wait -- they move to HostdFallback, in
+	// order, only when that is set. It is the connection's placement, not
+	// a task's: no task, template or repository chooses a hostd.
+	Hostd string `json:"hostd,omitempty"`
+	// HostdFallback is the hostd selectors, in order, a run on this
+	// connection tries when Hostd is not connected. Empty by default:
+	// nothing falls back silently.
+	HostdFallback []string `json:"hostdFallback,omitempty"`
+}
+
+// HostdTargets is the connection's hostd selectors in the order a run
+// tries them: Hostd, then HostdFallback. nil for a connection with no
+// hostd placement.
+func (b AgentBackend) HostdTargets() []string {
+	if strings.TrimSpace(b.Hostd) == "" {
+		return nil
+	}
+	out := []string{strings.TrimSpace(b.Hostd)}
+	for _, f := range b.HostdFallback {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // EffectiveConcurrency returns the maximum number of concurrent agent runs
@@ -1381,9 +1515,8 @@ func (b AgentBackend) TurnLimits() (turnTimeout, retryCutoff time.Duration) {
 }
 
 // AgentCLIBinary is the CLI a connection of framework runs -- "claude",
-// "codex" or "agy" -- or "" for a framework with no CLI of grain's own
-// to point at (a custom command names its own). It is what CLIPath
-// overrides.
+// "codex" or "agy" -- or "" for a name that is not a framework. It is
+// what CLIPath overrides.
 func AgentCLIBinary(framework string) string {
 	switch NormalizeAgentFrameworkName(framework) {
 	case AgentFrameworkClaude:
@@ -1425,7 +1558,7 @@ type DiscoveredModels struct {
 }
 
 // DiscoversModels reports whether b's provider can be asked which
-// models it serves -- every framework but a custom command.
+// models it serves: every framework grain dispatches onto.
 func (b AgentBackend) DiscoversModels() bool {
 	switch NormalizeAgentFrameworkName(b.Framework) {
 	case AgentFrameworkAntigravity, AgentFrameworkClaude, AgentFrameworkCodex:
@@ -1494,10 +1627,9 @@ func (b AgentBackend) SupportedModels() []string {
 }
 
 // HasModels reports whether b advertises any model at all. A connection
-// that does not -- a provider that has never answered, a custom command
-// with an empty list -- has "no models -- set one", and a task that
-// would run on it waits rather than being dispatched onto a guessed
-// model name (docs/connections-and-models.md).
+// that does not -- a provider that has never answered -- has "no models
+// -- set one", and a task that would run on it waits rather than being
+// dispatched onto a guessed model name (docs/connections-and-models.md).
 func (b AgentBackend) HasModels() bool { return len(b.SupportedModels()) > 0 }
 
 // ProviderModelAuto is what agy is asked for to let it pick the model
@@ -1637,6 +1769,10 @@ func DecodeAgentBackends(v string) ([]AgentBackend, error) {
 	if err := json.Unmarshal([]byte(v), &out); err != nil {
 		return nil, fmt.Errorf("decode agent backends: %w", err)
 	}
+	// Migration 104 disabled every stored custom command connection; one
+	// that arrives some other way (a grain/config edited by hand) is
+	// read disabled too, so nothing ever dispatches onto it.
+	DisableRemovedCustomConnections(out)
 	return out, nil
 }
 
@@ -1682,7 +1818,7 @@ func NormalizeAgentFramework(v string) string {
 // third is exactly the change that would have left one of them quietly
 // rejecting a framework the others accept.
 func AgentFrameworks() []string {
-	return []string{AgentFrameworkAntigravity, AgentFrameworkClaude, AgentFrameworkCodex, AgentFrameworkCustom}
+	return []string{AgentFrameworkAntigravity, AgentFrameworkClaude, AgentFrameworkCodex}
 }
 
 // ValidAgentFramework reports whether v names a framework grain can

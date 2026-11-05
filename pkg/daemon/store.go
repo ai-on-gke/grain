@@ -28,6 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/postgres"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // ResolveDatabase says which database a tool handed only dataDir should
@@ -87,7 +88,28 @@ func RecordDatabaseConfig(dataDir, driver, dsn string) error {
 	if saved, err := LoadDatabaseConfig(dataDir); err == nil && saved != nil && saved.Driver == driver && saved.DSN == dsn {
 		return nil
 	}
-	return postgres.SaveDatabaseConfig(dataDir, driver, dsn, OpenSecrets(dataDir))
+	var passwords postgres.PasswordStore
+	if _, _, hasPassword := postgres.SplitDSNPassword(dsn); hasPassword {
+		passwords = OpenSecrets(dataDir)
+	}
+	return postgres.SaveDatabaseConfig(dataDir, driver, dsn, passwords)
+}
+
+func recordDatabaseConfigForDaemon(cfg Config) error {
+	if cfg.SecretsBackend == secrets.BackendSecretManager {
+		if cfg.DataDir == "" || cfg.DbDriver != "postgres" {
+			return nil
+		}
+		if saved, err := postgres.ReadDatabaseConfig(cfg.DataDir); err == nil && saved != nil && saved.Driver == cfg.DbDriver && saved.DSN == cfg.DbDSN {
+			return nil
+		}
+		// Under -secrets-backend=secretmanager, secret_entries lives inside
+		// PostgreSQL itself, so a database password cannot be bootstrapped out
+		// of the secret store; passwordless IAM DSNs (cloud-sql-proxy) record
+		// cleanly without touching <data-dir>/secrets.
+		return postgres.SaveDatabaseConfig(cfg.DataDir, cfg.DbDriver, cfg.DbDSN, nil)
+	}
+	return RecordDatabaseConfig(cfg.DataDir, cfg.DbDriver, cfg.DbDSN)
 }
 
 func OpenRawDB(dataDir string) (*sql.DB, error) {
@@ -130,6 +152,14 @@ func openRawDB(driver, dsn, dataDir string) (*sql.DB, error) {
 // Startup connection readiness retries are performed for database backends
 // (such as Cloud SQL Auth Proxy sidecars) that may start up asynchronously.
 func OpenStore(driver, dsn, dataDir string) (*model.Store, *sql.DB, error) {
+	store, db, _, err := openStore(driver, dsn, dataDir)
+	return store, db, err
+}
+
+// openStore is OpenStore plus the schema version Init migrated the store in
+// place from (0 when Init opened a store already at model.SchemaVersion or
+// initialised an empty one).
+func openStore(driver, dsn, dataDir string) (*model.Store, *sql.DB, int, error) {
 	if driver == "" {
 		driver = "sqlite"
 	}
@@ -156,7 +186,7 @@ func OpenStore(driver, dsn, dataDir string) (*model.Store, *sql.DB, error) {
 					db, err = postgres.Open(cfg)
 				}
 			} else {
-				return nil, nil, errors.New("opening the task store: postgres DSN is required")
+				return nil, nil, 0, errors.New("opening the task store: postgres DSN is required")
 			}
 		case "sqlite":
 			sqliteDir := dsn
@@ -165,7 +195,7 @@ func OpenStore(driver, dsn, dataDir string) (*model.Store, *sql.DB, error) {
 			}
 			db, err = sqlite.Open(sqlite.DefaultConfig(sqliteDir))
 		default:
-			return nil, nil, fmt.Errorf("opening the task store: unsupported driver %q", driver)
+			return nil, nil, 0, fmt.Errorf("opening the task store: unsupported driver %q", driver)
 		}
 
 		if err == nil {
@@ -179,17 +209,38 @@ func OpenStore(driver, dsn, dataDir string) (*model.Store, *sql.DB, error) {
 		}
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("opening the task store: %w", err)
+		return nil, nil, 0, fmt.Errorf("opening the task store: %w", err)
 	}
 
+	ctx := context.Background()
 	store := model.New(db)
-	if err := store.Init(context.Background()); err != nil {
+	// Read before Init runs: a store stamped in [V2BaselineSchemaVersion,
+	// SchemaVersion) is migrated in place by Init and returns stamped at
+	// SchemaVersion, indistinguishable afterwards from one that started there
+	// or was created fresh (where before is 0).
+	before, verr := store.SchemaVersion(ctx)
+	if err := store.Init(ctx); err != nil {
 		db.Close()
-		return nil, nil, fmt.Errorf("applying schema: %w", err)
+		return nil, nil, 0, fmt.Errorf("applying schema: %w", err)
 	}
-	sweepOrphanedSettingsRows(context.Background(), store)
-	liftMisdirectedQuestions(context.Background(), store)
-	return store, db, nil
+	migratedFrom := 0
+	if verr == nil && before >= model.V2BaselineSchemaVersion && before < model.SchemaVersion {
+		migratedFrom = before
+		log.Printf("grain: migrated the store in place from schema %d to %d", before, model.SchemaVersion)
+	}
+	sweepOrphanedSettingsRows(ctx, store)
+	liftMisdirectedQuestions(ctx, store)
+	logRemovedCustomConnections(ctx, store)
+	return store, db, migratedFrom, nil
+}
+
+// logRemovedCustomConnections names, once per store open, every custom
+// command connection the store still holds: migration 104 disabled them,
+// and the operator is owed a line saying so until each is deleted.
+func logRemovedCustomConnections(ctx context.Context, store *model.Store) {
+	if cfg, err := store.GetConfig(ctx); err == nil && cfg != nil {
+		model.LogRemovedCustomConnections(cfg.AgentBackends)
+	}
 }
 
 // liftMisdirectedQuestions un-parks the tasks another task's run parked

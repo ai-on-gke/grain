@@ -17,8 +17,14 @@ package ui
 import (
 	"bytes"
 	"context"
+	"crypto"
+	cryptorand "crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -40,7 +46,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/modelexec"
 )
 
 // HTTPClient is Client's method surface (bwsalmon/agents#363) spoken over
@@ -71,6 +76,11 @@ type HTTPClient struct {
 	Audience string
 	// TokenProvider dynamically resolves an authentication token for each request.
 	TokenProvider func(ctx context.Context) (string, error)
+	// ContextToken is the credential of the CLI's named context
+	// (external-cli.spec.md#XC-4): asked after the environment's tokens
+	// and before the local API token or a Google ID token. "" with no
+	// error falls through to those.
+	ContextToken func(ctx context.Context) (string, error)
 	// User is the optional identity to send in proxy identity headers (e.g. X-Forwarded-User).
 	User string
 	// RetryPolicy is how long a call waits out a daemon that is not
@@ -130,8 +140,25 @@ func (c *HTTPClient) prepareRequest(ctx context.Context, req *http.Request) erro
 	if req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", "grain-cli")
 	}
+	// The tool and session this CLI runs in, for the daemon to record as
+	// the filed_via of what it posts (#XC-15). A label, not a credential.
+	if label := model.GrainClientLabel(os.Getenv(GrainClientEnv), os.Getenv(GrainClientSessionEnv)); label != "" {
+		req.Header.Set(model.GrainClientHeader, label)
+	}
 	return nil
 }
+
+// GrainClientEnv and GrainClientSessionEnv name the tool ("<tool>/<ver>")
+// and session id a workstation agent runs the CLI from, which every
+// request carries as its X-Grain-Client header (model.GrainClientLabel).
+const (
+	GrainClientEnv        = "GRAIN_CLIENT"
+	GrainClientSessionEnv = "GRAIN_CLIENT_SESSION"
+)
+
+// TokenEnvVars are the environment variables HTTPClient reads for a bearer
+// token, in precedence order.
+var TokenEnvVars = []string{"GRAIN_TOKEN", "GRAIN_AUTH_TOKEN", "GRAIN_ID_TOKEN", "GRAIN_TUNNEL_TOKEN"}
 
 func (c *HTTPClient) resolveToken(ctx context.Context) (string, error) {
 	if c.Token != "" {
@@ -140,9 +167,18 @@ func (c *HTTPClient) resolveToken(ctx context.Context) (string, error) {
 	if c.TokenProvider != nil {
 		return c.TokenProvider(ctx)
 	}
-	for _, env := range []string{"GRAIN_TOKEN", "GRAIN_AUTH_TOKEN", "GRAIN_ID_TOKEN", "GRAIN_TUNNEL_TOKEN"} {
+	for _, env := range TokenEnvVars {
 		if val := strings.TrimSpace(os.Getenv(env)); val != "" {
 			return val, nil
+		}
+	}
+	if c.ContextToken != nil {
+		tok, err := c.ContextToken(ctx)
+		if err != nil {
+			return "", contextTokenError{err}
+		}
+		if tok != "" {
+			return tok, nil
 		}
 	}
 
@@ -150,7 +186,7 @@ func (c *HTTPClient) resolveToken(ctx context.Context) (string, error) {
 	// token, when this process can read it: what keeps the CLI working
 	// against a daemon that wants the access code from every caller
 	// (localtoken.go, grain/task-2078). A server elsewhere never is.
-	if isLoopbackURL(c.BaseURL) {
+	if IsLoopbackURL(c.BaseURL) {
 		if tok := localAPIToken(); tok != "" {
 			return tok, nil
 		}
@@ -190,6 +226,15 @@ func (c *HTTPClient) getGoogleIDToken(ctx context.Context) (string, error) {
 	audience := c.Audience
 	if audience == "" {
 		audience = c.BaseURL
+	}
+
+	// 0. Cloud Run Direct IAP (Google-managed OAuth, no custom OAuth client)
+	// accepts RS256 service-account self-signed JWTs with audience
+	// "https://<service-host>/*" rather than accounts.google.com OIDC ID tokens.
+	if strings.HasSuffix(audience, "/*") {
+		if tok, exp, err := serviceAccountIAPToken(audience); err == nil && tok != "" {
+			return c.cacheIDToken(tok, exp), nil
+		}
 	}
 
 	// 1. Google Application Default Credentials, minting a token for
@@ -276,6 +321,78 @@ func adcIDToken(ctx context.Context, audience string) (*oauth2.Token, error) {
 	return ts.Token()
 }
 
+// serviceAccountIAPToken signs an RS256 service-account JWT for Google-managed
+// IAP on Cloud Run ("https://<host>/*") when GOOGLE_APPLICATION_CREDENTIALS
+// points to a service-account JSON key file.
+func serviceAccountIAPToken(audience string) (string, time.Time, error) {
+	credPath := strings.TrimSpace(os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"))
+	if credPath == "" {
+		return "", time.Time{}, nil
+	}
+	raw, err := os.ReadFile(credPath)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	var sa struct {
+		Type         string `json:"type"`
+		ClientEmail  string `json:"client_email"`
+		PrivateKey   string `json:"private_key"`
+		PrivateKeyID string `json:"private_key_id"`
+	}
+	if err := json.Unmarshal(raw, &sa); err != nil {
+		return "", time.Time{}, err
+	}
+	if sa.Type != "service_account" || sa.ClientEmail == "" || sa.PrivateKey == "" {
+		return "", time.Time{}, nil
+	}
+	block, _ := pem.Decode([]byte(sa.PrivateKey))
+	if block == nil {
+		return "", time.Time{}, errors.New("invalid PEM block in service account private_key")
+	}
+	var rsaKey *rsa.PrivateKey
+	if parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
+		var ok bool
+		rsaKey, ok = parsed.(*rsa.PrivateKey)
+		if !ok {
+			return "", time.Time{}, errors.New("service account private_key is not RSA")
+		}
+	} else if parsed1, err1 := x509.ParsePKCS1PrivateKey(block.Bytes); err1 == nil {
+		rsaKey = parsed1
+	} else {
+		return "", time.Time{}, err
+	}
+
+	now := time.Now().UTC()
+	exp := now.Add(time.Hour)
+	hdr := map[string]string{"alg": "RS256", "typ": "JWT"}
+	if sa.PrivateKeyID != "" {
+		hdr["kid"] = sa.PrivateKeyID
+	}
+	claims := map[string]any{
+		"iss": sa.ClientEmail,
+		"sub": sa.ClientEmail,
+		"aud": audience,
+		"iat": now.Unix(),
+		"exp": exp.Unix(),
+	}
+	hdrJSON, err := json.Marshal(hdr)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	claimsJSON, err := json.Marshal(claims)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	enc := base64.RawURLEncoding.EncodeToString
+	signingInput := enc(hdrJSON) + "." + enc(claimsJSON)
+	sum := sha256.Sum256([]byte(signingInput))
+	sig, err := rsa.SignPKCS1v15(cryptorand.Reader, rsaKey, crypto.SHA256, sum[:])
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	return signingInput + "." + enc(sig), exp, nil
+}
+
 func runGcloud(ctx context.Context, args ...string) (string, error) {
 	out, err := exec.CommandContext(ctx, "gcloud", args...).Output()
 	if err != nil {
@@ -287,7 +404,7 @@ func runGcloud(ctx context.Context, args ...string) (string, error) {
 // RetryPolicy is how long HTTPClient keeps trying a daemon that is not
 // answering, and how often, before it gives up and says so.
 //
-// It exists for the restart gap (docs/non-disruptive-upgrade.md, Stage
+// It exists for the restart gap (design/design/non-disruptive-upgrade.design.md, Stage
 // 1): while an upgrade restarts the daemon, its API refuses connections
 // -- or the reverse proxy in front of it answers 502/503 -- for as long
 // as the new build takes to come up, and every `grain mcpserver` call an
@@ -435,9 +552,13 @@ func (c *HTTPClient) send(ctx context.Context, method string, newRequest func() 
 			return nil, err
 		}
 		if err := c.prepareRequest(ctx, req); err != nil {
+			var own contextTokenError
+			if errors.As(err, &own) {
+				return nil, own.err // already says what it is about
+			}
 			return nil, fmt.Errorf("authenticating request to %s: %w", c.BaseURL, err)
 		}
-		resp, err := c.httpClient().Do(req)
+		resp, err := c.redirectClient().Do(req)
 		var failure error
 		switch {
 		case err != nil && retryableError(method, err) && ctx.Err() == nil:
@@ -472,6 +593,17 @@ func (c *HTTPClient) send(ctx context.Context, method string, newRequest func() 
 			wait = policy.Max
 		}
 	}
+}
+
+// RoundTrip sends req the way every call of this client is sent:
+// authenticated, and waited out under its RetryPolicy while the daemon is
+// not answering. It makes HTTPClient a transport for a caller that builds
+// its requests itself (grain fs, over pkg/nsclient); the response is the
+// daemon's own, whatever its status. req must have no body.
+func (c *HTTPClient) RoundTrip(req *http.Request) (*http.Response, error) {
+	return c.send(req.Context(), req.Method, func() (*http.Request, error) {
+		return req.Clone(req.Context()), nil
+	})
 }
 
 // do sends a request with an optional JSON body and decodes a JSON
@@ -512,6 +644,9 @@ func (c *HTTPClient) do(ctx context.Context, method, path string, body, out any)
 	}
 	defer resp.Body.Close()
 
+	if err := signInResponse(c.BaseURL, resp); err != nil {
+		return err
+	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return c.httpError(resp)
 	}
@@ -530,15 +665,36 @@ func (c *HTTPClient) do(ctx context.Context, method, path string, body, out any)
 // ForbiddenError, anything else to a plain error carrying the message and
 // status.
 func (c *HTTPClient) httpError(resp *http.Response) error {
+	return c.statusError(resp, false)
+}
+
+// ResponseError is the error a non-2xx resp from the daemon stands for,
+// the way every call of this client reports one -- for a caller sending
+// requests of its own through RoundTrip. A plain-text body, which the
+// namespace's own refusals under GET /api/fs/ are, is its message.
+func (c *HTTPClient) ResponseError(resp *http.Response) error {
+	return c.statusError(resp, true)
+}
+
+func (c *HTTPClient) statusError(resp *http.Response, plainText bool) error {
 	var payload struct {
 		Error string `json:"error"`
 	}
 	message := resp.Status
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err == nil && payload.Error != "" {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err := json.Unmarshal(body, &payload); err == nil && payload.Error != "" {
 		message = payload.Error
+	} else if text := strings.TrimSpace(string(body)); plainText && text != "" {
+		message = text
 	}
-	if resp.StatusCode == http.StatusUnauthorized && isLoopbackURL(c.BaseURL) {
+	if resp.StatusCode == http.StatusUnauthorized && IsLoopbackURL(c.BaseURL) {
 		message += loopbackUnauthorizedHint()
+	}
+	if resp.StatusCode == http.StatusBadRequest {
+		lower := strings.ToLower(string(body))
+		if strings.Contains(lower, "http request") && strings.Contains(lower, "https") {
+			return fmt.Errorf("tls: %s", strings.TrimSpace(string(body)))
+		}
 	}
 	switch resp.StatusCode {
 	case http.StatusNotFound:
@@ -550,8 +706,22 @@ func (c *HTTPClient) httpError(resp *http.Response) error {
 	case http.StatusServiceUnavailable:
 		return &UnavailableError{message: message}
 	default:
-		return fmt.Errorf("grain server: %s (%s)", message, resp.Status)
+		return &StatusError{StatusCode: resp.StatusCode, Status: resp.Status, Message: message}
 	}
+}
+
+// StatusError is any other non-2xx answer from the daemon: 401, 409,
+// 422, a 5xx. It keeps the status code so a caller can say what kind of
+// failure it was (the CLI's exit codes, pkg/cli/errors.go) without
+// reading it back out of the sentence.
+type StatusError struct {
+	StatusCode int
+	Status     string
+	Message    string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("grain server: %s (%s)", e.Message, e.Status)
 }
 
 // loopbackUnauthorizedHint returns an actionable hint for a 401 received
@@ -589,7 +759,7 @@ func (c *HTTPClient) SandboxHealth(ctx context.Context) (SandboxHealthResponse, 
 
 func (c *HTTPClient) ListTasks(ctx context.Context) ([]Task, error) {
 	var tasks []Task
-	if err := c.do(ctx, http.MethodGet, "/api/tasks", nil, &tasks); err != nil {
+	if err := c.do(ctx, http.MethodGet, "/api/tasks?fields=full", nil, &tasks); err != nil {
 		return nil, err
 	}
 	return tasks, nil
@@ -738,11 +908,16 @@ func (c *HTTPClient) AddCommentWithAuthor(ctx context.Context, id, body string, 
 // than saying so.
 func (c *HTTPClient) Close(ctx context.Context, id string, opts CloseOptions) error {
 	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/close",
-		closeRequest{ClosePullRequest: opts.ClosePullRequest}, nil)
+		closeRequest{ClosePullRequest: opts.ClosePullRequest, Reason: opts.Reason}, nil)
 }
 
 func (c *HTTPClient) Reopen(ctx context.Context, id string) error {
-	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/reopen", nil, nil)
+	return c.ReopenBecause(ctx, id, "")
+}
+
+// ReopenBecause is Client.ReopenBecause over the wire.
+func (c *HTTPClient) ReopenBecause(ctx context.Context, id, reason string) error {
+	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/reopen", reopenRequest{Reason: reason}, nil)
 }
 
 func (c *HTTPClient) Retry(ctx context.Context, id string) error {
@@ -853,6 +1028,22 @@ func (c *HTTPClient) StageAttachment(ctx context.Context, id, path string, uploa
 	return staged, nil
 }
 
+// ProposeConfigChange is Client.ProposeConfigChange over the wire: the
+// mcpserver's propose_config_change, for its own task.
+func (c *HTTPClient) ProposeConfigChange(ctx context.Context, id string, proposal ConfigChangeProposal) (*model.PendingConfigChange, error) {
+	var pending model.PendingConfigChange
+	if err := c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/config-change", proposal, &pending); err != nil {
+		return nil, err
+	}
+	return &pending, nil
+}
+
+// CheckAccessRequest is Client.CheckAccessRequest over the wire: the
+// mcpserver's request_access, checking its items for its own task.
+func (c *HTTPClient) CheckAccessRequest(ctx context.Context, id string, items []model.AccessRequestItem) error {
+	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/access-request/check", AccessRequestCheck{Items: items}, nil)
+}
+
 // CreditWait is Client.CreditWait over the wire: credit id's live run for
 // the time it has now spent blocked on CI, and read back where its
 // deadline stands as a result.
@@ -896,8 +1087,17 @@ func (c *HTTPClient) PostTaskMessage(ctx context.Context, id, body, summary stri
 // themselves rather than a "yes/no": the answer to a question is the
 // words in it.
 func (c *HTTPClient) TaskMessages(ctx context.Context, id string, after int64) ([]Message, error) {
+	return c.TaskMessagesWait(ctx, id, after, 0)
+}
+
+// TaskMessagesWait is TaskMessages with an optional server-side long-poll wait
+// so a chat turn wakes immediately when a human posts a reply.
+func (c *HTTPClient) TaskMessagesWait(ctx context.Context, id string, after int64, wait time.Duration) ([]Message, error) {
 	var messages []Message
 	path := "/api/tasks/" + id + "/messages?after=" + strconv.FormatInt(after, 10)
+	if ms := wait.Milliseconds(); ms > 0 {
+		path += "&wait_ms=" + strconv.FormatInt(ms, 10)
+	}
 	if err := c.do(ctx, http.MethodGet, path, nil, &messages); err != nil {
 		return nil, err
 	}
@@ -1638,9 +1838,9 @@ func (c *HTTPClient) ResumePipeline(ctx context.Context) (
 }
 
 // DecideRelease is Client.DecideRelease over the wire -- `grain release
-// approve|reject vX.Y.0`: a person approving or rejecting a pending trunk
-// release.
-func (c *HTTPClient) DecideRelease(ctx context.Context, repo, version string, approve bool) (ReleaseDecision, error) {
+// approve|reject [-short-soak-ok] [-allow-breaking] vX.Y.Z`: a person
+// approving or rejecting a pending trunk release.
+func (c *HTTPClient) DecideRelease(ctx context.Context, repo, version string, approve bool, answers ReleaseApproval) (ReleaseDecision, error) {
 	ref, err := model.ParseRepo(repo)
 	if err != nil {
 		return ReleaseDecision{}, err
@@ -1649,10 +1849,45 @@ func (c *HTTPClient) DecideRelease(ctx context.Context, repo, version string, ap
 	if approve {
 		verb = "approve"
 	}
+	var body any
+	if answers != (ReleaseApproval{}) {
+		body = answers
+	}
 	var resp ReleaseDecision
 	err = c.do(ctx, http.MethodPost, "/api/repos/"+url.PathEscape(ref.StoredOwner())+"/"+url.PathEscape(ref.Name)+
-		"/pending-releases/"+url.PathEscape(version)+"/"+verb, nil, &resp)
+		"/pending-releases/"+url.PathEscape(version)+"/"+verb, body, &resp)
 	return resp, err
+}
+
+// RollbackRelease starts a person's rollback of version, a promoted
+// release -- POST /api/releases/{version}/rollback.
+func (c *HTTPClient) RollbackRelease(ctx context.Context, repo, version string, opts ReleaseRollback) (ReleaseDecision, error) {
+	if repo != "" {
+		ref, err := model.ParseRepo(repo)
+		if err != nil {
+			return ReleaseDecision{}, err
+		}
+		if ref != model.GrainSourceRepo() {
+			opts.Repo = ref.String()
+		}
+	}
+	var body any
+	if opts != (ReleaseRollback{}) {
+		body = opts
+	}
+	var resp ReleaseDecision
+	err := c.do(ctx, http.MethodPost, "/api/releases/"+url.PathEscape(version)+"/rollback", body, &resp)
+	return resp, err
+}
+
+// ReleaseApprovalKey is the deployment's release-approval public key,
+// PEM -- GET /api/release-approval-key.
+func (c *HTTPClient) ReleaseApprovalKey(ctx context.Context) (string, error) {
+	var resp struct {
+		PublicKey string `json:"publicKey"`
+	}
+	err := c.do(ctx, http.MethodGet, "/api/release-approval-key", nil, &resp)
+	return resp.PublicKey, err
 }
 
 // MergeBatches queries the merge batches currently in flight -- GET /api/merge-batches.
@@ -1796,6 +2031,12 @@ func ciRunsPath(f ci.RunFilter, limit int, view string) string {
 	if job := strings.TrimSpace(f.Job); job != "" {
 		query.Set("job", job)
 	}
+	if workflow := strings.TrimSpace(f.Workflow); workflow != "" {
+		query.Set("workflow", workflow)
+	}
+	if provider := strings.TrimSpace(f.Provider); provider != "" {
+		query.Set("provider", provider)
+	}
 	for _, state := range f.States {
 		query.Add("conclusion", state)
 	}
@@ -1841,6 +2082,20 @@ func (c *HTTPClient) CIRun(ctx context.Context, id string) (ci.Run, error) {
 		return ci.Run{}, err
 	}
 	return run, nil
+}
+
+// CIRunLog is one GitHub Actions job's log -- GET /api/ci/runs/{id}/log,
+// job by name or id ("" for the first that failed).
+func (c *HTTPClient) CIRunLog(ctx context.Context, id, job string) (CIRunLogResponse, error) {
+	path := "/api/ci/runs/" + url.PathEscape(id) + "/log"
+	if job = strings.TrimSpace(job); job != "" {
+		path += "?job=" + url.QueryEscape(job)
+	}
+	var resp CIRunLogResponse
+	if err := c.do(ctx, http.MethodGet, path, nil, &resp); err != nil {
+		return CIRunLogResponse{}, err
+	}
+	return resp, nil
 }
 
 // CIRunArtifacts is what one run left behind -- GET
@@ -2021,15 +2276,6 @@ func (c *HTTPClient) SetGCPKey(ctx context.Context, req SetGCPKeyRequest) (model
 // DeleteGCPKey is DELETE /api/gcp-keys/{name}.
 func (c *HTTPClient) DeleteGCPKey(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodDelete, "/api/gcp-keys/"+url.PathEscape(name), nil, nil)
-}
-
-// ListExecutors returns the connected remote executors snapshot from GET /api/executors.
-func (c *HTTPClient) ListExecutors(ctx context.Context) ([]modelexec.Status, error) {
-	var out []modelexec.Status
-	if err := c.do(ctx, http.MethodGet, "/api/executors", nil, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 // RequestLocalScriptApproval is the run's mcpserver asking for a person

@@ -19,8 +19,10 @@ package hostd
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 var testBuiltins = []BuiltinEntry{
@@ -189,5 +191,78 @@ func TestEnsureBuiltinsNeverFollowsASymlink(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(real); string(data) != "capabilities:\n" {
 		t.Errorf("the symlink's target was written: %q", data)
+	}
+}
+
+// uptickBuiltin is an edition's non-capability entry: its own args, a
+// max_duration and env overrides.
+var uptickBuiltin = BuiltinEntry{Name: "grain-uptick", Args: []string{"uptick-verify"}, Env: []string{"UPTICK_TARGET"}, PassEnv: []string{"HTTPS_PROXY"}, MaxDuration: time.Minute}
+
+func TestPlanEnsureAddsARegisteredEntryWithItsMaxDurationAndLeavesAnEditedOne(t *testing.T) {
+	in := "clis: {}\ncapabilities:\n  host-git:\n    command: /usr/local/bin/grain\n    args: [capability, host-git]\n    pass_env: [HTTP_PROXY, HTTPS_PROXY, NO_PROXY, http_proxy, https_proxy, no_proxy]\n"
+	out, res, err := PlanEnsure([]byte(in), cmd, []BuiltinEntry{uptickBuiltin})
+	if err != nil || !reflect.DeepEqual(res.Added, []string{"grain-uptick"}) {
+		t.Fatalf("added %v (%v)", res.Added, err)
+	}
+	want := "  grain-uptick:\n    command: /usr/local/bin/grain\n    args: [uptick-verify]\n    env: [UPTICK_TARGET]\n    pass_env: [HTTPS_PROXY]\n    max_duration: 1m\n"
+	if string(out) != in+want {
+		t.Errorf("got:\n%s\nwant:\n%s", out, in+want)
+	}
+	a, err := ParseAllowlist(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := a.Capabilities["grain-uptick"]; e.MaxDuration != time.Minute || !reflect.DeepEqual(e, uptickBuiltin.Entry(cmd)) {
+		t.Errorf("parsed %+v, want %+v", e, uptickBuiltin.Entry(cmd))
+	}
+
+	// An operator's edit -- a longer max_duration -- is kept and reported.
+	edited := strings.Replace(string(out), "max_duration: 1m", "max_duration: 5m", 1)
+	again, res, err := PlanEnsure([]byte(edited), cmd, []BuiltinEntry{uptickBuiltin})
+	if err != nil || len(res.Added) != 0 || string(again) != edited {
+		t.Fatalf("an edited entry was changed: added %v (%v)\n%s", res.Added, err, again)
+	}
+	if len(res.Differs) != 1 || !strings.Contains(res.Differs[0], "grain-uptick: max_duration 5m0s (default 1m0s)") {
+		t.Errorf("differs = %q", res.Differs)
+	}
+}
+
+// An operator's edit to a field grain's own entry leaves unset -- set_env,
+// path, paths_under, cwd_under -- is kept and reported like any other, and
+// set_env is reported by its names, never its values (walkthrough
+// 2026-11-03-hostd-registry, F5).
+func TestPlanEnsureReportsEditsToFieldsTheBuiltinLeavesUnset(t *testing.T) {
+	in := "clis: {}\ncapabilities:\n  host-git:\n    command: /usr/local/bin/grain\n    args: [capability, host-git]\n" +
+		"    pass_env: [HTTP_PROXY, HTTPS_PROXY, NO_PROXY, http_proxy, https_proxy, no_proxy]\n" +
+		"    set_env: {GIT_TRACE: \"1\", GIT_SSH_COMMAND: \"ssh -i /root/secret-key\"}\n    cwd_under: [/srv]\n"
+	b := BuiltinEntry{Name: "host-git", Args: []string{"capability", "host-git"}}
+	out, res, err := PlanEnsure([]byte(in), cmd, []BuiltinEntry{b})
+	if err != nil || len(res.Added) != 0 || string(out) != in {
+		t.Fatalf("an edited entry was changed: added %v (%v)\n%s", res.Added, err, out)
+	}
+	if len(res.Differs) != 1 {
+		t.Fatalf("differs = %q, want one line for host-git", res.Differs)
+	}
+	for _, want := range []string{"set_env [GIT_SSH_COMMAND GIT_TRACE] (default [])", "cwd_under [/srv] (default [])"} {
+		if !strings.Contains(res.Differs[0], want) {
+			t.Errorf("differs = %q, want it to say %q", res.Differs[0], want)
+		}
+	}
+	if strings.Contains(res.Differs[0], "secret-key") {
+		t.Errorf("differs = %q carries a set_env value", res.Differs[0])
+	}
+}
+
+func TestCheckInstallerEntries(t *testing.T) {
+	good := "capabilities:\n" + uptickBuiltin.YAML(cmd, "  ", "  ")
+	if bad := CheckInstallerEntries(good, cmd, []BuiltinEntry{uptickBuiltin}); len(bad) != 0 {
+		t.Errorf("the binary's own text disagrees with itself: %q", bad)
+	}
+	noLimit := strings.Replace(good, "    max_duration: 1m\n", "", 1)
+	if bad := CheckInstallerEntries(noLimit, cmd, []BuiltinEntry{uptickBuiltin}); len(bad) != 2 {
+		t.Errorf("an installer without the max_duration: %q", bad)
+	}
+	if bad := CheckInstallerEntries("capabilities: {}\n", cmd, []BuiltinEntry{uptickBuiltin}); len(bad) != 1 || !strings.Contains(bad[0], "writes no entry") {
+		t.Errorf("an installer without the entry: %q", bad)
 	}
 }

@@ -43,6 +43,9 @@
 //             values are a fixed vocabulary rather than whatever the
 //             tasks happen to hold. The rest are offered alphabetically
 //             by what the menu shows.
+//   closed    whether `order` is every value there can be, so a value
+//             outside it matches nothing and its chip says so
+//             (taskFilters.js's unknownValues).
 //   noneLabel what "has no value for this" is called, for the attributes
 //             where having none is a real answer worth filtering on.
 //   glyphOf   the item glyph a value's menu row carries, for the
@@ -180,13 +183,24 @@ const one = (pick) => (t) => {
   return v === undefined || v === null || v === "" ? [] : [v];
 };
 
-// stateRank puts a task where STATE_ORDER -- the sidebar's own order,
-// proposed through closed -- says it goes. A state this build has never
-// heard of sorts after all of them instead of before, so a newer
-// daemon's unknown state doesn't quietly take over the top of the list.
+// SORT_STATE_ORDER is DISPLAY_STATE_ORDER -- the sidebar's and the
+// Kanban board's own order, proposed through closed -- with its one
+// "Asked" opened back out into the two states it stands for, side by
+// side. Not STATE_ORDER: that is model.StateOf's precedence, which puts
+// failed between the two asked states, so a list ordered by state split
+// the asked tasks the rest of the UI shows as one group with the failed
+// ones (gantt.js's lane order made the same mistake).
+const SORT_STATE_ORDER = DISPLAY_STATE_ORDER.flatMap((s) =>
+  s === "asked" ? ASKED_STATES : [s],
+);
+
+// stateRank puts a task where SORT_STATE_ORDER says it goes. A state
+// this build has never heard of sorts after all of them instead of
+// before, so a newer daemon's unknown state doesn't quietly take over
+// the top of the list.
 export function stateRank(t) {
-  const i = STATE_ORDER.indexOf(t.state);
-  return i === -1 ? STATE_ORDER.length : i;
+  const i = SORT_STATE_ORDER.indexOf(t.state);
+  return i === -1 ? SORT_STATE_ORDER.length : i;
 }
 
 // idKey sorts task ids as the numbers they are ("9" before "10"), while
@@ -222,6 +236,9 @@ export const ATTRIBUTES = [
     // order is model.State's own (the sort rank, and what pkg/cli's
     // vocabulary test reads); menuOrder is what the menu offers.
     order: STATE_ORDER,
+    // ...and is every state there is, so a condition naming anything
+    // else matches nothing and its chip says so (unknownValues).
+    closed: true,
     menuOrder: [...DISPLAY_STATE_ORDER, ...ASKED_STATES],
     labelOf: (v) =>
       v === "awaiting_reply"
@@ -442,6 +459,12 @@ export const ATTRIBUTES = [
     type: TYPE_TEXT,
     values: one((t) => t.id),
     key: idKey,
+  },
+  {
+    id: "priority",
+    label: "Task priority",
+    type: TYPE_NUMBER,
+    values: (t) => [String(t.priority ?? 5)],
   },
 ];
 

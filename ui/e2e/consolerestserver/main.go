@@ -41,11 +41,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
@@ -54,25 +56,119 @@ import (
 )
 
 // scriptedSession is the session's agent: it answers in plain text and
-// keeps every prompt it was given.
+// keeps every prompt it was given. When interactiveTaskID is set via
+// /e2e/interactive-control, runs for that task can be held in Running
+// state and answer with all human comments received up to release.
 type scriptedSession struct {
-	mu      sync.Mutex
-	prompts []string
+	mu                 sync.Mutex
+	store              *model.Store
+	prompts            []string
+	interactiveTaskID  string
+	interactiveReplies int
+	holdNext           bool
+	releaseCh          chan struct{}
+}
+
+func (s *scriptedSession) configureInteractive(taskID string, holdNext, release bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if taskID != "" {
+		s.interactiveTaskID = taskID
+	}
+	if holdNext {
+		s.holdNext = true
+		s.releaseCh = make(chan struct{})
+	}
+	if release && s.releaseCh != nil {
+		select {
+		case <-s.releaseCh:
+		default:
+			close(s.releaseCh)
+		}
+		s.holdNext = false
+	}
 }
 
 func (s *scriptedSession) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result, error) {
 	s.mu.Lock()
-	s.prompts = append(s.prompts, cfg.Prompt)
-	n := len(s.prompts)
+	isInteractive := s.interactiveTaskID != "" && cfg.TaskID == s.interactiveTaskID
+	var waitCh chan struct{}
+	if isInteractive && s.holdNext {
+		waitCh = s.releaseCh
+		s.holdNext = false
+	}
+	if !isInteractive {
+		s.prompts = append(s.prompts, cfg.Prompt)
+		n := len(s.prompts)
+		s.mu.Unlock()
+		answer := fmt.Sprintf("Scripted answer %d.", n)
+		return &agent.Result{FinalText: answer, Transcript: answer}, nil
+	}
 	s.mu.Unlock()
-	answer := fmt.Sprintf("Scripted answer %d.", n)
-	return &agent.Result{FinalText: answer, Transcript: answer}, nil
+
+	if waitCh != nil {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-waitCh:
+		}
+	}
+
+	obs, err := s.store.GetObservation(ctx, cfg.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	var deliveredID int64
+	if obs.DeliveredCommentID != nil {
+		deliveredID = *obs.DeliveredCommentID
+	}
+	comments, err := s.store.Comments(ctx, cfg.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	var received []string
+	var maxID int64
+	for _, c := range comments {
+		if c.Author.Actor.Kind == model.PrincipalHuman && c.ID > deliveredID {
+			received = append(received, strings.TrimSpace(c.Body))
+			if c.ID > maxID {
+				maxID = c.ID
+			}
+		}
+	}
+	if maxID > 0 {
+		_ = s.store.AdvanceDelivered(ctx, cfg.TaskID, maxID, time.Now().UTC())
+	}
+
+	s.mu.Lock()
+	s.interactiveReplies++
+	replyNum := s.interactiveReplies
+	s.mu.Unlock()
+
+	answer := fmt.Sprintf("Agent chat reply %d: received [%s]", replyNum, strings.Join(received, ", "))
+	return &agent.Result{
+		FinalText:        answer,
+		Transcript:       answer,
+		ResumableSession: "warm-session-e2e",
+		ToolCalls: []agent.ToolCall{{
+			Name:      "comment_on_issue",
+			Arguments: map[string]any{"comment": answer},
+		}},
+	}, nil
 }
 
 func (s *scriptedSession) snapshot() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.prompts...)
+}
+
+// taskCanceller is ui.Config.TaskCanceller over orchestrator.TaskCancellers,
+// as the daemon's taskCancellerAdapter is.
+type taskCanceller struct{ cancellers *orchestrator.TaskCancellers }
+
+func (c taskCanceller) CancelTask(_ context.Context, taskID string) bool {
+	return c.cancellers.Cancel(taskID, orchestrator.ErrTurnStopped)
 }
 
 func main() {
@@ -101,7 +197,7 @@ func run() error {
 		return err
 	}
 	cfg := model.DefaultConfig()
-	cfg.MaxWorkers = 1
+	cfg.MaxWorkers = 2
 	cfg.ConsoleSessions = []model.ConsoleSession{{
 		ID: model.DirectorSessionID, Title: "Director",
 		Capabilities: []string{}, NetworkAccess: model.NetworkOpen,
@@ -115,8 +211,14 @@ func run() error {
 		return err
 	}
 	defaultRepo := model.RepoRef{Owner: "acme", Name: "widgets"}
-	provider := &scriptedSession{}
+	provider := &scriptedSession{store: store}
+	// Stop reaches a held run the way it does on a daemon
+	// (daemon.taskCancellerAdapter): the run's own context is cancelled
+	// with orchestrator.ErrTurnStopped, rather than only its stored row
+	// being finished while the scripted agent goes on holding the task.
+	cancellers := orchestrator.NewTaskCancellers()
 	handler := ui.NewServer(ui.Config{
+		TaskCanceller: taskCanceller{cancellers},
 		Actor:         model.Principal{Kind: model.PrincipalHuman, ID: "console-rest-e2e-operator"},
 		DefaultTarget: &defaultRepo, Capabilities: ui.OfferedCapabilities(),
 		SandboxShapeIgnored: true,
@@ -124,13 +226,19 @@ func run() error {
 		// loopback included, shows it, as on every grain daemon.
 		LocalAPIToken: os.Getenv("GRAIN_E2E_ACCESS_CODE"),
 	}, store)
+	// api grants resolve as on every grain daemon
+	// (ui.AgentAPIDynamicProvider): every console session holds
+	// model.ConsoleSessionCIReadGrant by default.
+	registry := model.NewCapabilityRegistry(bootstrap.New(), durable.New())
+	registry.RegisterDynamic(ui.AgentAPIDynamicProvider)
 	deps := orchestrator.Deps{
 		Store: store, Sandboxes: orchestrator.NewHostSandboxes(sandboxRoot),
 		Framework: orchestrator.StaticFramework(provider),
 		Config: orchestrator.Config{
-			Capabilities: model.NewCapabilityRegistry(durable.New()),
+			Capabilities:   registry,
+			TaskCancellers: cancellers,
 		},
-		MaxWorkers: 1,
+		MaxWorkers: 2,
 	}
 
 	// One cycle at a time, whether the ticker or a test hook asked for it,
@@ -154,6 +262,19 @@ func run() error {
 	mux.HandleFunc("GET /e2e/prompts", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"prompts": provider.snapshot()})
+	})
+	mux.HandleFunc("POST /e2e/interactive-control", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			TaskID     string `json:"taskId"`
+			HoldNext   bool   `json:"holdNext"`
+			ReleaseRun bool   `json:"releaseRun"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		provider.configureInteractive(body.TaskID, body.HoldNext, body.ReleaseRun)
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /e2e/end-exchange", func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("task")

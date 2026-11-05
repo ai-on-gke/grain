@@ -200,7 +200,11 @@ test.describe("Responsive Navigation Matrix & Shell Behavior", () => {
     await expect(page).toHaveURL(new RegExp(`/repos/${repoName}/releases$`));
     await assertNoHorizontalOverflow(page);
 
-    // 7. CI
+    // 7. CI (re-enabled in Customize sidebar storage since CI is hidden by default)
+    await page.evaluate(() =>
+      localStorage.setItem("grain.sidebar.hidden", "[]"),
+    );
+    await page.reload();
     await page.getByRole("button", { name: /^CI/ }).click();
     await expect(page).toHaveURL(/\/ci$/);
     await expect(page.locator(".ci-panel")).toBeVisible();
@@ -284,7 +288,7 @@ test.describe("Responsive Navigation Matrix & Shell Behavior", () => {
     await page.locator(".overlay-pane-back button").click();
     await expect(page).toHaveURL(/\/processes(\?kind=suite)?$/);
 
-    // 11. Settings: a view behind the gear (docs/design/settings-panel.md)
+    // 11. Settings: a view behind the gear (design/design/settings-panel.design.md)
     await page.getByTestId("top-bar-settings").click();
     await expect(page).toHaveURL(/\/settings\/models$/);
     await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
@@ -451,14 +455,18 @@ test.describe("Responsive Navigation Matrix & Shell Behavior", () => {
     expect(isScrollable).toBe(true);
 
     // Scroll rail to bottom to view build stamp, the rail's foot now the
-    // user tile is gone (docs/design/settings-panel.md §4.3)
+    // user tile is gone (design/design/settings-panel.design.md §4.3)
     const buildStamp = aside.getByTestId("build-stamp");
     await buildStamp.scrollIntoViewIfNeeded();
     await expect(buildStamp).toBeVisible();
     const stampBox = await buildStamp.boundingBox();
     expect(stampBox.height).toBeGreaterThan(0);
     expect(stampBox.y + stampBox.height).toBeLessThanOrEqual(500);
-    await expect(aside.getByTestId("user-tile")).toHaveCount(0);
+    // The whoami tile sits over the stamp (operator-attribution spec §5.4).
+    await expect(aside.getByTestId("user-tile")).toHaveAttribute(
+      "title",
+      /^operator \((access code|local)\)$/,
+    );
 
     // System and Settings are reachable from the page's header rail
     await expect(page.getByTestId("top-bar-system")).toBeVisible();
@@ -677,7 +685,7 @@ test("Overlay action rows keep every control on a 320px phone", async ({
       controls: ["Delete", "Pause", "Run now", "Cancel", "Save"],
     },
     // Settings and System are views, not overlay panes
-    // (docs/design/settings-panel.md §3.1): their rows are in the main
+    // (design/design/settings-panel.design.md §3.1): their rows are in the main
     // landmark.
     { path: "/settings/access", controls: ["Log out"], view: true },
     { path: "/system/logs", controls: ["Refresh"], view: true },
@@ -936,6 +944,9 @@ test("A task pane wraps an unbroken usage-limit pause reason", async ({
 test("A phone's drawer closes when an entry is chosen from the keyboard", async ({
   page,
 }) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("grain.sidebar.hidden", "[]"),
+  );
   await page.setViewportSize(PHONE_PORTRAIT);
   await page.goto("/");
   await expect(page.locator(".task-row").first()).toBeVisible();
@@ -1569,6 +1580,9 @@ test("A grain version's release notes open on screen and say they are open", asy
 test("Every page the rail opens has one main landmark holding its heading", async ({
   page,
 }) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("grain.sidebar.hidden", "[]"),
+  );
   const pages = [
     { entry: /^Boards/, url: /\/boards$/, heading: "Boards" },
     { entry: /^Sessions/, url: /\/sessions$/, heading: "Sessions" },
@@ -1752,7 +1766,7 @@ test("Every pane the shell opens is named, and the rail says which page is open"
     await expect(page.getByRole("dialog")).toHaveCount(0);
 
     // Settings and System are views rather than dialogs now
-    // (docs/design/settings-panel.md §3.1): each has one main landmark,
+    // (design/design/settings-panel.design.md §3.1): each has one main landmark,
     // named by its heading, and the button that opened it says so.
     for (const { open, name } of [
       {
@@ -1859,12 +1873,11 @@ test("A new session opens as an empty chat with its controls in one row, and cre
   }
 });
 
-// On a phone the rail lives in PhoneNav's drawer, which closes -- and
-// unmounts the rail -- on the tap that asks for Customize. While the
-// overlay was the rail's own state it went with the drawer and never
-// appeared (2026-10-23 responsive walkthrough, bug 2). Pinning from a
-// phone has to open the overlay, save, and show the pin in the drawer
-// after a reload.
+// On a phone the rail lives in PhoneNav's drawer. While the overlay was
+// the rail's own state it went with the drawer and never appeared
+// (2026-10-23 responsive walkthrough, bug 2). The drawer now stays open
+// under it (2026-11-01 responsive walkthrough), so a pin saved there
+// shows in the drawer at once, and after a reload.
 test("Customize sidebar opens from the phone drawer and its pin persists", async ({
   page,
 }) => {
@@ -1873,8 +1886,13 @@ test("Customize sidebar opens from the phone drawer and its pin persists", async
   const menu = page.getByRole("button", { name: "Open navigation" });
   await menu.click();
   const drawer = page.getByRole("dialog", { name: "Navigation", exact: true });
-  await drawer.getByRole("button", { name: "Customize sidebar" }).click();
-  await expect(drawer).toHaveCount(0);
+  const customize = drawer.getByRole("button", { name: "Customize sidebar" });
+  await customize.click();
+  // By class as well as role: MUI hides the drawer from the
+  // accessibility tree while the overlay is up, which a role query
+  // honours.
+  const paper = page.locator(".MuiDrawer-paper[aria-label=Navigation]");
+  await expect(paper).toBeVisible();
   const overlay = page.getByRole("dialog", {
     name: "Customize sidebar",
   });
@@ -1889,9 +1907,13 @@ test("Customize sidebar opens from the phone drawer and its pin persists", async
     await overlay.getByRole("button", { name: "Pin item" }).click();
     await overlay.getByRole("button", { name: "Save" }).click();
     await expect(overlay).toHaveCount(0);
-    // Escape and Save hand focus back to the bar's menu button, the
-    // control the reader started from, rather than to a rail that is gone.
-    await expect(menu).toBeFocused();
+    // Save hands focus back to Customize, in the drawer that is still
+    // open, with the new pin already in it.
+    await expect(drawer).toBeVisible();
+    await expect(customize).toBeFocused();
+    await expect(
+      drawer.getByRole("button", { name: /^Director/ }),
+    ).toBeVisible();
 
     await page.reload();
     await menu.click();

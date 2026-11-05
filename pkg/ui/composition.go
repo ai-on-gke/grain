@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -56,7 +57,8 @@ import (
 type ComposedField struct {
 	// Name is the field, in the vocabulary a UI labels: "title",
 	// "body", "repo", "base", "reads", "writes", "capabilities",
-	// "customFields", "network", "autoMerge", "approval".
+	// "customFields", "network", "nothingNeeded", "model", "autoMerge",
+	// "approval", and "keepRunning" and "priority" where they are set.
 	Name   string   `json:"name"`
 	Values []string `json:"values,omitempty"`
 	// Source is a model.CompositionLayer: "template", "schedule",
@@ -179,6 +181,25 @@ func composedTaskFrom(c model.Composition, modelFallbackSource string, modelFall
 		{Name: "model", Values: modelValues, Source: modelSource},
 		{Name: "autoMerge", Values: []string{onOff(c.AutoMerge)}, Source: string(c.Sources.AutoMerge)},
 		{Name: "approval", Values: []string{approvalWord(c.Approved)}, Source: string(c.Sources.Approved)},
+	}
+	// Keep running, like priority below, only where it is on: an off row
+	// on every preview would say nothing a task pane does not, but a
+	// template or schedule that restarts every task it files is worth
+	// saying before it fires (2026-11-03 walkthrough: the panel had the
+	// label, and the composition never sent the row).
+	if c.KeepRunning {
+		fields = append(fields, ComposedField{
+			Name: "keepRunning", Values: []string{onOff(true)}, Source: string(c.Sources.KeepRunning),
+		})
+	}
+	// Only a template sets a priority other than the default
+	// (model.Template.Priority; an inline schedule's firing always takes
+	// model.DefaultTaskPriority), and only one that does is worth a row:
+	// the task detail pane says nothing of a priority of 5 either.
+	if c.Priority != 0 && c.Priority != model.DefaultTaskPriority {
+		fields = append(fields, ComposedField{
+			Name: "priority", Values: []string{strconv.Itoa(c.Priority)}, Source: string(model.LayerTemplate),
+		})
 	}
 	return ComposedTask{
 		TemplateID:   c.TemplateID,

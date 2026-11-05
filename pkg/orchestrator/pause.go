@@ -48,10 +48,12 @@ var errUsageLimit = errors.New("orchestrator: the agent's usage limit was reache
 //     short delay. The point of pausing is to stop the queue walking
 //     into the same wall run after run, and a few seconds does not.
 //   - maxUsageLimitPause is the ceiling over one that named a very long
-//     one -- or over a reset instant this code misread. A deployment
-//     idling for a wrong six hours is recoverable; one idling until 2286
-//     because an epoch was parsed in the wrong unit is not something
-//     anybody would think to look for.
+//     one -- or over a reset instant this code misread. A day covers the
+//     longest window a provider has been seen to name (agy's "Resets in
+//     17h32m", task 1908, which a 6h cap met two or three times over).
+//     A deployment idling for a wrong day is recoverable; one idling
+//     until 2286 because an epoch was parsed in the wrong unit is not
+//     something anybody would think to look for.
 //
 // Retrying once the pause lifts is not a promise the limit is over: a
 // window that has not actually reset produces one more refusal, one more
@@ -60,7 +62,7 @@ var errUsageLimit = errors.New("orchestrator: the agent's usage limit was reache
 const (
 	defaultUsageLimitPause = 15 * time.Minute
 	minUsageLimitPause     = time.Minute
-	maxUsageLimitPause     = 6 * time.Hour
+	maxUsageLimitPause     = 24 * time.Hour
 )
 
 // PauseScope is what one usage limit belongs to, and so what the pause it
@@ -71,8 +73,7 @@ const (
 // CredentialBackendID) or itself (model.AgentBackend.CredentialOwnerID)
 // -- and Connection names it. Teams cannot share connections, so such a
 // pause never reaches another team's work, nor the same team's other
-// connections on other keys. Remote executors' connections
-// ("executor-...") are connections like any other here.
+// connections on other keys.
 //
 // A run on no connection -- the deployment-level credentials a
 // deployment with no connections configured runs on (the legacy
@@ -321,6 +322,11 @@ type Pause struct {
 	// is counting towards a refusal nobody has a marker for, keyed by
 	// credential and error text (burstKey). See refusalburst.go.
 	bursts map[string][]burstFailure
+	// burstClaims is the earlier runs of a burst, by run id, with the
+	// detail they are re-recorded under (claimBurst): what a run that
+	// writes its own failure after the burst was declared reads back, so
+	// its write does not undo the re-record (claimedByBurst).
+	burstClaims map[string]burstClaim
 	// store keeps windows across restarts; nil until Restore attaches
 	// one, and nil for good in a test or one-shot cycle that never does.
 	store PauseStore

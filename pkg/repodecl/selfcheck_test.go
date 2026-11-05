@@ -178,11 +178,35 @@ func TestTheReleaseQualificationSuiteRunsEveryQualificationTemplate(t *testing.T
 				model.TemplateDeclarationDir, name, stem)
 		}
 	}
-	if suite.Mode != model.SuiteCount || suite.Count != 1 {
-		t.Errorf("%s runs %q x%d; expected mode count x1", stem, suite.Mode, suite.Count)
+	// One pass that must read clean, and no auto-merge: a pull request or a
+	// proposed follow-up fails Stage 2 (design/playbook/releases.playbook.md
+	// §2). And no auto-approve-proposals: a follow-up on any branch but the
+	// task's own scratch branch is a defect report for a person, and the
+	// fixtures on that branch run unattended on the template's push of it
+	// (model.ScratchFixture) -- checked below.
+	if suite.Mode != model.SuiteUntilClean || suite.MaxPasses != 1 {
+		t.Errorf("%s runs %q with max-passes %d; expected until_clean with max-passes 1", stem, suite.Mode, suite.MaxPasses)
 	}
-	if suite.RequireApproval || !suite.AutoMerge {
-		t.Errorf("%s: require-approval %v, auto-merge %v", stem, suite.RequireApproval, suite.AutoMerge)
+	if suite.RequireApproval || suite.AutoMerge || suite.AutoApproveProposals {
+		t.Errorf("%s: require-approval %v, auto-merge %v, auto-approve-proposals %v; want false, false, false",
+			stem, suite.RequireApproval, suite.AutoMerge, suite.AutoApproveProposals)
+	}
+	// Every item that files fixtures may push its own scratch branch, or
+	// its fixtures wait for a person and the item can never finish.
+	for _, f := range declared.Templates {
+		name := model.DeclarationStem(f.Path)
+		if !strings.HasPrefix(name, "qualification-") || !strings.Contains(f.Template.Body, "propose_task") {
+			continue
+		}
+		if matched, _, del := f.Push.Allows("refs/heads/" + model.QualificationScratchBranch("123")); !matched || !del {
+			t.Errorf("%s/%s.yml files scratch fixtures but does not declare a push (with delete) of "+
+				"refs/heads/qualification/*", model.TemplateDeclarationDir, name)
+		}
+	}
+	// The reconciler files the last item only after every other passes.
+	smoke := model.RepoDeclaredID(model.DeclaredTemplate, repo, "qualification-system-smoke")
+	if n := len(suite.Items); n == 0 || suite.Items[n-1].TemplateID != smoke {
+		t.Errorf("%s: qualification-system-smoke must be its last item, got %+v", stem, suite.Items)
 	}
 }
 

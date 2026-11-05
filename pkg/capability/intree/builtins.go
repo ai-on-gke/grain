@@ -30,7 +30,7 @@ import (
 // the same on every deployment, so a grant naming
 // https://grain.dev/capabilities/gcp#gcp-key carries across deployments,
 // templates and repos. Like any capability_id it is a name only: nothing
-// ever fetches it (docs/capabilities-spec.md §3.2).
+// ever fetches it (design/spec/capabilities/capabilities.spec.md §3.2).
 const CanonicalIDPrefix = "https://grain.dev/capabilities/"
 
 // CanonicalID is the canonical capability_id of the in-tree server called
@@ -43,7 +43,11 @@ func CanonicalID(name string) string { return CanonicalIDPrefix + name }
 // longer lingers as "needs configuring" in Settings; an entry an
 // operator configured or aliased is left in place as an external server
 // (Builtin cleared).
-var retiredBuiltins = []string{"self-debug"}
+//
+// model-proxy's canonical id is grain's in-process model-proxy server
+// now (pkg/capability/modelproxy.Method), so its default entry is
+// dropped the same way.
+var retiredBuiltins = []string{"self-debug", "model-proxy"}
 
 // BuiltinCommand is the stdio command a built-in entry starts in the
 // daemon's own environment: the grain binary, found on PATH, as

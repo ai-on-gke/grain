@@ -104,7 +104,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/k8s"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/postgres"
-	"github.com/ai-on-gke/grain/pkg/modelexec"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
@@ -193,6 +192,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	dbDriver := fs.String("db-driver", "sqlite", "database backend driver (\"sqlite\" or \"postgres\"); defaults to sqlite")
 	dbDSN := fs.String("db-dsn", "", "database connection string / DSN or path; for sqlite defaults to <data-dir>/store")
 	postgresURL := fs.String("postgres-url", "", "PostgreSQL connection URL (alias for -db-driver=postgres -db-dsn=URL)")
+	secretsBackend := fs.String("secrets-backend", secrets.BackendFile, "secret store backend (\"file\" or \"secretmanager\"); defaults to $GRAIN_SECRETS_BACKEND, then \"file\"")
+	secretsSMPrefix := fs.String("secrets-sm-prefix", "", "Secret Manager resource prefix (projects/<project>/secrets/<id-prefix>) when -secrets-backend=secretmanager; defaults to $GRAIN_SECRETS_SM_PREFIX")
 	sandboxDir := fs.String("sandbox-dir", "", "root directory for this deployment's disposable scratch space -- host-sandbox run directories, "+
 		"and the package and Actions caches default under it, and the UI reports its disk as the sandboxes' own (scripts/setup.sh installs it "+
 		"at /var/lib/grain/scratch, beside -data-dir's /var/lib/grain/data). Deliberately a separate flag from -data-dir rather than a "+
@@ -305,23 +306,27 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	uiIAPIssuer := fs.String("ui-iap-issuer", "", "the issuer a signed assertion must carry; defaults to $GRAIN_IAP_ISSUER, then "+ui.GoogleIAPIssuer)
 	uiIAPKeysURL := fs.String("ui-iap-keys-url", "", "where the signing keys for those assertions are published (IAP's PEM map or a JWK set); "+
 		"defaults to $GRAIN_IAP_KEYS_URL, then "+ui.GoogleIAPCertURL)
+	uiRequireIAP := fs.Bool("ui-require-iap", false, "accept the access code (bearer or grain_access cookie) only from loopback with no forwarding "+
+		"or proxy headers, and serve no \"Enter access code\" page, so network callers sign in through IAP alone (docs/access-code.md); "+
+		"needs -ui-iap-audience or $GRAIN_IAP_AUDIENCE. Defaults to $GRAIN_REQUIRE_IAP")
+	uiAllowedPrincipals := fs.String("ui-allowed-principals", "", ui.AllowedPrincipalsUsage)
 	uiOpen := fs.Bool("ui-open", false, "open the UI in the system's default browser once it's listening")
 	actor := fs.String("as", "", "principal the UI/API attributes tasks and comments it creates to (defaults to the OS user)")
 	defaultTargetRepo := fs.String("default-target-repo", "", "owner/name a task created through the UI/API with no repo of its own targets")
 	policyFile := fs.String("policy", "", "local policy file (grain_policy.yml) every task must fit before it gets a sandbox; empty enforces none (docs/local-policy.md)")
 	// The tunnel gateway and rendezvous relay these named are gone
-	// (grain/task-2099, docs/relay-removed.md). They stay defined only so
+	// (grain/task-2099). They stay defined only so
 	// a unit file still passing them stops the daemon with a clear
 	// message (removedTunnelGatewaySettings, removedRelaySettings), rather
 	// than being ignored as unknown and leaving the UI unreachable.
 	fs.String("tunnel-gateway-url", "", "removed: the tunnel gateway is gone. The daemon refuses to start with this set")
 	fs.String("tunnel-token", "", "removed: the tunnel gateway is gone. The daemon refuses to start with this set")
-	fs.String("relay-url", "", "removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set")
-	fs.String("relay-auth-token-file", "", "removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set")
-	fs.String("relay-token", "", "removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set")
-	fs.String("relay-audience", "", "removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set")
-	fs.String("relay-iap-jwt-audience", "", "removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set")
-	fs.String("relay-session-lifetime", "", "removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set")
+	fs.String("relay-url", "", "removed: the rendezvous relay is gone. The daemon refuses to start with this set")
+	fs.String("relay-auth-token-file", "", "removed: the rendezvous relay is gone. The daemon refuses to start with this set")
+	fs.String("relay-token", "", "removed: the rendezvous relay is gone. The daemon refuses to start with this set")
+	fs.String("relay-audience", "", "removed: the rendezvous relay is gone. The daemon refuses to start with this set")
+	fs.String("relay-iap-jwt-audience", "", "removed: the rendezvous relay is gone. The daemon refuses to start with this set")
+	fs.String("relay-session-lifetime", "", "removed: the rendezvous relay is gone. The daemon refuses to start with this set")
 	local := localFlags(fs)
 
 	geminiAPIKeyFile := fs.String("gemini-api-key-file", "", "file holding the Gemini API key the agent runs as. "+
@@ -373,9 +378,16 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	hostdSocket := fs.String("hostd-socket", "", "grain hostd's unix socket, for a daemon in a container whose host "+
 		"CLIs run through hostd; empty uses "+hostd.DefaultSocketPath+" when its directory is mounted into the container. "+
 		"Refused on Kubernetes, which has no host")
-	hostdTokenFile := fs.String("hostd-token-file", "", "file holding the shared token a grain hostd on another machine dials in to "+
-		hostd.RemotePath+" with (grain hostd -server <this daemon's URL> -token-file ...): its host CLIs and run: host capability "+
-		"servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset; neither means no hostd may dial in")
+	hostdTokenFile := fs.String("hostd-token-file", "", "deprecated, for one release: file holding a shared token a grain hostd on another machine dials in to "+
+		hostd.RemotePath+" with (grain hostd -server <this daemon's URL> -token-file ...), as the one hostd -hostd-token-name names: its host CLIs and run: host capability "+
+		"servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each hostd in the hostd registry (/api/hostds) instead, "+
+		"which gives it a token of its own")
+	hostdReattachTimeout := fs.Duration("hostd-reattach-timeout", 15*time.Minute, "how long a run's agent CLI, running detached on a grain hostd whose "+
+		"connection drops, waits for that same hostd to reconnect before the run fails as an infrastructure failure (no strike against the task); "+
+		"re-attached in time, it carries on from where its output stood. Runs queued for a hostd that is not connected wait for it whatever this is. 0 fails at once")
+	hostdTokenName := fs.String("hostd-token-name", hostd.DefaultSharedName, "the hostd name a hostd dialing in with -hostd-token-file's shared token is known by")
+	hostdTokenOwner := fs.String("hostd-token-owner", "", "the owner of -hostd-token-name's hostd: the email or service account a hostd dialing in with the shared token "+
+		"through IAP (or another identity verifier's proxy) must be verified as. A remote hostd with no owner is refused; one over loopback is not")
 	openAIAPIKeyFile := fs.String("openai-api-key-file", "", "file holding the OpenAI API key the agent "+
 		"authenticates as, passed to the codex subprocess as OPENAI_API_KEY. Optional, and the exact "+
 		"counterpart of the two files above: the UI stores one as the "+
@@ -407,17 +419,6 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		"repository's answer complete, as owner/name=check,check;owner/other=check -- a "+
 		"repository not named here is always read from GitHub")
 	githubWebhookURL, githubWebhookAddr := githubWebhookFlags(fs)
-
-	executorAddr := fs.String("executor-addr", "", "address to listen on for remote model executors (host:port, e.g. :4243); empty disables remote execution")
-	modelExecAddr := fs.String("model-exec-addr", "", "legacy alias for -executor-addr")
-	executorTokenFile := fs.String("executor-token-file", "", "file holding the shared token remote executors authenticate with (required with -executor-addr)")
-	modelExecTokenFile := fs.String("model-exec-token-file", "", "legacy alias for -executor-token-file")
-	executorWait := fs.Duration("executor-wait", modelexec.DefaultWait, "how long a dispatch waits for a remote executor to connect before giving up")
-	modelExecWait := fs.Duration("model-exec-wait", 0, "legacy alias for -executor-wait")
-	executorCertFile := fs.String("executor-cert-file", "", "PEM certificate file for TLS on -executor-addr (required with -executor-key-file)")
-	modelExecCertFile := fs.String("model-exec-cert-file", "", "legacy alias for -executor-cert-file")
-	executorKeyFile := fs.String("executor-key-file", "", "PEM private key file for TLS on -executor-addr (required with -executor-cert-file)")
-	modelExecKeyFile := fs.String("model-exec-key-file", "", "legacy alias for -executor-key-file")
 
 	gcpProject := fs.String("gcp-project", "", "GCP project the gcp-key/gemini-key capabilities mint into; empty disables both"+seedOnly)
 	gcpServiceAccountEmail := fs.String("gcp-agent-service-account", "", "the narrow agent service account gcp-key mints keys for"+seedOnly)
@@ -454,10 +455,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	// since nothing here builds or installs a binary: an image deployment
 	// passes neither, and the self-debug capability reads the source the
 	// image carries rather than a checkout a flag names (see sourceDir).
-	upgradeImage := fs.String("upgrade-image", "",
-		"image repository, with no tag, that CI publishes a tag per branch to (e.g. "+
-			"ghcr.io/bwsalmon/grain/grain); set, the UI's Upgrade button pulls a branch's image instead of "+
-			"building one, and -upgrade-image-ref-file is required")
+	upgradeSource := registerUpgradeSourceFlags(fs)
 	// Which branches an upgrade may install (bwsalmon/grain#2385). An
 	// upgrade replaces this daemon with whatever the branch builds, and a
 	// branch name says nothing about whether anybody reviewed it, so the
@@ -527,12 +525,11 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	ciEnabled := fs.Bool("ci", true,
 		"run grain's own CI: the .grain/workflows a repository declares, in this deployment's own sandboxes, "+
 			"for the repos whose CI mode is \"Use Grain CI\" (Settings -> Repos), which also grants their tasks the "+
-			grainci.CapabilityName+" capability. -ci=false turns the engine off entirely, so no repository's "+
+			grainci.Grant+" grant. -ci=false turns the engine off entirely, so no repository's "+
 			"workflows run however its CI mode is set, and the CI API reports that this deployment has none. "+
 			"A job's sandbox is built the way a run's is and given no credential beyond a read-only checkout of "+
 			"the one repository under test (pkg/ci, \"What a workflow file is trusted with\").")
-	gritURL := fs.String("grit-url", "", "remote grit server base `url` (e.g. http://127.0.0.1:4244); when unset, CI runs in-process")
-	gritClientToken := fs.String("grit-client-token", "", "client `token` (<id>.<secret>) sent in Grit-Client when -grit-url is set")
+	grit := daemon.RegisterGritFlags(fs)
 
 	// The CI job cache's bounds (ci.DirCacheOptions). Seeds, like the CI
 	// history's four below and unlike what they were until
@@ -654,9 +651,10 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 
 	// Every deployment names its sandbox backend: -container-sandboxes,
 	// -granule-sandboxes, -k8s-sandboxes, -host-sandboxes, or
-	// -disable-native-sandboxes for one whose sandboxes are all remote.
+	// -disable-native-sandboxes for a control-plane-only daemon (backend
+	// "none"), which creates no sandboxes and so runs no task.
 	disableNativeSandboxes := fs.Bool("disable-native-sandboxes", false,
-		"disable native sandboxes on this host -- in this mode only remote execution sandboxes can exist")
+		"select sandbox backend \"none\": run the control plane only -- no sandbox is created, so no task runs (for tests and walkthroughs)")
 	nativeSandboxes := fs.Bool("native-sandboxes", true,
 		"enable native sandboxes on this host; set to false to disable native sandboxes")
 	// A flag rather than a setting, unlike the switch that decides
@@ -760,6 +758,11 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	containerCapAdd := fs.String("container-sandbox-cap-add", "",
 		"comma-separated Linux capabilities handed back to local sandbox containers, which otherwise run with "+
 			"every capability dropped and no-new-privileges set; the stock sandbox image needs none")
+	containerFence := fs.String("container-sandbox-fence", string(orchestrator.ContainerFenceAuto),
+		"auto, require or off: whether local sandbox containers are fenced off from this host, its networks and "+
+			"link-local (the metadata server) by a per-container nftables chain. auto fences when nft can be run and "+
+			"otherwise runs containers unfenced and refuses external capability grants; require refuses a container "+
+			"that cannot be fenced; off never fences and refuses external capability grants")
 	granuleSandboxes := fs.Bool("granule-sandboxes", false,
 		"dispatch onto real bwsalmon/granule-managed VMs (one per run, named orchestrator.VMNamePrefix+<run id>) "+
 			"over SSH, instead of local host directories. This was -granule-vm-name-prefix, whose value both opted "+
@@ -768,8 +771,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			"orchestrator.VMNamePrefix")
 	runHostImage := fs.String("run-host-image", "",
 		"drive each claude run in a run host of this image: a container that is a sibling of the daemon, "+
-			"not a child of it, writing to a spool the daemon tails (pkg/runhost, docs/non-disruptive-upgrade.md). "+
-			"Normally the deployment image itself (\"self\" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes: a run host cannot reach a container sandbox")
+			"not a child of it, writing to a spool the daemon tails (pkg/runhost, design/design/non-disruptive-upgrade.design.md). "+
+			"Normally the deployment image itself (\"self\" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes or -host-sandboxes: a run host cannot reach either sandbox")
 	runHostCredentialDir := fs.String("run-host-credential-dir", "",
 		"the shared credential directory every run host mounts read-write, as a directory and at the same path "+
 			"(only used with -run-host-image)")
@@ -840,10 +843,10 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			"install-time value an older scripts/setup.sh wrote unconditionally, and the stamp is used instead "+
 			"(chooseSandboxImage). Only used with -granule-sandboxes.")
 	sandboxImageMirror := fs.String("sandbox-image-mirror", "",
-		"OCI repository (without tag, e.g. us-docker.pkg.dev/<cluster-project>/grain/guest) into which "+
-			"off-cluster deployments mirror the build-stamped sandbox guest image on upgrade and startup "+
-			"so a Kubernetes cluster in another GCP organization can pull the commit-matched guest image "+
-			"from its own registry.")
+		"OCI repository (without tag, e.g. us-docker.pkg.dev/<cluster-project>/grain/guest) into which off-cluster "+
+			"deployments mirror the build-stamped sandbox guest image on upgrade and startup, so a cluster in another GCP "+
+			"organization can pull the commit-matched guest from its own registry. This host keeps only the current and "+
+			"previous mirrored tags; the registry is not pruned -- give it a cleanup policy (docs/sandbox-image-mirror.md).")
 	granuleNet := fs.String("granule-net", granule.NetModeFlat,
 		"ignored, and removed in a later release. The granule this build vendors has only the former "+
 			"\"flat\" behaviour -- its own -net says \"deprecated: only the former flat behaviour exists "+
@@ -1001,14 +1004,14 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	sandboxAccessAddr := fs.String("sandbox-access-addr", "",
 		"k8s-granule only: address to run the sandbox-access acceptor on (\":4244\"), which every sandbox pod's "+
 			"wrapper then dials out to over mTLS with its own certificate and token (pkg/sandboxaccess, "+
-			"docs/design/grain-on-gke.md \"Sandbox access\"); empty leaves it off and builds pods as before")
+			"design/design/grain-on-gke.design.md \"Sandbox access\"); empty leaves it off and builds pods as before")
 	sandboxAccessDial := fs.String("sandbox-access-dial", "",
 		"the address sandbox wrappers dial the acceptor at; empty is grain-access.<-k8s-namespace>.svc:4244, "+
 			"the Service deploy/kubernetes/grain-granule.yaml creates")
 	sandboxAccessCASecret := fs.String("sandbox-access-ca-secret", "",
 		"Secret Manager secret (projects/<p>/secrets/<s>) holding the sandbox-access CA, read through Workload "+
 			"Identity and generated into it on first start; empty keeps the CA in <data-dir>/sandbox-access-ca.pem")
-	k8sGranuleAccess := fs.String("k8s-granule-access", orchestrator.K8sGranuleAccessKubectl, "k8s-granule only: how grain runs steps in a sandbox's guest -- \"kubectl\" (granule exec over kubectl exec) or \"dialout\" (the wrapper's channel to -sandbox-access-addr's acceptor; refused unless grain runs in-cluster). docs/design/grain-on-gke.md#GKE-3")
+	k8sGranuleAccess := fs.String("k8s-granule-access", orchestrator.K8sGranuleAccessKubectl, "k8s-granule only: how grain runs steps in a sandbox's guest -- \"kubectl\" (granule exec over kubectl exec) or \"dialout\" (the wrapper's channel to -sandbox-access-addr's acceptor; refused unless grain runs in-cluster). design/design/grain-on-gke.design.md#GKE-3")
 	k8sGranuleReattachTimeout := fs.Duration("k8s-granule-reattach-timeout", orchestrator.DefaultK8sGranuleReattachTimeout, "k8s-granule dialout only: how long a step waits for a dropped channel to reconnect before the sandbox is lost (a CI job errors with \"infra: sandbox channel lost\" and is re-run; an agent's tool call fails and its sandbox is rebuilt)")
 	sandboxCPUs := fs.Int("sandbox-cpus", 0,
 		"deployment-wide default vCPU count for a granule-managed sandbox VM, passed as `granule vm create`'s "+
@@ -1046,18 +1049,46 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	unitFlags := append([]string{}, unknownFlags...)
 	fs.Visit(func(f *flag.Flag) { unitFlags = append(unitFlags, "-"+f.Name) })
 	slices.Sort(unitFlags)
+	if !passed["secrets-backend"] {
+		if env := strings.TrimSpace(os.Getenv("GRAIN_SECRETS_BACKEND")); env != "" {
+			*secretsBackend = env
+		}
+	}
+	if !passed["secrets-sm-prefix"] {
+		if env := strings.TrimSpace(os.Getenv("GRAIN_SECRETS_SM_PREFIX")); env != "" {
+			*secretsSMPrefix = env
+		}
+	}
 	if !passed["db-driver"] {
 		if env := os.Getenv("GRAIN_DB_DRIVER"); env != "" {
 			*dbDriver = env
 		} else if passed["postgres-url"] || os.Getenv("GRAIN_POSTGRES_URL") != "" || os.Getenv("DATABASE_URL") != "" {
 			*dbDriver = "postgres"
-		} else if saved, err := daemon.LoadDatabaseConfig(*dataDir); err != nil {
-			return daemon.Config{}, fs, unknownFlags, err
-		} else if saved != nil && saved.Driver != "" {
-			*dbDriver = saved.Driver
-			if !passed["db-dsn"] && saved.DSN != "" {
-				*dbDSN = saved.DSN
+		} else {
+			var saved *postgres.DatabaseConfig
+			if *secretsBackend == secrets.BackendSecretManager {
+				saved, err = postgres.ReadDatabaseConfig(*dataDir)
+			} else {
+				saved, err = daemon.LoadDatabaseConfig(*dataDir)
 			}
+			if err != nil {
+				return daemon.Config{}, fs, unknownFlags, err
+			}
+			if saved != nil && saved.Driver != "" {
+				*dbDriver = saved.Driver
+				if !passed["db-dsn"] && saved.DSN != "" {
+					*dbDSN = saved.DSN
+				}
+			}
+		}
+	}
+	if !passed["ui-require-iap"] {
+		if env := strings.TrimSpace(os.Getenv("GRAIN_REQUIRE_IAP")); env != "" {
+			v, err := strconv.ParseBool(env)
+			if err != nil {
+				return daemon.Config{}, fs, unknownFlags, fmt.Errorf("GRAIN_REQUIRE_IAP=%q is not a boolean", env)
+			}
+			*uiRequireIAP = v
 		}
 	}
 	if !passed["db-dsn"] {
@@ -1175,26 +1206,16 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	if err := removedRelaySettings(passed, unknownFlags); err != nil {
 		return daemon.Config{}, fs, unknownFlags, err
 	}
-
-	if *executorAddr == "" && *modelExecAddr != "" {
-		*executorAddr = *modelExecAddr
-	}
-	if *executorTokenFile == "" && *modelExecTokenFile != "" {
-		*executorTokenFile = *modelExecTokenFile
-	}
-	if *executorWait == modelexec.DefaultWait && *modelExecWait > 0 {
-		*executorWait = *modelExecWait
-	}
-	if *executorCertFile == "" && *modelExecCertFile != "" {
-		*executorCertFile = *modelExecCertFile
-	}
-	if *executorKeyFile == "" && *modelExecKeyFile != "" {
-		*executorKeyFile = *modelExecKeyFile
+	containerFenceMode, err := orchestrator.ParseContainerFenceMode(*containerFence)
+	if err != nil {
+		return daemon.Config{}, fs, unknownFlags, fmt.Errorf("-container-sandbox-fence: %w", err)
 	}
 
 	cfg := daemon.Config{
 		UnitFlags: unitFlags, UnknownFlags: unknownFlags,
-		DataDir: *dataDir, DbDriver: *dbDriver, DbDSN: *dbDSN, SandboxDir: *sandboxDir, DockerRootDir: *dockerRootDir,
+		DataDir: *dataDir, DbDriver: *dbDriver, DbDSN: *dbDSN,
+		SecretsBackend: *secretsBackend, SecretsSMPrefix: *secretsSMPrefix,
+		SandboxDir: *sandboxDir, DockerRootDir: *dockerRootDir,
 		MaxWorkers: *maxWorkers, MaxMergers: *maxMergers, MaxCIJobs: model.DefaultMaxCIJobs,
 		Ledger:        &model.Ledger{},
 		CpuOvercommit: *cpuOvercommit, MemoryOvercommit: *memoryOvercommit, MemoryReserveMB: *memoryReserveMB,
@@ -1210,11 +1231,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UiIAPAudience:           *uiIAPAudience,
 		UiIAPIssuer:             *uiIAPIssuer,
 		UiIAPKeysURL:            *uiIAPKeysURL,
-		ExecutorAddr:            *executorAddr,
-		ExecutorTokenFile:       *executorTokenFile,
-		ExecutorWait:            *executorWait,
-		ExecutorCertFile:        *executorCertFile,
-		ExecutorKeyFile:         *executorKeyFile,
+		UiRequireIAP:            *uiRequireIAP,
+		UiAllowedPrincipals:     ui.SplitAllowedPrincipals(*uiAllowedPrincipals),
 		GeminiAPIKeyFile:        *geminiAPIKeyFile,
 		MaxAgentTurns:           *maxAgentTurns,
 		AgyPath:                 *agyPath,
@@ -1222,15 +1240,16 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		ModelProxyUnrestricted: *modelProxyUnrestricted, ModelProxyMaxConcurrent: *modelProxyMaxConcurrent, ModelProxySlotWait: *modelProxySlotWait,
 		CodexPath: *codexPath, OpenAIAPIKeyFile: *openAIAPIKeyFile, CodexAuthFile: *codexAuthFile,
 		ClaudeRun: *claudeRun, CodexRun: *codexRun, AgyRun: *agyRun,
-		HostdSocket: *hostdSocket,
-		GithubHost:  *githubHost, GithubInsecureHTTP: *githubInsecureHTTP,
+		HostdSocket:          *hostdSocket,
+		HostdReattachTimeout: *hostdReattachTimeout,
+		GithubHost:           *githubHost, GithubInsecureHTTP: *githubInsecureHTTP,
 		CheckpostURL: *checkpostURL, CheckpostExpect: *checkpostExpect,
 		GithubWebhookURL: *githubWebhookURL, GithubWebhookAddr: *githubWebhookAddr,
 		GcpProject: *gcpProject, GcpServiceAccountEmail: *gcpServiceAccountEmail, GcpServiceAccountCount: *gcpServiceAccountCount,
 		IapBackendService: *iapBackendService,
 		IapResource:       *iapResource,
 		UpgradeSrcDir:     *upgradeSrcDir, UpgradeInstallPath: *upgradeInstallPath, UpgradeRestartCmd: upgradeRestartCmd, UpgradeVerifyCmd: upgradeVerifyCmd,
-		UpgradeImage: *upgradeImage, UpgradeImageRefFile: *upgradeImageRefFile,
+		UpgradeImageRefFile:    *upgradeImageRefFile,
 		UpgradeAllowedBranches: daemon.SplitBranchPatterns(*upgradeAllowedBranches),
 		UpgradeDrainWindow:     *upgradeDrainWindow,
 		RebootCmd:              rebootCmd,
@@ -1251,8 +1270,6 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		CiStepOutputMB:   *ciStepOutputMB,
 		CiStepOutputDays: *ciStepOutputDays,
 		CiRunOutputKB:    *ciRunOutputKB,
-		GritURL:          *gritURL,
-		GritClientToken:  *gritClientToken,
 
 		DisableNativeSandboxes: *disableNativeSandboxes || (passed["native-sandboxes"] && !*nativeSandboxes),
 		PackageCacheDir:        *packageCacheDir,
@@ -1281,6 +1298,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		HostSandboxes: *hostSandboxes, AllowUnisolatedHostSandboxes: *allowUnisolatedHostSandboxes,
 		HostSandboxEnv:   hostSandboxEnv,
 		ContainerNetwork: *containerNetwork, ContainerCapAdd: splitRepoList(*containerCapAdd),
+		ContainerFence:       containerFenceMode,
 		GranuleSandboxes:     *granuleSandboxes,
 		GranuleStateDir:      *granuleStateDir,
 		LocalScripts:         localScripts,
@@ -1311,28 +1329,15 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		SandboxAccessCASecret: *sandboxAccessCASecret,
 		K8sGranuleAccess:      *k8sGranuleAccess, K8sGranuleReattachTimeout: *k8sGranuleReattachTimeout, SandboxCPUs: *sandboxCPUs, SandboxMemoryMB: *sandboxMemoryMB, SandboxDiskGB: *sandboxDiskGB,
 	}
-	if cfg.HostdRemote, err = hostdRemote(*hostdTokenFile); err != nil {
+	grit.Apply(&cfg)
+	if err = upgradeSource.apply(&cfg, passed); err != nil {
+		return cfg, fs, unknownFlags, err
+	}
+	if cfg.HostdRemote, err = hostdRemote(*hostdTokenFile, *hostdTokenName, *hostdTokenOwner); err != nil {
 		return cfg, fs, unknownFlags, err
 	}
 	cfg, err = local(cfg, passed)
 	return cfg, fs, unknownFlags, err
-}
-
-// hostdRemote is the acceptor for a grain hostd dialing in with the token
-// in tokenFile, or $GRAIN_HOSTD_TOKEN; nil when neither names one.
-func hostdRemote(tokenFile string) (*hostd.Remote, error) {
-	token := strings.TrimSpace(os.Getenv("GRAIN_HOSTD_TOKEN"))
-	if tokenFile != "" {
-		t, err := daemon.ReadTokenFile(tokenFile)
-		if err != nil {
-			return nil, fmt.Errorf("reading -hostd-token-file: %w", err)
-		}
-		token = t
-	}
-	if token == "" {
-		return nil, nil
-	}
-	return &hostd.Remote{Token: token, Logf: log.Printf}, nil
 }
 
 // checkConfig is every "these flags cannot be started with" rule daemon()
@@ -1362,6 +1367,9 @@ func checkConfig(cfg daemon.Config) error {
 		}
 	default:
 		return fmt.Errorf("-db-driver must be \"sqlite\" or \"postgres\", got %q", cfg.DbDriver)
+	}
+	if err := daemon.CheckSecretsConfig(cfg.SecretsBackend, cfg.SecretsSMPrefix); err != nil {
+		return err
 	}
 	if err := daemon.CheckSandboxBackend(cfg, daemon.LocalSandboxes != nil); err != nil {
 		return err
@@ -1423,12 +1431,6 @@ func checkConfig(cfg daemon.Config) error {
 				"<container>=<image>`)")
 		}
 	}
-	if cfg.ExecutorAddr != "" && cfg.ExecutorTokenFile == "" {
-		return errors.New("-executor-token-file is required with -executor-addr")
-	}
-	if (cfg.ExecutorCertFile != "" && cfg.ExecutorKeyFile == "") || (cfg.ExecutorCertFile == "" && cfg.ExecutorKeyFile != "") {
-		return errors.New("both -executor-cert-file and -executor-key-file are required for TLS")
-	}
 	if err := checkPackageCacheUpstreams(cfg); err != nil {
 		return err
 	}
@@ -1487,28 +1489,14 @@ func checkConfig(cfg daemon.Config) error {
 	if cfg.MaxMergers < 0 {
 		return errors.New("-max-mergers cannot be negative")
 	}
-	// Negative rather than zero: 0 is "use grain's own default" for each
-	// of these (ci.OpenDirCache reads it that way), so only a value that
-	// cannot mean anything at all is refused. A cache bounded at a
-	// negative size would otherwise be silently promoted to the default
-	// and run nothing like what the unit file asked for.
-	switch {
-	case cfg.CiCacheMaxAge < 0:
-		return errors.New("-ci-cache-max-age cannot be negative")
-	case cfg.CiCacheMaxBytes < 0:
-		return errors.New("-ci-cache-max-bytes cannot be negative")
-	case cfg.CiCacheMaxEntries < 0:
-		return errors.New("-ci-cache-max-entries cannot be negative")
-	case cfg.CiCacheMaxEntryBytes < 0:
-		return errors.New("-ci-cache-max-entry-bytes cannot be negative")
-	case cfg.CiArtifactMaxAge < 0:
-		return errors.New("-ci-artifact-max-age cannot be negative")
-	case cfg.CiArtifactMaxBytes < 0:
-		return errors.New("-ci-artifact-max-bytes cannot be negative")
-	case cfg.CiArtifactMaxRunBytes < 0:
-		return errors.New("-ci-artifact-max-run-bytes cannot be negative")
-	case cfg.CiArtifactMaxEntryBytes < 0:
-		return errors.New("-ci-artifact-max-entry-bytes cannot be negative")
+	if err := daemon.CheckUIAllowedPrincipals(cfg); err != nil {
+		return err
 	}
-	return nil
+	if err := daemon.CheckUIRequireIAP(cfg); err != nil {
+		return err
+	}
+	if err := daemon.CheckCICacheBounds(cfg); err != nil {
+		return err
+	}
+	return daemon.CheckGritURL(cfg)
 }

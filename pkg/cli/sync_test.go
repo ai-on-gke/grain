@@ -470,6 +470,7 @@ func settingsWithEveryFieldChanged() ui.Settings {
 			}
 		}
 		s.AgentBackends = []model.AgentBackend{{ID: "backend-1", Framework: model.AgentFrameworkClaude}}
+		s.OwnerTrust = []model.OwnerTrustRule{{Owner: "jane@example.com", Repo: "acme/widgets"}}
 	}
 	// The one struct-valued setting: the overcommit mode and its bounds.
 	s.SandboxOvercommit = model.OvercommitSettings{Mode: model.OvercommitAuto}

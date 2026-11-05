@@ -73,3 +73,28 @@ func TestListGrainTasksTakesSeveralStates(t *testing.T) {
 		t.Errorf("state \"proposed, queued\" =\n%s", got)
 	}
 }
+
+// A task parked on an operator's Stop waits on that person, not on
+// anything grain is failing to do: it is marked as such, and --stalled
+// leaves it out, whatever its merge-queue row says (task 2345).
+func TestTaskListMarksAStoppedTurnRatherThanStalled(t *testing.T) {
+	blocked := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	tasks := []TaskSummary{
+		{ID: "1977", State: "awaiting_reply", Repo: "acme/widgets", Title: "Stopped", TurnStopped: true,
+			MergeQueue: TaskMergeQueue{State: "merge_failed", BlockedAt: &blocked}},
+		{ID: "1978", State: "running", Repo: "acme/widgets", Title: "Slow", Stall: "running for 9h"},
+	}
+	got := ListTaskPage(tasks, TaskListQuery{}).Lines()
+	want := "1977  awaiting_reply  acme/widgets  Stopped  (stopped by operator)\n" +
+		"1978  running  acme/widgets  Slow  (stalled)\n"
+	if got != want {
+		t.Errorf("Lines() =\n%s\nwant\n%s", got, want)
+	}
+	if got := ListTaskPage(tasks, TaskListQuery{Stalled: true}).Lines(); strings.Contains(got, "1977") {
+		t.Errorf("--stalled kept the stopped turn:\n%s", got)
+	}
+	entries := ListTaskPage(tasks, TaskListQuery{}).Entries()
+	if !entries[0].StoppedByOperator || entries[0].Stalled {
+		t.Errorf("JSON entry = %+v, want stoppedByOperator and not stalled", entries[0])
+	}
+}

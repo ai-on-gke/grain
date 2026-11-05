@@ -20,12 +20,19 @@ import (
 	"log"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
+
+// processStartedAt is when this process started, near enough: package
+// initialisation runs before main.
+var processStartedAt = time.Now().UTC()
 
 // upgradeStatus is orchestrator.Config.UpgradeStatus for this
 // deployment: the last (or current) upgrade as pkg/upgrade recorded it,
@@ -68,6 +75,17 @@ func upgradeUnchanged(upgrader *upgrade.Upgrader) func(context.Context, string) 
 		return nil
 	}
 	return upgrader.AlreadyRunning
+}
+
+// latestRelease is orchestrator.Config.LatestRelease: the newest
+// release tag on this deployment's image channel, which the
+// release-triggered automatic upgrade follows, or nil for a deployment
+// that cannot upgrade itself.
+func latestRelease(upgrader *upgrade.Upgrader) func(context.Context) (string, error) {
+	if upgrader == nil {
+		return nil
+	}
+	return upgrader.LatestRelease
 }
 
 // SplitBranchPatterns reads -upgrade-allowed-branches: comma-separated,
@@ -121,7 +139,17 @@ func deploymentMode(cfg Config) upgrade.Mode {
 // store is the same deployment's rows at the level the pause lives at,
 // and it is what an upgrade holds the queue with while it runs
 // (orchestrator.UpgradeHold). Nil takes no hold.
-func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
+func newUpgrader(cfg Config, db *sql.DB, store *model.Store, creds ...*gitproxy.CredentialSet) *upgrade.Upgrader {
+	var credentials *gitproxy.CredentialSet
+	if len(creds) > 0 {
+		credentials = creds[0]
+	}
+	track := (installtrack.Probe{
+		IncludeHost:    true,
+		AgyPath:        cfg.AgyPath,
+		UIAllowedHosts: cfg.UiAllowedHosts,
+		DataDir:        cfg.DataDir,
+	}).Detect().Track
 	switch {
 	case cfg.K8sSandboxes && cfg.UpgradeImage != "" && cfg.UpgradeImageRefFile == "":
 		// The Kubernetes path: no pull, no ref file and no restart
@@ -136,6 +164,7 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 		return upgrade.New(upgrade.Config{
 			Kube: &upgrade.KubeConfig{
 				Repository:       cfg.UpgradeImage,
+				Track:            track,
 				Deployment:       cfg.K8sDeployment,
 				Container:        cfg.K8sContainer,
 				Namespace:        cfg.K8sNamespace,
@@ -206,15 +235,17 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 				// image moves under it on every upgrade, so this is the
 				// one check that is about the *deployment* rather than
 				// about the build (grain/task-233).
-				UnitFlags:     cfg.UnitFlags,
-				FlagNamesArgs: []string{"daemon", "-flag-names"},
-				Track: (installtrack.Probe{
-					IncludeHost:    true,
-					AgyPath:        cfg.AgyPath,
-					UIAllowedHosts: cfg.UiAllowedHosts,
-					DataDir:        cfg.DataDir,
-				}).Detect().Track,
+				UnitFlags:          cfg.UnitFlags,
+				FlagNamesArgs:      []string{"daemon", "-flag-names"},
+				Track:              track,
+				Source:             upgrade.ImageSource(strings.TrimSpace(cfg.UpgradeImageSource)),
+				SourceLocked:       cfg.UpgradeImageSourceLocked,
+				SourceOverrideFile: filepath.Join(cfg.DataDir, "upgrade-image-source.json"),
+				Fallback:           upgrade.ImageSource(strings.TrimSpace(cfg.UpgradeImageFallback)),
+				FallbackExplicit:   cfg.UpgradeImageFallbackExplicit,
+				ReleaseAssets:      upgradeReleaseAssetsConfig(cfg, store, credentials),
 			},
+			RunningCommit:   daemonRunningCommit,
 			HealthCheckArgs: []string{"schema-version"},
 			// What the pane previews when a target is chosen: the
 			// release notes that build carries, from this one's
@@ -223,7 +254,7 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 			Schema:           upgradeSchemaConfig(cfg, db),
 			Hold:             orchestrator.UpgradeHold(store),
 			// Every run in a run host lets go, its cursor written,
-			// before the restart (docs/non-disruptive-upgrade.md, piece
+			// before the restart (design/design/non-disruptive-upgrade.design.md, piece
 			// 6); the next build adopts it.
 			Flush:      cfg.runHostUpgrade.flushHook(),
 			RestartCmd: cfg.UpgradeRestartCmd,
@@ -359,4 +390,12 @@ func upgradeRestartRequest(cfg Config) func(branch string) {
 	return func(branch string) {
 		requests.recordOrLog("upgrade to "+branch, log.Printf)
 	}
+}
+
+func daemonRunningCommit() string {
+	info := version.Get()
+	if info.Modified {
+		return ""
+	}
+	return strings.TrimSpace(info.Revision)
 }

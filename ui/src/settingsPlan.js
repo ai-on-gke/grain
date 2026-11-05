@@ -48,13 +48,12 @@
 // job is completeness.
 const SETTING_LABELS = {
   environmentName: "Environment name",
+  settingsLocked: "Lock settings in UI (require config repo PRs)",
   pollInterval: "Poll interval",
   maxWorkers: "Max worker agents",
   maxMergesPerRepo: "Max merges per repo branch",
   maxMergers: "Max merge agents",
   maxCIJobs: "Max CI jobs",
-  mergeBatchSize: "Merge batch size",
-  mergeGatherWindow: "Merge gather window",
   newestFirst: "Work through the backlog newest-first",
   showClosedByDefault: "Show closed tasks by default",
   approvedByDefault: "Queue new tasks immediately by default",
@@ -138,12 +137,15 @@ const SETTING_LABELS = {
   upgradeCheckPausesPipeline: "Upgrade check pauses the pipeline",
   autoUpgradeChannel: "Automatic upgrade channel",
   autoUpgradeTime: "Automatic upgrade time of day",
+  autoUpgradeOn: "Automatic upgrades",
 };
 
 // settingLabel is what to call one setting, by its JSON name.
 export function settingLabel(field) {
   return SETTING_LABELS[field] || field;
 }
+
+export { settingLocation } from "./settingsIndex.js";
 
 // SETTING_MINS is the lower bound on each bounded numeric setting, matching
 // both the input's own `min` in components/settings and the check in
@@ -156,7 +158,6 @@ const SETTING_MINS = {
   maxMergesPerRepo: 1,
   maxMergers: 0,
   maxCIJobs: 0,
-  mergeBatchSize: 1,
   maxAutoSubmitDepth: 1,
   maxAutoSubmitFanOut: 1,
   maxAgentTurns: 0,

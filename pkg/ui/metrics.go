@@ -122,9 +122,11 @@ type MetricsReport struct {
 	// Latency is a list rather than an object so it arrives in the order
 	// a task passes through the stages, which is the order anybody reads
 	// them in and the order the CLI prints them.
-	Latency []MetricsStage `json:"latency"`
-	Runs    MetricsRuns    `json:"runs"`
-	Backlog MetricsBacklog `json:"backlog"`
+	Latency            []MetricsStage `json:"latency"`
+	InteractiveStartup []MetricsStage `json:"interactiveStartup,omitempty"`
+	BatchStartup       []MetricsStage `json:"batchStartup,omitempty"`
+	Runs               MetricsRuns    `json:"runs"`
+	Backlog            MetricsBacklog `json:"backlog"`
 	// Cycles sits beside Runs because it answers the question Runs
 	// raises. Runs.Utilization says whether the deployment was full;
 	// this says what the tick itself cost regardless -- the two together
@@ -970,6 +972,7 @@ type MetricsRuns struct {
 type MetricsBacklog struct {
 	ByState             map[model.State]int `json:"byState"`
 	Queued              int                 `json:"queued"`
+	StoppedByOperator   int                 `json:"stoppedByOperator,omitempty"`
 	OldestQueuedSeconds float64             `json:"oldestQueuedSeconds"`
 	OldestQueuedTaskID  string              `json:"oldestQueuedTaskId,omitempty"`
 }
@@ -1404,6 +1407,7 @@ func (c *Client) Metrics(ctx context.Context, req MetricsRequest) (MetricsReport
 		{metricsTasks, "task timings", into(&in.Tasks, c.Store.TaskTimings)},
 		{metricsRuns, "run timings", into(&in.Runs, c.Store.RunTimings)},
 		{metricsStates, "task states", into(&in.States, c.Store.States)},
+		{metricsStates, "stopped turns", into(&in.TurnsStopped, c.Store.TurnsStopped)},
 		// What each run recorded about its own tool use. A deployment
 		// whose runs all predate these rows reads them as empty and gets
 		// the rest of the report unchanged -- which is the honest answer,
@@ -1725,6 +1729,7 @@ func metricsReportFrom(rep metrics.Report, cycles bool) MetricsReport {
 		Backlog: MetricsBacklog{
 			ByState:             rep.Backlog.ByState,
 			Queued:              rep.Backlog.Queued,
+			StoppedByOperator:   rep.Backlog.StoppedByOperator,
 			OldestQueuedSeconds: rep.Backlog.OldestQueuedWait.Seconds(),
 			OldestQueuedTaskID:  rep.Backlog.OldestQueuedTaskID,
 		},
@@ -2065,6 +2070,39 @@ func metricsReportFrom(rep metrics.Report, cycles bool) MetricsReport {
 			"the whole of what whoever filed the task actually waited", l.LeadTime},
 	} {
 		out.Latency = append(out.Latency, MetricsStage{
+			Stage: s.stage, Label: s.label, Description: s.description,
+			N:           s.d.N,
+			MinSeconds:  s.d.Min.Seconds(),
+			P50Seconds:  s.d.P50.Seconds(),
+			P90Seconds:  s.d.P90.Seconds(),
+			P99Seconds:  s.d.P99.Seconds(),
+			MaxSeconds:  s.d.Max.Seconds(),
+			MeanSeconds: s.d.Mean.Seconds(),
+		})
+	}
+	out.InteractiveStartup = startupStagesOf("interactive", l.InteractiveStartup)
+	out.BatchStartup = startupStagesOf("batch", l.BatchStartup)
+	return out
+}
+
+func startupStagesOf(prefix string, b metrics.StartupBreakdown) []MetricsStage {
+	var out []MetricsStage
+	for _, s := range []struct {
+		stage, label, description string
+		d                         metrics.Distribution
+	}{
+		{prefix + "_queued_to_dispatched", "queued -> dispatched",
+			"how long a ready attempt waited in the queue before dispatch started it", b.QueuedToDispatched},
+		{prefix + "_sandbox_acquire", "sandbox acquire",
+			"time spent acquiring or claiming the attempt's sandbox", b.SandboxAcquire},
+		{prefix + "_prepare_sandbox", "prepare sandbox",
+			"time spent configuring package cache, credentials, repo/state checkout and capabilities", b.PrepareSandbox},
+		{prefix + "_agent_launch_to_first_turn", "agent launch -> first turn",
+			"time from handing control to the agent framework until its first turn", b.AgentLaunchToFirstTurn},
+		{prefix + "_started_to_first_turn", "attempt started -> agent's first turn",
+			"total attempt startup from dispatch to the agent's first turn", b.StartedToFirstTurn},
+	} {
+		out = append(out, MetricsStage{
 			Stage: s.stage, Label: s.label, Description: s.description,
 			N:           s.d.N,
 			MinSeconds:  s.d.Min.Seconds(),

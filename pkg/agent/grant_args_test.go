@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // The arguments a forked mcpserver needs before it serves the self-debug
@@ -138,38 +139,20 @@ func TestGrantArgsCarriesBothSelfDebugAndTheLogGrant(t *testing.T) {
 // unrelated grain-log grant made a deliberately narrowed Director refuse all
 // diagnostic reads even though deployment-health itself was granted.
 func TestGrantArgsCarriesStateAndSecretsWithDeploymentHealth(t *testing.T) {
-	args := agent.GrantArgs(agent.RunConfig{
-		Grants:          []string{"deployment-health"},
-		GrainStateDir:   "/var/lib/grain/data/state-repo",
-		GrainSecretsDir: "/var/lib/grain/data/secrets",
-	})
-	want := []string{
-		"-grant", "deployment-health",
-		"-grain-secrets-dir", "/var/lib/grain/data/secrets",
-		"-grain-state-dir", "/var/lib/grain/data/state-repo",
-	}
-	if !slices.Equal(args, want) {
-		t.Fatalf("GrantArgs = %v, want %v", args, want)
-	}
-}
-
-// Local scripts travel with the grants, so every Framework that forks
-// the mcpserver passes them: each declaration as NAME=PATH, and the
-// credentials as a file path, never their values.
-func TestGrantArgsCarriesLocalScripts(t *testing.T) {
-	args := agent.GrantArgs(agent.RunConfig{
-		Grants:              []string{"self-debug"},
-		LocalScripts:        []agent.LocalScripts{{Name: "ops", Path: "/state/local-scripts/ops/local-scripts.yaml"}},
-		LocalScriptsEnvFile: "/tmp/grain-local-scripts-1.json",
-	})
-	want := []string{"-grant", "self-debug",
-		"-local-scripts", "ops=/state/local-scripts/ops/local-scripts.yaml",
-		"-local-scripts-env-file", "/tmp/grain-local-scripts-1.json"}
-	if !slices.Equal(args, want) {
-		t.Fatalf("GrantArgs = %v, want %v", args, want)
-	}
-	if args := agent.GrantArgs(agent.RunConfig{LocalScriptsEnvFile: "/tmp/x"}); len(args) != 0 {
-		t.Fatalf("GrantArgs = %v: want no credentials file without a declaration", args)
+	for _, grant := range []string{"deployment-health", model.GrainHealthGrant} {
+		args := agent.GrantArgs(agent.RunConfig{
+			Grants:          []string{grant},
+			GrainStateDir:   "/var/lib/grain/data/state-repo",
+			GrainSecretsDir: "/var/lib/grain/data/secrets",
+		})
+		want := []string{
+			"-grant", grant,
+			"-grain-secrets-dir", "/var/lib/grain/data/secrets",
+			"-grain-state-dir", "/var/lib/grain/data/state-repo",
+		}
+		if !slices.Equal(args, want) {
+			t.Fatalf("GrantArgs(%s) = %v, want %v", grant, args, want)
+		}
 	}
 }
 
@@ -181,5 +164,12 @@ func TestGrantArgsCarriesTheToolBudget(t *testing.T) {
 	}
 	if args := agent.GrantArgs(agent.RunConfig{Grants: []string{"self-debug"}}); slices.Contains(args, "-tool-budget") {
 		t.Errorf("GrantArgs = %v, want no -tool-budget", args)
+	}
+	steward := agent.RunConfig{ToolBudget: true, ToolBudgetPipelineCursor: true}
+	if args := agent.GrantArgs(steward); !slices.Contains(args, "-tool-budget-pipeline-cursor") {
+		t.Errorf("GrantArgs = %v, want -tool-budget-pipeline-cursor for a steward wake", args)
+	}
+	if args := agent.GrantArgs(agent.RunConfig{ToolBudget: true}); slices.Contains(args, "-tool-budget-pipeline-cursor") {
+		t.Errorf("GrantArgs = %v, want no pipeline cursor for a durable task that is no steward", args)
 	}
 }

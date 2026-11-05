@@ -18,8 +18,10 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +29,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/credhealth"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
@@ -35,6 +38,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/namespace"
 	"github.com/ai-on-gke/grain/pkg/redact"
 	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/systemlog"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -210,8 +214,9 @@ func TestSandboxProxyServesTheStage2Roots(t *testing.T) {
 		{token: "own", path: "/fs/task/t-7/attempts/1/prompt.md", status: 200, want: []string{"prompt of attempt 1"}},
 		{token: "own", path: "/fs/task/t-7/attempts/1/transcript.md", status: 200, want: []string{"transcript of attempt 1"}},
 		{token: "own", path: "/fs/task/t-7/attempts?list", status: 200, want: []string{"1/", "2/"}},
-		// A sibling task in the run's own repository is readable too.
-		{token: "own", path: "/fs/task/t-8/record.md", status: 200, want: []string{"Widget task t-8"}},
+		// A sibling task in the run's own repository is not, without
+		// self-debug or an api:tasks:read grant naming the repository.
+		{token: "own", path: "/fs/task/t-8/record.md", status: 403, want: []string{"api:tasks:read@"}, not: []string{"Widget task t-8"}},
 		{token: "debug", path: "/fs/task/t-8/record.md", status: 200, want: []string{"Widget task t-8"}},
 		{token: "debug", path: "/fs/task/?list", status: 200, want: []string{"t-7/", "t-8/"}},
 		{token: "debug", path: "/fs/task/t-404/record.md", status: 404},
@@ -296,7 +301,7 @@ func TestSandboxProxyServesDBQueriesReadOnly(t *testing.T) {
 		t.Errorf("the task is gone after a refused DELETE: %v", err)
 	}
 	status, body = stage2Get(t, srv, "nogrant", "/cli/db/query?sql="+urlQuery("SELECT 1"))
-	if status != http.StatusForbidden || !strings.Contains(body, "db-read") {
+	if status != http.StatusForbidden || !strings.Contains(body, "grain#sql") {
 		t.Errorf("without the grant = %d %s", status, body)
 	}
 }
@@ -385,5 +390,203 @@ func TestDeployStateRedactsCredentialsSection(t *testing.T) {
 	status, body = stage2Get(t, srv, "debug", "/fs/deploy/state")
 	if status != 200 || strings.Contains(body, `"credentials"`) {
 		t.Errorf("GET /fs/deploy/state after clear = %d:\n%s", status, body)
+	}
+}
+
+// A `grain log` read through deploy://grain.log is audited as the task
+// whose sandbox made it. A walkthrough found every such read logged as
+// "task (no task)" (docs/test-runs/2026-10-31-sandbox-grain-cli.md, F2):
+// the namespace path built read_grain_log without its TaskID.
+func TestSandboxGrainLogReadIsAuditedAsItsTask(t *testing.T) {
+	var buf lockedBuffer
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(prevOut); log.SetFlags(prevFlags) })
+
+	dataDir := t.TempDir()
+	if err := secrets.Open(SecretsConfig(dataDir)).Set("widget-api", "token", []byte("s3cret-value")); err != nil {
+		t.Fatal(err)
+	}
+	d := sandboxDeploy{secretsDir: SecretsDir(dataDir), logSources: []grainlog.Source{{Name: "daemon", What: "test journal",
+		Read: func(context.Context, systemlog.Query) ([]string, error) { return []string{"a line"}, nil }}}}
+	if _, err := d.ReadGrainLog(context.Background(), "", namespace.GrainLogQuery{MaxLines: 5, TaskID: "42"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := buf.String(); !strings.Contains(got, "read_grain_log: task 42 read daemon") {
+		t.Errorf("audit line = %q, want it to name task 42", got)
+	}
+}
+
+// TestSandboxProxyPagesPipelineChanges reads deploy://pipeline-changes a
+// page at a time, as `grain read --cursor` does: each page ends with the
+// command that reads the next, and running it returns the changes after
+// the first page's rather than the first page again.
+func TestSandboxProxyPagesPipelineChanges(t *testing.T) {
+	srv, store, _ := stage2Proxy(t, stage2Scopes{
+		"steward": {TaskID: "t-1", RunID: "run-1", MayReadPipeline: true},
+	})
+	ctx := context.Background()
+	// A base-branch run that started and finished within the feed's
+	// lookback: two changes, so one to a page is two pages.
+	started := time.Now().Add(-2 * time.Hour)
+	finished := started.Add(time.Hour)
+	if err := store.PutBaseBranchCI(ctx, model.BaseBranchCI{Repo: model.RepoRef{Owner: "acme", Name: "widgets"},
+		Branch: "main", RunID: "run-7", Commit: "abc123", StartedAt: started, FinishedAt: &finished,
+		Conclusion: "failure", Attempts: 1}); err != nil {
+		t.Fatal(err)
+	}
+	status, all := stage2Get(t, srv, "steward", "/fs/deploy/pipeline-changes")
+	if status != http.StatusOK {
+		t.Fatalf("deploy://pipeline-changes: status=%d body=%q", status, all)
+	}
+	entries := func(body string) []string {
+		var out []string
+		for _, line := range strings.Split(strings.TrimSpace(body), "\n") {
+			if !strings.HasPrefix(line, "next: ") && !strings.HasPrefix(line, "(") {
+				out = append(out, line)
+			}
+		}
+		return out
+	}
+	everything := entries(all)
+	if len(everything) < 2 {
+		t.Fatalf("want at least two changes to page through, got:\n%s", all)
+	}
+
+	status, first := stage2Get(t, srv, "steward", "/fs/deploy/pipeline-changes?page=1")
+	if status != http.StatusOK {
+		t.Fatalf("?page=1: status=%d body=%q", status, first)
+	}
+	if got := entries(first); len(got) != 1 || got[0] != everything[0] {
+		t.Fatalf("first page = %q, want only %q", got, everything[0])
+	}
+	if !strings.Contains(first, "(more changes follow") {
+		t.Errorf("first page does not say more follow:\n%s", first)
+	}
+	_, nextLine, _ := strings.Cut(first, "next: ")
+	nextLine = strings.TrimSpace(nextLine)
+	cursor, ok := strings.CutPrefix(nextLine, "grain read deploy://pipeline-changes --cursor ")
+	if !ok || !strings.HasSuffix(cursor, " --page 1") {
+		t.Fatalf("next line = %q, want the grain read command for the next page", nextLine)
+	}
+	cursor = strings.TrimSuffix(cursor, " --page 1")
+
+	for _, param := range []string{"cursor", "since"} {
+		status, second := stage2Get(t, srv, "steward", "/fs/deploy/pipeline-changes?page=1&"+param+"="+url.QueryEscape(cursor))
+		if status != http.StatusOK {
+			t.Fatalf("?%s=: status=%d body=%q", param, status, second)
+		}
+		if got := entries(second); len(got) != 1 || got[0] != everything[1] {
+			t.Errorf("?%s= second page = %q, want only %q", param, got, everything[1])
+		}
+	}
+	if status, body := stage2Get(t, srv, "steward", "/fs/deploy/pipeline-changes?page=lots"); status != http.StatusBadRequest {
+		t.Errorf("?page=lots: status=%d, want 400; body=%q", status, body)
+	}
+}
+
+func TestInProcessAPIDetachesExternalTokenContextOnMergeQueue(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := sqlite.Open(sqlite.DefaultConfig(dataDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := model.New(db)
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		id, repo, pr string
+	}{
+		{"1", "acme/widgets", "acme/widgets#11"},
+		{"2", "acme/secret", "acme/secret#22"},
+	} {
+		parts := strings.Split(tc.repo, "/")
+		ref := model.RepoRef{Owner: parts[0], Name: parts[1]}
+		if err := store.PutTask(ctx, model.Task{
+			ID:         tc.id,
+			Intent:     model.IntentImplement,
+			Title:      "Task " + tc.id,
+			Body:       "Task " + tc.id,
+			Target:     &ref,
+			Base:       "main",
+			Branch:     "grain/task-" + tc.id,
+			CreatedAt:  &now,
+			AutoMerge:  true,
+			Approval:   &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "op"}},
+			ApprovedAt: &now,
+			Links:      []model.Link{{Kind: model.LinkFixes, Target: tc.pr}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.ObserveField(ctx, tc.id, now, func(o *model.Observation) {
+			o.CompletedAt = &now
+			o.MergeQueueState = "waiting_ci"
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	api := &inProcessAPI{}
+	ns := &namespace.Server{
+		NewRedactor: func() *redact.Redactor { return BuildNamespaceRedactor(dataDir) },
+	}
+	WireSandboxNamespace(ns, SandboxNamespaceConfig{
+		DataDir:      dataDir,
+		Store:        store,
+		InsecureHTTP: true,
+		API:          api,
+	})
+	client := ui.NewClient(ui.Config{
+		DataDir:      dataDir,
+		Actor:        ui.DefaultActor("op"),
+		Capabilities: ui.OfferedCapabilities(),
+		PullRequests: PullRequestGate{},
+	}, store)
+	cfgRow, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfgRow == nil {
+		cfgRow = &model.Config{}
+	}
+	cfgRow.ExternalAgentAPI = true
+	if err := store.PutConfig(ctx, *cfgRow); err != nil {
+		t.Fatal(err)
+	}
+	uiSrv := ui.NewServerWithClient(client)
+	uiSrv.SetNamespace(func() *namespace.Server { return ns })
+	api.Set(uiSrv)
+
+	person := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "op@example.com"})
+	issued, err := client.CreateExternalAgentToken(person, ui.CreateExternalAgentTokenRequest{
+		Name:   "ci-widgets",
+		Scopes: []string{"ci:read"},
+		Repos:  []string{"acme/widgets"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/fs/deploy/merge-queue", nil)
+	req.Header.Set("Authorization", "Bearer "+issued.Token)
+	rec := httptest.NewRecorder()
+	uiSrv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/fs/deploy/merge-queue with ci:read token = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "acme/widgets") || strings.Contains(body, "acme/secret") {
+		t.Errorf("ci:read@acme/widgets merge-queue body = %q, want acme/widgets and no acme/secret", body)
+	}
+
+	// PullRequestGate implements ui.PullRequestAdopter and reports unavailable cleanly before LivePullRequests is set.
+	var adopter ui.PullRequestAdopter = PullRequestGate{}
+	if _, err := adopter.PullRequestStatus(ctx, model.PullRequestRef{Repo: model.RepoRef{Owner: "acme", Name: "widgets"}, Number: 11}, false); err == nil {
+		t.Error("PullRequestGate.PullRequestStatus without LivePullRequests succeeded, want error")
 	}
 }

@@ -54,8 +54,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/sandboxaccess"
-	"github.com/bwsalmon/granule/pkg/guestforward"
-	"github.com/bwsalmon/granule/pkg/sandbox"
+	"github.com/gke-labs/granule/pkg/guestforward"
+	"github.com/gke-labs/granule/pkg/sandbox"
 )
 
 // DefaultGranuleForwardBackoff is how long K8sGranuleSandboxes first
@@ -487,7 +487,7 @@ func (k *K8sGranuleSandboxes) networkNoneForwardedPorts() []int {
 }
 
 // ReservedGuestPorts are the guest loopback ports a capability grant may
-// not forward into (docs/capabilities-spec.md §5.3.1): the guest's sshd
+// not forward into (design/spec/capabilities/capabilities.spec.md §5.3.1): the guest's sshd
 // (port 22) plus any controller service ports forwarded into guest
 // loopback by `granule forward` or the dial-out channel.
 func (k *K8sGranuleSandboxes) ReservedGuestPorts() []int {
@@ -643,17 +643,21 @@ func (k *K8sGranuleSandboxes) create(ctx context.Context, sandbox, name string, 
 // own podShape, unchanged: the pod's own cpu/memory/ephemeral-storage
 // request-and-limit, not the VM's boot size, which podOptions' CHV_*
 // variables carry separately. The one difference is memory: the pod's
-// limit is the guest's RAM plus GranuleVMMMemoryOverheadMB (the same
-// headroom GranuleSandboxes' -memory-limit-mb carries), because the
-// cloud-hypervisor process holding a guest that has touched all of its
-// RAM is bigger than that RAM, and a limit of exactly CHV_MEMORY_MB gets
-// the whole VM OOM-killed the first time the guest uses it all.
+// limit is GranuleMemoryLimitMB -- the guest's RAM plus the same headroom
+// GranuleSandboxes' -memory-limit-mb carries, capped at the largest
+// node's allocatable memory -- because the cloud-hypervisor process
+// holding a guest that has touched all of its RAM, and the host page
+// cache its disk writes go through, are bigger than that RAM, and a limit
+// of exactly CHV_MEMORY_MB gets the whole VM OOM-killed the first time
+// the guest uses it all. The request is that same figure (over the
+// memory overcommit ratio, as every pod's is), so what the scheduler
+// places and what the cgroup allows agree.
 func (k *K8sGranuleSandboxes) podShape(shape Shape) k8s.PodShape {
 	resolved := shape.orDefault(DefaultShape())
 	cpuOvercommit, memOvercommit, diskOvercommit := k.Overcommit()
 	return k8s.PodShape{
 		CPUs:             resolved.CPUs,
-		MemoryMB:         resolved.MemoryMB + GranuleVMMMemoryOverheadMB,
+		MemoryMB:         GranuleMemoryLimitMB(resolved.MemoryMB, k.fit.LargestAllocatableMemoryMB()),
 		DiskGB:           resolved.DiskGB,
 		CPUOvercommit:    cpuOvercommit,
 		MemoryOvercommit: memOvercommit,
@@ -1127,7 +1131,7 @@ func (s *k8sGranuleSandbox) UsesChannelPortForward() bool {
 // process's own rather than the grant's host_port itself, so every
 // connection still goes through serve (portforward.Forward.Serve): the
 // relay's check that host_port belongs to the capability server's service,
-// and the grant's Close cutting it (docs/capabilities-spec.md §5.3.2,
+// and the grant's Close cutting it (design/spec/capabilities/capabilities.spec.md §5.3.2,
 // §5.3.4).
 func (s *k8sGranuleSandbox) ForwardCapabilityPort(ctx context.Context, sandboxPort int, serve func(context.Context, net.Conn)) error {
 	cr := s.currentChannelRunner()

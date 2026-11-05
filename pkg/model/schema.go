@@ -146,15 +146,15 @@ import "strconv"
 //
 // 29 adds `grain_config`.`mcp_servers`: the capability servers this
 // deployment attaches, keyed by capability_id, as a JSON mcpServers
-// object (model.Config.MCPServers, docs/capabilities-spec.md §3.1).
+// object (model.Config.MCPServers, design/spec/capabilities/capabilities.spec.md §3.1).
 //
 // 30 adds `grain_config`.`capability_policy`: which repositories, run
 // kinds and events may hold which capability reference
-// (model.Config.CapabilityPolicy, docs/capabilities-spec.md §4.2.2).
+// (model.Config.CapabilityPolicy, design/spec/capabilities/capabilities.spec.md §4.2.2).
 //
 // 31 adds `grain_config`.`cli_run`: where each agent CLI runs -- on the
 // host, in a container of the release image, or whichever of the two the
-// host allows (model.Config.CLIRun, docs/design/cli-run-location.md).
+// host allows (model.Config.CLIRun, design/design/cli-run-location.design.md).
 //
 // 32 adds `task_observation`.`merge_queue_cancel_handoff_at` and
 // `merge_queue_cancel_handoff_run`: the grain CI run a person cancelled
@@ -217,7 +217,7 @@ import "strconv"
 // reference built FROM guest-base or k8s-sandbox-base
 // (model.Config.SandboxImage), not a script the daemon runs at dispatch.
 //
-// 45 adds the suspension record (docs/design/durable-tasks.md#DT-2):
+// 45 adds the suspension record (design/design/durable-tasks.design.md#DT-2):
 // `task_suspension`, and on `task_run` its `suspend_kind` (backfilled
 // for the four outcomes that were suspensions before the record existed)
 // and `standing`, the model.DispatchStanding snapshot startRun takes.
@@ -245,13 +245,13 @@ import "strconv"
 //
 // 50 adds `task`.`resume_on_deadline` (Task.ResumeOnDeadline), and
 // backfills `task_run`.`suspend_kind` = 'requested' for parked runs, which
-// are now the agent's own suspension (docs/design/durable-tasks.md#DT-9).
+// are now the agent's own suspension (design/design/durable-tasks.design.md#DT-9).
 //
 // 51 adds `ci_job`.`attempts`: each CI job's per-attempt logs and metadata
 // across automatic job retries (model.CIJob.Attempts).
 //
 // 52 adds the `task_goal` table, each task's daemon-checked goal and the
-// progress it has seen (model.TaskGoal, docs/design/durable-tasks.md#DT-4),
+// progress it has seen (model.TaskGoal, design/design/durable-tasks.design.md#DT-4),
 // and `template`.`goal`, the goal a template files its tasks with.
 //
 // 53 adds the `usage_limit_pause` table: the usage-limit pauses in force
@@ -259,7 +259,7 @@ import "strconv"
 //
 // 54 adds `grain_config`.`judgement_model`, the model the symbolic
 // `judgement` model resolves to (model.Config.JudgementModel,
-// docs/design/durable-tasks.md#DT-11).
+// design/design/durable-tasks.design.md#DT-11).
 //
 // 55 adds the `api_scope_set` table: a deployment's own named sets of
 // agent API scopes (model.APIScopeSet, docs/agent-api.md).
@@ -290,7 +290,7 @@ import "strconv"
 //
 // 62 adds the `sandbox_access` table: the SHA-256 token digest and expiry
 // time for each live k8s-granule sandbox's reverse control channel
-// (model.SandboxAccessCredential, docs/design/grain-on-gke.md#GKE-2).
+// (model.SandboxAccessCredential, design/design/grain-on-gke.design.md#GKE-2).
 //
 // 63 adds `sandbox_image_mirror` to `grain_config`: an optional OCI
 // repository into which grain mirrors the build-stamped sandbox image on
@@ -299,7 +299,7 @@ import "strconv"
 // 64 adds the `ci_step_attachment` table: each running CI step's sandbox,
 // exec id and output cursor, so a restarted grain reattaches the step
 // rather than marking its run interrupted (model.CIStepAttachment,
-// docs/design/grain-on-gke.md#GKE-4).
+// design/design/grain-on-gke.design.md#GKE-4).
 //
 // 65 adds `repo_config`.`issue_import_enabled`, `issue_import_repo`,
 // `issue_import_label`, `issue_import_approved` and
@@ -315,12 +315,342 @@ import "strconv"
 // (the grant tables, the default capability lists and the console
 // sessions) to `api:team-broadcast`, the in-process capability having
 // been retired for the agent API's teams:broadcast scope
-// (rewriteLegacyGrants, docs/design/unified-grants.md §4).
+// (rewriteLegacyGrants, design/design/unified-grants.design.md §4).
 //
 // 68 is 67 again for `dispatch-control`, now `api:dispatch-control`.
 //
 // 69 is 67 again for `pipeline-control`, now `api:pipeline-control`.
-const SchemaVersion = 69
+//
+// 70 adds `settings_locked` to `grain_config`: whether non-bootstrap settings
+// are locked in the UI and REST API in favour of config repository pull
+// requests (off by default).
+//
+// 71 is 67 again for `memory`, now `api:memory`.
+//
+// 72 is 67 again for `release-notes`, now `api:release-notes`.
+//
+// 73 adds `priority` to `task` (default 5) and `template`: numeric task
+// priority where higher numbers mean higher dispatch priority.
+//
+// 74 adds `keep_running` to `task`, `template` and `schedule`
+// (model.Task.KeepRunning, model.Template.KeepRunning, model.Schedule.KeepRunning).
+//
+// 75 is 67 again for `self-upgrade`, now `api:self-upgrade`.
+//
+// 76 is 67 again for `test-quarantine`, now `api:test-quarantine`.
+//
+// 77 adds `new_task_form` to `grain_config`: the New Task form's
+// configuration (settings/new-task-form.yml, model.NewTaskForm).
+//
+// 78 changes no table: it upgrades `grain_config`.`task_branch_template`
+// from the pre-slug default `grain/{deployment}/task-{id}`
+// (model.UnsluggedTaskBranchTemplate, seeded by NewDeploymentConfig
+// before grain/task-56) to `grain/{deployment}/task-{id}-{slug}`
+// (model.DefaultTaskBranchTemplate), so deployments created before
+// {slug} was added include a portion of the task's title in new task
+// branch names in addition to the deployment and task-id uniquifiers.
+// Existing tasks keep the branch recorded on their row, and any other
+// template is left alone.
+//
+// 79 adds `pending_config_change` to `task_observation`: the grain/config
+// change a session proposed and is parked on (model.PendingConfigChange),
+// as JSON.
+//
+// 80 rewrites stored `grain-log` grants to
+// `https://grain.dev/capabilities/grain#journal={}`: the in-process
+// `grain-log` provider is retired for the `grain#journal` method.
+//
+// 81 rewrites stored `deployment-health` grants to `api:deployment:read` and
+// `https://grain.dev/capabilities/grain#health={}`: the in-process
+// `deployment-health` provider is retired.
+//
+// 82 rewrites stored `db-read` and `db-write` grants to
+// `https://grain.dev/capabilities/grain#sql={"write":false}` and
+// `https://grain.dev/capabilities/grain#sql={"write":true}`: the in-process
+// `db-read` and `db-write` providers are retired.
+//
+// 83 changes no table: it rewrites retired capability names in
+// `repo_config`.`ci_capabilities` (`team-broadcast`, `dispatch-control`,
+// `pipeline-control`, `memory`, `release-notes`, `self-upgrade`,
+// `test-quarantine`, `grain-log`, `deployment-health`, `db-read` and
+// `db-write`) to the canonical grants migrations 67, 68, 69, 71, 72, 75,
+// 76, 80, 81 and 82 wrote everywhere else. Those migrations left
+// `ci_capabilities` alone, which leaves a bare retired name in a
+// repository's CI list to be handed to its jobs and refused (or, for one
+// with no provider, waited on) when a job starts.
+//
+// 84 rewrites stored `self-repair` grants, `repo_config`.`ci_capabilities`
+// included, to `https://grain.dev/capabilities/grain#host-exec={}`: the
+// in-process `self-repair` provider is retired for the `grain#host-exec`
+// method.
+//
+// 85 rewrites stored `git-push-any-ref` grants to
+// `https://grain.dev/capabilities/repo#write={"force":true,"refs":["refs/heads/*","refs/tags/*"]}`:
+// the in-process `git-push-any-ref` provider is retired for the in-process
+// repo server's `#write` method. It rewrites `repo_config`.`ci_capabilities`
+// as well as the grant tables and capability lists.
+//
+// 86 rewrites stored `corp-research` grants, `repo_config`.`ci_capabilities`
+// included, to `https://grain.dev/capabilities/corp#research={}`: the Google
+// build retires its in-process `corp-research` provider for a
+// `corp#research` method it registers through capability.Register, with
+// `corp-research` as that method's alias.
+//
+// 87 drops `executor_token` and `executor_token_sequence`: remote
+// executors are retired, and grain hostd (which authenticates with its
+// own -hostd-token-file) is grain's only host agent. A pure drop: the
+// importer passes over a table this build lacks, so a dump carrying
+// either imports without it.
+//
+// 88 rewrites stored `repo-read:<repo>` and `repo-write:<repo>` grants,
+// `repo_config`.`ci_capabilities` included, to
+// `https://grain.dev/capabilities/repo#read={"repo":"<repo>"}` and
+// `#write={"repo":"<repo>"}`: the in-process reporead and repowrite
+// providers are retired for the repo server's methods, whose grant carries
+// the CI-only rule and write's event gate itself.
+//
+// 89 rebuilds `merge_batch` with `task_id` in its primary key, so one
+// branch can hold an overlap re-check for each of several changes at once
+// (grain/task-2390). The rows are carried across with an empty task_id,
+// which the queue still reads, re-validates and cleans up as before.
+//
+// 90 changes no table: it folds retired 1-to-1 preset capability entries in
+// `grain_config`.`capability_policy`'s catalogue from `inProcess[<retired>]`
+// into `apiScopes.presets[<preset>]`, merging restrictions conservatively when
+// both exist, and rewrites retired task defaults in `catalogue.defaults`.
+//
+// 91 adds a `<p>_source` column beside every `<p>_kind`/`<p>_id` principal
+// pair (task, task_comment, task_pause, pipeline_pause, scheduled_upgrade,
+// memory, memory_document, release_note and task_event, which also gains
+// behalf_kind/behalf_id/behalf_source), and the config_audit table
+// (operator-attribution spec §1.3, §4.4, §7.1). No row is rewritten: a row
+// written before reads back with an empty Principal.Source.
+//
+// 92 adds the hostd registry: `hostd`, one row per grain hostd this
+// daemon takes host work through (the co-located one as `local`), and
+// `hostd_token`, the SHA-256 digests of each remote hostd's tokens.
+// `hostd` goes to the state repository; `hostd_token` never does
+// (staterepo.LocalTables).
+//
+// 93 routes host work per run: `task_hostd` (a task's hostd pin or label
+// selector), `task_run_hostd` (the hostd, instance and owner each run
+// went to) and a `hostd` column on `task_run_capability_audit`, ” for
+// every record written before.
+//
+// 94 adds `hostd` to `template` (model.Template.Hostd): the hostd pin or
+// label selector every task filed from it starts with.
+//
+// 95 raises `grain_config`.`max_merges_per_repo`'s column default from 1
+// to 5 (model.DefaultMaxMergesPerRepo). Stored values are left alone: the
+// row is always written whole, so a 1 written because it was the default
+// cannot be told from a 1 somebody chose, and both keep it.
+//
+// 96 rewrites stored `grain-ci` grants, `repo_config`.`ci_capabilities`
+// included, to `https://grain.dev/capabilities/grain#ci={}`: the
+// in-process `grain-ci` provider is retired for the `grain#ci` method.
+//
+// 97 retires the in-process `gcp-key` and `gcp-key:<name>` providers onto
+// `https://grain.dev/capabilities/gcp#gcp-key`: seeds `sandbox-agent` and
+// `<name>` permission sets in `grain_config`.`mcp_servers` from the
+// deployment's pool and `gcp_key` rows, and rewrites stored grants across
+// tasks, templates, schedules, default_capabilities, ci_capabilities,
+// console_sessions and capability_policy.
+//
+// 98 adds `allowed_principal` and `allowed_principal_migration`: the
+// database-backed list of `user:<email>` and `group:<email>` entries
+// admitted when authenticated by IAP or another IdentityVerifier, plus the
+// one-time startup migration record off `-ui-allowed-principals`. Kept off
+// SettingsTables so a config-repo pull request cannot lock operators out
+// or grant sign-in access (design/design/settings.design.md §1).
+//
+// 99 adds `grain_config`.`auto_upgrade_on` (model.Config.AutoUpgradeOn:
+// off, daily, or release) and the `auto_upgrade_release` table, what the
+// release-triggered automatic upgrade has seen and scheduled
+// (model.AutoUpgradeRelease).
+//
+// 100 retires the in-process claude-proxy, openai-proxy and gemini-proxy
+// providers onto the in-process model-proxy server: stored grants across
+// tasks, templates, schedules, default_capabilities, ci_capabilities,
+// console_sessions and capability_policy become
+// https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"<vendor>"}.
+//
+// 101 retires the in-process image-signing, registry-push and
+// package-publish providers onto the in-process release server: stored
+// grants, repo_config.ci_capabilities among them, become
+// https://grain.dev/capabilities/release#<method>={}.
+//
+// 102 adds `default_hostd` to `repo_config` (model.RepoConfig.DefaultHostd):
+// the hostd pin or label selector a task filed against the repository
+// starts with when neither the filing nor its template names one.
+//
+// 103 retires the in-process gemini-key onto the gcp server's
+// https://grain.dev/capabilities/gcp#gemini-key: where `gcp_project` is
+// set, seeds the gcp entry in `grain_config`.`mcp_servers` with
+// gemini_key: {project}, minting with the gcp-key-minter secret, and
+// rewrites stored gemini-key grants as 100 did the model proxies.
+//
+// 104 retires the custom command connection type: every stored
+// connection whose framework is "custom" is disabled and kept, with
+// model.RemovedCustomConnectionReason (custom_connection_migration.go).
+//
+// 105 adds `pending_access_request` and `access_decisions` to
+// `task_observation`: the request_access call a task is parked on
+// (model.PendingAccessRequest) and the answers people gave its earlier
+// ones (model.AccessDecision), both JSON.
+//
+// 106 adds `upstream_repo` to `repo_config` (model.RepoConfig.UpstreamRepo):
+// the upstream repository (`<owner>/<name>`) pull requests are opened
+// against when tasks target this fork repository.
+//
+// 107 adds `external_agent_token`.`owner` (model.ExternalAgentToken.Owner,
+// the person a credential acts on behalf of), `filed_via` to `task` and
+// `task_comment` (the X-Grain-Client label of the tool that filed them,
+// model.Task.FiledVia and model.Comment.FiledVia) and
+// `grain_config`.`owner_trust` (model.Config.OwnerTrust, the owners whose
+// external agents' filings queue without a person's approval;
+// design/spec/external-cli/external-cli.spec.md#XC-14..#XC-17).
+//
+// 108 adds `reason` to `allowed_principal` (model.AllowedPrincipal.Reason):
+// why an entry was added, required for the `serviceAccount:<email>` entries
+// the allowlist accepts again.
+//
+// 109 removes the deprecated account and activate arguments from
+// https://grain.dev/capabilities/gcp#gcp-key: stored grants carrying
+// account: X become permission_set: X ("default" resolves to the first
+// configured permission set) and activate is dropped; grants naming a
+// permission set that does not exist are kept, logged, and noted on their
+// task, template or schedule (gcp_key_args_migration.go).
+//
+// 110 adds `role` to `allowed_principal` (model.AllowedPrincipal.Role): the
+// API scope set an entry's sessions are held to, defaulting to
+// grain/operator so every entry that existed before keeps full access
+// (docs/design/access-rbac.md).
+//
+// 111 drops `task_hostd`, `template`.`hostd` and
+// `repo_config`.`default_hostd`: which grain hostd host work runs on is
+// the model connection's (model.AgentBackend.Hostd) or the capability
+// server's (protocol.ServerConfig.Hostd), never a task's. `task_run_hostd`
+// stays, the read-only record of where each run's agent CLI ran.
+//
+// 112 adds `grain_config`.`auto_grant_context_reads`
+// (model.Config.AutoGrantContextReads): the repositories ("*" or owner/name)
+// whose read-only access is auto-granted when a task names them as a
+// committed-context repository (`-design owner/name:path@rev`).
+const SchemaVersion = 112
+
+// allowedPrincipalTable is the `allowed_principal` table: one row per
+// `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
+// through a verified identity (model.AllowedPrincipal).
+const allowedPrincipalTable = `CREATE TABLE IF NOT EXISTS ` + "`allowed_principal`" + ` (
+  ` + "`entry`" + `    TEXT     NOT NULL PRIMARY KEY,
+  ` + "`added_by`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`added_at`" + ` DATETIME NOT NULL,
+  ` + "`reason`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`role`" + `     TEXT     NOT NULL DEFAULT 'grain/operator'
+)`
+
+// allowedPrincipalMigrationTable records the one-time startup migration off
+// `-ui-allowed-principals` / `$GRAIN_ALLOWED_PRINCIPALS` so the deprecated
+// flag is imported at most once even if every entry is later removed, and
+// preserves any unsupported entries (`serviceAccount:`, `domain:`) dropped
+// during import so Settings -> Access can surface them.
+const allowedPrincipalMigrationTable = `CREATE TABLE IF NOT EXISTS ` + "`allowed_principal_migration`" + ` (
+  ` + "`id`" + `          INTEGER  NOT NULL PRIMARY KEY,
+  ` + "`imported_at`" + ` DATETIME NOT NULL,
+  ` + "`source`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`dropped`" + `     TEXT     NOT NULL DEFAULT ''
+)`
+
+// configAuditTable is the `config_audit` table: one row per change to the
+// deployment's configuration somebody made (model.ConfigAuditEntry,
+// operator-attribution spec §4.4). surface is what was changed
+// (`settings`, `repo:<owner/name>`, `schedule:<id>`, ...) and summary
+// what changed, with no secret values.
+const configAuditTable = `CREATE TABLE IF NOT EXISTS ` + "`config_audit`" + ` (
+  ` + "`id`" + `            INTEGER PRIMARY KEY AUTOINCREMENT,
+  ` + "`at`" + `            DATETIME NOT NULL,
+  ` + "`actor_kind`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_id`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_source`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`behalf_kind`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`behalf_id`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`behalf_source`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`surface`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`summary`" + `       TEXT     NOT NULL DEFAULT ''
+)`
+
+// taskEventTable is the `task_event` table: one row per close or reopen of
+// a task by somebody (model.TaskEvent). actor_kind/actor_id are the
+// model.Principal that asked, actor_source how it was established
+// (operator-attribution spec §1.3), and behalf_* whose request it relayed,
+// all ” for none; reason is what they said, "" for nothing;
+// detail is what grain did because of it -- the live run and CI runs a
+// close cancelled. Observation.ClosedAt only ever holds the current
+// closure, so this is the only record of a close somebody later undid.
+// Needs no SchemaVersion bump and no migration rung, for the reason
+// task_run_tool gives: Store.Init's applySchema creates a missing table and
+// its indexes on every start.
+const taskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
+  ` + "`id`" + `         INTEGER PRIMARY KEY AUTOINCREMENT,
+  ` + "`task_id`" + `    TEXT     NOT NULL,
+  ` + "`kind`" + `       TEXT     NOT NULL,
+  ` + "`at`" + `         DATETIME NOT NULL,
+  ` + "`actor_kind`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_id`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_source`" + ` TEXT   NOT NULL DEFAULT '',
+  ` + "`behalf_kind`" + `  TEXT   NOT NULL DEFAULT '',
+  ` + "`behalf_id`" + `    TEXT   NOT NULL DEFAULT '',
+  ` + "`behalf_source`" + ` TEXT  NOT NULL DEFAULT '',
+  ` + "`reason`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`detail`" + `     TEXT     NOT NULL DEFAULT ''
+)`
+
+// integrationEventTable backs GET /api/events (model.IntegrationEvent,
+// design/design/integration-events.design.md): ordered task state changes,
+// questions, comments, and CI verdicts resumable from an integer cursor.
+// Needs no SchemaVersion bump and no migration rung, for taskEventTable's
+// own reason above.
+const integrationEventTable = `CREATE TABLE IF NOT EXISTS ` + "`integration_event`" + ` (
+  ` + "`id`" + `               INTEGER  PRIMARY KEY AUTOINCREMENT,
+  ` + "`type`" + `             TEXT     NOT NULL,
+  ` + "`at`" + `               DATETIME NOT NULL,
+  ` + "`task_id`" + `          TEXT     NOT NULL,
+  ` + "`repo`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`previous_state`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`state`" + `            TEXT     NOT NULL DEFAULT '',
+  ` + "`question_summary`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`comment_id`" + `       INTEGER  NOT NULL DEFAULT 0,
+  ` + "`external_ref`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`origin`" + `           TEXT     NOT NULL DEFAULT '',
+  ` + "`pull_request`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`filed_via`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`ci_provider`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`ci_run_id`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`ci_commit`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`ci_conclusion`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`ci_detail`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_kind`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_id`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_source`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`behalf_kind`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`behalf_id`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`behalf_source`" + `    TEXT     NOT NULL DEFAULT ''
+)`
+
+// secretEntriesTable is the `secret_entries` catalogue for
+// -secrets-backend=secretmanager (design/design/registry.design.md, "Secrets in
+// Secret Manager"): non-secret metadata (secret name, key name, Secret Manager
+// secret ID, and active version number) so List, Has, and bare-name Resolve
+// never call project-wide secretmanager.secrets.list. Secret values are never
+// stored here. Needs no SchemaVersion bump, for taskEventTable's own reason.
+const secretEntriesTable = `CREATE TABLE IF NOT EXISTS ` + "`secret_entries`" + ` (
+  ` + "`secret_name`" + ` TEXT     NOT NULL,
+  ` + "`key`" + `         TEXT     NOT NULL,
+  ` + "`sm_secret`" + `   TEXT     NOT NULL,
+  ` + "`version`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`updated_at`" + `  DATETIME NOT NULL,
+  PRIMARY KEY (` + "`secret_name`" + `, ` + "`key`" + `)
+)`
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -344,6 +674,48 @@ const sandboxAccessTable = `CREATE TABLE IF NOT EXISTS ` + "`sandbox_access`" + 
   PRIMARY KEY (` + "`sandbox`" + `)
 )`
 
+// hostdTable and hostdTokenTable are the hostd registry (model.Hostd),
+// named once for Tables and for the migration that adds them.
+const hostdTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd`" + ` (
+  ` + "`name`" + `       TEXT     NOT NULL,
+  ` + "`owner`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`labels`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`created_by`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + ` DATETIME NOT NULL,
+  ` + "`revoked_at`" + ` DATETIME NULL,
+  PRIMARY KEY (` + "`name`" + `)
+)`
+
+// taskHostdTable and taskRunHostdTable are a task's hostd selector (only
+// migrations 93 to 110 had one; 111 drops it) and the hostd each run
+// resolved (model.TaskRunHostd),
+// named once for Tables and for migration 93.
+const taskHostdTable = `CREATE TABLE IF NOT EXISTS ` + "`task_hostd`" + ` (
+  ` + "`task_id`" + `    TEXT     NOT NULL,
+  ` + "`selector`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`updated_at`" + ` DATETIME NOT NULL,
+  PRIMARY KEY (` + "`task_id`" + `)
+)`
+
+const taskRunHostdTable = `CREATE TABLE IF NOT EXISTS ` + "`task_run_hostd`" + ` (
+  ` + "`run_id`" + `   TEXT     NOT NULL,
+  ` + "`task_id`" + `  TEXT     NOT NULL,
+  ` + "`hostd`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`instance`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`owner`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`at`" + `       DATETIME NOT NULL,
+  PRIMARY KEY (` + "`run_id`" + `)
+)`
+
+const hostdTokenTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd_token`" + ` (
+  ` + "`token_hash`" + ` TEXT     NOT NULL,
+  ` + "`hostd`" + `      TEXT     NOT NULL,
+  ` + "`prefix`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + ` DATETIME NOT NULL,
+  ` + "`revoked_at`" + ` DATETIME NULL,
+  PRIMARY KEY (` + "`token_hash`" + `)
+)`
+
 // externalAgentTokenTable and externalAgentTokenSequenceTable are named
 // once for Tables and for the migration that adds them.
 const externalAgentTokenTable = `CREATE TABLE IF NOT EXISTS ` + "`external_agent_token`" + ` (
@@ -361,6 +733,7 @@ const externalAgentTokenTable = `CREATE TABLE IF NOT EXISTS ` + "`external_agent
   ` + "`revoked_at`" + `     DATETIME NULL,
   ` + "`last_used_at`" + `   DATETIME NULL,
   ` + "`created_by`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`owner`" + `          TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `),
   UNIQUE (` + "`token_hash`" + `)
 )`
@@ -470,12 +843,16 @@ var Tables = []string{
   ` + "`origin_actor_id`" + `       TEXT    NOT NULL,
   ` + "`origin_behalf_kind`" + `    TEXT    NULL,
   ` + "`origin_behalf_id`" + `      TEXT    NULL,
+  ` + "`origin_actor_source`" + `   TEXT    NOT NULL DEFAULT '',
+  ` + "`origin_behalf_source`" + `  TEXT    NOT NULL DEFAULT '',
   ` + "`origin_reason`" + `         TEXT    NOT NULL,
 
   ` + "`approval_actor_kind`" + `   TEXT    NULL,
   ` + "`approval_actor_id`" + `     TEXT    NULL,
   ` + "`approval_behalf_kind`" + `  TEXT    NULL,
   ` + "`approval_behalf_id`" + `    TEXT    NULL,
+  ` + "`approval_actor_source`" + ` TEXT    NOT NULL DEFAULT '',
+  ` + "`approval_behalf_source`" + ` TEXT   NOT NULL DEFAULT '',
   ` + "`approved_at`" + `           DATETIME NULL,
   ` + "`deferred_at`" + `           DATETIME NULL,
   ` + "`deferred_until`" + `        DATETIME NULL,
@@ -512,6 +889,9 @@ var Tables = []string{
   ` + "`change_target_kind`" + `    TEXT     NOT NULL DEFAULT '',
   ` + "`change_target_spec`" + `    TEXT     NOT NULL DEFAULT '',
   ` + "`reviewers`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`priority`" + `              INTEGER  NOT NULL DEFAULT 5,
+  ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
+  ` + "`filed_via`" + `             TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -616,10 +996,27 @@ var Tables = []string{
   ` + "`paused_at`" + `         DATETIME NOT NULL,
   ` + "`paused_by_kind`" + `    TEXT     NOT NULL,
   ` + "`paused_by_id`" + `      TEXT     NOT NULL,
+  ` + "`paused_by_source`" + `  TEXT     NOT NULL DEFAULT '',
   ` + "`from_state`" + `        TEXT     NOT NULL,
   ` + "`immediate`" + `         INTEGER  NOT NULL DEFAULT 0,
   ` + "`grace_until`" + `       DATETIME NULL,
   ` + "`run_id`" + `            TEXT     NULL,
+  PRIMARY KEY (` + "`task_id`" + `)
+)`,
+
+	// console_session_sync is the standing-session declaration last synced
+	// onto a session's task (model.ConsoleSessionConfigSnapshot, as JSON),
+	// so the sync that tells a config change from an operator's own edit
+	// on the task still can after a daemon restart. Held in memory only, a
+	// reads: or writes: entry dropped from the declaration while the
+	// daemon was down stayed on the task for good.
+	//
+	// Needs no SchemaVersion bump, for task_write's own reason: an older
+	// store gains an empty table, and a task with no row is synced as one
+	// that has never been, with the declaration authoritative.
+	`CREATE TABLE IF NOT EXISTS ` + "`console_session_sync`" + ` (
+  ` + "`task_id`" + `  TEXT NOT NULL,
+  ` + "`snapshot`" + ` TEXT NOT NULL,
   PRIMARY KEY (` + "`task_id`" + `)
 )`,
 
@@ -688,6 +1085,9 @@ var Tables = []string{
   ` + "`pending_question_comment_id`" + ` INTEGER  NULL,
   ` + "`baseline_comment_id`" + `         INTEGER  NULL,
   ` + "`pending_secret`" + `              TEXT     NULL,
+  ` + "`pending_config_change`" + `       TEXT     NULL,
+  ` + "`pending_access_request`" + `      TEXT     NULL,
+  ` + "`access_decisions`" + `            TEXT     NULL,
   ` + "`merge_queue_blocked_at`" + `      DATETIME NULL,
   ` + "`merge_queue_refreshed_at`" + `    DATETIME NULL,
   ` + "`merge_queue_repair_at`" + `       DATETIME NULL,
@@ -920,7 +1320,7 @@ var Tables = []string{
 )`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_suspension_open`" + ` ON ` + "`task_suspension`" + ` (` + "`task_id`" + `) WHERE ` + "`resumed_at`" + ` IS NULL`,
 
-	// One task's goal (model.TaskGoal, docs/design/durable-tasks.md#DT-4):
+	// One task's goal (model.TaskGoal, design/design/durable-tasks.design.md#DT-4):
 	// what grain checks to close or rest the task, and the progress it
 	// has seen towards it. spec is the JSON model.GoalSpec; max_stall is
 	// in seconds.
@@ -1086,7 +1486,7 @@ var Tables = []string{
 )`,
 
 	// task_run_api_call is one row per agent-API / grain tool call a run
-	// made (docs/design/durable-tasks.md#DT-14): which tool, the target
+	// made (design/design/durable-tasks.design.md#DT-14): which tool, the target
 	// ids it read or touched, how many bytes the answer carried back, and
 	// when. High volume, local only (staterepo.LocalTables), and pruned
 	// after 30 days (model.RunAPICallRetention).
@@ -1103,7 +1503,7 @@ var Tables = []string{
 
 	// task_run_report_check is one row per steward wake (or weekly sampled
 	// judgement audit) whose closing report was checked against the run's
-	// call log and the cited task records (docs/design/durable-tasks.md#DT-14).
+	// call log and the cited task records (design/design/durable-tasks.design.md#DT-14).
 	`CREATE TABLE IF NOT EXISTS ` + "`task_run_report_check`" + ` (
   ` + "`run_id`" + `     TEXT     NOT NULL,
   ` + "`claims`" + `     INTEGER  NOT NULL DEFAULT 0,
@@ -1119,7 +1519,7 @@ var Tables = []string{
 	// It is what lets the next daemon resume the tail with neither a
 	// hole nor a duplicate in the transcript, and updated_at is the start
 	// of the gap an adoption credits as wait time
-	// (docs/non-disruptive-upgrade.md, "Run hosts never touch the store").
+	// (design/design/non-disruptive-upgrade.design.md, "Run hosts never touch the store").
 	// The run host itself never writes it, or anything else here. Needs no
 	// SchemaVersion bump and no migration rung, for the reason the tables
 	// above give.
@@ -1166,6 +1566,22 @@ var Tables = []string{
   ` + "`fingerprint`" + ` TEXT    NOT NULL,
   ` + "`count`" + `       INTEGER NOT NULL,
   PRIMARY KEY (` + "`run_id`" + `, ` + "`fingerprint`" + `)
+)`,
+
+	// task_run_wait_ledger is a live run's CI wait time per reporting
+	// source (orchestrator.WaitSourceMCP, WaitSourceCLI, ...), written
+	// when the daemon stops and leaves the run for the next one to
+	// adopt. The adopting daemon seeds the run's clock from it
+	// (orchestrator.newAdoptedRunClock), so wait time credited before the
+	// restart is not lost -- the sandbox proxy's own ledger is held only
+	// in memory and starts again from zero. Deleted when the run
+	// finishes. Needs no SchemaVersion bump and no migration rung, for
+	// the reason the tables above give.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_run_wait_ledger`" + ` (
+  ` + "`run_id`" + `     TEXT    NOT NULL,
+  ` + "`source`" + `     TEXT    NOT NULL,
+  ` + "`blocked_ms`" + ` INTEGER NOT NULL,
+  PRIMARY KEY (` + "`run_id`" + `, ` + "`source`" + `)
 )`,
 
 	// task_run_unmatched_failure is one row per failed run whose own
@@ -1238,7 +1654,7 @@ var Tables = []string{
 
 	// task_run_capability_audit is what a run's capability grants did
 	// for it, as their servers reported it when the run released them
-	// (docs/capabilities-spec.md §4.4.4, model.CapabilityAuditRecord):
+	// (design/spec/capabilities/capabilities.spec.md §4.4.4, model.CapabilityAuditRecord):
 	// host-script's one record per call -- script, argv, exit code,
 	// duration -- above all. One row per record, in the order the
 	// servers returned them, `seq` counting from 1 within the run.
@@ -1264,7 +1680,37 @@ var Tables = []string{
   ` + "`at`" + `         DATETIME NOT NULL,
   ` + "`record`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`note`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`hostd`" + `      TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`run_id`" + `, ` + "`seq`" + `)
+)`,
+
+	// task_run_hostd: which grain hostd each run's agent CLI went to
+	// (model.TaskRunHostd), beside the frozen task_run DDL. Its
+	// task_hostd companion, a task's own selector, is dropped by 111.
+	taskRunHostdTable,
+
+	// task_run_startup records the per-phase startup timestamps of a run
+	// (queued_at -> started_at -> sandbox_acquired_at -> sandbox_prepared_at -> first_turn_at)
+	// so interactive and batch startup latency breakdowns can be reported on
+	// Attempt and in grain metrics without altering the frozen task_run DDL.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_run_startup`" + ` (
+  ` + "`run_id`" + `              TEXT     NOT NULL,
+  ` + "`queued_at`" + `           DATETIME NULL,
+  ` + "`sandbox_acquired_at`" + ` DATETIME NULL,
+  ` + "`sandbox_prepared_at`" + ` DATETIME NULL,
+  ` + "`first_turn_at`" + `       DATETIME NULL,
+  PRIMARY KEY (` + "`run_id`" + `)
+)`,
+
+	// task_run_sandbox_key records the sessionSandboxKey and sessionGrantsKey
+	// a run's sandbox was built or reused under, so an adopting daemon after a
+	// restart enforces the exact same warm-sandbox isolation key even if the
+	// task's grants, network access, target, or size were edited mid-run.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_run_sandbox_key`" + ` (
+  ` + "`run_id`" + `      TEXT NOT NULL,
+  ` + "`sandbox_key`" + ` TEXT NOT NULL,
+  ` + "`grants_key`" + `  TEXT NOT NULL,
+  PRIMARY KEY (` + "`run_id`" + `)
 )`,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`lease`" + ` (
@@ -1301,10 +1747,13 @@ var Tables = []string{
   ` + "`author_id`" + `          TEXT    NOT NULL,
   ` + "`author_behalf_kind`" + ` TEXT     NULL,
   ` + "`author_behalf_id`" + `   TEXT     NULL,
+  ` + "`author_source`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`author_behalf_source`" + ` TEXT   NOT NULL DEFAULT '',
   ` + "`body`" + `               TEXT     NOT NULL,
   ` + "`created_at`" + `         DATETIME NOT NULL,
   ` + "`handover`" + `           INTEGER  NOT NULL DEFAULT 0,
-  ` + "`summary`" + `            TEXT     NOT NULL DEFAULT ''
+  ` + "`summary`" + `            TEXT     NOT NULL DEFAULT '',
+  ` + "`filed_via`" + `          TEXT     NOT NULL DEFAULT ''
 )`,
 
 	`CREATE INDEX IF NOT EXISTS ` + "`task_comment_task`" + ` ON ` + "`task_comment`" + ` (` + "`task_id`" + `)`,
@@ -1434,6 +1883,7 @@ var Tables = []string{
   ` + "`last_run_at`" + `           DATETIME NULL,
   ` + "`created_at`" + `            DATETIME NOT NULL,
   ` + "`every_n_minutes`" + `       INTEGER  NULL,
+  ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -1550,6 +2000,8 @@ var Tables = []string{
   ` + "`change_target_kind`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`change_target_spec`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`reviewers`" + `          TEXT NOT NULL DEFAULT '',
+  ` + "`priority`" + `           INTEGER NOT NULL DEFAULT 0,
+  ` + "`keep_running`" + `       INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -1926,7 +2378,7 @@ var Tables = []string{
   ` + "`poll_interval_ms`" + `           INTEGER NOT NULL,
   ` + "`max_workers`" + `                 INTEGER NOT NULL DEFAULT 1,
   ` + "`max_mergers`" + `                 INTEGER NOT NULL DEFAULT 1,
-  ` + "`max_merges_per_repo`" + `         INTEGER NOT NULL DEFAULT 1,
+  ` + "`max_merges_per_repo`" + `         INTEGER NOT NULL DEFAULT 5,
   ` + "`merge_batch_size`" + `            INTEGER NOT NULL DEFAULT 3,
   ` + "`merge_gather_window_ms`" + `      INTEGER NOT NULL DEFAULT 0,
   ` + "`max_ci_jobs`" + `                 INTEGER NOT NULL DEFAULT 1,
@@ -2029,6 +2481,11 @@ var Tables = []string{
   ` + "`external_agent_api`" + `           INTEGER NOT NULL DEFAULT 0,
   ` + "`sandbox_image_mirror`" + `         TEXT    NOT NULL DEFAULT '',
   ` + "`session_sandbox_idle_ttl_ms`" + `  INTEGER NOT NULL DEFAULT 0,
+  ` + "`settings_locked`" + `              INTEGER NOT NULL DEFAULT 0,
+  ` + "`new_task_form`" + `                TEXT    NOT NULL DEFAULT '',
+  ` + "`auto_upgrade_on`" + `              TEXT    NOT NULL DEFAULT '',
+  ` + "`owner_trust`" + `                  TEXT    NOT NULL DEFAULT '',
+  ` + "`auto_grant_context_reads`" + `     TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2061,6 +2518,7 @@ var Tables = []string{
   ` + "`reason`" + `        TEXT     NOT NULL,
   ` + "`actor_kind`" + `    TEXT     NOT NULL,
   ` + "`actor_id`" + `      TEXT     NOT NULL,
+  ` + "`actor_source`" + `  TEXT     NOT NULL DEFAULT '',
   ` + "`until_task_id`" + ` TEXT     NOT NULL,
   PRIMARY KEY (` + "`id`" + `)
 )`,
@@ -2205,34 +2663,14 @@ var Tables = []string{
 	// base with several queued changes merged into it, and grain CI's
 	// verdict about that one tree.
 	//
-	// One row per (repo, branch), because a branch has at most one batch
-	// in flight and its members are held out of the ordinary merge path
-	// while it runs. `members` is JSON rather than a delimited list
-	// because a member is three fields including a commit; the rest is
+	// One row per (repo, branch, task): one change's overlap re-check
+	// (grain/task-2390), mergeBatchTable below. `members` is JSON rather
+	// than a delimited list because a member is three fields including a commit; the rest is
 	// the shape base_branch_ci above has, and it is off SettingsTables
 	// for the same reason -- the daemon writes it for itself, and a
 	// settings import landing mid-batch would either resurrect a batch
 	// whose ref has moved or drop one whose members are being held.
-	`CREATE TABLE IF NOT EXISTS ` + "`merge_batch`" + ` (
-  ` + "`owner`" + `       TEXT     NOT NULL,
-  ` + "`name`" + `        TEXT     NOT NULL,
-  ` + "`branch`" + `      TEXT     NOT NULL,
-  ` + "`ref`" + `         TEXT     NOT NULL,
-  ` + "`base_commit`" + ` TEXT     NOT NULL,
-  ` + "`commit`" + `      TEXT     NOT NULL,
-  ` + "`members`" + `     TEXT     NOT NULL DEFAULT '',
-  ` + "`run_id`" + `      TEXT     NOT NULL DEFAULT '',
-  ` + "`started_at`" + `  DATETIME NOT NULL,
-  ` + "`finished_at`" + ` DATETIME NULL,
-  ` + "`conclusion`" + `  TEXT     NOT NULL DEFAULT '',
-  ` + "`detail`" + `      TEXT     NOT NULL DEFAULT '',
-  ` + "`splits`" + `      INTEGER  NOT NULL DEFAULT 0,
-  ` + "`queued`" + `      INTEGER  NOT NULL DEFAULT 0,
-  ` + "`recheck_of`" + `     TEXT     NOT NULL DEFAULT '',
-  ` + "`recheck_detail`" + ` TEXT     NOT NULL DEFAULT '',
-  ` + "`recheck_at`" + `     DATETIME NULL,
-  PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `, ` + "`branch`" + `)
-)`,
+	mergeBatchTable,
 
 	// One firing of a schedule translated out of a workflow's own
 	// `on: schedule` cron (model.ScheduledWorkflowRun, grain/task-351):
@@ -2468,6 +2906,7 @@ var Tables = []string{
   ` + "`requested_at`" + ` DATETIME NOT NULL,
   ` + "`actor_kind`" + `   TEXT     NOT NULL,
   ` + "`actor_id`" + `     TEXT     NOT NULL,
+  ` + "`actor_source`" + ` TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2485,6 +2924,23 @@ var Tables = []string{
   ` + "`day`" + `      TEXT     NOT NULL,
   ` + "`branch`" + `   TEXT     NOT NULL,
   ` + "`fired_at`" + ` DATETIME NOT NULL,
+  PRIMARY KEY (` + "`id`" + `)
+)`,
+
+	// What the release-triggered automatic upgrade has seen and done
+	// (model.AutoUpgradeRelease): at most one row, written by
+	// orchestrator's reconcileReleaseUpgrade -- the newest release tag
+	// and since when, the release it last scheduled an upgrade for, and
+	// how that upgrade ended. Off SettingsTables for auto_upgrade_run's
+	// reason.
+	`CREATE TABLE IF NOT EXISTS ` + "`auto_upgrade_release`" + ` (
+  ` + "`id`" + `           INTEGER  NOT NULL,
+  ` + "`newest`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`seen_at`" + `      DATETIME NOT NULL,
+  ` + "`release_tag`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`target`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`scheduled_at`" + ` DATETIME NULL,
+  ` + "`outcome`" + `      TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2782,6 +3238,7 @@ var Tables = []string{
   ` + "`issue_import_label`" + `       TEXT NOT NULL DEFAULT '',
   ` + "`issue_import_approved`" + `    INTEGER NOT NULL DEFAULT 0,
   ` + "`issue_import_interval_seconds`" + ` INTEGER NOT NULL DEFAULT 0,
+  ` + "`upstream_repo`" + `            TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 
@@ -2936,6 +3393,20 @@ var Tables = []string{
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `, ` + "`branch`" + `)
 )`,
 
+	// Where each git_ref schedule last saw the ref it watches
+	// (model.ScheduleRefCursor): the commit it peeled to, so a restart
+	// neither re-fires on a ref that has not moved nor misses one that
+	// moved while the daemon was down. Grain's own record, like
+	// path_trigger_cursor.
+	`CREATE TABLE IF NOT EXISTS ` + "`git_ref_cursor`" + ` (
+  ` + "`schedule_id`" + ` TEXT NOT NULL,
+  ` + "`repo`" + `        TEXT NOT NULL DEFAULT '',
+  ` + "`ref`" + `         TEXT NOT NULL DEFAULT '',
+  ` + "`commit`" + `      TEXT NOT NULL DEFAULT '',
+  ` + "`updated_at`" + `  DATETIME NOT NULL,
+  PRIMARY KEY (` + "`schedule_id`" + `)
+)`,
+
 	// What grain has learned about working here (model.Memory,
 	// grain/task-237): one row per scope, the deployment-wide memory
 	// keyed by two empty strings and a repo's by its own (owner, name).
@@ -2974,6 +3445,7 @@ var Tables = []string{
   ` + "`updated_at`" + `      DATETIME NULL,
   ` + "`updated_by_kind`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`updated_by_id`" + `   TEXT NOT NULL DEFAULT '',
+  ` + "`updated_by_source`" + ` TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 
@@ -3015,6 +3487,7 @@ var Tables = []string{
   ` + "`updated_at`" + `      DATETIME NULL,
   ` + "`updated_by_kind`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`updated_by_id`" + `   TEXT NOT NULL DEFAULT '',
+  ` + "`updated_by_source`" + ` TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `, ` + "`document`" + `)
 )`,
 
@@ -3043,6 +3516,7 @@ var Tables = []string{
   ` + "`updated_at`" + `      DATETIME NULL,
   ` + "`updated_by_kind`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`updated_by_id`" + `   TEXT NOT NULL DEFAULT '',
+  ` + "`updated_by_source`" + ` TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`period`" + `)
 )`,
 
@@ -3595,25 +4069,11 @@ var Tables = []string{
   PRIMARY KEY (` + "`name`" + `)
 )`,
 
-	`CREATE TABLE IF NOT EXISTS ` + "`executor_token`" + ` (
-  ` + "`id`" + `                TEXT     NOT NULL,
-  ` + "`name`" + `              TEXT     NOT NULL,
-  ` + "`token_hash`" + `        TEXT     NOT NULL,
-  ` + "`prefix`" + `            TEXT     NOT NULL,
-  ` + "`created_at`" + `        DATETIME NOT NULL,
-  ` + "`revoked_at`" + `        DATETIME NULL,
-  ` + "`last_connected_at`" + ` DATETIME NULL,
-  PRIMARY KEY (` + "`id`" + `),
-  UNIQUE (` + "`token_hash`" + `)
-)`,
-
-	`CREATE TABLE IF NOT EXISTS ` + "`executor_token_sequence`" + ` (
-  ` + "`id`" + `        INTEGER PRIMARY KEY AUTOINCREMENT,
-  ` + "`issued_at`" + ` DATETIME NOT NULL
-)`,
-
 	externalAgentTokenTable,
 	externalAgentTokenSequenceTable,
+
+	hostdTable,
+	hostdTokenTable,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`secret_resolution_audit`" + ` (
   ` + "`id`" + `          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3681,17 +4141,39 @@ var Tables = []string{
 )`,
 
 	// Each live k8s-granule sandbox's reverse-channel token hash and expiry
-	// (model.SandboxAccessCredential, docs/design/grain-on-gke.md#GKE-2),
+	// (model.SandboxAccessCredential, design/design/grain-on-gke.design.md#GKE-2),
 	// kept so a restarting daemon can re-register readopted sandboxes with
 	// its acceptor before their wrappers reconnect. The raw token is never
 	// stored.
 	sandboxAccessTable,
 
 	// Each running CI step's sandbox, exec id and output cursor
-	// (model.CIStepAttachment, docs/design/grain-on-gke.md#GKE-4), written
+	// (model.CIStepAttachment, design/design/grain-on-gke.design.md#GKE-4), written
 	// when the step starts and checkpointed as it runs, so a restarted
 	// daemon reattaches the step instead of interrupting its run.
 	ciStepAttachmentTable,
+
+	// Every close and reopen of a task somebody asked for, with who, when
+	// and why (model.TaskEvent).
+	taskEventTable,
+	configAuditTable,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_event_task`" + ` ON ` + "`task_event`" + ` (` + "`task_id`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_event_at`" + ` ON ` + "`task_event`" + ` (` + "`at`" + `)`,
+
+	// Resumable task state, comment/question, and CI verdict stream for
+	// external integrations (model.IntegrationEvent, GET /api/events).
+	integrationEventTable,
+	`CREATE INDEX IF NOT EXISTS ` + "`integration_event_task`" + ` ON ` + "`integration_event`" + ` (` + "`task_id`" + `, ` + "`id`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`integration_event_repo`" + ` ON ` + "`integration_event`" + ` (` + "`repo`" + `, ` + "`id`" + `)`,
+
+	// Verified-identity sign-in allowlist (`user:<email>` and `group:<email>`)
+	// and its one-time startup migration off `-ui-allowed-principals`.
+	allowedPrincipalTable,
+	allowedPrincipalMigrationTable,
+
+	// Non-secret catalogue of names and keys stored in Google Cloud Secret
+	// Manager (-secrets-backend=secretmanager).
+	secretEntriesTable,
 }
 
 // Views is the derivations, each a (name, DDL) pair so Init can drop and
@@ -3870,4 +4352,30 @@ const apiScopeSetTable = `CREATE TABLE IF NOT EXISTS ` + "`api_scope_set`" + ` (
   ` + "`version`" + `         INTEGER NOT NULL DEFAULT 0,
   ` + "`deprecated`" + `      INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`name`" + `)
+)`
+
+// mergeBatchTable is merge_batch's definition, named so that migration 89
+// (Migrations) can create the table it rebuilds from the very statement
+// a fresh store is created with. task_id joined the primary key there:
+// one row per change rather than per branch (grain/task-2390).
+const mergeBatchTable = `CREATE TABLE IF NOT EXISTS ` + "`merge_batch`" + ` (
+  ` + "`owner`" + `       TEXT     NOT NULL,
+  ` + "`name`" + `        TEXT     NOT NULL,
+  ` + "`branch`" + `      TEXT     NOT NULL,
+  ` + "`task_id`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`ref`" + `         TEXT     NOT NULL,
+  ` + "`base_commit`" + ` TEXT     NOT NULL,
+  ` + "`commit`" + `      TEXT     NOT NULL,
+  ` + "`members`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`run_id`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`started_at`" + `  DATETIME NOT NULL,
+  ` + "`finished_at`" + ` DATETIME NULL,
+  ` + "`conclusion`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`detail`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`splits`" + `      INTEGER  NOT NULL DEFAULT 0,
+  ` + "`queued`" + `      INTEGER  NOT NULL DEFAULT 0,
+  ` + "`recheck_of`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`recheck_detail`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`recheck_at`" + `     DATETIME NULL,
+  PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `, ` + "`branch`" + `, ` + "`task_id`" + `)
 )`

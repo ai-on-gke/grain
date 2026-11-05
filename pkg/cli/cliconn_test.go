@@ -15,14 +15,19 @@
 package cli
 
 import (
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // writeCLIEnv points the CLI at a cli.env of the test's own, holding
@@ -186,6 +191,9 @@ func TestAnUnauthorisedCallNamesTheUnreadableToken(t *testing.T) {
 	}
 	writeCLIEnv(t, "GRAIN_DATA_DIR="+dir+"\n")
 	t.Setenv("GRAIN_LOCAL_API_TOKEN_FILE", "")
+	for _, env := range ui.TokenEnvVars {
+		t.Setenv(env, "")
+	}
 
 	err := runCLI([]string{"-server", srv.URL, "list"})
 	if err == nil {
@@ -210,6 +218,142 @@ func TestAnUnauthorisedCallNamesTheUnreadableToken(t *testing.T) {
 	}
 }
 
+// A 401 names the credential that was actually offered -- -token, an
+// environment variable, or the loopback local API token -- and never gives
+// local-token advice for a non-loopback server.
+func TestAnUnauthorisedCallNamesTheCredentialSource(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"nope"}`))
+	}))
+	defer srv.Close()
+
+	clearTokenEnv := func(t *testing.T) {
+		t.Helper()
+		t.Setenv("GRAIN_LOCAL_API_TOKEN_FILE", "")
+		for _, env := range ui.TokenEnvVars {
+			t.Setenv(env, "")
+		}
+	}
+
+	t.Run("flag token", func(t *testing.T) {
+		writeCLIEnv(t, "")
+		clearTokenEnv(t)
+		t.Setenv("GRAIN_TOKEN", "from-env")
+
+		err := runCLI([]string{"-server", srv.URL, "-token", "wrong", "list"})
+		if err == nil {
+			t.Fatal("runCLI succeeded against a 401")
+		}
+		msg := err.Error()
+		want := ": the token passed with -token was refused"
+		if !strings.HasSuffix(msg, want) {
+			t.Errorf("error = %q, want suffix %q", msg, want)
+		}
+		for _, wrong := range []string{"no -token was given", "local API token"} {
+			if strings.Contains(msg, wrong) {
+				t.Errorf("error %q should not say %q", msg, wrong)
+			}
+		}
+	})
+
+	for _, env := range ui.TokenEnvVars {
+		t.Run("env "+env, func(t *testing.T) {
+			writeCLIEnv(t, "")
+			clearTokenEnv(t)
+			t.Setenv(env, "wrong")
+
+			err := runCLI([]string{"-server", srv.URL, "list"})
+			if err == nil {
+				t.Fatal("runCLI succeeded against a 401")
+			}
+			msg := err.Error()
+			want := ": the token from $" + env + " was refused"
+			if !strings.HasSuffix(msg, want) {
+				t.Errorf("error = %q, want suffix %q", msg, want)
+			}
+			for _, wrong := range []string{"no -token was given", "local API token"} {
+				if strings.Contains(msg, wrong) {
+					t.Errorf("error %q should not say %q", msg, wrong)
+				}
+			}
+		})
+	}
+
+	t.Run("loopback local token absent or stale", func(t *testing.T) {
+		writeCLIEnv(t, "")
+		clearTokenEnv(t)
+		err := runCLI([]string{"-server", srv.URL, "list"})
+		if err == nil || !strings.Contains(err.Error(), "no local API token was found") {
+			t.Errorf("absent data dir error = %v, want missing local API token hint", err)
+		}
+
+		dir := t.TempDir()
+		writeCLIEnv(t, "GRAIN_DATA_DIR="+dir+"\n")
+		clearTokenEnv(t)
+		err = runCLI([]string{"-server", srv.URL, "list"})
+		if err == nil || !strings.Contains(err.Error(), "there is no local API token at "+filepath.Join(dir, "local-api-token")) {
+			t.Errorf("missing token file error = %v, want missing file hint", err)
+		}
+
+		tokenPath := filepath.Join(dir, "local-api-token")
+		if err := os.WriteFile(tokenPath, []byte("grain-local-stale\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		writeCLIEnv(t, "GRAIN_DATA_DIR="+dir+"\n")
+		clearTokenEnv(t)
+		err = runCLI([]string{"-server", srv.URL, "list"})
+		if err == nil || !strings.Contains(err.Error(), "the local API token at "+tokenPath+" was sent and refused") {
+			t.Errorf("stale token file error = %v, want stale token hint", err)
+		}
+	})
+
+	t.Run("non-loopback server", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "local-api-token"), []byte("grain-local-x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		writeCLIEnv(t, "GRAIN_DATA_DIR="+dir+"\n")
+		clearTokenEnv(t)
+		t.Setenv(dataDirEnvVar, dir)
+
+		unauth := errors.New("grain server: nope (401 Unauthorized)")
+		err := explainDaemonError(unauth, cliTarget{
+			server: "https://grain.example.com",
+			source: "-server",
+		})
+		msg := err.Error()
+		want := ": no -token was given; pass a token with -token or set GRAIN_TOKEN"
+		if !strings.HasSuffix(msg, want) {
+			t.Errorf("error = %q, want suffix %q", msg, want)
+		}
+		for _, localAdvice := range []string{"local API token", "local-api-token", "GRAIN_DATA_DIR", "grain access-code", "sudo -u", "grain-daemon.service"} {
+			if strings.Contains(msg, localAdvice) {
+				t.Errorf("non-loopback error %q contains local-token advice %q", msg, localAdvice)
+			}
+		}
+
+		err = explainDaemonError(unauth, cliTarget{
+			server:      "https://grain.example.com",
+			source:      "-server",
+			tokenSource: "-token",
+		})
+		if !strings.HasSuffix(err.Error(), ": the token passed with -token was refused") {
+			t.Errorf("non-loopback -token error = %q", err)
+		}
+
+		err = explainDaemonError(unauth, cliTarget{
+			server:      "https://grain.example.com",
+			source:      "-server",
+			tokenSource: "$GRAIN_TOKEN",
+		})
+		if !strings.HasSuffix(err.Error(), ": the token from $GRAIN_TOKEN was refused") {
+			t.Errorf("non-loopback $GRAIN_TOKEN error = %q", err)
+		}
+	})
+}
+
 // An answer from the daemon that is not about reaching it is left as
 // the daemon said it.
 func TestADaemonErrorIsNotRewritten(t *testing.T) {
@@ -223,5 +367,148 @@ func TestADaemonErrorIsNotRewritten(t *testing.T) {
 	err := runCLI([]string{"-server", srv.URL, "get", "9"})
 	if err == nil || strings.Contains(err.Error(), "grain daemon") {
 		t.Errorf("runCLI error = %v, want the daemon's own 404", err)
+	}
+}
+
+// TestContextCommandsAndServerPrecedence is external-cli.spec.md#XC-2 and
+// #XC-3: -context, then $GRAIN_CONTEXT, then config.json's current picks
+// the context; -server, then $GRAIN_SERVER, then that context's server,
+// then cli.env, then the default picks the daemon; an unknown context is
+// exit 2; the context's credential goes to its own server only; and
+// `grain context` lists, uses, shows and deletes contexts.
+func TestContextCommandsAndServerPrecedence(t *testing.T) {
+	dir := useConfigHome(t)
+	envFile := writeCLIEnv(t, "GRAIN_SERVER=http://127.0.0.1:81\n")
+	var hits [2]atomic.Value
+	servers := make([]*httptest.Server, 2)
+	for i := range servers {
+		i := i
+		servers[i] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits[i].Store(r.Header.Get("Authorization"))
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"acceptedAuth":["external-token"],"externalAgentApi":true,"authenticated":true,"principal":"agent:external:x"}`)
+		}))
+		defer servers[i].Close()
+	}
+	store := credentialStore{}
+	locA, err := store.store("a", "gma_secret-of-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := saveContexts(&contextConfig{Current: "a", Contexts: map[string]*cliContext{
+		"a": {Server: servers[0].URL, Auth: "external-token", Credential: locA},
+		"b": {Server: servers[1].URL, Auth: "local"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name, flag, envContext, envServer string
+		wantURL, wantSource               string
+	}{
+		{"current", "", "", "", servers[0].URL, "context a"},
+		{"$GRAIN_CONTEXT", "", "b", "", servers[1].URL, "context b"},
+		{"-context over $GRAIN_CONTEXT", "a", "b", "", servers[0].URL, "context a"},
+		{"$GRAIN_SERVER over the context", "a", "", "http://127.0.0.1:9", "http://127.0.0.1:9", "$GRAIN_SERVER"},
+	} {
+		t.Setenv(contextEnvVar, tc.envContext)
+		t.Setenv(serverEnvVar, tc.envServer)
+		sel, err := selectContext(tc.flag)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if url, source := serverSourceFor(sel); url != tc.wantURL || source != tc.wantSource {
+			t.Errorf("%s: server = %q from %q, want %q from %q", tc.name, url, source, tc.wantURL, tc.wantSource)
+		}
+	}
+	t.Setenv(contextEnvVar, "")
+	t.Setenv(serverEnvVar, "")
+
+	// The context's credential goes to its server; -server elsewhere
+	// gets none of it.
+	if err := runCLI([]string{"whoami", "--context", "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := hits[0].Load(); got != "Bearer gma_secret-of-a" {
+		t.Errorf("context a's server got Authorization %v, want its credential", got)
+	}
+	if err := runCLI([]string{"-server", servers[1].URL, "whoami"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := hits[1].Load(); got == "Bearer gma_secret-of-a" {
+		t.Error("-server pointed elsewhere was sent context a's credential")
+	}
+
+	for _, args := range [][]string{{"-context", "nope", "whoami"}, {"context", "use", "nope"}, {"context", "show", "nope"}, {"context", "delete", "nope"}} {
+		if err := runCLI(args); exitOf(err) != exitUsage || !strings.Contains(fmt.Sprint(err), `"nope"`) {
+			t.Errorf("grain %s = %v, want exit 2 naming the context", strings.Join(args, " "), err)
+		}
+	}
+	t.Setenv(contextEnvVar, "nope")
+	if err := runCLI([]string{"whoami"}); exitOf(err) != exitUsage {
+		t.Errorf("$GRAIN_CONTEXT=nope: %v, want exit 2", err)
+	}
+	t.Setenv(contextEnvVar, "")
+
+	// A context's server that is not answering is named as the context's.
+	if err := saveContexts(&contextConfig{Current: "a", Contexts: map[string]*cliContext{
+		"a":    {Server: servers[0].URL, Auth: "external-token", Credential: locA},
+		"b":    {Server: servers[1].URL, Auth: "local"},
+		"down": {Server: "http://127.0.0.1:1", Auth: "none"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	err = runCLI([]string{"-connect-timeout", "300ms", "--context", "down", "whoami"})
+	if exitOf(err) != exitUnreachable || !strings.Contains(err.Error(), "(from context down)") {
+		t.Errorf("unreachable context server: %v, want exit 4 naming context down", err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := runCLI([]string{"context", "list", "--json"}); err != nil {
+			t.Error(err)
+		}
+	})
+	if !strings.Contains(out, `"name": "a"`) || !strings.Contains(out, `"current": true`) || strings.Contains(out, "gma_") {
+		t.Errorf("context list --json = %s", out)
+	}
+	if err := runCLI([]string{"context", "use", "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if sel, _ := selectContext(""); sel.name != "b" {
+		t.Errorf("after use b, the current context is %q", sel.name)
+	}
+	out = captureStdout(t, func() {
+		if err := runCLI([]string{"context", "show", "a", "-json"}); err != nil {
+			t.Error(err)
+		}
+	})
+	if !strings.Contains(out, servers[0].URL) || !strings.Contains(out, "file:a") {
+		t.Errorf("context show a = %s", out)
+	}
+	if err := runCLI([]string{"context", "delete", "a"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := loadContexts()
+	if _, ok := cfg.Contexts["a"]; ok || cfg.Current != "b" {
+		t.Errorf("after delete a: %+v", cfg)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "credentials", "a")); !os.IsNotExist(err) {
+		t.Errorf("delete a left its credential file (%v)", err)
+	}
+	if err := runCLI([]string{"context", "delete", "b"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ = loadContexts()
+	if cfg.Current != "" {
+		t.Errorf("deleting the current context left current = %q", cfg.Current)
+	}
+
+	// With no context selected, cli.env and then the default.
+	cfg.Contexts = map[string]*cliContext{}
+	if err := saveContexts(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if url, source := serverSource(); url != "http://127.0.0.1:81" || source != envFile {
+		t.Errorf("with no context, serverSource() = %q, %q; want cli.env's", url, source)
 	}
 }

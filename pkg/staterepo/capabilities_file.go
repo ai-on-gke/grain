@@ -15,7 +15,7 @@
 package staterepo
 
 // settings/capabilities.yml: the capability catalogue
-// (docs/design/config-repo-settings.md §3), one file standing for what
+// (design/design/config-repo-settings.design.md §3), one file standing for what
 // is otherwise five places -- grain_config.mcp_servers,
 // grain_config.capability_policy, grain_config.default_capabilities,
 // api_scope_set, and repo_config.{default_capabilities,ci_capabilities}.
@@ -46,6 +46,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -86,18 +87,19 @@ type capabilitiesRepoDefault struct {
 // is grain_config.mcp_servers' (protocol.ServerConfig), and its methods
 // and restrictions, which are the catalogue's.
 type capabilityServerEntry struct {
-	ID      string            `yaml:"id"`
-	Name    string            `yaml:"name,omitempty"`
-	URL     string            `yaml:"url,omitempty"`
-	Command string            `yaml:"command,omitempty"`
-	Args    []string          `yaml:"args,omitempty"`
-	Env     map[string]string `yaml:"env,omitempty"`
-	Headers map[string]string `yaml:"headers,omitempty"`
-	Run     string            `yaml:"run,omitempty"`
-	Enabled *bool             `yaml:"enabled,omitempty"`
-	Builtin string            `yaml:"builtin,omitempty"`
-	Aliases []string          `yaml:"aliases,omitempty"`
-	Notice  string            `yaml:"notice,omitempty"`
+	ID      string               `yaml:"id"`
+	Name    string               `yaml:"name,omitempty"`
+	URL     string               `yaml:"url,omitempty"`
+	Command string               `yaml:"command,omitempty"`
+	Args    []string             `yaml:"args,omitempty"`
+	Env     map[string]string    `yaml:"env,omitempty"`
+	Headers map[string]string    `yaml:"headers,omitempty"`
+	Run     string               `yaml:"run,omitempty"`
+	Hostd   protocol.HostdTarget `yaml:"hostd,omitempty"`
+	Enabled *bool                `yaml:"enabled,omitempty"`
+	Builtin string               `yaml:"builtin,omitempty"`
+	Aliases []string             `yaml:"aliases,omitempty"`
+	Notice  string               `yaml:"notice,omitempty"`
 	// Secrets are configuration values held by reference
 	// ($secret:<name>), merged into Config: never a secret's value.
 	Secrets      map[string]string             `yaml:"secrets,omitempty"`
@@ -116,6 +118,7 @@ type capabilityAPIScopes struct {
 // neither restricts a set grain ships.
 type capabilityPreset struct {
 	Description  string                        `yaml:"description,omitempty"`
+	Enabled      *bool                         `yaml:"enabled,omitempty"`
 	Scopes       []string                      `yaml:"scopes,omitempty"`
 	Includes     []string                      `yaml:"includes,omitempty"`
 	ScopeRepos   []string                      `yaml:"scope_repos,omitempty"`
@@ -228,10 +231,57 @@ func ValidateCapabilitiesFile(data []byte) (*model.CapabilityCatalogue, error) {
 	return doc.validate()
 }
 
+func (d *capabilitiesDoc) validate() (*model.CapabilityCatalogue, error) {
+	var sets []string
+	var serverIDs map[string]bool
+	hasExplicitSets := false
+	if d.Servers != nil {
+		if servers, err := d.mcpServers(); err == nil {
+			if encoded, err := model.EncodeMCPServers(servers); err == nil {
+				sets, serverIDs = model.GCPPermissionSetsFromMCPServers(encoded)
+				if srv, ok := servers[model.GCPCapabilityServerID]; ok {
+					_, hasExplicitSets = srv.Config["permission_sets"]
+				}
+			}
+		}
+	}
+	if !hasExplicitSets && len(sets) == 0 {
+		// Standalone file check with no gcp server permission_sets block:
+		// allow named account values during the one-release import window.
+		sets = referencedGCPAccountNames(d.catalogue(nil))
+	}
+	return d.validateWithGCPSets(sets, serverIDs)
+}
+
+func referencedGCPAccountNames(cat *model.CapabilityCatalogue) []string {
+	if cat == nil {
+		return nil
+	}
+	var out []string
+	collect := func(grants []string) {
+		for _, g := range grants {
+			spec, err := model.CapabilityGrantSpec(g)
+			if err != nil {
+				continue
+			}
+			if acct, _ := spec.With["account"].(string); strings.TrimSpace(acct) != "" && strings.TrimSpace(acct) != "default" {
+				out = append(out, strings.TrimSpace(acct))
+			}
+		}
+	}
+	collect(cat.Defaults.Task)
+	collect(cat.Defaults.CI)
+	for _, rd := range cat.Defaults.Repos {
+		collect(rd.Task)
+		collect(rd.CI)
+	}
+	return out
+}
+
 // validate is the document's consistency: transports that parse,
 // secrets held by reference, scope sets that resolve, and everything the
 // catalogue checks of itself (model.CapabilityCatalogue.Validate).
-func (d *capabilitiesDoc) validate() (*model.CapabilityCatalogue, error) {
+func (d *capabilitiesDoc) validateWithGCPSets(configuredSets []string, gcpServerIDs map[string]bool) (*model.CapabilityCatalogue, error) {
 	var errs []string
 	if d.Servers != nil {
 		for i, s := range *d.Servers {
@@ -264,6 +314,9 @@ func (d *capabilitiesDoc) validate() (*model.CapabilityCatalogue, error) {
 		}
 	}
 	cat := d.catalogue(nil)
+	// One-release compatibility (schema 109): accept old-form gcp#gcp-key
+	// arguments in settings/capabilities.yml during state-repo import/check.
+	model.RewriteGCPKeyCatalogue(cat, configuredSets, gcpServerIDs, nil)
 	if err := cat.Validate(); err != nil {
 		errs = append(errs, err.Error())
 	}
@@ -286,7 +339,7 @@ func (d *capabilitiesDoc) mcpServers() (map[string]protocol.ServerConfig, error)
 		}
 		cfg := protocol.ServerConfig{
 			Command: s.Command, Args: s.Args, Env: s.Env, ServerURL: s.URL, Headers: s.Headers,
-			Disabled: s.Enabled != nil && !*s.Enabled, Run: s.Run, Builtin: s.Builtin,
+			Disabled: s.Enabled != nil && !*s.Enabled, Run: s.Run, Hostd: s.Hostd, Builtin: s.Builtin,
 			Aliases: s.Aliases, Notice: s.Notice,
 		}
 		if len(s.Config) > 0 || len(s.Secrets) > 0 {
@@ -340,8 +393,8 @@ func (d *capabilitiesDoc) catalogue(prev *model.CapabilityCatalogue) *model.Capa
 		if d.APIScopes.Presets != nil {
 			c.APIScopes.Presets = map[string]model.CataloguePreset{}
 			for name, p := range *d.APIScopes.Presets {
-				if p.Restrictions != nil {
-					c.APIScopes.Presets[name] = model.CataloguePreset{Restrictions: p.Restrictions}
+				if p.Enabled != nil || p.Restrictions != nil || !p.definesSet() {
+					c.APIScopes.Presets[name] = model.CataloguePreset{Enabled: p.Enabled, Restrictions: p.Restrictions}
 				}
 			}
 		}
@@ -622,7 +675,7 @@ func capabilitiesDocumentFor(ctx context.Context, db querier) ([]byte, error) {
 		enabled := !cfg.Disabled
 		e := capabilityServerEntry{
 			ID: id, Name: meta.Name, URL: cfg.ServerURL, Command: cfg.Command, Args: cfg.Args, Env: cfg.Env,
-			Headers: cfg.Headers, Run: cfg.Run, Enabled: &enabled, Builtin: cfg.Builtin, Aliases: cfg.Aliases,
+			Headers: cfg.Headers, Run: cfg.Run, Hostd: cfg.Hostd, Enabled: &enabled, Builtin: cfg.Builtin, Aliases: cfg.Aliases,
 			Notice: cfg.Notice, Methods: meta.Methods, Restrictions: meta.Restrictions,
 		}
 		for k, v := range cfg.Config {
@@ -666,7 +719,16 @@ func capabilitiesDocumentFor(ctx context.Context, db querier) ([]byte, error) {
 	}
 	for name, cp := range cat.APIScopes.Presets {
 		p := presets[name]
-		p.Restrictions = cp.Restrictions
+		rowRequiresPerson := p.Restrictions != nil && p.Restrictions.RequiresPerson
+		p.Enabled = cp.Enabled
+		switch {
+		case cp.Restrictions != nil && rowRequiresPerson && !cp.Restrictions.RequiresPerson:
+			merged := *cp.Restrictions
+			merged.RequiresPerson = true
+			p.Restrictions = &merged
+		case cp.Restrictions != nil || !rowRequiresPerson:
+			p.Restrictions = cp.Restrictions
+		}
 		presets[name] = p
 	}
 	doc.APIScopes = &capabilityAPIScopes{Presets: &presets, RawScopes: cat.APIScopes.RawScopes}
@@ -684,7 +746,7 @@ func capabilitiesDocumentFor(ctx context.Context, db querier) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-const capabilitiesHeader = `# grain's capability catalogue (docs/design/config-repo-settings.md §3):
+const capabilitiesHeader = `# grain's capability catalogue (design/design/config-repo-settings.design.md §3):
 # every capability server, in-process capability and agent API preset a
 # run may hold, who may hold it, and what runs hold by default. It is the
 # source of grain_config.mcp_servers, capability_policy and
@@ -702,7 +764,40 @@ func checkCapabilities(dir string) error {
 	if err != nil || doc == nil {
 		return err
 	}
-	cat, err := doc.validate()
+	var configuredSets []string
+	var serverIDs map[string]bool
+	hasExplicitSets := false
+	if doc.Servers != nil {
+		if servers, err := doc.mcpServers(); err == nil {
+			if encoded, err := model.EncodeMCPServers(servers); err == nil {
+				configuredSets, serverIDs = model.GCPPermissionSetsFromMCPServers(encoded)
+				if srv, ok := servers[model.GCPCapabilityServerID]; ok {
+					_, hasExplicitSets = srv.Config["permission_sets"]
+				}
+			}
+		}
+	} else if cfgRows, present, err := dumpRowsOf(dir, grainConfigTable); err == nil && present {
+		for _, r := range cfgRows {
+			mcpText, _ := textOf(r["mcp_servers"])
+			sets, ids := model.GCPPermissionSetsFromMCPServers(mcpText)
+			for _, s := range sets {
+				if !slices.Contains(configuredSets, s) {
+					configuredSets = append(configuredSets, s)
+				}
+			}
+			if serverIDs == nil {
+				serverIDs = ids
+			} else {
+				for id := range ids {
+					serverIDs[id] = true
+				}
+			}
+		}
+	}
+	if !hasExplicitSets && len(configuredSets) == 0 {
+		configuredSets = referencedGCPAccountNames(doc.catalogue(nil))
+	}
+	cat, err := doc.validateWithGCPSets(configuredSets, serverIDs)
 	if err != nil {
 		return err
 	}
@@ -727,6 +822,9 @@ func checkCapabilities(dir string) error {
 			id := fmt.Sprint(g[kind.parent])
 			owner := byID[id]
 			capability, _ := textOf(g["capability"])
+			if rewritten, changed, missing := model.RewriteGCPKeyGrant(capability, configuredSets, serverIDs); changed && missing == "" {
+				capability = rewritten
+			}
 			gc := model.GrantContext{Kind: model.CatalogueKindTask, Grants: []string{capability}}
 			if o, _ := textOf(owner["target_owner"]); o != "" {
 				n, _ := textOf(owner["target_name"])
@@ -747,4 +845,27 @@ func checkCapabilities(dir string) error {
 		return fmt.Errorf("staterepo: %s: %s", CapabilitiesPath, strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+// capabilitiesWarnings reports retired in_process keys in
+// settings/capabilities.yml that should be moved to api_scopes.presets.<name>.
+func capabilitiesWarnings(dir string) ([]string, error) {
+	doc, err := readCapabilitiesDoc(dir)
+	if err != nil || doc == nil || len(doc.InProcess) == 0 {
+		return nil, err
+	}
+	names := make([]string, 0, len(doc.InProcess))
+	for name := range doc.InProcess {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var warnings []string
+	for _, name := range names {
+		if preset, ok := model.RetiredInProcessPreset(name); ok {
+			warnings = append(warnings, fmt.Sprintf(
+				"%s: in_process.%s is retired; its entry still binds %s%s, so move it to api_scopes.presets.%s",
+				CapabilitiesPath, name, model.APIGrantPrefix, preset, preset))
+		}
+	}
+	return warnings, nil
 }

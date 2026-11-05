@@ -21,8 +21,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/bwsalmon/granule/pkg/agent"
-	"github.com/bwsalmon/granule/pkg/execwire"
+	"github.com/gke-labs/granule/pkg/agent"
+	"github.com/gke-labs/granule/pkg/cgroupmem"
+	"github.com/gke-labs/granule/pkg/execwire"
 )
 
 // fakeCHV stands in for cloud-hypervisor's hybrid-vsock endpoint: a unix
@@ -48,6 +49,10 @@ type fakeCHV struct {
 	// frame instead of letting the session finish, standing in for a VM
 	// that died with a command still running.
 	hangUpMidSession bool
+
+	// beforeHangUp, if set, runs just before hangUpMidSession's hang-up:
+	// the moment a real VMM's death would be recorded somewhere.
+	beforeHangUp func()
 
 	// olderAgent stands in for a guest image built before Request.Dir
 	// and Request.Env existed: it runs the command line and nothing
@@ -215,6 +220,9 @@ func (f *fakeCHV) serveThenHangUp(conn net.Conn, br *bufio.Reader) {
 	}
 	_ = execwire.WriteResponse(conn, execwire.Response{OK: true})
 	_ = execwire.WriteFrame(conn, execwire.TypeStdout, []byte("partial output"))
+	if f.beforeHangUp != nil {
+		f.beforeHangUp()
+	}
 }
 
 // serveAsAnAgentWithoutSignal accepts a session, names no features, and
@@ -558,6 +566,36 @@ func TestRun_AGuestThatVanishesMidCommandIsAnError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "exit status") {
 		t.Errorf("error = %v, want it to say no exit status arrived", err)
+	}
+}
+
+// A guest that vanishes because the container's OOM killer took its VMM
+// is reported as that, from the cgroup's own count, rather than as a
+// connection that closed for no reason anyone can see.
+func TestRun_AVMMKilledByTheCgroupOOMKillerSaysSo(t *testing.T) {
+	root := t.TempDir()
+	events := filepath.Join(root, "memory.events")
+	if err := os.WriteFile(events, []byte("oom_kill 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "memory.max"), []byte("17716740096\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := cgroupmem.Root
+	cgroupmem.Root = root
+	t.Cleanup(func() { cgroupmem.Root = old })
+
+	f := startFakeCHV(t, &fakeCHV{hangUpMidSession: true, beforeHangUp: func() {
+		_ = os.WriteFile(events, []byte("oom_kill 1\n"), 0o644)
+	}})
+	_, err := RunLine(context.Background(), testConfig(t, f), "mke2fs", nil, io.Discard, nil)
+	if !errors.Is(err, cgroupmem.ErrOOMKilled) {
+		t.Fatalf("Run = %v, want the cgroup OOM kill reported", err)
+	}
+	for _, want := range []string{"VM killed: host memory limit, cgroup OOM", "16896 MiB"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %v, want it to say %q", err, want)
+		}
 	}
 }
 

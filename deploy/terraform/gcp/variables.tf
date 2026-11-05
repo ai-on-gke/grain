@@ -524,7 +524,7 @@ variable "grain_image" {
     that needs credentials also needs grain_image_pull_user and a token
     pushed by push-secrets.sh.
   EOT
-  default     = "ghcr.io/bwsalmon/grain/grain"
+  default     = "docker.io/grainai/grain"
 }
 
 variable "grain_image_tag" {
@@ -551,7 +551,7 @@ variable "grain_image_pull_user" {
     does for the GitHub PAT.
 
     Empty (the default) pulls anonymously, which is what
-    ghcr.io/bwsalmon/grain's own public package needs.
+    docker.io/grainai's own public repositories need.
   EOT
   default     = ""
 }
@@ -837,8 +837,54 @@ variable "iap_members" {
     or "domain:example.com". Left empty (the default) grants nobody
     access -- a safe-but-useless default; set this before the first
     apply, or the environment is up but nobody can reach it.
+
+    Not the same list as allowed_principals: this is who IAP lets reach
+    the daemon at all, that one is who grain admits as themselves once
+    IAP has vouched for them.
   EOT
   default     = []
+}
+
+variable "allowed_principals" {
+  type        = list(string)
+  description = <<-EOT
+    Who grain admits as themselves once IAP has authenticated them --
+    the daemon's -ui-allowed-principals, handed to it through
+    files/deploy.sh and scripts/setup.sh. Entries are "user:<email>",
+    "group:<email>", "domain:<domain>" or "serviceAccount:<email>".
+
+    iap_members decides who reaches the daemon; this decides who the
+    daemon then signs in without the access code. Someone in
+    iap_members but not here still reaches the daemon, where IAP's
+    verified identity takes precedence over the access code (403 on the
+    IAP URL; tunnel_command reaches the daemon directly for break-glass
+    access-code sign-in).
+
+    Left null (the default), it is [deployer_member] when that is a
+    "user:" -- the person who installed this deployment -- and otherwise
+    empty. Empty (or [] set explicitly) passes nothing, and the daemon
+    falls back to its own default: the deployment owner, which is the
+    OS account it runs as rather than an email, plus the service
+    accounts grain provisions. That default matches no IAP sign-in, so a
+    deployment whose deployer_member is a CI service account must set
+    this explicitly to sign in over IAP.
+
+    A non-empty list replaces that default rather than adding to it:
+    name any service account that reaches the UI through IAP here too.
+
+    When expose_ui_publicly is true, iap.tf passes the backend service's
+    audience to -ui-iap-audience so verified IAP assertions take effect;
+    when expose_ui_publicly is false, no IAP backend exists and everyone
+    signs in over tunnel_command with the access code.
+  EOT
+  default     = null
+
+  validation {
+    condition = var.allowed_principals == null ? true : alltrue([
+      for p in var.allowed_principals : can(regex("^(user|group|serviceAccount):[^@,\\s\"'\\\\$%]+@[^@,\\s\"'\\\\$%]+$|^domain:[^@,/\\s\"'\\\\$%]+$", p))
+    ])
+    error_message = "allowed_principals entries must be \"user:<email>\", \"group:<email>\", \"serviceAccount:<email>\" or \"domain:<domain>\", with no commas, slashes in domains, quotes or spaces."
+  }
 }
 
 variable "create_iap_brand" {

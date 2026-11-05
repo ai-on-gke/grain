@@ -125,3 +125,112 @@ func TestDirectorProxyGuidanceRedactsProvisioningCredential(t *testing.T) {
 		t.Fatalf("prompt exposed credential: %q", prompt)
 	}
 }
+
+func TestDirectorStateRepositoryIsWritableWhenInWrites(t *testing.T) {
+	t.Parallel()
+	remoteBase := t.TempDir()
+	repo := model.ConfigRepo()
+	seedStateRemote(t, remoteBase, repo)
+	root := t.TempDir()
+	task := directorTask()
+	task.Writes = []model.WriteTarget{{Repo: repo}}
+
+	prepared, err := prepareCheckout(context.Background(), mcp.NewSandboxTools(root), remoteBase,
+		task, "", setupNotes{}, repo)
+	if err != nil {
+		t.Fatalf("prepareCheckout: %v", err)
+	}
+	if prepared.DirectorState != directorStateReady || !prepared.DirectorStateWritable {
+		t.Fatalf("state = %q writable = %v, want a ready writable checkout", prepared.DirectorState, prepared.DirectorStateWritable)
+	}
+	dir := filepath.Join(root, DirectorStateDir)
+	if got := git(t, dir, "remote", "get-url", "--push", "origin"); got == "grain-read-only" {
+		t.Fatalf("push URL = %q, want the proxy's", got)
+	}
+	if got := git(t, dir, "config", "user.email"); got == "" {
+		t.Fatal("no author identity configured on the writable checkout")
+	}
+	prompt := directorStateSection(prepared, task)
+	if !strings.Contains(prompt, "propose_config_change") || !strings.Contains(prompt, dir) {
+		t.Fatalf("prompt does not explain the proposal workflow: %q", prompt)
+	}
+}
+
+// A chat session that is not the Director, granted grain/config in its
+// Writes, is offered propose_config_change (and the git proxy's
+// proposal-branch grant) on that alone, so it needs the same writable
+// grain-state checkout the tool's script starts in.
+func TestNonDirectorSessionWritingConfigGetsAWritableStateCheckout(t *testing.T) {
+	t.Parallel()
+	remoteBase := t.TempDir()
+	repo := model.ConfigRepo()
+	seedStateRemote(t, remoteBase, repo)
+	root := t.TempDir()
+	task := model.Task{
+		ID:     "session-task",
+		Tags:   []string{model.ConsoleSessionTag("ops-chat")},
+		Writes: []model.WriteTarget{{Repo: repo}},
+	}
+
+	prepared, err := prepareCheckout(context.Background(), mcp.NewSandboxTools(root), remoteBase,
+		task, "", setupNotes{}, repo)
+	if err != nil {
+		t.Fatalf("prepareCheckout: %v", err)
+	}
+	if prepared.DirectorState != directorStateReady || !prepared.DirectorStateWritable {
+		t.Fatalf("state = %q writable = %v, want a ready writable checkout", prepared.DirectorState, prepared.DirectorStateWritable)
+	}
+	dir := filepath.Join(root, DirectorStateDir)
+	if got := git(t, dir, "remote", "get-url", "--push", "origin"); got == "grain-read-only" {
+		t.Fatalf("push URL = %q, want the proxy's", got)
+	}
+	prompt := directorStateSection(prepared, task)
+	if !strings.Contains(prompt, "propose_config_change") || !strings.Contains(prompt, dir) {
+		t.Fatalf("prompt does not explain the proposal workflow: %q", prompt)
+	}
+}
+
+func TestOnlyDirectorOrRepolessConfigWritersGetTheStateCheckout(t *testing.T) {
+	t.Parallel()
+	session := model.ConsoleSessionTag("ops-chat")
+	target := model.RepoRef{Owner: "acme", Name: "widgets"}
+	writes := []model.WriteTarget{{Repo: model.ConfigRepo()}}
+	for _, tc := range []struct {
+		name string
+		task model.Task
+		want bool
+	}{
+		{"director", directorTask(), true},
+		{"session writing grain/config", model.Task{Tags: []string{session}, Writes: writes}, true},
+		{"repo-less task writing grain/config", model.Task{Writes: writes}, true},
+		{"session reading grain/config", model.Task{Tags: []string{session}, Reads: []model.RepoRef{model.ConfigRepo()}}, false},
+		{"session writing another repo", model.Task{Tags: []string{session}, Writes: []model.WriteTarget{{Repo: target}}}, false},
+		{"repo task writing grain/config", model.Task{Target: &target, Writes: writes}, false},
+	} {
+		if got := wantsStateCheckout(tc.task); got != tc.want {
+			t.Errorf("%s: wantsStateCheckout = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A repo-less grain/config writer changes it with propose_config_change
+// from its grain-state checkout, so the write-targets paragraph -- "you
+// cannot push to those ... call propose_task" -- leaves grain/config out
+// for it. A repository task holding grain/config still hears it
+// (docs/test-runs/2026-11-03-config-state.md, finding 3).
+func TestWriteTargetsSectionLeavesTheStateCheckoutsRepoOut(t *testing.T) {
+	t.Parallel()
+	config := model.WriteTarget{Repo: model.RepoRef{Owner: "grain", Name: "config"}}
+	other := model.WriteTarget{Repo: model.RepoRef{Owner: "acme", Name: "gadgets"}}
+	if got := writeTargetsSection(model.Task{Writes: []model.WriteTarget{config}}); got != "" {
+		t.Errorf("repo-less grain/config writer told to propose_task it: %q", got)
+	}
+	got := writeTargetsSection(model.Task{Writes: []model.WriteTarget{config, other}})
+	if !strings.Contains(got, "acme/gadgets") || strings.Contains(got, "grain/config") {
+		t.Errorf("repo-less writer of grain/config and acme/gadgets: %q", got)
+	}
+	target := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if got := writeTargetsSection(model.Task{Target: &target, Writes: []model.WriteTarget{config}}); !strings.Contains(got, "grain/config") {
+		t.Errorf("repository task writing grain/config lost the paragraph: %q", got)
+	}
+}

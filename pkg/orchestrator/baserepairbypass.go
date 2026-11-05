@@ -64,7 +64,7 @@ func isBaseBranchRepairTask(ctx context.Context, store *model.Store, task model.
 	if !hasTag(task, BaseCIRepairBranchTag(repo, branch)) && !hasTag(task, BaseReleaseTriageBranchTag(repo, branch)) {
 		return false
 	}
-	if hasTag(task, model.MarkedBaseRepairTag) && model.SelfApproved(task) {
+	if hasTag(task, model.MarkedBaseRepairTag) && (model.SelfApproved(task) || (task.Approval != nil && task.Approval.Actor == model.OwnerTrustPrincipal)) {
 		return false
 	}
 	return true
@@ -228,6 +228,7 @@ func fileBaseRepairReviewFollowUp(ctx context.Context, store *model.Store, clien
 		OrderKey:   orderKey,
 	}
 	model.InheritRequester(&followUp, reviewed)
+	model.InheritContext(&followUp, reviewed)
 	if err := store.PutTask(ctx, followUp); err != nil {
 		return fmt.Errorf("orchestrator: filing follow-up task %s for %s's review findings: %w", followUp.ID, reviewed.ID, err)
 	}

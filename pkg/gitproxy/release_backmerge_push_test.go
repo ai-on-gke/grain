@@ -44,6 +44,7 @@ type releaseCutFixture struct {
 
 func newReleaseCutFixture(t *testing.T) *releaseCutFixture {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	f := &releaseCutFixture{t: t, state: filepath.Join(root, "state"), client: filepath.Join(root, "client")}
 	runLocalGit(t, "", "init", "-q", "-b", "main", f.state)
@@ -93,7 +94,7 @@ func newReleaseCutFixture(t *testing.T) *releaseCutFixture {
 		})
 		runLocalGit(t, f.state, append(gitAs, "commit", "-q", "-m", fmt.Sprintf("fix: candidate %d", i))...)
 	}
-	runLocalGit(t, f.state, "tag", "-a", "-m", "v1.9.0-rc.1", "v1.9.0-rc.1", "candidate~2")
+	runLocalGit(t, f.state, append(gitAs, "tag", "-a", "-m", "v1.9.0-rc.1", "v1.9.0-rc.1", "candidate~2")...)
 	runLocalGit(t, f.state, "checkout", "-q", "--detach", "main")
 
 	tokens, err := LoadSandboxTokens(writeTokensFile(t, t.TempDir(), map[string]string{"sandbox-0": "tok0"}))
@@ -230,7 +231,6 @@ func TestTheReleaseCutsBackMergeFastForwardsMainThroughTheProxy(t *testing.T) {
 func TestABackMergeAlreadyOnTheRemoteFastForwardsMain(t *testing.T) {
 	for name, first := range map[string]string{
 		"on the run's own branch": "HEAD:refs/heads/grain/eu/task-3201",
-		"on candidate":            "+HEAD:refs/heads/candidate",
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newReleaseCutFixture(t)
@@ -248,6 +248,36 @@ func TestABackMergeAlreadyOnTheRemoteFastForwardsMain(t *testing.T) {
 				t.Errorf("main = %s, want the tested notes commit %s itself (was %s)", got, notes, oldMain)
 			}
 		})
+	}
+}
+
+// A declared push moves refs onto commits the repository already has
+// (AuthorizeRefUpdates' history rule): the back-merge pushed to candidate
+// before main has it is new code on a ref whose workflows run it, and is
+// refused -- even force-declared. Once main has it, candidate may follow.
+func TestABackMergeCannotReachCandidateBeforeMain(t *testing.T) {
+	f := newReleaseCutFixture(t)
+	oldCandidate := f.remote("refs/heads/candidate")
+	f.backMerge()
+	if out, err := f.push("+HEAD:refs/heads/candidate"); err == nil || !strings.Contains(out, "a commit this push carries") {
+		t.Errorf("a commit new to the repository was force-pushed to candidate: err %v\n%s", err, out)
+	}
+	if got := f.remote("refs/heads/candidate"); got != oldCandidate {
+		t.Errorf("candidate moved to %s", got)
+	}
+	// An annotated tag is peeled to the commit it names.
+	runLocalGit(t, f.client, "tag", "-a", "-m", "rc", "v1.10.0-rc.1", "HEAD")
+	if out, err := f.push("refs/tags/v1.10.0-rc.1"); err == nil || !strings.Contains(out, "a commit this push carries") {
+		t.Errorf("an rc tag on a commit new to the repository was let through: err %v\n%s", err, out)
+	}
+	if out, err := f.push("main"); err != nil {
+		t.Fatalf("fast-forwarding main: %v\n%s", err, out)
+	}
+	if out, err := f.push("+HEAD:refs/heads/candidate"); err != nil {
+		t.Errorf("candidate, onto what main now has, was refused: %v\n%s", err, out)
+	}
+	if out, err := f.push("refs/tags/v1.10.0-rc.1"); err != nil {
+		t.Errorf("the rc tag, on what main now has, was refused: %v\n%s", err, out)
 	}
 }
 

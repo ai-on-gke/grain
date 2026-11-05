@@ -1039,7 +1039,7 @@ describe("App", () => {
   // a re-render of everything holding it and a miss in every memo keyed
   // on its identity, which on a store of 929 tasks was six dashboard
   // panels re-sorting and re-filtering all of them for nothing
-  // (docs/hand-runs/2026-09-07-panel-dashboard.md, section 5). A poll
+  // (the 2026-09-07 panel-dashboard hand run, section 5). A poll
   // keeps what it already holds when the new answer says the same thing
   // (poll.js), and this is what pins it.
   //
@@ -1583,7 +1583,7 @@ describe("App", () => {
     },
   );
 
-  // grain has no users (docs/design/settings-panel.md §6): a first visit
+  // grain has no users (design/design/settings-panel.design.md §6): a first visit
   // is asked for no name, and the app is what it opens on.
   it("asks a first visit for no username", async () => {
     setupApi();
@@ -1619,6 +1619,48 @@ describe("App", () => {
 
     expect(await screen.findByText("Fix bug")).toBeInTheDocument();
     expect(screen.queryByText("auth-user@example.com")).toBeNull();
+  });
+
+  it("shows the signed-in IAP email in the sidebar footer (not the header) and redirects logout to /_gcp_iap/clear_login_cookie", async () => {
+    const assignSpy = vi.fn();
+    const origLocation = window.location;
+    delete window.location;
+    window.location = { ...origLocation, assign: assignSpy };
+    try {
+      setupApi();
+      const realImpl = api.getMockImplementation();
+      api.mockImplementation((path, opts) => {
+        if (path === "/api/config") {
+          return Promise.resolve({
+            ...config,
+            authenticated: true,
+            authMethod: "iap",
+            actor: "iap-user@example.com",
+            actorKind: "human",
+          });
+        }
+        if (path === "/api/auth/logout") {
+          return Promise.resolve({
+            loggedOut: true,
+            redirect: "/_gcp_iap/clear_login_cookie",
+          });
+        }
+        return realImpl(path, opts);
+      });
+
+      const user = userEvent.setup();
+      render(<App />);
+
+      const tile = await screen.findByTestId("user-tile");
+      expect(tile).toHaveTextContent("iap-user@example.com");
+      expect(screen.queryByTestId("top-bar-user")).toBeNull();
+
+      const logoutBtn = screen.getByTestId("sidebar-logout");
+      await user.click(logoutBtn);
+      expect(assignSpy).toHaveBeenCalledWith("/_gcp_iap/clear_login_cookie");
+    } finally {
+      window.location = origLocation;
+    }
   });
 
   // A browser the server names nobody for (actor "") and refuses every

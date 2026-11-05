@@ -250,3 +250,46 @@ func TestGetCIArtifactDefaultsToNewestRunOnBranch(t *testing.T) {
 		t.Fatalf("downloaded run = %v, want branchB-newest", runnerFallback.downloads)
 	}
 }
+
+func TestGetCIArtifactScopesDefaultRunLookupToReadableRepos(t *testing.T) {
+	root := t.TempDir()
+	t1, t2 := time.Unix(100, 0).UTC(), time.Unix(500, 0).UTC()
+	runs := []ci.Run{
+		{
+			ID: "widgets-run", Repo: testCIRepo, Ref: "main", StartedAt: &t1, Conclusion: ci.ConclusionFailure,
+			Jobs: []ci.JobRun{{JobID: "e2e", Name: "e2e", Artifacts: []ci.Artifact{
+				{Run: "widgets-run", Job: "e2e", Name: "trace", Stored: true, Bytes: 3},
+			}}},
+		},
+		{
+			ID: "secret-run-9999", Repo: "secret/other-repo", Ref: "grain/task-1", StartedAt: &t2, Conclusion: ci.ConclusionFailure,
+			Jobs: []ci.JobRun{{JobID: "e2e", Name: "e2e", Artifacts: []ci.Artifact{
+				{Run: "secret-run-9999", Job: "e2e", Name: "trace", Stored: true, Bytes: 3},
+			}}},
+		},
+	}
+
+	// Single Read repo with empty Repo (e.g. -pr-repo is outside the ci:read grant):
+	// omitted run_id queries testCIRepo directly rather than Repo == "" and never
+	// fetches or names secret/other-repo's newer run.
+	innerSingle := &fakeGrainCIRunner{runs: runs}
+	runnerSingle := &fakeCIArtifactRunner{fakeGrainCIRunner: innerSingle, body: []byte("abc")}
+	toolsSingle := NewGrainCIArtifactTools(runnerSingle, CIRepoScope{Reads: []string{testCIRepo}}, root, "grain/task-1")
+	resSingle := toolsSingle[0].Handler(context.Background(), map[string]any{})
+	if resSingle.IsError {
+		t.Fatalf("get_ci_artifact with sole Read failed: %s", resSingle.Text)
+	}
+	if len(runnerSingle.downloads) != 1 || runnerSingle.downloads[0].Run != "widgets-run" {
+		t.Fatalf("downloaded run = %v, want widgets-run", runnerSingle.downloads)
+	}
+
+	// Multiple Read repos with empty Repo: omitted run_id refuses before lookup
+	// rather than querying Repo == "" and leaking secret-run-9999's existence.
+	innerMulti := &fakeGrainCIRunner{runs: runs}
+	runnerMulti := &fakeCIArtifactRunner{fakeGrainCIRunner: innerMulti, body: []byte("abc")}
+	toolsMulti := NewGrainCIArtifactTools(runnerMulti, CIRepoScope{Reads: []string{testCIRepo, "acme/second"}}, root, "grain/task-1")
+	resMulti := toolsMulti[0].Handler(context.Background(), map[string]any{})
+	if !resMulti.IsError || !strings.Contains(resMulti.Text, "Specify run_id") || strings.Contains(resMulti.Text, "secret") {
+		t.Fatalf("get_ci_artifact with ambiguous Reads = %+v, want Specify run_id without cross-repo leak", resMulti)
+	}
+}

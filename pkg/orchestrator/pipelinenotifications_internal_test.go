@@ -26,7 +26,7 @@ import (
 )
 
 // The existing escalations, raised and cleared as operator notifications
-// (docs/design/durable-tasks.md, DT-5's "Existing escalations, mapped").
+// (design/design/durable-tasks.design.md, DT-5's "Existing escalations, mapped").
 
 func openNotification(t *testing.T, ctx context.Context, store *model.Store, subject string) *model.Notification {
 	t.Helper()
@@ -61,6 +61,10 @@ func TestAConfirmedRedBaseRaisesBaseRedAndTheGreenVerdictClearsIt(t *testing.T) 
 	if n.Severity != model.NotificationWarning || n.TaskID != "repair-1" ||
 		!slices.Contains(n.Actions, "open-repair") || !strings.Contains(n.Body, "/tasks/repair-1") {
 		t.Errorf("base-red = %+v, want a warning naming repair-1 with open-repair", n)
+	}
+	// The repository before its branch, as the title says it.
+	if !strings.HasPrefix(n.Body, "grain CI on acme/widgets `main` is confirmed red: ") {
+		t.Errorf("base-red body = %q, want it to name acme/widgets `main`", n.Body)
 	}
 	if n.ClearsWhen == nil || n.ClearsWhen.Kind != model.ClearsOnBaseGreen {
 		t.Errorf("clears_when = %+v, want base-green", n.ClearsWhen)
@@ -281,8 +285,12 @@ func TestRequestSubjectsClearOnTheirConditions(t *testing.T) {
 			bare.Notification.ClearsWhen)
 	}
 
-	if err := closeSupersededTasks(ctx, store, []string{"12"}, baseCIRepairer, "done", now); err != nil {
+	if err := closeSupersededTasks(ctx, store, []string{"12"}, baseCIRepairer, "base green", "done", now); err != nil {
 		t.Fatal(err)
+	}
+	if events, err := store.TaskEvents(ctx, "12"); err != nil || len(events) != 1 ||
+		events[0].By != baseCIRepairer || events[0].Reason != "base green" {
+		t.Errorf("task 12's events = %+v (%v), want its close recorded as the merge queue's", events, err)
 	}
 	if err := reconcileNotifications(ctx, Deps{Store: store}, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)

@@ -56,8 +56,8 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/console"
 	"github.com/ai-on-gke/grain/pkg/forge"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -400,11 +400,11 @@ type Config struct {
 	CapabilityPortsURL string
 	// CapabilitySandboxServers is where a run's sandbox-callable
 	// capability tools are registered for the sandbox proxy's /cap/
-	// (grain cap, docs/capabilities-spec.md §5.2.6). Nil reaches none of
+	// (grain cap, design/spec/capabilities/capabilities.spec.md §5.2.6). Nil reaches none of
 	// them from the sandbox; model-only tools are unaffected.
 	CapabilitySandboxServers *gitproxy.CapRegistry
 	// CapabilitySetupTimeout bounds each capability setup command
-	// (docs/capabilities-spec.md §5.5.3); zero is
+	// (design/spec/capabilities/capabilities.spec.md §5.5.3); zero is
 	// DefaultCapabilitySetupTimeout.
 	CapabilitySetupTimeout time.Duration
 	// PreparedCapabilities are finite resources reserved before dispatch
@@ -444,6 +444,12 @@ type Config struct {
 	// sandboxPod.
 	capabilityMCPServers     []agent.CapabilityMCPServer
 	capabilityPromptSections string
+	// ControllerMCP builds a host-side proxy targeting POST /api/mcp for a
+	// run holding api:* grants, injecting daemon authentication and
+	// X-Grain-Acting-Task: <taskID> so built-in sessions and tasks reach
+	// grain-controller through the same CapabilityMCPServer loopback relay
+	// external capability servers use. Nil attaches none.
+	ControllerMCP func(taskID string) (*protocol.Proxy, error)
 	// Credentials resolves the named credentials a capability provider
 	// asks for by name, e.g. gcpkey's minter service account.
 	Credentials model.CredentialResolver
@@ -528,7 +534,7 @@ type Config struct {
 	// instead of switching this off.
 	MaxRunRuntime time.Duration
 	// MaxDurableRuns is how many runs of durable tasks (model.Task.IsDurable,
-	// docs/design/durable-tasks.md#DT-1) may be live at once. They are
+	// design/design/durable-tasks.design.md#DT-1) may be live at once. They are
 	// admitted outside every worker and merger count, as every task with
 	// priority dispatch is, so this is the one count that holds them:
 	// a safety ceiling, not a queue (model.Limits.Durable). Zero uses
@@ -628,8 +634,11 @@ type Config struct {
 	// agent.RunConfig.Tools, whose only consumer was the in-process
 	// Gemini runtime agent/antigravity replaced; every Framework left
 	// forks a CLI that manages its own MCP connection and cannot be
-	// handed an in-process registry. See selfrepair.Confirm's own doc
-	// comment for what closing that gap would take.
+	// handed an in-process registry. grain#host-exec's run_host_command,
+	// the tool this field was built for, no longer comes this way: the
+	// forked "grain mcpserver" serves it (runGrants passes the grant for
+	// an Interactive task) and asks for each confirmation over the
+	// daemon -- see selfrepair.Confirm's own doc comment.
 	//
 	// self-debug and bootstrap-playbooks are the capabilities that no
 	// longer depend on this, and it is worth reading why: their tools are
@@ -638,9 +647,9 @@ type Config struct {
 	// them for itself out of an argument (agent.GrantArgs) plus, for
 	// self-debug's task half, a REST client of the daemon. What travels
 	// is the name of the grant, not the tools --
-	// agent.RunConfig.Grants, set by RunDispatch. selfrepair cannot
-	// follow them: its one tool blocks on a human reply in the task's own
-	// chat, which is a store handle that process deliberately lacks.
+	// agent.RunConfig.Grants, set by RunDispatch. host-exec followed them
+	// last, once that process could ask the daemon for the human reply
+	// its one tool blocks on, as the chat tool does.
 	GrantTools map[string]func(store *model.Store, taskID string) []mcp.Tool
 	// PackageCache answers where a sandbox reaches this deployment's
 	// apt, PyPI and Docker Hub cache (pkg/pkgcache) -- "http://host:port" -- or ""
@@ -692,11 +701,6 @@ type Config struct {
 	GrainSecretsDir string
 	// GrainStateDir is the controller-local synchronized state repository used by deployment-health.
 	GrainStateDir string
-	// LocalScripts is where this host finds local-scripts declarations
-	// (pkg/capability/localscripts): a run whose task holds
-	// local-scripts:<name> is told the declaration's path and handed its
-	// credentials in a 0600 file (agent.RunConfig.LocalScripts).
-	LocalScripts localscripts.Config
 	// SandboxGuestImage is the reference this deployment's sandboxes are
 	// really created from -- cmd/grain's chooseSandboxImage, the same
 	// value ui.SandboxImage.Image reports.
@@ -902,6 +906,12 @@ type Config struct {
 	// a value for the same reason StateRepo above is one -- it is read
 	// per cycle, and the answer changes as upgrades happen.
 	UpgradeStatus func() (upgrade.Status, error)
+	// ProcessStartedAt is when this daemon process started, so that the
+	// upgrade check can tell the process an upgrade is about to restart
+	// away from the one that restart brought up
+	// (upgrade.Status.RestartPending). Zero cannot tell the two apart
+	// once the restart has begun.
+	ProcessStartedAt time.Time
 	// RestartGap, when set, reports how long the restart that started
 	// this process left each of its listeners unreachable
 	// (upgrade.GapRecorder), for the upgrade check to report beside the
@@ -951,6 +961,12 @@ type Config struct {
 	// error, or an answer slower than autoUpgradeProbeTimeout schedules
 	// the upgrade as if it had not been asked.
 	UpgradeUnchanged func(ctx context.Context, branch string) (bool, error)
+	// LatestRelease, when set, is the newest release tag on this
+	// deployment's image channel -- (*upgrade.Upgrader).LatestRelease,
+	// which never answers a release candidate or a retracted release.
+	// The release-triggered automatic upgrade (reconcileReleaseUpgrade)
+	// follows it; nil leaves that mode with nothing to follow.
+	LatestRelease func(ctx context.Context) (string, error)
 	// UpgradeDrainWindow, when non-zero, bounds how long a scheduled upgrade
 	// will wait for in-flight tasks and CI jobs to complete before proceeding
 	// with the upgrade. If the draining window elapses and runs are still active,
@@ -970,6 +986,12 @@ type Config struct {
 	// Deps.Runs is nil. When Deps.Runs is non-nil (an asynchronous daemon loop),
 	// in-process session continuation is enabled automatically.
 	WaitForSessionReply bool
+
+	// sessionIdleTTLStored says SessionSandboxIdleTTL was read from the
+	// stored setting at dispatch rather than pinned by the caller, so an
+	// in-process idle wait follows that setting while it waits
+	// (Config.liveSessionIdleTTL).
+	sessionIdleTTLStored bool
 
 	sandboxReused        bool
 	sandboxReclaimed     bool
@@ -1431,7 +1453,7 @@ func (s *hostSandbox) Release(ctx context.Context) error {
 // SandboxReadopter is a Sandboxes backend that can take back a sandbox a
 // previous process created and never released: the sandbox of a run this
 // daemon adopted from the one that started it (ResumeAdoptedRun,
-// docs/non-disruptive-upgrade.md, Stage 2). Readopt claims it -- it is
+// design/design/non-disruptive-upgrade.design.md, Stage 2). Readopt claims it -- it is
 // live from then on, so ReapOrphans and SweepOrphans spare it exactly as
 // they spare one Acquire built -- and returns a Sandbox whose Release
 // destroys it. It builds nothing: a sandbox that is not there is an

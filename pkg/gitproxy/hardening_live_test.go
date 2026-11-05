@@ -61,6 +61,7 @@ func newHardeningFixture(t *testing.T, forwarded bool) hardeningFixture {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	state := filepath.Join(root, "acme", "widgets.git")
 	if forwarded {

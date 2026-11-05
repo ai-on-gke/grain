@@ -295,6 +295,11 @@ func reconcileSandboxes(ctx context.Context, deps Deps, now time.Time) error {
 	}
 
 	liveRunIDs := map[string]bool{}
+	// sandboxRun names the run using a sandbox under a name other than its
+	// own run ID -- a session sandbox a later run reuses -- so step 4 reads
+	// that run's ledger charge as the sandbox's rather than charging the
+	// sandbox a second time.
+	sandboxRun := map[string]string{}
 	haveLiveRuns := false
 	if deps.Store != nil {
 		if runs, err := deps.Store.LiveRuns(ctx); err == nil {
@@ -303,18 +308,32 @@ func reconcileSandboxes(ctx context.Context, deps Deps, now time.Time) error {
 				liveRunIDs[r.ID] = true
 				if r.Sandbox != "" {
 					liveRunIDs[r.Sandbox] = true
+					if r.Sandbox != r.ID {
+						sandboxRun[r.Sandbox] = r.ID
+					}
 				}
-			}
-			for id := range warmSessionSandboxIDs(deps.Store) {
-				liveRunIDs[id] = true
 			}
 		}
 	}
 
+	// InFlight is read before the session pool: a run leaves InFlight only
+	// after parking its session sandbox warm, and a warm sandbox moves to a
+	// claiming run's hold under the pool's lock, so a sandbox missed by one
+	// read is in the next.
 	inFlightRunIDs := map[string]bool{}
 	if deps.Runs != nil {
 		for _, id := range deps.Runs.Runs() {
 			inFlightRunIDs[id] = true
+		}
+	}
+	if haveLiveRuns {
+		for id := range sessionSandboxesInUse(deps.Store) {
+			liveRunIDs[id] = true
+		}
+		for id, runID := range sessionSandboxHolds(deps.Store) {
+			if _, ok := sandboxRun[id]; !ok && id != runID {
+				sandboxRun[id] = runID
+			}
 		}
 	}
 
@@ -327,7 +346,7 @@ func reconcileSandboxes(ctx context.Context, deps Deps, now time.Time) error {
 	if hasLister && haveLiveRuns && deps.Store != nil {
 		kept := make([]LiveSandbox, 0, len(live))
 		for _, sb := range live {
-			if sb.Pool == model.PoolAgent && !liveRunIDs[sb.Holder] && !inFlightRunIDs[sb.Holder] {
+			if sb.Pool == model.PoolAgent && !liveRunIDs[sb.Holder] && !liveRunIDs[sb.ID] && !inFlightRunIDs[sb.Holder] {
 				if finished, found, err := deps.Store.RunFinished(ctx, sb.Holder); err == nil && found && finished {
 					msg := fmt.Sprintf("reaped leaked agent sandbox %s (%s): run %s already finished", sb.ID, sb.Name, sb.Holder)
 					log.Printf("orchestrator: sandbox reconciliation: %s", msg)
@@ -457,6 +476,15 @@ func reconcileSandboxes(ctx context.Context, deps Deps, now time.Time) error {
 				if !exists && sb.Pool == model.PoolCI && unmatchedGenericCI > 0 {
 					unmatchedGenericCI--
 					continue
+				}
+				if !exists && sb.Pool == model.PoolAgent {
+					runID, ok := sandboxRun[sb.ID]
+					if !ok {
+						runID, ok = sandboxRun[sb.Holder]
+					}
+					if _, charged := holderMap[poolHolderKey(model.PoolAgent, runID)]; ok && charged {
+						continue
+					}
 				}
 				if !exists {
 					deps.Ledger.Charge(sb.Pool, sb.Holder, want)

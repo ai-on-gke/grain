@@ -43,8 +43,8 @@ func cmdSandbox(ctx context.Context, c *ui.HTTPClient, out *printer, args []stri
 // throwaway sandbox (POST /api/sandbox-probe), run the command after
 // "--" in it over the deployment's guest-access channel, and delete it.
 // The command's stdout and stderr are copied to this process's, and a
-// non-zero exit is reported as an error, so a script can use it as a
-// check -- scripts/deploy-gke.sh --check does.
+// non-zero exit is reported as an error, so an operator or script can
+// use it as an end-to-end health check.
 //
 // The call waits for the sandbox to boot, which on a cold node is
 // minutes: pass the global -timeout (`grain -timeout=15m sandbox probe

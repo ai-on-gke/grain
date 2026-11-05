@@ -119,9 +119,21 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// grain/task-1025; v8 only adds release-promotion, a handful of
 	// release files, grain/task-1236; v9 makes state-privilege hold all
 	// config-repository paths by default with settings/config-policy.yml
-	// exceptions, grain/task-1591).
-	if trustboundary.Version != "trust-boundary/v9" {
-		w.t.Fatalf("this walkthrough is about trust-boundary/v9, the build has %s", trustboundary.Version)
+	// exceptions, grain/task-1591; v10 adds the single-tenant access gate,
+	// verified-identity seam and principal allowlist to auth-routes,
+	// grain/task-2434; v11 only adds the hostd registry, host-exec
+	// confirmation and CI repository-access files to auth-routes and
+	// capabilities-secrets, grain/task-2723; v12 only splits the release
+	// jobs out of release-promotion into release-machinery, grain/task-2664;
+	// v13 only adds the GitHub Actions Inbox approval's files to
+	// release-promotion, grain/task-2666; v14 only adds the rc
+	// qualification housekeeping workflow and its Actions helper to
+	// release-machinery, grain/task-2584; v15 only adds the controller MCP
+	// endpoint, allowlist, access-decision, CI grant rule, auto-merge guard
+	// and hostd install files to existing categories, task 2977; v16 only adds connection_hostd
+	// and capability server hostd placement, grain/task-2165).
+	if trustboundary.Version != "trust-boundary/v16" {
+		w.t.Fatalf("this walkthrough is about trust-boundary/v16, the build has %s", trustboundary.Version)
 	}
 	if w.merged(branch) {
 		w.t.Fatal("merged before the pull request read mergeable")

@@ -7,9 +7,12 @@ Agents used to get a hand-picked set of MCP tools, and each new ability
 was new plumbing: a capability package that re-wrapped a few `ui.Client`
 methods as tools. The agent API replaces that with one mechanism. Every
 route of grain's own REST API has a permission **scope**. A task granted a
-scope is served **one MCP tool per route under it**. Each tool calls the
-same route the UI calls, through the same handler, so validation, side
-effects and audit are the same.
+scope reaches **every route under it** through the `grain-controller`
+MCP server (`POST /api/mcp`): `grain_explore_scope` lists the routes and
+their input schemas, `grain_invoke` calls one, and four compact tools
+cover the everyday task reads and filing. Each call runs the same route
+the UI calls, through the same handler, so validation, side effects and
+audit are the same.
 
 A new UI action is agent-callable as soon as its route has a scope. There
 is nothing else to write.
@@ -22,11 +25,13 @@ is nothing else to write.
 | Route → scope table | `pkg/ui/route_scopes.go`, beside the route table in `pkg/ui/server.go` |
 | Totality test | `pkg/ui/agent_api_internal_test.go` (`TestRouteScopesAreTotal`) |
 | Enforcement, rails, attribution | `pkg/ui/agent_api_gate.go` (`agentAPIGate`, wrapping every route) |
-| Generated tools | `pkg/ui/agent_api_tools.go` (`AgentAPITools`), served by `grain mcpserver` |
+| Route table as tools (names, descriptions, schemas) | `pkg/ui/agent_api_tools.go` (`AgentAPIRoutes`) |
+| The controller MCP server | `pkg/ui/mcp_endpoint.go` (`POST /api/mcp`), attached to a run by `orchestrator.wireControllerMCP` |
 
-A generated tool sends its request to the daemon with
+A call through `grain-controller` reaches the daemon with
 `X-Grain-Acting-Task: <task id>` (and `X-Grain-Acting-Reason` when it has
-one). The daemon's gate then:
+one); `grain_invoke` then dispatches the route in-process with those
+same headers. The daemon's gate then:
 
 1. looks up the acting task's api grants;
 2. refuses the call unless they grant the route's scope, on the route's
@@ -112,6 +117,56 @@ and `summary` for that group to draw from. The grants are compared by
 name in the proposal trust gate, and can be matched by capability policy
 rules, the same as any other capability.
 
+### Asking a person for more access (`request_access`)
+
+A run that finds it needs something its task does not hold -- another
+repository to read or write, a capability grant (an in-process
+capability, an `api:*` scope, or a server method with `with:` arguments
+such as `gcp#gcp-key {permission_set}` or `repo#write {refs, force}`),
+or open network access -- asks for it with the turn-ending
+`request_access` tool rather than in prose:
+
+```json
+{"summary": "Grant write to acme/lib so the fix lands in both repos",
+ "reason": "The bug is in the shared client library ...",
+ "requests": [
+   {"kind": "read", "repo": "acme/docs"},
+   {"kind": "write", "repo": "acme/lib", "base": "release-2"},
+   {"kind": "grant", "capability": "api:tasks:admin"},
+   {"kind": "grant", "capability": "<server>#gcp-key", "with": {"permission_set": "reader"}},
+   {"kind": "network", "access": "open"}]}
+```
+
+Each item is checked when the call is made, with the checks the task's
+grants editor makes (`CheckCapabilityGrants`, the capability catalogue,
+the repository allowlist, base-branch names); an unknown capability,
+arguments its schema refuses, a repository this deployment does not work
+with, or something the task already holds is returned to the agent as
+an error to fix. Only the first call in a run is relayed.
+
+When the run finishes the task parks on the request (`awaiting_reply`,
+shown as **Asked for access**; the task row carries `awaitingAccess`).
+Its detail carries `pendingAccess`: each item judged against what the
+task holds now, marked `dangerous` or `requiresPerson`, what the task
+already holds, and `earlier` -- any previous answer to exactly the same
+request, so a repeat of a denied request shows the denial. The task pane,
+an interactive task's chat and the inbox show it as a card with
+per-item checkboxes, **Grant all** and **Deny**.
+
+| Route | What it does |
+|---|---|
+| `POST /api/tasks/{id}/access-request/grant` | `{"items": [0, 2]}` grants those items (omit `items` for all), through the same paths the task pane's editors use (`PATCH /api/tasks/{id}` for reads, writes and network access, `POST /api/tasks/{id}/capabilities` for each grant). The rest are declined. Records who granted what (an `access-granted` task event and the task's access decisions), posts the decision into the conversation and re-queues the task; the next run's prompt reads what was granted and what was declined. |
+| `POST /api/tasks/{id}/access-request/deny` | `{"reason": "..."}` (required). Records the denial, posts it with the reason and an instruction not to ask again, and re-queues the task. |
+| `POST /api/tasks/{id}/access-request/check` | grain's own plumbing: the mcpserver checking a call's items for its own task. |
+
+All three routes are `internal`, so no scope reaches them, and the grant
+and deny routes refuse every caller that is not a person. A dangerous
+scope or a `requires_person` grant goes through there because a person
+is the one deciding -- which is what the request is for -- and never for
+an automated approver: an agent holding `api:tasks:admin` cannot grant
+its own request, or anybody's. A reply in words instead un-parks the
+task too, and withdraws the request.
+
 ## The scope vocabulary
 
 Reads take an `<area>:read` scope. A scope marked **dangerous** can only
@@ -122,12 +177,13 @@ every `DELETE`.
 |---|---|---|
 | `tasks:read` | read tasks, conversations, transcripts, trees | |
 | `tasks:write` | file, edit, comment on, reorder, defer, pause, resume, retry, stop, close and reopen tasks | |
-| `tasks:admin` | approve proposed tasks, recreate sandboxes | yes |
+| `tasks:admin` | approve proposed tasks, recreate sandboxes, edit numeric task `priority` (`PATCH /api/tasks/{id}` with `{"priority": <int>}` only) | yes |
 | `tasks:from-template` | file a task from a repository's own declared template (`POST /api/tasks/from-template`); an agent's call also needs `tasks:write`, since it is served as `POST /api/tasks` | |
 | `merge:write` | open pull requests for tasks, retry their merges | |
 | `merge:force` | force-merge past the gate | yes |
 | `ci:read` | read CI runs (job logs included), artifacts, merge batches, base-branch gates | |
 | `ci:write` | start, re-run and cancel CI runs, base-branch and release runs | |
+| `tests:write` | quarantine flaky or failing tests (`POST /api/tests/quarantine` and `grain quarantine`) and file held follow-up repair tasks | |
 | `notifications:write` | raise and clear operator notifications (`POST /api/notifications`, `/{id}/clear`); acknowledging and Investigate are a person's | no |
 | `teams:broadcast` | post a comment to every active task (`POST /api/deployment/broadcast`), un-parking the ones awaiting a reply; signed as the broadcasting task, and model-only (never on the sandbox channel) | |
 | `dispatch:read` | read whether dispatch is paused | |
@@ -144,14 +200,18 @@ every `DELETE`.
 | `repos:write` | add and remove repositories, change their settings, create branches | |
 | `boards:read` | read boards | |
 | `boards:write` | create, edit and delete boards | |
-| `memory:read` | read memory documents and release notes | |
-| `memory:write` | write memory documents and release notes | |
+| `memory:read` | read memory documents | |
+| `memory:write` | write memory documents | |
+| `release-notes:read` | read release notes and weekly cluster stats | |
+| `release-notes:write` | write release notes | |
 | `sessions:read` | read standing sessions and live consoles | |
 | `sessions:write` | edit standing sessions (subject to the rails) | |
 | `caches:read` | read the CI, package and actions caches | |
 | `caches:write` | flush them | |
 | `settings:read` | read deployment settings and configuration | |
 | `settings:write` | change deployment settings, the database, the state repository | yes |
+| `access:read` | read the allowed users and groups list | |
+| `access:write` | add and remove allowed users and groups | yes |
 | `connections:read` | read git connections and model backends | |
 | `connections:write` | change them | yes |
 | `capabilities:read` | read capability servers and policy, check grants | |
@@ -160,6 +220,7 @@ every `DELETE`.
 | `secrets:write` | set and delete secrets, keys and tokens | yes |
 | `deployment:read` | read host, sandbox, log, metric and upgrade status | |
 | `sandboxes:read` | read the persistent sandboxes' status (`GET /api/persistent-sandboxes`); `deployment:read` implies it | |
+| `deployment:src` | read grain's own source under `src://` (`GET /api/fs/src/...`): an external agent (`gma_`) token is refused `src://` without it, even holding `deployment:read`, which the route also needs | |
 | `deployment:upgrade` | upgrade grain and its database, or cancel a scheduled upgrade | yes |
 | `deployment:restart` | restart grain, act on persistent sandboxes, run sandbox probes | yes |
 | `deployment:reboot` | reboot or shut down the host | yes |
@@ -183,25 +244,34 @@ table only so the table stays total.
 | `self-upgrade` | `deployment:read`, `deployment:upgrade` |
 | `pipeline-control` | `dispatch:read`, `dispatch:write` |
 | `team-broadcast` | `teams:broadcast` |
+| `memory` | `memory:read`, `memory:write` |
+| `release-notes` | `release-notes:read`, `release-notes:write` |
+| `test-quarantine` | `tests:write` |
 | `release-gate-read` | `ci:read`, `tasks:read`, `sandboxes:read`, `tasks:from-template` limited to the `release-notes` template |
+| `external-dev` | `tasks:read`, `tasks:write`, `ci:read`, `ci:write`, `merge:write`, `repos:read`, `templates:read`, `deployment:read` |
+| `external-read` | `tasks:read`, `ci:read`, `repos:read`, `templates:read`, `deployment:read` |
 
-The `self-debug` and `self-upgrade` capabilities are now aliases. A task
-holding either is also served its preset's routes, and keeps the tools
-it always had under their old names (`list_grain_tasks`,
-`read_grain_metrics`, `start_upgrade`, ...).
+The `self-debug` capability is now an alias. A task holding it is also
+served its preset's routes, and keeps the tools it always had under
+their old names (`list_grain_tasks`, `read_grain_metrics`, ...).
 
-`team-broadcast`, `dispatch-control` and `pipeline-control` are aliases
+`team-broadcast`, `dispatch-control`, `pipeline-control`, `memory`,
+`release-notes`, `self-upgrade` and `test-quarantine` are aliases
 too, but their
-in-process capabilities are retired (docs/design/unified-grants.md §4):
+in-process capabilities are retired (design/design/unified-grants.design.md §4):
 they have no tools of their own any longer, and a run holding one is
-served its preset's `api_*` tools instead (`api_deployment_broadcast`
+served its preset's routes through `grain-controller` and `grain` CLI subcommands instead (`api_deployment_broadcast`
 for `broadcast_team_message`; the pipeline-pause, run-now and defer
 routes for `pause_pipeline`, `resume_pipeline`, `run_task_now` and
 `defer_task`; for pipeline-control, the pipeline-pause routes, which an
 agent calls as itself, so it lifts only a pause it took and never an
-upgrade's hold). Every place a grant is recorded writes it as
+upgrade's hold; for `memory` and `release-notes`, the `/api/memory*` and
+`/api/release-notes*` routes and `grain memory` / `grain release-notes`;
+for `self-upgrade`, `api_start_upgrade` and `api_cancel_scheduled_upgrade`
+plus `GET /api/upgrade` via `grain api`; for `test-quarantine`,
+`POST /api/tests/quarantine` (`api_quarantine_test`) and `grain quarantine`). Every place a grant is recorded writes it as
 `api:<preset>` (`model.CanonicalLegacyGrant`), importing a grain/config
-does the same, and schema migrations 67, 68 and 69 rewrote the grants
+does the same, and schema migrations 67, 68, 69, 71, 72, 75 and 76 rewrote the grants
 already stored -- tasks, templates, schedules, the default capability
 lists and the standing sessions. The bare name keeps granting the preset
 wherever it is still written, such as a repository's own `.grain`
@@ -241,6 +311,26 @@ working. The `grain/` prefix is reserved: a deployment can't declare a
 set under it, or under a preset's bare name, so a built-in can't be
 shadowed or edited. It can be composed.
 
+grain also ships three sets that are meant to be **roles** for allowed
+users, groups and service accounts
+([`docs/access-code.md`](access-code.md#who-is-let-in),
+[`docs/design/access-rbac.md`](design/access-rbac.md)):
+
+- `grain/operator`: every scope. It is the default role, and only a
+  person may grant it.
+- `grain/viewer`: every `*:read` scope.
+- `grain/contributor`: `grain/viewer` plus `tasks:write` and `ci:write`.
+
+Any set can be an allowlist entry's role. A verified session is then
+checked against its role's scopes, through the same route table and
+repository limits as an agent's grants. A set's `repos` limits the role
+to those repositories. When a person holds several roles, a `deny` in
+any one of them withholds that scope from the person, whichever other
+role grants it. So build a narrower role by listing its scopes, and use
+`deny` only as a veto. Editing a set here also widens or narrows every
+person who holds it as a role, starting with their next request. The
+state check's diff of the set is the report of that change.
+
 A deployment declares its own sets in its config repository, in
 `tables/api_scope_set.json` (the `api_scope_set` settings table,
 `model.APIScopeSet`). It's a settings table like `custom_field`, chosen
@@ -263,7 +353,7 @@ A set is a row:
 | `includes` | JSON list of other sets, built-in or declared. Their resolved scopes are added, each keeping the repository limits it had. A missing set or a cycle (`a -> b -> a`, or a set including itself) is an error naming the path. |
 | `repos` | JSON list of `owner/name`. Limits every scope of the set, included ones too: a scope already limited by an included set keeps only the repositories in both, and one left with none is dropped. Empty means no limit of the set's own. |
 | `deny` | JSON list in the `scopes` syntax. Removed after composition. |
-| `requires_person` | 1 means only a person may grant the set. **Forced on** when the resolved set holds any dangerous scope (`capabilities:admin`, `secrets:write`, `settings:write`, `connections:write`, `merge:force`, `tasks:admin`, `deployment:*` except `deployment:read`). A set can turn it on, never off. |
+| `requires_person` | 1 means only a person may grant the set. **Forced on** when the resolved set holds any dangerous scope (`capabilities:admin`, `secrets:write`, `settings:write`, `access:write`, `connections:write`, `merge:force`, `tasks:admin`, `deployment:*` except `deployment:read`). A set can turn it on, never off. |
 | `version` | the author's revision number, shown in the check and in Settings |
 | `deprecated` | 1 to flag the set in Settings and the pickers. It still resolves and still grants. |
 
@@ -322,7 +412,8 @@ sets after the presets, each with its resolved scopes, so the operator
 sees what a grant hands out before granting it. `grain mcpserver`, which
 can't read the deployment's sets, is started with a declared set's
 grant written out as the scope grants it resolves to
-(`model.APIScopeSetGrantNames`).
+(`model.APIScopeSetGrantNames`); `grain-controller` reads the task's
+grants from the store on every call, so it needs no such copy.
 
 **Routes.** `GET /api/api-scope-sets` (`capabilities:read`) lists every
 set in effect with its source, resolved scopes and requires-person flag.
@@ -400,8 +491,72 @@ repository access, a job is granted them by declaring them: they are
 not taken from the repository's CI capabilities list.
 
 `release-gate-read`, the release train's capability
-(`docs/design/release-from-trunk.md`, RFT-3), is the built-in preset
+(`design/design/release-from-trunk.design.md`, RFT-3), is the built-in preset
 `api:release-gate-read`. A job may declare it under either name.
+
+## GitHub Actions runs
+
+For a repository whose CI is GitHub Actions (`ci_mode: github`, or any
+repository whose GitHub CI is not ignored), the `ci:read` routes serve
+its Actions workflow runs beside grain CI's. The reads go through the
+daemon's own forge connection, so no credential reaches a sandbox: the
+GitHub App or token for github.com, and the host's own tool
+(`ForgeViaCommand`) for a GitHub Enterprise host, whose REST API is
+under `/api/v3`. The rules for which
+repositories a task may read are the same as for grain CI runs, and
+only repositories this deployment works in (its target repos, or every
+repository while that list is empty) are read at all: a grant for every
+repository, or a person, reading a `gha:` id of any other gets a 404,
+and the forge is not asked.
+
+| Route | Answers |
+|---|---|
+| `GET /api/ci/runs?repo=owner/name` | Grain CI runs and Actions workflow runs merged, newest first. Each row has `provider` (`grain` or `github-actions`). An Actions row's `actions` object holds `runId`, `runAttempt`, `workflow` (the file), `workflowName`, GitHub's `status` and `conclusion`, `url` and `failedJobs`. `ref`, `conclusion`, `since`, `until` and `limit` filter both kinds of row. `provider=grain` or `provider=github-actions` keeps one kind. |
+| `GET /api/ci/runs/{id}` | With an Actions id (`gha:<owner>:<name>:<run id>`, for example `gha:ai-on-gke:grain:123`): the run with its jobs and their steps, each with its conclusion. Logs are not included. |
+| `GET /api/ci/runs/{id}/log?job=<name or id>&tail=<lines>` | One Actions job's log. With no `job`, the first job that failed, or the only job. It is capped at 256 KiB (`ci.MaxStepOutput`, the same cap as a grain CI step's output), and the end is kept. The answer gives `job`, `jobId`, `url`, the full size in `bytes`, and `truncated`. |
+| `GET /api/ci/runs/{id}/artifacts` | The Actions run's artifacts, names and sizes only. Downloading one (`.../artifacts/{job}/{name}`) answers 501. An Actions artifact is a zip behind a redirect, sometimes gigabytes, and grain does not fetch it for you; get it from the run's page. |
+
+Notes:
+
+- **Who sees Actions rows by default.** A call from an agent gets the
+  Actions rows without asking. A person's call needs `provider` to get
+  them. The CI pane is a person's call: it polls every few seconds and
+  shows grain CI only.
+- **Where the rows come from.** A listing reads the forge's
+  `actions/runs`, one page of at most 100, and adds in the jobs grain
+  has recorded for each run (`github_ci_job`, filled by the merge
+  queue's polls and by webhooks).
+  - If there is no forge connection, the hour's API budget is low
+    (`github.BudgetLow`), or the forge read fails, the listing is built
+    from grain's record alone.
+  - When that happens, `actionsNote` says why.
+- **Rate-limit budget.** Every forge call is charged to the `ci-read`
+  caller in the budget ledger (`GET /api/system/github`). Job logs and
+  artifact lists have their own kinds, `job logs` and `artifacts`.
+- **Caching.**
+  - A listing is cached for 30 seconds.
+  - A finished run, its jobs, and a finished job's log are cached for
+    10 minutes.
+  - A run or job that is still going is cached for 15 seconds.
+- **Log redirects.** A log comes back as a redirect to a blob host.
+  - On github.com, net/http follows it and drops the credential.
+  - Through a host's own tool (`ForgeViaCommand`), the tool follows it itself. If it hands the redirect
+    back, the full URL is sent through the tool again.
+
+In a sandbox the same runs are read with the `grain` CLI and under
+`ci://`:
+
+```sh
+grain ci list --repo ai-on-gke/grain --ref main --provider github-actions
+grain ci show gha:ai-on-gke:grain:123
+grain ci log gha:ai-on-gke:grain:123 --job publish --lines 80
+grain read ci://ai-on-gke/grain/gha:ai-on-gke:grain:123/publish/job.log --tail 4000
+```
+
+`list_ci_runs` takes `provider` as well, and `get_ci_log` reads an
+Actions job's log when given a `gha:` run id. `grain ci wait` and
+`wait_for_checks` already wait on the GitHub checks that gate a
+`ci_mode: github` task's branch.
 
 ## Policy
 
@@ -443,6 +598,20 @@ not taken from the repository's CI capabilities list.
   that default, with a note on the proposal, instead. Whatever template
   a review comes from, it never carries a dangerous api grant the
   reviewed task did not hold itself.
+- **Task priority is 1 or more, everywhere.** `priority` on
+  `POST`/`PATCH /api/tasks`, `grain create -priority` and
+  `grain update -priority`, `grain task propose --priority`,
+  `propose_task`'s `priority` and the Edit form all refuse 0 and below
+  with the same message. No value means "the default": leave the field
+  out to file at 5 (or at the template's priority), and set 5 to put an
+  edited task back on it. A `propose_task` priority above both the
+  proposer's own and 5 is filed for a person to approve.
+- **Follow-ups do not inherit their parent's priority.** A proposal
+  that names no `priority` files at 5, or at its template's priority,
+  whatever the proposing task's priority is
+  (`pkg/orchestrator/finish.go`). A follow-up from a priority-9 task
+  that should run as urgently has to ask for 9 itself, which it may do
+  without a person's approval because 9 is not above its parent's.
 - **Edits to grants go through the existing policy.** Approval rules,
   `capability_policy.go` and the proposal trust gate apply to api grants
   exactly as they apply to any other capability.
@@ -462,7 +631,12 @@ not taken from the repository's CI capabilities list.
   ([question-summaries.md](question-summaries.md)).
 - **Standing sessions.** A run can't act on a standing session it doesn't
   own. It can never create, restart, cancel or delete a session, and
-  can't type into a live console.
+  can't type into a live console. The one exception is a note
+  (`POST /api/tasks/{id}/notes`, message_task) from the session's own
+  parent or child: a director's child may report back to it. A note never
+  parks the session or acts on its run. It reaches the session the same
+  way whether it is sent through the agent API, `grain task message` or
+  `grain mcpserver`'s `message_task`.
 - **Upgrade holds.** A run honours them. It can't lift a dispatch pause
   someone else took. It can't upgrade, restart or reboot while an upgrade
   check holds dispatch for another task.
@@ -477,6 +651,7 @@ example:
 | `api_reorder` | `POST /api/tasks/reorder` |
 | `api_start_ci_run` | `POST /api/ci/runs` |
 | `api_get_ci_run` | `GET /api/ci/runs/{id}` |
+| `api_get_ci_run_log` | `GET /api/ci/runs/{id}/log` |
 | `api_run_schedule` | `POST /api/schedules/{id}/run` |
 | `api_cut_candidate` | `POST /api/repos/{owner}/{name}/releases/{release}/candidates` |
 
@@ -487,7 +662,11 @@ Its arguments are:
 - `query`, an object of query parameters, naming and describing the
   ones the route's handler reads (`routeQueries`);
 - `body`, for a route that reads one: the JSON request body, described
-  field by field from the request type declared in `routeBodies`.
+  field by field from the request type declared in `routeBodies`, with
+  the sentence `routeFieldDocs` gives a field whose name and type do not
+  say enough on their own (the git connection check's `credential`,
+  which is only ever a saved credential's name, against its `type`,
+  which is how an unsaved one is described).
 
 A route that changes one task by its id (`/api/tasks/{id}...`, any method
 but GET) also takes `expect`: `{state, title_prefix, kind}`, what the caller
@@ -497,7 +676,7 @@ any other read -- and refuses,
 changing nothing, when any field given disagrees with the record, naming
 both versions. `kind` is one of the kind tags `port`, `repair`, `session`,
 `proposal`, `durable` (`ui.TaskKindTags`), or `none`
-(docs/design/durable-tasks.md#DT-13).
+(design/design/durable-tasks.design.md#DT-13).
 
 Descriptions come from `routeDocs`, or, for a read with none, from the
 handler's name. `TestEveryScopedRouteIsDescribed` (in
@@ -505,8 +684,98 @@ handler's name. `TestEveryScopedRouteIsDescribed` (in
 scoped route that changes something has a sentence, and the body type
 and query parameters each route declares are the ones its handler's
 source reads, so a new UI action is fully described to agents as soon
-as its route is scoped. Every generated name is published to the
-frameworks' allowed-tool lists (`agent.RegisterPublishedToolNames`).
+as its route is scoped. The frameworks' allowed-tool lists name only
+`grain-controller`'s six fixed tools, so a new route needs no entry
+there either.
+
+## The controller MCP server (`POST /api/mcp`)
+
+`grain-controller` is one stateless Streamable HTTP MCP server on the
+daemon, serving six tools whatever the caller holds:
+
+| Tool | What it does |
+|---|---|
+| `grain_explore_scope(scope?, tool?, view?, includeAliases?)` | With no arguments, the scope groups the caller is authorized for; with a group or scope (or `all`), the routes under it; with `tool`, only the routes a word finds -- in tool names, paths, scopes and descriptions -- which is far cheaper than a whole group. The answer shrinks to fit one page (below). |
+| `grain_invoke(tool, arguments, reason?)` | Runs one route. `arguments` carries the path parameters by name, `query`, `body` (or the body's fields directly) and, on task mutations, `expect` (`state`, `title_prefix`, `kind`), which reads the task first and refuses the call if the record disagrees. A destructive or dangerous route needs `reason`. A `tool` that names no route is answered with the nearest names the caller may use (`did you mean api_get_log_lines?`). |
+| `grain_filing_context(repo?)` | `targetRepos`, `anyRepoAllowed`, `defaultRepo`, templates, boards, custom fields and grantable capabilities, each part served only to a caller holding the scope of the route that serves the same data. A key is absent only when the caller lacks that scope; a list the caller may read is `[]` when empty, never `null`. |
+| `grain_submit_task(...)` | `POST /api/tasks`; `approve` defaults to false, so the task lands proposed. |
+| `grain_list_tasks(repo?, state?, q?, limit?, summary?)` | Compact summary rows by default. |
+| `grain_get_task(id, view?)` | A ~1 KB summary by default; `conversation` pages comments, `full` is the whole record. |
+
+### Exploring: views, words and aliases
+
+`grain_explore_scope` answers a route query in one of three views, and
+left to choose picks the most detailed one that fits in about 10 KB
+(`maxExploreResultBytes`, under `pkg/mcp`'s own cap, so an answer is
+never elided in the middle):
+
+| `view` | Per route | Fits |
+|---|---|---|
+| `full` | `tool`, `method`, `path`, `scope`, `description`, `inputSchema` | a few routes: one named in `tool`, or a word's matches |
+| `compact` | `tool`, `method`, `path`, `scope`, one-line `summary`; no schema | any one group (`repos`, `tasks`, ...) |
+| `index` | tool names only, grouped by scope | every route the caller may call, in one call |
+
+So `grain_explore_scope(scope="all")` (or `view="index"` with no scope)
+lists every authorized tool name on one page; `scope="tasks"` lists the
+group's routes as compact lines with a `hint` saying how to get one
+route's schema; and `tool="api_add_comment"` gives that route's schema
+in full. Naming `view` overrides the choice: `view="full"` on a whole
+group is allowed and large.
+
+`tool` is a search, not only a name. One or more words are matched
+against the words of each route's tool name, path segments, scope and
+description, every word having to be found somewhere (`tool="git
+connection"`, `tool="merge queue"`, `tool="access"`); a query that is
+exactly a tool's name, with or without its `api_` prefix, finds that
+tool alone. A word that finds nothing is answered with the nearest tool
+names and scope groups (`Did you mean api_add_comment?`), ranked by
+word overlap, prefix and edit distance, rather than a dead end; a word
+that finds routes the caller holds no grant for says which grant.
+
+The per-field repository configuration routes -- `GET`/`PUT`
+`/api/repos/{owner}/{name}/ci-mode`, `.../setup-command`,
+`.../ignore-github-ci` and the rest named in `repoSettingsFieldRoutes`
+-- are aliases: each reads or writes one field of the document
+`api_get_repo_settings` reports whole and `api_set_repo_settings`
+writes field by field (`api_set_deployment_repo_config` is the other
+whole-document write). They stay for the UI and run as any route does,
+but a listing folds them out, with an `aliases` note saying how many
+and for which fields, unless `includeAliases=true`; when listed, each
+carries `aliasOf` naming the route it stands for, and a `tool` word that
+names one (`ci_mode`) finds it regardless.
+
+Six fixed schemas in the model's context instead of one per route is
+what the design is for: for a session holding many scopes the tool list
+is an order of magnitude smaller, and a task read through
+`grain_get_task` is a fraction of the full record
+(`pkg/ui/mcp_token_benchmark_test.go`;
+docs/test-runs/2026-11-02-controller-mcp-token-cost.md has the measured
+table).
+
+Who the caller is decides what `grain_explore_scope` shows and
+`grain_invoke` runs:
+
+- A run or session of a task holding any `api:*` grant has
+  `grain-controller` attached beside `grain-sandbox` (one capability
+  MCP server among the others), with the daemon's own credential and
+  `X-Grain-Acting-Task: <task id>` added on the daemon's side, so it
+  reaches exactly the routes its grants allow -- read from the store on
+  every call, so a grant added while it runs takes effect at once.
+- A sandbox process calling `/api/mcp` through the sandbox proxy
+  (`grain api`'s channel) is held to the non-dangerous subset, as every
+  other route on that channel is.
+- An external agent (below) authenticates with its `gma_` token, which
+  is the credential: an `X-Grain-Acting-Task` header on its request is
+  ignored. `/api/mcp` serves it the same six tools `POST /mcp` serves as
+  one tool per route.
+- A person, or a BYO harness on their behalf, authenticates as for any
+  other route -- the IAP identity, the access code as a bearer token, or
+  the access code in `X-Grain-Access-Code` when an upstream proxy owns
+  `Authorization` -- and reaches every route that is not internal.
+
+Every `grain_invoke` re-enters the route table through the same gate
+the REST call would, so the attribution, audit row and rails are the
+route's own; `/api/mcp` itself is a transport, like `/mcp`.
 
 ## Messaging another task's agent
 
@@ -539,10 +808,15 @@ Two other routes look like they do this, but don't:
 
 An external agent -- one not running as a grain task in a grain sandbox
 (for example, a person's own Claude, Gemini, or Codex CLI session, an
-external orchestrator, or an automation bot) -- can drive grain through
-the same generated `api_*` MCP tools over Streamable HTTP at `POST /mcp`,
-using a per-agent scoped credential (`model.ExternalAgentToken`,
-`pkg/ui/external_agents.go`).
+external orchestrator, or an automation bot) -- can drive grain over
+Streamable HTTP using a per-agent scoped credential
+(`model.ExternalAgentToken`, `pkg/ui/external_agents.go`), at either of
+two endpoints: `POST /mcp`, which serves one generated `api_*` MCP tool
+per route the credential reaches, or `POST /api/mcp`, the
+`grain-controller` server above, whose six tools reach the same routes
+through `grain_explore_scope` and `grain_invoke`. Prefer `/api/mcp` for
+a harness that loads every tool's schema into the model's context on
+every turn; `/mcp` suits a client that wants each route as its own tool.
 
 ### Enabling the endpoint
 
@@ -569,10 +843,23 @@ Each external agent is issued its own scoped bearer token (`gma_<hex>`):
   `<area>:<level>@owner/name` in `scopes` (`tasks:write@acme/widgets`).
   Each level is its own scope: a credential holding only `tasks:write`
   can file and edit tasks but is offered no `tasks:read` tool to list or
-  read them.
+  read them, and mutating task routes answer with `{id, state}` (plus any
+  fields that `PATCH /api/tasks/{id}` itself just replaced; empty `PATCH`
+  bodies are refused) rather than echoing the full task record unless the
+  caller also holds `tasks:read` on that repository. A plain `POST
+  /api/tasks` still answers with the whole new task, since it holds only
+  what the caller sent; one naming a `templateId` or `supersedes` does not.
 - **Expiry and limits**: an optional `expiresAt` timestamp, a per-credential
   request rate limit (`rateLimit`, requests per minute, default `60`), and
   an in-flight concurrency cap (`maxConcurrent`, default `8`).
+- **Owner**: the person the credential acts on behalf of (`owner`). It
+  defaults to the person issuing it; an operator may name somebody else.
+  A self-service credential (`"selfService": true`, what
+  `grain login --issue-token` mints) belongs to its caller only, and an
+  agent issuing one can pass on only the owner it acts for itself.
+  `grain/external-dev` (the default for a workstation agent) and
+  `grain/external-read` (a read-only observer) are the built-in scope
+  sets for these credentials; neither holds a dangerous scope.
 
 Only the SHA-256 hash of the token is stored (`external_agent_token`
 table). The raw `gma_...` secret is returned once when the credential is
@@ -615,6 +902,31 @@ through `agentAPIGate`:
   with `taskId`) records an audit comment on the affected task's
   conversation signed by `grain` on behalf of
   `{agent, external:<name>}`.
+- **Owner**: a call made with an owned credential runs on behalf of its
+  owner. The journal line reads `{agent, external:<name> on behalf of
+  <owner>}`, the audit comment says `on behalf of <owner>`, comments the
+  agent posts record the owner, and a task it files records the owner as
+  its requester (`creator`) and in its origin. A body naming an `author`
+  is refused, and `X-Forwarded-User` is not believed.
+- **Client label**: a request may carry `X-Grain-Client` (the CLI sends
+  `$GRAIN_CLIENT`, plus ` session=$GRAIN_CLIENT_SESSION`). The daemon
+  strips control characters, caps it at 256 bytes and stores it as the
+  `filedVia` of the task or comment the request posts, shown as
+  `provenance` (`filed from jetski/1.4 by jane@example.com`). It is a
+  label only: no scope, repository, approval or owner-trust decision
+  reads it.
+- **Owner-trust approval**: work an external agent files lands
+  `proposed` (setting `priority` above the default, `approved: true`,
+  `interactive: true`, or `fixesBaseBranch: true` requires `tasks:admin`,
+  and `keepRunning` is refused). The deployment setting `ownerTrust`
+  (`PUT /api/settings`, `settings:write`), a list of
+  `{"owner": "<person>", "repo": "<owner/name>|*"}`, queues an unapproved
+  filing whose credential owner and every repository the task targets,
+  reads, or writes match a rule. The approval is recorded as grain's
+  `owner-trust` principal on behalf of the owner. A catalogue or
+  requires-person hold, `holdForApproval`, `fixesBaseBranch`,
+  `keepRunning`, or a priority above the default still waits for a
+  person.
 
 ### Routes without calling-task context
 

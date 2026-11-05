@@ -96,7 +96,7 @@ func (s *Store) wakeStandingTask(ctx context.Context, open Task, comp Compositio
 	if obs == nil && resting {
 		obs = &Observation{}
 	}
-	if obs == nil || obs.PendingQuestionCommentID != nil || obs.PendingSecret != "" {
+	if obs == nil || obs.PendingQuestionCommentID != nil || obs.PendingSecret != "" || obs.PendingConfigChange != nil || obs.PendingAccess != nil {
 		return false, nil
 	}
 	if obs.CompletedAt == nil && !resting {
@@ -104,7 +104,7 @@ func (s *Store) wakeStandingTask(ctx context.Context, open Task, comp Compositio
 	}
 	if err := s.UpdateTask(ctx, open.ID, func(t *Task) error {
 		t.Title, t.Body = comp.Title, comp.Body
-		t.Reads, t.NetworkAccess, t.NothingNeededAction = comp.Reads, comp.NetworkAccess, comp.NothingNeededAction
+		t.Reads, t.NetworkAccess, t.NothingNeededAction, t.KeepRunning = comp.Reads, comp.NetworkAccess, comp.NothingNeededAction, comp.KeepRunning
 		t.Grants = mergeStandingGrants(t.Grants, comp.Grants)
 		// The model is refreshed only onto a task nobody chose one for:
 		// a model a person set on the standing task is their decision
@@ -166,7 +166,7 @@ func (s *Store) RestingTask(ctx context.Context, id string) (bool, error) {
 }
 
 // applyStandingDeclarations gives a standing template's task what the
-// template declares beyond its content (docs/design/durable-tasks.md's
+// template declares beyond its content (design/design/durable-tasks.design.md's
 // Migration): its goal, when the task has none -- one a person changed
 // is kept -- and its notification subscriptions
 // (StandingTemplateSubscriptions), added to any the task already has.

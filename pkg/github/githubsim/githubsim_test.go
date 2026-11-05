@@ -15,11 +15,14 @@
 package githubsim
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -176,6 +179,47 @@ func TestSimListIssuesFiltersByLabel(t *testing.T) {
 	}
 	if len(issues) != 1 || issues[0].Number != 1 || issues[0].Title != "needs a fix" {
 		t.Fatalf("got %+v", issues)
+	}
+}
+
+// TestSimListIssuesIsGitHubsListing: the listing GitHub answers -- closed
+// issues left out unless state asks for them, an issue closed through
+// PATCH leaving it, and pull requests in it marked by a pull_request key,
+// which RESTClient.ListIssues has to skip. Before, Sim listed every issue
+// whatever its state and no pull request at all, so neither half of what
+// the issue importer relies on was exercised against it.
+func TestSimListIssuesIsGitHubsListing(t *testing.T) {
+	sim, client := newSim(t, "main")
+	sim.Issues[1] = &Issue{Title: "open", Labels: map[string]struct{}{"grain-agent": {}}}
+	sim.Issues[2] = &Issue{Title: "closed", State: "closed", Labels: map[string]struct{}{"grain-agent": {}}}
+	sim.Issues[3] = &Issue{Title: "closed later", Labels: map[string]struct{}{"grain-agent": {}}}
+	sim.PullRequests = append(sim.PullRequests, PullRequest{Number: 9, Title: "a pr", State: "open", Labels: map[string]struct{}{"grain-agent": {}}})
+
+	if resp, err := sim.Request("PATCH", "/repos/acme/widgets/issues/3", nil, []byte(`{"state":"closed"}`)); err != nil || resp.Status != 200 {
+		t.Fatalf("closing #3: %d %v", resp.Status, err)
+	}
+	issues, err := client.ListIssues("acme", "widgets", "grain-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || issues[0].Number != 1 {
+		t.Fatalf("ListIssues = %+v, want #1 alone", issues)
+	}
+	resp, err := sim.Request("GET", "/repos/acme/widgets/issues?state=all&labels=grain-agent", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw []map[string]any
+	if err := json.Unmarshal(resp.Body, &raw); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, item := range raw {
+		_, isPR := item["pull_request"]
+		got = append(got, fmt.Sprintf("%v:%v:%v", item["number"], item["state"], isPR))
+	}
+	if want := "1:open:false 2:closed:false 3:closed:false 9:open:true"; strings.Join(got, " ") != want {
+		t.Fatalf("state=all listing = %v, want %s", got, want)
 	}
 }
 
@@ -1081,5 +1125,188 @@ func TestSimPublishFilesWritesARealCommitOffEveryBranch(t *testing.T) {
 
 	if _, err := client.PublishFiles("acme", "widgets", "refs/heads/sneaky", "x", at, files); err == nil {
 		t.Fatal("expected publishing onto a branch to be refused")
+	}
+}
+
+func TestAddWorkflowRunSerialisesWithRequestsAndReplacesReRunAttempts(t *testing.T) {
+	t.Parallel()
+	bare := setupBareRepoWithBranch(t, "main")
+	sim := New("acme", "widgets", bare, "main")
+	client := github.NewClient(sim, nil)
+
+	first := sim.AddWorkflowRun(WorkflowRun{
+		Path: ".github/workflows/release.yml",
+		Jobs: []WorkflowJob{{
+			Name:        "publish-image",
+			Conclusion:  "failure",
+			FailingStep: "ko publish",
+			Log:         "2026-11-01T08:58:00.0000000Z error: 500 Internal Server Error\n",
+		}},
+	})
+	if first.ID <= 0 || first.Name != "release" || first.HeadBranch != "main" ||
+		first.HeadSHA == "" || first.HeadRepo != "acme/widgets" || first.Conclusion != "failure" {
+		t.Fatalf("AddWorkflowRun defaults = %+v", first)
+	}
+
+	var wg sync.WaitGroup
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			for i := 0; i < 10; i++ {
+				sim.AddWorkflowRun(WorkflowRun{
+					Name:       "ci",
+					HeadBranch: "main",
+					Conclusion: "success",
+					Jobs:       []WorkflowJob{{Name: fmt.Sprintf("job-%d-%d", n, i), Conclusion: "success"}},
+				})
+				if _, err := client.CompletedWorkflowRuns("acme", "widgets", 50); err != nil {
+					t.Errorf("CompletedWorkflowRuns: %v", err)
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	// Re-running first.ID at attempt 2 replaces attempt 1 in the listing and jobs.
+	rerun := sim.AddWorkflowRun(WorkflowRun{
+		ID:         first.ID,
+		Path:       ".github/workflows/release.yml",
+		RunAttempt: 2,
+		Jobs:       []WorkflowJob{{Name: "publish-image", Conclusion: "success"}},
+	})
+	if rerun.RunAttempt != 2 || rerun.Conclusion != "success" {
+		t.Fatalf("rerun = %+v, want attempt 2 success", rerun)
+	}
+	runs, err := client.CompletedWorkflowRuns("acme", "widgets", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	for _, r := range runs {
+		if r.ID == first.ID {
+			count++
+			if r.RunAttempt != 2 || r.Conclusion != "success" {
+				t.Errorf("listed run %d = %+v, want attempt 2 success", first.ID, r)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("run %d appeared %d times in CompletedWorkflowRuns, want 1", first.ID, count)
+	}
+	jobs, err := client.ListWorkflowRunJobs("acme", "widgets", first.ID)
+	if err != nil || len(jobs) != 1 || jobs[0].Conclusion != "success" {
+		t.Fatalf("ListWorkflowRunJobs(%d) = %+v, %v", first.ID, jobs, err)
+	}
+	single, err := client.GetActionsRun("acme", "widgets", first.ID)
+	if err != nil || single.ID != first.ID || single.RunAttempt != 2 || single.Conclusion != "success" {
+		t.Fatalf("GetActionsRun(%d) = %+v, %v", first.ID, single, err)
+	}
+	if missingResp, err := sim.Request("GET", "/repos/acme/widgets/actions/runs/999999999", nil, nil); err != nil || missingResp.Status != 404 {
+		t.Fatalf("GET unknown actions run = %+v, %v, want 404", missingResp, err)
+	}
+
+	// Sim.Request itself still refuses POST .../actions/runs as an unhandled GitHub endpoint.
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected Sim.Request POST /repos/acme/widgets/actions/runs to panic")
+		}
+	}()
+	_, _ = sim.Request("POST", "/repos/acme/widgets/actions/runs", nil, []byte(`{}`))
+}
+
+// reconcileReleasePending calls ListMatchingTags and GetAnnotatedTag on
+// every repository whose CI mode is GitHub; Sim answers both from the bare
+// repository's real lightweight and annotated tags instead of panicking on
+// /git/matching-refs/...
+func TestSimMatchingTagsAndAnnotatedTagObject(t *testing.T) {
+	sim, client := newSim(t, "main")
+
+	work := t.TempDir()
+	run(t, work, "git", "clone", "-q", sim.BareRepo, work)
+	run(t, work, "git", "config", "user.email", "release@example.com")
+	run(t, work, "git", "config", "user.name", "release")
+	run(t, work, "git", "tag", "v0.9.0")
+	run(t, work, "git", "tag", "-a", "-m", "v1.0.0 release", "v1.0.0")
+	run(t, work, "git", "tag", "unrelated")
+	run(t, work, "git", "push", "-q", "origin", "refs/tags/v0.9.0", "refs/tags/v1.0.0", "refs/tags/unrelated")
+
+	refs, err := client.ListMatchingTags("acme", "widgets", "v")
+	if err != nil {
+		t.Fatalf("ListMatchingTags: %v", err)
+	}
+	if len(refs) != 2 {
+		t.Fatalf("ListMatchingTags(v) = %+v, want v0.9.0 and v1.0.0", refs)
+	}
+	var annotatedSHA string
+	for _, r := range refs {
+		switch r.Name {
+		case "v0.9.0":
+			if r.ObjectType != "commit" {
+				t.Errorf("lightweight tag v0.9.0 object type = %q, want commit", r.ObjectType)
+			}
+		case "v1.0.0":
+			if r.ObjectType != "tag" {
+				t.Errorf("annotated tag v1.0.0 object type = %q, want tag", r.ObjectType)
+			}
+			annotatedSHA = r.ObjectSHA
+		default:
+			t.Errorf("unexpected tag ref %q", r.Name)
+		}
+	}
+	tagObj, err := client.GetAnnotatedTag("acme", "widgets", annotatedSHA)
+	if err != nil {
+		t.Fatalf("GetAnnotatedTag(%s): %v", annotatedSHA, err)
+	}
+	if tagObj == nil || tagObj.Commit == "" {
+		t.Fatalf("GetAnnotatedTag = %+v, want peeled commit", tagObj)
+	}
+	if !strings.Contains(tagObj.Message, "v1.0.0 release") {
+		t.Errorf("GetAnnotatedTag message = %q, want v1.0.0 release", tagObj.Message)
+	}
+}
+
+// FailedJobLogs and ListWorkflowRuns query /actions/runs?head_sha=<sha>;
+// runs seeded with AddWorkflowRun must be returned alongside ActionsRuns.
+func TestSimListWorkflowRunsByHeadSHAIncludesAddWorkflowRun(t *testing.T) {
+	sim, client := newSim(t, "main")
+	head, err := client.GetBranchHead("acme", "widgets", "main")
+	if err != nil || head == nil {
+		t.Fatalf("GetBranchHead: %+v, %v", head, err)
+	}
+
+	seeded := sim.AddWorkflowRun(WorkflowRun{
+		Name:       "CI",
+		Path:       ".github/workflows/ci.yml",
+		HeadBranch: "main",
+		HeadSHA:    head.SHA,
+		Event:      "pull_request",
+		Status:     "completed",
+		Conclusion: "failure",
+		Jobs: []WorkflowJob{{
+			Name:       "Tests / unit",
+			Conclusion: "failure",
+			Log:        "--- FAIL: TestController\n",
+		}},
+	})
+	_ = sim.AddWorkflowRun(WorkflowRun{
+		Name:       "CI",
+		Path:       ".github/workflows/ci.yml",
+		HeadBranch: "other",
+		HeadSHA:    "0000000000000000000000000000000000000000",
+		Status:     "completed",
+		Conclusion: "success",
+	})
+
+	runs, err := client.ListWorkflowRuns("acme", "widgets", head.SHA)
+	if err != nil {
+		t.Fatalf("ListWorkflowRuns(%s): %v", head.SHA, err)
+	}
+	if len(runs) != 1 || runs[0].Name != "CI" || !strings.HasSuffix(runs[0].HTMLURL, "/actions/runs/9500") {
+		t.Fatalf("ListWorkflowRuns(%s) = %+v, want seeded run %d", head.SHA, runs, seeded.ID)
+	}
+	logs, err := client.FailedJobLogs("acme", "widgets", head.SHA)
+	if err != nil || len(logs) != 1 || !strings.Contains(logs[0].Log, "--- FAIL: TestController") {
+		t.Fatalf("FailedJobLogs(%s) = %+v, %v, want seeded failing job log", head.SHA, logs, err)
 	}
 }

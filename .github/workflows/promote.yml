@@ -14,7 +14,7 @@
 
 # GitHub Actions port of .grain/workflows/promote.yml.
 #
-# Keeps the `:latest` and `:vX.Y.Z` image tags on `ghcr.io/bwsalmon/grain/*`
+# Keeps the `:latest` and `:vX.Y.Z` image tags on `docker.io/grainai/*`
 # aligned with the git `latest` tag by running `scripts/release-images.sh promote`.
 
 name: promote
@@ -43,7 +43,7 @@ permissions:
 
 env:
   GOFLAGS: -mod=readonly
-  RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO || 'bwsalmon/grain' }}
+  RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO }}
 
 jobs:
   latest:
@@ -59,6 +59,16 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Refuse a patch tag that did not come from its release branch
+        # Whatever this run would publish as vX.Y.Z (Z >= 1) -- the tag it
+        # runs on, the version asked for, or the release `latest` names --
+        # must have been cut on release/vX.Y.Z from vX.Y.<Z-1>, or carry
+        # nothing but fix: commits past vX.Y.0
+        # (docs/release-candidate-management.md, section 9).
+        env:
+          PROMOTE_VERSION: ${{ inputs.version }}
+        run: bash ./scripts/patch-tag-guard.sh --latest "${GITHUB_REF:-}" "${PROMOTE_VERSION:-}"
 
       - name: Cache Go modules and build cache
         # zizmor: ignore[cache-poisoning]
@@ -138,32 +148,11 @@ jobs:
       - name: Configure package-publish credentials
         if: env.DRY_RUN != 'true'
         env:
+          DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
           GHCR_PAT: ${{ secrets.GHCR_TOKEN }}
-          FALLBACK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY || 'ghcr.io' }}
-          PUBLISH_USERNAME: ${{ vars.GHCR_USERNAME || 'bwsalmon' }}
-        run: |
-          set -euo pipefail
-          token="${GHCR_PAT:-}"
-          username="${PUBLISH_USERNAME}"
-          if [ -z "$token" ]; then
-            case "${RELEASE_IMAGE_REPO}" in
-              bwsalmon/*)
-                echo "::error::GHCR_TOKEN secret is required to publish packages under ghcr.io/${RELEASE_IMAGE_REPO} from ${GITHUB_REPOSITORY}" >&2
-                exit 1
-                ;;
-              *)
-                token="${FALLBACK_TOKEN}"
-                username="${GITHUB_ACTOR}"
-                ;;
-            esac
-          fi
-          echo "::add-mask::${token}"
-          {
-            echo "PACKAGE_PUBLISH_REGISTRY=${PUBLISH_REGISTRY}"
-            echo "PACKAGE_PUBLISH_USERNAME=${username}"
-            echo "PACKAGE_PUBLISH_TOKEN=${token}"
-          } >> "$GITHUB_ENV"
+          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY }}
+        run: bash ./scripts/configure-dockerhub-auth.sh
 
       - name: Configure optional image-signing key
         if: env.DRY_RUN != 'true'

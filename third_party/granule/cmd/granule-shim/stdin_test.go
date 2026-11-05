@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/config"
-	"github.com/bwsalmon/granule/pkg/workloadio"
+	"github.com/gke-labs/granule/pkg/config"
+	"github.com/gke-labs/granule/pkg/workloadio"
 )
 
 // guestInput is a wrapped container's stdin and terminal as the guest's

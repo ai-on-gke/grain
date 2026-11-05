@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import CapabilityArgsForm from "./CapabilityArgsForm.jsx";
+import { chooseOption, optionValues } from "../searchSelectTesting.js";
 import {
   argumentRows,
   grantLabel,
@@ -26,7 +27,7 @@ import {
   validateValue,
 } from "../capabilityArgs.js";
 
-// FIXTURE uses every keyword the form renders (docs/capabilities-spec.md
+// FIXTURE uses every keyword the form renders (design/spec/capabilities/capabilities.spec.md
 // §4.2.1): enum, const, boolean, a string with pattern/minLength/
 // maxLength, bounded integer and number, an array with items/minItems/
 // maxItems/uniqueItems, a nested object through $ref/$defs, oneOf and
@@ -376,6 +377,48 @@ describe("CapabilityArgsForm", () => {
     await user.click(screen.getByRole("option", { name: "Numbered" }));
     await user.type(screen.getByLabelText(/^Numbered/), "3");
     expect(value().mode).toBe(3);
+  });
+
+  // grain/task-2910: a long enum (every region, say) is searched rather
+  // than scrolled; a short one stays a plain select.
+  it("searches a long enum and keeps a short one a plain select", async () => {
+    const user = userEvent.setup();
+    const regions = [
+      "us-central1",
+      "us-east1",
+      "us-west1",
+      "europe-west1",
+      "europe-west4",
+      "asia-east1",
+      "asia-northeast1",
+      "australia-southeast1",
+    ];
+    render(
+      <Harness
+        schema={{
+          type: "object",
+          properties: {
+            region: { type: "string", enum: regions },
+            tier: { type: "string", enum: ["low", "high"] },
+          },
+        }}
+      />,
+    );
+
+    const region = screen.getByRole("combobox", { name: /region/ });
+    expect(region.tagName).toBe("INPUT");
+    await user.type(region, "europe 4");
+    expect(optionValues(region)).toEqual([
+      String(regions.indexOf("europe-west4")),
+    ]);
+    await user.keyboard("{Enter}");
+    expect(value().region).toBe("europe-west4");
+    await chooseOption(user, region, "Not set");
+    expect(value().region).toBeUndefined();
+
+    expect(screen.getByRole("combobox", { name: /tier/ }).tagName).not.toBe(
+      "INPUT",
+    );
   });
 
   it("falls back to a JSON editor rather than dropping a field", async () => {

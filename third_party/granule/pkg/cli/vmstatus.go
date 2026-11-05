@@ -9,8 +9,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/dockervm"
-	"github.com/bwsalmon/granule/pkg/vmspec"
+	"github.com/gke-labs/granule/pkg/dockervm"
+	"github.com/gke-labs/granule/pkg/vmspec"
 )
 
 // defaultStatusTimeout bounds one "vm status": the probe behind it is a

@@ -53,8 +53,8 @@ import (
 // tools (grantTools, for orchestrator.Config.GrantTools), but those
 // reach no agent at all -- no Framework left can consume in-process
 // tools, see that field's own doc comment -- so they are deliberately
-// unpublished, and run_host_command is not a name any roster should
-// carry.
+// unpublished. run_host_command is published because mcpserver.go now
+// serves it itself (selfrepair.ConfirmedHostCommandTools).
 //
 // Adding a tool means adding its constructor to both files, which is two
 // appended lines in two places and no shared number or sentence to edit.
@@ -67,9 +67,6 @@ func TestPublishedToolNamesCallsEveryConstructorTheServerRegisters(t *testing.T)
 	roster := toolConstructorsIn(t, "toolroster.go")
 
 	for _, name := range server {
-		if slices.Contains(publishedByRegistration, name) {
-			continue
-		}
 		if !slices.Contains(roster, name) {
 			t.Errorf("pkg/daemon/mcpserver.go registers %s, which pkg/agent/toolroster.go never calls: "+
 				"every tool it returns is a tool no run can be offered. Add it to PublishedToolNames.", name)
@@ -82,13 +79,6 @@ func TestPublishedToolNamesCallsEveryConstructorTheServerRegisters(t *testing.T)
 		}
 	}
 }
-
-// publishedByRegistration are the constructors whose names reach
-// PublishedToolNames through RegisterPublishedToolNames rather than a
-// call in toolroster.go, because their package imports this one: the
-// agent API's generated tools, whose package checks the names are
-// published (pkg/ui's TestGeneratedToolsMatchTheRouteTable).
-var publishedByRegistration = []string{"ui.AgentAPITools"}
 
 // toolConstructorsIn is every "pkg.SomethingTools(...)" call in one Go
 // file, sorted and deduplicated, spelled the way the source spells it.

@@ -53,6 +53,24 @@ func TestProposeTaskHoldForApprovalIsPassedOnAndTheReasonSaid(t *testing.T) {
 			hold: true,
 		},
 		{
+			name: "hold, parked off the target repo list",
+			args: map[string]any{"title": "t", "body": "b", "hold_for_approval": true},
+			filed: FiledProposal{ID: "7", Held: true,
+				ApprovalNote: "you asked to hold it (hold_for_approval); your permission would otherwise have queued it",
+				Parked:       "`a/b` is not on this deployment's target repo list"},
+			want: []string{"filed unapproved because you asked to hold it", "also parked awaiting a reply",
+				"a reply alone does not approve it", "`a/b` is not on this deployment's target repo list"},
+			hold: true,
+		},
+		{
+			name: "auto, covered, parked off the target repo list",
+			args: map[string]any{"title": "t", "body": "b"},
+			filed: FiledProposal{ID: "7", Queued: true,
+				Parked: "`a/b` is not on this deployment's target repo list"},
+			want: []string{"filed approved", "not queued: filing parked it awaiting a reply",
+				"`a/b` is not on this deployment's target repo list"},
+		},
+		{
 			name:  "hold, filer gives no reason",
 			args:  map[string]any{"title": "t", "body": "b", "hold_for_approval": true},
 			filed: FiledProposal{ID: "7"},
@@ -78,6 +96,9 @@ func TestProposeTaskHoldForApprovalIsPassedOnAndTheReasonSaid(t *testing.T) {
 				if !strings.Contains(res.Text, w) {
 					t.Errorf("result = %q, want it to say %q", res.Text, w)
 				}
+			}
+			if tc.filed.Parked != "" && strings.Contains(res.Text, "queued already") {
+				t.Errorf("result = %q, want no claim that a parked proposal is queued", res.Text)
 			}
 		})
 	}

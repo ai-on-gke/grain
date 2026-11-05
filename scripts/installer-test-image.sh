@@ -94,11 +94,16 @@ image="${1:-grain-installer:test}"
 # are lower-case, and a job's own repository is the one whose packages
 # belong to the commit being tested. The fallback is for a run outside
 # grain CI -- a laptop, a shell in a sandbox -- where nothing has said.
-repo="${RELEASE_IMAGE_REPO:-bwsalmon/grain}"
+# shellcheck source=scripts/release-image-repos.sh
+. ./scripts/release-image-repos.sh
+
+registry="${PACKAGE_PUBLISH_REGISTRY:-$RELEASE_IMAGE_REGISTRY_DEFAULT}"
+registry="${registry,,}"
+repo="${RELEASE_IMAGE_REPO:-$RELEASE_IMAGE_REPO_DEFAULT}"
 repo="${repo,,}"
 
-base="${GRAIN_INSTALLER_BASE_IMAGE:-ghcr.io/${repo}/grain:main}"
-sandbox="${GRAIN_INSTALLER_SANDBOX_IMAGE:-ghcr.io/${repo}/k8s-sandbox:main}"
+base="${GRAIN_INSTALLER_BASE_IMAGE:-${registry}/${repo}/grain:main}"
+sandbox="${GRAIN_INSTALLER_SANDBOX_IMAGE:-${registry}/${repo}/sandbox-k8s:main}"
 
 # Anonymously, and with no `docker login` anywhere in this file: the
 # packages are public, which is what lets a workflow that runs on an
@@ -111,12 +116,20 @@ sandbox="${GRAIN_INSTALLER_SANDBOX_IMAGE:-ghcr.io/${repo}/k8s-sandbox:main}"
 # a flake, and a registry that is genuinely unreachable still fails three
 # attempts later, saying which image it could not get.
 pull() {
-  local ref="$1" attempt
+  local ref="$1" attempt legacy_ref
   for attempt in 1 2 3 4 5 6; do
     if docker pull "$ref"; then
       return 0
     fi
     echo "installer-test-image.sh: pulling ${ref} failed (attempt ${attempt}/6)" >&2
+    if [ "$attempt" -eq 1 ]; then
+      legacy_ref="$(legacy_ghcr_image_for "$ref")"
+      if [ -n "$legacy_ref" ] && docker pull "$legacy_ref"; then
+        docker tag "$legacy_ref" "$ref"
+        echo "installer-test-image.sh: ${ref} not yet on Docker Hub; using legacy ${legacy_ref}" >&2
+        return 0
+      fi
+    fi
     sleep "$((attempt * 2))"
   done
   echo "installer-test-image.sh: cannot pull ${ref}." >&2

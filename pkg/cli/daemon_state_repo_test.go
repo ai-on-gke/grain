@@ -976,30 +976,43 @@ func TestDaemonExternalConfigRepoPullsAndRefusesSettingsEditsViaAPI(t *testing.T
 		t.Fatalf("expected internal mode with empty Remote after clearing, got %+v", clearedStatus)
 	}
 
-	// Back in Internal mode, POST /api/settings writes a bootstrap field
-	// directly, and sends any other to local grain/config.
+	// Back in Internal mode (settingsLocked == false by default),
+	// POST /api/settings writes both bootstrap and non-bootstrap fields
+	// directly; locking settings sends non-bootstrap writes to local grain/config.
 	code, body = postBody(t, "http://"+uiAddr+"/api/settings", `{"githubHost":"github.com","maxWorkers":2}`)
 	if code != http.StatusOK {
 		t.Fatalf("POST /api/settings (bootstrap) after switching back to internal mode returned %d: %s", code, body)
 	}
 	code, body = postBody(t, "http://"+uiAddr+"/api/settings", `{"environmentName":"staging"}`)
+	if code != http.StatusOK {
+		t.Fatalf("POST /api/settings (non-bootstrap, unlocked) after switching back to internal mode returned %d: %s", code, body)
+	}
+	code, body = postBody(t, "http://"+uiAddr+"/api/settings", `{"settingsLocked":true}`)
+	if code != http.StatusOK {
+		t.Fatalf("POST /api/settings (lock) after switching back to internal mode returned %d: %s", code, body)
+	}
+	code, body = postBody(t, "http://"+uiAddr+"/api/settings", `{"environmentName":"prod"}`)
 	if code != http.StatusConflict || !strings.Contains(body, `"repo":"grain/config"`) {
-		t.Fatalf("POST /api/settings (non-bootstrap) after switching back to internal mode returned %d: %s", code, body)
+		t.Fatalf("POST /api/settings (non-bootstrap, locked) after switching back to internal mode returned %d: %s", code, body)
 	}
 }
 
-// seedThroughConfigRepo makes a configuration write the way internal
-// mode takes one: the API refuses it with the edit, the edit is merged
-// into local grain/config's main, and a sync applies it.
+// seedThroughConfigRepo makes a configuration write in internal mode:
+// by default (settingsLocked == false) the API writes and exports it
+// directly; when settingsLocked is enabled, the API refuses it with the
+// edit, which is merged into local grain/config's main and applied by sync.
 func seedThroughConfigRepo(t *testing.T, uiAddr, dataDir, route, reqBody string) {
 	t.Helper()
 	code, body := postBody(t, "http://"+uiAddr+route, reqBody)
+	if code >= 200 && code < 300 {
+		return
+	}
 	var refusal struct {
 		Code   string                 `json:"code"`
 		Change []staterepo.FileChange `json:"change"`
 	}
 	if code != http.StatusConflict || json.Unmarshal([]byte(body), &refusal) != nil || len(refusal.Change) == 0 {
-		t.Fatalf("POST %s in internal mode returned %d, want the refusal with its edit: %s", route, code, body)
+		t.Fatalf("POST %s in internal mode returned %d, want 2xx or the refusal with its edit: %s", route, code, body)
 	}
 	work := daemon.StateRepoDir(dataDir)
 	gitIn(t, work, "checkout", "-b", "seed-change")

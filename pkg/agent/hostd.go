@@ -28,12 +28,14 @@ import (
 
 // HostdHost runs one allowlisted agent CLI on the bare machine through
 // grain hostd, for a daemon that itself runs in the release container
-// (docs/design/cli-run-location.md, "Host CLIs through grain hostd").
+// (design/design/cli-run-location.design.md, "Host CLIs through grain hostd").
 //
-// Staging is LocalHost's: the run's working directory, staging dir, CLI
-// home and session store are on the daemon's bind mounts, which have the
-// same paths on the host, so a file staged here is where the host-run CLI
-// looks for it. Only Run crosses the socket. The binary is the allowlist
+// Staging is LocalHost's for a hostd beside the daemon: the run's
+// working directory, staging dir, CLI home and session store are on the
+// daemon's bind mounts, which have the same paths on the host, so a file
+// staged here is where the host-run CLI looks for it, and only Run
+// crosses the socket. A hostd on another machine (Remote) stages over
+// its session instead (hostd_remote.go). The binary is the allowlist
 // entry's, not Command.Path: the daemon names an entry and hostd decides
 // what that runs.
 type HostdHost struct {
@@ -48,6 +50,20 @@ type HostdHost struct {
 	// through runhost.Hostd, which starts it detached so it outlives a
 	// daemon upgrade. Nil is Client.Run.
 	Start func(ctx context.Context, req hostd.Request, stdin io.Reader, stdout, stderr io.Writer) (hostd.Exit, error)
+
+	// Remote is set for a hostd on another machine, one that dialed in
+	// to the daemon (hostd.Hello.Remote): the run's files are staged
+	// there over Client rather than here, and grain's endpoints are
+	// carried to its loopback over Remote (hostd_remote.go). Nil is a
+	// hostd beside the daemon, staging as LocalHost does.
+	Remote HostdRemote
+	// Grain and StageRoot are that hostd's grain binary and staging
+	// directory, as its hello said them.
+	Grain     string
+	StageRoot string
+	// CodexAuth is the codex login on that hostd's machine, if it has
+	// one (hostd.Hello.CodexAuth).
+	CodexAuth string
 }
 
 func (h HostdHost) binary() string {
@@ -64,6 +80,29 @@ func (h HostdHost) binary() string {
 // starts on the hostd that replaces this one.
 var ErrHostdDraining = errors.New("grain hostd is updating (draining for its own upgrade); the run goes back to the queue")
 
+// ErrHostdLost is HostdHost.Run's error, wrapped, for a CLI whose grain
+// hostd dropped mid-run and did not reconnect within the reattach
+// timeout (runhost.Hostd.ReattachTimeout, -hostd-reattach-timeout). It
+// is the machine's doing, not the task's: the run ends as an
+// infrastructure failure, without a strike, and goes back to the queue.
+var ErrHostdLost = errors.New("grain hostd disconnected mid-run and did not reconnect in time; the run goes back to the queue")
+
+// ErrHostdWaiting is matched (errors.Is) by a framework build refused
+// because the hostd a run is pinned or selected to is not connected
+// (the daemon's HostdWaitError): nothing ran, and the run goes back to
+// the queue, where its task waits for that hostd to reconnect.
+var ErrHostdWaiting = errors.New("waiting for grain hostd to reconnect")
+
+// IsHostdStop reports whether err is a grain hostd infrastructure stop
+// (ErrHostdDraining or ErrHostdLost): a start hostd refused because it is
+// draining for its own upgrade, or a mid-run disconnect that did not
+// reconnect within the reattach timeout. Neither is a CLI crash or a
+// refused resume flag, so a framework retry loop stops at once and hands
+// err back for the run to return to the queue without a strike.
+func IsHostdStop(err error) bool {
+	return errors.Is(err, ErrHostdDraining) || errors.Is(err, ErrHostdLost)
+}
+
 // Run implements Host with the same contract as LocalHost.Run: stdout is
 // returned and teed as it arrives, a non-zero exit is an error carrying
 // stderr, cancelling ctx kills the CLI's whole group, and a CLI whose
@@ -76,6 +115,10 @@ func (h HostdHost) Run(ctx context.Context, c Command, tee io.Writer) (string, e
 	if tee != nil {
 		out = io.MultiWriter(&stdout, tee)
 	}
+	dir := c.Dir
+	if h.remote() {
+		dir = h.remoteDir(dir)
+	}
 	start := h.Start
 	if start == nil {
 		start = h.Client.Run
@@ -85,13 +128,16 @@ func (h HostdHost) Run(ctx context.Context, c Command, tee io.Writer) (string, e
 		Name: h.Entry,
 		Args: c.Args,
 		Env:  c.Env,
-		Dir:  c.Dir,
+		Dir:  dir,
 	}, strings.NewReader(c.Stdin), out, &stderr)
 	if hostd.IsDraining(err) {
 		return "", fmt.Errorf("%w: %v", ErrHostdDraining, err)
 	}
 	if errors.Is(err, ErrDetached) || errors.Is(err, hostd.ErrDetached) {
 		return stdout.String(), ErrDetached
+	}
+	if errors.Is(err, ErrHostdLost) {
+		return stdout.String(), err
 	}
 	if exit.WaitDelay {
 		h.logf("agent: %s exited on the host, but something it started still held its output open after %s; stopped waiting for it", h.Entry, hostd.WaitDelay)

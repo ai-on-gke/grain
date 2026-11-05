@@ -35,10 +35,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
 	"github.com/ai-on-gke/grain/pkg/agent/claude"
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
-	"github.com/ai-on-gke/grain/pkg/agent/custom"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
-	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 )
@@ -738,7 +736,7 @@ func TestAgentFrameworksSaysHowToInstallAMissingCodexCLI(t *testing.T) {
 func codexVersionStub(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "codex")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\necho 'codex-cli "+codex.ReviewedCLIVersion+"'\n"), 0o700); err != nil {
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+`if [ "$1 $2" = "debug models" ]; then echo '{"models":[{"slug":"gpt-test"}]}'; exit 0; fi`+"\necho 'codex-cli "+codex.ReviewedCLIVersion+"'\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -794,147 +792,6 @@ func TestAgentFrameworksAcceptsTheLegacyGeminiName(t *testing.T) {
 	}
 	if _, ok := unwrapBackend(framework).(*antigravity.Framework); !ok {
 		t.Fatalf("framework = %T, want *antigravity.Framework", framework)
-	}
-}
-
-func isolateModelProxies(t *testing.T) {
-	t.Helper()
-	orig := make(map[string]string)
-	for _, vendor := range modelproxy.Vendors() {
-		if ep := daemon.ModelProxies[vendor.Name]; ep != nil {
-			orig[vendor.Name] = ep.URL()
-			ep.SetURL("")
-		}
-	}
-	t.Cleanup(func() {
-		for vendor, u := range orig {
-			if ep := daemon.ModelProxies[vendor]; ep != nil {
-				ep.SetURL(u)
-			}
-		}
-	})
-}
-
-func TestCustomBackendModelProxyResolvesRunningProxy(t *testing.T) {
-	isolateModelProxies(t)
-
-	endpoint := daemon.ModelProxies[modelproxy.Claude.Name]
-	endpoint.SetURL("http://127.0.0.1:45678")
-
-	url, token, release, err := daemon.CustomBackendModelProxy(t.Context(), model.AgentBackend{
-		ID: "custom-claude",
-	}, "claude-sonnet-5", agent.RunConfig{TaskID: "task-123"})
-	if err != nil {
-		t.Fatalf("customBackendModelProxy: %v", err)
-	}
-	if release == nil {
-		t.Fatal("no release func for a minted token")
-	}
-	if url != "http://127.0.0.1:45678" {
-		t.Fatalf("url = %q, want http://127.0.0.1:45678", url)
-	}
-	if owner, ok := endpoint.Tokens.Authenticate(token); !ok || owner != "task-123" {
-		t.Fatalf("minted token authenticates as (%q, %v), want task-123", owner, ok)
-	}
-	release()
-	if _, ok := endpoint.Tokens.Authenticate(token); ok {
-		t.Fatalf("token still authenticates after release; it must be revoked when the run ends")
-	}
-}
-
-func TestCustomBackendModelProxyEmptyWhenNoProxy(t *testing.T) {
-	isolateModelProxies(t)
-
-	url, token, release, err := daemon.CustomBackendModelProxy(t.Context(), model.AgentBackend{
-		ID: "custom-claude",
-	}, "claude-sonnet-5", agent.RunConfig{TaskID: "task-123"})
-	if err != nil {
-		t.Fatalf("customBackendModelProxy: %v", err)
-	}
-	if url != "" || token != "" || release != nil {
-		t.Fatalf("expected empty fields, got url=%q token=%q release=%v", url, token, release != nil)
-	}
-}
-
-// A backend whose vendor cannot be told from its model or name is not
-// handed a token for whichever proxy is running: that is access to a
-// vendor it never named.
-func TestCustomBackendModelProxyEmptyForAnUnknownVendor(t *testing.T) {
-	isolateModelProxies(t)
-	for _, vendor := range modelproxy.Vendors() {
-		daemon.ModelProxies[vendor.Name].SetURL("http://127.0.0.1:45678")
-	}
-
-	url, token, release, err := daemon.CustomBackendModelProxy(t.Context(), model.AgentBackend{
-		ID: "custom-unknown",
-	}, "unknown-model", agent.RunConfig{TaskID: "task-123"})
-	if err != nil {
-		t.Fatalf("customBackendModelProxy: %v", err)
-	}
-	if url != "" || token != "" || release != nil {
-		t.Fatalf("expected empty fields, got url=%q token=%q", url, token)
-	}
-}
-
-// The token a custom backend is handed stops authenticating once the
-// run it was minted for returns, rather than living out its whole lease.
-func TestCustomBackendModelProxyTokenIsRevokedWhenTheRunEnds(t *testing.T) {
-	isolateModelProxies(t)
-	endpoint := daemon.ModelProxies[modelproxy.Claude.Name]
-	endpoint.SetURL("http://127.0.0.1:45678")
-
-	state := t.TempDir()
-	tokenFile := filepath.Join(state, "token")
-	script := "#!/bin/sh\n" +
-		"sed -n 's/.*\"model_proxy_token\":\"\\([^\"]*\\)\".*/\\1/p' > " + tokenFile + "\n" +
-		`printf '%s' '{"protocol_version":2,"result":{"final_text":"done"}}'` + "\n"
-	if err := os.WriteFile(filepath.Join(state, "backend"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	var seen string
-	framework, err := custom.New(custom.Config{
-		Command: filepath.Join(state, "backend"),
-		ModelProxy: func(ctx context.Context, run agent.RunConfig) (string, string, func(), error) {
-			url, token, release, err := daemon.CustomBackendModelProxy(t.Context(), model.AgentBackend{ID: "c"}, "claude-opus-5", run)
-			seen = token
-			if _, ok := endpoint.Tokens.Authenticate(token); !ok {
-				t.Error("token does not authenticate while the run is live")
-			}
-			return url, token, release, err
-		},
-		MCPServer: func(context.Context, agent.RunConfig) (custom.Command, error) {
-			return custom.Command{Command: "grain"}, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := framework.Run(context.Background(), agent.RunConfig{TaskID: "task-9", SandboxRoot: state}); err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.ReadFile(tokenFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if seen == "" || strings.TrimSpace(string(got)) != seen {
-		t.Fatalf("backend received token %q, minted %q", got, seen)
-	}
-	if owner, ok := endpoint.Tokens.Authenticate(seen); ok {
-		t.Fatalf("token still authenticates as %q after the run returned", owner)
-	}
-}
-
-func TestCustomAgentMCPServerUsesAContainerTransport(t *testing.T) {
-	t.Parallel()
-	args, err := daemon.CustomMCPServerArgs(context.Background(), daemon.Config{}, agent.RunConfig{
-		Container: "grain-sandbox-run-7",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"mcpserver", "-container", "grain-sandbox-run-7"}
-	if !slices.Equal(args, want) {
-		t.Fatalf("custom MCP server args = %q, want %q", args, want)
 	}
 }
 

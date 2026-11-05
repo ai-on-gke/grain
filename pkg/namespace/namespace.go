@@ -35,6 +35,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap/playbooks"
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/redact"
 	"github.com/ai-on-gke/grain/pkg/safepath"
 )
@@ -66,6 +67,12 @@ const (
 	// inspects per request to keep store and filesystem work bounded.
 	maxWalkFiles = 2000
 
+	// maxSrcWalkFiles is maxWalkFiles for src://, a read-only tree on the
+	// daemon's own disk: high enough that a grep of src://pkg or src://
+	// reaches every file of core with a layer overlaid, rather than
+	// stopping partway and reading as "no such symbol".
+	maxSrcWalkFiles = 20000
+
 	// maxCIRunsListed bounds how many runs a ci://<owner>/<repo> directory
 	// listing fetches from the CI run store in one request.
 	maxCIRunsListed = 200
@@ -95,18 +102,26 @@ type Scope struct {
 	MayReadSrc      bool
 	MayReadAllTasks bool
 	// TaskReadRepos are the repositories whose tasks this scope may read
-	// under task:// without MayReadAllTasks: the task's own, its reads
-	// and writes, and any an api:tasks:read@owner/repo grant names.
+	// under task:// without MayReadAllTasks: the ones an
+	// api:tasks:read@owner/repo grant names. TaskRepo is not implied.
 	TaskReadRepos     map[string]bool
 	MayReadFullConfig bool
 	MayReadAllMemory  bool
-	MayReadMetrics    bool
-	MayReadPipeline   bool
-	MayReadHealth     bool
-	MayReadGrainLog   bool
-	MayReadPlaybooks  bool
-	MayReadIssues     bool
-	MayReadDB         bool
+	// MemoryReadRepos are the repositories whose memory layers this scope
+	// may read under memory://repos/ without MayReadAllMemory: the ones an
+	// api:memory:read@owner/repo grant names.
+	MemoryReadRepos  map[string]bool
+	MayReadMetrics   bool
+	MayReadPipeline  bool
+	MayReadHealth    bool
+	MayReadGrainLog  bool
+	MayReadPlaybooks bool
+	MayReadIssues    bool
+	MayReadDB        bool
+	// MergeQueueByCI limits deploy://merge-queue to the repositories
+	// PermitsCI allows: a caller reaching it under ci:read rather than
+	// deployment:read (GET /api/fs/deploy/merge-queue).
+	MergeQueueByCI bool
 }
 
 // PermitsCI reports whether this scope may read ci://<repo>/...
@@ -170,11 +185,23 @@ type ResolvedNode struct {
 
 // Server resolves and serves paths in the grain namespace (ci://, src://, task://, config://, memory://, deploy://).
 type Server struct {
-	CIStore     ci.RunStore
+	CIStore ci.RunStore
+	// ExternalCI, when set, is CI another provider ran (GitHub Actions),
+	// served under ci://<repo>/ beside CIStore's runs: listed with them,
+	// a run's jobs as its directories, and each job's log as job.log.
+	ExternalCI  ci.ExternalRuns
 	ArtifactDir string
 	SrcDir      string
-	Tasks       TaskProvider
-	ConfigDir   string
+	// CoreSrcDir, when set, is the source of github.com/ai-on-gke/grain
+	// on a daemon whose own module (SrcDir) builds on it rather than
+	// being it: served under src://core/..., and beneath SrcDir for a
+	// path SrcDir does not have (resolveSrc). CoreModule is that
+	// dependency as module@version, which a not-found names when
+	// CoreSrcDir is empty because the source did not ship (CoreSource).
+	CoreSrcDir string
+	CoreModule string
+	Tasks      TaskProvider
+	ConfigDir  string
 	// ConfigAllow, when set, is the whole of what config:// serves out of
 	// ConfigDir: a slash path relative to it is listed and read only if
 	// this says so. ConfigDir is a working tree a deployment keeps more in
@@ -309,12 +336,83 @@ func (s *Server) resolveSrc(ctx context.Context, scope Scope, relPath string) (*
 			return nil, fmt.Errorf("%w: .git is not accessible via src://", ErrForbidden)
 		}
 	}
+	if within, ok := s.coreSrcPath(relPath); ok {
+		return resolveSrcIn(s.CoreSrcDir, relPath, within)
+	}
+	node, err := resolveSrcIn(s.SrcDir, relPath, relPath)
+	if s.CoreSrcDir == "" {
+		if errors.Is(err, ErrNotFound) && s.CoreModule != "" {
+			return nil, s.coreNotShipped(relPath)
+		}
+		return node, err
+	}
+	// A daemon whose own module builds on core (CoreSrcDir) overlays
+	// core's tree under its own, so that src://pkg/... -- which is where
+	// most of grain is, and what every example names -- reads core on a
+	// layer that has no pkg/ of its own. The layer wins a path both
+	// trees have; src://core/... is the unambiguous way to core's copy.
+	coreNode, coreErr := resolveSrcIn(s.CoreSrcDir, relPath, relPath)
+	switch {
+	case err != nil && errors.Is(err, ErrNotFound) && coreErr == nil:
+		return coreNode, nil
+	case err != nil:
+		return nil, err
+	case node.IsDir && coreErr == nil && coreNode.IsDir:
+		node.Entries = mergeEntries(node.Entries, coreNode.Entries)
+	}
+	if relPath == "" && !hasEntry(node.Entries, coreSrcRoot) {
+		node.Entries = append(node.Entries, Entry{Name: coreSrcRoot, Type: "dir"})
+		sortEntries(node.Entries)
+	}
+	return node, nil
+}
+
+// coreSrcRoot is the top-level src:// directory core's own source is
+// served under on a daemon whose module builds on core.
+const coreSrcRoot = "core"
+
+// coreSrcPath reports whether relPath names src://core/... on a daemon
+// that serves core's source there, and if so the path within core. A
+// layer with a real top-level core/ of its own keeps it.
+func (s *Server) coreSrcPath(relPath string) (string, bool) {
+	if s.CoreSrcDir == "" {
+		return "", false
+	}
+	within, ok := strings.CutPrefix(relPath, coreSrcRoot)
+	if !ok || (within != "" && within[0] != '/') {
+		return "", false
+	}
+	if _, err := os.Lstat(filepath.Join(s.SrcDir, coreSrcRoot)); err == nil {
+		return "", false
+	}
+	return strings.TrimPrefix(within, "/"), true
+}
+
+// coreNotShipped is the not-found for a src:// path on a daemon whose
+// module builds on core when core's source did not ship with it: the
+// path is most likely core's, so it says where core's source is to be
+// had rather than leaving the reader to guess why src://pkg is empty.
+func (s *Server) coreNotShipped(relPath string) error {
+	mod, ver, _ := strings.Cut(s.CoreModule, "@")
+	where := mod
+	if ver != "" {
+		where = mod + "@" + ver
+	}
+	return fmt.Errorf("%w: src://%s -- src:// serves this daemon's own module, which builds on %s, "+
+		"and that source did not ship with this daemon. To read core: `go mod download -json %s` "+
+		"in grain-src/ (or any checkout of this module) and read the Dir it prints, or clone %s if your task reads it",
+		ErrNotFound, relPath, where, where, strings.TrimPrefix(mod, "github.com/"))
+}
+
+// resolveSrcIn resolves within, a slash path under root, as the
+// src:// node relPath.
+func resolveSrcIn(root, relPath, within string) (*ResolvedNode, error) {
 	var target string
 	var err error
-	if relPath == "" {
-		target = s.SrcDir
+	if within == "" {
+		target = root
 	} else {
-		target, err = safepath.Within(s.SrcDir, filepath.FromSlash(relPath))
+		target, err = safepath.Within(root, filepath.FromSlash(within))
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrBadRequest, err)
 		}
@@ -367,6 +465,28 @@ func (s *Server) resolveSrc(ctx context.Context, scope Scope, relPath string) (*
 			return os.Open(target)
 		},
 	}, nil
+}
+
+// mergeEntries is the union of two directory listings by name, the
+// first's entry winning a name both have.
+func mergeEntries(primary, secondary []Entry) []Entry {
+	out := append([]Entry(nil), primary...)
+	for _, e := range secondary {
+		if !hasEntry(primary, e.Name) {
+			out = append(out, e)
+		}
+	}
+	sortEntries(out)
+	return out
+}
+
+func hasEntry(entries []Entry, name string) bool {
+	for _, e := range entries {
+		if e.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // resolvePlaybook serves src://playbooks out of the playbooks embedded
@@ -427,7 +547,7 @@ func repoSegmentCount(first string) int {
 
 func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*ResolvedNode, error) {
 	if !scope.PermitsCI("") {
-		return nil, RefuseCapability("ci://"+relPath, "grain-ci")
+		return nil, RefuseCapability("ci://"+relPath, model.GrainCIRef)
 	}
 	if s == nil || s.CIStore == nil {
 		return nil, fmt.Errorf("%w: CI store is unavailable", ErrNotFound)
@@ -482,6 +602,12 @@ func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*R
 			}
 			entries = append(entries, Entry{Name: run.ID, Type: "dir"})
 		}
+		if s.ExternalCI != nil {
+			external, _ := s.ExternalCI.FindExternalRuns(ctx, ci.RunFilter{Repo: repo, Descending: true}, maxCIRunsListed)
+			for _, run := range external {
+				entries = append(entries, Entry{Name: run.ID, Type: "dir"})
+			}
+		}
 		node := &ResolvedNode{
 			Scheme:  "ci",
 			Path:    relPath,
@@ -495,9 +621,24 @@ func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*R
 	}
 
 	runID := rest[0]
+	if s.ExternalCI != nil && strings.HasPrefix(runID, "gha:") {
+		return s.resolveExternalCI(ctx, repo, relPath, runID, rest[1:])
+	}
 	run, ok := s.CIStore.Get(runID)
 	if !ok || run.Repo != repo {
 		return nil, fmt.Errorf("%w: ci://%s/%s", ErrNotFound, repo, runID)
+	}
+	if s.ExternalCI != nil && run.Source == ci.FaultSourceGitHub {
+		// grain's polled record of a GitHub Actions run, under its bare
+		// GitHub id: it keeps each job's conclusion and no log, so the
+		// run is read from the forge as its gha: id is. Only a forge
+		// that cannot answer leaves the record standing in.
+		if n, err := strconv.ParseInt(runID, 10, 64); err == nil && n > 0 {
+			ghaID := ci.ActionsRunID(repo, n)
+			if ext, ok, err := s.ExternalCI.ExternalRun(ctx, ghaID); err == nil && ok && strings.EqualFold(ext.Repo, repo) {
+				return s.externalCINode(ctx, repo, relPath, ghaID, ext, rest[1:])
+			}
+		}
 	}
 	if len(rest) == 1 {
 		entries := make([]Entry, 0, len(run.Jobs)+1)
@@ -577,6 +718,101 @@ func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*R
 	att, _ := job.LatestAttempt()
 	growingAttempt := !run.Conclusion.Done() && !job.Conclusion.Done() && !att.Conclusion.Done()
 	return s.resolveCIAttempt(relPath, att, rem, true, growingAttempt)
+}
+
+// externalJobLog is the file a job of an ExternalCI run keeps its log
+// in: the forge serves one log per job, not one per step.
+const externalJobLog = "job.log"
+
+// resolveExternalCI is ci://<repo>/<run>/... for an ExternalCI run: the
+// run is its jobs, and each job is its job.log.
+func (s *Server) resolveExternalCI(ctx context.Context, repo, relPath, runID string, rest []string) (*ResolvedNode, error) {
+	// The id names its own repository: one other than the path's, which
+	// is the repository the scope was checked against, is not asked of
+	// the forge at all.
+	if idRepo, _, ok := ci.ParseActionsRunID(runID); !ok || !strings.EqualFold(idRepo, repo) {
+		return nil, fmt.Errorf("%w: ci://%s/%s", ErrNotFound, repo, runID)
+	}
+	run, ok, err := s.ExternalCI.ExternalRun(ctx, runID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: ci://%s/%s: %v", ErrNotFound, repo, runID, err)
+	}
+	if !ok || !strings.EqualFold(run.Repo, repo) {
+		return nil, fmt.Errorf("%w: ci://%s/%s", ErrNotFound, repo, runID)
+	}
+	return s.externalCINode(ctx, repo, relPath, runID, run, rest)
+}
+
+// externalCINode is ci://<repo>/<run>/<rest...> of ExternalCI run run
+// (id runID): its jobs, each job's job.log, and each step's slice of it
+// (<step>.log, ci.ActionsStepLog).
+func (s *Server) externalCINode(ctx context.Context, repo, relPath, runID string, run ci.Run, rest []string) (*ResolvedNode, error) {
+	if len(rest) == 0 {
+		entries := make([]Entry, 0, len(run.Jobs))
+		for _, job := range run.Jobs {
+			entries = append(entries, Entry{Name: job.Name, Type: "dir"})
+		}
+		return &ResolvedNode{Scheme: "ci", Path: relPath, IsDir: true, Entries: entries}, nil
+	}
+	var job *ci.JobRun
+	for i := range run.Jobs {
+		if run.Jobs[i].Name == rest[0] || run.Jobs[i].JobID == rest[0] {
+			job = &run.Jobs[i]
+			break
+		}
+	}
+	if job == nil {
+		return nil, fmt.Errorf("%w: job %q in ci://%s/%s", ErrNotFound, rest[0], repo, runID)
+	}
+	if len(rest) == 1 {
+		entries := []Entry{{Name: externalJobLog, Type: "file"}}
+		seen := map[string]bool{externalJobLog: true}
+		for _, step := range job.Steps {
+			if fn := stepFileName(step); !seen[fn] {
+				seen[fn] = true
+				entries = append(entries, Entry{Name: fn, Type: "file"})
+			}
+		}
+		return &ResolvedNode{Scheme: "ci", Path: relPath, IsDir: true, Entries: entries}, nil
+	}
+	step := -1
+	if len(rest) == 2 && rest[1] != externalJobLog {
+		if step = externalStep(job.Steps, rest[1]); step < 0 {
+			names := make([]string, 0, len(job.Steps))
+			for _, st := range job.Steps {
+				names = append(names, st.Name)
+			}
+			return nil, fmt.Errorf("%w: no step %q in job %q (its steps: %s; the whole log is %s)",
+				ErrNotFound, strings.TrimSuffix(rest[1], ".log"), job.Name, strings.Join(names, ", "), externalJobLog)
+		}
+	}
+	if len(rest) != 2 {
+		return nil, fmt.Errorf("%w: ci://%s (a GitHub Actions job keeps one log, %s, and a <step>.log for each step)", ErrNotFound, relPath, externalJobLog)
+	}
+	text, err := s.ExternalCI.ExternalJobLog(ctx, runID, job.JobID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: ci://%s: %v", ErrNotFound, relPath, err)
+	}
+	if step >= 0 {
+		if text, err = ci.ActionsStepLog(text, job.Steps, step); err != nil {
+			return nil, fmt.Errorf("%w: ci://%s: %v", ErrNotFound, relPath, err)
+		}
+		return stringNode("ci", relPath, text, !job.Steps[step].Conclusion.Done()), nil
+	}
+	return stringNode("ci", relPath, text, !job.Conclusion.Done()), nil
+}
+
+// externalStep is the index in steps of the step file names, by its
+// <step>.log file name or its name, case aside; -1 for none.
+func externalStep(steps []ci.StepRun, file string) int {
+	name := strings.TrimSuffix(file, ".log")
+	for i, st := range steps {
+		if stepFileName(st) == file || strings.EqualFold(strings.TrimSpace(st.Name), name) ||
+			strings.EqualFold(strings.TrimSuffix(stepFileName(st), ".log"), name) {
+			return i
+		}
+	}
+	return -1
 }
 
 func (s *Server) resolveCIArtifacts(run ci.Run, relPath string, rem []string) (*ResolvedNode, error) {
@@ -1301,6 +1537,23 @@ func writeTruncatedLine(b *strings.Builder, reason string) {
 	fmt.Fprintf(b, "[truncated: %s]\n", reason)
 }
 
+// walkCap is how many entries a ?glob= or ?grep= walk of scheme visits.
+func walkCap(scheme string) int {
+	if scheme == "src" {
+		return maxSrcWalkFiles
+	}
+	return maxWalkFiles
+}
+
+// skipWalkDir says whether a walk of scheme://relPath for pattern (a glob,
+// or "") passes over the directory name without descending: node_modules/
+// under src://, which on a source-built daemon is vendored JavaScript
+// nobody greps grain for, unless the path or pattern names it.
+func skipWalkDir(scheme, relPath, pattern, name string) bool {
+	return scheme == "src" && name == "node_modules" &&
+		!strings.Contains(relPath, "node_modules") && !strings.Contains(pattern, "node_modules")
+}
+
 // GlobResult is what a glob matched, and whether it saw everything there
 // was to match against.
 type GlobResult struct {
@@ -1367,30 +1620,41 @@ func (s *Server) GlobEntries(ctx context.Context, scope Scope, scheme, relPath, 
 
 	var matches []string
 	visited := 0
+	limit := walkCap(scheme)
 	truncated := ""
+	pruner := newGlobPruner(pattern)
 	var walk func(curRel string, n *ResolvedNode)
 	walk = func(curRel string, n *ResolvedNode) {
 		if n.Truncated != "" && truncated == "" {
 			truncated = n.Truncated
 		}
 		for _, e := range n.Entries {
-			visited++
-			if visited > maxWalkFiles {
-				truncated = fmt.Sprintf("walked %d entries; narrow the path", maxWalkFiles)
-				return
-			}
 			childRel := e.Name
 			if curRel != "" {
 				childRel = curRel + "/" + e.Name
 			}
-			if (!dirsOnly || e.Type == "dir") && (matchGlob(pattern, childRel) || matchGlob(pattern, e.Name)) {
-				matches = append(matches, dirName(e, childRel))
-			}
-			if e.Type != "dir" {
+			isDir := e.Type == "dir"
+			if !pruner.canMatchOrDescend(childRel, isDir) {
 				continue
 			}
+			matched := (!dirsOnly || isDir) && (matchGlob(pattern, childRel) || matchGlob(pattern, e.Name))
 			// Avoid descending into both unnumbered job files and attempts/<n> unless pattern asks for attempts.
-			if e.Name == "attempts" && !strings.Contains(pattern, "attempts") && !strings.Contains(pattern, "**") {
+			skipAttempts := isDir && e.Name == "attempts" && !strings.Contains(pattern, "attempts") && !strings.Contains(pattern, "**")
+			if skipAttempts && !matched {
+				continue
+			}
+			if isDir && skipWalkDir(scheme, relPath, pattern, e.Name) {
+				continue
+			}
+			visited++
+			if visited > limit {
+				truncated = fmt.Sprintf("walked %d entries; narrow the path", limit)
+				return
+			}
+			if matched {
+				matches = append(matches, dirName(e, childRel))
+			}
+			if !isDir || skipAttempts || !pruner.canDescend(childRel) {
 				continue
 			}
 			child, err := s.Resolve(ctx, scope, scheme, joinRel(relPath, childRel))
@@ -1398,7 +1662,7 @@ func (s *Server) GlobEntries(ctx context.Context, scope Scope, scheme, relPath, 
 				continue
 			}
 			walk(childRel, child)
-			if visited > maxWalkFiles {
+			if visited > limit {
 				return
 			}
 		}
@@ -1406,6 +1670,94 @@ func (s *Server) GlobEntries(ctx context.Context, scope Scope, scheme, relPath, 
 	walk("", node)
 	sort.Strings(matches)
 	return GlobResult{Matches: matches, Truncated: truncated}, nil
+}
+
+// globPruner prunes namespace entries and directory descents that cannot
+// match a slash-containing glob pattern. A pattern without "/" is left
+// unpruned here: GlobEntries handles direct-child globs before walking, and
+// Grep treats a bare filename glob (such as "*.go") as a filter at any depth.
+type globPruner struct {
+	active        bool
+	hasDoubleStar bool
+	segments      []string
+	prefix        []string
+}
+
+func newGlobPruner(pattern string) globPruner {
+	pattern = strings.TrimPrefix(strings.TrimSpace(pattern), "/")
+	if pattern == "" || !strings.Contains(pattern, "/") {
+		return globPruner{}
+	}
+	segs := strings.Split(pattern, "/")
+	if !strings.Contains(pattern, "**") {
+		return globPruner{
+			active:   true,
+			segments: segs,
+			prefix:   segs,
+		}
+	}
+	var prefix []string
+	for _, seg := range segs {
+		if strings.Contains(seg, "**") {
+			break
+		}
+		prefix = append(prefix, seg)
+	}
+	if len(prefix) == 0 {
+		return globPruner{}
+	}
+	return globPruner{
+		active:        true,
+		hasDoubleStar: true,
+		prefix:        prefix,
+	}
+}
+
+func (p globPruner) matchesPrefix(childSegs []string) bool {
+	limit := len(childSegs)
+	if len(p.prefix) < limit {
+		limit = len(p.prefix)
+	}
+	for i := 0; i < limit; i++ {
+		if !matchGlob(p.prefix[i], childSegs[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func (p globPruner) canMatchOrDescend(childRel string, isDir bool) bool {
+	if !p.active {
+		return true
+	}
+	childSegs := strings.Split(childRel, "/")
+	if !p.matchesPrefix(childSegs) {
+		return false
+	}
+	if p.hasDoubleStar {
+		return isDir || len(childSegs) >= len(p.prefix)
+	}
+	if len(childSegs) > len(p.segments) {
+		return false
+	}
+	if !isDir && len(childSegs) != len(p.segments) {
+		return false
+	}
+	return true
+}
+
+func (p globPruner) canDescend(childRel string) bool {
+	if !p.active {
+		return true
+	}
+	childSegs := strings.Split(childRel, "/")
+	if !p.matchesPrefix(childSegs) {
+		return false
+	}
+	if p.hasDoubleStar {
+		return true
+	}
+	return len(childSegs) < len(p.segments)
 }
 
 // joinRel joins a namespace path and a path relative to it.
@@ -1434,7 +1786,10 @@ type GrepResult struct {
 	Output    string
 	Matches   int
 	Truncated bool
-	MaxLimit  int
+	// WalkTruncated says the walk hit its cap before the match limit
+	// was reached, so part of the subtree went unsearched.
+	WalkTruncated bool
+	MaxLimit      int
 }
 
 func (s *Server) serveGrep(w http.ResponseWriter, r *http.Request, scope Scope, scheme, relPath, pattern string) {
@@ -1477,6 +1832,12 @@ func (s *Server) serveGrep(w http.ResponseWriter, r *http.Request, scope Scope, 
 	if res.Truncated {
 		w.Header().Set("X-Grain-Truncated", "true")
 	}
+	if res.WalkTruncated {
+		// grain grep exits non-zero on this with no match, rather than
+		// leave "not found" to be read off a body it found nothing in.
+		w.Header().Set("X-Grain-Walk-Truncated", "true")
+	}
+	w.Header().Set("X-Grain-Matches", strconv.Itoa(res.Matches))
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)
@@ -1524,68 +1885,83 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 	}
 	var files []targetFile
 	walkTruncated := false
+	// stoppedAt is the first entry the walk did not reach, when it hit
+	// the cap: it and everything after it in the walk went unsearched.
+	stoppedAt := ""
+	limit := walkCap(scheme)
 	if !node.IsDir {
 		files = append(files, targetFile{label: "", node: node})
 	} else {
 		visited := 0
-		var collect func(curRel string)
-		collect = func(curRel string) {
-			if visited >= maxWalkFiles {
-				walkTruncated = true
-				return
-			}
-			fullRel := relPath
-			if curRel != "" {
-				if fullRel != "" {
-					fullRel = fullRel + "/" + curRel
-				} else {
-					fullRel = curRel
-				}
-			}
-			n, err := s.Resolve(ctx, scope, scheme, fullRel)
-			if err != nil || !n.IsDir {
-				return
-			}
+		globFilter := strings.TrimPrefix(strings.TrimSpace(opts.GlobFilter), "/")
+		pruner := newGlobPruner(globFilter)
+		var collect func(curRel string, n *ResolvedNode)
+		collect = func(curRel string, n *ResolvedNode) {
 			for _, e := range n.Entries {
-				visited++
-				if visited > maxWalkFiles {
-					walkTruncated = true
-					break
-				}
 				childRel := e.Name
 				if curRel != "" {
 					childRel = curRel + "/" + e.Name
 				}
 				if e.Type == "dir" {
-					// When grepping a job directory, skip attempts/ unless asked so we don't duplicate latest attempt matches.
-					if e.Name == "attempts" && curRel == "" {
+					// Skip attempts/ unless asked so grepping a run, job, or task://
+					// does not duplicate latest attempt matches or load old transcripts.
+					if e.Name == "attempts" && !strings.Contains(globFilter, "attempts") && !strings.Contains(globFilter, "**") {
 						continue
 					}
-					collect(childRel)
+					if !pruner.canDescend(childRel) || skipWalkDir(scheme, relPath, globFilter, e.Name) {
+						continue
+					}
+					visited++
+					if visited > limit {
+						walkTruncated = true
+						stoppedAt = childRel + "/"
+						return
+					}
+					child, err := s.Resolve(ctx, scope, scheme, joinRel(relPath, childRel))
+					if err != nil || !child.IsDir {
+						continue
+					}
+					collect(childRel, child)
+					if walkTruncated {
+						return
+					}
 					continue
 				}
-				if opts.GlobFilter != "" && !matchGlob(opts.GlobFilter, childRel) && !matchGlob(opts.GlobFilter, e.Name) {
+				if !pruner.canMatchOrDescend(childRel, false) {
 					continue
 				}
-				childFull := relPath
-				if childFull != "" {
-					childFull += "/" + childRel
-				} else {
-					childFull = childRel
+				if globFilter != "" && !matchGlob(globFilter, childRel) && !matchGlob(globFilter, e.Name) {
+					continue
 				}
-				fn, err := s.Resolve(ctx, scope, scheme, childFull)
+				visited++
+				if visited > limit {
+					walkTruncated = true
+					stoppedAt = childRel
+					return
+				}
+				fn, err := s.Resolve(ctx, scope, scheme, joinRel(relPath, childRel))
 				if err == nil && !fn.IsDir {
 					files = append(files, targetFile{label: childRel, node: fn})
 				}
 			}
 		}
-		collect("")
+		collect("", node)
 	}
 
 	showLineNum := opts.LineNumbers || len(files) > 1 || ctxLines > 0
 	var out strings.Builder
 	totalMatches := 0
 	truncated := false
+	// One redactor for the whole request (NewRedactor reads the secrets
+	// directory), and only the lines grep prints go through it: running
+	// every line of every file through the credential shapes first made
+	// a grep of src://pkg take 15s and src:// 45s, nearly all of it in
+	// redact (docs/test-runs/2026-11-03-sandbox-cli-edges.md). A line
+	// whose raw text matches is a match only if its redacted text still
+	// does, so a pattern spelling a secret finds nothing; the cost is
+	// that a pattern matching only the "[redacted: ...]" placeholder no
+	// longer finds a line this pass would have redacted.
+	redactor := s.redactor()
 
 	for _, tf := range files {
 		if totalMatches >= maxMatches {
@@ -1607,12 +1983,17 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 		afterRemaining := 0
 		lastPrintedLine := 0
 		lineNum := 0
-		redactor := s.redactor()
 
 		for scanner.Scan() {
 			lineNum++
-			line := redactLine(redactor, scanner.Text())
-			if re.MatchString(line) {
+			raw := scanner.Text()
+			line := raw
+			matched := re.MatchString(raw)
+			if matched || afterRemaining > 0 {
+				line = redactLine(redactor, raw)
+				matched = matched && re.MatchString(line)
+			}
+			if matched {
 				if totalMatches >= maxMatches {
 					truncated = true
 					break
@@ -1620,7 +2001,7 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 				totalMatches++
 				for _, bLine := range beforeBuf {
 					if bLine.num > lastPrintedLine {
-						writeGrepLine(&out, tf.label, bLine.num, '-', bLine.text, showLineNum)
+						writeGrepLine(&out, tf.label, bLine.num, '-', redactLine(redactor, bLine.text), showLineNum)
 						lastPrintedLine = bLine.num
 					}
 				}
@@ -1646,17 +2027,24 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 	}
 
 	if truncated {
-		fmt.Fprintf(&out, "[truncated at match limit (%d matches); pass ?max=%d to raise the limit]\n", maxMatches, maxMatches*2)
+		fmt.Fprintf(&out, "[truncated at match limit (%d matches); pass --max %d (grain grep) to raise the limit]\n", maxMatches, maxMatches*2)
+		walkTruncated = false
 	} else if walkTruncated {
 		truncated = true
-		fmt.Fprintf(&out, "[truncated: walked %d entries; narrow the path]\n", maxWalkFiles)
+		unsearched := "there may be more matches"
+		if totalMatches == 0 {
+			unsearched = "finding no match here does not mean there is none"
+		}
+		fmt.Fprintf(&out, "[truncated: walked %d entries and stopped at %s; it and everything after it were not searched, so %s: narrow the path or pass --glob]\n",
+			limit, joinRel(relPath, stoppedAt), unsearched)
 	}
 
 	return GrepResult{
-		Output:    out.String(),
-		Matches:   totalMatches,
-		Truncated: truncated,
-		MaxLimit:  maxMatches,
+		Output:        out.String(),
+		Matches:       totalMatches,
+		Truncated:     truncated,
+		WalkTruncated: walkTruncated,
+		MaxLimit:      maxMatches,
 	}, nil
 }
 

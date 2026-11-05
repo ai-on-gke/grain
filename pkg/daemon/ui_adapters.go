@@ -168,9 +168,13 @@ func (a SandboxHealthAdapter) BudgetAndReconciliation() (*ui.SandboxBudgetReport
 					poolOrder = append(poolOrder, h.Pool)
 				}
 			}
+			// Charged per sandbox, the way Live charges it, so the pools
+			// add up to CommittedMemoryMB rather than leaving each VM's
+			// VMM headroom out of the breakdown.
+			charged := ledger.VMMHeadroom.Charge(h.Shape)
 			p.Count++
-			p.CPUs += h.Shape.CPUs
-			p.MemoryMB += h.Shape.MemoryMB
+			p.CPUs += charged.CPUs
+			p.MemoryMB += charged.MemoryMB
 		}
 		for _, pool := range poolOrder {
 			if p, ok := byPool[pool]; ok && p.Count > 0 {
@@ -323,7 +327,7 @@ type CapabilityCheckAdapter struct {
 
 func (a CapabilityCheckAdapter) CheckCapability(ctx context.Context, id string) (ui.CapabilityCheckResult, error) {
 	registry := newCapabilityRegistryWithStore(
-		a.Live.store, a.Live.Current().LocalScriptsConfig(),
+		a.Live.store,
 		CapabilityProviders(a.Live.Current(), a.Live.store, ModelProxies, a.Live.GitHubTokens(), a.Live.gitHubCredentialSource())...)
 	provider, ok := registry.Lookup(id)
 	if !ok {
@@ -373,7 +377,7 @@ func (a CapabilityCheckAdapter) CheckCapability(ctx context.Context, id string) 
 func (a CapabilityCheckAdapter) unregistered(ctx context.Context, id string) error {
 	if stored, ok := a.Live.storedConfig(ctx); ok {
 		registry := newCapabilityRegistryWithStore(
-			a.Live.store, stored.LocalScriptsConfig(),
+			a.Live.store,
 			CapabilityProviders(stored, a.Live.store, ModelProxies, a.Live.GitHubTokens(), a.Live.gitHubCredentialSource())...)
 		if _, found := registry.Lookup(id); found {
 			return fmt.Errorf(

@@ -164,7 +164,41 @@ const (
 	// wait, grain ci run-job), which runs inside this daemon and reports
 	// in-process.
 	WaitSourceCLI = "cli"
+	// WaitSourceBeforeRestart is what an adopted run's clock starts with
+	// from every source whose reporter did not survive the restart
+	// (carriedWaitLedger): added to what those sources report afresh in
+	// this daemon rather than maxed against it, since their new totals
+	// start again from zero.
+	WaitSourceBeforeRestart = "before-restart"
+	// WaitSourceRestartGap is how a clock records, in the ledger it
+	// leaves for the next daemon (runClock.sources), the restart gap it
+	// was itself adopted with -- which no source reported.
+	WaitSourceRestartGap = "restart-gap"
 )
+
+// carriedWaitLedger splits the ledger a previous daemon left for a run
+// (model.Store.RunWaitLedger) into what the adopting clock starts with.
+//
+// The run's own mcpserver survives a restart with the run, and its next
+// report is still its cumulative total for the whole run: mcp is seeded
+// as that source's report, so the next one supersedes it rather than
+// adding to it. Every other source restarts from zero in the new daemon
+// -- the sandbox proxy's CLI ledger (pkg/gitproxy) is held in memory --
+// as does the restart gap no source reports, so their totals are summed
+// into before, which the clock carries as a source of its own.
+func carriedWaitLedger(ledger map[string]time.Duration) (mcp, before time.Duration) {
+	for source, d := range ledger {
+		if d <= 0 {
+			continue
+		}
+		if source == WaitSourceMCP {
+			mcp = d
+		} else {
+			before += d
+		}
+	}
+	return mcp, before
+}
 
 // CreditSource is Credit for blocked time reported by source: blocked is
 // that source's own cumulative total for the run, kept monotonically
@@ -260,23 +294,36 @@ func newRunClock(parent context.Context, budget, cap time.Duration) (context.Con
 // the one that started it (ResumeAdoptedRun): the deadline is not reset
 // but carried, as base, and gap -- how long no daemon was reading the
 // run -- is credited at once as blocked time, up to cap, since the
-// restart was grain's doing and not the run's. A run whose deadline,
-// credit included, has already passed is cancelled with errRunTimedOut
-// straight away.
-func newAdoptedRunClock(parent context.Context, base time.Time, cap, gap time.Duration) (context.Context, *runClock) {
+// restart was grain's doing and not the run's. So is ledger, the wait
+// time the previous daemon had already credited the run with
+// (model.Store.RunWaitLedger, split by carriedWaitLedger). Both are
+// applied before the deadline is checked: a run whose deadline, credit
+// included, has already passed is cancelled with errRunTimedOut straight
+// away.
+func newAdoptedRunClock(parent context.Context, base time.Time, cap, gap time.Duration, ledger map[string]time.Duration) (context.Context, *runClock) {
 	ctx, cancel := context.WithCancelCause(parent)
 	if base.IsZero() {
 		// Adopting a durable run: no deadline to carry (newRunClock).
 		return ctx, &runClock{ctx: ctx, cancel: cancel}
 	}
+	mcp, before := carriedWaitLedger(ledger)
+	reported := map[string]time.Duration{}
+	if mcp > 0 {
+		reported[WaitSourceMCP] = mcp
+	}
+	if before > 0 {
+		reported[WaitSourceBeforeRestart] = before
+	}
+	blocked := gap + mcp + before
 	clock := &runClock{
 		base:     base,
 		cap:      cap,
 		gap:      gap,
 		ctx:      ctx,
 		cancel:   cancel,
-		blocked:  gap,
-		credited: min(gap, cap),
+		blocked:  blocked,
+		credited: min(blocked, cap),
+		reported: reported,
 	}
 	clock.timer = time.AfterFunc(time.Until(base.Add(clock.credited)), func() { cancel(errRunTimedOut) })
 	return ctx, clock
@@ -288,6 +335,28 @@ func (c *runClock) ledger() (blocked, credited time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.blocked, c.credited
+}
+
+// sources is this run's blocked time per source, as the ledger a daemon
+// leaving the run for the next one records (model.Store.SetRunWaitLedger):
+// every source's largest report, and the restart gap this clock was
+// adopted with under WaitSourceRestartGap. Nil for a nil clock.
+func (c *runClock) sources() map[string]time.Duration {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make(map[string]time.Duration, len(c.reported)+1)
+	for source, d := range c.reported {
+		if d > 0 {
+			out[source] = d
+		}
+	}
+	if c.gap > 0 {
+		out[WaitSourceRestartGap] += c.gap
+	}
+	return out
 }
 
 // credit applies a cumulative blocked-time report and moves the timer.

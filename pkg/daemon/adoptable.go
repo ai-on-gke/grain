@@ -29,7 +29,7 @@ import (
 // grain hostd (ResolveCLIRun's ViaHostd). Every other run is a child of
 // the daemon, which a restart drains and finishes as interrupted -- a
 // durable task's run then comes back as a restart suspension instead
-// (docs/design/durable-tasks.md#DT-1, "Adoption across restarts and
+// (design/design/durable-tasks.design.md#DT-1, "Adoption across restarts and
 // upgrades").
 func (c Config) adoptableFrameworks(ctx context.Context) map[string]bool {
 	out := map[string]bool{}
@@ -85,6 +85,74 @@ func (r poolRequest) adoptableOnly(candidates []model.AgentBackend) []model.Agen
 	var kept []model.AgentBackend
 	for _, b := range candidates {
 		if r.adoptable[model.NormalizeAgentFrameworkName(b.Framework)] {
+			kept = append(kept, b)
+		}
+	}
+	if len(kept) == 0 {
+		return candidates
+	}
+	return kept
+}
+
+// preferPrevious reorders r.models for an unpinned interactive or
+// resumable-session task so the model and framework of its previous
+// attempt are tried before the rest of the default rotation, preserving
+// warm CLI sessions (--resume) across runs unless that credential/model
+// is paused or unavailable.
+func (r *poolRequest) preferPrevious(framework, modelName string) {
+	if r.pinned != nil || r.pinnedModel {
+		return
+	}
+	r.preferFramework = model.NormalizeAgentFrameworkName(framework)
+	r.preferModel = modelName
+	if r.preferFramework == "" && r.preferModel == "" {
+		return
+	}
+	rank := func(m string) int {
+		mf := model.NormalizeAgentFrameworkName(r.frameworkFor(m))
+		if r.preferModel != "" && m == r.preferModel && (r.preferFramework == "" || mf == r.preferFramework) {
+			return 0
+		}
+		if r.preferFramework != "" && mf == r.preferFramework {
+			return 1
+		}
+		if r.preferModel != "" && m == r.preferModel {
+			return 2
+		}
+		return 3
+	}
+	slices.SortStableFunc(r.models, func(a, b string) int {
+		return rank(a) - rank(b)
+	})
+	if len(r.models) > 0 {
+		r.model = r.models[0]
+	}
+}
+
+// preferredOnly narrows candidates to connections on r.preferFramework
+// (and supporting r.preferModel when r.model is unset) when any candidate
+// matches, falling back to all candidates otherwise.
+func (r poolRequest) preferredOnly(candidates []model.AgentBackend) []model.AgentBackend {
+	if r.preferFramework == "" && r.preferModel == "" {
+		return candidates
+	}
+	if r.preferModel != "" && r.model == "" {
+		var exact []model.AgentBackend
+		for _, b := range candidates {
+			if (r.preferFramework == "" || model.NormalizeAgentFrameworkName(b.Framework) == r.preferFramework) && b.SupportsModel(r.preferModel) {
+				exact = append(exact, b)
+			}
+		}
+		if len(exact) > 0 {
+			return exact
+		}
+	}
+	if r.preferFramework == "" {
+		return candidates
+	}
+	var kept []model.AgentBackend
+	for _, b := range candidates {
+		if model.NormalizeAgentFrameworkName(b.Framework) == r.preferFramework {
 			kept = append(kept, b)
 		}
 	}

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/trustboundary"
 )
 
@@ -43,12 +45,18 @@ var (
 	_ github.DiffReader         = (*StateRepoPullRequestClient)(nil)
 	_ github.FileReader         = (*StateRepoPullRequestClient)(nil)
 	_ github.ReviewSubmitter    = (*StateRepoPullRequestClient)(nil)
+	_ github.TagLister          = (*StateRepoPullRequestClient)(nil)
+	_ github.ReleaseTagReader   = (*StateRepoPullRequestClient)(nil)
+	_ github.WorkflowDispatcher = (*StateRepoPullRequestClient)(nil)
 	_ github.CollaboratorReader = (*StateRepoPullRequestClient)(nil)
 	_ github.ReactionPoster     = (*StateRepoPullRequestClient)(nil)
 	_ github.CheckRunWriter     = (*StateRepoPullRequestClient)(nil)
 	_ github.CallerLabeler      = (*StateRepoPullRequestClient)(nil)
 	_ github.JobLogTailer       = (*StateRepoPullRequestClient)(nil)
 	_ github.WorkflowRunsReader = (*StateRepoPullRequestClient)(nil)
+	_ github.ActionsReader      = (*StateRepoPullRequestClient)(nil)
+
+	_ orchestrator.ReleaseQualificationForge = (*StateRepoPullRequestClient)(nil)
 )
 
 // WithCaller is this client with its forge requests charged to caller
@@ -806,6 +814,26 @@ func (c *StateRepoPullRequestClient) ListWorkflowRuns(owner, name, headSHA strin
 	return nil, nil
 }
 
+func (c *StateRepoPullRequestClient) RerequestCheckSuite(owner, name string, checkSuiteID int64) error {
+	if c.isDisabledConfigRepo(owner, name) {
+		return errExternalConfigRepoNoNativePR
+	}
+	if !c.isLocal(owner, name) {
+		return c.Client.RerequestCheckSuite(owner, name, checkSuiteID)
+	}
+	return &github.Error{Status: 422, Body: []byte(`{"message":"local state repo has no check suites"}`)}
+}
+
+func (c *StateRepoPullRequestClient) RerequestCheckRun(owner, name string, checkRunID int64) error {
+	if c.isDisabledConfigRepo(owner, name) {
+		return errExternalConfigRepoNoNativePR
+	}
+	if !c.isLocal(owner, name) {
+		return c.Client.RerequestCheckRun(owner, name, checkRunID)
+	}
+	return &github.Error{Status: 422, Body: []byte(`{"message":"local state repo has no check runs"}`)}
+}
+
 func (c *StateRepoPullRequestClient) ListPullRequestFiles(owner, name string, number int) ([]string, error) {
 	if c.isDisabledConfigRepo(owner, name) {
 		return nil, errExternalConfigRepoNoNativePR
@@ -1401,4 +1429,125 @@ func (c *StateRepoPullRequestClient) UpdateCheckRun(owner, name string, checkRun
 		return fmt.Errorf("%s/%s has no GitHub check run writer", owner, name)
 	}
 	return writer.UpdateCheckRun(owner, name, checkRunID, run)
+}
+
+// CheckRunApp is the wrapped client's own (github.RESTClient.CheckRunApp):
+// the GitHub App grain's check runs on owner/name are posted as, or ""
+// for the native config repository and a client that cannot tell.
+func (c *StateRepoPullRequestClient) CheckRunApp(owner, name string) (string, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return "", nil
+	}
+	src, ok := c.Client.(interface {
+		CheckRunApp(owner, repo string) (string, error)
+	})
+	if !ok {
+		return "", nil
+	}
+	return src.CheckRunApp(owner, name)
+}
+
+// ListTags is the wrapped client's own, for the repositories that have
+// one: the native config repository is not a forge and has no tags here,
+// which is the same answer a repository with none gives.
+func (c *StateRepoPullRequestClient) ListTags(owner, name string) ([]github.Tag, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	lister, ok := c.Client.(github.TagLister)
+	if !ok {
+		return nil, nil
+	}
+	return lister.ListTags(owner, name)
+}
+
+// ListMatchingTags is the wrapped client's own, as ListTags is: what the
+// release-pending watcher reads a -pending tag through.
+func (c *StateRepoPullRequestClient) ListMatchingTags(owner, name, prefix string) ([]github.TagRef, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	reader, ok := c.Client.(github.ReleaseTagReader)
+	if !ok {
+		return nil, nil
+	}
+	return reader.ListMatchingTags(owner, name, prefix)
+}
+
+// GetAnnotatedTag is the wrapped client's own; the native config
+// repository has no tags here.
+func (c *StateRepoPullRequestClient) GetAnnotatedTag(owner, name, sha string) (*github.AnnotatedTag, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	reader, ok := c.Client.(github.ReleaseTagReader)
+	if !ok {
+		return nil, nil
+	}
+	return reader.GetAnnotatedTag(owner, name, sha)
+}
+
+// DispatchWorkflow is the wrapped client's own: a person's Inbox answer
+// to a release on GitHub Actions (ui/release_approval_github.go). The
+// native config repository has no Actions to dispatch.
+func (c *StateRepoPullRequestClient) DispatchWorkflow(owner, name, workflow, ref string, inputs map[string]string) error {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return fmt.Errorf("%s/%s has no GitHub Actions to dispatch", owner, name)
+	}
+	dispatcher, ok := c.Client.(github.WorkflowDispatcher)
+	if !ok {
+		return fmt.Errorf("%s/%s's forge connection cannot dispatch a workflow", owner, name)
+	}
+	return dispatcher.DispatchWorkflow(owner, name, workflow, ref, inputs)
+}
+
+// actionsReader is the wrapped client's GitHub Actions reads, or nil for
+// the native config repository (which has no Actions) and a client
+// without them.
+func (c *StateRepoPullRequestClient) actionsReader(owner, name string) github.ActionsReader {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil
+	}
+	reader, _ := c.Client.(github.ActionsReader)
+	return reader
+}
+
+// ListActionsRuns is github.ActionsReader, passed through.
+func (c *StateRepoPullRequestClient) ListActionsRuns(owner, name string, q github.ActionsRunsQuery) ([]github.WorkflowRun, error) {
+	if reader := c.actionsReader(owner, name); reader != nil {
+		return reader.ListActionsRuns(owner, name, q)
+	}
+	return nil, nil
+}
+
+// GetActionsRun is github.ActionsReader, passed through.
+func (c *StateRepoPullRequestClient) GetActionsRun(owner, name string, runID int64) (*github.WorkflowRun, error) {
+	if reader := c.actionsReader(owner, name); reader != nil {
+		return reader.GetActionsRun(owner, name, runID)
+	}
+	return nil, nil
+}
+
+// ListActionsJobs is github.ActionsReader, passed through.
+func (c *StateRepoPullRequestClient) ListActionsJobs(owner, name string, runID int64) ([]github.ActionsRunJob, error) {
+	if reader := c.actionsReader(owner, name); reader != nil {
+		return reader.ListActionsJobs(owner, name, runID)
+	}
+	return nil, nil
+}
+
+// ActionsJobLog is github.ActionsReader, passed through.
+func (c *StateRepoPullRequestClient) ActionsJobLog(owner, name string, jobID int64) (string, error) {
+	if reader := c.actionsReader(owner, name); reader != nil {
+		return reader.ActionsJobLog(owner, name, jobID)
+	}
+	return "", &github.Error{Status: http.StatusNotFound}
+}
+
+// ListActionsArtifacts is github.ActionsReader, passed through.
+func (c *StateRepoPullRequestClient) ListActionsArtifacts(owner, name string, runID int64) ([]github.ActionsArtifact, error) {
+	if reader := c.actionsReader(owner, name); reader != nil {
+		return reader.ListActionsArtifacts(owner, name, runID)
+	}
+	return nil, nil
 }

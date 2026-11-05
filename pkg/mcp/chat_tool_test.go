@@ -179,3 +179,125 @@ func TestMaxBlockingToolWaitCoversEveryWaitingTool(t *testing.T) {
 			MaxBlockingToolWait, ChatWait, MaxWaitForChecksTimeout)
 	}
 }
+
+type trackingAckAddenda struct {
+	fakeAddenda
+	acked []int64
+}
+
+func (a *trackingAckAddenda) Delivered(_ context.Context, through int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.acked = append(a.acked, through)
+}
+
+func (a *trackingAckAddenda) ackedIDs() []int64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]int64(nil), a.acked...)
+}
+
+// When a comment arrives and is appended to the final tool call of a run,
+// Delivered must NOT be called until the agent makes a subsequent tool call.
+// If the agent ends its turn right after that tool call without acting on the
+// addendum, DeliveredCommentID stays unadvanced so the orchestrator immediately
+// re-queues the task for the unanswered comment.
+func TestAddendaDeliveredOnFinalToolCallIsNotAckedUntilNextToolCall(t *testing.T) {
+	t.Parallel()
+	conversation := &trackingAckAddenda{}
+	registry := NewRegistry()
+	registry.AnnounceAddenda(0, conversation)
+	registry.Register(Tool{
+		Name:        "run_command",
+		InputSchema: map[string]any{"type": "object"},
+		Handler:     func(context.Context, map[string]any) Result { return Result{Text: "ok"} },
+	})
+	client := NewInProcess(context.Background(), registry)
+	t.Cleanup(func() { client.Close() })
+
+	conversation.append("ok, did that do it?")
+
+	// First tool call: the comment is appended to the result, but NOT yet
+	// acknowledged as delivered because the agent might exit its turn right after.
+	res1, err := client.CallTool(context.Background(), "run_command", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res1.Text(), "> ok, did that do it?") {
+		t.Fatalf("first result = %q, want addendum appended", res1.Text())
+	}
+	if got := conversation.ackedIDs(); len(got) != 0 {
+		t.Fatalf("acked after first tool call = %v, want none until next tool call", got)
+	}
+
+	// Second tool call: proves the agent continued past the first tool result,
+	// so the addendum from the first tool call is now acknowledged.
+	res2, err := client.CallTool(context.Background(), "run_command", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.Text() != "ok" {
+		t.Fatalf("second result = %q, want plain 'ok'", res2.Text())
+	}
+	if got := conversation.ackedIDs(); len(got) != 1 || got[0] != 1 {
+		t.Fatalf("acked after second tool call = %v, want [1]", got)
+	}
+}
+
+// Turn-ending tools (comment_on_issue, ask_question, request_secret,
+// nothing_needed, resume_later, and an unanswered chat call) must not append
+// or consume a newly arrived comment at the end of the tool call, because the
+// agent ends its turn after calling them.
+func TestTurnEndingToolsDoNotConsumeNewAddenda(t *testing.T) {
+	t.Parallel()
+	conversation := &trackingAckAddenda{}
+	registry := NewRegistry()
+	registry.AnnounceAddenda(0, conversation)
+	registry.Register(Tool{
+		Name:        "run_command",
+		InputSchema: map[string]any{"type": "object"},
+		Handler:     func(context.Context, map[string]any) Result { return Result{Text: "cmd ok"} },
+	})
+	registry.Register(Tool{
+		Name:        "comment_on_issue",
+		InputSchema: map[string]any{"type": "object"},
+		Handler:     func(context.Context, map[string]any) Result { return Result{Text: "Comment posted."} },
+	})
+	for _, tool := range NewChatTools(&fakeChatter{}, nil) {
+		registry.Register(tool)
+	}
+	client := NewInProcess(context.Background(), registry)
+	t.Cleanup(func() { client.Close() })
+
+	// A comment arrives before comment_on_issue (the final tool call of the run).
+	conversation.append("follow-up question while finishing")
+	res, err := client.CallTool(context.Background(), "comment_on_issue", map[string]any{"comment": "done"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.Text(), "follow-up question while finishing") {
+		t.Fatalf("comment_on_issue result = %q, want turn-ending tool not to consume addendum", res.Text())
+	}
+	if got := conversation.ackedIDs(); len(got) != 0 {
+		t.Fatalf("acked = %v, want none", got)
+	}
+
+	// Nor does an unanswered chat call consume it as an addendum.
+	resChat, err := client.CallTool(context.Background(), "chat", map[string]any{"message": "still there?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(resChat.Text(), "follow-up question while finishing") {
+		t.Fatalf("unanswered chat result = %q, want turn-ending tool not to consume addendum", resChat.Text())
+	}
+
+	// If a regular tool call runs afterwards, the comment is still waiting and
+	// delivered then.
+	resCmd, err := client.CallTool(context.Background(), "run_command", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resCmd.Text(), "> follow-up question while finishing") {
+		t.Fatalf("run_command result = %q, want preserved addendum delivered", resCmd.Text())
+	}
+}

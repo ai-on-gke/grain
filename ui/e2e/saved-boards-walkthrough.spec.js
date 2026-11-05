@@ -502,6 +502,25 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     await page.getByRole("option", { name: "By state" }).click();
     await expect(page.locator(".gantt-lane-title").first()).toBeVisible();
 
+    // Both asked states share one "Asked" lane, drawn straight after
+    // Running as the rail and the kanban order it -- not below Closed,
+    // where ranking its "asked" key against the raw states put it.
+    const laneTitles = (
+      await page.locator(".gantt-lane-title").allInnerTexts()
+    ).map((t) => t.trim().toLowerCase());
+    const asked = laneTitles.indexOf("asked");
+    expect(asked, laneTitles.join(", ")).toBe(
+      laneTitles.indexOf("running") + 1,
+    );
+    expect(laneTitles.at(-1), laneTitles.join(", ")).toBe("closed");
+    const askedBox = await page
+      .locator(".gantt-lane-header", { hasText: /^asked/i })
+      .boundingBox();
+    const closedBox = await page
+      .locator(".gantt-lane-header", { hasText: /^closed/i })
+      .boundingBox();
+    expect(askedBox.y).toBeLessThan(closedBox.y);
+
     // Open task detail overlay from Gantt bar click
     await runningRow.click();
     await expect(page.locator(".detail-header")).toContainText(
@@ -1176,6 +1195,43 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     await expect(page).toHaveURL(/\/tasks\/8$/);
   });
 
+  test("5d. A board whose query names a state that does not exist says so on its chip", async ({
+    page,
+  }) => {
+    // grain/task-2401: `waiting` is the label of the state `queued`, and
+    // a board query written from the label drew the chip "state is any
+    // of running, waiting" -- word for word what `queued` draws -- over
+    // a tree missing every waiting task.
+    const stamp = Date.now();
+    const board = await seedOne(page, "/api/boards", {
+      name: `WT Unknown State ${stamp}`,
+      kind: "tree",
+      query: "f=state:any:running|waiting",
+    });
+    seededBoards.push(board.id);
+
+    await page.goto(`/boards/${board.id}`);
+    const chip = page.locator(".narrowing-chips .MuiChip-root").first();
+    await expect(chip).toHaveText(
+      "State is any of Running, “waiting” (unknown)",
+      {
+        ignoreCase: true,
+      },
+    );
+    await expect(chip).toHaveClass(/MuiChip-colorWarning/);
+    await expect(chip).toHaveAttribute(
+      "title",
+      /“waiting” is not a value State has/,
+    );
+
+    // The state the label belongs to is a known value, and not flagged.
+    await page.goto(`/boards/${board.id}?f=state:any:running|queued`);
+    await expect(chip).toHaveText("State is any of Running, Waiting", {
+      ignoreCase: true,
+    });
+    await expect(chip).not.toHaveClass(/MuiChip-colorWarning/);
+  });
+
   test("4b. Back from a reloaded task returns to the board it was opened from", async ({
     page,
   }) => {
@@ -1356,6 +1412,29 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     await expect(desc).not.toContainText("see the report section below");
   });
 
+  test("2c. A board's own columns that collect one asked state name the other in the no-column note", async ({
+    page,
+  }) => {
+    // 2026-11-01 walkthrough: a "Talking" column of awaiting_reply cards
+    // sat above "N tasks in no column (Asked, …)", because the demo's
+    // awaiting_submit tasks were the ones left off and both states read
+    // "Asked".
+    const board = await seedOne(page, "/api/boards", {
+      name: `WT Talking ${Date.now()}`,
+      kind: "kanban",
+      columns: [{ name: "Talking", states: ["awaiting_reply"] }],
+    });
+    seededBoards.push(board.id);
+
+    await page.goto(`/boards/${board.id}`);
+    await expect(
+      page.locator(".board-column", { hasText: "Talking" }),
+    ).toBeVisible();
+    const note = page.locator(".board-hidden-note");
+    await expect(note).toContainText("Asked to submit");
+    await expect(note).not.toContainText(/[(,] Asked[,)]|\(Asked[,)]/);
+  });
+
   test("8. Deletion safety and throwaway cleanup", async ({ page }) => {
     // Verify that the UI does NOT render arbitrary board deletion buttons,
     // adhering to the state repository configuration architecture.
@@ -1495,5 +1574,99 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     expect(layout.docScrollWidth).toBeLessThanOrEqual(layout.docClientWidth);
     expect(layout.titleWidth).toBeGreaterThanOrEqual(90);
     await page.unroute("**/api/tasks**");
+  });
+
+  test("5e. A list board ordered by state keeps both asked states together, ahead of failed", async ({
+    page,
+  }) => {
+    // 2026-11-04 walkthrough: sorting by state followed model.StateOf's
+    // precedence, which puts failed between the two asked states, so a
+    // failed task split the Asked group the sidebar and the Kanban board
+    // show as one. The demo seeds no failed task (failed is what a run
+    // ends in, and the demo runs none), so the task list here carries
+    // one more: a copy of an asked task, reported as failed. A copy
+    // rather than one of the demo's own tasks turned failed, since the
+    // specs before this one in the same worker move and close those.
+    const board = await seedOne(page, "/api/boards", {
+      name: `WT State Order ${Date.now()}`,
+      kind: "list",
+      query: "sort=state:asc&f=state:any:awaiting_reply|awaiting_submit|failed",
+    });
+    seededBoards.push(board.id);
+    await page.route(/\/api\/tasks(\?.*)?$/, async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      const res = await route.fetch();
+      const body = await res.json();
+      const list = Array.isArray(body) ? body : body.tasks;
+      const asked = list.find((t) => t.state === "awaiting_submit");
+      if (asked)
+        list.push({
+          ...asked,
+          id: "99601",
+          title: "WT stub failed task",
+          state: "failed",
+        });
+      await route.fulfill({ response: res, json: body });
+    });
+    try {
+      await page.goto(`/boards/${board.id}`);
+      await expect(page.locator(".task-row .badge-failed")).toHaveCount(1);
+      const states = await page
+        .locator(".task-row")
+        .evaluateAll((rows) =>
+          rows.map(
+            (r) =>
+              (r
+                .querySelector(".badge")
+                ?.className.match(
+                  /badge-(awaiting_reply|awaiting_submit|failed)/,
+                ) || [])[1],
+          ),
+        );
+      const firstFailed = states.indexOf("failed");
+      expect(states.lastIndexOf("awaiting_reply")).toBeLessThan(firstFailed);
+      expect(states.lastIndexOf("awaiting_submit")).toBeLessThan(firstFailed);
+      expect(states.at(-1)).toBe("failed");
+    } finally {
+      await page.unroute(/\/api\/tasks(\?.*)?$/);
+    }
+  });
+
+  test("6e. A dashboard's running count is named once, not by its mark as well", async ({
+    page,
+  }) => {
+    // 2026-11-04 walkthrough: the grain mark the running tile draws was
+    // labelled "Running" beside the column's own title, so a screen
+    // reader heard "2 Running Running".
+    const board = await seedOne(page, "/api/boards", {
+      name: `WT Counts ${Date.now()}`,
+      kind: "panels",
+      query: "f=repo:any:acme/widgets",
+      panels: [{ kind: "states" }],
+    });
+    seededBoards.push(board.id);
+    await page.goto(`/boards/${board.id}`);
+    const running = page.locator("a.panel-state", { hasText: "Running" });
+    await expect(running.locator(".grain-mark-sheet, canvas")).toHaveCount(1);
+    await expect(running).toHaveAccessibleName(/^\d+ Running$/);
+    // The mark costs the tiles without one no extra gap: every count's
+    // words start the same distance from its tile's left edge.
+    const offsets = await page.locator("a.panel-state").evaluateAll((tiles) =>
+      tiles
+        .filter((a) => !a.querySelector(".panel-state-mark"))
+        .map((a) => {
+          const title = a.querySelector(".panel-state-title");
+          const words = [...title.childNodes].find(
+            (n) => n.nodeType === Node.TEXT_NODE && n.textContent.trim(),
+          );
+          const range = document.createRange();
+          range.selectNodeContents(words);
+          return Math.round(
+            range.getBoundingClientRect().left - a.getBoundingClientRect().left,
+          );
+        }),
+    );
+    expect(offsets.length).toBeGreaterThan(3);
+    expect(new Set(offsets).size).toBe(1);
   });
 });

@@ -329,6 +329,20 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	if err != nil {
 		t.Fatalf("commenting: %v", err)
 	}
+	if _, err := store.RecordTaskEvent(ctx, model.TaskEvent{
+		TaskID: "a1b2", Kind: model.TaskEventClosed, At: sub, Reason: awkward,
+		By:         model.Principal{Kind: model.PrincipalHuman, ID: "bwsalmon", Source: model.SourceIAP},
+		OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: "alice", Source: "example-proxy"},
+		Detail:     "cancelled run a1b2-1 (attempt 1)",
+	}); err != nil {
+		t.Fatalf("recording a close: %v", err)
+	}
+	if _, err := store.RecordConfigAudit(ctx, model.ConfigAuditEntry{
+		At: sub, By: model.Principal{Kind: model.PrincipalHuman, ID: "operator", Source: model.SourceAccessCode},
+		Surface: "settings", Summary: awkward,
+	}); err != nil {
+		t.Fatalf("recording a config change: %v", err)
+	}
 	// One attachment on the task itself (a NULL comment_id) and one on
 	// the comment (an integer one).
 	blob := make([]byte, 512)
@@ -432,6 +446,13 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	if err := store.RecordRelayedCalls(ctx, "a1b2-1", []string{"9f86d081884c7d65", "9f86d081884c7d65"}); err != nil {
 		t.Fatalf("recording relayed calls: %v", err)
 	}
+	// A live run's wait time per source, left for an adopting daemon
+	// (task_run_wait_ledger): the mcpserver's source is the empty string.
+	if err := store.SetRunWaitLedger(ctx, "a1b2-1", map[string]time.Duration{
+		"": 90 * time.Second, "cli": 12*time.Minute + 345*time.Millisecond,
+	}); err != nil {
+		t.Fatalf("recording a wait ledger: %v", err)
+	}
 	// A live k8s-granule sandbox's reverse-channel token hash and expiry
 	// (sandbox_access).
 	if err := store.SetSandboxAccess(ctx, "c3d4-1",
@@ -466,6 +487,12 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	}); err != nil {
 		t.Fatalf("recording exec-tunnel failures: %v", err)
 	}
+	// Which hostd the run went to (task_run_hostd).
+	if err := store.RecordTaskRunHostd(ctx, model.TaskRunHostd{
+		RunID: "a1b2-1", TaskID: "a1b2", Hostd: "laptop", Instance: "laptop.example.com", Owner: "owner@example.com", At: sub,
+	}); err != nil {
+		t.Fatalf("recording a run's hostd: %v", err)
+	}
 	// What a run's capability grants did for it
 	// (task_run_capability_audit): a capability server's own JSON
 	// record, verbatim -- argv out of a sandbox, so the awkward string
@@ -476,6 +503,27 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 		{Grant: "host-script#host-script", AttemptID: "e1-a1b2-1-0", At: sub, Note: "the capability server left out 1 further record(s)"},
 	}); err != nil {
 		t.Fatalf("recording a capability audit: %v", err)
+	}
+	if err := store.RecordRunStartup(ctx, model.RunStartup{
+		RunID:             "a1b2-1",
+		QueuedAt:          &sub,
+		SandboxAcquiredAt: &sub,
+		SandboxPreparedAt: &sub,
+		FirstTurnAt:       &sub,
+	}); err != nil {
+		t.Fatalf("recording run startup: %v", err)
+	}
+	if err := store.SetRunSandboxKeys(ctx, "a1b2-1", "shape=default|target=owner/payments-api", "gcp-key:label"); err != nil {
+		t.Fatalf("recording run sandbox keys: %v", err)
+	}
+	if err := model.RecordSyncedConsoleSession(ctx, store, "a1b2", model.ConsoleSessionConfigSnapshot{
+		Capabilities:  []string{"memory"},
+		Reads:         []model.RepoRef{{Owner: "owner", Name: "docs"}},
+		Writes:        []model.WriteTarget{{Repo: model.RepoRef{Owner: "owner", Name: "payments-api"}, Base: "main"}},
+		NetworkAccess: model.NetworkOpen,
+		Title:         "Director",
+	}); err != nil {
+		t.Fatalf("recording console session sync: %v", err)
 	}
 	// A run of grain's own CI (ci_run, ci_job, ci_step): the three tables
 	// whose interesting column is a step's output, which is raw bytes
@@ -625,6 +673,7 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 		SetupCommand:                 "make test",
 		CIMode:                       model.CIModeGrain,
 		GitCredential:                "billing-token",
+		UpstreamRepo:                 "upstream/billing",
 		RepairTemplateID:             "repair-tpl",
 		RequireBranchUpToDate:        true,
 		WatchDefaultBranch:           true,
@@ -691,6 +740,12 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	if err := store.PutPathTriggerCursor(ctx, declaring, "main",
 		"0f1e2d3c4b5a69788796a5b4c3d2e1f001234567", sub); err != nil {
 		t.Fatalf("recording a path trigger cursor: %v", err)
+	}
+	if err := store.PutScheduleRefCursor(ctx, model.ScheduleRefCursor{
+		ScheduleID: "sched-ref", Repo: "upstream/core", Ref: "refs/tags/latest",
+		Commit: "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d", UpdatedAt: sub,
+	}); err != nil {
+		t.Fatalf("recording a git_ref schedule's cursor: %v", err)
 	}
 	// The grain CI workflows this deployment declares for a repo it does
 	// not control (model.RepoWorkflow). Two of them, since the table's
@@ -925,6 +980,14 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	}); err != nil {
 		t.Fatalf("recording an automatic upgrade: %v", err)
 	}
+	// And what the release-triggered automatic upgrade last saw and
+	// scheduled (model.AutoUpgradeRelease).
+	if err := store.SetAutoUpgradeRelease(ctx, model.AutoUpgradeRelease{
+		Newest: "v3.6.0", SeenAt: sub, Release: "v3.5.0", Target: "latest", ScheduledAt: &sub,
+		Outcome: model.AutoUpgradeFailed,
+	}); err != nil {
+		t.Fatalf("recording a release-triggered upgrade: %v", err)
+	}
 	// A usage-limit pause in force (model.StoredUsageLimitPause), with
 	// labels and an escalation so every column carries something.
 	if err := store.PutUsageLimitPause(ctx, "connection|agy-1|gemini-3-pro", model.UsageLimitPause{
@@ -1010,8 +1073,8 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	// column filled, for the reason above -- and with several members, so
 	// the JSON column carries more than one element on the round trip.
 	if err := store.PutMergeBatch(ctx, model.MergeBatch{
-		Repo: model.RepoRef{Owner: "owner", Name: "payments-api"}, Branch: "main",
-		Ref:        model.MergeBatchRef("eu", "main"),
+		Repo: model.RepoRef{Owner: "owner", Name: "payments-api"}, Branch: "main", TaskID: "a1b2",
+		Ref:        model.MergeRecheckRef("eu", "a1b2", "main"),
 		BaseCommit: "0123456789abcdef0123456789abcdef01234567",
 		Commit:     "89abcdef0123456789abcdef0123456789abcdef",
 		Members: []model.MergeBatchMember{
@@ -1135,18 +1198,13 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	// out is a row, and a dump that lost them would hand the same id out
 	// twice after a restore.
 	for _, allocate := range []func(context.Context) (string, error){
-		store.NewTaskID, store.NewScheduleID, store.NewTemplateID, store.NewSuiteID, store.NewExecutorTokenID,
+		store.NewTaskID, store.NewScheduleID, store.NewTemplateID, store.NewSuiteID,
 	} {
 		if _, err := allocate(ctx); err != nil {
 			t.Fatalf("allocating an id: %v", err)
 		}
 	}
 
-	if _, err := store.CreateExecutorToken(ctx, model.ExecutorToken{
-		ID: "gxt-1", Name: awkward, TokenHash: "abcdef", Prefix: "gxt_1234", CreatedAt: sub,
-	}); err != nil {
-		t.Fatalf("creating an executor token: %v", err)
-	}
 	if _, err := store.CreateExternalAgentToken(ctx, model.ExternalAgentToken{
 		Name: "ops-laptop", TokenHash: "fedcba9876543210", Prefix: "gma_1234",
 		ScopeSet: "grain/task-admin", Scopes: []string{"tasks:read"}, Repos: []string{"owner/payments-api"},
@@ -1163,6 +1221,10 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 		args []any
 	}{
 		{"INSERT INTO `task_tag` (`task_id`, `tag`) VALUES (?, ?)", []any{"a1b2", awkward}},
+		// The hostd registry (model.Hostd); its tokens stay local
+		// (LocalTables).
+		{"INSERT INTO `hostd` (`name`, `owner`, `labels`, `created_by`, `created_at`, `revoked_at`) VALUES (?, ?, ?, ?, ?, NULL)",
+			[]any{"ws-1", "alice@example.com", "gpu=yes,os=linux", "admin", time.Date(2026, 11, 2, 9, 0, 0, 123000000, time.UTC)}},
 		{"INSERT INTO `work_origin_comment` (`origin`, `comment_id`, `body`) VALUES (?, ?, ?)",
 			[]any{"owner/docs#7", 12345, awkward}},
 		{"INSERT INTO `task_link` (`task_id`, `kind`, `target`, `blocks`) VALUES (?, ?, ?, ?)",
@@ -1185,6 +1247,12 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 			[]any{"a1b2", "base-green", `{"repo":"owner/docs","branch":"main"}`, "close", "automation:task-goals", time.Now().UTC(), awkward, time.Now().UTC(), 6, 43200, "hold"}},
 		{"INSERT INTO `tuning_recommendation` (`target_parameter`, `proposed_value`, `cooldown_expiry`, `adopted`, `task_id`, `created_at`) VALUES (?, ?, ?, ?, ?, ?)",
 			[]any{"merge_batch_size", "4", "2026-10-12T00:00:00Z", 0, "a1b2", "2026-10-10T12:00:00Z"}},
+		{"INSERT INTO `allowed_principal` (`entry`, `added_by`, `added_at`) VALUES (?, ?, ?)",
+			[]any{"user:alice@example.com", "the access code", time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)}},
+		{"INSERT INTO `allowed_principal_migration` (`id`, `imported_at`, `source`, `dropped`) VALUES (?, ?, ?, ?)",
+			[]any{1, time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC), "-ui-allowed-principals", `["domain:example.com"]`}},
+		{"INSERT INTO `secret_entries` (`secret_name`, `key`, `sm_secret`, `version`, `updated_at`) VALUES (?, ?, ?, ?, ?)",
+			[]any{"gemini-api-key", "value", "grain-inst-alice-gemini-api-key", "2", time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)}},
 	} {
 		if _, err := db.ExecContext(ctx, stmt.sql, stmt.args...); err != nil {
 			t.Fatalf("writing %s: %v", stmt.sql, err)

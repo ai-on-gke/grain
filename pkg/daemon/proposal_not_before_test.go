@@ -147,3 +147,153 @@ func TestDaemonProposalFilerEmitsRelativeTaskLink(t *testing.T) {
 		t.Fatalf("propose_task output = %q, want relative /tasks/<id> link", res.Text)
 	}
 }
+
+// A proposal for a repo off the deployment's target repo list is filed
+// and parked awaiting a reply (ui.Client.parkOffAllowlist), whatever its
+// approval. The filer read every state but proposed and deferred as
+// queued, so a director that held three such proposals was told they
+// were "queued already and dispatched in its turn without anybody
+// approving it", and told its operator hold_for_approval was broken
+// (grain/task-2050). Held, it says held and parked; approved, it says
+// parked and never queued.
+func TestLiveProposalOffTheTargetRepoListSaysItIsParked(t *testing.T) {
+	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(t.TempDir(), "data")))
+	if err != nil {
+		t.Fatalf("opening embedded sqlite: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := model.New(db)
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("applying schema: %v", err)
+	}
+	if err := store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		if cfg.PollInterval == 0 {
+			cfg.PollInterval = model.DefaultPollInterval
+		}
+		cfg.TargetRepos = []string{"acme/widgets"}
+		cfg.ConsoleSessions = []model.ConsoleSession{
+			{ID: model.DirectorSessionID, Title: "Director", TasksApproved: true},
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(ui.NewServer(ui.Config{
+		Actor:         ui.DefaultActor("operator"),
+		Capabilities:  ui.OfferedCapabilities(),
+		LocalAPIToken: testAccessCode,
+	}, store))
+	t.Cleanup(srv.Close)
+	client := accessCodeClient(srv.URL)
+
+	for _, tc := range []struct {
+		name     string
+		hold     bool
+		want     []string
+		approved bool
+	}{
+		{"held", true, []string{"filed unapproved because you asked to hold it (hold_for_approval); your permission would otherwise have queued it",
+			"also parked awaiting a reply", "a reply alone does not approve it"}, false},
+		{"approved", false, []string{"filed approved", "not queued: filing parked it"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The director session of grain/task-1933, whose deployment
+			// lets it queue its own work in any repo.
+			parent, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "Director", Interactive: true, NoRepo: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored, err := store.GetTask(ctx, parent.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored.Tags = append(stored.Tags, model.ConsoleSessionTag(model.DirectorSessionID))
+			if err := store.PutTask(ctx, *stored); err != nil {
+				t.Fatal(err)
+			}
+			tool := mcp.NewLiveProposalTools(&mcp.MockSink{}, nil, parent.ID,
+				&daemonProposalFiler{client: client, parent: parent.ID, baseURL: srv.URL, filed: map[string]string{}})[0]
+			res := tool.Handler(ctx, map[string]any{
+				"title": "publish " + tc.name, "body": "b", "repo": "sklodowska-dev/skill-publisher",
+				"hold_for_approval": tc.hold,
+			})
+			if res.IsError {
+				t.Fatalf("propose_task refused: %s", res.Text)
+			}
+			for _, w := range append(tc.want, "`sklodowska-dev/skill-publisher` is not on this deployment's target repo list") {
+				if !strings.Contains(res.Text, w) {
+					t.Errorf("propose_task answered %q, want it to say %q", res.Text, w)
+				}
+			}
+			if strings.Contains(res.Text, "queued already") {
+				t.Errorf("propose_task answered %q, want no claim that a parked proposal is queued", res.Text)
+			}
+			tasks, err := client.ListTasks(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, task := range tasks {
+				if task.Title == "publish "+tc.name {
+					if task.State != model.StateAwaitingReply || task.Approved != tc.approved {
+						t.Fatalf("the proposal is %s, approved %v; want awaiting_reply, approved %v",
+							task.State, task.Approved, tc.approved)
+					}
+					return
+				}
+			}
+			t.Fatal("the proposal was not filed")
+		})
+	}
+}
+
+// A deployment default the capability policy denies is kept off a live
+// proposal, and the propose_task result says so, naming the grant and
+// the rule: the REST answer carries it (ui.Task.DroppedDefaults), and
+// the live filer used to drop it on the floor, so the run was told its
+// follow-up was filed and never that it lacked a grant
+// (docs/test-runs/2026-11-02-security-fixes-live.md, F3).
+func TestLiveProposalSaysWhichDefaultsThePolicyDropped(t *testing.T) {
+	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(t.TempDir(), "data")))
+	if err != nil {
+		t.Fatalf("opening embedded sqlite: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := model.New(db)
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("applying schema: %v", err)
+	}
+	srv := httptest.NewServer(ui.NewServer(ui.Config{
+		Actor:         ui.DefaultActor("operator"),
+		Capabilities:  ui.OfferedCapabilities(),
+		LocalAPIToken: testAccessCode,
+	}, store))
+	t.Cleanup(srv.Close)
+	client := accessCodeClient(srv.URL)
+	parent, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "parent", Description: "files a follow-up", Repo: "acme/widgets", Approved: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const journal = "https://grain.dev/capabilities/grain#journal"
+	if err := store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		cfg.DefaultCapabilities = append(cfg.DefaultCapabilities, journal+"={}")
+		cfg.CapabilityPolicy = model.CapabilityPolicy{Rules: []model.CapabilityPolicyRule{{Capability: journal, Deny: true}}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tool := mcp.NewLiveProposalTools(&mcp.MockSink{}, nil, parent.ID,
+		&daemonProposalFiler{client: client, parent: parent.ID, baseURL: srv.URL, filed: map[string]string{}})[0]
+	res := tool.Handler(ctx, map[string]any{"title": "follow-up", "body": "needs the journal"})
+	if res.IsError {
+		t.Fatalf("propose_task refused: %s", res.Text)
+	}
+	if !strings.Contains(res.Text, "Default grant "+journal+" was not attached to it: ") ||
+		!strings.Contains(res.Text, "rule 1: deny") {
+		t.Fatalf("propose_task answered %q, want it to name the dropped default and the rule", res.Text)
+	}
+}

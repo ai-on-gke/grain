@@ -19,7 +19,7 @@ import { test, expect } from "./fixtures.js";
 // as a development daemon on the bare machine (pkg/demo's
 // demoCLIRunConfig): every CLI on the host, with claude's flag set to the
 // container a release before v2.3.0 could have written, which runs on the
-// host with a warning. docs/design/cli-run-location.md.
+// host with a warning. design/design/cli-run-location.design.md.
 
 test("a bare-machine daemon offers only host, and a run location saves and survives a reload", async ({
   page,
@@ -87,7 +87,7 @@ test("the run-location rows line up and nothing overflows", async ({
     const card = page.getByTestId("cli-run-locations");
     await expect(card).toBeVisible();
     const cardBox = await card.boundingBox();
-    const rows = ["claude", "codex", "antigravity", "custom"];
+    const rows = ["claude", "codex", "antigravity"];
     let lastBottom = -1;
     for (const fw of rows) {
       const row = page.getByTestId(`cli-run-${fw}`);

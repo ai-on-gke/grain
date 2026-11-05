@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -29,15 +30,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // The deployment's capability servers: grain_config.mcp_servers, keyed by
-// capability_id (model.Config.MCPServers, docs/capabilities-spec.md
+// capability_id (model.Config.MCPServers, design/spec/capabilities/capabilities.spec.md
 // §3.1). Settings and `grain capability-servers` add, remove, enable and
 // disable them here and bind their env and headers entries to secrets in
 // the encrypted secrets store; the daemon attaches what is saved on its
@@ -77,6 +80,50 @@ type CapabilityServer struct {
 	// configured and disabled but not renamed or removed. Nil for an
 	// operator's own entry.
 	Builtin *intree.Builtin `json:"builtin,omitempty"`
+	// InProcess is set on a server grain runs inside its own process
+	// (pkg/capability/grainserver): built in, attached always, and with
+	// nothing to configure, disable or remove. It has no mcp_servers
+	// entry, so its Config is empty; it is listed so Settings shows its
+	// methods and who holds them beside the configured servers.
+	InProcess *CapabilityInProcessServer `json:"inProcess,omitempty"`
+}
+
+// CapabilityInProcessServer names an in-process server for Settings.
+type CapabilityInProcessServer struct {
+	// Name is its short name: grain, repo, or the last path element of
+	// a server a build contributed methods to (capability.Register).
+	Name    string `json:"name"`
+	Summary string `json:"summary,omitempty"`
+}
+
+// inProcessSummaries are what core's in-process servers give a task.
+var inProcessSummaries = map[string]string{
+	grainserver.ID:     "grain's own host and database: its journal, health probes, SQL against its database and confirmed shell commands on its host.",
+	grainserver.RepoID: "Access to repositories beyond a run's own: a CI job's read or write access to another repository, or pushing any ref of a repository a task may write.",
+}
+
+// inProcessServers are the in-process servers' rows, by capability_id,
+// leaving out any id configured mcp_servers also hold (which the
+// in-process server shadows; that entry is listed as configured).
+func inProcessServers(configured map[string]protocol.ServerConfig) []CapabilityServer {
+	var out []CapabilityServer
+	for _, s := range grainserver.Statuses() {
+		if _, ok := configured[s.ID]; ok {
+			continue
+		}
+		name := s.ID
+		if i := strings.LastIndex(strings.TrimRight(name, "/"), "/"); i >= 0 {
+			name = strings.TrimRight(name, "/")[i+1:]
+		}
+		status := s
+		out = append(out, CapabilityServer{
+			ID:        s.ID,
+			Secrets:   []CapabilityServerSecret{},
+			Status:    &status,
+			InProcess: &CapabilityInProcessServer{Name: name, Summary: inProcessSummaries[s.ID]},
+		})
+	}
+	return out
 }
 
 // CapabilityServerManagedField is one configure field grain manages for
@@ -122,6 +169,15 @@ type SetCapabilityServerRequest struct {
 type CapabilityServerProber interface {
 	Probe(ctx context.Context, id string, cfg protocol.ServerConfig, extra protocol.SecretLookup) servers.ProbeResult
 	HostCapabilityEntries(ctx context.Context) ([]string, error)
+}
+
+// CapabilityServerPlacedProber is implemented by a CapabilityServerProber
+// that routes placed run: hostd servers (protocol.ServerConfig.Hostd) to
+// their own hostd rather than the deployment's default hostd. When
+// connected is false and err is non-nil, the selector is valid in the
+// registry and its hostd is currently disconnected.
+type CapabilityServerPlacedProber interface {
+	HostCapabilityEntriesFor(ctx context.Context, selector string) (entries []string, connected bool, err error)
 }
 
 // CapabilityServerToolCaller is the part of the daemon's registry
@@ -271,10 +327,21 @@ func (c *Client) ListCapabilityServers(ctx context.Context) ([]CapabilityServer,
 		}
 		out = append(out, row)
 	}
-	// Built-ins first, then the operator's own, each by capability_id.
+	out = append(out, inProcessServers(configured)...)
+	// Built-ins first, then the in-process servers, then the operator's
+	// own, each by capability_id.
+	rank := func(s CapabilityServer) int {
+		switch {
+		case s.Builtin != nil:
+			return 0
+		case s.InProcess != nil:
+			return 1
+		}
+		return 2
+	}
 	sort.Slice(out, func(i, j int) bool {
-		if bi, bj := out[i].Builtin != nil, out[j].Builtin != nil; bi != bj {
-			return bi
+		if ri, rj := rank(out[i]), rank(out[j]); ri != rj {
+			return ri < rj
 		}
 		return out[i].ID < out[j].ID
 	})
@@ -336,10 +403,14 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 	if id == "" {
 		return validationErrorf("a capability_id is required")
 	}
-	cfg := req.Config
-	if err := c.checkRunLocation(ctx, cfg); err != nil {
-		return err
+	if grainserver.IsInProcessID(id) {
+		return validationErrorf("capability server %s runs inside grain itself and has nothing to configure", id)
 	}
+	cfg := req.Config
+	// Builtin, Aliases and Notice belong to grain, not the request: resolve
+	// them from what is stored now so neither secretMapField,
+	// CheckBuiltinConfig nor Probe acts on a caller-supplied Builtin.
+	c.applyStoredBuiltin(ctx, id, &cfg)
 	from := strings.TrimSpace(req.RenameFrom)
 	if from == id {
 		from = ""
@@ -347,6 +418,12 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 	schemaID := id
 	if from != "" {
 		schemaID = from
+	}
+	if err := c.normalizeServerHostd(ctx, schemaID, &cfg); err != nil {
+		return err
+	}
+	if err := c.checkRunLocation(ctx, cfg, false); err != nil {
+		return err
 	}
 	schema := c.capabilityConfigSchema(schemaID)
 	if schema == nil && (len(req.ConfigSecrets) > 0 || !c.storedConfigEqual(ctx, schemaID, cfg.Config)) {
@@ -393,6 +470,9 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 			}
 		}
 	}
+	if err := cfg.Validate(id); err != nil {
+		return validationErrorf("%s", err)
+	}
 	// An entry saved without any config -- a transport edit, or a
 	// server still configured by env -- is left to the attach to judge,
 	// whose status says what is missing.
@@ -410,14 +490,37 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 		}
 	}
 	if len(writes) > 0 {
-		// Unrehearsed: the secrets below are set before the store write
-		// a rehearsal would stop at, and would outlive its refusal.
+		// Unrehearsed: a save carrying secret values cannot be rehearsed, so
+		// external-config mode refuses it before Probe starts the server or
+		// hands it typed-in secrets, while the store writes themselves wait
+		// until Probe accepts the config.
 		if err := c.checkSettingsWritableUnrehearsed(ctx, "grain_config"); err != nil {
 			return err
 		}
 		if c.Config.Secrets == nil {
 			return errSecretsUnavailable
 		}
+	}
+	// The server's own configure is run against what would be saved, the
+	// way Test runs it, so a config it refuses -- a gcp permission set over
+	// its admin's role ceiling, 2026-11-03 -- is refused here rather than
+	// stored to leave the server needs-config with nobody told. A server
+	// that cannot be reached at all says nothing about the config: that
+	// save goes ahead, with a warning, so an entry for a host that is down
+	// can still be edited.
+	if p := c.prober(); p != nil && len(cfg.Config) > 0 && !cfg.Disabled {
+		res := p.Probe(hostd.ForDisplay(ctx), id, cfg, func(name string) (string, bool) {
+			v, ok := writes[name]
+			return v, ok
+		})
+		switch {
+		case res.ConfigRefused:
+			return configRefusal(id, cfg.Config, res.Error)
+		case !res.OK:
+			log.Printf("ui: capability server %s: saving a configuration it could not be asked to check: %s", id, res.Error)
+		}
+	}
+	if len(writes) > 0 {
 		for name, value := range writes {
 			secret, key, explicit := strings.Cut(name, "/")
 			if !explicit {
@@ -460,6 +563,53 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 func configSecretName(id, field string) string {
 	sum := sha256.Sum256([]byte(id))
 	return "capability-server-" + hex.EncodeToString(sum[:4]) + "/" + field
+}
+
+// grainServerSecret reports whether secret is one grain itself creates for
+// a capability server: configSecretName's for a config field's value, or
+// protocol.ManagedSecretName's for a field grain manages.
+func grainServerSecret(secret string) bool {
+	return strings.HasPrefix(secret, "capability-server-") || strings.HasPrefix(secret, "capability-managed-")
+}
+
+// capabilityServerSecretOwners maps each secret in the store's sense --
+// a reference's name before any /<key> -- to the capability servers in m
+// that use it, sorted: every $secret: reference in an entry's config, env
+// or headers, and the managed-field secret named for its capability_id,
+// which the registry resolves by name rather than by reference.
+func capabilityServerSecretOwners(m map[string]protocol.ServerConfig) map[string][]string {
+	owners := map[string][]string{}
+	claim := func(name, id string) {
+		secret, _, _ := strings.Cut(name, "/")
+		if !slices.Contains(owners[secret], id) {
+			owners[secret] = append(owners[secret], id)
+		}
+	}
+	for id, sc := range m {
+		for _, name := range sc.SecretRefs() {
+			claim(name, id)
+		}
+		claim(protocol.ManagedSecretName(id, ""), id)
+	}
+	for _, ids := range owners {
+		sort.Strings(ids)
+	}
+	return owners
+}
+
+// CapabilityServerSecretOwners is capabilityServerSecretOwners for the
+// deployment's configured servers, built-ins included.
+func (c *Client) CapabilityServerSecretOwners(ctx context.Context) (map[string][]string, error) {
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var configured map[string]protocol.ServerConfig
+	if cfg != nil {
+		configured = cfg.MCPServers
+	}
+	configured, _ = intree.EnsureBuiltins(configured)
+	return capabilityServerSecretOwners(configured), nil
 }
 
 // configuredSecretKeys inspects a JSON-map secret field (such as
@@ -607,6 +757,47 @@ func configValidationError(err error) error {
 	return ve
 }
 
+// configRefusal is the save refused because the server's own configure
+// refused the config (msg, ProbeResult.Error): shown at the top of the
+// config form, and on the field it is about where the message says.
+func configRefusal(id string, config map[string]any, msg string) error {
+	msg = strings.TrimPrefix(msg, "capability server "+id+": configure: ")
+	ve := &ValidationError{
+		err:    fmt.Errorf("capability server %s refused this configuration, so it was not saved: %s", id, msg),
+		fields: map[string]string{"": msg},
+	}
+	if field := refusedConfigField(config, msg); field != "" {
+		ve.fields[field] = msg
+	}
+	return ve
+}
+
+// refusedPermissionSet is how the gcp server names the permission set a
+// refusal is about (gcpsets.Config.Validate).
+var refusedPermissionSet = regexp.MustCompile(`permission set "([^"]+)"`)
+
+// refusedConfigField is the config form's path for what a configure
+// refusal is about, "" when it cannot tell: a gcp permission set's roles,
+// for one over its admin's role ceiling, or the set itself.
+func refusedConfigField(config map[string]any, msg string) string {
+	m := refusedPermissionSet.FindStringSubmatch(msg)
+	if m == nil {
+		return ""
+	}
+	sets, _ := config["permission_sets"].([]any)
+	for i, item := range sets {
+		set, _ := item.(map[string]any)
+		if name, _ := set["name"].(string); name != m[1] {
+			continue
+		}
+		if strings.Contains(msg, "role ceiling") {
+			return fmt.Sprintf("permission_sets[%d].roles", i)
+		}
+		return fmt.Sprintf("permission_sets[%d]", i)
+	}
+	return ""
+}
+
 // capabilityConfigSchema is the configure schema the registry last
 // discovered for id, nil when it knows of none.
 func (c *Client) capabilityConfigSchema(id string) map[string]any {
@@ -647,18 +838,90 @@ func (c *Client) prober() CapabilityServerProber {
 	return p
 }
 
-// checkRunLocation refuses run: host unless grain hostd is beside this
-// daemon and its allowlist has the capability entry the command names
-// (#5031: on Kubernetes, or a daemon on the host itself, there is none).
-func (c *Client) checkRunLocation(ctx context.Context, cfg protocol.ServerConfig) error {
+// normalizeServerHostd normalizes cfg's hostd placement and checks it
+// against the registry when it changed from what schemaID already has
+// stored, so a hostd revoked after the server was saved does not block
+// editing its other fields.
+func (c *Client) normalizeServerHostd(ctx context.Context, schemaID string, cfg *protocol.ServerConfig) error {
+	raw := strings.TrimSpace(string(cfg.Hostd))
+	if raw == "" {
+		cfg.Hostd = ""
+		return nil
+	}
+	if !cfg.OnHost() {
+		return validationErrorf("hostd %q places a run: hostd server; set run: hostd beside it", raw)
+	}
+	norm, err := model.NormalizeHostdSelector(raw)
+	if err != nil {
+		return validationErrorf("hostd: %v", err)
+	}
+	var prev string
+	if schemaID != "" && c.Store != nil {
+		if stored, err := c.Store.GetConfig(ctx); err == nil && stored != nil {
+			configured, _ := intree.EnsureBuiltins(stored.MCPServers)
+			prev = string(configured[schemaID].Hostd)
+		}
+	}
+	if norm != prev {
+		if err := c.checkHostdSelector(ctx, norm); err != nil {
+			return validationErrorf("hostd: %v", err)
+		}
+	}
+	cfg.Hostd = protocol.HostdTarget(norm)
+	return nil
+}
+
+// applyStoredBuiltin clears caller-supplied Builtin, Aliases and Notice on
+// cfg and restores them only when id is a stored (or ensured) built-in.
+func (c *Client) applyStoredBuiltin(ctx context.Context, id string, cfg *protocol.ServerConfig) {
+	cfg.Builtin, cfg.Aliases, cfg.Notice = "", nil, ""
+	var configured map[string]protocol.ServerConfig
+	if c.Store != nil {
+		if stored, err := c.Store.GetConfig(ctx); err == nil && stored != nil {
+			configured = stored.MCPServers
+		}
+	}
+	configured, _ = intree.EnsureBuiltins(configured)
+	if stored, ok := configured[id]; ok && stored.Builtin != "" {
+		cfg.Builtin, cfg.Aliases, cfg.Notice = stored.Builtin, stored.Aliases, stored.Notice
+	}
+}
+
+// checkRunLocation refuses run: host unless the target grain hostd -- the
+// placed hostd when cfg.Hostd is set, or the default hostd beside this
+// daemon -- can run it and its allowlist has the capability entry the
+// command names (#5031: on Kubernetes, or a daemon on the host itself,
+// there is no default hostd).
+func (c *Client) checkRunLocation(ctx context.Context, cfg protocol.ServerConfig, forTest bool) error {
 	if !cfg.OnHost() {
 		return nil
+	}
+	if cfg.Hostd != "" {
+		pp, ok := c.Config.CapabilityServers.(CapabilityServerPlacedProber)
+		if !ok {
+			return validationErrorf("run: host on hostd %s: this process does not route placed capability servers to their hostd", cfg.Hostd)
+		}
+		entries, connected, err := pp.HostCapabilityEntriesFor(ctx, string(cfg.Hostd))
+		if err != nil {
+			if !connected && !forTest {
+				// The hostd is in the registry and unrevoked, just not
+				// connected right now: saving parks the server in
+				// needs-hostd until that hostd dials in.
+				return nil
+			}
+			return validationErrorf("run: host on hostd %s: %s", cfg.Hostd, err)
+		}
+		return checkHostdOffersEntry(entries, cfg, "on hostd "+string(cfg.Hostd))
 	}
 	hosts := c.HostCapabilityEntries(ctx)
 	if !hosts.Available {
 		return validationErrorf("run: host is not available here: %s", hosts.Reason)
 	}
-	for _, e := range hosts.Entries {
+	return checkHostdOffersEntry(hosts.Entries, cfg, "")
+}
+
+func checkHostdOffersEntry(entries []string, cfg protocol.ServerConfig, where string) error {
+	for _, e := range entries {
 		if e == cfg.Command {
 			return nil
 		}
@@ -670,11 +933,15 @@ func (c *Client) checkRunLocation(ctx context.Context, cfg protocol.ServerConfig
 		return nil
 	}
 	offered := "no capabilities entries"
-	if len(hosts.Entries) > 0 {
-		offered = strings.Join(hosts.Entries, ", ")
+	if len(entries) > 0 {
+		offered = strings.Join(entries, ", ")
 	}
-	return validationErrorf("run: host: grain hostd's allowlist has no capabilities entry %q (it offers %s); %s",
-		cfg.Command, offered, hostd.MissingEntryHelp(cfg.Command))
+	prefix := "run: host"
+	if where != "" {
+		prefix += " " + where
+	}
+	return validationErrorf("%s: grain hostd's allowlist has no capabilities entry %q (it offers %s); %s",
+		prefix, cfg.Command, offered, hostd.MissingEntryHelp(cfg.Command))
 }
 
 // HostCapabilityEntries says whether run: host is possible here and what
@@ -714,6 +981,7 @@ func (c *Client) TestCapabilityServer(ctx context.Context, req TestCapabilitySer
 	var cfg protocol.ServerConfig
 	if req.Config != nil {
 		cfg = *req.Config
+		c.applyStoredBuiltin(ctx, id, &cfg)
 	} else {
 		stored, err := c.Store.GetConfig(ctx)
 		if err != nil {
@@ -733,9 +1001,19 @@ func (c *Client) TestCapabilityServer(ctx context.Context, req TestCapabilitySer
 	if err := cfg.Validate(id); err != nil {
 		return servers.ProbeResult{}, validationErrorf("%s", err)
 	}
+	if cfg.Hostd != "" {
+		norm, err := model.NormalizeHostdSelector(string(cfg.Hostd))
+		if err != nil {
+			return servers.ProbeResult{}, validationErrorf("hostd: %v", err)
+		}
+		if err := c.checkHostdSelector(ctx, norm); err != nil {
+			return servers.ProbeResult{}, validationErrorf("hostd: %v", err)
+		}
+		cfg.Hostd = protocol.HostdTarget(norm)
+	}
 	// A test says at once that no dialing-in hostd is connected, rather
 	// than waiting one out the way a run does (hostd.ForDisplay).
-	if err := c.checkRunLocation(hostd.ForDisplay(ctx), cfg); err != nil {
+	if err := c.checkRunLocation(hostd.ForDisplay(ctx), cfg, true); err != nil {
 		return servers.ProbeResult{}, err
 	}
 	// Typed-in secrets are offered under names of their own, which only
@@ -891,9 +1169,13 @@ func (c *Client) GChatUsage(ctx context.Context, id string) ([]intree.GChatUsage
 	return out, nil
 }
 
-// RemoveCapabilityServer deletes one entry.
+// RemoveCapabilityServer deletes one entry, and then the secrets grain
+// created for it (grainServerSecret) that no remaining entry uses: they
+// hold that server's own config values, which nothing else reads, and
+// left behind they would sit in the store with nothing naming them.
 func (c *Client) RemoveCapabilityServer(ctx context.Context, id string) error {
-	return c.updateCapabilityServers(ctx, func(m map[string]protocol.ServerConfig) error {
+	var orphaned []string
+	err := c.updateCapabilityServers(ctx, func(m map[string]protocol.ServerConfig) error {
 		sc, ok := m[id]
 		if !ok {
 			return validationErrorf("no capability server %q is configured", id)
@@ -901,9 +1183,28 @@ func (c *Client) RemoveCapabilityServer(ctx context.Context, id string) error {
 		if sc.Builtin != "" {
 			return validationErrorf("capability server %q is grain's built-in %s server and cannot be removed: disable it instead (grain capability-servers disable %s)", id, sc.Builtin, id)
 		}
+		used := capabilityServerSecretOwners(map[string]protocol.ServerConfig{id: sc})
 		delete(m, id)
+		remaining := capabilityServerSecretOwners(m)
+		orphaned = orphaned[:0]
+		for secret := range used {
+			if grainServerSecret(secret) && len(remaining[secret]) == 0 {
+				orphaned = append(orphaned, secret)
+			}
+		}
 		return nil
 	})
+	if err != nil || c.Config.Secrets == nil {
+		return err
+	}
+	for _, secret := range orphaned {
+		// Best effort: the entry is gone either way, and a secret left
+		// behind is listed as orphaned on Legacy capabilities.
+		if err := c.Config.Secrets.DeleteSecret(secret); err != nil && !errors.Is(err, secrets.ErrNoSecret) {
+			log.Printf("capability server %s removed, but deleting its secret %s: %v", id, secret, err)
+		}
+	}
+	return nil
 }
 
 // DismissCapabilityServerNotice clears one entry's one-time notice
@@ -971,10 +1272,18 @@ func (c *Client) BindCapabilityServerSecret(ctx context.Context, req BindCapabil
 	if req.Kind != "env" && req.Kind != "header" {
 		return validationErrorf(`kind must be "env" or "header", not %q`, req.Kind)
 	}
-	if err := c.checkBootstrapWritableUnrehearsed(ctx, "grain_config"); err != nil {
+	// Rehearsed, so an external config repository's refusal carries the
+	// mcp_servers edit updateCapabilityServers would have made, as
+	// settings_locked's does; nothing below the guard stores the value
+	// while it is armed (configRepoFor reports the write as managed).
+	if err := c.checkBootstrapWritable(ctx, "grain_config"); err != nil {
 		return err
 	}
-	if req.Value != "" {
+	// The value is bootstrap, but the binding is a write of mcp_servers
+	// that settings_locked sends to grain/config: store the value only
+	// when that write will go through, so a refused binding leaves no
+	// secret behind without its $secret: reference.
+	if _, _, managed := c.configRepoFor(ctx, false); req.Value != "" && !managed {
 		if c.Config.Secrets == nil {
 			return errSecretsUnavailable
 		}
@@ -987,7 +1296,7 @@ func (c *Client) BindCapabilityServerSecret(ctx context.Context, req BindCapabil
 		}
 	}
 	value := req.Prefix + "$secret:" + ref
-	return c.updateCapabilityServers(ctx, func(m map[string]protocol.ServerConfig) error {
+	err := c.updateCapabilityServers(ctx, func(m map[string]protocol.ServerConfig) error {
 		sc, ok := m[req.ID]
 		if !ok {
 			return validationErrorf("no capability server %q is configured", req.ID)
@@ -1000,6 +1309,23 @@ func (c *Client) BindCapabilityServerSecret(ctx context.Context, req BindCapabil
 		m[req.ID] = sc
 		return nil
 	})
+	// The refusal's edit commits only the reference: say that the value
+	// it names was not stored and has to be set apart from the change.
+	var refusal *externalConfigRepoError
+	if req.Value != "" && errors.As(err, &refusal) {
+		refusal.Description = secretNote(ref)
+	}
+	return err
+}
+
+// secretNote tells the operator of a refused binding where its value
+// goes: the secret store, which the refusal's edit only names.
+func secretNote(ref string) string {
+	secret, key, explicit := strings.Cut(ref, "/")
+	if !explicit {
+		key = "value"
+	}
+	return fmt.Sprintf("the value was not stored: set it as secret %s separately (PUT /api/secrets/%s/%s, or Settings → Secrets), since the change commits only its $secret:%s reference", ref, secret, key, ref)
 }
 
 func withEntry(in map[string]string, k, v string) map[string]string {

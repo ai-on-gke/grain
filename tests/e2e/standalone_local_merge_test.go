@@ -113,36 +113,30 @@ jobs:
 	dataDir := filepath.Join(home, ".grain")
 	// The test configures the daemon through its API, which a deployment
 	// with a grain/config repository otherwise sends to a config pull
-	// request (docs/design/config-repo-settings.md, section 4.1.1).
+	// request (design/design/config-repo-settings.design.md, section 4.1.1).
 	if err := staterepo.SaveSettings(dataDir, staterepo.Settings{DirectConfigWrites: true}); err != nil {
 		t.Fatal(err)
 	}
 
-	// The fake agent: it reads its request, edits NOTES.md in the
+	// The fake agent, a stand-in for agy: it edits NOTES.md in the
 	// checkout grain cloned under the sandbox it was given
 	// (orchestrator.CheckoutDir), commits on the task's branch and pushes it
 	// through the proxy -- the work an agent CLI does in a sandbox -- and
 	// reports the run_command call a real agent would have made it with.
 	ran := filepath.Join(home, "fake-agent-ran")
 	agentScript := filepath.Join(home, "fake-agent")
-	mustWriteFile(t, agentScript, fmt.Sprintf(`#!/bin/sh
-set -e
-cat > %[1]s
-dir="$(sed -n 's/.*"working_directory":"\([^"]*\)".*/\1/p' %[1]s)"
-# A host sandbox's commands run with HOME pinned to the sandbox, which
-# is where grain put the git proxy's credentials.
-HOME="$dir"
+	writeFakeAgy(t, agentScript, `set -e
+touch `+shellQuote(ran)+`
+# A host sandbox's commands run with HOME pinned to the sandbox (agy's
+# working directory there), which is where grain put the git proxy's
+# credentials.
+HOME="$PWD"
 export HOME
-cd "$dir/work"
+cd work
 echo "standalone agent was here" >> NOTES.md
 git add NOTES.md
 git -c user.name=agent -c user.email=agent@example.com commit -q -m "add the agent's NOTES line" >&2
-git push -q origin HEAD >&2
-printf '%%s\n' '{"protocol_version":2,"result":{"final_text":"Pushed the NOTES change.","tool_calls":[{"name":"run_command","arguments":{"command":"git push origin HEAD"},"text":"exit=0"}],"transcript":"edited, committed, pushed"}}'
-`, ran))
-	if err := os.Chmod(agentScript, 0o755); err != nil {
-		t.Fatal(err)
-	}
+git push -q origin HEAD >&2`, "Pushed the NOTES change.", fakeAgyTool{Name: "run_command", Args: map[string]any{"command": "git push origin HEAD"}, Output: "exit=0"})
 
 	var logs bytes.Buffer
 	// -sandbox-port-base=0: the default block starts at 9728, which the
@@ -191,12 +185,7 @@ printf '%%s\n' '{"protocol_version":2,"result":{"final_text":"Pushed the NOTES c
 		return err
 	})
 
-	backends := []model.AgentBackend{{
-		ID: "fake", Name: "fake agent", Framework: model.AgentFrameworkCustom, Command: agentScript,
-		// A custom command with an empty list has no models, and its
-		// tasks wait for one to be set.
-		Models: []string{"fake-model"},
-	}}
+	backends := []model.AgentBackend{fakeAgyConnection(agentScript)}
 	if _, err := client.UpdateSettings(ctx, ui.UpdateSettingsRequest{AgentBackends: &backends}); err != nil {
 		t.Fatalf("configuring the fake agent: %v", err)
 	}
@@ -212,7 +201,7 @@ printf '%%s\n' '{"protocol_version":2,"result":{"final_text":"Pushed the NOTES c
 
 	task, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "Add the agent's NOTES line", Description: "Append a line to NOTES.md so the notes workflow passes.",
-		Repo: owner + "/" + repoName, AutoMerge: true, AgentFramework: model.AgentFrameworkCustom,
+		Repo: owner + "/" + repoName, AutoMerge: true, AgentFramework: model.AgentFrameworkAntigravity,
 	})
 	if err != nil {
 		t.Fatalf("filing the task: %v", err)

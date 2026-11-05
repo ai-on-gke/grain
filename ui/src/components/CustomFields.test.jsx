@@ -12,9 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { useState } from "react";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
+import { chooseOption, optionValues } from "../searchSelectTesting.js";
 import {
+  CustomFieldInput,
   fieldRows,
+  hiddenLinkValues,
   initialFieldValues,
   unfiledLinkValues,
 } from "./CustomFields.jsx";
@@ -88,6 +94,24 @@ describe("unfiledLinkValues", () => {
   });
 });
 
+// What a /new link carried for custom fields settings/new-task-form.yml
+// hides: left out, since a hidden field files its default (2026-11-01
+// walkthrough).
+describe("hiddenLinkValues", () => {
+  it("names every value the link kept, and none it already drops", () => {
+    expect(hiddenLinkValues(config, null)).toEqual([]);
+    expect(
+      hiddenLinkValues(config, { priority: "high", customer: "globex" }),
+    ).toEqual([
+      "Priority: “high” is in a field this form hides",
+      "customer: “globex” is in a field this form hides",
+    ]);
+    expect(
+      hiddenLinkValues(config, { priority: "bogus", nosuch: "1" }),
+    ).toEqual([]);
+  });
+});
+
 describe("fieldRows", () => {
   it("deduplicates two declarations of one field name and handles undeclared fields", () => {
     const config = {
@@ -133,5 +157,66 @@ describe("fieldRows", () => {
       undeclared: true,
       legacy: ["old_val"],
     });
+  });
+});
+
+// grain/task-2910: a declaration with more than a handful of choices is
+// searched rather than scrolled; a short one stays a plain select.
+describe("CustomFieldInput's enum picker", () => {
+  function Harness({ field, initial = "" }) {
+    const [value, setValue] = useState(initial);
+    return (
+      <>
+        <CustomFieldInput field={field} value={value} onChange={setValue} />
+        <output data-testid="value">{value}</output>
+      </>
+    );
+  }
+  const teams = [
+    "payments",
+    "search",
+    "ads-serving",
+    "ads-billing",
+    "identity",
+    "storage",
+    "networking",
+    "observability",
+  ];
+
+  it("searches a long list, keeping none and a legacy value reachable", async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness
+        field={{ name: "team", label: "Team", type: "enum", options: teams }}
+        initial="retired-team"
+      />,
+    );
+    const box = screen.getByRole("combobox", { name: "Team" });
+    expect(box.tagName).toBe("INPUT");
+    await user.click(box);
+    expect(optionValues(box)).toContain("retired-team");
+    await user.clear(box);
+    await user.type(box, "billing");
+    expect(optionValues(box)).toEqual(["ads-billing"]);
+    await user.keyboard("{Enter}");
+    expect(screen.getByTestId("value")).toHaveTextContent("ads-billing");
+    await chooseOption(user, box, "none");
+    expect(screen.getByTestId("value")).toHaveTextContent("");
+  });
+
+  it("keeps a short list a plain select", () => {
+    render(
+      <Harness
+        field={{
+          name: "priority",
+          label: "Priority",
+          type: "enum",
+          options: ["low", "high"],
+        }}
+      />,
+    );
+    expect(screen.getByRole("combobox", { name: "Priority" }).tagName).not.toBe(
+      "INPUT",
+    );
   });
 });

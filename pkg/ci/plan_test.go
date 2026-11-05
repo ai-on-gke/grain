@@ -386,7 +386,7 @@ func TestFingerprintIsTheSameWorkTwiceAndDifferentWorkOnce(t *testing.T) {
 		"another branch":        func(r *Request, _ *Workflow) { r.Ref = "grain/task-185" },
 		"another event":         func(r *Request, _ *Workflow) { r.Event = EventPullRequest },
 		"another workflow":      func(_ *Request, w *Workflow) { w.Name = "renamed" },
-		"another sandbox image": func(r *Request, _ *Workflow) { r.SandboxImage = "ghcr.io/bwsalmon/grain/guest:v2" },
+		"another sandbox image": func(r *Request, _ *Workflow) { r.SandboxImage = "docker.io/grainai/sandbox:v2" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			r, changed := req, mustParse(t, ".grain/workflows/a.yml", body)

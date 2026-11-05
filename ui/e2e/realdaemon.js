@@ -49,7 +49,15 @@ async function writeExecutable(file, text) {
   await fs.writeFile(file, text, { mode: 0o755 });
 }
 
-export async function startDaemon(root, dataDir, sandboxDir, extraArgs = []) {
+// directConfigWrites false leaves the daemon's API writes on the config
+// repository path, for a spec about refusals and config pull requests.
+export async function startDaemon(
+  root,
+  dataDir,
+  sandboxDir,
+  extraArgs = [],
+  { directConfigWrites = true } = {},
+) {
   const bin = process.env.GRAIN_E2E_DEMO_BIN;
   if (!bin) throw new Error("global setup did not provide a Grain binary");
 
@@ -86,11 +94,11 @@ printf '%s\\n' \
   await writeAccessCode(path.join(dataDir, "local-api-token"));
   // These specs configure the daemon through its API, which a deployment
   // with a grain/config repository otherwise answers with a config pull
-  // request to open (docs/design/config-repo-settings.md, section
+  // request to open (design/design/config-repo-settings.design.md, section
   // 4.1.1); the host-local opt-out keeps those writes direct.
   await fs.writeFile(
     path.join(dataDir, "state-repo.json"),
-    JSON.stringify({ directConfigWrites: true }, null, 2) + "\n",
+    JSON.stringify({ directConfigWrites }, null, 2) + "\n",
   );
 
   const proc = spawn(

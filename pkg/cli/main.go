@@ -103,6 +103,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -137,7 +138,7 @@ func Main() {
 	gitrefs.Pin()
 	args := os.Args[1:]
 	// Inside an agent's sandbox, the read commands of
-	// docs/design/sandbox-first-agent-surface.md answer over the
+	// design/design/sandbox-first-agent-surface.design.md answer over the
 	// sandbox's own proxy (pkg/sandboxcli); anything else runs as it
 	// always has.
 	if code, handled := sandboxcli.Main(args, os.Stdout, os.Stderr); handled {
@@ -152,11 +153,7 @@ func Main() {
 			upgradePostgresCmd(args[1:])
 			return
 		case "db":
-			if len(args) > 1 && (args[1] == "upgrade-postgres" || args[1] == "upgrade-sqlite-to-postgres") {
-				upgradePostgresCmd(args[2:])
-				return
-			}
-			upgradePostgresCmd(args[1:])
+			dbCmd(args[1:])
 			return
 		case "demo":
 			cmdDemo(args[1:])
@@ -177,9 +174,6 @@ func Main() {
 			return
 		case "host-script":
 			os.Exit(hostscriptcli.Main(args[1:], os.Stdout, os.Stderr))
-		case "model-server", "executor", "modelexec":
-			executorCmd(args[1:])
-			return
 		case "access-code":
 			accessCodeCmd(args[1:])
 			return
@@ -248,10 +242,67 @@ func Main() {
 			return
 		}
 	}
-	if err := runCLI(args); err != nil {
-		fmt.Fprintln(os.Stderr, "grain: "+err.Error())
-		os.Exit(1)
+	if len(args) == 0 {
+		// Inside a sandbox, a bare grain gets the sandbox CLI's help.
+		if code, handled := sandboxcli.Unknown(args, os.Stderr); handled {
+			os.Exit(code)
+		}
 	}
+	if code := runTaskCLI(args, os.Stderr); code != exitOK {
+		os.Exit(code)
+	}
+}
+
+// runTaskCLI runs the task CLI and says how it ended (errors.go): the
+// exit code, and on stderr either a sentence or, under -json, the one
+// {"error": ...} object -- with whatever the flag package or a command
+// would have said there held back, so the object is all a script reads.
+func runTaskCLI(args []string, stderr io.Writer) int {
+	asJSON := jsonRequested(args)
+	var err error
+	if asJSON {
+		var said string
+		said, err = holdStderr(func() error { return runCLI(args) })
+		if err == nil || errors.Is(err, flag.ErrHelp) {
+			_, _ = io.WriteString(stderr, said)
+		}
+	} else {
+		err = runCLI(args)
+	}
+	var unknown unknownCommandError
+	if !asJSON && errors.As(err, &unknown) {
+		// Inside a sandbox, a command neither CLI has is answered with
+		// the sandbox CLI's help, not this CLI's daemon-facing usage;
+		// the task-CLI commands above (grain declarations check) still
+		// run there.
+		if code, handled := sandboxcli.Unknown(args, stderr); handled {
+			return code
+		}
+		fmt.Fprint(stderr, usage)
+	}
+	return reportError(stderr, err, asJSON)
+}
+
+// holdStderr runs fn with os.Stderr captured, and returns what it wrote
+// there instead of letting it through.
+func holdStderr(fn func() error) (string, error) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return "", fn()
+	}
+	old := os.Stderr
+	os.Stderr = w
+	done := make(chan string, 1)
+	go func() {
+		said, _ := io.ReadAll(r)
+		done <- string(said)
+	}()
+	err = fn()
+	os.Stderr = old
+	_ = w.Close()
+	said := <-done
+	_ = r.Close()
+	return said, err
 }
 
 const usage = `usage: grain [global flags] <command> [args]
@@ -260,7 +311,6 @@ const usage = `usage: grain [global flags] <command> [args]
        grain mcpserver [flags] speak MCP over stdin/stdout against the sandbox tools (see mcpserver.go)
        grain runhost exec [flags] a run host's entrypoint: run one spooled agent CLI invocation (see pkg/runhost)
        grain hostd [flags]     on the bare machine, run the allowlisted host CLIs and capability servers a containerised daemon asks for (see pkg/hostd)
-       grain model-server [flags] run agent model CLIs (agy, claude, codex) on this host and connect outbound to grain (aliases: executor, modelexec; see executor.go)
        grain host-script <name> [args]  in a sandbox, run a granted host script on grain's side (see pkg/hostscriptcli)
        grain secrets [flags]   set/delete/list a colocated server's secrets on disk (see secrets.go)
        grain connections import FILE  record a seed file's git and model connections (see connections.go)
@@ -283,7 +333,7 @@ const usage = `usage: grain [global flags] <command> [args]
        grain agy-tool-hook     answer one of agy's PreToolUse hooks on stdin/stdout (see agyhook.go)
        grain claude-stop-hook  answer one of Claude Code's Stop hooks on stdin/stdout (see pkg/agent/claude/stophook.go)
 
-Global flags (must come before the command):
+Global flags (before or after the command; -flag and --flag are the same):
   -server string  base URL of a running "grain daemon"'s UI/API. Defaults to
                   $GRAIN_SERVER when that is set, else GRAIN_SERVER in
                   /etc/grain/cli.env ($GRAIN_CLI_ENV names another file), else
@@ -296,15 +346,18 @@ Global flags (must come before the command):
   -audience string target audience for Google ID token authentication ($GRAIN_AUDIENCE, $GRAIN_TUNNEL_AUDIENCE)
   -as string      identity for request attribution / proxy headers ($GRAIN_USER)
   -json           print machine-readable JSON instead of a human-readable table
+  -context string the named context to use ($GRAIN_CONTEXT, else config.json's current)
 
 Commands:
+  login <url> [flags] / logout [<ctx>] / whoami   sign in to a deployment as a named context, and say as whom
+  context list|use|show|delete         the named contexts ($XDG_CONFIG_HOME/grain/config.json)
   list [flags]                         list the tasks in play -- closed and deferred ones are left
                                        out unless -closed/-deferred or a filter naming that state
                                        asks for them (-filter attribute:comparison:value narrows the
                                        list, repeatably, with -state/-repo/-capability and friends
                                        as shorthands; -sort attribute:asc orders it. "grain list -h"
                                        prints the attributes and comparisons -- see list.go)
-  get <id>                             show one task and its conversation
+  get <id> [-comments-since T]         show one task and its conversation (only what came after T)
   create -title T [flags]              file a new task (-position front|end picks which end of
                                        the backlog it joins, and is remembered for the next one;
                                        -field name=value sets one of the fields this deployment
@@ -319,6 +372,7 @@ Commands:
                                        queued its approval says
   capability <id> <cap> attach|detach  attach or detach a capability
   comment <id> <body...>               post a comment (and answer a parked question)
+  reply|inbox|wait|logs <id...>        answer a parked question, list what needs a person, block on tasks, read a run's log
   close [-close-pull-request] <id>     close a task (grain's "delete" -- see the package doc comment),
                                        and with the flag its open pull request too
   delete <id>                          alias for close
@@ -330,6 +384,8 @@ Commands:
                                        the pull request, and refused if the branch does not merge cleanly;
                                        -head <sha> names the commit you reviewed, and the override is
                                        withdrawn if anything else is pushed before the merge
+  pr adopt|review|status <pr>          adopt (-mode review-only|finish), review (-design) or report on
+                                       (-threads) a pull request grain did not open (see prcmd.go)
   run-now <id>                         start a run of this task next, ahead of the queue and whatever
                                        its state says -- including sending a finished or merging task
                                        back to an agent for more work on its own branch
@@ -349,6 +405,9 @@ Commands:
   failures [-window 7d] [-suspect]     what runs said when they failed for a reason grain could not
                                        name -- the instrument over its own provider-refusal markers
                                        (see failures.go)
+  health                               the counters a layer built on grain keeps in the daemon, by
+                                       section, since it started (-json: all of GET /api/sandboxes;
+                                       see health.go)
   pause [-lift|-set|-resume]           why nothing is dispatching, and stop or resume this deployment (see pause.go)
   pause [-now] <id>                    pause one task in any open state: release what it holds, keep its place
                                        (a running task is given 2m to push and write its handover; -now skips it)
@@ -363,6 +422,17 @@ Commands:
                                        "clear" to empty it (safe: a cached job simply runs again)
   ci faults [-repo r] [-source s]      shared CI faults across branches right now (grain CI and GitHub CI,
                                        labelled by source)
+  ci wait (<run-id> | -pr <url|owner/name#n> | -ref <branch> -repo <owner/name>) [-jobs j1,j2]
+                                       block until a run has a verdict (-timeout, default 30m), with each
+                                       failing job and any shared fault: exit 0 green, 1 red, 5 timed out
+  ci retrigger <run-id> [-jobs j1,j2]  rerun a run's failed jobs (or -jobs) once, bypassing the job cache
+  ci test-history <test> [-repo r] [-limit N]
+                                       pass, fail and flake history of one test across recent runs
+  merge-queue [-repo owner/name]       queued pull requests, the batches and CI testing them, and held
+                                       merge gates (deploy://merge-queue; see mergequeue.go)
+  fs ls|cat|read|grep <uri>            read grain's namespace (ci://, task://, deploy://, config://,
+                                       memory://, src://) over GET /api/fs/, as a sandbox's grain ls,
+                                       read and grep do; read is cat (see fscmd.go)
   declarations check [dir]             read a checkout's own .grain/templates, .grain/suites and
                                        .grain/schedules and print what they declare, or refuse them
                                        and exit non-zero -- no daemon involved, so a repository can
@@ -370,6 +440,9 @@ Commands:
                                        that breaks a declaration (see declcmd.go, docs/declarations.md)
   git-connections                      list the git connections this deployment clones and pushes
                                        with, one "host credential" per line (see deployment.go)
+  git-login [-web|-from-gh|-with-token] [-host h] [-scope s] [-author name]
+                                       delegate your GitHub HTTPS token to this deployment and sign new
+                                       pull requests and comments in your name ("Signed by <Name> (via Grain)")
   git-ambient [-host h] [-kind github|git] [-base-url u] [-proxy u] [-source gh|git|auto] [-if-none]
                                        give this deployment an ambient git connection: this host's own
                                        gh / git login, asked for a token at the moment one is needed
@@ -380,9 +453,16 @@ Commands:
   gcp-key list|get|set|delete          manage this deployment's GCP service-account keys
   capability-servers list|add|remove|enable|disable|bind-secret
                                        manage this deployment's capability servers (mcpServers)
+  hostds list|register|set-owner       the hostd registry: register a hostd with its owner, the identity
+                                       it dials in through IAP as
+  access list|allow|deny               the allowed users and groups list (Settings -> Access): who may
+                                       sign in through IAP or another identity verifier
   broadcast [-all] <message...>        send a notice to all running task agents (or with -all, all active tasks)
-  release approve|reject vX.Y.0        make a pending trunk release official, or drop it -- a person's act;
-                                       an agent is refused
+  release approve|reject|rollback vX.Y.0
+                                       make a pending trunk release official, drop it, or roll a promoted
+                                       release back -- a person's act; an agent is refused
+  release approval-key                 the public key GitHub's promote-release.yml verifies an Inbox approval
+                                       with (repository variable GRAIN_RELEASE_APPROVAL_KEY)
 `
 
 // defaultServerURL is loopback on the port every installer binds the
@@ -450,33 +530,49 @@ func dataDirDefault() string {
 	return readCLIEnv().dataDir
 }
 
+func audienceDefault() string {
+	for _, env := range []string{"GRAIN_AUDIENCE", "GRAIN_TUNNEL_AUDIENCE"} {
+		if v := strings.TrimSpace(os.Getenv(env)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func asUserDefault() string {
+	return strings.TrimSpace(os.Getenv("GRAIN_USER"))
+}
+
 func runCLI(args []string) error {
 	fs := flag.NewFlagSet("grain", flag.ContinueOnError)
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	server := fs.String("server", serverDefault(), "base URL of a running \"grain daemon\"'s UI/API ($"+serverEnvVar+" overrides the default)")
 	token := fs.String("token", "", "auth token for a proxy in front of the daemon ($GRAIN_TOKEN, $GRAIN_AUTH_TOKEN, $GRAIN_ID_TOKEN, $GRAIN_TUNNEL_TOKEN)")
-	audience := fs.String("audience", "", "Google ID token audience for Cloud Run ($GRAIN_AUDIENCE, $GRAIN_TUNNEL_AUDIENCE)")
-	asUser := fs.String("as", "", "identity for request attribution / proxy headers ($GRAIN_USER)")
+	audience := fs.String("audience", audienceDefault(), "Google ID token audience for Cloud Run ($GRAIN_AUDIENCE, $GRAIN_TUNNEL_AUDIENCE)")
+	asUser := fs.String("as", asUserDefault(), "identity for request attribution / proxy headers ($GRAIN_USER)")
 	jsonOutput := fs.Bool("json", false, "print machine-readable JSON instead of a human-readable table")
 	connectTimeout := fs.Duration("connect-timeout", defaultConnectTimeout,
 		"how long to wait to connect to the daemon, and to wait out one that refuses connections (a restart)")
 	callTimeout := fs.Duration("timeout", defaultCallTimeout, "how long one call waits for the daemon to start answering")
+	contextName := fs.String("context", "", "the named context to use ($"+contextEnvVar+"; see `grain context list`)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	_, source := serverSource()
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "server" {
-			source = "-server"
-		}
-	})
-	useCLIEnvDataDir()
-
 	rest := fs.Args()
 	if len(rest) == 0 {
 		fs.Usage()
-		return errors.New("a command is required")
+		return usageErrorf("a command is required")
 	}
+	cmdArgs, err := liftGlobalFlags(fs, rest[0], rest[1:])
+	if err != nil {
+		return err
+	}
+	rest = append(rest[:1:1], cmdArgs...)
+	sel, source, err := resolveTarget(fs, server, *contextName)
+	if err != nil {
+		return err
+	}
+	useCLIEnvDataDir()
 
 	c := ui.NewHTTPClient(*server)
 	c.HTTP = cliHTTPClient(*connectTimeout, *callTimeout)
@@ -492,15 +588,28 @@ func runCLI(args []string) error {
 	}
 	out := &printer{json: *jsonOutput}
 	ctx := context.Background()
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "timeout" {
+			ctx = withWaitLimit(ctx, *callTimeout)
+		}
+	})
 
-	target := cliTarget{server: *server, source: source, connect: *connectTimeout, call: *callTimeout}
-	return explainDaemonError(dispatchCLI(ctx, c, out, fs, rest), target)
+	target := cliTarget{
+		server:      *server,
+		source:      source,
+		tokenSource: useContextCredential(c, sel, tokenSource(*token)),
+		connect:     *connectTimeout,
+		call:        *callTimeout,
+	}
+	return explainDaemonError(dispatchCLI(ctx, c, out, fs, sel, rest), target)
 }
 
 // dispatchCLI runs one task-CLI command against c.
-func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.FlagSet, rest []string) error {
+func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.FlagSet, sel selectedContext, rest []string) error {
 	cmd, cmdArgs := rest[0], rest[1:]
 	switch cmd {
+	case "context", "whoami", "login", "logout":
+		return dispatchSignIn(ctx, c, out, sel, cmd, cmdArgs)
 	case "list":
 		return cmdList(ctx, c, out, cmdArgs)
 	case "get":
@@ -521,6 +630,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdCapability(ctx, c, out, cmdArgs)
 	case "comment":
 		return cmdComment(ctx, c, out, cmdArgs)
+	case "reply", "inbox", "wait", "logs":
+		return externalCommands[cmd](ctx, c, out, cmdArgs)
 	case "close", "delete":
 		return cmdClose(ctx, c, out, cmdArgs)
 	case "reopen":
@@ -539,12 +650,20 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdMetrics(ctx, c, out, cmdArgs)
 	case "failures":
 		return cmdFailures(ctx, c, out, cmdArgs)
+	case "health":
+		return cmdHealth(ctx, c, out, cmdArgs)
 	case "pause":
 		return cmdPause(ctx, c, out, cmdArgs)
 	case "resume":
 		return cmdResume(ctx, c, out, cmdArgs)
 	case "ci":
 		return cmdCI(ctx, c, out, cmdArgs)
+	case "pr":
+		return cmdPR(ctx, c, out, cmdArgs)
+	case "fs":
+		return cmdFS(ctx, c, out, cmdArgs)
+	case "merge-queue":
+		return cmdMergeQueue(ctx, c, out, cmdArgs)
 	case "declarations":
 		return cmdDeclarations(ctx, c, out, cmdArgs)
 	case "settings":
@@ -559,8 +678,14 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdGCPKey(ctx, c, out, cmdArgs)
 	case "capability-servers":
 		return cmdCapabilityServers(ctx, c, out, cmdArgs)
+	case "hostds":
+		return cmdHostds(ctx, c, out, cmdArgs)
+	case "access":
+		return cmdAccess(ctx, c, out, cmdArgs)
 	case "git-ambient":
 		return cmdGitAmbient(ctx, c, out, cmdArgs)
+	case "git-login":
+		return cmdGitLogin(ctx, c, out, cmdArgs)
 	case "git-connections":
 		return cmdGitConnections(ctx, c, out, cmdArgs)
 	case "default-model":
@@ -570,10 +695,15 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 	case "release":
 		return cmdRelease(ctx, c, out, cmdArgs)
 	default:
-		fs.Usage()
-		return fmt.Errorf("unknown command %q", cmd)
+		return unknownCommandError{cmd}
 	}
 }
+
+// unknownCommandError is a command dispatchCLI does not have; Main prints
+// the usage for it (the sandbox CLI's, inside a sandbox).
+type unknownCommandError struct{ cmd string }
+
+func (e unknownCommandError) Error() string { return fmt.Sprintf("unknown command %q", e.cmd) }
 
 // taskID reads the task id positional argument. It is not parsed as a
 // number: ids are decimal today because that is what Store.NewTaskID
@@ -581,7 +711,7 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 // to assume otherwise.
 func taskID(s string) (string, error) {
 	if s == "" {
-		return "", errors.New("a task id is required")
+		return "", usageErrorf("a task id is required")
 	}
 	return s, nil
 }
@@ -595,81 +725,6 @@ func (s *stringList) String() string { return strings.Join(*s, ",") }
 func (s *stringList) Set(v string) error {
 	*s = append(*s, v)
 	return nil
-}
-
-// parseArgs is flag.FlagSet.Parse for a command that takes positional
-// arguments as well as flags, and it exists because Go's own Parse stops
-// at the first word that is not a flag. Every usage line here is written
-// the way people type these commands -- `grain update <id> [flags]`,
-// `grain repo capabilities [-set a,b] <owner/name>` -- and with a plain
-// Parse the first of those forms silently did nothing at all: the id
-// ended parsing, -title was left among the leftover arguments, fs.Visit
-// saw no flag set, and the command sent an empty request and printed the
-// unchanged task as though it had worked. `grain repo capabilities
-// acme/widgets -set self-debug` was the same shape of quiet failure --
-// it printed the repo's capabilities instead of replacing them.
-//
-// So flags are parsed wherever they appear: Parse is called again on
-// what is left after each positional word, which is what a GNU-style
-// getopt does with permutation, and the positional words are returned in
-// the order they were written. A bare "--" still ends the flags, and
-// everything after it is positional verbatim -- which is how a value
-// that starts with a dash is passed to a command that takes one.
-//
-// `grain comment <id> <body...>` deliberately does not use this: its
-// body is free text, and a body word that happens to name a flag has to
-// stay a body word. misplacedFlag below is what that command says
-// instead of guessing.
-func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
-	var terminated []string
-	for i, arg := range args {
-		if arg == "--" {
-			terminated = args[i+1:]
-			args = args[:i]
-			break
-		}
-	}
-	var positional []string
-	for {
-		if err := fs.Parse(args); err != nil {
-			return nil, err
-		}
-		rest := fs.Args()
-		if len(rest) == 0 {
-			break
-		}
-		positional = append(positional, rest[0])
-		args = rest[1:]
-	}
-	return append(positional, terminated...), nil
-}
-
-// first is args[0] or "", so a command missing its one positional
-// argument reports that through taskID's own error rather than panicking
-// on an empty slice -- flag.FlagSet.Arg's behaviour, which parseArgs'
-// callers no longer go through.
-func first(args []string) string {
-	if len(args) == 0 {
-		return ""
-	}
-	return args[0]
-}
-
-// misplacedFlag reports the first word in args that names a flag defined
-// on fs -- a flag written after the positional arguments, where
-// flag.Parse has already stopped looking at them.
-func misplacedFlag(fs *flag.FlagSet, args []string) (string, bool) {
-	for _, arg := range args {
-		name := strings.TrimLeft(arg, "-")
-		if name == arg || name == "" {
-			continue // not a flag-shaped word, or a bare "--"
-		}
-		name, _, _ = strings.Cut(name, "=")
-		if fs.Lookup(name) != nil {
-			return name, true
-		}
-	}
-	return "", false
 }
 
 // printer renders CLI output either as a human-readable table (the

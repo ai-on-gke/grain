@@ -13,17 +13,28 @@
 // limitations under the License.
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import api from "../api.js";
+import AppIcon, { ExternalLinkIcon } from "./AppIcon.jsx";
 import ClChip from "./ClChip.jsx";
 import PresubmitBadge from "./PresubmitBadge.jsx";
 import ReviewBadge from "./ClReview.jsx";
 import { BehindBadge } from "./ClSubmit.jsx";
 import { processPath } from "../paths.js";
 import LinkedNote from "../linkedNote.jsx";
-import { Alert, Button, Chip, Link, Typography } from "@mui/material";
+import {
+  Alert,
+  Button,
+  Chip,
+  Link,
+  TextField,
+  Typography,
+} from "@mui/material";
+import ModelPicker from "./ModelPicker.jsx";
 import { branchRefs } from "../branchRefs.js";
 import {
   STATE_LABELS,
   activityTitle,
+  blockerState,
   completionPhase,
   mergeQueueBatching,
   mergeQueueStall,
@@ -37,6 +48,7 @@ import {
   taskBadgeModifier,
   taskBadgeState,
   isAgentRunning,
+  isTaskMerged,
   isTaskRepairing,
   taskPause,
 } from "../state.js";
@@ -51,6 +63,7 @@ import StateDot from "./StateDot.jsx";
 import TaskChat from "./TaskChat.jsx";
 import Actions from "./detail/Actions.jsx";
 import CapabilityToggles from "./detail/CapabilityToggles.jsx";
+import CommittedContext from "./detail/CommittedContext.jsx";
 import CustomFieldsSection from "./detail/CustomFieldsSection.jsx";
 import Declared from "./detail/Declared.jsx";
 import Dependencies from "./detail/Dependencies.jsx";
@@ -59,6 +72,8 @@ import GrainCIStatus from "./detail/GrainCIStatus.jsx";
 import LiveAttemptTranscript from "./detail/LiveAttemptTranscript.jsx";
 import PendingQuestion from "./detail/PendingQuestion.jsx";
 import PendingSecret from "./detail/PendingSecret.jsx";
+import PendingConfigChange from "./detail/PendingConfigChange.jsx";
+import PendingAccess from "./detail/PendingAccess.jsx";
 import LocalScriptApprovals from "./detail/LocalScriptApprovals.jsx";
 import ReadOnlyRepos from "./detail/ReadOnlyRepos.jsx";
 import SuspendedSession from "./detail/SuspendedSession.jsx";
@@ -299,7 +314,11 @@ export default function DetailOverlay({
                 <Button size="small" onClick={() => setShowPrompt(true)}>
                   Prompt
                 </Button>
-                <Button size="small" onClick={() => setEditing(true)}>
+                <Button
+                  size="small"
+                  startIcon={<AppIcon name="edit" size={15} />}
+                  onClick={() => setEditing(true)}
+                >
                   Edit
                 </Button>
               </div>
@@ -316,6 +335,7 @@ export default function DetailOverlay({
                       rel="noopener noreferrer"
                     >
                       {t.pullRequest}
+                      <ExternalLinkIcon />
                     </Link>
                   </>
                 ) : (
@@ -329,10 +349,38 @@ export default function DetailOverlay({
                         rel="noopener noreferrer"
                       >
                         Internal PR
+                        <ExternalLinkIcon />
                       </Link>
                     </>
                   )
                 )}
+                {/* The pull requests this task is about but does not own
+                    (model.LinkExternalPR): a fork's pull request it was
+                    filed against by head label, or one grain took over.
+                    Outlined chips beside the task's own pull request, so
+                    which contributor PR the task is about is not left to
+                    the description (grain/task-2199). */}
+                {(t.externalPullRequests || []).map((ref) => (
+                  <Fragment key={`external-pr-${ref}`}>
+                    {" "}
+                    ·{" "}
+                    <Chip
+                      className="external-pr-chip"
+                      data-testid="external-pr-chip"
+                      component="a"
+                      href={pullRequestUrl(ref)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      clickable
+                      size="small"
+                      variant="outlined"
+                      color="primary"
+                      label={ref}
+                      title={`${ref}: the pull request this task is about`}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </Fragment>
+                ))}
                 {/* The changelists (CLs) that are this task's work
                     (model.LinkChangelist) sit beside its pull request,
                     each a chip linking to its cl/<number> link, the
@@ -576,6 +624,13 @@ export default function DetailOverlay({
 
           <PendingSecret t={t} act={act} showError={showError} />
 
+          {/* An interactive task shows it in its chat (TaskChat). */}
+          {!t.interactive && <PendingAccess t={t} act={act} />}
+
+          {/* A proposed config change, like a local-script approval, is
+              answered in an interactive task's chat (TaskChat). */}
+          {!t.interactive && <PendingConfigChange t={t} act={act} />}
+
           {/* A run's local-script calls waiting on a person. An
               interactive task shows them in its chat instead (TaskChat),
               which is where the person sitting with it is looking. */}
@@ -679,7 +734,37 @@ export default function DetailOverlay({
                 label={`target: ${t.base}`}
               />
             )}
+            <Chip
+              size="small"
+              variant="outlined"
+              className="chip-priority"
+              data-testid="detail-priority-badge"
+              title="Task priority (default 5; higher numbers run first)"
+              label={`priority: ${t.priority ?? 5}`}
+            />
           </div>
+          {t.blocked &&
+            t.blockedBy?.length > 0 &&
+            t.state !== "running" &&
+            !isTaskMerged(t) && (
+              <div className="detail-blocked">
+                {t.parked ? "Waiting on" : "Blocked on"}{" "}
+                {t.blockedBy.map((id, idx) => {
+                  const dep = byId.get(id) ?? byId.get(String(id));
+                  const state = blockerState(dep);
+                  return (
+                    <Fragment key={id}>
+                      {idx > 0 && ", "}
+                      <TaskLink id={id} onOpenTask={onOpenTask}>
+                        #{id}
+                        {dep?.title ? ` ${dep.title}` : ""}
+                      </TaskLink>
+                      {state && ` (${state})`}
+                    </Fragment>
+                  );
+                })}
+              </div>
+            )}
           {/* And the sentence itself, spelled out under the badge it is
               about, for the same reason the merge queue's note is
               spelled out below: the row has to make do with a chip and a
@@ -752,8 +837,8 @@ export default function DetailOverlay({
 
           <Actions t={t} config={config} act={act} onOpenTask={onOpenTask} />
           {/* What grain checks to close this task, rather than its agent's
-              word (docs/design/durable-tasks.md#DT-4). */}
-          <GoalSection t={t} act={act} />
+              word (design/design/durable-tasks.design.md#DT-4). */}
+          <GoalSection t={t} act={act} config={config} tasks={tasks} />
           {/* The repos this task may change, in one section
               (grain/task-202): the one it is filed against, then the
               others under it, rather than a "Target" pane and a second
@@ -780,7 +865,57 @@ export default function DetailOverlay({
             act={act}
             showError={showError}
           />
+          <CommittedContext t={t} config={config} />
           <Declared t={t} config={config} act={act} />
+          {(t.interactive || t.consoleSession) && (
+            <fieldset>
+              <legend>Session parameters</legend>
+              <ModelPicker
+                config={config}
+                name="sessionModel"
+                value={t.model || ""}
+                onChange={(model) =>
+                  act(
+                    () =>
+                      api(`/api/tasks/${t.id}`, {
+                        method: "PATCH",
+                        body: JSON.stringify({ model }),
+                      }),
+                    t.id,
+                  )
+                }
+                margin="none"
+              />
+              <TextField
+                select
+                name="networkAccess"
+                label="Network access"
+                value={t.networkAccess || ""}
+                onChange={(e) =>
+                  act(
+                    () =>
+                      api(`/api/tasks/${t.id}`, {
+                        method: "PATCH",
+                        body: JSON.stringify({ networkAccess: e.target.value }),
+                      }),
+                    t.id,
+                  )
+                }
+                disabled={!!config?.sandboxShapeIgnored}
+                InputLabelProps={{ shrink: true }}
+                SelectProps={{ native: true }}
+                fullWidth
+                margin="dense"
+                size="small"
+              >
+                <option value="">
+                  {`Deployment default${config && config.networkAccess ? ` (${config.networkAccess === "open" ? "egress" : config.networkAccess})` : ""}`}
+                </option>
+                <option value="open">Egress (outbound internet only)</option>
+                <option value="none">None (this deployment only)</option>
+              </TextField>
+            </fieldset>
+          )}
           <CustomFieldsSection
             t={t}
             config={config}

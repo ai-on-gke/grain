@@ -164,6 +164,29 @@ func TestStateRepoStatusReportsWhereStateLives(t *testing.T) {
 	}
 }
 
+// Before the export loop's first cycle the manager reports a zero
+// SyncedAt. That has to leave syncedAt out of the answer rather than send
+// 0001-01-01, which the file browser printed as "exported 1/1/1, 12:00:00
+// AM" (docs/test-runs/2026-11-03-user-system-settings.md).
+func TestStateRepoStatusOmitsASyncThatHasNotHappened(t *testing.T) {
+	t.Parallel()
+	fake := &fakeStateRepo{status: ui.StateRepoStatus{Branch: "main", Head: "abc123"}}
+	rec := do(t, stateRepoServer(t, fake), http.MethodGet, "/api/state-repo", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "syncedAt") {
+		t.Fatalf("a cycle that has not run was reported: %s", rec.Body)
+	}
+
+	at := time.Date(2026, 11, 3, 3, 0, 0, 0, time.UTC)
+	fake.status.SyncedAt = at
+	rec = do(t, stateRepoServer(t, fake), http.MethodGet, "/api/state-repo", "")
+	if got := decode[ui.StateRepoStatus](t, rec); !got.SyncedAt.Equal(at) {
+		t.Fatalf("syncedAt = %v, want %v: %s", got.SyncedAt, at, rec.Body)
+	}
+}
+
 func TestStateRepoIsUnavailableWithoutOne(t *testing.T) {
 	t.Parallel()
 	srv, client := testServer(t)
@@ -360,17 +383,26 @@ func TestExternalConfigRepoRefusesSettingsMutationsAndExposesMode(t *testing.T) 
 		t.Fatalf("POST /api/state-repo/remote status %d: %s", rec.Code, rec.Body)
 	}
 
-	// Once back in internal mode, POST /api/settings writes a bootstrap
-	// field directly, and refuses any other with the edit to make in
-	// grain/config instead.
+	// Once back in internal mode (settingsLocked == false by default),
+	// POST /api/settings writes both bootstrap and non-bootstrap fields
+	// directly; when settingsLocked is enabled, it refuses non-bootstrap
+	// fields with the edit to make in grain/config instead.
 	rec = do(t, srv, http.MethodPost, "/api/settings", `{"maxWorkers":3}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("POST /api/settings (bootstrap) in internal mode status %d: %s", rec.Code, rec.Body)
 	}
+	rec = do(t, srv, http.MethodPost, "/api/settings", `{"environmentName":"staging"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/settings (non-bootstrap, unlocked) in internal mode status %d: %s", rec.Code, rec.Body)
+	}
+	rec = do(t, srv, http.MethodPost, "/api/settings", `{"settingsLocked":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/settings (lock) in internal mode status %d: %s", rec.Code, rec.Body)
+	}
 	rec = do(t, srv, http.MethodPost, "/api/settings", `{"environmentName":"prod"}`)
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"repo":"grain/config"`) ||
 		!strings.Contains(rec.Body.String(), `+    \"environment_name\": \"prod\"`) {
-		t.Fatalf("POST /api/settings (non-bootstrap) in internal mode status %d: %s", rec.Code, rec.Body)
+		t.Fatalf("POST /api/settings (non-bootstrap, locked) in internal mode status %d: %s", rec.Code, rec.Body)
 	}
 }
 

@@ -152,6 +152,7 @@ type Schedule struct {
 	// where "ack" (or an explicit "close") is most often wanted. Empty,
 	// the default, means close.
 	NothingNeededAction NothingNeededAction
+	KeepRunning         bool
 
 	// Model is the model every task this schedule files asks for
 	// (Task.Model, docs/connections-and-models.md). Empty means this
@@ -286,11 +287,12 @@ func (s Schedule) Location() *time.Location {
 
 // Recurrence and WorkflowReviewPolicy moved to pkg/workflows with the
 // workflow parser that produces them from a cron line, so that it does
-// not import this package (docs/design/grit-split.md, GS-2).
+// not import this package (design/design/grit-split.design.md, GS-2).
 type (
 	RecurrenceKind           = workflows.RecurrenceKind
 	Recurrence               = workflows.Recurrence
 	GitHubWorkflowRunTrigger = workflows.GitHubWorkflowRunTrigger
+	GitRefTrigger            = workflows.GitRefTrigger
 	WorkflowReviewPolicy     = workflows.ReviewPolicy
 )
 
@@ -301,6 +303,7 @@ const (
 	RecurrenceWeekly            = workflows.RecurrenceWeekly
 	RecurrenceMonthly           = workflows.RecurrenceMonthly
 	RecurrenceGitHubWorkflowRun = workflows.RecurrenceGitHubWorkflowRun
+	RecurrenceGitRef            = workflows.RecurrenceGitRef
 	MaxEveryNHours              = workflows.MaxEveryNHours
 	MinEveryNMinutes            = workflows.MinEveryNMinutes
 	MaxEveryNMinutes            = workflows.MaxEveryNMinutes
@@ -309,5 +312,11 @@ const (
 	WorkflowReviewAlways    = workflows.ReviewAlways
 )
 
+// RecurrenceKinds re-exports workflows.RecurrenceKinds: every kind.
+var RecurrenceKinds = workflows.RecurrenceKinds
+
 // ParseStoredRecurrenceKind re-exports workflows.ParseStoredRecurrenceKind.
 var ParseStoredRecurrenceKind = workflows.ParseStoredRecurrenceKind
+
+// ParseStoredGitRefTrigger re-exports workflows.ParseStoredGitRefTrigger.
+var ParseStoredGitRefTrigger = workflows.ParseStoredGitRefTrigger

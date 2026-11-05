@@ -20,12 +20,14 @@ import (
 	"fmt"
 	"log"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/cifault"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
@@ -60,6 +62,11 @@ type Deps struct {
 	// CapabilityPasses holds the passes minted for running attempts;
 	// nil shares one holder across the process.
 	CapabilityPasses *CapabilityPasses
+	// ApprovalCallback, when set, mints a task-scoped approval callback
+	// URL and bearer token for an attempt's capability grants (host-script
+	// approve: true) and returns a revoke function called when the pass is
+	// released.
+	ApprovalCallback func(taskID string, deadline time.Time) (protocol.ApprovalCallback, func(), error)
 	Store            *model.Store
 	Client           github.Client
 	Sandboxes        Sandboxes
@@ -102,7 +109,13 @@ type Deps struct {
 	// and rewriting the choice it hands Framework -- and it deliberately
 	// does not do so today (docs/connections-and-models.md).
 	ModelAvailability func(ctx context.Context, choice AgentChoice) string
-	Config            Config
+	// CapabilityHostd is the grain hostd run: host capability servers
+	// are started through where CapabilityServers does not route them
+	// per task (TaskCapabilityServers), recorded on each capability
+	// audit record (model.CapabilityAuditRecord.Hostd). "" where they
+	// have none.
+	CapabilityHostd string
+	Config          Config
 	// RequireTeamGitCredential holds back every task whose team has no
 	// GitHub credential for its target (model.Store.TaskGitCredential):
 	// its sandbox could neither clone nor push, since the git proxy has
@@ -310,6 +323,10 @@ type Deps struct {
 	// RepoConfig.Declarations decides that, per repo, and a deployment
 	// where no repository has it on spends one store read per cycle here.
 	Declarations DeclarationSource
+	// Refs, when non-nil, is where a git_ref schedule's watched ref is
+	// read from (reconcileGitRefSchedules): the daemon's own `git
+	// ls-remote`. nil makes that reconciler a no-op.
+	Refs RefSource
 	// StandingSandboxes, when non-nil, supervises long-standing sandboxes
 	// defined in grain/config (grain/task-126): starting them on boot,
 	// restarting them on failure, and keeping them running.
@@ -497,6 +514,10 @@ func Reconcilers() []Reconciler {
 		{Name: "standing-sandboxes", Reconcile: reconcileStandingSandboxes},
 		{Name: "persistent-sandboxes", Reconcile: reconcilePersistentSandboxes},
 		{Name: "schedule", Reconcile: reconcileSchedule},
+		// Beside "schedule": the schedules that fire when another
+		// repository's ref moves rather than when a clock comes round
+		// (reconcileGitRefSchedules).
+		{Name: "git-ref-schedules", Reconcile: reconcileGitRefSchedules},
 		// Immediately after "schedule", so that a workflow schedule which
 		// came due on this tick has its CI run started on this tick
 		// rather than on the next one -- and so that the run finishing
@@ -527,6 +548,7 @@ func Reconcilers() []Reconciler {
 		// Before "scheduled-upgrade", so that the upgrade it schedules is
 		// held for (or, on an idle deployment, started) this same tick.
 		{Name: "auto-upgrade", Reconcile: reconcileAutoUpgrade},
+		{Name: "release-upgrade", Reconcile: reconcileReleaseUpgrade},
 		{Name: "scheduled-upgrade", Reconcile: reconcileScheduledUpgrade},
 		{Name: "upgrade-check", Reconcile: reconcileUpgradeCheck},
 		{Name: "target-repos", Reconcile: reconcileTargetRepos},
@@ -555,6 +577,10 @@ func Reconcilers() []Reconciler {
 		// second run at the same tip, on a row of its own that the queue
 		// does not read (reconcileBaseBranchRelease).
 		{Name: "base-branch-release", Reconcile: reconcileBaseBranchRelease},
+		// And the release that waits for a person on a repository that
+		// releases from GitHub Actions: its -pending tag, read outbound,
+		// raises release.pending in the Inbox (releasepending.go).
+		{Name: "release-pending", Reconcile: reconcileReleasePending},
 		// And beside those, a repository's own `on: merge` path triggers:
 		// one diff of whatever landed since the branch was last diffed
 		// (pathtrigger.go).
@@ -568,6 +594,9 @@ func Reconcilers() []Reconciler {
 		{Name: "branches", Reconcile: reconcileBranches},
 		{Name: "qualifications", Reconcile: reconcileQualifications},
 		{Name: "suites", Reconcile: reconcileSuites},
+		// Right after it, so a qualification item that finished this tick
+		// is judged on this tick (releasequalification.go).
+		{Name: "release-qualification", Reconcile: reconcileReleaseQualification},
 		{Name: "sandbox-reconciliation", Reconcile: reconcileSandboxes},
 	}
 }
@@ -604,7 +633,7 @@ type AgentChoice struct {
 	// Durable is model.Task.IsDurable: the pool places the run on a
 	// framework this daemon can adopt across its own restart when it has
 	// one, ahead of the rotation's order but behind a pinned model or
-	// connection (docs/design/durable-tasks.md#DT-1, "Adoption across
+	// connection (design/design/durable-tasks.design.md#DT-1, "Adoption across
 	// restarts and upgrades").
 	Durable bool
 	// AvoidModels are models this task's latest runs were suspended off
@@ -612,6 +641,15 @@ type AgentChoice struct {
 	// rotation tries them after the rest of its default list. A model the
 	// task chose itself is used regardless.
 	AvoidModels []string
+	// PreferFramework and PreferModel are the framework and model an
+	// unpinned interactive (or suspended-session) task's previous run used.
+	// When set, the pool keeps the task on that model/framework so warm CLI
+	// sessions (--resume) and prompt caches survive across turns, falling
+	// back to the rest of the rotation only when unavailable or paused.
+	PreferFramework string
+	PreferModel     string
+	// TaskID is the task the run is for.
+	TaskID string
 }
 
 // ChoiceFor is the AgentChoice task's own fields make: the one runOne
@@ -624,6 +662,7 @@ func ChoiceFor(task model.Task) AgentChoice {
 		Model:     task.Model,
 		Priority:  task.HasPriorityDispatch(),
 		Durable:   task.IsDurable(),
+		TaskID:    task.ID,
 	}
 }
 
@@ -785,6 +824,7 @@ func RunCycle(ctx context.Context, deps Deps, now time.Time) error {
 			deps.Config.TimeZone = mc.TimeZone
 			if deps.Config.SessionSandboxIdleTTL == 0 {
 				deps.Config.SessionSandboxIdleTTL = mc.SessionSandboxIdleTTLOr()
+				deps.Config.sessionIdleTTLStored = true
 			}
 		}
 	}
@@ -822,6 +862,77 @@ func RunCycle(ctx context.Context, deps Deps, now time.Time) error {
 		})
 		if r.Name == dispatchReconciler {
 			timing.DispatchWait = wait
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// RunDispatchCycle runs only the local store-backed reconcilers needed to
+// admit and dispatch ready tasks (task pauses, pipeline pause, target repos,
+// and dispatch), bypassing slow GitHub-bound reconcilers so interactive
+// session creations and human replies dispatch within milliseconds of a wake.
+func RunDispatchCycle(ctx context.Context, deps Deps, now time.Time) error {
+	if deps.DiskSpace != nil {
+		deps.Budget.Disk = deps.DiskSpace()
+	}
+	if deps.Store != nil {
+		if mc, err := deps.Store.GetConfig(ctx); err != nil {
+			log.Printf("orchestrator: reading stored configuration: %v", err)
+		} else if mc != nil {
+			deps.Config.MaxMergesPerRepo = mc.MaxMergesPerRepo
+			if !deps.AgentShape.IsZero() {
+				if mc.SandboxCPUs > 0 {
+					deps.AgentShape.CPUs = mc.SandboxCPUs
+				}
+				if mc.SandboxMemoryMB > 0 {
+					deps.AgentShape.MemoryMB = mc.SandboxMemoryMB
+				}
+				if mc.SandboxDiskGB > 0 {
+					deps.AgentShape.DiskGB = mc.SandboxDiskGB
+				}
+			}
+			if deps.Budget.Known() {
+				if mc.SandboxMemoryReserveMB > 0 {
+					deps.Budget.ReserveMemoryMB = mc.SandboxMemoryReserveMB
+				}
+				if mc.SandboxCPUOvercommit > 0 {
+					deps.Budget.CPUOvercommit = mc.SandboxCPUOvercommit
+				}
+				if mc.SandboxMemoryOvercommit > 0 {
+					deps.Budget.MemoryOvercommit = mc.SandboxMemoryOvercommit
+				}
+				if mc.SandboxDiskOvercommit > 0 {
+					deps.Budget.DiskOvercommit = mc.SandboxDiskOvercommit
+				}
+				if !deps.Budget.RepairReserve.IsZero() && !deps.AgentShape.IsZero() {
+					deps.Budget.RepairReserve = deps.AgentShape
+				}
+			}
+			deps.Config.MaxAgentTurns = mc.MaxAgentTurns
+			deps.Config.PromptExtension = mc.PromptExtension
+			deps.Config.TimeZone = mc.TimeZone
+			if deps.Config.SessionSandboxIdleTTL == 0 {
+				deps.Config.SessionSandboxIdleTTL = mc.SessionSandboxIdleTTLOr()
+				deps.Config.sessionIdleTTLStored = true
+			}
+		}
+	}
+	fast := []Reconciler{
+		{Name: "task-pauses", Reconcile: reconcileTaskPauses},
+		{Name: "pause", Reconcile: reconcilePipelinePause},
+		{Name: "target-repos", Reconcile: reconcileTargetRepos},
+		{Name: dispatchReconciler, Reconcile: reconcileDispatch},
+	}
+	var errs []error
+	for _, r := range fast {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err)
+			break
+		}
+		rdeps := deps
+		rdeps.Client = github.WithCaller(deps.Client, r.Name)
+		if err := recoverReconcile(ctx, r, rdeps, now); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", r.Name, err))
 		}
 	}
 	return errors.Join(errs...)
@@ -969,7 +1080,28 @@ func reconcileSuites(ctx context.Context, deps Deps, now time.Time) error {
 // Run and the store calls underneath it all already respect it, so there
 // is no separate ctx.Err() check to make before launching them the way
 // the old sequential loop needed one before each iteration.
+var dispatchLocks sync.Map
+
+func storeDispatchMutex(store *model.Store) *sync.Mutex {
+	if store == nil {
+		return &sync.Mutex{}
+	}
+	v, _ := dispatchLocks.LoadOrStore(store, &sync.Mutex{})
+	return v.(*sync.Mutex)
+}
+
 func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
+	dispatchMu := storeDispatchMutex(deps.Store)
+	dispatchMu.Lock()
+	unlocked := false
+	unlockDispatch := func() {
+		if !unlocked {
+			unlocked = true
+			dispatchMu.Unlock()
+		}
+	}
+	defer unlockDispatch()
+	settleStoppedKeepRunningTasks(ctx, deps.Store, now)
 	// Nothing is dispatched onto a credential that has no budget left: a
 	// task started now would spend a sandbox and an attempt reaching the
 	// same refusal the run that closed that gate already reached
@@ -1063,6 +1195,10 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 	if held := catalogueHold(ctx, deps); held != nil {
 		holds = append(holds, held)
 	}
+	holds = append(holds, changeTargetHold(ctx, deps))
+	if held := untilMergedParkHold(ctx, deps, now); held != nil {
+		holds = append(holds, held)
+	}
 	if len(holds) > 0 {
 		opts = append(opts, dispatch.Hold(func(taskID string) string {
 			for _, held := range holds {
@@ -1105,7 +1241,14 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 	// even when no scarce capability providers are configured: a missing
 	// grain-ci task grant is itself the condition admission must expose.
 	opts = append(opts, dispatch.Preempt(preempter(deps, now)))
-	opts = append(opts, dispatch.Admit(capabilityAdmitter(deps, grantAdmitterWithFrameworks(ctx, deps, prepared, frameworks, now))))
+	opts = append(opts, dispatch.Admit(capabilityAdmitterFor(deps, grantAdmitterWithFrameworks(ctx, deps, prepared, frameworks, now),
+		func(runID string) string {
+			if connection, ok := frameworks[runID].framework.(CredentialConnection); ok {
+				c, _ := connection.CredentialConnection()
+				return c
+			}
+			return ""
+		})))
 	limits := model.Limits{
 		Workers: deps.MaxWorkers, Mergers: deps.MaxMergers, CIJobs: deps.MaxCIJobs,
 		Durable: deps.Config.maxDurableRuns(),
@@ -1155,7 +1298,11 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 			delete(prepared, d.RunID)
 			fw := frameworks[d.RunID]
 			delete(frameworks, d.RunID)
-			deps.Runs.Go(d.RunID, d.TaskID, func() {
+			var afterDone func()
+			if deps.Ledger != nil {
+				afterDone = deps.Ledger.Wake
+			}
+			deps.Runs.GoAfter(d.RunID, d.TaskID, func() {
 				// The sandbox this run holds stops being charged under RunID
 				// when the run is over; if the run kept its session sandbox
 				// warm between turns, park that sandbox as an idle entry in
@@ -1168,7 +1315,7 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 				if err := recoverRunOneWithFramework(ctx, deps, d, reserved, fw, now); err != nil {
 					log.Printf("orchestrator: run %s (task %s): %v", d.RunID, d.TaskID, err)
 				}
-			})
+			}, afterDone)
 		}
 		for _, f := range frameworks {
 			releaseFramework(f.framework)
@@ -1208,6 +1355,7 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 	for _, f := range frameworks {
 		releaseFramework(f.framework)
 	}
+	unlockDispatch()
 	wg.Wait()
 	return errors.Join(errs...)
 }
@@ -1267,6 +1415,18 @@ func releaseFramework(f agent.Framework) {
 	}
 }
 
+// The gates grantAdmitter names on a refusal (dispatch.Admission.Gate),
+// so a log line saying a candidate was refused says which one did.
+const (
+	// admissionGateModel is Deps.ModelAvailability: no connection that
+	// could serve the task's model can take it now -- every one is paused
+	// after a usage limit, disabled, draining or (for ordinary work)
+	// busy.
+	admissionGateModel = "model availability"
+	// admissionGatePolicy is local policy (checkPolicy).
+	admissionGatePolicy = "local policy"
+)
+
 // grantAdmitter reserves finite capability resources before dispatch records a
 // run. A full pool declines only this candidate, leaving Cycle free to fill the
 // same worker capacity with later tasks that do not need it.
@@ -1302,7 +1462,7 @@ func grantAdmitterWithFrameworks(ctx context.Context, deps Deps, prepared map[st
 					}); setErr != nil {
 						return dispatch.Admission{}, setErr
 					}
-					return dispatch.Admission{}, nil
+					return dispatch.Admission{Gate: admissionGateModel, Reason: reason}, nil
 				}
 			}
 			frameworks[candidate.RunID] = reservedFramework{
@@ -1363,7 +1523,7 @@ func grantAdmitterWithFrameworks(ctx context.Context, deps Deps, prepared map[st
 				}); err != nil {
 					return dispatch.Admission{}, err
 				}
-				return dispatch.Admission{}, nil
+				return dispatch.Admission{Gate: admissionGateModel, Reason: reason}, nil
 			}
 		}
 		// Every path out of here that admits the candidate has decided
@@ -1379,7 +1539,7 @@ func grantAdmitterWithFrameworks(ctx context.Context, deps Deps, prepared map[st
 			if err := deps.Store.UpdateTask(callCtx, task.ID, func(t *model.Task) error {
 				if !grainci.Granted(t.Grants) {
 					t.Grants = append(t.Grants, model.Grant{
-						Capability: grainci.CapabilityName,
+						Capability: grainci.Grant,
 						Via:        model.GrantByDefault,
 					})
 				}
@@ -1388,7 +1548,7 @@ func grantAdmitterWithFrameworks(ctx context.Context, deps Deps, prepared map[st
 				return dispatch.Admission{}, err
 			}
 			task.Grants = append(task.Grants, model.Grant{
-				Capability: grainci.CapabilityName,
+				Capability: grainci.Grant,
 				Via:        model.GrantByDefault,
 			})
 			_ = clearAdmissionWait(callCtx, deps.Store, task.ID)
@@ -1401,7 +1561,7 @@ func grantAdmitterWithFrameworks(ctx context.Context, deps Deps, prepared map[st
 				if setErr := recordPolicyRefusal(callCtx, deps, *task, policyStageAdmission, err, at); setErr != nil {
 					return dispatch.Admission{}, setErr
 				}
-				return dispatch.Admission{}, nil
+				return dispatch.Admission{Gate: admissionGatePolicy, Reason: err.Error()}, nil
 			}
 		}
 		if deps.Config.Capabilities == nil || !hasScarceGrant(deps.Config.Capabilities, *task) {
@@ -1436,7 +1596,7 @@ func grantAdmitterWithFrameworks(ctx context.Context, deps Deps, prepared map[st
 			}); setErr != nil {
 				return dispatch.Admission{}, setErr
 			}
-			return dispatch.Admission{}, nil
+			return dispatch.Admission{Gate: "capability " + capability, Reason: "exhausted: " + resource}, nil
 		}
 		if err != nil {
 			// Preserve the established behavior for configuration and provider
@@ -1677,9 +1837,57 @@ func pendingBranchHold(ctx context.Context, deps Deps) func(string) string {
 	}
 }
 
+// untilMergedParkHold keeps back a task parked until "merged" on a task
+// that closed with its pull request still open, which task_ready alone
+// would let go at the close (model.Store.UntilMergedParkWaitsOn): that
+// pull request can still be merged by hand, syncClosedPullRequests
+// records it when it is, and the wait was for the merge, not the close.
+// The hold ends when the pull request merges or closes, or once grain
+// stops reading it (closedPullRequestWindow) -- and at once for a task a
+// person asked to run now, or that no longer depends on the target. nil
+// when no closed task has an unsettled pull request, which is every
+// ordinary cycle: one query, and nothing read per task.
+func untilMergedParkHold(ctx context.Context, deps Deps, now time.Time) func(string) string {
+	links, err := deps.Store.ClosedUnsettledPullRequestLinks(ctx, now.Add(-closedPullRequestWindow))
+	if err != nil {
+		log.Printf("orchestrator: reading closed tasks' pull requests to hold parks until merged: %v", err)
+		return nil
+	}
+	if len(links) == 0 {
+		return nil
+	}
+	unsettled := map[string]bool{}
+	for _, l := range links {
+		unsettled[l.TaskID] = true
+	}
+	return func(taskID string) string {
+		task, err := deps.Store.GetTask(ctx, taskID)
+		if err != nil || task == nil {
+			return ""
+		}
+		if !slices.ContainsFunc(task.Links, func(l model.Link) bool {
+			return l.Kind == model.LinkDependsOn && unsettled[l.Target]
+		}) {
+			return ""
+		}
+		if obs, err := deps.Store.GetObservation(ctx, taskID); err == nil && obs != nil && obs.RunNowAt != nil {
+			return ""
+		}
+		target, err := deps.Store.UntilMergedParkWaitsOn(ctx, taskID, now)
+		if err != nil {
+			log.Printf("orchestrator: reading %s's park until merged: %v", taskID, err)
+			return ""
+		}
+		if target == "" {
+			return ""
+		}
+		return fmt.Sprintf("parked until task %s merges: it closed with its pull request still open", target)
+	}
+}
+
 // catalogueHold re-judges a queued task's grants against the capability
 // catalogue (settings/capabilities.yml) before anything is minted or a
-// sandbox started for it (docs/design/config-repo-settings.md §3.4): a
+// sandbox started for it (design/design/config-repo-settings.design.md §3.4): a
 // config change merged after the task was filed may have revoked a
 // capability or narrowed who may hold it, and the task waits, saying
 // which grant and why (model.CatalogueWaitCapability), rather than
@@ -1728,6 +1936,59 @@ func catalogueHold(ctx context.Context, deps Deps) func(string) string {
 			}
 		}
 		return ""
+	}
+}
+
+// changeTargetHold holds a queued task whose change target refuses it as it
+// stands (dispatchChangeTargetRefusal) before a sandbox is started for it.
+// runDispatch asks the same question, but only once the run exists, and a
+// refusal there is a setup failure: one nothing on the task will ever
+// change, which a kept run-now request then put back at the head of the
+// queue every cycle (task 1860). Held here, the task waits, saying why
+// on its row (model.ChangeTargetWaitCapability), and is told once in its
+// conversation what a person has to change; the first cycle after they
+// change it dispatches it and clears the wait.
+func changeTargetHold(ctx context.Context, deps Deps) func(string) string {
+	return func(taskID string) string {
+		task, err := deps.Store.GetTask(ctx, taskID)
+		if err != nil || task == nil {
+			// Not this hold's question to fail closed on: a task with no
+			// change target is the usual case, and the run's own check
+			// still refuses one that slips past.
+			return ""
+		}
+		if task.ChangeTarget == nil {
+			return ""
+		}
+		wait, werr := deps.Store.GrantWaitOf(ctx, taskID)
+		refusal := dispatchChangeTargetRefusal(*task)
+		if refusal == nil {
+			if werr == nil && wait != nil && wait.Capability == model.ChangeTargetWaitCapability {
+				if err := deps.Store.ClearGrantWait(ctx, taskID); err != nil {
+					log.Printf("orchestrator: clearing %s's change target wait: %v", taskID, err)
+				}
+			}
+			return ""
+		}
+		reason := refusal.Error()
+		if werr != nil || wait == nil || wait.Capability != model.ChangeTargetWaitCapability || wait.Resource != reason {
+			if err := deps.Store.SetGrantWait(ctx, model.GrantWait{
+				TaskID: taskID, Capability: model.ChangeTargetWaitCapability, Resource: reason, WaitingAt: deps.Config.now(),
+			}); err != nil {
+				log.Printf("orchestrator: recording why %s's change target holds it: %v", taskID, err)
+			}
+			if _, err := deps.Store.AddComment(ctx, model.Comment{
+				TaskID: taskID,
+				Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
+				Body: fmt.Sprintf("grain is not dispatching this task: %s. Nothing a run does can change "+
+					"that, so it waits until somebody edits the task; it is dispatched again on the "+
+					"first cycle after that.", reason),
+				CreatedAt: deps.Config.now(),
+			}); err != nil {
+				log.Printf("orchestrator: telling %s why its change target holds it: %v", taskID, err)
+			}
+		}
+		return "held by its change target: " + reason
 	}
 }
 
@@ -2020,6 +2281,40 @@ func finishPanickedRun(ctx context.Context, store *model.Store, runID string, no
 	return nil
 }
 
+func runQueuedAt(ctx context.Context, store *model.Store, task model.Task, attempt int, startedAt time.Time) time.Time {
+	var q time.Time
+	if task.CreatedAt != nil {
+		q = *task.CreatedAt
+	}
+	if task.ApprovedAt != nil && task.ApprovedAt.After(q) {
+		q = *task.ApprovedAt
+	}
+	if store != nil {
+		if attempt > 1 {
+			if runs, err := store.Runs(ctx, task.ID); err == nil {
+				for _, r := range runs {
+					if r.Attempt < attempt && r.FinishedAt != nil && !r.FinishedAt.After(startedAt) && r.FinishedAt.After(q) {
+						q = *r.FinishedAt
+					}
+				}
+			}
+		}
+		if attempt > 1 || task.Interactive {
+			if comments, err := store.Comments(ctx, task.ID); err == nil {
+				for _, c := range comments {
+					if c.Author.Actor.Kind != model.PrincipalAgent && !c.CreatedAt.After(startedAt) && c.CreatedAt.After(q) {
+						q = c.CreatedAt
+					}
+				}
+			}
+		}
+	}
+	if q.IsZero() || q.After(startedAt) {
+		q = startedAt
+	}
+	return q
+}
+
 func runOne(ctx context.Context, deps Deps, d dispatch.Dispatch, prepared []model.Materialized, now time.Time) error {
 	return runOneWithFramework(ctx, deps, d, prepared, reservedFramework{}, now)
 }
@@ -2155,6 +2450,12 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	if task == nil {
 		return fmt.Errorf("orchestrator: dispatch.Cycle dispatched unknown task %s", d.TaskID)
 	}
+	if deps.Store != nil {
+		queuedAt := runQueuedAt(ctx, deps.Store, *task, d.Attempt, now)
+		if rerr := deps.Store.RecordRunStartup(ctx, model.RunStartup{RunID: d.RunID, QueuedAt: &queuedAt}); rerr != nil {
+			log.Printf("orchestrator: recording run %s startup queued_at: %v", d.RunID, rerr)
+		}
+	}
 
 	// The local policy is checked once more here, against the task as
 	// this run read it, before anything is built or cloned: the dispatch
@@ -2237,11 +2538,15 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// name recorded is the sandbox this run actually uses.
 	var warmSandbox *warmSessionSandbox
 	var sandboxReclaimed bool
+	clearKeepRunningRequeued(deps.Store, task.ID)
 	sandboxKey := sessionSandboxKey(shape, *task, prepared)
-	if task.Interactive {
-		warmSandbox, sandboxReclaimed = claimWarmSessionSandbox(deps, task.ID, now)
+	if task.Interactive || task.KeepRunning {
+		warmSandbox, sandboxReclaimed = claimWarmSessionSandbox(deps, task.ID, d.RunID, now)
+		if warmSandbox != nil {
+			defer unholdSessionSandbox(deps.Store, warmSandbox.SandboxID, d.RunID)
+		}
 		if warmSandbox != nil && warmSandbox.Key != sandboxKey {
-			log.Printf("orchestrator: run %s (task %s): not reusing warm sandbox %s: its shape, target or grants changed",
+			log.Printf("orchestrator: run %s (task %s): not reusing warm sandbox %s: its shape, target, repos or grants changed",
 				d.RunID, d.TaskID, warmSandbox.SandboxID)
 			releaseWarmSandboxEntry(context.WithoutCancel(ctx), warmSandbox)
 			warmSandbox, sandboxReclaimed = nil, true
@@ -2249,6 +2554,8 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		if !sandboxReclaimed && warmSandbox == nil && d.Attempt > 1 {
 			sandboxReclaimed = true
 		}
+	} else {
+		sandboxReclaimed = discardWarmSessionSandbox(context.WithoutCancel(ctx), deps, task.ID)
 	}
 	sandboxReused := warmSandbox != nil
 	sandboxName := d.RunID
@@ -2260,6 +2567,11 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 			releaseWarmSandboxEntry(context.WithoutCancel(ctx), warmSandbox)
 		}
 		return fmt.Errorf("orchestrator: recording run %s's sandbox: %w", d.RunID, err)
+	}
+	if task.Interactive {
+		if kerr := deps.Store.SetRunSandboxKeys(ctx, d.RunID, sandboxKey, sessionGrantsKey(*task)); kerr != nil {
+			log.Printf("orchestrator: recording run %s's sandbox keys: %v", d.RunID, kerr)
+		}
 	}
 	var sandbox Sandbox
 	var sandboxCounted func(context.Context)
@@ -2282,6 +2594,15 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		sandbox, sandboxCounted, err = meter.Acquire(ctx, deps.Sandboxes, model.SandboxKindAgent, sandboxName, shape)
 		if err != nil {
 			return fmt.Errorf("orchestrator: acquiring a sandbox for run %s: %w", d.RunID, err)
+		}
+	}
+	acquiredAt := deps.Config.now()
+	if acquiredAt.Before(now) {
+		acquiredAt = now
+	}
+	if deps.Store != nil {
+		if rerr := deps.Store.SetRunSandboxAcquired(ctx, d.RunID, acquiredAt); rerr != nil {
+			log.Printf("orchestrator: recording run %s sandbox_acquired_at: %v", d.RunID, rerr)
 		}
 	}
 
@@ -2383,7 +2704,9 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// and unlike them it never fails a dispatch: a sandbox that could not
 	// be pointed at the cache downloads from the internet, as every
 	// sandbox did before the cache existed (applyPackageCache).
-	applyPackageCache(ctx, deps.Config, sandbox, d.TaskID)
+	if !sandboxReused {
+		applyPackageCache(withSkipGoCacheProgBuild(ctx, task.Target == nil), deps.Config, sandbox, d.TaskID)
+	}
 
 	tools, err := sandbox.Tools(ctx)
 	if err != nil {
@@ -2566,7 +2889,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		log.Printf("orchestrator: run %s: renewing its capability grants for its extended budget: %v", d.RunID, err)
 	}
 	// The pass admission minted, carried into the sandbox before anything
-	// runs in it (docs/capabilities-spec.md §5): ports, placements, then
+	// runs in it (design/spec/capabilities/capabilities.spec.md §5): ports, placements, then
 	// setup commands. A failure aborts the attempt here, as a setup
 	// failure -- the guard above finishes the row, the deferred release
 	// tears the sandbox down, and the dispatch goroutine releases the
@@ -2574,7 +2897,8 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// forwards close when this run ends, before the pass is released.
 	if pass, deadline := deps.capabilityPasses().held(d.RunID); pass != nil {
 		notes.say(ctx, capabilityGrantsNote)
-		mat, err := materializePass(ctx, cfg, sandbox, pass, deadline, deps.capabilityService)
+		passDeps := deps.capabilityPasses().heldDeps(d.RunID, deps)
+		mat, err := materializePass(ctx, cfg, sandbox, pass, deadline, passDeps.capabilityService)
 		if err == nil {
 			// Then every grant's mcp_endpoint proxied, handshaken and
 			// named, and its prompt_section rendered (§5.2, §5.4), each
@@ -2582,7 +2906,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 			if deps.Store != nil {
 				mat.narrator = mcp.NewCapabilityNarrator(taskActivityReporter{store: deps.Store, taskID: d.TaskID, now: cfg.now})
 			}
-			if err = mat.wireEndpoints(ctx, deps.capabilityDataPlane); err != nil {
+			if err = mat.wireEndpoints(ctx, passDeps.capabilityDataPlane); err != nil {
 				mat.Close()
 			}
 		}
@@ -2625,8 +2949,8 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	}
 
 	afterErr := afterAgentRun(ctx, deps, *task, d.RunID, result, runErr, preRunBranchSHA, preRunBranchSHA, now)
-	if afterErr == nil && runErr == nil && task.Interactive && deps.Store != nil {
-		cleanupCtx := context.WithoutCancel(ctx)
+	cleanupCtx := context.WithoutCancel(ctx)
+	if afterErr == nil && runErr == nil && deps.Store != nil && (task.Interactive || taskKeepRunning(cleanupCtx, deps.Store, *task)) {
 		finishNow := now
 		if deps.Config.Now != nil {
 			finishNow = deps.Config.Now()
@@ -2635,8 +2959,11 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 			if st, serr := deps.Store.State(cleanupCtx, task.ID); serr == nil && st != "" &&
 				st != model.StateClosed && st != model.StateFailed &&
 				st != model.StateCompleted && st != model.StateAwaitingSubmit {
-				parkWarmSessionSandbox(deps, task.ID, sandboxName, sandboxKey, sessionGrantsKey(*task), sandbox, sandboxCounted, cfg.sessionShape, finishNow, ttl)
-				keptWarm = true
+				if latest, lerr := deps.Store.GetTask(cleanupCtx, task.ID); lerr == nil && latest != nil &&
+					sessionGrantsKey(*latest) == sessionGrantsKey(*task) {
+					parkWarmSessionSandbox(deps, task.ID, sandboxName, sandboxKey, sessionGrantsKey(*task), sandbox, sandboxCounted, cfg.sessionShape, finishNow, ttl)
+					keptWarm = true
+				}
 			}
 		}
 	}
@@ -2732,8 +3059,30 @@ func afterAgentRun(ctx context.Context, deps Deps, task model.Task, runID string
 		}
 		return runErr
 	}
-	return noteFinishFailure(ctx, deps.Store, runID,
-		processResultFrom(ctx, deps.Store, deps.GitReach, deps.Client, deps.AppBotIdentity, task, result, runID, dispatchBranchSHA, now))
+	err := processResultFrom(ctx, deps.Store, deps.GitReach, deps.Client, deps.AppBotIdentity, task, result, runID, dispatchBranchSHA, now)
+	if err != nil && ctx.Err() != nil {
+		// ctx is the daemon's: it stopped between the agent returning and
+		// its result being turned into effects, so the finish failed on
+		// the shutdown rather than on anything about the run. Interrupted,
+		// as a run stopped a moment earlier is -- no strike, no backoff --
+		// and the next dispatch processes the conversation afresh.
+		return finishInterruptedResult(ctx, deps.Store, task.ID, runID, now, err)
+	}
+	return noteFinishFailure(ctx, deps.Store, runID, err)
+}
+
+// finishInterruptedResult records runID, whose result the daemon stopped
+// in the middle of processing, as interrupted by the shutdown and says so
+// on the task, then hands back err joined with errDaemonStopped.
+func finishInterruptedResult(ctx context.Context, store *model.Store, taskID, runID string, now time.Time, err error) error {
+	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runCleanupTimeout)
+	defer cancel()
+	if serr := store.SetRunOutcome(finishCtx, runID, model.InterruptedOutcome, model.InterruptedDetail); serr != nil {
+		return errors.Join(err, fmt.Errorf("orchestrator: recording run %s as interrupted: %w", runID, serr))
+	}
+	interruptedRuns.Add(1)
+	noteInterrupted(finishCtx, store, taskID, runID, now)
+	return fmt.Errorf("orchestrator: run %s: %w", runID, errors.Join(errDaemonStopped, err))
 }
 
 // noteFinishFailure records, on the run's own row, that turning a
@@ -2801,11 +3150,22 @@ func noteFinishFailure(ctx context.Context, store *model.Store, runID string, er
 // task -- but it does count for retry backoff, which is what spaces the
 // requeued attempts out while the cluster stays full. A pod no node
 // could ever fit is not ErrClusterFull (admitPod, unschedulableOutcome)
-// and stays a setup failure, so it surfaces rather than looping.
+// and stays a setup failure, so it surfaces rather than looping. A
+// framework build refused because the run's hostd is not connected
+// (agent.ErrHostdWaiting) is interrupted, without a strike: admission
+// parks the task on that hostd until it reconnects.
 func setupFailedEnding(err error) (outcome, detail string) {
 	if errors.Is(err, ErrClusterFull) {
 		return model.CapacityOutcome, "this run's sandbox could not be scheduled: " + err.Error() +
 			"; the task is not counted as failed and will be retried once the cluster has room"
+	}
+	if errors.Is(err, agent.ErrHostdWaiting) {
+		// The run's hostd dropped between admission and its framework
+		// being built: nothing ran, and the task goes back to the queue,
+		// where admission holds it until that hostd reconnects
+		// (Deps.ModelAvailability). It never moves to another hostd.
+		return model.InterruptedOutcome, "this run's hostd is not connected: " + err.Error() +
+			"; the task is not counted as failed, and waits in the queue for it to reconnect"
 	}
 	return "setup-failed", "this run's sandbox could not be prepared: " + err.Error()
 }

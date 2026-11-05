@@ -14,7 +14,7 @@
 
 // The sections of the Settings view and the tabs of the System view, and
 // the redirects from every path that used to open one of them
-// (docs/design/settings-panel.md §3.2, §2.1, §3.5).
+// (design/design/settings-panel.design.md §3.2, §2.1, §3.5).
 //
 // Pure data and pure functions, kept out of SettingsPage.jsx and
 // SystemPage.jsx so paths.js can read them without importing React
@@ -27,7 +27,7 @@
 // The Settings UI edits what a deployment needs before it can read its
 // config repo at all -- Models and Sandboxes -- plus the write-only
 // secret store, sign-in, this browser's preferences and the operational
-// controls (docs/design/config-repo-settings.md §2.1, §2.3). Everything
+// controls (design/design/config-repo-settings.design.md §2.1, §2.3). Everything
 // else lives in the config repo: those sections are under "Managed in
 // config repo", drawn read-only with a link to the file that holds them
 // (CONFIG_REPO_SECTION_PATHS) whenever the API sends their writes there
@@ -39,7 +39,6 @@ export const SETTINGS_GROUPS = [
     sections: [
       { id: "models", label: "Models" },
       { id: "sandboxes", label: "Sandboxes" },
-      { id: "executors", label: "Executors" },
     ],
   },
   {
@@ -52,6 +51,20 @@ export const SETTINGS_GROUPS = [
         keywords: ["credentials", "secrets", "legacy capabilities"],
       },
       { id: "access", label: "Access" },
+      // The hostd registry (pkg/model/hostd.go): created, rotated and
+      // revoked here, never declared in the config repo.
+      {
+        id: "hostds",
+        label: "Hostds",
+        keywords: ["hostd", "host", "remote", "token", "workstation"],
+      },
+      // Who changed what (operator-attribution spec §4.4): read-only
+      // logs, nothing to save.
+      {
+        id: "audit",
+        label: "Audit",
+        keywords: ["audit", "log", "history", "who", "changes", "principal"],
+      },
     ],
   },
   {
@@ -93,17 +106,35 @@ export const SETTINGS_GROUPS = [
 // write from that section names).
 export const CONFIG_REPO_SECTION_PATHS = {
   general: ["tables/grain_config.json"],
-  git: ["tables/git_credential.json", "tables/repo_git_credential.json"],
+  // Git connections live in grain_config (git_connections, git_credential)
+  // and each repository's binding in repo_config (git_credential); their
+  // tokens and keys stay in the secret store and are never exported.
+  git: ["tables/grain_config.json", "tables/repo_config.json"],
   repositories: ["tables/repo_config.json", "tables/grain_config.json"],
+  // settings/capabilities.yml is exported only once a deployment has
+  // adopted the capability catalogue; until then capability servers,
+  // policy and default grants are columns of grain_config and scope sets
+  // rows of api_scope_set. So the files that always exist come first,
+  // and the first link opens one.
   tasks: [
-    "settings/capabilities.yml",
     "tables/grain_config.json",
     "tables/custom_field.json",
+    "settings/capabilities.yml",
   ],
-  agents: ["tables/grain_config.json", "tables/console_session.json"],
-  capabilities: ["settings/capabilities.yml"],
+  // Standing console sessions are grain_config.console_sessions.
+  agents: ["tables/grain_config.json"],
+  capabilities: [
+    "tables/grain_config.json",
+    "tables/api_scope_set.json",
+    "settings/capabilities.yml",
+  ],
   ci: ["tables/grain_config.json", "tables/repo_config.json"],
   memory: ["memory/deployment.md"],
+  // Caches sit under System / Operations, but none of their four
+  // settings is a bootstrap one: with settings locked the API refuses
+  // them like any other config-managed field (settings-mutability.spec.md
+  // D-1), so the section is drawn read-only then too.
+  caches: ["tables/grain_config.json"],
 };
 
 // isConfigRepoSection is whether a section's settings are config-repo
@@ -156,7 +187,9 @@ const OLD_SETTINGS_TABS = {
   accounts: "access",
   engine: "engine",
   sandbox: "sandboxes",
-  executors: "executors",
+  // Executors were retired with remote executors; the grain hostds that
+  // replaced them are registered under Hostds.
+  executors: "hostds",
   integrations: "credentials",
   state: "config-repo",
   // Upgrade was a System tab (/system/upgrade) until it moved into
@@ -181,6 +214,9 @@ const OLD_SYSTEM_TABS = [
 // Secrets & access.
 const SETTINGS_SECTION_ALIASES = {
   "capability-servers": "capabilities",
+  // Settings -> Executors was retired with remote executors; the grain
+  // hostds that replaced them are registered under Hostds.
+  executors: "hostds",
   "legacy-capabilities": "credentials",
   secrets: "credentials",
 };

@@ -29,6 +29,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -42,23 +43,26 @@ const maxMCPRequestBytes = 4 << 20
 // returned by GET /api/external-agents/tokens. The raw secret token is never
 // stored and never returned here.
 type ExternalAgentTokenView struct {
-	ID             string     `json:"id"`
-	Name           string     `json:"name"`
-	Principal      string     `json:"principal"`
-	TokenPrefix    string     `json:"tokenPrefix"`
-	ScopeSet       string     `json:"scopeSet,omitempty"`
-	Scopes         []string   `json:"scopes,omitempty"`
-	ResolvedScopes []string   `json:"resolvedScopes"`
-	Repos          []string   `json:"repos,omitempty"`
-	RateLimit      int        `json:"rateLimit"`
-	MaxConcurrent  int        `json:"maxConcurrent"`
-	CreatedBy      string     `json:"createdBy,omitempty"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	RotatedAt      *time.Time `json:"rotatedAt,omitempty"`
-	LastUsedAt     *time.Time `json:"lastUsedAt,omitempty"`
-	ExpiresAt      *time.Time `json:"expiresAt,omitempty"`
-	RevokedAt      *time.Time `json:"revokedAt,omitempty"`
-	Active         bool       `json:"active"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	Principal      string   `json:"principal"`
+	TokenPrefix    string   `json:"tokenPrefix"`
+	ScopeSet       string   `json:"scopeSet,omitempty"`
+	Scopes         []string `json:"scopes,omitempty"`
+	ResolvedScopes []string `json:"resolvedScopes"`
+	Repos          []string `json:"repos,omitempty"`
+	RateLimit      int      `json:"rateLimit"`
+	MaxConcurrent  int      `json:"maxConcurrent"`
+	CreatedBy      string   `json:"createdBy,omitempty"`
+	// Owner is the person the credential acts on behalf of
+	// (model.ExternalAgentToken.Owner), "" for none.
+	Owner      string     `json:"owner,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	RotatedAt  *time.Time `json:"rotatedAt,omitempty"`
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+	ExpiresAt  *time.Time `json:"expiresAt,omitempty"`
+	RevokedAt  *time.Time `json:"revokedAt,omitempty"`
+	Active     bool       `json:"active"`
 }
 
 // CreateExternalAgentTokenRequest is the request body of POST /api/external-agents/tokens.
@@ -70,6 +74,15 @@ type CreateExternalAgentTokenRequest struct {
 	ExpiresAt     *time.Time `json:"expiresAt,omitempty"`
 	RateLimit     int        `json:"rateLimit,omitempty"`
 	MaxConcurrent int        `json:"maxConcurrent,omitempty"`
+	// Owner is the person the credential acts on behalf of
+	// (model.ExternalAgentToken.Owner). Left out, it is whoever issues
+	// it: the signed-in person, or the deployment's own actor when that
+	// is a person (externalAgentTokenOwner says who may name another).
+	Owner string `json:"owner,omitempty"`
+	// SelfService marks a credential a person mints for their own
+	// workstation (`grain login --issue-token`): its Owner is the caller
+	// and nobody else, whatever Owner says.
+	SelfService bool `json:"selfService,omitempty"`
 }
 
 // IssuedExternalAgentToken is returned once when a credential is created or
@@ -116,6 +129,7 @@ func externalAgentTokenViewOf(t model.ExternalAgentToken, now time.Time) Externa
 		RateLimit:      t.EffectiveRateLimit(),
 		MaxConcurrent:  t.EffectiveMaxConcurrent(),
 		CreatedBy:      t.CreatedBy,
+		Owner:          t.Owner,
 		CreatedAt:      t.CreatedAt,
 		LastUsedAt:     t.LastUsedAt,
 		ExpiresAt:      t.ExpiresAt,
@@ -138,6 +152,81 @@ func (c *Client) ListExternalAgentTokens(ctx context.Context) ([]ExternalAgentTo
 	return out, nil
 }
 
+func (c *Client) canIssuePersonExternalAgentToken(_ context.Context, actor model.Principal) bool {
+	return actor.Kind == model.PrincipalHuman
+}
+
+// externalAgentTokenOwner is the owner a credential req asks to issue is
+// recorded with (design/spec/external-cli/external-cli.spec.md#XC-14).
+// The owner is who the credential's calls are attributed to and whose
+// owner-trust policy its filings are measured against, so naming one is
+// held to who is asking:
+//
+//   - an agent -- an external agent credential, or a task acting through
+//     its grants -- may only pass on the owner it acts for itself, so a
+//     credential cannot be minted on behalf of somebody more trusted;
+//   - a person minting for themselves (SelfService) owns it, and may
+//     name nobody else;
+//   - anybody else -- a signed-in person or the operator issuing one for
+//     somebody -- may name its owner, which defaults to themselves.
+func (c *Client) externalAgentTokenOwner(ctx context.Context, req CreateExternalAgentTokenRequest) (string, error) {
+	asked := strings.TrimSpace(req.Owner)
+	for _, r := range asked {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return "", validationErrorf("owner %q may not contain whitespace or control characters", asked)
+		}
+	}
+	if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
+		if req.SelfService {
+			return "", forbiddenErrorf("a self-service credential is minted by a signed-in person")
+		}
+		own := ""
+		if tok := externalTokenFromContext(ctx); tok != nil {
+			own = strings.TrimSpace(tok.Owner)
+		}
+		if asked != "" && !strings.EqualFold(asked, own) {
+			return "", forbiddenErrorf("an agent cannot issue a credential on behalf of %q", asked)
+		}
+		return own, nil
+	}
+	caller := c.requestPersonOrOperator(ctx)
+	if req.SelfService {
+		if caller == "" {
+			return "", forbiddenErrorf("a self-service credential is minted by a signed-in person")
+		}
+		if asked != "" && !strings.EqualFold(asked, caller) {
+			return "", forbiddenErrorf("a self-service credential belongs to %s, not %q", caller, asked)
+		}
+		return caller, nil
+	}
+	if asked != "" {
+		return asked, nil
+	}
+	return caller, nil
+}
+
+// selfServiceLimits is what a person minting a credential for their own
+// workstation (`grain login --issue-token`, external-cli.spec.md#XC-9)
+// may ask for without capabilities:admin: no dangerous scope and no
+// requires_person scope set -- those are an operator's to issue -- and
+// only repositories the deployment already works in.
+func (c *Client) selfServiceLimits(ctx context.Context, name string, repos []string, needsPerson bool) error {
+	if needsPerson && requestPerson(ctx) != "" {
+		return forbiddenErrorf("self-service credential %q asks for a dangerous scope or a requires_person scope set: "+
+			"an operator issues those (Settings -> Agents)", name)
+	}
+	for _, r := range repos {
+		ref, err := model.ParseRepo(r)
+		if err != nil {
+			return validationErrorf("%v", err)
+		}
+		if err := c.refuseOffRepoAllowlist(ctx, ref, "a self-service credential cannot be limited to it"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // CreateExternalAgentToken issues a new scoped external agent credential.
 // Issuing a credential that includes any dangerous scope or a requires_person
 // scope set requires a human principal.
@@ -150,12 +239,21 @@ func (c *Client) CreateExternalAgentToken(ctx context.Context, req CreateExterna
 	if err != nil {
 		return IssuedExternalAgentToken{}, validationErrorf("%v", err)
 	}
-	actor := c.actor(ctx)
-	if needsPerson && actor.Kind != model.PrincipalHuman {
+	actor := c.requestActor(ctx).Actor
+	if needsPerson && !c.canIssuePersonExternalAgentToken(ctx, actor) {
 		return IssuedExternalAgentToken{}, forbiddenErrorf(
 			"external agent credential %q includes a dangerous scope or a requires_person scope set: only a person may issue it",
 			name,
 		)
+	}
+	owner, err := c.externalAgentTokenOwner(ctx, req)
+	if err != nil {
+		return IssuedExternalAgentToken{}, err
+	}
+	if req.SelfService {
+		if err := c.selfServiceLimits(ctx, name, repos, needsPerson); err != nil {
+			return IssuedExternalAgentToken{}, err
+		}
 	}
 	if req.RateLimit < 0 {
 		return IssuedExternalAgentToken{}, validationErrorf("rateLimit must be non-negative")
@@ -203,6 +301,7 @@ func (c *Client) CreateExternalAgentToken(ctx context.Context, req CreateExterna
 		RateLimit:     req.RateLimit,
 		MaxConcurrent: req.MaxConcurrent,
 		CreatedBy:     createdBy,
+		Owner:         owner,
 		CreatedAt:     now,
 		ExpiresAt:     expiresAt,
 	})
@@ -236,12 +335,24 @@ func (c *Client) RotateExternalAgentToken(ctx context.Context, id string) (Issue
 	if err != nil {
 		return IssuedExternalAgentToken{}, validationErrorf("%v", err)
 	}
-	actor := c.actor(ctx)
-	if needsPerson && actor.Kind != model.PrincipalHuman {
+	actor := c.requestActor(ctx).Actor
+	if needsPerson && !c.canIssuePersonExternalAgentToken(ctx, actor) {
 		return IssuedExternalAgentToken{}, forbiddenErrorf(
 			"external agent credential %q includes a dangerous scope or a requires_person scope set: only a person may rotate it",
 			existing.Name,
 		)
+	}
+	if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
+		own := ""
+		if tok := externalTokenFromContext(ctx); tok != nil {
+			own = strings.TrimSpace(tok.Owner)
+		}
+		if existingOwner := strings.TrimSpace(existing.Owner); !strings.EqualFold(existingOwner, own) {
+			return IssuedExternalAgentToken{}, forbiddenErrorf(
+				"an agent cannot rotate a credential owned by %q",
+				existingOwner,
+			)
+		}
 	}
 	rawToken, hash, prefix, err := model.GenerateExternalAgentToken()
 	if err != nil {
@@ -278,6 +389,7 @@ func (c *Client) RevokeExternalAgentToken(ctx context.Context, id string) error 
 		}
 		return err
 	}
+	noteConfigWrite(ctx)
 	return nil
 }
 
@@ -290,6 +402,7 @@ func (c *Client) DeleteExternalAgentToken(ctx context.Context, id string) error 
 		}
 		return err
 	}
+	noteConfigWrite(ctx)
 	return nil
 }
 
@@ -297,7 +410,11 @@ func (c *Client) DeleteExternalAgentToken(ctx context.Context, id string) error 
 // external agent credential immediately and returns the number revoked.
 func (c *Client) RevokeAllExternalAgentTokens(ctx context.Context) (int, error) {
 	n, err := c.Store.RevokeAllExternalAgentTokens(ctx)
-	return int(n), err
+	if err != nil {
+		return 0, err
+	}
+	noteConfigWrite(ctx)
+	return int(n), nil
 }
 
 // externalAgentLimiter enforces per-credential token-bucket rate limits and
@@ -423,7 +540,7 @@ func presentsExternalAgentToken(r *http.Request) bool {
 // revocation, rate limits, and concurrency caps, and returns the credential
 // along with its concurrency release callback.
 func (s *Server) authenticateExternalAgent(w http.ResponseWriter, r *http.Request) (*model.ExternalAgentToken, func(), bool) {
-	if r.URL.Path == "/mcp" && r.ContentLength > maxMCPRequestBytes {
+	if (r.URL.Path == "/mcp" || r.URL.Path == "/api/mcp") && r.ContentLength > maxMCPRequestBytes {
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Errorf("MCP request body exceeds maximum size of %d bytes", maxMCPRequestBytes))
 		return nil, nil, false
 	}
@@ -460,7 +577,7 @@ func (s *Server) authenticateExternalAgent(w http.ResponseWriter, r *http.Reques
 		return nil, nil, false
 	}
 	if tok.ExpiresAt != nil && !now.Before(*tok.ExpiresAt) {
-		writeError(w, http.StatusUnauthorized, errors.New("external agent bearer token has expired"))
+		writeTokenExpired(w, *tok.ExpiresAt)
 		return nil, nil, false
 	}
 	release, wait, err := s.externalLimiter.acquire(tok, now)
@@ -471,6 +588,16 @@ func (s *Server) authenticateExternalAgent(w http.ResponseWriter, r *http.Reques
 	}
 	_ = s.tasks.Store.TouchExternalAgentTokenUsed(r.Context(), tok.ID, now)
 	return tok, release, true
+}
+
+// tokenWriter is who an external agent token write was made by, for its
+// log line: the label and source RequestActor gives, as config writes
+// log theirs (recordConfigWrite). A credential is not configuration, so
+// it has no config_audit row; this line is its audit trail
+// (docs/test-runs/2026-11-03-operator-attribution.md F6).
+func tokenWriter(r *http.Request) string {
+	who := RequestActor(r.Context())
+	return PrincipalLabel(who.Actor, who.OnBehalfOf) + " (" + sourceName(who.Actor.Source) + ")"
 }
 
 func (s *Server) handleListExternalAgentTokens(w http.ResponseWriter, r *http.Request) {
@@ -492,8 +619,8 @@ func (s *Server) handleCreateExternalAgentToken(w http.ResponseWriter, r *http.R
 		writeClientError(w, err)
 		return
 	}
-	log.Printf("grain external-agent: issued credential id=%s name=%q scopeSet=%q scopes=%v repos=%v",
-		issued.ID, issued.Name, issued.ScopeSet, issued.Scopes, issued.Repos)
+	log.Printf("grain external-agent: %s issued credential id=%s name=%q owner=%q scopeSet=%q scopes=%v repos=%v",
+		tokenWriter(r), issued.ID, issued.Name, issued.Owner, issued.ScopeSet, issued.Scopes, issued.Repos)
 	writeJSON(w, http.StatusCreated, issued)
 }
 
@@ -505,7 +632,7 @@ func (s *Server) handleRotateExternalAgentToken(w http.ResponseWriter, r *http.R
 		return
 	}
 	s.externalLimiter.reset(strings.TrimSpace(id))
-	log.Printf("grain external-agent: rotated credential id=%s name=%q", issued.ID, issued.Name)
+	log.Printf("grain external-agent: %s rotated credential id=%s name=%q", tokenWriter(r), issued.ID, issued.Name)
 	writeJSON(w, http.StatusOK, issued)
 }
 
@@ -516,7 +643,7 @@ func (s *Server) handleRevokeExternalAgentToken(w http.ResponseWriter, r *http.R
 		return
 	}
 	s.externalLimiter.reset(strings.TrimSpace(id))
-	log.Printf("grain external-agent: revoked credential id=%s", id)
+	log.Printf("grain external-agent: %s revoked credential id=%s", tokenWriter(r), id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -527,7 +654,7 @@ func (s *Server) handleDeleteExternalAgentToken(w http.ResponseWriter, r *http.R
 		return
 	}
 	s.externalLimiter.reset(strings.TrimSpace(id))
-	log.Printf("grain external-agent: deleted credential id=%s", id)
+	log.Printf("grain external-agent: %s deleted credential id=%s", tokenWriter(r), id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -538,7 +665,7 @@ func (s *Server) handleRevokeAllExternalAgentTokens(w http.ResponseWriter, r *ht
 		return
 	}
 	s.externalLimiter.resetAll()
-	log.Printf("grain external-agent: kill switch revoked %d active credential(s)", n)
+	log.Printf("grain external-agent: %s's kill switch revoked %d active credential(s)", tokenWriter(r), n)
 	writeJSON(w, http.StatusOK, RevokeAllExternalAgentTokensResponse{Revoked: n})
 }
 
@@ -560,7 +687,7 @@ func ExternalAgentAPITools(s *Server, tok *model.ExternalAgentToken) ([]mcp.Tool
 		if _, blocked := isNoTaskContextRoute(route.Pattern); blocked {
 			continue
 		}
-		if !set.Has(route.Scope) {
+		if !set.Has(route.Scope) && !tasksAdminAllowsTaskPatch(set, route.Pattern) {
 			continue
 		}
 		tools = append(tools, route.externalTool(s, tok))

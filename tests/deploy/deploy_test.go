@@ -50,7 +50,7 @@ import (
 
 // The one name three files have to agree on: setup.sh's default, the
 // repository CI pushes to, and the daemon's own -upgrade-image.
-const image = "ghcr.io/bwsalmon/grain/grain"
+const image = "docker.io/grainai/grain"
 
 func TestSetupIsSyntacticallyValidBash(t *testing.T) {
 	out, err := exec.Command("bash", "-n", filepath.Join(repoRoot(t), "scripts", "setup.sh")).CombinedOutput()
@@ -416,12 +416,13 @@ func TestTheDeploymentIsOwnedByTheAccountsRealGroup(t *testing.T) {
 	// exists to support -- while reading correctly for the one whose
 	// group is its own name, so nothing but a mismatched account finds
 	// it. The numbers it resolves are the pair `docker run --user` is
-	// given, in both the daemon's unit and the CLI wrapper.
+	// given, in the daemon's unit, the CLI wrapper and the local
+	// PostgreSQL server's unit.
 	if strings.Contains(code, `id -g "$GRAIN_GROUP"`) || strings.Contains(code, `id -u "$GRAIN_GROUP"`) {
 		t.Error(`id is being asked about "$GRAIN_GROUP", which is a group name: it takes an account`)
 	}
-	if n := strings.Count(code, `gid="$(id -g "$GRAIN_USER")"`); n != 2 {
-		t.Errorf(`%d places resolve the numeric gid from the account, want 2 (the daemon's own --user, and the CLI wrapper's)`, n)
+	if n := strings.Count(code, `gid="$(id -g "$GRAIN_USER")"`); n != 3 {
+		t.Errorf(`%d places resolve the numeric gid from the account, want 3 (the daemon's own --user, the CLI wrapper's, and grain-postgres.service's)`, n)
 	}
 	// Line by line, and skipping `id -g`, which takes an account and so
 	// says "$GRAIN_USER" correctly: what must not come back is an
@@ -1208,12 +1209,20 @@ func TestWorkflowCLIDownloadsForceIPv4AndRetry(t *testing.T) {
 // VMs and clusters are deleted.
 func TestOnlyTheScheduledSmokeJobHoldsAGCPCredential(t *testing.T) {
 	smoke := stripComments(gcpSmokeWorkflow(t))
+	ghSmoke := stripComments(read(t, ".github", "workflows", "gcp-smoke.yml"))
 
-	contains(t, smoke, "schedule:")
-	contains(t, smoke, "workflow_dispatch:")
+	contains(t, upTo(t, ghSmoke, "jobs:"), "schedule:")
+	contains(t, upTo(t, ghSmoke, "jobs:"), "workflow_dispatch:")
 	for _, forbidden := range []string{"push:", "pull_request:"} {
+		if strings.Contains(upTo(t, ghSmoke, "jobs:"), forbidden) {
+			t.Errorf(".github/workflows/gcp-smoke.yml triggers on %s: the credential it holds would then be readable by any branch", forbidden)
+		}
+	}
+
+	contains(t, upTo(t, smoke, "jobs:"), "workflow_dispatch:")
+	for _, forbidden := range []string{"push:", "pull_request:", "release:", "schedule:"} {
 		if strings.Contains(upTo(t, smoke, "jobs:"), forbidden) {
-			t.Errorf("gcp-smoke.yml triggers on %s: the credential it holds would then be readable by any branch", forbidden)
+			t.Errorf(".grain/workflows/gcp-smoke.yml triggers on %s: expected workflow_dispatch only", forbidden)
 		}
 	}
 
@@ -1245,6 +1254,97 @@ func TestOnlyTheScheduledSmokeJobHoldsAGCPCredential(t *testing.T) {
 	} {
 		absent(t, smoke, obsolete)
 	}
+
+	// On GitHub Actions, an unconfigured repository must skip at the job
+	// level (conclusion `skipped`) rather than running a step that exits 0
+	// and marking the whole run green `success`; a half-configured pair
+	// emits a `::warning` and fails.
+	ghJob := from(t, ghSmoke, "\n  smoke:")
+	contains(t, ghJob, "if: vars.GCP_WIF_PROVIDER != '' || vars.GCP_SA_EMAIL != ''")
+	contains(t, ghJob, "::warning")
+	absent(t, ghJob, `echo "configured=false"`)
+	ghSweep := from(t, ghJob, "Delete anything left behind")
+	contains(t, ghSweep, "if: always() && steps.auth.outcome == 'success'")
+	contains(t, ghSweep, "instances delete")
+	contains(t, ghSweep, "clusters delete")
+	contains(t, ghSweep, "labels.purpose=gce-vm-smoke")
+	contains(t, ghSweep, "resourceLabels.purpose=gke-cluster-smoke")
+}
+
+func TestSetupGCPSmokeWIFScriptConfiguresLeastPrivilegeWIF(t *testing.T) {
+	const scriptName = "setup-gcp-smoke-wif.sh"
+	executable(t, "scripts", scriptName)
+	scriptPath := filepath.Join(repoRoot(t), "scripts", scriptName)
+
+	if out, err := exec.Command("bash", "-n", scriptPath).CombinedOutput(); err != nil {
+		t.Fatalf("bash -n scripts/%s: %v\n%s", scriptName, err, out)
+	}
+
+	// Never runs on its own without an explicit project argument.
+	cmd := exec.Command(scriptPath)
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("scripts/%s succeeded with no arguments; expected exit 2:\n%s", scriptName, out)
+	} else if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 2 {
+		t.Fatalf("scripts/%s with no arguments exited %v, want exit 2:\n%s", scriptName, err, out)
+	}
+
+	outBytes, err := exec.Command(scriptPath, "example-smoke-proj", "--dry-run").CombinedOutput()
+	if err != nil {
+		t.Fatalf("scripts/%s --dry-run failed: %v\n%s", scriptName, err, outBytes)
+	}
+	out := string(outBytes)
+
+	for _, api := range []string{
+		"iam.googleapis.com",
+		"iamcredentials.googleapis.com",
+		"sts.googleapis.com",
+		"compute.googleapis.com",
+		"container.googleapis.com",
+		"iap.googleapis.com",
+	} {
+		contains(t, out, api)
+	}
+	contains(t, out, "https://token.actions.githubusercontent.com")
+	contains(t, out, "assertion.repository == 'ai-on-gke/grain'")
+	// Trusting the repository alone would let a pull_request run, or a push
+	// to any agent branch, mint the smoke SA from its own unreviewed
+	// workflow files: the default condition must name the refs it admits.
+	contains(t, out, "assertion.ref == 'refs/heads/main'")
+	contains(t, out, "assertion.ref.startsWith('refs/tags/v')")
+	absent(t, out, "refs/pull/")
+	absent(t, out, "refs/heads/grain/")
+	for _, role := range []string{
+		"roles/compute.instanceAdmin.v1",
+		"roles/compute.osLogin",
+		"roles/iap.tunnelResourceAccessor",
+		"roles/container.admin",
+		"roles/iam.serviceAccountUser",
+		"roles/iam.workloadIdentityUser",
+	} {
+		contains(t, out, role)
+	}
+	for _, unwanted := range []string{
+		"roles/owner",
+		"roles/editor",
+		"roles/compute.admin",
+		"roles/iam.serviceAccountAdmin",
+	} {
+		absent(t, out, unwanted)
+	}
+	for _, variable := range []string{
+		"GCP_WIF_PROVIDER=projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/grain-gcp-smoke/providers/github",
+		"GCP_SA_EMAIL=grain-gcp-smoke@example-smoke-proj.iam.gserviceaccount.com",
+		"GCP_PROJECT_ID=example-smoke-proj",
+	} {
+		contains(t, out, variable)
+	}
+
+	refOut, err := exec.Command(scriptPath, "--project", "example-smoke-proj", "--ref", "refs/heads/main", "--dry-run").CombinedOutput()
+	if err != nil {
+		t.Fatalf("scripts/%s --ref --dry-run failed: %v\n%s", scriptName, err, refOut)
+	}
+	contains(t, string(refOut), "assertion.ref == 'refs/heads/main'")
+	absent(t, string(refOut), "refs/heads/candidate")
 }
 
 // The credential that can *write* to a GitHub repository lives in
@@ -1625,14 +1725,14 @@ func TestTheSandboxReferenceIsStampedIntoTheGrainImage(t *testing.T) {
 func TestTheGrainReleasePublishesDockerAndKubernetesSandboxImages(t *testing.T) {
 	script := read(t, "scripts", "release-images.sh")
 
-	contains(t, script, `guest="$root/guest:sha-$short"`)
-	contains(t, script, `k8s_sandbox="$root/k8s-sandbox:sha-$short"`)
+	contains(t, script, `guest="$root/sandbox:sha-$short"`)
+	contains(t, script, `k8s_sandbox="$root/sandbox-k8s:sha-$short"`)
 	contains(t, script, `docker build -f Dockerfile.k8s-sandbox -t "$k8s_sandbox" .`)
 	contains(t, script, `push_pinned "$guest"`)
 	contains(t, script, `push_pinned "$k8s_sandbox"`)
 	contains(t, script, `SANDBOX_IMAGE="$guest_pinned"`)
 	contains(t, script, `K8S_SANDBOX_IMAGE="$k8s_sandbox_pinned"`)
-	contains(t, script, `"$k8s_sandbox $root/k8s-sandbox:$branch"`)
+	contains(t, script, `"$k8s_sandbox $root/sandbox-k8s:$branch"`)
 
 	executable(t, "scripts", "release-images.sh")
 	out, err := exec.Command("bash", "-n", filepath.Join(repoRoot(t), "scripts", "release-images.sh")).CombinedOutput()
@@ -2596,12 +2696,17 @@ func TestTheNightlySuiteRunsTheLongTargets(t *testing.T) {
 		contains(t, makefile, "\n"+target+":")
 	}
 
-	// A schedule, because the whole point is that it runs when nobody
-	// remembered to ask; and workflow_dispatch, because a change to the
+	// A schedule on GitHub Actions (.github/workflows/nightly.yml), because
+	// the whole point is that it runs when nobody remembered to ask; and
+	// workflow_dispatch in both workflows, because a change to the
 	// reconcile loop or to pkg/staterepo deserves this before it merges
-	// rather than the night after.
-	contains(t, nightly, "schedule:")
-	contains(t, nightly, "workflow_dispatch:")
+	// rather than the night after, while .grain/workflows/nightly.yml has
+	// its automatic cron trigger retired.
+	ghNightly := stripComments(read(t, ".github", "workflows", "nightly.yml"))
+	contains(t, upTo(t, ghNightly, "jobs:"), "schedule:")
+	contains(t, upTo(t, ghNightly, "jobs:"), "workflow_dispatch:")
+	contains(t, upTo(t, nightly, "jobs:"), "workflow_dispatch:")
+	absent(t, upTo(t, nightly, "jobs:"), "schedule:")
 
 	// Credential-free, like tests.yml and for a weaker version of the
 	// same reason: this one is dispatchable against any branch, and
@@ -3116,13 +3221,13 @@ func TestSandboxBaseImagesAreMinimalAndCarryTheVersionedContract(t *testing.T) {
 	// full sandbox images.
 	releaseScript := read(t, "scripts", "release-images.sh")
 	for _, want := range []string{
-		`guest_base="$root/guest-base:sha-$short"`,
-		`k8s_sandbox_base="$root/k8s-sandbox-base:sha-$short"`,
+		`guest_base="$root/sandbox-base:sha-$short"`,
+		`k8s_sandbox_base="$root/sandbox-k8s-base:sha-$short"`,
 		`docker build --target k8s-sandbox-base -f Dockerfile.k8s-sandbox -t "$k8s_sandbox_base" .`,
 		`push_pinned "$guest_base"`,
 		`push_pinned "$k8s_sandbox_base"`,
-		`"$guest_base $root/guest-base:$branch"`,
-		`"$k8s_sandbox_base $root/k8s-sandbox-base:$branch"`,
+		`"$guest_base $root/sandbox-base:$branch"`,
+		`"$k8s_sandbox_base $root/sandbox-k8s-base:$branch"`,
 	} {
 		contains(t, releaseScript, want)
 	}
@@ -3133,8 +3238,8 @@ func TestSandboxBaseImagesAreMinimalAndCarryTheVersionedContract(t *testing.T) {
 		sandboximage.ContractLabel,
 		sandboximage.ContractFile,
 		sandboximage.GranuleContractLabel,
-		"ghcr.io/bwsalmon/grain/guest-base",
-		"ghcr.io/bwsalmon/grain/k8s-sandbox-base",
+		"docker.io/grainai/sandbox-base",
+		"docker.io/grainai/sandbox-k8s-base",
 		"grain sandbox-image contract",
 		"grain sandbox-image check",
 	} {
@@ -3161,7 +3266,7 @@ func TestSandboxBaseImagesAreMinimalAndCarryTheVersionedContract(t *testing.T) {
 // and claude through their vendors' install.sh, each of which serves the
 // current release, so two builds of the same grain commit could carry
 // two different CLIs (agy 1.1.27 in the daemon's image against the 1.2.5
-// install.sh was serving on 2026-09-17 -- docs/hand-runs/2026-09-17-agy-self-update.md,
+// install.sh was serving on 2026-09-17 -- the 2026-09-17 agy-self-update hand run,
 // whose "Still owed" left this open). Disabling the self-updater stopped
 // that binary changing under a *running* task; it said nothing about
 // which binary the image started with.
@@ -3369,7 +3474,7 @@ func TestTheGuestBuildScriptsAreSyntacticallyValid(t *testing.T) {
 	for _, file := range []string{"Granulefile", "Granulefile.guest-base"} {
 		out, err := exec.Command("granule", "granulefile", "check", "-f", filepath.Join(repoRoot(t), file)).CombinedOutput()
 		if err != nil {
-			out, err = exec.Command("go", "run", "github.com/bwsalmon/granule/cmd/granule", "granulefile", "check", "-f", filepath.Join(repoRoot(t), file)).CombinedOutput()
+			out, err = exec.Command("go", "run", "github.com/gke-labs/granule/cmd/granule", "granulefile", "check", "-f", filepath.Join(repoRoot(t), file)).CombinedOutput()
 			if err != nil {
 				t.Errorf("checking %s: %v\n%s", file, err, out)
 			}
@@ -3576,11 +3681,11 @@ func TestTheKVMSuiteReusesThePublishedGuestRatherThanRebuildingIt(t *testing.T) 
 	// characters of the same hash.
 	contains(t, release, "mapfile -t guest_inputs < <(./scripts/granule/guest-inputs.sh guest)")
 	contains(t, release, `guest_key="$(git rev-parse "${guest_inputs[@]/#/HEAD:}" | sha256sum | cut -c1-32)"`)
-	contains(t, release, `guest_cache="$root/guest:inputs-$guest_key"`)
+	contains(t, release, `guest_cache="$root/sandbox:inputs-$guest_key"`)
 
 	contains(t, resolve, "mapfile -t inputs < <(./scripts/granule/guest-inputs.sh guest)")
 	contains(t, resolve, `key="$(git rev-parse "${inputs[@]/#/HEAD:}" | sha256sum | cut -c1-32)"`)
-	contains(t, resolve, `cached="ghcr.io/${RELEASE_IMAGE_REPO,,}/guest:inputs-${key}"`)
+	contains(t, resolve, `cached="${PACKAGE_PUBLISH_REGISTRY,,}/${RELEASE_IMAGE_REPO,,}/sandbox:inputs-${key}"`)
 
 	// Two: a miss still builds one, and a hit reaches the suite under the
 	// local tag pkg/orchestrator/granule_docker_real_test.go expects.
@@ -3932,10 +4037,10 @@ func TestThePruneRuleKnowsTheTagsCIActuallyPushes(t *testing.T) {
 func TestABranchTagAndItsCommitTagAreOneManifest(t *testing.T) {
 	script := stripComments(read(t, "scripts", "release-images.sh"))
 	for _, pair := range []string{
-		`"$guest_base $root/guest-base:$branch"`,
-		`"$guest $root/guest:$branch"`,
-		`"$k8s_sandbox_base $root/k8s-sandbox-base:$branch"`,
-		`"$k8s_sandbox $root/k8s-sandbox:$branch"`,
+		`"$guest_base $root/sandbox-base:$branch"`,
+		`"$guest $root/sandbox:$branch"`,
+		`"$k8s_sandbox_base $root/sandbox-k8s-base:$branch"`,
+		`"$k8s_sandbox $root/sandbox-k8s:$branch"`,
 		`"$grain $root/grain:$branch"`,
 	} {
 		contains(t, script, pair)

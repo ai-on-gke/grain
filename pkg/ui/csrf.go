@@ -17,27 +17,35 @@ package ui
 import (
 	"fmt"
 	"net/http"
+
+	"github.com/ai-on-gke/grain/pkg/webauth"
 )
 
-// crossOriginProtection refuses a state-changing request a browser sent
-// on behalf of some other site (#2371). Every POST route here decodes
-// its body as JSON whatever Content-Type it claims, so a plain <form> or
-// a no-preflight fetch() from any page an operator's browser loads could
-// otherwise drive the daemon as that operator.
-//
-// http.CrossOriginProtection lets GET, HEAD and OPTIONS through, and any
-// request a browser marks Sec-Fetch-Site: same-origin (or none, for one
-// the user typed). Without that header it falls back to comparing Origin
-// with Host. A request carrying neither -- the CLI, pkg/mcp's client, a
-// sandbox's curl, a webhook -- did not come from a browser and is not
-// what CSRF is about, so it passes too.
-var crossOriginProtection = http.NewCrossOriginProtection()
-
 // checkCrossOrigin answers 403 and returns false for a cross-site
-// browser request with an unsafe method.
+// browser request with an unsafe method (#2371).
 func checkCrossOrigin(w http.ResponseWriter, r *http.Request) bool {
-	if err := crossOriginProtection.Check(r); err != nil {
+	if err := webauth.CheckCrossOrigin(r); err != nil {
 		writeError(w, http.StatusForbidden, fmt.Errorf("cross-origin %s %s refused: %w", r.Method, r.URL.Path, err))
+		return false
+	}
+	return true
+}
+
+// checkVerifiedIdentityCSRF enforces CSRF protection on state-changing
+// requests (any method other than GET or HEAD) authenticated by IAP or
+// another IdentityVerifier, whose browser session cookie is not controlled by
+// grain and is not SameSite=Strict.
+//
+// Browser requests (any request carrying Sec-Fetch-Site, Origin, or Cookie)
+// must carry Sec-Fetch-Site: same-origin (or none) or an Origin matching Host
+// (or X-Forwarded-Host). Non-browser programmatic callers carrying none of
+// those headers pass.
+func checkVerifiedIdentityCSRF(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		return true
+	}
+	if err := webauth.VerifySameOriginForProxyAuth(r); err != nil {
+		writeError(w, http.StatusForbidden, fmt.Errorf("CSRF check refused %s %s: %w", r.Method, r.URL.Path, err))
 		return false
 	}
 	return true

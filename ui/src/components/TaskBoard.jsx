@@ -15,6 +15,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Checkbox, Chip, Typography } from "@mui/material";
 import GrantChip from "./GrantChip.jsx";
+import KeepRunningChip from "./KeepRunningChip.jsx";
 import {
   activityTitle,
   isBlockedWaiting,
@@ -22,10 +23,10 @@ import {
   isAgentRunning,
   isTaskRepairing,
   mergeQueueStall,
+  partStateLabels,
   runActivity,
   stackedChip,
   stateLabel,
-  stateLabels,
   stateTitle,
   taskBadgeModifier,
   taskBadgeState,
@@ -369,7 +370,7 @@ export default function TaskBoard({
           className="board-hidden-note"
         >
           {hidden} task{hidden === 1 ? "" : "s"} in no column (
-          {stateLabels(offBoard).join(", ")}).{" "}
+          {partStateLabels(offBoard).join(", ")}).{" "}
           {!fixedColumns && (
             <Button size="small" onClick={() => setEditing(true)}>
               Edit columns
@@ -727,6 +728,10 @@ function BoardCard({
             -- the card wraps where the row does not, so they cost the
             title nothing here, but they still read first. */}
         <CustomFieldChips fields={shownFields} values={t.customFields} />
+        {/* The same keep_running mark the row carries (TaskList.jsx):
+            a card in the proposed column with this on it is one that,
+            once approved, never finishes. */}
+        {t.keepRunning && <KeepRunningChip />}
         {/* The two "nobody filed this by hand" chips carry the figure of
             the thing that did, exactly as they do on a task row
             (TaskList.jsx, ItemGlyph.jsx): the board is the same tasks in

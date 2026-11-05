@@ -15,6 +15,7 @@
 import { useEffect, useState } from "react";
 import {
   Alert,
+  AlertTitle,
   Box,
   Button,
   Dialog,
@@ -27,12 +28,56 @@ import {
 import api from "../api.js";
 import CopyButton from "./CopyButton.jsx";
 import ConfigRepoLink, { openInApp } from "./ConfigRepoLink.jsx";
+import { settleEdits } from "../unsavedEdits.js";
 
 // The refusal a configuration write gets when the deployment's
 // configuration lives in an external config repository (pkg/ui's
 // config_refusal.go): code "config_managed_externally", the repository,
 // the file(s) holding the setting and the patch that makes the change.
 export const CONFIG_MANAGED_EXTERNALLY = "config_managed_externally";
+
+// The code POST /api/state-repo/pull-requests' 422 carries when the
+// refusal's patch no longer applies: grain/config moved since
+// (pkg/ui's ConfigChangeStale).
+export const CONFIG_CHANGE_STALE = "config_change_stale";
+
+// ConfigPullRequestError says why a config pull request was not opened:
+// a stale patch as something to make again, the pre-review suite's
+// liveness findings as a list, anything else in the server's words.
+export function ConfigPullRequestError({ error, branch }) {
+  const message = error?.message || String(error);
+  if (error?.code === CONFIG_CHANGE_STALE) {
+    return (
+      <>
+        <AlertTitle>grain/config has changed since this was refused</AlertTitle>
+        {`This patch no longer applies to ${branch || "main"}, so no pull request was opened. Close this and make the change again for a patch that does.`}
+        <Typography
+          variant="caption"
+          component="div"
+          sx={{ mt: 0.5, opacity: 0.8 }}
+        >
+          {message}
+        </Typography>
+      </>
+    );
+  }
+  const liveness = error?.validation?.liveness || [];
+  if (liveness.length) {
+    return (
+      <>
+        <AlertTitle>This change does not pass validation</AlertTitle>
+        No pull request was opened: merged, it would leave grain unable to run
+        anything.
+        <Box component="ul" sx={{ m: 0, mt: 0.5, pl: 2.5 }}>
+          {liveness.map((l) => (
+            <li key={l}>{l}</li>
+          ))}
+        </Box>
+      </>
+    );
+  }
+  return message;
+}
 
 // configFileURL is the page of path in the repository, when the server
 // could tell where the repository is browsable.
@@ -140,12 +185,12 @@ export function EditInConfigRepo({ refusal, paths }) {
 export default function ConfigRefusalDialog({ refusal, onClose }) {
   const [opening, setOpening] = useState(false);
   const [opened, setOpened] = useState(null);
-  const [openError, setOpenError] = useState("");
+  const [openError, setOpenError] = useState(null);
   // A new refusal is a new question: what the last one opened, or why
   // it could not, is not this one's answer.
   useEffect(() => {
     setOpened(null);
-    setOpenError("");
+    setOpenError(null);
     setOpening(false);
   }, [refusal]);
   if (!refusal) return null;
@@ -157,19 +202,21 @@ export default function ConfigRefusalDialog({ refusal, onClose }) {
   const canOpenPR = isInternalRefusal(refusal) && changes.length > 0;
   const openPullRequest = async () => {
     setOpening(true);
-    setOpenError("");
+    setOpenError(null);
     try {
-      setOpened(
-        await api("/api/state-repo/pull-requests", {
-          method: "POST",
-          body: JSON.stringify({
-            title: configPullRequestTitle(refusal, paths),
-            changes,
-          }),
+      const pr = await api("/api/state-repo/pull-requests", {
+        method: "POST",
+        body: JSON.stringify({
+          title: configPullRequestTitle(refusal, paths),
+          changes,
         }),
-      );
+      });
+      // The editor behind this dialog holds the edit the pull request
+      // now carries: leaving it loses nothing, so it should not ask.
+      settleEdits();
+      setOpened(pr);
     } catch (err) {
-      setOpenError(err?.message || String(err));
+      setOpenError(err);
     } finally {
       setOpening(false);
     }
@@ -186,35 +233,6 @@ export default function ConfigRefusalDialog({ refusal, onClose }) {
       <DialogTitle>Configuration is managed in {refusal.repo}</DialogTitle>
       <DialogContent>
         <EditInConfigRepo refusal={refusal} paths={paths} />
-        {patch ? (
-          <Box sx={{ position: "relative", mt: 2 }}>
-            <Box sx={{ position: "absolute", top: 4, right: 4 }}>
-              <CopyButton text={patch} label="Copy patch" />
-            </Box>
-            <Box
-              component="pre"
-              data-testid="config-refusal-patch"
-              sx={{
-                m: 0,
-                p: 1.5,
-                pr: 5,
-                fontSize: "0.8rem",
-                overflow: "auto",
-                maxHeight: "50vh",
-                bgcolor: "action.hover",
-                borderRadius: 1,
-              }}
-            >
-              {patch}
-            </Box>
-          </Box>
-        ) : (
-          refusal.description && (
-            <Typography variant="body2" sx={{ mt: 2 }}>
-              {refusal.description}.
-            </Typography>
-          )
-        )}
         {opened && (
           <Alert
             severity="success"
@@ -246,8 +264,37 @@ export default function ConfigRefusalDialog({ refusal, onClose }) {
             sx={{ mt: 2 }}
             data-testid="config-refusal-error"
           >
-            {openError}
+            <ConfigPullRequestError error={openError} branch={refusal.branch} />
           </Alert>
+        )}
+        {patch ? (
+          <Box sx={{ position: "relative", mt: 2 }}>
+            <Box sx={{ position: "absolute", top: 4, right: 4 }}>
+              <CopyButton text={patch} label="Copy patch" />
+            </Box>
+            <Box
+              component="pre"
+              data-testid="config-refusal-patch"
+              sx={{
+                m: 0,
+                p: 1.5,
+                pr: 5,
+                fontSize: "0.8rem",
+                overflow: "auto",
+                maxHeight: "50vh",
+                bgcolor: "action.hover",
+                borderRadius: 1,
+              }}
+            >
+              {patch}
+            </Box>
+          </Box>
+        ) : (
+          refusal.description && (
+            <Typography variant="body2" sx={{ mt: 2 }}>
+              {refusal.description}.
+            </Typography>
+          )
         )}
       </DialogContent>
       <DialogActions>
@@ -256,7 +303,7 @@ export default function ConfigRefusalDialog({ refusal, onClose }) {
             How this works
           </Button>
         )}
-        {canOpenPR && !opened && (
+        {canOpenPR && !opened && openError?.code !== CONFIG_CHANGE_STALE && (
           <Button
             onClick={openPullRequest}
             disabled={opening}

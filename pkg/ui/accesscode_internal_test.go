@@ -246,7 +246,7 @@ func TestCouldBeAccessCode(t *testing.T) {
 		"",
 		"ABCD",
 		code + "A",
-		"gxt_0123456789abcdef0123456789abcdef", // an executor token
+		"gma_0123456789abcdef0123456789abcdef", // an external agent token
 		"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln", // a JWT
 		"ABCD.EFGH.IJKL.MNOP.QRST.UVWX.YZ23.4567"[:32],
 	} {
@@ -256,35 +256,104 @@ func TestCouldBeAccessCode(t *testing.T) {
 	}
 }
 
-func TestExecutorBootstrapRoute(t *testing.T) {
+func TestHostdConnectRoute(t *testing.T) {
 	for target, want := range map[string]bool{
-		"/_grain/executor":                      true,
-		"/api/executors/connect":                true,
-		"/api/executors/stream":                 true,
-		"/api/hostd/connect":                    true,
-		"/install-executor.sh":                  true,
-		"/api/executors/install.sh":             true,
-		"/api/model-servers/install.sh":         true,
-		"/api/executors/bin/grain-linux-amd64":  true,
-		"/install/linux/amd64":                  true,
-		"/install/linux/amd64.sha256":           true,
-		"/api/executors":                        false,
-		"/api/executors/tokens":                 false,
-		"/api/executors/bin/":                   false,
-		"/api/executors/bin/../../api/settings": false,
-		"/install/linux":                        false,
-		"/install/../api":                       false,
-		"/install/linux/amd64/x":                false,
-		"/api/tasks":                            false,
+		"/api/hostd/connect":     true,
+		"/api/hostd/connect/x":   false,
+		"/api/executors/connect": false,
+		"/_grain/executor":       false,
+		"/install-executor.sh":   false,
+		"/install/linux/amd64":   false,
+		"/api/tasks":             false,
 	} {
 		r := httptest.NewRequest(http.MethodGet, "http://grain.example/", nil)
 		r.URL.Path = target
-		if got := executorBootstrapRoute(r); got != want {
-			t.Errorf("GET %s: executorBootstrapRoute = %v, want %v", target, got, want)
+		if got := hostdConnectRoute(r); got != want {
+			t.Errorf("GET %s: hostdConnectRoute = %v, want %v", target, got, want)
 		}
 		r.Method = http.MethodPost
-		if executorBootstrapRoute(r) {
-			t.Errorf("POST %s counted as remote execution's", target)
+		if hostdConnectRoute(r) {
+			t.Errorf("POST %s counted as a hostd dialing in", target)
 		}
+	}
+}
+
+func TestAccessCodeHeaderFallbackAndRateLimit(t *testing.T) {
+	code := "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567"
+	cfg := IAPConfig{LocalAPIToken: code}
+
+	// Fallback works even when Authorization holds an upstream proxy's OIDC JWT.
+	req := httptest.NewRequest(http.MethodPost, "http://grain.example/api/mcp", nil)
+	req.RemoteAddr = "203.0.113.10:12345"
+	req.Header.Set("Authorization", "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln")
+	req.Header.Set(AccessCodeHeader, code)
+	if !presentsAccessCode(req, cfg) {
+		t.Fatal("X-Grain-Access-Code fallback was refused alongside an OIDC Authorization header")
+	}
+
+	// Wrong X-Grain-Access-Code values are rate-limited by singleTenantGate.
+	srv := &Server{}
+	for i := 0; i < accessSourceBurst; i++ {
+		bad := httptest.NewRequest(http.MethodPost, "http://grain.example/api/mcp", nil)
+		bad.RemoteAddr = "203.0.113.10:12345"
+		bad.Header.Set("Authorization", "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln")
+		bad.Header.Set(AccessCodeHeader, "WRNG-WRNG-WRNG-WRNG-WRNG-WRNG-WRNG-WRNG")
+		bad = bad.WithContext(WithIAPConfig(bad.Context(), cfg))
+		rec := httptest.NewRecorder()
+		if srv.singleTenantGate(rec, bad, cfg) {
+			t.Fatalf("wrong X-Grain-Access-Code admitted on attempt %d", i+1)
+		}
+		want := http.StatusUnauthorized
+		if i == accessSourceBurst-1 {
+			want = http.StatusTooManyRequests
+		}
+		if rec.Code != want {
+			t.Fatalf("attempt %d: status %d, want %d", i+1, rec.Code, want)
+		}
+	}
+
+	// Once rate-limited, even a valid X-Grain-Access-Code from that source is 429.
+	good := httptest.NewRequest(http.MethodPost, "http://grain.example/api/mcp", nil)
+	good.RemoteAddr = "203.0.113.10:12345"
+	good.Header.Set(AccessCodeHeader, code)
+	good = good.WithContext(WithIAPConfig(good.Context(), cfg))
+	rec := httptest.NewRecorder()
+	if srv.singleTenantGate(rec, good, cfg) || rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("rate-limited source got %d, want 429", rec.Code)
+	}
+}
+
+// task 2727: a sign-in sends the browser back to the page it was
+// trying to open, and only ever to a path on this origin.
+func TestLocalReturnPath(t *testing.T) {
+	for _, tc := range []struct{ next, want string }{
+		{"/settings/access", "/settings/access"},
+		{"/tasks/42?tab=runs&q=a%20b", "/tasks/42?tab=runs&q=a%20b"},
+		{"/", "/"},
+		{"", "/"},
+		{"//evil.example", "/"},
+		{"//evil.example/settings", "/"},
+		{"https://evil.example", "/"},
+		{"https://evil.example/settings", "/"},
+		{"javascript:alert(1)", "/"},
+		{"/\\evil", "/"},
+		{"/\\\\evil.example", "/"},
+		{"/a\\b", "/"},
+		{"settings/access", "/"},
+		{"/tasks/42#runs", "/"},
+		{"/tasks/42\r\nSet-Cookie: x=y", "/"},
+		{"/tasks/\t42", "/"},
+		{"/tasks/\x7f", "/"},
+		{"/api/tasks", "/"},
+		{"/" + strings.Repeat("a", maxAccessReturnPath), "/"},
+	} {
+		if got := localReturnPath(tc.next); got != tc.want {
+			t.Errorf("localReturnPath(%q) = %q, want %q", tc.next, got, tc.want)
+		}
+	}
+	// The longest path kept is kept whole.
+	long := "/" + strings.Repeat("a", maxAccessReturnPath-1)
+	if got := localReturnPath(long); got != long {
+		t.Errorf("localReturnPath of a %d-byte path = %d bytes, want it unchanged", len(long), len(got))
 	}
 }

@@ -158,6 +158,45 @@ func TestCheckCapabilityPatterns(t *testing.T) {
 		{"allow: [repo-write:*]", "self-debug", "does not allow capability"},
 		{"allow: [\"*\"]\n  deny: [gcp-key]", "self-debug", ""},
 		{"allow: [\"*\"]\n  deny: [gcp-key]", "gcp-key:x", "forbids capability"},
+		// gcp-key retired onto gcp#gcp-key {permission_set}: the old names
+		// in a policy file still reach the sets they became.
+		{"deny: [gcp-key:team-a]", model.GCPKeyServerGrant("team-a"), "forbids capability"},
+		{"deny: [gcp-key:team-a]", model.GCPKeyServerGrant("team-b"), ""},
+		{"deny: [gcp-key]", model.GCPKeyServerGrant("team-b"), "forbids capability"},
+		{"allow: [gcp-key:team-*]", model.GCPKeyServerGrant("team-a"), ""},
+		{"allow: [gcp-key:team-*]", model.GCPKeyServerGrant("other"), "does not allow capability"},
+		{"allow: [gcp-key:team-*]", model.GCPKeySandboxAgentGrant, "does not allow capability"},
+		// A grant naming no set gets whichever set the server lists
+		// first, so any gcp-key:<set> deny stops it and only an allow
+		// covering every set admits it.
+		{"deny: [gcp-key:team-a]", model.GCPKeyRef + "={}", "forbids capability"},
+		{"deny: [gcp-key:team-a]", model.GCPKeyRef + `={"account":"default"}`, "permission_set"},
+		{`allow: ["*"]`, model.GCPKeyRef + `={"activate":true}`, "permission_set"},
+		{"allow: [gcp-key:team-*]", model.GCPKeyRef + "={}", "does not allow capability"},
+		{"allow: [gcp-key]", model.GCPKeyRef + "={}", ""},
+		// A retired bare name in a policy file still reaches the grant
+		// it became: migration 85 rewrote git-push-any-ref on the task,
+		// not here.
+		{"deny: [git-push-any-ref]", model.GitPushAnyRefGrant, "forbids capability"},
+		{"deny: [git-push-any-ref]", model.RepoWriteRef + `={"refs":["refs/tags/*","refs/heads/*"],"force":true}`, "forbids capability"},
+		{"deny: [Git-Push-Any-Ref]", model.GitPushAnyRefGrant, "forbids capability"},
+		{"deny: [\"" + model.RepoWriteRef + "\"]", model.GitPushAnyRefCapability, "forbids capability"},
+		{"deny: [git-*]", model.GitPushAnyRefGrant, "forbids capability"},
+		{"deny: [\"*-any-ref\"]", model.RepoWriteRef + `={"refs":["refs/tags/*","refs/heads/*"],"force":true}`, "forbids capability"},
+		{"deny: [git-*]", model.GrainSQLWriteGrant, ""},
+		{"allow: [git-push-any-ref]", model.GitPushAnyRefGrant, ""},
+		{"allow: [git-push-any-ref]", model.GrainSQLWriteGrant, "does not allow capability"},
+		{"allow: [db-read]", model.GrainSQLWriteGrant, "does not allow capability"},
+		// Repository access matches in either spelling: migration 88
+		// rewrote repo-write: on the store, not here, and a repository's
+		// own .grain/workflows keeps the bare name.
+		{"deny: [repo-write:*]", model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "widgets"}), "forbids capability"},
+		{"deny: [repo-write:acme/*]", model.RepoWriteGrant(model.RepoRef{Owner: "other", Name: "widgets"}), ""},
+		{"deny: [repo-write:*]", model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "widgets"}), ""},
+		{"deny: [repo-write:*]", model.GitPushAnyRefGrant, ""},
+		{"deny: [\"" + model.RepoReadRef + "\"]", "repo-read:acme/widgets", "forbids capability"},
+		{"allow: [repo-read:acme/*]", model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "widgets"}), ""},
+		{"allow: [repo-read:acme/*]", model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "widgets"}), "does not allow capability"},
 	}
 	for _, c := range cases {
 		p := mustParse(t, "repos: [acme/widgets, other/widgets, ai-on-gke/grain]\ncapabilities:\n  "+c.rules+"\n")
@@ -195,9 +234,11 @@ func TestCheckCapabilityRepos(t *testing.T) {
 		model.RepoReadCapability(model.GrainSourceRepo()),
 		model.RepoReadCapability(model.RepoRef{Owner: "evil", Name: "y"}),
 		model.RepoWriteCapability(model.GrainSourceRepo()),
+		"repo-read:evil/y",
+		"repo-write:ai-on-gke/grain",
 	} {
 		task.Grants = []model.Grant{{Capability: model.SelfDebugCapability}, {Capability: grant}}
-		repo := strings.SplitN(grant, ":", 2)[1]
+		repo := model.CapabilityRepos(grant)[0].String()
 		if err := confined.Check(task, ""); err == nil || !strings.Contains(err.Error(), "repository "+repo) {
 			t.Errorf("Check = %v, want repos: [acme/*] to refuse %s", err, grant)
 		}
@@ -340,5 +381,20 @@ func TestCheckUnisolated(t *testing.T) {
 	}
 	if err := lax.CheckUnisolated(false); err != nil {
 		t.Errorf("allow_external_on_host_sandboxes: %v", err)
+	}
+}
+
+func TestAllowNamedSandboxAgentPatternRefusesUnnamedGCPKey(t *testing.T) {
+	p := mustParse(t, "capabilities:\n  allow: [gcp-key:sandbox-*]\n")
+	if err := p.CheckClaims(model.Task{Grants: []model.Grant{{Capability: model.GCPKeySandboxAgentGrant}}}, ""); err != nil {
+		t.Fatalf("named sandbox-agent refused by allow [gcp-key:sandbox-*]: %v", err)
+	}
+	for _, unnamed := range []string{model.GCPKeyRef, model.GCPKeyRef + "={}"} {
+		if err := p.CheckClaims(model.Task{Grants: []model.Grant{{Capability: unnamed}}}, ""); err == nil {
+			t.Errorf("unnamed %q admitted by allow [gcp-key:sandbox-*]", unnamed)
+		}
+	}
+	if err := p.CheckClaims(model.Task{Grants: []model.Grant{{Capability: model.GCPKeyRef + `={"account":"default"}`}}}, ""); err == nil || !strings.Contains(err.Error(), "permission_set") {
+		t.Errorf("account=default CheckClaims = %v, want refusal naming permission_set", err)
 	}
 }

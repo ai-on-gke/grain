@@ -24,7 +24,7 @@ import (
 	"time"
 )
 
-// Operator notifications (docs/design/durable-tasks.md, DT-5): something
+// Operator notifications (design/design/durable-tasks.design.md, DT-5): something
 // a person should know about or act on, raised by a reconciler, an agent
 // (notify_operator) or the API, which never parks whoever raised it.
 //
@@ -195,7 +195,7 @@ func PrincipalString(p Principal) string {
 }
 
 // The notification families grain's own escalations are raised under
-// (docs/design/durable-tasks.md, DT-5's "Existing escalations, mapped").
+// (design/design/durable-tasks.design.md, DT-5's "Existing escalations, mapped").
 // A subject is the family, ':', and what it is about.
 const (
 	// FamilyBaseRed is a confirmed-red base branch, "<repo>@<branch>".
@@ -203,6 +203,29 @@ const (
 	// FamilyNotPublishing is a base branch nothing has published from
 	// (BaseBranchPublishing), "<repo>@<branch>".
 	FamilyNotPublishing = "pipeline.not-publishing"
+	// FamilyReleaseNotStarting is a repository grain releases whose
+	// trunk has moved and no release has been started for it, "<repo>"
+	// (orchestrator's releasestall.go).
+	FamilyReleaseNotStarting = "pipeline.release-not-starting"
+	// FamilyRCFailed is a release candidate whose Stage 2 qualification
+	// is confirmed red, "<rc_tag>" (orchestrator's releaseredrc.go,
+	// design/playbook/releases.playbook.md §12). It wakes the pipeline
+	// steward to triage `<floor>..<rc_sha>`, and is cleared once a newer
+	// candidate is cut or the version is promoted.
+	FamilyRCFailed = "pipeline.rc-failed"
+	// FamilyFlakeBudget is a qualification target that spent
+	// FlakeBudgetRetries flake retries inside FlakeBudgetWindow,
+	// "<repo>:<target>" (playbook §3).
+	FamilyFlakeBudget = "pipeline.flake-budget"
+	// FamilyReleaseInfraStalled is a release candidate left qualifying
+	// because one item keeps failing on infrastructure, "<rc_tag>"
+	// (playbook §4's bounded patience).
+	FamilyReleaseInfraStalled = "pipeline.release-infra-stalled"
+	// FamilyReleaseEscalated is a version that used
+	// ReleaseMaxRCAttempts candidates and is still red, "<vX.Y.Z>"
+	// (playbook §5): the train cuts no more of it until a person resets
+	// or advances it.
+	FamilyReleaseEscalated = "pipeline.release-escalated"
 	// FamilyMergeStalled is a merge-queue entry handed to a person past
 	// its patience, "<task>".
 	FamilyMergeStalled = "pipeline.merge-stalled"
@@ -212,15 +235,34 @@ const (
 	// FamilyRepairFailing is a base-branch repair that is not getting
 	// the branch green, "<task>".
 	FamilyRepairFailing = "pipeline.repair-failing"
+	// FamilyCIWakeStalled is a task deferred on a resume_later CI wake past
+	// its stall bound with no CI activity on its branch, "<task>".
+	FamilyCIWakeStalled = "pipeline.ci-wake-stalled"
+	// FamilyStateRepoUnapplied is a configuration-repository commit the
+	// daemon could not apply across a schema migration and had to rewrite
+	// over, "<prior-head>".
+	FamilyStateRepoUnapplied = "pipeline.staterepo-unapplied"
 	// FamilyForceMergeRequest asks a person to force-merge "<task>".
 	FamilyForceMergeRequest = "request.force-merge"
 	// FamilyRevertRequest asks a person to revert "<task or sha>".
 	FamilyRevertRequest = "request.revert"
 	// FamilyReleasePending is a trunk release whose soak passed and that
 	// waits for a person to approve or reject it, "<vX.Y.0>"
-	// (docs/design/release-from-trunk.md, §4). Raised by the release
+	// (design/design/release-from-trunk.design.md, §4). Raised by the release
 	// train through the release gate, with ReleasePendingActions.
 	FamilyReleasePending = "release.pending"
+	// FamilyUpgradeFailed is an automatic upgrade that failed, "<target>"
+	// -- the release tag it was for, or the branch a daily upgrade
+	// follows -- with the step that failed and its output. Raised and
+	// cleared by orchestrator's automatic upgrades: the next one that
+	// succeeds clears every open instance.
+	FamilyUpgradeFailed = "upgrade.failed"
+	// FamilyCapabilityServerDown is a capability server that fell out of
+	// use -- attached, then failed or needs-config, or refusing the config
+	// it was saved with -- "<capability_id>". Raised and cleared by the
+	// daemon's capability-server registry: the server attaching again
+	// clears it.
+	FamilyCapabilityServerDown = "capability.server-down"
 )
 
 // ReleasePendingActions are the actions a FamilyReleasePending
@@ -655,7 +697,7 @@ func NotificationFamilyMatches(pattern, family string) bool {
 // NotificationSink is an external channel notifications are delivered
 // to (a webhook, a chat): once per instance, with retries, at or above
 // a minimum severity. An interface only for now -- the first sink is its
-// own task (docs/design/durable-tasks.md, DT-5 "External channels").
+// own task (design/design/durable-tasks.design.md, DT-5 "External channels").
 type NotificationSink interface {
 	// Name identifies the sink in Notification.Delivered.External.
 	Name() string

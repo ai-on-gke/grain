@@ -139,7 +139,7 @@ func (c *Client) RequestBaseBranchRun(ctx context.Context, repo string,
 		return BaseBranchRunRequested{}, err
 	}
 	now := c.now()
-	row, err := c.Store.RequestBaseBranchCIRun(ctx, parsed, branch, now, c.actor(ctx).ID)
+	row, err := c.Store.RequestBaseBranchCIRun(ctx, parsed, branch, now, c.requestActor(ctx).Actor.ID)
 	if err != nil {
 		return BaseBranchRunRequested{}, err
 	}

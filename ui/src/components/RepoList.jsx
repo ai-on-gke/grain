@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Alert,
   Autocomplete,
@@ -44,6 +44,8 @@ import {
   RowLink,
 } from "./ListPrimitives.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
+import { HighlightedText } from "./SearchSelect.jsx";
+import { searchFilter } from "../fuzzy.js";
 import { identifierField } from "../identifierField.js";
 import NoGitConnectionNotice from "./NoGitConnectionNotice.jsx";
 import { useInPageHeader } from "./PageHeader.jsx";
@@ -215,6 +217,24 @@ export default function RepoList({
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState("custom");
   const [reach, setReach] = useState({ loading: true });
+  // adding is the repo an add is in flight for, "" otherwise: set for
+  // the whole of addRepo, from the stranded-plan lookup the first add's
+  // confirmation waits on to onRefreshConfig resolving, and cleared on
+  // every exit. added is the repo the last add stored, shown in the
+  // caption until the next edit so a row the refreshed list already held
+  // still visibly lands.
+  const [adding, setAdding] = useState("");
+  const [added, setAdded] = useState("");
+  const addingRef = useRef(false);
+
+  // The "Added" note is for the moment after the click, not a standing
+  // state: it gives way to the discovery line again after a few
+  // seconds, or at the next edit of the picker, whichever comes first.
+  useEffect(() => {
+    if (!added) return undefined;
+    const t = setTimeout(() => setAdded(""), 6000);
+    return () => clearTimeout(t);
+  }, [added]);
 
   useEffect(() => {
     let live = true;
@@ -329,17 +349,36 @@ export default function RepoList({
     }
   };
 
+  // The add is not instantaneous -- the daemon resolves the spelling
+  // against the host, rewrites the stored config (a commit, on a
+  // deployment with a state repo), then the page re-reads config -- and
+  // before any of that the first add waits on the plan above. The form
+  // says so for the whole stretch: adding disables its fields and puts
+  // the button into its loading state (a spinner over the label), and
+  // the caption under the picker says which repo is being added
+  // (role="status", so it is announced), so a click visibly took,
+  // nothing can be edited or submitted again underneath it, and the
+  // second click a silent wait used to invite is ignored here as well
+  // as by the disabled button (a submit can still arrive through Enter
+  // in the field before React has re-rendered it disabled -- addingRef
+  // is the guard that does not wait for a render). A failure leaves
+  // what was typed in place behind the error, so it can be corrected
+  // rather than retyped.
   const addRepo = async (evt) => {
     evt.preventDefault();
+    if (addingRef.current) return;
     const repo = newRepo.trim();
     if (repo === "") return;
-    let warning = firstAddWarning(repo);
-    if (warning !== null) {
-      const stranded = await strandedByAdding(repo);
-      if (stranded.length > 0) warning += `\n\n${stranded.join("\n\n")}`;
-    }
-    if (warning !== null && !confirm(warning)) return;
+    addingRef.current = true;
+    setAdding(repo);
+    setAdded("");
     try {
+      let warning = firstAddWarning(repo);
+      if (warning !== null) {
+        const stranded = await strandedByAdding(repo);
+        if (stranded.length > 0) warning += `\n\n${stranded.join("\n\n")}`;
+      }
+      if (warning !== null && !confirm(warning)) return;
       await api("/api/repos", {
         method: "POST",
         body: JSON.stringify({
@@ -352,57 +391,76 @@ export default function RepoList({
       setNewRepo("");
       setCloneUrl("");
       setOther(false);
+      setAdded(repo);
       await onRefreshConfig();
     } catch (err) {
       showError(err);
+    } finally {
+      addingRef.current = false;
+      setAdding("");
     }
   };
 
-  // What discovery found, under the picker. In the header rail the
+  // What discovery found, under the picker -- or, while an add is in
+  // flight, that it is, and just after one, that it landed: the one
+  // line the picker already has for saying what is happening to it,
+  // and the one a screen reader announces. In the header rail the
   // picker is one row of the rail and has no room under it, so the
   // caption is drawn at the top of the page instead (PageHeader.jsx).
   const discoveryCaption = (
     <Typography
       variant="caption"
-      color={status.kind === "error" ? "error" : "text.secondary"}
+      color={
+        status.kind === "error" && !adding && !added
+          ? "error"
+          : "text.secondary"
+      }
       data-testid="repo-discovery-status"
-      data-status={status.kind}
+      data-status={adding ? "adding" : added ? "added" : status.kind}
       role="status"
       sx={{
         maxWidth: 560,
         ...(inRail ? { mx: "1.75rem", mt: 2, display: "block" } : {}),
       }}
     >
-      {status.text}
-      {status.kind === "none" && (
+      {adding ? (
+        `Adding ${adding}…`
+      ) : added ? (
+        `Added ${added}`
+      ) : (
         <>
-          {" — add or check a "}
-          <Link
-            href={settingsHref}
-            onClick={(evt) => {
-              if (
-                !onOpenSettings ||
-                evt.button !== 0 ||
-                evt.metaKey ||
-                evt.ctrlKey ||
-                evt.shiftKey ||
-                evt.altKey
-              )
-                return;
-              evt.preventDefault();
-              onOpenSettings("git");
-            }}
-          >
-            Git connection in Settings
-          </Link>
-          {status.reason ? ` (${status.reason})` : ""}
+          {status.text}
+          {status.kind === "none" && (
+            <>
+              {" — add or check a "}
+              <Link
+                href={settingsHref}
+                onClick={(evt) => {
+                  if (
+                    !onOpenSettings ||
+                    evt.button !== 0 ||
+                    evt.metaKey ||
+                    evt.ctrlKey ||
+                    evt.shiftKey ||
+                    evt.altKey
+                  )
+                    return;
+                  evt.preventDefault();
+                  onOpenSettings("git");
+                }}
+              >
+                Git connection in Settings
+              </Link>
+              {status.reason ? ` (${status.reason})` : ""}
+            </>
+          )}
+          {status.failures.map((f) => (
+            <span key={f} style={{ display: "block" }}>
+              {f}
+            </span>
+          ))}
         </>
       )}
-      {status.failures.map((f) => (
-        <span key={f} style={{ display: "block" }}>
-          {f}
-        </span>
-      ))}
     </Typography>
   );
 
@@ -412,16 +470,25 @@ export default function RepoList({
         title="Repos"
         icon={<ItemGlyph kind="repos" size={20} />}
         count={visible.length}
-        style={{ alignItems: "center" }}
+        style={{ alignItems: "center", flexWrap: "wrap" }}
         action={
           <Stack
             component="form"
             spacing={0.5}
             onSubmit={addRepo}
-            sx={{ ml: "auto" }}
+            // On a phone the header is drawn in the page rather than in
+            // the rail's slot, and a 300px field beside the title pushed
+            // Add repo past the viewport's right edge, where nothing
+            // could reach it (2026-11-01 walkthrough). There the form
+            // takes a line of its own and its field gives up width.
+            sx={{
+              ml: "auto",
+              minWidth: 0,
+              flexBasis: { xs: "100%", sm: "auto" },
+            }}
             aria-label="Add repo"
           >
-            <Stack direction="row" spacing={1}>
+            <Stack direction="row" spacing={1} sx={{ minWidth: 0 }}>
               <Autocomplete
                 freeSolo
                 forcePopupIcon
@@ -431,14 +498,32 @@ export default function RepoList({
                 loading={reach.loading}
                 loadingText="Discovering repositories…"
                 filterOptions={(opts, { inputValue }) => {
-                  const q = inputValue.trim().toLowerCase();
-                  return opts.filter(
-                    (o) => o === OTHER || o.toLowerCase().includes(q),
+                  const searchable = opts.filter((o) => o !== OTHER);
+                  const pinned = opts.includes(OTHER) ? [OTHER] : [];
+                  const hits = inputValue.trim()
+                    ? searchFilter(searchable, inputValue).map(
+                        ({ item }) => item,
+                      )
+                    : searchable;
+                  return [...hits, ...pinned];
+                }}
+                renderOption={(props, option, { inputValue }) => {
+                  const { key, ...rest } = props;
+                  const ranges =
+                    option !== OTHER && inputValue.trim()
+                      ? searchFilter([option], inputValue)[0]?.ranges
+                      : undefined;
+                  return (
+                    <li key={key} {...rest} data-value={option}>
+                      <HighlightedText text={option} ranges={ranges} />
+                    </li>
                   );
                 }}
                 value={newRepo}
                 inputValue={newRepo}
+                disabled={Boolean(adding)}
                 onChange={(_evt, next) => {
+                  setAdded("");
                   if (next === OTHER) {
                     setOther(true);
                     setNewRepo("");
@@ -448,6 +533,7 @@ export default function RepoList({
                 }}
                 onInputChange={(_evt, next, reason) => {
                   if (reason === "input") {
+                    setAdded("");
                     setNewRepo(next);
                   }
                 }}
@@ -466,7 +552,7 @@ export default function RepoList({
                     }}
                   />
                 )}
-                sx={{ minWidth: 300 }}
+                sx={{ minWidth: { xs: 0, sm: 300 }, flex: "1 1 auto" }}
               />
               {needsCloneUrl && (
                 <TextField
@@ -475,10 +561,32 @@ export default function RepoList({
                   placeholder="Clone URL (GitHub by default)"
                   size="small"
                   autoComplete="off"
+                  disabled={Boolean(adding)}
                   inputProps={{ "aria-label": "Clone URL" }}
                 />
               )}
-              <Button type="submit" variant="outlined" size="small">
+              {/* While adding, the button is MUI's loading button: its
+                  label goes transparent under a centred spinner, so the
+                  button keeps exactly the width "Add repo" has. That is
+                  not cosmetic. The header rail's slot clips to one line
+                  and hands anything that wraps to "More page actions"
+                  (PageHeader.jsx), and at 1440px a label 20px wider
+                  ("Adding…" beside a start icon) was enough to tip this
+                  form over that line -- behind a menu button whose own
+                  width then kept it there after the add had finished.
+                  On a phone the same width change would have pushed the
+                  button back toward the viewport's edge (the sx above).
+                  The words -- which repo, that it is being added -- are
+                  the caption's, which is the status line this picker
+                  already has. */}
+              <Button
+                type="submit"
+                variant="outlined"
+                size="small"
+                loading={Boolean(adding)}
+                aria-busy={Boolean(adding)}
+                sx={{ flex: "none" }}
+              >
                 Add repo
               </Button>
             </Stack>
@@ -598,6 +706,19 @@ export default function RepoList({
                 {r.repo}
               </RowLink>
               <ChipStrip>
+                {/* Blocked leads the strip: ChipStrip hides the last chips
+                    first once the row runs out of width, and a repo with
+                    tasks in every state already fills a desktop row with
+                    its counts -- so behind them, the one chip this list
+                    exists to make stand out was the first to go, at any
+                    width (grain/task-2235). */}
+                {r.blocked > 0 && (
+                  <Chip
+                    size="small"
+                    color="error"
+                    label={`Blocked ${r.blocked}`}
+                  />
+                )}
                 {/* Each chip here counts a repo's tasks in one state, not one
                       task's own status, so "running" keeps the plain CSS spin
                       (style.css's .badge-running) rather than StateDot's grain
@@ -611,13 +732,6 @@ export default function RepoList({
                     label={`${STATE_LABELS[s] || s} ${count}`}
                   />
                 ))}
-                {r.blocked > 0 && (
-                  <Chip
-                    size="small"
-                    color="error"
-                    label={`Blocked ${r.blocked}`}
-                  />
-                )}
                 {defaultsOnly && (
                   <Chip
                     size="small"

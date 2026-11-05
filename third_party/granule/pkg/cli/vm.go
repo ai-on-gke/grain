@@ -11,9 +11,9 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/dockercli"
-	"github.com/bwsalmon/granule/pkg/dockervm"
-	"github.com/bwsalmon/granule/pkg/vmspec"
+	"github.com/gke-labs/granule/pkg/dockercli"
+	"github.com/gke-labs/granule/pkg/dockervm"
+	"github.com/gke-labs/granule/pkg/vmspec"
 )
 
 // stringList collects a flag that may be repeated, in order. Used for
@@ -169,7 +169,7 @@ func registerVMFlags(fs *flag.FlagSet, d vmspec.VMSpec) *vmFlags {
 	v.memoryMB = fs.Int("memory-mb", d.MemoryMB, "guest memory, in MiB; left out, the machine image's own (\"VM SET memory-mb=\") is used, and this default applies only to an image that records none")
 	v.cpusMax = fs.Int("cpus-max", d.CPUsMax, "vCPU ceiling \"granule resize\" may grow this VM to; left out, the machine image's own (\"VM SET cpus-max=\"), and 0 if it records none -- no headroom, and the count is fixed at -cpus for the VM's whole life")
 	v.memoryMaxMB = fs.Int("memory-max-mb", d.MemoryMaxMB, "memory ceiling \"granule resize\" may grow this VM to, in MiB; left out, the machine image's own (\"VM SET memory-max-mb=\"), and 0 if it records none -- no headroom beyond the VM container's own default")
-	v.memoryLimitMB = fs.Int("memory-limit-mb", d.MemoryLimitMB, "cgroup memory limit for the VM container or process, in MiB, with swap bounded to 0; 0 uses guest memory plus 512 MiB VMM overhead")
+	v.memoryLimitMB = fs.Int("memory-limit-mb", d.MemoryLimitMB, "cgroup memory limit for the VM container or process, in MiB, with swap bounded to 0; 0 uses guest memory plus max(512 MiB, guest memory/16) VMM overhead")
 	v.oomScoreAdj = fs.Int("oom-score-adj", d.OOMScoreAdj, "host oom_score_adj for the VM container or process; 0 uses granule's default (500)")
 	v.memAgent = fs.Bool("mem-agent", d.MemAgent, "let the guest grow its own memory: the VM container listens for the pressure signals the guest's granule-mem-agent sends and hotplugs -mem-agent-step-mb on each, up to -memory-max-mb (which is required with this, since the hotplug window is sized once at boot). Needs a guest whose kernel reports pressure through /proc/pressure/memory -- of the images this tree builds, the debian12 variant -- and the control link the signals travel over (-control-cidr)")
 	v.memAgentAddr = fs.String("mem-agent-addr", d.MemAgentAddr, "address in the VM container the pressure signals are received on; empty means the container's own default (169.254.100.1:30090), which is the control link address the guest image is built to signal (-mem-agent only)")

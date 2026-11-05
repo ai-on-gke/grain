@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # Make a pending release official, or drop it -- a person's answer to
-# "vX.Y.0 is ready to promote" (docs/design/release-from-trunk.md, §4).
+# "vX.Y.0 is ready to promote" (design/design/release-from-trunk.design.md, §4).
 #
 # The release train (scripts/release-from-trunk.sh, run daily by
 # .grain/workflows/release-train.yml) does everything up to the release
@@ -37,11 +37,36 @@
 #     route -- `grain ci run`, POST /api/ci/runs, an agent's run -- fails
 #     at its first step and pushes nothing;
 #   - .grain/triggers/release-promotion.yml holds every change to this
-#     file and the scripts it runs for a person's Submit.
+#     file for a person's Submit; the scripts it runs are held for grain's
+#     security review, which checks they cannot move vX.Y.Z or latest
+#     but through this approval (release-machinery.yml).
+#
+# approve refuses a pending release whose recorded staging soak is under
+# the minimum (24h less the slack; release-from-trunk.sh writes it on the
+# -pending tag, with whether FORCE was used) unless RELEASE_SHORT_SOAK_OK
+# is true. Here that comes only from GRAIN_CI_RELEASE_SHORT_SOAK_OK, which
+# the approval route sets when the person approving passes short_soak_ok
+# (`grain release approve -short-soak-ok`, the SHORT SOAK approval in the
+# UI) and which, like the variables above, no API caller and no env:
+# block can set. .github/workflows/promote-release.yml takes the same
+# answer as its short_soak_ok input.
+#
+# approve also refuses a release carrying breaking changes that is not the
+# major release RELEASE_MAJOR asks for (release-notes.sh check-breaking)
+# unless RELEASE_ALLOW_BREAKING names it. Here that comes only from
+# GRAIN_CI_RELEASE_ALLOW_BREAKING, which the approval route sets when the
+# person approving passes allow_breaking (`grain release approve
+# -allow-breaking`) and which no API caller and no env: block can set
+# either; the step turns it into RELEASE_ALLOW_BREAKING=<the release>.
+# .github/workflows/promote-release.yml takes it as its allow_breaking
+# input.
 #
 # The route selects one job: `promote` for an approval (which brings
-# `approve` in front of it) or `reject`. Dispatched whole, all three
-# refuse.
+# `approve` in front of it), `reject`, or `rollback` (started by
+# POST /api/releases/{version}/rollback or `grain release rollback`,
+# which set GRAIN_CI_RELEASE_ROLLBACK_TO and
+# GRAIN_CI_RELEASE_ROLLBACK_REASON -- variables no API caller and no
+# env: block can set). Dispatched whole, all four refuse.
 name: promote-release
 
 on:
@@ -59,7 +84,14 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Promote the pending release a person approved
-        run: bash ./scripts/release-from-trunk.sh approve "$GRAIN_CI_RELEASE_VERSION"
+        run: |
+          allow_breaking=""
+          if [ "${GRAIN_CI_RELEASE_ALLOW_BREAKING:-}" = true ]; then
+            allow_breaking="$GRAIN_CI_RELEASE_VERSION"
+          fi
+          RELEASE_SHORT_SOAK_OK="${GRAIN_CI_RELEASE_SHORT_SOAK_OK:-false}" \
+          RELEASE_ALLOW_BREAKING="$allow_breaking" \
+            bash ./scripts/release-from-trunk.sh approve "$GRAIN_CI_RELEASE_VERSION"
 
   promote:
     # .grain/workflows/promote.yml's job, dispatched as the approval's last
@@ -91,3 +123,20 @@ jobs:
     steps:
       - name: Drop the pending release a person rejected
         run: bash ./scripts/release-from-trunk.sh reject "$GRAIN_CI_RELEASE_VERSION"
+
+  rollback:
+    name: roll a promoted release back
+    cache: false
+    capabilities: ["repo-write:ai-on-gke/grain", package-publish]
+    optional-capabilities: [image-signing]
+    timeout-minutes: 30
+    steps:
+      - name: Retract the release a person rolled back and re-point latest
+        run: |
+          if [ "${GRAIN_CI_REQUESTED_BY_KIND:-}" != human ]; then
+            echo "promote-release: only a person rolls a release back" >&2
+            exit 1
+          fi
+          RELEASE_ROLLBACK_TO="${GRAIN_CI_RELEASE_ROLLBACK_TO:-}" \
+          RELEASE_ROLLBACK_REASON="${GRAIN_CI_RELEASE_ROLLBACK_REASON:-}" \
+            bash ./scripts/release-from-trunk.sh rollback --bad "$GRAIN_CI_RELEASE_VERSION"

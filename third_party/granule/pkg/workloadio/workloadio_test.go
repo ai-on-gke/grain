@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/execwire"
+	"github.com/gke-labs/granule/pkg/execwire"
 )
 
 type received struct {

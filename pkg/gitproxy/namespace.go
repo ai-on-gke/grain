@@ -319,7 +319,7 @@ func (p *GitProxy) ServeCapHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case "quarantine", "test-quarantine", "quarantine-test":
 		scope := toNamespaceScope(modelScope)
-		act := RouteActivity{Tool: "quarantine_test", Phrase: "quarantining a test"}
+		act := RouteActivity{Tool: "api_quarantine_test", Phrase: "quarantining a test"}
 		p.noteActivity(r.Context(), modelScope.TaskID, act.Phrase)
 		cw := &countingResponseWriter{ResponseWriter: w}
 		p.serveQuarantine(cw, r, scope)

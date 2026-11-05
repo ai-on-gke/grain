@@ -167,6 +167,42 @@ describe("GitConnections git connections and input operations", () => {
     });
   });
 
+  // A plain git host has no App API and the save refuses an App there,
+  // so the form no longer offers one for it (2026-10-29..11-01
+  // walkthroughs), and switching an App draft to plain git drops it.
+  it("offers a GitHub App only for a GitHub host", async () => {
+    const user = userEvent.setup();
+    api.mockImplementation((url, opts) => {
+      if (url.includes("/git-connections") && !opts) {
+        return Promise.resolve([]);
+      }
+      if (url.includes("/github-credential") && !opts) {
+        return Promise.resolve({ configured: false });
+      }
+      return Promise.resolve({});
+    });
+    render(
+      <GitConnections
+        deployment={deployment}
+        onSave={vi.fn()}
+        onDeploymentChanged={vi.fn()}
+        showError={vi.fn()}
+      />,
+    );
+    await user.click(await screen.findByTestId("add-connection-button"));
+    await user.click(screen.getByLabelText("Auth type"));
+    await user.click(await screen.findByRole("option", { name: "GitHub App" }));
+    expect(screen.getByLabelText("Auth type")).toHaveTextContent("GitHub App");
+
+    await user.click(screen.getByLabelText("Kind"));
+    await user.click(await screen.findByRole("option", { name: "Plain git" }));
+    expect(screen.getByLabelText("Auth type")).toHaveTextContent("PAT");
+    await user.click(screen.getByLabelText("Auth type"));
+    expect(
+      await screen.findByRole("option", { name: "GitHub App" }),
+    ).toHaveAttribute("aria-disabled", "true");
+  });
+
   it("adds an ambient connection with its source and says whose access it uses", async () => {
     const user = userEvent.setup();
     api.mockImplementation((url, opts) => {

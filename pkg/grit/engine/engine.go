@@ -147,7 +147,7 @@ type Engine struct {
 	// Attachments, when set, is where each running step's exec id and
 	// output cursor are kept, so a grain that restarts mid-step can
 	// reattach the step rather than interrupt its run
-	// (docs/design/grain-on-gke.md#GKE-4). nil keeps nothing: a restart
+	// (design/design/grain-on-gke.design.md#GKE-4). nil keeps nothing: a restart
 	// can then only rerun the step through its in-sandbox step runner.
 	Attachments StepAttachments
 	// AttachmentCheckpoint is how often a running step's cursor is
@@ -249,7 +249,7 @@ type AdoptedJob struct {
 	// Attachment, when set, is the stored exec of the step that was
 	// running when grain stopped: that step is reattached by its exec id
 	// from its cursor rather than started again
-	// (docs/design/grain-on-gke.md#GKE-4).
+	// (design/design/grain-on-gke.design.md#GKE-4).
 	Attachment *StepAttachment
 	// Lost, when set, is why the job's sandbox did not come back across
 	// the restart. Sandbox is then nil, and the step that was running ends
@@ -895,21 +895,22 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		// tidiness: this same list is what Admission reserves finite
 		// credentials from, so a job that does not use the scarce one no
 		// longer queues for it.
-		Capabilities:       workflows.JobCapabilities(pj.Job, plan.Request.Capabilities, e.ExplicitOnlyCapability),
-		ReleaseSecrets:     workflows.JobSecrets(pj.Job, plan.Request.ReleaseSecrets),
-		Event:              plan.Request.Event,
-		TrustedSchedule:    plan.Request.TrustedSchedule,
-		WithholdEventGated: plan.Request.WithholdEventGated,
-		Name:               SandboxName(runID, plan, pj),
-		RunID:              runID,
-		JobAttempt:         jobIndex(plan, pj),
-		Untrusted:          plan.Request.UntrustedCommit() != "",
-		Repo:               plan.Request.Repo,
-		Ref:                plan.Request.Ref,
-		Commit:             plan.Request.Commit,
-		Shape:              pj.Job.Sandbox,
-		Builtin:            pj.Job.Builtin,
-		Timeout:            pj.Job.Timeout(),
+		Capabilities:         workflows.JobCapabilities(pj.Job, plan.Request.Capabilities, e.ExplicitOnlyCapability),
+		ImplicitCapabilities: pj.Job.ImplicitCapabilities(),
+		ReleaseSecrets:       workflows.JobSecrets(pj.Job, plan.Request.ReleaseSecrets),
+		Event:                plan.Request.Event,
+		TrustedSchedule:      plan.Request.TrustedSchedule,
+		WithholdEventGated:   plan.Request.WithholdEventGated,
+		Name:                 SandboxName(runID, plan, pj),
+		RunID:                runID,
+		JobAttempt:           jobIndex(plan, pj),
+		Untrusted:            plan.Request.UntrustedCommit() != "",
+		Repo:                 plan.Request.Repo,
+		Ref:                  plan.Request.Ref,
+		Commit:               plan.Request.Commit,
+		Shape:                pj.Job.Sandbox,
+		Builtin:              pj.Job.Builtin,
+		Timeout:              pj.Job.Timeout(),
 	}
 	if adopted == nil && e.GuestCache != nil && pj.GuestKey != "" {
 		warmCtx, cancel := context.WithTimeout(queueCtx, pj.Job.Timeout())
@@ -952,8 +953,16 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		}
 	}
 
-	if perRun != nil {
-		release, err := perRun.Acquire(queueCtx, GateRequest{Wait: waiting})
+	jobName := pj.Job.ID
+	if jobName == "" {
+		jobName = pj.ID
+	}
+	jobLabel := gateJobLabel(plan.Request.Repo, runID, jobName)
+	// A builtin job (Job.Builtin) runs in-process in the daemon with no
+	// image and no sandbox, so it takes neither a per-run sandbox slot nor
+	// a machine from the deployment's sandbox gate/ledger.
+	if perRun != nil && pj.Job.Builtin == "" {
+		release, err := perRun.Acquire(queueCtx, GateRequest{Job: jobLabel, Wait: waiting})
 		if err != nil {
 			if e.stopping(ctx) {
 				return NewJobRun(pj)
@@ -966,12 +975,13 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		defer release()
 	}
 
-	if e.Jobs != nil {
+	if e.Jobs != nil && pj.Job.Builtin == "" {
 		// The job's own shape goes with the request: this gate is the
 		// deployment's, and what it rations is the machine as well as
 		// the count (grain/task-173).
 		var jobID string
 		release, err := e.Jobs.Acquire(queueCtx, GateRequest{
+			Job:  jobLabel,
 			Want: workflows.SandboxCommitment(pj.Job.Sandbox), Priority: rank, Wait: waiting,
 			Adopted: adopted != nil,
 			Assigned: func(id string) {
@@ -1040,6 +1050,9 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 			e.log("ci: run %s: job %s: resumed in sandbox %s", runID, pj.ID, sandbox.Name())
 		}
 		result.Sandbox = sandbox.Name()
+		if warner, ok := sandbox.(gritsteps.WarningSandbox); ok {
+			result.Warning = joinJobWarning(result.Warning, warner.Warning())
+		}
 	} else {
 		if e.stopping(ctx) {
 			return NewJobRun(pj)
@@ -1079,6 +1092,9 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 			return result
 		}
 		result.Sandbox = sandbox.Name()
+		if warner, ok := sandbox.(gritsteps.WarningSandbox); ok {
+			result.Warning = joinJobWarning(result.Warning, warner.Warning())
+		}
 		if progress != nil && !e.stopping(ctx) {
 			progress(jobRunSnapshot(result))
 		}
@@ -1122,7 +1138,7 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 
 	// A first attempt whose sandbox the kernel OOM-killed is retried
 	// whatever the job declares: under memory overcommit that is the
-	// deployment's doing, not the tree's (docs/design/auto-overcommit.md).
+	// deployment's doing, not the tree's (design/design/auto-overcommit.design.md).
 	var oomHow string
 	var oomKilled bool
 	if !channelLost {
@@ -1208,6 +1224,9 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 			return NewJobRun(pj)
 		}
 		result.Sandbox = sandbox2.Name()
+		if ws, ok := sandbox2.(gritsteps.WarningSandbox); ok {
+			result.Warning = joinJobWarning(result.Warning, ws.Warning())
+		}
 		// The job is running again, so it must not read as finished: a
 		// conclusion left over from the first attempt makes every reader
 		// (the CI page, wait_for_checks, the merge queue) draw a job that
@@ -1250,19 +1269,19 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 			// Infrastructure, not a flake: nothing about the tree
 			// failed the first time, so nothing is recorded against it.
 			result.Status = "passed (retry after OOM kill)"
-			result.Warning = "infrastructure: " + firstFailureSummary + "; passed in a fresh sandbox"
+			result.Warning = joinJobWarning(result.Warning, "infrastructure: "+firstFailureSummary+"; passed in a fresh sandbox")
 			e.log("ci: run %s: job %s: passed on retry after its sandbox was OOM-killed", runID, pj.ID)
 		case preempted && result.Conclusion == workflows.ConclusionSuccess:
 			// The same: the first attempt lost its machine, not a test.
 			result.Status = "passed (retry after preemption)"
-			result.Warning = "infrastructure: " + firstFailureSummary + "; passed in a fresh sandbox"
+			result.Warning = joinJobWarning(result.Warning, "infrastructure: "+firstFailureSummary+"; passed in a fresh sandbox")
 			e.log("ci: run %s: job %s: passed on retry after its sandbox was preempted", runID, pj.ID)
 		case secondPreempted:
 			// Taken away again: errored, which the CI layer re-runs
 			// (ciReplacementFor) rather than reading as a red verdict.
 			result.Conclusion = conclusionFor(jobCtx, workflows.ConclusionErrored)
 			result.Status = "errored (preempted)"
-			result.Warning = "infrastructure: " + firstFailureSummary
+			result.Warning = joinJobWarning(result.Warning, "infrastructure: "+firstFailureSummary)
 			result.Error = PreemptedRetryReasonPrefix + secondPreemptHow + " (on retry, too)"
 			e.log("ci: run %s: job %s: %s", runID, pj.ID, result.Error)
 		case secondOOM:
@@ -1270,13 +1289,13 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 			// tree's, so errored rather than a red verdict.
 			result.Conclusion = conclusionFor(retryCtx, workflows.ConclusionErrored)
 			result.Status = "errored (OOM-killed)"
-			result.Warning = "infrastructure: " + firstFailureSummary
+			result.Warning = joinJobWarning(result.Warning, "infrastructure: "+firstFailureSummary)
 			result.Error = OOMRetryReasonPrefix + secondHow + " (on retry, too)"
 			e.log("ci: run %s: job %s: %s", runID, pj.ID, result.Error)
 		case result.Conclusion == workflows.ConclusionSuccess:
 			result.Flake = true
 			result.Status = "passed (retry)"
-			result.Warning = fmt.Sprintf("passed (retry): flaky failure on initial attempt: %s", firstFailureSummary)
+			result.Warning = joinJobWarning(result.Warning, fmt.Sprintf("passed (retry): flaky failure on initial attempt: %s", firstFailureSummary))
 			e.log("ci: run %s: job %s: passed on retry (flake: %s)", runID, pj.ID, firstFailureSummary)
 		default:
 			e.log("ci: run %s: job %s: retry failed with definitive failure (%s)", runID, pj.ID, SummarizeFailure(result))
@@ -1301,24 +1320,24 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 			switch {
 			case strings.HasPrefix(firstFailureSummary, OOMRetryReasonPrefix) && result.Conclusion == workflows.ConclusionSuccess:
 				result.Status = "passed (retry after OOM kill)"
-				result.Warning = "infrastructure: " + firstFailureSummary + "; passed in a fresh sandbox"
+				result.Warning = joinJobWarning(result.Warning, "infrastructure: "+firstFailureSummary+"; passed in a fresh sandbox")
 			case strings.HasPrefix(firstFailureSummary, PreemptedRetryReasonPrefix) && result.Conclusion == workflows.ConclusionSuccess:
 				result.Status = "passed (retry after preemption)"
-				result.Warning = "infrastructure: " + firstFailureSummary + "; passed in a fresh sandbox"
+				result.Warning = joinJobWarning(result.Warning, "infrastructure: "+firstFailureSummary+"; passed in a fresh sandbox")
 			case preempted:
 				result.Conclusion = conclusionFor(jobCtx, workflows.ConclusionErrored)
 				result.Status = "errored (preempted)"
-				result.Warning = "infrastructure: " + firstFailureSummary
+				result.Warning = joinJobWarning(result.Warning, "infrastructure: "+firstFailureSummary)
 				result.Error = PreemptedRetryReasonPrefix + preemptHow + " (on retry, too)"
 			case oomKilled:
 				result.Conclusion = conclusionFor(jobCtx, workflows.ConclusionErrored)
 				result.Status = "errored (OOM-killed)"
-				result.Warning = "infrastructure: " + firstFailureSummary
+				result.Warning = joinJobWarning(result.Warning, "infrastructure: "+firstFailureSummary)
 				result.Error = OOMRetryReasonPrefix + oomHow + " (on retry, too)"
 			case result.Conclusion == workflows.ConclusionSuccess:
 				result.Flake = true
 				result.Status = "passed (retry)"
-				result.Warning = fmt.Sprintf("passed (retry): flaky failure on initial attempt: %s", firstFailureSummary)
+				result.Warning = joinJobWarning(result.Warning, fmt.Sprintf("passed (retry): flaky failure on initial attempt: %s", firstFailureSummary))
 			}
 		}
 		if !channelLost {
@@ -1360,8 +1379,13 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 }
 
 // ChannelLostFaultPrefix is the JobRun.Error prefix recorded when a step ends
-// with sandboxaccess.ErrChannelLost (docs/design/grain-on-gke.md#GKE-3).
+// with sandboxaccess.ErrChannelLost (design/design/grain-on-gke.design.md#GKE-3).
 const ChannelLostFaultPrefix = sandboxaccess.ChannelLostFault
+
+// SandboxLostFaultPrefix is the JobRun.Error prefix recorded when a step's
+// sandbox transport failed with anything other than ErrChannelLost: the
+// machine died under it (sandboxaccess.SandboxLostFault).
+const SandboxLostFaultPrefix = sandboxaccess.SandboxLostFault
 
 // OOMRetryReasonPrefix starts a job's RetryReason (and Error, Warning)
 // when its sandbox was OOM-killed, so a reader can tell an infrastructure
@@ -1625,10 +1649,21 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 			notSuccess = workflows.ConclusionErrored
 		}
 		channelLostStep := errors.Is(err, sandboxaccess.ErrChannelLost)
+		// Any other transport error, under a step whose bounds and run are
+		// all still live, is the machine going away under it
+		// (gritsteps.Sandbox.Exec): errored, like a lost channel, so the
+		// job carries an infra error rather than a verdict on the tree. A
+		// context's own error is a bound or a cancel, which are told apart
+		// below as they always were.
+		sandboxLostStep := !channelLostStep && err != nil && ctx.Err() == nil && !expired && !ownExpired &&
+			!errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled)
 		switch {
 		case channelLostStep:
 			record.Conclusion = workflows.ConclusionErrored
 			record.Error = fmt.Sprintf("%s: %v", ChannelLostFaultPrefix, err)
+		case sandboxLostStep:
+			record.Conclusion = workflows.ConclusionErrored
+			record.Error = fmt.Sprintf("%s: %v", SandboxLostFaultPrefix, err)
 		case err != nil:
 			record.Conclusion = notSuccess
 			record.Error = err.Error()
@@ -1637,7 +1672,7 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 		default:
 			record.Conclusion = notSuccess
 		}
-		if record.Conclusion != workflows.ConclusionSuccess && !channelLostStep {
+		if record.Conclusion != workflows.ConclusionSuccess && !channelLostStep && !sandboxLostStep {
 			switch {
 			case ctx.Err() != nil:
 				// The run ended under this job -- cancelled, superseded, a
@@ -1657,7 +1692,7 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 			progress(jobRunSnapshot(*result))
 		}
 
-		if channelLostStep {
+		if channelLostStep || sandboxLostStep {
 			failed = true
 			channelLost = record.Error
 			continue
@@ -1699,7 +1734,7 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 				if result.Status == "" {
 					result.Status = "passed (quarantined)"
 				}
-				result.Warning = fmt.Sprintf("passed (quarantined): %d test(s) failed but are quarantined: %s", len(quarantinedNames), strings.Join(quarantinedNames, ", "))
+				result.Warning = joinJobWarning(result.Warning, fmt.Sprintf("passed (quarantined): %d test(s) failed but are quarantined: %s", len(quarantinedNames), strings.Join(quarantinedNames, ", ")))
 				// The tests still failed, and the summary (its tests
 				// marked Quarantined by EvaluateQuarantine) is what
 				// QueryTestHistory reads once the step output is gone:
@@ -1909,15 +1944,19 @@ func stepTimeout(ctx context.Context, step workflows.Step) time.Duration {
 // the bottom, then the workflow's, the job's and the step's, each
 // layering over the last -- GitHub's own precedence -- except for the
 // caller-identity variables (GRAIN_CI_REQUESTED_BY_KIND,
-// GRAIN_CI_REQUESTED_BY and GRAIN_CI_RELEASE_VERSION), which a
-// person-only release workflow reads to verify that a person started it
-// and which a workflow file's own env: may neither set nor replace.
+// GRAIN_CI_REQUESTED_BY, GRAIN_CI_RELEASE_VERSION,
+// GRAIN_CI_RELEASE_SHORT_SOAK_OK and GRAIN_CI_RELEASE_ALLOW_BREAKING),
+// which a person-only release workflow reads to verify that a person
+// started it, and what they decided, and which a workflow file's own
+// env: may neither set nor replace.
 func StepEnv(plan workflows.Plan, pj workflows.PlannedJob, step workflows.Step) map[string]string {
 	env := workflows.RunEnv(plan.Request, pj.Workflow, pj.Job.ID)
 	for _, layer := range []map[string]string{pj.WorkflowEnv, pj.Job.Env, step.Env} {
 		for k, v := range layer {
 			switch k {
-			case workflows.RequestedByKindEnv, workflows.RequestedByEnv, workflows.ReleaseVersionEnv:
+			case workflows.RequestedByKindEnv, workflows.RequestedByEnv, workflows.ReleaseVersionEnv,
+				workflows.ReleaseShortSoakOKEnv, workflows.ReleaseAllowBreakingEnv,
+				workflows.ReleaseRollbackToEnv, workflows.ReleaseRollbackReasonEnv:
 				continue
 			}
 			env[k] = v
@@ -2047,4 +2086,15 @@ var ExtractFailureSummary = func(string) *workflows.FailureSummary { return nil 
 // after a restart exactly what it was given before one.
 func (e *Engine) JobCapabilities(job workflows.Job, provided []string) []string {
 	return workflows.JobCapabilities(job, provided, e.ExplicitOnlyCapability)
+}
+
+func joinJobWarning(existing, next string) string {
+	switch {
+	case existing == "":
+		return next
+	case next == "" || strings.Contains(existing, next):
+		return existing
+	default:
+		return existing + "; " + next
+	}
 }

@@ -16,6 +16,7 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"errors"
 	"fmt"
@@ -24,10 +25,12 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/namespace"
 )
 
 //go:embed static
@@ -64,12 +67,25 @@ type Server struct {
 	taskList    taskListCache
 	taskDetails taskDetailCache
 	dbConfirm   databaseConfirmations
+	// hostdImage is the image /api/hostd/install.sh suggests
+	// (hostdInstallImage), hostd_install.go's.
+	hostdImage hostdImageCache
 	// access is the single-tenant access gate's rate limiter, and
 	// accessCode the token file it checks codes against
 	// (localAPITokenNow) -- both accesscode.go's.
-	access          accessLimiter
-	accessCode      atomic.Pointer[accessCodeFile]
-	externalLimiter *externalAgentLimiter
+	access            accessLimiter
+	accessCode        atomic.Pointer[accessCodeFile]
+	externalLimiter   *externalAgentLimiter
+	defaultGroupsOnce sync.Once
+	defaultGroups     GroupMemberChecker
+	// controllerMCPHandler serves POST /api/mcp (mcp_endpoint.go), built
+	// once on first use.
+	controllerMCPOnce    sync.Once
+	controllerMCPHandler http.Handler
+	// fsNamespace is the namespace GET /api/fs/ serves (api_fs.go).
+	fsNamespace func() *namespace.Server
+	// eventsKeepalive overrides defaultEventsKeepalive in tests (events.go).
+	eventsKeepalive time.Duration
 }
 
 // NewServer builds a Server over a store.
@@ -109,7 +125,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !checkCrossOrigin(w, r) {
 		return
 	}
-	serveRecovered(w, r, http.HandlerFunc(s.serveHTTP))
+	withCompression(w, r, func(w http.ResponseWriter, r *http.Request) {
+		serveRecovered(w, r, http.HandlerFunc(s.serveHTTP))
+	})
 }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
@@ -118,7 +136,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			Audience:              s.tasks.Config.IAPAudience,
 			Issuer:                s.tasks.Config.IAPIssuer,
 			KeysURL:               s.tasks.Config.IAPKeysURL,
-			Mode:                  s.tasks.Config.IAPMode,
+			RequireIAP:            s.tasks.Config.RequireIAP,
 			LocalAPIToken:         s.localAPITokenNow(),
 			AccessSessionLifetime: s.tasks.Config.AccessSessionLifetime,
 		}))
@@ -129,45 +147,88 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	// PrincipalAgent("external:<name>") and is held to its own scopes by
 	// agentAPIGate and handleMCP.
 	cfg, _ := IAPConfigFromContext(r.Context())
+	cv := verifyCallerNow(r)
+	r = r.WithContext(withCallerVerification(r.Context(), &cv))
+	if cv.present && cv.err != nil {
+		writeAssertionRefused(w, r, cv.err)
+		return
+	}
+	if presentsApprovalCallbackToken(r) {
+		taskID, ok := s.authenticateApprovalCallback(w, r)
+		if !ok {
+			return
+		}
+		r.Header.Del(ActingTaskHeader)
+		ctx := r.Context()
+		if s.tasks != nil {
+			ctx = s.tasks.withOperatorActor(ctx)
+		}
+		agent := model.Principal{Kind: model.PrincipalAgent, ID: taskID, Source: model.SourceInternal}
+		r = r.WithContext(withAuthMethod(WithPrincipal(ctx, agent), AuthMethodTrusted))
+		s.mux.ServeHTTP(w, r)
+		return
+	}
 	if externalTokenFromContext(r.Context()) == nil && presentsExternalAgentToken(r) {
 		tok, release, ok := s.authenticateExternalAgent(w, r)
 		if !ok {
 			return
 		}
 		defer release()
-		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name}
+		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name, Source: model.SourceExternalToken}
 		r = r.WithContext(withExternalToken(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), tok))
 	}
+	roleSlot := &accessRoleSlot{}
+	r = r.WithContext(context.WithValue(r.Context(), accessRoleSlotKey{}, roleSlot))
 	if !s.singleTenantGate(w, r, cfg) {
 		return
 	}
-	if singleTenantRefusesIdentity(r) && !s.presentsAccess(r) && !executorBootstrapRoute(r) && externalTokenFromContext(r.Context()) == nil {
-		writeError(w, http.StatusUnauthorized, errors.New(singleTenantProxiedRefusal))
-		return
+	if roleSlot.role != nil {
+		r = r.WithContext(withAccessRole(r.Context(), roleSlot.role))
+	}
+	if s.tasks != nil {
+		r = r.WithContext(s.tasks.withOperatorActor(r.Context()))
 	}
 	if tok := externalTokenFromContext(r.Context()); tok != nil {
-		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name}
+		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name, Source: model.SourceExternalToken}
 		r = r.WithContext(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted))
 	} else {
 		p, method, ok := extractPrincipal(r)
 		if ok {
-			r = r.WithContext(withAuthMethod(WithPrincipal(r.Context(), p), method))
+			if !singleTenantOpenRoute(r) || s.checkAllowedPrincipal(r.Context(), VerifiedIdentity{Email: p.ID, Kind: p.Kind}) == nil {
+				r = r.WithContext(withAuthMethod(WithPrincipal(r.Context(), p), method))
+			} else {
+				ok = false
+			}
 		}
 		if requiresAccess(r) && !ok && !singleTenantTrusted(r) {
 			// No verified principal at all. Only a caller this daemon
 			// already trusts as itself -- the access code's, or an
 			// in-process request -- runs as the deployment's own actor
-			// (Client.actor). The gate above already refused anybody else
+			// (RequestActor). The gate above already refused anybody else
 			// on every route but its own open ones (singleTenantOpenRoute).
 			writeError(w, http.StatusUnauthorized, errors.New(singleTenantRefusal))
 			return
 		}
+		if !ok {
+			r = r.WithContext(withRequestSource(r.Context(), trustedRequestSource(r)))
+		}
 	}
+	r = r.WithContext(model.WithEventActor(r.Context(), RequestActor(r.Context())))
 	// Unarmed until a configuration write's guard finds the deployment
 	// managed by an external config repository (checkSettingsWritable).
 	rehearsal := &configWriteRehearsal{}
 	r = r.WithContext(model.WithWriteRehearsal(r.Context(), rehearsal))
-	rw := &configRefusalWriter{ResponseWriter: w, rehearsal: rehearsal}
+	rw := &configRefusalWriter{
+		ResponseWriter: w,
+		rehearsal:      rehearsal,
+		onSuccess: func() {
+			// Who made the write is who it was guarded as made by: an
+			// agent's principal is on the handler's context alone.
+			by := rehearsal.writer(r.Context())
+			s.tasks.recordConfigWrite(by, r)
+			s.tasks.syncStateRepoAfterWrite(by)
+		},
+	}
 	s.mux.ServeHTTP(rw, r)
 	rw.finish()
 }
@@ -175,9 +236,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 // requiresAccess reports whether r is an API request that needs an
 // allowed caller. The frontend's static files, /api/config (what the
 // sign-in page reads) and /api/auth/* (signing in itself) are the only
-// things served to a caller nobody has vouched for. Remote execution's
-// routes under /api/executors/ authenticate in their own protocol
-// (executorBootstrapRoute), as their twins outside /api/ always have.
+// things served to a caller nobody has vouched for. A grain hostd dialing
+// in to /api/hostd/connect authenticates in its own protocol
+// (hostdConnectRoute), and the script that installs one
+// (hostdInstallRoute) is grain's own, with nothing in it to keep.
 //
 // A persistent sandbox's staging environment under /staging/ is held to
 // the same gate as the API: it is somebody's running service, not a page
@@ -187,14 +249,21 @@ func requiresAccess(r *http.Request) bool {
 		return true
 	}
 	return strings.HasPrefix(r.URL.Path, "/api/") &&
-		r.URL.Path != "/api/config" &&
+		!(r.URL.Path == "/api/config" && (r.Method == http.MethodGet || r.Method == http.MethodHead)) &&
 		!strings.HasPrefix(r.URL.Path, "/api/auth/") &&
-		!executorBootstrapRoute(r)
+		!hostdConnectRoute(r) && !hostdInstallRoute(r)
 }
 
 func (s *Server) routes() {
 	s.route("GET /api/config", s.handleConfig)
+	s.mux.HandleFunc("PUT /api/config", s.roleGate("PUT /api/settings", s.agentAPIGate("PUT /api/settings", s.handleUpdateSettings)))
 	s.route("GET /api/restart-watch", s.handleRestartWatch)
+	s.route("GET /api/fs/ci/{path...}", s.handleReadCINamespace)
+	s.route("GET /api/fs/task/{path...}", s.handleReadTaskNamespace)
+	s.route("GET /api/fs/deploy/{path...}", s.handleReadDeployNamespace)
+	s.route("GET /api/fs/config/{path...}", s.handleReadConfigNamespace)
+	s.route("GET /api/fs/memory/{path...}", s.handleReadMemoryNamespace)
+	s.route("GET /api/fs/src/{path...}", s.handleReadSrcNamespace)
 	s.route("GET /api/auth/access-code", s.handleAccessCodeStatus)
 	s.route("POST /api/auth/access-code", s.handleAccessCodeLogin)
 	s.route("GET /api/auth/access-code/login.js", s.handleAccessCodeScript)
@@ -202,6 +271,8 @@ func (s *Server) routes() {
 	s.route("GET /api/auth/logout", s.handleAuthLogout)
 	s.route("GET /api/auth/user", s.handleAuthUser)
 	s.route("GET /api/auth/status", s.handleAuthUser)
+	s.route("GET /api/auth/whoami", s.handleAuthWhoami)
+	s.route("GET /api/whoami", s.handleWhoami)
 	s.route("GET /api/settings", s.handleGetSettings)
 	s.route("PUT /api/settings", s.handleUpdateSettings)
 	s.route("POST /api/settings", s.handleUpdateSettings)
@@ -211,6 +282,9 @@ func (s *Server) routes() {
 	s.route("POST /api/capabilities/{id}/check", s.handleCheckCapability)
 	s.route("GET /api/tasks", s.handleListTasks)
 	s.route("GET /api/tasks/states", s.handleTaskStates)
+	s.route("GET /api/tasks/wait", s.handleTasksWait)
+	s.route("GET /api/inbox", s.handleInbox)
+	s.route("GET /api/events", s.handleEvents)
 	s.route("GET /api/states", s.handleTaskStates)
 	s.route("POST /api/tasks", s.handleCreateTask)
 	s.route("POST /api/tasks/from-template", s.handleCreateTaskFromTemplate)
@@ -225,17 +299,25 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/undefer", s.handleUndefer)
 	s.route("POST /api/tasks/{id}/submit", s.handleSubmit)
 	s.route("POST /api/tasks/{id}/comments", s.handleAddComment)
+	s.route("POST /api/tasks/{id}/reply", s.handleReplyTask)
 	// PUT, not POST: setting the one secret a parked run asked for is an
 	// idempotent write of a value at a name the task already fixed --
 	// the same shape (and the same verb) /api/secrets/{secret}/{key}
 	// already uses for the write this one delegates to.
 	s.route("PUT /api/tasks/{id}/secret", s.handleSetTaskSecret)
+	s.route("POST /api/tasks/{id}/config-change", s.handleProposeConfigChange)
+	s.route("POST /api/tasks/{id}/config-change/approve", s.handleApproveConfigChange)
+	s.route("POST /api/tasks/{id}/config-change/reject", s.handleRejectConfigChange)
+	s.route("POST /api/tasks/{id}/access-request/check", s.handleCheckAccessRequest)
+	s.route("POST /api/tasks/{id}/access-request/grant", s.handleGrantAccessRequest)
+	s.route("POST /api/tasks/{id}/access-request/deny", s.handleDenyAccessRequest)
 	s.route("GET /api/tasks/{id}/attachments/{attachmentId}", s.handleGetAttachment)
 	s.route("POST /api/tasks/{id}/close", s.handleClose)
 	s.route("POST /api/tasks/{id}/stop", s.handleStop)
 	s.route("POST /api/tasks/{id}/pause", s.handlePause)
 	s.route("POST /api/tasks/{id}/resume", s.handleResume)
 	s.route("PUT /api/tasks/{id}/goal", s.handleSetGoal)
+	s.route("PUT /api/tasks/{id}/hostd", s.handleSetTaskHostd)
 	s.route("DELETE /api/tasks/{id}/goal", s.handleClearGoal)
 	s.route("POST /api/tasks/{id}/reopen", s.handleReopen)
 	s.route("POST /api/tasks/{id}/retry", s.handleRetry)
@@ -247,6 +329,11 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/force-merge", s.handleForceMerge)
 	s.route("POST /api/tasks/{id}/run-now", s.handleRunNow)
 	s.route("POST /api/tasks/{id}/pull-request", s.handleOpenPullRequest)
+	// A pull request grain did not open (pull_requests_api.go, #XC-28,
+	// #XC-29): adopt it, review it, or report where it stands.
+	s.route("POST /api/pull-requests/adopt", s.handleAdoptPullRequest)
+	s.route("POST /api/pull-requests/review", s.handleReviewPullRequest)
+	s.route("GET /api/pull-requests/status", s.handlePullRequestStatus)
 	s.route("POST /api/tasks/{id}/sandbox/recreate", s.handleRecreateSandbox)
 	s.route("POST /api/sandbox-probe", s.handleSandboxProbe)
 	s.route("POST /api/tasks/{id}/activity", s.handleSetTaskActivity)
@@ -384,6 +471,8 @@ func (s *Server) routes() {
 	s.route("POST /api/repos/{owner}/{name}/releases/{release}/candidates/promote", s.handlePromoteCandidate)
 	s.route("POST /api/repos/{owner}/{name}/pending-releases/{version}/approve", s.handleApproveRelease)
 	s.route("POST /api/repos/{owner}/{name}/pending-releases/{version}/reject", s.handleRejectRelease)
+	s.route("POST /api/releases/{version}/rollback", s.handleRollbackRelease)
+	s.route("GET /api/release-approval-key", s.handleReleaseApprovalKey)
 
 	s.route("GET /api/repos/{owner}/{name}/branches", s.handleListBranches)
 	s.route("POST /api/repos/{owner}/{name}/branches", s.handleCreateBranch)
@@ -430,12 +519,6 @@ func (s *Server) routes() {
 	s.deploymentRoutes()
 
 	s.route("GET /api/agent-models", s.handleListAgentModels)
-
-	s.route("GET /api/executors/tokens", s.handleListExecutorTokens)
-	s.route("POST /api/executors/tokens", s.handleCreateExecutorToken)
-	s.route("POST /api/executors/tokens/{id}/revoke", s.handleRevokeExecutorToken)
-	s.route("DELETE /api/executors/tokens/{id}", s.handleRevokeExecutorToken)
-	s.route("DELETE /api/executors/tokens/{id}/revoke", s.handleRevokeExecutorToken)
 
 	s.route("GET /api/external-agents/tokens", s.handleListExternalAgentTokens)
 	s.route("POST /api/external-agents/tokens", s.handleCreateExternalAgentToken)
@@ -521,6 +604,7 @@ func (s *Server) routes() {
 	s.route("GET /api/host/top", s.handleGetHostTop)
 	s.route("GET /api/upgrade", s.handleGetUpgradeStatus)
 	s.route("POST /api/upgrade", s.handleStartUpgrade)
+	s.route("PUT /api/upgrade/source", s.handleUpdateUpgradeSource)
 	s.route("DELETE /api/upgrade/scheduled", s.handleCancelScheduledUpgrade)
 	s.route("GET /api/upgrade/targets", s.handleGetUpgradeTargets)
 	s.route("GET /api/upgrade/release-notes", s.handleUpgradeReleaseNotes)
@@ -574,12 +658,14 @@ func (s *Server) routes() {
 	s.route("GET /api/ci/faults", s.handleListCIFaults)
 	s.route("GET /api/ci/runs/{id}", s.handleGetCIRun)
 	s.route("DELETE /api/ci/runs/{id}", s.handleCancelCIRun)
+	s.route("GET /api/ci/runs/{id}/log", s.handleGetCIRunLog)
 	s.route("GET /api/ci/runs/{id}/artifacts", s.handleListCIRunArtifacts)
 	s.route("GET /api/ci/runs/{id}/artifacts/{job}/{name}", s.handleGetCIArtifact)
 	// The job cache behind those runs: what it holds, and the one thing
 	// an operator does to it.
 	s.route("GET /api/ci/cache", s.handleGetCICache)
 	s.route("DELETE /api/ci/cache", s.handleClearCICache)
+	s.route("POST /api/tests/quarantine", s.handleQuarantineTest)
 
 	// The merge queue's speculative batches: which changes one suite is
 	// deciding together (pkg/ui/mergebatches.go). Read-only, and beside
@@ -610,20 +696,26 @@ func (s *Server) routes() {
 	s.route("POST /api/pipeline-pause", s.handlePausePipeline)
 	s.route("DELETE /api/pipeline-pause", s.handleResumePipeline)
 
-	// Remote executors / model servers API and bootstrap scripts.
-	s.route("GET /api/executors", s.handleListExecutors)
-	s.route("GET /api/model-servers/install.sh", s.handleExecutorInstallScript)
-	s.route("GET /api/executors/install.sh", s.handleExecutorInstallScript)
-	s.route("GET /install-executor.sh", s.handleExecutorInstallScript)
-	s.route("GET /api/executors/bin/{binary}", s.handleExecutorBinary)
-	s.route("GET /install/{os}/{arch}", s.handleExecutorBinaryByArch)
-
-	// Remote executor inbound connections over HTTP Upgrade / Cloud Run reverse tunnel.
-	s.route("GET /_grain/executor", s.handleExecutorConnect)
-	s.route("GET /api/executors/connect", s.handleExecutorConnect)
-	s.route("GET /api/executors/stream", s.handleExecutorConnect)
 	// A grain hostd on another machine dialing in (hostd -server).
 	s.route("GET /api/hostd/connect", s.handleHostdConnect)
+	// The script that installs one there (Settings -> Hostds).
+	s.route("GET "+hostdInstallPath, s.handleHostdInstallScript)
+	// The hostd registry (Settings -> Hostds).
+	s.route("GET /api/hostds", s.handleListHostds)
+	s.route("POST /api/hostds", s.handleCreateHostd)
+	s.route("PATCH /api/hostds/{name}", s.handleUpdateHostd)
+	s.route("POST /api/hostds/{name}/rotate", s.handleRotateHostdToken)
+	s.route("POST /api/hostds/{name}/revoke", s.handleRevokeHostd)
+
+	// Verified-identity sign-in allowlist (Settings -> Access).
+	s.route("GET /api/access/principals", s.handleListAccessPrincipals)
+	s.route("POST /api/access/principals", s.handleAllowPrincipal)
+	s.route("PATCH /api/access/principals/{entry}", s.handleSetPrincipalRole)
+	s.route("DELETE /api/access/principals/{entry}", s.handleDenyPrincipal)
+
+	// Controller MCP server (mcp_endpoint.go) shared by external BYO
+	// harnesses and built-in sessions/tasks holding api:* grants.
+	s.route("POST /api/mcp", s.handleControllerMCP)
 
 	static, err := fs.Sub(staticFS, "static")
 	if err != nil {
@@ -673,6 +765,9 @@ func (s *Server) route(pattern string, handler http.HandlerFunc) {
 	// Every route answers an acting agent only within its scope
 	// (route_scopes.go, agent_api_gate.go).
 	handler = s.agentAPIGate(pattern, handler)
+	// And a verified person only within their role (access_roles.go),
+	// ahead of the agent gate so an acting-task header never widens one.
+	handler = s.roleGate(pattern, handler)
 	if timedRoutes[pattern] {
 		next := handler
 		handler = func(w http.ResponseWriter, r *http.Request) {

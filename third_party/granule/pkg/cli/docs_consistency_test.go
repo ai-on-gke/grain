@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/granule/pkg/granulefile"
+	"github.com/gke-labs/granule/pkg/granulefile"
 )
 
 // All registered host subcommands in the granule CLI.
@@ -36,6 +36,16 @@ var allSubcommands = []struct {
 	{"guest", "assemble", "-verify"},
 	{"granulefile", "check", "-level"},
 	{"granulefile", "build", "-guest-image"},
+}
+
+// Host commands that take no subcommand word.
+var topLevelCommands = []struct {
+	cmd     string
+	keyFlag string
+}{
+	{"doctor", "-only"},
+	{"forward", "-remote"},
+	{"relay", "-tls-cert"},
 }
 
 // TestCLISubcommandsAndHelpAudit verifies that all subcommands are listed in
@@ -67,6 +77,27 @@ func TestCLISubcommandsAndHelpAudit(t *testing.T) {
 			}
 			if strings.Contains(out, "granule: flag: help requested") {
 				t.Errorf("%s -h printed unwanted error message:\n%s", cmdName, out)
+			}
+		})
+	}
+
+	for _, tc := range topLevelCommands {
+		if !strings.Contains(topHelpStr, "granule "+tc.cmd+" ") {
+			t.Errorf("top-level usage does not mention %q", "granule "+tc.cmd)
+		}
+
+		t.Run(tc.cmd+"_help", func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			exitCode := Run(context.Background(), []string{tc.cmd, "-h"}, strings.NewReader(""), &stdout, &stderr)
+			if exitCode != 0 {
+				t.Errorf("granule %s -h returned exit code %d, want 0", tc.cmd, exitCode)
+			}
+			out := stdout.String() + stderr.String()
+			if !strings.Contains(out, tc.keyFlag) {
+				t.Errorf("granule %s -h output missing expected flag %s:\n%s", tc.cmd, tc.keyFlag, out)
+			}
+			if strings.Contains(out, "granule: flag: help requested") {
+				t.Errorf("granule %s -h printed unwanted error message:\n%s", tc.cmd, out)
 			}
 		})
 	}

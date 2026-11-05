@@ -144,10 +144,12 @@ func reconcileConsoleSessions(ctx context.Context, deps Deps, now time.Time) err
 		if configured[sessionID] {
 			continue
 		}
-		if err := deps.Store.ObserveField(ctx, taskID, now, func(o *model.Observation) {
+		reason := fmt.Sprintf("console session %s was removed from the settings", sessionID)
+		if err := deps.Store.ObserveClose(ctx, taskID, now, model.GrainPrincipal, reason, func(o *model.Observation) {
 			o.ClosedAt = &now
 			o.PendingQuestionCommentID = nil
 			o.PendingSecret = ""
+			o.PendingAccess = nil
 		}); err != nil {
 			errs = append(errs, fmt.Errorf("orchestrator: closing removed %s console session task %s: %w", sessionID, taskID, err))
 			continue
@@ -252,7 +254,9 @@ func reconcileConsoleSession(ctx context.Context, deps Deps, session model.Conso
 //   - Reads: the state repository, when this deployment has one -- the
 //     same evidence base the memory agent and the upgrade check are
 //     given, and what "what is this deployment actually doing" is
-//     answered out of.
+//     answered out of -- and, unless the session opts out, every
+//     repository the deployment works in (model.ConsoleSessionAutoReads),
+//     resolved again on every sync.
 //   - The capabilities the session configures, granted GrantByGrain: it
 //     is grain applying them to a task of its own, on the strength of a
 //     settings row, rather than a human labelling a task.
@@ -267,7 +271,7 @@ func reconcileConsoleSession(ctx context.Context, deps Deps, session model.Conso
 // previous is the session's own closed task when this filing is a fresh
 // conversation for a session that had one, and "" when the session is
 // being filed for the first time. A replacement carries exactly two
-// things across, and both are decided in docs/implementation-notes.md's
+// things across, and both are decided in grain's former implementation notes'
 // "A chat that never ends is not split for you":
 //
 //   - model.LinkContinues back to the closed task -- provenance, so the
@@ -315,6 +319,22 @@ func updateConsoleSession(ctx context.Context, deps Deps, session model.ConsoleS
 	// resting -- is what the next cycle reads.
 	if running {
 		return nil
+	}
+	if taskKeepRunning(ctx, deps.Store, task) {
+		if obs != nil && obs.PendingQuestionCommentID != nil {
+			if comments, err := deps.Store.Comments(ctx, task.ID); err == nil {
+				for _, c := range comments {
+					if c.ID == *obs.PendingQuestionCommentID && isConsoleSessionResting(c) {
+						return deps.Store.ObserveField(ctx, task.ID, now, func(o *model.Observation) {
+							o.PendingQuestionCommentID = nil
+						})
+					}
+				}
+			}
+		}
+		if waiting, unanswered, err := consoleSessionRest(ctx, deps, task.ID); err == nil && !waiting && unanswered == nil {
+			return nil
+		}
 	}
 	if obs == nil || obs.PendingQuestionCommentID == nil {
 		return restConsoleSession(ctx, deps, task.ID, now)
@@ -610,17 +630,28 @@ func undeliveredHumanComment(comments []model.Comment, obs *model.Observation, r
 	if obs == nil || obs.DeliveredCommentID == nil {
 		return nil, false
 	}
-	var started time.Time
-	for _, run := range runs {
-		if run.StartedAt.After(started) {
-			started = run.StartedAt
+	var latest *model.Run
+	for i := range runs {
+		if latest == nil || runs[i].StartedAt.After(latest.StartedAt) {
+			latest = &runs[i]
 		}
+	}
+	// Only treat the latest run's StartedAt as an implicit cutoff when that
+	// run ended without succeeding (for example, it failed in setup before
+	// it could advance DeliveredCommentID). If the run is still active or
+	// succeeded, it advances DeliveredCommentID for every comment it was
+	// actually shown; a human comment with ID > DeliveredCommentID that
+	// arrived just before StartedAt (or while an in-process turn was ending)
+	// was not answered and must still be dispatched.
+	var failedStart time.Time
+	if latest != nil && latest.FinishedAt != nil && latest.Outcome != "succeeded" {
+		failedStart = latest.StartedAt
 	}
 	for i, c := range comments {
 		if c.ID <= *obs.DeliveredCommentID || c.Author.Actor.Kind != model.PrincipalHuman {
 			continue
 		}
-		if !c.CreatedAt.After(started) {
+		if !failedStart.IsZero() && !c.CreatedAt.After(failedStart) {
 			continue
 		}
 		return &comments[i], true
@@ -664,28 +695,109 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		}
 		session.TitleSource = session.ResolvedTitleSource(model.ConsoleSessionFirstMessage(comments))
 	}
-	title := model.ConsoleSessionTitle(session)
-	body := model.DirectorSessionBody(deps.Config.settingsRepo(), session)
-	defaults, err := model.DeploymentDefaultCapabilities(ctx, deps.Store)
+	prev, hasPrev := model.LastSyncedConsoleSession(ctx, deps.Store, task.ID)
+	configTitle := model.ConsoleSessionTitle(session)
+	configNetwork := consoleSessionNetworkAccess(deps, session)
+	configModel := strings.TrimSpace(session.Model)
+	stateRepo := deps.Config.settingsRepo()
+
+	if !hasPrev {
+		prev = model.ConsoleSessionConfigSnapshot{
+			Capabilities:    session.Capabilities,
+			Reads:           session.Reads,
+			Writes:          session.Writes,
+			NetworkAccess:   configNetwork,
+			Model:           configModel,
+			Title:           configTitle,
+			TasksApproved:   session.TasksApproved,
+			KeepRunning:     session.KeepRunning,
+			GoogleChatSpace: session.GoogleChatSpace,
+		}
+	}
+
+	title := task.Title
+	if title == "" || configTitle != prev.Title {
+		title = configTitle
+	}
+	keepRunning := task.KeepRunning
+	if !hasPrev || session.KeepRunning != prev.KeepRunning {
+		keepRunning = session.KeepRunning
+	}
+	effectiveSession := session
+	effectiveSession.Title = title
+	if slices.Contains(task.Tags, model.ConsoleSessionTasksApprovedTag) {
+		effectiveSession.TasksApproved = true
+	} else if slices.Contains(task.Tags, model.ConsoleSessionTasksUnapprovedTag) {
+		effectiveSession.TasksApproved = false
+	} else if session.TasksApproved != prev.TasksApproved {
+		effectiveSession.TasksApproved = session.TasksApproved
+	} else if task.AutoApproveProposals {
+		effectiveSession.TasksApproved = true
+	}
+	body := model.DirectorSessionBody(stateRepo, effectiveSession)
+
+	grants := mergeConsoleSessionGrants(task.Grants, session, prev, hasPrev)
+	autoReads, err := model.ConsoleSessionAutoReads(ctx, deps.Store, session, stateRepo)
 	if err != nil {
 		return err
 	}
-	grants := consoleSessionGrants(session, defaults)
-	network := consoleSessionNetworkAccess(deps, session)
-	stateRepo := deps.Config.settingsRepo()
-	var reads []model.RepoRef
-	if stateRepo.Owner != "" {
-		reads = append(reads, stateRepo)
+	reads := mergeConsoleSessionReads(task.Reads, stateRepo, session.Reads, prev.Reads, hasPrev, autoReads, prev.AutoReads)
+	writes := mergeConsoleSessionWrites(task.Writes, session.Writes, prev.Writes, hasPrev)
+
+	network := task.NetworkAccess
+	if network == "" || configNetwork != prev.NetworkAccess {
+		network = configNetwork
 	}
-	for _, r := range session.Reads {
-		if r.Owner != "" && r.Name != "" && !r.Same(stateRepo) {
-			reads = append(reads, r)
+	if network == model.NetworkNone && !sandboxesIsolateNetwork(deps.Sandboxes) {
+		network = model.NetworkOpen
+	}
+
+	chosenModel := task.Model
+	if configModel != prev.Model {
+		chosenModel = configModel
+	}
+
+	links := task.Links
+	if links == nil {
+		links = []model.Link{}
+	}
+	if session.GoogleChatSpace != prev.GoogleChatSpace || (!hasPrev && session.GoogleChatSpace != "") {
+		var updatedLinks []model.Link
+		for _, l := range task.Links {
+			if l.Kind != model.LinkGoogleChat {
+				updatedLinks = append(updatedLinks, l)
+			}
 		}
+		if session.GoogleChatSpace != "" {
+			updatedLinks = append(updatedLinks, model.Link{Kind: model.LinkGoogleChat, Target: session.GoogleChatSpace})
+		}
+		if updatedLinks == nil {
+			updatedLinks = []model.Link{}
+		}
+		links = updatedLinks
 	}
-	writes := session.Writes
-	if writes == nil {
-		writes = []model.WriteTarget{}
+
+	// The snapshot is recorded only once the task holds what it describes:
+	// recorded first, a task write that failed -- or a daemon stopped
+	// between the two -- would leave a snapshot without an entry the task
+	// still carries, which every later sync would then keep as an
+	// operator's own edit.
+	record := func() error {
+		return model.RecordSyncedConsoleSession(ctx, deps.Store, task.ID, model.ConsoleSessionConfigSnapshot{
+			Capabilities:    session.Capabilities,
+			Reads:           session.Reads,
+			Writes:          session.Writes,
+			NetworkAccess:   configNetwork,
+			Model:           configModel,
+			Title:           configTitle,
+			TasksApproved:   session.TasksApproved,
+			KeepRunning:     session.KeepRunning,
+			GoogleChatSpace: session.GoogleChatSpace,
+			OfferedDefaults: model.ConsoleSessionDefaultGrants(),
+			AutoReads:       autoReads,
+		})
 	}
+
 	taskWrites := task.Writes
 	if taskWrites == nil {
 		taskWrites = []model.WriteTarget{}
@@ -694,51 +806,194 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 	if taskReads == nil {
 		taskReads = []model.RepoRef{}
 	}
-	if reads == nil {
-		reads = []model.RepoRef{}
-	}
-	var links []model.Link
-	for _, l := range task.Links {
-		if l.Kind != model.LinkGoogleChat {
-			links = append(links, l)
-		}
-	}
-	if session.GoogleChatSpace != "" {
-		links = append(links, model.Link{Kind: model.LinkGoogleChat, Target: session.GoogleChatSpace})
-	}
 	taskLinks := task.Links
 	if taskLinks == nil {
 		taskLinks = []model.Link{}
 	}
-	if links == nil {
-		links = []model.Link{}
-	}
-	chosenModel := strings.TrimSpace(session.Model)
 	if task.Title == title && task.Body == body && task.NetworkAccess == network &&
-		task.Model == chosenModel &&
+		task.Model == chosenModel && task.KeepRunning == keepRunning &&
 		slices.Equal(task.Grants, grants) &&
 		slices.Equal(taskReads, reads) &&
 		slices.Equal(taskWrites, writes) &&
 		slices.Equal(taskLinks, links) {
-		return nil
+		return record()
 	}
-	return deps.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+	if err := deps.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
 		t.Title = title
 		t.Body = body
 		t.Grants = grants
 		t.NetworkAccess = network
+		t.KeepRunning = keepRunning
 		t.Reads = reads
 		t.Writes = writes
 		t.Links = links
-		// The session row is where a session's model is chosen, so it
-		// is the session's choice rather than a template's or a
-		// schedule's: ModelSource is cleared with it.
 		if t.Model != chosenModel {
 			t.Model = chosenModel
 			t.ModelSource = ""
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	return record()
+}
+
+func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSession,
+	prev model.ConsoleSessionConfigSnapshot, hasPrev bool) []model.Grant {
+
+	removedSession := map[string]bool{}
+	if hasPrev {
+		for _, c := range prev.Capabilities {
+			if c != "" && !slices.Contains(session.Capabilities, c) {
+				removedSession[c] = true
+			}
+		}
+	}
+
+	out := make([]model.Grant, 0, len(current)+len(session.Capabilities)+1)
+	out = append(out, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
+	seen := map[string]bool{model.DurableCapability: true}
+
+	for _, g := range current {
+		if g.Capability == "" || seen[g.Capability] {
+			continue
+		}
+		if g.Via == model.GrantByGrain {
+			if hasPrev && removedSession[g.Capability] {
+				continue
+			}
+			if !hasPrev && !slices.Contains(session.Capabilities, g.Capability) {
+				continue
+			}
+		}
+		if g.Via == model.GrantByDefault && !slices.Contains(session.Capabilities, g.Capability) &&
+			(!model.IsConsoleSessionDefaultGrant(g.Capability) || session.DeclinesDefault(g.Capability)) {
+			continue
+		}
+		seen[g.Capability] = true
+		out = append(out, g)
+	}
+
+	// The defaults every session holds without naming them
+	// (model.ConsoleSessionDefaultGrants) reach a task that has never been
+	// given them -- one filed before they were defaults, on its first sync
+	// since -- and never one that was given them and no longer holds them,
+	// which is an operator having removed one from the task.
+	for _, name := range model.ConsoleSessionDefaultGrants() {
+		if seen[name] || session.DeclinesDefault(name) {
+			continue
+		}
+		if hasPrev && slices.Contains(prev.OfferedDefaults, name) {
+			continue
+		}
+		seen[name] = true
+		out = append(out, model.Grant{Capability: name, Via: model.GrantByDefault})
+	}
+
+	for _, name := range session.Capabilities {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		if !hasPrev || !slices.Contains(prev.Capabilities, name) {
+			seen[name] = true
+			out = append(out, model.Grant{Capability: name, Via: model.GrantByGrain})
+		}
+	}
+	return out
+}
+
+// mergeConsoleSessionReads and mergeConsoleSessionWrites carry the
+// declaration's reads: and writes: onto the task while keeping what an
+// operator added on the task itself. Against a snapshot, an entry the task
+// holds is dropped only when the declaration stopped naming it since the
+// last sync. With no snapshot to tell the two apart -- a task synced for the
+// first time, or one whose snapshot predates console_session_sync -- the
+// declaration is authoritative, the way it is for GrantByGrain grants: an
+// entry it does not name is dropped, rather than a repository the
+// deployment no longer lets the session write being kept for good.
+//
+// autoReads is the working repositories the session reads by default
+// (model.ConsoleSessionAutoReads), resolved this cycle, and prevAutoReads
+// the ones the last sync gave the task. An entry the last sync added that
+// way is the reconciler's own rather than an operator's, so it is kept
+// only while it is still in autoReads: a repository retired, or a session
+// opting out, drops it on the next cycle.
+func mergeConsoleSessionReads(current []model.RepoRef, stateRepo model.RepoRef,
+	sessionReads, prevReads []model.RepoRef, hasPrev bool, autoReads, prevAutoReads []model.RepoRef) []model.RepoRef {
+
+	var out []model.RepoRef
+	has := func(r model.RepoRef) bool {
+		return slices.ContainsFunc(out, func(e model.RepoRef) bool { return e.Same(r) })
+	}
+	if stateRepo.Owner != "" {
+		out = append(out, stateRepo)
+	}
+	for _, r := range current {
+		if r.Owner == "" || r.Name == "" || has(r) {
+			continue
+		}
+		wasInPrev := hasPrev && slices.ContainsFunc(prevReads, func(p model.RepoRef) bool { return p.Same(r) })
+		inSession := slices.ContainsFunc(sessionReads, func(s model.RepoRef) bool { return s.Same(r) })
+		wasAuto := hasPrev && slices.ContainsFunc(prevAutoReads, func(p model.RepoRef) bool { return p.Same(r) })
+		if (wasInPrev || wasAuto || !hasPrev) && !inSession {
+			continue
+		}
+		out = append(out, r)
+	}
+	for _, r := range sessionReads {
+		if r.Owner == "" || r.Name == "" || has(r) {
+			continue
+		}
+		wasInPrev := hasPrev && slices.ContainsFunc(prevReads, func(p model.RepoRef) bool { return p.Same(r) })
+		if !wasInPrev {
+			out = append(out, r)
+		}
+	}
+	for _, r := range autoReads {
+		if r.Owner == "" || r.Name == "" || has(r) {
+			continue
+		}
+		out = append(out, r)
+	}
+	if out == nil {
+		out = []model.RepoRef{}
+	}
+	return out
+}
+
+func mergeConsoleSessionWrites(current, sessionWrites, prevWrites []model.WriteTarget, hasPrev bool) []model.WriteTarget {
+	sameWrite := func(a, b model.WriteTarget) bool {
+		return a.Repo.Same(b.Repo) && a.Base == b.Base
+	}
+	var out []model.WriteTarget
+	has := func(w model.WriteTarget) bool {
+		return slices.ContainsFunc(out, func(e model.WriteTarget) bool { return sameWrite(e, w) })
+	}
+	for _, w := range current {
+		if w.Repo.Owner == "" || w.Repo.Name == "" || has(w) {
+			continue
+		}
+		wasInPrev := hasPrev && slices.ContainsFunc(prevWrites, func(p model.WriteTarget) bool { return sameWrite(p, w) })
+		inSession := slices.ContainsFunc(sessionWrites, func(s model.WriteTarget) bool { return sameWrite(s, w) })
+		if (wasInPrev || !hasPrev) && !inSession {
+			continue
+		}
+		out = append(out, w)
+	}
+	for _, w := range sessionWrites {
+		if w.Repo.Owner == "" || w.Repo.Name == "" || has(w) {
+			continue
+		}
+		wasInPrev := hasPrev && slices.ContainsFunc(prevWrites, func(p model.WriteTarget) bool { return sameWrite(p, w) })
+		if !wasInPrev {
+			out = append(out, w)
+		}
+	}
+	if out == nil {
+		out = []model.WriteTarget{}
+	}
+	return out
 }
 
 // consoleSessionNetworkAccess is how much of the internet a session's
@@ -765,11 +1020,10 @@ func consoleSessionNetworkAccess(deps Deps, session model.ConsoleSession) model.
 
 // consoleSessionGrants is the session's configured capabilities as
 // grants: GrantByGrain, because it is grain applying them to its own
-// task from a settings row rather than a human labelling one -- plus
-// this deployment's default capabilities, GrantByDefault, which every
-// task the session files is seeded with (model.ConsoleSessionGrants).
-func consoleSessionGrants(session model.ConsoleSession, defaults []string) []model.Grant {
-	return model.ConsoleSessionGrants(session, defaults...)
+// task from a settings row rather than a human labelling one
+// (model.ConsoleSessionGrants).
+func consoleSessionGrants(session model.ConsoleSession) []model.Grant {
+	return model.ConsoleSessionGrants(session)
 }
 
 func parkConsoleSession(ctx context.Context, deps Deps, taskID, note string, now time.Time) error {

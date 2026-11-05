@@ -17,6 +17,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -29,6 +30,28 @@ type MergeQueueReader interface {
 	QueryMergeQueue(ctx context.Context, repo, branch string) (MergeQueueReport, error)
 }
 
+// RepoFilteredMergeQueue is Reader's merge queue with every held gate,
+// batch and queued change of a repository Permits refuses left out: what
+// a caller that may read only some repositories' CI is shown.
+type RepoFilteredMergeQueue struct {
+	Reader  MergeQueueReader
+	Permits func(repo string) bool
+}
+
+func (f RepoFilteredMergeQueue) QueryMergeQueue(ctx context.Context, repo, branch string) (MergeQueueReport, error) {
+	if repo != "" && !f.Permits(repo) {
+		return MergeQueueReport{Repo: repo, Branch: branch}, nil
+	}
+	r, err := f.Reader.QueryMergeQueue(ctx, repo, branch)
+	if err != nil {
+		return r, err
+	}
+	r.HeldGates = slices.DeleteFunc(r.HeldGates, func(g HeldGateReport) bool { return !f.Permits(g.Repo) })
+	r.Batches = slices.DeleteFunc(r.Batches, func(b MergeBatchReport) bool { return !f.Permits(b.Repo) })
+	r.QueuedPRs = slices.DeleteFunc(r.QueuedPRs, func(p QueuedPRReport) bool { return !f.Permits(p.Repo) })
+	return r, nil
+}
+
 const noMergeQueueReader = "This run cannot inspect the merge queue: it was dispatched with no route back " +
 	"to the grain daemon that owns the merge queue state. Say so if it matters to what you were asked to do; " +
 	"nothing you can do from here will change it."
@@ -36,64 +59,64 @@ const noMergeQueueReader = "This run cannot inspect the merge queue: it was disp
 // MergeQueueReport captures the complete state of the merge queue for a
 // repo and branch.
 type MergeQueueReport struct {
-	Repo      string
-	Branch    string
-	Paused    bool
-	PauseInfo string
-	HeldGates []HeldGateReport
-	Batches   []MergeBatchReport
-	QueuedPRs []QueuedPRReport
+	Repo      string             `json:"repo,omitempty"`
+	Branch    string             `json:"branch,omitempty"`
+	Paused    bool               `json:"paused,omitempty"`
+	PauseInfo string             `json:"pauseInfo,omitempty"`
+	HeldGates []HeldGateReport   `json:"heldGates,omitempty"`
+	Batches   []MergeBatchReport `json:"batches,omitempty"`
+	QueuedPRs []QueuedPRReport   `json:"queuedPrs,omitempty"`
 }
 
 // HeldGateReport is one gate holding a branch or queue back.
 type HeldGateReport struct {
-	Repo      string
-	Branch    string
-	Gate      string
-	Status    string
-	Reason    string
-	Broken    bool
-	Confirmed bool
+	Repo      string `json:"repo,omitempty"`
+	Branch    string `json:"branch,omitempty"`
+	Gate      string `json:"gate"`
+	Status    string `json:"status"`
+	Reason    string `json:"reason,omitempty"`
+	Broken    bool   `json:"broken,omitempty"`
+	Confirmed bool   `json:"confirmed,omitempty"`
 }
 
 // MergeBatchReport is one speculative merge batch in flight.
 type MergeBatchReport struct {
-	Repo       string
-	Branch     string
-	Ref        string
-	BaseCommit string
-	Commit     string
-	RunID      string
-	Conclusion string
-	Detail     string
-	QueuedAt   time.Time
-	Members    []MergeBatchMemberReport
+	Repo       string                   `json:"repo,omitempty"`
+	Branch     string                   `json:"branch,omitempty"`
+	Ref        string                   `json:"ref,omitempty"`
+	BaseCommit string                   `json:"baseCommit,omitempty"`
+	Commit     string                   `json:"commit,omitempty"`
+	RunID      string                   `json:"runId,omitempty"`
+	Conclusion string                   `json:"conclusion,omitempty"`
+	Detail     string                   `json:"detail,omitempty"`
+	QueuedAt   time.Time                `json:"queuedAt"`
+	Members    []MergeBatchMemberReport `json:"members,omitempty"`
 }
 
 // MergeBatchMemberReport is one task/PR within a merge batch.
 type MergeBatchMemberReport struct {
-	TaskID string
-	Number int
-	Title  string
-	Commit string
+	TaskID string `json:"taskId"`
+	Number int    `json:"number,omitempty"`
+	Title  string `json:"title,omitempty"`
+	Commit string `json:"commit,omitempty"`
 }
 
 // QueuedPRReport is one task/PR waiting in the merge queue.
 type QueuedPRReport struct {
-	TaskID  string
-	Number  int
-	Title   string
-	Repo    string
-	Branch  string
-	State   string
-	Note    string
-	At      *time.Time
-	Stalled bool
-	Blocked bool
+	TaskID  string     `json:"taskId"`
+	Number  int        `json:"number,omitempty"`
+	Title   string     `json:"title,omitempty"`
+	Repo    string     `json:"repo,omitempty"`
+	Branch  string     `json:"branch,omitempty"`
+	State   string     `json:"state,omitempty"`
+	Note    string     `json:"note,omitempty"`
+	At      *time.Time `json:"at,omitempty"`
+	Stalled bool       `json:"stalled,omitempty"`
+	Blocked bool       `json:"blocked,omitempty"`
 	// MergePolicy is what the repository's merge rules require of this
 	// change and which rule each requirement came from, one line each
 	// (model.EffectiveMergePolicy.Describe); empty where it has none.
-	MergePolicy string
+	MergePolicy string `json:"mergePolicy,omitempty"`
 }
 
 var queryMergeQueueInputSchema = map[string]any{

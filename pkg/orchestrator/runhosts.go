@@ -30,7 +30,7 @@ import (
 )
 
 // RecoverRunHosts is the run-host half of startup recovery
-// (docs/non-disruptive-upgrade.md, "Run hosts never touch the store"),
+// (design/design/non-disruptive-upgrade.design.md, "Run hosts never touch the store"),
 // and runs before RecoverOrphanedRuns: it lists this deployment's run
 // hosts, matches them to live task_run rows by their run label
 // (runhost.Decide), destroys every run host no live row claims, and
@@ -81,7 +81,7 @@ func RecoverRunHosts(ctx context.Context, store *model.Store, client github.Clie
 			continue
 		}
 		byID[r.ID] = r
-		claims = append(claims, runhost.Claim{Run: r.ID, Task: r.TaskID, LastSeen: c.UpdatedAt})
+		claims = append(claims, runhost.Claim{Run: r.ID, Task: r.TaskID, Sandbox: r.Sandbox, LastSeen: c.UpdatedAt})
 	}
 	plan := runhost.Decide(claims, hosts, func(i runhost.Info) runhost.SpoolState {
 		e, _ := runhost.ReadExit(i.Labels.Spool)

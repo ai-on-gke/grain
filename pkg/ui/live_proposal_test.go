@@ -181,9 +181,9 @@ func TestProposalIsFiledWithDefaultCapabilitiesNotItsParents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(piece.Capabilities, []string{"gcp-key"}) {
-		t.Errorf("capabilities = %v, want [gcp-key] -- the defaults, not the parent's grant set",
-			piece.Capabilities)
+	if !reflect.DeepEqual(piece.Capabilities, []string{model.GCPKeySandboxAgentGrant}) {
+		t.Errorf("capabilities = %v, want [%s] -- the defaults, not the parent's grant set",
+			piece.Capabilities, model.GCPKeySandboxAgentGrant)
 	}
 	stored, err := store.GetTask(ctx, piece.ID)
 	if err != nil {
@@ -204,8 +204,8 @@ func TestProposalIsFiledWithDefaultCapabilitiesNotItsParents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(custom.Capabilities, "gcp-key") || !slices.Contains(custom.Capabilities, "self-repair") {
-		t.Errorf("custom capabilities = %v, want [gcp-key self-repair]", custom.Capabilities)
+	if !slices.Contains(custom.Capabilities, model.GCPKeySandboxAgentGrant) || !slices.Contains(custom.Capabilities, model.GrainHostExecGrant) {
+		t.Errorf("custom capabilities = %v, want [%s %s]", custom.Capabilities, model.GCPKeySandboxAgentGrant, model.GrainHostExecGrant)
 	}
 }
 
@@ -232,7 +232,7 @@ func TestAutoSubmittedProposalInheritanceAndCapabilities(t *testing.T) {
 		t.Errorf("state = %s, want queued -- its parent's permission covers the defaults", piece.State)
 	}
 
-	// Proposal asking for capability NOT granted to parent (e.g. self-upgrade) cannot auto-submit -> Proposed.
+	// Proposal asking for capability NOT granted to parent (e.g. self-upgrade, canonicalized to api:self-upgrade) cannot auto-submit -> Proposed.
 	escalated, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "escalated proposal", ProposedBy: parent.ID, AutoMerge: true,
 		Capabilities: &[]string{"self-upgrade"},
@@ -243,8 +243,8 @@ func TestAutoSubmittedProposalInheritanceAndCapabilities(t *testing.T) {
 	if escalated.State != model.StateProposed {
 		t.Errorf("state = %s, want proposed -- requested capabilities exceed parent grants", escalated.State)
 	}
-	if !strings.Contains(escalated.Description, "`self-upgrade`") {
-		t.Errorf("body = %q, want a note naming self-upgrade -- approving the work must not "+
+	if !strings.Contains(escalated.Description, "`api:self-upgrade`") {
+		t.Errorf("body = %q, want a note naming api:self-upgrade -- approving the work must not "+
 			"silently approve the capability", escalated.Description)
 	}
 	if strings.Contains(piece.Description, "grain: this proposal asked for") {
@@ -298,13 +298,13 @@ func TestSessionProposalAskingForACapabilityItsSessionLacksWaitsForAPerson(t *te
 	if filed.State != model.StateProposed {
 		t.Errorf("state = %s, want proposed -- the session never held self-repair", filed.State)
 	}
-	if !slices.Contains(filed.Capabilities, "self-repair") {
+	if !slices.Contains(filed.Capabilities, model.GrainHostExecGrant) {
 		t.Errorf("capabilities = %v, want self-repair kept for the person approving it", filed.Capabilities)
 	}
 	if proposal := mustGetTask(t, ctx, store, filed.ID); proposal.Approval != nil {
 		t.Errorf("approved by %+v, want nobody", proposal.Approval)
 	}
-	if !strings.Contains(filed.Description, "`self-repair`") {
+	if !strings.Contains(filed.Description, "`"+model.GrainHostExecGrant+"`") {
 		t.Errorf("body = %q, want a note naming self-repair", filed.Description)
 	}
 }
@@ -779,7 +779,7 @@ func TestProposalGetsAutoGrantedGrainCIWhenTargetHasWorkflows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(proposal.Capabilities, "grain-ci") {
+	if !slices.Contains(proposal.Capabilities, model.GrainCIGrant) {
 		t.Errorf("proposal capabilities = %v, want grain-ci auto-granted", proposal.Capabilities)
 	}
 }

@@ -229,7 +229,57 @@ type Run struct {
 	// BuildOf for why it is a pointer.
 	Build *Build `json:"build,omitempty"`
 
+	// Actions is set on a run that is a GitHub Actions workflow run
+	// rather than one of grain's own (Provider ProviderGitHubActions):
+	// what the forge said about it that a grain run has no field for.
+	// GET /api/ci/runs lists such runs beside grain's for a repository
+	// whose CI is GitHub's (pkg/ui/ci_actions.go).
+	Actions *ActionsRun `json:"actions,omitempty"`
+	// Provider is which CI ran this: ProviderGrain or
+	// ProviderGitHubActions. "" is grain's own, as it was before any
+	// other provider was listed beside it.
+	Provider string `json:"provider,omitempty"`
+
 	Jobs []JobRun `json:"jobs"`
+}
+
+// The CI providers a listed run can come from (Run.Provider).
+const (
+	ProviderGrain         = "grain"
+	ProviderGitHubActions = "github-actions"
+)
+
+// ProviderOf is run's provider, "" read as grain's own.
+func ProviderOf(run Run) string {
+	if run.Provider == "" {
+		return ProviderGrain
+	}
+	return run.Provider
+}
+
+// ActionsRun is what a GitHub Actions workflow run carries beyond a
+// grain run's own fields.
+type ActionsRun struct {
+	// RunID is GitHub's own id for the run; Run.ID is the namespaced
+	// gha:<owner>:<name>:<run id> that never collides with a grain run's.
+	RunID      int64 `json:"runId"`
+	RunAttempt int   `json:"runAttempt,omitempty"`
+	// Workflow is the workflow's file (.github/workflows/tests.yml) and
+	// WorkflowName the name it gives itself ("Tests").
+	Workflow     string `json:"workflow,omitempty"`
+	WorkflowName string `json:"workflowName,omitempty"`
+	// HeadRepo is the repository ("owner/name") the run's head commit
+	// came from, when the forge said: another one's is a fork's.
+	HeadRepo string `json:"headRepo,omitempty"`
+	// Status is GitHub's: queued, in_progress, completed, ... and
+	// Conclusion GitHub's own word for a completed run, kept beside the
+	// Run.Conclusion grain's vocabulary maps it to.
+	Status     string `json:"status,omitempty"`
+	Conclusion string `json:"conclusion,omitempty"`
+	URL        string `json:"url,omitempty"`
+	// FailedJobs names the jobs that did not pass, when the jobs are known
+	// (grain's polled record of them, or a show that read them).
+	FailedJobs []string `json:"failedJobs,omitempty"`
 }
 
 // InterruptedRunError is what a run gets for an Error when the daemon
@@ -318,12 +368,29 @@ func BuildOf(info version.Info) *Build {
 }
 
 // CancelSource is who wanted a run stopped (Run.CancelledBy). Two
-// answers, and they are told apart by which door the cancellation came
-// through rather than by reading the note left with it: everything
-// inside grain that stops a run says so at the call site, and the API
-// route a person reaches (ui.Server's DELETE /api/ci/runs/{id}) is the
-// only one that says CancelByOperator.
+// kinds of answer, and they are told apart by which door the
+// cancellation came through rather than by reading the note left with
+// it: everything inside grain that stops a run says CancelBySystem at
+// the call site, and the API route a person reaches (ui.Server's DELETE
+// /api/ci/runs/{id}), or a close, says who asked (CancelByPrincipal):
+// the principal's ID (operator-attribution spec §1.3.2), or
+// CancelByOperator where there is none, as every such run stored before
+// that reads back.
 type CancelSource string
+
+// CancelByPrincipal is the CancelSource of a cancellation the principal
+// with id asked for: id itself, or CancelByOperator for none.
+func CancelByPrincipal(id string) CancelSource {
+	if id = strings.TrimSpace(id); id != "" {
+		return CancelSource(id)
+	}
+	return CancelByOperator
+}
+
+// ByHand reports whether somebody asked for the cancellation -- a person
+// or an agent through grain's API -- rather than grain stopping its own
+// run.
+func (s CancelSource) ByHand() bool { return s != CancelBySystem }
 
 const (
 	// CancelBySystem is grain stopping its own run: a job that ran past
@@ -334,9 +401,10 @@ const (
 	// claims is far more likely to be a timeout than a person.
 	CancelBySystem CancelSource = ""
 	// CancelByOperator is a person asking, through grain's own API --
-	// the CI pane's cancel button, `grain ci cancel`, a DELETE by hand.
-	// Whatever they meant by it, they meant it about this commit, so
-	// grain does not quietly start the run again.
+	// the CI pane's cancel button, `grain ci cancel`, a DELETE by hand --
+	// with no ID to name them by (CancelByPrincipal). Whatever they meant
+	// by it, they meant it about this commit, so grain does not quietly
+	// start the run again. Test a source with ByHand, not against this.
 	CancelByOperator CancelSource = "operator"
 )
 

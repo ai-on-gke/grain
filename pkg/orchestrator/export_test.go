@@ -16,7 +16,9 @@ package orchestrator
 
 import (
 	"context"
+	"net/netip"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
@@ -26,8 +28,10 @@ import (
 	"github.com/ai-on-gke/grain/pkg/forge"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/granule"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // DisableBranchExistsSleep makes branchExistsSettled's own backoff
@@ -176,7 +180,7 @@ const CIMaximumAttempts = ciMaximumAttempts
 
 // BaseCIMaximumAttempts is the same bound for one commit of a base
 // branch, whose verdicts about nothing get maxInfraRetries re-runs
-// (docs/design/release-from-trunk.md, RFT-2).
+// (design/design/release-from-trunk.design.md, RFT-2).
 const BaseCIMaximumAttempts = baseCIMaximumAttempts
 
 // MaxInfraRetries is how many automatic re-runs an `infra` verdict on a
@@ -246,6 +250,23 @@ func StubHostFirewall() func() {
 		return []string{"veth0000000"}, nil
 	}
 	return func() { hostNFT, hostGuestNetworks, hostGuestPorts = prevNFT, prevNets, prevPorts }
+}
+
+// StubHostFirewallAddresses narrows StubHostFirewall for one test whose
+// granule VMs are given addresses from a pool: the stub's container
+// reports runAddr's answer for the run its VM is named after, so the
+// open-network fence's check that the VM holds the address it was
+// allocated (checkAllocatedAddress) has the address to find. A run
+// runAddr has no answer for reports the stub's usual one.
+func StubHostFirewallAddresses(runAddr func(runID string) (netip.Addr, bool)) func() {
+	prevNets := hostGuestNetworks
+	hostGuestNetworks = func(ctx context.Context, container string) ([]guestNetwork, error) {
+		if addr, ok := runAddr(strings.TrimPrefix(container, granule.PodName(VMNamePrefix))); ok {
+			return parseGuestNetworks(addr.String() + "|16||||\n")
+		}
+		return prevNets(ctx, container)
+	}
+	return func() { hostGuestNetworks = prevNets }
 }
 
 // UseRealHostFirewall undoes StubHostFirewall for one test, and returns
@@ -378,6 +399,11 @@ func RecordPolledChecks(ctx context.Context, store *model.Store, repo model.Repo
 	recordPolledChecks(ctx, store, repo, ref, sha, checks, now)
 }
 
+// ReconcileWake is reconcileWake, for tests of deferred and CI wakes.
+func ReconcileWake(ctx context.Context, deps Deps, now time.Time) error {
+	return reconcileWake(ctx, deps, now)
+}
+
 // GitHubCITailsPerHour is the hourly cap on failed-job log reads.
 const GitHubCITailsPerHour = gitHubCITailsPerHour
 
@@ -400,4 +426,31 @@ func StartMergeRecheckForTest(ctx context.Context, store *model.Store, client gi
 // the "ci" reconciler's own walk over open pull requests would not reach.
 func ReconcileTaskCI(ctx context.Context, deps Deps, task model.Task, now time.Time) error {
 	return reconcileTaskCI(ctx, deps, task, now)
+}
+
+// SessionKeysForTest is the sessionSandboxKey (with nothing materialized)
+// and sessionGrantsKey an adopting daemon compares task's against before
+// parking its sandbox warm: what a test records with SetRunSandboxKeys.
+func SessionKeysForTest(ctx context.Context, deps Deps, task model.Task) (sandboxKey, grantsKey string) {
+	return sessionSandboxKey(adoptedSessionShape(ctx, deps, task), task, nil), sessionGrantsKey(task)
+}
+
+// WriteExecutableStub is writeExecutableStub for tests in orchestrator_test.
+var WriteExecutableStub = writeExecutableStub
+
+// ClosingNote exposes closingNote, the release-qualification verdict's
+// source (releasequalification.go).
+func ClosingNote(comments []model.Comment, taskID string) string {
+	return closingNote(comments, taskID)
+}
+
+// SessionTestRegistry is model.NewCapabilityRegistry with the agent API's
+// grants resolvable, as the daemon's own registry has them
+// (ui.AgentAPIDynamicProvider): every console session holds
+// model.ConsoleSessionCIReadGrant by default, and a registry without it
+// would refuse the session's dispatch.
+func SessionTestRegistry(providers ...model.CapabilityProvider) *model.CapabilityRegistry {
+	reg := model.NewCapabilityRegistry(providers...)
+	reg.RegisterDynamic(ui.AgentAPIDynamicProvider)
+	return reg
 }

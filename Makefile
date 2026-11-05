@@ -141,8 +141,8 @@ CONTAINER_USER ?= $(shell id -u):$(shell id -g)
 # `make image` builds Dockerfile (not Dockerfile.build: that one is the
 # toolchain `container-build` above runs in) -- the runtime image a
 # deployment actually runs, carrying bin/grain and every binary it shells
-# out to. .github/workflows/build-artifacts.yml builds the same image
-# the same way on every commit and pushes it to GHCR, so this target is
+# out to. .github/workflows/release.yml builds the same image
+# the same way on every commit and pushes it to Docker Hub, so this target is
 # for a local build against a change to the Dockerfile itself, not
 # something a deployment ever needs to run.
 #
@@ -586,9 +586,11 @@ tunnel-stress:
 
 # Upgrade test suite -- verifies upgrading from the previous version of the software
 # to the current version, ensuring data, tasks, schemas, and daemon health transition smoothly.
+# With GRAIN_UPGRADE_RELEASE_IMAGE set (ghcr.io/<repo>/grain), it also upgrades from the
+# published latest and floor releases (tests/container/release_upgrade_test.go).
 test-upgrade:
 	GRAIN_TEST_IMAGE=$${GRAIN_TEST_IMAGE:-grain-e2e:test} \
-		go test -v -timeout 30m ./tests/container/ -run 'TestUpgradeFromPreviousVersion|TestAnUpgrade'
+		go test -v -timeout 50m ./tests/container/ -run 'TestUpgradeFromPreviousVersion|TestUpgradeFromReleasedVersions|TestAnUpgrade'
 
 
 # The formatting gate, run here and by the go job in

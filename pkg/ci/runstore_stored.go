@@ -279,9 +279,15 @@ type StoredRunStore struct {
 	log     func(format string, args ...any)
 
 	// mu makes Update a read-modify-write rather than two racing
-	// statements. One process writes a given run (the daemon running it),
-	// so a mutex is the whole of the concurrency control this needs; the
-	// database's own transactions cover the rest.
+	// statements, and Put takes it too: a Put landing between Update's
+	// read and its write would otherwise be overwritten by the stale copy
+	// Update read. That is how a run concluding just as Service.Cancel
+	// noted its reason (a second Cancel of a run already stopping) was
+	// left in flight for ever, with no goroutine left to conclude it
+	// (docs/test-runs/2026-11-01-github-actions-ci-workflow-run.md). One
+	// process writes a given run (the daemon running it), so a mutex is
+	// the whole of the concurrency control this needs; the database's own
+	// transactions cover the rest.
 	mu sync.Mutex
 }
 
@@ -383,6 +389,8 @@ func (s *StoredRunStore) logf(format string, args ...any) {
 // that can push the history over its bounds, so it is the only moment
 // worth checking, and it keeps the policy where the numbers are.
 func (s *StoredRunStore) Put(run Run) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	keep := s.retention()
 	stored, declined := storedRun(run, keep)
 	s.put(stored, keep, declined)
@@ -674,7 +682,7 @@ func (s *StoredRunStore) Find(f RunFilter, limit int) RunPage {
 // should send one: both readers parse the vocabulary first
 // (ParseRunState).
 func ciRunQueryOf(f RunFilter) model.CIRunQuery {
-	q := model.CIRunQuery{Repo: f.Repo, Ref: f.Ref, Job: f.Job, Since: f.Since, Until: f.Until}
+	q := model.CIRunQuery{Repo: f.Repo, Ref: f.Ref, Job: f.Job, Workflow: f.Workflow, Since: f.Since, Until: f.Until}
 	for _, state := range f.States {
 		switch {
 		case strings.EqualFold(state, StateRunning):
@@ -752,7 +760,7 @@ func (s *StoredRunStore) LiveRuns(ctx context.Context) ([]Run, error) {
 //
 // attached names the runs the adoption pass took back -- every run with
 // a step to reattach by exec id, or a readopted sandbox whose step runner
-// is still there (docs/design/grain-on-gke.md#GKE-4) -- and those are
+// is still there (design/design/grain-on-gke.design.md#GKE-4) -- and those are
 // still going. What is left has nothing to attach: a run that was queued
 // and had no sandbox yet, or one on a backend that cannot give a sandbox
 // back. Those are stamped cancelled-and-interrupted rather than deleted.

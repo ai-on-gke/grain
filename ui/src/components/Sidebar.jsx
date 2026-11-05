@@ -29,11 +29,6 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import AddIcon from "@mui/icons-material/Add";
-import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
-import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
-import ChevronRightIcon from "@mui/icons-material/ChevronRight";
-import TuneIcon from "@mui/icons-material/Tune";
 import PushPinIcon from "@mui/icons-material/PushPin";
 import PushPinOutlinedIcon from "@mui/icons-material/PushPinOutlined";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
@@ -62,9 +57,12 @@ import {
 import { formatDateTime } from "../time.js";
 import CustomizeSidebarOverlay from "./CustomizeSidebarOverlay.jsx";
 import { NEW_SESSION_ID } from "./NewSessionPage.jsx";
+import AppIcon, { NavGlyph } from "./AppIcon.jsx";
 import GrainMark from "./GrainMark.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
 import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
+import { verifiedUserEmail } from "./settings/AccessSection.jsx";
+import { whoamiParts } from "../principal.js";
 
 // Sidebar replaces TopBar and Filters with the one nav Plane builds every
 // view around: a fixed rail with the workspace identity up top, a state
@@ -286,7 +284,7 @@ function FooterItem({ kind, label, active, onClick, children }) {
       }}
     >
       <span className="nav-icon">
-        <ItemGlyph kind={kind} />
+        <NavGlyph kind={kind} />
       </span>
       <ListItemText
         primary={label}
@@ -298,6 +296,126 @@ function FooterItem({ kind, label, active, onClick, children }) {
         }}
       />
       {children}
+    </ListItemButton>
+  );
+}
+
+// SignedInRow is the phone's stand-in for the header rail's email badge
+// (PageHeader.jsx's GlobalButtons): who the deployment's identity
+// verifier says this browser is, as a row that opens Settings -> Access,
+// and Log out under it rather than behind a menu -- the drawer is
+// already the menu. Log out sits below the address, not beside it: in
+// the 232px drawer a button beside it left the address ~110px, which cut
+// even owner@example.com to "owner@example..." (2026-11-03 IAP deployment
+// walkthrough). A long address is still ellipsized inside the row, never
+// widening the drawer; the full address is its title.
+function SignedInRow({ email, onOpenAccess, onLogout }) {
+  return (
+    <Box
+      data-testid="phone-signed-in"
+      sx={{ display: "flex", flexDirection: "column", minWidth: 0 }}
+    >
+      <ListItemButton
+        onClick={onOpenAccess}
+        title={`Signed in as ${email}`}
+        aria-label={`Signed in as ${email}. Access settings`}
+        sx={{
+          flex: "1 1 auto",
+          minWidth: 0,
+          borderRadius: 1.5,
+          py: 0.6,
+          px: 0.9,
+          color: "text.secondary",
+        }}
+      >
+        <span className="nav-icon">
+          <AppIcon name="user" size={18} />
+        </span>
+        <ListItemText
+          primary="Signed in as"
+          secondary={email}
+          sx={{ ml: 1, my: 0, minWidth: 0 }}
+          primaryTypographyProps={{
+            fontSize: "0.7rem",
+            color: "inherit",
+            noWrap: true,
+          }}
+          secondaryTypographyProps={{
+            "data-testid": "phone-signed-in-email",
+            fontSize: "0.8rem",
+            fontWeight: 500,
+            color: "text.primary",
+            noWrap: true,
+          }}
+        />
+      </ListItemButton>
+      {onLogout ? (
+        <Button
+          size="small"
+          color="error"
+          startIcon={<AppIcon name="signOut" size={15} />}
+          onClick={onLogout}
+          sx={{ alignSelf: "flex-end", minWidth: 0, px: 1, py: 0.25 }}
+        >
+          Log out
+        </Button>
+      ) : null}
+    </Box>
+  );
+}
+
+// UserTile is who this browser acts as, at the foot of the rail
+// (operator-attribution spec §5.4): GET /api/whoami's label -- the
+// verified email, or "operator" with a muted "(access code)" or
+// "(local)" -- never a name the browser typed in. It opens Settings ->
+// Access. Folded, it is the icon alone, the label its tooltip.
+function UserTile({ whoami, collapsed, onOpenAccess }) {
+  const { name, qualifier } = whoamiParts(whoami);
+  if (!name) return null;
+  const full = qualifier ? `${name} ${qualifier}` : name;
+  return (
+    <ListItemButton
+      data-testid="user-tile"
+      onClick={onOpenAccess}
+      title={full}
+      aria-label={`Acting as ${full}`}
+      sx={{
+        flex: collapsed ? "none" : "1 1 auto",
+        minWidth: 0,
+        borderRadius: 1.5,
+        py: 0.5,
+        px: 0.9,
+        color: "text.secondary",
+      }}
+    >
+      <span className="nav-icon">
+        <AppIcon name="user" size={18} />
+      </span>
+      {collapsed ? null : (
+        <Typography
+          component="span"
+          noWrap
+          data-testid="user-tile-label"
+          sx={{
+            ml: 1,
+            minWidth: 0,
+            fontSize: "0.8rem",
+            fontWeight: 500,
+            color: "text.primary",
+          }}
+        >
+          {name}
+          {qualifier ? (
+            <Typography
+              component="span"
+              data-testid="user-tile-qualifier"
+              sx={{ ml: 0.5, fontSize: "inherit", color: "text.secondary" }}
+            >
+              {qualifier}
+            </Typography>
+          ) : null}
+        </Typography>
+      )}
     </ListItemButton>
   );
 }
@@ -453,7 +571,14 @@ function StagingItem({ sandbox, config, pinned, onTogglePin }) {
             aria-label="Host port not reachable through this proxy"
             sx={{ fontSize: "0.95rem", ml: 0.5 }}
           />
-        ) : null}
+        ) : (
+          <AppIcon
+            name="externalLink"
+            size={13}
+            className="rail-count"
+            sx={{ ml: 0.5, opacity: 0.65 }}
+          />
+        )}
       </ListItemButton>
       <IconButton
         className="staging-pin rail-hidden"
@@ -476,7 +601,16 @@ function StagingItem({ sandbox, config, pinned, onTogglePin }) {
 
 export default function Sidebar({
   config,
+  // GET /api/whoami's answer: who this browser acts as, for the user
+  // tile at the foot of the rail. null until it answers, and from a
+  // daemon too old to have the route, and then there is no tile.
+  whoami = null,
   tasks,
+  // The closed and merged tasks the server counts that tasks does not
+  // hold yet (closedTasks.js's unseenClosed): closed work is paged in, so
+  // without them the Closed, Merged and Tasks counts would stop at the
+  // pages read.
+  unseenClosed = null,
   notificationCount = 0,
   schedules = [],
   templates = [],
@@ -506,8 +640,14 @@ export default function Sidebar({
   onNewBoard,
   // System's entry is the page header rail's icon beside the gear; on a
   // phone, where PhoneNav's bar has room for the gear alone, it is a row at the foot
-  // of this rail instead (docs/design/settings-panel.md §4.3).
+  // of this rail instead (design/design/settings-panel.design.md §4.3).
   onOpenSystem,
+  // Who IAP (or another IdentityVerifier) says is signed in, and Log out:
+  // the header rail's email badge on desktop; on a phone, which has no
+  // header rail, a row under System at the foot of this rail (§4.3).
+  // onOpenAccess opens Settings -> Access.
+  onOpenAccess,
+  onLogout,
   // The build stamp at the foot is a link to Settings -> Upgrade.
   onOpenUpgrade,
   onOpenNewTask,
@@ -522,6 +662,10 @@ export default function Sidebar({
   // as much as the list is -- left to the single pane it opened below
   // the fold at 375x812.
   pinFooter = false,
+  // On desktop the header rail's top tray carries the New task split
+  // button on one horizontal baseline with the logo and global buttons;
+  // the phone drawer and standalone Sidebar tests still render it here.
+  hideCreateButton = false,
   // Folded down to an icon-only rail (sidebarCollapse.js), and the
   // toggle that folds it. Without onToggleCollapsed there is no toggle
   // at all -- the phone drawer, where the rail is never folded.
@@ -603,6 +747,11 @@ export default function Sidebar({
     }
     if (t.blocked) blocked += 1;
   }
+  if (unseenClosed?.closed > 0) {
+    counts.closed = (counts.closed || 0) + unseenClosed.closed;
+  }
+  merged += unseenClosed?.merged || 0;
+  taskCount += (unseenClosed?.closed || 0) + (unseenClosed?.merged || 0);
   const repoCount = repoRows(config, tasks).length;
   // time.Time's zero value is still a non-empty string on the wire, so
   // FinishedAt cannot distinguish a live run here. Conclusion is CI's
@@ -675,31 +824,32 @@ export default function Sidebar({
     onSetFilter(id);
   };
 
-  const toggleLabel = collapsed ? "Expand sidebar" : "Collapse sidebar";
-  const toggle = onToggleCollapsed ? (
-    <Tooltip
-      title={`${toggleLabel} (${SIDEBAR_TOGGLE_KEY})`}
-      placement="right"
-      describeChild
-    >
-      <IconButton
-        size="small"
-        aria-label={toggleLabel}
-        aria-expanded={!collapsed}
-        aria-controls="sidebar-rail"
-        aria-keyshortcuts={SIDEBAR_TOGGLE_KEY}
-        data-testid="sidebar-toggle"
-        onClick={onToggleCollapsed}
-        sx={{ ml: collapsed ? 0 : "auto", flex: "none", p: 0.5 }}
+  const toggle =
+    !collapsed && onToggleCollapsed ? (
+      <Tooltip
+        title={`Collapse sidebar (${SIDEBAR_TOGGLE_KEY})`}
+        placement="right"
+        describeChild
       >
-        {collapsed ? (
-          <ChevronRightIcon fontSize="small" />
-        ) : (
-          <ChevronLeftIcon fontSize="small" />
-        )}
-      </IconButton>
-    </Tooltip>
-  ) : null;
+        <IconButton
+          size="small"
+          className="header-control-icon"
+          aria-label="Collapse sidebar"
+          aria-expanded={true}
+          aria-controls="sidebar-rail"
+          aria-keyshortcuts={SIDEBAR_TOGGLE_KEY}
+          data-testid="sidebar-toggle"
+          onClick={onToggleCollapsed}
+          sx={{
+            ml: config?.environmentName ? 0 : "auto",
+            flex: "none",
+            color: "text.secondary",
+          }}
+        >
+          <AppIcon name="sidebar" size={18} />
+        </IconButton>
+      </Tooltip>
+    ) : null;
 
   const aside = (
     <Box
@@ -718,8 +868,10 @@ export default function Sidebar({
         // The width animates (style.css's .sidebar); nothing inside it
         // may push it wider or show a scrollbar while it does.
         overflowX: "hidden",
-        gap: 1.4,
-        p: collapsed ? "0.9rem 0.5rem" : "0.9rem 0.7rem",
+        gap: 1.2,
+        pt: 0,
+        pb: "0.9rem",
+        px: collapsed ? "0.5rem" : "0.7rem",
         bgcolor: "background.paper",
         borderRight: 1,
         borderColor: "divider",
@@ -732,12 +884,16 @@ export default function Sidebar({
         says whether the machine is busy without reading the counts
         below it. See docs/brand.md. */}
       <Box
+        className="sidebar-header"
+        data-testid="sidebar-header"
         sx={{
           display: "flex",
-          flexDirection: collapsed ? "column" : "row",
+          flexDirection: "row",
           alignItems: "center",
-          gap: 0.9,
-          px: collapsed ? 0 : 0.5,
+          justifyContent: collapsed ? "center" : "flex-start",
+          gap: 1,
+          mx: collapsed ? "-0.5rem" : "-0.7rem",
+          px: collapsed ? 0 : 1.5,
         }}
       >
         {/* Folded, the environment's name is too wide for the rail; the
@@ -745,6 +901,7 @@ export default function Sidebar({
           hover, so the two tabs still do not look alike. */}
         <Box
           component="span"
+          className="header-logo-box"
           title={
             collapsed && config?.environmentName
               ? `Environment: ${config.environmentName}`
@@ -753,10 +910,9 @@ export default function Sidebar({
           data-testid={
             collapsed && config?.environmentName
               ? "sidebar-environment-dot"
-              : undefined
+              : "brand-logo-box"
           }
           sx={{
-            display: "inline-flex",
             position: "relative",
             "&::after":
               collapsed && config?.environmentName
@@ -783,7 +939,12 @@ export default function Sidebar({
           letterSpacing="-0.01em"
           component="h1"
           className={collapsed ? "visually-hidden" : undefined}
-          sx={{ m: 0 }}
+          sx={{
+            m: 0,
+            lineHeight: 1,
+            display: collapsed ? undefined : "inline-flex",
+            alignItems: "center",
+          }}
         >
           grain
         </Typography>
@@ -806,59 +967,74 @@ export default function Sidebar({
             title={`Environment: ${config.environmentName}`}
             sx={{
               ml: "auto",
-              maxWidth: 110,
+              maxWidth: 100,
               fontWeight: 600,
             }}
           />
         ) : null}
-        {toggle}
+        {!collapsed ? toggle : null}
       </Box>
 
-      {collapsed ? (
-        <Tooltip title="New task, session or board" placement="right">
-          <Button
-            variant="contained"
+      {!hideCreateButton &&
+        (collapsed ? (
+          <Tooltip title="New task, session or board" placement="right">
+            <Button
+              variant="contained"
+              size="small"
+              aria-label="Create"
+              aria-controls={createMenuOpen ? "create-options-menu" : undefined}
+              aria-haspopup="true"
+              aria-expanded={createMenuOpen ? "true" : undefined}
+              onClick={(e) => setCreateMenuAnchor(e.currentTarget)}
+              sx={{
+                minWidth: 0,
+                height: "var(--header-control-size)",
+                px: 0,
+                py: 0,
+                my: 0.2,
+              }}
+            >
+              <AppIcon name="add" size={18} />
+            </Button>
+          </Tooltip>
+        ) : (
+          <ButtonGroup
             size="small"
-            aria-label="Create"
-            aria-controls={createMenuOpen ? "create-options-menu" : undefined}
-            aria-haspopup="true"
-            aria-expanded={createMenuOpen ? "true" : undefined}
-            onClick={(e) => setCreateMenuAnchor(e.currentTarget)}
-            sx={{ minWidth: 0, px: 0, py: 0.5, my: 0.4 }}
+            variant="contained"
+            fullWidth
+            className="header-split-button"
+            sx={{ my: 0.2 }}
           >
-            <AddIcon fontSize="small" />
-          </Button>
-        </Tooltip>
-      ) : (
-        <ButtonGroup
-          size="small"
-          variant="contained"
-          fullWidth
-          sx={{ my: 0.4 }}
-        >
-          <Button
-            onClick={onOpenNewTask}
-            sx={{ flex: "1 1 auto", minWidth: 0, whiteSpace: "nowrap" }}
-          >
-            + New task
-          </Button>
-          <Button
-            aria-label="Create options"
-            aria-controls={createMenuOpen ? "create-options-menu" : undefined}
-            aria-haspopup="true"
-            aria-expanded={createMenuOpen ? "true" : undefined}
-            onClick={(e) => setCreateMenuAnchor(e.currentTarget)}
-            sx={{
-              px: 0.5,
-              width: "32px",
-              minWidth: "32px",
-              flex: "0 0 32px",
-            }}
-          >
-            <ArrowDropDownIcon fontSize="small" />
-          </Button>
-        </ButtonGroup>
-      )}
+            <Button
+              aria-label="+ New task"
+              onClick={onOpenNewTask}
+              startIcon={<AppIcon name="add" size={16} />}
+              sx={{
+                flex: "1 1 auto",
+                minWidth: 0,
+                whiteSpace: "nowrap",
+                "& .MuiButton-startIcon": { mr: 0.5, ml: 0 },
+              }}
+            >
+              New task
+            </Button>
+            <Button
+              aria-label="Create options"
+              aria-controls={createMenuOpen ? "create-options-menu" : undefined}
+              aria-haspopup="true"
+              aria-expanded={createMenuOpen ? "true" : undefined}
+              onClick={(e) => setCreateMenuAnchor(e.currentTarget)}
+              sx={{
+                px: 0.5,
+                width: "32px",
+                minWidth: "32px",
+                flex: "0 0 32px",
+              }}
+            >
+              <AppIcon name="dropdown" size={18} />
+            </Button>
+          </ButtonGroup>
+        ))}
 
       <Menu
         id="create-options-menu"
@@ -956,16 +1132,18 @@ export default function Sidebar({
               <IconButton
                 size="small"
                 onClick={onOpenCustomize}
+                aria-haspopup="dialog"
                 aria-label="Customize sidebar"
                 sx={{ p: 0.5 }}
               >
-                <TuneIcon sx={{ fontSize: "1rem" }} />
+                <AppIcon name="customize" size={16} />
               </IconButton>
             </Tooltip>
           ) : (
             <Button
               size="small"
               onClick={onOpenCustomize}
+              aria-haspopup="dialog"
               sx={{
                 ml: "auto",
                 minWidth: 0,
@@ -995,7 +1173,11 @@ export default function Sidebar({
                   sx={{ borderRadius: 1.5, py: 0.6, px: 0.9 }}
                 >
                   <span className="nav-icon" style={iconStyle}>
-                    <ItemGlyph kind={glyph || "inbox"} />
+                    {glyph ? (
+                      <ItemGlyph kind={glyph} />
+                    ) : (
+                      <NavGlyph kind="inbox" />
+                    )}
                   </span>
                   <ListItemText
                     primary="Inbox"
@@ -1089,7 +1271,11 @@ export default function Sidebar({
                   sx={{ borderRadius: 1.5, py: 0.6, px: 0.9 }}
                 >
                   <span className="nav-icon" style={iconStyle}>
-                    <ItemGlyph kind={glyph || "ci"} />
+                    {glyph ? (
+                      <ItemGlyph kind={glyph} />
+                    ) : (
+                      <NavGlyph kind="ci" />
+                    )}
                   </span>
                   <ListItemText
                     primary="CI"
@@ -1104,7 +1290,7 @@ export default function Sidebar({
               );
             }
             // A pin of a System tab or a Settings section
-            // (docs/design/settings-panel.md §5.6) -- or of the bare
+            // (design/design/settings-panel.design.md §5.6) -- or of the bare
             // view. The old Sandboxes and Caches pins became the System
             // tabs of the same names, and keep their counts.
             if (item.id === "system" || item.id === "settings") {
@@ -1165,7 +1351,11 @@ export default function Sidebar({
                   sx={{ borderRadius: 1.5, py: 0.6, px: 0.9 }}
                 >
                   <span className="nav-icon" style={iconStyle}>
-                    <ItemGlyph kind={info.glyph} />
+                    {glyph ? (
+                      <ItemGlyph kind={glyph} />
+                    ) : (
+                      <NavGlyph kind={info.glyph} />
+                    )}
                   </span>
                   <ListItemText
                     primary={info.label}
@@ -1470,7 +1660,7 @@ export default function Sidebar({
             </ListItemButton>
           )}
 
-          {/* Processes (docs/design/settings-panel.md §4.2): schedules,
+          {/* Processes (design/design/settings-panel.design.md §4.2): schedules,
             templates, suites and triggers in one entry, counted the
             way the page lists them. Then CI. */}
           {shows("processes") && (
@@ -1505,7 +1695,7 @@ export default function Sidebar({
               sx={{ borderRadius: 1.5, py: 0.6, px: 0.9 }}
             >
               <span className="nav-icon">
-                <ItemGlyph kind="ci" />
+                <NavGlyph kind="ci" />
               </span>
               <ListItemText
                 primary="CI"
@@ -1592,8 +1782,71 @@ export default function Sidebar({
               <UnbackedStateDot {...stateDot(config)} />
             ) : null}
           </FooterItem>
+          {verifiedUserEmail(config) ? (
+            <SignedInRow
+              email={verifiedUserEmail(config)}
+              onOpenAccess={onOpenAccess}
+              onLogout={onLogout}
+            />
+          ) : (
+            <UserTile whoami={whoami} onOpenAccess={onOpenAccess} />
+          )}
         </List>
       )}
+      {/* On a phone the tile sits in the pinned list above, beside Log
+          out when somebody is signed in; beside the page it is the foot
+          of the rail, over the build stamp, with a compact Log out button
+          beside it when signed in through a verified identity. */}
+      {(() => {
+        if (pinFooter) return null;
+        const verifiedEmail = verifiedUserEmail(config);
+        const desktopWhoami =
+          verifiedEmail && !whoami?.verified
+            ? { actor: { label: verifiedEmail }, verified: true }
+            : whoami;
+        const canLogoutInFooter = Boolean(
+          onLogout && (verifiedEmail || whoami?.verified),
+        );
+        if (!desktopWhoami) return null;
+        return (
+          <Box
+            sx={{
+              mt: "auto",
+              pt: 0.6,
+              flex: "none",
+              display: "flex",
+              flexDirection: collapsed ? "column" : "row",
+              alignItems: collapsed ? "stretch" : "center",
+              gap: 0.25,
+              minWidth: 0,
+            }}
+          >
+            <UserTile
+              whoami={desktopWhoami}
+              collapsed={collapsed}
+              onOpenAccess={onOpenAccess}
+            />
+            {canLogoutInFooter ? (
+              <Tooltip title="Log out" placement={collapsed ? "right" : "top"}>
+                <IconButton
+                  size="small"
+                  aria-label="Log out"
+                  data-testid="sidebar-logout"
+                  onClick={onLogout}
+                  sx={{
+                    flex: "none",
+                    alignSelf: "center",
+                    color: "text.secondary",
+                    "&:hover": { color: "error.main" },
+                  }}
+                >
+                  <AppIcon name="signOut" size={16} />
+                </IconButton>
+              </Tooltip>
+            ) : null}
+          </Box>
+        );
+      })()}
 
       {/* Which build of grain is answering: the commit it was built from
           and when that commit was made, out of the binary's own VCS
@@ -1615,7 +1868,6 @@ export default function Sidebar({
             evt.preventDefault();
             onOpenUpgrade();
           }}
-          color="text.secondary"
           noWrap
           title={buildStampTitle(config.version, zone)}
           sx={{
@@ -1625,10 +1877,13 @@ export default function Sidebar({
             m: 0,
             // The foot of the rail on desktop, under the System row on a
             // phone (§4.3).
-            mt: pinFooter ? 0 : "auto",
+            mt: pinFooter || whoami || verifiedUserEmail(config) ? 0 : "auto",
             pt: 0.6,
             fontSize: "0.68rem",
-            opacity: 0.75,
+            // Muted by the tertiary token rather than by opacity over
+            // text.secondary, which drew it at 4.27:1 in light
+            // (docs/test-runs/2026-11-03-ui-fixes.md F1).
+            color: "var(--text-tertiary)",
             flex: "none",
             fontVariantNumeric: "tabular-nums",
           }}

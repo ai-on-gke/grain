@@ -17,9 +17,12 @@ import { Button, MenuItem, Stack, TextField } from "@mui/material";
 import api from "../../api.js";
 import { useTimeZone } from "../../TimeZoneContext.jsx";
 import { formatDateTime } from "../../time.js";
+import { knownRepos } from "../../state.js";
+import SearchSelect from "../SearchSelect.jsx";
+import { looksLikeRepo } from "../RepoPicker.jsx";
 
 // GoalSection is this task's goal (model.TaskGoal,
-// docs/design/durable-tasks.md#DT-4): what grain checks every cycle to
+// design/design/durable-tasks.design.md#DT-4): what grain checks every cycle to
 // close the task, or put it to rest, rather than waiting for its agent
 // to say it is done -- with the live check, the progress grain has seen
 // towards it, and its limits. It edits the goal too (PUT and DELETE
@@ -108,7 +111,7 @@ export function bodyOf(d) {
   return { kind: d.kind, spec, on_met: d.onMet, on_limit: d.onLimit };
 }
 
-export default function GoalSection({ t, act }) {
+export default function GoalSection({ t, act, config, tasks }) {
   const zone = useTimeZone();
   const goal = t.goal;
   const [draft, setDraft] = useState(null);
@@ -181,12 +184,24 @@ export default function GoalSection({ t, act }) {
           </TextField>
           {draft.kind === "base-green" && (
             <Stack spacing={1}>
-              <TextField
-                size="small"
+              {/* Searched like every other repo box (SearchSelect):
+                  the repos grain knows, and any owner/name typed in
+                  full -- a base-green goal can watch a repo no task
+                  here targets yet. */}
+              <SearchSelect
                 label="Repo"
                 value={draft.repo}
-                onChange={set("repo")}
-                fullWidth
+                options={knownRepos(config, tasks).map((r) => ({
+                  value: r,
+                  label: r,
+                }))}
+                typedOption={(text) =>
+                  looksLikeRepo(text) && !/\s/.test(text)
+                    ? { value: text, label: text, row: `Use ${text}` }
+                    : null
+                }
+                onChange={(repo) => setDraft({ ...draft, repo })}
+                noOptionsText="No matching repos -- type owner/name"
               />
               <TextField
                 size="small"

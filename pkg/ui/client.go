@@ -30,6 +30,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
@@ -54,8 +55,10 @@ type Client struct {
 	// localScripts is the local-script approvals of this daemon's live
 	// runs (localScriptApprovals): Config.LocalScriptApprovals, or one of
 	// its own.
-	localScripts     *LocalScriptApprovals
-	localScriptsOnce sync.Once
+	localScripts               *LocalScriptApprovals
+	localScriptsOnce           sync.Once
+	allowedPrincipalsMigrateMu sync.Mutex
+	allowedPrincipalsMigrated  bool
 	// Now is the clock, injectable so tests get deterministic timestamps.
 	// nil means time.Now().UTC().
 	Now func() time.Time
@@ -169,15 +172,6 @@ func (c *Client) now() time.Time {
 	return time.Now().UTC()
 }
 
-// actor returns the authenticated principal in ctx if present, falling back to
-// the client's configured default Actor.
-func (c *Client) actor(ctx context.Context) model.Principal {
-	if p, ok := PrincipalFromContext(ctx); ok {
-		return p
-	}
-	return c.Config.Actor
-}
-
 // ValidationError marks a request Client rejected before touching the
 // store -- a blank title, an unparseable repo, an unknown capability ID.
 // Server maps this to a 400; a CLI caller can print Error() on its own
@@ -288,6 +282,52 @@ const (
 	MaxAttachmentsPerRequest = 10
 )
 
+// errPriorityNotPositive is the refusal for a task priority below 1, on
+// create and on edit alike. 0 is refused rather than read as "the
+// default": leaving the field out is how a caller asks for that, and
+// the Edit form, the host CLI and the sandbox CLI all say the same.
+const errPriorityNotPositive = "priority must be a positive integer (1 or more; leave it out for the default, 5)"
+
+// decodeTaskPriority reads a JSON task priority as the whole number it
+// is. A JSON number has no int type of its own, so 1000, 1000.0 and 1e3
+// are all the same 1000, and are read as it -- as New task's box, the
+// task Edit form and propose_task read them -- rather than refused
+// because Go's int decoding takes only the first spelling (2026-11-02
+// walkthrough: one entry, two answers). Anything that is not a whole
+// number -- 1.5, "8", true, a number past 2^53 written as anything but
+// plain digits, where a float64 no longer holds it exactly, or plain
+// digits past int -- is refused in errPriorityNotPositive's words. The
+// caller checks the 1-or-more bound.
+func decodeTaskPriority(raw json.RawMessage) (int, error) {
+	n, err := model.ParseTaskPriority(string(raw))
+	if err != nil {
+		return 0, errors.New(errPriorityNotPositive)
+	}
+	return n, nil
+}
+
+// UnmarshalJSON reads Priority with decodeTaskPriority; every other field
+// decodes as it would without it.
+func (r *CreateTaskRequest) UnmarshalJSON(data []byte) error {
+	type Alias CreateTaskRequest
+	var aux struct {
+		Alias
+		RawPriority json.RawMessage `json:"priority,omitempty"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*r = CreateTaskRequest(aux.Alias)
+	if trimmed := strings.TrimSpace(string(aux.RawPriority)); trimmed != "" && trimmed != "null" {
+		n, err := decodeTaskPriority(aux.RawPriority)
+		if err != nil {
+			return err
+		}
+		r.Priority = &n
+	}
+	return nil
+}
+
 // decodeAttachments validates and base64-decodes uploads into the
 // model.Attachment shape Store.AddAttachment writes -- TaskID and
 // CommentID are left for the caller to fill in once it knows them
@@ -342,14 +382,14 @@ func sanitizeAttachmentFilename(name string) string {
 }
 
 // capabilityLookup is the attached capability servers a capability
-// reference is normalized against (docs/capabilities-spec.md §4.2.1),
+// reference is normalized against (design/spec/capabilities/capabilities.spec.md §4.2.1),
 // or nil in a process that attaches none -- where only a reference's
 // syntax can be checked, and admission normalizes it again anyway.
 func (c *Client) capabilityLookup() protocol.Lookup {
 	if l, ok := c.Config.CapabilityServers.(interface {
 		Lookup(string) (*protocol.Server, error)
 	}); ok && l != nil {
-		return l.Lookup
+		return grainserver.Lookup(l.Lookup)
 	}
 	return nil
 }
@@ -360,26 +400,102 @@ func (c *Client) capabilityLookup() protocol.Lookup {
 // validated against its server and in recorded form
 // (model.NormalizeCapabilityNames).
 func (c *Client) normalizeCapabilityID(id string) (string, error) {
+	orig := strings.TrimSpace(id)
 	id = model.CanonicalLegacyGrant(id)
 	if !model.IsCapabilityRef(id) {
 		return id, nil
 	}
-	names, err := model.NormalizeCapabilityNames([]string{id}, c.capabilityLookup())
+	lookup := c.capabilityLookup()
+	if lookup == nil && grainserver.IsInProcessGrant(id) {
+		lookup = grainserver.Lookup(nil)
+	}
+	if orig != id && model.CapabilityGrantRef(id) == model.GCPKeyRef {
+		if lookup == nil {
+			return id, nil
+		}
+		if _, err := lookup(model.GCPCapabilityServerID); err != nil {
+			return id, nil
+		}
+	}
+	names, err := model.NormalizeCapabilityNames([]string{id}, lookup)
 	if err != nil {
 		return "", validationErrorf("%v", err)
 	}
 	return names[0], nil
 }
 
+func (c *Client) hasConfiguredGCPKeyOrSet(ctx context.Context, set string) (bool, error) {
+	if c.Store == nil {
+		return true, nil
+	}
+	if k, err := c.Store.GetGCPKey(ctx, set); err != nil {
+		return false, err
+	} else if k != nil {
+		return true, nil
+	}
+	mc, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		return false, err
+	}
+	if mc != nil {
+		if srv, ok := mc.MCPServers[model.GCPCapabilityServerID]; ok {
+			if sets, ok := srv.Config["permission_sets"].([]any); ok {
+				for _, item := range sets {
+					if m, ok := item.(map[string]any); ok {
+						if n, _ := m["name"].(string); strings.TrimSpace(n) == set {
+							return true, nil
+						}
+					}
+				}
+			}
+		}
+	}
+	return false, nil
+}
+
+// normalizeCapabilityIDs expands 1-to-many retired legacy grants (such as
+// deployment-health -> [api:deployment:read, grain#health={}]) and normalizes
+// each resulting capability ID.
+func (c *Client) normalizeCapabilityIDs(id string) ([]string, error) {
+	expanded := model.CanonicalLegacyGrants(id)
+	out := make([]string, 0, len(expanded))
+	for _, part := range expanded {
+		normalized, err := c.normalizeCapabilityID(part)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, normalized)
+	}
+	return out, nil
+}
+
 func (c *Client) capabilityByID(id string) (Capability, bool) {
+	// grain#ci is a capability reference, which the branch below would
+	// take as grantable, but nobody grants it by hand in either
+	// spelling: a repository's CI Mode does (grainci.Refusal). Answering
+	// no here is what sends every picker to capabilityRefusal.
+	if grainci.IsGrant(id) {
+		return Capability{}, false
+	}
 	if model.IsCapabilityRef(id) {
 		if model.CheckCapabilityGrantSyntax(id) != nil {
 			return Capability{}, false
 		}
+		// A method with a CI rule (the release server's) is CI-only.
+		if _, ok := model.CIGrantRuleFor(id); ok {
+			return Capability{}, false
+		}
 		ref := model.CapabilityGrantRef(id)
+		// repo#read and repo#write {repo} are CI-only repository access
+		// grants; only repo#write {refs, force} (git-push-any-ref) is a
+		// task/template grant.
+		if ref == model.RepoReadRef || model.IsRepoAccessGrant(id) ||
+			(ref == model.RepoWriteRef && !model.IsGitPushAnyRefGrant(id)) {
+			return Capability{}, false
+		}
 		return Capability{ID: id, Name: ref, Description: "Granted by the capability server " + ref}, true
 	}
-	for _, capability := range c.Config.Capabilities {
+	for _, capability := range c.pickerCapabilities() {
 		if capability.ID == id {
 			return capability, true
 		}
@@ -622,6 +738,10 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	accessRequests, err := c.Store.PendingAccessRequests(ctx)
+	if err != nil {
+		return nil, err
+	}
 	// And once for goals, which name what a resting goal task waits for.
 	goalKinds, err := c.Store.TaskGoalKinds(ctx)
 	if err != nil {
@@ -650,6 +770,7 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 		task.TurnStopped = task.State == model.StateAwaitingReply && turnsStopped[t.ID]
 		if task.State == model.StateAwaitingReply {
 			task.QuestionSummary = questionSummaries[t.ID]
+			task.AwaitingAccess = accessRequests[t.ID]
 		}
 		var wait *model.GrantWait
 		if w, ok := grantWaits[t.ID]; ok {
@@ -707,8 +828,8 @@ func (c *Client) EachState(ctx context.Context, pageSize int, fn func(id string,
 // than a failure. This deployment's UI may not have been handed the
 // deadlines at all (Config.Stall, nil under `grain demo`); the state may
 // be one whose beginning the record cannot place, which
-// model.StateTimes.Since answers nil for -- every state a person owns,
-// and a queued task approved before Task.ApprovedAt existed; and the
+// model.StateTimes.Since answers nil for -- every state a person owns
+// (a deferral counts only once it has a wake time), and a queued task approved before Task.ApprovedAt existed; and the
 // state may simply be inside its patience, which is what the note itself
 // answers "" for.
 func (c *Client) stallNote(state model.State, times model.StateTimes, now time.Time) string {
@@ -957,6 +1078,7 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 		}
 		task.TurnStopped = turnStopped(state, obs, comments)
 		task.QuestionSummary = questionSummary(state, obs, comments)
+		task.AwaitingAccess = obs != nil && obs.PendingAccess != nil
 	}
 	if err := c.attachPause(ctx, &task); err != nil {
 		return Task{}, err
@@ -1094,6 +1216,7 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	}
 	detail.Task.TurnStopped = turnStopped(state, obs, comments)
 	detail.Task.QuestionSummary = questionSummary(state, obs, comments)
+	detail.Task.AwaitingAccess = state == model.StateAwaitingReply && obs != nil && obs.PendingAccess != nil
 	detail.Goal = goal
 	if err := c.attachPause(ctx, &detail.Task); err != nil {
 		return TaskDetail{}, err
@@ -1153,12 +1276,28 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 		log.Printf("ui: task %s: counting its attempts' capability audit records: %v", id, err)
 		auditCounts = nil
 	}
+	runHostds, err := c.Store.TaskRunHostds(ctx, id)
+	if err != nil {
+		log.Printf("ui: task %s: reading its attempts' hostds: %v", id, err)
+		runHostds = nil
+	}
 	detail.Attempts = make([]Attempt, 0, len(runs))
 	for _, r := range runs {
-		detail.Attempts = append(detail.Attempts, attemptFrom(r, promptBytes, auditCounts))
+		a := attemptFrom(r, promptBytes, auditCounts)
+		if h, ok := runHostds[r.ID]; ok {
+			a.Hostd = &h
+		}
+		detail.Attempts = append(detail.Attempts, a)
 	}
 
 	transitions := model.Transitions(*t, obs, runs, streak, askedAt(obs, comments))
+	// Who closed or reopened it, which the record above cannot say. A
+	// failure to read them leaves the timeline as the record alone has it.
+	if events, err := c.Store.TaskEvents(ctx, id); err != nil {
+		log.Printf("ui: task %s: reading its closes and reopens: %v", id, err)
+	} else {
+		transitions = model.MergeTaskEvents(transitions, events)
+	}
 	detail.Transitions = make([]Transition, 0, len(transitions))
 	for _, tr := range transitions {
 		detail.Transitions = append(detail.Transitions, transitionFrom(tr))
@@ -1168,6 +1307,10 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 		detail.RunNowAt = obs.RunNowAt
 	}
 	detail.PendingSecret = c.pendingSecretFor(obs)
+	if obs != nil {
+		detail.PendingConfigChange = obs.PendingConfigChange
+		detail.PendingAccess = c.pendingAccessFor(ctx, *t, obs)
+	}
 	detail.LocalScriptApprovals = c.localScriptApprovals().ForTask(id, c.now())
 	detail.CI = ciStatusFrom(obs)
 	if ownerID, inPlace := t.CIOwner(); inPlace {
@@ -1305,7 +1448,7 @@ func (c *Client) AttemptTranscript(ctx context.Context, taskID string, number in
 
 // AttemptCapabilityAudit returns what one attempt's capability grants did
 // for it, as their servers reported it when the attempt released them
-// (docs/capabilities-spec.md §4.4.4): host-script's record of every call
+// (design/spec/capabilities/capabilities.spec.md §4.4.4): host-script's record of every call
 // -- script, argv verbatim, exit code, duration -- above all. Empty until
 // the attempt has ended, since grants are released only then. A stored
 // record that is somehow not JSON is shown as a note rather than breaking
@@ -1320,7 +1463,7 @@ func (c *Client) AttemptCapabilityAudit(ctx context.Context, taskID string, numb
 	}
 	out := make([]CapabilityAuditEntry, 0, len(records))
 	for _, r := range records {
-		e := CapabilityAuditEntry{Grant: r.Grant, AttemptID: r.AttemptID, At: r.At, Note: r.Note}
+		e := CapabilityAuditEntry{Grant: r.Grant, AttemptID: r.AttemptID, At: r.At, Hostd: r.Hostd, Note: r.Note}
 		if r.Record != "" {
 			if json.Valid([]byte(r.Record)) {
 				e.Record = json.RawMessage(r.Record)
@@ -1495,6 +1638,10 @@ type CreateTaskRequest struct {
 	// template, which wins here as it does at every other firing point
 	// (model.Template.Target).
 	TemplateID string `json:"templateId"`
+	// BoardID is the board the New Task form was opened from, which
+	// picks settings/new-task-form.yml's boards layer (§6.3) when the
+	// server applies the defaults of the fields that form hides.
+	BoardID string `json:"boardId,omitempty"`
 	// Fields is what the template's own input fields are filled in with,
 	// keyed by field name (model.TemplateField.Name) -- "the environment
 	// to deploy to", not one of this deployment's declared columns,
@@ -1514,11 +1661,19 @@ type CreateTaskRequest struct {
 	// already on GitHub; dispatch holds the task until then
 	// (orchestrator.heldForPendingBranch). Base must be named, and the
 	// task must have a repo.
-	NewBranch            bool   `json:"newBranch,omitempty"`
-	NewBranchFrom        string `json:"newBranchFrom,omitempty"`
-	Issue                int    `json:"issue,omitempty"`
-	AutoMerge            bool   `json:"autoMerge"`
-	AutoApproveProposals bool   `json:"autoApproveProposals"`
+	NewBranch     bool   `json:"newBranch,omitempty"`
+	NewBranchFrom string `json:"newBranchFrom,omitempty"`
+	Issue         int    `json:"issue,omitempty"`
+	AutoMerge     bool   `json:"autoMerge"`
+	// DeclineAutoMerge is the filer saying auto_merge: false out loud
+	// (propose_task's explicit false), rather than leaving it to the
+	// proposer's permission or a default -- which AutoMerge alone, always
+	// on the wire, cannot tell apart. The task is filed with
+	// model.DeclineAutoMerge's mark, so nothing grain does on its own
+	// account turns auto-merge back on. It can only ever lower what the
+	// task is filed with, so no gate has to judge it.
+	DeclineAutoMerge     bool `json:"declineAutoMerge,omitempty"`
+	AutoApproveProposals bool `json:"autoApproveProposals"`
 	// TimeZone is the IANA zone of whoever is filing the task, which its
 	// runs are told the time in (model.Task.TimeZone). POST /api/tasks
 	// fills it from the browser's TimeZoneHeader when the body names
@@ -1537,6 +1692,12 @@ type CreateTaskRequest struct {
 	// A task filed from an interactive template (TemplateID,
 	// model.Template.Interactive) is interactive whatever this says.
 	Interactive bool `json:"interactive"`
+	// Priority is the task's numeric dispatch priority (model.Task.Priority,
+	// default model.DefaultTaskPriority = 5; higher numbers mean higher priority).
+	// When omitted, defaults to model.DefaultTaskPriority. 0 and below are
+	// refused (errPriorityNotPositive), as on every other surface that
+	// takes a task priority: there is no number that means "the default".
+	Priority *int `json:"priority,omitempty"`
 	// SandboxCPUs, SandboxMemoryMB and SandboxDiskGB
 	// (bwsalmon/agents#534, grain/task-41) set model.Task's own fields of
 	// the same name -- a per-task override of the deployment's default
@@ -1568,8 +1729,13 @@ type CreateTaskRequest struct {
 	// nothing_needed, "ack" leaves it in awaiting_ack for somebody to
 	// acknowledge.
 	NothingNeededAction string `json:"nothingNeededAction,omitempty"`
+	// KeepRunning sets model.Task.KeepRunning: when true, the orchestrator
+	// immediately restarts the task when its run exits rather than completing
+	// or parking it.
+	KeepRunning      bool  `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool `json:"keep_running,omitempty"`
 	// Goal declares the task's goal (model.TaskGoal,
-	// docs/design/durable-tasks.md#DT-4) as it is filed; nil for none, or
+	// design/design/durable-tasks.design.md#DT-4) as it is filed; nil for none, or
 	// for the goal of the template it is filed from.
 	Goal *model.GoalDecl `json:"goal,omitempty"`
 	// NoPort sets model.Task.NoPort: this task's change stays on the
@@ -1581,7 +1747,7 @@ type CreateTaskRequest struct {
 	// "This fixes a red <base>" checkbox. It is never made to wait on the
 	// branch's repair, because it is one: it counts as the branch's open
 	// repair once approved, and is declared with a base-green goal, so a
-	// green branch closes it (docs/design/durable-tasks.md#DT-4). Refused
+	// green branch closes it (design/design/durable-tasks.design.md#DT-4). Refused
 	// for a task with no repo.
 	FixesBaseBranch bool `json:"fixesBaseBranch,omitempty"`
 	// Origin is the GitHub pull request or issue this task's work comes
@@ -1665,6 +1831,14 @@ type CreateTaskRequest struct {
 	// Capabilities is. SetDependency is the picker's attach/detach
 	// counterpart for a task that already exists.
 	DependsOn []string `json:"dependsOn"`
+	// Designs (`[owner/name:]path[@rev]`) and Context (`{repo, path, rev}`)
+	// are committed-context references the task implements, either in its
+	// target repository or in a -read context repository, pinned to a commit
+	// SHA when filed and inherited by child tasks and reviews. DerivedFrom is
+	// the pull requests ("owner/repo#number") its work derives from.
+	Designs     []string          `json:"designs,omitempty"`
+	Context     []ContextRefInput `json:"context,omitempty"`
+	DerivedFrom []string          `json:"derivedFrom,omitempty"`
 	// Reads is a set of owner/name repos this task's run may read but
 	// never push to -- model.Task.Reads, docs/data-model.md's "one write
 	// target, many read targets". Unlike Repo, a Reads entry grants
@@ -1761,7 +1935,11 @@ type CreateTaskRequest struct {
 	// because provenance is what a proposal's authority is read off,
 	// decides how far AutoMerge and Approved above reach (CreateTask).
 	ProposalKey string `json:"proposalKey,omitempty"`
-	ProposedBy  string `json:"proposedBy,omitempty"`
+	// Hostd is read only to be refused (TaskHostdRefusal): which grain
+	// hostd host work runs on is the model connection's or the capability
+	// server's, not the task's.
+	Hostd      string `json:"hostd,omitempty"`
+	ProposedBy string `json:"proposedBy,omitempty"`
 	// HoldForApproval is propose_task's own `hold_for_approval`: file
 	// this proposal for a person to approve even if ProposedBy's
 	// permission would have queued it (model.HeldForApprovalTag). It can
@@ -1880,17 +2058,67 @@ func (c *Client) defaultCapabilities(ctx context.Context, teamID string, target 
 	}
 	ids := make([]string, 0, len(stored))
 	seen := make(map[string]bool, len(stored))
-	for _, id := range stored {
-		if seen[id] {
+	for _, raw := range stored {
+		normalized, err := c.normalizeCapabilityIDs(raw)
+		if err != nil {
 			continue
 		}
-		if _, ok := c.capabilityByID(id); !ok {
-			continue
+		for _, id := range normalized {
+			if seen[id] {
+				continue
+			}
+			if _, ok := c.capabilityByID(id); !ok {
+				continue
+			}
+			seen[id] = true
+			ids = append(ids, id)
 		}
-		seen[id] = true
-		ids = append(ids, id)
 	}
 	return ids, nil
+}
+
+// ownerTrustApproves is the owner a filing is approved on behalf of by
+// the deployment's owner-trust policy (model.Config.OwnerTrust,
+// design/spec/external-cli/external-cli.spec.md#XC-17), or nil when the
+// policy does not approve it. Only an external agent credential's own
+// unapproved filing qualifies, and only when its owner is trusted on the
+// filing's repository and nothing holds the work for a person: a
+// catalogue or requires-person hold (held), or a setting only a person
+// may give -- keepRunning, or a priority above the default. The
+// X-Grain-Client label plays no part.
+func (c *Client) ownerTrustApproves(ctx context.Context, req CreateTaskRequest, proposedBy *model.Task,
+	target *model.RepoRef, reads []model.RepoRef, writes []model.WriteTarget, held, keepRunning bool, priority int) (*model.Principal, error) {
+	tok := externalTokenFromContext(ctx)
+	if tok == nil || proposedBy != nil || req.Approved || req.HoldForApproval || req.FixesBaseBranch || req.Interactive || held || keepRunning || priority > model.DefaultTaskPriority {
+		return nil, nil
+	}
+	if p, ok := PrincipalFromContext(ctx); !ok || p.Kind != model.PrincipalAgent || p.Source != model.SourceExternalToken {
+		return nil, nil
+	}
+	owner := tok.OwnerPrincipal()
+	if owner == nil {
+		return nil, nil
+	}
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil || len(cfg.OwnerTrust) == 0 {
+		return nil, nil
+	}
+	if model.NormalizeNetworkAccess(cfg.NetworkAccess) == model.NetworkNone &&
+		strings.TrimSpace(req.NetworkAccess) != "" &&
+		model.NormalizeNetworkAccess(model.NetworkAccess(req.NetworkAccess)) != model.NetworkNone {
+		return nil, nil
+	}
+	repo := ""
+	if target != nil {
+		repo = target.String()
+	}
+	if !model.OwnerTrustedForTask(cfg.OwnerTrust, owner.ID, repo, reads, writes) {
+		return nil, nil
+	}
+	return owner, nil
 }
 
 // CreateTask files a task straight into the store.
@@ -1942,6 +2170,16 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	if strings.TrimSpace(req.Title) == "" {
 		return Task{}, validationErrorf("title is required")
+	}
+	if err := refuseTaskHostd("hostd", req.Hostd); err != nil {
+		return Task{}, err
+	}
+	priority := model.DefaultTaskPriority
+	if req.Priority != nil {
+		if *req.Priority < 1 {
+			return Task{}, validationErrorf(errPriorityNotPositive)
+		}
+		priority = *req.Priority
 	}
 	if req.NewBranch {
 		req.Base = strings.TrimSpace(req.Base)
@@ -2095,6 +2333,11 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err != nil {
 		return Task{}, err
 	}
+	provenance, err := derivedFromLinks(req.DerivedFrom)
+	if err != nil {
+		return Task{}, err
+	}
+	links = append(links, provenance...)
 	forkNote := ""
 	if forkPR != nil {
 		links = append(links, forkPR.Link())
@@ -2172,6 +2415,26 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err := refuseTargetAmongReads(reads, target); err != nil {
 		return Task{}, err
 	}
+	var contextCfg *model.Config
+	if len(req.Designs) > 0 || len(req.Context) > 0 {
+		if c.Store != nil {
+			contextCfg, err = c.Store.GetConfig(ctx)
+			if err != nil {
+				return Task{}, err
+			}
+		}
+		var contextLinks []model.Link
+		contextLinks, reads, err = c.resolveContextLinksAndReads(ctx, req.Designs, req.Context, target, reads, contextCfg, nil)
+		if err != nil {
+			return Task{}, err
+		}
+		links = append(links, contextLinks...)
+	} else if proposedBy != nil {
+		inherited := model.Task{Target: target, Links: links, Reads: reads}
+		model.InheritContext(&inherited, *proposedBy)
+		links = inherited.Links
+		reads = readsBesidesTarget(inherited.Reads, target)
+	}
 	// A repository the team's GitHub credential cannot reach is turned
 	// away here, where whoever is filing can still do something about it,
 	// rather than failing the task's first clone (grain/task-1850). Work
@@ -2184,7 +2447,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	parkUnreached := false
 	if reachRefused != "" {
-		if req.ProposedBy == "" && c.actor(ctx).Kind == model.PrincipalHuman {
+		if req.ProposedBy == "" && c.requestActor(ctx).Actor.Kind == model.PrincipalHuman {
 			return Task{}, validationErrorf("%s", reachRefused)
 		}
 		parkUnreached = true
@@ -2217,9 +2480,12 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	// So does the capability policy (§4.2.2), which admission would
 	// otherwise only apply once the task is dispatched.
-	grants, err = c.policyFilingGrants(ctx, grants, target)
+	grants, policyDropped, err := c.policyFilingGrants(ctx, grants, target)
 	if err != nil {
 		return Task{}, err
+	}
+	for _, d := range policyDropped {
+		droppedRefusals = append(droppedRefusals, d.Note())
 	}
 	customFields, err := c.normalizeCustomFields(ctx, req.CustomFields)
 	if err != nil {
@@ -2276,15 +2542,15 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	if proposedBy == nil {
 		submittingUser := strings.TrimSpace(req.Creator)
-		if submittingUser == "" && c.Config.Actor.Kind == model.PrincipalHuman {
-			submittingUser = strings.TrimSpace(c.Config.Actor.ID)
+		if submittingUser == "" {
+			submittingUser = c.operatorPerson()
 			req.Creator = submittingUser
 		}
 		if submittingUser == "" {
 			return Task{}, validationErrorf("creator is required")
 		}
 	}
-	orderKey, err := c.Store.OrderKeyForNewTask(ctx, atFront || (req.Interactive && proposedBy == nil && c.actor(ctx).Kind != model.PrincipalAgent))
+	orderKey, err := c.Store.OrderKeyForNewTask(ctx, atFront || (req.Interactive && proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent))
 	if err != nil {
 		return Task{}, err
 	}
@@ -2374,7 +2640,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		}
 	}
 	catalogueHold := false
-	if len(catalogueNeedsPerson) > 0 && (proposedBy != nil || c.actor(ctx).Kind == model.PrincipalAgent) {
+	if len(catalogueNeedsPerson) > 0 && (proposedBy != nil || c.requestActor(ctx).Actor.Kind == model.PrincipalAgent) {
 		why := model.CatalogueRequiresPersonNote(catalogueNeedsPerson)
 		if needsPersonWhy == "" {
 			needsPersonWhy = why
@@ -2385,8 +2651,9 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			catalogueHold, req.Approved = true, false
 		}
 	}
+	keepRunning := req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake)
 	autoMerge, autoSubmit, sessionQueued := req.AutoMerge, false, false
-	var limitNote, ungrantedNote, heldNote, refusal string
+	var limitNote, ungrantedNote, heldNote, needsPersonNote, personOnlyNote, refusal string
 	var escalated []string
 	if proposedBy != nil {
 		child := model.Task{Target: target, Base: req.Base, Grants: grants, Writes: writes}
@@ -2394,6 +2661,18 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		child.Reads = reads
 		escalated = model.EscalatedCapabilities(child, *proposedBy)
 		autoSubmit = model.AutoSubmits(child, *proposedBy)
+		// A fixture on the proposer's own qualification scratch branch,
+		// queued and merged there on the proposer's own permission to
+		// push that branch (model.ScratchFixture) -- the end-of-run
+		// relay's rule for the identical call.
+		pushesScratch, err := c.Store.PushesOwnScratchBranch(ctx, *proposedBy)
+		if err != nil {
+			return Task{}, err
+		}
+		if changeTarget == nil && model.ScratchFixture(child, *proposedBy, pushesScratch) {
+			autoSubmit = true
+			autoMerge = !req.DeclineAutoMerge
+		}
 		ungrantedWrites := model.UngrantedWrites(child, *proposedBy)
 		ungrantedReads := model.UngrantedReads(child, *proposedBy)
 		if len(ungrantedWrites) > 0 {
@@ -2408,23 +2687,49 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		if len(escalated) > 0 || len(ungrantedWrites) > 0 || len(ungrantedReads) > 0 {
 			sessionQueued = false
 		}
-		refusal = model.AutoApprovalRefusal(child, *proposedBy, sessionQueued)
+		if !autoSubmit {
+			refusal = model.AutoApprovalRefusal(child, *proposedBy, sessionQueued)
+		}
+		// A target only a person may approve: grain's own hold, not the
+		// run's, so it is neither tagged nor told to the run as one it
+		// asked for (heldNote) -- and asked before hold_for_approval, so a
+		// run that asked as well is told this is why, not that its
+		// permission would have queued the work.
+		if needsPersonWhy != "" {
+			if autoSubmit || sessionQueued || req.Approved {
+				needsPersonNote = fmt.Sprintf("\n\n_Filed for a person to approve: %s._", needsPersonWhy)
+			}
+			if refusal == "" {
+				refusal = needsPersonWhy
+			}
+			autoSubmit, sessionQueued, req.Approved = false, false, false
+		}
+		// keep_running, or a priority above the proposer's own: settings
+		// only a person may give a task (model.PersonOnlyProposalSettings),
+		// so neither permission queues a proposal that asks for one. Filed
+		// as asked, with a note saying which, and told to the run as what
+		// its permission does not cover.
+		if why := model.PersonOnlyProposalSettings(model.Task{KeepRunning: keepRunning, Priority: priority}, *proposedBy); why != "" {
+			if autoSubmit || sessionQueued || req.Approved {
+				personOnlyNote = fmt.Sprintf("\n\n_Filed for a person to approve: %s._", why)
+			}
+			if refusal == "" {
+				refusal = why
+			}
+			autoSubmit, sessionQueued, req.Approved = false, false, false
+		}
 		// Held (propose_task's hold_for_approval): whatever the
 		// proposer's permission would have done, nothing below approves
 		// this. Asked before the bound on self-approved work, which a
 		// proposal that is not going to be self-approved neither counts
-		// toward nor is measured against. The tag and the note go only on
-		// one the permission would actually have queued: one it did not
-		// cover was waiting for a person anyway.
+		// toward nor is measured against, and after grain's own holds
+		// above. The tag and the note go only on one the permission would
+		// actually have queued: one it did not cover -- or one asking for
+		// a setting only a person may give -- was waiting for a person
+		// anyway, and its note says why.
 		if req.HoldForApproval {
 			if autoSubmit || sessionQueued {
 				heldNote = model.HeldForApprovalNote(proposedBy.ID)
-			}
-			autoSubmit, sessionQueued, req.Approved = false, false, false
-		}
-		if needsPersonWhy != "" {
-			if autoSubmit || sessionQueued || req.Approved {
-				heldNote = fmt.Sprintf("\n\n_Filed for a person to approve: %s._", needsPersonWhy)
 			}
 			autoSubmit, sessionQueued, req.Approved = false, false, false
 		}
@@ -2452,8 +2757,10 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// task -- "Filed by: operator (human)" on work no operator had seen
 	// -- which is the one thing a provenance field must never say
 	// (grain/task-311).
+	// An owned external agent credential files on behalf of its owner
+	// (RequestActor, #XC-14).
 	origin := model.Origin{
-		Attribution: model.Attribution{Actor: c.actor(ctx)},
+		Attribution: c.requestActor(ctx),
 		Reason:      model.ReasonDirect,
 	}
 	if proposedBy != nil {
@@ -2467,20 +2774,21 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// agent's proposal records none, even one naming a template: a run
 	// cannot hand the refs it may push on to work it files.
 	var filedFrom string
-	if proposedBy == nil && c.actor(ctx).Kind != model.PrincipalAgent {
+	if proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent {
 		filedFrom = strings.TrimSpace(req.TemplateID)
 	}
 	task := model.Task{
 		ID:                   id,
 		Intent:               model.IntentImplement,
 		Title:                req.Title,
-		Body:                 req.Description + forkNote + ungrantedNote + reviewTemplateNote + limitNote + heldNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
+		Body:                 req.Description + forkNote + ungrantedNote + reviewTemplateNote + limitNote + needsPersonNote + heldNote + personOnlyNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
 		Origin:               origin,
 		Target:               target,
 		ChangeTarget:         changeTarget,
 		Reviewers:            model.NormalizeReviewers(req.Reviewers),
 		Binding:              model.BindingDirective,
 		Base:                 req.Base,
+		Priority:             priority,
 		Issue:                req.Issue,
 		AutoMerge:            autoMerge,
 		AutoApproveProposals: req.AutoApproveProposals,
@@ -2490,6 +2798,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		SandboxDiskGB:        req.SandboxDiskGB,
 		NetworkAccess:        model.NetworkAccess(req.NetworkAccess),
 		NothingNeededAction:  nothingNeeded,
+		KeepRunning:          keepRunning,
 		NoPort:               req.NoPort,
 		WorkOrigin:           explicitOrigin,
 		AgentFramework:       agentFramework,
@@ -2509,12 +2818,16 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		Tags:                 proposalTags(req.ProposalKey, heldNote != ""),
 		CreatedAt:            &now,
 		OrderKey:             orderKey,
+		FiledVia:             filedViaFromContext(ctx),
 	}
 	// A proposal is its proposer's root requester's work, whoever the
 	// request names: an agent's propose_task call cannot file as anybody,
 	// and filing as nobody would read as grain's own to local policy.
 	if proposedBy != nil {
 		model.InheritRequester(&task, *proposedBy)
+	}
+	if req.DeclineAutoMerge && !req.AutoMerge {
+		model.DeclineAutoMerge(&task, model.PrincipalString(c.requestActor(ctx).Actor))
 	}
 	if req.FixesBaseBranch && !model.SetFixesBaseBranch(&task, true) {
 		return Task{}, validationErrorf("a task with no repo has no base branch to fix: " +
@@ -2532,17 +2845,24 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// can be interactive too, through an interactive template's
 	// templateId (fromTemplate), and that must not turn propose_task into
 	// a way to approve its own work.
+	ownerTrust, err := c.ownerTrustApproves(ctx, req, proposedBy, target, reads, writes, catalogueHold || needsPersonWhy != "", keepRunning, priority)
+	if err != nil {
+		return Task{}, err
+	}
 	switch {
 	case catalogueHold:
 		task.Body += "\n\n_Filed for a person to approve: " + needsPersonWhy + "._"
-	case req.Approved || (req.Interactive && proposedBy == nil && c.actor(ctx).Kind != model.PrincipalAgent):
-		task.Approval = &model.Attribution{Actor: c.actor(ctx)}
+	case req.Approved || (req.Interactive && proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent):
+		task.Approval = &model.Attribution{Actor: c.requestActor(ctx).Actor}
 		task.ApprovedAt = &now
 	case sessionQueued:
 		task.Approval = &model.Attribution{Actor: model.ConsoleSessionPrincipal}
 		task.ApprovedAt = &now
 	case autoSubmit:
 		task.Approval = &model.Attribution{Actor: model.AutoSubmitPrincipal}
+		task.ApprovedAt = &now
+	case ownerTrust != nil:
+		task.Approval = &model.Attribution{Actor: model.OwnerTrustPrincipal, OnBehalfOf: ownerTrust}
 		task.ApprovedAt = &now
 	}
 	if task.Approval == nil && proposedBy != nil {
@@ -2585,10 +2905,11 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			return Task{}, err
 		}
 	}
+	// grain's notes, not the filer's: it was grain that left these off.
 	for _, refusal := range droppedRefusals {
 		if _, err := c.Store.AddComment(ctx, model.Comment{
 			TaskID:    id,
-			Author:    model.Attribution{Actor: c.actor(ctx)},
+			Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
 			Body:      refusal,
 			CreatedAt: now,
 		}); err != nil {
@@ -2610,7 +2931,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			// whoever reads the pair will find it.
 			if _, err := c.Store.AddComment(ctx, model.Comment{
 				TaskID:    id,
-				Author:    model.Attribution{Actor: c.actor(ctx)},
+				Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
 				Body:      model.SupersedeRefusedLine(supersedes, refusal),
 				CreatedAt: now,
 			}); err != nil {
@@ -2635,12 +2956,15 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		}
 	}
 	allowed := c.teamTargetRepos(ctx, teamID)
+	parkNote := ""
 	if target != nil && !targetAllowed(allowed, *target) {
 		if err := c.parkOffAllowlist(ctx, id, *target, now); err != nil {
 			return Task{}, err
 		}
+		parkNote = model.OffAllowlistParkComment(*target)
 	} else if parkUnreached {
-		if err := c.park(ctx, id, reachParkComment(reachRefused), now); err != nil {
+		parkNote = reachParkComment(reachRefused)
+		if err := c.park(ctx, id, parkNote, now); err != nil {
 			return Task{}, err
 		}
 	}
@@ -2656,11 +2980,16 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		return Task{}, err
 	}
 	created.SupersedeMoved = supersedeResult.Moved
+	created.ParkNote = parkNote
+	created.DroppedDefaults = policyDropped
 	if proposedBy != nil && !created.Approved {
 		created.ApprovalNote = proposalApprovalNote(req.HoldForApproval, heldNote != "", limitNote != "", refusal)
 	}
 	for _, k := range supersedeResult.Kept {
 		created.SupersedeKept = append(created.SupersedeKept, SupersedeKeptEntry{ID: k.ID, Reason: k.Reason})
+	}
+	if created.Interactive && created.State == model.StateQueued && c.Config.Wake != nil {
+		c.Config.Wake()
 	}
 	return created, nil
 }
@@ -2770,6 +3099,10 @@ func validateAgentFramework(framework string) error {
 	// doc comment), and only this caller reads it that way.
 	if framework == "" || model.ValidAgentFramework(framework) {
 		return nil
+	}
+	if strings.TrimSpace(framework) == model.RemovedAgentFrameworkCustom {
+		return validationErrorf("agentFramework: %s; use one of %s, or empty for this deployment's default",
+			removedCustomConnectionError, model.AgentFrameworkNames())
 	}
 	return validationErrorf("agentFramework must be %s, or empty for this deployment's default",
 		model.AgentFrameworkNames())
@@ -3169,6 +3502,7 @@ func (c *Client) park(ctx context.Context, taskID, reason string, now time.Time)
 	return c.Store.ObserveField(ctx, taskID, now, func(o *model.Observation) {
 		o.PendingQuestionCommentID = &commentID
 		o.PendingSecret = ""
+		o.PendingAccess = nil
 	})
 }
 
@@ -3188,7 +3522,7 @@ func (c *Client) park(ctx context.Context, taskID, reason string, now time.Time)
 func (c *Client) grantsFor(ids []string, via model.GrantSource) ([]model.Grant, error) {
 	grants := make([]model.Grant, 0, len(ids))
 	for _, id := range ids {
-		// grain-ci is the target repository's CI Mode to grant, never
+		// grain#ci (or the retired grain-ci) is the target repository's CI Mode to grant, never
 		// a caller's (pkg/capability/grainci's package doc), and
 		// creationGrants adds or strips it from that mode after this.
 		// A caller naming it is refused with the words that say so. A
@@ -3196,20 +3530,22 @@ func (c *Client) grantsFor(ids []string, via model.GrantSource) ([]model.Grant, 
 		// refused it there -- is not: dropping it changes nothing the
 		// mode does not already decide, and refusing it would fail
 		// every task filed against that repository.
-		if id == grainci.CapabilityName {
+		if grainci.IsGrant(id) {
 			if via == model.GrantByDefault {
 				continue
 			}
 			return nil, validationErrorf("%s", grainci.Refusal())
 		}
-		id, err := c.normalizeCapabilityID(id)
+		normalizedIDs, err := c.normalizeCapabilityIDs(id)
 		if err != nil {
 			return nil, grantValidationError(err)
 		}
-		if _, ok := c.capabilityByID(id); !ok {
-			return nil, validationErrorf("%s", capabilityRefusal(id))
+		for _, nid := range normalizedIDs {
+			if _, ok := c.capabilityByID(nid); !ok {
+				return nil, validationErrorf("%s", capabilityRefusal(nid))
+			}
+			grants = append(grants, model.Grant{Capability: nid, Via: via})
 		}
-		grants = append(grants, model.Grant{Capability: id, Via: via})
 	}
 	return model.NormalizeCapabilityGrants(grants, nil)
 }
@@ -3286,34 +3622,36 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 				if id == "" {
 					continue
 				}
-				// An agent's proposal may name grain-ci because its own
+				// An agent's proposal may name grain#ci because its own
 				// task holds it. That is passed over rather than refused:
 				// the target repository's CI Mode decides it below, as it
 				// does for every task, and a propose_task call failing
 				// on a grant grain itself handed the agent would be the
 				// wrong lesson.
-				if id == grainci.CapabilityName {
+				if grainci.IsGrant(id) {
 					continue
 				}
-				id, err := c.normalizeCapabilityID(id)
+				normalizedIDs, err := c.normalizeCapabilityIDs(id)
 				if err != nil {
 					return nil, nil, err
 				}
-				if _, ok := c.capabilityByID(id); !ok {
-					return nil, nil, validationErrorf("%s", capabilityRefusal(id))
-				}
-				found := false
-				for _, g := range grants {
-					if g.Capability == id {
-						found = true
-						break
+				for _, nid := range normalizedIDs {
+					if _, ok := c.capabilityByID(nid); !ok {
+						return nil, nil, validationErrorf("%s", capabilityRefusal(nid))
 					}
-				}
-				if !found {
-					grants = append(grants, model.Grant{
-						Capability: id,
-						Via:        model.GrantByLabel,
-					})
+					found := false
+					for _, g := range grants {
+						if g.Capability == nid {
+							found = true
+							break
+						}
+					}
+					if !found {
+						grants = append(grants, model.Grant{
+							Capability: nid,
+							Via:        model.GrantByLabel,
+						})
+					}
 				}
 			}
 		}
@@ -3353,21 +3691,21 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 		if usesGrainCI {
 			found := false
 			for _, grant := range grants {
-				if grant.Capability == grainci.CapabilityName {
+				if grainci.IsGrant(grant.Capability) {
 					found = true
 					break
 				}
 			}
 			if !found {
 				grants = append(grants, model.Grant{
-					Capability: grainci.CapabilityName,
+					Capability: grainci.Grant,
 					Via:        model.GrantByDefault,
 				})
 			}
 		} else {
 			filtered := make([]model.Grant, 0, len(grants))
 			for _, grant := range grants {
-				if grant.Capability != grainci.CapabilityName {
+				if !grainci.IsGrant(grant.Capability) {
 					filtered = append(filtered, grant)
 				}
 			}
@@ -3382,22 +3720,30 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 	allowed := grants[:0:0]
 	var droppedRefusals []string
 	for _, g := range grants {
-		if g.Capability != grainci.CapabilityName {
-			if keyName, ok := model.GCPKeyName(g.Capability); ok && keyName != "" && c.Store != nil {
-				k, err := c.Store.GetGCPKey(ctx, keyName)
-				if err != nil {
-					return nil, nil, err
+		if !grainci.IsGrant(g.Capability) {
+			if set, ok := model.ParseGCPKeyServerGrant(g.Capability); ok && set != "" && set != model.GCPKeyDefaultPermissionSet && c.Store != nil {
+				liveValidated := false
+				if lookup := c.capabilityLookup(); lookup != nil {
+					if _, err := lookup(model.GCPCapabilityServerID); err == nil {
+						liveValidated = true
+					}
 				}
-				if k == nil {
-					if g.Via == model.GrantByDefault {
-						continue
+				if !liveValidated {
+					configured, err := c.hasConfiguredGCPKeyOrSet(ctx, set)
+					if err != nil {
+						return nil, nil, err
 					}
-					refusal := model.MissingGCPKeyRefusal(g.Capability)
-					if g.Via.IsDeclaration() {
-						droppedRefusals = append(droppedRefusals, refusal)
-						continue
+					if !configured {
+						if g.Via == model.GrantByDefault {
+							continue
+						}
+						refusal := model.MissingGCPKeyRefusal(model.GCPKeyCapability(set))
+						if g.Via.IsDeclaration() {
+							droppedRefusals = append(droppedRefusals, refusal)
+							continue
+						}
+						return nil, nil, validationErrorf("%s", refusal)
 					}
-					return nil, nil, validationErrorf("%s", refusal)
 				}
 			}
 		}
@@ -3789,6 +4135,7 @@ type UpdateTaskRequest struct {
 	// every attempt until somebody corrects it.
 	Repo                 *string `json:"repo,omitempty"`
 	Base                 *string `json:"base,omitempty"`
+	Priority             *int    `json:"priority,omitempty"` // 1 or more; see errPriorityNotPositive
 	Issue                *int    `json:"issue,omitempty"`
 	AutoMerge            *bool   `json:"autoMerge,omitempty"`
 	AutoApproveProposals *bool   `json:"autoApproveProposals,omitempty"`
@@ -3833,6 +4180,9 @@ type UpdateTaskRequest struct {
 	// NothingNeededAction edits CreateTaskRequest.NothingNeededAction's
 	// field; "" sets it back to the default, close.
 	NothingNeededAction *string `json:"nothingNeededAction,omitempty"`
+	// KeepRunning edits CreateTaskRequest.KeepRunning's field.
+	KeepRunning      *bool `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool `json:"keep_running,omitempty"`
 	// NoPort edits CreateTaskRequest.NoPort's field.
 	NoPort *bool `json:"noPort,omitempty"`
 	// FixesBaseBranch marks or unmarks this task as fixing its base
@@ -3913,11 +4263,107 @@ type UpdateTaskRequest struct {
 	// GoogleChatSpace links the task to a Google Chat space, or clears
 	// the link when set to "".
 	GoogleChatSpace *string `json:"googleChatSpace,omitempty"`
+	// Designs and Context replace the task's committed-context references
+	// (`[owner/name:]path[@rev]` or `{repo, path, rev}`). A non-nil empty
+	// slice clears them.
+	Designs *[]string          `json:"designs,omitempty"`
+	Context *[]ContextRefInput `json:"context,omitempty"`
 	// Reviewers, given, replaces this task's person-set reviewer list
 	// (model.Task.Reviewers, docs/design/changelists.md §5). A non-nil empty
 	// slice clears it. Refused to agents by agentFilingEscalation /
 	// externalAgentFilingEscalation.
 	Reviewers *[]string `json:"reviewers,omitempty"`
+	// Capabilities, given, replaces the task's capability grants while
+	// preserving durable on standing console-session tasks.
+	Capabilities *[]string `json:"capabilities,omitempty"`
+	// PriorityDispatch attaches or detaches PriorityDispatchCapability on the
+	// task (also populated when JSON "priority" is a boolean).
+	PriorityDispatch *bool `json:"priorityDispatch,omitempty"`
+}
+
+// UnmarshalJSON accepts both camelCase and snake_case spellings for common
+// task parameter overrides as well as capabilities/grants lists containing
+// strings, {capability, with} objects, or model.Grant objects.
+func (r *UpdateTaskRequest) UnmarshalJSON(data []byte) error {
+	type Alias UpdateTaskRequest
+	var aux struct {
+		Alias
+		RawCapabilities       json.RawMessage `json:"capabilities,omitempty"`
+		RawGrants             json.RawMessage `json:"grants,omitempty"`
+		RawPriority           json.RawMessage `json:"priority,omitempty"`
+		NetworkAccessSnake    *string         `json:"network_access,omitempty"`
+		AutoApproveSnake      *bool           `json:"auto_approve_proposals,omitempty"`
+		KeepRunningSnake      *bool           `json:"keep_running,omitempty"`
+		PriorityDispatchSnake *bool           `json:"priority_dispatch,omitempty"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*r = UpdateTaskRequest(aux.Alias)
+	if trimmed := strings.TrimSpace(string(aux.RawPriority)); trimmed != "" && trimmed != "null" {
+		var b bool
+		if json.Unmarshal(aux.RawPriority, &b) == nil {
+			r.PriorityDispatch = &b
+		} else {
+			n, err := decodeTaskPriority(aux.RawPriority)
+			if err != nil {
+				return err
+			}
+			r.Priority = &n
+		}
+	}
+	parseCapRaw := func(raw json.RawMessage) (*[]string, error) {
+		trimmed := strings.TrimSpace(string(raw))
+		if trimmed == "" || trimmed == "null" {
+			return nil, nil
+		}
+		var items []json.RawMessage
+		if err := json.Unmarshal(raw, &items); err != nil {
+			return nil, fmt.Errorf("capabilities must be a list")
+		}
+		caps := make([]string, 0, len(items))
+		for _, item := range items {
+			if entries, err := model.CapabilityEntryNames(item); err == nil {
+				caps = append(caps, entries...)
+				continue
+			} else if spec, gerr := protocol.ParseGrant(item); gerr == nil && len(spec.With) == 0 {
+				if c := strings.TrimSpace(spec.Capability); c != "" {
+					caps = append(caps, c)
+				}
+				continue
+			} else {
+				return nil, err
+			}
+		}
+		return &caps, nil
+	}
+	if len(aux.RawCapabilities) > 0 {
+		caps, err := parseCapRaw(aux.RawCapabilities)
+		if err != nil {
+			return err
+		}
+		r.Capabilities = caps
+	}
+	if r.Capabilities == nil && len(aux.RawGrants) > 0 {
+		caps, err := parseCapRaw(aux.RawGrants)
+		if err != nil {
+			return err
+		}
+		r.Capabilities = caps
+	}
+	if r.NetworkAccess == nil && aux.NetworkAccessSnake != nil {
+		r.NetworkAccess = aux.NetworkAccessSnake
+	}
+	if r.AutoApproveProposals == nil && aux.AutoApproveSnake != nil {
+		r.AutoApproveProposals = aux.AutoApproveSnake
+	}
+	if r.KeepRunning == nil && aux.KeepRunningSnake != nil {
+		r.KeepRunning = aux.KeepRunningSnake
+	}
+	if r.PriorityDispatch == nil && aux.PriorityDispatchSnake != nil {
+		r.PriorityDispatch = aux.PriorityDispatchSnake
+	}
+	return nil
 }
 
 // UpdateTask edits a task's fields. Unlike the issue-backed version, this
@@ -3942,6 +4388,9 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	}
 	if req.Title != nil && strings.TrimSpace(*req.Title) == "" {
 		return Task{}, validationErrorf("title cannot be empty")
+	}
+	if req.Priority != nil && *req.Priority < 1 {
+		return Task{}, validationErrorf(errPriorityNotPositive)
 	}
 	// A fork head label is resolved to the pull request it heads the way
 	// CreateTask resolves one (forkhead.go): the edit stores that pull
@@ -4033,23 +4482,37 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	// model.Task.AgentBackendID); splitModelChoice reads a legacy model
 	// sent as agentBackendId as the model choice it was.
 	var editModel *string
+	var isConsoleSessionTask bool
+	if req.Model != nil || req.AgentBackendID != nil || req.Capabilities != nil || req.PriorityDispatch != nil || req.KeepRunning != nil {
+		if existing, err := c.Store.GetTask(ctx, id); err == nil && existing != nil {
+			isConsoleSessionTask = existing.IsConsoleSession()
+		}
+	}
 	if req.Model != nil || req.AgentBackendID != nil {
-		var m, pin string
-		if req.Model != nil {
-			m = *req.Model
-		}
-		if req.AgentBackendID != nil {
-			pin = *req.AgentBackendID
-		}
-		chosen, pinned, err := c.splitModelChoice(ctx, m, pin)
-		if err != nil {
-			return Task{}, err
-		}
-		if req.Model != nil || chosen != "" {
+		if isConsoleSessionTask && req.AgentBackendID == nil && req.Model != nil {
+			chosen, err := c.declaredModelChoice(ctx, *req.Model)
+			if err != nil {
+				return Task{}, err
+			}
 			editModel = &chosen
-		}
-		if req.AgentBackendID != nil {
-			req.AgentBackendID = &pinned
+		} else {
+			var m, pin string
+			if req.Model != nil {
+				m = *req.Model
+			}
+			if req.AgentBackendID != nil {
+				pin = *req.AgentBackendID
+			}
+			chosen, pinned, err := c.splitModelChoice(ctx, m, pin)
+			if err != nil {
+				return Task{}, err
+			}
+			if req.Model != nil || chosen != "" {
+				editModel = &chosen
+			}
+			if req.AgentBackendID != nil {
+				req.AgentBackendID = &pinned
+			}
 		}
 	}
 	var backendFrameworks map[string]string
@@ -4074,7 +4537,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	if req.AgentBackendID != nil {
 		statedPin = strings.TrimSpace(*req.AgentBackendID)
 	}
-	if editModel != nil {
+	if editModel != nil && !isConsoleSessionTask {
 		statedModel = *editModel
 	}
 	if statedPin != "" || statedModel != "" {
@@ -4197,6 +4660,27 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	if err != nil {
 		return Task{}, err
 	}
+	var normalizedCaps []string
+	if req.Capabilities != nil {
+		seen := map[string]bool{}
+		normalizedCaps = make([]string, 0, len(*req.Capabilities))
+		for _, rawCap := range *req.Capabilities {
+			capIDs, err := c.normalizeCapabilityIDs(rawCap)
+			if err != nil {
+				return Task{}, err
+			}
+			for _, capID := range capIDs {
+				if _, ok := c.capabilityByID(capID); !ok {
+					return Task{}, validationErrorf("capabilities: %s", capabilityRefusal(capID))
+				}
+				if seen[capID] {
+					continue
+				}
+				seen[capID] = true
+				normalizedCaps = append(normalizedCaps, capID)
+			}
+		}
+	}
 	submitted, submittedAt, submittedHead := false, c.now(), ""
 	if req.AutoMerge != nil && *req.AutoMerge {
 		// Read outside the closure: it may ask GitHub, and the
@@ -4205,7 +4689,48 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			submittedHead = c.submittedHead(ctx, *current)
 		}
 	}
-	if err := c.mutate(ctx, id, func(task *model.Task) error {
+	var ownerTrustCfg *model.Config
+	if c.requestActor(ctx).Actor.Kind == model.PrincipalAgent || req.Designs != nil || req.Context != nil || req.Reads != nil || req.Repo != nil {
+		var err error
+		ownerTrustCfg, err = c.Store.GetConfig(ctx)
+		if err != nil {
+			return Task{}, err
+		}
+	}
+	var resolvedContextLinks []model.Link
+	var resolvedContextReads []model.RepoRef
+	if req.Designs != nil || req.Context != nil {
+		current, err := c.Store.GetTask(ctx, id)
+		if err != nil {
+			return Task{}, err
+		}
+		if current == nil {
+			return Task{}, &NotFoundError{ID: id}
+		}
+		effectiveTarget := current.Target
+		if target != nil {
+			effectiveTarget = target
+		}
+		effectiveReads := slices.Clone(current.Reads)
+		if req.Reads != nil {
+			effectiveReads = slices.Clone(reads)
+		}
+		var designsInput []string
+		if req.Designs != nil {
+			designsInput = *req.Designs
+		}
+		var contextInput []ContextRefInput
+		if req.Context != nil {
+			contextInput = *req.Context
+		}
+		resolvedContextLinks, resolvedContextReads, err = c.resolveContextLinksAndReads(
+			ctx, designsInput, contextInput, effectiveTarget, effectiveReads, ownerTrustCfg, current.Links,
+		)
+		if err != nil {
+			return Task{}, err
+		}
+	}
+	if err := c.mutate(model.WithAutoMergeChange(ctx, c.requestActor(ctx).Actor, "edited"), id, func(task *model.Task) error {
 		submitted = false
 		// Whether this edit moves the task off a repository it had a
 		// target in, which takes the pull requests it opened there off
@@ -4255,6 +4780,13 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		if req.Base != nil {
 			task.Base = *req.Base
 		}
+		if req.Priority != nil {
+			if *req.Priority == 0 {
+				task.Priority = model.DefaultTaskPriority
+			} else {
+				task.Priority = *req.Priority
+			}
+		}
 		if forkPR != nil && !hasLinkTo(task.Links, forkPR.Link()) {
 			task.Links = append(task.Links, forkPR.Link())
 			task.Body += forkPR.Note()
@@ -4263,16 +4795,40 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			task.Issue = *req.Issue
 		}
 		if req.AutoMerge != nil {
+			// A change target's change is a CL, with no pull request
+			// to merge (model.ValidateTaskChangeTarget): a task turned
+			// to auto-merge is one no dispatch can set up.
+			if *req.AutoMerge && !task.AutoMerge && task.ChangeTarget != nil {
+				return validationErrorf("a %s task has no git pull request: auto_merge cannot be set", task.ChangeTarget.Kind)
+			}
 			// Turning it on is Submit by another name (see above), and
 			// says what Submit does about the holds it was waiting under.
 			if *req.AutoMerge && !task.AutoMerge {
 				humanSubmitted(task, submittedAt, submittedHead)
 				submitted = true
 			}
-			task.AutoMerge = *req.AutoMerge
+			// Either answer is the caller's own, and the one grain's holds
+			// must not overturn: a false stays false until a person or the
+			// API says true (model.DeclineAutoMerge).
+			if *req.AutoMerge {
+				model.AllowAutoMerge(task)
+				task.AutoMerge = true
+			} else {
+				model.DeclineAutoMerge(task, model.PrincipalString(c.requestActor(ctx).Actor))
+			}
 		}
 		if req.AutoApproveProposals != nil {
 			task.AutoApproveProposals = *req.AutoApproveProposals
+			if _, ok := model.ConsoleSessionIDOf(*task); ok {
+				task.Tags = slices.DeleteFunc(task.Tags, func(tag string) bool {
+					return tag == model.ConsoleSessionTasksApprovedTag || tag == model.ConsoleSessionTasksUnapprovedTag
+				})
+				if *req.AutoApproveProposals {
+					task.Tags = append(task.Tags, model.ConsoleSessionTasksApprovedTag)
+				} else {
+					task.Tags = append(task.Tags, model.ConsoleSessionTasksUnapprovedTag)
+				}
+			}
 		}
 		if req.SandboxCPUs != nil {
 			task.SandboxCPUs = *req.SandboxCPUs
@@ -4319,6 +4875,11 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		if req.NothingNeededAction != nil {
 			task.NothingNeededAction = nothingNeeded
 		}
+		if req.KeepRunning != nil {
+			task.KeepRunning = *req.KeepRunning
+		} else if req.KeepRunningSnake != nil {
+			task.KeepRunning = *req.KeepRunningSnake
+		}
 		if req.NoPort != nil {
 			task.NoPort = *req.NoPort
 		}
@@ -4329,13 +4890,84 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			task.ReviewTemplateID = reviewTemplateID
 		}
 		if req.Reads != nil {
-			task.Reads = reads
+			if task.IsConsoleSession() {
+				stateRepo := c.stateRepoRef()
+				var taskReads []model.RepoRef
+				if stateRepo.Owner != "" {
+					taskReads = append(taskReads, stateRepo)
+				}
+				for _, r := range reads {
+					if r.Owner != "" && r.Name != "" && !r.Same(stateRepo) {
+						taskReads = append(taskReads, r)
+					}
+				}
+				task.Reads = taskReads
+			} else {
+				task.Reads = reads
+			}
 		}
 		if req.Writes != nil {
 			task.Writes = writes
 		}
 		if req.Reviewers != nil {
 			task.Reviewers = model.NormalizeReviewers(*req.Reviewers)
+		}
+		if req.Capabilities != nil || req.PriorityDispatch != nil {
+			existingByCap := make(map[string]model.Grant, len(task.Grants))
+			for _, g := range task.Grants {
+				existingByCap[g.Capability] = g
+			}
+			if req.Capabilities != nil {
+				policy, configured, err := c.capabilityPolicyFor(ctx)
+				if err != nil {
+					return err
+				}
+				for _, capID := range normalizedCaps {
+					if _, had := existingByCap[capID]; !had {
+						if model.IsCapabilityRef(capID) {
+							subject := model.CapabilitySubject{Repo: task.Target, Kind: model.CapabilityRunTask}
+							if err := policy.Permits(capID, subject, configured); err != nil {
+								return validationErrorf("%v", err)
+							}
+						}
+						if err := c.catalogueEditRefusal(ctx, *task, capID); err != nil {
+							return err
+						}
+					}
+				}
+				newGrants := make([]model.Grant, 0, len(normalizedCaps)+1)
+				seen := map[string]bool{}
+				if task.IsConsoleSession() {
+					newGrants = append(newGrants, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
+					seen[model.DurableCapability] = true
+				}
+				for _, capID := range normalizedCaps {
+					if capID == "" || seen[capID] {
+						continue
+					}
+					seen[capID] = true
+					if prevGrant, had := existingByCap[capID]; had {
+						newGrants = append(newGrants, prevGrant)
+					} else {
+						newGrants = append(newGrants, model.Grant{Capability: capID, Via: model.GrantByLabel})
+					}
+				}
+				task.Grants = newGrants
+			}
+			if req.PriorityDispatch != nil {
+				if *req.PriorityDispatch {
+					if _, had := existingByCap[model.PriorityDispatchCapability]; !had {
+						if err := c.catalogueEditRefusal(ctx, *task, model.PriorityDispatchCapability); err != nil {
+							return err
+						}
+					}
+					if !slices.ContainsFunc(task.Grants, func(g model.Grant) bool { return g.Capability == model.PriorityDispatchCapability }) {
+						task.Grants = append(task.Grants, model.Grant{Capability: model.PriorityDispatchCapability, Via: model.GrantByLabel})
+					}
+				} else {
+					task.Grants = slices.DeleteFunc(task.Grants, func(g model.Grant) bool { return g.Capability == model.PriorityDispatchCapability })
+				}
+			}
 		}
 		if retargeted {
 			// A pull request a run opened in the repository the task is
@@ -4346,11 +4978,35 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			// request's head -- the classification of it, the hold it
 			// earned, a person's Submit of it -- goes with it; the next
 			// pull request is classified afresh.
+			//
+			// An external pull request in that repository -- the one a
+			// fork head label resolved to (forkhead.go) -- goes too, and
+			// so does the guidance appended about it: the next run
+			// cannot fetch its head or follow it up from here.
+			fixesDropped := false
+			for _, l := range task.Links {
+				if !model.LinkOffTarget(*task, l) {
+					continue
+				}
+				if l.Kind == model.LinkFixes {
+					fixesDropped = true
+					continue
+				}
+				ref, _ := model.ParsePullRequestRef(l.Target)
+				if body, stripped := forkhead.StripNote(task.Body, ref); stripped {
+					task.Body = body
+				} else if strings.Contains(task.Body, ref.String()) {
+					task.Body += forkhead.MovedNote(ref, *task.Target)
+				}
+			}
 			if links, dropped := model.WithoutOffTargetPullRequests(*task); dropped {
-				task.Links = slices.DeleteFunc(links, func(l model.Link) bool {
-					return l.Kind == model.LinkSecurityHold || l.Kind == model.LinkTrustBoundaryCleared ||
-						l.Kind == model.LinkHumanSubmitted
-				})
+				task.Links = links
+				if fixesDropped {
+					task.Links = slices.DeleteFunc(links, func(l model.Link) bool {
+						return l.Kind == model.LinkSecurityHold || l.Kind == model.LinkTrustBoundaryCleared ||
+							l.Kind == model.LinkHumanSubmitted
+					})
+				}
 			}
 		}
 		if req.GoogleChatSpace != nil {
@@ -4364,6 +5020,25 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 				newLinks = append(newLinks, model.Link{Kind: model.LinkGoogleChat, Target: space})
 			}
 			task.Links = newLinks
+		}
+		if req.Designs != nil || req.Context != nil {
+			var newLinks []model.Link
+			for _, l := range task.Links {
+				if l.Kind != model.LinkDesign && l.Kind != model.LinkContextManifest {
+					newLinks = append(newLinks, l)
+				}
+			}
+			newLinks = append(newLinks, resolvedContextLinks...)
+			task.Links = newLinks
+			for _, r := range resolvedContextReads {
+				if !slices.ContainsFunc(task.Reads, r.Same) {
+					task.Reads = append(task.Reads, r)
+				}
+			}
+		} else if req.Reads != nil || req.Repo != nil {
+			if err := validateExistingContextReads(task, ownerTrustCfg); err != nil {
+				return err
+			}
 		}
 		if req.CustomFields != nil {
 			declaredFields, err := c.Store.ListCustomFields(ctx)
@@ -4430,6 +5105,39 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		if req.Reads != nil || req.Repo != nil {
 			if err := refuseTargetAmongReads(task.Reads, task.Target); err != nil {
 				return err
+			}
+		}
+		// An agent editing a task approved by owner-trust cannot move its
+		// target, reads or writes outside the owner's trusted repositories
+		// and keep that approval (#XC-17): if the edited task would no
+		// longer qualify for owner-trust auto-approval, it reverts to
+		// proposed for a person to approve.
+		if task.Approval != nil && task.Approval.Actor == model.OwnerTrustPrincipal && c.requestActor(ctx).Actor.Kind == model.PrincipalAgent {
+			ownerID := ""
+			if task.Approval.OnBehalfOf != nil {
+				ownerID = strings.TrimSpace(task.Approval.OnBehalfOf.ID)
+			}
+			repo := ""
+			if task.Target != nil {
+				repo = task.Target.String()
+			}
+			netWidened := (ownerTrustCfg == nil || model.NormalizeNetworkAccess(ownerTrustCfg.NetworkAccess) == model.NetworkNone) &&
+				strings.TrimSpace(string(task.NetworkAccess)) != "" &&
+				model.NormalizeNetworkAccess(task.NetworkAccess) != model.NetworkNone
+			sameCallerOwner := false
+			if tok := externalTokenFromContext(ctx); tok != nil {
+				sameCallerOwner = ownerID != "" && strings.EqualFold(strings.TrimSpace(tok.Owner), ownerID)
+			}
+			stillTrusted := ownerTrustCfg != nil &&
+				sameCallerOwner &&
+				!task.KeepRunning &&
+				task.Priority <= model.DefaultTaskPriority &&
+				!model.FixesBaseBranch(*task) &&
+				!netWidened &&
+				model.OwnerTrustedForTask(ownerTrustCfg.OwnerTrust, ownerID, repo, task.Reads, task.Writes)
+			if !stillTrusted {
+				task.Approval = nil
+				task.ApprovedAt = nil
 			}
 		}
 		return nil
@@ -4561,7 +5269,7 @@ func (c *Client) noteEdit(ctx context.Context, id string, titleChanged bool, tit
 	}
 	_, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
-		Author:    model.Attribution{Actor: c.actor(ctx)},
+		Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
 		Body:      body,
 		CreatedAt: c.now(),
 	})
@@ -4579,6 +5287,7 @@ func (c *Client) mutate(ctx context.Context, id string, apply func(*model.Task) 
 	if task == nil {
 		return &NotFoundError{ID: id}
 	}
+	c.ensureConsoleSessionSnapshot(ctx, *task)
 	return c.Store.UpdateTask(ctx, id, apply)
 }
 
@@ -4607,33 +5316,45 @@ func (c *Client) SetCapability(ctx context.Context, id, capabilityID string, att
 	if capabilityID == "" {
 		return validationErrorf("capability id is required")
 	}
+	var targetIDs []string
 	if attach {
-		normalized, err := c.normalizeCapabilityID(capabilityID)
+		normalized, err := c.normalizeCapabilityIDs(capabilityID)
 		if err != nil {
 			return grantValidationError(err)
 		}
-		capabilityID = normalized
-	}
-	if _, ok := c.capabilityByID(capabilityID); attach && !ok {
-		return validationErrorf("%s", capabilityRefusal(capabilityID))
-	}
-	if attach {
-		if err := c.catalogueEditRefusalFor(ctx, id, capabilityID); err != nil {
-			return err
+		targetIDs = normalized
+		for _, nid := range targetIDs {
+			if _, ok := c.capabilityByID(nid); !ok {
+				return validationErrorf("%s", capabilityRefusal(nid))
+			}
+			if err := c.catalogueEditRefusalFor(ctx, id, nid); err != nil {
+				return err
+			}
+		}
+	} else {
+		targetIDs = model.CanonicalLegacyGrants(capabilityID)
+		if !slices.Contains(targetIDs, capabilityID) {
+			targetIDs = append(targetIDs, capabilityID)
 		}
 	}
 	// Rebuilding the grant set inside the closure is what lets two people
 	// attach two different capabilities without one losing: a retry runs
 	// again against the set the winner already wrote.
 	return c.mutate(ctx, id, func(task *model.Task) error {
-		kept := make([]model.Grant, 0, len(task.Grants)+1)
+		kept := make([]model.Grant, 0, len(task.Grants)+len(targetIDs))
 		for _, g := range task.Grants {
-			if g.Capability != capabilityID {
+			if !attach && g.Capability == model.DurableCapability && task.IsConsoleSession() {
+				kept = append(kept, g)
+				continue
+			}
+			if !slices.Contains(targetIDs, g.Capability) {
 				kept = append(kept, g)
 			}
 		}
 		if attach {
-			kept = append(kept, model.Grant{Capability: capabilityID, Via: model.GrantByLabel})
+			for _, nid := range targetIDs {
+				kept = append(kept, model.Grant{Capability: nid, Via: model.GrantByLabel})
+			}
 		}
 		task.Grants = kept
 		return nil
@@ -4654,7 +5375,7 @@ func (c *Client) SetDependency(ctx context.Context, id, dependsOnID string, atta
 		return validationErrorf("dependsOn id is required")
 	}
 	if !attach {
-		return c.mutate(ctx, id, func(task *model.Task) error {
+		if err := c.mutate(ctx, id, func(task *model.Task) error {
 			kept := make([]model.Link, 0, len(task.Links))
 			for _, l := range task.Links {
 				if !(l.Kind == model.LinkDependsOn && (l.Target == normDependsOnID || l.Target == dependsOnID)) {
@@ -4663,13 +5384,17 @@ func (c *Client) SetDependency(ctx context.Context, id, dependsOnID string, atta
 			}
 			task.Links = kept
 			return nil
-		})
+		}); err != nil {
+			return err
+		}
+		c.noteTaskAction(ctx, id, model.TaskEventDependencies, "no longer depends on "+normDependsOnID)
+		return nil
 	}
 	links, err := c.dependsOnLinks(ctx, []string{normDependsOnID}, id)
 	if err != nil {
 		return err
 	}
-	return c.mutate(ctx, id, func(task *model.Task) error {
+	if err := c.mutate(ctx, id, func(task *model.Task) error {
 		for _, l := range task.Links {
 			if l.Kind == model.LinkDependsOn &&
 				(l.Target == normDependsOnID || l.Target == strings.TrimSpace(dependsOnID)) {
@@ -4678,7 +5403,11 @@ func (c *Client) SetDependency(ctx context.Context, id, dependsOnID string, atta
 		}
 		task.Links = append(task.Links, links...)
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	c.noteTaskAction(ctx, id, model.TaskEventDependencies, "depends on "+normDependsOnID)
+	return nil
 }
 
 // ReorderRequest is a drag-and-drop move (bwsalmon/agents#476): ids, in
@@ -4730,7 +5459,22 @@ func (c *Client) Reorder(ctx context.Context, req ReorderRequest) error {
 	if req.BeforeID != "" {
 		beforeID = &req.BeforeID
 	}
-	return c.Store.Reorder(ctx, req.IDs, afterID, beforeID)
+	if err := c.Store.Reorder(ctx, req.IDs, afterID, beforeID); err != nil {
+		return err
+	}
+	where := "moved"
+	switch {
+	case req.AfterID != "" && req.BeforeID != "":
+		where = "moved between " + req.AfterID + " and " + req.BeforeID
+	case req.AfterID != "":
+		where = "moved after " + req.AfterID
+	case req.BeforeID != "":
+		where = "moved before " + req.BeforeID
+	}
+	for _, id := range req.IDs {
+		c.noteTaskAction(ctx, id, model.TaskEventReordered, where)
+	}
+	return nil
 }
 
 // Approve records approval on a proposed or deferred task, which is what
@@ -4753,7 +5497,13 @@ func (c *Client) Approve(ctx context.Context, id string) error {
 	if err := c.catalogueApprovalRefusal(ctx, *task); err != nil {
 		return err
 	}
-	return c.Store.Approve(ctx, id, model.Attribution{Actor: c.actor(ctx)}, c.now())
+	if err := c.Store.Approve(ctx, id, model.Attribution{Actor: c.requestActor(ctx).Actor}, c.now()); err != nil {
+		return err
+	}
+	if task.Interactive && task.DeferredAt == nil && c.Config.Wake != nil {
+		c.Config.Wake()
+	}
+	return nil
 }
 
 // WithdrawApproval takes an approved task back out of the queue: it
@@ -4806,7 +5556,11 @@ func (c *Client) WithdrawApproval(ctx context.Context, id string) error {
 	case model.StateCompleted, model.StateAwaitingSubmit, model.StateAwaitingReply, model.StateClosed:
 		return validationErrorf("task %s is %s: its approval is a record of work that already happened", id, state)
 	}
-	return c.Store.WithdrawApproval(ctx, id)
+	if err := c.Store.WithdrawApproval(ctx, id); err != nil {
+		return err
+	}
+	c.noteTaskAction(ctx, id, model.TaskEventApprovalWithdrawn, "")
+	return nil
 }
 
 // Defer puts a task aside: it stamps model.Task.DeferredAt, which is the
@@ -4859,7 +5613,15 @@ func (c *Client) Defer(ctx context.Context, id string, opts DeferOptions) error 
 		return validationErrorf("wake time %s is not in the future: a deferral until a moment that has passed would be undone by the next cycle",
 			opts.Until.UTC().Format(time.RFC3339))
 	}
-	return c.Store.SetDeferred(ctx, id, &now, opts.Until, now)
+	if err := c.Store.SetDeferred(ctx, id, &now, opts.Until, now); err != nil {
+		return err
+	}
+	detail := ""
+	if opts.Until != nil {
+		detail = "until " + opts.Until.UTC().Format(time.RFC3339)
+	}
+	c.noteTaskAction(ctx, id, model.TaskEventDeferred, detail)
+	return nil
 }
 
 // DeferOptions is what a caller chose at the moment of deferring, beyond
@@ -4902,7 +5664,14 @@ func (c *Client) Undefer(ctx context.Context, id string) error {
 	if task.DeferredAt == nil {
 		return nil
 	}
-	return c.Store.SetDeferred(ctx, id, nil, nil, c.now())
+	if err := c.Store.SetDeferred(ctx, id, nil, nil, c.now()); err != nil {
+		return err
+	}
+	c.noteTaskAction(ctx, id, model.TaskEventUndeferred, "")
+	if task.Interactive && task.Approval != nil && c.Config.Wake != nil {
+		c.Config.Wake()
+	}
+	return nil
 }
 
 // taskState is "what state is this task in", with a missing task reported
@@ -4936,6 +5705,15 @@ func (c *Client) taskState(ctx context.Context, id string) (model.State, error) 
 // its next cycle rather than waiting out orchestrator's ciRetryDelay, or
 // waiting on a verdict nothing will replace.
 func (c *Client) Submit(ctx context.Context, id string) error {
+	if err := c.submit(ctx, id); err != nil {
+		return err
+	}
+	c.noteTaskAction(ctx, id, model.TaskEventSubmitted, "")
+	return nil
+}
+
+// submit is Submit, short of the note that says who asked for it.
+func (c *Client) submit(ctx context.Context, id string) error {
 	task, err := c.Store.GetTask(ctx, id)
 	if err != nil {
 		return err
@@ -4947,6 +5725,13 @@ func (c *Client) Submit(ctx context.Context, id string) error {
 		// A CL is submitted by a person through its provider, never
 		// queued for a merge (change_submit.go).
 		return c.submitChange(ctx, *task)
+	}
+	if task.ChangeTarget != nil {
+		// A change target's change is only ever a CL: with none live
+		// there is nothing to submit, and the merge queue below has no
+		// pull request to take -- auto-merge on such a task is one
+		// every dispatch refuses (model.ValidateTaskChangeTarget).
+		return validationErrorf("%s has no %s change to submit yet", id, task.ChangeTarget.Kind)
 	}
 	// A CL whose provider gates Submit on its required reviews
 	// (change.ReviewGate) is submitted only once they have passed on its
@@ -4964,7 +5749,7 @@ func (c *Client) Submit(ctx context.Context, id string) error {
 		return c.submitWithApprovals(ctx, *task, pending)
 	}
 	now, head := c.now(), c.submittedHead(ctx, *task)
-	if err := c.mutate(ctx, id, func(task *model.Task) error {
+	if err := c.mutate(model.WithAutoMergeChange(ctx, c.requestActor(ctx).Actor, "submitted"), id, func(task *model.Task) error {
 		// Only a Submit that turns auto-merge on answers a hold. One
 		// over a change already merging itself (pressed to retry its CI)
 		// has looked at no new head, and must not pin a clearance to
@@ -4973,6 +5758,7 @@ func (c *Client) Submit(ctx context.Context, id string) error {
 		if !task.AutoMerge {
 			humanSubmitted(task, now, head)
 		}
+		model.AllowAutoMerge(task)
 		task.AutoMerge = true
 		return nil
 	}); err != nil {
@@ -5024,7 +5810,7 @@ func humanSubmitted(t *model.Task, now time.Time, head string) {
 // drawn with: a push landing between the page loading and the click is
 // recorded as what the human saw. That window is accepted, being seconds
 // against the old one of a whole cycle; closing it means the page
-// sending the head it showed with the request (docs/architecture.md,
+// sending the head it showed with the request (design/design/architecture.design.md,
 // "When something is stuck").
 func (c *Client) submittedHead(ctx context.Context, task model.Task) string {
 	ref := pullRequestRefOf(task)
@@ -5125,11 +5911,14 @@ func (c *Client) commentWithAuthor(ctx context.Context, id, body string, uploads
 	if err != nil {
 		return err
 	}
-	actor := c.actor(ctx)
-	if trimmed := strings.TrimSpace(author); trimmed != "" {
-		actor = model.Principal{Kind: model.PrincipalHuman, ID: trimmed}
+	by := c.requestActor(ctx)
+	// An author naming the request's own principal keeps its kind: a
+	// verified *.gserviceaccount.com caller is a service principal, as it
+	// is on the tasks it files and closes, not a human.
+	if trimmed := strings.TrimSpace(author); trimmed != "" && trimmed != by.Actor.ID {
+		by = model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: trimmed}}
 	}
-	return c.addAttributedComment(ctx, id, body, attachments, model.Attribution{Actor: actor}, now, reopenAck)
+	return c.addAttributedComment(ctx, id, body, attachments, by, now, reopenAck)
 }
 
 // addAttributedComment is AddCommentWithAuthor once the author is
@@ -5148,26 +5937,34 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 	if task == nil {
 		return &NotFoundError{ID: id}
 	}
-	commentID, err := c.Store.AddComment(ctx, model.Comment{
+	if _, _, err := c.Store.AddCommentWithAttachments(ctx, model.Comment{
 		TaskID:    id,
 		Author:    by,
 		Body:      body,
 		CreatedAt: now,
-	})
-	if err != nil {
+		FiledVia:  filedViaFromContext(ctx),
+	}, attachments); err != nil {
 		return err
-	}
-	for i := range attachments {
-		attachments[i].TaskID = id
-		attachments[i].CommentID = &commentID
-		if _, err := c.Store.AddAttachment(ctx, attachments[i]); err != nil {
-			return err
-		}
 	}
 
 	obs, err := c.Store.GetObservation(ctx, id)
 	if err != nil {
 		return err
+	}
+	// A run that stopped with resume_later(when: {message: true}) -- or a
+	// console session that ParkConsoleSessionTask both parked on a question
+	// and deferred on {message: true} -- is waiting for anybody's post but
+	// its own. Wake before reopenAcknowledgeable so the first human reply
+	// clears DeferredAt as well as PendingQuestionCommentID instead of
+	// returning early from reopenAcknowledgeable with the task still deferred.
+	wokeOnMessage := false
+	ownAgent := model.Principal{Kind: model.PrincipalAgent, ID: id}
+	if !by.Actor.Same(ownAgent) && (by.OnBehalfOf == nil || !by.OnBehalfOf.Same(ownAgent)) {
+		var err error
+		wokeOnMessage, err = c.Store.WakeOnMessage(ctx, id, now)
+		if err != nil {
+			return err
+		}
 	}
 	if reopenAck && by.Actor.Kind == model.PrincipalHuman {
 		reopened, err := c.reopenAcknowledgeable(ctx, id, now)
@@ -5175,19 +5972,8 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 			return err
 		}
 	}
-	// A run that stopped with resume_later(when: {message: true}) is
-	// waiting for exactly this: anybody's post but its own.
-	wokeOnMessage := false
-	ownAgent := model.Principal{Kind: model.PrincipalAgent, ID: id}
-	if by.Actor != ownAgent && (by.OnBehalfOf == nil || *by.OnBehalfOf != ownAgent) {
-		var err error
-		wokeOnMessage, err = c.Store.WakeOnMessage(ctx, id, now)
-		if err != nil {
-			return err
-		}
-	}
 	if obs == nil || obs.PendingQuestionCommentID == nil {
-		if wokeOnMessage && c.Config.Wake != nil {
+		if (wokeOnMessage || (task.Interactive && by.Actor.Kind == model.PrincipalHuman)) && c.Config.Wake != nil {
 			c.Config.Wake()
 		}
 		return nil
@@ -5216,6 +6002,7 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
 		o.PendingQuestionCommentID = nil
 		o.PendingSecret = ""
+		o.PendingAccess = nil
 	}); err != nil {
 		return err
 	}
@@ -5279,6 +6066,7 @@ func (c *Client) reopenAcknowledgeable(ctx context.Context, id string, now time.
 		o.RetryRequestedAt = &now
 		o.PendingQuestionCommentID = nil
 		o.PendingSecret = ""
+		o.PendingAccess = nil
 	}); err != nil {
 		return false, err
 	}
@@ -5308,7 +6096,7 @@ func (c *Client) Stop(ctx context.Context, id string) error {
 
 	commentID, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
-		Author:    model.Attribution{Actor: c.actor(ctx)},
+		Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
 		Body:      model.TurnStoppedComment,
 		CreatedAt: now,
 	})
@@ -5319,6 +6107,7 @@ func (c *Client) Stop(ctx context.Context, id string) error {
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
 		o.PendingQuestionCommentID = &commentID
 		o.PendingSecret = ""
+		o.PendingAccess = nil
 	}); err != nil {
 		return err
 	}
@@ -5326,7 +6115,12 @@ func (c *Client) Stop(ctx context.Context, id string) error {
 		return err
 	}
 
-	if err := c.cancelActiveRuns(ctx, id, now); err != nil {
+	// A run finished here rather than by the canceller is recorded as the
+	// stop it is (model.TurnStoppedDetail), as the orchestrator records
+	// one it cancels: "cancelled by user" reads as a plain cancellation,
+	// which counts toward the failure streak, and a person's Retry then
+	// waited out dispatch's failure backoff.
+	if err := c.cancelActiveRuns(ctx, id, now, model.TurnStoppedDetail); err != nil {
 		return err
 	}
 	if c.Config.Wake != nil {
@@ -5337,10 +6131,10 @@ func (c *Client) Stop(ctx context.Context, id string) error {
 
 // cancelActiveRuns stops the agent run working on id, if there is one:
 // through Config.TaskCanceller where this daemon dispatched it, and
-// otherwise by finishing whatever run the store still has open, so the
-// task stops reading as running either way. Stop's, and ForceMerge's
-// when the merge is forced over a live run.
-func (c *Client) cancelActiveRuns(ctx context.Context, id string, now time.Time) error {
+// otherwise by finishing whatever run the store still has open with
+// detail, so the task stops reading as running either way. Stop's, and
+// ForceMerge's when the merge is forced over a live run.
+func (c *Client) cancelActiveRuns(ctx context.Context, id string, now time.Time, detail string) error {
 	if c.Config.TaskCanceller != nil && c.Config.TaskCanceller.CancelTask(ctx, id) {
 		return nil
 	}
@@ -5352,7 +6146,7 @@ func (c *Client) cancelActiveRuns(ctx context.Context, id string, now time.Time)
 		if runs[i].FinishedAt != nil {
 			continue
 		}
-		if err := c.Store.FinishRun(ctx, runs[i].ID, now, "cancelled", "cancelled by user"); err != nil {
+		if err := c.Store.FinishRun(ctx, runs[i].ID, now, "cancelled", detail); err != nil {
 			return err
 		}
 	}
@@ -5380,6 +6174,9 @@ type CloseOptions struct {
 	// task closed and the pull request open, and says so in the note. See
 	// noteOrphanedPullRequests.
 	ClosePullRequest bool
+	// Reason is what whoever is closing the task says about why, kept on
+	// the close's model.TaskEvent beside who they are. Optional.
+	Reason string
 }
 
 // Close marks a task closed. Closed is the terminal state
@@ -5418,13 +6215,22 @@ func (c *Client) Close(ctx context.Context, id string, opts CloseOptions) error 
 // re-attach that fails is logged rather than failing the reopen -- the
 // task is open either way, and its next run looks again as it starts.
 func (c *Client) Reopen(ctx context.Context, id string) error {
-	if err := c.setClosed(ctx, id, false, CloseOptions{}); err != nil {
+	return c.ReopenBecause(ctx, id, "")
+}
+
+// ReopenBecause is Reopen with the reason whoever is reopening it gave,
+// kept on the reopen's model.TaskEvent.
+func (c *Client) ReopenBecause(ctx context.Context, id, reason string) error {
+	if err := c.setClosed(ctx, id, false, CloseOptions{Reason: reason}); err != nil {
 		return err
 	}
 	if r, ok := c.Config.PullRequests.(PullRequestReattacher); ok {
 		if err := r.ReattachForTask(ctx, id); err != nil {
 			log.Printf("ui: reopening %s: could not re-attach its pull request: %v", id, err)
 		}
+	}
+	if task, err := c.Store.GetTask(ctx, id); err == nil && task != nil && task.Interactive && c.Config.Wake != nil {
+		c.Config.Wake()
 	}
 	return nil
 }
@@ -5437,7 +6243,23 @@ func (c *Client) Reopen(ctx context.Context, id string) error {
 // RetryRequestedAt only ever narrows how far back task_streak looks, and
 // a task with no failing streak to narrow just keeps whatever state it
 // already had.
+//
+// A task parked on a stopped turn (Task.TurnStopped) is the exception:
+// what holds it is the stop, not a streak, and stamping RetryRequestedAt
+// alone left it awaiting_reply with nothing ever dispatching it. So Retry
+// lifts the stop as a reply would (reopenAcknowledgeable) -- the person
+// pressing it is the person the stop was waiting on -- and the task is
+// queued again.
 func (c *Client) Retry(ctx context.Context, id string) error {
+	if err := c.retry(ctx, id); err != nil {
+		return err
+	}
+	c.noteTaskAction(ctx, id, model.TaskEventRetried, "")
+	return nil
+}
+
+// retry is Retry, short of the note that says who asked for it.
+func (c *Client) retry(ctx context.Context, id string) error {
 	task, err := c.Store.GetTask(ctx, id)
 	if err != nil {
 		return err
@@ -5445,10 +6267,50 @@ func (c *Client) Retry(ctx context.Context, id string) error {
 	if task == nil {
 		return &NotFoundError{ID: id}
 	}
+	// An operator's pause is the one hold Retry does not lift: it is a
+	// separate decision with its own way out, and lifting it here would
+	// be undoing somebody else's pause behind their back. Said, rather
+	// than stamping a retry nothing will ever dispatch.
+	if pause, err := c.Store.GetPause(ctx, id); err != nil {
+		return err
+	} else if pause != nil {
+		return validationErrorf("%s is paused by %s: Resume it to put it back in the queue",
+			id, principalName(pause.PausedBy))
+	}
 	now := c.now()
-	return c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
+	stopped, err := c.Store.TurnStopped(ctx, id)
+	if err != nil {
+		return err
+	}
+	// Only a person lifts a stop a person made, the same rule a reply
+	// is held to (addAttributedComment): a run calling retry through the
+	// agent API on a task it may write is not the one the stop waits on.
+	if stopped && c.requestActor(ctx).Actor.Kind != model.PrincipalHuman {
+		return validationErrorf("%s was stopped by an operator: only a person can resume it, by replying or pressing Retry", id)
+	}
+	if stopped {
+		reopened, err := c.reopenAcknowledgeable(ctx, id, now)
+		if err != nil || reopened {
+			return err
+		}
+	}
+	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
 		o.RetryRequestedAt = &now
-	})
+		// A stopped task in some state other than awaiting_reply (one at
+		// its failure-streak limit, say) still has the stop to lift, or
+		// clearing its streak would leave it parked all the same.
+		if stopped {
+			o.PendingQuestionCommentID = nil
+			o.PendingSecret = ""
+			o.PendingAccess = nil
+		}
+	}); err != nil {
+		return err
+	}
+	if (task.Interactive || stopped) && c.Config.Wake != nil {
+		c.Config.Wake()
+	}
+	return nil
 }
 
 // RetryMerge puts a task the merge queue has given up on back on that
@@ -5558,7 +6420,7 @@ func (c *Client) RetryMerge(ctx context.Context, id string) error {
 	// later has no other way to see happened.
 	_, err = c.Store.AddComment(ctx, model.Comment{
 		TaskID: id,
-		Author: model.Attribution{Actor: c.actor(ctx)},
+		Author: model.Attribution{Actor: c.requestActor(ctx).Actor},
 		Body: fmt.Sprintf(
 			"Asked the merge queue to try %s again. It takes its place in the queue "+
 				"as if it had never been given up on: the checks are read afresh -- and "+
@@ -5693,7 +6555,7 @@ func (c *Client) ForceMerge(ctx context.Context, id, reason, head string) error 
 		return err
 	}
 	now := c.now()
-	by := c.actor(ctx).ID
+	by := c.requestActor(ctx).Actor.ID
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
 		o.ForceMergeAt = &now
 		o.ForceMergeReason, o.ForceMergeBy, o.ForceMergeSkipped = reason, by, skipped
@@ -5711,7 +6573,7 @@ func (c *Client) ForceMerge(ctx context.Context, id, reason, head string) error 
 		return err
 	}
 	if state == model.StateRunning {
-		if err := c.cancelActiveRuns(ctx, id, now); err != nil {
+		if err := c.cancelActiveRuns(ctx, id, now, "cancelled by user"); err != nil {
 			return err
 		}
 	}
@@ -5747,7 +6609,7 @@ func (c *Client) ForceMerge(ctx context.Context, id, reason, head string) error 
 		"forced again."
 	if _, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
-		Author:    model.Attribution{Actor: c.actor(ctx)},
+		Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
 		Body:      body,
 		CreatedAt: now,
 	}); err != nil {
@@ -5942,7 +6804,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 	if task == nil {
 		return &NotFoundError{ID: id}
 	}
-	if by := c.actor(ctx); by.Kind == model.PrincipalAgent {
+	if by := c.requestActor(ctx).Actor; by.Kind == model.PrincipalAgent {
 		if p, err := c.Store.GetPause(ctx, id); err != nil {
 			return err
 		} else if p != nil {
@@ -5963,7 +6825,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 		// Un-parking is "go on without an answer", which only the person
 		// the question (or request_secret) was put to may decide. An
 		// agent's run_task_now would otherwise answer it for them.
-		if by := c.actor(ctx); by.Kind == model.PrincipalAgent {
+		if by := c.requestActor(ctx).Actor; by.Kind == model.PrincipalAgent {
 			return forbiddenErrorf("%s is waiting for a person's reply, and agent %q may not start it in "+
 				"their place: a person has to answer it or Run now it themselves", id, by.ID)
 		}
@@ -5973,7 +6835,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 		if err := c.agentMayApprove(ctx, *task); err != nil {
 			return err
 		}
-		if err := c.Store.Approve(ctx, id, model.Attribution{Actor: c.actor(ctx)}, now); err != nil {
+		if err := c.Store.Approve(ctx, id, model.Attribution{Actor: c.requestActor(ctx).Actor}, now); err != nil {
 			return err
 		}
 	}
@@ -5988,6 +6850,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 		o.RetryRequestedAt = &now
 		o.PendingQuestionCommentID = nil
 		o.PendingSecret = ""
+		o.PendingAccess = nil
 	}); err != nil {
 		return err
 	}
@@ -6000,7 +6863,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 	// thread), so it names the branch that work belongs on.
 	if _, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
-		Author:    model.Attribution{Actor: c.actor(ctx)},
+		Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
 		Body:      runNowComment(state, pullRequestRefOf(*task)),
 		CreatedAt: now,
 	}); err != nil {
@@ -6029,7 +6892,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 // start it. A person asking -- the button, `grain run-now` -- is the
 // person those proposals wait for, so nothing is checked for them.
 func (c *Client) agentMayApprove(ctx context.Context, task model.Task) error {
-	by := c.actor(ctx)
+	by := c.requestActor(ctx).Actor
 	if by.Kind != model.PrincipalAgent {
 		return nil
 	}
@@ -6123,7 +6986,14 @@ func agentEscalatedCapabilities(task, requester model.Task) []string {
 		held[g.Capability] = true
 		out = append(out, g.Capability)
 	}
-	return append(out, model.UncoveredCapabilityRefs(task.Grants, requester.Grants)...)
+	childRefs := make([]model.Grant, 0, len(task.Grants))
+	for _, g := range task.Grants {
+		if g.Via == model.GrantByDefault && model.IsGrainCIGrant(g.Capability) {
+			continue
+		}
+		childRefs = append(childRefs, g)
+	}
+	return append(out, model.UncoveredCapabilityRefs(childRefs, requester.Grants)...)
 }
 
 // runNowComment is what a run-now leaves on the task's own thread. It
@@ -6165,6 +7035,11 @@ func pullRequestRefOf(task model.Task) string {
 	return ref
 }
 
+// setClosed closes or reopens a task and records who did it
+// (model.TaskEvent): the closure itself is one stamp the next reopen
+// clears, so the event is the only lasting trace of either. Closing a
+// task already closed, or reopening one already open, changes nothing and
+// records nothing.
 func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts CloseOptions) error {
 	task, err := c.Store.GetTask(ctx, id)
 	if err != nil {
@@ -6174,10 +7049,38 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 		return &NotFoundError{ID: id}
 	}
 	now := c.now()
+	by := c.requestActor(ctx).Actor
+	eventReason := strings.TrimSpace(opts.Reason)
+	if eventReason == "" {
+		if call, ok := agentCallFromContext(ctx); ok {
+			eventReason = call.reason
+		}
+	}
+	// The live run is read before the close is written: the orchestrator
+	// cancels it as soon as it sees the closure, and the event says so.
+	var liveRun *model.Run
+	if closed {
+		runs, err := c.Store.Runs(ctx, id)
+		if err != nil {
+			log.Printf("ui: closing %s: reading its runs: %v", id, err)
+		}
+		for i := range runs {
+			if runs[i].FinishedAt == nil {
+				liveRun = &runs[i]
+			}
+		}
+	}
 	var obs *model.Observation
+	changed := false
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
+		changed = (o.ClosedAt == nil) == closed
 		if closed {
-			o.ClosedAt = &now
+			// A task already closed keeps the stamp it has: moving it
+			// would leave the recorded close standing beside a second,
+			// unattributed closed step at the new stamp.
+			if o.ClosedAt == nil {
+				o.ClosedAt = &now
+			}
 			obs = o
 			return
 		}
@@ -6186,23 +7089,37 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 		return err
 	}
 	if !closed {
+		if changed {
+			c.recordTaskEvent(ctx, model.TaskEvent{TaskID: id, Kind: model.TaskEventReopened, At: now,
+				By: by, Reason: eventReason})
+		}
 		return nil
 	}
+	var cancelledCI []string
 	if c.Config.CI != nil && (obs == nil || obs.PrMergedAt == nil) {
 		reason := fmt.Sprintf("task %s was closed", id)
+		if by.ID != "" {
+			reason += " by " + principalLabel(by)
+		}
 		var cancelledRunID string
 		if obs != nil && obs.CI != nil && !obs.CI.Done() && obs.CI.RunID != "" {
-			c.Config.CI.Cancel(obs.CI.RunID, reason, ci.CancelByOperator)
+			c.Config.CI.Cancel(obs.CI.RunID, reason, ci.CancelByPrincipal(by.ID))
 			cancelledRunID = obs.CI.RunID
+			cancelledCI = append(cancelledCI, cancelledRunID)
 		}
 		for _, run := range c.Config.CI.List() {
 			if run.ID == "" || run.ID == cancelledRunID || run.Conclusion.Done() || run.Interrupted {
 				continue
 			}
 			if run.RequestedBy == id || (task.Target != nil && run.Repo == task.Target.String() && run.Ref == task.BranchName()) {
-				c.Config.CI.Cancel(run.ID, reason, ci.CancelByOperator)
+				c.Config.CI.Cancel(run.ID, reason, ci.CancelByPrincipal(by.ID))
+				cancelledCI = append(cancelledCI, run.ID)
 			}
 		}
+	}
+	if changed {
+		c.recordTaskEvent(ctx, model.TaskEvent{TaskID: id, Kind: model.TaskEventClosed, At: now,
+			By: by, Reason: eventReason, Detail: closeCancelled(liveRun, cancelledCI)})
 	}
 	// After the close is written, not before: the note says the task *is*
 	// closed, and a note left in front of a close that then failed would
@@ -6212,4 +7129,63 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	// and leaves the same note itself (orchestrator's own
 	// salvagePushedBranch).
 	return c.noteOrphanedPullRequests(ctx, *task, opts, now)
+}
+
+// recordTaskEvent writes a close or reopen's event, and only logs a
+// failure: the closure it records has already been written, and failing
+// the call now would tell the caller it had not.
+func (c *Client) recordTaskEvent(ctx context.Context, e model.TaskEvent) {
+	if _, err := c.Store.RecordTaskEvent(ctx, e); err != nil {
+		log.Printf("ui: recording the %s of task %s by %s: %v", e.Kind, e.TaskID, principalLabel(e.By), err)
+	}
+}
+
+// noteTaskAction records that whoever ctx names took action kind on task
+// id (operator-attribution spec §3.1's notes, model.TaskEventSubmitted
+// and the rest), with an agent's stated reason for its call. detail says
+// what the action was about, and never carries a secret's value. Like
+// recordTaskEvent it only logs a failure: the action is already done.
+func (c *Client) noteTaskAction(ctx context.Context, id string, kind model.TaskEventKind, detail string) {
+	who := c.requestActor(ctx)
+	var reason string
+	if call, ok := agentCallFromContext(ctx); ok {
+		reason = call.reason
+	}
+	c.recordTaskEvent(ctx, model.TaskEvent{TaskID: id, Kind: kind, At: c.now(),
+		By: who.Actor, OnBehalfOf: who.OnBehalfOf, Reason: reason, Detail: detail})
+}
+
+// closeCancelled says what a close cancelled, "" for nothing: the live
+// run the orchestrator stops once it sees the closure, and the CI runs
+// the close cancelled itself.
+func closeCancelled(live *model.Run, ciRuns []string) string {
+	var parts []string
+	if live != nil {
+		parts = append(parts, fmt.Sprintf("run %s (attempt %d)", live.ID, live.Attempt))
+	}
+	switch len(ciRuns) {
+	case 0:
+	case 1:
+		parts = append(parts, "CI run "+ciRuns[0])
+	default:
+		parts = append(parts, "CI runs "+strings.Join(ciRuns, ", "))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "cancelled " + strings.Join(parts, " and ")
+}
+
+// principalLabel is a principal as a reader is shown it: "human
+// alice@example.com", "agent 1920", or the kind alone for one with no id.
+func principalLabel(p model.Principal) string {
+	switch {
+	case p.Kind == "" && p.ID == "":
+		return "unknown"
+	case p.ID == "":
+		return string(p.Kind)
+	case p.Kind == "":
+		return p.ID
+	}
+	return string(p.Kind) + " " + p.ID
 }

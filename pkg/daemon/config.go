@@ -35,14 +35,15 @@ import (
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/iapreconciler"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/modelexec"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 type Config struct {
-	DataDir  string
-	DbDriver string
-	DbDSN    string
+	DataDir         string
+	DbDriver        string
+	DbDSN           string
+	SecretsBackend  string
+	SecretsSMPrefix string
 	// unitFlags are the names of the flags this process was actually
 	// started with, undefined ones included -- which on a deployment
 	// scripts/setup.sh installed is what grain-daemon.service's ExecStart
@@ -150,7 +151,13 @@ type Config struct {
 	// is no per-run commitment to add up and the budget charges agent
 	// runs nothing.
 	SandboxShapeIgnored bool
-	PollInterval        time.Duration
+	// VMMHeadroom is what each sandbox's cgroup is allowed beyond its
+	// guest's RAM, and so what the budget charges on top of each shape:
+	// model.DefaultVMMHeadroom under a granule backend
+	// (sandboxVMMHeadroom), nothing under any other. Set with
+	// SandboxShapeIgnored, from the backend itself.
+	VMMHeadroom  model.VMMHeadroom
+	PollInterval time.Duration
 	// Backup settings remain host-side rather than store-backed: the Google
 	// credential path describes this process's filesystem, and a schedule
 	// must be known before the UI is available to edit anything.
@@ -204,12 +211,16 @@ type Config struct {
 	// -ui-iap-issuer and -ui-iap-keys-url: what a signed assertion must
 	// carry, and where its keys are, for the UI/API to accept the
 	// identity in it (ui.Config.IAPAudience and the rest).
-	UiIAPAudience     string
-	UiIAPIssuer       string
-	UiIAPKeysURL      string
-	UiOpen            bool
-	Actor             string
-	DefaultTargetRepo string
+	UiIAPAudience string
+	UiIAPIssuer   string
+	UiIAPKeysURL  string
+	// UiRequireIAP is -ui-require-iap (ui.Config.RequireIAP): the access
+	// code works over unforwarded loopback only.
+	UiRequireIAP        bool
+	UiAllowedPrincipals []string
+	UiOpen              bool
+	Actor               string
+	DefaultTargetRepo   string
 	// PolicyFile is -policy: this workstation's local policy
 	// (grain_policy.yml, pkg/policy), which every task's claims are
 	// checked against before it is given a sandbox. Empty enforces none.
@@ -259,20 +270,9 @@ type Config struct {
 	// antigravity connection's model-turn limits (model.AgentBackend's
 	// TurnLimits; zero for the default) and the name its timeout
 	// messages call it by.
-	agyTurnTimeout    time.Duration
-	agyRetryCutoff    time.Duration
-	agyConnection     string
-	ExecutorAddr      string
-	ExecutorTokenFile string
-	ExecutorWait      time.Duration
-	ExecutorCertFile  string
-	ExecutorKeyFile   string
-	executorServer    *modelexec.Server
-	// executorListenAddr is where the remote executor listener actually
-	// bound (ExecutorAddr resolved, so ":0" says which port it got), or
-	// "" when this daemon runs none. It is what the UI's bootstrap
-	// command points a worker at (ui.Config.ExecutorAddr).
-	executorListenAddr string
+	agyTurnTimeout time.Duration
+	agyRetryCutoff time.Duration
+	agyConnection  string
 
 	// restartGaps measures how long this process's restart left each of
 	// its listeners unreachable (upgrade.GapRecorder), set by run() and
@@ -283,9 +283,13 @@ type Config struct {
 	// flushes and reports nothing -- without one.
 	runHostUpgrade *runHostUpgrade
 	// hostdRuns drives runs' host CLIs through grain hostd, detached
-	// (hostdruns.go): set by run() where the host executor is hostd, nil
-	// -- every host CLI a plain start -- elsewhere.
+	// (hostdruns.go): the host executor's hostd's, set by run() where the
+	// host executor is hostd and by hostdRoute.apply for a pinned run,
+	// nil -- every host CLI a plain start -- elsewhere.
 	hostdRuns *runhost.Hostd
+	// hostdRunSet is every hostd's hostdRuns, by name (newHostdRuns):
+	// set by run(), nil outside it.
+	hostdRunSet *hostdRunSet
 	// shuttingDown is set once run()'s context is cancelled: the process
 	// is draining and its API is about to stop answering. GET
 	// /api/config reports it as restarting. nil outside run().
@@ -332,12 +336,23 @@ type Config struct {
 	// (hostexec.go).
 	HostdSocket string
 	HostExec    *HostExecutor
+	// HostdReattachTimeout is -hostd-reattach-timeout: how long a run's
+	// CLI, running detached on a grain hostd whose connection drops, waits
+	// for that same hostd to reconnect and be re-attached from its cursor
+	// before the run fails as an infrastructure failure, with no strike
+	// (agent.ErrHostdLost). Zero fails it at once.
+	HostdReattachTimeout time.Duration
 	// HostdRemote is set by -hostd-token-file (or $GRAIN_HOSTD_TOKEN):
 	// the session of a grain hostd on another machine that dials in to
 	// /api/hostd/connect with that token (hostd -server), through which
 	// host CLIs and run: host capability servers start where the daemon
 	// has no hostd socket of its own -- on Kubernetes, say.
 	HostdRemote *hostd.Remote
+	// HostdHub takes every grain hostd that dials in: the registry's,
+	// each named by its own token (model.Hostd), and HostdRemote's shared
+	// token's when that is set, which is then the same Remote. Built once
+	// the store is open (newHostdHub); nil before.
+	HostdHub *hostd.Remote
 
 	// modelProxyUnrestricted is -model-proxy-unrestricted: the model
 	// proxies forward every vendor path rather than only the
@@ -388,6 +403,19 @@ type Config struct {
 	// runs grain from a container (bwsalmon/agents#645).
 	UpgradeImage        string
 	UpgradeImageRefFile string
+	// UpgradeImageSource selects where ModeImage loads candidate images from
+	// ("release-assets" or "registry"; empty uses the track or default
+	// release-assets-with-registry-fallback behavior). UpgradeImageSourceLocked
+	// records that the setting came from a daemon flag or environment variable
+	// so Settings -> Upgrade renders it read-only.
+	UpgradeImageSource           string
+	UpgradeImageSourceLocked     bool
+	UpgradeImageFallback         string
+	UpgradeImageFallbackExplicit bool
+	UpgradeReleaseRepo           string
+	UpgradeReleaseAsset          string
+	UpgradeReleaseChecksum       string
+	UpgradeSandboxReleaseAssets  map[string]string
 	// upgradeVerifyCmd checks an image's signature before either image
 	// path runs it (upgrade.ImageConfig.VerifyCmd); empty verifies
 	// nothing and every upgrade says so.
@@ -419,6 +447,10 @@ type Config struct {
 	Ci              bool
 	GritURL         string
 	GritClientToken string
+	// GritExperimental is -grit-experimental: the opt-in -grit-url is
+	// refused without, because the remote grit path runs no workflows
+	// yet (design/design/grit-split.design.md, GS-3 to GS-5 deferred).
+	GritExperimental bool
 
 	// ciCacheMaxAge, ciCacheMaxBytes, ciCacheMaxEntries and
 	// ciCacheMaxEntryBytes are the CI job cache's bounds
@@ -548,6 +580,10 @@ type Config struct {
 	ContainerGitProxyHost string
 	ContainerNetwork      string
 	ContainerCapAdd       []string
+	// ContainerFence is -container-sandbox-fence: whether container
+	// sandboxes are fenced off from this host by nftables
+	// (orchestrator.ContainerConfig.Fence).
+	ContainerFence orchestrator.ContainerFenceMode
 	// sandboxCIDR and sandboxNetwork are the address pool every granule
 	// sandbox VM is given an address out of and the docker network those
 	// addresses are on -- see -granule-sandbox-cidr. An empty CIDR is every
@@ -791,7 +827,7 @@ type Config struct {
 	// channel, which needs SandboxAccessAddr and an in-cluster daemon).
 	// K8sGranuleReattachTimeout is how long a step waits for a dropped
 	// channel to come back (DefaultK8sGranuleReattachTimeout when zero).
-	// docs/design/grain-on-gke.md#GKE-3. Startup-only.
+	// design/design/grain-on-gke.design.md#GKE-3. Startup-only.
 	K8sGranuleAccess          string
 	K8sGranuleReattachTimeout time.Duration
 
@@ -898,8 +934,8 @@ func (c Config) ChangesFrom(prev Config) []string {
 	note("actions-cache", prev.ActionsCacheEnabled, c.ActionsCacheEnabled)
 	note("k8s-namespace", prev.K8sNamespace, c.K8sNamespace)
 	note("k8s-kubectl", prev.K8sKubectl, c.K8sKubectl)
-	note("k8s-sandbox-image", firstNonEmpty(prev.K8sSandboxImage, prev.K8sImage), firstNonEmpty(c.K8sSandboxImage, c.K8sImage))
-	note("k8s-granule-image", prev.K8sGranuleImage, c.K8sGranuleImage)
+	note("k8s-sandbox-image", firstNonEmpty(prev.K8sSandboxImage, prev.K8sImage, DefaultK8sSandboxImage), firstNonEmpty(c.K8sSandboxImage, c.K8sImage, DefaultK8sSandboxImage))
+	note("k8s-granule-image", firstNonEmpty(prev.K8sGranuleImage, DefaultSandboxImage), firstNonEmpty(c.K8sGranuleImage, DefaultSandboxImage))
 	note("k8s-workspace", prev.K8sWorkspace, c.K8sWorkspace)
 	note("k8s-git-proxy-host", prev.K8sGitProxyHost, c.K8sGitProxyHost)
 	note("k8s-sandbox-service", prev.K8sSandboxService, c.K8sSandboxService)
@@ -1247,6 +1283,7 @@ func (c Config) Budget() model.Budget {
 	budget.DiskFloor = c.DiskFloor()
 	budget.RepairReserve = c.RepairReserve()
 	budget.ClusterFit = c.ClusterFit
+	budget.VMMHeadroom = c.VMMHeadroom
 	return budget
 }
 
@@ -1375,6 +1412,7 @@ func (c Config) AgentShape() model.Commitment {
 // were briefly unreadable at startup gets its budget without a restart.
 func (c Config) withHostCapacity(sandboxes orchestrator.Sandboxes) Config {
 	c.SandboxShapeIgnored = SandboxShapeIgnored(sandboxes)
+	c.VMMHeadroom = sandboxVMMHeadroom(sandboxes)
 	if fit, ok := sandboxes.(model.ClusterFit); ok {
 		c.ClusterFit = fit
 	}
@@ -1458,12 +1496,13 @@ func (c Config) ToModelConfig() model.Config {
 		mc.K8sKubectl = c.K8sKubectl
 	}
 	sandboxImg := firstNonEmpty(c.K8sSandboxImage, c.K8sImage)
-	if sandboxImg != DefaultK8sSandboxImage && sandboxImg != model.DefaultK8sSandboxImage {
+	if sandboxImg != DefaultK8sSandboxImage && !isUnpinnedDefaultK8sSandboxImage(sandboxImg) {
 		mc.K8sSandboxImage = sandboxImg
 	}
-	if c.K8sGranuleImage != DefaultSandboxImage && c.K8sGranuleImage != model.DefaultSandboxImage {
+	if c.K8sGranuleImage != DefaultSandboxImage && !isUnpinnedDefaultSandboxImage(c.K8sGranuleImage) {
 		mc.K8sGranuleImage = c.K8sGranuleImage
 	}
+	mc.SandboxImage = c.CustomSandboxImage
 	mc.SandboxImageMirror = c.SandboxImageMirror
 	if c.K8sWorkspace != model.DefaultK8sWorkspace {
 		mc.K8sWorkspace = c.K8sWorkspace
@@ -1515,9 +1554,18 @@ func (c Config) withLiveModelConfig(mc model.Config) Config {
 	live.GithubHost, live.GithubInsecureHTTP = c.GithubHost, c.GithubInsecureHTTP
 	live.K8sNamespace = c.K8sNamespace
 	live.K8sKubectl = c.K8sKubectl
-	live.K8sImage = c.K8sImage
-	live.K8sSandboxImage = c.K8sSandboxImage
-	live.K8sGranuleImage = c.K8sGranuleImage
+	// A stored Kubernetes image is live only on the backend that creates
+	// pods from it: applySandboxImage hands it to that backend on the next
+	// tick. Any other backend creates nothing from it until a restart
+	// adopts the backend too, so it stays what this process started with
+	// and Settings goes on reporting it as waiting for that restart.
+	if runningBackend != model.SandboxBackendKubernetes {
+		live.K8sImage = c.K8sImage
+		live.K8sSandboxImage = c.K8sSandboxImage
+	}
+	if runningBackend != model.SandboxBackendKubernetesGranule {
+		live.K8sGranuleImage = c.K8sGranuleImage
+	}
 	live.K8sWorkspace = c.K8sWorkspace
 	live.K8sGitProxyHost = c.K8sGitProxyHost
 	live.K8sSandboxService = c.K8sSandboxService

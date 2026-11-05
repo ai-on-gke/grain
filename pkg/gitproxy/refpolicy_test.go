@@ -81,6 +81,7 @@ func TestReadOnlyScopeAuthorizerHoldsAPushToTheRunsOwnBranch(t *testing.T) {
 // has no GitHub branch protection behind it. Only the run's own branch
 // may move; everything else is rejected with the reason printed.
 func TestLocalRepositoryPushesAreHeldToTheRunsOwnBranch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	state := filepath.Join(root, "state")
 	runLocalGit(t, "", "init", "-q", "-b", "main", state)

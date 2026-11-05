@@ -173,6 +173,10 @@ export default function ReportBoard({
   // the address bar.
   tasks = [],
   onOpenTask,
+  // Where a link into the task list goes when it is simply clicked (the
+  // backlog's state counts) -- App's openPanelView, the dashboard's own.
+  // Without it those links are followed as plain hrefs.
+  onOpen,
   showError,
   onMoveSection,
   // The picked window, when the caller keeps it: the Metrics pane and a
@@ -365,7 +369,9 @@ export default function ReportBoard({
               board={board}
               sections={sections}
               report={report}
+              scope={scope}
               onOpenTask={onOpenTask}
+              onOpen={onOpen}
               onMoveSection={onMoveSection}
             />
             <EmptyWindowNote report={report} />
@@ -394,7 +400,9 @@ function ReportSections({
   board,
   sections,
   report,
+  scope,
   onOpenTask,
+  onOpen,
   onMoveSection,
 }) {
   const [dragKey, setDragKey] = useState(null);
@@ -455,7 +463,9 @@ function ReportSections({
               section={section}
               report={report}
               explain={namedSections}
+              scope={scope}
               onOpenTask={onOpenTask}
+              onOpen={onOpen}
               handle={
                 enabled ? (
                   <MoveHandle
@@ -522,7 +532,9 @@ function ReportSection({
   section,
   report,
   explain,
+  scope,
   onOpenTask,
+  onOpen,
   handle,
   grip,
   target,
@@ -576,7 +588,12 @@ function ReportSection({
         )}
       </div>
       <div ref={body}>
-        <Body report={report} onOpenTask={onOpenTask} />
+        <Body
+          report={report}
+          scope={scope}
+          onOpenTask={onOpenTask}
+          onOpen={onOpen}
+        />
       </div>
       {explain && empty && (
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>

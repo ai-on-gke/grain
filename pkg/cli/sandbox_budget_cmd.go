@@ -68,27 +68,38 @@ func sandboxBudget(ctx context.Context, c *ui.HTTPClient) (hostinit.SandboxBudge
 
 // sandboxBudgetView is `grain sandbox-budget -json`.
 type sandboxBudgetView struct {
-	Verdict string         `json:"verdict"`
-	Detail  string         `json:"detail"`
-	Fix     map[string]any `json:"fix,omitempty"`
-	Command string         `json:"command,omitempty"`
+	Verdict           string         `json:"verdict"`
+	Detail            string         `json:"detail"`
+	ConfiguredWorkers int            `json:"configuredWorkers,omitempty"`
+	MaxConcurrent     int            `json:"maxConcurrent,omitempty"`
+	Fix               map[string]any `json:"fix,omitempty"`
+	Command           string         `json:"command,omitempty"`
 }
 
 func sandboxBudgetJSON(v hostinit.SandboxBudgetVerdict) sandboxBudgetView {
-	return sandboxBudgetView{Verdict: sandboxBudgetWord(v), Detail: v.Detail, Fix: v.Fix, Command: v.SettingsCommand()}
+	return sandboxBudgetView{
+		Verdict:           sandboxBudgetWord(v),
+		Detail:            v.Detail,
+		ConfiguredWorkers: v.ConfiguredWorkers,
+		MaxConcurrent:     v.MaxConcurrent,
+		Fix:               v.Fix,
+		Command:           v.SettingsCommand(),
+	}
 }
 
-// sandboxBudgetWord is the verdict's first word: "fits", "unchecked" or
-// "admits-nothing". setup.sh's report_readiness matches on it, so it is
-// part of this command's contract.
+// sandboxBudgetWord is the verdict's first word: "fits", "under-resourced",
+// "unchecked" or "admits-nothing". setup.sh's report_readiness matches on it,
+// so it is part of this command's contract.
 func sandboxBudgetWord(v hostinit.SandboxBudgetVerdict) string {
 	switch {
 	case !v.Checked:
 		return "unchecked"
-	case v.Fits:
-		return "fits"
-	default:
+	case !v.Fits:
 		return "admits-nothing"
+	case v.UnderResourced:
+		return "under-resourced"
+	default:
+		return "fits"
 	}
 }
 

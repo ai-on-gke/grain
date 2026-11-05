@@ -32,7 +32,7 @@ import (
 // before it is released, since what it reads (a container's state, a
 // pod's container statuses, a guest's console) goes with the sandbox.
 //
-// Under auto overcommit (docs/design/auto-overcommit.md) grain admits
+// Under auto overcommit (design/design/auto-overcommit.design.md) grain admits
 // more sandboxes than the host strictly has memory for and lets the
 // kernel pick one off when it is wrong. This is how grain finds out it
 // was one of its own, so that the run is retried as infrastructure
@@ -52,17 +52,26 @@ type SandboxOOMReporter interface {
 // run that has already failed.
 const oomCheckTimeout = 20 * time.Second
 
-// granuleOOM decides whether a granule VM died of OOM from the host's two
-// accounts of it: its VM container's state (granule.DockerContainerExit)
-// and its guest's serial console (granule.DockerContainerLogTail). The
-// VM process being OOM-killed, or killed outright (SIGKILL, exit 137,
-// which is what the host's OOM killer does to it), counts; so does the
-// guest's own kernel saying it killed something for want of memory,
+// granuleOOM decides whether a granule VM died of OOM from the host's
+// three accounts of it: its VM container's cgroup (oom_kill in
+// memory.events, granule.DockerContainerOOMKills, -1 when unreadable),
+// its VM container's state (granule.DockerContainerExit) and its guest's
+// serial console (granule.DockerContainerLogTail). The VMM being killed
+// by its own cgroup's limit -- for host memory, the guest's RAM plus
+// page cache past GranuleMemoryLimitMB -- counts, and is said as such,
+// since it is the one a guest sees only as its connection closing; so
+// does the VM process being OOM-killed, or killed outright (SIGKILL,
+// exit 137, which is what the host's OOM killer does to it); and so does
+// the guest's own kernel saying it killed something for want of memory,
 // which is the same shortage seen from inside the VM.
-func granuleOOM(exit granule.ContainerExit, exitErr error, console string) (string, bool) {
+func granuleOOM(cgroupOOMKills int, exit granule.ContainerExit, exitErr error, console string) (string, bool) {
+	if cgroupOOMKills > 0 {
+		return fmt.Sprintf("the granule VM was killed for host memory: its container's cgroup reached its memory limit "+
+			"and the kernel OOM-killed %d process(es) in it (memory.events oom_kill)", cgroupOOMKills), true
+	}
 	if exitErr == nil {
 		if exit.OOMKilled {
-			return fmt.Sprintf("the granule VM process was OOM-killed (container %s, exit %d)", exit.Status, exit.ExitCode), true
+			return fmt.Sprintf("the granule VM was killed for host memory: its VMM process was OOM-killed (container %s, exit %d)", exit.Status, exit.ExitCode), true
 		}
 		if dockerContainerDead[exit.Status] && exit.ExitCode == 137 {
 			return "the granule VM process was killed (SIGKILL, exit 137)", true
@@ -99,12 +108,20 @@ func (s *granuleSandbox) SandboxOOM(ctx context.Context) (string, bool) {
 	if k.consoleLog != nil {
 		consoleLog = k.consoleLog
 	}
+	oomKills := granule.DockerContainerOOMKills
+	if k.cgroupOOMKills != nil {
+		oomKills = k.cgroupOOMKills
+	}
+	kills, err := oomKills(ctx, s.vmName)
+	if err != nil {
+		kills = -1
+	}
 	exit, exitErr := vmExit(ctx, s.vmName)
 	console, err := consoleLog(ctx, s.vmName)
 	if err != nil {
 		console = ""
 	}
-	how, killed := granuleOOM(exit, exitErr, console)
+	how, killed := granuleOOM(kills, exit, exitErr, console)
 	if line := granule.GuestOOMLine(console); killed && line != "" {
 		log.Printf("orchestrator: sandbox %s: guest console OOM line: %q", s.vmName, truncateOOMLine(line))
 	}
@@ -133,6 +150,20 @@ func (s *containerSandbox) SandboxOOM(ctx context.Context) (string, bool) {
 		return "", false
 	}
 	return containerOOM(out)
+}
+
+// SandboxOOM implements SandboxOOMReporter for a kubernetes-granule pod:
+// its VM container terminated OOMKilled, which is the kubelet's word for
+// the pod's memory limit (GranuleMemoryLimitMB) having been reached --
+// the VMM killed for host memory.
+func (s *k8sGranuleSandbox) SandboxOOM(ctx context.Context) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), oomCheckTimeout)
+	defer cancel()
+	container, killed, err := s.owner.client.OOMKilled(ctx, s.podName)
+	if err != nil || !killed {
+		return "", false
+	}
+	return fmt.Sprintf("the granule VM was killed for host memory: container %s of sandbox pod %s was OOMKilled at the pod's memory limit", container, s.podName), true
 }
 
 // SandboxOOM implements SandboxOOMReporter for a pod: a container whose

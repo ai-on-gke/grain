@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/k8s"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/registryauth"
@@ -143,7 +144,7 @@ func chooseSandboxImage(cfg Config) sandboxImageChoice {
 			log: fmt.Sprintf("grain daemon: sandbox image %s (named by -granule-create-arg, and the same one this build is stamped for)",
 				pinned),
 		}
-	case pinned != "" && imageRepository(pinned) == imageRepository(DefaultSandboxImage):
+	case pinned != "" && installtrack.ResolveLegacyRepository(imageRepository(pinned)) == installtrack.ResolveLegacyRepository(imageRepository(DefaultSandboxImage)):
 		return sandboxImageChoice{
 			image:  DefaultSandboxImage,
 			source: sandboxImageAdopted,
@@ -201,7 +202,7 @@ func withSandboxImageArg(args []string, image string) []string {
 }
 
 // imageRepository is an image reference without its tag or digest --
-// "ghcr.io/bwsalmon/grain/guest" for both of that repository's sha- tags.
+// "docker.io/grainai/sandbox" for both of that repository's sha- tags.
 // It is how chooseSandboxImage tells "another tag of the image this build
 // is stamped for" from "an image published somewhere else entirely".
 //
@@ -333,14 +334,40 @@ func upgradeSandboxImageArgs(cfg Config) []string {
 // to go and change. nil for the host-directory backend, whose sandbox is
 // a directory on this machine and has no image to name.
 func uiSandboxImage(cfg Config) *ui.SandboxImage {
-	if !cfg.GranuleSandboxes {
+	switch {
+	case cfg.DisableNativeSandboxes:
 		return nil
-	}
-	choice := chooseSandboxImage(cfg)
-	return &ui.SandboxImage{
-		Image:    orUnknownImage(choice.image),
-		Expected: DefaultSandboxImage,
-		Pinned:   choice.source == sandboxImagePinnedHere,
+	case cfg.GranuleSandboxes:
+		choice := chooseSandboxImage(cfg)
+		custom := customSandboxImageFor(cfg)
+		return &ui.SandboxImage{
+			Image:    firstNonEmpty(custom, orUnknownImage(choice.image)),
+			Expected: DefaultSandboxImage,
+			Pinned:   custom == "" && choice.source == sandboxImagePinnedHere,
+		}
+	case cfg.K8sGranuleSandboxes:
+		expectedCfg := cfg
+		expectedCfg.CustomSandboxImage = ""
+		expectedCfg.K8sGranuleImage = ""
+		return &ui.SandboxImage{
+			Image:    activeSandboxImageFor(cfg),
+			Expected: EffectiveK8sGranuleImage(expectedCfg),
+		}
+	case cfg.K8sSandboxes:
+		return &ui.SandboxImage{
+			Image:    activeSandboxImageFor(cfg),
+			Expected: EffectiveK8sSandboxImage(Config{K8sSandboxes: true}),
+		}
+	case cfg.ContainerSandboxes:
+		custom := customSandboxImageFor(cfg)
+		stock := stockSandboxImageFor(cfg)
+		return &ui.SandboxImage{
+			Image:    firstNonEmpty(custom, stock),
+			Expected: DefaultK8sSandboxImage,
+			Pinned:   custom == "" && cfg.ContainerImage != "" && cfg.ContainerImage != DefaultK8sSandboxImage && cfg.ContainerImage != model.DefaultK8sSandboxImage && cfg.ContainerImage != model.LegacyDefaultK8sSandboxImage,
+		}
+	default:
+		return nil
 	}
 }
 
@@ -355,10 +382,14 @@ func uiSandboxImage(cfg Config) *ui.SandboxImage {
 // disagree -- and "" for the host-directory backend, whose sandbox is a
 // directory with no image to attribute to any repository.
 func sandboxGuestImage(cfg Config) string {
-	if !cfg.GranuleSandboxes {
+	switch {
+	case cfg.DisableNativeSandboxes:
+		return ""
+	case cfg.GranuleSandboxes, cfg.K8sGranuleSandboxes:
+		return activeSandboxImageFor(cfg)
+	default:
 		return ""
 	}
-	return chooseSandboxImage(cfg).image
 }
 
 // sandboxImagePin is upgrade.ImageConfig.SandboxImagePin: the sandbox
@@ -389,13 +420,17 @@ func sandboxImagePin(cfg Config) string {
 // (or flag-pinned) guest on granule, the backend's own image setting
 // otherwise. "" for a backend with no image at all (host, none).
 func stockSandboxImageFor(cfg Config) string {
+	cfg.CustomSandboxImage = ""
 	switch {
 	case cfg.DisableNativeSandboxes:
 		return ""
 	case cfg.GranuleSandboxes:
 		return chooseSandboxImage(cfg).image
 	case cfg.ContainerSandboxes:
-		return cfg.ContainerImage
+		if cfg.ContainerImage == model.LegacyDefaultK8sSandboxImage {
+			return DefaultK8sSandboxImage
+		}
+		return firstNonEmpty(cfg.ContainerImage, DefaultK8sSandboxImage)
 	case cfg.K8sSandboxes:
 		return EffectiveK8sSandboxImage(cfg)
 	case cfg.K8sGranuleSandboxes:
@@ -434,7 +469,7 @@ func customSandboxImageFor(cfg Config) string {
 			return ""
 		}
 	case cfg.ContainerSandboxes:
-		if cfg.ContainerImage != "" && cfg.ContainerImage != DefaultK8sSandboxImage && cfg.ContainerImage != model.DefaultK8sSandboxImage {
+		if cfg.ContainerImage != "" && cfg.ContainerImage != DefaultK8sSandboxImage && cfg.ContainerImage != model.DefaultK8sSandboxImage && cfg.ContainerImage != model.LegacyDefaultK8sSandboxImage {
 			return ""
 		}
 	case cfg.K8sSandboxes, cfg.K8sGranuleSandboxes:
@@ -466,52 +501,69 @@ func imageTag(ref string) string {
 //
 // An explicit cfg.SandboxImageMirror (-sandbox-image-mirror /
 // grain_config.sandbox_image_mirror) always wins. Otherwise, on a
-// kubernetes-granule deployment whose k8s_granule_image or sandbox_image
-// names a bare Artifact Registry / GCR repository in another GCP project
+// kubernetes-granule deployment whose k8s_granule_image or -sandbox-image
+// flag names a bare Artifact Registry / GCR repository in another GCP project
 // (e.g. "us-docker.pkg.dev/<project>/grain/guest") or a "sha-" guest tag in
 // another project's ".../guest" repository, that repository is derived as the
 // mirror target so upgrades automatically advance the mirrored guest image
-// instead of staying pinned to an older commit's digest.
+// instead of staying pinned to an older commit's digest. Settings shows a
+// derived one, and a save clearing the setting it came from writes it
+// into sandbox_image_mirror (ui's keepDerivedSandboxImageMirror), since
+// the setting is then ignored as an image and load-bearing as the mirror.
 func sandboxImageMirrorRepo(cfg Config) string {
 	if mirror := strings.TrimSpace(cfg.SandboxImageMirror); mirror != "" {
 		return imageRepository(mirror)
 	}
-	if !cfg.K8sGranuleSandboxes {
-		return ""
-	}
-	stampedRepo := imageRepository(DefaultSandboxImage)
-	for _, candidate := range []string{cfg.K8sGranuleImage, cfg.CustomSandboxImage, cfg.SandboxImage} {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" {
-			continue
-		}
-		repo := imageRepository(candidate)
-		_, project, _ := k8s.ImageRegistryProject(repo)
-		if repo == "" || repo == stampedRepo || project == "" {
-			continue
-		}
-		tag := imageTag(candidate)
-		if candidate == repo || (strings.HasSuffix(repo, "/guest") && strings.HasPrefix(tag, "sha-")) {
-			return repo
-		}
+	if hint, ok := derivedSandboxImageMirror(cfg); ok {
+		return hint.Repository
 	}
 	return ""
+}
+
+// derivedSandboxImageMirror is the setting sandboxImageMirrorRepo
+// derives cfg's mirror repository from when no sandbox_image_mirror
+// names one -- the same rule `grain state check` and the Settings pane
+// apply (sandboximage.DerivedMirror) -- and false when cfg has an
+// explicit mirror, is not kubernetes-granule, or names nothing to derive
+// one from.
+func derivedSandboxImageMirror(cfg Config) (sandboximage.MirrorHint, bool) {
+	if strings.TrimSpace(cfg.SandboxImageMirror) != "" || !cfg.K8sGranuleSandboxes {
+		return sandboximage.MirrorHint{}, false
+	}
+	return sandboximage.DerivedMirror(cfg.K8sGranuleImage, cfg.SandboxImage, imageRepository(DefaultSandboxImage))
 }
 
 // isMirroredGuestRef reports whether ref is the bare mirror repository or a
 // mirrored guest tag ("sha-..." or matching DefaultSandboxImage's tag) inside
 // mirrorRepo.
 func isMirroredGuestRef(ref, mirrorRepo string) bool {
-	ref = strings.TrimSpace(ref)
-	mirrorRepo = imageRepository(strings.TrimSpace(mirrorRepo))
-	if ref == "" || mirrorRepo == "" {
-		return false
+	return sandboximage.IsMirroredGuestRef(ref, mirrorRepo, imageTag(DefaultSandboxImage))
+}
+
+// sandboxImageMirrorForSettings is ui.Config.SandboxImageMirrorFor: the
+// mirror repository a daemon started on mc would mirror the stamped
+// guest into, where that repository comes from, and which of mc's image
+// settings it then reads as the mirror rather than as an image.
+//
+// It is the restart's view -- mc's own backend and k8s_granule_image,
+// laid over running -- because that is what a save is about to make
+// true: k8s_granule_image is restart-only, so a cleared pin keeps its
+// derived mirror only until the next restart, which is exactly the
+// change the Settings pane has to see coming.
+func sandboxImageMirrorForSettings(running Config, mc model.Config) ui.SandboxImageMirrorInfo {
+	cfg := running.WithModelConfig(mc)
+	info := ui.SandboxImageMirrorInfo{
+		KubernetesGranule: cfg.K8sGranuleSandboxes,
+		Repository:        sandboxImageMirrorRepo(cfg),
 	}
-	if imageRepository(ref) != mirrorRepo {
-		return false
+	if hint, ok := derivedSandboxImageMirror(cfg); ok {
+		info.DerivedFrom = hint.Field
 	}
-	tag := imageTag(ref)
-	return tag == "" || strings.HasPrefix(tag, "sha-") || tag == imageTag(DefaultSandboxImage)
+	if info.Repository != "" && cfg.K8sGranuleSandboxes {
+		info.K8sGranuleImageIsMirror = isMirroredGuestRef(mc.K8sGranuleImage, info.Repository)
+		info.SandboxImageIsMirror = isMirroredGuestRef(mc.SandboxImage, info.Repository)
+	}
+	return info
 }
 
 var (
@@ -521,6 +573,9 @@ var (
 	sandboxMirrorDockerCmd   = []string{"docker"}
 	sandboxMirrorTokenSource = registryauth.Token
 	mirrorSandboxImageFunc   = defaultMirrorSandboxImage
+	// cleanMirroredSandboxImagesFunc runs after every mirror that
+	// succeeded; tests replace it.
+	cleanMirroredSandboxImagesFunc = cleanOldMirroredSandboxImages
 	// sandboxMirrorRegistryDigest is what the mirror registry answers
 	// for a tag; tests replace it.
 	sandboxMirrorRegistryDigest = upgrade.RegistryManifestDigest
@@ -555,8 +610,9 @@ func mirroredSandboxImageIfKnown(sourceRef, mirrorRepo string) string {
 // resolveOrMirrorSandboxImage resolves the mirrored guest image reference in
 // mirrorRepo corresponding to sourceRef (pulling sourceRef, tagging and
 // pushing it to mirrorRepo, and pinning to mirrorRepo's RepoDigest when local
-// docker is available).
-func resolveOrMirrorSandboxImage(ctx context.Context, sourceRef, mirrorRepo string) string {
+// docker is available). After a mirror that succeeded, local tags of older
+// mirrored images are removed (cleanOldMirroredSandboxImages).
+func resolveOrMirrorSandboxImage(ctx context.Context, cfg Config, sourceRef, mirrorRepo string) string {
 	mirrorRepo = imageRepository(strings.TrimSpace(mirrorRepo))
 	targetTagRef := upgrade.MirrorSandboxRef(sourceRef, mirrorRepo)
 	if targetTagRef == "" {
@@ -587,17 +643,26 @@ func resolveOrMirrorSandboxImage(ctx context.Context, sourceRef, mirrorRepo stri
 	mirroredSandboxImagesMu.Lock()
 	mirroredSandboxImages[cacheKey] = pinned
 	mirroredSandboxImagesMu.Unlock()
+	cleanMirroredSandboxImagesFunc(ctx, cfg, sourceRef, mirrorRepo, targetTagRef)
 	return pinned
 }
 
-func defaultMirrorSandboxImage(ctx context.Context, sourceRef, mirrorRepo, targetTagRef string) (string, error) {
+// sandboxMirrorUsesDocker reports whether mirroring runs real docker
+// commands on this host, rather than handing back the target tag
+// untouched (local test sandboxes, no docker installed).
+func sandboxMirrorUsesDocker() bool {
 	if LocalSandboxes != nil && slices.Equal(sandboxMirrorDockerCmd, []string{"docker"}) {
-		return targetTagRef, nil
+		return false
 	}
 	if len(sandboxMirrorDockerCmd) == 0 {
-		return targetTagRef, nil
+		return false
 	}
-	if _, err := exec.LookPath(sandboxMirrorDockerCmd[0]); err != nil {
+	_, err := exec.LookPath(sandboxMirrorDockerCmd[0])
+	return err == nil
+}
+
+func defaultMirrorSandboxImage(ctx context.Context, sourceRef, mirrorRepo, targetTagRef string) (string, error) {
+	if !sandboxMirrorUsesDocker() {
 		return targetTagRef, nil
 	}
 

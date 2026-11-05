@@ -14,7 +14,7 @@
 
 package installer
 
-// The Google-track install shape (docs/design/cli-run-location.md, "Host
+// The Google-track install shape (design/design/cli-run-location.design.md, "Host
 // CLIs through grain hostd"): the daemon in the release container, and
 // agy -- and a `run: host` capability server -- on the bare machine
 // through grain hostd, as the installing user. Host mode is gone (task
@@ -451,7 +451,7 @@ func TestGoogleTrackRunsAgyThroughHostdAndMigratesFromHostMode(t *testing.T) {
 	})
 
 	// 6b'. A detached claude -- the image's claude through hostd's
-	// container-equivalent entry (docs/non-disruptive-upgrade.md, "Which
+	// container-equivalent entry (design/design/non-disruptive-upgrade.design.md, "Which
 	// substrate carries which CLI") -- outlives a daemon upgrade the same
 	// way: the same process, one attempt, every line of its stream once.
 	// It runs on the host with the container's HOME. The extracted claude
@@ -583,6 +583,8 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"fake claud
 # after grain codex-detached has started the MCP HTTP endpoint and written
 # $CODEX_HOME/config.toml.
 case "$1" in --version) echo "codex-cli %[3]s"; exit 0 ;; esac
+# The model catalog grain strips apply_patch from before every run.
+[ "$1 $2" = "debug models" ] && { echo '{"models":[{"slug":"gpt-test"}]}'; exit 0; }
 cat > /dev/null
 c=false; [ -e /.dockerenv ] && c=true
 echo "uid=$(id -u) in_container=$c home=$HOME codex_home=$CODEX_HOME auth_link=$(readlink "$CODEX_HOME/auth.json")" > %[2]q
@@ -742,6 +744,11 @@ echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
 		if got := strings.TrimSpace(sudoRead(report + ".pid")); got != pid {
 			t.Fatalf("the fake agy was started again (pid %s, then %s)", pid, got)
 		}
+		// The run filed during the cutover is seen to start, not to end:
+		// left running into the rollback below, it is a run on the
+		// upgraded hostd that that cutover has to wait out (drain_cap is an
+		// hour), and the rollback times out on this subtest's leftover.
+		f.waitForFinished(t, ctx, during)
 		f.waitForHostdOn(t, d, upgraded)
 	})
 
@@ -769,15 +776,34 @@ echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
 		task := f.start(t, ctx, model.AgentFrameworkAntigravity, "fake agy that never ends, across a hostd upgrade", "mode=hang report="+report)
 		defer f.client.Close(ctx, task, ui.CloseOptions{})
 		pids := f.waitForPids(t, report)
+		since := fmt.Sprintf("@%d", time.Now().Unix())
+		journal := func() string {
+			return sudo("journalctl", "-u", "grain-hostd.service", "-u", "grain-hostd-upgrade.service",
+				"--since", since, "--no-pager").stdout
+		}
 		f.extractHostd(t, next)
 		upgraded := f.hostdVersion(t)
+		// The cap the drain counts is the one hostd logs as it starts: a
+		// drain that never started, or one on another cap, fails here
+		// saying so rather than as a run still going 90 s on.
+		waitFor(t, "hostd to start cutting over with the allowlist's drain_cap", 30*time.Second, func() error {
+			if log := journal(); !strings.Contains(log, "cutting over to a new build") || !strings.Contains(log, "drain_cap 20s") {
+				return fmt.Errorf("hostd's journal since the upgrade:\n%s", tail(log, 3000))
+			}
+			return nil
+		})
 		time.Sleep(5 * time.Second)
 		if err := gone(pids); err == nil {
 			t.Fatalf("the stuck agy was killed at the start of the drain, not at its cap")
 		}
-		waitFor(t, "hostd to cancel the stuck agy at the drain cap", 90*time.Second, func() error { return gone(pids) })
+		waitFor(t, "hostd to cancel the stuck agy at the drain cap", 90*time.Second, func() error {
+			if err := gone(pids); err != nil {
+				return fmt.Errorf("%v; hostd's journal since the upgrade:\n%s", err, tail(journal(), 3000))
+			}
+			return nil
+		})
 		if log := sudo("journalctl", "-u", "grain-hostd.service", "-n", "300", "--no-pager").stdout; !strings.Contains(log, "drain cap 20s reached") {
-			t.Errorf("hostd's journal does not say it cancelled at the drain cap:\n%s", tail(log, 30))
+			t.Errorf("hostd's journal does not say it cancelled at the drain cap:\n%s", tail(log, 3000))
 		}
 		f.waitForHostdOn(t, d, upgraded)
 	})
@@ -1226,7 +1252,11 @@ func (f *hostdFixture) waitForHostdOn(t *testing.T, d *deployment, version strin
 			return errors.New("grain-hostd.service has no main process")
 		}
 		if exe := strings.TrimSpace(sudo("readlink", "/proc/"+pid+"/exe").stdout); exe != want {
-			return fmt.Errorf("hostd (pid %s) runs %s, want %s", pid, exe, want)
+			// What it still holds, and what it and the upgrade unit last
+			// said: a cutover waiting on a run, or one never asked for.
+			journal := sudo("journalctl", "-u", "grain-hostd.service", "-u", "grain-hostd-upgrade.service", "-n", "40", "--no-pager").stdout
+			return fmt.Errorf("hostd (pid %s) runs %s, want %s; hostd -status: %s\nhostd's journal:\n%s",
+				pid, exe, want, strings.TrimSpace(f.hostdStatus(t, d)), journal)
 		}
 		if st := f.hostdStatus(t, d); !strings.HasPrefix(st, "answering on ") || strings.Contains(st, "draining") {
 			return fmt.Errorf("hostd says %q", st)

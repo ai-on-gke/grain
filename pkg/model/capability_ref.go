@@ -28,7 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
-// This file is how a capability reference (docs/capabilities-spec.md
+// This file is how a capability reference (design/spec/capabilities/capabilities.spec.md
 // §2.1-§2.3) is carried by the grant lists grain already has: a
 // Grant.Capability, a Config.DefaultCapabilities entry, a declaration's
 // capabilities: list, propose_task's capabilities argument. Each holds a
@@ -113,6 +113,62 @@ func CheckCapabilityGrantSyntax(s string) error {
 	return err
 }
 
+// CheckGCPKeyGrantArgs refuses the removed "account" and "activate" grant
+// arguments on https://grain.dev/capabilities/gcp#gcp-key (and any server
+// alias whose canonical ID is GCPCapabilityServerID), directing callers to
+// "permission_set".
+func CheckGCPKeyGrantArgs(spec protocol.GrantSpec, resolvedServerID string) error {
+	if len(spec.With) == 0 {
+		return nil
+	}
+	ref, err := protocol.ParseRef(spec.Capability)
+	if err != nil {
+		return nil
+	}
+	if ref.CapabilityID != GCPCapabilityServerID && resolvedServerID != GCPCapabilityServerID {
+		return nil
+	}
+	if ref.Method != "" && ref.Method != GCPKeyMethod {
+		return nil
+	}
+	if _, hasAccount := spec.With["account"]; hasAccount {
+		return fmt.Errorf("capability %s: args.account: \"account\" was removed; use \"permission_set\"", spec.Capability)
+	}
+	if _, hasActivate := spec.With["activate"]; hasActivate {
+		return fmt.Errorf("capability %s: args.activate: \"activate\" was removed; a primary key is always activated (use \"permission_set\" and \"primary\")", spec.Capability)
+	}
+	return nil
+}
+
+// CheckCapabilityGrantArgsOffline runs CheckCapabilityGrantSyntax plus
+// offline argument checks for built-in methods whose deprecated arguments
+// have been removed.
+func CheckCapabilityGrantArgsOffline(s string) error {
+	spec, err := CapabilityGrantSpec(s)
+	if err != nil {
+		return err
+	}
+	if _, err := protocol.ParseRef(spec.Capability); err != nil {
+		return err
+	}
+	return CheckGCPKeyGrantArgs(spec, "")
+}
+
+func resolvedServerIDOf(capability string, lookup protocol.Lookup) string {
+	if lookup == nil {
+		return ""
+	}
+	ref, err := protocol.ParseRef(capability)
+	if err != nil {
+		return ""
+	}
+	srv, err := lookup(ref.CapabilityID)
+	if err != nil || srv == nil {
+		return ""
+	}
+	return srv.ID
+}
+
 // NormalizeCapabilityNames validates every reference among names against
 // its server (protocol.Normalize, §4.2.1) and returns names with each
 // reference replaced by its recorded form, duplicates dropped, first
@@ -141,13 +197,16 @@ func NormalizeCapabilityNames(names []string, lookup protocol.Lookup) ([]string,
 
 func normalizeCapabilityRef(s string, lookup protocol.Lookup) (string, error) {
 	if lookup == nil {
-		if err := CheckCapabilityGrantSyntax(s); err != nil {
+		if err := CheckCapabilityGrantArgsOffline(s); err != nil {
 			return "", err
 		}
 		return strings.TrimSpace(s), nil
 	}
 	spec, err := CapabilityGrantSpec(s)
 	if err != nil {
+		return "", err
+	}
+	if err := CheckGCPKeyGrantArgs(spec, resolvedServerIDOf(spec.Capability, lookup)); err != nil {
 		return "", err
 	}
 	grants, err := protocol.Normalize([]protocol.GrantSpec{spec}, lookup)
@@ -191,6 +250,9 @@ func CapabilityGrants(grants []Grant, lookup protocol.Lookup) ([]protocol.Grant,
 		}
 		spec, err := CapabilityGrantSpec(g.Capability)
 		if err != nil {
+			return nil, err
+		}
+		if err := CheckGCPKeyGrantArgs(spec, resolvedServerIDOf(spec.Capability, lookup)); err != nil {
 			return nil, err
 		}
 		specs = append(specs, spec)
@@ -351,7 +413,7 @@ func splitCapabilities(s string) []string {
 }
 
 // CapabilityPolicy is the deployment's admission policy for capability
-// references (docs/capabilities-spec.md §4.2.2): which repositories, run
+// references (design/spec/capabilities/capabilities.spec.md §4.2.2): which repositories, run
 // kinds and trigger events may hold which <capability_id>#<method>. It is
 // grain's own configuration (Config.CapabilityPolicy), never anything a
 // capability server advertises.
@@ -417,6 +479,12 @@ const (
 	// the kind and refuses others, depending on the repository or
 	// trigger event.
 	CapabilityPolicyMayBeRefused CapabilityPolicyVerdict = "may_be_refused"
+	// CapabilityPolicyCIOnly means the reference is a CI capability
+	// (CIOnlyRefusal) that no run of the kind may hold, whatever the
+	// policy says: the refusal is grain's own rule, so a picker words it
+	// as that rather than sending the operator to a policy with no rule
+	// to change.
+	CapabilityPolicyCIOnly CapabilityPolicyVerdict = "ci_only"
 )
 
 // CapabilitySubject is the run a grant is admitted for.
@@ -427,6 +495,9 @@ type CapabilitySubject struct {
 	Event string
 	// Untrusted is a trigger carrying untrusted input (§4.2.2).
 	Untrusted bool
+	// TrustedSchedule is a CI run grain itself fired from a workflow's
+	// cron (ci.Request.TrustedSchedule), which a CIGrantRule may admit.
+	TrustedSchedule bool
 }
 
 // Validate reports a rule that can never match as written.
@@ -461,10 +532,25 @@ func (p CapabilityPolicy) Validate() error {
 // either, so adopting a hand-added entry under its canonical id keeps
 // every allow and deny rule that named the old id in effect.
 func (p CapabilityPolicy) Permits(g string, s CapabilitySubject, servers ...map[string]protocol.ServerConfig) error {
+	// A retired name whose reference carries a CI rule is judged as
+	// that reference: the rule is the whole of when it may be held.
+	if _, ok := CIGrantRuleFor(g); ok {
+		g = CanonicalLegacyGrant(g)
+	}
 	if !IsCapabilityRef(g) {
 		return nil
 	}
 	ref := CapabilityGrantRef(g)
+	if s.Kind != "" && s.Kind != CapabilityRunCI && (ref == RepoReadRef || IsRepoAccessGrant(g)) {
+		return fmt.Errorf("%s", CIOnlyRefusal(g))
+	}
+	// The rule a capability's own server declared (CIGrantRule) comes
+	// before every policy rule: a policy may narrow it, never widen it.
+	if s.Kind != "" {
+		if reason := CIGrantRuleRefusal(g, s); reason != "" {
+			return fmt.Errorf("%s", reason)
+		}
+	}
 	refs := equivalentCapabilityRefs(ref, servers)
 	for i, r := range p.Rules {
 		if !r.Deny || !r.namesAny(refs) {
@@ -495,8 +581,9 @@ func (p CapabilityPolicy) Permits(g string, s CapabilitySubject, servers ...map[
 
 // VerdictForKind reports what p does to a grant of ref for a trusted run
 // of kind when the repository and trigger event are not yet known:
-// CapabilityPolicyDenied when every run of that kind is refused,
-// CapabilityPolicyMayBeRefused when a repository- or event-dependent rule
+// CapabilityPolicyCIOnly when ref is a CI capability no run of that kind
+// may hold (before any rule is looked at), CapabilityPolicyDenied when
+// every run of that kind is refused, CapabilityPolicyMayBeRefused when a repository- or event-dependent rule
 // may refuse it, or CapabilityPolicyAllowed when every trusted run of
 // that kind is admitted.
 func (p CapabilityPolicy) VerdictForKind(ref, kind string, servers ...map[string]protocol.ServerConfig) CapabilityPolicyVerdict {
@@ -504,6 +591,12 @@ func (p CapabilityPolicy) VerdictForKind(ref, kind string, servers ...map[string
 		return CapabilityPolicyAllowed
 	}
 	ref = CapabilityGrantRef(ref)
+	if kind != "" && kind != CapabilityRunCI && ref == RepoReadRef {
+		return CapabilityPolicyCIOnly
+	}
+	if _, ok := CIGrantRuleFor(ref); ok && kind != "" && kind != CapabilityRunCI {
+		return CapabilityPolicyCIOnly
+	}
 	refs := equivalentCapabilityRefs(ref, servers)
 	allOfKind := CapabilitySubject{Kind: kind}
 	anyDeny := false
@@ -666,8 +759,11 @@ func (r CapabilityPolicyRule) covers(s CapabilitySubject) bool {
 
 func (s CapabilitySubject) describe() string {
 	out := s.Kind
-	if out == "" {
+	switch out {
+	case "":
 		out = "run"
+	case CapabilityRunCI:
+		out = "CI job"
 	}
 	if s.Repo != nil {
 		out += " on " + s.Repo.Owner + "/" + s.Repo.Name
@@ -738,8 +834,10 @@ func recordedCapabilityGrant(s string) (protocol.Grant, bool) {
 func UncoveredCapabilityRefs(child, parent []Grant) []string {
 	var held []protocol.Grant
 	for _, g := range parent {
-		if pg, ok := recordedCapabilityGrant(g.Capability); ok {
-			held = append(held, pg)
+		for _, c := range CanonicalLegacyGrants(g.Capability) {
+			if pg, ok := recordedCapabilityGrant(c); ok {
+				held = append(held, pg)
+			}
 		}
 	}
 	var asked []protocol.Grant

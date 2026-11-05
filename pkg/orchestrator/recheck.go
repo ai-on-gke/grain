@@ -292,7 +292,7 @@ func startCIRecheck(ctx context.Context, deps Deps, task model.Task, status mode
 
 // startChannelLostRecheck re-runs, once and uncached, the jobs of a task's
 // errored required run that lost their sandbox channel
-// (sandboxaccess.ChannelLostFault, docs/design/grain-on-gke.md#GKE-3). The
+// (sandboxaccess.ChannelLostFault, design/design/grain-on-gke.design.md#GKE-3). The
 // run said nothing about the tree, so the answer is another sample now
 // rather than ciReplacementFor's whole-suite replacement ciRetryDelay later.
 // The merge rules' flake_recheck does not apply: nothing flaked. A commit is

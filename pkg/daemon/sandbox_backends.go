@@ -116,7 +116,7 @@ func K8sGitProxyHostOrPodIP(flagValue string) string {
 //
 // The address has to outlive this pod. A run pod survives a rollout of
 // the daemon Deployment and is adopted by the next daemon pod
-// (docs/non-disruptive-upgrade.md, Stage 2b), and its sandbox was handed
+// (design/design/non-disruptive-upgrade.design.md, Stage 2b), and its sandbox was handed
 // its URLs once, when it was created: this pod's IP is gone after the
 // roll, and the Service's cluster IP is not. The port block
 // (-sandbox-port-base) is what keeps the port half of those URLs.
@@ -229,14 +229,22 @@ func EffectiveK8sGitProxyHost(cfg Config) string {
 	return cfg.ContainerGitProxyHost
 }
 
+func isUnpinnedDefaultK8sSandboxImage(ref string) bool {
+	return ref == model.DefaultK8sSandboxImage || ref == model.LegacyDefaultK8sSandboxImage
+}
+
+func isUnpinnedDefaultSandboxImage(ref string) bool {
+	return ref == model.DefaultSandboxImage || ref == model.LegacyDefaultSandboxImage
+}
+
 // EffectiveK8sSandboxImage resolves the container image for kubernetes sandbox
 // pods, falling back to DefaultK8sSandboxImage (or the version-pinned default)
 // when unset.
 func EffectiveK8sSandboxImage(cfg Config) string {
-	if cfg.K8sSandboxImage != "" {
+	if cfg.K8sSandboxImage != "" && (!isUnpinnedDefaultK8sSandboxImage(cfg.K8sSandboxImage) || (DefaultK8sSandboxImage == model.DefaultK8sSandboxImage && cfg.K8sSandboxImage != model.LegacyDefaultK8sSandboxImage)) {
 		return cfg.K8sSandboxImage
 	}
-	if cfg.K8sImage != "" {
+	if cfg.K8sImage != "" && (!isUnpinnedDefaultK8sSandboxImage(cfg.K8sImage) || (DefaultK8sSandboxImage == model.DefaultK8sSandboxImage && cfg.K8sImage != model.LegacyDefaultK8sSandboxImage)) {
 		return cfg.K8sImage
 	}
 	if DefaultK8sSandboxImage != model.DefaultK8sSandboxImage {
@@ -252,7 +260,7 @@ func EffectiveK8sSandboxImage(cfg Config) string {
 // configured.
 func EffectiveK8sGranuleImage(cfg Config) string {
 	return effectiveK8sGranuleImage(cfg, func(base, mirrorRepo string) string {
-		return resolveOrMirrorSandboxImage(context.Background(), base, mirrorRepo)
+		return resolveOrMirrorSandboxImage(context.Background(), cfg, base, mirrorRepo)
 	})
 }
 
@@ -289,7 +297,7 @@ func effectiveK8sGranuleImage(cfg Config, mirror func(base, mirrorRepo string) s
 		// own arrives here with the stamp in K8sGranuleImage: that is
 		// the image to mirror, not a pin that opts out of the mirror.
 		pinned := cfg.K8sGranuleImage
-		if pinned == DefaultSandboxImage || pinned == model.DefaultSandboxImage || pinned == base {
+		if pinned == DefaultSandboxImage || isUnpinnedDefaultSandboxImage(pinned) || pinned == base {
 			pinned = ""
 		}
 		if pinned != "" && !isMirroredGuestRef(pinned, mirrorRepo) {
@@ -297,7 +305,7 @@ func effectiveK8sGranuleImage(cfg Config, mirror func(base, mirrorRepo string) s
 		}
 		return mirror(base, mirrorRepo)
 	}
-	if cfg.K8sGranuleImage != "" {
+	if cfg.K8sGranuleImage != "" && (!isUnpinnedDefaultSandboxImage(cfg.K8sGranuleImage) || (DefaultSandboxImage == model.DefaultSandboxImage && cfg.K8sGranuleImage != model.LegacyDefaultSandboxImage)) {
 		return cfg.K8sGranuleImage
 	}
 	return base
@@ -360,7 +368,7 @@ func (c Config) hasStartupSandboxPlumbing() bool {
 const (
 	HostSandboxesUsage = "dispatch each run into its own plain directory under -sandbox-dir on this host, with NO isolation: runs " +
 		"execute as this daemon's user, with this host's tools and network. For a single-user workstation; " +
-		"refused on a daemon others can reach (a non-loopback -ui-addr, -executor-addr, IAP, -run-host-image) " +
+		"refused on a daemon others can reach (a non-loopback -ui-addr, IAP, -run-host-image) " +
 		"unless -allow-unisolated-host-sandboxes is also passed"
 	AllowUnisolatedHostSandboxesUsage = "let -host-sandboxes start on a daemon others can reach, accepting that everyone " +
 		"who can file a task there may run anything on this host as this daemon's user"
@@ -431,8 +439,8 @@ var urlPassword = regexp.MustCompile(`://[^/\s@:]*:[^/\s@]*@`)
 // network. That is the point of it on a single-user workstation, where
 // the agent is meant to reach the same compilers, CLIs and proxies its
 // owner does. It is also why it does not start on a daemon that is
-// plainly shared -- one whose UI listens beyond loopback, which takes
-// remote executors, sits behind IAP, or hands its runs to run hosts or a
+// plainly shared -- one whose UI listens beyond loopback, sits behind
+// IAP, or hands its runs to run hosts or a
 // cluster -- unless the operator says, with
 // -allow-unisolated-host-sandboxes, that every person who can file a
 // task there may run anything on this host. Local policy then
@@ -515,9 +523,6 @@ func hostSandboxSharingFlags(cfg Config) []string {
 	var shared []string
 	if cfg.UiAddr != "" && !loopbackListenAddr(cfg.UiAddr) {
 		shared = append(shared, fmt.Sprintf("-ui-addr %s", cfg.UiAddr))
-	}
-	if cfg.ExecutorAddr != "" {
-		shared = append(shared, "-executor-addr")
 	}
 	if cfg.IapBackendService != "" || cfg.IapResource != "" {
 		shared = append(shared, "IAP")
@@ -628,6 +633,11 @@ func (c Config) sandboxBackendAvailability(backend model.SandboxBackend) (bool, 
 		// this daemon is a workstation's own.
 		if !c.HostSandboxes && !c.startupHostSandboxes {
 			return false, "needs -host-sandboxes at daemon startup"
+		}
+		// Nor with run hosts, which are not given a host sandbox
+		// (CheckRunHostBackend).
+		if c.RunHostImage != "" {
+			return false, "not available when run hosts (-run-host-image) are enabled"
 		}
 		if c.SandboxDir == "" {
 			return false, "needs a sandbox directory (-sandbox-dir)"

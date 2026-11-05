@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # The release train: release grain from main after a staging soak
-# (docs/design/release-from-trunk.md, RFT-6; docs/release-candidate-management.md).
+# (design/design/release-from-trunk.design.md, RFT-6; docs/release-candidate-management.md).
 #
 # Once a day it runs scripts/release-from-trunk.sh, which does two
 # idempotent things and stops:
@@ -53,8 +53,10 @@
 name: release-train
 
 on:
-  schedule:
-    - cron: "15 4 * * *"
+  # Retired from automatic schedule triggering: ai-on-gke/grain's release
+  # train is the grain task filed from .grain/templates/release-train.yml
+  # (releases playbook §0.4); .github/workflows/release-train.yml is an
+  # always-dry dispatch.
   workflow_dispatch:
 
 jobs:

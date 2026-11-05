@@ -27,8 +27,8 @@ import (
 // of mergers and ordinary work, passes a pipeline pause other than an
 // upgrade's own hold, is never parked behind a red base branch's repair,
 // and is not held by a provider connection's concurrency limit. It still
-// charges the sandbox budget, on the same exception policy a session's
-// does (Limits.AdmitDirectorSandboxShape).
+// charges the sandbox budget, on the same priority policy a session's
+// does (Limits.AdmitDirectorSandboxShape, Budget.AdmitsPriority).
 //
 // Only a person may grant it (IsPersonOnlyGrant): it lets the task jump
 // the queue, so an agent can neither attach it to work it files nor pass
@@ -42,7 +42,7 @@ import (
 const PriorityDispatchCapability = "priority-dispatch"
 
 // DurableCapability is the grant that makes a task durable
-// (docs/design/durable-tasks.md#DT-1, docs/capabilities.md's durable): a
+// (design/design/durable-tasks.design.md#DT-1, docs/capabilities.md's durable): a
 // run of it has no wall-clock deadline and no wait-credit cap, is
 // suspended by an idle watchdog rather than ended by a clock, counts
 // under the deployment's durable-run ceiling (Limits.Durable) rather than
@@ -175,7 +175,7 @@ func (s *Store) HasPriorityDispatch(ctx context.Context, taskID string) (bool, e
 
 // DurableCeilingSubject is the notification subject raised when a durable
 // task cannot start because Limits.Durable is full
-// (docs/design/durable-tasks.md#DT-5).
+// (design/design/durable-tasks.design.md#DT-5).
 func DurableCeilingSubject(team string) string { return "durable.ceiling:" + team }
 
 // DurableSetupFailingSubject is the notification subject raised when a

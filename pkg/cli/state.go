@@ -430,6 +430,10 @@ func stateSync(ctx context.Context, dataDir string) error {
 // in-place Upgrade button, a binary swapped by hand -- where nothing has
 // moved a store aside and nobody has said anything to the next start.
 func stateReformat(dataDir string) error {
+	return stateReformatTo(dataDir, os.Stdout)
+}
+
+func stateReformatTo(dataDir string, out io.Writer) error {
 	dir := daemon.StateRepoDir(dataDir)
 	// A repository already at this build's schema is not one to authorise
 	// anything against. The stamp is read once and cleared, but a stamp
@@ -437,7 +441,7 @@ func stateReformat(dataDir string) error {
 	// until some later schema change found it and took it for consent.
 	if staterepo.HasDump(dir) {
 		if found, err := staterepo.ReadSchemaVersion(dir); err == nil && found == model.SchemaVersion {
-			fmt.Printf("%s already holds a dump at schema %d, which is what this build knows -- "+
+			fmt.Fprintf(out, "%s already holds a dump at schema %d, which is what this build knows -- "+
 				"nothing to reformat, and nothing written\n", dir, model.SchemaVersion)
 			return nil
 		}
@@ -453,15 +457,18 @@ func stateReformat(dataDir string) error {
 	if err := os.WriteFile(stamp, []byte(note), 0o600); err != nil {
 		return fmt.Errorf("writing %s: %w", stamp, err)
 	}
-	fmt.Printf("wrote %s\n\n", stamp)
-	fmt.Printf("The next start replaces the dump in %s with this deployment's\n"+
+	fmt.Fprintf(out, "wrote %s\n\n", stamp)
+	fmt.Fprintf(out, "The next start replaces the dump in %s with this deployment's\n"+
 		"database, exported at schema %d, in one commit that says so.\n"+
 		"The rows it holds now stay in the history and stop being the tip: a restore\n"+
 		"from that point on gives back the deployment as it is now.\n\n"+
-		"If the store is at the old schema too, this is not enough on its own -- grain\n"+
-		"cannot open that store any more than it can read that dump. Move %s\n"+
-		"aside as well (or re-run scripts/setup.sh, which does both) before starting.\n",
-		dir, model.SchemaVersion, filepath.Join(dataDir, "store"))
+		"A store at schema %d or newer migrates in place on start, so leave %s\n"+
+		"in place to keep its rows. Only a store older than schema %d (use\n"+
+		"`grain state prepare-upgrade` to carry its rows across) or newer than %d\n"+
+		"(a downgrade) cannot be opened in place; moving it aside starts empty.\n",
+		dir, model.SchemaVersion,
+		model.V2BaselineSchemaVersion, filepath.Join(dataDir, "store"),
+		model.V2BaselineSchemaVersion, model.SchemaVersion)
 	return nil
 }
 

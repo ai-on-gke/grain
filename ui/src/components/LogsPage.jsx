@@ -17,14 +17,13 @@ import { PageHeaderActions, PageHeaderPageActions } from "./PageHeader.jsx";
 import {
   Alert,
   Button,
-  FormControl,
-  InputLabel,
-  MenuItem,
-  Select,
+  InputAdornment,
   TextField,
   Typography,
 } from "@mui/material";
 import api from "../api.js";
+import AppIcon from "./AppIcon.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 
 // REFRESH_MS is how often this panel re-fetches the selected source's log
 // lines while the System overlay is open -- the same order of magnitude
@@ -193,26 +192,34 @@ export default function LogsPage({ showError }) {
               header rail (PageHeader.jsx, grain/task-4915). */}
           <PageHeaderActions>
             <div className="logs-toolbar">
-              <FormControl size="small" sx={{ minWidth: 220 }}>
-                <InputLabel id="logs-source-label">Source</InputLabel>
-                <Select
-                  labelId="logs-source-label"
-                  label="Source"
-                  value={source || ""}
-                  onChange={(e) => setSource(e.target.value)}
-                >
-                  {sources.sources.map((s) => (
-                    <MenuItem key={s} value={s}>
-                      {s}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
+              {/* A width the slot can take back, not a minimum: in a
+                  narrow rail (an 820px tablet) a 220px floor ran the
+                  select past the slot's clipped edge, its arrow cut
+                  off, rather than leaving it whole beside "more". */}
+              <SearchSelect
+                label="Source"
+                fullWidth={false}
+                sx={{ width: 220, maxWidth: "100%", flex: "0 1 auto" }}
+                value={source || ""}
+                options={sources.sources.map((s) => ({ value: s, label: s }))}
+                onChange={(next) => {
+                  if (next) setSource(next);
+                }}
+              />
               <TextField
                 label="Search logs"
                 size="small"
                 sx={{ flex: "1 1 12rem" }}
                 value={query}
+                slotProps={{
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start" sx={{ mr: 0.5 }}>
+                        <AppIcon name="search" size={16} />
+                      </InputAdornment>
+                    ),
+                  },
+                }}
                 onChange={(event) => {
                   const next = event.target.value;
                   if (!query.trim() && next.trim()) {
@@ -224,7 +231,12 @@ export default function LogsPage({ showError }) {
                 }}
               />
               <PageHeaderPageActions>
-                <Button size="small" variant="outlined" onClick={refresh}>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<AppIcon name="refresh" size={16} />}
+                  onClick={refresh}
+                >
                   Refresh
                 </Button>
               </PageHeaderPageActions>

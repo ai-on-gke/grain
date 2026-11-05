@@ -380,7 +380,7 @@ func (p *printer) ciRun(run ci.Run, mode cicli.OutputMode) {
 		// task has been waiting on a verdict.
 		who := "grain itself: a job past its timeout, a daemon that stopped under it, " +
 			"or a newer run superseding it -- the merge queue starts another for this commit"
-		if run.CancelledBy == ci.CancelByOperator {
+		if run.CancelledBy.ByHand() {
 			who = "a person, through grain's own API -- the merge queue starts another for " +
 				"this commit after a short delay"
 		}
@@ -420,6 +420,9 @@ func (p *printer) ciRun(run ci.Run, mode cicli.OutputMode) {
 			// Not a step's non-zero exit: a sandbox that could not be
 			// built, a transport that stopped answering, a job timeout.
 			fmt.Printf("  error: %s\n", job.Error)
+		}
+		if job.Warning != "" {
+			fmt.Printf("  warning: %s\n", job.Warning)
 		}
 		for _, a := range job.Artifacts {
 			// Above the steps, not below them: the whole reason this
@@ -715,4 +718,38 @@ func (p *printer) ciFaults(faults []ui.CIFault) {
 			fmt.Println(line)
 		}
 	}
+}
+
+// ciWait is `grain ci wait`'s verdict (cicli.WaitResult.Report).
+func (p *printer) ciWait(res cicli.WaitResult) {
+	if p.json {
+		p.encode(res)
+		return
+	}
+	fmt.Print(res.Report())
+}
+
+// ciRetriggered is `grain ci retrigger`: the run that was started, and
+// which of from's jobs it reruns.
+func (p *printer) ciRetriggered(from, run ci.Run, jobs []string) {
+	if p.json {
+		p.encode(run)
+		return
+	}
+	fmt.Printf("retriggered %d %s of run %s, uncached: run %s on %s at %s\n",
+		len(jobs), plural(len(jobs), "job", "jobs"), from.ID, run.ID, run.Repo, ciRefDescriptionOf(run))
+	for _, job := range jobs {
+		fmt.Printf("  %s\n", job)
+	}
+	fmt.Printf("\nwait for it with \"grain ci wait %s\"\n", run.ID)
+}
+
+// ciTestHistory is `grain ci test-history`: the report as the in-sandbox
+// command renders it (ci.TestHistoryReport.Render), or it as JSON.
+func (p *printer) ciTestHistory(report ci.TestHistoryReport) {
+	if p.json {
+		p.encode(report)
+		return
+	}
+	fmt.Println(strings.TrimRight(report.Render(), "\n"))
 }

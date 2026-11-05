@@ -14,7 +14,7 @@
 
 package mcp
 
-// resume_later: the agent's own exit (docs/design/durable-tasks.md#DT-9).
+// resume_later: the agent's own exit (design/design/durable-tasks.design.md#DT-9).
 //
 // A run that is not done but has to stop -- it is waiting on CI, on a
 // person's message, on another task, on the clock, or is a durable task
@@ -52,12 +52,14 @@ func resumeLaterTool(waiter TaskWaiter, unpushed UnpushedWorkReader) Tool {
 		Name: "resume_later",
 		Description: "Stop this run without completing the task, and have the task queued again later: " +
 			"this is how to stop when the work is not done (comment_on_issue or nothing_needed is how " +
-			"to finish). The task is queued again when any condition in `when` is met -- a grain CI " +
-			"verdict (ci: a run id, or \"my-branch\" for the next run on this task's branch to " +
-			"conclude), other tasks closing (task, with until \"closed\" or \"merged\"; takes no other " +
+			"to finish). The task is queued again when any condition in `when` is met -- a CI " +
+			"verdict on the repository's gating CI, GitHub Actions on ci_mode: github or grain CI on " +
+			"ci_mode: grain (ci: \"my-branch\" for the next verdict on this task's branch, or a grain CI / " +
+			"gha:<owner>:<name>:<run-id> run id), other tasks closing (task, with until \"closed\" or \"merged\"; takes no other " +
 			"condition), a time (at: a duration like \"1h\" or an RFC 3339 time, at most a week away), " +
-			"or anybody posting to this task (message: true). With no `when` it is queued again on " +
-			"grain's next cycle, which suits splitting long work into steps. The next run's prompt " +
+			"or anybody posting to this task (message: true). A CI wait that can never be satisfied " +
+			"(no CI configured for the branch, or a run id that does not exist) is refused at once. " +
+			"With no `when` it is queued again on grain's next cycle, which suits splitting long work into steps. The next run's prompt " +
 			"says this run was suspended and why. THE SANDBOX DOES NOT SURVIVE: commit and push your " +
 			"branch first; a call with unpushed commits or uncommitted changes is refused unless you " +
 			"set force: true. After calling this, take no further actions.",
@@ -76,7 +78,7 @@ func resumeLaterTool(waiter TaskWaiter, unpushed UnpushedWorkReader) Tool {
 					"properties": map[string]any{
 						"ci": map[string]any{
 							"type":        "string",
-							"description": "A grain CI run id, or \"my-branch\": resume once it has a verdict.",
+							"description": "A CI run id (grain CI or gha:<owner>:<name>:<run-id> for GitHub Actions), or \"my-branch\": resume once the repository's gating CI (GitHub Actions on ci_mode: github, grain CI on ci_mode: grain) has a verdict.",
 						},
 						"task": map[string]any{
 							"anyOf": []any{
@@ -137,7 +139,11 @@ func resumeLater(ctx context.Context, waiter TaskWaiter, unpushed UnpushedWorkRe
 		return Result{Text: "Not stopped: " + err.Error(), IsError: true}
 	}
 	encoded, _ := json.Marshal(taken)
-	return Result{Text: parkedMarker + " This task is queued again once " + taken.Describe() +
+	queued := "once " + taken.Describe()
+	if taken.Empty() {
+		queued = "on the next cycle"
+	}
+	return Result{Text: parkedMarker + " This task is queued again " + queued +
 		"; the next run's prompt says this one was suspended, and why. This ends your run: stop " +
 		"here and take no further actions.\n\n" + resumeLaterTakenPrefix + string(encoded)}
 }
@@ -181,16 +187,24 @@ func ResumeLaterWhen(args map[string]any, now time.Time) (model.ResumeOn, error)
 
 // ResumeLaterTaken is the condition a successful resume_later call's
 // result says the daemon took, or false for any other text.
+//
+// The result a run sees is not only the tool's own: the registry appends
+// grain's notices after it (the deadline, the tool budget, a person's
+// words posted mid-run), so only the one JSON value after the first
+// resumeLaterTakenPrefix is read, and whatever follows it is left alone.
+// The first, not the last: a person's message relayed in a notice could
+// quote the prefix itself.
 func ResumeLaterTaken(text string) (model.ResumeOn, bool) {
 	if !strings.HasPrefix(text, parkedMarker) {
 		return model.ResumeOn{}, false
 	}
-	i := strings.LastIndex(text, "\n"+resumeLaterTakenPrefix)
+	i := strings.Index(text, "\n"+resumeLaterTakenPrefix)
 	if i < 0 {
 		return model.ResumeOn{}, false
 	}
 	var when model.ResumeOn
-	if err := json.Unmarshal([]byte(strings.TrimSpace(text[i+1+len(resumeLaterTakenPrefix):])), &when); err != nil {
+	dec := json.NewDecoder(strings.NewReader(text[i+1+len(resumeLaterTakenPrefix):]))
+	if err := dec.Decode(&when); err != nil {
 		return model.ResumeOn{}, false
 	}
 	return when, true

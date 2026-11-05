@@ -15,6 +15,10 @@
 package ui_test
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -146,5 +150,180 @@ func TestScopeSetUsageAndGrantsOutsideItsRepos(t *testing.T) {
 	slices.Sort(grants)
 	if want := []string{"api:walk-readers", "api:walk-readers@acme/widgets"}; !slices.Equal(grants, want) {
 		t.Errorf("walk-readers holders' grants = %v, want %v", grants, want)
+	}
+}
+
+func TestAPIScopeSetsIncludeCataloguePresetAndRetiredInProcessEntries(t *testing.T) {
+	client, store, ctx := testClient(t)
+	off := false
+	setCatalogue(t, ctx, store, &model.CapabilityCatalogue{
+		InProcess: map[string]model.CatalogueInProcess{
+			"memory": {Enabled: &off},
+		},
+		APIScopes: model.CatalogueAPIScopes{
+			Presets: map[string]model.CataloguePreset{
+				"release-notes": {
+					Restrictions: &model.CapabilityRestrictions{
+						Repos:          model.Patterns{"acme/*"},
+						RequiresPerson: true,
+					},
+				},
+			},
+		},
+	})
+	resp := client.APIScopeSets(ctx)
+	byName := map[string]ui.APIScopeSetRow{}
+	for _, row := range resp.Sets {
+		byName[row.Name] = row
+	}
+	mem := byName["grain/memory"]
+	if mem.Catalogue == nil || !mem.Catalogue.Disabled || mem.Catalogue.Preset != "memory" ||
+		!slices.Equal(mem.Catalogue.LegacyInProcess, []string{"memory"}) {
+		t.Fatalf("grain/memory = %+v (catalogue %+v), want disabled from legacy in_process.memory", mem, mem.Catalogue)
+	}
+	rn := byName["grain/release-notes"]
+	if rn.Catalogue == nil || rn.Catalogue.Disabled || !rn.Person || rn.Catalogue.Restrictions == nil ||
+		!slices.Equal([]string(rn.Catalogue.Restrictions.Repos), []string{"acme/*"}) {
+		t.Fatalf("grain/release-notes = %+v (catalogue %+v), want repo restriction and person", rn, rn.Catalogue)
+	}
+	if ciRead := byName["grain/ci-read"]; ciRead.Catalogue != nil {
+		t.Errorf("unrestricted grain/ci-read has Catalogue = %+v, want nil", ciRead.Catalogue)
+	}
+}
+
+// Task #2728: the daemon and grain demo build Config.Capabilities once,
+// at startup, so a set declared, edited or removed afterwards has to be
+// read again by GET /api/config and by the grant check rather than
+// taken from that snapshot -- otherwise no picker ever offered a set
+// made with New scope set, and one since removed went on being offered.
+func TestScopeSetsDeclaredAfterStartupAreOfferedAndGrantable(t *testing.T) {
+	srv, client := testServer(t)
+	t.Cleanup(func() { _ = model.InstallAPIScopeSets(nil) })
+	client.Config.Capabilities = append(ui.OfferedCapabilities(), ui.APICapabilities()...)
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	ui.SetAccessCodeForTest(srv, testAccessCode)
+
+	offered := func() *ui.Capability {
+		t.Helper()
+		var cfg struct {
+			Capabilities []ui.Capability `json:"capabilities"`
+		}
+		if code := postJSON(t, ts, http.MethodGet, "/api/config", nil, &cfg); code != http.StatusOK {
+			t.Fatalf("GET /api/config: %d", code)
+		}
+		for i := range cfg.Capabilities {
+			if cfg.Capabilities[i].ID == "api:ops/triage" {
+				return &cfg.Capabilities[i]
+			}
+		}
+		return nil
+	}
+	if row := offered(); row != nil {
+		t.Fatalf("api:ops/triage offered before it was declared: %+v", row)
+	}
+
+	put := ui.PutAPIScopeSetRequest{Set: model.APIScopeSet{Name: "ops/triage",
+		Description: "Triage the queue", Scopes: []string{"tasks:read"}}}
+	if code := postJSON(t, ts, http.MethodPut, "/api/api-scope-sets", put, nil); code != http.StatusOK {
+		t.Fatalf("PUT /api/api-scope-sets: %d", code)
+	}
+	if row := offered(); row == nil || !row.Preset || !slices.Equal(row.Scopes, []string{"tasks:read"}) {
+		t.Fatalf("api:ops/triage offered as %+v after it was declared", row)
+	}
+
+	var task map[string]any
+	if code := postJSON(t, ts, http.MethodPost, "/api/tasks", map[string]any{"title": "Triage the queue"}, &task); code != http.StatusOK && code != http.StatusCreated {
+		t.Fatalf("POST /api/tasks: %d %v", code, task)
+	}
+	grantPath := fmt.Sprintf("/api/tasks/%v/capabilities", task["id"])
+	grant := map[string]any{"id": "api:ops/triage", "attach": true}
+	if code := postJSON(t, ts, http.MethodPost, grantPath, grant, nil); code != http.StatusOK {
+		t.Fatalf("granting api:ops/triage: %d", code)
+	}
+
+	put.Set.Scopes = []string{"tasks:read", "ci:read"}
+	if code := postJSON(t, ts, http.MethodPut, "/api/api-scope-sets", put, nil); code != http.StatusOK {
+		t.Fatalf("PUT /api/api-scope-sets: %d", code)
+	}
+	if row := offered(); row == nil || !slices.Contains(row.Scopes, "ci:read") {
+		t.Fatalf("api:ops/triage offered as %+v after it was edited", row)
+	}
+
+	if code := postJSON(t, ts, http.MethodPost, "/api/api-scope-sets/delete", ui.DeleteAPIScopeSetRequest{Name: "ops/triage"}, nil); code != http.StatusOK {
+		t.Fatalf("POST /api/api-scope-sets/delete: %d", code)
+	}
+	if row := offered(); row != nil {
+		t.Fatalf("api:ops/triage still offered after it was removed: %+v", row)
+	}
+	created, err := client.CreateTask(context.Background(), ui.CreateTaskRequest{Title: "Triage again"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetCapability(context.Background(), created.ID, "api:ops/triage", true); err == nil {
+		t.Error("a removed set was granted")
+	}
+}
+
+// #XC-16: grain/external-dev and grain/external-read are built-in scope
+// sets an external agent credential can be issued with by anybody who may
+// issue one -- neither holds a dangerous scope or needs a person -- and
+// each grants exactly what the spec lists.
+func TestExternalDevAndExternalReadScopeSetsHoldNoDangerousScopes(t *testing.T) {
+	client, _, ctx := testClient(t)
+	want := map[string][]string{
+		"grain/external-dev": {"tasks:read", "tasks:write", "ci:read", "ci:write", "merge:write",
+			"repos:read", "templates:read", "deployment:read"},
+		"grain/external-read": {"tasks:read", "ci:read", "repos:read", "templates:read", "deployment:read"},
+	}
+	forbidden := []string{"tasks:admin", "merge:force", "settings:read", "settings:write",
+		"secrets:read", "secrets:write", "connections:write", "capabilities:admin",
+		"deployment:write", "deployment:upgrade", "deployment:src"}
+	for name, scopes := range want {
+		var set model.APIScopeSet
+		for _, s := range model.BuiltinAPIScopeSets() {
+			if s.Name == name {
+				set = s
+			}
+		}
+		if set.Name == "" {
+			t.Fatalf("BuiltinAPIScopeSets has no %s", name)
+		}
+		if set.RequiresPerson {
+			t.Errorf("%s requires a person, want RequiresPerson false", name)
+		}
+		got := slices.Clone(set.Scopes)
+		slices.Sort(got)
+		sorted := slices.Clone(scopes)
+		slices.Sort(sorted)
+		if !slices.Equal(got, sorted) {
+			t.Errorf("%s scopes = %v, want %v", name, got, sorted)
+		}
+		for _, s := range set.Scopes {
+			if model.IsDangerousAPIScope(model.APIScope(s)) {
+				t.Errorf("%s holds dangerous scope %s", name, s)
+			}
+			if slices.Contains(forbidden, s) {
+				t.Errorf("%s holds %s, which it must not", name, s)
+			}
+			if name == "grain/external-read" && (strings.HasSuffix(s, ":write") ||
+				strings.HasSuffix(s, ":admin") || strings.HasSuffix(s, ":force")) {
+				t.Errorf("grain/external-read holds %s, want read-only", s)
+			}
+		}
+		_, _, _, _, _, dangerous, err := model.NormalizeExternalAgentSpec(name, nil, nil)
+		if err != nil || dangerous {
+			t.Errorf("NormalizeExternalAgentSpec(%s) = dangerous %v, %v; want a set anybody may issue", name, dangerous, err)
+		}
+	}
+	// And an agent can be issued one without a person.
+	issued, err := client.CreateExternalAgentToken(ctx, ui.CreateExternalAgentTokenRequest{
+		Name: "workstation", ScopeSet: "grain/external-dev",
+	})
+	if err != nil {
+		t.Fatalf("issuing a grain/external-dev credential: %v", err)
+	}
+	if issued.ScopeSet != "grain/external-dev" {
+		t.Errorf("issued scopeSet = %q, want grain/external-dev", issued.ScopeSet)
 	}
 }

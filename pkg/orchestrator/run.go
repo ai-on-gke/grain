@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -36,16 +37,13 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
-	"github.com/ai-on-gke/grain/pkg/capability/memory"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
-	"github.com/ai-on-gke/grain/pkg/capability/selfupgrade"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/runhost"
-	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
@@ -363,6 +361,17 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 			checkoutDir, branch, branch,
 		)
 	}
+	if task.Target != nil && history.UpstreamRepo != (model.RepoRef{}) && !history.UpstreamRepo.Same(*task.Target) {
+		prompt += fmt.Sprintf(
+			"\n\n%s is a fork push repository for upstream %s: push your branch to `origin` (%s) "+
+				"and grain will open and track the cross-repository pull request (%s:%s) against "+
+				"upstream %s automatically (or when you run `grain pr open`). An `upstream` git "+
+				"remote pointing at %s is already configured in your checkout for fetching fresh "+
+				"upstream refs; do not try to run `gh pr create` across repositories yourself.",
+			task.Target, history.UpstreamRepo, task.Target,
+			task.Target.Owner, branch, history.UpstreamRepo, history.UpstreamRepo,
+		)
+	}
 	prompt += sandboxDirsSection(checkoutDir, sandboxRoot)
 	prompt += sandboxToolingSection(task.Target != nil, grainci.Granted(task.Grants))
 	prompt += grainCLISection(task)
@@ -370,6 +379,7 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	prompt += timezoneSection(task)
 	prompt += issueSection(task)
 	prompt += setupSection(setup)
+	prompt += committedContextSection(task, checkoutDir, sandboxRoot, history.CommittedContext)
 	prompt += sessionSandboxSection(task, history)
 	// The two history sections, together and in that order: what the
 	// attempts before this one did, then what has been said about the
@@ -642,6 +652,7 @@ func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 	prompt += timezoneSection(task)
 	prompt += issueSection(task)
 	prompt += setupSection(setup)
+	prompt += committedContextSection(task, checkoutDir, sandboxRoot, history.CommittedContext)
 	prompt += sessionSandboxSection(task, history)
 	if resumed := parkedResumeSection(history); resumed != "" {
 		prompt += "\n\n" + strings.TrimRight(resumed, "\n")
@@ -837,17 +848,27 @@ func readOnlyNames(task model.Task) []string {
 	return names
 }
 
+// writeTargetsSection tells a run about its write targets. grain/config
+// is left out of it for a task that is given the writable
+// grain-state checkout (wantsStateCheckout): that run changes it with
+// propose_config_change from that checkout, which the state-repo note
+// says, and telling it in the same prompt that it cannot push there and
+// must propose_task the change instead sent it two opposite ways.
 func writeTargetsSection(task model.Task) string {
-	if len(task.Writes) == 0 {
-		return ""
-	}
-	names := make([]string, len(task.Writes))
-	for i, w := range task.Writes {
-		if w.Base != "" {
-			names[i] = fmt.Sprintf("%s (on branch `%s`)", w.Repo, w.Base)
+	stateCheckout := wantsStateCheckout(task)
+	var names []string
+	for _, w := range task.Writes {
+		if stateCheckout && model.IsConfigRepo(w.Repo) {
 			continue
 		}
-		names[i] = fmt.Sprintf("%s (on its default branch)", w.Repo)
+		if w.Base != "" {
+			names = append(names, fmt.Sprintf("%s (on branch `%s`)", w.Repo, w.Base))
+			continue
+		}
+		names = append(names, fmt.Sprintf("%s (on its default branch)", w.Repo))
+	}
+	if len(names) == 0 {
+		return ""
 	}
 	s := fmt.Sprintf(
 		"\n\nThis task may land work in more than one repository or branch: besides the one you "+
@@ -987,7 +1008,7 @@ func nothingNeededSection(task model.Task) string {
 // the task list and notifications show nothing else of it, so a summary
 // that says only that there is a question tells a person nothing.
 const questionSummarySection = "\n\nWhenever you ask a person something -- ask_question, " +
-	"request_secret, chat -- give a `summary` as well: one line, at most 100 characters, " +
+	"request_secret, request_access, chat -- give a `summary` as well: one line, at most 100 characters, " +
 	"naming the decision or input you need (\"Keep the v1 API alongside v2, or remove " +
 	"it?\"). The inbox, the task list and notifications show only that line, with your " +
 	"full question behind an expander, so never write \"I have a question\" or " +
@@ -1170,11 +1191,11 @@ func resolvePromptExtension(ctx context.Context, store *model.Store, deployment 
 // made to read any of it. now is what turns a row's timestamp into that
 // age.
 //
-// Only for a task holding the memory capability, because reading a
-// document is one of that capability's tools (pkg/mcp's
-// read_memory_document): telling every other run that a note it has no
-// way to open exists would be a line of prompt whose only possible
-// effect is to send a run looking for a tool it does not have.
+// Only for a task holding the memory:read scope (via api:memory,
+// api:memory:read, or the bare memory alias): telling every other run
+// that a note it has no way to open exists would be a line of prompt
+// whose only possible effect is to send a run looking for a tool it does
+// not have.
 func resolveMemory(ctx context.Context, store *model.Store, task model.Task, now time.Time) (string, error) {
 	deployment, err := store.GetMemory(ctx, nil)
 	if err != nil {
@@ -1188,7 +1209,7 @@ func resolveMemory(ctx context.Context, store *model.Store, task model.Task, now
 		}
 	}
 	text := model.MemoryFor(memoryText(deployment), memoryText(repoMemory))
-	if !hasGrant(task, memory.CapabilityName) {
+	if !hasAPIScope(task, "memory:read") {
 		return text, nil
 	}
 	scopes := []model.MemoryScope{{Repo: nil}}
@@ -1440,7 +1461,7 @@ func sandboxToolingSection(hasTarget, grainCI bool) string {
 }
 
 // grainCLISection is the short reference to the `grain` CLI every run with
-// a sandbox has (docs/design/sandbox-first-agent-surface.md §4): the MCP
+// a sandbox has (design/design/sandbox-first-agent-surface.design.md §4): the MCP
 // roster is the control set alone, so this is the only place the rest of
 // what grain offers a run -- the namespace, CI, the pull request, the
 // collaboration helpers -- is named at all. `grain help` and `grain <cmd>
@@ -1453,7 +1474,9 @@ func grainCLISection(task model.Task) string {
 	s := "\n\n### Grain CLI (`grain`)\n\n" +
 		"Inside your sandbox, the `grain` CLI (run it with `run_command`) reaches this deployment's " +
 		"namespace, CI, pull request, merge queue and the capabilities granted to this task, with no " +
-		"tool-result size cap -- pipe it to `grep`, `jq` or a file:\n\n" +
+		"size cap of its own. What `run_command` hands back is still cut to about 20 KB, and counts at " +
+		"that size towards any tool budget the run is under, so send long output to a file and " +
+		"`grep`, `jq` or `head` it rather than printing it all:\n\n" +
 		"- **Namespace** (`ci://`, `src://`, `task://`, `config://`, `memory://`, `deploy://`): " +
 		"`grain ls <uri>`, `grain read <uri> [--tail N]`, `grain grep <re> <uri>`. For example " +
 		"`grain ls ci://" + repo + "`.\n"
@@ -1472,7 +1495,7 @@ func grainCLISection(task model.Task) string {
 		"--title <t>`, `grain git revert --task <id> --reason \"<why>\"`, `grain merge-queue`.\n" +
 		grainCLIGrantBullets(task.Grants) +
 		"- **Turn-ending, parking and proposals stay tool calls:** use `comment_on_issue`, " +
-		"`nothing_needed`, `ask_question`, `request_secret`, `wait_for_task` (`park: true`), " +
+		"`nothing_needed`, `ask_question`, `request_secret`, `request_access`, `wait_for_task` (`park: true`), " +
 		"`resume_later` and `propose_task` directly, not as shell commands.\n\n" +
 		"Run `grain help` or `grain <command> --help` for every flag."
 	return s
@@ -1480,11 +1503,11 @@ func grainCLISection(task model.Task) string {
 
 // grainCLIGrants is the `grain` commands each of grain's own capability
 // grants unlocks, in the order grainCLIGrantBullets lists them. A grant
-// whose tools stay model tools (self-upgrade, db-write) is not here: the
+// whose tools stay model tools (db-write) is not here: the
 // tool roster already names those.
 var grainCLIGrants = []struct{ grant, commands string }{
 	{model.SelfDebugCapability, "`grain ls/read/grep src://...`, `grain task list`, `grain task read <id>`, " +
-		"`grain task transcript <id>`, `grain metrics [<section>] [--window 7d | --since <t> --until <t>] [--repo <r>]`, `grain read deploy://pipeline-changes`"},
+		"`grain task transcript <id>`, `grain metrics [<section>] [--window 7d | --since <t> --until <t>] [--repo <r>]`, `grain read deploy://pipeline-changes [--cursor <c>] [--page N]`"},
 	{"grain-log", "`grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority err] [--contains <s>] [--max-lines N]`"},
 	{"deployment-health", "`grain health`, `grain read deploy://state`"},
 	{"bootstrap-playbooks", "`grain playbooks [<name>]`"},
@@ -1500,12 +1523,33 @@ var grainCLIGrants = []struct{ grant, commands string }{
 // `grain` commands it unlocks, plus one for any api grant.
 func grainCLIGrantBullets(grants []model.Grant) string {
 	held := map[string]bool{}
+	names := make([]string, 0, len(grants))
 	api := false
 	for _, g := range grants {
 		held[g.Capability] = true
+		names = append(names, g.Capability)
 		if strings.HasPrefix(g.Capability, model.APIGrantPrefix) {
 			api = true
 		}
+	}
+	apiSet := model.APIGrantsOf(names)
+	if apiSet.Has("memory:write") {
+		held["memory"] = true
+	}
+	if apiSet.Has("release-notes:read") || apiSet.Has("release-notes:write") {
+		held["release-notes"] = true
+	}
+	if grainserver.HasJournal(names) {
+		held["grain-log"] = true
+	}
+	if grainserver.HasHealth(names) || apiSet.Has("deployment:read") {
+		held["deployment-health"] = true
+	}
+	if grainserver.HasSQL(names) {
+		held["db-read"] = true
+	}
+	if apiSet.Has("tests:write") {
+		held["test-quarantine"] = true
 	}
 	var b strings.Builder
 	for _, c := range grainCLIGrants {
@@ -1514,9 +1558,10 @@ func grainCLIGrantBullets(grants []model.Grant) string {
 		}
 	}
 	if api {
-		b.WriteString("- **api grants:** `grain api routes` lists the agent API routes they reach; " +
-			"`grain api <METHOD> <path> [--body '<json>']` calls one. Routes a sandbox process may " +
-			"not call stay `api_*` tool calls.\n")
+		b.WriteString("- **api grants:** `grain api routes` lists the agent API routes they reach from the sandbox, " +
+			"and `grain api <METHOD> <path> [--body '<json>']` calls one; the `grain-controller` MCP server " +
+			"(`grain_explore_scope`, `grain_invoke`, `grain_list_tasks`, `grain_get_task`, `grain_filing_context`, `grain_submit_task`) " +
+			"calls any authorized route, including model-only scopes.\n")
 	}
 	return b.String()
 }
@@ -1817,8 +1862,7 @@ func stateCheckCommand(prepared checkout, image string) string {
 }
 
 func directorStateSection(prepared checkout, task model.Task) string {
-	id, ok := model.ConsoleSessionIDOf(task)
-	if !ok || id != model.DirectorSessionID {
+	if !wantsStateCheckout(task) {
 		return ""
 	}
 	path := DirectorStateDir
@@ -1827,6 +1871,9 @@ func directorStateSection(prepared checkout, task model.Task) string {
 	}
 	switch prepared.DirectorState {
 	case directorStateReady:
+		if prepared.DirectorStateWritable {
+			return fmt.Sprintf("\n\nGrain checked out this deployment's state repository, %[3]s, at `%[1]s`, and this session may propose changes to it. Read the files there to inspect this deployment's configuration and memory -- that export holds no tasks, runs or comments, so what this deployment has actually run is read with the self-debug task tools if you hold them, and reported as unavailable if you do not. To change the configuration, edit the files in `%[1]s` (`settings/*.yml`, `tables/*.json`, `memory/**`), check them with `grain state check %[1]s` where that command is available, and then call `propose_config_change` with a one-line summary: it commits and pushes your edits to a branch of %[3]s, validates them, and shows the person in this chat the diff with Approve and Reject buttons. That ends your turn; you are woken with their decision. Do not commit to or push `main` yourself -- grain's Git proxy refuses it -- and nothing you push takes effect until the person approves it. For any other repository listed in this task's read scope, clone `%[2]s/OWNER/REPO.git`; credentials are supplied by the sandbox and must not be copied into commands or output.", path, prepared.ProxyBase, prepared.DirectorStateRepo)
+		}
 		return fmt.Sprintf("\n\nGrain checked out this deployment's state repository read-only at `%s`. Read the JSON files under `tables/` there to inspect this deployment's configuration and memory -- that export holds no tasks, runs or comments, so what this deployment has actually run is read with the self-debug task tools if you hold them, and reported as unavailable if you do not. Its `origin` uses grain's scoped Git proxy, and pushing is disabled. For any other repository listed in this task's read scope, clone `%s/OWNER/REPO.git`; credentials are supplied by the sandbox and must not be copied into commands or output.", path, prepared.ProxyBase)
 	case directorStateAbsent:
 		return "\n\nThis deployment has no configured state repository, so no state checkout is available. Start normally and say that plainly when this deployment's own configuration is needed."
@@ -2145,11 +2192,15 @@ func baseDescription(task model.Task) string {
 // description says the rest; this is the sentence that gets a run to
 // read it.
 func proposalSection(task model.Task) string {
+	hasRepo := task.Target != nil || len(task.Writes) > 0
 	waitOn := fmt.Sprintf("task %s itself, when the follow-up only makes sense once "+
 		"this task's own change has landed, and the id you gave an earlier proposal "+
 		"in this same run that it builds on", task.ID)
 	if model.NeverCompletes(task) {
 		waitOn = "the id you gave an earlier proposal in this same run that it builds on"
+	} else if !hasRepo {
+		waitOn = "the id you gave an earlier proposal in this same run that it builds on, " +
+			"or another existing task whose change must land first"
 	}
 	s := fmt.Sprintf(
 		"\n\nYou are running as task %s. Anything you split out with propose_task "+
@@ -2166,6 +2217,10 @@ func proposalSection(task model.Task) string {
 			"target closing -- so a proposal waiting on this one would wait forever. grain "+
 			"refuses such a link and says so in the proposal's body, but a proposal that asks "+
 			"for it is one whose ordering nobody recorded.", task.ID)
+	} else if !hasRepo {
+		s += fmt.Sprintf(" Do not put task %s itself in depends_on: this task has no repository "+
+			"change to land and rests in awaiting_reply until a human closes the report, so a "+
+			"proposal that depends on it stays blocked until then.", task.ID)
 	}
 	if task.Target != nil {
 		s += fmt.Sprintf(" A proposal is filed against %s, the repository you are "+
@@ -2260,6 +2315,10 @@ type History struct {
 	// (model.RepoConfig.PairedBranches), or nil for a repository that
 	// pairs fewer than two. See pairedBranchesSection.
 	PairedBranches []string
+	// UpstreamRepo is the upstream repository pull requests for task.Target
+	// open against when task.Target is a fork (model.RepoConfig.UpstreamRepo),
+	// or the zero RepoRef when pull requests open on task.Target itself.
+	UpstreamRepo model.RepoRef
 	// Resumed is the tasks the previous attempt parked this one on
 	// through wait_for_task, as they stand now -- set only when that
 	// attempt ended model.ParkedOutcome. See parkedResumeSection.
@@ -2274,6 +2333,9 @@ type History struct {
 	// SandboxReclaimed is true when a session task had a warm sandbox that was
 	// reclaimed (TTL expiry or capacity eviction) before this turn started.
 	SandboxReclaimed bool
+	// CommittedContext is the committed-context references verified in ./work
+	// or cloned into ./repos/<owner>/<repo> detached at their pinned SHA.
+	CommittedContext []ResolvedContextCheckout
 }
 
 func sessionSandboxSection(task model.Task, h History) string {
@@ -2282,7 +2344,7 @@ func sessionSandboxSection(task model.Task, h History) string {
 			"packages, clones and uncommitted changes are still in place, so do not redo setup, " +
 			"re-clone or reinstall packages that are already there."
 	}
-	if h.SandboxReclaimed || (task.Interactive && len(h.Attempts) > 0) {
+	if h.SandboxReclaimed || ((task.Interactive || task.KeepRunning) && len(h.Attempts) > 0) {
 		return "\n\nThe sandbox is not the same one: your previous session sandbox was reclaimed, " +
 			"so this run has a new sandbox with a fresh clone and only what you committed and " +
 			"pushed still exists."
@@ -2309,7 +2371,9 @@ func parkedResumeSection(h History) string {
 	var b strings.Builder
 	b.WriteString("This run resumes from a park: the previous attempt called wait_for_task, " +
 		"parked this task on the task(s) below, and ended. They have all closed (or been removed " +
-		"from this task's dependencies), so grain queued it again. The sandbox did not survive " +
+		"from this task's dependencies) -- and for a wait until \"merged\", any pull request " +
+		"still open at the close has since merged or closed, or grain has stopped reading it " +
+		"-- so grain queued it again. The sandbox did not survive " +
 		"the park -- what that attempt pushed is on your branch, and nothing else of it is. " +
 		"Check how each one ended before carrying on: a task closed without merging is not " +
 		"the change you were waiting for.\n")
@@ -2378,7 +2442,7 @@ func previousAttempts(ctx context.Context, store *model.Store, taskID string, at
 
 // suspensionNoteSection is the line a prompt opens with when the run
 // before this one was suspended (model.SuspensionNote,
-// docs/design/durable-tasks.md#DT-2), followed by the blank line that
+// design/design/durable-tasks.design.md#DT-2), followed by the blank line that
 // separates it from the rest, and "" otherwise. Only the most recent
 // attempt is read: a suspension further back has been followed by a run
 // that was not one, and that run's ending is what the attempts section
@@ -2535,6 +2599,9 @@ func attemptDetail(r model.Run) string {
 // a team broadcast (ui.Client.BroadcastTeamMessage) -- is that task's,
 // not "you".
 func attributionLabel(a model.Attribution, taskID string) string {
+	if ext := externalAgentLabel(a); ext != "" {
+		return ext
+	}
 	if a.OnBehalfOf != nil {
 		switch a.OnBehalfOf.Kind {
 		case model.PrincipalAgent:
@@ -2581,6 +2648,21 @@ func otherTaskRun(a model.Attribution, taskID string) string {
 	return fmt.Sprintf("the run of another task (task %s), not a human", run.ID)
 }
 
+// externalAgentLabel labels a comment an external agent credential posted
+// (an "external:<name>" agent principal), or is empty for any other
+// comment. Such a comment carries its credential's owner as OnBehalfOf
+// (design/spec/external-cli/external-cli.spec.md#XC-14), but its words
+// are the agent's, not that person's, so it is never labelled a human's.
+func externalAgentLabel(a model.Attribution) string {
+	if a.Actor.Kind != model.PrincipalAgent || !strings.HasPrefix(a.Actor.ID, model.ExternalAgentPrincipalPrefix) {
+		return ""
+	}
+	if b := a.OnBehalfOf; b != nil && b.Kind == model.PrincipalHuman && b.ID != "" {
+		return fmt.Sprintf("an external agent (%s) acting for %s, not a human", a.Actor.ID, b.ID)
+	}
+	return fmt.Sprintf("an external agent (%s), not a human", a.Actor.ID)
+}
+
 // addendumText renders one just-arrived comment for a Framework to fold
 // into its conversation mid-run -- present tense, unlike
 // attributionLabel's own labels ("an earlier attempt at this task"),
@@ -2589,7 +2671,9 @@ func otherTaskRun(a model.Attribution, taskID string) string {
 // currently reading it.
 func addendumText(c model.Comment) string {
 	who := "a human"
-	if other := otherTaskRun(c.Author, c.TaskID); other != "" {
+	if ext := externalAgentLabel(c.Author); ext != "" {
+		who = ext
+	} else if other := otherTaskRun(c.Author, c.TaskID); other != "" {
 		who = other
 	} else if c.Author.OnBehalfOf != nil && c.Author.OnBehalfOf.Kind == model.PrincipalHuman {
 		if c.Author.OnBehalfOf.ID != "" {
@@ -2644,21 +2728,35 @@ func lastCommentID(seen []model.Comment) int64 {
 // own prompt -- its highest comment id seeds the cursor here, so the
 // first poll only ever returns what arrived after dispatch, never
 // something already sitting in the prompt this run started with.
-func addendaPoller(store *model.Store, taskID string, seen []model.Comment) func(context.Context) ([]string, error) {
+func addendaPoller(store *model.Store, taskID string, tools []mcp.Tool, seen []model.Comment) func(context.Context) ([]string, error) {
 	lastID := lastCommentID(seen)
 	return func(ctx context.Context) ([]string, error) {
-		comments, err := store.Comments(ctx, taskID)
+		comments, err := store.CommentsAfter(ctx, taskID, lastID)
 		if err != nil {
 			return nil, fmt.Errorf("orchestrator: polling %s's conversation for addenda: %w", taskID, err)
 		}
-		var addenda []string
+		if len(comments) == 0 {
+			return nil, nil
+		}
+		attachments, err := store.CommentAttachmentsAfter(ctx, taskID, lastID)
+		if err != nil {
+			return nil, fmt.Errorf("orchestrator: reading attachments on %s's addenda: %w", taskID, err)
+		}
+		byComment := groupAttachmentsByComment(attachments)
+		addenda := make([]string, 0, len(comments))
+		nextLastID := lastID
 		for _, c := range comments {
-			if c.ID <= lastID {
+			if c.ID <= nextLastID {
 				continue
 			}
-			lastID = c.ID
-			addenda = append(addenda, addendumText(c))
+			rendered, err := placeCommentAddendum(ctx, tools, c, byComment[c.ID])
+			if err != nil {
+				return nil, err
+			}
+			nextLastID = c.ID
+			addenda = append(addenda, rendered)
 		}
+		lastID = nextLastID
 		return addenda, nil
 	}
 }
@@ -2902,6 +3000,13 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	if err != nil {
 		return unprepared(err)
 	}
+	upstreamRepo, hasUpstreamRepo, err := resolveUpstreamRepo(ctx, store, task)
+	if err != nil {
+		return unprepared(err)
+	}
+	if !hasUpstreamRepo {
+		upstreamRepo = model.RepoRef{}
+	}
 	// Whether GitHub's check runs are a source of verdicts in this run's
 	// repository at all, read here for the same reason the two above are:
 	// it is a fact about the repository, settled when the run is
@@ -2932,8 +3037,10 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	// Before the clone, so the CLI every prompt names is there whatever
 	// the clone does. After the grants' own placements, so nothing a
 	// grant installs in the same directory is placed over it.
-	if err := placeSandboxGrain(ctx, cfg.SandboxGrainBinary, sandboxRoot, placer); err != nil {
-		log.Printf("orchestrator: task %s: the sandbox keeps its image's grain: %v", task.ID, err)
+	if !cfg.sandboxReused {
+		if err := placeSandboxGrain(ctx, cfg.SandboxGrainBinary, sandboxRoot, placer); err != nil {
+			log.Printf("orchestrator: task %s: the sandbox keeps its image's grain: %v", task.ID, err)
+		}
 	}
 
 	var prepared checkout
@@ -2947,9 +3054,31 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		if (cfg.GitRemoteBase != "" || cloneURL != "") && task.Target != nil && !cfg.sandboxReused {
 			notes.say(ctx, cloningNote(*task.Target))
 		}
-		prepared, checkoutErr = prepareCheckoutWithReuse(ctx, tools, cfg.GitRemoteBase, cloneURL, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
-		if checkoutErr == nil {
-			placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &prepared, cfg.sandboxReused)
+		if task.Target == nil && hasGrant(task, model.SelfDebugCapability) {
+			var srcOut checkout
+			var srcWG sync.WaitGroup
+			srcWG.Add(1)
+			go func() {
+				defer srcWG.Done()
+				placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &srcOut, cfg.sandboxReused)
+			}()
+			prepared, checkoutErr = prepareCheckoutWithUpstream(ctx, tools, cfg.GitRemoteBase, cloneURL, upstreamRepo, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
+			srcWG.Wait()
+			if checkoutErr == nil {
+				prepared.GrainSource = srcOut.GrainSource
+				prepared.GrainSourceWhy = srcOut.GrainSourceWhy
+				prepared.GrainSourceRevision = srcOut.GrainSourceRevision
+				prepared.GrainSourceCommits = srcOut.GrainSourceCommits
+			}
+		} else {
+			prepared, checkoutErr = prepareCheckoutWithUpstream(ctx, tools, cfg.GitRemoteBase, cloneURL, upstreamRepo, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
+			if checkoutErr == nil {
+				placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &prepared, cfg.sandboxReused)
+			}
+		}
+		if checkoutErr == nil && len(prepared.Context) > 0 {
+			persistCommittedContextManifests(ctx, store, &task, prepared.Context)
+			cc.Task = task
 		}
 	}
 
@@ -2963,8 +3092,10 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		Attempts:         previous,
 		Comments:         comments,
 		Repair:           repair,
+		UpstreamRepo:     upstreamRepo,
 		SandboxReused:    cfg.sandboxReused,
 		SandboxReclaimed: cfg.sandboxReclaimed,
+		CommittedContext: prepared.Context,
 	}
 	history.BaseIncident = baseIncidentNote(ctx, store, task)
 	history.Resumed = ResumedFrom(ctx, store, previous)
@@ -2991,7 +3122,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	}
 	// Each capability grant's prompt_section, as a block naming the grant,
 	// its attempt_id and its MCP server, and saying a capability server
-	// wrote it rather than the task's author (docs/capabilities-spec.md
+	// wrote it rather than the task's author (design/spec/capabilities/capabilities.spec.md
 	// §5.4.2).
 	if section := cfg.capabilityPromptSections; section != "" && prompt != "" {
 		prompt += "\n\n" + section
@@ -3202,24 +3333,19 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// answered with (pkg/capability/grainlog, agent.RunConfig's
 		// GrainSecretsDir).
 		grainSecretsDir := ""
-		if slices.Contains(grants, grainlog.CapabilityName) || slices.Contains(grants, deploymenthealth.CapabilityName) {
+		if grainserver.HasJournal(grants) || grainserver.HasHealth(grants) {
 			grainSecretsDir = cfg.GrainSecretsDir
 		}
 		grainStateDir := ""
-		if slices.Contains(grants, deploymenthealth.CapabilityName) {
+		if grainserver.HasHealth(grants) {
 			grainStateDir = cfg.GrainStateDir
 		}
-		// The local-scripts declarations this task's capabilities grant,
-		// and the credentials their scripts are delivered. The grants
-		// were resolved before the sandbox was built, which is where an
-		// untrusted run was refused; this says it again rather than
-		// trusting that it was (localScriptsFor).
-		localScripts, localScriptsEnvFile, err := localScriptsFor(ctx, cfg, task, d.RunID)
+		capabilityMCPServers, controllerEP, err := wireControllerMCP(ctx, cfg, store, task)
 		if err != nil {
-			return unprepared(fmt.Errorf("serving local scripts: %w", err))
+			return unprepared(fmt.Errorf("serving grain-controller MCP: %w", err))
 		}
-		if localScriptsEnvFile != "" {
-			defer os.Remove(localScriptsEnvFile)
+		if controllerEP != nil {
+			defer controllerEP.Close()
 		}
 
 		// The repositories a propose_task call from this run may name,
@@ -3242,6 +3368,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// taking it can cost one: a task must not fail because a
 		// bookkeeping write did (Store.SetRunAgentStarted).
 		agentStartedAt := cfg.now()
+		if cfg.Now == nil && agentStartedAt.Before(at) {
+			agentStartedAt = at
+		}
 		if err := store.SetRunAgentStarted(ctx, d.RunID, agentStartedAt); err != nil {
 			log.Printf("orchestrator: run %s: recording when its agent started: %v", d.RunID, err)
 		}
@@ -3316,14 +3445,40 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// legitimately end; runhost.Host adds its adoption allowance.
 		hostCtx := runhost.WithRun(agentCtx, runhost.Run{Task: task.ID, Run: d.RunID,
 			Deadline: runHostDeadline(cfg)})
+		var firstTurnOnce sync.Once
+		noteFirstTurn := func() {
+			firstTurnOnce.Do(func() {
+				if store != nil {
+					firstTurnAt := cfg.now()
+					if cfg.Now == nil && firstTurnAt.Before(agentStartedAt) {
+						firstTurnAt = agentStartedAt
+					}
+					if ferr := store.SetRunFirstTurn(context.WithoutCancel(ctx), d.RunID, firstTurnAt); ferr != nil {
+						log.Printf("orchestrator: run %s: recording first turn: %v", d.RunID, ferr)
+					}
+				}
+			})
+		}
+		runTools := make([]mcp.Tool, len(tools))
+		for i, t := range tools {
+			orig := t.Handler
+			if orig != nil {
+				t.Handler = func(tctx context.Context, args map[string]any) mcp.Result {
+					noteFirstTurn()
+					return orig(tctx, args)
+				}
+			}
+			runTools[i] = t
+		}
 		runCfg := agent.RunConfig{
-			Prompt: prompt, SuspendedPrompt: suspendedPrompt, Tools: tools, SandboxRoot: sandboxRoot, GranuleVM: granuleVM, Container: container, K8sPod: cfg.sandboxPod,
+			Prompt: prompt, SuspendedPrompt: suspendedPrompt, Tools: runTools, SandboxRoot: sandboxRoot, GranuleVM: granuleVM, Container: container, K8sPod: cfg.sandboxPod,
 			SandboxEnvFile: cfg.sandboxEnvFile,
 			SandboxHide:    cfg.sandboxHide,
 			// The MCP servers this run's capability grants expose, each
 			// registered beside grain-sandbox (§5.2.4).
-			CapabilityMCPServers: cfg.capabilityMCPServers,
+			CapabilityMCPServers: capabilityMCPServers,
 			Repo:                 repo, Branch: task.BranchName(),
+			UpstreamRepo: upstreamRepo.String(),
 			// The branch that branch merges into, which is what
 			// base_branch_status reads CI for. Passed as the task wrote
 			// it, empty included: an empty Base is a task that merges
@@ -3373,15 +3528,15 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			Deadline: clock.base,
 			// A durable judgement task's wake runs under the per-wake
 			// tool budget (model.UsesToolBudget, DT-13).
-			ToolBudget: model.UsesToolBudget(task),
-			Grants:     grants, GrainSourceDir: grainSourceDir, GrainSecretsDir: grainSecretsDir, GrainStateDir: grainStateDir,
-			LocalScripts: localScripts, LocalScriptsEnvFile: localScriptsEnvFile,
+			ToolBudget:               model.UsesToolBudget(task),
+			ToolBudgetPipelineCursor: model.IsPipelineStewardFiring(task),
+			Grants:                   grants, GrainSourceDir: grainSourceDir, GrainSecretsDir: grainSecretsDir, GrainStateDir: grainStateDir,
 			// Which repositories a proposal this run makes may be filed
 			// against -- the half of propose_task's `repo` argument only
 			// the store can answer (proposalRepos).
 			ProposeRepos: proposeRepos,
 			MaxTurns:     cfg.MaxAgentTurns, TranscriptPath: transcriptPath, RunID: d.RunID,
-			Addenda: addendaPoller(store, task.ID, comments),
+			Addenda: addendaPoller(store, task.ID, tools, comments),
 			// Where that same conversation stops in this run's prompt,
 			// for the route a comment posted mid-run actually takes:
 			// the run's own forked mcpserver polls the daemon from this
@@ -3407,11 +3562,16 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			OnResumableSession: early.record,
 		}
 		result, runErr = framework.Run(hostCtx, runCfg)
+		if runErr == nil || (result != nil && (len(result.ToolCalls) > 0 || strings.TrimSpace(result.FinalText) != "")) {
+			noteFirstTurn()
+		}
 		// The stop rule, for a framework whose CLI cannot apply it from
 		// inside the run: a turn that ended promising more work, or a
 		// background run that ended with no closing move, is resumed
 		// once in the same session with the nudge (continueStoppedRun).
-		result, runErr = continueStoppedRun(hostCtx, framework, runCfg, result, runErr)
+		if !taskKeepRunning(context.WithoutCancel(ctx), store, task) {
+			result, runErr = continueStoppedRun(hostCtx, framework, runCfg, result, runErr)
+		}
 		result, runErr, comments = continueSessionTurns(hostCtx, ctx, store, cfg, framework, runCfg, task, d.RunID, clock.deadline, comments, result, runErr)
 		agentRan = true
 		if result != nil {
@@ -3443,6 +3603,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// that adopts the run (RecoverRunHosts, ResumeAdoptedRun).
 		if errors.Is(runErr, agent.ErrDetached) {
 			log.Printf("orchestrator: run %s: left running in its run host for the next daemon to adopt", d.RunID)
+			// Its wait credit too: the sandbox proxy's CLI ledger lives in
+			// this process, and without this the adopter starts it at zero.
+			leaveWaitLedger(ctx, store, d.RunID, clock)
 			return nil, fmt.Errorf("orchestrator: run %s: %w", d.RunID, runErr)
 		}
 
@@ -3497,7 +3660,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// advance DeliveredCommentID past comments the agent never answered
 		// (undeliveredHumanComment's started-time rule still prevents a
 		// failed interactive run from looping).
-		if err := store.AdvanceDelivered(finishCtx, task.ID, lastCommentID(comments), cfg.now()); err != nil {
+		if err := store.AdvanceDeliveredFrom(finishCtx, task.ID, lastCommentID(comments), cfg.now()); err != nil {
 			log.Printf("orchestrator: run %s: recording the conversation it was dispatched for: %v", d.RunID, err)
 		}
 	}
@@ -3803,9 +3966,12 @@ const textOnlyAnswerDetail = "the agent answered in text without calling a tool"
 // session (grain/task-1774). A run that produced neither a tool call nor
 // any text is still a failure, interactive or not.
 func outcomeFor(task model.Task, result *agent.Result) (outcome, detail string) {
-	if task.Interactive && result != nil && len(result.ToolCalls) == 0 &&
+	if (task.Interactive || task.KeepRunning) && result != nil && len(result.ToolCalls) == 0 &&
 		strings.TrimSpace(result.FinalText) != "" {
 		return "succeeded", textOnlyAnswerDetail
+	}
+	if task.KeepRunning && result != nil && len(result.ToolCalls) == 0 {
+		return "succeeded", "the run exited cleanly"
 	}
 	return outcomeOf(result)
 }
@@ -4091,15 +4257,10 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 // rather than holding anything of their own. None of them puts a
 // credential in the subprocess.
 //
-// selfrepair's own grant is absent because its one tool blocks on a
-// human's reply in the task's chat, and that needs a store handle the
-// mcpserver process deliberately does not have. self-upgrade is here
-// precisely because it does not block on one: its three tools act on
-// this deployment's own upgrade through the daemon's REST API, which is
-// a hop the mcpserver process already makes, and a task granted it is
-// usually a scheduled one with nobody watching its chat
-// (pkg/capability/selfupgrade's own doc comment on why it is not a
-// relaxation of self-repair).
+// grain#host-exec (once self-repair) is absent because it does not
+// travel on every run holding it: its one tool blocks on a human's reply
+// in the task's chat, so runGrants passes it only for an Interactive
+// task, where somebody is there to answer.
 //
 // A fixed order, so that a run's own arguments read the same way twice
 // for the same task rather than following whatever order the grants were
@@ -4108,61 +4269,36 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 // serves no MCP tool at all may be read by the run's agent framework
 // instead (agent/antigravity's host-tool grants).
 var toolGrants = []string{
-	selfdebug.CapabilityName, grainlog.CapabilityName, bootstrap.CapabilityName, memory.CapabilityName,
-	grainci.CapabilityName, deploymenthealth.CapabilityName, selfupgrade.CapabilityName,
+	selfdebug.CapabilityName, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant, bootstrap.CapabilityName,
+	grainserver.LegacyGrainCI, grainserver.CIRef, grainserver.CIGrant, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
+	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
 }
 
 // runGrants is the subset of toolGrants task holds, which is what a
 // Framework passes on to the mcpserver it forks
-// (agent.RunConfig.Grants). Nothing outside that list travels: a run's
-// tools are the only thing this is for, and a capability that mints
-// credentials has no business being named in a subprocess's arguments.
-// localScriptsFor is the local-scripts declarations task's
-// local-scripts:<name> capabilities grant this run (cfg.LocalScripts),
-// and a 0600 file of the secrets their scripts name, resolved as the
-// task's team -- "" when they name none. An untrusted task
-// (localscripts.Untrusted) is served none, whatever it holds.
-func localScriptsFor(ctx context.Context, cfg Config, task model.Task, runID string) ([]agent.LocalScripts, string, error) {
-	names := localscripts.Granted(task)
-	if len(names) == 0 {
-		return nil, "", nil
-	}
-	if why := localscripts.Untrusted(task); why != "" {
-		log.Printf("orchestrator: task %s: not serving local scripts: %s", task.ID, why)
-		return nil, "", nil
-	}
-	var out []agent.LocalScripts
-	var paths []string
-	for _, name := range names {
-		path, err := cfg.LocalScripts.Path(name)
-		if err != nil {
-			return nil, "", err
-		}
-		out = append(out, agent.LocalScripts{Name: name, Path: path})
-		paths = append(paths, path)
-	}
-	ctx = secrets.WithRun(secrets.WithTask(ctx, task.ID), runID)
-	creds, err := localscripts.ResolveCredentials(ctx, cfg.Credentials, paths)
-	if err != nil {
-		return nil, "", err
-	}
-	if len(creds) == 0 {
-		return out, "", nil
-	}
-	file, err := localscripts.WriteCredentialsFile("", creds)
-	if err != nil {
-		return nil, "", fmt.Errorf("writing the local-scripts credentials file: %w", err)
-	}
-	return out, file, nil
-}
-
+// (agent.RunConfig.Grants), plus an Interactive task's grain#host-exec.
+// Nothing else travels: a run's tools are the only thing this is for,
+// and a capability that mints credentials has no business being named
+// in a subprocess's arguments.
 func runGrants(task model.Task) []string {
 	var grants []string
 	for _, grant := range append(slices.Clone(toolGrants), capability.RunGrants()...) {
 		if hasGrant(task, grant) {
 			grants = append(grants, grant)
+		}
+	}
+	// run_host_command asks a person in the task's chat before every
+	// command it runs (selfrepair.Confirm, and the forked mcpserver's
+	// daemonHostExecConfirm), so the grant that serves it travels only
+	// on a task somebody is sitting with -- the gate the mcpserver
+	// applies again with -interactive.
+	if task.Interactive {
+		for _, g := range task.Grants {
+			if grainserver.IsHostExecGrant(g.Capability) && !slices.Contains(grants, g.Capability) {
+				grants = append(grants, g.Capability)
+			}
 		}
 	}
 	return grants
@@ -4255,6 +4391,14 @@ func hasGrant(task model.Task, capability string) bool {
 		}
 	}
 	return false
+}
+
+func hasAPIScope(task model.Task, scope model.APIScope) bool {
+	names := make([]string, 0, len(task.Grants))
+	for _, g := range task.Grants {
+		names = append(names, g.Capability)
+	}
+	return model.APIGrantsOf(names).Has(scope)
 }
 
 // appendSection joins one more section onto a prompt, blank-line
@@ -4665,6 +4809,16 @@ func classifyRunEndArms(ctx context.Context, store *model.Store, cfg Config, tas
 		outcome = model.InterruptedOutcome
 		detail = runErr.Error()
 		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
+	case runErr != nil && errors.Is(runErr, agent.ErrHostdLost):
+		// The hostd the CLI ran on dropped and was not back within
+		// -hostd-reattach-timeout (runhost.Hostd.ReattachTimeout): an
+		// infrastructure failure, the machine's and not the task's.
+		// Interrupted, as a drain's refusal is: no strike, and the task
+		// is queued again, where it waits for its hostd if it is
+		// pinned to one.
+		outcome = model.InterruptedOutcome
+		detail = runErr.Error() + partialWorkSuffix(result)
+		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
 	case hitCapacity:
 		// The provider had no capacity for this run: overloaded,
 		// unavailable, a gateway that gave up. Recorded as
@@ -4705,6 +4859,22 @@ func classifyRunEndArms(ctx context.Context, store *model.Store, cfg Config, tas
 		// sentence (stopOnExpiredHostCredentials).
 		outcome = model.EnvironmentOutcome
 		detail = expired.Error() + partialWorkSuffix(result)
+		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
+	case runErr != nil && agent.HostSetupFailure(runErr):
+		// grain's own wiring to the CLI's host failed -- no grain hostd
+		// connected to carry the run's endpoints to, one too old to
+		// carry them, a file it could not stage there -- before the CLI
+		// said anything. Ahead of the arm below for the same reason as
+		// credsExpired: three of these in five minutes are fast,
+		// toolless and worded alike, and would read there as a provider
+		// refusing the framework and pause a connection the provider
+		// never refused (docs/test-runs/2026-11-03-hostd-routing.md,
+		// F4). Nor are its words a refusal grain lost a marker for, so
+		// they are kept out of the unmatched log too. A setup failure,
+		// as one before the agent started is; a task pinned to its
+		// hostd waits for it to reconnect at its next dispatch.
+		outcome = model.SetupFailedOutcome
+		detail = runErr.Error() + partialWorkSuffix(result)
 		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
 	case runErr != nil:
 		// runErr's own text, not the wrapped form below: that form
@@ -4755,6 +4925,7 @@ func classifyRunEndArms(ctx context.Context, store *model.Store, cfg Config, tas
 				detail = usageLimitDetail(limit, scope, until) + partialWorkSuffix(result)
 				burstRuns = burst[:len(burst)-1]
 				burstDetail = usageLimitDetail(limit, scope, until)
+				cfg.Pause.claimBurst(cfg.now(), burstRuns, burstDetail)
 				runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
 				break
 			}
@@ -4766,6 +4937,7 @@ func classifyRunEndArms(ctx context.Context, store *model.Store, cfg Config, tas
 		detail = runErr.Error() + partialWorkSuffix(result) + suspectedRefusalSuffix(unmatched)
 		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
 	default:
+		task.KeepRunning = taskKeepRunning(ctx, store, task)
 		outcome, detail = outcomeFor(task, result)
 	}
 	// A run that stopped by itself during a graceful pause's grace period
@@ -4814,6 +4986,17 @@ func recordRunEnd(ctx, finishCtx context.Context, store *model.Store, cfg Config
 	}
 	if finishErr == nil && failover {
 		noteFailedOverModels(finishCtx, store, task, cfg.now())
+	}
+	// A burst that this run's failure was part of may have been declared
+	// by a later run while this one was still on its way here; that run's
+	// re-record (below, in its own call) then landed before this write
+	// and was undone by it. The claim it left says so.
+	if finishErr == nil && outcome == "failed" && end.suspend == "" {
+		if claimed, ok := cfg.Pause.claimedByBurst(runID); ok {
+			if err := store.SetRunOutcome(finishCtx, runID, model.PausedOutcome, claimed); err != nil {
+				log.Printf("orchestrator: run %s: re-recording it as paused by a refusal burst: %v", runID, err)
+			}
+		}
 	}
 	// The earlier runs of the burst this one completed were recorded as
 	// failed, because one of them alone was indistinguishable from an
@@ -4903,7 +5086,7 @@ func recordRunEnd(ctx, finishCtx context.Context, store *model.Store, cfg Config
 			resumableSession = recordedEarly
 		}
 		// A suspension is not an ending: the next run joins this one's
-		// conversation (docs/design/durable-tasks.md#DT-2, Continuity),
+		// conversation (design/design/durable-tasks.design.md#DT-2, Continuity),
 		// so a suspended run whose framework named no session of its own
 		// leaves the one it was in -- what its stream named, or failing
 		// that the one it was resumed from -- rather than clearing it.

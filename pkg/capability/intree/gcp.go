@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -98,10 +99,42 @@ type GCPConfig struct {
 	// FallbackErr is why flags and environment that tried to configure
 	// the server did not, reported when configure supplies nothing.
 	FallbackErr error
+	// Env reads server environment variables (used for migrated per-admin
+	// credential_env bindings).
+	Env Env
 	// Connector reaches GCP; nil is gcpsets.GoogleConnector{}.
 	Connector gcpsets.Connector
-	Now       func() time.Time
-	Log       *log.Logger
+	// GeminiMinter builds the gemini-key method's API Keys minter; nil is
+	// geminikey.NewKeyMinter.
+	GeminiMinter GeminiMinterFunc
+	Now          func() time.Time
+	Log          *log.Logger
+	// Listen is the loopback address of the data-plane listener
+	// token-mode permission sets' grants exchange their per-attempt token
+	// at (gcpTokens); empty is 127.0.0.1:DefaultGCPTokenPort. Nothing
+	// listens until a token-mode set is configured.
+	Listen string
+}
+
+// gcpMethods is the server's methods over m: gcp-key when a permission
+// set is configured, and gemini-key when gemini_key is.
+func gcpMethods(cfg GCPConfig, m *gcpsets.Manager, report string, tokens *gcpTokens) ([]*protocol.Method, error) {
+	var methods []*protocol.Method
+	if len(m.Config.Sets) > 0 {
+		method, err := newGCPMethod(m, m.Now, report, tokens)
+		if err != nil {
+			return nil, err
+		}
+		methods = append(methods, method)
+	}
+	if m.Config.GeminiKey != nil {
+		method, err := newGeminiKeyMethod(m.Config, cfg.GeminiMinter, m.Now)
+		if err != nil {
+			return nil, err
+		}
+		methods = append(methods, method)
+	}
+	return methods, nil
 }
 
 // gcpConfigSchema is the gcp server's configure schema (§4.5): admins,
@@ -136,8 +169,8 @@ func gcpConfigSchema() map[string]any {
 // gcpConfigFrom is the configuration a configure call gives: its
 // permission sets when it has any, otherwise its old fields migrated over
 // the fallback's, otherwise the fallback itself.
-func gcpConfigFrom(fallback *gcpsets.Config, fallbackErr error, config map[string]any) (*gcpsets.Config, error) {
-	cfg, err := gcpConfigOf(fallback, fallbackErr, config)
+func gcpConfigFrom(fallback *gcpsets.Config, fallbackErr error, env Env, config map[string]any) (*gcpsets.Config, error) {
+	cfg, err := gcpConfigOf(fallback, fallbackErr, env, config)
 	if err != nil || cfg.Deployment != "" {
 		return cfg, err
 	}
@@ -149,9 +182,11 @@ func gcpConfigFrom(fallback *gcpsets.Config, fallbackErr error, config map[strin
 	return &c, nil
 }
 
-func gcpConfigOf(fallback *gcpsets.Config, fallbackErr error, config map[string]any) (*gcpsets.Config, error) {
-	if _, ok := config["permission_sets"]; ok {
-		return gcpsets.Parse(config)
+func gcpConfigOf(fallback *gcpsets.Config, fallbackErr error, env Env, config map[string]any) (*gcpsets.Config, error) {
+	_, hasSets := config["permission_sets"]
+	_, hasGemini := config["gemini_key"]
+	if hasSets || hasGemini {
+		return gcpsets.ParseWithEnv(config, env)
 	}
 	_, hasProject := config["project"]
 	_, hasAccounts := config["accounts"]
@@ -241,12 +276,20 @@ func migrateGCP(project string, accounts []gcpsets.LegacyAccount, minterKey stri
 // chooses the set, an enum of the configured ones whose first is the
 // default -- so a grant with no arguments, as every grant was before
 // permission sets, gets the first set. report is what Test shows.
-func newGCPMethod(m *gcpsets.Manager, now func() time.Time, report string) (*protocol.Method, error) {
+func newGCPMethod(m *gcpsets.Manager, now func() time.Time, report string, tokens *gcpTokens) (*protocol.Method, error) {
 	names := make([]any, 0, len(m.Config.Sets))
 	for _, n := range m.Config.SetNames() {
 		names = append(names, n)
 	}
-	desc := "Mint a per-attempt key for a service account of one of this deployment's GCP permission sets, deleted at release or past the attempt's deadline."
+	setArg := map[string]any{"type": "string", "title": "Permission set", "enum": names, "default": names[0]}
+	if reserved := m.Config.PersonGrantedSets(); len(reserved) > 0 {
+		vals := make([]any, 0, len(reserved))
+		for _, n := range reserved {
+			vals = append(vals, n)
+		}
+		setArg[protocol.PersonGrantedArgKey] = vals
+	}
+	desc := "Mint a per-attempt key for a service account of one of this deployment's GCP permission sets, deleted at release or past the attempt's deadline -- or, for a set over an existing service account with credential: token, short-lived access tokens for it by impersonation, and no key at all."
 	if report != "" {
 		desc += "\n\n" + report
 	}
@@ -257,11 +300,9 @@ func newGCPMethod(m *gcpsets.Manager, now func() time.Time, report string) (*pro
 			"type":                 "object",
 			"additionalProperties": false,
 			"properties": map[string]any{
-				"permission_set": map[string]any{"type": "string", "title": "Permission set", "enum": names, "default": names[0]},
+				"permission_set": setArg,
 				"primary": map[string]any{"type": "boolean", "default": true,
 					"description": "Place the key at ~/.gcp-service-account.json and activate it; false places it at ~/.gcp-keys/<set>.json only, for a task's second set."},
-				"account":  map[string]any{"type": "string", "pattern": gcpAccountName.String(), "description": "Deprecated: the old name for permission_set; \"default\" is the first set."},
-				"activate": map[string]any{"type": "boolean", "description": "Deprecated: a primary key is always activated."},
 			},
 		},
 		Now: now,
@@ -270,15 +311,12 @@ func newGCPMethod(m *gcpsets.Manager, now func() time.Time, report string) (*pro
 				return refusedResponse("attempt_id " + attemptID + " cannot name a directory"), nil
 			}
 			set, _ := args["permission_set"].(string)
-			if old, ok := args["account"].(string); ok && old != "" {
-				set = old
-				if old == "default" && m.Config.Set(old) == nil {
-					set = m.Config.Sets[0].Name
-				}
-			}
 			primary := true
 			if v, ok := args["primary"].(bool); ok {
 				primary = v
+			}
+			if ps := m.Config.Set(set); ps != nil && ps.TokenMode() && !tokens.ready() {
+				return nil, fmt.Errorf("permission set %s mints access tokens, but the gcp server has no data-plane listener", set)
 			}
 			keyJSON, lease, err := m.Mint(ctx, attemptID, set, deadline)
 			if err != nil {
@@ -291,14 +329,24 @@ func newGCPMethod(m *gcpsets.Manager, now func() time.Time, report string) (*pro
 				return gcpMintFailure(m, set, err)
 			}
 			ps := m.Config.Set(set)
+			what := "access tokens"
+			if !ps.TokenMode() {
+				what = "key " + lease.KeyID
+			}
+			tokens.log.Printf("gcp: audit: attempt %s: permission set %s: granted %s for %s until %s", attemptID, set, what, lease.Account, deadline.UTC().Format(time.RFC3339))
 			keyPath := GCPKeyPath
 			if !primary {
 				keyPath = gcpSecondaryKeyPath(set)
+			} else if ps.KeyPath != "" {
+				keyPath = ps.KeyPath
 			}
 			aboutPath := gcpAboutPath(keyPath)
 			roles := ""
 			if len(ps.Roles) > 0 {
 				roles = ", roles " + strings.Join(ps.Roles, ", ")
+			}
+			if ps.TokenMode() {
+				return gcpTokenResponse(tokens, attemptID, set, lease, ps, deadline, keyPath, primary)
 			}
 			resp := &protocol.MintResponse{
 				Status: protocol.StatusOK,
@@ -309,7 +357,7 @@ func newGCPMethod(m *gcpsets.Manager, now func() time.Time, report string) (*pro
 				PromptSection: fmt.Sprintf("GCP permission set %s: service account %s in project %s%s. Its key is at %s; its client_email is that account, and %s names the set, the account and the project.",
 					set, lease.Account, ps.Project, roles, keyPath, aboutPath),
 			}
-			if primary {
+			if primary && keyPath == GCPKeyPath {
 				resp.PromptSection += " gcloud is logged in as that account with the project selected, and GOOGLE_APPLICATION_CREDENTIALS-style clients find the key there."
 				script := "/home/debian/.gcp-key/" + attemptID + "/activate.sh"
 				resp.Placements = append(resp.Placements, protocol.Placement{
@@ -323,8 +371,60 @@ func newGCPMethod(m *gcpsets.Manager, now func() time.Time, report string) (*pro
 			}
 			return resp, nil
 		},
-		Release: m.Release,
+		Release: func(ctx context.Context, attemptID string) error {
+			tokens.release(attemptID)
+			return m.Release(ctx, attemptID)
+		},
 	})
+}
+
+// gcpTokenResponse is a token-mode grant's placements: the
+// external_account config where a key would go, the per-attempt token it
+// presents, the .about file, an ID-token helper, the forward to this
+// server's listener, and -- for a primary grant -- gcloud signed in with
+// the config.
+func gcpTokenResponse(tokens *gcpTokens, attemptID, set string, lease gcpsets.Lease, ps *gcpsets.PermissionSet, deadline time.Time, keyPath string, primary bool) (*protocol.MintResponse, error) {
+	secret, err := tokens.grant(attemptID, set, lease.Account, deadline)
+	if err != nil {
+		return nil, err
+	}
+	port := tokens.listenPort()
+	dir := gcpTokenDir(attemptID)
+	subject := dir + "/" + set + ".token"
+	idScript := dir + "/" + set + "-id-token"
+	aboutPath := gcpAboutPath(keyPath)
+	about := gcpAbout(set, lease.Account, ps, keyPath) +
+		"credential: short-lived access tokens by impersonation (no key exists); " + keyPath + " is an external_account config\n" +
+		"id_token: " + idScript + " AUDIENCE\n"
+	roles := ""
+	if len(ps.Roles) > 0 {
+		roles = " (listed roles " + strings.Join(ps.Roles, ", ") + "; the account's own permissions are what apply)"
+	}
+	resp := &protocol.MintResponse{
+		Status: protocol.StatusOK,
+		Ports:  []protocol.Port{{HostPort: port}},
+		Placements: []protocol.Placement{
+			{Path: keyPath, Mode: "0600", Content: gcpExternalAccount(port, attemptID, set, subject)},
+			{Path: subject, Mode: "0600", Content: secret},
+			{Path: idScript, Mode: "0700", Content: gcpIDTokenScript(port, attemptID, subject)},
+			{Path: aboutPath, Mode: "0644", Content: about},
+		},
+		PromptSection: fmt.Sprintf("GCP permission set %s: existing service account %s, project %s%s. %s is an external_account credential config, not a key: clients that read it get short-lived access tokens for that account, refreshed as they expire, until this attempt ends. `%s AUDIENCE` prints an ID token for it. %s names the set, the account and the project.",
+			set, lease.Account, ps.Project, roles, keyPath, idScript, aboutPath),
+	}
+	if primary && keyPath == GCPKeyPath {
+		resp.PromptSection += " gcloud is logged in with it, the project selected, and GOOGLE_APPLICATION_CREDENTIALS-style clients find it there."
+		script := dir + "/activate.sh"
+		resp.Placements = append(resp.Placements, protocol.Placement{
+			Path: script, Mode: "0700",
+			Content: "#!/bin/sh\nset -eu\n" +
+				"command -v gcloud >/dev/null 2>&1 || exit 0\n" +
+				"gcloud auth login --cred-file=" + shellQuote(keyPath) + " --quiet >/dev/null 2>&1\n" +
+				"gcloud config set project " + shellQuote(ps.Project) + " >/dev/null 2>&1\n",
+		})
+		resp.Setup = script
+	}
+	return resp, nil
 }
 
 // NewGCP builds the gcp server configured by cfg.Fallback alone, with no
@@ -334,15 +434,21 @@ func NewGCP(cfg GCPConfig) (*Server, error) {
 		return nil, fmt.Errorf("gcp: no permission sets are configured")
 	}
 	m := newGCPManager(cfg, cfg.Fallback)
-	method, err := newGCPMethod(m, m.Now, "")
+	tokens := newGCPTokens(func() *gcpsets.Manager { return m }, cfg.Log)
+	methods, err := gcpMethods(cfg, m, "", tokens)
 	if err != nil {
 		return nil, err
 	}
-	s, err := newServer("gcp", cfg.Log, method)
+	s, err := newServer("gcp", cfg.Log, methods...)
 	if err != nil {
+		return nil, err
+	}
+	if err := tokens.ensureListen(s, cfg, m.Config); err != nil {
+		s.Close(context.Background())
 		return nil, err
 	}
 	s.onTick(reaper(s, func() *gcpsets.Manager { return m }))
+	s.onTick(geminiReaper(s, func() *gcpsets.Config { return m.Config }, cfg.GeminiMinter, m.Now))
 	return s, nil
 }
 
@@ -389,10 +495,11 @@ func init() {
 			maxAge := fs.Duration("max-key-age", gcpkey.DefaultMaxKeyAge, "deprecated: the old fixed pool's longest key lifetime")
 			var accounts listFlag
 			fs.Var(&accounts, "account", "deprecated: an old fixed pool, [name=]email[*count] (repeatable)")
+			listen := fs.String("listen", "127.0.0.1:"+strconv.Itoa(DefaultGCPTokenPort), "the loopback address of the data-plane listener token-mode permission sets' grants fetch access tokens from")
 			if err := fs.Parse(args); err != nil {
 				return nil, err
 			}
-			cfg := GCPConfig{Log: logger}
+			cfg := GCPConfig{Log: logger, Env: env, Listen: listenAddr(env, *listen)}
 			var legacy []gcpsets.LegacyAccount
 			for _, v := range accounts {
 				a, err := parseGCPAccount(v)
@@ -450,37 +557,65 @@ func newConfigurableGCP(cfg GCPConfig) (*Server, error) {
 	var mu sync.Mutex
 	var current *gcpsets.Manager
 	var methods []*protocol.Method
+	tokens := newGCPTokens(func() *gcpsets.Manager {
+		mu.Lock()
+		defer mu.Unlock()
+		return current
+	}, cfg.Log)
 	if cfg.Fallback != nil {
 		m := newGCPManager(cfg, cfg.Fallback)
-		method, err := newGCPMethod(m, m.Now, "")
-		if err == nil {
-			methods, current = append(methods, method), m
+		if built, err := gcpMethods(cfg, m, "", tokens); err == nil {
+			methods, current = built, m
 		}
 	}
 	s, err := newServer("gcp", cfg.Log, methods...)
 	if err != nil {
 		return nil, err
 	}
+	if current != nil {
+		if err := tokens.ensureListen(s, cfg, current.Config); err != nil {
+			s.Close(context.Background())
+			return nil, err
+		}
+	}
 	s.onTick(reaper(s, func() *gcpsets.Manager {
 		mu.Lock()
 		defer mu.Unlock()
 		return current
 	}))
+	now := time.Now
+	if cfg.Now != nil {
+		now = cfg.Now
+	}
+	s.onTick(geminiReaper(s, func() *gcpsets.Config {
+		mu.Lock()
+		defer mu.Unlock()
+		if current == nil {
+			return nil
+		}
+		return current.Config
+	}, cfg.GeminiMinter, now))
 	err = s.configurable(gcpConfigSchema(), func(ctx context.Context, config map[string]any) ([]*protocol.Method, error) {
-		c, err := gcpConfigFrom(cfg.Fallback, cfg.FallbackErr, config)
+		c, err := gcpConfigFrom(cfg.Fallback, cfg.FallbackErr, cfg.Env, config)
 		if err != nil {
 			return nil, err
 		}
 		m := newGCPManager(cfg, c)
-		report := gcpConfigureReport(ctx, m)
-		method, err := newGCPMethod(m, m.Now, report)
+		if err := tokens.ensureListen(s, cfg, c); err != nil {
+			return nil, err
+		}
+		report := ""
+		if len(c.Sets) > 0 {
+			report = gcpConfigureReport(ctx, m)
+		}
+		methods, err := gcpMethods(cfg, m, report, tokens)
 		if err != nil {
 			return nil, err
 		}
 		mu.Lock()
 		current = m
 		mu.Unlock()
-		return []*protocol.Method{method}, nil
+		return methods, nil
 	})
 	if err != nil {
 		return nil, err

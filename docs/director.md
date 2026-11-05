@@ -54,7 +54,9 @@ the chat is in:
 
 | setting | shipped as | what it decides |
 |---|---|---|
-| `Capabilities` | self-debug, grain-log, deployment-health, bootstrap-playbooks (plus build defaults, e.g. corp-research on Google builds) | what the agent may reach |
+| `Capabilities` | self-debug, grain-log, deployment-health, bootstrap-playbooks (plus any capability a wrapper distribution registers as on by default) | what the agent may reach |
+| `ReadsAll` | true (every session) | whether it reads every repository this deployment works in |
+| `DeclinedDefaults` | none | which of the defaults every session holds (`api:ci-read`) it opts out of |
 | `NetworkAccess` | none | whether its sandbox reaches the internet |
 | `TasksApproved` | false | whether the tasks it files are queued or wait for a person |
 | `Title` | "Director" | what the rail calls it |
@@ -96,13 +98,42 @@ is the one grant here that can break the deployment it is talking about,
 and **memory**, which writes the standing instructions every later run is
 given.
 
-On a Google / Cloudtop install (`google/cmd/grain`, installed by
-`google/scripts/cloudtop-install.sh`), **corp-research** is also on by
-default for the director (`pkg/capability.Registration.DefaultOn`): it lets
-antigravity runs call the agy host's own search tools, as
-the host's corp identity -- see
-[corp-research.md](../google/docs/corp-research.md), and untick it in the
-director's pane to turn it off.
+A wrapper distribution can register further capabilities as on by default
+for the director (`pkg/capability.Registration.DefaultOn`); each shows in
+the director's pane like any other, and can be unticked there.
+
+## What every session reads by default
+
+A session exists to answer "what is going on in this deployment", so every
+session — the director and any session an operator creates, including ones
+stored before this default existed — reads all of it without anybody adding
+repositories one at a time (`pkg/model/console_session_reach.go`):
+
+- **Every repository this deployment works in.** Each `repo_config` row,
+  plus each repository `target_repos` names outright (not by pattern), less
+  any whose work ownership is `off` (retired) or that `target_repos` does
+  not allow (`model.ConsoleSessionWorkingRepos`). This is resolved again
+  on every cycle, so a repository added to `repo_config` later is readable
+  on the next one and a retired one stops being readable. These are
+  reads: the session may clone and fetch, never push. The state
+  repository and the session's own `Reads` still apply on top. The pane
+  lists them apart from the reads a session names itself (`autoReads` on
+  `GET /api/console-sessions`). Set `readsAll: false` (or `reads_all:
+  false`) on the session in `console_sessions` to opt it out. The opt-out
+  is a setting, read every cycle, so it holds until the setting changes.
+- **CI for every repository.** `api:ci-read`, unscoped, granted
+  `GrantByDefault`, so `grain ci list/show/log` and `grain pr status
+  --task/--ref` read grain CI and GitHub Actions runs on every repository.
+  This is not `grain-ci`, which is a repository's CI Mode and cannot be
+  attached by hand. A session's task is given the grant once
+  (`ConsoleSessionConfigSnapshot.OfferedDefaults`), so an operator who
+  removes it from the task keeps it removed across cycles and restarts of
+  the daemon. Unticking it in the session's pane also records it in the
+  session's `declinedDefaults`, so it stays off when the session's task is
+  filed again. Ticking it brings it back.
+
+Writes are never a default. A session files tasks rather than pushing, and
+what it may push to is `Writes`, named one repository at a time.
 
 `TasksApproved` is false because a chat is a fast way to ask for a lot of
 work: a director that could queue its own tasks would be one
@@ -197,6 +228,12 @@ CLI flag `-session-sandbox-idle-ttl`, default `30m`; set to `-1s` to disable):
    `agent.SuspendedReusedSandboxPreamble`) explicitly tells the agent that
    **the sandbox is the same one** so it does not redo setup.
 
+A session's run is admitted the moment it is ready, however full the
+worker pool and the sandbox budget are. Only the host disk floor, a cluster
+with no node for the pod, or having no connection to run its model on can
+hold it, and a refusal is logged as a warning that names the gate
+([Sandbox budget](sandbox-budget.md#sessions-are-never-held-by-the-budget)).
+
 Held session sandboxes are counted honestly against the deployment's sandbox
 budget and `MaxWorkers`, shown on **System → Sandboxes** with kind and status
 `"idle session"`, and released when the idle TTL expires, when the session
@@ -210,8 +247,10 @@ not the same one**.
 
 The director can do anything a person can do in the UI if its session
 holds the scope. It asks for scopes as `api:<scope>` or `api:<preset>`
-capabilities, granted in the session's capability pane, and each grant
-serves it one `api_*` tool per route under that scope. For example:
+capabilities, granted in the session's capability pane, and any such
+grant attaches the `grain-controller` MCP server, whose
+`grain_explore_scope` and `grain_invoke` reach every route under the
+scopes it holds. For example:
 
 - `api:task-admin` to reorder, edit, retry and close tasks and re-run
   their CI;
@@ -252,13 +291,11 @@ middle out of — and never on how old the chat is. It says what a fresh
 one costs and what it keeps before it closes anything, and grain never
 takes the decision on anybody's behalf. That is the whole of what "split
 this chat" means here, and it is why there is no separate mechanism for
-it; see "A chat that never ends is not split for you" in
-docs/implementation-notes.md for the decision behind it.
+it.
 
 ## Unification: The Director as the `grain/config` Repo Manager
 
-As specified in [docs/repo-managers-and-environments.md](repo-managers-and-environments.md),
-the Director's standing session model is the foundational primitive for all repository
+The Director's standing session model is the foundational primitive for all repository
 governance across Grain:
 - **The Director is the Repo Manager for `grain/config`**: It operates as the root of the
   governance hierarchy, managing deployment-wide settings, repository onboarding, global

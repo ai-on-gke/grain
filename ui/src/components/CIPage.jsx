@@ -27,7 +27,6 @@ import {
   Collapse,
   FormControlLabel,
   Link,
-  MenuItem,
   Table,
   TableBody,
   TableCell,
@@ -39,11 +38,13 @@ import {
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import api, { isUnreachable, unreachableReason } from "../api.js";
 import BranchField from "./BranchField.jsx";
-import ItemGlyph, { GlyphLabel } from "./ItemGlyph.jsx";
+import AppIcon, { NavGlyph } from "./AppIcon.jsx";
+import { GlyphLabel } from "./ItemGlyph.jsx";
 import { ListHeader } from "./ListPrimitives.jsx";
 import NarrowingBar from "./NarrowingBar.jsx";
 import { formatBytes } from "./PackageCachePanel.jsx";
 import RepoField from "./RepoField.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import {
   CONCLUSION_LABELS,
   RUN_ATTRIBUTES,
@@ -435,6 +436,7 @@ function ActiveSandboxes({ active, onOpen }) {
                       component="button"
                       type="button"
                       underline="hover"
+                      aria-label={`${run.repo} ${run.ref}, job ${jobName(job)}, sandbox ${job.sandbox}`}
                       onClick={() => onOpen(run.id)}
                     >
                       {run.repo}
@@ -1199,21 +1201,18 @@ export function StartRunForm({
         {loadingWorkflows && <CircularProgress size={18} />}
       </Box>
       {workflows?.length > 0 && (
-        <TextField
-          select
-          fullWidth
-          size="small"
+        <SearchSelect
           margin="dense"
           label="Workflow"
           value={workflow}
-          onChange={(e) => setWorkflow(e.target.value)}
-        >
-          {workflows.map((option) => (
-            <MenuItem key={option.path} value={option.path}>
-              {option.name} — {option.path}
-            </MenuItem>
-          ))}
-        </TextField>
+          options={workflows.map((option) => ({
+            value: option.path,
+            label: `${option.name} — ${option.path}`,
+          }))}
+          onChange={(next) => {
+            if (next) setWorkflow(next);
+          }}
+        />
       )}
       {workflows?.length === 0 && (
         <Alert severity="info" sx={{ mt: 1 }}>
@@ -1277,6 +1276,20 @@ export function StartRunForm({
 // same outage separately. Defaulted empty, so a listing that does not
 // carry them (an older response, a test) draws exactly what it drew
 // before.
+// runOpenLabel names the control that opens run in RunList (the active
+// sandboxes table names its own by job and sandbox). Its visible
+// text is only the repo (or, on a repo's own page, the branch), which every
+// row of a busy list shares, so a screen reader or a keyboard user heard
+// the same "acme/widgets" for each run; the name carries the branch, the
+// result and when it started too, with the visible text first.
+export function runOpenLabel(run, label, zone, showRepo = true) {
+  const parts = [showRepo ? `${run.repo} ${run.ref}` : run.ref];
+  if (label) parts.push(String(label).toLowerCase());
+  const started = formatDateTime(run.startedAt, zone);
+  if (started) parts.push(`started ${started}`);
+  return parts.join(", ");
+}
+
 export function RunList({
   runs,
   zone,
@@ -1324,6 +1337,7 @@ export function RunList({
                       component="button"
                       type="button"
                       underline="hover"
+                      aria-label={runOpenLabel(run, label, zone)}
                       onClick={() => onOpen(run.id)}
                     >
                       {run.repo}
@@ -1343,6 +1357,7 @@ export function RunList({
                       type="button"
                       underline="hover"
                       sx={{ fontFamily: "monospace", fontSize: "0.8rem" }}
+                      aria-label={runOpenLabel(run, label, zone, false)}
                       onClick={() => onOpen(run.id)}
                     >
                       {run.ref}
@@ -2042,7 +2057,7 @@ export default function CIPage({
           divider as the other pages opened from the rail. */}
       <ListHeader
         title="CI"
-        icon={<ItemGlyph kind="ci" size={20} />}
+        icon={<NavGlyph kind="ci" size={20} />}
         action={
           data?.enabled && (
             <Box
@@ -2068,6 +2083,7 @@ export default function CIPage({
               <Button
                 size="small"
                 variant="outlined"
+                startIcon={<AppIcon name="refresh" size={16} />}
                 onClick={() => {
                   refreshList();
                   // The cache polls slowly on its own, so somebody who has

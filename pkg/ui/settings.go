@@ -16,9 +16,12 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -65,6 +68,9 @@ type Settings struct {
 	// PollInterval is a Go duration string ("30s"), the same syntax
 	// -poll-interval itself parses.
 	PollInterval string `json:"pollInterval"`
+	// PollIntervalDefault is grain's own interval, shown beside the box
+	// as the placeholder a cleared box goes back to.
+	PollIntervalDefault string `json:"pollIntervalDefault"`
 	// There is deliberately no maxWorkers, maxMergers or maxCIJobs here.
 	// They were this deployment's three concurrency settings until
 	// grain/task-28: how many ordinary runs could be live, how much
@@ -79,42 +85,6 @@ type Settings struct {
 	// what they would commit, and nothing schedules on them.
 	MaxWorkers       int `json:"maxWorkers"`
 	MaxMergesPerRepo int `json:"maxMergesPerRepo"`
-	// MergeBatchSize is how many queued changes the merge queue tests
-	// together on a throwaway ref before merging the lot
-	// (model.Config.MergeBatchSize). 1 turns batching off and leaves the
-	// one-at-a-time queue.
-	MergeBatchSize int `json:"mergeBatchSize"`
-	// MergeBatchSizeChosen is the batch size this deployment has stored,
-	// or 0 when it has chosen none and MergeBatchSize is grain's default.
-	// The Admin pane's box shows this one, so a box somebody cleared reads
-	// blank after a reload rather than the default as though it had been
-	// typed in (docs/test-runs/2026-10-12-suite-release-batch-fixes.md).
-	MergeBatchSizeChosen int `json:"mergeBatchSizeChosen"`
-	// MergeGatherWindow is how long the queue holds a lone ready change
-	// at the front of a branch's queue, waiting to see whether a second
-	// becomes ready and the two can be tested together
-	// (model.Config.MergeGatherWindow), as a Go duration string ("5m") --
-	// the same syntax PollInterval and the CI gate's two windows use.
-	//
-	// Empty means this deployment has chosen nothing, which is grain's
-	// own window shown beside it as a placeholder
-	// (MergeGatherWindowDefault). A negative duration is how the wait is
-	// turned off altogether, the spelling CIReserveAfter uses for the
-	// same kind of trade.
-	MergeGatherWindow        string `json:"mergeGatherWindow"`
-	MergeGatherWindowDefault string `json:"mergeGatherWindowDefault"`
-	// MergeBatching is what the batches that size has produced have
-	// actually cost and saved (grain/task-300), or nil on a deployment
-	// that has never formed one. It sits beside the setting because the
-	// setting is a bet, and this is the record of how the bet has gone.
-	MergeBatching *MergeBatching `json:"mergeBatching,omitempty"`
-	// MergeGathering is what the holds that window has taken have
-	// actually done (grain/task-440), or nil on a deployment whose queue
-	// has never held anything. It sits beside MergeGatherWindow for
-	// MergeBatching's reason, and for a sharper one: a hold leaves no
-	// other trace at all, so without it the window above is the one
-	// setting in this pane with no evidence behind it.
-	MergeGathering *MergeGathering `json:"mergeGathering,omitempty"`
 	// MaxAutoSubmitDepth and MaxAutoSubmitFanOut are the bounds on work
 	// grain queues with nobody having approved it -- model.Config's own
 	// fields of the same name, and model.AutoSubmitLimits for what the
@@ -326,29 +296,43 @@ type Settings struct {
 	SandboxContract *sandboximage.ContractInfo `json:"sandboxContract,omitempty"`
 	// Kubernetes sandbox settings (model.Config.K8s*). All are restart-only:
 	// the sandbox backend is constructed once when grain daemon starts.
-	K8sNamespace           string   `json:"k8sNamespace"`
-	K8sNamespaceDefault    string   `json:"k8sNamespaceDefault"`
-	K8sKubectl             string   `json:"k8sKubectl"`
-	K8sKubectlDefault      string   `json:"k8sKubectlDefault"`
-	K8sSandboxImage        string   `json:"k8sSandboxImage"`
-	K8sSandboxImageDefault string   `json:"k8sSandboxImageDefault"`
-	K8sGranuleImage        string   `json:"k8sGranuleImage"`
-	K8sGranuleImageDefault string   `json:"k8sGranuleImageDefault"`
-	DaemonBuildVersion     string   `json:"daemonBuildVersion,omitempty"`
-	K8sSandboxImageWarning string   `json:"k8sSandboxImageWarning,omitempty"`
-	K8sGranuleImageWarning string   `json:"k8sGranuleImageWarning,omitempty"`
-	K8sWorkspace           string   `json:"k8sWorkspace"`
-	K8sWorkspaceDefault    string   `json:"k8sWorkspaceDefault"`
-	K8sGitProxyHost        string   `json:"k8sGitProxyHost"`
-	K8sSandboxService      string   `json:"k8sSandboxService"`
-	K8sServiceAccount      string   `json:"k8sServiceAccount"`
-	K8sNodeSelector        []string `json:"k8sNodeSelector"`
-	K8sPrivileged          bool     `json:"k8sPrivileged"`
-	K8sNetworkPolicy       bool     `json:"k8sNetworkPolicy"`
-	K8sDeployment          string   `json:"k8sDeployment"`
-	K8sDeploymentDefault   string   `json:"k8sDeploymentDefault"`
-	K8sContainer           string   `json:"k8sContainer"`
-	K8sContainerDefault    string   `json:"k8sContainerDefault"`
+	K8sNamespace           string `json:"k8sNamespace"`
+	K8sNamespaceDefault    string `json:"k8sNamespaceDefault"`
+	K8sKubectl             string `json:"k8sKubectl"`
+	K8sKubectlDefault      string `json:"k8sKubectlDefault"`
+	K8sSandboxImage        string `json:"k8sSandboxImage"`
+	K8sSandboxImageDefault string `json:"k8sSandboxImageDefault"`
+	K8sGranuleImage        string `json:"k8sGranuleImage"`
+	K8sGranuleImageDefault string `json:"k8sGranuleImageDefault"`
+	DaemonBuildVersion     string `json:"daemonBuildVersion,omitempty"`
+	K8sSandboxImageWarning string `json:"k8sSandboxImageWarning"`
+	K8sGranuleImageWarning string `json:"k8sGranuleImageWarning"`
+	// K8sGranuleImageEffective is the guest image kubernetes-granule pods
+	// are created from under these settings -- K8sGranuleImage, or the
+	// stamped guest mirrored into SandboxImageMirrorEffective -- which is
+	// not the stored value whenever that value is read as the mirror.
+	K8sGranuleImageEffective string `json:"k8sGranuleImageEffective"`
+	// K8sGranuleImageMirror is the mirror repository K8sGranuleImage is
+	// treated as rather than booted, "" when it is an image of its own
+	// (SandboxImageMirrorInfo.K8sGranuleImageIsMirror).
+	K8sGranuleImageMirror string `json:"k8sGranuleImageMirror"`
+	// SandboxImageMirrorEffective is the repository the stamped guest is
+	// mirrored into: SandboxImageMirror, or one derived from
+	// SandboxImageMirrorDerivedFrom when that is empty.
+	SandboxImageMirrorEffective   string   `json:"sandboxImageMirrorEffective"`
+	SandboxImageMirrorDerivedFrom string   `json:"sandboxImageMirrorDerivedFrom"`
+	K8sWorkspace                  string   `json:"k8sWorkspace"`
+	K8sWorkspaceDefault           string   `json:"k8sWorkspaceDefault"`
+	K8sGitProxyHost               string   `json:"k8sGitProxyHost"`
+	K8sSandboxService             string   `json:"k8sSandboxService"`
+	K8sServiceAccount             string   `json:"k8sServiceAccount"`
+	K8sNodeSelector               []string `json:"k8sNodeSelector"`
+	K8sPrivileged                 bool     `json:"k8sPrivileged"`
+	K8sNetworkPolicy              bool     `json:"k8sNetworkPolicy"`
+	K8sDeployment                 string   `json:"k8sDeployment"`
+	K8sDeploymentDefault          string   `json:"k8sDeploymentDefault"`
+	K8sContainer                  string   `json:"k8sContainer"`
+	K8sContainerDefault           string   `json:"k8sContainerDefault"`
 	// K8sPriorityClassInteractive, K8sPriorityClassAgent and
 	// K8sPriorityClassCI are model.Config's own fields: the PriorityClass
 	// each kind of Kubernetes sandbox pod runs at, "" for none. Their
@@ -652,6 +636,26 @@ type Settings struct {
 	// without a time would save.
 	AutoUpgradeChannel string `json:"autoUpgradeChannel"`
 	AutoUpgradeTime    string `json:"autoUpgradeTime"`
+	// AutoUpgradeOn is what makes this deployment upgrade itself
+	// (model.Config.AutoUpgradeMode): "off", "daily" (AutoUpgradeChannel
+	// at AutoUpgradeTime) or "release" (once its image channel publishes
+	// a new release, orchestrator's reconcileReleaseUpgrade, onto
+	// "latest" when AutoUpgradeChannel is "latest" and the exact tag
+	// otherwise). Never empty coming out of here. AutoUpgradeModes is the
+	// vocabulary, in a picker's order.
+	AutoUpgradeOn    string   `json:"autoUpgradeOn"`
+	AutoUpgradeModes []string `json:"autoUpgradeModes"`
+	// OwnerTrust is the owner-trust proposal policy
+	// (model.Config.OwnerTrust): the (owner, repo) pairs -- repo "*" for
+	// every repository -- whose external agent credentials' unapproved
+	// filings queue without a person's approval. Never nil coming out of
+	// here.
+	OwnerTrust []model.OwnerTrustRule `json:"ownerTrust"`
+	// AutoGrantContextReads is model.Config.AutoGrantContextReads: the
+	// committed-context repositories ("*" or owner/name) for which filing a
+	// task with `-design owner/name:path@rev` auto-grants -read access. Never
+	// nil coming out of here.
+	AutoGrantContextReads []string `json:"autoGrantContextReads"`
 	// TimeZone is model.Config.TimeZone: the IANA zone every timestamp the
 	// frontend prints is shown in. Never empty coming out of here -- an
 	// unset stored value reads back as model.DefaultTimeZone.
@@ -749,6 +753,16 @@ type Settings struct {
 	// is managed in read-only Infrastructure-as-Code mode (state-repo.json).
 	ExternalConfigRepo   string `json:"externalConfigRepo,omitempty"`
 	ExternalConfigBranch string `json:"externalConfigBranch,omitempty"`
+	// SettingsLocked is model.Config.SettingsLocked: whether non-bootstrap
+	// settings are locked in the UI and REST API in favour of config
+	// repository pull requests. False by default.
+	SettingsLocked bool `json:"settingsLocked"`
+	// ConfigRepoOnly is GET /api/config's configRepoOnly for this row:
+	// whether the API refuses its non-bootstrap writes in favour of a
+	// config pull request. Unlike SettingsLocked it is false without a
+	// config repository and under the directConfigWrites opt-out, so it is
+	// what the UI draws read-only on (settings-mutability D-10, D-12).
+	ConfigRepoOnly bool `json:"configRepoOnly"`
 }
 
 type UnrunnableSetting struct {
@@ -1022,34 +1036,39 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 	cfg, unrunnable := c.runnableSettings(cfg)
 	geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSet()
 	sandboxImgDefault, granuleImgDefault, buildVersion := c.resolveK8sImageDefaults(ctx, &cfg, repoConfigs)
+	mirror := c.sandboxImageMirrorFor(cfg, granuleImgDefault)
+	effectiveGranule := c.k8sGranuleImageForWarn(cfg, granuleImgDefault, mirror)
 	sandboxWarn, granuleWarn := c.resolveK8sImageWarnings(
 		ctx,
 		firstNonEmptyString(cfg.K8sSandboxImage, sandboxImgDefault),
-		c.k8sGranuleImageForWarn(cfg, granuleImgDefault),
+		effectiveGranule,
 	)
 	sandboxWarn = joinWarnings(sandboximage.StaleStockPin(cfg.K8sSandboxImage, sandboxImgDefault, nil), sandboxWarn)
-	granuleWarn = joinWarnings(sandboximage.StaleStockPin(cfg.K8sGranuleImage, granuleImgDefault, nil), granuleWarn)
+	// A k8s_granule_image read as the mirror repository is not booted,
+	// so calling it a stale pin of the stamp is what sends somebody to
+	// clear it -- and clearing it was the one thing that would change
+	// what sandboxes run (K8sGranuleImageMirror says what it is instead).
+	if !mirror.K8sGranuleImageIsMirror {
+		granuleWarn = joinWarnings(sandboximage.StaleStockPin(cfg.K8sGranuleImage, granuleImgDefault, nil), granuleWarn)
+	}
 	out := Settings{
-		Configured:               true,
-		PollInterval:             cfg.PollInterval.String(),
-		MaxWorkers:               cfg.MaxWorkers,
-		MaxMergesPerRepo:         cfg.MaxMergesPerRepo,
-		MergeBatchSize:           cfg.MergeBatchSizeOr(),
-		MergeBatchSizeChosen:     max(cfg.MergeBatchSize, 0),
-		MergeGatherWindow:        durationSetting(cfg.MergeGatherWindow),
-		MergeGatherWindowDefault: model.DefaultMergeGatherWindow.String(),
-		MaxAutoSubmitDepth:       cfg.AutoSubmitLimits().Depth,
-		MaxAutoSubmitFanOut:      cfg.AutoSubmitLimits().FanOut,
-		GeminiEfforts:            antigravity.Efforts(),
-		CodexEfforts:             codex.Efforts(),
-		MaxAgentTurns:            cfg.MaxAgentTurns,
-		GitHubHost:               cfg.GitHubHost,
-		GitHubInsecureHTTP:       cfg.GitHubInsecureHTTP,
-		GCPProject:               cfg.GCPProject,
-		GCPServiceAccountEmail:   cfg.GCPServiceAccountEmail,
-		GCPServiceAccountCount:   cfg.GCPServiceAccountCount,
-		IAPBackendService:        cfg.IAPBackendService,
-		IAPResource:              cfg.IAPResource,
+		Configured:             true,
+		PollInterval:           cfg.PollInterval.String(),
+		PollIntervalDefault:    model.DefaultPollInterval.String(),
+		MaxWorkers:             cfg.MaxWorkers,
+		MaxMergesPerRepo:       cfg.MaxMergesPerRepo,
+		MaxAutoSubmitDepth:     cfg.AutoSubmitLimits().Depth,
+		MaxAutoSubmitFanOut:    cfg.AutoSubmitLimits().FanOut,
+		GeminiEfforts:          antigravity.Efforts(),
+		CodexEfforts:           codex.Efforts(),
+		MaxAgentTurns:          cfg.MaxAgentTurns,
+		GitHubHost:             cfg.GitHubHost,
+		GitHubInsecureHTTP:     cfg.GitHubInsecureHTTP,
+		GCPProject:             cfg.GCPProject,
+		GCPServiceAccountEmail: cfg.GCPServiceAccountEmail,
+		GCPServiceAccountCount: cfg.GCPServiceAccountCount,
+		IAPBackendService:      cfg.IAPBackendService,
+		IAPResource:            cfg.IAPResource,
 
 		NewestFirst:            cfg.NewestFirst,
 		SandboxBackend:         string(cfg.SandboxBackend),
@@ -1148,6 +1167,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		SandboxShapeIgnored:                c.Config.SandboxShapeIgnored,
 		SandboxCommitment:                  c.sandboxCommitment(cfg),
 		ShowClosedByDefault:                cfg.ShowClosedByDefault,
+		SettingsLocked:                     cfg.SettingsLocked,
+		ConfigRepoOnly:                     c.rowConfigRepoOnly(ctx, cfg),
 		EnvironmentName:                    cfg.EnvironmentName,
 		PromptExtension:                    cfg.PromptExtension,
 		RepairTemplateID:                   cfg.RepairTemplateID,
@@ -1162,6 +1183,10 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		UpgradeCheckPausesPipeline:         cfg.UpgradeCheckPausesPipeline,
 		AutoUpgradeChannel:                 cfg.AutoUpgradeChannel,
 		AutoUpgradeTime:                    autoUpgradeTimeOrDefault(cfg.AutoUpgradeTime),
+		AutoUpgradeOn:                      cfg.AutoUpgradeMode(),
+		AutoUpgradeModes:                   model.AutoUpgradeModes(),
+		OwnerTrust:                         ownerTrustOrEmpty(cfg.OwnerTrust),
+		AutoGrantContextReads:              stringsOrEmpty(cfg.AutoGrantContextReads),
 		TimeZone:                           model.TimeZoneOrDefault(cfg.TimeZone),
 		AgentBackends:                      cfg.AgentBackends,
 		AgentCLIDefaults:                   c.Config.AgentCLIDefaults,
@@ -1177,6 +1202,12 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		Unrunnable:                         unrunnable,
 	}
 	c.resolveSandboxImageFields(ctx, cfg, sandboxImgDefault, granuleImgDefault).apply(&out)
+	out.K8sGranuleImageEffective = effectiveGranule
+	out.SandboxImageMirrorEffective = mirror.Repository
+	out.SandboxImageMirrorDerivedFrom = mirror.DerivedFrom
+	if mirror.K8sGranuleImageIsMirror {
+		out.K8sGranuleImageMirror = mirror.Repository
+	}
 	sources := computeSettingSources(cfg, out)
 	out.Sources = sources
 	out.SettingSources = sources
@@ -1421,8 +1452,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			CIArtifactRunMBDefault:             ciStorageDefaults.artifactRunMB,
 			CIArtifactFileMBDefault:            ciStorageDefaults.artifactFileMB,
 			CIArtifactDaysDefault:              ciStorageDefaults.artifactDays,
-			MergeGatherWindow:                  durationSetting(def.MergeGatherWindow),
-			MergeGatherWindowDefault:           model.DefaultMergeGatherWindow.String(),
+			PollIntervalDefault:                model.DefaultPollInterval.String(),
 			CIJobsPerRun:                       def.CIJobsPerRun,
 			CIAgeBoost:                         durationSetting(def.CIAgeBoost),
 			CIReserveAfter:                     durationSetting(def.CIReserveAfter),
@@ -1433,9 +1463,14 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			UpgradeCheckPausesPipeline:         def.UpgradeCheckPausesPipeline,
 			AutoUpgradeChannel:                 def.AutoUpgradeChannel,
 			AutoUpgradeTime:                    autoUpgradeTimeOrDefault(def.AutoUpgradeTime),
+			AutoUpgradeOn:                      def.AutoUpgradeMode(),
+			AutoUpgradeModes:                   model.AutoUpgradeModes(),
+			OwnerTrust:                         ownerTrustOrEmpty(def.OwnerTrust),
+			AutoGrantContextReads:              stringsOrEmpty(def.AutoGrantContextReads),
 			TimeZone:                           model.TimeZoneOrDefault(def.TimeZone),
 			NetworkAccess:                      string(model.NormalizeNetworkAccess(def.NetworkAccess)),
 			NetworkAccesses:                    networkAccessNames(),
+			SettingsLocked:                     def.SettingsLocked,
 			RestartRequired:                    restartRequiredKeys(),
 		}
 		c.resolveSandboxImageFields(ctx, def, sandboxImgDefault, granuleImgDefault).apply(&out)
@@ -1443,11 +1478,10 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 		out.Sources = sources
 		out.SettingSources = sources
 		out.ExternalConfigRepo, out.ExternalConfigBranch = c.externalConfigRepo(ctx)
+		out.ConfigRepoOnly = c.rowConfigRepoOnly(ctx, def)
 		return out, nil
 	}
 	settings := c.settingsFrom(ctx, *cfg, repoConfigs)
-	settings.MergeBatching = c.mergeBatching(ctx, *cfg)
-	settings.MergeGathering = c.mergeGathering(ctx)
 	settings.DeploymentIDDefault = c.deploymentIDDefault(ctx)
 	settings.TaskBranchTemplateDefault = model.DefaultTaskBranchTemplate
 	settings.ExternalConfigRepo, settings.ExternalConfigBranch = c.externalConfigRepo(ctx)
@@ -1458,8 +1492,6 @@ type UpdateSettingsRequest struct {
 	PollInterval            *string  `json:"pollInterval"`
 	MaxWorkers              *int     `json:"maxWorkers"`
 	MaxMergesPerRepo        *int     `json:"maxMergesPerRepo"`
-	MergeBatchSize          *int     `json:"mergeBatchSize"`
-	MergeGatherWindow       *string  `json:"mergeGatherWindow"`
 	MaxAutoSubmitDepth      *int     `json:"maxAutoSubmitDepth"`
 	MaxAutoSubmitFanOut     *int     `json:"maxAutoSubmitFanOut"`
 	MaxAgentTurns           *int     `json:"maxAgentTurns"`
@@ -1537,15 +1569,50 @@ type UpdateSettingsRequest struct {
 	UpgradeCheckPausesPipeline *bool   `json:"upgradeCheckPausesPipeline"`
 	// AutoUpgradeChannel is the branch to upgrade onto daily, "" to turn
 	// automatic upgrades off; AutoUpgradeTime is when, as "HH:MM".
-	AutoUpgradeChannel  *string               `json:"autoUpgradeChannel"`
-	AutoUpgradeTime     *string               `json:"autoUpgradeTime"`
-	AgentBackends       *[]model.AgentBackend `json:"agentBackends"`
-	DefaultModel        *string               `json:"defaultModel"`
-	PromptExtension     *string               `json:"promptExtension"`
-	RepairTemplateID    *string               `json:"repairTemplateID"`
-	TaskBranchTemplate  *string               `json:"taskBranchTemplate"`
-	DeploymentID        *string               `json:"deploymentId"`
-	DefaultCapabilities *[]string             `json:"defaultCapabilities"`
+	AutoUpgradeChannel *string `json:"autoUpgradeChannel"`
+	AutoUpgradeTime    *string `json:"autoUpgradeTime"`
+	// AutoUpgradeOn is "off", "daily" or "release" (Settings.AutoUpgradeOn).
+	AutoUpgradeOn *string `json:"autoUpgradeOn"`
+	// OwnerTrust replaces the owner-trust proposal policy
+	// (Settings.OwnerTrust); an empty list turns it off.
+	OwnerTrust *[]model.OwnerTrustRule `json:"ownerTrust"`
+	// AutoGrantContextReads replaces Settings.AutoGrantContextReads; an empty
+	// list turns auto-granting off.
+	AutoGrantContextReads *[]string             `json:"autoGrantContextReads"`
+	AgentBackends         *[]model.AgentBackend `json:"agentBackends"`
+	DefaultModel          *string               `json:"defaultModel"`
+	PromptExtension       *string               `json:"promptExtension"`
+	RepairTemplateID      *string               `json:"repairTemplateID"`
+	TaskBranchTemplate    *string               `json:"taskBranchTemplate"`
+	DeploymentID          *string               `json:"deploymentId"`
+	DefaultCapabilities   *[]string             `json:"defaultCapabilities"`
+	SettingsLocked        *bool                 `json:"settingsLocked"`
+}
+
+func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
+	type plain UpdateSettingsRequest
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*r = UpdateSettingsRequest(p)
+	var snake struct {
+		SettingsLocked        *bool     `json:"settings_locked"`
+		DefaultCapabilities   *[]string `json:"default_capabilities"`
+		AutoGrantContextReads *[]string `json:"auto_grant_context_reads"`
+	}
+	if err := json.Unmarshal(data, &snake); err == nil {
+		if r.SettingsLocked == nil && snake.SettingsLocked != nil {
+			r.SettingsLocked = snake.SettingsLocked
+		}
+		if r.DefaultCapabilities == nil && snake.DefaultCapabilities != nil {
+			r.DefaultCapabilities = snake.DefaultCapabilities
+		}
+		if r.AutoGrantContextReads == nil && snake.AutoGrantContextReads != nil {
+			r.AutoGrantContextReads = snake.AutoGrantContextReads
+		}
+	}
+	return nil
 }
 
 func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) (Settings, error) {
@@ -1568,6 +1635,15 @@ func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) 
 	if err := c.Store.PutConfig(ctx, cfg); err != nil {
 		return Settings{}, err
 	}
+	// Who saved what, named here because nothing downstream can: the
+	// daemon applies the change from the stored row on its own tick
+	// (pkg/daemon's live config), long after the request has gone. A
+	// rehearsal wrote nothing, so it is not reported as a save.
+	if r, ok := model.WriteRehearsalFrom(ctx); !ok || !r.Rehearsing() {
+		if changed := changedConfigFields(current, cfg); len(changed) > 0 {
+			log.Printf("grain ui: settings saved by %s: changed %s", writerName(ctx), strings.Join(changed, ", "))
+		}
+	}
 	c.triggerIAPSync()
 	if req.AgentBackends != nil {
 		var before []model.AgentBackend
@@ -1583,8 +1659,6 @@ func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) 
 		return Settings{}, err
 	}
 	settings := c.settingsFrom(ctx, cfg, repoConfigs)
-	settings.MergeBatching = c.mergeBatching(ctx, cfg)
-	settings.MergeGathering = c.mergeGathering(ctx)
 	settings.DeploymentIDDefault = c.deploymentIDDefault(ctx)
 	settings.TaskBranchTemplateDefault = model.DefaultTaskBranchTemplate
 	settings.ExternalConfigRepo, settings.ExternalConfigBranch = c.externalConfigRepo(ctx)
@@ -1607,9 +1681,18 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			cfg = capability.NewDeploymentConfig().WithConnectionsOf(*current)
 		}
 	}
+	before := cfg
 
 	if req.PollInterval != nil {
-		d, err := time.ParseDuration(*req.PollInterval)
+		// A cleared box is grain's default, shown beside it as the
+		// placeholder, rather than the parse error `time: invalid
+		// duration ""` it used to be. It is stored as that interval,
+		// since a stored zero means no interval at all.
+		raw := strings.TrimSpace(*req.PollInterval)
+		if raw == "" {
+			raw = model.DefaultPollInterval.String()
+		}
+		d, err := time.ParseDuration(raw)
 		if err != nil {
 			return model.Config{}, validationErrorf("pollInterval: %v", err)
 		}
@@ -1629,57 +1712,6 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			return model.Config{}, validationErrorf("maxMergesPerRepo must be at least 1")
 		}
 		cfg.MaxMergesPerRepo = *req.MaxMergesPerRepo
-	}
-	if req.MergeBatchSize != nil {
-		// 1 is off rather than a floor to reject: a deployment whose
-		// changes break each other constantly should be able to say so.
-		// The ceiling is model.MaxMergeBatchSize, because a batch holds
-		// every member out of the queue until it reports.
-		//
-		// 0 is not a size but "give it back to grain's default", which
-		// is what a stored zero already means (model.Config's
-		// MergeBatchSizeOr) and what the Admin pane sends for a cleared
-		// box. Refusing it left no way back to the default from the UI:
-		// clearing the box was a 400 and the old value stayed.
-		if *req.MergeBatchSize < 0 {
-			return model.Config{}, validationErrorf("mergeBatchSize must be at least 1 (1 turns batching off), or 0 for grain's default")
-		}
-		if *req.MergeBatchSize > model.MaxMergeBatchSize {
-			return model.Config{}, validationErrorf("mergeBatchSize cannot be more than %d",
-				model.MaxMergeBatchSize)
-		}
-		cfg.MergeBatchSize = *req.MergeBatchSize
-	}
-	if req.MergeGatherWindow != nil {
-		d, err := parseDurationSetting("mergeGatherWindow", *req.MergeGatherWindow)
-		if err != nil {
-			return model.Config{}, err
-		}
-		// Negative is allowed, and is how an operator declines the trade
-		// entirely: the wait buys at most one suite and costs latency on
-		// a change that is ready now, which a deployment with CI capacity
-		// to spare should be able to refuse. The ceiling is
-		// model.MaxMergeGatherWindow, because past it the latency is
-		// worth more than any suite the batch could save.
-		if d > model.MaxMergeGatherWindow {
-			return model.Config{}, validationErrorf("mergeGatherWindow cannot be more than %s",
-				model.MaxMergeGatherWindow)
-		}
-		// And refused rather than rounded if it cannot survive being
-		// stored. The column is milliseconds (grain_config's
-		// merge_gather_window_ms, like the poll interval and the CI
-		// gate's windows), so anything under one lands as a zero -- which
-		// means "this deployment has never chosen" and reads back as
-		// grain's own five minutes. A "-100µs" meant as "turn the wait
-		// off" would therefore turn it on, which is the one direction an
-		// operator must not be surprised in.
-		if d != 0 && d > -time.Millisecond && d < time.Millisecond {
-			return model.Config{}, validationErrorf("mergeGatherWindow is stored in whole "+
-				"milliseconds, so %s would be kept as 0 -- which means grain's own default rather "+
-				"than what you asked for. Use a negative duration (-1s) to turn the wait off, or "+
-				"blank for the default", d)
-		}
-		cfg.MergeGatherWindow = d
 	}
 	// Both bounds take 1 as their floor rather than 0. Zero is the value
 	// the store reads as "nobody chose" (model.AutoSubmitLimits.
@@ -1717,10 +1749,25 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		cfg.GitHubInsecureHTTP = *req.GitHubInsecureHTTP
 	}
 	if req.GCPProject != nil {
-		cfg.GCPProject = *req.GCPProject
+		// A project ID, which gcp-key and gemini-key put into every
+		// resource name they mint under: the 2026-11-01 walkthrough saved
+		// "Bad Project!", which only failed later, on a task's attempt.
+		project := strings.TrimSpace(*req.GCPProject)
+		if project != "" && !gcpProjectID.MatchString(project) {
+			return model.Config{}, validationErrorf("gcpProject %q is not a GCP project ID: 6 to 30 lowercase letters, digits and '-', starting with a letter and not ending with '-', such as my-project-123", project)
+		}
+		cfg.GCPProject = project
 	}
 	if req.GCPServiceAccountEmail != nil {
-		cfg.GCPServiceAccountEmail = *req.GCPServiceAccountEmail
+		// A service account is an email address; the 2026-11-01
+		// walkthrough saved "not an email", which only failed when a key
+		// was minted.
+		email := strings.TrimSpace(*req.GCPServiceAccountEmail)
+		if local, domain, ok := strings.Cut(email, "@"); email != "" &&
+			(!ok || local == "" || domain == "" || strings.ContainsAny(email, " \t") || strings.Contains(domain, "@")) {
+			return model.Config{}, validationErrorf("gcpServiceAccountEmail %q is not a service account email, such as grain-minter@my-project-123.iam.gserviceaccount.com", email)
+		}
+		cfg.GCPServiceAccountEmail = email
 	}
 	if req.GCPServiceAccountCount != nil {
 		count := *req.GCPServiceAccountCount
@@ -1744,24 +1791,26 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.DefaultCapabilities != nil {
 		seen := map[string]bool{}
 		ids := make([]string, 0, len(*req.DefaultCapabilities))
-		for _, id := range *req.DefaultCapabilities {
-			id, err := c.normalizeCapabilityID(id)
+		for _, rawID := range *req.DefaultCapabilities {
+			normalizedIDs, err := c.normalizeCapabilityIDs(rawID)
 			if err != nil {
 				return model.Config{}, err
 			}
-			if _, ok := c.capabilityByID(id); !ok {
-				// Refused rather than dropped, and named with
-				// capabilityRefusal's own words: this set seeds every
-				// task filed on the deployment (CreateTask), so a
-				// CI-only id landing here would fail every one of them
-				// at model.ResolveGrants at once.
-				return model.Config{}, validationErrorf("defaultCapabilities: %s", capabilityRefusal(id))
+			for _, id := range normalizedIDs {
+				if _, ok := c.capabilityByID(id); !ok {
+					// Refused rather than dropped, and named with
+					// capabilityRefusal's own words: this set seeds every
+					// task filed on the deployment (CreateTask), so a
+					// CI-only id landing here would fail every one of them
+					// at model.ResolveGrants at once.
+					return model.Config{}, validationErrorf("defaultCapabilities: %s", capabilityRefusal(id))
+				}
+				if seen[id] {
+					continue
+				}
+				seen[id] = true
+				ids = append(ids, id)
 			}
-			if seen[id] {
-				continue
-			}
-			seen[id] = true
-			ids = append(ids, id)
 		}
 		cfg.DefaultCapabilities = ids
 	}
@@ -1920,14 +1969,34 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.K8sKubectl != nil {
 		cfg.K8sKubectl = strings.TrimSpace(*req.K8sKubectl)
 	}
+	// The pod images are checked as the custom sandbox image is, and the
+	// workspace is a directory inside the pod, so an absolute path: the
+	// 2026-11-01 walkthrough saved "not a ref!!" and "relative/dir", which
+	// only failed later, on every pod grain created.
 	if req.K8sSandboxImage != nil {
-		cfg.K8sSandboxImage = strings.TrimSpace(*req.K8sSandboxImage)
+		image := strings.TrimSpace(*req.K8sSandboxImage)
+		if image != "" {
+			if err := sandboximage.ValidateReference(image); err != nil {
+				return model.Config{}, validationErrorf("k8sSandboxImage must be one OCI image reference, such as registry.example/team/k8s-sandbox:v1: %v", err)
+			}
+		}
+		cfg.K8sSandboxImage = image
 	}
 	if req.K8sGranuleImage != nil {
-		cfg.K8sGranuleImage = strings.TrimSpace(*req.K8sGranuleImage)
+		image := strings.TrimSpace(*req.K8sGranuleImage)
+		if image != "" {
+			if err := sandboximage.ValidateReference(image); err != nil {
+				return model.Config{}, validationErrorf("k8sGranuleImage must be one OCI image reference, such as registry.example/team/guest:v1: %v", err)
+			}
+		}
+		cfg.K8sGranuleImage = image
 	}
 	if req.K8sWorkspace != nil {
-		cfg.K8sWorkspace = strings.TrimSpace(*req.K8sWorkspace)
+		ws := strings.TrimSpace(*req.K8sWorkspace)
+		if ws != "" && !path.IsAbs(ws) {
+			return model.Config{}, validationErrorf("k8sWorkspace %q is not an absolute path, such as /home/agent", ws)
+		}
+		cfg.K8sWorkspace = ws
 	}
 	if req.K8sGitProxyHost != nil {
 		host := strings.TrimSpace(*req.K8sGitProxyHost)
@@ -2131,6 +2200,9 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.ShowClosedByDefault != nil {
 		cfg.ShowClosedByDefault = *req.ShowClosedByDefault
 	}
+	if req.SettingsLocked != nil {
+		cfg.SettingsLocked = *req.SettingsLocked
+	}
 	if req.EnvironmentName != nil {
 		name := strings.TrimSpace(*req.EnvironmentName)
 		if utf8.RuneCountInString(name) > maxEnvironmentNameLen {
@@ -2177,6 +2249,9 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 				return model.Config{}, validationErrorf("taskBranchTemplate %v", err)
 			}
 		}
+		if _, err := model.FormatTaskBranchName(template, strings.Repeat("a", 32), strings.Repeat("a", model.MaxDeploymentIDLen), "9223372036854775807", ""); err != nil {
+			return model.Config{}, validationErrorf("taskBranchTemplate %v", err)
+		}
 		cfg.TaskBranchTemplate = template
 	}
 	if req.DeploymentID != nil {
@@ -2219,6 +2294,27 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		}
 		cfg.AutoUpgradeTime = at
 	}
+	if req.AutoUpgradeOn != nil {
+		on, err := model.ParseAutoUpgradeOn(*req.AutoUpgradeOn)
+		if err != nil {
+			return model.Config{}, validationErrorf("autoUpgradeOn: %v", err)
+		}
+		cfg.AutoUpgradeOn = on
+	}
+	if req.OwnerTrust != nil {
+		rules, err := model.NormalizeOwnerTrust(*req.OwnerTrust)
+		if err != nil {
+			return model.Config{}, validationErrorf("%v", err)
+		}
+		cfg.OwnerTrust = rules
+	}
+	if req.AutoGrantContextReads != nil {
+		entries, err := model.NormalizeAutoGrantContextReads(*req.AutoGrantContextReads)
+		if err != nil {
+			return model.Config{}, validationErrorf("%v", err)
+		}
+		cfg.AutoGrantContextReads = entries
+	}
 	// A channel is a daily upgrade at some time; one saved without a
 	// time gets the default rather than a schedule that never fires.
 	if cfg.AutoUpgradeChannel != "" && strings.TrimSpace(cfg.AutoUpgradeTime) == "" {
@@ -2249,7 +2345,6 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 				}
 			}
 			backend.ExcludedModels = excluded
-			backend.Command = strings.TrimSpace(backend.Command)
 			backend.CredentialBackendID = strings.TrimSpace(backend.CredentialBackendID)
 			backend.Team = strings.TrimSpace(backend.Team)
 			if backend.AuthMode != "" {
@@ -2269,17 +2364,31 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			if seen[backend.ID] {
 				return model.Config{}, validationErrorf("agent backend id %q is duplicated", backend.ID)
 			}
+			if backend.IsRemovedCustomConnection() {
+				// A custom command connection the store already has is
+				// kept, disabled, exactly as stored until it is deleted:
+				// the Models page sends every connection back on a save.
+				// A new one is refused.
+				stored := findStoredBackend(cfg.AgentBackends, backend.ID)
+				if stored == nil || !stored.IsRemovedCustomConnection() {
+					return model.Config{}, validationErrorf("agentBackends[%d].framework: %s; "+
+						"use one of %s", i, removedCustomConnectionError, model.AgentFrameworkNames())
+				}
+				kept := *stored
+				kept.Disabled, kept.DisabledReason = true, model.RemovedCustomConnectionReason
+				seen[backend.ID] = true
+				(*req.AgentBackends)[i] = kept
+				continue
+			}
 			if !model.ValidAgentFramework(backend.Framework) {
 				return model.Config{}, validationErrorf("agentBackends[%d].framework must be %s", i, model.AgentFrameworkNames())
 			}
-			if backend.Framework == model.AgentFrameworkCustom && backend.Command == "" {
-				return model.Config{}, validationErrorf("agentBackends[%d].command is required for a custom backend", i)
-			}
+			backend.Command = ""
+			backend.DisabledReason = ""
 			backend.CLIPath = strings.TrimSpace(backend.CLIPath)
 			if backend.CLIPath != "" {
 				if model.AgentCLIBinary(backend.Framework) == "" {
-					return model.Config{}, validationErrorf("agentBackends[%d].cliPath is only for claude, codex and antigravity connections; "+
-						"a custom backend names its executable in command", i)
+					return model.Config{}, validationErrorf("agentBackends[%d].cliPath is only for claude, codex and antigravity connections", i)
 				}
 				// Checked only when it changes, so a binary removed after
 				// it was saved fails that connection's runs (naming it)
@@ -2309,6 +2418,9 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 						"a turn agy is retrying should not be allowed longer than a slow one", i, retryCutoff, turnTimeout)
 				}
 			}
+			if err := c.normalizeConnectionHostd(ctx, cfg.AgentBackends, &backend); err != nil {
+				return model.Config{}, validationErrorf("agentBackends[%d]: %v", i, err)
+			}
 			seen[backend.ID] = true
 			(*req.AgentBackends)[i] = backend
 		}
@@ -2328,6 +2440,10 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		stored := cfg.AgentBackends
 		cfg.AgentBackends = append([]model.AgentBackend(nil), (*req.AgentBackends)...)
 		carryDiscovered(stored, cfg.AgentBackends)
+	}
+
+	if req.K8sGranuleImage != nil || req.SandboxImage != nil {
+		cfg = c.keepDerivedSandboxImageMirror(before, cfg)
 	}
 
 	if firstTime {
@@ -2387,8 +2503,6 @@ func (c *Client) PlanSettings(ctx context.Context, req UpdateSettingsRequest) (S
 		return Settings{}, err
 	}
 	settings := c.settingsFrom(ctx, cfg, repoConfigs)
-	settings.MergeBatching = c.mergeBatching(ctx, cfg)
-	settings.MergeGathering = c.mergeGathering(ctx)
 	settings.DeploymentIDDefault = c.deploymentIDDefault(ctx)
 	settings.TaskBranchTemplateDefault = model.DefaultTaskBranchTemplate
 	settings.ExternalConfigRepo, settings.ExternalConfigBranch = c.externalConfigRepo(ctx)
@@ -2472,6 +2586,10 @@ var (
 	k8sSubdomainName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
 )
 
+// gcpProjectID is a GCP project ID, with the "example.com:" prefix a
+// domain-scoped project carries allowed in front of it.
+var gcpProjectID = regexp.MustCompile(`^([a-z0-9][a-z0-9.-]*[a-z0-9]:)?[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
+
 // k8sAddress is what the git proxy host a sandbox pod is handed may be:
 // a host name or an IP address, with no scheme, path or space in it.
 var k8sAddress = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.:-]*[A-Za-z0-9])?$`)
@@ -2500,4 +2618,20 @@ func k8sPriorityClassName(key, raw string) (string, error) {
 		return "", validationErrorf("%s %q is not a Kubernetes PriorityClass name: lowercase letters, digits, '-' and '.', starting and ending with a letter or digit", key, name)
 	}
 	return name, nil
+}
+
+// ownerTrustOrEmpty is rules, or an empty list for none, so the settings
+// payload always carries the field.
+func ownerTrustOrEmpty(rules []model.OwnerTrustRule) []model.OwnerTrustRule {
+	if rules == nil {
+		return []model.OwnerTrustRule{}
+	}
+	return rules
+}
+
+func stringsOrEmpty(items []string) []string {
+	if items == nil {
+		return []string{}
+	}
+	return items
 }

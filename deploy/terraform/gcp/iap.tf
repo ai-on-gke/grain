@@ -47,16 +47,36 @@ resource "google_compute_health_check" "ui" {
 # Unmanaged: one fixed instance, not a template a group would scale --
 # this deployment is one VM, on purpose (variables.tf's own machine_type
 # comment on why v2 needs no fleet).
+#
+# Membership is attached below by google_compute_instance_group_membership
+# rather than inline `instances = [host]`: google_compute_instance.host
+# carries google_compute_backend_service.ui[0].generated_id in its
+# grain-config metadata (iap_audience), so the group and backend service
+# must exist before the instance. Naming this group -ui-ig with
+# create_before_destroy also migrates an existing deployment off the
+# earlier inline -ig group in place without recreating the backend
+# service or hitting GCE's memberAlreadyExists on addInstances.
 resource "google_compute_instance_group" "host" {
-  count     = var.expose_ui_publicly ? 1 : 0
-  name      = "${var.name_prefix}-ig"
-  zone      = var.zone
-  instances = [google_compute_instance.host.self_link]
+  count   = var.expose_ui_publicly ? 1 : 0
+  name    = "${var.name_prefix}-ui-ig"
+  zone    = var.zone
+  network = var.create_network ? google_compute_network.this[0].self_link : (strcontains(var.network_name, "/") ? var.network_name : "projects/${var.project_id}/global/networks/${var.network_name}")
 
   named_port {
     name = "http"
     port = var.ui_port
   }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "google_compute_instance_group_membership" "host" {
+  count          = var.expose_ui_publicly ? 1 : 0
+  zone           = var.zone
+  instance_group = google_compute_instance_group.host[0].name
+  instance       = google_compute_instance.host.self_link
 }
 
 resource "google_compute_backend_service" "ui" {
@@ -161,9 +181,19 @@ resource "google_iap_client" "this" {
   display_name = "${var.name_prefix} UI"
 }
 
+data "google_project" "this" {
+  count      = var.expose_ui_publicly ? 1 : 0
+  project_id = var.project_id
+}
+
 locals {
   iap_client_id     = var.expose_ui_publicly && var.create_iap_brand ? google_iap_client.this[0].client_id : var.iap_client_id
   iap_client_secret = var.expose_ui_publicly && var.create_iap_brand ? google_iap_client.this[0].secret : var.iap_client_secret
+
+  # The audience IAP puts in X-Goog-IAP-JWT-Assertion for the backend
+  # service above (-ui-iap-audience). Empty when expose_ui_publicly is
+  # off and no IAP backend exists.
+  iap_audience = var.expose_ui_publicly ? "/projects/${data.google_project.this[0].number}/global/backendServices/${google_compute_backend_service.ui[0].generated_id}" : ""
 }
 
 # Who may actually reach the UI once they are through Google's own sign-in

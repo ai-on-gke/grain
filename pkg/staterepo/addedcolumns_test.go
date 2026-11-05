@@ -449,3 +449,50 @@ func TestTheUndeferralStampSurvivesTheDumpAndIsAbsentFromAnOlderOne(t *testing.T
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// TestAStoreWithoutAColumnExportsWithoutTheKey is the other way a dump
+// comes to be missing a column: not written by an older build, but
+// written by this one out of a store at an older schema -- `grain state
+// prepare-upgrade`, which scripts/setup.sh runs on the store a stopped
+// daemon left behind. Every settings document field the store has no
+// column for has to be left out of the file rather than written as
+// null: a null imports as NULL, and schedule.keep_running (schema 74) is
+// NOT NULL, so a store from before 74 could not be upgraded at all
+// ("inserting schedule row 0: NOT NULL constraint failed").
+func TestAStoreWithoutAColumnExportsWithoutTheKey(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, db := openRealDB(t)
+	now := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	if err := store.PutSchedule(ctx, model.Schedule{
+		ID: "sched-old", Title: "Nightly", Body: "b",
+		Recurrence: model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 9 * 60},
+		Overlap:    model.OverlapSkip, Enabled: true, NextRunAt: now, CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("putting a schedule: %v", err)
+	}
+	// The store as a build from before schema 74 left it.
+	if _, err := db.ExecContext(ctx, "ALTER TABLE `schedule` DROP COLUMN `keep_running`"); err != nil {
+		t.Fatalf("dropping keep_running: %v", err)
+	}
+	dir := filepath.Join(t.TempDir(), "dump")
+	if err := staterepo.Export(ctx, db, dir); err != nil {
+		t.Fatalf("exporting: %v", err)
+	}
+	doc := readGolden(t, filepath.Join(dir, filepath.FromSlash(staterepo.DumpPath("schedule"))))
+	if strings.Contains(doc, "keep-running") {
+		t.Fatalf("a store with no keep_running column exported a keep-running key:\n%s", doc)
+	}
+
+	fresh, freshDB := openRealDB(t)
+	if err := staterepo.Import(ctx, freshDB, dir); err != nil {
+		t.Fatalf("importing a dump exported from a store without keep_running: %v", err)
+	}
+	got, err := fresh.GetSchedule(ctx, "sched-old")
+	if err != nil || got == nil {
+		t.Fatalf("reading the schedule back: %v, %v", got, err)
+	}
+	if got.KeepRunning || got.Title != "Nightly" {
+		t.Fatalf("imported schedule = %+v, want Nightly with keep_running at its default", got)
+	}
+}

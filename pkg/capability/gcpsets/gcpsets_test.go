@@ -115,7 +115,7 @@ func TestConfigValidationForBothCredentialSources(t *testing.T) {
 		"set over its admin's role ceiling": {func(c map[string]any) {
 			c["admin_credentials"] = `{"a": ` + adminKey + `}`
 			c["permission_sets"].([]any)[0].(map[string]any)["roles"] = []any{"roles/viewer", "roles/owner"}
-		}, "roles/owner exceed(s) admin \"a\"'s role ceiling"},
+		}, "roles/owner exceeds admin a's role ceiling: add it to the admin's role_ceiling too"},
 		"unknown admin": {func(c map[string]any) {
 			c["admin_credentials"] = `{"a": ` + adminKey + `}`
 			c["permission_sets"].([]any)[0].(map[string]any)["admin"] = "b"
@@ -124,6 +124,28 @@ func TestConfigValidationForBothCredentialSources(t *testing.T) {
 			c["admin_credentials"] = `{"a": ` + adminKey + `}`
 			c["permission_sets"].([]any)[0].(map[string]any)["resource_scope"] = "topics/x"
 		}, "buckets/<name>"},
+		"migrated key_path": {func(c map[string]any) {
+			c["admin_credentials"] = `{"a": ` + adminKey + `}`
+			c["permission_sets"].([]any)[0].(map[string]any)["key_path"] = "/home/debian/.gcp-service-account-s.json"
+		}, ""},
+		"key_path over another dotfile": {func(c map[string]any) {
+			c["admin_credentials"] = `{"a": ` + adminKey + `}`
+			c["permission_sets"].([]any)[0].(map[string]any)["key_path"] = "/home/debian/.claude.json"
+		}, "is not a sandbox key path"},
+		"account traversal": {func(c map[string]any) {
+			c["admin_credentials"] = `{"a": ` + adminKey + `}`
+			c["permission_sets"].([]any)[0].(map[string]any)["accounts"] = []any{"../other-proj/serviceAccounts/sa@p.iam.gserviceaccount.com"}
+		}, "is not a service account"},
+		"migrated project with dotdot": {func(c map[string]any) {
+			c["admin_credentials"] = `{"a": ` + adminKey + `}`
+			ps := c["permission_sets"].([]any)[0].(map[string]any)
+			ps["project"] = "org..bad"
+			ps["accounts"] = []any{"sa@p.iam.gserviceaccount.com"}
+		}, "is not a project id"},
+		"arbitrary credential_env rejected": {func(c map[string]any) {
+			c["admin_credentials"] = `{"a": ` + adminKey + `}`
+			c["admins"].([]any)[0].(map[string]any)["credential_env"] = "AWS_SECRET_ACCESS_KEY"
+		}, "credential_env"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := base()

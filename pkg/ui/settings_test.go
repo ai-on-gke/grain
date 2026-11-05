@@ -193,44 +193,6 @@ func TestUpdateSettingsRoundTripsEnvironmentName(t *testing.T) {
 	}
 }
 
-// The merge queue's gather window round-trips through a column of whole
-// milliseconds, so the values that cannot survive that are refused while
-// whoever typed them is still looking. The dangerous one is a negative
-// window too small to store: it is an operator turning the wait off, and
-// a stored zero means "never chosen", which would turn it back on at
-// grain's own five minutes (grain/task-360).
-func TestUpdateSettingsRejectsAGatherWindowTooSmallToStore(t *testing.T) {
-	t.Parallel()
-	c, _, ctx := testClient(t)
-	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
-		t.Fatal(err)
-	}
-	for _, bad := range []string{"-100us", "500us", "1ns"} {
-		window := bad
-		if _, err := c.UpdateSettings(ctx,
-			ui.UpdateSettingsRequest{MergeGatherWindow: &window}); err == nil {
-			t.Errorf("UpdateSettings accepted mergeGatherWindow %q, want a validation error "+
-				"rather than a silent 0", bad)
-		}
-	}
-	// The two values either side of it are fine, and mean opposite
-	// things: blank is grain's own window, and a negative one is off.
-	for _, good := range []string{"", "-1s", "90s"} {
-		window := good
-		if _, err := c.UpdateSettings(ctx,
-			ui.UpdateSettingsRequest{MergeGatherWindow: &window}); err != nil {
-			t.Fatalf("UpdateSettings refused mergeGatherWindow %q: %v", good, err)
-		}
-	}
-	read, err := c.GetSettings(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if read.MergeGatherWindow != "1m30s" {
-		t.Fatalf("mergeGatherWindow = %q after storing 90s", read.MergeGatherWindow)
-	}
-}
-
 // TestUpdateSettingsRejectsUnrenderableEnvironmentName pins the two
 // bounds on what is otherwise free text: it is rendered as a badge in
 // the sidebar and appended to the tab title, so a pasted paragraph or an
@@ -349,23 +311,23 @@ func TestUpdateSettingsRoundTripsDefaultCapabilities(t *testing.T) {
 
 	// Repeated deliberately: a picker can produce a duplicate, and this
 	// is a set.
-	defaults := []string{"gcp-key", "gcp-key"}
+	defaults := []string{"self-debug", "self-debug"}
 	saved, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &defaults})
 	if err != nil {
 		t.Fatalf("setting default capabilities: %v", err)
 	}
-	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{"gcp-key"}) {
-		t.Fatalf("DefaultCapabilities = %v, want [gcp-key] with the repeat dropped", saved.DefaultCapabilities)
+	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{"self-debug"}) {
+		t.Fatalf("DefaultCapabilities = %v, want [self-debug] with the repeat dropped", saved.DefaultCapabilities)
 	}
 	read, err = c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"gcp-key"}) {
-		t.Fatalf("DefaultCapabilities = %v after a re-read, want [gcp-key]", read.DefaultCapabilities)
+	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"self-debug"}) {
+		t.Fatalf("DefaultCapabilities = %v after a re-read, want [self-debug]", read.DefaultCapabilities)
 	}
 	for _, status := range read.Capabilities {
-		if want := status.ID == "gcp-key"; status.Default != want {
+		if want := status.ID == "self-debug"; status.Default != want {
 			t.Errorf("capability %s: Default = %t, want %t", status.ID, status.Default, want)
 		}
 	}
@@ -430,31 +392,31 @@ func TestUpdateSettingsAcceptsDroppingARetiredDefaultCapability(t *testing.T) {
 	// it can only be one that had a row when it was chosen and lost it to
 	// an upgrade since (OfferedCapabilities' own "scratch-repo", now
 	// github-sandbox).
-	putDefaultCapabilities(t, ctx, store, "gcp-key", "scratch-repo")
+	putDefaultCapabilities(t, ctx, store, "self-debug", "scratch-repo")
 
 	read, err := c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"gcp-key", "scratch-repo"}) {
+	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"self-debug", "scratch-repo"}) {
 		t.Fatalf("DefaultCapabilities = %v, want it reported as stored: an operator can only clear one they can see",
 			read.DefaultCapabilities)
 	}
 
-	kept := []string{"gcp-key"}
+	kept := []string{"self-debug"}
 	saved, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &kept})
 	if err != nil {
 		t.Fatalf("dropping a retired default capability: %v", err)
 	}
-	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{"gcp-key"}) {
-		t.Fatalf("DefaultCapabilities = %v, want [gcp-key] with the retired id gone", saved.DefaultCapabilities)
+	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{"self-debug"}) {
+		t.Fatalf("DefaultCapabilities = %v, want [self-debug] with the retired id gone", saved.DefaultCapabilities)
 	}
 	read, err = c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"gcp-key"}) {
-		t.Fatalf("DefaultCapabilities = %v after a re-read, want [gcp-key]: the retired id is gone for good",
+	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"self-debug"}) {
+		t.Fatalf("DefaultCapabilities = %v after a re-read, want [self-debug]: the retired id is gone for good",
 			read.DefaultCapabilities)
 	}
 }
@@ -470,14 +432,14 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
 		t.Fatal(err)
 	}
-	deployment := []string{"gemini-key"}
+	deployment := []string{"read-issues"}
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &deployment}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"gcp-key"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"self-debug"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/gadgets", []string{"gcp-key", "gemini-key"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/gadgets", []string{"self-debug", "read-issues"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -489,23 +451,23 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	for _, status := range read.Capabilities {
 		byID[status.ID] = status
 	}
-	if got := byID["gemini-key"]; !got.Default {
+	if got := byID["read-issues"]; !got.Default {
 		t.Errorf("gemini-key Default = false, want true: the deployment defaults it")
 	}
 	// Reported even though the deployment already defaults it: dropping
 	// the deployment-wide entry leaves acme/gadgets' own standing.
-	if got := byID["gemini-key"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets"}) {
+	if got := byID["read-issues"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets"}) {
 		t.Errorf("gemini-key DefaultRepos = %v, want [acme/gadgets]", got)
 	}
-	if got := byID["gcp-key"]; got.Default {
-		t.Errorf("gcp-key Default = true, want false: no task outside those two repos is filed with it")
+	if got := byID["self-debug"]; got.Default {
+		t.Errorf("self-debug Default = true, want false: no task outside those two repos is filed with it")
 	}
 	// Sorted by repo, the order Store.ListRepoConfigs returns.
-	if got := byID["gcp-key"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets", "acme/widgets"}) {
-		t.Errorf("gcp-key DefaultRepos = %v, want [acme/gadgets acme/widgets]", got)
+	if got := byID["self-debug"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets", "acme/widgets"}) {
+		t.Errorf("self-debug DefaultRepos = %v, want [acme/gadgets acme/widgets]", got)
 	}
-	if got := byID["self-debug"].DefaultRepos; len(got) != 0 {
-		t.Errorf("self-debug DefaultRepos = %v, want none", got)
+	if got := byID["github-sandbox"].DefaultRepos; len(got) != 0 {
+		t.Errorf("github-sandbox DefaultRepos = %v, want none", got)
 	}
 }
 
@@ -516,7 +478,7 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 func TestSettingsReportsRepoDefaultsBeforeAnythingIsSaved(t *testing.T) {
 	t.Parallel()
 	c, _, ctx := testClient(t)
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"gcp-key"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"self-debug"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -528,11 +490,11 @@ func TestSettingsReportsRepoDefaultsBeforeAnythingIsSaved(t *testing.T) {
 		t.Fatalf("Configured = true, want false: no settings row was ever saved")
 	}
 	for _, status := range read.Capabilities {
-		if status.ID != "gcp-key" {
+		if status.ID != "self-debug" {
 			continue
 		}
 		if !reflect.DeepEqual(status.DefaultRepos, []string{"acme/widgets"}) {
-			t.Fatalf("gcp-key DefaultRepos = %v, want [acme/widgets]", status.DefaultRepos)
+			t.Fatalf("self-debug DefaultRepos = %v, want [acme/widgets]", status.DefaultRepos)
 		}
 	}
 }
@@ -1191,6 +1153,23 @@ func TestUpdateSettingsRoundTripsTheAutomaticUpgrade(t *testing.T) {
 	if read.AutoUpgradeChannel != "candidate" || read.AutoUpgradeTime != "21:45" {
 		t.Fatalf("read back channel %q at %q, want candidate at 21:45", read.AutoUpgradeChannel, read.AutoUpgradeTime)
 	}
+	// A channel saved before autoUpgradeOn existed reads as daily.
+	if read.AutoUpgradeOn != model.AutoUpgradeDaily {
+		t.Errorf("a channel with no mode reads back as %q, want daily", read.AutoUpgradeOn)
+	}
+	release := " Release "
+	if got, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{AutoUpgradeOn: &release}); err != nil ||
+		got.AutoUpgradeOn != model.AutoUpgradeOnRelease {
+		t.Fatalf("turning on release upgrades: %q, %v", got.AutoUpgradeOn, err)
+	}
+	hourly := "hourly"
+	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{AutoUpgradeOn: &hourly}); err == nil {
+		t.Error("an unknown auto-upgrade mode was accepted")
+	}
+	daily := "daily"
+	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{AutoUpgradeOn: &daily}); err != nil {
+		t.Fatalf("going back to daily: %v", err)
+	}
 
 	for _, bad := range []string{"24:00", "9:30", "12:60", "noon", "-1:00", "12:5a"} {
 		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{AutoUpgradeTime: &bad}); err == nil {
@@ -1356,8 +1335,8 @@ func TestACustomSandboxImageWithoutAContractIsWarnedAbout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(saved.SandboxBaseImage, "k8s-sandbox-base") {
-		t.Fatalf("base image on kubernetes = %q, want k8s-sandbox-base", saved.SandboxBaseImage)
+	if !strings.Contains(saved.SandboxBaseImage, "sandbox-k8s-base") {
+		t.Fatalf("base image on kubernetes = %q, want sandbox-k8s-base", saved.SandboxBaseImage)
 	}
 	if !strings.Contains(saved.SandboxImageWarning, "needs rebuilding FROM "+saved.SandboxBaseImage) {
 		t.Fatalf("warning = %q, want it to name the base image to rebuild FROM", saved.SandboxImageWarning)
@@ -1529,6 +1508,28 @@ func TestUpdateSettingsRoundTripsKubernetesSettingsAndValidatesNodeSelector(t *t
 			t.Errorf("UpdateSettings(k8sGitProxyHost=%q) = %v, want accepted %v", host, err, ok)
 		}
 	}
+	// The pod images are image references and the workspace an absolute
+	// path: the 2026-11-01 walkthrough saved "not a ref!!" and
+	// "relative/dir".
+	for _, tc := range []struct {
+		key       string
+		req       func(*string) ui.UpdateSettingsRequest
+		bad, good string
+	}{
+		{"k8sSandboxImage", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sSandboxImage: v} }, "not a ref!!", "registry.walk.test/team/k8s-sandbox:v1"},
+		{"k8sGranuleImage", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sGranuleImage: v} }, "not a ref!!", "registry.walk.test/team/guest@sha256:" + strings.Repeat("a", 64)},
+		{"k8sWorkspace", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sWorkspace: v} }, "relative/dir", "/home/walk"},
+	} {
+		bad, good, blank := tc.bad, tc.good, ""
+		if _, err := c.UpdateSettings(ctx, tc.req(&bad)); err == nil || !strings.HasPrefix(err.Error(), tc.key+" ") {
+			t.Errorf("UpdateSettings(%s=%q) = %v, want a refusal naming %s", tc.key, bad, err, tc.key)
+		}
+		for _, v := range []*string{&good, &blank} {
+			if _, err := c.UpdateSettings(ctx, tc.req(v)); err != nil {
+				t.Errorf("UpdateSettings(%s=%q): %v", tc.key, *v, err)
+			}
+		}
+	}
 	none := ""
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{K8sPriorityClassCI: &none}); err != nil {
 		t.Errorf("an empty priority class (none) was refused: %v", err)
@@ -1614,8 +1615,8 @@ func TestK8sImageDefaultsFollowVersionAndTrack(t *testing.T) {
 			track:        installtrack.TrackOSS,
 			wantTag:      "v2.2.0",
 			wantBuildVer: "v2.2.0",
-			wantSandbox:  "ghcr.io/bwsalmon/grain/k8s-sandbox:v2.2.0",
-			wantGranule:  "ghcr.io/bwsalmon/grain/guest:v2.2.0",
+			wantSandbox:  "docker.io/grainai/sandbox-k8s:v2.2.0",
+			wantGranule:  "docker.io/grainai/sandbox:v2.2.0",
 		},
 		{
 			name:         "main build with +sha metadata pins to sha- tag",
@@ -1623,8 +1624,8 @@ func TestK8sImageDefaultsFollowVersionAndTrack(t *testing.T) {
 			track:        installtrack.TrackOSS,
 			wantTag:      "sha-8e1a209",
 			wantBuildVer: "v2.3.0-dev.114+8e1a209",
-			wantSandbox:  "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-8e1a209",
-			wantGranule:  "ghcr.io/bwsalmon/grain/guest:sha-8e1a209",
+			wantSandbox:  "docker.io/grainai/sandbox-k8s:sha-8e1a209",
+			wantGranule:  "docker.io/grainai/sandbox:sha-8e1a209",
 		},
 		{
 			name:         "candidate build with +sha metadata pins to sha- tag",
@@ -1632,8 +1633,8 @@ func TestK8sImageDefaultsFollowVersionAndTrack(t *testing.T) {
 			track:        installtrack.TrackOSS,
 			wantTag:      "sha-6f65669",
 			wantBuildVer: "v2.2.0-rc.1.48+6f65669",
-			wantSandbox:  "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-6f65669",
-			wantGranule:  "ghcr.io/bwsalmon/grain/guest:sha-6f65669",
+			wantSandbox:  "docker.io/grainai/sandbox-k8s:sha-6f65669",
+			wantGranule:  "docker.io/grainai/sandbox:sha-6f65669",
 		},
 		{
 			name:         "a registered track with its own image repository override picks that registry",
@@ -1642,8 +1643,18 @@ func TestK8sImageDefaultsFollowVersionAndTrack(t *testing.T) {
 			trackRepo:    "mirror.example/acme/grain",
 			wantTag:      "v2.2.0",
 			wantBuildVer: "v2.2.0",
-			wantSandbox:  "mirror.example/acme/k8s-sandbox:v2.2.0",
-			wantGranule:  "mirror.example/acme/guest:v2.2.0",
+			wantSandbox:  "mirror.example/acme/sandbox-k8s:v2.2.0",
+			wantGranule:  "mirror.example/acme/sandbox:v2.2.0",
+		},
+		{
+			name:         "legacy GHCR OSS image repository override preserves legacy image names",
+			info:         version.Info{Release: "v2.2.0"},
+			track:        installtrack.TrackOSS,
+			ossRepo:      "ghcr.io/bwsalmon/grain/grain",
+			wantTag:      "v2.2.0",
+			wantBuildVer: "v2.2.0",
+			wantSandbox:  "ghcr.io/bwsalmon/grain/k8s-sandbox:v2.2.0",
+			wantGranule:  "ghcr.io/bwsalmon/grain/guest:v2.2.0",
 		},
 		{
 			name:         "dev build (Unversioned) falls back to latest",
@@ -1651,8 +1662,8 @@ func TestK8sImageDefaultsFollowVersionAndTrack(t *testing.T) {
 			track:        installtrack.TrackOSS,
 			wantTag:      "latest",
 			wantBuildVer: "dev",
-			wantSandbox:  "ghcr.io/bwsalmon/grain/k8s-sandbox:latest",
-			wantGranule:  "ghcr.io/bwsalmon/grain/guest:latest",
+			wantSandbox:  "docker.io/grainai/sandbox-k8s:latest",
+			wantGranule:  "docker.io/grainai/sandbox:latest",
 		},
 		{
 			name:         "unstamped test binary falls back to latest",
@@ -1660,8 +1671,8 @@ func TestK8sImageDefaultsFollowVersionAndTrack(t *testing.T) {
 			track:        installtrack.TrackOSS,
 			wantTag:      "latest",
 			wantBuildVer: "dev",
-			wantSandbox:  "ghcr.io/bwsalmon/grain/k8s-sandbox:latest",
-			wantGranule:  "ghcr.io/bwsalmon/grain/guest:latest",
+			wantSandbox:  "docker.io/grainai/sandbox-k8s:latest",
+			wantGranule:  "docker.io/grainai/sandbox:latest",
 		},
 	}
 
@@ -1691,11 +1702,11 @@ func TestK8sImageDefaultsFollowVersionAndTrack(t *testing.T) {
 		missingOnGAR := func(ref string) bool {
 			return !strings.HasPrefix(ref, "mirror.example/")
 		}
-		if got := ui.ResolveDefaultK8sSandboxImage(installtracktest.Track, info, missingOnGAR); got != "ghcr.io/bwsalmon/grain/k8s-sandbox:v2.2.0" {
-			t.Errorf("ResolveDefaultK8sSandboxImage fallback = %q, want ghcr.io/bwsalmon/grain/k8s-sandbox:v2.2.0", got)
+		if got := ui.ResolveDefaultK8sSandboxImage(installtracktest.Track, info, missingOnGAR); got != "docker.io/grainai/sandbox-k8s:v2.2.0" {
+			t.Errorf("ResolveDefaultK8sSandboxImage fallback = %q, want docker.io/grainai/sandbox-k8s:v2.2.0", got)
 		}
-		if got := ui.ResolveDefaultSandboxImage(installtracktest.Track, info, missingOnGAR); got != "ghcr.io/bwsalmon/grain/guest:v2.2.0" {
-			t.Errorf("ResolveDefaultSandboxImage fallback = %q, want ghcr.io/bwsalmon/grain/guest:v2.2.0", got)
+		if got := ui.ResolveDefaultSandboxImage(installtracktest.Track, info, missingOnGAR); got != "docker.io/grainai/sandbox:v2.2.0" {
+			t.Errorf("ResolveDefaultSandboxImage fallback = %q, want docker.io/grainai/sandbox:v2.2.0", got)
 		}
 	})
 }
@@ -1718,8 +1729,8 @@ func TestK8sSettingsSourcesWarningsAndPendingRestart(t *testing.T) {
 	running := model.DefaultConfig()
 	running.K8sNamespace = model.DefaultK8sNamespace
 	running.K8sKubectl = model.DefaultK8sKubectl
-	running.K8sSandboxImage = "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-8e1a209"
-	running.K8sGranuleImage = "ghcr.io/bwsalmon/grain/guest:sha-8e1a209"
+	running.K8sSandboxImage = "docker.io/grainai/sandbox-k8s:sha-8e1a209"
+	running.K8sGranuleImage = "docker.io/grainai/sandbox:sha-8e1a209"
 	running.K8sWorkspace = model.DefaultK8sWorkspace
 	running.K8sDeployment = model.DefaultK8sDeployment
 	running.K8sContainer = model.DefaultK8sContainer
@@ -1736,10 +1747,10 @@ func TestK8sSettingsSourcesWarningsAndPendingRestart(t *testing.T) {
 	if s.DaemonBuildVersion != "v2.3.0-dev.114+8e1a209" {
 		t.Fatalf("DaemonBuildVersion = %q, want v2.3.0-dev.114+8e1a209", s.DaemonBuildVersion)
 	}
-	if s.K8sSandboxImageDefault != "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-8e1a209" {
+	if s.K8sSandboxImageDefault != "docker.io/grainai/sandbox-k8s:sha-8e1a209" {
 		t.Fatalf("K8sSandboxImageDefault = %q, want sha-8e1a209", s.K8sSandboxImageDefault)
 	}
-	if s.K8sGranuleImageDefault != "ghcr.io/bwsalmon/grain/guest:sha-8e1a209" {
+	if s.K8sGranuleImageDefault != "docker.io/grainai/sandbox:sha-8e1a209" {
 		t.Fatalf("K8sGranuleImageDefault = %q, want sha-8e1a209", s.K8sGranuleImageDefault)
 	}
 	if s.K8sKubectlDefault != "kubectl" {
@@ -1763,7 +1774,7 @@ func TestK8sSettingsSourcesWarningsAndPendingRestart(t *testing.T) {
 	}
 
 	// Customizing k8sSandboxImage to a missing tag marks source="custom", triggers a warning, and marks pendingRestart.
-	missingImg := "ghcr.io/bwsalmon/grain/k8s-sandbox:missing-tag"
+	missingImg := "docker.io/grainai/sandbox-k8s:missing-tag"
 	updated, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{
 		K8sSandboxImage: &missingImg,
 	})
@@ -1800,6 +1811,19 @@ func TestK8sSettingsSourcesWarningsAndPendingRestart(t *testing.T) {
 	if slices.Contains(reset.PendingRestart, "k8sSandboxImage") {
 		t.Errorf("PendingRestart after reset still contains k8sSandboxImage: %v", reset.PendingRestart)
 	}
+	rawJSON, err := json.Marshal(reset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rawMap map[string]any
+	if err := json.Unmarshal(rawJSON, &rawMap); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"sandboxImage", "sandboxImageWarning", "sandboxImageCheck", "k8sSandboxImageWarning", "k8sGranuleImageWarning"} {
+		if _, ok := rawMap[key]; !ok {
+			t.Errorf("marshaled Settings after reset omitted %q; frontend state merge requires explicit empty/null key", key)
+		}
+	}
 }
 
 func TestCheckImageManifestHTTPServer(t *testing.T) {
@@ -1834,5 +1858,80 @@ func TestCheckImageManifestHTTPServer(t *testing.T) {
 	err := ui.CheckImageManifest(ctx, host+"/bwsalmon/grain/k8s-sandbox:missing")
 	if !errors.Is(err, ui.ErrImageNotFound) {
 		t.Fatalf("CheckImageManifest(missing) = %v, want ErrImageNotFound", err)
+	}
+}
+
+// The 2026-11-01 walkthrough saved "not an email" as the GCP service
+// account email, which only failed when gcp-key next minted a key.
+func TestUpdateSettingsRefusesAGCPServiceAccountEmailThatIsNotOne(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		email string
+		ok    bool
+	}{
+		{"not an email", false},
+		{"no-at-sign", false},
+		{"@project.iam.gserviceaccount.com", false},
+		{"minter@", false},
+		{"a@b@c", false},
+		{" grain-minter@walk-1.iam.gserviceaccount.com ", true},
+		{"", true},
+	} {
+		e := tc.email
+		_, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{GCPServiceAccountEmail: &e})
+		if tc.ok != (err == nil) {
+			t.Errorf("UpdateSettings(gcpServiceAccountEmail=%q) = %v, want accepted %v", tc.email, err, tc.ok)
+		}
+		if err != nil && !strings.HasPrefix(err.Error(), "gcpServiceAccountEmail ") {
+			t.Errorf("refusal %q does not name gcpServiceAccountEmail", err)
+		}
+		if tc.ok && err == nil && tc.email != "" {
+			saved, err := c.GetSettings(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if saved.GCPServiceAccountEmail != strings.TrimSpace(tc.email) {
+				t.Errorf("GCPServiceAccountEmail = %q, want %q trimmed", saved.GCPServiceAccountEmail, tc.email)
+			}
+		}
+	}
+}
+
+// TestUpdateSettingsRefusesAGCPProjectThatIsNotAProjectID: the 2026-11-01
+// walkthrough saved "Bad Project!" from Legacy capabilities, which every
+// gcp-key and gemini-key attempt would then have failed on.
+func TestUpdateSettingsRefusesAGCPProjectThatIsNotAProjectID(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
+		t.Fatal(err)
+	}
+	for project, ok := range map[string]bool{
+		"Bad Project!":           false,
+		"UPPER-case-1":           false,
+		"short":                  false,
+		"1starts-with-digit":     false,
+		"ends-with-hyphen-":      false,
+		"my-project-123":         true,
+		" walkthrough-project ":  true,
+		"example.com:my-project": true,
+		"":                       true,
+	} {
+		p := project
+		got, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{GCPProject: &p})
+		if ok != (err == nil) {
+			t.Errorf("UpdateSettings(gcpProject=%q) = %v, want accepted %v", project, err, ok)
+			continue
+		}
+		if !ok && !strings.HasPrefix(err.Error(), "gcpProject ") {
+			t.Errorf("UpdateSettings(gcpProject=%q) = %v, want a refusal naming gcpProject", project, err)
+		}
+		if ok && got.GCPProject != strings.TrimSpace(project) {
+			t.Errorf("UpdateSettings(gcpProject=%q) stored %q", project, got.GCPProject)
+		}
 	}
 }

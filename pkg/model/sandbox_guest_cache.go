@@ -121,7 +121,7 @@ func GuestCacheFollowsBaseBranch(cfg RepoConfig, guestImage string) bool {
 	if RunsWorkItem(&cfg, ReleaseItem) {
 		return false // the release run fills it on every merge
 	}
-	if !slices.Contains(cfg.CICapabilities, CapabilityPackagePublish) {
+	if !slices.ContainsFunc(cfg.CICapabilities, IsPackagePublishGrant) {
 		return false // a job that cannot push is not worth dispatching
 	}
 	publisher, ok := GuestImageRepo(guestImage)
@@ -164,7 +164,7 @@ func EffectivePostMergeDispatchJobs(cfg RepoConfig, guestImage string) []string 
 // The second result is false for exactly that case, and for the empty
 // reference a deployment with no image at all has.
 func GuestImageRepo(image string) (RepoRef, bool) {
-	path := image
+	path := strings.TrimSpace(image)
 	// A digest first, because its `@sha256:...` also contains the colon a
 	// tag is found by.
 	if at := strings.Index(path, "@"); at >= 0 {
@@ -173,8 +173,12 @@ func GuestImageRepo(image string) (RepoRef, bool) {
 	if colon := strings.LastIndex(path, ":"); colon > strings.LastIndex(path, "/") {
 		path = path[:colon]
 	}
+	switch path {
+	case "docker.io/grainai/sandbox", "index.docker.io/grainai/sandbox", "registry-1.docker.io/grainai/sandbox", "grainai/sandbox":
+		return RepoRef{Owner: "ai-on-gke", Name: "grain"}, true
+	}
 	parts := strings.Split(path, "/")
-	if len(parts) != 4 || parts[3] != "guest" {
+	if len(parts) != 4 || (parts[3] != "guest" && parts[3] != "sandbox") {
 		return RepoRef{}, false
 	}
 	for _, part := range parts[:3] {
@@ -183,4 +187,12 @@ func GuestImageRepo(image string) (RepoRef, bool) {
 		}
 	}
 	return RepoRef{Owner: parts[1], Name: parts[2]}, true
+}
+
+// IsPackagePublishGrant reports whether capability is package-publish in
+// either spelling: the retired bare name or the release server's
+// method it was rewritten to (schema migration 101).
+func IsPackagePublishGrant(capability string) bool {
+	c := CanonicalLegacyGrant(strings.TrimSpace(capability))
+	return CapabilityGrantRef(c) == PackagePublishRef
 }

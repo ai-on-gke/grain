@@ -273,8 +273,8 @@ func TestTheMemoryAgentScheduleFilesATaskWithNoTargetAndTheStateRepoToRead(t *te
 	for _, g := range task.Grants {
 		held[g.Capability] = true
 	}
-	if !held["memory"] || !held["self-debug"] {
-		t.Errorf("grants = %v, want memory (to write anything at all) and self-debug", task.Grants)
+	if !held["api:memory"] || !held["self-debug"] {
+		t.Errorf("grants = %v, want api:memory (to write anything at all) and self-debug", task.Grants)
 	}
 	if task.Body == "" || task.Title == "" {
 		t.Error("the filed task carries no prompt; the whole of the memory agent is what it is told")
@@ -526,12 +526,12 @@ func TestSystemSchedulesSeedsTheReleaseNotesJobWeekly(t *testing.T) {
 	for _, g := range tmpl.Grants {
 		granted[g.Capability] = true
 	}
-	for _, want := range []string{"release-notes", "self-debug"} {
+	for _, want := range []string{"api:release-notes", "self-debug"} {
 		if !granted[want] {
 			t.Errorf("the release-notes template does not hold %q; its grants are %+v", want, tmpl.Grants)
 		}
 	}
-	if granted["memory"] {
+	if granted["memory"] || granted["api:memory"] {
 		t.Error("the release-notes job holds the memory grant: a week's report must not be " +
 			"filable as a standing instruction to every run this deployment dispatches")
 	}
@@ -598,7 +598,7 @@ func TestSystemSchedulesSeedsTheInfraReviewNightly(t *testing.T) {
 	}
 	// It reads the record, the measurements and grain's own source
 	// through one grant, and the deployment's CI runs through the other.
-	for _, want := range []string{"self-debug", "grain-ci"} {
+	for _, want := range []string{"self-debug", model.GrainCIGrant} {
 		if !granted[want] {
 			t.Errorf("the infrastructure review template does not hold %q; its grants are %+v",
 				want, tmpl.Grants)
@@ -607,7 +607,7 @@ func TestSystemSchedulesSeedsTheInfraReviewNightly(t *testing.T) {
 	// And nothing that can change anything. self-repair is the exact
 	// counterpart capability, and a job whose whole value is that a
 	// person sees the reasoning first must not hold it.
-	if granted["self-repair"] {
+	if granted["self-repair"] || granted[model.GrainHostExecGrant] {
 		t.Error("the infrastructure review holds self-repair: the one job that exists to " +
 			"suggest changes to this deployment must not be able to make one")
 	}

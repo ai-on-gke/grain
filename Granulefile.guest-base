@@ -23,7 +23,7 @@
 #
 # Language toolchains, Docker, OCR/attachment packages, and developer CLI tools
 # live in Granulefile (Stage 2, sandbox_rootfs) so users who build custom
-# sandbox images FROM ghcr.io/bwsalmon/grain/guest-base:<tag> get a minimal
+# sandbox images FROM docker.io/grainai/sandbox-base:<tag> get a minimal
 # Debian VM base that only needs to be updated when dev.grain.sandbox.contract
 # (or dev.granule.guest.contract) bumps.
 #

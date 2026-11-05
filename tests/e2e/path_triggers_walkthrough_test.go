@@ -382,6 +382,14 @@ func TestPathTriggersWalkthrough(t *testing.T) {
 	t.Run("a burst of merges files one task per folder, and a restart neither re-fires nor skips", func(t *testing.T) {
 		t.Parallel()
 		w := newTriggerWorld(t, docsTrigger)
+		// One merge a lane per cycle, so the three land a cycle apart
+		// (below).
+		if err := w.store.UpdateConfig(w.ctx, func(c *model.Config) error {
+			c.MaxMergesPerRepo = 1
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
 		start := w.head("main")
 		var tasks []model.Task
 		for _, f := range []string{"docs/x/a/one.md", "docs/x/a/two.md", "docs/x/b/one.md"} {

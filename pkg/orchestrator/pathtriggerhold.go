@@ -268,7 +268,7 @@ func filePullRequestTrigger(ctx context.Context, store *model.Store, task model.
 			"(human: `%s`).\n", ref, rule.Trigger.Human)
 	}
 
-	return fileCoalesced(ctx, store, tag, now, func(prev *model.Task, superseding bool) (model.Task, error) {
+	filed, err := fileCoalesced(ctx, store, tag, now, func(prev *model.Task, superseding bool) (model.Task, error) {
 		tags := []string{model.PathTriggerMarkerTag, tag, pathTriggerRuleTag(rule.Commit)}
 		if !rule.Trigger.Gate {
 			comp, _, err := store.ComposeTriggerTask(ctx, rule.Trigger.Template, *task.Target, "", rule.Trigger.AutoApprove)
@@ -292,6 +292,7 @@ func filePullRequestTrigger(ctx context.Context, store *model.Store, task model.
 			filed.Tags = tags
 			filed.Links = append(filed.Links, model.Link{Kind: model.LinkProposedBy, Target: task.ID})
 			model.InheritRequester(&filed, task)
+			model.InheritContext(&filed, task)
 			return filed, nil
 		}
 
@@ -324,6 +325,7 @@ func filePullRequestTrigger(ctx context.Context, store *model.Store, task model.
 		}
 		return review, nil
 	})
+	return filed, err
 }
 
 // applyPathTriggerGate records that task's head was judged, and holds or
@@ -579,7 +581,8 @@ func dropPathTriggerHoldOnFindings(ctx context.Context, store *model.Store, clie
 				return nil
 			}
 		}
-		t.AutoMerge, dropped = false, true
+		model.AwaitPersonForAutoMerge(t, "review "+review.ID+" left findings")
+		dropped = true
 		t.Links = withoutLinks(t.Links, model.LinkPathTriggerHold)
 		return nil
 	}); err != nil {
@@ -696,7 +699,9 @@ func settlePathTriggerHold(ctx context.Context, store *model.Store, client githu
 		t.Links = withoutLinks(t.Links, model.LinkPathTriggerHold)
 		releasable := human == model.TriggerHumanNo ||
 			(human == model.TriggerHumanOnFindings && len(pushed) == 0 && len(abandoned) == 0)
-		if releasable && !hasSecurityHold(*t) && !heldForHuman(*t) && len(model.PendingApprovals(*t)) == 0 {
+		if !releasable {
+			model.AwaitPersonForAutoMerge(t, "a gating trigger's tasks left it for a person")
+		} else if !hasSecurityHold(*t) && !heldForHuman(*t) && len(model.PendingApprovals(*t)) == 0 {
 			t.AutoMerge, released = true, true
 		}
 		return nil

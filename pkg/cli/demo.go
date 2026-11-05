@@ -42,6 +42,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/demo"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ports"
+	"github.com/ai-on-gke/grain/pkg/ui"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
@@ -68,10 +69,11 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	unconfigured := fs.Bool("unconfigured", false, "serve a deployment with no agent model and no git credential configured, as a fresh install has")
 	agentPaused := fs.Bool("agent-paused", false, "serve a deployment whose agent dispatch is paused on a provider's usage limit")
 	mergeQueueStates := fs.Bool("merge-queue-states", false, "also seed two pull requests the merge queue is waiting on: one for its base branch to go green, one for an approval GitHub requires")
-	stalledTasks := fs.Bool("stalled-tasks", false, "hand the UI the orchestrator's stall deadlines and seed a queued task and a run past them, for the Inbox's stuck-task group")
+	stalledTasks := fs.Bool("stalled-tasks", false, "hand the UI the orchestrator's stall deadlines and seed a queued task, a run and a deferral past them, for the Inbox's stuck-task group")
 	fakeCI := fs.Bool("fake-ci", false, "wire a grain CI stub that accepts and reports runs but never executes anything")
 	githubSim := fs.Bool("github-sim", false, "wire a simulated GitHub whose -default-target-repo has branches main and release/1.0")
 	scheduledWorkflows := fs.Bool("scheduled-workflows", false, "with -github-sim and -fake-ci, add a candidate branch to the simulated repo, read its .grain declarations and start and settle its workflow schedules' runs every -reconcile interval (default 2s), and let POST /api/e2e/fake-ci/runs/{id}/finish end a run")
+	forkPullRequest := fs.Bool("fork-pull-request", false, "with -github-sim, also seed two pull requests from the fork contrib/<repo>: contrib:fix/readme-typo (#41, open) and contrib:feat/old-idea (#42, closed), each head at refs/pull/N/head, for filing a task against a fork head label")
 	githubSimPublic := fs.Bool("github-sim-public", false, "with -git-proxy, let the simulated GitHub serve its repo to an anonymous fetch, as GitHub does a public repository; an anonymous push is still refused")
 	gitProxy := fs.Bool("git-proxy", false, "with -github-sim, serve grain's git proxy in front of the simulated repo on loopback, and POST /api/e2e/git-proxy/runs to start a task's run and mint its sandbox a token to push with")
 	baseBranchCI := fs.Bool("base-branch-ci", false, "with -github-sim and -fake-ci, let POST /api/e2e/base-branch/{red,green} {\"branch\": ...} (loopback only) turn a branch red or green on a -fake-ci verdict, through grain's own base-branch reconciler and dispatch's linking step, dispatching nothing")
@@ -88,17 +90,24 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	upgradeAllowedBranches := fs.String("upgrade-allowed-branches", strings.Join(upgrade.DefaultAllowedBranches, ","), "comma-separated branches (path.Match patterns, or ** for any) -upgrade-image may upgrade to")
 	modelCatalog := fs.String("model-catalog", "", "host:port of an Anthropic model listing stub (GET /v1/models) on loopback: Claude connections that advertise no models are given what it lists, as a deployment's are given what Anthropic lists")
 	modelDiscoveryInterval := fs.Duration("model-discovery-interval", 0, "how often -model-catalog's discovery asks the provider again (default the deployment's 10m)")
-	hostExecutor := fs.String("host-executor", "", "resolve Settings -> Models' agent CLI run locations as this deployment would: "+
-		"empty for a development daemon on the bare machine, \"kubernetes\" (no host executor), \"none\" (a container with no grain hostd) or "+
-		"\"hostd-down\" (a container whose grain hostd is configured but not answering) or \"hostd\" (a container with a real grain hostd "+
-		"on a throwaway allowlist offering agy)")
+	hostExecutor := fs.String("host-executor", "", "resolve Settings' run locations (Models and Capability servers) as this deployment would: "+
+		"empty for a development daemon on the bare machine, \"kubernetes\" (no host executor), \"none\" (a container with no grain hostd), "+
+		"\"hostd-down\" (a container whose grain hostd is configured but not answering), \"hostd\" (a container with a real grain hostd "+
+		"on a throwaway allowlist offering agy and corp-search), \"hostd-remote\" (a Kubernetes daemon with a real grain hostd dialed in) "+
+		"or \"hostd-remote-down\" (none dialed in)")
 	hostModeInstall := fs.Bool("host-mode-install", false, "show the notice an unmigrated host-mode install shows (banner, System -> Health, Upgrade), with the CLIs the default bare-machine run locations leave nowhere to run")
 	notifications := fs.Bool("notifications", false, "run the reconcile loop's notification sweep every -reconcile interval (default 2s), so an open notification whose clears_when (task, base-green or ttl) has come true is cleared on its own, as on a daemon's cycle")
 	schedules := fs.Bool("schedules", false, "run the reconcile loop's schedule step every -reconcile interval (default 2s), so a schedule that comes due fires, or records why it was skipped, on its own (what it files is still never dispatched)")
-	reconcile := fs.Duration("reconcile", 0, "run the reconcile loop's suite step every interval, and its release step against -github-sim's simulated GitHub too, logging a failed cycle as the daemon does (default off; agents still never run)")
+	reconcile := fs.Duration("reconcile", 0, "run the reconcile loop's suite step every interval, and its release and issue-import steps against -github-sim's simulated GitHub too, logging a failed cycle as the daemon does (default off; agents still never run)")
 	var upgradeVerifyCmd stringSliceFlag
 	fs.Var(&upgradeVerifyCmd, "upgrade-verify-cmd", "one argument of the command that verifies an -upgrade-image image's signature, repeated for every argument, as on grain daemon")
 	accessCodeFile := fs.String("access-code-file", "", "keep the demo's access code, which every caller, loopback included, signs in with, in this file -- written there if it is not already -- rather than beside its throwaway store, where it is logged")
+	uiIAPAudience := fs.String("ui-iap-audience", "", "as on grain daemon: the audience a signed X-Goog-IAP-JWT-Assertion must carry for the demo to sign its caller in from it")
+	uiIAPIssuer := fs.String("ui-iap-issuer", "", "as on grain daemon: the issuer a signed assertion must carry (default "+ui.GoogleIAPIssuer+")")
+	uiIAPKeysURL := fs.String("ui-iap-keys-url", "", "as on grain daemon: where the assertions' signing keys are published (default "+ui.GoogleIAPCertURL+")")
+	uiRequireIAP := fs.Bool("ui-require-iap", false, "as on grain daemon: accept the access code only from loopback with no forwarding headers; needs -ui-iap-audience")
+	uiAllowedPrincipals := fs.String("ui-allowed-principals", "", ui.AllowedPrincipalsUsage)
+	uiCloudIdentityEndpoint := fs.String("ui-cloud-identity-endpoint", "", "resolve -ui-allowed-principals' group: entries against this Cloud Identity API base URL (a test stand-in) rather than "+ui.DefaultCloudIdentityEndpoint)
 	githubWebhookURL, githubWebhookAddr := githubWebhookFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return demo.Options{}, err
@@ -142,7 +151,20 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	if err != nil {
 		return demo.Options{}, fmt.Errorf("-default-target-repo: %w", err)
 	}
+	iapCfg := daemon.Config{UiIAPAudience: *uiIAPAudience, UiRequireIAP: *uiRequireIAP, UiAllowedPrincipals: ui.SplitAllowedPrincipals(*uiAllowedPrincipals)}
+	if err := daemon.CheckUIAllowedPrincipals(iapCfg); err != nil {
+		return demo.Options{}, err
+	}
+	if err := daemon.CheckUIRequireIAP(iapCfg); err != nil {
+		return demo.Options{}, err
+	}
 	return demo.Options{
+		IAPAudience:            *uiIAPAudience,
+		IAPIssuer:              *uiIAPIssuer,
+		IAPKeysURL:             *uiIAPKeysURL,
+		RequireIAP:             *uiRequireIAP,
+		AllowedPrincipals:      iapCfg.UiAllowedPrincipals,
+		CloudIdentityEndpoint:  *uiCloudIdentityEndpoint,
 		AccessCodeFile:         *accessCodeFile,
 		Addr:                   *addr,
 		Actor:                  *actor,
@@ -160,6 +182,7 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		GitProxy:               *gitProxy,
 		BaseBranchCI:           *baseBranchCI,
 		GitHubSimPublic:        *githubSimPublic,
+		ForkPullRequest:        *forkPullRequest,
 		MergeRules:             *mergeRules,
 		SensitiveHold:          *sensitiveHold,
 		ReviewQuestions:        *reviewQuestions,

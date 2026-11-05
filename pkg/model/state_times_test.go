@@ -160,6 +160,24 @@ func TestStateSinceDeclinesToGuessForTheStatesAPersonOwns(t *testing.T) {
 	}
 }
 
+func TestStateSinceMeasuresADeferralFromItsWakeTime(t *testing.T) {
+	// A deferral with a wake time is the orchestrator's to end, and its
+	// wait on that began when the wake time came -- not when somebody put
+	// the task aside, which may have been a month earlier.
+	deferred := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	until := time.Date(2026, 9, 18, 9, 0, 0, 0, time.UTC)
+	tk := task(true)
+	tk.DeferredAt, tk.DeferredUntil = &deferred, &until
+	if got := StateTimesFrom(tk, nil, nil).Since(StateDeferred); got == nil || !got.Equal(until) {
+		t.Fatalf("deferred since %v, want the wake time %v", got, until)
+	}
+	// One without a wake time is a person's, and says nothing.
+	tk.DeferredUntil = nil
+	if got := StateTimesFrom(tk, nil, nil).Since(StateDeferred); got != nil {
+		t.Fatalf("a deferral with no wake time since %v, want nothing", got)
+	}
+}
+
 func TestStateSinceIsNothingWhenTheRecordCannotSay(t *testing.T) {
 	// A task approved before Task.ApprovedAt existed, and a state whose
 	// own instant is simply not there. nil is the answer, and a reader

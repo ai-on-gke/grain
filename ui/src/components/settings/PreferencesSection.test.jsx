@@ -19,13 +19,14 @@ import PreferencesSection from "./PreferencesSection.jsx";
 import { ThemeModeProvider } from "../../ThemeModeContext.jsx";
 import { TimelineOrderProvider } from "../../TimelineOrderContext.jsx";
 import { PreferencesProvider } from "../../PreferencesContext.jsx";
+import { chooseOption, optionValues } from "../../searchSelectTesting.js";
 import api from "../../api.js";
 
 vi.mock("../../api.js", () => ({ default: vi.fn() }));
 
 // Settings → Preferences is this browser's own: what it chooses is kept
 // in localStorage and applies at once, and nothing is sent to the
-// deployment's settings (docs/design/settings-panel.md §3.2).
+// deployment's settings (design/design/settings-panel.design.md §3.2).
 const section = (props = {}) => (
   <PreferencesProvider>
     <ThemeModeProvider>
@@ -47,10 +48,17 @@ describe("PreferencesSection", () => {
 
   // With no choice made here, times follow the deployment's clock when it
   // has one, and the unset option says so rather than "Browser default".
-  it("names the deployment's clock as the default when it has one", () => {
-    render(section({ deploymentTimeZone: "Europe/Paris" }));
+  it("names the deployment's clock as the default when it has one", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      section({ deploymentTimeZone: "Europe/Paris" }),
+    );
     const zone = screen.getByRole("combobox", { name: "Time zone" });
-    expect(zone).toHaveValue("");
+    expect(zone).toHaveValue("Deployment default (Europe/Paris)");
+    expect(
+      container.querySelector('input[type="hidden"][name="userTimeZone"]'),
+    ).toHaveValue("");
+    await user.click(zone);
     expect(
       screen.getByRole("option", { name: "Deployment default (Europe/Paris)" }),
     ).toBeInTheDocument();
@@ -97,15 +105,25 @@ describe("PreferencesSection", () => {
     );
   });
 
-  it("picks a time zone from a select whose label sits above it", async () => {
+  it("picks a time zone from a searchable select whose label sits above it", async () => {
     const user = userEvent.setup();
-    render(section());
+    const { container } = render(section());
 
     const zone = screen.getByRole("combobox", { name: "Time zone" });
     const label = zone.closest(".MuiFormControl-root").querySelector("label");
     expect(label.className).toContain("MuiInputLabel-shrink");
-    await user.selectOptions(zone, "America/New_York");
-    expect(zone.value).toBe("America/New_York");
+    await chooseOption(user, zone, "America/New_York");
+    expect(zone.value).toContain("America/New_York");
+    expect(
+      container.querySelector('input[type="hidden"][name="userTimeZone"]'),
+    ).toHaveValue("America/New_York");
+    expect(localStorage.getItem("grain.timeZone")).toBe("America/New_York");
+
+    // Mid-word city search finds IANA zones whose region prefix differs.
+    await user.click(zone);
+    await user.clear(zone);
+    await user.type(zone, "tokyo");
+    expect(optionValues(zone)).toContain("Asia/Tokyo");
   });
 
   it("opens Customize sidebar", async () => {

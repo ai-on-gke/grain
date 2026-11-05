@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -30,6 +31,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/cifault"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -50,7 +52,7 @@ import (
 // (orchestrator.Deps.PolicyAudit). No HTTP route reads, writes or
 // removes it (TestLocalAuditLogIsReachedByNoRoute). The file keeps the
 // name it had when a Silo hub's messages were logged there too
-// (docs/hub-removed.md), so a deployment's existing log is appended to
+// (the Silo hub connection has since been removed), so a deployment's existing log is appended to
 // rather than left behind.
 func LocalAuditPath(dataDir string) string {
 	return filepath.Join(dataDir, "hub-audit.log")
@@ -88,7 +90,7 @@ func LogIgnoredRelaySettings(dataDir string, secretStore *secrets.Store, logf fu
 	if logf == nil {
 		logf = log.Printf
 	}
-	logf("grain daemon: ignoring stored %s -- the rendezvous relay has been removed (docs/relay-removed.md)", strings.Join(found, " and "))
+	logf("grain daemon: ignoring stored %s -- the rendezvous relay has been removed", strings.Join(found, " and "))
 }
 
 // run wires every piece pkg/orchestrator needs from real, on-disk material
@@ -106,7 +108,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// Before anything binds: how long the restart that started this
 	// process left each listener unreachable is measured from the times
 	// the previous process wrote down, against when each is bound below
-	// (upgrade.GapRecorder, docs/non-disruptive-upgrade.md Stage 1).
+	// (upgrade.GapRecorder, design/design/non-disruptive-upgrade.design.md Stage 1).
 	// Opened here so its start time is this process's, but it writes
 	// nothing until the first listener is up: a start refused before then
 	// -- the store guard, a bad flag -- leaves restart-gap.json as the
@@ -144,6 +146,9 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := checkStateRepoBaseline(cfg.DataDir); err != nil {
 		return err
 	}
+	if err := CheckSecretsConfig(cfg.SecretsBackend, cfg.SecretsSMPrefix); err != nil {
+		return err
+	}
 
 	// openStore, plus the one recovery a store this build cannot open has:
 	// the note an in-place upgrade leaves when it cut over to a build with
@@ -159,9 +164,15 @@ func Run(ctx context.Context, cfg Config) error {
 	// Recorded once the store has opened, so a mistyped DSN never replaces
 	// a good one: a daemon started with -postgres-url (or the environment)
 	// otherwise leaves nothing in its data dir saying where its store is.
-	if err := RecordDatabaseConfig(cfg.DataDir, cfg.DbDriver, cfg.DbDSN); err != nil {
+	if err := recordDatabaseConfigForDaemon(cfg); err != nil {
 		log.Printf("grain daemon: recording the database in %s: %v", cfg.DataDir, err)
 	}
+	// The hostd registry: the co-located hostd is always in it as local,
+	// and any hostd it names may dial in alongside it.
+	if err := store.EnsureLocalHostd(ctx); err != nil {
+		log.Printf("grain daemon: %v", err)
+	}
+	cfg.HostdHub = newHostdHub(cfg, store)
 
 	// Run hosts (pkg/runhost), when this deployment asks for them. Built
 	// here, as soon as the store is, because every framework built below
@@ -177,11 +188,13 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	// Host CLIs through grain hostd, started detached so a daemon
-	// upgrade leaves them running (hostdruns.go).
-	cfg.hostdRuns = newHostdRuns(cfg, store)
+	// upgrade leaves them running (hostdruns.go): the default hostd's,
+	// and each pinned hostd's as a run is routed to it.
+	cfg.hostdRunSet = newHostdRuns(cfg, store)
+	cfg.hostdRuns = cfg.hostdRunSet.defaultRuns()
 	// And the upgrade protocol's hold on them: flushed before an
 	// upgrade's restart, reported on by the check after it.
-	cfg.runHostUpgrade = newRunHostUpgrade(cfg.RunHost, cfg.hostdRuns, cfg.Ci).withStopping(cfg.shutdownStarted)
+	cfg.runHostUpgrade = newRunHostUpgrade(cfg.RunHost, cfg.hostdRunSet, cfg.Ci).withStopping(cfg.shutdownStarted)
 
 	// The state repository is opened and loaded into the database before
 	// anything reads a row out of it: what is in the repository is what
@@ -207,7 +220,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// -- and a store opened first would have minted a key over the
 	// absence of one. Nothing is configured on most deployments and
 	// nothing happens then.
-	secretsRepo := StartupSecretsRepoSync(ctx, cfg.DataDir)
+	secretsRepo := startupSecretsRepoSyncFor(ctx, cfg)
 	loadErr := loadStateRepo(ctx, cfg.DataDir, stateRepo, db, schemaMigrated)
 	if fatalStateRepoLoad(loadErr) {
 		return fmt.Errorf("loading the config repository: %w", loadErr)
@@ -226,7 +239,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// because a process that died in between would otherwise leave a
 	// repository nothing was allowed to rewrite and a deployment that
 	// could not start for it.
-	if schemaMigrated {
+	if schemaMigrated.any() {
 		discardSchemaUpgrade(cfg.DataDir)
 	}
 	if loadErr != nil {
@@ -242,7 +255,10 @@ func Run(ctx context.Context, cfg Config) error {
 	// The secrets database is opened once, here, and shared: the state
 	// manager syncs it, and the model proxies below and runDaemon's own
 	// dispatches resolve agent credentials through it.
-	secretStore := OpenSecrets(cfg.DataDir)
+	secretStore, err := OpenSecretsForConfig(cfg, store)
+	if err != nil {
+		return err
+	}
 	LogIgnoredRelaySettings(cfg.DataDir, secretStore, log.Printf)
 	// Every secret a run resolves through it is audited against its team
 	// (the Audit / Security tab). ui.NewServer attaches the store only to
@@ -357,7 +373,7 @@ func Run(ctx context.Context, cfg Config) error {
 	servicePorts := &SandboxServicePorts{}
 	if cfg.DisableNativeSandboxes {
 		sandboxes = orchestrator.NewDisabledSandboxes()
-		log.Print("grain daemon: native sandboxes are disabled -- only remote execution sandboxes can exist")
+		log.Print(`grain daemon: sandbox backend "none" -- this daemon runs the control plane only and creates no sandboxes, so no task will run`)
 	} else if cfg.GranuleSandboxes {
 		// The image chooseSandboxImage settled on -- this build's own
 		// stamp, an operator's -sandbox-image, or a pin kept -- with a
@@ -404,6 +420,7 @@ func Run(ctx context.Context, cfg Config) error {
 			DefaultCPUs:     cfg.SandboxCPUs,
 			DefaultMemoryMB: cfg.SandboxMemoryMB,
 			DefaultDiskGB:   cfg.SandboxDiskGB,
+			HostMemoryMB:    granuleHostMemoryMB(),
 			// The deployment-wide network default, in force from the
 			// first sandbox this process builds rather than from the
 			// first reconcile tick (liveConfig only hands on what
@@ -438,6 +455,10 @@ func Run(ctx context.Context, cfg Config) error {
 			// The same copy orchestrator.Config.GrainSourceDir is given
 			// below, mounted into self-debug runs' containers.
 			GrainSourceDir: sourceDir(cfg.UpgradeSrcDir),
+			// The fence's accepts: the address containers reach grain's
+			// services at, and only the ports those services listen on.
+			Fence: cfg.ContainerFence, GitProxyHost: cfg.ContainerGitProxyHost,
+			SandboxServicePorts: servicePorts.Ports,
 		})
 		log.Printf("grain daemon: container sandboxing -- one local Docker container per run from image %q", startImage)
 	} else if cfg.K8sSandboxes {
@@ -589,6 +610,12 @@ func Run(ctx context.Context, cfg Config) error {
 	if cfg.Ledger != nil && cfg.Ledger.Wake == nil {
 		cfg.Ledger.Wake = wakeCycle
 	}
+	// Set once, before anything admits a sandbox: every live sum the
+	// ledger gives the budget adds each VM's cgroup headroom, the other
+	// half of config.Budget's (model.Budget.VMMHeadroom).
+	if cfg.Ledger != nil {
+		cfg.Ledger.VMMHeadroom = cfg.VMMHeadroom
+	}
 	LogSandboxBudget(cfg)
 
 	// This deployment's GitHub credential ladder, read once here and
@@ -621,9 +648,17 @@ func Run(ctx context.Context, cfg Config) error {
 	if localHostSandboxes(sandboxes) {
 		cfg.Overcommit = model.NewOvercommitController(cfg.SandboxOvercommit, cfg.CpuOvercommit, cfg.MemoryOvercommit)
 	}
+	// Before the capability servers start, so the host-script server
+	// starts with the scripts of every local-scripts declaration that
+	// moved onto it.
+	if _, err := migrateLocalScripts(ctx, store, cfg.LocalScriptsConfig()); err != nil {
+		log.Printf("daemon: local-scripts: moving declarations to host-script: %v", err)
+	}
+	capabilityServers, hostdCapabilityServers := startCapabilityServers(ctx, store, secretStore, cfg.DataDir, cfg.capabilityHostd(), gcpKeyPool(cfg))
 	live := NewLiveConfig(store, sandboxes, cfg, githubCredentials).
 		WithSandboxImages(sandboxImages, stockSandboxImage, sandboxImageLabels()).
-		WithCapabilityServers(startCapabilityServers(ctx, store, secretStore, cfg.DataDir, cfg.capabilityHostd(), gcpKeyPool(cfg)))
+		WithCapabilityServers(capabilityServers).
+		withHostdCapabilityServers(hostdCapabilityServers)
 	if cfg.Overcommit != nil {
 		go runOvercommit(ctx, live, cfg.Overcommit)
 	}
@@ -797,7 +832,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// nil on a deployment configured for neither pipeline, which both
 	// halves already have to handle: the UI hides the pane and the
 	// reconciler applies nothing.
-	upgrader := newUpgrader(cfg, db, store)
+	upgrader := newUpgrader(cfg, db, store, githubCredentials)
 
 	// Which filesystems this deployment's own state sits on, resolved once
 	// for the two halves that read them: the host status pane's disk rows
@@ -814,17 +849,6 @@ func Run(ctx context.Context, cfg Config) error {
 	// to.
 	if cfg.UiAddr != "" || cfg.DiskFloor().Known() {
 		cfg.Volumes = hostDisks(cfg)
-	}
-
-	execSrv, execAddr, stopExecutor, err := startExecutorServer(cfg, store)
-	if err != nil {
-		return fmt.Errorf("starting remote executor listener: %w", err)
-	}
-	defer stopWithGrace(stopExecutor)
-	cfg.executorServer = execSrv
-	cfg.executorListenAddr = execAddr
-	if live != nil {
-		live.SetExecutorServer(execSrv)
 	}
 
 	// The UI/API server starts here, as early as its own dependencies (the
@@ -845,7 +869,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// run() itself only returns once ctx is actually cancelled.
 	if cfg.UiAddr != "" {
 		stopUI, err := startUIServer(cfg, store, db, transcriptDir, sandboxes, live, pkgCache, actionsCache,
-			stateManager, stateManager.settingsRepo, upgrader)
+			stateManager, stateManager.settingsRepo, upgrader, secretStore)
 		if err != nil {
 			return fmt.Errorf("starting the UI/API server: %w", err)
 		}
@@ -970,9 +994,15 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	ReclaimWith(disks, ctx, NewDiskReclaim(sandboxes, &DockerPruner{
 		ActiveSandboxImage: chooseSandboxImage(cfg).image,
 		ActiveGrainImage:   DefaultGrainImage,
+		KeepImages: func() []string {
+			if img := live.CurrentSandboxImage(); img != "" {
+				return []string{img}
+			}
+			return nil
+		},
 	}))
 
-	proxyURL, proxyHandler, stopProxy, err := startGitProxy(cfg.DataDir, store, cfg.GithubHost, cfg.GithubInsecureHTTP, fabric, forbidden, cfg.shutdownStarted)
+	proxyURL, proxyHandler, stopProxy, err := startGitProxy(cfg.DataDir, store, secretStore, cfg.GithubHost, cfg.GithubInsecureHTTP, fabric, forbidden, cfg.shutdownStarted)
 	if err != nil {
 		// Fatal to this loop, and only to it: every dispatch and every CI
 		// job clones through this proxy, so there is nothing to reconcile
@@ -989,7 +1019,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	cfg.gitProxyHandler = proxyHandler
 
 	// The relay a capability grant's ports reach a sandbox through
-	// (docs/capabilities-spec.md §5.3), on the same fabric as the git
+	// (design/spec/capabilities/capabilities.spec.md §5.3), on the same fabric as the git
 	// proxy, so a sandbox with no network reaches it as it reaches that.
 	// Not fatal: without it, a run whose grants return ports is refused
 	// at materialization, and every other run is unaffected.
@@ -1143,7 +1173,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	// After the proxy above, necessarily: every job's checkout is a
 	// clone from it, and it is where the read-only scope a CI sandbox
 	// holds is enforced (pkg/cli/ci.go).
-	registry := newCapabilityRegistryWithStore(store, cfg.LocalScriptsConfig(), CapabilityProviders(cfg, store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
+	registry := newCapabilityRegistryWithStore(store, CapabilityProviders(cfg, store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
 
 	// Recovering any run a previous process left running (bwsalmon/agents#425)
 	// has to happen here, once, before reconcile's first tick -- see
@@ -1165,7 +1195,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	// Host CLIs a previous daemon left running detached in grain hostd
 	// go through the same pass beside them (orchestrator.RecoverHostd),
 	// so an upgrade never re-dispatches a run hostd is still running.
-	adopted, report, err := adoptAll(ctx, store, githubClient, cfg.RunHost, cfg.hostdRuns, sandboxes)
+	adopted, report, err := adoptAll(ctx, store, githubClient, cfg.RunHost, cfg.hostdRunSet, sandboxes)
 	if err != nil {
 		log.Printf("grain daemon: %v", err)
 	}
@@ -1185,10 +1215,10 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		if strings.TrimSpace(cfg.GritURL) != "" {
 			gritRunner := BuildGritBackendRunner(ctx, cfg, live.ciRetention, store)
 			LiveCI.Store(gritRunner)
-			log.Printf("grain daemon: grain CI is wired to remote grit server at %s", cfg.GritURL)
+			log.Printf("grain daemon: grain CI is wired to remote grit server at %s (EXPERIMENTAL, -grit-experimental: it runs no repository's workflows yet)", cfg.GritURL)
 		} else {
 			ciProviders := func() *model.CapabilityRegistry {
-				return newCapabilityRegistryWithStore(store, live.Current().LocalScriptsConfig(), CapabilityProviders(live.Current(), store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
+				return newCapabilityRegistryWithStore(store, CapabilityProviders(live.Current(), store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
 			}
 			ciService := BuildCIService(ctx, cfg, LimitsWithDisk(live.limits, disks), live.ciRetention, live.ciStorageBounds, store, sandboxes, credentials, proxyURL, tokens, stateHooks.CheckImage, forbidden, ciProviders, secretStore, pkgCache.sandboxURL(live), pkgCache.sandboxCA(live), pkgCache.SandboxDNS(live), actionsCache.grantFor(live))
 			ciService.SandboxImage = live.CurrentSandboxImage
@@ -1204,9 +1234,9 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			LiveCI.Store(ciService)
 			defer ciService.Detach()
 			log.Printf("grain daemon: grain CI is on for repos whose CI mode is \"Use Grain CI\" (Settings -> Repos); "+
-				"attaching the %q capability alone does not turn it on. How many jobs run at once is "+
+				"attaching the %q grant alone does not turn it on. How many jobs run at once is "+
 				"bounded by %s",
-				grainci.CapabilityName, BudgetSentence(cfg.Limits(), KubernetesSandboxes(cfg)))
+				grainci.Grant, BudgetSentence(cfg.Limits(), KubernetesSandboxes(cfg)))
 		}
 	}
 	// The tokens those runs held came back with the registry's file
@@ -1301,12 +1331,40 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	}
 	reservePersistentPorts(cfg)
 	defer persistentSandboxes.Close()
+	// Where a repository's `.grain` declarations, and the refs git_ref
+	// schedules watch, are read from (wired into deps below).
+	declarationSource := RepoDeclarationSource{Clone: CiWorkflowSource{
+		ConfigRepoDir:       StateRepoDir(cfg.DataDir),
+		Credentials:         credentials,
+		GitHubHost:          cfg.GithubHost,
+		InsecureHTTP:        cfg.GithubInsecureHTTP,
+		Forbidden:           forbidden,
+		TempDir:             filepath.Join(cfg.DataDir, "state"),
+		TeamGitCredential:   teamGitCredential,
+		TeamGitCredentialOn: teamGitCredentialOn,
+	}}
 	deps := orchestrator.Deps{
 		// The attached capability servers a task's capability
 		// references are minted through at admission.
 		CapabilityServers: capabilityServerLookup(live),
-		Policy:            localPolicy,
-		Store:             store, Client: githubClient, Sandboxes: sandboxes,
+		CapabilityHostd:   capabilityHostdName(cfg),
+		ApprovalCallback: func(taskID string, deadline time.Time) (protocol.ApprovalCallback, func(), error) {
+			baseURL, _ := localScriptApprovalURL.Load().(string)
+			if baseURL == "" {
+				return protocol.ApprovalCallback{}, nil, nil
+			}
+			tok, err := localScriptApprovals.MintToken(taskID, deadline)
+			if err != nil {
+				return protocol.ApprovalCallback{}, nil, err
+			}
+			cb := protocol.ApprovalCallback{
+				URL:   baseURL + "/api/tasks/" + url.PathEscape(taskID) + "/local-script-approvals",
+				Token: tok,
+			}
+			return cb, func() { localScriptApprovals.RevokeToken(tok) }, nil
+		},
+		Policy: localPolicy,
+		Store:  store, Client: githubClient, Sandboxes: sandboxes,
 		// Sandbox reconciliation sweeps the run hosts no live run
 		// claims through it every tick.
 		RunHost:   cfg.RunHost,
@@ -1360,7 +1418,8 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// Where a run's sandbox-callable capability tools are
 			// registered for the proxy's /cap/ (grain cap).
 			CapabilitySandboxServers: SandboxCapabilities,
-			GrantTools:               grantTools(grainSrcDir, SecretsDir(cfg.DataDir)),
+			ControllerMCP:            controllerMCPProxy(cfg),
+			GrantTools:               grantTools(grainSrcDir, SecretsDir(cfg.DataDir), secretStore),
 			// Where a sandbox reaches this deployment's package
 			// cache -- asked per dispatch, and answering "" while the
 			// setting is off, so the switch in Settings reaches the next
@@ -1387,9 +1446,6 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// pkg/capability/grainlog).
 			GrainSecretsDir: SecretsDir(cfg.DataDir),
 			GrainStateDir:   filepath.Join(cfg.DataDir, "state-repo"),
-			// Where a run granted local-scripts:<name> finds that
-			// declaration (pkg/capability/localscripts).
-			LocalScripts: cfg.LocalScriptsConfig(),
 			// The image this deployment's sandboxes are really built
 			// from, asked of chooseSandboxImage exactly as the sandbox
 			// health pane asks (uiSandboxImage), so that the one
@@ -1478,6 +1534,10 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// carry that fact across, since the process that performed
 			// the upgrade is not this one.
 			UpgradeStatus: upgradeStatus(upgrader),
+			// And when this process started, so the process that
+			// upgrade is about to restart away does not file that check
+			// itself.
+			ProcessStartedAt: processStartedAt,
 			// And how long that restart left grain unreachable, measured
 			// by this process and the one it replaced (upgrade.GapRecorder).
 			RestartGap: cfg.restartGaps.Last,
@@ -1499,7 +1559,10 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// And whether the daily automatic upgrade's channel has
 			// anything new on it, asked of the registry or origin before
 			// the queue is held for it.
-			UpgradeUnchanged:   upgradeUnchanged(upgrader),
+			UpgradeUnchanged: upgradeUnchanged(upgrader),
+			// And the newest release on its image channel, which the
+			// release-triggered automatic upgrade follows.
+			LatestRelease:      latestRelease(upgrader),
 			UpgradeDrainWindow: cfg.UpgradeDrainWindow,
 		},
 		MintSandboxGrant:   tokens.EnsureGrant,
@@ -1558,16 +1621,11 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		// unconditionally, unlike CI above, because it costs nothing at
 		// all until an operator turns a repository's declarations on:
 		// with none on, the reconciler reads repo_config and stops.
-		Declarations: RepoDeclarationSource{Clone: CiWorkflowSource{
-			ConfigRepoDir:       StateRepoDir(cfg.DataDir),
-			Credentials:         credentials,
-			GitHubHost:          cfg.GithubHost,
-			InsecureHTTP:        cfg.GithubInsecureHTTP,
-			Forbidden:           forbidden,
-			TempDir:             filepath.Join(cfg.DataDir, "state"),
-			TeamGitCredential:   teamGitCredential,
-			TeamGitCredentialOn: teamGitCredentialOn,
-		}},
+		Declarations: declarationSource,
+		// The same ls-remote, for the refs git_ref schedules watch
+		// (orchestrator.reconcileGitRefSchedules). Costs nothing until a
+		// schedule declares one.
+		Refs: declarationSource,
 	}
 	// The same gate the UI/API server was given, so the CI a branch is put
 	// through by the cycle (orchestrator.reconcileCI) is the CI an
@@ -1594,7 +1652,10 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			}
 		}
 		resume(cfg.RunHost, adopted.runHost)
-		resume(cfg.hostdRuns, adopted.hostd)
+		// Each through the hostd it ran on (task_run_hostd).
+		for _, h := range adopted.hostd {
+			resume(h.host, h.runs)
+		}
 	}
 	resumeAdopted(adopted)
 	// And the same again if an upgrade flushed these runs for a restart
@@ -1604,7 +1665,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		if ctx.Err() != nil {
 			return
 		}
-		again, _, err := adoptAll(ctx, store, githubClient, cfg.RunHost, cfg.hostdRuns, sandboxes)
+		again, _, err := adoptAll(ctx, store, githubClient, cfg.RunHost, cfg.hostdRunSet, sandboxes)
 		if err != nil {
 			log.Printf("grain daemon: %v", err)
 		}

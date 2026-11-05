@@ -18,7 +18,7 @@ import (
 	"strings"
 )
 
-// The judgement model (docs/design/durable-tasks.md#DT-11).
+// The judgement model (design/design/durable-tasks.design.md#DT-11).
 //
 // A durable judgement agent -- the pipeline steward -- is pinned to a
 // strong model rather than run on the rotation: 768's first wake ran on
@@ -58,7 +58,11 @@ var JudgementModelRanking = []string{
 	"fable-5-1",
 	"claude-sonnet-5-5",
 	"sonnet-5-5",
+	"gemini-4-argon",
+	"gemini-4-argon-high",
+	"gemini-4-argon-medium",
 	"gemini-3-1-pro",
+	"gemini-3-1-pro-high",
 	"gpt-5",
 }
 

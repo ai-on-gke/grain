@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package selfrepair is a GRANT model.CapabilityProvider: a task
-// holding it gets a tool to run shell commands directly on the host
+// Package selfrepair builds the tool that the
+// https://grain.dev/capabilities/grain#host-exec grant (once the bare
+// "self-repair" capability; design/design/unified-grants.design.md §4) adds to a
+// run: run_host_command, to run shell commands directly on the host
 // grain's own controller runs on -- restart a systemd unit, poke at
 // grain's own config, call the grain CLI itself, anything a person at
 // that host's own terminal could do -- bwsalmon/agents#540's
-// "configuration mode." ui.OfferedCapabilities' own "self-repair" row
-// has named this since before there was anything behind it; this is
-// that provider.
+// "configuration mode." The grant itself is a dangerous method on the
+// in-process grain server (pkg/capability/grainserver), which only a
+// person may give; this package holds no provider of its own.
 //
 // Unlike selfdebug's read-only tools, everything here is capable of
 // changing grain's own running state, so every call is gated on a live
@@ -47,36 +49,11 @@ import (
 	"github.com/ai-on-gke/grain/pkg/procgroup"
 )
 
-// CapabilityName is the grant name ui.OfferedCapabilities lists as
-// "self-repair".
+// CapabilityName is the retired bare grant name this package's tool
+// was once offered under. It is kept so that a run still naming it
+// (model.CanonicalLegacyGrant reads it as model.GrainHostExecGrant) is
+// given the same tool; schema migration 84 rewrote every stored one.
 const CapabilityName = "self-repair"
-
-// Config configures self-repair capability settings.
-type Config struct{}
-
-// Provider is the self-repair capability. Every method but Spec is
-// model.BaseCapability's default -- see selfdebug.Provider's own doc
-// comment for why a GRANT capability whose only effect is which tools a
-// run gets needs nothing more.
-type Provider struct {
-	model.BaseCapability
-}
-
-// New returns a self-repair Provider, ready to register.
-func New() *Provider { return &Provider{} }
-
-// NewWithConfig returns a self-repair Provider with the given configuration.
-func NewWithConfig(_ Config) *Provider { return &Provider{} }
-
-func (p *Provider) Spec() model.CapabilitySpec {
-	return model.CapabilitySpec{
-		Name:        CapabilityName,
-		Label:       "Self repair",
-		Description: "Let this task run commands on grain's own host -- restart services, edit config, call the grain CLI -- each one needing a live reply in the task's chat before it runs",
-		Source:      model.GrantByLabel,
-		Provision:   model.ProvisionGrant,
-	}
-}
 
 // DefaultPollInterval is how often Confirm re-reads a task's comments
 // while waiting on a reply, absent a caller-supplied interval.
@@ -101,7 +78,28 @@ func HostCommandTools(store *model.Store, taskID string, pollInterval, timeout t
 	if timeout <= 0 {
 		timeout = DefaultConfirmTimeout
 	}
-	return []mcp.Tool{runHostCommandTool(store, taskID, pollInterval, timeout)}
+	return ConfirmedHostCommandTools(func(ctx context.Context, question string) (bool, string, error) {
+		return Confirm(ctx, store, taskID, question, pollInterval, timeout)
+	})
+}
+
+// Confirmer asks a person on the task's own chat whether to go ahead,
+// and reports what they said: Confirm's own contract -- approved is
+// false, with reply saying why, for a refusal, a timeout or a cancelled
+// ctx -- whatever route it takes to that chat. Confirm closes over a
+// store; a forked "grain mcpserver" holding none asks the daemon over
+// its REST API instead (pkg/daemon's daemonHostExecConfirm).
+type Confirmer func(ctx context.Context, question string) (approved bool, reply string, err error)
+
+// ConfirmSummary is the one line a confirmation question is shown by in
+// the inbox, the task list and notifications (model.Comment.Summary).
+const ConfirmSummary = "Run a command on grain's own host?"
+
+// ConfirmQuestion is what run_host_command asks before running command.
+func ConfirmQuestion(command string) string {
+	return fmt.Sprintf(
+		"This task wants to run this command directly on grain's own host:\n\n```\n%s\n```\n\n"+
+			"Reply **approve** to run it, or **deny** (optionally with a reason) to refuse.", command)
 }
 
 var runHostCommandInputSchema = map[string]any{
@@ -116,8 +114,12 @@ var runHostCommandInputSchema = map[string]any{
 	"required": []string{"command"},
 }
 
-func runHostCommandTool(store *model.Store, taskID string, pollInterval, timeout time.Duration) mcp.Tool {
-	return mcp.Tool{
+// ConfirmedHostCommandTools is run_host_command, asking confirm before
+// every command it runs and running nothing confirm does not approve. A
+// nil confirm builds the tool only for its name and schema
+// (agent.PublishedToolNames); every call to it is refused.
+func ConfirmedHostCommandTools(confirm Confirmer) []mcp.Tool {
+	return []mcp.Tool{{
 		Name: "run_host_command",
 		Description: "Run a shell command directly on the host grain's own controller runs on -- not a sandbox, " +
 			"the real machine. Before it runs, this posts the command into this task's own chat and waits for a " +
@@ -128,11 +130,11 @@ func runHostCommandTool(store *model.Store, taskID string, pollInterval, timeout
 			if command == "" {
 				return mcp.Result{Text: "command is required", IsError: true}
 			}
+			if confirm == nil {
+				return mcp.Result{Text: "run_host_command has no way to ask for confirmation in this run, so it runs nothing", IsError: true}
+			}
 
-			question := fmt.Sprintf(
-				"This task wants to run this command directly on grain's own host:\n\n```\n%s\n```\n\n"+
-					"Reply **approve** to run it, or **deny** (optionally with a reason) to refuse.", command)
-			approved, reply, err := Confirm(ctx, store, taskID, question, pollInterval, timeout)
+			approved, reply, err := confirm(ctx, ConfirmQuestion(command))
 			if err != nil {
 				return mcp.Result{Text: fmt.Sprintf("could not get confirmation: %v", err), IsError: true}
 			}
@@ -159,7 +161,7 @@ func runHostCommandTool(store *model.Store, taskID string, pollInterval, timeout
 			text := fmt.Sprintf("exit=%d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 			return mcp.Result{Text: text, IsError: exitCode != 0}
 		},
-	}
+	}}
 }
 
 // Confirm posts question as a comment on taskID's own conversation,
@@ -179,28 +181,15 @@ func runHostCommandTool(store *model.Store, taskID string, pollInterval, timeout
 // holds *model.Store directly and is running in the same OS process as
 // the reply it is waiting for.
 //
-// Nothing satisfies that today. It was true while the default framework
-// was a home-grown in-process Gemini API loop that registered a run's
-// tools in-process and so could call straight into this function; both
-// frameworks that remain (agent/antigravity and agent/claude) drive a
-// real CLI as a subprocess and ignore agent.RunConfig.Tools entirely,
-// because there is no in-process registry to hand a forked process. So
-// orchestrator.Config.GrantTools still assembles these tools and
-// RunDispatch still passes them, but no Framework consumes them: an
-// Interactive task's confirmation prompt is not reachable by a running
-// agent until the "mcpserver" subcommand grows a route back to the store
-// (it takes only a sandbox root or a kontur VM today -- see
-// pkg/cli/mcpserver.go). This function itself is unchanged and still
-// correct for any caller that does hold the store in-process.
-//
-// What that route turned out to be is next door, in pkg/mcp's chat tool:
-// the forked process does not need the store, it needs the daemon, and
-// two REST calls plus a poll loop are what the missing handle is worth
-// (pkg/cli/mcpserver.go's daemonChat, over pkg/ui's
-// /api/tasks/{id}/messages). Confirm is that same shape asking a
-// narrower question -- approve or deny, rather than anything a person
-// cares to say -- so what would make run_host_command reachable is
-// giving it that hop, not giving this process a store.
+// That is the in-process caller's half, and it is the one no agent
+// reaches: both frameworks that remain (agent/antigravity and
+// agent/claude) drive a real CLI as a subprocess, whose tools are served
+// by a forked "grain mcpserver" holding no store. That process asks the
+// same question through the daemon instead -- the REST hop the chat
+// tool's daemonChat makes (pkg/ui's /api/tasks/{id}/messages) -- with
+// pkg/daemon's daemonHostExecConfirm as its Confirmer, and reads the
+// reply with the same Decide. This function is still what an
+// in-process caller holding the store uses.
 //
 // approved is false, with reply explaining why, whenever a human
 // answers no, the wait times out, or ctx is cancelled (the task closed,
@@ -255,7 +244,7 @@ func Confirm(ctx context.Context, store *model.Store, taskID, question string, p
 					continue
 				}
 				clearPending(now)
-				return decide(c.Body), c.Body, nil
+				return Decide(c.Body), c.Body, nil
 			}
 			if now.After(deadline) {
 				clearPending(now)
@@ -265,11 +254,11 @@ func Confirm(ctx context.Context, store *model.Store, taskID, question string, p
 	}
 }
 
-// decide reads a human's reply as approve or deny -- deliberately
+// Decide reads a human's reply as approve or deny -- deliberately
 // biased toward refusing: an unrecognised reply (a question back, a
 // typo, small talk) must never be read as approval just because it
 // wasn't a clear "no".
-func decide(reply string) bool {
+func Decide(reply string) bool {
 	lower := strings.ToLower(strings.TrimSpace(reply))
 	if strings.Contains(lower, "deny") || strings.Contains(lower, "denied") || strings.Contains(lower, "refuse") {
 		return false

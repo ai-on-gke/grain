@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -32,11 +33,11 @@ import (
 func TestTargetsOffersTheStandardBranchesAndReleasedVersions(t *testing.T) {
 	listed := 0
 	u := New(Config{
-		Image:           &ImageConfig{Repository: "ghcr.io/bwsalmon/grain/grain"},
+		Image:           &ImageConfig{Repository: "docker.io/grainai/grain"},
 		AllowedBranches: []string{"main", "latest", "v*", "release/*", "ops/pinned"},
 		ListTags: func(_ context.Context, repo string) ([]string, error) {
 			listed++
-			if repo != "ghcr.io/bwsalmon/grain/grain" {
+			if repo != "docker.io/grainai/grain" {
 				t.Errorf("ListTags(%q), want the configured repository", repo)
 			}
 			return []string{"main", "latest", "sha-1234567", "v1.5.0", "v1.10.0", "v1.6.0", "v1.7.0-rc.1", "candidate", "grain..task-1"}, nil
@@ -106,7 +107,7 @@ func TestTargetsWithoutARegistry(t *testing.T) {
 // allowed.
 func TestTargetsOnADefaultDeployment(t *testing.T) {
 	img := New(Config{
-		Image: &ImageConfig{Repository: "ghcr.io/bwsalmon/grain/grain"},
+		Image: &ImageConfig{Repository: "docker.io/grainai/grain"},
 		ListTags: func(context.Context, string) ([]string, error) {
 			return []string{"main", "latest", "candidate", "v1.6.0", "v1.7.0", "v1.7.0-rc.1", "sha-1234567"}, nil
 		},
@@ -250,7 +251,7 @@ func TestTargetsFiltersReleasedVersionsByEdition(t *testing.T) {
 	// A Google edition install offers only Google-edition release tags.
 	googleUp := New(Config{
 		Edition: "google",
-		Image:   &ImageConfig{Repository: "ghcr.io/bwsalmon/grain/grain"},
+		Image:   &ImageConfig{Repository: "docker.io/grainai/grain"},
 		ListTags: func(context.Context, string) ([]string, error) {
 			return tags, nil
 		},
@@ -269,7 +270,7 @@ func TestTargetsFiltersReleasedVersionsByEdition(t *testing.T) {
 	// A core / OSS edition install offers only core / OSS release tags, not -google ones.
 	coreUp := New(Config{
 		Edition: "oss",
-		Image:   &ImageConfig{Repository: "ghcr.io/bwsalmon/grain/grain"},
+		Image:   &ImageConfig{Repository: "docker.io/grainai/grain"},
 		ListTags: func(context.Context, string) ([]string, error) {
 			return tags, nil
 		},
@@ -339,7 +340,7 @@ func TestTargetsDiscardedRC(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			u := New(Config{
-				Image:          &ImageConfig{Repository: "ghcr.io/bwsalmon/grain/grain"},
+				Image:          &ImageConfig{Repository: "docker.io/grainai/grain"},
 				RunningRelease: func() string { return tc.running },
 				ListTags: func(context.Context, string) ([]string, error) {
 					return tc.tags, nil
@@ -353,5 +354,114 @@ func TestTargetsDiscardedRC(t *testing.T) {
 				t.Errorf("DiscardedRC() = %+v, want %+v", gotDirect, tc.want)
 			}
 		})
+	}
+}
+
+func TestTargetsRetractedRelease(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		running string
+		tags    []string
+		want    *RetractedRelease
+	}{
+		{
+			name:    "retracted-latest-rolled-back",
+			running: "v3.5.0",
+			tags:    []string{"latest", "v3.3.0", "v3.4.0", "v3.5.0", "v3.5.0-retracted", "v3.6.0-rc.1"},
+			want:    &RetractedRelease{Running: "v3.5.0", Latest: "v3.4.0"},
+		},
+		{
+			name:    "retracted-with-a-fix-forward-published",
+			running: "v3.5.0",
+			tags:    []string{"latest", "v3.4.0", "v3.4.1", "v3.4.1-retracted", "v3.5.0", "v3.5.0-retracted", "v3.6.0"},
+			want:    &RetractedRelease{Running: "v3.5.0", Latest: "v3.4.0", Newer: "v3.6.0"},
+		},
+		{
+			name:    "release-stands",
+			running: "v3.4.0",
+			tags:    []string{"latest", "v3.4.0", "v3.5.0", "v3.5.0-retracted"},
+			want:    nil,
+		},
+		{
+			name:    "running-a-candidate",
+			running: "v3.5.0-rc.1",
+			tags:    []string{"v3.5.0", "v3.5.0-retracted", "v3.5.0-rc.1"},
+			want:    nil,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u := New(Config{
+				Image:          &ImageConfig{Repository: "ghcr.io/example/grain/grain"},
+				RunningRelease: func() string { return tc.running },
+				ListTags: func(context.Context, string) ([]string, error) {
+					return tc.tags, nil
+				},
+			})
+			targets := u.Targets(context.Background())
+			if got := targets.RetractedRelease; !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("Targets().RetractedRelease = %+v, want %+v", got, tc.want)
+			}
+			if got := u.CachedRetractedRelease(context.Background()); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("CachedRetractedRelease() = %+v, want %+v", got, tc.want)
+			}
+			for _, target := range targets.Targets {
+				if target.Kind == TargetVersion && slices.Contains(tc.tags, target.Name+"-retracted") {
+					t.Errorf("Targets() offers the retracted release %s", target.Name)
+				}
+			}
+		})
+	}
+}
+
+// TestLatestRelease: what the release-triggered automatic upgrade
+// follows is the newest promoted release in the deployment's own
+// edition -- never a release candidate, a discarded candidate, or a
+// retracted release.
+func TestLatestRelease(t *testing.T) {
+	tags := []string{
+		"main", "latest", "candidate", "sha-1234567",
+		"v3.7.0-rc.1", "v3.7.0-rc.1-discarded", "v3.7.0-rc.2",
+		"v3.6.1", "v3.6.1-retracted",
+		"v3.6.0",
+		"v3.6.2-google", "v3.6.0-google",
+	}
+	list := func(context.Context, string) ([]string, error) { return tags, nil }
+	for _, tc := range []struct{ edition, want string }{
+		{"oss", "v3.6.0"},
+		{"google", "v3.6.2-google"},
+	} {
+		up := New(Config{Edition: tc.edition, Image: &ImageConfig{Repository: "ghcr.io/example/grain"}, ListTags: list})
+		got, err := up.LatestRelease(context.Background())
+		if err != nil || got != tc.want {
+			t.Errorf("%s edition: LatestRelease = %q, %v; want %q", tc.edition, got, err, tc.want)
+		}
+	}
+
+	none := New(Config{Image: &ImageConfig{Repository: "ghcr.io/example/grain"},
+		ListTags: func(context.Context, string) ([]string, error) { return []string{"main", "v1.0.0-rc.1"}, nil }})
+	if got, err := none.LatestRelease(context.Background()); err != nil || got != "" {
+		t.Errorf("a registry with no release: LatestRelease = %q, %v; want none", got, err)
+	}
+	if _, err := New(Config{SrcDir: t.TempDir()}).LatestRelease(context.Background()); err == nil {
+		t.Error("the source pipeline answered a release to follow")
+	}
+}
+
+func TestRegistryLocationDockerHub(t *testing.T) {
+	for _, tc := range []struct {
+		repo, wantHost, wantName string
+	}{
+		{"docker.io/grainai/grain", "registry-1.docker.io", "grainai/grain"},
+		{"index.docker.io/grainai/sandbox", "registry-1.docker.io", "grainai/sandbox"},
+		{"registry-1.docker.io/grainai/sandbox-k8s", "registry-1.docker.io", "grainai/sandbox-k8s"},
+		{"grainai/grain", "registry-1.docker.io", "grainai/grain"},
+		{"docker.io/alpine", "registry-1.docker.io", "library/alpine"},
+		{"alpine", "registry-1.docker.io", "library/alpine"},
+		{"ghcr.io/bwsalmon/grain/grain", "ghcr.io", "bwsalmon/grain/grain"},
+	} {
+		host, name := registryLocation(tc.repo)
+		if host != tc.wantHost || name != tc.wantName {
+			t.Errorf("registryLocation(%q) = (%q, %q), want (%q, %q)", tc.repo, host, name, tc.wantHost, tc.wantName)
+		}
 	}
 }

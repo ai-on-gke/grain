@@ -12,17 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import PageHeader from "./PageHeader.jsx";
 import Sidebar, { compactCount } from "./Sidebar.jsx";
 import {
   SIDEBAR_COLLAPSED_STORAGE_KEY,
   useSidebarCollapsed,
 } from "../sidebarCollapse.js";
 import {
+  DEFAULT_HIDDEN_SECTIONS,
   SIDEBAR_HIDDEN_STORAGE_KEY,
   parseHiddenSections,
+  resetHiddenSections,
+  saveHiddenSections,
 } from "../sidebarSections.js";
 
 const noop = () => {};
@@ -44,6 +48,9 @@ const tasks = [
 ];
 
 describe("Sidebar", () => {
+  afterEach(() => {
+    localStorage.removeItem(SIDEBAR_HIDDEN_STORAGE_KEY);
+  });
   it("marks the Boards index as the current rail destination", () => {
     render(
       <Sidebar
@@ -216,7 +223,7 @@ describe("Sidebar", () => {
     );
 
     // The bordered "team-scoped section" is gone with the teams
-    // (docs/design/settings-panel.md §4.2); its entries are the list.
+    // (design/design/settings-panel.design.md §4.2); its entries are the list.
     expect(screen.queryByTestId("team-section")).toBeNull();
     expect(screen.queryByTestId("team-selector")).toBeNull();
     for (const name of [
@@ -224,11 +231,15 @@ describe("Sidebar", () => {
       "Boards 0",
       "Sessions 0",
       "Processes 0",
-      "CI 0",
       /^Repos/,
     ]) {
       expect(screen.getByRole("button", { name })).toBeInTheDocument();
     }
+    expect(screen.queryByRole("button", { name: /^CI/ })).toBeNull();
+
+    // The sidebar brand header keeps its 77px height alignment with no bottom border.
+    const header = screen.getByTestId("sidebar-header");
+    expect(getComputedStyle(header).borderBottomStyle).not.toBe("solid");
   });
 
   // A standing session's task is parked in "Asked" between
@@ -364,7 +375,7 @@ describe("Sidebar", () => {
     expect(screen.getByRole("button", { name: "Caches" })).toBeInTheDocument();
   });
 
-  // docs/design/settings-panel.md §5.6: a pinned System tab or Settings
+  // design/design/settings-panel.design.md §5.6: a pinned System tab or Settings
   // section is selected only while that tab or section is open.
   it("selects a pinned tab or section only while it is the open one", () => {
     const pins = [
@@ -489,6 +500,7 @@ describe("Sidebar", () => {
   });
 
   it("shows the number of running CI runs", () => {
+    localStorage.setItem(SIDEBAR_HIDDEN_STORAGE_KEY, "[]");
     render(
       <Sidebar
         {...baseProps}
@@ -892,7 +904,7 @@ describe("Sidebar", () => {
     expect(screen.getByRole("button", { name: /^Boards/ })).toBeInTheDocument();
   });
 
-  // docs/design/settings-panel.md §4.2: one Processes entry where
+  // design/design/settings-panel.design.md §4.2: one Processes entry where
   // Schedules, Templates and Suites were, counting every row the page
   // lists.
   it("switches to Processes and counts every process when clicked", async () => {
@@ -923,6 +935,7 @@ describe("Sidebar", () => {
   });
 
   it("sends a click on CI to its own view, and shows zero running", async () => {
+    localStorage.setItem(SIDEBAR_HIDDEN_STORAGE_KEY, "[]");
     const onSetView = vi.fn();
     const user = userEvent.setup();
     render(
@@ -945,21 +958,22 @@ describe("Sidebar", () => {
   });
 
   it("marks each list entry with its own glyph", () => {
+    localStorage.setItem(SIDEBAR_HIDDEN_STORAGE_KEY, "[]");
     render(<Sidebar {...baseProps} config={null} tasks={[]} />);
 
-    for (const [label, kind] of [
-      ["Tasks", "tasks"],
-      ["Boards", "boards"],
-      ["Sessions", "sessions"],
-      ["Processes", "processes"],
-      ["CI", "ci"],
-      ["Repos", "repos"],
+    for (const [label, kind, attr] of [
+      ["Tasks", "tasks", "glyph"],
+      ["Boards", "boards", "glyph"],
+      ["Sessions", "sessions", "glyph"],
+      ["Processes", "processes", "glyph"],
+      ["CI", "ci", "icon"],
+      ["Repos", "repos", "glyph"],
     ]) {
       const entry = screen.getByRole("button", {
         name: new RegExp(`^${label}`),
       });
       expect(
-        entry.querySelector(`svg[data-glyph="${kind}"]`),
+        entry.querySelector(`svg[data-${attr}="${kind}"]`),
       ).toBeInTheDocument();
     }
   });
@@ -1055,19 +1069,37 @@ describe("Sidebar", () => {
     expect(onOpenCustomize).toHaveBeenCalledTimes(1);
   });
 
+  // It opens a dialog, and says so: PhoneNav keeps the phone drawer open
+  // for a control with aria-haspopup, so Customize no longer closed the
+  // drawer whose pinned items it edits (2026-11-01 responsive
+  // walkthrough).
+  it("names Customize sidebar as opening a dialog", () => {
+    render(
+      <Sidebar
+        {...baseProps}
+        config={null}
+        tasks={tasks}
+        onOpenCustomize={() => {}}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Customize sidebar" }),
+    ).toHaveAttribute("aria-haspopup", "dialog");
+  });
+
   it("marks each destination with its own glyph", () => {
     const { container } = render(
       <Sidebar {...baseProps} config={null} tasks={[]} />,
     );
 
-    for (const [label, kind] of [
-      ["Inbox", "inbox"],
-      ["Repos", "repos"],
+    for (const [label, kind, attr] of [
+      ["Inbox", "inbox", "icon"],
+      ["Repos", "repos", "glyph"],
     ]) {
       const entry = screen.getByRole("button", {
         name: new RegExp(`^${label}\\b`),
       });
-      const glyph = entry.querySelector(`svg[data-glyph="${kind}"]`);
+      const glyph = entry.querySelector(`svg[data-${attr}="${kind}"]`);
       expect(glyph).toBeInTheDocument();
       expect(glyph.closest(".nav-icon")).not.toBeNull();
     }
@@ -1079,7 +1111,10 @@ describe("Sidebar", () => {
 
     expect(screen.queryByTestId("user-settings-button")).toBeNull();
 
-    expect(container.querySelectorAll("svg[data-glyph]")).toHaveLength(7);
+    expect(container.querySelectorAll("svg[data-glyph]")).toHaveLength(5);
+    expect(container.querySelectorAll(".nav-icon svg[data-icon]")).toHaveLength(
+      1,
+    );
   });
 
   it("shows Merged in sidebar under tasks and separates its count from Closed", async () => {
@@ -1106,6 +1141,34 @@ describe("Sidebar", () => {
 
     await user.click(mergedEntry);
     expect(onSetFilter).toHaveBeenCalledWith("merged");
+  });
+
+  // 2026-11-04 walkthrough: closed work is paged in 200 at a time, and
+  // the rail counted only what had been read -- "Closed 200" on a
+  // deployment with 205.
+  it("counts closed and merged work not yet paged in", () => {
+    const tasks = [
+      { id: "1", state: "closed", prMergedAt: "2026-09-26T00:00:00Z" },
+      { id: "2", state: "closed", endedAt: null },
+      { id: "3", state: "running" },
+    ];
+    render(
+      <Sidebar
+        {...baseProps}
+        config={null}
+        tasks={tasks}
+        unseenClosed={{ closed: 4, merged: 2 }}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: /Merged 3/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Closed 5/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^Tasks 9/ }),
+    ).toBeInTheDocument();
   });
 
   it("shows the environment name beside the wordmark when one is configured", () => {
@@ -1311,7 +1374,7 @@ describe("Sidebar", () => {
     expect(onSetView).toHaveBeenCalledWith("boards");
   });
 
-  // grain has no users (docs/design/settings-panel.md §6): the rail
+  // grain has no users (design/design/settings-panel.design.md §6): the rail
   // names nobody, neither a browser-chosen name nor the server's actor.
   it("has no user tile, and names no user or actor", () => {
     localStorage.setItem("grain.username", "alice");
@@ -1605,14 +1668,20 @@ describe("Sidebar staging entries", () => {
 function FoldableSidebar(props) {
   const [collapsed, , toggle] = useSidebarCollapsed();
   return (
-    <Sidebar
-      {...baseProps}
-      config={null}
-      tasks={tasks}
-      collapsed={collapsed}
-      onToggleCollapsed={toggle}
-      {...props}
-    />
+    <>
+      <Sidebar
+        {...baseProps}
+        config={null}
+        tasks={tasks}
+        collapsed={collapsed}
+        onToggleCollapsed={toggle}
+        {...props}
+      />
+      <PageHeader
+        title="boards"
+        onExpandSidebar={collapsed ? toggle : undefined}
+      />
+    </>
   );
 }
 
@@ -1635,19 +1704,31 @@ describe("Sidebar folded to an icon rail", () => {
     );
   });
 
-  it("folds and unfolds from the chevron, saying which it is", async () => {
+  it("folds from the sidebar header toggle and unfolds from the upper PageHeader rail", async () => {
     const user = userEvent.setup();
     render(<FoldableSidebar view="boards" />);
     const aside = document.querySelector("aside");
-    const collapse = screen.getByRole("button", { name: "Collapse sidebar" });
+    const pageHeader = screen.getByTestId("page-header");
+
+    const collapse = within(aside).getByRole("button", {
+      name: "Collapse sidebar",
+    });
     expect(collapse).toHaveAttribute("aria-expanded", "true");
+    expect(collapse.querySelector('svg[data-icon="sidebar"]')).not.toBeNull();
+    expect(within(pageHeader).queryByTestId("sidebar-toggle")).toBeNull();
     expect(aside).toHaveAttribute("data-collapsed", "false");
 
     await user.click(collapse);
     expect(aside).toHaveAttribute("data-collapsed", "true");
-    const expand = screen.getByRole("button", { name: "Expand sidebar" });
+    // Nothing sits stacked under the logo inside the collapsed rail; the
+    // restore button moves to the leading edge of PageHeader.
+    expect(within(aside).queryByTestId("sidebar-toggle")).toBeNull();
+    const expand = within(pageHeader).getByRole("button", {
+      name: "Expand sidebar",
+    });
     expect(expand).toHaveAttribute("aria-expanded", "false");
     expect(expand).toHaveAttribute("aria-keyshortcuts", "[");
+    expect(expand.querySelector('svg[data-icon="sidebar"]')).not.toBeNull();
 
     await user.click(expand);
     expect(aside).toHaveAttribute("data-collapsed", "false");
@@ -1709,11 +1790,11 @@ describe("Sidebar folded to an icon rail", () => {
       /^Boards/,
       /^Sessions/,
       /^Processes/,
-      /^CI/,
       /^Repos/,
     ]) {
       expect(screen.getByRole("button", { name })).toBeInTheDocument();
     }
+    expect(screen.queryByRole("button", { name: /^CI/ })).toBeNull();
     const boards = screen.getByRole("button", { name: /^Boards/ });
     expect(boards).toHaveAttribute("aria-current", "page");
     expect(boards).toHaveClass("Mui-selected");
@@ -1772,18 +1853,18 @@ describe("Sidebar sections this browser hides", () => {
     await user.click(screen.getByRole("button", { name: "Save" }));
   };
 
-  it("shows every section by default", () => {
+  it("hides CI by default while showing every other section", () => {
     render(<Sidebar {...baseProps} config={null} tasks={tasks} />);
     for (const name of [
       /^Tasks/,
       /^Boards/,
       /^Sessions/,
       /^Processes/,
-      /^CI/,
       /^Repos/,
     ]) {
       expect(screen.getByRole("button", { name })).toBeInTheDocument();
     }
+    expect(screen.queryByRole("button", { name: /^CI/ })).toBeNull();
     expect(screen.getByText("Pinned")).toBeInTheDocument();
   });
 
@@ -1800,11 +1881,32 @@ describe("Sidebar sections this browser hides", () => {
     ).toBeInTheDocument();
     expect(
       JSON.parse(localStorage.getItem(SIDEBAR_HIDDEN_STORAGE_KEY)),
-    ).toEqual(["boards"]);
+    ).toEqual(["boards", "ci"]);
 
     unmount();
     render(<Sidebar {...baseProps} config={null} tasks={tasks} boards={[]} />);
     expect(screen.queryByRole("button", { name: /^Boards/ })).toBeNull();
+  });
+
+  it("persists an explicit empty array when CI is turned on in Customize sidebar so reload keeps CI shown", async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <Sidebar {...baseProps} config={null} tasks={tasks} boards={[]} />,
+    );
+    expect(screen.queryByRole("button", { name: /^CI/ })).toBeNull();
+
+    // Toggling Show CI turns CI on (hidden becomes []).
+    await hideViaCustomize(user, "CI");
+    expect(screen.getByRole("button", { name: /^CI/ })).toBeInTheDocument();
+    expect(localStorage.getItem(SIDEBAR_HIDDEN_STORAGE_KEY)).toBe("[]");
+
+    unmount();
+    render(<Sidebar {...baseProps} config={null} tasks={tasks} boards={[]} />);
+    expect(screen.getByRole("button", { name: /^CI/ })).toBeInTheDocument();
+
+    act(() => resetHiddenSections());
+    expect(localStorage.getItem(SIDEBAR_HIDDEN_STORAGE_KEY)).toBeNull();
+    expect(screen.queryByRole("button", { name: /^CI/ })).toBeNull();
   });
 
   it("hides the section, and its count, from the folded rail too", () => {
@@ -1825,7 +1927,7 @@ describe("Sidebar sections this browser hides", () => {
     ).toBeInTheDocument();
   });
 
-  it("puts everything back on Reset to default", async () => {
+  it("restores DEFAULT_HIDDEN_SECTIONS on Reset to default", async () => {
     localStorage.setItem(
       SIDEBAR_HIDDEN_STORAGE_KEY,
       JSON.stringify(["boards", "sessions", "pinned"]),
@@ -1833,6 +1935,7 @@ describe("Sidebar sections this browser hides", () => {
     const user = userEvent.setup();
     render(<Sidebar {...baseProps} config={null} tasks={tasks} boards={[]} />);
     expect(screen.queryByRole("button", { name: /^Sessions/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /^CI/ })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Customize sidebar" }));
     await user.click(screen.getByRole("button", { name: "Reset to default" }));
@@ -1843,7 +1946,10 @@ describe("Sidebar sections this browser hides", () => {
       screen.getByRole("button", { name: /^Sessions/ }),
     ).toBeInTheDocument();
     expect(screen.getByText("Pinned")).toBeInTheDocument();
-    expect(localStorage.getItem(SIDEBAR_HIDDEN_STORAGE_KEY)).toBeNull();
+    expect(screen.queryByRole("button", { name: /^CI/ })).toBeNull();
+    expect(
+      JSON.parse(localStorage.getItem(SIDEBAR_HIDDEN_STORAGE_KEY)),
+    ).toEqual(DEFAULT_HIDDEN_SECTIONS);
   });
 
   it("keeps a pin of a hidden section under Pinned", () => {
@@ -1872,11 +1978,16 @@ describe("Sidebar sections this browser hides", () => {
     ).toBeInTheDocument();
   });
 
-  it("ignores ids it does not know, so a later section is never hidden", () => {
+  it("ignores ids it does not know, and falls back to DEFAULT_HIDDEN_SECTIONS when uncustomized or corrupt", () => {
+    expect(parseHiddenSections(null)).toEqual(DEFAULT_HIDDEN_SECTIONS);
+    expect(parseHiddenSections("[]")).toEqual([]);
+    expect(parseHiddenSections(JSON.stringify(["someday"]))).toEqual([]);
     expect(parseHiddenSections(JSON.stringify(["someday", "ci"]))).toEqual([
       "ci",
     ]);
-    expect(parseHiddenSections("not json")).toEqual([]);
-    expect(parseHiddenSections(JSON.stringify({ ci: true }))).toEqual([]);
+    expect(parseHiddenSections("not json")).toEqual(DEFAULT_HIDDEN_SECTIONS);
+    expect(parseHiddenSections(JSON.stringify({ ci: true }))).toEqual(
+      DEFAULT_HIDDEN_SECTIONS,
+    );
   });
 });

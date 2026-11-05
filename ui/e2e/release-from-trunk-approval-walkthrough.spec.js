@@ -16,7 +16,7 @@ import { expect, test } from "./fixtures.js";
 import { alertRow, openAlerts } from "./alerts.js";
 
 // Release-from-trunk pending-release approval walkthrough
-// (docs/test-plans/2026-10-28.md §6, docs/design/release-from-trunk.md §4).
+// (docs/test-plans/2026-10-28.md §6, design/design/release-from-trunk.design.md §4).
 //
 // `grain demo -github-sim -fake-ci` seeds a pending-release notification
 // (release.pending:v2.4.0) on GrainSourceRepo() and wires demoFakeCI so
@@ -28,6 +28,7 @@ test.describe.configure({ mode: "serial" });
 test.setTimeout(90_000);
 
 const DESKTOP = { width: 1440, height: 900 };
+const PHONE = { width: 390, height: 844 };
 
 test("pending releases: approved from Inbox and Alerts, rejected, and refused to an agent", async ({
   page,
@@ -39,7 +40,12 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
     return res.json();
   };
   const ciRuns = async () =>
-    (await ok(await page.request.get("/api/ci/runs"), "ci runs")).runs;
+    (
+      await ok(
+        await page.request.get("/api/ci/runs?repo=ai-on-gke%2Fgrain"),
+        "ci runs",
+      )
+    ).runs;
   const notificationBySubject = async (subject) => {
     const list = await ok(
       await page.request.get("/api/notifications"),
@@ -47,14 +53,16 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
     );
     return list.find((n) => n.subject === subject);
   };
-  const raisePendingRelease = async (version) => {
+  const raisePendingRelease = async (version, body) => {
     await ok(
       await page.request.post("/api/notifications", {
         data: {
           subject: `release.pending:${version}`,
           severity: "warning",
           title: `${version} is ready to promote (${version}-rc.1 passed its soak)`,
-          body: `${version}-rc.1 passed its 24h staging soak and is staged as ${version}-pending.`,
+          body:
+            body ||
+            `${version}-rc.1 passed its 24h staging soak and is staged as ${version}-pending.`,
           repo: "ai-on-gke/grain",
           actions: ["approve-release", "reject-release"],
         },
@@ -169,7 +177,147 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
   expect(n260?.clearedAt).toBeTruthy();
   expect(n260?.clearedBy).toMatch(/^human:/);
 
-  // 4. Confirm an agent token is refused even when holding api:releases:write.
+  // 4. Raise v2.8.0 on a short soak: the Inbox says so beside its
+  // Approve, and approving it asks about the short soak and accepts it
+  // with short_soak_ok.
+  await raisePendingRelease(
+    "v2.8.0",
+    "v2.8.0-rc.1 passed its 24h staging soak and is staged as v2.8.0-pending.\n\n" +
+      "SHORT SOAK: under the 22h minimum; approving it needs short_soak_ok: true.\n\n" +
+      "Soak: soaked 1h00m of 24h (FORCE=true): PASS",
+  );
+  await page.goto("/inbox");
+  const v280Row = section
+    .getByTestId("inbox-notification")
+    .filter({ hasText: "v2.8.0 is ready to promote" });
+  await expect(v280Row).toBeVisible();
+  const soak = v280Row.getByTestId("inbox-release-soak");
+  await expect(soak).toHaveText("SHORT SOAKsoaked 1h00m of 24h (FORCE=true)");
+  const approveShort = v280Row.getByRole("button", {
+    name: "Approve short soak",
+  });
+  const soakBox = await soak.boundingBox();
+  const approveShortBox = await approveShort.boundingBox();
+  expect(soakBox.x + soakBox.width).toBeLessThanOrEqual(approveShortBox.x);
+  expect(
+    Math.abs(
+      soakBox.y +
+        soakBox.height / 2 -
+        (approveShortBox.y + approveShortBox.height / 2),
+    ),
+  ).toBeLessThanOrEqual(2);
+
+  dialogMessage = "";
+  page.once("dialog", (dialog) => {
+    dialogMessage = dialog.message();
+    dialog.accept();
+  });
+  const approval = page.waitForRequest((req) =>
+    req.url().endsWith("/pending-releases/v2.8.0/approve"),
+  );
+  await approveShort.click();
+  expect((await approval).postDataJSON()).toEqual({ short_soak_ok: true });
+  expect(dialogMessage).toContain("Approve v2.8.0 on a SHORT SOAK?");
+  expect(dialogMessage).toContain("soaked 1h00m of 24h (FORCE=true)");
+  await expect(v280Row).toHaveCount(0);
+  expect(await ciRuns()).toHaveLength(4);
+
+  // 5. Raise a patch release (release.pending:v2.4.1) staged by the
+  // qualification-driven train: the Inbox offers Approve and Reject in the
+  // right-hand action slot with no soak chip, and Approve reaches
+  // /pending-releases/v2.4.1/approve.
+  await raisePendingRelease(
+    "v2.4.1",
+    "v2.4.1-rc.1 passed qualification (Stage 1 nightly.yml, Stage 2 grain/release-qualification) and is staged as v2.4.1-pending.\n\n" +
+      "Qualification: PASS",
+  );
+  await page.goto("/inbox");
+  const v241Row = section
+    .getByTestId("inbox-notification")
+    .filter({ hasText: "v2.4.1 is ready to promote" });
+  await expect(v241Row).toBeVisible();
+  await expect(v241Row.getByTestId("inbox-release-soak")).toHaveCount(0);
+  const approvePatch = v241Row.getByRole("button", { name: "Approve" });
+  const rejectPatch = v241Row.getByRole("button", { name: "Reject" });
+  await expect(approvePatch).toBeVisible();
+  await expect(rejectPatch).toBeVisible();
+
+  const rowBox = await v241Row.boundingBox();
+  const titleBox = await v241Row.locator(".inbox-gate").boundingBox();
+  const approveBox = await approvePatch.boundingBox();
+  const rejectBox = await rejectPatch.boundingBox();
+  expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(approveBox.x);
+  expect(approveBox.x + approveBox.width).toBeLessThanOrEqual(rejectBox.x);
+  expect(rejectBox.x + rejectBox.width).toBeLessThanOrEqual(
+    rowBox.x + rowBox.width,
+  );
+  expect(
+    Math.abs(
+      approveBox.y +
+        approveBox.height / 2 -
+        (rejectBox.y + rejectBox.height / 2),
+    ),
+  ).toBeLessThanOrEqual(2);
+
+  await page.setViewportSize(PHONE);
+  await expect
+    .poll(async () => {
+      const phoneRowBox = await v241Row.boundingBox();
+      const phoneApproveBox = await approvePatch.boundingBox();
+      const phoneRejectBox = await rejectPatch.boundingBox();
+      if (!phoneRowBox || !phoneApproveBox || !phoneRejectBox) return null;
+      return {
+        rowFitsViewport: phoneRowBox.width <= PHONE.width,
+        approveInsideRow: phoneApproveBox.x >= phoneRowBox.x,
+        approveBeforeReject:
+          phoneApproveBox.x + phoneApproveBox.width <= phoneRejectBox.x,
+        rejectInsideRow:
+          phoneRejectBox.x + phoneRejectBox.width <=
+          phoneRowBox.x + phoneRowBox.width,
+      };
+    })
+    .toEqual({
+      rowFitsViewport: true,
+      approveInsideRow: true,
+      approveBeforeReject: true,
+      rejectInsideRow: true,
+    });
+  await page.setViewportSize(DESKTOP);
+
+  dialogMessage = "";
+  page.once("dialog", (dialog) => {
+    dialogMessage = dialog.message();
+    dialog.accept();
+  });
+  const patchApproval = page.waitForRequest((req) =>
+    req.url().endsWith("/pending-releases/v2.4.1/approve"),
+  );
+  await approvePatch.click();
+  const patchReq = await patchApproval;
+  expect(patchReq.method()).toBe("POST");
+  expect(patchReq.postData()).toBeNull();
+  expect(dialogMessage).toContain("Approve v2.4.1?");
+  await expect(v241Row).toHaveCount(0);
+
+  runs = await ciRuns();
+  expect(runs).toHaveLength(5);
+  expect(runs[0]).toMatchObject({
+    id: "fake-ci-5",
+    repo: "ai-on-gke/grain",
+    ref: "main",
+    event: "workflow_dispatch",
+    jobs: [
+      {
+        jobId: ".grain/workflows/promote-release.yml:promote",
+        workflowPath: ".grain/workflows/promote-release.yml",
+      },
+    ],
+  });
+  let n241 = await notificationBySubject("release.pending:v2.4.1");
+  expect(n241?.clearedAt).toBeTruthy();
+  expect(n241?.clearedBy).toMatch(/^human:/);
+
+  // 6. Confirm an agent token is refused even when holding api:releases:write.
   await ok(
     await page.request.post("/api/tasks/1/capabilities", {
       data: { id: "api:releases:write", attach: true },
@@ -187,5 +335,5 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
     const body = await res.json();
     expect(body.error).toContain(`only a person may ${verb} a release`);
   }
-  expect(await ciRuns()).toHaveLength(3);
+  expect(await ciRuns()).toHaveLength(5);
 });

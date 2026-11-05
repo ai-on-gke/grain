@@ -113,9 +113,171 @@ func TestAPersonApprovesOrRejectsAPendingRelease(t *testing.T) {
 		t.Errorf("rejection started %+v, want the reject job", last.Jobs)
 	}
 
-	for _, bad := range []string{"v2.4.1", "latest", "v2.4.0-rc.1"} {
+	// A patch release the train staged from fixes alone is a person's to
+	// approve too.
+	if rec := do(t, srv, http.MethodPost, "/api/repos/ai-on-gke/grain/pending-releases/v2.4.1/approve", ""); rec.Code != http.StatusAccepted {
+		t.Errorf("approving the patch release v2.4.1: %d %s, want 202", rec.Code, rec.Body)
+	} else if last := runner.started[len(runner.started)-1]; last.ReleaseVersion != "v2.4.1" {
+		t.Errorf("the patch approval's run carries version %q, want v2.4.1", last.ReleaseVersion)
+	}
+
+	for _, bad := range []string{"latest", "v2.4.0-rc.1", "v2.4.0-pending", "2.4.0", "v2.4"} {
 		if rec := do(t, srv, http.MethodPost, "/api/repos/ai-on-gke/grain/pending-releases/"+bad+"/approve", ""); rec.Code != http.StatusBadRequest {
 			t.Errorf("approving %q: %d %s, want 400", bad, rec.Code, rec.Body)
 		}
+	}
+}
+
+// A short soak is accepted only by a person saying so on the approval:
+// short_soak_ok reaches the run in a field no API caller can set, an
+// approval without it carries nothing, and a rejection refuses it.
+func TestAPersonMayAcceptAShortSoakOnTheApproval(t *testing.T) {
+	srv, _, _, runner := approvalServer(t)
+	path := "/api/repos/ai-on-gke/grain/pending-releases/v2.4.0/"
+
+	if rec := do(t, srv, http.MethodPost, path+"approve", ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("a plain approval: %d %s, want 202", rec.Code, rec.Body)
+	}
+	if runner.started[0].ReleaseShortSoakOK {
+		t.Errorf("an approval without short_soak_ok accepted a short soak")
+	}
+
+	rec := do(t, srv, http.MethodPost, path+"approve", `{"short_soak_ok":true}`)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"shortSoakOk":true`) {
+		t.Fatalf("an approval accepting a short soak: %d %s, want 202 saying so", rec.Code, rec.Body)
+	}
+	if got := runner.started[1]; !got.ReleaseShortSoakOK || got.RequestedByKind != "human" {
+		t.Errorf("approval with short_soak_ok started %+v, want a person's run accepting the short soak", got)
+	}
+
+	if rec := do(t, srv, http.MethodPost, path+"reject", `{"short_soak_ok":true}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("a rejection with short_soak_ok: %d %s, want 400", rec.Code, rec.Body)
+	}
+	if rec := do(t, srv, http.MethodPost, path+"approve", `{"short_soak_ok":"yes"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("a malformed short_soak_ok: %d %s, want 400", rec.Code, rec.Body)
+	}
+	if len(runner.started) != 2 {
+		t.Errorf("started %d runs, want 2: a refused decision starts nothing", len(runner.started))
+	}
+}
+
+// Breaking changes outside a RELEASE_MAJOR release are accepted the same
+// way: allow_breaking reaches the run in a field no API caller can set,
+// an approval without it carries nothing, and a rejection refuses it.
+func TestAPersonMayAcceptBreakingChangesOnTheApproval(t *testing.T) {
+	srv, _, _, runner := approvalServer(t)
+	path := "/api/repos/ai-on-gke/grain/pending-releases/v2.4.0/"
+
+	if rec := do(t, srv, http.MethodPost, path+"approve", ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("a plain approval: %d %s, want 202", rec.Code, rec.Body)
+	}
+	if runner.started[0].ReleaseAllowBreaking {
+		t.Errorf("an approval without allow_breaking accepted breaking changes")
+	}
+
+	rec := do(t, srv, http.MethodPost, path+"approve", `{"allow_breaking":true}`)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"allowBreaking":true`) ||
+		strings.Contains(rec.Body.String(), `"shortSoakOk"`) {
+		t.Fatalf("an approval accepting breaking changes: %d %s, want 202 saying so and nothing else", rec.Code, rec.Body)
+	}
+	if got := runner.started[1]; !got.ReleaseAllowBreaking || got.ReleaseShortSoakOK || got.RequestedByKind != "human" ||
+		got.ReleaseVersion != "v2.4.0" {
+		t.Errorf("approval with allow_breaking started %+v, want a person's run of v2.4.0 accepting breaking changes only", got)
+	}
+
+	rec = do(t, srv, http.MethodPost, path+"approve", `{"allow_breaking":true,"short_soak_ok":true}`)
+	if got := runner.started[2]; rec.Code != http.StatusAccepted || !got.ReleaseAllowBreaking || !got.ReleaseShortSoakOK {
+		t.Errorf("an approval accepting both: %d %s, started %+v; want both answers on the run", rec.Code, rec.Body, got)
+	}
+
+	if rec := do(t, srv, http.MethodPost, path+"reject", `{"allow_breaking":true}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("a rejection with allow_breaking: %d %s, want 400", rec.Code, rec.Body)
+	}
+	if rec := do(t, srv, http.MethodPost, path+"approve", `{"allow_breaking":"v2.4.0"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("a malformed allow_breaking: %d %s, want 400", rec.Code, rec.Body)
+	}
+	if len(runner.started) != 3 {
+		t.Errorf("started %d runs, want 3: a refused decision starts nothing", len(runner.started))
+	}
+}
+
+// Rolling back a promoted release is person-only just like approving one:
+// an agent holding releases:write, an agent principal, automation, and an
+// unidentified caller are all refused before anything is started.
+func TestAnAgentMayNotRollBackARelease(t *testing.T) {
+	srv, client, _, runner := approvalServer(t)
+	seedAPITask(t, client, "7", "ai-on-gke/grain", "api:releases:write")
+
+	path := "/api/releases/v2.4.0/rollback"
+	code, body := asAgent(t, srv, "7", http.MethodPost, path, `{"to":"v2.3.0","reason":"bad schema"}`, "")
+	if code != http.StatusForbidden || !strings.Contains(body, "only a person may roll back") {
+		t.Errorf("an agent holding releases:write rolling back: %d %s, want 403 saying only a person may", code, body)
+	}
+	if rec := doAsCaller(t, srv, agentPrefix+"run-1", http.MethodPost, path, ""); rec.Code != http.StatusForbidden {
+		t.Errorf("an agent principal rolling back: %d %s, want 403", rec.Code, rec.Body)
+	}
+	for _, p := range []model.Principal{
+		{Kind: model.PrincipalAgent, ID: "run-9"},
+		{Kind: model.PrincipalAutomation, ID: "schedule:release-watchdog"},
+		{Kind: model.PrincipalService, ID: "steward"},
+	} {
+		if _, err := client.RollbackRelease(ui.WithPrincipal(context.Background(), p), "", "v2.4.0", ui.ReleaseRollback{}); err == nil ||
+			!strings.Contains(err.Error(), "only a person may roll back") {
+			t.Errorf("%s rolling back: %v, want refused", model.PrincipalString(p), err)
+		}
+	}
+	if len(runner.started) != 0 {
+		t.Fatalf("a non-person's rollback started CI anyway: %+v", runner.started)
+	}
+}
+
+// A person's rollback starts promote-release.yml's rollback job on trunk,
+// carrying RequestedByKind="human", ReleaseVersion, ReleaseRollbackTo and
+// ReleaseRollbackReason in fields no API caller can set.
+func TestAPersonRollsAReleaseBack(t *testing.T) {
+	srv, _, _, runner := approvalServer(t)
+
+	rec := do(t, srv, http.MethodPost, "/api/releases/v2.4.0/rollback", "")
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"rollback":true`) {
+		t.Fatalf("a plain rollback: %d %s, want 202 with rollback:true", rec.Code, rec.Body)
+	}
+	if len(runner.started) != 1 {
+		t.Fatalf("started %d runs, want 1", len(runner.started))
+	}
+	got := runner.started[0]
+	if got.Workflow != ui.PromoteReleaseWorkflow || got.Ref != "main" || got.Event != ci.EventManual ||
+		len(got.Jobs) != 1 || got.Jobs[0] != ui.PromoteReleaseWorkflow+":rollback" {
+		t.Errorf("rollback started %+v, want promote-release.yml's rollback job on main", got)
+	}
+	if got.Repo != "ai-on-gke/grain" || got.RequestedByKind != "human" || got.ReleaseVersion != "v2.4.0" ||
+		got.RequestedBy == "" || got.ReleaseRollbackTo != "" || got.ReleaseRollbackReason != "" {
+		t.Errorf("plain rollback run = %+v, want human rollback of ai-on-gke/grain v2.4.0 with empty to/reason", got)
+	}
+
+	rec = do(t, srv, http.MethodPost, "/api/releases/v2.4.0/rollback", `{"to":"v2.3.0","reason":"panics on startup"}`)
+	if rec.Code != http.StatusAccepted ||
+		!strings.Contains(rec.Body.String(), `"rollbackTo":"v2.3.0"`) ||
+		!strings.Contains(rec.Body.String(), `"rollbackReason":"panics on startup"`) {
+		t.Fatalf("rollback with to/reason: %d %s, want 202 with rollbackTo and rollbackReason", rec.Code, rec.Body)
+	}
+	got = runner.started[1]
+	if got.RequestedByKind != "human" || got.ReleaseVersion != "v2.4.0" ||
+		got.ReleaseRollbackTo != "v2.3.0" || got.ReleaseRollbackReason != "panics on startup" {
+		t.Errorf("rollback with to/reason started %+v", got)
+	}
+
+	for _, bad := range []string{"latest", "v2.4.0-rc.1", "v2.4.0-retracted", "2.4.0", "v2.4"} {
+		if rec := do(t, srv, http.MethodPost, "/api/releases/"+bad+"/rollback", ""); rec.Code != http.StatusBadRequest {
+			t.Errorf("rolling back %q: %d %s, want 400", bad, rec.Code, rec.Body)
+		}
+		if rec := do(t, srv, http.MethodPost, "/api/releases/v2.4.0/rollback", `{"to":"`+bad+`"}`); rec.Code != http.StatusBadRequest {
+			t.Errorf("rolling back to %q: %d %s, want 400", bad, rec.Code, rec.Body)
+		}
+	}
+	if rec := do(t, srv, http.MethodPost, "/api/releases/v2.4.0/rollback", `{"reason":"line1\nline2"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("multiline reason: %d %s, want 400", rec.Code, rec.Body)
+	}
+	if len(runner.started) != 2 {
+		t.Errorf("started %d runs, want 2: refused rollbacks start nothing", len(runner.started))
 	}
 }

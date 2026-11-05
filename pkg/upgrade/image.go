@@ -58,7 +58,7 @@ import (
 // they do for the binary path.
 type ImageConfig struct {
 	// Repository is the image CI publishes a tag per branch to, with no
-	// tag of its own -- "ghcr.io/bwsalmon/grain/grain". Required.
+	// tag of its own -- "docker.io/grainai/grain". Required.
 	Repository string
 	// RefFile is the file naming the image the deployment's service
 	// actually runs, which a successful upgrade rewrites: one
@@ -209,6 +209,35 @@ type ImageConfig struct {
 	// installtrack.TrackOSS; when Repository is empty, DefaultRepository(Track)
 	// supplies the default image repository.
 	Track installtrack.Track
+	// Source chooses where candidate container images are fetched from:
+	// ImageSourceRegistry (`docker pull`, the default) or
+	// ImageSourceReleaseAssets (tarballs on GitHub / GitHub Enterprise
+	// releases loaded with `docker load`). When empty, TrackDefaultsFor(Track)
+	// supplies any edition default before falling back to ImageSourceRegistry.
+	Source ImageSource
+	// SourceLocked marks Source as fixed by a daemon command-line flag or
+	// environment variable rather than editable configuration, so the UI
+	// displays it read-only.
+	SourceLocked bool
+	// SourceOverrideFile optionally persists UI-configured image source
+	// overrides across restarts when SourceLocked is false.
+	SourceOverrideFile string
+	// Fallback optionally names a secondary image source (ImageSourceRegistry
+	// or ImageSourceReleaseAssets) tried when Source fails to fetch the
+	// candidate daemon image.
+	Fallback ImageSource
+	// FallbackExplicit records that Fallback was explicitly set (including to
+	// empty/"none" to override a track default).
+	FallbackExplicit bool
+	// ReleaseAssets configures ImageSourceReleaseAssets (and fallback to it).
+	ReleaseAssets ReleaseAssetsConfig
+	// LoadCmd loads an image tarball appended as its last argument;
+	// {"docker", "load", "-i"} when left nil. Overridable for tests.
+	LoadCmd []string
+	// InspectIDCmd prints the local Docker image ID (`sha256:...`) of an image
+	// reference appended as its last argument;
+	// {"docker", "image", "inspect", "--format", "{{.Id}}"} when left nil.
+	InspectIDCmd []string
 }
 
 // imageRefEnvKey is the variable name written into ImageConfig.RefFile,
@@ -417,6 +446,14 @@ func (u *Upgrader) imageRefIn(repository, branch string) (string, error) {
 // holding a usable one. No token, or a login that fails, is only logged
 // -- the pull is what says whether it mattered.
 func (u *Upgrader) pullImage(ctx context.Context, p *progress, step, ref string) error {
+	// A ref naming no registry host is the local tag a release-asset
+	// tarball loads (grain/guest:sha-..., images.json's "ref"), not a
+	// pullable image: docker would resolve it to Docker Hub, where anybody
+	// may have published that name. Images from Docker Hub are named with
+	// an explicit docker.io/ host.
+	if registryauth.HostOf(ref) == "" {
+		return fmt.Errorf("refusing to pull %s: it names no registry host, so it is a local tag a release asset loads rather than an image to pull (docker would fetch it from Docker Hub); publish it on the release or name its registry", ref)
+	}
 	argv := u.cfg.Image.PullCmd
 	if len(argv) == 0 {
 		argv = []string{"docker", "pull"}
@@ -558,8 +595,8 @@ func (u *Upgrader) pinImage(ctx context.Context, p *progress, step, ref string) 
 	repo := repositoryOf(ref)
 	_, pinned, isPinned := strings.Cut(ref, "@")
 	for _, line := range strings.Split(out, "\n") {
-		digest, ok := strings.CutPrefix(strings.TrimSpace(line), repo+"@")
-		if !ok || !strings.HasPrefix(digest, "sha256:") {
+		r, digest, ok := strings.Cut(strings.TrimSpace(line), "@")
+		if !ok || !strings.HasPrefix(digest, "sha256:") || !sameRepository(r, repo) {
 			continue
 		}
 		if !isPinned {
@@ -932,13 +969,40 @@ func repositoryOf(ref string) string {
 	return ref
 }
 
+func dockerHubShortRepo(repo string) string {
+	norm := normalizeRepository(repo)
+	if rest, ok := strings.CutPrefix(norm, "docker.io/"); ok {
+		return strings.TrimPrefix(rest, "library/")
+	}
+	return ""
+}
+
+func isUntaggedRepoRow(repo, first string) bool {
+	r, tag, ok := strings.Cut(first, ":")
+	return ok && tag == "<none>" && sameRepository(r, repo)
+}
+
 // imageNames is every name ref can be matched by in an image listing:
 // itself, and for a pinned `repo:tag@sha256:...` also `repo@sha256:...`
-// (the image itself, however it is tagged now) and `repo:tag`.
+// (the image itself, however it is tagged now) and `repo:tag` -- plus
+// Docker's `docker.io/`-stripped short forms when ref is on Docker Hub.
 func imageNames(ref string) []string {
-	names := []string{ref}
-	if named, digest, ok := strings.Cut(ref, "@"); ok {
-		names = append(names, repositoryOf(ref)+"@"+digest, named)
+	repo := repositoryOf(ref)
+	suffix := strings.TrimPrefix(ref, repo)
+	prefixes := []string{repo}
+	if short := dockerHubShortRepo(repo); short != "" && short != repo {
+		prefixes = append(prefixes, short)
+	}
+	if norm := normalizeRepository(repo); norm != "" && norm != repo {
+		prefixes = append(prefixes, norm)
+	}
+	var names []string
+	for _, p := range prefixes {
+		r := p + suffix
+		names = append(names, r)
+		if named, digest, ok := strings.Cut(r, "@"); ok {
+			names = append(names, p+"@"+digest, named)
+		}
 	}
 	return names
 }
@@ -952,9 +1016,10 @@ func imageNames(ref string) []string {
 //
 // Best effort: a refusal (e.g. from an image still used by a running container)
 // is logged to the journal rather than failing an upgrade that has already succeeded.
-func (u *Upgrader) cleanOldImages(ctx context.Context, p *progress, ref, prevRef, sandbox, prevSandbox string) {
+func (u *Upgrader) cleanOldImages(ctx context.Context, p *progress, ref, prevRef, sandbox, prevSandbox string, extraKeep ...string) {
 	keep := make(map[string]bool)
-	for _, r := range []string{ref, prevRef, sandbox, prevSandbox, u.cfg.Image.SandboxImagePin} {
+	allKept := append([]string{ref, prevRef, sandbox, prevSandbox, u.cfg.Image.SandboxImagePin}, extraKeep...)
+	for _, r := range allKept {
 		if r == "" {
 			continue
 		}
@@ -982,6 +1047,11 @@ func (u *Upgrader) cleanOldImages(ctx context.Context, p *progress, ref, prevRef
 	if u.cfg.Image.SandboxImagePin != "" {
 		repos[repositoryOf(u.cfg.Image.SandboxImagePin)] = true
 	}
+	for _, r := range extraKeep {
+		if r != "" {
+			repos[repositoryOf(r)] = true
+		}
+	}
 	if mirror := repositoryOf(strings.TrimSpace(u.cfg.Image.SandboxImageMirror)); mirror != "" {
 		repos[mirror] = true
 		for _, s := range []string{sandbox, prevSandbox} {
@@ -992,7 +1062,9 @@ func (u *Upgrader) cleanOldImages(ctx context.Context, p *progress, ref, prevRef
 	}
 
 	for repo := range repos {
-		keep[repo+":previous"] = true
+		for _, name := range imageNames(repo + ":previous") {
+			keep[name] = true
+		}
 	}
 	// By any of its names: a pinned ref is kept by its digest, which is
 	// what still finds it after its tag has moved on.
@@ -1039,7 +1111,7 @@ func (u *Upgrader) cleanOldImages(ctx context.Context, p *progress, ref, prevRef
 				// No tag and no digest to name it by -- an untagged or
 				// locally built image -- so only its ID will do, and only
 				// if nothing kept or running is that same image.
-				if img.id == "" || len(img.names) == 0 || img.names[0] != repo+":<none>" ||
+				if img.id == "" || len(img.names) == 0 || !isUntaggedRepoRow(repo, img.names[0]) ||
 					containsImageID(keptIDs, img.id) || containsImageID(removedIDs, img.id) {
 					continue
 				}
@@ -1089,14 +1161,42 @@ func removableImage(repo string, names []string) string {
 	if len(names) == 0 {
 		return ""
 	}
+	prefixes := []string{repo}
+	if short := dockerHubShortRepo(repo); short != "" && short != repo {
+		prefixes = append(prefixes, short)
+	}
+	if norm := normalizeRepository(repo); norm != "" && norm != repo {
+		prefixes = append(prefixes, norm)
+	}
+	hasRepoPrefix := func(name, sep string) bool {
+		for _, p := range prefixes {
+			if strings.HasPrefix(name, p+sep) {
+				return true
+			}
+		}
+		return false
+	}
+	isRepoNone := func(name string) bool {
+		for _, p := range prefixes {
+			if name == p+":<none>" {
+				return true
+			}
+		}
+		return false
+	}
 	usableDigest := func(name string) bool {
-		return strings.HasPrefix(name, repo+"@") && name != repo+"@" && !strings.HasSuffix(name, "@<none>")
+		for _, p := range prefixes {
+			if strings.HasPrefix(name, p+"@") && name != p+"@" && !strings.HasSuffix(name, "@<none>") {
+				return true
+			}
+		}
+		return false
 	}
 	first := names[0]
-	if strings.HasPrefix(first, repo+":") && !strings.HasSuffix(first, ":<none>") {
+	if hasRepoPrefix(first, ":") && !strings.HasSuffix(first, ":<none>") {
 		return first
 	}
-	if first == repo+":<none>" || strings.HasPrefix(first, repo+"@") {
+	if isRepoNone(first) || hasRepoPrefix(first, "@") {
 		for _, name := range names {
 			if usableDigest(name) {
 				return name
@@ -1120,16 +1220,18 @@ func removableImage(repo string, names []string) string {
 // ref file written before pinning existed still needs to be rewritten to
 // record the digest it runs.
 func (u *Upgrader) sameImageVersion(prevRef, branch, tag, ref string) bool {
-	if prevDigest, ok := digestRef(prevRef); ok {
-		if newDigest, ok := digestRef(ref); ok && prevDigest == newDigest {
+	if prevDigest, ok := kubeDigestRef(prevRef); ok {
+		if newDigest, ok := kubeDigestRef(ref); ok && prevDigest == newDigest {
 			return true
 		}
 	}
-	if prevRef != "" && !strings.Contains(prevRef, "@") && prevRef == tag &&
+	if prevRef != "" && !strings.Contains(prevRef, "@") &&
+		sameRepository(repositoryOf(prevRef), repositoryOf(tag)) &&
+		strings.TrimPrefix(prevRef, repositoryOf(prevRef)) == strings.TrimPrefix(tag, repositoryOf(tag)) &&
 		(versionTag.MatchString(branch) || candidateTag.MatchString(branch) || strings.HasPrefix(branch, "sha-")) {
 		return true
 	}
-	if rel := u.runningRelease(); rel != "" && (prevRef == "" || repositoryOf(prevRef) == repositoryOf(ref)) {
+	if rel := u.runningRelease(); rel != "" && (prevRef == "" || sameRepository(repositoryOf(prevRef), repositoryOf(ref))) {
 		if branch == rel {
 			return true
 		}

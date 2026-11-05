@@ -14,7 +14,7 @@
 
 // Package servers keeps the daemon's attached capability servers: the
 // mcpServers entries of grain_config (model.Config.MCPServers,
-// docs/capabilities-spec.md §3.1), each attached with protocol.Attach and
+// design/spec/capabilities/capabilities.spec.md §3.1), each attached with protocol.Attach and
 // held under its capability_id for as long as its configuration says it
 // should be.
 //
@@ -121,6 +121,11 @@ type Status struct {
 	// (protocol.Server.ControlTools) -- host-script's test_script, which
 	// Settings' per-script Test button calls; empty unless it is attached.
 	Tools []string `json:"tools,omitempty"`
+	// ConfigRefused says the server refused the config it was given --
+	// its configure answered with an error -- rather than having none
+	// yet: a configuration somebody saved that the server will not run
+	// under, which is worth raising rather than waiting quietly.
+	ConfigRefused bool `json:"configRefused,omitempty"`
 	// Error is why the server is not attached (or why its last refresh
 	// failed), naming missing secrets by name and never a value.
 	Error       string     `json:"error,omitempty"`
@@ -139,7 +144,7 @@ type MethodDetail struct {
 	// stateful and its leases are released at teardown.
 	Releasable bool `json:"releasable"`
 	// Delivery is how the tools its grants' endpoints serve are
-	// delivered unless a tool says otherwise (docs/capabilities-spec.md
+	// delivered unless a tool says otherwise (design/spec/capabilities/capabilities.spec.md
 	// §5.2.6): "sandbox", through grain cap, or "model_only", the
 	// default, on the agent's own MCP channel alone.
 	Delivery string `json:"delivery"`
@@ -191,6 +196,21 @@ type Options struct {
 	// entry -- the gcp server's sets overlapping the in-process gcp-key
 	// provider's accounts (intree.GCPOverlapWarnings).
 	ProbeWarnings func(id string, cfg protocol.ServerConfig) []string
+	// OnDrop, when set, is told of a server that fell out of use: one
+	// that was attached -- before a config change, a reconfigure or a
+	// refresh that failed -- and is now failed or needs-config, or one
+	// whose configure refused the config it was saved with (which is how
+	// a refusal after a restart is seen, with nothing attached before
+	// it). It is called once per state and reason, outside the
+	// registry's lock.
+	OnDrop func(st Status)
+	// OnAttach, when set, is told each time a server attaches, outside
+	// the registry's lock: what clears what OnDrop raised.
+	OnAttach func(id string)
+	// OnClear, when set, is told when an entry is removed or disabled,
+	// outside the registry's lock, so an alert OnDrop raised does not
+	// outlive the entry.
+	OnClear func(id string)
 }
 
 type entry struct {
@@ -211,8 +231,15 @@ type entry struct {
 	// adds, or a hostd back from a restart, attaches it with no daemon
 	// restart.
 	hostRetry bool
-	attached  time.Time
-	refreshed time.Time
+	// configRefused is the server's configure having refused cfg.Config
+	// (Status.ConfigRefused).
+	configRefused bool
+	// wasAttached marks an entry that was attached under this or an
+	// earlier configuration, so its falling to failed or needs-config is
+	// a drop (Options.OnDrop) and not a server that never came up.
+	wasAttached bool
+	attached    time.Time
+	refreshed   time.Time
 }
 
 // Registry holds the attached servers, keyed by capability_id.
@@ -384,7 +411,7 @@ func (r *Registry) Statuses() []Status {
 }
 
 func (e *entry) status(id string) Status {
-	s := Status{ID: id, State: e.state, Error: e.err, Transport: "http", Builtin: e.cfg.Builtin}
+	s := Status{ID: id, State: e.state, Error: e.err, Transport: "http", Builtin: e.cfg.Builtin, ConfigRefused: e.configRefused}
 	s.Aliases = append([]string(nil), e.cfg.Aliases...)
 	if e.state == NeedsConfig && !e.hostRetry {
 		s.Error, s.Reason = "", e.err
@@ -439,6 +466,8 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 	// a configuration that no longer says it should.
 	r.mu.Lock()
 	var closing []*protocol.Server
+	var cleared []string
+	wasAttached := map[string]bool{}
 	for id, e := range r.entries {
 		cfg, ok := servers[id]
 		if ok && reflect.DeepEqual(cfg, e.cfg) && e.identity == identity {
@@ -447,16 +476,20 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 		if e.server != nil {
 			closing = append(closing, e.server)
 		}
+		// An entry attached under the configuration it is leaving is
+		// one whose refusal of the new one is a drop (Options.OnDrop).
+		wasAttached[id] = e.state == Attached || e.wasAttached
 		delete(r.entries, id)
 		if !ok {
 			r.opts.Logf("capability server %s: removed from mcpServers, detached", id)
+			cleared = append(cleared, id)
 		} else if reflect.DeepEqual(cfg, e.cfg) {
 			r.opts.Logf("capability server %s: this deployment's identity changed, attaching it again", id)
 		}
 	}
 	for id, cfg := range servers {
 		if _, ok := r.entries[id]; !ok {
-			r.entries[id] = &entry{cfg: cfg, identity: identity, state: Pending}
+			r.entries[id] = &entry{cfg: cfg, identity: identity, state: Pending, wasAttached: wasAttached[id]}
 		}
 	}
 	r.applied = copyServers(servers)
@@ -485,6 +518,12 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 	for _, s := range closing {
 		_ = s.Close()
 	}
+	if r.opts.OnClear != nil {
+		sort.Strings(cleared)
+		for _, id := range cleared {
+			r.opts.OnClear(id)
+		}
+	}
 	sort.Strings(ids)
 
 	for _, id := range ids {
@@ -498,7 +537,10 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 		switch {
 		case cfg.Disabled:
 			if state != Disabled {
-				r.set(id, func(e *entry) { e.state, e.err = Disabled, "" })
+				r.set(id, func(e *entry) { e.state, e.err, e.configRefused = Disabled, "", false })
+				if r.opts.OnClear != nil {
+					r.opts.OnClear(id)
+				}
 			}
 		case state == Attached && server.Ended():
 			// Its process is gone -- a run: host server that hostd's
@@ -562,10 +604,15 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 		}
 		var prevState State
 		var prevErr string
+		var dropped bool
+		var st Status
 		r.set(id, func(e *entry) {
 			prevState, prevErr = e.state, e.err
 			e.state, e.err, e.tried, e.schema = state, msg, now, schema
 			e.hostRetry = state == NeedsConfig && !isConfigure && cfg.OnHost()
+			e.configRefused = isConfigure && len(cfg.Config) > 0
+			dropped = (e.wasAttached || e.configRefused) && (prevState != state || prevErr != msg)
+			st = e.status(id)
 		})
 		if state == NeedsConfig {
 			if prevState != NeedsConfig || prevErr != msg {
@@ -573,6 +620,9 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 			}
 		} else {
 			r.opts.Logf("capability server %s: attach refused: %s", id, msg)
+		}
+		if dropped && r.opts.OnDrop != nil {
+			r.opts.OnDrop(st)
 		}
 		return
 	}
@@ -582,12 +632,19 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 		_ = server.Close()
 		reason := "it offers no methods until it is configured: fill in its Server settings (Edit server settings, under Settings → Capabilities)"
 		var prevState State
+		var dropped bool
+		var st Status
 		r.set(id, func(e *entry) {
 			prevState = e.state
-			e.state, e.err, e.tried, e.schema, e.hostRetry = NeedsConfig, reason, now, schema, false
+			e.state, e.err, e.tried, e.schema, e.hostRetry, e.configRefused = NeedsConfig, reason, now, schema, false, false
+			dropped = e.wasAttached && prevState != NeedsConfig
+			st = e.status(id)
 		})
 		if prevState != NeedsConfig {
 			r.opts.Logf("capability server %s: not configured", id)
+		}
+		if dropped && r.opts.OnDrop != nil {
+			r.opts.OnDrop(st)
 		}
 		return
 	}
@@ -595,6 +652,7 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 	kept := r.set(id, func(e *entry) {
 		e.state, e.err, e.tried, e.server, e.methods, e.details = Attached, "", now, server, methods, details
 		e.schema, e.tools = server.ConfigSchema, tools
+		e.configRefused, e.wasAttached = false, true
 		e.attached, e.refreshed = now, now
 	})
 	if !kept {
@@ -603,6 +661,9 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 		return
 	}
 	r.opts.Logf("capability server %s: attached, %d method(s)", id, len(methods))
+	if r.opts.OnAttach != nil {
+		r.opts.OnAttach(id)
+	}
 }
 
 // refresh re-issues tools/list. A server that no longer answers is
@@ -619,10 +680,50 @@ func (r *Registry) refresh(ctx context.Context, id string, server *protocol.Serv
 		})
 		return
 	}
-	msg := err.Error()
+	var cfg protocol.ServerConfig
+	r.mu.RLock()
+	if e := r.entries[id]; e != nil {
+		cfg = e.cfg
+	}
+	r.mu.RUnlock()
+	msg := Scrub(err.Error(), r.secretValues(id, cfg, server))
 	r.opts.Logf("capability server %s: refresh failed, detaching: %s", id, msg)
-	r.set(id, func(e *entry) { e.state, e.err, e.tried, e.server = Failed, msg, now, nil })
+	var st Status
+	r.set(id, func(e *entry) {
+		e.state, e.err, e.tried, e.server = Failed, msg, now, nil
+		st = e.status(id)
+	})
 	_ = server.Close()
+	if r.opts.OnDrop != nil {
+		r.opts.OnDrop(st)
+	}
+}
+
+// secretValues resolves the secret values id's entry may hold -- its
+// configured $secret: references, any managed fields, and server's
+// data-plane token -- so a refresh error that echoes one is scrubbed the
+// way an attach error is.
+func (r *Registry) secretValues(id string, cfg protocol.ServerConfig, server *protocol.Server) []string {
+	var resolved []string
+	if server != nil {
+		if tok := server.DataPlaneToken(); tok != "" {
+			resolved = append(resolved, tok)
+		}
+	}
+	if r.opts.Secrets == nil {
+		return resolved
+	}
+	for _, name := range cfg.SecretRefs() {
+		if v, ok := r.opts.Secrets(name); ok && v != "" {
+			resolved = append(resolved, v)
+		}
+	}
+	for _, f := range protocol.ManagedFields {
+		if v, ok := r.opts.Secrets(protocol.ManagedSecretName(id, f)); ok && v != "" {
+			resolved = append(resolved, v)
+		}
+	}
+	return resolved
 }
 
 // set applies f to id's entry under the lock, reporting false when the
@@ -755,11 +856,15 @@ func normalize(in map[string]protocol.ServerConfig) map[string]protocol.ServerCo
 // schema as discovery read them, and the error that refused it, if one
 // did -- scrubbed like any attach error.
 type ProbeResult struct {
-	ID           string         `json:"id"`
-	OK           bool           `json:"ok"`
-	Methods      []MethodDetail `json:"methods"`
-	ConfigSchema map[string]any `json:"configSchema,omitempty"`
-	Error        string         `json:"error,omitempty"`
+	ID string `json:"id"`
+	OK bool   `json:"ok"`
+	// ConfigRefused says Error is the server's configure refusing the
+	// config it was given, rather than the server not being reached at
+	// all: what a save is refused for (ui.Client.SetCapabilityServer).
+	ConfigRefused bool           `json:"configRefused,omitempty"`
+	Methods       []MethodDetail `json:"methods"`
+	ConfigSchema  map[string]any `json:"configSchema,omitempty"`
+	Error         string         `json:"error,omitempty"`
 	// Warnings are things Test found that do not stop the server
 	// attaching (Options.ProbeWarnings).
 	Warnings []string `json:"warnings,omitempty"`
@@ -773,11 +878,18 @@ type ProbeResult struct {
 // into the form and not saved yet.
 func (r *Registry) Probe(ctx context.Context, id string, cfg protocol.ServerConfig, extra protocol.SecretLookup) ProbeResult {
 	var resolved []string
+	var ephemeral *probeManaged
+	if r.opts.Managed != nil {
+		ephemeral = &probeManaged{existing: r.opts.Secrets, values: map[string]string{}}
+	}
 	lookup := func(name string) (string, bool) {
 		var v string
 		ok := false
 		if extra != nil {
 			v, ok = extra(name)
+		}
+		if !ok && ephemeral != nil {
+			v, ok = ephemeral.lookup(name)
 		}
 		if !ok && r.opts.Secrets != nil {
 			v, ok = r.opts.Secrets(name)
@@ -788,9 +900,15 @@ func (r *Registry) Probe(ctx context.Context, id string, cfg protocol.ServerConf
 		return v, ok
 	}
 	// The probe's stderr is kept, so a server that exits before it
-	// answers says why rather than just "closed its output".
+	// answers says why rather than just "closed its output". Managed
+	// values generated here live only for this probe, so an unsaved Test
+	// or a refused save leaves nothing in the secrets store.
 	stderr := &tailBuffer{max: probeStderrMax}
-	opts := protocol.DialOptions{ConfigRoot: r.opts.ConfigRoot, Hostd: r.opts.Hostd, Identity: r.opts.Identity(), Stderr: stderr, Managed: r.opts.Managed}
+	var managed protocol.ManagedSecrets
+	if ephemeral != nil {
+		managed = ephemeral
+	}
+	opts := protocol.DialOptions{ConfigRoot: r.opts.ConfigRoot, Hostd: r.opts.Hostd, Identity: r.opts.Identity(), Stderr: stderr, Managed: managed}
 	if r.opts.Stderr != nil {
 		if w := r.opts.Stderr(id); w != nil {
 			opts.Stderr = io.MultiWriter(stderr, w)
@@ -819,6 +937,7 @@ func (r *Registry) Probe(ctx context.Context, id string, cfg protocol.ServerConf
 		var ce *protocol.ConfigureError
 		if errors.As(err, &ce) {
 			res.ConfigSchema = protocol.OperatorSchema(ce.Schema)
+			res.ConfigRefused = true
 		}
 		return res
 	}
@@ -880,4 +999,50 @@ func (t *tailBuffer) String() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return string(t.b)
+}
+
+// probeManaged generates managed configure values only in memory for one
+// Probe call, reusing a value existing already resolves and never writing
+// to the persistent secrets store.
+type probeManaged struct {
+	existing protocol.SecretLookup
+	mu       sync.Mutex
+	values   map[string]string
+}
+
+func (m *probeManaged) Ensure(name string, generate func() (string, error)) error {
+	if m.existing != nil {
+		if _, ok := m.existing(name); ok {
+			return nil
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.values[name]; ok {
+		return nil
+	}
+	v, err := generate()
+	if err != nil {
+		return err
+	}
+	m.values[name] = v
+	return nil
+}
+
+func (m *probeManaged) Rotate(name string, generate func() (string, error)) error {
+	v, err := generate()
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.values[name] = v
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *probeManaged) lookup(name string) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.values[name]
+	return v, ok
 }

@@ -111,36 +111,6 @@ func TestLiveConfigNeverAdoptsARestartOnlySetting(t *testing.T) {
 	}
 }
 
-// A GCP project set in Settings enables the gcp-key/gemini-key
-// capabilities, which is only true if the registry a cycle resolves
-// grants against is rebuilt -- otherwise a task granted one is refused
-// by model.ResolveGrants until someone restarts the daemon.
-func TestLiveConfigRebuildsCapabilityProvidersWhenGCPChanges(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	store := testStore(t)
-	cfg := startupConfig()
-	putConfig(t, store, cfg.ToModelConfig())
-	live := daemon.NewLiveConfig(store, nil, cfg, nil)
-	deps := orchestrator.Deps{Config: orchestrator.Config{
-		Capabilities: model.NewCapabilityRegistry(daemon.CapabilityProviders(cfg, nil, daemon.NewModelProxies(), nil, nil)...),
-	}}
-
-	if _, ok := deps.Config.Capabilities.Lookup("gcp-key"); ok {
-		t.Fatal("gcp-key is registered with no GCP project configured")
-	}
-
-	changed := cfg.ToModelConfig()
-	changed.GCPProject = "acme-proj"
-	changed.GCPServiceAccountEmail = "agent@acme-proj.iam.gserviceaccount.com"
-	putConfig(t, store, changed)
-	live.Refresh(ctx, &deps)
-
-	if _, ok := deps.Config.Capabilities.Lookup("gcp-key"); !ok {
-		t.Fatal("gcp-key is still unregistered after a GCP project was configured -- the registry was not rebuilt")
-	}
-}
-
 // shapedSandboxes is a sandbox backend that records the default shape it
 // is told to adopt -- orchestrator.GranuleSandboxes' own SetDefaultShape,
 // which is what actually carries this on a real deployment, minus the
