@@ -105,6 +105,10 @@ func LogIgnoredRelaySettings(dataDir string, secretStore *secrets.Store, logf fu
 // error here early, since those leave nothing running worth keeping the
 // process up for. See runDaemon's own doc comment.
 func Run(ctx context.Context, cfg Config) error {
+	ctx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+	var writerLockLost atomic.Pointer[error]
+
 	// Before anything binds: how long the restart that started this
 	// process left each listener unreachable is measured from the times
 	// the previous process wrote down, against when each is bound below
@@ -145,6 +149,26 @@ func Run(ctx context.Context, cfg Config) error {
 	// start was not told about (checkStateRepoBaseline).
 	if err := checkStateRepoBaseline(cfg.DataDir); err != nil {
 		return err
+	}
+
+	writerLock, err := acquireDaemonWriterLock(ctx, cfg, func(lockErr error) {
+		wrapped := fmt.Errorf("PostgreSQL single-writer advisory lock lost: %w", lockErr)
+		if writerLockLost.CompareAndSwap(nil, &wrapped) {
+			log.Printf("grain daemon: %v; stopping immediately to prevent split-brain writes", wrapped)
+			cancelRun()
+		}
+	})
+	if err != nil {
+		return err
+	}
+	if writerLock != nil {
+		// Registered before `defer db.Close()` so LIFO defer ordering stops
+		// every background writer and closes the SQL connection pool before
+		// releasing the advisory lock to any waiting replacement VM.
+		defer func() {
+			log.Printf("grain daemon: releasing PostgreSQL single-writer advisory lock (schema=%s)", writerLock.Schema())
+			_ = writerLock.Close()
+		}()
 	}
 
 	// openStore, plus the one recovery a store this build cannot open has:
@@ -902,11 +926,18 @@ func Run(ctx context.Context, cfg Config) error {
 			<-ctx.Done()
 		}
 		<-done
+		if lost := writerLockLost.Load(); lost != nil {
+			return *lost
+		}
 		return nil
 	}
 
-	return runDaemon(ctx, cfg, store, sandboxes, transcriptDir, live, sandboxFabric, pkgCache, actionsCache, forbidden,
+	err = runDaemon(ctx, cfg, store, sandboxes, transcriptDir, live, sandboxFabric, pkgCache, actionsCache, forbidden,
 		stateRepoHooksFor(stateManager), upgrader, secretStore)
+	if lost := writerLockLost.Load(); lost != nil {
+		return *lost
+	}
+	return err
 }
 
 // orphanReaper is the startup sweep both sandbox backends implement:

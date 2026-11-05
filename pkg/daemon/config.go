@@ -42,6 +42,14 @@ type Config struct {
 	DataDir  string
 	DbDriver string
 	DbDSN    string
+	// WriterLockWaitTimeout, WriterLockKeepAlive, and WriterLockReacquireWindow
+	// configure the PostgreSQL session-level single-writer advisory lock
+	// acquired at daemon startup when DbDriver is "postgres". Zero values use
+	// pkg/model/postgres's defaults; negative values disable waiting or
+	// background keepalive in tests.
+	WriterLockWaitTimeout     time.Duration
+	WriterLockKeepAlive       time.Duration
+	WriterLockReacquireWindow time.Duration
 	// unitFlags are the names of the flags this process was actually
 	// started with, undefined ones included -- which on a deployment
 	// scripts/setup.sh installed is what grain-daemon.service's ExecStart
