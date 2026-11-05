@@ -257,7 +257,7 @@ func (d sandboxDeploy) redact() func(string) string {
 	if redactor == nil {
 		return nil
 	}
-	return func(s string) string { lines, _ := redactor.Redact([]string{s}); return lines[0] }
+	return func(s string) string { text, _ := redactor.Text(s); return text }
 }
 
 // health is read_deployment_health and read_deployment_state, built per

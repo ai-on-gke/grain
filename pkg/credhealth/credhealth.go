@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/redact"
 )
 
 // CheckInterval is how often Watch runs the registered checks.
@@ -85,9 +86,13 @@ func Bind(n Notifier) (unbind func()) {
 }
 
 // Fail records source's credentials as lapsed and, the first time in a
-// spell, raises a warning notification saying title and detail. It
-// reports whether the spell is new.
+// spell, raises a warning notification saying title and detail. Credential
+// shapes are redacted before either is recorded, so a check's error string
+// never writes a token into Failures or the notification table. It reports
+// whether the spell is new.
 func Fail(ctx context.Context, source, title, detail string, now time.Time) bool {
+	title, _ = (*redact.Redactor)(nil).Text(title)
+	detail, _ = (*redact.Redactor)(nil).Text(detail)
 	mu.Lock()
 	f, ok := failures[source]
 	if ok {

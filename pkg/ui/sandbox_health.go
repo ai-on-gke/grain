@@ -1009,7 +1009,7 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 	// failure: it is about the host, not about the sandbox pool, and a
 	// deployment with no pool to report still has to say it.
 	hostCredentials := s.tasks.hostCredentialsWarning(r.Context())
-	credentials := credentialsHealth(hostCredentials)
+	credentials := s.tasks.credentialsHealth(hostCredentials)
 	// The same goes for a stale sandbox image pin: it is in the settings,
 	// and says so whether or not a pool is wired to report on.
 	if s.tasks.Config.Sandboxes == nil && s.tasks.Config.HostStats == nil && s.tasks.Config.Daemon == nil && s.tasks.Config.StandingSandboxes == nil && s.tasks.Config.PersistentSandboxes == nil && s.tasks.Config.Overcommit == nil {

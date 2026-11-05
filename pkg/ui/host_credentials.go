@@ -19,6 +19,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/credhealth"
 )
@@ -79,11 +80,44 @@ type CredentialsHealth struct {
 }
 
 // credentialsHealth gathers CredentialsHealth, with host the warning
-// already read for the same response.
-func credentialsHealth(host *HostCredentialsWarning) *CredentialsHealth {
-	c := &CredentialsHealth{ChangeProviders: change.Blocked(), Host: host, Failures: credhealth.Failures()}
-	if len(c.ChangeProviders) == 0 && c.Host == nil && len(c.Failures) == 0 {
+// already read for the same response. Change-provider and credhealth
+// details are passed through Config.LogRedactor (or shape-redacted when
+// none is configured); if a configured redactor cannot be built, details
+// are withheld rather than served unredacted.
+func (c *Client) credentialsHealth(host *HostCredentialsWarning) *CredentialsHealth {
+	providers := change.Blocked()
+	failures := credhealth.Failures()
+	if len(providers) == 0 && host == nil && len(failures) == 0 {
 		return nil
 	}
-	return c
+	if len(providers) > 0 || len(failures) > 0 {
+		var redactor *grainlog.Redactor
+		var redactErr error
+		if c.Config.LogRedactor != nil {
+			redactor, redactErr = c.Config.LogRedactor()
+		}
+		withhold := c.Config.LogRedactor != nil && (redactErr != nil || redactor == nil)
+		for i := range providers {
+			if providers[i].Detail == "" {
+				continue
+			}
+			if withhold {
+				providers[i].Detail = "(withheld: the redaction list could not be read)"
+				continue
+			}
+			providers[i].Detail, _ = redactor.Text(providers[i].Detail)
+		}
+		for i := range failures {
+			if withhold {
+				failures[i].Title, _ = (*grainlog.Redactor)(nil).Text(failures[i].Title)
+				if failures[i].Detail != "" {
+					failures[i].Detail = "(withheld: the redaction list could not be read)"
+				}
+				continue
+			}
+			failures[i].Title, _ = redactor.Text(failures[i].Title)
+			failures[i].Detail, _ = redactor.Text(failures[i].Detail)
+		}
+	}
+	return &CredentialsHealth{ChangeProviders: providers, Host: host, Failures: failures}
 }

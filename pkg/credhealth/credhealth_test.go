@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,11 +28,13 @@ import (
 
 type notifier struct {
 	raised  []string
+	bodies  []string
 	cleared []string
 }
 
 func (n *notifier) RaiseNotification(_ context.Context, no model.Notification) (model.NotificationRaise, error) {
 	n.raised = append(n.raised, no.Subject)
+	n.bodies = append(n.bodies, no.Body)
 	return model.NotificationRaise{Notification: no, New: true}, nil
 }
 
@@ -83,10 +86,17 @@ func TestRunChecks(t *testing.T) {
 	})
 	defer unregister()
 
-	err = errors.New("expires in 40m: run gcert (touch your security key)")
+	err = errors.New("expires in 40m: run renew-cert against https://user:secretpass@auth.example.test/renew")
 	credhealth.RunChecks(context.Background(), time.Now())
-	if f := credhealth.Failures(); len(f) != 1 || f[0].Source != "check:cert" || f[0].Detail != err.Error() {
+	f := credhealth.Failures()
+	if len(f) != 1 || f[0].Source != "check:cert" || !strings.Contains(f[0].Detail, "run renew-cert") {
 		t.Errorf("failures = %+v, want check:cert", f)
+	}
+	if len(f) == 1 && strings.Contains(f[0].Detail, "secretpass") {
+		t.Errorf("check failure detail leaked credential shape: %q", f[0].Detail)
+	}
+	if len(n.bodies) != 1 || strings.Contains(n.bodies[0], "secretpass") {
+		t.Errorf("notification body leaked credential shape: %q", n.bodies)
 	}
 	err = nil
 	credhealth.RunChecks(context.Background(), time.Now())

@@ -16,11 +16,13 @@ package ui_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/credhealth"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -76,7 +78,7 @@ func TestSandboxHealthReportsBlockedChangeProvidersAndHostToolFailures(t *testin
 	t.Cleanup(func() { change.ClearBlocked("fakehealthcl") })
 
 	since := time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
-	change.MarkBlocked("fakehealthcl", change.BlockedCredentials, "credentials expired: run gcert", since)
+	change.MarkBlocked("fakehealthcl", change.BlockedCredentials, "credentials expired: run renew-creds", since)
 	credhealth.Fail(context.Background(), "host-tool:made-up", "Host tools failing on auth", "run renew on h1", since)
 
 	got := decode[ui.SandboxHealthResponse](t, do(t, srv, http.MethodGet, "/api/sandboxes", ""))
@@ -87,7 +89,7 @@ func TestSandboxHealthReportsBlockedChangeProvidersAndHostToolFailures(t *testin
 	for _, b := range got.Credentials.ChangeProviders {
 		if b.Kind == "fakehealthcl" {
 			found = true
-			if b.Blocked != change.BlockedCredentials || !b.Since.Equal(since) || b.Detail != "credentials expired: run gcert" {
+			if b.Blocked != change.BlockedCredentials || !b.Since.Equal(since) || b.Detail != "credentials expired: run renew-creds" {
 				t.Errorf("blocked kind = %+v, want credentials since %v", b, since)
 			}
 		}
@@ -108,5 +110,34 @@ func TestSandboxHealthReportsBlockedChangeProvidersAndHostToolFailures(t *testin
 				t.Errorf("fakehealthcl still reported after ClearBlocked: %+v", got.Credentials)
 			}
 		}
+	}
+}
+
+// GET /api/sandboxes is reachable directly under deployment:read (without
+// deploymenthealth.Tools), so its credentials section redacts known secrets
+// via Config.LogRedactor and withholds details if the redactor cannot load.
+func TestSandboxHealthRedactsCredentialsAndWithholdsWhenRedactorFails(t *testing.T) {
+	srv, client := testServer(t)
+	t.Cleanup(credhealth.Reset)
+	t.Cleanup(func() { change.ClearBlocked("fakeredactcl") })
+
+	since := time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
+	change.MarkBlocked("fakeredactcl", change.BlockedCredentials, "auth failed with plain-shapeless-secret", since)
+	credhealth.Fail(context.Background(), "check:probe", "Probe failing", "token plain-shapeless-secret rejected", since)
+
+	client.Config.LogRedactor = func() (*grainlog.Redactor, error) {
+		return grainlog.NewRedactor([]grainlog.KnownValue{{Label: "secret probe-token", Value: "plain-shapeless-secret"}}), nil
+	}
+	body := do(t, srv, http.MethodGet, "/api/sandboxes", "").Body.String()
+	if strings.Contains(body, "plain-shapeless-secret") || !strings.Contains(body, "secret probe-token") {
+		t.Fatalf("GET /api/sandboxes leaked known secret or skipped redactor:\n%s", body)
+	}
+
+	client.Config.LogRedactor = func() (*grainlog.Redactor, error) {
+		return nil, errors.New("secrets store unreadable")
+	}
+	body = do(t, srv, http.MethodGet, "/api/sandboxes", "").Body.String()
+	if strings.Contains(body, "plain-shapeless-secret") || !strings.Contains(body, "withheld") {
+		t.Fatalf("GET /api/sandboxes did not fail closed when redactor failed:\n%s", body)
 	}
 }
