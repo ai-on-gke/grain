@@ -55,19 +55,46 @@ func checkUIAllowedPrincipalsWithPool(cfg Config, gcpPoolEmails []string) error 
 	return nil
 }
 
-// CheckUIRequireIAP refuses -ui-require-iap without an IAP audience
-// (-ui-iap-audience or $GRAIN_IAP_AUDIENCE): with no assertion able to
-// verify and no access code accepted over the network, nobody could
+// CheckUIRequireVerifier validates -ui-require-verifier (and its
+// -ui-require-iap alias): it refuses conflicting flags and refuses to start
+// when the named IdentityVerifier is not active, because with no assertion
+// able to verify and no access code accepted over the network, nobody could
 // reach the UI except from the daemon's own host.
+func CheckUIRequireVerifier(cfg Config) error {
+	req := strings.TrimSpace(cfg.UiRequireVerifier)
+	if cfg.UiRequireIAP && req != "" && req != string(ui.AuthMethodIAP) {
+		return fmt.Errorf("cannot set both -ui-require-iap and -ui-require-verifier=%q: -ui-require-iap is an alias for -ui-require-verifier=iap", req)
+	}
+	fromRequireIAPAlias := false
+	if req == "" && cfg.UiRequireIAP {
+		req = string(ui.AuthMethodIAP)
+		fromRequireIAPAlias = true
+	}
+	if req == "" {
+		return nil
+	}
+	ctx := ui.WithIAPConfig(context.Background(), ui.IAPConfig{
+		Audience: cfg.UiIAPAudience,
+		Issuer:   cfg.UiIAPIssuer,
+		KeysURL:  cfg.UiIAPKeysURL,
+	})
+	if ui.HasActiveVerifier(ctx, req) {
+		return nil
+	}
+	if req == string(ui.AuthMethodIAP) {
+		if fromRequireIAPAlias {
+			return errors.New("-ui-require-iap needs an IAP audience: set -ui-iap-audience (or $GRAIN_IAP_AUDIENCE) to the IAP backend's " +
+				"/projects/NUMBER/global/backendServices/ID, or drop -ui-require-iap to keep accepting the access code over the network")
+		}
+		return errors.New("-ui-require-verifier=iap needs an IAP audience: set -ui-iap-audience (or $GRAIN_IAP_AUDIENCE) to the IAP backend's " +
+			"/projects/NUMBER/global/backendServices/ID, or drop -ui-require-verifier to keep accepting the access code over the network")
+	}
+	return fmt.Errorf("-ui-require-verifier=%q names no active IdentityVerifier: configure that verifier first, or drop -ui-require-verifier to keep accepting the access code over the network", req)
+}
+
+// CheckUIRequireIAP is an alias for CheckUIRequireVerifier.
 func CheckUIRequireIAP(cfg Config) error {
-	if !cfg.UiRequireIAP {
-		return nil
-	}
-	if strings.TrimSpace(cfg.UiIAPAudience) != "" || strings.TrimSpace(os.Getenv("GRAIN_IAP_AUDIENCE")) != "" {
-		return nil
-	}
-	return errors.New("-ui-require-iap needs an IAP audience: set -ui-iap-audience (or $GRAIN_IAP_AUDIENCE) to the IAP backend's " +
-		"/projects/NUMBER/global/backendServices/ID, or drop -ui-require-iap to keep accepting the access code over the network")
+	return CheckUIRequireVerifier(cfg)
 }
 
 // startUIServer serves pkg/ui.Server -- the JSON API plus the static
@@ -175,6 +202,7 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		IAPAudience:                cfg.UiIAPAudience,
 		IAPIssuer:                  cfg.UiIAPIssuer,
 		IAPKeysURL:                 cfg.UiIAPKeysURL,
+		RequireVerifier:            cfg.UiRequireVerifier,
 		RequireIAP:                 cfg.UiRequireIAP,
 		AllowedPrincipals:          cfg.UiAllowedPrincipals,
 		ProvisionedServiceAccounts: provisionedSAs,

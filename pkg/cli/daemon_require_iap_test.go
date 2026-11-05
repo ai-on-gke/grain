@@ -123,3 +123,144 @@ func TestAccessCodeNotesAServerThatRequiresIAP(t *testing.T) {
 		t.Errorf("stderr = %q against a server that takes the code, want nothing", errOut.String())
 	}
 }
+
+type stubIdentityVerifier struct {
+	name string
+}
+
+func (s stubIdentityVerifier) Name() string      { return s.name }
+func (s stubIdentityVerifier) Headers() []string { return []string{"X-Stub-Assertion"} }
+func (s stubIdentityVerifier) Verify(*http.Request) (ui.VerifiedIdentity, bool, error) {
+	return ui.VerifiedIdentity{}, false, nil
+}
+
+// -ui-require-verifier validates that the named IdentityVerifier is active,
+// treats -ui-require-iap as an alias for -ui-require-verifier=iap, and refuses
+// conflicting settings (task 3192).
+func TestCheckConfigRequireVerifier(t *testing.T) {
+	t.Setenv("GRAIN_IAP_AUDIENCE", "")
+	t.Setenv("GRAIN_REQUIRE_IAP", "")
+	t.Setenv("GRAIN_REQUIRE_VERIFIER", "")
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+
+	cfg, _, _, err := parseDaemonArgs([]string{"-data-dir=/var/lib/grain/data", "-ui-require-verifier=registry"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UiRequireVerifier != "registry" {
+		t.Fatalf("UiRequireVerifier = %q, want registry", cfg.UiRequireVerifier)
+	}
+
+	// Unregistered verifier is refused at startup.
+	start := startable()
+	start.UiRequireVerifier = "registry"
+	if err := checkConfig(start); err == nil || !strings.Contains(err.Error(), `-ui-require-verifier="registry" names no active IdentityVerifier`) {
+		t.Fatalf("checkConfig(-ui-require-verifier=registry, unregistered) = %v, want missing-verifier error", err)
+	}
+
+	// Once registered, -ui-require-verifier=registry passes startup validation.
+	unreg := ui.RegisterIdentityVerifier(stubIdentityVerifier{name: "registry"})
+	t.Cleanup(unreg)
+	if err := checkConfig(start); err != nil {
+		t.Errorf("checkConfig(-ui-require-verifier=registry, registered): %v", err)
+	}
+
+	// -ui-require-verifier=iap requires an IAP audience (or registered "iap" verifier).
+	start.UiRequireVerifier = "iap"
+	if err := checkConfig(start); err == nil || !strings.Contains(err.Error(), "needs an IAP audience") {
+		t.Fatalf("checkConfig(-ui-require-verifier=iap, no audience) = %v, want missing-audience error", err)
+	}
+	start.UiIAPAudience = "/projects/1/global/backendServices/2"
+	if err := checkConfig(start); err != nil {
+		t.Errorf("checkConfig(-ui-require-verifier=iap, with audience): %v", err)
+	}
+
+	// -ui-require-iap with -ui-require-verifier=iap is compatible, while
+	// -ui-require-iap with -ui-require-verifier=registry conflicts.
+	start.UiRequireIAP = true
+	if err := checkConfig(start); err != nil {
+		t.Errorf("checkConfig(-ui-require-iap + -ui-require-verifier=iap): %v", err)
+	}
+	start.UiRequireVerifier = "registry"
+	if err := checkConfig(start); err == nil || !strings.Contains(err.Error(), "cannot set both -ui-require-iap and -ui-require-verifier") {
+		t.Fatalf("checkConfig(-ui-require-iap + -ui-require-verifier=registry) = %v, want conflict error", err)
+	}
+
+	// grain demo validates -ui-require-verifier with the same rules.
+	if _, err := parseDemoFlags([]string{"-ui-require-verifier=unregistered"}); err == nil || !strings.Contains(err.Error(), "names no active IdentityVerifier") {
+		t.Errorf("parseDemoFlags(-ui-require-verifier=unregistered) = %v, want missing-verifier error", err)
+	}
+	demoOpts, err := parseDemoFlags([]string{"-ui-require-verifier=registry"})
+	if err != nil || demoOpts.RequireVerifier != "registry" {
+		t.Errorf("parseDemoFlags(-ui-require-verifier=registry) = (%+v, %v), want RequireVerifier=registry", demoOpts, err)
+	}
+}
+
+func TestRequireVerifierFromTheEnvironment(t *testing.T) {
+	t.Setenv("GRAIN_REQUIRE_IAP", "")
+	t.Setenv("GRAIN_REQUIRE_VERIFIER", "registry")
+	cfg, _, _, err := parseDaemonArgs([]string{"-data-dir=/var/lib/grain/data"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UiRequireVerifier != "registry" {
+		t.Errorf("GRAIN_REQUIRE_VERIFIER=registry gave UiRequireVerifier=%q, want registry", cfg.UiRequireVerifier)
+	}
+
+	// Explicit empty flag overrides GRAIN_REQUIRE_VERIFIER.
+	if cfg, _, _, err := parseDaemonArgs([]string{"-data-dir=/var/lib/grain/data", "-ui-require-verifier="}); err != nil || cfg.UiRequireVerifier != "" {
+		t.Errorf("-ui-require-verifier= override = (%q, %v), want empty", cfg.UiRequireVerifier, err)
+	}
+
+	// Explicit -ui-require-verifier CLI flag overrides GRAIN_REQUIRE_IAP from the environment.
+	t.Setenv("GRAIN_REQUIRE_IAP", "true")
+	t.Setenv("GRAIN_REQUIRE_VERIFIER", "")
+	if cfg, _, _, err := parseDaemonArgs([]string{"-data-dir=/var/lib/grain/data", "-ui-require-verifier=registry"}); err != nil || cfg.UiRequireVerifier != "registry" || cfg.UiRequireIAP {
+		t.Errorf("-ui-require-verifier=registry with GRAIN_REQUIRE_IAP=true = (verifier=%q, iap=%v, err=%v), want verifier=registry, iap=false", cfg.UiRequireVerifier, cfg.UiRequireIAP, err)
+	}
+
+	// Conflicting environment variables (neither flag passed) surface as a checkConfig conflict.
+	t.Setenv("GRAIN_REQUIRE_IAP", "true")
+	t.Setenv("GRAIN_REQUIRE_VERIFIER", "registry")
+	cfg, _, _, err = parseDaemonArgs([]string{"-data-dir=/var/lib/grain/data"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := startable()
+	start.UiRequireIAP = cfg.UiRequireIAP
+	start.UiRequireVerifier = cfg.UiRequireVerifier
+	if err := checkConfig(start); err == nil || !strings.Contains(err.Error(), "cannot set both") {
+		t.Errorf("conflicting env GRAIN_REQUIRE_IAP + GRAIN_REQUIRE_VERIFIER: checkConfig = %v, want conflict error", err)
+	}
+}
+
+func TestAccessCodeNotesAServerThatRequiresVerifier(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/auth/access-code" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write([]byte(`{"authenticated":false,"requireVerifier":"registry","accessCodeAccepted":true}`))
+	}))
+	defer srv.Close()
+	t.Setenv(serverEnvVar, srv.URL)
+	dir := t.TempDir()
+	t.Setenv(ui.LocalAPITokenFileEnv, "")
+	t.Setenv(dataDirEnvVar, dir)
+	code, err := ui.EnsureLocalAPIToken(ui.LocalAPITokenPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	if err := runAccessCode(nil, &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(out.String()) != code {
+		t.Errorf("stdout = %q, want only the code", out.String())
+	}
+	if !strings.Contains(errOut.String(), "-ui-require-verifier=registry") || !strings.Contains(errOut.String(), "not accepted over the network") {
+		t.Errorf("stderr = %q, want the require-verifier=registry note", errOut.String())
+	}
+}
