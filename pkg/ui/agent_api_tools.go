@@ -57,12 +57,25 @@ type APIRoute struct {
 	Scope       APIScope `json:"scope"`
 	Tool        string   `json:"tool"`
 	Description string   `json:"description"`
-	Params      []string `json:"params,omitempty"`
+	// Summary is Description's first line: what the route does, in the
+	// sentence routeDocs gives it (or its handler's name), without the
+	// boilerplate about the handler and scope that Description adds. It
+	// is what the compact explore listing shows and what the keyword
+	// filter searches.
+	Summary string   `json:"summary,omitempty"`
+	Params  []string `json:"params,omitempty"`
 	// NeedsReason says a call must carry a reason: a dangerous scope,
 	// or a DELETE.
 	NeedsReason bool `json:"needsReason,omitempty"`
-	body        any
-	query       map[string]string
+	// AliasOf names the whole-document route this one is a per-field
+	// alias of -- api_set_repo_ci_mode is api_set_repo_settings for the
+	// one field AliasField -- or is empty for a route that stands alone.
+	// grain_explore_scope folds aliases out of a listing unless asked
+	// for them (repoSettingsFieldRoutes).
+	AliasOf    string `json:"aliasOf,omitempty"`
+	AliasField string `json:"aliasField,omitempty"`
+	body       any
+	query      map[string]string
 }
 
 // APIToolPrefix begins every generated tool's name, so none can collide
@@ -188,7 +201,7 @@ var routeDocs = map[string]string{
 	"PUT /api/deployment":                                                  "Change the deployment's default model, per-model settings and target repositories.",
 	"POST /api/deployment/git-connections":                                 "Add a git connection to the deployment: the credential grain reaches a git host with.",
 	"DELETE /api/deployment/git-connections/{cred}":                        "Remove one of the deployment's git connections.",
-	"POST /api/deployment/git-connections/check":                           "Check a git connection works, without saving it.",
+	"POST /api/deployment/git-connections/check":                           "Check a git connection works, without saving it. To check an unsaved connection, leave credential empty and give what the editor would: type (pat with value, app with app, or ambient with nothing else) and host. To check a saved connection instead, name it in credential and give no value: credential is only ever a saved credential's name, never a type.",
 	"PUT /api/deployment/agent-backends/{backendId}":                       "Create or replace one of the deployment's model connections.",
 	"DELETE /api/deployment/agent-backends/{backendId}":                    "Delete one of the deployment's model connections.",
 	"PUT /api/deployment/repos/{owner}/{name}/config":                      "Set a repository's deployment-level configuration: only the fields given are changed.",
@@ -536,6 +549,71 @@ var (
 	apiRoutes     []APIRoute
 )
 
+// routeFieldDocs describes a body field whose meaning the field's name
+// and type do not carry: keyed by route pattern, then by the field's
+// JSON name, each sentence becomes the description of that property in
+// the route's input schema. Most bodies need none; the ones here are
+// where a caller working from the schema alone got it wrong.
+var routeFieldDocs = map[string]map[string]string{
+	"POST /api/deployment/git-connections/check": {
+		"credential": "The name of a SAVED credential to check (as listed by the deployment's git connections). Leave it empty to check an unsaved connection described by type, value, app and host; it is never a type such as \"ambient\".",
+		"type":       "The unsaved connection's kind: \"pat\" (a token in value), \"app\" (a GitHub App in app) or \"ambient\" (the host's own login -- nothing else needed; leave credential empty). Ignored when credential names a saved one.",
+		"value":      "The unsaved token (PAT) to check; empty when checking a saved credential or an ambient login.",
+		"app":        "The unsaved GitHub App to check: appId, installationId and privateKey.",
+		"host":       "The git host to check against, github.com when empty; a saved credential can only be checked on the host it is recorded for.",
+		"kind":       "The host's kind, \"github\" or \"git\" (a plain git host, checked by reading its repositories rather than its API).",
+		"scope":      "What to check access to: an owner/name repository, an owner (its target repositories on this host), or empty for every target repository on the host.",
+		"source":     "For an ambient login, which tool is asked for the token: \"gh\", \"git\" or \"auto\".",
+	},
+}
+
+// repoSettingsFieldRoutes names the per-field repository configuration
+// routes: GET and PUT /api/repos/{owner}/{name}/<suffix>, each reading
+// or writing the one field of the repository's settings named here --
+// the field GET /api/repos/{owner}/{name}/settings reports among the
+// rest and PUT .../settings (api_set_repo_settings) writes beside the
+// others. They stay for the UI, whose panes save one field at a time,
+// and run as any route does; grain_explore_scope folds them out of a
+// listing unless includeAliases is set, so a reader skimming the repos
+// group sees the one route that covers them all rather than twenty
+// that each cover a field.
+var repoSettingsFieldRoutes = map[string]string{
+	"ci-mode":                          "ciMode",
+	"ignore-github-ci":                 "ignoreGitHubCI",
+	"require-branch-up-to-date":        "requireBranchUpToDate",
+	"watch-default-branch":             "watchDefaultBranch",
+	"merge-on-green":                   "mergeOnGreen",
+	"base-repair-bypasses-human-gates": "baseRepairBypassesHumanGates",
+	"unfixable-checks":                 "unfixableChecks",
+	"prompt-extension":                 "promptExtension",
+	"setup-command":                    "setupCommand",
+	"capabilities":                     "defaultCapabilities",
+	"ci-capabilities":                  "ciCapabilities",
+}
+
+const repoSettingsPathPrefix = "/api/repos/{owner}/{name}/"
+
+// repoSettingsAlias is the whole-document route and the field a
+// per-field repository configuration route stands for, or "" for any
+// other route.
+func repoSettingsAlias(method, path string) (canonical, field string) {
+	suffix, ok := strings.CutPrefix(path, repoSettingsPathPrefix)
+	if !ok || strings.Contains(suffix, "/") {
+		return "", ""
+	}
+	field, ok = repoSettingsFieldRoutes[suffix]
+	if !ok {
+		return "", ""
+	}
+	switch method {
+	case http.MethodGet:
+		return APIToolPrefix + "get_repo_settings", field
+	case http.MethodPut:
+		return APIToolPrefix + "set_repo_settings", field
+	}
+	return "", ""
+}
+
 // AgentAPIRoutes is every route of the agent API, in registration order:
 // all of Server's routes but grain's internal plumbing, each with the
 // tool it is served as.
@@ -559,7 +637,9 @@ func AgentAPIRoutes() []APIRoute {
 				route.Params = append(route.Params, m[1])
 			}
 			route.Tool = uniqueToolName(toolNameFor(s.handlers[pattern], method, path), method, path, taken)
-			route.Description = routeDescription(route, s.handlers[pattern])
+			route.Summary = routeSummary(route, s.handlers[pattern])
+			route.Description = routeDescription(route)
+			route.AliasOf, route.AliasField = repoSettingsAlias(method, path)
 			apiRoutes = append(apiRoutes, route)
 		}
 	})
@@ -638,7 +718,9 @@ func snake(s string) string {
 	return b.String()
 }
 
-func routeDescription(r APIRoute, handler string) string {
+// routeSummary is the sentence a route is described by: routeDocs' for
+// the route, or, for a read with none, its handler's name as words.
+func routeSummary(r APIRoute, handler string) string {
 	doc := routeDocs[r.Pattern]
 	if doc == "" {
 		words := strings.ReplaceAll(snake(strings.TrimPrefix(handler, "handle")), "_", " ")
@@ -647,6 +729,13 @@ func routeDescription(r APIRoute, handler string) string {
 		}
 		doc = strings.ToUpper(words[:1]) + words[1:] + "."
 	}
+	return doc
+}
+
+// routeDescription is the route's tool's full description: its summary,
+// the route it calls and the scope it needs, and whether it is destructive.
+func routeDescription(r APIRoute) string {
+	doc := r.Summary
 	doc += fmt.Sprintf(" Calls %s through the same handler grain's UI uses (agent API scope %s).", r.Pattern, r.Scope)
 	if r.NeedsReason {
 		doc += " Destructive: reason is required and is recorded with the call."
@@ -681,6 +770,14 @@ func (r APIRoute) inputSchema() map[string]any {
 	if r.body != nil && r.Method != http.MethodGet {
 		body := jsonSchemaOf(reflect.TypeOf(r.body), 0)
 		body["description"] = "The JSON request body."
+		if docs := routeFieldDocs[r.Pattern]; len(docs) > 0 {
+			fields, _ := body["properties"].(map[string]any)
+			for name, doc := range docs {
+				if field, ok := fields[name].(map[string]any); ok {
+					field["description"] = doc
+				}
+			}
+		}
 		props["body"] = body
 	}
 	if r.takesExpect() {
