@@ -43,6 +43,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gritapi"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/policy"
 	"github.com/ai-on-gke/grain/pkg/sandboxaccess"
@@ -3295,7 +3296,26 @@ func ciArtifactDir(dataDir string) string {
 // way -- on every Save, including the per-artifact cap a job's sandbox is
 // told before it copies anything out, and on every sweep.
 func CiArtifactStore(cfg Config, bounds func() ci.StorageBounds) ci.ArtifactStore {
+	if cfg.ciArtifacts != nil {
+		return cfg.ciArtifacts
+	}
 	dir := ciArtifactDir(cfg.DataDir)
+	if cfg.ObjectStore != nil {
+		objStore, err := ci.OpenObjectArtifacts(
+			objectstore.WithPrefix(cfg.ObjectStore, "ci-artifacts"),
+			dir,
+			ci.DirArtifactsOptions{Bounds: bounds, Log: log.Printf},
+		)
+		if err != nil {
+			log.Printf("ci: no object-backed artifact store at %s (%v) -- a failing job's declared files will not be kept", dir, err)
+			return nil
+		}
+		if flushErr := objStore.FlushLocal(context.Background()); flushErr != nil {
+			log.Printf("ci: flushing local artifact cache %s to object store: %v", dir, flushErr)
+		}
+		log.Printf("ci: a failing job's declared artifacts are backed by the object store with read-through cache at %s", dir)
+		return objStore
+	}
 	store, err := ci.OpenDirArtifacts(dir, ci.DirArtifactsOptions{Bounds: bounds, Log: log.Printf})
 	if err != nil {
 		log.Printf("ci: no artifact store at %s (%v) -- a failing job's declared files will not be kept", dir, err)

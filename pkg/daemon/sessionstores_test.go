@@ -37,6 +37,8 @@ func TestSessionStoresOffClaim(t *testing.T) {
 			env: map[string]string{"HOME": "/home/grain", "CLAUDE_CONFIG_DIR": "/data/claude"}},
 		{name: "HOME on the pod's filesystem", cfg: Config{DataDir: "/data", K8sGranuleSandboxes: true},
 			env: map[string]string{"HOME": "/home/grain"}, want: []string{"claude's session store /home/grain/.claude"}},
+		{name: "HOME on the pod's filesystem with -object-store", cfg: Config{DataDir: "/data", K8sGranuleSandboxes: true, ObjectStoreURI: "gs://bucket/instances/calm-otter-7f3a/"},
+			env: map[string]string{"HOME": "/home/grain"}},
 		{name: "a sibling of the data dir is not under it", cfg: Config{DataDir: "/data", K8sSandboxes: true},
 			env: map[string]string{"HOME": "/data-home"}, want: []string{"claude's session store /data-home/.claude"}},
 		{name: "run pod HOME on its claim", cfg: Config{DataDir: "/data", K8sSandboxes: true, RunHostImage: "self",
