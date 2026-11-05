@@ -203,6 +203,7 @@ type Task struct {
 	// telling a reader apart from "no review".
 	ReviewTemplateID   string `json:"reviewTemplateId,omitempty"`
 	ReviewTemplateName string `json:"reviewTemplateName,omitempty"`
+	Owner              string `json:"owner"`
 	Creator            string `json:"creator,omitempty"`
 	// FiledVia is the X-Grain-Client label of the tool that filed the
 	// task (model.Task.FiledVia), and Provenance the line it reads as
@@ -929,16 +930,52 @@ type Transition struct {
 	ActorLabel  string      `json:"actorLabel,omitempty"`
 	// ByLabel is ActorLabel again, under the name the frontend first
 	// read it by.
-	ByLabel string `json:"byLabel,omitempty"`
-	Reason  string `json:"reason,omitempty"`
-	Detail  string `json:"detail,omitempty"`
+	ByLabel             string `json:"byLabel,omitempty"`
+	OnBehalfOf          string `json:"onBehalfOf,omitempty"`
+	OnBehalfOfLabel     string `json:"onBehalfOfLabel,omitempty"`
+	ProposingTaskID     string `json:"proposingTaskId,omitempty"`
+	ProposingRunID      string `json:"proposingRunId,omitempty"`
+	ProposingRunAttempt int    `json:"proposingRunAttempt,omitempty"`
+	OnBehalfOfOwner     string `json:"onBehalfOfOwner,omitempty"`
+	OldOwner            string `json:"oldOwner,omitempty"`
+	NewOwner            string `json:"newOwner,omitempty"`
+	Reason              string `json:"reason,omitempty"`
+	Detail              string `json:"detail,omitempty"`
 }
 
 func transitionFrom(t model.Transition) Transition {
-	out := Transition{State: t.State, At: t.At, Inferred: t.Inferred, Reason: t.Reason, Detail: t.Detail}
+	return transitionFromWithAttempt(t, 0)
+}
+
+func transitionFromWithAttempt(t model.Transition, proposingAttempt int) Transition {
+	out := Transition{
+		State:               t.State,
+		At:                  t.At,
+		Inferred:            t.Inferred,
+		Reason:              t.Reason,
+		Detail:              t.Detail,
+		ProposingTaskID:     t.ProposingTaskID,
+		ProposingRunID:      t.ProposingRunID,
+		ProposingRunAttempt: proposingAttempt,
+		OnBehalfOfOwner:     t.OnBehalfOfOwner,
+	}
+	if t.OnBehalfOf != nil {
+		out.OnBehalfOf = t.OnBehalfOf.ID
+		out.OnBehalfOfLabel = PrincipalLabel(*t.OnBehalfOf, nil)
+	}
+	if t.State == model.TransitionOwnerChanged {
+		if oldOwn, newOwn, ok := model.ParseOwnerChangeReason(t.Reason); ok {
+			out.OldOwner = oldOwn
+			out.NewOwner = newOwn
+		}
+	}
 	if t.By != nil {
 		out.Actor, out.ActorKind, out.ActorSource = t.By.ID, string(t.By.Kind), string(t.By.Source)
-		out.ActorLabel = PrincipalLabel(*t.By, t.OnBehalfOf)
+		if t.State == model.StateProposed {
+			out.ActorLabel = ProposerLabel(t, proposingAttempt)
+		} else {
+			out.ActorLabel = PrincipalLabel(*t.By, t.OnBehalfOf)
+		}
 		out.By = out.ActorLabel
 		out.ByLabel = out.ActorLabel
 	}
@@ -1092,6 +1129,7 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		PromptExtension:      t.PromptExtension,
 		ReviewTemplateID:     t.ReviewTemplateID,
 		ReviewTemplateName:   reviewTemplateName,
+		Owner:                cmp.Or(strings.TrimSpace(t.Owner), strings.TrimSpace(t.Creator), model.DefaultTaskOwner),
 		Creator:              t.Creator,
 		FiledVia:             t.FiledVia,
 		Provenance:           provenanceLabel(t.FiledVia, cmp.Or(attributedPerson(t.Origin.Attribution), t.Creator)),
@@ -2223,6 +2261,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 // answers only that repository's tasks.
 func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	q, narrowed := parseTaskListQuery(r.URL.Query())
+	if q.owner != "" {
+		q.owner = s.tasks.resolveOwnerFilter(r.Context(), q.owner)
+	}
 	if narrowed {
 		s.handleFilteredTaskList(w, r, q)
 		return

@@ -47,6 +47,7 @@ import (
 // taskListQuery is GET /api/tasks' narrowing.
 type taskListQuery struct {
 	repo    string
+	owner   string
 	states  []string
 	search  string
 	limit   int
@@ -123,6 +124,10 @@ func parseTaskListQuery(q url.Values) (taskListQuery, bool) {
 	if q.Has("filed_via") {
 		narrowed = true
 		out.filedVia = strings.TrimSpace(q.Get("filed_via"))
+	}
+	if q.Has("owner") {
+		narrowed = true
+		out.owner = strings.TrimSpace(q.Get("owner"))
 	}
 	if q.Has("closedSince") {
 		narrowed = true
@@ -202,6 +207,9 @@ func (q taskListQuery) matches(t Task) bool {
 		return false
 	}
 	if q.filedVia != "" && !strings.Contains(strings.ToLower(t.FiledVia), strings.ToLower(q.filedVia)) {
+		return false
+	}
+	if q.owner != "" && !strings.EqualFold(t.Owner, q.owner) {
 		return false
 	}
 	return true

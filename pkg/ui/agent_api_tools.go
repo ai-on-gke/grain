@@ -459,6 +459,7 @@ var routeQueries = map[string]map[string]string{
 		"closedBefore": "Only tasks closed before this RFC 3339 time.",
 		"derived_from": "Only tasks whose provenance records being derived from this pull request (owner/name#number or its URL).",
 		"filed_via":    "Only tasks whose filedVia (the X-Grain-Client label they were filed with) contains this text, case-insensitively.",
+		"owner":        "Only tasks owned by this account (or me for the caller's own).",
 	},
 	"GET /api/tasks/wait": {
 		"ids":     "The task ids to wait on, repeated or comma-separated; tasks:read must reach every one.",
