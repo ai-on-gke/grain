@@ -47,6 +47,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/installtrack"
 )
 
 func TestUpgradeFromReleasedVersions(t *testing.T) {
@@ -73,7 +75,18 @@ func TestUpgradeFromReleasedVersions(t *testing.T) {
 	} {
 		t.Run(baseline.name, func(t *testing.T) {
 			ref := releaseImage + ":" + baseline.tag
-			docker(t, "pull", "--quiet", ref)
+			if _, err := tryDocker("pull", "--quiet", ref); err != nil {
+				if leg, ok := installtrack.LegacyRepositoryFor(releaseImage); ok {
+					legRef := leg + ":" + baseline.tag
+					if _, legErr := tryDocker("pull", "--quiet", legRef); legErr == nil {
+						ref = legRef
+					} else {
+						t.Fatalf("docker pull %s (and legacy fallback %s): %v (%v)", ref, legRef, err, legErr)
+					}
+				} else {
+					t.Fatalf("docker pull %s: %v", ref, err)
+				}
+			}
 			// Asked, not assumed: an older build may predate the
 			// subcommand, and that is not what this test is about.
 			if out, err := tryDocker("run", "--rm", ref, "schema-version"); err == nil {
@@ -89,7 +102,7 @@ func TestUpgradeFromReleasedVersions(t *testing.T) {
 			// upgrader removes the images left in the repository the
 			// deployment ran from, and the image under test is usually in
 			// that same published repository (release.yml's
-			// ghcr.io/<repo>/grain:sha-...), so the first subtest would take
+			// docker.io/grainai/grain:sha-...), so the first subtest would take
 			// the second one's upgrade target with it.
 			local := "grain-e2e-baseline-" + baseline.name + ":" + randomSuffix(t, 8)
 			docker(t, "tag", ref, local)

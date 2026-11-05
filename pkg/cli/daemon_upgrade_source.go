@@ -46,7 +46,7 @@ func registerUpgradeSourceFlags(fs *flag.FlagSet) *upgradeSourceFlags {
 	f := &upgradeSourceFlags{}
 	f.image = fs.String("upgrade-image", "",
 		"image repository, with no tag, that CI publishes a tag per branch to (e.g. "+
-			"ghcr.io/bwsalmon/grain/grain); set, the UI's Upgrade button pulls a branch's image instead of "+
+			"docker.io/grainai/grain); set, the UI's Upgrade button pulls a branch's image instead of "+
 			"building one, and -upgrade-image-ref-file is required")
 	f.source = fs.String("upgrade-image-source", "",
 		"where -upgrade-image loads candidate container images from: \"release-assets\" (gzip tarballs on the "+
