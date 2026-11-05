@@ -99,6 +99,7 @@ var routeDocs = map[string]string{
 	"POST /api/tasks/{id}/reply":                                           "Answer the question a task's run parked on (ask_question): refused with 409, posting nothing, when no question is parked or the task waits on a secret request, which is set on its page instead.",
 	"GET /api/tasks/wait":                                                  "Block up to timeout seconds (at most 60) until the tasks in ids reach an until condition: closed, merged, awaiting-reply, ci-done or any; re-issue it to wait longer.",
 	"GET /api/inbox":                                                       "The actionable items the Inbox surfaces: parked questions and secret requests, warning and critical notifications, merge-held pull requests and unapproved proposals, each with its UI path.",
+	"GET /api/events":                                                      "Ordered task state transitions, questions, comments, and CI verdicts resumable from cursor since, as JSON (with optional wait long-poll) or Server-Sent Events (Accept: text/event-stream or stream=1).",
 	"PUT /api/tasks/{id}/secret":                                           "Answer a task's pending secret request with its value, which goes to the secret store and is never shown back.",
 	"POST /api/tasks/{id}/close":                                           "Close a task.",
 	"POST /api/tasks/{id}/stop":                                            "Stop a task's running attempt.",
@@ -455,6 +456,14 @@ var routeQueries = map[string]map[string]string{
 	"GET /api/inbox": {
 		"repo": "Only this repository's (owner/name) items.",
 		"kind": "Only items of this kind: question, secret, notification, merge-held or proposal.",
+	},
+	"GET /api/events": {
+		"since":  "Return events strictly after this event id cursor, or \"now\" to start from the current head.",
+		"wait":   "Long-poll up to this many seconds (at most 25) for a matching event when none is already waiting.",
+		"limit":  "At most this many events per JSON page, 1 to 500 (default 100).",
+		"repo":   "Only events for tasks targeting this repository (owner/name).",
+		"types":  "Comma-separated event types to include: task.state, task.question, task.comment, task.ci.",
+		"stream": "1 or true to stream Server-Sent Events (text/event-stream) instead of a JSON page.",
 	},
 	"GET /api/tasks/{id}": {
 		"comments_since": "An RFC 3339 time: answer only the conversation items created strictly after it.",
