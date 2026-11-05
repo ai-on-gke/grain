@@ -691,7 +691,9 @@ there either.
 ## The controller MCP server (`POST /api/mcp`)
 
 `grain-controller` is one stateless Streamable HTTP MCP server on the
-daemon, serving six tools whatever the caller holds:
+daemon, serving six tools whatever the caller holds. The design, with
+why it has this shape and what is still open, is
+[`design/design/controller-mcp.design.md`](../design/design/controller-mcp.design.md).
 
 | Tool | What it does |
 |---|---|
