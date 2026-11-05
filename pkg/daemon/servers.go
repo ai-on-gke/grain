@@ -16,19 +16,17 @@ package daemon
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
-	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
 	"github.com/ai-on-gke/grain/pkg/redact"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
@@ -90,12 +88,23 @@ func BuildNamespaceRedactor(dataDir string) *redact.Redactor {
 }
 
 func buildNamespaceRedactor(dataDir string) *redact.Redactor {
+	return buildNamespaceRedactorFor(dataDir, nil)
+}
+
+func buildNamespaceRedactorFor(dataDir string, secretStore *secrets.Store) *redact.Redactor {
 	var known []redact.KnownValue
-	if dataDir != "" {
+	if secretStore != nil {
+		if vals, err := KnownSecretValuesFromStore(context.Background(), secretStore); err == nil {
+			known = append(known, vals...)
+		}
+	} else if dataDir != "" {
 		secretsDir := filepath.Join(dataDir, "secrets")
 		if vals, err := KnownSecretValues(secretsDir); err == nil {
 			known = append(known, vals...)
 		}
+	}
+	if dataDir != "" {
+		secretsDir := filepath.Join(dataDir, "secrets")
 		if set, err := gitproxy.LoadCredentialSet(filepath.Join(secretsDir, "github")); err == nil {
 			for _, name := range set.Names() {
 				if set.IsApp(name) {
@@ -145,10 +154,10 @@ func buildNamespaceRedactor(dataDir string) *redact.Redactor {
 // in when the process started. A nil set is a caller with nothing that
 // can change that answer, which gets one of its own.
 func StartGitProxy(dataDir string, store *model.Store, githubHost string, insecureHTTP bool, fabric Fabric, forbidden *gitproxy.ForbiddenSet) (url string, handler http.Handler, stop func(context.Context) error, err error) {
-	return startGitProxy(dataDir, store, githubHost, insecureHTTP, fabric, forbidden, nil, nil)
+	return startGitProxy(dataDir, store, nil, githubHost, insecureHTTP, fabric, forbidden, nil, nil)
 }
 
-func startGitProxy(dataDir string, store *model.Store, githubHost string, insecureHTTP bool, fabric Fabric, forbidden *gitproxy.ForbiddenSet, shutdownStarted <-chan struct{}, artifacts ci.ArtifactStore) (url string, handler http.Handler, stop func(context.Context) error, err error) {
+func startGitProxy(dataDir string, store *model.Store, secretStore *secrets.Store, githubHost string, insecureHTTP bool, fabric Fabric, forbidden *gitproxy.ForbiddenSet, shutdownStarted <-chan struct{}, artifacts ci.ArtifactStore) (url string, handler http.Handler, stop func(context.Context) error, err error) {
 	repos, err := ForbiddenRepos(context.Background(), dataDir)
 	if err != nil {
 		return "", nil, nil, err
@@ -174,7 +183,7 @@ func startGitProxy(dataDir string, store *model.Store, githubHost string, insecu
 		// Rebuilt per request, as grainlog's redactor is per run
 		// (capabilities.go), so a secret set after the daemon started
 		// is redacted over /fs/ without waiting for a restart.
-		NewRedactor: func() *redact.Redactor { return buildNamespaceRedactor(dataDir) },
+		NewRedactor: func() *redact.Redactor { return buildNamespaceRedactorFor(dataDir, secretStore) },
 	}
 	// The same namespace answers GET /api/fs/ on grain's own API
 	// (ui.Server.SetNamespace), for grain fs and external agents.
@@ -183,7 +192,7 @@ func startGitProxy(dataDir string, store *model.Store, githubHost string, insecu
 	// and database reads, answered by the backends of the MCP tools they
 	// stand in for (sandbox_namespace.go).
 	cliBackend := wireSandboxNamespace(nsServer, sandboxNamespaceConfig{
-		DataDir: dataDir, Store: store, GithubHost: githubHost, InsecureHTTP: insecureHTTP, API: LiveAPI,
+		DataDir: dataDir, Store: store, SecretStore: secretStore, GithubHost: githubHost, InsecureHTTP: insecureHTTP, API: LiveAPI,
 	})
 	proxy, err := gitproxy.BuildProxy(gitproxy.BuildConfig{
 		DataDir: dataDir, Store: store, ForwardHost: githubHost, ForwardTLS: !insecureHTTP,
@@ -234,36 +243,4 @@ func startGitProxy(dataDir string, store *model.Store, githubHost string, insecu
 	}
 	log.Printf("grain daemon: the git proxy is serving at %s (bound %s)", endpoint.URL, endpoint.Bound)
 	return endpoint.URL, proxyHandler, stopServer, nil
-}
-
-// HostdRemoteFromFlags constructs the acceptor for a grain hostd dialing in
-// with the token in tokenFile or $GRAIN_HOSTD_TOKEN, or nil when neither names
-// a token.
-func HostdRemoteFromFlags(tokenFile, name, owner string) (*hostd.Remote, error) {
-	token := strings.TrimSpace(os.Getenv("GRAIN_HOSTD_TOKEN"))
-	if tokenFile != "" {
-		t, err := ReadTokenFile(tokenFile)
-		if err != nil {
-			return nil, fmt.Errorf("reading -hostd-token-file: %w", err)
-		}
-		token = t
-	}
-	if token == "" {
-		return nil, nil
-	}
-	if name == "" {
-		name = hostd.DefaultSharedName
-	}
-	if err := model.ValidateHostdName(name); err != nil {
-		return nil, fmt.Errorf("-hostd-token-name: %w", err)
-	}
-	if name == model.LocalHostd {
-		return nil, fmt.Errorf("-hostd-token-name: %q is the co-located hostd's name", name)
-	}
-	owner, err := model.NormalizeHostdOwner(owner)
-	if err != nil {
-		return nil, fmt.Errorf("-hostd-token-owner: %w", err)
-	}
-	log.Printf("grain daemon: -hostd-token-file is deprecated and goes in the next release: register hostd %s in the hostd registry (POST /api/hostds) and give it the token it answers with", name)
-	return &hostd.Remote{Token: token, SharedName: name, SharedOwner: owner, Logf: log.Printf}, nil
 }

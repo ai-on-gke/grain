@@ -53,6 +53,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/k8s"
 )
 
@@ -67,10 +68,13 @@ import (
 // unused and should be left nil: the rollout *is* the restart.
 type KubeConfig struct {
 	// Repository is the image CI publishes a tag per branch to, with no
-	// tag of its own -- "ghcr.io/bwsalmon/grain/grain". Required, and
+	// tag of its own -- "docker.io/grainai/grain". Required, and
 	// the same value ImageConfig.Repository takes: which branch has an
 	// image is a fact about CI, not about how a deployment runs it.
 	Repository string
+	// Track classifies this deployment's install track so legacy GHCR
+	// repositories transition cleanly onto Docker Hub.
+	Track installtrack.Track
 	// Deployment is the Deployment whose image an upgrade repoints --
 	// "grain", deploy/kubernetes/grain.yaml's own. Required.
 	Deployment string
@@ -199,11 +203,28 @@ func (c KubeConfig) client() k8s.Client {
 	return k8s.Client{Kubectl: c.Kubectl, Namespace: c.Namespace}
 }
 
+// EffectiveKubeRepository returns the image repository the Kubernetes upgrade
+// pipeline pulls from, transitioning legacy GHCR repositories onto Docker Hub
+// when Track is set.
+func (u *Upgrader) EffectiveKubeRepository() string {
+	if u.cfg.Kube == nil {
+		return ""
+	}
+	repo := strings.TrimSpace(u.cfg.Kube.Repository)
+	if repo == "" && u.cfg.Kube.Track != "" {
+		repo = installtrack.DefaultRepository(u.cfg.Kube.Track)
+	}
+	if repo == "" {
+		return ""
+	}
+	return installtrack.RepositoryForTrack(repo, u.cfg.Kube.Track)
+}
+
 // stageKube is the Kubernetes path: health-check the image the branch
 // names, carry the schema across if it moved, and repoint the
 // Deployment.
 func (u *Upgrader) stageKube(ctx context.Context, p *progress, branch string) (string, error) {
-	ref, err := u.imageRefIn(u.cfg.Kube.Repository, branch)
+	ref, err := u.imageRefIn(u.EffectiveKubeRepository(), branch)
 	if err != nil {
 		return "", err
 	}
@@ -470,19 +491,23 @@ func kubePin(ref, imageID string) (string, error) {
 // "library/".
 func normalizeRepository(repo string) string {
 	first, rest, hasSlash := strings.Cut(repo, "/")
-	if hasSlash && (strings.ContainsAny(first, ".:") || first == "localhost") {
-		return repo
-	}
 	if !hasSlash {
 		return "docker.io/library/" + repo
 	}
-	if first == "docker.io" || first == "index.docker.io" {
+	if first == "docker.io" || first == "index.docker.io" || first == "registry-1.docker.io" {
 		if !strings.Contains(rest, "/") {
 			return "docker.io/library/" + rest
 		}
 		return "docker.io/" + rest
 	}
+	if strings.ContainsAny(first, ".:") || first == "localhost" {
+		return repo
+	}
 	return "docker.io/" + repo
+}
+
+func sameRepository(a, b string) bool {
+	return a != "" && b != "" && normalizeRepository(a) == normalizeRepository(b)
 }
 
 // checkKubeFlags asks the candidate image which daemon flags it defines

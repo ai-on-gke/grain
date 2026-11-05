@@ -1251,6 +1251,8 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 			[]any{"user:alice@example.com", "the access code", time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)}},
 		{"INSERT INTO `allowed_principal_migration` (`id`, `imported_at`, `source`, `dropped`) VALUES (?, ?, ?, ?)",
 			[]any{1, time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC), "-ui-allowed-principals", `["domain:example.com"]`}},
+		{"INSERT INTO `secret_entries` (`secret_name`, `key`, `sm_secret`, `version`, `updated_at`) VALUES (?, ?, ?, ?, ?)",
+			[]any{"gemini-api-key", "value", "grain-inst-alice-gemini-api-key", "2", time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)}},
 	} {
 		if _, err := db.ExecContext(ctx, stmt.sql, stmt.args...); err != nil {
 			t.Fatalf("writing %s: %v", stmt.sql, err)

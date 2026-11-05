@@ -74,7 +74,7 @@ Usage of grain daemon:
   -container-sandbox-fence string
     	auto, require or off: whether local sandbox containers are fenced off from this host, its networks and link-local (the metadata server) by a per-container nftables chain. auto fences when nft can be run and otherwise runs containers unfenced and refuses external capability grants; require refuses a container that cannot be fenced; off never fences and refuses external capability grants (default "auto")
   -container-sandbox-image string
-    	image used by local container sandboxes (default "ghcr.io/bwsalmon/grain/k8s-sandbox:latest")
+    	image used by local container sandboxes (default "docker.io/grainai/sandbox-k8s:latest")
   -container-sandbox-network string
     	Docker network local sandbox containers join. Empty uses grain-sandboxes, a bridge grain creates with inter-container traffic disabled; any other name must already exist ("bridge" is Docker's shared default network)
   -container-sandboxes
@@ -170,7 +170,7 @@ Usage of grain daemon:
   -k8s-granule-access string
     	k8s-granule only: how grain runs steps in a sandbox's guest -- "kubectl" (granule exec over kubectl exec) or "dialout" (the wrapper's channel to -sandbox-access-addr's acceptor; refused unless grain runs in-cluster). design/design/grain-on-gke.design.md#GKE-3 (default "kubectl")
   -k8s-granule-image string
-    	the packed guest image every pod this backend creates runs: a self-contained image with its own guest disk and kernel already baked in -- the shape Granulefile's own build produces, not the thin exec target -k8s-sandbox-image names and, just as importantly, not "granule:vendored" either (grain init's own -granule-runtime-image default, what scripts/granule/build-granule-image.sh produces, which has no guest disk and cannot boot at all -- confirmed against a real cluster, where a pod running it exits immediately). Required with -k8s-granule-sandboxes; no context-free default to pick, since nothing publishes a packed guest image under a stable tag yet -- docs/k8s-granule-design.md §4 (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default "ghcr.io/bwsalmon/grain/guest:latest")
+    	the packed guest image every pod this backend creates runs: a self-contained image with its own guest disk and kernel already baked in -- the shape Granulefile's own build produces, not the thin exec target -k8s-sandbox-image names and, just as importantly, not "granule:vendored" either (grain init's own -granule-runtime-image default, what scripts/granule/build-granule-image.sh produces, which has no guest disk and cannot boot at all -- confirmed against a real cluster, where a pod running it exits immediately). Required with -k8s-granule-sandboxes; no context-free default to pick, since nothing publishes a packed guest image under a stable tag yet -- docs/k8s-granule-design.md §4 (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default "docker.io/grainai/sandbox:latest")
   -k8s-granule-reattach-timeout duration
     	k8s-granule dialout only: how long a step waits for a dropped channel to reconnect before the sandbox is lost (a CI job errors with "infra: sandbox channel lost" and is re-run; an agent's tool call fails and its sandbox is rebuilt) (default 2m0s)
   -k8s-granule-sandboxes
@@ -198,7 +198,7 @@ Usage of grain daemon:
   -k8s-run-host-volume value
     	CLAIM:PATH, repeatable: a claim this pod mounts at PATH; run pods get the spool, staging and credential directories as subPaths of these, at the same paths
   -k8s-sandbox-image string
-    	container image every sandbox pod runs; defaults to the image stamped into this build. It is the whole of what a dispatched agent finds when it lands. It needs the agent framework's own CLI, git, and a shell; Dockerfile.k8s-sandbox in this repo builds the published one (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default "ghcr.io/bwsalmon/grain/k8s-sandbox:latest")
+    	container image every sandbox pod runs; defaults to the image stamped into this build. It is the whole of what a dispatched agent finds when it lands. It needs the agent framework's own CLI, git, and a shell; Dockerfile.k8s-sandbox in this repo builds the published one (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default "docker.io/grainai/sandbox-k8s:latest")
   -k8s-sandbox-privileged
     	run sandbox containers privileged (only used with -k8s-sandboxes). This gives every dispatched agent root on the node it lands on; it is here because a sandbox that has to run docker or kind cannot work without it, not because it is a reasonable default (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
   -k8s-sandbox-service string
@@ -339,6 +339,10 @@ Usage of grain daemon:
     	memory kept back from that budget for everything on this host that is not a sandbox -- this daemon, the container runtime, each VM's own qemu overhead and the page cache they all read through. Taken off the top, before the overcommit ratio, so raising the ratio never eats into it. -1 takes an eighth of the machine, never less than 8 GiB and never more than half of it (model.DefaultReserveMemoryMB) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default -1)
   -sandbox-port-base int
     	first port of the block every sandbox-facing service binds in: the git proxy, the model proxies, the package cache and the Actions cache each take a reserved offset within it (sandboxnet.go's own sandboxPortOffsets). It is one aligned range of 256 ports, so what has to reach these services -- a firewall rule, a security group, a VPN ACL -- is one rule that a seventh service does not change. Must be a multiple of 256, and should stay below the ephemeral range this host allocates from (/proc/sys/net/ipv4/ip_local_port_range, 32768 by default) so the block cannot collide with this daemon's own outbound connections. 0 restores the behaviour before the block existed: every service on whatever ephemeral port the kernel gives it, renumbered on every restart -- which is why a sandbox that outlives a restart holds addresses that have moved. Not used by the package cache's interception listeners or its resolver, whose ports (443, 80, 53) are fixed by their protocols. (default 9728)
+  -secrets-backend string
+    	secret store backend ("file" or "secretmanager"); defaults to $GRAIN_SECRETS_BACKEND, then "file" (default "file")
+  -secrets-sm-prefix string
+    	Secret Manager resource prefix (projects/<project>/secrets/<id-prefix>) when -secrets-backend=secretmanager; defaults to $GRAIN_SECRETS_SM_PREFIX
   -shutdown-cmd sudo systemctl poweroff
     	one argument of the command the UI's shut-down-host button runs -- repeat for every argument. Defaults to sudo systemctl poweroff.
   -tunnel-gateway-url string
@@ -368,7 +372,7 @@ Usage of grain daemon:
   -upgrade-drain-window duration
     	maximum time a scheduled upgrade waits for active tasks and CI runs to drain before proceeding with the upgrade (0 waits indefinitely for runs to complete normally)
   -upgrade-image string
-    	image repository, with no tag, that CI publishes a tag per branch to (e.g. ghcr.io/bwsalmon/grain/grain); set, the UI's Upgrade button pulls a branch's image instead of building one, and -upgrade-image-ref-file is required
+    	image repository, with no tag, that CI publishes a tag per branch to (e.g. docker.io/grainai/grain); set, the UI's Upgrade button pulls a branch's image instead of building one, and -upgrade-image-ref-file is required
   -upgrade-image-fallback string
     	fallback image source when the primary source cannot fetch a candidate daemon image: "none", "registry", or "release-assets" (or GRAIN_UPGRADE_IMAGE_FALLBACK)
   -upgrade-image-ref-file string

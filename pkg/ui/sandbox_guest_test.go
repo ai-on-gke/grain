@@ -49,8 +49,8 @@ func guestServer(t *testing.T, image string) (*ui.Server, *ui.Client, *model.Sto
 // three readings apart and nobody joined them up.
 func TestSandboxHealthSaysWhenNothingIsPublishingTheSandboxGuest(t *testing.T) {
 	t.Parallel()
-	srv, _, store := guestServer(t, "ghcr.io/bwsalmon/grain/guest:sha-7746d62")
-	repo := model.RepoRef{Owner: "bwsalmon", Name: "grain"}
+	srv, _, store := guestServer(t, "docker.io/grainai/sandbox:sha-7746d62")
+	repo := model.RepoRef{Owner: "ai-on-gke", Name: "grain"}
 
 	// Releases on: the cache follows the branch, and the pane says so
 	// rather than warning about a healthy deployment.
@@ -89,7 +89,7 @@ func TestSandboxHealthSaysWhenNothingIsPublishingTheSandboxGuest(t *testing.T) {
 		t.Fatalf("sandboxGuest = %+v, want publishing false once releases are off", got)
 	}
 	for _, want := range []string{
-		"Release workflows are switched off for bwsalmon/grain",
+		"Release workflows are switched off for ai-on-gke/grain",
 		"main",
 		"builds one inline",
 		".grain/workflows/image.yml:guest-cache",
@@ -104,8 +104,8 @@ func TestSandboxHealthSaysWhenNothingIsPublishingTheSandboxGuest(t *testing.T) {
 // that is not the branch's tip says so, whether or not publishing is on.
 func TestSandboxHealthSaysWhenTheGuestIsNotTheBranchTipsOwn(t *testing.T) {
 	t.Parallel()
-	srv, _, store := guestServer(t, "ghcr.io/bwsalmon/grain/guest:sha-7746d62")
-	repo := model.RepoRef{Owner: "bwsalmon", Name: "grain"}
+	srv, _, store := guestServer(t, "docker.io/grainai/sandbox:sha-7746d62")
+	repo := model.RepoRef{Owner: "ai-on-gke", Name: "grain"}
 	if err := store.PutBaseBranchCI(t.Context(), model.BaseBranchCI{
 		Repo: repo, Branch: "main", Commit: "375d7cce3aa1", RunID: "run-1",
 		StartedAt: time.Now().UTC(),
@@ -156,8 +156,8 @@ func TestSandboxHealthReportsNoGuestForAnUnattributableImage(t *testing.T) {
 // switch alone, so for all three days it said yes.
 func TestSandboxHealthSaysWhenTheReleaseRunHasStoppedPublishing(t *testing.T) {
 	t.Parallel()
-	srv, _, store := guestServer(t, "ghcr.io/bwsalmon/grain/guest:sha-7746d62")
-	repo := model.RepoRef{Owner: "bwsalmon", Name: "grain"}
+	srv, _, store := guestServer(t, "docker.io/grainai/sandbox:sha-7746d62")
+	repo := model.RepoRef{Owner: "ai-on-gke", Name: "grain"}
 	finished := time.Date(2026, 9, 16, 15, 22, 0, 0, time.UTC)
 
 	// A run still going is not a run that failed to publish: it has not
@@ -192,7 +192,7 @@ func TestSandboxHealthSaysWhenTheReleaseRunHasStoppedPublishing(t *testing.T) {
 		t.Fatalf("sandboxGuest = %+v, want the failed run named, with its commit and time", got)
 	}
 	for _, want := range []string{
-		"switched on for bwsalmon/grain",
+		"switched on for ai-on-gke/grain",
 		"last release run on main",
 		"failed",
 		"published nothing",
@@ -226,7 +226,7 @@ func TestSandboxHealthSaysWhenTheReleaseRunHasStoppedPublishing(t *testing.T) {
 		"was cancelled before it finished",
 		"not a verdict on the tree",
 		"no repair task was filed",
-		"POST /api/repos/bwsalmon/grain/release-runs",
+		"POST /api/repos/ai-on-gke/grain/release-runs",
 	} {
 		if !strings.Contains(got.Detail, want) {
 			t.Errorf("detail = %q, want it to mention %q", got.Detail, want)
@@ -259,8 +259,8 @@ func TestSandboxHealthSaysWhenTheReleaseRunHasStoppedPublishing(t *testing.T) {
 // and would bury the remedy that is the useful half of the first.
 func TestSandboxHealthDoesNotReportAStalledReleaseWhenReleasesAreOff(t *testing.T) {
 	t.Parallel()
-	srv, _, store := guestServer(t, "ghcr.io/bwsalmon/grain/guest:sha-7746d62")
-	repo := model.RepoRef{Owner: "bwsalmon", Name: "grain"}
+	srv, _, store := guestServer(t, "docker.io/grainai/sandbox:sha-7746d62")
+	repo := model.RepoRef{Owner: "ai-on-gke", Name: "grain"}
 	finished := time.Now().UTC()
 	if err := store.PutRepoConfig(t.Context(), model.RepoConfig{
 		Repo: repo, Work: model.ItemOwnership(model.ReleaseItem, model.OwnershipOff),
@@ -298,8 +298,8 @@ func TestSandboxHealthDoesNotReportAStalledReleaseWhenReleasesAreOff(t *testing.
 // about.
 func TestSandboxHealthSaysWhenThePostMergeGuestCacheDispatchFilledNothing(t *testing.T) {
 	t.Parallel()
-	srv, _, store := guestServer(t, "ghcr.io/bwsalmon/grain/guest:sha-7746d62")
-	repo := model.RepoRef{Owner: "bwsalmon", Name: "grain"}
+	srv, _, store := guestServer(t, "docker.io/grainai/sandbox:sha-7746d62")
+	repo := model.RepoRef{Owner: "ai-on-gke", Name: "grain"}
 	finished := time.Date(2026, 9, 21, 20, 4, 0, 0, time.UTC)
 
 	// Releases off with package-publish granted: grain dispatches the
@@ -358,7 +358,7 @@ func TestSandboxHealthSaysWhenThePostMergeGuestCacheDispatchFilledNothing(t *tes
 		"Nothing retries a dispatch for the same commit",
 		"builds one inline",
 		"sandbox guest cache: the sandbox for this job never came up",
-		"grain ci run -repo bwsalmon/grain -branch main -job .grain/workflows/image.yml:guest-cache",
+		"grain ci run -repo ai-on-gke/grain -branch main -job .grain/workflows/image.yml:guest-cache",
 	} {
 		if !strings.Contains(got.Detail, want) {
 			t.Errorf("detail = %q, want it to mention %q", got.Detail, want)
@@ -410,12 +410,12 @@ func TestRepoReleaseSettingsSayWhenThisRepoPublishesTheSandboxGuest(t *testing.T
 	t.Parallel()
 	client, _, _ := testClient(t)
 	client.Config.SandboxImage = &ui.SandboxImage{
-		Image:    "ghcr.io/bwsalmon/grain/guest:sha-7746d62",
-		Expected: "ghcr.io/bwsalmon/grain/guest:sha-7746d62",
+		Image:    "docker.io/grainai/sandbox:sha-7746d62",
+		Expected: "docker.io/grainai/sandbox:sha-7746d62",
 	}
 	srv := ui.NewServerWithClient(client)
 
-	got := decode[ui.RepoReleaseSettings](t, do(t, srv, http.MethodGet, "/api/repos/bwsalmon/grain/release", ""))
+	got := decode[ui.RepoReleaseSettings](t, do(t, srv, http.MethodGet, "/api/repos/ai-on-gke/grain/release", ""))
 	if !got.PublishesSandboxGuest || got.SandboxGuestCacheJob != ".grain/workflows/image.yml:guest-cache" {
 		t.Fatalf("settings = %+v, want the guest publisher named with the job that fills the cache", got)
 	}
@@ -441,11 +441,11 @@ func TestRepoReleaseSettingsSayWhenGrainFillsTheGuestCacheItself(t *testing.T) {
 	t.Parallel()
 	client, store, _ := testClient(t)
 	client.Config.SandboxImage = &ui.SandboxImage{
-		Image:    "ghcr.io/bwsalmon/grain/guest:sha-7746d62",
-		Expected: "ghcr.io/bwsalmon/grain/guest:sha-7746d62",
+		Image:    "docker.io/grainai/sandbox:sha-7746d62",
+		Expected: "docker.io/grainai/sandbox:sha-7746d62",
 	}
 	srv := ui.NewServerWithClient(client)
-	repo := model.RepoRef{Owner: "bwsalmon", Name: "grain"}
+	repo := model.RepoRef{Owner: "ai-on-gke", Name: "grain"}
 
 	// Releases on: the release run fills the cache, so grain adds
 	// nothing and the pane has nothing to claim.
@@ -454,7 +454,7 @@ func TestRepoReleaseSettingsSayWhenGrainFillsTheGuestCacheItself(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	got := decode[ui.RepoReleaseSettings](t, do(t, srv, http.MethodGet, "/api/repos/bwsalmon/grain/release", ""))
+	got := decode[ui.RepoReleaseSettings](t, do(t, srv, http.MethodGet, "/api/repos/ai-on-gke/grain/release", ""))
 	if got.SandboxGuestCacheAutomatic {
 		t.Fatal("the pane claims grain fills the cache while releases are on, when the release " +
 			"run is what fills it: a second dispatch would be the same guest built twice")
@@ -469,7 +469,7 @@ func TestRepoReleaseSettingsSayWhenGrainFillsTheGuestCacheItself(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	got = decode[ui.RepoReleaseSettings](t, do(t, srv, http.MethodGet, "/api/repos/bwsalmon/grain/release", ""))
+	got = decode[ui.RepoReleaseSettings](t, do(t, srv, http.MethodGet, "/api/repos/ai-on-gke/grain/release", ""))
 	if got.Enabled || !got.SandboxGuestCacheAutomatic {
 		t.Fatalf("settings = %+v, want the pane to say the guest cache goes on following the "+
 			"branch with nobody having named the job", got)
@@ -487,7 +487,7 @@ func TestRepoReleaseSettingsSayWhenGrainFillsTheGuestCacheItself(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	got = decode[ui.RepoReleaseSettings](t, do(t, srv, http.MethodGet, "/api/repos/bwsalmon/grain/release", ""))
+	got = decode[ui.RepoReleaseSettings](t, do(t, srv, http.MethodGet, "/api/repos/ai-on-gke/grain/release", ""))
 	if got.SandboxGuestCacheAutomatic {
 		t.Fatal("the pane claims grain fills the cache for a repository whose CI holds no " +
 			"package-publish, where the job would stop on its first step")

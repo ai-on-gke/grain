@@ -61,7 +61,7 @@ func (u *Upgrader) AlreadyRunning(ctx context.Context, branch string) (bool, err
 		if err != nil {
 			return false, fmt.Errorf("reading the image deployment/%s runs: %w", u.cfg.Kube.Deployment, err)
 		}
-		tag, err := u.imageRefIn(u.cfg.Kube.Repository, branch)
+		tag, err := u.imageRefIn(u.EffectiveKubeRepository(), branch)
 		if err != nil {
 			return false, err
 		}
@@ -87,15 +87,15 @@ func (u *Upgrader) AlreadyRunning(ctx context.Context, branch string) (bool, err
 			return false, err
 		}
 		checkRegistry := func() (bool, error) {
-			running, ok := digestRef(current)
-			if !ok || repositoryOf(current) != repositoryOf(tag) {
+			running, ok := kubeDigestRef(current)
+			if !ok || !sameRepository(repositoryOf(current), repositoryOf(tag)) {
 				return false, nil
 			}
 			digest, err := u.manifestDigest(ctx, tag)
 			if err != nil {
 				return false, err
 			}
-			return running == repositoryOf(tag)+"@"+digest, nil
+			return running == normalizeRepository(repositoryOf(tag))+"@"+digest, nil
 		}
 		if u.EffectiveImageSource() == ImageSourceReleaseAssets && !u.shouldBypassDefaultReleaseAssets() {
 			same, relErr := u.alreadyRunningReleaseAssets(ctx, branch, current, tag)
@@ -186,7 +186,7 @@ var manifestAccept = []string{
 }
 
 // RegistryManifestDigest reads the digest a tagged ref
-// ("ghcr.io/bwsalmon/grain/grain:main") names, with a HEAD request to the
+// ("docker.io/grainai/grain:main") names, with a HEAD request to the
 // registry's v2 API and anonymously, as ListRegistryTags does: nothing
 // is pulled. An image on Artifact Registry or GCR is asked with a Google
 // access token instead, when this host has one (registryauth.TokenFor).

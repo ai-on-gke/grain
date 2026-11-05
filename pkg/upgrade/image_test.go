@@ -95,13 +95,13 @@ func TestValidateBranchRefusesTheNamesThatWouldAliasATag(t *testing.T) {
 // any later caller reach it too. "claude..task" spells the tag CI
 // publishes for claude/task.
 func TestImageRefRefusesABranchNameThatAliasesAnother(t *testing.T) {
-	u := New(Config{Image: &ImageConfig{Repository: "ghcr.io/bwsalmon/grain/grain"}})
+	u := New(Config{Image: &ImageConfig{Repository: "docker.io/grainai/grain"}})
 	for _, b := range []string{"claude..task", "claude/.task", "claude//task"} {
 		if ref, err := u.imageRef(b); err == nil {
 			t.Errorf("imageRef(%q) = %q, want it refused", b, ref)
 		}
 	}
-	if ref, err := u.imageRef("claude/task"); err != nil || ref != "ghcr.io/bwsalmon/grain/grain:claude..task" {
+	if ref, err := u.imageRef("claude/task"); err != nil || ref != "docker.io/grainai/grain:claude..task" {
 		t.Errorf("imageRef(claude/task) = %q, %v", ref, err)
 	}
 }
@@ -110,7 +110,7 @@ func TestImageRefRefusesABranchNameThatAliasesAnother(t *testing.T) {
 // branches on, and Mode is that same choice made answerable before an
 // upgrade runs, for a caller that has to describe one (pkg/ui's pane).
 func TestModeFollowsTheConfiguredPipeline(t *testing.T) {
-	if got := New(Config{Image: &ImageConfig{Repository: "ghcr.io/bwsalmon/grain/grain"}}).Mode(); got != ModeImage {
+	if got := New(Config{Image: &ImageConfig{Repository: "docker.io/grainai/grain"}}).Mode(); got != ModeImage {
 		t.Errorf("Mode() with an image = %q, want %q", got, ModeImage)
 	}
 	if got := New(Config{SrcDir: t.TempDir()}).Mode(); got != ModeSource {
@@ -134,7 +134,7 @@ func TestUpgraderImagePullsHealthChecksRecordsAndRestarts(t *testing.T) {
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			// Stand-ins for `docker pull` and `docker run --rm`: each
 			// appends its own arguments to a file, so the test can read
@@ -152,7 +152,7 @@ func TestUpgraderImagePullsHealthChecksRecordsAndRestarts(t *testing.T) {
 	}
 	status := waitForPhase(t, u, PhaseOK)
 
-	const wantRef = "ghcr.io/bwsalmon/grain/grain:grain..issue-645"
+	const wantRef = "docker.io/grainai/grain:grain..issue-645"
 	if got := readFile(t, pulled); got != wantRef {
 		t.Errorf("pulled %q, want %q", got, wantRef)
 	}
@@ -185,7 +185,7 @@ func TestUpgraderImagePullsTheSandboxImageTheNewBuildExpects(t *testing.T) {
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			// Appends each pull to one file, so the test reads back both
 			// pulls and the order they happened in.
@@ -194,7 +194,7 @@ func TestUpgraderImagePullsTheSandboxImageTheNewBuildExpects(t *testing.T) {
 			// check) prints a version, `sandbox-image` prints the
 			// sandbox ref it was built against.
 			RunCmd: []string{"sh", "-c",
-				`case "$2" in sandbox-image) echo ghcr.io/bwsalmon/grain/granule-sandbox:sha-abc1234;; *) echo 7;; esac`,
+				`case "$2" in sandbox-image) echo docker.io/grainai/sandbox:sha-abc1234;; *) echo 7;; esac`,
 				"sh"},
 			SandboxImageArgs: []string{"sandbox-image"},
 		},
@@ -207,11 +207,11 @@ func TestUpgraderImagePullsTheSandboxImageTheNewBuildExpects(t *testing.T) {
 	}
 	status := waitForPhase(t, u, PhaseOK)
 
-	want := "ghcr.io/bwsalmon/grain/grain:main\nghcr.io/bwsalmon/grain/granule-sandbox:sha-abc1234\n"
+	want := "docker.io/grainai/grain:main\ndocker.io/grainai/sandbox:sha-abc1234\n"
 	if got := readFile(t, pulled); got != want {
 		t.Errorf("pulled %q, want %q", got, want)
 	}
-	if !strings.Contains(status.Detail, "granule-sandbox:sha-abc1234") {
+	if !strings.Contains(status.Detail, "sandbox:sha-abc1234") {
 		t.Errorf("status detail = %q, want it to name the sandbox image too", status.Detail)
 	}
 }
@@ -230,14 +230,14 @@ func TestUpgraderImageSaysWhenThePulledSandboxImageWillNotBeRun(t *testing.T) {
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			RunCmd: []string{"sh", "-c",
-				`case "$2" in sandbox-image) echo ghcr.io/bwsalmon/grain/guest:sha-e5544d6;; *) echo 7;; esac`,
+				`case "$2" in sandbox-image) echo docker.io/grainai/sandbox:sha-e5544d6;; *) echo 7;; esac`,
 				"sh"},
 			SandboxImageArgs: []string{"sandbox-image"},
-			SandboxImagePin:  "ghcr.io/bwsalmon/grain/guest:sha-2f89890",
+			SandboxImagePin:  "docker.io/grainai/sandbox:sha-2f89890",
 		},
 		HealthCheckArgs: []string{"schema-version"},
 		StatusFile:      filepath.Join(dir, "upgrade-status.json"),
@@ -252,7 +252,7 @@ func TestUpgraderImageSaysWhenThePulledSandboxImageWillNotBeRun(t *testing.T) {
 	// pulled is what an operator would otherwise read as "this is what
 	// runs now", and the pinned one is the answer to "then what is it
 	// running?".
-	for _, want := range []string{"guest:sha-e5544d6", "will not run", "guest:sha-2f89890"} {
+	for _, want := range []string{"sandbox:sha-e5544d6", "will not run", "sandbox:sha-2f89890"} {
 		if !strings.Contains(status.Detail, want) {
 			t.Errorf("status detail = %q, want it to say %q", status.Detail, want)
 		}
@@ -266,7 +266,7 @@ func TestUpgraderImageSaysWhenThePulledSandboxImageWillNotBeRun(t *testing.T) {
 	if sandbox == nil {
 		t.Fatalf("no %q step in %+v", stepSandbox, status.Steps)
 	}
-	if !strings.Contains(sandbox.Detail, "guest:sha-2f89890") {
+	if !strings.Contains(sandbox.Detail, "sandbox:sha-2f89890") {
 		t.Errorf("sandbox step detail = %q, want it to name the pinned image", sandbox.Detail)
 	}
 }
@@ -280,14 +280,14 @@ func TestUpgraderImageSaysNothingWhenThePinIsWhatTheBuildExpects(t *testing.T) {
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			RunCmd: []string{"sh", "-c",
-				`case "$2" in sandbox-image) echo ghcr.io/bwsalmon/grain/guest:sha-e5544d6;; *) echo 7;; esac`,
+				`case "$2" in sandbox-image) echo docker.io/grainai/sandbox:sha-e5544d6;; *) echo 7;; esac`,
 				"sh"},
 			SandboxImageArgs: []string{"sandbox-image"},
-			SandboxImagePin:  "ghcr.io/bwsalmon/grain/guest:sha-e5544d6",
+			SandboxImagePin:  "docker.io/grainai/sandbox:sha-e5544d6",
 		},
 		HealthCheckArgs: []string{"schema-version"},
 		StatusFile:      filepath.Join(dir, "upgrade-status.json"),
@@ -312,20 +312,20 @@ func TestUpgraderImageStopsWhenTheSandboxImageCannotBePulled(t *testing.T) {
 	refFile := filepath.Join(dir, "image.env")
 	restartMarker := filepath.Join(dir, "restarted")
 
-	const previous = "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:main\n"
+	const previous = "GRAIN_IMAGE=docker.io/grainai/grain:main\n"
 	if err := os.WriteFile(refFile, []byte(previous), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			// The grain image pulls; the sandbox image does not.
 			PullCmd: []string{"sh", "-c",
-				`case "$1" in *granule-sandbox*) echo 'manifest unknown' >&2; exit 1;; esac`, "sh"},
+				`case "$1" in *grainai/sandbox*) echo 'manifest unknown' >&2; exit 1;; esac`, "sh"},
 			RunCmd: []string{"sh", "-c",
-				`case "$2" in sandbox-image) echo ghcr.io/bwsalmon/grain/granule-sandbox:sha-abc1234;; *) echo 7;; esac`,
+				`case "$2" in sandbox-image) echo docker.io/grainai/sandbox:sha-abc1234;; *) echo 7;; esac`,
 				"sh"},
 			SandboxImageArgs: []string{"sandbox-image"},
 		},
@@ -359,7 +359,7 @@ func TestUpgraderImageToleratesAnImageWithNoSandboxAnswer(t *testing.T) {
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			RunCmd: []string{"sh", "-c",
@@ -376,7 +376,7 @@ func TestUpgraderImageToleratesAnImageWithNoSandboxAnswer(t *testing.T) {
 	}
 	status := waitForPhase(t, u, PhaseOK)
 	if got, want := readFile(t, refFile),
-		"GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:v-old@"+testDigest+"\n"; got != want {
+		"GRAIN_IMAGE=docker.io/grainai/grain:v-old@"+testDigest+"\n"; got != want {
 		t.Errorf("ref file = %q, want %q", got, want)
 	}
 	// And the step says *why* it named none. "names no sandbox image" on
@@ -404,14 +404,14 @@ func TestUpgraderImageStopsWhenTheSandboxQuestionCannotBeAsked(t *testing.T) {
 	refFile := filepath.Join(dir, "image.env")
 	restartMarker := filepath.Join(dir, "restarted")
 
-	const previous = "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:main\n"
+	const previous = "GRAIN_IMAGE=docker.io/grainai/grain:main\n"
 	if err := os.WriteFile(refFile, []byte(previous), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			// The health check runs; the sandbox question dies the way
@@ -454,14 +454,14 @@ func TestUpgraderImageStopsWhenTheSandboxQuestionTimesOut(t *testing.T) {
 	refFile := filepath.Join(dir, "image.env")
 	restartMarker := filepath.Join(dir, "restarted")
 
-	const previous = "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:main\n"
+	const previous = "GRAIN_IMAGE=docker.io/grainai/grain:main\n"
 	if err := os.WriteFile(refFile, []byte(previous), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			// The health check answers at once; the sandbox question
@@ -539,14 +539,14 @@ func TestUpgraderImageLeavesRefFileAloneWhenHealthCheckFails(t *testing.T) {
 	refFile := filepath.Join(dir, "image.env")
 	restartMarker := filepath.Join(dir, "restarted")
 
-	const previous = "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:main\n"
+	const previous = "GRAIN_IMAGE=docker.io/grainai/grain:main\n"
 	if err := os.WriteFile(refFile, []byte(previous), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			// A "container" that starts and exits 1, standing in for an
@@ -650,14 +650,14 @@ func TestAnImageThatAnswersAndThenHangsFailsTheHealthCheckOnItsBound(t *testing.
 	refFile := filepath.Join(dir, "image.env")
 	restartMarker := filepath.Join(dir, "restarted")
 
-	const previous = "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:main\n"
+	const previous = "GRAIN_IMAGE=docker.io/grainai/grain:main\n"
 	if err := os.WriteFile(refFile, []byte(previous), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			RunCmd:     []string{"sh", "-c", "echo 18; sleep 60", "sh"},
@@ -762,7 +762,7 @@ func TestUpgraderImageFailsWhenPullFails(t *testing.T) {
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"sh", "-c", "echo 'manifest unknown' >&2; exit 1", "sh"},
 		},
@@ -827,7 +827,7 @@ func TestUpgraderImageRejectsABranchTooLongToBeATag(t *testing.T) {
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    filepath.Join(dir, "image.env"),
 			PullCmd:    []string{"touch", pullMarker},
 		},
@@ -862,7 +862,7 @@ func TestUpgraderImageRejectsASecondClickWhileOneIsRunning(t *testing.T) {
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    filepath.Join(dir, "image.env"),
 			// Via `sh -c`, since the ref is appended to whatever PullCmd
 			// is: the trailing "sh" takes that position as $0 rather than
@@ -891,10 +891,10 @@ func TestUpgraderImageRejectsASecondClickWhileOneIsRunning(t *testing.T) {
 func TestUpgraderRunningReadsTheRefFile(t *testing.T) {
 	dir := t.TempDir()
 	refFile := filepath.Join(dir, "image.env")
-	writeTestFile(t, refFile, "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:main\n")
+	writeTestFile(t, refFile, "GRAIN_IMAGE=docker.io/grainai/grain:main\n")
 
 	u := New(Config{
-		Image:      &ImageConfig{Repository: "ghcr.io/bwsalmon/grain/grain", RefFile: refFile},
+		Image:      &ImageConfig{Repository: "docker.io/grainai/grain", RefFile: refFile},
 		StatusFile: filepath.Join(dir, "upgrade-status.json"),
 	})
 
@@ -902,7 +902,7 @@ func TestUpgraderRunningReadsTheRefFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Running: %v", err)
 	}
-	if want := "ghcr.io/bwsalmon/grain/grain:main"; running.Ref != want {
+	if want := "docker.io/grainai/grain:main"; running.Ref != want {
 		t.Errorf("Running().Ref = %q, want %q", running.Ref, want)
 	}
 	if running.Build != (version.Info{}) {
@@ -919,12 +919,12 @@ func TestUpgraderRunningReadsTheRefFileSystemdWouldRead(t *testing.T) {
 	dir := t.TempDir()
 	refFile := filepath.Join(dir, "image.env")
 	writeTestFile(t, refFile, "# pinned by hand, 2026-09-02\n"+
-		"GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:main\n"+
+		"GRAIN_IMAGE=docker.io/grainai/grain:main\n"+
 		"\n"+
-		`GRAIN_IMAGE="ghcr.io/bwsalmon/grain/grain:grain-task-39"`+"\n")
+		`GRAIN_IMAGE="docker.io/grainai/grain:grain-task-39"`+"\n")
 
 	u := New(Config{
-		Image:      &ImageConfig{Repository: "ghcr.io/bwsalmon/grain/grain", RefFile: refFile},
+		Image:      &ImageConfig{Repository: "docker.io/grainai/grain", RefFile: refFile},
 		StatusFile: filepath.Join(dir, "upgrade-status.json"),
 	})
 
@@ -932,7 +932,7 @@ func TestUpgraderRunningReadsTheRefFileSystemdWouldRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Running: %v", err)
 	}
-	if want := "ghcr.io/bwsalmon/grain/grain:grain-task-39"; running.Ref != want {
+	if want := "docker.io/grainai/grain:grain-task-39"; running.Ref != want {
 		t.Errorf("Running().Ref = %q, want %q", running.Ref, want)
 	}
 }
@@ -944,7 +944,7 @@ func TestUpgraderRunningReadsTheRefFileSystemdWouldRead(t *testing.T) {
 func TestUpgraderRunningReportsARefFileItCannotRead(t *testing.T) {
 	dir := t.TempDir()
 	missing := New(Config{
-		Image:      &ImageConfig{Repository: "ghcr.io/bwsalmon/grain/grain", RefFile: filepath.Join(dir, "image.env")},
+		Image:      &ImageConfig{Repository: "docker.io/grainai/grain", RefFile: filepath.Join(dir, "image.env")},
 		StatusFile: filepath.Join(dir, "upgrade-status.json"),
 	})
 	if running, err := missing.Running(); err == nil {
@@ -954,7 +954,7 @@ func TestUpgraderRunningReportsARefFileItCannotRead(t *testing.T) {
 	empty := filepath.Join(dir, "empty.env")
 	writeTestFile(t, empty, "# nothing but a comment\n")
 	quiet := New(Config{
-		Image:      &ImageConfig{Repository: "ghcr.io/bwsalmon/grain/grain", RefFile: empty},
+		Image:      &ImageConfig{Repository: "docker.io/grainai/grain", RefFile: empty},
 		StatusFile: filepath.Join(dir, "upgrade-status.json"),
 	})
 	if running, err := quiet.Running(); err == nil {
@@ -1032,7 +1032,7 @@ func TestUpgraderImageReportsFlagsTheNewBuildWouldIgnore(t *testing.T) {
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			// The image, standing in for a build that has dropped
@@ -1081,7 +1081,7 @@ func TestUpgraderImageSaysNothingWhenTheNewBuildTakesEveryFlag(t *testing.T) {
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			RunCmd: []string{"sh", "-c",
@@ -1113,7 +1113,7 @@ func TestUpgraderImageCarriesOnWhenTheImageCannotListItsFlags(t *testing.T) {
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			RunCmd: []string{"sh", "-c",
@@ -1154,7 +1154,7 @@ func TestUpgraderImageSaysSoWhenTheFlagQuestionWasNeverAsked(t *testing.T) {
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			RunCmd: []string{"sh", "-c",
@@ -1188,7 +1188,7 @@ func TestUpgraderImageSkipsTheFlagCheckWithNoUnitToCheck(t *testing.T) {
 	dir := t.TempDir()
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    filepath.Join(dir, "image.env"),
 			PullCmd:    []string{"true"},
 			RunCmd:     []string{"sh", "-c", "echo 7", "sh"},
@@ -1214,20 +1214,20 @@ func TestUpgraderImageCleansUpOlderImagesKeepingPreviousVersion(t *testing.T) {
 	dir := t.TempDir()
 	refFile := filepath.Join(dir, "image.env")
 	removed := filepath.Join(dir, "removed")
-	const prevRef = "ghcr.io/bwsalmon/grain/grain:v2"
+	const prevRef = "docker.io/grainai/grain:v2"
 	writeTestFile(t, refFile, "GRAIN_IMAGE="+prevRef+"\n")
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			RunCmd:     []string{"sh", "-c", "echo 7"},
 			ListCmd: []string{"sh", "-c",
-				`echo ghcr.io/bwsalmon/grain/grain:v3
-				 echo ghcr.io/bwsalmon/grain/grain:v2
-				 echo ghcr.io/bwsalmon/grain/grain:v1
-				 echo ghcr.io/bwsalmon/grain/grain:v0`,
+				`echo docker.io/grainai/grain:v3
+				 echo docker.io/grainai/grain:v2
+				 echo docker.io/grainai/grain:v1
+				 echo docker.io/grainai/grain:v0`,
 				"sh"},
 			RemoveCmd: []string{"sh", "-c", `printf '%s\n' "$*" >> ` + removed + `; exit 0`, "sh"},
 		},
@@ -1240,11 +1240,11 @@ func TestUpgraderImageCleansUpOlderImagesKeepingPreviousVersion(t *testing.T) {
 	}
 	waitForPhase(t, u, PhaseOK)
 
-	wantRemoved := "ghcr.io/bwsalmon/grain/grain:v1\nghcr.io/bwsalmon/grain/grain:v0\n"
+	wantRemoved := "docker.io/grainai/grain:v1\ndocker.io/grainai/grain:v0\n"
 	if got := readFile(t, removed); got != wantRemoved {
 		t.Errorf("removed images = %q, want %q", got, wantRemoved)
 	}
-	if got, want := readFile(t, refFile), "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:v3@"+testDigest+"\n"; got != want {
+	if got, want := readFile(t, refFile), "GRAIN_IMAGE=docker.io/grainai/grain:v3@"+testDigest+"\n"; got != want {
 		t.Errorf("ref file = %q, want %q", got, want)
 	}
 }
@@ -1255,34 +1255,34 @@ func TestUpgraderImageCleansUpOlderSandboxImagesKeepingPreviousVersion(t *testin
 	dir := t.TempDir()
 	refFile := filepath.Join(dir, "image.env")
 	removed := filepath.Join(dir, "removed")
-	const prevRef = "ghcr.io/bwsalmon/grain/grain:v2"
+	const prevRef = "docker.io/grainai/grain:v2"
 	writeTestFile(t, refFile, "GRAIN_IMAGE="+prevRef+"\n")
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			RunCmd: []string{"sh", "-c",
 				`case "$1" in
-					*v3*) echo ghcr.io/bwsalmon/grain/granule-sandbox:sha-v3;;
-					*v2*) echo ghcr.io/bwsalmon/grain/granule-sandbox:sha-v2;;
+					*v3*) echo docker.io/grainai/sandbox:sha-v3;;
+					*v2*) echo docker.io/grainai/sandbox:sha-v2;;
 					*) echo 7;;
 				esac`,
 				"sh"},
 			SandboxImageArgs: []string{"sandbox-image"},
 			ListCmd: []string{"sh", "-c",
 				`case "$1" in
-					*granule-sandbox*)
-						echo ghcr.io/bwsalmon/grain/granule-sandbox:sha-v3
-						echo ghcr.io/bwsalmon/grain/granule-sandbox:sha-v2
-						echo ghcr.io/bwsalmon/grain/granule-sandbox:sha-v1
-						echo ghcr.io/bwsalmon/grain/granule-sandbox:sha-v0
+					*grainai/sandbox*)
+						echo docker.io/grainai/sandbox:sha-v3
+						echo docker.io/grainai/sandbox:sha-v2
+						echo docker.io/grainai/sandbox:sha-v1
+						echo docker.io/grainai/sandbox:sha-v0
 						;;
-					*grain*)
-						echo ghcr.io/bwsalmon/grain/grain:v3
-						echo ghcr.io/bwsalmon/grain/grain:v2
-						echo ghcr.io/bwsalmon/grain/grain:v1
+					*grainai/grain*)
+						echo docker.io/grainai/grain:v3
+						echo docker.io/grainai/grain:v2
+						echo docker.io/grainai/grain:v1
 						;;
 				esac`,
 				"sh"},
@@ -1298,12 +1298,12 @@ func TestUpgraderImageCleansUpOlderSandboxImagesKeepingPreviousVersion(t *testin
 	waitForPhase(t, u, PhaseOK)
 
 	got := readFile(t, removed)
-	for _, want := range []string{"ghcr.io/bwsalmon/grain/grain:v1", "ghcr.io/bwsalmon/grain/granule-sandbox:sha-v1", "ghcr.io/bwsalmon/grain/granule-sandbox:sha-v0"} {
+	for _, want := range []string{"docker.io/grainai/grain:v1", "docker.io/grainai/sandbox:sha-v1", "docker.io/grainai/sandbox:sha-v0"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("removed images %q does not contain expected %q", got, want)
 		}
 	}
-	for _, unwan := range []string{"ghcr.io/bwsalmon/grain/grain:v3", "ghcr.io/bwsalmon/grain/grain:v2", "ghcr.io/bwsalmon/grain/granule-sandbox:sha-v3", "ghcr.io/bwsalmon/grain/granule-sandbox:sha-v2"} {
+	for _, unwan := range []string{"docker.io/grainai/grain:v3", "docker.io/grainai/grain:v2", "docker.io/grainai/sandbox:sha-v3", "docker.io/grainai/sandbox:sha-v2"} {
 		if strings.Contains(got, unwan) {
 			t.Errorf("removed images %q unexpectedly contains kept image %q", got, unwan)
 		}
@@ -1316,20 +1316,20 @@ func TestUpgraderImageKeepsPinnedSandboxImage(t *testing.T) {
 	dir := t.TempDir()
 	refFile := filepath.Join(dir, "image.env")
 	removed := filepath.Join(dir, "removed")
-	const prevRef = "ghcr.io/bwsalmon/grain/grain:v2"
+	const prevRef = "docker.io/grainai/grain:v2"
 	writeTestFile(t, refFile, "GRAIN_IMAGE="+prevRef+"\n")
 
-	const pinned = "ghcr.io/bwsalmon/grain/granule-sandbox:sha-pinned"
+	const pinned = "docker.io/grainai/sandbox:sha-pinned"
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			RunCmd: []string{"sh", "-c",
 				`case "$1" in
-					*v3*) echo ghcr.io/bwsalmon/grain/granule-sandbox:sha-v3;;
-					*v2*) echo ghcr.io/bwsalmon/grain/granule-sandbox:sha-v2;;
+					*v3*) echo docker.io/grainai/sandbox:sha-v3;;
+					*v2*) echo docker.io/grainai/sandbox:sha-v2;;
 					*) echo 7;;
 				esac`,
 				"sh"},
@@ -1337,11 +1337,11 @@ func TestUpgraderImageKeepsPinnedSandboxImage(t *testing.T) {
 			SandboxImagePin:  pinned,
 			ListCmd: []string{"sh", "-c",
 				`case "$1" in
-					*granule-sandbox*)
-						echo ghcr.io/bwsalmon/grain/granule-sandbox:sha-v3
-						echo ghcr.io/bwsalmon/grain/granule-sandbox:sha-v2
+					*grainai/sandbox*)
+						echo docker.io/grainai/sandbox:sha-v3
+						echo docker.io/grainai/sandbox:sha-v2
 						echo ` + pinned + `
-						echo ghcr.io/bwsalmon/grain/granule-sandbox:sha-old
+						echo docker.io/grainai/sandbox:sha-old
 						;;
 				esac`,
 				"sh"},
@@ -1357,7 +1357,7 @@ func TestUpgraderImageKeepsPinnedSandboxImage(t *testing.T) {
 	waitForPhase(t, u, PhaseOK)
 
 	got := readFile(t, removed)
-	if !strings.Contains(got, "ghcr.io/bwsalmon/grain/granule-sandbox:sha-old") {
+	if !strings.Contains(got, "docker.io/grainai/sandbox:sha-old") {
 		t.Errorf("removed images %q does not contain sha-old", got)
 	}
 	if strings.Contains(got, pinned) {
@@ -1370,15 +1370,15 @@ func TestUpgraderImageKeepsPinnedSandboxImage(t *testing.T) {
 func TestUpgraderImageToleratesCleanupFailures(t *testing.T) {
 	dir := t.TempDir()
 	refFile := filepath.Join(dir, "image.env")
-	writeTestFile(t, refFile, "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:v2\n")
+	writeTestFile(t, refFile, "GRAIN_IMAGE=docker.io/grainai/grain:v2\n")
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			RunCmd:     []string{"sh", "-c", "echo 7"},
-			ListCmd:    []string{"sh", "-c", "echo ghcr.io/bwsalmon/grain/grain:v1"},
+			ListCmd:    []string{"sh", "-c", "echo docker.io/grainai/grain:v1"},
 			RemoveCmd:  []string{"sh", "-c", "echo 'image is in use' >&2; exit 1", "sh"},
 		},
 		HealthCheckArgs: []string{"schema-version"},
@@ -1390,7 +1390,7 @@ func TestUpgraderImageToleratesCleanupFailures(t *testing.T) {
 	}
 	waitForPhase(t, u, PhaseOK)
 
-	if got, want := readFile(t, refFile), "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:v3@"+testDigest+"\n"; got != want {
+	if got, want := readFile(t, refFile), "GRAIN_IMAGE=docker.io/grainai/grain:v3@"+testDigest+"\n"; got != want {
 		t.Errorf("ref file = %q, want %q", got, want)
 	}
 }
@@ -1444,12 +1444,12 @@ func TestUpgraderImageRefusesAnImageItCannotPin(t *testing.T) {
 	dir := t.TempDir()
 	ran := filepath.Join(dir, "ran")
 	refFile := filepath.Join(dir, "image.env")
-	const before = "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:main@" + testDigest + "\n"
+	const before = "GRAIN_IMAGE=docker.io/grainai/grain:main@" + testDigest + "\n"
 	writeTestFile(t, refFile, before)
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			// A locally built image tagged to look like the registry's:
@@ -1484,7 +1484,7 @@ func TestUpgraderImageCleanupKeepsThePinnedPreviousImageByDigest(t *testing.T) {
 	dir := t.TempDir()
 	refFile := filepath.Join(dir, "image.env")
 	removed := filepath.Join(dir, "removed")
-	const repo = "ghcr.io/bwsalmon/grain/grain"
+	const repo = "docker.io/grainai/grain"
 	const old = "sha256:" + "0000000000000000000000000000000000000000000000000000000000000000"
 	writeTestFile(t, refFile, "GRAIN_IMAGE="+repo+":v2@"+old+"\n")
 
@@ -1522,8 +1522,8 @@ func TestUpgraderImageCleanupRemovesUntaggedDigestsAndPreservesPreviousTag(t *te
 	refFile := filepath.Join(dir, "image.env")
 	removed := filepath.Join(dir, "removed")
 	const (
-		grainRepo = "ghcr.io/bwsalmon/grain/grain"
-		guestRepo = "ghcr.io/bwsalmon/grain/guest"
+		grainRepo = "docker.io/grainai/grain"
+		guestRepo = "docker.io/grainai/sandbox"
 		prevGrain = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 		pinnedRef = guestRepo + ":sha-pinned"
 	)
@@ -1604,12 +1604,12 @@ func TestUpgraderImageCleanupRemovesUntaggedDigestsAndPreservesPreviousTag(t *te
 
 func TestRepositoryOf(t *testing.T) {
 	for ref, want := range map[string]string{
-		"ghcr.io/bwsalmon/grain/grain":                  "ghcr.io/bwsalmon/grain/grain",
-		"ghcr.io/bwsalmon/grain/grain:main":             "ghcr.io/bwsalmon/grain/grain",
-		"ghcr.io/bwsalmon/grain/grain@sha256:abcd":      "ghcr.io/bwsalmon/grain/grain",
-		"ghcr.io/bwsalmon/grain/grain:main@sha256:abcd": "ghcr.io/bwsalmon/grain/grain",
-		"localhost:5000/grain":                          "localhost:5000/grain",
-		"localhost:5000/grain:main@sha256:abcd":         "localhost:5000/grain",
+		"docker.io/grainai/grain":                  "docker.io/grainai/grain",
+		"docker.io/grainai/grain:main":             "docker.io/grainai/grain",
+		"docker.io/grainai/grain@sha256:abcd":      "docker.io/grainai/grain",
+		"docker.io/grainai/grain:main@sha256:abcd": "docker.io/grainai/grain",
+		"localhost:5000/grain":                     "localhost:5000/grain",
+		"localhost:5000/grain:main@sha256:abcd":    "localhost:5000/grain",
 	} {
 		if got := repositoryOf(ref); got != want {
 			t.Errorf("repositoryOf(%q) = %q, want %q", ref, got, want)
@@ -1719,7 +1719,7 @@ func TestUpgraderImageMovesARegisteredTrackLegacyDeploymentOntoItsRepository(t *
 	}{
 		{"track-from-legacy", legacyRepo, installtracktest.Track, trackRepo},
 		{"track-from-moved", movedRepo, installtracktest.Track, trackRepo},
-		{"oss-from-legacy", legacyRepo, installtrack.TrackOSS, legacyRepo},
+		{"oss-from-legacy", legacyRepo, installtrack.TrackOSS, installtrack.DefaultOSSGrainRepository},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -1762,7 +1762,7 @@ func TestUpgraderImageMovesARegisteredTrackLegacyDeploymentOntoItsRepository(t *
 func TestUpgraderImageDoesNotUpgradeWhenVersionHasNotChanged(t *testing.T) {
 	dir := t.TempDir()
 	refFile := filepath.Join(dir, "image.env")
-	alreadyRunning := "ghcr.io/bwsalmon/grain/grain:main@" + testDigest
+	alreadyRunning := "docker.io/grainai/grain:main@" + testDigest
 	writeTestFile(t, refFile, "GRAIN_IMAGE="+alreadyRunning+"\n")
 
 	pulled := filepath.Join(dir, "pulled")
@@ -1772,7 +1772,7 @@ func TestUpgraderImageDoesNotUpgradeWhenVersionHasNotChanged(t *testing.T) {
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"sh", "-c", `printf '%s\n' "$1" >> ` + pulled, "sh"},
 			RunCmd:     []string{"sh", "-c", `printf '%s\n' "$1" >> ` + checked, "sh"},
@@ -1826,7 +1826,7 @@ func TestUpgraderImageDoesNotUpgradeWhenVersionHasNotChanged(t *testing.T) {
 }
 
 func TestRemovableImage(t *testing.T) {
-	const repo = "ghcr.io/bwsalmon/grain/grain"
+	const repo = "docker.io/grainai/grain"
 	for _, c := range []struct {
 		names []string
 		want  string
@@ -1872,7 +1872,7 @@ func TestUpgraderImageCleanupRemovesEmptyDigestImagesByIDButNeverKeptOnes(t *tes
 	refFile := filepath.Join(dir, "image.env")
 	removed := filepath.Join(dir, "removed")
 	const (
-		repo        = "ghcr.io/bwsalmon/grain/grain"
+		repo        = "docker.io/grainai/grain"
 		prevID      = "aaaaaaaaaaaa" // the rollback image, kept by its tag
 		staleID     = "bbbbbbbbbbbb"
 		runningID   = "cccccccccccc"
@@ -1923,7 +1923,7 @@ func TestMirrorSandboxRef(t *testing.T) {
 			want:       "us-docker.pkg.dev/cluster-project/grain/guest:sha-31d0973",
 		},
 		{
-			sandboxRef: "ghcr.io/bwsalmon/grain/guest:sha-abc1234",
+			sandboxRef: "docker.io/grainai/sandbox:sha-abc1234",
 			mirrorRepo: "us-docker.pkg.dev/cluster-project/grain/guest:oldtag@sha256:deadbeef",
 			want:       "us-docker.pkg.dev/cluster-project/grain/guest:sha-abc1234",
 		},
@@ -2010,5 +2010,55 @@ func TestUpgraderImageMirrorsSandboxImageAndCleansOldMirroredTags(t *testing.T) 
 	}
 	if gotRemoved := readFile(t, removed); gotRemoved != mirrorRepo+":sha-v1\n" {
 		t.Errorf("removed images = %q, want only %q", gotRemoved, mirrorRepo+":sha-v1\n")
+	}
+}
+
+func TestDockerHubStrippedRepoDigestsAndCleanup(t *testing.T) {
+	dir := t.TempDir()
+	refFile := filepath.Join(dir, "image.env")
+	removed := filepath.Join(dir, "removed")
+	const prevDigest = "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	writeTestFile(t, refFile, "GRAIN_IMAGE=docker.io/grainai/grain:v2@"+prevDigest+"\n")
+
+	u := newUpgrader(t, Config{
+		Image: &ImageConfig{
+			Repository: "docker.io/grainai/grain",
+			RefFile:    refFile,
+			PullCmd:    []string{"true"},
+			RunCmd:     []string{"sh", "-c", "echo 7"},
+			// Real Docker Engine strips docker.io/ from RepoDigests and `docker image ls`.
+			DigestCmd: []string{"sh", "-c", `echo "grainai/grain@` + testDigest + `"`, "sh"},
+			ListCmd: []string{"sh", "-c", `
+echo "grainai/grain:v3 grainai/grain@` + testDigest + ` aaaaaaaaaaaa"
+echo "grainai/grain:v2 grainai/grain@` + prevDigest + ` bbbbbbbbbbbb"
+echo "grainai/grain:previous grainai/grain@sha256:prevtag cccccccccccc"
+echo "grainai/grain:v1 grainai/grain@sha256:olddigest dddddddddddd"
+echo "grainai/grain:<none> grainai/grain@<none> eeeeeeeeeeee"
+`, "sh"},
+			ContainerImagesCmd: []string{"true"},
+			RemoveCmd:          []string{"sh", "-c", `printf '%s\n' "$*" >> ` + removed, "sh"},
+		},
+		HealthCheckArgs: []string{"schema-version"},
+		StatusFile:      filepath.Join(dir, "upgrade-status.json"),
+	})
+
+	if err := u.Start("v3"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForPhase(t, u, PhaseOK)
+
+	if got, want := readFile(t, refFile), "GRAIN_IMAGE=docker.io/grainai/grain:v3@"+testDigest+"\n"; got != want {
+		t.Errorf("refFile = %q, want %q", got, want)
+	}
+	gotRemoved := readFile(t, removed)
+	for _, want := range []string{"grainai/grain:v1", "eeeeeeeeeeee"} {
+		if !strings.Contains(gotRemoved, want) {
+			t.Errorf("removed = %q, want %q", gotRemoved, want)
+		}
+	}
+	for _, kept := range []string{"grainai/grain:v3", "grainai/grain:v2", "grainai/grain:previous", "aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc"} {
+		if strings.Contains(gotRemoved, kept) {
+			t.Errorf("removed = %q, unexpectedly removed kept %q", gotRemoved, kept)
+		}
 	}
 }

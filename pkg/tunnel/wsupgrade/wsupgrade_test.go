@@ -15,7 +15,14 @@
 package wsupgrade
 
 import (
+	"bufio"
+	"bytes"
+	"crypto/rand"
+	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -42,4 +49,125 @@ func TestSetRequestHeaders(t *testing.T) {
 	if AcceptHeader(&http.Request{Header: http.Header{}}) != "" {
 		t.Fatal("AcceptHeader without a key should be empty")
 	}
+}
+
+func TestBinaryFramingRoundTripAndMasking(t *testing.T) {
+	c1, c2 := net.Pipe()
+	client := NewClientConn(c1)
+	server := NewServerConn(c2)
+	defer client.Close()
+	defer server.Close()
+
+	payload := make([]byte, 100<<10) // 100 KiB -> spans multiple 32 KiB frames
+	if _, err := rand.Read(payload); err != nil {
+		t.Fatalf("rand.Read: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := client.Write(payload)
+		errCh <- err
+	}()
+
+	got := make([]byte, len(payload))
+	if _, err := io.ReadFull(server, got); err != nil {
+		t.Fatalf("server ReadFull: %v", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("client Write: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatal("server received payload mismatch")
+	}
+
+	// Server -> Client unmasked response.
+	reply := []byte("pong-from-server-payload")
+	go func() {
+		_, err := server.Write(reply)
+		errCh <- err
+	}()
+	gotReply := make([]byte, len(reply))
+	if _, err := io.ReadFull(client, gotReply); err != nil {
+		t.Fatalf("client ReadFull: %v", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("server Write: %v", err)
+	}
+	if !bytes.Equal(gotReply, reply) {
+		t.Fatalf("gotReply = %q, want %q", gotReply, reply)
+	}
+}
+
+func TestServerRejectsUnmaskedClientFrame(t *testing.T) {
+	rawClient, rawServer := net.Pipe()
+	defer rawClient.Close()
+	server := NewServerConn(rawServer)
+	defer server.Close()
+
+	go func() {
+		// Unmasked binary frame: FIN|0x2, len=3, "abc"
+		_, _ = rawClient.Write([]byte{0x82, 0x03, 'a', 'b', 'c'})
+	}()
+
+	buf := make([]byte, 8)
+	if _, err := server.Read(buf); err == nil || !strings.Contains(err.Error(), "unmasked") {
+		t.Fatalf("server.Read err = %v, want unmasked error", err)
+	}
+}
+
+func TestUpgradeHTTPAndPingClose(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := Upgrade(w, r, http.Header{"X-Test-Session": []string{"sess-1"}})
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.Copy(conn, conn)
+	}))
+	defer srv.Close()
+
+	raw, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer raw.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/connect", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	SetRequestHeaders(req.Header)
+	secKey := req.Header.Get("Sec-WebSocket-Key")
+	if err := req.Write(raw); err != nil {
+		t.Fatalf("req.Write: %v", err)
+	}
+
+	br := bufio.NewReader(raw)
+	resp, err := http.ReadResponse(br, req)
+	if err != nil {
+		t.Fatalf("ReadResponse: %v", err)
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("StatusCode = %d, want 101", resp.StatusCode)
+	}
+	if resp.Header.Get("Sec-WebSocket-Accept") != Accept(secKey) {
+		t.Fatalf("Sec-WebSocket-Accept = %q, want %q", resp.Header.Get("Sec-WebSocket-Accept"), Accept(secKey))
+	}
+	if resp.Header.Get("X-Test-Session") != "sess-1" {
+		t.Fatalf("X-Test-Session = %q, want sess-1", resp.Header.Get("X-Test-Session"))
+	}
+
+	ws := NewClientConn(BufferedConn(raw, br))
+	msg := []byte("hello-over-upgraded-websocket")
+	if _, err := ws.Write(msg); err != nil {
+		t.Fatalf("ws.Write: %v", err)
+	}
+	echo := make([]byte, len(msg))
+	if _, err := io.ReadFull(ws, echo); err != nil {
+		t.Fatalf("ws.ReadFull: %v", err)
+	}
+	if !bytes.Equal(echo, msg) {
+		t.Fatalf("echo = %q, want %q", echo, msg)
+	}
+	_ = ws.Close()
 }

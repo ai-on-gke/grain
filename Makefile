@@ -141,8 +141,8 @@ CONTAINER_USER ?= $(shell id -u):$(shell id -g)
 # `make image` builds Dockerfile (not Dockerfile.build: that one is the
 # toolchain `container-build` above runs in) -- the runtime image a
 # deployment actually runs, carrying bin/grain and every binary it shells
-# out to. .github/workflows/build-artifacts.yml builds the same image
-# the same way on every commit and pushes it to GHCR, so this target is
+# out to. .github/workflows/release.yml builds the same image
+# the same way on every commit and pushes it to Docker Hub, so this target is
 # for a local build against a change to the Dockerfile itself, not
 # something a deployment ever needs to run.
 #

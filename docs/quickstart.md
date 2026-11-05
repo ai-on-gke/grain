@@ -24,19 +24,19 @@ sandboxes.
 ## 1. Install the binary
 
 Releases are published as the signed container image
-`ghcr.io/bwsalmon/grain/grain:<version>`, the core build (`./cmd/grain`). The
-wrapper distribution build (a wrapper distribution's `cmd/grain`) is `ghcr.io/bwsalmon/grain/google-grain`,
-with the same tags. Its `/usr/local/bin/grain` is a static Linux binary
+`docker.io/grainai/grain:<version>`, the core build (`./cmd/grain`). A
+wrapper distribution's build (`pkg/installtrack`) is published under its own
+image repository with the same tags. Its `/usr/local/bin/grain` is a static Linux binary
 (`CGO_ENABLED=0`). Use a release tag (`vX.Y.Z`, listed
 in [docs/releases](releases)) rather than `latest`, and pin the digest you
 verified:
 
 ```sh
 VERSION=v1.9.0                       # the release you want
-IMAGE=ghcr.io/bwsalmon/grain/grain:$VERSION
+IMAGE=docker.io/grainai/grain:$VERSION
 docker pull "$IMAGE"
 PINNED=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE")
-echo "$PINNED"                       # ghcr.io/bwsalmon/grain/grain@sha256:...
+echo "$PINNED"                       # docker.io/grainai/grain@sha256:...
 
 # Verify the release signature (docs/image-signing.md). cosign.pub is the
 # release public key your Grain operator publishes.

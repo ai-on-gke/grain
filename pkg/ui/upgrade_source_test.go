@@ -28,7 +28,7 @@ import (
 func TestUpgradeStatusReportsAndUpdatesImageSourceUnlessLocked(t *testing.T) {
 	dir := t.TempDir()
 	refFile := filepath.Join(dir, "image-ref")
-	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:main\n"), 0o644); err != nil {
+	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE=docker.io/grainai/grain:main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	statusFile := filepath.Join(dir, "upgrade-status.json")
@@ -36,8 +36,8 @@ func TestUpgradeStatusReportsAndUpdatesImageSourceUnlessLocked(t *testing.T) {
 		"branch": "main",
 		"phase": "done",
 		"source": "registry",
-		"fallbackNote": "release has no image assets; pulled from ghcr.io/bwsalmon/grain/grain",
-		"detail": "release has no image assets; pulled from ghcr.io/bwsalmon/grain/grain"
+		"fallbackNote": "release has no image assets; pulled from docker.io/grainai/grain",
+		"detail": "release has no image assets; pulled from docker.io/grainai/grain"
 	}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestUpgradeStatusReportsAndUpdatesImageSourceUnlessLocked(t *testing.T) {
 	up := upgrade.New(upgrade.Config{
 		StatusFile: statusFile,
 		Image: &upgrade.ImageConfig{
-			Repository:         "ghcr.io/bwsalmon/grain/grain",
+			Repository:         "docker.io/grainai/grain",
 			RefFile:            refFile,
 			SourceOverrideFile: overrideFile,
 		},
@@ -96,7 +96,7 @@ func TestUpgradeStatusReportsAndUpdatesImageSourceUnlessLocked(t *testing.T) {
 	lockedUp := upgrade.New(upgrade.Config{
 		StatusFile: statusFile,
 		Image: &upgrade.ImageConfig{
-			Repository:   "ghcr.io/bwsalmon/grain/grain",
+			Repository:   "docker.io/grainai/grain",
 			RefFile:      refFile,
 			Source:       upgrade.ImageSourceReleaseAssets,
 			SourceLocked: true,

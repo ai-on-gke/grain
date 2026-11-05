@@ -483,14 +483,14 @@ spliced its text into `guest-setup.sh` before handing that to granule's
 `GUEST_SETUP_SCRIPT` build arg, which is as awkward as it sounds.
 
 Customizing is now deriving from a published image. For a deployment's
-own sandboxes, build an image `FROM ghcr.io/bwsalmon/grain/guest-base`
+own sandboxes, build an image `FROM docker.io/grainai/sandbox-base`
 and name it in Settings → Sandboxes → Custom sandbox image
 (`model.Config.SandboxImage`, `docs/sandbox-image-contract.md`). By hand
 it is:
 
 ```sh
 granule guest build \
-  -from ghcr.io/bwsalmon/grain/guest:latest \
+  -from docker.io/grainai/sandbox:latest \
   -setup ./my-setup.sh \
   -t my-guest:dev
 ```

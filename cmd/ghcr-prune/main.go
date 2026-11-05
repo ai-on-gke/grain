@@ -145,10 +145,13 @@ func main() {
 
 func run(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("ghcr-prune", flag.ContinueOnError)
-	owner := fs.String("owner", "", "account the packages belong to (default: from RELEASE_IMAGE_REPO or bwsalmon/grain)")
-	repo := fs.String("repo", "", "repository the packages are scoped to, and the first segment of their names (default: from RELEASE_IMAGE_REPO or bwsalmon/grain)")
-	packages := fs.String("packages", "grain,guest,guest-base,k8s-sandbox,k8s-sandbox-base", "comma-separated package names, relative to the repository")
-	tokenFlag := fs.String("token", "", "GitHub token (default: GITHUB_TOKEN, PACKAGE_PUBLISH_TOKEN, GHCR_TOKEN, or placed CI capability tokens)")
+	registryFlag := fs.String("registry", "", "container registry to prune: docker.io or ghcr.io (default: from PACKAGE_PUBLISH_REGISTRY or docker.io)")
+	namespaceFlag := fs.String("namespace", "", "Docker Hub namespace when -registry=docker.io (default: from RELEASE_IMAGE_REPO or grainai)")
+	usernameFlag := fs.String("username", "", "Docker Hub login username when -registry=docker.io (default: DOCKERHUB_USERNAME, PACKAGE_PUBLISH_USERNAME, or grainai)")
+	owner := fs.String("owner", "", "GitHub owner of the source repository (and GHCR package owner when -registry=ghcr.io)")
+	repo := fs.String("repo", "", "GitHub repository name for live branch lookup (and GHCR package prefix when -registry=ghcr.io)")
+	packages := fs.String("packages", "grain,sandbox,sandbox-base,sandbox-k8s,sandbox-k8s-base", "comma-separated package names, relative to the repository")
+	tokenFlag := fs.String("token", "", "registry token (DOCKER_PAT/PACKAGE_PUBLISH_TOKEN on Docker Hub; GITHUB_TOKEN/GHCR_TOKEN on ghcr.io)")
 	// 48 hours -- and, on top of it, the most recent build of every
 	// branch that still exists, which is what a branch tag amounts to
 	// (BuildPlan's liveBranches rule) and which is the half of the
@@ -247,21 +250,7 @@ func run(args []string, out io.Writer) error {
 		return fmt.Errorf("-max-deletes must not be negative (got %d)", *maxDeletes)
 	}
 
-	resolvedOwner, resolvedRepo, err := resolveRepo(*owner, *repo)
-	if err != nil {
-		return err
-	}
-	token := resolveToken(*tokenFlag)
-	if token == "" {
-		return fmt.Errorf("GITHUB_TOKEN is empty: listing package versions needs read:packages and deleting them needs packages: write")
-	}
-
-	api := &API{
-		Transport: github.NewRealTransport("github.com"),
-		Token:     token,
-		Owner:     resolvedOwner,
-		Repo:      resolvedRepo,
-	}
+	registry := resolveRegistry(*registryFlag)
 	policy := Policy{
 		KeepFor:     *keepFor,
 		KeepCommits: *keepCommits,
@@ -270,7 +259,163 @@ func run(args []string, out io.Writer) error {
 		MaxDeletes:  *maxDeletes,
 		Deployed:    deployedTags(*keepImages),
 	}
-	return prune(api, strings.Split(*packages, ","), policy, *apply, time.Now().UTC(), out)
+
+	if registry == "ghcr.io" {
+		resolvedOwner, resolvedRepo, err := resolveRepo(*owner, *repo)
+		if err != nil {
+			return err
+		}
+		token := resolveToken(*tokenFlag)
+		if token == "" {
+			return fmt.Errorf("GITHUB_TOKEN is empty: listing package versions needs read:packages and deleting them needs packages: write")
+		}
+		api := &API{
+			Transport: github.NewRealTransport("github.com"),
+			Token:     token,
+			Owner:     resolvedOwner,
+			Repo:      resolvedRepo,
+		}
+		return prune(api, strings.Split(*packages, ","), policy, *apply, time.Now().UTC(), out)
+	}
+
+	gitOwner, gitRepo, err := resolveGitRepo(*owner, *repo)
+	if err != nil {
+		return err
+	}
+	ns := resolveDockerHubNamespace(*namespaceFlag)
+	hubUser := resolveDockerHubUsername(*usernameFlag, ns)
+	hubToken := resolveDockerHubToken(*tokenFlag)
+	if *apply && hubToken == "" {
+		return fmt.Errorf("DOCKER_PAT (or PACKAGE_PUBLISH_TOKEN) is empty: pruning %s/%s/* with -apply requires a Docker Hub access token", registry, ns)
+	}
+	ghAPI := &API{
+		Transport: github.NewRealTransport("github.com"),
+		Token:     resolveGitHubBranchToken(),
+		Owner:     gitOwner,
+		Repo:      gitRepo,
+	}
+	hubAPI := &DockerHubAPI{
+		Namespace:    ns,
+		Username:     hubUser,
+		Password:     hubToken,
+		BranchLister: ghAPI.ListBranchTags,
+	}
+	return prune(hubAPI, strings.Split(*packages, ","), policy, *apply, time.Now().UTC(), out)
+}
+
+func resolveRegistry(flagVal string) string {
+	for _, candidate := range []string{
+		flagVal,
+		os.Getenv("PACKAGE_PUBLISH_REGISTRY"),
+		readPlacedFile(packagepublish.RegistryPath),
+		os.Getenv("REGISTRY_PUSH_REGISTRY"),
+		readPlacedFile("/home/debian/.registry-push-registry"),
+	} {
+		if v := strings.ToLower(strings.TrimSpace(candidate)); v != "" {
+			if v == "index.docker.io" {
+				return "docker.io"
+			}
+			return v
+		}
+	}
+	return "docker.io"
+}
+
+func resolveDockerHubNamespace(flagVal string) string {
+	if v := strings.ToLower(strings.TrimSpace(flagVal)); v != "" {
+		return v
+	}
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("RELEASE_IMAGE_REPO"))); v != "" {
+		if !strings.Contains(v, "/") {
+			return v
+		}
+	}
+	return "grainai"
+}
+
+func resolveDockerHubUsername(flagVal, defaultNS string) string {
+	for _, candidate := range []string{
+		flagVal,
+		os.Getenv("DOCKERHUB_USERNAME"),
+		os.Getenv("PACKAGE_PUBLISH_USERNAME"),
+		readPlacedFile(packagepublish.UsernamePath),
+		os.Getenv("REGISTRY_PUSH_USERNAME"),
+		readPlacedFile("/home/debian/.registry-push-username"),
+	} {
+		if v := strings.TrimSpace(candidate); v != "" {
+			return v
+		}
+	}
+	if defaultNS != "" {
+		return defaultNS
+	}
+	return "grainai"
+}
+
+func resolveDockerHubToken(flagVal string) string {
+	if strings.TrimSpace(flagVal) != "" {
+		return strings.TrimSpace(flagVal)
+	}
+	for _, env := range []string{"DOCKER_PAT", "PACKAGE_PUBLISH_TOKEN", "REGISTRY_PUSH_TOKEN"} {
+		if val := strings.TrimSpace(os.Getenv(env)); val != "" {
+			return val
+		}
+	}
+	for _, path := range []string{publishTokenPath, packagepublish.TokenPath, "/home/debian/.registry-push-token"} {
+		if val := readPlacedFile(path); val != "" {
+			return val
+		}
+	}
+	return ""
+}
+
+func resolveGitHubBranchToken() string {
+	for _, env := range []string{"GITHUB_TOKEN", "GHCR_TOKEN"} {
+		if val := strings.TrimSpace(os.Getenv(env)); val != "" {
+			return val
+		}
+	}
+	return readPlacedFile(sandboxTokenPath)
+}
+
+func resolveGitRepo(ownerFlag, repoFlag string) (string, string, error) {
+	owner := strings.TrimSpace(ownerFlag)
+	repo := strings.TrimSpace(repoFlag)
+	if owner != "" && repo != "" {
+		return strings.ToLower(owner), strings.ToLower(repo), nil
+	}
+	for _, env := range []string{"GRAIN_CI_REPO", "GITHUB_REPOSITORY"} {
+		if v := strings.ToLower(strings.TrimSpace(os.Getenv(env))); strings.Contains(v, "/") {
+			o, r, _ := strings.Cut(v, "/")
+			if owner == "" {
+				owner = o
+			}
+			if repo == "" {
+				repo = r
+			}
+			if owner != "" && repo != "" {
+				return owner, repo, nil
+			}
+		}
+	}
+	if owner == "" {
+		owner = "ai-on-gke"
+	}
+	if repo == "" {
+		repo = "grain"
+	}
+	return strings.ToLower(owner), strings.ToLower(repo), nil
+}
+
+func readPlacedFile(path string) string {
+	if path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 func resolveRepo(ownerFlag, repoFlag string) (string, string, error) {

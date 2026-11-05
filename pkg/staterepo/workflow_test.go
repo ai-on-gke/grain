@@ -297,7 +297,7 @@ func TestSyncRepointsTheCheckAtTheImageThisDeploymentRuns(t *testing.T) {
 	store, db := openDB(t)
 	remote := bareRemote(t)
 	dir := filepath.Join(t.TempDir(), "state")
-	const was = "ghcr.io/bwsalmon/grain/grain:sha-0000000"
+	const was = "docker.io/grainai/grain:sha-0000000"
 	repo, err := staterepo.Open(ctx, staterepo.Config{Dir: dir, Remote: remote, CheckImage: was})
 	if err != nil {
 		t.Fatalf("opening: %v", err)
@@ -311,7 +311,7 @@ func TestSyncRepointsTheCheckAtTheImageThisDeploymentRuns(t *testing.T) {
 
 	// The deployment is upgraded: the same repository, the same working
 	// tree, a grain that says it is a different image.
-	const now = "ghcr.io/bwsalmon/grain/grain:sha-abc1234"
+	const now = "docker.io/grainai/grain:sha-abc1234"
 	upgraded, err := staterepo.Open(ctx, staterepo.Config{Dir: dir, Remote: remote, CheckImage: now})
 	if err != nil {
 		t.Fatalf("reopening: %v", err)
@@ -368,7 +368,7 @@ func TestSyncAdoptsAWorkflowAnEarlierGrainWrote(t *testing.T) {
 	store, db := openDB(t)
 	remote := bareRemote(t)
 	dir := filepath.Join(t.TempDir(), "state")
-	const now = "ghcr.io/bwsalmon/grain/grain:sha-abc1234"
+	const now = "docker.io/grainai/grain:sha-abc1234"
 	repo, err := staterepo.Open(ctx, staterepo.Config{Dir: dir, Remote: remote, CheckImage: now})
 	if err != nil {
 		t.Fatalf("opening: %v", err)
@@ -446,7 +446,7 @@ func TestARefusedRepointingLeavesTheCheckThatWasAlreadyThere(t *testing.T) {
 	store, db := openDB(t)
 	remote := bareRemote(t)
 	dir := filepath.Join(t.TempDir(), "state")
-	const was = "ghcr.io/bwsalmon/grain/grain:sha-0000000"
+	const was = "docker.io/grainai/grain:sha-0000000"
 	repo, err := staterepo.Open(ctx, staterepo.Config{Dir: dir, Remote: remote, CheckImage: was})
 	if err != nil {
 		t.Fatalf("opening: %v", err)
@@ -463,7 +463,7 @@ func TestARefusedRepointingLeavesTheCheckThatWasAlreadyThere(t *testing.T) {
 	// deployment, was never there and the file was committed by hand.
 	refuseWorkflows(t, remote)
 	upgraded, err := staterepo.Open(ctx, staterepo.Config{Dir: dir, Remote: remote,
-		CheckImage: "ghcr.io/bwsalmon/grain/grain:sha-abc1234"})
+		CheckImage: "docker.io/grainai/grain:sha-abc1234"})
 	if err != nil {
 		t.Fatalf("reopening: %v", err)
 	}

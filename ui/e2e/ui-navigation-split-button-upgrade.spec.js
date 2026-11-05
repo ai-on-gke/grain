@@ -18,7 +18,7 @@ import { test } from "./fixtures.js";
 test.setTimeout(120_000);
 
 const DESKTOP = { width: 1440, height: 900 };
-const RUNNING_IMAGE = "ghcr.io/bwsalmon/grain/grain:main";
+const RUNNING_IMAGE = "docker.io/grainai/grain:main";
 
 test.describe("UI Navigation, Sidebar Split-Button Intake & In-App Upgrade Dialog (§4)", () => {
   test("1. Sidebar Split-Button renders and triggers creation dropdown actions", async ({
