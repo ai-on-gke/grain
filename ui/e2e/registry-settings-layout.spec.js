@@ -77,7 +77,9 @@ for (const [name, viewport] of [
       // Status badge centred on the endpoint label, and Heartbeat now in the right-hand slot.
       expect(
         Math.abs(
-          chipBox.y + chipBox.height / 2 - (endpointBox.y + endpointBox.height / 2),
+          chipBox.y +
+            chipBox.height / 2 -
+            (endpointBox.y + endpointBox.height / 2),
         ),
       ).toBeLessThan(4);
       expect(

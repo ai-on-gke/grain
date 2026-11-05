@@ -100,7 +100,13 @@ export default function RegistrySection({ s }) {
 
   useEffect(() => {
     loadSnapshot();
-  }, [loadSnapshot, reg.url, reg.entry, reg.authMode, settings.registryTokenSet]);
+  }, [
+    loadSnapshot,
+    reg.url,
+    reg.entry,
+    reg.authMode,
+    settings.registryTokenSet,
+  ]);
 
   const updateRegistry = (patch) => {
     const next = {
@@ -222,13 +228,21 @@ export default function RegistrySection({ s }) {
         </Typography>
 
         {snapshot?.lastError && (
-          <Alert severity="error" sx={{ mt: 1.5 }} data-testid="registry-last-error">
+          <Alert
+            severity="error"
+            sx={{ mt: 1.5 }}
+            data-testid="registry-last-error"
+          >
             {snapshot.lastError}
           </Alert>
         )}
 
         {conflicts.length > 0 && (
-          <Alert severity="warning" sx={{ mt: 1.5 }} data-testid="registry-scope-conflicts">
+          <Alert
+            severity="warning"
+            sx={{ mt: 1.5 }}
+            data-testid="registry-scope-conflicts"
+          >
             Scope conflict reported by registry:{" "}
             {conflicts
               .map(
@@ -244,7 +258,8 @@ export default function RegistrySection({ s }) {
         </Typography>
         {advertised.length === 0 ? (
           <Typography variant="body2" color="text.secondary">
-            No repositories advertised yet. Configured repositories are reported automatically from Settings → Repositories.
+            No repositories advertised yet. Configured repositories are reported
+            automatically from Settings → Repositories.
           </Typography>
         ) : (
           <Stack spacing={0.75} data-testid="registry-advertised-scopes">
@@ -264,14 +279,26 @@ export default function RegistrySection({ s }) {
                   borderRadius: 1,
                 }}
               >
-                <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
-                  <Typography variant="body2" sx={{ fontFamily: "monospace", fontWeight: 500 }}>
+                <Box
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 1,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <Typography
+                    variant="body2"
+                    sx={{ fontFamily: "monospace", fontWeight: 500 }}
+                  >
                     {sc.repo}
                   </Typography>
                   <Chip
                     size="small"
                     variant="outlined"
-                    label={sc.pathPrefix ? `${sc.pathPrefix}/` : "/ (whole repo)"}
+                    label={
+                      sc.pathPrefix ? `${sc.pathPrefix}/` : "/ (whole repo)"
+                    }
                     sx={{ fontFamily: "monospace" }}
                   />
                 </Box>
@@ -339,7 +366,11 @@ export default function RegistrySection({ s }) {
             margin="normal"
           />
 
-          <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ mt: 1 }}>
+          <Stack
+            direction={{ xs: "column", sm: "row" }}
+            spacing={2}
+            sx={{ mt: 1 }}
+          >
             <TextField
               select
               name="registryAuthMode"
@@ -350,7 +381,9 @@ export default function RegistrySection({ s }) {
               helperText="How heartbeats authenticate to the registry."
               fullWidth
             >
-              <MenuItem value="token">Registration credential (grc_… secret)</MenuItem>
+              <MenuItem value="token">
+                Registration credential (grc_… secret)
+              </MenuItem>
               <MenuItem value="oidc">OIDC ID token</MenuItem>
             </TextField>
 
@@ -364,7 +397,9 @@ export default function RegistrySection({ s }) {
               helperText="Defaults automatically from the active sandbox backend when unset."
               fullWidth
             >
-              <MenuItem value="">Auto-detect ({snapshot?.effectiveHostKind || "workstation"})</MenuItem>
+              <MenuItem value="">
+                Auto-detect ({snapshot?.effectiveHostKind || "workstation"})
+              </MenuItem>
               <MenuItem value="workstation">Workstation</MenuItem>
               <MenuItem value="kubernetes">Kubernetes</MenuItem>
               <MenuItem value="other">Other</MenuItem>
@@ -436,14 +471,18 @@ export default function RegistrySection({ s }) {
                 name="registryListed"
                 data-setting-id="registryListed"
                 checked={reg.listed !== false}
-                onChange={(evt) => updateRegistry({ listed: evt.target.checked })}
+                onChange={(evt) =>
+                  updateRegistry({ listed: evt.target.checked })
+                }
               />
             }
             label={
               <>
                 Listed in registry directory{" "}
                 <span className="hint">
-                  when off, this grain stays addressable by name and route queries for its owners but is omitted from default directory listings
+                  when off, this grain stays addressable by name and route
+                  queries for its owners but is omitted from default directory
+                  listings
                 </span>
               </>
             }
@@ -455,7 +494,9 @@ export default function RegistrySection({ s }) {
           Registration credential
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
-          Minted by <code>grain registry register</code> (or rotated in the registry) and stored encrypted in this daemon&apos;s secret store; never exported to <code>grain/config</code>.
+          Minted by <code>grain registry register</code> (or rotated in the
+          registry) and stored encrypted in this daemon&apos;s secret store;
+          never exported to <code>grain/config</code>.
         </Typography>
         <SecretField
           secret={{
@@ -480,11 +521,19 @@ export default function RegistrySection({ s }) {
           sx={{ border: 0, p: 0, m: 0, minInlineSize: 0 }}
         >
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            Scopes come automatically from Settings → Repositories and each repo&apos;s work ownership (<code>on</code> → <code>primary</code>, <code>off</code> → <code>secondary</code>). Add a rule here only to narrow a repo to a path prefix, exclude a repo from registry routing, or advertise an extra scope.
+            Scopes come automatically from Settings → Repositories and each
+            repo&apos;s work ownership (<code>on</code> → <code>primary</code>,{" "}
+            <code>off</code> → <code>secondary</code>). Add a rule here only to
+            narrow a repo to a path prefix, exclude a repo from registry
+            routing, or advertise an extra scope.
           </Typography>
 
           {rules.length > 0 && (
-            <Stack spacing={0.75} sx={{ mb: 2 }} data-testid="registry-scope-rules">
+            <Stack
+              spacing={0.75}
+              sx={{ mb: 2 }}
+              data-testid="registry-scope-rules"
+            >
               {rules.map((r, idx) => (
                 <Box
                   key={`${r.repo}:${r.pathPrefix || ""}:${idx}`}
@@ -500,8 +549,18 @@ export default function RegistrySection({ s }) {
                     borderRadius: 1,
                   }}
                 >
-                  <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
-                    <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                  <Box
+                    sx={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 1,
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <Typography
+                      variant="body2"
+                      sx={{ fontFamily: "monospace" }}
+                    >
                       {r.repo}
                     </Typography>
                     {r.pathPrefix && (
@@ -514,7 +573,13 @@ export default function RegistrySection({ s }) {
                     )}
                     <Chip
                       size="small"
-                      color={r.exclude ? "default" : r.role === "secondary" ? "default" : "primary"}
+                      color={
+                        r.exclude
+                          ? "default"
+                          : r.role === "secondary"
+                            ? "default"
+                            : "primary"
+                      }
                       variant={r.exclude ? "outlined" : "filled"}
                       label={r.exclude ? "excluded" : r.role || "primary"}
                     />

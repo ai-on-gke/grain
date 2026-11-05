@@ -400,8 +400,8 @@ type RouteCandidate struct {
 }
 
 var (
-	entryNameRe = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}[a-z0-9]$`)
-	tagRe       = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+	entryNameRe   = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}[a-z0-9]$`)
+	tagRe         = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 	reservedNames = []string{
 		"api", "admin", "www", "static", "status", "healthz",
 		"login", "logout", "auth", "mail", "well-known", "directory", "route",

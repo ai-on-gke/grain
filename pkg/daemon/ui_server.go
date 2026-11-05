@@ -445,7 +445,7 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		TriggerRegistryHeartbeat: triggerRegistryHeartbeat,
 		TriggerRegistrySync:      triggerRegistrySync,
 		SandboxBackends:          cfg.availableSandboxBackends(),
-		SandboxBackendOptions: cfg.sandboxBackendOptions(),
+		SandboxBackendOptions:    cfg.sandboxBackendOptions(),
 		// And whether a merged settings change reset something on this
 		// deployment that grain had nowhere to say out loud -- the same
 		// marker, for a fact that reaches nobody without one
