@@ -34,11 +34,11 @@ import (
 // on a laptop, or a `docker build` with no --build-arg -- and names the
 // tag CI keeps pointed at main rather than nothing at all, so an
 // unstamped binary still resolves to a real, if less precise, image.
-var DefaultSandboxImage = "ghcr.io/bwsalmon/grain/guest:latest"
+var DefaultSandboxImage = "docker.io/grainai/sandbox:latest"
 
 // DefaultK8sSandboxImage is the default container image for plain Kubernetes
 // sandbox pods ("kubernetes" backend).
-var DefaultK8sSandboxImage = "ghcr.io/bwsalmon/grain/k8s-sandbox:latest"
+var DefaultK8sSandboxImage = "docker.io/grainai/sandbox-k8s:latest"
 
 // timestampSuffix names an archived directory by when it was archived,
 // in a form that sorts and that a shell does not have to be quoted for.

@@ -56,7 +56,7 @@ func loopJournal(starts int) []string {
 					string(rune('0'+i%10))+".")
 		}
 		lines = append(lines,
-			"2026-09-18T05:35:0"+string(rune('0'+i%10))+"+0000 host systemd[1]: Started grain-daemon.service - grain daemon (task orchestrator, UI and API), from ghcr.io/bwsalmon/grain/grain.",
+			"2026-09-18T05:35:0"+string(rune('0'+i%10))+"+0000 host systemd[1]: Started grain-daemon.service - grain daemon (task orchestrator, UI and API), from docker.io/grainai/grain.",
 			"2026-09-18T05:35:0"+string(rune('0'+i%10))+"+0000 host grain[3614028]: flag provided but not defined: -root-shell-control-dir",
 		)
 	}

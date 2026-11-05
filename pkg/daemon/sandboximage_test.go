@@ -201,12 +201,12 @@ func TestSandboxImageCreateArgsDoesNotWarnWhenThePinMatchesTheStamp(t *testing.T
 func TestImageRepositoryStripsTagsAndDigestsAndNothingElse(t *testing.T) {
 	t.Parallel()
 	for ref, want := range map[string]string{
-		"ghcr.io/bwsalmon/grain/guest:sha-2f89890": "ghcr.io/bwsalmon/grain/guest",
-		"ghcr.io/bwsalmon/grain/guest":             "ghcr.io/bwsalmon/grain/guest",
+		"docker.io/grainai/sandbox:sha-2f89890": "docker.io/grainai/sandbox",
+		"docker.io/grainai/sandbox":             "docker.io/grainai/sandbox",
 		"127.0.0.1:5000/grain-sandbox:old":         "127.0.0.1:5000/grain-sandbox",
 		"127.0.0.1:5000/grain-sandbox":             "127.0.0.1:5000/grain-sandbox",
-		"ghcr.io/bwsalmon/grain/guest@sha256:0000000000000000000000000000000000000000000000000000000000000000":             "ghcr.io/bwsalmon/grain/guest",
-		"ghcr.io/bwsalmon/grain/guest:sha-2f89890@sha256:0000000000000000000000000000000000000000000000000000000000000000": "ghcr.io/bwsalmon/grain/guest",
+		"docker.io/grainai/sandbox@sha256:0000000000000000000000000000000000000000000000000000000000000000":             "docker.io/grainai/sandbox",
+		"docker.io/grainai/sandbox:sha-2f89890@sha256:0000000000000000000000000000000000000000000000000000000000000000": "docker.io/grainai/sandbox",
 		"127.0.0.1:5000/grain-sandbox:old@sha256:0000000000000000000000000000000000000000000000000000000000000000":         "127.0.0.1:5000/grain-sandbox",
 	} {
 		if got := imageRepository(ref); got != want {
@@ -326,7 +326,28 @@ func TestSandboxImageCreateArgsDoesNotMutateAPinItAdoptsOver(t *testing.T) {
 // a stamp by tag, and what VMs are created from is the pinned reference,
 // unchanged -- the digest an upgrade verified.
 func TestSandboxImageCreateArgsAdoptsADigestPinnedStamp(t *testing.T) {
-	stamped := "ghcr.io/bwsalmon/grain/guest:sha-1234567@sha256:5a4db0c55a4db0c55a4db0c55a4db0c55a4db0c55a4db0c55a4db0c55a4db0c5"
+	stamped := "docker.io/grainai/sandbox:sha-1234567@sha256:5a4db0c55a4db0c55a4db0c55a4db0c55a4db0c55a4db0c55a4db0c55a4db0c5"
+	saved := DefaultSandboxImage
+	DefaultSandboxImage = stamped
+	t.Cleanup(func() { DefaultSandboxImage = saved })
+	cfg := Config{
+		GranuleSandboxes:  true,
+		GranuleCreateArgs: []string{"-kontur-image", "docker.io/grainai/sandbox:sha-2f89890"},
+	}
+
+	var args []string
+	captureLog(t, func() { args = sandboxImageCreateArgs(cfg) })
+
+	if want := []string{"-kontur-image", stamped}; !slices.Equal(args, want) {
+		t.Errorf("create args = %q, want %q", args, want)
+	}
+	if image := uiSandboxImage(cfg); image == nil || image.Image != stamped || image.Pinned {
+		t.Errorf("uiSandboxImage = %+v, want the pinned stamp, unpinned", image)
+	}
+}
+
+func TestSandboxImageCreateArgsAdoptsDockerHubStampOverLegacyGHCRPin(t *testing.T) {
+	stamped := "docker.io/grainai/sandbox:sha-1234567@sha256:5a4db0c55a4db0c55a4db0c55a4db0c55a4db0c55a4db0c55a4db0c55a4db0c5"
 	saved := DefaultSandboxImage
 	DefaultSandboxImage = stamped
 	t.Cleanup(func() { DefaultSandboxImage = saved })
@@ -342,7 +363,7 @@ func TestSandboxImageCreateArgsAdoptsADigestPinnedStamp(t *testing.T) {
 		t.Errorf("create args = %q, want %q", args, want)
 	}
 	if image := uiSandboxImage(cfg); image == nil || image.Image != stamped || image.Pinned {
-		t.Errorf("uiSandboxImage = %+v, want the pinned stamp, unpinned", image)
+		t.Errorf("uiSandboxImage = %+v, want the Docker Hub stamp adopted over legacy GHCR pin", image)
 	}
 }
 
@@ -633,8 +654,8 @@ func TestApplySandboxImageClearingTheMirrorReturnsToTheStamp(t *testing.T) {
 // and the UI sandbox image reading to the build-stamped default across all four
 // image-backed backends.
 func TestClearingCustomSandboxImageRevertsToStampedDefaultAcrossBackends(t *testing.T) {
-	stampedGuest := "ghcr.io/bwsalmon/grain/guest:sha-stamped1@sha256:1111111111111111111111111111111111111111111111111111111111111111"
-	stampedPod := "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-stamped1@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	stampedGuest := "docker.io/grainai/sandbox:sha-stamped1@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	stampedPod := "docker.io/grainai/sandbox-k8s:sha-stamped1@sha256:2222222222222222222222222222222222222222222222222222222222222222"
 	savedGuest, savedPod := DefaultSandboxImage, DefaultK8sSandboxImage
 	DefaultSandboxImage = stampedGuest
 	DefaultK8sSandboxImage = stampedPod
