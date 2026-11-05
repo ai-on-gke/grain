@@ -21,7 +21,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -77,22 +76,20 @@ func daemonPostgresTestSchemaDSN(t *testing.T) (dsn, schema string, admin *sql.D
 	return u.String(), schema, admin, baseCfg
 }
 
-func freeLocalAddr(t *testing.T) string {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	_ = ln.Close()
-	return addr
-}
-
-func waitForDaemonUI(t *testing.T, uiAddr string, runErr chan error) {
+func waitForDaemonUI(t *testing.T, uiAddrCh <-chan string, runErr chan error) string {
 	t.Helper()
 	// Under -race, the first Store.Init in a binary adapts ~200 DDL statements
 	// before caching them, which can take ~25s on a 2-core test VM.
 	deadline := time.Now().Add(90 * time.Second)
+	var uiAddr string
+	select {
+	case uiAddr = <-uiAddrCh:
+	case err := <-runErr:
+		runErr <- err
+		t.Fatalf("daemon exited before binding UI listener: %v", err)
+	case <-time.After(time.Until(deadline)):
+		t.Fatal("daemon did not bind UI listener within 90s")
+	}
 	for {
 		select {
 		case err := <-runErr:
@@ -104,7 +101,7 @@ func waitForDaemonUI(t *testing.T, uiAddr string, runErr chan error) {
 		if err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusUnauthorized {
-				return
+				return uiAddr
 			}
 		}
 		if time.Now().After(deadline) {
@@ -117,7 +114,7 @@ func waitForDaemonUI(t *testing.T, uiAddr string, runErr chan error) {
 func TestDaemonWriterLockFencesSecondDaemonAndTransfersOnShutdown(t *testing.T) {
 	dsn, _, _, _ := daemonPostgresTestSchemaDSN(t)
 
-	uiAddr1 := freeLocalAddr(t)
+	uiAddrCh1 := make(chan string, 1)
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	runErr1 := make(chan error, 1)
 	go func() {
@@ -128,7 +125,8 @@ func TestDaemonWriterLockFencesSecondDaemonAndTransfersOnShutdown(t *testing.T) 
 			DbDSN:                  dsn,
 			MaxWorkers:             1,
 			PollInterval:           time.Hour,
-			UiAddr:                 uiAddr1,
+			UiAddr:                 "127.0.0.1:0",
+			UIAddrReady:            func(addr string) { uiAddrCh1 <- addr },
 			DisableNativeSandboxes: true,
 			Actor:                  "tester",
 			WriterLockWaitTimeout:  2 * time.Second,
@@ -141,7 +139,7 @@ func TestDaemonWriterLockFencesSecondDaemonAndTransfersOnShutdown(t *testing.T) 
 		}
 	}()
 
-	waitForDaemonUI(t, uiAddr1, runErr1)
+	waitForDaemonUI(t, uiAddrCh1, runErr1)
 
 	// A second daemon against the same Postgres schema while the first is live
 	// fails closed with ErrWriterLockHeld before opening or mutating the store.
@@ -152,7 +150,7 @@ func TestDaemonWriterLockFencesSecondDaemonAndTransfersOnShutdown(t *testing.T) 
 		DbDSN:                  dsn,
 		MaxWorkers:             1,
 		PollInterval:           time.Hour,
-		UiAddr:                 freeLocalAddr(t),
+		UiAddr:                 "127.0.0.1:0",
 		DisableNativeSandboxes: true,
 		Actor:                  "tester",
 		WriterLockWaitTimeout:  120 * time.Millisecond,
@@ -163,7 +161,7 @@ func TestDaemonWriterLockFencesSecondDaemonAndTransfersOnShutdown(t *testing.T) 
 
 	// A replacement daemon started while the first drains waits for the lock
 	// release and takes over cleanly once the first daemon closes its pool.
-	uiAddr2 := freeLocalAddr(t)
+	uiAddrCh2 := make(chan string, 1)
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	runErr2 := make(chan error, 1)
 	go func() {
@@ -174,7 +172,8 @@ func TestDaemonWriterLockFencesSecondDaemonAndTransfersOnShutdown(t *testing.T) 
 			DbDSN:                  dsn,
 			MaxWorkers:             1,
 			PollInterval:           time.Hour,
-			UiAddr:                 uiAddr2,
+			UiAddr:                 "127.0.0.1:0",
+			UIAddrReady:            func(addr string) { uiAddrCh2 <- addr },
 			DisableNativeSandboxes: true,
 			Actor:                  "tester",
 			WriterLockWaitTimeout:  15 * time.Second,
@@ -195,13 +194,13 @@ func TestDaemonWriterLockFencesSecondDaemonAndTransfersOnShutdown(t *testing.T) 
 	// Put nil back so the deferred cleanup does not block.
 	runErr1 <- nil
 
-	waitForDaemonUI(t, uiAddr2, runErr2)
+	waitForDaemonUI(t, uiAddrCh2, runErr2)
 }
 
 func TestDaemonWriterLockStopsOnSplitBrainTakeover(t *testing.T) {
 	dsn, schema, admin, _ := daemonPostgresTestSchemaDSN(t)
 
-	uiAddr := freeLocalAddr(t)
+	uiAddrCh := make(chan string, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	runErr := make(chan error, 1)
 	go func() {
@@ -212,7 +211,8 @@ func TestDaemonWriterLockStopsOnSplitBrainTakeover(t *testing.T) {
 			DbDSN:                     dsn,
 			MaxWorkers:                1,
 			PollInterval:              time.Hour,
-			UiAddr:                    uiAddr,
+			UiAddr:                    "127.0.0.1:0",
+			UIAddrReady:               func(addr string) { uiAddrCh <- addr },
 			DisableNativeSandboxes:    true,
 			Actor:                     "tester",
 			WriterLockWaitTimeout:     2 * time.Second,
@@ -225,7 +225,7 @@ func TestDaemonWriterLockStopsOnSplitBrainTakeover(t *testing.T) {
 		<-runErr
 	}()
 
-	waitForDaemonUI(t, uiAddr, runErr)
+	waitForDaemonUI(t, uiAddrCh, runErr)
 
 	key := postgres.AdvisoryLockKey(schema)
 	objid := int64(uint32(key >> 32))

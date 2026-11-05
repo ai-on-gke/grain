@@ -207,6 +207,10 @@ type Config struct {
 	// ui.Config the old standalone "ui" subcommand's -as/-default-target-repo
 	// flags did.
 	UiAddr string
+	// UIAddrReady, when non-nil, is called with the bound UI/API listener's
+	// "host:port" address once Run has opened its TCP socket (supporting
+	// ephemeral bindings such as "127.0.0.1:0" in tests without TOCTOU races).
+	UIAddrReady func(addr string)
 	// uiAllowedHosts is -ui-allowed-hosts: the extra Host names
 	// ui.HostGuard lets through on the uiAddr listener.
 	UiAllowedHosts []string

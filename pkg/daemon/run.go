@@ -315,6 +315,35 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("loading deployment configuration: %w", err)
 	}
+	// Bind the UI/API listener before starting capability servers, caches, or
+	// model proxies on ephemeral ports: callers that pass a concrete port or
+	// an ephemeral ":0" address cannot lose that port to an internal listener
+	// opened earlier in Run. If UiAddr requested port 0, preserve the caller's
+	// host part (for HostGuard's wildcard/hostname check) with the bound port.
+	var uiLn net.Listener
+	if cfg.UiAddr != "" {
+		uiLn, err = net.Listen("tcp", cfg.UiAddr)
+		if err != nil {
+			return fmt.Errorf("starting the UI/API server: listening on %s: %w", cfg.UiAddr, err)
+		}
+		if h, p, splitErr := net.SplitHostPort(cfg.UiAddr); splitErr == nil && p == "0" {
+			if _, boundPort, boundErr := net.SplitHostPort(uiLn.Addr().String()); boundErr == nil {
+				if h == "" {
+					cfg.UiAddr = ":" + boundPort
+				} else {
+					cfg.UiAddr = net.JoinHostPort(h, boundPort)
+				}
+			}
+		}
+		if cfg.UIAddrReady != nil {
+			cfg.UIAddrReady(uiLn.Addr().String())
+		}
+		defer func() {
+			if uiLn != nil {
+				_ = uiLn.Close()
+			}
+		}()
+	}
 	// This build is single-tenant only: the store resolves every task's
 	// git credential as the default team's (model.Store.SingleTenant).
 	store.SingleTenant = true
@@ -886,11 +915,12 @@ func Run(ctx context.Context, cfg Config) error {
 	// longer happens: runDaemon's own failure is logged, not fatal, and
 	// run() itself only returns once ctx is actually cancelled.
 	if cfg.UiAddr != "" {
-		stopUI, err := startUIServer(cfg, store, db, transcriptDir, sandboxes, live, pkgCache, actionsCache,
+		stopUI, err := startUIServer(cfg, uiLn, store, db, transcriptDir, sandboxes, live, pkgCache, actionsCache,
 			stateManager, stateManager.settingsRepo, upgrader)
 		if err != nil {
 			return fmt.Errorf("starting the UI/API server: %w", err)
 		}
+		uiLn = nil
 		cfg.restartGaps.Up(upgrade.ServiceAPI)
 		defer func() {
 			cfg.restartGaps.Down(upgrade.ServiceAPI)
