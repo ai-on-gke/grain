@@ -111,6 +111,11 @@ func NewClient(baseURL string, opts ...ClientOption) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	clonedHTTP := *c.httpClient
+	clonedHTTP.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	c.httpClient = &clonedHTTP
 	c.baseURL = norm
 	return c, nil
 }

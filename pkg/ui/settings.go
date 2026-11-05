@@ -1638,6 +1638,9 @@ func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) 
 		}
 		return Settings{}, err
 	}
+	if err := c.checkRegistryAuthTargetWrite(ctx, current, cfg); err != nil {
+		return Settings{}, err
+	}
 	// A request changing only the Models and Sandboxes settings writes
 	// them here; any other field is the config repository's to change.
 	if err := c.checkGrainConfigWritable(ctx, current, &cfg); err != nil {
@@ -1653,6 +1656,9 @@ func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) 
 	if r, ok := model.WriteRehearsalFrom(ctx); !ok || !r.Rehearsing() {
 		if changed := changedConfigFields(current, cfg); len(changed) > 0 {
 			log.Printf("grain ui: settings saved by %s: changed %s", writerName(ctx), strings.Join(changed, ", "))
+		}
+		if req.Registry != nil {
+			c.auditRegistryChanges(ctx, current, cfg)
 		}
 	}
 	c.triggerIAPSync()

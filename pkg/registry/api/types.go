@@ -22,7 +22,6 @@ package api
 
 import (
 	"fmt"
-	"net"
 	"net/netip"
 	"net/url"
 	"regexp"
@@ -610,7 +609,7 @@ func isLoopbackHost(host string) bool {
 		return true
 	}
 	if addr, err := netip.ParseAddr(host); err == nil {
-		return addr.IsLoopback()
+		return addr.Unmap().IsLoopback()
 	}
 	return false
 }
@@ -620,8 +619,9 @@ func isForbiddenMetadataHost(host string) bool {
 	if lower == "metadata" || strings.HasSuffix(lower, ".internal") && strings.HasPrefix(lower, "metadata.") {
 		return true
 	}
-	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+	if addr, err := netip.ParseAddr(host); err == nil {
+		unmapped := addr.Unmap()
+		if unmapped.IsLinkLocalUnicast() || unmapped.IsLinkLocalMulticast() || unmapped.IsUnspecified() {
 			return true
 		}
 	}

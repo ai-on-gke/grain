@@ -665,7 +665,7 @@ func Run(ctx context.Context, cfg Config) error {
 				return api.HealthDegraded, "reconcile loop is down"
 			}
 			if sf := stateManager.syncFailure(); sf != nil {
-				return api.HealthDegraded, "state repository sync failing: " + sf.Error
+				return api.HealthDegraded, "state repository sync failing"
 			}
 			return api.HealthOK, ""
 		},

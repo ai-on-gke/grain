@@ -16,9 +16,13 @@ package ui
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/registry/api"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -52,16 +56,84 @@ func (c *Client) triggerRegistrySync() {
 	}
 }
 
-func (c *Client) redactRegistryError(line string) string {
-	if line == "" || c == nil || c.Config.LogRedactor == nil {
-		return line
+func (c *Client) redactRegistryText(text string) string {
+	if text == "" {
+		return ""
 	}
-	redactor, err := c.Config.LogRedactor()
-	if err != nil || redactor == nil {
-		return "(withheld: the redaction list could not be read)"
+	redactor := grainlog.NewRedactor(nil)
+	if c != nil && c.Config.LogRedactor != nil {
+		var err error
+		redactor, err = c.Config.LogRedactor()
+		if err != nil || redactor == nil {
+			return "(withheld: the redaction list could not be read)"
+		}
 	}
-	redacted, _ := redactor.Line(line)
+	redacted, _ := redactor.Text(text)
 	return redacted
+}
+
+func registryAuthTarget(cfg model.RegistryConfig) (string, model.RegistryAuthMode, string) {
+	mode, _ := model.NormalizeRegistryAuthMode(cfg.AuthMode)
+	return strings.TrimSpace(cfg.URL), mode, strings.TrimSpace(cfg.OIDCAudience)
+}
+
+func registryAuthTargetChanged(before *model.Config, after model.Config) bool {
+	var prev model.RegistryConfig
+	if before != nil {
+		prev = before.Registry
+	}
+	bURL, bMode, bAud := registryAuthTarget(prev)
+	aURL, aMode, aAud := registryAuthTarget(after.Registry)
+	return bURL != aURL || bMode != aMode || bAud != aAud
+}
+
+// checkRegistryAuthTargetWrite holds changes to where the daemon sends its
+// registry registration token or mints host OIDC identity tokens for (URL,
+// authMode, oidcAudience) to a human principal with secrets:write.
+func (c *Client) checkRegistryAuthTargetWrite(ctx context.Context, before *model.Config, after model.Config) error {
+	if !registryAuthTargetChanged(before, after) {
+		return nil
+	}
+	if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
+		return forbiddenErrorf("%q is not a person, so it may not change registry URL or authentication settings", p.ID)
+	}
+	if role := accessRoleFromContext(ctx); role != nil && !role.allows("secrets:write", "") {
+		return forbiddenErrorf("%s holds no scope secrets:write, which changing registry URL or authentication settings needs", role.label())
+	}
+	return nil
+}
+
+// auditRegistryChanges records changes to registry URL, authMode, or
+// oidcAudience in the credential-access audit log.
+func (c *Client) auditRegistryChanges(ctx context.Context, before *model.Config, after model.Config) {
+	if c == nil || c.Store == nil || !registryAuthTargetChanged(before, after) {
+		return
+	}
+	var prev model.RegistryConfig
+	if before != nil {
+		prev = before.Registry
+	}
+	bURL, bMode, bAud := registryAuthTarget(prev)
+	aURL, aMode, aAud := registryAuthTarget(after.Registry)
+	action := "set registry target"
+	if aURL == "" {
+		action = "clear registry target"
+	}
+	outcome := fmt.Sprintf("url %q -> %q, authMode %q -> %q, oidcAudience %q -> %q",
+		bURL, aURL, bMode, aMode, bAud, aAud)
+	if user := c.requestActor(ctx).Actor.ID; user != "" {
+		outcome += " by " + user
+	}
+	log.Printf("grain ui: registry: %s %s", action, outcome)
+	if err := c.Store.RecordCredentialAccess(ctx, model.CredentialAccessEntry{
+		Kind:       model.CredentialAccessConnection,
+		Resource:   "registry",
+		Action:     action,
+		Credential: secrets.RegistryRegistrationTokenSecret,
+		Outcome:    outcome,
+	}); err != nil {
+		log.Printf("grain ui: auditing registry target change: %v", err)
+	}
 }
 
 // GetRegistrySnapshot returns the deployment's current connected-entry
@@ -72,7 +144,8 @@ func (c *Client) GetRegistrySnapshot(ctx context.Context) (model.RegistrySnapsho
 		if err != nil {
 			return model.RegistrySnapshot{}, err
 		}
-		snap.LastError = c.redactRegistryError(snap.LastError)
+		snap.LastError = c.redactRegistryText(snap.LastError)
+		snap.HealthDetail = c.redactRegistryText(snap.HealthDetail)
 		if snap.AdvertisedScopes == nil {
 			snap.AdvertisedScopes = []model.RegistryAdvertisedScope{}
 		}
@@ -181,7 +254,8 @@ func (c *Client) TriggerRegistryHeartbeat(ctx context.Context) (model.RegistrySn
 		if err != nil {
 			return model.RegistrySnapshot{}, err
 		}
-		snap.LastError = c.redactRegistryError(snap.LastError)
+		snap.LastError = c.redactRegistryText(snap.LastError)
+		snap.HealthDetail = c.redactRegistryText(snap.HealthDetail)
 		if snap.AdvertisedScopes == nil {
 			snap.AdvertisedScopes = []model.RegistryAdvertisedScope{}
 		}

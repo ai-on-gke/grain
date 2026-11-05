@@ -189,3 +189,68 @@ func TestRegistrySettingsAndEndpoints(t *testing.T) {
 		t.Errorf("LastError leaked secret token: %q", hbSnap.LastError)
 	}
 }
+
+func TestRegistryDefaultShapeRedactionAndHealthDetail(t *testing.T) {
+	t.Parallel()
+	c, _, _ := testClient(t)
+	// Leave c.Config.LogRedactor nil to verify shape-based redaction still
+	// cuts grc_ tokens, X-Grain-Registry-Token headers, and git URL tokens
+	// from both LastError and HealthDetail.
+	c.Config.RegistryStatus = func(_ context.Context) (model.RegistrySnapshot, error) {
+		return model.RegistrySnapshot{
+			Enabled:      true,
+			State:        model.RegistryStateError,
+			Config:       model.RegistryConfig{URL: "https://registry.example.com", Entry: "grain-dev"},
+			LastError:    "X-Grain-Registry-Token: grc_shorttok\nfailed with grc_AbCdEfGhIjKlMnOpQrStUvWxYz",
+			Health:       api.HealthDegraded,
+			HealthDetail: "sync failed against https://oauth2:ghp_abcdefghijklmnopqrstuvwxyz1234@github.com/acme/state.git",
+		}, nil
+	}
+	srv := ui.NewServerWithClient(c)
+
+	regRec := do(t, srv, http.MethodGet, "/api/registry", "")
+	if regRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/registry = %d: %s", regRec.Code, regRec.Body.String())
+	}
+	for _, secret := range []string{"grc_shorttok", "grc_AbCdEfGh", "ghp_abcdefgh"} {
+		if strings.Contains(regRec.Body.String(), secret) {
+			t.Errorf("GET /api/registry leaked %q: %s", secret, regRec.Body.String())
+		}
+	}
+
+	statusRec := do(t, srv, http.MethodGet, "/api/registry/status", "")
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/registry/status = %d: %s", statusRec.Code, statusRec.Body.String())
+	}
+	if strings.Contains(statusRec.Body.String(), "ghp_abcdefgh") {
+		t.Errorf("GET /api/registry/status leaked git credential in HealthDetail: %s", statusRec.Body.String())
+	}
+}
+
+func TestRegistryTargetRequiresSecretsWriteRole(t *testing.T) {
+	h := newRoleHarness(t)
+	installScopeSets(t,
+		model.APIScopeSet{
+			Name:   "team/settings-only",
+			Scopes: []string{"settings:read", "settings:write"},
+		},
+		model.APIScopeSet{
+			Name:   "team/settings-and-secrets",
+			Scopes: []string{"settings:read", "settings:write", "secrets:write"},
+		},
+	)
+	h.allow(t, "user:sam@example.com", "team/settings-only")
+	h.allow(t, "user:ops@example.com", "team/settings-and-secrets")
+
+	if _, err := h.client.UpdateSettings(context.Background(), firstSettings()); err != nil {
+		t.Fatal(err)
+	}
+
+	body := `{"registry":{"url":"https://registry.example.com","entry":"grain-dev"}}`
+	if code, resp := h.call("sam@example.com", http.MethodPut, "/api/settings", body); code != http.StatusForbidden {
+		t.Errorf("settings-only role PUT /api/settings(registry.url): %d %s, want 403", code, resp)
+	}
+	if code, resp := h.call("ops@example.com", http.MethodPut, "/api/settings", body); code != http.StatusOK {
+		t.Fatalf("settings+secrets role PUT /api/settings(registry.url): %d %s, want 200", code, resp)
+	}
+}

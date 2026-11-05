@@ -231,6 +231,11 @@ var patterns = []pattern{
 		regexp.MustCompile(`(?i)(x-grain-access-code\s*[:=]\s*)\S+`),
 		"${1}[redacted: access code]",
 	},
+	{
+		"registry token header",
+		regexp.MustCompile(`(?i)(x-grain-registry-token\s*[:=]\s*)\S+`),
+		"${1}[redacted: registry token]",
+	},
 	{"bearer token", regexp.MustCompile(`(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]{8,}`), "${1}[redacted: bearer token]"},
 	// A credential in a URL's userinfo -- the shape a git remote with a
 	// token in it takes, which is exactly what an error quoting a failed
@@ -260,8 +265,10 @@ var patterns = []pattern{
 	// (pkg/secrets' key file), the one value whose loss is unrecoverable.
 	{"age secret key", regexp.MustCompile(`\bAGE-SECRET-KEY-1[0-9A-Za-z]{20,}`), "[redacted: age secret key]"},
 	// A token minted for a CI job's api grants (pkg/capability/ciapi),
-	// and the release gate's before it (rg_).
+	// and the release gate's before it (rg_), plus per-entry connected
+	// registry tokens (grc_).
 	{"ci api token", regexp.MustCompile(`\b(?:ga|rg)_[0-9a-f]{16}_[0-9a-f]{64}\b`), "[redacted: ci api token]"},
+	{"registry token", regexp.MustCompile(`\bgrc_[A-Za-z0-9_-]{16,}`), "[redacted: registry token]"},
 	// A signed token, which carries its own claims and is worth cutting
 	// whether or not this host minted it.
 	{"jwt", regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`), "[redacted: jwt]"},

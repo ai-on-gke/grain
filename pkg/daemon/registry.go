@@ -35,6 +35,7 @@ import (
 	"google.golang.org/api/idtoken"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/redact"
 	"github.com/ai-on-gke/grain/pkg/registry/api"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/version"
@@ -474,9 +475,13 @@ func (m *RegistryManager) step(parentCtx context.Context) (time.Duration, error)
 	m.lastAttemptAt = &attemptAt
 	m.mu.Unlock()
 
-	if err := api.ValidateEntryName(inputs.regCfg.Entry); err != nil {
+	normCfg, err := model.NormalizeRegistryConfig(inputs.regCfg, m.opts.AllowInsecureHTTP)
+	if err != nil {
 		return m.recordFailure(err), err
 	}
+	inputs.regCfg = normCfg
+	inputs.daemonCfg.Registry = normCfg
+	inputs.hostKind = inputs.daemonCfg.InferRegistryHostKind()
 
 	tokenSource := func(callCtx context.Context) (string, error) {
 		tok, _, resolveErr := m.resolveCredential(callCtx, inputs.daemonCfg, inputs.regCfg)
@@ -642,11 +647,12 @@ func (m *RegistryManager) createConnectedEntry(ctx context.Context, client *api.
 
 func (m *RegistryManager) recordFailure(err error) time.Duration {
 	now := m.opts.Now().UTC()
+	redactedErr, _ := (*redact.Redactor)(nil).Text(err.Error())
 
 	m.mu.Lock()
 	m.consecutiveFailures++
 	failures := m.consecutiveFailures
-	m.lastError = err.Error()
+	m.lastError = redactedErr
 	var apiErr *api.APIError
 	if errors.As(err, &apiErr) && len(apiErr.Conflicts) > 0 {
 		m.scopeConflicts = slices.Clone(apiErr.Conflicts)
@@ -657,8 +663,8 @@ func (m *RegistryManager) recordFailure(err error) time.Duration {
 	m.mu.Unlock()
 
 	if failures == 1 || failures%10 == 0 {
-		m.opts.Logf("grain daemon: registry heartbeat failed (attempt %d, retrying in %s): %v",
-			failures, backoff.Round(10*time.Millisecond), err)
+		m.opts.Logf("grain daemon: registry heartbeat failed (attempt %d, retrying in %s): %s",
+			failures, backoff.Round(10*time.Millisecond), redactedErr)
 	}
 	return backoff
 }

@@ -75,12 +75,46 @@ func TestValidationHelpers(t *testing.T) {
 		"http://grain.example.com",
 		"https://user:pass@grain.example.com",
 		"http://169.254.169.254/latest",
+		"https://[::ffff:169.254.169.254]",
+		"https://[fe80::1%25eth0]",
+		"http://[fe80::1%25eth0]:8080",
 		"https://metadata.internal",
 		"https://grain.example.com?foo=1",
 	} {
 		if _, err := api.ValidateRegistryURL(badURL, false); err == nil {
 			t.Errorf("ValidateRegistryURL(%q) succeeded, want error", badURL)
 		}
+	}
+}
+
+func TestClientDoesNotFollowRedirectsOrLeakCredentials(t *testing.T) {
+	t.Parallel()
+
+	targetHit := false
+	targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHit = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"online"}`))
+	}))
+	defer targetSrv.Close()
+
+	redirectSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, targetSrv.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer redirectSrv.Close()
+
+	ctx := context.Background()
+	hbClient, err := api.NewClient(redirectSrv.URL, api.WithTokenSource(api.StaticTokenSource("grc_redirectsecrettoken12345")))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	_, err = hbClient.Heartbeat(ctx, "team-k8s", api.HeartbeatRequest{Health: api.HealthOK})
+	var apiErr *api.APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusTemporaryRedirect {
+		t.Fatalf("Heartbeat redirect error = %#v, want APIError{StatusCode: 307}", err)
+	}
+	if targetHit {
+		t.Fatal("Client followed HTTP redirect and forwarded registration credentials to redirect target")
 	}
 }
 

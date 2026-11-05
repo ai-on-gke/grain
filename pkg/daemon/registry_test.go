@@ -17,6 +17,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -575,5 +576,79 @@ func TestRegistryManagerOIDCRefreshAndTunnelSeam(t *testing.T) {
 	case <-tun.stopped:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for tunnel seam to stop cleanly")
+	}
+}
+
+func TestRegistryManagerValidatesStoredConfigAndRedactsFailureLogs(t *testing.T) {
+	t.Parallel()
+
+	errSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"rejected token grc_AbCdEfGhIjKlMnOpQrStUvWxYz0123"}`))
+	}))
+	defer errSrv.Close()
+
+	dataDir := t.TempDir()
+	store, db, err := OpenStore("sqlite", "", dataDir)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	// 1. Unnormalized/invalid ExternalURL stored directly in grain_config is
+	// rejected before any network call.
+	cfg := model.DefaultConfig()
+	cfg.Registry = model.RegistryConfig{
+		URL:         errSrv.URL,
+		Entry:       "edge-grain",
+		AuthMode:    model.RegistryAuthToken,
+		ExternalURL: "http://insecure.example.com",
+	}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatalf("PutConfig: %v", err)
+	}
+
+	secretStore := secrets.New(t.TempDir())
+	if err := secretStore.Set(secrets.RegistryRegistrationTokenSecret, secrets.AgentCredentialKey, []byte("grc_AbCdEfGhIjKlMnOpQrStUvWxYz0123")); err != nil {
+		t.Fatalf("secretStore.Set: %v", err)
+	}
+
+	var logged []string
+	var logMu sync.Mutex
+	mgr := NewRegistryManager(RegistryManagerOptions{
+		Store:          store,
+		Secrets:        secretStore,
+		HTTPClient:     errSrv.Client(),
+		JitterFraction: -1,
+		Logf: func(format string, args ...any) {
+			logMu.Lock()
+			defer logMu.Unlock()
+			logged = append(logged, fmt.Sprintf(format, args...))
+		},
+	})
+
+	if _, err := mgr.TriggerHeartbeat(ctx); err == nil || !strings.Contains(err.Error(), "external_url") {
+		t.Fatalf("expected invalid external_url error from stored config, got %v", err)
+	}
+
+	// 2. When the remote server echoes a grc_ token in its error body, both
+	// Snapshot().LastError and daemon logs shape-redact the token.
+	cfg.Registry.ExternalURL = ""
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatalf("PutConfig valid: %v", err)
+	}
+	snap, err := mgr.TriggerHeartbeat(ctx)
+	if err == nil {
+		t.Fatal("expected 401 failure from errSrv")
+	}
+	if strings.Contains(snap.LastError, "grc_AbCdEfGh") {
+		t.Errorf("Snapshot().LastError leaked grc_ token: %q", snap.LastError)
+	}
+	logMu.Lock()
+	allLogs := strings.Join(logged, "\n")
+	logMu.Unlock()
+	if strings.Contains(allLogs, "grc_AbCdEfGh") {
+		t.Errorf("daemon Logf leaked grc_ token:\n%s", allLogs)
 	}
 }
