@@ -93,6 +93,16 @@ var ErrHostdLost = errors.New("grain hostd disconnected mid-run and did not reco
 // the queue, where its task waits for that hostd to reconnect.
 var ErrHostdWaiting = errors.New("waiting for grain hostd to reconnect")
 
+// IsHostdStop reports whether err is a grain hostd infrastructure stop
+// (ErrHostdDraining or ErrHostdLost): a start hostd refused because it is
+// draining for its own upgrade, or a mid-run disconnect that did not
+// reconnect within the reattach timeout. Neither is a CLI crash or a
+// refused resume flag, so a framework retry loop stops at once and hands
+// err back for the run to return to the queue without a strike.
+func IsHostdStop(err error) bool {
+	return errors.Is(err, ErrHostdDraining) || errors.Is(err, ErrHostdLost)
+}
+
 // Run implements Host with the same contract as LocalHost.Run: stdout is
 // returned and teed as it arrives, a non-zero exit is an error carrying
 // stderr, cancelling ctx kills the CLI's whole group, and a CLI whose

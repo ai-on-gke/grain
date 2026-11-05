@@ -1322,3 +1322,61 @@ func TestExternalCITestHistoryFormattingAndJSON(t *testing.T) {
 		t.Error("-limit 0 should be refused")
 	}
 }
+
+func TestExternalCIWaitActionsFallbackAndZeroJobMissingJobName(t *testing.T) {
+	ghaRun := ci.Run{
+		ID:         "gha:acme:other:101",
+		Provider:   ci.ProviderGitHubActions,
+		Repo:       "acme/other",
+		Ref:        "feat/green",
+		Commit:     "abc123456789",
+		Conclusion: ci.ConclusionSuccess,
+		Jobs:       []ci.JobRun{{Name: "unit", Conclusion: ci.ConclusionSuccess}},
+	}
+	fakeRun := ci.Run{
+		ID:         "demo-ci-1",
+		Repo:       "acme/widgets",
+		Ref:        "grain/task-1",
+		Commit:     "def456789012",
+		Conclusion: ci.ConclusionSuccess,
+	}
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/ci/runs":
+			if r.URL.Query().Get("provider") == ci.ProviderGitHubActions {
+				json.NewEncoder(w).Encode(ui.CIRunsResponse{Enabled: true, Runs: []ci.Run{ghaRun}})
+				return
+			}
+			json.NewEncoder(w).Encode(ui.CIRunsResponse{Enabled: true, Runs: nil})
+		case "/api/ci/runs/gha:acme:other:101":
+			json.NewEncoder(w).Encode(ghaRun)
+		case "/api/ci/runs/demo-ci-1":
+			json.NewEncoder(w).Encode(fakeRun)
+		case "/api/tasks":
+			json.NewEncoder(w).Encode([]ui.Task{
+				{ID: "12", Repo: "acme/other", Branch: "feat/green", PullRequest: "acme/other#9"},
+			})
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL)
+			http.NotFound(w, r)
+		}
+	}
+
+	for _, args := range [][]string{
+		{"-ref", "feat/green", "-repo", "acme/other"},
+		{"-pr", "acme/other#9"},
+	} {
+		out, exit := ciWaitCLI(t, context.Background(), handler, false, args...)
+		if exit != exitOK || !strings.Contains(out, "gha:acme:other:101") {
+			t.Errorf("wait %v exits %d, want 0 on gha run:\n%s", args, exit, out)
+		}
+	}
+
+	// Settled 0-job run (e.g. fake-ci) with a missing -jobs name exits 2 (usage), not 1.
+	if _, err := ciCLI(t, handler, "wait", "demo-ci-1", "-jobs", "nonexistent"); err == nil || !strings.Contains(err.Error(), `has no job "nonexistent"`) {
+		t.Errorf("0-job settled run with missing -jobs err = %v", err)
+	} else if exit, _, _ := classifyError(err); exit != exitUsage {
+		t.Errorf("0-job settled run with missing -jobs exits %d, want 2", exit)
+	}
+}

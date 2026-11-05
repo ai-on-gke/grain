@@ -2325,6 +2325,8 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 	// "come back in a moment, the model is overloaded". See capacity.go.
 	capacity := capacityFailure(events.resultText+"\n"+diagnostic, runErr)
 	switch {
+	case agent.IsHostdStop(runErr):
+		return annotate(partialResult(result, stdout, recordedTools)), agent.RunFailure("antigravity", "agy", nil, runErr)
 	case capWatch.tripped():
 		// The cap cancelled the subprocess, so runErr is that
 		// cancellation rather than a fault of agy's -- report the cap.
@@ -2404,6 +2406,8 @@ func (f *Framework) ParseResult(stdout string, runErr error) (*agent.Result, err
 	result, parseErr := parseTranscriptWithRecorded(stdout, nil)
 	events := parseEvents(stdout)
 	switch {
+	case agent.IsHostdStop(runErr):
+		return partialResult(result, stdout, nil), agent.RunFailure("antigravity", "agy", nil, runErr)
 	case runErr != nil && (!events.sawResult || events.resultErr != nil):
 		return partialResult(result, stdout, nil), agent.RunFailure("antigravity", "agy", events.resultErr, runErr)
 	case parseErr != nil:

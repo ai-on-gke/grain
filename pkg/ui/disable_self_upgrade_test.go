@@ -98,10 +98,6 @@ func TestDisableSelfUpgradeBlocksUpgradeAndDatabaseCutoverRoutes(t *testing.T) {
 		{http.MethodGet, "/api/upgrade/release-notes?branch=main", ""},
 		{http.MethodDelete, "/api/upgrade/scheduled", ""},
 		{http.MethodPut, "/api/upgrade/source", `{"mode":"registry"}`},
-		{http.MethodPost, "/api/database/test", `{"dsn":"postgres://localhost:5432/grain"}`},
-		{http.MethodPost, "/api/database/upgrade", `{"dsn":"postgres://localhost:5432/grain"}`},
-		{http.MethodPost, "/api/upgrade/postgres", `{"dsn":"postgres://localhost:5432/grain"}`},
-		{http.MethodPost, "/api/settings/db/migrate-to-postgres", `{"dsn":"postgres://localhost:5432/grain"}`},
 	}
 	for _, tc := range blocked {
 		r := do(t, srv, tc.method, tc.path, tc.body)
@@ -110,6 +106,18 @@ func TestDisableSelfUpgradeBlocksUpgradeAndDatabaseCutoverRoutes(t *testing.T) {
 		}
 		if !strings.Contains(r.Body.String(), "-disable-self-upgrade") {
 			t.Errorf("%s %s body = %q, want -disable-self-upgrade explanation", tc.method, tc.path, r.Body.String())
+		}
+	}
+
+	for _, path := range []string{
+		"/api/database/test",
+		"/api/database/upgrade",
+		"/api/upgrade/postgres",
+		"/api/settings/db/migrate-to-postgres",
+	} {
+		r := do(t, srv, http.MethodPost, path, `{"dsn":"postgres://localhost:5432/grain"}`)
+		if r.Code != http.StatusNotFound && r.Code != http.StatusMethodNotAllowed {
+			t.Errorf("POST %s = %d (%s), want 404 or 405", path, r.Code, r.Body.String())
 		}
 	}
 }

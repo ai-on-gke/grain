@@ -653,7 +653,7 @@ func cmdCIWait(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		return waitResult(waitCtx, err)
 	}
 	for _, name := range jobs {
-		if len(run.Jobs) > 0 && !slices.ContainsFunc(run.Jobs, func(job ci.JobRun) bool { return cicli.JobNamed(job, name) }) {
+		if (len(run.Jobs) > 0 || run.Conclusion.Done()) && !slices.ContainsFunc(run.Jobs, func(job ci.JobRun) bool { return cicli.JobNamed(job, name) }) {
 			return usageErrorf("run %s has no job %q (\"grain ci show %s\" lists its jobs)", run.ID, name, run.ID)
 		}
 	}
@@ -694,8 +694,14 @@ func resolveCIWaitRun(ctx context.Context, c *ui.HTTPClient, pr, ref, repo strin
 	}
 	id, ok := cicli.NewestRunOn(page.Runs, repo, ref)
 	if !ok {
+		if page, err = c.FindCIRuns(ctx, ci.RunFilter{Repo: repo, Ref: ref, Provider: ci.ProviderGitHubActions, Descending: true}, 50); err != nil {
+			return "", err
+		}
+		id, ok = cicli.NewestRunOn(page.Runs, repo, ref)
+	}
+	if !ok {
 		return "", &cliError{exit: exitUsage, code: "not_found",
-			err: fmt.Errorf("no grain CI run on %s branch %s yet", repo, ref)}
+			err: fmt.Errorf("no CI run on %s branch %s yet", repo, ref)}
 	}
 	return id, nil
 }

@@ -149,6 +149,7 @@ func (s *Server) fsScope(r *http.Request, scheme string) (namespace.Scope, error
 		scope.MayReadFullConfig = set.allowsAll("settings:read")
 	case "memory":
 		scope.MayReadAllMemory = set.allowsAll("memory:read")
+		scope.MemoryReadRepos = repoSet(set.repos("memory:read"))
 		// The repository the gate held a repository-limited grant to.
 		scope.TaskRepo = call.repo
 		if !isAgent && !scope.MayReadAllMemory {

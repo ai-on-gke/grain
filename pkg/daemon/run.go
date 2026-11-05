@@ -157,12 +157,27 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 
+	// The data directory's daemon lock, held for as long as this process
+	// runs (storelock.go): a second daemon on the same store, or a copy,
+	// migration or move of it, refuses while it is held.
+	if cfg.DataDir != "" {
+		lock, err := AcquireStoreLock(cfg.DataDir, storeLockWait)
+		if err != nil {
+			return err
+		}
+		defer lock.Release()
+	}
+
+	var releasePostgresLease atomic.Pointer[func()]
 	writerLock, err := acquireDaemonWriterLock(ctx, cfg, func(lockErr error) {
 		wrapped := fmt.Errorf("PostgreSQL single-writer advisory lock lost: %w", lockErr)
 		if writerLockLost.CompareAndSwap(nil, &wrapped) {
 			log.Printf("grain daemon: %v; fencing database pool and stopping immediately to prevent split-brain writes", wrapped)
 			if sm := fencedStateManager.Load(); sm != nil {
 				sm.fence()
+			}
+			if rel := releasePostgresLease.Swap(nil); rel != nil && *rel != nil {
+				(*rel)()
 			}
 			if liveDB := fencedDB.Load(); liveDB != nil {
 				_ = liveDB.Close()
@@ -199,11 +214,39 @@ func Run(ctx context.Context, cfg Config) error {
 		_ = db.Close()
 		return *lost
 	}
+	// And the same on a PostgreSQL store itself, which a tool on another
+	// host can see where it cannot see the lock file (postgres.HoldDaemonLease).
+	if cfg.DbDriver == "postgres" {
+		release, err := holdPostgresLease(ctx, db)
+		if err != nil {
+			return err
+		}
+		releasePostgresLease.Store(&release)
+		if lost := writerLockLost.Load(); lost != nil {
+			if rel := releasePostgresLease.Swap(nil); rel != nil && *rel != nil {
+				(*rel)()
+			}
+			_ = db.Close()
+			return *lost
+		}
+		defer func() {
+			if rel := releasePostgresLease.Swap(nil); rel != nil && *rel != nil {
+				(*rel)()
+			}
+		}()
+	}
 	// Recorded once the store has opened, so a mistyped DSN never replaces
 	// a good one: a daemon started with -postgres-url (or the environment)
 	// otherwise leaves nothing in its data dir saying where its store is.
 	if err := recordDatabaseConfigForDaemon(cfg); err != nil {
 		log.Printf("grain daemon: recording the database in %s: %v", cfg.DataDir, err)
+	}
+	// What the data directory selects now, with the store open and
+	// recorded: the db-config.json watcher raises its alert the moment
+	// that changes (storeswitch.go).
+	openedSelection, selErr := storeSelection(cfg.DataDir)
+	if selErr != nil {
+		log.Printf("grain daemon: reading which store %s selects: %v", cfg.DataDir, selErr)
 	}
 	// The hostd registry: the co-located hostd is always in it as local,
 	// and any hostd it names may dial in alongside it.
@@ -269,6 +312,40 @@ func Run(ctx context.Context, cfg Config) error {
 	// question is asked of what it holds now, before anything serves it.
 	if err := store.CheckSingleTenant(ctx); err != nil {
 		return err
+	}
+	// A store behind the writes a previous daemon on this data directory
+	// made is refused, by name, before anything is served from it or
+	// written to it; one at or past them moves the mark (highwater.go).
+	if err := CheckStoreHighWater(ctx, db, cfg.DbDriver, cfg.DbDSN, cfg.DataDir); err != nil {
+		return err
+	}
+	{
+		// A copy: Run goes on to reassign cfg.
+		dataDir := cfg.DataDir
+		desc := StoreDescription(cfg.DbDriver, cfg.DbDSN, dataDir)
+		storeSwitched.Store(nil)
+		watchCtx, stopWatching := context.WithCancel(ctx)
+		markDone := make(chan struct{})
+		go func() {
+			defer close(markDone)
+			watchStoreHighWater(watchCtx, db, desc, dataDir)
+		}()
+		selDone := make(chan struct{})
+		if selErr == nil {
+			go func() {
+				defer close(selDone)
+				watchStoreSelection(watchCtx, dataDir, openedSelection)
+			}()
+		} else {
+			close(selDone)
+		}
+		// Ahead of db.Close, deferred above: the mark's last move reads
+		// the store.
+		defer func() {
+			stopWatching()
+			<-markDone
+			<-selDone
+		}()
 	}
 	// Both halves of the schema change are done -- the store rebuilt at
 	// this build's schema above, the repository's dump rewritten from it
@@ -1425,6 +1502,9 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		TeamGitCredentialOn: teamGitCredentialOn,
 	}}
 	deps := orchestrator.Deps{
+		// Nothing new is dispatched once the store has been switched
+		// underneath this process (storeswitch.go).
+		DispatchHalted: storeDispatchHalted,
 		// The attached capability servers a task's capability
 		// references are minted through at admission.
 		CapabilityServers: capabilityServerLookup(live),

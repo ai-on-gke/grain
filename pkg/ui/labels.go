@@ -51,7 +51,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/metrics"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/postgres"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 	"github.com/ai-on-gke/grain/pkg/version"
@@ -784,6 +783,11 @@ type Config struct {
 	// ReconcilerDown always reports false, the same nil-means-
 	// unavailable-feature default AutoMergeDegraded above gives.
 	ReconcilerDown func() bool
+	// StoreSwitch, when set, is polled by GET /api/config and GET
+	// /api/sandbox-health (DaemonHealth.StoreSwitch) for the standing
+	// alert that the store was switched underneath this daemon
+	// (pkg/daemon/storeswitch.go). nil, or a nil answer, is no alert.
+	StoreSwitch func() *StoreSwitch
 	// InstallNotice, when set, is what GET /api/config reports as
 	// installNotice: something about how this deployment is installed
 	// that an operator has to fix, found once at start -- an unmigrated
@@ -1155,16 +1159,9 @@ type Config struct {
 	DBDSN string
 	// DataDir is the root data directory of the grain installation.
 	DataDir string
-	// SourceDB is the raw *sql.DB backing this store, used during migration exports.
+	// SourceDB is the raw *sql.DB backing this store, which a task's
+	// database access queries (task_db.go).
 	SourceDB *sql.DB
-	// UpgradePostgres, when set, is what POST /api/database/upgrade calls to upgrade
-	// SQLite to PostgreSQL.
-	UpgradePostgres func(ctx context.Context, dsn string, migrateData bool) (*postgres.UpgradeResult, error)
-	// DatabaseConfirm, when set, is handed each confirmation token POST
-	// /api/database/upgrade issues, with a sentence saying what it would
-	// confirm, instead of the daemon log. It must deliver them somewhere
-	// the HTTP caller cannot read; tests set it to catch the token.
-	DatabaseConfirm func(token, summary string)
 	// IAPAudience, when set, specifies the expected target audience for verifying
 	// Google Cloud IAP JWT assertions (X-Goog-IAP-JWT-Assertion), or
 	// several separated by commas. With none (here or in
