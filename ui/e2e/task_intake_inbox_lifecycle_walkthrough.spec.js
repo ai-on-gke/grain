@@ -789,7 +789,7 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
   // Gemini key while saying it was not ready. Unticking it took its row
   // out of the open menu, so it could not be ticked again, and focus fell
   // out of the list. The row now stays for as long as the form is open.
-  // gemini-key and self-debug are retired, so this uses bootstrap-playbooks,
+  // gemini-key, self-debug and bootstrap-playbooks are retired, so this uses read-issues,
   // which this file's demo has ready: the real /api/config is read and only
   // that row's readiness is rewritten.
   test("keeps an unticked unready capability in the open menu", async ({
@@ -802,15 +802,12 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
         const response = await route.fetch();
         const config = JSON.parse(await response.text());
         config.capabilities = (config.capabilities || []).map((c) =>
-          c.id === "bootstrap-playbooks"
+          c.id === "read-issues"
             ? { ...c, ready: false, needs: ["a GCP project"] }
             : c,
         );
         config.defaultCapabilities = [
-          ...new Set([
-            ...(config.defaultCapabilities || []),
-            "bootstrap-playbooks",
-          ]),
+          ...new Set([...(config.defaultCapabilities || []), "read-issues"]),
         ];
         await route.fulfill({ response, json: config });
       } catch {
@@ -840,9 +837,9 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     });
     await expect
       .poll(() => chosenValues(capabilities))
-      .toContain("bootstrap-playbooks");
+      .toContain("read-issues");
     await capabilities.click();
-    const row = page.getByRole("option", { name: /Bootstrap playbooks/ });
+    const row = page.getByRole("option", { name: /Read issues/ });
     await expect(row).toContainText(/Not ready/);
     await row.click();
     await expect(row).toBeVisible();
@@ -856,14 +853,12 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     await expect(form).toBeVisible();
     await expect
       .poll(() => chosenValues(capabilities))
-      .toContain("bootstrap-playbooks");
+      .toContain("read-issues");
 
     await form.getByRole("button", { name: "Create task" }).click();
     await expect(form).toBeHidden();
     expect(filed).toHaveLength(1);
-    expect(filed[0].postDataJSON().capabilities).toContain(
-      "bootstrap-playbooks",
-    );
+    expect(filed[0].postDataJSON().capabilities).toContain("read-issues");
   });
 
   // grain/task-1625: a selection outlives the view it was made in.

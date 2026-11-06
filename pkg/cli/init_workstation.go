@@ -260,9 +260,12 @@ const directorNetworkWarning = "The Director chat asks for open network, so this
 // directorCapabilities is every capability the Director chat is granted
 // (model.DefaultConsoleSessions, by way of model.ConsoleSessionGrants),
 // as local policy's capabilities.allow names it: a capability reference
-// by its reference alone, since policy matches one without its
-// arguments. It is read from this binary, so a capability a linked-in
-// package registers for the Director is among them.
+// carrying narrowing arguments keeps its canonical =<json> arguments so
+// the starter policy admits only that grant (for example the built-in
+// bootstrap config map, without opening operator config maps or secrets),
+// while one with empty arguments is named by its reference alone. It is
+// read from this binary, so a capability a linked-in package registers
+// for the Director is among them.
 func directorCapabilities() []string {
 	var out []string
 	for _, s := range model.DefaultConsoleSessions() {
@@ -272,7 +275,13 @@ func directorCapabilities() []string {
 		for _, g := range model.ConsoleSessionGrants(s) {
 			c := g.Capability
 			if model.IsCapabilityRef(c) {
-				c = model.CapabilityGrantRef(c)
+				if spec, err := model.CapabilityGrantSpec(c); err == nil && len(spec.With) > 0 {
+					if enc, err := model.EncodeCapabilityGrant(spec); err == nil {
+						c = enc
+					}
+				} else {
+					c = model.CapabilityGrantRef(c)
+				}
 			}
 			if !slices.Contains(out, c) {
 				out = append(out, c)

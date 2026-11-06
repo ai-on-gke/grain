@@ -833,6 +833,11 @@ var Migrations = []Migration{
 			hostJoinRequestTable,
 		},
 	},
+	{
+		Version:     118,
+		Description: "rewrite stored bootstrap-playbooks grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]} (the in-process bootstrap-playbooks is retired)",
+		Up:          migrateBootstrapPlaybooksGrants,
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

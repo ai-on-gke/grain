@@ -563,7 +563,11 @@ import "strconv"
 // on `hostd` (`public_key`, `key_fingerprint`, `enrollment_code`, `capacity`,
 // `hostname`, `os`, `arch`, `clis`, `version`, `local_user`, `last_seen_at`),
 // and 30-day credential expiry on `hostd_token` (`expires_at`).
-const SchemaVersion = 117
+//
+// 118 rewrites stored `bootstrap-playbooks` grants across the grant tables,
+// deployment and repository default/CI capabilities, console sessions, and
+// capability_policy to `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}`.
+const SchemaVersion = 118
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted

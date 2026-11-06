@@ -52,7 +52,7 @@ import (
 )
 
 const (
-	ambientSSHCapabilityName = "bootstrap-playbooks"
+	ambientSSHCapabilityName = "read-issues"
 	ambientSSHCredentialName = "ambient-ssh-key"
 )
 

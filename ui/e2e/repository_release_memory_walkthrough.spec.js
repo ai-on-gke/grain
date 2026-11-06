@@ -346,7 +346,7 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
         res.request().method() === "PUT" &&
         /\/api\/repos\/acme\/widgets\/capabilities(\?|$)/.test(res.url()),
     );
-    await page.getByRole("option", { name: /Bootstrap playbooks/i }).click();
+    await page.getByRole("option", { name: /Priority dispatch/i }).click();
     expect((await defCapsSaved).ok()).toBeTruthy();
     await page.keyboard.press("Escape");
     await expect(page.locator(".MuiAlert-filledError")).not.toBeVisible();
@@ -359,7 +359,7 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
     ).toBeVisible();
     await page.getByRole("tab", { name: "Agents" }).click();
     await expect(
-      page.locator(".MuiChip-root").filter({ hasText: /Bootstrap playbooks/i }),
+      page.locator(".MuiChip-root").filter({ hasText: /Priority dispatch/i }),
     ).toBeVisible();
 
     // 2.5 Prompt Extension and Setup Command

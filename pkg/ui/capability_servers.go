@@ -302,9 +302,9 @@ func (c *Client) ListCapabilityServers(ctx context.Context) ([]CapabilityServer,
 			}
 			row.Status = &s
 		} else if schema := intree.BuiltinConfigSchema(sc.Builtin); schema != nil {
-			state := servers.NeedsConfig
-			if len(sc.Config) > 0 {
-				state = servers.Pending
+			state := servers.Pending
+			if b, ok := intree.BuiltinNamed(sc.Builtin); (!ok || b.NeedsConfig) && len(sc.Config) == 0 {
+				state = servers.NeedsConfig
 			}
 			row.Status = &servers.Status{
 				ID:           id,

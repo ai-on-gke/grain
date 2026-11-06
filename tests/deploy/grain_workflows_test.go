@@ -975,7 +975,7 @@ func TestTheGoJobDeclaresEveryFileItsOwnTestsRead(t *testing.T) {
 		"pkg/ci/paths.go",
 		"ui/package.json",
 		"go.mod",
-		"pkg/capability/bootstrap/playbooks/gcp-capabilities.md",
+		"pkg/playbooks/gcp-capabilities.md",
 	} {
 		if !selectsPath(goJob, path) {
 			t.Errorf("the `go` job does not declare %s, which something it runs reads: "+
@@ -1011,7 +1011,7 @@ func TestTheGoJobDeclaresEveryFileItsOwnTestsRead(t *testing.T) {
 			"docs/claude-surface.md",
 			"docs/codex-surface.md",
 			"docs/agy-surface.md",
-			"pkg/capability/bootstrap/playbooks/gcp-capabilities.md",
+			"pkg/playbooks/gcp-capabilities.md",
 		} {
 			if !selectsPath(job, path) {
 				t.Errorf("the %q job does not declare %s, which something it runs reads", id, path)

@@ -419,6 +419,10 @@ func (c *CapabilityCatalogue) judgeRetiredInProcess(g string, gc GrantContext) (
 		sort.Strings(extra)
 		names = append(names, extra...)
 	}
+	if BootstrapSkillSetUnnamed(g) && !slices.Contains(names, "bootstrap-playbooks") {
+		names = append(names, "bootstrap-playbooks")
+		sort.Strings(names)
+	}
 	for _, legacy := range names {
 		entry, key, ok := c.inProcessEntry(legacy)
 		if !ok {
@@ -528,6 +532,9 @@ func retiredInProcessNames(g string) []string {
 			}
 		}
 	}
+	if IsBootstrapPlaybooksGrant(grant) && !slices.Contains(out, "bootstrap-playbooks") {
+		out = append(out, "bootstrap-playbooks")
+	}
 	sort.Strings(out)
 	return out
 }
@@ -633,6 +640,25 @@ func (c *CapabilityCatalogue) server(id string) (CatalogueServer, bool) {
 	for _, s := range c.Servers {
 		if s.ID == id || containsString(s.Aliases, id) {
 			return s, true
+		}
+	}
+	// servers.Registry implicitly aliases https://grain.dev/capabilities/skill
+	// to https://grain.dev/capabilities/config-map when skill is not configured
+	// as an independent server, even when ServerConfig.Aliases is empty. Bind
+	// both IDs in the catalogue so restrictions on either apply to grants
+	// spelled under the other.
+	switch id {
+	case SkillCapabilityServerID:
+		for _, s := range c.Servers {
+			if s.ID == ConfigMapCapabilityServerID {
+				return s, true
+			}
+		}
+	case ConfigMapCapabilityServerID:
+		for _, s := range c.Servers {
+			if s.ID == SkillCapabilityServerID {
+				return s, true
+			}
 		}
 	}
 	return CatalogueServer{}, false
