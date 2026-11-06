@@ -183,7 +183,17 @@ func (s *remoteSession) serveCarry(st net.Conn) {
 		return
 	}
 	var req Request
-	if json.Unmarshal(payload, &req) != nil || req.Op != OpCarry || req.ID == "" {
+	if json.Unmarshal(payload, &req) != nil {
+		st.Close()
+		return
+	}
+	if req.Op == OpRenew {
+		defer st.Close()
+		_ = st.SetDeadline(time.Now().Add(carryHeaderTimeout))
+		s.serveRenew(st, req)
+		return
+	}
+	if req.Op != OpCarry || req.ID == "" {
 		st.Close()
 		return
 	}
@@ -196,6 +206,38 @@ func (s *remoteSession) serveCarry(st net.Conn) {
 	}
 	_ = st.SetReadDeadline(time.Time{})
 	handle(st)
+}
+
+func (s *remoteSession) serveRenew(st net.Conn, req Request) {
+	if s.r == nil || s.r.Renew == nil {
+		_ = writeJSON(st, frameRefused, Refusal{Reason: "credential renewal is not configured on this controller"})
+		return
+	}
+	if req.Renew == nil {
+		_ = writeJSON(st, frameRefused, Refusal{Reason: "missing renew proof"})
+		return
+	}
+	now := time.Now
+	if s.r.now != nil {
+		now = s.r.now
+	}
+	s.r.mu.Lock()
+	hostName := s.peer.Name
+	s.r.mu.Unlock()
+	if strings.TrimSpace(s.publicKey) != "" {
+		if err := VerifyRenewProof(hostName, req.Renew.CurrentToken, s.publicKey, *req.Renew, now(), &s.r.replay); err != nil {
+			_ = writeJSON(st, frameRefused, Refusal{Reason: err.Error()})
+			return
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), carryHeaderTimeout)
+	defer cancel()
+	tok, exp, err := s.r.Renew(ctx, hostName, req.Renew.CurrentToken)
+	if err != nil {
+		_ = writeJSON(st, frameRefused, Refusal{Reason: err.Error()})
+		return
+	}
+	_ = writeJSON(st, frameRenewed, RenewReply{Token: tok, ExpiresAt: exp})
 }
 
 // Carry asks the connected hostd to listen on its own loopback, and

@@ -39,6 +39,15 @@ func newHostdHub(cfg Config, store *model.Store) *hostd.Remote {
 	}
 	if store != nil {
 		hub.Resolve = registryResolver(store)
+		hub.ResolveCredential = registryCredentialResolver(store)
+		hub.Renew = func(ctx context.Context, name, currentToken string) (string, time.Time, error) {
+			return store.RenewHostdCredential(ctx, name, currentToken, time.Now().UTC())
+		}
+		hub.OnCheckin = func(ctx context.Context, peer hostd.RemotePeer) {
+			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			_ = store.RecordHostdCheckin(cctx, peer.Name, peer.Host, "", "", nil, peer.Build, "", time.Now().UTC())
+		}
 		hub.OnChange = hostdConnectionNotifier(store, hub)
 	}
 	return hub
@@ -133,16 +142,36 @@ func releaseFinishedHostdRuns(ctx context.Context, store *model.Store, c hostd.C
 // registryResolver names a hostd token from the registry: the live hostd
 // it belongs to, and that hostd's owner.
 func registryResolver(store *model.Store) func(ctx context.Context, token string) (string, string, bool, error) {
+	resolve := registryCredentialResolver(store)
 	return func(ctx context.Context, token string) (string, string, bool, error) {
+		cred, ok, err := resolve(ctx, token)
+		if !ok || err != nil {
+			return "", "", false, err
+		}
+		return cred.Name, cred.Owner, true, nil
+	}
+}
+
+func registryCredentialResolver(store *model.Store) func(ctx context.Context, token string) (hostd.ResolvedCredential, bool, error) {
+	return func(ctx context.Context, token string) (hostd.ResolvedCredential, bool, error) {
 		h, err := store.HostdForToken(ctx, token)
 		if err != nil || h == nil {
-			return "", "", false, err
+			return hostd.ResolvedCredential{}, false, err
 		}
 		if h.Name == model.LocalHostd {
 			// local is the socket's; nothing dials in as it.
-			return "", "", false, nil
+			return hostd.ResolvedCredential{}, false, nil
 		}
-		return h.Name, h.Owner, true, nil
+		var exp time.Time
+		if h.TokenExpiresAt != nil {
+			exp = *h.TokenExpiresAt
+		}
+		return hostd.ResolvedCredential{
+			Name:      h.Name,
+			Owner:     h.Owner,
+			PublicKey: h.PublicKey,
+			ExpiresAt: exp,
+		}, true, nil
 	}
 }
 
