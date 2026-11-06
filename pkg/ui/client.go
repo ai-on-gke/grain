@@ -564,7 +564,8 @@ func (c *Client) redBaseBranches(ctx context.Context) redBaseLookup {
 	}
 	if relRows, err := c.Store.ListBaseBranchRelease(ctx); err == nil {
 		for _, r := range relRows {
-			if r.Failing() || (r.Conclusion != "" && r.Conclusion != "success" && r.Conclusion != "skipped") {
+			if r.Failing() || (r.Conclusion != "" && r.Conclusion != "success" && r.Conclusion != "skipped" &&
+				!r.Superseded()) {
 				out.broken[strings.ToLower(r.Repo.String())+":"+r.Branch] = true
 			}
 		}
