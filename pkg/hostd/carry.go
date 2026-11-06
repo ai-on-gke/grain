@@ -224,11 +224,20 @@ func (s *remoteSession) serveRenew(st net.Conn, req Request) {
 	s.r.mu.Lock()
 	hostName := s.peer.Name
 	s.r.mu.Unlock()
-	if strings.TrimSpace(s.publicKey) != "" {
-		if err := VerifyRenewProof(hostName, req.Renew.CurrentToken, s.publicKey, *req.Renew, now(), &s.r.replay); err != nil {
-			_ = writeJSON(st, frameRefused, Refusal{Reason: err.Error()})
-			return
-		}
+	// Only a key-bound session renews, with its current credential and a
+	// fresh proof from its bound key: a legacy per-host token has no key
+	// behind it, and renewing one would only make it expire.
+	if strings.TrimSpace(s.publicKey) == "" {
+		_ = writeJSON(st, frameRefused, Refusal{Reason: "only a key-bound host renews its credential"})
+		return
+	}
+	if strings.TrimSpace(req.Renew.CurrentToken) == "" {
+		_ = writeJSON(st, frameRefused, Refusal{Reason: "missing current credential in renew proof"})
+		return
+	}
+	if err := VerifyRenewProof(hostName, req.Renew.CurrentToken, s.publicKey, *req.Renew, now(), &s.r.replay); err != nil {
+		_ = writeJSON(st, frameRefused, Refusal{Reason: err.Error()})
+		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), carryHeaderTimeout)
 	defer cancel()

@@ -283,3 +283,84 @@ func TestStoreRedactsHostEnrollmentCodesInTasksAndComments(t *testing.T) {
 		t.Fatalf("enrollment code leaked into stored comment: %+v", comments[0])
 	}
 }
+
+// A legacy per-host token migrates to a key-bound credential through
+// rekey, but once a host is key-bound a copied credential alone must not
+// move it to another key: only a request carrying its bound key rekeys it,
+// and a second rekey filed before the first was accepted cannot be accepted
+// afterwards. Legacy tokens never renew, and renewal always names the
+// current credential.
+func TestHostRekeyIsBoundToTheHostsKeyAndOnlyKeyBoundHostsRenew(t *testing.T) {
+	ctx := context.Background()
+	s := openHostEnrollStore(t)
+	now := time.Now().UTC()
+
+	legacy, legacyTok, err := s.CreateHostd(ctx, model.Hostd{Name: "old-box", Owner: "owner@example.com"})
+	if err != nil {
+		t.Fatalf("CreateHostd: %v", err)
+	}
+	if legacy.KeyBound() {
+		t.Fatalf("legacy host is key-bound: %+v", legacy)
+	}
+
+	// Legacy per-host tokens do not renew (with or without a token).
+	if _, _, err := s.RenewHostdCredential(ctx, "old-box", legacyTok, now); !errors.Is(err, model.ErrHostdNotKeyBound) {
+		t.Fatalf("RenewHostdCredential(legacy) err = %v, want ErrHostdNotKeyBound", err)
+	}
+	if got, err := s.HostdForTokenAt(ctx, legacyTok, now.Add(365*24*time.Hour)); err != nil || got == nil {
+		t.Fatalf("legacy token stopped resolving after a refused renew: %+v, %v", got, err)
+	}
+
+	// Two rekey requests race for the legacy host with different keys.
+	mine, err := s.CreateHostJoinRequest(ctx, model.HostJoinRequest{
+		RekeyHostd: "old-box", PublicKey: "ed25519:MINE", KeyFingerprint: "SHA256:mine",
+		Hostname: "old-box", EnrolledBy: "owner@example.com",
+	}, "", now)
+	if err != nil {
+		t.Fatalf("CreateHostJoinRequest(rekey mine): %v", err)
+	}
+	theirs, err := s.CreateHostJoinRequest(ctx, model.HostJoinRequest{
+		RekeyHostd: "old-box", PublicKey: "ed25519:THEIRS", KeyFingerprint: "SHA256:theirs",
+		Hostname: "old-box", EnrolledBy: "mallory@example.com",
+	}, "", now)
+	if err != nil {
+		t.Fatalf("CreateHostJoinRequest(rekey theirs): %v", err)
+	}
+	if _, _, err := s.AcceptHostJoinRequest(ctx, mine.ID, model.AcceptHostJoinOptions{AcceptedBy: "owner@example.com"}, now); err != nil {
+		t.Fatalf("AcceptHostJoinRequest(mine): %v", err)
+	}
+	_, _, cred, _, accepted, err := s.ClaimAcceptedHostJoinRequest(ctx, mine.ID, now)
+	if err != nil || !accepted || cred == "" {
+		t.Fatalf("ClaimAcceptedHostJoinRequest(mine) = %v %q %v", accepted, cred, err)
+	}
+
+	// The host is key-bound now: the stale request with another key cannot
+	// be accepted, and no new one can be filed with another key.
+	if _, _, err := s.AcceptHostJoinRequest(ctx, theirs.ID, model.AcceptHostJoinOptions{AcceptedBy: "owner@example.com"}, now); !errors.Is(err, model.ErrRekeyKeyMismatch) {
+		t.Fatalf("AcceptHostJoinRequest(theirs) err = %v, want ErrRekeyKeyMismatch", err)
+	}
+	if h, err := s.GetHostd(ctx, "old-box"); err != nil || h == nil || h.PublicKey != "ed25519:MINE" {
+		t.Fatalf("host after refused accept = %+v, %v", h, err)
+	}
+	if _, err := s.CreateHostJoinRequest(ctx, model.HostJoinRequest{
+		RekeyHostd: "old-box", PublicKey: "ed25519:OTHER", KeyFingerprint: "SHA256:other",
+		Hostname: "old-box", EnrolledBy: "mallory@example.com",
+	}, "", now); !errors.Is(err, model.ErrRekeyKeyMismatch) {
+		t.Fatalf("CreateHostJoinRequest(rekey other key) err = %v, want ErrRekeyKeyMismatch", err)
+	}
+	// Its own key (padding aside) may still file one.
+	if _, err := s.CreateHostJoinRequest(ctx, model.HostJoinRequest{
+		RekeyHostd: "old-box", PublicKey: "ed25519:MINE==", KeyFingerprint: "SHA256:mine",
+		Hostname: "old-box", EnrolledBy: "owner@example.com",
+	}, "", now); err != nil {
+		t.Fatalf("CreateHostJoinRequest(rekey same key): %v", err)
+	}
+
+	// Key-bound renewal needs the current credential.
+	if _, _, err := s.RenewHostdCredential(ctx, "old-box", "", now); !errors.Is(err, model.ErrHostdRevoked) {
+		t.Fatalf("RenewHostdCredential(empty token) err = %v, want ErrHostdRevoked", err)
+	}
+	if _, _, err := s.RenewHostdCredential(ctx, "old-box", cred, now); err != nil {
+		t.Fatalf("RenewHostdCredential(key-bound): %v", err)
+	}
+}

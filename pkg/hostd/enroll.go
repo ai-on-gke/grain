@@ -248,14 +248,28 @@ func sha256HexString(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// maxReplayEntries bounds NonceReplayCache: POST /api/hostd/join is
+// served without the access code, and any self-signed request records a
+// nonce before the enrollment code is checked, so an unbounded cache is
+// memory an anonymous caller can fill. Past the bound (after pruning what
+// has expired) new nonces are refused, which fails closed.
+const maxReplayEntries = 1 << 16
+
+// replayPruneEvery is how often CheckAndRecord sweeps expired entries
+// once the cache is large, so a full cache does not cost a whole-map walk
+// on every request.
+const replayPruneEvery = time.Second
+
 // NonceReplayCache rejects replayed Ed25519 request nonces within ConnectProofSkew.
 type NonceReplayCache struct {
-	mu   sync.Mutex
-	seen map[string]time.Time
+	mu        sync.Mutex
+	seen      map[string]time.Time
+	lastPrune time.Time
 }
 
 // CheckAndRecord returns true when nonce has not been seen for scope within
-// window, recording it until now + window.
+// window, recording it until now + window. It returns false, refusing the
+// request, for a replayed nonce and when the cache is full of live nonces.
 func (c *NonceReplayCache) CheckAndRecord(scope, nonce string, now time.Time, window time.Duration) bool {
 	if c == nil {
 		return true
@@ -267,7 +281,8 @@ func (c *NonceReplayCache) CheckAndRecord(scope, nonce string, now time.Time, wi
 	if c.seen == nil {
 		c.seen = map[string]time.Time{}
 	}
-	if len(c.seen) > 4096 {
+	if len(c.seen) > 4096 && now.Sub(c.lastPrune) >= replayPruneEvery {
+		c.lastPrune = now
 		for k, exp := range c.seen {
 			if !exp.After(now) {
 				delete(c.seen, k)
@@ -275,6 +290,9 @@ func (c *NonceReplayCache) CheckAndRecord(scope, nonce string, now time.Time, wi
 		}
 	}
 	if exp, exists := c.seen[key]; exists && exp.After(now) {
+		return false
+	}
+	if len(c.seen) >= maxReplayEntries {
 		return false
 	}
 	c.seen[key] = now.Add(window)
