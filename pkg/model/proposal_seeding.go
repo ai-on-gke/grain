@@ -117,6 +117,15 @@ func ProposalEscalations(child, parent Task, sessionQueues bool, seeding *Propos
 // admits is §4.2 for one escalated capability c of child: the seeded
 // default it is, when the rule admits it.
 func (s *ProposalSeeding) admits(child Task, c string) (SeededDefault, bool) {
+	// A capability reference that was never normalized into recorded form
+	// (no #method) cannot have its method-level person-only rules
+	// (protocol.RequirePersonGrant, SetGrantPolicy) or normalized with:
+	// arguments checked, so it stays uncovered (§2.3.4).
+	if IsCapabilityRef(c) {
+		if _, ok := recordedCapabilityGrant(c); !ok {
+			return SeededDefault{}, false
+		}
+	}
 	if !isSeededGrant(child.Grants, c) || IsPersonOnlyGrant(c) {
 		return SeededDefault{}, false
 	}
@@ -144,9 +153,21 @@ func (s *ProposalSeeding) admits(child Task, c string) (SeededDefault, bool) {
 // for a reference is its recorded form -- is one of defaults exactly,
 // with: arguments and all once both are in recorded form.
 func seededFrom(defaults []string, c string) bool {
-	want := canonicalGrantString(c)
+	if IsCapabilityRef(c) {
+		want, ok := recordedCapabilityGrant(c)
+		if !ok {
+			return false
+		}
+		wantRecorded := RecordedCapabilityGrant(want)
+		for _, d := range defaults {
+			if got, ok := recordedCapabilityGrant(strings.TrimSpace(d)); ok && RecordedCapabilityGrant(got) == wantRecorded {
+				return true
+			}
+		}
+		return false
+	}
 	for _, d := range defaults {
-		if canonicalGrantString(strings.TrimSpace(d)) == want {
+		if strings.TrimSpace(d) == c {
 			return true
 		}
 	}

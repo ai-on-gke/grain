@@ -534,7 +534,7 @@ deployment's `default_capabilities`.
 | G11 | Docs | Retired capability names and the `NetworkAccess: open` note in `docs/director.md` updated in [Task #3185](/tasks/3185); envelope table still reflects pre-G1–G3 defaults | Matches §3 | Update `docs/director.md` alongside G1–G3 as each default flips. |
 | G12 | Capacity bound on session-queued proposals | **done**: `AutoSubmitLimits.TurnFanOut` (default 10), checked by `Store.ExceededSessionTurnLimit` beside `ExceededAutoSubmitLimit` in `ui.Client.CreateTask` and `orchestrator.relayProposedTasks`; over it, filed for a person with `AutoSubmitLimitNote` | Per-turn fan-out bound; over it, filed for a person (§3.1.5) | None. The bound has no settings knob yet. |
 
-Ordering: G4, G5, G7 and G12 are done, and G10 can land with G1. G6 precedes the
+Ordering: G4, G5, G7, G9 and G12 are done, and G10 can land with G1. G6 precedes the
 detach part of G1, and G3's verification precedes its default change. G8 MUST
 land before G2 (as G5's `IsConfigRepo` proposal hold, G7's built-in floor and G12 have), so that the auto-queueing
 director never runs on a deployment without the Tier 3 rails.

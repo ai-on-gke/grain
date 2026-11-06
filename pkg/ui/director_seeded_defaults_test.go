@@ -162,3 +162,41 @@ func TestDirectorProposalOutsideTheSeededRuleWaitsForAPerson(t *testing.T) {
 		})
 	}
 }
+
+// An agent's proposal records no TemplateID on the stored task, so naming
+// a template on propose_task must not let a director proposal carry a
+// default that settings/capabilities.yml restricts to that template.
+func TestDirectorProposalNamingATemplateDropsTemplateRestrictedDefaults(t *testing.T) {
+	t.Parallel()
+	client, store, ctx, director := seededSessionClient(t, model.DirectorSessionID, true)
+	if err := store.PutTemplate(ctx, model.Template{
+		ID: "tmpl-release", Name: "release-audit", Title: "Audit", Body: "Check",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		cfg.CapabilityPolicy.Catalogue = &model.CapabilityCatalogue{
+			Servers: []model.CatalogueServer{{
+				ID:           "https://caps.example/host-script",
+				Restrictions: &model.CapabilityRestrictions{Templates: model.Patterns{"release-audit"}},
+			}},
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	filed, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "audit widgets", Description: "d",
+		Repo: "acme/widgets", TemplateID: "tmpl-release", ProposedBy: director,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if holdsSeededHostScript(filed.Capabilities) {
+		t.Errorf("capabilities = %v, want template-restricted default dropped for a proposal stored with no TemplateID", filed.Capabilities)
+	}
+	if stored := mustGetTask(t, ctx, store, filed.ID); stored.TemplateID != "" {
+		t.Errorf("stored TemplateID = %q, want empty", stored.TemplateID)
+	}
+}

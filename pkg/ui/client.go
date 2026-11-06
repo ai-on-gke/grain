@@ -2561,11 +2561,20 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err != nil {
 		return Task{}, err
 	}
+	// The template a person filed this from, which is how the task's runs
+	// find that template's declared push set (model.Task.TemplateID) and how
+	// the catalogue judges its template restrictions. An agent's proposal
+	// records none, even one naming a template: a run cannot hand a
+	// template's push set or template-restricted grants on to work it files.
+	var filedFrom string
+	if proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent {
+		filedFrom = strings.TrimSpace(req.TemplateID)
+	}
 	// The capability catalogue (settings/capabilities.yml) refuses what
 	// it does not admit here, and names what only a person may grant:
 	// a proposal or an agent's own filing holding one is left for a
 	// person to approve, whatever permission it would otherwise inherit.
-	grants, catalogueNeedsPerson, err := c.catalogueFilingGrants(ctx, grants, target, req.TemplateID)
+	grants, catalogueNeedsPerson, err := c.catalogueFilingGrants(ctx, grants, target, filedFrom)
 	if err != nil {
 		return Task{}, err
 	}
@@ -2765,7 +2774,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	var limitNote, ungrantedNote, heldNote, needsPersonNote, personOnlyNote, seededNote, refusal string
 	var escalated []string
 	if proposedBy != nil {
-		child := model.Task{Target: target, Base: req.Base, Grants: grants, Writes: writes, TemplateID: strings.TrimSpace(req.TemplateID)}
+		child := model.Task{Target: target, Base: req.Base, Grants: grants, Writes: writes, TemplateID: filedFrom}
 		autoMerge = autoMerge && proposedBy.AutoMerge && model.AutoSubmits(child, *proposedBy)
 		child.Reads = reads
 		// Read before the proposal's escalations are measured: a
@@ -2924,14 +2933,6 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
 			OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: proposedBy.ID},
 		}
-	}
-	// The template a person filed this from, which is how the task's runs
-	// find that template's declared push set (model.Task.TemplateID). An
-	// agent's proposal records none, even one naming a template: a run
-	// cannot hand the refs it may push on to work it files.
-	var filedFrom string
-	if proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent {
-		filedFrom = strings.TrimSpace(req.TemplateID)
 	}
 	resolvedOwner, sessionBehalf, err := c.resolveNewTaskOwner(ctx, req, proposedBy)
 	if err != nil {

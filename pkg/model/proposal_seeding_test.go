@@ -240,6 +240,17 @@ func TestDirectorProposalStillHoldsEveryExcludedCase(t *testing.T) {
 			held:    "https://caps.example/seeded-person-only#approve",
 			refusal: "seeded with this deployment's default capability",
 		},
+		// An unnormalized reference with no #method cannot have its
+		// method-level person-only rules or normalized args checked, even
+		// when the seeding source spells it identically.
+		"unnormalized reference without a method": {
+			child: seededChild(byDefault("https://caps.example/seeded-person-only")),
+			seeding: func(s *model.ProposalSeeding) {
+				s.RepoDefaults = []string{"https://caps.example/seeded-person-only"}
+			},
+			held:    "https://caps.example/seeded-person-only",
+			refusal: "seeded with this deployment's default capability",
+		},
 		// The catalogue marks it a person's decision for this task.
 		"requires_person in the catalogue": {
 			child: seededChild(byDefault(seededRepoDefault)),
