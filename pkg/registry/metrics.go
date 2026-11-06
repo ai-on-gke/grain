@@ -27,11 +27,13 @@ import (
 // Metrics tracks operational counters and gauges for `grain-registry`
 // and renders them in Prometheus exposition format (or JSON when requested).
 type Metrics struct {
-	requestsTotal     atomic.Int64
-	assertionsSigned  atomic.Int64
-	admissionRejected atomic.Int64
-	activeTunnels     atomic.Int64
-	heartbeatsTotal   atomic.Int64
+	requestsTotal       atomic.Int64
+	assertionsSigned    atomic.Int64
+	admissionRejected   atomic.Int64
+	activeTunnels       atomic.Int64
+	heartbeatsTotal     atomic.Int64
+	peerStreamsRejected atomic.Int64
+	peerForwardsTotal   atomic.Int64
 
 	mu       sync.RWMutex
 	byStatus map[int]int64
@@ -84,14 +86,30 @@ func (m *Metrics) IncHeartbeats() {
 	m.heartbeatsTotal.Add(1)
 }
 
+func (m *Metrics) IncPeerStreamRejected() {
+	if m == nil {
+		return
+	}
+	m.peerStreamsRejected.Add(1)
+}
+
+func (m *Metrics) IncPeerForwards() {
+	if m == nil {
+		return
+	}
+	m.peerForwardsTotal.Add(1)
+}
+
 // MetricsSnapshot holds a point-in-time snapshot of registry metrics.
 type MetricsSnapshot struct {
-	RequestsTotal     int64         `json:"requests_total"`
-	AssertionsSigned  int64         `json:"assertions_signed_total"`
-	AdmissionRejected int64         `json:"admission_rejected_total"`
-	ActiveTunnels     int64         `json:"active_tunnels"`
-	HeartbeatsTotal   int64         `json:"heartbeats_total"`
-	ResponsesByStatus map[int]int64 `json:"responses_by_status"`
+	RequestsTotal       int64         `json:"requests_total"`
+	AssertionsSigned    int64         `json:"assertions_signed_total"`
+	AdmissionRejected   int64         `json:"admission_rejected_total"`
+	ActiveTunnels       int64         `json:"active_tunnels"`
+	HeartbeatsTotal     int64         `json:"heartbeats_total"`
+	PeerStreamsRejected int64         `json:"peer_streams_rejected_total"`
+	PeerForwardsTotal   int64         `json:"peer_forwards_total"`
+	ResponsesByStatus   map[int]int64 `json:"responses_by_status"`
 }
 
 // Snapshot returns a point-in-time MetricsSnapshot.
@@ -106,12 +124,14 @@ func (m *Metrics) Snapshot() MetricsSnapshot {
 	}
 	m.mu.RUnlock()
 	return MetricsSnapshot{
-		RequestsTotal:     m.requestsTotal.Load(),
-		AssertionsSigned:  m.assertionsSigned.Load(),
-		AdmissionRejected: m.admissionRejected.Load(),
-		ActiveTunnels:     m.activeTunnels.Load(),
-		HeartbeatsTotal:   m.heartbeatsTotal.Load(),
-		ResponsesByStatus: byStatus,
+		RequestsTotal:       m.requestsTotal.Load(),
+		AssertionsSigned:    m.assertionsSigned.Load(),
+		AdmissionRejected:   m.admissionRejected.Load(),
+		ActiveTunnels:       m.activeTunnels.Load(),
+		HeartbeatsTotal:     m.heartbeatsTotal.Load(),
+		PeerStreamsRejected: m.peerStreamsRejected.Load(),
+		PeerForwardsTotal:   m.peerForwardsTotal.Load(),
+		ResponsesByStatus:   byStatus,
 	}
 }
 
@@ -146,6 +166,14 @@ func (m *Metrics) Handler() http.Handler {
 		fmt.Fprintf(&sb, "# HELP grain_registry_heartbeats_total Total instance and connected entry heartbeats processed.\n")
 		fmt.Fprintf(&sb, "# TYPE grain_registry_heartbeats_total counter\n")
 		fmt.Fprintf(&sb, "grain_registry_heartbeats_total %d\n", snap.HeartbeatsTotal)
+
+		fmt.Fprintf(&sb, "# HELP grain_registry_peer_streams_rejected_total Total grain-initiated mux stream frames rejected on outbound tunnels.\n")
+		fmt.Fprintf(&sb, "# TYPE grain_registry_peer_streams_rejected_total counter\n")
+		fmt.Fprintf(&sb, "grain_registry_peer_streams_rejected_total %d\n", snap.PeerStreamsRejected)
+
+		fmt.Fprintf(&sb, "# HELP grain_registry_peer_forwards_total Total replica-to-replica tunnel requests forwarded.\n")
+		fmt.Fprintf(&sb, "# TYPE grain_registry_peer_forwards_total counter\n")
+		fmt.Fprintf(&sb, "grain_registry_peer_forwards_total %d\n", snap.PeerForwardsTotal)
 
 		codes := make([]int, 0, len(snap.ResponsesByStatus))
 		for code := range snap.ResponsesByStatus {

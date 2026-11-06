@@ -182,6 +182,20 @@ CREATE INDEX IF NOT EXISTS tunnel_sessions_replica_idx
     ON registry.tunnel_sessions (replica_id);
 `,
 	},
+	{
+		version: 2,
+		name:    "tunnel_and_routing_extensions",
+		upSQL: `
+ALTER TABLE registry.entries
+    ADD COLUMN IF NOT EXISTS connected_principal TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS host_kind TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS last_disconnect_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS last_disconnect_reason TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE registry.tunnel_sessions
+    ADD COLUMN IF NOT EXISTS cred_id UUID;
+`,
+	},
 }
 
 // Migrate applies all pending registry schema migrations inside the `registry` PostgreSQL schema.
