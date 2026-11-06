@@ -2315,6 +2315,9 @@ func (c *RESTClient) DeleteBranch(owner, repo, branch string) error {
 
 // CreatePullRequest opens a pull request from head into base.
 func (c *RESTClient) CreatePullRequest(owner, repo, head, base, title, body string) (PullRequest, error) {
+	if taskID := taskIDFromHeadBranch(head); taskID != "" {
+		c = c.ForTask(taskID)
+	}
 	if err := c.gitOnly(owner, repo); err != nil {
 		return PullRequest{}, err
 	}

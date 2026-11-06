@@ -5343,9 +5343,82 @@ func (s *Store) TaskGitCredentialOn(ctx context.Context, taskID, host, owner, re
 	if name, ok := gitCredentialOverride(grants); ok {
 		return name, nil
 	}
-	// The task's team chooses nothing: every task resolves through the
-	// deployment's git connections (docs/single-tenant-reset.md, stage 1).
+	if users := s.taskUserCandidates(ctx, taskID); len(users) > 0 {
+		settings, err := s.GetConfig(ctx)
+		if err != nil {
+			return "", fmt.Errorf("reading the deployment's git connections: %w", err)
+		}
+		if settings != nil {
+			conns := settings.EffectiveGitConnections()
+			for _, u := range users {
+				if conn, ok := MatchUserGitConnection(conns, u, host, s.GitDefaultHost, owner, repo); ok {
+					return conn.Credential, nil
+				}
+			}
+		}
+	}
+	// Fall back to the deployment's default git connections.
 	return s.GitConnectionOn(ctx, host, owner, repo)
+}
+
+// taskUserCandidates returns the ordered list of human/service user
+// identities associated with taskID (owner, creator, and origin behalf/actor,
+// walking DerivedFrom if needed) for resolving per-user git connections.
+func (s *Store) taskUserCandidates(ctx context.Context, taskID string) []string {
+	var out []string
+	add := func(raw string) {
+		norm, err := NormalizeTaskOwner(raw)
+		if err != nil || norm == "" {
+			return
+		}
+		for _, existing := range out {
+			if SameIdentity(existing, norm) {
+				return
+			}
+		}
+		out = append(out, norm)
+	}
+	seen := map[string]bool{}
+	cur := strings.TrimSpace(taskID)
+	for cur != "" && !seen[cur] && len(seen) < 64 {
+		seen[cur] = true
+		var owner, creator, oaKind, oaID, originRef string
+		var obKindNull, obIDNull sql.NullString
+		err := s.db.QueryRowContext(ctx,
+			"SELECT `owner`, `creator`, `origin_actor_kind`, `origin_actor_id`, `origin_behalf_kind`, `origin_behalf_id`, `origin_ref` "+
+				"FROM `task` WHERE `id` = ?", cur).
+			Scan(&owner, &creator, &oaKind, &oaID, &obKindNull, &obIDNull, &originRef)
+		if err != nil {
+			break
+		}
+		if !strings.EqualFold(strings.TrimSpace(owner), DefaultTaskOwner) {
+			add(owner)
+		}
+		if !strings.EqualFold(strings.TrimSpace(creator), DefaultTaskOwner) {
+			add(creator)
+		}
+		add(ownerFromPrincipalFields(obKindNull.String, obIDNull.String, oaKind, oaID))
+		if len(out) > 0 {
+			break
+		}
+		var next string
+		for _, kind := range []LinkKind{LinkProposedBy, LinkPortOf} {
+			var target string
+			if lerr := s.db.QueryRowContext(ctx,
+				"SELECT `target` FROM `task_link` WHERE `task_id` = ? AND `kind` = ? LIMIT 1",
+				cur, string(kind)).Scan(&target); lerr == nil && strings.TrimSpace(target) != "" {
+				next = strings.TrimSpace(target)
+				break
+			}
+		}
+		if next == "" {
+			if orig := WorkOrigin(originRef).Task(); orig != "" && orig != cur {
+				next = orig
+			}
+		}
+		cur = next
+	}
+	return out
 }
 
 // TeamGitCredential is the team half of TaskGitCredential's ladder for a

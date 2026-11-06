@@ -44,10 +44,38 @@ import (
 // for that host, "owner" (or "owner/*") an owner or organization, and
 // "owner/repo" one repository. A team wanting one credential for several
 // specific repositories lists one connection per repository.
+//
+// User optionally binds the connection to a specific task author/owner
+// account (normalized via NormalizeTaskOwner, e.g. "alice@example.com").
+// Empty is the deployment-wide default connection for (Host, Scope).
 type TeamGitConnection struct {
 	Credential string `json:"credential" yaml:"credential"`
 	Host       string `json:"host,omitempty" yaml:"host,omitempty"`
 	Scope      string `json:"scope,omitempty" yaml:"scope,omitempty"`
+	User       string `json:"user,omitempty" yaml:"user,omitempty"`
+}
+
+// SameGitConnectionUser reports whether two connection User fields name
+// the same user binding (or are both empty, for the deployment default).
+// If one identifier is an email address and the other is a bare username
+// without "@", the email's local-part is compared case-insensitively.
+func SameGitConnectionUser(a, b string) bool {
+	a, b = NormalizeIdentity(a), NormalizeIdentity(b)
+	if a == "" && b == "" {
+		return true
+	}
+	if a == "" || b == "" {
+		return false
+	}
+	if strings.EqualFold(a, b) {
+		return true
+	}
+	aLocal, _, aHasAt := strings.Cut(a, "@")
+	bLocal, _, bHasAt := strings.Cut(b, "@")
+	if aHasAt != bHasAt && aLocal != "" && bLocal != "" {
+		return strings.EqualFold(aLocal, bLocal)
+	}
+	return false
 }
 
 // connectionSpecificity ranks a scope: a repository beats an owner beats
@@ -60,8 +88,9 @@ const (
 )
 
 // NormalizeTeamGitConnection is c as grain stores it: trimmed, host
-// normalized (NormalizeGitHost) and scope spelled "", "owner" or
-// "owner/repo" in lowercase, or an error naming what is wrong.
+// normalized (NormalizeGitHost), scope spelled "", "owner" or
+// "owner/repo" in lowercase, and user normalized via NormalizeTaskOwner
+// when present, or an error naming what is wrong.
 func NormalizeTeamGitConnection(c TeamGitConnection) (TeamGitConnection, error) {
 	c.Credential = strings.TrimSpace(c.Credential)
 	if c.Credential == "" {
@@ -86,6 +115,15 @@ func NormalizeTeamGitConnection(c TeamGitConnection) (TeamGitConnection, error) 
 		}
 	}
 	c.Scope = scope
+	if rawUser := strings.TrimSpace(c.User); rawUser != "" {
+		normUser, err := NormalizeTaskOwner(rawUser)
+		if err != nil {
+			return c, fmt.Errorf("git connection user: %w", err)
+		}
+		c.User = normUser
+	} else {
+		c.User = ""
+	}
 	return c, nil
 }
 
@@ -155,30 +193,70 @@ func (c Config) HasGitConnectionOn(host, defaultHost string) bool {
 // MatchTeamGitConnection is the most specific connection in conns for
 // owner/repo on host -- one scoped to that repository, then to its
 // owner, then the host's default -- with the earlier entry winning a tie.
+// Default (User == "") connections are preferred over user-bound connections,
+// falling back to a user-bound connection on host only when no default
+// connection matches on that host.
 // host and every connection's own Host resolve an empty value to
 // defaultHost (ResolveGitHost). A connection on another host never
 // matches, however broad: there is no fallback across hosts.
 func MatchTeamGitConnection(conns []TeamGitConnection, host, defaultHost, owner, repo string) (TeamGitConnection, bool) {
 	owner, repo = strings.ToLower(owner), strings.TrimSuffix(strings.ToLower(repo), ".git")
-	var best TeamGitConnection
-	bestRank := scopeNoMatch
+	var bestDefault, bestAny TeamGitConnection
+	bestDefaultRank, bestAnyRank := scopeNoMatch, scopeNoMatch
 	for _, raw := range conns {
 		c, err := NormalizeTeamGitConnection(raw)
 		if err != nil || !SameGitHost(c.Host, host, defaultHost) {
 			continue
 		}
-		rank := scopeNoMatch
-		switch {
-		case c.Scope == "":
-			rank = scopeHostDefault
-		case owner != "" && repo != "" && c.Scope == owner+"/"+repo:
-			rank = scopeRepo
-		case owner != "" && c.Scope == owner:
-			rank = scopeOwner
+		rank := scopeRankFor(c.Scope, owner, repo)
+		if c.User == "" && rank > bestDefaultRank {
+			bestDefault, bestDefaultRank = c, rank
 		}
+		if rank > bestAnyRank {
+			bestAny, bestAnyRank = c, rank
+		}
+	}
+	if bestDefaultRank != scopeNoMatch {
+		return bestDefault, true
+	}
+	return bestAny, bestAnyRank != scopeNoMatch
+}
+
+// MatchUserGitConnection is the most specific connection in conns bound
+// to user (SameGitConnectionUser(c.User, user)) for owner/repo on host -- one
+// scoped to that repository, then to its owner, then the host's default
+// -- with the earlier entry winning a tie. Returns false when user is
+// empty or holds no matching connection on host.
+func MatchUserGitConnection(conns []TeamGitConnection, user, host, defaultHost, owner, repo string) (TeamGitConnection, bool) {
+	normUser := NormalizeIdentity(user)
+	if normUser == "" {
+		return TeamGitConnection{}, false
+	}
+	owner, repo = strings.ToLower(owner), strings.TrimSuffix(strings.ToLower(repo), ".git")
+	var best TeamGitConnection
+	bestRank := scopeNoMatch
+	for _, raw := range conns {
+		c, err := NormalizeTeamGitConnection(raw)
+		if err != nil || c.User == "" || !SameGitConnectionUser(c.User, normUser) || !SameGitHost(c.Host, host, defaultHost) {
+			continue
+		}
+		rank := scopeRankFor(c.Scope, owner, repo)
 		if rank > bestRank {
 			best, bestRank = c, rank
 		}
 	}
 	return best, bestRank != scopeNoMatch
+}
+
+func scopeRankFor(scope, owner, repo string) int {
+	switch {
+	case scope == "":
+		return scopeHostDefault
+	case owner != "" && repo != "" && scope == owner+"/"+repo:
+		return scopeRepo
+	case owner != "" && scope == owner:
+		return scopeOwner
+	default:
+		return scopeNoMatch
+	}
 }

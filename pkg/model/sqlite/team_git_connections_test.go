@@ -158,3 +158,36 @@ func TestTeamGitCredentialOnFollowsTheDeploymentsDefaultHost(t *testing.T) {
 		t.Errorf("github.com on a GHE deployment: err = %v, want ErrNoTeamGitCredential", err)
 	}
 }
+
+func TestTaskGitCredentialOnSelectsTaskUserPATAndFallsBackToDefault(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	if err := setGitConnections(ctx, store, "", []model.TeamGitConnection{
+		{Credential: "default-pat", Host: "github.com"},
+		{Credential: "alice-pat", Host: "github.com", User: "alice@example.com"},
+		{Credential: "bob-pat", Host: "github.com", User: "bob@example.com"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tk := range []model.Task{
+		{ID: "t-alice", Intent: model.IntentImplement, Title: "Alice task", Owner: "alice@example.com", Binding: model.BindingDirective},
+		{ID: "t-bob", Intent: model.IntentImplement, Title: "Bob task", Owner: "bob", Binding: model.BindingDirective},
+		{ID: "t-charlie", Intent: model.IntentImplement, Title: "Charlie task", Owner: "charlie@example.com", Binding: model.BindingDirective},
+	} {
+		if err := store.PutTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got, err := store.TaskGitCredentialOn(ctx, "t-alice", "github.com", "acme", "widgets"); err != nil || got != "alice-pat" {
+		t.Errorf("TaskGitCredentialOn(alice) = %q, %v; want alice-pat", got, err)
+	}
+	if got, err := store.TaskGitCredentialOn(ctx, "t-bob", "github.com", "acme", "widgets"); err != nil || got != "bob-pat" {
+		t.Errorf("TaskGitCredentialOn(bob) = %q, %v; want bob-pat", got, err)
+	}
+	if got, err := store.TaskGitCredentialOn(ctx, "t-charlie", "github.com", "acme", "widgets"); err != nil || got != "default-pat" {
+		t.Errorf("TaskGitCredentialOn(charlie) = %q, %v; want default-pat", got, err)
+	}
+}
+

@@ -227,6 +227,7 @@ func processResult(ctx context.Context, store *model.Store, reach *gitproxy.Reac
 func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.Reach, client github.Client,
 	appBot AppBotIdentityFunc, task model.Task, result *agent.Result, runID, preRunBranchSHA string, now time.Time) error {
 
+	client = github.ForTask(client, task.ID)
 	if err := relayProposedTasks(withRelayingRunID(ctx, runID), store, reach, client, task, result, now); err != nil {
 		return err
 	}
@@ -3303,6 +3304,7 @@ func EnsurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 func ensurePullRequest(ctx context.Context, store *model.Store, client github.Client,
 	task model.Task, now time.Time) (github.PullRequest, landedWork, error) {
 
+	client = github.ForTask(client, task.ID)
 	branch := task.BranchName()
 	prRepo, headRef, crossRepo := taskPullRequestTarget(ctx, store, task)
 	if existing, err := client.FindOpenPullRequestForBranch(prRepo.Owner, prRepo.Name, headRef); err != nil {

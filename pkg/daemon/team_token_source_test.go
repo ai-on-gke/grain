@@ -75,3 +75,60 @@ func TestCredentialTokenSourceUsesTheSSHKeysPairedAPICredential(t *testing.T) {
 		t.Errorf("opening a pull request on a git-only repository: %v", err)
 	}
 }
+
+func TestCredentialTokenSourceForTaskSelectsUserPATAndAuthorSignature(t *testing.T) {
+	credentials, err := gitproxy.LoadCredentialSet(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := credentials.SetPAT("default-cred", "tok-default"); err != nil {
+		t.Fatal(err)
+	}
+	if err := credentials.SetPAT("alice-cred", "tok-alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := credentials.SetHost("alice-cred", gitproxy.CredentialHost{Host: "github.com", Kind: model.GitHostGitHub, Author: "Alice Developer"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := credentials.SetPAT("bob-cred", "tok-bob"); err != nil {
+		t.Fatal(err)
+	}
+	if err := credentials.SetHost("bob-cred", gitproxy.CredentialHost{Host: "github.com", Kind: model.GitHostGitHub, Author: "Bob Engineer"}); err != nil {
+		t.Fatal(err)
+	}
+
+	taskCreds := map[string]string{
+		"42": "alice-cred",
+		"99": "bob-cred",
+	}
+	src := credentialTokenSource{
+		credentials: credentials,
+		teamCredential: func(host, owner, repo string) (string, bool) {
+			return "default-cred", true
+		},
+		taskCredential: func(taskID, host, owner, repo string) (string, bool) {
+			c, ok := taskCreds[taskID]
+			return c, ok
+		},
+	}
+
+	if tok := src.TokenFor("acme", "widgets"); tok == nil || *tok != "tok-default" {
+		t.Fatalf("unscoped TokenFor = %v, want tok-default", tok)
+	}
+	aliceSrc := src.ForTask("42")
+	if tok := aliceSrc.TokenFor("acme", "widgets"); tok == nil || *tok != "tok-alice" {
+		t.Fatalf("ForTask(42).TokenFor = %v, want tok-alice", tok)
+	}
+	if sig, ok := aliceSrc.(github.AuthorSignatureSource); !ok || sig.AuthorSignature("acme", "widgets") != "Alice Developer" {
+		t.Fatalf("ForTask(42).AuthorSignature = %q, want Alice Developer", sig.AuthorSignature("acme", "widgets"))
+	}
+
+	bobSrc := src.ForTask("99")
+	if tok := bobSrc.TokenFor("acme", "widgets"); tok == nil || *tok != "tok-bob" {
+		t.Fatalf("ForTask(99).TokenFor = %v, want tok-bob", tok)
+	}
+	if sig, ok := bobSrc.(github.AuthorSignatureSource); !ok || sig.AuthorSignature("acme", "widgets") != "Bob Engineer" {
+		t.Fatalf("ForTask(99).AuthorSignature = %q, want Bob Engineer", sig.AuthorSignature("acme", "widgets"))
+	}
+}
+

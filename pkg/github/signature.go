@@ -16,6 +16,7 @@ package github
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -27,6 +28,69 @@ import (
 // via Grain.
 type AuthorSignatureSource interface {
 	AuthorSignature(owner, repo string) string
+}
+
+// TaskTokenSource is an optional interface a TokenSource may implement
+// to return a copy of itself scoped to a specific task's Git credential
+// (such as the task author's personal PAT or a task capability grant).
+type TaskTokenSource interface {
+	ForTask(taskID string) TokenSource
+}
+
+// TaskClientScoper is an optional interface a Client wrapper may implement
+// to pass a task ID through to the RESTClient underneath it.
+type TaskClientScoper interface {
+	ForTask(taskID string) Client
+}
+
+// ForTask returns a copy of c whose requests authenticate and sign with
+// taskID's resolved Git credential when c's TokenSource implements
+// TaskTokenSource. A client that is not a RESTClient (or whose TokenSource
+// is not task-aware) is returned unchanged.
+func ForTask(c Client, taskID string) Client {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" || c == nil {
+		return c
+	}
+	switch c := c.(type) {
+	case *RESTClient:
+		if c != nil {
+			return c.ForTask(taskID)
+		}
+	case TaskClientScoper:
+		return c.ForTask(taskID)
+	}
+	return c
+}
+
+// ForTask returns a copy of c scoped to taskID when c.Tokens implements
+// TaskTokenSource, sharing c's Transport and Caller.
+func (c *RESTClient) ForTask(taskID string) *RESTClient {
+	taskID = strings.TrimSpace(taskID)
+	if c == nil || c.Tokens == nil || taskID == "" {
+		return c
+	}
+	ts, ok := c.Tokens.(TaskTokenSource)
+	if !ok {
+		return c
+	}
+	out := *c
+	out.Tokens = ts.ForTask(taskID)
+	return &out
+}
+
+var headBranchTaskIDPattern = regexp.MustCompile(`^grain/(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?/)?task-([0-9]+)(?:-[a-z0-9][a-z0-9-]*)?$`)
+
+func taskIDFromHeadBranch(head string) string {
+	head = strings.TrimSpace(head)
+	if _, b, ok := strings.Cut(head, ":"); ok {
+		head = b
+	}
+	head = strings.TrimPrefix(head, "refs/heads/")
+	if m := headBranchTaskIDPattern.FindStringSubmatch(head); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 // AuthorSignatureFor returns the human author signature configured on client

@@ -50,7 +50,7 @@ func (o *PullRequestOpener) OpenForTask(ctx context.Context, taskID string) (ui.
 	if task == nil {
 		return ui.PullRequestStatus{}, fmt.Errorf("no task %s", taskID)
 	}
-	status, err := orchestrator.OpenPullRequestForTask(ctx, o.Store, o.Client, *task)
+	status, err := orchestrator.OpenPullRequestForTask(ctx, o.Store, github.ForTask(o.Client, task.ID), *task)
 	if err != nil {
 		return ui.PullRequestStatus{}, err
 	}
@@ -89,7 +89,7 @@ func (o *PullRequestOpener) ReattachForTask(ctx context.Context, taskID string) 
 	if err != nil || task == nil {
 		return err
 	}
-	_, err = orchestrator.ReattachPullRequest(ctx, o.Store, o.Client, *task, true, time.Now().UTC())
+	_, err = orchestrator.ReattachPullRequest(ctx, o.Store, github.ForTask(o.Client, task.ID), *task, true, time.Now().UTC())
 	return err
 }
 

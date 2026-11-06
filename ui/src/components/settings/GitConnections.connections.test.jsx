@@ -744,4 +744,71 @@ describe("GitConnections git connections and input operations", () => {
     ).toHaveTextContent("remove it or edit its scope first");
     confirm.mockRestore();
   });
+
+  it("saves and displays per-user Git connections bound to a task author", async () => {
+    const user = userEvent.setup();
+    api.mockImplementation((url, opts) => {
+      if (url.includes("/git-connections") && !opts) {
+        return Promise.resolve([
+          {
+            credential: "c-alice",
+            host: "github.com",
+            authType: "pat",
+            user: "alice@example.com",
+            status: {
+              configured: true,
+              commitName: "Alice Example",
+              commitEmail: "4242+alice@users.noreply.github.com",
+            },
+          },
+        ]);
+      }
+      if (url.includes("/git-connections") && opts?.method === "POST") {
+        return Promise.resolve({ ok: true });
+      }
+      return Promise.resolve({});
+    });
+
+    render(
+      <GitConnections
+        deployment={deployment}
+        onSave={vi.fn()}
+        onDeploymentChanged={vi.fn()}
+        showError={vi.fn()}
+      />,
+    );
+
+    expect(
+      await screen.findByTestId("connection-row-c-alice"),
+    ).toHaveTextContent("alice@example.com");
+    expect(screen.getByTestId("commit-author-c-alice")).toHaveTextContent(
+      "for alice@example.com",
+    );
+
+    await user.click(screen.getByTestId("add-connection-button"));
+    await user.type(screen.getByLabelText("Host"), "github.com");
+    await user.type(
+      screen.getByLabelText("User (task author, optional)"),
+      "bob@example.com",
+    );
+    await user.type(screen.getByLabelText("Token (PAT)"), "ghp_bob_token");
+    await user.click(screen.getByRole("button", { name: "Save connection" }));
+
+    await waitFor(() => {
+      expect(api).toHaveBeenCalledWith(
+        "/api/deployment/git-connections",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            host: "github.com",
+            kind: "github",
+            scope: "",
+            type: "pat",
+            taskUser: "bob@example.com",
+            value: "ghp_bob_token",
+          }),
+        }),
+      );
+    });
+  });
 });
