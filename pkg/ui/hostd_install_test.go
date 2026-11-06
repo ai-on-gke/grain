@@ -329,6 +329,8 @@ func TestHostdInstallScriptRefusesUnsafeInputs(t *testing.T) {
 		{name: "non-hex sha256", args: []string{"--name", "box", "--user", "hostd", "--sha256", strings.Repeat("z", 64)}, want: "64-digit hex SHA-256"},
 		{name: "leading hyphen iap-audience", args: []string{"--name", "box", "--user", "hostd", "--iap-audience", "-bad"}, want: "leading '-'"},
 		{name: "leading hyphen ca-file", args: []string{"--name", "box", "--user", "hostd", "--ca-file", "-bad"}, want: "leading '-'"},
+		{name: "leading hyphen join", args: []string{"--join", "-bad", "--user", "hostd"}, want: "not a valid enrollment code"},
+		{name: "shell metachar join", args: []string{"--join", "ghe_abc;id", "--user", "hostd"}, want: "not a valid enrollment code"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cmd := exec.Command("sh", append([]string{scriptPath}, tc.args...)...)

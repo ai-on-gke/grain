@@ -618,7 +618,7 @@ func RegisterEnrollHTTPClient(fn EnrollHTTPProvider) {
 
 // DetectAgentCLIs probes PATH for known agent CLIs on this host.
 func DetectAgentCLIs() []string {
-	candidates := []string{"claude", "codex", "gemini", "antigravity"}
+	candidates := []string{"agy", "claude", "codex", "gemini", "antigravity"}
 	var found []string
 	for _, name := range candidates {
 		if _, err := exec.LookPath(name); err == nil {
