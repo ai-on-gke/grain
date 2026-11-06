@@ -83,6 +83,7 @@ import {
   taskPause,
   reasonControl,
   reasonLabel,
+  taskReasonLabel,
   reasonTitle,
 } from "./state.js";
 
@@ -2644,6 +2645,23 @@ describe("liveness sub-cases", () => {
       "usage limit paused",
     );
     expect(reasonLabel(null)).toBe(null);
+    // The task chip's form: awaiting_reply's one sub-case is named by
+    // askedCase's kind, so a finished report's chip does not say
+    // "question" beside its "Answered in a comment" badge.
+    const awaiting = { reason: "awaiting_reply/question" };
+    expect(taskReasonLabel({ state: "awaiting_reply", reason: awaiting })).toBe("answered");
+    expect(
+      taskReasonLabel({ state: "awaiting_reply", reason: awaiting, questionSummary: "Which?" }),
+    ).toBe("question");
+    expect(
+      taskReasonLabel({ state: "awaiting_reply", reason: awaiting, interactive: true }),
+    ).toBe("your message");
+    expect(
+      taskReasonLabel({ state: "awaiting_reply", reason: awaiting, awaitingAccess: true }),
+    ).toBe("access request");
+    expect(
+      taskReasonLabel({ state: "queued", reason: { reason: "queued/usage_limit_paused" } }),
+    ).toBe("usage limit paused");
   });
 
   it("explains which condition a sub-case is in and why", () => {
