@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -44,5 +45,19 @@ func TestAttemptLineNamesTheModelItRanOn(t *testing.T) {
 		if tc.a.Model == "" && strings.Contains(attemptLine(tc.a), " on ") {
 			t.Errorf("attemptLine(%d) names a model it was not given", tc.a.Number)
 		}
+	}
+}
+
+// `grain get` names the hostd each attempt's agent CLI ran on, by the
+// name the run recorded, and marks one since deleted from the registry.
+func TestAttemptLineNamesItsHostdAndMarksADeletedOne(t *testing.T) {
+	start := time.Date(2026, 10, 26, 10, 0, 0, 0, time.UTC)
+	live := attemptLine(ui.Attempt{Number: 1, StartedAt: start, Hostd: &model.TaskRunHostd{Hostd: "ws-a"}})
+	if want := "  #1 started 2026-10-26T10:00:00Z, still running, host ws-a"; live != want {
+		t.Errorf("attemptLine(live hostd) = %q, want %q", live, want)
+	}
+	gone := attemptLine(ui.Attempt{Number: 2, StartedAt: start, Hostd: &model.TaskRunHostd{Hostd: "rarcea", Deleted: true}})
+	if want := "  #2 started 2026-10-26T10:00:00Z, still running, host rarcea (deleted)"; gone != want {
+		t.Errorf("attemptLine(deleted hostd) = %q, want %q", gone, want)
 	}
 }

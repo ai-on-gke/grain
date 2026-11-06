@@ -98,6 +98,11 @@ type TaskRunHostd struct {
 	Instance string    `json:"instance,omitempty"`
 	Owner    string    `json:"owner,omitempty"`
 	At       time.Time `json:"at"`
+	// Deleted is set by a reader, never stored: the registry no longer
+	// holds the hostd this run used -- it was deleted, or deleted and its
+	// name registered again since (ui's markDeletedRunHostds). Hostd
+	// still names it, as the run recorded.
+	Deleted bool `json:"deleted,omitempty"`
 }
 
 // RecordTaskRunHostd records which hostd r.RunID resolved to, replacing
