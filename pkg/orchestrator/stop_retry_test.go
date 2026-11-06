@@ -44,7 +44,7 @@ type blockingFirstAcquireSandboxes struct {
 	acquiring chan struct{}
 }
 
-func (blockingFirstAcquireSandboxes) IsolatesNetwork() bool { return true }
+func (*blockingFirstAcquireSandboxes) IsolatesNetwork() bool { return true }
 
 func (b *blockingFirstAcquireSandboxes) Acquire(ctx context.Context, name string, shape orchestrator.Shape) (orchestrator.Sandbox, error) {
 	if b.calls.Add(1) == 1 {
