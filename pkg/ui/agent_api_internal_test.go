@@ -756,6 +756,12 @@ var capabilitiesAdminBodies = map[string]struct {
 		nil, []string{"id", "config", "configSecrets"}},
 	"TestHostScriptRequest": {reflect.TypeFor[TestHostScriptRequest](), nil, []string{"id", "script", "argv"}},
 	"TestGChatPostRequest":  {reflect.TypeFor[TestGChatPostRequest](), nil, []string{"id", "space"}},
+	"TestFigmaAccountRequest": {reflect.TypeFor[TestFigmaAccountRequest](),
+		nil, []string{"id", "account"}},
+	"FigmaOAuthAuthorizeRequest": {reflect.TypeFor[FigmaOAuthAuthorizeRequest](),
+		nil, []string{"id", "account", "redirectUri"}},
+	"FigmaOAuthExchangeRequest": {reflect.TypeFor[FigmaOAuthExchangeRequest](),
+		nil, []string{"id", "account", "code", "state", "redirectUri"}},
 	// A scope set is a definition: declaring one hands it to no task, but
 	// editing one already granted widens every grant of it. set is not a
 	// grant name, so it is sorted here; grantBodies reads it as the scopes

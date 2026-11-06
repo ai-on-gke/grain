@@ -13,8 +13,18 @@
 // limitations under the License.
 
 import { useState } from "react";
+import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import CloseIcon from "@mui/icons-material/Close";
-import { Box, Chip, Dialog, IconButton, Link, Typography } from "@mui/material";
+import {
+  Box,
+  ButtonBase,
+  Chip,
+  Dialog,
+  IconButton,
+  Link,
+  Typography,
+} from "@mui/material";
 
 // Where an attachment's bytes actually live: GET
 // /api/tasks/{taskId}/attachments/{id} is the only place they are served
@@ -49,6 +59,16 @@ const isImage = (a) =>
     (a.contentType || "").split(";")[0].trim().toLowerCase(),
   );
 
+// The previous and next arrows at the viewer's sides.
+const navButtonSx = {
+  position: "absolute",
+  top: "50%",
+  transform: "translateY(-50%)",
+  color: "common.white",
+  bgcolor: "rgba(0, 0, 0, 0.5)",
+  "&:hover": { bgcolor: "rgba(0, 0, 0, 0.7)" },
+};
+
 // ImageView is the full-screen look at one attached image, and it exists
 // for one reason: an image opened as a link had no way back
 // (grain/task-78). grain is meant to be added to an iOS home screen
@@ -64,11 +84,32 @@ const isImage = (a) =>
 // drawn over the image rather than in a bar of its own: the picture gets
 // the whole window, which on a phone is the only way a screenshot is
 // legible at all.
-function ImageView({ src, filename, onClose }) {
+//
+// With several images -- a run's before and after contact sheets, its
+// screenshots beside the Figma frame they implement -- the viewer pages
+// through all of them: the arrows at its sides and the keyboard's left and
+// right step to the previous and next, wrapping round, and a counter says
+// where in the set this one is.
+function ImageView({ images, index, onIndex, onClose }) {
+  const { src, filename } = images[index];
+  const many = images.length > 1;
+  const step = (delta) =>
+    onIndex((index + delta + images.length) % images.length);
+  const onKeyDown = (evt) => {
+    if (!many) return;
+    if (evt.key === "ArrowLeft") {
+      evt.preventDefault();
+      step(-1);
+    } else if (evt.key === "ArrowRight") {
+      evt.preventDefault();
+      step(1);
+    }
+  };
   return (
     <Dialog
       open
       onClose={onClose}
+      onKeyDown={onKeyDown}
       fullScreen
       // Dark ground under the picture, not the paper's usual surface: an
       // image with transparency or a pale border reads against it in
@@ -124,6 +165,24 @@ function ImageView({ src, filename, onClose }) {
       >
         <CloseIcon />
       </IconButton>
+      {many && (
+        <>
+          <IconButton
+            aria-label="Previous image"
+            onClick={() => step(-1)}
+            sx={{ ...navButtonSx, left: 8 }}
+          >
+            <ChevronLeftIcon />
+          </IconButton>
+          <IconButton
+            aria-label="Next image"
+            onClick={() => step(1)}
+            sx={{ ...navButtonSx, right: 8 }}
+          >
+            <ChevronRightIcon />
+          </IconButton>
+        </>
+      )}
       {/* Which file this is, and the way to keep it. The link downloads
           rather than navigating (same-origin, so the attribute is
           honoured) -- following it to the image's own URL is exactly the
@@ -137,6 +196,7 @@ function ImageView({ src, filename, onClose }) {
         }}
       >
         <Typography variant="caption" sx={{ color: "common.white" }} noWrap>
+          {many && `${index + 1} / ${images.length} · `}
           {filename}
           {" · "}
           <Link
@@ -153,50 +213,123 @@ function ImageView({ src, filename, onClose }) {
   );
 }
 
+// Thumbnail is an attached image drawn small, in line with the note it
+// came with, so a run's screenshots are seen where they are reported
+// rather than behind a file name. It is a button, never a link: a click
+// opens ImageView over the UI (grain/task-78). The picture is decorative
+// -- alt="" -- since the file name under it is the button's label, and
+// the one <img> named after the file stays the viewer's own.
+function Thumbnail({ src, filename, onOpen }) {
+  return (
+    <ButtonBase
+      onClick={onOpen}
+      focusRipple
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "stretch",
+        width: { xs: 140, sm: 180 },
+        borderRadius: 1,
+        overflow: "hidden",
+        border: 1,
+        borderColor: "divider",
+        bgcolor: "action.hover",
+        textAlign: "left",
+      }}
+    >
+      <Box
+        component="img"
+        src={src}
+        alt=""
+        loading="lazy"
+        sx={{
+          display: "block",
+          width: "100%",
+          height: { xs: 90, sm: 110 },
+          objectFit: "cover",
+          objectPosition: "top",
+          bgcolor: "background.default",
+        }}
+      />
+      <Typography
+        variant="caption"
+        noWrap
+        sx={{ px: 0.75, py: 0.25, display: "block" }}
+      >
+        {filename}
+      </Typography>
+    </ButtonBase>
+  );
+}
+
 // AttachmentLinks renders the files already attached to a task or a
 // comment (ui.Attachment's own {id, filename, contentType, size} shape,
-// bwsalmon/agents#522) as a row of clickable chips.
+// bwsalmon/agents#522).
 //
-// An image opens in ImageView above, over the UI and with an X to leave
-// by. Everything else is still a link straight at
+// Images come first, as thumbnails that open in ImageView above, over the
+// UI and with an X to leave by, paging through every image of the set.
+// Everything else is a row of chips, each a link straight at
 // GET /api/tasks/{taskId}/attachments/{id} in a new tab -- a zip or a
 // PDF is something a browser hands to a download or to its own reader
 // rather than something this could draw, and there is nothing for this
 // component to fetch ahead of a click either way.
 export default function AttachmentLinks({ taskId, attachments }) {
-  // The attachment being looked at, or null. One at a time: the viewer
-  // is the whole window.
+  // The index into images of the one being looked at, or null. One at a
+  // time: the viewer is the whole window.
   const [viewing, setViewing] = useState(null);
 
   if (!attachments || attachments.length === 0) return null;
+  const images = attachments.filter(isImage).map((a) => ({
+    id: a.id,
+    src: attachmentURL(taskId, a),
+    filename: a.filename,
+  }));
+  const files = attachments.filter((a) => !isImage(a));
   return (
-    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 0.5 }}>
-      {attachments.map((a) =>
-        isImage(a) ? (
-          <Chip
-            key={a.id}
-            size="small"
-            clickable
-            onClick={() => setViewing(a)}
-            label={a.filename}
-          />
-        ) : (
-          <Chip
-            key={a.id}
-            size="small"
-            component="a"
-            href={attachmentURL(taskId, a)}
-            target="_blank"
-            rel="noopener noreferrer"
-            clickable
-            label={a.filename}
-          />
-        ),
+    <Box sx={{ mt: 0.5 }}>
+      {images.length > 0 && (
+        <Box
+          sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}
+          data-testid="attachment-thumbnails"
+        >
+          {images.map((img, i) => (
+            <Thumbnail
+              key={img.id}
+              src={img.src}
+              filename={img.filename}
+              onOpen={() => setViewing(i)}
+            />
+          ))}
+        </Box>
       )}
-      {viewing && (
+      {files.length > 0 && (
+        <Box
+          sx={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 0.5,
+            mt: images.length > 0 ? 0.5 : 0,
+          }}
+        >
+          {files.map((a) => (
+            <Chip
+              key={a.id}
+              size="small"
+              component="a"
+              href={attachmentURL(taskId, a)}
+              target="_blank"
+              rel="noopener noreferrer"
+              clickable
+              label={a.filename}
+            />
+          ))}
+        </Box>
+      )}
+      {viewing !== null && images[viewing] && (
         <ImageView
-          src={attachmentURL(taskId, viewing)}
-          filename={viewing.filename}
+          images={images}
+          index={viewing}
+          onIndex={setViewing}
           onClose={() => setViewing(null)}
         />
       )}

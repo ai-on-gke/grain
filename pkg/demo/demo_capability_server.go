@@ -65,6 +65,24 @@ type fakeChat struct {
 	n  int
 }
 
+// fakeFigma is the Figma API the demo's figma server calls: /v1/me names
+// a demo designer for any credential, so an account's Test answers, and
+// anything else is a 404. Nothing is sent anywhere.
+type fakeFigma struct{}
+
+func (fakeFigma) RoundTrip(req *http.Request) (*http.Response, error) {
+	status, body := http.StatusNotFound, `{"status":404,"err":"Not found"}`
+	if req.Method == http.MethodGet && req.URL.Path == "/v1/me" {
+		status, body = http.StatusOK, `{"id":"demo-user","handle":"Demo Designer","email":"designer@demo.grain.example"}`
+	}
+	return &http.Response{
+		StatusCode: status,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Request:    req,
+	}, nil
+}
+
 var fakeChatPath = regexp.MustCompile(`^/v1/(spaces/[A-Za-z0-9_-]+)/messages$`)
 
 func (f *fakeChat) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -295,6 +313,28 @@ func configureCapabilityServerDemo(ctx context.Context, stored *model.Config, lo
 	}
 	gchatEntry.Builtin = "gchat"
 	stored.MCPServers[intree.CanonicalID("gchat")] = gchatEntry
+
+	// The figma server likewise: grain's own, unconfigured, with a data
+	// plane token of its own and fakeFigma for Figma's API, so Settings can
+	// add accounts and Test one.
+	figmaToken := make([]byte, intree.MinTokenBytes)
+	if _, err := rand.Read(figmaToken); err != nil {
+		return nil, err
+	}
+	figma, err := intree.NewFigma(intree.FigmaServerConfig{
+		Listen: "127.0.0.1:0",
+		Token:  hex.EncodeToString(figmaToken),
+		Client: &http.Client{Transport: fakeFigma{}, Timeout: 10 * time.Second},
+	})
+	if err != nil {
+		return nil, err
+	}
+	figmaEntry, err := serveDemoCapability(ctx, figma.CapabilityServer)
+	if err != nil {
+		return nil, err
+	}
+	figmaEntry.Builtin = intree.FigmaName
+	stored.MCPServers[intree.CanonicalID(intree.FigmaName)] = figmaEntry
 	opts := servers.Options{Secrets: lookup, Hostd: hostdClient}
 	if identity != nil {
 		opts.Identity = servers.StoreIdentity(identity, nil)

@@ -43,6 +43,7 @@ import ConfigMapList, {
   normalizeConfigMapPayload,
 } from "./ConfigMapList.jsx";
 import HostScriptList, { isHostScriptServer } from "./HostScriptList.jsx";
+import FigmaAccountList, { isFigmaServer } from "./FigmaAccountList.jsx";
 import GChatSpaceList, { isGChatServer } from "./GChatSpaceList.jsx";
 import { argumentRows } from "../capabilityArgs.js";
 import { identifierField } from "../identifierField.js";
@@ -1501,6 +1502,7 @@ export default function CapabilityServersPanel({
       Boolean(builtin && server.status?.error) ||
       isHostScriptServer(server) ||
       isGChatServer(server) ||
+      isFigmaServer(server) ||
       isConfigMapServer(server);
     return (
       <Paper
@@ -1846,6 +1848,9 @@ export default function CapabilityServersPanel({
             )}
             {isGChatServer(server) && (
               <GChatSpaceList server={server} readOnly={readOnly} />
+            )}
+            {isFigmaServer(server) && (
+              <FigmaAccountList server={server} readOnly={readOnly} />
             )}
             {isConfigMapServer(server) && <ConfigMapList server={server} />}
           </Section>
