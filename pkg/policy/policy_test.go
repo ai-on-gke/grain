@@ -17,6 +17,7 @@ package policy
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -162,6 +163,8 @@ func TestRetiredSelfDebugInAPolicyBindsWhatItBecame(t *testing.T) {
 	}
 }
 
+func strconvQuote(s string) string { return strconv.Quote(s) }
+
 func TestCheckCapabilityPatterns(t *testing.T) {
 	cases := []struct {
 		rules, grant string
@@ -223,6 +226,27 @@ func TestCheckCapabilityPatterns(t *testing.T) {
 		{"deny: [\"" + model.RepoReadRef + "\"]", "repo-read:acme/widgets", "forbids capability"},
 		{"allow: [repo-read:acme/*]", model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "widgets"}), ""},
 		{"allow: [repo-read:acme/*]", model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "widgets"}), "does not allow capability"},
+		// Exact capability-reference grants (ref=<json>) bind only those
+		// arguments, while bootstrap-playbooks denies every config-map and
+		// skill alias selecting the bootstrap playbooks.
+		{`allow: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.BootstrapPlaybooksGrant, ""},
+		{`allow: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.ConfigMapRef + `={"config_maps": ["bootstrap"]}`, ""},
+		{`allow: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, "bootstrap-playbooks", ""},
+		{`allow: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.ConfigMapRef, "does not allow capability"},
+		{`allow: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.ConfigMapRef + "={}", "does not allow capability"},
+		{`allow: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.ConfigMapRef + `={"secrets":["prod"]}`, "does not allow capability"},
+		{`allow: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.ConfigMapRef + `={"config_maps":["BOOTSTRAP"]}`, "does not allow capability"},
+		{`allow: [bootstrap-playbooks]`, model.ConfigMapRef + `={"config_maps": ["bootstrap"]}`, ""},
+		{`allow: [bootstrap-playbooks]`, model.ConfigMapRef + `={"secrets":["prod"]}`, "does not allow capability"},
+		{`allow: [` + strconvQuote(model.GrainSourceGrant) + `]`, model.GrainSourceGrant, ""},
+		{`allow: [` + strconvQuote(model.GrainSourceGrant) + `]`, model.GrainSourceRef, ""},
+		{`deny: [bootstrap-playbooks]`, model.BootstrapPlaybooksGrant, "forbids capability"},
+		{`deny: [bootstrap-playbooks]`, model.SkillCapabilityServerID + `#config-map={"config_maps":["bootstrap"]}`, "forbids capability"},
+		{`deny: [bootstrap-playbooks]`, model.SkillCapabilityServerID + `#skill={"skills":["bootstrap"]}`, "forbids capability"},
+		{`deny: [bootstrap-playbooks]`, model.ConfigMapCapabilityServerID + `#skill={"skills":["bootstrap"]}`, "forbids capability"},
+		{`deny: [boot*]`, model.SkillCapabilityServerID + `#skill={"skills":["bootstrap"]}`, "forbids capability"},
+		{`deny: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.SkillCapabilityServerID + `#skill={"skills":["bootstrap"]}`, "forbids capability"},
+		{`deny: [` + strconvQuote(model.ConfigMapRef+`={"secrets":["prod"]}`) + `]`, model.BootstrapPlaybooksGrant, ""},
 	}
 	for _, c := range cases {
 		p := mustParse(t, "repos: [acme/widgets, other/widgets, ai-on-gke/grain]\ncapabilities:\n  "+c.rules+"\n")
@@ -322,18 +346,19 @@ func TestEmptyPolicyFailsClosed(t *testing.T) {
 
 func TestParseRejects(t *testing.T) {
 	for _, src := range []string{
-		"repo: [acme/widgets]\n",                     // misspelt key
-		"repos: [widgets]\n",                         // not owner/name
-		"repos: [a/b/c/d]\n",                         // too many segments
-		"repos: [\"acme/[\"]\n",                      // bad pattern
-		"repos: [acme/w]\nnetwork: [x]\n",            // unknown access
-		"repos: acme/widgets\n",                      // not a list
-		"capabilities:\n  deny: [\"gcp-key:[\"]\n",   // bad parameter pattern
-		"capabilities:\n  allow: [\"[\"]\n",          // bad family pattern
-		"capabilities:\n  deny: [\"repo-write:\"]\n", // empty parameter
-		"capabilities:\n  deny: [\":x\"]\n",          // empty family
-		"repos: [acme/w]\n---\nrepos: [evil/x]\n",    // a second document (GSA1-14)
-		"---\nrepos: [acme/w]\n---\n{}\n",            // likewise, however small
+		"repo: [acme/widgets]\n",                                              // misspelt key
+		"repos: [widgets]\n",                                                  // not owner/name
+		"repos: [a/b/c/d]\n",                                                  // too many segments
+		"repos: [\"acme/[\"]\n",                                               // bad pattern
+		"repos: [acme/w]\nnetwork: [x]\n",                                     // unknown access
+		"repos: acme/widgets\n",                                               // not a list
+		"capabilities:\n  deny: [\"gcp-key:[\"]\n",                            // bad parameter pattern
+		"capabilities:\n  allow: [\"[\"]\n",                                   // bad family pattern
+		"capabilities:\n  deny: [\"repo-write:\"]\n",                          // empty parameter
+		"capabilities:\n  deny: [\":x\"]\n",                                   // empty family
+		"capabilities:\n  allow: [\"" + model.ConfigMapRef + "=not-json\"]\n", // bad inline JSON args
+		"repos: [acme/w]\n---\nrepos: [evil/x]\n",                             // a second document (GSA1-14)
+		"---\nrepos: [acme/w]\n---\n{}\n",                                     // likewise, however small
 	} {
 		if _, err := Parse([]byte(src)); err == nil {
 			t.Errorf("Parse(%q) succeeded, want an error", src)

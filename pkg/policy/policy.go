@@ -31,6 +31,8 @@
 package policy
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -93,7 +95,10 @@ type Policy struct {
 // family name ("gcp-key") matches the family and every parameterised
 // grant of it ("gcp-key:team-a"), "family:*" matches every parameterised
 // grant of the family, and otherwise the family and the parameter are
-// each path.Match patterns ("repo-write:acme/*").
+// each path.Match patterns ("repo-write:acme/*"). A capability reference
+// without "=" ("https://...#method") is a path.Match pattern over the
+// method regardless of arguments; one with inline JSON arguments
+// ("https://...#method={...}") matches only that exact grant.
 type CapabilityRules struct {
 	// Allow, when set, is every capability a task may be granted; a
 	// grant of anything else refuses the task.
@@ -165,6 +170,12 @@ func (p *Policy) validate() error {
 // entry, or nil when it can.
 func validCapabilityPattern(pattern string) error {
 	if model.IsCapabilityRef(pattern) {
+		if strings.Contains(pattern, "=") {
+			if err := model.CheckCapabilityGrantArgsOffline(pattern); err != nil {
+				return fmt.Errorf("is not a valid capability grant: %w", err)
+			}
+			return nil
+		}
 		if _, err := path.Match(pattern, ""); err != nil {
 			return fmt.Errorf("is not a valid pattern: %w", err)
 		}
@@ -183,16 +194,58 @@ func validCapabilityPattern(pattern string) error {
 	return nil
 }
 
+// sameCapabilityRefGrant reports whether two capability references carry
+// the same method (without regard to case) and identical JSON arguments
+// (treating a bare reference and an empty {} object as the same).
+func sameCapabilityRefGrant(a, b string) bool {
+	aSpec, err := model.CapabilityGrantSpec(a)
+	if err != nil {
+		return false
+	}
+	bSpec, err := model.CapabilityGrantSpec(b)
+	if err != nil {
+		return false
+	}
+	if !strings.EqualFold(aSpec.Capability, bSpec.Capability) {
+		return false
+	}
+	aWith := aSpec.With
+	if aWith == nil {
+		aWith = map[string]any{}
+	}
+	bWith := bSpec.With
+	if bWith == nil {
+		bWith = map[string]any{}
+	}
+	aJSON, err := json.Marshal(aWith)
+	if err != nil {
+		return false
+	}
+	bJSON, err := json.Marshal(bWith)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(aJSON, bJSON)
+}
+
 // capabilityMatch reports whether the capabilities entry pattern matches
 // the granted capability, as CapabilityRules describes. A parameter can
 // itself hold a slash (repo-write:owner/name), which path.Match's * does
 // not cross, so a parameter pattern of * alone matches any parameter.
 func capabilityMatch(pattern, capability string) bool {
-	pattern = strings.ToLower(strings.TrimSpace(pattern))
-	capability = strings.ToLower(strings.TrimSpace(capability))
-	// A capability reference (https://...#method, with its args after
-	// "=") is matched whole, without them: its ":" is the scheme's, not
-	// a family's parameter.
+	rawPattern := strings.TrimSpace(pattern)
+	rawCapability := strings.TrimSpace(capability)
+	// A capability reference pattern carrying inline =<json> arguments
+	// matches only that exact grant (preserving JSON key/value case),
+	// rather than every argument to the method.
+	if model.IsCapabilityRef(rawPattern) && strings.Contains(rawPattern, "=") {
+		return model.IsCapabilityRef(rawCapability) && sameCapabilityRefGrant(rawPattern, rawCapability)
+	}
+	pattern = strings.ToLower(rawPattern)
+	capability = strings.ToLower(rawCapability)
+	// A capability reference without "=" (https://...#method) matches the
+	// method whole, whatever its arguments: its ":" is the scheme's, not a
+	// family's parameter.
 	if model.IsCapabilityRef(pattern) || model.IsCapabilityRef(capability) {
 		ref := model.CapabilityGrantRef(capability)
 		ok, err := path.Match(pattern, ref)
@@ -482,6 +535,10 @@ func deniesCapability(patterns []string, capability string) bool {
 			return true
 		}
 	}
+	if model.IsBootstrapPlaybooksGrant(capability) &&
+		(matchesCapability(patterns, "bootstrap-playbooks") || matchesCapability(patterns, model.BootstrapPlaybooksGrant)) {
+		return true
+	}
 	unnamedGCPKey := model.GCPKeySetUnnamed(capability)
 	if to, ok := retiredAs(capability); ok {
 		capability = to
@@ -555,10 +612,15 @@ func allowsCapability(patterns []string, capability string) bool {
 	}
 	if to, ok := retiredAs(want); ok {
 		want = to
+		if matchesCapability(patterns, want) {
+			return true
+		}
 	}
 	for _, pattern := range patterns {
-		if to, ok := retiredAs(pattern); ok && to == want {
-			return true
+		if to, ok := retiredAs(pattern); ok {
+			if to == want || (model.IsCapabilityRef(to) && model.IsCapabilityRef(want) && sameCapabilityRefGrant(to, want)) {
+				return true
+			}
 		}
 		// A name retired into several grants (self-debug became
 		// api:self-debug and grain#source; deployment-health
