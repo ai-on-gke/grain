@@ -92,7 +92,7 @@ Remote hosts join in **Settings → Hosts** (`/settings/hosts`, alias `/settings
    The snippet names the daemon's `--release` (and `--image`) when the daemon knows them, and says `--any-version` in the command when it does not: the script itself never skips its version check.
 2. **Ed25519 join request and verified identity.** On first run the host generates an Ed25519 private key on disk (mode `0600`), signs a join request carrying its public key, hostname, OS/arch, detected agent CLIs, version, and local account, and presents a **verified** enrolling identity (via the deployment's `IdentityVerifier` / SSO proxy, `ui.RegisterHostJoinVerifier`, or a GitHub device-flow OAuth login verified server-side in OSS).
 3. **Owner acceptance (owner-only, no auto-approve).** The request appears in **Settings → Hosts → Pending host requests** (`grain host pending`) with the verified person who enrolled it, the host's details and its key fingerprint, while the host's terminal waits. There is no pairing code to compare for now: the enrolling person is verified, so the owner checks who filed the request. Only the deployment owner may click **Accept** (`grain host accept <id> [-name -labels -capacity]`) or **Reject** (`grain host reject <id>`). Only the co-located `local` socket host (`/run/grain-hostd/hostd.sock`) operates without a handshake. Accepting sets the host's `Owner` to the verified enrolling identity — the exact owner that connection-level placement, IAP admission, and ambient-credential rate limits key on.
-4. **30-day key-bound credential, silent renewal, and revocation.** Once accepted, the host claims a 30-day `ghd_...` credential bound to its Ed25519 public key. Every `/api/hostd/connect` upgrade must carry a fresh, un-replayed Ed25519 signature (`X-Grain-Hostd-Timestamp`, `X-Grain-Hostd-Nonce`, `X-Grain-Hostd-Signature`), so a copied token without the private key is refused. Connected key-bound hosts renew their 30-day credential automatically in-band (`OpRenew` / `POST /api/hostd/renew`), each renewal signed by the host's key and naming its current credential; legacy per-host tokens never renew. Revoking a host drops any live session immediately; offline and revoked hosts can be renamed or deleted cleanly (`grain host rename`, `grain host delete`).
+4. **30-day key-bound credential, silent renewal, and revocation.** Once accepted, the host claims a 30-day `ghd_...` credential bound to its Ed25519 public key. Every `/api/hostd/connect` upgrade must carry a fresh, un-replayed Ed25519 signature (`X-Grain-Hostd-Timestamp`, `X-Grain-Hostd-Nonce`, `X-Grain-Hostd-Signature`), so a copied token without the private key is refused. Connected key-bound hosts renew their 30-day credential automatically in-band (`OpRenew` / `POST /api/hostd/renew`), each renewal signed by the host's key and naming its current credential; legacy per-host tokens never renew. Revoking a host drops any live session immediately; any host can be renamed (`grain host rename`), and a revoked one can be deleted, which frees its name (`grain host delete`, or `grain host delete-revoked` and Settings -> Hosts -> Delete all revoked for every revoked host nothing still names). An offline host that should go is revoked first, then deleted.
 5. **Migrating legacy per-host tokens.** Existing per-host token registrations continue working. Migrate an existing host in place without losing its name or placement references by re-running the installer with `--join <code>` or running `grain host rekey -server <url> -token-file <old-token-file> -key-file <new-key-file>` (or `grain-agentd install -rekey`) and approving the pairing code once in **Settings → Hosts**. Rekey is for migrating legacy tokens: once a host is key-bound, only a request signed by its bound key may rekey it (a copied credential cannot move it to another key, and a pending rekey with another key cannot be accepted after the host has been bound), so a host that has lost its key is revoked and re-enrolled with `--join`.
 
 ## Migration
@@ -103,3 +103,46 @@ record of where each run's agent CLI ran, and the run history keeps
 showing it. A deployment that pinned tasks or repositories to a host
 moves the pin to the connection (or connections) those tasks ran on, in
 Settings -> Models.
+
+## Revoking and deleting a host
+
+Revoking a host (Settings -> Hosts -> **Revoke**,
+`POST /api/hostds/{name}/revoke`) retires every token it has and drops its
+live session: it is what cuts a host off. A revoked host stays in the
+registry until it is deleted (Settings -> Hosts -> **Delete**, on revoked
+rows only; `grain host delete <name>`; `DELETE /api/hostds/{name}`),
+which removes its row and every `hostd_token` row it had, and records who
+deleted it in the config audit (`hostd:<name>`), as revoking does.
+
+- **Only a revoked host is deleted.** A live one is refused with "revoke
+  it first", so deleting never cuts off a connected host or its running
+  work by surprise. `local`, the co-located host, is never deleted, and an
+  unknown name is a 404.
+- **Configuration that names it refuses the delete.** A model connection
+  whose `hostd` or `hostdFallback`, or a capability server entry whose
+  `hostd`, names the host by name is listed in the refusal; point it at
+  another host first. Clearing it silently would move that connection's
+  runs, or that server, somewhere nobody chose. A label selector names no
+  one host and does not hold a delete. (Per-task, template and repository
+  pins went with schema 111, above, so there are none to check.)
+- **Runtime state built from the name is cleared and reported.** The
+  usage-limit pauses keyed `<credential>@hostd/<name>` are lifted and
+  forgotten with the host, and the answer (and `grain host delete`)
+  lists each one, so a host registered under the name later does not
+  start out paused.
+- **The run history keeps the name.** `task_run_hostd`, the capability
+  audit's `hostd` and the spool cursors are not touched. A task page and
+  `grain get` show the name each past run recorded, marked deleted when the
+  registry no longer holds that host -- also once the name has been
+  registered again, since that is a different host.
+- **The name can be reused.** After deletion `POST /api/hostds` (or
+  `grain host register`) with the same name registers a fresh host with
+  a new token; nothing of the old row -- owner, labels, tokens -- carries
+  over.
+
+**Delete all revoked** in Settings -> Hosts (`grain host delete-revoked`,
+`POST /api/hostds/delete-revoked`) deletes every revoked host nothing
+still names and lists the ones it skipped, with why.
+
+The `hostd` table is in the state repository's dump (its `hostd_token`
+digests never are), so a deleted row leaves the dump at the next export.

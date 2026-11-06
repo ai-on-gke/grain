@@ -170,6 +170,14 @@ func attemptLine(a ui.Attempt) string {
 	case a.Model != "":
 		line += ", on " + a.Model
 	}
+	// The host its agent CLI ran on, by the name the run recorded --
+	// marked when that host has since been deleted from the registry.
+	if a.Hostd != nil && a.Hostd.Hostd != "" {
+		line += ", host " + a.Hostd.Hostd
+		if a.Hostd.Deleted {
+			line += " (deleted)"
+		}
+	}
 	return line
 }
 

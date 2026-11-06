@@ -115,6 +115,8 @@ func hostdError(err error) error {
 		return &NotFoundError{message: err.Error()}
 	case errors.Is(err, model.ErrHostdExists), errors.Is(err, model.ErrHostdRevoked):
 		return validationErrorf("%v", err)
+	case errors.Is(err, model.ErrHostdLive):
+		return validationErrorf("host is not revoked: revoke it first, which disconnects it, then delete it")
 	}
 	return err
 }
@@ -285,27 +287,6 @@ func (c *Client) RenameHostd(ctx context.Context, oldName, newName string) (mode
 	return *h, nil
 }
 
-// DeleteHostd permanently removes a revoked or offline host from the registry.
-func (c *Client) DeleteHostd(ctx context.Context, name string) error {
-	name = strings.TrimSpace(name)
-	if name == model.LocalHostd {
-		return validationErrorf("%q is the co-located host and cannot be deleted", model.LocalHostd)
-	}
-	if st, ok := c.Config.HostdRemote.(hostdStatuses); ok {
-		if cur, ok := st.Statuses()[name]; ok && cur.Connected {
-			return validationErrorf("host %q is currently connected: revoke it before deleting", name)
-		}
-	}
-	if err := c.Store.DeleteHostd(ctx, name); err != nil {
-		return hostdError(err)
-	}
-	if _, err := c.Store.ClearNotification(ctx, "hostd-disconnected:"+name, "automation:hostd"); err != nil {
-		log.Printf("grain ui: clearing hostd-disconnected:%s after delete: %v", name, err)
-	}
-	c.auditHostd(ctx, name, "deleted host "+name)
-	return nil
-}
-
 // dropSessionNotOwnedBy closes name's live session when it was admitted
 // as a verified identity that is no longer its owner: admission checks the
 // owner only when a hostd dials in, so without this a hostd whose owner
@@ -431,14 +412,6 @@ func (s *Server) handleRenameHostd(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, h)
 }
 
-func (s *Server) handleDeleteHostd(w http.ResponseWriter, r *http.Request) {
-	if err := s.tasks.DeleteHostd(r.Context(), r.PathValue("name")); err != nil {
-		writeClientError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"deleted": r.PathValue("name")})
-}
-
 // auditHostd records a change to the hostd registry in config_audit, with
 // the person or agent who made it (ui.RequestActor). The summary names the
 // hostd and never carries its token.
@@ -500,9 +473,4 @@ func (c *HTTPClient) RenameHostd(ctx context.Context, oldName, newName string) (
 	var out model.Hostd
 	err := c.do(ctx, http.MethodPost, "/api/hostds/"+url.PathEscape(oldName)+"/rename", RenameHostdRequest{Name: newName}, &out)
 	return out, err
-}
-
-// DeleteHostd is DELETE /api/hostds/{name}.
-func (c *HTTPClient) DeleteHostd(ctx context.Context, name string) error {
-	return c.do(ctx, http.MethodDelete, "/api/hostds/"+url.PathEscape(name), nil, nil)
 }

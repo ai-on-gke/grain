@@ -465,7 +465,7 @@ func TestHostEnrollHandshakeKeyBoundConnectRenewalAndOSSDeviceFlow(t *testing.T)
 	}
 
 	// Deleting while connected is refused; revoking drops the live connection immediately; deleting then succeeds!
-	if err := ownerCLI.DeleteHostd(ctx, "octocat-box"); err == nil {
+	if _, err := ownerCLI.DeleteHostd(ctx, "octocat-box"); err == nil {
 		t.Fatal("DeleteHostd while connected succeeded, want refusal")
 	}
 	if _, err := ownerCLI.RevokeHostd(ctx, "octocat-box"); err != nil {
@@ -478,7 +478,7 @@ func TestHostEnrollHandshakeKeyBoundConnectRenewalAndOSSDeviceFlow(t *testing.T)
 	if remote.IsConnected("octocat-box") {
 		t.Fatal("revoked host remained connected")
 	}
-	if err := ownerCLI.DeleteHostd(ctx, "octocat-box"); err != nil {
+	if _, err := ownerCLI.DeleteHostd(ctx, "octocat-box"); err != nil {
 		t.Fatalf("DeleteHostd after revoke: %v", err)
 	}
 }

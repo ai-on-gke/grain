@@ -133,7 +133,7 @@ accepts it.
 | Git connections (`team.git_connections`, `team.git_credential`) | Deployment git connections: one list on the settings row, with the same scope rules (`model.TeamGitConnection` without the team) | The owner's decision. The host-default, owner and repository scopes already express everything the ladder did |
 | Model connections (`grain_config.agent_backends`, `AgentBackend.Team`) | The same records with no team | They are already stored on the settings row. Only `Team` and the team filter (`TeamAgentBackends`, `BelongsTo`) go |
 | `team.default_model`, `team.model_settings`, per-model pauses | A deployment default model and per-model settings on the settings row | One deployment means one set of choices |
-| Per-team GCP keys (`team_gcp_key`, docs/team-gcp-keys.md) | Deployment GCP keys, `gcp-key:<name>` | The key mechanism is unchanged. Its owner is now the deployment |
+| Per-team GCP keys (`team_gcp_key`, docs/team-gcp-keys.md) | Deployment GCP keys, `gcp-key:<name>` (now `https://grain.dev/capabilities/gcp#gcp-key` `{permission_set: <name>}`; the in-process name was retired in schema migration 97) | The key mechanism is unchanged. Its owner is now the deployment |
 | Boards and custom fields (`board.team`, `custom_field.team`) | Deployment-level | There is nothing left to scope them to |
 | Team repo config (`team_repo_config`) | Folded into `repo_config` | Repositories are configured once |
 | Team pipeline pause | Gone; `pipeline_pause` remains | There is one queue |
@@ -289,7 +289,7 @@ starts before the one it builds on has merged.
      `/api/teams/{id}/pipeline-pause`, `model/teampipelinepause.go`,
      `pkg/ui/teampipelinepause.go`, dispatch's per-team gate, the team
      pause control and its alert. `pipeline_pause` is the one pause.
-     pipeline-control now pauses the deployment only for a task that
+     pipeline-control (now the `api:pipeline-control` preset) now pauses the deployment only for a task that
      holds it deployment-wide, which every single-tenant task does; a
      team-scoped grant is refused rather than widened. Both tables stay
      for stage 6, written by hand in the state-repo fidelity fixture
@@ -918,7 +918,7 @@ starts before the one it builds on has merged.
        - `withholdReleaseSecrets`: a by-hand run started by anything but
          a person places no release secrets.
        - `memoryWriter`: a person writes memory; an agent still needs the
-         memory capability.
+         memory capability (now the `api:memory` preset).
        - `teamRepoTarget`: a person may name a repository outside the
          target repos.
        - `Store.IsApprover`: every person approves every rule
@@ -993,13 +993,14 @@ starts before the one it builds on has merged.
      Settings > Capabilities "Also authorize teams" editor, the
      `admincaps.IDs`/`Widenable` list, the schedule-firing and
      task-filing refusals, the multi-owner CI refusal, and the grant
-     drop on a team move. self-debug, pipeline-control and memory are
+     drop on a team move. self-debug, pipeline-control and memory (the
+     last two now `api:` presets) are
      deployment-wide for every holder (`TaskDetail.DeploymentWide`
      still lists them, so the MCP server's checks are unchanged); a team
      memory agent still writes only its own team's layer until memory
      becomes deployment-level. `grain_config.capability_teams` stays for
      stage 6 to drop, and nothing reads it. A team GCP key
-     (`gcp-key:<name>`) a team has not configured is still refused at
+     (`gcp-key:<name>`, now `…/gcp#gcp-key`) a team has not configured is still refused at
      filing (`MissingGCPKeyRefusal`) until 4e moves the keys to the
      deployment. The frontend's `capabilityAllowedForTeam` was inert
      (no row carries `authorizedTeams`) and went with stage 3e-ii's team
@@ -1076,7 +1077,7 @@ starts before the one it builds on has merged.
        3e-ii's team UI.
      - **Left for later stages.** `team_repo_config` and team-restricted
        secrets no longer reach CI (stage 6 folds the team layer into
-       `repo_config`); a custom team's `gcp-key:<name>` in CI waits for
+       `repo_config`); a custom team's `gcp-key:<name>` (now `…/gcp#gcp-key`) in CI waits for
        4e.
    - **4d: memory, boards and custom fields (task 4744, landed).**
      None of the three has a team any more.
@@ -1088,7 +1089,7 @@ starts before the one it builds on has merged.
        `team` of `/api/memory` and `/api/memory/documents` (an old
        client's `team` or `?team=` is ignored). Every reader is shown
        every scope; a person writes any of it only as a system admin,
-       and an agent only from a task holding the memory capability,
+       and an agent only from a task holding the memory capability (now `api:memory`),
        with no team memory agent narrowed to its own layer
        (`requireMemoryGrant`, `daemonMemory`, `deploymentWideGrants`).
        Rows keep the `team` column for stage 6: the deployment row is
@@ -1123,7 +1124,8 @@ starts before the one it builds on has merged.
      - `board.team`, `custom_field.team`, `memory.team` and
        `memory_document.team` stay for stage 6 to drop.
    - **4e: GCP keys (task 4745, landed).** Per-team GCP keys are the
-     deployment's named GCP keys, `gcp-key:<name>`
+     deployment's named GCP keys, `gcp-key:<name>` (since schema
+     migration 97, `…/gcp#gcp-key` `{permission_set: <name>}`)
      ([team-gcp-keys.md](team-gcp-keys.md)); the key mechanism (pools,
      minters, leases, the reaper) is unchanged.
      - **Lookup.** `gcpkey.TeamKeyProvider` is `gcpkey.KeyProvider`: its

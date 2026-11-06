@@ -725,11 +725,12 @@ func (s *Server) routes() {
 	s.route("POST /api/hostds/pending/{id}/accept", s.handleAcceptPendingHostJoin)
 	s.route("POST /api/hostds/pending/{id}/reject", s.handleRejectPendingHostJoin)
 	s.route("PATCH /api/hostds/{name}", s.handleUpdateHostd)
-	s.route("DELETE /api/hostds/{name}", s.handleDeleteHostd)
 	s.route("GET /api/hostds/{name}/install", s.handleHostdInstall)
 	s.route("POST /api/hostds/{name}/rename", s.handleRenameHostd)
 	s.route("POST /api/hostds/{name}/rotate", s.handleRotateHostdToken)
 	s.route("POST /api/hostds/{name}/revoke", s.handleRevokeHostd)
+	s.route("DELETE /api/hostds/{name}", s.handleDeleteHostd)
+	s.route("POST /api/hostds/delete-revoked", s.handleDeleteRevokedHostds)
 
 	// Verified-identity sign-in allowlist (Settings -> Access).
 	s.route("GET /api/access/principals", s.handleListAccessPrincipals)

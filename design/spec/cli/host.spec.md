@@ -645,18 +645,20 @@ _No flags._
 
 **Pinned by:** *untested*.
 
-### 4.7 `grain host list|pending|accept|reject|codes|invite|rotate-code|revoke-code|rename|update|revoke|delete|rekey|register|install|set-owner` {#CLI-36}
+### 4.7 `grain host list|pending|accept|reject|codes|invite|rotate-code|revoke-code|rename|update|revoke|delete|delete-revoked|rekey|register|install|set-owner` {#CLI-36}
 
 This is the host registry and its enrollment handshake (Settings -> Hosts; docs/host-placement.md). A host joins with one shared enrollment code (`grain host -server <url> -join <code>`) as a verified person and waits for the deployment owner to accept it; a legacy host is registered with its owner, the identity it dials in as through IAP. `grain hostds` (and `grain hostd <verb>`) are hidden aliases that keep working; a bare `grain hostds` still lists.
 - `pending` calls `GET /api/hostds/pending` and prints each pending join request with its enrolling identity, host details and key fingerprint.
 - `accept [-name -labels -capacity] <id>` calls `POST /api/hostds/pending/{id}/accept`; `reject <id>` calls `POST /api/hostds/pending/{id}/reject`. Both are the deployment owner's alone and audited.
 - `codes` calls `GET /api/hostds/enrollment-codes`; `invite` creates one (`POST /api/hostds/enrollment-codes`) and prints the shared `--join` snippet; `rotate-code` and `revoke-code` call `.../{name}/rotate` and `.../{name}/revoke`. Revoking a code stops new joins and leaves accepted hosts alone.
-- `rename <old> <new>` calls `POST /api/hostds/{name}/rename`; `update` calls `PATCH /api/hostds/{name}` (owner, labels, capacity); `revoke` calls `POST /api/hostds/{name}/revoke` and drops a live connection; `delete` calls `DELETE /api/hostds/{name}` for an offline or revoked host.
+- `rename <old> <new>` calls `POST /api/hostds/{name}/rename`; `update` calls `PATCH /api/hostds/{name}` (owner, labels, capacity); `revoke` calls `POST /api/hostds/{name}/revoke` and drops a live connection; `delete` calls `DELETE /api/hostds/{name}` for a revoked host that no model connection or capability server still names, clearing the usage-limit pauses keyed to it; `delete-revoked` calls `POST /api/hostds/delete-revoked` and deletes every revoked host nothing still names, listing the ones it skipped.
 - `rekey <name>` moves a host registered with a legacy per-host token to a key-bound credential through the same owner-accepted join handshake.
 - `list` (`ls`) calls `GET /api/hostds`.
 - `register` (`create`) calls `POST /api/hostds`. It prints the token once, then the install instructions the daemon rendered (`install.lines`, `install.note`; `ui.RegisterHostdInstall`), which never carry the token.
 - `install <name>` calls `GET /api/hostds/{name}/install` and prints the same instructions again, without rotating the token.
 - `set-owner <name> <owner>` calls `PATCH /api/hostds/{name}`.
+- `delete <name>` (`rm`) calls `DELETE /api/hostds/{name}`. It removes a revoked host and its tokens from the registry, so the name can be registered again. The daemon refuses a live host ("revoke it first"), `local`, and a host a model connection's `hostd`/`hostdFallback` or a capability server's `hostd` still names by name, listing each; the CLI prints that refusal as its error. It prints the usage-limit pauses keyed to the host that were cleared with it.
+- `delete-revoked` calls `POST /api/hostds/delete-revoked`: it deletes every revoked host nothing still names and prints the ones it skipped, with why.
 
 **Scope:** admin.
 
@@ -749,7 +751,11 @@ _No flags._
 | `-token-file` | string |  | $GRAIN_HOSTD_TOKEN | file holding the host's current token, and where the new key-bound credential is saved ($GRAIN_HOSTD_TOKEN when unset) |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/hostds_test.go`: `TestHostdsRegisterAndSetOwner`.
+<!-- BEGIN GENERATED FLAGS: grain host delete-revoked -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/hostds_test.go`: `TestHostdsRegisterAndSetOwner`, `TestHostdsDelete`.
 
 ### 4.8 `grain git-connections`, `grain git-ambient`, `grain git-login`, `grain default-model` {#CLI-37}
 

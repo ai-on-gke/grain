@@ -497,7 +497,7 @@ Commands:
   gcp-key list|get|set|delete          manage this deployment's GCP service-account keys
   capability-servers list|add|remove|enable|disable|bind-secret
                                        manage this deployment's capability servers (mcpServers)
-  host list|pending|accept|reject|invite|codes|rename|update|revoke|delete|rekey
+  host list|pending|accept|reject|invite|codes|rename|update|revoke|delete|delete-revoked|rekey
                                        hosts (Settings -> Hosts): invite hosts with one shared enrollment
                                        snippet, accept or reject the hosts that join, and manage hosts
   host register|install|set-owner      the legacy host registry: register a host with its owner, the

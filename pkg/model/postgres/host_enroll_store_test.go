@@ -124,6 +124,12 @@ func TestPostgresHostEnrollmentCodeJoinHandshakeAndMigration117(t *testing.T) {
 	if got, err := s.HostdForTokenAt(ctx, cred2, renewAt.Add(time.Hour)); err != nil || got == nil || got.Name != "alice-ws" {
 		t.Fatalf("token after RenameHostd = %+v, %v", got, err)
 	}
+	if err := s.DeleteHostd(ctx, "alice-ws"); !errors.Is(err, model.ErrHostdLive) {
+		t.Fatalf("DeleteHostd on a live host = %v, want ErrHostdLive", err)
+	}
+	if _, err := s.RevokeHostd(ctx, "alice-ws"); err != nil {
+		t.Fatalf("RevokeHostd: %v", err)
+	}
 	if err := s.DeleteHostd(ctx, "alice-ws"); err != nil {
 		t.Fatalf("DeleteHostd: %v", err)
 	}

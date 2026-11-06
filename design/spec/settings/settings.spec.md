@@ -183,8 +183,8 @@ Component: `CredentialsSection.jsx`. The aliases `/settings/secrets` and `/setti
 | --- | --- | --- | --- | --- |
 | GitHub host | `githubHost` | `github_host` | Host (normalised by `gitHubHostSetting`). Required the first time settings are saved. Default `github.com`. | **restart** |
 | (checkbox) plain HTTP | `githubInsecureHttp` | `github_insecure_http` | `false`; for mock servers only | **restart** |
-| GCP project | `gcpProject` | `gcp_project` | Empty disables `gcp-key` and `gemini-key` | live (tick): the capability registry is rebuilt |
-| GCP service account email | `gcpServiceAccountEmail` | `gcp_service_account_email` | The narrow agent SA `gcp-key` mints keys for | live (tick) |
+| GCP project | `gcpProject` | `gcp_project` | Empty disabled the in-process `gcp-key` and `gemini-key`, both retired: schema migrations 97 and 103 seeded `https://grain.dev/capabilities/gcp`'s permission sets and its `gemini_key` from it, and that server's own configuration is what `…/gcp#gcp-key` and `…/gcp#gemini-key` mint with now | live (tick): the capability registry is rebuilt |
+| GCP service account email | `gcpServiceAccountEmail` | `gcp_service_account_email` | The narrow agent SA the retired in-process `gcp-key` minted keys for; schema migration 97 seeded `…/gcp#gcp-key`'s permission sets from it | live (tick) |
 | GCP service account count | `gcpServiceAccountCount` | `gcp_service_account_count` | `0` or `1` means a single account; `N` means a numbered pool | live (tick) |
 | Secret values | `GET /api/secrets` (names only), `PUT /api/secrets/{secret}/{key}`, `DELETE /api/secrets/{secret}[/{key}]`, `PUT`/`DELETE /api/github-tokens/{name}` | `<data-dir>/secrets` | Write-only. A GitHub token cannot be deleted while a git connection names it. | immediate |
 

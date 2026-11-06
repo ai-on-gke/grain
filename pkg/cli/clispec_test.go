@@ -68,7 +68,7 @@ var hostSpecSubcommands = map[string][]string{
 	"fs":                 {"ls", "cat", "read", "grep"},
 	"gcp-key":            {"list", "get", "set", "delete"},
 	"host": {"list", "pending", "accept", "reject", "codes", "invite", "rotate-code", "revoke-code",
-		"rename", "update", "revoke", "delete", "rekey", "register", "install", "set-owner"},
+		"rename", "update", "revoke", "delete", "delete-revoked", "rekey", "register", "install", "set-owner"},
 	"init":     {"workstation"},
 	"pr":       {"adopt", "review", "status"},
 	"registry": {"status", "register", "unregister"},

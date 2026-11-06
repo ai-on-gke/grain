@@ -231,6 +231,12 @@ func TestHostEnrollmentCodeAndJoinHandshakeLifecycle(t *testing.T) {
 	if err != nil || updated.Capacity != 8 {
 		t.Fatalf("UpdateHostdDetails = %+v, %v", updated, err)
 	}
+	if err := s.DeleteHostd(ctx, "alice-ws"); !errors.Is(err, model.ErrHostdLive) {
+		t.Fatalf("DeleteHostd on a live host = %v, want ErrHostdLive", err)
+	}
+	if _, err := s.RevokeHostd(ctx, "alice-ws"); err != nil {
+		t.Fatalf("RevokeHostd: %v", err)
+	}
 	if err := s.DeleteHostd(ctx, "alice-ws"); err != nil {
 		t.Fatalf("DeleteHostd: %v", err)
 	}

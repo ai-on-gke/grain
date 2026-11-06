@@ -27,8 +27,9 @@ body: |
     default capacity/default labels/allowed principals, Rotate code and
     Revoke code), Pending host requests (verified enrollee, no pairing code, key fingerprint, editable Host name/labels/capacity, Accept
     and Reject), Hosts table (`local`, key-bound and legacy token rows,
-    Edit owner/labels/capacity, Rename, Revoke, Delete for offline/revoked
-    hosts), and legacy per-host token registration.
+    Edit owner/labels/capacity, Rename, Revoke, Delete for revoked hosts
+    behind a confirmation, and Delete all revoked listing any skipped),
+    and legacy per-host token registration.
   - Capabilities (`/settings/capabilities`, and the old
     `/settings/capability-servers` link): capability servers with the
     built-in ones first, disable-only (confirming Disable flips a

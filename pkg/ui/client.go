@@ -1273,6 +1273,7 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 		log.Printf("ui: task %s: reading its attempts' hostds: %v", id, err)
 		runHostds = nil
 	}
+	c.markDeletedRunHostds(ctx, runHostds)
 	detail.Attempts = make([]Attempt, 0, len(runs))
 	for _, r := range runs {
 		a := attemptFrom(r, promptBytes, auditCounts)

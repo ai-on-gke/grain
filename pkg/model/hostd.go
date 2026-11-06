@@ -64,6 +64,10 @@ var (
 	// ErrHostdNotKeyBound is RenewHostdCredential on a host holding a legacy
 	// per-host token: only key-bound credentials renew (migrate with rekey).
 	ErrHostdNotKeyBound = errors.New("model: this host holds a legacy per-host token, which does not renew; migrate it with rekey")
+	// ErrHostdLive is DeleteHostd on a hostd that is not revoked: a live
+	// hostd is revoked first, so deleting one never cuts off a connected
+	// hostd or its running work by surprise.
+	ErrHostdLive = errors.New("model: host is not revoked; revoke it first")
 )
 
 // hostdNameRE is what a hostd name may be: a DNS label, so it reads the
@@ -362,7 +366,8 @@ func insertHostdToken(ctx context.Context, tx *sql.Tx, name, token string, now t
 	return nil
 }
 
-// ListHostds is the registry, revoked hostds included, by name.
+// ListHostds is the registry, by name: revoked hostds included until they
+// are deleted (DeleteHostd).
 func (s *Store) ListHostds(ctx context.Context) ([]Hostd, error) {
 	rows, err := s.db.QueryContext(ctx, "SELECT "+hostdColumns+" FROM `hostd` ORDER BY `name`")
 	if err != nil {
@@ -667,6 +672,37 @@ type HostdUpdate struct {
 	Capacity *int
 }
 
+// DeleteHostd removes name's registry row and every hostd_token row it
+// has, once it is revoked: ErrHostdLive for one that is not,
+// ErrHostdNotFound for a name the registry does not hold, and a refusal
+// for LocalHostd. Nothing else is touched: task_run_hostd and the spool
+// cursors keep the name each past run recorded, and the name is free to
+// be registered again as a new hostd with nothing of this one's.
+func (s *Store) DeleteHostd(ctx context.Context, name string) error {
+	if name == LocalHostd {
+		return fmt.Errorf("%q is the co-located host and cannot be deleted", LocalHostd)
+	}
+	return s.write(ctx, "delete hostd "+name, func(tx *sql.Tx) error {
+		h, err := scanHostd(tx.QueryRowContext(ctx, "SELECT "+hostdColumns+" FROM `hostd` WHERE `name` = ?", name).Scan)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrHostdNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if !h.Revoked() {
+			return ErrHostdLive
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM `hostd_token` WHERE `hostd` = ?", name); err != nil {
+			return fmt.Errorf("deleting hostd %s's tokens: %w", name, err)
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM `hostd` WHERE `name` = ?", name); err != nil {
+			return fmt.Errorf("deleting hostd %s: %w", name, err)
+		}
+		return nil
+	})
+}
+
 // UpdateHostd sets name's owner and labels; a nil pointer leaves that
 // field as it is.
 func (s *Store) UpdateHostd(ctx context.Context, name string, owner *string, labels *map[string]string) (*Hostd, error) {
@@ -770,25 +806,4 @@ func (s *Store) RenameHostd(ctx context.Context, oldName, newName string) (*Host
 		return nil, err
 	}
 	return s.GetHostd(ctx, newName)
-}
-
-// DeleteHostd removes name and its tokens from the registry. LocalHostd
-// cannot be deleted.
-func (s *Store) DeleteHostd(ctx context.Context, name string) error {
-	if name == LocalHostd {
-		return fmt.Errorf("%q is the co-located hostd and cannot be deleted", LocalHostd)
-	}
-	return s.write(ctx, "delete hostd "+name, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM `hostd_token` WHERE `hostd` = ?", name); err != nil {
-			return err
-		}
-		res, err := tx.ExecContext(ctx, "DELETE FROM `hostd` WHERE `name` = ?", name)
-		if err != nil {
-			return err
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return ErrHostdNotFound
-		}
-		return nil
-	})
 }

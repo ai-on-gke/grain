@@ -203,6 +203,17 @@ func registerPendingHostJoin(t *testing.T, client *ui.Client, _ sender) string {
 	return jr.ID
 }
 
+// registerRevokedHostd puts hostd ws-1 in the registry, revoked, as what
+// deleting a hostd acts on.
+func registerRevokedHostd(t *testing.T, client *ui.Client, s sender) string {
+	t.Helper()
+	name := registerHostd(t, client, s)
+	if _, err := client.Store.RevokeHostd(context.Background(), name); err != nil {
+		t.Fatalf("revoking ws-1: %v", err)
+	}
+	return name
+}
+
 // releaseClient is approvalServer's deployment: grain CI on
 // ai-on-gke/grain, with a fake runner recording what is started.
 func releaseClient(t *testing.T) *ui.Client {
@@ -669,12 +680,6 @@ var attributedRoutes = map[string]attributedRoute{
 		agentGrants: []string{"api:capabilities:admin"},
 		recorded:    lastConfigAudit,
 	},
-	"DELETE /api/hostds/{name}": {
-		setup:       registerHostd,
-		path:        "/api/hostds/{id}",
-		agentGrants: []string{"api:capabilities:admin"},
-		recorded:    lastConfigAudit,
-	},
 	"POST /api/hostds/{name}/rename": {
 		setup:       registerHostd,
 		path:        "/api/hostds/{id}/rename",
@@ -691,6 +696,17 @@ var attributedRoutes = map[string]attributedRoute{
 	"POST /api/hostds/{name}/revoke": {
 		setup:       registerHostd,
 		path:        "/api/hostds/{id}/revoke",
+		agentGrants: []string{"api:capabilities:admin"},
+		recorded:    lastConfigAudit,
+	},
+	"DELETE /api/hostds/{name}": {
+		setup:       registerRevokedHostd,
+		path:        "/api/hostds/{id}",
+		agentGrants: []string{"api:capabilities:admin"},
+		recorded:    lastConfigAudit,
+	},
+	"POST /api/hostds/delete-revoked": {
+		setup:       registerRevokedHostd,
 		agentGrants: []string{"api:capabilities:admin"},
 		recorded:    lastConfigAudit,
 	},
