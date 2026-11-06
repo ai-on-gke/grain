@@ -1,0 +1,34 @@
+7 Cross-surface attribution walkthrough
+state:      queued
+owner:      alice@example.com
+paused:     by operator (access code) at 2026-11-06T06:22:59Z (was queued)
+priority:   5
+auto-merge: false
+
+One task touched by IAP person, access code, external agent, and grain.
+filed by:        alice@example.com
+
+history:
+  -> proposed        2026-11-06T06:22:59Z by alice@example.com
+  -> queued          2026-11-06T06:22:59Z
+
+--- comment #3 by alice@example.com ---
+Verified person comment from IAP.
+
+--- comment #4 by operator (access code) ---
+Access code comment from loopback.
+
+--- comment #5 by grain ---
+Paused by operator (access code).
+
+--- comment #6 by grain ---
+Resumed by alice@example.com. This task was paused by operator (access code) at 2026-11-06T06:22:59Z and has now been resumed (2026-11-06T06:22:59Z).
+
+--- comment #7 by grain ---
+Paused by operator (access code).
+
+--- comment #8 by external agent triage-bot for alice@example.com (from triage-runner/1.2) ---
+External agent comment on behalf of alice.
+
+--- comment #9 by grain on behalf of external:triage-bot ---
+External agent `triage-bot` (`external:triage-bot`) on behalf of `alice@example.com` called `POST /api/tasks/{id}/comments` through the agent API (scope `tasks:write`).

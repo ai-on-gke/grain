@@ -38,6 +38,19 @@ import (
 	"time"
 )
 
+// errDowngradeRedirect marks a refused https-to-http redirect so Fetch keeps
+// it as an authentication refusal (401) rather than a transient outage (503).
+var errDowngradeRedirect = errors.New("refusing a redirect off https")
+
+// unavailableError marks a key-endpoint transport failure or upstream 5xx/429
+// response so callers checking interface{ Unavailable() bool } (such as
+// ui.VerifierUnavailableError) return 503 Service Unavailable rather than 401.
+type unavailableError struct{ err error }
+
+func (e unavailableError) Error() string     { return e.err.Error() }
+func (e unavailableError) Unwrap() error     { return e.err }
+func (e unavailableError) Unavailable() bool { return true }
+
 // refusingDowngrades is client, refusing to follow a redirect off https:
 // keys fetched over https and then served over plain http are keys
 // anybody on the path could have swapped (GSA1-19). Whatever client
@@ -48,7 +61,7 @@ func refusingDowngrades(client *http.Client) *http.Client {
 	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		for _, prev := range via {
 			if prev.URL.Scheme == "https" && req.URL.Scheme != "https" {
-				return fmt.Errorf("refusing a redirect from %s to %s: it is not https", prev.URL.Redacted(), req.URL.Redacted())
+				return fmt.Errorf("%w: from %s to %s: it is not https", errDowngradeRedirect, prev.URL.Redacted(), req.URL.Redacted())
 			}
 		}
 		if next != nil {
@@ -78,11 +91,19 @@ func Fetch(ctx context.Context, client *http.Client, url, name string) (map[stri
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetching %s public keys: %w", name, err)
+		wrapped := fmt.Errorf("fetching %s public keys: %w", name, err)
+		if ctx.Err() == context.Canceled || errors.Is(err, errDowngradeRedirect) {
+			return nil, wrapped
+		}
+		return nil, unavailableError{wrapped}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetching %s public keys: unexpected status %d", name, resp.StatusCode)
+		wrapped := fmt.Errorf("fetching %s public keys: unexpected status %d", name, resp.StatusCode)
+		if resp.StatusCode >= http.StatusInternalServerError || resp.StatusCode == http.StatusTooManyRequests {
+			return nil, unavailableError{wrapped}
+		}
+		return nil, wrapped
 	}
 	var raw map[string]json.RawMessage
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&raw); err != nil {
