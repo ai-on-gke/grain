@@ -605,6 +605,7 @@ func TestWSMuxSessionRoundTripClosesStreams(t *testing.T) {
 	})
 	defer clientMux.Close()
 
+	streamClosed := make(chan struct{}, 6)
 	go func() {
 		for {
 			st, err := clientMux.AcceptStream()
@@ -612,7 +613,10 @@ func TestWSMuxSessionRoundTripClosesStreams(t *testing.T) {
 				return
 			}
 			go func(s *mux.Stream) {
-				defer s.Close()
+				defer func() {
+					_ = s.Close()
+					streamClosed <- struct{}{}
+				}()
 				req, err := http.ReadRequest(bufio.NewReader(s))
 				if err != nil {
 					return
@@ -620,9 +624,12 @@ func TestWSMuxSessionRoundTripClosesStreams(t *testing.T) {
 				_, _ = io.Copy(io.Discard, req.Body)
 				_ = req.Body.Close()
 				if req.URL.Path == "/drop" {
+					_ = s.CloseWrite()
+					_, _ = io.Copy(io.Discard, s)
 					return
 				}
 				_, _ = io.WriteString(s, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+				_, _ = io.Copy(io.Discard, s)
 			}(st)
 		}
 	}()
@@ -644,17 +651,22 @@ func TestWSMuxSessionRoundTripClosesStreams(t *testing.T) {
 				_ = resp.Body.Close()
 				t.Fatalf("expected error on /drop")
 			}
-			continue
+		} else {
+			if err != nil {
+				t.Fatalf("RoundTrip %d failed: %v", i, err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			if err := resp.Body.Close(); err != nil {
+				t.Fatalf("resp.Body.Close %d: %v", i, err)
+			}
+			if string(body) != "ok" {
+				t.Fatalf("unexpected body %q", string(body))
+			}
 		}
-		if err != nil {
-			t.Fatalf("RoundTrip %d failed: %v", i, err)
-		}
-		body, _ := io.ReadAll(resp.Body)
-		if err := resp.Body.Close(); err != nil {
-			t.Fatalf("resp.Body.Close %d: %v", i, err)
-		}
-		if string(body) != "ok" {
-			t.Fatalf("unexpected body %q", string(body))
+		select {
+		case <-streamClosed:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("RoundTrip %d did not close stream", i)
 		}
 	}
 }
