@@ -120,7 +120,7 @@ func rewindSchemaTo(t *testing.T, ctx context.Context, db *sql.DB, target int) {
 			if !ok {
 				continue
 			}
-			if _, err := db.ExecContext(ctx, "ALTER TABLE `"+table+"` DROP COLUMN IF EXISTS `"+col+"`"); err != nil {
+			if _, err := db.ExecContext(ctx, "ALTER TABLE IF EXISTS `"+table+"` DROP COLUMN IF EXISTS `"+col+"`"); err != nil {
 				t.Fatal(err)
 			}
 		}
