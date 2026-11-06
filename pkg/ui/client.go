@@ -2685,8 +2685,12 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			needsPersonWhy = why
 		}
 	}
+	limitedRole := false
+	if a := accessRoleFromContext(ctx); a != nil && !a.Full {
+		limitedRole = true
+	}
 	catalogueHold := false
-	if len(catalogueNeedsPerson) > 0 && (proposedBy != nil || c.requestActor(ctx).Actor.Kind == model.PrincipalAgent) {
+	if len(catalogueNeedsPerson) > 0 && (proposedBy != nil || c.requestActor(ctx).Actor.Kind == model.PrincipalAgent || limitedRole) {
 		why := model.CatalogueRequiresPersonNote(catalogueNeedsPerson)
 		if needsPersonWhy == "" {
 			needsPersonWhy = why

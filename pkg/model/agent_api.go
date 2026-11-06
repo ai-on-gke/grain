@@ -918,6 +918,25 @@ func (s APIGrantSet) Scopes() []APIScope {
 	return out
 }
 
+// Without returns s with every scope in deny removed.
+func (s APIGrantSet) Without(deny map[APIScope]bool) APIGrantSet {
+	if len(deny) == 0 {
+		return s
+	}
+	out := APIGrantSet{scopes: map[APIScope][]string{}, all: map[APIScope]bool{}}
+	for scope := range s.all {
+		if !deny[scope] {
+			out.all[scope] = true
+		}
+	}
+	for scope, repos := range s.scopes {
+		if !deny[scope] {
+			out.scopes[scope] = slices.Clone(repos)
+		}
+	}
+	return out
+}
+
 // IsDangerousAPIGrant reports whether a grant name is an api grant of a
 // dangerous scope (or a preset holding one): what only a person may
 // grant, so that even a proposer holding it cannot pass it on.

@@ -2509,11 +2509,13 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		req.TimeZone = requestTimeZone(r)
 	}
 	// The fields settings/new-task-form.yml hides file as it says -- for
-	// a person's filing, never an agent's. agentAPIGate judged an agent's
-	// escalations (autoMerge, approved, writes, reads, grants, repo) on
-	// the body it sent, so a default put in after it would be a grant
-	// that gate never saw.
+	// an unlimited person's filing, never an agent's or a limited role's.
+	// agentAPIGate and roleGate judged their escalations (autoMerge,
+	// approved, writes, reads, grants, repo) on the body they sent, so a
+	// default put in after them would be a grant neither gate saw.
 	if p, ok := PrincipalFromContext(r.Context()); ok && p.Kind == model.PrincipalAgent {
+		// filed as the body says
+	} else if a := accessRoleFromContext(r.Context()); a != nil && !a.Full {
 		// filed as the body says
 	} else if cfg, err := s.tasks.Store.GetConfig(r.Context()); err == nil && cfg != nil {
 		if err := applyHiddenFormDefaults(&req, cfg.NewTaskForm); err != nil {
