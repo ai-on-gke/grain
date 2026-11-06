@@ -59,12 +59,12 @@ Any other command, including `mcpserver`, `capability` and the agent hooks, runs
 
 | Scheme | Holds | Needs |
 |---|---|---|
-| `ci://<owner>/<repo>/<run>/<job>/[attempts/<k>/]<step>.log`, `…/artifacts/<job>/<name>` | grain CI runs and GitHub Actions runs (`gha:` ids; one `job.log` per job) | `grain-ci` for the task's own repo, `ci-read` for others |
+| `ci://<owner>/<repo>/<run>/<job>/[attempts/<k>/]<step>.log`, `…/artifacts/<job>/<name>` | grain CI runs and GitHub Actions runs (`gha:` ids; one `job.log` per job) | `https://grain.dev/capabilities/grain#ci` (formerly `grain-ci`, retired in schema migration 96) for the task's own repo, `ci-read` for others |
 | `src://…` | the daemon's own source; `src://core/…` for core under a layered build; `src://playbooks/…` | `self-debug`, or `bootstrap-playbooks` for playbooks |
 | `task://<id>/record.md`, `prompt.md`, `transcript.md`, `attempts/<n>/…` | task records | the run's own task, or `self-debug`/`tasks:read` for others |
 | `config://…` | the deployment's state repository (grain/config) | as the namespace grants |
 | `memory://<key>` | memory documents | `memory` |
-| `deploy://grain.log[/<source>]`, `health`, `metrics[/<section>]`, `merge-queue`, `pipeline-changes` | deployment state | `grain-log`, `deployment-health`, `self-debug` |
+| `deploy://grain.log[/<source>]`, `health`, `metrics[/<section>]`, `merge-queue`, `pipeline-changes` | deployment state | `…/grain#journal` (formerly `grain-log`, retired in schema migration 80), `…/grain#health` (with `api:deployment:read`, formerly `deployment-health`, retired in schema migration 81), `self-debug` |
 
 The schemes and their grants are the namespace's to define ([`grain-namespace.design.md`](../../design/grain-namespace.design.md)). This CLI only forwards.
 
@@ -136,7 +136,7 @@ Usage: `grain grep <pattern> <uri> [-i] [-C N] [--glob <pat>] [--max N]`
 
 ## 3. CI and pull request
 
-These are scoped by the proxy to the run's task repository and branch. **Needs** `grain-ci` (own repository) or `ci-read` (others). `ci retrigger` and `ci run-job` are grain-CI-only.
+These are scoped by the proxy to the run's task repository and branch. **Needs** `…/grain#ci` (own repository) or `ci-read` (others). `ci retrigger` and `ci run-job` are grain-CI-only.
 
 ### 3.1 `grain ci list` {#CLI-86}
 
@@ -606,7 +606,7 @@ Usage: `grain api routes [--scope <s>]`
 - `memory write [<owner/name>] <text> | --file f [--repo r] [--reason]` sends `PUT /api/memory {"repo", "text"}`, which replaces the whole memory text. A leading `<key>` is refused: `grain memory write takes no <key>: …`.
 - `memory doc-write <name> …` sends `PUT /api/memory/documents`.
 
-**Needs** `memory`.
+**Needs** `api:memory` (formerly the `memory` capability, retired in schema migration 71).
 
 <!-- BEGIN GENERATED FLAGS: grain memory list -->
 Usage: `grain memory list`
@@ -694,8 +694,8 @@ Usage: `grain quarantine <package> <test-name> --reason <why> [--ttl 30d] [--no-
 ### 6.1 `grain metrics`, `grain health`, `grain log`, `grain playbooks` {#CLI-103}
 
 - `grain metrics [<section>]` reads `deploy://metrics[/<section>]` with `window`, `since` and `until`. `--repo` and `--author` may be repeated. **Needs** `self-debug`.
-- `grain health` reads `deploy://health`. **Needs** `deployment-health`.
-- `grain log [<source> | --source s]` reads `deploy://grain.log[/<source>]`. `--since`/`--until` spans are resolved to RFC 3339 instants relative to now. `--priority`/`--min-priority` become `min_priority`, and `--max-lines`/`--lines`/`-n` become `max_lines`. A zero count is refused: `grain log: <flag> "0" is not a count of entries: it takes a positive integer`. **Needs** `grain-log`.
+- `grain health` reads `deploy://health`. **Needs** `…/grain#health` (formerly `deployment-health`).
+- `grain log [<source> | --source s]` reads `deploy://grain.log[/<source>]`. `--since`/`--until` spans are resolved to RFC 3339 instants relative to now. `--priority`/`--min-priority` become `min_priority`, and `--max-lines`/`--lines`/`-n` become `max_lines`. A zero count is refused: `grain log: <flag> "0" is not a count of entries: it takes a positive integer`. **Needs** `…/grain#journal` (formerly `grain-log`).
 - `grain playbooks` prints one playbook name per line (`src://playbooks`, with `.md` dropped). `grain playbooks <name>` reads it. **Needs** `bootstrap-playbooks`.
 
 <!-- BEGIN GENERATED FLAGS: grain metrics -->
