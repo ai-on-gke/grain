@@ -384,6 +384,9 @@ func (s *scriptedSession) Run(ctx context.Context, cfg agent.RunConfig) (*agent.
 		case <-waitCh:
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	obs, err := s.store.GetObservation(ctx, cfg.TaskID)
 	if err != nil {

@@ -2114,6 +2114,54 @@ func TestRunDispatchCancelsLiveRunWhenTaskStopped(t *testing.T) {
 	}
 }
 
+func TestRunDispatchCancelsRunAlreadyStoppedInStore(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	dispatchTask(t, ctx, store, "t1")
+	d := dispatch.Dispatch{TaskID: "t1", RunID: "r1", Attempt: 1}
+	startRun(t, ctx, store, d, baseTime)
+	task, err := store.GetTask(ctx, "t1")
+	if err != nil || task == nil {
+		t.Fatalf("reading task: %v", err)
+	}
+
+	stoppedAt := baseTime.Add(3 * time.Second)
+	if err := store.FinishRun(ctx, "r1", stoppedAt, "cancelled", model.TurnStoppedDetail); err != nil {
+		t.Fatalf("finishing run as stopped: %v", err)
+	}
+
+	sawCancelledCtx := false
+	fw := agentFunc(func(runCtx context.Context, cfg agent.RunConfig) (*agent.Result, error) {
+		sawCancelledCtx = runCtx.Err() != nil
+		return nil, runCtx.Err()
+	})
+
+	cfg := orchestrator.Config{
+		CancelPollInterval: time.Hour,
+		Now:                func() time.Time { return baseTime.Add(10 * time.Second) },
+	}
+	res, err := orchestrator.RunDispatch(ctx, store, fw, cfg, *task, d, nil, t.TempDir(), "", nil, baseTime)
+	if res != nil {
+		t.Errorf("result = %+v, want nil", res)
+	}
+	if err == nil || !strings.Contains(err.Error(), "turn stopped by user") {
+		t.Errorf("RunDispatch err = %v, want error naming turn stopped by user", err)
+	}
+	if !sawCancelledCtx {
+		t.Error("framework.Run's ctx was not already cancelled when run was stopped in store during setup")
+	}
+	runs, err := store.Runs(ctx, "t1")
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("reading runs: %v, len = %d", err, len(runs))
+	}
+	if runs[0].Outcome != "cancelled" || runs[0].Detail != model.TurnStoppedDetail {
+		t.Errorf("run = %q / %q, want cancelled / %q", runs[0].Outcome, runs[0].Detail, model.TurnStoppedDetail)
+	}
+	if runs[0].FinishedAt == nil || !runs[0].FinishedAt.Equal(stoppedAt) {
+		t.Errorf("run FinishedAt = %v, want preserved %v", runs[0].FinishedAt, stoppedAt)
+	}
+}
+
 // TestRunDispatchGivesTheFrameworkATranscriptPathAndCleansItUp proves the
 // two halves of bwsalmon/agents#467's wiring: RunDispatch tells the
 // framework where to mirror a still-running run's own transcript (a file
