@@ -383,6 +383,13 @@ func TestSandboxLogAndMetricsFlagsBecomeTheirQuery(t *testing.T) {
 	if got, want := grainLogQuery(p, time.Now()).Encode(), "max_lines=50&min_priority=warning"; got != want {
 		t.Errorf("grain log query = %s, want %s", got, want)
 	}
+	p, err = parseSandboxArgs([]string{"--unit", "grain-daemon.service", "--lines", "25"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := grainLogQuery(p, time.Now()).Encode(), "max_lines=25&unit=grain-daemon.service"; got != want {
+		t.Errorf("grain log --unit query = %s, want %s", got, want)
+	}
 	p, err = parseSandboxArgs([]string{"summary", "--since", "2026-10-28", "--until", "2026-10-29"})
 	if err != nil {
 		t.Fatal(err)

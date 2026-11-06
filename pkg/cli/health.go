@@ -26,6 +26,7 @@ import (
 	"os"
 	"slices"
 	"text/tabwriter"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -50,6 +51,19 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 	if p.json {
 		p.encode(h)
 		return
+	}
+	// The failing checks first: a deployment whose dispatch is down has
+	// nothing more important to say, and a reader who stops at the
+	// first line has to see it.
+	if len(h.DispatchBlocked) > 0 {
+		fmt.Println("FAILING: dispatch is blocked -- no task is dispatched until this clears:")
+		for _, c := range h.DispatchBlocked {
+			fmt.Printf("  [%s] %s (for %s, since %s)\n", c.Name, c.Error, c.Held, c.Since.Format(time.RFC3339))
+			if c.Remedy != "" {
+				fmt.Printf("    remedy: %s\n", c.Remedy)
+			}
+		}
+		fmt.Println()
 	}
 	if h.Daemon != nil && h.Daemon.StoreSwitch != nil {
 		fmt.Printf("ALERT (since %s): %s\n\n", h.Daemon.StoreSwitch.Since.UTC().Format("2006-01-02 15:04:05Z"), h.Daemon.StoreSwitch.Message)
