@@ -419,8 +419,8 @@ gate, not merely left ungranted.
 
 ## 4. Proposals and grant inheritance for a `no_repo` director {#DC-6}
 
-4.1. **What `main` does.** A child that `propose_task` files from the
-director is judged by `AutoApprovalRefusal(child, director, sessionQueues)`:
+4.1. **What `main` did before G9.** A child that `propose_task` files from the
+director is judged by `AutoApprovalRefusal(child, director, sessionQueues, seeding)`:
 
 - `EscalatedCapabilities` returns:
   - every `GrantByLabel` capability the director does not hold, or
@@ -436,13 +436,18 @@ director is judged by `AutoApprovalRefusal(child, director, sessionQueues)`:
   target the director cannot reach. The child's own `Target` is not
   counted.
 
-The result: a director proposal to a repository whose
+The result was that a director proposal to a repository whose
 `default_capabilities` include a reference, such as
 `…/host-script#host-script` `{script: …}` or a `…/gcp#gcp-key`
-permission set, is held unapproved. It is held only because the
+permission set, was held unapproved. It was held only because the
 director is `no_repo` and holds no repo defaults, even though a person
 filing the same task by hand would get the same grant without a
-prompt.
+prompt. G9 (§5) closes this: both filing paths (`ui.Client.CreateTask`
+and `orchestrator.relayProposedTasks`) now pass the seeding source
+(`model.ProposalSeeding`: the target's and the deployment's
+`default_capabilities` as resolved at filing time, and the catalogue
+with the child's `GrantContext`) to `model.ProposalEscalations` and
+`AutoApprovalRefusal`, which apply §4.2.
 
 4.2. **Rule.** For a proposal whose parent is the director (and only
 when `QueuesProposals` holds), a grant on the child MUST NOT count as
@@ -479,7 +484,9 @@ the rule never admits a grant the director wrote.
 4.4. **What the proposal says.** A child admitted under §4.2 SHOULD
 carry a note naming the defaults it received and where they came from,
 in the voice of `CapabilityEscalationNote`, so the row shows why it
-holds them.
+holds them. `model.SeededDefaultsNote` is that note: it names each admitted
+default and whether it came from the target repository's or the
+deployment's `default_capabilities`.
 
 ## 5. Gap analysis and implementation checklist {#DC-7}
 
@@ -493,7 +500,7 @@ holds them.
 | G6 | `capabilities:detach` | does not exist | New non-dangerous, MCP-only scope (§3.1.2) | Add it to `model.apiScopes`, `IsSandboxDeniedAPIScope`, `route_scopes.go` (a detach-body check like `tasksAdminTaskPatchBodyAllowed`), `docs/agent-api.md`; then add it to G1. |
 | G7 | Default catalogue for the director kind | none (`DefaultCapabilityCatalogue` absent; nil catalogue admits all) | Shipped rule set denying the director kind `merge:force`, `settings:write`, `secrets:write`, `connections:write`, `repos:write` | Add a built-in restriction layer applied under any `settings/capabilities.yml`, keyed on `CatalogueKindDirector` (operator files may narrow, not widen). |
 | G8 | Self-approval | relies on `tasks:admin` being person-granted | Gate refuses `POST /api/tasks/{id}/approve` on a task in the actor's proposal subtree or held for a person | Add to `agentRails` in `pkg/ui/agent_api_gate.go`, with tests. |
-| G9 | Seeded repo defaults on director proposals | held as "seeded" escalations | Admitted under §4.2 | Change `EscalatedCapabilities` / `AutoApprovalRefusal` (`pkg/model/auto_submit.go`, `hold_for_approval.go`) to take the seeding source; tests for each excluded case. |
+| G9 | Seeded repo defaults on director proposals | **done**: admitted under §4.2 by `model.ProposalEscalations` (`pkg/model/proposal_seeding.go`), which `AutoApprovalRefusal` (`hold_for_approval.go`), `ui.Client.CreateTask` and `orchestrator.relayProposedTasks` take the seeding source (`model.ProposalSeeding`) for; §4.4 note is `model.SeededDefaultsNote`; each excluded case pinned by `proposal_seeding_test.go`, `director_seeded_defaults_test.go` and `consolesessions_test.go` | Admitted under §4.2 | None. |
 | G10 | `DirectorSessionBody` | — | Tells the director to use `expect` on stop/close, `hold_for_approval` for destructive proposals, and give reasons | Update the reviewed body text. |
 | G11 | Docs | Retired capability names and the `NetworkAccess: open` note in `docs/director.md` updated in [Task #3185](/tasks/3185); envelope table still reflects pre-G1–G3 defaults | Matches §3 | Update `docs/director.md` alongside G1–G3 as each default flips. |
 | G12 | Capacity bound on session-queued proposals | session-queued proposals skip `AutoSubmitLimits` | Per-turn fan-out bound; over it, filed for a person (§3.1.5) | Add the check beside `ExceededAutoSubmitLimit` in `ui.Client.CreateTask` and `orchestrator.relayProposedTasks`, with tests. |

@@ -214,6 +214,12 @@ func AutoSubmitLimitNote(proposer string, limit AutoSubmitLimit, limits AutoSubm
 // check for the approvals that do not go through AutoSubmits -- a
 // standing session's (ConsoleSession.TasksApproved) -- and the list
 // CapabilityEscalationNote puts in front of whoever decides.
+//
+// A proposal from the director has a narrower answer: the defaults it
+// carries seeded unchanged from its own target repository or the
+// deployment are not escalations (ProposalEscalations,
+// director-capabilities.spec.md §4.2), which the filing paths ask for
+// with the seeding source this function does not know.
 func EscalatedCapabilities(child, parent Task) []string {
 	held := make(map[string]bool, len(parent.Grants))
 	for _, g := range parent.Grants {
