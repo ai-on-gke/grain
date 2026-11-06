@@ -2098,6 +2098,13 @@ func (c *Client) defaultCapabilities(ctx context.Context, teamID string, target 
 			stored = append(append([]string{}, stored...), repoCfg.DefaultCapabilities...)
 		}
 	}
+	return c.resolveDefaultCapabilities(stored), nil
+}
+
+// resolveDefaultCapabilities is a stored default_capabilities list as
+// defaultCapabilities seeds it: each id normalized, deduplicated, and any
+// this deployment does not offer left out.
+func (c *Client) resolveDefaultCapabilities(stored []string) []string {
 	ids := make([]string, 0, len(stored))
 	seen := make(map[string]bool, len(stored))
 	for _, raw := range stored {
@@ -2116,7 +2123,37 @@ func (c *Client) defaultCapabilities(ctx context.Context, teamID string, target 
 			ids = append(ids, id)
 		}
 	}
-	return ids, nil
+	return ids
+}
+
+// proposalSeeding is the seeding source a director proposal filed against
+// target (nil: no repository) from templateID is measured against
+// (model.ProposalSeeding, director-capabilities.spec.md §4.2): the two
+// layers defaultCapabilities resolves for it, read and normalized the
+// same way but kept apart, so a default is admitted only as the layer it
+// came from wrote it, and the catalogue that judges it in that context.
+func (c *Client) proposalSeeding(ctx context.Context, target *model.RepoRef, templateID string) (*model.ProposalSeeding, error) {
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seeding := &model.ProposalSeeding{GrantContext: c.catalogueGrantContext(ctx, target, templateID, nil)}
+	if cfg != nil {
+		seeding.DeploymentDefaults = c.resolveDefaultCapabilities(cfg.DefaultCapabilities)
+		seeding.Catalogue = cfg.CapabilityPolicy.Catalogue
+	}
+	if target != nil {
+		repo := *target
+		seeding.Target = &repo
+		repoCfg, err := c.Store.GetRepoConfig(ctx, *target)
+		if err != nil {
+			return nil, err
+		}
+		if repoCfg != nil {
+			seeding.RepoDefaults = c.resolveDefaultCapabilities(repoCfg.DefaultCapabilities)
+		}
+	}
+	return seeding, nil
 }
 
 // ownerTrustApproves is the owner a filing is approved on behalf of by
@@ -2525,11 +2562,20 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err != nil {
 		return Task{}, err
 	}
+	// The template a person filed this from, which is how the task's runs
+	// find that template's declared push set (model.Task.TemplateID) and how
+	// the catalogue judges its template restrictions. An agent's proposal
+	// records none, even one naming a template: a run cannot hand a
+	// template's push set or template-restricted grants on to work it files.
+	var filedFrom string
+	if proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent {
+		filedFrom = strings.TrimSpace(req.TemplateID)
+	}
 	// The capability catalogue (settings/capabilities.yml) refuses what
 	// it does not admit here, and names what only a person may grant:
 	// a proposal or an agent's own filing holding one is left for a
 	// person to approve, whatever permission it would otherwise inherit.
-	grants, catalogueNeedsPerson, err := c.catalogueFilingGrants(ctx, grants, target, req.TemplateID)
+	grants, catalogueNeedsPerson, err := c.catalogueFilingGrants(ctx, grants, target, filedFrom)
 	if err != nil {
 		return Task{}, err
 	}
@@ -2726,13 +2772,31 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	keepRunning := req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake)
 	autoMerge, autoSubmit, sessionQueued := req.AutoMerge, false, false
-	var limitNote, ungrantedNote, heldNote, needsPersonNote, personOnlyNote, refusal string
+	var limitNote, ungrantedNote, heldNote, needsPersonNote, personOnlyNote, seededNote, refusal string
 	var escalated []string
 	if proposedBy != nil {
-		child := model.Task{Target: target, Base: req.Base, Grants: grants, Writes: writes}
+		child := model.Task{Target: target, Base: req.Base, Grants: grants, Writes: writes, TemplateID: filedFrom}
 		autoMerge = autoMerge && proposedBy.AutoMerge && model.AutoSubmits(child, *proposedBy)
 		child.Reads = reads
-		escalated = model.EscalatedCapabilities(child, *proposedBy)
+		// Read before the proposal's escalations are measured: a
+		// director allowed to queue its own work is not escalating by
+		// carrying its target repository's or this deployment's
+		// defaults unchanged (model.ProposalEscalations,
+		// director-capabilities.spec.md §4.2), and that is only its
+		// question when the session may queue at all.
+		sessionQueues, err := c.consoleSessionQueuesProposals(ctx, *proposedBy)
+		if err != nil {
+			return Task{}, err
+		}
+		var seeding *model.ProposalSeeding
+		if sessionQueues && model.IsDirectorTask(*proposedBy) {
+			if seeding, err = c.proposalSeeding(ctx, target, child.TemplateID); err != nil {
+				return Task{}, err
+			}
+		}
+		var admitted []model.SeededDefault
+		escalated, admitted = model.ProposalEscalations(child, *proposedBy, sessionQueues, seeding)
+		seededNote = model.SeededDefaultsNote(proposedBy.ID, admitted)
 		autoSubmit = model.AutoSubmits(child, *proposedBy)
 		// A fixture on the proposer's own qualification scratch branch,
 		// queued and merged there on the proposer's own permission to
@@ -2754,14 +2818,12 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		if len(ungrantedReads) > 0 {
 			ungrantedNote += model.UngrantedReadsNote(proposedBy.ID, ungrantedReads)
 		}
-		if sessionQueued, err = c.consoleSessionQueuesProposals(ctx, *proposedBy); err != nil {
-			return Task{}, err
-		}
+		sessionQueued = sessionQueues
 		if len(escalated) > 0 || len(ungrantedWrites) > 0 || len(ungrantedReads) > 0 {
 			sessionQueued = false
 		}
 		if !autoSubmit {
-			refusal = model.AutoApprovalRefusal(child, *proposedBy, sessionQueued)
+			refusal = model.AutoApprovalRefusal(child, *proposedBy, sessionQueues, seeding)
 		}
 		// A proposal that targets or writes grain/config waits for a
 		// person whatever its proposer holds (model.ConfigRepoProposalHold):
@@ -2873,14 +2935,6 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: proposedBy.ID},
 		}
 	}
-	// The template a person filed this from, which is how the task's runs
-	// find that template's declared push set (model.Task.TemplateID). An
-	// agent's proposal records none, even one naming a template: a run
-	// cannot hand the refs it may push on to work it files.
-	var filedFrom string
-	if proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent {
-		filedFrom = strings.TrimSpace(req.TemplateID)
-	}
 	resolvedOwner, sessionBehalf, err := c.resolveNewTaskOwner(ctx, req, proposedBy)
 	if err != nil {
 		return Task{}, err
@@ -2889,7 +2943,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		ID:                   id,
 		Intent:               model.IntentImplement,
 		Title:                req.Title,
-		Body:                 req.Description + forkNote + ungrantedNote + reviewTemplateNote + limitNote + needsPersonNote + heldNote + personOnlyNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
+		Body:                 req.Description + forkNote + ungrantedNote + seededNote + reviewTemplateNote + limitNote + needsPersonNote + heldNote + personOnlyNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
 		Origin:               origin,
 		Target:               target,
 		ChangeTarget:         changeTarget,
