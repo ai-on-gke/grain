@@ -131,7 +131,9 @@ describe("SearchSelect multiple", () => {
   // (a Schedule was filed from a picker reading "No matches").
   it("keeps Enter from the form while the open list matches nothing", async () => {
     const user = userEvent.setup();
-    const { onSubmit, box } = form({ options: OPTIONS.filter((o) => !o.pinned) });
+    const { onSubmit, box } = form({
+      options: OPTIONS.filter((o) => !o.pinned),
+    });
     await user.click(box);
     await user.type(box, "zzqxv");
     expect(screen.getByText("No matches")).toBeInTheDocument();

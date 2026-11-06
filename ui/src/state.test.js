@@ -2649,18 +2649,35 @@ describe("liveness sub-cases", () => {
     // askedCase's kind, so a finished report's chip does not say
     // "question" beside its "Answered in a comment" badge.
     const awaiting = { reason: "awaiting_reply/question" };
-    expect(taskReasonLabel({ state: "awaiting_reply", reason: awaiting })).toBe("answered");
+    expect(taskReasonLabel({ state: "awaiting_reply", reason: awaiting })).toBe(
+      "answered",
+    );
     expect(
-      taskReasonLabel({ state: "awaiting_reply", reason: awaiting, questionSummary: "Which?" }),
+      taskReasonLabel({
+        state: "awaiting_reply",
+        reason: awaiting,
+        questionSummary: "Which?",
+      }),
     ).toBe("question");
     expect(
-      taskReasonLabel({ state: "awaiting_reply", reason: awaiting, interactive: true }),
+      taskReasonLabel({
+        state: "awaiting_reply",
+        reason: awaiting,
+        interactive: true,
+      }),
     ).toBe("your message");
     expect(
-      taskReasonLabel({ state: "awaiting_reply", reason: awaiting, awaitingAccess: true }),
+      taskReasonLabel({
+        state: "awaiting_reply",
+        reason: awaiting,
+        awaitingAccess: true,
+      }),
     ).toBe("access request");
     expect(
-      taskReasonLabel({ state: "queued", reason: { reason: "queued/usage_limit_paused" } }),
+      taskReasonLabel({
+        state: "queued",
+        reason: { reason: "queued/usage_limit_paused" },
+      }),
     ).toBe("usage limit paused");
   });
 

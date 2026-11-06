@@ -87,14 +87,16 @@ try {
   pageIds.length = 0;
   let clicks = 0;
   const more = a.getByRole("button", { name: "Load older closed tasks" });
+  const clickLog = [];
   while (await more.isVisible().catch(() => false)) {
+    const box = await more.boundingBox();
     await more.click();
     clicks++;
-    await a.waitForFunction(
-      () => !document.body.innerText.includes("Loading closed tasks…"),
-      null,
-      { timeout: 20000 },
-    );
+    clickLog.push({ box, urlAfter: a.url().replace(S, ""), rowsAfter: await a.locator(".task-row").count() });
+    // The button reads "Loading closed tasks…" while its page is read
+    // (innerText is lower-cased by the theme's text-transform, so match
+    // on the accessible name, case-insensitively).
+    await a.getByRole("button", { name: /loading closed tasks/i }).waitFor({ state: "hidden", timeout: 30000 });
     if (clicks > 40) break;
   }
   const rowIds = await a.$$eval(".task-row", (rows) =>
@@ -106,6 +108,8 @@ try {
     rowsDrawn: rowIds.length,
     uniqueRows: new Set(rowIds).size,
     buttonGone: !(await more.isVisible().catch(() => false)),
+    firstClicks: clickLog.slice(0, 2),
+    urlAtEnd: a.url().replace(S, ""),
   });
 
   // Filters, boards and the tree over the oldest closed task.

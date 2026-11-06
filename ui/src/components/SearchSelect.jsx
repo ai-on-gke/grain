@@ -13,7 +13,13 @@
 // limitations under the License.
 
 import { Fragment, useRef, useState } from "react";
-import { Autocomplete, Box, Chip, ListItemText, TextField } from "@mui/material";
+import {
+  Autocomplete,
+  Box,
+  Chip,
+  ListItemText,
+  TextField,
+} from "@mui/material";
 import CheckBoxIcon from "@mui/icons-material/CheckBox";
 import CheckBoxOutlineBlankIcon from "@mui/icons-material/CheckBoxOutlineBlank";
 import { searchFilter } from "../fuzzy.js";
