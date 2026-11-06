@@ -253,8 +253,8 @@ type Config struct {
 	UiAllowedPrincipals     []string
 	UiCloudIdentityEndpoint string
 	UiOpen                  bool
-	Actor               string
-	DefaultTargetRepo   string
+	Actor                   string
+	DefaultTargetRepo       string
 	// PolicyFile is -policy: this workstation's local policy
 	// (grain_policy.yml, pkg/policy), which every task's claims are
 	// checked against before it is given a sandbox. Empty enforces none.
