@@ -2637,25 +2637,6 @@ func updateTaskStreakTx(ctx context.Context, tx *sql.Tx, taskID string) error {
 	return err
 }
 
-// RunFinishedDetail reports whether runID's row has been finished and,
-// if so, the detail it was finished with. A run's own goroutine reads it
-// to notice a finish written by somebody else -- ui.Client.Stop finishes
-// the row itself when no canceller reaches the run
-// (orchestrator.checkRunStopped). An unknown runID reads as unfinished.
-func (s *Store) RunFinishedDetail(ctx context.Context, runID string) (bool, string, error) {
-	var finishedAt sql.NullTime
-	var detail sql.NullString
-	err := s.db.QueryRowContext(ctx,
-		"SELECT `finished_at`, `detail` FROM `task_run` WHERE `id` = ?", runID).Scan(&finishedAt, &detail)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, "", nil
-	}
-	if err != nil {
-		return false, "", err
-	}
-	return finishedAt.Valid, detail.String, nil
-}
-
 // FinishRun records that runID ended at at with outcome and detail, and
 // recomputes its task's failure streak in the same transaction so
 // task_state's 'failed' cutoff never reads a stale count. An unknown
