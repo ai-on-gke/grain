@@ -178,9 +178,9 @@ func Main() {
 			runHostCmd(args[1:])
 			return
 		case "host":
-			// grain host list|register|install|set-owner is the host
-			// registry, a task-CLI command (cmdHostds); anything else
-			// runs the host agent on this machine.
+			// grain host list|pending|accept|... is the host registry, a
+			// task-CLI command (cmdHostds); anything else runs the host
+			// agent on this machine.
 			if len(args) < 2 || !hostRegistryVerb(args[1]) {
 				hostdCmd(args[1:])
 				return
@@ -288,7 +288,9 @@ func canonicalCommand(cmd string) string {
 // host agent, whose arguments are all flags.
 func hostRegistryVerb(word string) bool {
 	switch word {
-	case "list", "ls", "register", "create", "install", "set-owner", "help":
+	case "list", "ls", "register", "create", "install", "set-owner", "help",
+		"pending", "accept", "reject", "rekey", "codes", "invite", "rotate-code", "revoke-code",
+		"rename", "update", "revoke", "delete":
 		return true
 	}
 	return false
@@ -495,9 +497,11 @@ Commands:
   gcp-key list|get|set|delete          manage this deployment's GCP service-account keys
   capability-servers list|add|remove|enable|disable|bind-secret
                                        manage this deployment's capability servers (mcpServers)
-  host list|register|install|set-owner|delete|delete-revoked
-                                       the host registry: register a host with its owner, the identity
-                                       it dials in through IAP as, and print how to install it
+  host list|pending|accept|reject|invite|codes|rename|update|revoke|delete|delete-revoked|rekey
+                                       hosts (Settings -> Hosts): invite hosts with one shared enrollment
+                                       snippet, accept or reject the hosts that join, and manage hosts
+  host register|install|set-owner      the legacy host registry: register a host with its owner, the
+                                       identity it dials in through IAP as, and print how to install it
   registry status|register|unregister  self-register this deployment with a grain registry and inspect
                                        heartbeats and self-reported scopes (Settings -> Registry)
   access list|allow|deny               the allowed users and groups list (Settings -> Access): who may

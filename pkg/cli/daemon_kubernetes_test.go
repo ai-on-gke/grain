@@ -39,6 +39,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/daemon"
 
 	"github.com/ai-on-gke/grain/pkg/systemlog"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // kubeConfig is a config that would start: everything -k8s-sandboxes
@@ -242,8 +243,16 @@ func TestHostDeploymentKeepsAllFourLogSources(t *testing.T) {
 			t.Errorf("%q is withheld from a deployment that owns its host", name)
 		}
 	}
-	if _, ok := sources["daemon"].(systemlog.Journalctl); !ok {
-		t.Errorf("the host daemon log source = %T, want its unit's journal", sources["daemon"])
+	// The unit this process runs under (systemlog.DaemonUnit) -- which
+	// on a test runner inside some unit of its own is that unit, and
+	// grain-daemon.service where no unit is visible -- offered beside
+	// whichever other grain unit is installed here (ui.DaemonJournal).
+	journal, ok := sources["daemon"].(ui.DaemonJournal)
+	if !ok {
+		t.Fatalf("the host daemon log source = %T, want its unit's journal", sources["daemon"])
+	}
+	if journal.Running != systemlog.DaemonUnit() {
+		t.Errorf("the host daemon log source reads %+v, want the running unit %+v", journal.Running, systemlog.DaemonUnit())
 	}
 }
 
@@ -309,8 +318,8 @@ func TestTheRestartCountUnderKubernetesIsThePodsOwn(t *testing.T) {
 	// The other half: a deployment that owns its host still counts
 	// starts in its unit's journal and is still told about its unit.
 	host := daemon.DaemonHealthFor(daemon.Config{DataDir: "/data", SandboxDir: "/sandbox"}, time.Now()).Health()
-	if !strings.Contains(host.LogCommand, "journalctl -u grain-daemon.service") {
-		t.Errorf("logCommand on a host deployment = %q, want its unit's journal", host.LogCommand)
+	if want := systemlog.DaemonUnit().LogCommand(); !strings.Contains(host.LogCommand, want) {
+		t.Errorf("logCommand on a host deployment = %q, want its own unit's journal (%s)", host.LogCommand, want)
 	}
 	if !strings.Contains(host.FlagFix, "scripts/setup.sh") {
 		t.Errorf("flagFix on a host deployment = %q, want the script that rewrites the unit", host.FlagFix)

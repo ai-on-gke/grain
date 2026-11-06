@@ -134,6 +134,7 @@ Why these choices:
 | `queued/blocked_on_task` | the task it depends on | reconcileDispatch | resource |
 | `queued/usage_limit_paused` | the connection's limit window | reconcileDispatch | person ("Run now") |
 | `queued/held_by_local_policy` | an edit to the `-policy` file allowing the refused claim, and a restart (external) | -- | resource |
+| `queued/dispatch_blocked` | the deployment dispatching again: the condition it recorded against itself (`pkg/dispatchcondition`: a git proxy that failed to bind, a reconcile loop that died), named in the resource; outranks every other queued sub-case | -- | resource (the deployment's health lists the condition as a failing check) |
 | `running/live_run` | (executing) | ProcessResult | person ("Cancel") |
 | `completed/on_merge_queue` | the merge queue landing it | syncEntry | resource (the merge lane) |
 | `completed/merge_failed` | a person: "Retry merge" | -- | -- |

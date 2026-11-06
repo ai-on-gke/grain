@@ -88,9 +88,22 @@ func SelfApproved(t Task) bool {
 // the work an agent identified is not wrong for the tree having got deep,
 // and a human reading a proposal that explains itself loses nothing. The
 // limit costs a click, never the work.
+//
+// TurnFanOut is the third bound, and the one a standing console
+// session's own permission (ConsoleSession.TasksApproved) is measured
+// against rather than the other two: how many proposals a session may
+// queue on that permission in one conversation turn -- since the last
+// thing a person said in its chat (Store.ExceededSessionTurnLimit). Per
+// turn rather than per task, because a session's task lives as long as
+// the conversation does and every turn is a person asking afresh; but
+// bounded, because a chat is a fast way to ask for a lot of work, and
+// an agent that misread one message should not be able to fill the
+// queue from it. Over it, the proposal is filed for a person with
+// AutoSubmitLimitNote, exactly as one over Depth or FanOut is.
 type AutoSubmitLimits struct {
-	Depth  int
-	FanOut int
+	Depth      int
+	FanOut     int
+	TurnFanOut int
 }
 
 const (
@@ -106,12 +119,21 @@ const (
 	// the cost of guessing low is a click on the sixth rather than lost
 	// work.
 	DefaultAutoSubmitFanOut = 5
+	// DefaultConsoleSessionTurnFanOut is AutoSubmitLimits.TurnFanOut
+	// for a deployment that has not chosen one (there is no setting for
+	// it yet). Ten is above what splitting one request into pieces takes
+	// -- a person asking the director to file "one task per failing
+	// test" rarely means more -- and well below what a session looping
+	// on its own output produces; the eleventh costs a click, not the
+	// work.
+	DefaultConsoleSessionTurnFanOut = 10
 )
 
 // DefaultAutoSubmitLimits is the pair a deployment that has never chosen
 // runs with.
 func DefaultAutoSubmitLimits() AutoSubmitLimits {
-	return AutoSubmitLimits{Depth: DefaultAutoSubmitDepth, FanOut: DefaultAutoSubmitFanOut}
+	return AutoSubmitLimits{Depth: DefaultAutoSubmitDepth, FanOut: DefaultAutoSubmitFanOut,
+		TurnFanOut: DefaultConsoleSessionTurnFanOut}
 }
 
 // Resolved fills in whichever half was left unset with its default. A
@@ -130,6 +152,9 @@ func (l AutoSubmitLimits) Resolved() AutoSubmitLimits {
 	}
 	if l.FanOut <= 0 {
 		l.FanOut = DefaultAutoSubmitFanOut
+	}
+	if l.TurnFanOut <= 0 {
+		l.TurnFanOut = DefaultConsoleSessionTurnFanOut
 	}
 	return l
 }
@@ -164,6 +189,10 @@ const (
 	// AutoSubmitFanOutReached is a proposer that has already
 	// self-approved as many proposals as the fan-out allows.
 	AutoSubmitFanOutReached AutoSubmitLimit = "fan-out"
+	// AutoSubmitTurnFanOutReached is a standing console session that has
+	// already queued as many proposals on its own permission in this
+	// conversation turn as AutoSubmitLimits.TurnFanOut allows.
+	AutoSubmitTurnFanOutReached AutoSubmitLimit = "turn-fan-out"
 )
 
 // AutoSubmitLimitNote is how a proposal filed over one of those bounds
@@ -186,6 +215,14 @@ func AutoSubmitLimitNote(proposer string, limit AutoSubmitLimit, limits AutoSubm
 	case AutoSubmitFanOutReached:
 		why = fmt.Sprintf("task %s has already had %d proposals queued that way, which is "+
 			"the limit", proposer, limits.FanOut)
+	case AutoSubmitTurnFanOutReached:
+		return fmt.Sprintf("\n\n---\n\ngrain: task %s, which proposed this, is a standing session "+
+			"this deployment lets queue its own work, so this would normally have been queued "+
+			"without anybody approving it. It is waiting for you instead because the session has "+
+			"already queued %d proposals since the last message a person sent it, which is the "+
+			"limit for one conversation turn. Nothing about the work was changed and nothing is "+
+			"wrong with it -- the limit is there so one message cannot fill the queue with work "+
+			"nobody looked at. Approve it if it should go ahead.", proposer, limits.TurnFanOut)
 	default:
 		return ""
 	}

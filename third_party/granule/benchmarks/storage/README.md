@@ -240,8 +240,9 @@ The whole run happens on a fresh VM that is deleted afterwards:
 benchmarks/storage/gce-bench.sh --out /tmp/storage-results
 ```
 
-In CI, run `.grain/workflows/storage-benchmark.yml`. It is
-`workflow_dispatch` only and holds the `gcp-key` capability. It takes about 35
+In CI, run `.github/workflows/storage-benchmark.yml`. It is
+`workflow_dispatch` only and needs the GCP variables listed in
+`docs/github-actions-ci.md`. It takes about 35
 minutes: about 5 to build the guest, 5 to derive the extent images and 20 to
 benchmark. The results appear in the job log between the
 `STORAGE-BENCH-JSON-BEGIN/END` and `STORAGE-BENCH-MARKDOWN-BEGIN/END`
