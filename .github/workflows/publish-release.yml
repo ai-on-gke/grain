@@ -50,14 +50,20 @@ permissions:
 env:
   GOFLAGS: -mod=readonly
   RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO }}
+  # A promoted commit whose release run a newer merge superseded has no
+  # sha- images: release-images.sh dispatches release.yml with
+  # commit=<sha> to build, test and publish it, and waits (grain/task-3334).
+  RELEASE_ON_DEMAND_BUILD: dispatch
 
 jobs:
   publish:
     name: publish the release the train made
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Room for an on-demand release build (release.yml's 120 minutes).
+    timeout-minutes: 180
     permissions:
-      actions: read
+      # write, not read: an on-demand build dispatches release.yml.
+      actions: write
       checks: read
       contents: write
       packages: write
@@ -73,6 +79,10 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node.js
+        # setup-node v4 caches nothing unless `cache:` is set (the implicit
+        # package-manager cache zizmor warns about arrived in v5), and this
+        # step sets none.
+        # zizmor: ignore[cache-poisoning]
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
@@ -162,6 +172,7 @@ jobs:
         if: steps.verify.outputs.train == 'true'
         env:
           RELEASE_VERSION: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
         run: bash ./scripts/release-images.sh promote "${RELEASE_VERSION}"
 
       - name: Write the release notes and the GitHub Release

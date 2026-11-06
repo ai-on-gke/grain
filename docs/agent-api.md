@@ -177,7 +177,7 @@ every `DELETE`.
 |---|---|---|
 | `tasks:read` | read tasks, conversations, transcripts, trees | |
 | `tasks:write` | file, edit, comment on, reorder, defer, pause, resume, retry, stop, close and reopen tasks | |
-| `tasks:admin` | approve proposed tasks, recreate sandboxes, edit numeric task `priority` (`PATCH /api/tasks/{id}` with `{"priority": <int>}` only) | yes |
+| `tasks:admin` | approve proposed tasks (never its own proposals or a task held for a person: see [Self-protection rails](#self-protection-rails)), recreate sandboxes, edit numeric task `priority` (`PATCH /api/tasks/{id}` with `{"priority": <int>}` only) | yes |
 | `tasks:from-template` | file a task from a repository's own declared template (`POST /api/tasks/from-template`); an agent's call also needs `tasks:write`, since it is served as `POST /api/tasks` | |
 | `merge:write` | open pull requests for tasks, retry their merges | |
 | `merge:force` | force-merge past the gate | yes |
@@ -664,6 +664,29 @@ Actions job's log when given a `gha:` run id. `grain ci wait` and
   parks the session or acts on its run. It reaches the session the same
   way whether it is sent through the agent API, `grain task message` or
   `grain mcpserver`'s `message_task`.
+- **Approving its own work, or a person's.** Even holding a person's
+  `api:tasks:admin` or `api:dispatch-control` (`dispatch:write`), a run
+  always files work unapproved (`approved: true` is refused) and can't
+  approve (`POST /api/tasks/{id}/approve`, `api_approve_task`, or
+  `POST /api/tasks/{id}/run-now` on an unapproved task):
+  - a task in its own proposal lineage: one it proposed or filed over the
+    API, or one proposed by any task down that chain, however many hops;
+  - a task held for a person: one filed with `hold_for_approval`
+    (`held-for-approval` tag), targeting or writing `grain/config`, or
+    targeting a change target that requires a person's approval; one
+    carrying a repository-declared `push:` set or ungranted `autoMerge`;
+    one holding a grant `settings/capabilities.yml` marks `requires_person`,
+    or a person-only grant (a dangerous api scope, a capability method
+    only a person may grant, `durable`, `priority-dispatch`); or one
+    setting `keep_running`, or asking for a capability, write target, read
+    or priority its own proposer doesn't hold.
+
+  The refusal is a 403 naming the chain or the holds. Once a task is
+  approved, `run-now` still jumps it ahead of the queue under
+  `dispatch:write`, and any other unapproved task outside the run's lineage
+  and held for nobody is still approved under `tasks:admin`. A person
+  approves either kind as before
+  (design/spec/director/director-capabilities.spec.md §3.3 item 3, G8).
 - **Upgrade holds.** A run honours them. It can't lift a dispatch pause
   someone else took. It can't upgrade, restart or reboot while an upgrade
   check holds dispatch for another task.

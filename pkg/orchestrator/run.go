@@ -111,6 +111,40 @@ func finishStoppedInSetup(ctx context.Context, store *model.Store, taskID, runID
 	return nil
 }
 
+// finishSetupCancellation records a per-run cancellation (Stop, task close,
+// operator pause, pre-emption, capability restart, or out-of-band FinishRun)
+// that arrived while runID was still in setup before RunDispatch's switch. It
+// returns ok=false when cause is nil or not a recognized cancellation, leaving
+// the caller to record a normal setup failure.
+func finishSetupCancellation(finishCtx context.Context, store *model.Store, taskID, runID string, at time.Time, cause error) (bool, error) {
+	if cause == nil {
+		return false, nil
+	}
+	switch {
+	case errors.Is(cause, errDaemonStopped):
+		return true, finishStoppedInSetup(finishCtx, store, taskID, runID, at)
+	case errors.Is(cause, ErrTurnStopped):
+		if finished, found, err := store.RunFinished(finishCtx, runID); err == nil && found && finished {
+			return true, nil
+		}
+		return true, store.FinishRun(finishCtx, runID, at, "cancelled", model.TurnStoppedDetail)
+	case errors.Is(cause, errTaskClosed):
+		return true, store.FinishRun(finishCtx, runID, at, "cancelled", model.TaskClosedDetail)
+	case errors.Is(cause, ErrOperatorPaused):
+		return true, store.FinishRun(finishCtx, runID, at, model.InterruptedOutcome, model.OperatorPausedDetail)
+	case errors.Is(cause, errPreempted):
+		return true, store.FinishRun(finishCtx, runID, at, model.InterruptedOutcome, PreemptedDetail)
+	case errors.Is(cause, errCapabilityChanged):
+		return true, store.Suspend(finishCtx, model.Suspension{
+			RunID: runID, Kind: model.SuspendCapability, Detail: CapabilityChangedDetail, CreatedAt: at,
+		})
+	case errors.Is(cause, errGoalMet):
+		return true, store.FinishRun(finishCtx, runID, at, "cancelled", errGoalMet.Error())
+	default:
+		return false, nil
+	}
+}
+
 // StoppedByDaemon reports whether ctx -- the one a run's framework is
 // given, or a child of it -- was cancelled because the daemon driving the
 // run is stopping, rather than by the run's deadline, its task closing or
@@ -177,7 +211,7 @@ func checkTaskClosed(ctx context.Context, store *model.Store, taskID, runID stri
 // check's business and is left to the paths that already handle it. A
 // store error reads as "not cancelled", for checkTaskClosed's reason.
 func checkRunCancelledElsewhere(ctx context.Context, store *model.Store, taskID, runID string, cancel context.CancelCauseFunc) bool {
-	if runID == "" {
+	if store == nil || runID == "" {
 		return false
 	}
 	finished, found, err := store.RunFinished(ctx, runID)
@@ -197,20 +231,15 @@ func checkRunCancelledElsewhere(ctx context.Context, store *model.Store, taskID,
 	return false
 }
 
-// watchForTaskClosed polls store.State(taskID) every interval and calls
-// cancel(errTaskClosed) the moment it reads model.StateClosed -- the
-// store-polled cancellation signal RunDispatch needs because grain daemon
-// (running the agent) and grain ui (where a close actually lands) are
-// separate processes sharing only the store, per bwsalmon/agents#346.
+// watchForTaskClosed polls store.State(taskID) and checkRunCancelledElsewhere
+// every interval and cancels runCtx the moment the task is closed or the run
+// row is finished as cancelled out-of-band -- the store-polled cancellation
+// signal RunDispatch needs because grain daemon (running the agent) and grain
+// ui (where a close or Stop lands) can be separate processes sharing only the
+// store, per bwsalmon/agents#346.
 //
-// It does not check immediately on entry: RunDispatch itself already
-// calls checkTaskClosed synchronously, before framework.Run is ever
-// invoked, which is what makes a task already closed by the time
-// RunDispatch runs -- dispatch.Cycle claimed the slot before the close
-// write landed, and RunDispatch only got around to running it after --
-// stop that run's first tool call from ever reaching a real sandbox,
-// deterministically, rather than racing this goroutine's own first tick
-// against a real subprocess. See RunDispatch's own doc comment.
+// It does not check immediately on entry: RunDispatch itself already calls
+// checkTaskClosed synchronously before framework.Run is ever invoked.
 //
 // queryCtx, not runCtx, bounds the store reads: runCtx is what this func
 // is about to cancel, so querying with it would make the very last read
@@ -2958,6 +2987,18 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		panic(rec)
 	}()
 
+	runCtx, cancelRun, stopCancelling := cfg.runCtx, cfg.cancelRun, cfg.stopCancelling
+	if runCtx == nil {
+		runCtx, cancelRun = context.WithCancelCause(context.WithoutCancel(ctx))
+		stopDaemonWatch := context.AfterFunc(ctx, func() { cancelRun(errDaemonStopped) })
+		defer stopDaemonWatch()
+		stopCancelling = cfg.TaskCancellers.register(d.TaskID, cancelRun)
+	}
+	if stopCancelling != nil {
+		defer stopCancelling()
+	}
+	checkRunCancelledElsewhere(ctx, store, d.TaskID, d.RunID, cancelRun)
+
 	// unprepared is every return below that comes before this run has
 	// anything of its own to finish -- the store reads the prompt is
 	// assembled from. runOne handed this run's row over before calling
@@ -2979,6 +3020,12 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 				err = errors.Join(err, fmt.Errorf("orchestrator: finishing run %s stopped in setup: %w", d.RunID, ferr))
 			}
 			return nil, fmt.Errorf("orchestrator: run %s: %w", d.RunID, errors.Join(errDaemonStopped, err))
+		}
+		if ok, ferr := finishSetupCancellation(cleanupCtx, store, d.TaskID, d.RunID, cfg.now(), context.Cause(runCtx)); ok {
+			if ferr != nil {
+				err = errors.Join(err, fmt.Errorf("orchestrator: finishing run %s cancelled in setup: %w", d.RunID, ferr))
+			}
+			return nil, fmt.Errorf("orchestrator: run %s: %w", d.RunID, errors.Join(context.Cause(runCtx), err))
 		}
 		if ferr := finishSetupFailed(cleanupCtx, store, d.TaskID, d.RunID, cfg.now(),
 			"this run could not be set up: "+err.Error()); ferr != nil {
@@ -3083,25 +3130,25 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	// resulting materialization for prompt sections, recreation and the one
 	// eventual revoke; never materialize the same grant a second time.
 	var prepErr error
-	if len(task.Grants) > 0 {
+	if runCtx.Err() == nil && len(task.Grants) > 0 {
 		notes.say(ctx, capabilityCredentialsNote)
 	}
-	materialized, prepErr = materializeCapabilities(ctx, cfg.Capabilities, cc,
+	materialized, prepErr = materializeCapabilities(runCtx, cfg.Capabilities, cc,
 		cfg.PreparedCapabilities, sandboxRoot, placer)
 	cfg.SandboxRecreations.setMaterialized(d.TaskID, materialized)
 	recordMaterializedLeases(ctx, store, d.RunID, materialized)
 	// Before the clone, so the CLI every prompt names is there whatever
 	// the clone does. After the grants' own placements, so nothing a
 	// grant installs in the same directory is placed over it.
-	if !cfg.sandboxReused {
-		if err := placeSandboxGrain(ctx, cfg.SandboxGrainBinary, sandboxRoot, placer); err != nil {
+	if !cfg.sandboxReused && runCtx.Err() == nil {
+		if err := placeSandboxGrain(runCtx, cfg.SandboxGrainBinary, sandboxRoot, placer); err != nil {
 			log.Printf("orchestrator: task %s: the sandbox keeps its image's grain: %v", task.ID, err)
 		}
 	}
 
 	var prepared checkout
 	var checkoutErr error
-	if closed, err := taskClosed(ctx, store, task.ID); prepErr == nil && (err != nil || !closed) {
+	if closed, err := taskClosed(ctx, store, task.ID); prepErr == nil && runCtx.Err() == nil && (err != nil || !closed) {
 		// Named, because on a deployment with several repos "cloning" on
 		// its own says nothing the row did not already say. Only where
 		// there is actually a clone to make: prepareCheckout returns a
@@ -3116,9 +3163,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			srcWG.Add(1)
 			go func() {
 				defer srcWG.Done()
-				placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &srcOut, cfg.sandboxReused)
+				placeGrainSource(runCtx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &srcOut, cfg.sandboxReused)
 			}()
-			prepared, checkoutErr = prepareCheckoutWithUpstream(ctx, tools, cfg.GitRemoteBase, cloneURL, upstreamRepo, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
+			prepared, checkoutErr = prepareCheckoutWithUpstream(runCtx, tools, cfg.GitRemoteBase, cloneURL, upstreamRepo, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
 			srcWG.Wait()
 			if checkoutErr == nil {
 				prepared.GrainSource = srcOut.GrainSource
@@ -3127,9 +3174,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 				prepared.GrainSourceCommits = srcOut.GrainSourceCommits
 			}
 		} else {
-			prepared, checkoutErr = prepareCheckoutWithUpstream(ctx, tools, cfg.GitRemoteBase, cloneURL, upstreamRepo, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
+			prepared, checkoutErr = prepareCheckoutWithUpstream(runCtx, tools, cfg.GitRemoteBase, cloneURL, upstreamRepo, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
 			if checkoutErr == nil {
-				placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &prepared, cfg.sandboxReused)
+				placeGrainSource(runCtx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &prepared, cfg.sandboxReused)
 			}
 		}
 		if checkoutErr == nil && len(prepared.Context) > 0 {
@@ -3246,6 +3293,30 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		noteInterrupted(context.WithoutCancel(ctx), store, task.ID, d.RunID, cfg.now())
 		runErr = fmt.Errorf("orchestrator: run %s: %w", d.RunID,
 			errors.Join(errDaemonStopped, errors.Join(checkoutErr, prepErr)))
+	case (checkoutErr != nil || prepErr != nil) && runCtx.Err() != nil,
+		runCtx.Err() != nil && !errors.Is(context.Cause(runCtx), errTaskClosed):
+		// Cancelled via TaskCancellers (Stop, operator pause, pre-emption,
+		// capability restart) or an out-of-band FinishRun while setup or the
+		// clone was still running: classify by the cancellation cause rather
+		// than charging a setup/clone failure or starting framework.Run on a
+		// stopped turn.
+		cause := context.Cause(runCtx)
+		if errors.Is(cause, errDaemonStopped) {
+			outcome, detail = model.InterruptedOutcome, InterruptedInSetupDetail
+			interruptedRuns.Add(1)
+			noteInterrupted(context.WithoutCancel(ctx), store, task.ID, d.RunID, cfg.now())
+			runErr = fmt.Errorf("orchestrator: run %s: %w", d.RunID,
+				errors.Join(errDaemonStopped, errors.Join(checkoutErr, prepErr)))
+		} else {
+			if task.AgentFramework == "" {
+				task.AgentFramework = runFrameworkFor(framework, task, cfg)
+			}
+			runScope := runPauseScope(framework, task, cfg)
+			end := classifyRunEnd(ctx, store, cfg, task, d.RunID, nil, cause, cause, 0, runScope, cfg.now())
+			outcome, detail, runErr = end.outcome, end.detail, end.runErr
+			unmatched, burstRuns, burstDetail = end.unmatched, end.burstRuns, end.burstDetail
+			suspend, modelHint = end.suspend, end.modelHint
+		}
 	case checkoutErr != nil:
 		runErr = fmt.Errorf("orchestrator: preparing %s: %w", d.RunID, checkoutErr)
 		detail = checkoutErr.Error()
@@ -3282,14 +3353,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// and registering it is what lets the run's own wait_for_checks
 		// reach it from the sandbox (RunWaitCredits).
 		//
-		// runCtx is detached from ctx and cancelled by hand when ctx is,
-		// so that a daemon shutdown reaches the run as errDaemonStopped
-		// rather than as a cancellation with no cause of its own -- which
-		// is what lets it be told apart from the run's other endings
-		// (see errDaemonStopped). Its values are ctx's all the same.
-		runCtx, cancelRun := context.WithCancelCause(context.WithoutCancel(ctx))
-		stopDaemonWatch := context.AfterFunc(ctx, func() { cancelRun(errDaemonStopped) })
-		defer stopDaemonWatch()
+		// runCtx was created and registered in TaskCancellers at the start
+		// of runOneWithFramework (or RunDispatch when called directly),
+		// detached from ctx and cancelled with errDaemonStopped when ctx is.
 		agentCtx, clock := newRunClock(runCtx, cfg.maxRunRuntime(), cfg.runWaitCreditCap())
 		stopIdle := func() {}
 		if cfg.durable {
@@ -3299,8 +3365,6 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			defer stopIdle()
 		}
 		stopCrediting := cfg.RunWaitCredits.register(d.TaskID, clock)
-		stopCancelling := cfg.TaskCancellers.register(d.TaskID, cancelRun)
-		defer stopCancelling()
 		checkTaskClosed(ctx, store, task.ID, d.RunID, cancelRun)
 		watcherDone := make(chan struct{})
 		go func() {
@@ -3638,6 +3702,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// all, never a stopped clock it would be told was still live.
 		stopIdle()
 		stopCrediting()
+		if stopCancelling != nil {
+			stopCancelling()
+		}
 		clock.stop()
 		stopPause()
 		cancelRun(nil)
@@ -3721,7 +3788,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		}
 	}
 	finishErr := recordRunEnd(ctx, finishCtx, store, cfg, task, d.RunID, obs, result,
-		runEnding{outcome: outcome, detail: detail, unmatched: unmatched, burstRuns: burstRuns, burstDetail: burstDetail,
+		runEnding{outcome: outcome, detail: detail, runErr: runErr, unmatched: unmatched, burstRuns: burstRuns, burstDetail: burstDetail,
 			suspend: suspend, modelHint: modelHint},
 		waitCredit, agentRan, resumableSession, recordedEarly)
 	// A grant this task holds that no run of it can ever be given, said
@@ -4823,6 +4890,10 @@ func classifyRunEndArms(ctx context.Context, store *model.Store, cfg Config, tas
 		outcome = "cancelled"
 		detail = model.TurnStoppedDetail
 		runErr = fmt.Errorf("orchestrator: run %s: %w", runID, ErrTurnStopped)
+	case runErr != nil && errors.Is(cause, errGoalMet):
+		outcome = "cancelled"
+		detail = errGoalMet.Error() + partialWorkSuffix(result)
+		runErr = fmt.Errorf("orchestrator: run %s: %w", runID, errGoalMet)
 	case runErr != nil && errors.Is(cause, errRunTimedOut):
 		outcome = "cancelled"
 		// The limit as this run actually had it: the budget plus
@@ -5050,14 +5121,22 @@ func recordRunEnd(ctx, finishCtx context.Context, store *model.Store, cfg Config
 	var finishErr error
 	kind, _ := end.suspensionKind()
 	failover := kind.IsFailover() && end.modelHint != ""
-	if end.suspend != "" || failover {
-		susp := model.Suspension{RunID: runID, Kind: kind, Detail: detail, CreatedAt: cfg.now()}
-		if failover {
-			susp.ModelHint = end.modelHint
+	alreadyFinished := false
+	if end.suspend == "" && !failover && outcome == "cancelled" {
+		if finished, found, err := store.RunFinished(finishCtx, runID); err == nil && found && finished {
+			alreadyFinished = true
 		}
-		finishErr = store.Suspend(finishCtx, susp)
-	} else {
-		finishErr = store.FinishRun(finishCtx, runID, cfg.now(), outcome, detail)
+	}
+	if !alreadyFinished {
+		if end.suspend != "" || failover {
+			susp := model.Suspension{RunID: runID, Kind: kind, Detail: detail, CreatedAt: cfg.now()}
+			if failover {
+				susp.ModelHint = end.modelHint
+			}
+			finishErr = store.Suspend(finishCtx, susp)
+		} else {
+			finishErr = store.FinishRun(finishCtx, runID, cfg.now(), outcome, detail)
+		}
 	}
 	if finishErr == nil && failover {
 		noteFailedOverModels(finishCtx, store, task, cfg.now())

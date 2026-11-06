@@ -87,7 +87,7 @@ With `-json` it prints the `ui.Task` array.
 | `-external-ref` | string |  |  | shorthand for -filter externalRef:any:VALUE (e.g. CA-204, or "none" for tasks with no external reference) |
 | `-filter` | value |  |  | only tasks matching this condition, written attribute:comparison:value -- repeatable, and every one of them has to hold |
 | `-interactive` | bool |  |  | only live chats (-interactive=false for only background tasks) |
-| `-origin` | string |  |  | shorthand for -filter origin:any:VALUE (hand, external, proposed, schedule, suite, fix, review) |
+| `-origin` | string |  |  | shorthand for -filter origin:any:VALUE (hand, external, proposed, imported, schedule, suite, fix, review) |
 | `-owner` | string |  |  | shorthand for -filter owner:any:VALUE (or "me" for your own tasks) |
 | `-repo` | string |  |  | shorthand for -filter repo:any:VALUE (owner/name, or "none" for the tasks with no target repo) |
 | `-search` | string |  |  | only tasks whose title or id contains this text, case-insensitively |

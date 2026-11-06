@@ -418,13 +418,14 @@ type CachingSigner struct {
 // Only the time claims (iat/nbf/exp) and jti, which the signer fills in,
 // are left out; RequestID/JWTID bypass the cache altogether.
 type signerCacheKey struct {
-	issuer   string
-	email    string
-	sub      string
-	audience string
-	kind     string
-	hasActor bool
-	actorSub string
+	issuer     string
+	email      string
+	sub        string
+	audience   string
+	kind       string
+	hasActor   bool
+	actorSub   string
+	actorGrant string
 }
 
 type cachedAssertion struct {
@@ -466,25 +467,27 @@ func NewCachingSigner(inner Signer, cacheTTL time.Duration) *CachingSigner {
 // When RequestID or JWTID is explicitly populated on claims, caching is bypassed
 // so caller-supplied per-request correlation IDs are never aliased across requests.
 func (c *CachingSigner) SignAssertion(ctx context.Context, claims RegistryClaims) (string, error) {
-	if claims.RequestID != "" || claims.JWTID != "" {
+	if claims.RequestID != "" || claims.JWTID != "" || claims.ExpiresAt != 0 {
 		return c.inner.SignAssertion(ctx, claims)
 	}
 	now := time.Now()
 	if c.nowFn != nil {
 		now = c.nowFn()
 	}
-	var actorSub string
+	var actorSub, actorGrant string
 	if claims.Actor != nil {
 		actorSub = claims.Actor.Sub
+		actorGrant = claims.Actor.Grant
 	}
 	key := signerCacheKey{
-		issuer:   claims.Issuer,
-		hasActor: claims.Actor != nil,
-		email:    strings.ToLower(strings.TrimSpace(claims.Email)),
-		sub:      claims.Subject,
-		audience: claims.Audience,
-		kind:     claims.Kind,
-		actorSub: actorSub,
+		issuer:     claims.Issuer,
+		hasActor:   claims.Actor != nil,
+		email:      strings.ToLower(strings.TrimSpace(claims.Email)),
+		sub:        claims.Subject,
+		audience:   claims.Audience,
+		kind:       claims.Kind,
+		actorSub:   actorSub,
+		actorGrant: actorGrant,
 	}
 
 	c.mu.Lock()
