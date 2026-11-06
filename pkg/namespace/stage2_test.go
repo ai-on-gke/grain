@@ -747,8 +747,8 @@ func TestMemorySingleDocumentAndLargeWalkAvoidQuadraticLayerFetches(t *testing.T
 	mem.resetCounts()
 	start := time.Now()
 	listRec := serveRequest(srv, scope, http.MethodGet, "/fs/memory/repos/acme/widgets?list", map[string]string{"Accept": "application/json"})
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("?list over %d docs took %v, want < 1s", docCount, elapsed)
+	if elapsed := time.Since(start); elapsed > walkBudget {
+		t.Fatalf("?list over %d docs took %v, want < %v", docCount, elapsed, walkBudget)
 	}
 	if listRec.Code != http.StatusOK {
 		t.Fatalf("?list status=%d body=%q", listRec.Code, listRec.Body.String())
@@ -777,8 +777,8 @@ func TestMemorySingleDocumentAndLargeWalkAvoidQuadraticLayerFetches(t *testing.T
 	if err != nil {
 		t.Fatalf("GlobEntries: %v", err)
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("GlobEntries over %d docs took %v, want < 1s", docCount, elapsed)
+	if elapsed := time.Since(start); elapsed > walkBudget {
+		t.Fatalf("GlobEntries over %d docs took %v, want < %v", docCount, elapsed, walkBudget)
 	}
 	if len(globRes.Matches) == 0 {
 		t.Fatalf("GlobEntries returned no matches")
@@ -798,8 +798,8 @@ func TestMemorySingleDocumentAndLargeWalkAvoidQuadraticLayerFetches(t *testing.T
 	if err != nil {
 		t.Fatalf("Grep: %v", err)
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("Grep over %d docs took %v, want < 1s", docCount, elapsed)
+	if elapsed := time.Since(start); elapsed > walkBudget {
+		t.Fatalf("Grep over %d docs took %v, want < %v", docCount, elapsed, walkBudget)
 	}
 	if grepRes.Matches != 1 || !strings.Contains(grepRes.Output, "doc-1500.md:2:Observation marker-1500") {
 		t.Fatalf("Grep result = %+v, want 1 match for marker-1500", grepRes)
@@ -847,8 +847,8 @@ func TestMemorySingleDocumentAndLargeWalkAvoidQuadraticLayerFetches(t *testing.T
 	if err != nil {
 		t.Fatalf("legacy Grep: %v", err)
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("legacy Grep over %d docs took %v, want < 1s", docCount, elapsed)
+	if elapsed := time.Since(start); elapsed > walkBudget {
+		t.Fatalf("legacy Grep over %d docs took %v, want < %v", docCount, elapsed, walkBudget)
 	}
 	if legacyGrep.Matches != 1 || legacyLayerDecodes.Load() != 1 {
 		t.Fatalf("legacy Grep matches=%d layerDecodes=%d, want 1 match and 1 layer decode",
