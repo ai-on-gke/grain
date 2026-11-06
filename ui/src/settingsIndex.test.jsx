@@ -28,6 +28,7 @@ import ModelsSection from "./components/settings/ModelsSection.jsx";
 import TasksSection from "./components/settings/TasksSection.jsx";
 import GitSection from "./components/settings/GitSection.jsx";
 import UpgradeSection from "./components/settings/UpgradeSection.jsx";
+import RegistrySection from "./components/settings/RegistrySection.jsx";
 
 // Models and Git read their own /api/settings and /api/deployment; an
 // empty answer to each is enough for every field they own to draw.
@@ -77,6 +78,7 @@ const SECTIONS = {
   tasks: <TasksSection s={s} config={{}} />,
   git: <GitSection showError={vi.fn()} />,
   upgrade: <UpgradeSection config={{}} showError={vi.fn()} />,
+  registry: <RegistrySection s={s} />,
 };
 
 // renderedIds is every data-setting-id a section draws once it has

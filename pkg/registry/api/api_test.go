@@ -419,3 +419,78 @@ func TestRegisterConnectDialerAndUnregister(t *testing.T) {
 		t.Fatal("expected custom-relay dialer to be unregistered")
 	}
 }
+
+func TestClientRejectsMetadataURLsAndDoesNotFollowRedirects(t *testing.T) {
+	t.Parallel()
+
+	for _, bad := range []string{
+		"http://grain.example.com",
+		"https://user:pass@grain.example.com",
+		"http://169.254.169.254/latest",
+		"https://[::ffff:169.254.169.254]",
+		"https://[fe80::1%25eth0]",
+		"http://[fe80::1%25eth0]:8080",
+		"https://metadata.internal",
+		"https://metadata.google.internal",
+		"https://grain.example.com?foo=1",
+	} {
+		if _, err := api.ValidateRegistryURL(bad, false); err == nil {
+			t.Errorf("ValidateRegistryURL(%q) = nil, want error", bad)
+		}
+		if res, err := api.DialConnect(context.Background(), api.ConnectConfig{
+			BaseURL:           bad,
+			Entry:             "team-k8s",
+			RegistrationToken: "grc_dialconnectsecrettok1234",
+		}); err == nil {
+			_ = res.Conn.Close()
+			t.Errorf("DialConnect(%q) = nil, want error", bad)
+		}
+	}
+	for _, badWS := range []string{
+		"ws://grain.example.com",
+		"wss://user:pass@grain.example.com",
+		"wss://[::ffff:169.254.169.254]",
+		"wss://[fe80::1%25eth0]",
+		"wss://metadata.google.internal",
+		"wss://grain.example.com?foo=1",
+		"wss://grain.example.com#frag",
+	} {
+		if res, err := api.DialConnect(context.Background(), api.ConnectConfig{
+			BaseURL:           badWS,
+			Entry:             "team-k8s",
+			RegistrationToken: "grc_dialconnectsecrettok1234",
+		}); err == nil {
+			_ = res.Conn.Close()
+			t.Errorf("DialConnect(%q) = nil, want error", badWS)
+		}
+	}
+
+	targetHit := false
+	targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHit = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"online"}`))
+	}))
+	defer targetSrv.Close()
+
+	redirectSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, targetSrv.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer redirectSrv.Close()
+
+	hbClient, err := api.NewClient(api.ClientConfig{
+		BaseURL:           redirectSrv.URL,
+		RegistrationToken: "grc_redirectsecrettoken12345",
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	_, err = hbClient.Heartbeat(context.Background(), "team-k8s", api.HeartbeatRequest{Health: api.HealthOK})
+	var apiErr *api.APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusTemporaryRedirect {
+		t.Fatalf("Heartbeat redirect error = %#v, want APIError{StatusCode: 307}", err)
+	}
+	if targetHit {
+		t.Fatal("Client followed HTTP redirect and forwarded registration credentials to redirect target")
+	}
+}

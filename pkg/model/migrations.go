@@ -806,6 +806,13 @@ var Migrations = []Migration{
 			"included, to api:self-debug and https://grain.dev/capabilities/grain#source={} (the in-process capability is retired)",
 		Up: migrateSelfDebugGrants,
 	},
+	{
+		Version:     116,
+		Description: "add grain_config.registry for connected-entry self-registration and heartbeat settings (design/design/registry.design.md)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `registry` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as

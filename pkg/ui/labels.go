@@ -842,6 +842,19 @@ type Config struct {
 	// TriggerIAPSync requests an immediate IAP IAM synchronization cycle when team
 	// memberships or admin access lists are modified.
 	TriggerIAPSync func()
+	// RegistryStatus, when set, returns the live RegistrySnapshot from the
+	// daemon's RegistryManager; nil falls back to reading stored settings and
+	// repo configurations directly.
+	RegistryStatus func(ctx context.Context) (model.RegistrySnapshot, error)
+	// TriggerRegistryHeartbeat, when set, runs an immediate registry
+	// registration/heartbeat step and returns the updated snapshot.
+	TriggerRegistryHeartbeat func(ctx context.Context) (model.RegistrySnapshot, error)
+	// TriggerRegistrySync wakes the daemon's RegistryManager after settings,
+	// secrets, or repository configurations change.
+	TriggerRegistrySync func()
+	// RegistryAllowInsecureHTTP permits non-loopback plain HTTP registry URLs
+	// in test setups.
+	RegistryAllowInsecureHTTP bool
 	// SandboxBackends names the backend methods this daemon has enough
 	// startup configuration to build. SandboxBackendOptions lists every backend
 	// in model.SandboxBackends() with Available and Reason so Settings never
