@@ -403,6 +403,16 @@ func defaultConsoleSessionCapabilities() []string {
 // break the deployment it is holding a conversation with; and memory,
 // which writes the standing instructions every later run is given.
 //
+// Writes names grain/config (ConfigRepo), and nothing else, so the
+// director is offered propose_config_change: its /home/debian/grain-state
+// checkout may push candidate branches under ConfigProposalBranchPrefix
+// (never the default branch -- the git proxy admits nothing else), each
+// validated, classified by the trust boundary and landed only on a
+// person's approval of its pinned head. That write is not passed on to
+// the work the director files: a proposal that targets or writes
+// grain/config always waits for a person (ConfigRepoProposalHold),
+// whatever TasksApproved says (director-capabilities spec §3.1.3).
+//
 // NetworkNone (director-capabilities.spec.md §3.1.6): the director reads
 // untrusted text -- repository bodies, CI logs, transcripts -- and
 // everything it needs is reached through grain itself rather than the
@@ -441,6 +451,7 @@ func DefaultConsoleSessions() []ConsoleSession {
 		// own CapabilityName: those packages import this one.
 		Capabilities:  caps,
 		NetworkAccess: network,
+		Writes:        []WriteTarget{{Repo: ConfigRepo()}},
 	}}
 }
 

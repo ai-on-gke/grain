@@ -58,6 +58,7 @@ the chat is in:
 | `ReadsAll` | true (every session) | whether it reads every repository this deployment works in |
 | `DeclinedDefaults` | none | which of the defaults every session holds (`api:ci-read`) it opts out of |
 | `NetworkAccess` | none (`model.DefaultConsoleSessions`, `director-capabilities.spec.md` §3.1.6). On a backend that cannot isolate a sandbox's network (host directory, container, plain Kubernetes pods), `model.ConsoleSessionNetworkAccess` files the director open instead, since that backend would refuse every exchange. A build that registers a default-on capability needing egress from the sandbox itself (`capability.Registration.SandboxEgress`) ships it open | whether its sandbox reaches the internet. The director's state-repository checkout, its `ReadsAll` clones and the in-sandbox `grain` CLI all go through the git proxy, and its `api_*` tools run on grain's side, so closing its network takes away nothing it uses |
+| `Writes` | `grain/config` (the director; other sessions none) | where it may push: for the director, candidate `grain/config/<task-id>/*` branches for `propose_config_change` |
 | `TasksApproved` | false | whether the tasks it files are queued or wait for a person |
 | `Title` | "Director" | what the rail calls it |
 
@@ -133,8 +134,16 @@ repositories one at a time (`pkg/model/console_session_reach.go`):
   session's `declinedDefaults`, so it stays off when the session's task is
   filed again. Ticking it brings it back.
 
-Writes are never a default. A session files tasks rather than pushing, and
-what it may push to is `Writes`, named one repository at a time.
+Writes are never a default, with one exception. A session files tasks
+rather than pushing, and what it may push to is `Writes`, named one
+repository at a time. The shipped director holds `grain/config` there, so
+it is offered `propose_config_change`: its `/home/debian/grain-state`
+checkout may push candidate branches under `grain/config/<task-id>/`
+(never the default branch), each validated, classified by the trust
+boundary, and landed only on a person's approval of its pinned head. That
+write is not passed on: any proposal whose repo or `writes` names
+`grain/config` is filed for a person whatever the session's permission
+(`model.ConfigRepoProposalHold`).
 
 `TasksApproved` is false because a chat is a fast way to ask for a lot of
 work: a director that could queue its own tasks would be one
@@ -149,9 +158,13 @@ run (`orchestrator.relayProposedTasks`). It is written that way because
 it was not: the middle one did not exist, so the director was told its
 tasks were queued and every one of them was filed `proposed`
 (grain/task-311). A proposal queued this way is approved as
-`ConsoleSessionPrincipal`, is not bounded by `model.AutoSubmitLimits` —
-every task a session files is one somebody just asked for in a message,
-and bounding those would bound the person — and inherits no auto-merge,
+`ConsoleSessionPrincipal`, is not bounded by `model.AutoSubmitLimits`'
+depth or lifetime fan-out — every task a session files is one somebody
+just asked for in a message, and bounding those over a day would bound
+the person — but is bounded per conversation turn: past
+`AutoSubmitLimits.TurnFanOut` (10) proposals since the last message a
+person sent the session, the rest are filed for a person with a note
+saying why. It inherits no auto-merge,
 since a session that may queue work has been granted nothing about
 anybody's branch.
 

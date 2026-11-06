@@ -51,12 +51,22 @@ export const SETTINGS_GROUPS = [
         keywords: ["credentials", "secrets", "legacy capabilities"],
       },
       { id: "access", label: "Access" },
-      // The hostd registry (pkg/model/hostd.go): created, rotated and
-      // revoked here, never declared in the config repo.
+      // The host registry (pkg/model/hostd.go): invited, paired, rotated
+      // and revoked here, never declared in the config repo.
       {
         id: "hostds",
         label: "Hosts",
-        keywords: ["hostd", "host", "remote", "token", "workstation"],
+        keywords: [
+          "host",
+          "hosts",
+          "hostd",
+          "invite",
+          "join",
+          "pairing",
+          "remote",
+          "token",
+          "workstation",
+        ],
       },
       // Who changed what (operator-attribution spec §4.4): read-only
       // logs, nothing to save.
@@ -220,8 +230,11 @@ const OLD_SYSTEM_TABS = [
 const SETTINGS_SECTION_ALIASES = {
   "capability-servers": "capabilities",
   // Settings -> Executors was retired with remote executors; the grain
-  // hostds that replaced them are registered under Hostds.
+  // hosts that replaced them are registered under Hosts (/settings/hosts
+  // and /settings/hostds).
   executors: "hostds",
+  hosts: "hostds",
+  host: "hostds",
   "legacy-capabilities": "credentials",
   secrets: "credentials",
 };

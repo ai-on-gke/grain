@@ -43,6 +43,7 @@ const ALLOWED = [
   /-hostd-[a-z-]+/g, // daemon flags (-hostd-token-file, -hostd-socket)
   /GRAIN_HOSTD[A-Z_]*/g, // installer and daemon environment
   /\/api\/hostds?[\w/{}.-]*/g, // API paths
+  /\/hostd\/install\b/g, // the shared --join snippet's installer URL
   /needs-hostd:?/g, // a capability server's state, on the wire
   /hostdFallback/g, // a JSON field
 ];

@@ -74,6 +74,10 @@ const (
 	PipelineChangeStall = "stall"
 	PipelineChangeBase  = "base"
 	PipelineChangeBatch = "batch"
+	// PipelineChangeDispatch is the deployment's own dispatch being
+	// blocked or unblocked (Config.DispatchConditions): ID is the
+	// condition's name, To "blocked" or "dispatching".
+	PipelineChangeDispatch = "dispatch"
 )
 
 // PipelineChanges is one page of the feed. Next is the cursor to pass as
@@ -262,6 +266,12 @@ func (c *Client) pipelineChanges(ctx context.Context, now, since time.Time, repo
 		all = append(all, PipelineChange{At: b.FinishedAt, ID: "batch " + strconv.FormatInt(b.ID, 10),
 			Kind: PipelineChangeBatch, From: "running", To: blankAsWord(b.Outcome, "finished"), Detail: detail})
 	}
+
+	// The deployment's own dispatch conditions are about every
+	// repository at once, so a read narrowed to one still sees them: a
+	// reader watching one repo's pipeline stall needs to know it is the
+	// whole deployment that stopped.
+	all = append(all, c.dispatchChanges()...)
 
 	sortPipelineChanges(all)
 	return all, nil

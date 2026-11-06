@@ -15,6 +15,7 @@
 package orchestrator
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -176,7 +177,7 @@ func TestTaskReasonOfIsTotal(t *testing.T) {
 		for _, task := range tasks {
 			for _, obs := range observations {
 				for _, deps := range [][]string{nil, {"2"}} {
-					for _, hold := range []queuedHold{holdNone, holdUsagePaused, holdLocalPolicy} {
+					for _, hold := range []queuedHold{holdNone, holdUsagePaused, holdLocalPolicy, holdDispatchBlocked} {
 						for _, asked := range askedFacts {
 							reason := taskReasonOf(task, model.State(state), obs, deps, hold, asked)
 							if _, ok := taskReasons[reason]; !ok || reasonState(reason) != state {
@@ -208,6 +209,8 @@ func TestTaskReasonOfIsTotal(t *testing.T) {
 		{model.StateQueued, model.Task{}, nil, nil, holdLocalPolicy, taskReasonLocalPolicy},
 		{model.StateQueued, model.Task{}, nil, []string{"2"}, holdUsagePaused, taskReasonBlocked},
 		{model.StateQueued, model.Task{}, nil, []string{"2"}, holdLocalPolicy, taskReasonBlocked},
+		{model.StateQueued, model.Task{}, nil, nil, holdDispatchBlocked, taskReasonDispatchBlocked},
+		{model.StateQueued, model.Task{}, nil, []string{"2"}, holdDispatchBlocked, taskReasonDispatchBlocked},
 		{model.StateRunning, model.Task{}, nil, nil, holdNone, taskReasonRunLive},
 		{model.StateCompleted, model.Task{}, nil, nil, holdNone, taskReasonOnMergeQueue},
 		{model.StateCompleted, model.Task{}, &model.Observation{MergeQueueState: mergeStateMerging}, nil, holdNone, taskReasonOnMergeQueue},
@@ -222,7 +225,7 @@ func TestTaskReasonOfIsTotal(t *testing.T) {
 				c.state, c.obs, c.deps, c.hold, got, c.want)
 		}
 	}
-	if got := TaskReason(model.Task{}, model.StateQueued, nil, nil, nil, model.ReplyFacts{}, ""); got.Control != "Run now" ||
+	if got := TaskReason(model.Task{}, model.StateQueued, nil, nil, nil, model.ReplyFacts{}, "", ""); got.Control != "Run now" ||
 		got.Class != string(livenessDriven) || got.Reason != taskReasonReady {
 		t.Errorf("TaskReason(queued) = %+v, want queued/ready, driven, with Run now", got)
 	}
@@ -253,7 +256,7 @@ func TestAwaitingReplyReasonNamesTheAsk(t *testing.T) {
 		{chat, model.ReplyFacts{Access: true}, taskReasonAccessRequest, "Grant"},
 		{chat, model.ReplyFacts{Stopped: true}, taskReasonStopped, "Reply"},
 	} {
-		got := TaskReason(c.task, model.StateAwaitingReply, nil, nil, nil, c.asked, "")
+		got := TaskReason(c.task, model.StateAwaitingReply, nil, nil, nil, c.asked, "", "")
 		if got.Reason != c.want || got.Control != c.label || got.Class != string(livenessAwaitingPerson) {
 			t.Errorf("TaskReason(awaiting_reply, interactive %v, %+v) = %+v, want %s, awaiting a person, with %q",
 				c.task.Interactive, c.asked, got, c.want, c.label)
@@ -261,8 +264,36 @@ func TestAwaitingReplyReasonNamesTheAsk(t *testing.T) {
 	}
 	// The facts are an awaiting_reply task's alone: another state's
 	// sub-case does not move for them.
-	if got := TaskReason(plain, model.StateQueued, nil, nil, nil, model.ReplyFacts{Access: true}, "").Reason; got != taskReasonReady {
+	if got := TaskReason(plain, model.StateQueued, nil, nil, nil, model.ReplyFacts{Access: true}, "", "").Reason; got != taskReasonReady {
 		t.Errorf("TaskReason(queued, access) = %q, want %q", got, taskReasonReady)
+	}
+}
+
+// A deployment whose dispatch is down says so on every queued task,
+// ahead of the task's own particulars, naming the condition; nothing
+// about it is a person's to press, since what clears it is outside the
+// task. A task in any other state is unaffected.
+func TestTaskReasonNamesADispatchConditionOnEveryQueuedTask(t *testing.T) {
+	why := "git proxy: listen tcp 0.0.0.0:7100: bind: address already in use"
+	wait := &model.GrantWait{Capability: model.QuotaWaitCapability, Resource: dispatch.ConnectionPausedWhy}
+	for _, c := range []struct {
+		deps []string
+		wait *model.GrantWait
+	}{{nil, nil}, {[]string{"2"}, nil}, {nil, wait}} {
+		got := TaskReason(model.Task{}, model.StateQueued, nil, c.deps, c.wait, model.ReplyFacts{}, "", why)
+		if got.Reason != taskReasonDispatchBlocked || got.Class != string(livenessAwaitingExternal) || got.Control != "" {
+			t.Errorf("TaskReason(queued, deps %v, wait %v, blocked) = %+v, want %s, awaiting an external answer, no control",
+				c.deps, c.wait, got, taskReasonDispatchBlocked)
+		}
+		if !strings.Contains(got.Resource, why) || !strings.HasPrefix(got.Resource, "dispatch blocked") {
+			t.Errorf("Resource = %q, want it to say dispatch is blocked and name %q", got.Resource, why)
+		}
+	}
+	if got := TaskReason(model.Task{}, model.StateRunning, nil, nil, nil, model.ReplyFacts{}, "", why); got.Reason != taskReasonRunLive {
+		t.Errorf("TaskReason(running, blocked) = %+v, want %s", got, taskReasonRunLive)
+	}
+	if got := TaskReason(model.Task{}, model.StateQueued, nil, nil, nil, model.ReplyFacts{}, "", ""); got.Reason != taskReasonReady {
+		t.Errorf("TaskReason(queued, not blocked) = %+v, want %s", got, taskReasonReady)
 	}
 }
 
@@ -286,7 +317,7 @@ func TestTaskReasonReadsAUsageLimitPauseOffItsWait(t *testing.T) {
 		{&model.GrantWait{Capability: model.QuotaWaitCapability, Resource: "2 worker runs are live of the 2 this cycle allows"}, taskReasonReady},
 		{&model.GrantWait{Capability: model.ModelWaitCapability, Resource: covered}, taskReasonReady},
 	} {
-		if got := TaskReason(model.Task{}, model.StateQueued, nil, nil, c.wait, model.ReplyFacts{}, "").Reason; got != c.want {
+		if got := TaskReason(model.Task{}, model.StateQueued, nil, nil, c.wait, model.ReplyFacts{}, "", "").Reason; got != c.want {
 			t.Errorf("TaskReason(queued, wait %+v) = %q, want %q", c.wait, got, c.want)
 		}
 	}
