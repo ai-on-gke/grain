@@ -24,7 +24,10 @@ import (
 	"testing"
 )
 
-const modulePrefix = "github.com/ai-on-gke/grain/"
+const (
+	modulePrefix    = "github.com/ai-on-gke/grain/"
+	plcModulePrefix = "github.com/ai-on-gke/grain/grain-plc"
+)
 
 // registryAllowed lists the only packages in this Go module that
 // cmd/grain-registry, pkg/registry/..., and pkg/webauth may import (directly
@@ -66,12 +69,17 @@ func repoRootDir(t *testing.T) string {
 
 func runGoList(t *testing.T, args ...string) []string {
 	t.Helper()
+	return runGoListInDir(t, repoRootDir(t), args...)
+}
+
+func runGoListInDir(t *testing.T, dir string, args ...string) []string {
+	t.Helper()
 	cmd := exec.Command("go", append([]string{"list"}, args...)...)
-	cmd.Dir = repoRootDir(t)
+	cmd.Dir = dir
 	cmd.Env = os.Environ()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("go list %s: %v\n%s", strings.Join(args, " "), err, out)
+		t.Fatalf("go list %s (dir=%s): %v\n%s", strings.Join(args, " "), dir, err, out)
 	}
 	var lines []string
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
@@ -173,6 +181,40 @@ func checkRegistryAPIPurity(deps []depInfo) []string {
 	return forbidden
 }
 
+func checkNoGrainPLCImports(pkgs []pkgImports) []string {
+	var violations []string
+	for _, p := range pkgs {
+		callerRel := strings.TrimPrefix(p.importPath, modulePrefix)
+		for _, imp := range p.imports {
+			if imp == plcModulePrefix || strings.HasPrefix(imp, plcModulePrefix+"/") {
+				violations = append(violations, callerRel+" -> "+imp)
+			}
+		}
+	}
+	sort.Strings(violations)
+	return violations
+}
+
+func checkGrainPLCImportsOnlyRegistryAPI(deps []string) []string {
+	var forbidden []string
+	seen := map[string]bool{}
+	for _, pkg := range deps {
+		if pkg == plcModulePrefix || strings.HasPrefix(pkg, plcModulePrefix+"/") {
+			continue
+		}
+		rel, ok := strings.CutPrefix(pkg, modulePrefix)
+		if !ok {
+			continue
+		}
+		if !matchesPattern(rel, registryAPIAllowed) && !seen[rel] {
+			seen[rel] = true
+			forbidden = append(forbidden, rel)
+		}
+	}
+	sort.Strings(forbidden)
+	return forbidden
+}
+
 func TestRegistryDoesNotImportDaemonPackages(t *testing.T) {
 	roots := []string{"./pkg/registry/...", "./pkg/webauth/..."}
 	if info, err := os.Stat(filepath.Join(repoRootDir(t), "cmd", "grain-registry")); err == nil && info.IsDir() {
@@ -230,6 +272,52 @@ func TestRegistryAPIDependsOnlyOnStdlibAndLeafPackages(t *testing.T) {
 	if bad := checkRegistryAPIPurity(deps); len(bad) > 0 {
 		t.Fatalf("pkg/registry/api depends on forbidden non-stdlib or sibling packages:\n\t%s\n\n"+
 			"pkg/registry/api must depend only on stdlib, pkg/tunnel/wsupgrade, pkg/tunnel/mux, and pkg/apierror.",
+			strings.Join(bad, "\n\t"))
+	}
+}
+
+func TestCoreNeverImportsGrainPLC(t *testing.T) {
+	lines := runGoList(t, "-f", `{{.ImportPath}}|{{join .Imports ","}},{{join .TestImports ","}},{{join .XTestImports ","}}`, "./...")
+	var pkgs []pkgImports
+	for _, line := range lines {
+		pkgPath, rest, ok := strings.Cut(line, "|")
+		if !ok {
+			continue
+		}
+		var imps []string
+		seen := map[string]bool{}
+		for _, imp := range strings.Split(rest, ",") {
+			imp = strings.TrimSpace(imp)
+			if imp != "" && !seen[imp] {
+				seen[imp] = true
+				imps = append(imps, imp)
+			}
+		}
+		pkgs = append(pkgs, pkgImports{importPath: pkgPath, imports: imps})
+	}
+	if bad := checkNoGrainPLCImports(pkgs); len(bad) > 0 {
+		t.Fatalf("core grain packages import grain-plc (one-way boundary violation):\n\t%s\n\n"+
+			"Nothing in github.com/ai-on-gke/grain may import github.com/ai-on-gke/grain/grain-plc.",
+			strings.Join(bad, "\n\t"))
+	}
+	goModBytes, err := os.ReadFile(filepath.Join(repoRootDir(t), "go.mod"))
+	if err != nil {
+		t.Fatalf("read root go.mod: %v", err)
+	}
+	if strings.Contains(string(goModBytes), plcModulePrefix) {
+		t.Fatalf("root go.mod must not require or replace %s", plcModulePrefix)
+	}
+}
+
+func TestGrainPLCImportsOnlyRegistryAPI(t *testing.T) {
+	plcDir := filepath.Join(repoRootDir(t), "grain-plc")
+	if info, err := os.Stat(filepath.Join(plcDir, "go.mod")); err != nil || info.IsDir() {
+		t.Fatalf("grain-plc/go.mod not found at %s: %v", plcDir, err)
+	}
+	deps := runGoListInDir(t, plcDir, "-deps", "-test=false", "./...")
+	if bad := checkGrainPLCImportsOnlyRegistryAPI(deps); len(bad) > 0 {
+		t.Fatalf("grain-plc packages transitively import forbidden core grain packages:\n\t%s\n\n"+
+			"grain-plc/ may import only pkg/registry/api (and its allowed leaf dependencies) from github.com/ai-on-gke/grain.",
 			strings.Join(bad, "\n\t"))
 	}
 }
@@ -318,5 +406,49 @@ func TestBoundaryCheckersCatchViolations(t *testing.T) {
 	}
 	if strings.Join(purity, ",") != strings.Join(wantPurity, ",") {
 		t.Fatalf("purity violations = %v, want %v", purity, wantPurity)
+	}
+
+	// 4. Core -> grain-plc one-way check catches any import of grain-plc.
+	plcViolations := checkNoGrainPLCImports([]pkgImports{
+		{
+			importPath: modulePrefix + "pkg/daemon",
+			imports: []string{
+				plcModulePrefix + "/pkg/grainclient",
+				modulePrefix + "pkg/registry/api",
+			},
+		},
+		{
+			importPath: modulePrefix + "pkg/ui",
+			imports: []string{
+				plcModulePrefix,
+			},
+		},
+	})
+	wantPLCViolations := []string{
+		"pkg/daemon -> " + plcModulePrefix + "/pkg/grainclient",
+		"pkg/ui -> " + plcModulePrefix,
+	}
+	if strings.Join(plcViolations, ",") != strings.Join(wantPLCViolations, ",") {
+		t.Fatalf("plc violations = %v, want %v", plcViolations, wantPLCViolations)
+	}
+
+	// 5. grain-plc -> core check allows pkg/registry/api and leaf deps while catching internal core packages.
+	plcCoreForbidden := checkGrainPLCImportsOnlyRegistryAPI([]string{
+		plcModulePrefix + "/pkg/grainclient",
+		modulePrefix + "pkg/registry/api",
+		modulePrefix + "pkg/tunnel/wsupgrade",
+		modulePrefix + "pkg/tunnel/mux",
+		modulePrefix + "pkg/apierror",
+		modulePrefix + "pkg/model",
+		modulePrefix + "pkg/ui",
+		modulePrefix + "pkg/registry/server",
+	})
+	wantPLCCoreForbidden := []string{
+		"pkg/model",
+		"pkg/registry/server",
+		"pkg/ui",
+	}
+	if strings.Join(plcCoreForbidden, ",") != strings.Join(wantPLCCoreForbidden, ",") {
+		t.Fatalf("plc core forbidden = %v, want %v", plcCoreForbidden, wantPLCCoreForbidden)
 	}
 }
