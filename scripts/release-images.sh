@@ -162,6 +162,7 @@ trap 'echo "release-images.sh: aborting: line $LINENO: $BASH_COMMAND" >&2' ERR
 # written to ~/.docker/config.json. Isolating the publishing login keeps
 # `docker build` and subsequent e2e suites unauthenticated against library/*.
 registry_docker_config=""
+signing_pub_key=""
 
 registry_env() {
   if [ -n "${registry_docker_config:-}" ]; then
@@ -494,6 +495,10 @@ cleanup_release_images() {
     rm -rf "$registry_docker_config" 2>/dev/null || true
     registry_docker_config=""
   fi
+  if [ -n "${signing_pub_key:-}" ] && command -v rm >/dev/null 2>&1; then
+    rm -f "$signing_pub_key" 2>/dev/null || true
+    signing_pub_key=""
+  fi
 }
 trap cleanup_release_images EXIT INT TERM
 
@@ -748,6 +753,13 @@ release_takes_main_grain() {
   if ! fetch_promote_tag_into "$work" 2; then
     rm -rf "$work"
     echo "release-images.sh: could not fetch $promote_tag from $remote to inspect its Dockerfile" >&2
+    exit 1
+  fi
+  local fetched_commit
+  fetched_commit="$(git -C "$work" rev-parse -q --verify 'FETCH_HEAD^{commit}' 2>/dev/null || true)"
+  if [ "$fetched_commit" != "$promote_commit" ]; then
+    rm -rf "$work"
+    echo "release-images.sh: $promote_tag fetched as ${fetched_commit:-nothing}, not $promote_commit" >&2
     exit 1
   fi
   if git -C "$work" show FETCH_HEAD:Dockerfile 2>/dev/null | grep -q '^ARG MAIN_GRAIN='; then
@@ -1417,21 +1429,60 @@ registry_digest() {
   registry_env docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}' 2>/dev/null
 }
 
+# Derive the public half of $signing_key once so signed_with_our_key can
+# verify source digests against it. Kept separate from signature absence so
+# a missing cosign or an unusable key/password fails the job -- just as
+# sign_image does -- rather than looking like an unsigned source and quietly
+# publishing an unsigned release when a key was given.
+ensure_signing_public_key() {
+  if [ -n "${signing_pub_key:-}" ] && [ -s "$signing_pub_key" ]; then
+    return 0
+  fi
+  ensure_cosign || return 1
+  signing_pub_key="$(mktemp)"
+  if ! COSIGN_PASSWORD="$(cat "$signing_password_file" 2>/dev/null || true)" \
+    cosign public-key --key "$signing_key" >"$signing_pub_key" || [ ! -s "$signing_pub_key" ]; then
+    echo "release-images.sh: could not derive a public key from $signing_key, so signatures cannot be checked or made" >&2
+    rm -f "$signing_pub_key"
+    signing_pub_key=""
+    return 1
+  fi
+}
+
 # Whether $1 (a repo@sha256:... reference) carries a signature made with
 # this job's own signing key: the public half is derived from the key
 # sign_image would sign with, so nothing else has to be configured.
+# Returns:
+#   0  verified against $signing_key
+#   1  reachable, and carries no signature made with $signing_key
+#   2  cosign/key setup failed, registry refused auth, or registry was unreachable
 signed_with_our_key() {
-  local ref="$1" pub status=0
-  ensure_cosign || return 1
-  pub="$(mktemp)"
-  if ! COSIGN_PASSWORD="$(cat "$signing_password_file" 2>/dev/null || true)" \
-    cosign public-key --key "$signing_key" >"$pub" 2>/dev/null || [ ! -s "$pub" ]; then
-    rm -f "$pub"
-    return 1
-  fi
-  registry_env cosign verify --key "$pub" --insecure-ignore-tlog=true "$ref" >/dev/null 2>&1 || status=1
-  rm -f "$pub"
-  return "$status"
+  local ref="$1" attempt err
+  ensure_signing_public_key || return 2
+  err="$(mktemp)"
+  for attempt in 1 2 3; do
+    if registry_env cosign verify --key "$signing_pub_key" --insecure-ignore-tlog=true "$ref" >/dev/null 2>"$err"; then
+      rm -f "$err"
+      return 0
+    fi
+    if grep -qiE 'UNAUTHORIZED|authentication required|insufficient_scope' "$err" 2>/dev/null; then
+      cat "$err" >&2 || true
+      rm -f "$err"
+      echo "release-images.sh: registry refused signature check on $ref" >&2
+      return 2
+    fi
+    if ! grep -qiE 'TOOMANYREQUESTS|429 Too Many Requests|50[0234] |INTERNAL_ERROR|UNAVAILABLE|dial tcp|i/o timeout|TLS handshake timeout|connection reset|unexpected EOF' "$err" 2>/dev/null; then
+      rm -f "$err"
+      return 1
+    fi
+    if [ "$attempt" -lt 3 ]; then
+      sleep $((5 * attempt))
+    fi
+  done
+  cat "$err" >&2 || true
+  rm -f "$err"
+  echo "release-images.sh: could not reach registry to verify signature on $ref in three attempts" >&2
+  return 2
 }
 
 # Copy $1 (a tag) to $2 by digest ($3 when the caller already resolved
@@ -1447,7 +1498,7 @@ signed_with_our_key() {
 # REQUIRE_IMAGE_SIGNING is set, and otherwise copied unsigned with a
 # warning -- as every image is published where no key is granted.
 copy_by_digest() {
-  local source="$1" target="$2" want="${3:-}" got vouch=false pinned_source
+  local source="$1" target="$2" want="${3:-}" got vouch=false pinned_source sig_status
   if [ -z "$want" ]; then
     want="$(registry_digest "$source" || true)"
   fi
@@ -1455,17 +1506,21 @@ copy_by_digest() {
     echo "release-images.sh: could not read the digest of $source" >&2
     return 1
   fi
-  pinned_source="${source%%@*}"
-  pinned_source="${pinned_source%:*}@$want"
+  pinned_source="$(repository_of "$source")@$want"
   if [ -r "$signing_key" ]; then
-    if signed_with_our_key "$pinned_source"; then
-      vouch=true
-    elif [ "$require_signing" = true ]; then
-      echo "release-images.sh: $pinned_source ($source) carries no signature made with $signing_key, and REQUIRE_IMAGE_SIGNING is set, so it is not copied to $target" >&2
-      return 1
-    else
-      echo "release-images.sh: WARNING: $pinned_source ($source) carries no signature made with $signing_key, so $target is copied unsigned and a deployment verifying signatures will refuse it"
-    fi
+    sig_status=0
+    signed_with_our_key "$pinned_source" || sig_status=$?
+    case "$sig_status" in
+      0) vouch=true ;;
+      1)
+        if [ "$require_signing" = true ]; then
+          echo "release-images.sh: $pinned_source ($source) carries no signature made with $signing_key, and REQUIRE_IMAGE_SIGNING is set, so it is not copied to $target" >&2
+          return 1
+        fi
+        echo "release-images.sh: WARNING: $pinned_source ($source) carries no signature made with $signing_key, so $target is copied unsigned and a deployment verifying signatures will refuse it"
+        ;;
+      *) return 1 ;;
+    esac
   fi
   retag_image "$pinned_source" "$target" || return 1
   got="$(registry_digest "$target" || true)"
@@ -1475,7 +1530,7 @@ copy_by_digest() {
   fi
   echo "release-images.sh: copied $source to $target by digest ($want)"
   if [ "$vouch" = true ] || [ ! -r "$signing_key" ]; then
-    sign_image "$target" "${target%:*}@$want"
+    sign_image "$target" "$(repository_of "$target")@$want"
   fi
 }
 
@@ -1850,27 +1905,39 @@ check_release_stamp() {
 # before it is pulled or run.
 rebuild_release_grain() {
   local source="$1" target="$2" main="${3:-}" question want answered work go_version
-  local guest_ref k8s_ref image_ref vouch=false pull_ref="$source" source_digest="" pulled=false
+  local guest_ref k8s_ref image_ref vouch=false pull_ref="$source" source_digest="" pulled=false sig_status
   if [ -r "$signing_key" ]; then
     if docker buildx version >/dev/null 2>&1; then
       source_digest="$(registry_digest "$source" || true)"
     else
       registry_env docker pull "$source"
       pulled=true
-      local repo="${source%:*}" short_repo
+      local repo short_repo
+      repo="$(repository_of "$source")"
       short_repo="${repo#docker.io/}"
       source_digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$source" \
         | awk -v repo="$repo" -v short="$short_repo" 'index($0, repo "@sha256:") == 1 || index($0, short "@sha256:") == 1 {sub(/^.*@/, ""); print; exit}')"
     fi
-    if [[ "$source_digest" =~ ^sha256:[0-9a-f]+$ ]] && signed_with_our_key "${source%:*}@$source_digest"; then
-      vouch=true
-      [ "$pulled" = true ] || pull_ref="${source%:*}@$source_digest"
-    elif [ "$require_signing" = true ]; then
-      echo "release-images.sh: ${source%:*}@${source_digest:-unreadable} ($source) carries no signature made with $signing_key, and REQUIRE_IMAGE_SIGNING is set, so $target is not rebuilt from it" >&2
+    if ! [[ "$source_digest" =~ ^sha256:[0-9a-f]+$ ]]; then
+      echo "release-images.sh: could not read the digest of $source, so its signature cannot be checked before rebuilding $target" >&2
       return 1
-    else
-      echo "release-images.sh: WARNING: ${source%:*}@${source_digest:-unreadable} ($source) carries no signature made with $signing_key, so $target is published unsigned and a deployment verifying signatures will refuse it"
     fi
+    local pinned_source
+    pinned_source="$(repository_of "$source")@$source_digest"
+    [ "$pulled" = true ] || pull_ref="$pinned_source"
+    sig_status=0
+    signed_with_our_key "$pinned_source" || sig_status=$?
+    case "$sig_status" in
+      0) vouch=true ;;
+      1)
+        if [ "$require_signing" = true ]; then
+          echo "release-images.sh: $pinned_source ($source) carries no signature made with $signing_key, and REQUIRE_IMAGE_SIGNING is set, so $target is not rebuilt from it" >&2
+          return 1
+        fi
+        echo "release-images.sh: WARNING: $pinned_source ($source) carries no signature made with $signing_key, so $target is published unsigned and a deployment verifying signatures will refuse it"
+        ;;
+      *) return 1 ;;
+    esac
   fi
   if [ "$pulled" != true ]; then
     registry_env docker pull "$pull_ref"
@@ -1883,7 +1950,7 @@ rebuild_release_grain() {
     echo "release-images.sh: $source did not say which sandbox images and image reference it was built with (sandbox-image: ${guest_ref:-nothing}, k8s-sandbox-image: ${k8s_ref:-nothing}, image: ${image_ref:-nothing}), so there is nothing to rebuild it with" >&2
     return 1
   fi
-  local ref_pattern='^[A-Za-z0-9._/:@-]+$'
+  local ref_pattern='^[A-Za-z0-9][A-Za-z0-9._/:@-]*$'
   if ! [[ "$guest_ref" =~ $ref_pattern && "$k8s_ref" =~ $ref_pattern && "$image_ref" =~ $ref_pattern ]]; then
     echo "release-images.sh: $source answered with malformed image references (sandbox-image: $guest_ref, k8s-sandbox-image: $k8s_ref, image: $image_ref), so $target cannot be rebuilt from it" >&2
     return 1

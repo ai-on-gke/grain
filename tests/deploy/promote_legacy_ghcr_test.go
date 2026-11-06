@@ -280,7 +280,7 @@ func TestPromoteRebuildSignsOnlyWhenShaSourceVerified(t *testing.T) {
 	containsRun(t, docker, "pull docker.io/grainai/grain@sha256:1234")
 	containsRun(t, string(asked), "sign --yes --key "+env["IMAGE_SIGNING_KEY"]+" --tlog-upload=false docker.io/grainai/grain@sha256:9999")
 
-	// Unverified sha-<short> source: rebuilt unsigned with a warning, never signed.
+	// Unverified sha-<short> source: still pulled by resolved digest, rebuilt unsigned with a warning, never signed.
 	env, log = legacySigningEnv(t, legacyAnswers(t, commits["released"], true, "sha256:1234"), true)
 	env["DOCKER_STUB_MISSING"] = "ghcr.io/bwsalmon/grain/grain:v1.5.0"
 	out, docker, err = promoteRun(t, remote, []string{"promote"}, env)
@@ -291,6 +291,7 @@ func TestPromoteRebuildSignsOnlyWhenShaSourceVerified(t *testing.T) {
 	if strings.Contains(string(asked), "sign --yes --key ") {
 		t.Errorf("rebuild_release_grain signed a rebuild whose sha-<short> source did not verify:\n%s", asked)
 	}
+	containsRun(t, docker, "pull docker.io/grainai/grain@sha256:1234")
 	containsRun(t, out, "so docker.io/grainai/grain:v1.5.0 is published unsigned")
 }
 
@@ -312,19 +313,87 @@ func TestPromoteOfAPreDockerHubReleaseRefusesMismatchedShaRevision(t *testing.T)
 }
 
 // Malformed sandbox or image references returned by a source image (such
-// as shell metacharacters that a release's Dockerfile RUN would expand)
-// are refused before docker build runs.
+// as shell metacharacters that a release's Dockerfile RUN would expand, or
+// leading hyphens) are refused before docker build runs.
 func TestPromoteRefusesMalformedSourceImageReferences(t *testing.T) {
 	remote, commits := preDockerHubReleaseRepo(t)
-	env := publishEnv(legacyAnswers(t, commits["released"], true, "sha256:1234"))
-	env["DOCKER_STUB_MISSING"] = "ghcr.io/bwsalmon/grain/grain:v1.5.0"
-	env["STUB_SANDBOX_IMAGE"] = "ghcr.io/bwsalmon/grain/guest:sha-bad;touch /tmp/injected"
-	out, docker, err := promoteRun(t, remote, []string{"promote"}, env)
-	if err == nil {
-		t.Fatalf("promote succeeded with malformed sandbox-image reference:\n%s", out)
+	for _, bad := range []string{
+		"ghcr.io/bwsalmon/grain/guest:sha-bad;touch /tmp/injected",
+		"-bad-leading-flag",
+	} {
+		env := publishEnv(legacyAnswers(t, commits["released"], true, "sha256:1234"))
+		env["DOCKER_STUB_MISSING"] = "ghcr.io/bwsalmon/grain/grain:v1.5.0"
+		env["STUB_SANDBOX_IMAGE"] = bad
+		out, docker, err := promoteRun(t, remote, []string{"promote"}, env)
+		if err == nil {
+			t.Fatalf("promote succeeded with malformed sandbox-image reference %q:\n%s", bad, out)
+		}
+		containsRun(t, out, "answered with malformed image references")
+		if strings.Contains(docker, "\nbuild ") || strings.HasPrefix(docker, "build ") {
+			t.Errorf("promote invoked docker build with malformed build-arg %q:\n%s", bad, docker)
+		}
 	}
-	containsRun(t, out, "answered with malformed image references")
-	if strings.Contains(docker, "\nbuild ") || strings.HasPrefix(docker, "build ") {
-		t.Errorf("promote invoked docker build with malformed build-arg:\n%s", docker)
-	}
+}
+
+// When a signing key is configured (even without REQUIRE_IMAGE_SIGNING),
+// an unusable key, a registry auth failure during signature verification,
+// or an unreadable source digest must fail closed rather than looking like
+// an unsigned source and quietly publishing an unsigned release.
+func TestPromoteFailsClosedWhenSigningKeyOrDigestCheckFails(t *testing.T) {
+	t.Run("broken signing key fails copy_by_digest", func(t *testing.T) {
+		remote, commits := preDockerHubReleaseRepo(t)
+		env, _ := legacySigningEnv(t, legacyAnswers(t, commits["released"], true, "sha256:1234"), false)
+		dir := t.TempDir()
+		stub := "#!/bin/sh\nif [ \"$1\" = \"public-key\" ]; then echo 'decrypt failed' >&2; exit 1; fi\nexit 0\n"
+		if err := os.WriteFile(filepath.Join(dir, "cosign"), []byte(stub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		env["PATH"] = dir + ":" + realToolPath(t)
+		out, docker, err := promoteRun(t, remote, []string{"promote"}, env)
+		if err == nil {
+			t.Fatalf("promote succeeded with an unusable signing key:\n%s", out)
+		}
+		containsRun(t, out, "could not derive a public key")
+		if strings.Contains(docker, "imagetools create --tag docker.io/grainai/") {
+			t.Errorf("promote copied an image unsigned when the signing key could not be unlocked:\n%s", docker)
+		}
+	})
+
+	t.Run("registry auth error on cosign verify fails closed", func(t *testing.T) {
+		remote, commits := preDockerHubReleaseRepo(t)
+		env, _ := legacySigningEnv(t, legacyAnswers(t, commits["released"], true, "sha256:1234"), false)
+		dir := t.TempDir()
+		stub := "#!/bin/sh\ncase \"$1\" in\n" +
+			"  public-key) echo '-----BEGIN PUBLIC KEY-----'; echo 'stub'; echo '-----END PUBLIC KEY-----' ;;\n" +
+			"  verify) echo 'GET https://ghcr.io/v2/...: UNAUTHORIZED: authentication required' >&2; exit 1 ;;\n" +
+			"esac\nexit 0\n"
+		if err := os.WriteFile(filepath.Join(dir, "cosign"), []byte(stub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		env["PATH"] = dir + ":" + realToolPath(t)
+		out, docker, err := promoteRun(t, remote, []string{"promote"}, env)
+		if err == nil {
+			t.Fatalf("promote succeeded when cosign verify was refused with UNAUTHORIZED:\n%s", out)
+		}
+		containsRun(t, out, "registry refused signature check")
+		if strings.Contains(docker, "imagetools create --tag docker.io/grainai/") {
+			t.Errorf("promote copied an image unsigned when cosign verify failed with UNAUTHORIZED:\n%s", docker)
+		}
+	})
+
+	t.Run("unreadable source digest in rebuild_release_grain fails closed with signing key", func(t *testing.T) {
+		remote, commits := releaseRepo(t)
+		short := commits["released"][:7]
+		// stubAnswers returns no digest for grain:sha-<short>, simulating a transient
+		// failure reading the source digest after image_exists succeeded.
+		env, _ := legacySigningEnv(t, stubAnswers(t, short, "", "v1.5.0"), false)
+		out, docker, err := promoteRun(t, remote, []string{"promote"}, env)
+		if err == nil {
+			t.Fatalf("promote succeeded with signing key and unreadable source digest:\n%s", out)
+		}
+		containsRun(t, out, "could not read the digest of docker.io/grainai/grain:sha-"+short)
+		if strings.Contains(docker, "push ") || strings.Contains(docker, "imagetools create") {
+			t.Errorf("promote published unsigned images after failing to read source digest:\n%s", docker)
+		}
+	})
 }
