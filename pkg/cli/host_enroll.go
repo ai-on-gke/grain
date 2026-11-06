@@ -89,8 +89,8 @@ func cmdHostPending(ctx context.Context, c *ui.HTTPClient, out *printer, args []
 		if len(p.CLIs) > 0 {
 			clis = strings.Join(p.CLIs, ",")
 		}
-		fmt.Printf("%s\tcode %s\thost %s (%s/%s)\tenrolled by %s (local %s)\tclis %s\tkey %s\tused %s\texpires %s\n",
-			p.ID, p.PairingCode, p.Hostname, p.OS, p.Arch,
+		fmt.Printf("%s\thost %s (%s/%s)\tenrolled by %s (local %s)\tclis %s\tkey %s\tused %s\texpires %s\n",
+			p.ID, p.Hostname, p.OS, p.Arch,
 			ownerOrNone(p.EnrolledBy), ownerOrNone(p.LocalUser),
 			clis, p.KeyFingerprint, codeLabel, p.ExpiresAt.UTC().Format(time.RFC3339))
 	}

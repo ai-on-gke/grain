@@ -337,8 +337,7 @@ What else the host needs depends on how it reaches the daemon:
 
 Set the owner automatically by enrolling with `--join <enrollment-code>` from
 **Settings → Hosts → Invite hosts** (the verified enrolling identity becomes
-the host's owner once the deployment owner accepts the `XXXX-XXXX` pairing
-code), or set it on a legacy per-host token (**Settings → Hosts**,
+the host's owner once the deployment owner accepts its join request), or set it on a legacy per-host token (**Settings → Hosts**,
 `grain host register -owner <email> <name>`, `POST /api/hostds`,
 `grain host set-owner <name> <email>`, or `PATCH /api/hostds/{name}`). For
 the shared token, use `-hostd-token-owner`. Start the host with
@@ -353,7 +352,7 @@ requests with its generated Ed25519 keypair, presents a shared `ghe_...`
 enrollment code (which grants nothing except filing a pending join request)
 plus a verified enrolling identity (from the proxy `IdentityVerifier`,
 `ui.RegisterHostJoinVerifier`, or a GitHub device-flow token verified
-server-side), and waits for the deployment owner's pairing-code approval. For
+server-side), and waits for the deployment owner to accept it. For
 legacy per-host token installs, the script reads the token on the machine
 itself from stdin or `$GRAIN_HOSTD_TOKEN`; `--release` and `--image` are
 filled in only for an admitted caller or passed on the command line.

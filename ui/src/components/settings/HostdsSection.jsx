@@ -173,7 +173,7 @@ function shortFingerprint(fp) {
 }
 
 // HostdsSection is Settings → Hosts: shared --join enrollment codes ("Invite
-// hosts"), pending pairing-code handshakes ("Pending"), the host registry
+// hosts"), pending join requests ("Pending"), the host registry
 // ("Hosts"), and legacy per-host token registration.
 export default function HostdsSection({ showError }) {
   const [hostds, setHostds] = useState(null);
@@ -436,8 +436,9 @@ export default function HostdsSection({ showError }) {
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
             Share one enrollment command across machines. The code only files a
             pending join request; each host generates its own Ed25519 keypair
-            and waits for the deployment owner to verify its pairing code before
-            receiving a 30-day key-bound credential.
+            and waits for the deployment owner to accept it (the request names
+            the verified person who enrolled it) before receiving a 30-day
+            key-bound credential.
           </Typography>
           {!ownerAccess ? (
             <Alert severity="info" data-testid="invite-hosts-owner-only">
@@ -692,8 +693,8 @@ export default function HostdsSection({ showError }) {
           <Box data-testid="pending-hosts-card">
             {pending.length === 0 ? (
               <Typography variant="body2" color="text.secondary">
-                No hosts are waiting for pairing-code approval. Pending requests
-                expire automatically after 24 hours.
+                No hosts are waiting for approval. Pending requests expire
+                automatically after 24 hours.
               </Typography>
             ) : (
               <Stack spacing={1.5}>
@@ -720,15 +721,6 @@ export default function HostdsSection({ showError }) {
                             flexWrap="wrap"
                             useFlexGap
                           >
-                            <Chip
-                              color="warning"
-                              label={`Pairing code: ${p.pairing_code}`}
-                              data-testid={`pending-pairing-code-${p.id}`}
-                              sx={{
-                                fontFamily: "monospace",
-                                fontWeight: 700,
-                              }}
-                            />
                             <Typography variant="subtitle2">
                               {p.hostname} ({p.os}/{p.arch})
                             </Typography>
@@ -1152,7 +1144,7 @@ export default function HostdsSection({ showError }) {
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
           Prefer <strong>Invite hosts</strong> above for Ed25519 key-bound
           enrollment. Use a per-host token only for non-interactive setups that
-          cannot complete the pairing-code handshake.
+          cannot wait for the owner's acceptance.
         </Typography>
         <Stack
           direction={{ xs: "column", sm: "row" }}

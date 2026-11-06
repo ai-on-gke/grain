@@ -335,7 +335,7 @@ func TestHostEnrollHandshakeKeyBoundConnectRenewalAndOSSDeviceFlow(t *testing.T)
 		enrollErrCh <- err
 	}()
 
-	// Wait until the pending join request appears in Settings -> Hosts, verify pairing code, and Accept.
+	// Wait until the pending join request appears in Settings -> Hosts, and Accept.
 	var pending []ui.PendingHostJoinView
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -363,8 +363,11 @@ func TestHostEnrollHandshakeKeyBoundConnectRenewalAndOSSDeviceFlow(t *testing.T)
 	if err := <-enrollErrCh; err != nil {
 		t.Fatalf("hostd.Enroll failed: %v\nterm:\n%s", err, termOut.String())
 	}
-	if !strings.Contains(termOut.String(), pending[0].PairingCode) {
-		t.Errorf("terminal output did not print pairing code %s:\n%s", pending[0].PairingCode, termOut.String())
+	// The pairing code is skipped for now (the enrolling person is
+	// verified): the terminal names the host and says it waits for the
+	// owner, and never shows a code to compare.
+	if out := termOut.String(); strings.Contains(out, pending[0].PairingCode) || !strings.Contains(out, "Waiting for the deployment owner to accept it") {
+		t.Errorf("terminal output should wait for acceptance without a pairing code:\n%s", out)
 	}
 	for _, secretFile := range []string{keyPath, tokPath} {
 		st, err := os.Stat(secretFile)

@@ -499,7 +499,7 @@ Commands:
                                        manage this deployment's capability servers (mcpServers)
   host list|pending|accept|reject|invite|codes|rename|update|revoke|delete|rekey
                                        hosts (Settings -> Hosts): invite hosts with one shared enrollment
-                                       snippet, check pairing codes to accept or reject, and manage hosts
+                                       snippet, accept or reject the hosts that join, and manage hosts
   host register|install|set-owner      the legacy host registry: register a host with its owner, the
                                        identity it dials in through IAP as, and print how to install it
   access list|allow|deny               the allowed users and groups list (Settings -> Access): who may

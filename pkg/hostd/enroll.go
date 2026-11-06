@@ -691,8 +691,8 @@ type EnrollResult struct {
 }
 
 // Enroll generates (or loads) the host's 0600 Ed25519 keypair, submits a join
-// request with a verified identity, prints the deterministic pairing code, and
-// waits until the deployment owner accepts or rejects the host.
+// request with a verified identity, prints the host and key it is enrolling,
+// and waits until the deployment owner accepts or rejects the host.
 func Enroll(ctx context.Context, opts EnrollOptions) (*EnrollResult, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(opts.ServerURL), "/")
 	if baseURL == "" {
@@ -881,8 +881,7 @@ func Enroll(ctx context.Context, opts EnrollOptions) (*EnrollResult, error) {
 		fmt.Fprintf(out, "  Enrolled by:  %s\n", joinResp.EnrolledBy)
 	}
 	fmt.Fprintf(out, "  Key:          %s\n", fp)
-	fmt.Fprintf(out, "  Pairing code: %s\n", pairingCode)
-	fmt.Fprintf(out, "Waiting for the deployment owner to check the pairing code and click Accept...\n")
+	fmt.Fprintf(out, "Waiting for the deployment owner to accept it in Settings → Hosts...\n")
 
 	pollURL := baseURL + "/api/hostd/join/" + url.PathEscape(joinResp.ID) + "/poll"
 	ticker := time.NewTicker(pollEvery)

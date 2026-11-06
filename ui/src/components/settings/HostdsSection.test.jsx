@@ -202,7 +202,7 @@ describe("HostdsSection", () => {
     });
   });
 
-  it("renders shared --join snippet, pairing code handshake, accept, rename, and delete", async () => {
+  it("renders shared --join snippet, a pending request without a pairing code, accept, rename, and delete", async () => {
     const codeView = {
       name: "default",
       code: "ghe_11223344556677889900aabbccddeeff0011223344556677",
@@ -251,8 +251,12 @@ describe("HostdsSection", () => {
     expect(snippet).toHaveTextContent(
       `/hostd/install | sh -s -- --join ${codeView.code}`,
     );
-    const pairing = screen.getByTestId("pending-pairing-code-hjr_123");
-    expect(pairing).toHaveTextContent("7K9M-2P4Q");
+    // The pairing code is skipped for now: the verified enrolling person
+    // is what the owner checks before accepting.
+    const pendingCard = screen.getByTestId("pending-host-hjr_123");
+    expect(pendingCard).toHaveTextContent("alice@example.com");
+    expect(pendingCard).not.toHaveTextContent("7K9M-2P4Q");
+    expect(screen.queryByTestId("pending-pairing-code-hjr_123")).toBeNull();
 
     await userEvent.clear(screen.getByLabelText("Host name"));
     await userEvent.type(screen.getByLabelText("Host name"), "alice-box");

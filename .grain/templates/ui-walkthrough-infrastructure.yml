@@ -25,8 +25,7 @@ body: |
   - Hosts (`/settings/hosts` and `/settings/hostds`): Invite hosts shared
     `--join` snippet (enrollment code chips, New code with expiry/max uses/
     default capacity/default labels/allowed principals, Rotate code and
-    Revoke code), Pending host requests (`XXXX-XXXX` pairing code, verified
-    enrollee, key fingerprint, editable Host name/labels/capacity, Accept
+    Revoke code), Pending host requests (verified enrollee, no pairing code, key fingerprint, editable Host name/labels/capacity, Accept
     and Reject), Hosts table (`local`, key-bound and legacy token rows,
     Edit owner/labels/capacity, Rename, Revoke, Delete for offline/revoked
     hosts), and legacy per-host token registration.

@@ -73,7 +73,7 @@ Usage: grain-hostd-install [--join CODE | --name NAME] [options]
 
 Installs grain hostd on this machine as grain-hostd.service, dialing in to
 the grain daemon at ${GRAIN_DAEMON_URL:-(--server)}. With --join CODE, generates
-an Ed25519 keypair, prints a pairing code for the deployment owner to accept in
+an Ed25519 keypair, files a join request for the deployment owner to accept in
 Settings -> Hosts, and receives a key-bound credential. Otherwise, reads a
 per-host token from \$GRAIN_HOSTD_TOKEN or stdin.
 

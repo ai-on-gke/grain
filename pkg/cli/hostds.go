@@ -45,10 +45,10 @@ const hostRegistryUsage = `usage: grain host <subcommand> [args]
   set-owner <name> <email|"">
 
 Hosts (Settings -> Hosts): invite machines with one shared enrollment snippet,
-verify their pairing code before accepting, and manage accepted hosts.
-invite creates an enrollment code; a host joins with grain host -server
--join <code>, prints a pairing code, and waits for the deployment owner to
-check it and accept (pending, accept, reject).
+accept or reject the hosts that join, and manage accepted hosts. invite
+creates an enrollment code; a host joins with grain host -server -join
+<code> as a verified person and waits for the deployment owner to accept
+it (pending, accept, reject).
 
 register is the legacy per-host token registry: it prints the new host's
 token once, or writes it to -token-file (mode 0600) for grain host -server

@@ -46,7 +46,7 @@ With `-join`:
 
 1. `grain-agentd` generates `~/.config/grain/agentd-key` (Ed25519 private key, mode `0600`) if absent;
 2. authenticates your enrolling identity (through your identity proxy / `-iap-audience`, or via an interactive GitHub device-flow prompt on deployments without a proxy verifier);
-3. prints a short `XXXX-XXXX` pairing code on the terminal and waits for the deployment owner to verify the matching code and click **Accept** in **Settings → Hosts** (or run `grain host accept <id>`);
+3. files a join request naming you and the host, and waits for the deployment owner to click **Accept** in **Settings → Hosts** (or run `grain host accept <id>`);
 4. writes the issued 30-day key-bound credential to `~/.config/grain/agentd-token` (`0600`), installs `~/.config/grain/agentd.yaml` and `~/.config/systemd/user/grain-agentd.service`, and starts `grain-agentd`, which signs every `/api/hostd/connect` upgrade with its Ed25519 key and renews its 30-day credential silently while connected.
 
 Then point a model connection at the accepted host name (**Settings → Models** → the connection → **Run on** `<host>`); see [host-placement.md](host-placement.md).
@@ -59,11 +59,11 @@ If `grain-agentd` was previously installed with a legacy per-host token, bind an
 grain-agentd install -server https://grain.example.com -name ws-1 -rekey
 ```
 
-Approve the pairing code in **Settings → Hosts** (`rekey: ws-1`); `grain-agentd` replaces `~/.config/grain/agentd-token` with a 30-day key-bound credential without changing the host's name.
+Accept the request in **Settings → Hosts** (`rekey: ws-1`); `grain-agentd` replaces `~/.config/grain/agentd-token` with a 30-day key-bound credential without changing the host's name.
 
 ## Legacy per-host token registration
 
-For non-interactive setups that cannot complete the pairing-code handshake, register a per-host token on the daemon (**Settings → Hosts → Add a host (legacy token)**, or `grain host register`):
+For non-interactive setups that cannot wait for the owner to accept them, register a per-host token on the daemon (**Settings → Hosts → Add a host (legacy token)**, or `grain host register`):
 
 ```sh
 grain host register ws-1                             # a daemon reached directly

@@ -206,7 +206,8 @@ func TestHostEnrollmentAndLifecycleCLI(t *testing.T) {
 	out, err := captureStdoutCLI(t, func() error {
 		return cmdHostds(ctx, c, &printer{}, []string{"pending"})
 	})
-	if err != nil || !strings.Contains(out, "K7M9-P3W4") || !strings.Contains(out, "alice@example.com") {
+	// No pairing code for now: pending names the verified enrolling person.
+	if err != nil || strings.Contains(out, "K7M9-P3W4") || !strings.Contains(out, "alice@example.com") {
 		t.Fatalf("pending = %q, %v", out, err)
 	}
 

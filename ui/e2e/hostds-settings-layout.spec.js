@@ -15,7 +15,7 @@
 import { expect, test } from "./fixtures.js";
 
 // Settings → Hosts (/settings/hosts and /settings/hostds): Invite hosts
-// shared --join snippet, Pending pairing-code handshake, the host registry
+// shared --join snippet, Pending join requests, the host registry
 // table, and the legacy per-host token form -- on a wide screen and on a
 // phone, with nothing pushing the page sideways.
 const DESKTOP = { width: 1440, height: 900 };
@@ -43,9 +43,7 @@ for (const [name, viewport] of [
     await expect(pendingCard).toBeVisible();
     await expect(pendingCard).toContainText("devbox-carol.example.com");
     await expect(pendingCard).toContainText("carol@example.com");
-    await expect(pendingCard).toContainText(
-      /Pairing code: [A-Z2-9]{4}-[A-Z2-9]{4}/,
-    );
+    await expect(pendingCard).not.toContainText("Pairing code");
 
     const table = page.getByTestId("hostds-table");
     await expect(table).toBeVisible();
@@ -133,7 +131,5 @@ test("Accepting a pending host moves it into the Hosts table as key-bound", asyn
   await expect(row).toContainText("cap=4");
   await expect(row).toContainText("pool=workstation");
   await expect(row).toContainText("via workstations");
-  await expect(pendingCard).toContainText(
-    "No hosts are waiting for pairing-code approval.",
-  );
+  await expect(pendingCard).toContainText("No hosts are waiting for approval.");
 });

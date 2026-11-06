@@ -711,7 +711,7 @@ func (s *Server) routes() {
 	// The script that installs one there (Settings -> Hosts).
 	s.route("GET "+hostdInstallPath, s.handleHostdInstallScript)
 	s.route("GET "+hostdInstallShortPath, s.handleHostdInstallScript)
-	// The host registry and pairing handshake (Settings -> Hosts).
+	// The host registry and join handshake (Settings -> Hosts).
 	s.route("GET /api/hostds", s.handleListHostds)
 	s.route("POST /api/hostds", s.handleCreateHostd)
 	s.route("GET /api/hostds/enrollment-codes", s.handleListHostEnrollmentCodes)
