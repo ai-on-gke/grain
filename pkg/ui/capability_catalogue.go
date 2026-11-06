@@ -121,10 +121,14 @@ func (c *Client) taskGrantContext(ctx context.Context, task model.Task, grants [
 
 // catalogueEditRefusal judges one grant being attached to an existing
 // task: 400 for one the catalogue refuses the task, 403 for an agent
-// attaching one the catalogue says is a person's decision.
+// attaching one the catalogue says is a person's decision. It asks even
+// when the deployment has no catalogue, since a nil catalogue still
+// applies grain's built-in director floor (model.DirectorFloorRefusal):
+// nobody -- person, agent or config import -- attaches api:merge:force
+// and the rest of the Tier 3 scopes to the director session.
 func (c *Client) catalogueEditRefusal(ctx context.Context, task model.Task, grant string) error {
 	cat, err := c.capabilityCatalogue(ctx)
-	if err != nil || cat == nil {
+	if err != nil {
 		return err
 	}
 	verdict, err := cat.ValidateGrants(c.taskGrantContext(ctx, task, []string{grant}))
