@@ -457,6 +457,11 @@ func TestHostEnrollHandshakeKeyBoundConnectRenewalAndOSSDeviceFlow(t *testing.T)
 	if renewResp.StatusCode != http.StatusOK || !strings.HasPrefix(renewed.Token, model.HostdTokenPrefix) {
 		t.Fatalf("POST /api/hostd/renew while connected = %d (%+v)", renewResp.StatusCode, renewed)
 	}
+	// The HTTP renewal recorded its nonce in the hub's replay cache, the one
+	// the in-band OpRenew checks, so the same proof cannot renew twice.
+	if remote.ReplayCache().CheckAndRecord("renew:"+hostd.PublicKeyString(priv.Public().(ed25519.PublicKey)), proof2.Nonce, time.Now().UTC(), 2*hostd.ConnectProofSkew) {
+		t.Errorf("POST /api/hostd/renew did not record its nonce in the hub's replay cache")
+	}
 
 	// Rename the connected host -> live session renames cleanly.
 	renamed, err := ownerCLI.RenameHostd(ctx, acceptedHost.Name, "octocat-box")
@@ -569,4 +574,58 @@ func mustDefaultEnrollmentCode(t *testing.T, store *model.Store) string {
 		t.Fatalf("EnsureDefaultHostEnrollmentCode = %+v, %v", c, err)
 	}
 	return c.SecretCode
+}
+
+// TestHostdJoinRefusesMisleadingMetadata pins that what a joining host says
+// about itself -- shown verbatim to the owner deciding on it, in Settings ->
+// Hosts and `grain host pending` -- carries no control or formatting
+// characters and no field longer than a real host's, and that a refused
+// request leaves nothing pending.
+func TestHostdJoinRefusesMisleadingMetadata(t *testing.T) {
+	client, store, _ := testClient(t)
+	client.Now = nil
+	client.Config.LocalAPIToken = testAccessCode
+	srv := ui.NewServerWithClient(client)
+	code := mustDefaultEnrollmentCode(t, store)
+
+	join := func(mut func(*hostd.JoinSubmitRequest)) *httptest.ResponseRecorder {
+		t.Helper()
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := hostd.JoinSubmitRequest{EnrollmentCode: code, Hostname: "build-01", OS: "linux", Arch: "amd64", Version: "v1.2.3", LocalUser: "alice", CLIs: []string{"claude"}}
+		mut(&req)
+		if err := hostd.SignJoinSubmit(&req, priv, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+		body, _ := json.Marshal(req)
+		return serveFrom(srv, "203.0.113.80:443", http.MethodPost, "/api/hostd/join", string(body), map[string]string{
+			"Content-Type":      "application/json",
+			ui.AccessCodeHeader: testAccessCode,
+		})
+	}
+	for name, mut := range map[string]func(*hostd.JoinSubmitRequest){
+		"ansi escape in hostname": func(r *hostd.JoinSubmitRequest) { r.Hostname = "build-01\x1b[2K\renrolled by owner@example.com" },
+		"newline in hostname":     func(r *hostd.JoinSubmitRequest) { r.Hostname = "build-01\nenrolled-by-owner" },
+		"space in hostname":       func(r *hostd.JoinSubmitRequest) { r.Hostname = "build-01 (owner@example.com)" },
+		"bidi override in os":     func(r *hostd.JoinSubmitRequest) { r.OS = "linux\u202e" },
+		"long hostname":           func(r *hostd.JoinSubmitRequest) { r.Hostname = strings.Repeat("a", 254) },
+		"control in version":      func(r *hostd.JoinSubmitRequest) { r.Version = "v1\x07" },
+		"control in local user":   func(r *hostd.JoinSubmitRequest) { r.LocalUser = "alice\x1b]0;x\x07" },
+		"comma in a cli":          func(r *hostd.JoinSubmitRequest) { r.CLIs = []string{"claude,codex"} },
+		"too many clis":           func(r *hostd.JoinSubmitRequest) { r.CLIs = make([]string, 33) },
+		"invalid utf-8 in arch":   func(r *hostd.JoinSubmitRequest) { r.Arch = "amd64\xff" },
+	} {
+		if rec := join(mut); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid host join request") {
+			t.Errorf("%s: POST /api/hostd/join = %d %s, want 400", name, rec.Code, rec.Body.String())
+		}
+	}
+	if pending, err := store.ListPendingHostJoinRequests(context.Background(), time.Now().UTC()); err != nil || len(pending) != 0 {
+		t.Fatalf("pending after refused joins = %+v, %v", pending, err)
+	}
+	// An ordinary host still joins, with a version that carries a space.
+	if rec := join(func(r *hostd.JoinSubmitRequest) { r.Version = "dev (abc123)" }); rec.Code != http.StatusCreated {
+		t.Fatalf("ordinary join = %d %s, want 201", rec.Code, rec.Body.String())
+	}
 }

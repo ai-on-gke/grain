@@ -28,6 +28,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -40,6 +42,64 @@ const (
 	maxPendingJoinPerCode     = 32
 	maxPendingJoinPerIdentity = 8
 )
+
+// Bounds on what a joining host says about itself. POST /api/hostd/join is
+// served before the enrolling identity is known, and these fields reach the
+// deployment owner verbatim -- the pending card in Settings -> Hosts and
+// `grain host pending`'s terminal output -- as what they accept the host on.
+const (
+	maxJoinHostnameLen = 253
+	maxJoinFieldLen    = 64
+	maxJoinVersionLen  = 128
+	maxJoinCLIs        = 32
+)
+
+// validateJoinMetadata refuses a join request whose self-description could
+// mislead the owner deciding on it: a control character (an ANSI escape that
+// rewrites `grain host pending`'s lines, a newline that forges one), a
+// formatting character (a bidi override that reorders what is shown), or a
+// field longer than any real host's.
+func validateJoinMetadata(req hostd.JoinSubmitRequest) error {
+	check := func(field, v string, max int, spaces bool) error {
+		v = strings.TrimSpace(v)
+		if len(v) > max {
+			return fmt.Errorf("%s is longer than %d bytes", field, max)
+		}
+		for _, r := range v {
+			if r == utf8.RuneError || !unicode.IsPrint(r) || (!spaces && unicode.IsSpace(r)) {
+				return fmt.Errorf("%s holds a control, formatting or whitespace character", field)
+			}
+		}
+		return nil
+	}
+	if err := check("hostname", req.Hostname, maxJoinHostnameLen, false); err != nil {
+		return err
+	}
+	if err := check("os", req.OS, maxJoinFieldLen, false); err != nil {
+		return err
+	}
+	if err := check("arch", req.Arch, maxJoinFieldLen, false); err != nil {
+		return err
+	}
+	if err := check("version", req.Version, maxJoinVersionLen, true); err != nil {
+		return err
+	}
+	if err := check("local_user", req.LocalUser, maxJoinFieldLen, false); err != nil {
+		return err
+	}
+	if len(req.CLIs) > maxJoinCLIs {
+		return fmt.Errorf("clis names more than %d agent CLIs", maxJoinCLIs)
+	}
+	for _, c := range req.CLIs {
+		if err := check("clis", c, maxJoinFieldLen, false); err != nil {
+			return err
+		}
+		if strings.Contains(c, ",") {
+			return errors.New("clis holds a ','")
+		}
+	}
+	return nil
+}
 
 // HostJoinIdentity is the verified person or account enrolling a host on
 // POST /api/hostd/join when an edition registers a custom HostJoinVerifier.
@@ -479,6 +539,10 @@ func (s *Server) handleHostdJoin(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
+	if err := validateJoinMetadata(req); err != nil {
+		writeError(w, http.StatusBadRequest, apierror.Public("invalid host join request: "+err.Error()))
+		return
+	}
 	now := time.Now().UTC()
 	if s.tasks != nil {
 		now = s.tasks.now()
@@ -881,6 +945,10 @@ type hostdConnectedChecker interface {
 	IsConnected(name string) bool
 }
 
+type hostdReplayCacher interface {
+	ReplayCache() *hostd.NonceReplayCache
+}
+
 // handleHostdRenew is POST /api/hostd/renew: silent renewal of a connected
 // host's 30-day key-bound credential.
 func (s *Server) handleHostdRenew(w http.ResponseWriter, r *http.Request) {
@@ -920,7 +988,17 @@ func (s *Server) handleHostdRenew(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, apierror.Public(model.ErrHostdNotKeyBound.Error()))
 		return
 	}
-	if err := hostd.VerifyRenewProof(h.Name, tok, h.PublicKey, proof, now, &s.hostdJoinReplay); err != nil {
+	// Check the nonce against the replay cache the in-band OpRenew and
+	// /api/hostd/connect use, so one proof renews once whichever way it
+	// arrives, and so anonymous join traffic filling hostdJoinReplay cannot
+	// refuse a connected host's renewal.
+	replay := &s.hostdJoinReplay
+	if rc, ok := s.tasks.Config.HostdRemote.(hostdReplayCacher); ok {
+		if c := rc.ReplayCache(); c != nil {
+			replay = c
+		}
+	}
+	if err := hostd.VerifyRenewProof(h.Name, tok, h.PublicKey, proof, now, replay); err != nil {
 		writeError(w, http.StatusUnauthorized, apierror.Public("invalid renewal signature: "+err.Error()))
 		return
 	}
