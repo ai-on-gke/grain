@@ -97,7 +97,11 @@ func startDaemonForUpgrade(t *testing.T, cfg daemon.Config) (string, func()) {
 	}
 	if store, db, err := daemon.OpenStore("sqlite", "", cfg.DataDir); err == nil {
 		_ = store.Init(context.Background())
-		_ = store.PutConfig(context.Background(), model.Config{PollInterval: model.DefaultPollInterval})
+		_ = store.PutConfig(context.Background(), model.Config{
+			PollInterval:       model.DefaultPollInterval,
+			GitHubHost:         cfg.GithubHost,
+			GitHubInsecureHTTP: cfg.GithubInsecureHTTP,
+		})
 		_ = db.Close()
 	}
 
@@ -243,6 +247,7 @@ exit 0
 	deployment := daemon.Config{
 		DataDir:             dataDir,
 		UpgradeImage:        "docker.io/grainai/grain",
+		UpgradeImageSource:  "registry",
 		UpgradeImageRefFile: refFile,
 		UpgradeRestartCmd:   []string{"touch", restartMarker},
 		// What -upgrade-allowed-branches=main,grain/* parses to: the
