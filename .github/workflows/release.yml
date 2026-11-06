@@ -74,6 +74,10 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.commit != ''
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Reads git history and the public registry, nothing else: none of the
+    # workflow's packages: write or id-token: write.
+    permissions:
+      contents: read
     outputs:
       build: ${{ steps.check.outputs.build }}
     steps:
@@ -140,7 +144,7 @@ jobs:
       # is cancelled by the branch's runs, and a second dispatch of the same
       # commit waits behind the first (and then finds it published).
       group: ${{ github.workflow }}-images-${{ inputs.commit && format('commit-{0}', inputs.commit) || github.ref }}
-      cancel-in-progress: ${{ !inputs.commit && github.ref != 'refs/heads/main' && github.ref != 'refs/heads/candidate' }}
+      cancel-in-progress: ${{ inputs.commit == '' && github.ref != 'refs/heads/main' && github.ref != 'refs/heads/candidate' }}
     env:
       RELEASE_IMAGES_STATE: /tmp/release-images.env
     steps:
