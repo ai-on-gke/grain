@@ -52,7 +52,7 @@ func TestAutoApprovalRefusalAlwaysHoldsConfigRepoProposals(t *testing.T) {
 			if got := model.UngrantedWrites(tc.child, session); len(got) != 0 {
 				t.Fatalf("UngrantedWrites = %v, want none -- the session holds grain/config, which is the case this guards", got)
 			}
-			got := model.AutoApprovalRefusal(tc.child, session, true)
+			got := model.AutoApprovalRefusal(tc.child, session, true, nil)
 			if !strings.Contains(got, tc.want) || !strings.Contains(got, "always waits for a person") {
 				t.Errorf("AutoApprovalRefusal = %q, want it to say %q and that it always waits for a person", got, tc.want)
 			}
@@ -66,7 +66,7 @@ func TestAutoApprovalRefusalAlwaysHoldsConfigRepoProposals(t *testing.T) {
 	if got := model.ConfigRepoProposalHold(elsewhere); got != "" {
 		t.Errorf("ConfigRepoProposalHold(acme/widgets) = %q, want none", got)
 	}
-	if got := model.AutoApprovalRefusal(model.Task{}, session, true); got != "" {
+	if got := model.AutoApprovalRefusal(model.Task{}, session, true, nil); got != "" {
 		t.Errorf("AutoApprovalRefusal of a repo-less child from a queueing session = %q, want none", got)
 	}
 }
@@ -95,7 +95,7 @@ func TestShippedDirectorWritesOnlyTheConfigRepo(t *testing.T) {
 		t.Fatal("a TasksApproved director does not queue its proposals; the test below would prove nothing")
 	}
 	child := model.Task{Writes: []model.WriteTarget{{Repo: model.ConfigRepo()}}}
-	if got := model.AutoApprovalRefusal(child, parent, true); got == "" {
+	if got := model.AutoApprovalRefusal(child, parent, true, nil); got == "" {
 		t.Error("a TasksApproved director's proposal writing grain/config was not refused auto-approval")
 	}
 }

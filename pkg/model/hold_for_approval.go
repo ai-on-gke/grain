@@ -68,14 +68,20 @@ func HeldForApprovalNote(proposer string) string {
 // approved is AutoSubmitLimits' question, which this does not ask, since
 // it needs the store and has its own note (AutoSubmitLimitNote).
 //
+// seeding is where child's default grants came from when it was filed
+// (ProposalSeeding): a director proposal's defaults seeded unchanged
+// from its own target repository or the deployment are not escalations
+// (ProposalEscalations, director-capabilities.spec.md §4.2). nil
+// measures every default reference as EscalatedCapabilities does.
+//
 // A proposal that would land work in this deployment's configuration
 // repository (ConfigRepoProposalHold) is refused first and whatever
 // parent holds: see that function for why.
-func AutoApprovalRefusal(child, parent Task, sessionQueues bool) string {
+func AutoApprovalRefusal(child, parent Task, sessionQueues bool, seeding *ProposalSeeding) string {
 	if why := ConfigRepoProposalHold(child); why != "" {
 		return why
 	}
-	if escalated := EscalatedCapabilities(child, parent); len(escalated) > 0 {
+	if escalated, _ := ProposalEscalations(child, parent, sessionQueues, seeding); len(escalated) > 0 {
 		asked, seeded := SeededEscalations(child, escalated)
 		var why []string
 		if len(asked) > 0 {

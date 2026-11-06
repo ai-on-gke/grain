@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -26,6 +27,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -72,6 +74,29 @@ var (
 	// ErrInvalidCredential is returned when a `grc_` token is unknown or revoked.
 	ErrInvalidCredential = errors.New("registry store: invalid or revoked entry credential")
 )
+
+// PrimaryScopeConflictError is returned when a synchronous scope mutation
+// conflicts with an existing active primary scope claim on a listed entry.
+type PrimaryScopeConflictError struct {
+	Conflict api.ScopeConflict
+}
+
+func (e *PrimaryScopeConflictError) Error() string {
+	if e == nil {
+		return ErrPrimaryScopeConflict.Error()
+	}
+	return fmt.Sprintf("%s: repo %q path %q overlaps with primary claim on %q held by entry %q",
+		ErrPrimaryScopeConflict.Error(),
+		e.Conflict.Repo,
+		e.Conflict.PathPrefix,
+		e.Conflict.ConflictingPrefix,
+		e.Conflict.ConflictingEntry,
+	)
+}
+
+func (e *PrimaryScopeConflictError) Unwrap() error {
+	return ErrPrimaryScopeConflict
+}
 
 // Thresholds configures runtime status derivation from heartbeat and replica timestamps.
 type Thresholds struct {
@@ -135,12 +160,18 @@ type QuotaRow struct {
 
 // ScopeRow represents a row in `registry.entry_scopes`.
 type ScopeRow struct {
-	EntryID      string `json:"entry_id"`
-	Repo         string `json:"repo"`
-	PathPrefix   string `json:"path_prefix"`
-	Source       string `json:"source"`
-	PrimaryClaim bool   `json:"primary_claim"`
-	Branch       string `json:"branch,omitempty"`
+	EntryID        string        `json:"entry_id"`
+	Repo           string        `json:"repo"`
+	PathPrefix     string        `json:"path_prefix"`
+	Source         string        `json:"source"`
+	PrimaryClaim   bool          `json:"primary_claim"`
+	EffectiveRole  api.ScopeRole `json:"effective_role,omitempty"`
+	Branch         string        `json:"branch,omitempty"`
+	Active         bool          `json:"active"`
+	InactiveReason string        `json:"inactive_reason,omitempty"`
+	ConflictWith   string        `json:"conflict_with,omitempty"`
+	ClaimedAt      time.Time     `json:"claimed_at,omitempty"`
+	UpdatedAt      time.Time     `json:"updated_at,omitempty"`
 }
 
 // EntryRow represents a catalog entry in `registry.entries` along with its
@@ -151,6 +182,7 @@ type EntryRow struct {
 	Kind           api.EntryKind  `json:"kind"`
 	OwnerEmail     string         `json:"owner_email"`
 	OwnerGroup     string         `json:"owner_group,omitempty"`
+	PendingOwner   string         `json:"pending_owner,omitempty"`
 	Listed         bool           `json:"listed"`
 	Visibility     Visibility     `json:"visibility"`
 	AccessList     []string       `json:"access_list"`
@@ -159,6 +191,7 @@ type EntryRow struct {
 	Tags           []string       `json:"tags,omitempty"`
 	LifecycleState api.EntryState `json:"lifecycle_state"`
 	StatusReason   string         `json:"status_reason,omitempty"`
+	ReplaceStep    string         `json:"replace_step,omitempty"`
 	Version        int64          `json:"version"`
 
 	Shape             string     `json:"shape,omitempty"`
@@ -174,25 +207,36 @@ type EntryRow struct {
 	ConfigRepo        string     `json:"config_repo,omitempty"`
 	SSHGrantExpiresAt *time.Time `json:"ssh_grant_expires_at,omitempty"`
 	SSHGrantedTo      string     `json:"ssh_granted_to,omitempty"`
+	AllowSSH          bool       `json:"allow_ssh"`
+	ShipLogs          bool       `json:"ship_logs"`
 
-	GrainVersion         string     `json:"grain_version,omitempty"`
-	ActiveTasks          int        `json:"active_tasks"`
-	PendingInbox         int        `json:"pending_inbox"`
-	LastHeartbeatAt      *time.Time `json:"last_heartbeat_at,omitempty"`
-	SessionEpoch         int64      `json:"session_epoch"`
-	ConnectedPrincipal   string     `json:"connected_principal,omitempty"`
-	HostKind             string     `json:"host_kind,omitempty"`
-	LastDisconnectAt     *time.Time `json:"last_disconnect_at,omitempty"`
-	LastDisconnectReason string     `json:"last_disconnect_reason,omitempty"`
-	OwnerDisabled        bool       `json:"owner_disabled,omitempty"`
+	GrainVersion         string          `json:"grain_version,omitempty"`
+	GrainCommit          string          `json:"grain_commit,omitempty"`
+	TargetVersion        string          `json:"target_version,omitempty"`
+	HealthState          api.HealthState `json:"health_state,omitempty"`
+	HealthDetail         string          `json:"health_detail,omitempty"`
+	ActiveTasks          int             `json:"active_tasks"`
+	AwaitingReplyTasks   int             `json:"awaiting_reply_tasks"`
+	PendingInbox         int             `json:"pending_inbox"`
+	ActiveSessions       int             `json:"active_sessions"`
+	HasReportedScopes    bool            `json:"has_reported_scopes"`
+	LastHeartbeatAt      *time.Time      `json:"last_heartbeat_at,omitempty"`
+	SessionEpoch         int64           `json:"session_epoch"`
+	ConnectedPrincipal   string          `json:"connected_principal,omitempty"`
+	HostKind             string          `json:"host_kind,omitempty"`
+	LastDisconnectAt     *time.Time      `json:"last_disconnect_at,omitempty"`
+	LastDisconnectReason string          `json:"last_disconnect_reason,omitempty"`
+	OwnerDisabled        bool            `json:"owner_disabled,omitempty"`
 
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
-	DeletedAt  *time.Time `json:"deleted_at,omitempty"`
-	PurgeAfter *time.Time `json:"purge_after,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	DeletedAt     *time.Time `json:"deleted_at,omitempty"`
+	ReservedUntil *time.Time `json:"reserved_until,omitempty"`
+	PurgeAfter    *time.Time `json:"purge_after,omitempty"`
 
-	Scopes []ScopeRow        `json:"scopes,omitempty"`
-	Tunnel *TunnelSessionRow `json:"tunnel,omitempty"`
+	Scopes      []ScopeRow           `json:"scopes,omitempty"`
+	Credentials []api.CredentialMeta `json:"credentials,omitempty"`
+	Tunnel      *TunnelSessionRow    `json:"tunnel,omitempty"`
 }
 
 // TunnelSessionRow represents an active `grain connect` session in `registry.tunnel_sessions`.
@@ -234,6 +278,24 @@ type Store struct {
 	db         *sql.DB
 	thresholds Thresholds
 	nowFn      func() time.Time
+	catalogGen atomic.Uint64
+}
+
+// Thresholds returns the store's configured runtime thresholds.
+func (s *Store) Thresholds() Thresholds {
+	if s == nil {
+		return DefaultThresholds()
+	}
+	return s.thresholds
+}
+
+// CatalogGeneration returns a monotonically increasing in-process counter
+// incremented whenever catalog-visible store state changes.
+func (s *Store) CatalogGeneration() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.catalogGen.Load()
 }
 
 // Open opens a PostgreSQL connection pool, verifies connectivity, and runs migrations.
@@ -448,7 +510,13 @@ WHERE owner_email = $2 AND deleted_at IS NULL`, now, email)
 }
 
 func (s *Store) notify(ctx context.Context, channel, payload string) {
-	if s == nil || s.db == nil || channel == "" {
+	if s == nil {
+		return
+	}
+	if channel == "registry_catalog" || channel == "registry_entries" || channel == "registry_tunnels" {
+		s.catalogGen.Add(1)
+	}
+	if s.db == nil || channel == "" {
 		return
 	}
 	_, _ = s.db.ExecContext(ctx, `SELECT pg_notify($1, $2)`, channel, payload)
@@ -499,12 +567,98 @@ SELECT
     COALESCE(SUM(CASE WHEN e.kind = 'connected' THEN 1 ELSE 0 END), 0)
 FROM registry.entries e
 LEFT JOIN registry.shapes sh ON sh.name = e.shape
-WHERE e.owner_email = $1 AND e.deleted_at IS NULL AND e.lifecycle_state NOT IN ('deleted', 'DELETED')`,
+WHERE e.owner_email = $1
+  AND e.deleted_at IS NULL
+  AND e.lifecycle_state NOT IN ('deleted', 'DELETED', 'failed', 'FAILED')`,
 		ownerEmail).Scan(&q.UsedInstanceUnits, &q.UsedConnected)
 	if err != nil {
 		return nil, err
 	}
 	return q, nil
+}
+
+func (s *Store) getQuotaTx(ctx context.Context, tx *sql.Tx, ownerEmail string) (*QuotaRow, error) {
+	ownerEmail = strings.ToLower(strings.TrimSpace(ownerEmail))
+	var disabled bool
+	if err := tx.QueryRowContext(ctx, `SELECT disabled FROM registry.owners WHERE email = $1 FOR UPDATE`, ownerEmail).Scan(&disabled); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	q := &QuotaRow{
+		OwnerEmail:       ownerEmail,
+		MaxInstanceUnits: s.thresholds.DefaultUnitsQuota,
+		MaxConnected:     s.thresholds.DefaultConnQuota,
+		UpdatedAt:        s.now(),
+	}
+	var updatedBy sql.NullString
+	err := tx.QueryRowContext(ctx, `
+SELECT max_instance_units, max_connected, updated_by, updated_at
+FROM registry.quotas
+WHERE owner_email = $1`, ownerEmail).
+		Scan(&q.MaxInstanceUnits, &q.MaxConnected, &updatedBy, &q.UpdatedAt)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	q.UpdatedBy = updatedBy.String
+
+	err = tx.QueryRowContext(ctx, `
+SELECT
+    COALESCE(SUM(CASE WHEN e.kind = 'instance' THEN COALESCE(sh.quota_units, 1) ELSE 0 END), 0),
+    COALESCE(SUM(CASE WHEN e.kind = 'connected' THEN 1 ELSE 0 END), 0)
+FROM registry.entries e
+LEFT JOIN registry.shapes sh ON sh.name = e.shape
+WHERE e.owner_email = $1
+  AND e.deleted_at IS NULL
+  AND e.lifecycle_state NOT IN ('deleted', 'DELETED', 'failed', 'FAILED')`,
+		ownerEmail).Scan(&q.UsedInstanceUnits, &q.UsedConnected)
+	if err != nil {
+		return nil, err
+	}
+	return q, nil
+}
+
+var (
+	randomNameAdjectives = []string{
+		"amber", "arctic", "astral", "autumn", "azure", "bold", "bright", "Brisk",
+		"calm", " cedar", "clear", "clever", "cobalt", "coral", "cosmic", "crisp",
+		"crystal", "cyber", "daring", "dawn", "delta", "eager", "emerald", "fable",
+		"fair", "fleet", "floral", "frost", "gentle", "golden", "grand", "harbor",
+		"hazel", "indigo", "iron", "ivory", "jade", "keen", "lunar", "maple",
+		"meadow", "misty", "noble", "northern", "nova", "ocean", "olive", "onyx",
+		"opal", "orbit", "pearl", "pine", "polar", "prime", "quiet", "rapid",
+		"river", "ruby", "rustic", "sable", "sage", "silver", "solar", "steady",
+	}
+	randomNameNouns = []string{
+		"anchor", "anvil", "arch", "atlas", "badger", "beacon", "birch", "breeze",
+		"bridge", "brook", "canyon", "cinder", "cliff", "cloud", "comet", "compass",
+		"condor", "crest", "crane", "creek", "crown", "delta", "dune", "eagle",
+		"echo", "ember", "falcon", "fern", "finch", "fjord", "flint", "forge",
+		"fox", "glade", "glacier", "grove", "harbor", "hawk", "heron", "horizon",
+		"island", "kestrel", "lantern", "larch", "ledge", "linnet", "lynx", "marsh",
+		"meadow", "mesa", "meteor", "osprey", "otter", "pebble", "peak", "phoenix",
+		"pioneer", "prism", "quarry", "quartz", "raven", "reef", "ridge", "sparrow",
+	}
+)
+
+// GenerateRandomName produces an available `<adjective>-<noun>-<4hex>` entry name.
+func (s *Store) GenerateRandomName(ctx context.Context, callerEmail string) (string, error) {
+	for attempt := 0; attempt < 16; attempt++ {
+		var buf [4]byte
+		if _, err := rand.Read(buf[:]); err != nil {
+			return "", fmt.Errorf("generating random name bytes: %w", err)
+		}
+		adj := strings.ToLower(strings.TrimSpace(randomNameAdjectives[int(buf[0])%len(randomNameAdjectives)]))
+		noun := strings.ToLower(strings.TrimSpace(randomNameNouns[int(buf[1])%len(randomNameNouns)]))
+		suffix := hex.EncodeToString(buf[2:4])
+		candidate := fmt.Sprintf("%s-%s-%s", adj, noun, suffix)
+		avail, err := s.CheckNameAvailability(ctx, candidate, callerEmail)
+		if err != nil {
+			return "", err
+		}
+		if avail.State == "available" {
+			return candidate, nil
+		}
+	}
+	return "", errors.New("failed to generate an available random entry name")
 }
 
 // NameAvailability describes whether an entry name can be claimed by callerEmail.
@@ -550,13 +704,13 @@ WHERE name = $1 AND deleted_at IS NULL`, name).Scan(&activeOwner)
 
 	now := s.now()
 	var reservedOwner string
-	var purgeAfter time.Time
+	var reservedUntil time.Time
 	err = s.db.QueryRowContext(ctx, `
-SELECT owner_email, purge_after
+SELECT owner_email, COALESCE(reserved_until, purge_after)
 FROM registry.entries
-WHERE name = $1 AND deleted_at IS NOT NULL AND purge_after > $2
-ORDER BY purge_after DESC
-LIMIT 1`, name, now).Scan(&reservedOwner, &purgeAfter)
+WHERE name = $1 AND deleted_at IS NOT NULL AND COALESCE(reserved_until, purge_after) > $2
+ORDER BY COALESCE(reserved_until, purge_after) DESC
+LIMIT 1`, name, now).Scan(&reservedOwner, &reservedUntil)
 	if err == nil {
 		if callerEmail != "" && strings.EqualFold(reservedOwner, callerEmail) {
 			return &NameAvailability{
@@ -570,7 +724,7 @@ LIMIT 1`, name, now).Scan(&reservedOwner, &purgeAfter)
 			State:      "reserved",
 			Status:     api.NameReserved,
 			OwnerEmail: reservedOwner,
-			PurgeAfter: &purgeAfter,
+			PurgeAfter: &reservedUntil,
 			Reason:     "entry name is within the 30-day tombstone reservation window",
 		}, nil
 	}
@@ -602,6 +756,8 @@ type CreateEntryInput struct {
 	LifecycleState     api.EntryState
 	Shape              string
 	Zone               string
+	AllowSSH           *bool
+	ShipLogs           *bool
 	BackendURL         string
 	DeclaredScopes     []ScopeClaim
 }
@@ -609,16 +765,25 @@ type CreateEntryInput struct {
 // CreateEntry validates name availability, quotas, backend URL scheme, and primary
 // scope claims, then inserts a new row into `registry.entries`.
 func (s *Store) CreateEntry(ctx context.Context, in CreateEntryInput) (*EntryRow, error) {
-	name := strings.ToLower(strings.TrimSpace(in.Name))
-	if err := api.ValidateEntryName(name); err != nil {
-		return nil, err
-	}
 	if !in.Kind.Valid() {
 		return nil, fmt.Errorf("unsupported entry kind %q (only \"instance\" and \"connected\" are supported in v1)", in.Kind)
 	}
 	ownerEmail := strings.ToLower(strings.TrimSpace(in.OwnerEmail))
 	if ownerEmail == "" {
 		return nil, errors.New("owner_email is required")
+	}
+	name := strings.ToLower(strings.TrimSpace(in.Name))
+	if name == "" {
+		var err error
+		name, err = s.GenerateRandomName(ctx, ownerEmail)
+		if err != nil {
+			return nil, err
+		}
+	} else if err := api.ValidateEntryName(name); err != nil {
+		return nil, err
+	}
+	if err := api.ValidateCatalogMetadata(in.DisplayName, in.Purpose, in.Tags); err != nil {
+		return nil, err
 	}
 	vis := in.Visibility
 	if vis == "" {
@@ -630,6 +795,14 @@ func (s *Store) CreateEntry(ctx context.Context, in CreateEntryInput) (*EntryRow
 	listed := true
 	if in.Listed != nil {
 		listed = *in.Listed
+	}
+	allowSSH := true
+	if in.AllowSSH != nil {
+		allowSSH = *in.AllowSSH
+	}
+	shipLogs := false
+	if in.ShipLogs != nil {
+		shipLogs = *in.ShipLogs
 	}
 	state := in.LifecycleState
 	if state == "" {
@@ -663,28 +836,6 @@ func (s *Store) CreateEntry(ctx context.Context, in CreateEntryInput) (*EntryRow
 		return nil, fmt.Errorf("invalid entry name %q: %s", name, avail.Reason)
 	}
 
-	quota, err := s.GetQuota(ctx, ownerEmail)
-	if err != nil {
-		return nil, err
-	}
-	switch in.Kind {
-	case api.KindInstance:
-		units := 1
-		if in.Shape != "" {
-			err := s.db.QueryRowContext(ctx, `SELECT quota_units FROM registry.shapes WHERE name = $1`, in.Shape).Scan(&units)
-			if err != nil {
-				return nil, fmt.Errorf("lookup shape %q: %w", in.Shape, err)
-			}
-		}
-		if quota.UsedInstanceUnits+units > quota.MaxInstanceUnits {
-			return nil, fmt.Errorf("%w: instance quota units %d + %d exceeds limit %d", ErrQuotaExceeded, quota.UsedInstanceUnits, units, quota.MaxInstanceUnits)
-		}
-	case api.KindConnected:
-		if quota.UsedConnected+1 > quota.MaxConnected {
-			return nil, fmt.Errorf("%w: connected entries %d + 1 exceeds limit %d", ErrQuotaExceeded, quota.UsedConnected, quota.MaxConnected)
-		}
-	}
-
 	accessList := in.AccessList
 	if accessList == nil {
 		accessList = []string{}
@@ -704,6 +855,11 @@ func (s *Store) CreateEntry(ctx context.Context, in CreateEntryInput) (*EntryRow
 
 	id := uuid.NewString()
 	now := s.now()
+	ownerGroup := strings.ToLower(strings.TrimSpace(in.OwnerGroup))
+	hostKind := strings.TrimSpace(in.HostKind)
+	if hostKind == "" && in.Kind == api.KindInstance {
+		hostKind = string(api.HostKindRegistryVM)
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -711,30 +867,55 @@ func (s *Store) CreateEntry(ctx context.Context, in CreateEntryInput) (*EntryRow
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	quota, err := s.getQuotaTx(ctx, tx, ownerEmail)
+	if err != nil {
+		return nil, err
+	}
+	switch in.Kind {
+	case api.KindInstance:
+		units := 1
+		if in.Shape != "" {
+			err := tx.QueryRowContext(ctx, `SELECT quota_units FROM registry.shapes WHERE name = $1`, in.Shape).Scan(&units)
+			if err != nil {
+				return nil, fmt.Errorf("lookup shape %q: %w", in.Shape, err)
+			}
+		}
+		if quota.UsedInstanceUnits+units > quota.MaxInstanceUnits {
+			return nil, fmt.Errorf("%w: instance quota units %d + %d exceeds limit %d", ErrQuotaExceeded, quota.UsedInstanceUnits, units, quota.MaxInstanceUnits)
+		}
+	case api.KindConnected:
+		if quota.UsedConnected+1 > quota.MaxConnected {
+			return nil, fmt.Errorf("%w: connected entries %d + 1 exceeds limit %d", ErrQuotaExceeded, quota.UsedConnected, quota.MaxConnected)
+		}
+	}
+
 	_, err = tx.ExecContext(ctx, `
 INSERT INTO registry.entries (
     id, name, kind, owner_email, owner_group, listed, visibility, access_list,
     display_name, purpose, tags,
-    lifecycle_state, version, shape, zone, backend_url,
+    lifecycle_state, version, shape, zone, allow_ssh, ship_logs, backend_url,
     connected_principal, host_kind,
     created_at, updated_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8::jsonb,
     $9, $10, $11::jsonb,
-    $12, 1, NULLIF($13, ''), NULLIF($14, ''), NULLIF($15, ''),
-    $16, $17,
-    $18, $18
+    $12, 1, NULLIF($13, ''), NULLIF($14, ''), $15, $16, NULLIF($17, ''),
+    $18, $19,
+    $20, $20
 )`,
-		id, name, string(in.Kind), ownerEmail, in.OwnerGroup, listed, string(vis), string(accessJSON),
+		id, name, string(in.Kind), ownerEmail, ownerGroup, listed, string(vis), string(accessJSON),
 		in.DisplayName, in.Purpose, string(tagsJSON),
-		string(state), in.Shape, in.Zone, in.BackendURL,
-		strings.TrimSpace(in.ConnectedPrincipal), strings.TrimSpace(in.HostKind), now)
+		string(state), in.Shape, in.Zone, allowSSH, shipLogs, in.BackendURL,
+		strings.TrimSpace(in.ConnectedPrincipal), hostKind, now)
 	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "entries_active_name_idx") || strings.Contains(strings.ToLower(err.Error()), "duplicate key") {
+			return nil, fmt.Errorf("%w: entry %q already exists", ErrConflict, name)
+		}
 		return nil, fmt.Errorf("inserting entry %q: %w", name, err)
 	}
 
 	if len(in.DeclaredScopes) > 0 {
-		if err := replaceEntryScopesTx(ctx, tx, id, "declared", in.DeclaredScopes); err != nil {
+		if err := s.replaceEntryScopesWithPolicyTx(ctx, tx, id, "declared", in.DeclaredScopes, listed, false, true, now); err != nil {
 			return nil, err
 		}
 	}
@@ -743,6 +924,9 @@ INSERT INTO registry.entries (
 		return nil, err
 	}
 	s.notify(ctx, "registry_entries", name)
+	if listed {
+		s.notify(ctx, "registry_catalog", name)
+	}
 	return s.GetEntryByID(ctx, id)
 }
 
@@ -779,7 +963,7 @@ func (s *Store) GetLatestDeletedEntryByName(ctx context.Context, name string) (*
 	var id string
 	err := s.db.QueryRowContext(ctx, `
 SELECT id FROM registry.entries
-WHERE name = $1 AND deleted_at IS NOT NULL AND (purge_after IS NULL OR purge_after > $2)
+WHERE name = $1 AND deleted_at IS NOT NULL AND (COALESCE(reserved_until, purge_after) IS NULL OR COALESCE(reserved_until, purge_after) > $2)
 ORDER BY deleted_at DESC
 LIMIT 1`, name, now).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -796,6 +980,7 @@ func (s *Store) GetEntryByID(ctx context.Context, id string) (*EntryRow, error) 
 	row := &EntryRow{}
 	var (
 		kindStr, visStr, stateStr string
+		healthStr                 string
 		accessJSON, tagsJSON      []byte
 		shape, zone, gceID        sql.NullString
 		internalIP, backendURL    sql.NullString
@@ -803,36 +988,42 @@ func (s *Store) GetEntryByID(ctx context.Context, id string) (*EntryRow, error) 
 		secretPrefix, configRepo  sql.NullString
 		sshGrantedTo, grainVer    sql.NullString
 		dbPurge, sshExp, hbAt     sql.NullTime
-		delAt, purgeAfter         sql.NullTime
-		discAt                    sql.NullTime
+		delAt, reservedUntil      sql.NullTime
+		purgeAfter, discAt        sql.NullTime
 	)
 	err := s.db.QueryRowContext(ctx, `
 SELECT
-    e.id, e.name, e.kind, e.owner_email, e.owner_group, e.listed, e.visibility, e.access_list,
+    e.id, e.name, e.kind, e.owner_email, e.owner_group, e.pending_owner, e.listed, e.visibility, e.access_list,
     e.display_name, e.purpose, e.tags,
-    e.lifecycle_state, e.status_reason, e.version,
+    e.lifecycle_state, e.status_reason, e.replace_step, e.version,
     e.shape, e.zone, e.gce_instance_id, host(e.internal_ip), e.backend_url,
     e.service_account, e.sql_instance, e.db_name, e.db_purge_after,
     e.secret_prefix, e.config_repo, e.ssh_grant_expires_at, e.ssh_granted_to,
-    e.grain_version, e.active_tasks, e.pending_inbox, e.last_heartbeat_at,
+    e.allow_ssh, e.ship_logs,
+    e.grain_version, e.grain_commit, e.target_version, e.health_state, e.health_detail,
+    e.active_tasks, e.awaiting_reply_tasks, e.pending_inbox, e.active_sessions,
+    e.has_reported_scopes, e.last_heartbeat_at,
     e.session_epoch, e.connected_principal, e.host_kind,
     e.last_disconnect_at, e.last_disconnect_reason,
     COALESCE(o.disabled, FALSE),
-    e.created_at, e.updated_at, e.deleted_at, e.purge_after
+    e.created_at, e.updated_at, e.deleted_at, e.reserved_until, e.purge_after
 FROM registry.entries e
 LEFT JOIN registry.owners o ON o.email = e.owner_email
 WHERE e.id = $1`, id).Scan(
-		&row.ID, &row.Name, &kindStr, &row.OwnerEmail, &row.OwnerGroup, &row.Listed, &visStr, &accessJSON,
+		&row.ID, &row.Name, &kindStr, &row.OwnerEmail, &row.OwnerGroup, &row.PendingOwner, &row.Listed, &visStr, &accessJSON,
 		&row.DisplayName, &row.Purpose, &tagsJSON,
-		&stateStr, &row.StatusReason, &row.Version,
+		&stateStr, &row.StatusReason, &row.ReplaceStep, &row.Version,
 		&shape, &zone, &gceID, &internalIP, &backendURL,
 		&sa, &sqlInst, &dbName, &dbPurge,
 		&secretPrefix, &configRepo, &sshExp, &sshGrantedTo,
-		&grainVer, &row.ActiveTasks, &row.PendingInbox, &hbAt,
+		&row.AllowSSH, &row.ShipLogs,
+		&grainVer, &row.GrainCommit, &row.TargetVersion, &healthStr, &row.HealthDetail,
+		&row.ActiveTasks, &row.AwaitingReplyTasks, &row.PendingInbox, &row.ActiveSessions,
+		&row.HasReportedScopes, &hbAt,
 		&row.SessionEpoch, &row.ConnectedPrincipal, &row.HostKind,
 		&discAt, &row.LastDisconnectReason,
 		&row.OwnerDisabled,
-		&row.CreatedAt, &row.UpdatedAt, &delAt, &purgeAfter,
+		&row.CreatedAt, &row.UpdatedAt, &delAt, &reservedUntil, &purgeAfter,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -843,6 +1034,7 @@ WHERE e.id = $1`, id).Scan(
 	row.Kind = api.EntryKind(kindStr)
 	row.Visibility = Visibility(visStr)
 	row.LifecycleState = api.EntryState(stateStr)
+	row.HealthState = api.HealthState(healthStr)
 	_ = json.Unmarshal(accessJSON, &row.AccessList)
 	_ = json.Unmarshal(tagsJSON, &row.Tags)
 	row.Shape = shape.String
@@ -877,16 +1069,30 @@ WHERE e.id = $1`, id).Scan(
 		t := delAt.Time
 		row.DeletedAt = &t
 	}
+	if reservedUntil.Valid {
+		t := reservedUntil.Time
+		row.ReservedUntil = &t
+	}
 	if purgeAfter.Valid {
 		t := purgeAfter.Time
 		row.PurgeAfter = &t
+		if row.ReservedUntil == nil {
+			row.ReservedUntil = &t
+		}
 	}
 
 	scopes, err := s.ListEntryScopes(ctx, row.ID)
 	if err != nil {
 		return nil, err
 	}
+	populateEffectiveRoles(scopes, row.HasReportedScopes)
 	row.Scopes = scopes
+
+	creds, err := s.ListEntryCredentials(ctx, row.ID)
+	if err != nil {
+		return nil, err
+	}
+	row.Credentials = creds
 
 	ts, err := s.GetActiveTunnelSession(ctx, row.ID)
 	if err != nil && !errors.Is(err, ErrNotFound) {
@@ -898,10 +1104,16 @@ WHERE e.id = $1`, id).Scan(
 
 // ListEntries returns all active (non-deleted) entries ordered by name.
 func (s *Store) ListEntries(ctx context.Context) ([]*EntryRow, error) {
-	rows, err := s.db.QueryContext(ctx, `
-SELECT id FROM registry.entries
-WHERE deleted_at IS NULL
-ORDER BY name ASC`)
+	return s.ListEntriesFiltered(ctx, false)
+}
+
+// ListEntriesFiltered returns all entries ordered by name, optionally including soft-deleted rows.
+func (s *Store) ListEntriesFiltered(ctx context.Context, includeDeleted bool) ([]*EntryRow, error) {
+	q := `SELECT id FROM registry.entries WHERE deleted_at IS NULL ORDER BY name ASC`
+	if includeDeleted {
+		q = `SELECT id FROM registry.entries ORDER BY name ASC, created_at DESC`
+	}
+	rows, err := s.db.QueryContext(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -928,6 +1140,113 @@ ORDER BY name ASC`)
 			return nil, err
 		}
 		out = append(out, e)
+	}
+	return out, nil
+}
+
+// ListCatalogEntries loads only public catalog fields for listed, non-deleted entries
+// (`listed = TRUE AND deleted_at IS NULL AND lifecycle_state NOT IN ('deleted', 'DELETED')`).
+// Internal placement columns (`backend_url`, `internal_ip`, `gce_instance_id`, etc.) are never selected.
+func (s *Store) ListCatalogEntries(ctx context.Context) ([]*EntryRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT
+    e.id, e.name, e.kind, e.owner_email, e.owner_group, e.listed,
+    e.display_name, e.purpose, e.tags,
+    e.lifecycle_state, e.status_reason, e.version,
+    COALESCE(e.grain_version, ''), e.grain_commit, e.health_state, e.health_detail,
+    e.active_tasks, e.awaiting_reply_tasks, e.pending_inbox, e.active_sessions,
+    e.has_reported_scopes, e.last_heartbeat_at, e.host_kind,
+    e.created_at, e.updated_at
+FROM registry.entries e
+WHERE e.listed = TRUE
+  AND e.deleted_at IS NULL
+  AND e.lifecycle_state NOT IN ('deleted', 'DELETED')
+ORDER BY e.name ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*EntryRow
+	byID := make(map[string]*EntryRow)
+	for rows.Next() {
+		row := &EntryRow{}
+		var kindStr, stateStr, healthStr string
+		var tagsJSON []byte
+		var hbAt sql.NullTime
+		if err := rows.Scan(
+			&row.ID, &row.Name, &kindStr, &row.OwnerEmail, &row.OwnerGroup, &row.Listed,
+			&row.DisplayName, &row.Purpose, &tagsJSON,
+			&stateStr, &row.StatusReason, &row.Version,
+			&row.GrainVersion, &row.GrainCommit, &healthStr, &row.HealthDetail,
+			&row.ActiveTasks, &row.AwaitingReplyTasks, &row.PendingInbox, &row.ActiveSessions,
+			&row.HasReportedScopes, &hbAt, &row.HostKind,
+			&row.CreatedAt, &row.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		row.Kind = api.EntryKind(kindStr)
+		row.LifecycleState = api.EntryState(stateStr)
+		row.HealthState = api.HealthState(healthStr)
+		_ = json.Unmarshal(tagsJSON, &row.Tags)
+		if hbAt.Valid {
+			t := hbAt.Time
+			row.LastHeartbeatAt = &t
+		}
+		out = append(out, row)
+		byID[row.ID] = row
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return out, nil
+	}
+
+	scopeRows, err := s.db.QueryContext(ctx, `
+SELECT
+    es.entry_id, es.repo, es.path_prefix, es.source, es.primary_claim, es.branch,
+    es.active, es.inactive_reason, es.conflict_with, es.claimed_at, es.updated_at
+FROM registry.entry_scopes es
+JOIN registry.entries e ON e.id = es.entry_id
+WHERE e.listed = TRUE
+  AND e.deleted_at IS NULL
+  AND e.lifecycle_state NOT IN ('deleted', 'DELETED')
+ORDER BY es.entry_id ASC, es.repo ASC, es.path_prefix ASC, es.source ASC`)
+	if err != nil {
+		return nil, err
+	}
+	for scopeRows.Next() {
+		var sr ScopeRow
+		if err := scopeRows.Scan(
+			&sr.EntryID, &sr.Repo, &sr.PathPrefix, &sr.Source, &sr.PrimaryClaim, &sr.Branch,
+			&sr.Active, &sr.InactiveReason, &sr.ConflictWith, &sr.ClaimedAt, &sr.UpdatedAt,
+		); err != nil {
+			_ = scopeRows.Close()
+			return nil, err
+		}
+		if e, ok := byID[sr.EntryID]; ok {
+			e.Scopes = append(e.Scopes, sr)
+		}
+	}
+	if err := scopeRows.Close(); err != nil {
+		return nil, err
+	}
+
+	for _, e := range out {
+		populateEffectiveRoles(e.Scopes, e.HasReportedScopes)
+	}
+
+	tsRows, err := s.ListActiveTunnelSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range tsRows {
+		ts := tsRows[i]
+		if e, ok := byID[ts.EntryID]; ok {
+			tsCopy := ts
+			e.Tunnel = &tsCopy
+		}
 	}
 	return out, nil
 }
@@ -1127,11 +1446,442 @@ WHERE id = $3 AND version = $4 AND deleted_at IS NULL`,
 	return out, err
 }
 
-// SoftDeleteEntry transitions an entry to `deleted`, sets `deleted_at` and
-// `purge_after` (30-day name reservation), and clears its active scopes and credentials.
-func (s *Store) SoftDeleteEntry(ctx context.Context, entryID string, expectedVersion int64) (*EntryRow, error) {
+// UpdateEntryCatalogInput holds optional mutable catalog and VM configuration fields for PATCH /api/entries/<name>.
+type UpdateEntryCatalogInput struct {
+	DisplayName        *string
+	Purpose            *string
+	HostKind           *api.HostKind
+	ConnectedPrincipal *string
+	OwnerGroup         *string
+	Listed             *bool
+	Tags               *[]string
+	Shape              *string
+	AllowSSH           *bool
+	ShipLogs           *bool
+}
+
+// UpdateEntryCatalog updates mutable catalog and VM configuration fields under optimistic concurrency.
+func (s *Store) UpdateEntryCatalog(ctx context.Context, entryID string, expectedVersion int64, in UpdateEntryCatalogInput) (*EntryRow, error) {
+	cur, err := s.GetEntryByID(ctx, entryID)
+	if err != nil {
+		return nil, err
+	}
+	if cur.DeletedAt != nil {
+		return nil, ErrNotFound
+	}
+
+	displayName := cur.DisplayName
+	if in.DisplayName != nil {
+		displayName = *in.DisplayName
+	}
+	purpose := cur.Purpose
+	if in.Purpose != nil {
+		purpose = *in.Purpose
+	}
+	tags := cur.Tags
+	if in.Tags != nil {
+		tags = *in.Tags
+	}
+	if tags == nil {
+		tags = []string{}
+	}
+	if err := api.ValidateCatalogMetadata(displayName, purpose, tags); err != nil {
+		return nil, err
+	}
+	tagsJSON, err := json.Marshal(tags)
+	if err != nil {
+		return nil, err
+	}
+
+	hostKind := cur.HostKind
+	if in.HostKind != nil {
+		if *in.HostKind != "" && !in.HostKind.Valid() {
+			return nil, fmt.Errorf("invalid host_kind %q", *in.HostKind)
+		}
+		hostKind = string(*in.HostKind)
+	}
+	connPrincipal := cur.ConnectedPrincipal
+	principalChanged := false
+	if in.ConnectedPrincipal != nil {
+		nextP := strings.TrimSpace(*in.ConnectedPrincipal)
+		if nextP != connPrincipal {
+			connPrincipal = nextP
+			principalChanged = true
+		}
+	}
+	ownerGroup := cur.OwnerGroup
+	if in.OwnerGroup != nil {
+		ownerGroup = strings.ToLower(strings.TrimSpace(*in.OwnerGroup))
+	}
+	listed := cur.Listed
+	if in.Listed != nil {
+		listed = *in.Listed
+	}
+	shape := cur.Shape
+	shapeChanged := false
+	if in.Shape != nil {
+		nextShape := strings.TrimSpace(*in.Shape)
+		if nextShape != shape {
+			shape = nextShape
+			shapeChanged = true
+		}
+	}
+	allowSSH := cur.AllowSSH
+	if in.AllowSSH != nil {
+		allowSSH = *in.AllowSSH
+	}
+	shipLogs := cur.ShipLogs
+	if in.ShipLogs != nil {
+		shipLogs = *in.ShipLogs
+	}
+
 	now := s.now()
-	purgeAfter := now.Add(s.thresholds.ReservationPeriod)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if shapeChanged && cur.Kind == api.KindInstance && shape != "" {
+		quota, err := s.getQuotaTx(ctx, tx, cur.OwnerEmail)
+		if err != nil {
+			return nil, err
+		}
+		newUnits := 1
+		if err := tx.QueryRowContext(ctx, `SELECT quota_units FROM registry.shapes WHERE name = $1`, shape).Scan(&newUnits); err != nil {
+			return nil, fmt.Errorf("lookup shape %q: %w", shape, err)
+		}
+		oldUnits := 1
+		if cur.Shape != "" {
+			_ = tx.QueryRowContext(ctx, `SELECT quota_units FROM registry.shapes WHERE name = $1`, cur.Shape).Scan(&oldUnits)
+		}
+		if quota.UsedInstanceUnits-oldUnits+newUnits > quota.MaxInstanceUnits {
+			return nil, fmt.Errorf("%w: instance quota units %d - %d + %d exceeds limit %d",
+				ErrQuotaExceeded, quota.UsedInstanceUnits, oldUnits, newUnits, quota.MaxInstanceUnits)
+		}
+	}
+
+	res, err := tx.ExecContext(ctx, `
+UPDATE registry.entries
+SET display_name        = $1,
+    purpose             = $2,
+    tags                = $3::jsonb,
+    host_kind           = $4,
+    connected_principal = $5,
+    owner_group         = $6,
+    listed              = $7,
+    shape               = NULLIF($8, ''),
+    allow_ssh           = $9,
+    ship_logs           = $10,
+    version             = version + 1,
+    updated_at          = $11
+WHERE id = $12 AND version = $13 AND deleted_at IS NULL`,
+		displayName, purpose, string(tagsJSON), hostKind, connPrincipal, ownerGroup,
+		listed, shape, allowSSH, shipLogs, now, entryID, expectedVersion)
+	if err != nil {
+		return nil, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, fmt.Errorf("%w: entry %s version %d mismatch", ErrConflict, entryID, expectedVersion)
+	}
+
+	if !cur.Listed && listed {
+		if err := s.reconcileEntryScopesTx(ctx, tx, entryID, true, cur.HasReportedScopes, true, now); err != nil {
+			return nil, err
+		}
+	} else if cur.Listed && !listed {
+		repos := collectPrimaryRepos(cur.Scopes)
+		if err := s.promoteContendersForReposTx(ctx, tx, repos, now); err != nil {
+			return nil, err
+		}
+	}
+
+	if principalChanged && cur.Kind == api.KindConnected {
+		_, _ = tx.ExecContext(ctx, `
+UPDATE registry.entries
+SET last_disconnect_at     = $1,
+    last_disconnect_reason = 'connected_principal changed'
+WHERE id = $2`, now, entryID)
+		if _, err := tx.ExecContext(ctx, `DELETE FROM registry.tunnel_sessions WHERE entry_id = $1`, entryID); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err == nil && out != nil {
+		s.notify(ctx, "registry_entries", out.Name)
+		if cur.Listed || listed {
+			s.notify(ctx, "registry_catalog", out.Name)
+		}
+		if principalChanged {
+			s.notify(ctx, "registry_tunnels", out.Name)
+		}
+	}
+	return out, err
+}
+
+// RequestEntryUpgrade records a requested `target_version` upgrade on a hosted instance entry.
+func (s *Store) RequestEntryUpgrade(ctx context.Context, entryID string, expectedVersion int64, targetVersion string) (*EntryRow, error) {
+	now := s.now()
+	res, err := s.db.ExecContext(ctx, `
+UPDATE registry.entries
+SET target_version = $1,
+    version        = version + 1,
+    updated_at     = $2
+WHERE id = $3 AND version = $4 AND deleted_at IS NULL`,
+		strings.TrimSpace(targetVersion), now, entryID, expectedVersion)
+	if err != nil {
+		return nil, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, fmt.Errorf("%w: entry %s version %d mismatch", ErrConflict, entryID, expectedVersion)
+	}
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err == nil && out != nil {
+		s.notify(ctx, "registry_entries", out.Name)
+	}
+	return out, err
+}
+
+// RequestEntryReplace transitions a hosted instance entry into `replacing` (draining step)
+// while validating any shape change against the owner's instance unit quota.
+func (s *Store) RequestEntryReplace(ctx context.Context, entryID string, expectedVersion int64, shape, targetVersion string) (*EntryRow, error) {
+	cur, err := s.GetEntryByID(ctx, entryID)
+	if err != nil {
+		return nil, err
+	}
+	if cur.DeletedAt != nil {
+		return nil, ErrNotFound
+	}
+	nextShape := cur.Shape
+	if strings.TrimSpace(shape) != "" {
+		nextShape = strings.TrimSpace(shape)
+	}
+	nextTarget := cur.TargetVersion
+	if strings.TrimSpace(targetVersion) != "" {
+		nextTarget = strings.TrimSpace(targetVersion)
+	}
+
+	now := s.now()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if nextShape != "" && nextShape != cur.Shape {
+		quota, err := s.getQuotaTx(ctx, tx, cur.OwnerEmail)
+		if err != nil {
+			return nil, err
+		}
+		newUnits := 1
+		if err := tx.QueryRowContext(ctx, `SELECT quota_units FROM registry.shapes WHERE name = $1`, nextShape).Scan(&newUnits); err != nil {
+			return nil, fmt.Errorf("lookup shape %q: %w", nextShape, err)
+		}
+		oldUnits := 1
+		if cur.Shape != "" {
+			_ = tx.QueryRowContext(ctx, `SELECT quota_units FROM registry.shapes WHERE name = $1`, cur.Shape).Scan(&oldUnits)
+		}
+		if quota.UsedInstanceUnits-oldUnits+newUnits > quota.MaxInstanceUnits {
+			return nil, fmt.Errorf("%w: instance quota units %d - %d + %d exceeds limit %d",
+				ErrQuotaExceeded, quota.UsedInstanceUnits, oldUnits, newUnits, quota.MaxInstanceUnits)
+		}
+	}
+
+	res, err := tx.ExecContext(ctx, `
+UPDATE registry.entries
+SET lifecycle_state = $1,
+    replace_step    = $2,
+    shape           = NULLIF($3, ''),
+    target_version  = $4,
+    version         = version + 1,
+    updated_at      = $5
+WHERE id = $6 AND version = $7 AND deleted_at IS NULL`,
+		string(api.StateReplacing), string(api.ReplaceStepDraining), nextShape, nextTarget, now, entryID, expectedVersion)
+	if err != nil {
+		return nil, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, fmt.Errorf("%w: entry %s version %d mismatch", ErrConflict, entryID, expectedVersion)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err == nil && out != nil {
+		s.notify(ctx, "registry_entries", out.Name)
+		if out.Listed {
+			s.notify(ctx, "registry_catalog", out.Name)
+		}
+	}
+	return out, err
+}
+
+// OfferEntryTransfer sets `pending_owner` (and optionally updates `owner_group`) on an entry.
+func (s *Store) OfferEntryTransfer(ctx context.Context, entryID string, expectedVersion int64, pendingOwner string, ownerGroup *string) (*EntryRow, error) {
+	pendingOwner = strings.ToLower(strings.TrimSpace(pendingOwner))
+	if pendingOwner == "" {
+		return nil, errors.New("pending_owner is required")
+	}
+	cur, err := s.GetEntryByID(ctx, entryID)
+	if err != nil {
+		return nil, err
+	}
+	nextGroup := cur.OwnerGroup
+	if ownerGroup != nil {
+		nextGroup = strings.ToLower(strings.TrimSpace(*ownerGroup))
+	}
+	now := s.now()
+	res, err := s.db.ExecContext(ctx, `
+UPDATE registry.entries
+SET pending_owner = $1,
+    owner_group   = $2,
+    version       = version + 1,
+    updated_at    = $3
+WHERE id = $4 AND version = $5 AND deleted_at IS NULL`,
+		pendingOwner, nextGroup, now, entryID, expectedVersion)
+	if err != nil {
+		return nil, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, fmt.Errorf("%w: entry %s version %d mismatch", ErrConflict, entryID, expectedVersion)
+	}
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err == nil && out != nil {
+		s.notify(ctx, "registry_entries", out.Name)
+		if out.Listed {
+			s.notify(ctx, "registry_catalog", out.Name)
+		}
+	}
+	return out, err
+}
+
+// AcceptEntryTransfer completes a pending ownership transfer to `callerEmail`,
+// checking `callerEmail`'s quota under `SELECT ... FOR UPDATE`, revoking existing
+// `grc_...` credentials, and terminating any active tunnel session.
+func (s *Store) AcceptEntryTransfer(ctx context.Context, entryID string, expectedVersion int64, callerEmail string) (*EntryRow, error) {
+	callerEmail = strings.ToLower(strings.TrimSpace(callerEmail))
+	if callerEmail == "" {
+		return nil, errors.New("caller email is required")
+	}
+	cur, err := s.GetEntryByID(ctx, entryID)
+	if err != nil {
+		return nil, err
+	}
+	if cur.DeletedAt != nil {
+		return nil, ErrNotFound
+	}
+	if strings.TrimSpace(cur.PendingOwner) == "" || !strings.EqualFold(cur.PendingOwner, callerEmail) {
+		return nil, fmt.Errorf("caller %q is not the pending transfer recipient (%q)", callerEmail, cur.PendingOwner)
+	}
+	if _, err := s.UpsertOwner(ctx, callerEmail); err != nil {
+		return nil, err
+	}
+
+	now := s.now()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if !strings.EqualFold(cur.OwnerEmail, callerEmail) {
+		quota, err := s.getQuotaTx(ctx, tx, callerEmail)
+		if err != nil {
+			return nil, err
+		}
+		switch cur.Kind {
+		case api.KindInstance:
+			units := 1
+			if cur.Shape != "" {
+				_ = tx.QueryRowContext(ctx, `SELECT quota_units FROM registry.shapes WHERE name = $1`, cur.Shape).Scan(&units)
+			}
+			if quota.UsedInstanceUnits+units > quota.MaxInstanceUnits {
+				return nil, fmt.Errorf("%w: instance quota units %d + %d exceeds limit %d", ErrQuotaExceeded, quota.UsedInstanceUnits, units, quota.MaxInstanceUnits)
+			}
+		case api.KindConnected:
+			if quota.UsedConnected+1 > quota.MaxConnected {
+				return nil, fmt.Errorf("%w: connected entries %d + 1 exceeds limit %d", ErrQuotaExceeded, quota.UsedConnected, quota.MaxConnected)
+			}
+		}
+	}
+
+	res, err := tx.ExecContext(ctx, `
+UPDATE registry.entries
+SET owner_email            = $1,
+    pending_owner          = '',
+    last_disconnect_at     = $2,
+    last_disconnect_reason = 'ownership transferred',
+    version                = version + 1,
+    updated_at             = $2
+WHERE id = $3 AND version = $4 AND deleted_at IS NULL`,
+		callerEmail, now, entryID, expectedVersion)
+	if err != nil {
+		return nil, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, fmt.Errorf("%w: entry %s version %d mismatch", ErrConflict, entryID, expectedVersion)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE registry.entry_credentials SET revoked_at = $1 WHERE entry_id = $2 AND revoked_at IS NULL`, now, entryID); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM registry.tunnel_sessions WHERE entry_id = $1`, entryID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err == nil && out != nil {
+		s.notify(ctx, "registry_entries", out.Name)
+		s.notify(ctx, "registry_tunnels", out.Name)
+		if out.Listed {
+			s.notify(ctx, "registry_catalog", out.Name)
+		}
+	}
+	return out, err
+}
+
+// RestoreEntry restores the most recently soft-deleted entry for `name` within its 30-day
+// reservation window after checking the owner's quota under `SELECT ... FOR UPDATE`.
+func (s *Store) RestoreEntry(ctx context.Context, entryID string, expectedVersion int64) (*EntryRow, error) {
+	cur, err := s.GetEntryByID(ctx, entryID)
+	if err != nil {
+		return nil, err
+	}
+	if cur.DeletedAt == nil {
+		return nil, fmt.Errorf("%w: entry %q is not deleted", ErrConflict, cur.Name)
+	}
+	now := s.now()
+	if cur.ReservedUntil != nil && !cur.ReservedUntil.After(now) {
+		return nil, ErrNotFound
+	}
+	if cur.DBPurgeAfter != nil && !cur.DBPurgeAfter.After(now) {
+		return nil, fmt.Errorf("%w: entry %q disk/database has already been purged", ErrConflict, cur.Name)
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1139,17 +1889,113 @@ func (s *Store) SoftDeleteEntry(ctx context.Context, entryID string, expectedVer
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	quota, err := s.getQuotaTx(ctx, tx, cur.OwnerEmail)
+	if err != nil {
+		return nil, err
+	}
+	switch cur.Kind {
+	case api.KindInstance:
+		units := 1
+		if cur.Shape != "" {
+			_ = tx.QueryRowContext(ctx, `SELECT quota_units FROM registry.shapes WHERE name = $1`, cur.Shape).Scan(&units)
+		}
+		if quota.UsedInstanceUnits+units > quota.MaxInstanceUnits {
+			return nil, fmt.Errorf("%w: instance quota units %d + %d exceeds limit %d", ErrQuotaExceeded, quota.UsedInstanceUnits, units, quota.MaxInstanceUnits)
+		}
+	case api.KindConnected:
+		if quota.UsedConnected+1 > quota.MaxConnected {
+			return nil, fmt.Errorf("%w: connected entries %d + 1 exceeds limit %d", ErrQuotaExceeded, quota.UsedConnected, quota.MaxConnected)
+		}
+	}
+
+	nextState := api.StateRunning
+	if cur.Kind == api.KindInstance && cur.BackendURL == "" {
+		nextState = api.StateCreating
+	}
+
+	res, err := tx.ExecContext(ctx, `
+UPDATE registry.entries
+SET lifecycle_state = $1,
+    deleted_at      = NULL,
+    reserved_until  = NULL,
+    purge_after     = NULL,
+    status_reason   = '',
+    version         = version + 1,
+    updated_at      = $2
+WHERE id = $3 AND version = $4 AND deleted_at IS NOT NULL`,
+		string(nextState), now, entryID, expectedVersion)
+	if err != nil {
+		return nil, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, fmt.Errorf("%w: entry %s version %d mismatch", ErrConflict, entryID, expectedVersion)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err == nil && out != nil {
+		s.notify(ctx, "registry_entries", out.Name)
+		if out.Listed {
+			s.notify(ctx, "registry_catalog", out.Name)
+		}
+	}
+	return out, err
+}
+
+// SoftDeleteEntry transitions an entry to `deleted`, sets `deleted_at` and
+// `purge_after` (30-day name reservation), and clears its active scopes and credentials.
+func (s *Store) SoftDeleteEntry(ctx context.Context, entryID string, expectedVersion int64) (*EntryRow, error) {
+	return s.SoftDeleteEntryWithOptions(ctx, entryID, expectedVersion, false)
+}
+
+// SoftDeleteEntryWithOptions transitions an entry to `deleted`, sets its 30-day name
+// reservation window (`reserved_until` and `purge_after`), clears its scopes and credentials,
+// and promotes any contenders waiting in `conflict_with` on its primary scopes.
+func (s *Store) SoftDeleteEntryWithOptions(ctx context.Context, entryID string, expectedVersion int64, deleteDisk bool) (*EntryRow, error) {
+	cur, err := s.GetEntryByID(ctx, entryID)
+	if err != nil {
+		return nil, err
+	}
+	now := s.now()
+	purgeAfter := now.Add(s.thresholds.ReservationPeriod)
+	var dbPurgeAfter any
+	if deleteDisk {
+		dbPurgeAfter = now
+	} else {
+		dbPurgeAfter = purgeAfter
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	repos := collectPrimaryRepos(cur.Scopes)
+	for _, r := range repos {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "scope:"+r); err != nil {
+			return nil, err
+		}
+	}
+
 	res, err := tx.ExecContext(ctx, `
 UPDATE registry.entries
 SET lifecycle_state        = $1,
     deleted_at             = $2,
+    reserved_until         = $3,
     purge_after            = $3,
+    db_purge_after         = $4,
     last_disconnect_at     = $2,
     last_disconnect_reason = 'entry deleted',
     version                = version + 1,
     updated_at             = $2
-WHERE id = $4 AND version = $5 AND deleted_at IS NULL`,
-		string(api.StateDeleted), now, purgeAfter, entryID, expectedVersion)
+WHERE id = $5 AND version = $6 AND deleted_at IS NULL`,
+		string(api.StateDeleted), now, purgeAfter, dbPurgeAfter, entryID, expectedVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -1162,6 +2008,9 @@ WHERE id = $4 AND version = $5 AND deleted_at IS NULL`,
 	}
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM registry.entry_scopes WHERE entry_id = $1`, entryID); err != nil {
+		return nil, err
+	}
+	if err := s.promoteContendersForReposTx(ctx, tx, repos, now); err != nil {
 		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE registry.entry_credentials SET revoked_at = $1 WHERE entry_id = $2 AND revoked_at IS NULL`, now, entryID); err != nil {
@@ -1177,6 +2026,9 @@ WHERE id = $4 AND version = $5 AND deleted_at IS NULL`,
 	if err == nil && out != nil {
 		s.notify(ctx, "registry_entries", out.Name)
 		s.notify(ctx, "registry_tunnels", out.Name)
+		if cur.Listed {
+			s.notify(ctx, "registry_catalog", out.Name)
+		}
 	}
 	return out, err
 }
@@ -1194,54 +2046,269 @@ func ScopesOverlap(prefixA, prefixB string) bool {
 	return api.PrimaryPrefixesOverlap(prefixA, prefixB)
 }
 
+func collectPrimaryRepos(scopes []ScopeRow) []string {
+	seen := make(map[string]bool)
+	for _, s := range scopes {
+		if s.PrimaryClaim && s.Repo != "" {
+			seen[s.Repo] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for r := range seen {
+		out = append(out, r)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func populateEffectiveRoles(scopes []ScopeRow, hasReported bool) {
+	if !hasReported {
+		for i := range scopes {
+			if scopes[i].PrimaryClaim {
+				scopes[i].EffectiveRole = api.RolePrimary
+			} else {
+				scopes[i].EffectiveRole = api.RoleSecondary
+			}
+		}
+		return
+	}
+	reportedByRepo := make(map[string][]ScopeRow)
+	for _, s := range scopes {
+		if s.Source == "reported" {
+			reportedByRepo[s.Repo] = append(reportedByRepo[s.Repo], s)
+		}
+	}
+	for i := range scopes {
+		s := &scopes[i]
+		role := api.RoleSecondary
+		if s.PrimaryClaim {
+			role = api.RolePrimary
+		}
+		if s.Source == "declared" {
+			eff := role
+			reps := reportedByRepo[s.Repo]
+			bestSpec := -1
+			var matchedRep *ScopeRow
+			for j := range reps {
+				if ok, spec := api.PathMatchesPrefix(s.PathPrefix, reps[j].PathPrefix); ok && spec >= bestSpec {
+					bestSpec = spec
+					matchedRep = &reps[j]
+				}
+			}
+			if matchedRep != nil && !matchedRep.PrimaryClaim {
+				eff = api.RoleSecondary
+			}
+			s.EffectiveRole = eff
+		} else {
+			s.EffectiveRole = role
+		}
+	}
+}
+
+// SetDeclaredScopes replaces the entry's `declared` scopes via PUT /api/entries/<name>/scopes,
+// synchronously rejecting primary scope overlaps on listed entries with `*PrimaryScopeConflictError`.
+func (s *Store) SetDeclaredScopes(ctx context.Context, entryID string, claims []ScopeClaim) (*EntryRow, error) {
+	cur, err := s.GetEntryByID(ctx, entryID)
+	if err != nil {
+		return nil, err
+	}
+	if cur.DeletedAt != nil {
+		return nil, ErrNotFound
+	}
+	now := s.now()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := s.replaceEntryScopesWithPolicyTx(ctx, tx, entryID, "declared", claims, cur.Listed, cur.HasReportedScopes, true, now); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE registry.entries
+SET version    = version + 1,
+    updated_at = $1
+WHERE id = $2`, now, entryID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	s.notify(ctx, "registry_entries", cur.Name)
+	if cur.Listed {
+		s.notify(ctx, "registry_catalog", cur.Name)
+	}
+	return s.GetEntryByID(ctx, entryID)
+}
+
 // ReplaceEntryScopes replaces all scopes for `(entryID, source)` ("reported" or "declared")
 // while enforcing primary-claim non-overlap under `pg_advisory_xact_lock`.
 func (s *Store) ReplaceEntryScopes(ctx context.Context, entryID, source string, claims []ScopeClaim) error {
 	if source != "reported" && source != "declared" {
 		return fmt.Errorf("invalid scope source %q (expected \"reported\" or \"declared\")", source)
 	}
+	now := s.now()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := replaceEntryScopesTx(ctx, tx, entryID, source, claims); err != nil {
+
+	var listed, hasReported bool
+	if err := tx.QueryRowContext(ctx, `SELECT listed, has_reported_scopes FROM registry.entries WHERE id = $1`, entryID).Scan(&listed, &hasReported); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if err := s.replaceEntryScopesWithPolicyTx(ctx, tx, entryID, source, claims, listed, hasReported, true, now); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func replaceEntryScopesTx(ctx context.Context, tx *sql.Tx, entryID, source string, claims []ScopeClaim) error {
-	type normClaim struct {
-		repo    string
-		prefix  string
-		primary bool
-		branch  string
-	}
-	seen := make(map[string]bool, len(claims))
-	normalized := make([]normClaim, 0, len(claims))
-	reposToLock := make(map[string]bool)
+type normScopeClaim struct {
+	repo    string
+	prefix  string
+	primary bool
+	branch  string
+}
 
+func normalizeScopeClaims(claims []ScopeClaim) ([]normScopeClaim, error) {
+	seen := make(map[string]bool, len(claims))
+	normalized := make([]normScopeClaim, 0, len(claims))
 	for _, c := range claims {
-		repo := strings.ToLower(strings.TrimSpace(c.Repo))
-		if repo == "" {
-			return errors.New("scope repo must be non-empty")
+		repo, err := api.NormalizeRepo(c.Repo)
+		if err != nil {
+			repo = strings.ToLower(strings.TrimSpace(c.Repo))
+			if repo == "" {
+				return nil, errors.New("scope repo must be non-empty")
+			}
 		}
-		prefix := NormalizeScopePath(c.PathPrefix)
+		prefix, err := api.NormalizePathPrefix(c.PathPrefix)
+		if err != nil {
+			return nil, err
+		}
 		key := repo + "\x00" + prefix
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-		normalized = append(normalized, normClaim{
+		normalized = append(normalized, normScopeClaim{
 			repo:    repo,
 			prefix:  prefix,
 			primary: c.Primary,
 			branch:  strings.TrimSpace(c.Branch),
 		})
-		if c.Primary {
-			reposToLock[repo] = true
+	}
+	return normalized, nil
+}
+
+func (s *Store) replaceEntryScopesWithPolicyTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	entryID, source string,
+	claims []ScopeClaim,
+	isListed, hasReported, syncReject bool,
+	now time.Time,
+) error {
+	normalized, err := normalizeScopeClaims(claims)
+	if err != nil {
+		return err
+	}
+
+	existingClaimedAt := make(map[string]time.Time)
+	reposToLock := make(map[string]bool)
+	rows, err := tx.QueryContext(ctx, `
+SELECT repo, path_prefix, source, claimed_at
+FROM registry.entry_scopes
+WHERE entry_id = $1`, entryID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var r, p, src string
+		var ca time.Time
+		if err := rows.Scan(&r, &p, &src, &ca); err != nil {
+			_ = rows.Close()
+			return err
 		}
+		reposToLock[r] = true
+		if src == source {
+			existingClaimedAt[r+"\x00"+p] = ca
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	for _, nc := range normalized {
+		reposToLock[nc.repo] = true
+	}
+	sortedRepos := make([]string, 0, len(reposToLock))
+	for r := range reposToLock {
+		sortedRepos = append(sortedRepos, r)
+	}
+	sort.Strings(sortedRepos)
+	for _, r := range sortedRepos {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "scope:"+r); err != nil {
+			return fmt.Errorf("acquiring scope advisory lock for %s: %w", r, err)
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM registry.entry_scopes WHERE entry_id = $1 AND source = $2`, entryID, source); err != nil {
+		return err
+	}
+	for _, nc := range normalized {
+		claimedAt := now
+		if prev, ok := existingClaimedAt[nc.repo+"\x00"+nc.prefix]; ok && !prev.IsZero() {
+			claimedAt = prev
+		}
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO registry.entry_scopes (
+    entry_id, repo, path_prefix, source, primary_claim, branch,
+    active, inactive_reason, conflict_with, claimed_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, TRUE, '', '', $7, $8)`,
+			entryID, nc.repo, nc.prefix, source, nc.primary, nc.branch, claimedAt, now); err != nil {
+			return err
+		}
+	}
+
+	return s.reconcileEntryScopesTx(ctx, tx, entryID, isListed, hasReported, syncReject, now)
+}
+
+func (s *Store) reconcileEntryScopesTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	entryID string,
+	isListed, hasReported, syncReject bool,
+	now time.Time,
+) error {
+	rows, err := tx.QueryContext(ctx, `
+SELECT entry_id, repo, path_prefix, source, primary_claim, branch, active, inactive_reason, conflict_with, claimed_at, updated_at
+FROM registry.entry_scopes
+WHERE entry_id = $1
+ORDER BY repo ASC, path_prefix ASC, source ASC`, entryID)
+	if err != nil {
+		return err
+	}
+	var all []ScopeRow
+	reposToLock := make(map[string]bool)
+	for rows.Next() {
+		var r ScopeRow
+		if err := rows.Scan(
+			&r.EntryID, &r.Repo, &r.PathPrefix, &r.Source, &r.PrimaryClaim, &r.Branch,
+			&r.Active, &r.InactiveReason, &r.ConflictWith, &r.ClaimedAt, &r.UpdatedAt,
+		); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		all = append(all, r)
+		reposToLock[r.Repo] = true
+	}
+	if err := rows.Close(); err != nil {
+		return err
 	}
 
 	sortedRepos := make([]string, 0, len(reposToLock))
@@ -1250,53 +2317,257 @@ func replaceEntryScopesTx(ctx context.Context, tx *sql.Tx, entryID, source strin
 	}
 	sort.Strings(sortedRepos)
 	for _, r := range sortedRepos {
-		lockKey := "scope:" + r
-		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, lockKey); err != nil {
-			return fmt.Errorf("acquiring scope advisory lock for %s: %w", r, err)
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "scope:"+r); err != nil {
+			return err
 		}
 	}
 
-	for _, nc := range normalized {
-		if !nc.primary {
+	type evalState struct {
+		active           bool
+		inactiveReason   string
+		conflictWith     string
+		effectivePrimary bool
+	}
+	states := make([]evalState, len(all))
+	for i := range all {
+		states[i] = evalState{
+			active:           true,
+			effectivePrimary: all[i].PrimaryClaim,
+		}
+	}
+
+	if hasReported {
+		repIdxsByRepo := make(map[string][]int)
+		declIdxsByRepo := make(map[string][]int)
+		for i, r := range all {
+			if r.Source == "reported" {
+				repIdxsByRepo[r.Repo] = append(repIdxsByRepo[r.Repo], i)
+			} else if r.Source == "declared" {
+				declIdxsByRepo[r.Repo] = append(declIdxsByRepo[r.Repo], i)
+			}
+		}
+
+		for repo, declIdxs := range declIdxsByRepo {
+			repIdxs := repIdxsByRepo[repo]
+			if len(repIdxs) == 0 {
+				for _, di := range declIdxs {
+					states[di] = evalState{
+						active:           false,
+						inactiveReason:   string(api.InactiveNotReportedByInstance),
+						effectivePrimary: false,
+					}
+				}
+				continue
+			}
+			for _, di := range declIdxs {
+				d := all[di]
+				bestRepIdx := -1
+				bestSpec := -1
+				for _, ri := range repIdxs {
+					rep := all[ri]
+					if ok, spec := api.PathMatchesPrefix(d.PathPrefix, rep.PathPrefix); ok && spec >= bestSpec {
+						bestSpec = spec
+						bestRepIdx = ri
+					}
+				}
+				if bestRepIdx < 0 {
+					states[di] = evalState{
+						active:           false,
+						inactiveReason:   string(api.InactiveNotReportedByInstance),
+						effectivePrimary: false,
+					}
+					continue
+				}
+				rep := all[bestRepIdx]
+				effPrimary := d.PrimaryClaim && rep.PrimaryClaim
+				states[di] = evalState{
+					active:           true,
+					effectivePrimary: effPrimary,
+				}
+				// If declared narrows path_prefix or demotes primary -> secondary, mark reported row overridden_by_narrower.
+				if d.PathPrefix != rep.PathPrefix || (!d.PrimaryClaim && rep.PrimaryClaim) {
+					states[bestRepIdx] = evalState{
+						active:           false,
+						inactiveReason:   string(api.InactiveOverriddenByNarrower),
+						effectivePrimary: false,
+					}
+				}
+			}
+		}
+	}
+
+	for i, r := range all {
+		st := &states[i]
+		if !st.active || !st.effectivePrimary {
 			continue
 		}
+		if !isListed {
+			continue
+		}
+		otherRows, err := tx.QueryContext(ctx, `
+SELECT e.name, e.owner_email, e.owner_group, e.listed, es.path_prefix
+FROM registry.entry_scopes es
+JOIN registry.entries e ON e.id = es.entry_id
+WHERE es.repo = $1
+  AND es.primary_claim = TRUE
+  AND es.active = TRUE
+  AND es.entry_id != $2
+  AND e.deleted_at IS NULL
+  AND e.listed = TRUE
+ORDER BY es.claimed_at ASC, e.created_at ASC, e.name ASC`, r.Repo, entryID)
+		if err != nil {
+			return err
+		}
+		var conflict *api.ScopeConflict
+		for otherRows.Next() {
+			var otherName, otherOwner, otherGroup, otherPrefix string
+			var otherListed bool
+			if err := otherRows.Scan(&otherName, &otherOwner, &otherGroup, &otherListed, &otherPrefix); err != nil {
+				_ = otherRows.Close()
+				return err
+			}
+			if ScopesOverlap(r.PathPrefix, otherPrefix) {
+				conflict = &api.ScopeConflict{
+					Repo:                  r.Repo,
+					PathPrefix:            r.PathPrefix,
+					ConflictingEntry:      otherName,
+					ConflictingOwner:      otherOwner,
+					ConflictingOwnerGroup: otherGroup,
+					ConflictingPrefix:     otherPrefix,
+					ConflictingListed:     otherListed,
+				}
+				break
+			}
+		}
+		if err := otherRows.Close(); err != nil {
+			return err
+		}
+		if conflict != nil {
+			if syncReject {
+				return &PrimaryScopeConflictError{Conflict: *conflict}
+			}
+			st.active = false
+			st.inactiveReason = string(api.InactivePrimaryConflict)
+			st.conflictWith = conflict.ConflictingEntry
+		}
+	}
+
+	for i, r := range all {
+		st := states[i]
+		// If a declared primary scope was capped to secondary because reported is secondary,
+		// ensure it does not hold a primary_claim lock in SQL against other entries.
+		if r.Active != st.active || r.InactiveReason != st.inactiveReason || r.ConflictWith != st.conflictWith {
+			if _, err := tx.ExecContext(ctx, `
+UPDATE registry.entry_scopes
+SET active          = $1,
+    inactive_reason = $2,
+    conflict_with   = $3,
+    updated_at      = $4
+WHERE entry_id = $5 AND repo = $6 AND path_prefix = $7 AND source = $8`,
+				st.active, st.inactiveReason, st.conflictWith, now,
+				entryID, r.Repo, r.PathPrefix, r.Source); err != nil {
+				return err
+			}
+		}
+	}
+
+	return s.promoteContendersForReposTx(ctx, tx, sortedRepos, now)
+}
+
+func (s *Store) promoteContendersForReposTx(ctx context.Context, tx *sql.Tx, repos []string, now time.Time) error {
+	for _, repo := range repos {
+		if repo == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "scope:"+repo); err != nil {
+			return err
+		}
 		rows, err := tx.QueryContext(ctx, `
+SELECT es.entry_id, e.name, es.path_prefix, es.source, es.conflict_with
+FROM registry.entry_scopes es
+JOIN registry.entries e ON e.id = es.entry_id
+WHERE es.repo = $1
+  AND es.primary_claim = TRUE
+  AND es.active = FALSE
+  AND es.inactive_reason = $2
+  AND e.deleted_at IS NULL
+  AND e.listed = TRUE
+ORDER BY es.claimed_at ASC, e.created_at ASC, e.name ASC`,
+			repo, string(api.InactivePrimaryConflict))
+		if err != nil {
+			return err
+		}
+		type contender struct {
+			entryID      string
+			entryName    string
+			pathPrefix   string
+			source       string
+			conflictWith string
+		}
+		var contenders []contender
+		for rows.Next() {
+			var c contender
+			if err := rows.Scan(&c.entryID, &c.entryName, &c.pathPrefix, &c.source, &c.conflictWith); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			contenders = append(contenders, c)
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+
+		for _, c := range contenders {
+			activeRows, err := tx.QueryContext(ctx, `
 SELECT e.name, es.path_prefix
 FROM registry.entry_scopes es
 JOIN registry.entries e ON e.id = es.entry_id
 WHERE es.repo = $1
   AND es.primary_claim = TRUE
+  AND es.active = TRUE
   AND es.entry_id != $2
-  AND e.deleted_at IS NULL`, nc.repo, entryID)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var otherName, otherPrefix string
-			if err := rows.Scan(&otherName, &otherPrefix); err != nil {
-				_ = rows.Close()
+  AND e.deleted_at IS NULL
+  AND e.listed = TRUE
+ORDER BY es.claimed_at ASC, e.created_at ASC, e.name ASC`, repo, c.entryID)
+			if err != nil {
 				return err
 			}
-			if ScopesOverlap(nc.prefix, otherPrefix) {
-				_ = rows.Close()
-				return fmt.Errorf("%w: repo %q path %q overlaps with primary claim on %q held by entry %q",
-					ErrPrimaryScopeConflict, nc.repo, nc.prefix, otherPrefix, otherName)
+			holder := ""
+			for activeRows.Next() {
+				var otherName, otherPrefix string
+				if err := activeRows.Scan(&otherName, &otherPrefix); err != nil {
+					_ = activeRows.Close()
+					return err
+				}
+				if ScopesOverlap(c.pathPrefix, otherPrefix) {
+					holder = otherName
+					break
+				}
 			}
-		}
-		if err := rows.Close(); err != nil {
-			return err
-		}
-	}
-
-	if _, err := tx.ExecContext(ctx, `DELETE FROM registry.entry_scopes WHERE entry_id = $1 AND source = $2`, entryID, source); err != nil {
-		return err
-	}
-	for _, nc := range normalized {
-		if _, err := tx.ExecContext(ctx, `
-INSERT INTO registry.entry_scopes (entry_id, repo, path_prefix, source, primary_claim, branch)
-VALUES ($1, $2, $3, $4, $5, $6)`,
-			entryID, nc.repo, nc.prefix, source, nc.primary, nc.branch); err != nil {
-			return err
+			if err := activeRows.Close(); err != nil {
+				return err
+			}
+			if holder == "" {
+				if _, err := tx.ExecContext(ctx, `
+UPDATE registry.entry_scopes
+SET active          = TRUE,
+    inactive_reason = '',
+    conflict_with   = '',
+    updated_at      = $1
+WHERE entry_id = $2 AND repo = $3 AND path_prefix = $4 AND source = $5`,
+					now, c.entryID, repo, c.pathPrefix, c.source); err != nil {
+					return err
+				}
+			} else if holder != c.conflictWith {
+				if _, err := tx.ExecContext(ctx, `
+UPDATE registry.entry_scopes
+SET conflict_with = $1,
+    updated_at    = $2
+WHERE entry_id = $3 AND repo = $4 AND path_prefix = $5 AND source = $6`,
+					holder, now, c.entryID, repo, c.pathPrefix, c.source); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
@@ -1305,7 +2576,9 @@ VALUES ($1, $2, $3, $4, $5, $6)`,
 // ListEntryScopes returns the combined `reported` and `declared` scopes for entryID.
 func (s *Store) ListEntryScopes(ctx context.Context, entryID string) ([]ScopeRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT entry_id, repo, path_prefix, source, primary_claim, branch
+SELECT
+    entry_id, repo, path_prefix, source, primary_claim, branch,
+    active, inactive_reason, conflict_with, claimed_at, updated_at
 FROM registry.entry_scopes
 WHERE entry_id = $1
 ORDER BY repo ASC, path_prefix ASC, source ASC`, entryID)
@@ -1316,7 +2589,10 @@ ORDER BY repo ASC, path_prefix ASC, source ASC`, entryID)
 	var out []ScopeRow
 	for rows.Next() {
 		var r ScopeRow
-		if err := rows.Scan(&r.EntryID, &r.Repo, &r.PathPrefix, &r.Source, &r.PrimaryClaim, &r.Branch); err != nil {
+		if err := rows.Scan(
+			&r.EntryID, &r.Repo, &r.PathPrefix, &r.Source, &r.PrimaryClaim, &r.Branch,
+			&r.Active, &r.InactiveReason, &r.ConflictWith, &r.ClaimedAt, &r.UpdatedAt,
+		); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -1329,31 +2605,55 @@ func CombinedAPIScopes(rows []ScopeRow) []api.Scope {
 	type key struct {
 		repo   string
 		prefix string
+		active bool
 	}
 	byKey := make(map[key]*api.Scope, len(rows))
 	var order []key
 	for _, r := range rows {
-		k := key{repo: r.Repo, prefix: r.PathPrefix}
+		// In unit tests that construct ScopeRow literals directly without running SQL,
+		// treat zero-value Active with empty InactiveReason as active.
+		active := r.Active || (r.EntryID == "" && r.InactiveReason == "" && r.ConflictWith == "")
+		k := key{repo: r.Repo, prefix: r.PathPrefix, active: active}
 		role := api.RoleSecondary
 		if r.PrimaryClaim {
 			role = api.RolePrimary
+		}
+		effRole := r.EffectiveRole
+		if effRole == "" {
+			effRole = role
 		}
 		if existing, ok := byKey[k]; ok {
 			if r.PrimaryClaim {
 				existing.Role = api.RolePrimary
 			}
+			if r.Source == "declared" && r.EffectiveRole != "" {
+				existing.EffectiveRole = r.EffectiveRole
+			}
 			if existing.Branch == "" && r.Branch != "" {
 				existing.Branch = r.Branch
 			}
+			if r.Source == "reported" && existing.InactiveReason == "" {
+				existing.Source = api.SourceReported
+			}
 			continue
 		}
+		var claimedAt *time.Time
+		if !r.ClaimedAt.IsZero() {
+			t := r.ClaimedAt
+			claimedAt = &t
+		}
 		sc := &api.Scope{
-			Repo:       r.Repo,
-			PathPrefix: r.PathPrefix,
-			Role:       role,
-			Source:     api.ScopeSource(r.Source),
-			Branch:     r.Branch,
-			Active:     true,
+			Repo:           r.Repo,
+			PathPrefix:     r.PathPrefix,
+			Role:           role,
+			EffectiveRole:  effRole,
+			Source:         api.ScopeSource(r.Source),
+			Branch:         r.Branch,
+			Active:         active,
+			InactiveReason: api.InactiveReason(r.InactiveReason),
+			ConflictWith:   r.ConflictWith,
+			ClaimedAt:      claimedAt,
+			UpdatedAt:      r.UpdatedAt,
 		}
 		byKey[k] = sc
 		order = append(order, k)
@@ -1365,25 +2665,232 @@ func CombinedAPIScopes(rows []ScopeRow) []api.Scope {
 	return out
 }
 
+// EntryScopeConflicts returns structured `api.ScopeConflict` items for any scopes on `e`
+// that are currently inactive due to `primary_conflict`.
+func (s *Store) EntryScopeConflicts(ctx context.Context, e *EntryRow) []api.ScopeConflict {
+	if e == nil {
+		return nil
+	}
+	var out []api.ScopeConflict
+	for _, sr := range e.Scopes {
+		if sr.InactiveReason != string(api.InactivePrimaryConflict) {
+			continue
+		}
+		c := api.ScopeConflict{
+			Repo:              sr.Repo,
+			PathPrefix:        sr.PathPrefix,
+			ConflictingEntry:  sr.ConflictWith,
+			ConflictingListed: true,
+		}
+		if s != nil && s.db != nil && sr.ConflictWith != "" {
+			var owner, group, prefix string
+			var listed bool
+			err := s.db.QueryRowContext(ctx, `
+SELECT e.owner_email, e.owner_group, e.listed, COALESCE(es.path_prefix, '')
+FROM registry.entries e
+LEFT JOIN registry.entry_scopes es ON es.entry_id = e.id AND es.repo = $2 AND es.primary_claim = TRUE AND es.active = TRUE
+WHERE e.name = $1 AND e.deleted_at IS NULL
+LIMIT 1`, sr.ConflictWith, sr.Repo).Scan(&owner, &group, &listed, &prefix)
+			if err == nil {
+				c.ConflictingOwner = owner
+				c.ConflictingOwnerGroup = group
+				c.ConflictingListed = listed
+				c.ConflictingPrefix = prefix
+			}
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 // IssueCredential generates a new `grc_<hex>` bearer credential for `entryID`
 // and stores only its SHA-256 digest in `registry.entry_credentials`.
 func (s *Store) IssueCredential(ctx context.Context, entryID string) (token string, credID string, err error) {
+	tok, meta, err := s.IssueCredentialWithMeta(ctx, entryID, "", "")
+	if err != nil {
+		return "", "", err
+	}
+	return tok, meta.CredentialID, nil
+}
+
+// IssueCredentialWithMeta generates a new `grc_<hex>` bearer credential for `entryID`
+// with optional `label` and `createdBy` metadata, storing only its SHA-256 digest.
+func (s *Store) IssueCredentialWithMeta(ctx context.Context, entryID, label, createdBy string) (string, api.CredentialMeta, error) {
 	var raw [32]byte
 	if _, err := rand.Read(raw[:]); err != nil {
-		return "", "", fmt.Errorf("generating random credential bytes: %w", err)
+		return "", api.CredentialMeta{}, fmt.Errorf("generating random credential bytes: %w", err)
 	}
-	token = "grc_" + hex.EncodeToString(raw[:])
+	token := "grc_" + hex.EncodeToString(raw[:])
 	sum := sha256.Sum256([]byte(token))
-	credID = uuid.NewString()
+	credID := uuid.NewString()
 	now := s.now()
-	_, err = s.db.ExecContext(ctx, `
-INSERT INTO registry.entry_credentials (id, entry_id, token_sha256, created_at)
-VALUES ($1, $2, $3, $4)`,
-		credID, entryID, sum[:], now)
+	label = strings.TrimSpace(label)
+	createdBy = strings.ToLower(strings.TrimSpace(createdBy))
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO registry.entry_credentials (id, entry_id, token_sha256, label, created_by, created_at)
+VALUES ($1, $2, $3, $4, $5, $6)`,
+		credID, entryID, sum[:], label, createdBy, now)
 	if err != nil {
-		return "", "", fmt.Errorf("storing entry credential: %w", err)
+		return "", api.CredentialMeta{}, fmt.Errorf("storing entry credential: %w", err)
 	}
-	return token, credID, nil
+	return token, api.CredentialMeta{
+		CredentialID: credID,
+		Label:        label,
+		CreatedBy:    createdBy,
+		CreatedAt:    now,
+	}, nil
+}
+
+// RotateCredential mints a new `grc_<hex>` credential for `entryID` and optionally revokes
+// or sets an overlap expiration window on previous credentials (`cred_id`, `revoke_previous`, `overlap_seconds`).
+// Any active tunnel session bound to a newly revoked credential is terminated immediately.
+func (s *Store) RotateCredential(ctx context.Context, entryID string, req api.RotateCredentialRequest, actorEmail string) (string, api.CredentialMeta, error) {
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", api.CredentialMeta{}, fmt.Errorf("generating random credential bytes: %w", err)
+	}
+	token := "grc_" + hex.EncodeToString(raw[:])
+	sum := sha256.Sum256([]byte(token))
+	newCredID := uuid.NewString()
+	now := s.now()
+	label := strings.TrimSpace(req.Label)
+	actorEmail = strings.ToLower(strings.TrimSpace(actorEmail))
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", api.CredentialMeta{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var entryName string
+	if err := tx.QueryRowContext(ctx, `SELECT name FROM registry.entries WHERE id = $1 AND deleted_at IS NULL`, entryID).Scan(&entryName); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", api.CredentialMeta{}, ErrNotFound
+		}
+		return "", api.CredentialMeta{}, err
+	}
+
+	revokeImmediate := req.RevokePrevious || (req.CredID != "" && req.OverlapSeconds <= 0)
+	var tunnelDropped bool
+	if revokeImmediate {
+		if req.CredID != "" {
+			if _, err := tx.ExecContext(ctx, `
+UPDATE registry.entry_credentials
+SET revoked_at = $1
+WHERE entry_id = $2 AND id = $3::uuid AND revoked_at IS NULL`,
+				now, entryID, req.CredID); err != nil {
+				return "", api.CredentialMeta{}, err
+			}
+			delRes, err := tx.ExecContext(ctx, `
+DELETE FROM registry.tunnel_sessions
+WHERE entry_id = $1 AND (cred_id IS NULL OR cred_id = $2::uuid)`,
+				entryID, req.CredID)
+			if err != nil {
+				return "", api.CredentialMeta{}, err
+			}
+			if dn, _ := delRes.RowsAffected(); dn > 0 {
+				tunnelDropped = true
+			}
+		} else {
+			if _, err := tx.ExecContext(ctx, `
+UPDATE registry.entry_credentials
+SET revoked_at = $1
+WHERE entry_id = $2 AND revoked_at IS NULL`,
+				now, entryID); err != nil {
+				return "", api.CredentialMeta{}, err
+			}
+			delRes, err := tx.ExecContext(ctx, `DELETE FROM registry.tunnel_sessions WHERE entry_id = $1`, entryID)
+			if err != nil {
+				return "", api.CredentialMeta{}, err
+			}
+			if dn, _ := delRes.RowsAffected(); dn > 0 {
+				tunnelDropped = true
+			}
+		}
+	} else if req.OverlapSeconds > 0 {
+		exp := now.Add(time.Duration(req.OverlapSeconds) * time.Second)
+		if req.CredID != "" {
+			if _, err := tx.ExecContext(ctx, `
+UPDATE registry.entry_credentials
+SET expires_at = $1
+WHERE entry_id = $2 AND id = $3::uuid AND revoked_at IS NULL`,
+				exp, entryID, req.CredID); err != nil {
+				return "", api.CredentialMeta{}, err
+			}
+		} else {
+			if _, err := tx.ExecContext(ctx, `
+UPDATE registry.entry_credentials
+SET expires_at = $1
+WHERE entry_id = $2 AND revoked_at IS NULL AND expires_at IS NULL`,
+				exp, entryID); err != nil {
+				return "", api.CredentialMeta{}, err
+			}
+		}
+	}
+
+	if tunnelDropped {
+		_, _ = tx.ExecContext(ctx, `
+UPDATE registry.entries
+SET last_disconnect_at     = $1,
+    last_disconnect_reason = 'credential rotated',
+    updated_at             = $1
+WHERE id = $2`, now, entryID)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO registry.entry_credentials (id, entry_id, token_sha256, label, created_by, created_at)
+VALUES ($1, $2, $3, $4, $5, $6)`,
+		newCredID, entryID, sum[:], label, actorEmail, now); err != nil {
+		return "", api.CredentialMeta{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", api.CredentialMeta{}, err
+	}
+	if tunnelDropped && entryName != "" {
+		s.notify(ctx, "registry_tunnels", entryName)
+	}
+	return token, api.CredentialMeta{
+		CredentialID: newCredID,
+		Label:        label,
+		CreatedBy:    actorEmail,
+		CreatedAt:    now,
+	}, nil
+}
+
+// ListEntryCredentials returns non-secret metadata for all credentials belonging to `entryID`.
+func (s *Store) ListEntryCredentials(ctx context.Context, entryID string) ([]api.CredentialMeta, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id::text, label, created_by, created_at, last_used_at, expires_at, revoked_at
+FROM registry.entry_credentials
+WHERE entry_id = $1
+ORDER BY created_at DESC`, entryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []api.CredentialMeta
+	for rows.Next() {
+		var m api.CredentialMeta
+		var lastUsed, expires, revoked sql.NullTime
+		if err := rows.Scan(&m.CredentialID, &m.Label, &m.CreatedBy, &m.CreatedAt, &lastUsed, &expires, &revoked); err != nil {
+			return nil, err
+		}
+		if lastUsed.Valid {
+			t := lastUsed.Time
+			m.LastUsedAt = &t
+		}
+		if expires.Valid {
+			t := expires.Time
+			m.ExpiresAt = &t
+		}
+		if revoked.Valid {
+			t := revoked.Time
+			m.RevokedAt = &t
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 // AuthenticateCredential verifies a `grc_` token against `registry.entry_credentials`,
@@ -1403,20 +2910,25 @@ func (s *Store) AuthenticateCredentialWithID(ctx context.Context, token string) 
 	sum := sha256.Sum256([]byte(token))
 	now := s.now()
 	var entryID, credID string
+	var storedHash []byte
 	err := s.db.QueryRowContext(ctx, `
 UPDATE registry.entry_credentials ec
 SET last_used_at = $1
 FROM registry.entries e
 WHERE ec.token_sha256 = $2
   AND ec.revoked_at IS NULL
+  AND (ec.expires_at IS NULL OR ec.expires_at > $1)
   AND e.id = ec.entry_id
   AND e.deleted_at IS NULL
-RETURNING ec.entry_id, ec.id::text`, now, sum[:]).Scan(&entryID, &credID)
+RETURNING ec.entry_id, ec.id::text, ec.token_sha256`, now, sum[:]).Scan(&entryID, &credID, &storedHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "", ErrInvalidCredential
 	}
 	if err != nil {
 		return nil, "", err
+	}
+	if subtle.ConstantTimeCompare(sum[:], storedHash) != 1 {
+		return nil, "", ErrInvalidCredential
 	}
 	row, err := s.GetEntryByID(ctx, entryID)
 	if err != nil {
@@ -1476,66 +2988,198 @@ WHERE id = $2::uuid`, now, entryID)
 	return nil
 }
 
-// IsCredentialActive reports whether `credID` is still unrevoked for `entryID`.
+// IsCredentialActive reports whether `credID` is still unrevoked and unexpired for `entryID`.
 func (s *Store) IsCredentialActive(ctx context.Context, entryID, credID string) (bool, error) {
 	if credID == "" {
 		return true, nil
 	}
+	now := s.now()
 	var ok bool
 	err := s.db.QueryRowContext(ctx, `
 SELECT EXISTS (
     SELECT 1 FROM registry.entry_credentials
-    WHERE id = $1::uuid AND entry_id = $2::uuid AND revoked_at IS NULL
-)`, credID, entryID).Scan(&ok)
+    WHERE id = $1::uuid
+      AND entry_id = $2::uuid
+      AND revoked_at IS NULL
+      AND (expires_at IS NULL OR expires_at > $3)
+)`, credID, entryID, now).Scan(&ok)
 	return ok, err
 }
 
-// RecordHeartbeat updates an entry's heartbeat telemetry (`grain_version`,
-// `active_tasks`, `pending_inbox`, `last_heartbeat_at`) and replaces its `reported` scopes.
-func (s *Store) RecordHeartbeat(ctx context.Context, entryID string, hb api.HeartbeatRequest) (*EntryRow, error) {
-	now := s.now()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
+func reportedScopesEqual(existing []ScopeRow, incoming []normScopeClaim) bool {
+	var rep []ScopeRow
+	for _, r := range existing {
+		if r.Source == "reported" {
+			rep = append(rep, r)
+		}
 	}
-	defer func() { _ = tx.Rollback() }()
+	if len(rep) != len(incoming) {
+		return false
+	}
+	byKey := make(map[string]ScopeRow, len(rep))
+	for _, r := range rep {
+		byKey[r.Repo+"\x00"+r.PathPrefix] = r
+	}
+	for _, inc := range incoming {
+		r, ok := byKey[inc.repo+"\x00"+inc.prefix]
+		if !ok {
+			return false
+		}
+		if r.PrimaryClaim != inc.primary || r.Branch != inc.branch {
+			return false
+		}
+	}
+	return true
+}
 
-	res, err := tx.ExecContext(ctx, `
-UPDATE registry.entries
-SET grain_version     = COALESCE(NULLIF($1, ''), grain_version),
-    active_tasks      = $2,
-    pending_inbox     = $3,
-    last_heartbeat_at = $4,
-    updated_at        = $4
-WHERE id = $5 AND deleted_at IS NULL`,
-		hb.GrainVersion, hb.ActiveTasks, hb.QueueDepth, now, entryID)
+// RecordHeartbeat updates an entry's heartbeat telemetry (`grain_version`, `grain_commit`,
+// `host_kind`, `health_state`, `health_detail`, `active_tasks`, `awaiting_reply_tasks`,
+// `pending_inbox`, `active_sessions`, `last_heartbeat_at`) and reconciles its `reported` scopes.
+//
+// When reported scopes are unchanged, `entry_scopes` writes are skipped so the `entries`
+// update touches no indexed columns (allowing PostgreSQL HOT updates). `NOTIFY registry_catalog`
+// is emitted only when `listed = true` and `scopes`, `grain_version`, `grain_commit`, `host_kind`,
+// `health_state`, or the derived `status` bucket actually changed.
+func (s *Store) RecordHeartbeat(ctx context.Context, entryID string, hb api.HeartbeatRequest) (*EntryRow, error) {
+	prev, err := s.GetEntryByID(ctx, entryID)
 	if err != nil {
 		return nil, err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return nil, err
-	}
-	if n == 0 {
+	if prev.DeletedAt != nil {
 		return nil, ErrNotFound
 	}
+	prevStatus := s.DeriveStatus(prev)
+
+	now := s.now()
+	nextVersion := prev.GrainVersion
+	if strings.TrimSpace(hb.GrainVersion) != "" {
+		nextVersion = strings.TrimSpace(hb.GrainVersion)
+	}
+	nextCommit := prev.GrainCommit
+	if strings.TrimSpace(hb.GrainCommit) != "" {
+		nextCommit = strings.TrimSpace(hb.GrainCommit)
+	}
+	nextHostKind := prev.HostKind
+	if hb.HostKind != "" && hb.HostKind.Valid() {
+		nextHostKind = string(hb.HostKind)
+	}
+	nextHealth := prev.HealthState
+	if nextHealth == "" {
+		nextHealth = api.HealthOK
+	}
+	if hb.Health != "" && hb.Health.Valid() {
+		nextHealth = hb.Health
+	}
+	nextHealthDetail := hb.HealthDetail
+	if hb.Health == api.HealthOK && nextHealthDetail == "" {
+		nextHealthDetail = ""
+	} else if hb.Health == "" && nextHealthDetail == "" {
+		nextHealthDetail = prev.HealthDetail
+	}
+
+	hasReported := prev.HasReportedScopes
+	scopesChanged := false
+	var claims []ScopeClaim
 	if hb.Scopes != nil {
-		claims := make([]ScopeClaim, 0, len(hb.Scopes))
+		claims = make([]ScopeClaim, 0, len(hb.Scopes))
 		for _, sc := range hb.Scopes {
+			primary := sc.Role == "" || sc.Role == api.RolePrimary
 			claims = append(claims, ScopeClaim{
 				Repo:       sc.Repo,
 				PathPrefix: sc.PathPrefix,
+				Primary:    primary,
 				Branch:     sc.Branch,
 			})
 		}
-		if err := replaceEntryScopesTx(ctx, tx, entryID, "reported", claims); err != nil {
+		norm, err := normalizeScopeClaims(claims)
+		if err != nil {
+			return nil, err
+		}
+		if !prev.HasReportedScopes || !reportedScopesEqual(prev.Scopes, norm) {
+			scopesChanged = true
+		}
+		hasReported = true
+	}
+
+	if !scopesChanged {
+		res, err := s.db.ExecContext(ctx, `
+UPDATE registry.entries
+SET grain_version        = $1,
+    grain_commit         = $2,
+    host_kind            = $3,
+    health_state         = $4,
+    health_detail        = $5,
+    active_tasks         = $6,
+    awaiting_reply_tasks = $7,
+    pending_inbox        = $8,
+    active_sessions      = $9,
+    has_reported_scopes  = $10,
+    last_heartbeat_at    = $11,
+    updated_at           = $11
+WHERE id = $12 AND deleted_at IS NULL`,
+			nextVersion, nextCommit, nextHostKind, string(nextHealth), nextHealthDetail,
+			hb.ActiveTasks, hb.AwaitingReplyTasks, hb.QueueDepth, hb.ActiveSessions,
+			hasReported, now, entryID)
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return nil, ErrNotFound
+		}
+	} else {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = tx.Rollback() }()
+
+		res, err := tx.ExecContext(ctx, `
+UPDATE registry.entries
+SET grain_version        = $1,
+    grain_commit         = $2,
+    host_kind            = $3,
+    health_state         = $4,
+    health_detail        = $5,
+    active_tasks         = $6,
+    awaiting_reply_tasks = $7,
+    pending_inbox        = $8,
+    active_sessions      = $9,
+    has_reported_scopes  = TRUE,
+    last_heartbeat_at    = $10,
+    updated_at           = $10
+WHERE id = $11 AND deleted_at IS NULL`,
+			nextVersion, nextCommit, nextHostKind, string(nextHealth), nextHealthDetail,
+			hb.ActiveTasks, hb.AwaitingReplyTasks, hb.QueueDepth, hb.ActiveSessions,
+			now, entryID)
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return nil, ErrNotFound
+		}
+		if err := s.replaceEntryScopesWithPolicyTx(ctx, tx, entryID, "reported", claims, prev.Listed, true, false, now); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
 	}
-	if err := tx.Commit(); err != nil {
+
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err != nil {
 		return nil, err
 	}
-	return s.GetEntryByID(ctx, entryID)
+	newStatus := s.DeriveStatus(out)
+	catalogChanged := scopesChanged ||
+		prev.GrainVersion != out.GrainVersion ||
+		prev.GrainCommit != out.GrainCommit ||
+		prev.HostKind != out.HostKind ||
+		prev.HealthState != out.HealthState ||
+		prevStatus != newStatus
+	if out.Listed && catalogChanged {
+		s.notify(ctx, "registry_catalog", out.Name)
+	}
+	return out, nil
 }
 
 // UpsertReplica registers or refreshes a registry replica's heartbeat in `registry.replicas`.
@@ -1747,8 +3391,11 @@ WHERE e.deleted_at IS NULL`)
 }
 
 // DeriveStatus computes the runtime `api.EntryStatus` from `EntryRow.LifecycleState`,
-// `LastHeartbeatAt`, and any active `TunnelSessionRow` + `ReplicaLastSeen`.
+// `LastHeartbeatAt`, `HealthState`, and any active `TunnelSessionRow` + `ReplicaLastSeen`.
 func (s *Store) DeriveStatus(e *EntryRow) api.EntryStatus {
+	if e == nil || e.OwnerDisabled {
+		return api.StatusOffline
+	}
 	now := s.now()
 	switch e.LifecycleState {
 	case api.StateRunning, "ACTIVE":
@@ -1757,19 +3404,13 @@ func (s *Store) DeriveStatus(e *EntryRow) api.EntryStatus {
 		return api.StatusOffline
 	}
 
+	var age time.Duration
 	switch e.Kind {
 	case api.KindInstance:
 		if e.LastHeartbeatAt == nil {
 			return api.StatusOffline
 		}
-		age := now.Sub(*e.LastHeartbeatAt)
-		if age <= s.thresholds.DegradedAfter {
-			return api.StatusOnline
-		}
-		if age <= s.thresholds.OfflineAfter {
-			return api.StatusDegraded
-		}
-		return api.StatusOffline
+		age = now.Sub(*e.LastHeartbeatAt)
 
 	case api.KindConnected:
 		if e.Tunnel == nil {
@@ -1778,22 +3419,49 @@ func (s *Store) DeriveStatus(e *EntryRow) api.EntryStatus {
 		if now.Sub(e.Tunnel.ReplicaLastSeen) > s.thresholds.ReplicaTTL {
 			return api.StatusOffline
 		}
-		age := now.Sub(e.Tunnel.LastSeenAt)
+		age = now.Sub(e.Tunnel.LastSeenAt)
 		if e.LastHeartbeatAt != nil {
 			if hbAge := now.Sub(*e.LastHeartbeatAt); hbAge < age {
 				age = hbAge
 			}
 		}
-		if age <= s.thresholds.DegradedAfter {
-			return api.StatusOnline
-		}
-		if age <= s.thresholds.OfflineAfter {
-			return api.StatusDegraded
-		}
-		return api.StatusOffline
 	default:
 		return api.StatusOffline
 	}
+
+	if age > s.thresholds.OfflineAfter {
+		return api.StatusOffline
+	}
+	if e.HealthState == api.HealthDegraded || e.HealthState == api.HealthUnhealthy {
+		return api.StatusDegraded
+	}
+	if age <= s.thresholds.DegradedAfter {
+		return api.StatusOnline
+	}
+	return api.StatusDegraded
+}
+
+// HeartbeatAgeSeconds returns the age in seconds since the entry's most recent heartbeat or tunnel activity.
+func (s *Store) HeartbeatAgeSeconds(e *EntryRow) *int {
+	if e == nil {
+		return nil
+	}
+	var last *time.Time
+	if e.LastHeartbeatAt != nil {
+		last = e.LastHeartbeatAt
+	}
+	if e.Tunnel != nil && (last == nil || e.Tunnel.LastSeenAt.After(*last)) {
+		t := e.Tunnel.LastSeenAt
+		last = &t
+	}
+	if last == nil {
+		return nil
+	}
+	secs := int(s.now().Sub(*last).Seconds())
+	if secs < 0 {
+		secs = 0
+	}
+	return &secs
 }
 
 // ToAPIEntry converts an EntryRow into an `api.Entry` with derived runtime status.
@@ -1802,30 +3470,74 @@ func (s *Store) ToAPIEntry(e *EntryRow, instanceDomain string) api.Entry {
 	if instanceDomain != "" {
 		urlStr = fmt.Sprintf("https://%s.%s", e.Name, instanceDomain)
 	}
+	statusDetail := e.StatusReason
+	if statusDetail == "" && e.HealthDetail != "" {
+		statusDetail = e.HealthDetail
+	}
+	var tunnelConn *bool
+	var connectedSince, lastSeenAt *time.Time
+	if e.Kind == api.KindConnected {
+		tc := e.Tunnel != nil && s.now().Sub(e.Tunnel.ReplicaLastSeen) <= s.thresholds.ReplicaTTL
+		tunnelConn = &tc
+		if e.Tunnel != nil {
+			cs := e.Tunnel.ConnectedAt
+			ls := e.Tunnel.LastSeenAt
+			connectedSince = &cs
+			lastSeenAt = &ls
+		}
+	}
+	if lastSeenAt == nil && e.LastHeartbeatAt != nil {
+		lastSeenAt = e.LastHeartbeatAt
+	}
+	var conflicts []api.ScopeConflict
+	if s != nil {
+		conflicts = s.EntryScopeConflicts(context.Background(), e)
+	}
 	return api.Entry{
-		Name:            e.Name,
-		URL:             urlStr,
-		Kind:            e.Kind,
-		State:           e.LifecycleState,
-		Status:          s.DeriveStatus(e),
-		StatusDetail:    e.StatusReason,
-		DisplayName:     e.DisplayName,
-		Purpose:         e.Purpose,
-		Owner:           e.OwnerEmail,
-		OwnerGroup:      e.OwnerGroup,
-		Listed:          e.Listed,
-		Tags:            e.Tags,
-		Shape:           e.Shape,
-		Zone:            e.Zone,
-		BackendURL:      e.BackendURL,
-		GrainVersion:    e.GrainVersion,
-		ActiveTasks:     e.ActiveTasks,
-		QueueDepth:      e.PendingInbox,
-		LastHeartbeatAt: e.LastHeartbeatAt,
-		Scopes:          CombinedAPIScopes(e.Scopes),
-		CreatedAt:       e.CreatedAt,
-		UpdatedAt:       e.UpdatedAt,
-		DeletedAt:       e.DeletedAt,
+		Name:                e.Name,
+		URL:                 urlStr,
+		Kind:                e.Kind,
+		State:               e.LifecycleState,
+		Status:              s.DeriveStatus(e),
+		StatusDetail:        statusDetail,
+		Health:              e.HealthState,
+		HealthDetail:        e.HealthDetail,
+		ReplaceStep:         api.ReplaceStep(e.ReplaceStep),
+		DisplayName:         e.DisplayName,
+		Purpose:             e.Purpose,
+		Owner:               e.OwnerEmail,
+		OwnerGroup:          e.OwnerGroup,
+		PendingOwner:        e.PendingOwner,
+		ConnectedPrincipal:  e.ConnectedPrincipal,
+		Listed:              e.Listed,
+		Tags:                e.Tags,
+		Shape:               e.Shape,
+		Zone:                e.Zone,
+		AllowSSH:            e.AllowSSH,
+		ShipLogs:            e.ShipLogs,
+		BackendURL:          e.BackendURL,
+		GrainVersion:        e.GrainVersion,
+		GrainCommit:         e.GrainCommit,
+		TargetVersion:       e.TargetVersion,
+		HostKind:            api.HostKind(e.HostKind),
+		ActiveTasks:         e.ActiveTasks,
+		AwaitingReplyTasks:  e.AwaitingReplyTasks,
+		QueueDepth:          e.PendingInbox,
+		ActiveSessions:      e.ActiveSessions,
+		TunnelConnected:     tunnelConn,
+		ConnectedSince:      connectedSince,
+		LastHeartbeatAt:     e.LastHeartbeatAt,
+		LastSeenAt:          lastSeenAt,
+		HeartbeatAgeSeconds: s.HeartbeatAgeSeconds(e),
+		Scopes:              CombinedAPIScopes(e.Scopes),
+		ScopeConflicts:      conflicts,
+		Credentials:         e.Credentials,
+		CreatedAt:           e.CreatedAt,
+		UpdatedAt:           e.UpdatedAt,
+		DeletedAt:           e.DeletedAt,
+		ReservedUntil:       e.ReservedUntil,
+		PurgeAfter:          e.PurgeAfter,
+		Generation:          int(e.Version),
 	}
 }
 
@@ -1836,26 +3548,36 @@ func (s *Store) ToDirectoryEntry(e *EntryRow, instanceDomain string) api.Directo
 		urlStr = fmt.Sprintf("https://%s.%s", e.Name, instanceDomain)
 	}
 	return api.DirectoryEntry{
-		Name:         e.Name,
-		URL:          urlStr,
-		Kind:         e.Kind,
-		Status:       s.DeriveStatus(e),
-		DisplayName:  e.DisplayName,
-		Owner:        e.OwnerEmail,
-		OwnerGroup:   e.OwnerGroup,
-		Tags:         e.Tags,
-		GrainVersion: e.GrainVersion,
-		Scopes:       CombinedAPIScopes(e.Scopes),
-		ActiveTasks:  e.ActiveTasks,
-		QueueDepth:   e.PendingInbox,
-		UpdatedAt:    e.UpdatedAt,
+		Name:                e.Name,
+		URL:                 urlStr,
+		Kind:                e.Kind,
+		State:               e.LifecycleState,
+		Status:              s.DeriveStatus(e),
+		HeartbeatAgeSeconds: s.HeartbeatAgeSeconds(e),
+		DisplayName:         e.DisplayName,
+		Purpose:             e.Purpose,
+		Owner:               e.OwnerEmail,
+		OwnerGroup:          e.OwnerGroup,
+		Tags:                e.Tags,
+		GrainVersion:        e.GrainVersion,
+		GrainCommit:         e.GrainCommit,
+		HostKind:            api.HostKind(e.HostKind),
+		Scopes:              CombinedAPIScopes(e.Scopes),
+		ActiveTasks:         e.ActiveTasks,
+		AwaitingReplyTasks:  e.AwaitingReplyTasks,
+		QueueDepth:          e.PendingInbox,
+		UpdatedAt:           e.UpdatedAt,
 	}
 }
 
 // RouteRepoPath resolves the best-matching entries for `(repo, filePath)` using
 // longest-path-prefix matching.
 func (s *Store) RouteRepoPath(ctx context.Context, repo, filePath, instanceDomain string, filter func(*EntryRow) bool) (*api.RouteResponse, error) {
-	repo = strings.ToLower(strings.TrimSpace(repo))
+	if normRepo, err := api.NormalizeRepo(repo); err == nil {
+		repo = normRepo
+	} else {
+		repo = strings.ToLower(strings.TrimSpace(repo))
+	}
 	normPath := NormalizeScopePath(filePath)
 	entries, err := s.ListEntries(ctx)
 	if err != nil {
@@ -1872,6 +3594,9 @@ func (s *Store) RouteRepoPath(ctx context.Context, repo, filePath, instanceDomai
 		var bestScope *api.Scope
 		for i := range combined {
 			sc := &combined[i]
+			if !sc.Active {
+				continue
+			}
 			if !strings.EqualFold(sc.Repo, repo) {
 				continue
 			}
@@ -1879,7 +3604,18 @@ func (s *Store) RouteRepoPath(ctx context.Context, repo, filePath, instanceDomai
 			if !matched {
 				continue
 			}
-			if spec > bestLen || (spec == bestLen && sc.Role == api.RolePrimary) {
+			effRole := sc.EffectiveRole
+			if effRole == "" {
+				effRole = sc.Role
+			}
+			bestRole := api.RoleSecondary
+			if bestScope != nil {
+				bestRole = bestScope.EffectiveRole
+				if bestRole == "" {
+					bestRole = bestScope.Role
+				}
+			}
+			if spec > bestLen || (spec == bestLen && effRole == api.RolePrimary && bestRole != api.RolePrimary) {
 				bestLen = spec
 				bestScope = sc
 			}
@@ -1889,19 +3625,27 @@ func (s *Store) RouteRepoPath(ctx context.Context, repo, filePath, instanceDomai
 			if instanceDomain != "" {
 				urlStr = fmt.Sprintf("https://%s.%s", e.Name, instanceDomain)
 			}
+			effRole := bestScope.EffectiveRole
+			if effRole == "" {
+				effRole = bestScope.Role
+			}
 			matches = append(matches, api.RouteCandidate{
-				Name:        e.Name,
-				URL:         urlStr,
-				Kind:        e.Kind,
-				Status:      s.DeriveStatus(e),
-				DisplayName: e.DisplayName,
-				Purpose:     e.Purpose,
-				Owner:       e.OwnerEmail,
-				OwnerGroup:  e.OwnerGroup,
+				Name:                e.Name,
+				URL:                 urlStr,
+				Kind:                e.Kind,
+				State:               e.LifecycleState,
+				Status:              s.DeriveStatus(e),
+				HeartbeatAgeSeconds: s.HeartbeatAgeSeconds(e),
+				DisplayName:         e.DisplayName,
+				Purpose:             e.Purpose,
+				Owner:               e.OwnerEmail,
+				OwnerGroup:          e.OwnerGroup,
+				ActiveTasks:         e.ActiveTasks,
+				AwaitingReplyTasks:  e.AwaitingReplyTasks,
 				MatchedScope: api.MatchedScope{
 					Repo:        bestScope.Repo,
 					PathPrefix:  bestScope.PathPrefix,
-					Role:        bestScope.Role,
+					Role:        effRole,
 					Source:      bestScope.Source,
 					Specificity: bestLen,
 				},
@@ -1910,13 +3654,21 @@ func (s *Store) RouteRepoPath(ctx context.Context, repo, filePath, instanceDomai
 	}
 
 	sort.Slice(matches, func(i, j int) bool {
-		if matches[i].MatchedScope.Specificity != matches[j].MatchedScope.Specificity {
-			return matches[i].MatchedScope.Specificity > matches[j].MatchedScope.Specificity
-		}
 		iPrimary := matches[i].MatchedScope.Role == api.RolePrimary
 		jPrimary := matches[j].MatchedScope.Role == api.RolePrimary
 		if iPrimary != jPrimary {
 			return iPrimary
+		}
+		if matches[i].MatchedScope.Specificity != matches[j].MatchedScope.Specificity {
+			return matches[i].MatchedScope.Specificity > matches[j].MatchedScope.Specificity
+		}
+		iRank := statusRank(matches[i].Status)
+		jRank := statusRank(matches[j].Status)
+		if iRank != jRank {
+			return iRank < jRank
+		}
+		if matches[i].ActiveTasks != matches[j].ActiveTasks {
+			return matches[i].ActiveTasks < matches[j].ActiveTasks
 		}
 		return matches[i].Name < matches[j].Name
 	})
@@ -1941,6 +3693,17 @@ func (s *Store) RouteRepoPath(ctx context.Context, repo, filePath, instanceDomai
 		res.Primary = &m
 	}
 	return res, nil
+}
+
+func statusRank(s api.EntryStatus) int {
+	switch s {
+	case api.StatusOnline:
+		return 0
+	case api.StatusDegraded:
+		return 1
+	default:
+		return 2
+	}
 }
 
 // AcquireOrRenewLease acquires or renews a named lease in `registry.leases` if it is

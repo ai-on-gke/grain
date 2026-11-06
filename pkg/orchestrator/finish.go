@@ -2204,7 +2204,20 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// does not hold (model.EscalatedCapabilities): it is filed holding
 		// it, for a person, with a note saying so -- ui.CreateTask's rule
 		// for the identical call filed live.
-		escalated := model.EscalatedCapabilities(proposal, task)
+		//
+		// A director this deployment lets queue its own work is not
+		// escalating by carrying its proposal's target repository's or
+		// this deployment's defaults unchanged
+		// (model.ProposalEscalations, director-capabilities.spec.md
+		// §4.2): those are filed with the note that names them instead.
+		var seeding *model.ProposalSeeding
+		if approved && model.IsDirectorTask(task) {
+			if seeding, err = proposalSeeding(ctx, store, target, catalogue, proposal); err != nil {
+				return fmt.Errorf("orchestrator: resolving the default capabilities seeded on proposed task %q: %w", title, err)
+			}
+		}
+		escalated, admittedDefaults := model.ProposalEscalations(proposal, task, approved, seeding)
+		proposal.Body += model.SeededDefaultsNote(task.ID, admittedDefaults)
 		// Write targets the run asked for that this task was never given
 		// are filed as asked -- a person may well agree the work belongs
 		// there too -- but they keep it from being queued or merging on
@@ -2450,6 +2463,36 @@ func defaultTaskGrants(ctx context.Context, store *model.Store, target *model.Re
 		}
 	}
 	return grants, nil
+}
+
+// proposalSeeding is the seeding source a director's proposal filed
+// against target (nil: no repository) is measured against
+// (model.ProposalSeeding, director-capabilities.spec.md §4.2): the two
+// layers defaultTaskGrants reads, kept apart and spelled as it spells
+// them, and catalogue judging proposal in its own context --
+// ui.Client.proposalSeeding's answer for the identical call filed live.
+func proposalSeeding(ctx context.Context, store *model.Store, target *model.RepoRef,
+	catalogue *model.CapabilityCatalogue, proposal model.Task) (*model.ProposalSeeding, error) {
+	cfg, err := store.GetConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seeding := &model.ProposalSeeding{Catalogue: catalogue, GrantContext: model.TaskGrantContext(proposal)}
+	if cfg != nil {
+		seeding.DeploymentDefaults = append([]string(nil), cfg.DefaultCapabilities...)
+	}
+	if target != nil {
+		repo := *target
+		seeding.Target = &repo
+		repoCfg, err := store.GetRepoConfig(ctx, *target)
+		if err != nil {
+			return nil, err
+		}
+		if repoCfg != nil {
+			seeding.RepoDefaults = append([]string(nil), repoCfg.DefaultCapabilities...)
+		}
+	}
+	return seeding, nil
 }
 
 // newestFirst is model.Config.NewestFirst, read fresh from the store --

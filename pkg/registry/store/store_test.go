@@ -327,3 +327,287 @@ func TestCredentialsFencedTunnelSessionsAndLeases(t *testing.T) {
 		t.Fatalf("unexpected audit log: %+v (err=%v)", audits, err)
 	}
 }
+
+func TestStep12RandomNameScopesCombinationSyncAndAsyncConflictsAndPromotion(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	st.SetNow(func() time.Time { return now })
+
+	if err := st.SeedShapes(ctx, []ShapeRow{
+		{Name: "small", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+		{Name: "medium", MachineType: "e2-standard-8", BootDiskGB: 50, QuotaUnits: 2},
+	}); err != nil {
+		t.Fatalf("SeedShapes: %v", err)
+	}
+
+	// 1. Random name generation when Name is omitted.
+	listedFalse := false
+	randEntry, err := st.CreateEntry(ctx, CreateEntryInput{
+		Kind:       api.KindInstance,
+		OwnerEmail: "alice@example.com",
+		Shape:      "small",
+		Listed:     &listedFalse,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry with random name: %v", err)
+	}
+	if err := api.ValidateEntryName(randEntry.Name); err != nil {
+		t.Fatalf("random name %q failed ValidateEntryName: %v", randEntry.Name, err)
+	}
+
+	// 2. Declared + reported scope combination rules on a connected entry.
+	listedTrue := true
+	combEntry, err := st.CreateEntry(ctx, CreateEntryInput{
+		Name:       "combo-grain",
+		Kind:       api.KindConnected,
+		OwnerEmail: "alice@example.com",
+		Listed:     &listedTrue,
+		DeclaredScopes: []ScopeClaim{
+			{Repo: "acme/monorepo", PathPrefix: "pkg/autoscaler", Primary: true},
+			{Repo: "acme/unconfigured", PathPrefix: "", Primary: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry combo-grain: %v", err)
+	}
+
+	// Before first heartbeat (`has_reported_scopes = false`), declared scopes are effective.
+	initialScopes := CombinedAPIScopes(combEntry.Scopes)
+	if len(initialScopes) != 2 || !initialScopes[0].Active || !initialScopes[1].Active {
+		t.Fatalf("expected both declared scopes active before first heartbeat, got %+v", initialScopes)
+	}
+
+	// First heartbeat reports:
+	// - acme/monorepo "" as secondary (declared narrows to "pkg/autoscaler" and wants primary, but effective_role is capped at secondary!)
+	// - acme/core "" as primary (no declared override -> reported is effective verbatim)
+	// - acme/unconfigured is NOT reported -> declared row becomes inactive with not_reported_by_instance
+	combAfterHB, err := st.RecordHeartbeat(ctx, combEntry.ID, api.HeartbeatRequest{
+		GrainVersion: "v1.4.0",
+		GrainCommit:  "abc1234",
+		HostKind:     api.HostKindWorkstation,
+		Health:       api.HealthOK,
+		ActiveTasks:  2,
+		Scopes: []api.HeartbeatScope{
+			{Repo: "acme/monorepo", PathPrefix: "", Role: api.RoleSecondary},
+			{Repo: "acme/core", PathPrefix: "", Role: api.RolePrimary},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordHeartbeat combo-grain: %v", err)
+	}
+	if !combAfterHB.HasReportedScopes {
+		t.Fatalf("expected HasReportedScopes=true after first heartbeat")
+	}
+
+	byKey := make(map[string]api.Scope)
+	for _, sc := range CombinedAPIScopes(combAfterHB.Scopes) {
+		byKey[string(sc.Source)+":"+sc.Repo+":"+sc.PathPrefix] = sc
+	}
+	// Reported acme/monorepo "" is overridden by narrower declared "pkg/autoscaler".
+	repMono := byKey["reported:acme/monorepo:"]
+	if repMono.Active || repMono.InactiveReason != api.InactiveOverriddenByNarrower {
+		t.Fatalf("expected reported acme/monorepo to be overridden_by_narrower, got %+v", repMono)
+	}
+	// Declared acme/monorepo "pkg/autoscaler" is active, but effective_role is capped at secondary (reported role).
+	decMono := byKey["declared:acme/monorepo:pkg/autoscaler"]
+	if !decMono.Active || decMono.EffectiveRole != api.RoleSecondary {
+		t.Fatalf("expected declared acme/monorepo:pkg/autoscaler active with EffectiveRole=secondary, got %+v", decMono)
+	}
+	// Reported acme/core "" is active with EffectiveRole=primary.
+	repCore := byKey["reported:acme/core:"]
+	if !repCore.Active || repCore.EffectiveRole != api.RolePrimary {
+		t.Fatalf("expected reported acme/core active with EffectiveRole=primary, got %+v", repCore)
+	}
+	// Declared acme/unconfigured "" is inactive with not_reported_by_instance.
+	decUnconf := byKey["declared:acme/unconfigured:"]
+	if decUnconf.Active || decUnconf.InactiveReason != api.InactiveNotReportedByInstance {
+		t.Fatalf("expected declared acme/unconfigured inactive with not_reported_by_instance, got %+v", decUnconf)
+	}
+
+	// 3. HOT-friendly heartbeat check: identical heartbeat does not bump CatalogGeneration.
+	genBefore := st.CatalogGeneration()
+	now = now.Add(15 * time.Second)
+	combAfterHB2, err := st.RecordHeartbeat(ctx, combEntry.ID, api.HeartbeatRequest{
+		GrainVersion: "v1.4.0",
+		GrainCommit:  "abc1234",
+		HostKind:     api.HostKindWorkstation,
+		Health:       api.HealthOK,
+		ActiveTasks:  5, // task count changed, but scopes/version/health/status-bucket did not
+		Scopes: []api.HeartbeatScope{
+			{Repo: "acme/monorepo", PathPrefix: "", Role: api.RoleSecondary},
+			{Repo: "acme/core", PathPrefix: "", Role: api.RolePrimary},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordHeartbeat 2: %v", err)
+	}
+	if combAfterHB2.ActiveTasks != 5 {
+		t.Fatalf("expected ActiveTasks=5, got %d", combAfterHB2.ActiveTasks)
+	}
+	if st.CatalogGeneration() != genBefore {
+		t.Fatalf("expected identical-scope/version/health heartbeat not to bump CatalogGeneration (%d -> %d)", genBefore, st.CatalogGeneration())
+	}
+
+	// 4. Synchronous 409 PrimaryScopeConflictError with holder details on listed entry creation,
+	// flipping listed: false -> true, and SetDeclaredScopes.
+	_, err = st.CreateEntry(ctx, CreateEntryInput{
+		Name:       "sync-collider",
+		Kind:       api.KindConnected,
+		OwnerEmail: "bob@example.com",
+		Listed:     &listedTrue,
+		DeclaredScopes: []ScopeClaim{
+			{Repo: "acme/core", PathPrefix: "sub/dir", Primary: true},
+		},
+	})
+	var pce *PrimaryScopeConflictError
+	if !errors.As(err, &pce) {
+		t.Fatalf("expected PrimaryScopeConflictError on sync create, got %v", err)
+	}
+	if pce.Conflict.ConflictingEntry != "combo-grain" || pce.Conflict.ConflictingOwner != "alice@example.com" || pce.Conflict.ConflictingPrefix != "" {
+		t.Fatalf("unexpected conflict details: %+v", pce.Conflict)
+	}
+
+	// Unlisted entry with overlapping primary scope succeeds.
+	unlistedOverlap, err := st.CreateEntry(ctx, CreateEntryInput{
+		Name:       "unlisted-collider",
+		Kind:       api.KindConnected,
+		OwnerEmail: "bob@example.com",
+		Listed:     &listedFalse,
+		DeclaredScopes: []ScopeClaim{
+			{Repo: "acme/core", PathPrefix: "sub/dir", Primary: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unlisted entry with overlapping primary scope should succeed: %v", err)
+	}
+	// Flipping listed: false -> true on unlisted-collider fails with PrimaryScopeConflictError.
+	_, err = st.UpdateEntryCatalog(ctx, unlistedOverlap.ID, unlistedOverlap.Version, UpdateEntryCatalogInput{
+		Listed: &listedTrue,
+	})
+	if !errors.As(err, &pce) || pce.Conflict.ConflictingEntry != "combo-grain" {
+		t.Fatalf("expected PrimaryScopeConflictError when flipping listed false->true, got %v", err)
+	}
+
+	// 5. Async heartbeat primary-prefix conflict (`claimed_at` first-registered wins) & automatic contender promotion.
+	now = now.Add(10 * time.Second)
+	contender1, err := st.CreateEntry(ctx, CreateEntryInput{
+		Name:       "contender-auth",
+		Kind:       api.KindConnected,
+		OwnerEmail: "bob@example.com",
+		Listed:     &listedTrue,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry contender-auth: %v", err)
+	}
+	now = now.Add(5 * time.Second)
+	c1Updated, err := st.RecordHeartbeat(ctx, contender1.ID, api.HeartbeatRequest{
+		GrainVersion: "v1.4.0",
+		Health:       api.HealthOK,
+		Scopes: []api.HeartbeatScope{
+			{Repo: "acme/core", PathPrefix: "services/auth", Role: api.RolePrimary},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordHeartbeat contender-auth must succeed even on async primary conflict: %v", err)
+	}
+	c1Conflicts := st.EntryScopeConflicts(ctx, c1Updated)
+	if len(c1Conflicts) != 1 || c1Conflicts[0].ConflictingEntry != "combo-grain" {
+		t.Fatalf("expected contender-auth to record conflict with combo-grain, got %+v", c1Conflicts)
+	}
+
+	now = now.Add(5 * time.Second)
+	contender2, err := st.CreateEntry(ctx, CreateEntryInput{
+		Name:       "contender-billing",
+		Kind:       api.KindConnected,
+		OwnerEmail: "carol@example.com",
+		Listed:     &listedTrue,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry contender-billing: %v", err)
+	}
+	c2Updated, err := st.RecordHeartbeat(ctx, contender2.ID, api.HeartbeatRequest{
+		GrainVersion: "v1.4.0",
+		Health:       api.HealthOK,
+		Scopes: []api.HeartbeatScope{
+			{Repo: "acme/core", PathPrefix: "services/billing", Role: api.RolePrimary},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordHeartbeat contender-billing: %v", err)
+	}
+	if len(st.EntryScopeConflicts(ctx, c2Updated)) != 1 {
+		t.Fatalf("expected contender-billing to conflict with combo-grain")
+	}
+
+	// Now unlist incumbent `combo-grain`: both disjoint contenders (`services/auth` and `services/billing`)
+	// must be promoted to `active = true` in `claimed_at` order!
+	curComb, err := st.GetEntryByID(ctx, combEntry.ID)
+	if err != nil {
+		t.Fatalf("GetEntryByID combo-grain: %v", err)
+	}
+	if _, err := st.UpdateEntryCatalog(ctx, combEntry.ID, curComb.Version, UpdateEntryCatalogInput{
+		Listed: &listedFalse,
+	}); err != nil {
+		t.Fatalf("unlist combo-grain: %v", err)
+	}
+
+	c1Promoted, err := st.GetEntryByID(ctx, contender1.ID)
+	if err != nil {
+		t.Fatalf("GetEntryByID contender1: %v", err)
+	}
+	if len(st.EntryScopeConflicts(ctx, c1Promoted)) != 0 || len(CombinedAPIScopes(c1Promoted.Scopes)) != 1 || !CombinedAPIScopes(c1Promoted.Scopes)[0].Active {
+		t.Fatalf("expected contender-auth to be promoted to active after incumbent unlisted, got %+v", c1Promoted.Scopes)
+	}
+	c2Promoted, err := st.GetEntryByID(ctx, contender2.ID)
+	if err != nil {
+		t.Fatalf("GetEntryByID contender2: %v", err)
+	}
+	if len(st.EntryScopeConflicts(ctx, c2Promoted)) != 0 || len(CombinedAPIScopes(c2Promoted.Scopes)) != 1 || !CombinedAPIScopes(c2Promoted.Scopes)[0].Active {
+		t.Fatalf("expected disjoint contender-billing to be promoted to active after incumbent unlisted, got %+v", c2Promoted.Scopes)
+	}
+
+	// 6. Credential rotation with overlap_seconds and immediate revocation.
+	tok1, meta1, err := st.IssueCredentialWithMeta(ctx, contender1.ID, "initial", "bob@example.com")
+	if err != nil {
+		t.Fatalf("IssueCredentialWithMeta: %v", err)
+	}
+	_ = st.UpsertReplica(ctx, "rep-1", "10.0.0.1:8082")
+	if _, err := st.AcquireTunnelSessionWithCred(ctx, contender1.ID, "rep-1", "198.51.100.10:4444", meta1.CredentialID); err != nil {
+		t.Fatalf("AcquireTunnelSessionWithCred: %v", err)
+	}
+
+	// Rotate with 60s overlap: tok1 remains valid during overlap window, then expires.
+	tok2, meta2, err := st.RotateCredential(ctx, contender1.ID, api.RotateCredentialRequest{
+		Label:          "rotated-overlap",
+		OverlapSeconds: 60,
+	}, "bob@example.com")
+	if err != nil {
+		t.Fatalf("RotateCredential overlap: %v", err)
+	}
+	if _, _, err := st.AuthenticateCredentialWithID(ctx, tok1); err != nil {
+		t.Fatalf("expected tok1 to remain valid during 60s overlap window: %v", err)
+	}
+	if _, _, err := st.AuthenticateCredentialWithID(ctx, tok2); err != nil {
+		t.Fatalf("expected tok2 to be valid: %v", err)
+	}
+	now = now.Add(61 * time.Second)
+	if _, _, err := st.AuthenticateCredentialWithID(ctx, tok1); !errors.Is(err, ErrInvalidCredential) {
+		t.Fatalf("expected tok1 to expire after 60s overlap window, got %v", err)
+	}
+
+	// Rotate with immediate RevokePrevious on tok2's tunnel session: active tunnel session is removed immediately.
+	if _, err := st.AcquireTunnelSessionWithCred(ctx, contender1.ID, "rep-1", "198.51.100.10:4445", meta2.CredentialID); err != nil {
+		t.Fatalf("AcquireTunnelSessionWithCred meta2: %v", err)
+	}
+	_, _, err = st.RotateCredential(ctx, contender1.ID, api.RotateCredentialRequest{
+		Label:          "rotated-immediate",
+		RevokePrevious: true,
+	}, "bob@example.com")
+	if err != nil {
+		t.Fatalf("RotateCredential RevokePrevious: %v", err)
+	}
+	if _, err := st.GetActiveTunnelSession(ctx, contender1.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected active tunnel session for revoked cred to be deleted immediately, got %v", err)
+	}
+}
