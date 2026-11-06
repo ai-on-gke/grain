@@ -156,7 +156,11 @@ func defaultNormalizeGroup(raw string) (string, error) {
 // DelegationActor identifies the acting service principal when an on-behalf-of
 // delegation assertion is issued.
 type DelegationActor struct {
-	Sub string `json:"sub"`
+	Sub    string `json:"sub"`
+	Kind   string `json:"kind,omitempty"`
+	App    string `json:"app,omitempty"`
+	Grant  string `json:"grant,omitempty"`
+	Access string `json:"access,omitempty"`
 }
 
 // DelegationPolicy governs machine service-principal admission and on-behalf-of

@@ -1234,6 +1234,7 @@ func (c *Client) stopAndCloseConsoleSessionTask(ctx context.Context, taskID stri
 		if err != nil {
 			return err
 		}
+		finishedAny := false
 		for i := range runs {
 			if runs[i].FinishedAt != nil {
 				continue
@@ -1241,6 +1242,10 @@ func (c *Client) stopAndCloseConsoleSessionTask(ctx context.Context, taskID stri
 			if err := c.Store.FinishRun(ctx, runs[i].ID, now, "cancelled", "cancelled by user"); err != nil {
 				return err
 			}
+			finishedAny = true
+		}
+		if finishedAny && c.Config.TaskCanceller != nil {
+			c.Config.TaskCanceller.CancelTask(ctx, taskID)
 		}
 	}
 	obs, err := c.Store.GetObservation(ctx, taskID)

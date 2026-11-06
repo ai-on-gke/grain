@@ -25,8 +25,22 @@
 # `docker` wrapper intercepts `login`, `push`, and `buildx imagetools create`
 # so all images and stamped `sandbox-image` labels are built and tested
 # byte-for-byte identically without pushing any tags to the registry.
+#
+# On demand (grain/task-3334): the images job keeps one run in flight and
+# one pending per branch, so a burst of merges cancels every pending run
+# but the newest -- superseded, not failed: the newest commit contains the
+# others and is what gets published. The commits in between have no
+# `sha-<short>` images, so `workflow_dispatch` with `commit: <sha>` builds,
+# tests and publishes exactly that commit through this same job, checked
+# out at it. scripts/release-images.sh dispatches it when a promotion, rc
+# or pending release needs a commit that has none
+# (RELEASE_ON_DEMAND_BUILD=dispatch). The `on-demand` job refuses a commit
+# that is not on main, candidate, rc/v* or release/v*, and skips the build
+# of one whose images already exist, which is what makes a repeated
+# dispatch harmless.
 
 name: release
+run-name: ${{ inputs.commit && format('release {0} (on demand)', inputs.commit) || '' }}
 
 on:
   push:
@@ -39,30 +53,125 @@ on:
         required: false
         default: false
         type: boolean
+      commit:
+        description: "Build, test and publish this commit (a full sha on main, candidate, rc/v* or release/v*) rather than the ref's head: what a promotion of a superseded commit dispatches"
+        required: false
+        default: ""
+        type: string
 
+# Each job names what it needs: `images` publishes (packages: write) and
+# authenticates to Google Cloud (id-token: write); `on-demand` only reads.
 permissions:
   contents: read
-  packages: write
-  id-token: write
 
 env:
   GOFLAGS: -mod=readonly
   RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO }}
 
 jobs:
+  on-demand:
+    name: resolve on-demand commit
+    if: github.event_name == 'workflow_dispatch' && inputs.commit != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Reads git history and the public registry, nothing else: none of the
+    # workflow's packages: write or id-token: write.
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      branch: ${{ steps.check.outputs.branch }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse a commit off the release branches, and skip one already published
+        id: check
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+            echo "::error::on-demand commit builds must be dispatched on a branch (such as main), not tag ref '${GITHUB_REF}'"
+            exit 1
+          fi
+          if ! [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::commit must be a full 40-character sha, not '$COMMIT'"
+            exit 1
+          fi
+          if ! git cat-file -e "${COMMIT}^{commit}" 2>/dev/null; then
+            echo "::error::$COMMIT is not a commit of this repository"
+            exit 1
+          fi
+          on=""
+          while IFS= read -r ref; do
+            [ -n "$ref" ] || continue
+            if git merge-base --is-ancestor "$COMMIT" "$ref"; then
+              on="${ref#refs/remotes/origin/}"
+              break
+            fi
+          done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/main refs/remotes/origin/candidate 'refs/remotes/origin/rc/v*' 'refs/remotes/origin/release/v*')
+          if [ -z "$on" ]; then
+            echo "::error::refusing to build $COMMIT on demand: it is on none of main, candidate, rc/v* or release/v*"
+            exit 1
+          fi
+          # shellcheck source=/dev/null
+          . ./scripts/release-image-repos.sh
+          repo="${RELEASE_IMAGE_REPO:-$RELEASE_IMAGE_REPO_DEFAULT}"
+          root="${RELEASE_IMAGE_REGISTRY_DEFAULT}/${repo,,}"
+          short="${COMMIT:0:7}"
+          images=(sandbox sandbox-k8s grain)
+          names="sandbox,sandbox-k8s,grain"
+          if git cat-file -e "${COMMIT}:Dockerfile.registry" 2>/dev/null &&
+             git show "${COMMIT}:scripts/release-images.sh" 2>/dev/null | grep -q '^build_registry_image()'; then
+            images+=(registry)
+            names="sandbox,sandbox-k8s,grain,registry"
+          fi
+          build=false
+          for image in "${images[@]}"; do
+            if ! docker buildx imagetools inspect "$root/$image:sha-$short" >/dev/null 2>&1; then
+              build=true
+            fi
+          done
+          if [ "$build" = true ]; then
+            echo "$COMMIT is on $on and has no published $root/{$names}:sha-$short: building it"
+          else
+            echo "$COMMIT already has $root/{$names}:sha-$short published: nothing to build"
+          fi
+          {
+            echo "build=$build"
+            echo "branch=$on"
+          } >> "$GITHUB_OUTPUT"
+
   images:
     name: release images
+    needs: [on-demand]
+    # A push, release or plain dispatch skips `on-demand` and builds the
+    # ref's head as it always has; an on-demand dispatch builds only when
+    # the commit was accepted and is not already published.
+    if: ${{ !cancelled() && (needs.on-demand.result == 'skipped' || (needs.on-demand.result == 'success' && needs.on-demand.outputs.build == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     concurrency:
-      group: ${{ github.workflow }}-images-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/candidate' }}
+      # An on-demand build is a group of its own, so it neither cancels nor
+      # is cancelled by the branch's runs, and a second dispatch of the same
+      # commit waits behind the first (and then finds it published).
+      group: ${{ github.workflow }}-images-${{ inputs.commit && format('commit-{0}', inputs.commit) || github.ref }}
+      cancel-in-progress: ${{ inputs.commit == '' && github.ref != 'refs/heads/main' && github.ref != 'refs/heads/candidate' }}
     env:
       RELEASE_IMAGES_STATE: /tmp/release-images.env
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ inputs.commit }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -125,11 +234,19 @@ jobs:
         env:
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           GH_REF_NAME: ${{ github.head_ref || github.ref_name }}
+          ON_DEMAND_BRANCH: ${{ needs.on-demand.outputs.branch }}
         run: |
           set -euo pipefail
           case "${GITHUB_REF:-}" in
-            refs/heads/main|refs/heads/candidate|refs/heads/rc/v*|refs/heads/release/v*|refs/tags/v*)
+            refs/heads/main|refs/heads/candidate|refs/heads/rc/v*|refs/heads/release/v*)
               is_release_ref=true
+              ;;
+            refs/tags/v*)
+              if [ -n "${ON_DEMAND_BRANCH:-}" ]; then
+                is_release_ref=false
+              else
+                is_release_ref=true
+              fi
               ;;
             *)
               is_release_ref=false
@@ -142,13 +259,17 @@ jobs:
           elif [ -z "$dry_run" ]; then
             dry_run="false"
           fi
+          ref_name="${ON_DEMAND_BRANCH:-${GH_REF_NAME}}"
           {
             echo "GRAIN_CI_REPO=${GITHUB_REPOSITORY}"
-            echo "GRAIN_CI_COMMIT=${GITHUB_SHA}"
-            echo "GRAIN_CI_REF=${GH_REF_NAME}"
+            # HEAD rather than GITHUB_SHA: an on-demand run checks out the
+            # commit it was asked for, not the dispatching ref's head, and
+            # ON_DEMAND_BRANCH names the release branch it sits on.
+            echo "GRAIN_CI_COMMIT=$(git rev-parse HEAD)"
+            echo "GRAIN_CI_REF=${ref_name}"
             echo "DRY_RUN=${dry_run}"
           } >> "$GITHUB_ENV"
-          echo "Resolved GRAIN_CI_REF=${GH_REF_NAME} DRY_RUN=${dry_run}"
+          echo "Resolved GRAIN_CI_REF=${ref_name} DRY_RUN=${dry_run}"
 
           if [ "${dry_run}" = "true" ]; then
             wrapper_dir="${RUNNER_TEMP}/dry-run-docker-bin"
@@ -337,6 +458,9 @@ jobs:
           fi
 
       - name: Prune old package versions
+        # Never prune from an older commit checked out on demand: its
+        # cmd/ghcr-prune may predate newer package names (such as registry).
+        if: inputs.commit == ''
         continue-on-error: true
         env:
           DOCKER_PAT: ${{ secrets.DOCKER_PAT }}

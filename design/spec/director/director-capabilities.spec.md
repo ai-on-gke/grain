@@ -473,8 +473,10 @@ gate, not merely left ungranted.
        (the `LinkProposedBy` chain);
      - a proposal held for `requires_person`, escalation or
        `HeldForApprovalTag`.
-   - This holds even under `api:tasks:admin`. It is a **proposed gate
-     rail**: `main` relies on `tasks:admin` being person-granted.
+   - This holds even under `api:tasks:admin`. It is a **gate rail**
+     (`agentApprovalRail`, called from `agentRails` in
+     `pkg/ui/agent_api_gate.go`), not a grant decision: it refuses every
+     agent, the director included, whatever it holds.
 4. **Config approval.**
    - The director MUST NOT approve, merge or push to the default branch
      of the state repository.
@@ -568,13 +570,13 @@ holds them.
 | G5 | `propose_config_change` & config-repo proposal rail | **done**: `model.ConfigRepoProposalHold` holds every child whose `Target` or `Writes` names `IsConfigRepo` (first in `AutoApprovalRefusal`, and as a grain hold in `ui.Client.CreateTask` and `orchestrator.relayProposedTasks`); `DefaultConsoleSessions` ships the director with `Writes: [grain/config]` | Shipped on the director, while child `propose_task` calls targeting or writing `IsConfigRepo` always wait for a person (§3.1.3) | None. Pinned by the `director_proposal_rails` tests in `pkg/model`, `pkg/ui` and `pkg/orchestrator`. |
 | G6 | `capabilities:detach` | **done**: in `model.apiScopes` (not dangerous) and `IsSandboxDeniedAPIScope`; admitted by `capabilitiesDetachRoutes` (`route_scopes.go`) and `capabilitiesDetachAllowed` / `capabilitiesDetachBodyAllowed` (`agent_api_gate.go`); pinned by `pkg/ui/capabilities_detach_test.go`; documented in `docs/agent-api.md` | New non-dangerous, MCP-only scope (§3.1.2) | Add `api:capabilities:detach` to G1. |
 | G7 | Default catalogue for the director kind | **done**: built-in floor `model.DirectorFloorRefusal` (`pkg/model/director_floor.go`) applied by `ValidateGrants`/`Refusals` under any `settings/capabilities.yml` and on a nil catalogue; enforced at dispatch (`catalogueHold`), on grant edits (`catalogueEditRefusal`), on session saves (`ValidateConsoleSessions`) and at the API gate (`WithinDirectorFloor`); tests in `pkg/model`, `pkg/ui`, `pkg/orchestrator` | Shipped rule set denying the director kind `merge:force`, `settings:write`, `secrets:write`, `connections:write`, `repos:write` | None. Operator files may narrow the director further, never widen it past the floor. |
-| G8 | Self-approval | relies on `tasks:admin` being person-granted | Gate refuses `POST /api/tasks/{id}/approve` on a task in the actor's proposal subtree or held for a person | Add to `agentRails` in `pkg/ui/agent_api_gate.go`, with tests. |
+| G8 | Self-approval | **done**: `agentFilingEscalation` refuses `approved: true` for every in-grain task agent, and `agentRails` (`agentApprovalRail` in `pkg/ui/agent_api_gate.go`) refuses an agent's `POST /api/tasks/{id}/approve` (and `POST /api/tasks/{id}/run-now` on an unapproved task) on a task in its own proposal or `Origin` lineage or held for a person (`HeldForApprovalTag`, `ConfigRepoProposalHold`, `ChangeTargetNeedsPersonApproval`, declared `push:` sets, ungranted `AutoMerge`, catalogue `requires_person`, person-only grants, `KeepRunning`, and `EscalatedCapabilities` / `UngrantedWrites` / `UngrantedReads` / `PersonOnlyProposalSettings` against the task's proposer), pinned by `pkg/ui/agent_approval_rail_test.go` | Unchanged | None. |
 | G9 | Seeded repo defaults on director proposals | held as "seeded" escalations | Admitted under §4.2 | Change `EscalatedCapabilities` / `AutoApprovalRefusal` (`pkg/model/auto_submit.go`, `hold_for_approval.go`) to take the seeding source; tests for each excluded case. |
 | G10 | `DirectorSessionBody` | — | Tells the director to use `expect` on stop/close, `hold_for_approval` for destructive proposals, and give reasons | Update the reviewed body text. |
 | G11 | Docs | Retired capability names updated in [Task #3185](/tasks/3185). The `NetworkAccess` row of `docs/director.md`'s envelope table, and `docs/local-policy.md`, match G3 ([Task #3312](/tasks/3312)). The `Capabilities` and `TasksApproved` rows still show the pre-G1/G2 defaults | Matches §3 | Update `docs/director.md` alongside G1 and G2 as each default flips. |
 | G12 | Capacity bound on session-queued proposals | **done**: `AutoSubmitLimits.TurnFanOut` (default 10), checked by `Store.ExceededSessionTurnLimit` beside `ExceededAutoSubmitLimit` in `ui.Client.CreateTask` and `orchestrator.relayProposedTasks`; over it, filed for a person with `AutoSubmitLimitNote` | Per-turn fan-out bound; over it, filed for a person (§3.1.5) | None. The bound has no settings knob yet. |
 
-Ordering: G3, G4, G5, G6, G7 and G12 are done (G3's verification is recorded in
-§3.1.6), and G10 can land with G1. G6 preceded the detach part of G1. G8 MUST
-land before G2 (as G5's `IsConfigRepo` proposal hold, G7's built-in floor and G12 have), so that the auto-queueing
-director never runs on a deployment without the Tier 3 rails.
+Ordering: G3, G4, G5, G6, G7, G8 and G12 are done (G3's verification is recorded
+in §3.1.6), and G10 can land with G1. G6 preceded the detach part of G1. The Tier 3
+rails (G5's `IsConfigRepo` proposal hold, G7's built-in floor, G8's approval
+rail and G12's fan-out bound) are all in place ahead of G2.

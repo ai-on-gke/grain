@@ -380,6 +380,41 @@ func TestTaskOriginTellsAnExternalAgentsFilingFromAHandFiledOne(t *testing.T) {
 	}
 }
 
+// Imported GitHub issues carry Imported rather than GeneratedFrom, and
+// sort at their precedence between proposed and schedule
+// (docs/test-runs/2026-11-06-saved-boards-and-visualizations.md).
+func TestTaskOriginFindsAndOrdersImportedIssues(t *testing.T) {
+	t.Parallel()
+	tasks := []ui.Task{
+		{ID: "review", Title: "Review it", State: model.StateQueued, Stacked: true, Review: true},
+		{ID: "imported", Title: "[#42] Search results drop the last page", State: model.StateProposed, Imported: true},
+		{ID: "hand", Title: "By hand", State: model.StateQueued},
+		{ID: "schedule", Title: "Scheduled", State: model.StateQueued, Scheduled: true},
+		{ID: "proposed", Title: "Follow-up", State: model.StateProposed, GeneratedFrom: "1"},
+		{ID: "fix", Title: "Repair it", State: model.StateQueued, Stacked: true, GeneratedFrom: "1"},
+		{ID: "suite", Title: "Suite pass", State: model.StateQueued, SuiteRun: true},
+		{ID: "external", Title: "External", State: model.StateProposed, Author: "external:w", AuthorKind: "agent"},
+	}
+	if got := asked(t, "origin:any:imported").apply(tasks); !equal(ids(got), []string{"imported"}) {
+		t.Fatalf("apply(origin:any:imported) = %v, want [imported]", ids(got))
+	}
+	q, err := listFlags{origin: "imported"}.query(builtinAttributes)
+	if err != nil {
+		t.Fatalf("query(-origin imported): %v", err)
+	}
+	if got := q.apply(tasks); !equal(ids(got), []string{"imported"}) {
+		t.Fatalf("apply(-origin imported) = %v, want [imported]", ids(got))
+	}
+	sorted, err := listFlags{sortBy: "origin:asc"}.query(builtinAttributes)
+	if err != nil {
+		t.Fatalf("query(-sort origin:asc): %v", err)
+	}
+	want := []string{"hand", "external", "proposed", "imported", "schedule", "suite", "fix", "review"}
+	if got := ids(sorted.apply(tasks)); !equal(got, want) {
+		t.Fatalf("apply(-sort origin:asc) = %v, want %v", got, want)
+	}
+}
+
 // A word nobody can act on is answered with the words that work, rather
 // than with an empty listing that reads like a deployment with no such
 // tasks. Unlike the frontend -- which drops a clause it cannot answer so
