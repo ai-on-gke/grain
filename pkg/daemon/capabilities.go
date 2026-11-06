@@ -91,7 +91,7 @@ func CapabilityProviders(cfg Config, store *model.Store, _ map[string]*modelprox
 	providers = append(providers, admincaps.Providers()...)
 	// bootstrap-playbooks is no longer a provider here: it was retired onto
 	// the config-map server's config-map {"config_maps":["bootstrap"]}
-	// (schema migration 117), which places the same embedded playbooks.
+	// (schema migration 118), which places the same embedded playbooks.
 	providers = append(providers,
 		consolecap.New(),
 		readissues.New(),

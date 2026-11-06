@@ -233,11 +233,19 @@ test("follows a live Director task through its durable exchange", async ({
     .getByRole("button", { name: "Edit Director capabilities" })
     .click();
   await page.getByRole("button", { name: "Add grant…" }).click();
+  const grantMenu = page.getByRole("menu", { name: "Grants to add" });
+  await expect(grantMenu).toBeVisible();
   await page
+    .getByRole("textbox", { name: "Search grants" })
+    .fill("grain#health");
+  await grantMenu
     .locator('[data-method="https://grain.dev/capabilities/grain#health"]')
     .click();
+  await expect(grantMenu).toBeHidden();
   await expect
-    .poll(async () => (await task(page, firstTask)).capabilities)
+    .poll(async () => (await task(page, firstTask)).capabilities, {
+      timeout: 30_000,
+    })
     .toContain("https://grain.dev/capabilities/grain#health={}");
   await page
     .getByRole("button", { name: "Hide Director capabilities" })

@@ -27,6 +27,7 @@ import (
 // a plain substring and a line cap. The zero value is that tool's own
 // default -- the last stretch of the log, every priority.
 type GrainLogQuery struct {
+	Unit         string
 	Since, Until string
 	MinPriority  string
 	Contains     string
@@ -61,11 +62,12 @@ func queryFrom(ctx context.Context) url.Values {
 	return q
 }
 
-// grainLogQueryFrom reads ?since=, ?until=, ?min_priority=, ?contains=
-// and ?max_lines= (or its short form ?lines=).
+// grainLogQueryFrom reads ?unit=, ?since=, ?until=, ?min_priority=,
+// ?contains= and ?max_lines= (or its short form ?lines=).
 func grainLogQueryFrom(ctx context.Context) (GrainLogQuery, error) {
 	q := queryFrom(ctx)
 	out := GrainLogQuery{
+		Unit:        strings.TrimSpace(q.Get("unit")),
 		Since:       strings.TrimSpace(q.Get("since")),
 		Until:       strings.TrimSpace(q.Get("until")),
 		MinPriority: strings.TrimSpace(q.Get("min_priority")),

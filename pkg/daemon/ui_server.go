@@ -339,7 +339,10 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		Stall: orchestrator.TaskStallNote,
 		// And the sub-case of that state, with its control
 		// (ui.Config.Reasons) -- joined here for the same reason.
-		Reasons: ReasonClassifier{PolicyFile: cfg.PolicyFile},
+		// With the deployment's own dispatch conditions, so a queued
+		// task says why nothing is dispatching rather than that it is
+		// ready (DispatchConditions).
+		Reasons: ReasonClassifier{PolicyFile: cfg.PolicyFile, DispatchBlocked: DispatchConditions.Why},
 		// The same action for the other kind of credential this
 		// deployment holds (ui.Config.AgentKeyChecks): the key each agent
 		// framework runs as, which the Agents tab can otherwise only
@@ -535,6 +538,10 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		// reconcilerDown (daemon.go), the same way AutoMergeDegraded above
 		// mirrors orchestrator.ChecksUnavailable -- bwsalmon/agents#576.
 		ReconcilerDown: func() bool { return ReconcilerDown.Load() },
+		// And why, with the error and since when: the same fact as
+		// named conditions, for the health route, the config response
+		// and the pipeline feed.
+		DispatchConditions: DispatchConditions,
 		// And the store switched underneath it (storeswitch.go).
 		StoreSwitch: CurrentStoreSwitch,
 		// Restarting: this process has been told to stop, or the

@@ -319,10 +319,11 @@ var sandboxCommandHelp = map[string]string{
 		"  --since, --until  an absolute span instead: a date or an RFC 3339 timestamp\n" +
 		"  --repo, --author  only tasks on these repositories / by these authors (repeat or comma-separate)\n",
 	"health": "grain health\n\nThis deployment's health (deploy://health). Needs deployment-health.\n",
-	"log": "grain log [<source> | --source daemon|dmesg] [--since <rfc3339>] [--until <rfc3339>] [--priority err|warning|...] [--contains <text>] [--lines N] [--tail N]\n\n" +
+	"log": "grain log [<source> | --source daemon|dmesg] [--unit <unit>] [--since <rfc3339>] [--until <rfc3339>] [--priority err|warning|...] [--contains <text>] [--lines N] [--tail N]\n\n" +
 		"grain's own log, redacted (deploy://grain.log). Needs grain-log.\n\n" +
 		"  --since, --until  the window, as RFC 3339 timestamps (default: the latest entries)\n" +
 		"  --source          which journal: daemon (the default) or dmesg (the kernel's)\n" +
+		"  --unit            for daemon when both grain-daemon.service and grain.service exist: which unit to read\n" +
 		"  --priority        least severe journald priority to return (err, warning, info, ...; alias --min-priority)\n" +
 		"  --contains        only entries containing this text (plain, case-insensitive)\n" +
 		"  --lines N, -n N   the latest N entries, one a line (alias --max-lines; default 200, at most 1000)\n" +

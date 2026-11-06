@@ -558,10 +558,16 @@ import "strconv"
 // scope overrides) for daemon self-registration and heartbeating
 // (design/design/registry.design.md).
 //
-// 117 rewrites stored `bootstrap-playbooks` grants across the grant tables,
+// 117 adds shared host enrollment codes (`host_enrollment_code`), pending
+// join requests (`host_join_request`), key-bound host metadata
+// on `hostd` (`public_key`, `key_fingerprint`, `enrollment_code`, `capacity`,
+// `hostname`, `os`, `arch`, `clis`, `version`, `local_user`, `last_seen_at`),
+// and 30-day credential expiry on `hostd_token` (`expires_at`).
+//
+// 118 rewrites stored `bootstrap-playbooks` grants across the grant tables,
 // deployment and repository default/CI capabilities, console sessions, and
 // capability_policy to `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}`.
-const SchemaVersion = 117
+const SchemaVersion = 118
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
@@ -700,14 +706,25 @@ const sandboxAccessTable = `CREATE TABLE IF NOT EXISTS ` + "`sandbox_access`" + 
 )`
 
 // hostdTable and hostdTokenTable are the hostd registry (model.Hostd),
-// named once for Tables and for the migration that adds them.
+// named once for Tables and for the migrations that build them.
 const hostdTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd`" + ` (
-  ` + "`name`" + `       TEXT     NOT NULL,
-  ` + "`owner`" + `      TEXT     NOT NULL DEFAULT '',
-  ` + "`labels`" + `     TEXT     NOT NULL DEFAULT '',
-  ` + "`created_by`" + ` TEXT     NOT NULL DEFAULT '',
-  ` + "`created_at`" + ` DATETIME NOT NULL,
-  ` + "`revoked_at`" + ` DATETIME NULL,
+  ` + "`name`" + `            TEXT     NOT NULL,
+  ` + "`owner`" + `           TEXT     NOT NULL DEFAULT '',
+  ` + "`labels`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`created_by`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + `      DATETIME NOT NULL,
+  ` + "`revoked_at`" + `      DATETIME NULL,
+  ` + "`public_key`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`key_fingerprint`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`enrollment_code`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`capacity`" + `        INTEGER  NOT NULL DEFAULT 0,
+  ` + "`hostname`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`os`" + `              TEXT     NOT NULL DEFAULT '',
+  ` + "`arch`" + `            TEXT     NOT NULL DEFAULT '',
+  ` + "`clis`" + `            TEXT     NOT NULL DEFAULT '',
+  ` + "`version`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`local_user`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`last_seen_at`" + `    DATETIME NULL,
   PRIMARY KEY (` + "`name`" + `)
 )`
 
@@ -737,8 +754,56 @@ const hostdTokenTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd_token`" + ` (
   ` + "`hostd`" + `      TEXT     NOT NULL,
   ` + "`prefix`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`created_at`" + ` DATETIME NOT NULL,
+  ` + "`expires_at`" + ` DATETIME NULL,
   ` + "`revoked_at`" + ` DATETIME NULL,
   PRIMARY KEY (` + "`token_hash`" + `)
+)`
+
+// hostEnrollmentCodeTable and hostJoinRequestTable back shared host enrollment
+// snippets and the pending pairing-code join handshake (model.HostEnrollmentCode,
+// model.HostJoinRequest). Both stay local (staterepo.LocalTables).
+const hostEnrollmentCodeTable = `CREATE TABLE IF NOT EXISTS ` + "`host_enrollment_code`" + ` (
+  ` + "`name`" + `               TEXT     NOT NULL,
+  ` + "`code_hash`" + `          TEXT     NOT NULL,
+  ` + "`code_value`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`prefix`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`default_labels`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`default_capacity`" + `   INTEGER  NOT NULL DEFAULT 0,
+  ` + "`allowed_principals`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`max_uses`" + `           INTEGER  NOT NULL DEFAULT 0,
+  ` + "`uses`" + `               INTEGER  NOT NULL DEFAULT 0,
+  ` + "`expires_at`" + `         DATETIME NULL,
+  ` + "`created_by`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + `         DATETIME NOT NULL,
+  ` + "`rotated_at`" + `         DATETIME NULL,
+  ` + "`revoked_at`" + `         DATETIME NULL,
+  PRIMARY KEY (` + "`name`" + `)
+)`
+
+const hostJoinRequestTable = `CREATE TABLE IF NOT EXISTS ` + "`host_join_request`" + ` (
+  ` + "`id`" + `                TEXT     NOT NULL,
+  ` + "`enrollment_code`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`rekey_hostd`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`public_key`" + `        TEXT     NOT NULL,
+  ` + "`key_fingerprint`" + `   TEXT     NOT NULL,
+  ` + "`server_nonce`" + `      TEXT     NOT NULL,
+  ` + "`hostname`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`os`" + `                TEXT     NOT NULL DEFAULT '',
+  ` + "`arch`" + `              TEXT     NOT NULL DEFAULT '',
+  ` + "`clis`" + `              TEXT     NOT NULL DEFAULT '',
+  ` + "`version`" + `           TEXT     NOT NULL DEFAULT '',
+  ` + "`local_user`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`enrolled_by`" + `       TEXT     NOT NULL,
+  ` + "`default_labels`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`default_capacity`" + `  INTEGER  NOT NULL DEFAULT 0,
+  ` + "`created_at`" + `        DATETIME NOT NULL,
+  ` + "`expires_at`" + `        DATETIME NOT NULL,
+  ` + "`accepted_at`" + `       DATETIME NULL,
+  ` + "`accepted_by`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_name`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_labels`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_capacity`" + ` INTEGER  NOT NULL DEFAULT 0,
+  PRIMARY KEY (` + "`id`" + `)
 )`
 
 // externalAgentTokenTable and externalAgentTokenSequenceTable are named
@@ -4126,6 +4191,8 @@ var Tables = []string{
 
 	hostdTable,
 	hostdTokenTable,
+	hostEnrollmentCodeTable,
+	hostJoinRequestTable,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`secret_resolution_audit`" + ` (
   ` + "`id`" + `          INTEGER PRIMARY KEY AUTOINCREMENT,

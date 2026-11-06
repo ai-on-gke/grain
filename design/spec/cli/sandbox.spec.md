@@ -717,11 +717,12 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain log -->
-Usage: `grain log [<source> | --source daemon|dmesg] [--since <rfc3339>] [--until <rfc3339>] [--priority err|warning|...] [--contains <text>] [--lines N] [--tail N]`
+Usage: `grain log [<source> | --source daemon|dmesg] [--unit <unit>] [--since <rfc3339>] [--until <rfc3339>] [--priority err|warning|...] [--contains <text>] [--lines N] [--tail N]`
 
 | Flag | Type |
 |---|---|
 | `--source` | string |
+| `--unit` | string |
 | `--since` | string |
 | `--until` | string |
 | `--priority` | string |

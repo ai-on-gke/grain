@@ -361,7 +361,7 @@ func TestGitHubCIChangesMirrorsGrainTestsWorkflowPaths(t *testing.T) {
 		"pkg/orchestrator/foo.go",
 		"pkg/ci/paths.go",
 		"pkg/playbooks/gcp-capabilities.md",
-		"third_party/granule/pkg/forward/forward.go",
+		"third_party/granule/pkg/guestforward/forward.go",
 		"scripts/run-go-tests.sh",
 		"scripts/warm-npm-cache.sh",
 		"scripts/setup.sh",

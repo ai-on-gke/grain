@@ -120,7 +120,7 @@ func rewindSchemaTo(t *testing.T, ctx context.Context, db *sql.DB, target int) {
 			if !ok {
 				continue
 			}
-			if _, err := db.ExecContext(ctx, "ALTER TABLE `"+table+"` DROP COLUMN IF EXISTS `"+col+"`"); err != nil {
+			if _, err := db.ExecContext(ctx, "ALTER TABLE IF EXISTS `"+table+"` DROP COLUMN IF EXISTS `"+col+"`"); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -159,7 +159,7 @@ var retiredGrants = []struct {
 	{101, "package-publish", []string{model.PackagePublishRef + "={}"}},
 	{103, "gemini-key", []string{model.GCPGeminiKeyGrant}},
 	{115, "self-debug", []string{"api:self-debug", model.GrainSourceGrant}},
-	{117, "bootstrap-playbooks", []string{model.BootstrapPlaybooksGrant}},
+	{118, "bootstrap-playbooks", []string{model.BootstrapPlaybooksGrant}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'

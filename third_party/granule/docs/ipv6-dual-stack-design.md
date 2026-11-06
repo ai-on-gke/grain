@@ -599,9 +599,9 @@ addresses it with `nodad` so it doesn't wait.
 
 Done: `test/e2e-ipv6.sh` (targets `docker`, `kind`, `kind-dual`,
 `kind-ipv6` and `gke`). It runs nightly for docker and kind
-(`.grain/workflows/e2e-ipv6.yml` and stage 5 of
+(`.github/workflows/e2e-ipv6.yml` and stage 5 of
 `test/run-nightly-suite.sh`) and by hand for GKE
-(`.grain/workflows/e2e-ipv6-gke.yml`); `docs/nightly-test-suite.md`
+(`.github/workflows/e2e-ipv6-gke.yml`); `docs/nightly-test-suite.md`
 section 5 has the details. Where it falls short of the plan above:
 
 * On docker the guest can't use docker's resolver, 127.0.0.11, which is

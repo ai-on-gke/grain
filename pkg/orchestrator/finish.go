@@ -829,7 +829,7 @@ func retireStaleBranch(ctx context.Context, store *model.Store, task model.Task,
 func salvagePushedBranch(ctx context.Context, store *model.Store, client github.Client,
 	task model.Task, now time.Time) (bool, error) {
 
-	if task.Target == nil {
+	if task.Target == nil || client == nil {
 		return false, nil
 	}
 	if _, inPlace := reviewsInPlace(task); inPlace {
@@ -2147,6 +2147,20 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 				}
 			}
 		}
+		// A proposal that targets or writes grain/config waits for a
+		// person whatever this task holds (model.ConfigRepoProposalHold)
+		// -- ui.CreateTask's rule for the identical call filed live. A
+		// session holding grain/config in its Writes for
+		// propose_config_change would otherwise pass that write on to a
+		// child its own permission queues.
+		if why := model.ConfigRepoProposalHold(proposal); why != "" {
+			proposal.Body += fmt.Sprintf("\n\n_Filed for a person to approve: %s._", why)
+			if needsPersonWhy == "" {
+				needsPersonWhy = why
+			} else {
+				needsPersonWhy += "; " + why
+			}
+		}
 		// Scheduled for later: filed deferred with the wake time the
 		// call asked for, so reconcileWake picks it back up then and not
 		// before -- ui.CreateTask's rule for the identical call filed
@@ -2169,16 +2183,22 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// other proposal is filed for a human to decide on, which is
 		// propose_task's whole contract.
 		//
-		// The session is not bounded here and the tasks below it are.
-		// Its permission is not a run's inherited one but a person
-		// sitting in front of the chat: every task it files is one
-		// somebody just asked for in a message, so a cap on how many
-		// would be a cap on how much a human may ask for in a day. What
-		// that person cannot see is what the work they asked for goes
-		// on to queue for itself, so a session-queued task counts as a
-		// level of self-approved work like any other
-		// (model.SelfApproved) and everything below it is bounded
-		// exactly as an auto-merge job's proposals are.
+		// The session is not bounded by depth or lifetime fan-out, and
+		// the tasks below it are. Its permission is not a run's
+		// inherited one but a person sitting in front of the chat:
+		// every task it files is one somebody just asked for in a
+		// message, so a cap over the session's life would be a cap on
+		// how much a human may ask for in a day. What bounds it instead
+		// is per conversation turn (model.AutoSubmitLimits.TurnFanOut,
+		// counted since the last message a person sent it): one message
+		// is still a fast way to ask for a lot of work, so past that
+		// many the rest are filed for a person, with
+		// model.AutoSubmitLimitNote saying why. What that person cannot
+		// see is what the work they asked for goes on to queue for
+		// itself, so a session-queued task counts as a level of
+		// self-approved work like any other (model.SelfApproved) and
+		// everything below it is bounded exactly as an auto-merge job's
+		// proposals are.
 		//
 		// Neither reaches a proposal that asked for a capability this task
 		// does not hold (model.EscalatedCapabilities): it is filed holding
@@ -2234,8 +2254,16 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		case hold:
 			// Waiting for a person anyway; nothing was held back.
 		case approved:
-			proposal.Approval = &model.Attribution{Actor: consoleSessionPrincipal}
-			proposal.ApprovedAt = &now
+			limit, err := store.ExceededSessionTurnLimit(ctx, task.ID, limits)
+			if err != nil {
+				return fmt.Errorf("orchestrator: bounding the session's approval of proposed task %q: %w", title, err)
+			}
+			if limit == model.AutoSubmitWithinLimits {
+				proposal.Approval = &model.Attribution{Actor: consoleSessionPrincipal}
+				proposal.ApprovedAt = &now
+			} else {
+				proposal.Body += model.AutoSubmitLimitNote(task.ID, limit, limits)
+			}
 		case selfApproves:
 			limit, err := store.ExceededAutoSubmitLimit(ctx, task.ID, limits)
 			if err != nil {

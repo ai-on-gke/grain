@@ -71,17 +71,23 @@ func TestCatalogueRequiresPersonHoldsAProposal(t *testing.T) {
 		t.Errorf("body = %q, want it to name the catalogue's reason", held.Description)
 	}
 
-	// An agent filing directly (its own bearer token) is not approved
-	// by asking to be.
-	agentCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: parent.ID})
-	direct, err := client.CreateTask(agentCtx, ui.CreateTaskRequest{
-		Title: "direct", Approved: true, Capabilities: &[]string{"read-issues"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if direct.State != model.StateProposed {
-		t.Fatalf("agent's own filing is %s, want proposed", direct.State)
+	// Any non-person caller filing directly (an agent bearer token, a service
+	// account, or automation) is not approved by asking to be.
+	for _, who := range []model.Principal{
+		{Kind: model.PrincipalAgent, ID: parent.ID},
+		{Kind: model.PrincipalService, ID: "ci-bot@my-proj.iam.gserviceaccount.com", Source: model.SourceIAP},
+		{Kind: model.PrincipalAutomation, ID: "grain"},
+	} {
+		callerCtx := ui.WithPrincipal(ctx, who)
+		direct, err := client.CreateTask(callerCtx, ui.CreateTaskRequest{
+			Title: "direct-" + string(who.Kind), Approved: true, Capabilities: &[]string{"read-issues"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if direct.State != model.StateProposed {
+			t.Fatalf("%s filing is %s, want proposed", who.Kind, direct.State)
+		}
 	}
 }
 
@@ -111,18 +117,25 @@ func TestCatalogueRequiresPersonRefusesAnAgentsApproval(t *testing.T) {
 	if held.State != model.StateProposed {
 		t.Fatalf("agent's own filing is %s, want proposed", held.State)
 	}
-	for name, approve := range map[string]func(context.Context, string) error{
-		"Approve": client.Approve,
-		"RunNow":  client.RunNow,
+	for _, who := range []model.Principal{
+		{Kind: model.PrincipalAgent, ID: parent.ID},
+		{Kind: model.PrincipalService, ID: "ci-bot@my-proj.iam.gserviceaccount.com", Source: model.SourceIAP},
+		{Kind: model.PrincipalAutomation, ID: "grain"},
 	} {
-		err := approve(agentCtx, held.ID)
-		var ferr *ui.ForbiddenError
-		if !errors.As(err, &ferr) || !strings.Contains(err.Error(), "requires_person") ||
-			!strings.Contains(err.Error(), "read-issues") {
-			t.Errorf("agent %s = %v, want a 403 naming gemini-key and requires_person", name, err)
-		}
-		if state, err := store.State(ctx, held.ID); err != nil || state != model.StateProposed {
-			t.Errorf("after agent %s: state = %s (%v), want proposed", name, state, err)
+		callerCtx := ui.WithPrincipal(ctx, who)
+		for name, approve := range map[string]func(context.Context, string) error{
+			"Approve": client.Approve,
+			"RunNow":  client.RunNow,
+		} {
+			err := approve(callerCtx, held.ID)
+			var ferr *ui.ForbiddenError
+			if !errors.As(err, &ferr) || !strings.Contains(err.Error(), "requires_person") ||
+				!strings.Contains(err.Error(), "read-issues") {
+				t.Errorf("%s %s = %v, want a 403 naming read-issues and requires_person", who.Kind, name, err)
+			}
+			if state, err := store.State(ctx, held.ID); err != nil || state != model.StateProposed {
+				t.Errorf("after %s %s: state = %s (%v), want proposed", who.Kind, name, state, err)
+			}
 		}
 	}
 
@@ -158,10 +171,16 @@ func TestCatalogueRefusesFilingAndEdit(t *testing.T) {
 	setCatalogue(t, ctx, store, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
 		"read-issues": {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
 	}})
-	agentCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: task.ID})
-	err = client.SetCapability(agentCtx, task.ID, "read-issues", true)
-	if err == nil || !strings.Contains(err.Error(), "requires human approval") {
-		t.Fatalf("agent SetCapability = %v, want a refusal", err)
+	for _, who := range []model.Principal{
+		{Kind: model.PrincipalAgent, ID: task.ID},
+		{Kind: model.PrincipalService, ID: "ci-bot@my-proj.iam.gserviceaccount.com", Source: model.SourceIAP},
+		{Kind: model.PrincipalAutomation, ID: "grain"},
+	} {
+		callerCtx := ui.WithPrincipal(ctx, who)
+		err = client.SetCapability(callerCtx, task.ID, "read-issues", true)
+		if err == nil || !strings.Contains(err.Error(), "requires human approval") {
+			t.Fatalf("%s SetCapability = %v, want a refusal", who.Kind, err)
+		}
 	}
 	if err := client.SetCapability(ctx, task.ID, "read-issues", true); err != nil {
 		t.Fatalf("a person attaching it: %v", err)

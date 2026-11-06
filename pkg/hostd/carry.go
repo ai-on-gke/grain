@@ -183,7 +183,17 @@ func (s *remoteSession) serveCarry(st net.Conn) {
 		return
 	}
 	var req Request
-	if json.Unmarshal(payload, &req) != nil || req.Op != OpCarry || req.ID == "" {
+	if json.Unmarshal(payload, &req) != nil {
+		st.Close()
+		return
+	}
+	if req.Op == OpRenew {
+		defer st.Close()
+		_ = st.SetDeadline(time.Now().Add(carryHeaderTimeout))
+		s.serveRenew(st, req)
+		return
+	}
+	if req.Op != OpCarry || req.ID == "" {
 		st.Close()
 		return
 	}
@@ -196,6 +206,47 @@ func (s *remoteSession) serveCarry(st net.Conn) {
 	}
 	_ = st.SetReadDeadline(time.Time{})
 	handle(st)
+}
+
+func (s *remoteSession) serveRenew(st net.Conn, req Request) {
+	if s.r == nil || s.r.Renew == nil {
+		_ = writeJSON(st, frameRefused, Refusal{Reason: "credential renewal is not configured on this controller"})
+		return
+	}
+	if req.Renew == nil {
+		_ = writeJSON(st, frameRefused, Refusal{Reason: "missing renew proof"})
+		return
+	}
+	now := time.Now
+	if s.r.now != nil {
+		now = s.r.now
+	}
+	s.r.mu.Lock()
+	hostName := s.peer.Name
+	s.r.mu.Unlock()
+	// Only a key-bound session renews, with its current credential and a
+	// fresh proof from its bound key: a legacy per-host token has no key
+	// behind it, and renewing one would only make it expire.
+	if strings.TrimSpace(s.publicKey) == "" {
+		_ = writeJSON(st, frameRefused, Refusal{Reason: "only a key-bound host renews its credential"})
+		return
+	}
+	if strings.TrimSpace(req.Renew.CurrentToken) == "" {
+		_ = writeJSON(st, frameRefused, Refusal{Reason: "missing current credential in renew proof"})
+		return
+	}
+	if err := VerifyRenewProof(hostName, req.Renew.CurrentToken, s.publicKey, *req.Renew, now(), &s.r.replay); err != nil {
+		_ = writeJSON(st, frameRefused, Refusal{Reason: err.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), carryHeaderTimeout)
+	defer cancel()
+	tok, exp, err := s.r.Renew(ctx, hostName, req.Renew.CurrentToken)
+	if err != nil {
+		_ = writeJSON(st, frameRefused, Refusal{Reason: err.Error()})
+		return
+	}
+	_ = writeJSON(st, frameRenewed, RenewReply{Token: tok, ExpiresAt: exp})
 }
 
 // Carry asks the connected hostd to listen on its own loopback, and

@@ -67,6 +67,9 @@ func (c *taskDetailCache) response(ctx context.Context, client *Client, id strin
 		if v := client.localScriptApprovals().version(client.now()); v != 0 {
 			token = token + ":lsa=" + strconv.FormatInt(v, 10)
 		}
+		if v := client.dispatchConditionVersion(); v != 0 {
+			token = token + ":dc=" + strconv.FormatUint(v, 10)
+		}
 		if entry, ok := c.hit(id, token); ok {
 			return entry.body, entry.etag, nil
 		}

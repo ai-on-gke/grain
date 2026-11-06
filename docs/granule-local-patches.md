@@ -27,15 +27,49 @@ the resync that carries it lands.
 
 ## Synced at
 
-`gke-labs/granule` `main` at `a0aeae5` (`a0aeae57fdefd16e002e1d037a94eabac1bc793b`,
-"Merge pull request #240 from gke-labs/grain/049f1e09/task-2628-ci-port-granule-s-grain-ci",
-2026-11-02).
+`gke-labs/granule` `main` at `b2fda8b` (`b2fda8bbff418d5039b808ec25f5a39ebc3b4849`,
+"Merge pull request #243 from gke-labs/grain/049f1e09/task-2949-nightly-master-regression",
+2026-11-04).
 
-The tree was replaced wholesale from a `git archive` of `a0aeae5`, with the
-local patches listed under "Patches in flight" below re-applied on top.
-The previous sync was `a4b4e4b` (`b0b39e23`).
+The tree was replaced wholesale from a `git archive` of `b2fda8b`, and the
+one patch listed under "Patches in flight" below was re-applied on top --
+it is the only difference from upstream (grain task 3024). The previous
+sync was `a0aeae5` (`a0aeae57`, grain task 2167).
 
-This sync carries PRs #228–#241 on top of `a4b4e4b`, including:
+This sync carries PRs #242 and #243 on top of `a0aeae5`. Neither touches
+Go code, `go.mod`, `go.sum` or `vendor/`:
+- granule's `.grain/workflows` are retired in favour of the GitHub Actions
+  ports in `.github/workflows`, with `.grain/schedules` that review failed
+  scheduled Actions runs (gke-labs/granule#242). Neither directory is read
+  in this repository: grain and GitHub only read the root `.grain/` and
+  `.github/`. The `Dockerfile` changes only in two comments that named
+  `.grain/workflows`.
+- `test/e2e-ipv6.sh` applies the KVM device plugin with the preloaded
+  image already substituted, and dumps the plugin's pods, logs and events
+  when its rollout times out (gke-labs/granule#243).
+
+It also drops the legacy `pkg/forward` compatibility this file listed as
+in flight: `pkg/forward`, `pkg/execwire`'s `ForwardSpecs`,
+`pkg/agent/forward.go`'s `serveLegacyForward`, `pkg/guestexec/forward.go`,
+`cmd/granule-shim`'s `forward` mode, and the `-kube` path in
+`pkg/cli/forward.go` / `pkg/cli/vm.go` (`gke-labs/granule#13`, grain task
+480 / task 721). Upstream never carried them. Grain stopped using them when
+`pkg/granule/forward.go` moved to a `pkg/guestforward.Forwarder` over
+`kubectl exec -i <pod> -c sandbox -- granule forward-stdio` (grain task
+2601); the guest only names which listener took a connection, never where
+to dial, so the controller still reaches nothing beyond the configured
+targets (`TestForwardKubectlRefusesOpenOutsideRemotePorts`). Every
+`kubernetes-granule` pod started since the `a4b4e4b` resync (`b0b39e23`,
+#1456) runs a shim and guest agent that speak `pkg/guestforward`.
+`pkg/trustboundary`'s tests and `tests/deploy`'s
+`TestGitHubCIChangesMirrorsGrainTestsWorkflowPaths` and
+`TestTheGranuleJobRunsTheVendoredModulesOwnTests` now name
+`third_party/granule/pkg/guestforward` where they named `pkg/forward`.
+
+### What the `a0aeae5` sync carried
+
+The `a0aeae5` sync (grain task 2167, module path switched by grain task
+2973) carried PRs #228–#241 on top of `a4b4e4b`, including:
 - `pkg/vmspec`, `pkg/hypervisor`, `pkg/config`, `pkg/cgroupmem`: a VM
   that fills its RAM with page cache is no longer OOM-killed from the host
   (gke-labs/granule#238 / task 2577, `c35ae79`).
@@ -89,33 +123,20 @@ need no change.
 
 ## Patches in flight
 
-- **Legacy `pkg/forward` compatibility -- no longer needed by grain.**
-  `pkg/forward`, `pkg/execwire`'s `ForwardSpecs`, `pkg/agent/forward.go`'s
-  `serveLegacyForward`, `pkg/guestexec/forward.go`, `cmd/granule-shim`'s
-  `forward` mode, and the `-kube` path in `pkg/cli/forward.go` /
-  `pkg/cli/vm.go` keep granule's old `pkg/forward` protocol next to
-  upstream's `pkg/guestforward` (`gke-labs/granule#13`, grain task 480 /
-  task 721). Grain itself no longer uses any of it: `pkg/granule/forward.go`
-  now runs a `pkg/guestforward.Forwarder` over `kubectl exec -i <pod> -c
-  sandbox -- granule forward-stdio`, and its `Command.ForwardArgs` renders
-  upstream's `granule forward pod/<pod> -L CALLER=GUEST -R GUEST=CALLER`
-  (grain task 2601). The guest only names which listener took a
-  connection, never where to dial, so the controller still reaches nothing
-  beyond the configured targets (`TestForwardKubectlRefusesOpenOutsideRemotePorts`).
-  Pod-side, `forward-stdio` and the agent's `guestforward.ServeAgent` have
-  been in the vendored tree since the `a4b4e4b` resync (`b0b39e23`, #1456),
-  and a `kubernetes-granule` pod's shim and guest agent are built from that
-  same tree, so every pod started since then speaks the new protocol. The
-  legacy files stay in `third_party/granule` only until a byte-identical
-  re-vendor of upstream drops them (the module switch, grain task 2973,
-  changed only the module path); that re-vendor should also repoint `tests/deploy`'s and `pkg/trustboundary`'s
-  references to `third_party/granule/pkg/forward`.
-- **Sanitized GCP project placeholder in IPv6 e2e docs and scripts.**
-  `.grain/workflows/e2e-ipv6-gke.yml`, `.github/workflows/e2e-ipv6-gke.yml`,
-  `docs/ipv6-dual-stack-design.md`, `docs/github-actions-ci.md` and
-  `test/e2e-ipv6.sh` replace a contributor-specific GCP project name with
-  `grain-sandbox-dev` so `tests/hygiene` (`TestCoreSaysNoGoogleTokens`)
-  stays clean (`91c0dfffd`).
+- **Sanitized GCP project placeholder in the IPv6 e2e docs and scripts.**
+  `.github/workflows/e2e-ipv6-gke.yml`, `docs/ipv6-dual-stack-design.md`,
+  `docs/github-actions-ci.md` and `test/e2e-ipv6.sh` replace a
+  contributor-specific GCP project name with `grain-sandbox-dev`, one line
+  each, so `tests/hygiene` (`TestCoreSaysNoGoogleTokens`) stays clean
+  (`91c0dfffd`; re-applied by `sed` on top of the `b2fda8b` archive).
+  Upstream still says the original name at `b2fda8b`. The patch goes away
+  either when gke-labs/granule scrubs it (a task asking that is filed
+  against gke-labs/granule) and the next re-vendor is byte-identical, or
+  when a person decides `third_party/granule/` belongs in
+  `tests/hygiene`'s `googleTokensExempt` -- a judgement about what this
+  repository may say that a re-vendor does not get to make on its own.
+  (Upstream's `.grain/workflows/e2e-ipv6-gke.yml`, which this patch also
+  touched, is gone at `b2fda8b`.)
 
 ## Landed upstream
 

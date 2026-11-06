@@ -383,6 +383,11 @@ func Run(ctx context.Context, cfg Config) error {
 	// the UI's own open of the secrets (ui_server.go), never to this one,
 	// so without this no run's resolution was ever recorded (task 3140).
 	secretStore.SetAuditLogger(store)
+	// A dispatch condition's text (DispatchConditions) is served to
+	// every queued task's reason, which an agent reads from its sandbox,
+	// so it is redacted with the same list the journal is read through
+	// -- set here, before anything that could record one runs.
+	DispatchConditions.Redact = dispatchConditionRedactor(SecretsDir(cfg.DataDir), secretStore)
 	stateManager := NewStateManager(cfg.DataDir, db, stateRepo, secretStore, secretsRepo, forbidden)
 	fencedStateManager.Store(stateManager)
 	if lost := writerLockLost.Load(); lost != nil {
@@ -855,7 +860,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 
-	capabilityServers, hostdCapabilityServers := startCapabilityServers(ctx, store, secretStore, cfg.DataDir, cfg.capabilityHostd(), gcpKeyPool(cfg))
+	capabilityServers, hostdCapabilityServers := startCapabilityServers(ctx, store, secretStore, cfg.DataDir, cfg.capabilityHostd())
 	live := NewLiveConfig(store, sandboxes, cfg, githubCredentials).
 		WithSandboxImages(sandboxImages, stockSandboxImage, sandboxImageLabels()).
 		WithCapabilityServers(capabilityServers).
@@ -1095,6 +1100,12 @@ func Run(ctx context.Context, cfg Config) error {
 				// while the UI it left running kept looking perfectly
 				// healthy.
 				ReconcilerDown.Store(true)
+				// And as a named condition with the error and the time,
+				// which is what the health route, every queued task's
+				// reason and the pipeline feed say it by
+				// (DispatchConditions): the boolean above says dispatch
+				// is dead, and this says why.
+				recordDispatchBlock(err)
 				log.Printf("grain daemon: %v -- the UI/API server above is still up, but nothing is "+
 					"dispatching or reconciling tasks until this is fixed and the process is restarted", err)
 			}
@@ -1222,7 +1233,10 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		// without it. The UI and every other sandbox-facing service --
 		// both caches and the model proxies -- were started by run()
 		// before this, and stay up (TestAGitProxyPortTakenFailsOnlyTheGitProxy).
-		return fmt.Errorf("starting git proxy: %w", err)
+		// Named, so that run() records it as the git proxy's own
+		// condition (DispatchConditions) rather than a loop that died.
+		return &dispatchBlock{name: ConditionGitProxy, err: fmt.Errorf("starting git proxy: %w", err),
+			remedy: "free the port the git proxy binds (or move the block with -sandbox-port-base) and restart the daemon"}
 	}
 	cfg.restartGaps.Up(upgrade.ServiceGitProxy)
 	defer func() {
