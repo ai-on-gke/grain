@@ -1232,6 +1232,51 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     await expect(chip).not.toHaveClass(/MuiChip-colorWarning/);
   });
 
+  test("5d2. A board narrowed by a blocked or held value that does not exist says so on its chip", async ({
+    page,
+  }) => {
+    // docs/test-runs/2026-11-06-saved-boards-and-visualizations.md, bug
+    // 1: `blocked:any:true` drew "Blocked is any of Not blocked" -- the
+    // label of the value it is *not* -- over a Kanban board with no
+    // cards, and `humanReview:any:product_decision` (the category is
+    // product-decision) read like the real thing over an empty board.
+    const stamp = Date.now();
+    const board = await seedOne(page, "/api/boards", {
+      name: `WT Unknown Blocked ${stamp}`,
+      kind: "kanban",
+      query: "f=blocked:any:true",
+    });
+    seededBoards.push(board.id);
+
+    await page.goto(`/boards/${board.id}`);
+    const chip = page.locator(".narrowing-chips .MuiChip-root").first();
+    await expect(chip).toHaveText("Blocked is any of “true” (unknown)", {
+      ignoreCase: true,
+    });
+    await expect(chip).toHaveClass(/MuiChip-colorWarning/);
+    await expect(chip).toHaveAttribute(
+      "title",
+      /“true” is not a value Blocked has/,
+    );
+    await expect(page.locator(".board-card")).toHaveCount(0);
+
+    // The value the vocabulary has is known, labelled and matched: the
+    // demo's task 11 waits on task 8.
+    await page.goto(`/boards/${board.id}?f=blocked:any:yes`);
+    await expect(chip).toHaveText("Blocked is any of Blocked", {
+      ignoreCase: true,
+    });
+    await expect(chip).not.toHaveClass(/MuiChip-colorWarning/);
+    await expect(page.locator(".board-card").first()).toBeVisible();
+
+    await page.goto(`/boards/${board.id}?f=humanReview:any:product_decision`);
+    await expect(chip).toHaveText(
+      "Human review is any of “product_decision” (unknown)",
+      { ignoreCase: true },
+    );
+    await expect(chip).toHaveClass(/MuiChip-colorWarning/);
+  });
+
   test("4b. Back from a reloaded task returns to the board it was opened from", async ({
     page,
   }) => {
