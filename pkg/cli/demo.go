@@ -108,6 +108,9 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	uiIAPAudience := fs.String("ui-iap-audience", "", "as on grain daemon: the audience a signed X-Goog-IAP-JWT-Assertion must carry for the demo to sign its caller in from it")
 	uiIAPIssuer := fs.String("ui-iap-issuer", "", "as on grain daemon: the issuer a signed assertion must carry (default "+ui.GoogleIAPIssuer+")")
 	uiIAPKeysURL := fs.String("ui-iap-keys-url", "", "as on grain daemon: where the assertions' signing keys are published (default "+ui.GoogleIAPCertURL+")")
+	uiRegistryIssuer := fs.String("ui-registry-issuer", "", "as on grain daemon: the exact issuer URL a signed X-Grain-Registry-Assertion must carry")
+	uiRegistryAudience := fs.String("ui-registry-audience", "", "as on grain daemon: the single audience URL a signed X-Grain-Registry-Assertion must carry")
+	uiRegistryKeysURL := fs.String("ui-registry-keys-url", "", "as on grain daemon: where the registry's ES256 signing keys are published as a JWK set")
 	uiRequireIAP := fs.Bool("ui-require-iap", false, "as on grain daemon: accept the access code only from loopback with no forwarding headers; needs -ui-iap-audience")
 	uiRequireVerifier := fs.String("ui-require-verifier", "", "as on grain daemon: require network callers to sign in through the named IdentityVerifier (-ui-require-iap is an alias for -ui-require-verifier=iap)")
 	uiAllowedPrincipals := fs.String("ui-allowed-principals", "", ui.AllowedPrincipalsUsage)
@@ -163,6 +166,9 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		UiIAPAudience:       *uiIAPAudience,
 		UiIAPIssuer:         *uiIAPIssuer,
 		UiIAPKeysURL:        *uiIAPKeysURL,
+		UiRegistryIssuer:    *uiRegistryIssuer,
+		UiRegistryAudience:  *uiRegistryAudience,
+		UiRegistryKeysURL:   *uiRegistryKeysURL,
 		UiRequireVerifier:   strings.TrimSpace(*uiRequireVerifier),
 		UiRequireIAP:        *uiRequireIAP,
 		UiAllowedPrincipals: ui.SplitAllowedPrincipals(*uiAllowedPrincipals),
@@ -177,6 +183,9 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		IAPAudience:            *uiIAPAudience,
 		IAPIssuer:              *uiIAPIssuer,
 		IAPKeysURL:             *uiIAPKeysURL,
+		RegistryIssuer:         *uiRegistryIssuer,
+		RegistryAudience:       *uiRegistryAudience,
+		RegistryKeysURL:        *uiRegistryKeysURL,
 		RequireVerifier:        iapCfg.UiRequireVerifier,
 		RequireIAP:             *uiRequireIAP,
 		AllowedPrincipals:      iapCfg.UiAllowedPrincipals,

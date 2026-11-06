@@ -307,6 +307,13 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	uiIAPIssuer := fs.String("ui-iap-issuer", "", "the issuer a signed assertion must carry; defaults to $GRAIN_IAP_ISSUER, then "+ui.GoogleIAPIssuer)
 	uiIAPKeysURL := fs.String("ui-iap-keys-url", "", "where the signing keys for those assertions are published (IAP's PEM map or a JWK set); "+
 		"defaults to $GRAIN_IAP_KEYS_URL, then "+ui.GoogleIAPCertURL)
+	uiRegistryIssuer := fs.String("ui-registry-issuer", "", "the exact issuer URL a signed X-Grain-Registry-Assertion must carry for the UI/API to accept "+
+		"the identity in it (e.g. \"https://grain.example.com\"); defaults to $GRAIN_REGISTRY_ISSUER. All three of -ui-registry-issuer, "+
+		"-ui-registry-audience, and -ui-registry-keys-url must be set to enable the \"registry\" IdentityVerifier")
+	uiRegistryAudience := fs.String("ui-registry-audience", "", "the single audience URL a signed X-Grain-Registry-Assertion must carry "+
+		"(e.g. \"https://<name>.<instance-domain>\"); defaults to $GRAIN_REGISTRY_AUDIENCE")
+	uiRegistryKeysURL := fs.String("ui-registry-keys-url", "", "where the registry's ES256 signing keys are published as a JWK set "+
+		"(e.g. \"https://grain.example.com/.well-known/jwks.json\"); defaults to $GRAIN_REGISTRY_KEYS_URL")
 	uiRequireIAP := fs.Bool("ui-require-iap", false, "accept the access code (bearer or grain_access cookie) only from loopback with no forwarding "+
 		"or proxy headers, and serve no \"Enter access code\" page, so network callers sign in through IAP alone (docs/access-code.md); "+
 		"needs -ui-iap-audience or $GRAIN_IAP_AUDIENCE. Defaults to $GRAIN_REQUIRE_IAP")
@@ -1238,6 +1245,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UiIAPAudience:           *uiIAPAudience,
 		UiIAPIssuer:             *uiIAPIssuer,
 		UiIAPKeysURL:            *uiIAPKeysURL,
+		UiRegistryIssuer:        *uiRegistryIssuer,
+		UiRegistryAudience:      *uiRegistryAudience,
+		UiRegistryKeysURL:       *uiRegistryKeysURL,
 		UiRequireVerifier:       strings.TrimSpace(*uiRequireVerifier),
 		UiRequireIAP:            *uiRequireIAP,
 		UiAllowedPrincipals:     ui.SplitAllowedPrincipals(*uiAllowedPrincipals),
