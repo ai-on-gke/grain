@@ -42,13 +42,13 @@ func legacyAnswers(t *testing.T, commit string, ghcrHas bool, copiedDigest strin
 	if !ghcrHas {
 		has = "exit 1"
 	}
-	script := `written() { grep -qF -- "--tag $1 " "$DOCKER_STUB_LOG"; }
+	script := `written() { grep -qF -- "--tag $1 " "$DOCKER_STUB_LOG" || grep -qF -- "push $1" "$DOCKER_STUB_LOG"; }
 case "$*" in
   "buildx imagetools inspect ghcr.io/"*" --format {{.Manifest.Digest}}")
     ` + strings.Replace(has, "exit 0", "echo sha256:1234; exit 0", 1) + ` ;;
-  "buildx imagetools inspect ghcr.io/bwsalmon/grain/grain:v1.5.0 --format "*revision*)
+  "buildx imagetools inspect ghcr.io/bwsalmon/grain/grain"*" --format "*revision*)
     ` + strings.Replace(has, "exit 0", "echo "+commit+"; exit 0", 1) + ` ;;
-  "buildx imagetools inspect ghcr.io/bwsalmon/grain/grain:v1.5.0 --format "*version*)
+  "buildx imagetools inspect ghcr.io/bwsalmon/grain/grain"*" --format "*version*)
     ` + strings.Replace(has, "exit 0", "echo v1.5.0; exit 0", 1) + ` ;;
   "buildx imagetools inspect ghcr.io/"*) ` + has + ` ;;
   "pull -q ghcr.io/"*) ` + has + ` ;;
@@ -60,6 +60,11 @@ case "$*" in
     written "$4" || exit 1; echo v1.5.0; exit 0 ;;
   "buildx imagetools inspect docker.io/grainai/"*) written "$4" || exit 1 ;;
   "pull -q docker.io/grainai/"*) written "$3" || exit 1 ;;
+  "image inspect --format "*" docker.io/grainai/grain:v1.5.0") echo "docker.io/grainai/grain@sha256:9999" ;;
+  "run --rm "*" sandbox-image") echo "${STUB_SANDBOX_IMAGE:-ghcr.io/bwsalmon/grain/guest:sha-` + commit[:7] + `@sha256:1234}" ;;
+  "run --rm "*" k8s-sandbox-image") echo "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-` + commit[:7] + `@sha256:1234" ;;
+  "run --rm "*" image") echo "ghcr.io/bwsalmon/grain/grain:sha-` + commit[:7] + `" ;;
+  "run --rm "*" version --json") printf '{\n  "release": "v1.5.0"\n}\n' ;;
 esac
 `
 	path := filepath.Join(t.TempDir(), "answers.sh")
@@ -233,13 +238,15 @@ func TestPromoteOfAPreDockerHubReleaseDoesNotSignAnUnverifiedSource(t *testing.T
 
 	env, log := legacySigningEnv(t, legacyAnswers(t, commits["released"], true, "sha256:1234"), true)
 	out, docker, err := promoteRun(t, remote, []string{"promote"}, env)
+	if err != nil {
+		t.Fatalf("promote without REQUIRE_IMAGE_SIGNING failed on unsigned GHCR source: %v\n%s", err, out)
+	}
 	asked, _ := os.ReadFile(log)
-	if strings.Contains(string(asked), "sign --yes --key "+env["IMAGE_SIGNING_KEY"]+" --tlog-upload=false docker.io/grainai/sandbox@") {
+	if strings.Contains(string(asked), "sign --yes --key "+env["IMAGE_SIGNING_KEY"]+" --tlog-upload=false docker.io/grainai/") {
 		t.Errorf("promote signed a copy whose source did not verify:\n%s", asked)
 	}
 	containsRun(t, out, "carries no signature made with")
 	containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/sandbox:sha-"+short+" ghcr.io/bwsalmon/grain/guest@sha256:1234")
-	_ = err
 
 	env, _ = legacySigningEnv(t, legacyAnswers(t, commits["released"], true, "sha256:1234"), true)
 	env["REQUIRE_IMAGE_SIGNING"] = "true"
@@ -250,5 +257,74 @@ func TestPromoteOfAPreDockerHubReleaseDoesNotSignAnUnverifiedSource(t *testing.T
 	containsRun(t, out, "REQUIRE_IMAGE_SIGNING is set, so it is not copied")
 	if strings.Contains(docker, "imagetools create --tag docker.io/grainai/") {
 		t.Errorf("promote copied an unverified source although signing is required:\n%s", docker)
+	}
+}
+
+// When GHCR lacks a stamped grain:vX.Y.Z and promote falls back to
+// rebuilding from grain:sha-<short>, the rebuilt grain:vX.Y.Z is signed
+// only when its sha-<short> source verified against the job's key -- and
+// an unverified sha-<short> is never vouched for by rebuilding it.
+func TestPromoteRebuildSignsOnlyWhenShaSourceVerified(t *testing.T) {
+	remote, commits := preDockerHubReleaseRepo(t)
+	short := commits["released"][:7]
+
+	// Verified sha-<short> source: pulled by verified digest and rebuilt + signed.
+	env, log := legacySigningEnv(t, legacyAnswers(t, commits["released"], true, "sha256:1234"), false)
+	env["DOCKER_STUB_MISSING"] = "ghcr.io/bwsalmon/grain/grain:v1.5.0"
+	out, docker, err := promoteRun(t, remote, []string{"promote"}, env)
+	if err != nil {
+		t.Fatalf("promote failed on verified sha-<short> fallback: %v\n%s\ndocker:\n%s", err, out, docker)
+	}
+	asked, _ := os.ReadFile(log)
+	containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/grain:sha-"+short+" ghcr.io/bwsalmon/grain/grain@sha256:1234")
+	containsRun(t, docker, "pull docker.io/grainai/grain@sha256:1234")
+	containsRun(t, string(asked), "sign --yes --key "+env["IMAGE_SIGNING_KEY"]+" --tlog-upload=false docker.io/grainai/grain@sha256:9999")
+
+	// Unverified sha-<short> source: rebuilt unsigned with a warning, never signed.
+	env, log = legacySigningEnv(t, legacyAnswers(t, commits["released"], true, "sha256:1234"), true)
+	env["DOCKER_STUB_MISSING"] = "ghcr.io/bwsalmon/grain/grain:v1.5.0"
+	out, docker, err = promoteRun(t, remote, []string{"promote"}, env)
+	if err != nil {
+		t.Fatalf("promote without REQUIRE_IMAGE_SIGNING failed on unsigned sha-<short> fallback: %v\n%s\ndocker:\n%s", err, out, docker)
+	}
+	asked, _ = os.ReadFile(log)
+	if strings.Contains(string(asked), "sign --yes --key ") {
+		t.Errorf("rebuild_release_grain signed a rebuild whose sha-<short> source did not verify:\n%s", asked)
+	}
+	containsRun(t, out, "so docker.io/grainai/grain:v1.5.0 is published unsigned")
+}
+
+// A GHCR grain:sha-<short> whose org.opencontainers.image.revision label
+// names another commit (e.g. an older signed build retagged onto this
+// commit's sha- tag) is refused before it can be copied or rebuilt.
+func TestPromoteOfAPreDockerHubReleaseRefusesMismatchedShaRevision(t *testing.T) {
+	remote, commits := preDockerHubReleaseRepo(t)
+	env, _ := legacySigningEnv(t, legacyAnswers(t, commits["old"], true, "sha256:1234"), false)
+	env["DOCKER_STUB_MISSING"] = "ghcr.io/bwsalmon/grain/grain:v1.5.0"
+	out, docker, err := promoteRun(t, remote, []string{"promote"}, env)
+	if err == nil {
+		t.Fatalf("promote succeeded with a grain:sha- image labelled with another commit:\n%s", out)
+	}
+	containsRun(t, out, "is labelled with "+commits["old"]+", not "+commits["released"]+", so it is not copied")
+	if strings.Contains(docker, "--tag docker.io/grainai/grain:") || strings.Contains(docker, "--tag docker.io/grainai/sandbox:v1.5.0") {
+		t.Errorf("promote copied grain or moved a release tag for a mismatched commit:\n%s", docker)
+	}
+}
+
+// Malformed sandbox or image references returned by a source image (such
+// as shell metacharacters that a release's Dockerfile RUN would expand)
+// are refused before docker build runs.
+func TestPromoteRefusesMalformedSourceImageReferences(t *testing.T) {
+	remote, commits := preDockerHubReleaseRepo(t)
+	env := publishEnv(legacyAnswers(t, commits["released"], true, "sha256:1234"))
+	env["DOCKER_STUB_MISSING"] = "ghcr.io/bwsalmon/grain/grain:v1.5.0"
+	env["STUB_SANDBOX_IMAGE"] = "ghcr.io/bwsalmon/grain/guest:sha-bad;touch /tmp/injected"
+	out, docker, err := promoteRun(t, remote, []string{"promote"}, env)
+	if err == nil {
+		t.Fatalf("promote succeeded with malformed sandbox-image reference:\n%s", out)
+	}
+	containsRun(t, out, "answered with malformed image references")
+	if strings.Contains(docker, "\nbuild ") || strings.HasPrefix(docker, "build ") {
+		t.Errorf("promote invoked docker build with malformed build-arg:\n%s", docker)
 	}
 }
