@@ -2385,6 +2385,13 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// one setup failure the guard did not cover. A panic is
 	// recoverRunOne's to finish (finishPanickedRun): err is still nil
 	// while one unwinds through here.
+	runCtx, cancelRun := context.WithCancelCause(context.WithoutCancel(ctx))
+	stopDaemonWatch := context.AfterFunc(ctx, func() { cancelRun(errDaemonStopped) })
+	defer stopDaemonWatch()
+	stopCancelling := deps.Config.TaskCancellers.register(d.TaskID, cancelRun)
+	defer stopCancelling()
+	checkRunFinished(ctx, deps.Store, d.RunID, cancelRun)
+
 	ranAgent := false
 	defer func() {
 		if ranAgent || err == nil {
@@ -2402,6 +2409,16 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		}
 		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runCleanupTimeout)
 		defer cancel()
+		finishAt := deps.Config.now()
+		if finishAt.Before(now) {
+			finishAt = now
+		}
+		if ok, ferr := finishSetupCancellation(finishCtx, deps.Store, d.TaskID, d.RunID, finishAt, context.Cause(runCtx)); ok {
+			if ferr != nil {
+				err = errors.Join(err, fmt.Errorf("orchestrator: finishing run %s cancelled in setup: %w", d.RunID, ferr))
+			}
+			return
+		}
 		// A durable task's setup failure is a suspension rather than a
 		// strike (finishSetupFailed); a full cluster is capacity for
 		// every task alike.
@@ -2605,8 +2622,11 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		// A sandbox that never comes up is counted too, before this returns:
 		// the run fails either way, and a deployment whose sandboxes fail to
 		// start has spent real time and real machine on them.
+		if err := runCtx.Err(); err != nil && ctx.Err() == nil {
+			return err
+		}
 		meter := MeterFor(deps.Store)
-		sandbox, sandboxCounted, err = meter.Acquire(ctx, deps.Sandboxes, model.SandboxKindAgent, sandboxName, shape)
+		sandbox, sandboxCounted, err = meter.Acquire(runCtx, deps.Sandboxes, model.SandboxKindAgent, sandboxName, shape)
 		if err != nil {
 			return fmt.Errorf("orchestrator: acquiring a sandbox for run %s: %w", d.RunID, err)
 		}
@@ -2706,7 +2726,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		}
 		stopTokenRefresh = keepSandboxTokenFresh(ctx, deps.RefreshSandboxToken, sandboxName, deps.SandboxTokenRefreshInterval)
 		gitIdentity := runGitIdentity(ctx, deps.Store, deps.CredentialGitIdentity, task)
-		if err := sandbox.ConfigureGitCredentials(ctx,
+		if err := sandbox.ConfigureGitCredentials(runCtx,
 			deps.Config.GitRemoteBase+"/placeholder/placeholder.git", token, gitIdentity); err != nil {
 			return fmt.Errorf("orchestrator: configuring git credentials for run %s: %w", d.RunID, err)
 		}
@@ -2720,10 +2740,10 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// be pointed at the cache downloads from the internet, as every
 	// sandbox did before the cache existed (applyPackageCache).
 	if !sandboxReused {
-		applyPackageCache(withSkipGoCacheProgBuild(ctx, task.Target == nil), deps.Config, sandbox, d.TaskID)
+		applyPackageCache(withSkipGoCacheProgBuild(runCtx, task.Target == nil), deps.Config, sandbox, d.TaskID)
 	}
 
-	tools, err := sandbox.Tools(ctx)
+	tools, err := sandbox.Tools(runCtx)
 	if err != nil {
 		return err
 	}
@@ -2838,7 +2858,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	if preBuilt.built {
 		framework, err = preBuilt.framework, preBuilt.err
 	} else {
-		framework, err = deps.Framework(ctx, deps.dispatchChoiceFor(ctx, *task))
+		framework, err = deps.Framework(runCtx, deps.dispatchChoiceFor(ctx, *task))
 		leasedFramework = framework
 	}
 	if err != nil {
@@ -2879,6 +2899,9 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	cfg.sessionLedger = deps.Ledger
 	cfg.sessionReach = deps.GitReach
 	cfg.sessionClient = deps.Client
+	cfg.runCtx = runCtx
+	cfg.cancelRun = cancelRun
+	cfg.stopCancelling = stopCancelling
 	framework, cfg, err = consoleDispatch(framework, *task, d.RunID, cfg)
 	if err != nil {
 		return err
@@ -2913,7 +2936,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	if pass, deadline := deps.capabilityPasses().held(d.RunID); pass != nil {
 		notes.say(ctx, capabilityGrantsNote)
 		passDeps := deps.capabilityPasses().heldDeps(d.RunID, deps)
-		mat, err := materializePass(ctx, cfg, sandbox, pass, deadline, passDeps.capabilityService)
+		mat, err := materializePass(runCtx, cfg, sandbox, pass, deadline, passDeps.capabilityService)
 		if err == nil {
 			// Then every grant's mcp_endpoint proxied, handshaken and
 			// named, and its prompt_section rendered (§5.2, §5.4), each
@@ -2921,7 +2944,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 			if deps.Store != nil {
 				mat.narrator = mcp.NewCapabilityNarrator(taskActivityReporter{store: deps.Store, taskID: d.TaskID, now: cfg.now})
 			}
-			if err = mat.wireEndpoints(ctx, passDeps.capabilityDataPlane); err != nil {
+			if err = mat.wireEndpoints(runCtx, passDeps.capabilityDataPlane); err != nil {
 				mat.Close()
 			}
 		}
