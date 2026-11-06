@@ -114,7 +114,7 @@ on every call, so taking it off the task stops the next call.
 
 ### The risk
 
-An agent holding `dispatch-control` decides what this deployment spends
+An agent holding `api:dispatch-control` decides what this deployment spends
 its runs on. It can hold the queue for as long as it likes and start
 whatever it chooses ahead of everybody else's work. Only grant it to
 a task or session you would trust with the pause button and Run now

@@ -112,7 +112,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/internal/heartbeat", s.handleInternalHeartbeat)
 
 	mux.Handle("GET /api/me", s.admitter.RequireHuman(http.HandlerFunc(s.handleGetMe)))
-	mux.Handle("GET /api/shapes", s.admitter.RequireAdmitted(http.HandlerFunc(s.handleGetShapes)))
+	// Service principals read the catalog (/api/directory, /api/route) and
+	// nothing else; shapes are for people creating entries
+	// (registry.design.md, "Plain service calls").
+	mux.Handle("GET /api/shapes", s.admitter.RequireHuman(http.HandlerFunc(s.handleGetShapes)))
 	mux.Handle("GET /api/directory", s.admitter.RequireAdmitted(http.HandlerFunc(s.handleGetDirectory)))
 	mux.Handle("GET /api/entries", s.admitter.RequireHuman(http.HandlerFunc(s.handleGetEntries)))
 	mux.Handle("GET /api/entries/{name}/availability", s.admitter.RequireHuman(http.HandlerFunc(s.handleGetEntryAvailability)))

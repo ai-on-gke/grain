@@ -105,7 +105,7 @@ four is a decision with a rule behind it (grain/task-340). The rule is
 
 The tempting rule -- "a repository may declare anything that only affects
 itself" -- is wrong, because by that test a repository could grant its own
-tasks `gcp-key`, which affects nothing but its own tasks and is exactly
+tasks `…/gcp#gcp-key`, which affects nothing but its own tasks and is exactly
 what must never happen. What makes the real rule safe is that a repository
 *already* decides what code runs: `.grain/workflows` is in the repository,
 its tests are in the repository, its setup script runs its own tree, and
@@ -306,7 +306,9 @@ fields:                            # optional; the inputs it asks for when filed
 capabilities:                      # optional; capabilities and repository access
   - repo-read:acme/upstream        #   the filed task may fetch acme/upstream
   - repo-write:acme/downstream     #   ...and push its own branch to acme/downstream
-  - gcp-key                        #   capabilities bounded by the filing team
+  - 'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent"}'
+                                   #   capabilities bounded by the filing team
+                                   #   (formerly gcp-key, retired in schema migration 97)
 ```
 
 #### Capabilities and repository access: `capabilities:` on a template or schedule
@@ -318,8 +320,9 @@ and `repo-write:<owner>/<repo>` on templates.
 **Team boundary.** A declared capability cannot grant what the filing team is not
 authorized to have. The team the task runs under is the bound: each capability's
 own `CapabilitySpec.AuthorizedTeams`, plus team-scoped capabilities (such as a
-team-scoped `self-debug` and `pipeline-control`). A named GCP key, `gcp-key:<name>`,
-is the deployment's since single-tenant reset stage 4e, and is dropped only when the
+team-scoped `self-debug` and `api:pipeline-control`). A named GCP key,
+`…/gcp#gcp-key` `{permission_set: <name>}` (formerly `gcp-key:<name>`, retired in
+schema migration 97), is the deployment's since single-tenant reset stage 4e, and is dropped only when the
 deployment has no key of that name ([GCP keys](team-gcp-keys.md)).
 An admin-only capability cannot be given to a non-admin team's task.
 When a task is filed (by hand, schedule firing, or path trigger) from a declaration
