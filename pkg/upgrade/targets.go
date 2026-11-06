@@ -164,6 +164,10 @@ type tagCache struct {
 	repo    string
 	tags    []string
 	fetched time.Time
+	// dedicated is whether tags came from a dedicated edition release
+	// repository (dedicatedReleaseRepository), whose bare vX.Y.Z tags
+	// are this edition's own releases.
+	dedicated bool
 }
 
 // Targets lists what the pane's selector offers, each marked with
@@ -193,20 +197,20 @@ func (u *Upgrader) Targets(ctx context.Context) Targets {
 		add(name, TargetChannel)
 	}
 	if repository != "" {
-		tags, err := u.registryTags(ctx, repository)
+		tags, dedicated, err := u.registryTags(ctx, repository)
 		if err != nil {
 			log.Printf("upgrade: listing released versions in %s: %v", repository, err)
 			out.VersionsError = err.Error()
 		}
-		ed := u.edition()
-		for _, v := range releasedVersions(tags, ed) {
+		f := u.tagFilter(dedicated)
+		for _, v := range f.releasedVersions(tags) {
 			add(v, TargetVersion)
 		}
 		if runningRC := u.runningCandidateRelease(); runningRC != "" {
-			out.DiscardedRC = discardedRCFromTags(runningRC, tags, ed)
+			out.DiscardedRC = discardedRCFromTags(runningRC, tags, f)
 		}
 		if running := u.runningPromotedRelease(); running != "" {
-			out.RetractedRelease = retractedReleaseFromTags(running, tags, ed)
+			out.RetractedRelease = retractedReleaseFromTags(running, tags, f)
 		}
 	}
 	for _, pattern := range u.AllowedBranches() {
@@ -239,11 +243,11 @@ func (u *Upgrader) DiscardedRC(ctx context.Context) *DiscardedRC {
 	if repository == "" && u.cfg.ListTags == nil {
 		return nil
 	}
-	tags, err := u.registryTags(ctx, repository)
+	tags, dedicated, err := u.registryTags(ctx, repository)
 	if err != nil {
 		return nil
 	}
-	return discardedRCFromTags(runningRC, tags, u.edition())
+	return discardedRCFromTags(runningRC, tags, u.tagFilter(dedicated))
 }
 
 // CachedDiscardedRC reports DiscardedRC using the cached registry tag list when
@@ -259,10 +263,10 @@ func (u *Upgrader) CachedDiscardedRC(ctx context.Context) *DiscardedRC {
 	key := u.tagCacheKey(repository)
 	u.tags.mu.Lock()
 	cached := u.tags.repo == key && !u.tags.fetched.IsZero() && time.Since(u.tags.fetched) < tagListTTL
-	tags := u.tags.tags
+	tags, dedicated := u.tags.tags, u.tags.dedicated
 	u.tags.mu.Unlock()
 	if cached {
-		return discardedRCFromTags(runningRC, tags, u.edition())
+		return discardedRCFromTags(runningRC, tags, u.tagFilter(dedicated))
 	}
 	if u.cfg.ListTags != nil {
 		return u.DiscardedRC(ctx)
@@ -285,18 +289,18 @@ func (u *Upgrader) CachedRetractedRelease(ctx context.Context) *RetractedRelease
 	key := u.tagCacheKey(repository)
 	u.tags.mu.Lock()
 	cached := u.tags.repo == key && !u.tags.fetched.IsZero() && time.Since(u.tags.fetched) < tagListTTL
-	tags := u.tags.tags
+	tags, dedicated := u.tags.tags, u.tags.dedicated
 	u.tags.mu.Unlock()
 	if !cached {
 		if u.cfg.ListTags == nil {
 			return nil
 		}
 		var err error
-		if tags, err = u.registryTags(ctx, repository); err != nil {
+		if tags, dedicated, err = u.registryTags(ctx, repository); err != nil {
 			return nil
 		}
 	}
-	return retractedReleaseFromTags(running, tags, u.edition())
+	return retractedReleaseFromTags(running, tags, u.tagFilter(dedicated))
 }
 
 // runningPromotedRelease is the release (vX.Y.Z, or edition-qualified
@@ -323,13 +327,13 @@ func (u *Upgrader) runningPromotedRelease() string {
 // retractedReleaseFromTags is RetractedRelease for a deployment running
 // release running, given the registry's tags: nil unless the registry
 // carries running-retracted.
-func retractedReleaseFromTags(running string, tags []string, edition string) *RetractedRelease {
+func retractedReleaseFromTags(running string, tags []string, f tagFilter) *RetractedRelease {
 	if !slices.Contains(tags, running+"-retracted") {
 		return nil
 	}
 	out := &RetractedRelease{Running: running}
-	rels := releasedVersions(tags, edition)
-	if len(rels) == 0 && edition == "" {
+	rels := f.releasedVersions(tags)
+	if len(rels) == 0 && f.edition == "" {
 		rels = releasedVersions(tags)
 	}
 	for _, v := range rels {
@@ -381,7 +385,7 @@ func (u *Upgrader) runningCandidateRelease() string {
 	return ""
 }
 
-func discardedRCFromTags(running string, tags []string, edition string) *DiscardedRC {
+func discardedRCFromTags(running string, tags []string, f tagFilter) *DiscardedRC {
 	m := candidateTagParts.FindStringSubmatch(running)
 	if m == nil {
 		return nil
@@ -392,17 +396,20 @@ func discardedRCFromTags(running string, tags []string, edition string) *Discard
 		return nil
 	}
 	baseVersion := fmt.Sprintf("v%s.%s.%s", maj, min, pat)
-	wantEd := normalizeEdition(edition)
-	if wantEd == "" {
-		wantEd = normalizeEdition(tagEdition(running))
+	// With no edition of its own to go by, the running candidate's
+	// suffix says which tags are its siblings; with neither, any are.
+	if f.edition == "" {
+		f.edition = normalizeEdition(tagEdition(running))
 	}
+	anyEdition := f.edition == "" && !f.bareOK
+	matches := func(tagEd string) bool { return anyEdition || f.accepts(tagEd) }
 	for _, t := range tags {
 		vm := versionTag.FindStringSubmatch(t)
 		if vm == nil {
 			continue
 		}
 		if vm[1] == maj && vm[2] == min && vm[3] == pat {
-			if wantEd == "" || normalizeEdition(vm[4]) == wantEd {
+			if matches(vm[4]) {
 				return nil
 			}
 		}
@@ -423,7 +430,7 @@ func discardedRCFromTags(running string, tags []string, edition string) *Discard
 		if tEd == "" {
 			tEd = cm[6]
 		}
-		if wantEd != "" && normalizeEdition(tEd) != wantEd {
+		if !matches(tEd) {
 			continue
 		}
 		n, err := strconv.Atoi(cm[5])
@@ -440,7 +447,7 @@ func discardedRCFromTags(running string, tags []string, edition string) *Discard
 		return nil
 	}
 	var latest string
-	if rels := releasedVersions(tags, edition); len(rels) > 0 {
+	if rels := f.releasedVersions(tags); len(rels) > 0 {
 		latest = rels[0]
 	}
 	return &DiscardedRC{
@@ -464,11 +471,11 @@ func (u *Upgrader) LatestRelease(ctx context.Context) (string, error) {
 	if repository == "" {
 		return "", errors.New("this deployment upgrades from source, which publishes no release tags to follow")
 	}
-	tags, err := u.registryTags(ctx, repository)
+	tags, dedicated, err := u.registryTags(ctx, repository)
 	if err != nil {
 		return "", fmt.Errorf("listing released versions in %s: %w", repository, err)
 	}
-	if versions := releasedVersions(tags, u.edition()); len(versions) > 0 {
+	if versions := u.tagFilter(dedicated).releasedVersions(tags); len(versions) > 0 {
 		return versions[0], nil
 	}
 	return "", nil
@@ -493,24 +500,26 @@ func (u *Upgrader) tagCacheKey(repository string) string {
 	return repository
 }
 
-func (u *Upgrader) registryTags(ctx context.Context, repository string) ([]string, error) {
+// registryTags lists the tags upgrades can reach, from the release
+// repository or the image registry, and reports whether they came from a
+// dedicated edition release repository (dedicatedReleaseRepository) --
+// where a bare vX.Y.Z is this edition's own release -- rather than from a
+// registry that may be shared between editions.
+func (u *Upgrader) registryTags(ctx context.Context, repository string) (tags []string, dedicated bool, err error) {
 	key := u.tagCacheKey(repository)
 	u.tags.mu.Lock()
 	defer u.tags.mu.Unlock()
 	if u.tags.repo == key && time.Since(u.tags.fetched) < tagListTTL {
-		return u.tags.tags, nil
+		return u.tags.tags, u.tags.dedicated, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	var (
-		tags []string
-		err  error
-	)
 	if u.Mode() == ModeImage && u.cfg.ListTags == nil && u.EffectiveImageSource() == ImageSourceReleaseAssets && !u.shouldBypassDefaultReleaseAssets() {
 		tags, err = u.listReleaseTags(ctx)
+		dedicated = err == nil && u.dedicatedReleaseRepository()
 		if u.EffectiveImageFallback() == ImageSourceRegistry && repository != "" && (err != nil || (!u.IsImageSourceExplicit() && len(tags) == 0)) {
 			if regTags, regErr := ListRegistryTags(ctx, repository); regErr == nil || err != nil {
-				tags, err = regTags, regErr
+				tags, err, dedicated = regTags, regErr, false
 			}
 		}
 	} else {
@@ -521,15 +530,73 @@ func (u *Upgrader) registryTags(ctx context.Context, repository string) ([]strin
 		tags, err = list(ctx, repository)
 		if err != nil && u.Mode() == ModeImage && u.cfg.ListTags == nil && u.EffectiveImageFallback() == ImageSourceReleaseAssets {
 			if relTags, relErr := u.listReleaseTags(ctx); relErr == nil {
-				tags, err = relTags, nil
+				tags, err, dedicated = relTags, nil, u.dedicatedReleaseRepository()
 			}
 		}
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	u.tags.repo, u.tags.tags, u.tags.fetched = key, tags, time.Now()
-	return tags, nil
+	u.tags.repo, u.tags.tags, u.tags.fetched, u.tags.dedicated = key, tags, time.Now(), dedicated
+	return tags, dedicated, nil
+}
+
+// sharedReleaseRepositories are the release repositories whose tags are
+// shared between editions: core's own, which the open-source and legacy
+// pre-split image repositories map to (ReleaseRepositoryForImage), and the
+// legacy pre-split one. A bare vX.Y.Z there is a core build, and an
+// edition's builds carry its suffix (v2.0.0-google).
+var sharedReleaseRepositories = []string{
+	"github.com/ai-on-gke/grain",
+	"github.com/bwsalmon/grain",
+}
+
+// dedicatedReleaseRepository reports whether the release repository this
+// deployment lists release tags from belongs to its edition alone -- one an
+// edition registered for its track (RegisterTrackDefaults), one the operator
+// named (-upgrade-release-repo or the image-source override), or one
+// inferred from a post-split image repository -- rather than one of the
+// sharedReleaseRepositories. A dedicated repository publishes the edition's
+// releases under bare vX.Y.Z / vX.Y.Z-rc.N tags, never vX.Y.Z-<edition>.
+func (u *Upgrader) dedicatedReleaseRepository() bool {
+	if u.cfg.Image == nil {
+		return false
+	}
+	host, owner, repo, err := ParseReleaseRepository(u.EffectiveReleaseAssets().Repository)
+	if err != nil {
+		return false
+	}
+	name := strings.ToLower(hostNameOnly(host) + "/" + owner + "/" + repo)
+	return !slices.Contains(sharedReleaseRepositories, name)
+}
+
+// tagFilter is which editions' tags a deployment accepts from one tag
+// list.
+type tagFilter struct {
+	// edition is the deployment's own edition, normalized ("" is core).
+	edition string
+	// bareOK also accepts unsuffixed tags: the list came from a dedicated
+	// edition release repository, where vX.Y.Z is the edition's release.
+	bareOK bool
+}
+
+// tagFilter is the filter for a tag list from a dedicated edition release
+// repository (dedicated) or from a possibly shared one.
+func (u *Upgrader) tagFilter(dedicated bool) tagFilter {
+	ed := normalizeEdition(u.edition())
+	return tagFilter{edition: ed, bareOK: dedicated && ed != ""}
+}
+
+// accepts is whether a tag carrying edition suffix tagEd ("" for none) is
+// one of this deployment's.
+func (f tagFilter) accepts(tagEd string) bool {
+	tagEd = normalizeEdition(tagEd)
+	return tagEd == f.edition || (f.bareOK && tagEd == "")
+}
+
+// releasedVersions is releasedVersions filtered by f.
+func (f tagFilter) releasedVersions(tags []string) []string {
+	return releasedVersionsMatching(tags, f.accepts)
 }
 
 func (u *Upgrader) edition() string {
@@ -567,14 +634,18 @@ func normalizeEdition(ed string) string {
 // tags, newest first, at most maxVersions of them. When an edition is
 // given, only tags compatible with that edition are included.
 func releasedVersions(tags []string, edition ...string) []string {
+	if len(edition) == 0 {
+		return releasedVersionsMatching(tags, nil)
+	}
+	return tagFilter{edition: normalizeEdition(edition[0])}.releasedVersions(tags)
+}
+
+// releasedVersionsMatching is releasedVersions keeping only the tags whose
+// edition suffix ("" for none) accept takes; a nil accept keeps every one.
+func releasedVersionsMatching(tags []string, accept func(tagEd string) bool) []string {
 	type version struct {
 		tag string
 		n   [3]int
-	}
-	filterByEdition := len(edition) > 0
-	var wantEd string
-	if filterByEdition {
-		wantEd = normalizeEdition(edition[0])
 	}
 	var vs []version
 	for _, t := range tags {
@@ -587,8 +658,7 @@ func releasedVersions(tags []string, edition ...string) []string {
 		if slices.Contains(tags, t+"-retracted") {
 			continue
 		}
-		tagEd := normalizeEdition(m[4])
-		if filterByEdition && tagEd != wantEd {
+		if accept != nil && !accept(m[4]) {
 			continue
 		}
 		var v version

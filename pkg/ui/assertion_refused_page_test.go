@@ -15,11 +15,17 @@
 package ui_test
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -134,5 +140,92 @@ func TestUnavailableVerifierGets503StartingUpPageAndIsNotAdmitted(t *testing.T) 
 	rec := serveFrom(srv, "198.51.100.8:1234", http.MethodGet, "/api/tasks", "", map[string]string{"X-Corp-Proxy-Assertion": "bad:mallory@example.com"})
 	if rec.Code != http.StatusUnauthorized || rec.Header().Get("Retry-After") != "" {
 		t.Fatalf("bad assertion: got %d Retry-After %q, want 401 with none", rec.Code, rec.Header().Get("Retry-After"))
+	}
+}
+
+// End-to-end regression for the built-in IAP verifier (defaultIAPVerifier ->
+// webauth.IAPVerifier -> jwks.Fetch): when -ui-iap-keys-url is unreachable or
+// returning 503 on startup, API callers get 503 + Retry-After: 5, browsers get
+// the starting-up page, the access code does not bypass the unverified header,
+// and logRefusedAssertion records an "unavailable" warning without burning the
+// "unverifiable" slot needed to log a subsequent unknown-kid assertion.
+func TestBuiltInIAPVerifierReturns503WhenJWKSDownAndLogsUnknownKidAfterRecovery(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+
+	priv, pemStr := generateECDSATestKey(t)
+	var jwksUp atomic.Bool
+	jwksSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if !jwksUp.Load() {
+			http.Error(w, "upstream key server starting", http.StatusServiceUnavailable)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{tunnelKid: pemStr})
+	}))
+	t.Cleanup(jwksSrv.Close)
+	ui.SetIAPHTTPClient(jwksSrv.Client())
+
+	const aud = "/projects/987654/global/backendServices/321"
+	const iss = "https://iap-down-test.example"
+
+	logBuf := ui.LogBufferForTest(t)
+
+	store, _ := sqlitetest.Open(t)
+	client := ui.NewClient(ui.Config{
+		Actor:             ui.DefaultActor("owner@example.com"),
+		LocalAPIToken:     testAccessCode,
+		IAPAudience:       aud,
+		IAPIssuer:         iss,
+		IAPKeysURL:        jwksSrv.URL,
+		AllowedPrincipals: []string{"user:alice@example.com"},
+	}, store)
+	if err := client.MigrateAllowedPrincipals(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	srv := ui.NewServerWithClient(client)
+
+	aliceTok := signIAPToken(t, priv, tunnelKid, aud, "alice@example.com", "accounts.google.com:111", iss, time.Now().Add(10*time.Minute))
+	unknownKidTok := signIAPToken(t, priv, "unknown-kid-99", aud, "mallory@example.com", "accounts.google.com:999", iss, time.Now().Add(10*time.Minute))
+
+	// 1. JWKS returns 503 -> both API and browser return 503 + Retry-After: 5, even with access code.
+	for _, h := range []map[string]string{
+		{ui.IAPAssertionHeader: aliceTok},
+		{ui.IAPAssertionHeader: aliceTok, "Authorization": "Bearer " + testAccessCode},
+	} {
+		apiRec := serveFrom(srv, "198.51.100.8:1234", http.MethodGet, "/api/tasks", "", h)
+		if apiRec.Code != http.StatusServiceUnavailable || apiRec.Header().Get("Retry-After") != "5" {
+			t.Fatalf("API while JWKS 503: got %d Retry-After %q, want 503 Retry-After 5: %s",
+				apiRec.Code, apiRec.Header().Get("Retry-After"), apiRec.Body.String())
+		}
+		htmlRec := serveFrom(srv, "198.51.100.8:1234", http.MethodGet, "/", "", h)
+		if htmlRec.Code != http.StatusServiceUnavailable || htmlRec.Header().Get("Retry-After") != "5" ||
+			!strings.Contains(htmlRec.Body.String(), "Sign-in verification is starting up") {
+			t.Fatalf("Browser while JWKS 503: got %d Retry-After %q:\n%s",
+				htmlRec.Code, htmlRec.Header().Get("Retry-After"), htmlRec.Body.String())
+		}
+	}
+
+	firstLogs := logBuf.String()
+	if !strings.Contains(firstLogs, "could not verify X-Goog-IAP-JWT-Assertion yet") {
+		t.Errorf("expected unavailable diagnostic in logs, got:\n%s", firstLogs)
+	}
+	if strings.Contains(firstLogs, "not a configuration mismatch") {
+		t.Errorf("transient JWKS 503 logged clock-skew/bad-signature hint:\n%s", firstLogs)
+	}
+
+	// 2. JWKS recovers -> alice is admitted (200), and unknown-kid returns 401 AND logs its refusal.
+	jwksUp.Store(true)
+	okRec := serveFrom(srv, "198.51.100.8:1234", http.MethodGet, "/api/auth/whoami", "", map[string]string{ui.IAPAssertionHeader: aliceTok})
+	if okRec.Code != http.StatusOK {
+		t.Fatalf("alice after JWKS recovery: got %d: %s", okRec.Code, okRec.Body.String())
+	}
+
+	beforeUnknown := len(logBuf.String())
+	badRec := serveFrom(srv, "198.51.100.8:1234", http.MethodGet, "/api/tasks", "", map[string]string{ui.IAPAssertionHeader: unknownKidTok})
+	if badRec.Code != http.StatusUnauthorized || badRec.Header().Get("Retry-After") != "" {
+		t.Fatalf("unknown-kid after JWKS recovery: got %d Retry-After %q, want 401", badRec.Code, badRec.Header().Get("Retry-After"))
+	}
+	if afterLogs := logBuf.String()[beforeUnknown:]; !strings.Contains(afterLogs, "not a configuration mismatch") {
+		t.Errorf("unknown-kid refusal was suppressed after prior JWKS outage; logs:\n%s", afterLogs)
 	}
 }

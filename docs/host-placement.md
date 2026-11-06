@@ -89,3 +89,46 @@ record of where each run's agent CLI ran, and the run history keeps
 showing it. A deployment that pinned tasks or repositories to a host
 moves the pin to the connection (or connections) those tasks ran on, in
 Settings -> Models.
+
+## Revoking and deleting a host
+
+Revoking a host (Settings -> Hosts -> **Revoke**,
+`POST /api/hostds/{name}/revoke`) retires every token it has and drops its
+live session: it is what cuts a host off. A revoked host stays in the
+registry until it is deleted (Settings -> Hosts -> **Delete**, on revoked
+rows only; `grain host delete <name>`; `DELETE /api/hostds/{name}`),
+which removes its row and every `hostd_token` row it had, and records who
+deleted it in the config audit (`hostd:<name>`), as revoking does.
+
+- **Only a revoked host is deleted.** A live one is refused with "revoke
+  it first", so deleting never cuts off a connected host or its running
+  work by surprise. `local`, the co-located host, is never deleted, and an
+  unknown name is a 404.
+- **Configuration that names it refuses the delete.** A model connection
+  whose `hostd` or `hostdFallback`, or a capability server entry whose
+  `hostd`, names the host by name is listed in the refusal; point it at
+  another host first. Clearing it silently would move that connection's
+  runs, or that server, somewhere nobody chose. A label selector names no
+  one host and does not hold a delete. (Per-task, template and repository
+  pins went with schema 111, above, so there are none to check.)
+- **Runtime state built from the name is cleared and reported.** The
+  usage-limit pauses keyed `<credential>@hostd/<name>` are lifted and
+  forgotten with the host, and the answer (and `grain host delete`)
+  lists each one, so a host registered under the name later does not
+  start out paused.
+- **The run history keeps the name.** `task_run_hostd`, the capability
+  audit's `hostd` and the spool cursors are not touched. A task page and
+  `grain get` show the name each past run recorded, marked deleted when the
+  registry no longer holds that host -- also once the name has been
+  registered again, since that is a different host.
+- **The name can be reused.** After deletion `POST /api/hostds` (or
+  `grain host register`) with the same name registers a fresh host with
+  a new token; nothing of the old row -- owner, labels, tokens -- carries
+  over.
+
+**Delete all revoked** in Settings -> Hosts (`grain host delete-revoked`,
+`POST /api/hostds/delete-revoked`) deletes every revoked host nothing
+still names and lists the ones it skipped, with why.
+
+The `hostd` table is in the state repository's dump (its `hostd_token`
+digests never are), so a deleted row leaves the dump at the next export.

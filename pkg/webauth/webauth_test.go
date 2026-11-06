@@ -681,3 +681,42 @@ func TestRegistryVerifier(t *testing.T) {
 		t.Fatalf("after refetch floor elapsed: id=%+v, ok=%v, err=%v", id2, ok, err)
 	}
 }
+
+// A Cloud Identity endpoint override (-ui-cloud-identity-endpoint,
+// $GRAIN_CLOUD_IDENTITY_ENDPOINT) must not carry the daemon's ADC bearer
+// token in cleartext off this host: anything but https or loopback http is
+// refused before the HTTP client is used, and the check fails closed.
+func TestCloudIdentityCheckerRefusesNonHTTPSEndpointOffLoopback(t *testing.T) {
+	var calls atomic.Int32
+	spy := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return nil, errors.New("unexpected request to " + r.URL.String())
+	})}
+	for _, ep := range []string{
+		"http://cloudidentity.example.com",
+		"http://198.51.100.7:8080",
+		"ftp://127.0.0.1",
+		"127.0.0.1:18280",
+	} {
+		ci := webauth.NewCloudIdentityGroupChecker(
+			webauth.WithCloudIdentityEndpoint(ep),
+			webauth.WithCloudIdentityHTTPClient(spy),
+		)
+		ok, err := ci.IsMember(context.Background(), "ops@example.com", "carol@example.com")
+		if ok || err == nil {
+			t.Errorf("endpoint %q: IsMember = (%v, %v), want a refusal", ep, ok, err)
+		}
+	}
+	t.Setenv("GRAIN_CLOUD_IDENTITY_ENDPOINT", "http://cloudidentity.example.com")
+	if ok, err := webauth.NewCloudIdentityGroupChecker(webauth.WithCloudIdentityHTTPClient(spy)).IsMember(
+		context.Background(), "ops@example.com", "carol@example.com"); ok || err == nil {
+		t.Errorf("$GRAIN_CLOUD_IDENTITY_ENDPOINT over plain http: IsMember = (%v, %v), want a refusal", ok, err)
+	}
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("refused endpoints still made %d HTTP request(s)", n)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

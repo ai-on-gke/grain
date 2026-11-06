@@ -145,6 +145,18 @@ export function connectionText(h) {
   return "Disconnected";
 }
 
+// deletedLines says what deleting each hostd in deleted did, one line
+// each: its name, and the usage-limit pauses cleared with it.
+export function deletedLines(deleted) {
+  return deleted.map((d) => {
+    let line = `Deleted host ${d.name}.`;
+    if (d.clearedPauses?.length) {
+      line += ` Cleared its usage-limit pauses: ${d.clearedPauses.join(", ")}.`;
+    }
+    return line;
+  });
+}
+
 // HostdsSection is Settings → Hostds: the hostd registry (model.Hostd).
 // The co-located hostd is listed as local; every other hostd dials in to
 // /api/hostd/connect with a token of its own, which names it. A token is
@@ -158,6 +170,8 @@ export default function HostdsSection({ showError }) {
   const [shown, setShown] = useState(null);
   const [editing, setEditing] = useState(null);
   const [busy, setBusy] = useState(false);
+  // notice is what the last delete did: { severity, lines }.
+  const [notice, setNotice] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -227,6 +241,52 @@ export default function HostdsSection({ showError }) {
       if (issued?.hostd?.name === h.name) setIssued(null);
       if (shown?.name === h.name) setShown(null);
     });
+  // remove deletes a revoked hostd from the registry, with its tokens
+  // (DELETE /api/hostds/{name}). The daemon refuses one a model
+  // connection or capability server still names, listing them.
+  const remove = (h) => {
+    if (
+      !window.confirm(
+        `Delete host ${h.name} from the registry? Its tokens go with it and the name can be registered again; past runs keep showing it, marked deleted.`,
+      )
+    ) {
+      return;
+    }
+    act(async () => {
+      setNotice(null);
+      const out = await api(`/api/hostds/${encodeURIComponent(h.name)}`, {
+        method: "DELETE",
+      });
+      setNotice({ severity: "success", lines: deletedLines([out]) });
+    });
+  };
+  // removeAllRevoked deletes every revoked hostd nothing still names
+  // (POST /api/hostds/delete-revoked) and says which it skipped.
+  const removeAllRevoked = () => {
+    if (
+      !window.confirm(
+        "Delete every revoked host from the registry? One a model connection or capability server still names is skipped.",
+      )
+    ) {
+      return;
+    }
+    act(async () => {
+      setNotice(null);
+      const out = await api("/api/hostds/delete-revoked", { method: "POST" });
+      const lines = deletedLines(out.deleted || []);
+      for (const sk of out.skipped || []) {
+        lines.push(`Skipped ${sk.name}: ${sk.reason}`);
+      }
+      if (lines.length === 0) lines.push("No revoked hosts to delete.");
+      setNotice({
+        severity: (out.skipped || []).length ? "warning" : "success",
+        lines,
+      });
+    });
+  };
+  const anyRevoked = (hostds || []).some(
+    (h) => h.revoked_at && h.name !== "local" && !h.shared,
+  );
   const save = () =>
     act(async () => {
       await api(`/api/hostds/${encodeURIComponent(editing.name)}`, {
@@ -252,7 +312,8 @@ export default function HostdsSection({ showError }) {
           and is known by the token it presents. A host that dials in through
           IAP is also admitted only as its owner: set the owner to the email or
           service account it connects as. Adding one shows the command that
-          installs it on its machine; Install shows it again.
+          installs it on its machine; Install shows it again. Revoke cuts a host
+          off; a revoked host can then be deleted, which frees its name.
         </Typography>
         {issued ? (
           <Alert
@@ -289,6 +350,31 @@ export default function HostdsSection({ showError }) {
               }
             />
           </Alert>
+        ) : null}
+        {notice ? (
+          <Alert
+            severity={notice.severity}
+            onClose={() => setNotice(null)}
+            sx={{ mb: 2, wordBreak: "break-word" }}
+            data-testid="hostd-delete-notice"
+          >
+            {notice.lines.map((l) => (
+              <div key={l}>{l}</div>
+            ))}
+          </Alert>
+        ) : null}
+        {anyRevoked ? (
+          <Stack direction="row" justifyContent="flex-end" sx={{ mb: 1 }}>
+            <Button
+              size="small"
+              color="error"
+              disabled={busy}
+              onClick={removeAllRevoked}
+              data-testid="hostds-delete-revoked"
+            >
+              Delete all revoked
+            </Button>
+          </Stack>
         ) : null}
         <Box sx={{ overflowX: "auto" }}>
           <Table size="small" data-testid="hostds-table">
@@ -427,6 +513,16 @@ export default function HostdsSection({ showError }) {
                                 Revoke
                               </Button>
                             </>
+                          ) : null}
+                          {h.revoked_at && h.name !== "local" && !h.shared ? (
+                            <Button
+                              size="small"
+                              color="error"
+                              disabled={busy}
+                              onClick={() => remove(h)}
+                            >
+                              Delete
+                            </Button>
                           ) : null}
                         </>
                       )}

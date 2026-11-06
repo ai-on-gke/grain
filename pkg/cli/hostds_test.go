@@ -148,3 +148,51 @@ func TestHostdsRegisterAndInstallPrintTheDaemonsLines(t *testing.T) {
 		t.Error("install with no name succeeded")
 	}
 }
+
+// `grain hostds delete` sends DELETE /api/hostds/<name> and passes the
+// daemon's refusal of a live hostd through; `grain hostds
+// delete-revoked` posts the bulk action.
+func TestHostdsDelete(t *testing.T) {
+	var deleted []string
+	bulk := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/hostds/live-1":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "host live-1 is not revoked: revoke it first, which disconnects it, then delete it"})
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/hostds/"):
+			name := strings.TrimPrefix(r.URL.Path, "/api/hostds/")
+			deleted = append(deleted, name)
+			_ = json.NewEncoder(w).Encode(ui.DeletedHostd{Name: name, ClearedPauses: []string{"agy@hostd/" + name}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/hostds/delete-revoked":
+			bulk = true
+			_ = json.NewEncoder(w).Encode(ui.DeleteRevokedHostdsResult{
+				Deleted: []ui.DeletedHostd{{Name: "old-1"}},
+				Skipped: []ui.SkippedHostd{{Name: "old-2", Reason: "still named"}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	c := ui.NewHTTPClient(srv.URL)
+	ctx := context.Background()
+
+	err := cmdHostds(ctx, c, &printer{}, []string{"delete", "live-1"})
+	if err == nil || !strings.Contains(err.Error(), "revoke it first") {
+		t.Errorf("deleting a live hostd: err = %v, want the daemon's refusal", err)
+	}
+	if err := cmdHostds(ctx, c, &printer{json: true}, []string{"delete", "old-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(deleted) != 1 || deleted[0] != "old-1" {
+		t.Errorf("DELETE requests = %v, want old-1", deleted)
+	}
+	if err := cmdHostds(ctx, c, &printer{}, []string{"delete"}); err == nil {
+		t.Error("delete with no name succeeded")
+	}
+	if err := cmdHostds(ctx, c, &printer{}, []string{"delete-revoked"}); err != nil || !bulk {
+		t.Errorf("delete-revoked: err = %v, posted = %v", err, bulk)
+	}
+}

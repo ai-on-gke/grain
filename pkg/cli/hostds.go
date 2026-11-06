@@ -26,12 +26,14 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-const hostRegistryUsage = `usage: grain host <list|register|install|set-owner> [args]
+const hostRegistryUsage = `usage: grain host <list|register|install|set-owner|delete|delete-revoked> [args]
 
   list
   register [-owner <email>] [-label k=v]... [-token-file <path>] <name>
   install <name>
   set-owner <name> <email|"">
+  delete <name>
+  delete-revoked
 
 The host registry (Settings -> Hosts): the hosts this daemon
 takes host work through. register prints the new host's token once, or
@@ -45,9 +47,17 @@ host that dials in through IAP or another identity verifier's proxy
 must be verified as its owner, so give a remote host the identity it
 connects as: its service account (Workload Identity or a key), or the
 login of the person it runs as. A host over loopback is named by its
-token alone and needs no owner.`
+token alone and needs no owner.
 
-// cmdHostds is `grain host list|register|install|set-owner` (hidden alias
+delete removes a revoked host from the registry, with its tokens, so its
+name can be registered again. A live host is refused -- revoke it first
+(Settings -> Hosts) -- and so is one a model connection's host or host
+fallback, or a capability server's host, still names. Usage-limit pauses
+keyed to it are cleared and listed. Past runs keep its name.
+delete-revoked deletes every revoked host nothing still names, and lists
+the ones it skipped.`
+
+// cmdHostds is `grain host list|register|install|set-owner|delete|delete-revoked` (hidden alias
 // `grain hostds`): the host registry, through /api/hostds.
 func cmdHostds(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	if len(args) == 0 {
@@ -108,6 +118,52 @@ func cmdHostds(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 			return nil
 		}
 		fmt.Printf("host %s: owner %s\n", h.Name, ownerOrNone(h.Owner))
+		return nil
+	case "delete", "rm":
+		fs := flag.NewFlagSet("grain host delete", flag.ContinueOnError)
+		rest, err := parseArgs(fs, subArgs)
+		if err != nil {
+			return err
+		}
+		if len(rest) != 1 {
+			return errors.New("usage: grain host delete <name>")
+		}
+		d, err := c.DeleteHostd(ctx, rest[0])
+		if err != nil {
+			return err
+		}
+		if out.json {
+			out.encode(d)
+			return nil
+		}
+		printDeletedHostd(d)
+		return nil
+	case "delete-revoked":
+		fs := flag.NewFlagSet("grain host delete-revoked", flag.ContinueOnError)
+		rest, err := parseArgs(fs, subArgs)
+		if err != nil {
+			return err
+		}
+		if len(rest) != 0 {
+			return errors.New("usage: grain host delete-revoked")
+		}
+		res, err := c.DeleteRevokedHostds(ctx)
+		if err != nil {
+			return err
+		}
+		if out.json {
+			out.encode(res)
+			return nil
+		}
+		for _, d := range res.Deleted {
+			printDeletedHostd(d)
+		}
+		for _, sk := range res.Skipped {
+			fmt.Printf("skipped host %s: %s\n", sk.Name, sk.Reason)
+		}
+		if len(res.Deleted) == 0 && len(res.Skipped) == 0 {
+			fmt.Println("No revoked hosts to delete.")
+		}
 		return nil
 	default:
 		return fmt.Errorf("unknown host subcommand %q\n%s", sub, hostRegistryUsage)
@@ -173,6 +229,15 @@ func printHostdInstall(inst *ui.HostdInstall) {
 	}
 	if inst.Note != "" {
 		fmt.Println(inst.Note)
+	}
+}
+
+// printDeletedHostd says a host was deleted, and which usage-limit
+// pauses keyed to it went with it.
+func printDeletedHostd(d ui.DeletedHostd) {
+	fmt.Printf("deleted host %s from the registry\n", d.Name)
+	for _, p := range d.ClearedPauses {
+		fmt.Printf("  cleared its usage-limit pause %s\n", p)
 	}
 }
 
