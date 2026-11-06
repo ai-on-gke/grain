@@ -146,7 +146,7 @@ func TestACheckDoesNotChangeTheReadyBadge(t *testing.T) {
 		t.Fatalf("settings status = %d, want 200", rec.Code)
 	}
 	settings := decode[ui.Settings](t, rec)
-	if !capabilityStatus(t, settings.Capabilities, "bootstrap-playbooks").Ready {
+	if !capabilityStatus(t, settings.Capabilities, "read-issues").Ready {
 		t.Error("self-debug stopped being Ready because a check was run")
 	}
 }

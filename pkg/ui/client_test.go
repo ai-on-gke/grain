@@ -326,8 +326,8 @@ func TestAttachingTheMissingCapabilityStopsTheTaskSayingItIsWaiting(t *testing.T
 	c, store, ctx := testClient(t)
 	task := create(t, c, ctx)
 	if err := store.SetGrantWait(ctx, model.GrantWait{
-		TaskID: task.ID, Capability: "bootstrap-playbooks",
-		Resource: "bootstrap-playbooks", WaitingAt: baseTime,
+		TaskID: task.ID, Capability: "read-issues",
+		Resource: "read-issues", WaitingAt: baseTime,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +339,7 @@ func TestAttachingTheMissingCapabilityStopsTheTaskSayingItIsWaiting(t *testing.T
 		t.Fatal("detail says nothing while the task is parked for a missing grant")
 	}
 
-	if err := c.SetCapability(ctx, task.ID, "bootstrap-playbooks", true); err != nil {
+	if err := c.SetCapability(ctx, task.ID, "read-issues", true); err != nil {
 		t.Fatalf("attaching self-debug: %v", err)
 	}
 

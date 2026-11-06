@@ -32,7 +32,7 @@ func TestMigration115RewritesSelfDebugInTheCatalogue(t *testing.T) {
 	cfg.CapabilityPolicy = model.CapabilityPolicy{
 		Catalogue: &model.CapabilityCatalogue{
 			Defaults: model.CatalogueDefaults{
-				Task: []string{"bootstrap-playbooks", "self-debug"},
+				Task: []string{"read-issues", "self-debug"},
 				CI:   []string{"self-debug"},
 				Repos: map[string]model.CatalogueRepoDefaults{
 					"acme/tools": {Task: []string{"self-debug", "api:self-debug"}},
@@ -59,7 +59,7 @@ func TestMigration115RewritesSelfDebugInTheCatalogue(t *testing.T) {
 		t.Fatal("the catalogue was dropped")
 	}
 	became := model.SelfDebugGrants()
-	if want := append([]string{"bootstrap-playbooks"}, became...); !slices.Equal(cat.Defaults.Task, want) {
+	if want := append([]string{"read-issues"}, became...); !slices.Equal(cat.Defaults.Task, want) {
 		t.Errorf("defaults.task = %v, want %v", cat.Defaults.Task, want)
 	}
 	if !slices.Equal(cat.Defaults.CI, became) {
