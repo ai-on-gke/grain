@@ -584,12 +584,27 @@ func IsEmbeddedBootstrapOnlyGrant(grant string) bool {
 	}
 	switch spec.Capability {
 	case ConfigMapRef, SkillCapabilityServerID + "#" + ConfigMapMethod:
-		if secs, ok := stringSliceField(spec.With, "secrets"); ok && len(secs) > 0 {
+		// Anything but a well-formed config_maps/keys/secrets string list
+		// -- a field the classifier does not know, or a list holding a
+		// non-string the mint would skip past to the strings beside it --
+		// is not provably bootstrap-only.
+		for field := range spec.With {
+			switch field {
+			case "config_maps", "keys", "secrets":
+			default:
+				return false
+			}
+		}
+		secs, hasSecs := stringSliceField(spec.With, "secrets")
+		if hasSecs && (secs == nil || len(secs) > 0) {
 			return false
 		}
 		cms, hasCM := stringSliceField(spec.With, "config_maps")
 		keys, hasKeys := stringSliceField(spec.With, "keys")
 		if !hasCM && !hasKeys {
+			return false
+		}
+		if (hasCM && cms == nil) || (hasKeys && keys == nil) {
 			return false
 		}
 		for _, cm := range cms {
@@ -604,6 +619,11 @@ func IsEmbeddedBootstrapOnlyGrant(grant string) bool {
 		}
 		return (hasCM && len(cms) > 0) || (hasKeys && len(keys) > 0)
 	case SkillCapabilityServerID + "#skill":
+		for field := range spec.With {
+			if field != "skills" {
+				return false
+			}
+		}
 		skills, hasSkills := stringSliceField(spec.With, "skills")
 		if !hasSkills || len(skills) == 0 {
 			return false

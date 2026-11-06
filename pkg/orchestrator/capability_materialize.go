@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
@@ -255,13 +256,42 @@ func (m *passMaterialization) apply(ctx context.Context, sb Sandbox) error {
 	return m.runSetup(ctx, commander)
 }
 
+// onlyEmbeddedBootstrapPlacements reports whether every placement in pass
+// belongs to a grant selecting only the embedded bootstrap map and is,
+// byte for byte, one of the files this binary embeds for it
+// (intree.EmbeddedBootstrapPlacements), at its own path, not executable and
+// owned by nobody but the sandbox user. The grant's arguments alone are not
+// enough: the config-map reference resolves to whatever server the
+// deployment attaches under that id, and a skill server's -dir bootstrap
+// reads a directory of that name when one exists, so it is the response
+// itself that is checked before it is written onto grain's own host.
 func onlyEmbeddedBootstrapPlacements(pass *protocol.Pass) bool {
 	if pass == nil {
 		return true
 	}
+	var embedded map[string]string
 	for _, mg := range pass.Grants {
-		if mg.Response != nil && len(mg.Response.Placements) > 0 && !model.IsEmbeddedBootstrapOnlyGrant(model.RecordedCapabilityGrant(mg.Grant)) {
+		if mg.Response == nil || len(mg.Response.Placements) == 0 {
+			continue
+		}
+		if !model.IsEmbeddedBootstrapOnlyGrant(model.RecordedCapabilityGrant(mg.Grant)) {
 			return false
+		}
+		if embedded == nil {
+			var err error
+			if embedded, err = intree.EmbeddedBootstrapPlacements(); err != nil {
+				return false
+			}
+		}
+		for _, pl := range mg.Response.Placements {
+			want, ok := embedded[pl.Path]
+			if !ok || (pl.Owner != "" && pl.Owner != sandboxUser) || pl.FileMode()&0o7111 != 0 {
+				return false
+			}
+			data, err := pl.Decoded()
+			if err != nil || string(data) != want {
+				return false
+			}
 		}
 	}
 	return true
