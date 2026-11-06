@@ -21,6 +21,7 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
@@ -65,15 +66,36 @@ func hostdDisconnectedSubject(name string) string { return "hostd-disconnected:"
 // (runhost.Hostd.ReattachTimeout). Nothing moves to another hostd.
 // A hostd that connects is also rid of the CLIs it still runs for
 // finished runs (releaseFinishedHostdRuns) when hub is set.
+//
+// Each change is handled on its own goroutine, so a connect's handler
+// (slowed by the round trip to the hostd in releaseFinishedHostdRuns)
+// can finish after the drop that followed it. The handlers for one name
+// therefore run one at a time, and with hub set each acts on whether
+// the hostd is connected when it runs rather than on the change that
+// queued it: the last handler to run sees the latest state, so a clear
+// never lands after the raise for a later drop, or the reverse.
 func hostdConnectionNotifier(store *model.Store, hub *hostd.Remote) func(name string, connected bool) {
+	var locks sync.Map // hostd name -> *sync.Mutex
 	return func(name string, connected bool) {
 		go func() {
+			l, _ := locks.LoadOrStore(name, new(sync.Mutex))
+			mu := l.(*sync.Mutex)
+			mu.Lock()
+			defer mu.Unlock()
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			subject := hostdDisconnectedSubject(name)
+			if hub != nil {
+				connected = hub.HostdStatus(name).Connected
+			}
 			if connected {
 				if hub != nil {
 					releaseFinishedHostdRuns(ctx, store, hostd.Client{Dial: hub.Dialer(name), Build: daemonBuild()}, name)
+					if !hub.HostdStatus(name).Connected {
+						// It dropped meanwhile; the drop's own handler,
+						// queued behind this one, raises the notice.
+						return
+					}
 				}
 				if _, err := store.ClearNotification(ctx, subject, "automation:hostd"); err != nil {
 					log.Printf("grain daemon: clearing %s: %v", subject, err)
