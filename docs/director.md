@@ -93,9 +93,10 @@ their title is exactly what their first message would give, and as
 offered for renaming.
 
 Two capabilities are deliberately not shipped on and are one tick away:
-**self-repair**, which lets a run change things on grain's own host and
-is the one grant here that can break the deployment it is talking about,
-and **memory**, which writes the standing instructions every later run is
+**`https://grain.dev/capabilities/grain#host-exec`** (formerly `self-repair`),
+which lets a run change things on grain's own host and is the one grant here
+that can break the deployment it is talking about, and **`api:memory`**
+(formerly `memory`), which writes the standing instructions every later run is
 given.
 
 A wrapper distribution can register further capabilities as on by default
