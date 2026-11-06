@@ -247,6 +247,10 @@ func TestCheckCapabilityPatterns(t *testing.T) {
 		{`deny: [boot*]`, model.SkillCapabilityServerID + `#skill={"skills":["bootstrap"]}`, "forbids capability"},
 		{`deny: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.SkillCapabilityServerID + `#skill={"skills":["bootstrap"]}`, "forbids capability"},
 		{`deny: [` + strconvQuote(model.ConfigMapRef+`={"secrets":["prod"]}`) + `]`, model.BootstrapPlaybooksGrant, ""},
+		{`deny: [bootstrap-playbooks]`, model.SkillCapabilityServerID + `#config-map={"secrets":["prod"]}`, "forbids capability"},
+		{`deny: [` + strconvQuote(model.ConfigMapRef) + `]`, model.SkillCapabilityServerID + `#config-map={"secrets":["prod"]}`, "forbids capability"},
+		{`deny: [` + strconvQuote(model.ConfigMapRef+`={"secrets":["prod"]}`) + `]`, model.SkillCapabilityServerID + `#config-map={"secrets":["prod"]}`, "forbids capability"},
+		{`deny: [` + strconvQuote(model.SkillCapabilityServerID+"#*") + `]`, model.ConfigMapRef + `={"secrets":["prod"]}`, "forbids capability"},
 	}
 	for _, c := range cases {
 		p := mustParse(t, "repos: [acme/widgets, other/widgets, ai-on-gke/grain]\ncapabilities:\n  "+c.rules+"\n")

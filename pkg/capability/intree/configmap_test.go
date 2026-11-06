@@ -226,6 +226,29 @@ func TestSkillServerDirBootstrapServesEmbeddedPlaybooks(t *testing.T) {
 	if p := placement(t, resp, "/home/debian/.skills/bootstrap/gcp-capabilities.md"); p.Content != string(raw) {
 		t.Errorf("gcp-capabilities.md len = %d, want %d", len(p.Content), len(raw))
 	}
+
+	// EnsureBuiltins migrates `grain capability skill -dir bootstrap` to
+	// `grain capability config-map -dir bootstrap`; NewConfigMap must still
+	// expose #skill for the embedded bootstrap playbooks without a ./bootstrap
+	// directory on disk, while keeping #config-map's implicit default refused.
+	cm, err := NewConfigMap(ConfigMapConfig{Dir: "bootstrap"})
+	if err != nil {
+		t.Fatalf("NewConfigMap(Dir: bootstrap): %v", err)
+	}
+	cmPS, err := attachConfigured(t, cm, nil, nil)
+	if err != nil {
+		t.Fatalf("attach NewConfigMap(Dir: bootstrap): %v", err)
+	}
+	if cmPS.Methods["config-map"] == nil || cmPS.Methods["skill"] == nil {
+		t.Fatalf("NewConfigMap(Dir: bootstrap) methods = %v, want both config-map and skill", cmPS.Methods)
+	}
+	if implicit := mint(t, cmPS, "config-map", "cm-boot-implicit", nil); implicit.Status != protocol.StatusRefused {
+		t.Errorf("NewConfigMap(Dir: bootstrap) implicit config-map mint = %+v, want refused", implicit)
+	}
+	cmSkillResp := mint(t, cmPS, "skill", "cm-boot-sk-1", map[string]any{"skills": []any{"bootstrap"}})
+	if cmSkillResp.Status != protocol.StatusOK || placement(t, cmSkillResp, "/home/debian/.skills/bootstrap/SKILL.md").Content == "" {
+		t.Errorf("NewConfigMap(Dir: bootstrap) skill mint = %+v", cmSkillResp)
+	}
 }
 
 func placementPaths(r *protocol.MintResponse) []string {

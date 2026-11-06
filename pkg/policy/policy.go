@@ -516,13 +516,42 @@ func retiredAs(name string) (string, bool) {
 	return to, to != name
 }
 
+func swapSkillConfigMapServerID(capability string) string {
+	trimmed := strings.TrimSpace(capability)
+	id, rest, ok := strings.Cut(trimmed, "#")
+	if !ok {
+		return ""
+	}
+	switch {
+	case strings.EqualFold(id, model.SkillCapabilityServerID):
+		return model.ConfigMapCapabilityServerID + "#" + rest
+	case strings.EqualFold(id, model.ConfigMapCapabilityServerID):
+		return model.SkillCapabilityServerID + "#" + rest
+	default:
+		return ""
+	}
+}
+
 // deniesCapability is matchesCapability for Deny, which also reads a
 // retired bare name, on either side, as the grant it became: a policy
 // file on this machine is not rewritten by the schema migration that
 // rewrote the task's grants (git-push-any-ref became repo#write), and a
 // deny it names must not stop applying when that happens. The retired
-// name denies the whole method it became, whatever the arguments.
+// name denies the whole method it became, whatever the arguments. Because
+// servers.Registry implicitly aliases https://grain.dev/capabilities/skill
+// to https://grain.dev/capabilities/config-map, a deny naming either ID
+// denies grants under the other as well.
 func deniesCapability(patterns []string, capability string) bool {
+	if deniesCapabilityOne(patterns, capability) {
+		return true
+	}
+	if alt := swapSkillConfigMapServerID(capability); alt != "" {
+		return deniesCapabilityOne(patterns, alt)
+	}
+	return false
+}
+
+func deniesCapabilityOne(patterns []string, capability string) bool {
 	if matchesCapability(patterns, capability) {
 		return true
 	}

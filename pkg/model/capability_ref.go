@@ -696,7 +696,23 @@ func equivalentCapabilityRefs(ref string, serverMaps []map[string]protocol.Serve
 		}
 		refs = append(refs, cand)
 	}
+	addImplicitSkillConfigMapAlias := func() {
+		switch id {
+		case ConfigMapCapabilityServerID:
+			add(SkillCapabilityServerID)
+		case SkillCapabilityServerID:
+			add(ConfigMapCapabilityServerID)
+		}
+	}
+	if len(serverMaps) == 0 {
+		addImplicitSkillConfigMapAlias()
+	}
 	for _, servers := range serverMaps {
+		_, hasSkill := servers[SkillCapabilityServerID]
+		_, hasCM := servers[ConfigMapCapabilityServerID]
+		if !(hasSkill && hasCM) && (hasCM || hasSkill || len(servers) == 0) {
+			addImplicitSkillConfigMapAlias()
+		}
 		for entryID, cfg := range servers {
 			if entryID == id {
 				for _, a := range cfg.Aliases {
