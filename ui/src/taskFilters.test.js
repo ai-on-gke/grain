@@ -856,15 +856,22 @@ describe("describing a narrowing", () => {
         values: ["asked", "awaiting_reply", NONE],
       }),
     ).toEqual([]);
-    // An origin's order is only how it sorts ("imported" is not in it),
-    // and an open vocabulary takes any value.
+    // Origin's order is every value originOf returns, so "imported" is
+    // known and a value outside it says so.
     expect(
       unknownValues(attr("origin"), {
         attr: "origin",
         op: "any",
-        values: ["imported"],
+        values: ["imported", "robot"],
       }),
-    ).toEqual([]);
+    ).toEqual(["robot"]);
+    expect(
+      describeCondition(
+        attr("origin"),
+        { attr: "origin", op: "any", values: ["imported", "robot"] },
+        config,
+      ),
+    ).toBe("Origin is any of Imported issue, “robot” (unknown)");
     expect(
       unknownValues(attr("repo"), {
         attr: "repo",
@@ -1668,17 +1675,46 @@ describe("attributesFor", () => {
 });
 
 describe("originOf", () => {
-  it("names the one thing that put a task in the list", () => {
-    expect(originOf(task({}))).toBe("hand");
-    expect(originOf(task({ generatedFrom: "7" }))).toBe("proposed");
-    expect(originOf(task({ scheduled: true }))).toBe("schedule");
-    expect(originOf(task({ suiteRun: true }))).toBe("suite");
-    expect(originOf(task({ imported: true }))).toBe("imported");
-    expect(originOf(task({ author: "external:w", authorKind: "agent" }))).toBe(
+  it("names the one thing that put a task in the list, in the attribute's closed order", () => {
+    const cases = [
+      [task({}), "hand"],
+      [task({ author: "external:w", authorKind: "agent" }), "external"],
+      [task({ generatedFrom: "7" }), "proposed"],
+      [task({ imported: true }), "imported"],
+      [task({ imported: true, generatedFrom: "7" }), "imported"],
+      [task({ scheduled: true }), "schedule"],
+      [task({ suiteRun: true }), "suite"],
+      [task({ stacked: true, generatedFrom: "7" }), "fix"],
+      [task({ stacked: true, review: true }), "review"],
+    ];
+    for (const [t, want] of cases) {
+      expect(originOf(t)).toBe(want);
+      expect(attr("origin").order).toContain(want);
+    }
+    const oneOfEach = [
+      task({ id: "review", stacked: true, review: true }),
+      task({ id: "imported", imported: true }),
+      task({ id: "hand" }),
+      task({ id: "schedule", scheduled: true }),
+      task({ id: "proposed", generatedFrom: "7" }),
+      task({ id: "fix", stacked: true, generatedFrom: "7" }),
+      task({ id: "suite", suiteRun: true }),
+      task({ id: "external", author: "external:w", authorKind: "agent" }),
+    ];
+    expect(
+      sortTasks(oneOfEach, [{ attr: "origin", dir: "asc" }], attrs, config).map(
+        (t) => t.id,
+      ),
+    ).toEqual([
+      "hand",
       "external",
-    );
-    expect(originOf(task({ stacked: true, generatedFrom: "7" }))).toBe("fix");
-    expect(originOf(task({ stacked: true, review: true }))).toBe("review");
+      "proposed",
+      "imported",
+      "schedule",
+      "suite",
+      "fix",
+      "review",
+    ]);
   });
 });
 

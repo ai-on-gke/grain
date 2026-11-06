@@ -2402,32 +2402,36 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// while one unwinds through here.
 	runCtx, cancelRun := context.WithCancelCause(context.WithoutCancel(ctx))
 	stopDaemonWatch := context.AfterFunc(ctx, func() { cancelRun(errDaemonStopped) })
+	defer stopDaemonWatch()
 	stopCancelling := deps.Config.TaskCancellers.register(d.TaskID, cancelRun)
-	watcherDone := make(chan struct{})
-	go func() {
-		defer close(watcherDone)
-		watchForTaskClosed(runCtx, ctx, deps.Store, d.TaskID, d.RunID, deps.Config.cancelPollInterval(), cancelRun)
-	}()
-	var stopWatchOnce sync.Once
-	stopRunWatch := func() {
-		stopWatchOnce.Do(func() {
-			stopDaemonWatch()
-			stopCancelling()
-			cancelRun(nil)
-			<-watcherDone
-		})
-	}
-	defer stopRunWatch()
+	defer stopCancelling()
+	checkRunCancelledElsewhere(ctx, deps.Store, d.TaskID, d.RunID, cancelRun)
 
 	ranAgent := false
 	defer func() {
 		if ranAgent || err == nil {
 			return
 		}
+		// ctx is the daemon's: done here means the daemon is stopping
+		// under a run still in setup, which hands the run back rather
+		// than failing it (finishStoppedInSetup).
+		if ctx.Err() != nil {
+			if ferr := finishStoppedInSetup(ctx, deps.Store, d.TaskID, d.RunID, now); ferr != nil {
+				err = errors.Join(err, fmt.Errorf("orchestrator: finishing run %s stopped in setup: %w", d.RunID, ferr))
+			}
+			err = fmt.Errorf("orchestrator: run %s: %w", d.RunID, errors.Join(errDaemonStopped, err))
+			return
+		}
 		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runCleanupTimeout)
 		defer cancel()
-		if handled, cerr := finishCancelledInSetup(ctx, finishCtx, deps.Store, d.TaskID, d.RunID, now, runCtx, cancelRun, err); handled {
-			err = cerr
+		finishAt := deps.Config.now()
+		if finishAt.Before(now) {
+			finishAt = now
+		}
+		if ok, ferr := finishSetupCancellation(finishCtx, deps.Store, d.TaskID, d.RunID, finishAt, context.Cause(runCtx)); ok {
+			if ferr != nil {
+				err = errors.Join(err, fmt.Errorf("orchestrator: finishing run %s cancelled in setup: %w", d.RunID, ferr))
+			}
 			return
 		}
 		// A durable task's setup failure is a suspension rather than a
@@ -2442,7 +2446,6 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 			err = errors.Join(err, fmt.Errorf("orchestrator: finishing run %s after its setup failed: %w", d.RunID, ferr))
 		}
 	}()
-	checkTaskClosed(ctx, deps.Store, d.TaskID, d.RunID, cancelRun)
 
 	var leasedFramework agent.Framework
 	if preBuilt.built {
@@ -2617,14 +2620,6 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 			log.Printf("orchestrator: recording run %s's sandbox keys: %v", d.RunID, kerr)
 		}
 	}
-	checkTaskClosed(ctx, deps.Store, d.TaskID, d.RunID, cancelRun)
-	if runCtx.Err() != nil {
-		if warmSandbox != nil {
-			releaseWarmSandboxEntry(context.WithoutCancel(ctx), warmSandbox)
-		}
-		return context.Cause(runCtx)
-	}
-
 	var sandbox Sandbox
 	var sandboxCounted func(context.Context)
 	if sandboxReused {
@@ -2642,6 +2637,9 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		// A sandbox that never comes up is counted too, before this returns:
 		// the run fails either way, and a deployment whose sandboxes fail to
 		// start has spent real time and real machine on them.
+		if err := runCtx.Err(); err != nil && ctx.Err() == nil {
+			return err
+		}
 		meter := MeterFor(deps.Store)
 		sandbox, sandboxCounted, err = meter.Acquire(runCtx, deps.Sandboxes, model.SandboxKindAgent, sandboxName, shape)
 		if err != nil {
@@ -2756,7 +2754,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// and unlike them it never fails a dispatch: a sandbox that could not
 	// be pointed at the cache downloads from the internet, as every
 	// sandbox did before the cache existed (applyPackageCache).
-	if !sandboxReused && runCtx.Err() == nil {
+	if !sandboxReused {
 		applyPackageCache(withSkipGoCacheProgBuild(runCtx, task.Target == nil), deps.Config, sandbox, d.TaskID)
 	}
 
@@ -2896,9 +2894,6 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// cannot serve ends as a setup-failed run saying exactly that, rather
 	// than as an agent run nobody was watching.
 	cfg := deps.Config
-	cfg.runCtx = runCtx
-	cfg.cancelRun = cancelRun
-	cfg.stopRunWatch = stopRunWatch
 	cfg.PreparedCapabilities = prepared
 	cfg.sandboxPod = sandboxPod
 	if reporter, ok := sandbox.(SandboxOOMReporter); ok {
@@ -2919,6 +2914,9 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	cfg.sessionLedger = deps.Ledger
 	cfg.sessionReach = deps.GitReach
 	cfg.sessionClient = deps.Client
+	cfg.runCtx = runCtx
+	cfg.cancelRun = cancelRun
+	cfg.stopCancelling = stopCancelling
 	framework, cfg, err = consoleDispatch(framework, *task, d.RunID, cfg)
 	if err != nil {
 		return err
@@ -2951,9 +2949,6 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// pass -- with the failing grant reported on the task (§5.5.4). The
 	// forwards close when this run ends, before the pass is released.
 	if pass, deadline := deps.capabilityPasses().held(d.RunID); pass != nil {
-		if runCtx.Err() != nil {
-			return context.Cause(runCtx)
-		}
 		notes.say(ctx, capabilityGrantsNote)
 		passDeps := deps.capabilityPasses().heldDeps(d.RunID, deps)
 		mat, err := materializePass(runCtx, cfg, sandbox, pass, deadline, passDeps.capabilityService)
@@ -2969,9 +2964,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 			}
 		}
 		if err != nil {
-			if runCtx.Err() == nil && ctx.Err() == nil {
-				reportCapabilitySetupFailure(ctx, deps.Store, d.TaskID, err, cfg.now())
-			}
+			reportCapabilitySetupFailure(ctx, deps.Store, d.TaskID, err, cfg.now())
 			return fmt.Errorf("orchestrator: materializing run %s's capability grants: %w", d.RunID, err)
 		}
 		defer mat.Close()

@@ -1275,6 +1275,24 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
       { ignoreCase: true },
     );
     await expect(chip).toHaveClass(/MuiChip-colorWarning/);
+
+    await page.goto(`/boards/${board.id}?f=origin:any:robot`);
+    await expect(chip).toHaveText("Origin is any of “robot” (unknown)", {
+      ignoreCase: true,
+    });
+    await expect(chip).toHaveClass(/MuiChip-colorWarning/);
+    await expect(page.locator(".board-card")).toHaveCount(0);
+
+    await page.goto(`/boards/${board.id}?f=origin:any:imported`);
+    await expect(chip).toHaveText("Origin is any of Imported issue", {
+      ignoreCase: true,
+    });
+    await expect(chip).not.toHaveClass(/MuiChip-colorWarning/);
+    await expect(
+      page.locator(".board-card", {
+        hasText: "[#42] Search results drop the last page",
+      }),
+    ).toBeVisible();
   });
 
   test("4b. Back from a reloaded task returns to the board it was opened from", async ({

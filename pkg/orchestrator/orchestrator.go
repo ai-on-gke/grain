@@ -444,15 +444,6 @@ type Config struct {
 	// sandboxPod.
 	capabilityMCPServers     []agent.CapabilityMCPServer
 	capabilityPromptSections string
-	// runCtx, cancelRun and stopRunWatch, when set by runOneWithFramework,
-	// carry the run's cancellable context, its TaskCancellers registration
-	// and its store-polled watcher from the start of sandbox setup into
-	// RunDispatch, so a Stop or Close pressed while a sandbox is booting or
-	// a repository is cloning cancels that setup at once. Direct callers of
-	// RunDispatch leave them nil and RunDispatch creates its own.
-	runCtx       context.Context
-	cancelRun    context.CancelCauseFunc
-	stopRunWatch func()
 	// ControllerMCP builds a host-side proxy targeting POST /api/mcp for a
 	// run holding api:* grants, injecting daemon authentication and
 	// X-Grain-Acting-Task: <taskID> so built-in sessions and tasks reach
@@ -1018,6 +1009,15 @@ type Config struct {
 	// same reach and fork-head checks processResult gives the rest.
 	sessionReach  *gitproxy.Reach
 	sessionClient github.Client
+
+	// runCtx, cancelRun and stopCancelling carry runOneWithFramework's
+	// per-run cancellation context and TaskCancellers registration into
+	// RunDispatch so a cancellation (Stop, pause, pre-emption, capability
+	// restart) arriving during sandbox setup or checkout reaches the run
+	// rather than missing TaskCancellers until framework.Run begins.
+	runCtx         context.Context
+	cancelRun      context.CancelCauseFunc
+	stopCancelling func()
 }
 
 func (c Config) cancelPollInterval() time.Duration {

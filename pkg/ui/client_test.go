@@ -3421,6 +3421,46 @@ func TestStop(t *testing.T) {
 	}
 }
 
+type lateRegisteringTaskCanceller struct {
+	calls int
+}
+
+func (l *lateRegisteringTaskCanceller) CancelTask(_ context.Context, _ string) bool {
+	l.calls++
+	// Misses the first check (before the run registered its canceller), then
+	// succeeds once Stop re-checks after finishing the open run row.
+	return l.calls >= 2
+}
+
+func TestStopReachesRunRegisteredDuringFinishRun(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	task := create(t, c, ctx)
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	if err := store.StartRun(ctx, model.Run{
+		ID: task.ID + "-1", TaskID: task.ID, Attempt: 1, StartedAt: now,
+	}, model.Limits{}); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	canceller := &lateRegisteringTaskCanceller{}
+	c.Config.TaskCanceller = canceller
+
+	if err := c.Stop(ctx, task.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if canceller.calls != 2 {
+		t.Fatalf("CancelTask calls = %d, want 2 (before and after FinishRun)", canceller.calls)
+	}
+	runs, err := store.Runs(ctx, task.ID)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("Runs: %v, len = %d", err, len(runs))
+	}
+	if runs[0].FinishedAt == nil || runs[0].Outcome != "cancelled" || runs[0].Detail != model.TurnStoppedDetail {
+		t.Fatalf("run = %+v, want finished cancelled/%q", runs[0], model.TurnStoppedDetail)
+	}
+}
+
 // A stopped turn is "Asked" in the UI like a question is, so every view
 // of the task has to say which of the two it is (Task.TurnStopped).
 func TestStoppedTurnIsMarkedOnEveryView(t *testing.T) {

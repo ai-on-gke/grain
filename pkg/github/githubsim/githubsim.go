@@ -342,6 +342,8 @@ type WorkflowRun struct {
 	Conclusion string
 	RunAttempt int
 	HTMLURL    string
+	// DisplayTitle, when set, is served as display_title (a `run-name`).
+	DisplayTitle string
 	// CreatedAt, when set, is served as created_at and run_started_at and
 	// is what ?created=>=... filters on; a run without one always matches.
 	CreatedAt time.Time
@@ -3227,6 +3229,9 @@ func (s *Sim) repoRunsJSON(owner, repo string) map[string]any {
 			"run_attempt":     attempt,
 			"html_url":        htmlURL,
 		})
+		if wr.DisplayTitle != "" {
+			runs[len(runs)-1]["display_title"] = wr.DisplayTitle
+		}
 		if !wr.CreatedAt.IsZero() {
 			at := wr.CreatedAt.UTC().Format(time.RFC3339)
 			runs[len(runs)-1]["created_at"] = at
