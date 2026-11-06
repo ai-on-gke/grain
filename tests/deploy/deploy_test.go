@@ -3439,6 +3439,19 @@ func TestEveryBaseImageIsPinnedByDigest(t *testing.T) {
 	}
 }
 
+func TestRegistryDockerfileStampsVersionAndExcludesBuildCA(t *testing.T) {
+	df := read(t, "Dockerfile.registry")
+	contains(t, df, "github.com/ai-on-gke/grain/pkg/version.Release=${RELEASE}")
+	contains(t, df, "github.com/ai-on-gke/grain/pkg/version.Edition=${EDITION}")
+	absent(t, df, "pkg/buildinfo")
+	absent(t, df, "COPY --from=build /usr/local/share/ca-certificates/")
+
+	releaseScript := read(t, "scripts", "release-images.sh")
+	regBuild := body(t, releaseScript, "build_registry_image() {")
+	contains(t, regBuild, `check_release_stamp "$image" "$RELEASE"`)
+	contains(t, regBuild, `check_edition "$image" "$main"`)
+}
+
 // The caches are what make those toolchains usable, and they are warmed
 // from the same six manifests CI installs from: a sandbox has no route
 // to proxy.golang.org or registry.npmjs.org, so anything the image did

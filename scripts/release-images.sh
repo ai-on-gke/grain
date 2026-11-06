@@ -1135,7 +1135,7 @@ build_daemon_image() {
 }
 
 build_registry_image() {
-  local image="$1" main="$2" labelled
+  local image="$1" main="$2" labelled stamp_dir container stamped
   make image-registry IMAGE_REGISTRY="$image" MAIN_grain-registry="$main" \
     GIT_REVISION="$commit" RELEASE="${RELEASE:-}"
 
@@ -1148,6 +1148,27 @@ build_registry_image() {
     echo "release-images.sh: $image is labelled with ${labelled:-no commit}, not $commit" >&2
     exit 1
   fi
+
+  if command -v go >/dev/null 2>&1; then
+    stamp_dir="$(mktemp -d)"
+    container="$(docker create "$image")"
+    docker cp "$container:/usr/local/bin/grain-registry" "$stamp_dir/grain-registry" >/dev/null
+    docker rm "$container" >/dev/null
+    stamped="$(go version -m "$stamp_dir/grain-registry" | awk -F= '$1 ~ /[\t ]vcs\.revision$/ { print $2 }')"
+    rm -rf "$stamp_dir"
+    if [ -z "$stamped" ]; then
+      echo "release-images.sh: $image carries no commit stamp -- its revision label is the whole record;" \
+        "scripts/buildvcs.sh printed git's own reason earlier in this log"
+    elif [ "$stamped" != "$commit" ]; then
+      echo "release-images.sh: $image was built from $stamped, not the $commit this release is for" >&2
+      exit 1
+    fi
+  fi
+  if [ -n "${RELEASE:-}" ]; then
+    check_release_stamp "$image" "$RELEASE"
+  fi
+
+  check_edition "$image" "$main"
 }
 
 build_images() {

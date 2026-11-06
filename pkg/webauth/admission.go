@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/ai-on-gke/grain/pkg/apierror"
 )
 
 // Caller represents a verified front-door identity (from IAP or another FrontIdentity provider).
@@ -114,6 +116,10 @@ func normalizeGroupEmail(raw string) string {
 // DisabledChecker reports whether a human owner email has been disabled by an admin.
 type DisabledChecker func(ctx context.Context, email string) (bool, error)
 
+// ServicePrincipalChecker reports whether a service principal email is authorized
+// to call read-only catalog endpoints (e.g. via DelegationPolicy.IsServicePrincipalReader).
+type ServicePrincipalChecker func(ctx context.Context, email string) (bool, error)
+
 // AdmittedCaller holds the verified identity and authorization flags for an
 // admitted HTTP request.
 type AdmittedCaller struct {
@@ -140,28 +146,30 @@ func WithAdmitted(ctx context.Context, c *AdmittedCaller) context.Context {
 
 // AdmissionConfig configures IAP + service-principal admission for the registry.
 type AdmissionConfig struct {
-	Verifier          IdentityVerifier
-	Groups            GroupMemberChecker
-	AllowedDomains    []string
-	Admins            []string
-	Creators          []string
-	ServicePrincipals []string
-	IsDisabled        DisabledChecker
+	Verifier                IdentityVerifier
+	Groups                  GroupMemberChecker
+	AllowedDomains          []string
+	Admins                  []string
+	Creators                []string
+	ServicePrincipals       []string
+	ServicePrincipalChecker ServicePrincipalChecker
+	IsDisabled              DisabledChecker
 }
 
 // Admitter enforces caller authentication, domain admission, service-principal
 // catalog-read admission, disabled-user checks, and admin/creator role resolution.
 type Admitter struct {
-	verifier        IdentityVerifier
-	groups          GroupMemberChecker
-	allowedDomains  map[string]bool
-	adminUsers      map[string]bool
-	adminGroups     []string
-	creatorUsers    map[string]bool
-	creatorGroups   []string
-	hasCreatorsCfg  bool
-	serviceAccounts map[string]bool
-	isDisabled      DisabledChecker
+	verifier                IdentityVerifier
+	groups                  GroupMemberChecker
+	allowedDomains          map[string]bool
+	adminUsers              map[string]bool
+	adminGroups             []string
+	creatorUsers            map[string]bool
+	creatorGroups           []string
+	hasCreatorsCfg          bool
+	serviceAccounts         map[string]bool
+	servicePrincipalChecker ServicePrincipalChecker
+	isDisabled              DisabledChecker
 }
 
 // NewAdmitter validates the AdmissionConfig and constructs an Admitter.
@@ -170,14 +178,15 @@ func NewAdmitter(cfg AdmissionConfig) (*Admitter, error) {
 		return nil, errors.New("webauth: IdentityVerifier is required")
 	}
 	a := &Admitter{
-		verifier:        cfg.Verifier,
-		groups:          cfg.Groups,
-		allowedDomains:  make(map[string]bool, len(cfg.AllowedDomains)),
-		adminUsers:      make(map[string]bool),
-		creatorUsers:    make(map[string]bool),
-		hasCreatorsCfg:  len(cfg.Creators) > 0,
-		serviceAccounts: make(map[string]bool, len(cfg.ServicePrincipals)),
-		isDisabled:      cfg.IsDisabled,
+		verifier:                cfg.Verifier,
+		groups:                  cfg.Groups,
+		allowedDomains:          make(map[string]bool, len(cfg.AllowedDomains)),
+		adminUsers:              make(map[string]bool),
+		creatorUsers:            make(map[string]bool),
+		hasCreatorsCfg:          len(cfg.Creators) > 0,
+		serviceAccounts:         make(map[string]bool, len(cfg.ServicePrincipals)),
+		servicePrincipalChecker: cfg.ServicePrincipalChecker,
+		isDisabled:              cfg.IsDisabled,
 	}
 	for _, d := range cfg.AllowedDomains {
 		d = strings.ToLower(strings.TrimSpace(d))
@@ -264,9 +273,21 @@ func (a *Admitter) Admit(r *http.Request) (*AdmittedCaller, error) {
 	}
 
 	ctx := r.Context()
+	kind := caller.Kind
+	if kind == "" {
+		kind = PrincipalKindForEmail(email)
+	}
 
-	// Check whether this caller is a configured service principal first.
-	if a.serviceAccounts[email] {
+	// Check whether this caller is an authorized service principal reader.
+	isServiceReader := a.serviceAccounts[email]
+	if !isServiceReader && a.servicePrincipalChecker != nil {
+		ok, err := a.servicePrincipalChecker(ctx, email)
+		if err != nil {
+			return nil, fmt.Errorf("%w: checking service principal admission: %v", ErrGroupLookupUnavailable, err)
+		}
+		isServiceReader = ok
+	}
+	if isServiceReader {
 		return &AdmittedCaller{
 			Email:        email,
 			Subject:      caller.Subject,
@@ -275,6 +296,11 @@ func (a *Admitter) Admit(r *http.Request) (*AdmittedCaller, error) {
 			IsAdmin:      false,
 			CanCreate:    false,
 		}, nil
+	}
+
+	// Machine / service identities must never fall through to human domain admission.
+	if kind == PrincipalService {
+		return nil, fmt.Errorf("%w: service principal %q is not authorized", ErrCallerForbidden, email)
 	}
 
 	// Human caller: verify email domain against allowed_domains.
@@ -417,10 +443,8 @@ func (a *Admitter) admitOrWriteError(w http.ResponseWriter, r *http.Request) (*A
 func writeAdmissionError(w http.ResponseWriter, status int, code, msg string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"error": map[string]any{
-			"code":    code,
-			"message": msg,
-		},
+	_ = json.NewEncoder(w).Encode(apierror.Response{
+		Error: msg,
+		Code:  code,
 	})
 }

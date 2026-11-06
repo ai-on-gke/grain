@@ -32,7 +32,7 @@ COPY Dockerfile.registry .grain-ca.cr[t] /tmp/
 RUN if [ -f /tmp/.grain-ca.crt ]; then \
         cp /tmp/.grain-ca.crt /usr/local/share/ca-certificates/grain-ca.crt && \
         update-ca-certificates; \
-    fi
+    fi && rm -f /tmp/.grain-ca.crt /tmp/Dockerfile.registry
 
 WORKDIR /src
 COPY . .
@@ -46,10 +46,10 @@ RUN set -eu; \
     vcs="$(./scripts/buildvcs.sh "${BUILDVCS}")"; \
     ldflags="-s -w"; \
     if [ -n "${RELEASE}" ]; then \
-        ldflags="$ldflags -X github.com/ai-on-gke/grain/pkg/buildinfo.Release=${RELEASE}"; \
+        ldflags="$ldflags -X github.com/ai-on-gke/grain/pkg/version.Release=${RELEASE}"; \
     fi; \
     if [ -n "${EDITION}" ]; then \
-        ldflags="$ldflags -X github.com/ai-on-gke/grain/pkg/buildinfo.Edition=${EDITION}"; \
+        ldflags="$ldflags -X github.com/ai-on-gke/grain/pkg/version.Edition=${EDITION}"; \
     fi; \
     CGO_ENABLED=0 go build -buildvcs="$vcs" -ldflags="$ldflags" -o /out/grain-registry "${MAIN_GRAIN_REGISTRY}"
 
@@ -59,13 +59,10 @@ LABEL org.opencontainers.image.source="https://github.com/bwsalmon/grain" \
       org.opencontainers.image.title="grain-registry" \
       org.opencontainers.image.description="The grain multi-instance registry, directory, and tunnel router."
 
-COPY --from=build /usr/local/share/ca-certificates/ /usr/local/share/ca-certificates/
-
 RUN apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update && \
     DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends \
         ca-certificates \
         tini && \
-    update-ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid 1000 grain && \

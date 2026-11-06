@@ -17,7 +17,10 @@ package registry
 import (
 	"bufio"
 	"context"
+	"errors"
+	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/registry/api"
@@ -80,7 +83,30 @@ func (s *wsMuxSession) RoundTrip(r *http.Request) (*http.Response, error) {
 		_ = stream.Close()
 		return nil, err
 	}
-	return http.ReadResponse(bufio.NewReader(stream), r)
+	resp, err := http.ReadResponse(bufio.NewReader(stream), r)
+	if err != nil {
+		_ = stream.Close()
+		return nil, err
+	}
+	resp.Body = &streamClosingBody{
+		ReadCloser: resp.Body,
+		stream:     stream,
+	}
+	return resp, nil
+}
+
+type streamClosingBody struct {
+	io.ReadCloser
+	stream io.Closer
+	once   sync.Once
+	err    error
+}
+
+func (b *streamClosingBody) Close() error {
+	b.once.Do(func() {
+		b.err = errors.Join(b.ReadCloser.Close(), b.stream.Close())
+	})
+	return b.err
 }
 
 func (s *wsMuxSession) Ping(ctx context.Context) (time.Duration, error) {

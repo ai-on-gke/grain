@@ -426,6 +426,21 @@ type cachedAssertion struct {
 	expiresAt time.Time
 }
 
+const maxSignerCacheEntries = 4096
+
+// CacheTTLForJWTTTL derives a safe CachingSigner TTL that never exceeds half
+// of the signed assertion's lifetime (`jwtTTL / 2`) or DefaultJWTCacheTTL.
+func CacheTTLForJWTTTL(jwtTTL time.Duration) time.Duration {
+	if jwtTTL <= 0 {
+		jwtTTL = DefaultJWTTTL
+	}
+	half := jwtTTL / 2
+	if half < DefaultJWTCacheTTL {
+		return half
+	}
+	return DefaultJWTCacheTTL
+}
+
 // NewCachingSigner wraps inner with a per-(email, audience) assertion cache.
 func NewCachingSigner(inner Signer, cacheTTL time.Duration) *CachingSigner {
 	if cacheTTL <= 0 {
@@ -441,7 +456,13 @@ func NewCachingSigner(inner Signer, cacheTTL time.Duration) *CachingSigner {
 
 // SignAssertion returns a cached token if one is still valid for the given caller
 // and target entry audience, or signs and caches a new one.
+//
+// When RequestID or JWTID is explicitly populated on claims, caching is bypassed
+// so caller-supplied per-request correlation IDs are never aliased across requests.
 func (c *CachingSigner) SignAssertion(ctx context.Context, claims RegistryClaims) (string, error) {
+	if claims.RequestID != "" || claims.JWTID != "" {
+		return c.inner.SignAssertion(ctx, claims)
+	}
 	now := time.Now()
 	if c.nowFn != nil {
 		now = c.nowFn()
@@ -471,6 +492,19 @@ func (c *CachingSigner) SignAssertion(ctx context.Context, claims RegistryClaims
 	}
 
 	c.mu.Lock()
+	if len(c.entries) >= maxSignerCacheEntries {
+		for k, v := range c.entries {
+			if !now.Before(v.expiresAt) {
+				delete(c.entries, k)
+			}
+		}
+		if len(c.entries) >= maxSignerCacheEntries {
+			for k := range c.entries {
+				delete(c.entries, k)
+				break
+			}
+		}
+	}
 	c.entries[key] = cachedAssertion{
 		token:     tok,
 		expiresAt: now.Add(c.cacheTTL),
@@ -566,6 +600,10 @@ func init() {
 		if err != nil {
 			return nil, err
 		}
-		return NewCachingSigner(ls, DefaultJWTCacheTTL), nil
+		cacheTTL := CacheTTLForJWTTTL(cfg.JWTTTL)
+		if cacheTTL <= 0 {
+			return ls, nil
+		}
+		return NewCachingSigner(ls, cacheTTL), nil
 	})
 }

@@ -15,19 +15,32 @@
 package registry
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"os/exec"
+	"os/user"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/apierror"
+	"github.com/ai-on-gke/grain/pkg/registry/api"
+	"github.com/ai-on-gke/grain/pkg/registry/store"
+	"github.com/ai-on-gke/grain/pkg/tunnel/mux"
 	"github.com/ai-on-gke/grain/pkg/webauth"
 )
 
@@ -221,6 +234,14 @@ func TestDelegationPolicyRefuseAllStubAndExtensionHooks(t *testing.T) {
 	}
 
 	// Register custom FrontIdentity, GroupResolver, DelegationPolicy, and ConnectTransport.
+	t.Cleanup(func() {
+		regMu.Lock()
+		delete(frontIdentityFactories, "test-custom-auth")
+		delete(groupResolverFactories, "test-custom-groups")
+		delete(delegationFactories, "test-custom-delegation")
+		delete(connectTransports, "test-custom-mux")
+		regMu.Unlock()
+	})
 	RegisterFrontIdentity("test-custom-auth", func(_ context.Context, _ AuthConfig) (FrontIdentity, error) {
 		return fakeFrontIdentity{}, nil
 	})
@@ -339,6 +360,12 @@ func TestRunVersionAndValidateCLI(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &verMap); err != nil {
 		t.Fatalf("Unmarshal version JSON: %v (%s)", err, out.String())
 	}
+	if _, hasEdition := verMap["edition"]; hasEdition {
+		t.Fatalf("expected core build version --json to omit edition, got %s", out.String())
+	}
+	if _, hasCap := verMap["Edition"]; hasCap {
+		t.Fatalf("expected lowercase JSON keys in version --json, got %s", out.String())
+	}
 
 	cfgFile := filepath.Join(t.TempDir(), "registry.yaml")
 	if err := os.WriteFile(cfgFile, []byte(validTestYAML()), 0o600); err != nil {
@@ -386,4 +413,437 @@ func TestServerEndToEndInRegistryPackage(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK from JWKSHandler, got %d", rec.Code)
 	}
+}
+
+func TestServerAuthBoundariesMetricsAndErrorSanitization(t *testing.T) {
+	signer, err := NewEphemeralLocalSigner("reg-sec-1")
+	if err != nil {
+		t.Fatalf("NewEphemeralLocalSigner: %v", err)
+	}
+	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
+		Verifier:          fakeFrontIdentity{},
+		AllowedDomains:    []string{"example.com"},
+		Admins:            []string{"user:admin@example.com"},
+		ServicePrincipals: []string{"serviceAccount:scanner@proj.iam.gserviceaccount.com"},
+	})
+	if err != nil {
+		t.Fatalf("NewAdmitter: %v", err)
+	}
+	cfg, err := ParseConfig([]byte(validTestYAML()))
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	srv, err := NewServer(ServerOptions{
+		Config:   *cfg,
+		Admitter: admitter,
+		Signer:   signer,
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	h := srv.Handler()
+
+	// 1. /metrics requires admin on the front :8080 listener.
+	for _, tc := range []struct {
+		name  string
+		email string
+		want  int
+	}{
+		{"unauthenticated", "", http.StatusUnauthorized},
+		{"regular human", "alice@example.com", http.StatusForbidden},
+		{"service principal", "scanner@proj.iam.gserviceaccount.com", http.StatusForbidden},
+		{"admin human", "admin@example.com", http.StatusOK},
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "https://registry.example.com/metrics", nil)
+		if tc.email != "" {
+			req.Header.Set("X-Test-Email", tc.email)
+		}
+		h.ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Fatalf("/metrics for %s: got %d, want %d (body=%s)", tc.name, rec.Code, tc.want, rec.Body.String())
+		}
+	}
+
+	// 2. Service principals may read /api/directory and /api/route, but GET /api/entries rejects them with 403.
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{"/api/directory", http.StatusOK},
+		{"/api/route?repo=acme/repo", http.StatusOK},
+		{"/api/entries", http.StatusForbidden},
+		{"/api/me", http.StatusForbidden},
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "https://registry.example.com"+tc.path, nil)
+		req.Header.Set("X-Test-Email", "scanner@proj.iam.gserviceaccount.com")
+		h.ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Fatalf("service principal %s: got %d, want %d (body=%s)", tc.path, rec.Code, tc.want, rec.Body.String())
+		}
+	}
+
+	// 3. Error format matches pkg/registry/api.Client and 500 internal details are sanitized.
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+	cli, err := api.NewClient(api.ClientConfig{
+		BaseURL:           ts.URL,
+		AllowInsecureHTTP: true,
+		ExtraHeaders:      http.Header{"X-Test-Email": []string{"scanner@proj.iam.gserviceaccount.com"}},
+	})
+	if err != nil {
+		t.Fatalf("api.NewClient: %v", err)
+	}
+	_, listErr := cli.ListEntries(context.Background(), api.ListEntriesQuery{})
+	if !api.IsForbidden(listErr) {
+		t.Fatalf("expected api.IsForbidden on service principal ListEntries, got %v", listErr)
+	}
+	var ae *api.APIError
+	if !errors.As(listErr, &ae) || ae.Code != "forbidden" || !strings.Contains(ae.Message, "service principals") {
+		t.Fatalf("unexpected decoded APIError: %+v", ae)
+	}
+
+	rec500 := httptest.NewRecorder()
+	writeInternalError(rec500, errors.New("pq: dial tcp 10.8.0.5:5432: secret-dsn-detail"))
+	if rec500.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rec500.Code)
+	}
+	if strings.Contains(rec500.Body.String(), "10.8.0.5") || strings.Contains(rec500.Body.String(), "secret-dsn-detail") {
+		t.Fatalf("500 response leaked internal error string: %s", rec500.Body.String())
+	}
+	var resp500 apierror.Response
+	if err := json.Unmarshal(rec500.Body.Bytes(), &resp500); err != nil || resp500.Ref == "" || resp500.Code == "" {
+		t.Fatalf("expected sanitized apierror.Response with ref, got %+v (err=%v)", resp500, err)
+	}
+}
+
+func TestCachingSignerClampsShortJWTTTLAndBypassesRequestID(t *testing.T) {
+	if got := CacheTTLForJWTTTL(10 * time.Second); got != 5*time.Second {
+		t.Fatalf("CacheTTLForJWTTTL(10s) = %s, want 5s", got)
+	}
+	if got := CacheTTLForJWTTTL(60 * time.Second); got != 30*time.Second {
+		t.Fatalf("CacheTTLForJWTTTL(60s) = %s, want 30s", got)
+	}
+
+	ctx := context.Background()
+	signer, err := BuildSigner(ctx, SigningConfig{
+		Provider: "local",
+		KeyID:    "short-ttl-k1",
+		JWTTTL:   6 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("BuildSigner: %v", err)
+	}
+	cs, ok := signer.(*CachingSigner)
+	if !ok || cs.cacheTTL != 3*time.Second {
+		t.Fatalf("expected CachingSigner with 3s cacheTTL for 6s JWTTTL, got %#v", signer)
+	}
+
+	// Explicit per-request RequestID must never be aliased across calls.
+	t1, err := signer.SignAssertion(ctx, RegistryClaims{
+		Audience:  "grain-instance:dev",
+		Subject:   "sub-alice",
+		Email:     "alice@example.com",
+		Kind:      "human",
+		RequestID: "req-1",
+	})
+	if err != nil {
+		t.Fatalf("SignAssertion req-1: %v", err)
+	}
+	t2, err := signer.SignAssertion(ctx, RegistryClaims{
+		Audience:  "grain-instance:dev",
+		Subject:   "sub-alice",
+		Email:     "alice@example.com",
+		Kind:      "human",
+		RequestID: "req-2",
+	})
+	if err != nil {
+		t.Fatalf("SignAssertion req-2: %v", err)
+	}
+	if t1 == t2 {
+		t.Fatalf("SignAssertion returned cached token for distinct RequestIDs")
+	}
+}
+
+func TestWSMuxSessionRoundTripClosesStreams(t *testing.T) {
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+
+	serverMux := mux.NewMux(c1, mux.Config{
+		IsServer:   true,
+		MaxStreams: 2,
+	})
+	defer serverMux.Close()
+	clientMux := mux.NewMux(c2, mux.Config{
+		IsServer:   false,
+		MaxStreams: 2,
+	})
+	defer clientMux.Close()
+
+	go func() {
+		for {
+			st, err := clientMux.AcceptStream()
+			if err != nil {
+				return
+			}
+			go func(s *mux.Stream) {
+				defer s.Close()
+				req, err := http.ReadRequest(bufio.NewReader(s))
+				if err != nil {
+					return
+				}
+				_, _ = io.Copy(io.Discard, req.Body)
+				_ = req.Body.Close()
+				if req.URL.Path == "/drop" {
+					return
+				}
+				_, _ = io.WriteString(s, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+			}(st)
+		}
+	}()
+
+	sess := &wsMuxSession{m: serverMux}
+	// Run 6 sequential requests over a MaxStreams=2 mux to prove streams are closed on Body.Close() and error.
+	for i := 0; i < 6; i++ {
+		path := "/ping"
+		if i == 2 {
+			path = "/drop"
+		}
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://entry.local"+path, nil)
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		resp, err := sess.RoundTrip(req)
+		if path == "/drop" {
+			if err == nil {
+				_ = resp.Body.Close()
+				t.Fatalf("expected error on /drop")
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("RoundTrip %d failed: %v", i, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		if err := resp.Body.Close(); err != nil {
+			t.Fatalf("resp.Body.Close %d: %v", i, err)
+		}
+		if string(body) != "ok" {
+			t.Fatalf("unexpected body %q", string(body))
+		}
+	}
+}
+
+func TestServerCatalogUnlistedAndEntryManagerIsolationPostgres(t *testing.T) {
+	pgURL := startEphemeralPostgresForRegistryTest(t)
+	ctx := context.Background()
+	st, err := store.Open(ctx, pgURL, store.DefaultThresholds())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer st.Close()
+
+	unlistedFalse := false
+	// Create a listed entry owned by alice (with internal BackendURL) and an unlisted entry owned by bob (with group team-b).
+	if _, err := st.CreateEntry(ctx, store.CreateEntryInput{
+		Name:       "alice-listed",
+		Kind:       api.KindConnected,
+		OwnerEmail: "alice@example.com",
+		BackendURL: "http://10.128.0.42:8080",
+		DeclaredScopes: []store.ScopeClaim{
+			{Repo: "acme/repo", PathPrefix: "pkg/a", Primary: true},
+		},
+	}); err != nil {
+		t.Fatalf("CreateEntry alice-listed: %v", err)
+	}
+	if _, err := st.CreateEntry(ctx, store.CreateEntryInput{
+		Name:       "bob-unlisted",
+		Kind:       api.KindConnected,
+		OwnerEmail: "bob@example.com",
+		OwnerGroup: "group:team-b@example.com",
+		Listed:     &unlistedFalse,
+		Visibility: store.VisibilityPublic,
+		BackendURL: "http://10.128.0.99:8080",
+		DeclaredScopes: []store.ScopeClaim{
+			{Repo: "acme/repo", PathPrefix: "", Primary: false},
+		},
+	}); err != nil {
+		t.Fatalf("CreateEntry bob-unlisted: %v", err)
+	}
+
+	groups := staticGroupResolverForTest{
+		StaticGroupChecker: webauth.NewStaticGroups(map[string][]string{
+			"group:team-b@example.com": {"coowner@example.com"},
+		}),
+	}
+	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
+		Verifier:          fakeFrontIdentity{},
+		Groups:            groups,
+		AllowedDomains:    []string{"example.com"},
+		Admins:            []string{"user:admin@example.com"},
+		ServicePrincipals: []string{"serviceAccount:scanner@proj.iam.gserviceaccount.com"},
+	})
+	if err != nil {
+		t.Fatalf("NewAdmitter: %v", err)
+	}
+	signer, err := NewEphemeralLocalSigner("pg-sec-k1")
+	if err != nil {
+		t.Fatalf("NewEphemeralLocalSigner: %v", err)
+	}
+	cfg, err := ParseConfig([]byte(validTestYAML()))
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	srv, err := NewServer(ServerOptions{
+		Config:   *cfg,
+		Store:    st,
+		Admitter: admitter,
+		Groups:   groups,
+		Signer:   signer,
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	h := srv.Handler()
+
+	// 1. /api/directory and /api/route return ONLY listed entries, even for bob/admin/service principal.
+	for _, email := range []string{"bob@example.com", "admin@example.com", "scanner@proj.iam.gserviceaccount.com"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "https://registry.example.com/api/directory", nil)
+		req.Header.Set("X-Test-Email", email)
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /api/directory (%s): %d %s", email, rec.Code, rec.Body.String())
+		}
+		var dirResp api.DirectoryResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &dirResp); err != nil {
+			t.Fatalf("decode DirectoryResponse: %v", err)
+		}
+		if len(dirResp.Entries) != 1 || dirResp.Entries[0].Name != "alice-listed" {
+			t.Fatalf("expected only alice-listed in directory for %s, got %+v", email, dirResp.Entries)
+		}
+
+		recRoute := httptest.NewRecorder()
+		reqRoute := httptest.NewRequest(http.MethodGet, "https://registry.example.com/api/route?repo=acme/repo&path=README.md", nil)
+		reqRoute.Header.Set("X-Test-Email", email)
+		h.ServeHTTP(recRoute, reqRoute)
+		if recRoute.Code != http.StatusOK {
+			t.Fatalf("GET /api/route (%s): %d %s", email, recRoute.Code, recRoute.Body.String())
+		}
+		var routeResp api.RouteResponse
+		if err := json.Unmarshal(recRoute.Body.Bytes(), &routeResp); err != nil {
+			t.Fatalf("decode RouteResponse: %v", err)
+		}
+		if len(routeResp.Candidates) != 0 {
+			t.Fatalf("expected unlisted entry excluded from /api/route for %s, got %+v", email, routeResp.Candidates)
+		}
+	}
+
+	// 2. GET /api/entries returns ONLY entries managed by caller (owner or owner_group), never leaking alice-listed's BackendURL to carol or coowner.
+	for _, tc := range []struct {
+		email string
+		want  []string
+	}{
+		{"carol@example.com", nil},
+		{"coowner@example.com", []string{"bob-unlisted"}},
+		{"alice@example.com", []string{"alice-listed"}},
+		{"admin@example.com", []string{"alice-listed", "bob-unlisted"}},
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "https://registry.example.com/api/entries", nil)
+		req.Header.Set("X-Test-Email", tc.email)
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /api/entries (%s): %d %s", tc.email, rec.Code, rec.Body.String())
+		}
+		var listResp api.ListEntriesResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &listResp); err != nil {
+			t.Fatalf("decode ListEntriesResponse: %v", err)
+		}
+		var got []string
+		for _, e := range listResp.Entries {
+			got = append(got, e.Name)
+		}
+		sort.Strings(got)
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Fatalf("GET /api/entries (%s): got %v, want %v", tc.email, got, tc.want)
+		}
+	}
+}
+
+type staticGroupResolverForTest struct {
+	*webauth.StaticGroupChecker
+}
+
+func (r staticGroupResolverForTest) NormalizeGroup(raw string) (string, error) {
+	return defaultNormalizeGroup(raw)
+}
+
+func startEphemeralPostgresForRegistryTest(t *testing.T) string {
+	t.Helper()
+	if envURL := strings.TrimSpace(os.Getenv("GRAIN_TEST_POSTGRES_URL")); envURL != "" {
+		return envURL
+	}
+	findBin := func(name string) string {
+		if p, err := exec.LookPath(name); err == nil {
+			return p
+		}
+		matches, _ := filepath.Glob(filepath.Join("/usr/lib/postgresql", "*", "bin", name))
+		if len(matches) > 0 {
+			sort.Strings(matches)
+			return matches[len(matches)-1]
+		}
+		return ""
+	}
+	initdbBin := findBin("initdb")
+	pgCtlBin := findBin("pg_ctl")
+	if initdbBin == "" || pgCtlBin == "" {
+		if os.Getenv("GRAIN_REQUIRE_POSTGRES") == "1" {
+			t.Fatalf("initdb/pg_ctl not found while GRAIN_REQUIRE_POSTGRES=1")
+		}
+		t.Skip("skipping Postgres registry server test: initdb/pg_ctl not installed")
+	}
+	if u, err := user.Current(); err == nil && u.Uid == "0" {
+		t.Skip("skipping Postgres registry server test: running as root")
+	}
+	baseDir, err := os.MkdirTemp("/tmp", "grain-reg-srv-pg-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	dataDir := filepath.Join(baseDir, "data")
+	sockDir := filepath.Join(baseDir, "sock")
+	if err := os.MkdirAll(sockDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if out, err := exec.Command(initdbBin, "-D", dataDir, "-A", "trust", "-U", "postgres", "--no-sync", "--encoding=UTF8", "--locale=C").CombinedOutput(); err != nil {
+		_ = os.RemoveAll(baseDir)
+		t.Fatalf("initdb: %v\n%s", err, out)
+	}
+	opts := fmt.Sprintf("-F -k %s -h ''", sockDir)
+	if out, err := exec.Command(pgCtlBin, "-D", dataDir, "-l", filepath.Join(baseDir, "pg.log"), "-o", opts, "-w", "start").CombinedOutput(); err != nil {
+		_ = os.RemoveAll(baseDir)
+		t.Fatalf("pg_ctl start: %v\n%s", err, out)
+	}
+	t.Cleanup(func() {
+		_ = exec.Command(pgCtlBin, "-D", dataDir, "-m", "immediate", "-w", "stop").Run()
+		_ = os.RemoveAll(baseDir)
+	})
+	dsn := (&url.URL{
+		Scheme:   "postgres",
+		User:     url.User("postgres"),
+		Host:     "localhost",
+		Path:     "/postgres",
+		RawQuery: "host=" + url.QueryEscape(sockDir) + "&sslmode=disable",
+	}).String()
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		t.Fatalf("db.Ping: %v", err)
+	}
+	return dsn
 }
