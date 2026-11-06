@@ -34,6 +34,7 @@ type TeamGitConnectionView struct {
 	Host       string              `json:"host,omitempty"`
 	Kind       string              `json:"kind,omitempty"`
 	Scope      string              `json:"scope,omitempty"`
+	User       string              `json:"user,omitempty"`
 	AuthType   string              `json:"authType,omitempty"`
 	Status     GitCredentialStatus `json:"status"`
 	Legacy     bool                `json:"legacy,omitempty"`
@@ -63,6 +64,14 @@ type AddTeamGitConnectionRequest struct {
 	Source     string `json:"source,omitempty"`
 	Credential string `json:"credential,omitempty"`
 	User       string `json:"user,omitempty"`
+	// TaskUser optionally binds this connection to a specific task
+	// author/owner account (e.g. "alice@example.com"). When empty and
+	// SignAs is true (without Default), an authenticated human caller's
+	// own verified identity is used automatically.
+	TaskUser string `json:"taskUser,omitempty"`
+	// Default registers the connection as the deployment-wide fallback on
+	// (Host, Scope) with an empty User binding, even when SignAs is set.
+	Default bool `json:"default,omitempty"`
 	// Author is the human user's name to sign pull requests and comments
 	// with ("Signed by <Author> (via Grain)"). When SignAs is true and
 	// Author is empty, the daemon resolves the user's name from GitHub
@@ -72,9 +81,9 @@ type AddTeamGitConnectionRequest struct {
 	// credential owner's name (resolved from GET /user when Author is
 	// empty).
 	SignAs bool `json:"signAs,omitempty"`
-	// Replace removes any existing connection on the same (Host, Scope)
+	// Replace removes any existing connection on the same (Host, Scope, User)
 	// before adding this one, so `grain git-login` cleanly updates the
-	// deployment's login on that host.
+	// user's or deployment's login on that host.
 	Replace bool `json:"replace,omitempty"`
 }
 
@@ -140,6 +149,7 @@ func (c *Client) teamGitConnectionViews(settings model.Config) []TeamGitConnecti
 			Host:       host,
 			Kind:       kind,
 			Scope:      conn.Scope,
+			User:       conn.User,
 			AuthType:   authType,
 			Status:     status,
 		})
@@ -233,10 +243,24 @@ func (c *Client) AddTeamGitConnection(ctx context.Context, id string, req AddTea
 		}
 	}
 
+	connUser := strings.TrimSpace(req.TaskUser)
+	if connUser == "" && req.SignAs && !req.Default {
+		caller := strings.TrimSpace(user)
+		if caller == "" {
+			caller = requestPerson(ctx)
+		}
+		if caller != "" {
+			if norm, err := model.NormalizeTaskOwner(caller); err == nil && norm != model.DefaultTaskOwner {
+				connUser = norm
+			}
+		}
+	}
+
 	candidate, err := model.NormalizeTeamGitConnection(model.TeamGitConnection{
 		Credential: "-",
 		Host:       host,
 		Scope:      req.Scope,
+		User:       connUser,
 	})
 	if err != nil {
 		return Team{}, validationErrorf("invalid connection: %w", err)
@@ -247,10 +271,22 @@ func (c *Client) AddTeamGitConnection(ctx context.Context, id string, req AddTea
 			if err != nil || existing.Credential == "anonymous" {
 				continue
 			}
-			if !model.SameGitHost(existing.Host, candidate.Host, model.DefaultGitHost) || existing.Scope != candidate.Scope {
+			if !model.SameGitHost(existing.Host, candidate.Host, model.DefaultGitHost) ||
+				existing.Scope != candidate.Scope ||
+				!model.SameGitConnectionUser(existing.User, candidate.User) {
 				continue
 			}
 			onHost, _ := model.ResolveGitHost(candidate.Host, model.DefaultGitHost)
+			if candidate.User != "" {
+				if candidate.Scope == "" {
+					return Team{}, validationErrorf(
+						"this deployment already has a git connection on %s for user %q (%s): remove it or edit its scope first",
+						onHost, candidate.User, existing.Credential)
+				}
+				return Team{}, validationErrorf(
+					"this deployment already has a git connection on %s for scope %q and user %q (%s): remove it or edit its scope first",
+					onHost, candidate.Scope, candidate.User, existing.Credential)
+			}
 			if candidate.Scope == "" {
 				return Team{}, validationErrorf(
 					"this deployment already has a default git connection on %s (%s): remove it or edit its scope first",
@@ -359,7 +395,8 @@ func (c *Client) AddTeamGitConnection(ctx context.Context, id string, req AddTea
 		if req.Replace {
 			if existingNorm, err := model.NormalizeTeamGitConnection(conn); err == nil &&
 				model.SameGitHost(existingNorm.Host, normConn.Host, model.DefaultGitHost) &&
-				existingNorm.Scope == normConn.Scope {
+				existingNorm.Scope == normConn.Scope &&
+				model.SameGitConnectionUser(existingNorm.User, normConn.User) {
 				if conn.Credential != credName {
 					replacedCreds = append(replacedCreds, conn.Credential)
 				}
@@ -369,7 +406,7 @@ func (c *Client) AddTeamGitConnection(ctx context.Context, id string, req AddTea
 		updatedConns = append(updatedConns, conn)
 	}
 	if legacy != "" && !hasLegacy {
-		if req.Replace && model.SameGitHost("", normConn.Host, model.DefaultGitHost) && normConn.Scope == "" {
+		if req.Replace && normConn.User == "" && model.SameGitHost("", normConn.Host, model.DefaultGitHost) && normConn.Scope == "" {
 			if legacy != credName {
 				replacedCreds = append(replacedCreds, legacy)
 			}

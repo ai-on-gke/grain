@@ -392,8 +392,12 @@ func newForgeClient(cfg Config, store *model.Store, credentials *gitproxy.Creden
 // for another host's repository in.
 func newForgeClientOver(def github.Transport, defHost string, store *model.Store, credentials *gitproxy.CredentialSet) (*github.RESTClient, credentialTokenSource) {
 	hostOf := storeRepoHosts(store)
-	tokens := credentialTokenSource{credentials: credentials, teamCredential: repoTeamCredential(store),
-		hostOf: hostOf}
+	tokens := credentialTokenSource{
+		credentials:    credentials,
+		teamCredential: repoTeamCredential(store),
+		taskCredential: taskGitCredential(store),
+		hostOf:         hostOf,
+	}
 	router := &forgeRouter{def: def, defHost: defHost, transportFor: tokens.forgeTransport, hostOf: hostOf,
 		viaCommand: tokens.forgeViaCommand}
 	return github.NewClient(router, tokens), tokens

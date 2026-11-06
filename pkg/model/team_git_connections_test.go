@@ -49,3 +49,36 @@ func TestHasGitConnectionOnCountsConnectionsAndTheLegacyCredential(t *testing.T)
 		})
 	}
 }
+
+func TestMatchUserGitConnectionAndDefaultPrecedence(t *testing.T) {
+	conns := []TeamGitConnection{
+		{Credential: "default-host", Host: "github.com"},
+		{Credential: "default-acme", Host: "github.com", Scope: "acme"},
+		{Credential: "alice-host", Host: "github.com", User: "alice@example.com"},
+		{Credential: "alice-widgets", Host: "github.com", Scope: "acme/widgets", User: "alice@example.com"},
+		{Credential: "bob-host", Host: "github.com", User: "bob@example.com"},
+	}
+
+	// Default resolution ignores user-bound connections when a default (User == "") connection exists.
+	if got, ok := MatchTeamGitConnection(conns, "github.com", "github.com", "acme", "widgets"); !ok || got.Credential != "default-acme" {
+		t.Fatalf("MatchTeamGitConnection(acme/widgets) = %+v, %v; want default-acme", got, ok)
+	}
+	if got, ok := MatchTeamGitConnection(conns, "github.com", "github.com", "other", "repo"); !ok || got.Credential != "default-host" {
+		t.Fatalf("MatchTeamGitConnection(other/repo) = %+v, %v; want default-host", got, ok)
+	}
+
+	// Per-user resolution picks the user's most specific connection on the host (matching email or local-part).
+	if got, ok := MatchUserGitConnection(conns, "alice", "github.com", "github.com", "acme", "widgets"); !ok || got.Credential != "alice-widgets" {
+		t.Fatalf("MatchUserGitConnection(alice, acme/widgets) = %+v, %v; want alice-widgets", got, ok)
+	}
+	if got, ok := MatchUserGitConnection(conns, "alice@example.com", "github.com", "github.com", "acme", "other"); !ok || got.Credential != "alice-host" {
+		t.Fatalf("MatchUserGitConnection(alice@example.com, acme/other) = %+v, %v; want alice-host", got, ok)
+	}
+	if got, ok := MatchUserGitConnection(conns, "bob", "github.com", "github.com", "acme", "widgets"); !ok || got.Credential != "bob-host" {
+		t.Fatalf("MatchUserGitConnection(bob, acme/widgets) = %+v, %v; want bob-host", got, ok)
+	}
+	if _, ok := MatchUserGitConnection(conns, "charlie", "github.com", "github.com", "acme", "widgets"); ok {
+		t.Fatalf("MatchUserGitConnection(charlie) matched unexpectedly")
+	}
+}
+

@@ -39,6 +39,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/release"
+	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -289,11 +290,21 @@ func grantTools(srcDir, secretsDir string, secretStore *secrets.Store) map[strin
 type credentialTokenSource struct {
 	credentials    *gitproxy.CredentialSet
 	teamCredential func(host, owner, repo string) (name string, ok bool)
+	taskCredential func(taskID, host, owner, repo string) (name string, ok bool)
+	taskID         string
 	// hostOf, when set, is the host a repository named by a bare owner
 	// is on (storeRepoHosts), or "" for the default host: what lets a
 	// caller that dropped a RepoRef's host still be authenticated with
 	// the credential for the host forgeRouter sends it to.
 	hostOf func(owner, repo string) string
+}
+
+// ForTask implements github.TaskTokenSource: returns a copy of c scoped to
+// taskID so REST calls for that task authenticate and sign with the task
+// author's resolved Git credential.
+func (c credentialTokenSource) ForTask(taskID string) github.TokenSource {
+	c.taskID = strings.TrimSpace(taskID)
+	return c
 }
 
 // ref is owner/repo as a RepoRef: host-qualified as stored
@@ -420,13 +431,24 @@ func (c credentialTokenSource) GitRefSHA(owner, repo, rev string) (string, bool,
 }
 
 // selectGitCredential is the credential owner/repo is cloned and pushed
-// with: the deployment's git connection for it (teamCredential), or none.
-// The credentials.json ladder is not asked (docs/single-tenant-reset.md,
-// stage 1).
+// with: when scoped to a task (c.taskID != ""), the task's resolved
+// credential (taskCredential, including per-user task author connections
+// and task capability grants); otherwise the deployment's git connection
+// for it (teamCredential), or none.
 func (c credentialTokenSource) selectGitCredential(owner, repo string) (gitproxy.Credential, bool) {
 	ref := c.ref(owner, repo)
 	host := ref.GitHost()
-	if c.teamCredential == nil || c.credentials == nil {
+	if c.credentials == nil {
+		return gitproxy.Credential{}, false
+	}
+	if c.taskID != "" && c.taskCredential != nil {
+		if name, ok := c.taskCredential(c.taskID, host, ref.Owner, ref.Name); ok {
+			if cred, found := c.credentials.GetForRepoOn(name, host, ref.Owner, ref.Name); found {
+				return cred, true
+			}
+		}
+	}
+	if c.teamCredential == nil {
 		return gitproxy.Credential{}, false
 	}
 	name, ok := c.teamCredential(host, ref.Owner, ref.Name)
@@ -571,6 +593,29 @@ func lookupRepoTeamCredential(store *model.Store, host, owner, repo string) (str
 		return "", false
 	}
 	return name, name != ""
+}
+
+func taskGitCredential(store *model.Store) func(taskID, host, owner, repo string) (string, bool) {
+	if store == nil {
+		return nil
+	}
+	return func(taskID, host, owner, repo string) (string, bool) {
+		taskID = strings.TrimSpace(taskID)
+		if taskID == "" || owner == "" || repo == "" {
+			return "", false
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		name, err := store.TaskGitCredentialOn(ctx, taskID, host, owner, repo)
+		if errors.Is(err, model.ErrNoTeamGitCredential) {
+			return "", false
+		}
+		if err != nil {
+			log.Printf("grain daemon: finding task %s git credential for %s/%s: %v", taskID, owner, repo, err)
+			return "", false
+		}
+		return name, name != ""
+	}
 }
 
 // restClientHost is the git host a REST client built for githubHost (the

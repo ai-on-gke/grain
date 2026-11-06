@@ -136,6 +136,12 @@ export default function GitConnections({
                   (<code>{a.scope}</code>)
                 </>
               ) : null}
+              {a.user ? (
+                <>
+                  {" "}
+                  for <code>{a.user}</code>
+                </>
+              ) : null}
               : {formatCommitAuthor(a, grainDefault)}
             </Typography>
           ))}
@@ -294,6 +300,7 @@ export function commitIdentities(connections) {
       credential: c.credential,
       host: c.host || "",
       scope: c.scope || "",
+      user: c.user || "",
       name: c.status?.commitName || "",
       email: c.status?.commitEmail || "",
       pending: Boolean(c.status?.commitPending || c.status?.ambientPending),
@@ -337,6 +344,7 @@ function GitConnectionsList({
   const [host, setHost] = useState("");
   const [kind, setKind] = useState("github");
   const [scope, setScope] = useState("");
+  const [user, setUser] = useState("");
   const [authType, setAuthType] = useState("pat");
   const [tokenValue, setTokenValue] = useState("");
   const [appId, setAppId] = useState("");
@@ -479,6 +487,7 @@ function GitConnectionsList({
     setProxy("");
     setPreset("");
     setScope("");
+    setUser("");
     setTokenValue("");
     setAppId("");
     setInstallationId("");
@@ -498,6 +507,9 @@ function GitConnectionsList({
         scope: scope.trim(),
         type: authType,
       };
+      if (user.trim()) {
+        body.taskUser = user.trim();
+      }
       if (proxy.trim()) {
         body.proxy = proxy.trim();
       }
@@ -581,6 +593,7 @@ function GitConnectionsList({
                 <TableCell>Kind</TableCell>
                 <TableCell>Auth Type</TableCell>
                 <TableCell>Scope</TableCell>
+                <TableCell>User</TableCell>
                 <TableCell align="right">Actions</TableCell>
               </TableRow>
             </TableHead>
@@ -639,6 +652,15 @@ function GitConnectionsList({
                     ) : (
                       <Typography variant="caption" color="text.secondary">
                         all repos
+                      </Typography>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {conn.user ? (
+                      <code>{conn.user}</code>
+                    ) : (
+                      <Typography variant="caption" color="text.secondary">
+                        all users
                       </Typography>
                     )}
                   </TableCell>
@@ -800,6 +822,17 @@ function GitConnectionsList({
               value={scope}
               onChange={(evt) => setScope(evt.target.value)}
               helperText="Owner/organization or owner/repo to narrow this connection. Leave empty for host default."
+              fullWidth
+            />
+
+            <TextField
+              name="new-connection-user"
+              label="User (task author, optional)"
+              size="small"
+              value={user}
+              onChange={(evt) => setUser(evt.target.value)}
+              placeholder="alice@example.com or alice"
+              helperText="Bind this credential to tasks raised by a specific user. Leave empty for a deployment-wide default connection."
               fullWidth
             />
 

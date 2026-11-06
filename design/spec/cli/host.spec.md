@@ -687,7 +687,7 @@ _No flags._
 
 - `git-connections` reads `GET /api/deployment` and prints one `host credential` line per git connection.
 - `git-ambient [-host h] [-kind github|git] [-base-url u] [-proxy u] [-source gh|git|auto] [-if-none]` calls `POST /api/deployment/git-connections`. It adds an ambient connection that asks this host's own `gh`/`git` login for a token on demand. It is for a daemon on the bare machine only.
-- `git-login [-web|-from-gh|-with-token] [-host h] [-base-url u] [-proxy u] [-scope s] [-author name] [-client-id id] [-scopes list]` delegates the caller's own GitHub HTTPS token to the deployment and registers it with `POST /api/deployment/git-connections`, with signing on, so pull requests and comments made with it are signed `Signed by <Name> (via Grain)`. `-web` runs the GitHub OAuth Device Flow, `-from-gh` takes `gh auth token`, and `-with-token` reads the token from standard input; at most one may be given, and with none it uses an active `gh` login and falls back to the Device Flow. It has no `login` alias: `grain login` is the sign-in command ([#CLI-108](#CLI-108)). See `design/design/git-login.design.md`.
+- `git-login [-web|-from-gh|-with-token] [-host h] [-base-url u] [-proxy u] [-scope s] [-user u] [-default] [-author name] [-client-id id] [-scopes list]` delegates the caller's own GitHub HTTPS token to the deployment and registers it with `POST /api/deployment/git-connections`, with signing on, so pull requests and comments made with it are signed `Signed by <Name> (via Grain)`. By default it binds the token to the signed-in caller (`-user` overrides the bound task author, and `-default` registers a deployment-wide connection instead). `-web` runs the GitHub OAuth Device Flow, `-from-gh` takes `gh auth token`, and `-with-token` reads the token from standard input; at most one may be given, and with none it uses an active `gh` login and falls back to the Device Flow. It has no `login` alias: `grain login` is the sign-in command ([#CLI-108](#CLI-108)). See `design/design/git-login.design.md`.
 - `default-model [-if-none|-if-unserved] <model>` sends `PUT /api/deployment {"defaultModel"}`. Without either flag that is its only call. With `-if-none` or `-if-unserved` it first reads `GET /api/deployment` and leaves a set default alone (`This deployment already runs on <m> by default: leaving it as it is.`). `-if-unserved` also reads `GET /api/settings` when a default is set, and replaces it when no enabled connection serves it.
 
 **Scope:** admin.
@@ -713,11 +713,13 @@ _No flags._
 | `-author` | string |  |  | explicit name to sign pull requests and comments with (defaults to your GitHub profile name or login) |
 | `-base-url` | string |  |  | the host's scheme://host[:port], when that is not https on the default port |
 | `-client-id` | string | `"178c6fc778ccc68e1d6a"` | $GRAIN_GITHUB_CLIENT_ID | GitHub OAuth Client ID for -web device flow ($GRAIN_GITHUB_CLIENT_ID) |
+| `-default` | bool |  |  | register as the deployment-wide default connection rather than a per-user connection |
 | `-from-gh` | value |  |  | delegate the token from this machine's gh auth token login |
 | `-host` | string | `"github.com"` |  | git host to authenticate against |
 | `-proxy` | string |  |  | the http(s)://host:port proxy the host is reached through, if any |
 | `-scope` | string |  |  | optional owner or owner/repo scope (empty sets the deployment-wide default on -host) |
 | `-scopes` | string | `"repo,read:org,workflow"` |  | comma-separated OAuth scopes requested by -web |
+| `-user` | string |  |  | optional task author account/email to bind this token to (defaults to your signed-in account, or deployment-wide when -default is set) |
 | `-web` | bool |  |  | authenticate in a web browser using GitHub OAuth Device Flow |
 | `-with-token` | bool |  |  | read the HTTPS token from standard input |
 <!-- END GENERATED FLAGS -->

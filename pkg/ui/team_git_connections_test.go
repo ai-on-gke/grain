@@ -293,3 +293,101 @@ func TestTeamGitConnectionsWithoutCredentialDirectory(t *testing.T) {
 		t.Errorf("DELETE error = %q, want substring %q", errBody.Error, wantMsg)
 	}
 }
+
+func TestAddTeamGitConnectionPerUserPATAndReplaceScoping(t *testing.T) {
+	client, store, _ := testClient(t)
+	credentials, err := gitproxy.LoadCredentialSet(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Config.Credentials = credentials
+	srv := ui.NewServerWithClient(client)
+	ctx := context.Background()
+
+	if err := store.PutConfig(ctx, model.Config{PollInterval: model.DefaultPollInterval}); err != nil {
+		t.Fatal(err)
+	}
+	admitUser(t, store, "alice@example.com")
+	admitUser(t, store, "bob@example.com")
+	alice := map[string]string{"Content-Type": "application/json", "X-Grain-User": "alice@example.com"}
+	bob := map[string]string{"Content-Type": "application/json", "X-Grain-User": "bob@example.com"}
+
+	// 1. Add a deployment-wide default connection on git.example.test.
+	rec := doWithHeaders(t, srv, http.MethodPost, "/api/deployment/git-connections",
+		`{"host": "git.example.test", "kind": "git", "type": "pat", "value": "tok-default"}`, alice)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("default POST git-connections: got %d %s, want 200", rec.Code, rec.Body)
+	}
+
+	// 2. Alice runs git-login (SignAs=true, Replace=true) as a verified human principal -> binds to alice@example.com without overwriting default.
+	aliceCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com"})
+	if _, err := client.AddTeamGitConnection(aliceCtx, model.DefaultTeamID, ui.AddTeamGitConnectionRequest{
+		Host:    "git.example.test",
+		Kind:    "git",
+		Type:    "pat",
+		Value:   "tok-alice-1",
+		SignAs:  true,
+		Replace: true,
+	}, "alice@example.com"); err != nil {
+		t.Fatalf("alice git-login AddTeamGitConnection: %v", err)
+	}
+
+	// 3. Bob registers a connection via HTTP POST with explicit taskUser -> binds to bob@example.com without overwriting Alice or default.
+	rec = doWithHeaders(t, srv, http.MethodPost, "/api/deployment/git-connections",
+		`{"host": "git.example.test", "kind": "git", "type": "pat", "value": "tok-bob", "taskUser": "bob@example.com", "signAs": true, "replace": true}`, bob)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bob git-login POST: got %d %s, want 200", rec.Code, rec.Body)
+	}
+
+	// 4. Alice re-runs git-login -> replaces only Alice's connection, keeping 3 connections total.
+	team, err := client.AddTeamGitConnection(aliceCtx, model.DefaultTeamID, ui.AddTeamGitConnectionRequest{
+		Host:    "git.example.test",
+		Kind:    "git",
+		Type:    "pat",
+		Value:   "tok-alice-2",
+		SignAs:  true,
+		Replace: true,
+	}, "alice@example.com")
+	if err != nil {
+		t.Fatalf("alice second git-login AddTeamGitConnection: %v", err)
+	}
+	if len(team.GitConnections) != 3 {
+		t.Fatalf("GitConnections = %+v, want 3 connections (default, alice, bob)", team.GitConnections)
+	}
+
+	for _, tk := range []model.Task{
+		{ID: "t-alice", Intent: model.IntentImplement, Title: "Alice task", Owner: "alice@example.com", Binding: model.BindingDirective},
+		{ID: "t-bob", Intent: model.IntentImplement, Title: "Bob task", Owner: "bob@example.com", Binding: model.BindingDirective},
+		{ID: "t-charlie", Intent: model.IntentImplement, Title: "Charlie task", Owner: "charlie@example.com", Binding: model.BindingDirective},
+	} {
+		if err := store.PutTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	credAlice, err := store.TaskGitCredentialOn(ctx, "t-alice", "git.example.test", "acme", "widgets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	credBob, err := store.TaskGitCredentialOn(ctx, "t-bob", "git.example.test", "acme", "widgets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	credCharlie, err := store.TaskGitCredentialOn(ctx, "t-charlie", "git.example.test", "acme", "widgets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credAlice == credBob || credAlice == credCharlie || credBob == credCharlie {
+		t.Fatalf("expected distinct credentials for alice (%q), bob (%q), and charlie/default (%q)", credAlice, credBob, credCharlie)
+	}
+	if got, ok := credentials.GetForRepoOn(credAlice, "git.example.test", "acme", "widgets"); !ok || got.Token == nil || *got.Token != "tok-alice-2" {
+		t.Errorf("Alice token = %+v, want tok-alice-2", got)
+	}
+	if got, ok := credentials.GetForRepoOn(credBob, "git.example.test", "acme", "widgets"); !ok || got.Token == nil || *got.Token != "tok-bob" {
+		t.Errorf("Bob token = %+v, want tok-bob", got)
+	}
+	if got, ok := credentials.GetForRepoOn(credCharlie, "git.example.test", "acme", "widgets"); !ok || got.Token == nil || *got.Token != "tok-default" {
+		t.Errorf("Charlie (default) token = %+v, want tok-default", got)
+	}
+}
+
