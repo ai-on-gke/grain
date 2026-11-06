@@ -55,6 +55,12 @@ const (
 // two equal.
 const SandboxAccess = 4244
 
+// 4251-4259: built-in capability servers' loopback data planes.
+const (
+	// Figma is the figma capability server's loopback data-plane port.
+	Figma = 4253
+)
+
 // 4280-4289: persistent sandboxes' host_port (model.PersistentSandbox),
 // the staging environments grain keeps running beside itself.
 const (

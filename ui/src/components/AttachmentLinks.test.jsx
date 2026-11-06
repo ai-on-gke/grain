@@ -26,7 +26,7 @@ describe("AttachmentLinks", () => {
     const user = userEvent.setup();
     render(<AttachmentLinks taskId="42" attachments={[png]} />);
 
-    // The chip is a button, not a link: following a link to the raw
+    // The thumbnail is a button, not a link: following a link to the raw
     // image is the dead end this replaced (grain/task-78).
     const chip = screen.getByText("screenshot.png");
     expect(chip.closest("a")).toBeNull();
@@ -117,6 +117,64 @@ describe("AttachmentLinks", () => {
     const link = screen.getByRole("link", { name: "diagram.svg" });
     expect(link).toHaveAttribute("href", "/api/tasks/42/attachments/9");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("draws an image in line as a thumbnail that opens the viewer", async () => {
+    const user = userEvent.setup();
+    render(<AttachmentLinks taskId="42" attachments={[png, zip]} />);
+
+    // The thumbnail is decorative (alt=""), labelled by its file name, so
+    // the one <img> named after the file is still the viewer's.
+    const thumbs = screen.getByTestId("attachment-thumbnails");
+    const thumb = thumbs.querySelector("img");
+    expect(thumb).toHaveAttribute("src", "/api/tasks/42/attachments/7");
+    expect(thumb).toHaveAttribute("alt", "");
+    expect(thumb).toHaveAttribute("loading", "lazy");
+    expect(screen.queryByAltText("screenshot.png")).not.toBeInTheDocument();
+    // The zip stays a chip linking to its content, outside the strip.
+    expect(thumbs).not.toContainElement(
+      screen.getByRole("link", { name: "repro.zip" }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "screenshot.png" }));
+    expect(screen.getByAltText("screenshot.png")).toBeInTheDocument();
+  });
+
+  it("pages through every image of the set, wrapping round", async () => {
+    const user = userEvent.setup();
+    const before = { id: 10, filename: "before.png", contentType: "image/png" };
+    const after = { id: 11, filename: "after.webp", contentType: "image/webp" };
+    render(<AttachmentLinks taskId="42" attachments={[before, zip, after]} />);
+
+    await user.click(screen.getByRole("button", { name: "before.png" }));
+    expect(screen.getByAltText("before.png")).toBeInTheDocument();
+    expect(screen.getByText(/1 \/ 2/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Next image" }));
+    expect(screen.getByAltText("after.webp")).toHaveAttribute(
+      "src",
+      "/api/tasks/42/attachments/11",
+    );
+    expect(screen.getByText(/2 \/ 2/)).toBeInTheDocument();
+
+    // Past the last is the first again, and the keyboard steps too.
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByAltText("before.png")).toBeInTheDocument();
+    await user.keyboard("{ArrowLeft}");
+    expect(screen.getByAltText("after.webp")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Previous image" }));
+    expect(screen.getByAltText("before.png")).toBeInTheDocument();
+  });
+
+  it("offers no paging for a single image", async () => {
+    const user = userEvent.setup();
+    render(<AttachmentLinks taskId="42" attachments={[png]} />);
+
+    await user.click(screen.getByText("screenshot.png"));
+    expect(
+      screen.queryByRole("button", { name: "Next image" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/1 \/ 1/)).not.toBeInTheDocument();
   });
 
   it("renders nothing without attachments", () => {
