@@ -339,10 +339,11 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	capAllowed := agentCapabilityAllowsRoute(held, set, pattern, scope)
 	ciCap := grainCIReadsRoute(held, pattern)
 	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
+	detach := capabilitiesDetachAllowsRoute(set, pattern)
 	if fsMergeQueueByCI(set, pattern, r) {
 		capAllowed = true
 	}
-	if !set.Has(scope) && !capAllowed && !ciCap && !adminPatch {
+	if !set.Has(scope) && !capAllowed && !ciCap && !adminPatch && !detach {
 		return call, fmt.Errorf("task %s holds no api grant for scope %s, which %s needs: "+
 			"ask a person to grant api:%s or a preset that includes it (docs/agent-api.md)", taskID, scope, pattern, scope)
 	}
@@ -379,10 +380,19 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 		}
 		capAllowed = true
 	}
+	if detach && !set.Allows(scope, call.repo) && set.Allows("capabilities:detach", call.repo) {
+		if err := s.capabilitiesDetachAllowed(ctx, "task "+taskID, pattern, call.repo, call.targetTask, call.reason, body); err != nil {
+			return call, err
+		}
+		capAllowed = true
+	}
 	if !set.Allows(scope, call.repo) && !capAllowed {
 		missingScope := scope
 		if !set.Has(scope) && adminPatch {
 			missingScope = "tasks:admin"
+		}
+		if !set.Has(scope) && detach {
+			missingScope = "capabilities:detach"
 		}
 		if call.repo == "" {
 			return call, fmt.Errorf("task %s holds %s only for some repositories, and %s does not name one it reaches",
@@ -468,6 +478,95 @@ func tasksAdminTaskPatchBodyAllowed(body []byte) error {
 		}
 	}
 	return nil
+}
+
+// capabilitiesDetachAllowed holds a call admitted through
+// capabilities:detach alone (capabilitiesDetachAllowsRoute) to what that
+// scope is for (director-capabilities.spec.md §3.1.2): a non-empty reason,
+// a body that only removes (capabilitiesDetachBodyAllowed), and never a
+// standing session's task -- not another session's, and not the caller's
+// own. who names the caller in the refusal.
+func (s *Server) capabilitiesDetachAllowed(ctx context.Context, who, pattern, repo, target, reason string, body []byte) error {
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("%s under scope capabilities:detach removes grants: give a reason (%s)", pattern, ActingReasonHeader)
+	}
+	if pattern == "POST /api/tasks/{id}/capabilities" {
+		if target == "" {
+			return fmt.Errorf("%s under scope capabilities:detach names no task", pattern)
+		}
+		t, err := s.tasks.Store.GetTask(ctx, target)
+		if err != nil || t == nil {
+			return fmt.Errorf("task %s could not be read: %v", target, err)
+		}
+		if t.IsConsoleSession() {
+			session, _ := model.ConsoleSessionIDOf(*t)
+			return fmt.Errorf("%s cannot detach grants from task %s: it is the standing session %q, and "+
+				"capabilities:detach never changes a standing session's grants (its own included)", who, target, session)
+		}
+	}
+	return capabilitiesDetachBodyAllowed(pattern, body, s.storedFieldGrants(ctx, pattern, repo), s.tasks.normalizeCapabilityID)
+}
+
+// capabilitiesDetachBodyAllowed reports whether body only removes grants
+// on pattern: "attach": false with no "replace" on a task, or a repository
+// list every entry of which is already stored on that field (stored, from
+// storedFieldGrants). Anything else -- an attach, a replacement, a list
+// naming something the row does not hold, or a body that does not name
+// the list at all -- needs capabilities:admin.
+func capabilitiesDetachBodyAllowed(pattern string, body []byte, stored map[string][]string, normalize func(string) (string, error)) error {
+	trimmed := bytes.TrimSpace(body)
+	switch pattern {
+	case "POST /api/tasks/{id}/capabilities":
+		var req setCapabilityRequest
+		if len(trimmed) == 0 || json.Unmarshal(trimmed, &req) != nil {
+			return fmt.Errorf("capabilities:detach requires a JSON object with \"attach\": false on %s", pattern)
+		}
+		if req.Attach == nil || *req.Attach {
+			return fmt.Errorf("capabilities:detach may only remove a grant on %s (\"attach\": false); attaching one needs capabilities:admin", pattern)
+		}
+		if req.Replace != "" {
+			return fmt.Errorf("capabilities:detach cannot replace a grant on %s; replacing one needs capabilities:admin", pattern)
+		}
+		if strings.TrimSpace(req.ID) == "" && strings.TrimSpace(req.Grant) == "" && strings.TrimSpace(req.Capability) == "" {
+			return fmt.Errorf("capabilities:detach requires the grant to remove (id, grant, or capability) on %s", pattern)
+		}
+		return nil
+	case "PUT /api/repos/{owner}/{name}/capabilities", "PUT /api/repos/{owner}/{name}/ci-capabilities":
+		field, key := "defaultCapabilities", "defaultcapabilities"
+		if pattern == "PUT /api/repos/{owner}/{name}/ci-capabilities" {
+			field, key = "ciCapabilities", "cicapabilities"
+		}
+		var fields map[string]json.RawMessage
+		if len(trimmed) == 0 || json.Unmarshal(trimmed, &fields) != nil {
+			return fmt.Errorf("capabilities:detach requires a JSON object naming %s on %s", field, pattern)
+		}
+		var list []string
+		found := false
+		for k, raw := range fields {
+			if gateKey(k) != key {
+				return fmt.Errorf("capabilities:detach may only narrow %s on %s (got %q)", field, pattern, k)
+			}
+			if json.Unmarshal(raw, &list) != nil || list == nil {
+				return fmt.Errorf("capabilities:detach requires %s to be a list on %s", field, pattern)
+			}
+			found = true
+		}
+		if !found {
+			return fmt.Errorf("capabilities:detach requires a JSON object naming %s on %s", field, pattern)
+		}
+		existing := stored[key]
+		for _, name := range list {
+			if strings.TrimSpace(name) == "" {
+				continue
+			}
+			if !grantAlreadyStored(existing, name, normalize) {
+				return fmt.Errorf("capabilities:detach may only narrow %s on %s, and %q is not already on it; "+
+					"adding one needs capabilities:admin", field, pattern, name)
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("%s is not a route capabilities:detach reaches", pattern)
 }
 
 // agentTaskPatchBodyAllowed refuses empty or no-op PATCH /api/tasks/{id}
@@ -2212,13 +2311,14 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	}
 	call.grants = set
 	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
+	detach := capabilitiesDetachAllowsRoute(set, pattern)
 	// GET /api/inbox and GET /api/events without ?repo= answer only the
 	// repositories the token reads (Server.inboxReadable,
 	// Server.eventsReadable), so a token held to some of them is let
 	// through rather than refused for naming none.
 	fsAllowed := fsMergeQueueByCI(set, pattern, r) ||
 		((pattern == "GET /api/inbox" || pattern == "GET /api/events") && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "")
-	if !set.Has(scope) && !adminPatch && !fsAllowed {
+	if !set.Has(scope) && !adminPatch && !fsAllowed && !detach {
 		return call, fmt.Errorf("%s holds no api grant for scope %s, which %s needs", principal, scope, pattern)
 	}
 	if fsRoutes[pattern] == "src" && !set.Has("deployment:src") {
@@ -2257,10 +2357,19 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 		}
 		adminPatchAllowed = true
 	}
+	if detach && !set.Allows(scope, call.repo) && set.Allows("capabilities:detach", call.repo) {
+		if err := s.capabilitiesDetachAllowed(ctx, principal, pattern, call.repo, call.targetTask, call.reason, body); err != nil {
+			return call, err
+		}
+		adminPatchAllowed = true
+	}
 	if !set.Allows(scope, call.repo) && !adminPatchAllowed && !fsAllowed {
 		missingScope := scope
 		if !set.Has(scope) && adminPatch {
 			missingScope = "tasks:admin"
+		}
+		if !set.Has(scope) && detach {
+			missingScope = "capabilities:detach"
 		}
 		if call.repo == "" {
 			return call, fmt.Errorf("%s holds %s only for %s, and %s does not name a repository it reaches",

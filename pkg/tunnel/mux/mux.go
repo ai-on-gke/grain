@@ -275,6 +275,12 @@ func (m *Mux) OpenStream(ctx context.Context) (*Stream, error) {
 
 // AcceptStream waits for and returns the next stream opened by the peer.
 func (m *Mux) AcceptStream() (*Stream, error) {
+	return m.AcceptStreamContext(context.Background())
+}
+
+// AcceptStreamContext waits for and returns the next stream opened by the peer,
+// or returns ctx.Err() if ctx is cancelled before a stream arrives.
+func (m *Mux) AcceptStreamContext(ctx context.Context) (*Stream, error) {
 	select {
 	case s, ok := <-m.acceptCh:
 		if !ok {
@@ -283,6 +289,8 @@ func (m *Mux) AcceptStream() (*Stream, error) {
 		return s, nil
 	case <-m.doneCh:
 		return nil, m.getCloseErr()
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
