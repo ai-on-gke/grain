@@ -1002,6 +1002,43 @@ func ConsoleSessionNetworkAccess(session ConsoleSession, networkIsolates bool) N
 	return NetworkOpen
 }
 
+// DirectorNetworkAccess is the network the shipped Director
+// (DefaultConsoleSessions) is filed with on a backend that does or does
+// not isolate a sandbox's network (ConsoleSessionNetworkAccess).
+func DirectorNetworkAccess(networkIsolates bool) NetworkAccess {
+	for _, s := range DefaultConsoleSessions() {
+		if s.ID == DirectorSessionID {
+			return ConsoleSessionNetworkAccess(s, networkIsolates)
+		}
+	}
+	return NetworkNone
+}
+
+// DirectorPolicyCapabilities is every capability the shipped Director is
+// granted (DefaultConsoleSessions, by way of ConsoleSessionGrants), as
+// local policy's capabilities.allow names it: a capability reference by
+// its reference alone, since policy matches one without its arguments.
+// It is read from the running binary, so a capability a linked-in
+// package registers for the Director is among them.
+func DirectorPolicyCapabilities() []string {
+	var out []string
+	for _, s := range DefaultConsoleSessions() {
+		if s.ID != DirectorSessionID {
+			continue
+		}
+		for _, g := range ConsoleSessionGrants(s) {
+			c := g.Capability
+			if IsCapabilityRef(c) {
+				c = CapabilityGrantRef(c)
+			}
+			if !slices.Contains(out, c) {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
+}
+
 // ConsoleSessionConfigSnapshot records the static ConsoleSession config values
 // last applied to a console session task, so syncConsoleSessionTask can distinguish
 // config changes in grain_config from operator edits made directly on the active

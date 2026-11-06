@@ -238,7 +238,7 @@ func renderWorkstationPolicy(o workstationOptions) string {
 	// and take it away; any task may be granted them, not only the
 	// Director.
 	b.WriteString("    # The Director chat's own grants. Remove one and the Director is held for it.\n")
-	for _, c := range directorCapabilities() {
+	for _, c := range model.DirectorPolicyCapabilities() {
 		if !slices.ContainsFunc(allow, func(a string) bool { return strings.EqualFold(a, c) }) {
 			fmt.Fprintf(&b, "    - %q\n", c)
 		}
@@ -278,40 +278,6 @@ const directorNetworkWarning = "This sandbox backend cannot withhold a network, 
 // written for -network none allows only none.
 const directorEgressNetworkWarning = "The Director chat ships with open network on this build, so this policy holds it: " +
 	"add \"open\" to network: in the policy, or set the Director's network to none in its console session settings."
-
-func directorDefaultNetwork(isolates bool) model.NetworkAccess {
-	for _, s := range model.DefaultConsoleSessions() {
-		if s.ID == model.DirectorSessionID {
-			return model.ConsoleSessionNetworkAccess(s, isolates)
-		}
-	}
-	return model.NetworkNone
-}
-
-// directorCapabilities is every capability the Director chat is granted
-// (model.DefaultConsoleSessions, by way of model.ConsoleSessionGrants),
-// as local policy's capabilities.allow names it: a capability reference
-// by its reference alone, since policy matches one without its
-// arguments. It is read from this binary, so a capability a linked-in
-// package registers for the Director is among them.
-func directorCapabilities() []string {
-	var out []string
-	for _, s := range model.DefaultConsoleSessions() {
-		if s.ID != model.DirectorSessionID {
-			continue
-		}
-		for _, g := range model.ConsoleSessionGrants(s) {
-			c := g.Capability
-			if model.IsCapabilityRef(c) {
-				c = model.CapabilityGrantRef(c)
-			}
-			if !slices.Contains(out, c) {
-				out = append(out, c)
-			}
-		}
-	}
-	return out
-}
 
 // withConfigRepo is repos with grain/config (model.ConfigRepo) appended
 // unless it is already named. Left out, local policy held every task
@@ -701,7 +667,7 @@ func runInitWorkstation(ctx context.Context, args []string, stdin io.Reader, out
 	if o.Network == string(model.NetworkNone) {
 		if o.SandboxBackend != string(model.SandboxBackendGranule) {
 			fmt.Fprintln(out, directorNetworkWarning)
-		} else if directorDefaultNetwork(true) != model.NetworkNone {
+		} else if model.DirectorNetworkAccess(true) != model.NetworkNone {
 			fmt.Fprintln(out, directorEgressNetworkWarning)
 		}
 	}
