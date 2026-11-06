@@ -306,7 +306,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("plc-chat-gateway", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
-	listenAddr := fs.String("listen", envOrDefault("PLC_CHAT_GATEWAY_LISTEN", ":8086"), "HTTP listen address")
+	listenAddr := fs.String("listen", envOrDefault("PLC_CHAT_GATEWAY_LISTEN", ":4286"), "HTTP listen address")
 	registryURL := fs.String("registry-url", os.Getenv("GRAIN_REGISTRY_URL"), "Grain Registry base URL")
 	grainURL := fs.String("grain-url", os.Getenv("GRAIN_URL"), "Default Grain daemon base URL")
 	webhookSecret := fs.String("webhook-secret", os.Getenv("PLC_CHAT_WEBHOOK_SECRET"), "Shared secret for HMAC chat webhook verification")

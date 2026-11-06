@@ -49,7 +49,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("plc-studio", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
-	listenAddr := fs.String("listen", envOrDefault("PLC_STUDIO_LISTEN", ":8085"), "HTTP listen address")
+	listenAddr := fs.String("listen", envOrDefault("PLC_STUDIO_LISTEN", ":4285"), "HTTP listen address")
 	registryURL := fs.String("registry-url", os.Getenv("GRAIN_REGISTRY_URL"), "Grain Registry base URL")
 	grainURL := fs.String("grain-url", os.Getenv("GRAIN_URL"), "Default Grain daemon base URL")
 	requireAuth := fs.Bool("require-auth", false, "Require verified caller identity on /api/studio/* endpoints")
