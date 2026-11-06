@@ -551,21 +551,23 @@ func IsBootstrapPlaybooksGrant(grant string) bool {
 	}
 	switch spec.Capability {
 	case ConfigMapRef, SkillCapabilityServerID + "#" + ConfigMapMethod:
-		if cms, ok := stringSliceField(spec.With, "config_maps"); ok && slices.Contains(cms, "bootstrap") {
-			return true
-		}
-		if keys, ok := stringSliceField(spec.With, "keys"); ok {
-			for _, k := range keys {
-				if strings.HasPrefix(k, "bootstrap/") {
-					return true
-				}
+		cms, hasCM := stringSliceField(spec.With, "config_maps")
+		_, hasSec := spec.With["secrets"]
+		keys, hasKeys := stringSliceField(spec.With, "keys")
+		hasBootstrapKey := false
+		for _, k := range keys {
+			if strings.HasPrefix(k, "bootstrap/") {
+				hasBootstrapKey = true
+				break
 			}
 		}
-	case SkillCapabilityServerID + "#skill":
-		skills, ok := stringSliceField(spec.With, "skills")
-		if !ok || slices.Contains(skills, "bootstrap") {
-			return true
+		if hasCM || hasSec {
+			return slices.Contains(cms, "bootstrap") && (!hasKeys || hasBootstrapKey)
 		}
+		return hasKeys && hasBootstrapKey
+	case ConfigMapCapabilityServerID + "#skill", SkillCapabilityServerID + "#skill":
+		skills, ok := stringSliceField(spec.With, "skills")
+		return ok && slices.Contains(skills, "bootstrap")
 	}
 	return false
 }
@@ -618,7 +620,7 @@ func IsEmbeddedBootstrapOnlyGrant(grant string) bool {
 			}
 		}
 		return (hasCM && len(cms) > 0) || (hasKeys && len(keys) > 0)
-	case SkillCapabilityServerID + "#skill":
+	case ConfigMapCapabilityServerID + "#skill", SkillCapabilityServerID + "#skill":
 		for field := range spec.With {
 			if field != "skills" {
 				return false

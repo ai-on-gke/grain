@@ -50,6 +50,32 @@ func (s staticCapabilityServers) Lookup(id string) (*protocol.Server, error) {
 	return nil, os.ErrNotExist
 }
 
+type countingCapabilityServers struct {
+	inner    orchestrator.CapabilityServers
+	onLookup func(string)
+}
+
+func (c countingCapabilityServers) Lookup(id string) (*protocol.Server, error) {
+	if c.onLookup != nil {
+		c.onLookup(id)
+	}
+	return c.inner.Lookup(id)
+}
+
+// unfencedSandboxes hides Unisolated() so isUnisolated is false while
+// OpenNetworkUnfenced reports an unfenced container bridge (§3.2.4).
+type unfencedSandboxes struct {
+	inner orchestrator.Sandboxes
+}
+
+func (u unfencedSandboxes) Acquire(ctx context.Context, name string, shape orchestrator.Shape) (orchestrator.Sandbox, error) {
+	return u.inner.Acquire(ctx, name, shape)
+}
+
+func (u unfencedSandboxes) OpenNetworkUnfenced(context.Context) string {
+	return "container sandbox fence is off"
+}
+
 // grantCapturingFramework records what one run was told about its own
 // grants, then finishes the way toolCapturingFramework does.
 type grantCapturingFramework struct {
@@ -163,8 +189,22 @@ func TestRunCycleMaterializesBootstrapPlaybooksOnHostSandboxes(t *testing.T) {
 		CapabilityPasses:  orchestrator.NewCapabilityPasses(),
 		MaxWorkers:        1,
 	}
+	// Even if an external server is attached under config-map, an unisolated
+	// HostSandboxes run serves embedded bootstrap grants (both #config-map and
+	// #skill) straight from the binary without dialing the external server's
+	// control plane (§3.2.4).
+	externalDialed := false
+	countingLookup := countingCapabilityServers{
+		inner:    lookup,
+		onLookup: func(string) { externalDialed = true },
+	}
+	deps.CapabilityServers = countingLookup
+
 	if err := orchestrator.RunCycle(ctx, deps, baseTime); err != nil {
 		t.Fatal(err)
+	}
+	if externalDialed {
+		t.Errorf("HostSandboxes dialed the external config-map server for an embedded-bootstrap-only grant")
 	}
 	for _, want := range []string{
 		"/home/debian/.config-map/bootstrap",
@@ -176,6 +216,28 @@ func TestRunCycleMaterializesBootstrapPlaybooksOnHostSandboxes(t *testing.T) {
 		}
 	}
 
+	// Legacy skill#skill={"skills":["bootstrap"]} normalizes onto config-map#skill
+	// and places the embedded SKILL.md and playbooks on HostSandboxes as well.
+	skillTask := filedTask(t, ctx, store, "t-boot-skill", repo)
+	skillTask.Grants = []model.Grant{{
+		Capability: `https://grain.dev/capabilities/skill#skill={"skills":["bootstrap"]}`,
+		Via:        model.GrantByGrain,
+	}}
+	if err := store.PutTask(ctx, skillTask); err != nil {
+		t.Fatal(err)
+	}
+	framework.onRun = func(cfg agent.RunConfig) {
+		if raw, err := os.ReadFile(filepath.Join(cfg.SandboxRoot, ".skills", "bootstrap", "SKILL.md")); err != nil || len(raw) == 0 {
+			t.Errorf("reading placed bootstrap SKILL.md in HostSandboxes: err=%v len=%d", err, len(raw))
+		}
+	}
+	if err := orchestrator.RunCycle(ctx, deps, baseTime.Add(1)); err != nil {
+		t.Fatal(err)
+	}
+	if externalDialed {
+		t.Errorf("HostSandboxes dialed the external skill/config-map server for skill#skill bootstrap grant")
+	}
+
 	// Operator-configured config-map entries remain refused on HostSandboxes.
 	refused := filedTask(t, ctx, store, "t-op-map", repo)
 	refused.Grants = []model.Grant{{
@@ -185,7 +247,7 @@ func TestRunCycleMaterializesBootstrapPlaybooksOnHostSandboxes(t *testing.T) {
 	if err := store.PutTask(ctx, refused); err != nil {
 		t.Fatal(err)
 	}
-	if err := orchestrator.RunCycle(ctx, deps, baseTime.Add(1)); err != nil {
+	if err := orchestrator.RunCycle(ctx, deps, baseTime.Add(2)); err != nil {
 		t.Fatal(err)
 	}
 	state, err := store.State(ctx, refused.ID)
@@ -194,6 +256,43 @@ func TestRunCycleMaterializesBootstrapPlaybooksOnHostSandboxes(t *testing.T) {
 	}
 	if state != model.StateAwaitingReply {
 		t.Errorf("operator config-map task state on HostSandboxes = %q, want %q", state, model.StateAwaitingReply)
+	}
+
+	// An unfenced container backend (isUnisolated == false, OpenNetworkUnfenced != "")
+	// likewise serves embedded bootstrap grants in-process without dialing an
+	// attached external server, and still refuses operator config maps.
+	unfencedDeps := deps
+	unfencedDeps.Sandboxes = unfencedSandboxes{inner: orchestrator.NewHostSandboxes(t.TempDir())}
+	unfencedBoot := filedTask(t, ctx, store, "t-unfenced-boot", repo)
+	unfencedBoot.Grants = []model.Grant{{Capability: model.BootstrapPlaybooksGrant, Via: model.GrantByGrain}}
+	if err := store.PutTask(ctx, unfencedBoot); err != nil {
+		t.Fatal(err)
+	}
+	framework.onRun = func(cfg agent.RunConfig) {
+		if raw, err := os.ReadFile(filepath.Join(cfg.SandboxRoot, ".config-map", "bootstrap", "gcp-capabilities.md")); err != nil || len(raw) == 0 {
+			t.Errorf("reading placed bootstrap playbook in unfenced sandbox: err=%v len=%d", err, len(raw))
+		}
+	}
+	if err := orchestrator.RunCycle(ctx, unfencedDeps, baseTime.Add(3)); err != nil {
+		t.Fatal(err)
+	}
+	if externalDialed {
+		t.Errorf("unfenced backend dialed the external config-map server for an embedded-bootstrap-only grant")
+	}
+
+	unfencedRefused := filedTask(t, ctx, store, "t-unfenced-op-map", repo)
+	unfencedRefused.Grants = []model.Grant{{
+		Capability: `https://grain.dev/capabilities/config-map#config-map={"config_maps":["operator-map"]}`,
+		Via:        model.GrantByLabel,
+	}}
+	if err := store.PutTask(ctx, unfencedRefused); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.RunCycle(ctx, unfencedDeps, baseTime.Add(4)); err != nil {
+		t.Fatal(err)
+	}
+	if unfencedState, err := store.State(ctx, unfencedRefused.ID); err != nil || unfencedState != model.StateAwaitingReply {
+		t.Errorf("operator config-map task state on unfenced backend = %q (%v), want %q", unfencedState, err, model.StateAwaitingReply)
 	}
 }
 

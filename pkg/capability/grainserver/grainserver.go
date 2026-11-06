@@ -414,7 +414,7 @@ func statusOf(id string, srv *protocol.Server) servers.Status {
 
 func defaultConfigMapServer() *protocol.Server {
 	configMapOnce.Do(func() {
-		cm, err := intree.NewConfigMap(intree.ConfigMapConfig{Now: callerClock})
+		cm, err := intree.NewEmbeddedBootstrapServer(callerClock)
 		if err != nil {
 			panic(fmt.Sprintf("grainserver: building default config-map server: %v", err))
 		}

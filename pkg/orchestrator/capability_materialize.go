@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
@@ -222,19 +223,19 @@ type sandboxBatchFilePlacer interface {
 // then every placement, then the setup commands -- at dispatch, and again
 // into the fresh VM of a recreate_sandbox (§5.5.5).
 func (m *passMaterialization) apply(ctx context.Context, sb Sandbox) error {
-	if len(m.forwards) == 0 && len(m.pass.Placements()) == 0 && len(m.pass.SetupCommands()) == 0 {
-		return nil
-	}
 	commander, ok := sandboxRunsCommands(sb)
 	if !ok {
 		// A backend that cannot run commands (HostSandboxes) is still
 		// given the embedded bootstrap playbooks: public markdown compiled
-		// into this binary, with no forward and no setup command. Every
-		// other pass -- an in-process method's credential placements
-		// (model-proxy, release, ...) included -- is refused here as it
-		// was before the bootstrap-playbooks retirement, rather than
-		// written into a directory on grain's own host.
+		// into this binary, with no forward, setup command, or external
+		// MCP endpoint. Every other pass -- an in-process method's
+		// credential placements (model-proxy, release, ...) included -- is
+		// refused here as it was before the bootstrap-playbooks retirement,
+		// rather than written into a directory on grain's own host.
 		if len(m.forwards) == 0 && len(m.pass.SetupCommands()) == 0 && onlyEmbeddedBootstrapPlacements(m.pass) {
+			if len(m.pass.Placements()) == 0 {
+				return nil
+			}
 			if rooted, hasRoot := sb.(rootedSandbox); hasRoot {
 				if root, err := rooted.Root(); err == nil && root != "" {
 					return placeAllUnderRoot(root, m.pass.Placements())
@@ -247,6 +248,9 @@ func (m *passMaterialization) apply(ctx context.Context, sb Sandbox) error {
 		}
 		return fmt.Errorf("this sandbox backend (%T) cannot run commands in its sandbox, so it cannot materialize capability grants", sb)
 	}
+	if len(m.forwards) == 0 && len(m.pass.Placements()) == 0 && len(m.pass.SetupCommands()) == 0 {
+		return nil
+	}
 	if err := m.startGuestForwarders(ctx, sb, commander); err != nil {
 		return err
 	}
@@ -256,11 +260,65 @@ func (m *passMaterialization) apply(ctx context.Context, sb Sandbox) error {
 	return m.runSetup(ctx, commander)
 }
 
+func embeddedBootstrapGrantOK(mg protocol.MintedGrant, embedded *map[string]string) bool {
+	if !model.IsEmbeddedBootstrapOnlyGrant(model.RecordedCapabilityGrant(mg.Grant)) {
+		return false
+	}
+	if mg.Response == nil {
+		return true
+	}
+	if mg.Response.MCPEndpoint != "" || len(mg.Response.Ports) > 0 || mg.Response.SetupRoot != "" || len(mg.Response.Setup) > 0 {
+		return false
+	}
+	if len(mg.Response.Placements) == 0 {
+		return true
+	}
+	if *embedded == nil {
+		m, err := intree.EmbeddedBootstrapPlacements()
+		if err != nil {
+			return false
+		}
+		*embedded = m
+	}
+	for _, pl := range mg.Response.Placements {
+		want, ok := (*embedded)[pl.Path]
+		if !ok || (pl.Owner != "" && pl.Owner != sandboxUser) || pl.FileMode()&0o7111 != 0 {
+			return false
+		}
+		data, err := pl.Decoded()
+		if err != nil || string(data) != want {
+			return false
+		}
+	}
+	return true
+}
+
+// onlyInProcessOrEmbeddedBootstrap reports whether every grant in pass is
+// either an in-process server's grant or an embedded-bootstrap-only grant
+// carrying nothing beyond this binary's embedded playbooks (§3.2.4).
+func onlyInProcessOrEmbeddedBootstrap(pass *protocol.Pass) bool {
+	if pass == nil {
+		return true
+	}
+	var embedded map[string]string
+	for _, mg := range pass.Grants {
+		recorded := model.RecordedCapabilityGrant(mg.Grant)
+		if grainserver.IsInProcessGrant(recorded) {
+			continue
+		}
+		if !embeddedBootstrapGrantOK(mg, &embedded) {
+			return false
+		}
+	}
+	return true
+}
+
 // onlyEmbeddedBootstrapPlacements reports whether every placement in pass
 // belongs to a grant selecting only the embedded bootstrap map and is,
 // byte for byte, one of the files this binary embeds for it
 // (intree.EmbeddedBootstrapPlacements), at its own path, not executable and
-// owned by nobody but the sandbox user. The grant's arguments alone are not
+// owned by nobody but the sandbox user, with no non-in-process MCP endpoint,
+// port forward, or setup command. The grant's arguments alone are not
 // enough: the config-map reference resolves to whatever server the
 // deployment attaches under that id, and a skill server's -dir bootstrap
 // reads a directory of that name when one exists, so it is the response
@@ -271,27 +329,16 @@ func onlyEmbeddedBootstrapPlacements(pass *protocol.Pass) bool {
 	}
 	var embedded map[string]string
 	for _, mg := range pass.Grants {
-		if mg.Response == nil || len(mg.Response.Placements) == 0 {
+		if mg.Response == nil {
 			continue
 		}
-		if !model.IsEmbeddedBootstrapOnlyGrant(model.RecordedCapabilityGrant(mg.Grant)) {
+		recorded := model.RecordedCapabilityGrant(mg.Grant)
+		if len(mg.Response.Placements) == 0 && len(mg.Response.Ports) == 0 && mg.Response.SetupRoot == "" && len(mg.Response.Setup) == 0 &&
+			(mg.Response.MCPEndpoint == "" || grainserver.IsInProcessGrant(recorded)) {
+			continue
+		}
+		if !embeddedBootstrapGrantOK(mg, &embedded) {
 			return false
-		}
-		if embedded == nil {
-			var err error
-			if embedded, err = intree.EmbeddedBootstrapPlacements(); err != nil {
-				return false
-			}
-		}
-		for _, pl := range mg.Response.Placements {
-			want, ok := embedded[pl.Path]
-			if !ok || (pl.Owner != "" && pl.Owner != sandboxUser) || pl.FileMode()&0o7111 != 0 {
-				return false
-			}
-			data, err := pl.Decoded()
-			if err != nil || string(data) != want {
-				return false
-			}
 		}
 	}
 	return true

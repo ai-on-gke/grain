@@ -408,3 +408,33 @@ func TestConfigMapSupportsOptionalDirFallback(t *testing.T) {
 		t.Errorf("mint config-map from -dir = %+v", resp)
 	}
 }
+
+func TestNewEmbeddedBootstrapServerServesConfigMapAndSkill(t *testing.T) {
+	s, err := NewEmbeddedBootstrapServer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps := attach(t, s)
+	if ps.Methods["config-map"] == nil || ps.Methods["skill"] == nil {
+		t.Fatalf("methods = %v, want both config-map and skill", ps.Methods)
+	}
+	if implicit := mint(t, ps, "config-map", "e0-1-0", nil); implicit.Status != protocol.StatusRefused {
+		t.Errorf("implicit config-map mint = %+v, want refused", implicit)
+	}
+	embedded, err := EmbeddedBootstrapPlacements()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmResp := mint(t, ps, "config-map", "e0-2-0", map[string]any{"config_maps": []any{"bootstrap"}})
+	skResp := mint(t, ps, "skill", "e0-3-0", map[string]any{"skills": []any{"bootstrap"}})
+	if cmResp.Status != protocol.StatusOK || skResp.Status != protocol.StatusOK {
+		t.Fatalf("mint responses = %+v / %+v", cmResp, skResp)
+	}
+	got := map[string]string{}
+	for _, pl := range append(cmResp.Placements, skResp.Placements...) {
+		got[pl.Path] = pl.Content
+	}
+	if !reflect.DeepEqual(got, embedded) {
+		t.Errorf("minted paths = %d, want exact EmbeddedBootstrapPlacements (%d)", len(got), len(embedded))
+	}
+}

@@ -517,7 +517,7 @@ func loadEmbeddedBootstrapSkill() (map[string]*skill, error) {
 // skillFile, a symlink, or more than a response may carry.
 func loadSkills(dir string) (map[string]*skill, error) {
 	if dir == BootstrapMapName {
-		if _, err := os.Stat(dir); err != nil {
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 			return loadEmbeddedBootstrapSkill()
 		}
 	}
@@ -915,13 +915,29 @@ func ConfigMapConfigSchema() map[string]any {
 	return protocol.OperatorSchema(s)
 }
 
+// NewEmbeddedBootstrapServer builds an unconfigured, stateless config-map
+// server serving exclusively this binary's embedded bootstrap playbooks --
+// both as #config-map ("bootstrap") and as #skill ("bootstrap") -- without
+// reading the host filesystem.
+func NewEmbeddedBootstrapServer(now func() time.Time) (*Server, error) {
+	skills, err := loadEmbeddedBootstrapSkill()
+	if err != nil {
+		return nil, err
+	}
+	methods, err := newConfigMapMethods(nil, skills, now)
+	if err != nil {
+		return nil, err
+	}
+	return newServer("config-map", nil, methods...)
+}
+
 // NewConfigMap builds the configurable config-map server: method config-map,
 // stateless, placing configured files and secrets on the sandbox VM.
 func NewConfigMap(cfg ConfigMapConfig) (*Server, error) {
 	var dirSkills map[string]*skill
 	if cfg.Dir != "" {
 		if cfg.Dir == BootstrapMapName {
-			if _, err := os.Stat(cfg.Dir); err == nil {
+			if info, err := os.Stat(cfg.Dir); err == nil && info.IsDir() {
 				var lerr error
 				dirSkills, lerr = loadSkills(cfg.Dir)
 				if lerr != nil {

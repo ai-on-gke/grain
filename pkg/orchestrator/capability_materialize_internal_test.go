@@ -444,6 +444,17 @@ func TestMaterializePassOnACommandlessSandboxPlacesOnlyTheBootstrapPlaybooks(t *
 				Path: "/home/debian/.config/gcloud/key.json", Content: "secret",
 			}}},
 		},
+		"a bootstrap-only grant also carrying an mcp_endpoint": {
+			Grant:     bootstrap.Grant,
+			AttemptID: "grain-task-1-1-1",
+			Response: &protocol.MintResponse{
+				Status:      protocol.StatusOK,
+				MCPEndpoint: "/runs/grain-task-1-1-1/mcp",
+				Placements: []protocol.Placement{{
+					Path: playbookPath, Mode: "0644", Content: playbook,
+				}},
+			},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
@@ -459,5 +470,18 @@ func TestMaterializePassOnACommandlessSandboxPlacesOnlyTheBootstrapPlaybooks(t *
 				t.Fatalf("a refused pass still wrote into the commandless sandbox: %v, %v", entries, err)
 			}
 		})
+	}
+
+	// Even with zero placements, a bootstrap grant carrying an mcp_endpoint
+	// must not slip past the empty-placements early return on a commandless
+	// sandbox.
+	endpointOnly := protocol.MintedGrant{
+		Grant:     bootstrap.Grant,
+		AttemptID: "grain-task-1-1-0",
+		Response:  &protocol.MintResponse{Status: protocol.StatusOK, MCPEndpoint: "/runs/grain-task-1-1-0/mcp"},
+	}
+	if _, err := materializePass(context.Background(), Config{}, &rootOnlySandbox{root: t.TempDir()},
+		&protocol.Pass{Grants: []protocol.MintedGrant{endpointOnly}}, time.Now().Add(time.Hour), nil); err == nil || !strings.Contains(err.Error(), "cannot materialize capability grants") {
+		t.Fatalf("endpoint-only bootstrap grant on commandless sandbox = %v, want it refused", err)
 	}
 }

@@ -702,13 +702,19 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 	// So can a container left unfenced on this host's own bridge
 	// (ContainerConfig.Fence): refused the same way, saying why it is
 	// unfenced.
+	unfenced := openNetworkUnfenced(ctx, deps.Sandboxes)
 	if external {
-		if why := openNetworkUnfenced(ctx, deps.Sandboxes); why != "" {
-			return nil, &grainRefusalError{Reason: why + ", so it runs no attempt holding a capability grant"}
+		if unfenced != "" {
+			return nil, &grainRefusalError{Reason: unfenced + ", so it runs no attempt holding a capability grant"}
 		}
 	}
 	var baseLookup protocol.Lookup
-	if deps.CapabilityServers != nil {
+	// On an unisolated host sandbox or an unfenced container, never dial an
+	// attached capability server even for an embedded-bootstrap-only grant:
+	// grainserver.Lookup(nil) serves in-process grants and this binary's
+	// embedded bootstrap playbooks directly, with no external control-plane
+	// listener or host skill directory (§3.2.4).
+	if deps.CapabilityServers != nil && !isUnisolated(deps.Sandboxes) && unfenced == "" {
 		baseLookup = deps.CapabilityServers.Lookup
 	}
 	lookup := grainserver.Lookup(baseLookup)
@@ -780,7 +786,7 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 		}
 		return srv, nil
 	}
-	return protocol.MintPass(ctx, grants, minters, protocol.PassOptions{
+	pass, err := protocol.MintPass(ctx, grants, minters, protocol.PassOptions{
 		Deployment: deployment,
 		Task:       task.ID,
 		Attempt:    candidate.Attempt,
@@ -790,6 +796,14 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 		ReservedSandboxPorts: reservedGuestPorts(deps.Sandboxes),
 		Now:                  func() time.Time { return at },
 	})
+	if err != nil {
+		return nil, err
+	}
+	if (isUnisolated(deps.Sandboxes) || unfenced != "") && !onlyInProcessOrEmbeddedBootstrap(pass) {
+		_, _ = pass.Release(ctx)
+		return nil, &grainRefusalError{Reason: "this sandbox backend cannot fence capability control planes, so it runs no attempt whose grant carries anything beyond in-process grants and the embedded bootstrap playbooks"}
+	}
+	return pass, nil
 }
 
 // guestPortReserver is a Sandboxes backend whose guests have loopback

@@ -23,11 +23,13 @@ import "testing"
 // config map or secret, and nothing malformed the mint would read past.
 func TestIsEmbeddedBootstrapOnlyGrant(t *testing.T) {
 	skill := SkillCapabilityServerID + "#skill"
+	cmSkill := ConfigMapCapabilityServerID + "#skill"
 	for grant, want := range map[string]bool{
 		BootstrapPlaybooksGrant: true,
 		ConfigMapRef + `={"keys":["bootstrap/host-migration.md"]}`:      true,
 		ConfigMapRef + `={"config_maps":["bootstrap"],"secrets":[]}`:    true,
 		skill + `={"skills":["bootstrap"]}`:                             true,
+		cmSkill + `={"skills":["bootstrap"]}`:                           true,
 		"bootstrap-playbooks":                                           false,
 		ConfigMapRef:                                                    false,
 		ConfigMapRef + `={}`:                                            false,
@@ -41,14 +43,50 @@ func TestIsEmbeddedBootstrapOnlyGrant(t *testing.T) {
 		ConfigMapRef + `={"config_maps":["bootstrap"],"secrets":"t"}`:     false,
 		ConfigMapRef + `={"config_maps":["bootstrap",1]}`:                 false,
 		ConfigMapRef + `={"config_maps":["bootstrap"],"other":["x"]}`:     false,
-		skill: false,
+		skill:   false,
+		cmSkill: false,
 		skill + `={"skills":["bootstrap","ops"]}`:    false,
+		cmSkill + `={"skills":["bootstrap","ops"]}`:  false,
 		skill + `={"skills":["bootstrap"],"x":1}`:    false,
 		skill + `={"skills":["bootstrap",1]}`:        false,
 		ModelProxyRef + `={"vendors":["anthropic"]}`: false,
 	} {
 		if got := IsEmbeddedBootstrapOnlyGrant(grant); got != want {
 			t.Errorf("IsEmbeddedBootstrapOnlyGrant(%s) = %v, want %v", grant, got, want)
+		}
+	}
+}
+
+func TestIsBootstrapPlaybooksGrant(t *testing.T) {
+	skill := SkillCapabilityServerID + "#skill"
+	cmSkill := ConfigMapCapabilityServerID + "#skill"
+	for grant, want := range map[string]bool{
+		"bootstrap-playbooks":   true,
+		BootstrapPlaybooksGrant: true,
+		ConfigMapRef + `={"config_maps":["bootstrap","tools"]}`:                           true,
+		ConfigMapRef + `={"config_maps":["bootstrap","tools"],"keys":["bootstrap/a.md"]}`: true,
+		ConfigMapRef + `={"keys":["bootstrap/host-migration.md"]}`:                        true,
+		skill + `={"skills":["bootstrap"]}`:                                               true,
+		cmSkill + `={"skills":["bootstrap","ops"]}`:                                       true,
+		ConfigMapRef:                              false,
+		ConfigMapRef + `={}`:                      false,
+		ConfigMapRef + `={"config_maps":["ops"]}`: false,
+		// Keys subset excludes bootstrap/* even though bootstrap is in config_maps.
+		ConfigMapRef + `={"config_maps":["bootstrap","tools"],"keys":["tools/a"]}`: false,
+		// Explicit config_maps/secrets excludes bootstrap even though keys names bootstrap/*.
+		ConfigMapRef + `={"config_maps":["tools"],"keys":["bootstrap/a.md"]}`: false,
+		ConfigMapRef + `={"config_maps":[],"keys":["bootstrap/a.md"]}`:        false,
+		ConfigMapRef + `={"secrets":["s"],"keys":["bootstrap/a.md"]}`:         false,
+		ConfigMapRef + `={"config_maps":["bootstrap",1]}`:                     false,
+		// Bare/empty skill grants on unrelated skill directories do not open src://playbooks.
+		skill:                        false,
+		skill + `={}`:                false,
+		cmSkill:                      false,
+		cmSkill + `={}`:              false,
+		skill + `={"skills":["ops"]}`: false,
+	} {
+		if got := IsBootstrapPlaybooksGrant(grant); got != want {
+			t.Errorf("IsBootstrapPlaybooksGrant(%s) = %v, want %v", grant, got, want)
 		}
 	}
 }
