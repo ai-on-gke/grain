@@ -12,7 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Alert,
   Box,
@@ -183,6 +190,14 @@ export default function GrantsPicker({
   const [drafts, setDrafts] = useState([]);
   const [error, setError] = useState("");
   const listRef = useRef(null);
+  const popoverAction = useRef(null);
+  // Reposition synchronously before paint when filtering or method loading
+  // shrinks a viewport-clamped menu: MUI's own Popover repositions in a
+  // post-paint useEffect, leaving one frame where the filtered row sits above
+  // the repositioned paper so an immediate click lands on the backdrop.
+  useLayoutEffect(() => {
+    if (anchor) popoverAction.current?.updatePosition();
+  }, [anchor, query, methods, offered.length, repos.length, formCapabilities]);
 
   // The method listing is fetched only where there is something in it --
   // /api/config's count says so -- or a grant to show. A change in that
@@ -847,9 +862,11 @@ export default function GrantsPicker({
         </Button>
       )}
       <Popover
+        action={popoverAction}
         open={Boolean(anchor)}
         anchorEl={anchor}
         onClose={() => setAnchor(null)}
+        transitionDuration={0}
         anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
         slotProps={{
           paper: {
