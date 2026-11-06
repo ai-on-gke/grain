@@ -27,6 +27,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/whererun"
@@ -188,6 +189,43 @@ func TestHostdSelfAssertedLabelsDoNotSelectIt(t *testing.T) {
 	if _, name, err := cfg.SelectHostd(ctx, store, gpu); err != nil || name != "ws-a" {
 		t.Errorf("SelectHostd(%s) with ws-a connected = %q, %v; want ws-a", gpu, name, err)
 	}
+}
+
+// A drop reported right after a connect leaves hostd-disconnected:<name>
+// raised even when the connect's clear, held back behind asking the hostd
+// for its finished runs, would otherwise land after the drop's raise.
+func TestAConnectsLateClearDoesNotHideTheDropThatFollowedIt(t *testing.T) {
+	ctx := context.Background()
+	store, closeStore := openTestStore(t, t.TempDir())
+	t.Cleanup(closeStore)
+	if _, _, err := store.CreateHostd(ctx, model.Hostd{Name: "ws-a"}); err != nil {
+		t.Fatal(err)
+	}
+	unblock := make(chan struct{})
+	released := make(chan struct{})
+	var once sync.Once
+	notify := hostdConnectionNotifierReleasing(store, func(context.Context, string) {
+		<-unblock
+		once.Do(func() { close(released) })
+	})
+	open := func() bool {
+		n, err := store.OpenNotification(ctx, hostdDisconnectedSubject("ws-a"))
+		return err == nil && n != nil
+	}
+
+	notify("ws-a", true)
+	notify("ws-a", false)
+	waitFor(t, open)
+	close(unblock)
+	<-released
+	for deadline := time.Now().Add(300 * time.Millisecond); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if !open() {
+			t.Fatal("the connect's late clear hid the drop that followed it")
+		}
+	}
+
+	notify("ws-a", true)
+	waitFor(t, func() bool { return !open() })
 }
 
 // A disconnected hostd's pinned work waits for it, and its drop raises

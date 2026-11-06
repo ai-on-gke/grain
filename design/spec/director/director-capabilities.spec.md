@@ -503,8 +503,8 @@ gate, not merely left ungranted.
 
 ## 4. Proposals and grant inheritance for a `no_repo` director {#DC-6}
 
-4.1. **What `main` does.** A child that `propose_task` files from the
-director is judged by `AutoApprovalRefusal(child, director, sessionQueues)`:
+4.1. **What `main` did before G9.** A child that `propose_task` files from the
+director is judged by `AutoApprovalRefusal(child, director, sessionQueues, seeding)`:
 
 - `EscalatedCapabilities` returns:
   - every `GrantByLabel` capability the director does not hold, or
@@ -520,13 +520,18 @@ director is judged by `AutoApprovalRefusal(child, director, sessionQueues)`:
   target the director cannot reach. The child's own `Target` is not
   counted.
 
-The result: a director proposal to a repository whose
+The result was that a director proposal to a repository whose
 `default_capabilities` include a reference, such as
 `…/host-script#host-script` `{script: …}` or a `…/gcp#gcp-key`
-permission set, is held unapproved. It is held only because the
+permission set, was held unapproved. It was held only because the
 director is `no_repo` and holds no repo defaults, even though a person
 filing the same task by hand would get the same grant without a
-prompt.
+prompt. G9 (§5) closes this: both filing paths (`ui.Client.CreateTask`
+and `orchestrator.relayProposedTasks`) now pass the seeding source
+(`model.ProposalSeeding`: the target's and the deployment's
+`default_capabilities` as resolved at filing time, and the catalogue
+with the child's `GrantContext`) to `model.ProposalEscalations` and
+`AutoApprovalRefusal`, which apply §4.2.
 
 4.2. **Rule.** For a proposal whose parent is the director (and only
 when `QueuesProposals` holds), a grant on the child MUST NOT count as
@@ -563,7 +568,9 @@ the rule never admits a grant the director wrote.
 4.4. **What the proposal says.** A child admitted under §4.2 SHOULD
 carry a note naming the defaults it received and where they came from,
 in the voice of `CapabilityEscalationNote`, so the row shows why it
-holds them.
+holds them. `model.SeededDefaultsNote` is that note: it names each admitted
+default and whether it came from the target repository's or the
+deployment's `default_capabilities`.
 
 ## 5. Gap analysis and implementation checklist {#DC-7}
 
@@ -577,12 +584,12 @@ holds them.
 | G6 | `capabilities:detach` | **done**: in `model.apiScopes` (not dangerous) and `IsSandboxDeniedAPIScope`; admitted by `capabilitiesDetachRoutes` (`route_scopes.go`) and `capabilitiesDetachAllowed` / `capabilitiesDetachBodyAllowed` (`agent_api_gate.go`); pinned by `pkg/ui/capabilities_detach_test.go`; documented in `docs/agent-api.md` | New non-dangerous, MCP-only scope (§3.1.2) | Add `api:capabilities:detach` to G1. |
 | G7 | Default catalogue for the director kind | **done**: built-in floor `model.DirectorFloorRefusal` (`pkg/model/director_floor.go`) applied by `ValidateGrants`/`Refusals` under any `settings/capabilities.yml` and on a nil catalogue; enforced at dispatch (`catalogueHold`), on grant edits (`catalogueEditRefusal`), on session saves (`ValidateConsoleSessions`) and at the API gate (`WithinDirectorFloor`); tests in `pkg/model`, `pkg/ui`, `pkg/orchestrator` | Shipped rule set denying the director kind `merge:force`, `settings:write`, `secrets:write`, `connections:write`, `repos:write` | None. Operator files may narrow the director further, never widen it past the floor. |
 | G8 | Self-approval | **done**: `agentFilingEscalation` refuses `approved: true` for every in-grain task agent, and `agentRails` (`agentApprovalRail` in `pkg/ui/agent_api_gate.go`) refuses an agent's `POST /api/tasks/{id}/approve` (and `POST /api/tasks/{id}/run-now` on an unapproved task) on a task in its own proposal or `Origin` lineage or held for a person (`HeldForApprovalTag`, `ConfigRepoProposalHold`, `ChangeTargetNeedsPersonApproval`, declared `push:` sets, ungranted `AutoMerge`, catalogue `requires_person`, person-only grants, `KeepRunning`, and `EscalatedCapabilities` / `UngrantedWrites` / `UngrantedReads` / `PersonOnlyProposalSettings` against the task's proposer), pinned by `pkg/ui/agent_approval_rail_test.go` | Unchanged | None. |
-| G9 | Seeded repo defaults on director proposals | held as "seeded" escalations | Admitted under §4.2 | Change `EscalatedCapabilities` / `AutoApprovalRefusal` (`pkg/model/auto_submit.go`, `hold_for_approval.go`) to take the seeding source; tests for each excluded case. |
+| G9 | Seeded repo defaults on director proposals | **done**: admitted under §4.2 by `model.ProposalEscalations` (`pkg/model/proposal_seeding.go`), which `AutoApprovalRefusal` (`hold_for_approval.go`), `ui.Client.CreateTask` and `orchestrator.relayProposedTasks` take the seeding source (`model.ProposalSeeding`) for; §4.4 note is `model.SeededDefaultsNote`; each excluded case pinned by `proposal_seeding_test.go`, `director_seeded_defaults_test.go` and `consolesessions_test.go` | Admitted under §4.2 | None. |
 | G10 | `DirectorSessionBody` | — | Tells the director to use `expect` on stop/close, `hold_for_approval` for destructive proposals, and give reasons | Update the reviewed body text. |
 | G11 | Docs | Retired capability names updated in [Task #3185](/tasks/3185). The `NetworkAccess` row of `docs/director.md`'s envelope table, and `docs/local-policy.md`, match G3 ([Task #3312](/tasks/3312)). The `Capabilities` and `TasksApproved` rows still show the pre-G1/G2 defaults | Matches §3 | Update `docs/director.md` alongside G1 and G2 as each default flips. |
 | G12 | Capacity bound on session-queued proposals | **done**: `AutoSubmitLimits.TurnFanOut` (default 10), checked by `Store.ExceededSessionTurnLimit` beside `ExceededAutoSubmitLimit` in `ui.Client.CreateTask` and `orchestrator.relayProposedTasks`; over it, filed for a person with `AutoSubmitLimitNote` | Per-turn fan-out bound; over it, filed for a person (§3.1.5) | None. The bound has no settings knob yet. |
 
-Ordering: G3, G4, G5, G6, G7, G8 and G12 are done (G3's verification is recorded
+Ordering: G3, G4, G5, G6, G7, G8, G9 and G12 are done (G3's verification is recorded
 in §3.1.6), and G10 can land with G1. G6 preceded the detach part of G1. The Tier 3
 rails (G5's `IsConfigRepo` proposal hold, G7's built-in floor, G8's approval
 rail and G12's fan-out bound) are all in place ahead of G2.
