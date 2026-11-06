@@ -89,6 +89,7 @@ type RouterOptions struct {
 	ReplicaHeartbeat time.Duration
 	ReplicaTTL       time.Duration
 	ReconnectGrace   time.Duration
+	CatalogTTL       time.Duration
 	TunnelOptions    TunnelOptions
 
 	Store        *store.Store
@@ -123,6 +124,7 @@ type Router struct {
 	signer                AssertionSigner
 	hostCache             *HostCache
 	tunnelCache           *TunnelCache
+	catalogCache          *CatalogCache
 	limiters              *RateLimiters
 	tunnelOpts            TunnelOptions
 	peerTokens            *PeerTokenCache
@@ -173,6 +175,9 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 		limiters = NewDefaultRateLimiters()
 	}
 
+	tunnelCache := NewTunnelCache(opts.Store, opts.ReplicaTTL)
+	catalogCache := NewCatalogCache(opts.Store, tunnelCache, opts.InstanceDomain, opts.CatalogTTL)
+
 	rt := &Router{
 		opts:                  opts,
 		replicaID:             replicaID,
@@ -183,7 +188,8 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 		delegation:            opts.Delegation,
 		signer:                opts.Signer,
 		hostCache:             NewHostCache(opts.Store, DefaultHostCacheTTL, DefaultHostCacheStaleGrace),
-		tunnelCache:           NewTunnelCache(opts.Store, opts.ReplicaTTL),
+		tunnelCache:           tunnelCache,
+		catalogCache:          catalogCache,
 		limiters:              limiters,
 		tunnelOpts:            opts.TunnelOptions.withDefaults(),
 		peerTokens:            NewPeerTokenCache(opts.Signer, replicaID),
@@ -202,7 +208,7 @@ func randomReplicaID() string {
 	return "replica-" + hex.EncodeToString(b[:8])
 }
 
-// SetNow overrides the clock across Router, HostCache, TunnelCache, PeerTokenCache, and RateLimiters.
+// SetNow overrides the clock across Router, HostCache, TunnelCache, CatalogCache, PeerTokenCache, and RateLimiters.
 func (rt *Router) SetNow(fn func() time.Time) {
 	if fn == nil {
 		return
@@ -212,6 +218,7 @@ func (rt *Router) SetNow(fn func() time.Time) {
 	rt.nowMu.Unlock()
 	rt.hostCache.SetNow(fn)
 	rt.tunnelCache.SetNow(fn)
+	rt.catalogCache.SetNow(fn)
 	rt.peerTokens.SetNow(fn)
 	rt.limiters.SetNow(fn)
 }
@@ -234,6 +241,11 @@ func (rt *Router) HostCache() *HostCache {
 // TunnelCache returns the router's in-memory TunnelCache.
 func (rt *Router) TunnelCache() *TunnelCache {
 	return rt.tunnelCache
+}
+
+// CatalogCache returns the router's in-memory CatalogCache.
+func (rt *Router) CatalogCache() *CatalogCache {
+	return rt.catalogCache
 }
 
 // RateLimiters returns the router's rate limiters.
@@ -294,9 +306,11 @@ func (rt *Router) StartBackground(ctx context.Context) {
 	}
 	_ = rt.store.UpsertReplica(ctx, rt.replicaID, rt.PeerAddr())
 	_ = rt.tunnelCache.PollAll(ctx)
+	_ = rt.catalogCache.Reload(ctx)
+	go rt.catalogCache.StartLoop(ctx)
 
 	if strings.TrimSpace(rt.opts.DatabaseURL) != "" {
-		go ListenPostgresNotifications(ctx, rt.opts.DatabaseURL, rt.onEntryNotification, rt.onTunnelNotification)
+		go ListenPostgresAllNotifications(ctx, rt.opts.DatabaseURL, rt.onEntryNotification, rt.onTunnelNotification, rt.onCatalogNotification)
 	}
 
 	go func() {
@@ -354,6 +368,13 @@ func (rt *Router) onTunnelNotification(name string) {
 	}
 	_, _ = rt.tunnelCache.RefreshEntry(ctx, name)
 	rt.ReconcileLocalTunnel(ctx, name)
+}
+
+func (rt *Router) onCatalogNotification(_ string) {
+	rt.catalogCache.Invalidate()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = rt.catalogCache.Reload(ctx)
 }
 
 // WrapMainHandler wraps the control-plane handler on `:8080`, routing
@@ -438,8 +459,8 @@ func (rt *Router) HandleEntryHeartbeat(w http.ResponseWriter, r *http.Request, p
 
 	var entry *store.EntryRow
 	rawToken := ExtractRegistryToken(r)
-	wantsToken := publicOnly || strings.EqualFold(strings.TrimSpace(r.Header.Get(api.HeaderAuth)), api.AuthModeToken) || rawToken != ""
-	if wantsToken {
+	wantsTokenOnly := publicOnly || strings.EqualFold(strings.TrimSpace(r.Header.Get(api.HeaderAuth)), api.AuthModeToken)
+	if wantsTokenOnly {
 		if rawToken == "" {
 			rt.recordFailedAuthOrWrite429(w, ip, "Bearer grc_ token required")
 			return
@@ -452,7 +473,47 @@ func (rt *Router) HandleEntryHeartbeat(w http.ResponseWriter, r *http.Request, p
 		entry = authedEntry
 	} else {
 		callerEmail, authErr := rt.authenticateConnectIdentity(r)
-		if authErr != nil {
+		if authErr == nil && callerEmail != "" {
+			loaded, err := rt.store.GetEntryByName(r.Context(), name)
+			if errors.Is(err, store.ErrNotFound) {
+				writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("entry %q not found", name))
+				return
+			}
+			if err != nil {
+				writeInternalError(w, err)
+				return
+			}
+			ok, groupErr := rt.canConnectAsIdentity(r.Context(), callerEmail, loaded)
+			if groupErr != nil {
+				w.Header().Set("Retry-After", "5")
+				writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "authorization lookup temporarily unavailable")
+				return
+			}
+			if !ok {
+				writeJSONError(w, http.StatusForbidden, "forbidden", "caller is not authorized for this entry")
+				return
+			}
+			if rawToken != "" {
+				authedEntry, _, err := rt.store.AuthenticateCredentialWithID(r.Context(), rawToken)
+				if err != nil || authedEntry.ID != loaded.ID {
+					rt.recordFailedAuthOrWrite429(w, ip, "invalid or mismatched entry credential")
+					return
+				}
+			}
+			entry = loaded
+		} else if errors.Is(authErr, webauth.ErrCallerUnauthenticated) && rawToken != "" {
+			authedEntry, _, err := rt.store.AuthenticateCredentialWithID(r.Context(), rawToken)
+			if err != nil || !strings.EqualFold(authedEntry.Name, name) {
+				rt.recordFailedAuthOrWrite429(w, ip, "invalid or revoked credential")
+				return
+			}
+			entry = authedEntry
+		} else {
+			if errors.Is(authErr, webauth.ErrGroupLookupUnavailable) {
+				w.Header().Set("Retry-After", "5")
+				writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "authorization lookup temporarily unavailable")
+				return
+			}
 			if webauthErrForbidden(authErr) {
 				writeJSONError(w, http.StatusForbidden, "forbidden", "access denied")
 				return
@@ -460,20 +521,24 @@ func (rt *Router) HandleEntryHeartbeat(w http.ResponseWriter, r *http.Request, p
 			writeJSONError(w, http.StatusUnauthorized, "unauthenticated", "authentication required")
 			return
 		}
-		loaded, err := rt.store.GetEntryByName(r.Context(), name)
-		if errors.Is(err, store.ErrNotFound) {
-			writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("entry %q not found", name))
-			return
-		}
-		if err != nil {
-			writeInternalError(w, err)
-			return
-		}
-		if !rt.canConnectAsIdentity(r.Context(), callerEmail, loaded) {
-			writeJSONError(w, http.StatusForbidden, "forbidden", "caller is not authorized for this entry")
-			return
-		}
-		entry = loaded
+	}
+
+	if entry.OwnerDisabled {
+		writeJSONError(w, http.StatusForbidden, "owner_disabled", "entry owner account is disabled")
+		return
+	}
+	if disabled, err := rt.isOwnerDisabled(r.Context(), entry.OwnerEmail); err == nil && disabled {
+		writeJSONError(w, http.StatusForbidden, "owner_disabled", "entry owner account is disabled")
+		return
+	}
+	if entry.LifecycleState == api.StateDeleted || entry.DeletedAt != nil {
+		writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("entry %q not found", name))
+		return
+	}
+
+	if ok, retryAfter := rt.limiters.HeartbeatPerEntry.Allow(entry.Name); !ok {
+		WriteRateLimited(w, retryAfter, "entry heartbeat rate limit exceeded")
+		return
 	}
 
 	var req api.HeartbeatRequest
@@ -490,13 +555,32 @@ func (rt *Router) HandleEntryHeartbeat(w http.ResponseWriter, r *http.Request, p
 		writeInternalError(w, err)
 		return
 	}
+	rt.hostCache.Put(updated)
 	if rt.opts.OnHeartbeat != nil {
 		rt.opts.OnHeartbeat()
 	}
+
+	combined := store.CombinedAPIScopes(updated.Scopes)
+	activeScopes := make([]api.Scope, 0, len(combined))
+	for _, sc := range combined {
+		if sc.Active {
+			activeScopes = append(activeScopes, sc)
+		}
+	}
+	conflicts := rt.store.EntryScopeConflicts(r.Context(), updated)
+	if conflicts == nil {
+		conflicts = []api.ScopeConflict{}
+	}
+
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(api.HeartbeatResponse{
-		Status: rt.store.DeriveStatus(updated),
+		Status:               rt.store.DeriveStatus(updated),
+		ActiveScopes:         activeScopes,
+		Conflicts:            conflicts,
+		ScopeConflicts:       conflicts,
+		NextIntervalSeconds:  15,
+		NextHeartbeatSeconds: 15,
 	})
 }
 
@@ -822,6 +906,17 @@ func (rt *Router) isOwnerDisabled(ctx context.Context, email string) (bool, erro
 	return rt.store.IsOwnerDisabled(ctx, email)
 }
 
+func normalizeGroupSpec(g string) string {
+	g = strings.TrimSpace(g)
+	if g == "" {
+		return ""
+	}
+	if !strings.HasPrefix(g, "group:") {
+		return "group:" + strings.ToLower(g)
+	}
+	return "group:" + strings.ToLower(strings.TrimSpace(strings.TrimPrefix(g, "group:")))
+}
+
 func (rt *Router) canCallerManageEntry(ctx context.Context, caller *webauth.AdmittedCaller, e *store.EntryRow) (bool, error) {
 	if caller == nil || e == nil || caller.Kind != webauth.PrincipalHuman {
 		return false, nil
@@ -829,8 +924,8 @@ func (rt *Router) canCallerManageEntry(ctx context.Context, caller *webauth.Admi
 	if caller.IsAdmin || strings.EqualFold(e.OwnerEmail, caller.Email) {
 		return true, nil
 	}
-	if strings.TrimSpace(e.OwnerGroup) != "" {
-		return rt.matchesAccessList(ctx, caller.Email, []string{e.OwnerGroup})
+	if g := normalizeGroupSpec(e.OwnerGroup); g != "" {
+		return rt.matchesAccessList(ctx, caller.Email, []string{g})
 	}
 	return false, nil
 }
@@ -845,8 +940,8 @@ func (rt *Router) canCallerAccessEntry(ctx context.Context, caller *webauth.Admi
 	if caller.IsAdmin || strings.EqualFold(e.OwnerEmail, caller.Email) || e.Visibility == store.VisibilityPublic {
 		return true, nil
 	}
-	if strings.TrimSpace(e.OwnerGroup) != "" {
-		ok, err := rt.matchesAccessList(ctx, caller.Email, []string{e.OwnerGroup})
+	if g := normalizeGroupSpec(e.OwnerGroup); g != "" {
+		ok, err := rt.matchesAccessList(ctx, caller.Email, []string{g})
 		if err != nil {
 			return false, err
 		}

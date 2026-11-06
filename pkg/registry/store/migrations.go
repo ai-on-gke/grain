@@ -196,6 +196,40 @@ ALTER TABLE registry.tunnel_sessions
     ADD COLUMN IF NOT EXISTS cred_id UUID;
 `,
 	},
+	{
+		version: 3,
+		name:    "catalog_metadata_scopes_and_heartbeats",
+		upSQL: `
+ALTER TABLE registry.entries
+    ADD COLUMN IF NOT EXISTS pending_owner TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS replace_step TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS target_version TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS allow_ssh BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN IF NOT EXISTS ship_logs BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS grain_commit TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS health_state TEXT NOT NULL DEFAULT 'ok',
+    ADD COLUMN IF NOT EXISTS health_detail TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS awaiting_reply_tasks INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS active_sessions INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS has_reported_scopes BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS reserved_until TIMESTAMPTZ;
+
+ALTER TABLE registry.entry_scopes
+    ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN IF NOT EXISTS inactive_reason TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS conflict_with TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+CREATE INDEX IF NOT EXISTS entry_scopes_conflict_idx
+    ON registry.entry_scopes (repo, conflict_with) WHERE conflict_with <> '';
+
+ALTER TABLE registry.entry_credentials
+    ADD COLUMN IF NOT EXISTS label TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+`,
+	},
 }
 
 // Migrate applies all pending registry schema migrations inside the `registry` PostgreSQL schema.

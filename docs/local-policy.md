@@ -115,7 +115,9 @@ approvers: [me@example.com, lead@example.com]
 # Capability patterns, compared without regard to case. A bare family
 # (gcp-key) matches it and every grant of it (gcp-key:team-a);
 # family:* matches every parameterised grant (repo-write:acme/widgets);
-# otherwise both halves are glob patterns (repo-write:acme/*).
+# otherwise both halves are glob patterns (repo-write:acme/*). A
+# capability reference without = (https://...#method) matches the method
+# regardless of arguments; one with =<json> matches only those arguments.
 capabilities:
   # When set, every capability a task may be granted.
   allow: [api:self-debug, gcp-key:team-*]
@@ -168,7 +170,7 @@ all of these holds it, and the Director never runs:
   `api:self-debug`, `https://grain.dev/capabilities/grain#source={}`,
   `https://grain.dev/capabilities/grain#journal`,
   `api:deployment:read`, `https://grain.dev/capabilities/grain#health`,
-  `bootstrap-playbooks` and `api:ci-read`, plus any your build adds.
+  `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}` and `api:ci-read`, plus any your build adds.
   A held task's log line names the one that refused it.
 - The Director's network in `network`. It asks for `none`, which a
   granule sandbox honours. A host or container sandbox cannot withhold a

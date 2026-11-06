@@ -40,6 +40,18 @@ const (
 	// DefaultProxyPerEntryRate is 100 req/s sustained, burst 200.
 	DefaultProxyPerEntryRate  = 100.0
 	DefaultProxyPerEntryBurst = 200
+
+	// DefaultHeartbeatPerEntryRate is 12 heartbeats/min (0.2/s), burst 4.
+	DefaultHeartbeatPerEntryRate  = 12.0 / 60.0
+	DefaultHeartbeatPerEntryBurst = 4
+
+	// DefaultMutationsPerUserRate is 10 mutations/min, burst 10.
+	DefaultMutationsPerUserRate  = 10.0 / 60.0
+	DefaultMutationsPerUserBurst = 10
+
+	// DefaultCreatesPerUserRate is 20 creates/day, burst 20.
+	DefaultCreatesPerUserRate  = 20.0 / 86400.0
+	DefaultCreatesPerUserBurst = 20
 )
 
 type tokenBucket struct {
@@ -123,21 +135,27 @@ func (l *KeyedLimiter) Allow(key string) (allowed bool, retryAfterSeconds int) {
 	return false, waitSec
 }
 
-// RateLimiters groups the registry's connect, heartbeat, auth-failure, and proxy limiters.
+// RateLimiters groups the registry's connect, heartbeat, auth-failure, mutation, and proxy limiters.
 type RateLimiters struct {
-	ConnectPerEntry *KeyedLimiter
-	PublicPerIP     *KeyedLimiter
-	FailedAuthPerIP *KeyedLimiter
-	ProxyPerEntry   *KeyedLimiter
+	ConnectPerEntry   *KeyedLimiter
+	HeartbeatPerEntry *KeyedLimiter
+	PublicPerIP       *KeyedLimiter
+	FailedAuthPerIP   *KeyedLimiter
+	ProxyPerEntry     *KeyedLimiter
+	MutationsPerUser  *KeyedLimiter
+	CreatesPerUser    *KeyedLimiter
 }
 
 // NewDefaultRateLimiters constructs the default v1 registry rate limiters.
 func NewDefaultRateLimiters() *RateLimiters {
 	return &RateLimiters{
-		ConnectPerEntry: NewKeyedLimiter(DefaultConnectPerEntryRate, DefaultConnectPerEntryBurst),
-		PublicPerIP:     NewKeyedLimiter(DefaultPublicPerIPRate, DefaultPublicPerIPBurst),
-		FailedAuthPerIP: NewKeyedLimiter(DefaultFailedAuthPerIPRate, DefaultFailedAuthPerIPBurst),
-		ProxyPerEntry:   NewKeyedLimiter(DefaultProxyPerEntryRate, DefaultProxyPerEntryBurst),
+		ConnectPerEntry:   NewKeyedLimiter(DefaultConnectPerEntryRate, DefaultConnectPerEntryBurst),
+		HeartbeatPerEntry: NewKeyedLimiter(DefaultHeartbeatPerEntryRate, DefaultHeartbeatPerEntryBurst),
+		PublicPerIP:       NewKeyedLimiter(DefaultPublicPerIPRate, DefaultPublicPerIPBurst),
+		FailedAuthPerIP:   NewKeyedLimiter(DefaultFailedAuthPerIPRate, DefaultFailedAuthPerIPBurst),
+		ProxyPerEntry:     NewKeyedLimiter(DefaultProxyPerEntryRate, DefaultProxyPerEntryBurst),
+		MutationsPerUser:  NewKeyedLimiter(DefaultMutationsPerUserRate, DefaultMutationsPerUserBurst),
+		CreatesPerUser:    NewKeyedLimiter(DefaultCreatesPerUserRate, DefaultCreatesPerUserBurst),
 	}
 }
 
@@ -147,9 +165,12 @@ func (r *RateLimiters) SetNow(fn func() time.Time) {
 		return
 	}
 	r.ConnectPerEntry.SetNow(fn)
+	r.HeartbeatPerEntry.SetNow(fn)
 	r.PublicPerIP.SetNow(fn)
 	r.FailedAuthPerIP.SetNow(fn)
 	r.ProxyPerEntry.SetNow(fn)
+	r.MutationsPerUser.SetNow(fn)
+	r.CreatesPerUser.SetNow(fn)
 }
 
 // ClientIP extracts the normalized source IP from `r.RemoteAddr`.

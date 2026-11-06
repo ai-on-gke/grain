@@ -17,9 +17,12 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -613,6 +616,18 @@ func (c *TunnelCache) ActiveWaiters(name string) int {
 // `registry_tunnels`, invoking `onEntry(payload)` and `onTunnel(payload)` when notifications arrive.
 // It automatically reconnects with backoff until `ctx` is canceled.
 func ListenPostgresNotifications(ctx context.Context, dsn string, onEntry func(name string), onTunnel func(name string)) {
+	ListenPostgresAllNotifications(ctx, dsn, onEntry, onTunnel, nil)
+}
+
+// ListenPostgresAllNotifications connects to `dsn` and listens on `registry_entries`,
+// `registry_tunnels`, and `registry_catalog`.
+func ListenPostgresAllNotifications(
+	ctx context.Context,
+	dsn string,
+	onEntry func(name string),
+	onTunnel func(name string),
+	onCatalog func(name string),
+) {
 	if strings.TrimSpace(dsn) == "" {
 		return
 	}
@@ -620,7 +635,7 @@ func ListenPostgresNotifications(ctx context.Context, dsn string, onEntry func(n
 		if ctx.Err() != nil {
 			return
 		}
-		_ = runPostgresListenSession(ctx, dsn, onEntry, onTunnel)
+		_ = runPostgresListenSession(ctx, dsn, onEntry, onTunnel, onCatalog)
 		select {
 		case <-ctx.Done():
 			return
@@ -629,7 +644,13 @@ func ListenPostgresNotifications(ctx context.Context, dsn string, onEntry func(n
 	}
 }
 
-func runPostgresListenSession(ctx context.Context, dsn string, onEntry func(name string), onTunnel func(name string)) error {
+func runPostgresListenSession(
+	ctx context.Context,
+	dsn string,
+	onEntry func(name string),
+	onTunnel func(name string),
+	onCatalog func(name string),
+) error {
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
 		return err
@@ -640,6 +661,9 @@ func runPostgresListenSession(ctx context.Context, dsn string, onEntry func(name
 		return err
 	}
 	if _, err := conn.Exec(ctx, `LISTEN registry_tunnels`); err != nil {
+		return err
+	}
+	if _, err := conn.Exec(ctx, `LISTEN registry_catalog`); err != nil {
 		return err
 	}
 
@@ -658,6 +682,575 @@ func runPostgresListenSession(ctx context.Context, dsn string, onEntry func(name
 			if onTunnel != nil {
 				onTunnel(payload)
 			}
+		case "registry_catalog":
+			if onCatalog != nil {
+				onCatalog(payload)
+			}
 		}
+	}
+}
+
+// DefaultCatalogCacheTTL is the background refresh interval for CatalogCache (3s).
+const DefaultCatalogCacheTTL = 3 * time.Second
+
+// CatalogSnapshot is an immutable in-memory snapshot of all listed (`listed = true`),
+// non-deleted catalog entries and their scopes. Internal placement fields (`backend_url`,
+// `internal_ip`, `gce_instance_id`) and unlisted entries are never stored here.
+type CatalogSnapshot struct {
+	Entries  []*store.EntryRow
+	ByRepo   map[string][]int
+	BuiltAt  time.Time
+	StoreGen uint64
+}
+
+// CatalogCache serves `GET /api/directory` and `GET /api/route` from an in-memory
+// snapshot refreshed by `LISTEN registry_catalog` and a 3s background poll, executing
+// zero SQL queries on the request hot path.
+type CatalogCache struct {
+	st             *store.Store
+	tunnels        *TunnelCache
+	instanceDomain string
+	ttl            time.Duration
+	nowFn          func() time.Time
+
+	reloadMu    sync.Mutex
+	snap        atomic.Pointer[CatalogSnapshot]
+	dirty       atomic.Bool
+	reloadCount atomic.Uint64
+	wakeCh      chan struct{}
+}
+
+// NewCatalogCache creates a new CatalogCache backed by `st` and `tunnels`.
+func NewCatalogCache(st *store.Store, tunnels *TunnelCache, instanceDomain string, ttl time.Duration) *CatalogCache {
+	if ttl <= 0 {
+		ttl = DefaultCatalogCacheTTL
+	}
+	c := &CatalogCache{
+		st:             st,
+		tunnels:        tunnels,
+		instanceDomain: instanceDomain,
+		ttl:            ttl,
+		nowFn:          time.Now,
+		wakeCh:         make(chan struct{}, 1),
+	}
+	c.dirty.Store(true)
+	return c
+}
+
+// SetNow overrides the clock used by CatalogCache (for deterministic tests).
+func (c *CatalogCache) SetNow(fn func() time.Time) {
+	if c != nil && fn != nil {
+		c.nowFn = fn
+	}
+}
+
+func (c *CatalogCache) now() time.Time {
+	if c != nil && c.nowFn != nil {
+		return c.nowFn().UTC()
+	}
+	return time.Now().UTC()
+}
+
+// ReloadCount returns the total number of SQL snapshot reloads executed by this cache.
+func (c *CatalogCache) ReloadCount() uint64 {
+	if c == nil {
+		return 0
+	}
+	return c.reloadCount.Load()
+}
+
+// Invalidate marks the catalog snapshot dirty and wakes the background refresh loop.
+func (c *CatalogCache) Invalidate() {
+	if c == nil {
+		return
+	}
+	c.dirty.Store(true)
+	select {
+	case c.wakeCh <- struct{}{}:
+	default:
+	}
+}
+
+// StartLoop periodically refreshes the catalog snapshot every `ttl` (default 3s)
+// or immediately when woken by `Invalidate()` (`LISTEN registry_catalog`).
+func (c *CatalogCache) StartLoop(ctx context.Context) {
+	if c == nil || c.st == nil {
+		return
+	}
+	_ = c.Reload(ctx)
+	ticker := time.NewTicker(c.ttl)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.wakeCh:
+			_ = c.Reload(ctx)
+		case <-ticker.C:
+			_ = c.Reload(ctx)
+		}
+	}
+}
+
+// Reload fetches all `listed = true` entries and their scopes from PostgreSQL and
+// atomically swaps the in-memory `CatalogSnapshot`.
+func (c *CatalogCache) Reload(ctx context.Context) error {
+	if c == nil || c.st == nil {
+		return nil
+	}
+	c.reloadMu.Lock()
+	defer c.reloadMu.Unlock()
+
+	genBefore := c.st.CatalogGeneration()
+	entries, err := c.st.ListCatalogEntries(ctx)
+	if err != nil {
+		return err
+	}
+	c.reloadCount.Add(1)
+
+	byRepo := make(map[string][]int)
+	for idx, e := range entries {
+		// Defensive scrub: never retain backend_url or internal_ip in CatalogCache.
+		e.BackendURL = ""
+		e.InternalIP = ""
+		e.GCEInstanceID = ""
+		seenRepo := make(map[string]bool)
+		for _, sc := range store.CombinedAPIScopes(e.Scopes) {
+			if !sc.Active {
+				continue
+			}
+			r := strings.ToLower(strings.TrimSpace(sc.Repo))
+			if r != "" && !seenRepo[r] {
+				seenRepo[r] = true
+				byRepo[r] = append(byRepo[r], idx)
+			}
+		}
+	}
+
+	snap := &CatalogSnapshot{
+		Entries:  entries,
+		ByRepo:   byRepo,
+		BuiltAt:  c.now(),
+		StoreGen: genBefore,
+	}
+	c.snap.Store(snap)
+	if c.st.CatalogGeneration() == genBefore {
+		c.dirty.Store(false)
+	}
+	return nil
+}
+
+// Snapshot returns the current in-memory CatalogSnapshot, loading it if needed.
+func (c *CatalogCache) Snapshot(ctx context.Context) (*CatalogSnapshot, error) {
+	if c == nil {
+		return &CatalogSnapshot{ByRepo: map[string][]int{}}, nil
+	}
+	snap := c.snap.Load()
+	if snap == nil || c.dirty.Load() || (c.st != nil && snap.StoreGen != c.st.CatalogGeneration()) {
+		if err := c.Reload(ctx); err != nil {
+			if snap != nil {
+				return snap, nil
+			}
+			return nil, err
+		}
+		snap = c.snap.Load()
+	}
+	return snap, nil
+}
+
+// DeriveLiveStatusAndAge computes the live `status` and `heartbeat_age_seconds`
+// for an entry against the current clock and `tunnelCache`.
+func (c *CatalogCache) DeriveLiveStatusAndAge(e *store.EntryRow) (api.EntryStatus, *int) {
+	if c == nil {
+		return api.StatusOffline, nil
+	}
+	return c.deriveLiveStatusAndAge(e, c.now())
+}
+
+func (c *CatalogCache) deriveLiveStatusAndAge(e *store.EntryRow, now time.Time) (api.EntryStatus, *int) {
+	if e == nil || e.OwnerDisabled {
+		return api.StatusOffline, nil
+	}
+	th := store.DefaultThresholds()
+	if c.st != nil {
+		th = c.st.Thresholds()
+	}
+
+	var lastSeen *time.Time
+	if e.LastHeartbeatAt != nil {
+		t := *e.LastHeartbeatAt
+		lastSeen = &t
+	}
+
+	var hasTunnel bool
+	var tunnelLastSeen time.Time
+	if e.Kind == api.KindConnected {
+		if c.tunnels != nil {
+			if tc, ok := c.tunnels.Get(e.Name); ok && tc.HasActiveSession(now, th.ReplicaTTL) {
+				hasTunnel = true
+				tunnelLastSeen = tc.LastSeenAt
+			}
+		}
+		if !hasTunnel && e.Tunnel != nil && now.Sub(e.Tunnel.ReplicaLastSeen) <= th.ReplicaTTL {
+			hasTunnel = true
+			tunnelLastSeen = e.Tunnel.LastSeenAt
+		}
+		if hasTunnel && (lastSeen == nil || tunnelLastSeen.After(*lastSeen)) {
+			t := tunnelLastSeen
+			lastSeen = &t
+		}
+	}
+
+	var ageSec *int
+	if lastSeen != nil {
+		secs := int(now.Sub(*lastSeen).Seconds())
+		if secs < 0 {
+			secs = 0
+		}
+		ageSec = &secs
+	}
+
+	if e.LifecycleState != api.StateRunning && e.LifecycleState != "ACTIVE" {
+		return api.StatusOffline, ageSec
+	}
+
+	var age time.Duration
+	switch e.Kind {
+	case api.KindInstance:
+		if e.LastHeartbeatAt == nil {
+			return api.StatusOffline, ageSec
+		}
+		age = now.Sub(*e.LastHeartbeatAt)
+	case api.KindConnected:
+		if !hasTunnel {
+			return api.StatusOffline, ageSec
+		}
+		age = now.Sub(tunnelLastSeen)
+		if e.LastHeartbeatAt != nil {
+			if hbAge := now.Sub(*e.LastHeartbeatAt); hbAge < age {
+				age = hbAge
+			}
+		}
+	default:
+		return api.StatusOffline, ageSec
+	}
+
+	if age > th.OfflineAfter {
+		return api.StatusOffline, ageSec
+	}
+	if e.HealthState == api.HealthDegraded || e.HealthState == api.HealthUnhealthy {
+		return api.StatusDegraded, ageSec
+	}
+	if age <= th.DegradedAfter {
+		return api.StatusOnline, ageSec
+	}
+	return api.StatusDegraded, ageSec
+}
+
+// Directory evaluates `GET /api/directory` against the in-memory `CatalogSnapshot`.
+func (c *CatalogCache) Directory(ctx context.Context, q api.DirectoryQuery) (*api.DirectoryResponse, error) {
+	snap, err := c.Snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	now := c.now()
+	searchQ := strings.ToLower(strings.TrimSpace(q.Query))
+	filterRepo := strings.ToLower(strings.TrimSpace(q.Repo))
+	if filterRepo != "" {
+		if norm, err := api.NormalizeRepo(filterRepo); err == nil {
+			filterRepo = norm
+		}
+	}
+	filterTag := strings.ToLower(strings.TrimSpace(q.Tag))
+	filterOwner := strings.ToLower(strings.TrimSpace(q.Owner))
+
+	var out []api.DirectoryEntry
+	for _, e := range snap.Entries {
+		if !e.Listed || e.DeletedAt != nil || e.LifecycleState == api.StateDeleted {
+			continue
+		}
+		status, ageSec := c.deriveLiveStatusAndAge(e, now)
+		if q.Status != "" && status != q.Status {
+			continue
+		}
+		if q.Kind != "" && e.Kind != q.Kind {
+			continue
+		}
+		if q.HostKind != "" && api.HostKind(e.HostKind) != q.HostKind {
+			continue
+		}
+		if filterOwner != "" && !strings.EqualFold(e.OwnerEmail, filterOwner) && !strings.EqualFold(e.OwnerGroup, filterOwner) {
+			continue
+		}
+		if filterTag != "" {
+			matchedTag := false
+			for _, t := range e.Tags {
+				if strings.EqualFold(t, filterTag) {
+					matchedTag = true
+					break
+				}
+			}
+			if !matchedTag {
+				continue
+			}
+		}
+		scopes := store.CombinedAPIScopes(e.Scopes)
+		if filterRepo != "" {
+			matchedRepo := false
+			for _, sc := range scopes {
+				if sc.Active && strings.EqualFold(sc.Repo, filterRepo) {
+					matchedRepo = true
+					break
+				}
+			}
+			if !matchedRepo {
+				continue
+			}
+		}
+		if searchQ != "" {
+			matchedQ := strings.Contains(strings.ToLower(e.Name), searchQ) ||
+				strings.Contains(strings.ToLower(e.DisplayName), searchQ) ||
+				strings.Contains(strings.ToLower(e.Purpose), searchQ) ||
+				strings.Contains(strings.ToLower(e.OwnerEmail), searchQ) ||
+				strings.Contains(strings.ToLower(e.OwnerGroup), searchQ)
+			if !matchedQ {
+				for _, t := range e.Tags {
+					if strings.Contains(strings.ToLower(t), searchQ) {
+						matchedQ = true
+						break
+					}
+				}
+			}
+			if !matchedQ {
+				for _, sc := range scopes {
+					if sc.Active && (strings.Contains(strings.ToLower(sc.Repo), searchQ) || strings.Contains(strings.ToLower(sc.PathPrefix), searchQ)) {
+						matchedQ = true
+						break
+					}
+				}
+			}
+			if !matchedQ {
+				continue
+			}
+		}
+
+		urlStr := ""
+		if c.instanceDomain != "" {
+			urlStr = fmt.Sprintf("https://%s.%s", e.Name, c.instanceDomain)
+		}
+		out = append(out, api.DirectoryEntry{
+			Name:                e.Name,
+			URL:                 urlStr,
+			Kind:                e.Kind,
+			State:               e.LifecycleState,
+			Status:              status,
+			HeartbeatAgeSeconds: ageSec,
+			DisplayName:         e.DisplayName,
+			Purpose:             e.Purpose,
+			Owner:               e.OwnerEmail,
+			OwnerGroup:          e.OwnerGroup,
+			Tags:                e.Tags,
+			GrainVersion:        e.GrainVersion,
+			GrainCommit:         e.GrainCommit,
+			HostKind:            api.HostKind(e.HostKind),
+			Scopes:              scopes,
+			ActiveTasks:         e.ActiveTasks,
+			AwaitingReplyTasks:  e.AwaitingReplyTasks,
+			QueueDepth:          e.PendingInbox,
+			UpdatedAt:           e.UpdatedAt,
+		})
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		ri := catalogStatusRank(out[i].Status)
+		rj := catalogStatusRank(out[j].Status)
+		if ri != rj {
+			return ri < rj
+		}
+		return out[i].Name < out[j].Name
+	})
+
+	if q.Cursor != "" {
+		idx := 0
+		for idx < len(out) && out[idx].Name <= q.Cursor {
+			idx++
+		}
+		out = out[idx:]
+	}
+	var nextCursor string
+	if q.Limit > 0 && len(out) > q.Limit {
+		nextCursor = out[q.Limit-1].Name
+		out = out[:q.Limit]
+	}
+	if out == nil {
+		out = []api.DirectoryEntry{}
+	}
+	return &api.DirectoryResponse{
+		Entries:    out,
+		NextCursor: nextCursor,
+	}, nil
+}
+
+// Route evaluates `GET /api/route` against the in-memory `CatalogSnapshot`.
+// `rawIncludeOffline` is the raw query parameter ("true", "false", or "").
+// When `rawIncludeOffline` is "", offline secondary entries are excluded while
+// offline primary entries are retained in rank 1 with `"status": "offline"`.
+func (c *CatalogCache) Route(ctx context.Context, repo, filePath, rawIncludeOffline string) (*api.RouteResponse, error) {
+	snap, err := c.Snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if normRepo, err := api.NormalizeRepo(repo); err == nil {
+		repo = normRepo
+	} else {
+		repo = strings.ToLower(strings.TrimSpace(repo))
+	}
+	normPath, err := api.NormalizePathPrefix(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	now := c.now()
+	idxs := snap.ByRepo[repo]
+	var matches []api.RouteCandidate
+	for _, idx := range idxs {
+		if idx < 0 || idx >= len(snap.Entries) {
+			continue
+		}
+		e := snap.Entries[idx]
+		if !e.Listed || e.DeletedAt != nil || e.LifecycleState == api.StateDeleted {
+			continue
+		}
+		combined := store.CombinedAPIScopes(e.Scopes)
+		bestLen := -1
+		var bestScope *api.Scope
+		for i := range combined {
+			sc := &combined[i]
+			if !sc.Active {
+				continue
+			}
+			if !strings.EqualFold(sc.Repo, repo) {
+				continue
+			}
+			matched, spec := api.PathMatchesPrefix(normPath, sc.PathPrefix)
+			if !matched {
+				continue
+			}
+			effRole := sc.EffectiveRole
+			if effRole == "" {
+				effRole = sc.Role
+			}
+			bestRole := api.RoleSecondary
+			if bestScope != nil {
+				bestRole = bestScope.EffectiveRole
+				if bestRole == "" {
+					bestRole = bestScope.Role
+				}
+			}
+			if spec > bestLen || (spec == bestLen && effRole == api.RolePrimary && bestRole != api.RolePrimary) {
+				bestLen = spec
+				bestScope = sc
+			}
+		}
+		if bestScope == nil {
+			continue
+		}
+		effRole := bestScope.EffectiveRole
+		if effRole == "" {
+			effRole = bestScope.Role
+		}
+		status, ageSec := c.deriveLiveStatusAndAge(e, now)
+		if status == api.StatusOffline {
+			switch strings.ToLower(strings.TrimSpace(rawIncludeOffline)) {
+			case "true", "1":
+				// Include all offline entries when explicitly requested.
+			case "false", "0":
+				// Exclude all offline entries (including primary) when include_offline=false.
+				continue
+			default:
+				// Default: exclude offline secondaries, but retain offline primaries.
+				if effRole != api.RolePrimary {
+					continue
+				}
+			}
+		}
+
+		urlStr := ""
+		if c.instanceDomain != "" {
+			urlStr = fmt.Sprintf("https://%s.%s", e.Name, c.instanceDomain)
+		}
+		matches = append(matches, api.RouteCandidate{
+			Name:                e.Name,
+			URL:                 urlStr,
+			Kind:                e.Kind,
+			State:               e.LifecycleState,
+			Status:              status,
+			HeartbeatAgeSeconds: ageSec,
+			DisplayName:         e.DisplayName,
+			Purpose:             e.Purpose,
+			Owner:               e.OwnerEmail,
+			OwnerGroup:          e.OwnerGroup,
+			ActiveTasks:         e.ActiveTasks,
+			AwaitingReplyTasks:  e.AwaitingReplyTasks,
+			MatchedScope: api.MatchedScope{
+				Repo:        bestScope.Repo,
+				PathPrefix:  bestScope.PathPrefix,
+				Role:        effRole,
+				Source:      bestScope.Source,
+				Specificity: bestLen,
+			},
+		})
+	}
+
+	sort.Slice(matches, func(i, j int) bool {
+		iPrimary := matches[i].MatchedScope.Role == api.RolePrimary
+		jPrimary := matches[j].MatchedScope.Role == api.RolePrimary
+		if iPrimary != jPrimary {
+			return iPrimary
+		}
+		if matches[i].MatchedScope.Specificity != matches[j].MatchedScope.Specificity {
+			return matches[i].MatchedScope.Specificity > matches[j].MatchedScope.Specificity
+		}
+		iRank := catalogStatusRank(matches[i].Status)
+		jRank := catalogStatusRank(matches[j].Status)
+		if iRank != jRank {
+			return iRank < jRank
+		}
+		if matches[i].ActiveTasks != matches[j].ActiveTasks {
+			return matches[i].ActiveTasks < matches[j].ActiveTasks
+		}
+		return matches[i].Name < matches[j].Name
+	})
+
+	res := &api.RouteResponse{
+		Repo:       repo,
+		Path:       normPath,
+		Candidates: matches,
+	}
+	if res.Candidates == nil {
+		res.Candidates = []api.RouteCandidate{}
+	}
+	for i := range matches {
+		if matches[i].MatchedScope.Role == api.RolePrimary {
+			m := matches[i]
+			res.Primary = &m
+			break
+		}
+	}
+	if res.Primary == nil && len(matches) == 1 {
+		m := matches[0]
+		res.Primary = &m
+	}
+	return res, nil
+}
+
+func catalogStatusRank(s api.EntryStatus) int {
+	switch s {
+	case api.StatusOnline:
+		return 0
+	case api.StatusDegraded:
+		return 1
+	default:
+		return 2
 	}
 }

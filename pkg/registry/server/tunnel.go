@@ -30,6 +30,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/registry/store"
 	"github.com/ai-on-gke/grain/pkg/tunnel/mux"
 	"github.com/ai-on-gke/grain/pkg/tunnel/wsupgrade"
+	"github.com/ai-on-gke/grain/pkg/webauth"
 )
 
 const (
@@ -465,6 +466,11 @@ func (rt *Router) HandleConnect(w http.ResponseWriter, r *http.Request, name str
 		}
 		callerEmail, authErr := rt.authenticateConnectIdentity(r)
 		if authErr != nil {
+			if errors.Is(authErr, webauth.ErrGroupLookupUnavailable) {
+				w.Header().Set("Retry-After", "5")
+				writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "authorization lookup temporarily unavailable")
+				return
+			}
 			if webauthErrForbidden(authErr) {
 				writeJSONError(w, http.StatusForbidden, "forbidden", "access denied")
 				return
@@ -486,7 +492,13 @@ func (rt *Router) HandleConnect(w http.ResponseWriter, r *http.Request, name str
 			writeInternalError(w, err)
 			return
 		}
-		if !rt.canConnectAsIdentity(ctx, callerEmail, e) {
+		ok, groupErr := rt.canConnectAsIdentity(ctx, callerEmail, e)
+		if groupErr != nil {
+			w.Header().Set("Retry-After", "5")
+			writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "authorization lookup temporarily unavailable")
+			return
+		}
+		if !ok {
 			writeJSONError(w, http.StatusForbidden, "forbidden", "caller is not authorized to connect this entry (must be owner, owner_group member, or connected_principal)")
 			return
 		}
@@ -600,26 +612,34 @@ func (rt *Router) ReconcileAllLocalTunnels(ctx context.Context) {
 	}
 }
 
-func (rt *Router) canConnectAsIdentity(ctx context.Context, callerEmail string, entry *store.EntryRow) bool {
+func (rt *Router) canConnectAsIdentity(ctx context.Context, callerEmail string, entry *store.EntryRow) (bool, error) {
 	callerEmail = strings.ToLower(strings.TrimSpace(callerEmail))
 	if callerEmail == "" || entry == nil {
-		return false
+		return false, nil
 	}
 	if strings.EqualFold(callerEmail, entry.OwnerEmail) {
-		return true
+		return true, nil
 	}
 	if entry.ConnectedPrincipal != "" {
 		cp := strings.TrimPrefix(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(entry.ConnectedPrincipal)), "user:"), "serviceaccount:")
 		if strings.EqualFold(callerEmail, cp) {
-			return true
+			return true, nil
 		}
 	}
-	if entry.OwnerGroup != "" && rt.groups != nil {
-		if ok, err := rt.groups.IsMember(ctx, entry.OwnerGroup, callerEmail); err == nil && ok {
-			return true
+	if strings.TrimSpace(entry.OwnerGroup) != "" {
+		if rt.groups == nil {
+			return false, errors.New("group resolver not configured")
+		}
+		gEmail := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(entry.OwnerGroup), "group:")))
+		ok, err := rt.groups.IsMember(ctx, gEmail, callerEmail)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func (rt *Router) registerActiveTunnel(t *ActiveTunnel, entry *store.EntryRow) {

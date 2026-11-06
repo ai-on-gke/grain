@@ -433,7 +433,7 @@ func defaultConsoleSessionCapabilities() []string {
 // instead. An operator can reopen the director in the same pane the
 // capabilities are in.
 func DefaultConsoleSessions() []ConsoleSession {
-	caps := []string{APIGrantPrefix + "self-debug", GrainSourceGrant, GrainJournalGrant, "api:deployment:read", GrainHealthGrant, "bootstrap-playbooks"}
+	caps := []string{APIGrantPrefix + "self-debug", GrainSourceGrant, GrainJournalGrant, "api:deployment:read", GrainHealthGrant, BootstrapPlaybooksGrant}
 	for _, id := range defaultConsoleSessionCapabilities() {
 		if !slices.Contains(caps, id) {
 			caps = append(caps, id)
@@ -1016,10 +1016,13 @@ func DirectorNetworkAccess(networkIsolates bool) NetworkAccess {
 
 // DirectorPolicyCapabilities is every capability the shipped Director is
 // granted (DefaultConsoleSessions, by way of ConsoleSessionGrants), as
-// local policy's capabilities.allow names it: a capability reference by
-// its reference alone, since policy matches one without its arguments.
-// It is read from the running binary, so a capability a linked-in
-// package registers for the Director is among them.
+// local policy's capabilities.allow names it: a capability reference
+// carrying narrowing arguments keeps its canonical =<json> arguments so
+// a starter policy admits only that grant (for example the built-in
+// bootstrap config map, without opening operator config maps or
+// secrets), while one with empty arguments is named by its reference
+// alone. It is read from the running binary, so a capability a
+// linked-in package registers for the Director is among them.
 func DirectorPolicyCapabilities() []string {
 	var out []string
 	for _, s := range DefaultConsoleSessions() {
@@ -1029,7 +1032,13 @@ func DirectorPolicyCapabilities() []string {
 		for _, g := range ConsoleSessionGrants(s) {
 			c := g.Capability
 			if IsCapabilityRef(c) {
-				c = CapabilityGrantRef(c)
+				if spec, err := CapabilityGrantSpec(c); err == nil && len(spec.With) > 0 {
+					if enc, err := EncodeCapabilityGrant(spec); err == nil {
+						c = enc
+					}
+				} else {
+					c = CapabilityGrantRef(c)
+				}
 			}
 			if !slices.Contains(out, c) {
 				out = append(out, c)

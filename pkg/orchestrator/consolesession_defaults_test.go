@@ -310,7 +310,7 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 	}
 
 	// Simulate a config edit made while the daemon is down (dropping
-	// bootstrap-playbooks from the declaration), then restart again.
+	// BootstrapPlaybooksGrant from the declaration), then restart again.
 	db.Close()
 	closed = true
 	store, db = openStoreInDir(t, dir)
@@ -318,7 +318,7 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 	settings(t, store, func(c *model.Config) {
 		defs := model.DefaultConsoleSessions()
 		defs[0].Capabilities = slices.DeleteFunc(defs[0].Capabilities, func(capID string) bool {
-			return capID == "bootstrap-playbooks"
+			return capID == model.BootstrapPlaybooksGrant
 		})
 		c.ConsoleSessions = defs
 	})
@@ -328,8 +328,8 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hasGrant(afterConfigEdit.Grants, "bootstrap-playbooks") {
-		t.Errorf("after offline config removal, task grants = %+v, kept dropped bootstrap-playbooks", afterConfigEdit.Grants)
+	if hasGrant(afterConfigEdit.Grants, model.BootstrapPlaybooksGrant) {
+		t.Errorf("after offline config removal, task grants = %+v, kept dropped BootstrapPlaybooksGrant", afterConfigEdit.Grants)
 	}
 	if hasGrant(afterConfigEdit.Grants, model.GrainSourceGrant) {
 		t.Errorf("after offline config removal, task grants = %+v, reverted removed self-debug", afterConfigEdit.Grants)
@@ -362,7 +362,7 @@ func TestConsoleSessionTaskEditWithoutSnapshotHonoursDeclarationChanges(t *testi
 
 	// Clear the persisted snapshot and change the declaration as if the
 	// deployment upgraded and edited grain/config while down: self-repair is
-	// dropped, bootstrap-playbooks is added, and KeepRunning is turned off.
+	// dropped, BootstrapPlaybooksGrant is added, and KeepRunning is turned off.
 	if _, err := store.DB().ExecContext(ctx, "DELETE FROM `console_session_sync`"); err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +370,7 @@ func TestConsoleSessionTaskEditWithoutSnapshotHonoursDeclarationChanges(t *testi
 		cfg.ConsoleSessions = []model.ConsoleSession{{
 			ID:            model.DirectorSessionID,
 			Title:         "Director",
-			Capabilities:  []string{model.GrainSourceGrant, "bootstrap-playbooks"},
+			Capabilities:  []string{model.GrainSourceGrant, model.BootstrapPlaybooksGrant},
 			NetworkAccess: model.NetworkOpen,
 			KeepRunning:   false,
 		}}
@@ -406,8 +406,8 @@ func TestConsoleSessionTaskEditWithoutSnapshotHonoursDeclarationChanges(t *testi
 	if hasGrant("self-repair") || hasGrant(model.GrainHostExecGrant) {
 		t.Errorf("synced Grants = %+v, kept self-repair dropped from declaration while down", synced.Grants)
 	}
-	if !hasGrant("bootstrap-playbooks") {
-		t.Errorf("synced Grants = %+v, swallowed bootstrap-playbooks added to declaration while down", synced.Grants)
+	if !hasGrant(model.BootstrapPlaybooksGrant) {
+		t.Errorf("synced Grants = %+v, swallowed bootstrap-playbooks alias added to declaration while down", synced.Grants)
 	}
 	if synced.KeepRunning {
 		t.Errorf("synced KeepRunning = true, want false from declaration change while down")
