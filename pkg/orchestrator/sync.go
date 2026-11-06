@@ -1333,6 +1333,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	}()
 
 	task, ref := e.task, e.ref
+	client = github.ForTask(client, task.ID)
 	e.policyFor = func(headSHA string) *model.EffectiveMergePolicy {
 		return mergePolicyFor(ctx, store, client, &e, headSHA, now)
 	}
