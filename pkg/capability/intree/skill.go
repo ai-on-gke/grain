@@ -452,6 +452,34 @@ func parseConfigMapEntries(config map[string]any) ([]*configMapEntry, error) {
 	return entries, nil
 }
 
+// EmbeddedBootstrapPlacements returns every file the built-in bootstrap map
+// places -- under ConfigMapDir/bootstrap through config-map, and under
+// SkillsDir/bootstrap through the skill alias -- keyed by sandbox path, with
+// the exact content compiled into this binary. The orchestrator checks a
+// pass against it before writing a "bootstrap-only" grant's placements into
+// a sandbox that is a directory on grain's own host, so what lands there is
+// this binary's public markdown whatever server answered the mint.
+func EmbeddedBootstrapPlacements() (map[string]string, error) {
+	entry, err := builtinBootstrapEntry()
+	if err != nil {
+		return nil, err
+	}
+	skills, err := loadEmbeddedBootstrapSkill()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, f := range entry.files {
+		out[f.placement.Path] = f.placement.Content
+	}
+	for _, sk := range skills {
+		for _, pl := range sk.files {
+			out[pl.Path] = pl.Content
+		}
+	}
+	return out, nil
+}
+
 func loadEmbeddedBootstrapSkill() (map[string]*skill, error) {
 	entry, err := builtinBootstrapEntry()
 	if err != nil {
