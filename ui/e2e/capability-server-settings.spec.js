@@ -278,7 +278,7 @@ test("run location offers host only where grain hostd is, and says why not", asy
   );
   await add.getByLabel("Run location").click();
   await expect(
-    page.getByRole("option", { name: /host \(through grain hostd\)/ }),
+    page.getByRole("option", { name: /host \(through the host agent\)/ }),
   ).toHaveAttribute("aria-disabled", "true");
 });
 

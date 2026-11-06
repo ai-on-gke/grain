@@ -3176,7 +3176,7 @@ func setupFailedEnding(err error) (outcome, detail string) {
 		// being built: nothing ran, and the task goes back to the queue,
 		// where admission holds it until that hostd reconnects
 		// (Deps.ModelAvailability). It never moves to another hostd.
-		return model.InterruptedOutcome, "this run's hostd is not connected: " + err.Error() +
+		return model.InterruptedOutcome, "this run's host is not connected: " + err.Error() +
 			"; the task is not counted as failed, and waits in the queue for it to reconnect"
 	}
 	return "setup-failed", "this run's sandbox could not be prepared: " + err.Error()

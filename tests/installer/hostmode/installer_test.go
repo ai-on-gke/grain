@@ -15,7 +15,7 @@
 // Package hostmode is the migration off host mode, end to end (task
 // 5041). Host mode -- scripts/setup.sh with GRAIN_INSTALL_MODE=host, the
 // daemon as a plain systemd service on the machine -- is gone, and every
-// machine install is container mode plus grain hostd. What is left to
+// machine install is container mode plus the host agent. What is left to
 // test is the way an existing host-mode deployment leaves it:
 //
 //  1. a host-mode install, made by the last setup.sh that had the mode
@@ -474,8 +474,8 @@ WantedBy=multi-user.target
 		t.Fatalf("this setup.sh accepted GRAIN_INSTALL_MODE=host:\n%s", refused.combined())
 	}
 	if !strings.Contains(refused.combined(), "GRAIN_INSTALL_MODE=host is no longer supported") ||
-		!strings.Contains(refused.combined(), "container mode plus grain hostd") {
-		t.Errorf("the refusal does not point to container mode plus grain hostd:\n%s", refused.combined())
+		!strings.Contains(refused.combined(), "container mode plus the host agent") {
+		t.Errorf("the refusal does not point to container mode plus the host agent:\n%s", refused.combined())
 	}
 	if after := execIn(host, "cat", unitPath); after.stdout != unit.stdout {
 		t.Errorf("a refused GRAIN_INSTALL_MODE=host rewrote the unit:\n%s", after.stdout)
@@ -489,7 +489,7 @@ WantedBy=multi-user.target
 	}
 	// No agy is on this host's PATH, so hostd allowlists only the image's
 	// own detached claude and codex, and no host CLI.
-	for _, want := range []string{"moving this host-mode install to container mode plus grain hostd",
+	for _, want := range []string{"moving this host-mode install to container mode plus the host agent",
 		"hostd:             installed", "clis: claude-detached, codex-detached;"} {
 		if !strings.Contains(migrated.stdout, want) {
 			t.Errorf("the migration does not say %q:\n%s", want, migrated.stdout)

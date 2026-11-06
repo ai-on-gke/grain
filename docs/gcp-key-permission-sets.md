@@ -7,7 +7,7 @@ This is the operator's walk-through. What the capability does, and why, is in [c
 An admin is the identity grain uses to create service accounts, bind their roles and mint their keys. Its credential has one of two sources:
 
 - **configured** — a secret you give grain: a service-account key JSON, or a workload-identity external-account config. Use this when the `gcp` server runs in grain's container and the container's own identity should not be the admin.
-- **ambient** — whatever identity the server already has where it runs. With `"run": "host"` (through `grain hostd`) that is your own `gcloud auth application-default login` identity on the host; in a container it is the container's ADC (`GOOGLE_APPLICATION_CREDENTIALS`) or the metadata server's service account.
+- **ambient** — whatever identity the server already has where it runs. With `"run": "host"` (through `grain host`) that is your own `gcloud auth application-default login` identity on the host; in a container it is the container's ADC (`GOOGLE_APPLICATION_CREDENTIALS`) or the metadata server's service account.
 
 Give the admin the custom role in [capabilities.md](capabilities.md#gcp-gcp-key) on every project it acts in:
 

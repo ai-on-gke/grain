@@ -472,14 +472,14 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
             <div
               className="timeline-meta timeline-attempt-hostd"
               title={[
-                `The agent CLI ran on grain hostd ${a.hostd.hostd}`,
+                `The agent CLI ran on host ${a.hostd.hostd}`,
                 a.hostd.instance && `on ${a.hostd.instance}`,
                 a.hostd.owner && `owned by ${a.hostd.owner}`,
               ]
                 .filter(Boolean)
                 .join(", ")}
             >
-              ran on hostd {a.hostd.hostd}
+              ran on host {a.hostd.hostd}
               {a.hostd.instance && <> on {a.hostd.instance}</>}
               {a.hostd.owner && <> · {a.hostd.owner}</>}
             </div>

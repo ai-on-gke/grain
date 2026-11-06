@@ -55,7 +55,7 @@ export const SETTINGS_GROUPS = [
       // revoked here, never declared in the config repo.
       {
         id: "hostds",
-        label: "Hostds",
+        label: "Hosts",
         keywords: ["hostd", "host", "remote", "token", "workstation"],
       },
       // Who changed what (operator-attribution spec §4.4): read-only

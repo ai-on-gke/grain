@@ -250,7 +250,7 @@ func capabilityServerAlertsOnHostd(ctx context.Context, store *model.Store, host
 		if hostdName == "" {
 			return id
 		}
-		return id + " on grain hostd " + hostdName
+		return id + " on host " + hostdName
 	}
 	onDrop := func(st servers.Status) {
 		reason := st.Reason

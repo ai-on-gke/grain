@@ -223,7 +223,7 @@ func TestRunNeedsServerAndToken(t *testing.T) {
 		t.Errorf("no -server = %d, %q", code, errOut.String())
 	}
 	errOut.Reset()
-	if code := run([]string{"-allowlist", p, "-server", "https://grain.example.com", "-token-file", filepath.Join(dir, "none")}, &out, &errOut); code != 2 || !strings.Contains(errOut.String(), "no hostd token") {
+	if code := run([]string{"-allowlist", p, "-server", "https://grain.example.com", "-token-file", filepath.Join(dir, "none")}, &out, &errOut); code != 2 || !strings.Contains(errOut.String(), "no host token") {
 		t.Errorf("no token = %d, %q", code, errOut.String())
 	}
 	errOut.Reset()

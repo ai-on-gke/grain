@@ -15,8 +15,8 @@
 import { expect, test } from "./fixtures.js";
 
 // Which grain hostd host work runs on is a model connection's (Settings
-// -> Models -> the connection -> Run on) or a capability server's, never
-// a task's (docs/hostd-placement.md). The connection's picker lists the
+// -> Models -> the connection -> Run on host) or a capability server's, never
+// a task's (docs/host-placement.md). The connection's picker lists the
 // registry -- each hostd with whether it is connected and its owner, and
 // no revoked one -- sits inside the connection's form at desktop and
 // phone widths, and offers a fallback list only once a hostd is picked.
@@ -37,7 +37,7 @@ test("a connection picks its hostd; a task has none", async ({ page }) => {
       .first()
       .click();
     const field = page.getByTestId("connection-hostd");
-    const picker = field.getByRole("combobox", { name: "Run on" });
+    const picker = field.getByRole("combobox", { name: "Run on host" });
     await expect(picker).toBeVisible();
     await expect(field.getByTestId("connection-hostd-fallback")).toHaveCount(0);
 
@@ -60,12 +60,12 @@ test("a connection picks its hostd; a task has none", async ({ page }) => {
     await picker.click();
     const options = page.getByRole("listbox");
     await expect(
-      options.getByRole("option", { name: /^hostd cloudtop-alice/ }),
+      options.getByRole("option", { name: /^host cloudtop-alice/ }),
     ).toContainText("owner alice@example.com");
     await expect(
-      options.getByRole("option", { name: /^hostd old-laptop/ }),
+      options.getByRole("option", { name: /^host old-laptop/ }),
     ).toHaveCount(0);
-    await options.getByRole("option", { name: /^hostd build-runner/ }).click();
+    await options.getByRole("option", { name: /^host build-runner/ }).click();
     await expect(field.getByTestId("connection-hostd-fallback")).toBeVisible();
     await expect(field.getByTestId("connection-hostd-fallback")).toHaveValue(
       "",
@@ -85,6 +85,6 @@ test("a connection picks its hostd; a task has none", async ({ page }) => {
   });
   expect(refused.status()).toBe(400);
   expect(await refused.text()).toContain(
-    "hostd is set on the model connection or capability server, not the task",
+    "The host is set on the model connection or capability server, not the task",
   );
 });
