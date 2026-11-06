@@ -1,0 +1,11 @@
+=== Repro 1: Second request_access after partial grant (2 of 3 granted) ===
+Run 2 re-check of all 3 items: err=requests[0] (read acme/docs): task 1 holds this already; requests[1] (network access open): task 1 holds this already
+GET /api/tasks/1 -> pendingAccess.earlier = [{"request":{"summary":"Read acme/docs, open network and read tasks","reason":"Need docs context, registry fetch and task history.","items":[{"kind":"read","repo":"acme/docs"},{"kind":"network","access":"open"},{"kind":"grant","capability":"api:tasks:read"}],"createdAt":"2026-11-04T21:55:53.257877071Z"},"granted":[{"kind":"read","repo":"acme/docs"},{"kind":"network","access":"open"}],"declined":[{"kind":"grant","capability":"api:tasks:read"}],"by":{"Kind":"human","ID":"alice","Source":"in-process"},"at":"2026-11-04T21:55:53.261147118Z"}] (len=1)
+
+=== Repro 3: requires_person capability vs non-person PrincipalService ===
+PrincipalService CreateTask(Approved:true, [self-debug]): err=<nil> state=proposed
+PrincipalService SetCapabilityGrant(self-debug): err=capability self-debug requires human approval (settings/capabilities.yml marks it requires_person)
+PrincipalService Approve(proposed holding self-debug): err=task 4 holds self-debug, which settings/capabilities.yml marks as a person's decision (requires_person): only a person may approve it state=proposed
+
+=== Repro 2: askedCase on interactive task parked on request_access ===
+{"kind":"access","title":"Asked for access","action":"grant"}

@@ -2683,7 +2683,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		limitedRole = true
 	}
 	catalogueHold := false
-	if len(catalogueNeedsPerson) > 0 && (proposedBy != nil || c.requestActor(ctx).Actor.Kind == model.PrincipalAgent || limitedRole) {
+	if len(catalogueNeedsPerson) > 0 && (proposedBy != nil || c.requestActor(ctx).Actor.Kind != model.PrincipalHuman || limitedRole) {
 		why := model.CatalogueRequiresPersonNote(catalogueNeedsPerson)
 		if needsPersonWhy == "" {
 			needsPersonWhy = why
@@ -7011,12 +7011,12 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 // start it. A person asking -- the button, `grain run-now` -- is the
 // person those proposals wait for, so nothing is checked for them.
 func (c *Client) agentMayApprove(ctx context.Context, task model.Task) error {
+	if err := c.catalogueApprovalRefusal(ctx, task); err != nil {
+		return err
+	}
 	by := c.requestActor(ctx).Actor
 	if by.Kind != model.PrincipalAgent {
 		return nil
-	}
-	if err := c.catalogueApprovalRefusal(ctx, task); err != nil {
-		return err
 	}
 	requester, err := c.Store.GetTask(ctx, by.ID)
 	if err != nil {

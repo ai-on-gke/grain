@@ -2864,6 +2864,28 @@ describe("askedCase", () => {
       askedCase({
         state: "awaiting_reply",
         interactive: true,
+        awaitingAccess: true,
+      }),
+    ).toEqual({
+      kind: "access",
+      title: "Asked for access",
+      action: "grant",
+    });
+    expect(
+      askedCase({
+        state: "awaiting_reply",
+        consoleSession: "director",
+        awaitingAccess: true,
+      }),
+    ).toEqual({
+      kind: "access",
+      title: "Asked for access",
+      action: "grant",
+    });
+    expect(
+      askedCase({
+        state: "awaiting_reply",
+        interactive: true,
         turnStopped: true,
       }),
     ).toEqual({ kind: "stopped", title: "Stopped by you", action: "reply" });
