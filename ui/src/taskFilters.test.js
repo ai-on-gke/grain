@@ -874,6 +874,40 @@ describe("describing a narrowing", () => {
     ).toEqual([]);
   });
 
+  it("marks a value a yes/no or held-category attribute does not have", () => {
+    // blocked:any:true read "Blocked is any of Not blocked" -- labelOf
+    // words everything but "yes" as the other answer -- over a board
+    // matching nothing; autoMerge:any:yes read "Off" the same way.
+    expect(
+      describeCondition(
+        attr("blocked"),
+        { attr: "blocked", op: "any", values: ["true"] },
+        config,
+      ),
+    ).toBe("Blocked is any of “true” (unknown)");
+    expect(
+      describeCondition(
+        attr("autoMerge"),
+        { attr: "autoMerge", op: "any", values: ["yes"] },
+        config,
+      ),
+    ).toBe("Auto-merge is any of “yes” (unknown)");
+    expect(
+      unknownValues(attr("humanReview"), {
+        attr: "humanReview",
+        op: "any",
+        values: ["product_decision", "product-decision", NONE],
+      }),
+    ).toEqual(["product_decision"]);
+    expect(
+      describeCondition(
+        attr("blocked"),
+        { attr: "blocked", op: "any", values: ["yes", "no"] },
+        config,
+      ),
+    ).toBe("Blocked is any of Blocked, Not blocked");
+  });
+
   it("says a condition is still waiting rather than reading as a filter", () => {
     expect(
       describeCondition(attr("repo"), { attr: "repo", op: "any", values: [] }),
