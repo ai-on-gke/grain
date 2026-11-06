@@ -125,6 +125,41 @@ func TestSettingsSaveByAVerifiedCallerRecordsWhoSavedIt(t *testing.T) {
 	}
 }
 
+// TestAgentConfigWriteRecordsActingReasonInConfigAudit pins F5 from the
+// 2026-11-04 §3 access-and-identity walkthrough: dangerous configuration
+// writes made by an agent require X-Grain-Acting-Reason, and that reason
+// must appear in config_audit (and GET /api/deployment/config-audit ->
+// Settings -> Audit) rather than being dropped by recordConfigWrite.
+func TestAgentConfigWriteRecordsActingReasonInConfigAudit(t *testing.T) {
+	srv, client := testServer(t)
+	storeSettingsRow(t, client)
+	seedAPITask(t, client, "42", "acme/widgets", "api:settings:write")
+
+	if code, _ := asAgent(t, srv, "42", http.MethodPut, "/api/settings", `{"pollInterval":"25s"}`, ""); code != http.StatusForbidden {
+		t.Fatalf("PUT /api/settings without X-Grain-Acting-Reason = %d, want 403", code)
+	}
+	const wantReason = "adjust poll interval during triage"
+	if code, body := asAgent(t, srv, "42", http.MethodPut, "/api/settings", `{"pollInterval":"25s"}`, wantReason); code != http.StatusOK {
+		t.Fatalf("PUT /api/settings with X-Grain-Acting-Reason = %d: %s", code, body)
+	}
+
+	audits, err := client.Store.ConfigAudit(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("Store.ConfigAudit: %v", err)
+	}
+	if len(audits) == 0 {
+		t.Fatal("expected config_audit row after agent PUT /api/settings")
+	}
+	got := audits[0]
+	if got.By.Kind != model.PrincipalAgent || got.By.ID != "42" {
+		t.Errorf("config_audit By = %+v, want agent 42", got.By)
+	}
+	wantSummary := "PUT /api/settings (" + wantReason + ")"
+	if got.Summary != wantSummary {
+		t.Errorf("config_audit Summary = %q, want %q", got.Summary, wantSummary)
+	}
+}
+
 func gitSubject(t *testing.T, dir string) string {
 	t.Helper()
 	out, err := exec.Command("git", "-C", dir, "log", "-1", "--format=%s").Output()

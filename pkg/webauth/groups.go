@@ -20,8 +20,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -322,8 +324,12 @@ type CloudIdentityGroupChecker struct {
 // NewCloudIdentityGroupChecker returns a GroupMemberChecker backed by the
 // Cloud Identity groups API with in-memory caching.
 func NewCloudIdentityGroupChecker(opts ...CloudIdentityOption) *CloudIdentityGroupChecker {
+	defaultEndpoint := strings.TrimRight(strings.TrimSpace(os.Getenv("GRAIN_CLOUD_IDENTITY_ENDPOINT")), "/")
+	if defaultEndpoint == "" {
+		defaultEndpoint = DefaultCloudIdentityEndpoint
+	}
 	c := &CloudIdentityGroupChecker{
-		endpoint:   DefaultCloudIdentityEndpoint,
+		endpoint:   defaultEndpoint,
 		ttl:        DefaultGroupMembershipCacheTTL,
 		now:        time.Now,
 		groupNames: map[string]groupNameCacheEntry{},
@@ -335,7 +341,7 @@ func NewCloudIdentityGroupChecker(opts ...CloudIdentityOption) *CloudIdentityGro
 		}
 	}
 	if c.endpoint == "" {
-		c.endpoint = DefaultCloudIdentityEndpoint
+		c.endpoint = defaultEndpoint
 	}
 	if c.ttl <= 0 {
 		c.ttl = DefaultGroupMembershipCacheTTL
@@ -397,6 +403,9 @@ func (c *CloudIdentityGroupChecker) IsMember(ctx context.Context, groupEmail, me
 	}
 	c.cacheMu.RUnlock()
 
+	if err := checkCloudIdentityEndpoint(c.endpoint); err != nil {
+		return false, err
+	}
 	ctx, cancel := context.WithTimeout(ctx, c.callTimeout())
 	defer cancel()
 	hc, err := c.httpClient()
@@ -467,6 +476,32 @@ func (c *CloudIdentityGroupChecker) lookupGroupName(ctx context.Context, hc *htt
 	}
 	c.cacheMu.Unlock()
 	return name, nil
+}
+
+// checkCloudIdentityEndpoint refuses an endpoint the checker's
+// Application Default Credentials bearer token must not be sent to:
+// anything but https, except plain http to a loopback host (the test
+// stand-in -ui-cloud-identity-endpoint and $GRAIN_CLOUD_IDENTITY_ENDPOINT
+// exist for). A membership check against such an endpoint fails closed
+// before any credential is fetched or sent.
+func checkCloudIdentityEndpoint(endpoint string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("cloud identity endpoint %q is not an absolute URL", endpoint)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		host := u.Hostname()
+		if strings.EqualFold(host, "localhost") {
+			return nil
+		}
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			return nil
+		}
+	}
+	return fmt.Errorf("cloud identity endpoint %s is not https: refusing to send credentials to it (plain http is accepted only for a loopback test stand-in)", u.Redacted())
 }
 
 func escapeCELSingleQuoted(s string) string {
