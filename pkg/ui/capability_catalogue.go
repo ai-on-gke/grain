@@ -153,9 +153,24 @@ func (c *Client) catalogueApprovalRefusal(ctx context.Context, task model.Task) 
 	if c.requestActor(ctx).Actor.Kind == model.PrincipalHuman {
 		return nil
 	}
+	needsPerson, err := c.catalogueRequiresPerson(ctx, task)
+	if err != nil || len(needsPerson) == 0 {
+		return err
+	}
+	return forbiddenErrorf("task %s holds %s, which settings/capabilities.yml marks as a person's decision (requires_person): only a person may approve it",
+		task.ID, strings.Join(needsPerson, ", "))
+}
+
+// catalogueRequiresPerson is the grants task holds that the capability
+// catalogue marks as a person's decision (requires_person), whoever is
+// asking: catalogueApprovalRefusal's question without its exemption for
+// a person, so the agent API's approval rail (Server.agentApprovalRail)
+// can ask it of the task an agent is about to approve. nil for none, or
+// for a deployment with no catalogue.
+func (c *Client) catalogueRequiresPerson(ctx context.Context, task model.Task) ([]string, error) {
 	cat, err := c.capabilityCatalogue(ctx)
 	if err != nil || cat == nil {
-		return err
+		return nil, err
 	}
 	gc := model.TaskGrantContext(task)
 	if gc.TemplateID != "" {
@@ -171,11 +186,7 @@ func (c *Client) catalogueApprovalRefusal(ctx context.Context, task model.Task) 
 			needsPerson = append(needsPerson, verdict.RequiresPerson...)
 		}
 	}
-	if len(needsPerson) == 0 {
-		return nil
-	}
-	return forbiddenErrorf("task %s holds %s, which settings/capabilities.yml marks as a person's decision (requires_person): only a person may approve it",
-		task.ID, strings.Join(needsPerson, ", "))
+	return needsPerson, nil
 }
 
 // catalogueEditRefusalFor is catalogueEditRefusal for the task stored as
