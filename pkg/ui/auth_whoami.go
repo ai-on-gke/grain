@@ -85,7 +85,7 @@ func (s *Server) handleAuthWhoami(w http.ResponseWriter, r *http.Request) {
 	if resp.ExternalAgentAPI {
 		resp.AcceptedAuth = append(resp.AcceptedAuth, "external-token")
 	}
-	if iap.Audience != "" || iap.RequireIAP {
+	if iap.Audience != "" || requiredVerifier(iap) == string(AuthMethodIAP) {
 		resp.AcceptedAuth = append(resp.AcceptedAuth, "iap")
 	}
 	if len(registeredVerifiersSnapshot()) > 0 {

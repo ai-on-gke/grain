@@ -344,8 +344,10 @@ func (c *Client) InvestigateNotification(ctx context.Context, id int64) (Investi
 		return InvestigateResponse{}, err
 	}
 	if stored, err := c.Store.GetTask(ctx, task.ID); err == nil && stored != nil && stored.Approval == nil {
-		if err := c.Approve(ctx, task.ID); err != nil {
-			return InvestigateResponse{}, err
+		if a := accessRoleFromContext(ctx); a == nil || a.allows("tasks:admin", "") {
+			if err := c.Approve(ctx, task.ID); err != nil {
+				return InvestigateResponse{}, err
+			}
 		}
 	}
 	recorded, err := c.Store.SetNotificationInvestigation(ctx, n.ID, task.ID)

@@ -162,6 +162,7 @@ trap 'echo "release-images.sh: aborting: line $LINENO: $BASH_COMMAND" >&2' ERR
 # written to ~/.docker/config.json. Isolating the publishing login keeps
 # `docker build` and subsequent e2e suites unauthenticated against library/*.
 registry_docker_config=""
+signing_pub_key=""
 
 registry_env() {
   if [ -n "${registry_docker_config:-}" ]; then
@@ -304,6 +305,7 @@ tag_may_move() (
 dry_run=false
 phase="all"
 promote_request=""
+promote_predates_dockerhub=false
 rc_request=""
 pending_request=""
 retract_request=""
@@ -496,6 +498,10 @@ cleanup_release_images() {
   if [ -n "${registry_docker_config:-}" ] && command -v rm >/dev/null 2>&1; then
     rm -rf "$registry_docker_config" 2>/dev/null || true
     registry_docker_config=""
+  fi
+  if [ -n "${signing_pub_key:-}" ] && command -v rm >/dev/null 2>&1; then
+    rm -f "$signing_pub_key" 2>/dev/null || true
+    signing_pub_key=""
   fi
 }
 trap cleanup_release_images EXIT INT TERM
@@ -741,14 +747,23 @@ fetch_promote_tag_into() {
 # shallow fetch of the tag since this job's checkout is main or
 # candidate's head rather than the release. Also sets
 # promote_is_root_commit (whether the tag is a root or initial cutover
-# commit).
+# commit) and promote_predates_dockerhub (whether the release's own tree
+# is from before the switch to Docker Hub: see adopt_legacy_ghcr_release).
 release_takes_main_grain() {
   local work answer=1
   promote_is_root_commit=false
+  promote_predates_dockerhub=false
   work="$(mktemp -d)"
   if ! fetch_promote_tag_into "$work" 2; then
     rm -rf "$work"
     echo "release-images.sh: could not fetch $promote_tag from $remote to inspect its Dockerfile" >&2
+    exit 1
+  fi
+  local fetched_commit
+  fetched_commit="$(git -C "$work" rev-parse -q --verify 'FETCH_HEAD^{commit}' 2>/dev/null || true)"
+  if [ "$fetched_commit" != "$promote_commit" ]; then
+    rm -rf "$work"
+    echo "release-images.sh: $promote_tag fetched as ${fetched_commit:-nothing}, not $promote_commit" >&2
     exit 1
   fi
   if git -C "$work" show FETCH_HEAD:Dockerfile 2>/dev/null | grep -q '^ARG MAIN_GRAIN='; then
@@ -757,6 +772,12 @@ release_takes_main_grain() {
   if ! git -C "$work" rev-parse --verify -q "FETCH_HEAD^" >/dev/null 2>&1 ||
      ! git -C "$work" cat-file -e "FETCH_HEAD^:Dockerfile" 2>/dev/null; then
     promote_is_root_commit=true
+  fi
+  # scripts/release-image-repos.sh arrived with the switch to Docker Hub
+  # (a8c313d5, #739): a release whose tree lacks it had a release job
+  # that published to ghcr.io/bwsalmon/grain/* and nowhere else.
+  if ! git -C "$work" cat-file -e "FETCH_HEAD:scripts/release-image-repos.sh" 2>/dev/null; then
+    promote_predates_dockerhub=true
   fi
   rm -rf "$work"
   return "$answer"
@@ -808,6 +829,9 @@ if [ "$dry_run" = true ]; then
         echo "release-images.sh: [dry-run] and rebuild $root/grain:sha-${promote_commit:0:7} from $promote_commit with RELEASE=$promote_tag as $targets, unless $root/grain:$promote_tag already reports $promote_tag"
       fi
       echo "release-images.sh: [dry-run] and point $root/grain:sha-${promote_commit:0:7} at the stamped $root/grain:$promote_tag"
+      if [ "$promote_predates_dockerhub" = true ]; then
+        echo "release-images.sh: [dry-run] $promote_tag predates the switch to Docker Hub (#739), so first copy by digest whichever of those images $root lacks from $GRAIN_LEGACY_GHCR_PREFIX/{guest,k8s-sandbox,guest-base,k8s-sandbox-base}:sha-${promote_commit:0:7} and $GRAIN_LEGACY_GHCR_PREFIX/grain:$promote_tag (its stamped build) or :sha-${promote_commit:0:7}"
+      fi
       if [ "$promote_latest" != true ]; then
         echo "release-images.sh: [dry-run] latest stays put: the git tag latest names ${latest_commit:-nothing}, not $promote_tag"
       fi
@@ -1135,7 +1159,7 @@ build_daemon_image() {
 }
 
 build_registry_image() {
-  local image="$1" main="$2" labelled
+  local image="$1" main="$2" labelled stamp_dir container stamped
   make image-registry IMAGE_REGISTRY="$image" MAIN_grain-registry="$main" \
     GIT_REVISION="$commit" RELEASE="${RELEASE:-}"
 
@@ -1148,6 +1172,27 @@ build_registry_image() {
     echo "release-images.sh: $image is labelled with ${labelled:-no commit}, not $commit" >&2
     exit 1
   fi
+
+  if command -v go >/dev/null 2>&1; then
+    stamp_dir="$(mktemp -d)"
+    container="$(docker create "$image")"
+    docker cp "$container:/usr/local/bin/grain-registry" "$stamp_dir/grain-registry" >/dev/null
+    docker rm "$container" >/dev/null
+    stamped="$(go version -m "$stamp_dir/grain-registry" | awk -F= '$1 ~ /[\t ]vcs\.revision$/ { print $2 }')"
+    rm -rf "$stamp_dir"
+    if [ -z "$stamped" ]; then
+      echo "release-images.sh: $image carries no commit stamp -- its revision label is the whole record;" \
+        "scripts/buildvcs.sh printed git's own reason earlier in this log"
+    elif [ "$stamped" != "$commit" ]; then
+      echo "release-images.sh: $image was built from $stamped, not the $commit this release is for" >&2
+      exit 1
+    fi
+  fi
+  if [ -n "${RELEASE:-}" ]; then
+    check_release_stamp "$image" "$RELEASE"
+  fi
+
+  check_edition "$image" "$main"
 }
 
 build_images() {
@@ -1427,6 +1472,204 @@ rc_images() {
   publish_release
 }
 
+# The registry digest $1 names, asked of the registry: an index's digest
+# for a multi-platform image, the manifest's for a single one.
+registry_digest() {
+  registry_env docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}' 2>/dev/null
+}
+
+# Derive the public half of $signing_key once so signed_with_our_key can
+# verify source digests against it. Kept separate from signature absence so
+# a missing cosign or an unusable key/password fails the job -- just as
+# sign_image does -- rather than looking like an unsigned source and quietly
+# publishing an unsigned release when a key was given.
+ensure_signing_public_key() {
+  if [ -n "${signing_pub_key:-}" ] && [ -s "$signing_pub_key" ]; then
+    return 0
+  fi
+  ensure_cosign || return 1
+  signing_pub_key="$(mktemp)"
+  if ! COSIGN_PASSWORD="$(cat "$signing_password_file" 2>/dev/null || true)" \
+    cosign public-key --key "$signing_key" >"$signing_pub_key" || [ ! -s "$signing_pub_key" ]; then
+    echo "release-images.sh: could not derive a public key from $signing_key, so signatures cannot be checked or made" >&2
+    rm -f "$signing_pub_key"
+    signing_pub_key=""
+    return 1
+  fi
+}
+
+# Whether $1 (a repo@sha256:... reference) carries a signature made with
+# this job's own signing key: the public half is derived from the key
+# sign_image would sign with, so nothing else has to be configured.
+# Returns:
+#   0  verified against $signing_key
+#   1  reachable, and carries no signature made with $signing_key
+#   2  cosign/key setup failed, registry refused auth, or registry was unreachable
+signed_with_our_key() {
+  local ref="$1" attempt err
+  ensure_signing_public_key || return 2
+  err="$(mktemp)"
+  for attempt in 1 2 3; do
+    if registry_env cosign verify --key "$signing_pub_key" --insecure-ignore-tlog=true "$ref" >/dev/null 2>"$err"; then
+      rm -f "$err"
+      return 0
+    fi
+    if grep -qiE 'UNAUTHORIZED|authentication required|insufficient_scope' "$err" 2>/dev/null; then
+      cat "$err" >&2 || true
+      rm -f "$err"
+      echo "release-images.sh: registry refused signature check on $ref" >&2
+      return 2
+    fi
+    if ! grep -qiE 'TOOMANYREQUESTS|429 Too Many Requests|50[0234] |INTERNAL_ERROR|UNAVAILABLE|dial tcp|i/o timeout|TLS handshake timeout|connection reset|unexpected EOF' "$err" 2>/dev/null; then
+      rm -f "$err"
+      return 1
+    fi
+    if [ "$attempt" -lt 3 ]; then
+      sleep $((5 * attempt))
+    fi
+  done
+  cat "$err" >&2 || true
+  rm -f "$err"
+  echo "release-images.sh: could not reach registry to verify signature on $ref in three attempts" >&2
+  return 2
+}
+
+# Copy $1 (a tag) to $2 by digest ($3 when the caller already resolved
+# and checked it, registry_digest otherwise), registry-side, and refuse
+# a copy whose digest differs from the source's: the copy has to be the
+# image that was tested, byte for byte, not a re-encoding of it.
+#
+# The source's tag is mutable and its registry is not this job's, so the
+# copy is signed with this job's key only when the source already carries
+# a signature made with that same key: re-signing would otherwise vouch,
+# with the key deployments verify upgrades against, for whatever the GHCR
+# tag names today. A source that does not verify is refused where
+# REQUIRE_IMAGE_SIGNING is set, and otherwise copied unsigned with a
+# warning -- as every image is published where no key is granted.
+copy_by_digest() {
+  local source="$1" target="$2" want="${3:-}" got vouch=false pinned_source sig_status
+  if [ -z "$want" ]; then
+    want="$(registry_digest "$source" || true)"
+  fi
+  if ! [[ "$want" =~ ^sha256:[0-9a-f]+$ ]]; then
+    echo "release-images.sh: could not read the digest of $source" >&2
+    return 1
+  fi
+  pinned_source="$(repository_of "$source")@$want"
+  if [ -r "$signing_key" ]; then
+    sig_status=0
+    signed_with_our_key "$pinned_source" || sig_status=$?
+    case "$sig_status" in
+      0) vouch=true ;;
+      1)
+        if [ "$require_signing" = true ]; then
+          echo "release-images.sh: $pinned_source ($source) carries no signature made with $signing_key, and REQUIRE_IMAGE_SIGNING is set, so it is not copied to $target" >&2
+          return 1
+        fi
+        echo "release-images.sh: WARNING: $pinned_source ($source) carries no signature made with $signing_key, so $target is copied unsigned and a deployment verifying signatures will refuse it"
+        ;;
+      *) return 1 ;;
+    esac
+  fi
+  retag_image "$pinned_source" "$target" || return 1
+  got="$(registry_digest "$target" || true)"
+  if [ "$got" != "$want" ]; then
+    echo "release-images.sh: copied $source ($want) to $target, but $target is ${got:-unreadable}: the copy is not the image that was tested" >&2
+    return 1
+  fi
+  echo "release-images.sh: copied $source to $target by digest ($want)"
+  if [ "$vouch" = true ] || [ ! -r "$signing_key" ]; then
+    sign_image "$target" "$(repository_of "$target")@$want"
+  fi
+}
+
+# A one-time bridge for releases cut before the switch to Docker Hub
+# (a8c313d5, #739, task 3174) -- v3.1.0 and v3.1.1 among them. Their
+# release jobs published to ghcr.io/bwsalmon/grain/{grain,guest,
+# k8s-sandbox,...} and nothing else, so promoting one to Docker Hub found
+# none of its sha- images there and failed (task 3249). Re-running the
+# release at such a commit does not help: it runs that commit's own
+# workflow and scripts, which publish to GHCR under the old names again.
+#
+# So before publish_release looks for them, the images it needs and
+# Docker Hub lacks are copied from GHCR by digest (copy_by_digest), and
+# the copy is refused unless its digest equals the source's. What reaches
+# Docker Hub is then exactly what that release job built and tested -- and,
+# for the grain image, the build GHCR's own promotion already stamped
+# (checked against the resolved digest so the mutable GHCR tag cannot move
+# between the label check and the copy), which publish_release then finds
+# stamped and does not rebuild, or the sha- build verified to carry
+# org.opencontainers.image.revision=$promote_commit. The copies name their
+# sandbox images on GHCR by digest, as they did when they were tested.
+# Nothing is copied for a release whose tree has
+# scripts/release-image-repos.sh (promote_predates_dockerhub), whose
+# release job published to Docker Hub itself.
+adopt_legacy_ghcr_release() {
+  local promoted_short="${promote_commit:0:7}" image legacy stamp="${stamp_tag:-$promote_tag}"
+  local grain_digest="" grain_rev=""
+  for image in sandbox sandbox-k8s sandbox-base sandbox-k8s-base; do
+    legacy="$(legacy_ghcr_image_repo "$root/$image")"
+    [ -n "$legacy" ] || continue
+    if image_exists "$root/$image:sha-$promoted_short" 2>/dev/null; then
+      continue
+    fi
+    if ! image_exists "$legacy:sha-$promoted_short" 2>/dev/null; then
+      continue
+    fi
+    if ! docker buildx version >/dev/null 2>&1; then
+      echo "release-images.sh: $promote_tag predates Docker Hub and $root/$image:sha-$promoted_short is only on GHCR ($legacy:sha-$promoted_short); copying it by digest needs docker buildx, which is not here" >&2
+      return 1
+    fi
+    copy_by_digest "$legacy:sha-$promoted_short" "$root/$image:sha-$promoted_short" || return 1
+  done
+
+  legacy="$(legacy_ghcr_image_repo "$root/grain")"
+  [ -n "$legacy" ] || return 0
+  # The grain image comes last and may be the stamped :vX.Y.Z itself,
+  # so it is copied only once both sandbox images promotion requires
+  # are here: otherwise publish_release refuses the release ("nothing
+  # was moved") with a :vX.Y.Z already written beside it.
+  if ! image_exists "$root/sandbox:sha-$promoted_short" 2>/dev/null ||
+     ! image_exists "$root/sandbox-k8s:sha-$promoted_short" 2>/dev/null; then
+    return 0
+  fi
+  if image_exists "$root/grain:$promote_tag" 2>/dev/null; then
+    return 0
+  fi
+  if image_exists "$legacy:$promote_tag" 2>/dev/null; then
+    if ! docker buildx version >/dev/null 2>&1; then
+      echo "release-images.sh: $promote_tag predates Docker Hub and $root/grain:$promote_tag is only on GHCR ($legacy:$promote_tag); copying it by digest needs docker buildx, which is not here" >&2
+      return 1
+    fi
+    grain_digest="$(registry_digest "$legacy:$promote_tag" || true)"
+    if [[ "$grain_digest" =~ ^sha256:[0-9a-f]+$ ]] && stamped_build "$legacy@$grain_digest" "$stamp"; then
+      copy_by_digest "$legacy:$promote_tag" "$root/grain:$promote_tag" "$grain_digest" || return 1
+      return 0
+    fi
+  fi
+  if image_exists "$root/grain:sha-$promoted_short" 2>/dev/null; then
+    return 0
+  fi
+  if ! image_exists "$legacy:sha-$promoted_short" 2>/dev/null; then
+    return 0
+  fi
+  if ! docker buildx version >/dev/null 2>&1; then
+    echo "release-images.sh: $promote_tag predates Docker Hub and $root/grain:sha-$promoted_short is only on GHCR ($legacy:sha-$promoted_short); copying it by digest needs docker buildx, which is not here" >&2
+    return 1
+  fi
+  grain_digest="$(registry_digest "$legacy:sha-$promoted_short" || true)"
+  if ! [[ "$grain_digest" =~ ^sha256:[0-9a-f]+$ ]]; then
+    echo "release-images.sh: could not read the digest of $legacy:sha-$promoted_short" >&2
+    return 1
+  fi
+  grain_rev="$(image_revision "$legacy@$grain_digest")"
+  if [ "$grain_rev" != "$promote_commit" ]; then
+    echo "release-images.sh: $legacy:sha-$promoted_short ($grain_digest) is labelled with ${grain_rev:-no commit}, not $promote_commit, so it is not copied" >&2
+    return 1
+  fi
+  copy_by_digest "$legacy:sha-$promoted_short" "$root/grain:sha-$promoted_short" "$grain_digest" || return 1
+}
+
 # What promote_images and rc_images share: publish $promote_commit's
 # images as each of targets, the first of which is the name stamped into
 # the daemon image ($promote_tag) and the rest the moving tags that go
@@ -1450,6 +1693,9 @@ publish_release() {
   # version with vX.Y.Z, so prune keeps them, and they are what is
   # retagged here on every tick.
   local stamped=() stamp="${stamp_tag:-$promote_tag}"
+  if [ "$phase" = promote ] && [ "$promote_predates_dockerhub" = true ]; then
+    adopt_legacy_ghcr_release || return 1
+  fi
   for daemon in "${daemons[@]}"; do
     read -r image main <<< "$daemon"
     if [ -n "$stamp_tag" ]; then
@@ -1497,6 +1743,13 @@ publish_release() {
   done
   if [ "${#missing[@]}" -gt 0 ]; then
     echo "release-images.sh: $promote_tag is $promote_commit, and the release job never published ${missing[*]} for it." >&2
+    if [ "$promote_predates_dockerhub" = true ]; then
+      # Re-running such a release publishes to GHCR again, so the
+      # generic advice below would send an operator round in a circle.
+      echo "release-images.sh: $promote_tag predates the switch to Docker Hub (#739): its release job published only to $GRAIN_LEGACY_GHCR_PREFIX/{grain,guest,k8s-sandbox}, and what promotion needs is not there either, so there was nothing to copy by digest and nothing was moved." >&2
+      echo "release-images.sh: publish $promote_tag's images to $GRAIN_LEGACY_GHCR_PREFIX/* (re-running that commit's release does exactly that) and promote again: they are then copied here by digest. Or promote a release cut after the switch." >&2
+      return 1
+    fi
     echo "release-images.sh: promotion publishes what was built and tested for that commit, so nothing was moved. Re-run that commit's release (POST /api/repos/$GRAIN_CI_REPO/release-runs) and promote again." >&2
     return 1
   fi
@@ -1646,13 +1899,12 @@ published_release() {
   printf '%s' "$label"
 }
 
-# Whether the published image $1 is a stamped build of release $2 from
-# $promote_commit: its version label says $2 and its revision label says
-# the commit. The commit matters for a `-pending` tag, which a rejected
-# release can leave behind on another commit with the same version.
-stamped_build() {
-  local ref="$1" want="$2" revision=""
-  [ "$(published_release "$ref")" = "$want" ] || return 1
+# The commit a published grain image was built from, from its
+# org.opencontainers.image.revision label: asked of the registry where
+# buildx is here, and of a local copy where it is not or the registry's
+# answer carried no label.
+image_revision() {
+  local ref="$1" revision=""
   if docker buildx version >/dev/null 2>&1; then
     revision="$(registry_env docker buildx imagetools inspect "$ref" \
       --format '{{ index .Image.Config.Labels "org.opencontainers.image.revision" }}' 2>/dev/null || true)"
@@ -1661,7 +1913,18 @@ stamped_build() {
     revision="$(docker image inspect \
       --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$ref" 2>/dev/null || true)"
   fi
-  [ "$revision" = "$promote_commit" ]
+  [ "$revision" != "<no value>" ] || revision=""
+  printf '%s' "$revision"
+}
+
+# Whether the published image $1 is a stamped build of release $2 from
+# $promote_commit: its version label says $2 and its revision label says
+# the commit. The commit matters for a `-pending` tag, which a rejected
+# release can leave behind on another commit with the same version.
+stamped_build() {
+  local ref="$1" want="$2"
+  [ "$(published_release "$ref")" = "$want" ] || return 1
+  [ "$(image_revision "$ref")" = "$promote_commit" ]
 }
 
 # Whether $1 reports release $2 the way a deployment reads it: `grain
@@ -1681,16 +1944,64 @@ check_release_stamp() {
 # takes no MAIN_GRAIN. Built from a clean checkout of the release tag
 # rather than from this job's own tree, which is main or candidate's head:
 # the Dockerfile, the Makefile and the source are the release's own.
+#
+# When a signing key is configured, $source must already verify against
+# that same key before the rebuilt $target is signed with it -- otherwise
+# rebuilding an unverified sha- copy (for instance a pre-Docker-Hub
+# release whose GHCR tag carried no signature) would vouch with the
+# release key for whatever sandbox references that unverified image
+# printed. With REQUIRE_IMAGE_SIGNING, an unverified $source is refused
+# before it is pulled or run.
 rebuild_release_grain() {
   local source="$1" target="$2" main="${3:-}" question want answered work go_version
-  local guest_ref k8s_ref image_ref
-  registry_env docker pull "$source"
+  local guest_ref k8s_ref image_ref vouch=false pull_ref="$source" source_digest="" pulled=false sig_status
+  if [ -r "$signing_key" ]; then
+    if docker buildx version >/dev/null 2>&1; then
+      source_digest="$(registry_digest "$source" || true)"
+    else
+      registry_env docker pull "$source"
+      pulled=true
+      local repo short_repo
+      repo="$(repository_of "$source")"
+      short_repo="${repo#docker.io/}"
+      source_digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$source" \
+        | awk -v repo="$repo" -v short="$short_repo" 'index($0, repo "@sha256:") == 1 || index($0, short "@sha256:") == 1 {sub(/^.*@/, ""); print; exit}')"
+    fi
+    if ! [[ "$source_digest" =~ ^sha256:[0-9a-f]+$ ]]; then
+      echo "release-images.sh: could not read the digest of $source, so its signature cannot be checked before rebuilding $target" >&2
+      return 1
+    fi
+    local pinned_source
+    pinned_source="$(repository_of "$source")@$source_digest"
+    [ "$pulled" = true ] || pull_ref="$pinned_source"
+    sig_status=0
+    signed_with_our_key "$pinned_source" || sig_status=$?
+    case "$sig_status" in
+      0) vouch=true ;;
+      1)
+        if [ "$require_signing" = true ]; then
+          echo "release-images.sh: $pinned_source ($source) carries no signature made with $signing_key, and REQUIRE_IMAGE_SIGNING is set, so $target is not rebuilt from it" >&2
+          return 1
+        fi
+        echo "release-images.sh: WARNING: $pinned_source ($source) carries no signature made with $signing_key, so $target is published unsigned and a deployment verifying signatures will refuse it"
+        ;;
+      *) return 1 ;;
+    esac
+  fi
+  if [ "$pulled" != true ]; then
+    registry_env docker pull "$pull_ref"
+  fi
   # What the candidate's build stamped, so the rebuild stamps the same.
-  guest_ref="$(docker run --rm "$source" sandbox-image)"
-  k8s_ref="$(docker run --rm "$source" k8s-sandbox-image)"
-  image_ref="$(docker run --rm "$source" image)"
+  guest_ref="$(docker run --rm --network none "$pull_ref" sandbox-image)"
+  k8s_ref="$(docker run --rm --network none "$pull_ref" k8s-sandbox-image)"
+  image_ref="$(docker run --rm --network none "$pull_ref" image)"
   if [ -z "$guest_ref" ] || [ -z "$k8s_ref" ] || [ -z "$image_ref" ]; then
     echo "release-images.sh: $source did not say which sandbox images and image reference it was built with (sandbox-image: ${guest_ref:-nothing}, k8s-sandbox-image: ${k8s_ref:-nothing}, image: ${image_ref:-nothing}), so there is nothing to rebuild it with" >&2
+    return 1
+  fi
+  local ref_pattern='^[A-Za-z0-9][A-Za-z0-9._/:@-]*$'
+  if ! [[ "$guest_ref" =~ $ref_pattern && "$k8s_ref" =~ $ref_pattern && "$image_ref" =~ $ref_pattern ]]; then
+    echo "release-images.sh: $source answered with malformed image references (sandbox-image: $guest_ref, k8s-sandbox-image: $k8s_ref, image: $image_ref), so $target cannot be rebuilt from it" >&2
     return 1
   fi
 
@@ -1764,7 +2075,7 @@ rebuild_release_grain() {
 
   for question in "sandbox-image $guest_ref" "k8s-sandbox-image $k8s_ref" "image $image_ref"; do
     read -r question want <<< "$question"
-    answered="$(docker run --rm "$target" "$question")"
+    answered="$(docker run --rm --network none "$target" "$question")"
     if [ "$answered" != "$want" ]; then
       echo "release-images.sh: the rebuilt $target answers \`$question\` with ${answered:-nothing}, not the $want $source was built with" >&2
       return 1
@@ -1776,14 +2087,16 @@ rebuild_release_grain() {
   fi
   # Built from a clean checkout of the tag, so a rebuild that says its
   # tree was modified is one whose checkout this script dirtied.
-  answered="$(docker run --rm "$target" version --json | tr -d ' \n')"
+  answered="$(docker run --rm --network none "$target" version --json | tr -d ' \n')"
   if [[ "$answered" == *'"modified":true'* ]]; then
     echo "release-images.sh: the rebuilt $target reports a modified tree ($answered), although it was built from a clean checkout of $promote_tag" >&2
     return 1
   fi
 
   push_image "$target"
-  sign_image "$target"
+  if [ "$vouch" = true ] || [ ! -r "$signing_key" ]; then
+    sign_image "$target"
+  fi
   echo "release-images.sh: published $target, rebuilt from $promote_commit with RELEASE=${stamp_tag:-$promote_tag}"
 }
 

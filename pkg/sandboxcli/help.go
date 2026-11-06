@@ -88,10 +88,13 @@ TASKS, CAPABILITIES & AGENT API (shown to every run; the proxy refuses what this
   grain cap list                         Capability tools this run's grants let the sandbox call
   grain cap <server> <tool> [flags | --json '<args>']
                                          Call one (--help lists its flags, generated from its input schema)
+  grain screenshot --url <app-url> [--pages /,/x] [--widths desktop,phone] [--reference design.png]
+                                         Screenshot the app you are working on (light and dark, desktop and phone)
+                                         plus a contact sheet to attach to the closing note, where grain shows it
   grain quarantine <pkg> <test> --reason <why> [--no-follow-up]
                                          Quarantine a flaky test in .grain/quarantine.yml and file a follow-up (api:test-quarantine)
   grain metrics [<section>] [--window 7d | --since <d> --until <d>]
-                                         grain's own measurements (self-debug)
+                                         grain's own measurements (api:self-debug)
   grain health                           This deployment's health (deployment-health)
   grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority <p>] [--contains <s>] [--lines N]
                                          grain's own log, redacted (grain-log)
@@ -190,6 +193,33 @@ var sandboxCommandHelp = map[string]string{
 		"whose capability marks them sandbox-callable are here; a model-only tool is the agent's own MCP\n" +
 		"tool and the proxy refuses it. Each tool's flags are generated from its input schema.\n\n" +
 		"  grain cap list\n  grain cap widgets ping --help\n  grain cap widgets ping --host example.com --count 3\n  grain cap widgets ping --json '{\"host\":\"example.com\"}'\n",
+	"screenshot": "grain screenshot --url <app-url> [--pages /,/settings] [flags]\n\n" +
+		"Screenshot a web app -- the dev server this run started, a preview deployment -- in a real\n" +
+		"browser (Playwright's Chromium, which the sandbox image carries), at desktop and phone widths\n" +
+		"in light and dark, and lay every shot out on one contact sheet. Attach the contact sheet to the\n" +
+		"closing note (comment_on_issue attachments: [{\"path\": \"screenshots/contact-sheet.png\"}]) and\n" +
+		"grain shows it inline in the task's conversation and in the pull request's description.\n" +
+		"Playwright is the app's own if it has one, else playwright-core is installed once into\n" +
+		"~/.cache/grain/screenshot ($GRAIN_PLAYWRIGHT_VERSION picks the version).\n\n" +
+		"  --url URL          the app's base URL, e.g. http://127.0.0.1:5173 (required)\n" +
+		"  --pages P          comma-separated paths under --url (\"/\" if unset); a path's #anchor is\n" +
+		"                     scrolled to the top before the shot\n" +
+		"  --out DIR          directory for the PNGs (screenshots if unset)\n" +
+		"  --widths W         any of desktop, tablet, phone (\"desktop,phone\")\n" +
+		"  --themes T         any of light, dark (\"light,dark\"); sets prefers-color-scheme\n" +
+		"  --theme-key KEY    also set localStorage[KEY] to the theme's name\n" +
+		"  --storage K=V      a localStorage entry set before the page loads (repeat)\n" +
+		"  --cookie N=V       a cookie for --url's host (repeat)\n" +
+		"  --header \"N: v\"    a header sent on every request (repeat)\n" +
+		"  --click SEL        a Playwright selector clicked after load (repeat, in order)\n" +
+		"  --type TEXT        text typed after the clicks\n" +
+		"  --wait-for SEL     wait for this selector to be visible before the shot\n" +
+		"  --full-page        capture the whole scrollable page, not the viewport\n" +
+		"  --reference FILE   a design image (a Figma export) put first on the contact sheet (repeat)\n" +
+		"  --allow-errors     do not fail on uncaught page errors\n\n" +
+		"Files are <page>-<width>-<theme>.png, so a before and an after run line up file for file.\n\n" +
+		"  grain screenshot --url http://127.0.0.1:5173 --pages /,/checkout --out screenshots/after\n" +
+		"  grain screenshot --url http://127.0.0.1:3000 --pages /pricing --widths phone --reference figma/pricing.png\n",
 	"ls": "grain ls <uri> [--glob <pat>]\n\nList a namespace directory. --glob matches the directory's own entries; a\npattern with / or ** walks the subtree instead, and ends with a [truncated: ...]\nline if the walk was cut short. A trailing / matches directories only.\n\n  grain ls ci://<owner>/<repo>\n  grain ls task:// --glob '19*'\n  grain ls src://cmd --glob '**/*.go'\n\nsrc:// is the source this daemon was built from. A daemon whose own module builds on grain core (github.com/ai-on-gke/grain) serves core's source under src://core/, and for any src:// path its own module has no copy of.\n",
 	"read": "grain read <uri> [--tail N] [--offset N --limit N] [--lines N]\n" +
 		"grain read deploy://pipeline-changes [--cursor <c>] [--page N]\n\nPrint a namespace file to stdout, whole: there is no size cap.\n\n" +
@@ -284,7 +314,7 @@ var sandboxCommandHelp = map[string]string{
 	"release-notes publish": "grain release-notes publish --version <v> (<markdown> | --file <f>) [--period <p>] [--title <t>] [--reason <why>]\n\nPublish release notes for a version. Needs api:release-notes or api:release-notes:write.\n",
 	"quarantine":            "grain quarantine <package> <test-name> --reason <why> [--ttl 30d] [--no-follow-up] [-C <dir>]\n\nAdd a flaky test entry to .grain/quarantine.yml in the workspace and file a follow-up task.\nNeeds api:test-quarantine or api:tests:write.\n",
 	"metrics": "grain metrics [<section>] [--window 7d | --since <date> [--until <date>]] [--repo owner/name]... [--author <a>]...\n\n" +
-		"grain's own measurements (deploy://metrics). Needs self-debug.\n\n" +
+		"grain's own measurements (deploy://metrics). Needs api:self-debug or api:deployment:read.\n\n" +
 		"  --window   how far back to measure: 36h, 7d, 2w (default: the daemon's own)\n" +
 		"  --since, --until  an absolute span instead: a date or an RFC 3339 timestamp\n" +
 		"  --repo, --author  only tasks on these repositories / by these authors (repeat or comma-separate)\n",
@@ -311,7 +341,7 @@ var sandboxCommandHelp = map[string]string{
 // sandboxTaskListHelp is grain task list --help.
 const sandboxTaskListHelp = "grain task list [--state <s>[,<s>...]] [--repo <owner/name>] [--search <title text>]\n" +
 	"                [--kind <k>] [--changed-since <30m|24h|7d|time>] [--stalled] [--limit N] [--json]\n\n" +
-	"The tasks this run may read (its own, or every task with self-debug), one line each:\n" +
+	"The tasks this run may read (its own, or every task with api:self-debug or api:tasks:read), one line each:\n" +
 	"id, state, repo, title, then \"(stopped by operator)\" or \"(stalled)\" and \"blocked on <ids>\" where they apply.\n" +
 	"Oldest first by filing; --limit (default 50) keeps the newest. The count, and how many\n" +
 	"were left out, go to stderr. --state may be repeated or comma-separated (proposed, queued,\n" +

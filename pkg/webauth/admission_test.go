@@ -16,10 +16,13 @@ package webauth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/apierror"
 )
 
 type fakeIdentityVerifier struct {
@@ -165,6 +168,74 @@ func TestAdmitterHumanServicePrincipalAndRoles(t *testing.T) {
 		req.Header.Set("X-Test-Email", "disabled@example.com")
 		if _, err := admitter.Admit(req); !errors.Is(err, ErrCallerForbidden) {
 			t.Fatalf("expected ErrCallerForbidden, got %v", err)
+		}
+	})
+
+	t.Run("unauthorized service principal in allowed_domains never promoted to human", func(t *testing.T) {
+		svcAdmitter, err := NewAdmitter(AdmissionConfig{
+			Verifier: &fakeIdentityVerifier{
+				caller: &Caller{
+					Email:   "ci-bot@example.com",
+					Subject: "sub:ci-bot",
+					Kind:    PrincipalService,
+				},
+			},
+			AllowedDomains: []string{"example.com"},
+		})
+		if err != nil {
+			t.Fatalf("NewAdmitter: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		if c, err := svcAdmitter.Admit(req); !errors.Is(err, ErrCallerForbidden) {
+			t.Fatalf("expected ErrCallerForbidden for unlisted service principal, got caller=%+v err=%v", c, err)
+		}
+	})
+
+	t.Run("unauthorized gserviceaccount email rejected", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/directory", nil)
+		req.Header.Set("X-Test-Email", "unlisted@project.iam.gserviceaccount.com")
+		if _, err := admitter.Admit(req); !errors.Is(err, ErrCallerForbidden) {
+			t.Fatalf("expected ErrCallerForbidden, got %v", err)
+		}
+	})
+
+	t.Run("custom ServicePrincipalChecker admits authorized reader and fails closed on error", func(t *testing.T) {
+		var failLookup bool
+		dynAdmitter, err := NewAdmitter(AdmissionConfig{
+			Verifier:       &fakeIdentityVerifier{},
+			AllowedDomains: []string{"example.com"},
+			ServicePrincipalChecker: func(ctx context.Context, email string) (bool, error) {
+				if failLookup {
+					return false, errors.New("delegation store unreachable")
+				}
+				return email == "dynamic-bot@project.iam.gserviceaccount.com", nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewAdmitter: %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodGet, "/api/directory", nil)
+		req.Header.Set("X-Test-Email", "dynamic-bot@project.iam.gserviceaccount.com")
+		c, err := dynAdmitter.Admit(req)
+		if err != nil || c.Kind != PrincipalService || c.IsAdmin || c.CanCreate {
+			t.Fatalf("expected dynamic service principal admission, got caller=%+v err=%v", c, err)
+		}
+
+		failLookup = true
+		rec := httptest.NewRecorder()
+		dynAdmitter.RequireAdmitted(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})).ServeHTTP(rec, req)
+		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "5" {
+			t.Fatalf("expected 503 with Retry-After: 5 on ServicePrincipalChecker failure, got %d", rec.Code)
+		}
+		var errResp apierror.Response
+		if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+			t.Fatalf("decode apierror.Response: %v (%s)", err, rec.Body.String())
+		}
+		if errResp.Code != "unavailable" || errResp.Error == "" {
+			t.Fatalf("unexpected apierror.Response: %+v", errResp)
 		}
 	})
 }

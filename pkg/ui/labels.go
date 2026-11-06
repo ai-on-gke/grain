@@ -183,11 +183,13 @@ func OfferedCapabilities() []Capability {
 		// No gemini-key row: it was retired onto the gcp server's
 		// gcp#gemini-key (schema migration 103), which is offered with
 		// the other capability-server methods.
-		{ID: "self-debug", Name: "Self debug",
-			Description: "Let this task read grain's own source checkout, this deployment's own tasks and runs, and the measurements it keeps about itself -- throughput, latency, the tool-use census -- to help it debug or explain grain's own behavior. All read-only, and all of it is what anyone with this UI open can already see."},
+		// No self-debug row: it was retired onto the api:self-debug
+		// preset and the grain server's grain#source method (schema
+		// migration 115), which are offered with the other api presets
+		// and capability-server methods.
 	}
 	// Capabilities contributed from outside core
-	// (capability.RegisterProvider) follow self-debug, where the
+	// (capability.RegisterProvider) come first, where the
 	// deployment-level ones begin.
 	for _, r := range capability.Registered() {
 		offered = append(offered, Capability{ID: r.ID, Name: r.Name, Description: r.Description})
@@ -534,6 +536,16 @@ type Config struct {
 	// unavailable rather than erroring on every call, the same as a nil
 	// Secrets above.
 	Upgrader Upgrader
+	// DisableSelfUpgrade disables in-VM self-upgrade actions (pkg/upgrade,
+	// automatic/scheduled upgrades, and in-VM SQLite-to-PostgreSQL cutover)
+	// and hides in-VM upgrade controls in the UI in favour of an optional
+	// external management URL (-disable-self-upgrade).
+	DisableSelfUpgrade bool
+	// ManagementURL is an optional http:// or https:// URL where this
+	// deployment's lifecycle and upgrades are managed externally
+	// (-management-url), shown in place of in-VM self-upgrade controls when
+	// DisableSelfUpgrade is true.
+	ManagementURL string
 	// LastRestart is what the restart that started this daemon did to
 	// the runs in flight across it (orchestrator.UpgradeAdoption), for
 	// the upgrade pane, or nil when there is nothing to report. nil on a
@@ -1172,6 +1184,19 @@ type Config struct {
 	// IAPKeysURL is where the assertion's signing keys are published (a
 	// PEM map or JWK set); empty means GoogleIAPCertURL.
 	IAPKeysURL string
+	// RegistryIssuer is the expected iss claim for verifying grain-registry
+	// JWT assertions (X-Grain-Registry-Assertion) (-ui-registry-issuer /
+	// $GRAIN_REGISTRY_ISSUER). All three of RegistryIssuer,
+	// RegistryAudience, and RegistryKeysURL must be set to enable the
+	// built-in "registry" IdentityVerifier.
+	RegistryIssuer string
+	// RegistryAudience is the single expected aud URL for verifying
+	// grain-registry JWT assertions (-ui-registry-audience /
+	// $GRAIN_REGISTRY_AUDIENCE).
+	RegistryAudience string
+	// RegistryKeysURL is the JWKS endpoint URL publishing grain-registry's
+	// ES256 public keys (-ui-registry-keys-url / $GRAIN_REGISTRY_KEYS_URL).
+	RegistryKeysURL string
 	// AllowedPrincipals, when non-empty, is the allowlist of user:,
 	// serviceAccount:, group:, and domain: entries admitted when a request
 	// authenticates through IAP or another registered IdentityVerifier
@@ -1190,12 +1215,15 @@ type Config struct {
 	// nil uses CloudIdentityGroupChecker lazily when at least one group: entry
 	// is configured.
 	GroupChecker GroupMemberChecker
-	// RequireIAP is -ui-require-iap: the access code, as a bearer token
-	// or the grain_access cookie, is accepted only from loopback with no
-	// forwarding or proxy headers (accessCodeAccepted), and the "Enter
-	// access code" page is not served, so a network caller signs in
-	// through IAP alone. A registered IdentityVerifier that declares
-	// AccessCodeWins still takes the code over its own proxy.
+	// RequireVerifier is -ui-require-verifier: when non-empty, names the
+	// IdentityVerifier (e.g. "iap", "registry", or a registered verifier)
+	// that network callers must sign in through. The access code, as a
+	// bearer token or the grain_access cookie, is accepted only from
+	// loopback with no forwarding or proxy headers (accessCodeAccepted),
+	// or through a registered IdentityVerifier that declares
+	// AccessCodeWins, and the "Enter access code" page is not served.
+	RequireVerifier string
+	// RequireIAP is -ui-require-iap, an alias for RequireVerifier = "iap".
 	RequireIAP bool
 	// LocalAPIToken is the secret in -data-dir/local-api-token
 	// (EnsureLocalAPIToken) that a loopback request presents as a bearer

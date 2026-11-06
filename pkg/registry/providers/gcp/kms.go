@@ -98,6 +98,9 @@ func NewKMSSigner(ctx context.Context, opts KMSSignerOptions) (*KMSSigner, error
 		if err != nil {
 			return nil, fmt.Errorf("gcp kms: creating default OAuth2 client: %w", err)
 		}
+		if c.Timeout == 0 {
+			c.Timeout = 15 * time.Second
+		}
 		httpClient = c
 	}
 
@@ -365,6 +368,10 @@ func init() {
 		if err != nil {
 			return nil, err
 		}
-		return registry.NewCachingSigner(kmsSigner, registry.DefaultJWTCacheTTL), nil
+		cacheTTL := registry.CacheTTLForJWTTTL(cfg.JWTTTL)
+		if cacheTTL <= 0 {
+			return kmsSigner, nil
+		}
+		return registry.NewCachingSigner(kmsSigner, cacheTTL), nil
 	})
 }

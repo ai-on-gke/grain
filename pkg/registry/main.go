@@ -72,6 +72,15 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  grain-registry version [--json]")
 }
 
+type versionJSON struct {
+	Release     string `json:"release,omitempty"`
+	Edition     string `json:"edition,omitempty"`
+	Revision    string `json:"revision,omitempty"`
+	CommittedAt string `json:"committedAt,omitempty"`
+	Modified    bool   `json:"modified,omitempty"`
+	Unversioned bool   `json:"unversioned,omitempty"`
+}
+
 func runVersion(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("grain-registry version", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -81,9 +90,19 @@ func runVersion(args []string, stdout, stderr io.Writer) error {
 	}
 	info := version.Get()
 	if *jsonOut {
+		out := versionJSON{
+			Release:     info.Release,
+			Edition:     info.Edition,
+			Revision:    info.Revision,
+			Modified:    info.Modified,
+			Unversioned: info.Unversioned,
+		}
+		if !info.Time.IsZero() {
+			out.CommittedAt = info.Time.UTC().Format(time.RFC3339)
+		}
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
-		return enc.Encode(info)
+		return enc.Encode(out)
 	}
 	ver := info.Release
 	if ver == "" {
@@ -231,13 +250,14 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	}
 
 	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
-		Verifier:          frontIdentity,
-		Groups:            groups,
-		AllowedDomains:    cfg.Auth.AllowedDomains,
-		Admins:            cfg.Auth.Admins,
-		Creators:          cfg.Auth.Creators,
-		ServicePrincipals: cfg.Auth.ServicePrincipals,
-		IsDisabled:        isDisabled,
+		Verifier:                frontIdentity,
+		Groups:                  groups,
+		AllowedDomains:          cfg.Auth.AllowedDomains,
+		Admins:                  cfg.Auth.Admins,
+		Creators:                cfg.Auth.Creators,
+		ServicePrincipals:       cfg.Auth.ServicePrincipals,
+		ServicePrincipalChecker: delegation.IsServicePrincipalReader,
+		IsDisabled:              isDisabled,
 	})
 	if err != nil {
 		return err

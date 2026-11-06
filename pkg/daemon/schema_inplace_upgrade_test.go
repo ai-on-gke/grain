@@ -29,7 +29,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -282,14 +281,8 @@ func TestDaemonRunStartsAcrossPlainBinarySwapFromSchema65(t *testing.T) {
 		commitDumpAtSchema(t, dataDir, db, "", 65)
 	})
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	uiAddr := ln.Addr().String()
-	_ = ln.Close()
-
 	ctx, cancel := context.WithCancel(context.Background())
+	uiAddrCh := make(chan string, 1)
 	runErr := make(chan error, 1)
 	go func() {
 		runErr <- Run(ctx, Config{
@@ -297,7 +290,8 @@ func TestDaemonRunStartsAcrossPlainBinarySwapFromSchema65(t *testing.T) {
 			SandboxDir:             t.TempDir(),
 			MaxWorkers:             1,
 			PollInterval:           time.Hour,
-			UiAddr:                 uiAddr,
+			UiAddr:                 "127.0.0.1:0",
+			UIAddrReady:            func(addr string) { uiAddrCh <- addr },
 			SandboxPortBase:        0,
 			DisableNativeSandboxes: true,
 			Actor:                  "tester",
@@ -309,6 +303,16 @@ func TestDaemonRunStartsAcrossPlainBinarySwapFromSchema65(t *testing.T) {
 			t.Errorf("daemon Run returned unexpected error: %v", err)
 		}
 	}()
+
+	var uiAddr string
+	select {
+	case uiAddr = <-uiAddrCh:
+	case err := <-runErr:
+		runErr <- err
+		t.Fatalf("daemon exited before binding UI listener on schema-65 store and dump: %v", err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("daemon did not bind UI listener within 30s")
+	}
 
 	deadline := time.Now().Add(30 * time.Second)
 	for {

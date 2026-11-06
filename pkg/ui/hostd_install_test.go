@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
@@ -341,5 +342,76 @@ func TestHostdInstallScriptRefusesUnsafeInputs(t *testing.T) {
 				t.Errorf("output = %q, want substring %q", out, tc.want)
 			}
 		})
+	}
+}
+
+// TestHostdInstallForDropsInstructionsCarryingTheToken: a provider is
+// never given the token, but instructions that carry it anyway -- however
+// it reached them -- are dropped for the default's, and the default's are
+// dropped too rather than shown with it.
+func TestHostdInstallForDropsInstructionsCarryingTheToken(t *testing.T) {
+	const token = "ghd_example-token-0123456789"
+	s := &Server{tasks: &Client{}}
+	r := httptest.NewRequest(http.MethodPost, "http://grain.example.com/api/hostds", nil)
+	h := model.Hostd{Name: "ws-1", Owner: "alice@example.com"}
+
+	t.Cleanup(RegisterHostdInstall(func(c HostdInstallContext) HostdInstallInstructions {
+		return HostdInstallInstructions{Lines: []string{"GRAIN_HOSTD_TOKEN=" + token + " ./install.sh"}}
+	}))
+	got := s.hostdInstallFor(r, h, token)
+	if len(got.Lines) != 1 || !strings.HasPrefix(got.Lines[0], "sudo sh -c") || strings.Contains(got.Lines[0], token) {
+		t.Errorf("lines carrying the token gave %q, want the default line", got.Lines)
+	}
+
+	t.Cleanup(RegisterHostdInstall(func(c HostdInstallContext) HostdInstallInstructions {
+		return HostdInstallInstructions{Lines: []string{"./install.sh"}, Note: "the token is " + token}
+	}))
+	if got := s.hostdInstallFor(r, h, token); got.Note != "" || len(got.Lines) != 1 || got.Lines[0] == "./install.sh" {
+		t.Errorf("a note carrying the token gave %+v, want the default", got)
+	}
+
+	// A hostd named like its token (it cannot be: tokens are not valid
+	// names) would put it in the default line; nothing is shown then.
+	unregister := RegisterHostdInstall(nil)
+	defer unregister()
+	if got := s.hostdInstallFor(r, model.Hostd{Name: token}, token); len(got.Lines) != 0 {
+		t.Errorf("a default line carrying the token was shown: %q", got.Lines)
+	}
+}
+
+// TestDefaultHostdInstall: the root installer's line, with the daemon's
+// release and image when it has them, and no line without an origin.
+func TestDefaultHostdInstall(t *testing.T) {
+	for _, tc := range []struct {
+		c    HostdInstallContext
+		want []string
+	}{
+		{c: HostdInstallContext{Origin: "https://grain.example.com", Name: "ws-1"},
+			want: []string{`sudo sh -c "$(curl -fsSL 'https://grain.example.com/api/hostd/install.sh')" grain-hostd-install --name ws-1 --any-version`}},
+		{c: HostdInstallContext{Origin: "http://127.0.0.1:8080", Name: "ws-1", Release: "v1.2.3", Image: "registry.example.com/grain:v1.2.3"},
+			want: []string{`sudo sh -c "$(curl -fsSL 'http://127.0.0.1:8080/api/hostd/install.sh')" grain-hostd-install --name ws-1 --release v1.2.3 --image registry.example.com/grain:v1.2.3`}},
+		{c: HostdInstallContext{Name: "ws-1"}},
+	} {
+		if got := defaultHostdInstall(tc.c); strings.Join(got.Lines, "\n") != strings.Join(tc.want, "\n") || got.Note != "" {
+			t.Errorf("defaultHostdInstall(%+v) = %+v, want %q", tc.c, got, tc.want)
+		}
+	}
+}
+
+// TestHostdInstallOrigin: an origin a shell line cannot carry between
+// single quotes is left out.
+func TestHostdInstallOrigin(t *testing.T) {
+	for host, want := range map[string]string{
+		"grain.example.com":      "http://grain.example.com",
+		"grain.example.com:8443": "http://grain.example.com:8443",
+		"[::1]:8080":             "http://[::1]:8080",
+		"evil.example.com'$(id)": "",
+		"":                       "",
+	} {
+		r := httptest.NewRequest(http.MethodGet, "http://placeholder/", nil)
+		r.Host = host
+		if got := hostdInstallOrigin(r); got != want {
+			t.Errorf("Host %q: hostdInstallOrigin = %q, want %q", host, got, want)
+		}
 	}
 }

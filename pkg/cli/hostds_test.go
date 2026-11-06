@@ -85,3 +85,66 @@ func TestHostdsRegisterAndSetOwner(t *testing.T) {
 		t.Error("set-owner with no owner argument succeeded")
 	}
 }
+
+// `grain hostds register` prints the install lines and note the daemon
+// rendered after the token, and `grain hostds install` prints them again
+// from GET /api/hostds/{name}/install; the token is printed once, never
+// as part of them.
+func TestHostdsRegisterAndInstallPrintTheDaemonsLines(t *testing.T) {
+	inst := &ui.HostdInstall{
+		Lines: []string{"git clone https://git.example.com/grain-hostd", "./grain-hostd/install.sh --name ws-1"},
+		Note:  "Run these as yourself; paste the token when asked.",
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/hostds":
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(ui.IssuedHostdToken{Hostd: model.Hostd{Name: "ws-1", Owner: "alice@example.com"}, Token: "ghd_secret", Install: inst})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/hostds/ws-1/install":
+			_ = json.NewEncoder(w).Encode(inst)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/hostds/old/install":
+			_ = json.NewEncoder(w).Encode(ui.HostdInstall{Release: "v1.0.0"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	c := ui.NewHTTPClient(srv.URL)
+	ctx := context.Background()
+
+	out, err := captureStdoutCLI(t, func() error {
+		return cmdHostds(ctx, c, &printer{}, []string{"register", "-owner", "alice@example.com", "ws-1"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := strings.Index(out, "ghd_secret")
+	if tok < 0 || strings.Count(out, "ghd_secret") != 1 {
+		t.Fatalf("register printed %q, want the token once", out)
+	}
+	for _, want := range append(append([]string{}, inst.Lines...), inst.Note) {
+		i := strings.Index(out, want)
+		if i < 0 || i < tok {
+			t.Errorf("register printed %q, want %q after the token", out, want)
+		}
+	}
+
+	out, err = captureStdoutCLI(t, func() error {
+		return cmdHostds(ctx, c, &printer{}, []string{"install", "ws-1"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "ghd_") || !strings.Contains(out, "    "+inst.Lines[0]+"\n    "+inst.Lines[1]+"\n") || !strings.Contains(out, inst.Note) {
+		t.Errorf("install printed %q, want the lines as one block and the note", out)
+	}
+
+	if _, err := captureStdoutCLI(t, func() error {
+		return cmdHostds(ctx, c, &printer{}, []string{"install", "old"})
+	}); err == nil {
+		t.Error("install against a daemon that sends no lines succeeded")
+	}
+	if err := cmdHostds(ctx, c, &printer{}, []string{"install"}); err == nil {
+		t.Error("install with no name succeeded")
+	}
+}

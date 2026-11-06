@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/registry/api"
 	"github.com/ai-on-gke/grain/pkg/registry/server"
 	"github.com/ai-on-gke/grain/pkg/registry/store"
@@ -106,19 +107,19 @@ func (s *Server) JWKSHandler() http.Handler {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
-	mux.Handle("GET /metrics", s.metrics.Handler())
+	mux.Handle("GET /metrics", s.admitter.RequireAdmin(s.metrics.Handler()))
 	mux.HandleFunc("GET /.well-known/jwks.json", s.handleJWKS)
 	mux.HandleFunc("POST /api/internal/heartbeat", s.handleInternalHeartbeat)
 
-	// Service principals may read the catalog -- /api/directory and
-	// /api/route -- and nothing else: entries, shapes and the rest of the
-	// control plane are for people (registry.design.md, "Plain service
-	// calls").
 	mux.Handle("GET /api/me", s.admitter.RequireHuman(http.HandlerFunc(s.handleGetMe)))
+	// Service principals read the catalog (/api/directory, /api/route) and
+	// nothing else; shapes are for people creating entries
+	// (registry.design.md, "Plain service calls").
 	mux.Handle("GET /api/shapes", s.admitter.RequireHuman(http.HandlerFunc(s.handleGetShapes)))
 	mux.Handle("GET /api/directory", s.admitter.RequireAdmitted(http.HandlerFunc(s.handleGetDirectory)))
 	mux.Handle("GET /api/entries", s.admitter.RequireHuman(http.HandlerFunc(s.handleGetEntries)))
 	mux.Handle("GET /api/entries/{name}/availability", s.admitter.RequireHuman(http.HandlerFunc(s.handleGetEntryAvailability)))
+	mux.Handle("GET /api/names/{name}", s.admitter.RequireHuman(http.HandlerFunc(s.handleGetEntryAvailability)))
 	mux.Handle("GET /api/route", s.admitter.RequireAdmitted(http.HandlerFunc(s.handleGetRoute)))
 	mux.Handle("/", s.admitter.RequireHuman(s.static))
 
@@ -231,7 +232,7 @@ func (s *Server) handleGetShapes(w http.ResponseWriter, r *http.Request) {
 	if s.store != nil {
 		shapes, err := s.store.ListShapes(r.Context())
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, "internal", err.Error())
+			writeInternalError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -258,12 +259,12 @@ func (s *Server) handleGetDirectory(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, err := s.store.ListEntries(r.Context())
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "internal", err.Error())
+		writeInternalError(w, err)
 		return
 	}
 	out := make([]api.DirectoryEntry, 0, len(entries))
 	for _, e := range entries {
-		if !inCatalog(e) {
+		if !e.Listed {
 			continue
 		}
 		out = append(out, s.store.ToDirectoryEntry(e, s.cfg.InstanceDomain))
@@ -277,25 +278,39 @@ func (s *Server) handleGetEntries(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusUnauthorized, "unauthenticated", "authentication required")
 		return
 	}
+	if caller.Kind != webauth.PrincipalHuman {
+		writeJSONError(w, http.StatusForbidden, "forbidden", "service principals may only call read-only catalog endpoints")
+		return
+	}
+	ownerFilter := strings.TrimSpace(r.URL.Query().Get("owner"))
+	if ownerFilter != "" && !caller.IsAdmin && !strings.EqualFold(ownerFilter, caller.Email) {
+		writeJSONError(w, http.StatusForbidden, "forbidden", "only admins may filter entries by another owner")
+		return
+	}
 	if s.store == nil {
 		writeJSON(w, http.StatusOK, api.ListEntriesResponse{Entries: []api.Entry{}})
 		return
 	}
 	entries, err := s.store.ListEntries(r.Context())
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "internal", err.Error())
+		writeInternalError(w, err)
 		return
 	}
 	out := make([]api.Entry, 0, len(entries))
 	for _, e := range entries {
-		ok, err := s.canCallerListEntry(r.Context(), caller, e)
-		if err != nil {
-			w.Header().Set("Retry-After", "5")
-			writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "authorization lookup temporarily unavailable")
-			return
-		}
-		if !ok {
+		if ownerFilter != "" && !strings.EqualFold(e.OwnerEmail, ownerFilter) {
 			continue
+		}
+		if !caller.IsAdmin {
+			ok, err := s.canCallerManageEntry(r.Context(), caller, e)
+			if err != nil {
+				w.Header().Set("Retry-After", "5")
+				writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "authorization lookup temporarily unavailable")
+				return
+			}
+			if !ok {
+				continue
+			}
 		}
 		out = append(out, s.store.ToAPIEntry(e, s.cfg.InstanceDomain))
 	}
@@ -319,7 +334,7 @@ func (s *Server) handleGetEntryAvailability(w http.ResponseWriter, r *http.Reque
 	}
 	avail, err := s.store.CheckNameAvailability(r.Context(), name, caller.Email)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "internal", err.Error())
+		writeInternalError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, avail)
@@ -341,9 +356,11 @@ func (s *Server) handleGetRoute(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, api.RouteResponse{Repo: repo, Path: filePath, Candidates: []api.RouteCandidate{}})
 		return
 	}
-	res, err := s.store.RouteRepoPath(r.Context(), repo, filePath, s.cfg.InstanceDomain, inCatalog)
+	res, err := s.store.RouteRepoPath(r.Context(), repo, filePath, s.cfg.InstanceDomain, func(e *store.EntryRow) bool {
+		return e.Listed
+	})
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "internal", err.Error())
+		writeInternalError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -376,7 +393,7 @@ func (s *Server) handleInternalHeartbeat(w http.ResponseWriter, r *http.Request)
 			writeJSONError(w, http.StatusConflict, "scope_conflict", err.Error())
 			return
 		}
-		writeJSONError(w, http.StatusInternalServerError, "internal", err.Error())
+		writeInternalError(w, err)
 		return
 	}
 	s.metrics.IncHeartbeats()
@@ -414,7 +431,7 @@ func (s *Server) serveEntrySubdomain(w http.ResponseWriter, r *http.Request, ent
 		return
 	}
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "internal", err.Error())
+		writeInternalError(w, err)
 		return
 	}
 	allowed, err := s.canCallerAccessEntry(r.Context(), caller, entry)
@@ -430,34 +447,15 @@ func (s *Server) serveEntrySubdomain(w http.ResponseWriter, r *http.Request, ent
 	writeJSONError(w, http.StatusServiceUnavailable, "entry_not_ready", fmt.Sprintf("entry %q (%s) backend proxy is not yet active", entry.Name, entry.Kind))
 }
 
-// inCatalog reports whether e belongs in catalog discovery (/api/directory
-// and /api/route). The catalog is the same for every admitted caller --
-// person, admin or service principal -- and holds listed entries only:
-// an unlisted entry never appears there, whoever owns it, whatever its
-// visibility, and however it is shared (registry.design.md: "Catalog
-// discovery exposes only entries explicitly marked listed").
-func inCatalog(e *store.EntryRow) bool {
-	return e != nil && e.Listed && e.DeletedAt == nil && e.LifecycleState != api.StateDeleted
-}
-
-// canCallerListEntry reports whether e is one of the caller's own entries
-// for GET /api/entries: one they own, one whose owner_group they are in,
-// or -- for a registry admin -- any entry. Being listed in the catalog,
-// public, or shared with the caller does not put an entry here: this
-// projection carries internal fields (backend_url, zone, shape) that the
-// catalog never shows.
-func (s *Server) canCallerListEntry(ctx context.Context, caller *webauth.AdmittedCaller, e *store.EntryRow) (bool, error) {
-	if caller == nil || caller.Kind != webauth.PrincipalHuman || e == nil {
+func (s *Server) canCallerManageEntry(ctx context.Context, caller *webauth.AdmittedCaller, e *store.EntryRow) (bool, error) {
+	if caller == nil || caller.Kind != webauth.PrincipalHuman {
 		return false, nil
 	}
 	if caller.IsAdmin || strings.EqualFold(e.OwnerEmail, caller.Email) {
 		return true, nil
 	}
-	if g := strings.TrimSpace(e.OwnerGroup); g != "" {
-		if s.groups == nil {
-			return false, errors.New("group resolver not configured")
-		}
-		return s.groups.IsMember(ctx, strings.TrimPrefix(strings.ToLower(g), "group:"), strings.ToLower(strings.TrimSpace(caller.Email)))
+	if strings.TrimSpace(e.OwnerGroup) != "" {
+		return s.matchesAccessList(ctx, caller.Email, []string{e.OwnerGroup})
 	}
 	return false, nil
 }
@@ -466,8 +464,17 @@ func (s *Server) canCallerAccessEntry(ctx context.Context, caller *webauth.Admit
 	if caller == nil || caller.Kind != webauth.PrincipalHuman {
 		return false, nil
 	}
-	if strings.EqualFold(e.OwnerEmail, caller.Email) || e.Visibility == store.VisibilityPublic {
+	if caller.IsAdmin || strings.EqualFold(e.OwnerEmail, caller.Email) || e.Visibility == store.VisibilityPublic {
 		return true, nil
+	}
+	if strings.TrimSpace(e.OwnerGroup) != "" {
+		ok, err := s.matchesAccessList(ctx, caller.Email, []string{e.OwnerGroup})
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
 	}
 	if e.Visibility == store.VisibilityShared {
 		return s.matchesAccessList(ctx, caller.Email, e.AccessList)
@@ -519,10 +526,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeJSONError(w http.ResponseWriter, status int, code, msg string) {
-	writeJSON(w, status, map[string]any{
-		"error": map[string]any{
-			"code":    code,
-			"message": msg,
-		},
+	writeJSON(w, status, apierror.Response{
+		Error: msg,
+		Code:  code,
 	})
+}
+
+func writeInternalError(w http.ResponseWriter, err error) {
+	writeJSON(w, http.StatusInternalServerError, apierror.Body(http.StatusInternalServerError, err))
 }

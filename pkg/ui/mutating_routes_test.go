@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -87,6 +88,20 @@ func taskParkedOnQuestion(t *testing.T, client *ui.Client, _ sender) string {
 		t.Fatal(err)
 	}
 	if err := client.Store.Observe(ctx, model.Observation{TaskID: id, PendingQuestionCommentID: &qid}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// taskHeldForHumanReview is a task a review held for a person's decision:
+// what POST /api/tasks/{id}/human-review/release acts on.
+func taskHeldForHumanReview(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	id := fileTask(true)(t, client, nil)
+	if _, err := client.Store.RaiseHumanReviewHold(context.Background(), id, model.HumanReviewRequest{
+		Reason: model.HumanReviewReason{Source: model.HumanReviewRequested, Reason: "a person must decide", ReviewTask: "r1"},
+		By:     model.Principal{Kind: model.PrincipalAgent, ID: "r1"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	return id
@@ -223,6 +238,45 @@ func secretsClient(t *testing.T) *ui.Client {
 	t.Helper()
 	client, _, _ := testClient(t)
 	client.Config.Secrets = secrets.New(t.TempDir())
+	return client
+}
+
+// figmaOAuthClient is secretsClient's deployment with the figma
+// capability server configured for one oauth account, "design", whose
+// code exchange goes to a fake Figma token endpoint.
+func figmaOAuthClient(t *testing.T) *ui.Client {
+	t.Helper()
+	client := secretsClient(t)
+	figma := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/oauth/token" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"at","refresh_token":"rt","expires_in":3600,"user_id_string":"42"}`))
+	}))
+	t.Cleanup(figma.Close)
+	prevBase, prevClient := ui.FigmaOAuthAPIBase, ui.FigmaOAuthHTTPClient
+	ui.FigmaOAuthAPIBase, ui.FigmaOAuthHTTPClient = figma.URL, figma.Client()
+	t.Cleanup(func() { ui.FigmaOAuthAPIBase, ui.FigmaOAuthHTTPClient = prevBase, prevClient })
+	if err := client.Config.Secrets.Set("figma-oauth", "client_secrets", []byte(`{"design":"shh"}`)); err != nil {
+		t.Fatal(err)
+	}
+	mc := model.DefaultConfig()
+	mc.MCPServers = map[string]protocol.ServerConfig{
+		"https://grain.dev/capabilities/figma": {
+			Command: "grain",
+			Args:    []string{"capability", "figma"},
+			Builtin: "figma",
+			Config: map[string]any{
+				"accounts":       []any{map[string]any{"name": "design", "auth_mode": "oauth", "client_id": "cid"}},
+				"client_secrets": protocol.SecretRef("figma-oauth/client_secrets"),
+			},
+		},
+	}
+	if err := client.Store.PutConfig(context.Background(), mc); err != nil {
+		t.Fatal(err)
+	}
 	return client
 }
 
@@ -414,6 +468,10 @@ var attributedRoutes = map[string]attributedRoute{
 		setup:    taskWithPullRequest,
 		recorded: noted(model.TaskEventSubmitted),
 	},
+	"POST /api/tasks/{id}/human-review/release": {
+		setup:    taskHeldForHumanReview,
+		recorded: noted(model.TaskEventHumanReviewReleased),
+	},
 	"POST /api/tasks/{id}/retry": {
 		setup:       fileTask(true),
 		agentGrants: []string{"api:tasks:write"},
@@ -538,6 +596,14 @@ var attributedRoutes = map[string]attributedRoute{
 			return notes[0].UpdatedBy
 		},
 	},
+	// Figma OAuth code exchange stores the account's refresh token in the
+	// secret store and writes a config_audit row naming who connected it.
+	"POST /api/capability-servers/figma-oauth-exchange": {
+		client:      figmaOAuthClient,
+		body:        `{"id":"https://grain.dev/capabilities/figma","account":"design","code":"c0de","redirectUri":"https://grain.example/settings/capabilities"}`,
+		agentGrants: []string{"api:capabilities:admin"},
+		recorded:    lastConfigAudit,
+	},
 	// The hostd registry (Settings -> Hostds): each change is a
 	// config_audit entry about hostd:<name>.
 	"POST /api/hostds": {
@@ -642,19 +708,28 @@ var attributedRoutes = map[string]attributedRoute{
 // is credited with: signing in and out, and requests that only check,
 // plan or preview a change without making it.
 var neverAttributedRoutes = map[string]bool{
+	// A review's request for human review is recorded as that review's
+	// agent, whoever relays it (its run's MCP server reaches the daemon
+	// as the daemon): the hold is the review's, and the request's own
+	// principal is checked rather than recorded (ui.Client.RequestHumanReview).
+	"POST /api/tasks/{id}/human-review": true,
 	// Signing in and out: there is nobody to credit until it succeeds,
 	// and nothing is written that names them.
 	"POST /api/auth/access-code": true,
 	"POST /api/auth/logout":      true,
 	// Checks, tests and previews: they report what a change would do and
 	// write nothing.
-	"POST /api/agent-keys/{framework}/check":     true,
-	"POST /api/capabilities/{id}/check":          true,
-	"POST /api/capability-grants/check":          true,
-	"POST /api/capability-policy/preview":        true,
-	"POST /api/capability-servers/test":          true,
-	"POST /api/deployment/git-connections/check": true,
-	"POST /api/settings/plan":                    true,
+	"POST /api/agent-keys/{framework}/check": true,
+	"POST /api/capabilities/{id}/check":      true,
+	"POST /api/capability-grants/check":      true,
+	"POST /api/capability-policy/preview":    true,
+	"POST /api/capability-servers/test":      true,
+	// Figma's account check calls Figma's /v1/me; authorize only issues an
+	// in-memory, single-use OAuth state. Neither persists anything.
+	"POST /api/capability-servers/figma-test":            true,
+	"POST /api/capability-servers/figma-oauth-authorize": true,
+	"POST /api/deployment/git-connections/check":         true,
+	"POST /api/settings/plan":                            true,
 	// The MCP endpoints are transports: each tool they serve calls one of
 	// the routes here, and is attributed there. POST /api/mcp's
 	// grain_invoke dispatches the route through s.mux with the outer

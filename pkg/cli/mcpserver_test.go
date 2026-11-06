@@ -31,7 +31,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -144,16 +144,27 @@ func TestCIRepoScopeFollowsTheRunsOwnRepositoryAndTheWideGrant(t *testing.T) {
 	}{
 		{"an ordinary task", "acme/widgets", daemon.GrantNames{"grain-ci"}, nil,
 			mcp.CIRepoScope{Repo: "acme/widgets"}},
-		{"a task debugging grain itself", "acme/widgets", daemon.GrantNames{"grain-ci", selfdebug.CapabilityName},
-			[]string{selfdebug.CapabilityName},
+		{"a task debugging grain itself", "acme/widgets", daemon.GrantNames{"grain-ci", grainserver.SourceGrant},
+			[]string{grainserver.SourceGrant},
 			mcp.CIRepoScope{Repo: "acme/widgets", AllRepos: true}},
-		// grain/task-2555: a team whose self-debug is scoped to its own
+		// The retired bare self-debug, from a run or a daemon a release
+		// behind, still reads as grain#source.
+		{"the retired self-debug alias", "acme/widgets", daemon.GrantNames{"grain-ci", grainserver.LegacySelfDebug},
+			[]string{grainserver.LegacySelfDebug},
+			mcp.CIRepoScope{Repo: "acme/widgets", AllRepos: true}},
+		{"grain#source with an older daemon's self-debug", "acme/widgets", daemon.GrantNames{"grain-ci", grainserver.SourceGrant},
+			[]string{grainserver.LegacySelfDebug},
+			mcp.CIRepoScope{Repo: "acme/widgets", AllRepos: true}},
+		// grain/task-2555: a team whose grain#source is scoped to its own
 		// work reads its own repository's CI and nobody else's.
-		{"a team-scoped self-debug grant", "acme/widgets", daemon.GrantNames{"grain-ci", selfdebug.CapabilityName},
+		{"a team-scoped grain#source grant", "acme/widgets", daemon.GrantNames{"grain-ci", grainserver.SourceGrant},
+			nil, mcp.CIRepoScope{Repo: "acme/widgets"}},
+		// The api half of self-debug reads task records, not CI.
+		{"api:self-debug alone", "acme/widgets", daemon.GrantNames{"grain-ci", "api:self-debug"},
 			nil, mcp.CIRepoScope{Repo: "acme/widgets"}},
 		{"a task with no repository", "", daemon.GrantNames{"grain-ci"}, nil, mcp.CIRepoScope{}},
-		{"no repository, but the wide grant", "", daemon.GrantNames{selfdebug.CapabilityName},
-			[]string{selfdebug.CapabilityName}, mcp.CIRepoScope{AllRepos: true}},
+		{"no repository, but the wide grant", "", daemon.GrantNames{grainserver.SourceGrant},
+			[]string{grainserver.SourceGrant}, mcp.CIRepoScope{AllRepos: true}},
 		{"grain-ci plus repo-scoped api:ci-read", "acme/widgets",
 			daemon.GrantNames{"grain-ci", "api:ci-read@acme/other"}, nil,
 			mcp.CIRepoScope{Repo: "acme/widgets", Reads: []string{"acme/other"}}},
@@ -174,10 +185,10 @@ func TestCIRepoScopeFollowsTheRunsOwnRepositoryAndTheWideGrant(t *testing.T) {
 // two spellings one grant: rename the capability and this fails here,
 // where both are in scope, rather than silently leaving every run
 // scoped to its own repository.
-func TestCIWideReadGrantIsSelfDebug(t *testing.T) {
+func TestCIWideReadGrantIsGrainSource(t *testing.T) {
 	t.Parallel()
-	if mcp.CIWideReadGrant != selfdebug.CapabilityName {
-		t.Errorf("mcp.CIWideReadGrant = %q, want %q", mcp.CIWideReadGrant, selfdebug.CapabilityName)
+	if mcp.CIWideReadGrant != grainserver.SourceRef {
+		t.Errorf("mcp.CIWideReadGrant = %q, want %q", mcp.CIWideReadGrant, grainserver.SourceRef)
 	}
 }
 

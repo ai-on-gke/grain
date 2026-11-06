@@ -70,6 +70,22 @@ git stash pop
 make ui-screenshots PAGES=/repos OUT=screenshots/after
 ```
 
+## Another app's UI
+
+`make ui-screenshots` shoots grain itself. For the app a run is working
+on in any other repository, start its dev server in the sandbox and use
+the sandbox CLI's `grain screenshot`, which takes the same widths and
+themes, writes the same `<page>-<width>-<theme>.png` names and the same
+`contact-sheet.png`, and can put a Figma frame beside the render with
+`--reference`:
+
+```sh
+grain screenshot --url http://127.0.0.1:5173 --pages /,/settings --out screenshots/after
+```
+
+[figma.md](figma.md) covers it, and the figma capability server that
+gives a run the design it is implementing.
+
 ## Looking at them
 
 Open the PNGs and check the following:

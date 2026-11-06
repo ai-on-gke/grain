@@ -350,7 +350,7 @@ function inFlightSentence(count, atRisk) {
   if (atRisk.survive) {
     parts.push(
       `${atRisk.survive} ${atRisk.survive === 1 ? "is" : "are"} in a run ` +
-        "host or grain hostd and would be adopted by the new daemon.",
+        "host or the host agent and would be adopted by the new daemon.",
     );
   }
   return parts.join(" ");
@@ -1163,8 +1163,59 @@ function isSameRunningVersion(target, status, version, preview) {
   return false;
 }
 
+export function safeManagementUrl(raw) {
+  if (typeof raw !== "string") return "";
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  try {
+    const parsed = new URL(trimmed);
+    if (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      parsed.hostname &&
+      !parsed.username &&
+      !parsed.password
+    ) {
+      return parsed.toString();
+    }
+  } catch {
+    // Reject malformed or relative URLs.
+  }
+  return "";
+}
+
+export function ExternallyManagedUpgradeNotice({
+  managementUrl,
+  testId = "upgrade-externally-managed",
+  linkTestId = "upgrade-management-link",
+  sx,
+}) {
+  const href = safeManagementUrl(managementUrl);
+  return (
+    <Alert severity="info" data-testid={testId} sx={sx}>
+      In-VM self-upgrade is disabled on this deployment; upgrades and instance
+      lifecycle are managed externally.
+      {href && (
+        <Box sx={{ mt: 1.25 }}>
+          <Button
+            component="a"
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            size="small"
+            variant="outlined"
+            data-testid={linkTestId}
+          >
+            Manage instance
+          </Button>
+        </Box>
+      )}
+    </Alert>
+  );
+}
+
 export default function UpgradePanel({
   showError = defaultShowError,
+  config,
   settings,
   onSaveSettings,
   version,
@@ -1370,17 +1421,41 @@ export default function UpgradePanel({
   const progress = upgradeProgress(status.steps);
   const unchangedTarget =
     unchangedBranch || (!running && status.unchanged ? status.branch : "");
+  const selfUpgradeDisabled = Boolean(
+    status.selfUpgradeDisabled || config?.selfUpgradeDisabled,
+  );
+  const managementUrl = status.managementUrl || config?.managementUrl || "";
+  const fallbackRunning =
+    status.running ||
+    (version?.commit || (!version?.unversioned && version?.release)
+      ? {
+          release: version?.unversioned ? "" : version?.release || "",
+          commit: version?.commit || "",
+          modified: Boolean(version?.modified),
+        }
+      : null);
 
   return (
     <>
-      {!status.enabled && (
+      {selfUpgradeDisabled && (
+        <>
+          <RunningNow running={fallbackRunning} />
+          <ExternallyManagedUpgradeNotice
+            managementUrl={managementUrl}
+            testId="upgrade-externally-managed"
+            linkTestId="upgrade-management-link"
+            sx={{ mb: 2 }}
+          />
+        </>
+      )}
+      {!selfUpgradeDisabled && !status.enabled && (
         <Alert severity="info" sx={{ mb: 2 }}>
           Not available: this deployment was started with neither -upgrade-image
           nor -upgrade-src-dir configured (bwsalmon/agents#396, #645), so there
           is nothing here that can cut it over to another branch.
         </Alert>
       )}
-      {status.enabled && (
+      {!selfUpgradeDisabled && status.enabled && (
         <>
           <Typography
             variant="body2"
@@ -1573,13 +1648,16 @@ export default function UpgradePanel({
           )}
         </>
       )}
-      {settings && onSaveSettings && (
+      {!selfUpgradeDisabled && settings && onSaveSettings && (
         <UpgradeCheckSettings
           settings={settings}
           onSave={(payload) => onSaveSettings(payload, { close: false })}
         />
       )}
-      <DatabaseBackend databaseStatus={status?.database} />
+      <DatabaseBackend
+        databaseStatus={status?.database}
+        selfUpgradeDisabled={selfUpgradeDisabled}
+      />
     </>
   );
 }
@@ -1920,9 +1998,15 @@ export const OFFLINE_MIGRATION_COMMANDS = [
 
 // databaseStatus is GET /api/upgrade's "database" (the same reading as
 // GET /api/database), so the pane asks nothing of its own.
-export function DatabaseBackend({ databaseStatus }) {
+export function DatabaseBackend({
+  databaseStatus,
+  selfUpgradeDisabled = false,
+}) {
   const dbStatus = databaseStatus || null;
   const postgres = dbStatus && dbStatus.driver === "postgres";
+  if (selfUpgradeDisabled && !postgres) {
+    return null;
+  }
 
   return (
     <Box sx={{ mt: 4 }} className="database-backend-section">
@@ -1940,19 +2024,21 @@ export function DatabaseBackend({ databaseStatus }) {
           {dbStatus.dsn ? ` (${dbStatus.dsn})` : ""}.
         </Typography>
       )}
-      <Alert
-        severity="info"
-        sx={{ mb: 2 }}
-        className="database-backend-offline"
-      >
-        The store is moved only with the daemon stopped, never from here: a copy
-        taken while grain is running loses everything written after it.
-        {postgres
-          ? " To move this PostgreSQL store to another server, stop the daemon, dump and restore it, check it with grain db check, and start the daemon again."
-          : " To move this SQLite store into PostgreSQL, run these on the daemon's host. setup.sh stops the daemon, migrates the store and starts it again once grain db check finds nothing missing."}{" "}
-        See docs/database.md.
-      </Alert>
-      {!postgres && (
+      {!selfUpgradeDisabled && (
+        <Alert
+          severity="info"
+          sx={{ mb: 2 }}
+          className="database-backend-offline"
+        >
+          The store is moved only with the daemon stopped, never from here: a
+          copy taken while grain is running loses everything written after it.
+          {postgres
+            ? " To move this PostgreSQL store to another server, stop the daemon, dump and restore it, check it with grain db check, and start the daemon again."
+            : " To move this SQLite store into PostgreSQL, run these on the daemon's host. setup.sh stops the daemon, migrates the store and starts it again once grain db check finds nothing missing."}{" "}
+          See docs/database.md.
+        </Alert>
+      )}
+      {!selfUpgradeDisabled && !postgres && (
         <Box
           component="pre"
           className="database-backend-commands"

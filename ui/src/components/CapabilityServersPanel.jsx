@@ -43,6 +43,7 @@ import ConfigMapList, {
   normalizeConfigMapPayload,
 } from "./ConfigMapList.jsx";
 import HostScriptList, { isHostScriptServer } from "./HostScriptList.jsx";
+import FigmaAccountList, { isFigmaServer } from "./FigmaAccountList.jsx";
 import GChatSpaceList, { isGChatServer } from "./GChatSpaceList.jsx";
 import { argumentRows } from "../capabilityArgs.js";
 import { identifierField } from "../identifierField.js";
@@ -111,8 +112,14 @@ export const stateHelp = {
 // needsHostd is whether state is a placed server's wait for its hostd
 // (daemon.NeedsHostd): "needs-hostd:<selector>".
 const needsHostd = (state) => String(state).startsWith("needs-hostd:");
+// needsHostLabel is how a needs-hostd:<name> state reads on its chip:
+// the state is wire format, the chip says host.
+const needsHostLabel = (state) =>
+  needsHostd(state)
+    ? `needs host ${String(state).slice("needs-hostd:".length)}`
+    : "";
 const needsHostdHelp =
-  "The grain hostd this server is placed on is not connected: a grant of it waits until that hostd dials in.";
+  "The host this server is placed on is not connected: a grant of it waits until that host dials in.";
 
 function serverState(server) {
   return (
@@ -131,10 +138,10 @@ export function runsAt(config) {
   if (config.run === "host" || config.run === "hostd")
     return {
       key: "host",
-      label: config.hostd ? `on hostd ${config.hostd}` : "on the host",
+      label: config.hostd ? `on host ${config.hostd}` : "on the host",
       help: config.hostd
-        ? `grain starts the command through grain hostd ${config.hostd}, on that hostd's machine, for every run that holds a grant of it.`
-        : "grain starts the command on the bare machine through grain hostd, outside any container.",
+        ? `grain starts the command on host ${config.hostd}, on that host's machine, for every run that holds a grant of it.`
+        : "grain starts the command on the bare machine through the host agent, outside any container.",
     };
   return {
     key: "container",
@@ -382,19 +389,22 @@ function configFromForm(form, base) {
 // not when it cannot (#5031: no grain hostd beside the daemon, as on
 // Kubernetes, or no allowlist entry for this command).
 function hostChoice(hostEntries, command) {
-  if (!hostEntries) return { ok: false, why: "checking for grain hostd…" };
+  if (!hostEntries) return { ok: false, why: "checking for the host agent…" };
   if (!hostEntries.available)
     return {
       ok: false,
-      why: hostEntries.reason || "grain hostd is not available here",
+      why: hostEntries.reason || "the host agent is not available here",
     };
   const entries = hostEntries.entries || [];
   if (!command.trim())
-    return { ok: false, why: "name the command to see if hostd offers it" };
+    return {
+      ok: false,
+      why: "name the command to see if the host agent offers it",
+    };
   if (!entries.includes(command.trim()))
     return {
       ok: false,
-      why: `grain hostd's allowlist has no capabilities entry for "${command.trim()}"${
+      why: `the host agent's allowlist has no capabilities entry for "${command.trim()}"${
         entries.length ? ` (it offers ${entries.join(", ")})` : ""
       }`,
     };
@@ -707,14 +717,14 @@ function ServerForm({
             id={`${prefix}-run`}
             helperText={
               host.ok
-                ? "Where grain starts the command. container: beside the grain daemon, in its container. host: on the bare machine through grain hostd, for a server that needs the host's own tools or files."
+                ? "Where grain starts the command. container: beside the grain daemon, in its container. host: on the bare machine through the host agent, for a server that needs the host's own tools or files."
                 : `Where grain starts the command. container: beside the grain daemon, in its container. host is not available: ${host.why}`
             }
             data-testid="capability-server-run"
           >
             <MenuItem value="container">container (beside the daemon)</MenuItem>
             <MenuItem value="host" disabled={!host.ok}>
-              host (through grain hostd)
+              host (through the host agent)
             </MenuItem>
           </TextField>
           {form.run === "host" && (
@@ -726,8 +736,8 @@ function ServerForm({
               noFallback
               disabled={readOnly}
               testId="capability-server-hostd"
-              emptyLabel="The default hostd"
-              helperText="Which grain hostd this server runs on, for every run that holds a grant of it. Run the same server on two hostds as two entries under two ids. While its hostd is not connected a grant of it waits (needs-hostd)."
+              emptyLabel="The default host"
+              helperText="Which host this server runs on, for every run that holds a grant of it. Run the same server on two hosts as two entries under two ids. While its host is not connected a grant of it waits (needs host)."
             />
           )}
         </>
@@ -1126,7 +1136,7 @@ function ServerChips({ server, holders }) {
       />
       <HelpChip
         help={stateHelp[state] || (needsHostd(state) ? needsHostdHelp : "")}
-        label={stateLabel[state] || state}
+        label={stateLabel[state] || needsHostLabel(state) || state}
         color={stateColor[state] || (needsHostd(state) ? "warning" : "default")}
         data-testid="capability-server-state"
       />
@@ -1501,6 +1511,7 @@ export default function CapabilityServersPanel({
       Boolean(builtin && server.status?.error) ||
       isHostScriptServer(server) ||
       isGChatServer(server) ||
+      isFigmaServer(server) ||
       isConfigMapServer(server);
     return (
       <Paper
@@ -1846,6 +1857,9 @@ export default function CapabilityServersPanel({
             )}
             {isGChatServer(server) && (
               <GChatSpaceList server={server} readOnly={readOnly} />
+            )}
+            {isFigmaServer(server) && (
+              <FigmaAccountList server={server} readOnly={readOnly} />
             )}
             {isConfigMapServer(server) && <ConfigMapList server={server} />}
           </Section>

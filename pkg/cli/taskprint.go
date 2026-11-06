@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -187,7 +188,32 @@ func taskLine(t ui.Task) string {
 	if repo == "" {
 		repo = "-"
 	}
-	return fmt.Sprintf("%-6s %-*s %-24s %s", t.ID, stateColumn, t.State, repo, t.Title)
+	title := t.Title
+	if waiting := waitingOn(t); len(waiting) > 0 {
+		marker := fmt.Sprintf("(waits on %s)", strings.Join(waiting, ", "))
+		if title == "" {
+			title = marker
+		} else {
+			title += " " + marker
+		}
+	}
+	return fmt.Sprintf("%-6s %-*s %-24s %s", t.ID, stateColumn, t.State, repo, title)
+}
+
+func waitingOn(t ui.Task) []string {
+	if t.State != model.StateQueued {
+		return nil
+	}
+	if len(t.BlockedBy) > 0 {
+		return t.BlockedBy
+	}
+	var out []string
+	for _, dep := range t.DependsOn {
+		if st := t.DependsOnStates[dep]; st != "" && st != model.StateClosed {
+			out = append(out, dep)
+		}
+	}
+	return out
 }
 
 func taskBlock(t ui.Task) string {
@@ -258,6 +284,17 @@ func taskBlock(t ui.Task) string {
 	// readable only with -json.
 	if t.DeferredUntil != nil {
 		fmt.Fprintf(&b, "deferred until: %s\n", t.DeferredUntil.Format(time.RFC3339))
+	}
+	if len(t.DependsOn) > 0 {
+		deps := make([]string, len(t.DependsOn))
+		for i, dep := range t.DependsOn {
+			if st := t.DependsOnStates[dep]; st != "" {
+				deps[i] = fmt.Sprintf("%s (%s)", dep, st)
+			} else {
+				deps[i] = dep
+			}
+		}
+		fmt.Fprintf(&b, "depends on: %s\n", strings.Join(deps, ", "))
 	}
 	priority := t.Priority
 	if priority <= 0 {

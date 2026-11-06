@@ -307,9 +307,20 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	uiIAPIssuer := fs.String("ui-iap-issuer", "", "the issuer a signed assertion must carry; defaults to $GRAIN_IAP_ISSUER, then "+ui.GoogleIAPIssuer)
 	uiIAPKeysURL := fs.String("ui-iap-keys-url", "", "where the signing keys for those assertions are published (IAP's PEM map or a JWK set); "+
 		"defaults to $GRAIN_IAP_KEYS_URL, then "+ui.GoogleIAPCertURL)
+	uiRegistryIssuer := fs.String("ui-registry-issuer", "", "the exact issuer URL a signed X-Grain-Registry-Assertion must carry for the UI/API to accept "+
+		"the identity in it (e.g. \"https://grain.example.com\"); defaults to $GRAIN_REGISTRY_ISSUER. All three of -ui-registry-issuer, "+
+		"-ui-registry-audience, and -ui-registry-keys-url must be set to enable the \"registry\" IdentityVerifier")
+	uiRegistryAudience := fs.String("ui-registry-audience", "", "the single audience URL a signed X-Grain-Registry-Assertion must carry "+
+		"(e.g. \"https://<name>.<instance-domain>\"); defaults to $GRAIN_REGISTRY_AUDIENCE")
+	uiRegistryKeysURL := fs.String("ui-registry-keys-url", "", "where the registry's ES256 signing keys are published as a JWK set "+
+		"(e.g. \"https://grain.example.com/.well-known/jwks.json\"); defaults to $GRAIN_REGISTRY_KEYS_URL")
 	uiRequireIAP := fs.Bool("ui-require-iap", false, "accept the access code (bearer or grain_access cookie) only from loopback with no forwarding "+
 		"or proxy headers, and serve no \"Enter access code\" page, so network callers sign in through IAP alone (docs/access-code.md); "+
 		"needs -ui-iap-audience or $GRAIN_IAP_AUDIENCE. Defaults to $GRAIN_REQUIRE_IAP")
+	uiRequireVerifier := fs.String("ui-require-verifier", "", "require network callers to sign in through the named IdentityVerifier (e.g. \"iap\", \"registry\", "+
+		"or a registered verifier): accept the access code (bearer or grain_access cookie) only from loopback with no forwarding or proxy headers "+
+		"(or through a verifier that declares AccessCodeWins), and serve no \"Enter access code\" page (-ui-require-iap is an alias for -ui-require-verifier=iap). "+
+		"Defaults to $GRAIN_REQUIRE_VERIFIER")
 	uiAllowedPrincipals := fs.String("ui-allowed-principals", "", ui.AllowedPrincipalsUsage)
 	uiOpen := fs.Bool("ui-open", false, "open the UI in the system's default browser once it's listening")
 	actor := fs.String("as", "", "principal the UI/API attributes tasks and comments it creates to (defaults to the OS user)")
@@ -362,13 +373,13 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		model.AgentFrameworkCodex+"\"")
 	runHelp := func(cli string) string {
 		return "where the " + cli + " CLI runs: \"container\" (a subprocess in the daemon's own container) or \"host\" " +
-			"(through grain hostd, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty " +
+			"(through the host agent, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty " +
 			"is container in a container and host on the bare machine. \"auto\" is accepted and ignored for one release"
 	}
 	claudeRun := fs.String("claude-run", "", runHelp("claude")+". claude also takes \"detached\": the image's claude, "+
-		"through grain hostd's claude-detached entry, so a daemon upgrade does not interrupt it")
+		"through the host agent's claude-detached entry, so a daemon upgrade does not interrupt it")
 	codexRun := fs.String("codex-run", "", runHelp("codex")+". codex also takes \"detached\": the image's codex, "+
-		"through grain hostd's codex-detached entry, so a daemon upgrade does not interrupt it")
+		"through the host agent's codex-detached entry, so a daemon upgrade does not interrupt it")
 	agyRun := fs.String("agy-run", "", runHelp("agy"))
 	// The per-run docker launcher these configured is gone (v2.3.0). They
 	// stay defined so a unit an older installer wrote still starts, and
@@ -376,19 +387,19 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	fs.String("cli-image", "", "deprecated and ignored: agent CLIs no longer run in a per-run container of an image")
 	fs.String("cli-image-file", "", "deprecated and ignored: agent CLIs no longer run in a per-run container of an image")
 	fs.String("cli-container-engine", "", "deprecated and ignored: agent CLIs no longer run in a per-run container of an image")
-	hostdSocket := fs.String("hostd-socket", "", "grain hostd's unix socket, for a daemon in a container whose host "+
-		"CLIs run through hostd; empty uses "+hostd.DefaultSocketPath+" when its directory is mounted into the container. "+
+	hostdSocket := fs.String("hostd-socket", "", "the host agent's unix socket, for a daemon in a container whose host "+
+		"CLIs run through the host agent; empty uses "+hostd.DefaultSocketPath+" when its directory is mounted into the container. "+
 		"Refused on Kubernetes, which has no host")
-	hostdTokenFile := fs.String("hostd-token-file", "", "deprecated, for one release: file holding a shared token a grain hostd on another machine dials in to "+
-		hostd.RemotePath+" with (grain hostd -server <this daemon's URL> -token-file ...), as the one hostd -hostd-token-name names: its host CLIs and run: host capability "+
-		"servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each hostd in the hostd registry (/api/hostds) instead, "+
+	hostdTokenFile := fs.String("hostd-token-file", "", "deprecated, for one release: file holding a shared token a host on another machine dials in to "+
+		hostd.RemotePath+" with (grain host -server <this daemon's URL> -token-file ...), as the one host -hostd-token-name names: its host CLIs and run: host capability "+
+		"servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each host in the host registry (/api/hostds) instead, "+
 		"which gives it a token of its own")
-	hostdReattachTimeout := fs.Duration("hostd-reattach-timeout", 15*time.Minute, "how long a run's agent CLI, running detached on a grain hostd whose "+
-		"connection drops, waits for that same hostd to reconnect before the run fails as an infrastructure failure (no strike against the task); "+
-		"re-attached in time, it carries on from where its output stood. Runs queued for a hostd that is not connected wait for it whatever this is. 0 fails at once")
-	hostdTokenName := fs.String("hostd-token-name", hostd.DefaultSharedName, "the hostd name a hostd dialing in with -hostd-token-file's shared token is known by")
-	hostdTokenOwner := fs.String("hostd-token-owner", "", "the owner of -hostd-token-name's hostd: the email or service account a hostd dialing in with the shared token "+
-		"through IAP (or another identity verifier's proxy) must be verified as. A remote hostd with no owner is refused; one over loopback is not")
+	hostdReattachTimeout := fs.Duration("hostd-reattach-timeout", 15*time.Minute, "how long a run's agent CLI, running detached on a host whose "+
+		"connection drops, waits for that same host to reconnect before the run fails as an infrastructure failure (no strike against the task); "+
+		"re-attached in time, it carries on from where its output stood. Runs queued for a host that is not connected wait for it whatever this is. 0 fails at once")
+	hostdTokenName := fs.String("hostd-token-name", hostd.DefaultSharedName, "the host name a host dialing in with -hostd-token-file's shared token is known by")
+	hostdTokenOwner := fs.String("hostd-token-owner", "", "the owner of -hostd-token-name's host: the email or service account a host dialing in with the shared token "+
+		"through IAP (or another identity verifier's proxy) must be verified as. A remote host with no owner is refused; one over loopback is not")
 	openAIAPIKeyFile := fs.String("openai-api-key-file", "", "file holding the OpenAI API key the agent "+
 		"authenticates as, passed to the codex subprocess as OPENAI_API_KEY. Optional, and the exact "+
 		"counterpart of the two files above: the UI stores one as the "+
@@ -486,6 +497,14 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			"(docs/image-signing.md). The image is appended (by digest on a host, by tag in a cluster, where the "+
 			"command must print cosign's JSON); a non-zero exit refuses the upgrade. Omitted, upgrades go ahead "+
 			"unverified and say so.")
+	disableSelfUpgrade := fs.Bool("disable-self-upgrade", false,
+		"disable in-VM self-upgrade actions (pkg/upgrade, automatic/scheduled upgrades, and SQLite-to-PostgreSQL cutover) "+
+			"and hide in-VM upgrade controls in the UI in favour of external lifecycle management "+
+			"($GRAIN_DISABLE_SELF_UPGRADE when unset)")
+	managementURL := fs.String("management-url", "",
+		"optional external http:// or https:// URL where this deployment's lifecycle and upgrades are managed "+
+			"(for example its registry entry page), shown in place of in-VM self-upgrade controls when "+
+			"-disable-self-upgrade is set ($GRAIN_MANAGEMENT_URL when unset)")
 
 	// How the UI's "reboot host" button reboots (pkg/ui/host.go). The
 	// default is the `sudo systemctl reboot` this always ran, which is
@@ -1083,13 +1102,32 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			}
 		}
 	}
-	if !passed["ui-require-iap"] {
+	if !passed["ui-require-verifier"] && !(passed["ui-require-iap"] && *uiRequireIAP) {
+		if env := strings.TrimSpace(os.Getenv("GRAIN_REQUIRE_VERIFIER")); env != "" {
+			*uiRequireVerifier = env
+		}
+	}
+	if !passed["ui-require-iap"] && !passed["ui-require-verifier"] {
 		if env := strings.TrimSpace(os.Getenv("GRAIN_REQUIRE_IAP")); env != "" {
 			v, err := strconv.ParseBool(env)
 			if err != nil {
 				return daemon.Config{}, fs, unknownFlags, fmt.Errorf("GRAIN_REQUIRE_IAP=%q is not a boolean", env)
 			}
 			*uiRequireIAP = v
+		}
+	}
+	if !passed["disable-self-upgrade"] {
+		if env := strings.TrimSpace(os.Getenv("GRAIN_DISABLE_SELF_UPGRADE")); env != "" {
+			v, err := strconv.ParseBool(env)
+			if err != nil {
+				return daemon.Config{}, fs, unknownFlags, fmt.Errorf("GRAIN_DISABLE_SELF_UPGRADE=%q is not a boolean", env)
+			}
+			*disableSelfUpgrade = v
+		}
+	}
+	if !passed["management-url"] {
+		if env := strings.TrimSpace(os.Getenv("GRAIN_MANAGEMENT_URL")); env != "" {
+			*managementURL = env
 		}
 	}
 	if !passed["object-store"] {
@@ -1207,6 +1245,10 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UiIAPAudience:           *uiIAPAudience,
 		UiIAPIssuer:             *uiIAPIssuer,
 		UiIAPKeysURL:            *uiIAPKeysURL,
+		UiRegistryIssuer:        *uiRegistryIssuer,
+		UiRegistryAudience:      *uiRegistryAudience,
+		UiRegistryKeysURL:       *uiRegistryKeysURL,
+		UiRequireVerifier:       strings.TrimSpace(*uiRequireVerifier),
 		UiRequireIAP:            *uiRequireIAP,
 		UiAllowedPrincipals:     ui.SplitAllowedPrincipals(*uiAllowedPrincipals),
 		GeminiAPIKeyFile:        *geminiAPIKeyFile,
@@ -1228,6 +1270,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UpgradeImageRefFile:    *upgradeImageRefFile,
 		UpgradeAllowedBranches: daemon.SplitBranchPatterns(*upgradeAllowedBranches),
 		UpgradeDrainWindow:     *upgradeDrainWindow,
+		DisableSelfUpgrade:     *disableSelfUpgrade,
+		ManagementURL:          strings.TrimSpace(*managementURL),
 		RebootCmd:              rebootCmd,
 		ShutdownCmd:            shutdownCmd,
 		RestartCmd:             restartCmd,
@@ -1309,173 +1353,15 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	if err = upgradeSource.apply(&cfg, passed); err != nil {
 		return cfg, fs, unknownFlags, err
 	}
-	if cfg.HostdRemote, err = hostdRemote(*hostdTokenFile, *hostdTokenName, *hostdTokenOwner); err != nil {
+	if cfg.HostdRemote, err = daemon.NewHostdRemote(*hostdTokenFile, *hostdTokenName, *hostdTokenOwner); err != nil {
 		return cfg, fs, unknownFlags, err
 	}
 	cfg, err = local(cfg, passed)
 	return cfg, fs, unknownFlags, err
 }
 
-// checkConfig is every "these flags cannot be started with" rule daemon()
-// has, over the config they were parsed into rather than over the flag
-// pointers themselves -- so the rules are a function a test can call
-// instead of an exit code only a subprocess could observe.
-//
-// What is *not* here is anything about a credential. An agent key is set
-// from the UI now and read per dispatch (agentFrameworks), so a daemon
-// with none is a daemon whose runs end as setup-failed saying which key
-// is missing, and whose UI is up for somebody to paste one into --
-// refusing to start over it would take away the screen the fix is made
-// on. This checks only what cannot be repaired without a restart anyway:
-// a missing directory to keep state in, two sandbox backends asked for
-// at once, a granule deployment with no way to reach its VMs, an upgrade
-// path half-configured, a concurrency that is not a number of runs, and
-// an interval that is not a length of time.
+// checkConfig validates the flags parsed into cfg (daemon.CheckDaemonFlags plus
+// the CLI's own package-cache upstream syntax check).
 func checkConfig(cfg daemon.Config) error {
-	if cfg.DataDir == "" {
-		return errors.New("-data-dir is required")
-	}
-	switch cfg.DbDriver {
-	case "", "sqlite":
-	case "postgres":
-		if cfg.DbDSN == "" && !postgres.IsAvailable() {
-			return errors.New("-db-dsn is required when -db-driver is postgres")
-		}
-	default:
-		return fmt.Errorf("-db-driver must be \"sqlite\" or \"postgres\", got %q", cfg.DbDriver)
-	}
-	if err := daemon.CheckSecretsConfig(cfg.SecretsBackend, cfg.SecretsSMPrefix); err != nil {
-		return err
-	}
-	if err := daemon.CheckObjectStoreURI(cfg); err != nil {
-		return err
-	}
-	if err := daemon.CheckSandboxBackend(cfg, daemon.LocalSandboxes != nil); err != nil {
-		return err
-	}
-	if err := daemon.CheckHostExecutorFlags(cfg); err != nil {
-		return err
-	}
-	if err := daemon.CheckCLIRunFlags(cfg); err != nil {
-		return err
-	}
-	// Four backends now, so this is a count rather than a pair: any two
-	// of them together is the same misconfiguration, and naming which
-	// two were passed is what tells an operator which flag to drop.
-	if selected := daemon.SelectedSandboxBackends(cfg); len(selected) > 1 {
-		return fmt.Errorf("%s select different sandbox backends -- pass one of them, not several",
-			strings.Join(selected, " and "))
-	}
-	if cfg.ContainerSandboxes {
-		if cfg.ContainerImage == "" {
-			return errors.New("-container-sandbox-image is required with -container-sandboxes")
-		}
-		if cfg.ContainerGitProxyHost == "" {
-			return errors.New("-container-git-proxy-host is required with -container-sandboxes")
-		}
-	}
-	if cfg.K8sSandboxes {
-		if cfg.K8sWorkspace == "" {
-			return errors.New("-k8s-workspace is required with -k8s-sandboxes")
-		}
-		if cfg.K8sGitProxyHost == "" {
-			return errors.New("-k8s-git-proxy-host is required with -k8s-sandboxes (in-cluster, set GRAIN_POD_IP " +
-				"from the downward API instead and it is taken from there -- deploy/kubernetes/deployment.yaml does)")
-		}
-	}
-	if cfg.K8sSandboxes || cfg.K8sGranuleSandboxes {
-		for _, entry := range cfg.K8sNodeSelector {
-			if !strings.Contains(entry, "=") {
-				return fmt.Errorf("-k8s-node-selector %q is not a \"key=value\" pair", entry)
-			}
-		}
-	}
-	if cfg.K8sGranuleSandboxes {
-		if cfg.K8sGranuleImage == "" {
-			return errors.New("-k8s-granule-image is required with -k8s-granule-sandboxes")
-		}
-		if cfg.K8sWorkspace == "" {
-			return errors.New("-k8s-workspace is required with -k8s-granule-sandboxes -- the guest account's " +
-				"home, the same field -k8s-sandboxes names its container's")
-		}
-		if cfg.K8sGitProxyHost == "" {
-			return errors.New("-k8s-git-proxy-host is required with -k8s-granule-sandboxes (in-cluster, set " +
-				"GRAIN_POD_IP from the downward API instead and it is taken from there)")
-		}
-		if cfg.UpgradeImage != "" && cfg.UpgradeImageRefFile == "" {
-			return errors.New("-upgrade-image is not supported yet with -k8s-granule-sandboxes: this backend's " +
-				"self-upgrade would need a privileged, /dev/kvm-mounted health-check pod rather than the plain " +
-				"one -k8s-sandboxes checks a candidate image with, and nothing here builds that yet -- repoint " +
-				"this Deployment's image by hand instead (`kubectl set image deployment/<name> " +
-				"<container>=<image>`)")
-		}
-	}
-	if err := checkPackageCacheUpstreams(cfg); err != nil {
-		return err
-	}
-	if cfg.UpgradeSrcDir != "" && cfg.UpgradeInstallPath == "" && cfg.UpgradeImage == "" {
-		return errors.New("-upgrade-install-path is required with -upgrade-src-dir")
-	}
-	// A ref file is how a *host* deployment tells its unit which image to
-	// start, so an -upgrade-image with nowhere to record its answer
-	// upgrades nothing. A Kubernetes deployment has no unit and no such
-	// file: the Deployment's own spec is the record, and repointing it is
-	// the upgrade (upgrade.ModeKube).
-	if cfg.UpgradeImage != "" && cfg.UpgradeImageRefFile == "" && !cfg.K8sSandboxes {
-		return errors.New("-upgrade-image-ref-file is required with -upgrade-image (except with -k8s-sandboxes, " +
-			"where an upgrade repoints this deployment's own Deployment instead of writing a file)")
-	}
-	if cfg.K8sSandboxes && cfg.UpgradeImage != "" {
-		if cfg.K8sDeployment == "" {
-			return errors.New("-k8s-deployment is required with -k8s-sandboxes and -upgrade-image: an upgrade " +
-				"has to know which Deployment to repoint")
-		}
-		if cfg.K8sContainer == "" {
-			return errors.New("-k8s-container is required with -k8s-sandboxes and -upgrade-image")
-		}
-	}
-	if cfg.GranuleSandboxes {
-		if cfg.GranuleSSHUser == "" {
-			return errors.New("-granule-ssh-user is required with -granule-sandboxes")
-		}
-		if cfg.GranuleWorkspace == "" {
-			return errors.New("-granule-workspace is required with -granule-sandboxes")
-		}
-		if cfg.GranuleGitProxyHost == "" {
-			return errors.New("-granule-git-proxy-host is required with -granule-sandboxes")
-		}
-	}
-	if cfg.MaxWorkers < 1 {
-		return errors.New("-max-workers must be at least 1")
-	}
-	// Refused for the same reason as -max-workers above, and for one
-	// more: this is the value loadConfig falls back to when the stored
-	// interval is one no reconcile loop can be paced by
-	// (runnableStoredConfig), so a flag that is not itself runnable would
-	// leave that fallback with nothing to offer -- and a non-positive
-	// interval reaching time.NewTicker panics the loop while leaving the
-	// UI server up, which is the failure that is hardest to notice
-	// (grain/task-316).
-	if cfg.PollInterval <= 0 {
-		return errors.New("-poll-interval must be positive")
-	}
-	if cfg.BackupInterval < 0 {
-		return errors.New("-backup-interval cannot be negative")
-	}
-	if cfg.BackupInterval > 0 && cfg.DbDriver == "postgres" {
-		return errors.New("-backup-interval requires SQLite; database snapshotting is not supported on Postgres (use pg_dump or database-native backups)")
-	}
-	if cfg.MaxMergers < 0 {
-		return errors.New("-max-mergers cannot be negative")
-	}
-	if err := daemon.CheckUIAllowedPrincipals(cfg); err != nil {
-		return err
-	}
-	if err := daemon.CheckUIRequireIAP(cfg); err != nil {
-		return err
-	}
-	if err := daemon.CheckCICacheBounds(cfg); err != nil {
-		return err
-	}
-	return daemon.CheckGritURL(cfg)
+	return daemon.CheckDaemonFlags(cfg, daemon.LocalSandboxes != nil, checkPackageCacheUpstreams)
 }

@@ -151,6 +151,8 @@ var routeAuthorization = map[string]authLevel{
 	"DELETE /api/tasks/{id}/goal":                                   trusted,
 	"POST /api/tasks/{id}/reopen":                                   trusted,
 	"POST /api/tasks/{id}/retry":                                    trusted,
+	"POST /api/tasks/{id}/human-review":                             trusted,
+	"POST /api/tasks/{id}/human-review/release":                     trusted,
 	"POST /api/tasks/{id}/retry-merge":                              trusted,
 	"POST /api/tasks/{id}/force-merge":                              trusted,
 	"POST /api/tasks/{id}/run-now":                                  trusted,
@@ -328,6 +330,7 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/hostds":                              trusted,
 	"POST /api/hostds":                             trusted,
 	"PATCH /api/hostds/{name}":                     trusted,
+	"GET /api/hostds/{name}/install":               trusted,
 	"POST /api/hostds/{name}/rotate":               trusted,
 	"POST /api/hostds/{name}/revoke":               trusted,
 	"GET /api/access/principals":                   trusted,
@@ -357,41 +360,44 @@ var routeAuthorization = map[string]authLevel{
 	// material, and is what a person granting gcp-key:<name> reads.
 	// Capability servers: the deployment's own configuration, and a
 	// bind that writes into the secrets store.
-	"GET /api/capability-servers":                 trusted,
-	"GET /api/capability-methods":                 trusted,
-	"POST /api/capability-grants/check":           trusted,
-	"PUT /api/capability-servers":                 trusted,
-	"POST /api/capability-servers/remove":         trusted,
-	"POST /api/capability-servers/enable":         trusted,
-	"POST /api/capability-servers/dismiss-notice": trusted,
-	"POST /api/capability-servers/rotate-managed": trusted,
-	"POST /api/capability-servers/disable":        trusted,
-	"POST /api/capability-servers/bind-secret":    trusted,
-	"POST /api/capability-servers/test":           trusted,
-	"POST /api/capability-servers/test-script":    trusted,
-	"POST /api/capability-servers/gchat-test":     trusted,
-	"GET /api/capability-servers/gchat-usage":     trusted,
-	"GET /api/capability-servers/host-entries":    trusted,
-	"GET /api/capability-servers/usage":           trusted,
-	"GET /api/capability-policy":                  trusted,
-	"PUT /api/capability-policy":                  trusted,
-	"POST /api/capability-policy/preview":         trusted,
-	"GET /api/api-scope-sets":                     trusted,
-	"GET /api/api-scope-sets/usage":               trusted,
-	"PUT /api/api-scope-sets":                     trusted,
-	"POST /api/api-scope-sets/delete":             trusted,
-	"GET /api/gcp-keys":                           trusted,
-	"POST /api/gcp-keys":                          trusted,
-	"GET /api/gcp-keys/{name}":                    trusted,
-	"PUT /api/gcp-keys/{name}":                    trusted,
-	"DELETE /api/gcp-keys/{name}":                 trusted,
-	"GET /api/github-tokens":                      trusted,
-	"PUT /api/github-tokens/{name}":               trusted,
-	"DELETE /api/github-tokens/{name}":            trusted,
-	"GET /api/secrets":                            trusted,
-	"PUT /api/secrets/{secret}/{key}":             trusted,
-	"DELETE /api/secrets/{secret}/{key}":          trusted,
-	"DELETE /api/secrets/{secret}":                trusted,
+	"GET /api/capability-servers":                        trusted,
+	"GET /api/capability-methods":                        trusted,
+	"POST /api/capability-grants/check":                  trusted,
+	"PUT /api/capability-servers":                        trusted,
+	"POST /api/capability-servers/remove":                trusted,
+	"POST /api/capability-servers/enable":                trusted,
+	"POST /api/capability-servers/dismiss-notice":        trusted,
+	"POST /api/capability-servers/rotate-managed":        trusted,
+	"POST /api/capability-servers/disable":               trusted,
+	"POST /api/capability-servers/bind-secret":           trusted,
+	"POST /api/capability-servers/test":                  trusted,
+	"POST /api/capability-servers/test-script":           trusted,
+	"POST /api/capability-servers/gchat-test":            trusted,
+	"POST /api/capability-servers/figma-test":            trusted,
+	"POST /api/capability-servers/figma-oauth-authorize": trusted,
+	"POST /api/capability-servers/figma-oauth-exchange":  trusted,
+	"GET /api/capability-servers/gchat-usage":            trusted,
+	"GET /api/capability-servers/host-entries":           trusted,
+	"GET /api/capability-servers/usage":                  trusted,
+	"GET /api/capability-policy":                         trusted,
+	"PUT /api/capability-policy":                         trusted,
+	"POST /api/capability-policy/preview":                trusted,
+	"GET /api/api-scope-sets":                            trusted,
+	"GET /api/api-scope-sets/usage":                      trusted,
+	"PUT /api/api-scope-sets":                            trusted,
+	"POST /api/api-scope-sets/delete":                    trusted,
+	"GET /api/gcp-keys":                                  trusted,
+	"POST /api/gcp-keys":                                 trusted,
+	"GET /api/gcp-keys/{name}":                           trusted,
+	"PUT /api/gcp-keys/{name}":                           trusted,
+	"DELETE /api/gcp-keys/{name}":                        trusted,
+	"GET /api/github-tokens":                             trusted,
+	"PUT /api/github-tokens/{name}":                      trusted,
+	"DELETE /api/github-tokens/{name}":                   trusted,
+	"GET /api/secrets":                                   trusted,
+	"PUT /api/secrets/{secret}/{key}":                    trusted,
+	"DELETE /api/secrets/{secret}/{key}":                 trusted,
+	"DELETE /api/secrets/{secret}":                       trusted,
 
 	// The deployment's own state, host, daemon and database.
 	"GET /api/state-repo":                trusted,
@@ -1139,4 +1145,107 @@ func (r *statusRecorder) snapshot() *statusRecorder {
 		out.code = http.StatusOK
 	}
 	return out
+}
+
+// TestLimitedRoleCannotEscalateThroughTaskOrTemplateWriteRoutes walks every
+// non-GET route whose role scope is tasks:write or templates:write and asserts
+// that, as a limited role, a body carrying capabilities, autoMerge, approved
+// or writes outside the role is refused with 403 before the handler runs.
+func TestLimitedRoleCannotEscalateThroughTaskOrTemplateWriteRoutes(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+	t.Setenv("GRAIN_ALLOWED_PRINCIPALS", "")
+
+	if err := model.InstallAPIScopeSets([]model.APIScopeSet{
+		{
+			Name:     "contrib-and-templates",
+			Includes: []string{"grain/contributor"},
+			Scopes:   []string{"templates:write"},
+			Version:  1,
+		},
+		{
+			Name:    "widgets-tasks",
+			Scopes:  []string{"tasks:read", "tasks:write"},
+			Repos:   []string{"acme/widgets"},
+			Version: 1,
+		},
+		{
+			Name:     "widgets-writer",
+			Includes: []string{"widgets-tasks"},
+			Scopes:   []string{"templates:read", "templates:write"},
+			Version:  1,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = model.InstallAPIScopeSets(nil) })
+
+	f := newRouteFixtureWith(t, true, true)
+	f.from = publicAddr
+	f.accessCookie = ""
+
+	ctx := context.Background()
+	now := time.Now()
+	if _, _, err := f.store.AddAllowedPrincipalWithRole(ctx, "user:global@example.com", "test", "test", "contrib-and-templates", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.store.AddAllowedPrincipalWithRole(ctx, "user:scoped@example.com", "test", "test", "widgets-writer", now); err != nil {
+		t.Fatal(err)
+	}
+
+	escalatingBodies := []struct {
+		key      string
+		fragment string
+	}{
+		{"capabilities", `"capabilities":["api:secrets:write"]`},
+		{"autoMerge", `"autoMerge":true`},
+		{"approved", `"approved":true`},
+		{"writes", `"writes":[{"repo":"acme/other"}]`},
+	}
+
+	bodyFor := func(pattern, fragment string) string {
+		prefix := `"repo":"acme/widgets",`
+		if pattern == "POST /api/pull-requests/review" {
+			prefix += `"pr":"acme/widgets#1",`
+		}
+		return `{` + prefix + fragment + `}`
+	}
+
+	checked := 0
+	for _, pattern := range f.server.Routes() {
+		method, _, ok := strings.Cut(pattern, " ")
+		if !ok || method == http.MethodGet {
+			continue
+		}
+		scope := ui.RoleScopeOf(pattern)
+		if scope != "tasks:write" && scope != "templates:write" {
+			continue
+		}
+		checked++
+		target := f.path(pattern)
+
+		// A deployment-wide limited role passes the route and repository checks on
+		// every tasks:write and templates:write route, so capabilities, autoMerge
+		// and approved must be caught by the escalation gate itself.
+		for _, probe := range escalatingBodies[:3] {
+			rec := f.send(t, method, target, bodyFor(pattern, probe.fragment), "global@example.com")
+			if rec.code != http.StatusForbidden || !strings.Contains(rec.body.String(), "contrib-and-templates") || !strings.Contains(rec.body.String(), probe.key) {
+				t.Errorf("%s as contrib-and-templates with %s: got %d %s, want 403 naming contrib-and-templates and %s",
+					pattern, probe.key, rec.code, rec.excerpt(), probe.key)
+			}
+		}
+
+		// A repository-limited role must refuse all four -- including writes to
+		// acme/other -- with 403 on every tasks:write and templates:write route.
+		for _, probe := range escalatingBodies {
+			rec := f.send(t, method, target, bodyFor(pattern, probe.fragment), "scoped@example.com")
+			if rec.code != http.StatusForbidden || !strings.Contains(rec.body.String(), "widgets-writer") {
+				t.Errorf("%s as widgets-writer with %s: got %d %s, want 403 naming widgets-writer",
+					pattern, probe.key, rec.code, rec.excerpt())
+			}
+		}
+	}
+	if checked < 20 {
+		t.Fatalf("checked %d non-GET tasks:write/templates:write routes, want at least 20", checked)
+	}
 }
