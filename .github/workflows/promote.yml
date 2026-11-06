@@ -37,6 +37,8 @@ on:
         type: boolean
 
 permissions:
+  # actions: write dispatches release.yml for an on-demand build.
+  actions: write
   contents: read
   packages: write
   id-token: write
@@ -44,12 +46,17 @@ permissions:
 env:
   GOFLAGS: -mod=readonly
   RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO }}
+  # A promoted commit whose release run a newer merge superseded has no
+  # sha- images: release-images.sh dispatches release.yml with
+  # commit=<sha> to build, test and publish it, and waits (grain/task-3334).
+  RELEASE_ON_DEMAND_BUILD: dispatch
 
 jobs:
   latest:
     name: promote release images
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Room for an on-demand release build (release.yml's 120 minutes).
+    timeout-minutes: 180
     concurrency:
       group: ${{ github.workflow }}-latest-${{ github.ref }}
       cancel-in-progress: false
@@ -185,6 +192,7 @@ jobs:
       - name: Publish the last promoted release as latest
         env:
           PROMOTE_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           args=(promote)

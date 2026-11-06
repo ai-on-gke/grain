@@ -1670,6 +1670,143 @@ adopt_legacy_ghcr_release() {
   copy_by_digest "$legacy:sha-$promoted_short" "$root/grain:sha-$promoted_short" "$grain_digest" || return 1
 }
 
+# On-demand builds of a commit whose release run was superseded
+# (grain/task-3334).
+#
+# release.yml's `release images` job keeps one run in flight and one
+# pending per branch (`concurrency`, cancel-in-progress off on main and
+# candidate), so a burst of merges cancels every pending run except the
+# newest. That is right for the branch -- the newest commit contains the
+# others and is what gets published -- but the commits in between never
+# get `sha-<short>` images, and a vX.Y.Z, `latest` or rc tag cut on one of
+# them later could not be promoted: "the release job never published ...
+# for it" (v3.1.0).
+#
+# With RELEASE_ON_DEMAND_BUILD=dispatch (what the promote and train
+# workflows set), publish_release fills that gap instead of failing: it
+# asks release.yml to build exactly that commit (`workflow_dispatch`
+# with `commit: <sha>`), waits for the images to appear, and carries on.
+# The build is release.yml's own job checked out at the commit -- build,
+# container e2e, installer e2e, push -- so "promotion publishes what was
+# built and tested for that commit" still holds. It is idempotent: an
+# on-demand run already in flight for the commit is waited on rather than
+# started again, and release.yml itself publishes nothing for a commit
+# whose images already exist. It refuses a commit that is not on main,
+# candidate, rc/v* or release/v*. Unset, nothing is dispatched and a
+# missing image fails the promotion as it always did.
+
+# on_demand_eligible <commit> reports whether <commit> is on one of the
+# branches a release is built from at $remote, setting on_demand_branch
+# to the first that holds it.
+on_demand_eligible() {
+  local commit="$1" heads sha ref url work
+  on_demand_branch=""
+  if ! [[ "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "release-images.sh: refusing to build ${commit:-an empty commit} on demand: not a full commit sha" >&2
+    return 1
+  fi
+  if ! heads="$(git ls-remote --heads "$remote")"; then
+    echo "release-images.sh: could not list $remote's branches to check $commit is on one a release is built from" >&2
+    return 1
+  fi
+  url="$(git -C "$repo_root" remote get-url "$remote" 2>/dev/null || printf '%s' "$remote")"
+  work="$(mktemp -d)"
+  git -C "$work" init -q
+  if [ "$remote" = "origin" ] && [ -d "$repo_root/.git/objects" ]; then
+    mkdir -p "$work/.git/objects/info"
+    printf '%s\n' "$repo_root/.git/objects" >"$work/.git/objects/info/alternates"
+  fi
+  while read -r sha ref; do
+    case "$ref" in
+      refs/heads/main | refs/heads/candidate | refs/heads/rc/v* | refs/heads/release/v*) ;;
+      *) continue ;;
+    esac
+    if [ "$sha" != "$commit" ] && ! git -C "$work" fetch -q --no-tags "$url" "$ref" 2>/dev/null; then
+      continue
+    fi
+    if [ "$sha" = "$commit" ] || git -C "$work" merge-base --is-ancestor "$commit" "$sha" 2>/dev/null; then
+      on_demand_branch="${ref#refs/heads/}"
+      break
+    fi
+  done <<<"$heads"
+  rm -rf "$work"
+  if [ -z "$on_demand_branch" ]; then
+    echo "release-images.sh: refusing to build $commit on demand: it is on none of main, candidate, rc/v* or release/v* at $remote" >&2
+    return 1
+  fi
+}
+
+# on_demand_published <short> reports whether the images promotion needs
+# exist for the commit: the guest, k8s-sandbox and grain sha- builds.
+on_demand_published() {
+  local image
+  for image in sandbox sandbox-k8s grain; do
+    image_exists "$root/$image:sha-$1" 2>/dev/null || return 1
+  done
+}
+
+# on_demand_run <commit> prints "<status> <conclusion> <url>" of the
+# newest on-demand release run for <commit>, or nothing. release.yml names
+# such a run after the commit (`run-name`), which is how it is found.
+on_demand_run() {
+  gh run list --repo "$GRAIN_CI_REPO" --workflow "$on_demand_workflow" --event workflow_dispatch \
+    --limit 50 --json status,conclusion,url,displayTitle \
+    --jq "[.[] | select(.displayTitle | contains(\"$1\"))][0] | select(. != null) | \"\(.status) \(.conclusion // \"-\") \(.url)\"" \
+    2>/dev/null || true
+}
+
+# build_on_demand <commit> has release.yml build and publish <commit>'s
+# images and waits for them. It returns non-zero, having said why, when
+# on-demand builds are off, the commit is refused, or the build failed or
+# timed out -- publish_release then fails naming what is missing.
+build_on_demand() {
+  local commit="$1" short="${1:0:7}" before="" status="" conclusion="" url="" run waited=0
+  local timeout="${RELEASE_ON_DEMAND_TIMEOUT:-9000}" poll="${RELEASE_ON_DEMAND_POLL:-60}"
+  on_demand_workflow="${RELEASE_ON_DEMAND_WORKFLOW:-release.yml}"
+  if [ "${RELEASE_ON_DEMAND_BUILD:-}" != dispatch ]; then
+    return 1
+  fi
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "release-images.sh: RELEASE_ON_DEMAND_BUILD=dispatch, but there is no gh here to dispatch $on_demand_workflow with" >&2
+    return 1
+  fi
+  on_demand_eligible "$commit" || return 1
+  run="$(on_demand_run "$commit")"
+  read -r status conclusion url <<<"$run"
+  if [ -n "$status" ] && [ "$status" != completed ]; then
+    echo "release-images.sh: $commit is already being built on demand ($url); waiting for it rather than starting another"
+  else
+    before="$url"
+    echo "release-images.sh: $commit (on $on_demand_branch) has no published sha-$short images -- its release run was superseded by a newer merge, or never ran -- so dispatching $on_demand_workflow to build, test and publish it (commit=$commit)"
+    if ! gh workflow run "$on_demand_workflow" --repo "$GRAIN_CI_REPO" --ref "${RELEASE_ON_DEMAND_REF:-main}" -f commit="$commit"; then
+      echo "release-images.sh: could not dispatch $on_demand_workflow for $commit (the token needs actions: write)" >&2
+      return 1
+    fi
+  fi
+  while :; do
+    if on_demand_published "$short"; then
+      echo "release-images.sh: $root/{sandbox,sandbox-k8s,grain}:sha-$short are published; promoting them"
+      return 0
+    fi
+    run="$(on_demand_run "$commit")"
+    status="" conclusion="" url=""
+    read -r status conclusion url <<<"$run"
+    if [ -n "$url" ] && [ "$url" != "$before" ] && [ "$status" = completed ]; then
+      if on_demand_published "$short"; then
+        continue
+      fi
+      echo "release-images.sh: the on-demand release run for $commit ended $conclusion without publishing $root/{sandbox,sandbox-k8s,grain}:sha-$short: $url" >&2
+      return 1
+    fi
+    if [ "$waited" -ge "$timeout" ]; then
+      echo "release-images.sh: waited ${timeout}s for the on-demand release of $commit to publish $root/{sandbox,sandbox-k8s,grain}:sha-$short, and it has not${url:+ ($url)}" >&2
+      return 1
+    fi
+    sleep "$poll"
+    waited=$((waited + (poll > 0 ? poll : 1)))
+  done
+}
+
 # What promote_images and rc_images share: publish $promote_commit's
 # images as each of targets, the first of which is the name stamped into
 # the daemon image ($promote_tag) and the rest the moving tags that go
@@ -1741,6 +1878,22 @@ publish_release() {
       missing+=("$source")
     fi
   done
+  # A commit whose release run a newer merge superseded has no sha-
+  # images: build it on demand, through release.yml, rather than fail
+  # (build_on_demand; a no-op unless RELEASE_ON_DEMAND_BUILD=dispatch).
+  if [ "${#missing[@]}" -gt 0 ] && [ "$promote_predates_dockerhub" != true ] &&
+      build_on_demand "$promote_commit"; then
+    missing=()
+    for image in sandbox sandbox-k8s "${daemons[@]%% *}"; do
+      if [[ " ${stamped[*]} " == *" $image "* ]]; then
+        continue
+      fi
+      source="$root/$image:sha-$promoted_short"
+      if ! image_exists "$source"; then
+        missing+=("$source")
+      fi
+    done
+  fi
   if [ "${#missing[@]}" -gt 0 ]; then
     echo "release-images.sh: $promote_tag is $promote_commit, and the release job never published ${missing[*]} for it." >&2
     if [ "$promote_predates_dockerhub" = true ]; then
@@ -1750,7 +1903,7 @@ publish_release() {
       echo "release-images.sh: publish $promote_tag's images to $GRAIN_LEGACY_GHCR_PREFIX/* (re-running that commit's release does exactly that) and promote again: they are then copied here by digest. Or promote a release cut after the switch." >&2
       return 1
     fi
-    echo "release-images.sh: promotion publishes what was built and tested for that commit, so nothing was moved. Re-run that commit's release (POST /api/repos/$GRAIN_CI_REPO/release-runs) and promote again." >&2
+    echo "release-images.sh: promotion publishes what was built and tested for that commit, so nothing was moved. Build it on demand -- dispatch release.yml with commit=$promote_commit, or set RELEASE_ON_DEMAND_BUILD=dispatch and promote again -- or re-run that commit's release (POST /api/repos/$GRAIN_CI_REPO/release-runs) and promote again." >&2
     return 1
   fi
 

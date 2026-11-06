@@ -117,7 +117,15 @@ type BaseBranchRelease struct {
 	// them, which is what keeps the surface off a repository having one
 	// bad afternoon.
 	//
-	// Anything that concluded and is not success counts. A run that never
+	// Anything that concluded and is not success counts, except a run a
+	// newer merge's release superseded (a GitHub Actions run cancelled by
+	// its workflow's concurrency group while a newer run of a descendant
+	// commit exists, grain/task-3334): that is how a busy branch normally
+	// works, so it adds nothing to Failures. It does set FailingSince when
+	// nothing else has, meaning "nothing has published since", so a
+	// branch on which every release is superseded and none finishes is
+	// still reported after BaseBranchNotPublishingFor. Failures can
+	// therefore be zero with FailingSince set. A run that never
 	// concluded -- interrupted by a daemon restart, or lost to it -- does
 	// not: it is forgotten and the branch released again on the next
 	// cycle (orchestrator.forgetLostBaseBranchRelease), so a restart
