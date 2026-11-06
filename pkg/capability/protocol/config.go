@@ -102,11 +102,11 @@ func NormalizeHostdTarget(s string) (HostdTarget, error) {
 		return "", nil
 	}
 	if strings.ContainsAny(s, " \t\n\r") {
-		return "", fmt.Errorf("hostd %q: a hostd name or k=v selector holds no spaces", s)
+		return "", fmt.Errorf("host %q: a host name or k=v selector holds no spaces", s)
 	}
 	if !strings.Contains(s, "=") {
 		if !hostdTargetNameRE.MatchString(s) {
-			return "", fmt.Errorf("hostd name %q must be a lowercase DNS label: letters, digits and '-', at most 63", s)
+			return "", fmt.Errorf("host name %q must be a lowercase DNS label: letters, digits and '-', at most 63", s)
 		}
 		return HostdTarget(s), nil
 	}
@@ -118,12 +118,12 @@ func NormalizeHostdTarget(s string) (HostdTarget, error) {
 		}
 		k, v, ok := strings.Cut(part, "=")
 		if !ok || k == "" || v == "" || strings.ContainsAny(k+v, ",= \t\n\r") {
-			return "", fmt.Errorf("hostd selector %q: %q is not label=value", s, part)
+			return "", fmt.Errorf("host selector %q: %q is not label=value", s, part)
 		}
 		labels[k] = v
 	}
 	if len(labels) == 0 {
-		return "", fmt.Errorf("hostd selector %q names no label", s)
+		return "", fmt.Errorf("host selector %q names no label", s)
 	}
 	return encodeHostdTargetLabels(labels)
 }
@@ -132,12 +132,12 @@ func encodeHostdTargetObject(name string, labels map[string]string) (HostdTarget
 	name = strings.TrimSpace(name)
 	switch {
 	case name != "" && len(labels) > 0:
-		return "", fmt.Errorf("hostd: names both a hostd and labels; pick one")
+		return "", fmt.Errorf("hostd: names both a host and labels; pick one")
 	case name == "" && len(labels) == 0:
-		return "", fmt.Errorf("hostd: names neither a hostd nor labels")
+		return "", fmt.Errorf("hostd: names neither a host nor labels")
 	case name != "":
 		if !hostdTargetNameRE.MatchString(name) {
-			return "", fmt.Errorf("hostd name %q must be a lowercase DNS label: letters, digits and '-', at most 63", name)
+			return "", fmt.Errorf("host name %q must be a lowercase DNS label: letters, digits and '-', at most 63", name)
 		}
 		return HostdTarget(name), nil
 	default:
@@ -149,7 +149,7 @@ func encodeHostdTargetLabels(labels map[string]string) (HostdTarget, error) {
 	keys := make([]string, 0, len(labels))
 	for k, v := range labels {
 		if k == "" || v == "" || strings.ContainsAny(k+v, ",= \t\n\r") {
-			return "", fmt.Errorf("hostd label %q=%q: keys and values may not be empty or hold ',', '=' or spaces", k, v)
+			return "", fmt.Errorf("host label %q=%q: keys and values may not be empty or hold ',', '=' or spaces", k, v)
 		}
 		keys = append(keys, k)
 	}
@@ -179,7 +179,7 @@ func (t *HostdTarget) UnmarshalJSON(data []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&obj); err != nil {
-		return fmt.Errorf("hostd: want a hostd name, a k=v selector, or {\"name\": ...} / {\"labels\": {...}}: %v", err)
+		return fmt.Errorf("hostd: want a host name, a k=v selector, or {\"name\": ...} / {\"labels\": {...}}: %v", err)
 	}
 	norm, err := encodeHostdTargetObject(obj.Name, obj.Labels)
 	if err != nil {
@@ -225,7 +225,7 @@ func (t *HostdTarget) UnmarshalYAML(n *yaml.Node) error {
 		*t = norm
 		return nil
 	default:
-		return fmt.Errorf("hostd: want a hostd name, a k=v selector, or {name: ...} / {labels: {...}}")
+		return fmt.Errorf("hostd: want a host name, a k=v selector, or {name: ...} / {labels: {...}}")
 	}
 }
 
@@ -289,14 +289,14 @@ func (c ServerConfig) Validate(id string) error {
 	}
 	switch {
 	case c.Run != "" && !RunsOnHost(c.Run):
-		return fmt.Errorf("mcpServers[%q]: run %q: the only run is %q, through grain hostd", id, c.Run, RunHostd)
+		return fmt.Errorf("mcpServers[%q]: run %q: the only run is %q, through the host agent", id, c.Run, RunHostd)
 	case c.Hostd != "" && !RunsOnHost(c.Run):
 		return fmt.Errorf("mcpServers[%q]: hostd %q places a run: hostd server; set run: hostd beside it", id, c.Hostd)
 	case RunsOnHost(c.Run) && c.Command == "":
 		return fmt.Errorf("mcpServers[%q]: run: hostd is for a stdio server; an HTTP server on the host is reached at its serverUrl", id)
 	case RunsOnHost(c.Run):
 		if !validHostdEntryName(c.Command) {
-			return fmt.Errorf("mcpServers[%q]: with run: host, command names grain hostd's capability entry "+
+			return fmt.Errorf("mcpServers[%q]: with run: host, command names the host agent's capability entry "+
 				"(letters, digits, '-', '_' and '.'), not a path: got %q", id, c.Command)
 		}
 		if c.Hostd != "" {

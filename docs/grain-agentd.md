@@ -1,16 +1,16 @@
 # grain-agentd: agent CLIs on a machine that is not the daemon's
 
-`grain-agentd` is a small, rootless grain hostd that runs **agent CLIs and
+`grain-agentd` is a small, rootless host agent that runs **agent CLIs and
 nothing else** (agy, claude, codex) for a grain daemon somewhere else: a
 workstation whose agy login a model connection should use, say, while the
 daemon runs on a server or in Kubernetes. It runs as the user who starts it,
 dials out to the daemon, and starts the CLIs the daemon asks for, as that
 user, under its allowlist.
 
-It is `grain hostd -server` cut down to that one job (`cmd/grain-agentd`,
+It is `grain host -server` cut down to that one job (`cmd/grain-agentd`,
 `pkg/agentd`):
 
-| | `grain hostd` | `grain-agentd` |
+| | `grain host` | `grain-agentd` |
 | --- | --- | --- |
 | Runs as | root, or the daemon's user | the user who starts it; refuses root |
 | Capability servers | yes (`capabilities:`, built-ins) | none: an allowlist naming any is refused |
@@ -49,7 +49,7 @@ With `-join`:
 3. prints a short `XXXX-XXXX` pairing code on the terminal and waits for the deployment owner to verify the matching code and click **Accept** in **Settings → Hosts** (or run `grain host accept <id>`);
 4. writes the issued 30-day key-bound credential to `~/.config/grain/agentd-token` (`0600`), installs `~/.config/grain/agentd.yaml` and `~/.config/systemd/user/grain-agentd.service`, and starts `grain-agentd`, which signs every `/api/hostd/connect` upgrade with its Ed25519 key and renews its 30-day credential silently while connected.
 
-Then point a model connection at the accepted host name (**Settings → Models** → the connection → **Run on** `<host>`); see [hostd-placement.md](hostd-placement.md).
+Then point a model connection at the accepted host name (**Settings → Models** → the connection → **Run on** `<host>`); see [host-placement.md](host-placement.md).
 
 ### Migrating an existing per-host token (`-rekey`)
 
@@ -72,7 +72,7 @@ grain host register -owner you@example.com ws-1      # a daemon behind IAP
 
 A host that dials in through IAP or another identity-verifying proxy must be
 registered with its owner, the identity it dials in as; see
-[access-code.md](access-code.md#a-grain-hostd-dialing-in).
+[access-code.md](access-code.md#a-host-dialing-in).
 
 ## Install with a legacy token
 
@@ -110,8 +110,8 @@ Running `install` again replaces the binary and the unit and keeps the token
 
 `-server` is the daemon's URL as this machine reaches it --
 `https://grain.example.com`, or `http://127.0.0.1:4242` through a
-`kubectl port-forward` or an SSH tunnel. The hostd token alone names the
-hostd.
+`kubectl port-forward` or an SSH tunnel. The host token alone names the
+host.
 
 ### A daemon behind IAP
 
@@ -124,8 +124,8 @@ grain-agentd install -server https://grain.example.com -name ws-1 \
 
 grain-agentd then sends an ID token for that audience from your Application
 Default Credentials (`gcloud auth application-default login`) or the
-machine's service account, with the hostd token beside it, exactly as
-`grain hostd -server -iap-audience` does. The identity must be the hostd's
+machine's service account, with the host token beside it, exactly as
+`grain host -server -iap-audience` does. The identity must be the host's
 registered owner.
 
 ## Run it by hand
@@ -146,7 +146,7 @@ grain-agentd -server https://grain.example.com [-name ws-1] \
 
 ## The allowlist
 
-The same format as `grain hostd`'s, with `clis:` only:
+The same format as `grain host`'s, with `clis:` only:
 
 ```yaml
 clis:
@@ -160,14 +160,14 @@ capabilities: {}
 ```
 
 grain-agentd refuses to start on an allowlist that names a capability, has no
-CLI, is missing, or is writable by anyone but its owner. hostd re-reads it on
+CLI, is missing, or is writable by anyone but its owner. The host agent re-reads it on
 every request.
 
 ## Hooks
 
 A run's agent CLI forks hooks -- agy's pre-tool hook (`agy-tool-hook`) and
-Claude Code's Stop hook (`claude-stop-hook`) -- and a run on a remote hostd
-names that hostd's own binary for them. grain-agentd answers both, from the
+Claude Code's Stop hook (`claude-stop-hook`) -- and a run on a remote host
+names that host's own binary for them. grain-agentd answers both, from the
 leaf packages `pkg/agent/antigravity/hook` and `pkg/agent/claude/stophook`
 that `cmd/grain` uses too, so the hook decides the same way wherever the CLI
 runs.

@@ -651,9 +651,9 @@ export default function ModelsSection({ config, onSaved, showError }) {
       </SettingsCard>
       <SettingsCard title="Where each agent CLI runs" anchor="cli-run">
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-          A CLI set to run on the host runs through <code>grain hostd</code>: on
-          this machine over its socket, or on another machine that dials in to
-          this daemon (<code>grain hostd -server</code>).
+          A CLI set to run on the host runs through the host agent: on this
+          machine over its socket, or on another machine that dials in to this
+          daemon (<code>grain host -server</code>).
         </Typography>
         <CLIRunLocations
           showError={showError}

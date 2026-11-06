@@ -380,15 +380,15 @@ it can reach, not only the team's. So:
 - It is only allowed where the operator's login can be reached:
   - **A daemon on the bare machine** (a development `grain demo` or
     `grain daemon`) runs `gh`, a registered source's tool or `git credential fill` itself.
-  - **A daemon in the release container beside grain hostd**, which
-    is every machine install with hostd (the default), reaches the login
-    through hostd's `host-git` capability entry (`pkg/gitproxy/hostgit.go`).
+  - **A daemon in the release container beside the host agent**, which
+    is every machine install with the host agent (the default), reaches the login
+    through the host agent's `host-git` capability entry (`pkg/gitproxy/hostgit.go`).
     That entry starts `grain capability host-git` on the host, as the
     installing user, once per call. The server runs only a registered
     source's own commands: its token command, its package-token command,
     and `<tool> api` for a source whose forge traffic goes through its
     tool (`forgecli` in the tests). Each runs exactly as it would on the host. The daemon
-    names the entry and hands hostd no argv. That matters because hostd's
+    names the entry and hands host no argv. That matters because host's
     argv check would refuse every `<tool> api` endpoint as a path outside
     the data directory. The `git` source is refused here, because `git
     credential fill` would hand the container every login the account's
@@ -403,12 +403,12 @@ it can reach, not only the team's. So:
 
     Saving or
     using an ambient connection is refused, saying which piece is
-    missing, while hostd does not answer or its allowlist does not offer
+    missing, while host does not answer or its allowlist does not offer
     `host-git`. The daemon still holds the token it is handed, just as a
     daemon on the host does. design/design/cli-run-location.design.md ("Security")
     explains why that is no wider than before: grain is trusted as the
     installing user in both modes.
-  - **A daemon in a container with no hostd** (`GRAIN_HOSTD=0`, or
+  - **A daemon in a container with no host** (`GRAIN_HOSTD=0`, or
     Kubernetes) has no login of the operator's to borrow. The daemon
     counts as containerised only on evidence of a container
     (`pkg/whererun`): `GRAIN_IN_CONTAINER=1`, which grain's image sets,

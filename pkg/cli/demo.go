@@ -81,6 +81,7 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	mechanicalPort := fs.Bool("mechanical-port", false, "seed a change merged onto main and the port grain cherry-picked to candidate itself, with no agent run")
 	qualification := fs.Bool("qualification", false, "seed a release candidate of -default-target-repo whose qualification run is waiting for approval")
 	secretsStore := fs.Bool("secrets-store", false, "wire a real secrets store in the demo's throwaway directory, so secrets and release secrets can be set and removed")
+	humanReview := fs.Bool("human-review", false, "seed a change a review held for a person's decision (request_human_review), waiting for Submit or Release hold")
 	reviewQuestions := fs.Bool("review-questions", false, "seed a change whose review left questions for its owner, held on their decision, and send it back to the queue once they reply, as a daemon would")
 	externalConfigRepo := fs.String("external-config-repo", "", "serve a deployment whose configuration is managed in this external config repository (a remote URL): every configuration write is refused with 409 and the exact edit to commit there instead (docs/external-config-repo.md)")
 	externalConfigBranch := fs.String("external-config-branch", "main", "with -external-config-repo, the branch of that repository configuration is read from")
@@ -91,9 +92,9 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	modelCatalog := fs.String("model-catalog", "", "host:port of an Anthropic model listing stub (GET /v1/models) on loopback: Claude connections that advertise no models are given what it lists, as a deployment's are given what Anthropic lists")
 	modelDiscoveryInterval := fs.Duration("model-discovery-interval", 0, "how often -model-catalog's discovery asks the provider again (default the deployment's 10m)")
 	hostExecutor := fs.String("host-executor", "", "resolve Settings' run locations (Models and Capability servers) as this deployment would: "+
-		"empty for a development daemon on the bare machine, \"kubernetes\" (no host executor), \"none\" (a container with no grain hostd), "+
-		"\"hostd-down\" (a container whose grain hostd is configured but not answering), \"hostd\" (a container with a real grain hostd "+
-		"on a throwaway allowlist offering agy and corp-search), \"hostd-remote\" (a Kubernetes daemon with a real grain hostd dialed in) "+
+		"empty for a development daemon on the bare machine, \"kubernetes\" (no host executor), \"none\" (a container with no host agent), "+
+		"\"hostd-down\" (a container whose host agent is configured but not answering), \"hostd\" (a container with a real host agent "+
+		"on a throwaway allowlist offering agy and corp-search), \"hostd-remote\" (a Kubernetes daemon with a real host agent dialed in) "+
 		"or \"hostd-remote-down\" (none dialed in)")
 	hostModeInstall := fs.Bool("host-mode-install", false, "show the notice an unmigrated host-mode install shows (banner, System -> Health, Upgrade), with the CLIs the default bare-machine run locations leave nowhere to run")
 	notifications := fs.Bool("notifications", false, "run the reconcile loop's notification sweep every -reconcile interval (default 2s), so an open notification whose clears_when (task, base-green or ttl) has come true is cleared on its own, as on a daemon's cycle")
@@ -201,6 +202,7 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		MergeRules:             *mergeRules,
 		SensitiveHold:          *sensitiveHold,
 		ReviewQuestions:        *reviewQuestions,
+		HumanReview:            *humanReview,
 		ExternalConfigRepo:     *externalConfigRepo,
 		ExternalConfigBranch:   *externalConfigBranch,
 		MechanicalPort:         *mechanicalPort,

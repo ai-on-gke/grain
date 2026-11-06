@@ -1171,7 +1171,7 @@ describe("CapabilityServersPanel", () => {
     const row = await card("https://example.com/caps/own");
     expect(
       await within(row).findByTestId("hostd-unreachable"),
-    ).toHaveTextContent("grain hostd is not reachable");
+    ).toHaveTextContent("The host agent is not reachable");
   });
 
   it("shortens long server summaries and puts server, method, and field descriptions in (i) popovers", async () => {

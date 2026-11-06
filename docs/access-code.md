@@ -296,10 +296,10 @@ any remote source.
 Codes are compared in constant time (hashed first). A wrong code gets the
 same answer as any other wrong code.
 
-### A grain hostd dialing in
+### A host dialing in
 
 The daemon serves `GET /api/hostd/connect` without the access code. A
-`grain hostd -server` or `grain-agentd -server` on another machine upgrades
+`grain host -server` or `grain-agentd -server` on another machine upgrades
 it and presents its host credential (`ghd_...`), which says which host it is
 (the host registry in **Settings → Hosts** / `/api/hostds`, or the deprecated
 shared `-hostd-token-file`). Hosts enrolled via `--join` or migrated with
@@ -311,29 +311,29 @@ renew silently while connected (`OpRenew` and `POST /api/hostd/renew`). A
 bearer on that route (the host credential, or an IAP token) is never counted
 as an access-code guess.
 
-What else the hostd needs depends on how it reaches the daemon:
+What else the host needs depends on how it reaches the daemon:
 
 - **Remote**: it dials in through the IAP Gateway or another registered
   identity verifier's proxy, so the request carries a verified identity.
   The daemon records that identity as the connection's principal and
   checks that it is admitted (either on the database allowlist in
   **Settings → Access**, a daemon-provisioned non-pool service account,
-  or the non-pool service account registered as an active hostd's owner
-  in **Settings → Hostds**). The
-  identity must also equal the hostd row's owner, compared as full,
-  lowercased emails. A stolen hostd token is no use without its
-  owner's identity. Service accounts may be owners, so a hostd running
+  or the non-pool service account registered as an active host's owner
+  in **Settings → Hosts**). The
+  identity must also equal the host row's owner, compared as full,
+  lowercased emails. A stolen host token is no use without its
+  owner's identity. Service accounts may be owners, so a host running
   under Workload Identity or a key needs its service account as the
-  owner. The daemon refuses, and logs, a remote hostd that connects as
-  somebody else, a remote hostd whose row has no owner, and a request
+  owner. The daemon refuses, and logs, a remote host that connects as
+  somebody else, a remote host whose row has no owner, and a request
   that came through a proxy, or from another host to a daemon with a
   verifier configured, with no verified identity. It never falls back to
   the token alone.
 - **Local**: over loopback with no forwarding headers and no assertion,
   such as through `kubectl port-forward`. The token alone names it, as
-  it always has, and it needs no owner. The same goes for every hostd
+  it always has, and it needs no owner. The same goes for every host
   of a daemon that has no identity verifier configured. The co-located
-  hostd at `/run/grain-hostd/hostd.sock` does not dial in at all.
+  host at `/run/grain-hostd/hostd.sock` does not dial in at all.
 
 Set the owner automatically by enrolling with `--join <enrollment-code>` from
 **Settings → Hosts → Invite hosts** (the verified enrolling identity becomes
