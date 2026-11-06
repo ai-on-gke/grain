@@ -50,6 +50,10 @@ var (
 	ErrHostdRevoked = errors.New("model: hostd is revoked")
 	// ErrHostdExists is CreateHostd on a name already taken.
 	ErrHostdExists = errors.New("model: a hostd by that name already exists")
+	// ErrHostdLive is DeleteHostd on a hostd that is not revoked: a live
+	// hostd is revoked first, so deleting one never cuts off a connected
+	// hostd or its running work by surprise.
+	ErrHostdLive = errors.New("model: hostd is not revoked; revoke it first")
 )
 
 // hostdNameRE is what a hostd name may be: a DNS label, so it reads the
@@ -406,6 +410,37 @@ func (s *Store) RevokeHostd(ctx context.Context, name string) (*Hostd, error) {
 		return nil, err
 	}
 	return s.GetHostd(ctx, name)
+}
+
+// DeleteHostd removes name's registry row and every hostd_token row it
+// has, once it is revoked: ErrHostdLive for one that is not,
+// ErrHostdNotFound for a name the registry does not hold, and a refusal
+// for LocalHostd. Nothing else is touched: task_run_hostd and the spool
+// cursors keep the name each past run recorded, and the name is free to
+// be registered again as a new hostd with nothing of this one's.
+func (s *Store) DeleteHostd(ctx context.Context, name string) error {
+	if name == LocalHostd {
+		return fmt.Errorf("%q is the co-located hostd and cannot be deleted", LocalHostd)
+	}
+	return s.write(ctx, "delete hostd "+name, func(tx *sql.Tx) error {
+		h, err := scanHostd(tx.QueryRowContext(ctx, "SELECT "+hostdColumns+" FROM `hostd` WHERE `name` = ?", name).Scan)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrHostdNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if !h.Revoked() {
+			return ErrHostdLive
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM `hostd_token` WHERE `hostd` = ?", name); err != nil {
+			return fmt.Errorf("deleting hostd %s's tokens: %w", name, err)
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM `hostd` WHERE `name` = ?", name); err != nil {
+			return fmt.Errorf("deleting hostd %s: %w", name, err)
+		}
+		return nil
+	})
 }
 
 // UpdateHostd sets name's owner and labels; a nil pointer leaves that

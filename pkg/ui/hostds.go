@@ -103,6 +103,8 @@ func hostdError(err error) error {
 		return &NotFoundError{message: err.Error()}
 	case errors.Is(err, model.ErrHostdExists), errors.Is(err, model.ErrHostdRevoked):
 		return validationErrorf("%v", err)
+	case errors.Is(err, model.ErrHostdLive):
+		return validationErrorf("hostd is not revoked: revoke it first, which disconnects it, then delete it")
 	}
 	return err
 }

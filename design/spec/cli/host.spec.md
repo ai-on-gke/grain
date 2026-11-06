@@ -645,13 +645,15 @@ _No flags._
 
 **Pinned by:** *untested*.
 
-### 4.7 `grain hostds list|register|install|set-owner` {#CLI-36}
+### 4.7 `grain hostds list|register|install|set-owner|delete|delete-revoked` {#CLI-36}
 
 This is the hostd registry. A hostd is registered with its owner, the identity it dials in as through IAP.
 - `list` (`ls`) calls `GET /api/hostds`.
 - `register` (`create`) calls `POST /api/hostds`. It prints the token once, then the install instructions the daemon rendered (`install.lines`, `install.note`; `ui.RegisterHostdInstall`), which never carry the token.
 - `install <name>` calls `GET /api/hostds/{name}/install` and prints the same instructions again, without rotating the token.
 - `set-owner <name> <owner>` calls `PATCH /api/hostds/{name}`.
+- `delete <name>` (`rm`) calls `DELETE /api/hostds/{name}`. It removes a revoked hostd and its tokens from the registry, so the name can be registered again. The daemon refuses a live hostd ("revoke it first"), `local`, and a hostd a model connection's `hostd`/`hostdFallback` or a capability server's `hostd` still names by name, listing each; the CLI prints that refusal as its error. It prints the usage-limit pauses keyed to the hostd that were cleared with it.
+- `delete-revoked` calls `POST /api/hostds/delete-revoked`: it deletes every revoked hostd nothing still names and prints the ones it skipped, with why.
 
 **Scope:** admin.
 
@@ -675,7 +677,15 @@ _No flags._
 _No flags._
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/hostds_test.go`: `TestHostdsRegisterAndSetOwner`.
+<!-- BEGIN GENERATED FLAGS: grain hostds delete -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain hostds delete-revoked -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/hostds_test.go`: `TestHostdsRegisterAndSetOwner`, `TestHostdsDelete`.
 
 ### 4.8 `grain git-connections`, `grain git-ambient`, `grain git-login`, `grain default-model` {#CLI-37}
 

@@ -444,6 +444,8 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `GET /api/hostds/{name}/install` | `capabilities:read` | `admin` | Shows a registered `hostd`'s install instructions again (`ui.RegisterHostdInstall`); never its token. |
 | `POST /api/hostds/{name}/rotate` | `capabilities:admin` | `admin` | Rotates `ghd_…` token. |
 | `POST /api/hostds/{name}/revoke` | `capabilities:admin` | `admin` | Revokes `ghd_…` token. |
+| `DELETE /api/hostds/{name}` | `capabilities:admin` | `admin` | Deletes a revoked `hostd` and its `ghd_…` token rows; refuses a live one, `local`, and one a model connection or capability server still names. |
+| `POST /api/hostds/delete-revoked` | `capabilities:admin` | `admin` | Deletes every revoked `hostd` nothing still names; lists those skipped. |
 | `GET /api/hostd/connect` | `internal` | `protocol` | `hostd` dial-in upgrade; enforces `X-Grain-Hostd-Token` + verified owner (`AU-17`, `AU-18`). |
 | `POST /mcp` | `internal` | `protocol` | Streamable HTTP MCP; authenticates `gma_…` and enforces per-tool route role + `OnBehalfOf` intersection (§4). |
 

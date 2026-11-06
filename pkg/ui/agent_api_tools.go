@@ -213,6 +213,8 @@ var routeDocs = map[string]string{
 	"GET /api/hostds/{name}/install":                                       "Show how to install a registered hostd on its machine again; never its token.",
 	"POST /api/hostds/{name}/rotate":                                       "Retire a hostd's token and mint a new one, shown once in the answer.",
 	"POST /api/hostds/{name}/revoke":                                       "Revoke a hostd and every token it has.",
+	"DELETE /api/hostds/{name}":                                            "Delete a revoked hostd from the registry, with its tokens; refused for a live hostd or one a model connection or capability server still names.",
+	"POST /api/hostds/delete-revoked":                                      "Delete every revoked hostd nothing still names; lists the ones skipped.",
 	"PUT /api/agent-keys/{framework}":                                      "Set an agent framework's credential.",
 	"DELETE /api/agent-keys/{framework}":                                   "Clear an agent framework's credential.",
 	"PUT /api/agent-backends/{id}/credential":                              "Set a model connection's credential.",
