@@ -256,6 +256,16 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 		}
 		taskID := strings.TrimSpace(r.Header.Get(ActingTaskHeader))
 		if taskID == "" {
+			if pattern != "POST /mcp" {
+				if perms, ok := principalPermissionsFromContext(r.Context()); ok && !perms.IsAdmin {
+					if err := s.authorizePrincipalRoleCall(r, pattern, scope, perms); err != nil {
+						p, _ := PrincipalFromContext(r.Context())
+						log.Printf("grain api: refused {%s, %s} %s: %v", p.Kind, p.ID, pattern, err)
+						writeError(w, agentRefusalStatus(err), err)
+						return
+					}
+				}
+			}
 			next(w, r)
 			return
 		}
@@ -2181,6 +2191,199 @@ func isNoTaskContextRoute(pattern string) (string, bool) {
 		return why, true
 	}
 	return "", false
+}
+
+// authorizePrincipalRoleCall enforces RBAC scope and repository restrictions
+// for an authenticated human or service-account principal whose allowlist
+// entry specifies a non-admin role or scope binding.
+func (s *Server) authorizePrincipalRoleCall(r *http.Request, pattern string, scope APIScope, perms PrincipalPermissions) error {
+	if perms.IsAdmin || !requiresAccess(r) {
+		return nil
+	}
+	ctx := r.Context()
+	p, _ := PrincipalFromContext(ctx)
+	who := p.ID
+	if who == "" {
+		who = "caller"
+	}
+	roleDesc := strings.Join(perms.Roles, ", ")
+	if roleDesc == "" {
+		roleDesc = "restricted"
+	}
+	set := perms.GrantSet
+
+	if scope == "" || scope == scopeInternal {
+		switch pattern {
+		case "GET /api/local-script-approvals":
+			if set.Has("tasks:read") {
+				return nil
+			}
+		case "/staging/{name}/{path...}":
+			if set.Has("sandboxes:read") {
+				return nil
+			}
+		case "POST /api/notifications/{id}/ack", "POST /api/notifications/{id}/investigate":
+			if set.Has("notifications:write") || set.Has("tasks:write") {
+				return nil
+			}
+		}
+		return fmt.Errorf("principal %q (role %s) is not authorized for %s: requires admin role", who, roleDesc, pattern)
+	}
+
+	capAllowed := agentCapabilityAllowsRoute(perms.Grants, set, pattern, scope)
+	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
+	if !set.Has(scope) && !capAllowed && !adminPatch {
+		return fmt.Errorf("principal %q (role %s) does not hold scope %s required for %s", who, roleDesc, scope, pattern)
+	}
+
+	body, err := peekBody(r)
+	if err != nil {
+		return err
+	}
+	var targetTask string
+	if target := r.PathValue("id"); target != "" && strings.HasPrefix(pathOf(pattern), "/api/tasks/{id}") {
+		targetTask = target
+	}
+	repo, err := s.principalCallRepo(ctx, r, pattern, scope, set, targetTask, body)
+	if err != nil {
+		return err
+	}
+
+	adminPatchAllowed := false
+	if adminPatch && !set.Allows(scope, repo) && set.Allows("tasks:admin", repo) {
+		if err := tasksAdminTaskPatchBodyAllowed(body); err != nil {
+			return err
+		}
+		adminPatchAllowed = true
+	}
+	if !set.Allows(scope, repo) && !capAllowed && !adminPatchAllowed {
+		missingScope := scope
+		if !set.Has(scope) && adminPatch {
+			missingScope = "tasks:admin"
+		}
+		if repo == "" {
+			return fmt.Errorf("principal %q (role %s) holds %s only for [%s], and %s does not name a repository it reaches",
+				who, roleDesc, missingScope, strings.Join(set.Repos(missingScope), ", "), pattern)
+		}
+		return fmt.Errorf("principal %q (role %s) holds %s, but not on repository %s", who, roleDesc, missingScope, repo)
+	}
+
+	if pattern == "PATCH /api/tasks/{id}" && patchTouchesTaskGrants(body) {
+		if !set.Allows("capabilities:admin", repo) {
+			return fmt.Errorf("principal %q (role %s) does not hold scope capabilities:admin required to edit task capabilities on %s",
+				who, roleDesc, pattern)
+		}
+	}
+
+	if len(body) > 0 && !set.Allows(scope, "") {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(body, &fields) == nil {
+			for key, raw := range fields {
+				switch gateKey(key) {
+				case "writes":
+					var targets []WriteTarget
+					if json.Unmarshal(raw, &targets) == nil {
+						for _, t := range targets {
+							if r := strings.TrimSpace(t.Repo); r != "" && !set.Allows(scope, r) {
+								return fmt.Errorf("principal %q (role %s) cannot grant push access to %s, which its %s scope does not cover", who, roleDesc, r, scope)
+							}
+						}
+					}
+				case "reads":
+					var repos []string
+					if json.Unmarshal(raw, &repos) == nil {
+						for _, r := range repos {
+							if r = strings.TrimSpace(r); r != "" && !set.Allows(scope, r) {
+								return fmt.Errorf("principal %q (role %s) cannot grant read access to %s, which its %s scope does not cover", who, roleDesc, r, scope)
+							}
+						}
+					}
+				case "repo":
+					var to string
+					if json.Unmarshal(raw, &to) == nil && strings.TrimSpace(to) != "" && !model.SameRepoText(to, repo) {
+						if !set.Allows(scope, strings.TrimSpace(to)) {
+							return fmt.Errorf("principal %q (role %s) does not hold %s on %s", who, roleDesc, scope, strings.TrimSpace(to))
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Server) principalCallRepo(ctx context.Context, r *http.Request, pattern string, scope APIScope, set APIGrantSet, target string, body []byte) (string, error) {
+	if owner, name := r.PathValue("owner"), r.PathValue("name"); owner != "" && name != "" {
+		return s.agentCanonicalRepo(owner + "/" + name)
+	}
+	if target != "" && s.tasks != nil && s.tasks.Store != nil {
+		t, err := s.tasks.Store.GetTask(ctx, target)
+		if err != nil || t == nil {
+			return "", nil
+		}
+		return taskRepo(t), nil
+	}
+	if pattern == "GET /api/ci/runs/{id}" || pattern == "DELETE /api/ci/runs/{id}" || strings.HasPrefix(pathOf(pattern), "/api/ci/runs/{id}/") {
+		if s.tasks != nil && s.tasks.Config.CI != nil {
+			if run, ok := s.tasks.Config.CI.Get(r.PathValue("id")); ok && run.Repo != "" {
+				return run.Repo, nil
+			}
+		}
+		if repo, _, ok := ParseActionsRunID(r.PathValue("id")); ok {
+			return s.agentCanonicalRepo(repo)
+		}
+	}
+	if pathParam.MatchString(pathOf(pattern)) && !agentRepoDefaultRoutes[pattern] {
+		return "", nil
+	}
+	if pattern == "POST /api/tasks/reorder" && len(body) > 0 && s.tasks != nil && s.tasks.Store != nil {
+		var req ReorderRequest
+		if json.Unmarshal(body, &req) == nil && len(req.IDs) > 0 {
+			var firstRepo string
+			for _, id := range req.IDs {
+				t, err := s.tasks.Store.GetTask(ctx, strings.TrimSpace(id))
+				if err != nil || t == nil {
+					continue
+				}
+				tr := taskRepo(t)
+				if tr == "" || !set.Allows(scope, tr) {
+					return tr, nil
+				}
+				if firstRepo == "" {
+					firstRepo = tr
+				}
+			}
+			return firstRepo, nil
+		}
+	}
+	var fields struct {
+		Repo   string `json:"repo"`
+		TaskID string `json:"taskId"`
+	}
+	if len(body) > 0 && json.Unmarshal(body, &fields) == nil {
+		if id := strings.TrimSpace(fields.TaskID); id != "" && s.tasks != nil && s.tasks.Store != nil {
+			if t, err := s.tasks.Store.GetTask(ctx, id); err == nil && t != nil {
+				return taskRepo(t), nil
+			}
+		}
+		if repo := strings.TrimSpace(fields.Repo); repo != "" {
+			return s.agentCanonicalRepo(repo)
+		}
+	}
+	if repo := strings.TrimSpace(r.URL.Query().Get("repo")); repo != "" && r.Method == http.MethodGet {
+		return s.agentCanonicalRepo(repo)
+	}
+	if r.Method == http.MethodGet && agentRepoDefaultRoutes[pattern] && !set.Allows(scope, "") {
+		if repos := set.Repos(scope); len(repos) == 1 {
+			q := r.URL.Query()
+			if q.Get("repo") == "" {
+				q.Set("repo", repos[0])
+				r.URL.RawQuery = q.Encode()
+			}
+			return repos[0], nil
+		}
+	}
+	return "", nil
 }
 
 // authorizeExternalAgentCall decides whether external token tok may make this call.

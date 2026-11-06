@@ -485,6 +485,10 @@ Commands:
   git-login [-web|-from-gh|-with-token] [-host h] [-scope s] [-author name]
                                        delegate your GitHub HTTPS token to this deployment and sign new
                                        pull requests and comments in your name ("Signed by <Name> (via Grain)")
+  login [-server u] [-client-id id] [-no-browser]
+                                       authenticate to a grain server with Google OAuth 2.0 / OIDC (PKCE)
+                                       and store credentials in ~/.config/grain/oauth-credentials.json
+  logout [-server u] [-all]            remove stored OAuth 2.0 credentials for a grain server
   git-ambient [-host h] [-kind github|git] [-base-url u] [-proxy u] [-source gh|git|auto] [-if-none]
                                        give this deployment an ambient git connection: this host's own
                                        gh / git login, asked for a token at the moment one is needed
@@ -733,6 +737,10 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdGitAmbient(ctx, c, out, cmdArgs)
 	case "git-login":
 		return cmdGitLogin(ctx, c, out, cmdArgs)
+	case "oauth-login":
+		return cmdOAuthLogin(ctx, c, out, cmdArgs)
+	case "oauth-logout":
+		return cmdOAuthLogout(ctx, c, out, cmdArgs)
 	case "git-connections":
 		return cmdGitConnections(ctx, c, out, cmdArgs)
 	case "default-model":

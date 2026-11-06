@@ -341,7 +341,7 @@ func requiredVerifier(cfg IAPConfig) string {
 // decides that declares AccessCodeWins, whose proxy keeps the code as its
 // own break-glass path.
 func accessCodeAccepted(r *http.Request, cfg IAPConfig) bool {
-	if requiredVerifier(cfg) == "" {
+	if requiredVerifier(cfg) == "" && !oauthRequireFor(r.Context()) {
 		return true
 	}
 	if isLoopbackRequest(r) && !relayedByProxy(r) {
@@ -623,7 +623,8 @@ const (
 
 func singleTenantOpenRoute(r *http.Request) bool {
 	switch r.URL.Path {
-	case accessCodePath, accessCodeScriptPath, "/api/auth/logout", "/api/auth/whoami":
+	case accessCodePath, accessCodeScriptPath, "/api/auth/logout", "/api/auth/whoami",
+		oauthLoginPath, oauthCallbackPath, oauthCLIConfigPath:
 		return true
 	}
 	return hostdConnectRoute(r) || hostdInstallRoute(r)
@@ -734,7 +735,18 @@ func (s *Server) singleTenantGate(w http.ResponseWriter, r *http.Request, cfg IA
 		// Expired, or signed with a code since rotated.
 		clearAccessCookie(w, r)
 	}
+	if c, err := r.Cookie(OAuthSessionCookieName); err == nil && c.Value != "" {
+		clearOAuthSessionCookie(w, r)
+	}
 	if !codeAccepted {
+		if oauthRequireFor(r.Context()) && requiredVerifier(cfg) == "" {
+			if strings.HasPrefix(r.URL.Path, "/api/") || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+				writeError(w, http.StatusUnauthorized, errors.New(errOAuthRequired))
+				return false
+			}
+			writeOAuthRequiredPage(w, r)
+			return false
+		}
 		// No code form to offer: behind a required verifier a browser that
 		// got here without an assertion bypassed the proxy, and signs in by
 		// going through it.
@@ -779,16 +791,24 @@ func (s *Server) handleAccessCodeStatus(w http.ResponseWriter, r *http.Request) 
 		}
 		resp["accessCodeAccepted"] = accessCodeAccepted(r, cfg)
 	}
+	if oauthRequireFor(r.Context()) {
+		resp["requireOAuth"] = true
+		resp["accessCodeAccepted"] = accessCodeAccepted(r, cfg)
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleAccessCodeLogin is POST /api/auth/access-code: the access code,
 // as a form field or JSON, for an access session cookie. A form post
 // (the login page's, which works without script) is redirected to the
-// UI on success and shown the page again otherwise.
+// UI on success and shown the page otherwise.
 func (s *Server) handleAccessCodeLogin(w http.ResponseWriter, r *http.Request) {
 	cfg, _ := IAPConfigFromContext(r.Context())
 	if !accessCodeAccepted(r, cfg) {
+		if oauthRequireFor(r.Context()) && requiredVerifier(cfg) == "" {
+			writeError(w, http.StatusForbidden, errors.New(errOAuthRequired))
+			return
+		}
 		writeError(w, http.StatusForbidden, errors.New(errVerifierRequired(requiredVerifier(cfg))))
 		return
 	}

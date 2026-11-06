@@ -172,6 +172,102 @@ var apiPresets = []APIPreset{
 			"repos:read", "templates:read", "deployment:read"}},
 	{Name: "external-read", Description: "Read-only observer: read tasks, CI, repositories, templates and deployment status",
 		Scopes: []APIScope{"tasks:read", "ci:read", "repos:read", "templates:read", "deployment:read"}},
+	{Name: "role-admin", Description: "Full operator access across all areas and repositories",
+		Scopes: []APIScope{
+			"tasks:read", "tasks:write", "tasks:admin", "tasks:from-template",
+			"merge:write", "merge:force",
+			"ci:read", "ci:write", "tests:write",
+			"notifications:write", "teams:broadcast",
+			"dispatch:read", "dispatch:write",
+			"schedules:read", "schedules:write",
+			"templates:read", "templates:write",
+			"suites:read", "suites:write",
+			"releases:read", "releases:write",
+			"repos:read", "repos:write",
+			"boards:read", "boards:write",
+			"memory:read", "memory:write",
+			"release-notes:read", "release-notes:write",
+			"sessions:read", "sessions:write",
+			"caches:read", "caches:write",
+			"settings:read", "settings:write",
+			"connections:read", "connections:write",
+			"capabilities:read", "capabilities:admin",
+			"secrets:read", "secrets:write",
+			"deployment:read", "sandboxes:read",
+			"deployment:upgrade", "deployment:restart", "deployment:reboot",
+		}},
+	{Name: "role-maintainer", Description: "Maintainer role: manage tasks, approvals, repositories, templates, schedules, suites, releases, boards, sessions and caches",
+		Scopes: []APIScope{
+			"tasks:read", "tasks:write", "tasks:admin", "tasks:from-template",
+			"merge:write",
+			"ci:read", "ci:write", "tests:write",
+			"notifications:write", "teams:broadcast",
+			"dispatch:read", "dispatch:write",
+			"schedules:read", "schedules:write",
+			"templates:read", "templates:write",
+			"suites:read", "suites:write",
+			"releases:read", "releases:write",
+			"repos:read", "repos:write",
+			"boards:read", "boards:write",
+			"memory:read", "memory:write",
+			"release-notes:read", "release-notes:write",
+			"sessions:read", "sessions:write",
+			"caches:read", "caches:write",
+			"settings:read", "connections:read", "capabilities:read",
+			"deployment:read", "sandboxes:read",
+		}},
+	{Name: "role-developer", Description: "Developer role: file and manage tasks, open PRs, run CI, quarantine tests, and read deployment state",
+		Scopes: []APIScope{
+			"tasks:read", "tasks:write", "tasks:from-template",
+			"merge:write",
+			"ci:read", "ci:write", "tests:write",
+			"notifications:write",
+			"dispatch:read",
+			"schedules:read", "templates:read", "suites:read", "releases:read", "repos:read", "boards:read",
+			"memory:read", "memory:write",
+			"release-notes:read",
+			"sessions:read", "caches:read",
+			"deployment:read", "sandboxes:read",
+		}},
+	{Name: "role-viewer", Description: "Viewer role: read-only access to tasks, CI, repositories, releases, schedules, templates, boards and deployment status",
+		Scopes: []APIScope{
+			"tasks:read", "ci:read", "dispatch:read",
+			"schedules:read", "templates:read", "suites:read", "releases:read", "repos:read", "boards:read",
+			"memory:read", "release-notes:read",
+			"sessions:read", "caches:read",
+			"settings:read", "connections:read", "capabilities:read",
+			"deployment:read", "sandboxes:read",
+		}},
+}
+
+// rolePresetAliases maps short RBAC role names used in GRAIN_ALLOWED_PRINCIPALS
+// to their canonical built-in preset names.
+var rolePresetAliases = map[string]string{
+	"admin":                 "role-admin",
+	"role-admin":            "role-admin",
+	"grain/role-admin":      "role-admin",
+	"maintainer":            "role-maintainer",
+	"role-maintainer":       "role-maintainer",
+	"grain/role-maintainer": "role-maintainer",
+	"developer":             "role-developer",
+	"role-developer":        "role-developer",
+	"grain/role-developer":  "role-developer",
+	"viewer":                "role-viewer",
+	"role-viewer":           "role-viewer",
+	"grain/role-viewer":     "role-viewer",
+}
+
+// ResolveRolePreset returns the canonical built-in role preset name ("role-admin",
+// "role-maintainer", "role-developer", "role-viewer") and short role label
+// ("admin", "maintainer", "developer", "viewer") if name is a role alias.
+func ResolveRolePreset(name string) (preset string, shortRole string, ok bool) {
+	trimmed := strings.ToLower(strings.TrimSpace(name))
+	trimmed = strings.TrimPrefix(trimmed, APIGrantPrefix)
+	preset, ok = rolePresetAliases[trimmed]
+	if !ok {
+		return "", "", false
+	}
+	return preset, strings.TrimPrefix(preset, "role-"), true
 }
 
 // apiAliasCapabilities are the older capabilities that are now aliases
@@ -815,6 +911,9 @@ func ParseAPIGrant(name string) (g APIGrant, ok bool, err error) {
 			return APIGrant{}, true, fmt.Errorf("api grant %q: %v", name, perr)
 		}
 		g.Repo = ref.String()
+	}
+	if rolePreset, _, isRole := ResolveRolePreset(what); isRole {
+		what = rolePreset
 	}
 	if p, isPreset := APIPresetNamed(what); isPreset {
 		g.Preset = p.Name

@@ -129,9 +129,9 @@ func registeredVerifiersSnapshot() []IdentityVerifier {
 
 // HasActiveVerifier reports whether an IdentityVerifier with Name() == name
 // is active for ctx (built-in IAP when an IAP audience is configured, built-in
-// registry when -ui-registry-issuer, -ui-registry-audience, and
-// -ui-registry-keys-url are all configured, or an IdentityVerifier registered
-// via RegisterIdentityVerifier).
+// OAuth when an OAuth client ID is configured, built-in registry when
+// -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url are
+// all configured, or an IdentityVerifier registered via RegisterIdentityVerifier).
 func HasActiveVerifier(ctx context.Context, name string) bool {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -152,29 +152,37 @@ func registryVerifierEnabled(ctx context.Context) bool {
 // activeVerifiers returns the verifiers active for ctx in evaluation order.
 // IAP is registered first by default whenever an IAP audience is configured
 // (-ui-iap-audience / $GRAIN_IAP_AUDIENCE / Config.IAPAudience), followed by
+// direct Google OAuth2 / OIDC whenever an OAuth client ID is configured
+// (-ui-oauth-client-id / $GRAIN_OAUTH_CLIENT_ID / Config.OAuthClientID), and
 // the built-in registry verifier whenever all three of -ui-registry-issuer,
 // -ui-registry-audience, and -ui-registry-keys-url are configured, unless an
 // explicit verifier of the same name has been registered via
 // RegisterIdentityVerifier.
 func activeVerifiers(ctx context.Context) []IdentityVerifier {
 	explicit := registeredVerifiersSnapshot()
-	var hasExplicitIAP, hasExplicitRegistry bool
+	var hasExplicitIAP, hasExplicitOAuth, hasExplicitRegistry bool
 	for _, v := range explicit {
 		switch v.Name() {
 		case string(AuthMethodIAP):
 			hasExplicitIAP = true
+		case string(AuthMethodOAuth):
+			hasExplicitOAuth = true
 		case string(AuthMethodRegistry):
 			hasExplicitRegistry = true
 		}
 	}
 	includeIAP := !hasExplicitIAP && iapAudienceFor(ctx) != ""
+	includeOAuth := !hasExplicitOAuth && len(oauthAudiencesFor(ctx)) > 0
 	includeRegistry := !hasExplicitRegistry && registryVerifierEnabled(ctx)
-	if !includeIAP && !includeRegistry {
+	if !includeIAP && !includeOAuth && !includeRegistry {
 		return explicit
 	}
-	out := make([]IdentityVerifier, 0, 2+len(explicit))
+	out := make([]IdentityVerifier, 0, 3+len(explicit))
 	if includeIAP {
 		out = append(out, defaultIAPVerifier)
+	}
+	if includeOAuth {
+		out = append(out, defaultOAuthVerifier)
 	}
 	if includeRegistry {
 		out = append(out, defaultRegistryVerifier)
@@ -347,6 +355,10 @@ type callerVerification struct {
 	method         AuthMethod
 	accessCodeWins bool
 	err            error
+
+	permsResolved bool
+	perms         PrincipalPermissions
+	permsErr      error
 }
 
 func withCallerVerification(ctx context.Context, cv *callerVerification) context.Context {

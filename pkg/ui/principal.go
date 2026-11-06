@@ -188,6 +188,7 @@ func iapAudienceFor(ctx context.Context) string {
 
 // ResetIAPConfig resets all IAP package-level configurations to defaults.
 func ResetIAPConfig() {
+	resetOAuthConfig()
 	webauth.ResetIAPConfig()
 	ignoredIdentityHeadersMu.Lock()
 	clear(ignoredIdentityHeadersLogged)

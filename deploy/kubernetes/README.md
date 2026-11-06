@@ -251,6 +251,20 @@ when IAP or the allowlist is broken:
 kubectl -n grain exec deploy/grain -- env GRAIN_SERVER=http://127.0.0.1:8080 GRAIN_DATA_DIR=/data grain list
 ```
 
+## Direct in-app OAuth 2.0 and RBAC (without IAP)
+
+When `Service/grain` is exposed through a standard Ingress, Gateway, or LoadBalancer without Cloud IAP, grain can perform Google Cloud OAuth 2.0 / OIDC authentication and Role-Based Access Control (RBAC) directly in-process using GCP-registered OAuth 2.0 Client IDs (`deploy/kubernetes/oauth-config.yaml`):
+
+1. Register a **Web application** OAuth 2.0 Client ID (with authorized redirect URI `https://<your-grain-domain>/api/auth/oauth/callback`) and an optional **Desktop app** OAuth 2.0 Client ID (for `grain login` from the CLI) in Google Cloud Console (**APIs & Services → Credentials**).
+2. Edit `deploy/kubernetes/oauth-config.yaml` (`ConfigMap/grain-oauth-config` and `Secret/grain-oauth-secret`) with your Client IDs, Client Secrets, optional `GRAIN_OAUTH_HOSTED_DOMAINS`, and `GRAIN_ALLOWED_PRINCIPALS` RBAC bindings:
+   - `admin`: full administrative access (Settings, Secrets, Upgrades, Tasks, CI).
+   - `maintainer`: `developer` + repository settings, force-merge, pause/resume, and CI cache clear.
+   - `developer`: create, update, approve, comment on, and run tasks, trigger CI, and view logs.
+   - `viewer`: read-only access to tasks, logs, metrics, and CI runs.
+   - Any role or `+`-joined scope list can also be restricted to a repository with `@<owner>/<repo>` (e.g. `user:contractor@example.com=developer@myorg/frontend`).
+3. Apply `deploy/kubernetes/oauth-config.yaml` and uncomment `envFrom` on `Deployment/grain` in `deploy/kubernetes/grain.yaml`.
+4. Browser users sign in at `/api/auth/oauth/login`, and CLI users authenticate with `grain login --server https://<your-grain-domain>`.
+
 ## What is different in the UI
 
 Several controls in the System overlay are reported as unavailable, and

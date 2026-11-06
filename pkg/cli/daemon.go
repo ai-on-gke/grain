@@ -1371,5 +1371,8 @@ func checkConfig(cfg daemon.Config) error {
 	if err := daemon.CheckDaemonFlags(cfg, daemon.LocalSandboxes != nil, checkPackageCacheUpstreams); err != nil {
 		return err
 	}
+	if err := daemon.CheckUIRequireOAuth(cfg); err != nil {
+		return err
+	}
 	return checkRegistryConfig(cfg)
 }

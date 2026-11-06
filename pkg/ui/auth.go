@@ -35,11 +35,12 @@ func requestIsHTTPS(r *http.Request) bool {
 // IAP's browser login cookie.
 const IAPClearLoginCookiePath = "/_gcp_iap/clear_login_cookie"
 
-// handleAuthLogout ends a single-tenant daemon's access session, and for a
-// caller signed in through IAP directs the browser to IAP's own cookie-clearing
-// endpoint.
+// handleAuthLogout ends a single-tenant daemon's access session, clears any
+// in-app OAuth2 session cookie, and for a caller signed in through IAP directs
+// the browser to IAP's own cookie-clearing endpoint.
 func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	clearAccessCookie(w, r)
+	clearOAuthSessionCookie(w, r)
 
 	_, method, ok := identifyCaller(r)
 	viaIAP := ok && method == AuthMethodIAP
@@ -69,11 +70,20 @@ type AuthUserResponse struct {
 	// to. The frontend and the cloudtop installer still read it.
 	Tenancy string `json:"tenancy"`
 	// AuthMethod is how the caller is authenticated (Server.authMethod):
-	// "iap", "header", or "trusted" for nobody signed in from a source
+	// "iap", "oauth", "header", or "trusted" for nobody signed in from a source
 	// this daemon trusts as itself. Empty for anybody else.
 	AuthMethod AuthMethod `json:"authMethod,omitempty"`
 	// Access is configResponse.Access.
 	Access *AccessRoleInfo `json:"access,omitempty"`
+	// Roles lists the RBAC roles assigned to the authenticated principal
+	// (e.g. ["admin"], ["developer"], ["developer@myorg/repo"]).
+	Roles []string `json:"roles,omitempty"`
+	// Scopes lists the effective API scopes granted to a non-admin principal,
+	// or ["*"] for an admin principal.
+	Scopes []string `json:"scopes,omitempty"`
+	// OAuthLoginURL is "/api/auth/oauth/login" when in-app browser OAuth2 login
+	// is configured on this daemon.
+	OAuthLoginURL string `json:"oauthLoginUrl,omitempty"`
 }
 
 // identityNotAccepted is, for a request that is not authenticated, the
@@ -120,6 +130,21 @@ func (s *Server) handleAuthUser(w http.ResponseWriter, r *http.Request) {
 
 	resp.Tenancy = "single"
 	resp.Access = accessRoleInfo(r.Context())
+	if oauthBrowserLoginEnabled(r.Context()) {
+		resp.OAuthLoginURL = oauthLoginPath
+	}
+	if resp.Authenticated {
+		if perms, ok := principalPermissionsFromContext(r.Context()); ok {
+			resp.Roles = append([]string(nil), perms.Roles...)
+			if perms.IsAdmin {
+				resp.Scopes = []string{"*"}
+			} else {
+				for _, sc := range perms.GrantSet.Scopes() {
+					resp.Scopes = append(resp.Scopes, string(sc))
+				}
+			}
+		}
+	}
 
 	writeJSON(w, http.StatusOK, resp)
 }

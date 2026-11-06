@@ -68,8 +68,42 @@ type AllowedPrincipalEntry struct {
 	Prefix string // "user", "serviceAccount", "domain", "group"
 	Value  string // lowercased email or domain
 	// Role is the entry's role on the database allowlist
-	// (model.AllowedPrincipal.Role); "" is model.DefaultAccessRole.
+	// (model.AllowedPrincipal.Role) or optional role/scope binding after '=';
+	// "" is model.DefaultAccessRole / full admin.
 	Role string
+}
+
+type principalPermissionsContextKey struct{}
+
+// PrincipalPermissions holds the effective RBAC permissions resolved for an
+// authenticated human or service-account principal from -ui-allowed-principals
+// / $GRAIN_ALLOWED_PRINCIPALS.
+type PrincipalPermissions struct {
+	// IsAdmin is true when the principal holds unrestricted admin access
+	// (either a bare allowlist entry with no '=' role or '=admin' / '=role-admin').
+	IsAdmin bool
+	// Roles lists the canonical role/scope labels granted to the principal
+	// (e.g. ["admin"], ["developer"], ["developer@myorg/repo", "viewer"]).
+	Roles []string
+	// Grants lists the canonical "api:..." grant strings when IsAdmin is false.
+	Grants []string
+	// GrantSet is the compiled APIGrantSet enforced by agentAPIGate when IsAdmin is false.
+	GrantSet model.APIGrantSet
+}
+
+func withPrincipalPermissions(ctx context.Context, perms PrincipalPermissions) context.Context {
+	return context.WithValue(ctx, principalPermissionsContextKey{}, perms)
+}
+
+func principalPermissionsFromContext(ctx context.Context) (PrincipalPermissions, bool) {
+	if ctx == nil {
+		return PrincipalPermissions{}, false
+	}
+	perms, ok := ctx.Value(principalPermissionsContextKey{}).(PrincipalPermissions)
+	if !ok || (!perms.IsAdmin && len(perms.Roles) == 0 && len(perms.Grants) == 0) {
+		return PrincipalPermissions{}, false
+	}
+	return perms, true
 }
 
 // AllowedPrincipalsUsage describes the deprecated -ui-allowed-principals flag.
@@ -77,30 +111,40 @@ const AllowedPrincipalsUsage = "deprecated: imported once on first start when th
 	"(user:<email> and group:<email> only; serviceAccount: and domain: entries are logged and dropped), then ignored. " +
 	"Manage allowed users and groups in Settings -> Access or with 'grain access'"
 
-// SplitAllowedPrincipals splits a comma-separated -ui-allowed-principals list,
-// trimming whitespace and dropping empty items.
+// SplitAllowedPrincipals splits a comma- or newline-separated -ui-allowed-principals
+// list, ignoring '#' comment lines, trimming whitespace, and dropping empty items.
 func SplitAllowedPrincipals(raw string) []string {
 	var out []string
-	for _, part := range strings.Split(raw, ",") {
-		if p := strings.TrimSpace(part); p != "" {
-			out = append(out, p)
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		for _, part := range strings.Split(line, ",") {
+			if p := strings.TrimSpace(part); p != "" && !strings.HasPrefix(p, "#") {
+				out = append(out, p)
+			}
 		}
 	}
 	return out
 }
 
 // ParseAllowedPrincipals validates and normalizes -ui-allowed-principals entries.
-// Supported forms are user:<email>, serviceAccount:<email>, group:<email>, and domain:<domain>.
+// Supported forms are user:<email>[=<role>], serviceAccount:<email>[=<role>],
+// group:<email>[=<role>], and domain:<domain>[=<role>], where <role> may be a
+// built-in role (admin, maintainer, developer, viewer), preset, scope set, or
+// '+'-joined scopes, optionally suffixed with @<owner>/<repo>.
 func ParseAllowedPrincipals(entries []string) ([]AllowedPrincipalEntry, error) {
 	var out []AllowedPrincipalEntry
 	for _, raw := range entries {
 		for _, item := range SplitAllowedPrincipals(raw) {
-			prefix, val, ok := strings.Cut(item, ":")
+			prefix, rest, ok := strings.Cut(item, ":")
 			if !ok {
 				return nil, fmt.Errorf("invalid allowed principal %q: must start with user:, serviceAccount:, group:, or domain:", item)
 			}
 			prefix = strings.TrimSpace(prefix)
-			val = strings.ToLower(strings.TrimSpace(val))
+			valPart, roleSpec, hasRole := strings.Cut(rest, "=")
+			val := strings.ToLower(strings.TrimSpace(valPart))
 			if val == "" {
 				return nil, fmt.Errorf("invalid allowed principal %q: empty %s value", item, prefix)
 			}
@@ -116,10 +160,117 @@ func ParseAllowedPrincipals(entries []string) ([]AllowedPrincipalEntry, error) {
 			default:
 				return nil, fmt.Errorf("invalid allowed principal %q: unknown prefix %q (want user:, serviceAccount:, group:, or domain:)", item, prefix+":")
 			}
-			out = append(out, AllowedPrincipalEntry{Prefix: prefix, Value: val})
+			var cleanRole string
+			if hasRole {
+				cleanRole = strings.TrimSpace(roleSpec)
+				if cleanRole == "" {
+					return nil, fmt.Errorf("invalid allowed principal %q: empty role assignment after '='", item)
+				}
+				if _, _, _, err := parsePrincipalRoleSpec(cleanRole); err != nil {
+					return nil, fmt.Errorf("invalid allowed principal %q: %w", item, err)
+				}
+			}
+			out = append(out, AllowedPrincipalEntry{Prefix: prefix, Value: val, Role: cleanRole})
 		}
 	}
 	return out, nil
+}
+
+func entryIsFullAdmin(roleSpec string) bool {
+	if strings.TrimSpace(roleSpec) == "" {
+		return true
+	}
+	isAdmin, _, _, err := parsePrincipalRoleSpec(roleSpec)
+	return err == nil && isAdmin
+}
+
+// parsePrincipalRoleSpec parses the RHS of `<prefix>:<id>=<roleSpec>` into
+// whether it grants unrestricted admin, its display role labels, and its
+// canonical "api:..." grant strings.
+func parsePrincipalRoleSpec(roleSpec string) (isAdmin bool, roles []string, grants []string, err error) {
+	roleSpec = strings.TrimSpace(roleSpec)
+	if roleSpec == "" {
+		return true, []string{"admin"}, nil, nil
+	}
+	parts := strings.Split(roleSpec, "+")
+	// If the final '+'-separated token carries an @owner/repo suffix, apply it
+	// as the default repo for earlier tokens in the same '=' binding that do
+	// not specify their own @owner/repo (e.g. "ci:write+tasks:read@myorg/repo").
+	var sharedRepo string
+	if last := strings.TrimSpace(parts[len(parts)-1]); strings.Contains(last, "@") {
+		if _, r, ok := strings.Cut(last, "@"); ok && strings.TrimSpace(r) != "" {
+			sharedRepo = strings.TrimSpace(r)
+		}
+	}
+	for _, rawPart := range parts {
+		token := strings.TrimSpace(rawPart)
+		if token == "" {
+			return false, nil, nil, fmt.Errorf("empty role or scope in %q", roleSpec)
+		}
+		name, repoPart, hasAt := strings.Cut(token, "@")
+		name = strings.TrimSpace(name)
+		repo := strings.TrimSpace(repoPart)
+		if hasAt && repo == "" {
+			return false, nil, nil, fmt.Errorf("empty repository after '@' in %q", token)
+		}
+		if !hasAt && sharedRepo != "" {
+			repo = sharedRepo
+		}
+		var canonicalRepo string
+		if repo != "" {
+			ref, rErr := model.ParseRepo(repo)
+			if rErr != nil {
+				return false, nil, nil, fmt.Errorf("invalid repository %q in %q: %w", repo, token, rErr)
+			}
+			canonicalRepo = ref.String()
+		}
+
+		if preset, shortRole, ok := model.ResolveRolePreset(name); ok {
+			if shortRole == "admin" && canonicalRepo == "" {
+				isAdmin = true
+				roles = appendUniqueString(roles, "admin")
+				continue
+			}
+			grant := model.APIGrantPrefix + preset
+			label := shortRole
+			if canonicalRepo != "" {
+				grant += "@" + canonicalRepo
+				label += "@" + canonicalRepo
+			}
+			roles = appendUniqueString(roles, label)
+			grants = appendUniqueString(grants, grant)
+			continue
+		}
+
+		bareName := strings.TrimPrefix(name, model.APIGrantPrefix)
+		grantCandidate := model.APIGrantPrefix + bareName
+		if canonicalRepo != "" {
+			grantCandidate += "@" + canonicalRepo
+		}
+		if _, ok, gErr := model.ParseAPIGrant(grantCandidate); ok && gErr == nil {
+			label := bareName
+			if canonicalRepo != "" {
+				label += "@" + canonicalRepo
+			}
+			roles = appendUniqueString(roles, label)
+			grants = appendUniqueString(grants, grantCandidate)
+			continue
+		} else if gErr != nil {
+			return false, nil, nil, gErr
+		}
+		return false, nil, nil, fmt.Errorf("unknown role, preset, or scope %q", name)
+	}
+	if isAdmin {
+		return true, []string{"admin"}, nil, nil
+	}
+	return false, roles, grants, nil
+}
+
+func appendUniqueString(slice []string, val string) []string {
+	if !slices.Contains(slice, val) {
+		return append(slice, val)
+	}
+	return slice
 }
 
 // GCPKeyPoolEmails returns the normalized service-account emails belonging to
@@ -405,8 +556,43 @@ func (s *Server) provisionedServiceAccountEntries(ctx context.Context) []Allowed
 	return out
 }
 
+func (s *Server) hasExplicitFlagRoleBindings() bool {
+	if s == nil || s.tasks == nil {
+		return false
+	}
+	raw, _ := s.tasks.explicitAllowedPrincipalsRawWithSource()
+	for _, r := range raw {
+		for _, item := range SplitAllowedPrincipals(r) {
+			if strings.Contains(item, "=") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (s *Server) effectiveAllowedPrincipals(ctx context.Context) ([]AllowedPrincipalEntry, error) {
-	if s.tasks == nil || s.tasks.Store == nil {
+	if s.tasks == nil {
+		return nil, nil
+	}
+	pool := s.tasks.gcpKeyPoolSet(ctx)
+	if s.hasExplicitFlagRoleBindings() {
+		raw, _ := s.tasks.explicitAllowedPrincipalsRawWithSource()
+		parsed, err := ValidateAllowedPrincipals(raw, s.tasks.gcpKeyPoolEmailList(ctx))
+		if err != nil {
+			return nil, err
+		}
+		out := make([]AllowedPrincipalEntry, 0, len(parsed)+2)
+		for _, p := range parsed {
+			if p.Prefix == "serviceAccount" && pool[p.Value] {
+				continue
+			}
+			out = append(out, p)
+		}
+		out = append(out, s.provisionedServiceAccountEntries(ctx)...)
+		return out, nil
+	}
+	if s.tasks.Store == nil {
 		return nil, nil
 	}
 	if err := s.tasks.MigrateAllowedPrincipals(ctx); err != nil {
@@ -417,7 +603,6 @@ func (s *Server) effectiveAllowedPrincipals(ctx context.Context) ([]AllowedPrinc
 		return nil, err
 	}
 	out := make([]AllowedPrincipalEntry, 0, len(rows)+2)
-	pool := s.tasks.gcpKeyPoolSet(ctx)
 	for _, r := range rows {
 		prefix, val, _, nErr := model.NormalizeAllowedPrincipalEntry(r.Entry)
 		if nErr != nil || (prefix == "serviceAccount" && pool[val]) {
@@ -444,7 +629,12 @@ func (s *Server) effectiveAllowedPrincipals(ctx context.Context) ([]AllowedPrinc
 // turned away -- above all a gcp-key pool account, whose key reaching the
 // UI through the proxy means one handed to a sandbox was used outside it.
 func (s *Server) checkAllowedPrincipal(ctx context.Context, id VerifiedIdentity) error {
-	err := s.allowedPrincipalErr(ctx, id)
+	var err error
+	if s.hasExplicitFlagRoleBindings() {
+		_, err = s.resolvePrincipalPermissions(ctx, id)
+	} else {
+		err = s.allowedPrincipalErr(ctx, id)
+	}
 	if err != nil {
 		logRefusedPrincipal(id, err)
 	}
@@ -544,6 +734,123 @@ func (s *Server) allowedPrincipalRoles(ctx context.Context, id VerifiedIdentity,
 		return roles, nil
 	}
 	return nil, fmt.Errorf("principal %q is not on the allowed users and groups list (Settings -> Access)", id.Email)
+}
+
+func (s *Server) resolvePrincipalPermissions(ctx context.Context, id VerifiedIdentity) (PrincipalPermissions, error) {
+	if ctx != nil {
+		if cv, ok := ctx.Value(callerVerificationKey{}).(*callerVerification); ok && cv != nil && cv.id == id && cv.permsResolved {
+			return cv.perms, cv.permsErr
+		}
+	}
+	perms, err := s.computePrincipalPermissions(ctx, id)
+	if ctx != nil {
+		if cv, ok := ctx.Value(callerVerificationKey{}).(*callerVerification); ok && cv != nil && cv.id == id {
+			cv.permsResolved = true
+			cv.perms = perms
+			cv.permsErr = err
+		}
+	}
+	return perms, err
+}
+
+func (s *Server) computePrincipalPermissions(ctx context.Context, id VerifiedIdentity) (PrincipalPermissions, error) {
+	email := normalizeIdentityEmail(id.Email)
+	if id.Kind == model.PrincipalService && s.tasks != nil && s.tasks.gcpKeyPoolSet(ctx)[email] {
+		return PrincipalPermissions{}, fmt.Errorf(
+			"principal %q is a %w whose key is materialized into task sandboxes and cannot be admitted by -ui-allowed-principals",
+			id.Email, errGCPKeyPoolPrincipal,
+		)
+	}
+	entries, err := s.effectiveAllowedPrincipals(ctx)
+	if err != nil {
+		return PrincipalPermissions{}, fmt.Errorf("principal %q cannot be authorized: %w", id.Email, err)
+	}
+	var matched []AllowedPrincipalEntry
+	var groupEntries []AllowedPrincipalEntry
+	hasDirectAdmin := false
+	for _, e := range entries {
+		switch e.Prefix {
+		case "user":
+			if id.Kind == model.PrincipalHuman && email == e.Value {
+				matched = append(matched, e)
+				if entryIsFullAdmin(e.Role) {
+					hasDirectAdmin = true
+				}
+			}
+		case "serviceAccount":
+			if id.Kind == model.PrincipalService && email == e.Value {
+				matched = append(matched, e)
+				if entryIsFullAdmin(e.Role) {
+					hasDirectAdmin = true
+				}
+			}
+		case "domain":
+			if id.Kind == model.PrincipalHuman {
+				if _, domain, ok := strings.Cut(email, "@"); ok && domain == e.Value {
+					matched = append(matched, e)
+					if entryIsFullAdmin(e.Role) {
+						hasDirectAdmin = true
+					}
+				}
+			}
+		case "group":
+			groupEntries = append(groupEntries, e)
+		}
+	}
+	if hasDirectAdmin {
+		return PrincipalPermissions{IsAdmin: true, Roles: []string{"admin"}}, nil
+	}
+	if len(groupEntries) > 0 && id.Kind == model.PrincipalHuman {
+		checker := s.groupChecker()
+		var firstErr error
+		checkedGroups := map[string]bool{}
+		memberGroups := map[string]bool{}
+		for _, ge := range groupEntries {
+			grp := ge.Value
+			if !checkedGroups[grp] {
+				checkedGroups[grp] = true
+				ok, err := checker.IsMember(ctx, grp, email)
+				if err != nil {
+					if firstErr == nil {
+						firstErr = err
+					}
+					continue
+				}
+				memberGroups[grp] = ok
+			}
+			if memberGroups[grp] {
+				matched = append(matched, ge)
+				if entryIsFullAdmin(ge.Role) {
+					return PrincipalPermissions{IsAdmin: true, Roles: []string{"admin"}}, nil
+				}
+			}
+		}
+		if len(matched) == 0 && firstErr != nil {
+			return PrincipalPermissions{}, fmt.Errorf("principal %q could not be authorized against group allowlist: %w", id.Email, firstErr)
+		}
+	}
+	if len(matched) == 0 {
+		return PrincipalPermissions{}, fmt.Errorf("principal %q is not allowed by -ui-allowed-principals", id.Email)
+	}
+
+	var perms PrincipalPermissions
+	for _, e := range matched {
+		isAdmin, roles, grants, err := parsePrincipalRoleSpec(e.Role)
+		if err != nil {
+			return PrincipalPermissions{}, fmt.Errorf("principal %q cannot be authorized: %w", id.Email, err)
+		}
+		if isAdmin {
+			return PrincipalPermissions{IsAdmin: true, Roles: []string{"admin"}}, nil
+		}
+		for _, r := range roles {
+			perms.Roles = appendUniqueString(perms.Roles, r)
+		}
+		for _, g := range grants {
+			perms.Grants = appendUniqueString(perms.Grants, g)
+		}
+	}
+	perms.GrantSet = model.APIGrantsOf(perms.Grants)
+	return perms, nil
 }
 
 // refusedPrincipalsLogged is which principals have been logged as refused

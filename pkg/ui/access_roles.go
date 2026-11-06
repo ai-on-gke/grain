@@ -50,6 +50,9 @@ var humanRouteScopes = map[string]APIScope{
 	"GET /api/auth/access-code":                                     scopeSignedIn,
 	"POST /api/auth/access-code":                                    scopeSignedIn,
 	"GET /api/auth/access-code/login.js":                            scopeSignedIn,
+	"GET /api/auth/oauth/login":                                     scopeSignedIn,
+	"GET /api/auth/oauth/callback":                                  scopeSignedIn,
+	"GET /api/auth/oauth/cli-config":                                scopeSignedIn,
 	"POST /api/auth/logout":                                         scopeSignedIn,
 	"GET /api/auth/logout":                                          scopeSignedIn,
 	"GET /api/auth/user":                                            scopeSignedIn,
@@ -295,6 +298,13 @@ func accessRoleFromContext(ctx context.Context) *accessRole {
 // admitVerifiedPrincipal is checkAllowedPrincipal that also resolves the
 // admitted session's role, and leaves it in the request's slot.
 func (s *Server) admitVerifiedPrincipal(ctx context.Context, id VerifiedIdentity) error {
+	if s.hasExplicitFlagRoleBindings() {
+		_, err := s.resolvePrincipalPermissions(ctx, id)
+		if err != nil {
+			logRefusedPrincipal(id, err)
+		}
+		return err
+	}
 	roles, err := s.allowedPrincipalRoles(ctx, id, true)
 	if err != nil {
 		logRefusedPrincipal(id, err)
