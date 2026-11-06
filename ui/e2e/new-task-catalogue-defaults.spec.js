@@ -171,7 +171,7 @@ test("an edited picker is asked to untick a refused grant", async ({
       page,
       `E2E catalogue edited ${Date.now()}`,
     );
-    await chooseOption(picker, "bootstrap-playbooks");
+    await chooseOption(picker, "priority-dispatch");
     await page.keyboard.press("Escape");
     await expect(note).toHaveText(
       "settings/capabilities.yml refuses read-issues on a task with no repo: untick it, or the task will not be filed.",

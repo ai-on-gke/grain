@@ -300,7 +300,7 @@ func TestGitHubCIChangesPathClassification(t *testing.T) {
 		},
 		{
 			name:        "embedded playbook markdown outside top-level is not ignored",
-			files:       []string{"pkg/capability/bootstrap/playbooks/gcp-capabilities.md"},
+			files:       []string{"pkg/playbooks/gcp-capabilities.md"},
 			wantEnabled: []string{"go_program", "go_backend", "go_unit"},
 		},
 		{
@@ -360,7 +360,7 @@ func TestGitHubCIChangesMirrorsGrainTestsWorkflowPaths(t *testing.T) {
 		"ui/src/taskAttributes.js",
 		"pkg/orchestrator/foo.go",
 		"pkg/ci/paths.go",
-		"pkg/capability/bootstrap/playbooks/gcp-capabilities.md",
+		"pkg/playbooks/gcp-capabilities.md",
 		"third_party/granule/pkg/guestforward/forward.go",
 		"scripts/run-go-tests.sh",
 		"scripts/warm-npm-cache.sh",

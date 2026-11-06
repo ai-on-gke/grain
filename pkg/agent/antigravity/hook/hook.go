@@ -549,7 +549,7 @@ var PublishedTools = []string{
 	"read_grain_task", "read_grain_task_prompt", "read_grain_task_transcript",
 	"read_pipeline_changes", "read_grain_metrics", "read_grain_log",
 	"read_deployment_health", "read_deployment_state",
-	"list_bootstrap_playbooks", "read_bootstrap_playbook", "query_grain_db",
+	"query_grain_db",
 	"execute_grain_db", "run_host_command",
 }
 

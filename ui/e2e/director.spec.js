@@ -151,7 +151,7 @@ async function expectCapabilityDisclosure(page) {
     page.getByRole("heading", { name: "What it may reach" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("checkbox", { name: /Bootstrap playbooks/ }),
+    page.getByRole("checkbox", { name: /Read issues/ }),
   ).toBeVisible();
   await expect(
     page.getByLabel(/What it may reach on the internet/),
@@ -160,7 +160,7 @@ async function expectCapabilityDisclosure(page) {
     .getByRole("button", { name: "Hide Director capabilities" })
     .click();
   await expect(
-    page.getByRole("checkbox", { name: /Bootstrap playbooks/ }),
+    page.getByRole("checkbox", { name: /Read issues/ }),
   ).toBeHidden();
 }
 

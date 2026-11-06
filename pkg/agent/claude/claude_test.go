@@ -637,8 +637,7 @@ func TestAllowedToolsNamesEveryGrainSandboxTool(t *testing.T) {
 		"open_pull_request", "recreate_sandbox",
 		"update_status", "chat",
 		"read_grain_log",
-		"read_deployment_health", "read_deployment_state",
-		"list_bootstrap_playbooks", "read_bootstrap_playbook"} {
+		"read_deployment_health", "read_deployment_state"} {
 		if !slices.Contains(names, mcp.QualifiedToolName(tool)) {
 			t.Errorf("allowedTools() = %v, want %s admitted", names, tool)
 		}
@@ -703,14 +702,14 @@ func TestRunPassesTheGrantsToTheMCPServer(t *testing.T) {
 
 	if _, err := f.Run(context.Background(), agent.RunConfig{
 		Prompt: "go", SandboxRoot: t.TempDir(),
-		Grants:         []string{"self-debug", "bootstrap-playbooks"},
+		Grants:         []string{"self-debug", "read-issues"},
 		GrainSourceDir: "/usr/local/share/grain/src",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	args := mcpConfigArgs(t, fake.gotMCPConfig)
 	if !argsHave(args, "-grant", "self-debug") ||
-		!argsHave(args, "-grant", "bootstrap-playbooks") ||
+		!argsHave(args, "-grant", "read-issues") ||
 		!argsHave(args, "-grain-src-dir", "/usr/local/share/grain/src") {
 		t.Errorf("mcpserver args = %v, want both -grant pairs and -grain-src-dir among them", args)
 	}

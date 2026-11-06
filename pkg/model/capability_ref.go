@@ -552,8 +552,21 @@ func (p CapabilityPolicy) Permits(g string, s CapabilitySubject, servers ...map[
 		}
 	}
 	refs := equivalentCapabilityRefs(ref, servers)
+	denyRefs := slices.Clone(refs)
+	// Schema migration 118 rewrote a deny rule on bootstrap-playbooks to
+	// ConfigMapRef (https://grain.dev/capabilities/config-map#config-map).
+	// Bootstrap playbooks can also be requested via #skill (or an unnormalized
+	// unnamed #skill grant whose server default includes "bootstrap"); widen
+	// deny-only matching (never allow/allowUntrusted) so #skill cannot bypass it.
+	if IsBootstrapPlaybooksGrant(g) || BootstrapSkillSetUnnamed(g) {
+		for _, extra := range equivalentCapabilityRefs(ConfigMapRef, servers) {
+			if !slices.Contains(denyRefs, extra) {
+				denyRefs = append(denyRefs, extra)
+			}
+		}
+	}
 	for i, r := range p.Rules {
-		if !r.Deny || !r.namesAny(refs) {
+		if !r.Deny || !r.namesAny(denyRefs) {
 			continue
 		}
 		if r.covers(s) {
@@ -667,8 +680,16 @@ func (r CapabilityPolicyRule) coversAnyOfKind(kind string) bool {
 }
 
 func (r CapabilityPolicyRule) names(ref string) bool {
-	ok, _ := path.Match(r.Capability, ref)
-	return ok || r.Capability == ref
+	if ok, _ := path.Match(r.Capability, ref); ok || r.Capability == ref {
+		return true
+	}
+	if r.Deny && !strings.Contains(ref, "#") {
+		if rID, _, hasHash := strings.Cut(r.Capability, "#"); hasHash {
+			ok, _ := path.Match(rID, ref)
+			return ok || rID == ref
+		}
+	}
+	return false
 }
 
 func (r CapabilityPolicyRule) namesAny(refs []string) bool {
@@ -696,7 +717,22 @@ func equivalentCapabilityRefs(ref string, serverMaps []map[string]protocol.Serve
 		}
 		refs = append(refs, cand)
 	}
+	addImplicitSkillConfigMapAlias := func() {
+		switch id {
+		case ConfigMapCapabilityServerID:
+			add(SkillCapabilityServerID)
+		case SkillCapabilityServerID:
+			add(ConfigMapCapabilityServerID)
+		}
+	}
+	if len(serverMaps) == 0 {
+		addImplicitSkillConfigMapAlias()
+	}
 	for _, servers := range serverMaps {
+		_, hasSkill := servers[SkillCapabilityServerID]
+		if !hasSkill {
+			addImplicitSkillConfigMapAlias()
+		}
 		for entryID, cfg := range servers {
 			if entryID == id {
 				for _, a := range cfg.Aliases {
