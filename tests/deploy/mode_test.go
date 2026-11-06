@@ -17,7 +17,7 @@ package deploy
 // scripts/setup.sh's install mode (GRAIN_INSTALL_MODE): container is the
 // only one left (task 5041). A re-run over a host-mode unit migrates it
 // to container mode, said as the move it is; GRAIN_INSTALL_MODE=host is
-// refused, pointing to container mode plus grain hostd. Run, not read, as
+// refused, pointing to container mode plus the host agent. Run, not read, as
 // ui_addr_test.go does: the block is sourced with the UI address block
 // before it, whose installed_unit_flag it uses.
 
@@ -99,7 +99,7 @@ func TestSetupModeReRunMovesAHostInstallToContainerMode(t *testing.T) {
 			if !ok || mode != "container" {
 				t.Fatalf("a re-run settled on mode %q (ok=%v), want container:\n%s", mode, ok, out)
 			}
-			if got := strings.Contains(out, "moving this host-mode install to container mode plus grain hostd"); got != tc.migrates {
+			if got := strings.Contains(out, "moving this host-mode install to container mode plus the host agent"); got != tc.migrates {
 				t.Errorf("says it migrates = %v, want %v:\n%s", got, tc.migrates, out)
 			}
 			if tc.migrates {
@@ -116,7 +116,7 @@ func TestSetupModeRefusesHostMode(t *testing.T) {
 			t.Fatalf("GRAIN_INSTALL_MODE=host was accepted:\n%s", out)
 		}
 		contains(t, out, "GRAIN_INSTALL_MODE=host is no longer supported")
-		contains(t, out, "container mode plus grain hostd")
+		contains(t, out, "container mode plus the host agent")
 		contains(t, out, "sudo ./scripts/setup.sh")
 	}
 }

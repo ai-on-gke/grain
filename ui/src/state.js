@@ -191,12 +191,21 @@ export function displayCounts(counts) {
 // "stopped" (a turn the reader stopped -- ui.Task.TurnStopped) or
 // "submit" (awaiting_submit); title is the chip's tooltip; action is what
 // ends it, "reply", "grant" or "submit".
+// humanReviewLine is a human-review hold's reasons on one line.
+export function humanReviewLine(t) {
+  return [...new Set((t.humanReviewHold || []).map((r) => r.reason))].join(
+    "; ",
+  );
+}
+
 export function askedCase(t) {
   if (!t || !ASKED_STATES.includes(t.state)) return null;
   if (t.state === "awaiting_submit") {
     const what = t.pullRequest || "its change";
     let title = `Asked you to submit ${what}`;
-    if (t.pathTriggerHold) {
+    if (t.humanReviewHold?.length) {
+      title += ` — held for a person's review: ${humanReviewLine(t)}`;
+    } else if (t.pathTriggerHold) {
       title += ` — held by repository gating triggers (human: ${t.pathTriggerHold})`;
     } else if (t.securityHold) {
       const review = t.securityReviewTask
@@ -505,6 +514,16 @@ export function completionPhase(t) {
   // clean. Without the chip it looked like every other change waiting for
   // a Submit click (docs/test-runs/2026-10-01-security-hold-escalated-
   // proposals.md, finding 3).
+  // A human-review hold (ui.Task.HumanReviewHold) waits on a person and
+  // nothing else: a review asked for a decision, a security review left
+  // findings, or the change touches a path only a person may release.
+  if (t.humanReviewHold?.length) {
+    return {
+      label: "Human review",
+      color: "warning",
+      title: `Held for a person's review: ${humanReviewLine(t)}. It will not merge itself until somebody presses Submit or Release hold.`,
+    };
+  }
   if (t.securityHold) {
     const review = t.securityReviewTask
       ? `security review (task ${t.securityReviewTask})`
@@ -940,6 +959,26 @@ export function reasonLabel(r) {
   return (at < 0 ? reason : reason.slice(at + 1)).replaceAll("_", " ");
 }
 
+// taskReasonLabel is reasonLabel for a task's own reason chip. The
+// orchestrator gives every awaiting_reply task the one sub-case
+// "awaiting_reply/question" (taskReasonOf), but askedCase tells those
+// tasks apart, and the badge's tooltip already says which one this is.
+// Left alone, the chip beside a finished report's "Answered in a comment"
+// badge read "question" -- the very word #674 took off that badge. So for
+// that sub-case the chip names askedCase's kind instead; every other
+// reason is reasonLabel's.
+const ASKED_REASON_LABELS = {
+  answer: "answered",
+  message: "your message",
+  access: "access request",
+  stopped: "stopped",
+};
+export function taskReasonLabel(t) {
+  const label = reasonLabel(t?.reason);
+  if (t?.reason?.reason !== "awaiting_reply/question") return label;
+  return ASKED_REASON_LABELS[askedCase(t)?.kind] ?? label;
+}
+
 // reasonTitle is the sub-case's hover: its full name, which of the three
 // conditions it is in, and what it waits on -- the "why" the chip has no
 // room for.
@@ -1111,6 +1150,9 @@ export function baseRepairWaitReason(t) {
         )
         .join(", ");
       return `waiting for human approval on ${rules}`;
+    }
+    if (t.humanReviewHold?.length) {
+      return `held for a person's review (${humanReviewLine(t)}) — waiting for Submit or Release hold`;
     }
     if (t.pathTriggerHold) {
       return `held by repository gating triggers (human: ${t.pathTriggerHold}) — waiting for Submit`;

@@ -1,0 +1,130 @@
+{
+  "steps": [
+    {
+      "name": "live poll",
+      "liveTasks": 118,
+      "liveSeed": 117,
+      "target": "2"
+    },
+    {
+      "name": "API closed pages",
+      "pages": 15,
+      "ids": 2864,
+      "unique": 2864,
+      "total": 2864
+    },
+    {
+      "name": "closed list at load",
+      "rows": 200
+    },
+    {
+      "name": "close in tab B -> tab A closed list",
+      "closeStatus": 200,
+      "ms": 3484
+    },
+    {
+      "name": "reopen in tab B -> left closed list, back in open list",
+      "reopenStatus": 200,
+      "goneMs": 1368
+    },
+    {
+      "name": "load older to the end",
+      "clicks": 14,
+      "pageResponses": 2664,
+      "rowsDrawn": 2864,
+      "uniqueRows": 2864,
+      "buttonGone": true,
+      "firstClicks": [
+        {
+          "box": {
+            "x": 759.875,
+            "y": 11810.09375,
+            "width": 152.25,
+            "height": 30.75
+          },
+          "urlAfter": "/?f=state:any:closed",
+          "rowsAfter": 200
+        },
+        {
+          "box": {
+            "x": 759.875,
+            "y": 12450.59375,
+            "width": 152.25,
+            "height": 30.75
+          },
+          "urlAfter": "/?f=state:any:closed",
+          "rowsAfter": 400
+        }
+      ],
+      "urlAtEnd": "/?f=state:any:closed"
+    },
+    {
+      "name": "search filter finds the oldest closed task after paging",
+      "oldest": "118",
+      "filtered": true
+    },
+    {
+      "name": "saved list board shows the oldest closed task",
+      "board": "board-10",
+      "seen": true
+    },
+    {
+      "name": "saved tree board shows the oldest closed task",
+      "board": "board-11",
+      "seen": true
+    },
+    {
+      "name": "saved kanban board shows the oldest closed task",
+      "board": "board-12",
+      "seen": true
+    },
+    {
+      "name": "deep link to the oldest closed task",
+      "oldest": "118",
+      "opened": true
+    }
+  ],
+  "har": {
+    "livePolls": [
+      {
+        "url": "/api/tasks",
+        "status": 200,
+        "encoding": "gzip",
+        "bodySize": 82551,
+        "transfer": 4785
+      },
+      {
+        "url": "/api/tasks",
+        "status": 200,
+        "encoding": "gzip",
+        "bodySize": 82551,
+        "transfer": 4785
+      },
+      {
+        "url": "/api/tasks",
+        "status": 304,
+        "encoding": "",
+        "bodySize": -1,
+        "transfer": -1
+      }
+    ],
+    "live304s": 33,
+    "closedFirstPage": [
+      {
+        "url": "/api/tasks?state=closed&limit=200&cursor=",
+        "status": 200,
+        "encoding": "gzip",
+        "bodySize": 149405,
+        "transfer": 8338
+      },
+      {
+        "url": "/api/tasks?state=closed&limit=200&cursor=",
+        "status": 200,
+        "encoding": "gzip",
+        "bodySize": 149405,
+        "transfer": 8338
+      }
+    ],
+    "entries": 87
+  }
+}

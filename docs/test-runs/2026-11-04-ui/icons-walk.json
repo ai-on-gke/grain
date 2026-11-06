@@ -1,0 +1,670 @@
+{
+  "390": {
+    "pages": {
+      "/": {
+        "axeNameViolations": [],
+        "trayControls": 5,
+        "centreSpread": 0,
+        "heights": [
+          40
+        ],
+        "overflowRight": false,
+        "tray": [
+          {
+            "cls": "header-control-icon",
+            "name": "Open navigation",
+            "top": 8,
+            "height": 40,
+            "centre": 28,
+            "left": 12,
+            "right": 52
+          },
+          {
+            "cls": "header-logo-box",
+            "name": "",
+            "top": 8,
+            "height": 40,
+            "centre": 28,
+            "left": 60,
+            "right": 100
+          },
+          {
+            "cls": "header-control-icon",
+            "name": "Alerts: 2 active",
+            "top": 8,
+            "height": 40,
+            "centre": 28,
+            "left": 242,
+            "right": 282
+          },
+          {
+            "cls": "header-control-icon",
+            "name": "Settings",
+            "top": 8,
+            "height": 40,
+            "centre": 28,
+            "left": 290,
+            "right": 330
+          },
+          {
+            "cls": "header-control-icon",
+            "name": "New task",
+            "top": 8,
+            "height": 40,
+            "centre": 28,
+            "left": 338,
+            "right": 378
+          }
+        ]
+      },
+      "/inbox": {
+        "axeNameViolations": [],
+        "trayControls": 5,
+        "centreSpread": 0,
+        "heights": [
+          40
+        ],
+        "overflowRight": false
+      },
+      "/boards": {
+        "axeNameViolations": [],
+        "trayControls": 5,
+        "centreSpread": 0,
+        "heights": [
+          40
+        ],
+        "overflowRight": false
+      },
+      "/ci": {
+        "axeNameViolations": [],
+        "trayControls": 5,
+        "centreSpread": 0,
+        "heights": [
+          40
+        ],
+        "overflowRight": false
+      },
+      "/settings": {
+        "axeNameViolations": [],
+        "trayControls": 5,
+        "centreSpread": 0,
+        "heights": [
+          40
+        ],
+        "overflowRight": false
+      },
+      "/system": {
+        "axeNameViolations": [],
+        "trayControls": 5,
+        "centreSpread": 0,
+        "heights": [
+          40
+        ],
+        "overflowRight": false
+      }
+    },
+    "drawer": true,
+    "navDestinations": [
+      {
+        "name": "Customize sidebar"
+      },
+      {
+        "name": "inbox 14"
+      },
+      {
+        "name": "tasks 3001"
+      },
+      {
+        "name": "proposed 2"
+      },
+      {
+        "name": "waiting 119"
+      },
+      {
+        "name": "running 2"
+      },
+      {
+        "name": "asked 9"
+      },
+      {
+        "name": "merging 1"
+      },
+      {
+        "name": "deferred 1"
+      },
+      {
+        "name": "closed 2867"
+      },
+      {
+        "name": "blocked 3"
+      },
+      {
+        "name": "boards 4"
+      },
+      {
+        "name": "sessions 1"
+      },
+      {
+        "name": "processes 6"
+      },
+      {
+        "name": "repos 1"
+      },
+      {
+        "name": "system"
+      },
+      {
+        "name": "Acting as operator (access code)"
+      }
+    ],
+    "unnamedNav": 0,
+    "navAxe": []
+  },
+  "768": {
+    "pages": {
+      "/": {
+        "axeNameViolations": [],
+        "trayControls": 7,
+        "centreSpread": 68.2,
+        "heights": [
+          36
+        ],
+        "overflowRight": false,
+        "tray": [
+          {
+            "cls": "header-logo-box",
+            "name": "",
+            "top": 20,
+            "height": 36,
+            "centre": 38,
+            "left": 12,
+            "right": 48
+          },
+          {
+            "cls": "header-control-icon",
+            "name": "Collapse sidebar",
+            "top": 20,
+            "height": 36,
+            "centre": 38,
+            "left": 183,
+            "right": 219
+          },
+          {
+            "cls": "header-split-button",
+            "name": "New task",
+            "top": 88.2,
+            "height": 36,
+            "centre": 106.2,
+            "left": 11,
+            "right": 220
+          },
+          {
+            "cls": "header-control-icon",
+            "name": "More page actions",
+            "top": 20,
+            "height": 36,
+            "centre": 38,
+            "left": 584,
+            "right": 620
+          },
+          {
+            "cls": "header-control-icon",
+            "name": "Alerts: 2 active",
+            "top": 20,
+            "height": 36,
+            "centre": 38,
+            "left": 628,
+            "right": 664
+          },
+          {
+            "cls": "header-control-icon",
+            "name": "System",
+            "top": 20,
+            "height": 36,
+            "centre": 38,
+            "left": 672,
+            "right": 708
+          },
+          {
+            "cls": "header-control-icon",
+            "name": "Settings",
+            "top": 20,
+            "height": 36,
+            "centre": 38,
+            "left": 716,
+            "right": 752
+          }
+        ]
+      },
+      "/inbox": {
+        "axeNameViolations": [],
+        "trayControls": 6,
+        "centreSpread": 68.2,
+        "heights": [
+          36
+        ],
+        "overflowRight": false
+      },
+      "/boards": {
+        "axeNameViolations": [],
+        "trayControls": 6,
+        "centreSpread": 68.2,
+        "heights": [
+          36
+        ],
+        "overflowRight": false
+      },
+      "/ci": {
+        "axeNameViolations": [],
+        "trayControls": 7,
+        "centreSpread": 68.2,
+        "heights": [
+          36
+        ],
+        "overflowRight": false
+      },
+      "/settings": {
+        "axeNameViolations": [],
+        "trayControls": 6,
+        "centreSpread": 68.2,
+        "heights": [
+          36
+        ],
+        "overflowRight": false
+      },
+      "/system": {
+        "axeNameViolations": [],
+        "trayControls": 6,
+        "centreSpread": 68.2,
+        "heights": [
+          36
+        ],
+        "overflowRight": false
+      }
+    },
+    "navDestinations": [
+      {
+        "name": "Customize sidebar"
+      },
+      {
+        "name": "inbox 14"
+      },
+      {
+        "name": "tasks 3001"
+      },
+      {
+        "name": "proposed 2"
+      },
+      {
+        "name": "waiting 119"
+      },
+      {
+        "name": "running 2"
+      },
+      {
+        "name": "asked 9"
+      },
+      {
+        "name": "merging 1"
+      },
+      {
+        "name": "deferred 1"
+      },
+      {
+        "name": "closed 2867"
+      },
+      {
+        "name": "blocked 3"
+      },
+      {
+        "name": "boards 4"
+      },
+      {
+        "name": "sessions 1"
+      },
+      {
+        "name": "processes 6"
+      },
+      {
+        "name": "repos 1"
+      }
+    ],
+    "unnamedNav": 0,
+    "navAxe": []
+  },
+  "1024": {
+    "pages": {
+      "/": {
+        "axeNameViolations": [],
+        "trayControls": 7,
+        "centreSpread": 68.2,
+        "heights": [
+          36
+        ],
+        "overflowRight": false,
+        "tray": [
+          {
+            "cls": "header-logo-box",
+            "name": "",
+            "top": 20,
+            "height": 36,
+            "centre": 38,
+            "left": 12,
+            "right": 48
+          },
+          {
+            "cls": "header-control-icon",
+            "name": "Collapse sidebar",
+            "top": 20,
+            "height": 36,
+            "centre": 38,
+            "left": 183,
+            "right": 219
+          },
+          {
+            "cls": "header-split-button",
+            "name": "New task",
+            "top": 88.2,
+            "height": 36,
+            "centre": 106.2,
+            "left": 11,
+            "right": 220
+          },
+          {
+            "cls": "header-control-icon",
+            "name": "More page actions",
+            "top": 20,
+            "height": 36,
+            "centre": 38,
+            "left": 824,
+            "right": 860
+          },
+          {
+            "cls": "header-control-icon",
+            "name": "Alerts: 2 active",
+            "top": 20,
+            "height": 36,
+            "centre": 38,
+            "left": 872,
+            "right": 908
+          },
+          {
+            "cls": "header-control-icon",
+            "name": "System",
+            "top": 20,
+            "height": 36,
+            "centre": 38,
+            "left": 916,
+            "right": 952
+          },
+          {
+            "cls": "header-control-icon",
+            "name": "Settings",
+            "top": 20,
+            "height": 36,
+            "centre": 38,
+            "left": 960,
+            "right": 996
+          }
+        ]
+      },
+      "/inbox": {
+        "axeNameViolations": [],
+        "trayControls": 6,
+        "centreSpread": 68.2,
+        "heights": [
+          36
+        ],
+        "overflowRight": false
+      },
+      "/boards": {
+        "axeNameViolations": [],
+        "trayControls": 6,
+        "centreSpread": 68.2,
+        "heights": [
+          36
+        ],
+        "overflowRight": false
+      },
+      "/ci": {
+        "axeNameViolations": [],
+        "trayControls": 7,
+        "centreSpread": 68.2,
+        "heights": [
+          36
+        ],
+        "overflowRight": false
+      },
+      "/settings": {
+        "axeNameViolations": [],
+        "trayControls": 6,
+        "centreSpread": 68.2,
+        "heights": [
+          36
+        ],
+        "overflowRight": false
+      },
+      "/system": {
+        "axeNameViolations": [],
+        "trayControls": 6,
+        "centreSpread": 68.2,
+        "heights": [
+          36
+        ],
+        "overflowRight": false
+      }
+    },
+    "navDestinations": [
+      {
+        "name": "Customize sidebar"
+      },
+      {
+        "name": "inbox 14"
+      },
+      {
+        "name": "tasks 3001"
+      },
+      {
+        "name": "proposed 2"
+      },
+      {
+        "name": "waiting 119"
+      },
+      {
+        "name": "running 2"
+      },
+      {
+        "name": "asked 9"
+      },
+      {
+        "name": "merging 1"
+      },
+      {
+        "name": "deferred 1"
+      },
+      {
+        "name": "closed 2867"
+      },
+      {
+        "name": "blocked 3"
+      },
+      {
+        "name": "boards 4"
+      },
+      {
+        "name": "sessions 1"
+      },
+      {
+        "name": "processes 6"
+      },
+      {
+        "name": "repos 1"
+      }
+    ],
+    "unnamedNav": 0,
+    "navAxe": []
+  },
+  "1440": {
+    "pages": {
+      "/": {
+        "axeNameViolations": [],
+        "trayControls": 6,
+        "centreSpread": 68.2,
+        "heights": [
+          36
+        ],
+        "overflowRight": false,
+        "tray": [
+          {
+            "cls": "header-logo-box",
+            "name": "",
+            "top": 20,
+            "height": 36,
+            "centre": 38,
+            "left": 12,
+            "right": 48
+          },
+          {
+            "cls": "header-control-icon",
+            "name": "Collapse sidebar",
+            "top": 20,
+            "height": 36,
+            "centre": 38,
+            "left": 183,
+            "right": 219
+          },
+          {
+            "cls": "header-split-button",
+            "name": "New task",
+            "top": 88.2,
+            "height": 36,
+            "centre": 106.2,
+            "left": 11,
+            "right": 220
+          },
+          {
+            "cls": "header-control-icon",
+            "name": "Alerts: 2 active",
+            "top": 20,
+            "height": 36,
+            "centre": 38,
+            "left": 1288,
+            "right": 1324
+          },
+          {
+            "cls": "header-control-icon",
+            "name": "System",
+            "top": 20,
+            "height": 36,
+            "centre": 38,
+            "left": 1332,
+            "right": 1368
+          },
+          {
+            "cls": "header-control-icon",
+            "name": "Settings",
+            "top": 20,
+            "height": 36,
+            "centre": 38,
+            "left": 1376,
+            "right": 1412
+          }
+        ]
+      },
+      "/inbox": {
+        "axeNameViolations": [],
+        "trayControls": 6,
+        "centreSpread": 68.2,
+        "heights": [
+          36
+        ],
+        "overflowRight": false
+      },
+      "/boards": {
+        "axeNameViolations": [],
+        "trayControls": 6,
+        "centreSpread": 68.2,
+        "heights": [
+          36
+        ],
+        "overflowRight": false
+      },
+      "/ci": {
+        "axeNameViolations": [],
+        "trayControls": 6,
+        "centreSpread": 68.2,
+        "heights": [
+          36
+        ],
+        "overflowRight": false
+      },
+      "/settings": {
+        "axeNameViolations": [],
+        "trayControls": 6,
+        "centreSpread": 68.2,
+        "heights": [
+          36
+        ],
+        "overflowRight": false
+      },
+      "/system": {
+        "axeNameViolations": [],
+        "trayControls": 6,
+        "centreSpread": 68.2,
+        "heights": [
+          36
+        ],
+        "overflowRight": false
+      }
+    },
+    "navDestinations": [
+      {
+        "name": "Customize sidebar"
+      },
+      {
+        "name": "inbox 14"
+      },
+      {
+        "name": "tasks 3001"
+      },
+      {
+        "name": "proposed 2"
+      },
+      {
+        "name": "waiting 119"
+      },
+      {
+        "name": "running 2"
+      },
+      {
+        "name": "asked 9"
+      },
+      {
+        "name": "merging 1"
+      },
+      {
+        "name": "deferred 1"
+      },
+      {
+        "name": "closed 2867"
+      },
+      {
+        "name": "blocked 3"
+      },
+      {
+        "name": "boards 4"
+      },
+      {
+        "name": "sessions 1"
+      },
+      {
+        "name": "processes 6"
+      },
+      {
+        "name": "repos 1"
+      }
+    ],
+    "unnamedNav": 0,
+    "navAxe": []
+  }
+}

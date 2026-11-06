@@ -120,7 +120,7 @@ func TestLocalAndRemoteHostdsServeTogetherRoutedByPinAndLabel(t *testing.T) {
 	// Registered and not connected: waited for, by name.
 	_, _, err = cfg.SelectHostd(ctx, store, HostdSelector{Name: "ws-off"})
 	var wait *HostdWaitError
-	if !errors.As(err, &wait) || err.Error() != "waiting for hostd ws-off" {
+	if !errors.As(err, &wait) || err.Error() != "waiting for host ws-off" {
 		t.Errorf("pinned to a disconnected hostd: %v, want waiting for hostd ws-off", err)
 	}
 	for _, sel := range []HostdSelector{{Name: "ws-gone"}, {Name: "nope"}, {Labels: map[string]string{"gpu": "no"}}} {
@@ -259,7 +259,7 @@ func TestAPinnedHostdIsWaitedForAcrossADisconnect(t *testing.T) {
 	drop()
 	waitFor(t, func() bool { return !cfg.HostdHub.HostdStatus("ws-a").Connected })
 	_, _, err = cfg.SelectHostd(ctx, store, HostdSelector{Name: "ws-a"})
-	if err == nil || !strings.Contains(err.Error(), "waiting for hostd ws-a") {
+	if err == nil || !strings.Contains(err.Error(), "waiting for host ws-a") {
 		t.Errorf("while ws-a is away: %v, want waiting for hostd ws-a", err)
 	}
 	waitFor(t, open)

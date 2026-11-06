@@ -698,12 +698,12 @@ more things:
 - **A Secret for the off-cluster processes.** `Secret/grain-migration`
   is mounted read-only at `/etc/grain-secrets`, and its `hostd-token` is
   passed as `-hostd-token-file`, `-executor-token-file` and
-  `-executor-addr=:4243`. The host's own `grain hostd -server` and
+  `-executor-addr=:4243`. The host's own `grain host -server` and
   `grain model-server -server` both dial in with that one token. That
   is how `run: host` capability servers and ambient CLIs such as `agy`
   keep working once the controller is in the cluster.
   `pkg/daemon.Config.HostdRemote` (comment on that field) describes the
-  hostd side of it.
+  host side of it.
 
 The namespace label and the device plugin are checked the way §1 and
 §2 describe. The script creates and labels the namespace the same way

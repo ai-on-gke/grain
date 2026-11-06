@@ -106,7 +106,7 @@ func TestTheDirectorIsFiledOnTheFirstCycleAndParkedOnItsOwnOpening(t *testing.T)
 		grants = append(grants, g.Capability)
 	}
 	slices.Sort(grants)
-	if !slices.Equal(grants, []string{model.ConsoleSessionCIReadGrant, "api:deployment:read", "bootstrap-playbooks", "durable", model.GrainHealthGrant, model.GrainJournalGrant, "self-debug"}) {
+	if !slices.Equal(grants, []string{model.ConsoleSessionCIReadGrant, "api:deployment:read", "api:self-debug", "bootstrap-playbooks", "durable", model.GrainHealthGrant, model.GrainJournalGrant, model.GrainSourceGrant}) {
 		t.Errorf("Grants = %v, want the shipped default set plus durable", grants)
 	}
 	goal, err := store.TaskGoal(ctx, director.ID)
@@ -629,7 +629,7 @@ func TestChangingASessionsCapabilitiesReachesItsTask(t *testing.T) {
 		cfg.ConsoleSessions = []model.ConsoleSession{{
 			ID:            model.DirectorSessionID,
 			Title:         "Director",
-			Capabilities:  []string{"self-debug", "self-repair"},
+			Capabilities:  []string{model.GrainSourceGrant, "self-repair"},
 			NetworkAccess: model.NetworkOpen,
 			TasksApproved: true,
 		}}
@@ -645,7 +645,7 @@ func TestChangingASessionsCapabilitiesReachesItsTask(t *testing.T) {
 		grants = append(grants, g.Capability)
 	}
 	slices.Sort(grants)
-	if !slices.Equal(grants, []string{model.ConsoleSessionCIReadGrant, "durable", "self-debug", "self-repair"}) {
+	if !slices.Equal(grants, []string{model.ConsoleSessionCIReadGrant, "durable", model.GrainSourceGrant, "self-repair"}) {
 		t.Errorf("Grants = %v, want what the settings now say plus durable and the session defaults", grants)
 	}
 	if updated.NetworkAccess != model.NetworkOpen {
@@ -666,7 +666,7 @@ func TestChangingASessionsRepoGrantsReachesItsTask(t *testing.T) {
 		cfg.ConsoleSessions = []model.ConsoleSession{{
 			ID:            model.DirectorSessionID,
 			Title:         "Director",
-			Capabilities:  []string{"self-debug"},
+			Capabilities:  []string{model.GrainSourceGrant},
 			NetworkAccess: model.NetworkOpen,
 			Reads:         []model.RepoRef{{Owner: "acme", Name: "custom-read"}},
 			Writes:        []model.WriteTarget{{Repo: model.RepoRef{Owner: "acme", Name: "custom-write"}, Base: "main"}},
@@ -721,7 +721,7 @@ func TestWhatASessionProposesWaitsUnlessTheDeploymentSaysOtherwise(t *testing.T)
 	}{
 		{"the default", false, nil, model.StateProposed},
 		{"a deployment that trusts its director", true, nil, model.StateQueued},
-		{"asking for a capability the session holds", true, []any{"self-debug"}, model.StateQueued},
+		{"asking for a capability the session holds", true, []any{model.GrainSourceGrant}, model.StateQueued},
 		// grain#2409: the trust is in what the session may queue, not in
 		// what it may grant -- a capability it never held waits for a person.
 		{"asking for a capability the session lacks", true, []any{"self-repair"}, model.StateProposed},
@@ -789,7 +789,7 @@ func TestChangingASessionsGoogleChatSpaceReachesItsTask(t *testing.T) {
 		cfg.ConsoleSessions = []model.ConsoleSession{{
 			ID:              model.DirectorSessionID,
 			Title:           "Director",
-			Capabilities:    []string{"self-debug"},
+			Capabilities:    []string{model.GrainSourceGrant},
 			NetworkAccess:   model.NetworkOpen,
 			GoogleChatSpace: "spaces/AAAAAAAAAAA",
 		}}
@@ -1273,7 +1273,7 @@ func TestChangingASessionsModelReachesItsTask(t *testing.T) {
 			cfg.ConsoleSessions = []model.ConsoleSession{{
 				ID:            model.DirectorSessionID,
 				Title:         "Director",
-				Capabilities:  []string{"self-debug"},
+				Capabilities:  []string{model.GrainSourceGrant},
 				NetworkAccess: model.NetworkOpen,
 				Model:         chosen,
 			}}
@@ -2171,7 +2171,7 @@ func TestActiveConsoleSessionOperatorEditsPreservedAcrossReconciles(t *testing.T
 		cfg.ConsoleSessions = []model.ConsoleSession{{
 			ID:            model.DirectorSessionID,
 			Title:         "Director",
-			Capabilities:  []string{"self-debug"},
+			Capabilities:  []string{model.GrainSourceGrant},
 			NetworkAccess: model.NetworkOpen,
 			TasksApproved: false,
 			Reads:         []model.RepoRef{{Owner: "acme", Name: "docs"}},
@@ -2191,7 +2191,7 @@ func TestActiveConsoleSessionOperatorEditsPreservedAcrossReconciles(t *testing.T
 	// 1. Operator edits the active console session task via PATCH /api/tasks/{id}
 	// even though a state repo (grain/config) is configured.
 	hostScriptCap := `https://grain.dev/capabilities/host-script#host-script={"script":"cluster-autoscaler"}`
-	caps := []string{"self-debug", "api:tasks:admin", "api:release-manager", hostScriptCap}
+	caps := []string{model.GrainSourceGrant, "api:tasks:admin", "api:release-manager", hostScriptCap}
 	reads := []string{"acme/docs", "acme/widgets"}
 	writes := []ui.WriteTarget{{Repo: "acme/widgets", Base: "main"}}
 	chosenModel := "claude-opus-4"
@@ -2255,7 +2255,7 @@ func TestActiveConsoleSessionOperatorEditsPreservedAcrossReconciles(t *testing.T
 		cfg.ConsoleSessions = []model.ConsoleSession{{
 			ID:            model.DirectorSessionID,
 			Title:         "Director",
-			Capabilities:  []string{"self-debug", "self-repair"},
+			Capabilities:  []string{model.GrainSourceGrant, "self-repair"},
 			NetworkAccess: model.NetworkOpen,
 			TasksApproved: false,
 			Reads: []model.RepoRef{

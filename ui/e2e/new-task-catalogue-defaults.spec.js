@@ -17,7 +17,7 @@ import { chips, chooseOption } from "./searchSelect.js";
 
 // A deployment default the capability catalogue restricts to one repo,
 // on a task filed with No repo (2026-10-29 test run, Bug 3). The demo
-// defaults self-debug and read-issues; with read-issues restricted to
+// defaults api:self-debug, grain#source (once self-debug) and read-issues; with read-issues restricted to
 // acme/widgets, the form used to post all defaults and be refused with
 // a 400 for a grant nobody had picked. Now it marks read-issues as refused
 // where it is ticked, says it is left off, and files the task with the
@@ -140,7 +140,10 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
       const task = await res.json();
       const detail = await (await request.get(`/api/tasks/${task.id}`)).json();
       expect(detail.capabilities).toEqual(
-        expect.arrayContaining(["self-debug"]),
+        expect.arrayContaining([
+          "api:self-debug",
+          "https://grain.dev/capabilities/grain#source={}",
+        ]),
       );
       expect(detail.capabilities).not.toContain("read-issues");
     }
@@ -168,7 +171,7 @@ test("an edited picker is asked to untick a refused grant", async ({
       page,
       `E2E catalogue edited ${Date.now()}`,
     );
-    await chooseOption(picker, "self-debug");
+    await chooseOption(picker, "bootstrap-playbooks");
     await page.keyboard.press("Escape");
     await expect(note).toHaveText(
       "settings/capabilities.yml refuses read-issues on a task with no repo: untick it, or the task will not be filed.",

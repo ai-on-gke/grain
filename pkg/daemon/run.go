@@ -31,9 +31,9 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
-	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/cifault"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -1508,10 +1508,10 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	// capability from a path they got wrong. One line in the journal at
 	// startup is where an operator can actually see it.
 	//
-	// Logged rather than fatal: a deployment whose self-debug tools cannot
+	// Logged rather than fatal: a deployment whose grain#source cannot
 	// read anything is still a deployment that should dispatch work.
 	grainSrcDir := sourceDir(cfg.UpgradeSrcDir)
-	if err := selfdebug.CheckSourceReadable(grainSrcDir); err != nil {
+	if err := grainserver.CheckSourceReadable(grainSrcDir); err != nil {
 		log.Printf("grain daemon: %v", err)
 	}
 

@@ -76,7 +76,14 @@ describe("SearchSelect multiple", () => {
     await user.click(box);
     const web = screen.getByRole("option", { name: /Web search/ });
     expect(web).toHaveAttribute("title", "Search the web");
-    expect(web.querySelector('input[type="checkbox"]')).toBeChecked();
+    // The tick is drawn, not an <input>: aria-selected is what says the
+    // row is picked, and no control nests inside the option.
+    expect(web).toHaveAttribute("aria-selected", "true");
+    expect(web.querySelector(".search-select-check")).toHaveAttribute(
+      "data-checked",
+      "true",
+    );
+    expect(web.querySelector("input")).toBeNull();
     expect(screen.getByRole("option", { name: /GCP key/ })).toHaveTextContent(
       "Not ready",
     );
@@ -117,5 +124,26 @@ describe("SearchSelect multiple", () => {
 
     await user.keyboard("{Enter}");
     expect(onSubmit).toHaveBeenCalledWith(["web-search"]);
+  });
+
+  // The open list that matches nothing: MUI highlights no option, picks
+  // nothing on Enter, and the keypress used to go on to submit the form
+  // (a Schedule was filed from a picker reading "No matches").
+  it("keeps Enter from the form while the open list matches nothing", async () => {
+    const user = userEvent.setup();
+    const { onSubmit, box } = form({
+      options: OPTIONS.filter((o) => !o.pinned),
+    });
+    await user.click(box);
+    await user.type(box, "zzqxv");
+    expect(screen.getByText("No matches")).toBeInTheDocument();
+    await user.keyboard("{Enter}");
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(chosenValues(box)).toEqual([]);
+
+    // Closed again, Enter is the form's.
+    await user.keyboard("{Escape}");
+    await user.keyboard("{Enter}");
+    expect(onSubmit).toHaveBeenCalledWith([]);
   });
 });

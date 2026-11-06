@@ -81,9 +81,9 @@ type Hostd struct {
 // hostdName is d's hostd as a sentence names it.
 func (d *Hostd) hostdName() string {
 	if d.Name == "" {
-		return "grain hostd"
+		return "the host agent"
 	}
-	return "grain hostd " + d.Name
+	return "host " + d.Name
 }
 
 // Host is the agent.Host a run's CLI named entry on hostd's allowlist
@@ -113,7 +113,7 @@ func (d *Hostd) Handshake(ctx context.Context) (hostd.Hello, error) {
 		return peer, err
 	}
 	if err := hostd.Compatible(hostd.ThisHello(d.Client.Build), peer); err != nil {
-		return peer, fmt.Errorf("grain hostd cannot run this daemon's host CLIs: %w", err)
+		return peer, fmt.Errorf("the host agent cannot run this daemon's host CLIs: %w", err)
 	}
 	return peer, nil
 }
@@ -132,10 +132,10 @@ func (d *Hostd) Start(ctx context.Context, req hostd.Request, stdin io.Reader, s
 		return hostd.Exit{Code: -1}, err
 	}
 	if peer.Draining {
-		return hostd.Exit{Code: -1}, &hostd.RefusedError{Reason: "grain hostd is draining for its own upgrade", Draining: true}
+		return hostd.Exit{Code: -1}, &hostd.RefusedError{Reason: "the host agent is draining for its own upgrade", Draining: true}
 	}
 	if !peer.SupportsAttach() {
-		d.logf("runhost: grain hostd speaks protocol %d, which cannot detach; run %s's CLI ends if this daemon stops", peer.Protocol, r.Run)
+		d.logf("runhost: the host agent speaks protocol %d, which cannot detach; run %s's CLI ends if this daemon stops", peer.Protocol, r.Run)
 		return d.Client.Run(ctx, req, stdin, stdout, stderr)
 	}
 	allowance := d.Allowance
@@ -152,7 +152,7 @@ func (d *Hostd) Start(ctx context.Context, req hostd.Request, stdin io.Reader, s
 		c.OnStarted = func(st hostd.Started) {
 			defer close(started)
 			proc.set(st.ID)
-			d.logf("runhost: run %s's CLI %q started detached through grain hostd as %s (pid %d)", r.Run, req.Name, st.ID, st.PID)
+			d.logf("runhost: run %s's CLI %q started detached through the host agent as %s (pid %d)", r.Run, req.Name, st.ID, st.PID)
 			if d.OnCursor != nil {
 				d.OnCursor(context.WithoutCancel(ctx), r.Run, 0)
 			}
@@ -211,7 +211,7 @@ func (c *countingWriter) count() int64 {
 func (d *Hostd) Attach(ctx context.Context, info Info, cursor int64, tee io.Writer) (string, error) {
 	id, ok := HostdID(info)
 	if !ok {
-		return "", fmt.Errorf("runhost: %s is not a grain hostd process", info.Name)
+		return "", fmt.Errorf("runhost: %s is not a host process", info.Name)
 	}
 	var whole, stderr bytes.Buffer
 	started := make(chan struct{})
@@ -243,11 +243,11 @@ func (d *Hostd) Release(ctx context.Context, info Info, reason string) {
 	if !ok {
 		return
 	}
-	d.logf("runhost: releasing grain hostd process %s (task %s, run %s): %s", id, info.Labels.Task, info.Labels.Run, reason)
+	d.logf("runhost: releasing the host agent process %s (task %s, run %s): %s", id, info.Labels.Task, info.Labels.Run, reason)
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	if err := d.Client.Cancel(cctx, id); err != nil {
-		d.logf("runhost: cancelling grain hostd process %s: %v", id, err)
+		d.logf("runhost: cancelling the host agent process %s: %v", id, err)
 	}
 }
 
@@ -313,7 +313,7 @@ func (d *Hostd) stream(ctx context.Context, run string, proc *procRef, skip int6
 		if flushed.Load() {
 			why = "upgrade flushing"
 		}
-		d.logf("runhost: %s; leaving run %s's CLI running in grain hostd at cursor %d", why, run, w.cursor())
+		d.logf("runhost: %s; leaving run %s's CLI running in the host agent at cursor %d", why, run, w.cursor())
 		return exit, ErrDetached
 	}
 	if err != nil && ctx.Err() != nil && errors.Is(err, context.Canceled) {
@@ -348,7 +348,7 @@ func (d *Hostd) reattach(ctx context.Context, c hostd.Client, run, id string, ou
 		return hostd.Exit{Code: -1}, ctx.Err()
 	}
 	give := time.Now().Add(d.ReattachTimeout)
-	d.logf("runhost: lost %s while streaming run %s's CLI (%s) at cursor %d; it keeps running, and is re-attached if hostd is back within %s",
+	d.logf("runhost: lost %s while streaming run %s's CLI (%s) at cursor %d; it keeps running, and is re-attached if the host agent is back within %s",
 		d.hostdName(), run, id, out.cursor(), d.ReattachTimeout)
 	wait := 100 * time.Millisecond
 	for {

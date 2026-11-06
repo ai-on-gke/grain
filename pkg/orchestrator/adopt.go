@@ -452,7 +452,7 @@ func adoptedSessionShape(ctx context.Context, deps Deps, tk model.Task) Shape {
 		MemoryMB:      tk.SandboxMemoryMB,
 		DiskGB:        tk.SandboxDiskGB,
 		NetworkAccess: tk.NetworkAccess,
-		GrainSource:   hasGrant(tk, model.SelfDebugCapability),
+		GrainSource:   hasGrainSource(tk),
 		Class:         sandboxClassFor(tk),
 	}
 	if isUnisolated(deps.Sandboxes) {

@@ -145,7 +145,7 @@ GKE. A local install is `linux-kvm` or `linux-container`, set up by
 `/var/lib/grain`, `grain-daemon.service`, `grain-hostd.service` and
 `/etc/grain/hostd.yaml`. After the migration the controller runs in a
 cluster on the `k8s-granule` backend
-(`deploy/kubernetes/grain-granule.yaml`), and `grain hostd` keeps
+(`deploy/kubernetes/grain-granule.yaml`), and `grain host` keeps
 running on the host and dials out to it. So does a `grain
 model-server`, for host-bound CLIs such as `agy` on a workstation. It is
 the same deployment, with the same store, history, secrets key,
@@ -208,9 +208,9 @@ failure picks up where the last run stopped:
 5. **Controller.** The script scales `Deployment/grain` to 1 and waits
    for `kubectl rollout status`.
 6. **This host.** By default `grain-gke-forward.service` runs `kubectl
-   port-forward svc/grain` to `127.0.0.1:4280` as hostd's user;
+   port-forward svc/grain` to `127.0.0.1:4280` as host's user;
    `--server-url` names a Gateway/IAP URL to use instead. A drop-in,
-   `grain-hostd.service.d/gke.conf`, re-runs hostd's own `ExecStart`
+   `grain-hostd.service.d/gke.conf`, re-runs host's own `ExecStart`
    with `-server <url> -token-file /etc/grain/hostd.token`. The
    allowlist, its built-in capability servers (`grain-gcp`,
    `grain-host-script`, `grain-gchat`, ...) and the local socket stay
@@ -232,7 +232,7 @@ failure picks up where the last run stopped:
 copies the PVC back into the data directory and moves the local copy
 aside to `<data-dir>.pre-rollback-<timestamp>`; `--no-sync-back` skips
 the copy. It removes the drop-in, the forward unit and the model-server
-unit, restarts hostd on its socket, unmasks `grain-daemon.service`,
+unit, restarts host on its socket, unmasks `grain-daemon.service`,
 moves its unit file back from `grain-daemon.service.pre-gke`, starts it,
 and lifts the pause.
 
