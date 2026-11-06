@@ -161,22 +161,22 @@ func TestCapabilityProviders(t *testing.T) {
 		{
 			name: "no gcp project configured still registers the built-in capabilities",
 			cfg:  Config{},
-			want: []string{"github-sandbox", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
+			want: []string{"github-sandbox", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
 		},
 		{
 			name: "an agent service account without a gcp project does not add either gcp capability",
 			cfg:  Config{GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"},
-			want: []string{"github-sandbox", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
+			want: []string{"github-sandbox", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
 		},
 		{
 			name: "a gcp project adds nothing: gemini-key is served by the gcp capability server",
 			cfg:  Config{GcpProject: "proj"},
-			want: []string{"github-sandbox", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
+			want: []string{"github-sandbox", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
 		},
 		{
 			name: "a gcp project with an agent service account adds nothing either (gcp-key and gemini-key are served by the gcp capability server)",
 			cfg:  Config{GcpProject: "proj", GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"},
-			want: []string{"github-sandbox", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
+			want: []string{"github-sandbox", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
 		},
 	}
 	for _, tc := range cases {

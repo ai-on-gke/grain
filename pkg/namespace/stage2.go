@@ -308,13 +308,14 @@ func (s Scope) mayReadRepoTasks() bool {
 }
 
 // refuseTaskRead refuses task://<relPath> for a task other than the run's
-// own, naming both ways in: the self-debug capability, or an
-// api:tasks:read@<repo> grant.
+// own, naming both ways in: an api:tasks:read grant (the api:self-debug
+// preset, once the self-debug capability, holds one), or one naming the
+// task's repository.
 func refuseTaskRead(relPath string) error {
 	return fmt.Errorf(
-		"%w: task://%s: another task's record needs the %q capability or an %q grant naming its repository, and this run holds neither. "+
+		"%w: task://%s: another task's record needs an %q grant (the api:self-debug preset holds one) or an %q grant naming its repository, and this run holds neither. "+
 			"Nothing you can do from inside this run will add one -- a human attaches it to the task.",
-		ErrForbidden, relPath, "self-debug", "api:tasks:read@<owner/repo>")
+		ErrForbidden, relPath, "api:tasks:read", "api:tasks:read@<owner/repo>")
 }
 
 // PermitsConfig reports whether this scope may read config://<relPath>.
@@ -381,7 +382,7 @@ func (s *Server) resolveTask(ctx context.Context, scope Scope, relPath string) (
 		if !scope.MayReadAllTasks {
 			own := scope.ownTaskID()
 			if own == "" {
-				return nil, RefuseCapability("task://", "self-debug")
+				return nil, RefuseCapability("task://", "api:tasks:read")
 			}
 			return &ResolvedNode{
 				Scheme:  "task",
@@ -552,7 +553,7 @@ func (s *Server) resolveTask(ctx context.Context, scope Scope, relPath string) (
 func (s *Server) resolveConfig(ctx context.Context, scope Scope, relPath string) (*ResolvedNode, error) {
 	relPath = strings.TrimPrefix(strings.TrimSuffix(relPath, "/"), "/")
 	if !scope.PermitsConfig(relPath) {
-		return nil, RefuseCapability("config://"+relPath, "self-debug")
+		return nil, RefuseCapability("config://"+relPath, "https://grain.dev/capabilities/grain#source")
 	}
 	for _, seg := range strings.Split(relPath, "/") {
 		if seg == ".git" || seg == "secrets.enc" {
@@ -1227,7 +1228,7 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 
 	case "metrics", "metrics.txt":
 		if !scope.MayReadMetrics {
-			return nil, RefuseCapability("deploy://"+relPath, "self-debug")
+			return nil, RefuseCapability("deploy://"+relPath, "api:deployment:read")
 		}
 		if s == nil || s.Deploy == nil {
 			return nil, fmt.Errorf("%w: deploy://metrics is not configured on this daemon", ErrNotFound)
@@ -1260,7 +1261,7 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 
 	case "pipeline-changes", "pipeline-changes.md":
 		if !scope.MayReadPipeline {
-			return nil, RefuseCapability("deploy://"+relPath, "self-debug")
+			return nil, RefuseCapability("deploy://"+relPath, "api:deployment:read")
 		}
 		if s == nil || s.Deploy == nil {
 			return nil, fmt.Errorf("%w: deploy://pipeline-changes is not configured on this daemon", ErrNotFound)

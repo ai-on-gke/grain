@@ -880,16 +880,19 @@ func GitCredentialName(capability string) (name string, ok bool) {
 // own event gate and repository list are what bound it.
 const ReleaseGateReadCapability = "release-gate-read"
 
-// SelfDebugCapability is the grant that lets a task's run read grain's
-// own source, tasks and metrics (pkg/capability/selfdebug). The source
-// is the deployment's own baked-in copy, placed in the sandbox at
-// grain-src/ (orchestrator's placeGrainSource) and read by
-// read_grain_source: the grant reaches no repository through the git
-// proxy, and implies none (CapabilityRepos).
+// SelfDebugCapability is the retired bare name of SelfDebugGrants: the
+// api:self-debug preset (every task's record, metrics, pipeline and
+// deployment status) and GrainSourceGrant, which places the deployment's
+// own baked-in source at grain-src/ in the sandbox (orchestrator's
+// placeGrainSource) and opens src://. Schema migration 115 rewrote the
+// stored grants; the bare name stays readable as an alias for one release
+// (CanonicalLegacyGrants, IsGrainSourceGrant, apiAliasCapabilities). The
+// source grant reaches no repository through the git proxy, and implies
+// none (CapabilityRepos).
 const SelfDebugCapability = "self-debug"
 
 // GrainSourceRepo is grain's own source repository. Nothing grants a
-// read of it implicitly: a self-debug run is given the deployment's
+// read of it implicitly: a grain#source run is given the deployment's
 // baked-in copy instead, and a task that wants the repository itself
 // names it in its reads or a repo-read: grant like any other.
 func GrainSourceRepo() RepoRef { return RepoRef{Owner: "ai-on-gke", Name: "grain"} }
@@ -897,7 +900,7 @@ func GrainSourceRepo() RepoRef { return RepoRef{Owner: "ai-on-gke", Name: "grain
 // CapabilityRepos returns the repositories a grant of capability lets a
 // run reach beyond its task's own Target, Writes and Reads: the
 // repository a repository access grant (IsRepoAccessGrant) names. Nil for
-// any other capability -- SelfDebugCapability included, whose grain-src/
+// any other capability -- GrainSourceGrant included, whose grain-src/
 // is the deployment's baked-in copy rather than a clone, so a local
 // policy never refuses a self-debug task over bwsalmon/grain. Anything
 // that judges a task by the repositories it touches -- a local policy's

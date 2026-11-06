@@ -2530,7 +2530,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		// Read here, before the sandbox exists, because a backend that
 		// can mount grain-src/ has to know at create time
 		// (placeGrainSource).
-		GrainSource: hasGrant(*task, model.SelfDebugCapability),
+		GrainSource: hasGrainSource(*task),
 		Class:       sandboxClassFor(*task),
 	}
 	// The operator's ambient credentials (-host-sandbox-env) go to a run

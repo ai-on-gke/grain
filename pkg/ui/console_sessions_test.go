@@ -256,7 +256,7 @@ func TestUpdatingASessionsCapabilitiesIsStored(t *testing.T) {
 	t.Parallel()
 	client, store, ctx := testClient(t)
 
-	capabilities := []string{"self-debug", model.GrainHostExecGrant}
+	capabilities := []string{model.GrainSourceGrant, model.GrainHostExecGrant}
 	sessions, err := client.UpdateConsoleSession(ctx, model.DirectorSessionID,
 		ui.UpdateConsoleSessionRequest{Capabilities: &capabilities})
 	if err != nil {
@@ -355,12 +355,12 @@ func TestConsoleSessionCapabilitiesSayWhichOnesThisDeploymentCanHonour(t *testin
 		t.Error("github-sandbox says it is not ready without naming a single thing it needs")
 	}
 	// One that needs no configuration at all stays on offer.
-	debug, ok := byID["self-debug"]
+	debug, ok := byID["bootstrap-playbooks"]
 	if !ok {
-		t.Fatalf("self-debug is missing from %v", resp.Capabilities)
+		t.Fatalf("bootstrap-playbooks is missing from %v", resp.Capabilities)
 	}
 	if debug.Ready == nil || !*debug.Ready {
-		t.Errorf("self-debug ready = %v, want true: it needs nothing configured", debug.Ready)
+		t.Errorf("bootstrap-playbooks ready = %v, want true: it needs nothing configured", debug.Ready)
 	}
 }
 
@@ -1095,7 +1095,7 @@ func TestActiveConsoleSessionEditableWhenStateRepoConfigured(t *testing.T) {
 		ConsoleSessions: []model.ConsoleSession{{
 			ID:            model.DirectorSessionID,
 			Title:         "Director",
-			Capabilities:  []string{"self-debug"},
+			Capabilities:  []string{"bootstrap-playbooks"},
 			NetworkAccess: model.NetworkOpen,
 		}},
 	}); err != nil {
@@ -1106,7 +1106,7 @@ func TestActiveConsoleSessionEditableWhenStateRepoConfigured(t *testing.T) {
 	taskID, err := model.FileConsoleSessionTask(ctx, store, model.ConsoleSession{
 		ID:            model.DirectorSessionID,
 		Title:         "Director",
-		Capabilities:  []string{"self-debug"},
+		Capabilities:  []string{"bootstrap-playbooks"},
 		NetworkAccess: model.NetworkOpen,
 	}, model.FileConsoleSessionOptions{
 		StateRepo:       model.RepoRef{Owner: "acme", Name: "grain-config"},
@@ -1128,7 +1128,7 @@ func TestActiveConsoleSessionEditableWhenStateRepoConfigured(t *testing.T) {
 
 	// 1. Edit active session via PATCH /api/tasks/{id} (including dangerous scopes, reads, writes, model, network_access).
 	patchBody := `{
-		"capabilities": ["self-debug", "api:tasks:admin", "api:release-manager", "https://grain.dev/capabilities/host-script#host-script={\"script\":\"cluster-autoscaler\"}"],
+		"capabilities": ["bootstrap-playbooks", "api:tasks:admin", "api:release-manager", "https://grain.dev/capabilities/host-script#host-script={\"script\":\"cluster-autoscaler\"}"],
 		"reads": ["acme/docs"],
 		"writes": [{"repo": "acme/widgets", "base": "main"}],
 		"model": "claude-opus-4",
@@ -1151,7 +1151,7 @@ func TestActiveConsoleSessionEditableWhenStateRepoConfigured(t *testing.T) {
 		t.Fatalf("len(listed.Sessions) = %d, want 1", len(listed.Sessions))
 	}
 	dir := listed.Sessions[0]
-	for _, wantCap := range []string{"self-debug", "api:tasks:admin", "api:release-manager"} {
+	for _, wantCap := range []string{"bootstrap-playbooks", "api:tasks:admin", "api:release-manager"} {
 		if !slices.Contains(dir.Capabilities, wantCap) {
 			t.Errorf("GET /api/console-sessions Capabilities = %v, missing %q", dir.Capabilities, wantCap)
 		}
@@ -1171,7 +1171,7 @@ func TestActiveConsoleSessionEditableWhenStateRepoConfigured(t *testing.T) {
 
 	// 3. Edit active session via PUT /api/console-sessions/director directly when StateRepo is configured.
 	putBody := `{
-		"capabilities": ["self-debug", "self-repair", "api:tasks:admin"],
+		"capabilities": ["bootstrap-playbooks", "self-repair", "api:tasks:admin"],
 		"model": "claude-sonnet-4",
 		"networkAccess": "open",
 		"tasksApproved": true

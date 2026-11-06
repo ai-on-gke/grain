@@ -404,7 +404,7 @@ func Run(opts Options) error {
 	storedCfg.DefaultModel = "gemini-2.5-pro"
 	storedCfg.GCPProject = "grain-sandbox-dev"
 	storedCfg.GCPServiceAccountEmail = "grain-sb-agent-0@grain-sandbox-dev.iam.gserviceaccount.com"
-	storedCfg.DefaultCapabilities = []string{"self-debug", "read-issues"}
+	storedCfg.DefaultCapabilities = append(model.SelfDebugGrants(), "read-issues")
 	storedCfg.TargetRepos = []string{"acme/widgets"}
 	// The deployment's git connection to the fake credential above, as
 	// `grain connections import` would record it.
@@ -851,7 +851,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		Title:        "Bump the Go toolchain to 1.24",
 		Description:  "go.mod and the CI image both need the version bump.",
 		Approved:     true,
-		Capabilities: &[]string{"self-debug"},
+		Capabilities: &[]string{model.GrainSourceGrant},
 		CustomFields: map[string]ui.CustomFieldValue{
 			"priority": {"medium"},
 			// The field that holds a set, on the task with more than one
@@ -1574,7 +1574,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		Repo:         "acme/widgets",
 		Base:         "main",
 		AutoMerge:    false,
-		Capabilities: []string{"self-debug"},
+		Capabilities: []string{model.GrainSourceGrant},
 		Recurrence:   ui.Recurrence{Kind: "weekly", TimeOfDay: "06:00", Weekday: "monday"},
 	}); err != nil {
 		return fmt.Errorf("seeding schedule: %w", err)
