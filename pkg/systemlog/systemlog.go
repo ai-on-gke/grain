@@ -48,12 +48,20 @@ import (
 type Journalctl struct {
 	// Unit is the systemd unit name to read, e.g. "grain-daemon.service".
 	Unit string
+	// User selects the user manager's journal (journalctl --user): the
+	// unit is one of this account's, such as `grain init-workstation`'s
+	// grain.service, rather than the system's. Without it journalctl
+	// looks for the unit among the system manager's and finds nothing.
+	User bool
 }
+
+// desc is the command this reader stands for, as its errors name it.
+func (j Journalctl) desc() string { return Unit{Name: j.Unit, User: j.User}.LogCommand() }
 
 // Tail returns the last lines entries of the unit's journal, oldest
 // last. lines must be positive; see checkLines.
 func (j Journalctl) Tail(ctx context.Context, lines int) ([]string, error) {
-	if err := checkLines("journalctl -u "+j.Unit, lines); err != nil {
+	if err := checkLines(j.desc(), lines); err != nil {
 		return nil, err
 	}
 	return j.Read(ctx, Query{Lines: lines})
@@ -74,7 +82,11 @@ func (j Journalctl) Tail(ctx context.Context, lines int) ([]string, error) {
 // includes reading other units, other machines and other output formats
 // -- by writing a clever value into one of these.
 func (j Journalctl) Read(ctx context.Context, q Query) ([]string, error) {
-	return journalctlQuery(ctx, "journalctl -u "+j.Unit, q, "--unit", j.Unit)
+	sel := []string{"--unit", j.Unit}
+	if j.User {
+		sel = append([]string{"--user"}, sel...)
+	}
+	return journalctlQuery(ctx, j.desc(), q, sel...)
 }
 
 // Dmesg tails the kernel's own log for the machine the daemon runs on --

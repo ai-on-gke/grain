@@ -131,7 +131,7 @@ follows). Requests with role grants are checked as follows:
 | File downloads (`/api/fs/...`, CI artifacts and logs) | Their table scope, on the repository the path names. |
 | `/api/mcp`, `/mcp` | Refused to any role that does not resolve to every scope. Their tools dispatch to many routes in process, and we have not given that dispatch a per-tool role check. |
 | `/staging/{name}/...` (persistent sandboxes' running services) | Refused to any role that does not resolve to every scope. |
-| hostd data plane (`/api/hostd/connect`, `/api/hostd/install.sh`) | These authenticate in their own protocol with the hostd's token. The service-owner admission check is unchanged. Registering, rotating and revoking a hostd needs `capabilities:admin`. |
+| hostd data plane (`/api/hostd/connect`, `/hostd/install`, `/api/hostd/install.sh`, `/api/hostd/join*`, `/api/hostd/renew`) | Authenticate in their own protocol with the host's credential and Ed25519 proof-of-possession signature (or verified enrolling identity on `/api/hostd/join`). Viewing/managing enrollment codes and accepting/rejecting pending join requests require the deployment owner (`IsDeploymentOwner`); host registry lifecycle actions require `capabilities:admin`. |
 | CI data plane (`/cli/ci/...`, sandbox proxy) | Served by the sandbox proxy to run tokens, never to a verified session. Not affected. |
 | `PUT /api/config` (registered outside `route`) | Gated as `PUT /api/settings` (`settings:write`). |
 

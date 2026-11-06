@@ -969,6 +969,58 @@ func TestReviewQuestionsDemoSeedsWithGitHubSim(t *testing.T) {
 	}
 }
 
+// TestHumanReviewDemoSeedsWithGitHubSim is `grain demo -human-review
+// -github-sim`, which exited at start (2026-11-06 saved boards
+// walkthrough): the review is based on the held change's branch, and the
+// simulated GitHub refused a base that was never pushed.
+func TestHumanReviewDemoSeedsWithGitHubSim(t *testing.T) {
+	t.Parallel()
+	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+	if err != nil {
+		t.Fatalf("opening embedded sqlite: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := model.New(db)
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("applying schema: %v", err)
+	}
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	cfg, bare, err := configureGitHubSimDemo(t.TempDir(), ui.Config{Actor: ui.DefaultActor("demo-operator"), DefaultTarget: &repo}, repo)
+	if err != nil {
+		t.Fatalf("configureGitHubSimDemo: %v", err)
+	}
+	if err := seedHumanReviewDemo(ctx, store, cfg, repo, bare); err != nil {
+		t.Fatalf("seedHumanReviewDemo with -github-sim: %v", err)
+	}
+	tasks, err := store.ListTasks(ctx)
+	if err != nil {
+		t.Fatalf("listing tasks: %v", err)
+	}
+	var held, review *model.Task
+	for i := range tasks {
+		switch tasks[i].Title {
+		case "Default new workspaces to the paid tier":
+			held = &tasks[i]
+		case "Review: Default new workspaces to the paid tier":
+			review = &tasks[i]
+		}
+	}
+	if held == nil || review == nil {
+		t.Fatalf("seeded tasks = %v, want the held change and its review", tasks)
+	}
+	if want := model.BranchName(held.ID); review.Base != want {
+		t.Errorf("review base = %q, want %q", review.Base, want)
+	}
+	names, err := ui.NewClient(cfg, store).ListGitHubBranches(ctx, repo)
+	if err != nil {
+		t.Fatalf("listing the sim's branches: %v", err)
+	}
+	if !slices.Contains(names, model.BranchName(held.ID)) {
+		t.Errorf("sim branches = %v, want the held change's %s pushed", names, model.BranchName(held.ID))
+	}
+}
+
 // TestSeedDemoTimesItsSchedulesFromNow pins the seeded schedules to the
 // real clock rather than the backdated one the seeded tasks are filed
 // with. Timed from the last task's createdAt (40 minutes ago), "daily at

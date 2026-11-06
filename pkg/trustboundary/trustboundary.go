@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v17"
+const Version = "trust-boundary/v18"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +81,10 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v18 adds host enrollment codes, pending pairing-code handshakes and
+// deployment-owner request checks (pkg/model/host_enroll.go,
+// pkg/ui/request_actor.go, and pkg/ui/host_enroll.go) to auth-routes.
 //
 // v17 added the authorization-bearing files the 2026-11-05 nightly
 // security review found unclassified (finding 2, task 3168) to
@@ -199,7 +203,7 @@ var Categories = []Category{
 		Description: "authentication, principals, request guards and the UI/API route table",
 		prefixes:    []string{"pkg/access/", "pkg/iapreconciler/", "pkg/policy/", "pkg/jwks/"},
 		files: []string{
-			"pkg/ui/server.go", "pkg/ui/principal.go", "pkg/ui/access.go",
+			"pkg/ui/server.go", "pkg/ui/principal.go", "pkg/ui/request_actor.go", "pkg/ui/access.go",
 			"pkg/ui/accesscode.go", "pkg/ui/single_tenant.go",
 			"pkg/ui/allowlist.go", "pkg/ui/verifier.go",
 			"pkg/ui/auth.go", "pkg/ui/agent_keys.go", "pkg/ui/github_tokens.go",
@@ -213,9 +217,9 @@ var Categories = []Category{
 			// The hostd registry: whether a dialing hostd is local or must
 			// present its owner's identity, token -> hostd/owner, revocation,
 			// and which hostd a run is routed to.
-			"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/connection_hostd.go",
+			"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/host_enroll.go", "pkg/ui/connection_hostd.go",
 			"pkg/daemon/hostd_registry.go", "pkg/daemon/hostd_route.go",
-			"pkg/daemon/hostexec.go", "pkg/model/hostd.go",
+			"pkg/daemon/hostexec.go", "pkg/model/hostd.go", "pkg/model/host_enroll.go",
 			// messagesSince's human-only filter is what makes the answer a
 			// host-exec confirmation reads a person's.
 			"pkg/ui/messages.go",

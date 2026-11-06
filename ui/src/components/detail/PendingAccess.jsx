@@ -106,18 +106,22 @@ export default function PendingAccess({ t, act }) {
         </Typography>
       )}
 
-      {earlier.map((d) => (
-        <Alert
-          key={d.at}
-          severity={d.denied ? "warning" : "success"}
-          sx={{ mt: 1 }}
-          data-testid="access-earlier"
-        >
-          {d.denied
-            ? `This same request was denied before${d.by?.id ? ` by ${d.by.id}` : ""}: ${d.reason}`
-            : `This same request was answered before${d.by?.id ? ` by ${d.by.id}` : ""}: ${(d.granted || []).length} granted, ${(d.declined || []).length} declined.`}
-        </Alert>
-      ))}
+      {earlier.map((d) => {
+        const declined = d.declined || [];
+        const who = d.by?.id || d.by?.ID;
+        return (
+          <Alert
+            key={d.at}
+            severity={d.denied || declined.length > 0 ? "warning" : "success"}
+            sx={{ mt: 1, overflowWrap: "anywhere" }}
+            data-testid="access-earlier"
+          >
+            {d.denied
+              ? `Denied before${who ? ` by ${who}` : ""}: ${d.reason}`
+              : `Answered before${who ? ` by ${who}` : ""}: ${(d.granted || []).length} granted, ${declined.length} declined${declined.length ? ` (${declined.map(itemText).join(", ")})` : ""}.`}
+          </Alert>
+        );
+      })}
 
       <Box
         component="ul"
@@ -302,7 +306,11 @@ export function itemText(it) {
     case "network":
       return `network › ${it.access}`;
     default:
-      return it.grant || it.capability;
+      if (it.grant) return it.grant;
+      if (it.with && Object.keys(it.with).length > 0) {
+        return `${it.capability}=${JSON.stringify(it.with)}`;
+      }
+      return it.capability;
   }
 }
 

@@ -217,14 +217,14 @@ export function askedCase(t) {
   }
   if (t.turnStopped)
     return { kind: "stopped", title: "Stopped by you", action: "reply" };
+  if (t.awaitingAccess)
+    return { kind: "access", title: "Asked for access", action: "grant" };
   if (t.interactive || t.consoleSession)
     return {
       kind: "message",
       title: "Waiting for your message",
       action: "reply",
     };
-  if (t.awaitingAccess)
-    return { kind: "access", title: "Asked for access", action: "grant" };
   if (t.questionSummary || t.pendingSecret)
     return { kind: "question", title: "Asked a question", action: "reply" };
   return { kind: "answer", title: "Answered in a comment", action: "reply" };
@@ -957,26 +957,6 @@ export function reasonLabel(r) {
   if (!reason) return null;
   const at = reason.indexOf("/");
   return (at < 0 ? reason : reason.slice(at + 1)).replaceAll("_", " ");
-}
-
-// taskReasonLabel is reasonLabel for a task's own reason chip. The
-// orchestrator gives every awaiting_reply task the one sub-case
-// "awaiting_reply/question" (taskReasonOf), but askedCase tells those
-// tasks apart, and the badge's tooltip already says which one this is.
-// Left alone, the chip beside a finished report's "Answered in a comment"
-// badge read "question" -- the very word #674 took off that badge. So for
-// that sub-case the chip names askedCase's kind instead; every other
-// reason is reasonLabel's.
-const ASKED_REASON_LABELS = {
-  answer: "answered",
-  message: "your message",
-  access: "access request",
-  stopped: "stopped",
-};
-export function taskReasonLabel(t) {
-  const label = reasonLabel(t?.reason);
-  if (t?.reason?.reason !== "awaiting_reply/question") return label;
-  return ASKED_REASON_LABELS[askedCase(t)?.kind] ?? label;
 }
 
 // reasonTitle is the sub-case's hover: its full name, which of the three

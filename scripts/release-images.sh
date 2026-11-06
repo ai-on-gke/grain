@@ -13,7 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Build and publish Grain's three release images from a Grain CI release job.
+# Build and publish Grain's release images -- the guest, the Kubernetes
+# sandbox image, the grain daemon image and the grain-registry image -- from
+# a Grain CI release job.
 # The registry login is an operator-owned CI capability, not repository YAML:
 # `grain repo ci-capabilities -set package-publish bwsalmon/grain`, which
 # publishes as this deployment's own GitHub credential for the repository --
@@ -25,9 +27,10 @@
 # Two phases, because a release has to be able to look at what it built
 # before it publishes it:
 #
-#   build   build the guest, the Kubernetes sandbox image and the grain
-#           image, check the grain image's own record of which commit it
-#           came from, and push nothing that anybody resolves. The two
+#   build   build the guest, the Kubernetes sandbox image, the grain
+#           image and the registry image, check the grain and registry
+#           images' own records of which commit they came from, and push
+#           nothing that anybody resolves. The two
 #           sandbox images are the exception that proves it: their
 #           immutable sha- tags are pushed (not signed) here, because the
 #           grain image names them by the digest a registry assigns on
@@ -36,8 +39,9 @@
 #           What it built is recorded in $RELEASE_IMAGES_STATE (default
 #           /tmp/release-images.env) for the steps that follow.
 #   push    sign the two sandbox images by the digests `build` recorded,
-#           publish the grain image's immutable sha- tag and sign it,
-#           then move all three branch tags forward onto this commit
+#           publish the grain and registry images' immutable sha- tags
+#           and sign them, then move every image's branch tag forward
+#           onto this commit
 #           where the commit they hold is an ancestor of it
 #           (tag_may_move, below). Never `latest`: see
 #           `promote` below.
@@ -74,7 +78,8 @@
 #           never holds a token that can dispatch workflows (grain/task-3334).
 #
 #   promote [vX.Y.Z]
-#           point `latest` -- on guest, k8s-sandbox and grain alike -- at
+#           point `latest` -- on guest, k8s-sandbox, grain and registry
+#           alike -- at
 #           the last promoted release. `latest` means exactly that: the
 #           commit the git tag `latest` names, which
 #           scripts/release-from-trunk.sh moves when it promotes a soaked
@@ -91,19 +96,24 @@
 #           release and only to stamp the release name into it: from the
 #           same commit, naming the same pinned sandbox images, with
 #           RELEASE=vX.Y.Z -- the candidate's build could only carry the
-#           rc tag, which is what the UI would otherwise show. A replayed
-#           promotion finds `grain:vX.Y.Z` already labelled with its
-#           release and rebuilds nothing. If any of the three `sha-`
-#           images is missing it fails, naming them, and moves nothing.
+#           rc tag, which is what the UI would otherwise show. The
+#           registry image is rebuilt the same way, from the release's
+#           own Dockerfile.registry, where the release's own release job
+#           published one (a release cut before the registry image was
+#           has none, and promotes without it). A replayed promotion
+#           finds `grain:vX.Y.Z` (and `registry:vX.Y.Z`) already
+#           labelled with its release and rebuilds nothing. If any
+#           `sha-` image it needs is missing it fails, naming them, and
+#           moves nothing.
 #           .grain/workflows/promote.yml runs it; this is the only thing
 #           that moves `latest`.
 #
 #   rc [vX.Y.0-rc.N]
 #           publish a release candidate the way `promote` publishes a
 #           release (design/design/release-from-trunk.design.md, RFT-4): the guest
-#           and k8s-sandbox `sha-<short>` images retagged, grain rebuilt
-#           from the same commit with RELEASE=vX.Y.0-rc.N, and all three
-#           published as `:vX.Y.0-rc.N`, `:candidate` and `:rc` -- the two
+#           and k8s-sandbox `sha-<short>` images retagged, grain (and,
+#           as for `promote`, registry) rebuilt from the same commit with
+#           RELEASE=vX.Y.0-rc.N, and all of them published as `:vX.Y.0-rc.N`, `:candidate` and `:rc` -- the two
 #           moving names the candidate (and its `rc` alias) upgrade channel
 #           resolves.
 #           With no argument the rc is the one the remote's
@@ -117,8 +127,8 @@
 #           stage a release whose soak passed, for a person to approve
 #           (design/design/release-from-trunk.design.md, §4): exactly `promote`'s
 #           publishing of the commit the git tag vX.Y.0-pending names --
-#           guest and k8s-sandbox retagged, grain rebuilt with
-#           RELEASE=vX.Y.0 -- but published under `:vX.Y.0-pending`
+#           guest and k8s-sandbox retagged, grain (and registry) rebuilt
+#           with RELEASE=vX.Y.0 -- but published under `:vX.Y.0-pending`
 #           alone. Neither `:vX.Y.0` nor `latest` moves, and no upgrade
 #           channel resolves `-pending`. `promote vX.Y.0` then finds the
 #           stamped `:vX.Y.0-pending` build and only retags it, so
@@ -318,6 +328,7 @@ dry_run=false
 phase="all"
 promote_request=""
 promote_predates_dockerhub=false
+promote_takes_registry=false
 rc_request=""
 pending_request=""
 retract_request=""
@@ -759,12 +770,15 @@ fetch_promote_tag_into() {
 # shallow fetch of the tag since this job's checkout is main or
 # candidate's head rather than the release. Also sets
 # promote_is_root_commit (whether the tag is a root or initial cutover
-# commit) and promote_predates_dockerhub (whether the release's own tree
-# is from before the switch to Docker Hub: see adopt_legacy_ghcr_release).
+# commit), promote_predates_dockerhub (whether the release's own tree
+# is from before the switch to Docker Hub: see adopt_legacy_ghcr_release)
+# and promote_takes_registry (whether the release's own release job
+# published a registry image to promote: see publish_release).
 release_takes_main_grain() {
   local work answer=1
   promote_is_root_commit=false
   promote_predates_dockerhub=false
+  promote_takes_registry=false
   work="$(mktemp -d)"
   if ! fetch_promote_tag_into "$work" 2; then
     rm -rf "$work"
@@ -791,6 +805,16 @@ release_takes_main_grain() {
   if ! git -C "$work" cat-file -e "FETCH_HEAD:scripts/release-image-repos.sh" 2>/dev/null; then
     promote_predates_dockerhub=true
   fi
+  # The registry image (registry.design.md step 9) is published beside
+  # grain only by a release whose own release job built it -- its
+  # scripts/release-images.sh has build_registry_image -- and is rebuilt
+  # from the release's own Dockerfile.registry. A release cut before
+  # either has no registry:sha-<short> to promote and none is asked for,
+  # so promoting or rolling back to it still works.
+  if git -C "$work" cat-file -e "FETCH_HEAD:Dockerfile.registry" 2>/dev/null &&
+     git -C "$work" show "FETCH_HEAD:scripts/release-images.sh" 2>/dev/null | grep -q '^build_registry_image()'; then
+    promote_takes_registry=true
+  fi
   rm -rf "$work"
   return "$answer"
 }
@@ -800,6 +824,18 @@ ensure_network_mtu
 ensure_direct_registry_route "$registry"
 
 stage_grain_ca
+
+# What a dry run of `promote`, `rc` or `pending` says of the registry
+# image, once release_takes_main_grain has looked at the release's tree:
+# $1 is the tags it would be published as.
+dry_run_registry_release() {
+  local stamp="${stamp_tag:-$promote_tag}"
+  if [ "$promote_takes_registry" = true ]; then
+    echo "release-images.sh: [dry-run] and rebuild $root/registry:sha-${promote_commit:0:7} from $promote_commit ($registry_main) with RELEASE=$stamp as $1, unless $root/registry:$promote_tag already reports $stamp, and point $root/registry:sha-${promote_commit:0:7} at it"
+  else
+    echo "release-images.sh: [dry-run] $promote_tag's tree publishes no registry image (no Dockerfile.registry, or a release job that never built one), so no registry image is published for it"
+  fi
+}
 
 if [ "$dry_run" = true ]; then
   echo "release-images.sh: [dry-run] repository: $GRAIN_CI_REPO (ref: $GRAIN_CI_REF, commit: $commit)"
@@ -819,16 +855,16 @@ if [ "$dry_run" = true ]; then
   esac
   case "$phase" in
     build)
-      echo "release-images.sh: [dry-run] phase 'build': would build $guest, $k8s_sandbox and $grain, publishing the two sandbox images so the daemon image can name them by digest (state: $state)"
+      echo "release-images.sh: [dry-run] phase 'build': would build $guest, $k8s_sandbox, $grain and $registry_image, publishing the two sandbox images so the daemon image can name them by digest (state: $state)"
       ;;
     push)
-      echo "release-images.sh: [dry-run] phase 'push': would publish and sign $grain to $registry, and move the $branch tags of all three"
+      echo "release-images.sh: [dry-run] phase 'push': would publish and sign $grain and $registry_image to $registry, and move the $branch tags of the sandbox, sandbox-k8s, grain and registry images"
       ;;
     guest-cache)
       echo "release-images.sh: [dry-run] phase 'guest-cache': would resolve and build guest cache inputs"
       ;;
     all)
-      echo "release-images.sh: [dry-run] phase 'all': would build and publish $guest, $k8s_sandbox and $grain to $registry"
+      echo "release-images.sh: [dry-run] phase 'all': would build and publish $guest, $k8s_sandbox, $grain and $registry_image to $registry"
       ;;
     promote)
       select_promotion "$promote_request"
@@ -841,6 +877,7 @@ if [ "$dry_run" = true ]; then
         echo "release-images.sh: [dry-run] and rebuild $root/grain:sha-${promote_commit:0:7} from $promote_commit with RELEASE=$promote_tag as $targets, unless $root/grain:$promote_tag already reports $promote_tag"
       fi
       echo "release-images.sh: [dry-run] and point $root/grain:sha-${promote_commit:0:7} at the stamped $root/grain:$promote_tag"
+      dry_run_registry_release "$targets"
       if [ "$promote_predates_dockerhub" = true ]; then
         echo "release-images.sh: [dry-run] $promote_tag predates the switch to Docker Hub (#739), so first copy by digest whichever of those images $root lacks from $GRAIN_LEGACY_GHCR_PREFIX/{guest,k8s-sandbox,guest-base,k8s-sandbox-base}:sha-${promote_commit:0:7} and $GRAIN_LEGACY_GHCR_PREFIX/grain:$promote_tag (its stamped build) or :sha-${promote_commit:0:7}"
       fi
@@ -858,6 +895,8 @@ if [ "$dry_run" = true ]; then
       [ "${#moving[@]}" -eq 0 ] || targets="$targets, ${moving[*]}"
       echo "release-images.sh: [dry-run] phase 'rc': would retag $root/{sandbox,sandbox-k8s}:sha-${promote_commit:0:7} as $targets"
       echo "release-images.sh: [dry-run] and rebuild $root/grain:sha-${promote_commit:0:7} from $promote_commit ($core_main) with RELEASE=$promote_tag as $targets, unless $root/grain:$promote_tag already reports $promote_tag"
+      release_takes_main_grain || true
+      dry_run_registry_release "$targets"
       if [ "${#moving[@]}" -eq 0 ]; then
         echo "release-images.sh: [dry-run] candidate and rc stay put"
       fi
@@ -865,23 +904,25 @@ if [ "$dry_run" = true ]; then
     pending)
       select_pending "$pending_request"
       echo "release-images.sh: [dry-run] phase 'pending': would retag $root/{sandbox,sandbox-k8s}:sha-${promote_commit:0:7} as $promote_tag, and rebuild $root/grain:sha-${promote_commit:0:7} from $promote_commit with RELEASE=$stamp_tag as $promote_tag, unless it already reports $stamp_tag at $promote_commit; $stamp_tag and latest stay put"
+      release_takes_main_grain || true
+      dry_run_registry_release "$promote_tag"
       ;;
     discard-pending)
-      echo "release-images.sh: [dry-run] phase 'discard-pending': would tag $root/{grain,sandbox,sandbox-k8s}:$pending_request-pending as $pending_request-rejected"
+      echo "release-images.sh: [dry-run] phase 'discard-pending': would tag $root/{grain,sandbox,sandbox-k8s,registry}:$pending_request-pending as $pending_request-rejected"
       ;;
     discard-rc)
       if ! [[ "$rc_request" =~ $rc_tag_pattern ]]; then
         echo "release-images.sh: $rc_request is not a release candidate tag (vX.Y.0-rc.N)" >&2
         exit 1
       fi
-      echo "release-images.sh: [dry-run] phase 'discard-rc': would tag $root/{grain,sandbox,sandbox-k8s}:$rc_request as $rc_request-discarded, and leave candidate and rc where they are"
+      echo "release-images.sh: [dry-run] phase 'discard-rc': would tag $root/{grain,sandbox,sandbox-k8s,registry}:$rc_request as $rc_request-discarded, and leave candidate and rc where they are"
       ;;
     retract)
       if ! [[ "$retract_request" =~ $release_tag_pattern ]]; then
         echo "release-images.sh: $retract_request is not a release tag (vX.Y.Z)" >&2
         exit 1
       fi
-      echo "release-images.sh: [dry-run] phase 'retract': would tag $root/{grain,sandbox,sandbox-k8s}:$retract_request as $retract_request-retracted, and leave $retract_request where it is"
+      echo "release-images.sh: [dry-run] phase 'retract': would tag $root/{grain,sandbox,sandbox-k8s,registry}:$retract_request as $retract_request-retracted, and leave $retract_request where it is"
       ;;
   esac
   exit 0
@@ -1428,7 +1469,7 @@ publish_images() {
   # tag_may_move decides, failing closed, and says why.
   # The branch tag is the only moving tag a merge moves: `latest` is the
   # last promoted release, and `promote` is the one thing that moves it.
-  # grain:<branch> decides for all three: the tags move together, so what
+  # grain:<branch> decides for all of them: the tags move together, so what
   # one holds is what they all hold.
   if ! tag_may_move "$root/grain:$branch" "$commit" "$GRAIN_CI_REF"; then
     echo "published immutable sha-$short images; moving tags stay put"
@@ -1464,7 +1505,12 @@ publish_images() {
 # candidate's build stamped -- read back off that image -- so the release
 # name is the only thing that differs. It is then published as vX.Y.Z,
 # labelled with the release, and every later tick sees that label and
-# rebuilds nothing, so `latest`'s digest does not churn.
+# rebuilds nothing, so `latest`'s digest does not churn. The registry
+# image (`registry`, registry.design.md step 9) is rebuilt alongside it
+# for the same reason -- `grain-registry version` would otherwise report
+# the candidate's build version -- from the release's own
+# Dockerfile.registry (rebuild_release_registry), where the release's
+# own release job published one.
 promote_images() {
   local image source missing=() targets tag daemon main
   select_promotion "$promote_request"
@@ -1876,6 +1922,14 @@ publish_release() {
   else
     daemons=("grain ")
   fi
+  # The registry image goes with them where the release's own release job
+  # published one (release_takes_main_grain says): rebuilt the same way,
+  # so `grain-registry version` reports the release rather than the
+  # candidate's build version, and held to the same pre-pass -- a
+  # release whose registry:sha-<short> is missing moves nothing.
+  if [ "$promote_takes_registry" = true ]; then
+    daemons+=("registry $registry_main")
+  fi
   # The daemons' sha- builds are only the rebuilds' source. Until the
   # tick below moves <daemon>:sha-<short> onto the stamped vX.Y.Z it is a
   # version of its own, which cmd/ghcr-prune deletes after -keep-for like
@@ -1968,6 +2022,8 @@ publish_release() {
     read -r image main <<< "$daemon"
     if [[ " ${stamped[*]} " == *" $image "* ]]; then
       echo "release-images.sh: $root/$image:$promote_tag already reports $stamp; nothing to rebuild"
+    elif [ "$image" = registry ]; then
+      rebuild_release_registry "$root/$image:sha-$promoted_short" "$root/$image:$promote_tag" "$main"
     else
       rebuild_release_grain "$root/$image:sha-$promoted_short" "$root/$image:$promote_tag" "$main"
     fi
@@ -2007,6 +2063,11 @@ publish_release() {
     retag_image "$root/$image:$promote_tag" "$root/$image:sha-$promoted_short"
   done
   echo "release-images.sh: $root/{sandbox,sandbox-k8s}:sha-$promoted_short are now also ${targets[*]}, and $root/grain:$promote_tag is $promote_commit stamped $promote_tag, as is its sha-$promoted_short$([ "${#targets[@]}" -le 1 ] || echo " and ${targets[*]:1}")"
+  if [ "$promote_takes_registry" = true ]; then
+    echo "release-images.sh: and $root/registry:$promote_tag is $promote_commit stamped $stamp, as is its sha-$promoted_short$([ "${#targets[@]}" -le 1 ] || echo " and ${targets[*]:1}")"
+  else
+    echo "release-images.sh: $promote_tag's tree publishes no registry image, so none was published for it"
+  fi
 }
 
 # Stage a pending release: the commit vX.Y.0-pending names, published as
@@ -2022,7 +2083,7 @@ pending_images() {
 # Mark a pending release a person rejected: <image>:vX.Y.0-rejected
 # beside every image it was staged as. Nothing that resolves moves.
 discard_pending() {
-  local image images=(grain sandbox sandbox-k8s) marked=()
+  local image images=(grain sandbox sandbox-k8s registry) marked=()
   if ! [[ "$pending_request" =~ $release_tag_pattern ]]; then
     echo "release-images.sh: $pending_request is not a release tag (vX.Y.Z)" >&2
     return 1
@@ -2042,7 +2103,7 @@ discard_pending() {
 # touched. An image the rc was never published as has nothing to mark,
 # and is said so; a deployment never ran it.
 discard_rc() {
-  local image images=(grain sandbox sandbox-k8s) marked=() unpublished=()
+  local image images=(grain sandbox sandbox-k8s registry) marked=() unpublished=()
   if ! [[ "$rc_request" =~ $rc_tag_pattern ]]; then
     echo "release-images.sh: $rc_request is not a release candidate tag (vX.Y.0-rc.N)" >&2
     return 1
@@ -2066,7 +2127,7 @@ discard_rc() {
 # beside every image it was published as. :vX.Y.Z is never deleted or
 # moved; `promote` of the earlier release moves :latest back.
 retract_release() {
-  local image images=(grain sandbox sandbox-k8s) marked=() unpublished=()
+  local image images=(grain sandbox sandbox-k8s registry) marked=() unpublished=()
   if ! [[ "$retract_request" =~ $release_tag_pattern ]]; then
     echo "release-images.sh: $retract_request is not a release tag (vX.Y.Z)" >&2
     return 1
@@ -2136,12 +2197,79 @@ stamped_build() {
 }
 
 # Whether $1 reports release $2 the way a deployment reads it: `grain
-# version --json`, out of the binary the image runs.
+# version --json` (or `grain-registry version --json`), out of the binary
+# the image runs.
 check_release_stamp() {
   local image="$1" want="$2" answered
   answered="$(docker run --rm "$image" version --json | tr -d ' \n')"
   if [[ "$answered" != *"\"release\":\"$want\""* ]]; then
-    echo "release-images.sh: $image reports ${answered:-nothing} from \`grain version --json\`, not release $want" >&2
+    echo "release-images.sh: $image reports ${answered:-nothing} from \`version --json\`, not release $want" >&2
+    return 1
+  fi
+}
+
+# Whether the release job's own $1 (a sha- tag) carries this release
+# key's signature, checked before $2 is rebuilt from it and signed with
+# that key: sets source_vouch (sign $2), source_pull_ref (the pinned
+# $1@sha256:... to pull, or $1 where it was already pulled to read its
+# digest) and source_pulled. With no signing key there is nothing to
+# vouch with, and $2 is signed (which warns and publishes it unsigned)
+# as any other image is.
+check_source_signature() {
+  local source="$1" target="$2" source_digest="" sig_status
+  source_vouch=false
+  source_pull_ref="$source"
+  source_pulled=false
+  [ -r "$signing_key" ] || return 0
+  if docker buildx version >/dev/null 2>&1; then
+    source_digest="$(registry_digest "$source" || true)"
+  else
+    registry_env docker pull "$source"
+    source_pulled=true
+    local repo short_repo
+    repo="$(repository_of "$source")"
+    short_repo="${repo#docker.io/}"
+    source_digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$source" \
+      | awk -v repo="$repo" -v short="$short_repo" 'index($0, repo "@sha256:") == 1 || index($0, short "@sha256:") == 1 {sub(/^.*@/, ""); print; exit}')"
+  fi
+  if ! [[ "$source_digest" =~ ^sha256:[0-9a-f]+$ ]]; then
+    echo "release-images.sh: could not read the digest of $source, so its signature cannot be checked before rebuilding $target" >&2
+    return 1
+  fi
+  local pinned_source
+  pinned_source="$(repository_of "$source")@$source_digest"
+  [ "$source_pulled" = true ] || source_pull_ref="$pinned_source"
+  sig_status=0
+  signed_with_our_key "$pinned_source" || sig_status=$?
+  case "$sig_status" in
+    0) source_vouch=true ;;
+    1)
+      if [ "$require_signing" = true ]; then
+        echo "release-images.sh: $pinned_source ($source) carries no signature made with $signing_key, and REQUIRE_IMAGE_SIGNING is set, so $target is not rebuilt from it" >&2
+        return 1
+      fi
+      echo "release-images.sh: WARNING: $pinned_source ($source) carries no signature made with $signing_key, so $target is published unsigned and a deployment verifying signatures will refuse it"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# Check $promote_tag out of $remote into the empty directory $1, as a
+# self-contained repository whose HEAD is $promote_commit, to rebuild $2
+# from. Returns 1, having said why, if it cannot.
+checkout_promote_tag() {
+  local work="$1" target="$2"
+  if ! fetch_promote_tag_into "$work"; then
+    echo "release-images.sh: could not fetch $promote_tag from $remote to rebuild $target" >&2
+    return 1
+  fi
+  git -C "$work" -c advice.detachedHead=false checkout -q --detach FETCH_HEAD
+  if [ -f "$work/.git/objects/info/alternates" ]; then
+    git -C "$work" repack -a -d -q
+    rm -f "$work/.git/objects/info/alternates"
+  fi
+  if [ "$(git -C "$work" rev-parse HEAD)" != "$promote_commit" ]; then
+    echo "release-images.sh: $promote_tag checked out as $(git -C "$work" rev-parse HEAD), not $promote_commit" >&2
     return 1
   fi
 }
@@ -2162,40 +2290,11 @@ check_release_stamp() {
 # before it is pulled or run.
 rebuild_release_grain() {
   local source="$1" target="$2" main="${3:-}" question want answered work go_version
-  local guest_ref k8s_ref image_ref vouch=false pull_ref="$source" source_digest="" pulled=false sig_status
-  if [ -r "$signing_key" ]; then
-    if docker buildx version >/dev/null 2>&1; then
-      source_digest="$(registry_digest "$source" || true)"
-    else
-      registry_env docker pull "$source"
-      pulled=true
-      local repo short_repo
-      repo="$(repository_of "$source")"
-      short_repo="${repo#docker.io/}"
-      source_digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$source" \
-        | awk -v repo="$repo" -v short="$short_repo" 'index($0, repo "@sha256:") == 1 || index($0, short "@sha256:") == 1 {sub(/^.*@/, ""); print; exit}')"
-    fi
-    if ! [[ "$source_digest" =~ ^sha256:[0-9a-f]+$ ]]; then
-      echo "release-images.sh: could not read the digest of $source, so its signature cannot be checked before rebuilding $target" >&2
-      return 1
-    fi
-    local pinned_source
-    pinned_source="$(repository_of "$source")@$source_digest"
-    [ "$pulled" = true ] || pull_ref="$pinned_source"
-    sig_status=0
-    signed_with_our_key "$pinned_source" || sig_status=$?
-    case "$sig_status" in
-      0) vouch=true ;;
-      1)
-        if [ "$require_signing" = true ]; then
-          echo "release-images.sh: $pinned_source ($source) carries no signature made with $signing_key, and REQUIRE_IMAGE_SIGNING is set, so $target is not rebuilt from it" >&2
-          return 1
-        fi
-        echo "release-images.sh: WARNING: $pinned_source ($source) carries no signature made with $signing_key, so $target is published unsigned and a deployment verifying signatures will refuse it"
-        ;;
-      *) return 1 ;;
-    esac
-  fi
+  local guest_ref k8s_ref image_ref vouch pull_ref pulled
+  check_source_signature "$source" "$target" || return 1
+  vouch="$source_vouch"
+  pull_ref="$source_pull_ref"
+  pulled="$source_pulled"
   if [ "$pulled" != true ]; then
     registry_env docker pull "$pull_ref"
   fi
@@ -2214,18 +2313,8 @@ rebuild_release_grain() {
   fi
 
   work="$(mktemp -d)"
-  if ! fetch_promote_tag_into "$work"; then
+  if ! checkout_promote_tag "$work" "$target"; then
     rm -rf "$work"
-    echo "release-images.sh: could not fetch $promote_tag from $remote to rebuild $target" >&2
-    return 1
-  fi
-  git -C "$work" -c advice.detachedHead=false checkout -q --detach FETCH_HEAD
-  if [ -f "$work/.git/objects/info/alternates" ]; then
-    git -C "$work" repack -a -d -q
-    rm -f "$work/.git/objects/info/alternates"
-  fi
-  if [ "$(git -C "$work" rev-parse HEAD)" != "$promote_commit" ]; then
-    echo "release-images.sh: $promote_tag checked out as $(git -C "$work" rev-parse HEAD), not $promote_commit" >&2
     return 1
   fi
 
@@ -2306,6 +2395,75 @@ rebuild_release_grain() {
     sign_image "$target"
   fi
   echo "release-images.sh: published $target, rebuilt from $promote_commit with RELEASE=${stamp_tag:-$promote_tag}"
+}
+
+# Rebuild the registry image $1 (a release job's sha- tag) as $2 from
+# $promote_commit's own Dockerfile.registry with RELEASE=$promote_tag
+# (or $stamp_tag) and main package $3, verify it, and publish and sign
+# it -- by the digest its push was given, before publish_release points
+# any moving tag at it. Nothing is read out of $1: the registry image
+# names no sandbox images and no image reference of its own, so the
+# rebuild is wholly the release's tree. $1 is still held to the same
+# signature check as the grain image's source, because signing $2 with
+# the release key says the release job built and tested this registry
+# for this commit, and $1's signature is what says that.
+rebuild_release_registry() {
+  local source="$1" target="$2" main="${3:-./cmd/grain-registry}" stamp="${stamp_tag:-$promote_tag}"
+  local vouch work go_version answered
+  check_source_signature "$source" "$target" || return 1
+  vouch="$source_vouch"
+
+  work="$(mktemp -d)"
+  if ! checkout_promote_tag "$work" "$target"; then
+    rm -rf "$work"
+    return 1
+  fi
+  if [ ! -f "$work/Dockerfile.registry" ]; then
+    rm -rf "$work"
+    echo "release-images.sh: $promote_tag has no Dockerfile.registry to rebuild $target from" >&2
+    return 1
+  fi
+  if [ -f /usr/local/share/ca-certificates/grain-ca.crt ]; then
+    cp /usr/local/share/ca-certificates/grain-ca.crt "$work/.grain-ca.crt"
+  fi
+  go_version="$(sed -n 's/^toolchain[[:space:]]\{1,\}go//p' "$work/go.mod")"
+  [ -n "$go_version" ] || go_version="$(sed -n 's/^go[[:space:]]\{1,\}//p' "$work/go.mod")"
+  local source_label=()
+  if [ -n "$source_github_repo" ] && { [ "$registry" = "docker.io" ] || [ "$registry" = "index.docker.io" ] || [ "$registry" = "ghcr.io" ]; }; then
+    source_label=(--label org.opencontainers.image.source="https://github.com/${source_github_repo}")
+  fi
+  (
+    cd "$work"
+    docker build \
+      --build-arg GO_IMAGE="${GO_IMAGE:-golang}" \
+      ${go_version:+--build-arg GO_VERSION="$go_version"} \
+      --build-arg BUILDVCS=auto \
+      --build-arg MAIN_GRAIN_REGISTRY="$main" \
+      --build-arg GIT_REVISION="$promote_commit" \
+      "${source_label[@]}" \
+      --build-arg RELEASE="$stamp" \
+      --label org.opencontainers.image.version="$stamp" \
+      -t "$target" -f Dockerfile.registry .
+  )
+  rm -rf "$work"
+
+  # What the rebuilt binary says of itself, the way `grain-registry
+  # version --json` says it to whoever runs it: the release, core (no
+  # edition, as build_registry_image checks of every merge's build), and
+  # a clean tree.
+  check_release_stamp "$target" "$stamp"
+  check_edition "$target" "$main"
+  answered="$(docker run --rm --network none "$target" version --json | tr -d ' \n')"
+  if [[ "$answered" == *'"modified":true'* ]]; then
+    echo "release-images.sh: the rebuilt $target reports a modified tree ($answered), although it was built from a clean checkout of $promote_tag" >&2
+    return 1
+  fi
+
+  push_image "$target"
+  if [ "$vouch" = true ] || [ ! -r "$signing_key" ]; then
+    sign_image "$target"
+  fi
+  echo "release-images.sh: published $target, rebuilt from $promote_commit with RELEASE=$stamp"
 }
 
 # Whether a tag exists in the registry, asked of the registry rather than
