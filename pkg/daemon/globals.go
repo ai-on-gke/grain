@@ -28,6 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/sysstat"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -97,6 +98,25 @@ func recordDispatchBlock(err error) {
 		}
 	}
 	DispatchConditions.Block(name, err, remedy)
+}
+
+// dispatchConditionRedactor is DispatchConditions.Redact for a
+// deployment keeping its secrets under secretsDir and in secretStore:
+// the same redaction list read_grain_log and the Logs pane read the
+// journal through (grainLogRedactorFor), applied to a condition's one
+// line of error text before it is kept. A list that cannot be built
+// withholds the text rather than serving it as it is -- the rule the
+// log route and the standing-sandbox errors already follow -- and says
+// where the whole error still is.
+func dispatchConditionRedactor(secretsDir string, secretStore *secrets.Store) func(string) string {
+	return func(text string) string {
+		redactor := grainLogRedactorFor(secretsDir, secretStore)
+		if redactor == nil {
+			return "(withheld: the redaction list could not be read -- the error is in the daemon's journal)"
+		}
+		out, _ := redactor.Line(text)
+		return out
+	}
 }
 
 // livePullRequests holds the GitHub-backed pull request opener runDaemon

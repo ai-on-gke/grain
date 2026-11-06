@@ -147,3 +147,43 @@ func TestBlockKeepsOnlyTheErrorsFirstLine(t *testing.T) {
 		t.Errorf("Error = %q, want the one line, trimmed", got)
 	}
 }
+
+// The text a condition keeps is served to every reader of a queued
+// task's reason -- an agent in its sandbox among them -- and to the
+// health, config and feed routes, so a Set with a Redact runs the text
+// through it before anything, the journal line included, sees it. A
+// re-report with different words moves Version, so a cache keyed on it
+// re-reads them; the same words move nothing.
+func TestBlockRedactsTheTextItKeepsAndVersionsAChangeOfWords(t *testing.T) {
+	var lines []string
+	s := &dispatchcondition.Set{
+		Logf:   func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) },
+		Redact: func(text string) string { return strings.ReplaceAll(text, "ghp_secret", "[REDACTED]") },
+	}
+	s.Block("reconciler", errors.New("posting to https://x:ghp_secret@github.com failed"), "")
+	if got := s.Active()[0].Error; strings.Contains(got, "ghp_secret") || !strings.Contains(got, "[REDACTED]") {
+		t.Errorf("Error = %q, want the credential redacted", got)
+	}
+	if why := s.Why(); strings.Contains(why, "ghp_secret") {
+		t.Errorf("Why() = %q, want the credential redacted", why)
+	}
+	if len(lines) != 1 || strings.Contains(lines[0], "ghp_secret") {
+		t.Errorf("log lines = %q, want one, with the credential redacted", lines)
+	}
+	if got := s.History()[0].Condition.Error; strings.Contains(got, "ghp_secret") {
+		t.Errorf("History()[0].Condition.Error = %q, want the credential redacted", got)
+	}
+
+	v := s.Version()
+	s.Block("reconciler", errors.New("posting to https://x:ghp_secret@github.com failed"), "")
+	if s.Version() != v {
+		t.Errorf("Version moved from %d to %d on a re-report with the same words", v, s.Version())
+	}
+	s.Block("reconciler", errors.New("something else"), "")
+	if s.Version() == v {
+		t.Error("Version did not move on a re-report with different words")
+	}
+	if len(s.History()) != 1 {
+		t.Errorf("History() has %d events after re-reports, want the one set", len(s.History()))
+	}
+}

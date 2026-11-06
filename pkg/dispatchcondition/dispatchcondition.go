@@ -86,14 +86,24 @@ type Set struct {
 	Logf func(format string, args ...any)
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// Redact, when set, is applied to a condition's text before it is
+	// kept (Block). A condition's text is served far beyond the
+	// journal -- to every queued task's reason, which an agent reads
+	// for its own task from inside its sandbox, and to the health,
+	// config and pipeline-feed routes -- so the deployment wires its
+	// own secret redaction here, the same list its journal is read
+	// through, rather than trusting that no error a daemon fails on
+	// ever quotes a credential. nil keeps the text as it is.
+	Redact func(text string) string
 
 	mu      sync.Mutex
 	active  map[string]Condition
 	history []Event
-	// version counts sets and clears, for a reader that caches what it
-	// derived from Active and has to know when that went stale
-	// (pkg/ui's task caches, keyed on the store's own change token,
-	// which nothing here moves).
+	// version counts sets and clears, and a re-report that changed a
+	// condition's text, for a reader that caches what it derived from
+	// Active and has to know when that went stale (pkg/ui's task
+	// caches, keyed on the store's own change token, which nothing here
+	// moves).
 	version uint64
 }
 
@@ -117,7 +127,8 @@ func (s *Set) logf(format string, args ...any) {
 // setter that re-reports the same failure every cycle neither moves
 // the clock nor writes a line each time.
 //
-// Only the error's first line is kept (errorLine). A condition is read
+// Only the error's first line is kept (errorLine), passed through
+// Redact where one is set. A condition is read
 // far outside the journal -- by every queued task's reason, which any
 // agent reads for its own task from its sandbox, by GET /api/config,
 // and by the health route and the pipeline feed -- and the one error
@@ -127,16 +138,26 @@ func (s *Set) logf(format string, args ...any) {
 // journal, where the daemon logs the whole error beside this
 // condition; the condition carries what the operator reads first.
 func (s *Set) Block(name string, err error, remedy string) {
+	text := "unknown error"
+	if err != nil {
+		text = errorLine(err)
+	}
+	// Outside the lock: the deployment's redactor reads its secret
+	// store, and a reader of Active should not wait on that.
+	if s.Redact != nil {
+		text = s.Redact(text)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.active == nil {
 		s.active = map[string]Condition{}
 	}
-	text := "unknown error"
-	if err != nil {
-		text = errorLine(err)
-	}
 	if c, ok := s.active[name]; ok {
+		if c.Error != text || c.Remedy != remedy {
+			// New words for the same condition: a cache keyed on
+			// Version has to re-read them.
+			s.version++
+		}
 		c.Error, c.Remedy = text, remedy
 		s.active[name] = c
 		return
@@ -236,9 +257,10 @@ func names(cs []Condition) []string {
 	return out
 }
 
-// Version is a counter that moves on every set and clear: equal
-// between two reads, nothing about Active or History changed between
-// them. Zero on a Set nothing has touched, and on a nil one.
+// Version is a counter that moves on every set and clear, and on a
+// re-report that changed a condition's text: equal between two reads,
+// nothing about Active or History changed between them. Zero on a Set
+// nothing has touched, and on a nil one.
 func (s *Set) Version() uint64 {
 	if s == nil {
 		return 0
