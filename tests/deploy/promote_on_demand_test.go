@@ -20,6 +20,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Promoting a commit whose release run was superseded (grain/task-3334).
@@ -210,5 +212,132 @@ func TestReleaseWorkflowBuildsACommitOnDemand(t *testing.T) {
 	}
 	for _, name := range []string{"promote.yml", "promote-release.yml", "publish-release.yml"} {
 		containsRun(t, read(t, ".github", "workflows", name), "RELEASE_ON_DEMAND_BUILD: dispatch")
+	}
+}
+
+// `on-demand` is the half of a promotion that needs `actions: write`:
+// promote.yml runs it in a job of its own, with no registry credentials,
+// and only on a tag or a dispatch. It builds a superseded commit and
+// retags nothing; `promote` then finds the images there.
+func TestOnDemandPhaseBuildsASupersededCommitAndRetagsNothing(t *testing.T) {
+	remote, commits := releaseRepo(t)
+	short := commits["released"][:7]
+	env, ghLog := onDemandEnv(t, commits, "publish", "")
+	// As promote.yml's on-demand job runs it: no publishing credential.
+	delete(env, "DOCKER_PAT")
+	delete(env, "GRAIN_CI")
+	out, docker, err := promoteRun(t, remote, []string{"on-demand"}, env)
+	if err != nil {
+		t.Fatalf("on-demand of a superseded commit failed: %v\n%s\ndocker was asked:\n%s", err, out, docker)
+	}
+	containsRun(t, out, "v1.5.0 ("+commits["released"]+") has no docker.io/grainai/sandbox:sha-"+short)
+	containsRun(t, readLog(t, ghLog), "workflow run release.yml --repo bwsalmon/grain --ref main -f commit="+commits["released"])
+	containsRun(t, out, "sha-"+short+" are published")
+	for _, moved := range []string{"imagetools create", "docker login", "push "} {
+		if strings.Contains(docker, moved) {
+			t.Errorf("on-demand ran %q; it only builds through release.yml:\n%s", moved, docker)
+		}
+	}
+}
+
+// A release whose images are there is not built again.
+func TestOnDemandPhaseLeavesAPublishedReleaseAlone(t *testing.T) {
+	remote, commits := releaseRepo(t)
+	short := commits["released"][:7]
+	env := publishEnv(stubAnswers(t, short, "", "v1.5.0"))
+	delete(env, "DOCKER_PAT")
+	delete(env, "GRAIN_CI")
+	env["RELEASE_ON_DEMAND_BUILD"] = "dispatch"
+	out, docker, err := promoteRun(t, remote, []string{"on-demand"}, env)
+	if err != nil {
+		t.Fatalf("on-demand of a published release failed: %v\n%s", err, out)
+	}
+	containsRun(t, out, "is already published; nothing to build on demand")
+	if strings.Contains(out, "dispatching") || strings.Contains(docker, "imagetools create") {
+		t.Errorf("on-demand acted on a release that is already published:\n%s\n%s", out, docker)
+	}
+}
+
+// Without RELEASE_ON_DEMAND_BUILD=dispatch nothing is dispatched, and the
+// missing images are named.
+func TestOnDemandPhaseWithoutDispatchFailsNamingWhatIsMissing(t *testing.T) {
+	remote, commits := releaseRepo(t)
+	short := commits["released"][:7]
+	env, ghLog := onDemandEnv(t, commits, "publish", "")
+	delete(env, "RELEASE_ON_DEMAND_BUILD")
+	out, _, err := promoteRun(t, remote, []string{"on-demand"}, env)
+	if err == nil {
+		t.Fatalf("on-demand succeeded with on-demand builds off:\n%s", out)
+	}
+	containsRun(t, out, "nothing published docker.io/grainai/sandbox:sha-"+short)
+	containsRun(t, out, "Set RELEASE_ON_DEMAND_BUILD=dispatch")
+	if strings.Contains(readLog(t, ghLog), "workflow run") {
+		t.Errorf("dispatched with on-demand builds off:\n%s", readLog(t, ghLog))
+	}
+}
+
+// The security review of grain/task-3334 accepted `actions: write` on the
+// promotion workflows for the dispatch, but not on promote.yml's push to
+// main and candidate, which runs on every merge: only its on-demand job,
+// gated off pushes, holds it, and that job holds no registry credential;
+// the job that publishes holds no token that can dispatch.
+func TestPromoteWorkflowHoldsActionsWriteOnlyOffPushes(t *testing.T) {
+	type step struct {
+		Name string            `yaml:"name"`
+		Env  map[string]string `yaml:"env"`
+	}
+	type job struct {
+		If          string            `yaml:"if"`
+		Needs       any               `yaml:"needs"`
+		Permissions map[string]string `yaml:"permissions"`
+		Steps       []step            `yaml:"steps"`
+	}
+	var wf struct {
+		Permissions map[string]string `yaml:"permissions"`
+		Env         map[string]string `yaml:"env"`
+		Jobs        map[string]job    `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal([]byte(read(t, ".github", "workflows", "promote.yml")), &wf); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := wf.Permissions["actions"]; ok {
+		t.Errorf("promote.yml grants actions at workflow level, so every push holds it: %v", wf.Permissions)
+	}
+	if _, ok := wf.Env["RELEASE_ON_DEMAND_BUILD"]; ok {
+		t.Errorf("promote.yml sets RELEASE_ON_DEMAND_BUILD for every job")
+	}
+	onDemand, ok := wf.Jobs["on-demand"]
+	if !ok {
+		t.Fatalf("promote.yml has no on-demand job: %v", wf.Jobs)
+	}
+	if onDemand.If != "github.event_name != 'push'" {
+		t.Errorf("on-demand runs if %q; it must never run on a push", onDemand.If)
+	}
+	if onDemand.Permissions["actions"] != "write" {
+		t.Errorf("on-demand cannot dispatch release.yml: %v", onDemand.Permissions)
+	}
+	for perm, level := range onDemand.Permissions {
+		if perm != "actions" && level != "read" {
+			t.Errorf("on-demand holds %s: %s; it needs actions: write and nothing else", perm, level)
+		}
+	}
+	for _, s := range onDemand.Steps {
+		for k, v := range s.Env {
+			if strings.Contains(v, "secrets.") {
+				t.Errorf("on-demand step %q reads a secret (%s), beside a token that can dispatch workflows", s.Name, k)
+			}
+		}
+	}
+	latest := wf.Jobs["latest"]
+	if _, ok := latest.Permissions["actions"]; ok {
+		t.Errorf("latest, which runs on every push, holds actions: %v", latest.Permissions)
+	}
+	if latest.Needs != "on-demand" {
+		t.Errorf("latest does not wait for on-demand: needs %v", latest.Needs)
+	}
+	for _, s := range latest.Steps {
+		if _, ok := s.Env["GH_TOKEN"]; ok {
+			t.Errorf("latest step %q is handed GH_TOKEN", s.Name)
+		}
 	}
 }

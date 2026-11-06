@@ -61,6 +61,18 @@
 #
 # And one that is not part of a merge's release:
 #
+#   on-demand [vX.Y.Z]
+#           the half of `promote` that needs `actions: write` and nothing
+#           else: pick the release exactly as `promote` does and, if its
+#           commit has no sha- images (its release run was superseded by
+#           a newer merge, or never ran), have release.yml build and
+#           publish that commit and wait for it (build_on_demand, which
+#           needs RELEASE_ON_DEMAND_BUILD=dispatch and gh). It retags
+#           nothing and pushes nothing itself. .github/workflows/promote.yml
+#           runs it in a job of its own, on a tag or a dispatch and never
+#           on a push, so the job that holds the registry credentials
+#           never holds a token that can dispatch workflows (grain/task-3334).
+#
 #   promote [vX.Y.Z]
 #           point `latest` -- on guest, k8s-sandbox and grain alike -- at
 #           the last promoted release. `latest` means exactly that: the
@@ -324,7 +336,7 @@ while [ $# -gt 0 ]; do
       phase="$1"
       shift
       ;;
-    promote)
+    promote | on-demand)
       phase="$1"
       shift
       if [ $# -gt 0 ] && [[ "$1" != -* ]]; then
@@ -381,7 +393,7 @@ while [ $# -gt 0 ]; do
       exit "$status"
       ;;
     *)
-      echo "release-images.sh: usage: release-images.sh [--dry-run|-n] [build|push|all|guest-cache|promote [vX.Y.Z]|rc [vX.Y.0-rc.N]|pending <vX.Y.0>|discard-pending <vX.Y.0>|discard-rc <vX.Y.Z-rc.N>|retract <vX.Y.Z>|may-move <image:branch-tag> <commit> <branch>]" >&2
+      echo "release-images.sh: usage: release-images.sh [--dry-run|-n] [build|push|all|guest-cache|promote [vX.Y.Z]|on-demand [vX.Y.Z]|rc [vX.Y.0-rc.N]|pending <vX.Y.0>|discard-pending <vX.Y.0>|discard-rc <vX.Y.Z-rc.N>|retract <vX.Y.Z>|may-move <image:branch-tag> <commit> <branch>]" >&2
       exit 1
       ;;
   esac
@@ -835,6 +847,10 @@ if [ "$dry_run" = true ]; then
       if [ "$promote_latest" != true ]; then
         echo "release-images.sh: [dry-run] latest stays put: the git tag latest names ${latest_commit:-nothing}, not $promote_tag"
       fi
+      ;;
+    on-demand)
+      select_promotion "$promote_request"
+      echo "release-images.sh: [dry-run] phase 'on-demand': would dispatch ${RELEASE_ON_DEMAND_WORKFLOW:-release.yml} with commit=$promote_commit ($promote_tag) and wait for it, unless $root/{sandbox,sandbox-k8s,grain}:sha-${promote_commit:0:7} are already published; nothing is retagged"
       ;;
     rc)
       select_rc "$rc_request"
@@ -1807,6 +1823,45 @@ build_on_demand() {
   done
 }
 
+# on_demand_images is `on-demand`: build_on_demand for the release
+# `promote` would publish, when what promotion needs of its commit is not
+# in the registry -- the guest and k8s-sandbox sha- builds, and the grain
+# one unless a stamped vX.Y.Z (or the vX.Y.0-pending an approval
+# promotes) already stands in for it, as publish_release accepts. A
+# release from before the switch to Docker Hub is left to promote, which
+# copies it from GHCR instead.
+on_demand_images() {
+  local short image missing=()
+  select_promotion "$promote_request"
+  short="${promote_commit:0:7}"
+  release_takes_main_grain || true
+  if [ "$promote_predates_dockerhub" = true ]; then
+    echo "release-images.sh: $promote_tag ($promote_commit) predates the switch to Docker Hub (#739); promote copies its images from $GRAIN_LEGACY_GHCR_PREFIX rather than building them, so there is nothing to build on demand"
+    return 0
+  fi
+  for image in sandbox sandbox-k8s grain; do
+    if image_exists "$root/$image:sha-$short" 2>/dev/null; then
+      continue
+    fi
+    if [ "$image" = grain ] && {
+      stamped_build "$root/grain:$promote_tag" "$promote_tag" ||
+        stamped_build "$root/grain:$promote_tag-pending" "$promote_tag"
+    }; then
+      continue
+    fi
+    missing+=("$root/$image:sha-$short")
+  done
+  if [ "${#missing[@]}" -eq 0 ]; then
+    echo "release-images.sh: $promote_tag ($promote_commit) is already published; nothing to build on demand"
+    return 0
+  fi
+  echo "release-images.sh: $promote_tag ($promote_commit) has no ${missing[*]}"
+  if ! build_on_demand "$promote_commit"; then
+    echo "release-images.sh: $promote_tag is $promote_commit, and nothing published ${missing[*]} for it, so promotion would have nothing built and tested to publish.$([ "${RELEASE_ON_DEMAND_BUILD:-}" = dispatch ] || echo " Set RELEASE_ON_DEMAND_BUILD=dispatch to build it on demand.")" >&2
+    return 1
+  fi
+}
+
 # What promote_images and rc_images share: publish $promote_commit's
 # images as each of targets, the first of which is the name stamped into
 # the daemon image ($promote_tag) and the rest the moving tags that go
@@ -2334,6 +2389,7 @@ case "$phase" in
   guest-cache) resolve_guest ;;
   push) publish_images ;;
   promote) promote_images ;;
+  on-demand) on_demand_images ;;
   rc) rc_images ;;
   pending) pending_images ;;
   discard-pending) discard_pending ;;
