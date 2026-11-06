@@ -94,13 +94,13 @@ test.describe("Repository Settings, Releases, and Memory Views Inputs Walkthroug
       name: /default capabilities/i,
     });
     await expect(defaultCapsSelect).toBeVisible();
-    // Toggle Bootstrap playbooks and toggle it back: every spec file a worker runs
+    // Toggle Priority dispatch and toggle it back: every spec file a worker runs
     // shares one demo store, and repository_release_memory_walkthrough.spec.js
     // turns this same capability on and expects its chip afterwards.
     const selfDebugChip = defaultCapsSelect
       .locator(".MuiChip-root")
-      .filter({ hasText: /Bootstrap playbooks/i });
-    const option = page.getByRole("option", { name: /Bootstrap playbooks/i });
+      .filter({ hasText: /Priority dispatch/i });
+    const option = page.getByRole("option", { name: /Priority dispatch/i });
     const toggleSelfDebug = async () => {
       await defaultCapsSelect.click();
       await option.click();

@@ -688,7 +688,7 @@ func TestTheCLIWrappersReplaceASymlinkRatherThanWritingThroughIt(t *testing.T) {
 // Both halves are asserted: the wrapper's container, which is where a
 // `grain` invocation on this host actually runs, and the profile script,
 // which is what a shell (and anything reading $GRAIN_DATA_DIR out here,
-// like pkg/capability/bootstrap's playbooks) gets.
+// like pkg/playbooks) gets.
 func TestTheCLIIsToldWhereThisDeploymentsStateLives(t *testing.T) {
 	text := setupText(t)
 
@@ -4212,7 +4212,7 @@ func TestPrivateInfrastructureOrgPoliciesAreConfigured(t *testing.T) {
 	contains(t, iam, `constraint = "constraints/sql.restrictPublicIp"`)
 	contains(t, iam, "var.enforce_private_infrastructure_policies ? 1 : 0")
 
-	playbook := read(t, "pkg", "capability", "bootstrap", "playbooks", "gcp-capabilities.md")
+	playbook := read(t, "pkg", "playbooks", "gcp-capabilities.md")
 	contains(t, playbook, "-target=google_project_organization_policy.restrict_public_endpoints")
 	contains(t, playbook, "-target=google_project_organization_policy.no_external_ip")
 	contains(t, playbook, "-target=google_project_organization_policy.restrict_public_ip")
@@ -4236,7 +4236,7 @@ func TestCloudSQLCapabilityIsConfigured(t *testing.T) {
 	instance := read(t, "deploy", "terraform", "gcp", "instance.tf")
 	contains(t, instance, "var.agent_can_manage_cloud_sql")
 
-	playbook := read(t, "pkg", "capability", "bootstrap", "playbooks", "gcp-capabilities.md")
+	playbook := read(t, "pkg", "playbooks", "gcp-capabilities.md")
 	contains(t, playbook, "-target=google_project_iam_member.agent_cloud_sql")
 	contains(t, playbook, "-target=google_project_service.sqladmin")
 }

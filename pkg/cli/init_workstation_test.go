@@ -174,8 +174,16 @@ func TestTheStarterPolicyFailsClosed(t *testing.T) {
 		t.Errorf("the Director chat was held on a fresh workstation: %v", err)
 	}
 	// Named exactly: a capability the Director is not granted stays
-	// refused, even one in a family it holds a grant of.
-	for _, c := range []string{"api:deployment:write", "repo-write:acme/widgets"} {
+	// refused, even one in a family or method it holds a narrowed grant of
+	// (such as operator config maps or secret maps on config-map#config-map).
+	for _, c := range []string{
+		"api:deployment:write",
+		"repo-write:acme/widgets",
+		model.ConfigMapRef,
+		model.ConfigMapRef + "={}",
+		model.ConfigMapRef + `={"secrets":["prod"]}`,
+		model.ConfigMapRef + `={"config_maps":["bootstrap","tools"]}`,
+	} {
 		if err := p.Check(model.Task{Target: widgets, Creator: "me@example.com", Grants: []model.Grant{{Capability: c}}}, model.NetworkNone); err == nil {
 			t.Errorf("the Director's grants let %s through", c)
 		}

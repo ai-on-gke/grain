@@ -98,7 +98,7 @@ TASKS, CAPABILITIES & AGENT API (shown to every run; the proxy refuses what this
   grain health                           This deployment's health (deployment-health)
   grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority <p>] [--contains <s>] [--lines N]
                                          grain's own log, redacted (grain-log)
-  grain playbooks [<name>]               Bootstrap playbooks (bootstrap-playbooks)
+  grain playbooks [<name>]               Bootstrap playbooks (config-map bootstrap)
   grain issue list | grain issue read <n>
                                          GitHub issues (read-issues)
   grain db query <sql>                   Read-only query on grain's database (db-read)
@@ -328,7 +328,7 @@ var sandboxCommandHelp = map[string]string{
 		"  --contains        only entries containing this text (plain, case-insensitive)\n" +
 		"  --lines N, -n N   the latest N entries, one a line (alias --max-lines; default 200, at most 1000)\n" +
 		"  --tail N          the last N BYTES of what that returns\n",
-	"playbooks":  "grain playbooks [<name>]\n\nList the bootstrap playbooks by name, one per line, or print one (src://playbooks; the name\nis taken with or without its .md). Needs bootstrap-playbooks.\n",
+	"playbooks":  "grain playbooks [<name>]\n\nList the bootstrap playbooks by name, one per line, or print one (src://playbooks; the name\nis taken with or without its .md). Needs https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]}.\n",
 	"issue list": "grain issue list [--repo owner/name] [--label <l>] [--limit N]\n\nGitHub issues. Needs read-issues.\n",
 	"issue read": "grain issue read <number> [--repo owner/name] [--comments]\n\nOne GitHub issue. Needs read-issues.\n",
 	"db query":   "grain db query <sql>\n\nA read-only SQL query on grain's database. Needs db-read.\n",

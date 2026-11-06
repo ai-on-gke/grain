@@ -72,7 +72,6 @@ Before capability servers, grain had a registry of in-process providers, each gr
 
 `daemon.CapabilityProviders` still registers these:
 
-- `self-debug` (becoming `api:self-debug` + `…/grain#source`) and `bootstrap-playbooks` (becoming `…/grain#playbooks`);
 - `github-sandbox` and `read-issues` (becoming `#sandbox-repo` and `#read-issues` on an in-process `…/github` server), and the named GitHub tokens `github-credential:<name>` (becoming `…/repo#credential` `{credential}`);
 - the CI alias `release-gate-read` (retiring with `…/api` references in unified-grants slices 2–4);
 - `console`, `priority-dispatch` and `durable`, which are decided to become the task settings `hosting` and `admission` (§4.1).

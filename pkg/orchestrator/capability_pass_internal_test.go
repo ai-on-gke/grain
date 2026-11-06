@@ -25,6 +25,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/policy"
 )
 
 const passTestCap = "https://github.com/bwsalmon/grain/capabilities/gcp"
@@ -872,4 +873,65 @@ func TestAdmissionWithholdsWhatALocalScriptsDeclarationBecameFromAScheduledRun(t
 		t.Fatalf("calls = %q, want one mint for a task a person filed", got)
 	}
 	adm.Release()
+}
+
+// When server normalization populates default arguments on a bare capability
+// reference, admission re-checks local policy and settings/capabilities.yml
+// before minting and holds the task rather than minting or parking on a
+// server refusal comment.
+func TestAdmissionRejudgesNormalizedDefaultArgsAgainstPolicyAndCatalogue(t *testing.T) {
+	caller := &mintCaller{}
+	deps, store, ctx, _ := passHarness(t, caller)
+	pol, err := policy.Parse([]byte("repos: [acme/widgets]\ncapabilities:\n  deny: ['" + passTestCap + `#gcp-key={"account":"staging"}` + "']\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps.Policy = pol
+	admit := capabilityAdmitter(deps, admitAll)
+	cand := dispatch.Candidate{TaskID: "7", RunID: dispatch.RunID("7", 1), Attempt: 1}
+	adm, err := admit(ctx, cand)
+	if err != nil || adm.Admitted || adm.Gate != admissionGatePolicy {
+		t.Fatalf("admit under local policy deny = %+v, %v; want declined on %q", adm, err, admissionGatePolicy)
+	}
+	if got := caller.called(); len(got) != 0 {
+		t.Fatalf("calls = %q, want nothing minted when normalized grant is denied by local policy", got)
+	}
+	if wait, err := store.GrantWaitOf(ctx, "7"); err != nil || wait == nil || wait.Capability != model.PolicyWaitCapability {
+		t.Fatalf("grant wait = %+v, %v; want %s", wait, err, model.PolicyWaitCapability)
+	}
+
+	// Reset unnormalized grant and test catalogue refusal on normalized default args.
+	deps.Policy = nil
+	admit = capabilityAdmitter(deps, admitAll)
+	if err := store.UpdateTask(ctx, "7", func(tk *model.Task) error {
+		tk.Grants = []model.Grant{{Capability: passTestCap, Via: model.GrantByLabel}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutConfig(ctx, model.Config{
+		CapabilityPolicy: model.CapabilityPolicy{
+			Catalogue: &model.CapabilityCatalogue{
+				Servers: []model.CatalogueServer{{
+					ID: passTestCap,
+					Methods: []model.CatalogueMethod{{
+						Name: "gcp-key",
+						Args: map[string]model.CatalogueArg{"account": {Allowed: []string{"dev"}}},
+					}},
+				}},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	adm, err = admit(ctx, dispatch.Candidate{TaskID: "7", RunID: dispatch.RunID("7", 2), Attempt: 2})
+	if err != nil || adm.Admitted || adm.Gate != "capability catalogue" {
+		t.Fatalf("admit under catalogue restriction = %+v, %v; want declined on capability catalogue", adm, err)
+	}
+	if got := caller.called(); len(got) != 0 {
+		t.Fatalf("calls = %q, want nothing minted when normalized grant is refused by catalogue", got)
+	}
+	if wait, err := store.GrantWaitOf(ctx, "7"); err != nil || wait == nil || wait.Capability != model.CatalogueWaitCapability {
+		t.Fatalf("grant wait = %+v, %v; want %s", wait, err, model.CatalogueWaitCapability)
+	}
 }

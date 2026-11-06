@@ -5130,12 +5130,13 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 			mayReadGrainLog = true
 		case "deployment-health", GrainHealthRef, GrainHealthGrant:
 			mayReadHealth = true
-		case "bootstrap-playbooks":
-			mayReadPlaybooks = true
 		case "read-issues":
 			mayReadIssues = true
 		case "db-read", "db-write":
 			mayReadDB = true
+		}
+		if IsBootstrapPlaybooksGrant(name) {
+			mayReadPlaybooks = true
 		}
 		if IsGrainSQLGrant(name) {
 			mayReadDB = true

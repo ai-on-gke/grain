@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability"
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -129,6 +130,9 @@ var (
 
 	repoOnce sync.Once
 	repoInst *protocol.Server
+
+	configMapOnce sync.Once
+	configMapInst *protocol.Server
 )
 
 // callerClock is the in-process methods' clock. An external server
@@ -408,10 +412,28 @@ func statusOf(id string, srv *protocol.Server) servers.Status {
 	}
 }
 
+func defaultConfigMapServer() *protocol.Server {
+	configMapOnce.Do(func() {
+		cm, err := intree.NewEmbeddedBootstrapServer(callerClock)
+		if err != nil {
+			panic(fmt.Sprintf("grainserver: building default config-map server: %v", err))
+		}
+		srv, err := protocol.NewServer(context.Background(), model.ConfigMapCapabilityServerID, cm.InProcessCaller())
+		if err != nil {
+			panic(fmt.Sprintf("grainserver: attaching default config-map server: %v", err))
+		}
+		configMapInst = srv
+	})
+	return configMapInst
+}
+
 // Lookup wraps fallback so ID and RepoID always resolve to the in-process
 // servers, and a server with methods contributed through capability.Register
 // to the in-process server built from them, even when fallback is nil or
-// comes from a registry that only tracks mcp_servers.
+// comes from a registry that only tracks mcp_servers. When fallback is nil,
+// ConfigMapCapabilityServerID (and its legacy skill alias) resolves to an
+// unconfigured in-process config-map server so built-in bootstrap playbook
+// grants work without a subprocess registry.
 func Lookup(fallback protocol.Lookup) protocol.Lookup {
 	return func(capabilityID string) (*protocol.Server, error) {
 		switch capabilityID {
@@ -425,6 +447,9 @@ func Lookup(fallback protocol.Lookup) protocol.Lookup {
 		}
 		if fallback != nil {
 			return fallback(capabilityID)
+		}
+		if capabilityID == model.ConfigMapCapabilityServerID || capabilityID == model.SkillCapabilityServerID {
+			return defaultConfigMapServer(), nil
 		}
 		return nil, fmt.Errorf("capability %s is not configured in mcpServers", capabilityID)
 	}

@@ -77,7 +77,7 @@ refused without it. The reason is written to the controller log
   - `ID: "director"`, `Title: "Director"`, `Team: DefaultTeamID`.
   - `Capabilities`: `self-debug`, `…/grain#journal={}` (formerly
     `grain-log`), `api:deployment:read` and `…/grain#health={}`
-    (together formerly `deployment-health`) and `bootstrap-playbooks`,
+    (together formerly `deployment-health`) and `…/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`),
     plus every build `DefaultOn` registration
     (`RegisterDefaultConsoleSessionCapability`, which `capability.Register`
     calls for a `DefaultOn` method, e.g. `…/corp#research={}` on the
@@ -164,7 +164,7 @@ to. *Implicit* means the grant comes with the task rather than from
 | Source checkout, metrics tools, `grain task list\|read\|prompt\|transcript`, `task://`, `src://` | `self-debug` (alias → `api:self-debug` = `tasks:read` + `deployment:read`) | `…/api#self-debug` + `…/grain#source` *(proposed)* | 1 |
 | Daemon journal (formerly `grain-log`) | `…/grain#journal` | `…/grain#journal` | 1 |
 | Host / sandbox probes; `GET /api/deployment/*` reads | `api:deployment:read` + `…/grain#health` (formerly `deployment-health`) | `…/api#deployment:read` + `…/grain#health` | 1 |
-| Bring-up runbooks | `bootstrap-playbooks` | `…/grain#playbooks` *(proposed)* | 1 |
+| Bring-up runbooks | `…/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`) | `…/config-map#config-map` `{"config_maps":["bootstrap"]}` | 1 |
 | `request_secret` (write-only intake into `<data-dir>/secrets`) | none (a turn-ending tool that every task holds) | — | 1 |
 | `GET /api/tasks`, `GET /api/tasks/{id}`, `GET /api/states` | `api:tasks:read` (via `api:self-debug`) | `…/api#tasks:read` | 1 |
 | `GET /api/ci/runs`, `/api/ci/runs/{id}`, `/api/ci/faults`, artifacts; `grain ci list\|log\|test-history`; `ci://` | `api:ci:read` (or preset `api:ci-read`) | `…/api#ci:read` | 1 |
@@ -235,7 +235,7 @@ default, and §5 says how existing deployments are offered it.
 
 | Field | Value | Rationale |
 |---|---|---|
-| `Capabilities` | `self-debug`, `…/grain#journal`, `api:deployment:read`, `…/grain#health`, `bootstrap-playbooks`, `api:task-admin`, `api:capabilities:read`, `api:settings:read`, `api:repos:read`, `api:releases:read`, `api:schedules:read`, `api:templates:read`, `api:suites:read`, `api:dispatch:read`, plus build `DefaultOn` ids | W1–W5 day-to-day. None of these is dangerous, so none needs a person's grant under `IsPersonOnlyGrant`. |
+| `Capabilities` | `self-debug`, `…/grain#journal`, `api:deployment:read`, `…/grain#health`, `…/config-map#config-map={"config_maps":["bootstrap"]}`, `api:task-admin`, `api:capabilities:read`, `api:settings:read`, `api:repos:read`, `api:releases:read`, `api:schedules:read`, `api:templates:read`, `api:suites:read`, `api:dispatch:read`, plus build `DefaultOn` ids | W1–W5 day-to-day. None of these is dangerous, so none needs a person's grant under `IsPersonOnlyGrant`. |
 | (implicit) `durable` | always, via `ConsoleSessionGrants` | Priority admission (§3.1.4). |
 | `Reads` | `[]` in the row; the state repository is added at filing (`FileConsoleSessionOptions.StateRepo`) | Config is always readable without the operator naming a repo (§3.1.3). |
 | `Writes` | `[grain/config]` | The director has no target and lands no code. The one write is the state repository, for `propose_config_change` (§3.1.3); it is never passed on to a proposal. |

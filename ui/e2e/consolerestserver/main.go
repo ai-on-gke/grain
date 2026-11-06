@@ -53,7 +53,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
@@ -597,7 +596,7 @@ func run() error {
 	// api grants resolve as on every grain daemon
 	// (ui.AgentAPIDynamicProvider): every console session holds
 	// model.ConsoleSessionCIReadGrant by default.
-	registry := model.NewCapabilityRegistry(append(admincaps.Providers(), bootstrap.New(), durable.New())...)
+	registry := model.NewCapabilityRegistry(append(admincaps.Providers(), durable.New())...)
 	registry.RegisterDynamic(ui.AgentAPIDynamicProvider)
 	deps := orchestrator.Deps{
 		Store:     store,
