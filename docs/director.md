@@ -277,6 +277,20 @@ work around a missing one. It also says that dangerous scopes, and every
 call under one, need a person and a reason. Every call is attributed to
 the session's task. See [agent-api.md](agent-api.md).
 
+Five scopes are out of the director's reach whatever it is granted:
+`merge:force`, `settings:write`, `secrets:write`, `connections:write` and
+`repos:write`. This is grain's built-in floor for the director
+(`model.DirectorFloorRefusal`;
+[director-capabilities.spec.md](../design/spec/director/director-capabilities.spec.md)
+§3.3, G7), and it applies with or without a `settings/capabilities.yml`.
+It covers every grant reaching one of those scopes, including a preset
+or scope set that expands to one, such as `api:grain/operator`. Grain
+refuses such a grant when it is attached to the director's task, refuses
+to save it in the session pane, holds the director at dispatch while it
+holds one, and refuses those routes at the API gate. A rule in
+`settings/capabilities.yml` can take more away from the director, but it
+cannot give these back.
+
 ## Starting a fresh one
 
 Close the session's task. grain does not reopen a conversation somebody

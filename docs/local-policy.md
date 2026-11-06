@@ -175,6 +175,14 @@ all of these holds it, and the Director never runs:
   network, so grain files the Director `open` there. A Director whose
   network was set in its console-session settings asks for that one.
 
+Allowing a grant here does not get it past grain's built-in floor for
+the Director. The Director is never given a grant that reaches
+`merge:force`, `settings:write`, `secrets:write`, `connections:write` or
+`repos:write`, whatever this file or `settings/capabilities.yml` says
+([director.md](director.md#acting-through-grains-api)). Writing one of
+those into the Director's session holds it the same way a refusal here
+would, and the hold names the grant.
+
 `grain init workstation` writes `grain/config` and the Director's grants
 into the starter policy. It names each grant exactly, so you can see
 what it allows and remove any of them. Any task may be granted those
