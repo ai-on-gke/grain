@@ -96,10 +96,16 @@ func pullRequestCallRepo(r *http.Request, pattern string, body []byte) (string, 
 	return ref.Repo.String(), true, nil
 }
 
-// requirePullRequestScopes asks an agent's call for the scopes beyond
-// its route's own that a pull-request route needs on repo; a person's
-// call is not an agent call and passes.
+// requirePullRequestScopes asks an agent's or limited role's call for the
+// scopes beyond its route's own that a pull-request route needs on repo.
 func requirePullRequestScopes(ctx context.Context, repo string, scopes ...APIScope) error {
+	if a := accessRoleFromContext(ctx); a != nil && !a.Full {
+		for _, scope := range scopes {
+			if !a.allows(scope, repo) {
+				return forbiddenErrorf("%s holds no scope %s on %s", a.label(), scope, repo)
+			}
+		}
+	}
 	call, ok := agentCallFromContext(ctx)
 	if !ok {
 		return nil
@@ -114,13 +120,17 @@ func requirePullRequestScopes(ctx context.Context, repo string, scopes ...APISco
 }
 
 // pullRequestFiling is who work filed by a pull-request route is for and
-// whether it lands approved, under #XC-17's rules: a person's request is
-// approved; an agent's only with tasks:admin on the repository, or when
-// the deployment's owner-trust policy trusts its credential's owner
-// there. Everything else lands proposed.
+// whether it lands approved, under #XC-17's rules: an unlimited person's
+// request is approved; a limited role's or an agent's only with
+// tasks:admin on the repository, or when the deployment's owner-trust
+// policy trusts an external credential's owner there. Everything else
+// lands proposed.
 func (c *Client) pullRequestFiling(ctx context.Context, repo model.RepoRef) (model.Attribution, bool, error) {
 	actor := c.requestActor(ctx)
 	if actor.Actor.Kind != model.PrincipalAgent {
+		if a := accessRoleFromContext(ctx); a != nil && !a.Full {
+			return actor, a.allows("tasks:admin", repo.String()), nil
+		}
 		return actor, true, nil
 	}
 	if call, ok := agentCallFromContext(ctx); ok && call.grants.Allows("tasks:admin", repo.String()) {

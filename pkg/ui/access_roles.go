@@ -16,6 +16,7 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -102,6 +103,7 @@ type accessRole struct {
 	// Missing are Roles that name no scope set in effect, which grant
 	// nothing.
 	Missing []string
+	grants  []string
 	set     APIGrantSet
 	deny    map[APIScope]bool
 	// Full is true for a session holding every scope on every
@@ -205,7 +207,8 @@ func resolveAccessRoles(who string, roles []string) *accessRole {
 		}
 	}
 	sort.Strings(a.Roles)
-	a.set = model.APIGrantsOf(grants)
+	a.set = model.APIGrantsOf(grants).Without(a.deny)
+	a.grants = roleGrantList(grants, a.set, a.deny)
 	a.Full = len(a.deny) == 0
 	for _, info := range model.APIScopes() {
 		if !a.set.Allows(info.Scope, "") {
@@ -214,6 +217,27 @@ func resolveAccessRoles(who string, roles []string) *accessRole {
 		}
 	}
 	return a
+}
+
+// roleGrantList is the api:<role> list resolveAccessRoles built, or -- when a
+// role's deny vetoed a scope -- the remaining per-scope grants from set so
+// grant-escalation checks cannot pass on a vetoed scope.
+func roleGrantList(grants []string, set APIGrantSet, deny map[APIScope]bool) []string {
+	if len(deny) == 0 {
+		return grants
+	}
+	var out []string
+	for _, sc := range set.Scopes() {
+		repos := set.Repos(sc)
+		if len(repos) == 0 {
+			out = append(out, model.APIGrantPrefix+string(sc))
+			continue
+		}
+		for _, r := range repos {
+			out = append(out, model.APIGrantPrefix+string(sc)+"@"+r)
+		}
+	}
+	return out
 }
 
 // roleDenies is every scope the set named role, or any set it includes,
@@ -301,8 +325,12 @@ func (s *Server) roleGate(pattern string, next http.HandlerFunc) http.HandlerFun
 	}
 }
 
-// roleScopeOf is the scope pattern needs of a person's role: "" for a
+// RoleScopeOf is the scope pattern needs of a person's role: "" for a
 // route only a role holding every scope reaches.
+func RoleScopeOf(pattern string) APIScope {
+	return roleScopeOf(pattern)
+}
+
 func roleScopeOf(pattern string) APIScope {
 	if sc, ok := humanRouteScopes[pattern]; ok {
 		return sc
@@ -332,38 +360,228 @@ func (s *Server) authorizeRoleCall(r *http.Request, pattern string, a *accessRol
 		}
 		return fmt.Errorf("%s holds no scope %s, which %s needs: %s", a.label(), scope, pattern, ask)
 	}
-	if a.allows(scope, "") || s.tasks == nil || s.tasks.Store == nil {
+	mutating := r.Method != http.MethodGet && !strings.HasSuffix(string(scope), ":read")
+	if a.allows(scope, "") && !mutating {
+		return nil
+	}
+	if !mutating && (s.tasks == nil || s.tasks.Store == nil) {
 		return nil
 	}
 	body, err := peekBody(r)
 	if err != nil {
 		return err
 	}
-	var target string
-	if id := r.PathValue("id"); id != "" && strings.HasPrefix(pathOf(pattern), "/api/tasks/{id}") {
-		target = id
+	var repo string
+	if s.tasks != nil && s.tasks.Store != nil {
+		var target string
+		if id := r.PathValue("id"); id != "" && strings.HasPrefix(pathOf(pattern), "/api/tasks/{id}") {
+			target = id
+		}
+		callRepo, callErr := s.agentCallRepo(r.Context(), r, pattern, target, body, nil, a.set, scope, false)
+		if callErr != nil {
+			if !a.allows(scope, "") {
+				return callErr
+			}
+		} else {
+			repo = callRepo
+		}
+		if repo == "" && pattern == "POST /api/tasks" && len(body) > 0 {
+			var req struct {
+				TemplateID string `json:"templateId"`
+			}
+			if json.Unmarshal(body, &req) == nil && strings.TrimSpace(req.TemplateID) != "" {
+				if tmpl := s.gateTemplate(r.Context(), req.TemplateID); tmpl != nil && tmpl.Target != nil {
+					repo = tmpl.Target.String()
+				}
+			}
+		}
 	}
-	repo, err := s.agentCallRepo(r.Context(), r, pattern, target, body, nil, a.set, scope, false)
-	if err != nil {
+	if !a.allows(scope, "") {
+		if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events") && repo == "" {
+			// A namespace read or event stream naming no repository is narrowed
+			// to the ones the role reaches by fsScope / eventsReadable, as an
+			// agent's is.
+			return nil
+		}
+		if (pattern == "GET /api/inbox" && strings.TrimSpace(r.URL.Query().Get("repo")) == "") || (isRepoNarrowedTasksRead(pattern, r) && repo == "") {
+			return nil
+		}
+		if !a.allows(scope, repo) {
+			if repo == "" {
+				return fmt.Errorf("%s holds %s only on %s, and %s does not name one of them",
+					a.label(), scope, strings.Join(a.set.Repos(scope), ", "), pattern)
+			}
+			return fmt.Errorf("%s holds %s, but not on %s: %s", a.label(), scope, repo, ask)
+		}
+		if !mutating {
+			return nil
+		}
+	}
+	ctx := r.Context()
+	stored := s.storedFieldGrants(ctx, pattern, repo)
+	normalize := s.normalizeCapFn()
+	if _, isGrantBody := grantBodies[pattern]; isGrantBody {
+		if err := roleGrantEscalation(a, pattern, body, stored, normalize); err != nil {
+			return err
+		}
+	}
+	allowedRepo := func(need APIScope, targetRepo string) bool {
+		targetRepo = strings.TrimSpace(targetRepo)
+		if targetRepo == "" {
+			return true
+		}
+		return a.allows(need, targetRepo)
+	}
+	if err := s.filingEscalation(ctx, a.grants, a.set, allowedRepo, pattern, scope, repo, body, filingEscalationOpts{
+		role:      a,
+		stored:    stored,
+		normalize: normalize,
+	}); err != nil {
 		return err
 	}
-	if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events") && repo == "" {
-		// A namespace read or event stream naming no repository is narrowed
-		// to the ones the role reaches by fsScope / eventsReadable, as an
-		// agent's is.
+	if err := roleGrantEscalation(a, pattern, body, stored, normalize); err != nil {
+		return err
+	}
+	return s.roleStandingTargetEscalation(ctx, r, pattern, scope, repo, a, allowedRepo, normalize)
+}
+
+// roleGrantEscalation refuses a body that grants a capability outside a's own
+// scopes, a dangerous grant, or a person-only scope set.
+func roleGrantEscalation(a *accessRole, pattern string, body []byte, stored map[string][]string, normalize func(string) (string, error)) error {
+	for _, gf := range addedGrantFieldsInBody(pattern, body, stored, normalize) {
+		if err := roleGrantRefusal(a, gf.key, gf.name, normalize); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func roleGrantRefusal(a *accessRole, key, name string, normalize func(string) (string, error)) error {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
 		return nil
 	}
-	if (pattern == "GET /api/inbox" && strings.TrimSpace(r.URL.Query().Get("repo")) == "") || (isRepoNarrowedTasksRead(pattern, r) && repo == "") {
-		return nil
+	if grantNamesPersonScopeSet(trimmed) {
+		return fmt.Errorf("%s cannot set %s: %s names a person-only scope set, which requires an unlimited role (grain/operator)",
+			a.label(), key, trimmed)
 	}
-	if a.allows(scope, repo) {
-		return nil
+	if err := agentGrantRefusal(a.grants, trimmed, normalize); err != nil {
+		if slices.ContainsFunc(APIGrantsOf([]string{trimmed}).Scopes(), IsDangerousAPIScope) ||
+			model.IsDangerousAPIGrant(trimmed) || model.IsDangerousGrant(trimmed) ||
+			trimmed == model.PriorityDispatchCapability || trimmed == model.DurableCapability {
+			return fmt.Errorf("%s cannot set %s: %s requires an unlimited role (grain/operator)", a.label(), key, trimmed)
+		}
+		return fmt.Errorf("%s cannot set %s: cannot grant %s, which the role does not hold", a.label(), key, trimmed)
 	}
-	if repo == "" {
-		return fmt.Errorf("%s holds %s only on %s, and %s does not name one of them",
-			a.label(), scope, strings.Join(a.set.Repos(scope), ", "), pattern)
+	return nil
+}
+
+func roleTemplateWithin(a *accessRole, key string, tmpl model.Template, allowedRepo func(APIScope, string) bool, normalize func(string) (string, error)) error {
+	for _, g := range tmpl.Grants {
+		if err := roleGrantRefusal(a, key, g.Capability, normalize); err != nil {
+			return err
+		}
 	}
-	return fmt.Errorf("%s holds %s, but not on %s: %s", a.label(), scope, repo, ask)
+	for _, w := range tmpl.Writes {
+		if !allowedRepo("tasks:write", w.Repo.String()) {
+			return fmt.Errorf("%s cannot set %s: template %s grants push access to %s, which role's tasks:write does not reach",
+				a.label(), key, tmpl.ID, w.Repo)
+		}
+	}
+	for _, r := range tmpl.Reads {
+		if !allowedRepo("tasks:read", r.String()) {
+			return fmt.Errorf("%s cannot set %s: template %s grants read access to %s, which role's tasks:read does not reach",
+				a.label(), key, tmpl.ID, r)
+		}
+	}
+	return nil
+}
+
+// roleStandingTargetEscalation holds indirect filings and edits of stored
+// templates, schedules and suites to a's own scopes even when the request body
+// leaves their grants untouched.
+func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Request, pattern string, scope APIScope, repo string,
+	a *accessRole, allowedRepo func(APIScope, string) bool, normalize func(string) (string, error)) error {
+	opts := filingEscalationOpts{role: a, normalize: normalize}
+	switch pattern {
+	case "POST /api/notifications/{id}/investigate":
+		if tmpl := model.SystemTemplate(model.InvestigateNotificationTemplateID, model.RepoRef{}); tmpl != nil {
+			return roleTemplateWithin(a, "capabilities", *tmpl, allowedRepo, normalize)
+		}
+	case "PATCH /api/templates/{id}":
+		if s.tasks != nil && s.tasks.Store != nil {
+			if existing, err := s.tasks.Store.GetTemplate(ctx, r.PathValue("id")); err == nil && existing != nil {
+				return s.checkFilingTemplate(ctx, *existing, "template", a.grants, a.set, allowedRepo, scope, repo, opts)
+			}
+		}
+	case "PATCH /api/schedules/{id}", "POST /api/schedules/{id}/run":
+		if s.tasks != nil && s.tasks.Store != nil {
+			sched, err := s.tasks.Store.GetSchedule(ctx, r.PathValue("id"))
+			if err != nil || sched == nil {
+				return nil
+			}
+			schedRepo := ""
+			if sched.Target.Owner != "" {
+				schedRepo = sched.Target.String()
+				if !a.allows("tasks:write", schedRepo) {
+					return fmt.Errorf("%s cannot modify or run schedule %s: role does not hold tasks:write on %s",
+						a.label(), sched.ID, schedRepo)
+				}
+			}
+			if sched.AutoMerge {
+				return fmt.Errorf("%s cannot modify or run schedule %s (autoMerge): auto-merge requires an unlimited role (grain/operator)",
+					a.label(), sched.ID)
+			}
+			if sched.KeepRunning {
+				return fmt.Errorf("%s cannot modify or run schedule %s (keepRunning): keepRunning requires an unlimited role (grain/operator)",
+					a.label(), sched.ID)
+			}
+			if sched.AutoApproveProposals && !a.allows("tasks:admin", schedRepo) {
+				return fmt.Errorf("%s cannot modify or run schedule %s (autoApproveProposals): needs tasks:admin",
+					a.label(), sched.ID)
+			}
+			for _, g := range sched.Grants {
+				if err := roleGrantRefusal(a, "capabilities", g.Capability, normalize); err != nil {
+					return err
+				}
+			}
+			for _, w := range sched.Writes {
+				if !allowedRepo("tasks:write", w.Repo.String()) {
+					return fmt.Errorf("%s cannot modify or run schedule %s (writes): role does not hold tasks:write on %s",
+						a.label(), sched.ID, w.Repo)
+				}
+			}
+			for _, rd := range sched.Reads {
+				if !allowedRepo("tasks:read", rd.String()) {
+					return fmt.Errorf("%s cannot modify or run schedule %s (reads): role does not hold tasks:read on %s",
+						a.label(), sched.ID, rd)
+				}
+			}
+			if sched.TemplateID != nil && *sched.TemplateID != "" {
+				if tmpl := s.gateTemplate(ctx, *sched.TemplateID); tmpl != nil {
+					if err := s.checkFilingTemplate(ctx, *tmpl, "templateId", a.grants, a.set, allowedRepo, scope, schedRepo, opts); err != nil {
+						return err
+					}
+				}
+			}
+			if sched.SuiteID != nil && *sched.SuiteID != "" {
+				if suite, err := s.tasks.Store.GetSuite(ctx, *sched.SuiteID); err == nil && suite != nil {
+					if err := s.checkRoleSuite(ctx, *suite, "suiteId", a.grants, a.set, allowedRepo, scope, schedRepo, opts); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	case "PATCH /api/suites/{id}":
+		if s.tasks != nil && s.tasks.Store != nil {
+			if suite, err := s.tasks.Store.GetSuite(ctx, r.PathValue("id")); err == nil && suite != nil {
+				return s.checkRoleSuite(ctx, *suite, "suite", a.grants, a.set, allowedRepo, scope, repo, opts)
+			}
+		}
+	case "POST /api/suite-runs":
+		// suiteId in the body is already checked by filingEscalation.
+	}
+	return nil
 }
 
 // AccessRoleInfo is a verified session's resolved access, as
