@@ -236,8 +236,12 @@ func defaultHostInviteInstall(c HostdInstallContext) HostdInstallInstructions {
 		return HostdInstallInstructions{}
 	}
 	cmd := "curl -fsSL " + c.Origin + hostdInstallShortPath + " | sh -s -- --join " + c.JoinCode
+	// As defaultHostdInstall: the script installs only the daemon's own
+	// release unless the command it is given says otherwise, in sight.
 	if c.Release != "" {
 		cmd += " --release " + c.Release
+	} else {
+		cmd += " --any-version"
 	}
 	if c.Image != "" {
 		cmd += " --image " + c.Image
