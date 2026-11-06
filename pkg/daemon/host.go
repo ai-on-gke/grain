@@ -153,7 +153,13 @@ func LogSources(cfg Config) map[string]ui.LogSource {
 		return sources
 	}
 	return map[string]ui.LogSource{
-		"daemon":          systemlog.Journalctl{Unit: "grain-daemon.service"},
+		// The unit this process runs under, not a fixed name: a
+		// workstation daemon runs as the user unit grain.service, and
+		// reading grain-daemon.service there answered with the journal
+		// of a process that was not serving the request
+		// (systemlog.DaemonUnit). Where the host has both installed the
+		// other is offered through ?unit= (ui.UnitLogSource).
+		"daemon":          ui.DaemonJournal{DaemonJournal: systemlog.DetectDaemonJournal(systemlog.DaemonUnit(), nil)},
 		"git-proxy-audit": auditLog,
 		"config-sync":     systemlog.Journalctl{Unit: "grain-config-sync.service"},
 		"dmesg":           systemlog.Dmesg{},
@@ -212,8 +218,10 @@ func DaemonHealthFor(cfg Config, startedAt time.Time) *daemonHealth {
 		return newPodDaemonHealth(startedAt, cfg.UnknownFlags, pods, ownPodName(), container,
 			kubeShape(pods.NamespaceOrDefault(), deployment, container))
 	}
-	return newDaemonHealth(startedAt, cfg.UnknownFlags, systemlog.Journalctl{Unit: "grain-daemon.service"},
-		newRestartRequests(cfg.DataDir))
+	unit := systemlog.DaemonUnit()
+	h := newDaemonHealth(startedAt, cfg.UnknownFlags, unit.Journal(), newRestartRequests(cfg.DataDir))
+	h.shape = systemdShape(unit)
+	return h
 }
 
 // k8sSelfNames is which Deployment and container this process is a pod

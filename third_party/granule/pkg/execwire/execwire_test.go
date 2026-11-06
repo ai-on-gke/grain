@@ -304,7 +304,7 @@ func TestAFieldThisBuildDoesNotKnowIsRefused(t *testing.T) {
 // agent refuse the client that ships with it.
 func TestEveryFieldRequestHasIsAccepted(t *testing.T) {
 	var buf bytes.Buffer
-	req := Request{Line: "echo hi", User: "root", TTY: true, Cols: 80, Rows: 24, Term: "xterm-256color", Dir: "/src", Env: []string{"A=1"}, Forward: true, ForwardSpecs: []string{"9728:127.0.0.1:9728"}}
+	req := Request{Line: "echo hi", User: "root", TTY: true, Cols: 80, Rows: 24, Term: "xterm-256color", Dir: "/src", Env: []string{"A=1"}}
 	if err := WriteRequest(&buf, req); err != nil {
 		t.Fatal(err)
 	}

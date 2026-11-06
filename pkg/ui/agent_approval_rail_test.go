@@ -140,6 +140,15 @@ func TestAgentApprovalRailRefusesTasksHeldForAPerson(t *testing.T) {
 		{name: "keep_running", id: "24", proposedBy: "9",
 			edit: func(t *model.Task) { t.KeepRunning = true },
 			want: "keep_running"},
+		{name: "priority escalation", id: "27", proposedBy: "9",
+			edit: func(t *model.Task) { t.Priority = model.DefaultTaskPriority + 1 },
+			want: "above the"},
+		{name: "config repository target", id: "28", proposedBy: "9",
+			edit: func(t *model.Task) {
+				cfgRepo := model.ConfigRepo()
+				t.Target = &cfgRepo
+			},
+			want: "configuration repository"},
 		{name: "person-only grant filed by a person", id: "25",
 			grants: []string{"api:merge:force"}, want: "which only a person may grant"},
 		{name: "requires_person grant filed by a person", id: "26",

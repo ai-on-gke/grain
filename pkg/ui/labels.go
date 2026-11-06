@@ -794,6 +794,15 @@ type Config struct {
 	// ReconcilerDown always reports false, the same nil-means-
 	// unavailable-feature default AutoMergeDegraded above gives.
 	ReconcilerDown func() bool
+	// DispatchConditions, when set, is why this deployment is not
+	// dispatching, as named conditions with the error and the time each
+	// was set (pkg/dispatchcondition.Set, wired by pkg/daemon): what
+	// ReconcilerDown's boolean cannot say. GET /api/sandboxes lists the
+	// conditions in force as failing checks, GET /api/config carries
+	// them beside reconcilerDown, and GET /api/pipeline/changes shows
+	// each set and clear as an entry. nil reports none, the same
+	// nil-means-nothing-to-warn-about default ReconcilerDown has.
+	DispatchConditions DispatchConditionReader
 	// StoreSwitch, when set, is polled by GET /api/config and GET
 	// /api/sandbox-health (DaemonHealth.StoreSwitch) for the standing
 	// alert that the store was switched underneath this daemon

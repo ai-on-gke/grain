@@ -644,12 +644,12 @@ Actions job's log when given a `gha:` run id. `grain ci wait` and
   - a task in its own proposal lineage: one it proposed, or one proposed
     by any task down that `LinkProposedBy` chain, however many hops;
   - a task held for a person: one filed with `hold_for_approval`
-    (`held-for-approval` tag); one holding a grant
-    `settings/capabilities.yml` marks `requires_person`, or a person-only
-    grant (a dangerous api scope, a capability method only a person may
-    grant, `durable`, `priority-dispatch`); or one asking for a
-    capability, write target or read its own proposer doesn't hold, or
-    for `keep_running` or a priority above its proposer's.
+    (`held-for-approval` tag) or targeting or writing `grain/config`; one
+    holding a grant `settings/capabilities.yml` marks `requires_person`,
+    or a person-only grant (a dangerous api scope, a capability method
+    only a person may grant, `durable`, `priority-dispatch`); or one
+    asking for a capability, write target or read its own proposer doesn't
+    hold, or for `keep_running` or a priority above its proposer's.
 
   The refusal is a 403 naming the chain or the holds. Any other task,
   outside the run's lineage and held for nobody, is still approved under

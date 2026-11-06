@@ -32,24 +32,49 @@ make grain-agentd        # bin/grain-agentd, static
 
 `make build` does not build it, and no release ships it yet.
 
-## Register it
+## Enroll and install it (`--join`, recommended)
 
-On the daemon, register a host for the machine and keep its token: **Settings
-→ Hosts**, or
+Copy the shared enrollment command from **Settings → Hosts → Invite hosts** (or run `grain host invite` as the deployment owner), or pass `-join <enrollment-code>` directly to `grain-agentd install`:
 
 ```sh
-grain host register ws-1                       # a daemon reached directly
-grain host register -owner you@example.com ws-1   # a daemon behind IAP
+./bin/grain-agentd install -server https://grain.example.com -join <enrollment-code>
+# or from the hosted installer:
+curl -fsSL https://grain.example.com/hostd/install | sh -s -- --agentd --join <enrollment-code>
+```
+
+With `-join`:
+
+1. `grain-agentd` generates `~/.config/grain/agentd-key` (Ed25519 private key, mode `0600`) if absent;
+2. authenticates your enrolling identity (through your identity proxy / `-iap-audience`, or via an interactive GitHub device-flow prompt on deployments without a proxy verifier);
+3. files a join request naming you and the host, and waits for the deployment owner to click **Accept** in **Settings → Hosts** (or run `grain host accept <id>`);
+4. writes the issued 30-day key-bound credential to `~/.config/grain/agentd-token` (`0600`), installs `~/.config/grain/agentd.yaml` and `~/.config/systemd/user/grain-agentd.service`, and starts `grain-agentd`, which signs every `/api/hostd/connect` upgrade with its Ed25519 key and renews its 30-day credential silently while connected.
+
+Then point a model connection at the accepted host name (**Settings → Models** → the connection → **Run on** `<host>`); see [host-placement.md](host-placement.md).
+
+### Migrating an existing per-host token (`-rekey`)
+
+If `grain-agentd` was previously installed with a legacy per-host token, bind an Ed25519 key to the existing host entry in place:
+
+```sh
+grain-agentd install -server https://grain.example.com -name ws-1 -rekey
+```
+
+Accept the request in **Settings → Hosts** (`rekey: ws-1`); `grain-agentd` replaces `~/.config/grain/agentd-token` with a 30-day key-bound credential without changing the host's name.
+
+## Legacy per-host token registration
+
+For non-interactive setups that cannot wait for the owner to accept them, register a per-host token on the daemon (**Settings → Hosts → Add a host (legacy token)**, or `grain host register`):
+
+```sh
+grain host register ws-1                             # a daemon reached directly
+grain host register -owner you@example.com ws-1      # a daemon behind IAP
 ```
 
 A host that dials in through IAP or another identity-verifying proxy must be
 registered with its owner, the identity it dials in as; see
-[access-code.md](access-code.md#a-grain-hostd-dialing-in).
+[access-code.md](access-code.md#a-host-dialing-in).
 
-Then point a model connection at it (Settings → Models → the connection →
-**Run on host** `ws-1`); see [host-placement.md](host-placement.md).
-
-## Install it
+## Install with a legacy token
 
 As yourself, on the machine the CLIs should run on:
 
@@ -108,8 +133,9 @@ registered owner.
 Without systemd, run what the unit runs, e.g. in tmux:
 
 ```sh
-grain-agentd -server https://grain.example.com -name ws-1 \
+grain-agentd -server https://grain.example.com [-name ws-1] \
   [-iap-audience <client id>] [-token-file ~/.config/grain/agentd-token] \
+  [-key-file ~/.config/grain/agentd-key] \
   [-allowlist ~/.config/grain/agentd.yaml] [-state-dir ~/.local/state/grain-agentd]
 ```
 

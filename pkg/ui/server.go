@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
 )
@@ -68,7 +69,8 @@ type Server struct {
 	taskDetails taskDetailCache
 	// hostdImage is the image /api/hostd/install.sh suggests
 	// (hostdInstallImage), hostd_install.go's.
-	hostdImage hostdImageCache
+	hostdImage      hostdImageCache
+	hostdJoinReplay hostd.NonceReplayCache
 	// access is the single-tenant access gate's rate limiter, and
 	// accessCode the token file it checks codes against
 	// (localAPITokenNow) -- both accesscode.go's.
@@ -197,7 +199,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		p, method, ok := extractPrincipal(r)
 		if ok {
-			if !singleTenantOpenRoute(r) || s.checkAllowedPrincipal(r.Context(), VerifiedIdentity{Email: p.ID, Kind: p.Kind}) == nil {
+			if !singleTenantOpenRoute(r) || s.allowedPrincipalErr(r.Context(), VerifiedIdentity{Email: p.ID, Kind: p.Kind}) == nil {
 				r = r.WithContext(withAuthMethod(WithPrincipal(r.Context(), p), method))
 			} else {
 				ok = false
@@ -254,7 +256,7 @@ func requiresAccess(r *http.Request) bool {
 	return strings.HasPrefix(r.URL.Path, "/api/") &&
 		!(r.URL.Path == "/api/config" && (r.Method == http.MethodGet || r.Method == http.MethodHead)) &&
 		!strings.HasPrefix(r.URL.Path, "/api/auth/") &&
-		!hostdConnectRoute(r) && !hostdInstallRoute(r)
+		!hostdConnectRoute(r) && !hostdInstallRoute(r) && !hostdEnrollOpenRoute(r)
 }
 
 func (s *Server) routes() {
@@ -706,13 +708,25 @@ func (s *Server) routes() {
 
 	// A grain hostd on another machine dialing in (hostd -server).
 	s.route("GET /api/hostd/connect", s.handleHostdConnect)
-	// The script that installs one there (Settings -> Hostds).
+	s.route("POST /api/hostd/join", s.handleHostdJoin)
+	s.route("POST /api/hostd/join/{id}/poll", s.handleHostdJoinPoll)
+	s.route("POST /api/hostd/renew", s.handleHostdRenew)
+	// The script that installs one there (Settings -> Hosts).
 	s.route("GET "+hostdInstallPath, s.handleHostdInstallScript)
-	// The hostd registry (Settings -> Hostds).
+	s.route("GET "+hostdInstallShortPath, s.handleHostdInstallScript)
+	// The host registry and join handshake (Settings -> Hosts).
 	s.route("GET /api/hostds", s.handleListHostds)
 	s.route("POST /api/hostds", s.handleCreateHostd)
+	s.route("GET /api/hostds/enrollment-codes", s.handleListHostEnrollmentCodes)
+	s.route("POST /api/hostds/enrollment-codes", s.handleCreateHostEnrollmentCode)
+	s.route("POST /api/hostds/enrollment-codes/{name}/rotate", s.handleRotateHostEnrollmentCode)
+	s.route("POST /api/hostds/enrollment-codes/{name}/revoke", s.handleRevokeHostEnrollmentCode)
+	s.route("GET /api/hostds/pending", s.handleListPendingHostJoins)
+	s.route("POST /api/hostds/pending/{id}/accept", s.handleAcceptPendingHostJoin)
+	s.route("POST /api/hostds/pending/{id}/reject", s.handleRejectPendingHostJoin)
 	s.route("PATCH /api/hostds/{name}", s.handleUpdateHostd)
 	s.route("GET /api/hostds/{name}/install", s.handleHostdInstall)
+	s.route("POST /api/hostds/{name}/rename", s.handleRenameHostd)
 	s.route("POST /api/hostds/{name}/rotate", s.handleRotateHostdToken)
 	s.route("POST /api/hostds/{name}/revoke", s.handleRevokeHostd)
 	s.route("DELETE /api/hostds/{name}", s.handleDeleteHostd)

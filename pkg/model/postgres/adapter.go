@@ -147,6 +147,8 @@ var tablePrimaryKeys = map[string][]string{
 	"external_agent_token":           {"id"},
 	"hostd":                          {"name"},
 	"hostd_token":                    {"token_hash"},
+	"host_enrollment_code":           {"name"},
+	"host_join_request":              {"id"},
 	"external_agent_token_sequence":  {"id"},
 	"gcp_key":                        {"name"},
 	"secret_resolution_audit":        {"id"},

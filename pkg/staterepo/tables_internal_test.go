@@ -415,12 +415,15 @@ var notSettings = []string{
 	// repo declarative settings.
 	"external_agent_token",
 	"external_agent_token_sequence",
-	// The hostd registry (model.Hostd) and its tokens' digests: hostds
-	// are created, rotated and revoked in Settings -> Hostds and minted
-	// a token there, not declared; hostd_token is never exported at all
-	// (LocalTables).
+	// The hostd registry (model.Hostd), its tokens' digests, shared
+	// enrollment codes and pending join requests: hosts are invited,
+	// accepted and revoked in Settings -> Hosts rather than declared in
+	// state, and hostd_token, host_enrollment_code and host_join_request
+	// are never exported at all (LocalTables).
 	"hostd",
 	"hostd_token",
+	"host_enrollment_code",
+	"host_join_request",
 	// Verified-identity sign-in access (model.AllowedPrincipal) and its
 	// one-time flag migration record: managed live in Settings -> Access
 	// and `grain access`, and intentionally kept out of `grain/config` so

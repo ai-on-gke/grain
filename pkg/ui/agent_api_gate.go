@@ -721,7 +721,7 @@ func (s *Server) proposalLineage(ctx context.Context, task model.Task, actor str
 	for range maxProposalLineageDepth {
 		up := proposedByOf(cur)
 		if up == "" || seen[up] {
-			break
+			return proposer, nil, nil
 		}
 		seen[up] = true
 		chain = append(chain, up)
@@ -734,12 +734,16 @@ func (s *Server) proposalLineage(ctx context.Context, task model.Task, actor str
 			return nil, nil, fmt.Errorf("reading task %s, which proposed %s: %w", up, cur.ID, err)
 		}
 		if next == nil {
-			break
+			return proposer, nil, nil
 		}
 		if proposer == nil {
 			proposer = next
 		}
 		cur = *next
+	}
+	if up := proposedByOf(cur); up != "" && !seen[up] {
+		return nil, nil, fmt.Errorf("task %s's LinkProposedBy chain exceeds %d hops, so its proposal lineage cannot be verified",
+			task.ID, maxProposalLineageDepth)
 	}
 	return proposer, nil, nil
 }
@@ -763,6 +767,8 @@ func proposedByOf(t model.Task) string {
 // now:
 //
 //   - hold_for_approval (model.HeldForApprovalTag);
+//   - targeting or writing this deployment's configuration repository
+//     (model.ConfigRepoProposalHold);
 //   - a grant settings/capabilities.yml marks requires_person, for the
 //     capability or the method it names (catalogueRequiresPerson);
 //   - a person-only grant (model.IsPersonOnlyGrant): a dangerous api
@@ -776,6 +782,9 @@ func (s *Server) proposalPersonHolds(ctx context.Context, task model.Task, propo
 	var holds []string
 	if model.HeldForApproval(task) {
 		holds = append(holds, "it was filed with hold_for_approval")
+	}
+	if why := model.ConfigRepoProposalHold(task); why != "" {
+		holds = append(holds, why)
 	}
 	needsPerson, err := s.tasks.catalogueRequiresPerson(ctx, task)
 	if err != nil {
