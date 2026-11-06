@@ -36,6 +36,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -330,8 +331,9 @@ func (p *Policy) checkRepos(task model.Task) error {
 	repos = append(repos, task.Reads...)
 	// A grant can reach a repository the task never names: repo-read:
 	// and repo-write: grants. Those are repositories this machine would
-	// run against too, so they answer to repos alike. (self-debug reaches
-	// none: its grain-src/ is the deployment's baked-in source.)
+	// run against too, so they answer to repos alike. (grain#source,
+	// once self-debug, reaches none: its grain-src/ is the deployment's
+	// baked-in source.)
 	for _, g := range task.Grants {
 		repos = append(repos, model.CapabilityRepos(g.Capability)...)
 	}
@@ -531,8 +533,8 @@ func becameCapability(to, capability string) bool {
 }
 
 // allowsCapability is matchesCapability for Allow, which also admits
-// exactly the grant a retired bare name in it became -- arguments and
-// all, so an allow written for git-push-any-ref admits its repo#write
+// exactly the grant (or each of the grants) a retired bare name in it
+// became -- arguments and all, so an allow written for git-push-any-ref admits its repo#write
 // grant and no other repo#write.
 func allowsCapability(patterns []string, capability string) bool {
 	if matchesCapability(patterns, capability) {
@@ -556,6 +558,13 @@ func allowsCapability(patterns []string, capability string) bool {
 	}
 	for _, pattern := range patterns {
 		if to, ok := retiredAs(pattern); ok && to == want {
+			return true
+		}
+		// A name retired into several grants (self-debug became
+		// api:self-debug and grain#source; deployment-health
+		// api:deployment:read and grain#health) admits each of them.
+		if tos := model.CanonicalLegacyGrants(strings.ToLower(strings.TrimSpace(pattern))); len(tos) > 1 &&
+			slices.ContainsFunc(tos, func(to string) bool { return strings.EqualFold(to, want) }) {
 			return true
 		}
 	}

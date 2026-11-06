@@ -130,7 +130,7 @@ func NewAdoptionReport(at time.Time, plan runhost.Plan, took map[string]bool) *A
 // a child of the daemon (agent.LocalHost), not in a run host or grain
 // hostd, so nothing was left running to adopt.
 const StoppedWithTheDaemon = "its CLI ran inside the daemon's own container and stopped with it " +
-	"(not in a run host or grain hostd, so nothing was left to adopt)"
+	"(not in a run host or the host agent, so nothing was left to adopt)"
 
 // withRows completes the report from the store: the framework of every
 // run it names (frameworks, Store.RunFrameworks), and every run that

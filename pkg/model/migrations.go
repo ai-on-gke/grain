@@ -801,7 +801,13 @@ var Migrations = []Migration{
 		},
 	},
 	{
-		Version:     115,
+		Version: 115,
+		Description: "rewrite stored self-debug grants, repo_config.ci_capabilities and the capability policy's catalogue " +
+			"included, to api:self-debug and https://grain.dev/capabilities/grain#source={} (the in-process capability is retired)",
+		Up: migrateSelfDebugGrants,
+	},
+	{
+		Version:     116,
 		Description: "add grain_config.registry for connected-entry self-registration and heartbeat settings (design/design/registry.design.md)",
 		Statements: []string{
 			"ALTER TABLE `grain_config` ADD COLUMN `registry` TEXT NOT NULL DEFAULT ''",

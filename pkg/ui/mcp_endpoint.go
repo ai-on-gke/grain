@@ -1508,6 +1508,13 @@ func taskDetailToMCPRecord(detail TaskDetail) mcp.TaskRecord {
 			latest = at
 		}
 	}
+	var depStates map[string]string
+	if len(t.DependsOnStates) > 0 {
+		depStates = make(map[string]string, len(t.DependsOnStates))
+		for id, st := range t.DependsOnStates {
+			depStates[id] = string(st)
+		}
+	}
 	summary := mcp.TaskSummary{
 		ID:          t.ID,
 		Title:       t.Title,
@@ -1526,9 +1533,10 @@ func taskDetailToMCPRecord(detail TaskDetail) mcp.TaskRecord {
 			StalledAt: t.MergeQueueStalledAt,
 			BlockedAt: t.MergeQueueBlockedAt,
 		},
-		Kinds:     TaskKindTags(t),
-		DependsOn: t.DependsOn,
-		ChangedAt: latest,
+		Kinds:           TaskKindTags(t),
+		DependsOn:       t.DependsOn,
+		DependsOnStates: depStates,
+		ChangedAt:       latest,
 	}
 	rec := mcp.TaskRecord{
 		TaskSummary:         summary,

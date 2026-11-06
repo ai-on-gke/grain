@@ -6,7 +6,7 @@ Usage of grain daemon:
   -agy-path string
     	path to the Antigravity CLI binary (agy) agent/antigravity runs as a subprocess; empty resolves "agy" against $PATH instead. Only used by a run driven by the "antigravity" framework
   -agy-run string
-    	where the agy CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through grain hostd, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release
+    	where the agy CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through the host agent, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release
   -allow-unisolated-host-sandboxes
     	let -host-sandboxes start on a daemon others can reach, accepting that everyone who can file a task there may run anything on this host as this daemon's user
   -as string
@@ -54,7 +54,7 @@ Usage of grain daemon:
   -claude-path string
     	path to the claude CLI binary agent/claude runs as a subprocess; empty resolves "claude" against $PATH instead. Only used when the agent-framework setting is "claude"
   -claude-run string
-    	where the claude CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through grain hostd, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release. claude also takes "detached": the image's claude, through grain hostd's claude-detached entry, so a daemon upgrade does not interrupt it
+    	where the claude CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through the host agent, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release. claude also takes "detached": the image's claude, through the host agent's claude-detached entry, so a daemon upgrade does not interrupt it
   -cli-container-engine string
     	deprecated and ignored: agent CLIs no longer run in a per-run container of an image
   -cli-image string
@@ -66,7 +66,7 @@ Usage of grain daemon:
   -codex-path string
     	path to the codex CLI binary agent/codex runs as a subprocess; empty resolves "codex" against $PATH instead. Only used when the agent-framework setting is "codex"
   -codex-run string
-    	where the codex CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through grain hostd, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release. codex also takes "detached": the image's codex, through grain hostd's codex-detached entry, so a daemon upgrade does not interrupt it
+    	where the codex CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through the host agent, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release. codex also takes "detached": the image's codex, through the host agent's codex-detached entry, so a daemon upgrade does not interrupt it
   -container-git-proxy-host string
     	host address grain services are reachable at from local sandbox containers
   -container-sandbox-cap-add string
@@ -89,6 +89,8 @@ Usage of grain daemon:
     	owner/name a task created through the UI/API with no repo of its own targets
   -disable-native-sandboxes
     	select sandbox backend "none": run the control plane only -- no sandbox is created, so no task runs (for tests and walkthroughs)
+  -disable-self-upgrade
+    	disable in-VM self-upgrade actions (pkg/upgrade, automatic/scheduled upgrades, and SQLite-to-PostgreSQL cutover) and hide in-VM upgrade controls in the UI in favour of external lifecycle management ($GRAIN_DISABLE_SELF_UPGRADE when unset)
   -docker-root-dir docker info
     	path to the local docker engine's own data root, for the UI's host disk figures only (grain/task-148): the sandbox image and every granule VM's disk overlay are written there rather than under -sandbox-dir, so on a deployment that gives sandboxes a volume of their own it is a disk worth a figure. Empty asks docker info for it once at startup, which is right whenever the daemon can reach the docker socket and sees that path where dockerd does; name it here when it cannot, or when this process sees the same directory at a path of its own. A path this process cannot stat is logged once and left out, not reported as a broken figure -- a containerised daemon is usually shown docker's socket and not the tree behind it
   -flag-names grain daemon
@@ -148,15 +150,15 @@ Usage of grain daemon:
   -host-sandboxes
     	dispatch each run into its own plain directory under -sandbox-dir on this host, with NO isolation: runs execute as this daemon's user, with this host's tools and network. For a single-user workstation; refused on a daemon others can reach (a non-loopback -ui-addr, IAP, -run-host-image) unless -allow-unisolated-host-sandboxes is also passed
   -hostd-reattach-timeout duration
-    	how long a run's agent CLI, running detached on a grain hostd whose connection drops, waits for that same hostd to reconnect before the run fails as an infrastructure failure (no strike against the task); re-attached in time, it carries on from where its output stood. Runs queued for a hostd that is not connected wait for it whatever this is. 0 fails at once (default 15m0s)
+    	how long a run's agent CLI, running detached on a host whose connection drops, waits for that same host to reconnect before the run fails as an infrastructure failure (no strike against the task); re-attached in time, it carries on from where its output stood. Runs queued for a host that is not connected wait for it whatever this is. 0 fails at once (default 15m0s)
   -hostd-socket string
-    	grain hostd's unix socket, for a daemon in a container whose host CLIs run through hostd; empty uses /run/grain-hostd/hostd.sock when its directory is mounted into the container. Refused on Kubernetes, which has no host
+    	the host agent's unix socket, for a daemon in a container whose host CLIs run through the host agent; empty uses /run/grain-hostd/hostd.sock when its directory is mounted into the container. Refused on Kubernetes, which has no host
   -hostd-token-file string
-    	deprecated, for one release: file holding a shared token a grain hostd on another machine dials in to /api/hostd/connect with (grain hostd -server <this daemon's URL> -token-file ...), as the one hostd -hostd-token-name names: its host CLIs and run: host capability servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each hostd in the hostd registry (/api/hostds) instead, which gives it a token of its own
+    	deprecated, for one release: file holding a shared token a host on another machine dials in to /api/hostd/connect with (grain host -server <this daemon's URL> -token-file ...), as the one host -hostd-token-name names: its host CLIs and run: host capability servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each host in the host registry (/api/hostds) instead, which gives it a token of its own
   -hostd-token-name string
-    	the hostd name a hostd dialing in with -hostd-token-file's shared token is known by (default "remote")
+    	the host name a host dialing in with -hostd-token-file's shared token is known by (default "remote")
   -hostd-token-owner string
-    	the owner of -hostd-token-name's hostd: the email or service account a hostd dialing in with the shared token through IAP (or another identity verifier's proxy) must be verified as. A remote hostd with no owner is refused; one over loopback is not
+    	the owner of -hostd-token-name's host: the email or service account a host dialing in with the shared token through IAP (or another identity verifier's proxy) must be verified as. A remote host with no owner is refused; one over loopback is not
   -iap-backend-service string
     	GCP Compute backend service name for dynamic IAP IAM reconciliation; empty disables IAP reconciliation (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
   -iap-resource string
@@ -229,6 +231,8 @@ Usage of grain daemon:
     	former name of -granule-workspace, still accepted so existing systemd unit files keep working
   -local-scripts value
     	NAME=/absolute/path/local-scripts.yaml, repeatable: a host-managed local-scripts declaration a task holding local-scripts:NAME is served (docs/local-scripts.md). Every other declaration is read from the state repository's local-scripts/NAME/local-scripts.yaml
+  -management-url string
+    	optional external http:// or https:// URL where this deployment's lifecycle and upgrades are managed (for example its registry entry page), shown in place of in-VM self-upgrade controls when -disable-self-upgrade is set ($GRAIN_MANAGEMENT_URL when unset)
   -max-agent-turns int
     	cap on model/tool round trips per run (0 = uncapped; runs are bounded by wall-clock runtime instead) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
   -max-ci-jobs int
@@ -383,6 +387,12 @@ Usage of grain daemon:
     	where the signing keys for those assertions are published (IAP's PEM map or a JWK set); defaults to $GRAIN_IAP_KEYS_URL, then https://www.gstatic.com/iap/verify/public_key
   -ui-open
     	open the UI in the system's default browser once it's listening
+  -ui-registry-audience string
+    	the single audience URL a signed X-Grain-Registry-Assertion must carry (e.g. "https://<name>.<instance-domain>"); defaults to $GRAIN_REGISTRY_AUDIENCE
+  -ui-registry-issuer string
+    	the exact issuer URL a signed X-Grain-Registry-Assertion must carry for the UI/API to accept the identity in it (e.g. "https://grain.example.com"); defaults to $GRAIN_REGISTRY_ISSUER. All three of -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url must be set to enable the "registry" IdentityVerifier
+  -ui-registry-keys-url string
+    	where the registry's ES256 signing keys are published as a JWK set (e.g. "https://grain.example.com/.well-known/jwks.json"); defaults to $GRAIN_REGISTRY_KEYS_URL
   -ui-require-iap
     	accept the access code (bearer or grain_access cookie) only from loopback with no forwarding or proxy headers, and serve no "Enter access code" page, so network callers sign in through IAP alone (docs/access-code.md); needs -ui-iap-audience or $GRAIN_IAP_AUDIENCE. Defaults to $GRAIN_REQUIRE_IAP
   -ui-require-verifier string

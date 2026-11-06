@@ -17,7 +17,7 @@
 # instructions kept in sync by hand.
 
 BIN := bin
-CMDS := grain grit
+CMDS := grain grit grain-registry
 # Commands built the same way, but only when asked for by name and never
 # by `build` (so not into the image, which runs `make build`):
 # grain-agentd is the agents-only, rootless hostd for a machine that is
@@ -86,6 +86,7 @@ EDITION ?=
 # main of its own and names it here. `make image` passes it on to the
 # Dockerfile as MAIN_GRAIN.
 MAIN_grain ?= ./cmd/grain
+MAIN_grain-registry ?= ./cmd/grain-registry
 # The same for bin/grain-agentd: a build that registers a transport or
 # host-tool grants of its own (pkg/agentd) names its own main here.
 MAIN_grain-agentd ?= ./cmd/grain-agentd
@@ -159,7 +160,8 @@ CONTAINER_USER ?= $(shell id -u):$(shell id -g)
 # from .git. GO_VERSION is passed for the same reason `builder` passes
 # it -- one version, read out of go.mod.
 IMAGE ?= grain:dev
-.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-long playwright-browsers ui-screenshots vet vuln security fmt fmt-frontend clean builder container-build image frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli $(CMDS) $(EXTRA_CMDS)
+IMAGE_REGISTRY ?= grain-registry:dev
+.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-long playwright-browsers ui-screenshots vet vuln security fmt fmt-frontend clean builder container-build image image-registry frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli $(CMDS) $(EXTRA_CMDS)
 
 all: vet test build
 
@@ -666,3 +668,14 @@ image:
 		$(if $(GIT_REVISION),--build-arg GIT_REVISION=$(GIT_REVISION),) \
 		$(if $(RELEASE),--build-arg RELEASE=$(RELEASE),) \
 		-t $(IMAGE) -f Dockerfile .
+
+image-registry:
+	$(CONTAINER_ENGINE) build \
+		--build-arg GO_IMAGE=$(GO_IMAGE) \
+		--build-arg GO_VERSION=$(GO_VERSION) \
+		--build-arg BUILDVCS=$(BUILDVCS) \
+		--build-arg MAIN_GRAIN_REGISTRY=$(MAIN_grain-registry) \
+		$(if $(GIT_REVISION),--build-arg GIT_REVISION=$(GIT_REVISION),) \
+		$(if $(RELEASE),--build-arg RELEASE=$(RELEASE),) \
+		$(if $(EDITION),--build-arg EDITION=$(EDITION),) \
+		-t $(IMAGE_REGISTRY) -f Dockerfile.registry .

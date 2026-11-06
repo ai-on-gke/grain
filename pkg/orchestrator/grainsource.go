@@ -192,7 +192,7 @@ func bakedSourceArchive(src bakedSource) ([]byte, error) {
 // fails, leaves a run without grain-src/ and a prompt saying why
 // (grainSourceSection), never a refused task.
 func placeGrainSource(ctx context.Context, task model.Task, srcDir, sandboxRoot string, placer SandboxPlacer, tools []mcp.Tool, out *checkout, reused ...bool) {
-	if !hasGrant(task, model.SelfDebugCapability) {
+	if !hasGrainSource(task) {
 		out.GrainSource = grainSourceAbsent
 		return
 	}

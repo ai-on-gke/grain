@@ -117,13 +117,6 @@ func (f registryDaemonFlags) apply(cfg *daemon.Config, passed map[string]bool) {
 	}
 }
 
-func checkDaemonTail(cfg daemon.Config) error {
-	if err := daemon.CheckGritURL(cfg); err != nil {
-		return err
-	}
-	return checkRegistryConfig(cfg)
-}
-
 func checkRegistryConfig(cfg daemon.Config) error {
 	r := cfg.Registry
 	anySet := r.URL != "" || r.Entry != "" || r.AuthMode != "" || r.OIDCAudience != "" ||

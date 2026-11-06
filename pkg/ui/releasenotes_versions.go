@@ -73,8 +73,8 @@ type upgradeReleaseNoter interface {
 // one. A system admin's, like every other upgrade route -- answering it
 // pulls and runs the target image.
 func (s *Server) handleUpgradeReleaseNotes(w http.ResponseWriter, r *http.Request) {
-	if s.tasks.Config.Upgrader == nil {
-		writeError(w, http.StatusNotFound, errUpgradeUnavailable)
+	if s.isSelfUpgradeDisabled() || s.tasks.Config.Upgrader == nil {
+		writeError(w, http.StatusNotFound, s.upgradeUnavailableErr())
 		return
 	}
 	branch := r.URL.Query().Get("branch")

@@ -38,13 +38,14 @@ const TaskListNoteHeader = "Grain-Task-List-Note"
 // the newest limit of them, one line each -- or, with format=json, as
 // mcp.TaskListEntry values.
 //
-// A scope that may read every task (self-debug, api:tasks:read) lists
+// A scope that may read every task (api:tasks:read, which the
+// api:self-debug preset holds) lists
 // them all; any other lists the tasks task:// would serve it: its own,
 // and those in a repository an api:tasks:read@<repo> grant names.
 func (p *GitProxy) serveTasks(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
 	own := strings.TrimSpace(scope.TaskIDStr)
 	if !scope.MayReadAllTasks && own == "" {
-		cliError(w, namespace.RefuseCapability("grain task list", "self-debug"))
+		cliError(w, namespace.RefuseCapability("grain task list", "api:tasks:read"))
 		return
 	}
 	query, err := taskListQuery(r.URL.Query(), time.Now())

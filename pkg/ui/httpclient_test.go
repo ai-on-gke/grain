@@ -385,11 +385,11 @@ func TestHTTPClientRepoFamilyRoundTrip(t *testing.T) {
 		t.Fatalf("AddTargetRepo: %v", err)
 	}
 
-	defaults, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"self-debug"})
+	defaults, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"bootstrap-playbooks"})
 	if err != nil {
 		t.Fatalf("SetRepoDefaultCapabilities: %v", err)
 	}
-	if !reflect.DeepEqual(defaults.DefaultCapabilities, []string{"self-debug"}) {
+	if !reflect.DeepEqual(defaults.DefaultCapabilities, []string{"bootstrap-playbooks"}) {
 		t.Fatalf("own defaults after set = %v, want [self-debug]", defaults.DefaultCapabilities)
 	}
 	read, err := c.RepoDefaults(ctx, "acme/widgets")
@@ -412,7 +412,7 @@ func TestHTTPClientRepoFamilyRoundTrip(t *testing.T) {
 	if prompt.PromptExtension != "Migrations live in db/." {
 		t.Fatalf("own prompt extension after set = %q, want the text just written", prompt.PromptExtension)
 	}
-	if !reflect.DeepEqual(prompt.DefaultCapabilities, []string{"self-debug"}) {
+	if !reflect.DeepEqual(prompt.DefaultCapabilities, []string{"bootstrap-playbooks"}) {
 		t.Fatalf("own defaults after setting the prompt extension = %v, want [self-debug] still",
 			prompt.DefaultCapabilities)
 	}
@@ -438,7 +438,7 @@ func TestHTTPClientRepoFamilyRoundTrip(t *testing.T) {
 	want := ui.RepoSummary{
 		Repo: "acme/widgets", Configured: true, Tasks: 1,
 		States:              map[model.State]int{model.StateQueued: 1},
-		DefaultCapabilities: []string{"self-debug"},
+		DefaultCapabilities: []string{"bootstrap-playbooks"},
 		// Whether, not what: a row per repo is no place for a paragraph,
 		// so the listing only points at `grain repo prompt-extension`.
 		PromptExtension: true,

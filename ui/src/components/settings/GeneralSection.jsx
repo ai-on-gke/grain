@@ -19,7 +19,10 @@ import {
   Typography,
 } from "@mui/material";
 import SettingsCard, { ReadOnlyFieldset } from "./SettingsCard.jsx";
-import { UpgradeCheckSettings } from "../UpgradePanel.jsx";
+import {
+  ExternallyManagedUpgradeNotice,
+  UpgradeCheckSettings,
+} from "../UpgradePanel.jsx";
 
 // GeneralSection is Settings → General (design/design/settings-panel.design.md
 // §3.2). `s` is the page's useSettingsSection().
@@ -108,11 +111,19 @@ export default function GeneralSection({ s, config }) {
         </ReadOnlyFieldset>
       </SettingsCard>
       <SettingsCard title="Updates" anchor="updates">
-        <UpgradeCheckSettings
-          key={`${settings.upgradeCheckMode}-${settings.upgradeCheckPausesPipeline}-${settings.autoUpgradeOn}-${settings.autoUpgradeChannel}-${settings.autoUpgradeTime}`}
-          settings={settings}
-          onSave={saveChoice}
-        />
+        {config?.selfUpgradeDisabled ? (
+          <ExternallyManagedUpgradeNotice
+            managementUrl={config?.managementUrl}
+            testId="updates-externally-managed"
+            linkTestId="updates-management-link"
+          />
+        ) : (
+          <UpgradeCheckSettings
+            key={`${settings.upgradeCheckMode}-${settings.upgradeCheckPausesPipeline}-${settings.autoUpgradeOn}-${settings.autoUpgradeChannel}-${settings.autoUpgradeTime}`}
+            settings={settings}
+            onSave={saveChoice}
+          />
+        )}
       </SettingsCard>
       <SettingsCard title="About" anchor="about">
         <Typography

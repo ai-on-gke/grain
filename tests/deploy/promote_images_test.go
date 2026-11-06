@@ -59,6 +59,23 @@ const postSplitDockerfile = "FROM scratch\nARG GRAIN_IMAGE_REF=\nARG RELEASE=\nA
 // given.
 func releaseRepoWithDockerfile(t *testing.T, dockerfile string) (string, map[string]string) {
 	t.Helper()
+	return releaseRepoWith(t, dockerfile, true)
+}
+
+// preDockerHubReleaseRepo is releaseRepo as it was before the switch to
+// Docker Hub (#739): its tree has no scripts/release-image-repos.sh, so
+// its release job published to ghcr.io/bwsalmon/grain/* alone.
+func preDockerHubReleaseRepo(t *testing.T) (string, map[string]string) {
+	t.Helper()
+	return releaseRepoWith(t, "FROM scratch\nARG GRAIN_IMAGE_REF=\n"+oldMakeBuild+"\n", false)
+}
+
+// releaseRepoWith builds releaseRepo's repository with the release's
+// Dockerfile given and, where dockerHub is set, the
+// scripts/release-image-repos.sh every release since the switch to Docker
+// Hub carries.
+func releaseRepoWith(t *testing.T, dockerfile string, dockerHub bool) (string, map[string]string) {
+	t.Helper()
 	dir := t.TempDir()
 	git := func(args ...string) string {
 		t.Helper()
@@ -80,11 +97,18 @@ func releaseRepoWithDockerfile(t *testing.T, dockerfile string) (string, map[str
 	// version is read out of (its toolchain line, not its lower `go`
 	// directive: GSA1-13), and the .gitignore entry that keeps the
 	// CA a build is handed out of `git status`, as grain's own does.
-	for name, body := range map[string]string{
+	files := map[string]string{
 		".gitignore": "/.grain-ca.crt\n",
 		"Dockerfile": dockerfile,
 		"go.mod":     "module example.com/release\n\ngo 1.26.6\n\ntoolchain go1.26.10\n",
-	} {
+	}
+	if dockerHub {
+		files["scripts/release-image-repos.sh"] = "RELEASE_IMAGE_REGISTRY_DEFAULT=\"docker.io\"\n"
+	}
+	for name, body := range files {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
+			t.Fatalf("creating the directory of %s: %v", name, err)
+		}
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
 			t.Fatalf("writing %s: %v", name, err)
 		}

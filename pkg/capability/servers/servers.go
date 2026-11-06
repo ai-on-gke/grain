@@ -951,8 +951,8 @@ func (r *Registry) Probe(ctx context.Context, id string, cfg protocol.ServerConf
 // ErrNoHostd is HostCapabilityEntries on a daemon with no grain hostd to
 // start a run: host server through: one on the host itself, or on
 // Kubernetes, where there is no host to run it on.
-var ErrNoHostd = errors.New("this daemon has no grain hostd beside it, so no capability server can run on the host: " +
-	"run: host needs a daemon in the release container with grain hostd installed (on Kubernetes there is no host to run on)")
+var ErrNoHostd = errors.New("this daemon has no host agent beside it, so no capability server can run on the host: " +
+	"run: host needs a daemon in the release container with the host agent installed (on Kubernetes there is no host to run on)")
 
 // HostCapabilityEntries lists, sorted, the capability entries grain
 // hostd's allowlist offers: the commands a run: host server may name.
@@ -962,7 +962,7 @@ func (r *Registry) HostCapabilityEntries(ctx context.Context) ([]string, error) 
 	}
 	offers, err := r.opts.Hostd.Offers(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("asking grain hostd what it offers: %w", err)
+		return nil, fmt.Errorf("asking the host agent what it offers: %w", err)
 	}
 	var out []string
 	for _, o := range offers {

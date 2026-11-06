@@ -253,12 +253,12 @@ func (h HostdHost) CarryCapabilityServers(servers []CapabilityMCPServer) ([]Capa
 	for _, s := range servers {
 		if s.Handler == nil {
 			releaseAll()
-			return nil, nil, hostSetup(fmt.Errorf("capability MCP server %q is not one grain proxies, so it cannot be carried to the grain hostd's machine", s.Name))
+			return nil, nil, hostSetup(fmt.Errorf("capability MCP server %q is not one grain proxies, so it cannot be carried to the host agent's machine", s.Name))
 		}
 		base, release, err := h.carry(s.Handler)
 		if err != nil {
 			releaseAll()
-			return nil, nil, hostSetup(fmt.Errorf("carrying capability MCP server %q to the grain hostd's machine: %w", s.Name, err))
+			return nil, nil, hostSetup(fmt.Errorf("carrying capability MCP server %q to the host agent's machine: %w", s.Name, err))
 		}
 		releases = append(releases, release)
 		s.URL, err = rebase(base, s.URL)
@@ -302,7 +302,7 @@ func (h HostdHost) CarryMCPEndpoint(endpoint, token string) (string, func(), err
 	}
 	base, release, err := h.carry(proxy)
 	if err != nil {
-		return "", nil, hostSetup(fmt.Errorf("carrying the run's MCP endpoint to the grain hostd's machine: %w", err))
+		return "", nil, hostSetup(fmt.Errorf("carrying the run's MCP endpoint to the host agent's machine: %w", err))
 	}
 	carried, err := rebase(base, endpoint)
 	if err != nil {

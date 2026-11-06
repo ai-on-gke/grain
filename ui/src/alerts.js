@@ -18,6 +18,17 @@ import { hasGitCredential } from "./gitConnections.js";
 import { redBaseRepairSentence, waitingBaseRepair } from "./state.js";
 import { forceMergeOffered } from "./taskWrites.js";
 
+// pauseConnectionLabel is a pause's connection key as a person reads it:
+// a pause scoped to one host is keyed "<connection>@hostd/<host>" on the
+// wire (pkg/daemon's hostdPauseOwner) and reads "<connection> on host
+// <host>".
+export function pauseConnectionLabel(key) {
+  if (typeof key !== "string") return key;
+  const at = key.indexOf("@hostd/");
+  if (at < 0) return key;
+  return `${key.slice(0, at)} on host ${key.slice(at + "@hostd/".length)}`;
+}
+
 // alerts.js is every standing warning about the deployment as rows of one
 // list, read from /api/config: what the alerts button in the top bar
 // counts and its panel lists (components/AlertsButton.jsx,
@@ -108,7 +119,7 @@ export function liftAgentPause(entry) {
 // no connection's key (the deployment-level credentials).
 export function pauseSubject(entry) {
   if (entry?.connection) {
-    const name = entry.connectionName || entry.connection;
+    const name = entry.connectionName || pauseConnectionLabel(entry.connection);
     if (entry.model) return `${entry.model} on ${name}`;
     return `connection ${name}`;
   }
@@ -475,7 +486,8 @@ export function collectAlerts(config, zone = "", tasks = []) {
         ? {
             kind: "connection",
             connection: entry.connection,
-            connectionName: entry.connectionName || entry.connection,
+            connectionName:
+              entry.connectionName || pauseConnectionLabel(entry.connection),
           }
         : { kind: "deployment" };
       const actions = [];
@@ -596,5 +608,5 @@ export function alertSentence(alert, zone = "") {
 // "Connection Alpha's Claude".
 export function scopeLabel(scope) {
   if (!scope || scope.kind !== "connection") return "Deployment";
-  return `Connection ${scope.connectionName || scope.connection}`;
+  return `Connection ${scope.connectionName || pauseConnectionLabel(scope.connection)}`;
 }

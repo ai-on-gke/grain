@@ -63,15 +63,20 @@ type Options struct {
 	// with it, as on a real deployment (docs/access-code.md). Empty keeps
 	// it beside the throwaway store and logs it.
 	AccessCodeFile string
-	// IAPAudience, IAPIssuer, IAPKeysURL, RequireVerifier, RequireIAP and
-	// AllowedPrincipals are the daemon's -ui-iap-audience,
-	// -ui-iap-issuer, -ui-iap-keys-url, -ui-require-verifier,
-	// -ui-require-iap and -ui-allowed-principals, so the demo can be put
-	// behind a signing proxy (a real IAP or a test issuer) and sign callers
-	// in as a deployment does (design/design/authentication.design.md).
+	// IAPAudience, IAPIssuer, IAPKeysURL, RegistryIssuer, RegistryAudience,
+	// RegistryKeysURL, RequireVerifier, RequireIAP and AllowedPrincipals are
+	// the daemon's -ui-iap-audience, -ui-iap-issuer, -ui-iap-keys-url,
+	// -ui-registry-issuer, -ui-registry-audience, -ui-registry-keys-url,
+	// -ui-require-verifier, -ui-require-iap and -ui-allowed-principals, so
+	// the demo can be put behind a signing proxy (a real IAP, grain-registry,
+	// or a test issuer) and sign callers in as a deployment does
+	// (design/design/authentication.design.md).
 	IAPAudience       string
 	IAPIssuer         string
 	IAPKeysURL        string
+	RegistryIssuer    string
+	RegistryAudience  string
+	RegistryKeysURL   string
 	RequireVerifier   string
 	RequireIAP        bool
 	AllowedPrincipals []string
@@ -126,6 +131,9 @@ type Options struct {
 	// so an owner's reply sends that change back to the queue as a
 	// daemon's cycle would.
 	ReviewQuestions bool
+	// HumanReview is -human-review (demo_human_review.go): a change a
+	// review held for a person's decision (model.LinkHumanReviewHold).
+	HumanReview bool
 	// ExternalConfigRepo is -external-config-repo
 	// (demo_external_config.go): the remote of an external config
 	// repository this deployment's configuration is managed in, so every
@@ -145,6 +153,8 @@ type Options struct {
 	// into its patterns.
 	UpgradeAllowedBranches []string
 	UpgradeVerifyCmd       []string
+	DisableSelfUpgrade     bool
+	ManagementURL          string
 	// ModelCatalog is -model-catalog: the host:port of an Anthropic model
 	// listing stub on loopback (demo_model_catalog.go). Empty wires no
 	// lister, so model discovery has nothing to ask.
@@ -267,6 +277,9 @@ func Run(opts Options) error {
 		IAPAudience:       opts.IAPAudience,
 		IAPIssuer:         opts.IAPIssuer,
 		IAPKeysURL:        opts.IAPKeysURL,
+		RegistryIssuer:    opts.RegistryIssuer,
+		RegistryAudience:  opts.RegistryAudience,
+		RegistryKeysURL:   opts.RegistryKeysURL,
 		RequireVerifier:   opts.RequireVerifier,
 		RequireIAP:        opts.RequireIAP,
 		AllowedPrincipals: opts.AllowedPrincipals,
@@ -391,7 +404,7 @@ func Run(opts Options) error {
 	storedCfg.DefaultModel = "gemini-2.5-pro"
 	storedCfg.GCPProject = "grain-sandbox-dev"
 	storedCfg.GCPServiceAccountEmail = "grain-sb-agent-0@grain-sandbox-dev.iam.gserviceaccount.com"
-	storedCfg.DefaultCapabilities = []string{"self-debug", "read-issues"}
+	storedCfg.DefaultCapabilities = append(model.SelfDebugGrants(), "read-issues")
 	storedCfg.TargetRepos = []string{"acme/widgets"}
 	// The deployment's git connection to the fake credential above, as
 	// `grain connections import` would record it.
@@ -505,7 +518,9 @@ func Run(opts Options) error {
 			return fmt.Errorf("grain demo: -unconfigured: %v", err)
 		}
 	}
-	if opts.UpgradeImage != "" {
+	cfg.DisableSelfUpgrade = opts.DisableSelfUpgrade
+	cfg.ManagementURL = opts.ManagementURL
+	if opts.UpgradeImage != "" && !opts.DisableSelfUpgrade {
 		if cfg, err = configureUpgradeDemo(dir, store, cfg, opts.UpgradeImage, opts.UpgradeAllowedBranches, opts.UpgradeVerifyCmd); err != nil {
 			return fmt.Errorf("grain demo: -upgrade-image: %v", err)
 		}
@@ -548,6 +563,11 @@ func Run(opts Options) error {
 	if opts.ReviewQuestions {
 		if err := seedReviewQuestionsDemo(ctx, store, cfg, repo, githubSimRepo); err != nil {
 			return fmt.Errorf("grain demo: -review-questions: %v", err)
+		}
+	}
+	if opts.HumanReview {
+		if err := seedHumanReviewDemo(ctx, store, cfg, repo); err != nil {
+			return fmt.Errorf("grain demo: -human-review: %v", err)
 		}
 	}
 	if opts.MechanicalPort {
@@ -834,7 +854,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		Title:        "Bump the Go toolchain to 1.24",
 		Description:  "go.mod and the CI image both need the version bump.",
 		Approved:     true,
-		Capabilities: &[]string{"self-debug"},
+		Capabilities: &[]string{model.GrainSourceGrant},
 		CustomFields: map[string]ui.CustomFieldValue{
 			"priority": {"medium"},
 			// The field that holds a set, on the task with more than one
@@ -1557,7 +1577,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		Repo:         "acme/widgets",
 		Base:         "main",
 		AutoMerge:    false,
-		Capabilities: []string{"self-debug"},
+		Capabilities: []string{model.GrainSourceGrant},
 		Recurrence:   ui.Recurrence{Kind: "weekly", TimeOfDay: "06:00", Weekday: "monday"},
 	}); err != nil {
 		return fmt.Errorf("seeding schedule: %w", err)

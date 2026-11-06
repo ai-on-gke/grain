@@ -98,8 +98,9 @@ var PipelineStewardAPIPresets = []string{"task-admin", "dispatch-control", "ci-r
 //     nothing resolves.
 //   - NothingNeededAck, so a wake that ends on nothing_needed leaves the
 //     task open to be woken again rather than closing it.
-//   - The grants: the presets above, self-debug for the task readers and
-//     read_pipeline_changes, durable, and priority-dispatch
+//   - The grants: the presets above, what self-debug became
+//     (api:self-debug for the task readers and read_pipeline_changes, and
+//     grain#source), durable, and priority-dispatch
 //     (PriorityDispatchCapability), so that a congested pipeline -- the
 //     thing this job exists to unstick -- cannot starve it of a worker,
 //     park it behind a red branch's repair or hold it behind a pause it
@@ -107,13 +108,15 @@ var PipelineStewardAPIPresets = []string{"task-admin", "dispatch-control", "ci-r
 //     may otherwise give; grain gives them here by construction.
 //     query_merge_queue needs no grant; every run has it.
 func pipelineStewardTemplate(stateRepo RepoRef) *Template {
-	grants := make([]Grant, 0, len(PipelineStewardAPIPresets)+3)
+	grants := make([]Grant, 0, len(PipelineStewardAPIPresets)+4)
 	for _, preset := range PipelineStewardAPIPresets {
 		grants = append(grants, Grant{Capability: APIGrantPrefix + preset, Via: GrantByGrain})
 	}
-	// Named as a string rather than through pkg/capability/selfdebug's
-	// own CapabilityName: that package imports this one.
-	grants = append(grants, Grant{Capability: "self-debug", Via: GrantByGrain})
+	// What self-debug became (SelfDebugGrants): its api preset for the
+	// task readers and grain#source for grain's own source.
+	for _, g := range SelfDebugGrants() {
+		grants = append(grants, Grant{Capability: g, Via: GrantByGrain})
+	}
 	grants = append(grants, Grant{Capability: PriorityDispatchCapability, Via: GrantByGrain})
 	grants = append(grants, Grant{Capability: DurableCapability, Via: GrantByGrain})
 	t := &Template{
