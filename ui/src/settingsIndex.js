@@ -662,7 +662,16 @@ export const SETTINGS_INDEX = [
     section: "hostds",
     anchor: "hostds",
     label: "Hosts",
-    keywords: ["host", "hostd", "token", "rotate", "revoke", "owner", "labels"],
+    keywords: [
+      "host",
+      "hostd",
+      "token",
+      "rotate",
+      "revoke",
+      "delete",
+      "owner",
+      "labels",
+    ],
     card: true,
   },
   {

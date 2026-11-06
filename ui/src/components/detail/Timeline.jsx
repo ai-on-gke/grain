@@ -477,6 +477,8 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
               className="timeline-meta timeline-attempt-hostd"
               title={[
                 `The agent CLI ran on host ${a.hostd.hostd}`,
+                a.hostd.deleted &&
+                  "since deleted from the host registry (Settings → Hosts)",
                 a.hostd.instance && `on ${a.hostd.instance}`,
                 a.hostd.owner && `owned by ${a.hostd.owner}`,
               ]
@@ -484,6 +486,12 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
                 .join(", ")}
             >
               ran on host {a.hostd.hostd}
+              {a.hostd.deleted && (
+                <span className="timeline-attempt-hostd-deleted">
+                  {" "}
+                  (deleted)
+                </span>
+              )}
               {a.hostd.instance && <> on {a.hostd.instance}</>}
               {a.hostd.owner && <> · {a.hostd.owner}</>}
             </div>
