@@ -76,6 +76,13 @@ func preDockerHubReleaseRepo(t *testing.T) (string, map[string]string) {
 // Hub carries.
 func releaseRepoWith(t *testing.T, dockerfile string, dockerHub bool) (string, map[string]string) {
 	t.Helper()
+	return releaseRepoWithFiles(t, dockerfile, dockerHub, nil)
+}
+
+// releaseRepoWithFiles is releaseRepoWith with more files, by path, in
+// every release's tree.
+func releaseRepoWithFiles(t *testing.T, dockerfile string, dockerHub bool, extra map[string]string) (string, map[string]string) {
+	t.Helper()
 	dir := t.TempDir()
 	git := func(args ...string) string {
 		t.Helper()
@@ -104,6 +111,9 @@ func releaseRepoWith(t *testing.T, dockerfile string, dockerHub bool) (string, m
 	}
 	if dockerHub {
 		files["scripts/release-image-repos.sh"] = "RELEASE_IMAGE_REGISTRY_DEFAULT=\"docker.io\"\n"
+	}
+	for name, body := range extra {
+		files[name] = body
 	}
 	for name, body := range files {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
