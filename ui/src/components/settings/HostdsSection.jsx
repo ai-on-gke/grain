@@ -149,7 +149,7 @@ export function connectionText(h) {
 // each: its name, and the usage-limit pauses cleared with it.
 export function deletedLines(deleted) {
   return deleted.map((d) => {
-    let line = `Deleted hostd ${d.name}.`;
+    let line = `Deleted host ${d.name}.`;
     if (d.clearedPauses?.length) {
       line += ` Cleared its usage-limit pauses: ${d.clearedPauses.join(", ")}.`;
     }
@@ -247,7 +247,7 @@ export default function HostdsSection({ showError }) {
   const remove = (h) => {
     if (
       !window.confirm(
-        `Delete hostd ${h.name} from the registry? Its tokens go with it and the name can be registered again; past runs keep showing it, marked deleted.`,
+        `Delete host ${h.name} from the registry? Its tokens go with it and the name can be registered again; past runs keep showing it, marked deleted.`,
       )
     ) {
       return;
@@ -265,7 +265,7 @@ export default function HostdsSection({ showError }) {
   const removeAllRevoked = () => {
     if (
       !window.confirm(
-        "Delete every revoked hostd from the registry? One a model connection or capability server still names is skipped.",
+        "Delete every revoked host from the registry? One a model connection or capability server still names is skipped.",
       )
     ) {
       return;
@@ -277,7 +277,7 @@ export default function HostdsSection({ showError }) {
       for (const sk of out.skipped || []) {
         lines.push(`Skipped ${sk.name}: ${sk.reason}`);
       }
-      if (lines.length === 0) lines.push("No revoked hostds to delete.");
+      if (lines.length === 0) lines.push("No revoked hosts to delete.");
       setNotice({
         severity: (out.skipped || []).length ? "warning" : "success",
         lines,
@@ -301,19 +301,19 @@ export default function HostdsSection({ showError }) {
 
   return (
     <>
-      <SettingsCard title="Hostds" anchor="hostds">
+      <SettingsCard title="Hosts" anchor="hostds">
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          The grain hostds this daemon runs host work through. local is the one
-          on this machine; any other dials in with{" "}
+          The hosts this daemon runs host work through. local is the one on this
+          machine; any other dials in with{" "}
           <code>
-            grain hostd -server &lt;this daemon&apos;s URL&gt; -token-file
+            grain host -server &lt;this daemon&apos;s URL&gt; -token-file
             &lt;file&gt;
           </code>{" "}
-          and is known by the token it presents. A hostd that dials in through
+          and is known by the token it presents. A host that dials in through
           IAP is also admitted only as its owner: set the owner to the email or
           service account it connects as. Adding one shows the command that
-          installs it on its machine; Install shows it again. Revoke cuts a
-          hostd off; a revoked hostd can then be deleted, which frees its name.
+          installs it on its machine; Install shows it again. Revoke cuts a host
+          off; a revoked host can then be deleted, which frees its name.
         </Typography>
         {issued ? (
           <Alert
@@ -322,8 +322,8 @@ export default function HostdsSection({ showError }) {
             sx={{ mb: 2, wordBreak: "break-all" }}
             data-testid="hostd-issued-token"
           >
-            Token for hostd <strong>{issued.hostd.name}</strong>, shown only
-            this once: <code>{issued.token}</code>
+            Token for host <strong>{issued.hostd.name}</strong>, shown only this
+            once: <code>{issued.token}</code>
             <CopyButton text={issued.token} label="Copy token" />
             <InstallInstructions
               name={issued.hostd.name}
@@ -338,7 +338,7 @@ export default function HostdsSection({ showError }) {
             sx={{ mb: 2, wordBreak: "break-all" }}
             data-testid="hostd-install-again"
           >
-            Installing hostd <strong>{shown.name}</strong>. Its token was shown
+            Installing host <strong>{shown.name}</strong>. Its token was shown
             when it was added or last rotated; rotate it for a new one.
             <InstallInstructions
               name={shown.name}
@@ -534,7 +534,7 @@ export default function HostdsSection({ showError }) {
           </Table>
         </Box>
       </SettingsCard>
-      <SettingsCard title="Add a hostd" anchor="add-hostd">
+      <SettingsCard title="Add a host" anchor="add-hostd">
         <Stack
           direction={{ xs: "column", sm: "row" }}
           spacing={1}
@@ -568,7 +568,7 @@ export default function HostdsSection({ showError }) {
             onClick={create}
             sx={{ alignSelf: { sm: "flex-start" }, mt: { sm: 0.5 } }}
           >
-            Add hostd
+            Add host
           </Button>
         </Stack>
       </SettingsCard>

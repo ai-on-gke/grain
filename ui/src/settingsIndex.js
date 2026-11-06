@@ -589,8 +589,9 @@ export const SETTINGS_INDEX = [
     id: "card:hostds:hostds",
     section: "hostds",
     anchor: "hostds",
-    label: "Hostds",
+    label: "Hosts",
     keywords: [
+      "host",
       "hostd",
       "token",
       "rotate",
@@ -605,8 +606,8 @@ export const SETTINGS_INDEX = [
     id: "card:hostds:add-hostd",
     section: "hostds",
     anchor: "add-hostd",
-    label: "Add a hostd",
-    keywords: ["hostd", "register", "token"],
+    label: "Add a host",
+    keywords: ["host", "hostd", "register", "token"],
     card: true,
   },
   {

@@ -121,8 +121,11 @@ func TestSandboxProxyServesTheStage2Roots(t *testing.T) {
 	ref, _ := model.ParseRepo(repo)
 	base := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
 	for _, id := range []string{"t-7", "t-8"} {
-		if err := store.PutTask(ctx, model.Task{ID: id, Title: "Widget task " + id, Body: "Make the widget spin",
-			Target: &ref}); err != nil {
+		tk := model.Task{ID: id, Title: "Widget task " + id, Body: "Make the widget spin", Target: &ref}
+		if id == "t-8" {
+			tk.Links = []model.Link{{Kind: model.LinkDependsOn, Target: "t-7"}}
+		}
+		if err := store.PutTask(ctx, tk); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -204,7 +207,8 @@ func TestSandboxProxyServesTheStage2Roots(t *testing.T) {
 	}{
 		// task://: a run reads its own task, in read_grain_task's words.
 		{token: "own", path: "/fs/task/t-7/record.md", status: 200,
-			want: []string{"Task t-7: Widget task t-7", "Make the widget spin", "#1", "outcome failed", "please also polish it"}},
+			want: []string{"Task t-7: Widget task t-7", "Make the widget spin", "#1", "outcome failed", "please also polish it"},
+			not:  []string{"Depends on:"}},
 		{token: "own", path: "/fs/task/t-7/summary.md", status: 200, want: []string{"Widget task t-7"}},
 		{token: "own", path: "/fs/task/t-7/conversation.md", status: 200, want: []string{"please also polish it", "Settled: spin clockwise."}},
 		{token: "own", path: "/fs/task/t-7/handover.md", status: 200, want: []string{"Settled: spin clockwise."}, not: []string{"polish"}},
@@ -216,7 +220,7 @@ func TestSandboxProxyServesTheStage2Roots(t *testing.T) {
 		// A sibling task in the run's own repository is not, without
 		// self-debug or an api:tasks:read grant naming the repository.
 		{token: "own", path: "/fs/task/t-8/record.md", status: 403, want: []string{"api:tasks:read@"}, not: []string{"Widget task t-8"}},
-		{token: "debug", path: "/fs/task/t-8/record.md", status: 200, want: []string{"Widget task t-8"}},
+		{token: "debug", path: "/fs/task/t-8/record.md", status: 200, want: []string{"Widget task t-8", "Depends on: t-7 (running)"}},
 		{token: "debug", path: "/fs/task/?list", status: 200, want: []string{"t-7/", "t-8/"}},
 		{token: "debug", path: "/fs/task/t-404/record.md", status: 404},
 

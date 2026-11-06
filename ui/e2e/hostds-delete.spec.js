@@ -14,7 +14,7 @@
 
 import { expect, test } from "./fixtures.js";
 
-// Settings → Hostds: a revoked hostd has a Delete action in the row's
+// Settings → Hosts: a revoked host has a Delete action in the row's
 // right-hand actions, a live one has none, and "Delete all revoked" sits
 // at the card's right edge -- on a wide screen and on a phone. Deleting
 // asks first, and the deleted hostd leaves the table.
@@ -25,7 +25,7 @@ for (const [name, viewport] of [
   ["desktop", DESKTOP],
   ["phone", PHONE],
 ]) {
-  test(`Settings → Hostds offers Delete on revoked hostds on a ${name} screen`, async ({
+  test(`Settings → Hosts offers Delete on revoked hosts on a ${name} screen`, async ({
     page,
   }) => {
     await page.setViewportSize(viewport);
@@ -73,7 +73,7 @@ for (const [name, viewport] of [
   });
 }
 
-test("deleting a revoked hostd asks first and removes it", async ({
+test("deleting a revoked host asks first and removes it", async ({
   page,
   request,
 }) => {
@@ -100,9 +100,9 @@ test("deleting a revoked hostd asks first and removes it", async ({
     });
     await row.getByRole("button", { name: "Delete" }).click();
     await expect(page.getByTestId("hostd-delete-notice")).toContainText(
-      "Deleted hostd e2e-gone.",
+      "Deleted host e2e-gone.",
     );
-    expect(asked).toContain("Delete hostd e2e-gone");
+    expect(asked).toContain("Delete host e2e-gone");
     await expect(row).toHaveCount(0);
     await expect(page.getByTestId("hostd-row-old-laptop")).toBeVisible();
   } finally {

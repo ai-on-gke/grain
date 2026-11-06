@@ -160,7 +160,7 @@ func TestHostdsDelete(t *testing.T) {
 		case r.Method == http.MethodDelete && r.URL.Path == "/api/hostds/live-1":
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "hostd live-1 is not revoked: revoke it first, which disconnects it, then delete it"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "host live-1 is not revoked: revoke it first, which disconnects it, then delete it"})
 		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/hostds/"):
 			name := strings.TrimPrefix(r.URL.Path, "/api/hostds/")
 			deleted = append(deleted, name)

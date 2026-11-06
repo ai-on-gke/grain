@@ -48,7 +48,7 @@ func NewHostdRemote(tokenFile, name, owner string) (*hostd.Remote, error) {
 		return nil, fmt.Errorf("-hostd-token-name: %w", err)
 	}
 	if name == model.LocalHostd {
-		return nil, fmt.Errorf("-hostd-token-name: %q is the co-located hostd's name", name)
+		return nil, fmt.Errorf("-hostd-token-name: %q is the co-located host's name", name)
 	}
 	owner, err := model.NormalizeHostdOwner(owner)
 	if err != nil {

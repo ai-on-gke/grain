@@ -93,6 +93,20 @@ func taskParkedOnQuestion(t *testing.T, client *ui.Client, _ sender) string {
 	return id
 }
 
+// taskHeldForHumanReview is a task a review held for a person's decision:
+// what POST /api/tasks/{id}/human-review/release acts on.
+func taskHeldForHumanReview(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	id := fileTask(true)(t, client, nil)
+	if _, err := client.Store.RaiseHumanReviewHold(context.Background(), id, model.HumanReviewRequest{
+		Reason: model.HumanReviewReason{Source: model.HumanReviewRequested, Reason: "a person must decide", ReviewTask: "r1"},
+		By:     model.Principal{Kind: model.PrincipalAgent, ID: "r1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 // taskWithPullRequest is a task whose pull request the merge queue has
 // given up on: what retry-merge and force-merge act on.
 func taskWithPullRequest(t *testing.T, client *ui.Client, _ sender) string {
@@ -465,6 +479,10 @@ var attributedRoutes = map[string]attributedRoute{
 		setup:    taskWithPullRequest,
 		recorded: noted(model.TaskEventSubmitted),
 	},
+	"POST /api/tasks/{id}/human-review/release": {
+		setup:    taskHeldForHumanReview,
+		recorded: noted(model.TaskEventHumanReviewReleased),
+	},
 	"POST /api/tasks/{id}/retry": {
 		setup:       fileTask(true),
 		agentGrants: []string{"api:tasks:write"},
@@ -712,6 +730,11 @@ var attributedRoutes = map[string]attributedRoute{
 // is credited with: signing in and out, and requests that only check,
 // plan or preview a change without making it.
 var neverAttributedRoutes = map[string]bool{
+	// A review's request for human review is recorded as that review's
+	// agent, whoever relays it (its run's MCP server reaches the daemon
+	// as the daemon): the hold is the review's, and the request's own
+	// principal is checked rather than recorded (ui.Client.RequestHumanReview).
+	"POST /api/tasks/{id}/human-review": true,
 	// Signing in and out: there is nobody to credit until it succeeds,
 	// and nothing is written that names them.
 	"POST /api/auth/access-code": true,

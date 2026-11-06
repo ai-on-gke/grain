@@ -542,7 +542,7 @@ var PublishedTools = []string{
 	"wait_for_checks", "list_ci_runs", "get_ci_log", "retrigger_ci",
 	"query_test_history", "run_ci_job", "get_ci_artifact", "grain_ls",
 	"grain_read", "grain_grep", "grain_copy", "open_pull_request",
-	"recreate_sandbox", "update_status", "rename_session",
+	"recreate_sandbox", "update_status", "rename_session", "request_human_review",
 	"propose_config_change", "wait_for_task", "resume_later",
 	"notify_operator", "message_task", "query_merge_queue", "revert_task",
 	"revert_merge", "chat", "list_issues", "read_issue", "list_grain_tasks",

@@ -544,7 +544,15 @@ import "strconv"
 // 114 adds `external_ref` to `task` (model.Task.ExternalRef) and the
 // `task_external_ref`, `github_ci_job_repo_ref` and `ci_run_repo_ref`
 // indexes that back external-reference filtering and GET /api/refs/{ref}/summary.
-const SchemaVersion = 114
+//
+// 115 changes no table: it rewrites stored `self-debug` grants -- the grant
+// tables, default capabilities, standing sessions,
+// `repo_config`.`ci_capabilities` and the capability policy's catalogue
+// defaults -- to `api:self-debug` and
+// `https://grain.dev/capabilities/grain#source={}`: the in-process
+// `self-debug` provider is retired for the api preset and the grain
+// server's `#source` method.
+const SchemaVersion = 115
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted

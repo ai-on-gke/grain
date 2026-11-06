@@ -182,7 +182,7 @@ in the shell that just ran the installer. It gives up after `-connect-timeout`
 It authenticates with `<data-dir>/local-api-token`, the deployment's operator
 credential, which only the daemon's account can read: run the CLI with `sudo`
 (the `docker run` wrapper drops to that account), or as `sudo -u grain grain ...`
-beside grain hostd, where `/usr/local/bin/grain` is the image's own binary.
+beside the host agent, where `/usr/local/bin/grain` is the image's own binary.
 
 **The CLI on a workstation.** `grain login <url>` signs the CLI in to a
 deployment and records it as a named context in
@@ -234,9 +234,9 @@ exit codes, what each step does, and what to do when one is left manual.
 > in-process, `gcp#…` included) is refused until it can. The daemon's
 > `-container-sandbox-fence` flag picks the mode: `auto`, `require` or `off`.
 
-> **One install shape: the release container, plus grain hostd.** Every
+> **One install shape: the release container, plus grain host.** Every
 > machine install runs the daemon as a `docker run` of the deployment image.
-> `setup.sh` also installs `grain-hostd.service` by default: `grain hostd`, run
+> `setup.sh` also installs `grain-hostd.service` by default: `grain host`, run
 > as `GRAIN_USER` outside the daemon's lifecycle. It starts the few programs
 > that must run on the bare machine (agy under the user's corp identity, or a
 > stdio capability server with `run: host`), and only those that the root-owned
@@ -244,7 +244,7 @@ exit codes, what each step does, and what to do when one is left manual.
 > add an entry. The installer writes that file once
 > and keeps your edits. Its socket directory, `/run/grain-hostd`, is mounted
 > into the daemon's container, and `/etc/grain` never is. **`GRAIN_HOSTD=0`
-> leaves hostd out** (and removes an installed one): everything then runs in
+> leaves the host agent out** (and removes an installed one): everything then runs in
 > the container, nothing runs as you on the machine, and "host" is not offered
 > as a run location, as on Kubernetes. The readiness report and Settings →
 > Models say which of the two an install is. See
@@ -254,7 +254,7 @@ exit codes, what each step does, and what to do when one is left manual.
 > **Host mode is gone.** `GRAIN_INSTALL_MODE=host` (the daemon as a plain
 > systemd service) was removed, and is refused with the command to run
 > instead. Re-running `sudo ./scripts/setup.sh` on a host-mode install moves it
-> to container mode plus hostd, keeping its data directory and
+> to container mode plus the host agent, keeping its data directory and
 > `grain-daemon.service`. A host-mode install upgraded with the Upgrade button,
 > or by hand, keeps running on the bare machine but refuses further UI upgrades
 > until that re-run, and says so: a `level=warning` line at start and a banner
@@ -267,7 +267,7 @@ exit codes, what each step does, and what to do when one is left manual.
 > `sudo systemctl disable --now grain-hostd.service` removes it. Each agent CLI runs
 > where `GRAIN_CLAUDE_RUN`, `GRAIN_CODEX_RUN` and `GRAIN_AGY_RUN` say:
 > `container` (a subprocess in the daemon's container) or `host` (through
-> grain hostd, for a CLI its allowlist names). **Settings → Models** overrides
+> the host agent, for a CLI its allowlist names). **Settings → Models** overrides
 > them for the next run.
 
 > **Which branches an upgrade may install:** the Upgrade button, a scheduled
@@ -405,37 +405,37 @@ temporary bundle export removes that path from every commit.
 
 ## Remote hosts
 
-`grain hostd` is grain's only host agent. On the daemon's own machine it
+`grain host` is grain's only host agent. On the daemon's own machine it
 listens on `/run/grain-hostd/hostd.sock` and is the registry's `local`
-hostd. Any number of others dial in to the daemon alongside it, each
-registered in **Settings → Hostds** (or `POST /api/hostds`) with a name,
+host. Any number of others dial in to the daemon alongside it, each
+registered in **Settings → Hosts** (or `POST /api/hostds`) with a name,
 an owner and labels, and given a token of its own there, shown once:
 
 ```bash
-grain hostd -server https://<grain-host> -token-file /etc/grain/hostd.token -name <name>
+grain host -server https://<grain-host> -token-file /etc/grain/hostd.token -name <name>
 ```
 
 The daemon names a connection from its token alone; `-name` is optional
-and, when given, must be that token's hostd. Rotating a hostd's token
-takes effect on its next connection; revoking the hostd disconnects it
+and, when given, must be that token's host. Rotating a host's token
+takes effect on its next connection; revoking the host disconnects it
 at once. The single
 shared token of `grain daemon -hostd-token-file` still works for this
-release, as one hostd named by `-hostd-token-name` (default `remote`),
-and is removed in the next. A hostd's allowlist (`/etc/grain/hostd.yaml`)
+release, as one host named by `-hostd-token-name` (default `remote`),
+and is removed in the next. A host's allowlist (`/etc/grain/hostd.yaml`)
 may set `capacity:` and `labels:`, which it reports to the daemon.
 
-While a hostd is disconnected, tasks pinned to it wait in the queue
-(`waiting for hostd <name>`) and never move to another hostd; they
+While a host is disconnected, tasks pinned to it wait in the queue
+(`waiting for host <name>`) and never move to another host; they
 resume when it reconnects. An agent CLI already running there keeps
 running, and is re-attached from where its output stood if the same
-hostd reconnects within `grain daemon -hostd-reattach-timeout` (default
+host reconnects within `grain daemon -hostd-reattach-timeout` (default
 15m). Past that the run fails as an infrastructure failure, with no
 strike against the task.
 
 The remote model executors (`grain executor` / `grain model-server`,
 `scripts/run-remote-executor.sh`) were removed; see
 [docs/executors-removed.md](docs/executors-removed.md) for what a remote
-hostd does and does not do yet.
+host does and does not do yet.
 The `none` sandbox backend (`-disable-native-sandboxes`) that such
 deployments used remains only for a control-plane-only daemon in tests
 and walkthroughs; see
@@ -444,7 +444,7 @@ and walkthroughs; see
 ## Documentation
 
 - **[Architecture](design/design/architecture.design.md)** describes the
-  current design end to end: the control plane, sandboxes, `grain hostd`,
+  current design end to end: the control plane, sandboxes, `grain host`,
   agents, capabilities, CI and the merge queue, where state lives, and the
   security boundaries. Component designs live beside it in
   [`design/design/`](design/design), playbook designs in

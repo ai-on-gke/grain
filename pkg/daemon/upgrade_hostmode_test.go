@@ -66,7 +66,7 @@ var (
 // 5041); nothing else is refused.
 func TestOnlyALeftoverHostModeInstallRefusesUIUpgrades(t *testing.T) {
 	got := hostModeUpgradeRefusal(imageConfig, probe(hostEnv, hostModeUnit, true))
-	for _, want := range []string{"host mode", "sudo ./scripts/setup.sh", "container mode plus grain hostd", "expects container mode"} {
+	for _, want := range []string{"host mode", "sudo ./scripts/setup.sh", "container mode plus the host agent", "expects container mode"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("refusal %q does not say %q", got, want)
 		}

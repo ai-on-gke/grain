@@ -59,12 +59,12 @@ func ParseHostdSelector(s string) (name string, labels map[string]string, err er
 		k, v, ok := strings.Cut(part, "=")
 		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
 		if !ok || k == "" || v == "" || strings.ContainsAny(k+v, ",= \t\n\r") {
-			return "", nil, fmt.Errorf("hostd selector %q: %q is not label=value", s, part)
+			return "", nil, fmt.Errorf("host selector %q: %q is not label=value", s, part)
 		}
 		labels[k] = v
 	}
 	if len(labels) == 0 {
-		return "", nil, fmt.Errorf("hostd selector %q names no label", s)
+		return "", nil, fmt.Errorf("host selector %q names no label", s)
 	}
 	return "", labels, nil
 }

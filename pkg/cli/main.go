@@ -137,6 +137,14 @@ func Main() {
 	// still read it (pkg/gitrefs).
 	gitrefs.Pin()
 	args := os.Args[1:]
+	if len(args) == 1 && args[0] == "hostds" {
+		// A bare "grain hostds" listed the registry; "grain host" alone
+		// runs the host agent.
+		args = []string{"host", "list"}
+	}
+	if len(args) > 0 {
+		args[0] = canonicalCommand(args[0])
+	}
 	// Inside an agent's sandbox, the read commands of
 	// design/design/sandbox-first-agent-surface.design.md answer over the
 	// sandbox's own proxy (pkg/sandboxcli); anything else runs as it
@@ -169,9 +177,14 @@ func Main() {
 		case "runhost":
 			runHostCmd(args[1:])
 			return
-		case "hostd":
-			hostdCmd(args[1:])
-			return
+		case "host":
+			// grain host list|register|install|set-owner is the host
+			// registry, a task-CLI command (cmdHostds); anything else
+			// runs the host agent on this machine.
+			if len(args) < 2 || !hostRegistryVerb(args[1]) {
+				hostdCmd(args[1:])
+				return
+			}
 		case "host-script":
 			os.Exit(hostscriptcli.Main(args[1:], os.Stdout, os.Stderr))
 		case "access-code":
@@ -253,6 +266,34 @@ func Main() {
 	}
 }
 
+// hiddenCommandAliases are command words grain still answers to but no
+// longer shows: "hostd" (the host agent) and "hostds" (the host
+// registry) are both "host" now, which users see. Neither is in usage
+// or the CLI spec; both keep working for scripts and installed units.
+var hiddenCommandAliases = map[string]string{
+	"hostd":  "host",
+	"hostds": "host",
+}
+
+// canonicalCommand is the command word cmd is spelled as now.
+func canonicalCommand(cmd string) string {
+	if c, ok := hiddenCommandAliases[cmd]; ok {
+		return c
+	}
+	return cmd
+}
+
+// hostRegistryVerb reports whether word, after "grain host", names one of
+// the host registry's subcommands (cmdHostds) rather than starting the
+// host agent, whose arguments are all flags.
+func hostRegistryVerb(word string) bool {
+	switch word {
+	case "list", "ls", "register", "create", "install", "set-owner", "help":
+		return true
+	}
+	return false
+}
+
 // runTaskCLI runs the task CLI and says how it ended (errors.go): the
 // exit code, and on stderr either a sentence or, under -json, the one
 // {"error": ...} object -- with whatever the flag package or a command
@@ -310,7 +351,7 @@ const usage = `usage: grain [global flags] <command> [args]
        grain demo [flags]      serve the task UI on localhost over a throwaway store of fake tasks (see demo.go)
        grain mcpserver [flags] speak MCP over stdin/stdout against the sandbox tools (see mcpserver.go)
        grain runhost exec [flags] a run host's entrypoint: run one spooled agent CLI invocation (see pkg/runhost)
-       grain hostd [flags]     on the bare machine, run the allowlisted host CLIs and capability servers a containerised daemon asks for (see pkg/hostd)
+       grain host [flags]      on the bare machine, run the host agent: the allowlisted host CLIs and capability servers a containerised daemon asks for (see pkg/hostd)
        grain host-script <name> [args]  in a sandbox, run a granted host script on grain's side (see pkg/hostscriptcli)
        grain secrets [flags]   set/delete/list a colocated server's secrets on disk (see secrets.go)
        grain connections import FILE  record a seed file's git and model connections (see connections.go)
@@ -454,8 +495,8 @@ Commands:
   gcp-key list|get|set|delete          manage this deployment's GCP service-account keys
   capability-servers list|add|remove|enable|disable|bind-secret
                                        manage this deployment's capability servers (mcpServers)
-  hostds list|register|install|set-owner|delete|delete-revoked
-                                       the hostd registry: register a hostd with its owner, the identity
+  host list|register|install|set-owner|delete|delete-revoked
+                                       the host registry: register a host with its owner, the identity
                                        it dials in through IAP as, and print how to install it
   access list|allow|deny               the allowed users and groups list (Settings -> Access): who may
                                        sign in through IAP or another identity verifier
@@ -608,7 +649,7 @@ func runCLI(args []string) error {
 
 // dispatchCLI runs one task-CLI command against c.
 func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.FlagSet, sel selectedContext, rest []string) error {
-	cmd, cmdArgs := rest[0], rest[1:]
+	cmd, cmdArgs := canonicalCommand(rest[0]), rest[1:]
 	switch cmd {
 	case "context", "whoami", "login", "logout":
 		return dispatchSignIn(ctx, c, out, sel, cmd, cmdArgs)
@@ -680,7 +721,7 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdGCPKey(ctx, c, out, cmdArgs)
 	case "capability-servers":
 		return cmdCapabilityServers(ctx, c, out, cmdArgs)
-	case "hostds":
+	case "host":
 		return cmdHostds(ctx, c, out, cmdArgs)
 	case "access":
 		return cmdAccess(ctx, c, out, cmdArgs)

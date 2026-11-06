@@ -53,11 +53,11 @@ func TestAttemptLineNamesTheModelItRanOn(t *testing.T) {
 func TestAttemptLineNamesItsHostdAndMarksADeletedOne(t *testing.T) {
 	start := time.Date(2026, 10, 26, 10, 0, 0, 0, time.UTC)
 	live := attemptLine(ui.Attempt{Number: 1, StartedAt: start, Hostd: &model.TaskRunHostd{Hostd: "ws-a"}})
-	if want := "  #1 started 2026-10-26T10:00:00Z, still running, hostd ws-a"; live != want {
+	if want := "  #1 started 2026-10-26T10:00:00Z, still running, host ws-a"; live != want {
 		t.Errorf("attemptLine(live hostd) = %q, want %q", live, want)
 	}
 	gone := attemptLine(ui.Attempt{Number: 2, StartedAt: start, Hostd: &model.TaskRunHostd{Hostd: "rarcea", Deleted: true}})
-	if want := "  #2 started 2026-10-26T10:00:00Z, still running, hostd rarcea (deleted)"; gone != want {
+	if want := "  #2 started 2026-10-26T10:00:00Z, still running, host rarcea (deleted)"; gone != want {
 		t.Errorf("attemptLine(deleted hostd) = %q, want %q", gone, want)
 	}
 }

@@ -111,7 +111,7 @@ func (e *hostdReferenceError) Error() string {
 	for _, r := range e.refs {
 		parts = append(parts, r.String())
 	}
-	return fmt.Sprintf("hostd %s is still named by %s: point them at another hostd (Settings -> Models, Settings -> Capabilities), then delete it",
+	return fmt.Sprintf("host %s is still named by %s: point them at another host (Settings -> Models, Settings -> Capabilities), then delete it",
 		e.name, strings.Join(parts, ", "))
 }
 
@@ -215,17 +215,17 @@ func pauseLabel(p model.UsageLimitPause) string {
 // cleared and reported.
 func (c *Client) DeleteHostd(ctx context.Context, name string) (DeletedHostd, error) {
 	if name == model.LocalHostd {
-		return DeletedHostd{}, validationErrorf("%q is the co-located hostd and cannot be deleted", name)
+		return DeletedHostd{}, validationErrorf("%q is the co-located host and cannot be deleted", name)
 	}
 	h, err := c.Store.GetHostd(ctx, name)
 	if err != nil {
 		return DeletedHostd{}, err
 	}
 	if h == nil {
-		return DeletedHostd{}, &NotFoundError{message: fmt.Sprintf("no hostd %q in the registry", name)}
+		return DeletedHostd{}, &NotFoundError{message: fmt.Sprintf("no host %q in the registry", name)}
 	}
 	if !h.Revoked() {
-		return DeletedHostd{}, validationErrorf("hostd %s is not revoked: revoke it first, which disconnects it, then delete it", name)
+		return DeletedHostd{}, validationErrorf("host %s is not revoked: revoke it first, which disconnects it, then delete it", name)
 	}
 	refs, err := c.HostdReferences(ctx, name)
 	if err != nil {
@@ -241,7 +241,7 @@ func (c *Client) DeleteHostd(ctx context.Context, name string) (DeletedHostd, er
 	if _, err := c.Store.ClearNotification(ctx, "hostd-disconnected:"+name, "automation:hostd"); err != nil {
 		log.Printf("grain ui: clearing hostd-disconnected:%s after delete: %v", name, err)
 	}
-	summary := "deleted revoked hostd " + name + " from the registry"
+	summary := "deleted revoked host " + name + " from the registry"
 	if len(out.ClearedPauses) > 0 {
 		summary += "; cleared its usage-limit pauses " + strings.Join(out.ClearedPauses, ", ")
 	}

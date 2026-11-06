@@ -208,11 +208,11 @@ describe("DetailOverlay timeline", () => {
     const lines = document.querySelectorAll(".timeline-attempt-hostd");
     expect(lines).toHaveLength(1);
     expect(lines[0].textContent).toBe(
-      "ran on hostd ws-a on cloudtop · alice@example.com",
+      "ran on host ws-a on cloudtop · alice@example.com",
     );
     expect(lines[0]).toHaveAttribute(
       "title",
-      "The agent CLI ran on grain hostd ws-a, on cloudtop, owned by alice@example.com",
+      "The agent CLI ran on host ws-a, on cloudtop, owned by alice@example.com",
     );
   });
 
@@ -246,9 +246,9 @@ describe("DetailOverlay timeline", () => {
     );
     const lines = document.querySelectorAll(".timeline-attempt-hostd");
     expect(lines).toHaveLength(1);
-    expect(lines[0].textContent).toBe("ran on hostd rarcea (deleted)");
+    expect(lines[0].textContent).toBe("ran on host rarcea (deleted)");
     expect(lines[0].getAttribute("title")).toContain(
-      "since deleted from the hostd registry",
+      "since deleted from the host registry",
     );
   });
 

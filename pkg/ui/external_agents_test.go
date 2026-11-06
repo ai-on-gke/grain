@@ -1429,7 +1429,7 @@ func TestExternalAgentEscalationRailsAndTokenRotationOwnerGuard(t *testing.T) {
 		}
 	}
 
-	// A task has no hostd at all (docs/hostd-placement.md): naming one is
+	// A task has no hostd at all (docs/host-placement.md): naming one is
 	// refused for everybody, an external agent included, never routed.
 	for _, tc := range []struct{ method, path, body string }{
 		{http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets","hostd":"workstation-1"}`},

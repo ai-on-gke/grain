@@ -335,6 +335,10 @@ func MergeTaskEvents(ts []Transition, events []TaskEvent) []Transition {
 			state = TransitionAutoMergeKeptOff
 		case TaskEventOwnerChanged:
 			state = TransitionOwnerChanged
+		case TaskEventHumanReviewRequested:
+			state = TransitionHumanReviewRequested
+		case TaskEventHumanReviewReleased:
+			state = TransitionHumanReviewReleased
 		default:
 			// A note about an action, not a step (TaskEventSubmitted, ...).
 			continue

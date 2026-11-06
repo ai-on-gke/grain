@@ -142,7 +142,7 @@ describe("TemplateOverlay hostd", () => {
   it("offers no hostd and sends none: a template's tasks have no hostd", async () => {
     api.mockResolvedValue(saved);
     const onSaved = overlay(null);
-    expect(screen.queryByRole("textbox", { name: "Hostd" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Host" })).toBeNull();
     fireEvent.submit(screen.getAllByRole("textbox")[0].closest("form"));
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
     expect(sentBody("POST")).not.toHaveProperty("hostd");

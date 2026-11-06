@@ -33,15 +33,15 @@ sandbox|sandbox|guest|granule-sandbox
 sandbox-base|sandbox-base|guest-base|
 sandbox-k8s|sandbox-k8s|k8s-sandbox|
 sandbox-k8s-base|sandbox-k8s-base|k8s-sandbox-base|
+registry|registry||
 '
-# Reserved for the future grain-registry image (not yet built or published):
-#   registry|registry||
 
 GRAIN_OSS_DAEMON_IMAGE_NAME="grain"
 GRAIN_OSS_SANDBOX_IMAGE_NAME="sandbox"
 GRAIN_OSS_SANDBOX_BASE_IMAGE_NAME="sandbox-base"
 GRAIN_OSS_K8S_SANDBOX_IMAGE_NAME="sandbox-k8s"
 GRAIN_OSS_K8S_SANDBOX_BASE_IMAGE_NAME="sandbox-k8s-base"
+GRAIN_OSS_REGISTRY_IMAGE_NAME="registry"
 
 GRAIN_OSS_IMAGE_REPO_DEFAULT="${RELEASE_IMAGE_REGISTRY_DEFAULT}/${RELEASE_IMAGE_REPO_DEFAULT}/${GRAIN_OSS_DAEMON_IMAGE_NAME}"
 GRAIN_LEGACY_GHCR_PREFIX="ghcr.io/bwsalmon/grain"

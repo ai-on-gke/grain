@@ -125,7 +125,7 @@ describe("HostdsSection", () => {
       { ...WS, name: "ws-3", connection: null },
     ]);
     await userEvent.type(screen.getByLabelText("Name"), "ws-3");
-    await userEvent.click(screen.getByText("Add hostd"));
+    await userEvent.click(screen.getByText("Add host"));
     const issued = await screen.findByTestId("hostd-issued-token");
     expect(issued).toHaveTextContent("ghd_secret");
     // The lines are one block, in order, with nothing of the root
@@ -186,7 +186,7 @@ describe("HostdsSection", () => {
     ]);
     await userEvent.type(screen.getByLabelText("Name"), "ws-2");
     await userEvent.type(screen.getByLabelText("Labels"), "gpu=yes");
-    await userEvent.click(screen.getByText("Add hostd"));
+    await userEvent.click(screen.getByText("Add host"));
     expect(await screen.findByTestId("hostd-issued-token")).toHaveTextContent(
       "ghd_secret",
     );
@@ -237,7 +237,7 @@ describe("HostdsSection", () => {
       method: "DELETE",
     });
     expect(await screen.findByTestId("hostd-delete-notice")).toHaveTextContent(
-      "Deleted hostd rarcea. Cleared its usage-limit pauses: agy@hostd/rarcea.",
+      "Deleted host rarcea. Cleared its usage-limit pauses: agy@hostd/rarcea.",
     );
     expect(screen.queryByTestId("hostd-row-rarcea")).toBeNull();
     confirm.mockRestore();
@@ -265,7 +265,7 @@ describe("HostdsSection", () => {
       method: "POST",
     });
     const notice = await screen.findByTestId("hostd-delete-notice");
-    expect(notice).toHaveTextContent("Deleted hostd old-1.");
+    expect(notice).toHaveTextContent("Deleted host old-1.");
     expect(notice).toHaveTextContent(
       "Skipped old-2: still named by a connection",
     );
@@ -285,8 +285,8 @@ describe("hostd helpers", () => {
     expect(
       deletedLines([{ name: "a" }, { name: "b", clearedPauses: ["x", "y"] }]),
     ).toEqual([
-      "Deleted hostd a.",
-      "Deleted hostd b. Cleared its usage-limit pauses: x, y.",
+      "Deleted host a.",
+      "Deleted host b. Cleared its usage-limit pauses: x, y.",
     ]);
   });
 

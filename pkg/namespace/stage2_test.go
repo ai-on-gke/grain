@@ -215,15 +215,15 @@ func TestStage2NamespaceRootsAndScoping(t *testing.T) {
 		TaskRepo:  "bwsalmon/grain",
 	}
 
-	// 1. task:// baseline allows own task, refuses other tasks with self-debug message.
+	// 1. task:// baseline allows own task, refuses other tasks naming api:tasks:read.
 	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/task/100/record.md", nil); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Task 100") {
 		t.Fatalf("own task record: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/task/100/attempts/1/transcript.md", nil); rec.Code != http.StatusOK || rec.Body.String() != "transcript 1\n" {
 		t.Fatalf("own task attempt transcript: status=%d body=%q", rec.Code, rec.Body.String())
 	}
-	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/task/200/record.md", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"self-debug"`) {
-		t.Fatalf("other task without self-debug: status=%d body=%q", rec.Code, rec.Body.String())
+	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/task/200/record.md", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"api:tasks:read"`) {
+		t.Fatalf("other task without api:tasks:read: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 
 	// 2. config:// baseline allows repos/<task-repo> and workflows/, refuses grain.yml and other repos.
@@ -233,8 +233,8 @@ func TestStage2NamespaceRootsAndScoping(t *testing.T) {
 	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/config/workflows/default.yml", nil); rec.Code != http.StatusOK {
 		t.Fatalf("workflows config: status=%d body=%q", rec.Code, rec.Body.String())
 	}
-	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/config/grain.yml", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"self-debug"`) {
-		t.Fatalf("grain.yml without self-debug: status=%d body=%q", rec.Code, rec.Body.String())
+	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/config/grain.yml", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"https://grain.dev/capabilities/grain#source"`) {
+		t.Fatalf("grain.yml without grain#source: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/config/repos/acme/private.yml", nil); rec.Code != http.StatusForbidden {
 		t.Fatalf("other repo config without self-debug: status=%d body=%q", rec.Code, rec.Body.String())
@@ -258,7 +258,7 @@ func TestStage2NamespaceRootsAndScoping(t *testing.T) {
 	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/merge-queue", nil); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Merge queue") {
 		t.Fatalf("deploy://merge-queue: status=%d body=%q", rec.Code, rec.Body.String())
 	}
-	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/metrics", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"self-debug"`) {
+	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/metrics", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"api:deployment:read"`) {
 		t.Fatalf("deploy://metrics without grant: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/health", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"https://grain.dev/capabilities/grain#health"`) {
@@ -747,8 +747,8 @@ func TestMemorySingleDocumentAndLargeWalkAvoidQuadraticLayerFetches(t *testing.T
 	mem.resetCounts()
 	start := time.Now()
 	listRec := serveRequest(srv, scope, http.MethodGet, "/fs/memory/repos/acme/widgets?list", map[string]string{"Accept": "application/json"})
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("?list over %d docs took %v, want < 1s", docCount, elapsed)
+	if elapsed := time.Since(start); elapsed > walkBudget {
+		t.Fatalf("?list over %d docs took %v, want < %v", docCount, elapsed, walkBudget)
 	}
 	if listRec.Code != http.StatusOK {
 		t.Fatalf("?list status=%d body=%q", listRec.Code, listRec.Body.String())
@@ -777,8 +777,8 @@ func TestMemorySingleDocumentAndLargeWalkAvoidQuadraticLayerFetches(t *testing.T
 	if err != nil {
 		t.Fatalf("GlobEntries: %v", err)
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("GlobEntries over %d docs took %v, want < 1s", docCount, elapsed)
+	if elapsed := time.Since(start); elapsed > walkBudget {
+		t.Fatalf("GlobEntries over %d docs took %v, want < %v", docCount, elapsed, walkBudget)
 	}
 	if len(globRes.Matches) == 0 {
 		t.Fatalf("GlobEntries returned no matches")
@@ -798,8 +798,8 @@ func TestMemorySingleDocumentAndLargeWalkAvoidQuadraticLayerFetches(t *testing.T
 	if err != nil {
 		t.Fatalf("Grep: %v", err)
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("Grep over %d docs took %v, want < 1s", docCount, elapsed)
+	if elapsed := time.Since(start); elapsed > walkBudget {
+		t.Fatalf("Grep over %d docs took %v, want < %v", docCount, elapsed, walkBudget)
 	}
 	if grepRes.Matches != 1 || !strings.Contains(grepRes.Output, "doc-1500.md:2:Observation marker-1500") {
 		t.Fatalf("Grep result = %+v, want 1 match for marker-1500", grepRes)
@@ -847,8 +847,8 @@ func TestMemorySingleDocumentAndLargeWalkAvoidQuadraticLayerFetches(t *testing.T
 	if err != nil {
 		t.Fatalf("legacy Grep: %v", err)
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("legacy Grep over %d docs took %v, want < 1s", docCount, elapsed)
+	if elapsed := time.Since(start); elapsed > walkBudget {
+		t.Fatalf("legacy Grep over %d docs took %v, want < %v", docCount, elapsed, walkBudget)
 	}
 	if legacyGrep.Matches != 1 || legacyLayerDecodes.Load() != 1 {
 		t.Fatalf("legacy Grep matches=%d layerDecodes=%d, want 1 match and 1 layer decode",
