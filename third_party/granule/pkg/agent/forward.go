@@ -3,7 +3,6 @@ package agent
 import (
 	"bufio"
 	"context"
-	"fmt"
 	"io"
 	"log"
 	"os"
@@ -11,7 +10,6 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/gke-labs/granule/pkg/execwire"
-	"github.com/gke-labs/granule/pkg/forward"
 	"github.com/gke-labs/granule/pkg/guestforward"
 )
 
@@ -29,9 +27,6 @@ func serveForward(ctx context.Context, br *bufio.Reader, conn io.ReadWriter, req
 		_ = execwire.WriteResponse(conn, execwire.Response{OK: false, Error: "a forward request carries no command, account, terminal or environment", Features: execwire.Features})
 		return nil
 	}
-	if len(req.ForwardSpecs) > 0 {
-		return serveLegacyForward(ctx, br, conn, req)
-	}
 	if err := execwire.WriteResponse(conn, execwire.Response{OK: true, Features: execwire.Features}); err != nil {
 		return err
 	}
@@ -40,28 +35,6 @@ func serveForward(ctx context.Context, br *bufio.Reader, conn io.ReadWriter, req
 	return guestforward.ServeAgent(ctx, forwardConn{Reader: br, conn: conn}, guestforward.AgentOptions{
 		Logf: func(format string, args ...any) { log.Printf("forward: "+format, args...) },
 	})
-}
-
-func serveLegacyForward(ctx context.Context, br *bufio.Reader, conn io.Writer, req execwire.Request) error {
-	var specs []forward.Spec
-	for _, raw := range req.ForwardSpecs {
-		spec, err := forward.ParseSpec(forward.RemoteToLocal, raw)
-		if err != nil {
-			_ = execwire.WriteResponse(conn, execwire.Response{OK: false, Error: err.Error(), Features: execwire.Features})
-			return nil
-		}
-		specs = append(specs, spec)
-	}
-	gl, err := forward.BindGuestListeners(specs)
-	if err != nil {
-		_ = execwire.WriteResponse(conn, execwire.Response{OK: false, Error: err.Error(), Features: execwire.Features})
-		return nil
-	}
-	defer gl.Close()
-	if err := execwire.WriteResponse(conn, execwire.Response{OK: true, Features: execwire.Features}); err != nil {
-		return fmt.Errorf("writing the forward response: %w", err)
-	}
-	return gl.Serve(ctx, br, conn)
 }
 
 // forwardConn is the connection with reads going through the buffered

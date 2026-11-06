@@ -193,8 +193,8 @@ type Options struct {
 	// Now defaults to time.Now.
 	Now func() time.Time
 	// ProbeWarnings, when set, adds warnings to what Probe found for an
-	// entry -- the gcp server's sets overlapping the in-process gcp-key
-	// provider's accounts (intree.GCPOverlapWarnings).
+	// entry: things worth telling whoever pressed Test that do not stop
+	// the server attaching (ProbeResult.Warnings, which Settings shows).
 	ProbeWarnings func(id string, cfg protocol.ServerConfig) []string
 	// OnDrop, when set, is told of a server that fell out of use: one
 	// that was attached -- before a config change, a reconfigure or a

@@ -187,29 +187,29 @@ func TestTheMergeRulesNeedTheRepositorysOwners(t *testing.T) {
 // have let merge itself.
 func TestClassifyWhatThe24AuditFoundOutsideV5(t *testing.T) {
 	cases := map[string]string{
-		"pkg/ui/agent_api_gate.go":               "auth-routes",
-		"pkg/ui/route_scopes.go":                 "auth-routes",
-		"pkg/ui/agent_api.go":                    "auth-routes",
-		"pkg/ui/agent_api_tools.go":              "auth-routes",
-		"pkg/model/agent_api.go":                 "auth-routes",
-		"pkg/ui/config_refusal.go":               "auth-routes",
-		"pkg/ui/persistent_sandboxes.go":         "auth-routes",
-		"pkg/ui/accesscode.go":                   "auth-routes",
-		"pkg/ui/single_tenant.go":                "auth-routes",
-		"pkg/ui/allowlist.go":                    "auth-routes",
-		"pkg/ui/verifier.go":                     "auth-routes",
-		"pkg/policy/policy.go":                   "auth-routes",
-		"pkg/jwks/jwks.go":                       "auth-routes",
-		"pkg/redact/redact.go":                   "capabilities-secrets",
-		"pkg/k8s/pod.go":                         "exec-sandbox",
-		"pkg/hostd/server.go":                    "exec-sandbox",
-		"pkg/localexec/exec.go":                  "exec-sandbox",
-		"pkg/runhost/host.go":                    "exec-sandbox",
-		"pkg/sandboximage/build.go":              "exec-sandbox",
-		"third_party/granule/pkg/forward/mux.go": "exec-sandbox",
-		"pkg/daemon/run.go":                      "exec-sandbox",
-		"pkg/daemon/sandboxnet.go":               "exec-sandbox",
-		"pkg/staterepo/sync.go":                  "state-repo",
+		"pkg/ui/agent_api_gate.go":                    "auth-routes",
+		"pkg/ui/route_scopes.go":                      "auth-routes",
+		"pkg/ui/agent_api.go":                         "auth-routes",
+		"pkg/ui/agent_api_tools.go":                   "auth-routes",
+		"pkg/model/agent_api.go":                      "auth-routes",
+		"pkg/ui/config_refusal.go":                    "auth-routes",
+		"pkg/ui/persistent_sandboxes.go":              "auth-routes",
+		"pkg/ui/accesscode.go":                        "auth-routes",
+		"pkg/ui/single_tenant.go":                     "auth-routes",
+		"pkg/ui/allowlist.go":                         "auth-routes",
+		"pkg/ui/verifier.go":                          "auth-routes",
+		"pkg/policy/policy.go":                        "auth-routes",
+		"pkg/jwks/jwks.go":                            "auth-routes",
+		"pkg/redact/redact.go":                        "capabilities-secrets",
+		"pkg/k8s/pod.go":                              "exec-sandbox",
+		"pkg/hostd/server.go":                         "exec-sandbox",
+		"pkg/localexec/exec.go":                       "exec-sandbox",
+		"pkg/runhost/host.go":                         "exec-sandbox",
+		"pkg/sandboximage/build.go":                   "exec-sandbox",
+		"third_party/granule/pkg/guestforward/mux.go": "exec-sandbox",
+		"pkg/daemon/run.go":                           "exec-sandbox",
+		"pkg/daemon/sandboxnet.go":                    "exec-sandbox",
+		"pkg/staterepo/sync.go":                       "state-repo",
 	}
 	for p, want := range cases {
 		got := categoryIDs(Classify([]string{p}))
@@ -236,7 +236,7 @@ var knownBoundaryFiles = []string{
 	"pkg/policy/", "pkg/jwks/", "pkg/hostd/", "pkg/localexec/", "pkg/runhost/",
 	"pkg/k8s/", "pkg/sandboximage/", "pkg/staterepo/", "pkg/redact/",
 	"third_party/granule/pkg/agent/", "third_party/granule/pkg/execwire/",
-	"third_party/granule/pkg/guestexec/", "third_party/granule/pkg/forward/",
+	"third_party/granule/pkg/guestexec/", "third_party/granule/pkg/guestforward/",
 	"pkg/daemon/run.go", "pkg/daemon/sandboxnet.go",
 	"pkg/ui/server.go", "pkg/ui/auth.go", "pkg/orchestrator/securityhold.go",
 	"pkg/gitproxy/", "pkg/secrets/", "pkg/ci/", "pkg/workflows/", "deploy/kubernetes/",
@@ -499,12 +499,15 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 // reach, the approval-callback tokens and the daemon's UI listeners. v16
 // classified none of them, so a change to any merged itself.
 func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v17" {
-		t.Errorf("Version = %q, want trust-boundary/v17", Version)
+	if Version != "trust-boundary/v18" {
+		t.Errorf("Version = %q, want trust-boundary/v18", Version)
 	}
 	for _, p := range []string{
 		"pkg/ui/access_roles.go",
+		"pkg/ui/request_actor.go",
+		"pkg/ui/host_enroll.go",
 		"pkg/model/api_scope_set.go",
+		"pkg/model/host_enroll.go",
 		"pkg/ui/external_cli.go",
 		"pkg/ui/local_script_approvals.go",
 		"pkg/daemon/ui_server.go",

@@ -427,3 +427,68 @@ func TestReadGrainLogSchemaNamesTheLogsItWillServe(t *testing.T) {
 		}
 	}
 }
+
+// On a host carrying both grain's user unit (running) and its system unit
+// (also installed), read_grain_log defaults to the running unit, says which
+// unit was read and which other unit exists, and lets unit= pick the other.
+func TestReadGrainLogNamesTheRunningUnitAndLetsUnitPickTheOther(t *testing.T) {
+	userJournal := &fakeJournal{lines: []string{"user: serving"}}
+	sysJournal := &fakeJournal{lines: []string{"system: stale"}}
+	journals := map[string]*fakeJournal{
+		"grain.service":        userJournal,
+		"grain-daemon.service": sysJournal,
+	}
+	units := []systemlog.Unit{systemlog.WorkstationUnit, systemlog.DefaultDaemonUnit}
+	tools := grainlog.Tools(grainlog.Config{
+		TaskID:   "58",
+		Redactor: grainlog.NewRedactor(nil),
+		Sources: []grainlog.Source{
+			{
+				Name:  "daemon",
+				What:  "daemon journal",
+				Read:  userJournal.read,
+				Units: units,
+				ForUnit: func(name string) (func(context.Context, systemlog.Query) ([]string, error), error) {
+					j, ok := journals[name]
+					if !ok {
+						return nil, fmt.Errorf("no grain unit %q on this host", name)
+					}
+					return j.read, nil
+				},
+			},
+			{
+				Name: "dmesg",
+				What: "kernel log",
+				Read: (&fakeJournal{lines: []string{"kernel"}}).read,
+			},
+		},
+	})
+	tl := tools[0]
+
+	got := call(t, tl, map[string]any{"source": "daemon"})
+	if got.IsError {
+		t.Fatalf("default daemon read errored: %s", got.Text)
+	}
+	for _, want := range []string{"grain.service (user unit), running", "also installed: grain-daemon.service", "user: serving"} {
+		if !strings.Contains(got.Text, want) {
+			t.Errorf("default daemon read missing %q:\n%s", want, got.Text)
+		}
+	}
+
+	got = call(t, tl, map[string]any{"source": "daemon", "unit": "grain-daemon.service"})
+	if got.IsError {
+		t.Fatalf("unit=grain-daemon.service errored: %s", got.Text)
+	}
+	for _, want := range []string{"grain-daemon.service, not running", "system: stale"} {
+		if !strings.Contains(got.Text, want) {
+			t.Errorf("unit=grain-daemon.service read missing %q:\n%s", want, got.Text)
+		}
+	}
+
+	if bad := call(t, tl, map[string]any{"source": "daemon", "unit": "sshd.service"}); !bad.IsError {
+		t.Errorf("unit=sshd.service succeeded, want refusal:\n%s", bad.Text)
+	}
+	if bad := call(t, tl, map[string]any{"source": "dmesg", "unit": "grain.service"}); !bad.IsError {
+		t.Errorf("dmesg with unit= succeeded, want refusal:\n%s", bad.Text)
+	}
+}

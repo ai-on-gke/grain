@@ -16,6 +16,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -190,4 +191,45 @@ func (c *Client) requestPersonOrTrustedOperator(ctx context.Context) string {
 		return requestPerson(ctx)
 	}
 	return c.requestPersonOrOperator(ctx)
+}
+
+// IsDeploymentOwner reports whether ctx acts as the deployment owner:
+//
+//   - Never an agent or service account.
+//   - Never a verified session holding a limited RBAC role (even one granted
+//     capabilities:admin).
+//   - An un-named trusted caller (the deployment access code, loopback
+//     break-glass, or an in-process Client call) acts as the deployment owner.
+//   - A verified human holding full owner access (grain/operator, role.Full)
+//     is the deployment owner when Config.Actor names no email address (the
+//     default OS account), or when their verified email matches Config.Actor.
+func (c *Client) IsDeploymentOwner(ctx context.Context) bool {
+	if c == nil {
+		return false
+	}
+	if role := accessRoleFromContext(ctx); role != nil && !role.Full {
+		return false
+	}
+	p, named := PrincipalFromContext(ctx)
+	if !named {
+		return true
+	}
+	if p.Kind != model.PrincipalHuman {
+		return false
+	}
+	owner := c.operatorPerson()
+	if strings.Contains(owner, "@") {
+		return strings.EqualFold(strings.TrimSpace(p.ID), owner)
+	}
+	return true
+}
+
+func (c *Client) requireDeploymentOwner(ctx context.Context, action string) error {
+	if c.IsDeploymentOwner(ctx) {
+		return nil
+	}
+	if owner := c.operatorPerson(); strings.Contains(owner, "@") {
+		return &ForbiddenError{err: fmt.Errorf("only the deployment owner (%s) may %s", owner, action)}
+	}
+	return &ForbiddenError{err: fmt.Errorf("only the deployment owner may %s", action)}
 }

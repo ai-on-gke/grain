@@ -1539,6 +1539,9 @@ func taskDetailToMCPRecord(detail TaskDetail) mcp.TaskRecord {
 		DependsOnStates: depStates,
 		ChangedAt:       latest,
 	}
+	if t.Reason != nil {
+		summary.Reason = &mcp.TaskReason{Reason: t.Reason.Reason, Resource: t.Reason.Resource}
+	}
 	rec := mcp.TaskRecord{
 		TaskSummary:         summary,
 		Description:         detail.Description,

@@ -67,7 +67,14 @@ func HeldForApprovalNote(proposer string) string {
 // "" means the permission does cover it -- whether it was then filed
 // approved is AutoSubmitLimits' question, which this does not ask, since
 // it needs the store and has its own note (AutoSubmitLimitNote).
+//
+// A proposal that would land work in this deployment's configuration
+// repository (ConfigRepoProposalHold) is refused first and whatever
+// parent holds: see that function for why.
 func AutoApprovalRefusal(child, parent Task, sessionQueues bool) string {
+	if why := ConfigRepoProposalHold(child); why != "" {
+		return why
+	}
 	if escalated := EscalatedCapabilities(child, parent); len(escalated) > 0 {
 		asked, seeded := SeededEscalations(child, escalated)
 		var why []string
@@ -104,6 +111,49 @@ func AutoApprovalRefusal(child, parent Task, sessionQueues bool) string {
 	}
 	return "it is not work of the shape your task may queue unreviewed: the same branch your " +
 		"task lands on, holding no capability your task lacks"
+}
+
+// ConfigRepoProposalHold is why child, a proposal, must wait for a
+// person whatever its proposer's permission: it targets this
+// deployment's configuration repository (IsConfigRepo), or lists it
+// among its writes. Phrased, like AutoApprovalRefusal, to finish "filed
+// unapproved: your permission does not cover ..."; "" when it names the
+// repository nowhere.
+//
+// Unconditional, and so asked before anything the proposer holds.
+// grain/config holds this deployment's capability grants, schedules and
+// secrets configuration, and the one sanctioned way a run changes it is
+// propose_config_change: a candidate branch under
+// ConfigProposalBranchPrefix, validated, classified by the trust
+// boundary and landed only on a person's approval of its pinned head.
+// That tool is keyed on the run holding grain/config in its Writes, and
+// UngrantedWrites admits any child write its parent holds -- so without
+// this, the director given propose_config_change would also have been
+// given a way to queue, on its own permission (TasksApproved), a child
+// task that pushes to grain/config with nobody looking at the diff
+// first (director-capabilities spec §3.1.3, gap G5). The proposal is
+// still filed as asked; a person decides whether it goes ahead.
+//
+// Here rather than in either package that files a proposal, so the
+// end-of-run relay (orchestrator.relayProposedTasks) and the live call
+// (ui.CreateTask) hold it the same way.
+func ConfigRepoProposalHold(child Task) string {
+	targets := child.Target != nil && IsConfigRepo(*child.Target)
+	writes := slices.ContainsFunc(child.Writes, func(w WriteTarget) bool { return IsConfigRepo(w.Repo) })
+	var what string
+	switch {
+	case targets && writes:
+		what = "it targets and writes"
+	case targets:
+		what = "it targets"
+	case writes:
+		what = "it writes"
+	default:
+		return ""
+	}
+	return fmt.Sprintf("%s %s, this deployment's configuration repository, and a proposed task that "+
+		"may land work there always waits for a person (propose a configuration change with "+
+		"propose_config_change instead)", what, ConfigRepo())
 }
 
 // PersonOnlyProposalSettings is why child, a proposal parent filed, asks

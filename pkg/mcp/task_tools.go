@@ -124,6 +124,17 @@ type TaskSummary struct {
 	// of the merge queue's -- which is what list_grain_tasks'
 	// changed_since compares. nil for a record that stamps none.
 	ChangedAt *time.Time
+	// Reason is why the task sits in State (ui.Task.Reason): "queued/ready"
+	// while waiting for a worker vs "queued/dispatch_blocked" with the
+	// deployment's blocking condition in Resource.
+	Reason *TaskReason
+}
+
+// TaskReason is why a task sits in State (ui.Reason, orchestrator's
+// TaskReason): the named sub-case and what it waits on.
+type TaskReason struct {
+	Reason   string
+	Resource string
 }
 
 // TaskMergeQueue is the merge queue's own account of one task, as the
@@ -830,6 +841,13 @@ func renderTaskRecord(t TaskRecord, now time.Time) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Task %s: %s\n", t.ID, singleLine(t.Title))
 	fmt.Fprintf(&b, "State: %s\n", t.State)
+	if r := t.Reason; r != nil && r.Reason != "" {
+		if r.Resource != "" {
+			fmt.Fprintf(&b, "Reason: %s (%s)\n", r.Reason, singleLine(r.Resource))
+		} else {
+			fmt.Fprintf(&b, "Reason: %s\n", r.Reason)
+		}
+	}
 	// Immediately under the state, because it is about that word and
 	// nothing else: the state says what this task is waiting for and
 	// this says that the wait has gone on longer than it should have.

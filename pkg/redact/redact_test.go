@@ -32,15 +32,17 @@ func TestTextCutsLoginTokenShapes(t *testing.T) {
 		"AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP\n" +
 		"GRAIN_RELEASE_GATE_TOKEN=rg_0123456789abcdef_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n" +
 		"GRAIN_API_TOKEN=ga_fedcba9876543210_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n" +
+		"join=ghe_0123456789abcdef0123456789abcdef0123456789abcdef\n" +
+		"cred=ghd_fedcba9876543210fedcba9876543210fedcba9876543210\n" +
 		"commit 0123456789abcdef0123456789abcdef01234567"
 	got, n := (*redact.Redactor)(nil).Text(text)
-	for _, leaked := range []string{"ya29.a0AfB", "1//0gAbCd", "gho_abcdef", "AKIAABCDEFGHIJKLMNOP", "rg_0123456789abcdef", "ga_fedcba9876543210"} {
+	for _, leaked := range []string{"ya29.a0AfB", "1//0gAbCd", "gho_abcdef", "AKIAABCDEFGHIJKLMNOP", "rg_0123456789abcdef", "ga_fedcba9876543210", "ghe_0123456789abcdef", "ghd_fedcba9876543210"} {
 		if strings.Contains(got, leaked) {
 			t.Errorf("Text left %q in:\n%s", leaked, got)
 		}
 	}
-	if n != 6 {
-		t.Errorf("Text counted %d redactions, want 6:\n%s", n, got)
+	if n != 8 {
+		t.Errorf("Text counted %d redactions, want 8:\n%s", n, got)
 	}
 	if !strings.Contains(got, "commit 0123456789abcdef0123456789abcdef01234567") {
 		t.Errorf("Text cut a git SHA:\n%s", got)
