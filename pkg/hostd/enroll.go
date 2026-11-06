@@ -443,16 +443,16 @@ func VerifyJoinSubmit(r JoinSubmitRequest, now time.Time, replay *NonceReplayCac
 // JoinSubmitResponse is returned by POST /api/hostd/join (201 Created) or on a
 // 401 github_device challenge.
 type JoinSubmitResponse struct {
-	ID              string    `json:"id,omitempty"`
-	ServerNonce     string    `json:"server_nonce,omitempty"`
-	PairingCode     string    `json:"pairing_code,omitempty"`
-	KeyFingerprint  string    `json:"key_fingerprint,omitempty"`
-	EnrolledBy      string    `json:"enrolled_by,omitempty"`
-	ExpiresAt       time.Time `json:"expires_at,omitempty"`
-	AuthMode        string    `json:"auth_mode,omitempty"`
-	GitHubClientID  string    `json:"github_client_id,omitempty"`
-	GitHubWebURL    string    `json:"github_web_url,omitempty"`
-	Error           string    `json:"error,omitempty"`
+	ID             string    `json:"id,omitempty"`
+	ServerNonce    string    `json:"server_nonce,omitempty"`
+	PairingCode    string    `json:"pairing_code,omitempty"`
+	KeyFingerprint string    `json:"key_fingerprint,omitempty"`
+	EnrolledBy     string    `json:"enrolled_by,omitempty"`
+	ExpiresAt      time.Time `json:"expires_at,omitempty"`
+	AuthMode       string    `json:"auth_mode,omitempty"`
+	GitHubClientID string    `json:"github_client_id,omitempty"`
+	GitHubWebURL   string    `json:"github_web_url,omitempty"`
+	Error          string    `json:"error,omitempty"`
 }
 
 // JoinPollRequest is POSTed to /api/hostd/join/{id}/poll, signed by the host's

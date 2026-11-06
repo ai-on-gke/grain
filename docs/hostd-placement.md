@@ -81,6 +81,19 @@ server's capability audit records (`task_run_capability_audit.hostd`) says
 B. While a placed server's hostd is not connected, a grant of it cannot be
 minted and the task waits with `needs-hostd:<selector>`.
 
+## Enrolling and managing hosts
+
+Remote hosts join in **Settings → Hosts** (`/settings/hosts`, alias `/settings/hostds`) or through `grain host`:
+
+1. **Invite hosts (shared `--join` snippet).** Only the deployment owner can view, create, rotate, or revoke enrollment codes (`ghe_...`). Each code grants **nothing** except filing a 24-hour pending join request, and may carry an expiry, `max_uses`, `default_labels`, `default_capacity`, and `allowed_principals` (`user:<email>`, `group:<email>` resolved via `ui.RegisterGroupMemberChecker`, `github:<login>`, or `org:<org>`). The snippet uses `ui.RegisterHostdInstall` when an edition registers custom install instructions, and defaults to:
+   ```sh
+   curl -fsSL https://grain.example.com/hostd/install | sh -s -- --join <enrollment-code>
+   ```
+2. **Ed25519 join request and verified identity.** On first run the host generates an Ed25519 private key on disk (mode `0600`), signs a join request carrying its public key, hostname, OS/arch, detected agent CLIs, version, and local account, and presents a **verified** enrolling identity (via the deployment's `IdentityVerifier` / SSO proxy, `ui.RegisterHostJoinVerifier`, or a GitHub device-flow OAuth login verified server-side in OSS).
+3. **Pairing-code handshake (owner-only, no auto-approve).** Both the host terminal and **Settings → Hosts → Pending host requests** (`grain host pending`) display the same deterministic `XXXX-XXXX` pairing code. Only the deployment owner may click **Accept** (`grain host accept <id> [-name -labels -capacity]`) or **Reject** (`grain host reject <id>`). Only the co-located `local` socket host (`/run/grain-hostd/hostd.sock`) operates without a handshake. Accepting sets the host's `Owner` to the verified enrolling identity — the exact owner that connection-level placement, IAP admission, and ambient-credential rate limits key on.
+4. **30-day key-bound credential, silent renewal, and revocation.** Once accepted, the host claims a 30-day `ghd_...` credential bound to its Ed25519 public key. Every `/api/hostd/connect` upgrade must carry a fresh, un-replayed Ed25519 signature (`X-Grain-Hostd-Timestamp`, `X-Grain-Hostd-Nonce`, `X-Grain-Hostd-Signature`), so a copied token without the private key is refused. Connected hosts renew their 30-day credential automatically in-band (`OpRenew` / `POST /api/hostd/renew`). Revoking a host drops any live session immediately; offline and revoked hosts can be renamed or deleted cleanly (`grain host rename`, `grain host delete`).
+5. **Migrating legacy per-host tokens.** Existing per-host token registrations continue working. Migrate an existing host in place without losing its name or placement references by re-running the installer with `--join <code>` or running `grain host rekey -server <url> -token-file <old-token-file> -key-file <new-key-file>` (or `grain-agentd install -rekey`) and approving the pairing code once in **Settings → Hosts**.
+
 ## Migration
 
 Schema 111 drops `task_hostd`, `template.hostd` and

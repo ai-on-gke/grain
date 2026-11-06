@@ -91,7 +91,9 @@ export function inviteLines(origin, codeView) {
     return codeView.install.lines;
   }
   if (!codeView?.code) return [];
-  return [`curl -fsSL ${origin}/hostd/install | sh -s -- --join ${codeView.code}`];
+  return [
+    `curl -fsSL ${origin}/hostd/install | sh -s -- --join ${codeView.code}`,
+  ];
 }
 
 function InstallInstructions({ name, install, intro }) {
@@ -213,7 +215,8 @@ export default function HostdsSection({ showError }) {
       ]);
       if (
         (codesRes.status === "rejected" && isForbiddenError(codesRes.reason)) ||
-        (pendingRes.status === "rejected" && isForbiddenError(pendingRes.reason))
+        (pendingRes.status === "rejected" &&
+          isForbiddenError(pendingRes.reason))
       ) {
         setOwnerAccess(false);
         setCodes([]);
@@ -399,7 +402,10 @@ export default function HostdsSection({ showError }) {
         owner: editing.owner.trim(),
         labels: parseLabels(editing.labels),
       };
-      if (editing.capacity !== undefined && String(editing.capacity).trim() !== "") {
+      if (
+        editing.capacity !== undefined &&
+        String(editing.capacity).trim() !== ""
+      ) {
         body.capacity = Number(String(editing.capacity).trim());
       }
       await api(`/api/hostds/${encodeURIComponent(editing.name)}`, {
@@ -747,7 +753,9 @@ export default function HostdsSection({ showError }) {
                             sx={{ mt: 0.5, wordBreak: "break-word" }}
                           >
                             Enrolled by <strong>{p.enrolled_by}</strong>
-                            {p.local_user ? ` (local user ${p.local_user})` : ""}
+                            {p.local_user
+                              ? ` (local user ${p.local_user})`
+                              : ""}
                             {p.clis?.length
                               ? ` · CLIs: ${p.clis.join(", ")}`
                               : ""}
@@ -888,8 +896,7 @@ export default function HostdsSection({ showError }) {
               {(hostds || []).map((h) => {
                 const isEditing = editing?.name === h.name;
                 const isRenaming = renaming?.oldName === h.name;
-                const remote =
-                  h.name !== "local" && !h.revoked_at && !h.shared;
+                const remote = h.name !== "local" && !h.revoked_at && !h.shared;
                 const keyBound = Boolean(h.key_fingerprint);
                 const canDelete =
                   h.name !== "local" &&
@@ -899,7 +906,11 @@ export default function HostdsSection({ showError }) {
                   <TableRow key={h.name} data-testid={`hostd-row-${h.name}`}>
                     <TableCell>
                       {isRenaming ? (
-                        <Stack direction="row" spacing={0.5} alignItems="center">
+                        <Stack
+                          direction="row"
+                          spacing={0.5}
+                          alignItems="center"
+                        >
                           <TextField
                             size="small"
                             value={renaming.newName}
@@ -1067,7 +1078,9 @@ export default function HostdsSection({ showError }) {
                                   name: h.name,
                                   owner: h.owner || "",
                                   labels: formatLabels(h.labels),
-                                  capacity: h.capacity ? String(h.capacity) : "",
+                                  capacity: h.capacity
+                                    ? String(h.capacity)
+                                    : "",
                                 })
                               }
                             >

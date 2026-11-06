@@ -606,14 +606,7 @@ export const SETTINGS_INDEX = [
     section: "hostds",
     anchor: "pending-hosts",
     label: "Pending host requests",
-    keywords: [
-      "pending",
-      "pairing",
-      "handshake",
-      "accept",
-      "reject",
-      "host",
-    ],
+    keywords: ["pending", "pairing", "handshake", "accept", "reject", "host"],
     card: true,
   },
   {
