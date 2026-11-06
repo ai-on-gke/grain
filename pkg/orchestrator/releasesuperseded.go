@@ -95,7 +95,8 @@ func sameGitHubWorkflow(r github.WorkflowRun, run ConcludedGitHubWorkflowRun) bo
 // isOnDemandReleaseRun reports whether r is an on-demand build of one
 // commit rather than a release of its branch's head.
 func isOnDemandReleaseRun(r github.WorkflowRun) bool {
-	return strings.HasSuffix(strings.TrimSpace(r.DisplayTitle), onDemandReleaseRunSuffix)
+	return strings.EqualFold(strings.TrimSpace(r.Event), "workflow_dispatch") &&
+		strings.HasSuffix(strings.TrimSpace(r.DisplayTitle), onDemandReleaseRunSuffix)
 }
 
 // isOnDemandGitHubReleaseRun reports whether the concluded run is an

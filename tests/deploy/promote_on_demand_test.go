@@ -206,6 +206,8 @@ func TestReleaseWorkflowBuildsACommitOnDemand(t *testing.T) {
 		"format('commit-{0}', inputs.commit)",
 		"refs/remotes/origin/main",
 		"needs.on-demand.outputs.build == 'true'",
+		"ON_DEMAND_BRANCH: ${{ needs.on-demand.outputs.branch }}",
+		"if: inputs.commit == ''",
 		"run-name:",
 	} {
 		containsRun(t, wf, want)
@@ -335,9 +337,64 @@ func TestPromoteWorkflowHoldsActionsWriteOnlyOffPushes(t *testing.T) {
 	if latest.Needs != "on-demand" {
 		t.Errorf("latest does not wait for on-demand: needs %v", latest.Needs)
 	}
+	if !strings.Contains(latest.If, "needs.on-demand.result == 'success'") || !strings.Contains(latest.If, "needs.on-demand.result == 'skipped'") {
+		t.Errorf("latest if = %q; want explicit success/skipped allowlist", latest.If)
+	}
 	for _, s := range latest.Steps {
 		if _, ok := s.Env["GH_TOKEN"]; ok {
 			t.Errorf("latest step %q is handed GH_TOKEN", s.Name)
 		}
 	}
+}
+
+// Where the commit's tree builds docker.io/grainai/registry alongside grain,
+// publish_images pushes grain:sha-<short> before registry:sha-<short>;
+// on-demand must check and wait for registry:sha-<short> too so promote does
+// not start before registry is published.
+func TestOnDemandWaitsForRegistryImageWhenReleasePublishesOne(t *testing.T) {
+	remote, commits := releaseRepoWithFiles(t, postSplitDockerfile, true, map[string]string{
+		"Dockerfile.registry":       "FROM scratch\nARG RELEASE=\n",
+		"scripts/release-images.sh": "build_registry_image() {\n  :\n}\n",
+	})
+	short := commits["released"][:7]
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "registry-published")
+	runsFile := filepath.Join(dir, "runs")
+	answers := "case \"$*\" in\n" +
+		"  \"buildx imagetools inspect docker.io/grainai/registry:sha-" + short + "\") [ -f \"" + marker + "\" ] || exit 1 ;;\n" +
+		"esac\n" +
+		". \"" + stubAnswers(t, short, "", "v1.5.0") + "\"\n"
+	answersPath := filepath.Join(dir, "answers.sh")
+	if err := os.WriteFile(answersPath, []byte(answers), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ghLog := filepath.Join(dir, "gh.log")
+	gh := "#!/bin/sh\n" +
+		"echo \"$@\" >> \"" + ghLog + "\"\n" +
+		"case \"$1 $2\" in\n" +
+		"  \"run list\") [ -f \"" + runsFile + "\" ] && cat \"" + runsFile + "\"; exit 0 ;;\n" +
+		"  \"workflow run\") : > \"" + marker + "\"; echo \"completed success https://github.example/actions/runs/3\" > \"" + runsFile + "\"; exit 0 ;;\n" +
+		"esac\n" +
+		"exit 0\n"
+	ghBin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(ghBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ghBin, "gh"), []byte(gh), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := publishEnv(answersPath)
+	delete(env, "DOCKER_PAT")
+	delete(env, "GRAIN_CI")
+	env["PATH"] = ghBin + ":" + realToolPath(t)
+	env["RELEASE_ON_DEMAND_BUILD"] = "dispatch"
+	env["RELEASE_ON_DEMAND_POLL"] = "0"
+	env["RELEASE_ON_DEMAND_TIMEOUT"] = "5"
+	out, _, err := promoteRun(t, remote, []string{"on-demand"}, env)
+	if err != nil {
+		t.Fatalf("on-demand with missing registry:sha-%s failed: %v\n%s", short, err, out)
+	}
+	containsRun(t, out, "has no docker.io/grainai/registry:sha-"+short)
+	containsRun(t, readLog(t, ghLog), "workflow run release.yml --repo bwsalmon/grain --ref main -f commit="+commits["released"])
+	containsRun(t, out, "docker.io/grainai/{sandbox,sandbox-k8s,grain,registry}:sha-"+short+" are published")
 }

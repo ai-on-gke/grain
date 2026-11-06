@@ -200,4 +200,22 @@ func TestAnOnDemandReleaseBuildIsNotRecordedAsTheBranchsRelease(t *testing.T) {
 	if rel, err := store.GetBaseBranchRelease(ctx, repo, "main"); err != nil || rel != nil {
 		t.Fatalf("an on-demand build was recorded as main's release: %+v, %v", rel, err)
 	}
+
+	// A push run whose commit subject happens to end with "(on demand)" is a
+	// real branch release, not an on-demand workflow_dispatch, so it still
+	// supersedes an earlier cancelled push run and records main's release.
+	pushBranch(t, sim.BareRepo, "main")
+	newer := headSHA(t, client, repo, "main")
+	pushNamedLikeOnDemand := releaseRun(1603, newer, "completed", "success", baseTime.Add(2*time.Minute))
+	pushNamedLikeOnDemand.DisplayTitle = "fix(release): build superseded commits (on demand)"
+	sim.WorkflowRuns = []githubsim.WorkflowRun{
+		onDemand,
+		releaseRun(1602, tip, "completed", "cancelled", baseTime.Add(time.Minute)),
+		pushNamedLikeOnDemand,
+	}
+	runGitHubCITails(t, ctx, orchestrator.Deps{Store: store, Client: client}, baseTime.Add(3*time.Minute))
+	rel, err := store.GetBaseBranchRelease(ctx, repo, "main")
+	if err != nil || rel == nil || rel.RunID != "1603" || rel.Conclusion != "success" || rel.Failures != 0 {
+		t.Fatalf("push run ending in '(on demand)' was not recorded as a real release: %+v, %v", rel, err)
+	}
 }

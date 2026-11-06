@@ -107,7 +107,7 @@ jobs:
     needs: on-demand
     # On a push on-demand is skipped, and a commit with no images fails
     # here naming what is missing, as it always did.
-    if: ${{ !cancelled() && needs.on-demand.result != 'failure' }}
+    if: ${{ !cancelled() && (needs.on-demand.result == 'success' || needs.on-demand.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:

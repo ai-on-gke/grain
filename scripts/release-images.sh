@@ -248,6 +248,13 @@ tag_may_move() (
     exit 1
   }
 
+  # Only branch tags ever move in `push`: `latest`, `vX.Y.Z`, `vX.Y.0-rc.N`
+  # and `vX.Y.0-pending` belong to `promote`, `rc` and `pending` alone, so a
+  # release run on a git tag ref never overwrites a stamped release image.
+  if [ "$ref" = latest ] || [[ "$ref" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$ ]]; then
+    stay "$ref is a release tag, not a branch -- promote and rc move release tags"
+  fi
+
   # The tip rule, for the two cases where nothing names what the tag
   # holds and it is still safe to answer: the tag does not exist, or this
   # machine has no way to read its label without pulling it.
@@ -1799,10 +1806,14 @@ on_demand_eligible() {
 }
 
 # on_demand_published <short> reports whether the images promotion needs
-# exist for the commit: the guest, k8s-sandbox and grain sha- builds.
+# exist for the commit: the guest, k8s-sandbox and grain sha- builds, and
+# registry too where the commit's tree builds one.
 on_demand_published() {
-  local image
-  for image in sandbox sandbox-k8s grain; do
+  local image images=(sandbox sandbox-k8s grain)
+  if [ "${promote_takes_registry:-false}" = true ]; then
+    images+=(registry)
+  fi
+  for image in "${images[@]}"; do
     image_exists "$root/$image:sha-$1" 2>/dev/null || return 1
   done
 }
@@ -1824,6 +1835,10 @@ on_demand_run() {
 build_on_demand() {
   local commit="$1" short="${1:0:7}" before="" status="" conclusion="" url="" run waited=0
   local timeout="${RELEASE_ON_DEMAND_TIMEOUT:-9000}" poll="${RELEASE_ON_DEMAND_POLL:-60}"
+  local names="sandbox,sandbox-k8s,grain"
+  if [ "${promote_takes_registry:-false}" = true ]; then
+    names="sandbox,sandbox-k8s,grain,registry"
+  fi
   on_demand_workflow="${RELEASE_ON_DEMAND_WORKFLOW:-release.yml}"
   if [ "${RELEASE_ON_DEMAND_BUILD:-}" != dispatch ]; then
     return 1
@@ -1847,7 +1862,7 @@ build_on_demand() {
   fi
   while :; do
     if on_demand_published "$short"; then
-      echo "release-images.sh: $root/{sandbox,sandbox-k8s,grain}:sha-$short are published; promoting them"
+      echo "release-images.sh: $root/{$names}:sha-$short are published; promoting them"
       return 0
     fi
     run="$(on_demand_run "$commit")"
@@ -1857,11 +1872,11 @@ build_on_demand() {
       if on_demand_published "$short"; then
         continue
       fi
-      echo "release-images.sh: the on-demand release run for $commit ended $conclusion without publishing $root/{sandbox,sandbox-k8s,grain}:sha-$short: $url" >&2
+      echo "release-images.sh: the on-demand release run for $commit ended $conclusion without publishing $root/{$names}:sha-$short: $url" >&2
       return 1
     fi
     if [ "$waited" -ge "$timeout" ]; then
-      echo "release-images.sh: waited ${timeout}s for the on-demand release of $commit to publish $root/{sandbox,sandbox-k8s,grain}:sha-$short, and it has not${url:+ ($url)}" >&2
+      echo "release-images.sh: waited ${timeout}s for the on-demand release of $commit to publish $root/{$names}:sha-$short, and it has not${url:+ ($url)}" >&2
       return 1
     fi
     sleep "$poll"
@@ -1872,12 +1887,12 @@ build_on_demand() {
 # on_demand_images is `on-demand`: build_on_demand for the release
 # `promote` would publish, when what promotion needs of its commit is not
 # in the registry -- the guest and k8s-sandbox sha- builds, and the grain
-# one unless a stamped vX.Y.Z (or the vX.Y.0-pending an approval
-# promotes) already stands in for it, as publish_release accepts. A
-# release from before the switch to Docker Hub is left to promote, which
-# copies it from GHCR instead.
+# (and registry, where built) ones unless a stamped vX.Y.Z (or the
+# vX.Y.0-pending an approval promotes) already stands in for them, as
+# publish_release accepts. A release from before the switch to Docker Hub
+# is left to promote, which copies it from GHCR instead.
 on_demand_images() {
-  local short image missing=()
+  local short image daemons=(grain) missing=()
   select_promotion "$promote_request"
   short="${promote_commit:0:7}"
   release_takes_main_grain || true
@@ -1885,13 +1900,16 @@ on_demand_images() {
     echo "release-images.sh: $promote_tag ($promote_commit) predates the switch to Docker Hub (#739); promote copies its images from $GRAIN_LEGACY_GHCR_PREFIX rather than building them, so there is nothing to build on demand"
     return 0
   fi
-  for image in sandbox sandbox-k8s grain; do
+  if [ "$promote_takes_registry" = true ]; then
+    daemons+=(registry)
+  fi
+  for image in sandbox sandbox-k8s "${daemons[@]}"; do
     if image_exists "$root/$image:sha-$short" 2>/dev/null; then
       continue
     fi
-    if [ "$image" = grain ] && {
-      stamped_build "$root/grain:$promote_tag" "$promote_tag" ||
-        stamped_build "$root/grain:$promote_tag-pending" "$promote_tag"
+    if [[ " ${daemons[*]} " == *" $image "* ]] && {
+      stamped_build "$root/$image:$promote_tag" "$promote_tag" ||
+        stamped_build "$root/$image:$promote_tag-pending" "$promote_tag"
     }; then
       continue
     fi
