@@ -16,6 +16,8 @@ package upgrade
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -246,5 +248,40 @@ func TestTagFilterBareTagsOnlyOnDedicatedRepositories(t *testing.T) {
 	}
 	if got := discardedRCFromTags("v3.2.0-rc.1", rcTags, tagFilter{edition: "google", bareOK: true}); got == nil || got.ReplacementRC != "v3.2.0-rc.2" {
 		t.Errorf("dedicated: discardedRCFromTags = %+v, want replacement v3.2.0-rc.2", got)
+	}
+}
+
+// TestDedicatedEditionRegistryFallbackKeepsEditionSuffixes: when a
+// dedicated edition release repository publishes nothing and the tag list
+// falls back to the image registry -- which may be shared between editions
+// -- a bare vX.Y.Z there is not taken as the edition's release, so neither
+// the selector nor the automatic upgrade (LatestRelease) offers a core
+// build to an edition daemon.
+func TestDedicatedEditionRegistryFallbackKeepsEditionSuffixes(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/team/grain/tags/list" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write([]byte(`{"tags":["v3.1.0","v3.0.0-google","v2.9.0"]}`))
+	}))
+	defer srv.Close()
+	registryHosts(t, map[string]*httptest.Server{"registry.example": srv})
+	forge := editionForge(t, "team", "edition")
+	u := editionUpgrader(t, forge, "google", ImageConfig{
+		Repository:    "registry.example/team/grain",
+		ReleaseAssets: ReleaseAssetsConfig{Repository: "github.com/team/edition"},
+	}, "")
+	if !u.dedicatedReleaseRepository() {
+		t.Fatalf("release repository %q is not dedicated", u.EffectiveReleaseAssets().Repository)
+	}
+	if got := u.EffectiveImageFallback(); got != ImageSourceRegistry {
+		t.Fatalf("EffectiveImageFallback = %q, want registry", got)
+	}
+	if latest, err := u.LatestRelease(context.Background()); err != nil || latest != "v3.0.0-google" {
+		t.Errorf("LatestRelease = (%q, %v), want (v3.0.0-google, nil)", latest, err)
+	}
+	if got, want := targetVersions(u.Targets(context.Background())), []string{"v3.0.0-google"}; !slices.Equal(got, want) {
+		t.Errorf("Targets versions = %v, want %v", got, want)
 	}
 }
