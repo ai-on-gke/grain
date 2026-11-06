@@ -161,7 +161,9 @@ type CatalogueDefaults struct {
 }
 
 // CapabilityCatalogue is the whole of settings/capabilities.yml's
-// judgement. A nil catalogue judges nothing.
+// judgement. A nil catalogue judges nothing of its own; ValidateGrants
+// and Refusals still apply grain's built-in director floor
+// (director_floor.go) underneath it.
 type CapabilityCatalogue struct {
 	Defaults  CatalogueDefaults             `json:"defaults,omitempty"`
 	Servers   []CatalogueServer             `json:"servers,omitempty"`
@@ -194,6 +196,9 @@ type GrantVerdict struct {
 type GrantRefusal struct {
 	Grant  string
 	Reason string
+	// Builtin says the refusal is grain's own built-in floor
+	// (DirectorFloorRefusal), not a rule of settings/capabilities.yml.
+	Builtin bool
 }
 
 func (r GrantRefusal) Error() string { return r.Reason }
@@ -230,15 +235,20 @@ func TaskGrantContext(t Task) GrantContext {
 
 // ValidateGrants judges every grant in gc: the first refusal is returned
 // as a *GrantRefusal, and otherwise the verdict says which of them a
-// person has to approve. A nil catalogue admits everything.
+// person has to approve. Grain's built-in floor (DirectorFloorRefusal)
+// is applied first and binds whatever the catalogue says; past it, a nil
+// catalogue admits everything.
 func (c *CapabilityCatalogue) ValidateGrants(gc GrantContext) (GrantVerdict, error) {
 	var v GrantVerdict
-	if c == nil {
-		return v, nil
-	}
 	for _, g := range gc.Grants {
 		g = strings.TrimSpace(g)
 		if g == "" {
+			continue
+		}
+		if r := DirectorFloorRefusal(g, gc.Kind); r != nil {
+			return GrantVerdict{}, r
+		}
+		if c == nil {
 			continue
 		}
 		person, err := c.judge(g, gc)
@@ -254,13 +264,18 @@ func (c *CapabilityCatalogue) ValidateGrants(gc GrantContext) (GrantVerdict, err
 }
 
 // Refusals is ValidateGrants without stopping at the first: every grant
-// the catalogue refuses, in gc's order.
+// the catalogue (or grain's built-in floor) refuses, in gc's order.
 func (c *CapabilityCatalogue) Refusals(gc GrantContext) []GrantRefusal {
-	if c == nil {
-		return nil
-	}
 	var out []GrantRefusal
 	for _, g := range gc.Grants {
+		if r := DirectorFloorRefusal(g, gc.Kind); r != nil {
+			r.Grant = g
+			out = append(out, *r)
+			continue
+		}
+		if c == nil {
+			continue
+		}
 		if _, err := c.judge(strings.TrimSpace(g), gc); err != nil {
 			out = append(out, GrantRefusal{Grant: g, Reason: err.Error()})
 		}
