@@ -248,7 +248,7 @@ Every capability entry in `settings/capabilities.yml` carries a uniform `restric
 3. **`kinds` (`[]string`):** Which execution kinds may hold the capability:
    - `task`: standard code/investigation task runs;
    - `session`: standing interactive chat sessions;
-   - `director`: the deployment director session;
+   - `director`: the deployment director session. Underneath every rule written here, grain applies a built-in floor to this kind (`model.DirectorFloorRefusal`, `design/spec/director/director-capabilities.spec.md` §3.3 and G7). No grant reaching `merge:force`, `settings:write`, `secrets:write`, `connections:write` or `repos:write` is admitted to a director run, even with no catalogue at all. A rule naming `director` can narrow the kind further but cannot widen it past the floor;
    - `review`: pre-merge code review runs spawned via `reviewTemplateId`;
    - `process`: capability server process sandboxes;
    - `ci`: Grain CI workflow jobs (`.grain/workflows/*.yml`).

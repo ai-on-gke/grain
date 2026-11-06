@@ -192,6 +192,7 @@ func (s *Server) resolveMCPCallerAccess(ctx context.Context) (mcpCallerAccess, e
 		} else {
 			set = APIGrantsOf(held)
 		}
+		set = model.WithinDirectorFloor(*acting, set)
 		return mcpCallerAccess{
 			actingTaskID: taskID,
 			grantSet:     set,

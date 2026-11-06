@@ -332,6 +332,9 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	} else {
 		set = APIGrantsOf(held)
 	}
+	// The director never reaches a Tier 3 scope, however it came to
+	// hold a grant for one (model.WithinDirectorFloor).
+	set = model.WithinDirectorFloor(*acting, set)
 	call.grants = set
 	capAllowed := agentCapabilityAllowsRoute(held, set, pattern, scope)
 	ciCap := grainCIReadsRoute(held, pattern)
