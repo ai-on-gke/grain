@@ -1190,3 +1190,21 @@ func TestEveryAgentAPIListRouteIsBounded(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentRepoDefaultRoutesTakeRepo holds every route the gate defaults
+// ?repo= on for a single-repository caller (agentRepoDefaultRoutes) to
+// declaring repo in routeQueries: queryCallRepo reads a named ?repo= only
+// on a route that declares it, so a route listed here without one would
+// have the repository a caller names ignored for authorisation while the
+// default is still injected -- and the handler behind it has to narrow by
+// repo for the default to mean anything (agent_repo_default_routes_test.go).
+func TestAgentRepoDefaultRoutesTakeRepo(t *testing.T) {
+	for pattern := range agentRepoDefaultRoutes {
+		if !routeHasQuery(pattern, "repo") {
+			t.Errorf("%s is in agentRepoDefaultRoutes but routeQueries does not declare repo for it", pattern)
+		}
+		if !strings.HasPrefix(pattern, "GET ") {
+			t.Errorf("%s is in agentRepoDefaultRoutes, which is for GET collection reads only", pattern)
+		}
+	}
+}
