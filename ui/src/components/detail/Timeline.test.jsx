@@ -216,6 +216,42 @@ describe("DetailOverlay timeline", () => {
     );
   });
 
+  // A run on a hostd since deleted from the registry keeps the name it
+  // recorded, marked deleted.
+  it("marks an attempt's hostd that has since been deleted", () => {
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          attempts: [
+            {
+              number: 1,
+              startedAt: "2026-08-28T12:00:00Z",
+              finishedAt: "2026-08-28T12:10:00Z",
+              outcome: "failed",
+              hostd: {
+                hostd: "rarcea",
+                at: "2026-08-28T12:00:01Z",
+                deleted: true,
+              },
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+    const lines = document.querySelectorAll(".timeline-attempt-hostd");
+    expect(lines).toHaveLength(1);
+    expect(lines[0].textContent).toBe("ran on hostd rarcea (deleted)");
+    expect(lines[0].getAttribute("title")).toContain(
+      "since deleted from the hostd registry",
+    );
+  });
+
   // bwsalmon/agents#503: a "running" transition and the attempt it started
   // both landing on the timeline read as two nodes for the same moment.
   it("shows a single node for a running transition and its first attempt, not two", () => {

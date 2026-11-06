@@ -590,7 +590,15 @@ export const SETTINGS_INDEX = [
     section: "hostds",
     anchor: "hostds",
     label: "Hostds",
-    keywords: ["hostd", "token", "rotate", "revoke", "owner", "labels"],
+    keywords: [
+      "hostd",
+      "token",
+      "rotate",
+      "revoke",
+      "delete",
+      "owner",
+      "labels",
+    ],
     card: true,
   },
   {

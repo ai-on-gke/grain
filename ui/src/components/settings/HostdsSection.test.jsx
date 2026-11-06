@@ -17,6 +17,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import HostdsSection, {
   connectionText,
+  deletedLines,
   installCommand,
   installLines,
   parseLabels,
@@ -200,9 +201,95 @@ describe("HostdsSection", () => {
       body: JSON.stringify({ name: "ws-2", owner: "", labels: { gpu: "yes" } }),
     });
   });
+
+  it("offers Delete on revoked hostds only, behind a confirmation", async () => {
+    const REVOKED = {
+      ...WS,
+      name: "rarcea",
+      token_prefix: "",
+      revoked_at: "2026-11-03T00:00:00Z",
+      connection: null,
+    };
+    api.mockResolvedValueOnce([LOCAL, WS, REVOKED]);
+    render(<HostdsSection showError={vi.fn()} />);
+    const row = await screen.findByTestId("hostd-row-rarcea");
+    expect(
+      within(screen.getByTestId("hostd-row-ws-1")).queryByText("Delete"),
+    ).toBeNull();
+    expect(
+      within(screen.getByTestId("hostd-row-local")).queryByText("Delete"),
+    ).toBeNull();
+
+    // Declining the confirmation sends nothing.
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false);
+    await userEvent.click(within(row).getByText("Delete"));
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(api).toHaveBeenCalledTimes(1);
+
+    confirm.mockReturnValueOnce(true);
+    api.mockResolvedValueOnce({
+      name: "rarcea",
+      clearedPauses: ["agy@hostd/rarcea"],
+    });
+    api.mockResolvedValueOnce([LOCAL, WS]);
+    await userEvent.click(within(row).getByText("Delete"));
+    expect(api).toHaveBeenCalledWith("/api/hostds/rarcea", {
+      method: "DELETE",
+    });
+    expect(await screen.findByTestId("hostd-delete-notice")).toHaveTextContent(
+      "Deleted hostd rarcea. Cleared its usage-limit pauses: agy@hostd/rarcea.",
+    );
+    expect(screen.queryByTestId("hostd-row-rarcea")).toBeNull();
+    confirm.mockRestore();
+  });
+
+  it("deletes every revoked hostd at once and lists the skipped", async () => {
+    const revoked = (name) => ({
+      ...WS,
+      name,
+      token_prefix: "",
+      revoked_at: "2026-11-03T00:00:00Z",
+      connection: null,
+    });
+    api.mockResolvedValueOnce([LOCAL, WS, revoked("old-1"), revoked("old-2")]);
+    render(<HostdsSection showError={vi.fn()} />);
+    const bulk = await screen.findByTestId("hostds-delete-revoked");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+    api.mockResolvedValueOnce({
+      deleted: [{ name: "old-1" }],
+      skipped: [{ name: "old-2", reason: "still named by a connection" }],
+    });
+    api.mockResolvedValueOnce([LOCAL, WS, revoked("old-2")]);
+    await userEvent.click(bulk);
+    expect(api).toHaveBeenCalledWith("/api/hostds/delete-revoked", {
+      method: "POST",
+    });
+    const notice = await screen.findByTestId("hostd-delete-notice");
+    expect(notice).toHaveTextContent("Deleted hostd old-1.");
+    expect(notice).toHaveTextContent(
+      "Skipped old-2: still named by a connection",
+    );
+    confirm.mockRestore();
+  });
+
+  it("offers no bulk delete when nothing is revoked", async () => {
+    api.mockResolvedValueOnce([LOCAL, WS]);
+    render(<HostdsSection showError={vi.fn()} />);
+    await screen.findByTestId("hostd-row-ws-1");
+    expect(screen.queryByTestId("hostds-delete-revoked")).toBeNull();
+  });
 });
 
 describe("hostd helpers", () => {
+  it("says what each delete cleared", () => {
+    expect(
+      deletedLines([{ name: "a" }, { name: "b", clearedPauses: ["x", "y"] }]),
+    ).toEqual([
+      "Deleted hostd a.",
+      "Deleted hostd b. Cleared its usage-limit pauses: x, y.",
+    ]);
+  });
+
   it("builds an install command that names the daemon and not the token", () => {
     expect(
       installCommand("https://grain.example.com", "ws-2", {
