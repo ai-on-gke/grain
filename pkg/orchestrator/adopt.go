@@ -235,11 +235,11 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 	stopCrediting := cfg.RunWaitCredits.register(task.ID, clock)
 	stopCancelling := cfg.TaskCancellers.register(task.ID, cancelRun)
 	defer stopCancelling()
-	checkTaskClosed(ctx, store, task.ID, cancelRun)
+	checkTaskClosed(ctx, store, task.ID, runID, cancelRun)
 	watcherDone := make(chan struct{})
 	go func() {
 		defer close(watcherDone)
-		watchForTaskClosed(runCtx, ctx, store, task.ID, cfg.cancelPollInterval(), cancelRun)
+		watchForTaskClosed(runCtx, ctx, store, task.ID, runID, cfg.cancelPollInterval(), cancelRun)
 	}()
 	scope := runPauseScope(framework, *task, cfg)
 	stopPause := cfg.Pause.register(runID, scope, cfg.now(), cancelRun)
