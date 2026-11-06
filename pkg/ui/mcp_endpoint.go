@@ -217,7 +217,8 @@ func (a mcpCallerAccess) allowsRoute(rt APIRoute) bool {
 		if _, blocked := isNoTaskContextRoute(rt.Pattern); blocked {
 			return false
 		}
-		return a.grantSet.Has(rt.Scope) || tasksAdminAllowsTaskPatch(a.grantSet, rt.Pattern)
+		return a.grantSet.Has(rt.Scope) || tasksAdminAllowsTaskPatch(a.grantSet, rt.Pattern) ||
+			capabilitiesDetachAllowsRoute(a.grantSet, rt.Pattern)
 	}
 	if a.channel == SandboxCLIChannel {
 		if IsSandboxDeniedScope(rt.Scope) || sandboxChannelGuard(rt.Pattern, nil) != nil {
@@ -226,6 +227,7 @@ func (a mcpCallerAccess) allowsRoute(rt APIRoute) bool {
 	}
 	return a.grantSet.Has(rt.Scope) ||
 		tasksAdminAllowsTaskPatch(a.grantSet, rt.Pattern) ||
+		capabilitiesDetachAllowsRoute(a.grantSet, rt.Pattern) ||
 		agentCapabilityAllowsRoute(a.heldGrants, a.grantSet, rt.Pattern, rt.Scope) ||
 		grainCIReadsRoute(a.heldGrants, rt.Pattern)
 }

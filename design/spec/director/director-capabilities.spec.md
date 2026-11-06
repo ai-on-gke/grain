@@ -175,7 +175,7 @@ recreation only.
 |---|---|---|---|
 | `GET /api/capability-servers`, `/api/capability-methods`, `POST /api/capability-grants/check`, `GET /api/repos/{o}/{n}/capabilities\|ci-capabilities` | `api:capabilities:read` | `…/api#capabilities:read` | 1 |
 | Detach a grant: `POST /api/tasks/{id}/capabilities` `{attach: false}`; narrow `PUT /api/repos/{o}/{n}/capabilities` | `api:capabilities:admin` (**dangerous**) | `…/api#capabilities:admin` | 2 |
-| Detach only (no attach, no replace, never on a standing session) | **`api:capabilities:detach` (proposed new scope)**, not dangerous, reason required | `…/api#capabilities:detach` *(proposed)* | 1 once it exists (§3.1.2) |
+| Detach only (no attach, no replace, never on a standing session) | `api:capabilities:detach`, not dangerous, sandbox-denied, reason required | `…/api#capabilities:detach` | 1 (§3.1.2) |
 | Read deployment config | implicit state-repo read; `api:settings:read` | `…/repo#read` `{repo: grain/config}` | 1 |
 | `propose_config_change` (branch, validate, pin `headSha`, in-chat approval card) | `Writes: [<state repo>]` on a repo-less session (`grain/config/<task-id>/*` branches only; opt-in on `main`) | `…/repo#write` `{repo: grain/config, refs: [refs/heads/grain/config/<task-id>/*]}` *(proposed)* | 1 once G5's `IsConfigRepo` proposal hold lands (§3.1.3) |
 | `grain/config` PR via a filed task | `propose_task` with `writes: [grain/config]` (held for a person by `UngrantedWrites`) | `…/repo#write` | 1 (the hold is the gate) |
@@ -247,26 +247,32 @@ does not replace the person, because a dangerous scope is defined as
 one only a person may grant (`docs/agent-api.md` §Policy). Shipping one
 by default would be grain granting it on everyone's behalf.
 
-#### 3.1.2 Grant detachment (proposed `capabilities:detach`)
+#### 3.1.2 Grant detachment (`capabilities:detach`)
 
-W4's grant cleanup needs to remove grants, and on `main` that means
-`capabilities:admin`, which is dangerous. This specification proposes a
-new scope `capabilities:detach`, **not dangerous** and sandbox-denied
-(MCP-only), that admits exactly:
+W4's grant cleanup needs to remove grants, which used to mean
+`capabilities:admin`, which is dangerous. The scope
+`capabilities:detach` (G6) is **not dangerous** and sandbox-denied
+(MCP-only), and admits exactly:
 
 - `POST /api/tasks/{id}/capabilities` with `attach: false` and no
   `replace`;
 - `PUT /api/repos/{owner}/{name}/capabilities` and
-  `…/ci-capabilities` whose body is a subset of the stored list
-  (`storedFieldGrants` already computes that);
+  `…/ci-capabilities` whose body names only that list, and only entries
+  already on the stored list (`storedFieldGrants`);
 - in both cases with a non-empty reason, and never on a task for which
   `IsConsoleSession()` holds (design §3.4: the director does not modify
   another standing session, and not its own either).
 
-Once `capabilities:detach` exists, Tier 1 MUST include
-`api:capabilities:detach`. Until then, detachment is Tier 2 through
-`api:capabilities:admin`, or is done by proposing a `grain/config`
-change.
+The gate (`capabilitiesDetachRoutes` in `pkg/ui/route_scopes.go`,
+`Server.capabilitiesDetachAllowed` in `pkg/ui/agent_api_gate.go`)
+applies these checks only when the caller does not hold
+`capabilities:admin` for the repository. The routes keep
+`capabilities:admin` as their scope for attach, replace and widen.
+
+Tier 1 MUST include `api:capabilities:detach` (the detach part of G1).
+Until G1 lands, a deployment grants it to the director by hand;
+otherwise detachment is Tier 2 through `api:capabilities:admin`, or is
+done by proposing a `grain/config` change.
 
 #### 3.1.3 `grain/config` access
 
@@ -490,7 +496,7 @@ holds them.
 | G3 | `NetworkAccess` | `NetworkOpen` | `NetworkNone` with the `ConsoleSessionNetworkAccess` fallback | Change the default. First verify on granule that the state-repo clone, `grain` CLI and `api_*` tools work under `none`, and that no build `DefaultOn` capability needs sandbox egress. |
 | G4 | State repo read | **done**: implicit via `StateRepo`, read-only checkout pinned by `consolesessions_test.go` and `director_state_internal_test.go` | Unchanged | None. |
 | G5 | `propose_config_change` & config-repo proposal rail | Tool and `grain/config/<task-id>/*` push policy implemented (`pkg/mcp/config_change_tool.go`, `pkg/ui/task_config_change.go`), keyed on `Writes: [<state repo>]`; `DefaultConsoleSessions` still ships `Writes: []`, and `AutoApprovalRefusal` does not yet hold `IsConfigRepo` targets/writes when the parent holds `Writes: [<state repo>]` | Shipped on the director, while child `propose_task` calls targeting or writing `IsConfigRepo` always wait for a person (§3.1.3) | Hold `IsConfigRepo` target and write proposals unconditionally in `AutoApprovalRefusal` (`pkg/model/hold_for_approval.go`), then enable `propose_config_change` on the shipped director without widening `propose_task`. |
-| G6 | `capabilities:detach` | does not exist | New non-dangerous, MCP-only scope (§3.1.2) | Add it to `model.apiScopes`, `IsSandboxDeniedAPIScope`, `route_scopes.go` (a detach-body check like `tasksAdminTaskPatchBodyAllowed`), `docs/agent-api.md`; then add it to G1. |
+| G6 | `capabilities:detach` | **done**: in `model.apiScopes` (not dangerous) and `IsSandboxDeniedAPIScope`; admitted by `capabilitiesDetachRoutes` (`route_scopes.go`) and `capabilitiesDetachAllowed` / `capabilitiesDetachBodyAllowed` (`agent_api_gate.go`); pinned by `pkg/ui/capabilities_detach_test.go`; documented in `docs/agent-api.md` | New non-dangerous, MCP-only scope (§3.1.2) | Add `api:capabilities:detach` to G1. |
 | G7 | Default catalogue for the director kind | none (`DefaultCapabilityCatalogue` absent; nil catalogue admits all) | Shipped rule set denying the director kind `merge:force`, `settings:write`, `secrets:write`, `connections:write`, `repos:write` | Add a built-in restriction layer applied under any `settings/capabilities.yml`, keyed on `CatalogueKindDirector` (operator files may narrow, not widen). |
 | G8 | Self-approval | relies on `tasks:admin` being person-granted | Gate refuses `POST /api/tasks/{id}/approve` on a task in the actor's proposal subtree or held for a person | Add to `agentRails` in `pkg/ui/agent_api_gate.go`, with tests. |
 | G9 | Seeded repo defaults on director proposals | held as "seeded" escalations | Admitted under §4.2 | Change `EscalatedCapabilities` / `AutoApprovalRefusal` (`pkg/model/auto_submit.go`, `hold_for_approval.go`) to take the seeding source; tests for each excluded case. |
@@ -498,7 +504,7 @@ holds them.
 | G11 | Docs | Retired capability names and the `NetworkAccess: open` note in `docs/director.md` updated in [Task #3185](/tasks/3185); envelope table still reflects pre-G1–G3 defaults | Matches §3 | Update `docs/director.md` alongside G1–G3 as each default flips. |
 | G12 | Capacity bound on session-queued proposals | session-queued proposals skip `AutoSubmitLimits` | Per-turn fan-out bound; over it, filed for a person (§3.1.5) | Add the check beside `ExceededAutoSubmitLimit` in `ui.Client.CreateTask` and `orchestrator.relayProposedTasks`, with tests. |
 
-Ordering: G4 is done, and G10 can land with G1. G6 precedes the detach part of
+Ordering: G4 and G6 are done, and G10 can land with G1. G6 preceded the detach part of
 G1, and G3's verification precedes its default change. G5's `IsConfigRepo`
 proposal hold, G7, G8 and G12 MUST land before G2, so that the auto-queueing
 director never runs on a deployment without the Tier 3 rails.
