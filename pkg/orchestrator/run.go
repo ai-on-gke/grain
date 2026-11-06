@@ -77,13 +77,6 @@ var errRunTimedOut = errors.New("orchestrator: run exceeded its wall-clock time 
 // the daemon's is (see where it is made).
 var errDaemonStopped = errors.New("orchestrator: the daemon driving this run was stopped")
 
-// errRunAlreadyFinished is context.Cause's report when store.RunFinished
-// shows this run's row was already finished out-of-band (for example by
-// Client.Stop or ForceMerge in a separate grain ui process, or before
-// TaskCancellers had this run registered). recordRunEnd leaves the stored
-// outcome and detail untouched.
-var errRunAlreadyFinished = errors.New("orchestrator: run already finished in store")
-
 // InterruptedInSetupDetail is the task_run.detail of a run the daemon
 // was stopped under while the run was still setting up: its sandbox
 // building, its checkout or its capabilities being prepared, no agent
@@ -129,11 +122,12 @@ func finishSetupCancellation(finishCtx context.Context, store *model.Store, task
 		return false, nil
 	}
 	switch {
-	case errors.Is(cause, errRunAlreadyFinished):
-		return true, nil
 	case errors.Is(cause, errDaemonStopped):
 		return true, finishStoppedInSetup(finishCtx, store, taskID, runID, at)
 	case errors.Is(cause, ErrTurnStopped):
+		if finished, found, err := store.RunFinished(finishCtx, runID); err == nil && found && finished {
+			return true, nil
+		}
 		return true, store.FinishRun(finishCtx, runID, at, "cancelled", model.TurnStoppedDetail)
 	case errors.Is(cause, errTaskClosed):
 		return true, store.FinishRun(finishCtx, runID, at, "cancelled", model.TaskClosedDetail)
@@ -178,7 +172,11 @@ func InterruptedRuns() int64 { return interruptedRuns.Load() }
 // propagated: watchForTaskClosed's own caller retries on the next tick
 // regardless, so a transient read failure costs one interval of latency,
 // not the ability to ever notice a close for the rest of the run.
-func checkTaskClosed(ctx context.Context, store *model.Store, taskID string, cancel context.CancelCauseFunc) bool {
+//
+// It also ends a run whose own task_run row somebody else has already
+// finished as cancelled (checkRunCancelledElsewhere), the other way a
+// cancellation reaches a run through the store alone.
+func checkTaskClosed(ctx context.Context, store *model.Store, taskID, runID string, cancel context.CancelCauseFunc) bool {
 	st, err := store.State(ctx, taskID)
 	if err != nil {
 		return false
@@ -187,14 +185,33 @@ func checkTaskClosed(ctx context.Context, store *model.Store, taskID string, can
 		cancel(errTaskClosed)
 		return true
 	}
-	return false
+	return checkRunCancelledElsewhere(ctx, store, taskID, runID, cancel)
 }
 
-// checkRunFinished reads store.RunFinished(runID) once and calls
-// cancel(errRunAlreadyFinished) if the row already has finished_at set (for
-// example because Client.Stop finished the row from another process or before
-// TaskCancellers registered the run).
-func checkRunFinished(ctx context.Context, store *model.Store, runID string, cancel context.CancelCauseFunc) bool {
+// checkRunCancelledElsewhere calls cancel(ErrTurnStopped) when runID's
+// task_run row has already been finished with outcome "cancelled" by
+// something other than this run, reporting whether it did.
+//
+// That is ui.Client.cancelActiveRuns's fallback -- Stop's, and
+// ForceMerge's over a live run -- for a run that has not registered in
+// TaskCancellers yet: a Stop pressed while the run's sandbox is still
+// being prepared finds no canceller, so it finishes the row itself and
+// the task reads as stopped. Nothing told the run, though, so it went on
+// to register, start its agent and hold the task's one worker slot for
+// as long as that agent ran -- and a person's Retry, which lifts the
+// stop and expects the task to be dispatched again at once, found it
+// still occupied and waited with nothing happening (ui/e2e/
+// stopped-turn-retry.spec.js). Checked once right after registering,
+// and on every watchForTaskClosed tick for a finish that lands between
+// Stop's missed CancelTask and this run's registration.
+//
+// ErrTurnStopped because it is the cause taskCancellerAdapter delivers
+// for those very calls when the canceller is there, so the run ends the
+// same way whichever of the two reached it first. A row finished any
+// other way (an interrupted run another daemon reaped, say) is not this
+// check's business and is left to the paths that already handle it. A
+// store error reads as "not cancelled", for checkTaskClosed's reason.
+func checkRunCancelledElsewhere(ctx context.Context, store *model.Store, taskID, runID string, cancel context.CancelCauseFunc) bool {
 	if store == nil || runID == "" {
 		return false
 	}
@@ -202,20 +219,28 @@ func checkRunFinished(ctx context.Context, store *model.Store, runID string, can
 	if err != nil || !found || !finished {
 		return false
 	}
-	cancel(errRunAlreadyFinished)
-	return true
+	runs, err := store.Runs(ctx, taskID)
+	if err != nil {
+		return false
+	}
+	for _, r := range runs {
+		if r.ID == runID && r.Outcome == "cancelled" {
+			cancel(ErrTurnStopped)
+			return true
+		}
+	}
+	return false
 }
 
-// watchForTaskClosed polls store.State(taskID) and store.RunFinished(runID)
+// watchForTaskClosed polls store.State(taskID) and checkRunCancelledElsewhere
 // every interval and cancels runCtx the moment the task is closed or the run
-// row is finished out-of-band -- the store-polled cancellation signal
-// RunDispatch needs because grain daemon (running the agent) and grain ui
-// (where a close or Stop lands) can be separate processes sharing only the
+// row is finished as cancelled out-of-band -- the store-polled cancellation
+// signal RunDispatch needs because grain daemon (running the agent) and grain
+// ui (where a close or Stop lands) can be separate processes sharing only the
 // store, per bwsalmon/agents#346.
 //
 // It does not check immediately on entry: RunDispatch itself already calls
-// checkTaskClosed and checkRunFinished synchronously before framework.Run is
-// ever invoked.
+// checkTaskClosed synchronously before framework.Run is ever invoked.
 //
 // queryCtx, not runCtx, bounds the store reads: runCtx is what this func
 // is about to cancel, so querying with it would make the very last read
@@ -231,7 +256,7 @@ func watchForTaskClosed(runCtx, queryCtx context.Context, store *model.Store, ta
 		case <-runCtx.Done():
 			return
 		case <-ticker.C:
-			if checkTaskClosed(queryCtx, store, taskID, cancel) || checkRunFinished(queryCtx, store, runID, cancel) {
+			if checkTaskClosed(queryCtx, store, taskID, runID, cancel) {
 				return
 			}
 		}
@@ -2970,7 +2995,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	if stopCancelling != nil {
 		defer stopCancelling()
 	}
-	checkRunFinished(ctx, store, d.RunID, cancelRun)
+	checkRunCancelledElsewhere(ctx, store, d.TaskID, d.RunID, cancelRun)
 
 	// unprepared is every return below that comes before this run has
 	// anything of its own to finish -- the store reads the prompt is
@@ -3338,8 +3363,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			defer stopIdle()
 		}
 		stopCrediting := cfg.RunWaitCredits.register(d.TaskID, clock)
-		checkTaskClosed(ctx, store, task.ID, cancelRun)
-		checkRunFinished(ctx, store, d.RunID, cancelRun)
+		checkTaskClosed(ctx, store, task.ID, d.RunID, cancelRun)
 		watcherDone := make(chan struct{})
 		go func() {
 			defer close(watcherDone)
@@ -4864,10 +4888,6 @@ func classifyRunEndArms(ctx context.Context, store *model.Store, cfg Config, tas
 		outcome = "cancelled"
 		detail = model.TurnStoppedDetail
 		runErr = fmt.Errorf("orchestrator: run %s: %w", runID, ErrTurnStopped)
-	case runErr != nil && errors.Is(cause, errRunAlreadyFinished):
-		outcome = "cancelled"
-		detail = model.TurnStoppedDetail
-		runErr = fmt.Errorf("orchestrator: run %s: %w", runID, errRunAlreadyFinished)
 	case runErr != nil && errors.Is(cause, errGoalMet):
 		outcome = "cancelled"
 		detail = errGoalMet.Error() + partialWorkSuffix(result)
@@ -5099,7 +5119,13 @@ func recordRunEnd(ctx, finishCtx context.Context, store *model.Store, cfg Config
 	var finishErr error
 	kind, _ := end.suspensionKind()
 	failover := kind.IsFailover() && end.modelHint != ""
-	if !errors.Is(end.runErr, errRunAlreadyFinished) {
+	alreadyFinished := false
+	if end.suspend == "" && !failover && outcome == "cancelled" {
+		if finished, found, err := store.RunFinished(finishCtx, runID); err == nil && found && finished {
+			alreadyFinished = true
+		}
+	}
+	if !alreadyFinished {
 		if end.suspend != "" || failover {
 			susp := model.Suspension{RunID: runID, Kind: kind, Detail: detail, CreatedAt: cfg.now()}
 			if failover {

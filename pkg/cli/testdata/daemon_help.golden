@@ -285,6 +285,8 @@ Usage of grain daemon:
     	one argument of the command the UI's reboot-host button runs -- repeat for every argument. Defaults to sudo systemctl reboot.
   -registry-auth-mode string
     	credential mode for registry heartbeats: "token" (secret registry-registration-token, -registry-token-file, or $GRAIN_REGISTRY_TOKEN) or "oidc" (ID token for -registry-oidc-audience) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
+  -registry-connect
+    	supervise an outbound wss://<registry-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the registry assertion verifier gate ($GRAIN_REGISTRY_CONNECT; requires -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url)
   -registry-display-name string
     	human-readable display name advertised in the registry directory (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
   -registry-entry string

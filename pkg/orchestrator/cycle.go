@@ -2405,7 +2405,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	defer stopDaemonWatch()
 	stopCancelling := deps.Config.TaskCancellers.register(d.TaskID, cancelRun)
 	defer stopCancelling()
-	checkRunFinished(ctx, deps.Store, d.RunID, cancelRun)
+	checkRunCancelledElsewhere(ctx, deps.Store, d.TaskID, d.RunID, cancelRun)
 
 	ranAgent := false
 	defer func() {

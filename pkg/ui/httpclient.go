@@ -46,6 +46,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/registry/api"
 )
 
 // HTTPClient is Client's method surface (bwsalmon/agents#363) spoken over
@@ -1931,6 +1932,16 @@ func (c *HTTPClient) TriggerRegistryHeartbeat(ctx context.Context) (model.Regist
 		return model.RegistrySnapshot{}, err
 	}
 	return snap, nil
+}
+
+// GetRegistryInstanceStatus fetches the wire api.InstanceStatusResponse from
+// GET /api/registry/status.
+func (c *HTTPClient) GetRegistryInstanceStatus(ctx context.Context) (api.InstanceStatusResponse, error) {
+	var status api.InstanceStatusResponse
+	if err := c.do(ctx, http.MethodGet, "/api/registry/status", nil, &status); err != nil {
+		return api.InstanceStatusResponse{}, err
+	}
+	return status, nil
 }
 
 // SetSecret writes one secret key in the daemon's secrets store --

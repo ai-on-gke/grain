@@ -235,8 +235,7 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 	stopCrediting := cfg.RunWaitCredits.register(task.ID, clock)
 	stopCancelling := cfg.TaskCancellers.register(task.ID, cancelRun)
 	defer stopCancelling()
-	checkTaskClosed(ctx, store, task.ID, cancelRun)
-	checkRunFinished(ctx, store, runID, cancelRun)
+	checkTaskClosed(ctx, store, task.ID, runID, cancelRun)
 	watcherDone := make(chan struct{})
 	go func() {
 		defer close(watcherDone)
