@@ -936,20 +936,10 @@ func NewEmbeddedBootstrapServer(now func() time.Time) (*Server, error) {
 func NewConfigMap(cfg ConfigMapConfig) (*Server, error) {
 	var dirSkills map[string]*skill
 	if cfg.Dir != "" {
-		if cfg.Dir == BootstrapMapName {
-			if info, err := os.Stat(cfg.Dir); err == nil && info.IsDir() {
-				var lerr error
-				dirSkills, lerr = loadSkills(cfg.Dir)
-				if lerr != nil {
-					return nil, fmt.Errorf("config-map: %w", lerr)
-				}
-			}
-		} else {
-			var err error
-			dirSkills, err = loadSkills(cfg.Dir)
-			if err != nil {
-				return nil, fmt.Errorf("config-map: %w", err)
-			}
+		var err error
+		dirSkills, err = loadSkills(cfg.Dir)
+		if err != nil {
+			return nil, fmt.Errorf("config-map: %w", err)
 		}
 	}
 	initial, err := newConfigMapMethods(nil, dirSkills, cfg.Now)

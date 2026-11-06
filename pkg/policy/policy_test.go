@@ -258,6 +258,7 @@ func TestCheckCapabilityPatterns(t *testing.T) {
 		{`deny: [` + strconvQuote(model.ConfigMapRef+`={"secrets":["prod"]}`) + `]`, model.ConfigMapCapabilityServerID + `={"secrets":["prod"]}`, "forbids capability"},
 		{`deny: [` + strconvQuote(model.ConfigMapRef+`={"secrets":["prod"]}`) + `]`, model.SkillCapabilityServerID + `#config-map={"secrets":["prod"]}`, "forbids capability"},
 		{`deny: [` + strconvQuote(model.ConfigMapRef+`={"secrets":["prod"]}`) + `]`, model.ConfigMapCapabilityServerID + `={"config_maps":["bootstrap"]}`, ""},
+		{`deny: [bootstrap-playbooks]`, model.SkillCapabilityServerID + `#config-map={"secrets":["prod"]}`, "forbids capability"},
 		{`deny: [bootstrap-playbooks]`, model.ConfigMapCapabilityServerID + `={"config_maps":["bootstrap"]}`, "forbids capability"},
 		{`deny: [bootstrap-playbooks]`, model.SkillCapabilityServerID + `#skill`, "forbids capability"},
 		{`deny: [bootstrap-playbooks]`, model.ConfigMapCapabilityServerID + `#skill`, "forbids capability"},
@@ -265,6 +266,7 @@ func TestCheckCapabilityPatterns(t *testing.T) {
 		{`deny: [bootstrap-playbooks]`, model.SkillCapabilityServerID + `#skill={"skills":["ops"]}`, ""},
 		{`deny: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.SkillCapabilityServerID + `#skill`, "forbids capability"},
 		{`deny: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.SkillCapabilityServerID + `#skill={"skills":["ops"]}`, ""},
+		{`deny: [` + strconvQuote(model.SkillCapabilityServerID+"#*") + `]`, model.ConfigMapRef + `={"secrets":["prod"]}`, "forbids capability"},
 	}
 	for _, c := range cases {
 		p := mustParse(t, "repos: [acme/widgets, other/widgets, ai-on-gke/grain]\ncapabilities:\n  "+c.rules+"\n")

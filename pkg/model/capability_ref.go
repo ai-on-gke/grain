@@ -667,8 +667,16 @@ func (r CapabilityPolicyRule) coversAnyOfKind(kind string) bool {
 }
 
 func (r CapabilityPolicyRule) names(ref string) bool {
-	ok, _ := path.Match(r.Capability, ref)
-	return ok || r.Capability == ref
+	if ok, _ := path.Match(r.Capability, ref); ok || r.Capability == ref {
+		return true
+	}
+	if r.Deny && !strings.Contains(ref, "#") {
+		if rID, _, hasHash := strings.Cut(r.Capability, "#"); hasHash {
+			ok, _ := path.Match(rID, ref)
+			return ok || rID == ref
+		}
+	}
+	return false
 }
 
 func (r CapabilityPolicyRule) namesAny(refs []string) bool {
@@ -696,7 +704,23 @@ func equivalentCapabilityRefs(ref string, serverMaps []map[string]protocol.Serve
 		}
 		refs = append(refs, cand)
 	}
+	addImplicitSkillConfigMapAlias := func() {
+		switch id {
+		case ConfigMapCapabilityServerID:
+			add(SkillCapabilityServerID)
+		case SkillCapabilityServerID:
+			add(ConfigMapCapabilityServerID)
+		}
+	}
+	if len(serverMaps) == 0 {
+		addImplicitSkillConfigMapAlias()
+	}
 	for _, servers := range serverMaps {
+		_, hasSkill := servers[SkillCapabilityServerID]
+		_, hasCM := servers[ConfigMapCapabilityServerID]
+		if !(hasSkill && hasCM) && (hasCM || hasSkill || len(servers) == 0) {
+			addImplicitSkillConfigMapAlias()
+		}
 		for entryID, cfg := range servers {
 			if entryID == id {
 				for _, a := range cfg.Aliases {

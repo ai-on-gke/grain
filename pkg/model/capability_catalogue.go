@@ -642,6 +642,25 @@ func (c *CapabilityCatalogue) server(id string) (CatalogueServer, bool) {
 			return s, true
 		}
 	}
+	// servers.Registry implicitly aliases https://grain.dev/capabilities/skill
+	// to https://grain.dev/capabilities/config-map when skill is not configured
+	// as an independent server, even when ServerConfig.Aliases is empty. Bind
+	// both IDs in the catalogue so restrictions on either apply to grants
+	// spelled under the other.
+	switch id {
+	case SkillCapabilityServerID:
+		for _, s := range c.Servers {
+			if s.ID == ConfigMapCapabilityServerID {
+				return s, true
+			}
+		}
+	case ConfigMapCapabilityServerID:
+		for _, s := range c.Servers {
+			if s.ID == SkillCapabilityServerID {
+				return s, true
+			}
+		}
+	}
 	return CatalogueServer{}, false
 }
 

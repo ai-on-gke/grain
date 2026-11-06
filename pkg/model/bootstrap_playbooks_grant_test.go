@@ -15,8 +15,11 @@
 package model
 
 import (
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 // IsEmbeddedBootstrapOnlyGrant is what lets a grant through on a sandbox
@@ -151,5 +154,62 @@ func TestBootstrapSkillSetUnnamedAndCatalogueBinding(t *testing.T) {
 		if _, err := cat.ValidateGrants(GrantContext{Kind: CatalogueKindCI, Grants: []string{allowed}}); err != nil {
 			t.Errorf("disabled in_process.bootstrap-playbooks refused unrelated %q: %v", allowed, err)
 		}
+	}
+}
+
+func TestSkillAndConfigMapImplicitServerAliasBindsPolicyAndCatalogue(t *testing.T) {
+	skillSecret := SkillCapabilityServerID + `#config-map={"secrets":["prod"]}`
+	cmSecret := ConfigMapRef + `={"secrets":["prod"]}`
+	cmShorthand := ConfigMapCapabilityServerID + `={"secrets":["prod"]}`
+	skillShorthand := SkillCapabilityServerID + `={"secrets":["prod"]}`
+
+	// CapabilityCatalogue restrictions on config-map bind grants spelled via
+	// the implicit skill server ID alias even when Aliases is unset.
+	disabled := false
+	disabledCat := &CapabilityCatalogue{
+		Servers: []CatalogueServer{{ID: ConfigMapCapabilityServerID, Enabled: &disabled}},
+	}
+	for _, g := range []string{skillSecret, cmShorthand, skillShorthand} {
+		if _, r := disabledCat.ValidateGrants(GrantContext{Kind: CatalogueKindTask, Grants: []string{g}}); r == nil {
+			t.Errorf("disabled config-map catalogue admitted %s", g)
+		}
+	}
+	personCat := &CapabilityCatalogue{
+		Servers: []CatalogueServer{{
+			ID:           ConfigMapCapabilityServerID,
+			Restrictions: &CapabilityRestrictions{RequiresPerson: true},
+		}},
+	}
+	verdict, r := personCat.ValidateGrants(GrantContext{Kind: CatalogueKindTask, Grants: []string{skillSecret}})
+	if r != nil || !slices.Contains(verdict.RequiresPerson, skillSecret) {
+		t.Errorf("RequiresPerson config-map catalogue on %s = (%+v, %v), want RequiresPerson", skillSecret, verdict, r)
+	}
+
+	// CapabilityPolicy.Permits binds unnormalized skill#config-map and
+	// methodless shorthand grants to config-map#config-map rules (and vice
+	// versa) when EnsureBuiltins creates config-map with empty Aliases, unless
+	// skill is configured as a separate server.
+	builtins := map[string]protocol.ServerConfig{
+		ConfigMapCapabilityServerID: {Command: "grain", Args: []string{"capability", "config-map"}, Builtin: "config-map"},
+	}
+	denyCM := CapabilityPolicy{Rules: []CapabilityPolicyRule{{Capability: ConfigMapRef, Deny: true}}}
+	for _, g := range []string{skillSecret, cmShorthand, skillShorthand} {
+		if err := denyCM.Permits(g, CapabilitySubject{Kind: CapabilityRunTask}, builtins); err == nil {
+			t.Errorf("deny %s permitted %s under implicit alias", ConfigMapRef, g)
+		}
+		if err := denyCM.Permits(g, CapabilitySubject{Kind: CapabilityRunTask}); err == nil {
+			t.Errorf("deny %s permitted %s with no server map", ConfigMapRef, g)
+		}
+	}
+	denySkill := CapabilityPolicy{Rules: []CapabilityPolicyRule{{Capability: SkillCapabilityServerID + "#*", Deny: true}}}
+	if err := denySkill.Permits(cmSecret, CapabilitySubject{Kind: CapabilityRunTask}, builtins); err == nil {
+		t.Errorf("deny skill#* permitted %s under implicit alias", cmSecret)
+	}
+	independent := map[string]protocol.ServerConfig{
+		ConfigMapCapabilityServerID: {Command: "grain", Args: []string{"capability", "config-map"}, Builtin: "config-map"},
+		SkillCapabilityServerID:     {Command: "custom-skill", Args: []string{"serve"}},
+	}
+	if err := denyCM.Permits(skillSecret, CapabilitySubject{Kind: CapabilityRunTask}, independent); err != nil {
+		t.Errorf("independent skill server was denied by config-map rule: %v", err)
 	}
 }
