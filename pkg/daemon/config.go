@@ -896,8 +896,11 @@ type Config struct {
 	// grain registry (model.Config.Registry, design/design/registry.design.md).
 	// RegistryTokenFile is the optional flags-only path to a registration
 	// credential file when secret registry-registration-token is not set.
+	// RegistryConnect (-registry-connect / $GRAIN_REGISTRY_CONNECT) enables
+	// the outbound tunnel supervisor dialing wss://<registry-host>/api/entries/<name>/connect.
 	Registry          model.RegistryConfig
 	RegistryTokenFile string
+	RegistryConnect   bool
 }
 
 // limits is the sandbox pool this deployment is rationing right now --
