@@ -544,7 +544,15 @@ import "strconv"
 // 114 adds `external_ref` to `task` (model.Task.ExternalRef) and the
 // `task_external_ref`, `github_ci_job_repo_ref` and `ci_run_repo_ref`
 // indexes that back external-reference filtering and GET /api/refs/{ref}/summary.
-const SchemaVersion = 114
+//
+// 115 changes no table: it rewrites stored `self-debug` grants -- the grant
+// tables, default capabilities, standing sessions,
+// `repo_config`.`ci_capabilities` and the capability policy's catalogue
+// defaults -- to `api:self-debug` and
+// `https://grain.dev/capabilities/grain#source={}`: the in-process
+// `self-debug` provider is retired for the api preset and the grain
+// server's `#source` method.
+const SchemaVersion = 115
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
@@ -3425,6 +3433,19 @@ var Tables = []string{
   ` + "`commit`" + `      TEXT NOT NULL DEFAULT '',
   ` + "`updated_at`" + `  DATETIME NOT NULL,
   PRIMARY KEY (` + "`schedule_id`" + `)
+)`,
+
+	// How far the daemon's GitHub webhook consumer has acknowledged webhook
+	// deliveries (model.GitHubWebhookCursor) when running on PostgreSQL, so
+	// replacing a VM's scratch disk preserves the replay cursor while
+	// github-webhooks.jsonl remains ephemeral on local disk. Grain's own
+	// runtime record, like git_ref_cursor. Needs no SchemaVersion bump:
+	// Init's CREATE TABLE IF NOT EXISTS creates it on every database.
+	`CREATE TABLE IF NOT EXISTS ` + "`github_webhook_cursor`" + ` (
+  ` + "`id`" + `             TEXT     NOT NULL,
+  ` + "`last_acked_seq`" + ` INTEGER  NOT NULL DEFAULT 0,
+  ` + "`updated_at`" + `     DATETIME NOT NULL,
+  PRIMARY KEY (` + "`id`" + `)
 )`,
 
 	// What grain has learned about working here (model.Memory,

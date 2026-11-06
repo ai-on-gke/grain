@@ -104,7 +104,7 @@ func TestHostdResolutionMatrix(t *testing.T) {
 		{"", map[string]want{"absent": {"container", ViaDaemon, ""}, "not offering": {"container", ViaDaemon, ""}, "offering": {"container", ViaDaemon, ""}}},
 		{"container", map[string]want{"absent": {"container", ViaDaemon, ""}, "not offering": {"container", ViaDaemon, ""}, "offering": {"container", ViaDaemon, ""}}},
 		{"host", map[string]want{
-			"absent":       {"host", ViaHostd, "grain hostd is not reachable"},
+			"absent":       {"host", ViaHostd, "the host agent is not reachable"},
 			"not offering": {"host", ViaHostd, `offers no cli entry "agy"`},
 			"offering":     {"host", ViaHostd, ""},
 		}},
@@ -133,7 +133,7 @@ func TestHostdResolutionMatrix(t *testing.T) {
 					if r.HostPath != wantPath {
 						t.Fatalf("hostPath = %q from the %s hostd, want %q", r.HostPath, name, wantPath)
 					}
-					if name == "offering" && !strings.Contains(r.Summary(), "agy: host ("+sh+", through grain hostd") {
+					if name == "offering" && !strings.Contains(r.Summary(), "agy: host ("+sh+", through the host agent") {
 						t.Fatalf("summary = %q, want it to name %s", r.Summary(), sh)
 					}
 				}
@@ -446,7 +446,7 @@ func TestDetachedResolution(t *testing.T) {
 				if r.Location != model.CLIRunDetached || r.Via != ViaHostd || r.Entry != "claude-detached" || r.HostPath != sh || r.Warning != "" {
 					t.Fatalf("resolved %+v, want detached through hostd's claude-detached at %s", r, sh)
 				}
-				if !strings.Contains(r.Summary(), `claude: detached (`+sh+`, through grain hostd, entry "claude-detached")`) {
+				if !strings.Contains(r.Summary(), `claude: detached (`+sh+`, through the host agent, entry "claude-detached")`) {
 					t.Errorf("summary = %q", r.Summary())
 				}
 				h, err := cfg.cliHostdHost(r)
@@ -455,7 +455,7 @@ func TestDetachedResolution(t *testing.T) {
 				}
 				return
 			}
-			want := map[string]string{"absent": "grain hostd is not reachable", "not offering": `offers no cli entry "claude-detached"`}[name]
+			want := map[string]string{"absent": "the host agent is not reachable", "not offering": `offers no cli entry "claude-detached"`}[name]
 			if r.Location != model.CLIRunContainer || r.Via != ViaDaemon || !strings.Contains(r.Warning, want) {
 				t.Fatalf("resolved %+v, want the container with a warning containing %q", r, want)
 			}

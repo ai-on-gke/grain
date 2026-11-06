@@ -646,14 +646,6 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	// One States call already answers "is X closed?" for every task in
-	// the store, so a list of many tasks costs nothing extra to also
-	// carry each one's blocked signal -- unlike Task below, which has no
-	// reason to fetch every task's state just to render one.
-	closed := make(map[string]bool, len(states))
-	for id, st := range states {
-		closed[id] = st == model.StateClosed
-	}
 	// Same trade for the merge queue's own "gave up on this one" signal:
 	// one query over every task_observation row that has it set, rather
 	// than a per-task read.
@@ -762,7 +754,7 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 		} else if at, ok := oomRetries[t.ID]; ok && states[t.ID] == model.StateQueued {
 			doing = oomRetryActivity(at)
 		}
-		task := taskFrom(t, states[t.ID], closed, blockedAt, repairing[t.ID], mergeQueueStates[t.ID], doing,
+		task := taskFrom(t, states[t.ID], states, blockedAt, repairing[t.ID], mergeQueueStates[t.ID], doing,
 			reviewNames[t.ReviewTemplateID], spans[t.ID], c.stallNote(states[t.ID], stateTimes[t.ID], now))
 		if at, ok := runNow[t.ID]; ok {
 			task.RunNowAt = &at
@@ -900,7 +892,7 @@ func (c *Client) templateNames(ctx context.Context) (map[string]string, error) {
 // reviewTemplateName is templateNames for a single task: the Name of the
 // template it names as its review, empty when it names none or when that
 // template is gone. One read rather than the whole list, matching
-// closedTargets' own "a few queries for one task" trade.
+// targetStates' own "a few queries for one task" trade.
 func (c *Client) reviewTemplateName(ctx context.Context, t model.Task) (string, error) {
 	if t.ReviewTemplateID == "" {
 		return "", nil
@@ -1011,7 +1003,7 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 	if err != nil {
 		return Task{}, err
 	}
-	closed, err := c.closedTargets(ctx, t.Links)
+	targetStates, err := c.targetStates(ctx, t.Links)
 	if err != nil {
 		return Task{}, err
 	}
@@ -1065,7 +1057,7 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 	if goal != nil {
 		t.GoalKind = goal.Kind
 	}
-	task := c.withReasons(taskFrom(*t, state, closed, blockedAt, obs.RepairInFlight(), observationMergeQueueState(obs), activity, reviewName, span,
+	task := c.withReasons(taskFrom(*t, state, targetStates, blockedAt, obs.RepairInFlight(), observationMergeQueueState(obs), activity, reviewName, span,
 		c.stallNote(state, model.StateTimesFrom(*t, obs, runs), c.now())), *t, obs, wait)
 	task.Goal = goal
 	if obs != nil {
@@ -1089,26 +1081,26 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 	return task, nil
 }
 
-// closedTargets resolves whether each of a task's own blocking-link
-// targets reads closed -- a handful of extra queries for one task rather
-// than States' whole-store read, matching ListTasks' own "a few queries
-// per task" trade-off (store.go's hydrate).
-func (c *Client) closedTargets(ctx context.Context, links []model.Link) (map[string]bool, error) {
-	closed := map[string]bool{}
+// targetStates resolves each of a task's own blocking-link targets' states
+// -- a handful of extra queries for one task rather than States' whole-store
+// read, matching ListTasks' own "a few queries per task" trade-off
+// (store.go's hydrate).
+func (c *Client) targetStates(ctx context.Context, links []model.Link) (map[string]model.State, error) {
+	states := map[string]model.State{}
 	for _, l := range links {
 		if !l.Kind.Blocks() {
 			continue
 		}
-		if _, ok := closed[l.Target]; ok {
+		if _, ok := states[l.Target]; ok {
 			continue
 		}
 		state, err := c.Store.State(ctx, l.Target)
 		if err != nil {
 			return nil, err
 		}
-		closed[l.Target] = state == model.StateClosed
+		states[l.Target] = state
 	}
-	return closed, nil
+	return states, nil
 }
 
 // GetTask returns one task plus its conversation.
@@ -1124,7 +1116,7 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	if err != nil {
 		return TaskDetail{}, err
 	}
-	closed, err := c.closedTargets(ctx, t.Links)
+	targetStates, err := c.targetStates(ctx, t.Links)
 	if err != nil {
 		return TaskDetail{}, err
 	}
@@ -1209,7 +1201,7 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 		t.GoalKind = goal.Kind
 	}
 	detail := TaskDetail{
-		Task: c.withReasons(taskFrom(*t, state, closed, blockedAt, obs.RepairInFlight(), observationMergeQueueState(obs), activity, reviewName, span,
+		Task: c.withReasons(taskFrom(*t, state, targetStates, blockedAt, obs.RepairInFlight(), observationMergeQueueState(obs), activity, reviewName, span,
 			c.stallNote(state, model.StateTimesFrom(*t, obs, runs), c.now())), *t, obs, wait),
 		Comments:    make([]Comment, 0, len(comments)),
 		Attachments: taskAttachments,
@@ -2685,8 +2677,12 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			needsPersonWhy = why
 		}
 	}
+	limitedRole := false
+	if a := accessRoleFromContext(ctx); a != nil && !a.Full {
+		limitedRole = true
+	}
 	catalogueHold := false
-	if len(catalogueNeedsPerson) > 0 && (proposedBy != nil || c.requestActor(ctx).Actor.Kind != model.PrincipalHuman) {
+	if len(catalogueNeedsPerson) > 0 && (proposedBy != nil || c.requestActor(ctx).Actor.Kind != model.PrincipalHuman || limitedRole) {
 		why := model.CatalogueRequiresPersonNote(catalogueNeedsPerson)
 		if needsPersonWhy == "" {
 			needsPersonWhy = why
@@ -5373,7 +5369,41 @@ func (c *Client) mutate(ctx context.Context, id string, apply func(*model.Task) 
 		return &NotFoundError{ID: id}
 	}
 	c.ensureConsoleSessionSnapshot(ctx, *task)
-	return c.Store.UpdateTask(ctx, id, apply)
+	actor := c.requestActor(ctx).Actor
+	var released []model.HumanReviewReason
+	if err := c.Store.UpdateTask(ctx, id, func(t *model.Task) error {
+		released = nil
+		before := model.HumanReviewReasons(*t)
+		if err := apply(t); err != nil {
+			return err
+		}
+		if len(before) > 0 && !model.HumanReviewHeld(*t) {
+			// An edit that ends a human-review hold -- a Submit, a PATCH
+			// turning auto-merge on -- is a person's decision, and only a
+			// person's (human_review_hold.go): an agent may raise the
+			// hold, never release it.
+			if !mayReleaseHumanReview(actor) {
+				return forbiddenErrorf("%s is held for a person's review (%s), and only a person may release it",
+					id, model.HumanReviewSummary(*t))
+			}
+			released = before
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if len(released) > 0 {
+		if err := c.Store.RecordHumanReviewRelease(ctx, id, actor, "submitted", released); err != nil {
+			return fmt.Errorf("recording the release of %s's human-review hold: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// mayReleaseHumanReview reports whether p may end a human-review hold:
+// anybody but an agent or grain's own automation.
+func mayReleaseHumanReview(p model.Principal) bool {
+	return p.Kind != model.PrincipalAgent && p.Kind != model.PrincipalAutomation
 }
 
 // SetCapability attaches or detaches one capability grant. Detaching one
@@ -5868,6 +5898,9 @@ func (c *Client) submit(ctx context.Context, id string) error {
 // orchestrator to pin before it merges anything into the branch -- and
 // only if the branch is still there (orchestrator.pinHumanSubmit).
 func humanSubmitted(t *model.Task, now time.Time, head string) {
+	// A human-review hold waits for exactly this decision too, and is
+	// recorded as released by whoever made it (Client.mutate).
+	model.DropHumanReviewHold(t)
 	t.Links = slices.DeleteFunc(t.Links, func(l model.Link) bool {
 		switch l.Kind {
 		case model.LinkSecurityHold, model.LinkHumanOnlyHold, model.LinkBrokenRulesHold,

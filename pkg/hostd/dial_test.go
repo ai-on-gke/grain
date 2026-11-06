@@ -54,7 +54,7 @@ func TestDialSaysHostdIsDown(t *testing.T) {
 	dialRetry = 200 * time.Millisecond
 	defer func() { dialRetry = old }()
 	_, err := Client{Socket: filepath.Join(t.TempDir(), "hostd.sock")}.dial(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "grain hostd is not running") || !strings.Contains(err.Error(), "systemctl status grain-hostd") {
+	if err == nil || !strings.Contains(err.Error(), "the host agent is not running") || !strings.Contains(err.Error(), "systemctl status grain-hostd") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -93,7 +93,7 @@ func TestDialForDisplayAnswersAtOnceWithNoHostdConnected(t *testing.T) {
 	if took := time.Since(start); took > 500*time.Millisecond {
 		t.Errorf("dial for display took %s, want it at once", took)
 	}
-	if err == nil || !strings.Contains(err.Error(), ErrRemoteNotConnected.Error()) || !strings.Contains(err.Error(), "grain hostd -server") {
+	if err == nil || !strings.Contains(err.Error(), ErrRemoteNotConnected.Error()) || !strings.Contains(err.Error(), "grain host -server") {
 		t.Fatalf("err = %v", err)
 	}
 

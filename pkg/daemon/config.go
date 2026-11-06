@@ -45,8 +45,16 @@ type Config struct {
 	DbDSN           string
 	SecretsBackend  string
 	SecretsSMPrefix string
-	ObjectStoreURI  string
-	ObjectStore     objectstore.Store
+	// WriterLockWaitTimeout, WriterLockKeepAlive, and WriterLockReacquireWindow
+	// configure the PostgreSQL session-level single-writer advisory lock
+	// acquired at daemon startup when DbDriver is "postgres". Zero values use
+	// pkg/model/postgres's defaults; negative values disable waiting or
+	// background keepalive in tests.
+	WriterLockWaitTimeout     time.Duration
+	WriterLockKeepAlive       time.Duration
+	WriterLockReacquireWindow time.Duration
+	ObjectStoreURI            string
+	ObjectStore               objectstore.Store
 	// transcriptObjects is the live/read-through transcript object store
 	// opened by run() when ObjectStore or ObjectStoreURI is configured.
 	transcriptObjects *TranscriptObjectStore
@@ -211,6 +219,10 @@ type Config struct {
 	// ui.Config the old standalone "ui" subcommand's -as/-default-target-repo
 	// flags did.
 	UiAddr string
+	// UIAddrReady, when non-nil, is called with the bound UI/API listener's
+	// "host:port" address once Run has opened its TCP socket (supporting
+	// ephemeral bindings such as "127.0.0.1:0" in tests without TOCTOU races).
+	UIAddrReady func(addr string)
 	// uiAllowedHosts is -ui-allowed-hosts: the extra Host names
 	// ui.HostGuard lets through on the uiAddr listener.
 	UiAllowedHosts []string
@@ -224,8 +236,19 @@ type Config struct {
 	UiIAPAudience string
 	UiIAPIssuer   string
 	UiIAPKeysURL  string
-	// UiRequireIAP is -ui-require-iap (ui.Config.RequireIAP): the access
-	// code works over unforwarded loopback only.
+	// UiRegistryIssuer, UiRegistryAudience and UiRegistryKeysURL are
+	// -ui-registry-issuer, -ui-registry-audience and -ui-registry-keys-url:
+	// what a signed X-Grain-Registry-Assertion must carry, and where the
+	// registry's ES256 JWKS is published (ui.Config.RegistryIssuer and the rest).
+	UiRegistryIssuer   string
+	UiRegistryAudience string
+	UiRegistryKeysURL  string
+	// UiRequireVerifier is -ui-require-verifier (ui.Config.RequireVerifier):
+	// network callers must sign in through the named IdentityVerifier, and
+	// the access code works over unforwarded loopback only.
+	UiRequireVerifier string
+	// UiRequireIAP is -ui-require-iap (ui.Config.RequireIAP), an alias for
+	// UiRequireVerifier = "iap".
 	UiRequireIAP        bool
 	UiAllowedPrincipals []string
 	UiOpen              bool
@@ -436,6 +459,15 @@ type Config struct {
 	// UpgradeDrainWindow bounds how long a scheduled upgrade waits for active
 	// runs to finish before proceeding with the upgrade anyway.
 	UpgradeDrainWindow time.Duration
+	// DisableSelfUpgrade disables in-VM self-upgrade actions (pkg/upgrade,
+	// automatic/scheduled upgrades, and in-VM SQLite-to-PostgreSQL cutover)
+	// and hides in-VM upgrade controls in the UI in favour of an optional
+	// external management URL (-disable-self-upgrade / $GRAIN_DISABLE_SELF_UPGRADE).
+	DisableSelfUpgrade bool
+	// ManagementURL is an optional http:// or https:// URL where this
+	// deployment's lifecycle and upgrades are managed externally
+	// (-management-url / $GRAIN_MANAGEMENT_URL).
+	ManagementURL string
 
 	// rebootCmd is what the UI's reboot-host button runs; empty means
 	// rebootHost's own `sudo systemctl reboot` default.

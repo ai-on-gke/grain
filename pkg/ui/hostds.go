@@ -27,6 +27,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/hostd"
@@ -66,8 +67,9 @@ type UpdateHostdRequest struct {
 type IssuedHostdToken struct {
 	Hostd model.Hostd `json:"hostd"`
 	Token string      `json:"token"`
-	// Install is what the command that installs the hostd on its machine
-	// passes /api/hostd/install.sh (HostdInstall).
+	// Install is how to install the hostd on its machine: the lines to
+	// run and a note (RegisterHostdInstall), and what the root installer's
+	// command passes /api/hostd/install.sh (HostdInstall). Never the token.
 	Install *HostdInstall `json:"install,omitempty"`
 }
 
@@ -147,10 +149,10 @@ func (c *Client) CreateHostd(ctx context.Context, req CreateHostdRequest) (Issue
 		return IssuedHostdToken{}, validationErrorf("%v", err)
 	}
 	if name == model.LocalHostd {
-		return IssuedHostdToken{}, validationErrorf("%q is the co-located hostd's name; a remote hostd needs another", name)
+		return IssuedHostdToken{}, validationErrorf("%q is the co-located host's name; a remote host needs another", name)
 	}
 	if s, ok := c.Config.HostdRemote.(hostdSharedNamer); ok && s.SharedTokenName() == name {
-		return IssuedHostdToken{}, validationErrorf("%q is the name -hostd-token-name gives the shared token's hostd; a registry hostd needs another", name)
+		return IssuedHostdToken{}, validationErrorf("%q is the name -hostd-token-name gives the shared token's host; a registry host needs another", name)
 	}
 	if _, err := model.NormalizeHostdOwner(req.Owner); err != nil {
 		return IssuedHostdToken{}, validationErrorf("%v", err)
@@ -164,14 +166,14 @@ func (c *Client) CreateHostd(ctx context.Context, req CreateHostdRequest) (Issue
 	if err != nil {
 		return IssuedHostdToken{}, hostdError(err)
 	}
-	c.auditHostd(ctx, h.Name, "registered hostd "+h.Name)
+	c.auditHostd(ctx, h.Name, "registered host "+h.Name)
 	return IssuedHostdToken{Hostd: *h, Token: token}, nil
 }
 
 // RotateHostdToken retires name's tokens and mints a new one.
 func (c *Client) RotateHostdToken(ctx context.Context, name string) (IssuedHostdToken, error) {
 	if name == model.LocalHostd {
-		return IssuedHostdToken{}, validationErrorf("%q is the co-located hostd, and it takes no token", name)
+		return IssuedHostdToken{}, validationErrorf("%q is the co-located host, and it takes no token", name)
 	}
 	token, err := c.Store.RotateHostdToken(ctx, name)
 	if err != nil {
@@ -181,7 +183,7 @@ func (c *Client) RotateHostdToken(ctx context.Context, name string) (IssuedHostd
 	if err != nil {
 		return IssuedHostdToken{}, err
 	}
-	c.auditHostd(ctx, name, "rotated hostd "+name+"'s token")
+	c.auditHostd(ctx, name, "rotated host "+name+"'s token")
 	return IssuedHostdToken{Hostd: *h, Token: token}, nil
 }
 
@@ -189,7 +191,7 @@ func (c *Client) RotateHostdToken(ctx context.Context, name string) (IssuedHostd
 // session at once if it is connected.
 func (c *Client) RevokeHostd(ctx context.Context, name string) (model.Hostd, error) {
 	if name == model.LocalHostd {
-		return model.Hostd{}, validationErrorf("%q is the co-located hostd and cannot be revoked", name)
+		return model.Hostd{}, validationErrorf("%q is the co-located host and cannot be revoked", name)
 	}
 	h, err := c.Store.RevokeHostd(ctx, name)
 	if err != nil {
@@ -201,7 +203,7 @@ func (c *Client) RevokeHostd(ctx context.Context, name string) (model.Hostd, err
 	if _, err := c.Store.ClearNotification(ctx, "hostd-disconnected:"+name, "automation:hostd"); err != nil {
 		log.Printf("grain ui: clearing hostd-disconnected:%s after revoke: %v", name, err)
 	}
-	c.auditHostd(ctx, name, "revoked hostd "+name+" and its tokens")
+	c.auditHostd(ctx, name, "revoked host "+name+" and its tokens")
 	return *h, nil
 }
 
@@ -221,7 +223,7 @@ func (c *Client) UpdateHostd(ctx context.Context, name string, req UpdateHostdRe
 	if err != nil {
 		return model.Hostd{}, hostdError(err)
 	}
-	c.auditHostd(ctx, name, "set hostd "+name+"'s owner or labels")
+	c.auditHostd(ctx, name, "set host "+name+"'s owner or labels")
 	if req.Owner != nil {
 		c.dropSessionNotOwnedBy(name, h.Owner)
 	}
@@ -270,7 +272,7 @@ func (s *Server) handleCreateHostd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("grain hostd: registered hostd %s (owner %q)", issued.Hostd.Name, issued.Hostd.Owner)
-	issued.Install = s.hostdInstallInfo()
+	issued.Install = s.hostdInstallFor(r, issued.Hostd, issued.Token)
 	writeJSON(w, http.StatusCreated, issued)
 }
 
@@ -281,8 +283,40 @@ func (s *Server) handleRotateHostdToken(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	log.Printf("grain hostd: rotated hostd %s's token", issued.Hostd.Name)
-	issued.Install = s.hostdInstallInfo()
+	issued.Install = s.hostdInstallFor(r, issued.Hostd, issued.Token)
 	writeJSON(w, http.StatusOK, issued)
+}
+
+// HostdInstallTarget is the registry row whose install instructions GET
+// /api/hostds/{name}/install shows again: a remote hostd that is not
+// revoked. The co-located hostd is not installed anywhere else.
+func (c *Client) HostdInstallTarget(ctx context.Context, name string) (model.Hostd, error) {
+	if name == model.LocalHostd {
+		return model.Hostd{}, validationErrorf("%q is the co-located host, and it is not installed elsewhere", name)
+	}
+	h, err := c.Store.GetHostd(ctx, name)
+	if err != nil {
+		return model.Hostd{}, err
+	}
+	if h == nil {
+		return model.Hostd{}, &NotFoundError{message: "no host " + strconv.Quote(name)}
+	}
+	if h.Revoked() {
+		return model.Hostd{}, validationErrorf("host %q is revoked", name)
+	}
+	return *h, nil
+}
+
+// handleHostdInstall is GET /api/hostds/{name}/install: the instructions
+// for installing a hostd already registered, shown again without rotating
+// its token (which they never carry).
+func (s *Server) handleHostdInstall(w http.ResponseWriter, r *http.Request) {
+	h, err := s.tasks.HostdInstallTarget(r.Context(), r.PathValue("name"))
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.hostdInstallFor(r, h, ""))
 }
 
 func (s *Server) handleRevokeHostd(w http.ResponseWriter, r *http.Request) {
@@ -332,6 +366,14 @@ func (c *HTTPClient) ListHostds(ctx context.Context) ([]HostdView, error) {
 func (c *HTTPClient) CreateHostd(ctx context.Context, req CreateHostdRequest) (IssuedHostdToken, error) {
 	var out IssuedHostdToken
 	err := c.do(ctx, http.MethodPost, "/api/hostds", req, &out)
+	return out, err
+}
+
+// HostdInstall is GET /api/hostds/{name}/install: how to install a
+// registered hostd on its machine, without its token.
+func (c *HTTPClient) HostdInstall(ctx context.Context, name string) (HostdInstall, error) {
+	var out HostdInstall
+	err := c.do(ctx, http.MethodGet, "/api/hostds/"+url.PathEscape(name)+"/install", nil, &out)
 	return out, err
 }
 

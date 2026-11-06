@@ -67,6 +67,71 @@ export function installCommand(origin, name, install) {
   return cmd;
 }
 
+// installLines is what installs hostd name on its machine, one shell line
+// each: the lines the daemon rendered (install.lines, pkg/ui's
+// RegisterHostdInstall, which a build may replace), or -- from an older
+// daemon that sends none -- the root installer's line, assembled here.
+// Neither ever carries the token.
+export function installLines(origin, name, install) {
+  if (Array.isArray(install?.lines) && install.lines.length > 0) {
+    return install.lines;
+  }
+  return [installCommand(origin, name, install)];
+}
+
+// InstallInstructions shows how to install hostd name on its machine:
+// the lines as one copyable block, and the daemon's note beside them.
+function InstallInstructions({ name, install, intro }) {
+  const lines = installLines(window.location.origin, name, install);
+  const text = lines.join("\n");
+  const note = install?.note;
+  return (
+    <Box sx={{ mt: 1 }} data-testid="hostd-install-command">
+      {intro ??
+        (note
+          ? "To install it on another machine, run this there:"
+          : "To install it on another machine, run this there and paste the token when it asks:")}
+      <Stack
+        direction="row"
+        alignItems="flex-start"
+        spacing={0.5}
+        sx={{ mt: 0.5 }}
+      >
+        <Box
+          component="pre"
+          data-testid="hostd-install-lines"
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            m: 0,
+            fontFamily: "monospace",
+            fontSize: "0.85em",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-all",
+          }}
+        >
+          {text}
+        </Box>
+        <CopyButton
+          text={text}
+          label={
+            lines.length > 1 ? "Copy install commands" : "Copy install command"
+          }
+        />
+      </Stack>
+      {note ? (
+        <Typography
+          variant="body2"
+          sx={{ mt: 0.5, wordBreak: "normal" }}
+          data-testid="hostd-install-note"
+        >
+          {note}
+        </Typography>
+      ) : null}
+    </Box>
+  );
+}
+
 // connectionText says whether a hostd is connected, as the status
 // column shows it.
 export function connectionText(h) {
@@ -90,6 +155,7 @@ export default function HostdsSection({ showError }) {
   const [owner, setOwner] = useState("");
   const [labels, setLabels] = useState("");
   const [issued, setIssued] = useState(null);
+  const [shown, setShown] = useState(null);
   const [editing, setEditing] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -127,24 +193,39 @@ export default function HostdsSection({ showError }) {
         }),
       });
       setIssued(out);
+      setShown(null);
       setName("");
       setOwner("");
       setLabels("");
     });
   const rotate = (h) =>
     act(async () => {
+      setShown(null);
       setIssued(
         await api(`/api/hostds/${encodeURIComponent(h.name)}/rotate`, {
           method: "POST",
         }),
       );
     });
+  // showInstall shows a registered hostd's install instructions again,
+  // without rotating its token (GET /api/hostds/{name}/install).
+  const showInstall = async (h) => {
+    try {
+      const install = await api(
+        `/api/hostds/${encodeURIComponent(h.name)}/install`,
+      );
+      setShown({ name: h.name, install });
+    } catch (err) {
+      showError?.(err);
+    }
+  };
   const revoke = (h) =>
     act(async () => {
       await api(`/api/hostds/${encodeURIComponent(h.name)}/revoke`, {
         method: "POST",
       });
       if (issued?.hostd?.name === h.name) setIssued(null);
+      if (shown?.name === h.name) setShown(null);
     });
   const save = () =>
     act(async () => {
@@ -160,18 +241,18 @@ export default function HostdsSection({ showError }) {
 
   return (
     <>
-      <SettingsCard title="Hostds" anchor="hostds">
+      <SettingsCard title="Hosts" anchor="hostds">
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          The grain hostds this daemon runs host work through. local is the one
-          on this machine; any other dials in with{" "}
+          The hosts this daemon runs host work through. local is the one on this
+          machine; any other dials in with{" "}
           <code>
-            grain hostd -server &lt;this daemon&apos;s URL&gt; -token-file
+            grain host -server &lt;this daemon&apos;s URL&gt; -token-file
             &lt;file&gt;
           </code>{" "}
-          and is known by the token it presents. A hostd that dials in through
+          and is known by the token it presents. A host that dials in through
           IAP is also admitted only as its owner: set the owner to the email or
           service account it connects as. Adding one shows the command that
-          installs it on its machine.
+          installs it on its machine; Install shows it again.
         </Typography>
         {issued ? (
           <Alert
@@ -180,35 +261,33 @@ export default function HostdsSection({ showError }) {
             sx={{ mb: 2, wordBreak: "break-all" }}
             data-testid="hostd-issued-token"
           >
-            Token for hostd <strong>{issued.hostd.name}</strong>, shown only
-            this once: <code>{issued.token}</code>
+            Token for host <strong>{issued.hostd.name}</strong>, shown only this
+            once: <code>{issued.token}</code>
             <CopyButton text={issued.token} label="Copy token" />
-            <Box sx={{ mt: 1 }} data-testid="hostd-install-command">
-              To install it on another machine, run this there and paste the
-              token when it asks:
-              <Stack
-                direction="row"
-                alignItems="flex-start"
-                spacing={0.5}
-                sx={{ mt: 0.5 }}
-              >
-                <Box component="code" sx={{ flex: 1, minWidth: 0 }}>
-                  {installCommand(
-                    window.location.origin,
-                    issued.hostd.name,
-                    issued.install,
-                  )}
-                </Box>
-                <CopyButton
-                  text={installCommand(
-                    window.location.origin,
-                    issued.hostd.name,
-                    issued.install,
-                  )}
-                  label="Copy install command"
-                />
-              </Stack>
-            </Box>
+            <InstallInstructions
+              name={issued.hostd.name}
+              install={issued.install}
+            />
+          </Alert>
+        ) : null}
+        {shown ? (
+          <Alert
+            severity="info"
+            onClose={() => setShown(null)}
+            sx={{ mb: 2, wordBreak: "break-all" }}
+            data-testid="hostd-install-again"
+          >
+            Installing host <strong>{shown.name}</strong>. Its token was shown
+            when it was added or last rotated; rotate it for a new one.
+            <InstallInstructions
+              name={shown.name}
+              install={shown.install}
+              intro={
+                shown.install?.note
+                  ? "Run this on its machine:"
+                  : "Run this on its machine and paste the token when it asks:"
+              }
+            />
           </Alert>
         ) : null}
         <Box sx={{ overflowX: "auto" }}>
@@ -328,6 +407,12 @@ export default function HostdsSection({ showError }) {
                             <>
                               <Button
                                 size="small"
+                                onClick={() => showInstall(h)}
+                              >
+                                Install
+                              </Button>
+                              <Button
+                                size="small"
                                 disabled={busy}
                                 onClick={() => rotate(h)}
                               >
@@ -353,7 +438,7 @@ export default function HostdsSection({ showError }) {
           </Table>
         </Box>
       </SettingsCard>
-      <SettingsCard title="Add a hostd" anchor="add-hostd">
+      <SettingsCard title="Add a host" anchor="add-hostd">
         <Stack
           direction={{ xs: "column", sm: "row" }}
           spacing={1}
@@ -387,7 +472,7 @@ export default function HostdsSection({ showError }) {
             onClick={create}
             sx={{ alignSelf: { sm: "flex-start" }, mt: { sm: 0.5 } }}
           >
-            Add hostd
+            Add host
           </Button>
         </Stack>
       </SettingsCard>

@@ -1,22 +1,26 @@
 # Remote executors were removed
 
 On 2026-11-01 the operator decided to remove remote executors from grain
-outright, with no migration into hostd (task 2324). No deployment had
-executors or executor tokens worth keeping. `grain hostd` is now grain's
+outright, with no migration into the host agent (task 2324). No deployment had
+executors or executor tokens worth keeping. `grain host` is now grain's
 only host agent: it listens on `/run/grain-hostd/hostd.sock` on the
-daemon's own machine, and a hostd on another machine dials in to
-`/api/hostd/connect` with a token of its own from the hostd registry
-(Settings → Hostds; `grain hostd -server <url> -token-file`), or, for one
+daemon's own machine, and a host on another machine dials in to
+`/api/hostd/connect` with a token of its own from the host registry
+(Settings → Hosts; `grain host -server <url> -token-file`), or, for one
 more release, with the shared token the daemon was started with
 (`grain daemon -hostd-token-file`). `GET /api/hostd/install.sh`, which
-Settings → Hostds offers beside a new token, installs such a hostd as
-`grain-hostd.service`, where the executor install scripts used to.
+Settings → Hosts offers beside a new token, installs such a host as
+`grain-hostd.service`, where the executor install scripts used to. The
+daemon renders those instructions itself (`install.lines` and
+`install.note` on create and rotate, `GET /api/hostds/{name}/install`,
+`grain host install`), and a build that installs hosts another way
+replaces them with `ui.RegisterHostdInstall`; they never carry the token.
 
 The removal took out:
 
 - `grain executor` / `grain model-server` / `grain modelexec`
   (`pkg/cli/executor.go`) and the protocol behind it (`pkg/modelexec`).
-  The IAP token provider `grain hostd -server -iap-audience` uses moved
+  The IAP token provider `grain host -server -iap-audience` uses moved
   to `pkg/hostd/iap_auth.go`.
 - The install scripts (`scripts/run-remote-executor.sh`,
   `scripts/run-model-server.sh` and their symlinks,
@@ -33,7 +37,7 @@ The removal took out:
   anyway: the daemon ignores an unknown flag and reports it on its health
   page.
 - Settings → Executors. `/settings/executors` now opens Models, where
-  "Where each agent CLI runs" sets up grain hostd. System → Sandboxes'
+  "Where each agent CLI runs" sets up the host agent. System → Sandboxes'
   list of connected model servers is gone too.
 - The `executor_token` and `executor_token_sequence` tables, which schema
   87 drops. A state-repository export that still carries them imports;
@@ -47,27 +51,27 @@ The removal took out:
   label now say that nothing runs, rather than "remote execution only";
   see [sandbox-backend-none.md](sandbox-backend-none.md).
 - The `grain model-server` unit `scripts/migrate-local-to-gke.sh`
-  installed beside hostd. `--rollback` still removes a unit an earlier
+  installed beside the host agent. `--rollback` still removes a unit an earlier
   run left.
 
-## What a remote hostd does and does not do yet
+## What a remote host does and does not do yet
 
 Before deleting anything, the removal checked each thing an executor did
 against a remote hostd:
 
-| Executor feature | Remote hostd today |
+| Executor feature | Remote host today |
 | --- | --- |
-| Run an agent CLI (agy, claude, codex) on another machine | Yes. Host CLIs go through the hostd session (`remoteHostExecutor`, `pkg/daemon/hostexec.go`) |
+| Run an agent CLI (agy, claude, codex) on another machine | Yes. Host CLIs go through the host session (`remoteHostExecutor`, `pkg/daemon/hostexec.go`) |
 | Host-pinned capability servers on that machine | Yes. `run: host` capability servers attach over the session |
 | Stage the run's files (MCP config, agy's HOME and session store, CODEX_HOME) on the remote machine | **No.** `agent.HostdHost` stages on the daemon's machine |
-| Serve the run's `grain mcpserver` back from the daemon over the connection (an MCP tunnel, admitted per run) | **No.** Hostd runs reach the run's MCP on the daemon's loopback |
+| Serve the run's `grain mcpserver` back from the daemon over the connection (an MCP tunnel, admitted per run) | **No.** Host runs reach the run's MCP on the daemon's loopback |
 | Carry the git proxy, and grain's own capability proxies, to the remote CLI | **No.** Both are loopback listeners on the daemon's machine |
 | Use the remote host's own codex login | **No** |
-| Several named remote hosts, each with its own token, and connections, concurrency and usage-limit pauses kept per host (`executor-<id>` connections) | **No.** One remote hostd at a time, with one shared token. This is the hostd registry, [Task #2164](/tasks/2164) |
+| Several named remote hosts, each with its own token, and connections, concurrency and usage-limit pauses kept per host (`executor-<id>` connections) | **No.** One remote host at a time, with one shared token. This is the host registry, [Task #2164](/tasks/2164) |
 
-So a remote hostd works today where the CLI can reach the daemon's
-filesystem and loopback, for example a hostd on the same machine or
+So a remote host works today where the CLI can reach the daemon's
+filesystem and loopback, for example a host on the same machine or
 sharing its network namespace. It does not yet work for a CLI on a truly
 separate machine. The follow-up filed from task 2324 adds that over the
-hostd session. Until it lands, a deployment that needs agent CLIs on
+host session. Until it lands, a deployment that needs agent CLIs on
 another machine has no supported path.

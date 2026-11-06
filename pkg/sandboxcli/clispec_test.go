@@ -46,7 +46,7 @@ var (
 
 // sandboxSpecTables is every command path and the flags it takes.
 func sandboxSpecTables() map[string][]string {
-	tables := map[string][]string{"grain help": nil, "grain cap": nil}
+	tables := map[string][]string{"grain help": nil, "grain cap": nil, "grain screenshot": nil}
 	for cmd, flags := range sandboxCommandFlags {
 		tables["grain "+cmd] = slices.Clone(flags)
 	}

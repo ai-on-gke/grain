@@ -48,12 +48,19 @@ network listener takes depends on two settings:
   refuses to start with `-ui-require-iap` and no IAP audience.
   `grain access-code` still prints the code, and says the server takes
   it over loopback only.
+- **Another verifier required.** `-ui-require-verifier=<name>` (or
+  `GRAIN_REQUIRE_VERIFIER=<name>`) is the general form of the flag above:
+  `-ui-require-iap` is an alias for `-ui-require-verifier=iap`, and the
+  two together with a name other than `iap` are refused. It closes the
+  network listener to the access code the same way, and the daemon
+  refuses to start unless an `IdentityVerifier` of that name is active
+  (for `iap`, an IAP audience; otherwise one a wrapper build registered).
+  Any active verifier's assertion still signs its caller in.
 
-`-ui-require-iap` governs IAP only. A wrapper build's own
-`IdentityVerifier` that declares the access code wins over it
-(`AccessCodeWins()`, as a verifier behind an identity-aware proxy may) keeps
-taking the code over its proxy, so break-glass through that proxy still
-works with the flag set.
+Neither flag stops a wrapper build's own `IdentityVerifier` that declares
+the access code wins over it (`AccessCodeWins()`, as a verifier behind an
+identity-aware proxy may): it keeps taking the code over its proxy, so
+break-glass through that proxy still works with the flag set.
 
 In every mode the executor routes stay open
 ([Remote executors](#remote-executors)), and calls from inside a
@@ -289,58 +296,58 @@ any remote source.
 Codes are compared in constant time (hashed first). A wrong code gets the
 same answer as any other wrong code.
 
-### A grain hostd dialing in
+### A host dialing in
 
 The daemon serves `GET /api/hostd/connect` without the access code. A
-`grain hostd -server` on another machine upgrades it and presents its
-hostd token, which says which hostd it is (the hostd registry,
+`grain host -server` on another machine upgrades it and presents its
+host token, which says which host it is (the host registry,
 `/api/hostds`, or the deprecated shared `-hostd-token-file`). A bearer
-on that route (the hostd token, or an IAP token) is never counted as an
+on that route (the host token, or an IAP token) is never counted as an
 access-code guess.
 
-What else the hostd needs depends on how it reaches the daemon:
+What else the host needs depends on how it reaches the daemon:
 
 - **Remote**: it dials in through the IAP Gateway or another registered
   identity verifier's proxy, so the request carries a verified identity.
   The daemon records that identity as the connection's principal and
   checks that it is admitted (either on the database allowlist in
   **Settings → Access**, a daemon-provisioned non-pool service account,
-  or the non-pool service account registered as an active hostd's owner
-  in **Settings → Hostds**). The
-  identity must also equal the hostd row's owner, compared as full,
-  lowercased emails. A stolen hostd token is no use without its
-  owner's identity. Service accounts may be owners, so a hostd running
+  or the non-pool service account registered as an active host's owner
+  in **Settings → Hosts**). The
+  identity must also equal the host row's owner, compared as full,
+  lowercased emails. A stolen host token is no use without its
+  owner's identity. Service accounts may be owners, so a host running
   under Workload Identity or a key needs its service account as the
-  owner. The daemon refuses, and logs, a remote hostd that connects as
-  somebody else, a remote hostd whose row has no owner, and a request
+  owner. The daemon refuses, and logs, a remote host that connects as
+  somebody else, a remote host whose row has no owner, and a request
   that came through a proxy, or from another host to a daemon with a
   verifier configured, with no verified identity. It never falls back to
   the token alone.
 - **Local**: over loopback with no forwarding headers and no assertion,
   such as through `kubectl port-forward`. The token alone names it, as
-  it always has, and it needs no owner. The same goes for every hostd
+  it always has, and it needs no owner. The same goes for every host
   of a daemon that has no identity verifier configured. The co-located
-  hostd at `/run/grain-hostd/hostd.sock` does not dial in at all.
+  host at `/run/grain-hostd/hostd.sock` does not dial in at all.
 
-Set the owner when you register the hostd (Settings → Hostds,
-`grain hostds register -owner <email> <name>`, or `POST /api/hostds`),
-or later (`grain hostds set-owner <name> <email>`, or `PATCH
+Set the owner when you register the host (Settings → Hosts,
+`grain host register -owner <email> <name>`, or `POST /api/hostds`),
+or later (`grain host set-owner <name> <email>`, or `PATCH
 /api/hostds/{name}`). For the shared token, use `-hostd-token-owner`.
-Start the hostd with `-iap-audience <IAP client ID>` so that it sends an
+Start the host with `-iap-audience <IAP client ID>` so that it sends an
 ID token from its service account or its user's login. At startup it
 logs the email that token names, which is the owner the daemon expects.
 
-`GET /api/hostd/install.sh`, the script that sets such a hostd up
-(Settings → Hostds shows the command when it issues a token), is served
+`GET /api/hostd/install.sh`, the script that sets such a host up
+(Settings → Hosts shows the command when it issues a token), is served
 without the access code too: the machine fetching it holds no credential
 yet, and the script carries none. It holds the daemon's URL as the
-request reached it, and reads the hostd token on the machine itself, from
+request reached it, and reads the host token on the machine itself, from
 stdin or `$GRAIN_HOSTD_TOKEN`. The daemon's release and the image it runs
 are filled in only for a caller the gate would let through elsewhere (the
 access code or its session, or an admitted identity); anybody else's copy
 leaves them blank and refuses to guess a version. The command Settings →
-Hostds shows passes them as `--release` and `--image`; add
-`--iap-audience` for a hostd that dials in through IAP.
+Hosts shows passes them as `--release` and `--image`; add
+`--iap-audience` for a host that dials in through IAP.
 
 The remote executor routes that were open the same way, including the
 executor bootstrap routes (`executorBootstrapRoute`), were removed with

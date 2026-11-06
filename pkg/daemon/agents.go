@@ -758,7 +758,7 @@ func (p *AgentPool) fallbackReasonLocked(live Config, req poolRequest, picked st
 		case !until.IsZero():
 			why = append(why, fmt.Sprintf("%s is paused until %s", m, until.UTC().Format("15:04 UTC")))
 		case onHost:
-			why = append(why, fmt.Sprintf("%s runs on the host, and grain hostd is updating", m))
+			why = append(why, fmt.Sprintf("%s runs on the host, and the host agent is updating", m))
 		default:
 			why = append(why, fmt.Sprintf("%s has no free connection", m))
 		}
@@ -1134,10 +1134,10 @@ func noBackendError(team, framework, targetModel string, configured int, e backe
 		why = append(why, fmt.Sprintf("%d with no models (set one)", len(e.noModels)))
 	}
 	if e.hostdDraining > 0 {
-		why = append(why, fmt.Sprintf("%d running its CLI on the host while grain hostd updates", e.hostdDraining))
+		why = append(why, fmt.Sprintf("%d running its CLI on the host while the host agent updates", e.hostdDraining))
 	}
 	if e.hostdBlocked > 0 {
-		why = append(why, fmt.Sprintf("%d whose hostd cannot take a run now (%s)", e.hostdBlocked, e.hostdBlockedWhy))
+		why = append(why, fmt.Sprintf("%d whose host cannot take a run now (%s)", e.hostdBlocked, e.hostdBlockedWhy))
 	}
 	if e.coolingOff > 0 {
 		why = append(why, fmt.Sprintf("%d cooling off after a recent refusal", e.coolingOff))
@@ -1780,8 +1780,8 @@ func buildCodexFramework(ctx context.Context, cfg Config, secretStore *secrets.S
 	if hostLogin != "" {
 		authFile = ""
 	} else if remoteHostd(container) && apiKey == "" && cfg.codexAuthMode != model.AntigravityAuthAmbient {
-		return nil, errors.New("codex runs through the grain hostd that dials in, on a machine with no codex login of its own " +
-			"($CODEX_HOME/auth.json or ~/.codex/auth.json): run `codex login` there as hostd's user, or set an OpenAI API key " +
+		return nil, errors.New("codex runs through the host agent that dials in, on a machine with no codex login of its own " +
+			"($CODEX_HOME/auth.json or ~/.codex/auth.json): run `codex login` there as the host agent's user, or set an OpenAI API key " +
 			"on this connection in Settings -> Models (/settings/models)")
 	}
 	if apiKey == "" && hostLogin == "" && cfg.codexAuthMode != model.AntigravityAuthAmbient {
@@ -2049,7 +2049,7 @@ func remoteHostd(h agent.Host) bool {
 // beside itself, with this daemon's sandbox access and credentials,
 // which that machine does not have.
 func errDetachedRemote(cli string) error {
-	return fmt.Errorf("%s is set to run detached on the host, but the grain hostd it would run through dials in from another machine, "+
+	return fmt.Errorf("%s is set to run detached on the host, but the host agent it would run through dials in from another machine, "+
 		"where the mcpserver a detached run forks has none of this daemon's sandbox access or credentials: "+
 		"set %s to run on the host instead (Settings -> Models, \"Where each agent CLI runs\")", cli, cli)
 }

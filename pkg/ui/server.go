@@ -135,6 +135,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			Audience:              s.tasks.Config.IAPAudience,
 			Issuer:                s.tasks.Config.IAPIssuer,
 			KeysURL:               s.tasks.Config.IAPKeysURL,
+			RegistryIssuer:        s.tasks.Config.RegistryIssuer,
+			RegistryAudience:      s.tasks.Config.RegistryAudience,
+			RegistryKeysURL:       s.tasks.Config.RegistryKeysURL,
+			RequireVerifier:       s.tasks.Config.RequireVerifier,
 			RequireIAP:            s.tasks.Config.RequireIAP,
 			LocalAPIToken:         s.localAPITokenNow(),
 			AccessSessionLifetime: s.tasks.Config.AccessSessionLifetime,
@@ -351,6 +355,8 @@ func (s *Server) routes() {
 	// messages.go, and mcp's chat tool at the other end of it.
 	s.route("POST /api/tasks/{id}/messages", s.handlePostTaskMessage)
 	s.route("POST /api/tasks/{id}/notes", s.handlePostTaskNote)
+	s.route("POST /api/tasks/{id}/human-review", s.handleRequestHumanReview)
+	s.route("POST /api/tasks/{id}/human-review/release", s.handleReleaseHumanReview)
 	s.route("POST /api/tasks/{id}/notify", s.handleAgentNotify)
 	s.route("POST /api/notifications", s.handleRaiseNotification)
 	s.route("GET /api/notifications", s.handleListNotifications)
@@ -558,6 +564,9 @@ func (s *Server) routes() {
 	s.route("POST /api/capability-servers/test-script", s.handleTestHostScript)
 	s.route("POST /api/capability-servers/gchat-test", s.handleTestGChatPost)
 	s.route("GET /api/capability-servers/gchat-usage", s.handleGChatUsage)
+	s.route("POST /api/capability-servers/figma-test", s.handleTestFigmaAccount)
+	s.route("POST /api/capability-servers/figma-oauth-authorize", s.handleAuthorizeFigmaOAuth)
+	s.route("POST /api/capability-servers/figma-oauth-exchange", s.handleExchangeFigmaOAuth)
 	s.route("GET /api/capability-servers/host-entries", s.handleCapabilityServerHostEntries)
 	s.route("GET /api/capability-servers/usage", s.handleCapabilityServerUsage)
 	s.route("GET /api/capability-policy", s.handleGetCapabilityPolicy)
@@ -700,6 +709,7 @@ func (s *Server) routes() {
 	s.route("GET /api/hostds", s.handleListHostds)
 	s.route("POST /api/hostds", s.handleCreateHostd)
 	s.route("PATCH /api/hostds/{name}", s.handleUpdateHostd)
+	s.route("GET /api/hostds/{name}/install", s.handleHostdInstall)
 	s.route("POST /api/hostds/{name}/rotate", s.handleRotateHostdToken)
 	s.route("POST /api/hostds/{name}/revoke", s.handleRevokeHostd)
 

@@ -38,18 +38,18 @@ describe("ConnectionHostdField", () => {
     const onChange = vi.fn();
     render(<ConnectionHostdField backend={{}} onChange={onChange} />);
     fireEvent.mouseDown(
-      await screen.findByRole("combobox", { name: "Run on" }),
+      await screen.findByRole("combobox", { name: "Run on host" }),
     );
     const list = within(await screen.findByRole("listbox"));
-    await list.findByText(/hostd ws-a/);
-    expect(list.getByText(/hostd ws-a/).textContent).toBe(
-      "hostd ws-a · connected · owner dana@example.com · runs as dana · on build-box",
+    await list.findByText(/host ws-a/);
+    expect(list.getByText(/host ws-a/).textContent).toBe(
+      "host ws-a · connected · owner dana@example.com · runs as dana · on build-box",
     );
-    expect(list.getByText(/hostd ws-off/).textContent).toContain(
+    expect(list.getByText(/host ws-off/).textContent).toContain(
       "not connected",
     );
-    expect(list.queryByText(/hostd gone/)).toBeNull();
-    fireEvent.click(list.getByText(/hostd ws-a/));
+    expect(list.queryByText(/host gone/)).toBeNull();
+    fireEvent.click(list.getByText(/host ws-a/));
     expect(onChange).toHaveBeenCalledWith({ hostd: "ws-a" });
   });
 
@@ -59,7 +59,7 @@ describe("ConnectionHostdField", () => {
     const { rerender } = render(
       <ConnectionHostdField backend={{}} onChange={onChange} />,
     );
-    await screen.findByRole("combobox", { name: "Run on" });
+    await screen.findByRole("combobox", { name: "Run on host" });
     expect(screen.queryByTestId("connection-hostd-fallback")).toBeNull();
     rerender(
       <ConnectionHostdField backend={{ hostd: "ws-a" }} onChange={onChange} />,

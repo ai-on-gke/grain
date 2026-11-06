@@ -67,7 +67,7 @@ describe("CapabilityAudit", () => {
       await screen.findByText('["--dry-run","two words",""]'),
     ).toBeInTheDocument();
     expect(screen.getByText("deploy")).toBeInTheDocument();
-    expect(screen.getByText("hostd h2")).toBeInTheDocument();
+    expect(screen.getByText("host h2")).toBeInTheDocument();
     expect(screen.getByText("exit_code")).toBeInTheDocument();
     expect(screen.queryByText("attempt_id")).not.toBeInTheDocument();
     expect(screen.getByText(/left out 3 further/)).toBeInTheDocument();

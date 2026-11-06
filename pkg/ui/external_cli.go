@@ -244,9 +244,17 @@ func (c *Client) inbox(ctx context.Context, cache *taskListCache, readable func(
 	if err != nil {
 		return nil, err
 	}
+	heldTasks := map[string]bool{}
+	for _, h := range held {
+		heldTasks[h.Task] = true
+	}
 	var notifications []InboxItem
 	for _, n := range notes {
 		if n.Severity != model.NotificationWarning && n.Severity != model.NotificationCritical {
+			continue
+		}
+		if heldTasks[n.TaskID] && n.Subject == model.HumanReviewNotificationSubject(n.TaskID) {
+			// The merge-held item already says it, with the reason.
 			continue
 		}
 		repo := n.Repo
@@ -291,6 +299,8 @@ func (c *Client) inbox(ctx context.Context, cache *taskListCache, readable func(
 // person has to act on, or "" when nothing holds it there.
 func mergeHeldReason(t Task) string {
 	switch {
+	case len(t.HumanReviewHold) > 0:
+		return "held for a person's review: " + humanReviewReasonsLine(t.HumanReviewHold)
 	case t.SecurityHold != "":
 		return "held for a security review (task " + t.SecurityHold + ")"
 	case t.PathTriggerHold != "":
@@ -303,6 +313,17 @@ func mergeHeldReason(t Task) string {
 		return "waiting for a person to Submit it to the merge queue"
 	}
 	return ""
+}
+
+// humanReviewReasonsLine is a hold's reasons on one line.
+func humanReviewReasonsLine(rs []HumanReviewView) string {
+	var parts []string
+	for _, r := range rs {
+		if !slices.Contains(parts, r.Reason) {
+			parts = append(parts, r.Reason)
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 func cmpOr(a, b string) string {

@@ -31,7 +31,7 @@ hovered or focused:
 - **built-in** or **custom** — part of grain itself, or added here.
 - where it runs — **beside grain** (a command grain starts in the daemon's own
   container or machine; run location `container`), **on the host** (a command
-  started on the bare machine through grain hostd; run location `host`), or
+  started on the bare machine through the host agent; run location `host`), or
   **remote (HTTP)** (a server grain reaches at its URL).
 - **granted by N** — how many open tasks, templates, schedules and
   Settings-declared workflow jobs grant one of its methods.
@@ -64,8 +64,8 @@ Settings does.
 
 ## Built-in servers
 
-grain's own in-tree capability servers (`config-map`, `gcp`, `gchat`, `git`
-and `host-script`) are listed first on every deployment
+grain's own in-tree capability servers (`config-map`, `figma`, `gcp`, `gchat`,
+`git` and `host-script`) are listed first on every deployment
 without anyone adding them
 ([capabilities.md](capabilities.md#in-tree-capability-servers-grain-capability-name)).
 Each row carries the **built-in** chip; its page is titled `<name> server`,
@@ -118,10 +118,10 @@ Select **+ Add server** above the list (it opens **Add a capability server**):
    Write a credential as `$secret:<name>`, or bind it after saving with
    **Bind a secret**, which stores the value and writes the reference.
 3. **Run location** (stdio only) — **container** runs the command beside
-   the daemon. **host** runs it on the bare machine through grain hostd,
-   and is offered only when hostd is running beside the daemon and its
+   the daemon. **host** runs it on the bare machine through the host agent,
+   and is offered only when the host agent is running beside the daemon and its
    allowlist has a `capabilities` entry for exactly this command. When it
-   is not offered, the field says why: no hostd (as on Kubernetes), or no
+   is not offered, the field says why: no host (as on Kubernetes), or no
    matching entry, with the entries it does have.
 4. **Test** — before saving, runs `initialize`, `tools/list` and
    `configure` against the unsaved values in a session of its own and saves

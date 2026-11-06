@@ -14,7 +14,7 @@ Every normative requirement below is derived from the implementation on `main` a
 - [2. IAP Assertion Verification and Principal Normalization](#2-iap-assertion-verification-and-principal-normalization)
 - [3. Database Principal Allowlist (`allowed_principal`)](#3-database-principal-allowlist-allowed_principal)
 - [4. Access-Code Precedence and Credential Interaction](#4-access-code-precedence-and-credential-interaction)
-- [5. `-ui-require-iap` and Loopback Break-Glass](#5--ui-require-iap-and-loopback-break-glass)
+- [5. `-ui-require-verifier` (`-ui-require-iap`) and Loopback Break-Glass](#5--ui-require-verifier--ui-require-iap-and-loopback-break-glass)
 - [6. Cross-Origin and CSRF Protection](#6-cross-origin-and-csrf-protection)
 - [7. Refusal Responses and Browser Pages](#7-refusal-responses-and-browser-pages)
 - [8. `grain hostd` Connection Identity and Owner Matching](#8-grain-hostd-connection-identity-and-owner-matching)
@@ -91,6 +91,17 @@ Every normative requirement below is derived from the implementation on `main` a
 - `pkg/ui/auth_method_test.go`: `TestAuthUserReportsHowTheCallerAuthenticated`
 - `pkg/ui/mutating_routes_test.go`: `TestEveryMutatingRouteIsAttributed`
 - `pkg/ui/request_actor_source_test.go`: `TestNothingOutsideRequestActorReadsTheActor`
+
+### 2.4 `registry` `IdentityVerifier` (`X-Grain-Registry-Assertion`) {#AU-5B}
+
+1. The built-in `"registry"` `IdentityVerifier` (`pkg/webauth/registry.go`, `pkg/ui/verifier.go`) MUST be active when `-ui-registry-issuer` (`$GRAIN_REGISTRY_ISSUER`), `-ui-registry-audience` (`$GRAIN_REGISTRY_AUDIENCE`), and `-ui-registry-keys-url` (`$GRAIN_REGISTRY_KEYS_URL`) are all configured (`daemon.CheckUIRegistryVerifier` refuses partial configuration or comma-separated issuer/audience values at startup). It inspects `X-Grain-Registry-Assertion` (`ui.RegistryAssertionHeader`), reports `Name() == "registry"` (`ui.AuthMethodRegistry`, `model.SourceRegistry`), and sets `AccessCodeWins() == false`.
+2. Signature verification MUST fetch RFC 7517 JWKS keys via `pkg/jwks` (cached for `1h`, refetched on unknown `kid` at most once per `1m`, retaining stale cached keys on refresh failure, and returning a `VerifierUnavailableError` (`503` with `Retry-After: 5`) when the initial JWKS fetch fails before any keys are cached) and MUST pin the algorithm to `ES256` on an ECDSA P-256 key (`RS256`, `HS256`, and `none` rejected).
+3. The verifier MUST enforce exact `iss` equality against `-ui-registry-issuer`, single-audience equality (`len(aud) == 1 && aud[0] == -ui-registry-audience`), require `exp` and `iat` with `30s` clock-skew tolerance on `exp`, `nbf`, and `iat` and `0 < exp - iat <= 5m`, reject any token carrying the reserved `act` claim (`401`) until delegated-identity support is enabled, and normalize/classify `sub`/`email`/`kind` into `model.Principal{Kind: kind, ID: email, Source: "registry"}`.
+
+**Pinned by:**
+- `pkg/webauth/webauth_test.go`: `TestRegistryVerifier`
+- `pkg/ui/registry_verifier_test.go`: `TestRegistryIdentityVerifierEndToEnd`
+- `pkg/cli/daemon_require_iap_test.go`: `TestCheckConfigRegistryVerifierFlagsAndEnv`
 
 ---
 
@@ -176,27 +187,27 @@ Every normative requirement below is derived from the implementation on `main` a
 
 ---
 
-## 5. `-ui-require-iap` and Loopback Break-Glass
+## 5. `-ui-require-verifier` (`-ui-require-iap`) and Loopback Break-Glass
 
-### 5.1 Startup check requiring an IAP audience {#AU-12}
+### 5.1 Startup check requiring an active verifier {#AU-12}
 
-1. `-ui-require-iap` (or `$GRAIN_REQUIRE_IAP` set to `1`, `true`, `yes`, or `on`) MUST set `ui.Config.RequireIAP = true` (`pkg/cli/daemon.go`).
-2. `daemon.CheckUIRequireIAP` MUST refuse to start the daemon when `RequireIAP` is `true` and `IAPConfig.Enabled()` is `false` (no IAP audience configured via flag or environment).
+1. `-ui-require-verifier=<name>` (or `$GRAIN_REQUIRE_VERIFIER`) MUST set `ui.Config.RequireVerifier = <name>`, and `-ui-require-iap` (or `$GRAIN_REQUIRE_IAP` set to `1`, `true`, `yes`, or `on`) MUST remain supported as an alias for requiring `"iap"` (`ui.Config.RequireIAP = true`, `pkg/cli/daemon.go`). Setting both `-ui-require-iap` and a non-`"iap"` `-ui-require-verifier` MUST be refused at startup.
+2. `daemon.CheckUIRequireVerifier` (aliased as `daemon.CheckUIRequireIAP`) MUST refuse to start the daemon when a verifier is required (`RequireVerifier != ""` or `RequireIAP == true`) and `ui.HasActiveVerifier(ctx, required)` is `false` (for `"iap"`, when neither an IAP audience nor a registered `"iap"` verifier is configured).
 
 **Pinned by:**
-- `pkg/cli/daemon_require_iap_test.go`: `TestCheckConfigRefusesRequireIAPWithoutAnAudience`, `TestRequireIAPFromTheEnvironment`
+- `pkg/cli/daemon_require_iap_test.go`: `TestCheckConfigRefusesRequireIAPWithoutAnAudience`, `TestRequireIAPFromTheEnvironment`, `TestCheckConfigRequireVerifier`, `TestRequireVerifierFromTheEnvironment`
 
 ### 5.2 Network access-code disablement and unproxied loopback break-glass {#AU-13}
 
-1. When `Config.RequireIAP` is `true`, `Server.accessCodeAccepted(r)` MUST return `false`—disabling bearer access codes, `grain_access` session cookies, and `POST /api/auth/access-code`—unless either:
-   - a verifier implementing `AccessCodeWins() == true` has its header present on `r`, OR
-   - `isLoopbackRequest(r)` is `true` (`127.0.0.0/8`, `::1`, or non-TCP Unix socket `RemoteAddr`) AND `s.relayedByProxy(r)` is `false` (`pkg/ui/accesscode.go`).
-2. `Server.relayedByProxy(r)` MUST return `true` whenever `r` carries any non-empty standard forwarding header (`Forwarded`, `X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Real-IP`, `X-Client-IP`, `True-Client-IP`, `CF-Connecting-IP`, `X-Appengine-User-IP`, `Via`) or any header listed in `Headers()` of an active `IdentityVerifier`.
-3. `GET /api/auth/access-code` MUST include `"requireIAP": true` when `Config.RequireIAP` is `true`, and `grain access-code` MUST print a note to `stderr` explaining that the server accepts the access code only over loopback (`pkg/ui/accesscode.go`, `pkg/cli/accesscode.go`).
+1. When a verifier is required (`Config.RequireVerifier != ""` or `Config.RequireIAP == true`), `accessCodeAccepted(r, cfg)` MUST return `false`—disabling bearer access codes, `X-Grain-Access-Code`, `grain_access` session cookies, and `POST /api/auth/access-code`—unless either:
+   - an active verifier implementing `AccessCodeWins() == true` verified its header on `r`, OR
+   - `isLoopbackRequest(r)` is `true` (`127.0.0.0/8`, `::1`, or non-TCP Unix socket `RemoteAddr`) AND `relayedByProxy(r)` is `false` (`pkg/ui/accesscode.go`).
+2. `relayedByProxy(r)` MUST return `true` whenever `r` carries any non-empty standard forwarding header (`Forwarded`, `X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Real-IP`, `X-Client-IP`, `True-Client-IP`, `CF-Connecting-IP`, `X-Appengine-User-IP`, `Via`) or any header listed in `Headers()` of an active `IdentityVerifier`.
+3. `GET /api/auth/access-code` MUST include `"requireVerifier": "<name>"` (plus `"requireIAP": true` when `<name>` is `"iap"`) and `"accessCodeAccepted"` when a verifier is required, and `grain access-code` MUST print a note to `stderr` explaining that the server accepts the access code only over loopback (`pkg/ui/accesscode.go`, `pkg/cli/accesscode.go`).
 
 **Pinned by:**
-- `pkg/ui/require_iap_test.go`: `TestRequireIAPRefusesTheAccessCodeOverTheNetwork`, `TestRequireIAPKeepsTheCodeForAVerifierWhoseCodeWins`, `TestWithoutRequireIAPTheCodeStillWorksOverTheNetwork`
-- `pkg/cli/daemon_require_iap_test.go`: `TestAccessCodeNotesAServerThatRequiresIAP`
+- `pkg/ui/require_iap_test.go`: `TestRequireIAPRefusesTheAccessCodeOverTheNetwork`, `TestRequireIAPKeepsTheCodeForAVerifierWhoseCodeWins`, `TestWithoutRequireIAPTheCodeStillWorksOverTheNetwork`, `TestRequireVerifierRefusesAccessCodeOverNetworkAndKeepsLoopbackBreakGlass`, `TestRequireVerifierIAPMatchesRequireIAPAlias`, `TestRequireVerifierKeepsTheCodeForAVerifierWhoseCodeWins`
+- `pkg/cli/daemon_require_iap_test.go`: `TestAccessCodeNotesAServerThatRequiresIAP`, `TestAccessCodeNotesAServerThatRequiresVerifier`
 - `tests/security/loopback_test.go`: `TestTheHostCLIReachesAnUntrustedLoopbackWithTheLocalToken`
 
 ---
@@ -237,16 +248,16 @@ Every normative requirement below is derived from the implementation on `main` a
 - `pkg/ui/principal_refusal_test.go`: `TestRefusedPrincipalGetsAPageNamingThemWithTheAccessCodeForm`, `TestRefusedPrincipalPageSaysTheAssertionTakesPrecedence`, `TestRefusedPrincipalPageUsesRegisteredAdvice`
 - `pkg/ui/verifier_allowlist_test.go`: `TestIdentityVerifierRegistryOrderRefusalAndProxyHeaders`
 
-### 7.2 Unverified assertion (`401`) and IAP-required (`401`) browser pages {#AU-16}
+### 7.2 Unverified assertion (`401`) and verifier-required (`401`) browser pages {#AU-16}
 
 1. When an assertion header is present and fails verification (`cv.present && cv.err != nil`), `writeAssertionRefused` MUST return HTTP `401 Unauthorized` with `Cache-Control: no-store`:
    - HTML `"Sign-in could not be verified"` naming the failure reason and omitting any access-code form on browser navigations (`GET`/`HEAD` outside `/api/`);
    - JSON `{"error": "authentication assertion failed verification"}` on `/api/*` and non-`GET`/`HEAD` requests (`pkg/ui/principalrefusal.go`).
-2. When no assertion is present and `Config.RequireIAP` refuses the access code (`!accessCodeAccepted(r)`), unauthenticated browser navigations MUST receive HTTP `401 Unauthorized` HTML `"Sign in through IAP"` (`writeIAPRequiredPage`) with `Cache-Control: no-store` and no access-code form, while API requests receive HTTP `401 Unauthorized` JSON stating that IAP sign-in is required and the access code works only on loopback (`pkg/ui/accesscode.go`).
+2. When no assertion is present and a required verifier (`Config.RequireVerifier` or `Config.RequireIAP`) refuses the access code (`!accessCodeAccepted(r, cfg)`), unauthenticated browser navigations MUST receive HTTP `401 Unauthorized` HTML `"Sign in through IAP"` (for `"iap"`) or `"Sign in through <verifier>"` (`writeVerifierRequiredPage`) with `Cache-Control: no-store` and no access-code form, while API requests receive HTTP `401 Unauthorized` JSON stating that sign-in through the required verifier is needed and the access code works only on loopback (`pkg/ui/accesscode.go`).
 
 **Pinned by:**
 - `pkg/ui/assertion_refused_page_test.go`: `TestUnverifiedAssertionGetsAPageForABrowserAndJSONForTheAPI`
-- `pkg/ui/require_iap_test.go`: `TestRequireIAPRefusesTheAccessCodeOverTheNetwork`
+- `pkg/ui/require_iap_test.go`: `TestRequireIAPRefusesTheAccessCodeOverTheNetwork`, `TestRequireVerifierRefusesAccessCodeOverNetworkAndKeepsLoopbackBreakGlass`, `TestRequireVerifierIAPMatchesRequireIAPAlias`
 
 ---
 
@@ -421,13 +432,13 @@ Every normative requirement below is derived from the implementation on `main` a
 | `AU-7` | Direct entry matching (`user:`, provisioned `serviceAccount:`) | Implemented | `TestAllowedPrincipalsDefaultsAndCloudIdentityGroups`, `TestIAPPrincipalsNormalizationClockSkewAndServiceAccounts` |
 | `AU-8` | Provisioned daemon SAs and `gcp-key` sandbox pool exclusion | Implemented | `TestAllowedPrincipalsDefaultsAndCloudIdentityGroups`, `TestGCPKeyPoolAccountsAreNotAdmittedByDefault`, `TestCheckUIAllowedPrincipalsRefusesGCPKeyPoolAccounts`, `TestUnlistedServicePrincipalCannotMintDangerousExternalAgentToken` |
 | `AU-9` | Human-only optional Cloud Identity `group:` lookup, `5m` cache, `10s` timeout | Implemented | `TestAllowedPrincipalsDefaultsAndCloudIdentityGroups`, `TestGroupAllowlistRefusesWhenTokenEndpointNeverAnswers`, `TestUnlistedServicePrincipalCannotMintDangerousExternalAgentToken` |
-| `AU-10` | Per-verifier `AccessCodePrecedence` | Implemented | `TestFakeVerifierContractPinsBothAccessCodePrecedenceModes`, `TestRequireIAPKeepsTheCodeForAVerifierWhoseCodeWins` (*`gma_` + assertion combination untested*) |
+| `AU-10` | Per-verifier `AccessCodePrecedence` | Implemented | `TestFakeVerifierContractPinsBothAccessCodePrecedenceModes`, `TestRequireIAPKeepsTheCodeForAVerifierWhoseCodeWins`, `TestRequireVerifierKeepsTheCodeForAVerifierWhoseCodeWins` (*`gma_` + assertion combination untested*) |
 | `AU-11` | Dangerous `gma_` scope minting restricted to `PrincipalHuman` | Implemented | `TestExternalAgentDangerousScopeRequiresPerson`, `TestUnlistedServicePrincipalCannotMintDangerousExternalAgentToken` |
-| `AU-12` | `-ui-require-iap` startup audience validation | Implemented | `TestCheckConfigRefusesRequireIAPWithoutAnAudience`, `TestRequireIAPFromTheEnvironment` |
-| `AU-13` | `-ui-require-iap` network refusal and loopback break-glass | Implemented | `TestRequireIAPRefusesTheAccessCodeOverTheNetwork`, `TestWithoutRequireIAPTheCodeStillWorksOverTheNetwork`, `TestAccessCodeNotesAServerThatRequiresIAP` |
+| `AU-12` | `-ui-require-verifier` (`-ui-require-iap`) startup active-verifier validation | Implemented | `TestCheckConfigRefusesRequireIAPWithoutAnAudience`, `TestRequireIAPFromTheEnvironment`, `TestCheckConfigRequireVerifier`, `TestRequireVerifierFromTheEnvironment` |
+| `AU-13` | `-ui-require-verifier` (`-ui-require-iap`) network refusal and loopback break-glass | Implemented | `TestRequireIAPRefusesTheAccessCodeOverTheNetwork`, `TestWithoutRequireIAPTheCodeStillWorksOverTheNetwork`, `TestRequireVerifierRefusesAccessCodeOverNetworkAndKeepsLoopbackBreakGlass`, `TestRequireVerifierIAPMatchesRequireIAPAlias`, `TestAccessCodeNotesAServerThatRequiresIAP`, `TestAccessCodeNotesAServerThatRequiresVerifier` |
 | `AU-14` | Global and verified-identity CSRF checks + IAP logout | Implemented | `TestCrossOriginStateChangeRefused`, `TestVerifiedIdentityCSRFLogoutAndUnchangedNoIAPPath`, `PageHeader.test.jsx`, `AccessSection.test.jsx`, `iap-header-logout.spec.js`, `phone-signed-in-logout.spec.js` |
 | `AU-15` | `403` `"Not allowed on this grain"` page and `PrincipalAdvice` | Implemented | `TestRefusedPrincipalGetsAPageNamingThemWithTheAccessCodeForm`, `TestRefusedPrincipalPageSaysTheAssertionTakesPrecedence`, `TestRefusedPrincipalPageUsesRegisteredAdvice` |
-| `AU-16` | `401` `"Sign-in could not be verified"` and `"Sign in through IAP"` pages | Implemented | `TestUnverifiedAssertionGetsAPageForABrowserAndJSONForTheAPI`, `TestRequireIAPRefusesTheAccessCodeOverTheNetwork` |
+| `AU-16` | `401` `"Sign-in could not be verified"` and `"Sign in through <verifier>"` pages | Implemented | `TestUnverifiedAssertionGetsAPageForABrowserAndJSONForTheAPI`, `TestRequireIAPRefusesTheAccessCodeOverTheNetwork`, `TestRequireVerifierRefusesAccessCodeOverNetworkAndKeepsLoopbackBreakGlass` |
 | `AU-17` | Local vs remote `hostd` classification and allowlist gate | Implemented | `TestRemoteHostdMustConnectAsItsOwner`, `TestHostdConnectEndpoint`, `TestASingleTenantDaemonAcceptsARemoteHostd` |
 | `AU-18` | `X-Grain-Hostd-Token`, `IAPTokenProvider`, and remote owner match | Implemented | `TestOwnerRefusal`, `TestRemoteHostdMustConnectAsItsOwner`, `TestRemoteSharedTokenHostdMustConnectAsItsOwner`, `TestHostdRegistryRoutes`, `TestHostdsRegisterAndSetOwner`, `TestIAPTokenProviderFromMetadataServer` |
 | `AU-19` | Bounded deduplicated logging of refused assertions and principals | Implemented | `TestRefusedAssertionLoggedOncePerKindNotOncePerAudience`, `TestRefusedAssertionForOwnAudienceDoesNotSayToSetTheAudience`, `TestRefusedPrincipalsAreLoggedOnce` (*64-cap saturation, unconfigured-audience warning, and `logRefusedVerifierHeader` untested*) |

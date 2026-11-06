@@ -24,6 +24,8 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -130,8 +132,9 @@ func accessCodeFileError(path string, err error) error {
 
 // accessCodeServerNote asks the server the CLI would talk to
 // (serverSource) whether it takes the code over the network, and says
-// so when it does not (-ui-require-iap). It is a note, not an answer:
-// a server that cannot be reached, or one too old to say, gets none.
+// so when it does not (-ui-require-verifier / -ui-require-iap). It is a
+// note, not an answer: a server that cannot be reached, or one too old to
+// say, gets none.
 var accessCodeServerNote = func() string {
 	server, _ := serverSource()
 	client := cliHTTPClient(time.Second, 2*time.Second)
@@ -145,13 +148,46 @@ var accessCodeServerNote = func() string {
 		return ""
 	}
 	var status struct {
-		RequireIAP bool `json:"requireIAP"`
+		RequireVerifier string `json:"requireVerifier"`
+		RequireIAP      bool   `json:"requireIAP"`
 	}
-	if json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&status) != nil || !status.RequireIAP {
+	if json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&status) != nil {
 		return ""
 	}
-	return accessCodeRequireIAPNote
+	req := strings.TrimSpace(status.RequireVerifier)
+	if req == "" && status.RequireIAP {
+		req = string(ui.AuthMethodIAP)
+	}
+	if req == "" {
+		return ""
+	}
+	if req == string(ui.AuthMethodIAP) {
+		return accessCodeRequireIAPNote
+	}
+	if !safeVerifierLabel(req) {
+		return accessCodeRequireVerifierGenericNote
+	}
+	return fmt.Sprintf("the server requires %s (-ui-require-verifier=%s): this code is not accepted over the network, "+
+		"only from the daemon's own host over loopback; sign in through %s instead", req, req, req)
 }
 
 const accessCodeRequireIAPNote = "the server requires IAP (-ui-require-iap): this code is not accepted over the network, " +
 	"only from the daemon's own host over loopback (kubectl exec deploy/grain -- grain ...); sign in through IAP instead"
+
+const accessCodeRequireVerifierGenericNote = "the server requires verified sign-in (-ui-require-verifier): this code is not accepted over the network, " +
+	"only from the daemon's own host over loopback"
+
+// safeVerifierLabel reports whether s is a plain verifier identifier safe to
+// print to the operator's terminal (no control/escape sequences, format
+// characters, whitespace, or excessive length).
+func safeVerifierLabel(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		if r == utf8.RuneError || unicode.IsControl(r) || unicode.IsSpace(r) || unicode.Is(unicode.Cf, r) {
+			return false
+		}
+	}
+	return true
+}

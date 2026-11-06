@@ -48,6 +48,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/postgres/postgrestest"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
@@ -67,7 +68,9 @@ func TestMain(m *testing.M) {
 	if filepath.Base(os.Args[0]) == "forgecli" {
 		os.Exit(fakeForgeCLI(os.Args[1:]))
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	postgrestest.Shutdown()
+	os.Exit(code)
 }
 
 // fakeForgeCLI is `forgecli` for these tests.
