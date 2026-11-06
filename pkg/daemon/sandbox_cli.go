@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -230,7 +231,7 @@ func (o *PullRequestOpener) reviewTool(ctx context.Context, taskID, name string,
 	if pr := model.TaskPullRequest(*task); pr != nil && (pr.Repo.Same(*task.Target) || model.IsUpstreamRepoFor(*task.Target, pr.Repo)) {
 		scope.PullRequestNumber = pr.Number
 	}
-	for _, tool := range mcp.NewPullRequestTools(o.Client, nil, scope) {
+	for _, tool := range mcp.NewPullRequestTools(github.ForTask(o.Client, task.ID), nil, scope) {
 		if tool.Name == name {
 			res := tool.Handler(ctx, args)
 			return res.Text, res.IsError, nil

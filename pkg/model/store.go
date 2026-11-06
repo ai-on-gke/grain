@@ -5361,14 +5361,39 @@ func (s *Store) TaskGitCredentialOn(ctx context.Context, taskID, host, owner, re
 	return s.GitConnectionOn(ctx, host, owner, repo)
 }
 
+// PullRequestOwnerTaskID returns the earliest task that opened or fixed
+// pullRequestRef (e.g. "owner/repo#42"), or "" when no task holds a
+// LinkFixes link for it.
+func (s *Store) PullRequestOwnerTaskID(ctx context.Context, pullRequestRef string) string {
+	if s == nil || s.db == nil {
+		return ""
+	}
+	ref := strings.TrimSpace(pullRequestRef)
+	if ref == "" {
+		return ""
+	}
+	var taskID string
+	err := s.db.QueryRowContext(ctx,
+		"SELECT `l`.`task_id` FROM `task_link` AS `l` "+
+			"LEFT JOIN `task` AS `t` ON `t`.`id` = `l`.`task_id` "+
+			"WHERE `l`.`kind` = ? AND LOWER(`l`.`target`) = LOWER(?) "+
+			"ORDER BY `t`.`created_at` IS NULL, `t`.`created_at` ASC, `l`.`task_id` ASC LIMIT 1",
+		string(LinkFixes), ref).Scan(&taskID)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(taskID)
+}
+
 // taskUserCandidates returns the ordered list of human/service user
-// identities associated with taskID (owner, creator, and origin behalf/actor,
-// walking DerivedFrom if needed) for resolving per-user git connections.
+// identities associated with taskID (the original PR owner task if linked to
+// an existing PR, then owner, creator, and origin behalf/actor, walking
+// DerivedFrom if needed) for resolving per-user git connections.
 func (s *Store) taskUserCandidates(ctx context.Context, taskID string) []string {
 	var out []string
 	add := func(raw string) {
 		norm, err := NormalizeTaskOwner(raw)
-		if err != nil || norm == "" {
+		if err != nil || norm == "" || strings.EqualFold(norm, DefaultTaskOwner) {
 			return
 		}
 		for _, existing := range out {
@@ -5378,29 +5403,50 @@ func (s *Store) taskUserCandidates(ctx context.Context, taskID string) []string 
 		}
 		out = append(out, norm)
 	}
+	addTaskUsers := func(id string) bool {
+		var owner, creator, oaKind, oaID string
+		var obKindNull, obIDNull sql.NullString
+		err := s.db.QueryRowContext(ctx,
+			"SELECT `owner`, `creator`, `origin_actor_kind`, `origin_actor_id`, `origin_behalf_kind`, `origin_behalf_id` "+
+				"FROM `task` WHERE `id` = ?", id).
+			Scan(&owner, &creator, &oaKind, &oaID, &obKindNull, &obIDNull)
+		if err != nil {
+			return false
+		}
+		add(owner)
+		add(creator)
+		add(ownerFromPrincipalFields(obKindNull.String, obIDNull.String, oaKind, oaID))
+		return true
+	}
 	seen := map[string]bool{}
 	cur := strings.TrimSpace(taskID)
 	for cur != "" && !seen[cur] && len(seen) < 64 {
 		seen[cur] = true
-		var owner, creator, oaKind, oaID, originRef string
-		var obKindNull, obIDNull sql.NullString
-		err := s.db.QueryRowContext(ctx,
-			"SELECT `owner`, `creator`, `origin_actor_kind`, `origin_actor_id`, `origin_behalf_kind`, `origin_behalf_id`, `origin_ref` "+
-				"FROM `task` WHERE `id` = ?", cur).
-			Scan(&owner, &creator, &oaKind, &oaID, &obKindNull, &obIDNull, &originRef)
-		if err != nil {
+		var prRef string
+		for _, kind := range []LinkKind{LinkFixes, LinkExternalPR, LinkTakeover} {
+			var target string
+			if lerr := s.db.QueryRowContext(ctx,
+				"SELECT `target` FROM `task_link` WHERE `task_id` = ? AND `kind` = ? LIMIT 1",
+				cur, string(kind)).Scan(&target); lerr == nil && strings.TrimSpace(target) != "" {
+				prRef = strings.TrimSpace(target)
+				break
+			}
+		}
+		origPRTask := ""
+		if prRef != "" {
+			if ownerTask := s.PullRequestOwnerTaskID(ctx, prRef); ownerTask != "" && ownerTask != cur {
+				origPRTask = ownerTask
+				_ = addTaskUsers(origPRTask)
+			}
+		}
+		if !addTaskUsers(cur) {
 			break
 		}
-		if !strings.EqualFold(strings.TrimSpace(owner), DefaultTaskOwner) {
-			add(owner)
-		}
-		if !strings.EqualFold(strings.TrimSpace(creator), DefaultTaskOwner) {
-			add(creator)
-		}
-		add(ownerFromPrincipalFields(obKindNull.String, obIDNull.String, oaKind, oaID))
 		if len(out) > 0 {
 			break
 		}
+		var originRef string
+		_ = s.db.QueryRowContext(ctx, "SELECT `origin_ref` FROM `task` WHERE `id` = ?", cur).Scan(&originRef)
 		var next string
 		for _, kind := range []LinkKind{LinkProposedBy, LinkPortOf} {
 			var target string
@@ -5415,6 +5461,9 @@ func (s *Store) taskUserCandidates(ctx context.Context, taskID string) []string 
 			if orig := WorkOrigin(originRef).Task(); orig != "" && orig != cur {
 				next = orig
 			}
+		}
+		if next == "" && origPRTask != "" && !seen[origPRTask] {
+			next = origPRTask
 		}
 		cur = next
 	}

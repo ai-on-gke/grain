@@ -124,6 +124,7 @@ type reviewThreadResolver interface {
 func sendRunForReviewThreads(ctx context.Context, store *model.Store, client github.Client,
 	task model.Task, ref model.PullRequestRef, now time.Time) error {
 
+	client = github.ForTask(client, task.ID)
 	// A finished pull request nobody is commenting on is read less and
 	// less often (github.PollSchedule): any new comment, or anything
 	// grain writes to it, puts it back on every cycle.
@@ -568,6 +569,7 @@ func decidedRelayedThreadMap(task model.Task) map[int]model.RelayedReviewThread 
 func resolveHandledRelayedThreads(ctx context.Context, store *model.Store, client github.Client,
 	task model.Task, ref model.PullRequestRef, replyLine string) (int, error) {
 
+	client = github.ForTask(client, task.ID)
 	task, comments, threads := syncRelayedReviewThreads(ctx, store, client, task, ref)
 	decided := decidedRelayedThreadMap(task)
 	if len(decided) == 0 || len(threads) == 0 {
