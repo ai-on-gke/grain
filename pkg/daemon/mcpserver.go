@@ -1459,8 +1459,11 @@ func warnUnknownGrants(grants GrantNames) {
 		if _, isAPI, err := ui.ParseAPIGrant(name); isAPI && err == nil {
 			continue // served by grain-controller on POST /api/mcp
 		}
-		if grainserver.IsInProcessGrant(name) || model.IsCapabilityRef(name) {
+		if grainserver.IsInProcessGrant(name) {
 			continue
+		}
+		if model.IsBootstrapPlaybooksGrant(name) {
+			continue // the bootstrap map, or its retired bare alias: src://playbooks and `grain playbooks` read it
 		}
 		if model.APIAliasPreset(name) != "" {
 			continue // bare alias for an api preset (served by grain-controller on POST /api/mcp)
