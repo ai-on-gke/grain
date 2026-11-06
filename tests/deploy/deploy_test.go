@@ -3396,7 +3396,7 @@ var (
 // GO_IMAGE and GO_VERSION -- neither of which chooses the digest.
 func TestEveryBaseImageIsPinnedByDigest(t *testing.T) {
 	texts := map[string]string{}
-	for _, name := range []string{"Dockerfile", "Dockerfile.build", "Dockerfile.k8s-sandbox", "Granulefile", "Granulefile.guest-base"} {
+	for _, name := range []string{"Dockerfile", "Dockerfile.build", "Dockerfile.k8s-sandbox", "Dockerfile.registry", "Granulefile", "Granulefile.guest-base"} {
 		text := read(t, name)
 		texts[name] = text
 		code := stripComments(text)
@@ -3424,14 +3424,32 @@ func TestEveryBaseImageIsPinnedByDigest(t *testing.T) {
 
 	// The same upstream image carries the same pin everywhere it is used,
 	// so one bump cannot leave a second copy behind on the old bytes.
-	if a, b := buildArgDefault(t, "Dockerfile", texts["Dockerfile"], "GO_IMAGE_DIGEST"), buildArgDefault(t, "Dockerfile.build", texts["Dockerfile.build"], "GO_IMAGE_DIGEST"); a != b {
-		t.Errorf("Dockerfile pins GO_IMAGE_DIGEST=%s and Dockerfile.build pins %s; bump both in the same commit", a, b)
+	for _, name := range []string{"Dockerfile.build", "Dockerfile.registry"} {
+		if a, b := buildArgDefault(t, "Dockerfile", texts["Dockerfile"], "GO_IMAGE_DIGEST"), buildArgDefault(t, name, texts[name], "GO_IMAGE_DIGEST"); a != b {
+			t.Errorf("Dockerfile pins GO_IMAGE_DIGEST=%s and %s pins %s; bump both in the same commit", a, name, b)
+		}
+	}
+	if a, b := buildArgDefault(t, "Dockerfile", texts["Dockerfile"], "RUNTIME_IMAGE"), buildArgDefault(t, "Dockerfile.registry", texts["Dockerfile.registry"], "RUNTIME_IMAGE"); a != b {
+		t.Errorf("Dockerfile pins RUNTIME_IMAGE=%s and Dockerfile.registry pins %s; bump both in the same commit", a, b)
 	}
 	for _, name := range []string{"Dockerfile.k8s-sandbox", "Granulefile", "Granulefile.guest-base"} {
 		if a, b := buildArgDefault(t, "Dockerfile", texts["Dockerfile"], "RUNTIME_IMAGE"), buildArgDefault(t, name, texts[name], "BASE_IMAGE"); a != b {
 			t.Errorf("Dockerfile's RUNTIME_IMAGE=%s and %s's BASE_IMAGE=%s differ; they are the same Debian base, so bump them in the same commit", a, name, b)
 		}
 	}
+}
+
+func TestRegistryDockerfileStampsVersionAndExcludesBuildCA(t *testing.T) {
+	df := read(t, "Dockerfile.registry")
+	contains(t, df, "github.com/ai-on-gke/grain/pkg/version.Release=${RELEASE}")
+	contains(t, df, "github.com/ai-on-gke/grain/pkg/version.Edition=${EDITION}")
+	absent(t, df, "pkg/buildinfo")
+	absent(t, df, "COPY --from=build /usr/local/share/ca-certificates/")
+
+	releaseScript := read(t, "scripts", "release-images.sh")
+	regBuild := body(t, releaseScript, "build_registry_image() {")
+	contains(t, regBuild, `check_release_stamp "$image" "$RELEASE"`)
+	contains(t, regBuild, `check_edition "$image" "$main"`)
 }
 
 // The caches are what make those toolchains usable, and they are warmed
