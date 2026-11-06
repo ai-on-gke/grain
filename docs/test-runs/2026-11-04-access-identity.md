@@ -218,3 +218,19 @@ All 18 screenshots passed `scrollWidth <= clientWidth + 1` and zero uncaught `pa
 | Sidebar (rail / open phone drawer) | [`sidebar-1440-light.png`](2026-11-04-access-identity/screenshots/sidebar-1440-light.png) | [`sidebar-1440-dark.png`](2026-11-04-access-identity/screenshots/sidebar-1440-dark.png) | [`sidebar-390-light.png`](2026-11-04-access-identity/screenshots/sidebar-390-light.png) | [`sidebar-390-dark.png`](2026-11-04-access-identity/screenshots/sidebar-390-dark.png) |
 | Partial-scope Audit (`settings:read` only) | [`audit-partial-1440-light.png`](2026-11-04-access-identity/screenshots/audit-partial-1440-light.png) | — | — | — |
 | Verifier down (`503` browser page) | [`verifier-down-1440-light.png`](2026-11-04-access-identity/screenshots/verifier-down-1440-light.png) | — | — | — |
+
+---
+
+## CI repair (merge-queue redispatch, 2026-11-06)
+
+The `go` check on this branch failed at its `Format` step (`make fmt`): the
+`UiCloudIdentityEndpoint` field this branch added to `daemon.Config` widened
+the struct's alignment column, and the two following fields (`Actor`,
+`DefaultTargetRepo`) were left at the old width. `main` itself was gofmt-clean,
+so this failure was this branch's alone. Fixed by `gofmt -w pkg/daemon/config.go`
+after merging current `main`. Verified locally against the `go` job's steps:
+`make fmt`, `make frontend`, `go build ./...`, `go vet ./...` all clean, and
+`./scripts/run-go-tests.sh go test -race -timeout 25m ./pkg/ui/... ./cmd/grain/... ./ui/e2e/...`
+exit 0 (no failing tests, panics or races). The touched packages outside that
+job (`pkg/jwks`, `pkg/webauth`, `pkg/cli`, `pkg/daemon`, `tests/hygiene`
+including `TestCoreSaysNoGoogleTokens`) also pass.
