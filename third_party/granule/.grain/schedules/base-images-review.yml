@@ -1,0 +1,12 @@
+name: Base images review
+base: main
+# Files a system:workflow-review:base-images triage task for every red,
+# timed-out or startup_failure run of .github/workflows/base-images.yml
+# on main. It replaces the review grain filed from
+# .grain/workflows/base-images.yml's weekly schedule.
+trigger:
+  github_workflow_run:
+    workflow: base-images.yml
+    conclusions: [failure, timed_out, startup_failure]
+    branches: [main]
+overlap: skip

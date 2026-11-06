@@ -64,7 +64,7 @@ func ownerRefusal(id ConnectIdentity, name, owner string, shared bool) string {
 	if !id.Remote {
 		return ""
 	}
-	setOwner := fmt.Sprintf("set it in Settings → Hostds, `grain hostds set-owner %s <email>`, or PATCH /api/hostds/%s {\"owner\": \"<email>\"}", name, name)
+	setOwner := fmt.Sprintf("set it in Settings → Hosts, `grain host set-owner %s <email>`, or PATCH /api/hostds/%s {\"owner\": \"<email>\"}", name, name)
 	if shared {
 		setOwner = "start the daemon with -hostd-token-owner=<email>, or register this hostd in the hostd registry (/api/hostds) with an owner"
 	}

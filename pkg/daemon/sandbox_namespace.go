@@ -409,7 +409,7 @@ func grainLogArgs(source string, q namespace.GrainLogQuery) map[string]any {
 	}
 	args := map[string]any{"source": source}
 	for key, v := range map[string]string{
-		"since": q.Since, "until": q.Until, "min_priority": q.MinPriority, "contains": q.Contains,
+		"unit": q.Unit, "since": q.Since, "until": q.Until, "min_priority": q.MinPriority, "contains": q.Contains,
 	} {
 		if v != "" {
 			args[key] = v

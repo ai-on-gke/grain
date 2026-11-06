@@ -29,6 +29,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/ai-on-gke/grain/pkg/redact"
 )
 
 // Store is the model's read and write surface over any database/sql
@@ -566,6 +568,8 @@ func branchForTask(ctx context.Context, q interface {
 // putTask is PutTask's body, against whatever transaction it is running
 // in -- so UpdateTask can read and write in the same one.
 func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
+	t.Title = redact.RedactHostEnrollmentCodes(t.Title)
+	t.Body = redact.RedactHostEnrollmentCodes(t.Body)
 	var existing int
 	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM `task` WHERE `id` = ?", t.ID).Scan(&existing); err != nil {
 		return err
@@ -1001,6 +1005,8 @@ func (s *Store) signalCommentAdded(taskID string) {
 }
 
 func addComment(ctx context.Context, tx *sql.Tx, c Comment) (int64, error) {
+	c.Body = redact.RedactHostEnrollmentCodes(c.Body)
+	c.Summary = redact.RedactHostEnrollmentCodes(c.Summary)
 	// Every comment carries the moment it was written: a caller that left
 	// CreatedAt unset would otherwise store year one, which the timeline
 	// can only place before everything else on the task.

@@ -272,8 +272,12 @@ func taskSummary(t ui.Task) mcp.TaskSummary {
 			depStates[id] = string(st)
 		}
 	}
+	var reason *mcp.TaskReason
+	if t.Reason != nil {
+		reason = &mcp.TaskReason{Reason: t.Reason.Reason, Resource: t.Reason.Resource}
+	}
 	return mcp.TaskSummary{ID: t.ID, Title: t.Title, State: string(t.State), Repo: t.Repo, Priority: t.Priority, Interactive: t.Interactive, CreatedAt: t.CreatedAt, BlockedBy: t.BlockedBy, Stall: t.Stall, TurnStopped: t.TurnStopped, MergeQueue: mcp.TaskMergeQueue{State: t.MergeQueueState, Note: t.MergeQueueNote, At: t.MergeQueueStateAt, StalledAt: t.MergeQueueStalledAt, BlockedAt: t.MergeQueueBlockedAt},
-		Kinds: ui.TaskKindTags(t), DependsOn: t.DependsOn, DependsOnStates: depStates, ChangedAt: taskChangedAt(t)}
+		Kinds: ui.TaskKindTags(t), DependsOn: t.DependsOn, DependsOnStates: depStates, ChangedAt: taskChangedAt(t), Reason: reason}
 }
 
 // taskChangedAt is the latest change the record stamps (mcp.TaskSummary.ChangedAt).

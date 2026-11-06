@@ -134,11 +134,16 @@ Why these choices:
 | `queued/blocked_on_task` | the task it depends on | reconcileDispatch | resource |
 | `queued/usage_limit_paused` | the connection's limit window | reconcileDispatch | person ("Run now") |
 | `queued/held_by_local_policy` | an edit to the `-policy` file allowing the refused claim, and a restart (external) | -- | resource |
+| `queued/dispatch_blocked` | the deployment dispatching again: the condition it recorded against itself (`pkg/dispatchcondition`: a git proxy that failed to bind, a reconcile loop that died), named in the resource; outranks every other queued sub-case | -- | resource (the deployment's health lists the condition as a failing check) |
 | `running/live_run` | (executing) | ProcessResult | person ("Cancel") |
 | `completed/on_merge_queue` | the merge queue landing it | syncEntry | resource (the merge lane) |
 | `completed/merge_failed` | a person: "Retry merge" | -- | -- |
 | `proposed/unapproved` | a person: "Approve" | -- | -- |
-| `awaiting_reply/question` | a person: "Reply" | -- | -- |
+| `awaiting_reply/question` | a person: "Reply" (a question or secret request) | -- | -- |
+| `awaiting_reply/answered` | a person: "Reply" (a run that answered in a comment and opened no pull request) | -- | -- |
+| `awaiting_reply/your_message` | a person: "Reply" (an interactive task or console session's next message) | -- | -- |
+| `awaiting_reply/access_request` | a person: "Grant" (a `request_access` call) | -- | -- |
+| `awaiting_reply/stopped` | a person: "Reply" (a turn a person stopped) | -- | -- |
 | `awaiting_submit/not_auto_merge` | a person: "Submit" | -- | -- |
 | `failed/consecutive_failures` | a person: "Retry" | -- | -- |
 | `deferred/no_wake_time` | a person: "Undefer" | -- | -- |
@@ -152,7 +157,15 @@ The task lane has no per-task cycle to block a task from.
 `taskReasonOf` computes a task's sub-case from the task, its observation,
 its open dependencies, whether a usage-limit pause covers its dispatch,
 `DeferredUntil` and the merge queue's state. An open dependency outranks
-a pause. The UI reads it on every task read through `ui.Config.Reasons`
+a pause. An `awaiting_reply` task's sub-case names the ask it is parked
+on, from the facts the frontend's `askedCase` reads (`model.ReplyFacts`
+and `Task.Interactive`), in the same order: a stopped turn, then an
+access request, then an interactive task or console session, then a
+pending question or secret request, and otherwise an answer. The reader
+resolves those facts (`ui.Task`'s `TurnStopped`, `AwaitingAccess` and
+`QuestionSummary`, and `Observation.PendingSecret`) before it asks for
+the reason, so the reason chip and the badge beside it name the same
+case and API readers see it in `reason.reason`. The UI reads it on every task read through `ui.Config.Reasons`
 (`orchestrator.TaskReason`, wired from `pkg/daemon` the way
 `ui.Config.Stall` is). The pause is read off the quota grant wait dispatch
 records for a task a pause covers (`gatedByPause`, or

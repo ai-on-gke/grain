@@ -72,8 +72,6 @@ func runVM(ctx context.Context, args []string, stdin io.Reader, stdout, stderr i
 		return runVMDelete(ctx, rest, stdout, stderr)
 	case "list":
 		return runVMList(ctx, rest, stdout, stderr)
-	case "forward":
-		return runLegacyForward(ctx, rest, stderr)
 	default:
 		return fmt.Errorf("vm: unknown subcommand %q", cmd)
 	}

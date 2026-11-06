@@ -626,7 +626,7 @@ func singleTenantOpenRoute(r *http.Request) bool {
 	case accessCodePath, accessCodeScriptPath, "/api/auth/logout", "/api/auth/whoami":
 		return true
 	}
-	return hostdConnectRoute(r) || hostdInstallRoute(r)
+	return hostdConnectRoute(r) || hostdInstallRoute(r) || hostdEnrollOpenRoute(r)
 }
 
 const errAccessCodeNeeded = "this daemon is single-tenant and every caller shows its access code: " +

@@ -31,6 +31,7 @@ const ALLOWED = [
   /-hostd-[a-z-]+/g,
   /GRAIN_HOSTD[A-Z_]*/g,
   /\/api\/hostds?[\w/{}.-]*/g,
+  /\/hostd\/install\b/g,
 ];
 
 function hostdLines(text) {

@@ -794,6 +794,15 @@ type Config struct {
 	// ReconcilerDown always reports false, the same nil-means-
 	// unavailable-feature default AutoMergeDegraded above gives.
 	ReconcilerDown func() bool
+	// DispatchConditions, when set, is why this deployment is not
+	// dispatching, as named conditions with the error and the time each
+	// was set (pkg/dispatchcondition.Set, wired by pkg/daemon): what
+	// ReconcilerDown's boolean cannot say. GET /api/sandboxes lists the
+	// conditions in force as failing checks, GET /api/config carries
+	// them beside reconcilerDown, and GET /api/pipeline/changes shows
+	// each set and clear as an entry. nil reports none, the same
+	// nil-means-nothing-to-warn-about default ReconcilerDown has.
+	DispatchConditions DispatchConditionReader
 	// StoreSwitch, when set, is polled by GET /api/config and GET
 	// /api/sandbox-health (DaemonHealth.StoreSwitch) for the standing
 	// alert that the store was switched underneath this daemon
@@ -1305,10 +1314,11 @@ type StallNoter func(state model.State, since, now time.Time) string
 // orchestrator.MergeReason, in this package's types.
 type ReasonClassifier interface {
 	// TaskReason is the sub-case of state t is in, given its observation
-	// (nil for none), the blocking tasks it is still waiting on, and the
-	// grant wait dispatch recorded for it (nil for none).
+	// (nil for none), the blocking tasks it is still waiting on, the
+	// grant wait dispatch recorded for it (nil for none), and, for an
+	// awaiting_reply task, which ask it is parked on (Task.replyFacts).
 	TaskReason(t model.Task, state model.State, obs *model.Observation, openDeps []string,
-		wait *model.GrantWait) Reason
+		wait *model.GrantWait, asked model.ReplyFacts) Reason
 	// MergeReason classifies a merge-queue sub-case the cycle recorded,
 	// or answers the zero Reason for one it does not know.
 	MergeReason(reason string) Reason

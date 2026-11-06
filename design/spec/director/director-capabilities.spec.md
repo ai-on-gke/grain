@@ -86,8 +86,9 @@ refused without it. The reason is written to the controller log
     `docs/director.md` and the task that filed this spec both say. Its
     doc comment explains why: the host-directory sandbox cannot honour
     `none`.
-  - `TasksApproved` is unset (`false`). `Reads` and `Writes` are empty;
-    `ReadsAll` is unset (`nil`, meaning `true`: `model.ConsoleSessionAutoReads`
+  - `TasksApproved` is unset (`false`). `Reads` is empty and `Writes`
+    is `[{Repo: grain/config}]` (`model.ConfigRepo`), which offers
+    `propose_config_change` (G5); `ReadsAll` is unset (`nil`, meaning `true`: `model.ConsoleSessionAutoReads`
     adds every active working repository in `repo_config` and `target_repos`).
 - `model.ConsoleSessionDefaultGrants` adds `api:ci-read` to every console
   session unless `DeclinedDefaults` names it.
@@ -103,9 +104,10 @@ refused without it. The reason is written to the controller log
   repository in `Writes`, in which case the push URL points at the
   per-attempt git proxy and `AuthorizeRefUpdates` admits fast-forward
   pushes only to `refs/heads/grain/config/<task-id>/*`
-  (`model.ConfigProposalBranchPrefix`), never `main`. Because
-  `DefaultConsoleSessions()` ships `Writes: []`, the shipped director's
-  checkout is read-only today.
+  (`model.ConfigProposalBranchPrefix`), never `main`.
+  `DefaultConsoleSessions()` ships `Writes: [grain/config]`, so the
+  shipped director's checkout pushes candidate branches; a deployment
+  that saved its own session list keeps whatever `Writes` it saved.
 - The `self-debug` alias also grants the `api:self-debug` preset
   (`tasks:read`, `deployment:read`).
 - `CatalogueKindDirector` is only a kind that `CatalogueKindOf` returns
@@ -119,12 +121,14 @@ refused without it. The reason is written to the controller log
   the candidate `grain/config/<task-id>/*` branch with
   `staterepo.ValidateCandidateConfig`, classifies the diff with
   `trustboundary.ClassifyState`, pins `headSha` on the in-chat approval
-  card, and lands only on a person's approval. Because `main` keys the
-  tool on `Writes: [<state repo>]`, adding `grain/config` to `Writes` on
-  a session with `TasksApproved: true` would let `UngrantedWrites` admit
-  child `propose_task` calls writing `grain/config` until
-  `AutoApprovalRefusal` holds `IsConfigRepo` targets and writes
-  unconditionally (G5).
+  card, and lands only on a person's approval. `main` keys the tool on
+  `Writes: [<state repo>]`, which `UngrantedWrites` would also admit as
+  a write a child `propose_task` call may inherit; so
+  `model.ConfigRepoProposalHold` (asked first by `AutoApprovalRefusal`,
+  and as a grain hold by both `ui.Client.CreateTask` and
+  `orchestrator.relayProposedTasks`) files any child whose `Target` or
+  `Writes` names `IsConfigRepo` for a person, whatever the parent holds
+  (G5, done).
 
 ## 2. Workflow-to-capability traceability matrix {#DC-2}
 
@@ -177,7 +181,7 @@ recreation only.
 | Detach a grant: `POST /api/tasks/{id}/capabilities` `{attach: false}`; narrow `PUT /api/repos/{o}/{n}/capabilities` | `api:capabilities:admin` (**dangerous**) | `…/api#capabilities:admin` | 2 |
 | Detach only (no attach, no replace, never on a standing session) | **`api:capabilities:detach` (proposed new scope)**, not dangerous, reason required | `…/api#capabilities:detach` *(proposed)* | 1 once it exists (§3.1.2) |
 | Read deployment config | implicit state-repo read; `api:settings:read` | `…/repo#read` `{repo: grain/config}` | 1 |
-| `propose_config_change` (branch, validate, pin `headSha`, in-chat approval card) | `Writes: [<state repo>]` on a repo-less session (`grain/config/<task-id>/*` branches only; opt-in on `main`) | `…/repo#write` `{repo: grain/config, refs: [refs/heads/grain/config/<task-id>/*]}` *(proposed)* | 1 once G5's `IsConfigRepo` proposal hold lands (§3.1.3) |
+| `propose_config_change` (branch, validate, pin `headSha`, in-chat approval card) | `Writes: [<state repo>]` on a repo-less session (`grain/config/<task-id>/*` branches only; shipped on the director) | `…/repo#write` `{repo: grain/config, refs: [refs/heads/grain/config/<task-id>/*]}` *(proposed)* | 1 (§3.1.3) |
 | `grain/config` PR via a filed task | `propose_task` with `writes: [grain/config]` (held for a person by `UngrantedWrites`) | `…/repo#write` | 1 (the hold is the gate) |
 | `POST /api/state-repo/sync\|pull-requests\|remote`, `PUT /api/settings` | `api:settings:write` (**dangerous**) | `…/api#settings:write` | 3 for the director (§3.3) |
 
@@ -214,7 +218,7 @@ default, and §5 says how existing deployments are offered it.
 | `Capabilities` | `self-debug`, `…/grain#journal`, `api:deployment:read`, `…/grain#health`, `bootstrap-playbooks`, `api:task-admin`, `api:capabilities:read`, `api:settings:read`, `api:repos:read`, `api:releases:read`, `api:schedules:read`, `api:templates:read`, `api:suites:read`, `api:dispatch:read`, plus build `DefaultOn` ids | W1–W5 day-to-day. None of these is dangerous, so none needs a person's grant under `IsPersonOnlyGrant`. |
 | (implicit) `durable` | always, via `ConsoleSessionGrants` | Priority admission (§3.1.4). |
 | `Reads` | `[]` in the row; the state repository is added at filing (`FileConsoleSessionOptions.StateRepo`) | Config is always readable without the operator naming a repo (§3.1.3). |
-| `Writes` | `[]` | The director has no target and lands no code. Config writes go through §3.1.3. |
+| `Writes` | `[grain/config]` | The director has no target and lands no code. The one write is the state repository, for `propose_config_change` (§3.1.3); it is never passed on to a proposal. |
 | `TasksApproved` | `true` | §3.1.5. |
 | `NetworkAccess` | `none`, resolved by `ConsoleSessionNetworkAccess` (falls back to `open` on a backend that cannot isolate) | §3.1.6. |
 
@@ -325,12 +329,17 @@ The shipped director MUST file its proposals approved
   work". That risk is real. On `main`, a session-queued proposal is
   exempt from `AutoSubmitLimits` (`ui.Client.CreateTask` only checks
   `ExceededAutoSubmitLimit` when `autoSubmit && !sessionQueued`), so
-  nothing bounds how much the director can queue. Before the default
+  nothing bounded how much the director could queue. Before the default
   flips, session-queued proposals MUST be held to a fan-out bound. The
   bound is counted per conversation turn, not per task lifetime,
   because the director task is long-lived. Over the bound, a proposal
   is filed for a person with `AutoSubmitLimitNote`, as an auto-submit
-  over its limit is today (gap G12).
+  over its limit is (gap G12, done): `AutoSubmitLimits.TurnFanOut`
+  (`DefaultConsoleSessionTurnFanOut`, 10), measured by
+  `Store.ExceededSessionTurnLimit` as the proposals queued on
+  `ConsoleSessionPrincipal` since the latest comment a person wrote on
+  the session's task, in both `ui.Client.CreateTask` and
+  `orchestrator.relayProposedTasks`.
 
 #### 3.1.6 `NetworkAccess: none`
 
@@ -495,17 +504,17 @@ deployment's `default_capabilities`.
 | G1 | `DefaultConsoleSessions().Capabilities` | 5 grants (§1.4) + build `DefaultOn` | Tier 1 list (§3.1) | Append the api grants in `pkg/model/console_session.go`, and update its doc comment and `docs/director.md`. Existing deployments keep their saved row: surface the new defaults as a one-click "adopt shipped defaults" in the session pane, not a silent rewrite (grain/task-2126 keeps operator removals sticky). |
 | G2 | `TasksApproved` | `false` | `true` | Set in `DefaultConsoleSessions`. `ConsoleSessionTasksApprovedTag` / its opposite keep an operator's override. Add tests in `pkg/model`. |
 | G3 | `NetworkAccess` | `NetworkOpen` | `NetworkNone` with the `ConsoleSessionNetworkAccess` fallback | Change the default. First verify on granule that the state-repo clone, `grain` CLI and `api_*` tools work under `none`, and that no build `DefaultOn` capability needs sandbox egress. |
-| G4 | State repo read | **done**: implicit via `StateRepo`, read-only checkout pinned by `consolesessions_test.go` and `director_state_internal_test.go` | Unchanged | None. |
-| G5 | `propose_config_change` & config-repo proposal rail | Tool and `grain/config/<task-id>/*` push policy implemented (`pkg/mcp/config_change_tool.go`, `pkg/ui/task_config_change.go`), keyed on `Writes: [<state repo>]`; `DefaultConsoleSessions` still ships `Writes: []`, and `AutoApprovalRefusal` does not yet hold `IsConfigRepo` targets/writes when the parent holds `Writes: [<state repo>]` | Shipped on the director, while child `propose_task` calls targeting or writing `IsConfigRepo` always wait for a person (§3.1.3) | Hold `IsConfigRepo` target and write proposals unconditionally in `AutoApprovalRefusal` (`pkg/model/hold_for_approval.go`), then enable `propose_config_change` on the shipped director without widening `propose_task`. |
+| G4 | State repo read | **done**: implicit via `StateRepo`; the checkout is read-only for a session without `grain/config` in `Writes`, pinned by `consolesessions_test.go` and `director_state_internal_test.go` | Unchanged | None. |
+| G5 | `propose_config_change` & config-repo proposal rail | **done**: `model.ConfigRepoProposalHold` holds every child whose `Target` or `Writes` names `IsConfigRepo` (first in `AutoApprovalRefusal`, and as a grain hold in `ui.Client.CreateTask` and `orchestrator.relayProposedTasks`); `DefaultConsoleSessions` ships the director with `Writes: [grain/config]` | Shipped on the director, while child `propose_task` calls targeting or writing `IsConfigRepo` always wait for a person (§3.1.3) | None. Pinned by the `director_proposal_rails` tests in `pkg/model`, `pkg/ui` and `pkg/orchestrator`. |
 | G6 | `capabilities:detach` | does not exist | New non-dangerous, MCP-only scope (§3.1.2) | Add it to `model.apiScopes`, `IsSandboxDeniedAPIScope`, `route_scopes.go` (a detach-body check like `tasksAdminTaskPatchBodyAllowed`), `docs/agent-api.md`; then add it to G1. |
 | G7 | Default catalogue for the director kind | none (`DefaultCapabilityCatalogue` absent; nil catalogue admits all) | Shipped rule set denying the director kind `merge:force`, `settings:write`, `secrets:write`, `connections:write`, `repos:write` | Add a built-in restriction layer applied under any `settings/capabilities.yml`, keyed on `CatalogueKindDirector` (operator files may narrow, not widen). |
 | G8 | Self-approval | relies on `tasks:admin` being person-granted | Gate refuses `POST /api/tasks/{id}/approve` on a task in the actor's proposal subtree or held for a person | Add to `agentRails` in `pkg/ui/agent_api_gate.go`, with tests. |
 | G9 | Seeded repo defaults on director proposals | **done**: admitted under §4.2 by `model.ProposalEscalations` (`pkg/model/proposal_seeding.go`), which `AutoApprovalRefusal` (`hold_for_approval.go`), `ui.Client.CreateTask` and `orchestrator.relayProposedTasks` take the seeding source (`model.ProposalSeeding`) for; §4.4 note is `model.SeededDefaultsNote`; each excluded case pinned by `proposal_seeding_test.go`, `director_seeded_defaults_test.go` and `consolesessions_test.go` | Admitted under §4.2 | None. |
 | G10 | `DirectorSessionBody` | — | Tells the director to use `expect` on stop/close, `hold_for_approval` for destructive proposals, and give reasons | Update the reviewed body text. |
 | G11 | Docs | Retired capability names and the `NetworkAccess: open` note in `docs/director.md` updated in [Task #3185](/tasks/3185); envelope table still reflects pre-G1–G3 defaults | Matches §3 | Update `docs/director.md` alongside G1–G3 as each default flips. |
-| G12 | Capacity bound on session-queued proposals | session-queued proposals skip `AutoSubmitLimits` | Per-turn fan-out bound; over it, filed for a person (§3.1.5) | Add the check beside `ExceededAutoSubmitLimit` in `ui.Client.CreateTask` and `orchestrator.relayProposedTasks`, with tests. |
+| G12 | Capacity bound on session-queued proposals | **done**: `AutoSubmitLimits.TurnFanOut` (default 10), checked by `Store.ExceededSessionTurnLimit` beside `ExceededAutoSubmitLimit` in `ui.Client.CreateTask` and `orchestrator.relayProposedTasks`; over it, filed for a person with `AutoSubmitLimitNote` | Per-turn fan-out bound; over it, filed for a person (§3.1.5) | None. The bound has no settings knob yet. |
 
-Ordering: G4 is done, and G10 can land with G1. G6 precedes the detach part of
-G1, and G3's verification precedes its default change. G5's `IsConfigRepo`
-proposal hold, G7, G8 and G12 MUST land before G2, so that the auto-queueing
+Ordering: G4, G5 and G12 are done, and G10 can land with G1. G6 precedes the
+detach part of G1, and G3's verification precedes its default change. G7 and
+G8 MUST land before G2 (as G5's `IsConfigRepo` proposal hold and G12 have), so that the auto-queueing
 director never runs on a deployment without the Tier 3 rails.

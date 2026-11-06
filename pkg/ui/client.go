@@ -839,7 +839,9 @@ func (c *Client) stallNote(state model.State, times model.StateTimes, now time.T
 // Task.MergeQueueReason) off what the caller has already read about t:
 // its observation (nil for none), and the grant wait dispatch recorded
 // for it (nil for none). The open dependencies are out's own BlockedBy,
-// which taskFrom has just resolved.
+// which taskFrom has just resolved; an awaiting_reply task's ask is
+// out's own TurnStopped, AwaitingAccess and QuestionSummary
+// (Task.replyFacts), so the caller sets those first.
 func (c *Client) withReasons(out Task, t model.Task, obs *model.Observation, wait *model.GrantWait) Task {
 	if obs != nil && obs.MergeQueueState != "" && obs.MergeQueueReason != "" {
 		reason := Reason{Reason: obs.MergeQueueReason}
@@ -853,10 +855,26 @@ func (c *Client) withReasons(out Task, t model.Task, obs *model.Observation, wai
 	if c.Config.Reasons == nil {
 		return out
 	}
-	if reason := c.Config.Reasons.TaskReason(t, out.State, obs, out.BlockedBy, wait); reason.Reason != "" {
+	if reason := c.Config.Reasons.TaskReason(t, out.State, obs, out.BlockedBy, wait, out.replyFacts(obs)); reason.Reason != "" {
 		out.Reason = &reason
 	}
 	return out
+}
+
+// replyFacts is which ask an awaiting_reply task is parked on, off what
+// a read has already set on it -- the facts the frontend's askedCase
+// reads (TurnStopped, AwaitingAccess, QuestionSummary), plus a pending
+// secret request where the read has the observation that names one. The
+// zero value for every other state.
+func (t Task) replyFacts(obs *model.Observation) model.ReplyFacts {
+	if t.State != model.StateAwaitingReply {
+		return model.ReplyFacts{}
+	}
+	return model.ReplyFacts{
+		Question: t.QuestionSummary != "" || (obs != nil && obs.PendingSecret != ""),
+		Access:   t.AwaitingAccess,
+		Stopped:  t.TurnStopped,
+	}
 }
 
 // listObservation is the part of a task's observation a list read has to
@@ -1057,12 +1075,14 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 	if goal != nil {
 		t.GoalKind = goal.Kind
 	}
-	task := c.withReasons(taskFrom(*t, state, targetStates, blockedAt, obs.RepairInFlight(), observationMergeQueueState(obs), activity, reviewName, span,
-		c.stallNote(state, model.StateTimesFrom(*t, obs, runs), c.now())), *t, obs, wait)
+	task := taskFrom(*t, state, targetStates, blockedAt, obs.RepairInFlight(), observationMergeQueueState(obs), activity, reviewName, span,
+		c.stallNote(state, model.StateTimesFrom(*t, obs, runs), c.now()))
 	task.Goal = goal
 	if obs != nil {
 		task.RunNowAt = obs.RunNowAt
 	}
+	// Which ask an awaiting_reply task is parked on, before its reason,
+	// which is told apart by it (withReasons).
 	if state == model.StateAwaitingReply {
 		comments, err := c.Store.Comments(ctx, id)
 		if err != nil {
@@ -1072,6 +1092,7 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 		task.QuestionSummary = questionSummary(state, obs, comments)
 		task.AwaitingAccess = obs != nil && obs.PendingAccess != nil
 	}
+	task = c.withReasons(task, *t, obs, wait)
 	if err := c.attachPause(ctx, &task); err != nil {
 		return Task{}, err
 	}
@@ -1200,15 +1221,18 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	if goal != nil {
 		t.GoalKind = goal.Kind
 	}
+	task := taskFrom(*t, state, targetStates, blockedAt, obs.RepairInFlight(), observationMergeQueueState(obs), activity, reviewName, span,
+		c.stallNote(state, model.StateTimesFrom(*t, obs, runs), c.now()))
+	// Which ask an awaiting_reply task is parked on, before its reason,
+	// which is told apart by it (withReasons).
+	task.TurnStopped = turnStopped(state, obs, comments)
+	task.QuestionSummary = questionSummary(state, obs, comments)
+	task.AwaitingAccess = state == model.StateAwaitingReply && obs != nil && obs.PendingAccess != nil
 	detail := TaskDetail{
-		Task: c.withReasons(taskFrom(*t, state, targetStates, blockedAt, obs.RepairInFlight(), observationMergeQueueState(obs), activity, reviewName, span,
-			c.stallNote(state, model.StateTimesFrom(*t, obs, runs), c.now())), *t, obs, wait),
+		Task:        c.withReasons(task, *t, obs, wait),
 		Comments:    make([]Comment, 0, len(comments)),
 		Attachments: taskAttachments,
 	}
-	detail.Task.TurnStopped = turnStopped(state, obs, comments)
-	detail.Task.QuestionSummary = questionSummary(state, obs, comments)
-	detail.Task.AwaitingAccess = state == model.StateAwaitingReply && obs != nil && obs.PendingAccess != nil
 	detail.Goal = goal
 	if err := c.attachPause(ctx, &detail.Task); err != nil {
 		return TaskDetail{}, err
@@ -2675,6 +2699,11 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// work goes on to queue for itself, so a session-queued task counts
 	// as a level of self-approved work like any other
 	// (model.SelfApproved) and everything below it is bounded as usual.
+	// What does bound the session itself is per turn rather than per
+	// task (model.AutoSubmitLimits.TurnFanOut): one message is still a
+	// fast way to ask for a lot of work, so past that many in one turn
+	// the rest are filed for a person (spec director-capabilities
+	// §3.1.5, gap G12).
 	//
 	// It says nothing about autoMerge, which stays capped by AutoSubmits
 	// alone. Whether a proposal's own pull request is read is a question
@@ -2786,6 +2815,18 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		if !autoSubmit {
 			refusal = model.AutoApprovalRefusal(child, *proposedBy, sessionQueues, seeding)
 		}
+		// A proposal that targets or writes grain/config waits for a
+		// person whatever its proposer holds (model.ConfigRepoProposalHold):
+		// a session given propose_config_change holds grain/config in its
+		// Writes, which would otherwise let it queue a child that pushes
+		// there unreviewed. Grain's own hold, so it joins needsPersonWhy.
+		if why := model.ConfigRepoProposalHold(child); why != "" {
+			if needsPersonWhy == "" {
+				needsPersonWhy = why
+			} else {
+				needsPersonWhy += "; " + why
+			}
+		}
 		// A target only a person may approve: grain's own hold, not the
 		// run's, so it is neither tagged nor told to the run as one it
 		// asked for (heldNote) -- and asked before hold_for_approval, so a
@@ -2840,6 +2881,25 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			}
 			if limit != model.AutoSubmitWithinLimits {
 				autoSubmit = false
+				limitNote = model.AutoSubmitLimitNote(proposedBy.ID, limit, limits)
+			}
+		}
+		// A session's own permission has a bound of its own: how many
+		// proposals it may queue in one conversation turn
+		// (model.AutoSubmitLimits.TurnFanOut). Past it, filed for a
+		// person with a note saying why, as orchestrator.relayProposedTasks
+		// files the identical call.
+		if sessionQueued {
+			limits, err := c.autoSubmitLimits(ctx)
+			if err != nil {
+				return Task{}, err
+			}
+			limit, err := c.Store.ExceededSessionTurnLimit(ctx, proposedBy.ID, limits)
+			if err != nil {
+				return Task{}, err
+			}
+			if limit != model.AutoSubmitWithinLimits {
+				autoSubmit, sessionQueued = false, false
 				limitNote = model.AutoSubmitLimitNote(proposedBy.ID, limit, limits)
 			}
 		}
