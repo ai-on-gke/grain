@@ -226,7 +226,14 @@ func (m *passMaterialization) apply(ctx context.Context, sb Sandbox) error {
 	}
 	commander, ok := sandboxRunsCommands(sb)
 	if !ok {
-		if len(m.forwards) == 0 && len(m.pass.SetupCommands()) == 0 {
+		// A backend that cannot run commands (HostSandboxes) is still
+		// given the embedded bootstrap playbooks: public markdown compiled
+		// into this binary, with no forward and no setup command. Every
+		// other pass -- an in-process method's credential placements
+		// (model-proxy, release, ...) included -- is refused here as it
+		// was before the bootstrap-playbooks retirement, rather than
+		// written into a directory on grain's own host.
+		if len(m.forwards) == 0 && len(m.pass.SetupCommands()) == 0 && onlyEmbeddedBootstrapPlacements(m.pass) {
 			if rooted, hasRoot := sb.(rootedSandbox); hasRoot {
 				if root, err := rooted.Root(); err == nil && root != "" {
 					return placeAllUnderRoot(root, m.pass.Placements())
@@ -235,9 +242,7 @@ func (m *passMaterialization) apply(ctx context.Context, sb Sandbox) error {
 			if placer, hasPlacer := sb.(SandboxPlacer); hasPlacer {
 				return placeAllWithPlacer(ctx, placer, m.pass.Placements())
 			}
-			if onlyEmbeddedBootstrapPlacements(m.pass) {
-				return nil
-			}
+			return nil
 		}
 		return fmt.Errorf("this sandbox backend (%T) cannot run commands in its sandbox, so it cannot materialize capability grants", sb)
 	}

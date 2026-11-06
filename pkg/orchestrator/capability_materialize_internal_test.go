@@ -31,6 +31,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // commandSandbox is a Sandbox that records every command run in it and
@@ -339,5 +340,76 @@ func TestMaterializePassForwardsChannelPortsThroughTheRelaysForward(t *testing.T
 	m.Close()
 	if _, err := guest.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatalf("a channel connection survived its grant being closed: %v", err)
+	}
+}
+
+// rootOnlySandbox is a directory-backed Sandbox that cannot run commands,
+// the shape HostSandboxes has.
+type rootOnlySandbox struct{ root string }
+
+func (s *rootOnlySandbox) Name() string                              { return "run-1" }
+func (s *rootOnlySandbox) Tools(context.Context) ([]mcp.Tool, error) { return nil, nil }
+func (s *rootOnlySandbox) ConfigureGitCredentials(context.Context, string, string, mcp.GitIdentity) error {
+	return nil
+}
+func (s *rootOnlySandbox) Release(context.Context) error { return nil }
+func (s *rootOnlySandbox) Root() (string, error)         { return s.root, nil }
+
+// A sandbox that cannot run commands is given the embedded bootstrap
+// playbooks, and nothing else: another grant's placements -- credential
+// material, as every other server's are -- are refused rather than
+// written into a directory on grain's own host.
+func TestMaterializePassOnACommandlessSandboxPlacesOnlyTheBootstrapPlaybooks(t *testing.T) {
+	bootstrap := protocol.MintedGrant{
+		Grant: protocol.Grant{
+			Ref:  protocol.Ref{CapabilityID: model.ConfigMapCapabilityServerID, Method: model.ConfigMapMethod},
+			Args: map[string]any{"config_maps": []any{"bootstrap"}},
+		},
+		AttemptID: "grain-task-1-1-0",
+		Response: &protocol.MintResponse{Status: protocol.StatusOK, Placements: []protocol.Placement{{
+			Path: "/home/debian/.config-map/bootstrap/gcp-capabilities.md", Mode: "0644", Content: "# playbook\n",
+		}}},
+	}
+	root := t.TempDir()
+	m, err := materializePass(context.Background(), Config{}, &rootOnlySandbox{root: root},
+		&protocol.Pass{Grants: []protocol.MintedGrant{bootstrap}}, time.Now().Add(time.Hour), nil)
+	if err != nil {
+		t.Fatalf("bootstrap-only pass: %v", err)
+	}
+	m.Close()
+	if raw, err := os.ReadFile(filepath.Join(root, ".config-map", "bootstrap", "gcp-capabilities.md")); err != nil || string(raw) != "# playbook\n" {
+		t.Fatalf("bootstrap playbook placed = %q, %v", raw, err)
+	}
+
+	for name, other := range map[string]protocol.MintedGrant{
+		"another server's grant": {
+			Grant:     protocol.Grant{Ref: protocol.Ref{CapabilityID: passTestCap, Method: "gcp-key"}},
+			AttemptID: "grain-task-1-1-1",
+			Response: &protocol.MintResponse{Status: protocol.StatusOK, Placements: []protocol.Placement{{
+				Path: "/home/debian/.config/gcloud/key.json", Content: "secret",
+			}}},
+		},
+		"an operator config map": {
+			Grant: protocol.Grant{
+				Ref:  protocol.Ref{CapabilityID: model.ConfigMapCapabilityServerID, Method: model.ConfigMapMethod},
+				Args: map[string]any{"config_maps": []any{"bootstrap"}, "secrets": []any{"tokens"}},
+			},
+			AttemptID: "grain-task-1-1-1",
+			Response: &protocol.MintResponse{Status: protocol.StatusOK, Placements: []protocol.Placement{{
+				Path: "/home/debian/.config/gcloud/key.json", Content: "secret",
+			}}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			_, err := materializePass(context.Background(), Config{}, &rootOnlySandbox{root: root},
+				&protocol.Pass{Grants: []protocol.MintedGrant{bootstrap, other}}, time.Now().Add(time.Hour), nil)
+			if err == nil || !strings.Contains(err.Error(), "cannot materialize capability grants") {
+				t.Fatalf("materializePass = %v, want it refused", err)
+			}
+			if _, err := os.Stat(filepath.Join(root, ".config", "gcloud", "key.json")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("credential placed into a commandless sandbox: %v", err)
+			}
+		})
 	}
 }
