@@ -61,6 +61,9 @@ var (
 	ErrHostdRevoked = errors.New("model: host is revoked")
 	// ErrHostdExists is CreateHostd or RenameHostd on a name already taken.
 	ErrHostdExists = errors.New("model: a host by that name already exists")
+	// ErrHostdNotKeyBound is RenewHostdCredential on a host holding a legacy
+	// per-host token: only key-bound credentials renew (migrate with rekey).
+	ErrHostdNotKeyBound = errors.New("model: this host holds a legacy per-host token, which does not renew; migrate it with rekey")
 )
 
 // hostdNameRE is what a hostd name may be: a DNS label, so it reads the
@@ -517,14 +520,18 @@ func (s *Store) RotateHostdToken(ctx context.Context, name string) (string, erro
 	return token, nil
 }
 
-// RenewHostdCredential silently renews a connected host's credential for a
-// fresh HostdCredentialTTL window starting at now. When currentToken is
-// non-empty, it must be a live, non-expired token for name; when empty (an
-// already-authenticated mux session whose key proof was verified in-band),
-// any live non-expired token for name is extended/replaced.
+// RenewHostdCredential silently renews a connected key-bound host's
+// credential for a fresh HostdCredentialTTL window starting at now.
+// currentToken must be a live, non-expired token for name, and the host
+// must be key-bound: a legacy per-host token never renews (it would turn a
+// non-expiring token into a 30-day one with no key behind it), and the
+// caller has already checked the host's Ed25519 renewal proof.
 func (s *Store) RenewHostdCredential(ctx context.Context, name, currentToken string, now time.Time) (string, time.Time, error) {
 	if name == LocalHostd {
 		return "", time.Time{}, fmt.Errorf("%q is the co-located hostd, and it takes no token", LocalHostd)
+	}
+	if strings.TrimSpace(currentToken) == "" {
+		return "", time.Time{}, ErrHostdRevoked
 	}
 	now = now.UTC()
 	nextToken, err := GenerateHostdToken()
@@ -543,21 +550,22 @@ func (s *Store) RenewHostdCredential(ctx context.Context, name, currentToken str
 		if h.Revoked() {
 			return ErrHostdRevoked
 		}
-		if currentToken != "" {
-			var gotName string
-			var exp sql.NullTime
-			err := tx.QueryRowContext(ctx,
-				"SELECT `hostd`, `expires_at` FROM `hostd_token` WHERE `token_hash` = ? AND `revoked_at` IS NULL",
-				HashHostdToken(currentToken)).Scan(&gotName, &exp)
-			if errors.Is(err, sql.ErrNoRows) || gotName != name {
-				return ErrHostdRevoked
-			}
-			if err != nil {
-				return err
-			}
-			if exp.Valid && !exp.Time.UTC().After(now) {
-				return ErrHostdRevoked
-			}
+		if !h.KeyBound() {
+			return ErrHostdNotKeyBound
+		}
+		var gotName string
+		var exp sql.NullTime
+		err = tx.QueryRowContext(ctx,
+			"SELECT `hostd`, `expires_at` FROM `hostd_token` WHERE `token_hash` = ? AND `revoked_at` IS NULL",
+			HashHostdToken(currentToken)).Scan(&gotName, &exp)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && gotName != name) {
+			return ErrHostdRevoked
+		}
+		if err != nil {
+			return err
+		}
+		if exp.Valid && !exp.Time.UTC().After(now) {
+			return ErrHostdRevoked
 		}
 		grace := now.Add(hostdRenewGrace)
 		if _, err := tx.ExecContext(ctx,

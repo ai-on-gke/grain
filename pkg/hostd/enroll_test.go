@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -237,5 +238,101 @@ func TestKeyBoundConnectRejectsCopiedTokenAndRenewsSilently(t *testing.T) {
 	}
 	if remote.IsConnected("ws-keybound") {
 		t.Fatal("ws-keybound remained connected after Disconnect")
+	}
+}
+
+// POST /api/hostd/join records a nonce for any self-signed request before
+// its enrollment code is checked, so the replay cache an anonymous caller
+// can write to must be bounded: once it holds 1<<16 live nonces it refuses
+// new ones (failing closed), and it takes them again once those expire.
+func TestNonceReplayCacheIsBounded(t *testing.T) {
+	var c hostd.NonceReplayCache
+	now := time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC)
+	const limit = 1 << 16
+	for i := 0; i < limit; i++ {
+		if !c.CheckAndRecord("join:k", fmt.Sprintf("nonce-%016d", i), now, time.Minute) {
+			t.Fatalf("nonce %d refused below the bound", i)
+		}
+	}
+	if c.CheckAndRecord("join:k", "one-past-the-bound", now.Add(time.Second), time.Minute) {
+		t.Fatal("a full cache of live nonces took another")
+	}
+	if c.CheckAndRecord("join:k", fmt.Sprintf("nonce-%016d", 7), now.Add(time.Second), time.Minute) {
+		t.Fatal("a replayed nonce was taken")
+	}
+	later := now.Add(2 * time.Minute)
+	if !c.CheckAndRecord("join:k", "after-expiry", later, time.Minute) {
+		t.Fatal("the cache did not take a new nonce once the old ones expired")
+	}
+}
+
+// A session dialed in on a legacy per-host token has no bound key, so
+// OpRenew over it is refused before the controller's Renew is reached, even
+// when the host signs the proof with some key of its own.
+func TestInBandRenewIsRefusedOnALegacySession(t *testing.T) {
+	_, hostPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var renewMu sync.Mutex
+	renewCalls := 0
+	remote := &hostd.Remote{
+		ResolveCredential: func(_ context.Context, tok string) (hostd.ResolvedCredential, bool, error) {
+			if tok != "ghd_legacy_token" {
+				return hostd.ResolvedCredential{}, false, nil
+			}
+			return hostd.ResolvedCredential{Name: "ws-legacy", Owner: "bob@example.com"}, true, nil
+		},
+		Renew: func(_ context.Context, name, curTok string) (string, time.Time, error) {
+			renewMu.Lock()
+			renewCalls++
+			renewMu.Unlock()
+			return "ghd_should_not_be_minted", time.Now().Add(time.Hour), nil
+		},
+	}
+	srv := httptest.NewServer(remote)
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	dir := t.TempDir()
+	allowPath := filepath.Join(dir, "allow.yml")
+	if err := os.WriteFile(allowPath, []byte("clis: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dialer := hostd.Dialer{Server: srv.URL, Token: "ghd_legacy_token", Host: "legacy-box"}
+	renewed := make(chan string, 1)
+	hServer := &hostd.Server{
+		Allowlist:       allowPath,
+		AllowlistOwners: []uint32{uint32(os.Getuid())},
+		StateDir:        filepath.Join(dir, "state"),
+		Remote:          dialer.Dial,
+		RenewKey:        hostPriv,
+		RenewInterval:   20 * time.Millisecond,
+		CurrentToken:    func() string { return "ghd_legacy_token" },
+		OnTokenRenewed: func(tok string, _ time.Time) {
+			select {
+			case renewed <- tok:
+			default:
+			}
+		},
+	}
+	serveCtx, stopServe := context.WithCancel(ctx)
+	defer stopServe()
+	go func() { _ = hServer.Serve(serveCtx) }()
+
+	if err := remote.WaitHostd(ctx, "ws-legacy"); err != nil {
+		t.Fatalf("WaitHostd: %v", err)
+	}
+	select {
+	case tok := <-renewed:
+		t.Fatalf("a legacy session renewed its credential in-band: %q", tok)
+	case <-time.After(400 * time.Millisecond):
+	}
+	renewMu.Lock()
+	defer renewMu.Unlock()
+	if renewCalls != 0 {
+		t.Fatalf("Remote.Renew called %d times for a legacy session", renewCalls)
 	}
 }

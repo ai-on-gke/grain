@@ -479,3 +479,91 @@ func TestHostEnrollHandshakeKeyBoundConnectRenewalAndOSSDeviceFlow(t *testing.T)
 		t.Fatalf("DeleteHostd after revoke: %v", err)
 	}
 }
+
+// A key-bound host's credential is refused on /api/hostd/connect without
+// its private key, so a copied one must not be able to file a rekey that
+// moves the host to the copier's key either; and a legacy per-host token,
+// which has no key behind it, never renews over POST /api/hostd/renew.
+func TestHostdRekeyNeedsTheBoundKeyAndLegacyTokensDoNotRenew(t *testing.T) {
+	client, store, ctx := testClient(t)
+	client.Now = nil
+	srv := ui.NewServerWithClient(client)
+	now := time.Now().UTC()
+
+	boundPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundKey := hostd.PublicKeyString(boundPub)
+	jr, err := store.CreateHostJoinRequest(ctx, model.HostJoinRequest{
+		PublicKey: boundKey, KeyFingerprint: hostd.KeyFingerprint(boundPub),
+		Hostname: "bound-box", EnrolledBy: "owner@example.com",
+	}, mustDefaultEnrollmentCode(t, store), now)
+	if err != nil {
+		t.Fatalf("CreateHostJoinRequest: %v", err)
+	}
+	if _, _, err := store.AcceptHostJoinRequest(ctx, jr.ID, model.AcceptHostJoinOptions{AcceptedBy: "owner@example.com"}, now); err != nil {
+		t.Fatalf("AcceptHostJoinRequest: %v", err)
+	}
+	_, _, cred, _, accepted, err := store.ClaimAcceptedHostJoinRequest(ctx, jr.ID, now)
+	if err != nil || !accepted {
+		t.Fatalf("ClaimAcceptedHostJoinRequest = %v, %v", accepted, err)
+	}
+
+	rekey := func(priv ed25519.PrivateKey) *httptest.ResponseRecorder {
+		t.Helper()
+		req := hostd.JoinSubmitRequest{RekeyHostd: "bound-box", Hostname: "bound-box", OS: "linux", Arch: "amd64"}
+		if err := hostd.SignJoinSubmit(&req, priv, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+		body, _ := json.Marshal(req)
+		return serveFrom(srv, "203.0.113.70:443", http.MethodPost, "/api/hostd/join", string(body), map[string]string{
+			"Content-Type":    "application/json",
+			hostd.TokenHeader: cred,
+		})
+	}
+
+	_, otherPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := rekey(otherPriv); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "key-bound") {
+		t.Fatalf("rekey of a key-bound host with a copied credential and another key = %d %s, want 403", rec.Code, rec.Body.String())
+	}
+	if pending, err := store.ListPendingHostJoinRequests(ctx, time.Now().UTC()); err != nil || len(pending) != 0 {
+		t.Fatalf("pending after refused rekey = %+v, %v", pending, err)
+	}
+	if h, err := store.GetHostd(ctx, "bound-box"); err != nil || h == nil || h.PublicKey != boundKey {
+		t.Fatalf("host after refused rekey = %+v, %v", h, err)
+	}
+
+	// A legacy per-host token does not renew, even with a well-formed proof.
+	_, legacyTok, err := store.CreateHostd(ctx, model.Hostd{Name: "legacy-box"})
+	if err != nil {
+		t.Fatalf("CreateHostd: %v", err)
+	}
+	proof, err := hostd.SignRenewProof("legacy-box", legacyTok, otherPriv, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	proofRaw, _ := json.Marshal(proof)
+	rec := serveFrom(srv, "203.0.113.71:443", http.MethodPost, "/api/hostd/renew", string(proofRaw), map[string]string{
+		"Content-Type":    "application/json",
+		hostd.TokenHeader: legacyTok,
+	})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("POST /api/hostd/renew with a legacy token = %d %s, want 403", rec.Code, rec.Body.String())
+	}
+	if got, err := store.HostdForTokenAt(ctx, legacyTok, time.Now().UTC().Add(365*24*time.Hour)); err != nil || got == nil {
+		t.Fatalf("legacy token no longer resolves after a refused renew: %+v, %v", got, err)
+	}
+}
+
+func mustDefaultEnrollmentCode(t *testing.T, store *model.Store) string {
+	t.Helper()
+	c, err := store.EnsureDefaultHostEnrollmentCode(context.Background(), "owner@example.com")
+	if err != nil || c == nil || c.SecretCode == "" {
+		t.Fatalf("EnsureDefaultHostEnrollmentCode = %+v, %v", c, err)
+	}
+	return c.SecretCode
+}

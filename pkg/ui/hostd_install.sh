@@ -228,10 +228,6 @@ check_request() {
   [ "$(id -u "$HOSTD_USER")" != 0 ] || die "--user $HOSTD_USER is root, and the host agent refuses to run as root"
   HOSTD_GROUP="$(id -gn "$HOSTD_USER")"
 
-  if [ -n "$JOIN_CODE" ] && [ -z "$RELEASE" ]; then
-    ANY_VERSION=1
-  fi
-
   # A version this copy was not told is not a version it may skip
   # checking: without one, it installs nothing until it is given one.
   if [ "$ANY_VERSION" != 1 ]; then

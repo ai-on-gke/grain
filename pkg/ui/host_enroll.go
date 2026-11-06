@@ -146,6 +146,8 @@ func hostEnrollError(err error) error {
 	switch {
 	case errors.Is(err, model.ErrEnrollmentCodeNotFound), errors.Is(err, model.ErrJoinRequestNotFound):
 		return &NotFoundError{message: err.Error()}
+	case errors.Is(err, model.ErrRekeyKeyMismatch):
+		return &ForbiddenError{err: err}
 	case errors.Is(err, model.ErrEnrollmentCodeExists),
 		errors.Is(err, model.ErrEnrollmentCodeRevoked),
 		errors.Is(err, model.ErrEnrollmentCodeExpired),
@@ -503,6 +505,14 @@ func (s *Server) handleHostdJoin(w http.ResponseWriter, r *http.Request) {
 		h, err := s.tasks.Store.HostdForTokenAt(ctx, curTok, now)
 		if err != nil || h == nil || h.Name != strings.TrimSpace(req.RekeyHostd) || h.Revoked() {
 			writeError(w, http.StatusUnauthorized, apierror.Public("invalid current host credential for rekey"))
+			return
+		}
+		// A key-bound host's credential is useless without its private key
+		// (/api/hostd/connect refuses it), so a copied one must not be able
+		// to move the host to a new key either: only a request signed by the
+		// bound key itself rekeys it.
+		if h.KeyBound() && !model.SameHostPublicKey(h.PublicKey, req.PublicKey) {
+			writeError(w, http.StatusForbidden, apierror.Public(model.ErrRekeyKeyMismatch.Error()))
 			return
 		}
 	} else {
@@ -904,11 +914,15 @@ func (s *Server) handleHostdRenew(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, apierror.Public("host must have an active connection to renew its credential"))
 		return
 	}
-	if h.KeyBound() {
-		if err := hostd.VerifyRenewProof(h.Name, tok, h.PublicKey, proof, now, &s.hostdJoinReplay); err != nil {
-			writeError(w, http.StatusUnauthorized, apierror.Public("invalid renewal signature: "+err.Error()))
-			return
-		}
+	// Only key-bound credentials renew, and only with a fresh Ed25519 proof:
+	// a legacy per-host token is a bearer secret with no key behind it.
+	if !h.KeyBound() {
+		writeError(w, http.StatusForbidden, apierror.Public(model.ErrHostdNotKeyBound.Error()))
+		return
+	}
+	if err := hostd.VerifyRenewProof(h.Name, tok, h.PublicKey, proof, now, &s.hostdJoinReplay); err != nil {
+		writeError(w, http.StatusUnauthorized, apierror.Public("invalid renewal signature: "+err.Error()))
+		return
 	}
 	newTok, exp, err := s.tasks.Store.RenewHostdCredential(r.Context(), h.Name, tok, now)
 	if err != nil {

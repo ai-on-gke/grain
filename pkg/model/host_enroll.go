@@ -52,7 +52,19 @@ var (
 	ErrJoinRequestNotFound = errors.New("model: host join request not found")
 	// ErrJoinRequestAlreadyAccepted is Accept or Reject on an already-accepted request.
 	ErrJoinRequestAlreadyAccepted = errors.New("model: host join request has already been accepted")
+	// ErrRekeyKeyMismatch is a rekey of a host that is already key-bound by a
+	// request signed with a different key: only its bound key may rekey it
+	// (a copied credential alone must not move the host to a new key), and a
+	// host whose key is lost re-enrolls with --join instead.
+	ErrRekeyKeyMismatch = errors.New("model: this host is already key-bound, and only its bound Ed25519 key may rekey it; re-enroll it with --join instead")
 )
+
+// SameHostPublicKey reports whether a and b name the same "ed25519:<base64>"
+// public key, ignoring surrounding space and base64 padding.
+func SameHostPublicKey(a, b string) bool {
+	norm := func(s string) string { return strings.TrimRight(strings.TrimSpace(s), "=") }
+	return norm(a) != "" && norm(a) == norm(b)
+}
 
 // HostEnrollmentCode is one shared host enrollment code. It grants nothing
 // except filing a pending join request.
@@ -576,6 +588,9 @@ func (s *Store) CreateHostJoinRequest(ctx context.Context, r HostJoinRequest, ra
 			if h.Revoked() {
 				return ErrHostdRevoked
 			}
+			if h.KeyBound() && !SameHostPublicKey(h.PublicKey, r.PublicKey) {
+				return ErrRekeyKeyMismatch
+			}
 			r.DefaultLabels = h.Labels
 			r.DefaultCapacity = h.Capacity
 			r.EnrollmentCode = h.EnrollmentCode
@@ -724,6 +739,12 @@ func (s *Store) AcceptHostJoinRequest(ctx context.Context, id string, opts Accep
 			}
 			if h.Revoked() {
 				return ErrHostdRevoked
+			}
+			// The host may have become key-bound since this request was
+			// filed (another rekey accepted first): never move a key-bound
+			// host to a key other than its own.
+			if h.KeyBound() && !SameHostPublicKey(h.PublicKey, r.PublicKey) {
+				return ErrRekeyKeyMismatch
 			}
 			if owner == "" {
 				owner = h.Owner
