@@ -282,7 +282,7 @@ this mechanism rather than new tool plumbing:
 
 | Queued task | Capability | Preset |
 |---|---|---|
-| 399 | dispatch-control | `dispatch-control` |
+| 399 | dispatch-control (in-process, retired in schema migration 68) | `dispatch-control` |
 | 420 | task-admin | `task-admin` |
 | 421 | deployment-ops | `deployment-ops` |
 | 422 | ci-read | `ci-read` |
@@ -1070,10 +1070,12 @@ task" behave as follows:
    task is refused as a call that "does not name a repository it
    reaches". Moving a standing console session (a director chat) is
    refused, since an external agent owns none, and `api_start_ci_run`
-   with a `taskId` runs only for a task that holds the `grain-ci`
-   capability -- one filed on a repository whose CI Mode is "Use Grain
-   CI" (Settings -> Repos) -- answering `task 42 does not hold the
-   "grain-ci" capability` otherwise.
+   with a `taskId` runs only for a task that holds
+   `https://grain.dev/capabilities/grain#ci` (formerly `grain-ci`,
+   retired in schema migration 96) -- one filed on a repository whose CI
+   Mode is "Use Grain CI" (Settings -> Repos) -- answering `task 42 does
+   not hold the "https://grain.dev/capabilities/grain#ci={}" grant`
+   otherwise.
 
    The plain `curl` calls above work without an `initialize` handshake:
    the endpoint keeps no session, so every request stands on its own.
