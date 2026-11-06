@@ -215,7 +215,7 @@ func CheckDaemonFlags(cfg Config, hasLocalSandboxes bool, checkPackageCache func
 	if err := CheckUIAllowedPrincipals(cfg); err != nil {
 		return err
 	}
-	if err := CheckUIRequireIAP(cfg); err != nil {
+	if err := CheckUIRequireVerifier(cfg); err != nil {
 		return err
 	}
 	if err := CheckCICacheBounds(cfg); err != nil {

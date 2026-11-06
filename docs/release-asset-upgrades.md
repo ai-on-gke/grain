@@ -12,10 +12,20 @@ When `-upgrade-image-source` (`GRAIN_UPGRADE_IMAGE_SOURCE`) is unset:
 2. If the target release does not exist yet or carries no `images.json` manifest asset, the upgrade automatically falls back to `docker pull` from the configured container registry (`-upgrade-image`) and records:
    `release has no image assets; pulled from <registry>`
    in the upgrade status, on [Settings -> Upgrade](/settings/upgrade), and in the post-upgrade check task.
-   A **moving** release (`channel-<branch>`, `latest`, or a pre-channel bare branch tag) that exists but has no `images.json` is not treated this way: its publisher deletes `images.json` first and uploads it last when it re-points the release, so the release is mid-update. The upgrade fails before cutover with "try again later" and never falls back to the registry, even under an explicit `-upgrade-image-fallback=registry`; the next check retries. Only a release that does not exist, or an immutable one (`sha-<short>`, `vX.Y.Z`) without a manifest, falls back.
+   A **moving** release (`channel-<branch>`, `latest`, or a pre-channel bare branch tag) that exists but has no `images.json` is not treated this way: its publisher uploads `images.json.next` and swaps it into place when it re-points the release, so the release is mid-update. The upgrade fails before cutover with "try again later" and never falls back to the registry, even under an explicit `-upgrade-image-fallback=registry`; the next check retries. Only a release that does not exist, an immutable one (`sha-<short>`, `vX.Y.Z`) without a manifest, or a moving one whose body says `tagged, not published`, falls back.
 3. Integrity failures (an invalid `images.json`, a missing `.sha256` sidecar, a SHA-256 mismatch, a Docker image ID mismatch, or a failed `-upgrade-verify-cmd`) **never** fall back silently.
 
 Pinning `-upgrade-image-source=release-assets` (or registering `Source: upgrade.ImageSourceReleaseAssets` via `upgrade.RegisterTrackDefaults` for an edition) disables the automatic missing-manifest fallback unless `-upgrade-image-fallback=registry` is explicitly configured. Pinning `-upgrade-image-source=registry` skips release lookups and always runs `docker pull` (with optional `-upgrade-image-fallback=release-assets`).
+
+### Tagged, not published
+
+A publisher may write every tag (`sha-<short>`, `channel-<branch>`, `vX.Y.Z`, `latest`) while uploading no assets, leaving empty releases whose body says `tagged, not published`. A deployment pinned to `release-assets` with no registry fallback keeps working against the last release that was published, meaning a non-draft, non-pointer release carrying `images.json` (newest by `created_at`, then id, from a paginated `GET /repos/<owner>/<name>/releases?per_page=100`):
+
+- **`main` / `channel-*` / `latest`**: when the target release is missing, or has no `images.json` and no `images.json.next` swap in flight, the upgrade resolves to the newest published release. `latest` prefers the newest published non-prerelease `vX.Y.Z` and falls back to any published release. A channel with `images.json.next` up is still mid-update and retried.
+- **An explicit `vX.Y.Z` or `sha-<short>`** with no `images.json` (or missing, while the releases list answers) is refused before anything is downloaded: `release <tag> on <host>/<owner>/<repo> is not published; the newest published release is <newest>`. For a `vX.Y.Z` the release it names is the newest published non-prerelease version, if there is one. The automatic upgrade's probe treats such a target as nothing to install.
+- **Released versions** listed on [Settings -> Upgrade](/settings/upgrade), and the one the release-triggered automatic upgrade picks, are only versions (and release candidates) whose release carries `images.json`.
+
+Before the first `docker load`, staging checks that every image the manifest names (the daemon, `guest`, and `k8s-sandbox`) has its tarball and a `.sha256` sidecar agreeing with `images.json`. A missing or mismatched asset is refused before Docker holds any of the release's images. Each tarball's SHA-256 is also checked as it streams, before it is loaded.
 
 ## Daemon flags and environment variables
 
@@ -44,7 +54,7 @@ Publishing a release whose git tag has the same bare name as a branch (such as `
 
 Contract v2 keeps tarballs only on immutable releases (`sha-<short>`, `vX.Y.Z`). A moving `channel-<branch>` release is a pointer that holds only a schema-2 `images.json`, in which every image entry adds `"release": "<immutable tag>"`, the release holding that image's asset and `.sha256` sidecar. The loader looks that release up by tag through the same releases API and downloads the asset from it by name; a `release` naming a moving release is refused. Schema 1 (assets on the release itself) is still accepted, and immutable releases may write either schema.
 
-A channel release with no `images.json`, or two of them while its publisher swaps them, is mid-update: an upgrade onto it fails before cutover with "try again later", and the unchanged probe reports nothing to install so the next poll retries.
+A channel release with no `images.json`, or two of them while its publisher swaps them, is mid-update: an upgrade onto it fails before cutover with "try again later", and the unchanged probe reports nothing to install so the next poll retries. On a deployment that loads release assets only, a channel with neither `images.json` nor `images.json.next` was tagged without being published, and resolves to the newest published release instead (see [Tagged, not published](#tagged-not-published)).
 
 ## `images.json` v1 contract
 

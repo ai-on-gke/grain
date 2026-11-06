@@ -236,8 +236,12 @@ type Config struct {
 	UiIAPAudience string
 	UiIAPIssuer   string
 	UiIAPKeysURL  string
-	// UiRequireIAP is -ui-require-iap (ui.Config.RequireIAP): the access
-	// code works over unforwarded loopback only.
+	// UiRequireVerifier is -ui-require-verifier (ui.Config.RequireVerifier):
+	// network callers must sign in through the named IdentityVerifier, and
+	// the access code works over unforwarded loopback only.
+	UiRequireVerifier string
+	// UiRequireIAP is -ui-require-iap (ui.Config.RequireIAP), an alias for
+	// UiRequireVerifier = "iap".
 	UiRequireIAP        bool
 	UiAllowedPrincipals []string
 	UiOpen              bool

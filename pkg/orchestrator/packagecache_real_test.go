@@ -155,9 +155,10 @@ func TestPackageCachePullsThroughARealDockerd(t *testing.T) {
 	}
 
 	for _, p := range probes {
+		t.Cleanup(func() { removeImage(t, p.ref) })
 		removeImage(t, p.ref)
-		if out, err := dockerCLI(t, 2*time.Minute, "system", "prune", "-af"); err != nil {
-			t.Fatalf("emptying dockerd store before pull: %v\n%s", err, out)
+		if out, err := dockerCLI(t, 2*time.Minute, "image", "prune", "-f"); err != nil {
+			t.Fatalf("pruning dangling images before pull: %v\n%s", err, out)
 		}
 		seen.reset()
 		if out, err := dockerCLI(t, 3*time.Minute, "pull", p.ref); err != nil {
@@ -178,8 +179,8 @@ func TestPackageCachePullsThroughARealDockerd(t *testing.T) {
 		// Second pull
 		seen.reset()
 		removeImage(t, p.ref)
-		if out, err := dockerCLI(t, 2*time.Minute, "system", "prune", "-af"); err != nil {
-			t.Fatalf("emptying dockerd store between pulls: %v\n%s", err, out)
+		if out, err := dockerCLI(t, 2*time.Minute, "image", "prune", "-f"); err != nil {
+			t.Fatalf("pruning dangling images between pulls: %v\n%s", err, out)
 		}
 		if out, err := dockerCLI(t, 3*time.Minute, "pull", p.ref); err != nil {
 			t.Fatalf("pulling %s a second time: %v\n%s\n\nwhat cache was asked for:\n%s", p.ref, err, out, seen.report())

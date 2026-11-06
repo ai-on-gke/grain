@@ -50,6 +50,12 @@ type fakeReleaseSpec struct {
 	targetCommitish string
 	assets          map[string][]byte
 	redirectBlobURL string
+	// id, createdAt, body and prerelease are answered as the release's
+	// id, created_at, body and prerelease.
+	id         int64
+	createdAt  string
+	body       string
+	prerelease bool
 }
 
 type fakeForgeServer struct {
@@ -194,8 +200,12 @@ func (f *fakeForgeServer) toGitHubRelease(spec *fakeReleaseSpec, enterprisePrefi
 		id++
 	}
 	return githubRelease{
+		ID:              spec.id,
 		TagName:         spec.tag,
 		TargetCommitish: spec.targetCommitish,
+		Prerelease:      spec.prerelease,
+		CreatedAt:       spec.createdAt,
+		Body:            spec.body,
 		Assets:          assets,
 	}
 }
@@ -1610,5 +1620,289 @@ func TestReleaseTokenStaysOnTheAPIHost(t *testing.T) {
 		if got := req.Header.Get("Authorization"); got != want {
 			t.Errorf("Authorization to %s = %q, want %q", target, got, want)
 		}
+	}
+}
+
+// publishRelease adds a v1 release carrying images.json and its daemon
+// tarball, created at createdAt with id.
+func publishRelease(f *fakeForgeServer, tag, commit, createdAt string, id int64) {
+	addV1Release(f, tag, "github.com/team/edition", commit, tag, "edition-local/grain:sha-"+commit[:12], daemonIDForCommit(commit), false)
+	f.releases[tag].createdAt, f.releases[tag].id = createdAt, id
+}
+
+// tagUnpublished adds the empty release the publisher writes while asset
+// publishing is off: every tag, no assets, "tagged, not published".
+func tagUnpublished(f *fakeForgeServer, tag, commit, createdAt string, id int64) {
+	f.releases[tag] = &fakeReleaseSpec{
+		tag:             tag,
+		targetCommitish: commit,
+		assets:          map[string][]byte{},
+		id:              id,
+		createdAt:       createdAt,
+		body:            "Release " + tag + ": tagged, not published (PUBLISH_RELEASE_ASSETS is off).",
+	}
+}
+
+func daemonIDForCommit(commit string) string {
+	switch commit {
+	case testCommit1:
+		return testDaemonID1
+	case testCommit2:
+		return testDaemonID2
+	}
+	return "sha256:" + strings.Repeat("e", 64)
+}
+
+func (d *fakeDockerEnv) loads(t *testing.T) int {
+	t.Helper()
+	raw, err := os.ReadFile(d.loadedLog)
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(strings.Fields(string(raw)))
+}
+
+// TestReleaseAssetsStayOnTheLastPublishedRelease: while the publisher
+// writes every tag but uploads no assets ("tagged, not published"), an
+// explicit release-assets deployment keeps working against the last
+// release that was published, refuses a tag that never was, and is never
+// offered one.
+func TestReleaseAssetsStayOnTheLastPublishedRelease(t *testing.T) {
+	shortRestartGrace(t)
+	const (
+		commit3 = "3333333333333333333333333333333333333333"
+		commit4 = "4444444444444444444444444444444444444444"
+	)
+	// v3.2.0 (published, commit1) < sha-222222222222 (published, newest
+	// published) < v3.3.0 / sha-333333333333 / channel-main (tagged, not
+	// published).
+	setup := func(t *testing.T) *fakeForgeServer {
+		forge := newFakeForgeServer(t, "team", "edition")
+		publishRelease(forge, "v3.2.0", testCommit1, "2026-11-01T10:00:00Z", 10)
+		publishRelease(forge, "sha-222222222222", testCommit2, "2026-11-02T10:00:00Z", 11)
+		tagUnpublished(forge, "sha-333333333333", commit3, "2026-11-04T10:00:00Z", 12)
+		tagUnpublished(forge, "v3.3.0", commit3, "2026-11-04T10:00:01Z", 13)
+		tagUnpublished(forge, "channel-main", commit3, "2026-11-04T10:00:02Z", 14)
+		return forge
+	}
+	newU := func(t *testing.T, forge *fakeForgeServer, dk *fakeDockerEnv) *Upgrader {
+		t.Helper()
+		dir := t.TempDir()
+		return newUpgrader(t, Config{
+			Image: &ImageConfig{
+				Repository: "edition-local/grain",
+				Source:     ImageSourceReleaseAssets,
+				RefFile:    filepath.Join(dir, "image.env"),
+				PullCmd:    []string{"false"},
+				LoadCmd: dk.loadCmd(map[string][2]string{
+					testCommit1: {"edition-local/grain:sha-111111111111", testDaemonID1},
+					testCommit2: {"edition-local/grain:sha-222222222222", testDaemonID2},
+				}),
+				InspectIDCmd: dk.inspectIDCmd(),
+				TagCmd:       dk.tagCmd(),
+				RunCmd:       dk.runCmd(),
+				RemoveCmd:    []string{"true"},
+				ListCmd:      []string{"true"},
+				ReleaseAssets: ReleaseAssetsConfig{
+					Repository:    "github.com/team/edition",
+					ClientForHost: forge.clientFunc("", "", ""),
+				},
+			},
+			HealthCheckArgs: []string{"schema-version"},
+			StatusFile:      filepath.Join(dir, "status.json"),
+		})
+	}
+
+	t.Run("main resolves to the newest published release when channel-main is tagged, not published", func(t *testing.T) {
+		forge := setup(t)
+		dk := newFakeDockerEnv(t)
+		u := newU(t, forge, dk)
+		if !u.releaseAssetsOnly() {
+			t.Fatal("explicit release-assets with no fallback should load release assets only")
+		}
+		status := runUpgradeToCompletion(t, u, "main")
+		if status.Phase != PhaseOK {
+			t.Fatalf("status = %+v", status)
+		}
+		if got := dk.getTag("edition-local/grain:main"); got != testDaemonID2 {
+			t.Errorf("edition-local/grain:main = %q, want %q (sha-222222222222)", got, testDaemonID2)
+		}
+	})
+
+	t.Run("main resolves to the newest published release when channel-main is missing", func(t *testing.T) {
+		forge := setup(t)
+		delete(forge.releases, "channel-main")
+		dk := newFakeDockerEnv(t)
+		status := runUpgradeToCompletion(t, newU(t, forge, dk), "main")
+		if status.Phase != PhaseOK {
+			t.Fatalf("status = %+v", status)
+		}
+		if got := dk.getTag("edition-local/grain:main"); got != testDaemonID2 {
+			t.Errorf("edition-local/grain:main = %q, want %q (sha-222222222222)", got, testDaemonID2)
+		}
+	})
+
+	t.Run("latest on an empty release resolves to the newest published version", func(t *testing.T) {
+		forge := setup(t)
+		forge.latestTag = "v3.3.0"
+		// A newer published prerelease is passed over for latest.
+		publishRelease(forge, "v3.2.1", commit4, "2026-11-03T10:00:00Z", 15)
+		forge.releases["v3.2.1"].prerelease = true
+		dk := newFakeDockerEnv(t)
+		status := runUpgradeToCompletion(t, newU(t, forge, dk), "latest")
+		if status.Phase != PhaseOK {
+			t.Fatalf("status = %+v", status)
+		}
+		if got := dk.getTag("edition-local/grain:latest"); got != testDaemonID1 {
+			t.Errorf("edition-local/grain:latest = %q, want %q (v3.2.0)", got, testDaemonID1)
+		}
+	})
+
+	t.Run("a channel mid-swap still waits for its publisher", func(t *testing.T) {
+		forge := setup(t)
+		forge.releases["channel-main"] = &fakeReleaseSpec{
+			tag:             "channel-main",
+			targetCommitish: commit3,
+			assets:          map[string][]byte{"images.json.next": []byte(`{"schema":2}`)},
+		}
+		dk := newFakeDockerEnv(t)
+		status := runUpgradeToCompletion(t, newU(t, forge, dk), "main")
+		if status.Phase != PhaseFailed || !strings.Contains(status.Detail, "try again later") {
+			t.Fatalf("status = %+v, want a failure that waits for the swap", status)
+		}
+		if n := dk.loads(t); n != 0 {
+			t.Errorf("docker load ran %d times for a channel mid-swap, want 0", n)
+		}
+	})
+
+	for _, tc := range []struct {
+		name, target, want string
+		remove             bool
+	}{
+		{"unpublished version", "v3.3.0", "release v3.3.0 on github.com/team/edition is not published; the newest published release is v3.2.0", false},
+		{"unpublished sha", "sha-333333333333", "release sha-333333333333 on github.com/team/edition is not published; the newest published release is sha-222222222222", false},
+		{"missing version", "v3.4.0", "release v3.4.0 on github.com/team/edition is not published; the newest published release is v3.2.0", true},
+		{"missing sha", "sha-444444444444", "release sha-444444444444 on github.com/team/edition is not published; the newest published release is sha-222222222222", true},
+	} {
+		t.Run(tc.name+" is refused naming the newest published release", func(t *testing.T) {
+			forge := setup(t)
+			if _, exists := forge.releases[tc.target]; exists == tc.remove {
+				t.Fatalf("fixture: release %s exists=%v", tc.target, exists)
+			}
+			dk := newFakeDockerEnv(t)
+			u := newU(t, forge, dk)
+			status := runUpgradeToCompletion(t, u, tc.target)
+			if status.Phase != PhaseFailed || !strings.Contains(status.Detail, tc.want) {
+				t.Fatalf("status = %+v, want a refusal saying %q", status, tc.want)
+			}
+			if n := dk.loads(t); n != 0 {
+				t.Errorf("docker load ran %d times for %s, want 0", n, tc.target)
+			}
+			if forge.tarDownloads.Load() != 0 {
+				t.Errorf("downloaded %d tarballs for %s, want 0", forge.tarDownloads.Load(), tc.target)
+			}
+		})
+	}
+
+	t.Run("an unpublished target is nothing for the automatic upgrade to install", func(t *testing.T) {
+		forge := setup(t)
+		dk := newFakeDockerEnv(t)
+		u := newU(t, forge, dk)
+		if err := os.WriteFile(u.cfg.Image.RefFile, []byte("GRAIN_IMAGE=edition-local/grain:v3.2.0\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		same, err := u.AlreadyRunning(context.Background(), "v3.3.0")
+		if err != nil || !same {
+			t.Errorf("AlreadyRunning(v3.3.0) = (%v, %v), want (true, nil)", same, err)
+		}
+	})
+
+	for _, tc := range []struct{ name, asset string }{
+		{"missing sandbox tarball", "guest-image.tar.gz"},
+		{"missing sandbox checksum", "guest-image.tar.gz.sha256"},
+		{"corrupt sandbox checksum", ""},
+	} {
+		t.Run(tc.name+" is refused before anything is loaded", func(t *testing.T) {
+			forge := newFakeForgeServer(t, "team", "edition")
+			addV1Release(forge, "v3.2.0", "github.com/team/edition", testCommit1, "v3.2.0", "edition-local/grain:sha-111111111111", testDaemonID1, true)
+			if tc.asset != "" {
+				delete(forge.releases["v3.2.0"].assets, tc.asset)
+			} else {
+				forge.releases["v3.2.0"].assets["guest-image.tar.gz.sha256"] = []byte(strings.Repeat("0", 64) + "  guest-image.tar.gz\n")
+			}
+			dk := newFakeDockerEnv(t)
+			status := runUpgradeToCompletion(t, newU(t, forge, dk), "v3.2.0")
+			if status.Phase != PhaseFailed || !strings.Contains(status.Detail, "guest") {
+				t.Fatalf("status = %+v, want a refusal naming the guest image", status)
+			}
+			if n := dk.loads(t); n != 0 {
+				t.Errorf("docker load ran %d times, want 0 (nothing loaded before every asset checks out)", n)
+			}
+		})
+	}
+
+	t.Run("Targets and LatestRelease never offer an unpublished version", func(t *testing.T) {
+		forge := setup(t)
+		forge.releases["v3.4.0"] = &fakeReleaseSpec{tag: "v3.4.0", assets: map[string][]byte{"notes.txt": []byte("notes")}}
+		u := newU(t, forge, newFakeDockerEnv(t))
+		latest, err := u.LatestRelease(context.Background())
+		if err != nil || latest != "v3.2.0" {
+			t.Fatalf("LatestRelease = (%q, %v), want (v3.2.0, nil)", latest, err)
+		}
+		var versions []string
+		for _, tg := range u.Targets(context.Background()).Targets {
+			if tg.Kind == TargetVersion {
+				versions = append(versions, tg.Name)
+			}
+		}
+		if !slices.Equal(versions, []string{"v3.2.0"}) {
+			t.Errorf("Targets versions = %v, want [v3.2.0]", versions)
+		}
+	})
+
+	t.Run("a registry fallback still lists every tagged version", func(t *testing.T) {
+		forge := setup(t)
+		u := newU(t, forge, newFakeDockerEnv(t))
+		u.cfg.Image.Fallback, u.cfg.Image.FallbackExplicit = ImageSourceRegistry, true
+		if u.releaseAssetsOnly() {
+			t.Fatal("a registry fallback should not load release assets only")
+		}
+		tags, err := u.listReleaseTags(context.Background())
+		if err != nil || !slices.Contains(tags, "v3.3.0") {
+			t.Errorf("listReleaseTags = (%v, %v), want v3.3.0 listed", tags, err)
+		}
+	})
+}
+
+func TestPublishedReleasesSortsNewestFirstAndSkipsPointers(t *testing.T) {
+	t.Parallel()
+	manifest := []githubReleaseAsset{{Name: "images.json"}}
+	got := publishedReleases([]githubRelease{
+		{ID: 1, TagName: "v1.0.0", CreatedAt: "2026-10-01T00:00:00Z", Assets: manifest},
+		{ID: 2, TagName: "channel-main", CreatedAt: "2026-11-05T00:00:00Z", Assets: manifest},
+		{ID: 3, TagName: "sha-aaaaaaaaaaaa", CreatedAt: "2026-11-03T00:00:00Z", Assets: manifest},
+		{ID: 4, TagName: "sha-bbbbbbbbbbbb", CreatedAt: "2026-11-03T00:00:00Z", Assets: manifest},
+		{ID: 5, TagName: "v1.1.0", CreatedAt: "2026-11-04T00:00:00Z", Draft: true, Assets: manifest},
+		{ID: 6, TagName: "v1.2.0", CreatedAt: "2026-11-04T00:00:00Z", Body: "tagged, not published"},
+		{ID: 7, TagName: "latest", CreatedAt: "2026-11-05T00:00:00Z", Assets: manifest},
+	}, "images.json")
+	var tags []string
+	for _, r := range got {
+		tags = append(tags, r.TagName)
+	}
+	if want := []string{"sha-bbbbbbbbbbbb", "sha-aaaaaaaaaaaa", "v1.0.0"}; !slices.Equal(tags, want) {
+		t.Errorf("publishedReleases = %v, want %v", tags, want)
+	}
+	if rel, ok := pickPublishedRelease(got, true); !ok || rel.TagName != "v1.0.0" {
+		t.Errorf("pickPublishedRelease(preferVersion) = %q, %v; want v1.0.0", rel.TagName, ok)
+	}
+	if rel, ok := pickPublishedRelease(got, false); !ok || rel.TagName != "sha-bbbbbbbbbbbb" {
+		t.Errorf("pickPublishedRelease = %q, %v; want sha-bbbbbbbbbbbb", rel.TagName, ok)
+	}
+	if _, ok := pickPublishedRelease(nil, true); ok {
+		t.Error("pickPublishedRelease(nil) found a release")
 	}
 }

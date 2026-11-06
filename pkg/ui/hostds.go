@@ -27,6 +27,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/hostd"
@@ -66,8 +67,9 @@ type UpdateHostdRequest struct {
 type IssuedHostdToken struct {
 	Hostd model.Hostd `json:"hostd"`
 	Token string      `json:"token"`
-	// Install is what the command that installs the hostd on its machine
-	// passes /api/hostd/install.sh (HostdInstall).
+	// Install is how to install the hostd on its machine: the lines to
+	// run and a note (RegisterHostdInstall), and what the root installer's
+	// command passes /api/hostd/install.sh (HostdInstall). Never the token.
 	Install *HostdInstall `json:"install,omitempty"`
 }
 
@@ -270,7 +272,7 @@ func (s *Server) handleCreateHostd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("grain hostd: registered hostd %s (owner %q)", issued.Hostd.Name, issued.Hostd.Owner)
-	issued.Install = s.hostdInstallInfo()
+	issued.Install = s.hostdInstallFor(r, issued.Hostd, issued.Token)
 	writeJSON(w, http.StatusCreated, issued)
 }
 
@@ -281,8 +283,40 @@ func (s *Server) handleRotateHostdToken(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	log.Printf("grain hostd: rotated hostd %s's token", issued.Hostd.Name)
-	issued.Install = s.hostdInstallInfo()
+	issued.Install = s.hostdInstallFor(r, issued.Hostd, issued.Token)
 	writeJSON(w, http.StatusOK, issued)
+}
+
+// HostdInstallTarget is the registry row whose install instructions GET
+// /api/hostds/{name}/install shows again: a remote hostd that is not
+// revoked. The co-located hostd is not installed anywhere else.
+func (c *Client) HostdInstallTarget(ctx context.Context, name string) (model.Hostd, error) {
+	if name == model.LocalHostd {
+		return model.Hostd{}, validationErrorf("%q is the co-located hostd, and it is not installed elsewhere", name)
+	}
+	h, err := c.Store.GetHostd(ctx, name)
+	if err != nil {
+		return model.Hostd{}, err
+	}
+	if h == nil {
+		return model.Hostd{}, &NotFoundError{message: "no hostd " + strconv.Quote(name)}
+	}
+	if h.Revoked() {
+		return model.Hostd{}, validationErrorf("hostd %q is revoked", name)
+	}
+	return *h, nil
+}
+
+// handleHostdInstall is GET /api/hostds/{name}/install: the instructions
+// for installing a hostd already registered, shown again without rotating
+// its token (which they never carry).
+func (s *Server) handleHostdInstall(w http.ResponseWriter, r *http.Request) {
+	h, err := s.tasks.HostdInstallTarget(r.Context(), r.PathValue("name"))
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.hostdInstallFor(r, h, ""))
 }
 
 func (s *Server) handleRevokeHostd(w http.ResponseWriter, r *http.Request) {
@@ -332,6 +366,14 @@ func (c *HTTPClient) ListHostds(ctx context.Context) ([]HostdView, error) {
 func (c *HTTPClient) CreateHostd(ctx context.Context, req CreateHostdRequest) (IssuedHostdToken, error) {
 	var out IssuedHostdToken
 	err := c.do(ctx, http.MethodPost, "/api/hostds", req, &out)
+	return out, err
+}
+
+// HostdInstall is GET /api/hostds/{name}/install: how to install a
+// registered hostd on its machine, without its token.
+func (c *HTTPClient) HostdInstall(ctx context.Context, name string) (HostdInstall, error) {
+	var out HostdInstall
+	err := c.do(ctx, http.MethodGet, "/api/hostds/"+url.PathEscape(name)+"/install", nil, &out)
 	return out, err
 }
 

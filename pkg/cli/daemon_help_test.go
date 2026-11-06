@@ -37,6 +37,7 @@ func TestDaemonHelpUnchanged(t *testing.T) {
 	for _, env := range []string{
 		dataDirEnvVar, "GRAIN_DB_DRIVER", "GRAIN_DB_DSN", "GRAIN_POSTGRES_URL", "DATABASE_URL",
 		"GRAIN_SECRETS_BACKEND", "GRAIN_SECRETS_SM_PREFIX", "GRAIN_OBJECT_STORE",
+		"GRAIN_REQUIRE_IAP", "GRAIN_REQUIRE_VERIFIER",
 	} {
 		t.Setenv(env, "")
 	}

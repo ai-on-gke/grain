@@ -63,15 +63,16 @@ type Options struct {
 	// with it, as on a real deployment (docs/access-code.md). Empty keeps
 	// it beside the throwaway store and logs it.
 	AccessCodeFile string
-	// IAPAudience, IAPIssuer, IAPKeysURL, RequireIAP and
+	// IAPAudience, IAPIssuer, IAPKeysURL, RequireVerifier, RequireIAP and
 	// AllowedPrincipals are the daemon's -ui-iap-audience,
-	// -ui-iap-issuer, -ui-iap-keys-url, -ui-require-iap and
-	// -ui-allowed-principals, so the demo can be put behind a signing
-	// proxy (a real IAP or a test issuer) and sign callers in as a
-	// deployment does (design/design/authentication.design.md).
+	// -ui-iap-issuer, -ui-iap-keys-url, -ui-require-verifier,
+	// -ui-require-iap and -ui-allowed-principals, so the demo can be put
+	// behind a signing proxy (a real IAP or a test issuer) and sign callers
+	// in as a deployment does (design/design/authentication.design.md).
 	IAPAudience       string
 	IAPIssuer         string
 	IAPKeysURL        string
+	RequireVerifier   string
 	RequireIAP        bool
 	AllowedPrincipals []string
 	// CloudIdentityEndpoint, when set, is the base URL group: entries in
@@ -268,6 +269,7 @@ func Run(opts Options) error {
 		IAPAudience:       opts.IAPAudience,
 		IAPIssuer:         opts.IAPIssuer,
 		IAPKeysURL:        opts.IAPKeysURL,
+		RequireVerifier:   opts.RequireVerifier,
 		RequireIAP:        opts.RequireIAP,
 		AllowedPrincipals: opts.AllowedPrincipals,
 	}
