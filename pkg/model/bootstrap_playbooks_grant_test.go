@@ -68,8 +68,8 @@ func TestIsBootstrapPlaybooksGrant(t *testing.T) {
 		ConfigMapRef + `={"keys":["bootstrap/host-migration.md"]}`:                        true,
 		skill + `={"skills":["bootstrap"]}`:                                               true,
 		cmSkill + `={"skills":["bootstrap","ops"]}`:                                       true,
-		ConfigMapRef:                              false,
-		ConfigMapRef + `={}`:                      false,
+		ConfigMapRef:         false,
+		ConfigMapRef + `={}`: false,
 		ConfigMapRef + `={"config_maps":["ops"]}`: false,
 		// Keys subset excludes bootstrap/* even though bootstrap is in config_maps.
 		ConfigMapRef + `={"config_maps":["bootstrap","tools"],"keys":["tools/a"]}`: false,
@@ -79,10 +79,10 @@ func TestIsBootstrapPlaybooksGrant(t *testing.T) {
 		ConfigMapRef + `={"secrets":["s"],"keys":["bootstrap/a.md"]}`:         false,
 		ConfigMapRef + `={"config_maps":["bootstrap",1]}`:                     false,
 		// Bare/empty skill grants on unrelated skill directories do not open src://playbooks.
-		skill:                        false,
-		skill + `={}`:                false,
-		cmSkill:                      false,
-		cmSkill + `={}`:              false,
+		skill:                         false,
+		skill + `={}`:                 false,
+		cmSkill:                       false,
+		cmSkill + `={}`:               false,
 		skill + `={"skills":["ops"]}`: false,
 	} {
 		if got := IsBootstrapPlaybooksGrant(grant); got != want {
