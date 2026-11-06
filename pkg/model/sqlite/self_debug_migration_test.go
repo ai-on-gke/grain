@@ -77,3 +77,61 @@ func TestMigration115RewritesSelfDebugInTheCatalogue(t *testing.T) {
 		}
 	}
 }
+
+// Migration 118 rewrites capability_policy deny rules and catalogue defaults
+// for bootstrap-playbooks, while never rewriting a non-deny rule (such as
+// AllowUntrusted) onto the shared config-map#config-map method where it would
+// admit secret maps on untrusted runs.
+func TestMigration118RewritesBootstrapPlaybooksDenyWithoutWideningAllowUntrusted(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+	disabled := false
+	cfg := testConfig()
+	cfg.CapabilityPolicy = model.CapabilityPolicy{
+		Rules: []model.CapabilityPolicyRule{
+			{Capability: "bootstrap-playbooks", Repos: []string{"acme/*"}, Deny: true},
+			{Capability: "bootstrap-playbooks", AllowUntrusted: true},
+		},
+		Catalogue: &model.CapabilityCatalogue{
+			Defaults: model.CatalogueDefaults{
+				Task: []string{"read-issues", "bootstrap-playbooks"},
+				CI:   []string{"bootstrap-playbooks"},
+			},
+			InProcess: map[string]model.CatalogueInProcess{"bootstrap-playbooks": {Enabled: &disabled}},
+		},
+	}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 117 WHERE `id` = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("migrating a version-117 store: %v", err)
+	}
+	got, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pol := got.CapabilityPolicy
+	if len(pol.Rules) != 2 || pol.Rules[0].Capability != model.ConfigMapRef || !pol.Rules[0].Deny {
+		t.Fatalf("rules[0] = %+v, want deny rewritten to %s", pol.Rules, model.ConfigMapRef)
+	}
+	if pol.Rules[1].Capability == model.ConfigMapRef {
+		t.Fatalf("non-deny AllowUntrusted rule was rewritten onto shared %s: %+v", model.ConfigMapRef, pol.Rules[1])
+	}
+	untrusted := model.CapabilitySubject{
+		Repo:      &model.RepoRef{Owner: "other", Name: "repo"},
+		Kind:      model.CapabilityRunCI,
+		Event:     "pull_request",
+		Untrusted: true,
+	}
+	if err := pol.Permits(model.ConfigMapRef+`={"secrets":["prod"]}`, untrusted, nil); err == nil {
+		t.Fatal("Permits admitted config-map secrets on an untrusted run after migration 118")
+	}
+	cat := pol.Catalogue
+	if cat == nil || !slices.Equal(cat.Defaults.Task, []string{"read-issues", model.BootstrapPlaybooksGrant}) ||
+		!slices.Equal(cat.Defaults.CI, []string{model.BootstrapPlaybooksGrant}) {
+		t.Errorf("catalogue defaults after migration 118 = %+v", cat)
+	}
+}

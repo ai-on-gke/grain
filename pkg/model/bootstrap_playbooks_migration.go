@@ -31,8 +31,11 @@ var bootstrapPlaybooksRenames = map[string][]string{
 // bootstrap-playbooks provider is retired onto the built-in config-map server's
 // bootstrap map, rewriting every stored grant across the three grant tables,
 // deployment and repository default capabilities, standing console sessions,
-// repo_config.ci_capabilities, and capability_policy rules and catalogue
-// defaults.
+// repo_config.ci_capabilities, and capability_policy deny rules and catalogue
+// defaults. Non-deny rules are never rewritten onto ConfigMapRef because
+// config-map#config-map is shared with operator config maps and secret maps
+// (an AllowUntrusted rule on bootstrap-playbooks must not open secrets to
+// untrusted runs).
 func migrateBootstrapPlaybooksGrants(ctx context.Context, tx *sql.Tx) error {
 	if err := rewriteLegacyGrantsMulti(bootstrapPlaybooksRenames)(ctx, tx); err != nil {
 		return err
@@ -40,5 +43,5 @@ func migrateBootstrapPlaybooksGrants(ctx context.Context, tx *sql.Tx) error {
 	if err := rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", bootstrapPlaybooksRenames); err != nil {
 		return err
 	}
-	return rewritePolicyRenames(ctx, tx, bootstrapPlaybooksRenames, ConfigMapRef)
+	return rewritePolicyRenamesDenyOnly(ctx, tx, bootstrapPlaybooksRenames, ConfigMapRef)
 }

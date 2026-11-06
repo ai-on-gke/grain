@@ -640,6 +640,11 @@ func capabilityAdmitterFor(deps Deps, admit dispatch.Admitter, connectionOf func
 			if revokeApproval != nil {
 				revokeApproval()
 			}
+			var hold *admissionHoldError
+			if errors.As(err, &hold) {
+				passes.clearBackoff(task.ID)
+				return decline(hold.gate, hold.reason)
+			}
 			if serr := admissionMintFailed(ctx, deps, passes, *task, err, at); serr != nil {
 				log.Printf("orchestrator: task %s: recording its failed capability admission: %v", task.ID, serr)
 			}
@@ -722,12 +727,22 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 	if err != nil {
 		return nil, &protocol.TransientError{Grant: "capabilities", Err: err}
 	}
-	if !sameGrantNames(recorded, task.Grants) {
+	rewroteGrants := !sameGrantNames(recorded, task.Grants)
+	if rewroteGrants {
 		if err := deps.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
 			t.Grants = recorded
 			return nil
 		}); err != nil {
 			return nil, &protocol.TransientError{Grant: "capabilities", Err: err}
+		}
+		task.Grants = recorded
+		if deps.Policy != nil || isUnisolated(deps.Sandboxes) {
+			if err := checkPolicy(ctx, deps, task, deploymentNetworkAccess(ctx, deps.Store)); err != nil {
+				if serr := recordPolicyRefusal(ctx, deps, task, policyStageAdmission, err, at); serr != nil {
+					log.Printf("orchestrator: recording why local policy refuses %s after grant normalization: %v", task.ID, serr)
+				}
+				return nil, &admissionHoldError{gate: admissionGatePolicy, reason: err.Error()}
+			}
 		}
 	}
 	grants, err := model.CapabilityGrants(recorded, lookup)
@@ -746,6 +761,22 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 		configured = cfg.MCPServers
 		if id := strings.TrimSpace(cfg.DeploymentID); id != "" {
 			deployment = id
+		}
+	}
+	if rewroteGrants && (policy.Catalogue != nil || model.CatalogueKindOf(task) == model.CatalogueKindDirector) {
+		gc := model.TaskGrantContext(task)
+		if gc.TemplateID != "" {
+			if tmpl, err := deps.Store.GetTemplate(ctx, gc.TemplateID); err == nil && tmpl != nil {
+				gc.TemplateName = tmpl.Name
+			}
+		}
+		if _, err := policy.Catalogue.ValidateGrants(gc); err != nil {
+			if serr := deps.Store.SetGrantWait(ctx, model.GrantWait{
+				TaskID: task.ID, Capability: model.CatalogueWaitCapability, Resource: err.Error(), WaitingAt: at,
+			}); serr != nil {
+				log.Printf("orchestrator: recording why the capability catalogue holds %s after grant normalization: %v", task.ID, serr)
+			}
+			return nil, &admissionHoldError{gate: "capability catalogue", reason: err.Error()}
 		}
 	}
 	configured, _ = intree.EnsureBuiltins(configured)
@@ -843,6 +874,16 @@ func sameGrantNames(a, b []model.Grant) bool {
 	}
 	return true
 }
+
+// admissionHoldError indicates that grant normalization revealed a local-policy
+// or capability-catalogue refusal, which holds the task on its wait record
+// rather than parking it on a server refusal comment.
+type admissionHoldError struct {
+	gate   string
+	reason string
+}
+
+func (e *admissionHoldError) Error() string { return e.reason }
 
 // grainRefusalError is a grant grain itself refused before asking any
 // capability server: the capability policy (and its catalogue) denying

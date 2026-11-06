@@ -534,13 +534,34 @@ func stringSliceField(with map[string]any, key string) ([]string, bool) {
 	return out, true
 }
 
+func configMapSelectsBootstrap(with map[string]any) bool {
+	cms, hasCM := stringSliceField(with, "config_maps")
+	_, hasSec := with["secrets"]
+	keys, hasKeys := stringSliceField(with, "keys")
+	hasBootstrapKey := false
+	for _, k := range keys {
+		if strings.HasPrefix(k, "bootstrap/") {
+			hasBootstrapKey = true
+			break
+		}
+	}
+	if hasCM || hasSec {
+		return slices.Contains(cms, "bootstrap") && (!hasKeys || hasBootstrapKey)
+	}
+	return hasKeys && hasBootstrapKey
+}
+
 // IsBootstrapPlaybooksGrant reports whether grant names the bootstrap playbooks
-// via config-map#config-map (or its legacy skill alias) or the retired bare
+// via config-map#config-map (or its legacy skill alias, including methodless
+// shorthand before server normalization) or the retired bare
 // bootstrap-playbooks alias.
 func IsBootstrapPlaybooksGrant(grant string) bool {
 	s := strings.TrimSpace(grant)
-	if s == "bootstrap-playbooks" {
+	if strings.EqualFold(s, "bootstrap-playbooks") {
 		return true
+	}
+	if len(s) >= len("https://") && strings.EqualFold(s[:len("https://")], "https://") {
+		s = "https://" + s[len("https://"):]
 	}
 	if !IsCapabilityRef(s) {
 		return false
@@ -549,25 +570,50 @@ func IsBootstrapPlaybooksGrant(grant string) bool {
 	if err != nil {
 		return false
 	}
-	switch spec.Capability {
-	case ConfigMapRef, SkillCapabilityServerID + "#" + ConfigMapMethod:
-		cms, hasCM := stringSliceField(spec.With, "config_maps")
-		_, hasSec := spec.With["secrets"]
-		keys, hasKeys := stringSliceField(spec.With, "keys")
-		hasBootstrapKey := false
-		for _, k := range keys {
-			if strings.HasPrefix(k, "bootstrap/") {
-				hasBootstrapKey = true
-				break
-			}
-		}
-		if hasCM || hasSec {
-			return slices.Contains(cms, "bootstrap") && (!hasKeys || hasBootstrapKey)
-		}
-		return hasKeys && hasBootstrapKey
+	switch strings.ToLower(spec.Capability) {
+	case ConfigMapRef, ConfigMapCapabilityServerID, SkillCapabilityServerID + "#" + ConfigMapMethod:
+		return configMapSelectsBootstrap(spec.With)
 	case ConfigMapCapabilityServerID + "#skill", SkillCapabilityServerID + "#skill":
 		skills, ok := stringSliceField(spec.With, "skills")
 		return ok && slices.Contains(skills, "bootstrap")
+	case SkillCapabilityServerID:
+		if _, hasSkills := spec.With["skills"]; hasSkills {
+			skills, ok := stringSliceField(spec.With, "skills")
+			return ok && slices.Contains(skills, "bootstrap")
+		}
+		return configMapSelectsBootstrap(spec.With)
+	}
+	return false
+}
+
+// BootstrapSkillSetUnnamed reports whether grant is an unnormalized #skill (or
+// methodless skill) capability-server grant that omits "skills", leaving its
+// selection to the server's default ("all", which includes "bootstrap" whenever
+// the server serves the bootstrap playbooks). Once normalized, "skills" is
+// explicit so unrelated skill directories are no longer flagged.
+func BootstrapSkillSetUnnamed(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if len(s) >= len("https://") && strings.EqualFold(s[:len("https://")], "https://") {
+		s = "https://" + s[len("https://"):]
+	}
+	if !IsCapabilityRef(s) {
+		return false
+	}
+	spec, err := CapabilityGrantSpec(s)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(spec.Capability) {
+	case ConfigMapCapabilityServerID + "#skill", SkillCapabilityServerID + "#skill":
+		_, hasSkills := spec.With["skills"]
+		return !hasSkills
+	case SkillCapabilityServerID:
+		for _, k := range []string{"skills", "config_maps", "secrets", "keys"} {
+			if _, ok := spec.With[k]; ok {
+				return false
+			}
+		}
+		return true
 	}
 	return false
 }

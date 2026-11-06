@@ -247,9 +247,25 @@ func TestCheckCapabilityPatterns(t *testing.T) {
 		{`deny: [boot*]`, model.SkillCapabilityServerID + `#skill={"skills":["bootstrap"]}`, "forbids capability"},
 		{`deny: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.SkillCapabilityServerID + `#skill={"skills":["bootstrap"]}`, "forbids capability"},
 		{`deny: [` + strconvQuote(model.ConfigMapRef+`={"secrets":["prod"]}`) + `]`, model.BootstrapPlaybooksGrant, ""},
-		{`deny: [bootstrap-playbooks]`, model.SkillCapabilityServerID + `#config-map={"secrets":["prod"]}`, "forbids capability"},
+		// Case-insensitive https:// scheme/method on ref=<json>, while preserving JSON value case.
+		{`deny: [` + strconvQuote(`HTTPS://GRAIN.DEV/CAPABILITIES/CONFIG-MAP#CONFIG-MAP={"secrets":["prod"]}`) + `]`, model.ConfigMapRef + `={"secrets":["prod"]}`, "forbids capability"},
+		{`deny: [` + strconvQuote(`HTTPS://GRAIN.DEV/CAPABILITIES/CONFIG-MAP#CONFIG-MAP={"secrets":["prod"]}`) + `]`, model.ConfigMapRef + `={"secrets":["PROD"]}`, ""},
+		{`allow: [` + strconvQuote(`HTTPS://GRAIN.DEV/CAPABILITIES/CONFIG-MAP#CONFIG-MAP={"config_maps":["bootstrap"]}`) + `]`, model.BootstrapPlaybooksGrant, ""},
+		{`allow: [` + strconvQuote(`HTTPS://GRAIN.DEV/CAPABILITIES/CONFIG-MAP#CONFIG-MAP={"config_maps":["bootstrap"]}`) + `]`, model.ConfigMapRef + `={"config_maps":["BOOTSTRAP"]}`, "does not allow capability"},
+		// Unnormalized methodless shorthand, unnamed #skill, and skill/config-map server aliases cannot bypass deny rules.
+		{`deny: [` + strconvQuote(model.ConfigMapRef) + `]`, model.ConfigMapCapabilityServerID + `={"secrets":["prod"]}`, "forbids capability"},
 		{`deny: [` + strconvQuote(model.ConfigMapRef) + `]`, model.SkillCapabilityServerID + `#config-map={"secrets":["prod"]}`, "forbids capability"},
+		{`deny: [` + strconvQuote(model.ConfigMapRef+`={"secrets":["prod"]}`) + `]`, model.ConfigMapCapabilityServerID + `={"secrets":["prod"]}`, "forbids capability"},
 		{`deny: [` + strconvQuote(model.ConfigMapRef+`={"secrets":["prod"]}`) + `]`, model.SkillCapabilityServerID + `#config-map={"secrets":["prod"]}`, "forbids capability"},
+		{`deny: [` + strconvQuote(model.ConfigMapRef+`={"secrets":["prod"]}`) + `]`, model.ConfigMapCapabilityServerID + `={"config_maps":["bootstrap"]}`, ""},
+		{`deny: [bootstrap-playbooks]`, model.SkillCapabilityServerID + `#config-map={"secrets":["prod"]}`, "forbids capability"},
+		{`deny: [bootstrap-playbooks]`, model.ConfigMapCapabilityServerID + `={"config_maps":["bootstrap"]}`, "forbids capability"},
+		{`deny: [bootstrap-playbooks]`, model.SkillCapabilityServerID + `#skill`, "forbids capability"},
+		{`deny: [bootstrap-playbooks]`, model.ConfigMapCapabilityServerID + `#skill`, "forbids capability"},
+		{`deny: [bootstrap-playbooks]`, model.SkillCapabilityServerID, "forbids capability"},
+		{`deny: [bootstrap-playbooks]`, model.SkillCapabilityServerID + `#skill={"skills":["ops"]}`, ""},
+		{`deny: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.SkillCapabilityServerID + `#skill`, "forbids capability"},
+		{`deny: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.SkillCapabilityServerID + `#skill={"skills":["ops"]}`, ""},
 		{`deny: [` + strconvQuote(model.SkillCapabilityServerID+"#*") + `]`, model.ConfigMapRef + `={"secrets":["prod"]}`, "forbids capability"},
 	}
 	for _, c := range cases {
@@ -361,8 +377,9 @@ func TestParseRejects(t *testing.T) {
 		"capabilities:\n  deny: [\"repo-write:\"]\n",                          // empty parameter
 		"capabilities:\n  deny: [\":x\"]\n",                                   // empty family
 		"capabilities:\n  allow: [\"" + model.ConfigMapRef + "=not-json\"]\n", // bad inline JSON args
-		"repos: [acme/w]\n---\nrepos: [evil/x]\n",                             // a second document (GSA1-14)
-		"---\nrepos: [acme/w]\n---\n{}\n",                                     // likewise, however small
+		"capabilities:\n  deny: [\"HTTPS://grain.dev/capabilities/config-map#config-map=not-json\"]\n", // bad inline JSON args with uppercase scheme
+		"repos: [acme/w]\n---\nrepos: [evil/x]\n",                                                      // a second document (GSA1-14)
+		"---\nrepos: [acme/w]\n---\n{}\n",                                                              // likewise, however small
 	} {
 		if _, err := Parse([]byte(src)); err == nil {
 			t.Errorf("Parse(%q) succeeded, want an error", src)

@@ -667,8 +667,16 @@ func (r CapabilityPolicyRule) coversAnyOfKind(kind string) bool {
 }
 
 func (r CapabilityPolicyRule) names(ref string) bool {
-	ok, _ := path.Match(r.Capability, ref)
-	return ok || r.Capability == ref
+	if ok, _ := path.Match(r.Capability, ref); ok || r.Capability == ref {
+		return true
+	}
+	if r.Deny && !strings.Contains(ref, "#") {
+		if rID, _, hasHash := strings.Cut(r.Capability, "#"); hasHash {
+			ok, _ := path.Match(rID, ref)
+			return ok || rID == ref
+		}
+	}
+	return false
 }
 
 func (r CapabilityPolicyRule) namesAny(refs []string) bool {

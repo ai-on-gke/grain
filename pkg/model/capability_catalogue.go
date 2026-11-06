@@ -419,6 +419,10 @@ func (c *CapabilityCatalogue) judgeRetiredInProcess(g string, gc GrantContext) (
 		sort.Strings(extra)
 		names = append(names, extra...)
 	}
+	if BootstrapSkillSetUnnamed(g) && !slices.Contains(names, "bootstrap-playbooks") {
+		names = append(names, "bootstrap-playbooks")
+		sort.Strings(names)
+	}
 	for _, legacy := range names {
 		entry, key, ok := c.inProcessEntry(legacy)
 		if !ok {
