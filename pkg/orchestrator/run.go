@@ -150,6 +150,25 @@ func checkTaskClosed(ctx context.Context, store *model.Store, taskID string, can
 	return false
 }
 
+// checkRunStopped cancels a run with ErrTurnStopped when its own task_run
+// row was finished before the run registered its canceller
+// (TaskCancellers): StartRun writes the row before RunDispatch prepares
+// the sandbox, so a Stop (ui.Client.Stop) in between found no canceller
+// to reach and finished the stored row instead (cancelActiveRuns),
+// leaving the agent to go on holding the task with nothing able to stop
+// it -- and a person's Retry with no slot to dispatch into. Asked after
+// registering, as ui.Client.cancelActiveRuns asks the canceller again
+// after finishing the row, so a Stop on either side of the registration
+// reaches the run.
+func checkRunStopped(ctx context.Context, store *model.Store, runID string, cancel context.CancelCauseFunc) bool {
+	finished, found, err := store.RunFinished(ctx, runID)
+	if err != nil || !found || !finished {
+		return false
+	}
+	cancel(ErrTurnStopped)
+	return true
+}
+
 // watchForTaskClosed polls store.State(taskID) every interval and calls
 // cancel(errTaskClosed) the moment it reads model.StateClosed -- the
 // store-polled cancellation signal RunDispatch needs because grain daemon
@@ -3252,6 +3271,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		stopCancelling := cfg.TaskCancellers.register(d.TaskID, cancelRun)
 		defer stopCancelling()
 		checkTaskClosed(ctx, store, task.ID, cancelRun)
+		checkRunStopped(ctx, store, d.RunID, cancelRun)
 		watcherDone := make(chan struct{})
 		go func() {
 			defer close(watcherDone)

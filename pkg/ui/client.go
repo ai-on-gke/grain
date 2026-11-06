@@ -6382,6 +6382,13 @@ func (c *Client) cancelActiveRuns(ctx context.Context, id string, now time.Time,
 			return err
 		}
 	}
+	// Asked again now the rows are finished: a run that registered its
+	// canceller after the first ask, but before its row was finished
+	// here, is reached this way, and one that registers after this sees
+	// its row finished and stops itself (orchestrator.checkRunStopped).
+	if c.Config.TaskCanceller != nil {
+		c.Config.TaskCanceller.CancelTask(ctx, id)
+	}
 	return nil
 }
 
