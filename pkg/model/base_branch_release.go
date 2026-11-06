@@ -14,7 +14,10 @@
 
 package model
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // BaseBranchRelease is grain's note of the trusted release run it started
 // on a base branch after a merge, and the commit it started it for -- one
@@ -161,6 +164,19 @@ func (b BaseBranchRelease) AttemptsMade() int {
 // because a streak is about what has published and not about what is
 // running right now.
 func (b BaseBranchRelease) Failing() bool { return b.Failures > 0 }
+
+// ReleaseSupersededDetailPrefix starts the Detail of a release run a
+// newer merge's release superseded (grain/task-3334): "superseded by
+// <sha> ...". orchestrator.recordSupersededGitHubRelease writes it.
+const ReleaseSupersededDetailPrefix = "superseded by "
+
+// Superseded reports whether this row records a release run that was
+// cancelled because a newer merge's release replaced it. That is how a
+// busy branch normally works, not a red one: the newest commit contains
+// the superseded one, and its release is the verdict that matters.
+func (b BaseBranchRelease) Superseded() bool {
+	return b.Conclusion == "cancelled" && strings.HasPrefix(b.Detail, ReleaseSupersededDetailPrefix)
+}
 
 // InFlight reports whether this row names a release that has not
 // finished: the one state in which nothing new is started for the

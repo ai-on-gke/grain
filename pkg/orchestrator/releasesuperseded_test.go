@@ -75,6 +75,9 @@ func TestABurstOfSupersededReleaseRunsFilesNothingAndRaisesNoAlert(t *testing.T)
 	if rel.RunID != "1304" || !strings.Contains(rel.Detail, "superseded by "+commits[4][:12]+" (run 1305)") {
 		t.Errorf("row = %+v, want the last cancelled run shown as superseded by %s (run 1305)", rel, commits[4][:12])
 	}
+	if !rel.Superseded() {
+		t.Errorf("row %+v is not Superseded(): the UI and the base-repair gate would read the branch as red", rel)
+	}
 	if rel.FailingSince == nil || !rel.FailingSince.Equal(baseTime.Add(time.Minute)) {
 		t.Errorf("FailingSince = %v, want the first superseded run's start %v: nothing has published since",
 			rel.FailingSince, baseTime.Add(time.Minute))

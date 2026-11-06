@@ -172,7 +172,7 @@ func supersededDetail(by supersedingRelease) string {
 	if by.RunID != "" {
 		run = " (run " + by.RunID + ")"
 	}
-	return fmt.Sprintf("superseded by %s%s: a newer merge's release replaced this one before it could run, "+
+	return fmt.Sprintf(model.ReleaseSupersededDetailPrefix+"%s%s: a newer merge's release replaced this one before it could run, "+
 		"so this commit publishes nothing of its own and nothing failed -- if it is ever tagged or promoted, "+
 		"its images are built on demand", shortSHA(by.Commit), run)
 }
