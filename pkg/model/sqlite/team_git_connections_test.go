@@ -189,5 +189,29 @@ func TestTaskGitCredentialOnSelectsTaskUserPATAndFallsBackToDefault(t *testing.T
 	if got, err := store.TaskGitCredentialOn(ctx, "t-charlie", "github.com", "acme", "widgets"); err != nil || got != "default-pat" {
 		t.Errorf("TaskGitCredentialOn(charlie) = %q, %v; want default-pat", got, err)
 	}
+
+	// Follow-up task on the same PR (#42 opened by t-bob) should use t-bob's PAT ("bob-pat"),
+	// not the first PAT on the list ("alice-pat") or default-pat.
+	if err := store.UpdateTask(ctx, "t-bob", func(tk *model.Task) error {
+		tk.Links = []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#42"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	followUp := model.Task{
+		ID:      "t-followup",
+		Intent:  model.IntentImplement,
+		Title:   "Address PR #42 review comments",
+		Owner:   model.DefaultTaskOwner,
+		Creator: model.DefaultTaskOwner,
+		Binding: model.BindingDirective,
+		Links:   []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#42"}},
+	}
+	if err := store.PutTask(ctx, followUp); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.TaskGitCredentialOn(ctx, "t-followup", "github.com", "acme", "widgets"); err != nil || got != "bob-pat" {
+		t.Errorf("TaskGitCredentialOn(t-followup on bob's PR) = %q, %v; want bob-pat", got, err)
+	}
 }
 

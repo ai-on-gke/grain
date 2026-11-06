@@ -52,6 +52,7 @@ var (
 	_ github.ReactionPoster     = (*StateRepoPullRequestClient)(nil)
 	_ github.CheckRunWriter     = (*StateRepoPullRequestClient)(nil)
 	_ github.CallerLabeler      = (*StateRepoPullRequestClient)(nil)
+	_ github.TaskClientScoper   = (*StateRepoPullRequestClient)(nil)
 	_ github.JobLogTailer       = (*StateRepoPullRequestClient)(nil)
 	_ github.WorkflowRunsReader = (*StateRepoPullRequestClient)(nil)
 	_ github.ActionsReader      = (*StateRepoPullRequestClient)(nil)
@@ -64,6 +65,14 @@ var (
 func (c *StateRepoPullRequestClient) WithCaller(caller string) github.Client {
 	out := *c
 	out.Client = github.WithCaller(c.Client, caller)
+	return &out
+}
+
+// ForTask is this client scoped to taskID's git credential and author
+// attribution (github.ForTask), still overlaying the native config repository.
+func (c *StateRepoPullRequestClient) ForTask(taskID string) github.Client {
+	out := *c
+	out.Client = github.ForTask(c.Client, taskID)
 	return &out
 }
 

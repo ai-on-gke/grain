@@ -15,6 +15,7 @@
 package daemon
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
@@ -131,4 +132,107 @@ func TestCredentialTokenSourceForTaskSelectsUserPATAndAuthorSignature(t *testing
 		t.Fatalf("ForTask(99).AuthorSignature = %q, want Bob Engineer", sig.AuthorSignature("acme", "widgets"))
 	}
 }
+
+func TestStateRepoPullRequestClientAndReplyForTaskUseTaskPATInsteadOfFirstOnList(t *testing.T) {
+	ctx := context.Background()
+	store, db, err := OpenStore("sqlite", "", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if err := store.UpdateConfig(ctx, func(c *model.Config) error {
+		c.GitConnections = []model.TeamGitConnection{
+			{Credential: "first-cred", User: "alice@example.com"},
+			{Credential: "second-cred", User: "bob@example.com"},
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	taskBob := model.Task{
+		ID:      "t-bob",
+		Branch:  "grain/t-bob",
+		Intent:  model.IntentImplement,
+		Title:   "Bob PR",
+		Owner:   "bob@example.com",
+		Creator: "bob@example.com",
+		Target:  &repo,
+		Binding: model.BindingDirective,
+		Links:   []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#42"}},
+	}
+	if err := store.PutTask(ctx, taskBob); err != nil {
+		t.Fatal(err)
+	}
+
+	credentials, err := gitproxy.LoadCredentialSet(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := credentials.SetPAT("first-cred", "tok-first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := credentials.SetHost("first-cred", gitproxy.CredentialHost{Host: "github.com", Kind: model.GitHostGitHub, Author: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := credentials.SetPAT("second-cred", "tok-second"); err != nil {
+		t.Fatal(err)
+	}
+	if err := credentials.SetHost("second-cred", gitproxy.CredentialHost{Host: "github.com", Kind: model.GitHostGitHub, Author: "bob"}); err != nil {
+		t.Fatal(err)
+	}
+
+	src := credentialTokenSource{
+		credentials:    credentials,
+		teamCredential: repoTeamCredential(store),
+		taskCredential: taskGitCredential(store),
+	}
+
+	fake := github.NewFakeTransport(
+		github.ApiResponse{
+			Status: 200,
+			Body:   []byte(`[{"number":42,"state":"open","head":{"ref":"grain/t-bob","sha":"abc"},"base":{"ref":"main"}}]`),
+		},
+		github.ApiResponse{
+			Status: 200,
+			Body:   []byte(`[{"id":701,"body":"Please fix this","path":"main.go","line":10,"user":{"login":"reviewer"}}]`),
+		},
+		github.ApiResponse{
+			Status: 201,
+			Body:   []byte(`{"id":702}`),
+		},
+	)
+
+	var wrapped github.Client = &StateRepoPullRequestClient{
+		Client: &github.RESTClient{Transport: fake, Tokens: src},
+		Store:  store,
+	}
+	wrapped = github.WithCaller(wrapped, "sync")
+
+	opener := &PullRequestOpener{Store: store, Client: wrapped}
+	text, refused, err := opener.ReplyForTask(ctx, "t-bob", 701, "Addressed in latest commit.")
+	if err != nil || refused {
+		t.Fatalf("ReplyForTask = %q, refused=%v, err=%v", text, refused, err)
+	}
+
+	var replyCall *github.FakeCall
+	for i := range fake.Calls {
+		if fake.Calls[i].Method == "POST" && strings.HasSuffix(fake.Calls[i].Path, "/comments/701/replies") {
+			replyCall = &fake.Calls[i]
+			break
+		}
+	}
+	if replyCall == nil {
+		t.Fatalf("expected POST to /comments/701/replies, calls=%+v", fake.Calls)
+	}
+	if gotAuth := replyCall.Headers["Authorization"]; gotAuth != "token tok-second" {
+		t.Errorf("reply Authorization = %q, want %q (used wrong PAT)", gotAuth, "token tok-second")
+	}
+	if !strings.Contains(string(replyCall.Body), "*Signed by bob (via Grain)*") {
+		t.Errorf("reply body = %s, want bob attribution", string(replyCall.Body))
+	}
+}
+
 

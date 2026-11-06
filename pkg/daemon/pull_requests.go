@@ -175,12 +175,21 @@ func (a taskCancellerAdapter) CancelTask(ctx context.Context, taskID string) boo
 // ref arrives as a task_link target ("owner/name#123") because that is
 // the only spelling pkg/ui has for a pull request; parsing it back is
 // this side's job for the same reason converting the status shape is.
+func (o *PullRequestOpener) clientForPullRequest(ctx context.Context, ref string) github.Client {
+	if o.Store != nil {
+		if taskID := o.Store.PullRequestOwnerTaskID(ctx, ref); taskID != "" {
+			return github.ForTask(o.Client, taskID)
+		}
+	}
+	return o.Client
+}
+
 func (o *PullRequestOpener) Comment(ctx context.Context, ref, body string) error {
 	pr, err := model.ParsePullRequestRef(ref)
 	if err != nil {
 		return err
 	}
-	_, err = o.Client.CreateComment(pr.Repo.Owner, pr.Repo.Name, pr.Number, body)
+	_, err = o.clientForPullRequest(ctx, pr.String()).CreateComment(pr.Repo.Owner, pr.Repo.Name, pr.Number, body)
 	return err
 }
 
@@ -198,7 +207,7 @@ func (o *PullRequestOpener) Close(ctx context.Context, ref string) error {
 	if err != nil {
 		return err
 	}
-	return o.Client.ClosePullRequest(pr.Repo.Owner, pr.Repo.Name, pr.Number)
+	return o.clientForPullRequest(ctx, pr.String()).ClosePullRequest(pr.Repo.Owner, pr.Repo.Name, pr.Number)
 }
 
 // pullRequestGate is the ui.Config.PullRequests the UI/API server is
