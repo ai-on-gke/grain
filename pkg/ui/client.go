@@ -6321,6 +6321,7 @@ func (c *Client) cancelActiveRuns(ctx context.Context, id string, now time.Time,
 	if err != nil {
 		return err
 	}
+	finishedAny := false
 	for i := range runs {
 		if runs[i].FinishedAt != nil {
 			continue
@@ -6328,6 +6329,14 @@ func (c *Client) cancelActiveRuns(ctx context.Context, id string, now time.Time,
 		if err := c.Store.FinishRun(ctx, runs[i].ID, now, "cancelled", detail); err != nil {
 			return err
 		}
+		finishedAny = true
+	}
+	// Ask the canceller again once the rows are finished: a run that
+	// registered after the first check above but before FinishRun committed
+	// is cancelled immediately here, while any run that registers after
+	// FinishRun sees store.RunFinished and cancels itself on registration.
+	if finishedAny && c.Config.TaskCanceller != nil {
+		c.Config.TaskCanceller.CancelTask(ctx, id)
 	}
 	return nil
 }
