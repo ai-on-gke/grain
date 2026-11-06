@@ -37,7 +37,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
-	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
@@ -222,7 +221,7 @@ func (d DaemonTasks) AttemptTranscript(ctx context.Context, id string, attempt i
 //
 // Rendered on this side of the hop rather than in pkg/mcp because the
 // report shape is pkg/ui's, and pkg/ui imports pkg/mcp by way of
-// pkg/capability/selfdebug -- so this process, which already imports
+// pkg/capability -- so this process, which already imports
 // both, is the only place the two can meet. It is also where the
 // question gets parsed: metricsRequest is the same function cmdMetrics
 // builds its request with, so a run that asks for a window nobody can
@@ -762,22 +761,21 @@ func grainCIReader(client *ui.HTTPClient, taskID string, grants GrantNames) mcp.
 // with no repository at all gets an empty scope, which reads as "no CI
 // to see" rather than as "no scope configured, so all of it".
 //
-// self-debug is the wide grant, for the reason ci_repo_scope.go gives:
-// it is already the grant that lets a task read grain's own record
-// across every task in the deployment, and "is this job flaky
-// everywhere" is that same question asked of CI. It is resolved here
-// rather than in pkg/mcp because the grant names live in
-// pkg/capability, which imports pkg/mcp.
+// grain#source (once self-debug) is the wide grant, for the reason
+// ci_repo_scope.go gives: it is the grant a task holds to work out what
+// grain itself did, and "is this job flaky everywhere" is that question
+// asked of CI. It is resolved here rather than in pkg/mcp because the
+// grant names live in pkg/model and pkg/capability, which import
+// pkg/mcp.
 //
-// Only self-debug in its deployment-wide form widens it: deploymentWide
-// is the daemon's ui.TaskDetail.DeploymentWide for this task. A team
-// whose self-debug is scoped to its own work (grain/task-2555) reads its
-// own task's repository here like any other run, since another team's
-// CI is another team's work.
+// Only grain#source in its deployment-wide form widens it:
+// deploymentWide is the daemon's ui.TaskDetail.DeploymentWide for this
+// task (admincaps.TeamScoped). A team whose grant is scoped to its own
+// work (grain/task-2555) reads its own task's repository here like any
+// other run, since another team's CI is another team's work.
 func CiRepoScope(prRepo string, grants GrantNames, deploymentWide []string) mcp.CIRepoScope {
 	own := strings.TrimSpace(prRepo)
-	wide := grants.Has(selfdebug.CapabilityName) &&
-		slices.Contains(deploymentWide, selfdebug.CapabilityName)
+	wide := sourceDeploymentWide(grants, deploymentWide)
 	apiGrants := model.APIGrantsOf(grants)
 	if wide || apiGrants.Allows("ci:read", "") {
 		return mcp.CIRepoScope{Repo: own, AllRepos: true}
@@ -797,12 +795,11 @@ func CiRepoScope(prRepo string, grants GrantNames, deploymentWide []string) mcp.
 // ciReadRepoScope is which repositories list_ci_runs, get_ci_log and
 // get_ci_artifact may read when a run holds an api ci:read grant rather
 // than grain#ci: only the repositories its ci:read grants name (plus all
-// repositories for deployment-wide self-debug or an unscoped api:ci-read),
+// repositories for deployment-wide grain#source or an unscoped api:ci-read),
 // never -pr-repo on its own when the grant was scoped elsewhere.
 func ciReadRepoScope(prRepo string, grants GrantNames, deploymentWide []string) mcp.CIRepoScope {
 	own := strings.TrimSpace(prRepo)
-	wide := grants.Has(selfdebug.CapabilityName) &&
-		slices.Contains(deploymentWide, selfdebug.CapabilityName)
+	wide := sourceDeploymentWide(grants, deploymentWide)
 	apiGrants := model.APIGrantsOf(grants)
 	if wide || apiGrants.Allows("ci:read", "") {
 		return mcp.CIRepoScope{Repo: own, AllRepos: true}
@@ -818,6 +815,14 @@ func ciReadRepoScope(prRepo string, grants GrantNames, deploymentWide []string) 
 		return mcp.CIRepoScope{Repo: own, Reads: extra}
 	}
 	return mcp.CIRepoScope{Reads: repos}
+}
+
+// sourceDeploymentWide reports whether the run holds grain#source (or the
+// retired bare self-debug) and the daemon named it deployment-wide
+// (ui.TaskDetail.DeploymentWide, admincaps.TeamScoped). An older daemon
+// names the bare self-debug there, which counts the same.
+func sourceDeploymentWide(grants GrantNames, deploymentWide []string) bool {
+	return model.HasGrainSource(grants) && slices.ContainsFunc(deploymentWide, model.IsGrainSourceGrant)
 }
 
 // daemonGrainCI implements mcp.GrainCIReader by reading this run's own
@@ -1446,7 +1451,8 @@ func (g GrantNames) Has(name string) bool { return slices.Contains(g, name) }
 // served by the run's agent framework -- agent/antigravity's pre-tool
 // hook, say -- rather than by any tool of this process.
 var servedGrants = []string{
-	selfdebug.CapabilityName, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant, bootstrap.CapabilityName,
+	grainserver.LegacySelfDebug, grainserver.SourceRef, grainserver.SourceGrant,
+	grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant, bootstrap.CapabilityName,
 	grainserver.LegacyGrainCI, grainserver.CIRef, grainserver.CIGrant, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
@@ -2315,7 +2321,7 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 		// /fs/ (model.Store.SandboxNamespaceScope); a bare "ci-read" is
 		// no capability and widens nothing.
 		apiGrants := model.APIGrantsOf(grants)
-		mayReadCI := model.HasGrainCI(grants) || grants.Has(selfdebug.CapabilityName) || apiGrants.Has("ci:read")
+		mayReadCI := model.HasGrainCI(grants) || grainserver.HasSource(grants) || apiGrants.Has("ci:read")
 		mayReadAllCI := ciScope.AllRepos || apiGrants.Allows("ci:read", "")
 		allowedCIRepos := make(map[string]bool)
 		addAllowedRepo := func(r string) {
@@ -2356,15 +2362,15 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 				MayReadCI:        mayReadCI,
 				MayReadAllCI:     mayReadAllCI,
 				AllowedRepos:     allowedCIRepos,
-				MayReadSrc:       grants.Has(selfdebug.CapabilityName),
-				MayReadPlaybooks: grants.Has(bootstrap.CapabilityName) || grants.Has(selfdebug.CapabilityName),
-				MayReadAllTasks:  grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("tasks:read", ""),
+				MayReadSrc:       grainserver.HasSource(grants),
+				MayReadPlaybooks: grants.Has(bootstrap.CapabilityName) || grainserver.HasSource(grants),
+				MayReadAllTasks:  apiGrants.Allows("tasks:read", ""),
 				TaskReadRepos:    taskReadRepos,
-				MayReadFullConfig: grants.Has(selfdebug.CapabilityName) ||
+				MayReadFullConfig: grainserver.HasSource(grants) ||
 					apiGrants.Allows("settings:read", "") || apiGrants.Allows("repos:read", ""),
 				MayReadAllMemory: apiGrants.Allows("memory:read", ""),
-				MayReadMetrics:   grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("deployment:read", ""),
-				MayReadPipeline:  grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("deployment:read", "") || apiGrants.Allows("dispatch:read", ""),
+				MayReadMetrics:   apiGrants.Allows("deployment:read", ""),
+				MayReadPipeline:  apiGrants.Allows("deployment:read", "") || apiGrants.Allows("dispatch:read", ""),
 				MayReadHealth:    grainserver.HasHealth(grants) || apiGrants.Allows("deployment:read", ""),
 				MayReadGrainLog:  grainserver.HasJournal(grants),
 			},
@@ -2411,7 +2417,12 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 	if grants.Has(readissues.CapabilityName) {
 		registry.Register(issueTools(*dataDir, *githubHost, *githubInsecureHTTP, *prRepo, *prCredential)...)
 	}
-	if grants.Has(selfdebug.CapabilityName) {
+	// The task readers, read_pipeline_changes and read_grain_metrics are
+	// what self-debug opened over the daemon's REST API, and are its
+	// api:self-debug preset's now (tasks:read and deployment:read; the
+	// retired bare self-debug still reads as that preset). A run is told
+	// the preset by the orchestrator's runGrants, beside grain#source.
+	if selfDebugAPI := model.APIGrantsOf(grants); selfDebugAPI.Allows("tasks:read", "") && selfDebugAPI.Allows("deployment:read", "") {
 		var reader mcp.TaskReader
 		if client != nil {
 			reader = DaemonTasks{Client: client}

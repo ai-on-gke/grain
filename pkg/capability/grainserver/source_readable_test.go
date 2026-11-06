@@ -12,37 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package selfdebug
+package grainserver
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/ai-on-gke/grain/pkg/model"
 )
-
-func TestSpecIsAGrantCapabilityNamedSelfDebug(t *testing.T) {
-	spec := New().Spec()
-	if CapabilityName != "self-debug" || spec.Name != CapabilityName {
-		t.Fatalf("Name = %q, want %q", spec.Name, "self-debug")
-	}
-	if spec.Provision != model.ProvisionGrant {
-		t.Fatalf("Provision = %q, want %q", spec.Provision, model.ProvisionGrant)
-	}
-}
-
-func TestResolveAlwaysHonours(t *testing.T) {
-	res, err := New().Resolve(context.Background(), model.CapabilityContext{})
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if res.Refused {
-		t.Fatalf("Resolve refused: %+v", res)
-	}
-}
 
 func setupTree(t *testing.T) string {
 	t.Helper()

@@ -183,11 +183,13 @@ func OfferedCapabilities() []Capability {
 		// No gemini-key row: it was retired onto the gcp server's
 		// gcp#gemini-key (schema migration 103), which is offered with
 		// the other capability-server methods.
-		{ID: "self-debug", Name: "Self debug",
-			Description: "Let this task read grain's own source checkout, this deployment's own tasks and runs, and the measurements it keeps about itself -- throughput, latency, the tool-use census -- to help it debug or explain grain's own behavior. All read-only, and all of it is what anyone with this UI open can already see."},
+		// No self-debug row: it was retired onto the api:self-debug
+		// preset and the grain server's grain#source method (schema
+		// migration 115), which are offered with the other api presets
+		// and capability-server methods.
 	}
 	// Capabilities contributed from outside core
-	// (capability.RegisterProvider) follow self-debug, where the
+	// (capability.RegisterProvider) come first, where the
 	// deployment-level ones begin.
 	for _, r := range capability.Registered() {
 		offered = append(offered, Capability{ID: r.ID, Name: r.Name, Description: r.Description})

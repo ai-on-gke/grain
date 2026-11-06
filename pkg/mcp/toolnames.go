@@ -108,18 +108,18 @@ func BareToolName(reported string) string {
 // which is a better answer than this one and the reason those tools are
 // always registered.
 var capabilityForTool = map[string]string{
-	// What self-debug opens (pkg/cli/mcpserver.go registers all of these
-	// only for a run holding the grant): the task readers, and
-	// read_grain_metrics for this deployment's own measurements. A run that
-	// asks one of these without the grant is asking a reasonable question
-	// and should be told which box to have ticked, not that grain cannot
-	// answer it.
-	"list_grain_tasks":           "self-debug",
-	"read_grain_task":            "self-debug",
-	"read_grain_task_prompt":     "self-debug",
-	"read_grain_task_transcript": "self-debug",
-	"read_pipeline_changes":      "self-debug",
-	"read_grain_metrics":         "self-debug",
+	// What self-debug opened over the REST API, its api:self-debug preset
+	// now (pkg/daemon's mcpserver registers all of these only for a run
+	// holding it): the task readers, and read_grain_metrics for this
+	// deployment's own measurements. A run that asks one of these without
+	// the grant is asking a reasonable question and should be told which
+	// box to have ticked, not that grain cannot answer it.
+	"list_grain_tasks":           "api:self-debug",
+	"read_grain_task":            "api:self-debug",
+	"read_grain_task_prompt":     "api:self-debug",
+	"read_grain_task_transcript": "api:self-debug",
+	"read_pipeline_changes":      "api:self-debug",
+	"read_grain_metrics":         "api:self-debug",
 	"read_grain_log":             "https://grain.dev/capabilities/grain#journal",
 	"list_bootstrap_playbooks":   "bootstrap-playbooks",
 	"read_bootstrap_playbook":    "bootstrap-playbooks",

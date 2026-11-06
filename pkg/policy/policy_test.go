@@ -136,6 +136,32 @@ func TestCheckAllowList(t *testing.T) {
 	}
 }
 
+// A policy file on this machine is not rewritten by schema migration 115,
+// which rewrote a self-debug grant to api:self-debug and grain#source: an
+// allow list naming self-debug admits both halves, and a deny naming it
+// refuses each.
+func TestRetiredSelfDebugInAPolicyBindsWhatItBecame(t *testing.T) {
+	allow := mustParse(t, "repos: [acme/widgets]\ncapabilities:\n  allow: [self-debug]\n")
+	task := model.Task{Target: &model.RepoRef{Owner: "acme", Name: "widgets"}}
+	for _, g := range model.SelfDebugGrants() {
+		task.Grants = []model.Grant{{Capability: g}}
+		if err := allow.Check(task, ""); err != nil {
+			t.Errorf("allow: [self-debug] refused %s: %v", g, err)
+		}
+	}
+	task.Grants = []model.Grant{{Capability: model.GrainHealthGrant}}
+	if err := allow.Check(task, ""); err == nil {
+		t.Errorf("allow: [self-debug] admitted %s, which self-debug never became", model.GrainHealthGrant)
+	}
+	deny := mustParse(t, "repos: [acme/widgets]\ncapabilities:\n  deny: [self-debug]\n")
+	for _, g := range model.SelfDebugGrants() {
+		task.Grants = []model.Grant{{Capability: g}}
+		if err := deny.Check(task, ""); err == nil || !strings.Contains(err.Error(), "forbids capability") {
+			t.Errorf("deny: [self-debug] = %v for %s, want it refused", err, g)
+		}
+	}
+}
+
 func TestCheckCapabilityPatterns(t *testing.T) {
 	cases := []struct {
 		rules, grant string

@@ -215,15 +215,15 @@ func TestStage2NamespaceRootsAndScoping(t *testing.T) {
 		TaskRepo:  "bwsalmon/grain",
 	}
 
-	// 1. task:// baseline allows own task, refuses other tasks with self-debug message.
+	// 1. task:// baseline allows own task, refuses other tasks naming api:tasks:read.
 	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/task/100/record.md", nil); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Task 100") {
 		t.Fatalf("own task record: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/task/100/attempts/1/transcript.md", nil); rec.Code != http.StatusOK || rec.Body.String() != "transcript 1\n" {
 		t.Fatalf("own task attempt transcript: status=%d body=%q", rec.Code, rec.Body.String())
 	}
-	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/task/200/record.md", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"self-debug"`) {
-		t.Fatalf("other task without self-debug: status=%d body=%q", rec.Code, rec.Body.String())
+	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/task/200/record.md", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"api:tasks:read"`) {
+		t.Fatalf("other task without api:tasks:read: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 
 	// 2. config:// baseline allows repos/<task-repo> and workflows/, refuses grain.yml and other repos.
@@ -233,8 +233,8 @@ func TestStage2NamespaceRootsAndScoping(t *testing.T) {
 	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/config/workflows/default.yml", nil); rec.Code != http.StatusOK {
 		t.Fatalf("workflows config: status=%d body=%q", rec.Code, rec.Body.String())
 	}
-	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/config/grain.yml", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"self-debug"`) {
-		t.Fatalf("grain.yml without self-debug: status=%d body=%q", rec.Code, rec.Body.String())
+	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/config/grain.yml", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"https://grain.dev/capabilities/grain#source"`) {
+		t.Fatalf("grain.yml without grain#source: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/config/repos/acme/private.yml", nil); rec.Code != http.StatusForbidden {
 		t.Fatalf("other repo config without self-debug: status=%d body=%q", rec.Code, rec.Body.String())
@@ -258,7 +258,7 @@ func TestStage2NamespaceRootsAndScoping(t *testing.T) {
 	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/merge-queue", nil); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Merge queue") {
 		t.Fatalf("deploy://merge-queue: status=%d body=%q", rec.Code, rec.Body.String())
 	}
-	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/metrics", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"self-debug"`) {
+	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/metrics", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"api:deployment:read"`) {
 		t.Fatalf("deploy://metrics without grant: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/health", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"https://grain.dev/capabilities/grain#health"`) {
