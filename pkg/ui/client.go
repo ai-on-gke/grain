@@ -2638,6 +2638,11 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// work goes on to queue for itself, so a session-queued task counts
 	// as a level of self-approved work like any other
 	// (model.SelfApproved) and everything below it is bounded as usual.
+	// What does bound the session itself is per turn rather than per
+	// task (model.AutoSubmitLimits.TurnFanOut): one message is still a
+	// fast way to ask for a lot of work, so past that many in one turn
+	// the rest are filed for a person (spec director-capabilities
+	// §3.1.5, gap G12).
 	//
 	// It says nothing about autoMerge, which stays capped by AutoSubmits
 	// alone. Whether a proposal's own pull request is read is a question
@@ -2733,6 +2738,18 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		if !autoSubmit {
 			refusal = model.AutoApprovalRefusal(child, *proposedBy, sessionQueued)
 		}
+		// A proposal that targets or writes grain/config waits for a
+		// person whatever its proposer holds (model.ConfigRepoProposalHold):
+		// a session given propose_config_change holds grain/config in its
+		// Writes, which would otherwise let it queue a child that pushes
+		// there unreviewed. Grain's own hold, so it joins needsPersonWhy.
+		if why := model.ConfigRepoProposalHold(child); why != "" {
+			if needsPersonWhy == "" {
+				needsPersonWhy = why
+			} else {
+				needsPersonWhy += "; " + why
+			}
+		}
 		// A target only a person may approve: grain's own hold, not the
 		// run's, so it is neither tagged nor told to the run as one it
 		// asked for (heldNote) -- and asked before hold_for_approval, so a
@@ -2787,6 +2804,25 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			}
 			if limit != model.AutoSubmitWithinLimits {
 				autoSubmit = false
+				limitNote = model.AutoSubmitLimitNote(proposedBy.ID, limit, limits)
+			}
+		}
+		// A session's own permission has a bound of its own: how many
+		// proposals it may queue in one conversation turn
+		// (model.AutoSubmitLimits.TurnFanOut). Past it, filed for a
+		// person with a note saying why, as orchestrator.relayProposedTasks
+		// files the identical call.
+		if sessionQueued {
+			limits, err := c.autoSubmitLimits(ctx)
+			if err != nil {
+				return Task{}, err
+			}
+			limit, err := c.Store.ExceededSessionTurnLimit(ctx, proposedBy.ID, limits)
+			if err != nil {
+				return Task{}, err
+			}
+			if limit != model.AutoSubmitWithinLimits {
+				autoSubmit, sessionQueued = false, false
 				limitNote = model.AutoSubmitLimitNote(proposedBy.ID, limit, limits)
 			}
 		}

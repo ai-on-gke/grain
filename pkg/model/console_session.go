@@ -362,6 +362,16 @@ func defaultConsoleSessionCapabilities() []string {
 // break the deployment it is holding a conversation with; and memory,
 // which writes the standing instructions every later run is given.
 //
+// Writes names grain/config (ConfigRepo), and nothing else, so the
+// director is offered propose_config_change: its /home/debian/grain-state
+// checkout may push candidate branches under ConfigProposalBranchPrefix
+// (never the default branch -- the git proxy admits nothing else), each
+// validated, classified by the trust boundary and landed only on a
+// person's approval of its pinned head. That write is not passed on to
+// the work the director files: a proposal that targets or writes
+// grain/config always waits for a person (ConfigRepoProposalHold),
+// whatever TasksApproved says (director-capabilities spec §3.1.3).
+//
 // NetworkOpen because the shipped host-directory sandbox cannot honour
 // NetworkNone: it runs on the host's own network stack, and correctly
 // refuses to pretend that network is absent. A deployment with an
@@ -382,6 +392,7 @@ func DefaultConsoleSessions() []ConsoleSession {
 		// own CapabilityName: those packages import this one.
 		Capabilities:  caps,
 		NetworkAccess: NetworkOpen,
+		Writes:        []WriteTarget{{Repo: ConfigRepo()}},
 	}}
 }
 
