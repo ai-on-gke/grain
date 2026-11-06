@@ -800,6 +800,20 @@ var Migrations = []Migration{
 			"CREATE INDEX IF NOT EXISTS `ci_run_repo_ref` ON `ci_run` (`repo`, `ref`, `started_at`)",
 		},
 	},
+	{
+		Version:     115,
+		Description: "replace priority-dispatch and durable grants with the admission setting on tasks, templates, schedules and defaults",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `admission` TEXT NOT NULL DEFAULT 'standard'",
+			"ALTER TABLE `template` ADD COLUMN `admission` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `schedule` ADD COLUMN `admission` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `grain_config` ADD COLUMN `default_admission` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `default_admission` TEXT NOT NULL DEFAULT ''",
+		},
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			return MigrateAdmissionFromGrants(ctx, tx, false)
+		},
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as

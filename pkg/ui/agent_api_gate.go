@@ -918,6 +918,7 @@ func patchTouchesTaskGrants(body []byte) bool {
 			continue
 		}
 		if strings.Contains(lower, "capabilit") || lower == "grants" ||
+			lower == "admission" ||
 			lower == "keeprunning" || lower == "keep_running" ||
 			lower == "prioritydispatch" || lower == "priority_dispatch" {
 			return true
@@ -940,6 +941,27 @@ func addedGrantsInBody(pattern string, body []byte, stored map[string][]string, 
 	var names []string
 	for key, raw := range fields {
 		lower := gateKey(key)
+		if lower == "admission" || lower == "defaultadmission" || lower == "default_admission" {
+			trimmed := strings.TrimSpace(string(raw))
+			if trimmed == "" || trimmed == "null" {
+				continue
+			}
+			var v string
+			if json.Unmarshal(raw, &v) != nil {
+				names = append(names, model.PriorityDispatchCapability)
+				continue
+			}
+			adm, err := model.ParseOptionalAdmission(v)
+			switch {
+			case err != nil:
+				names = append(names, model.PriorityDispatchCapability)
+			case adm == model.AdmissionDurable:
+				names = append(names, model.DurableCapability)
+			case adm.AtLeast(model.AdmissionBypass) || pattern == "PATCH /api/tasks/{id}":
+				names = append(names, model.PriorityDispatchCapability)
+			}
+			continue
+		}
 		if lower == "priority" || lower == "prioritydispatch" || lower == "priority_dispatch" {
 			var on bool
 			if json.Unmarshal(raw, &on) == nil && (on || pattern == "PATCH /api/tasks/{id}") {
@@ -2197,6 +2219,9 @@ func externalTemplateWithin(tok *model.ExternalAgentToken, held []string, tmpl m
 	if len(tmpl.Reviewers) > 0 {
 		return fmt.Errorf("template %s sets reviewers, which only a person may set", tmpl.ID)
 	}
+	if model.NormalizeAdmission(tmpl.Admission).AtLeast(model.AdmissionBypass) {
+		return fmt.Errorf("template %s sets admission %s, which only a person may give", tmpl.ID, tmpl.Admission)
+	}
 	return nil
 }
 
@@ -2542,6 +2567,7 @@ func editedPatchResponseKeys(body []byte) []string {
 	add(req.ExternalRef != nil, "externalRef")
 	add(req.Priority != nil, "priority")
 	add(req.PriorityDispatch != nil, "priorityDispatch")
+	add(req.Admission != nil, "admission")
 	add(req.Issue != nil, "issue")
 	add(req.AutoMerge != nil, "autoMerge")
 	add(req.AutoApproveProposals != nil, "autoApproveProposals")

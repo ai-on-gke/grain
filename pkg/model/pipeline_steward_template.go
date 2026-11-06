@@ -107,21 +107,20 @@ var PipelineStewardAPIPresets = []string{"task-admin", "dispatch-control", "ci-r
 //     may otherwise give; grain gives them here by construction.
 //     query_merge_queue needs no grant; every run has it.
 func pipelineStewardTemplate(stateRepo RepoRef) *Template {
-	grants := make([]Grant, 0, len(PipelineStewardAPIPresets)+3)
+	grants := make([]Grant, 0, len(PipelineStewardAPIPresets)+1)
 	for _, preset := range PipelineStewardAPIPresets {
 		grants = append(grants, Grant{Capability: APIGrantPrefix + preset, Via: GrantByGrain})
 	}
 	// Named as a string rather than through pkg/capability/selfdebug's
 	// own CapabilityName: that package imports this one.
 	grants = append(grants, Grant{Capability: "self-debug", Via: GrantByGrain})
-	grants = append(grants, Grant{Capability: PriorityDispatchCapability, Via: GrantByGrain})
-	grants = append(grants, Grant{Capability: DurableCapability, Via: GrantByGrain})
 	t := &Template{
 		ID:                  PipelineStewardTemplateID,
 		Name:                "Pipeline steward",
 		Title:               "Pipeline steward",
 		Body:                pipelineStewardBody(),
 		NetworkAccess:       NetworkOpen,
+		Admission:           AdmissionDurable,
 		NothingNeededAction: NothingNeededAck,
 		Grants:              grants,
 		Goal:                PipelineStewardGoal(),

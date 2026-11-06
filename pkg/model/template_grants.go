@@ -40,6 +40,9 @@ import (
 // scope does not reach) is the caller's, since a review takes neither
 // from its template.
 func TemplateWithinTask(acting Task, tmpl Template) error {
+	if adm := NormalizeAdmission(tmpl.Admission); adm.AtLeast(AdmissionBypass) {
+		return fmt.Errorf("template %s sets admission %s, which only a person may give", tmpl.ID, adm)
+	}
 	held := make([]string, len(acting.Grants))
 	for i, g := range acting.Grants {
 		held[i] = g.Capability
@@ -136,4 +139,20 @@ func ReviewGrants(grants []Grant, reviewed Task) (kept []Grant, dropped []string
 		kept = append(kept, g)
 	}
 	return kept, dropped
+}
+
+// ReviewAdmission is the admission level a review of reviewed is filed with
+// when its review template asks for tmplAdmission: capped to reviewed's own
+// admission if tmplAdmission exceeds it, since raising admission above
+// standard is person-only.
+func ReviewAdmission(tmplAdmission Admission, reviewed Task) (Admission, bool) {
+	want := NormalizeAdmission(tmplAdmission)
+	if !want.AtLeast(AdmissionBypass) {
+		return AdmissionStandard, false
+	}
+	held := NormalizeAdmission(reviewed.Admission)
+	if held.AtLeast(want) {
+		return want, false
+	}
+	return held, true
 }

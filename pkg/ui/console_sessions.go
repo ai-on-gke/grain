@@ -338,7 +338,7 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 				if len(openTask.Grants) > 0 {
 					capabilities = make([]string, 0, len(openTask.Grants))
 					for _, g := range openTask.Grants {
-						if g.Capability == "" || g.Capability == model.DurableCapability {
+						if _, legacy := model.LegacyAdmissionAlias(g.Capability); g.Capability == "" || legacy {
 							continue
 						}
 						if g.Via == model.GrantByDefault && !slices.Contains(s.Capabilities, g.Capability) &&
@@ -561,7 +561,8 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 		// somebody choosing a set, in front of the thing it applies to.
 		seen := map[string]bool{}
 		ids := make([]string, 0, len(*req.Capabilities))
-		for _, rawCap := range *req.Capabilities {
+		capsWithoutLegacy, _, _ := extractLegacyAdmissionCaps("console session "+id, *req.Capabilities)
+		for _, rawCap := range capsWithoutLegacy {
 			normalizedIDs, err := c.normalizeCapabilityIDs(rawCap)
 			if err != nil {
 				return nil, err
@@ -736,9 +737,9 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 						return err
 					}
 				}
-				newGrants := make([]model.Grant, 0, len(session.Capabilities)+1)
-				newGrants = append(newGrants, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
-				seen := map[string]bool{model.DurableCapability: true}
+				newGrants := make([]model.Grant, 0, len(session.Capabilities))
+				seen := map[string]bool{}
+				t.Admission = model.AdmissionDurable
 				for _, capID := range session.Capabilities {
 					if capID == "" || seen[capID] {
 						continue
@@ -875,7 +876,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 func consoleSessionGrainCapabilities(grants []model.Grant) []string {
 	caps := make([]string, 0, len(grants))
 	for _, g := range grants {
-		if g.Via != model.GrantByGrain || g.Capability == "" || g.Capability == model.DurableCapability {
+		if _, legacy := model.LegacyAdmissionAlias(g.Capability); g.Via != model.GrantByGrain || g.Capability == "" || legacy {
 			continue
 		}
 		if !slices.Contains(caps, g.Capability) {

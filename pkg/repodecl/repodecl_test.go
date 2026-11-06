@@ -799,3 +799,46 @@ trigger:
 		t.Fatalf("no template: error = %q", msg)
 	}
 }
+
+func TestDeclaredAdmissionAndLegacyCapabilityAliases(t *testing.T) {
+	declared := load(t, map[string]string{
+		".grain/templates/urgent.yml":  "title: Urgent\nadmission: bypass\n",
+		".grain/templates/legacy.yml":  "title: Legacy\ncapabilities:\n  - priority-dispatch\n  - durable\n",
+		".grain/schedules/urgent.yml":  "template: urgent\nevery:\n  hours: 2\nadmission: durable\n",
+		".grain/schedules/legacy.yml":  "template: legacy\nevery:\n  hours: 4\ncapabilities:\n  - priority-dispatch\n",
+	})
+	tmpls := map[string]model.Template{}
+	for _, f := range declared.Templates {
+		tmpls[f.Template.Name] = f.Template
+	}
+	if tmpls["urgent"].Admission != model.AdmissionBypass {
+		t.Errorf("urgent template Admission = %q, want %q", tmpls["urgent"].Admission, model.AdmissionBypass)
+	}
+	if tmpls["legacy"].Admission != model.AdmissionDurable {
+		t.Errorf("legacy template Admission = %q, want %q", tmpls["legacy"].Admission, model.AdmissionDurable)
+	}
+	if len(tmpls["legacy"].Grants) != 0 {
+		t.Errorf("legacy template Grants = %+v, want none", tmpls["legacy"].Grants)
+	}
+	scheds := map[string]model.Schedule{}
+	for _, f := range declared.Schedules {
+		scheds[f.Schedule.Title] = f.Schedule
+	}
+	if scheds["urgent"].Admission != model.AdmissionDurable {
+		t.Errorf("urgent schedule Admission = %q, want %q", scheds["urgent"].Admission, model.AdmissionDurable)
+	}
+	if scheds["legacy"].Admission != model.AdmissionBypass || len(scheds["legacy"].Grants) != 0 {
+		t.Errorf("legacy schedule = (%q, %+v), want (bypass, empty grants)", scheds["legacy"].Admission, scheds["legacy"].Grants)
+	}
+
+	if msg := loadErr(t, map[string]string{
+		".grain/templates/bad.yml": "title: Bad\nadmission: turbo\n",
+	}); !strings.Contains(msg, "admission") {
+		t.Errorf("invalid template admission error = %q, want mention of admission", msg)
+	}
+	if msg := loadErr(t, map[string]string{
+		".grain/settings.yml": "default-admission: bypass\n",
+	}); !strings.Contains(msg, "default-admission") {
+		t.Errorf("repo default-admission error = %q, want refusal of default-admission", msg)
+	}
+}

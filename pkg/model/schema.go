@@ -544,7 +544,12 @@ import "strconv"
 // 114 adds `external_ref` to `task` (model.Task.ExternalRef) and the
 // `task_external_ref`, `github_ci_job_repo_ref` and `ci_run_repo_ref`
 // indexes that back external-reference filtering and GET /api/refs/{ref}/summary.
-const SchemaVersion = 114
+//
+// 115 adds `admission` to `task`, `template` and `schedule` and
+// `default_admission` to `grain_config` and `repo_config`, moving stored
+// `priority-dispatch` and `durable` grants into the setting and dropping
+// catalogue and policy entries for both names.
+const SchemaVersion = 115
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
@@ -910,6 +915,7 @@ var Tables = []string{
   ` + "`proposer_task_id`" + `      TEXT     NOT NULL DEFAULT '',
   ` + "`proposer_run_id`" + `       TEXT     NOT NULL DEFAULT '',
   ` + "`external_ref`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`admission`" + `             TEXT     NOT NULL DEFAULT 'standard',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_external_ref`" + ` ON ` + "`task`" + ` (` + "`external_ref`" + `, ` + "`id`" + `)`,
@@ -1903,6 +1909,7 @@ var Tables = []string{
   ` + "`created_at`" + `            DATETIME NOT NULL,
   ` + "`every_n_minutes`" + `       INTEGER  NULL,
   ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
+  ` + "`admission`" + `             TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2021,6 +2028,7 @@ var Tables = []string{
   ` + "`reviewers`" + `          TEXT NOT NULL DEFAULT '',
   ` + "`priority`" + `           INTEGER NOT NULL DEFAULT 0,
   ` + "`keep_running`" + `       INTEGER NOT NULL DEFAULT 0,
+  ` + "`admission`" + `          TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2506,6 +2514,7 @@ var Tables = []string{
   ` + "`auto_upgrade_on`" + `              TEXT    NOT NULL DEFAULT '',
   ` + "`owner_trust`" + `                  TEXT    NOT NULL DEFAULT '',
   ` + "`auto_grant_context_reads`" + `     TEXT    NOT NULL DEFAULT '',
+  ` + "`default_admission`" + `            TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -3259,6 +3268,7 @@ var Tables = []string{
   ` + "`issue_import_approved`" + `    INTEGER NOT NULL DEFAULT 0,
   ` + "`issue_import_interval_seconds`" + ` INTEGER NOT NULL DEFAULT 0,
   ` + "`upstream_repo`" + `            TEXT NOT NULL DEFAULT '',
+  ` + "`default_admission`" + `        TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 

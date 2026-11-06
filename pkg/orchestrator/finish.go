@@ -1755,6 +1755,17 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		noPort, _ := p["no_port"].(bool)
 		keepRunning, keepRunningSet := p["keep_running"].(bool)
 		fixesBase, _ := p["fixes_base_branch"].(bool)
+		var explicitAdmission, tmplAdmission, legacyAdmission model.Admission
+		var hasExplicitAdmission bool
+		var droppedAdmission string
+		if v, ok := p["admission"].(string); ok && strings.TrimSpace(v) != "" {
+			if parsed, perr := model.ParseAdmission(v); perr != nil {
+				droppedAdmission = strings.TrimSpace(v)
+			} else {
+				explicitAdmission = parsed
+				hasExplicitAdmission = true
+			}
+		}
 		priority := model.DefaultTaskPriority
 		var hasExplicitPriority bool
 		if v, ok := p["priority"]; ok {
@@ -1807,6 +1818,9 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 				if !keepRunningSet {
 					keepRunning = comp.KeepRunning
 				}
+				if !hasExplicitAdmission && comp.Admission != "" {
+					tmplAdmission = comp.Admission
+				}
 			}
 		}
 
@@ -1850,6 +1864,10 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		if err != nil {
 			return fmt.Errorf("orchestrator: resolving default capabilities for proposed task %q: %w", title, err)
 		}
+		defaultAdmission, err := defaultTaskAdmission(ctx, store, target)
+		if err != nil {
+			return fmt.Errorf("orchestrator: resolving default admission for proposed task %q: %w", title, err)
+		}
 		// A {capability, with} entry the run wrote is read as the
 		// grant string it stands for; one that does not parse is
 		// dropped here, as a non-string entry always was, since the
@@ -1857,6 +1875,11 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		capabilities, _ := model.CapabilityEntries(p["capabilities"])
 		for _, cap := range capabilities {
 			cap = strings.TrimSpace(cap)
+			if aliasAdm, isLegacyAdm := model.LegacyAdmissionAlias(cap); isLegacyAdm {
+				log.Printf("orchestrator: deprecated capability %q on proposed task %q; use admission=%q instead", cap, title, aliasAdm)
+				legacyAdmission = model.MaxAdmission(legacyAdmission, aliasAdm)
+				continue
+			}
 			// A review grant is grain's to give, on a review it files
 			// itself (SyncCLReviews); the live call refused it too.
 			if model.GrantNamesReviewOf(cap) {
@@ -1896,6 +1919,24 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		if droppedNetAccess != "" {
 			body += droppedNetworkAccessNote(droppedNetAccess)
 		}
+		if droppedAdmission != "" {
+			body += fmt.Sprintf("\n\n_grain could not use this proposal's admission (%q): want standard, bypass or durable._", droppedAdmission)
+		}
+		proposalAdmission := defaultAdmission
+		var askedAdmission model.Admission
+		if tmplAdmission != "" {
+			proposalAdmission = tmplAdmission
+			askedAdmission = model.MaxAdmission(askedAdmission, tmplAdmission)
+		}
+		if hasExplicitAdmission {
+			proposalAdmission = explicitAdmission
+			askedAdmission = model.MaxAdmission(askedAdmission, explicitAdmission)
+		}
+		if legacyAdmission != "" {
+			proposalAdmission = model.MaxAdmission(proposalAdmission, legacyAdmission)
+			askedAdmission = model.MaxAdmission(askedAdmission, legacyAdmission)
+		}
+		proposalAdmission = model.NormalizeAdmission(proposalAdmission)
 		// Whether the task this proposal replaces may be closed is
 		// decided before the proposal is written and the close is done
 		// after it: the note belongs in the body a human approves, and
@@ -1987,6 +2028,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			Target:              target,
 			Binding:             model.BindingDirective,
 			Base:                base,
+			Admission:           proposalAdmission,
 			Priority:            priority,
 			Interactive:         interactive,
 			Grants:              grants,
@@ -2090,11 +2132,16 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 				needsPersonWhy += "; " + why
 			}
 		}
-		// keep_running, or a priority above this task's own: settings only
-		// a person may give a task (model.PersonOnlyProposalSettings), so
-		// filed as asked, for a person, saying which -- ui.CreateTask's
-		// rule for the identical call filed live.
-		if why := model.PersonOnlyProposalSettings(proposal, task); why != "" {
+		permissionProposal := proposal
+		if !model.NormalizeAdmission(askedAdmission).AtLeast(model.AdmissionBypass) {
+			permissionProposal.Admission = model.AdmissionStandard
+		}
+		// admission above standard, keep_running, or a priority above this
+		// task's own: settings only a person may give a task
+		// (model.PersonOnlyProposalSettings), so filed as asked, for a
+		// person, saying which -- ui.CreateTask's rule for the identical
+		// call filed live.
+		if why := model.PersonOnlyProposalSettings(permissionProposal, task); why != "" {
 			proposal.Body += fmt.Sprintf("\n\n_Filed for a person to approve: %s._", why)
 			if needsPersonWhy == "" {
 				needsPersonWhy = why
@@ -2222,7 +2269,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// merges there, on that -- bounded like any other self-approved
 		// proposal.
 		scratch := model.ScratchFixture(proposal, task, pushesScratch)
-		selfApproves := scratch || model.AutoSubmits(proposal, task)
+		selfApproves := scratch || model.AutoSubmits(permissionProposal, task)
 		switch {
 		case len(escalated) > 0:
 			proposal.Body += model.ProposalEscalationNote(task.ID, proposal, escalated)
@@ -2422,6 +2469,27 @@ func defaultTaskGrants(ctx context.Context, store *model.Store, target *model.Re
 		}
 	}
 	return grants, nil
+}
+
+func defaultTaskAdmission(ctx context.Context, store *model.Store, target *model.RepoRef) (model.Admission, error) {
+	cfg, err := store.GetConfig(ctx)
+	if err != nil {
+		return model.AdmissionStandard, err
+	}
+	adm := model.AdmissionStandard
+	if cfg != nil && cfg.DefaultAdmission != "" {
+		adm = cfg.DefaultAdmission
+	}
+	if target != nil {
+		repoCfg, err := store.GetRepoConfig(ctx, *target)
+		if err != nil {
+			return model.AdmissionStandard, err
+		}
+		if repoCfg != nil && repoCfg.DefaultAdmission != "" {
+			adm = repoCfg.DefaultAdmission
+		}
+	}
+	return model.NormalizeAdmission(adm), nil
 }
 
 // newestFirst is model.Config.NewestFirst, read fresh from the store --

@@ -839,6 +839,7 @@ var AutoSubmitPrincipal = Principal{Kind: PrincipalAutomation, ID: "auto-submit"
 // a human's own review) has said nothing about the first.
 func AutoSubmits(child, parent Task) bool {
 	return (parent.AutoMerge || parent.AutoApproveProposals) &&
+		!NormalizeAdmission(child.Admission).AtLeast(AdmissionBypass) &&
 		GrantsSubsetOf(child.Grants, parent.Grants) &&
 		len(UngrantedReads(child, parent)) == 0 &&
 		LandsWhereGranted(child, parent)
@@ -1543,6 +1544,9 @@ type Task struct {
 	ID string
 	// Priority is the numeric task priority (DefaultTaskPriority = 5; higher = higher priority).
 	Priority int `json:"priority"`
+	// Admission says which dispatch pool this task runs in and whether it
+	// bypasses worker saturation (standard, bypass or durable).
+	Admission Admission `json:"admission,omitempty"`
 	// Branch is the resolved branch this task owns. It is fixed when the
 	// task is first written so changing the deployment's naming template
 	// cannot strand work already pushed under an earlier name. Empty is a

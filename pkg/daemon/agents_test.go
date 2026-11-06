@@ -134,11 +134,10 @@ func TestAPriorityDispatchTaskIsAdmittedOntoAConnectionAtItsLimit(t *testing.T) 
 	pool := providerDefaultPool(t, "gemini-3.1-pro", conn)
 
 	workerChoice := orchestrator.ChoiceFor(model.Task{ID: "worker-1"})
-	steward := model.Task{ID: "steward-1", Grants: []model.Grant{
-		{Capability: model.PriorityDispatchCapability, Via: model.GrantByGrain}}}
+	steward := model.Task{ID: "steward-1", Admission: model.AdmissionBypass}
 	stewardChoice := orchestrator.ChoiceFor(steward)
 	if !stewardChoice.Priority {
-		t.Fatalf("ChoiceFor(a priority-dispatch holder).Priority = false, want true")
+		t.Fatalf("ChoiceFor(a bypass admission task).Priority = false, want true")
 	}
 
 	workerBuilt, err := pool.Build(ctx, workerChoice)

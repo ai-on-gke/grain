@@ -30,13 +30,11 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/ciapi"
 	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
-	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/release"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
@@ -94,8 +92,6 @@ func CapabilityProviders(cfg Config, store *model.Store, _ map[string]*modelprox
 		bootstrap.New(),
 		consolecap.New(),
 		readissues.New(),
-		prioritydispatch.New(),
-		durable.New(),
 	)
 	// image-signing, registry-push and package-publish are no longer
 	// providers here: they were retired onto the in-process release

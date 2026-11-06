@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/metrics"
@@ -136,7 +135,7 @@ func TestInteractiveInitialStartupLatencyAndBreakdown(t *testing.T) {
 		MaxWorkers: 2,
 		Config: orchestrator.Config{
 			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          model.NewCapabilityRegistry(durable.New(), selfdebug.New()),
+			Capabilities:          model.NewCapabilityRegistry(selfdebug.New()),
 			GrainSourceDir:        grainSrc,
 			PackageCache:          func(context.Context) string { return "http://10.9.0.1:41234" },
 			SessionSandboxIdleTTL: 30 * time.Minute,
@@ -337,7 +336,7 @@ func TestInteractiveSubsequentTurnLatencyAndWarmReuse(t *testing.T) {
 			MaxWorkers: 2,
 			Config: orchestrator.Config{
 				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-				Capabilities:          model.NewCapabilityRegistry(durable.New(), selfdebug.New()),
+				Capabilities:          model.NewCapabilityRegistry(selfdebug.New()),
 				PackageCache:          func(context.Context) string { return "http://10.9.0.1:41234" },
 				SandboxGrainBinary:    fakeGrainBin,
 				SessionSandboxIdleTTL: 30 * time.Minute,
@@ -451,7 +450,7 @@ func TestInteractiveSubsequentTurnLatencyAndWarmReuse(t *testing.T) {
 			MaxWorkers: 1,
 			Config: orchestrator.Config{
 				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-				Capabilities:          model.NewCapabilityRegistry(durable.New()),
+				Capabilities:          model.NewCapabilityRegistry(),
 				SessionSandboxIdleTTL: time.Second,
 				WaitForSessionReply:   true,
 				CancelPollInterval:    5 * time.Millisecond,

@@ -891,12 +891,14 @@ type FileConsoleSessionOptions struct {
 // holds GrantByDefault without its Capabilities naming them, unless it
 // declines them (ConsoleSession.DeclinedDefaults).
 func ConsoleSessionGrants(session ConsoleSession) []Grant {
-	grants := make([]Grant, 0, len(session.Capabilities)+1+len(consoleSessionDefaultGrants))
-	grants = append(grants, Grant{Capability: DurableCapability, Via: GrantByGrain})
-	seen := map[string]bool{DurableCapability: true}
+	grants := make([]Grant, 0, len(session.Capabilities)+len(consoleSessionDefaultGrants))
+	seen := map[string]bool{}
 	for _, name := range session.Capabilities {
 		name = strings.TrimSpace(name)
 		if name == "" || seen[name] {
+			continue
+		}
+		if _, legacy := LegacyAdmissionAlias(name); legacy {
 			continue
 		}
 		seen[name] = true
@@ -1027,6 +1029,7 @@ func FileConsoleSessionTask(ctx context.Context, store *Store, session ConsoleSe
 			Reason:      ReasonConsoleSession,
 		},
 		Binding:       BindingDirective,
+		Admission:     AdmissionDurable,
 		Grants:        ConsoleSessionGrants(session),
 		Tags:          []string{ConsoleSessionTag(session.ID)},
 		Interactive:   true,

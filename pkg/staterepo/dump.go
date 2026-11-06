@@ -677,6 +677,9 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 		if err := model.MigrateTaskOwnerAndProposer(ctx, tx); err != nil {
 			return fmt.Errorf("staterepo: %w", err)
 		}
+		if err := model.MigrateAdmissionFromGrants(ctx, tx, true); err != nil {
+			return fmt.Errorf("staterepo: %w", err)
+		}
 	}
 	return tx.Commit()
 }

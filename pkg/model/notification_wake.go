@@ -17,19 +17,18 @@ package model
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 )
 
 // IsDurableTask reports whether t rests between wakes and is woken by a
-// note or a notification: it holds DurableCapability, or it is a standing
+// note or a notification: its admission is durable, or it is a standing
 // task (IsStandingTemplateID) -- the pipeline steward, today.
 func IsDurableTask(t Task) bool {
 	if IsStandingTemplateID(t.TemplateID) {
 		return true
 	}
-	return slices.ContainsFunc(t.Grants, func(g Grant) bool { return g.Capability == DurableCapability })
+	return t.IsDurable()
 }
 
 // WakeRestingTask re-queues id if it is resting -- awaiting_reply with

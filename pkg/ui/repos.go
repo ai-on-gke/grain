@@ -321,6 +321,9 @@ type RepoDefaults struct {
 	// (*Client).defaultCapabilities' own answer, for this repo, rather
 	// than a second computation of it that could drift.
 	EffectiveDefaultCapabilities []string `json:"effectiveDefaultCapabilities"`
+	DefaultAdmission             string   `json:"defaultAdmission"`
+	DeploymentDefaultAdmission   string   `json:"deploymentDefaultAdmission"`
+	EffectiveDefaultAdmission    string   `json:"effectiveDefaultAdmission"`
 	// PromptExtension is this repo's own standing instructions for a run
 	// working in it -- model.RepoConfig.PromptExtension, exactly as
 	// stored, and the only one of the three fields below that a PUT to
@@ -602,6 +605,7 @@ type SetRepoSettingsRequest struct {
 	// default, observe.
 	MergeRecheck        *string   `json:"mergeRecheck,omitempty"`
 	DefaultCapabilities *[]string `json:"defaultCapabilities,omitempty"`
+	DefaultAdmission    *string   `json:"defaultAdmission,omitempty"`
 	CICapabilities      *[]string `json:"ciCapabilities,omitempty"`
 	PromptExtension     *string   `json:"promptExtension,omitempty"`
 	RepairTemplateID    *string   `json:"repairTemplateID,omitempty"`
@@ -722,6 +726,7 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 	if stored != nil {
 		out.IssueImport = repoIssueImportOf(stored.IssueImport)
 		out.DefaultCapabilities = stored.DefaultCapabilities
+		out.DefaultAdmission = string(stored.DefaultAdmission)
 		out.CICapabilities = stored.CICapabilities
 		out.PromptExtension = stored.PromptExtension
 		out.RepairTemplateID = stored.RepairTemplateID
@@ -763,10 +768,18 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 	if err != nil {
 		return RepoDefaults{}, err
 	}
+	var deploymentAdmission model.Admission
 	if cfg != nil {
 		out.DeploymentDefaultCapabilities = cfg.DefaultCapabilities
 		out.DeploymentPromptExtension = cfg.PromptExtension
+		deploymentAdmission = cfg.DefaultAdmission
 	}
+	out.DeploymentDefaultAdmission = string(model.NormalizeAdmission(deploymentAdmission))
+	effAdm := model.NormalizeAdmission(deploymentAdmission)
+	if stored != nil && stored.DefaultAdmission != "" {
+		effAdm = model.NormalizeAdmission(stored.DefaultAdmission)
+	}
+	out.EffectiveDefaultAdmission = string(effAdm)
 	// The same composition dispatch itself applies, with no task layer:
 	// what a run here is told when nothing overrides it
 	// (model.PromptExtensionFor).
@@ -819,11 +832,17 @@ func (c *Client) SetRepoDefaultCapabilities(ctx context.Context, repo string, id
 	if err != nil {
 		return RepoDefaults{}, validationErrorf("repo: %v", err)
 	}
-	clean, err := c.cleanRepoDefaultCapabilities(ids)
+	capsWithoutLegacy, legacyAdm, hadLegacy := extractLegacyAdmissionCaps("repo "+parsed.String()+" defaultCapabilities", ids)
+	clean, err := c.cleanRepoDefaultCapabilities(capsWithoutLegacy)
 	if err != nil {
 		return RepoDefaults{}, err
 	}
-	return c.putRepoConfig(ctx, parsed, func(rc *model.RepoConfig) { rc.DefaultCapabilities = clean })
+	return c.putRepoConfig(ctx, parsed, func(rc *model.RepoConfig) {
+		rc.DefaultCapabilities = clean
+		if hadLegacy {
+			rc.DefaultAdmission = model.MaxAdmission(rc.DefaultAdmission, legacyAdm)
+		}
+	})
 }
 
 func (c *Client) cleanRepoDefaultCapabilities(ids []string) ([]string, error) {
@@ -1077,10 +1096,22 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		}
 	}
 	var defaultCaps []string
+	var legacyAdmission model.Admission
+	var hadLegacyAdmission bool
 	if req.DefaultCapabilities != nil {
-		if defaultCaps, err = c.cleanRepoDefaultCapabilities(*req.DefaultCapabilities); err != nil {
+		var capsWithoutLegacy []string
+		capsWithoutLegacy, legacyAdmission, hadLegacyAdmission = extractLegacyAdmissionCaps("repo "+parsed.String()+" defaultCapabilities", *req.DefaultCapabilities)
+		if defaultCaps, err = c.cleanRepoDefaultCapabilities(capsWithoutLegacy); err != nil {
 			return RepoDefaults{}, err
 		}
+	}
+	var chosenDefaultAdmission *model.Admission
+	if req.DefaultAdmission != nil {
+		adm, err := model.ParseOptionalAdmission(*req.DefaultAdmission)
+		if err != nil {
+			return RepoDefaults{}, validationErrorf("defaultAdmission: %v", err)
+		}
+		chosenDefaultAdmission = &adm
 	}
 	var ciCaps []string
 	if req.CICapabilities != nil {
@@ -1145,6 +1176,12 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		}
 		if req.DefaultCapabilities != nil {
 			rc.DefaultCapabilities = defaultCaps
+		}
+		if chosenDefaultAdmission != nil {
+			rc.DefaultAdmission = *chosenDefaultAdmission
+		}
+		if hadLegacyAdmission {
+			rc.DefaultAdmission = model.MaxAdmission(rc.DefaultAdmission, legacyAdmission)
 		}
 		if req.CICapabilities != nil {
 			rc.CICapabilities = ciCaps

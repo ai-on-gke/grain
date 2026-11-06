@@ -23,8 +23,9 @@ import "context"
 type EffectiveRepoConfig struct {
 	Repo                  RepoRef  `json:"repo"`
 	CloneURL              string   `json:"cloneUrl,omitempty"`
-	DefaultCapabilities   []string `json:"defaultCapabilities,omitempty"`
-	CICapabilities        []string `json:"ciCapabilities,omitempty"`
+	DefaultCapabilities   []string  `json:"defaultCapabilities,omitempty"`
+	DefaultAdmission      Admission `json:"defaultAdmission,omitempty"`
+	CICapabilities        []string  `json:"ciCapabilities,omitempty"`
 	PromptExtension       string   `json:"promptExtension,omitempty"`
 	SetupCommand          string   `json:"setupCommand,omitempty"`
 	CIMode                CIMode   `json:"ciMode,omitempty"`
@@ -39,6 +40,7 @@ type EffectiveRepoConfig struct {
 func (c EffectiveRepoConfig) Empty() bool {
 	return c.CloneURL == "" &&
 		len(c.DefaultCapabilities) == 0 &&
+		c.DefaultAdmission == "" &&
 		len(c.CICapabilities) == 0 &&
 		c.PromptExtension == "" &&
 		c.SetupCommand == "" &&
@@ -83,6 +85,13 @@ func EffectiveRepoConfigFor(global Config, repoCfg *RepoConfig) EffectiveRepoCon
 	} else if len(global.DefaultCapabilities) > 0 {
 		eff.DefaultCapabilities = append([]string(nil), global.DefaultCapabilities...)
 	}
+
+	// DefaultAdmission
+	var repoAdm Admission
+	if repoCfg != nil {
+		repoAdm = repoCfg.DefaultAdmission
+	}
+	eff.DefaultAdmission = MaxAdmission(global.DefaultAdmission, repoAdm)
 
 	// PromptExtension
 	if repoCfg != nil && repoCfg.PromptExtension != "" {

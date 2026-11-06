@@ -830,6 +830,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		taskLinks = []model.Link{}
 	}
 	if task.Title == title && task.Body == body && task.NetworkAccess == network &&
+		task.Admission == model.AdmissionDurable &&
 		task.Model == chosenModel && task.KeepRunning == keepRunning &&
 		slices.Equal(task.Grants, grants) &&
 		slices.Equal(taskReads, reads) &&
@@ -846,6 +847,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 	if err := deps.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
 		t.Title = title
 		t.Body = body
+		t.Admission = model.AdmissionDurable
 		t.Grants = grants
 		t.NetworkAccess = network
 		t.KeepRunning = keepRunning
@@ -931,11 +933,13 @@ func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSessi
 		}
 	}
 
-	out := make([]model.Grant, 0, len(current)+len(session.Capabilities)+1)
-	out = append(out, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
-	seen := map[string]bool{model.DurableCapability: true}
+	out := make([]model.Grant, 0, len(current)+len(session.Capabilities))
+	seen := map[string]bool{}
 
 	for _, g := range current {
+		if _, isLegacyAdm := model.LegacyAdmissionAlias(g.Capability); isLegacyAdm {
+			continue
+		}
 		if g.Capability == "" || seen[g.Capability] {
 			continue
 		}
@@ -973,6 +977,9 @@ func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSessi
 
 	for _, name := range session.Capabilities {
 		name = strings.TrimSpace(name)
+		if _, isLegacyAdm := model.LegacyAdmissionAlias(name); isLegacyAdm {
+			continue
+		}
 		if name == "" || seen[name] {
 			continue
 		}
