@@ -126,6 +126,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/agent/antigravity/hook"
 	"github.com/ai-on-gke/grain/pkg/agent/sessionstore"
+	"github.com/ai-on-gke/grain/pkg/credhealth"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
@@ -2254,8 +2255,9 @@ func hostName(h agent.Host) string {
 // that is the operator's to fix on the host rather than the run's.
 func reportHostToolCalls(r *agent.Result, calls []HostToolCall, fallbackHost string) []string {
 	var notes []string
+	completed := r.ToolCalls
 	seen := map[string]int{}
-	for _, tc := range r.ToolCalls {
+	for _, tc := range completed {
 		if _, ok := hostToolGrantFor(tc.Name); ok {
 			seen[tc.Name]++
 		}
@@ -2291,16 +2293,55 @@ func reportHostToolCalls(r *agent.Result, calls []HostToolCall, fallbackHost str
 				n, grantLabel(g), host, identity))
 		}
 	}
-	for _, tc := range r.ToolCalls {
+	// authFailed is each grant's last word in this run: true for a call
+	// that failed on auth, false for one that completed without error.
+	// Calls the hook recorded after the stream stopped, in-flight calls
+	// with no result text, and calls that failed some other way say
+	// nothing about the credential.
+	authFailed := map[string]bool{}
+	hints := map[string]string{}
+	noted := map[string]bool{}
+	for _, tc := range completed {
 		g, ok := hostToolGrantFor(tc.Name)
-		if ok && tc.IsError && g.IsAuthFailure != nil && g.AuthHint != nil && g.IsAuthFailure(tc.Text) {
+		if !ok {
+			continue
+		}
+		if !tc.IsError {
+			if tc.Text != "" {
+				authFailed[g.Capability] = false
+			}
+			continue
+		}
+		if g.IsAuthFailure != nil && g.AuthHint != nil && g.IsAuthFailure(tc.Text) {
 			hint := g.AuthHint(host)
-			log.Printf("antigravity: %s failed on auth: %s", tc.Name, hint)
-			notes = append(notes, "grain: "+tc.Name+" failed on auth -- "+hint)
-			break
+			authFailed[g.Capability], hints[g.Capability] = true, hint
+			if !noted[g.Capability] {
+				log.Printf("antigravity: %s failed on auth: %s", tc.Name, hint)
+				notes = append(notes, "grain: "+tc.Name+" failed on auth -- "+hint)
+				noted[g.Capability] = true
+			}
 		}
 	}
+	noteHostToolCredentials(authFailed, hints, host)
 	return notes
+}
+
+// noteHostToolCredentials puts each grant's auth outcome on the
+// deployment's record (credhealth), not only the run's: a failure raises
+// one warning notification for the operator until a later call under the
+// same grant succeeds, which clears it.
+func noteHostToolCredentials(authFailed map[string]bool, hints map[string]string, host string) {
+	ctx, now := context.Background(), time.Now()
+	for capability, failed := range authFailed {
+		source := "host-tool:" + capability
+		if !failed {
+			credhealth.Clear(ctx, source)
+			continue
+		}
+		credhealth.Fail(ctx, source,
+			fmt.Sprintf("Host tools under the %s grant are failing on auth on %s", capability, host),
+			hints[capability], now)
+	}
 }
 
 // grantLabel is g's capability for a log line or a note, or a stand-in

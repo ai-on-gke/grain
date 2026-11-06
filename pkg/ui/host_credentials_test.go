@@ -16,11 +16,15 @@ package ui_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/change"
+	"github.com/ai-on-gke/grain/pkg/credhealth"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -62,5 +66,78 @@ func TestSandboxHealthSaysToRenewHostCredentialsOnceForTheHost(t *testing.T) {
 	if !strings.Contains(got.HostCredentials.Detail, "run `renew-host-creds`") || got.HostCredentials.Runs != 1 ||
 		got.HostCredentials.TaskID != task.ID {
 		t.Errorf("hostCredentials = %+v, want the renewal sentence, one run, on %s", got.HostCredentials, task.ID)
+	}
+}
+
+// A change kind blocked on expired credentials, and a host tool failing
+// on auth, are both in the health payload's credentials section -- and
+// the section is gone once neither is.
+func TestSandboxHealthReportsBlockedChangeProvidersAndHostToolFailures(t *testing.T) {
+	srv, _ := testServer(t)
+	t.Cleanup(credhealth.Reset)
+	t.Cleanup(func() { change.ClearBlocked("fakehealthcl") })
+
+	since := time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
+	change.MarkBlocked("fakehealthcl", change.BlockedCredentials, "credentials expired: run renew-creds", since)
+	credhealth.Fail(context.Background(), "host-tool:made-up", "Host tools failing on auth", "run renew on h1", since)
+
+	got := decode[ui.SandboxHealthResponse](t, do(t, srv, http.MethodGet, "/api/sandboxes", ""))
+	if got.Credentials == nil {
+		t.Fatal("credentials absent while a change kind is blocked")
+	}
+	var found bool
+	for _, b := range got.Credentials.ChangeProviders {
+		if b.Kind == "fakehealthcl" {
+			found = true
+			if b.Blocked != change.BlockedCredentials || !b.Since.Equal(since) || b.Detail != "credentials expired: run renew-creds" {
+				t.Errorf("blocked kind = %+v, want credentials since %v", b, since)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("changeProviders = %+v, want fakehealthcl", got.Credentials.ChangeProviders)
+	}
+	if len(got.Credentials.Failures) != 1 || got.Credentials.Failures[0].Source != "host-tool:made-up" {
+		t.Errorf("failures = %+v, want the host tool's", got.Credentials.Failures)
+	}
+
+	change.ClearBlocked("fakehealthcl")
+	credhealth.Clear(context.Background(), "host-tool:made-up")
+	got = decode[ui.SandboxHealthResponse](t, do(t, srv, http.MethodGet, "/api/sandboxes", ""))
+	if got.Credentials != nil {
+		for _, b := range got.Credentials.ChangeProviders {
+			if b.Kind == "fakehealthcl" {
+				t.Errorf("fakehealthcl still reported after ClearBlocked: %+v", got.Credentials)
+			}
+		}
+	}
+}
+
+// GET /api/sandboxes is reachable directly under deployment:read (without
+// deploymenthealth.Tools), so its credentials section redacts known secrets
+// via Config.LogRedactor and withholds details if the redactor cannot load.
+func TestSandboxHealthRedactsCredentialsAndWithholdsWhenRedactorFails(t *testing.T) {
+	srv, client := testServer(t)
+	t.Cleanup(credhealth.Reset)
+	t.Cleanup(func() { change.ClearBlocked("fakeredactcl") })
+
+	since := time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
+	change.MarkBlocked("fakeredactcl", change.BlockedCredentials, "auth failed with plain-shapeless-secret", since)
+	credhealth.Fail(context.Background(), "check:probe", "Probe failing", "token plain-shapeless-secret rejected", since)
+
+	client.Config.LogRedactor = func() (*grainlog.Redactor, error) {
+		return grainlog.NewRedactor([]grainlog.KnownValue{{Label: "secret probe-token", Value: "plain-shapeless-secret"}}), nil
+	}
+	body := do(t, srv, http.MethodGet, "/api/sandboxes", "").Body.String()
+	if strings.Contains(body, "plain-shapeless-secret") || !strings.Contains(body, "secret probe-token") {
+		t.Fatalf("GET /api/sandboxes leaked known secret or skipped redactor:\n%s", body)
+	}
+
+	client.Config.LogRedactor = func() (*grainlog.Redactor, error) {
+		return nil, errors.New("secrets store unreadable")
+	}
+	body = do(t, srv, http.MethodGet, "/api/sandboxes", "").Body.String()
+	if strings.Contains(body, "plain-shapeless-secret") || !strings.Contains(body, "withheld") {
+		t.Fatalf("GET /api/sandboxes did not fail closed when redactor failed:\n%s", body)
 	}
 }

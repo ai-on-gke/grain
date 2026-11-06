@@ -346,16 +346,20 @@ func pipelineChangesReadCommand(cursor string, limit int) string {
 	return cmd
 }
 
+func (d sandboxDeploy) redact() func(string) string {
+	redactor := grainLogRedactorFor(d.secretsDir, d.secretStore)
+	if redactor == nil {
+		return nil
+	}
+	return func(s string) string { text, _ := redactor.Text(s); return text }
+}
+
 // health is read_deployment_health and read_deployment_state, built per
 // read so that a secret set since the daemon started is redacted by the
-// next read (grainLogRedactor reads the store each time).
+// next read (grainLogRedactorFor reads the store each time).
 func (d sandboxDeploy) health() []mcp.Tool {
-	var redactFn func(string) string
-	if redactor := grainLogRedactorFor(d.secretsDir, d.secretStore); redactor != nil {
-		redactFn = func(s string) string { lines, _ := redactor.Redact([]string{s}); return lines[0] }
-	}
 	return deploymenthealth.Tools(deploymenthealth.Config{
-		StateDir: d.stateDir, Reader: daemonDeploymentHealth{client: d.client}, Redact: redactFn,
+		StateDir: d.stateDir, Reader: daemonDeploymentHealth{client: d.client}, Redact: d.redact(),
 	})
 }
 
@@ -369,8 +373,42 @@ func (d sandboxDeploy) ReadState(ctx context.Context, table string) (string, err
 	args := map[string]any{}
 	if table != "" {
 		args["path"] = "tables/" + table + ".json"
+		return toolText(d.health()[1].Handler(ctx, args))
 	}
-	return toolText(d.health()[1].Handler(ctx, args))
+	text, err := toolText(d.health()[1].Handler(ctx, args))
+	if err != nil {
+		return text, err
+	}
+	return d.withCredentials(ctx, text), nil
+}
+
+// withCredentials adds the deployment's credentials section
+// (ui.CredentialsHealth) to the state listing, so a reader of
+// deploy://state learns that the operator's credentials have lapsed
+// without also having to read deploy://health. The listing is returned
+// as it was when there is nothing to add or health cannot be read.
+func (d sandboxDeploy) withCredentials(ctx context.Context, listing string) string {
+	if d.client == nil {
+		return listing
+	}
+	redact := d.redact()
+	if redact == nil {
+		return listing
+	}
+	health, err := d.client.SandboxHealth(ctx)
+	if err != nil || health.Credentials == nil {
+		return listing
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(listing), &m); err != nil {
+		return listing
+	}
+	m["credentials"] = health.Credentials
+	b, err := json.Marshal(m)
+	if err != nil {
+		return listing
+	}
+	return redact(string(b)) + "\n"
 }
 
 func (d sandboxDeploy) ListStateTables(ctx context.Context) ([]string, error) {
