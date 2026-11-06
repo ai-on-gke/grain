@@ -115,7 +115,7 @@ func TestClientAuthHeadersEndpointsAndErrors(t *testing.T) {
 				CanCreate: true,
 				Quota:     api.QuotaUsage{QuotaUnitsUsed: 1, QuotaUnitsLimit: 4, ConnectedLimit: 5},
 			})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/entries/alice/heartbeat":
+		case r.Method == http.MethodPut && r.URL.Path == "/api/entries/alice/heartbeat":
 			if r.Header.Get(api.HeaderAuth) != api.AuthModeToken {
 				t.Errorf("X-Grain-Auth = %q, want token", r.Header.Get(api.HeaderAuth))
 			}

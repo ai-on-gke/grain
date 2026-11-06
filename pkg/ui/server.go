@@ -121,6 +121,75 @@ func NewServerWithClient(client *Client) *Server {
 	return s
 }
 
+const maxTunnelRequestBodyBytes = 64 << 20 // 64 MiB cap on non-upgraded tunnel request bodies
+
+// RegistryTunnelHandler returns an http.Handler for serving accepted mux
+// streams on an outbound registry tunnel (-registry-connect). Every tunneled
+// request is gated unconditionally behind the "registry" IdentityVerifier
+// (X-Grain-Registry-Assertion, Source == "registry")—including open routes like
+// /api/config, /api/auth/*, and /api/hostd/connect—and loopback or access-code
+// shortcuts (grain_access cookies, X-Grain-Access-Code headers, and bearer
+// access codes) are unconditionally rejected.
+func (s *Server) RegistryTunnelHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setSecurityHeaders(w.Header())
+		r = r.Clone(withRegistryTunnelRequest(r.Context()))
+		if strings.TrimSpace(r.RemoteAddr) == "" || isLoopbackRequest(r) {
+			r.RemoteAddr = "tunnel-stream-remote"
+		}
+		if r.Body != nil && strings.TrimSpace(r.Header.Get("Upgrade")) == "" {
+			r.Body = http.MaxBytesReader(w, r.Body, maxTunnelRequestBodyBytes)
+		}
+		if s.tasks != nil {
+			r = r.WithContext(WithIAPConfig(r.Context(), IAPConfig{
+				Audience:              s.tasks.Config.IAPAudience,
+				Issuer:                s.tasks.Config.IAPIssuer,
+				KeysURL:               s.tasks.Config.IAPKeysURL,
+				RegistryIssuer:        s.tasks.Config.RegistryIssuer,
+				RegistryAudience:      s.tasks.Config.RegistryAudience,
+				RegistryKeysURL:       s.tasks.Config.RegistryKeysURL,
+				RequireVerifier:       string(AuthMethodRegistry),
+				RequireIAP:            false,
+				LocalAPIToken:         "",
+				AccessSessionLifetime: s.tasks.Config.AccessSessionLifetime,
+			}))
+		} else {
+			cfg, _ := IAPConfigFromContext(r.Context())
+			cfg.RequireVerifier = string(AuthMethodRegistry)
+			cfg.RequireIAP = false
+			cfg.LocalAPIToken = ""
+			r = r.WithContext(WithIAPConfig(r.Context(), cfg))
+		}
+		if strings.TrimSpace(r.Header.Get(AccessCodeHeader)) != "" {
+			writeError(w, http.StatusUnauthorized, errors.New("X-Grain-Access-Code is not accepted over the registry tunnel"))
+			return
+		}
+		if c, err := r.Cookie(AccessCookieName); err == nil && c != nil && strings.TrimSpace(c.Value) != "" {
+			writeError(w, http.StatusUnauthorized, errors.New("grain_access cookies are not accepted over the registry tunnel"))
+			return
+		}
+		if presentsApprovalCallbackToken(r) {
+			writeError(w, http.StatusUnauthorized, errors.New("local script approval tokens are not accepted over the registry tunnel"))
+			return
+		}
+		if _, ok := bearerToken(r); ok && !presentsExternalAgentToken(r) {
+			writeError(w, http.StatusUnauthorized, errors.New("bearer access codes are not accepted over the registry tunnel"))
+			return
+		}
+		cv := verifyRegistryTunnelCaller(r)
+		r = r.WithContext(withCallerVerification(r.Context(), &cv))
+		if !cv.present || cv.err != nil {
+			err := cv.err
+			if err == nil {
+				err = errors.New(errVerifierRequired(string(AuthMethodRegistry)))
+			}
+			writeAssertionRefused(w, r, err)
+			return
+		}
+		s.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w.Header())
 	if !checkCrossOrigin(w, r) {
@@ -132,8 +201,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	tunnelReq := isRegistryTunnelRequest(r)
 	if s.tasks != nil {
-		r = r.WithContext(WithIAPConfig(r.Context(), IAPConfig{
+		iapCfg := IAPConfig{
 			Audience:              s.tasks.Config.IAPAudience,
 			Issuer:                s.tasks.Config.IAPIssuer,
 			KeysURL:               s.tasks.Config.IAPKeysURL,
@@ -144,7 +214,13 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			RequireIAP:            s.tasks.Config.RequireIAP,
 			LocalAPIToken:         s.localAPITokenNow(),
 			AccessSessionLifetime: s.tasks.Config.AccessSessionLifetime,
-		}))
+		}
+		if tunnelReq {
+			iapCfg.RequireVerifier = string(AuthMethodRegistry)
+			iapCfg.RequireIAP = false
+			iapCfg.LocalAPIToken = ""
+		}
+		r = r.WithContext(WithIAPConfig(r.Context(), iapCfg))
 	}
 	// Nobody gets further without the access code -- loopback included
 	// (accesscode.go, grain/task-4343) -- unless the request presents a
@@ -152,13 +228,18 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	// PrincipalAgent("external:<name>") and is held to its own scopes by
 	// agentAPIGate and handleMCP.
 	cfg, _ := IAPConfigFromContext(r.Context())
-	cv := verifyCallerNow(r)
-	r = r.WithContext(withCallerVerification(r.Context(), &cv))
+	var cv callerVerification
+	if tunnelReq {
+		cv = cachedOrVerifyCaller(r)
+	} else {
+		cv = verifyCallerNow(r)
+		r = r.WithContext(withCallerVerification(r.Context(), &cv))
+	}
 	if cv.present && cv.err != nil {
 		writeAssertionRefused(w, r, cv.err)
 		return
 	}
-	if presentsApprovalCallbackToken(r) {
+	if !tunnelReq && presentsApprovalCallbackToken(r) {
 		taskID, ok := s.authenticateApprovalCallback(w, r)
 		if !ok {
 			return

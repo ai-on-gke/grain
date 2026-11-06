@@ -42,12 +42,14 @@ import (
 )
 
 const (
-	// RegistryURLEnv, RegistryEntryEnv, and RegistryTokenEnv allow container
-	// and Kubernetes deployments to configure registry self-registration via
-	// environment variables when flags are omitted.
-	RegistryURLEnv   = "GRAIN_REGISTRY_URL"
-	RegistryEntryEnv = "GRAIN_REGISTRY_ENTRY"
-	RegistryTokenEnv = "GRAIN_REGISTRY_TOKEN"
+	// RegistryURLEnv, RegistryEntryEnv, RegistryTokenEnv, and RegistryConnectEnv
+	// allow container and Kubernetes deployments to configure registry
+	// self-registration and the outbound tunnel via environment variables when
+	// flags are omitted.
+	RegistryURLEnv     = "GRAIN_REGISTRY_URL"
+	RegistryEntryEnv   = "GRAIN_REGISTRY_ENTRY"
+	RegistryTokenEnv   = "GRAIN_REGISTRY_TOKEN"
+	RegistryConnectEnv = "GRAIN_REGISTRY_CONNECT"
 
 	defaultRegistryRequestTimeout = 10 * time.Second
 	defaultRegistryMinInterval    = 2 * time.Second
@@ -220,6 +222,25 @@ func (m *RegistryManager) SetTunnelConnector(tc RegistryTunnelConnector) {
 	m.tunnelConnector = tc
 	m.tunnelMu.Unlock()
 	m.Trigger()
+}
+
+// HasTunnelConnector reports whether a RegistryTunnelConnector is attached.
+func (m *RegistryManager) HasTunnelConnector() bool {
+	if m == nil {
+		return false
+	}
+	m.tunnelMu.Lock()
+	defer m.tunnelMu.Unlock()
+	return m.tunnelConnector != nil
+}
+
+// InvalidateOIDCCache clears any cached OIDC ID token so the next heartbeat or
+// tunnel dial mints a fresh token.
+func (m *RegistryManager) InvalidateOIDCCache() {
+	if m == nil {
+		return
+	}
+	m.invalidateOIDCCache()
 }
 
 // Trigger wakes the background heartbeat loop asynchronously. Safe to call from
@@ -592,6 +613,7 @@ func (m *RegistryManager) step(parentCtx context.Context) (time.Duration, error)
 		if api.IsUnauthorized(err) {
 			m.invalidateOIDCCache()
 		}
+		m.ensureTunnel(parentCtx, inputs, initialTok, tokenSource)
 		return m.recordFailure(err), err
 	}
 

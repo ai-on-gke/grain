@@ -69,6 +69,7 @@ type registryDaemonFlags struct {
 	purpose      *string
 	hostKind     *string
 	listed       *bool
+	connect      *bool
 }
 
 func registerRegistryFlags(fs *flag.FlagSet) registryDaemonFlags {
@@ -92,6 +93,8 @@ func registerRegistryFlags(fs *flag.FlagSet) registryDaemonFlags {
 			"connected entry host kind advertised to the registry: \"workstation\", \"kubernetes\", or \"other\" (defaults to the active sandbox backend)"+seedNote),
 		listed: fs.Bool("registry-listed", true,
 			"include this connected entry in default registry directory listings"+seedNote),
+		connect: fs.Bool("registry-connect", false,
+			"supervise an outbound wss://<registry-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the registry assertion verifier gate ($"+daemon.RegistryConnectEnv+"; requires -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url)"),
 	}
 }
 
@@ -104,7 +107,14 @@ func (f registryDaemonFlags) apply(cfg *daemon.Config, passed map[string]bool) {
 	if !passed["registry-entry"] && entryVal == "" {
 		entryVal = strings.TrimSpace(os.Getenv(daemon.RegistryEntryEnv))
 	}
+	connectVal := *f.connect
+	if !passed["registry-connect"] && !connectVal {
+		if env := strings.TrimSpace(os.Getenv(daemon.RegistryConnectEnv)); env != "" {
+			connectVal = env == "1" || strings.EqualFold(env, "true") || strings.EqualFold(env, "yes")
+		}
+	}
 	cfg.RegistryTokenFile = strings.TrimSpace(*f.tokenFile)
+	cfg.RegistryConnect = connectVal
 	cfg.Registry = model.RegistryConfig{
 		URL:          urlVal,
 		Entry:        entryVal,
@@ -118,6 +128,9 @@ func (f registryDaemonFlags) apply(cfg *daemon.Config, passed map[string]bool) {
 }
 
 func checkRegistryConfig(cfg daemon.Config) error {
+	if err := daemon.CheckRegistryConnect(cfg); err != nil {
+		return err
+	}
 	r := cfg.Registry
 	anySet := r.URL != "" || r.Entry != "" || r.AuthMode != "" || r.OIDCAudience != "" ||
 		r.DisplayName != "" || r.Purpose != "" || r.HostKind != ""
