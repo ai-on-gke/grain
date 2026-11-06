@@ -15,6 +15,7 @@
 package registry
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,7 @@ import (
 	"net/http"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/registry/api"
@@ -43,10 +45,12 @@ type ServerOptions struct {
 	Signer     Signer
 	Transport  ConnectTransport
 	Metrics    *Metrics
+	ReplicaID  string
+	PeerAddr   string
 }
 
-// Server serves the main registry HTTP listener (`:8080`) and the public JWKS
-// listener (`:8081`).
+// Server serves the main registry HTTP listener (`:8080`), the public listener
+// (`:8081`), and the replica-to-replica peer listener (`:8082`).
 type Server struct {
 	cfg        Config
 	store      *store.Store
@@ -57,7 +61,86 @@ type Server struct {
 	transport  ConnectTransport
 	metrics    *Metrics
 	static     http.Handler
+	router     *server.Router
 	draining   atomic.Bool
+}
+
+type signerAdapter struct {
+	signer Signer
+}
+
+func (a signerAdapter) SignAssertion(ctx context.Context, claims server.AssertionClaims) (string, error) {
+	var act *DelegationActor
+	if claims.Actor != nil {
+		act = &DelegationActor{
+			Sub:    claims.Actor.Sub,
+			Kind:   claims.Actor.Kind,
+			App:    claims.Actor.App,
+			Grant:  claims.Actor.Grant,
+			Access: claims.Actor.Access,
+		}
+	}
+	return a.signer.SignAssertion(ctx, RegistryClaims{
+		Issuer:   claims.Issuer,
+		Audience: claims.Audience,
+		Subject:  claims.Subject,
+		Email:    claims.Email,
+		Kind:     claims.Kind,
+		Actor:    act,
+	})
+}
+
+func (a signerAdapter) SignPeerToken(ctx context.Context, replicaID string, ttl time.Duration) (string, error) {
+	if ttl <= 0 {
+		ttl = server.PeerTokenTTL
+	}
+	now := time.Now().UTC()
+	return a.signer.SignAssertion(ctx, RegistryClaims{
+		Issuer:    RegistryAssertionIssuer,
+		Audience:  server.PeerAuthAudience,
+		Subject:   replicaID,
+		Kind:      "service",
+		IssuedAt:  now.Unix(),
+		NotBefore: now.Add(-AssertionNotBeforeSkew).Unix(),
+		ExpiresAt: now.Add(ttl).Unix(),
+		JWTID:     randomJTI(),
+	})
+}
+
+func (a signerAdapter) VerifyPeerToken(ctx context.Context, token string) (string, error) {
+	jwksDoc, err := a.signer.JWKS(ctx)
+	if err != nil {
+		return "", err
+	}
+	claims, err := VerifyRegistryAssertion(token, jwksDoc, server.PeerAuthAudience, time.Now().UTC())
+	if err != nil {
+		return "", err
+	}
+	return claims.Subject, nil
+}
+
+type delegationAdapter struct {
+	policy DelegationPolicy
+}
+
+func (a delegationAdapter) AuthorizeOnBehalfOf(ctx context.Context, servicePrincipal, targetUserEmail, targetEntryName string) (*server.AssertionActor, error) {
+	if a.policy == nil {
+		return nil, ErrDelegationDenied
+	}
+	act, err := a.policy.AuthorizeOnBehalfOf(ctx, servicePrincipal, targetUserEmail, targetEntryName)
+	if err != nil {
+		return nil, err
+	}
+	if act == nil {
+		return nil, nil
+	}
+	return &server.AssertionActor{
+		Sub:    act.Sub,
+		Kind:   act.Kind,
+		App:    act.App,
+		Grant:  act.Grant,
+		Access: act.Access,
+	}, nil
 }
 
 // NewServer constructs a registry HTTP Server from ServerOptions.
@@ -72,6 +155,54 @@ func NewServer(opts ServerOptions) (*Server, error) {
 	if metrics == nil {
 		metrics = NewMetrics()
 	}
+
+	peerAddr := strings.TrimSpace(opts.PeerAddr)
+	if peerAddr == "" {
+		peerAddr = strings.TrimSpace(opts.Config.Tunnel.SelfAddr)
+	}
+	if peerAddr == "" {
+		peerAddr = strings.TrimSpace(opts.Config.Tunnel.PeerListen)
+	}
+
+	var delChecker server.DelegationChecker
+	if opts.Delegation != nil {
+		delChecker = delegationAdapter{policy: opts.Delegation}
+	}
+
+	rt, err := server.NewRouter(server.RouterOptions{
+		RegistryHost:     opts.Config.Host,
+		InstanceDomain:   opts.Config.InstanceDomain,
+		IAPAudience:      opts.Config.Auth.IAPAudience,
+		ReplicaID:        opts.ReplicaID,
+		PeerAddr:         peerAddr,
+		DatabaseURL:      opts.Config.Database.URL,
+		ReplicaHeartbeat: opts.Config.Tunnel.ReplicaHeartbeat,
+		ReplicaTTL:       opts.Config.Tunnel.ReplicaTTL,
+		ReconnectGrace:   opts.Config.Tunnel.ReconnectGrace,
+		TunnelOptions: server.TunnelOptions{
+			MaxConcurrentStreams: opts.Config.Tunnel.MaxConcurrentStreams,
+			MaxBufferedBytes:     opts.Config.Tunnel.MaxBufferedBytes,
+			DrainTimeout:         opts.Config.Tunnel.DrainTimeout,
+			OnPeerStreamRejected: func(_ string, _ uint32) {
+				metrics.IncPeerStreamRejected()
+			},
+			OnActiveTunnelsChanged: func(count int64) {
+				metrics.SetActiveTunnels(count)
+			},
+		},
+		Store:               opts.Store,
+		Admitter:            opts.Admitter,
+		Groups:              opts.Groups,
+		Delegation:          delChecker,
+		Signer:              signerAdapter{signer: opts.Signer},
+		OnPeerForward:       metrics.IncPeerForwards,
+		OnAdmissionRejected: metrics.IncAdmissionRejected,
+		OnHeartbeat:         metrics.IncHeartbeats,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	return &Server{
 		cfg:        opts.Config,
 		store:      opts.Store,
@@ -82,25 +213,61 @@ func NewServer(opts ServerOptions) (*Server, error) {
 		transport:  opts.Transport,
 		metrics:    metrics,
 		static:     server.NewStaticHandler(),
+		router:     rt,
 	}, nil
+}
+
+// Router returns the underlying subdomain/tunnel/peer Router.
+func (s *Server) Router() *server.Router {
+	return s.router
+}
+
+// StartBackground launches background LISTEN/poll/heartbeat loops on the Router.
+func (s *Server) StartBackground(ctx context.Context) {
+	if s.router != nil {
+		s.router.StartBackground(ctx)
+	}
+}
+
+// BeginDrain marks `/healthz` not-ready (`503`) and drains active tunnels on SIGTERM.
+func (s *Server) BeginDrain(ctx context.Context) {
+	s.SetDraining(true)
+	if s.router != nil {
+		s.router.BeginDrain(ctx)
+	}
 }
 
 // SetDraining toggles the server's drain mode (`GET /healthz` returns 503 while draining).
 func (s *Server) SetDraining(draining bool) {
 	s.draining.Store(draining)
+	if s.router != nil {
+		s.router.SetDraining(draining)
+	}
 }
 
 // IsDraining reports whether the server is currently draining.
 func (s *Server) IsDraining() bool {
-	return s.draining.Load()
+	if s.draining.Load() {
+		return true
+	}
+	return s.router != nil && s.router.IsDraining()
 }
 
-// JWKSHandler returns the unauthenticated handler for the dedicated public JWKS listener (`:8081`).
+// JWKSHandler returns the handler for the dedicated public listener (`:8081`),
+// serving `GET /.well-known/jwks.json`, `GET /healthz`, `GET /api/entries/{name}/connect`,
+// and `PUT`/`POST /api/entries/{name}/heartbeat`.
 func (s *Server) JWKSHandler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /.well-known/jwks.json", s.handleJWKS)
-	mux.HandleFunc("GET /healthz", s.handleHealthz)
-	return mux
+	return s.PublicHandler()
+}
+
+// PublicHandler returns the handler for `grain-registry-public` (`:8081`).
+func (s *Server) PublicHandler() http.Handler {
+	return s.router.PublicHandler(s.handleJWKS, s.handleHealthz)
+}
+
+// PeerHandler returns the handler for the replica-to-replica peer listener (`:8082`).
+func (s *Server) PeerHandler() http.Handler {
+	return s.router.PeerHandler()
 }
 
 // Handler returns the main HTTP handler for `:8080`.
@@ -110,6 +277,15 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /metrics", s.admitter.RequireAdmin(s.metrics.Handler()))
 	mux.HandleFunc("GET /.well-known/jwks.json", s.handleJWKS)
 	mux.HandleFunc("POST /api/internal/heartbeat", s.handleInternalHeartbeat)
+	mux.HandleFunc("GET /api/entries/{name}/connect", func(w http.ResponseWriter, r *http.Request) {
+		s.router.HandleConnect(w, r, r.PathValue("name"), false)
+	})
+	mux.HandleFunc("PUT /api/entries/{name}/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+		s.router.HandleEntryHeartbeat(w, r, false)
+	})
+	mux.HandleFunc("POST /api/entries/{name}/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+		s.router.HandleEntryHeartbeat(w, r, false)
+	})
 
 	mux.Handle("GET /api/me", s.admitter.RequireHuman(http.HandlerFunc(s.handleGetMe)))
 	// Service principals read the catalog (/api/directory, /api/route) and
@@ -123,14 +299,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/route", s.admitter.RequireAdmitted(http.HandlerFunc(s.handleGetRoute)))
 	mux.Handle("/", s.admitter.RequireHuman(s.static))
 
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	controlPlane := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", strictCSP)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-
-		if entryName, ok := s.extractInstanceSubdomain(r.Host); ok {
-			s.serveEntrySubdomain(w, r, entryName)
-			return
-		}
 
 		// Enforce CSRF protection on state-changing requests other than bearer-authenticated internal endpoints.
 		if !strings.HasPrefix(r.URL.Path, "/api/internal/") && r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
@@ -145,6 +316,8 @@ func (s *Server) Handler() http.Handler {
 		mux.ServeHTTP(rec, r)
 		s.metrics.IncRequests(rec.status)
 	})
+
+	return s.router.WrapMainHandler(controlPlane)
 }
 
 func (s *Server) extractInstanceSubdomain(hostHeader string) (string, bool) {
@@ -517,6 +690,24 @@ type statusCapturingWriter struct {
 func (w *statusCapturingWriter) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusCapturingWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("underlying ResponseWriter does not support Hijack")
+	}
+	return hj.Hijack()
+}
+
+func (w *statusCapturingWriter) Flush() {
+	if fl, ok := w.ResponseWriter.(http.Flusher); ok {
+		fl.Flush()
+	}
+}
+
+func (w *statusCapturingWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

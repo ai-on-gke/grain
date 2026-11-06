@@ -175,11 +175,16 @@ type EntryRow struct {
 	SSHGrantExpiresAt *time.Time `json:"ssh_grant_expires_at,omitempty"`
 	SSHGrantedTo      string     `json:"ssh_granted_to,omitempty"`
 
-	GrainVersion    string     `json:"grain_version,omitempty"`
-	ActiveTasks     int        `json:"active_tasks"`
-	PendingInbox    int        `json:"pending_inbox"`
-	LastHeartbeatAt *time.Time `json:"last_heartbeat_at,omitempty"`
-	SessionEpoch    int64      `json:"session_epoch"`
+	GrainVersion         string     `json:"grain_version,omitempty"`
+	ActiveTasks          int        `json:"active_tasks"`
+	PendingInbox         int        `json:"pending_inbox"`
+	LastHeartbeatAt      *time.Time `json:"last_heartbeat_at,omitempty"`
+	SessionEpoch         int64      `json:"session_epoch"`
+	ConnectedPrincipal   string     `json:"connected_principal,omitempty"`
+	HostKind             string     `json:"host_kind,omitempty"`
+	LastDisconnectAt     *time.Time `json:"last_disconnect_at,omitempty"`
+	LastDisconnectReason string     `json:"last_disconnect_reason,omitempty"`
+	OwnerDisabled        bool       `json:"owner_disabled,omitempty"`
 
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
@@ -193,6 +198,7 @@ type EntryRow struct {
 // TunnelSessionRow represents an active `grain connect` session in `registry.tunnel_sessions`.
 type TunnelSessionRow struct {
 	EntryID         string    `json:"entry_id"`
+	EntryName       string    `json:"entry_name,omitempty"`
 	ReplicaID       string    `json:"replica_id"`
 	PeerAddr        string    `json:"peer_addr,omitempty"`
 	ReplicaLastSeen time.Time `json:"replica_last_seen"`
@@ -201,6 +207,7 @@ type TunnelSessionRow struct {
 	ConnectedAt     time.Time `json:"connected_at"`
 	LastSeenAt      time.Time `json:"last_seen_at"`
 	RTTMs           int       `json:"rtt_ms,omitempty"`
+	CredID          string    `json:"cred_id,omitempty"`
 }
 
 // ReplicaRow represents a registry replica in `registry.replicas`.
@@ -399,6 +406,8 @@ func (s *Store) IsOwnerDisabled(ctx context.Context, email string) (bool, error)
 }
 
 // SetOwnerDisabled updates `disabled` on `registry.owners` (creating the owner row if needed).
+// When disabling an owner, any active tunnel sessions for entries owned by `email` are
+// terminated and `NOTIFY registry_entries` / `NOTIFY registry_tunnels` are emitted.
 func (s *Store) SetOwnerDisabled(ctx context.Context, email string, disabled bool) error {
 	email = strings.ToLower(strings.TrimSpace(email))
 	now := s.now()
@@ -406,7 +415,43 @@ func (s *Store) SetOwnerDisabled(ctx context.Context, email string, disabled boo
 INSERT INTO registry.owners (email, disabled, created_at, last_seen_at)
 VALUES ($1, $2, $3, $3)
 ON CONFLICT (email) DO UPDATE SET disabled = EXCLUDED.disabled`, email, disabled, now)
-	return err
+	if err != nil {
+		return err
+	}
+	if disabled {
+		_, _ = s.db.ExecContext(ctx, `
+DELETE FROM registry.tunnel_sessions
+WHERE entry_id IN (SELECT id FROM registry.entries WHERE owner_email = $1 AND deleted_at IS NULL)`, email)
+		_, _ = s.db.ExecContext(ctx, `
+UPDATE registry.entries
+SET last_disconnect_at     = $1,
+    last_disconnect_reason = 'owner disabled',
+    updated_at             = $1
+WHERE owner_email = $2 AND deleted_at IS NULL`, now, email)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT name FROM registry.entries WHERE owner_email = $1 AND deleted_at IS NULL`, email)
+	if err == nil {
+		var names []string
+		for rows.Next() {
+			var n string
+			if rows.Scan(&n) == nil {
+				names = append(names, n)
+			}
+		}
+		_ = rows.Close()
+		for _, n := range names {
+			s.notify(ctx, "registry_entries", n)
+			s.notify(ctx, "registry_tunnels", n)
+		}
+	}
+	return nil
+}
+
+func (s *Store) notify(ctx context.Context, channel, payload string) {
+	if s == nil || s.db == nil || channel == "" {
+		return
+	}
+	_, _ = s.db.ExecContext(ctx, `SELECT pg_notify($1, $2)`, channel, payload)
 }
 
 // SetQuota upserts a per-owner quota override in `registry.quotas`.
@@ -542,21 +587,23 @@ LIMIT 1`, name, now).Scan(&reservedOwner, &purgeAfter)
 
 // CreateEntryInput holds parameters for creating an `instance` or `connected` entry.
 type CreateEntryInput struct {
-	Name           string
-	Kind           api.EntryKind
-	OwnerEmail     string
-	OwnerGroup     string
-	Listed         *bool
-	Visibility     Visibility
-	AccessList     []string
-	DisplayName    string
-	Purpose        string
-	Tags           []string
-	LifecycleState api.EntryState
-	Shape          string
-	Zone           string
-	BackendURL     string
-	DeclaredScopes []ScopeClaim
+	Name               string
+	Kind               api.EntryKind
+	OwnerEmail         string
+	OwnerGroup         string
+	ConnectedPrincipal string
+	HostKind           string
+	Listed             *bool
+	Visibility         Visibility
+	AccessList         []string
+	DisplayName        string
+	Purpose            string
+	Tags               []string
+	LifecycleState     api.EntryState
+	Shape              string
+	Zone               string
+	BackendURL         string
+	DeclaredScopes     []ScopeClaim
 }
 
 // CreateEntry validates name availability, quotas, backend URL scheme, and primary
@@ -669,16 +716,19 @@ INSERT INTO registry.entries (
     id, name, kind, owner_email, owner_group, listed, visibility, access_list,
     display_name, purpose, tags,
     lifecycle_state, version, shape, zone, backend_url,
+    connected_principal, host_kind,
     created_at, updated_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8::jsonb,
     $9, $10, $11::jsonb,
     $12, 1, NULLIF($13, ''), NULLIF($14, ''), NULLIF($15, ''),
-    $16, $16
+    $16, $17,
+    $18, $18
 )`,
 		id, name, string(in.Kind), ownerEmail, in.OwnerGroup, listed, string(vis), string(accessJSON),
 		in.DisplayName, in.Purpose, string(tagsJSON),
-		string(state), in.Shape, in.Zone, in.BackendURL, now)
+		string(state), in.Shape, in.Zone, in.BackendURL,
+		strings.TrimSpace(in.ConnectedPrincipal), strings.TrimSpace(in.HostKind), now)
 	if err != nil {
 		return nil, fmt.Errorf("inserting entry %q: %w", name, err)
 	}
@@ -692,6 +742,7 @@ INSERT INTO registry.entries (
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+	s.notify(ctx, "registry_entries", name)
 	return s.GetEntryByID(ctx, id)
 }
 
@@ -720,6 +771,26 @@ func (s *Store) GetEntryByName(ctx context.Context, name string) (*EntryRow, err
 	return s.GetEntryByID(ctx, id)
 }
 
+// GetLatestDeletedEntryByName returns the most recently soft-deleted entry for `name`
+// that is still within its retention window (`purge_after > now`).
+func (s *Store) GetLatestDeletedEntryByName(ctx context.Context, name string) (*EntryRow, error) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	now := s.now()
+	var id string
+	err := s.db.QueryRowContext(ctx, `
+SELECT id FROM registry.entries
+WHERE name = $1 AND deleted_at IS NOT NULL AND (purge_after IS NULL OR purge_after > $2)
+ORDER BY deleted_at DESC
+LIMIT 1`, name, now).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.GetEntryByID(ctx, id)
+}
+
 // GetEntryByID looks up an entry by UUID (including soft-deleted rows).
 func (s *Store) GetEntryByID(ctx context.Context, id string) (*EntryRow, error) {
 	row := &EntryRow{}
@@ -733,19 +804,24 @@ func (s *Store) GetEntryByID(ctx context.Context, id string) (*EntryRow, error) 
 		sshGrantedTo, grainVer    sql.NullString
 		dbPurge, sshExp, hbAt     sql.NullTime
 		delAt, purgeAfter         sql.NullTime
+		discAt                    sql.NullTime
 	)
 	err := s.db.QueryRowContext(ctx, `
 SELECT
-    id, name, kind, owner_email, owner_group, listed, visibility, access_list,
-    display_name, purpose, tags,
-    lifecycle_state, status_reason, version,
-    shape, zone, gce_instance_id, host(internal_ip), backend_url,
-    service_account, sql_instance, db_name, db_purge_after,
-    secret_prefix, config_repo, ssh_grant_expires_at, ssh_granted_to,
-    grain_version, active_tasks, pending_inbox, last_heartbeat_at,
-    session_epoch, created_at, updated_at, deleted_at, purge_after
-FROM registry.entries
-WHERE id = $1`, id).Scan(
+    e.id, e.name, e.kind, e.owner_email, e.owner_group, e.listed, e.visibility, e.access_list,
+    e.display_name, e.purpose, e.tags,
+    e.lifecycle_state, e.status_reason, e.version,
+    e.shape, e.zone, e.gce_instance_id, host(e.internal_ip), e.backend_url,
+    e.service_account, e.sql_instance, e.db_name, e.db_purge_after,
+    e.secret_prefix, e.config_repo, e.ssh_grant_expires_at, e.ssh_granted_to,
+    e.grain_version, e.active_tasks, e.pending_inbox, e.last_heartbeat_at,
+    e.session_epoch, e.connected_principal, e.host_kind,
+    e.last_disconnect_at, e.last_disconnect_reason,
+    COALESCE(o.disabled, FALSE),
+    e.created_at, e.updated_at, e.deleted_at, e.purge_after
+FROM registry.entries e
+LEFT JOIN registry.owners o ON o.email = e.owner_email
+WHERE e.id = $1`, id).Scan(
 		&row.ID, &row.Name, &kindStr, &row.OwnerEmail, &row.OwnerGroup, &row.Listed, &visStr, &accessJSON,
 		&row.DisplayName, &row.Purpose, &tagsJSON,
 		&stateStr, &row.StatusReason, &row.Version,
@@ -753,7 +829,10 @@ WHERE id = $1`, id).Scan(
 		&sa, &sqlInst, &dbName, &dbPurge,
 		&secretPrefix, &configRepo, &sshExp, &sshGrantedTo,
 		&grainVer, &row.ActiveTasks, &row.PendingInbox, &hbAt,
-		&row.SessionEpoch, &row.CreatedAt, &row.UpdatedAt, &delAt, &purgeAfter,
+		&row.SessionEpoch, &row.ConnectedPrincipal, &row.HostKind,
+		&discAt, &row.LastDisconnectReason,
+		&row.OwnerDisabled,
+		&row.CreatedAt, &row.UpdatedAt, &delAt, &purgeAfter,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -789,6 +868,10 @@ WHERE id = $1`, id).Scan(
 	if hbAt.Valid {
 		t := hbAt.Time
 		row.LastHeartbeatAt = &t
+	}
+	if discAt.Valid {
+		t := discAt.Time
+		row.LastDisconnectAt = &t
 	}
 	if delAt.Valid {
 		t := delAt.Time
@@ -870,7 +953,11 @@ WHERE id = $4 AND version = $5`,
 	if n == 0 {
 		return nil, fmt.Errorf("%w: entry %s version %d mismatch", ErrConflict, entryID, expectedVersion)
 	}
-	return s.GetEntryByID(ctx, entryID)
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err == nil && out != nil {
+		s.notify(ctx, "registry_entries", out.Name)
+	}
+	return out, err
 }
 
 // UpdateInstancePlacement records the provisioned VM's placement and scheme-qualified backend_url.
@@ -904,7 +991,11 @@ WHERE id = $9 AND version = $10`,
 	if n == 0 {
 		return nil, fmt.Errorf("%w: entry %s version %d mismatch", ErrConflict, entryID, expectedVersion)
 	}
-	return s.GetEntryByID(ctx, entryID)
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err == nil && out != nil {
+		s.notify(ctx, "registry_entries", out.Name)
+	}
+	return out, err
 }
 
 // UpdateEntryAccess updates an entry's visibility and access_list under optimistic concurrency.
@@ -935,7 +1026,105 @@ WHERE id = $4 AND version = $5`,
 	if n == 0 {
 		return nil, fmt.Errorf("%w: entry %s version %d mismatch", ErrConflict, entryID, expectedVersion)
 	}
-	return s.GetEntryByID(ctx, entryID)
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err == nil && out != nil {
+		s.notify(ctx, "registry_entries", out.Name)
+	}
+	return out, err
+}
+
+// TransferEntryOwner transfers ownership of an entry to `newOwnerEmail` (and optional `newOwnerGroup`),
+// bumps `version`, terminates any active tunnel session, and emits `NOTIFY registry_entries` / `NOTIFY registry_tunnels`.
+func (s *Store) TransferEntryOwner(ctx context.Context, entryID string, expectedVersion int64, newOwnerEmail, newOwnerGroup string) (*EntryRow, error) {
+	newOwnerEmail = strings.ToLower(strings.TrimSpace(newOwnerEmail))
+	if newOwnerEmail == "" {
+		return nil, errors.New("new_owner_email is required")
+	}
+	if _, err := s.UpsertOwner(ctx, newOwnerEmail); err != nil {
+		return nil, err
+	}
+	now := s.now()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `
+UPDATE registry.entries
+SET owner_email            = $1,
+    owner_group            = $2,
+    last_disconnect_at     = $3,
+    last_disconnect_reason = 'ownership transferred',
+    version                = version + 1,
+    updated_at             = $3
+WHERE id = $4 AND version = $5 AND deleted_at IS NULL`,
+		newOwnerEmail, strings.TrimSpace(newOwnerGroup), now, entryID, expectedVersion)
+	if err != nil {
+		return nil, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, fmt.Errorf("%w: entry %s version %d mismatch", ErrConflict, entryID, expectedVersion)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM registry.tunnel_sessions WHERE entry_id = $1`, entryID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err == nil && out != nil {
+		s.notify(ctx, "registry_entries", out.Name)
+		s.notify(ctx, "registry_tunnels", out.Name)
+	}
+	return out, err
+}
+
+// UpdateConnectedPrincipal updates `connected_principal` on a connected entry,
+// bumps `version`, terminates any active tunnel session, and emits `NOTIFY registry_entries` / `NOTIFY registry_tunnels`.
+func (s *Store) UpdateConnectedPrincipal(ctx context.Context, entryID string, expectedVersion int64, connectedPrincipal string) (*EntryRow, error) {
+	now := s.now()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `
+UPDATE registry.entries
+SET connected_principal    = $1,
+    last_disconnect_at     = $2,
+    last_disconnect_reason = 'connected_principal changed',
+    version                = version + 1,
+    updated_at             = $2
+WHERE id = $3 AND version = $4 AND deleted_at IS NULL`,
+		strings.TrimSpace(connectedPrincipal), now, entryID, expectedVersion)
+	if err != nil {
+		return nil, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, fmt.Errorf("%w: entry %s version %d mismatch", ErrConflict, entryID, expectedVersion)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM registry.tunnel_sessions WHERE entry_id = $1`, entryID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err == nil && out != nil {
+		s.notify(ctx, "registry_entries", out.Name)
+		s.notify(ctx, "registry_tunnels", out.Name)
+	}
+	return out, err
 }
 
 // SoftDeleteEntry transitions an entry to `deleted`, sets `deleted_at` and
@@ -952,11 +1141,13 @@ func (s *Store) SoftDeleteEntry(ctx context.Context, entryID string, expectedVer
 
 	res, err := tx.ExecContext(ctx, `
 UPDATE registry.entries
-SET lifecycle_state = $1,
-    deleted_at      = $2,
-    purge_after     = $3,
-    version         = version + 1,
-    updated_at      = $2
+SET lifecycle_state        = $1,
+    deleted_at             = $2,
+    purge_after            = $3,
+    last_disconnect_at     = $2,
+    last_disconnect_reason = 'entry deleted',
+    version                = version + 1,
+    updated_at             = $2
 WHERE id = $4 AND version = $5 AND deleted_at IS NULL`,
 		string(api.StateDeleted), now, purgeAfter, entryID, expectedVersion)
 	if err != nil {
@@ -982,7 +1173,12 @@ WHERE id = $4 AND version = $5 AND deleted_at IS NULL`,
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return s.GetEntryByID(ctx, entryID)
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err == nil && out != nil {
+		s.notify(ctx, "registry_entries", out.Name)
+		s.notify(ctx, "registry_tunnels", out.Name)
+	}
+	return out, err
 }
 
 // NormalizeScopePath canonicalizes a scope path prefix by trimming leading/trailing slashes.
@@ -1193,13 +1389,20 @@ VALUES ($1, $2, $3, $4)`,
 // AuthenticateCredential verifies a `grc_` token against `registry.entry_credentials`,
 // updates `last_used_at`, and returns the owning active EntryRow.
 func (s *Store) AuthenticateCredential(ctx context.Context, token string) (*EntryRow, error) {
+	row, _, err := s.AuthenticateCredentialWithID(ctx, token)
+	return row, err
+}
+
+// AuthenticateCredentialWithID verifies a `grc_` token against `registry.entry_credentials`,
+// updates `last_used_at`, and returns the owning active EntryRow and credential UUID.
+func (s *Store) AuthenticateCredentialWithID(ctx context.Context, token string) (*EntryRow, string, error) {
 	token = strings.TrimSpace(token)
 	if !strings.HasPrefix(token, "grc_") {
-		return nil, ErrInvalidCredential
+		return nil, "", ErrInvalidCredential
 	}
 	sum := sha256.Sum256([]byte(token))
 	now := s.now()
-	var entryID string
+	var entryID, credID string
 	err := s.db.QueryRowContext(ctx, `
 UPDATE registry.entry_credentials ec
 SET last_used_at = $1
@@ -1208,14 +1411,83 @@ WHERE ec.token_sha256 = $2
   AND ec.revoked_at IS NULL
   AND e.id = ec.entry_id
   AND e.deleted_at IS NULL
-RETURNING ec.entry_id`, now, sum[:]).Scan(&entryID)
+RETURNING ec.entry_id, ec.id::text`, now, sum[:]).Scan(&entryID, &credID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrInvalidCredential
+		return nil, "", ErrInvalidCredential
 	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return s.GetEntryByID(ctx, entryID)
+	row, err := s.GetEntryByID(ctx, entryID)
+	if err != nil {
+		return nil, "", err
+	}
+	return row, credID, nil
+}
+
+// RevokeCredential marks a single credential as revoked, terminates any active tunnel
+// session that authenticated with that credential, and emits `NOTIFY registry_tunnels`.
+func (s *Store) RevokeCredential(ctx context.Context, entryID, credID string) error {
+	now := s.now()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `
+UPDATE registry.entry_credentials
+SET revoked_at = $1
+WHERE id = $2::uuid AND entry_id = $3::uuid AND revoked_at IS NULL`,
+		now, credID, entryID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+
+	delRes, err := tx.ExecContext(ctx, `
+DELETE FROM registry.tunnel_sessions
+WHERE entry_id = $1::uuid AND (cred_id IS NULL OR cred_id = $2::uuid)`, entryID, credID)
+	if err != nil {
+		return err
+	}
+	if dn, _ := delRes.RowsAffected(); dn > 0 {
+		_, _ = tx.ExecContext(ctx, `
+UPDATE registry.entries
+SET last_disconnect_at     = $1,
+    last_disconnect_reason = 'credential revoked',
+    updated_at             = $1
+WHERE id = $2::uuid`, now, entryID)
+	}
+	var name string
+	_ = tx.QueryRowContext(ctx, `SELECT name FROM registry.entries WHERE id = $1::uuid`, entryID).Scan(&name)
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if name != "" {
+		s.notify(ctx, "registry_tunnels", name)
+	}
+	return nil
+}
+
+// IsCredentialActive reports whether `credID` is still unrevoked for `entryID`.
+func (s *Store) IsCredentialActive(ctx context.Context, entryID, credID string) (bool, error) {
+	if credID == "" {
+		return true, nil
+	}
+	var ok bool
+	err := s.db.QueryRowContext(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM registry.entry_credentials
+    WHERE id = $1::uuid AND entry_id = $2::uuid AND revoked_at IS NULL
+)`, credID, entryID).Scan(&ok)
+	return ok, err
 }
 
 // RecordHeartbeat updates an entry's heartbeat telemetry (`grain_version`,
@@ -1288,6 +1560,12 @@ func (s *Store) DeleteReplica(ctx context.Context, replicaID string) error {
 // AcquireTunnelSession increments `entries.session_epoch` and binds `tunnel_sessions`
 // to `replicaID` at that fenced epoch.
 func (s *Store) AcquireTunnelSession(ctx context.Context, entryID, replicaID, remoteAddr string) (*TunnelSessionRow, error) {
+	return s.AcquireTunnelSessionWithCred(ctx, entryID, replicaID, remoteAddr, "")
+}
+
+// AcquireTunnelSessionWithCred increments `entries.session_epoch`, records `credID` (when non-empty),
+// binds `tunnel_sessions` to `replicaID` at that fenced epoch, and emits `NOTIFY registry_tunnels`.
+func (s *Store) AcquireTunnelSessionWithCred(ctx context.Context, entryID, replicaID, remoteAddr, credID string) (*TunnelSessionRow, error) {
 	now := s.now()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1296,13 +1574,16 @@ func (s *Store) AcquireTunnelSession(ctx context.Context, entryID, replicaID, re
 	defer func() { _ = tx.Rollback() }()
 
 	var epoch int64
+	var name string
 	err = tx.QueryRowContext(ctx, `
 UPDATE registry.entries
-SET session_epoch     = session_epoch + 1,
-    last_heartbeat_at = $1,
-    updated_at        = $1
+SET session_epoch          = session_epoch + 1,
+    last_heartbeat_at      = $1,
+    last_disconnect_at     = NULL,
+    last_disconnect_reason = '',
+    updated_at             = $1
 WHERE id = $2 AND deleted_at IS NULL
-RETURNING session_epoch`, now, entryID).Scan(&epoch)
+RETURNING session_epoch, name`, now, entryID).Scan(&epoch, &name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -1311,22 +1592,26 @@ RETURNING session_epoch`, now, entryID).Scan(&epoch)
 	}
 
 	_, err = tx.ExecContext(ctx, `
-INSERT INTO registry.tunnel_sessions (entry_id, replica_id, session_epoch, remote_addr, connected_at, last_seen_at)
-VALUES ($1, $2, $3, $4, $5, $5)
+INSERT INTO registry.tunnel_sessions (entry_id, replica_id, session_epoch, remote_addr, connected_at, last_seen_at, cred_id)
+VALUES ($1, $2, $3, $4, $5, $5, NULLIF($6, '')::uuid)
 ON CONFLICT (entry_id) DO UPDATE SET
     replica_id    = EXCLUDED.replica_id,
     session_epoch = EXCLUDED.session_epoch,
     remote_addr   = EXCLUDED.remote_addr,
     connected_at  = EXCLUDED.connected_at,
-    last_seen_at  = EXCLUDED.last_seen_at
+    last_seen_at  = EXCLUDED.last_seen_at,
+    cred_id       = EXCLUDED.cred_id
 WHERE registry.tunnel_sessions.session_epoch <= EXCLUDED.session_epoch`,
-		entryID, replicaID, epoch, remoteAddr, now)
+		entryID, replicaID, epoch, remoteAddr, now, credID)
 	if err != nil {
 		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, err
+	}
+	if name != "" {
+		s.notify(ctx, "registry_tunnels", name)
 	}
 	return s.GetActiveTunnelSession(ctx, entryID)
 }
@@ -1362,6 +1647,13 @@ WHERE id = $2 AND session_epoch = $3`, now, entryID, sessionEpoch)
 // ReleaseTunnelSession deletes the `tunnel_sessions` row only if `sessionEpoch` matches,
 // preventing a stale disconnecting session from wiping out a newer session.
 func (s *Store) ReleaseTunnelSession(ctx context.Context, entryID string, sessionEpoch int64) (bool, error) {
+	return s.ReleaseTunnelSessionWithReason(ctx, entryID, sessionEpoch, "disconnected")
+}
+
+// ReleaseTunnelSessionWithReason deletes the `tunnel_sessions` row only if `sessionEpoch` matches,
+// records `last_disconnect_at` / `last_disconnect_reason` on `entries`, and emits `NOTIFY registry_tunnels`.
+func (s *Store) ReleaseTunnelSessionWithReason(ctx context.Context, entryID string, sessionEpoch int64, reason string) (bool, error) {
+	now := s.now()
 	res, err := s.db.ExecContext(ctx, `
 DELETE FROM registry.tunnel_sessions
 WHERE entry_id = $1 AND session_epoch = $2`, entryID, sessionEpoch)
@@ -1369,22 +1661,41 @@ WHERE entry_id = $1 AND session_epoch = $2`, entryID, sessionEpoch)
 		return false, err
 	}
 	n, err := res.RowsAffected()
-	return n > 0, err
+	if err != nil || n == 0 {
+		return false, err
+	}
+	var name string
+	_ = s.db.QueryRowContext(ctx, `
+UPDATE registry.entries
+SET last_heartbeat_at      = GREATEST(COALESCE(last_heartbeat_at, $1), $1),
+    last_disconnect_at     = $1,
+    last_disconnect_reason = $2,
+    updated_at             = $1
+WHERE id = $3 AND session_epoch = $4
+RETURNING name`, now, reason, entryID, sessionEpoch).Scan(&name)
+	if name != "" {
+		s.notify(ctx, "registry_tunnels", name)
+	}
+	return true, nil
 }
 
 // GetActiveTunnelSession returns the current `tunnel_sessions` row joined with its `replicas` row.
 func (s *Store) GetActiveTunnelSession(ctx context.Context, entryID string) (*TunnelSessionRow, error) {
 	var row TunnelSessionRow
 	var rtt sql.NullInt64
+	var credID sql.NullString
 	err := s.db.QueryRowContext(ctx, `
 SELECT
-    ts.entry_id, ts.replica_id, r.peer_addr, r.heartbeat_at,
-    ts.session_epoch, ts.remote_addr, ts.connected_at, ts.last_seen_at, ts.rtt_ms
+    ts.entry_id, COALESCE(e.name, ''), ts.replica_id, r.peer_addr, r.heartbeat_at,
+    ts.session_epoch, ts.remote_addr, ts.connected_at, ts.last_seen_at, ts.rtt_ms,
+    ts.cred_id::text
 FROM registry.tunnel_sessions ts
 JOIN registry.replicas r ON r.replica_id = ts.replica_id
+LEFT JOIN registry.entries e ON e.id = ts.entry_id
 WHERE ts.entry_id = $1`, entryID).Scan(
-		&row.EntryID, &row.ReplicaID, &row.PeerAddr, &row.ReplicaLastSeen,
+		&row.EntryID, &row.EntryName, &row.ReplicaID, &row.PeerAddr, &row.ReplicaLastSeen,
 		&row.SessionEpoch, &row.RemoteAddr, &row.ConnectedAt, &row.LastSeenAt, &rtt,
+		&credID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -1395,7 +1706,44 @@ WHERE ts.entry_id = $1`, entryID).Scan(
 	if rtt.Valid {
 		row.RTTMs = int(rtt.Int64)
 	}
+	row.CredID = credID.String
 	return &row, nil
+}
+
+// ListActiveTunnelSessions returns all active `tunnel_sessions` rows joined with `replicas` and `entries`.
+func (s *Store) ListActiveTunnelSessions(ctx context.Context) ([]TunnelSessionRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT
+    ts.entry_id, e.name, ts.replica_id, r.peer_addr, r.heartbeat_at,
+    ts.session_epoch, ts.remote_addr, ts.connected_at, ts.last_seen_at, ts.rtt_ms,
+    ts.cred_id::text
+FROM registry.tunnel_sessions ts
+JOIN registry.replicas r ON r.replica_id = ts.replica_id
+JOIN registry.entries e ON e.id = ts.entry_id
+WHERE e.deleted_at IS NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TunnelSessionRow
+	for rows.Next() {
+		var row TunnelSessionRow
+		var rtt sql.NullInt64
+		var credID sql.NullString
+		if err := rows.Scan(
+			&row.EntryID, &row.EntryName, &row.ReplicaID, &row.PeerAddr, &row.ReplicaLastSeen,
+			&row.SessionEpoch, &row.RemoteAddr, &row.ConnectedAt, &row.LastSeenAt, &rtt,
+			&credID,
+		); err != nil {
+			return nil, err
+		}
+		if rtt.Valid {
+			row.RTTMs = int(rtt.Int64)
+		}
+		row.CredID = credID.String
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }
 
 // DeriveStatus computes the runtime `api.EntryStatus` from `EntryRow.LifecycleState`,
