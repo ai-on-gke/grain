@@ -2383,3 +2383,94 @@ func TestRunDispatchInterruptedByShutdownKeepsItsRecord(t *testing.T) {
 		t.Errorf("tool census for r1 = %+v, want the interrupted run's one tool call recorded", uses)
 	}
 }
+
+// A Stop that lands before RunDispatch has registered the run's canceller
+// -- while its sandbox is still being acquired and prepared -- finds no
+// live run to cancel, so ui.Client.Stop finishes the stored row itself
+// (cancelActiveRuns). RunDispatch reads its own row right after it
+// registers and ends the run as the stopped turn it is, rather than
+// starting an agent the task's page already says was stopped: that agent
+// held its worker slot and kept the task in flight, so the Retry that
+// lifted the stop queued a task nothing dispatched
+// (ui/e2e/stopped-turn-retry.spec.js).
+func TestRunDispatchEndsARunStoppedBeforeItsCancellerWasRegistered(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	dispatchTask(t, ctx, store, "t1")
+	d := dispatch.Dispatch{TaskID: "t1", RunID: "r1", Attempt: 1}
+	startRun(t, ctx, store, d, baseTime)
+	task, err := store.GetTask(ctx, "t1")
+	if err != nil || task == nil {
+		t.Fatalf("reading task: %v", err)
+	}
+	if err := store.FinishRun(ctx, d.RunID, baseTime, "cancelled", model.TurnStoppedDetail); err != nil {
+		t.Fatal(err)
+	}
+
+	fw := agentFunc(func(runCtx context.Context, cfg agent.RunConfig) (*agent.Result, error) {
+		<-runCtx.Done()
+		return nil, runCtx.Err()
+	})
+	cfg := orchestrator.Config{TaskCancellers: orchestrator.NewTaskCancellers()}
+	done := make(chan error, 1)
+	go func() {
+		_, err := orchestrator.RunDispatch(ctx, store, fw, cfg, *task, d, nil, t.TempDir(), "", nil, baseTime)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, orchestrator.ErrTurnStopped) {
+			t.Errorf("RunDispatch err = %v, want ErrTurnStopped", err)
+		}
+	case <-time.After(runWaitLimit):
+		t.Fatal("RunDispatch did not return for a run whose row was already finished as a stopped turn")
+	}
+	runs, err := store.Runs(ctx, "t1")
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("runs = %+v, %v; want the one run", runs, err)
+	}
+	if runs[0].Detail != model.TurnStoppedDetail {
+		t.Errorf("run detail = %q, want %q", runs[0].Detail, model.TurnStoppedDetail)
+	}
+}
+
+// The same Stop landing mid-flight with no canceller to reach the run --
+// a grain ui that is not the daemon's own process, or a canceller lookup
+// that missed the registration -- is noticed by the store-polled watcher.
+func TestRunDispatchEndsARunWhoseRowIsFinishedAsStoppedMidFlight(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	dispatchTask(t, ctx, store, "t1")
+	d := dispatch.Dispatch{TaskID: "t1", RunID: "r1", Attempt: 1}
+	startRun(t, ctx, store, d, baseTime)
+	task, err := store.GetTask(ctx, "t1")
+	if err != nil || task == nil {
+		t.Fatalf("reading task: %v", err)
+	}
+
+	started := make(chan struct{})
+	fw := agentFunc(func(runCtx context.Context, cfg agent.RunConfig) (*agent.Result, error) {
+		close(started)
+		<-runCtx.Done()
+		return nil, runCtx.Err()
+	})
+	cfg := orchestrator.Config{CancelPollInterval: 5 * time.Millisecond}
+	done := make(chan error, 1)
+	go func() {
+		_, err := orchestrator.RunDispatch(ctx, store, fw, cfg, *task, d, nil, t.TempDir(), "", nil, baseTime)
+		done <- err
+	}()
+
+	<-started
+	if err := store.FinishRun(ctx, d.RunID, baseTime, "cancelled", model.TurnStoppedDetail); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, orchestrator.ErrTurnStopped) {
+			t.Errorf("RunDispatch err = %v, want ErrTurnStopped", err)
+		}
+	case <-time.After(runWaitLimit):
+		t.Fatal("RunDispatch did not return after its row was finished as a stopped turn -- the agent's ctx was never cancelled")
+	}
+}

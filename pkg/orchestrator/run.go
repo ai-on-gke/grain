@@ -150,11 +150,45 @@ func checkTaskClosed(ctx context.Context, store *model.Store, taskID string, can
 	return false
 }
 
+// checkRunStopped reads runID's own row once and calls
+// cancel(ErrTurnStopped) if somebody else has already finished it as a
+// stopped turn (model.TurnStoppedDetail), reporting whether it did.
+//
+// ui.Client.Stop reaches a live run through its TaskCanceller, but a run
+// only registers there once its sandbox is acquired and prepared, and a
+// grain ui that is not the daemon's own process has no canceller at all.
+// A Stop that lands before the registration, or with no canceller, finishes
+// the stored row instead (cancelActiveRuns) -- and without this the run
+// went on to start its agent regardless: a turn the task's page says was
+// stopped kept its worker slot and its task in flight, so the Retry that
+// lifted the stop queued a task nothing would dispatch until that agent
+// gave up of its own accord. RunDispatch calls this once right after it
+// registers the canceller, and watchForTaskClosed on every tick after
+// that, which covers a Stop whose canceller lookup missed the
+// registration but whose row write lands after this first read.
+//
+// A store error reads as "not stopped", as in checkTaskClosed. An empty
+// runID is never stopped.
+func checkRunStopped(ctx context.Context, store *model.Store, runID string, cancel context.CancelCauseFunc) bool {
+	if runID == "" {
+		return false
+	}
+	finished, detail, err := store.RunFinishedDetail(ctx, runID)
+	if err != nil || !finished || detail != model.TurnStoppedDetail {
+		return false
+	}
+	cancel(ErrTurnStopped)
+	return true
+}
+
 // watchForTaskClosed polls store.State(taskID) every interval and calls
 // cancel(errTaskClosed) the moment it reads model.StateClosed -- the
 // store-polled cancellation signal RunDispatch needs because grain daemon
 // (running the agent) and grain ui (where a close actually lands) are
 // separate processes sharing only the store, per bwsalmon/agents#346.
+// Each tick also reads runID's own row (checkRunStopped), so a Stop that
+// only reached the store -- no canceller registered for this run --
+// ends the run with ErrTurnStopped the same way.
 //
 // It does not check immediately on entry: RunDispatch itself already
 // calls checkTaskClosed synchronously, before framework.Run is ever
@@ -171,7 +205,7 @@ func checkTaskClosed(ctx context.Context, store *model.Store, taskID string, can
 // for any reason, which is what bounds this goroutine's lifetime to the
 // run's: RunDispatch cancels runCtx itself the moment framework.Run
 // returns.
-func watchForTaskClosed(runCtx, queryCtx context.Context, store *model.Store, taskID string, interval time.Duration, cancel context.CancelCauseFunc) {
+func watchForTaskClosed(runCtx, queryCtx context.Context, store *model.Store, taskID, runID string, interval time.Duration, cancel context.CancelCauseFunc) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -179,7 +213,8 @@ func watchForTaskClosed(runCtx, queryCtx context.Context, store *model.Store, ta
 		case <-runCtx.Done():
 			return
 		case <-ticker.C:
-			if checkTaskClosed(queryCtx, store, taskID, cancel) {
+			if checkTaskClosed(queryCtx, store, taskID, cancel) ||
+				checkRunStopped(queryCtx, store, runID, cancel) {
 				return
 			}
 		}
@@ -3251,11 +3286,13 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		stopCrediting := cfg.RunWaitCredits.register(d.TaskID, clock)
 		stopCancelling := cfg.TaskCancellers.register(d.TaskID, cancelRun)
 		defer stopCancelling()
-		checkTaskClosed(ctx, store, task.ID, cancelRun)
+		if !checkTaskClosed(ctx, store, task.ID, cancelRun) {
+			checkRunStopped(ctx, store, d.RunID, cancelRun)
+		}
 		watcherDone := make(chan struct{})
 		go func() {
 			defer close(watcherDone)
-			watchForTaskClosed(runCtx, ctx, store, task.ID, cfg.cancelPollInterval(), cancelRun)
+			watchForTaskClosed(runCtx, ctx, store, task.ID, d.RunID, cfg.cancelPollInterval(), cancelRun)
 		}()
 
 		// The third thing that can end this run from outside it: another
