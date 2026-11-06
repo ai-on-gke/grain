@@ -395,7 +395,7 @@ director MUST NOT be able to obtain any of them itself:
 | Grant | Unlocks | Why opt-in |
 |---|---|---|
 | `api:tasks:admin` | Approve proposed tasks (other than its own, §3.3), recreate sandboxes | Dangerous: approval is the person's half of every proposal gate. |
-| `api:dispatch-control` (`dispatch:write`) | Pause/resume all dispatch, `run-now` | Deployment-wide stop, and a queue jump equivalent to `priority-dispatch`. MCP-only. |
+| `api:dispatch-control` (`dispatch:write`) | Pause/resume all dispatch, `run-now` (approving unapproved tasks subject to §3.3) | Deployment-wide stop, and a queue jump equivalent to `priority-dispatch`. MCP-only. |
 | `api:capabilities:admin` | Attach/replace grants, edit capability servers and policy | Dangerous. `agentGrantEscalation` still applies, so the director can only hand out what it holds. |
 | `api:release-manager` | Cut, qualify and promote candidates; write schedules and releases | Publishes artefacts to users. |
 | `api:self-upgrade` (alias `self-upgrade`) | Start or cancel a drained controller upgrade (`deployment:upgrade`) | Dangerous; restarts the deployment the director is talking from. Honours upgrade holds (`agentRails`). |
@@ -427,15 +427,21 @@ gate, not merely left ungranted.
    - `merge-on-green` writes (`repos:write`) MUST NOT be held by the
      director either.
 3. **Approving its own work.**
-   - The director MUST NOT approve:
-     - a task it proposed, directly or through descendants
-       (the `LinkProposedBy` chain);
-     - a proposal held for `requires_person`, escalation or
-       `HeldForApprovalTag`.
-   - This holds even under `api:tasks:admin`. It is a **gate rail**
-     (`agentApprovalRail`, called from `agentRails` in
+   - The director MUST NOT approve (`POST /api/tasks/{id}/approve`,
+     `approved: true` at filing, or `POST /api/tasks/{id}/run-now` on an
+     unapproved task):
+     - a task it proposed or filed, directly or through descendants
+       (the `LinkProposedBy` and `Origin` lineage);
+     - a proposal held for a person (`requires_person`, person-only
+       grants, `ConfigRepoProposalHold`, escalation, or
+       `HeldForApprovalTag`).
+   - This holds even under `api:tasks:admin` and `api:dispatch-control`
+     (`dispatch:write`). It is a **gate rail** (`agentApprovalRail` and
+     `agentFilingEscalation`, called from `agentRails` / `agentAPIGate` in
      `pkg/ui/agent_api_gate.go`), not a grant decision: it refuses every
-     agent, the director included, whatever it holds.
+     agent, the director included, whatever it holds. `run-now` on an
+     already-approved task is not an approval and remains allowed under
+     `dispatch:write`.
 4. **Config approval.**
    - The director MUST NOT approve, merge or push to the default branch
      of the state repository.

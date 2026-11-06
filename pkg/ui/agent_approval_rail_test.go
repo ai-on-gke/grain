@@ -316,3 +316,82 @@ func TestAgentApprovalRailCoversDirectAPIFilingAndRunNow(t *testing.T) {
 		t.Errorf("run-now on already-approved task %s: %d %s, want 200", created.ID, code, body)
 	}
 }
+
+// An agent holding dispatch:write (api:dispatch-control) without api:tasks:admin
+// cannot use POST /api/tasks/{id}/run-now's implicit approval to start its own
+// LinkProposedBy lineage or a proposal held for a person (hold_for_approval, or
+// an escalation against the task's proposer even when the caller holds that
+// grant). Once a person approves those tasks, run-now jumps them ahead of the
+// queue, and unrelated unapproved tasks held for nobody still pass when
+// agentMayApprove admits them.
+func TestAgentApprovalRailOnRunNowUnderDispatchWrite(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	seedAPITask(t, client, "1", "acme/widgets", "api:dispatch-control", "self-debug")
+	seedAPITask(t, client, "9", "acme/widgets")
+
+	runNowAsAgent := func(id string) (int, string) {
+		t.Helper()
+		return asAgent(t, srv, "1", http.MethodPost, "/api/tasks/"+id+"/run-now", `{}`, "testing run-now approval rail")
+	}
+
+	// 1. Own LinkProposedBy lineage (direct and multi-hop) is refused while unapproved.
+	railTask(t, client, "2", "1", nil)
+	railTask(t, client, "3", "2", nil)
+	railTask(t, client, "4", "3", nil)
+
+	if code, body := runNowAsAgent("2"); code != http.StatusForbidden || !strings.Contains(body, "it proposed it") {
+		t.Errorf("run-now on own direct proposal: %d %s, want 403 saying it proposed it", code, body)
+	}
+	wantProposed(t, client, "2")
+	if obs, err := client.Store.GetObservation(ctx, "2"); err != nil || (obs != nil && obs.RunNowAt != nil) {
+		t.Errorf("observation on refused run-now = %+v (%v), want nil RunNowAt", obs, err)
+	}
+
+	if code, body := runNowAsAgent("4"); code != http.StatusForbidden || !strings.Contains(body, "1 → 2 → 3") {
+		t.Errorf("run-now three hops down LinkProposedBy chain: %d %s, want 403 naming 1 → 2 → 3", code, body)
+	}
+	wantProposed(t, client, "4")
+
+	// 2. Tasks held for a person that agentMayApprove alone would let past
+	//    (hold_for_approval, and a grant escalated against the proposer that
+	//    the run-now caller itself holds) are refused while unapproved.
+	railTask(t, client, "20", "9", func(tk *model.Task) {
+		tk.Tags = []string{model.HeldForApprovalTag}
+	})
+	if code, body := runNowAsAgent("20"); code != http.StatusForbidden ||
+		!strings.Contains(body, "held for a person") || !strings.Contains(body, "hold_for_approval") {
+		t.Errorf("run-now on hold_for_approval proposal: %d %s, want 403 naming hold_for_approval", code, body)
+	}
+	wantProposed(t, client, "20")
+
+	railTask(t, client, "21", "9", nil, "self-debug")
+	if code, body := runNowAsAgent("21"); code != http.StatusForbidden ||
+		!strings.Contains(body, "held for a person") || !strings.Contains(body, "it asks for self-debug, which task 9") {
+		t.Errorf("run-now on proposal escalated past its proposer: %d %s, want 403 naming proposer escalation", code, body)
+	}
+	wantProposed(t, client, "21")
+
+	// 3. Once a person approves them, run-now is not an approval and succeeds.
+	for _, id := range []string{"2", "20"} {
+		if rec := do(t, srv, http.MethodPost, "/api/tasks/"+id+"/approve", ""); rec.Code != http.StatusOK {
+			t.Fatalf("a person approving %s: %d %s", id, rec.Code, rec.Body.String())
+		}
+		if code, body := runNowAsAgent(id); code != http.StatusOK {
+			t.Errorf("run-now on already-approved task %s: %d %s, want 200", id, code, body)
+		}
+		if obs, err := client.Store.GetObservation(ctx, id); err != nil || obs == nil || obs.RunNowAt == nil {
+			t.Errorf("after approved run-now on %s: obs = %+v (%v), want RunNowAt stamped", id, obs, err)
+		}
+	}
+
+	// 4. An unrelated unapproved task held for nobody and within task 1's
+	//    grants is still approved and queued ahead by run-now.
+	railTask(t, client, "30", "9", nil)
+	if code, body := runNowAsAgent("30"); code != http.StatusOK {
+		t.Fatalf("run-now on unrelated unapproved task 30: %d %s, want 200", code, body)
+	}
+	if state, err := client.Store.State(ctx, "30"); err != nil || state != model.StateQueued {
+		t.Errorf("task 30 state = %s (%v), want queued", state, err)
+	}
+}
