@@ -59,7 +59,17 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
 }) => {
   test.setTimeout(120_000);
   const before = await (await request.get("/api/capability-policy")).json();
+  const defaultsBefore =
+    (await (await request.get("/api/settings")).json()).defaultCapabilities ||
+    [];
   try {
+    expect(
+      (
+        await request.put("/api/settings", {
+          data: { defaultCapabilities: ["self-debug", "bootstrap-playbooks"] },
+        })
+      ).ok(),
+    ).toBe(true);
     const put = await request.put("/api/capability-policy", {
       data: { policy: RESTRICTED },
     });
@@ -150,6 +160,9 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
     await request.put("/api/capability-policy", {
       data: { policy: before.policy || {} },
     });
+    await request.put("/api/settings", {
+      data: { defaultCapabilities: defaultsBefore },
+    });
   }
 });
 
@@ -161,7 +174,17 @@ test("an edited picker is asked to untick a refused grant", async ({
   request,
 }) => {
   const before = await (await request.get("/api/capability-policy")).json();
+  const defaultsBefore =
+    (await (await request.get("/api/settings")).json()).defaultCapabilities ||
+    [];
   try {
+    expect(
+      (
+        await request.put("/api/settings", {
+          data: { defaultCapabilities: ["self-debug", "bootstrap-playbooks"] },
+        })
+      ).ok(),
+    ).toBe(true);
     await request.put("/api/capability-policy", {
       data: { policy: RESTRICTED },
     });
@@ -184,6 +207,9 @@ test("an edited picker is asked to untick a refused grant", async ({
   } finally {
     await request.put("/api/capability-policy", {
       data: { policy: before.policy || {} },
+    });
+    await request.put("/api/settings", {
+      data: { defaultCapabilities: defaultsBefore },
     });
   }
 });
