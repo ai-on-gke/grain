@@ -648,6 +648,9 @@ func TestRegistryManagerValidatesStoredConfigAndRedactsFailureLogs(t *testing.T)
 	if err == nil {
 		t.Fatal("expected 401 failure from errSrv")
 	}
+	if strings.Contains(err.Error(), "grc_AbCdEfGh") {
+		t.Errorf("TriggerHeartbeat error leaked grc_ token: %q", err.Error())
+	}
 	if strings.Contains(snap.LastError, "grc_AbCdEfGh") {
 		t.Errorf("Snapshot().LastError leaked grc_ token: %q", snap.LastError)
 	}
@@ -657,4 +660,138 @@ func TestRegistryManagerValidatesStoredConfigAndRedactsFailureLogs(t *testing.T)
 	if strings.Contains(allLogs, "grc_AbCdEfGh") {
 		t.Errorf("daemon Logf leaked grc_ token:\n%s", allLogs)
 	}
+}
+
+type rotatingTunnelConnector struct {
+	started chan string
+	mu      sync.Mutex
+	failErr error
+}
+
+func (r *rotatingTunnelConnector) setFailErr(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failErr = err
+}
+
+func (r *rotatingTunnelConnector) RunTunnel(ctx context.Context, cfg api.ConnectConfig) error {
+	select {
+	case r.started <- cfg.RegistrationToken:
+	default:
+	}
+	r.mu.Lock()
+	err := r.failErr
+	r.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestRegistryManagerRotatesStaticTokenTunnelAndRedactsTunnelErrors(t *testing.T) {
+	t.Parallel()
+	fake, srv := newFakeRegistryServer(t)
+	fake.mu.Lock()
+	fake.entries["edge-grain"] = api.CreateEntryRequest{Name: "edge-grain", Kind: api.KindConnected}
+	fake.mu.Unlock()
+
+	dataDir := t.TempDir()
+	store, db, err := OpenStore("sqlite", "", dataDir)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	cfg := model.DefaultConfig()
+	cfg.Registry = model.RegistryConfig{
+		URL:      srv.URL,
+		Entry:    "edge-grain",
+		AuthMode: model.RegistryAuthToken,
+	}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatalf("PutConfig: %v", err)
+	}
+
+	secStore := secrets.New(t.TempDir())
+	if err := secStore.Set(secrets.RegistryRegistrationTokenSecret, secrets.AgentCredentialKey, []byte("grc_first_static_token_123456")); err != nil {
+		t.Fatalf("secStore.Set: %v", err)
+	}
+
+	tun := &rotatingTunnelConnector{started: make(chan string, 4)}
+	var logMu sync.Mutex
+	var logged []string
+	mgr := NewRegistryManager(RegistryManagerOptions{
+		Store:           store,
+		Secrets:         secStore,
+		HTTPClient:      srv.Client(),
+		TunnelConnector: tun,
+		BaseInterval:    time.Hour,
+		JitterFraction:  -1,
+		Logf: func(format string, args ...any) {
+			logMu.Lock()
+			defer logMu.Unlock()
+			logged = append(logged, fmt.Sprintf(format, args...))
+		},
+	})
+
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		mgr.Run(runCtx)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	select {
+	case tok := <-tun.started:
+		if tok != "grc_first_static_token_123456" {
+			t.Fatalf("initial tunnel token = %q", tok)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for initial tunnel")
+	}
+
+	// Rotate the static grc_ credential in secrets.Store using a short-lived
+	// request context (as POST /api/registry/heartbeat does): the next heartbeat
+	// must tear down the old tunnel, reconnect with the new token rooted in
+	// Run's lifecycle context, and redact any token echoed in tunnel errors.
+	if err := secStore.Set(secrets.RegistryRegistrationTokenSecret, secrets.AgentCredentialKey, []byte("grc_second_static_token_654321")); err != nil {
+		t.Fatalf("secStore.Set rotated: %v", err)
+	}
+	tun.setFailErr(fmt.Errorf("tunnel rejected credential grc_second_static_token_654321"))
+
+	reqCtx, reqCancel := context.WithCancel(ctx)
+	if _, err := mgr.TriggerHeartbeat(reqCtx); err != nil {
+		reqCancel()
+		t.Fatalf("TriggerHeartbeat after rotation: %v", err)
+	}
+	reqCancel()
+	select {
+	case tok := <-tun.started:
+		if tok != "grc_second_static_token_654321" {
+			t.Fatalf("rotated tunnel token = %q, want grc_second_static_token_654321", tok)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for tunnel restart after grc_ rotation")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		logMu.Lock()
+		joined := strings.Join(logged, "\n")
+		logMu.Unlock()
+		if strings.Contains(joined, "registry tunnel (edge-grain) stopped") {
+			if strings.Contains(joined, "grc_second_static_token_654321") {
+				t.Fatalf("tunnel stop log leaked grc_ token:\n%s", joined)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for redacted tunnel stop log")
 }

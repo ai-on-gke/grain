@@ -16,6 +16,7 @@ package ui_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -187,6 +188,20 @@ func TestRegistrySettingsAndEndpoints(t *testing.T) {
 	hbSnap := decode[model.RegistrySnapshot](t, hbRec)
 	if strings.Contains(hbSnap.LastError, "grc_supersecrettokenvalue") {
 		t.Errorf("LastError leaked secret token: %q", hbSnap.LastError)
+	}
+
+	// Verify Client.TriggerRegistryHeartbeat also redacts errors returned
+	// directly by c.Config.TriggerRegistryHeartbeat using LogRedactor.
+	c.Config.LogRedactor = func() (*grainlog.Redactor, error) {
+		return grainlog.NewRedactor([]grainlog.KnownValue{
+			{Label: "secret registry-registration-token", Value: "custom-secret-value-xyz987"},
+		}), nil
+	}
+	c.Config.TriggerRegistryHeartbeat = func(_ context.Context) (model.RegistrySnapshot, error) {
+		return model.RegistrySnapshot{}, errors.New("upstream failed with custom-secret-value-xyz987")
+	}
+	if _, hbErr := c.TriggerRegistryHeartbeat(ctx); hbErr == nil || strings.Contains(hbErr.Error(), "custom-secret-value-xyz987") {
+		t.Fatalf("TriggerRegistryHeartbeat error leaked LogRedactor secret: %v", hbErr)
 	}
 }
 

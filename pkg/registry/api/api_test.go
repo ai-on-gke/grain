@@ -437,6 +437,32 @@ func TestClientRejectsMetadataURLsAndDoesNotFollowRedirects(t *testing.T) {
 		if _, err := api.ValidateRegistryURL(bad, false); err == nil {
 			t.Errorf("ValidateRegistryURL(%q) = nil, want error", bad)
 		}
+		if res, err := api.DialConnect(context.Background(), api.ConnectConfig{
+			BaseURL:           bad,
+			Entry:             "team-k8s",
+			RegistrationToken: "grc_dialconnectsecrettok1234",
+		}); err == nil {
+			_ = res.Conn.Close()
+			t.Errorf("DialConnect(%q) = nil, want error", bad)
+		}
+	}
+	for _, badWS := range []string{
+		"ws://grain.example.com",
+		"wss://user:pass@grain.example.com",
+		"wss://[::ffff:169.254.169.254]",
+		"wss://[fe80::1%25eth0]",
+		"wss://metadata.google.internal",
+		"wss://grain.example.com?foo=1",
+		"wss://grain.example.com#frag",
+	} {
+		if res, err := api.DialConnect(context.Background(), api.ConnectConfig{
+			BaseURL:           badWS,
+			Entry:             "team-k8s",
+			RegistrationToken: "grc_dialconnectsecrettok1234",
+		}); err == nil {
+			_ = res.Conn.Close()
+			t.Errorf("DialConnect(%q) = nil, want error", badWS)
+		}
 	}
 
 	targetHit := false

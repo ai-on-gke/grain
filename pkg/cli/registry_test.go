@@ -17,6 +17,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -172,6 +174,9 @@ func TestRegistryCLIRegisterStatusUnregister(t *testing.T) {
 		Secrets: secStore,
 		LiveConfig: func() daemon.Config {
 			mc, _ := store.GetConfig(ctx)
+			if mc == nil {
+				return daemon.Config{HostSandboxes: true}
+			}
 			return daemon.Config{HostSandboxes: true, Registry: mc.Registry}
 		},
 		Health:         func() (api.HealthState, string) { return api.HealthOK, "" },
@@ -314,6 +319,154 @@ func TestRegistryCLIRegisterStatusUnregister(t *testing.T) {
 	}
 	if fi, err := os.Stat(tokFile); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("standalone token file mode = %v, %v; want 0600", fi.Mode().Perm(), err)
+	}
+}
+
+func TestGrainRegistryRegisterRetargetingNeverSendsCrossHostToken(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(tmp, "data")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	secStore := secrets.Open(secrets.Config{
+		File:    filepath.Join(tmp, "secrets.age"),
+		KeyFile: filepath.Join(tmp, "secrets.key"),
+	})
+
+	const (
+		tokOld = "grc_old_registry_token_1111111111"
+		tokNew = "grc_new_registry_token_2222222222"
+	)
+
+	var leakMu sync.Mutex
+	var crossHostLeaks []string
+
+	newFakeReg := func(label, ownTok, otherTok string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotRegTok := r.Header.Get(api.HeaderRegistryToken)
+			if gotRegTok == "" {
+				if authz := r.Header.Get("Authorization"); strings.HasPrefix(authz, "Bearer grc_") {
+					gotRegTok = strings.TrimPrefix(authz, "Bearer ")
+				}
+			}
+			if gotRegTok == otherTok {
+				leakMu.Lock()
+				crossHostLeaks = append(crossHostLeaks, fmt.Sprintf("%s received other registry's token on %s %s", label, r.Method, r.URL.Path))
+				leakMu.Unlock()
+			}
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/entries/widgets-dev":
+				_ = json.NewEncoder(w).Encode(api.Entry{Name: "widgets-dev", Kind: api.KindConnected, HostKind: api.HostKindWorkstation, Listed: true})
+			case r.Method == http.MethodPatch && r.URL.Path == "/api/entries/widgets-dev":
+				_ = json.NewEncoder(w).Encode(api.Entry{Name: "widgets-dev", Kind: api.KindConnected, HostKind: api.HostKindWorkstation, Listed: true})
+			case r.Method == http.MethodPost && r.URL.Path == "/api/entries/widgets-dev/credentials/rotate":
+				_ = json.NewEncoder(w).Encode(api.RotateCredentialResponse{RegistrationToken: ownTok})
+			case r.Method == http.MethodPost && r.URL.Path == "/api/entries/widgets-dev/heartbeat":
+				if gotRegTok != ownTok {
+					w.WriteHeader(http.StatusUnauthorized)
+					_, _ = w.Write([]byte(`{"error":"unexpected token"}`))
+					return
+				}
+				_ = json.NewEncoder(w).Encode(api.HeartbeatResponse{Status: api.StatusOnline, NextIntervalSeconds: 60})
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+	}
+
+	regOld := newFakeReg("regOld", tokOld, tokNew)
+	defer regOld.Close()
+	regNew := newFakeReg("regNew", tokNew, tokOld)
+	defer regNew.Close()
+
+	prevHTTP := registryHTTPClient
+	prevOIDC := registryOIDCToken
+	registryHTTPClient = regOld.Client()
+	registryOIDCToken = func(_ context.Context, _, _ string) (string, error) {
+		return "oidc-creator-jwt", nil
+	}
+	defer func() {
+		registryHTTPClient = prevHTTP
+		registryOIDCToken = prevOIDC
+	}()
+
+	mgr := daemon.NewRegistryManager(daemon.RegistryManagerOptions{
+		Store:   store,
+		Secrets: secStore,
+		LiveConfig: func() daemon.Config {
+			mc, _ := store.GetConfig(ctx)
+			if mc == nil {
+				return daemon.Config{HostSandboxes: true}
+			}
+			return daemon.Config{HostSandboxes: true, Registry: mc.Registry}
+		},
+		Health:         func() (api.HealthState, string) { return api.HealthOK, "" },
+		Version:        func() version.Info { return version.Info{Release: "v1.4.0", Revision: "abc1234"} },
+		HTTPClient:     regOld.Client(),
+		BaseInterval:   time.Hour,
+		JitterFraction: -1,
+	})
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		mgr.Run(runCtx)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	uiCfg := withAccessCode(ui.Config{
+		Actor:                    ui.DefaultActor("operator"),
+		Capabilities:             ui.OfferedCapabilities(),
+		Secrets:                  secStore,
+		RegistryStatus:           mgr.Snapshot,
+		TriggerRegistryHeartbeat: mgr.TriggerHeartbeat,
+		TriggerRegistrySync: func() {
+			// Run an immediate synchronous step whenever settings or secrets
+			// change, maximizing race sensitivity for cross-host token leaks.
+			_, _ = mgr.TriggerHeartbeat(ctx)
+		},
+	})
+	daemonSrv := httptest.NewServer(ui.NewServer(uiCfg, store))
+	defer daemonSrv.Close()
+
+	c := accessCodeClient(daemonSrv.URL)
+	if _, err := c.UpdateSettings(ctx, *settingsRequest("30s", 2, "github.example")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Register initially against regOld.
+	_ = captureStdout(t, func() {
+		if err := cmdRegistry(ctx, c, &printer{}, []string{"register", "-registry-url", regOld.URL, "widgets-dev"}); err != nil {
+			t.Fatalf("register regOld: %v", err)
+		}
+	})
+
+	// Retarget live daemon from regOld to regNew where widgets-dev already exists.
+	_ = captureStdout(t, func() {
+		if err := cmdRegistry(ctx, c, &printer{}, []string{"register", "-registry-url", regNew.URL, "widgets-dev"}); err != nil {
+			t.Fatalf("retarget regNew: %v", err)
+		}
+	})
+
+	leakMu.Lock()
+	leaks := append([]string(nil), crossHostLeaks...)
+	leakMu.Unlock()
+	if len(leaks) > 0 {
+		t.Fatalf("cross-host registry token leak detected:\n%s", strings.Join(leaks, "\n"))
+	}
+	gotTok, err := secStore.Resolve(ctx, secrets.RegistryRegistrationTokenSecret+"/"+secrets.AgentCredentialKey)
+	if err != nil || gotTok != tokNew {
+		t.Fatalf("stored secret after retarget = %q, %v; want %q", gotTok, err, tokNew)
 	}
 }
 

@@ -16,6 +16,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -275,6 +276,11 @@ func (c *Client) TriggerRegistryHeartbeat(ctx context.Context) (model.RegistrySn
 	if c.Config.TriggerRegistryHeartbeat != nil {
 		snap, err := c.Config.TriggerRegistryHeartbeat(ctx)
 		if err != nil {
+			if msg := err.Error(); msg != "" {
+				if redacted := c.redactRegistryText(msg); redacted != msg {
+					err = errors.New(redacted)
+				}
+			}
 			return model.RegistrySnapshot{}, err
 		}
 		snap.LastError = c.redactRegistryText(snap.LastError)

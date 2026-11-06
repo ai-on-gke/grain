@@ -144,6 +144,7 @@ type RegistryManager struct {
 	cachedOIDCExpiry       time.Time
 
 	tunnelMu        sync.Mutex
+	tunnelRunCtx    context.Context
 	tunnelConnector RegistryTunnelConnector
 	tunnelKey       string
 	tunnelCancel    context.CancelFunc
@@ -260,9 +261,21 @@ func (m *RegistryManager) TriggerHeartbeat(ctx context.Context) (model.RegistryS
 	_, stepErr := m.step(ctx)
 	snap, snapErr := m.Snapshot(ctx)
 	if stepErr != nil {
-		return snap, stepErr
+		return snap, redactRegistryError(stepErr)
 	}
-	return snap, snapErr
+	return snap, redactRegistryError(snapErr)
+}
+
+func redactRegistryError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	redacted, n := (*redact.Redactor)(nil).Text(msg)
+	if n == 0 || redacted == msg {
+		return err
+	}
+	return errors.New(redacted)
 }
 
 // Run executes the background self-registration and heartbeat loop until ctx is
@@ -271,7 +284,15 @@ func (m *RegistryManager) Run(ctx context.Context) {
 	if m == nil {
 		return
 	}
-	defer m.stopTunnel()
+	m.tunnelMu.Lock()
+	m.tunnelRunCtx = ctx
+	m.tunnelMu.Unlock()
+	defer func() {
+		m.tunnelMu.Lock()
+		m.tunnelRunCtx = nil
+		m.tunnelMu.Unlock()
+		m.stopTunnel()
+	}()
 
 	delay, _ := m.step(ctx)
 	timer := time.NewTimer(delay)
@@ -937,7 +958,11 @@ func (m *RegistryManager) ensureTunnel(parentCtx context.Context, inputs registr
 		return
 	}
 	cfg := inputs.regCfg
-	key := fmt.Sprintf("%s|%s|%s", cfg.URL, cfg.Entry, cfg.EffectiveAuthMode())
+	regTok := ""
+	if strings.HasPrefix(initialTok, api.RegistrationTokenPrefix) {
+		regTok = initialTok
+	}
+	key := fmt.Sprintf("%s|%s|%s|%s|%s", cfg.URL, cfg.Entry, cfg.EffectiveAuthMode(), cfg.EffectiveAudience(), regTok)
 	if m.tunnelCancel != nil && m.tunnelKey == key {
 		select {
 		case <-m.tunnelDone:
@@ -950,7 +975,11 @@ func (m *RegistryManager) ensureTunnel(parentCtx context.Context, inputs registr
 	prevCancel := m.tunnelCancel
 	prevDone := m.tunnelDone
 
-	tunCtx, cancel := context.WithCancel(parentCtx)
+	baseCtx := m.tunnelRunCtx
+	if baseCtx == nil {
+		baseCtx = parentCtx
+	}
+	tunCtx, cancel := context.WithCancel(baseCtx)
 	done := make(chan struct{})
 	m.tunnelKey = key
 	m.tunnelCancel = cancel
@@ -970,8 +999,8 @@ func (m *RegistryManager) ensureTunnel(parentCtx context.Context, inputs registr
 		HostKind:          inputs.hostKind,
 		AllowInsecureHTTP: m.opts.AllowInsecureHTTP,
 	}
-	if strings.HasPrefix(initialTok, api.RegistrationTokenPrefix) {
-		connCfg.RegistrationToken = initialTok
+	if regTok != "" {
+		connCfg.RegistrationToken = regTok
 	} else {
 		connCfg.IDToken = tokenSource
 	}
@@ -979,7 +1008,8 @@ func (m *RegistryManager) ensureTunnel(parentCtx context.Context, inputs registr
 	go func(c api.ConnectConfig) {
 		defer close(done)
 		if err := tc.RunTunnel(tunCtx, c); err != nil && !errors.Is(err, context.Canceled) {
-			m.opts.Logf("grain daemon: registry tunnel (%s) stopped: %v", c.Entry, err)
+			redactedErr, _ := (*redact.Redactor)(nil).Text(err.Error())
+			m.opts.Logf("grain daemon: registry tunnel (%s) stopped: %s", c.Entry, redactedErr)
 		}
 	}(connCfg)
 }

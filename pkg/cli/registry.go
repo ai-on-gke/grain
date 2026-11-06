@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -205,6 +206,7 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 	var existingCfg model.RegistryConfig
 	var existingSnap model.RegistrySnapshot
 	var daemonHasSecret bool
+	var configRepoOnly bool
 	if !*standalone {
 		settings, sErr := c.GetSettings(ctx)
 		if sErr != nil {
@@ -212,6 +214,7 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 		}
 		existingCfg = settings.Registry
 		daemonHasSecret = settings.RegistryTokenSet
+		configRepoOnly = settings.ConfigRepoOnly
 		if snap, snapErr := c.GetRegistry(ctx); snapErr == nil {
 			existingSnap = snap
 		}
@@ -263,6 +266,12 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 	if err != nil {
 		return err
 	}
+	cfgChanged := !reflect.DeepEqual(existingCfg, normCfg)
+	if !*standalone && configRepoOnly && cfgChanged {
+		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Registry: &normCfg}); err != nil {
+			return fmt.Errorf("updating daemon registry settings: %w", err)
+		}
+	}
 
 	effectiveHostKind := normCfg.HostKind
 	if effectiveHostKind == "" {
@@ -295,7 +304,9 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 		}
 		scopes := model.ToScopeInputs(existingSnap.AdvertisedScopes)
 		wantMint := normCfg.EffectiveAuthMode() == model.RegistryAuthToken
-		remoteEntry, mintedToken, err = upsertConnectedEntry(ctx, regClient, normCfg, effectiveHostKind, scopes, wantMint, *rotateToken || *standalone || !daemonHasSecret)
+		retargeting := (existingCfg.URL != "" && existingCfg.URL != normCfg.URL) ||
+			(existingCfg.Entry != "" && !strings.EqualFold(existingCfg.Entry, normCfg.Entry))
+		remoteEntry, mintedToken, err = upsertConnectedEntry(ctx, regClient, normCfg, effectiveHostKind, scopes, wantMint, *rotateToken || *standalone || !daemonHasSecret || retargeting)
 		if err != nil {
 			return err
 		}
@@ -326,13 +337,41 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 		return nil
 	}
 
-	if mintedToken != "" {
-		if err := c.SetSecret(ctx, secrets.RegistryRegistrationTokenSecret, secrets.AgentCredentialKey, mintedToken); err != nil {
-			return fmt.Errorf("storing %s in daemon secrets: %w", secrets.RegistryRegistrationTokenSecret, err)
+	retargetingURL := existingCfg.URL != "" && existingCfg.URL != normCfg.URL
+	if retargetingURL {
+		// Clear the previous registry URL before swapping the stored grc_...
+		// credential so the background manager never sends the old registry's
+		// token to the new URL or the new registry's token to the old URL.
+		// Running UpdateSettings first also enforces human-principal, RBAC and
+		// config-repo lock checks before touching secrets.Store.
+		empty := model.RegistryConfig{}
+		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Registry: &empty}); err != nil {
+			return fmt.Errorf("clearing previous daemon registry target before retargeting: %w", err)
 		}
-	}
-	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Registry: &normCfg}); err != nil {
-		return fmt.Errorf("updating daemon registry settings: %w", err)
+		if mintedToken != "" {
+			if err := c.SetSecret(ctx, secrets.RegistryRegistrationTokenSecret, secrets.AgentCredentialKey, mintedToken); err != nil {
+				return fmt.Errorf("storing %s in daemon secrets: %w", secrets.RegistryRegistrationTokenSecret, err)
+			}
+		} else if daemonHasSecret {
+			if delErr := c.DeleteSecret(ctx, secrets.RegistryRegistrationTokenSecret); delErr != nil {
+				var notFound *ui.NotFoundError
+				if !errors.As(delErr, &notFound) {
+					return fmt.Errorf("deleting previous %s secret: %w", secrets.RegistryRegistrationTokenSecret, delErr)
+				}
+			}
+		}
+		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Registry: &normCfg}); err != nil {
+			return fmt.Errorf("updating daemon registry settings: %w", err)
+		}
+	} else {
+		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Registry: &normCfg}); err != nil {
+			return fmt.Errorf("updating daemon registry settings: %w", err)
+		}
+		if mintedToken != "" {
+			if err := c.SetSecret(ctx, secrets.RegistryRegistrationTokenSecret, secrets.AgentCredentialKey, mintedToken); err != nil {
+				return fmt.Errorf("storing %s in daemon secrets: %w", secrets.RegistryRegistrationTokenSecret, err)
+			}
+		}
 	}
 	snap, hbErr := c.TriggerRegistryHeartbeat(ctx)
 	if hbErr != nil {
@@ -428,12 +467,20 @@ func cmdRegistryUnregister(ctx context.Context, c *ui.HTTPClient, out *printer, 
 	}
 
 	var existingCfg model.RegistryConfig
+	var configRepoOnly bool
 	if !*standalone {
 		settings, sErr := c.GetSettings(ctx)
 		if sErr != nil {
 			return sErr
 		}
 		existingCfg = settings.Registry
+		configRepoOnly = settings.ConfigRepoOnly
+	}
+	if !*standalone && configRepoOnly && !reflect.DeepEqual(existingCfg, model.RegistryConfig{}) {
+		empty := model.RegistryConfig{}
+		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Registry: &empty}); err != nil {
+			return fmt.Errorf("clearing daemon registry settings: %w", err)
+		}
 	}
 
 	posEntry := ""
