@@ -260,7 +260,8 @@ func insertHostdToken(ctx context.Context, tx *sql.Tx, name, token string, now t
 	return nil
 }
 
-// ListHostds is the registry, revoked hostds included, by name.
+// ListHostds is the registry, by name: revoked hostds included until they
+// are deleted (DeleteHostd).
 func (s *Store) ListHostds(ctx context.Context) ([]Hostd, error) {
 	rows, err := s.db.QueryContext(ctx, "SELECT "+hostdColumns+" FROM `hostd` ORDER BY `name`")
 	if err != nil {
