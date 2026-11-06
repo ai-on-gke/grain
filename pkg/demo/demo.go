@@ -566,7 +566,7 @@ func Run(opts Options) error {
 		}
 	}
 	if opts.HumanReview {
-		if err := seedHumanReviewDemo(ctx, store, cfg, repo); err != nil {
+		if err := seedHumanReviewDemo(ctx, store, cfg, repo, githubSimRepo); err != nil {
 			return fmt.Errorf("grain demo: -human-review: %v", err)
 		}
 	}

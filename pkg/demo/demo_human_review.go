@@ -28,8 +28,11 @@ import (
 // about it (request_human_review), so it waits on a human-review hold
 // (model.LinkHumanReviewHold) -- in the inbox, with a banner on its page.
 // Opt-in, like the other hold demos, so the default demo's inbox stays as
-// it is.
-func seedHumanReviewDemo(ctx context.Context, store *model.Store, cfg ui.Config, repo model.RepoRef) error {
+// it is. With -github-sim the held change's branch is pushed to the
+// simulated repo first, as -review-questions and -sensitive-hold do, or
+// filing its review (based on that branch) is refused and the demo
+// does not start.
+func seedHumanReviewDemo(ctx context.Context, store *model.Store, cfg ui.Config, repo model.RepoRef, githubSimRepo string) error {
 	now := time.Now().UTC()
 	client := ui.NewClient(cfg, store)
 	held, err := client.CreateTask(ctx, ui.CreateTaskRequest{
@@ -41,6 +44,11 @@ func seedHumanReviewDemo(ctx context.Context, store *model.Store, cfg ui.Config,
 	})
 	if err != nil {
 		return fmt.Errorf("seeding the held change: %w", err)
+	}
+	if githubSimRepo != "" {
+		if err := pushDemoGitHubSimBranch(githubSimRepo, model.BranchName(held.ID)); err != nil {
+			return fmt.Errorf("pushing the held change's branch: %w", err)
+		}
 	}
 	review, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title:       "Review: Default new workspaces to the paid tier",

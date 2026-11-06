@@ -434,6 +434,9 @@ export const ATTRIBUTES = [
     type: TYPE_ENUM,
     values: (t) => [t.autoMerge ? "on" : "off"],
     order: ["on", "off"],
+    // Every value there is, so `autoMerge:any:yes` says it matches
+    // nothing rather than reading as "Off" (labelOf's other branch).
+    closed: true,
     labelOf: (v) => (v === "on" ? "On" : "Off"),
   },
   {
@@ -447,6 +450,10 @@ export const ATTRIBUTES = [
       ...new Set((t.humanReviewHold || []).map((r) => r.category || "other")),
     ],
     order: ["product-decision", "risk", "security", "intent-unclear", "other"],
+    // model.HumanReviewCategories, every category request_human_review
+    // accepts: `humanReview:any:product_decision` matches nothing, and
+    // its chip says so rather than reading like the real one.
+    closed: true,
     noneLabel: "Not held",
   },
   {
@@ -455,6 +462,10 @@ export const ATTRIBUTES = [
     type: TYPE_ENUM,
     values: (t) => [t.blocked ? "yes" : "no"],
     order: ["yes", "no"],
+    // Every value there is. Without it `blocked:any:true` was worded
+    // "Blocked is any of Not blocked" (labelOf's other branch) over a
+    // list matching nothing.
+    closed: true,
     labelOf: (v) => (v === "yes" ? "Blocked" : "Not blocked"),
   },
   {
