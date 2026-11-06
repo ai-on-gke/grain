@@ -1058,6 +1058,11 @@ func recordGitHubBaseBranchRelease(ctx context.Context, deps Deps, run Concluded
 	if !isGitHubBaseBranch(deps, run.Repo, branch) {
 		return nil
 	}
+	if isOnDemandGitHubReleaseRun(deps, run, branch) {
+		log.Printf("orchestrator: GitHub release run %d on %s is an on-demand build of one commit, not a release of %s: not recording it",
+			run.RunID, run.Repo, branch)
+		return nil
+	}
 
 	existing, err := deps.Store.GetBaseBranchRelease(ctx, run.Repo, branch)
 	if err != nil {
@@ -1088,6 +1093,13 @@ func recordGitHubBaseBranchRelease(ctx context.Context, deps Deps, run Concluded
 	row.FinishedAt = &finished
 	row.Conclusion = string(conclusion)
 	row.Detail = gitHubWorkflowRunDetail(run, jobs)
+	if conclusion == ci.ConclusionCancelled {
+		// Superseded by a newer merge's release: normal, not a failure
+		// (releasesuperseded.go).
+		if by, ok := supersedingGitHubReleaseRun(ctx, deps, run, branch); ok {
+			return recordSupersededGitHubRelease(ctx, deps, existing, row, run, by)
+		}
+	}
 	if conclusion == ci.ConclusionFailure {
 		if retried, err := retryInfraGitHubBaseBranchRelease(ctx, deps, &row, run, jobs); err != nil || retried {
 			return err
