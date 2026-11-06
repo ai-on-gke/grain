@@ -786,6 +786,8 @@ var capabilitiesAdminBodylessRoutes = map[string]bool{
 	"POST /api/external-agents/tokens/revoke-all":  true,
 	"POST /api/hostds/{name}/rotate":               true,
 	"POST /api/hostds/{name}/revoke":               true,
+	"DELETE /api/hostds/{name}":                    true,
+	"POST /api/hostds/delete-revoked":              true,
 }
 
 // TestCapabilitiesAdminGrantKeysAreScanned holds agentGrantEscalation to

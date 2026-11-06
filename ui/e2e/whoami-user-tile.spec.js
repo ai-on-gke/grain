@@ -123,4 +123,32 @@ test.describe("sidebar user tile", () => {
     );
     await expect(page.getByTestId("user-tile-qualifier")).toHaveCount(0);
   });
+
+  test("TaskChat shows PrincipalLabel headers visibly on outgoing human bubbles", async ({
+    page,
+    request,
+  }) => {
+    const whoRes = await request.get("/api/whoami");
+    expect(whoRes.ok()).toBeTruthy();
+    const whoami = await whoRes.json();
+
+    const createRes = await request.post("/api/tasks", {
+      data: {
+        title: "Chat sender label visibility check",
+        description: "Opening human prompt in chat.",
+        noRepo: true,
+        interactive: true,
+      },
+    });
+    expect(createRes.status()).toBe(201);
+    const created = await createRes.json();
+
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`/tasks/${created.id}`);
+    const sender = page
+      .locator(".cs-message--outgoing .cs-message__sender-name")
+      .first();
+    await expect(sender).toBeVisible();
+    await expect(sender).toHaveText(whoami.actor.label);
+  });
 });

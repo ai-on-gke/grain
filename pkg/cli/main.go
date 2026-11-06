@@ -495,7 +495,7 @@ Commands:
   gcp-key list|get|set|delete          manage this deployment's GCP service-account keys
   capability-servers list|add|remove|enable|disable|bind-secret
                                        manage this deployment's capability servers (mcpServers)
-  host list|register|install|set-owner
+  host list|register|install|set-owner|delete|delete-revoked
                                        the host registry: register a host with its owner, the identity
                                        it dials in through IAP as, and print how to install it
   registry status|register|unregister  self-register this deployment with a grain registry and inspect

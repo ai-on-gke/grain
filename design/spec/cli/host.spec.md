@@ -645,13 +645,15 @@ _No flags._
 
 **Pinned by:** *untested*.
 
-### 4.7 `grain host list|register|install|set-owner` {#CLI-36}
+### 4.7 `grain host list|register|install|set-owner|delete|delete-revoked` {#CLI-36}
 
 This is the host registry. A host is registered with its owner, the identity it dials in as through IAP. `grain hostds` is a hidden alias that keeps working; a bare `grain hostds` still lists.
 - `list` (`ls`) calls `GET /api/hostds`.
 - `register` (`create`) calls `POST /api/hostds`. It prints the token once, then the install instructions the daemon rendered (`install.lines`, `install.note`; `ui.RegisterHostdInstall`), which never carry the token.
 - `install <name>` calls `GET /api/hostds/{name}/install` and prints the same instructions again, without rotating the token.
 - `set-owner <name> <owner>` calls `PATCH /api/hostds/{name}`.
+- `delete <name>` (`rm`) calls `DELETE /api/hostds/{name}`. It removes a revoked host and its tokens from the registry, so the name can be registered again. The daemon refuses a live host ("revoke it first"), `local`, and a host a model connection's `hostd`/`hostdFallback` or a capability server's `hostd` still names by name, listing each; the CLI prints that refusal as its error. It prints the usage-limit pauses keyed to the host that were cleared with it.
+- `delete-revoked` calls `POST /api/hostds/delete-revoked`: it deletes every revoked host nothing still names and prints the ones it skipped, with why.
 
 **Scope:** admin.
 
@@ -671,7 +673,15 @@ _No flags._
 _No flags._
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/hostds_test.go`: `TestHostdsRegisterAndSetOwner`.
+<!-- BEGIN GENERATED FLAGS: grain host delete -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host delete-revoked -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/hostds_test.go`: `TestHostdsRegisterAndSetOwner`, `TestHostdsDelete`.
 
 ### 4.8 `grain git-connections`, `grain git-ambient`, `grain git-login`, `grain default-model` {#CLI-37}
 
@@ -1398,6 +1408,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-ui-addr` | string | `"0.0.0.0:4242"` |  | address to serve the UI/API on, in-process, over this same store -- empty disables it |
 | `-ui-allowed-hosts` | string |  |  | comma-separated host names the UI/API answers to besides IP literals, localhost and this machine's own hostname ("grain.example.com", "*.example.com"); a request with any other Host header is refused with 421, which is what stops a DNS-rebinding page reaching a loopback-bound API (grain#2380). Checked on every request when this is set or -ui-addr names a specific address; on an every-interface -ui-addr with this unset, on loopback requests only. "*" turns the check off |
 | `-ui-allowed-principals` | string |  |  | deprecated: imported once on first start when the database allowlist is empty (user:<email> and group:<email> only; serviceAccount: and domain: entries are logged and dropped), then ignored. Manage allowed users and groups in Settings -> Access or with 'grain access' |
+| `-ui-cloud-identity-endpoint` | string |  | $GRAIN_CLOUD_IDENTITY_ENDPOINT | resolve allowed group: entries against this Cloud Identity API base URL (a test stand-in) rather than https://cloudidentity.googleapis.com; defaults to $GRAIN_CLOUD_IDENTITY_ENDPOINT |
 | `-ui-iap-audience` | string |  | $GRAIN_IAP_AUDIENCE | the audience a signed X-Goog-IAP-JWT-Assertion must carry for the UI/API to accept the identity in it, or several separated by commas -- IAP's /projects/NUMBER/global/backendServices/ID or /projects/NUMBER/apps/PROJECT, or what a BeyondCorp tunnel's assertion names (the proxy's own docs); defaults to $GRAIN_IAP_AUDIENCE. With none, no assertion is accepted |
 | `-ui-iap-issuer` | string |  | $GRAIN_IAP_ISSUER | the issuer a signed assertion must carry; defaults to $GRAIN_IAP_ISSUER, then https://cloud.google.com/iap |
 | `-ui-iap-keys-url` | string |  | $GRAIN_IAP_KEYS_URL | where the signing keys for those assertions are published (IAP's PEM map or a JWK set); defaults to $GRAIN_IAP_KEYS_URL, then https://www.gstatic.com/iap/verify/public_key |
@@ -1471,7 +1482,7 @@ Serves the task UI on localhost over a throwaway store of fake tasks. Every call
 | `-staging` | bool |  |  | run two fake persistent sandboxes, one on a /staging/ sub-path and one on a host port, for the rail's Staging group |
 | `-stalled-tasks` | bool |  |  | hand the UI the orchestrator's stall deadlines and seed a queued task, a run and a deferral past them, for the Inbox's stuck-task group |
 | `-ui-allowed-principals` | string |  |  | deprecated: imported once on first start when the database allowlist is empty (user:<email> and group:<email> only; serviceAccount: and domain: entries are logged and dropped), then ignored. Manage allowed users and groups in Settings -> Access or with 'grain access' |
-| `-ui-cloud-identity-endpoint` | string |  |  | resolve -ui-allowed-principals' group: entries against this Cloud Identity API base URL (a test stand-in) rather than https://cloudidentity.googleapis.com |
+| `-ui-cloud-identity-endpoint` | string |  |  | as on grain daemon: resolve allowed group: entries against this Cloud Identity API base URL (a test stand-in) rather than https://cloudidentity.googleapis.com |
 | `-ui-iap-audience` | string |  |  | as on grain daemon: the audience a signed X-Goog-IAP-JWT-Assertion must carry for the demo to sign its caller in from it |
 | `-ui-iap-issuer` | string |  |  | as on grain daemon: the issuer a signed assertion must carry (default https://cloud.google.com/iap) |
 | `-ui-iap-keys-url` | string |  |  | as on grain daemon: where the assertions' signing keys are published (default https://www.gstatic.com/iap/verify/public_key) |
