@@ -147,7 +147,7 @@ describe("SuiteOverlay", () => {
     await user.click(box);
     const bump = await screen.findByRole("option", { name: /bump-deps/ });
     expect(bump).toHaveTextContent("Bump deps -- acme/widgets");
-    expect(bump.querySelector('input[type="checkbox"]')).not.toBeChecked();
+    expect(bump).toHaveAttribute("aria-selected", "false");
 
     await user.type(box, "deps bump");
     expect(optionValues(box)).toEqual(["t-bump"]);
@@ -156,11 +156,10 @@ describe("SuiteOverlay", () => {
     await chooseOptions(user, box, ["t-lint", "docs-check"]);
     expect(chosenValues(box)).toEqual(["t-lint", "t-docs"]);
     // The list stays open while rows are ticked, and says which are.
-    expect(
-      screen
-        .getByRole("option", { name: /lint-all/ })
-        .querySelector('input[type="checkbox"]'),
-    ).toBeChecked();
+    expect(screen.getByRole("option", { name: /lint-all/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     await user.keyboard("{Escape}");
 
     await removeOption(user, box, "t-lint");
