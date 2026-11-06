@@ -21,7 +21,10 @@
 //   - A multiple SearchSelect's open list put a real, unlabelled
 //     checkbox inside every role="option" (axe: label, nested-interactive).
 //   - A finished report's reason chip read "question" beside its
-//     "Answered in a comment" badge, in the list and the Inbox.
+//     "Answered in a comment" badge, in the list and the Inbox. The
+//     server now names the ask in the sub-case itself
+//     (awaiting_reply/answered, awaiting_reply/question, ...), so API
+//     readers tell them apart too.
 
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "./fixtures.js";
@@ -156,6 +159,8 @@ test("a finished report's reason chip says it answered, and a parked question's 
     "the demo seeds a run that answered in a comment",
   ).toBeTruthy();
   expect(question, "the demo seeds a parked question").toBeTruthy();
+  expect(answer.reason?.reason).toBe("awaiting_reply/answered");
+  expect(question.reason?.reason).toBe("awaiting_reply/question");
 
   await page.goto("/");
   const answerRow = page
