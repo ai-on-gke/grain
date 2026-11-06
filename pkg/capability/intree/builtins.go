@@ -395,6 +395,9 @@ func CheckBuiltinConfig(name string, config map[string]any) error {
 		}
 		_, err := parseHostScripts(config, environ)
 		return err
+	case FigmaName:
+		_, err := parseFigmaConfig(config, nil, false)
+		return err
 	}
 	return nil
 }
@@ -406,6 +409,8 @@ func BuiltinConfigSchema(name string) map[string]any {
 	switch name {
 	case "config-map":
 		raw = configMapConfigSchema
+	case FigmaName:
+		raw = figmaConfigSchema()
 	case "gchat":
 		raw = gchatConfigSchema()
 	case "gcp":

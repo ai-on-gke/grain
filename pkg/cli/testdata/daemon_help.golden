@@ -89,6 +89,8 @@ Usage of grain daemon:
     	owner/name a task created through the UI/API with no repo of its own targets
   -disable-native-sandboxes
     	select sandbox backend "none": run the control plane only -- no sandbox is created, so no task runs (for tests and walkthroughs)
+  -disable-self-upgrade
+    	disable in-VM self-upgrade actions (pkg/upgrade, automatic/scheduled upgrades, and SQLite-to-PostgreSQL cutover) and hide in-VM upgrade controls in the UI in favour of external lifecycle management ($GRAIN_DISABLE_SELF_UPGRADE when unset)
   -docker-root-dir docker info
     	path to the local docker engine's own data root, for the UI's host disk figures only (grain/task-148): the sandbox image and every granule VM's disk overlay are written there rather than under -sandbox-dir, so on a deployment that gives sandboxes a volume of their own it is a disk worth a figure. Empty asks docker info for it once at startup, which is right whenever the daemon can reach the docker socket and sees that path where dockerd does; name it here when it cannot, or when this process sees the same directory at a path of its own. A path this process cannot stat is logged once and left out, not reported as a broken figure -- a containerised daemon is usually shown docker's socket and not the tree behind it
   -flag-names grain daemon
@@ -229,6 +231,8 @@ Usage of grain daemon:
     	former name of -granule-workspace, still accepted so existing systemd unit files keep working
   -local-scripts value
     	NAME=/absolute/path/local-scripts.yaml, repeatable: a host-managed local-scripts declaration a task holding local-scripts:NAME is served (docs/local-scripts.md). Every other declaration is read from the state repository's local-scripts/NAME/local-scripts.yaml
+  -management-url string
+    	optional external http:// or https:// URL where this deployment's lifecycle and upgrades are managed (for example its registry entry page), shown in place of in-VM self-upgrade controls when -disable-self-upgrade is set ($GRAIN_MANAGEMENT_URL when unset)
   -max-agent-turns int
     	cap on model/tool round trips per run (0 = uncapped; runs are bounded by wall-clock runtime instead) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
   -max-ci-jobs int

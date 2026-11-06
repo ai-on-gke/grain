@@ -19,6 +19,7 @@ import UpgradePanel, {
   AutoUpgradeSettings,
   OFFLINE_MIGRATION_COMMANDS,
   resolvedImage,
+  safeManagementUrl,
 } from "./UpgradePanel.jsx";
 import api from "../api.js";
 import { optionValues } from "../searchSelectTesting.js";
@@ -1998,5 +1999,84 @@ describe("ImageSourceSettings on UpgradePanel", () => {
     expect(
       screen.getByDisplayValue("ghe.internal.example/platform/grain"),
     ).toBeDisabled();
+  });
+
+  it("replaces in-VM upgrade and SQLite migration controls with an external management notice when selfUpgradeDisabled is set", async () => {
+    api.mockResolvedValue({
+      enabled: false,
+      selfUpgradeDisabled: true,
+      managementUrl: "https://grain.example.com/entries/alice",
+      running: { commit: "abcdef1234567890" },
+      database: { driver: "sqlite", isSqlite: true, postgresAvailable: false },
+    });
+
+    render(
+      <UpgradePanel
+        showError={() => {}}
+        config={{
+          selfUpgradeDisabled: true,
+          managementUrl: "https://grain.example.com/entries/alice",
+        }}
+        settings={{ upgradeCheckMode: "auto" }}
+        onSaveSettings={() => {}}
+      />,
+    );
+
+    const notice = await screen.findByTestId("upgrade-externally-managed");
+    expect(notice).toHaveTextContent(
+      /In-VM self-upgrade is disabled on this deployment/,
+    );
+    expect(screen.getByText("abcdef1")).toBeInTheDocument();
+    const link = screen.getByTestId("upgrade-management-link");
+    expect(link).toHaveAttribute(
+      "href",
+      "https://grain.example.com/entries/alice",
+    );
+    expect(
+      screen.queryByText(/neither -upgrade-image nor -upgrade-src-dir/),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^Upgrade$/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Migrate Database to PostgreSQL/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("After an upgrade")).not.toBeInTheDocument();
+  });
+
+  it("omits unsafe or empty managementUrl links while still showing PostgreSQL status when selfUpgradeDisabled is set", async () => {
+    api.mockResolvedValue({
+      enabled: false,
+      selfUpgradeDisabled: true,
+      managementUrl: "javascript:alert(1)",
+      database: {
+        driver: "postgres",
+        dsn: "postgres://localhost:5432/grain",
+        isSqlite: false,
+        postgresAvailable: true,
+      },
+    });
+
+    render(
+      <UpgradePanel
+        showError={() => {}}
+        config={{ selfUpgradeDisabled: true, managementUrl: "" }}
+      />,
+    );
+
+    await screen.findByTestId("upgrade-externally-managed");
+    expect(
+      screen.queryByTestId("upgrade-management-link"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/PostgreSQL/)).toBeInTheDocument();
+
+    expect(safeManagementUrl("https://grain.example.com/entries/alice")).toBe(
+      "https://grain.example.com/entries/alice",
+    );
+    expect(safeManagementUrl("javascript:alert(1)")).toBe("");
+    expect(
+      safeManagementUrl("https://user:secret@grain.example.com/entries/alice"),
+    ).toBe("");
+    expect(safeManagementUrl("https://:8080/entries/alice")).toBe("");
   });
 });

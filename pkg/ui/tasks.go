@@ -1887,6 +1887,11 @@ type configResponse struct {
 	// repository, template and board it is filled in for; nil draws the
 	// form as built (design/design/config-repo-settings.design.md §6).
 	NewTaskForm *model.NewTaskForm `json:"newTaskForm,omitempty"`
+	// SelfUpgradeDisabled is true when -disable-self-upgrade is set, so the
+	// UI hides in-VM self-upgrade actions in favour of external lifecycle
+	// management (optionally linking to ManagementURL).
+	SelfUpgradeDisabled bool   `json:"selfUpgradeDisabled,omitempty"`
+	ManagementURL       string `json:"managementUrl,omitempty"`
 }
 
 // CustomFieldDeclaration is one declared field on the wire -- the JSON
@@ -2093,6 +2098,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		RebootEnabled:       s.tasks.Config.Reboot != nil,
 		ShutdownEnabled:     s.tasks.Config.Shutdown != nil,
 		RestartEnabled:      s.tasks.Config.Restart != nil,
+		SelfUpgradeDisabled: s.tasks.Config.DisableSelfUpgrade,
+		ManagementURL:       sanitizeManagementURL(s.tasks.Config.ManagementURL),
 		GitCredentialsConfigured: s.tasks.Config.Credentials != nil &&
 			len(s.tasks.Config.Credentials.Names()) > 0,
 		TargetRepos:  allTargetRepos,
@@ -2169,6 +2176,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if !authenticated && !singleTenantTrusted(r) {
 		resp.Deployment = nil
 		resp.TargetRepos = []string{}
+		resp.ManagementURL = ""
 	}
 	// Outside the cfg != nil branch above: a repo can carry defaults of
 	// its own on a deployment that has never saved a settings row, the

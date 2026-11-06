@@ -148,6 +148,8 @@ type Options struct {
 	// into its patterns.
 	UpgradeAllowedBranches []string
 	UpgradeVerifyCmd       []string
+	DisableSelfUpgrade     bool
+	ManagementURL          string
 	// ModelCatalog is -model-catalog: the host:port of an Anthropic model
 	// listing stub on loopback (demo_model_catalog.go). Empty wires no
 	// lister, so model discovery has nothing to ask.
@@ -505,7 +507,9 @@ func Run(opts Options) error {
 			return fmt.Errorf("grain demo: -unconfigured: %v", err)
 		}
 	}
-	if opts.UpgradeImage != "" {
+	cfg.DisableSelfUpgrade = opts.DisableSelfUpgrade
+	cfg.ManagementURL = opts.ManagementURL
+	if opts.UpgradeImage != "" && !opts.DisableSelfUpgrade {
 		if cfg, err = configureUpgradeDemo(dir, store, cfg, opts.UpgradeImage, opts.UpgradeAllowedBranches, opts.UpgradeVerifyCmd); err != nil {
 			return fmt.Errorf("grain demo: -upgrade-image: %v", err)
 		}

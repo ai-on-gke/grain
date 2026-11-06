@@ -534,6 +534,16 @@ type Config struct {
 	// unavailable rather than erroring on every call, the same as a nil
 	// Secrets above.
 	Upgrader Upgrader
+	// DisableSelfUpgrade disables in-VM self-upgrade actions (pkg/upgrade,
+	// automatic/scheduled upgrades, and in-VM SQLite-to-PostgreSQL cutover)
+	// and hides in-VM upgrade controls in the UI in favour of an optional
+	// external management URL (-disable-self-upgrade).
+	DisableSelfUpgrade bool
+	// ManagementURL is an optional http:// or https:// URL where this
+	// deployment's lifecycle and upgrades are managed externally
+	// (-management-url), shown in place of in-VM self-upgrade controls when
+	// DisableSelfUpgrade is true.
+	ManagementURL string
 	// LastRestart is what the restart that started this daemon did to
 	// the runs in flight across it (orchestrator.UpgradeAdoption), for
 	// the upgrade pane, or nil when there is nothing to report. nil on a

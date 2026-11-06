@@ -102,6 +102,8 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	reconcile := fs.Duration("reconcile", 0, "run the reconcile loop's suite step every interval, and its release and issue-import steps against -github-sim's simulated GitHub too, logging a failed cycle as the daemon does (default off; agents still never run)")
 	var upgradeVerifyCmd stringSliceFlag
 	fs.Var(&upgradeVerifyCmd, "upgrade-verify-cmd", "one argument of the command that verifies an -upgrade-image image's signature, repeated for every argument, as on grain daemon")
+	disableSelfUpgrade := fs.Bool("disable-self-upgrade", false, "as on grain daemon: disable in-VM self-upgrade actions and hide in-VM upgrade controls in the UI")
+	managementURL := fs.String("management-url", "", "as on grain daemon: optional external http:// or https:// URL shown where upgrades are managed externally")
 	accessCodeFile := fs.String("access-code-file", "", "keep the demo's access code, which every caller, loopback included, signs in with, in this file -- written there if it is not already -- rather than beside its throwaway store, where it is logged")
 	uiIAPAudience := fs.String("ui-iap-audience", "", "as on grain daemon: the audience a signed X-Goog-IAP-JWT-Assertion must carry for the demo to sign its caller in from it")
 	uiIAPIssuer := fs.String("ui-iap-issuer", "", "as on grain daemon: the issuer a signed assertion must carry (default "+ui.GoogleIAPIssuer+")")
@@ -119,6 +121,10 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	}
 	if strings.TrimSpace(*githubWebhookURL) != "" && strings.TrimSpace(*githubWebhookAddr) != "" {
 		return demo.Options{}, errors.New("-github-webhook-url and -github-webhook-addr are mutually exclusive")
+	}
+	cleanManagementURL, err := daemon.ValidateManagementURL(*managementURL)
+	if err != nil {
+		return demo.Options{}, err
 	}
 
 	if *upgradeImage == "" {
@@ -206,6 +212,8 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		UpgradeImage:           *upgradeImage,
 		UpgradeAllowedBranches: daemon.SplitBranchPatterns(*upgradeAllowedBranches),
 		UpgradeVerifyCmd:       upgradeVerifyCmd,
+		DisableSelfUpgrade:     *disableSelfUpgrade,
+		ManagementURL:          cleanManagementURL,
 		ModelCatalog:           *modelCatalog,
 		ModelDiscoveryInterval: *modelDiscoveryInterval,
 		Schedules:              *schedules,

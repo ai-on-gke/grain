@@ -56,6 +56,8 @@ var allowlist = []allowed{
 	{5432, "", "PostgreSQL"},
 	{5000, "", "a local Docker registry (localhost:5000)"},
 	{8443, "", "an example GitHub Enterprise host:port in help and validation text"},
+	{5173, "pkg/sandboxcli/help.go", "grain screenshot's example: Vite's default dev-server port, the app under test's, not grain's"},
+	{3000, "pkg/sandboxcli/help.go", "grain screenshot's example: a typical Node dev-server port, the app under test's, not grain's"},
 	// Not grain's to move.
 	{8080, "cmd/checkpost/", "checkpost is a separate service whose deployment publishes :8080"},
 	{8080, "cmd/github-webhook/", "github-webhook is a separate gateway service whose deployment (deploy/kubernetes/github-webhook.yaml) publishes :8080"},

@@ -112,6 +112,16 @@ type StateManager struct {
 	// seconds, and two nudges arriving together want one cycle between
 	// them, not two in a row.
 	nudge chan struct{}
+
+	// fenced is set when the daemon loses its PostgreSQL single-writer
+	// advisory lock so detached shutdown state-sync passes cannot import
+	// stale files into the database or push to remote mirrors after another
+	// writer has taken over.
+	fenced atomic.Bool
+}
+
+func (m *StateManager) fence() {
+	m.fenced.Store(true)
 }
 
 func NewStateManager(dataDir string, db *sql.DB, repo *staterepo.Repo, secretStore *secrets.Store, secretsRepo *secretsrepo.Repo, forbidden *gitproxy.ForbiddenSet) *StateManager {
@@ -259,6 +269,9 @@ func (m *StateManager) syncAll(ctx context.Context) (bool, error) {
 // instead of the plain one (staterepo.SyncNoted): SyncAfterWrite's,
 // naming who made the write it follows.
 func (m *StateManager) cycle(ctx context.Context, all bool, note string) (bool, error) {
+	if m.fenced.Load() {
+		return false, nil
+	}
 	m.lastCycle = time.Now()
 	// Whatever this cycle imports, the deployment's API scope sets are
 	// installed from the database it leaves behind -- on its way out, so
