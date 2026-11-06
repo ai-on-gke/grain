@@ -143,6 +143,9 @@ func InterruptedRuns() int64 { return interruptedRuns.Load() }
 // finished as cancelled (checkRunCancelledElsewhere), the other way a
 // cancellation reaches a run through the store alone.
 func checkTaskClosed(ctx context.Context, store *model.Store, taskID, runID string, cancel context.CancelCauseFunc) bool {
+	if store == nil {
+		return false
+	}
 	st, err := store.State(ctx, taskID)
 	if err != nil {
 		return false
@@ -152,6 +155,26 @@ func checkTaskClosed(ctx context.Context, store *model.Store, taskID, runID stri
 		return true
 	}
 	return checkRunCancelledElsewhere(ctx, store, taskID, runID, cancel)
+}
+
+func runAlreadyCancelled(ctx context.Context, store *model.Store, taskID, runID string) bool {
+	if store == nil || runID == "" {
+		return false
+	}
+	finished, found, err := store.RunFinished(ctx, runID)
+	if err != nil || !found || !finished {
+		return false
+	}
+	runs, err := store.Runs(ctx, taskID)
+	if err != nil {
+		return false
+	}
+	for _, r := range runs {
+		if r.ID == runID && r.Outcome == "cancelled" {
+			return true
+		}
+	}
+	return false
 }
 
 // checkRunCancelledElsewhere calls cancel(ErrTurnStopped) when runID's
@@ -178,24 +201,76 @@ func checkTaskClosed(ctx context.Context, store *model.Store, taskID, runID stri
 // check's business and is left to the paths that already handle it. A
 // store error reads as "not cancelled", for checkTaskClosed's reason.
 func checkRunCancelledElsewhere(ctx context.Context, store *model.Store, taskID, runID string, cancel context.CancelCauseFunc) bool {
-	if runID == "" {
-		return false
-	}
-	finished, found, err := store.RunFinished(ctx, runID)
-	if err != nil || !found || !finished {
-		return false
-	}
-	runs, err := store.Runs(ctx, taskID)
-	if err != nil {
-		return false
-	}
-	for _, r := range runs {
-		if r.ID == runID && r.Outcome == "cancelled" {
-			cancel(ErrTurnStopped)
-			return true
-		}
+	if runAlreadyCancelled(ctx, store, taskID, runID) {
+		cancel(ErrTurnStopped)
+		return true
 	}
 	return false
+}
+
+// finishCancelledInSetup records a run cancelled or interrupted before its
+// agent ever started, returning (true, err) when runCtx or ctx was cancelled
+// so callers do not record the cancellation as a setup failure.
+func finishCancelledInSetup(ctx, finishCtx context.Context, store *model.Store, taskID, runID string,
+	finishAt time.Time, runCtx context.Context, cancelRun context.CancelCauseFunc, setupErr error) (bool, error) {
+	if runCtx != nil && cancelRun != nil && context.Cause(runCtx) == nil {
+		checkTaskClosed(finishCtx, store, taskID, runID, cancelRun)
+	}
+	var cause error
+	if runCtx != nil {
+		cause = context.Cause(runCtx)
+	}
+	switch {
+	case ctx.Err() != nil || errors.Is(cause, errDaemonStopped):
+		var out error
+		if ferr := finishStoppedInSetup(ctx, store, taskID, runID, finishAt); ferr != nil {
+			out = fmt.Errorf("orchestrator: finishing run %s stopped in setup: %w", runID, ferr)
+		}
+		return true, fmt.Errorf("orchestrator: run %s: %w", runID, errors.Join(errDaemonStopped, setupErr, out))
+	case errors.Is(cause, ErrTurnStopped):
+		out := fmt.Errorf("orchestrator: run %s: %w", runID, ErrTurnStopped)
+		if store != nil && !runAlreadyCancelled(finishCtx, store, taskID, runID) {
+			if ferr := store.FinishRun(finishCtx, runID, finishAt, "cancelled", model.TurnStoppedDetail); ferr != nil {
+				out = errors.Join(out, fmt.Errorf("orchestrator: finishing stopped run %s: %w", runID, ferr))
+			}
+		}
+		return true, out
+	case errors.Is(cause, errTaskClosed):
+		out := fmt.Errorf("orchestrator: run %s: %w", runID, errTaskClosed)
+		if store != nil && !runAlreadyCancelled(finishCtx, store, taskID, runID) {
+			if ferr := store.FinishRun(finishCtx, runID, finishAt, "cancelled", model.TaskClosedDetail); ferr != nil {
+				out = errors.Join(out, fmt.Errorf("orchestrator: finishing closed task's run %s: %w", runID, ferr))
+			}
+		}
+		return true, out
+	case errors.Is(cause, ErrOperatorPaused):
+		out := fmt.Errorf("orchestrator: run %s: %w", runID, ErrOperatorPaused)
+		if store != nil {
+			if ferr := store.FinishRun(finishCtx, runID, finishAt, model.InterruptedOutcome, model.OperatorPausedDetail); ferr != nil {
+				out = errors.Join(out, fmt.Errorf("orchestrator: finishing paused run %s: %w", runID, ferr))
+			}
+		}
+		return true, out
+	case errors.Is(cause, errPreempted):
+		out := fmt.Errorf("orchestrator: run %s: %w", runID, errPreempted)
+		if store != nil {
+			if ferr := store.FinishRun(finishCtx, runID, finishAt, model.InterruptedOutcome, PreemptedDetail); ferr != nil {
+				out = errors.Join(out, fmt.Errorf("orchestrator: finishing preempted run %s: %w", runID, ferr))
+			}
+		}
+		return true, out
+	case errors.Is(cause, errCapabilityChanged):
+		out := fmt.Errorf("orchestrator: run %s: %w", runID, errCapabilityChanged)
+		if store != nil {
+			susp := model.Suspension{RunID: runID, Kind: model.SuspendCapability, Detail: CapabilityChangedDetail, CreatedAt: finishAt}
+			if ferr := store.Suspend(finishCtx, susp); ferr != nil {
+				out = errors.Join(out, fmt.Errorf("orchestrator: suspending run %s for capability change: %w", runID, ferr))
+			}
+		}
+		return true, out
+	default:
+		return false, nil
+	}
 }
 
 // watchForTaskClosed polls store.State(taskID) every interval and calls
@@ -2967,16 +3042,39 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	// the word runOne's own guard uses for a run no agent ever reached,
 	// and gives the reservation back, on a context detached from ctx's
 	// cancellation for that guard's reason.
+	runCtx := cfg.runCtx
+	cancelRun := cfg.cancelRun
+	stopRunWatch := cfg.stopRunWatch
+	if runCtx == nil || cancelRun == nil || stopRunWatch == nil {
+		var localCancel context.CancelCauseFunc
+		runCtx, localCancel = context.WithCancelCause(context.WithoutCancel(ctx))
+		cancelRun = localCancel
+		stopDaemonWatch := context.AfterFunc(ctx, func() { cancelRun(errDaemonStopped) })
+		stopCancelling := cfg.TaskCancellers.register(d.TaskID, cancelRun)
+		watcherDone := make(chan struct{})
+		go func() {
+			defer close(watcherDone)
+			watchForTaskClosed(runCtx, ctx, store, task.ID, d.RunID, cfg.cancelPollInterval(), cancelRun)
+		}()
+		var stopOnce sync.Once
+		stopRunWatch = func() {
+			stopOnce.Do(func() {
+				stopDaemonWatch()
+				stopCancelling()
+				cancelRun(nil)
+				<-watcherDone
+			})
+		}
+	}
+	defer stopRunWatch()
+	checkTaskClosed(ctx, store, task.ID, d.RunID, cancelRun)
+
 	unprepared := func(err error) (*agent.Result, error) {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runCleanupTimeout)
 		defer cancel()
 		revokeAll(cleanupCtx, store, cc, cfg.PreparedCapabilities)
-		if ctx.Err() != nil {
-			// The daemon stopping, not the store failing: handed back.
-			if ferr := finishStoppedInSetup(ctx, store, d.TaskID, d.RunID, cfg.now()); ferr != nil {
-				err = errors.Join(err, fmt.Errorf("orchestrator: finishing run %s stopped in setup: %w", d.RunID, ferr))
-			}
-			return nil, fmt.Errorf("orchestrator: run %s: %w", d.RunID, errors.Join(errDaemonStopped, err))
+		if handled, cerr := finishCancelledInSetup(ctx, cleanupCtx, store, d.TaskID, d.RunID, cfg.now(), runCtx, cancelRun, err); handled {
+			return nil, cerr
 		}
 		if ferr := finishSetupFailed(cleanupCtx, store, d.TaskID, d.RunID, cfg.now(),
 			"this run could not be set up: "+err.Error()); ferr != nil {
@@ -3081,25 +3179,28 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	// resulting materialization for prompt sections, recreation and the one
 	// eventual revoke; never materialize the same grant a second time.
 	var prepErr error
-	if len(task.Grants) > 0 {
-		notes.say(ctx, capabilityCredentialsNote)
-	}
-	materialized, prepErr = materializeCapabilities(ctx, cfg.Capabilities, cc,
-		cfg.PreparedCapabilities, sandboxRoot, placer)
-	cfg.SandboxRecreations.setMaterialized(d.TaskID, materialized)
-	recordMaterializedLeases(ctx, store, d.RunID, materialized)
-	// Before the clone, so the CLI every prompt names is there whatever
-	// the clone does. After the grants' own placements, so nothing a
-	// grant installs in the same directory is placed over it.
-	if !cfg.sandboxReused {
-		if err := placeSandboxGrain(ctx, cfg.SandboxGrainBinary, sandboxRoot, placer); err != nil {
-			log.Printf("orchestrator: task %s: the sandbox keeps its image's grain: %v", task.ID, err)
+	if runCtx.Err() == nil {
+		if len(task.Grants) > 0 {
+			notes.say(ctx, capabilityCredentialsNote)
+		}
+		materialized, prepErr = materializeCapabilities(runCtx, cfg.Capabilities, cc,
+			cfg.PreparedCapabilities, sandboxRoot, placer)
+		cfg.SandboxRecreations.setMaterialized(d.TaskID, materialized)
+		recordMaterializedLeases(ctx, store, d.RunID, materialized)
+		// Before the clone, so the CLI every prompt names is there whatever
+		// the clone does. After the grants' own placements, so nothing a
+		// grant installs in the same directory is placed over it.
+		if !cfg.sandboxReused && runCtx.Err() == nil {
+			if err := placeSandboxGrain(runCtx, cfg.SandboxGrainBinary, sandboxRoot, placer); err != nil {
+				log.Printf("orchestrator: task %s: the sandbox keeps its image's grain: %v", task.ID, err)
+			}
 		}
 	}
 
 	var prepared checkout
 	var checkoutErr error
-	if closed, err := taskClosed(ctx, store, task.ID); prepErr == nil && (err != nil || !closed) {
+	checkTaskClosed(ctx, store, task.ID, d.RunID, cancelRun)
+	if closed, err := taskClosed(ctx, store, task.ID); prepErr == nil && runCtx.Err() == nil && (err != nil || !closed) {
 		// Named, because on a deployment with several repos "cloning" on
 		// its own says nothing the row did not already say. Only where
 		// there is actually a clone to make: prepareCheckout returns a
@@ -3114,9 +3215,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			srcWG.Add(1)
 			go func() {
 				defer srcWG.Done()
-				placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &srcOut, cfg.sandboxReused)
+				placeGrainSource(runCtx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &srcOut, cfg.sandboxReused)
 			}()
-			prepared, checkoutErr = prepareCheckoutWithUpstream(ctx, tools, cfg.GitRemoteBase, cloneURL, upstreamRepo, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
+			prepared, checkoutErr = prepareCheckoutWithUpstream(runCtx, tools, cfg.GitRemoteBase, cloneURL, upstreamRepo, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
 			srcWG.Wait()
 			if checkoutErr == nil {
 				prepared.GrainSource = srcOut.GrainSource
@@ -3125,9 +3226,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 				prepared.GrainSourceCommits = srcOut.GrainSourceCommits
 			}
 		} else {
-			prepared, checkoutErr = prepareCheckoutWithUpstream(ctx, tools, cfg.GitRemoteBase, cloneURL, upstreamRepo, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
-			if checkoutErr == nil {
-				placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &prepared, cfg.sandboxReused)
+			prepared, checkoutErr = prepareCheckoutWithUpstream(runCtx, tools, cfg.GitRemoteBase, cloneURL, upstreamRepo, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
+			if checkoutErr == nil && runCtx.Err() == nil {
+				placeGrainSource(runCtx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &prepared, cfg.sandboxReused)
 			}
 		}
 		if checkoutErr == nil && len(prepared.Context) > 0 {
@@ -3163,16 +3264,21 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			}
 		}
 	}
-	if len(previous) > 0 && checkoutErr == nil && prepared.Dir != "" {
-		history.Commits = checkoutCommits(ctx, tools, task, maxBranchCommits+1)
+	if len(previous) > 0 && checkoutErr == nil && prepared.Dir != "" && runCtx.Err() == nil {
+		history.Commits = checkoutCommits(runCtx, tools, task, maxBranchCommits+1)
 	}
 
 	var prompt string
 	var dynamicSections []string
 	if checkoutErr == nil && prepErr == nil {
-		prompt, dynamicSections, prepErr = prepareCapabilityPrompt(ctx, cc, materialized, tools, history,
-			attachments, prepared, cfg.settingsRepo(), cfg.checkImage(),
-			frameworkOpensPullRequests(framework), promptExtension, memory, cfg.maxRunRuntime())
+		if runCtx.Err() == nil {
+			prompt, dynamicSections, prepErr = prepareCapabilityPrompt(runCtx, cc, materialized, tools, history,
+				attachments, prepared, cfg.settingsRepo(), cfg.checkImage(),
+				frameworkOpensPullRequests(framework), promptExtension, memory, cfg.maxRunRuntime())
+		} else {
+			prompt = BuildPrompt(task, prepared.Dir, prepared.Root,
+				frameworkOpensPullRequests(framework), cfg.maxRunRuntime(), history, prepared.Setup)
+		}
 	}
 	// Each capability grant's prompt_section, as a block naming the grant,
 	// its attempt_id and its MCP server, and saying a capability server
@@ -3233,8 +3339,12 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	if cfg.TranscriptDir != "" {
 		transcriptPath = filepath.Join(cfg.TranscriptDir, d.RunID)
 	}
+	if checkoutErr != nil || prepErr != nil {
+		checkTaskClosed(ctx, store, task.ID, d.RunID, cancelRun)
+	}
+	setupCause := context.Cause(runCtx)
 	switch {
-	case (checkoutErr != nil || prepErr != nil) && ctx.Err() != nil:
+	case (checkoutErr != nil || prepErr != nil) && (ctx.Err() != nil || errors.Is(setupCause, errDaemonStopped)):
 		// The daemon was stopped under the clone or the capabilities,
 		// before any agent started: handed back without a strike, as
 		// finishStoppedInSetup does for the paths that finish the row
@@ -3244,6 +3354,22 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		noteInterrupted(context.WithoutCancel(ctx), store, task.ID, d.RunID, cfg.now())
 		runErr = fmt.Errorf("orchestrator: run %s: %w", d.RunID,
 			errors.Join(errDaemonStopped, errors.Join(checkoutErr, prepErr)))
+	case (checkoutErr != nil || prepErr != nil) && errors.Is(setupCause, ErrTurnStopped):
+		outcome, detail = "cancelled", model.TurnStoppedDetail
+		runErr = fmt.Errorf("orchestrator: run %s: %w", d.RunID, ErrTurnStopped)
+	case (checkoutErr != nil || prepErr != nil) && errors.Is(setupCause, errTaskClosed):
+		outcome, detail = "cancelled", model.TaskClosedDetail
+		runErr = fmt.Errorf("orchestrator: run %s: %w", d.RunID, errTaskClosed)
+	case (checkoutErr != nil || prepErr != nil) && errors.Is(setupCause, ErrOperatorPaused):
+		outcome, detail = model.InterruptedOutcome, model.OperatorPausedDetail
+		runErr = fmt.Errorf("orchestrator: run %s: %w", d.RunID, ErrOperatorPaused)
+	case (checkoutErr != nil || prepErr != nil) && errors.Is(setupCause, errPreempted):
+		outcome, detail = model.InterruptedOutcome, PreemptedDetail
+		runErr = fmt.Errorf("orchestrator: run %s: %w", d.RunID, errPreempted)
+	case (checkoutErr != nil || prepErr != nil) && errors.Is(setupCause, errCapabilityChanged):
+		outcome, detail = model.SuspendedOutcome, CapabilityChangedDetail
+		suspend = model.SuspendCapability
+		runErr = fmt.Errorf("orchestrator: run %s: %w", d.RunID, errCapabilityChanged)
 	case checkoutErr != nil:
 		runErr = fmt.Errorf("orchestrator: preparing %s: %w", d.RunID, checkoutErr)
 		detail = checkoutErr.Error()
@@ -3253,13 +3379,6 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		detail = prepErr.Error()
 		outcome, detail = setupEnding(prepErr, outcome, detail)
 	default:
-		// runCtx, not ctx, is what watchForTaskClosed cancels the instant
-		// it sees this task closed, which is what makes cancelling this
-		// run from outside the process running it possible at all -- see
-		// that func's own doc comment. cancelRun(nil) once framework.Run
-		// returns is what stops the watcher goroutine either way, whether
-		// or not it was the one that ended the run.
-		//
 		// agentCtx, not runCtx, is what framework.Run actually gets: a
 		// child of runCtx carrying its own deadline, cfg.maxRunRuntime()
 		// out from now, so a run that outlives it gets cancelled the same
@@ -3279,15 +3398,6 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// clock keeps every property that call had -- see newRunClock --
 		// and registering it is what lets the run's own wait_for_checks
 		// reach it from the sandbox (RunWaitCredits).
-		//
-		// runCtx is detached from ctx and cancelled by hand when ctx is,
-		// so that a daemon shutdown reaches the run as errDaemonStopped
-		// rather than as a cancellation with no cause of its own -- which
-		// is what lets it be told apart from the run's other endings
-		// (see errDaemonStopped). Its values are ctx's all the same.
-		runCtx, cancelRun := context.WithCancelCause(context.WithoutCancel(ctx))
-		stopDaemonWatch := context.AfterFunc(ctx, func() { cancelRun(errDaemonStopped) })
-		defer stopDaemonWatch()
 		agentCtx, clock := newRunClock(runCtx, cfg.maxRunRuntime(), cfg.runWaitCreditCap())
 		stopIdle := func() {}
 		if cfg.durable {
@@ -3297,14 +3407,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			defer stopIdle()
 		}
 		stopCrediting := cfg.RunWaitCredits.register(d.TaskID, clock)
-		stopCancelling := cfg.TaskCancellers.register(d.TaskID, cancelRun)
-		defer stopCancelling()
+		defer stopCrediting()
+		defer clock.stop()
 		checkTaskClosed(ctx, store, task.ID, d.RunID, cancelRun)
-		watcherDone := make(chan struct{})
-		go func() {
-			defer close(watcherDone)
-			watchForTaskClosed(runCtx, ctx, store, task.ID, d.RunID, cfg.cancelPollInterval(), cancelRun)
-		}()
 
 		// The third thing that can end this run from outside it: another
 		// run meeting the usage limit of the same credential, which
@@ -3329,6 +3434,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		}
 		runScope := runPauseScope(framework, task, cfg)
 		stopPause := cfg.Pause.register(d.RunID, runScope, cfg.now(), cancelRun)
+		defer stopPause()
 
 		// Repo/Branch are the same pair BuildPrompt names in the prompt,
 		// passed structurally as well so a Framework can scope its
@@ -3616,17 +3722,19 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			OnResumableSession: early.record,
 		}
 		result, runErr = framework.Run(hostCtx, runCfg)
-		if runErr == nil || (result != nil && (len(result.ToolCalls) > 0 || strings.TrimSpace(result.FinalText) != "")) {
+		if runCtx.Err() == nil && (runErr == nil || (result != nil && (len(result.ToolCalls) > 0 || strings.TrimSpace(result.FinalText) != ""))) {
 			noteFirstTurn()
 		}
 		// The stop rule, for a framework whose CLI cannot apply it from
 		// inside the run: a turn that ended promising more work, or a
 		// background run that ended with no closing move, is resumed
 		// once in the same session with the nudge (continueStoppedRun).
-		if !taskKeepRunning(context.WithoutCancel(ctx), store, task) {
+		if runCtx.Err() == nil && !taskKeepRunning(context.WithoutCancel(ctx), store, task) {
 			result, runErr = continueStoppedRun(hostCtx, framework, runCfg, result, runErr)
 		}
-		result, runErr, comments = continueSessionTurns(hostCtx, ctx, store, cfg, framework, runCfg, task, d.RunID, clock.deadline, comments, result, runErr)
+		if runCtx.Err() == nil {
+			result, runErr, comments = continueSessionTurns(hostCtx, ctx, store, cfg, framework, runCfg, task, d.RunID, clock.deadline, comments, result, runErr)
+		}
 		agentRan = true
 		if result != nil {
 			resumableSession = result.ResumableSession
@@ -3638,8 +3746,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		stopCrediting()
 		clock.stop()
 		stopPause()
-		cancelRun(nil)
-		<-watcherDone
+		stopRunWatch()
 
 		// What the wait credit came to, for the record that lets the cap
 		// be re-priced against real runs rather than re-argued
@@ -5054,6 +5161,9 @@ func recordRunEnd(ctx, finishCtx context.Context, store *model.Store, cfg Config
 			susp.ModelHint = end.modelHint
 		}
 		finishErr = store.Suspend(finishCtx, susp)
+	} else if outcome == "cancelled" && runAlreadyCancelled(finishCtx, store, task.ID, runID) {
+		// Stop or Close already finished this row (ui.Client.cancelActiveRuns);
+		// leave its finished_at and detail untouched.
 	} else {
 		finishErr = store.FinishRun(finishCtx, runID, cfg.now(), outcome, detail)
 	}

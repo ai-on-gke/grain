@@ -444,6 +444,15 @@ type Config struct {
 	// sandboxPod.
 	capabilityMCPServers     []agent.CapabilityMCPServer
 	capabilityPromptSections string
+	// runCtx, cancelRun and stopRunWatch, when set by runOneWithFramework,
+	// carry the run's cancellable context, its TaskCancellers registration
+	// and its store-polled watcher from the start of sandbox setup into
+	// RunDispatch, so a Stop or Close pressed while a sandbox is booting or
+	// a repository is cloning cancels that setup at once. Direct callers of
+	// RunDispatch leave them nil and RunDispatch creates its own.
+	runCtx       context.Context
+	cancelRun    context.CancelCauseFunc
+	stopRunWatch func()
 	// ControllerMCP builds a host-side proxy targeting POST /api/mcp for a
 	// run holding api:* grants, injecting daemon authentication and
 	// X-Grain-Acting-Task: <taskID> so built-in sessions and tasks reach
