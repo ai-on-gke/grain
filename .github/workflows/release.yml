@@ -59,10 +59,10 @@ on:
         default: ""
         type: string
 
+# Each job names what it needs: `images` publishes (packages: write) and
+# authenticates to Google Cloud (id-token: write); `on-demand` only reads.
 permissions:
   contents: read
-  packages: write
-  id-token: write
 
 env:
   GOFLAGS: -mod=readonly
@@ -139,6 +139,10 @@ jobs:
     if: ${{ !cancelled() && (needs.on-demand.result == 'skipped' || (needs.on-demand.result == 'success' && needs.on-demand.outputs.build == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     concurrency:
       # An on-demand build is a group of its own, so it neither cancels nor
       # is cancelled by the branch's runs, and a second dispatch of the same
