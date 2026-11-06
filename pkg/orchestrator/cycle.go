@@ -2402,6 +2402,9 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		}
 		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runCleanupTimeout)
 		defer cancel()
+		if runFinished(finishCtx, deps.Store, d.RunID) {
+			return
+		}
 		// A durable task's setup failure is a suspension rather than a
 		// strike (finishSetupFailed); a full cluster is capacity for
 		// every task alike.

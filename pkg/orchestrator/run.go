@@ -132,6 +132,14 @@ var interruptedRuns atomic.Int64
 // interrupted, since that is the only thing that ends a run that way.
 func InterruptedRuns() int64 { return interruptedRuns.Load() }
 
+func runFinished(ctx context.Context, store *model.Store, runID string) bool {
+	if store == nil || runID == "" {
+		return false
+	}
+	finished, found, err := store.RunFinished(ctx, runID)
+	return err == nil && found && finished
+}
+
 // checkTaskClosed reads store.State(taskID) once and calls
 // cancel(errTaskClosed) if it reads model.StateClosed, reporting whether
 // it did. A store error is treated as "not closed" rather than
@@ -139,6 +147,9 @@ func InterruptedRuns() int64 { return interruptedRuns.Load() }
 // regardless, so a transient read failure costs one interval of latency,
 // not the ability to ever notice a close for the rest of the run.
 func checkTaskClosed(ctx context.Context, store *model.Store, taskID string, cancel context.CancelCauseFunc) bool {
+	if store == nil {
+		return false
+	}
 	st, err := store.State(ctx, taskID)
 	if err != nil {
 		return false
@@ -150,16 +161,32 @@ func checkTaskClosed(ctx context.Context, store *model.Store, taskID string, can
 	return false
 }
 
-// watchForTaskClosed polls store.State(taskID) every interval and calls
-// cancel(errTaskClosed) the moment it reads model.StateClosed -- the
-// store-polled cancellation signal RunDispatch needs because grain daemon
-// (running the agent) and grain ui (where a close actually lands) are
-// separate processes sharing only the store, per bwsalmon/agents#346.
+// checkRunStopped cancels runCtx if either taskID has been closed or runID
+// has already been finished in the store (e.g. ui.Client.Stop or ForceMerge
+// landing while setup was cloning the repository before TaskCancellers
+// registered, or from a separate grain ui process sharing only the store).
+func checkRunStopped(ctx context.Context, store *model.Store, taskID, runID string, cancel context.CancelCauseFunc) bool {
+	if checkTaskClosed(ctx, store, taskID, cancel) {
+		return true
+	}
+	if runFinished(ctx, store, runID) {
+		cancel(ErrTurnStopped)
+		return true
+	}
+	return false
+}
+
+// watchForTaskClosed polls store.State(taskID) and store.RunFinished(runID)
+// every interval and cancels runCtx the moment the task closes or the run
+// row is finished externally -- the store-polled cancellation signal
+// RunDispatch needs because grain daemon (running the agent) and grain ui
+// (where a close or stop lands) can be separate processes sharing only the
+// store, per bwsalmon/agents#346.
 //
 // It does not check immediately on entry: RunDispatch itself already
-// calls checkTaskClosed synchronously, before framework.Run is ever
-// invoked, which is what makes a task already closed by the time
-// RunDispatch runs -- dispatch.Cycle claimed the slot before the close
+// calls checkRunStopped synchronously, before framework.Run is ever
+// invoked, which is what makes a task already closed or stopped by the time
+// RunDispatch runs -- dispatch.Cycle claimed the slot before the close/stop
 // write landed, and RunDispatch only got around to running it after --
 // stop that run's first tool call from ever reaching a real sandbox,
 // deterministically, rather than racing this goroutine's own first tick
@@ -171,7 +198,7 @@ func checkTaskClosed(ctx context.Context, store *model.Store, taskID string, can
 // for any reason, which is what bounds this goroutine's lifetime to the
 // run's: RunDispatch cancels runCtx itself the moment framework.Run
 // returns.
-func watchForTaskClosed(runCtx, queryCtx context.Context, store *model.Store, taskID string, interval time.Duration, cancel context.CancelCauseFunc) {
+func watchForTaskClosed(runCtx, queryCtx context.Context, store *model.Store, taskID, runID string, interval time.Duration, cancel context.CancelCauseFunc) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -179,7 +206,7 @@ func watchForTaskClosed(runCtx, queryCtx context.Context, store *model.Store, ta
 		case <-runCtx.Done():
 			return
 		case <-ticker.C:
-			if checkTaskClosed(queryCtx, store, taskID, cancel) {
+			if checkRunStopped(queryCtx, store, taskID, runID, cancel) {
 				return
 			}
 		}
@@ -3051,7 +3078,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 
 	var prepared checkout
 	var checkoutErr error
-	if closed, err := taskClosed(ctx, store, task.ID); prepErr == nil && (err != nil || !closed) {
+	if closed, err := taskClosed(ctx, store, task.ID); prepErr == nil && (err != nil || !closed) && !runFinished(ctx, store, d.RunID) {
 		// Named, because on a deployment with several repos "cloning" on
 		// its own says nothing the row did not already say. Only where
 		// there is actually a clone to make: prepareCheckout returns a
@@ -3251,11 +3278,11 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		stopCrediting := cfg.RunWaitCredits.register(d.TaskID, clock)
 		stopCancelling := cfg.TaskCancellers.register(d.TaskID, cancelRun)
 		defer stopCancelling()
-		checkTaskClosed(ctx, store, task.ID, cancelRun)
+		checkRunStopped(ctx, store, task.ID, d.RunID, cancelRun)
 		watcherDone := make(chan struct{})
 		go func() {
 			defer close(watcherDone)
-			watchForTaskClosed(runCtx, ctx, store, task.ID, cfg.cancelPollInterval(), cancelRun)
+			watchForTaskClosed(runCtx, ctx, store, task.ID, d.RunID, cfg.cancelPollInterval(), cancelRun)
 		}()
 
 		// The third thing that can end this run from outside it: another
@@ -5000,7 +5027,13 @@ func recordRunEnd(ctx, finishCtx context.Context, store *model.Store, cfg Config
 	var finishErr error
 	kind, _ := end.suspensionKind()
 	failover := kind.IsFailover() && end.modelHint != ""
-	if end.suspend != "" || failover {
+	if runFinished(finishCtx, store, runID) {
+		// Another caller (such as ui.Client.Stop or ForceMerge via
+		// cancelActiveRuns while this run was still in setup, or from a
+		// separate UI process) has already recorded this run's finished_at,
+		// outcome and detail; keep that record intact while still flushing
+		// transcripts, telemetry and leases below.
+	} else if end.suspend != "" || failover {
 		susp := model.Suspension{RunID: runID, Kind: kind, Detail: detail, CreatedAt: cfg.now()}
 		if failover {
 			susp.ModelHint = end.modelHint

@@ -62,8 +62,11 @@ type APIScopeSetsResponse struct {
 	// Error is why the deployment's declared sets are not in effect --
 	// they did not resolve when last loaded -- so the ones listed are
 	// the previous version.
-	Error string `json:"error,omitempty"`
-	Path  string `json:"path"`
+	Error      string `json:"error,omitempty"`
+	Path       string `json:"path"`
+	Total      int    `json:"total,omitempty"`
+	Truncated  bool   `json:"truncated,omitempty"`
+	NextCursor string `json:"nextCursor,omitempty"`
 }
 
 // PutAPIScopeSetRequest is PUT /api/api-scope-sets.
@@ -188,16 +191,40 @@ func (c *Client) DeleteAPIScopeSet(ctx context.Context, name string) error {
 }
 
 func (s *Server) handleListAPIScopeSets(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.tasks.APIScopeSets(r.Context()))
+	list, err := parseListQuery(r, listPageSmall)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	out := s.tasks.APIScopeSets(r.Context())
+	if list.Paged {
+		matched := filterList(out.Sets, func(set APIScopeSetRow) bool {
+			return list.matches(set.Name, set.Source)
+		})
+		page := pageOf(matched, list)
+		out.Sets = page.Items
+		out.Total = page.Total
+		out.Truncated = page.Truncated
+		out.NextCursor = page.NextCursor
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleAPIScopeSetUsage(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageLarge)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	out, err := s.tasks.APIScopeSetUsage(r.Context())
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	out = filterList(out, func(u APIScopeSetUsage) bool {
+		return list.matches(u.Name)
+	})
+	writeList(w, out, list)
 }
 
 func (s *Server) handlePutAPIScopeSet(w http.ResponseWriter, r *http.Request) {
@@ -209,7 +236,7 @@ func (s *Server) handlePutAPIScopeSet(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
-	s.handleListAPIScopeSets(w, r)
+	writeJSON(w, http.StatusOK, s.tasks.APIScopeSets(r.Context()))
 }
 
 func (s *Server) handleDeleteAPIScopeSet(w http.ResponseWriter, r *http.Request) {
@@ -221,5 +248,5 @@ func (s *Server) handleDeleteAPIScopeSet(w http.ResponseWriter, r *http.Request)
 		writeClientError(w, err)
 		return
 	}
-	s.handleListAPIScopeSets(w, r)
+	writeJSON(w, http.StatusOK, s.tasks.APIScopeSets(r.Context()))
 }

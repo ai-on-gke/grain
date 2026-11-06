@@ -53,6 +53,9 @@ type CICompactRunsResponse struct {
 	Faults []CICompactFault `json:"faults,omitempty"`
 	// ActionsNote is CIRunsResponse.ActionsNote.
 	ActionsNote string `json:"actionsNote,omitempty"`
+	// Truncated and NextCursor are CIRunsResponse's page bookkeeping.
+	Truncated  bool   `json:"truncated,omitempty"`
+	NextCursor string `json:"nextCursor,omitempty"`
 }
 
 // CICompactRun is one run of the compact listing.

@@ -1161,12 +1161,34 @@ func (c *Client) nameDependents(ctx context.Context, deps []dependent) (string, 
 // --- handlers ------------------------------------------------------------
 
 func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
-	list, err := s.tasks.ListTemplates(r.Context())
+	summary := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("fields")), "summary")
+	defaultLimit := listPageTiny
+	if summary {
+		defaultLimit = listPageMedium
+	}
+	list, err := parseListQuery(r, defaultLimit)
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, list)
+	templates, err := s.tasks.ListTemplates(r.Context())
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	if repo := strings.TrimSpace(r.URL.Query().Get("repo")); repo != "" {
+		templates = filterList(templates, func(t Template) bool { return strings.EqualFold(t.Repo, repo) })
+	}
+	templates = filterList(templates, func(t Template) bool {
+		return list.matches(t.ID, t.Name, t.Title, t.Repo)
+	})
+	if summary {
+		for i := range templates {
+			templates[i].Description = ""
+		}
+		list.Paged = true
+	}
+	writeList(w, templates, list)
 }
 
 // handleTemplateComposition takes the repo, the branch and the values

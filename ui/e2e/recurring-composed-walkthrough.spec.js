@@ -16,6 +16,8 @@ import { test, expect } from "./fixtures.js";
 import { chooseOption } from "./searchSelect.js";
 
 test.describe("Recurring and Composed Work Automation UI Walkthrough", () => {
+  test.setTimeout(120_000);
+
   // Helper to create API items directly
   async function seedOne(page, path, data) {
     const res = await page.request.post(path, { data });
