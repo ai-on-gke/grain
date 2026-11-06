@@ -399,6 +399,9 @@ func (c *Client) Directory(ctx context.Context, q DirectoryQuery) (*DirectoryRes
 	if q.Kind != "" {
 		vals.Set("kind", string(q.Kind))
 	}
+	if q.HostKind != "" {
+		vals.Set("host_kind", string(q.HostKind))
+	}
 	if q.Owner != "" {
 		vals.Set("owner", q.Owner)
 	}
@@ -438,14 +441,26 @@ func (c *Client) ListEntries(ctx context.Context, q ListEntriesQuery) ([]Entry, 
 	if q.Owner != "" {
 		vals.Set("owner", q.Owner)
 	}
+	if q.OwnerGroup != "" {
+		vals.Set("owner_group", q.OwnerGroup)
+	}
 	if q.Kind != "" {
 		vals.Set("kind", string(q.Kind))
 	}
 	if q.Status != "" {
 		vals.Set("status", string(q.Status))
 	}
+	if q.Listed != nil {
+		vals.Set("listed", strconv.FormatBool(*q.Listed))
+	}
+	if q.Conflict != nil {
+		vals.Set("conflict", strconv.FormatBool(*q.Conflict))
+	}
 	if q.IncludeDeleted {
 		vals.Set("include_deleted", "true")
+	}
+	if q.All {
+		vals.Set("all", "true")
 	}
 	var out ListEntriesResponse
 	if err := c.doJSON(ctx, http.MethodGet, "/api/entries", vals, nil, &out); err != nil {
