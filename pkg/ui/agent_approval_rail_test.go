@@ -16,9 +16,11 @@ package ui_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -118,6 +120,20 @@ func TestAgentApprovalRailRefusesTasksHeldForAPerson(t *testing.T) {
 	setCatalogue(t, ctx, client.Store, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
 		"read-issues": {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
 	}})
+	widgets, err := model.ParseRepo("acme/widgets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pushTmplID := model.RepoDeclaredID(model.DeclaredTemplate, widgets, "tag-release")
+	if _, err := client.Store.SyncRepoDeclarations(ctx, widgets, "abc123", model.RepoDeclarations{
+		Templates: []model.DeclaredTemplateFile{{
+			Path:     ".grain/templates/tag-release.yml",
+			Template: model.Template{ID: pushTmplID, Name: "tag-release", Title: "Tag release", Target: &widgets},
+			Push:     model.RefPushSet{{Pattern: "refs/tags/v*"}},
+		}},
+	}, time.Now(), time.UTC); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, tc := range []struct {
 		name, id   string
@@ -149,6 +165,21 @@ func TestAgentApprovalRailRefusesTasksHeldForAPerson(t *testing.T) {
 				t.Target = &cfgRepo
 			},
 			want: "configuration repository"},
+		{name: "change target needing person approval", id: "29", proposedBy: "9",
+			edit: func(t *model.Task) {
+				t.Target = nil
+				t.ChangeTarget = &model.ChangeTarget{Kind: testTargetKind, Spec: json.RawMessage(`{"workspace":"w1"}`)}
+			},
+			want: "it names another workspace"},
+		{name: "declared push set", id: "35", proposedBy: "9",
+			edit: func(t *model.Task) { t.TemplateID = pushTmplID },
+			want: "declared push set"},
+		{name: "ungranted auto-merge", id: "36", proposedBy: "9",
+			edit: func(t *model.Task) { t.AutoMerge = true },
+			want: "auto-merge"},
+		{name: "keep_running filed by a person", id: "37",
+			edit: func(t *model.Task) { t.KeepRunning = true },
+			want: "keep_running"},
 		{name: "person-only grant filed by a person", id: "25",
 			grants: []string{"api:merge:force"}, want: "which only a person may grant"},
 		{name: "requires_person grant filed by a person", id: "26",
@@ -202,5 +233,86 @@ func TestAgentApprovalRailAdmitsUnrelatedTasksUnderTasksAdmin(t *testing.T) {
 	railTask(t, client, "34", "2", nil)
 	if code, body := approveAsAgent(t, srv, "8", "34"); code != http.StatusOK {
 		t.Errorf("an unrelated tasks:admin approving task 1's grandchild: %d %s, want 200", code, body)
+	}
+}
+
+// Neither direct POST /api/tasks filing (approved: true, or filing unapproved
+// and then calling approve) nor POST /api/tasks/{id}/run-now (which approves
+// unapproved tasks in Client.RunNow) may step around agentApprovalRail; once a
+// person has approved a task, run-now still jumps it ahead of the queue.
+func TestAgentApprovalRailCoversDirectAPIFilingAndRunNow(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	if _, err := client.AddTargetRepo(ctx, "acme/widgets"); err != nil {
+		t.Fatal(err)
+	}
+	seedAPITask(t, client, "100", "acme/widgets",
+		"api:tasks:write", "api:tasks:admin", "api:dispatch-control")
+	cfgRepo := model.ConfigRepo()
+	if err := client.Store.UpdateTask(ctx, "100", func(tk *model.Task) error {
+		tk.Writes = []model.WriteTarget{{Repo: cfgRepo}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Direct self-approval at creation is refused even under api:tasks:admin.
+	for _, body := range []string{
+		`{"title":"self-approved","repo":"acme/widgets","approved":true}`,
+		`{"title":"self-approved-case","repo":"acme/widgets","Approved":true}`,
+	} {
+		code, resp := asAgent(t, srv, "100", http.MethodPost, "/api/tasks", body, "self-approving at creation")
+		if code != http.StatusForbidden || !strings.Contains(resp, "never approves its own proposals") {
+			t.Errorf("POST /api/tasks with %s: got %d %s, want 403 refusing self-approval", body, code, resp)
+		}
+	}
+
+	// 2. Two-step filing over POST /api/tasks records task 100 on Origin rather
+	//    than LinkProposedBy; neither approve nor run-now may approve it or its
+	//    descendants.
+	code, resp := asAgent(t, srv, "100", http.MethodPost, "/api/tasks",
+		`{"title":"filed-over-api","repo":"acme/widgets"}`, "filing unapproved")
+	if code != http.StatusCreated && code != http.StatusOK {
+		t.Fatalf("POST /api/tasks unapproved: %d %s", code, resp)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(resp), &created); err != nil || created.ID == "" {
+		t.Fatalf("decoding created task: %v (%s)", err, resp)
+	}
+	wantProposed(t, client, created.ID)
+
+	if code, body := approveAsAgent(t, srv, "100", created.ID); code != http.StatusForbidden || !strings.Contains(body, "it proposed it") {
+		t.Errorf("approving own POST /api/tasks filing %s: %d %s, want 403", created.ID, code, body)
+	}
+	if code, body := asAgent(t, srv, "100", http.MethodPost, "/api/tasks/"+created.ID+"/run-now", `{}`, "run-now own filing"); code != http.StatusForbidden || !strings.Contains(body, "it proposed it") {
+		t.Errorf("run-now on own unapproved filing %s: %d %s, want 403", created.ID, code, body)
+	}
+	wantProposed(t, client, created.ID)
+
+	railTask(t, client, "101", created.ID, nil)
+	if code, body := approveAsAgent(t, srv, "100", "101"); code != http.StatusForbidden || !strings.Contains(body, "100 → "+created.ID) {
+		t.Errorf("approving descendant of POST /api/tasks filing: %d %s, want 403 naming 100 → %s", code, body, created.ID)
+	}
+
+	// 3. run-now also refuses unapproved tasks held for a person, even when the
+	//    acting task writes grain/config (as the director does).
+	seedAPITask(t, client, "109", "acme/widgets")
+	railTask(t, client, "102", "109", func(tk *model.Task) {
+		tk.Target = &cfgRepo
+	})
+	if code, body := asAgent(t, srv, "100", http.MethodPost, "/api/tasks/102/run-now", `{}`, "run-now config proposal"); code != http.StatusForbidden || !strings.Contains(body, "held for a person") {
+		t.Errorf("run-now on unapproved config-repo proposal: %d %s, want 403 saying held for a person", code, body)
+	}
+	wantProposed(t, client, "102")
+
+	// 4. Once a person approves task 100's filing, run-now under dispatch:write
+	//    may jump it ahead of the queue.
+	if rec := do(t, srv, http.MethodPost, "/api/tasks/"+created.ID+"/approve", ""); rec.Code != http.StatusOK {
+		t.Fatalf("a person approving %s: %d %s", created.ID, rec.Code, rec.Body.String())
+	}
+	if code, body := asAgent(t, srv, "100", http.MethodPost, "/api/tasks/"+created.ID+"/run-now", `{}`, "jump approved task"); code != http.StatusOK {
+		t.Errorf("run-now on already-approved task %s: %d %s, want 200", created.ID, code, body)
 	}
 }

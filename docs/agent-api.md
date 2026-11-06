@@ -639,21 +639,27 @@ Actions job's log when given a `gha:` run id. `grain ci wait` and
   way whether it is sent through the agent API, `grain task message` or
   `grain mcpserver`'s `message_task`.
 - **Approving its own work, or a person's.** Even holding a person's
-  `api:tasks:admin`, a run can't approve (`POST /api/tasks/{id}/approve`,
-  `api_approve_task`):
-  - a task in its own proposal lineage: one it proposed, or one proposed
-    by any task down that `LinkProposedBy` chain, however many hops;
+  `api:tasks:admin` or `api:dispatch-control` (`dispatch:write`), a run
+  always files work unapproved (`approved: true` is refused) and can't
+  approve (`POST /api/tasks/{id}/approve`, `api_approve_task`, or
+  `POST /api/tasks/{id}/run-now` on an unapproved task):
+  - a task in its own proposal lineage: one it proposed or filed over the
+    API, or one proposed by any task down that chain, however many hops;
   - a task held for a person: one filed with `hold_for_approval`
-    (`held-for-approval` tag) or targeting or writing `grain/config`; one
-    holding a grant `settings/capabilities.yml` marks `requires_person`,
+    (`held-for-approval` tag), targeting or writing `grain/config`, or
+    targeting a change target that requires a person's approval; one
+    carrying a repository-declared `push:` set or ungranted `autoMerge`;
+    one holding a grant `settings/capabilities.yml` marks `requires_person`,
     or a person-only grant (a dangerous api scope, a capability method
     only a person may grant, `durable`, `priority-dispatch`); or one
-    asking for a capability, write target or read its own proposer doesn't
-    hold, or for `keep_running` or a priority above its proposer's.
+    setting `keep_running`, or asking for a capability, write target, read
+    or priority its own proposer doesn't hold.
 
-  The refusal is a 403 naming the chain or the holds. Any other task,
-  outside the run's lineage and held for nobody, is still approved under
-  `tasks:admin`. A person approves either kind as before
+  The refusal is a 403 naming the chain or the holds. Once a task is
+  approved, `run-now` still jumps it ahead of the queue under
+  `dispatch:write`, and any other unapproved task outside the run's lineage
+  and held for nobody is still approved under `tasks:admin`. A person
+  approves either kind as before
   (design/spec/director/director-capabilities.spec.md §3.3 item 3, G8).
 - **Upgrade holds.** A run honours them. It can't lift a dispatch pause
   someone else took. It can't upgrade, restart or reboot while an upgrade
