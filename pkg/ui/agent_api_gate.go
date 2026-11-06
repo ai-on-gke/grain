@@ -893,79 +893,221 @@ func gateKey(key string) string {
 	return b.String()
 }
 
-func patchTouchesTaskGrants(body []byte) bool {
-	if len(body) == 0 {
-		return false
-	}
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(body, &fields) != nil {
-		return false
-	}
-	for key, raw := range fields {
-		trimmed := strings.TrimSpace(string(raw))
-		if trimmed == "" || trimmed == "null" {
-			continue
-		}
-		lower := gateKey(key)
-		// "priority" is the numeric dispatch priority unless it is a
-		// boolean, which UpdateTaskRequest reads as priorityDispatch:
-		// the priority-dispatch grant, under either spelling.
-		if lower == "priority" {
-			var on bool
-			if json.Unmarshal(raw, &on) == nil {
-				return true
-			}
-			continue
-		}
-		if strings.Contains(lower, "capabilit") || lower == "grants" ||
-			lower == "keeprunning" || lower == "keep_running" ||
-			lower == "prioritydispatch" || lower == "priority_dispatch" {
-			return true
-		}
-	}
-	return false
+type jsonField struct {
+	key string
+	raw json.RawMessage
 }
 
-func addedGrantsInBody(pattern string, body []byte, stored map[string][]string, normalize func(string) (string, error)) []string {
+// orderedJSONFields reads a top-level JSON object's fields in wire order,
+// keeping duplicate keys rather than letting a second key overwrite the
+// first in a map, and so reporting the first refused key deterministically.
+func orderedJSONFields(body []byte) ([]jsonField, bool) {
+	if len(body) == 0 {
+		return nil, false
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	tok, err := dec.Token()
+	if err != nil || tok != json.Delim('{') {
+		return nil, false
+	}
+	var out []jsonField
+	for dec.More() {
+		ktok, err := dec.Token()
+		key, ok := ktok.(string)
+		if err != nil || !ok {
+			return nil, false
+		}
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return nil, false
+		}
+		out = append(out, jsonField{key: key, raw: raw})
+	}
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
+		return nil, false
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, false
+	}
+	return out, true
+}
+
+func fieldTouchesTaskGrants(key string, raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return false
+	}
+	lower := gateKey(key)
+	// "priority" is the numeric dispatch priority unless it is a
+	// boolean, which UpdateTaskRequest reads as priorityDispatch:
+	// the priority-dispatch grant, under either spelling.
+	if lower == "priority" {
+		var on bool
+		return json.Unmarshal(raw, &on) == nil
+	}
+	return strings.Contains(lower, "capabilit") || lower == "grants" ||
+		lower == "keeprunning" || lower == "keep_running" ||
+		lower == "prioritydispatch" || lower == "priority_dispatch"
+}
+
+func firstTaskGrantKeyInPatch(body []byte) string {
+	fields, ok := orderedJSONFields(body)
+	if !ok {
+		return ""
+	}
+	for _, f := range fields {
+		if fieldTouchesTaskGrants(f.key, f.raw) {
+			return f.key
+		}
+	}
+	return ""
+}
+
+func patchTouchesTaskGrants(body []byte) bool {
+	return firstTaskGrantKeyInPatch(body) != ""
+}
+
+type grantField struct {
+	key  string
+	name string
+}
+
+func grantNamesFromField(pattern string, f jsonField, stored map[string][]string, normalize func(string) (string, error)) []string {
+	lower := gateKey(f.key)
+	if lower == "priority" || lower == "prioritydispatch" || lower == "priority_dispatch" {
+		var on bool
+		if json.Unmarshal(f.raw, &on) == nil && (on || pattern == "PATCH /api/tasks/{id}") {
+			return []string{model.PriorityDispatchCapability}
+		}
+		return nil
+	}
+	if lower == "keeprunning" || lower == "keep_running" {
+		var on bool
+		if json.Unmarshal(f.raw, &on) == nil && (on || pattern == "PATCH /api/tasks/{id}") {
+			return []string{model.DurableCapability}
+		}
+		return nil
+	}
+	if !strings.Contains(lower, "capabilit") && !strings.EqualFold(f.key, "grants") {
+		return nil
+	}
+	existing := stored[lower]
+	var names []string
+	for _, name := range grantNamesIn(f.raw) {
+		if grantAlreadyStored(existing, name, normalize) {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
+func firstMatchingJSONKey(fields []jsonField, candidates ...string) string {
+	for _, f := range fields {
+		trimmed := strings.TrimSpace(string(f.raw))
+		if trimmed == "" || trimmed == "null" || trimmed == `""` {
+			continue
+		}
+		lower := gateKey(f.key)
+		for _, want := range candidates {
+			if lower == gateKey(want) {
+				return f.key
+			}
+		}
+	}
+	if len(candidates) > 0 {
+		return candidates[0]
+	}
+	return "capabilities"
+}
+
+func addedGrantFieldsInBody(pattern string, body []byte, stored map[string][]string, normalize func(string) (string, error)) []grantField {
 	if len(body) == 0 {
 		return nil
 	}
 	if read, ok := grantBodies[pattern]; ok {
-		return read(body)
+		names := read(body)
+		if len(names) == 0 {
+			return nil
+		}
+		fields, _ := orderedJSONFields(body)
+		key := "capabilities"
+		switch pattern {
+		case "POST /api/tasks/{id}/capabilities":
+			key = firstMatchingJSONKey(fields, "id", "grant", "capability", "replace")
+		case "PUT /api/api-scope-sets":
+			key = firstMatchingJSONKey(fields, "set", "scopes")
+		case "POST /api/external-agents/tokens":
+			key = firstMatchingJSONKey(fields, "scopeSet", "scopes")
+		}
+		out := make([]grantField, 0, len(names))
+		for _, name := range names {
+			if strings.TrimSpace(name) != "" {
+				out = append(out, grantField{key: key, name: name})
+			}
+		}
+		return out
 	}
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(body, &fields) != nil {
+	fields, ok := orderedJSONFields(body)
+	if !ok {
 		return nil
 	}
-	var names []string
-	for key, raw := range fields {
-		lower := gateKey(key)
-		if lower == "priority" || lower == "prioritydispatch" || lower == "priority_dispatch" {
-			var on bool
-			if json.Unmarshal(raw, &on) == nil && (on || pattern == "PATCH /api/tasks/{id}") {
-				names = append(names, model.PriorityDispatchCapability)
-			}
-			continue
-		}
-		if lower == "keeprunning" || lower == "keep_running" {
-			var on bool
-			if json.Unmarshal(raw, &on) == nil && (on || pattern == "PATCH /api/tasks/{id}") {
-				names = append(names, model.DurableCapability)
-			}
-			continue
-		}
-		if !strings.Contains(lower, "capabilit") && !strings.EqualFold(key, "grants") {
-			continue
-		}
-		existing := stored[lower]
-		for _, name := range grantNamesIn(raw) {
-			if grantAlreadyStored(existing, name, normalize) {
-				continue
-			}
-			names = append(names, name)
+	var out []grantField
+	for _, f := range fields {
+		for _, name := range grantNamesFromField(pattern, f, stored, normalize) {
+			out = append(out, grantField{key: f.key, name: name})
 		}
 	}
+	return out
+}
+
+func addedGrantsInBody(pattern string, body []byte, stored map[string][]string, normalize func(string) (string, error)) []string {
+	gfs := addedGrantFieldsInBody(pattern, body, stored, normalize)
+	if len(gfs) == 0 {
+		return nil
+	}
+	names := make([]string, len(gfs))
+	for i, gf := range gfs {
+		names[i] = gf.name
+	}
 	return names
+}
+
+// grantNamesPersonScopeSet reports whether name is an api grant of a scope
+// set marked Person (directly or through Includes).
+func grantNamesPersonScopeSet(name string) bool {
+	g, ok, err := ParseAPIGrant(name)
+	if !ok || err != nil {
+		return false
+	}
+	if g.RequiresPerson {
+		return true
+	}
+	if g.Preset == "" {
+		return false
+	}
+	seen := map[string]bool{}
+	var walk func(setName string) bool
+	walk = func(setName string) bool {
+		if seen[setName] {
+			return false
+		}
+		seen[setName] = true
+		set, ok := model.APIScopeSetNamed(setName)
+		if !ok {
+			return false
+		}
+		if set.Person {
+			return true
+		}
+		for _, inc := range set.Includes {
+			if walk(strings.TrimSpace(inc)) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(g.Preset)
 }
 
 func grantAlreadyStored(existing []string, name string, normalize func(string) (string, error)) bool {
@@ -1050,6 +1192,46 @@ func (s *Server) networkAccessWidens(ctx context.Context, limit model.NetworkAcc
 	return effective(limit) == model.NetworkNone && effective(model.NetworkAccess(access)) != model.NetworkNone
 }
 
+// filingEscalationOpts distinguishes the three callers sharing
+// filingEscalation: an in-grain task's agent (acting != nil), an external
+// agent credential (external != nil), or a verified person with a limited
+// access role (role != nil).
+type filingEscalationOpts struct {
+	acting    *model.Task
+	external  *model.ExternalAgentToken
+	role      *accessRole
+	stored    map[string][]string
+	normalize func(string) (string, error)
+}
+
+func (s *Server) gateTemplate(ctx context.Context, id string) *model.Template {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil
+	}
+	if model.IsSystemTemplateID(id) {
+		if tmpl := model.FileableSystemTemplate(id); tmpl != nil {
+			return tmpl
+		}
+		return model.SystemTemplate(id, model.RepoRef{})
+	}
+	if s.tasks == nil || s.tasks.Store == nil {
+		return nil
+	}
+	tmpl, err := s.tasks.Store.GetTemplate(ctx, id)
+	if err != nil {
+		return nil
+	}
+	return tmpl
+}
+
+func (s *Server) normalizeCapFn() func(string) (string, error) {
+	if s.tasks == nil {
+		return nil
+	}
+	return s.tasks.normalizeCapabilityID
+}
+
 // agentFilingEscalation refuses the rest of what a task, schedule or
 // template body can hand out beyond its capabilities (agentGrantEscalation):
 // push or read access to a repository, auto-merge (and Submit, which
@@ -1062,20 +1244,50 @@ func (s *Server) networkAccessWidens(ctx context.Context, limit model.NetworkAcc
 // case, and so does this.
 func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, set APIGrantSet,
 	pattern string, scope APIScope, repo string, body []byte) error {
-	if pattern == "POST /api/tasks/{id}/submit" {
-		return errAgentAutoMerge
+	var held []string
+	if acting != nil {
+		held = grantNames(acting.Grants)
 	}
-	if personOnlyChangeReview[pattern] {
-		return errAgentChangeReview
+	allowedRepo := func(need APIScope, r string) bool {
+		if need == "tasks:write" {
+			return agentMayWrite(acting, r)
+		}
+		return agentMayRead(acting, r)
 	}
-	if len(body) == 0 {
-		return nil
+	return s.filingEscalation(ctx, held, set, allowedRepo, pattern, scope, repo, body, filingEscalationOpts{acting: acting})
+}
+
+// filingEscalation is the shared body check across agentFilingEscalation,
+// externalAgentFilingEscalation and authorizeRoleCall: every task, template,
+// schedule, suite or session key that widens authority beyond held and set.
+func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGrantSet,
+	allowedRepo func(APIScope, string) bool, pattern string, scope APIScope, repo string,
+	body []byte, opts filingEscalationOpts) error {
+	if opts.role == nil {
+		if pattern == "POST /api/tasks/{id}/submit" {
+			return errAgentAutoMerge
+		}
+		if personOnlyChangeReview[pattern] {
+			return errAgentChangeReview
+		}
 	}
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(body, &fields) != nil {
-		return nil
+	fields, ok := orderedJSONFields(body)
+	if !ok && len(body) > 0 {
+		fields = nil
 	}
-	for key, raw := range fields {
+	for _, f := range fields {
+		key, raw := f.key, f.raw
+		if opts.role != nil {
+			if pattern == "PATCH /api/tasks/{id}" && fieldTouchesTaskGrants(key, raw) && !set.Allows("capabilities:admin", repo) {
+				return fmt.Errorf("%s cannot set %s: %s with capabilities needs scope capabilities:admin",
+					opts.role.label(), key, pattern)
+			}
+			for _, name := range grantNamesFromField(pattern, f, opts.stored, opts.normalize) {
+				if err := roleGrantRefusal(opts.role, key, name, opts.normalize); err != nil {
+					return err
+				}
+			}
+		}
 		switch gateKey(key) {
 		case "writes":
 			var targets []WriteTarget
@@ -1083,8 +1295,15 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 				continue // the handler refuses a body it cannot read
 			}
 			for _, t := range targets {
-				if !agentMayWrite(acting, t.Repo) {
-					return fmt.Errorf("an agent cannot grant push access to %s, which its own task cannot push to", t.Repo)
+				if !allowedRepo("tasks:write", t.Repo) {
+					switch {
+					case opts.role != nil:
+						return fmt.Errorf("%s cannot set %s: role does not hold tasks:write on %s", opts.role.label(), key, t.Repo)
+					case opts.external != nil:
+						return fmt.Errorf("external agent %q cannot grant push access to %s, which its credential does not cover", opts.external.Name, t.Repo)
+					default:
+						return fmt.Errorf("an agent cannot grant push access to %s, which its own task cannot push to", t.Repo)
+					}
 				}
 			}
 		case "reads":
@@ -1093,81 +1312,237 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 				continue
 			}
 			for _, r := range repos {
-				if !agentMayRead(acting, r) {
-					return fmt.Errorf("an agent cannot grant read access to %s, which its own task cannot read", r)
+				if !allowedRepo("tasks:read", r) {
+					switch {
+					case opts.role != nil:
+						return fmt.Errorf("%s cannot set %s: role does not hold tasks:read on %s", opts.role.label(), key, r)
+					case opts.external != nil:
+						return fmt.Errorf("external agent %q cannot grant read access to %s, which its credential does not cover", opts.external.Name, r)
+					default:
+						return fmt.Errorf("an agent cannot grant read access to %s, which its own task cannot read", r)
+					}
 				}
 			}
 		case "designs", "context":
 			for _, r := range contextReposInBody(gateKey(key), raw) {
-				if !agentMayRead(acting, r) {
-					return fmt.Errorf("an agent cannot reference committed context in %s, which its own task cannot read", r)
+				if !allowedRepo("tasks:read", r) {
+					switch {
+					case opts.role != nil:
+						return fmt.Errorf("%s cannot set %s: role does not hold tasks:read on %s", opts.role.label(), key, r)
+					case opts.external != nil:
+						return fmt.Errorf("external agent %q cannot reference committed context in %s, which its credential does not cover", opts.external.Name, r)
+					default:
+						return fmt.Errorf("an agent cannot reference committed context in %s, which its own task cannot read", r)
+					}
 				}
 			}
 		case "readsall", "reads_all":
 			// A console session's opt-in to reading every repository
 			// this deployment works in (model.ConsoleSessionAutoReads):
-			// the same grant as naming each of them in reads, so held to
-			// the same rule -- an agent may turn it on only when its own
-			// task already reads every one of them.
+			// the same grant as naming each of them in reads.
 			var on bool
-			if json.Unmarshal(raw, &on) == nil && on && !s.agentMayReadAllRepos(ctx, acting) {
-				return errors.New("an agent cannot turn on readsAll, which its own task does not have")
+			if json.Unmarshal(raw, &on) != nil || !on {
+				continue
+			}
+			switch {
+			case opts.role != nil:
+				if !set.Allows("tasks:read", "") {
+					return fmt.Errorf("%s cannot set %s: reading every repository requires tasks:read without repository limits", opts.role.label(), key)
+				}
+			case opts.external != nil:
+				if !set.Allows(scope, "") {
+					return fmt.Errorf("external agent %q cannot turn on readsAll with repository limits", opts.external.Name)
+				}
+			default:
+				if !s.agentMayReadAllRepos(ctx, opts.acting) {
+					return errors.New("an agent cannot turn on readsAll, which its own task does not have")
+				}
 			}
 		case "automerge":
 			var on bool
 			if json.Unmarshal(raw, &on) == nil && on {
+				if opts.role != nil {
+					return fmt.Errorf("%s cannot set %s: turning on auto-merge requires an unlimited role (grain/operator)", opts.role.label(), key)
+				}
 				return errAgentAutoMerge
 			}
 		case "autoapproveproposals", "auto_approve_proposals", "tasksapproved":
 			var on bool
-			if json.Unmarshal(raw, &on) == nil && on && !s.agentMayAutoApproveProposals(ctx, acting) {
-				return errors.New("an agent cannot turn on autoApproveProposals, which its own task does not have")
+			if json.Unmarshal(raw, &on) != nil || !on {
+				continue
+			}
+			switch {
+			case opts.role != nil:
+				if !set.Allows("tasks:admin", repo) {
+					return fmt.Errorf("%s cannot set %s: approving proposals needs tasks:admin", opts.role.label(), key)
+				}
+			case opts.external != nil:
+				return errors.New("an external agent cannot turn on autoApproveProposals")
+			default:
+				if !s.agentMayAutoApproveProposals(ctx, opts.acting) {
+					return errors.New("an agent cannot turn on autoApproveProposals, which its own task does not have")
+				}
 			}
 		case "networkaccess", "network_access":
 			var access string
-			if json.Unmarshal(raw, &access) == nil && s.networkAccessWidens(ctx, acting.NetworkAccess, access) {
-				return errors.New("an agent with networkAccess \"none\" cannot widen networkAccess")
+			if json.Unmarshal(raw, &access) != nil {
+				continue
+			}
+			switch {
+			case opts.role != nil:
+				if s.networkAccessWidens(ctx, "", access) {
+					return fmt.Errorf("%s cannot set %s: widening networkAccess past this deployment's default requires an unlimited role (grain/operator)", opts.role.label(), key)
+				}
+			case opts.external != nil:
+				if s.networkAccessWidens(ctx, "", access) {
+					return errors.New("an external agent cannot widen networkAccess past this deployment's default of \"none\"")
+				}
+			default:
+				if s.networkAccessWidens(ctx, opts.acting.NetworkAccess, access) {
+					return errors.New("an agent with networkAccess \"none\" cannot widen networkAccess")
+				}
+			}
+		case "keeprunning", "keep_running":
+			var on bool
+			if json.Unmarshal(raw, &on) != nil || !on {
+				continue
+			}
+			switch {
+			case opts.role != nil:
+				return fmt.Errorf("%s cannot set %s: keepRunning requires an unlimited role (grain/operator)", opts.role.label(), key)
+			case opts.external != nil:
+				return errors.New("an external agent cannot turn on keepRunning")
+			}
+		case "priority":
+			var on bool
+			if json.Unmarshal(raw, &on) == nil {
+				continue
+			}
+			if opts.acting != nil {
+				continue
+			}
+			if p, err := decodeTaskPriority(raw); err == nil && p > model.DefaultTaskPriority && !set.Allows("tasks:admin", repo) {
+				if opts.role != nil {
+					return fmt.Errorf("%s cannot set %s above %d without tasks:admin", opts.role.label(), key, model.DefaultTaskPriority)
+				}
+				return fmt.Errorf("an external agent cannot set priority above %d without tasks:admin", model.DefaultTaskPriority)
+			}
+		case "fixesbasebranch", "fixes_base_branch":
+			if opts.acting != nil {
+				continue
+			}
+			var on bool
+			if json.Unmarshal(raw, &on) == nil && on && !set.Allows("tasks:admin", repo) {
+				if opts.role != nil {
+					return fmt.Errorf("%s cannot set %s without tasks:admin", opts.role.label(), key)
+				}
+				return errors.New("an external agent cannot mark a task fixesBaseBranch without tasks:admin")
 			}
 		case "approved", "interactive":
 			var on bool
 			if json.Unmarshal(raw, &on) == nil && on && !set.Allows("tasks:admin", repo) {
+				if opts.role != nil {
+					return fmt.Errorf("%s cannot set %s: approving work needs tasks:admin", opts.role.label(), key)
+				}
 				return errors.New("an agent files work unapproved: approving it needs tasks:admin")
 			}
 		case "owner":
-			if hasTaskOwnerField(pattern, raw) {
+			if opts.role == nil && hasTaskOwnerField(pattern, raw) {
 				return errAgentTaskOwner
 			}
-		case "author", "proposedby":
-			var who string
-			if json.Unmarshal(raw, &who) == nil && strings.TrimSpace(who) != "" {
-				return fmt.Errorf("an agent cannot name somebody else as the %s of work it files", key)
+		case "author", "creator", "proposedby":
+			lower := gateKey(key)
+			if lower == "creator" && opts.acting != nil {
+				continue
 			}
+			var who string
+			if json.Unmarshal(raw, &who) != nil || strings.TrimSpace(who) == "" {
+				continue
+			}
+			if opts.role != nil {
+				if lower == "proposedby" {
+					return fmt.Errorf("%s cannot set %s: proposedBy is daemon-internal", opts.role.label(), key)
+				}
+				if !strings.EqualFold(strings.TrimSpace(who), opts.role.Who) {
+					return fmt.Errorf("%s cannot set %s to %q: a limited role files work only as themselves", opts.role.label(), key, strings.TrimSpace(who))
+				}
+				continue
+			}
+			return fmt.Errorf("an agent cannot name somebody else as the %s of work it files", key)
 		case "proposalkey":
 			var k string
 			if json.Unmarshal(raw, &k) == nil && strings.TrimSpace(k) != "" {
+				if opts.role != nil {
+					return fmt.Errorf("%s cannot set %s directly", opts.role.label(), key)
+				}
 				return errors.New("an agent cannot set proposalKey directly")
 			}
 		case "reviewers":
-			if hasReviewersField(pattern, raw) {
+			if opts.role == nil && hasReviewersField(pattern, raw) {
 				return errAgentReviewers
+			}
+		case "template":
+			if pattern != "POST /api/tasks/from-template" {
+				continue
+			}
+			var stem string
+			if json.Unmarshal(raw, &stem) != nil || strings.TrimSpace(stem) == "" {
+				continue
+			}
+			parsedRepo, err := model.ParseRepo(strings.TrimSpace(repo))
+			if err != nil {
+				continue
+			}
+			fullID, err := FromTemplateID(parsedRepo, stem)
+			if err != nil {
+				continue
+			}
+			if tmpl := s.gateTemplate(ctx, fullID); tmpl != nil {
+				if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
+					return err
+				}
 			}
 		case "templateid":
 			var id string
 			if json.Unmarshal(raw, &id) != nil || strings.TrimSpace(id) == "" {
 				continue
 			}
-			tmpl, err := s.tasks.Store.GetTemplate(ctx, strings.TrimSpace(id))
-			if err != nil || tmpl == nil {
+			tmpl := s.gateTemplate(ctx, id)
+			if tmpl == nil {
 				continue // the handler says it is not there
 			}
-			if err := model.TemplateWithinTask(*acting, *tmpl); err != nil {
+			if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
 				return err
 			}
-			if tmpl.AutoMerge {
-				return fmt.Errorf("template %s is auto-merge: %w", tmpl.ID, errAgentAutoMerge)
+		case "templateids":
+			if opts.role == nil && opts.external == nil {
+				continue
 			}
-			if tmpl.Target != nil && !set.Allows(scope, tmpl.Target.String()) {
-				return fmt.Errorf("template %s files against %s, which the agent's %s does not reach", tmpl.ID, tmpl.Target, scope)
+			var ids []string
+			if json.Unmarshal(raw, &ids) != nil {
+				continue
+			}
+			for _, id := range ids {
+				if tmpl := s.gateTemplate(ctx, id); tmpl != nil {
+					if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
+						return err
+					}
+				}
+			}
+		case "suiteid":
+			if opts.role == nil || s.tasks == nil || s.tasks.Store == nil {
+				continue
+			}
+			var id string
+			if json.Unmarshal(raw, &id) != nil || strings.TrimSpace(id) == "" {
+				continue
+			}
+			suite, err := s.tasks.Store.GetSuite(ctx, strings.TrimSpace(id))
+			if err != nil || suite == nil {
+				continue
+			}
+			if err := s.checkRoleSuite(ctx, *suite, key, held, set, allowedRepo, scope, repo, opts); err != nil {
+				return err
 			}
 		case "reviewtemplateid":
 			// The template a task's review is filed from once its work
@@ -1181,16 +1556,33 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 			if json.Unmarshal(raw, &id) != nil || strings.TrimSpace(id) == "" {
 				continue
 			}
-			tmpl, err := s.tasks.Store.GetTemplate(ctx, strings.TrimSpace(id))
-			if err != nil || tmpl == nil {
+			tmpl := s.gateTemplate(ctx, id)
+			if tmpl == nil {
 				continue // the handler says it is not there
 			}
 			var target *model.RepoRef
 			if r, err := model.ParseRepo(repo); err == nil {
 				target = &r
 			}
-			if err := model.ReviewTemplateWithinTask(*acting, *tmpl, target); err != nil {
-				return err
+			switch {
+			case opts.role != nil:
+				if target != nil && tmpl.ID == model.DefaultReviewTemplateID(*target) {
+					continue
+				}
+				if err := roleTemplateWithin(opts.role, key, *tmpl, allowedRepo, opts.normalize); err != nil {
+					return err
+				}
+			case opts.external != nil:
+				if target != nil && tmpl.ID == model.DefaultReviewTemplateID(*target) {
+					continue
+				}
+				if err := externalTemplateWithin(opts.external, held, *tmpl, func(r string) bool { return allowedRepo(scope, r) }); err != nil {
+					return err
+				}
+			default:
+				if err := model.ReviewTemplateWithinTask(*opts.acting, *tmpl, target); err != nil {
+					return err
+				}
 			}
 		case "repo":
 			// Moving work to another repository (PATCH /api/tasks/{id}
@@ -1200,7 +1592,120 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 				continue
 			}
 			if !set.Allows(scope, strings.TrimSpace(to)) {
-				return fmt.Errorf("the agent's %s does not reach %s", scope, strings.TrimSpace(to))
+				switch {
+				case opts.role != nil:
+					return fmt.Errorf("%s cannot set %s: role's %s does not reach %s", opts.role.label(), key, scope, strings.TrimSpace(to))
+				case opts.external != nil:
+					return fmt.Errorf("the external agent's %s does not reach %s", scope, strings.TrimSpace(to))
+				default:
+					return fmt.Errorf("the agent's %s does not reach %s", scope, strings.TrimSpace(to))
+				}
+			}
+		}
+	}
+	if opts.role != nil {
+		if pattern == "POST /api/tasks/{id}/submit" {
+			return fmt.Errorf("%s cannot submit work (autoMerge): letting a change merge unreviewed requires an unlimited role (grain/operator)", opts.role.label())
+		}
+		if pattern == "POST /api/suites" && !bodyExplicitlyDisablesAutoMerge(fields) {
+			return fmt.Errorf("%s cannot set autoMerge: suites default autoMerge to true, which requires an unlimited role (pass \"autoMerge\": false)", opts.role.label())
+		}
+	}
+	return nil
+}
+
+func bodyExplicitlyDisablesAutoMerge(fields []jsonField) bool {
+	disabled := false
+	for _, f := range fields {
+		if gateKey(f.key) != "automerge" {
+			continue
+		}
+		var on *bool
+		if json.Unmarshal(f.raw, &on) == nil && on != nil {
+			disabled = !*on
+		} else {
+			disabled = false
+		}
+	}
+	return disabled
+}
+
+func (s *Server) checkFilingTemplate(ctx context.Context, tmpl model.Template, key string, held []string, set APIGrantSet,
+	allowedRepo func(APIScope, string) bool, scope APIScope, repo string, opts filingEscalationOpts) error {
+	switch {
+	case opts.role != nil:
+		if err := roleTemplateWithin(opts.role, key, tmpl, allowedRepo, opts.normalize); err != nil {
+			return err
+		}
+		if tmpl.AutoMerge {
+			return fmt.Errorf("%s cannot set %s: template %s sets autoMerge, which requires an unlimited role (grain/operator)", opts.role.label(), key, tmpl.ID)
+		}
+		if tmpl.KeepRunning {
+			return fmt.Errorf("%s cannot set %s: template %s sets keepRunning, which requires an unlimited role (grain/operator)", opts.role.label(), key, tmpl.ID)
+		}
+		if tmpl.Interactive && !set.Allows("tasks:admin", repo) {
+			return fmt.Errorf("%s cannot set %s: template %s is interactive, which needs tasks:admin", opts.role.label(), key, tmpl.ID)
+		}
+		if tmpl.Priority != nil && *tmpl.Priority > model.DefaultTaskPriority && !set.Allows("tasks:admin", repo) {
+			return fmt.Errorf("%s cannot set %s: template %s sets priority %d (above %d), which needs tasks:admin", opts.role.label(), key, tmpl.ID, *tmpl.Priority, model.DefaultTaskPriority)
+		}
+		if s.networkAccessWidens(ctx, "", string(tmpl.NetworkAccess)) {
+			return fmt.Errorf("%s cannot set %s: template %s widens networkAccess past this deployment's default", opts.role.label(), key, tmpl.ID)
+		}
+		if tmpl.Target != nil && !set.Allows("tasks:write", tmpl.Target.String()) {
+			return fmt.Errorf("%s cannot set %s: template %s targets %s, which role's tasks:write does not reach", opts.role.label(), key, tmpl.ID, tmpl.Target)
+		}
+	case opts.external != nil:
+		if err := externalTemplateWithin(opts.external, held, tmpl, func(r string) bool { return allowedRepo(scope, r) }); err != nil {
+			return err
+		}
+		if tmpl.AutoMerge {
+			return fmt.Errorf("template %s is auto-merge: %w", tmpl.ID, errAgentAutoMerge)
+		}
+		if tmpl.KeepRunning {
+			return fmt.Errorf("template %s sets keepRunning, which an external agent cannot turn on", tmpl.ID)
+		}
+		if tmpl.Interactive && !set.Allows("tasks:admin", repo) {
+			return fmt.Errorf("template %s is interactive: approving it needs tasks:admin", tmpl.ID)
+		}
+		if tmpl.Priority != nil && *tmpl.Priority > model.DefaultTaskPriority && !set.Allows("tasks:admin", repo) {
+			return fmt.Errorf("template %s sets priority %d (above %d), which needs tasks:admin", tmpl.ID, *tmpl.Priority, model.DefaultTaskPriority)
+		}
+		if s.networkAccessWidens(ctx, "", string(tmpl.NetworkAccess)) {
+			return fmt.Errorf("template %s widens networkAccess past this deployment's default of \"none\"", tmpl.ID)
+		}
+		if tmpl.Target != nil && !set.Allows(scope, tmpl.Target.String()) {
+			return fmt.Errorf("template %s files against %s, which the external agent's %s does not reach", tmpl.ID, tmpl.Target, scope)
+		}
+	default:
+		if err := model.TemplateWithinTask(*opts.acting, tmpl); err != nil {
+			return err
+		}
+		if tmpl.AutoMerge {
+			return fmt.Errorf("template %s is auto-merge: %w", tmpl.ID, errAgentAutoMerge)
+		}
+		if tmpl.Target != nil && !set.Allows(scope, tmpl.Target.String()) {
+			return fmt.Errorf("template %s files against %s, which the agent's %s does not reach", tmpl.ID, tmpl.Target, scope)
+		}
+	}
+	return nil
+}
+
+func (s *Server) checkRoleSuite(ctx context.Context, suite model.Suite, key string, held []string, set APIGrantSet,
+	allowedRepo func(APIScope, string) bool, scope APIScope, repo string, opts filingEscalationOpts) error {
+	if suite.AutoMerge {
+		return fmt.Errorf("%s cannot set %s: suite %s sets autoMerge, which requires an unlimited role (grain/operator)", opts.role.label(), key, suite.ID)
+	}
+	if suite.AutoApproveProposals && !set.Allows("tasks:admin", repo) {
+		return fmt.Errorf("%s cannot set %s: suite %s sets autoApproveProposals, which needs tasks:admin", opts.role.label(), key, suite.ID)
+	}
+	if !suite.RequireApproval && !set.Allows("tasks:admin", repo) {
+		return fmt.Errorf("%s cannot set %s: suite %s files approved tasks, which needs tasks:admin", opts.role.label(), key, suite.ID)
+	}
+	for _, it := range suite.Items {
+		if tmpl := s.gateTemplate(ctx, it.TemplateID); tmpl != nil {
+			if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
+				return err
 			}
 		}
 	}
@@ -2000,175 +2505,18 @@ func (s *Server) externalAgentRails(ctx context.Context, tok *model.ExternalAgen
 
 func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.ExternalAgentToken, held []string, set APIGrantSet,
 	pattern string, scope APIScope, repo string, body []byte) error {
-	if pattern == "POST /api/tasks/{id}/submit" {
-		return errAgentAutoMerge
-	}
-	if personOnlyChangeReview[pattern] {
-		return errAgentChangeReview
-	}
-	if len(body) == 0 {
-		return nil
-	}
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(body, &fields) != nil {
-		return nil
-	}
 	// A repository the work may push to or read is one the credential's
 	// own scope for this call reaches: tok.Repos alone is not enough,
 	// since a credential with no repos list may still hold its scopes
 	// only on named repositories (tasks:write@owner/name).
-	allowedRepo := func(r string) bool {
+	allowedRepo := func(_ APIScope, r string) bool {
 		r = strings.TrimSpace(r)
 		if r == "" {
 			return true
 		}
 		return set.Allows(scope, r)
 	}
-	for key, raw := range fields {
-		switch gateKey(key) {
-		case "writes":
-			var targets []WriteTarget
-			if json.Unmarshal(raw, &targets) != nil {
-				continue
-			}
-			for _, t := range targets {
-				if !allowedRepo(t.Repo) {
-					return fmt.Errorf("external agent %q cannot grant push access to %s, which its credential does not cover", tok.Name, t.Repo)
-				}
-			}
-		case "reads":
-			var repos []string
-			if json.Unmarshal(raw, &repos) != nil {
-				continue
-			}
-			for _, r := range repos {
-				if !allowedRepo(r) {
-					return fmt.Errorf("external agent %q cannot grant read access to %s, which its credential does not cover", tok.Name, r)
-				}
-			}
-		case "designs", "context":
-			for _, r := range contextReposInBody(gateKey(key), raw) {
-				if !allowedRepo(r) {
-					return fmt.Errorf("external agent %q cannot reference committed context in %s, which its credential does not cover", tok.Name, r)
-				}
-			}
-		case "automerge":
-			var on bool
-			if json.Unmarshal(raw, &on) == nil && on {
-				return errAgentAutoMerge
-			}
-		case "autoapproveproposals", "auto_approve_proposals", "tasksapproved":
-			var on bool
-			if json.Unmarshal(raw, &on) == nil && on {
-				return errors.New("an external agent cannot turn on autoApproveProposals")
-			}
-		case "networkaccess", "network_access":
-			// An external agent has no sandbox of its own, so the most
-			// it may hand out is the deployment's default.
-			var access string
-			if json.Unmarshal(raw, &access) == nil && s.networkAccessWidens(ctx, "", access) {
-				return errors.New("an external agent cannot widen networkAccess past this deployment's default of \"none\"")
-			}
-		case "keeprunning", "keep_running":
-			var on bool
-			if json.Unmarshal(raw, &on) == nil && on {
-				return errors.New("an external agent cannot turn on keepRunning")
-			}
-		case "priority":
-			var on bool
-			if json.Unmarshal(raw, &on) == nil {
-				continue
-			}
-			if p, err := decodeTaskPriority(raw); err == nil && p > model.DefaultTaskPriority && !set.Allows("tasks:admin", repo) {
-				return fmt.Errorf("an external agent cannot set priority above %d without tasks:admin", model.DefaultTaskPriority)
-			}
-		case "fixesbasebranch", "fixes_base_branch":
-			var on bool
-			if json.Unmarshal(raw, &on) == nil && on && !set.Allows("tasks:admin", repo) {
-				return errors.New("an external agent cannot mark a task fixesBaseBranch without tasks:admin")
-			}
-		case "approved", "interactive":
-			var on bool
-			if json.Unmarshal(raw, &on) == nil && on && !set.Allows("tasks:admin", repo) {
-				return errors.New("an agent files work unapproved: approving it needs tasks:admin")
-			}
-		case "owner":
-			if hasTaskOwnerField(pattern, raw) {
-				return errAgentTaskOwner
-			}
-		case "author", "creator", "proposedby":
-			var who string
-			if json.Unmarshal(raw, &who) == nil && strings.TrimSpace(who) != "" {
-				return fmt.Errorf("an agent cannot name somebody else as the %s of work it files", key)
-			}
-		case "proposalkey":
-			var k string
-			if json.Unmarshal(raw, &k) == nil && strings.TrimSpace(k) != "" {
-				return errors.New("an agent cannot set proposalKey directly")
-			}
-		case "reviewers":
-			if hasReviewersField(pattern, raw) {
-				return errAgentReviewers
-			}
-		case "templateid":
-			var id string
-			if json.Unmarshal(raw, &id) != nil || strings.TrimSpace(id) == "" {
-				continue
-			}
-			tmpl, err := s.tasks.Store.GetTemplate(ctx, strings.TrimSpace(id))
-			if err != nil || tmpl == nil {
-				continue
-			}
-			if err := externalTemplateWithin(tok, held, *tmpl, allowedRepo); err != nil {
-				return err
-			}
-			if tmpl.AutoMerge {
-				return fmt.Errorf("template %s is auto-merge: %w", tmpl.ID, errAgentAutoMerge)
-			}
-			if tmpl.KeepRunning {
-				return fmt.Errorf("template %s sets keepRunning, which an external agent cannot turn on", tmpl.ID)
-			}
-			if tmpl.Interactive && !set.Allows("tasks:admin", repo) {
-				return fmt.Errorf("template %s is interactive: approving it needs tasks:admin", tmpl.ID)
-			}
-			if tmpl.Priority != nil && *tmpl.Priority > model.DefaultTaskPriority && !set.Allows("tasks:admin", repo) {
-				return fmt.Errorf("template %s sets priority %d (above %d), which needs tasks:admin", tmpl.ID, *tmpl.Priority, model.DefaultTaskPriority)
-			}
-			if s.networkAccessWidens(ctx, "", string(tmpl.NetworkAccess)) {
-				return fmt.Errorf("template %s widens networkAccess past this deployment's default of \"none\"", tmpl.ID)
-			}
-			if tmpl.Target != nil && !set.Allows(scope, tmpl.Target.String()) {
-				return fmt.Errorf("template %s files against %s, which the external agent's %s does not reach", tmpl.ID, tmpl.Target, scope)
-			}
-		case "reviewtemplateid":
-			// A review is filed approved and auto-merge, so its template
-			// is held to the credential's own grants exactly as an
-			// in-grain agent's is to its task's (ReviewTemplateWithinTask).
-			var id string
-			if json.Unmarshal(raw, &id) != nil || strings.TrimSpace(id) == "" {
-				continue
-			}
-			tmpl, err := s.tasks.Store.GetTemplate(ctx, strings.TrimSpace(id))
-			if err != nil || tmpl == nil {
-				continue
-			}
-			if r, err := model.ParseRepo(repo); err == nil && tmpl.ID == model.DefaultReviewTemplateID(r) {
-				continue
-			}
-			if err := externalTemplateWithin(tok, held, *tmpl, allowedRepo); err != nil {
-				return err
-			}
-		case "repo":
-			var to string
-			if json.Unmarshal(raw, &to) != nil || strings.TrimSpace(to) == "" || model.SameRepoText(to, repo) {
-				continue
-			}
-			if !set.Allows(scope, strings.TrimSpace(to)) {
-				return fmt.Errorf("the external agent's %s does not reach %s", scope, strings.TrimSpace(to))
-			}
-		}
-	}
-	return nil
+	return s.filingEscalation(ctx, held, set, allowedRepo, pattern, scope, repo, body, filingEscalationOpts{external: tok})
 }
 
 // externalTemplateWithin is model.TemplateWithinTask for an external agent
@@ -2335,6 +2683,8 @@ var taskMutationResponseKinds = map[string]taskMutationRespKind{
 	"POST /api/tasks/{id}/sandbox/recreate":        taskRespNone,
 	"POST /api/tasks/{id}/messages":                taskRespNone,
 	"POST /api/tasks/{id}/notes":                   taskRespNone,
+	"POST /api/tasks/{id}/human-review":            taskRespNone,
+	"POST /api/tasks/{id}/human-review/release":    taskRespNone,
 	"POST /api/tasks/{id}/agent-messages":          taskRespNone,
 	"POST /api/tasks/{id}/change-publish":          taskRespSingle,
 	"POST /api/tasks/{id}/change-mail":             taskRespSingle,

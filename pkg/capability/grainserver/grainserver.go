@@ -17,7 +17,7 @@
 // than by an external MCP server subprocess:
 //
 //   - https://grain.dev/capabilities/grain: the host- and controller-side
-//     diagnostic and database grants.
+//     diagnostic, source and database grants.
 //   - https://grain.dev/capabilities/repo: repository access. #read {repo}
 //     and #write {repo} are a CI job's access to another repository
 //     (formerly repo-read:<repo> and repo-write:<repo>), CI-only and
@@ -30,6 +30,8 @@ package grainserver
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -87,6 +89,20 @@ const (
 
 	// LegacyGrainCI is the retired in-process capability name for CIGrant.
 	LegacyGrainCI = model.GrainCICapability
+
+	// SourceMethod lets a task read grain's own baked-in source checkout
+	// (grain-src/ in its sandbox, src:// and src://core/... through the
+	// sandbox CLI) -- formerly the source half of self-debug, whose REST
+	// half is the api:self-debug preset. It is team-scoped
+	// (admincaps.TeamScoped): held deployment-wide, it also reads every
+	// repository's CI and the whole of config://.
+	SourceMethod = model.GrainSourceMethod
+	SourceRef    = model.GrainSourceRef
+	SourceGrant  = model.GrainSourceGrant
+
+	// LegacySelfDebug is the retired in-process capability name for
+	// api:self-debug + SourceGrant.
+	LegacySelfDebug = model.SelfDebugCapability
 
 	// RepoID is the canonical capability_id of the in-process repo server.
 	RepoID = model.RepoCapabilityServerID
@@ -204,7 +220,25 @@ func buildServer() *protocol.Server {
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building #%s: %v", CIMethod, err))
 	}
-	cs, err := protocol.NewCapabilityServer("grain", journal, health, sqlMethod, hostExec, ciMethod)
+	source, err := protocol.NewMethod(protocol.MethodSpec{
+		Name: SourceMethod,
+		Description: "Let this task read grain's own source checkout -- the tree this deployment runs, " +
+			"placed read-only at grain-src/ in the sandbox and readable as src:// (and src://core/...) " +
+			"through the grain CLI -- and, held deployment-wide, every repository's CI and the whole of " +
+			"config://, to help it debug or explain grain's own behavior. Read-only. Task records, metrics " +
+			"and deployment status are the api:self-debug preset (formerly, with this, self-debug).",
+		// Nothing is placed by the mint: the orchestrator places
+		// grain-src/ for a task holding the grant (placeGrainSource),
+		// and the namespace reads it off the run's grants.
+		Mint: func(_ context.Context, _ string, _ time.Time, _ map[string]any) (*protocol.MintResponse, error) {
+			return &protocol.MintResponse{Status: protocol.StatusOK}, nil
+		},
+		Now: callerClock,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("grainserver: building #%s: %v", SourceMethod, err))
+	}
+	cs, err := protocol.NewCapabilityServer("grain", journal, health, sqlMethod, hostExec, ciMethod, source)
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building capability server: %v", err))
 	}
@@ -465,6 +499,13 @@ func IsHostExecGrant(grant string) bool { return model.IsGrainHostExecGrant(gran
 // HasHostExec reports whether any grant in grants opens grain#host-exec.
 func HasHostExec(grants []string) bool { return model.HasGrainHostExec(grants) }
 
+// IsSourceGrant reports whether grant names grain#source (recorded or
+// bare) or the retired bare self-debug alias.
+func IsSourceGrant(grant string) bool { return model.IsGrainSourceGrant(grant) }
+
+// HasSource reports whether any grant in grants opens grain#source.
+func HasSource(grants []string) bool { return model.HasGrainSource(grants) }
+
 // IsCIGrant reports whether grant names grain#ci (recorded or bare) or
 // the retired grain-ci alias.
 func IsCIGrant(grant string) bool { return model.IsGrainCIGrant(grant) }
@@ -472,3 +513,40 @@ func IsCIGrant(grant string) bool { return model.IsGrainCIGrant(grant) }
 // IsGitPushAnyRefGrant reports whether grant is GitPushAnyRefGrant or the
 // retired bare git-push-any-ref alias.
 func IsGitPushAnyRefGrant(grant string) bool { return model.IsGitPushAnyRefGrant(grant) }
+
+// CheckSourceReadable reports whether this process's own account can
+// actually read srcDir, grain's own source checkout grain#source serves
+// -- not merely whether the directory is there, and not merely whether
+// its root lists.
+//
+// A deployment that has no source checkout at all (srcDir == "") has
+// nothing to check and returns nil.
+func CheckSourceReadable(srcDir string) error {
+	if srcDir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return fmt.Errorf("grain's own source checkout at %s cannot be listed by this process (uid %d): %w -- "+
+			"grain#source cannot stage grain-src/",
+			srcDir, os.Geteuid(), err)
+	}
+	// One directory below the root, and one file in it: the cheapest pair
+	// that distinguishes "staged readable" from "the root is the only
+	// readable thing in it". Which entry is immaterial, so this takes the
+	// first that answers either way.
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		below := filepath.Join(srcDir, entry.Name())
+		if _, err := os.ReadDir(below); err != nil {
+			return fmt.Errorf("grain's own source checkout at %s lists at its root but %s cannot be read by "+
+				"this process (uid %d): %w -- grain#source can read nothing below that root. "+
+				"The tree was staged with modes this account cannot use (scripts/export-source.sh, and "+
+				"setup.sh's extract-host-binaries.sh)", srcDir, below, os.Geteuid(), err)
+		}
+		return nil
+	}
+	return nil
+}

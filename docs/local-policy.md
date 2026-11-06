@@ -118,7 +118,7 @@ approvers: [me@example.com, lead@example.com]
 # otherwise both halves are glob patterns (repo-write:acme/*).
 capabilities:
   # When set, every capability a task may be granted.
-  allow: [self-debug, gcp-key:team-*]
+  allow: [api:self-debug, gcp-key:team-*]
   # Refused whatever allow says.
   deny: [gcp-key:team-secret, repo-write:*]
 
@@ -143,11 +143,17 @@ names: a `repo-read:owner/name` or `repo-write:owner/name` grant answers
 to `repos` exactly like the task's own target and reads, so
 `repos: [acme/*]` refuses `repo-read:bwsalmon/grain`.
 
-`self-debug` reaches no repository. A self-debug run's `grain-src/` is
-the deployment's own baked-in copy of grain's source, placed in its
-sandbox; grain no longer clones bwsalmon/grain for it, and the git proxy
-does not let it fetch that repository. So a policy that does not list
-bwsalmon/grain admits a self-debug task (`model.CapabilityRepos`).
+`https://grain.dev/capabilities/grain#source` (formerly the source half
+of `self-debug`) reaches no repository. Its `grain-src/` is the
+deployment's own baked-in copy of grain's source, placed in its sandbox;
+grain does not clone ai-on-gke/grain for it, and the git proxy does not
+let it fetch that repository. So a policy that does not list
+ai-on-gke/grain admits a grain#source task (`model.CapabilityRepos`).
+
+A policy file is not rewritten by the schema migrations that retire a
+capability. A retired name in it still binds what the name became: an
+`allow` or `deny` naming `self-debug` admits or refuses both
+`api:self-debug` and `https://grain.dev/capabilities/grain#source={}`.
 
 ### The Director and grain/config
 
@@ -159,7 +165,8 @@ all of these holds it, and the Director never runs:
   which the Director reads, and which any chat proposing a config change
   writes.
 - Every grant the Director is given in `capabilities.allow`: `durable`,
-  `self-debug`, `https://grain.dev/capabilities/grain#journal`,
+  `api:self-debug`, `https://grain.dev/capabilities/grain#source={}`,
+  `https://grain.dev/capabilities/grain#journal`,
   `api:deployment:read`, `https://grain.dev/capabilities/grain#health`,
   `https://grain.dev/capabilities/config-map#config-map` and `api:ci-read`, plus any your build adds.
   A held task's log line names the one that refused it.

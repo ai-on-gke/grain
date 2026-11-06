@@ -110,6 +110,8 @@ func PublishedToolNames() []string {
 	// chat session, and listed unconditionally for the reason every
 	// daemon-gated tool above is.
 	add(mcp.NewRenameSessionTools(nil))
+	// request_human_review is registered only for a review run.
+	add(mcp.NewHumanReviewTools(nil))
 	add(mcp.NewProposeConfigChangeTools(nil, "", nil))
 	add(mcp.NewWaitForTaskTools(nil, nil))
 	add(mcp.NewResumeLaterTools(nil, nil))
@@ -195,6 +197,7 @@ var controlTools = map[string]bool{
 	"recreate_sandbox":      true,
 	"chat":                  true,
 	"rename_session":        true,
+	"request_human_review":  true,
 }
 
 // SandboxToolNames is the four tools that cross from the agent CLI into

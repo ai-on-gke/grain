@@ -128,8 +128,10 @@ func registeredVerifiersSnapshot() []IdentityVerifier {
 }
 
 // HasActiveVerifier reports whether an IdentityVerifier with Name() == name
-// is active for ctx (either built-in IAP when an IAP audience is configured,
-// or an IdentityVerifier registered via RegisterIdentityVerifier).
+// is active for ctx (built-in IAP when an IAP audience is configured, built-in
+// registry when -ui-registry-issuer, -ui-registry-audience, and
+// -ui-registry-keys-url are all configured, or an IdentityVerifier registered
+// via RegisterIdentityVerifier).
 func HasActiveVerifier(ctx context.Context, name string) bool {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -143,22 +145,40 @@ func HasActiveVerifier(ctx context.Context, name string) bool {
 	return false
 }
 
+func registryVerifierEnabled(ctx context.Context) bool {
+	return webauth.EffectiveRegistryConfig(ctx).Enabled()
+}
+
 // activeVerifiers returns the verifiers active for ctx in evaluation order.
 // IAP is registered first by default whenever an IAP audience is configured
-// (-ui-iap-audience / $GRAIN_IAP_AUDIENCE / Config.IAPAudience), unless an
-// explicit "iap" verifier has been registered via RegisterIdentityVerifier.
+// (-ui-iap-audience / $GRAIN_IAP_AUDIENCE / Config.IAPAudience), followed by
+// the built-in registry verifier whenever all three of -ui-registry-issuer,
+// -ui-registry-audience, and -ui-registry-keys-url are configured, unless an
+// explicit verifier of the same name has been registered via
+// RegisterIdentityVerifier.
 func activeVerifiers(ctx context.Context) []IdentityVerifier {
 	explicit := registeredVerifiersSnapshot()
+	var hasExplicitIAP, hasExplicitRegistry bool
 	for _, v := range explicit {
-		if v.Name() == string(AuthMethodIAP) {
-			return explicit
+		switch v.Name() {
+		case string(AuthMethodIAP):
+			hasExplicitIAP = true
+		case string(AuthMethodRegistry):
+			hasExplicitRegistry = true
 		}
 	}
-	if iapAudienceFor(ctx) == "" {
+	includeIAP := !hasExplicitIAP && iapAudienceFor(ctx) != ""
+	includeRegistry := !hasExplicitRegistry && registryVerifierEnabled(ctx)
+	if !includeIAP && !includeRegistry {
 		return explicit
 	}
-	out := make([]IdentityVerifier, 0, 1+len(explicit))
-	out = append(out, defaultIAPVerifier)
+	out := make([]IdentityVerifier, 0, 2+len(explicit))
+	if includeIAP {
+		out = append(out, defaultIAPVerifier)
+	}
+	if includeRegistry {
+		out = append(out, defaultRegistryVerifier)
+	}
 	out = append(out, explicit...)
 	return out
 }
@@ -224,6 +244,74 @@ func (v *iapVerifier) Verify(r *http.Request) (VerifiedIdentity, bool, error) {
 	if err != nil {
 		logRefusedAssertion(tokenStr, aud, err)
 		return VerifiedIdentity{}, false, err
+	}
+	return VerifiedIdentity{
+		Email: id.Email,
+		Kind:  model.PrincipalKind(id.Kind),
+	}, true, nil
+}
+
+// RegistryVerifierOption configures a registry IdentityVerifier created by NewRegistryVerifier.
+type RegistryVerifierOption = webauth.RegistryVerifierOption
+
+// WithRegistryValidator overrides JWT validation on a registry IdentityVerifier.
+func WithRegistryValidator(v RegistryValidator) RegistryVerifierOption {
+	return webauth.WithRegistryValidator(v)
+}
+
+// WithRegistryAudience pins an expected single-URL audience on a registry
+// IdentityVerifier, taking precedence over request/package defaults.
+func WithRegistryAudience(audience string) RegistryVerifierOption {
+	return webauth.WithRegistryAudience(audience)
+}
+
+// WithRegistryIssuer pins the expected JWT issuer on a registry IdentityVerifier.
+func WithRegistryIssuer(issuer string) RegistryVerifierOption {
+	return webauth.WithRegistryIssuer(issuer)
+}
+
+// WithRegistryKeysURL pins the JWKS endpoint URL on a registry IdentityVerifier.
+func WithRegistryKeysURL(keysURL string) RegistryVerifierOption {
+	return webauth.WithRegistryKeysURL(keysURL)
+}
+
+// WithRegistryVerifierHTTPClient pins an HTTP client for fetching JWKS keys on
+// a registry IdentityVerifier.
+func WithRegistryVerifierHTTPClient(client *http.Client) RegistryVerifierOption {
+	return webauth.WithRegistryVerifierHTTPClient(client)
+}
+
+type registryVerifier struct {
+	inner *webauth.RegistryVerifier
+}
+
+var defaultRegistryVerifier IdentityVerifier = &registryVerifier{inner: webauth.NewRegistryVerifier()}
+
+// NewRegistryVerifier constructs an IdentityVerifier for grain-registry
+// (X-Grain-Registry-Assertion).
+func NewRegistryVerifier(opts ...RegistryVerifierOption) IdentityVerifier {
+	return &registryVerifier{inner: webauth.NewRegistryVerifier(opts...)}
+}
+
+func (v *registryVerifier) Name() string {
+	return string(AuthMethodRegistry)
+}
+
+func (v *registryVerifier) Headers() []string {
+	return []string{RegistryAssertionHeader}
+}
+
+func (v *registryVerifier) AccessCodeWins() bool {
+	return false
+}
+
+func (v *registryVerifier) Verify(r *http.Request) (VerifiedIdentity, bool, error) {
+	if r == nil {
+		return VerifiedIdentity{}, false, nil
+	}
+	id, ok, err := v.inner.VerifyRequest(r)
+	if err != nil || !ok {
+		return VerifiedIdentity{}, ok, err
 	}
 	return VerifiedIdentity{
 		Email: id.Email,
@@ -362,11 +450,14 @@ func verifyCallerNow(r *http.Request) callerVerification {
 		}
 	}
 
-	// No active verifier claimed the request. If an IAP assertion arrived while
-	// IAP is unconfigured, log it once so an operator setting up a proxy can
-	// see what audience it sent; otherwise log any unsigned plaintext header.
+	// No active verifier claimed the request. If an IAP or registry assertion
+	// arrived while its verifier is unconfigured, log it once so an operator
+	// setting up a proxy can see why it was not accepted; otherwise log any
+	// unsigned plaintext header.
 	if raw := strings.TrimSpace(r.Header.Get(IAPAssertionHeader)); raw != "" {
 		logRefusedAssertion(raw, "", errors.New("no IAP audience is configured (GRAIN_IAP_AUDIENCE / -ui-iap-audience), so no assertion can be verified"))
+	} else if raw := strings.TrimSpace(r.Header.Get(RegistryAssertionHeader)); raw != "" {
+		logRefusedVerifierHeader(string(AuthMethodRegistry), RegistryAssertionHeader, errors.New("no registry verifier is configured (-ui-registry-issuer, -ui-registry-audience, -ui-registry-keys-url), so no assertion can be verified"))
 	} else {
 		logIgnoredIdentityHeader(r)
 	}

@@ -35,7 +35,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
-	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 )
 
 // Every grant this binary serves tools for, so the server started below
@@ -43,7 +42,8 @@ import (
 // Append a capability's name here when it grows tools of its own; there
 // is no count to keep in step with it.
 var everyToolGrant = []string{
-	selfdebug.CapabilityName,
+	"api:self-debug",
+	"https://grain.dev/capabilities/grain#source={}",
 	"https://grain.dev/capabilities/grain#journal",
 	"https://grain.dev/capabilities/grain#health",
 	grainci.Grant,

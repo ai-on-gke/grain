@@ -282,7 +282,6 @@ var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 	"gcp-key":               "GCP key",
 	"gemini-key":            "Gemini key",
 	"github-sandbox":        "GitHub sandbox",
-	"self-debug":            "Self debug",
 	"bootstrap-playbooks":   "Bootstrap playbooks",
 	model.GrainCIGrant:      "grain CI",
 	model.GrainCICapability: "grain CI",

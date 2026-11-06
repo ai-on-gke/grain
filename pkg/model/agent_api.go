@@ -145,7 +145,7 @@ var apiPresets = []APIPreset{
 	{Name: "release-manager", Description: "Cut, qualify and promote release candidates, run schedules, and drive their CI and merges",
 		Scopes: []APIScope{"tasks:read", "tasks:write", "merge:write", "ci:read", "ci:write",
 			"schedules:read", "schedules:write", "releases:read", "releases:write", "repos:read"}},
-	{Name: "self-debug", Description: "What the self-debug capability grants: read tasks, runs and deployment status",
+	{Name: "self-debug", Description: "What the self-debug capability granted over the REST API: read tasks, runs, metrics and deployment status (grain's source checkout is grain#source)",
 		Scopes: []APIScope{"tasks:read", "deployment:read"}},
 	{Name: "self-upgrade", Description: "What the self-upgrade capability granted: read and start upgrades",
 		Scopes: []APIScope{"deployment:read", "deployment:upgrade"}},
@@ -213,6 +213,16 @@ const (
 	GrainHostExecMethod = "host-exec"
 	GrainHostExecRef    = GrainCapabilityServerID + "#" + GrainHostExecMethod
 	GrainHostExecGrant  = GrainHostExecRef + "={}"
+
+	// GrainSourceMethod lets a run read grain's own baked-in source
+	// checkout -- grain-src/ in its sandbox and src:// (src://core/...)
+	// through the sandbox CLI -- and, held in its deployment-wide form
+	// (admincaps.TeamScoped), every repository's CI and the whole of
+	// config:// (formerly the source half of self-debug, whose REST half
+	// is the api:self-debug preset).
+	GrainSourceMethod = "source"
+	GrainSourceRef    = GrainCapabilityServerID + "#" + GrainSourceMethod
+	GrainSourceGrant  = GrainSourceRef + "={}"
 
 	// GCPCapabilityServerID is the canonical capability_id of the in-tree gcp
 	// server (design/design/unified-grants.design.md §1, §4).
@@ -388,6 +398,30 @@ func IsGrainJournalGrant(grant string) bool {
 // HasGrainJournal reports whether any grant in grants opens grain#journal.
 func HasGrainJournal(grants []string) bool {
 	return slices.ContainsFunc(grants, IsGrainJournalGrant)
+}
+
+// IsGrainSourceGrant reports whether grant names grain#source (recorded or
+// bare) or the retired bare self-debug alias, which still grants it for
+// one release (SelfDebugCapability).
+func IsGrainSourceGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if s == SelfDebugCapability {
+		return true
+	}
+	return CapabilityGrantRef(s) == GrainSourceRef
+}
+
+// HasGrainSource reports whether any grant in grants opens grain#source.
+func HasGrainSource(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGrainSourceGrant)
+}
+
+// SelfDebugGrants is what the retired self-debug capability became, in
+// the order a grant list records them: the api:self-debug preset for the
+// REST half (every task's record, metrics, pipeline and deployment
+// status) and grain#source for grain's own source checkout.
+func SelfDebugGrants() []string {
+	return []string{APIGrantPrefix + "self-debug", GrainSourceGrant}
 }
 
 // IsGrainHealthGrant reports whether grant names grain#health (recorded or
@@ -625,7 +659,7 @@ var legacyGrantReplacements = map[string]string{
 	// Retired by schema migration 103 onto the gcp server's gemini-key,
 	// which mints with the same gcp-key-minter secret.
 	"gemini-key": GCPGeminiKeyGrant,
-	// Retired by schema migration 115 onto the built-in config-map server's
+	// Retired by schema migration 116 onto the built-in config-map server's
 	// bootstrap map.
 	"bootstrap-playbooks": BootstrapPlaybooksGrant,
 }
@@ -635,6 +669,9 @@ var legacyGrantReplacements = map[string]string{
 // grain server method).
 var legacyGrantMultiReplacements = map[string][]string{
 	"deployment-health": {APIGrantPrefix + "deployment:read", GrainHealthGrant},
+	// Retired by schema migration 115: the REST half of self-debug is its
+	// api preset, the source checkout the grain server's #source method.
+	SelfDebugCapability: SelfDebugGrants(),
 }
 
 var (
@@ -1038,6 +1075,25 @@ func (s APIGrantSet) Scopes() []APIScope {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// Without returns s with every scope in deny removed.
+func (s APIGrantSet) Without(deny map[APIScope]bool) APIGrantSet {
+	if len(deny) == 0 {
+		return s
+	}
+	out := APIGrantSet{scopes: map[APIScope][]string{}, all: map[APIScope]bool{}}
+	for scope := range s.all {
+		if !deny[scope] {
+			out.all[scope] = true
+		}
+	}
+	for scope, repos := range s.scopes {
+		if !deny[scope] {
+			out.scopes[scope] = slices.Clone(repos)
+		}
+	}
 	return out
 }
 

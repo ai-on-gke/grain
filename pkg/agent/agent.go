@@ -29,7 +29,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -201,11 +200,11 @@ type RunConfig struct {
 	GitCredential string
 	// Grants names the capability grants this run's task holds whose
 	// whole effect is which tools the run gets -- such as
-	// "self-debug" (pkg/capability/selfdebug) or "grain#journal"
-	// (pkg/capability/grainlog). A Framework passes each one on as a
-	// "-grant <name>" argument of its forked "mcpserver" subprocess, which
-	// is where those tools are actually built (GrantArgs, and
-	// pkg/cli/mcpserver.go's flag of that name).
+	// grain#source (once self-debug), for reading grain's own source, or
+	// "grain#journal" (pkg/capability/grainlog). A Framework passes each
+	// one on as a "-grant <name>" argument of its forked "mcpserver"
+	// subprocess, which is where those tools are actually built
+	// (GrantArgs, and pkg/cli/mcpserver.go's flag of that name).
 	//
 	// They are names here, rather than the tools themselves in Tools,
 	// because Tools has no consumer left (see above): a Framework that
@@ -662,7 +661,7 @@ func RunDeadlineArgs(ctx context.Context, cfg RunConfig) []string {
 // tools a name turns on is mcpserver's own business, and a grant added
 // later needs no new flag, no new field and no edit to this function.
 // The exceptions are the controller-side directories a tool needs:
-// self-debug's -grain-src-dir, grain-log's -grain-secrets-dir, and both
+// grain#source's -grain-src-dir (once self-debug's), grain-log's -grain-secrets-dir, and both
 // deployment-health's -grain-secrets-dir and -grain-state-dir. They are
 // written beside their grants, so a process's arguments say which grant a
 // directory belongs to, and omitted rather than passed empty when a
@@ -678,6 +677,7 @@ func RunDeadlineArgs(ctx context.Context, cfg RunConfig) []string {
 func GrantArgs(cfg RunConfig) []string {
 	var args []string
 	var grants []string
+	srcDirPassed := false
 	for _, grant := range cfg.Grants {
 		grants = append(grants, model.APIScopeSetGrantNames(grant)...)
 	}
@@ -686,8 +686,9 @@ func GrantArgs(cfg RunConfig) []string {
 			continue
 		}
 		args = append(args, "-grant", grant)
-		if grant == selfdebug.CapabilityName && cfg.GrainSourceDir != "" {
+		if model.IsGrainSourceGrant(grant) && cfg.GrainSourceDir != "" && !srcDirPassed {
 			args = append(args, "-grain-src-dir", cfg.GrainSourceDir)
+			srcDirPassed = true
 		}
 		if (model.IsGrainJournalGrant(grant) || model.IsGrainHealthGrant(grant)) && cfg.GrainSecretsDir != "" {
 			args = append(args, "-grain-secrets-dir", cfg.GrainSecretsDir)

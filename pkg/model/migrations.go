@@ -801,7 +801,13 @@ var Migrations = []Migration{
 		},
 	},
 	{
-		Version:     115,
+		Version: 115,
+		Description: "rewrite stored self-debug grants, repo_config.ci_capabilities and the capability policy's catalogue " +
+			"included, to api:self-debug and https://grain.dev/capabilities/grain#source={} (the in-process capability is retired)",
+		Up: migrateSelfDebugGrants,
+	},
+	{
+		Version:     116,
 		Description: "rewrite stored bootstrap-playbooks grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]} (the in-process bootstrap-playbooks is retired)",
 		Up:          migrateBootstrapPlaybooksGrants,
 	},

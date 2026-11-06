@@ -54,7 +54,7 @@ the chat is in:
 
 | setting | shipped as | what it decides |
 |---|---|---|
-| `Capabilities` | `self-debug`, `https://grain.dev/capabilities/grain#journal` (formerly `grain-log`), `api:deployment:read` and `…/grain#health` (formerly `deployment-health`), `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`, plus any capability a wrapper distribution registers as on by default) | what the agent may reach |
+| `Capabilities` | `api:self-debug` and `https://grain.dev/capabilities/grain#source` (formerly `self-debug`), `https://grain.dev/capabilities/grain#journal` (formerly `grain-log`), `api:deployment:read` and `…/grain#health` (formerly `deployment-health`), `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`; plus any capability a wrapper distribution registers as on by default) | what the agent may reach |
 | `ReadsAll` | true (every session) | whether it reads every repository this deployment works in |
 | `DeclinedDefaults` | none | which of the defaults every session holds (`api:ci-read`) it opts out of |
 | `NetworkAccess` | open (`model.DefaultConsoleSessions`; `none` is the target, `director-capabilities.spec.md` G3) | whether its sandbox reaches the internet |
@@ -93,9 +93,10 @@ their title is exactly what their first message would give, and as
 offered for renaming.
 
 Two capabilities are deliberately not shipped on and are one tick away:
-**self-repair**, which lets a run change things on grain's own host and
-is the one grant here that can break the deployment it is talking about,
-and **memory**, which writes the standing instructions every later run is
+**`https://grain.dev/capabilities/grain#host-exec`** (formerly `self-repair`),
+which lets a run change things on grain's own host and is the one grant here
+that can break the deployment it is talking about, and **`api:memory`**
+(formerly `memory`), which writes the standing instructions every later run is
 given.
 
 A wrapper distribution can register further capabilities as on by default

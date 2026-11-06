@@ -4,7 +4,7 @@
 
 **The core rule:** a run gets nothing it was not granted, and what it is granted reaches it only for one attempt. A capability server holds the root credential and mints a short-lived, attempt-scoped thing from it; grain checks the grant against policy, places what the server returned in the sandbox, and releases it when the attempt ends. Root credentials never enter a sandbox, and a grant's `with:` arguments never carry one.
 
-**Status:** describes `main` as of 2026-11-05. The normative protocol is [`capabilities.spec.md`](../spec/capabilities/capabilities.spec.md); this page is the overview it specifies. Where they disagree, the spec wins.
+**Status:** describes `main` as of 2026-11-06. The normative protocol is [`capabilities.spec.md`](../spec/capabilities/capabilities.spec.md); this page is the overview it specifies. Where they disagree, the spec wins.
 
 ## What a capability is
 
@@ -18,7 +18,7 @@ A capability server is an MCP server that advertises `mint_<method>` (and, for s
 
 | Kind | How grain reaches it | Where it runs | Examples |
 |---|---|---|---|
-| **stdio** (`command`, `args`, `env`) | spawned by grain and spoken to over stdin/stdout | beside the daemon (`run: container`, the default), or on the bare machine through `grain hostd` (`run: host`, naming an allowlist `capabilities:` entry in `/etc/grain/hostd.yaml`; a `hostd:` selector picks a named hostd) | the built-ins `grain capability gcp`, `git`, `gchat`, `host-script` and `config-map` (`pkg/capability/intree`), and `grain/config` plugins |
+| **stdio** (`command`, `args`, `env`) | spawned by grain and spoken to over stdin/stdout | beside the daemon (`run: container`, the default), or on the bare machine through `grain hostd` (`run: host`, naming an allowlist `capabilities:` entry in `/etc/grain/hostd.yaml`; a `hostd:` selector picks a named hostd) | the built-ins `grain capability gcp`, `git`, `gchat`, `host-script`, `config-map` and `figma` (`pkg/capability/intree`), and `grain/config` plugins |
 | **HTTP** (`serverUrl`, `headers`) | Streamable HTTP, authenticated with the entry's headers | wherever the operator runs it | an organisation's own servers |
 | **in-process** | a Go method table called directly (`protocol.InProcessCaller`) | inside the daemon; no listener, no `mcpServers` entry | `…/grain` (`#journal`, `#health`, `#sql`, `#host-exec`, `#ci`) and `…/repo` (`#read`, `#write`) in `pkg/capability/grainserver`; `…/release` and `…/model-proxy`, and an edition's own (such as `…/corp#research`), contributed through `capability.Register` |
 
@@ -62,7 +62,7 @@ Grain's own API is granted as `api:<scope>` or `api:<preset>`, optionally limite
 A `.grain/workflows` job names what it needs under `capabilities:` and `optional-capabilities:` ([`docs/ci-capabilities.md`](../../docs/ci-capabilities.md)):
 
 - **Capability references, repository access and `api:` grants are granted by being declared.** The policy decides each, as run kind `ci` with the run's event. A reference is minted at the job's grant admission, before its sandbox exists. A job that does not declare one never gets it.
-- **Repository-granted grants** come from the operator's per-repository CI capabilities list (`repo_config.ci_capabilities`): the remaining in-process providers (`github-sandbox`, named GitHub tokens) and the `…/release` methods. A job narrows that list by declaring; it can never widen it.
+- **Repository-granted grants** come from the operator's per-repository CI capabilities list (`repo_config.ci_capabilities`): the remaining in-process provider (`github-sandbox`) and the `…/release` methods. A job narrows that list by declaring; it can never widen it.
 - **CI grant rules** are declared in code by the in-process server that answers a method (`capability.Method.CI`, `model.CIGrantRule`), and grain enforces them before the policy is read, so a policy can only narrow them. A method with a rule is CI-only. `…/release#image-signing` goes to `release` only. `#registry-push` goes to `release` and `workflow_dispatch`, and `#package-publish` also to grain's own trusted scheduled run. `…/repo#write {repo}` has the same kind of gate (`model.RepoAccessAdmitsCIEvent`).
 - A run whose pinned commit is not on its branch is withheld every capability.
 
@@ -72,8 +72,8 @@ Before capability servers, grain had a registry of in-process providers, each gr
 
 `daemon.CapabilityProviders` still registers these:
 
-- `self-debug`, `read-issues`, `github-sandbox`, and the named GitHub tokens (`github-credential:<name>`);
-- the CI alias `release-gate-read`;
+- `github-sandbox` and `read-issues` (becoming `#sandbox-repo` and `#read-issues` on an in-process `…/github` server), and the named GitHub tokens `github-credential:<name>` (becoming `…/repo#credential` `{credential}`);
+- the CI alias `release-gate-read` (retiring with `…/api` references in unified-grants slices 2–4);
 - `console`, `priority-dispatch` and `durable`, which are decided to become the task settings `hosting` and `admission` (§4.1).
 
 Until each one is converted, the UI shows it under **Legacy capabilities**.

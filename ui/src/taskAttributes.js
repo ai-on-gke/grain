@@ -437,6 +437,19 @@ export const ATTRIBUTES = [
     labelOf: (v) => (v === "on" ? "On" : "Off"),
   },
   {
+    // Held for a person's decision (humanReviewHold), by the categories
+    // of the reasons it is held for: `humanReview:filled` is every
+    // held change, `humanReview:any:security` the security ones.
+    id: "humanReview",
+    label: "Human review",
+    type: TYPE_ENUM,
+    values: (t) => [
+      ...new Set((t.humanReviewHold || []).map((r) => r.category || "other")),
+    ],
+    order: ["product-decision", "risk", "security", "intent-unclear", "other"],
+    noneLabel: "Not held",
+  },
+  {
     id: "blocked",
     label: "Blocked",
     type: TYPE_ENUM,

@@ -211,8 +211,8 @@ func TestSandboxCLIAgainstTheProxy(t *testing.T) {
 	}
 	// Refusals come back in unknownToolMessage's words.
 	_, errOut, code := run("read", "src://pkg/ci/engine.go")
-	if code != 1 || !strings.Contains(errOut, `does not hold the "self-debug" capability`) || !strings.Contains(errOut, "a human attaches it to the task") {
-		t.Errorf("src without self-debug: %d %s", code, errOut)
+	if code != 1 || !strings.Contains(errOut, `does not hold the "https://grain.dev/capabilities/grain#source" capability`) || !strings.Contains(errOut, "a human attaches it to the task") {
+		t.Errorf("src without grain#source: %d %s", code, errOut)
 	}
 	_, errOut, code = run("db", "query", "SELECT 1")
 	if code != 1 || !strings.Contains(errOut, `"https://grain.dev/capabilities/grain#sql"`) {

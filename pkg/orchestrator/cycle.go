@@ -974,7 +974,10 @@ func reconcileReviews(ctx context.Context, deps Deps, now time.Time) error {
 // touching the trust boundary whose security review finished clean
 // (securityhold.go).
 func reconcileSecurityHolds(ctx context.Context, deps Deps, now time.Time) error {
-	return SyncSecurityHolds(ctx, deps.Store, deps.Client, now)
+	if err := SyncSecurityHolds(ctx, deps.Store, deps.Client, now); err != nil {
+		return err
+	}
+	return SyncHumanReviewHolds(ctx, deps.Store, now)
 }
 
 // reconcilePathTriggerHolds gives auto-merge back to every change held by
@@ -2527,7 +2530,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		// Read here, before the sandbox exists, because a backend that
 		// can mount grain-src/ has to know at create time
 		// (placeGrainSource).
-		GrainSource: hasGrant(*task, model.SelfDebugCapability),
+		GrainSource: hasGrainSource(*task),
 		Class:       sandboxClassFor(*task),
 	}
 	// The operator's ambient credentials (-host-sandbox-env) go to a run

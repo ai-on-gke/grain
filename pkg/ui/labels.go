@@ -183,11 +183,13 @@ func OfferedCapabilities() []Capability {
 		// No gemini-key row: it was retired onto the gcp server's
 		// gcp#gemini-key (schema migration 103), which is offered with
 		// the other capability-server methods.
-		{ID: "self-debug", Name: "Self debug",
-			Description: "Let this task read grain's own source checkout, this deployment's own tasks and runs, and the measurements it keeps about itself -- throughput, latency, the tool-use census -- to help it debug or explain grain's own behavior. All read-only, and all of it is what anyone with this UI open can already see."},
+		// No self-debug row: it was retired onto the api:self-debug
+		// preset and the grain server's grain#source method (schema
+		// migration 115), which are offered with the other api presets
+		// and capability-server methods.
 	}
 	// Capabilities contributed from outside core
-	// (capability.RegisterProvider) follow self-debug, where the
+	// (capability.RegisterProvider) come first, where the
 	// deployment-level ones begin.
 	for _, r := range capability.Registered() {
 		offered = append(offered, Capability{ID: r.ID, Name: r.Name, Description: r.Description})
@@ -199,7 +201,7 @@ func OfferedCapabilities() []Capability {
 			Description: durable.Description},
 		// No bootstrap-playbooks row: it was retired onto the config-map
 		// server's config-map {"config_maps":["bootstrap"]} (schema migration
-		// 115), which is offered with the other capability-server methods.
+		// 116), which is offered with the other capability-server methods.
 		{ID: "github-sandbox", Name: "GitHub sandbox",
 			Description: "Create a private, single-use GitHub sandbox repo for this task to work in instead of /repo"},
 		{ID: "console", Name: "Interactive console",
@@ -1183,6 +1185,19 @@ type Config struct {
 	// IAPKeysURL is where the assertion's signing keys are published (a
 	// PEM map or JWK set); empty means GoogleIAPCertURL.
 	IAPKeysURL string
+	// RegistryIssuer is the expected iss claim for verifying grain-registry
+	// JWT assertions (X-Grain-Registry-Assertion) (-ui-registry-issuer /
+	// $GRAIN_REGISTRY_ISSUER). All three of RegistryIssuer,
+	// RegistryAudience, and RegistryKeysURL must be set to enable the
+	// built-in "registry" IdentityVerifier.
+	RegistryIssuer string
+	// RegistryAudience is the single expected aud URL for verifying
+	// grain-registry JWT assertions (-ui-registry-audience /
+	// $GRAIN_REGISTRY_AUDIENCE).
+	RegistryAudience string
+	// RegistryKeysURL is the JWKS endpoint URL publishing grain-registry's
+	// ES256 public keys (-ui-registry-keys-url / $GRAIN_REGISTRY_KEYS_URL).
+	RegistryKeysURL string
 	// AllowedPrincipals, when non-empty, is the allowlist of user:,
 	// serviceAccount:, group:, and domain: entries admitted when a request
 	// authenticates through IAP or another registered IdentityVerifier

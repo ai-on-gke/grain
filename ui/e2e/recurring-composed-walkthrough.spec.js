@@ -1721,13 +1721,13 @@ test.describe("Recurring and Composed Work Automation UI Walkthrough", () => {
       const caps = page
         .locator("dt", { hasText: /^Capabilities$/ })
         .locator("..");
-      await expect(caps).toContainText("self-debug");
+      await expect(caps).toContainText("grain › source");
       await expect(caps).toContainText("from the schedule");
       await expect(caps).toContainText("grain › ci");
       await expect(caps).toContainText("from the repo");
 
       const schedVal = await caps
-        .getByText("self-debug", { exact: true })
+        .getByText("grain › source", { exact: true })
         .boundingBox();
       const schedChip = await caps
         .getByText("from the schedule", { exact: true })

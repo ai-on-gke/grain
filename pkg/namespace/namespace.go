@@ -326,7 +326,7 @@ func (s *Server) resolveSrc(ctx context.Context, scope Scope, relPath string) (*
 		if trimmed == "playbooks" || strings.HasPrefix(trimmed, "playbooks/") {
 			return nil, RefuseCapability("src://"+relPath, "bootstrap-playbooks")
 		}
-		return nil, RefuseCapability("src://"+relPath, "self-debug")
+		return nil, RefuseCapability("src://"+relPath, model.GrainSourceRef)
 	}
 	if trimmed := strings.TrimPrefix(strings.TrimSuffix(relPath, "/"), "/"); trimmed == "playbooks" || strings.HasPrefix(trimmed, "playbooks/") {
 		return resolvePlaybook(relPath, strings.TrimPrefix(strings.TrimPrefix(trimmed, "playbooks"), "/"))
