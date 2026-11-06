@@ -242,8 +242,13 @@ type Task struct {
 	// PathTriggerHold is the strictest `human` setting of the gating
 	// triggers holding this change (model.LinkPathTriggerHold), and
 	// PathTriggerTasks the tasks they filed, as "<trigger>=<task>".
-	PathTriggerHold  string   `json:"pathTriggerHold,omitempty"`
-	PathTriggerTasks []string `json:"pathTriggerTasks,omitempty"`
+	PathTriggerHold string `json:"pathTriggerHold,omitempty"`
+	// HumanReviewHold is every reason this change waits for a person's
+	// decision (model.LinkHumanReviewHold): a review's
+	// request_human_review, a security review's findings, a path only a
+	// human may release. Only Submit or Release hold ends it.
+	HumanReviewHold  []HumanReviewView `json:"humanReviewHold,omitempty"`
+	PathTriggerTasks []string          `json:"pathTriggerTasks,omitempty"`
 	// ReviewQuestions is the review task whose open questions this change
 	// waits on its owner's decision about (model.LinkReviewQuestions):
 	// a reply sends another run to carry the decision out, and Submit
@@ -459,13 +464,17 @@ type Task struct {
 	// CreateTask only, like ApprovalNote.
 	ParkNote string `json:"parkNote,omitempty"`
 	// DependsOn is every task this one has declared a depends-on link to,
-	// resolved or not -- the definition. Blocked and BlockedBy are the
+	// resolved or not -- the definition. DependsOnStates carries each
+	// declared dependency's current state so text views (`grain get`,
+	// `task://<id>/record.md`) can report both the link and whether the
+	// target is still open. Blocked and BlockedBy are the
 	// signal: whether any of it (or a child-of link) is still open right
 	// now, re-derived on every read rather than pinned at creation, per
 	// docs/data-model.md's "blocked is not a state, it is derived from
 	// links" -- see model.IsBlocked.
-	DependsOn []string `json:"dependsOn,omitempty"`
-	Blocked   bool     `json:"blocked"`
+	DependsOn       []string               `json:"dependsOn,omitempty"`
+	DependsOnStates map[string]model.State `json:"dependsOnStates,omitempty"`
+	Blocked         bool                   `json:"blocked"`
 	// Parked is a blocked task whose last run parked it on those blockers
 	// through wait_for_task (model.ParkedOutcome), which the page words as
 	// "waiting on" rather than "blocked on". Set on a task's own detail.
@@ -1093,7 +1102,7 @@ type AttemptStartup struct {
 // because answering needs both the deployment's own deadlines, which
 // live in the orchestrator and arrive through Config.Stall, and a clock,
 // neither of which belongs in a projection.
-func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueueBlockedAt *time.Time,
+func taskFrom(t model.Task, state model.State, targetStates map[string]model.State, mergeQueueBlockedAt *time.Time,
 	repairing bool, mergeQueue model.MergeQueueActivity, activity *model.RunActivity,
 	reviewTemplateName string, span model.TaskSpan, stall string) Task {
 	priority := t.Priority
@@ -1214,6 +1223,9 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		if l.Kind == model.LinkSecurityHold {
 			out.SecurityHold = l.Target
 		}
+		if l.Kind == model.LinkHumanReviewHold && out.HumanReviewHold == nil {
+			out.HumanReviewHold = humanReviewViews(model.HumanReviewReasons(t))
+		}
 		if l.Kind == model.LinkSecurityReviewTask {
 			out.SecurityReviewTask = l.Target
 		}
@@ -1273,11 +1285,17 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		}
 		if l.Kind == model.LinkDependsOn {
 			out.DependsOn = append(out.DependsOn, l.Target)
+			if st := targetStates[l.Target]; st != "" {
+				if out.DependsOnStates == nil {
+					out.DependsOnStates = make(map[string]model.State)
+				}
+				out.DependsOnStates[l.Target] = st
+			}
 		}
 		// A follow-up filed with its parent in depends_on carries both a
 		// child-of and a depends-on link to the same task; it is waiting
 		// on that task once, and says so once.
-		if l.Kind.Blocks() && !closed[l.Target] && !slices.Contains(out.BlockedBy, l.Target) {
+		if l.Kind.Blocks() && targetStates[l.Target] != model.StateClosed && !slices.Contains(out.BlockedBy, l.Target) {
 			out.BlockedBy = append(out.BlockedBy, l.Target)
 		}
 	}
@@ -2509,11 +2527,13 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		req.TimeZone = requestTimeZone(r)
 	}
 	// The fields settings/new-task-form.yml hides file as it says -- for
-	// a person's filing, never an agent's. agentAPIGate judged an agent's
-	// escalations (autoMerge, approved, writes, reads, grants, repo) on
-	// the body it sent, so a default put in after it would be a grant
-	// that gate never saw.
+	// an unlimited person's filing, never an agent's or a limited role's.
+	// agentAPIGate and roleGate judged their escalations (autoMerge,
+	// approved, writes, reads, grants, repo) on the body they sent, so a
+	// default put in after them would be a grant neither gate saw.
 	if p, ok := PrincipalFromContext(r.Context()); ok && p.Kind == model.PrincipalAgent {
+		// filed as the body says
+	} else if a := accessRoleFromContext(r.Context()); a != nil && !a.Full {
 		// filed as the body says
 	} else if cfg, err := s.tasks.Store.GetConfig(r.Context()); err == nil && cfg != nil {
 		if err := applyHiddenFormDefaults(&req, cfg.NewTaskForm); err != nil {

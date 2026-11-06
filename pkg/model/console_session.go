@@ -339,7 +339,8 @@ func defaultConsoleSessionCapabilities() []string {
 // any gets: the director, and nothing else.
 //
 // Its capabilities are the "look at this deployment and explain it"
-// set -- the source checkout this host runs from (self-debug), the
+// set -- the source checkout this host runs from and every task's record
+// (grain#source and api:self-debug, once self-debug), the
 // journal it writes (grain-log), bounded host and state diagnostics
 // (deployment-health), and the runbooks for setting a
 // deployment up (bootstrap-playbooks), which is the capability whose own
@@ -367,7 +368,7 @@ func defaultConsoleSessionCapabilities() []string {
 // isolating backend can close the director in the same pane the
 // capabilities are in.
 func DefaultConsoleSessions() []ConsoleSession {
-	caps := []string{"self-debug", GrainJournalGrant, "api:deployment:read", GrainHealthGrant, "bootstrap-playbooks"}
+	caps := []string{APIGrantPrefix + "self-debug", GrainSourceGrant, GrainJournalGrant, "api:deployment:read", GrainHealthGrant, "bootstrap-playbooks"}
 	for _, id := range defaultConsoleSessionCapabilities() {
 		if !slices.Contains(caps, id) {
 			caps = append(caps, id)

@@ -800,6 +800,12 @@ var Migrations = []Migration{
 			"CREATE INDEX IF NOT EXISTS `ci_run_repo_ref` ON `ci_run` (`repo`, `ref`, `started_at`)",
 		},
 	},
+	{
+		Version: 115,
+		Description: "rewrite stored self-debug grants, repo_config.ci_capabilities and the capability policy's catalogue " +
+			"included, to api:self-debug and https://grain.dev/capabilities/grain#source={} (the in-process capability is retired)",
+		Up: migrateSelfDebugGrants,
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as
