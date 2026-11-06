@@ -974,7 +974,10 @@ func reconcileReviews(ctx context.Context, deps Deps, now time.Time) error {
 // touching the trust boundary whose security review finished clean
 // (securityhold.go).
 func reconcileSecurityHolds(ctx context.Context, deps Deps, now time.Time) error {
-	return SyncSecurityHolds(ctx, deps.Store, deps.Client, now)
+	if err := SyncSecurityHolds(ctx, deps.Store, deps.Client, now); err != nil {
+		return err
+	}
+	return SyncHumanReviewHolds(ctx, deps.Store, now)
 }
 
 // reconcilePathTriggerHolds gives auto-merge back to every change held by

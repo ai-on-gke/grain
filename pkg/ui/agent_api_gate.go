@@ -2335,6 +2335,8 @@ var taskMutationResponseKinds = map[string]taskMutationRespKind{
 	"POST /api/tasks/{id}/sandbox/recreate":        taskRespNone,
 	"POST /api/tasks/{id}/messages":                taskRespNone,
 	"POST /api/tasks/{id}/notes":                   taskRespNone,
+	"POST /api/tasks/{id}/human-review":            taskRespNone,
+	"POST /api/tasks/{id}/human-review/release":    taskRespNone,
 	"POST /api/tasks/{id}/agent-messages":          taskRespNone,
 	"POST /api/tasks/{id}/change-publish":          taskRespSingle,
 	"POST /api/tasks/{id}/change-mail":             taskRespSingle,
