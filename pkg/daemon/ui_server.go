@@ -675,12 +675,20 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		uiCfg.Upgrader = upgrader
 		uiCfg.LastRestart = lastRestart(store, upgrader, cfg.runHostUpgrade.adoption())
 	}
+	uiCfg.DisableSelfUpgrade = cfg.DisableSelfUpgrade
+	uiCfg.ManagementURL = strings.TrimSpace(cfg.ManagementURL)
 	// And one line in the journal saying which of the two pipelines this
 	// deployment's upgrades actually run, or that they are off. Here
 	// rather than inside newUpgrader, so that it is said where the
 	// upgrader is put to use rather than wherever it happens to be
 	// built.
 	switch {
+	case cfg.DisableSelfUpgrade:
+		if uiCfg.ManagementURL != "" {
+			log.Printf("grain daemon: in-VM self-upgrade is disabled (-disable-self-upgrade); upgrades are managed externally at %s", uiCfg.ManagementURL)
+		} else {
+			log.Print("grain daemon: in-VM self-upgrade is disabled (-disable-self-upgrade); upgrades are managed externally")
+		}
 	case cfg.UpgradeImage != "":
 		log.Print(upgradeImageNote(cfg))
 		if len(cfg.UpgradeVerifyCmd) == 0 {

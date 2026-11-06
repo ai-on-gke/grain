@@ -16,6 +16,7 @@ package daemon
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -107,6 +108,12 @@ func LogIgnoredRelaySettings(dataDir string, secretStore *secrets.Store, logf fu
 // error here early, since those leave nothing running worth keeping the
 // process up for. See runDaemon's own doc comment.
 func Run(ctx context.Context, cfg Config) error {
+	ctx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+	var writerLockLost atomic.Pointer[error]
+	var fencedDB atomic.Pointer[sql.DB]
+	var fencedStateManager atomic.Pointer[StateManager]
+
 	// Before anything binds: how long the restart that started this
 	// process left each listener unreachable is measured from the times
 	// the previous process wrote down, against when each is bound below
@@ -163,6 +170,36 @@ func Run(ctx context.Context, cfg Config) error {
 		defer lock.Release()
 	}
 
+	var releasePostgresLease atomic.Pointer[func()]
+	writerLock, err := acquireDaemonWriterLock(ctx, cfg, func(lockErr error) {
+		wrapped := fmt.Errorf("PostgreSQL single-writer advisory lock lost: %w", lockErr)
+		if writerLockLost.CompareAndSwap(nil, &wrapped) {
+			log.Printf("grain daemon: %v; fencing database pool and stopping immediately to prevent split-brain writes", wrapped)
+			if sm := fencedStateManager.Load(); sm != nil {
+				sm.fence()
+			}
+			if rel := releasePostgresLease.Swap(nil); rel != nil && *rel != nil {
+				(*rel)()
+			}
+			if liveDB := fencedDB.Load(); liveDB != nil {
+				_ = liveDB.Close()
+			}
+			cancelRun()
+		}
+	})
+	if err != nil {
+		return err
+	}
+	if writerLock != nil {
+		// Registered before `defer db.Close()` so LIFO defer ordering stops
+		// every background writer and closes the SQL connection pool before
+		// releasing the advisory lock to any waiting replacement VM.
+		defer func() {
+			log.Printf("grain daemon: releasing PostgreSQL single-writer advisory lock (schema=%s)", writerLock.Schema())
+			_ = writerLock.Close()
+		}()
+	}
+
 	// openStore, plus the one recovery a store this build cannot open has:
 	// the note an in-place upgrade leaves when it cut over to a build with
 	// a different schema, which authorises this start to move that store
@@ -174,6 +211,11 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer db.Close()
+	fencedDB.Store(db)
+	if lost := writerLockLost.Load(); lost != nil {
+		_ = db.Close()
+		return *lost
+	}
 	// And the same on a PostgreSQL store itself, which a tool on another
 	// host can see where it cannot see the lock file (postgres.HoldDaemonLease).
 	if cfg.DbDriver == "postgres" {
@@ -181,7 +223,19 @@ func Run(ctx context.Context, cfg Config) error {
 		if err != nil {
 			return err
 		}
-		defer release()
+		releasePostgresLease.Store(&release)
+		if lost := writerLockLost.Load(); lost != nil {
+			if rel := releasePostgresLease.Swap(nil); rel != nil && *rel != nil {
+				(*rel)()
+			}
+			_ = db.Close()
+			return *lost
+		}
+		defer func() {
+			if rel := releasePostgresLease.Swap(nil); rel != nil && *rel != nil {
+				(*rel)()
+			}
+		}()
 	}
 	// Recorded once the store has opened, so a mistyped DSN never replaces
 	// a good one: a daemon started with -postgres-url (or the environment)
@@ -329,6 +383,12 @@ func Run(ctx context.Context, cfg Config) error {
 	// so without this no run's resolution was ever recorded (task 3140).
 	secretStore.SetAuditLogger(store)
 	stateManager := NewStateManager(cfg.DataDir, db, stateRepo, secretStore, secretsRepo, forbidden)
+	fencedStateManager.Store(stateManager)
+	if lost := writerLockLost.Load(); lost != nil {
+		stateManager.fence()
+		_ = db.Close()
+		return *lost
+	}
 	stateManager.noteLoadFailure(loadErr)
 	stateManager.loadAPIScopeSets(ctx)
 	stopStateSync := startStateSync(ctx, stateManager.sync, stateManager.syncAll, stateManager.nudge)
@@ -359,6 +419,35 @@ func Run(ctx context.Context, cfg Config) error {
 	cfg, err = LoadConfig(ctx, store, cfg)
 	if err != nil {
 		return fmt.Errorf("loading deployment configuration: %w", err)
+	}
+	// Bind the UI/API listener before starting capability servers, caches, or
+	// model proxies on ephemeral ports: callers that pass a concrete port or
+	// an ephemeral ":0" address cannot lose that port to an internal listener
+	// opened earlier in Run. If UiAddr requested port 0, preserve the caller's
+	// host part (for HostGuard's wildcard/hostname check) with the bound port.
+	var uiLn net.Listener
+	if cfg.UiAddr != "" {
+		uiLn, err = net.Listen("tcp", cfg.UiAddr)
+		if err != nil {
+			return fmt.Errorf("starting the UI/API server: listening on %s: %w", cfg.UiAddr, err)
+		}
+		if h, p, splitErr := net.SplitHostPort(cfg.UiAddr); splitErr == nil && p == "0" {
+			if _, boundPort, boundErr := net.SplitHostPort(uiLn.Addr().String()); boundErr == nil {
+				if h == "" {
+					cfg.UiAddr = ":" + boundPort
+				} else {
+					cfg.UiAddr = net.JoinHostPort(h, boundPort)
+				}
+			}
+		}
+		if cfg.UIAddrReady != nil {
+			cfg.UIAddrReady(uiLn.Addr().String())
+		}
+		defer func() {
+			if uiLn != nil {
+				_ = uiLn.Close()
+			}
+		}()
 	}
 	// This build is single-tenant only: the store resolves every task's
 	// git credential as the default team's (model.Store.SingleTenant).
@@ -765,19 +854,6 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 
-	var uiLn net.Listener
-	if cfg.UiAddr != "" {
-		uiLn, err = net.Listen("tcp", cfg.UiAddr)
-		if err != nil {
-			return fmt.Errorf("starting the UI/API server: listening on %s: %w", cfg.UiAddr, err)
-		}
-		defer func() {
-			if uiLn != nil {
-				_ = uiLn.Close()
-			}
-		}()
-	}
-
 	capabilityServers, hostdCapabilityServers := startCapabilityServers(ctx, store, secretStore, cfg.DataDir, cfg.capabilityHostd(), gcpKeyPool(cfg))
 	live := NewLiveConfig(store, sandboxes, cfg, githubCredentials).
 		WithSandboxImages(sandboxImages, stockSandboxImage, sandboxImageLabels()).
@@ -980,6 +1056,7 @@ func Run(ctx context.Context, cfg Config) error {
 		if err != nil {
 			return fmt.Errorf("starting the UI/API server: %w", err)
 		}
+		uiLn = nil
 		cfg.restartGaps.Up(upgrade.ServiceAPI)
 		defer func() {
 			cfg.restartGaps.Down(upgrade.ServiceAPI)
@@ -1015,11 +1092,18 @@ func Run(ctx context.Context, cfg Config) error {
 			<-ctx.Done()
 		}
 		<-done
+		if lost := writerLockLost.Load(); lost != nil {
+			return *lost
+		}
 		return nil
 	}
 
-	return runDaemon(ctx, cfg, store, sandboxes, transcriptDir, live, sandboxFabric, pkgCache, actionsCache, forbidden,
+	err = runDaemon(ctx, cfg, store, sandboxes, transcriptDir, live, sandboxFabric, pkgCache, actionsCache, forbidden,
 		stateRepoHooksFor(stateManager), upgrader, secretStore)
+	if lost := writerLockLost.Load(); lost != nil {
+		return *lost
+	}
+	return err
 }
 
 // orphanReaper is the startup sweep both sandbox backends implement:
@@ -1233,7 +1317,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			cfg.CheckpostURL, len(verdicts.Expect))
 	}
 
-	webhookConsumer, err := newGitHubWebhookConsumer(cfg, credentials)
+	webhookConsumer, err := newGitHubWebhookConsumer(ctx, cfg, credentials, store)
 	if err != nil {
 		return err
 	}

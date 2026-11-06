@@ -97,31 +97,9 @@ func DefaultConfig(connURL string) Config {
 // the connection pool and keepalive settings, wraps the driver with
 // query/dialect adaptation for model.Store, and verifies connectivity.
 func Open(cfg Config) (*sql.DB, error) {
-	connConfig, err := parseConnConfig(cfg)
+	connConfig, err := buildConnConfig(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("postgres: parsing config: %w", err)
-	}
-
-	keepAlive := cfg.KeepAlive
-	if keepAlive <= 0 {
-		keepAlive = 1 * time.Minute
-	}
-	connectTimeout := cfg.ConnectTimeout
-	if connectTimeout <= 0 {
-		connectTimeout = 10 * time.Second
-	}
-
-	dialer := &net.Dialer{
-		KeepAlive: keepAlive,
-		Timeout:   connectTimeout,
-	}
-	connConfig.DialFunc = dialer.DialContext
-
-	if cfg.SearchPath != "" {
-		if connConfig.RuntimeParams == nil {
-			connConfig.RuntimeParams = make(map[string]string)
-		}
-		connConfig.RuntimeParams["search_path"] = cfg.SearchPath
+		return nil, err
 	}
 
 	rawConnector := stdlib.GetConnector(*connConfig)
@@ -175,6 +153,37 @@ FROM pg_indexes
 WHERE schemaname = current_schema()`)
 
 	return db, nil
+}
+
+func buildConnConfig(cfg Config) (*pgx.ConnConfig, error) {
+	connConfig, err := parseConnConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: parsing config: %w", err)
+	}
+
+	keepAlive := cfg.KeepAlive
+	if keepAlive <= 0 {
+		keepAlive = 1 * time.Minute
+	}
+	connectTimeout := cfg.ConnectTimeout
+	if connectTimeout <= 0 {
+		connectTimeout = 10 * time.Second
+	}
+
+	dialer := &net.Dialer{
+		KeepAlive: keepAlive,
+		Timeout:   connectTimeout,
+	}
+	connConfig.DialFunc = dialer.DialContext
+
+	if cfg.SearchPath != "" {
+		if connConfig.RuntimeParams == nil {
+			connConfig.RuntimeParams = make(map[string]string)
+		}
+		connConfig.RuntimeParams["search_path"] = cfg.SearchPath
+	}
+
+	return connConfig, nil
 }
 
 func parseConnConfig(cfg Config) (*pgx.ConnConfig, error) {
