@@ -149,6 +149,31 @@ func checkTaskClosed(ctx context.Context, store *model.Store, taskID string, can
 	return false
 }
 
+// checkTurnStopped reads runID's own row once and calls
+// cancel(ErrTurnStopped) if an operator's Stop has already finished it,
+// reporting whether it did. It is the registration-time half of a Stop:
+// the run is marked running as it is dispatched, but it only registers
+// with Config.TaskCancellers once its sandbox is prepared, so a Stop
+// pressed in between finds nothing to cancel and finishes the stored row
+// instead (ui.Client.Stop). Without this read the run would go on to
+// start its agent turn behind a row that says it was stopped -- and, since
+// a task's live run holds its dispatch slot, keep any Retry or reply from
+// dispatching it again until that turn ended on its own. A store error is
+// treated as "not stopped", as checkTaskClosed treats one as "not closed".
+func checkTurnStopped(ctx context.Context, store *model.Store, taskID, runID string, cancel context.CancelCauseFunc) bool {
+	runs, err := store.Runs(ctx, taskID)
+	if err != nil {
+		return false
+	}
+	for _, r := range runs {
+		if r.ID == runID && r.FinishedAt != nil && model.EndingOf(r.Outcome, r.Detail) == model.EndingTurnStopped {
+			cancel(ErrTurnStopped)
+			return true
+		}
+	}
+	return false
+}
+
 // watchForTaskClosed polls store.State(taskID) every interval and calls
 // cancel(errTaskClosed) the moment it reads model.StateClosed -- the
 // store-polled cancellation signal RunDispatch needs because grain daemon
@@ -3254,6 +3279,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		stopCancelling := cfg.TaskCancellers.register(d.TaskID, cancelRun)
 		defer stopCancelling()
 		checkTaskClosed(ctx, store, task.ID, cancelRun)
+		checkTurnStopped(ctx, store, task.ID, d.RunID, cancelRun)
 		watcherDone := make(chan struct{})
 		go func() {
 			defer close(watcherDone)
