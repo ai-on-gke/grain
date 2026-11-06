@@ -100,7 +100,7 @@ var routeDocs = map[string]string{
 	"POST /api/tasks/reorder":                                              "Move tasks in the queue: ids (in order) go after afterId and before beforeId; give only beforeId as the first queued task to move them to the front.",
 	"GET /api/tasks/{id}":                                                  "Read one task in full: its fields, grants, conversation and runs.",
 	"PATCH /api/tasks/{id}":                                                "Edit a task's title, description, priority, base branch, auto-merge or grants -- the same edit the task page makes.",
-	"POST /api/tasks/{id}/capabilities":                                    "Attach a capability to a task or detach one (attach false), with its arguments; replace swaps a grant out for another.",
+	"POST /api/tasks/{id}/capabilities":                                    "Attach a capability to a task or detach one (attach false), with its arguments; replace swaps a grant out for another. Under capabilities:detach alone, only attach false without replace, never on a standing session.",
 	"POST /api/tasks/{id}/depends-on":                                      "Make a task wait on another task (attach true), or stop waiting on it (attach false).",
 	"POST /api/tasks/{id}/approve":                                         "Approve a proposed task, which puts it in the queue.",
 	"POST /api/tasks/{id}/withdraw-approval":                               "Take a queued task back out of the queue, leaving it a proposal again without closing it.",
@@ -150,7 +150,7 @@ var routeDocs = map[string]string{
 	"PUT /api/release-notes":                                               "Write the release notes for a week (period; the week just ended without one).",
 	"POST /api/repos":                                                      "Add a repository to the deployment's targets.",
 	"DELETE /api/repos/{owner}/{name}":                                     "Remove a repository from the deployment's targets.",
-	"PUT /api/repos/{owner}/{name}/ci-capabilities":                        "Set the capabilities a repository's grain CI jobs are granted.",
+	"PUT /api/repos/{owner}/{name}/ci-capabilities":                        "Set the capabilities a repository's grain CI jobs are granted. Under capabilities:detach alone, only a subset of the stored list.",
 	"PUT /api/repos/{owner}/{name}/release":                                "Turn a repository's release workflow on or off, and set the jobs that judge its base branches and are dispatched after a merge.",
 	"PUT /api/repos/{owner}/{name}/release-secrets/{secret}":               "Set the value of one of a repository's release secrets.",
 	"DELETE /api/repos/{owner}/{name}/release-secrets/{secret}":            "Delete one of a repository's release secrets.",
@@ -161,7 +161,7 @@ var routeDocs = map[string]string{
 	"POST /api/releases/{version}/rollback":                                "Roll back a promoted trunk release (vX.Y.Z), tagging vX.Y.Z-retracted and re-pointing latest to an earlier release. Only a person may; an agent is refused.",
 	"POST /api/repos/{owner}/{name}/base-branch-runs":                      "Start a grain CI run of one of a repository's base branches.",
 	"PUT /api/repos/{owner}/{name}/work-ownership":                         "Set who owns a repository's work: its default, or one work item's override.",
-	"PUT /api/repos/{owner}/{name}/capabilities":                           "Set the capabilities every task on a repository is granted by default.",
+	"PUT /api/repos/{owner}/{name}/capabilities":                           "Set the capabilities every task on a repository is granted by default. Under capabilities:detach alone, only a subset of the stored list.",
 	"PUT /api/repos/{owner}/{name}/prompt-extension":                       "Set the text added to every agent prompt for work on a repository.",
 	"PUT /api/repos/{owner}/{name}/setup-command":                          "Set the command a sandbox runs to set up a repository's checkout.",
 	"PUT /api/repos/{owner}/{name}/declarations":                           "Set whether grain reads a repository's own declarations from its tree.",
@@ -899,7 +899,7 @@ func AgentAPITools(client *HTTPClient, taskID string, grants []string) []mcp.Too
 	}
 	var tools []mcp.Tool
 	for _, route := range AgentAPIRoutes() {
-		if !set.Has(route.Scope) && !tasksAdminAllowsTaskPatch(set, route.Pattern) {
+		if !set.Has(route.Scope) && !tasksAdminAllowsTaskPatch(set, route.Pattern) && !capabilitiesDetachAllowsRoute(set, route.Pattern) {
 			continue
 		}
 		tools = append(tools, route.tool(client, taskID))

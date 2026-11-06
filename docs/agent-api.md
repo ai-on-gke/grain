@@ -215,6 +215,7 @@ every `DELETE`.
 | `connections:read` | read git connections and model backends | |
 | `connections:write` | change them | yes |
 | `capabilities:read` | read capability servers and policy, check grants | |
+| `capabilities:detach` | remove grants only: detach one from a task (`POST /api/tasks/{id}/capabilities` with `attach: false`, no `replace`) or narrow a repository's `defaultCapabilities` / `ciCapabilities` to a subset of what is stored; every call needs a reason, it never touches a standing session's task, and it is model-only (never on the sandbox channel). See *Detaching grants* under [Policy](#policy) | |
 | `capabilities:admin` | change capability servers, policy, and any task's or repository's grants | yes |
 | `secrets:read` | list secrets, keys and tokens by name, never their values | |
 | `secrets:write` | set and delete secrets, keys and tokens | yes |
@@ -613,6 +614,31 @@ Actions job's log when given a `gha:` run id. `grain ci wait` and
   (`pkg/orchestrator/finish.go`). A follow-up from a priority-9 task
   that should run as urgently has to ask for 9 itself, which it may do
   without a person's approval because 9 is not above its parent's.
+- **Detaching grants (`capabilities:detach`).**
+  `capabilities:detach` lets an agent such as the director clean up
+  stale or over-broad grants without holding the dangerous
+  `capabilities:admin` (director-capabilities.spec.md §3.1.2). It
+  reaches three `capabilities:admin` routes, and only to remove:
+  - `POST /api/tasks/{id}/capabilities` with `"attach": false` spelled
+    out and no `replace` (naming the grant by `id`, `grant`, or
+    `capability` with its `with`);
+  - `PUT /api/repos/{owner}/{name}/capabilities` whose
+    `defaultCapabilities` list, and
+    `PUT /api/repos/{owner}/{name}/ci-capabilities` whose
+    `ciCapabilities` list, names only entries already stored on that
+    field (an empty list clears it). The body may carry nothing else.
+
+  Every call needs a non-empty reason (`X-Grain-Acting-Reason`; the
+  generated tool's `reason`). A call on a task for which
+  `IsConsoleSession()` holds is refused, whether it is another standing
+  session or the caller's own. An attach, a `replace`, a list naming
+  anything the row does not already hold, or any other route still needs
+  `capabilities:admin`. The scope is not dangerous, so a person need not
+  grant it, but it is sandbox-denied: `grain api` from inside a sandbox
+  (`X-Grain-Channel: sandbox-cli`) cannot spend it, so every detach is a
+  reasoned MCP tool call in the transcript. A repository-limited grant
+  (`api:capabilities:detach@owner/name`) reaches that repository's
+  tasks and lists only.
 - **Edits to grants go through the existing policy.** Approval rules,
   `capability_policy.go` and the proposal trust gate apply to api grants
   exactly as they apply to any other capability.
