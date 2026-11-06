@@ -250,6 +250,20 @@ type Config struct {
 	// UiRequireIAP is -ui-require-iap (ui.Config.RequireIAP), an alias for
 	// UiRequireVerifier = "iap".
 	UiRequireIAP            bool
+	UiOAuthClientID         string
+	UiOAuthClientSecret     string
+	UiOAuthCLIClientID      string
+	UiOAuthCLIClientSecret  string
+	UiOAuthExtraAudiences   string
+	UiOAuthRedirectURL      string
+	UiOAuthHostedDomains    string
+	UiOAuthIssuer           string
+	UiOAuthKeysURL          string
+	UiOAuthAuthURL          string
+	UiOAuthTokenURL         string
+	UiOAuthSessionLifetime  time.Duration
+	UiOAuthSessionKey       string
+	UiRequireOAuth          bool
 	UiAllowedPrincipals     []string
 	UiCloudIdentityEndpoint string
 	UiOpen                  bool

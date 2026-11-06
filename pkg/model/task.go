@@ -98,6 +98,7 @@ type AuthSource string
 const (
 	SourceIAP           AuthSource = "iap"            // a verified IAP assertion
 	SourceRegistry      AuthSource = "registry"       // a verified registry assertion
+	SourceOAuth         AuthSource = "oauth"          // a verified Google OAuth2/OIDC ID token or session
 	SourceToken         AuthSource = "token"          // a per-user API token (future)
 	SourceAccessCode    AuthSource = "access-code"    // the shared access code or its session
 	SourceLoopback      AuthSource = "loopback"       // break-glass over loopback

@@ -131,7 +131,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.tasks != nil {
-		r = r.WithContext(WithIAPConfig(r.Context(), IAPConfig{
+		localTok := s.localAPITokenNow()
+		ctx := WithIAPConfig(r.Context(), IAPConfig{
 			Audience:              s.tasks.Config.IAPAudience,
 			Issuer:                s.tasks.Config.IAPIssuer,
 			KeysURL:               s.tasks.Config.IAPKeysURL,
@@ -140,9 +141,27 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			RegistryKeysURL:       s.tasks.Config.RegistryKeysURL,
 			RequireVerifier:       s.tasks.Config.RequireVerifier,
 			RequireIAP:            s.tasks.Config.RequireIAP,
-			LocalAPIToken:         s.localAPITokenNow(),
+			LocalAPIToken:         localTok,
 			AccessSessionLifetime: s.tasks.Config.AccessSessionLifetime,
-		}))
+		})
+		ctx = WithOAuthConfig(ctx, OAuthConfig{
+			ClientID:        s.tasks.Config.OAuthClientID,
+			ClientSecret:    s.tasks.Config.OAuthClientSecret,
+			CLIClientID:     s.tasks.Config.OAuthCLIClientID,
+			CLIClientSecret: s.tasks.Config.OAuthCLIClientSecret,
+			ExtraAudiences:  s.tasks.Config.OAuthExtraAudiences,
+			RedirectURL:     s.tasks.Config.OAuthRedirectURL,
+			HostedDomains:   s.tasks.Config.OAuthHostedDomains,
+			Issuer:          s.tasks.Config.OAuthIssuer,
+			KeysURL:         s.tasks.Config.OAuthKeysURL,
+			AuthURL:         s.tasks.Config.OAuthAuthURL,
+			TokenURL:        s.tasks.Config.OAuthTokenURL,
+			SessionLifetime: s.tasks.Config.OAuthSessionLifetime,
+			SessionKey:      s.tasks.Config.OAuthSessionKey,
+			RequireOAuth:    s.tasks.Config.RequireOAuth,
+			LocalAPIToken:   localTok,
+		})
+		r = r.WithContext(ctx)
 	}
 	// Nobody gets further without the access code -- loopback included
 	// (accesscode.go, grain/task-4343) -- unless the request presents a
@@ -197,7 +216,15 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		p, method, ok := extractPrincipal(r)
 		if ok {
-			if !singleTenantOpenRoute(r) || s.checkAllowedPrincipal(r.Context(), VerifiedIdentity{Email: p.ID, Kind: p.Kind}) == nil {
+			if s.hasExplicitFlagRoleBindings() {
+				if perms, err := s.resolvePrincipalPermissions(r.Context(), VerifiedIdentity{Email: p.ID, Kind: p.Kind}); err == nil {
+					r = r.WithContext(withPrincipalPermissions(withAuthMethod(WithPrincipal(r.Context(), p), method), perms))
+				} else if !singleTenantOpenRoute(r) {
+					r = r.WithContext(withAuthMethod(WithPrincipal(r.Context(), p), method))
+				} else {
+					ok = false
+				}
+			} else if !singleTenantOpenRoute(r) || s.allowedPrincipalErr(r.Context(), VerifiedIdentity{Email: p.ID, Kind: p.Kind}) == nil {
 				r = r.WithContext(withAuthMethod(WithPrincipal(r.Context(), p), method))
 			} else {
 				ok = false
@@ -270,6 +297,9 @@ func (s *Server) routes() {
 	s.route("GET /api/auth/access-code", s.handleAccessCodeStatus)
 	s.route("POST /api/auth/access-code", s.handleAccessCodeLogin)
 	s.route("GET /api/auth/access-code/login.js", s.handleAccessCodeScript)
+	s.route("GET /api/auth/oauth/login", s.handleOAuthLogin)
+	s.route("GET /api/auth/oauth/callback", s.handleOAuthCallback)
+	s.route("GET /api/auth/oauth/cli-config", s.handleOAuthCLIConfig)
 	s.route("POST /api/auth/logout", s.handleAuthLogout)
 	s.route("GET /api/auth/logout", s.handleAuthLogout)
 	s.route("GET /api/auth/user", s.handleAuthUser)

@@ -1251,6 +1251,48 @@ type Config struct {
 	// session lasts without being used before its access code has to be
 	// entered again; zero is DefaultAccessSessionLifetime.
 	AccessSessionLifetime time.Duration
+	// OAuthClientID is the Google Cloud Web Application OAuth 2.0 Client ID
+	// (-ui-oauth-client-id / $GRAIN_OAUTH_CLIENT_ID) used for browser OAuth2
+	// login and direct OIDC ID token verification.
+	OAuthClientID string
+	// OAuthClientSecret is the Google Cloud Web Application OAuth 2.0 Client Secret
+	// (-ui-oauth-client-secret / $GRAIN_OAUTH_CLIENT_SECRET) used by /api/auth/oauth/callback.
+	OAuthClientSecret string
+	// OAuthCLIClientID is the Google Cloud Desktop App OAuth 2.0 Client ID
+	// (-ui-oauth-cli-client-id / $GRAIN_OAUTH_CLI_CLIENT_ID) used by `grain login`.
+	OAuthCLIClientID string
+	// OAuthCLIClientSecret is the Desktop App OAuth 2.0 Client Secret
+	// (-ui-oauth-cli-client-secret / $GRAIN_OAUTH_CLI_CLIENT_SECRET) used by `grain login`.
+	OAuthCLIClientSecret string
+	// OAuthExtraAudiences is a comma-separated list of additional accepted OAuth2
+	// Client IDs / audiences (-ui-oauth-extra-audiences / $GRAIN_OAUTH_EXTRA_AUDIENCES).
+	OAuthExtraAudiences string
+	// OAuthRedirectURL overrides the callback URL for browser OAuth2 login
+	// (-ui-oauth-redirect-url / $GRAIN_OAUTH_REDIRECT_URL).
+	OAuthRedirectURL string
+	// OAuthHostedDomains is a comma-separated list of allowed Google Workspace
+	// hd domains (-ui-oauth-hosted-domains / $GRAIN_OAUTH_HOSTED_DOMAINS).
+	OAuthHostedDomains string
+	// OAuthIssuer overrides the expected OIDC issuer (-ui-oauth-issuer / $GRAIN_OAUTH_ISSUER);
+	// empty defaults to GoogleOIDCIssuer.
+	OAuthIssuer string
+	// OAuthKeysURL overrides the OIDC JWKS URL (-ui-oauth-keys-url / $GRAIN_OAUTH_KEYS_URL);
+	// empty defaults to GoogleOIDCKeysURL.
+	OAuthKeysURL string
+	// OAuthAuthURL overrides Google's OAuth 2.0 authorization URL.
+	OAuthAuthURL string
+	// OAuthTokenURL overrides Google's OAuth 2.0 token exchange URL.
+	OAuthTokenURL string
+	// OAuthSessionLifetime is how long an in-app OAuth2 browser session lasts
+	// (-ui-oauth-session-lifetime / $GRAIN_OAUTH_SESSION_LIFETIME); zero is DefaultOAuthSessionLifetime.
+	OAuthSessionLifetime time.Duration
+	// OAuthSessionKey is the secret used to HMAC-sign OAuth2 browser session
+	// and PKCE state cookies (-ui-oauth-session-key / $GRAIN_OAUTH_SESSION_KEY).
+	OAuthSessionKey string
+	// RequireOAuth is -ui-require-oauth / $GRAIN_REQUIRE_OAUTH: disables the
+	// single-tenant access code over the network while keeping unforwarded
+	// loopback as break-glass recovery.
+	RequireOAuth bool
 	// InstallTrackProbe, when set, supplies the host and daemon-flag inputs
 	// that GET /api/config combines with the store's live configuration to
 	// classify this deployment as a Google install ("google") or an

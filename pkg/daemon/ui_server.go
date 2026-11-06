@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -155,6 +156,35 @@ func CheckUIRequireIAP(cfg Config) error {
 	return CheckUIRequireVerifier(cfg)
 }
 
+// CheckUIRequireOAuth validates GRAIN_REQUIRE_OAUTH / cfg.UiRequireOAuth and
+// refuses startup when OAuth is required over the network without any OAuth 2.0
+// Client ID configured.
+func CheckUIRequireOAuth(cfg Config) error {
+	requireOAuth := cfg.UiRequireOAuth
+	if env := strings.TrimSpace(os.Getenv("GRAIN_REQUIRE_OAUTH")); env != "" {
+		v, err := strconv.ParseBool(env)
+		if err != nil {
+			return fmt.Errorf("GRAIN_REQUIRE_OAUTH=%q is not a boolean", env)
+		}
+		if !cfg.UiRequireOAuth {
+			requireOAuth = v
+		}
+	}
+	if !requireOAuth {
+		return nil
+	}
+	if strings.TrimSpace(cfg.UiOAuthClientID) != "" ||
+		strings.TrimSpace(cfg.UiOAuthCLIClientID) != "" ||
+		strings.TrimSpace(cfg.UiOAuthExtraAudiences) != "" ||
+		strings.TrimSpace(os.Getenv("GRAIN_OAUTH_CLIENT_ID")) != "" ||
+		strings.TrimSpace(os.Getenv("GRAIN_OAUTH_CLI_CLIENT_ID")) != "" ||
+		strings.TrimSpace(os.Getenv("GRAIN_OAUTH_EXTRA_AUDIENCES")) != "" {
+		return nil
+	}
+	return errors.New("GRAIN_REQUIRE_OAUTH needs an OAuth 2.0 Client ID: set GRAIN_OAUTH_CLIENT_ID (or GRAIN_OAUTH_CLI_CLIENT_ID), " +
+		"or unset GRAIN_REQUIRE_OAUTH to keep accepting the access code over the network")
+}
+
 // startUIServer serves pkg/ui.Server -- the JSON API plus the static
 // frontend -- on addr, over the same store RunCycle dispatches against,
 // returning a shutdown func the same shape startGitProxy's own is.
@@ -283,6 +313,20 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		RegistryKeysURL:            cfg.UiRegistryKeysURL,
 		RequireVerifier:            cfg.UiRequireVerifier,
 		RequireIAP:                 cfg.UiRequireIAP,
+		OAuthClientID:              cfg.UiOAuthClientID,
+		OAuthClientSecret:          cfg.UiOAuthClientSecret,
+		OAuthCLIClientID:           cfg.UiOAuthCLIClientID,
+		OAuthCLIClientSecret:       cfg.UiOAuthCLIClientSecret,
+		OAuthExtraAudiences:        cfg.UiOAuthExtraAudiences,
+		OAuthRedirectURL:           cfg.UiOAuthRedirectURL,
+		OAuthHostedDomains:         cfg.UiOAuthHostedDomains,
+		OAuthIssuer:                cfg.UiOAuthIssuer,
+		OAuthKeysURL:               cfg.UiOAuthKeysURL,
+		OAuthAuthURL:               cfg.UiOAuthAuthURL,
+		OAuthTokenURL:              cfg.UiOAuthTokenURL,
+		OAuthSessionLifetime:       cfg.UiOAuthSessionLifetime,
+		OAuthSessionKey:            cfg.UiOAuthSessionKey,
+		RequireOAuth:               cfg.UiRequireOAuth,
 		AllowedPrincipals:          cfg.UiAllowedPrincipals,
 		ProvisionedServiceAccounts: provisionedSAs,
 		GCPKeyServiceAccounts:      gcpPoolSAs,

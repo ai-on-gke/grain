@@ -698,18 +698,25 @@ spec:
             # dispatch fails writing to a filesystem it does not own.
             - name: HOME
               value: /data/home
-            # CHANGEME (4 of 4, if this Service sits behind IAP): who the
-            # daemon admits as themselves once IAP has authenticated them
-            # (-ui-allowed-principals) -- the installing user, at least,
-            # as user:<their IAP email>. Comma-separated user:, group:,
-            # domain: and serviceAccount: entries. Not the IAP access
-            # list: that decides who reaches this pod, and this decides
-            # who is signed in without the access code. Without it the
-            # daemon's default is its own OS account, which no IAP email
-            # matches. Left as the placeholder, it admits nobody, and a
-            # tunnel with the access code works as before.
+            # CHANGEME (4 of 4, if this Service sits behind IAP or uses
+            # direct in-app OAuth 2.0): who the daemon admits as themselves
+            # once authenticated (-ui-allowed-principals) -- the installing
+            # user, at least, as user:<their email>[=<role>]. Comma- or
+            # newline-separated user:, group:, domain: and serviceAccount:
+            # entries with optional =admin|maintainer|developer|viewer[@owner/repo].
+            # For direct in-app Google Cloud OAuth 2.0 / OIDC (no IAP),
+            # apply deploy/kubernetes/oauth-config.yaml and uncomment
+            # envFrom below instead of setting GRAIN_ALLOWED_PRINCIPALS here.
             - name: GRAIN_ALLOWED_PRINCIPALS
               value: user:CHANGEME@example.com
+          # Direct in-app Google Cloud OAuth 2.0 / OIDC + RBAC (see
+          # deploy/kubernetes/oauth-config.yaml and README "Direct in-app
+          # OAuth 2.0 and RBAC"):
+          # envFrom:
+          #   - configMapRef:
+          #       name: grain-oauth-config
+          #   - secretRef:
+          #       name: grain-oauth-secret
           # CAP_NET_BIND_SERVICE, and nothing else: the Dockerfile
           # setcaps /usr/local/bin/grain with it (cap_net_bind_service=+ep)
           # so the package cache can bind 443/80, the same reason

@@ -71,7 +71,16 @@ func dispatchSignIn(ctx context.Context, c *ui.HTTPClient, out *printer, sel sel
 	case "whoami":
 		return cmdWhoami(ctx, c, out, sel, args)
 	case "login":
+		if isGitLoginInvocation(args) {
+			return cmdGitLogin(ctx, c, out, args)
+		}
+		if isOAuthLoginInvocation(args) {
+			return cmdOAuthLogin(ctx, c, out, args)
+		}
 		return cmdLogin(ctx, c, out, sel, args)
+	}
+	if isOAuthLogoutInvocation(sel, args) {
+		return cmdOAuthLogout(ctx, c, out, args)
 	}
 	return cmdLogout(ctx, c, out, sel, args)
 }

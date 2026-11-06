@@ -150,9 +150,13 @@ var accessCodeServerNote = func() string {
 	var status struct {
 		RequireVerifier string `json:"requireVerifier"`
 		RequireIAP      bool   `json:"requireIAP"`
+		RequireOAuth    bool   `json:"requireOAuth"`
 	}
 	if json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&status) != nil {
 		return ""
+	}
+	if status.RequireOAuth && !status.RequireIAP && strings.TrimSpace(status.RequireVerifier) == "" {
+		return accessCodeRequireOAuthNote
 	}
 	req := strings.TrimSpace(status.RequireVerifier)
 	if req == "" && status.RequireIAP {
@@ -173,6 +177,9 @@ var accessCodeServerNote = func() string {
 
 const accessCodeRequireIAPNote = "the server requires IAP (-ui-require-iap): this code is not accepted over the network, " +
 	"only from the daemon's own host over loopback (kubectl exec deploy/grain -- grain ...); sign in through IAP instead"
+
+const accessCodeRequireOAuthNote = "the server requires OAuth 2.0 ($GRAIN_REQUIRE_OAUTH): this code is not accepted over the network, " +
+	"only from the daemon's own host over loopback (kubectl exec deploy/grain -- grain ...); sign in with `grain login` instead"
 
 const accessCodeRequireVerifierGenericNote = "the server requires verified sign-in (-ui-require-verifier): this code is not accepted over the network, " +
 	"only from the daemon's own host over loopback"

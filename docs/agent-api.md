@@ -250,6 +250,10 @@ table only so the table stays total.
 | `release-gate-read` | `ci:read`, `tasks:read`, `sandboxes:read`, `tasks:from-template` limited to the `release-notes` template |
 | `external-dev` | `tasks:read`, `tasks:write`, `ci:read`, `ci:write`, `merge:write`, `repos:read`, `templates:read`, `deployment:read` |
 | `external-read` | `tasks:read`, `ci:read`, `repos:read`, `templates:read`, `deployment:read` |
+| `role-admin` | all scopes (`admin` RBAC role for verified principals) |
+| `role-maintainer` | maintainer RBAC role: `release-manager` + `tasks:admin`, `repos:write`, `templates:write`, `suites:write`, `boards:write`, `sessions:*`, `caches:*`, `memory:*`, `release-notes:*`, `tests:write`, `dispatch:*`, `teams:broadcast`, `settings:read`, `connections:read`, `capabilities:read`, `deployment:read`, `sandboxes:read` |
+| `role-developer` | developer RBAC role: `task-admin` + `tasks:from-template`, `tests:write`, `dispatch:read`, `schedules:read`, `templates:read`, `suites:read`, `releases:read`, `repos:read`, `boards:read`, `memory:*`, `release-notes:read`, `sessions:read`, `caches:read`, `deployment:read`, `sandboxes:read` |
+| `role-viewer` | viewer RBAC role: all `<area>:read` scopes except `secrets:read` |
 
 The `self-debug` capability is now an alias. A task holding it is also
 served its preset's routes, and keeps the tools it always had under

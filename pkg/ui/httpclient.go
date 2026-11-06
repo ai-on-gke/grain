@@ -192,6 +192,12 @@ func (c *HTTPClient) resolveToken(ctx context.Context) (string, error) {
 		}
 	}
 
+	if tok, err := c.resolveStoredOAuthIDToken(ctx); err != nil {
+		return "", err
+	} else if tok != "" {
+		return tok, nil
+	}
+
 	if c.shouldAttemptCloudRunAuth() {
 		return c.getGoogleIDToken(ctx)
 	}
