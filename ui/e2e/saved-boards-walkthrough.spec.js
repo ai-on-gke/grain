@@ -1478,6 +1478,23 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     const note = page.locator(".board-hidden-note");
     await expect(note).toContainText("Asked to submit");
     await expect(note).not.toContainText(/[(,] Asked[,)]|\(Asked[,)]/);
+
+    // 2026-11-06 walkthrough, bug 2: narrowed to the state no column
+    // collects, the board counted those tasks in the note and, under it,
+    // said none matched at all.
+    await page.goto(`/boards/${board.id}?f=state:any:awaiting_submit`);
+    await expect(note).toContainText(
+      /\d+ tasks? in no column \(Asked to submit\)/,
+    );
+    await expect(page.locator(".board-card")).toHaveCount(0);
+    await expect(
+      page.getByText("No tasks match this search and these filters."),
+    ).toHaveCount(0);
+    await expect(
+      page.getByText(
+        "None of the tasks this search and these filters match is in one of these columns.",
+      ),
+    ).toBeVisible();
   });
 
   test("8. Deletion safety and throwaway cleanup", async ({ page }) => {

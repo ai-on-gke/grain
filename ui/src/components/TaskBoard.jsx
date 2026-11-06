@@ -539,8 +539,14 @@ export default function TaskBoard({
       )}
       {columns.length > 0 && shown === 0 && (
         <ListEmpty>
+          {/* Tasks the narrowing matches but no column collects are
+              counted in the note above: "No tasks match" would be
+              false of them (a board whose one column is "Talking",
+              narrowed to awaiting_submit, said both at once). */}
           {isNarrowed(narrowing)
-            ? "No tasks match this search and these filters."
+            ? hidden > 0
+              ? "None of the tasks this search and these filters match is in one of these columns."
+              : "No tasks match this search and these filters."
             : "No tasks in any of these columns."}
         </ListEmpty>
       )}
