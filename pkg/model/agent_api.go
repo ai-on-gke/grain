@@ -99,6 +99,7 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "connections:read", Description: "Read git connections and model backends"},
 	{Scope: "connections:write", Description: "Change git connections and model backends", Dangerous: true},
 	{Scope: "capabilities:read", Description: "Read capability servers and policy, and check grants"},
+	{Scope: "capabilities:detach", Description: "Remove grants from a task (never a standing session's) and narrow a repository's default or CI capabilities, with a reason"},
 	{Scope: "capabilities:admin", Description: "Change capability servers, policy and any task's or repository's grants", Dangerous: true},
 	{Scope: "secrets:read", Description: "List secrets, keys and tokens by name (never their values)"},
 	{Scope: "secrets:write", Description: "Set and delete secrets, keys and tokens", Dangerous: true},
@@ -697,17 +698,23 @@ func IsDangerousAPIScope(scope APIScope) bool {
 
 // sandboxModelOnlyScopes are non-dangerous scopes that remain model-only
 // (never reachable via the sandbox proxy credential / X-Grain-Channel: sandbox-cli).
+//
+// capabilities:detach is model-only so that removing a grant is always a
+// reasoned MCP tool call the transcript records, never something a script
+// in the sandbox does (director-capabilities.spec.md §3.1.2).
 var sandboxModelOnlyScopes = map[APIScope]bool{
-	"dispatch:write":  true,
-	"repos:write":     true,
-	"sessions:write":  true,
-	"teams:broadcast": true,
+	"capabilities:detach": true,
+	"dispatch:write":      true,
+	"repos:write":         true,
+	"sessions:write":      true,
+	"teams:broadcast":     true,
 }
 
 // IsSandboxDeniedAPIScope reports whether scope is refused on the sandbox
 // proxy channel (X-Grain-Channel: sandbox-cli): every Dangerous scope, plus
-// model-only scopes (dispatch:write, repos:write, sessions:write,
-// teams:broadcast, and any deployment:* scope other than deployment:read).
+// model-only scopes (capabilities:detach, dispatch:write, repos:write,
+// sessions:write, teams:broadcast, and any deployment:* scope other than
+// deployment:read).
 func IsSandboxDeniedAPIScope(scope APIScope) bool {
 	if scope == "" || scope == APIScopeInternal {
 		return true

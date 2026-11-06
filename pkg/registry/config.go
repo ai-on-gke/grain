@@ -119,6 +119,8 @@ type TunnelConfig struct {
 	SelfAddr             string        `yaml:"self_addr"`
 	ReplicaHeartbeat     time.Duration `yaml:"replica_heartbeat"`
 	ReplicaTTL           time.Duration `yaml:"replica_ttl"`
+	ReconnectGrace       time.Duration `yaml:"reconnect_grace"`
+	DrainTimeout         time.Duration `yaml:"drain_timeout"`
 	MaxConcurrentStreams int           `yaml:"max_concurrent_streams"`
 	MaxBufferedBytes     int           `yaml:"max_buffered_bytes"`
 }
@@ -274,6 +276,12 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Tunnel.ReplicaTTL == 0 {
 		c.Tunnel.ReplicaTTL = DefaultTunnelReplicaTTL
+	}
+	if c.Tunnel.ReconnectGrace == 0 {
+		c.Tunnel.ReconnectGrace = 2 * time.Second
+	}
+	if c.Tunnel.DrainTimeout == 0 {
+		c.Tunnel.DrainTimeout = 30 * time.Second
 	}
 	if c.Tunnel.MaxConcurrentStreams == 0 {
 		c.Tunnel.MaxConcurrentStreams = DefaultTunnelMaxConcurrentStreams

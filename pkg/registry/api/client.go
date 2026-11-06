@@ -92,6 +92,12 @@ func IsRateLimited(err error) bool {
 	return errors.As(err, &ae) && ae.StatusCode == http.StatusTooManyRequests
 }
 
+// IsServiceUnavailable reports whether err is an HTTP 503 APIError.
+func IsServiceUnavailable(err error) bool {
+	var ae *APIError
+	return errors.As(err, &ae) && ae.StatusCode == http.StatusServiceUnavailable
+}
+
 func parseAPIError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBytes))
 	ae := &APIError{
@@ -487,11 +493,20 @@ func (c *Client) SetScopes(ctx context.Context, name string, scopes []ScopeInput
 	return &out, nil
 }
 
-// Heartbeat sends POST /api/entries/<name>/heartbeat.
+// Heartbeat sends PUT /api/entries/<name>/heartbeat.
 func (c *Client) Heartbeat(ctx context.Context, name string, req HeartbeatRequest) (*HeartbeatResponse, error) {
 	var out HeartbeatResponse
 	path := "/api/entries/" + url.PathEscape(name) + "/heartbeat"
-	if err := c.doJSON(ctx, http.MethodPost, path, nil, req, &out); err != nil {
+	if err := c.doJSON(ctx, http.MethodPut, path, nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// InstanceStatus fetches GET /api/registry/status from a grain instance.
+func (c *Client) InstanceStatus(ctx context.Context) (*InstanceStatusResponse, error) {
+	var out InstanceStatusResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/registry/status", nil, nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

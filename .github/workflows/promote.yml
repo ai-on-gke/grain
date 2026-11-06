@@ -38,18 +38,82 @@ on:
 
 permissions:
   contents: read
-  packages: write
-  id-token: write
 
 env:
   GOFLAGS: -mod=readonly
   RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO }}
 
 jobs:
+  # A promoted commit whose release run a newer merge superseded has no
+  # sha- images. On a tag or a dispatch -- which is when a release can
+  # name such a commit -- this job has release.yml build, test and
+  # publish it (`workflow_dispatch` with commit=<sha>) and waits, before
+  # `latest` promotes it (grain/task-3334). It is a job of its own so the
+  # token that can dispatch workflows (`actions: write`) is held only
+  # here: never on the push to main or candidate that runs this workflow
+  # on every merge, and never beside the registry credentials `latest`
+  # publishes with. It reads the registry anonymously and pushes nothing.
+  on-demand:
+    name: build the release on demand
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    # Room for release.yml's 120 minutes.
+    timeout-minutes: 180
+    permissions:
+      # actions: write dispatches release.yml for an on-demand build.
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse a patch tag that did not come from its release branch
+        env:
+          PROMOTE_VERSION: ${{ inputs.version }}
+        run: bash ./scripts/patch-tag-guard.sh --latest "${GITHUB_REF:-}" "${PROMOTE_VERSION:-}"
+
+      - name: Build the promoted commit on demand if it has no images
+        env:
+          PROMOTE_VERSION: ${{ inputs.version }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          GH_REF_NAME: ${{ github.head_ref || github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY }}
+          RELEASE_ON_DEMAND_BUILD: dispatch
+        run: |
+          set -euo pipefail
+          export GRAIN_CI_REPO="${GITHUB_REPOSITORY}" GRAIN_CI_COMMIT="${GITHUB_SHA}" GRAIN_CI_REF="${GH_REF_NAME}"
+          args=(on-demand)
+          if [ -n "${PROMOTE_VERSION:-}" ]; then
+            args+=("${PROMOTE_VERSION}")
+          fi
+          # The same dry-run rule as `latest` below.
+          case "${GITHUB_REF:-}" in
+            refs/heads/main|refs/heads/candidate|refs/tags/v*) is_release_ref=true ;;
+            *) is_release_ref=false ;;
+          esac
+          if [ "${INPUT_DRY_RUN:-}" = "true" ] ||
+             { [ "$is_release_ref" != "true" ] && [ "${GITHUB_EVENT_NAME:-}" != "release" ]; }; then
+            bash ./scripts/release-images.sh --dry-run "${args[@]}"
+          else
+            bash ./scripts/release-images.sh "${args[@]}"
+          fi
+
   latest:
     name: promote release images
+    needs: on-demand
+    # On a push on-demand is skipped, and a commit with no images fails
+    # here naming what is missing, as it always did.
+    if: ${{ !cancelled() && (needs.on-demand.result == 'success' || needs.on-demand.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     concurrency:
       group: ${{ github.workflow }}-latest-${{ github.ref }}
       cancel-in-progress: false

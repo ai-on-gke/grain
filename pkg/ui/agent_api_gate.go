@@ -339,10 +339,11 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	capAllowed := agentCapabilityAllowsRoute(held, set, pattern, scope)
 	ciCap := grainCIReadsRoute(held, pattern)
 	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
+	detach := capabilitiesDetachAllowsRoute(set, pattern)
 	if fsMergeQueueByCI(set, pattern, r) {
 		capAllowed = true
 	}
-	if !set.Has(scope) && !capAllowed && !ciCap && !adminPatch {
+	if !set.Has(scope) && !capAllowed && !ciCap && !adminPatch && !detach {
 		return call, fmt.Errorf("task %s holds no api grant for scope %s, which %s needs: "+
 			"ask a person to grant api:%s or a preset that includes it (docs/agent-api.md)", taskID, scope, pattern, scope)
 	}
@@ -379,10 +380,19 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 		}
 		capAllowed = true
 	}
+	if detach && !set.Allows(scope, call.repo) && set.Allows("capabilities:detach", call.repo) {
+		if err := s.capabilitiesDetachAllowed(ctx, "task "+taskID, pattern, call.repo, call.targetTask, call.reason, body); err != nil {
+			return call, err
+		}
+		capAllowed = true
+	}
 	if !set.Allows(scope, call.repo) && !capAllowed {
 		missingScope := scope
 		if !set.Has(scope) && adminPatch {
 			missingScope = "tasks:admin"
+		}
+		if !set.Has(scope) && detach {
+			missingScope = "capabilities:detach"
 		}
 		if call.repo == "" {
 			return call, fmt.Errorf("task %s holds %s only for some repositories, and %s does not name one it reaches",
@@ -468,6 +478,95 @@ func tasksAdminTaskPatchBodyAllowed(body []byte) error {
 		}
 	}
 	return nil
+}
+
+// capabilitiesDetachAllowed holds a call admitted through
+// capabilities:detach alone (capabilitiesDetachAllowsRoute) to what that
+// scope is for (director-capabilities.spec.md §3.1.2): a non-empty reason,
+// a body that only removes (capabilitiesDetachBodyAllowed), and never a
+// standing session's task -- not another session's, and not the caller's
+// own. who names the caller in the refusal.
+func (s *Server) capabilitiesDetachAllowed(ctx context.Context, who, pattern, repo, target, reason string, body []byte) error {
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("%s under scope capabilities:detach removes grants: give a reason (%s)", pattern, ActingReasonHeader)
+	}
+	if pattern == "POST /api/tasks/{id}/capabilities" {
+		if target == "" {
+			return fmt.Errorf("%s under scope capabilities:detach names no task", pattern)
+		}
+		t, err := s.tasks.Store.GetTask(ctx, target)
+		if err != nil || t == nil {
+			return fmt.Errorf("task %s could not be read: %v", target, err)
+		}
+		if t.IsConsoleSession() {
+			session, _ := model.ConsoleSessionIDOf(*t)
+			return fmt.Errorf("%s cannot detach grants from task %s: it is the standing session %q, and "+
+				"capabilities:detach never changes a standing session's grants (its own included)", who, target, session)
+		}
+	}
+	return capabilitiesDetachBodyAllowed(pattern, body, s.storedFieldGrants(ctx, pattern, repo), s.tasks.normalizeCapabilityID)
+}
+
+// capabilitiesDetachBodyAllowed reports whether body only removes grants
+// on pattern: "attach": false with no "replace" on a task, or a repository
+// list every entry of which is already stored on that field (stored, from
+// storedFieldGrants). Anything else -- an attach, a replacement, a list
+// naming something the row does not hold, or a body that does not name
+// the list at all -- needs capabilities:admin.
+func capabilitiesDetachBodyAllowed(pattern string, body []byte, stored map[string][]string, normalize func(string) (string, error)) error {
+	trimmed := bytes.TrimSpace(body)
+	switch pattern {
+	case "POST /api/tasks/{id}/capabilities":
+		var req setCapabilityRequest
+		if len(trimmed) == 0 || json.Unmarshal(trimmed, &req) != nil {
+			return fmt.Errorf("capabilities:detach requires a JSON object with \"attach\": false on %s", pattern)
+		}
+		if req.Attach == nil || *req.Attach {
+			return fmt.Errorf("capabilities:detach may only remove a grant on %s (\"attach\": false); attaching one needs capabilities:admin", pattern)
+		}
+		if req.Replace != "" {
+			return fmt.Errorf("capabilities:detach cannot replace a grant on %s; replacing one needs capabilities:admin", pattern)
+		}
+		if strings.TrimSpace(req.ID) == "" && strings.TrimSpace(req.Grant) == "" && strings.TrimSpace(req.Capability) == "" {
+			return fmt.Errorf("capabilities:detach requires the grant to remove (id, grant, or capability) on %s", pattern)
+		}
+		return nil
+	case "PUT /api/repos/{owner}/{name}/capabilities", "PUT /api/repos/{owner}/{name}/ci-capabilities":
+		field, key := "defaultCapabilities", "defaultcapabilities"
+		if pattern == "PUT /api/repos/{owner}/{name}/ci-capabilities" {
+			field, key = "ciCapabilities", "cicapabilities"
+		}
+		var fields map[string]json.RawMessage
+		if len(trimmed) == 0 || json.Unmarshal(trimmed, &fields) != nil {
+			return fmt.Errorf("capabilities:detach requires a JSON object naming %s on %s", field, pattern)
+		}
+		var list []string
+		found := false
+		for k, raw := range fields {
+			if gateKey(k) != key {
+				return fmt.Errorf("capabilities:detach may only narrow %s on %s (got %q)", field, pattern, k)
+			}
+			if json.Unmarshal(raw, &list) != nil || list == nil {
+				return fmt.Errorf("capabilities:detach requires %s to be a list on %s", field, pattern)
+			}
+			found = true
+		}
+		if !found {
+			return fmt.Errorf("capabilities:detach requires a JSON object naming %s on %s", field, pattern)
+		}
+		existing := stored[key]
+		for _, name := range list {
+			if strings.TrimSpace(name) == "" {
+				continue
+			}
+			if !grantAlreadyStored(existing, name, normalize) {
+				return fmt.Errorf("capabilities:detach may only narrow %s on %s, and %q is not already on it; "+
+					"adding one needs capabilities:admin", field, pattern, name)
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("%s is not a route capabilities:detach reaches", pattern)
 }
 
 // agentTaskPatchBodyAllowed refuses empty or no-op PATCH /api/tasks/{id}
@@ -602,6 +701,11 @@ func (s *Server) agentRails(ctx context.Context, acting *model.Task, pattern, me
 			}
 		}
 	}
+	if (pattern == approveTaskRoute || pattern == runNowTaskRoute) && target != "" {
+		if err := s.agentApprovalRail(ctx, acting, target, pattern == runNowTaskRoute); err != nil {
+			return err
+		}
+	}
 	path := pathOf(pattern)
 	if strings.HasPrefix(path, "/api/console/{id}") {
 		return fmt.Errorf("task %s cannot type into or close a live console through the agent API", acting.ID)
@@ -638,6 +742,243 @@ func (s *Server) agentRails(ctx context.Context, acting *model.Task, pattern, me
 		}
 	}
 	return nil
+}
+
+// approveTaskRoute is the agent API's approval: the person's half of
+// every proposal gate, which agentApprovalRail keeps an agent from
+// spending on its own work or on work held for a person.
+const approveTaskRoute = "POST /api/tasks/{id}/approve"
+
+// runNowTaskRoute dispatches a task ahead of the queue, and approves it
+// first when it has no approval yet (Client.RunNow); agentApprovalRail
+// applies to that implicit approval too.
+const runNowTaskRoute = "POST /api/tasks/{id}/run-now"
+
+// maxProposalLineageDepth bounds agentApprovalRail's walk up a task's
+// LinkProposedBy chain. Proposal trees are shallow in practice; the bound
+// is only there so a malformed chain cannot make one request walk the
+// store forever (the walk also stops at a task it has already seen).
+const maxProposalLineageDepth = 256
+
+// agentApprovalRail refuses an agent approving target
+// (POST /api/tasks/{id}/approve, or POST /api/tasks/{id}/run-now on an
+// unapproved task) when the approval would be the agent deciding something
+// a person must
+// (design/spec/director/director-capabilities.spec.md §3.3 item 3, G8):
+//
+//   - target is in acting's own proposal lineage: acting proposed or filed
+//     it, or proposed a task that proposed it, however far down the
+//     chain. Approving it would be a run queueing its own work on a
+//     permission nobody gave that work.
+//   - target is held for a person (proposalPersonHolds): it asked for
+//     hold_for_approval, targets grain/config or a person-held change
+//     target, carries a declared push set or ungranted auto-merge, holds a
+//     requires_person or person-only grant, or asks for capabilities,
+//     writes, reads or settings its own proposer could not give it.
+//
+// It holds whatever acting is granted, api:tasks:admin and dispatch:write
+// included, which is what makes it a rail rather than a scope: tasks:admin
+// being a person's grant says a person trusts the run to approve other
+// work, not that the run may stand in for the person every hold is waiting
+// for. When onlyIfUnapproved is true (POST /api/tasks/{id}/run-now), an
+// already-approved target passes straight through so dispatch:write can
+// still jump queued work ahead of the backlog.
+func (s *Server) agentApprovalRail(ctx context.Context, acting *model.Task, target string, onlyIfUnapproved bool) error {
+	id := model.NormalizeTaskID(target)
+	task, err := s.tasks.Store.GetTask(ctx, id)
+	if err != nil {
+		return fmt.Errorf("reading task %s: %w", id, err)
+	}
+	if task == nil || (onlyIfUnapproved && task.Approval != nil) {
+		// Not there (the handler's own 404 says so), or already approved on a
+		// route that only approves unapproved tasks.
+		return nil
+	}
+	me := model.NormalizeTaskID(acting.ID)
+	proposer, chain, err := s.proposalLineage(ctx, *task, me)
+	if err != nil {
+		return err
+	}
+	if len(chain) > 0 {
+		how := "it proposed it"
+		if len(chain) > 1 {
+			how = "it is in the chain that proposed it (" + strings.Join(chain, " → ") + ")"
+		}
+		return fmt.Errorf("task %s cannot approve task %s: %s, and an agent never approves its own proposals, "+
+			"directly or through the tasks they filed, even under api:tasks:admin -- a person approves them "+
+			"(docs/agent-api.md)", me, task.ID, how)
+	}
+	if holds, err := s.proposalPersonHolds(ctx, *task, proposer, acting); err != nil {
+		return err
+	} else if len(holds) > 0 {
+		return fmt.Errorf("task %s cannot approve task %s: it is held for a person (%s), and an agent never "+
+			"approves a task held for a person, even under api:tasks:admin (docs/agent-api.md)",
+			me, task.ID, strings.Join(holds, "; "))
+	}
+	return nil
+}
+
+// proposalLineage walks task's LinkProposedBy chain upwards. It returns
+// task's own proposer (nil when it has none, or it is no longer stored)
+// and, when actor is somewhere on that chain, the chain from actor down
+// to task's proposer, nearest last -- empty when actor proposed none of
+// it.
+func (s *Server) proposalLineage(ctx context.Context, task model.Task, actor string) (*model.Task, []string, error) {
+	var proposer *model.Task
+	var chain []string
+	seen := map[string]bool{task.ID: true}
+	cur := task
+	for range maxProposalLineageDepth {
+		up := proposedByOf(cur)
+		if up == "" || seen[up] {
+			return proposer, nil, nil
+		}
+		seen[up] = true
+		chain = append(chain, up)
+		if up == actor {
+			slices.Reverse(chain)
+			return proposer, chain, nil
+		}
+		next, err := s.tasks.Store.GetTask(ctx, up)
+		if err != nil {
+			return nil, nil, fmt.Errorf("reading task %s, which proposed %s: %w", up, cur.ID, err)
+		}
+		if next == nil {
+			return proposer, nil, nil
+		}
+		if proposer == nil {
+			proposer = next
+		}
+		cur = *next
+	}
+	if up := proposedByOf(cur); up != "" && !seen[up] {
+		return nil, nil, fmt.Errorf("task %s's LinkProposedBy chain exceeds %d hops, so its proposal lineage cannot be verified",
+			task.ID, maxProposalLineageDepth)
+	}
+	return proposer, nil, nil
+}
+
+// proposedByOf is the in-grain task that proposed or filed t: its
+// LinkProposedBy target, or the acting task recorded on t.Origin when an
+// agent filed t directly over POST /api/tasks rather than propose_task.
+// "" for a task filed by a person, automation or an external credential.
+func proposedByOf(t model.Task) string {
+	for _, l := range t.Links {
+		if l.Kind == model.LinkProposedBy {
+			return model.NormalizeTaskID(l.Target)
+		}
+	}
+	if t.Origin.Attribution.OnBehalfOf != nil {
+		if id := inGrainAgentTaskID(*t.Origin.Attribution.OnBehalfOf); id != "" {
+			return id
+		}
+	}
+	return inGrainAgentTaskID(t.Origin.Attribution.Actor)
+}
+
+func inGrainAgentTaskID(p model.Principal) string {
+	id := strings.TrimSpace(p.ID)
+	if p.Kind != model.PrincipalAgent || p.Source == model.SourceExternalToken ||
+		id == "" || strings.HasPrefix(id, "external:") {
+		return ""
+	}
+	return model.NormalizeTaskID(id)
+}
+
+// proposalPersonHolds is every reason task waits for a person rather than
+// for any automated approver, each phrased to sit in a list after "held
+// for a person": none means it waits for nobody in particular. The
+// reasons are the ones filing a proposal or approving via RunNow holds it
+// for (ui.CreateTask, orchestrator.relayProposedTasks, Client.agentMayApprove),
+// asked again of the task as it stands now:
+//
+//   - hold_for_approval (model.HeldForApprovalTag);
+//   - targeting or writing this deployment's configuration repository
+//     (model.ConfigRepoProposalHold);
+//   - targeting a change target that requires a person's approval
+//     (model.ChangeTargetNeedsPersonApproval);
+//   - a grant settings/capabilities.yml marks requires_person, for the
+//     capability or the method it names (catalogueRequiresPerson);
+//   - a person-only grant (model.IsPersonOnlyGrant): a dangerous api
+//     scope, a capability method only a person may grant, durable or
+//     priority-dispatch;
+//   - carrying a repository-declared push set (declaredPushOf) or
+//     auto-merge that acting could not have inherited itself;
+//   - keep_running on any task, and against proposer when there is one:
+//     capabilities, write targets or reads it does not hold
+//     (model.EscalatedCapabilities, UngrantedWrites, UngrantedReads), and
+//     keep_running or a priority above its own
+//     (model.PersonOnlyProposalSettings).
+func (s *Server) proposalPersonHolds(ctx context.Context, task model.Task, proposer, acting *model.Task) ([]string, error) {
+	var holds []string
+	if model.HeldForApproval(task) {
+		holds = append(holds, "it was filed with hold_for_approval")
+	}
+	if why := model.ConfigRepoProposalHold(task); why != "" {
+		holds = append(holds, why)
+	}
+	if needs, why := model.ChangeTargetNeedsPersonApproval(task.ChangeTarget); needs {
+		holds = append(holds, why)
+	}
+	needsPerson, err := s.tasks.catalogueRequiresPerson(ctx, task)
+	if err != nil {
+		return nil, fmt.Errorf("reading the capability catalogue: %w", err)
+	}
+	if len(needsPerson) > 0 {
+		holds = append(holds, fmt.Sprintf("it holds %s, which settings/capabilities.yml marks requires_person",
+			strings.Join(needsPerson, ", ")))
+	}
+	var personOnly []string
+	for _, g := range task.Grants {
+		if model.IsPersonOnlyGrant(g.Capability) && !slices.Contains(personOnly, g.Capability) {
+			personOnly = append(personOnly, g.Capability)
+		}
+	}
+	if len(personOnly) > 0 {
+		holds = append(holds, fmt.Sprintf("it holds %s, which only a person may grant", strings.Join(personOnly, ", ")))
+	}
+	if task.TemplateID != "" {
+		decl, err := s.tasks.Store.GetRepoDeclaration(ctx, task.TemplateID)
+		if err != nil {
+			return nil, fmt.Errorf("reading declaration %s: %w", task.TemplateID, err)
+		}
+		if push := declaredPushOf(decl); push != nil {
+			holds = append(holds, fmt.Sprintf("it carries a declared push set from %s", push.Path))
+		}
+	}
+	if task.AutoMerge && (acting == nil || !(acting.AutoMerge && model.LandsWhereGranted(task, *acting))) {
+		holds = append(holds, "it has auto-merge enabled, which would land its change without review")
+	}
+	if proposer == nil {
+		if why := model.PersonOnlyProposalSettings(model.Task{KeepRunning: task.KeepRunning}, model.Task{}); why != "" {
+			holds = append(holds, why)
+		}
+		return holds, nil
+	}
+	if escalated := model.EscalatedCapabilities(task, *proposer); len(escalated) > 0 {
+		holds = append(holds, fmt.Sprintf("it asks for %s, which task %s that proposed it does not hold",
+			strings.Join(escalated, ", "), proposer.ID))
+	}
+	if writes := model.UngrantedWrites(task, *proposer); len(writes) > 0 {
+		names := make([]string, 0, len(writes))
+		for _, w := range writes {
+			names = append(names, w.Repo.String())
+		}
+		holds = append(holds, fmt.Sprintf("it may land work in %s, which task %s that proposed it was never given",
+			strings.Join(names, ", "), proposer.ID))
+	}
+	if reads := model.UngrantedReads(task, *proposer); len(reads) > 0 {
+		names := make([]string, 0, len(reads))
+		for _, r := range reads {
+			names = append(names, r.String())
+		}
+		holds = append(holds, fmt.Sprintf("it reads %s, which task %s that proposed it cannot read",
+			strings.Join(names, ", "), proposer.ID))
+	}
+	if why := model.PersonOnlyProposalSettings(task, *proposer); why != "" {
+		holds = append(holds, why)
+	}
+	return holds, nil
 }
 
 // agentGrantEscalation refuses a body that writes any capability the
@@ -1443,11 +1784,16 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 			}
 		case "approved", "interactive":
 			var on bool
-			if json.Unmarshal(raw, &on) == nil && on && !set.Allows("tasks:admin", repo) {
-				if opts.role != nil {
-					return fmt.Errorf("%s cannot set %s: approving work needs tasks:admin", opts.role.label(), key)
+			if json.Unmarshal(raw, &on) == nil && on {
+				if opts.acting != nil && gateKey(key) == "approved" {
+					return errors.New("an agent files work unapproved and never approves its own proposals, even under api:tasks:admin (docs/agent-api.md)")
 				}
-				return errors.New("an agent files work unapproved: approving it needs tasks:admin")
+				if !set.Allows("tasks:admin", repo) {
+					if opts.role != nil {
+						return fmt.Errorf("%s cannot set %s: approving work needs tasks:admin", opts.role.label(), key)
+					}
+					return errors.New("an agent files work unapproved: approving it needs tasks:admin")
+				}
 			}
 		case "owner":
 			if opts.role == nil && hasTaskOwnerField(pattern, raw) {
@@ -2212,13 +2558,14 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	}
 	call.grants = set
 	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
+	detach := capabilitiesDetachAllowsRoute(set, pattern)
 	// GET /api/inbox and GET /api/events without ?repo= answer only the
 	// repositories the token reads (Server.inboxReadable,
 	// Server.eventsReadable), so a token held to some of them is let
 	// through rather than refused for naming none.
 	fsAllowed := fsMergeQueueByCI(set, pattern, r) ||
 		((pattern == "GET /api/inbox" || pattern == "GET /api/events") && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "")
-	if !set.Has(scope) && !adminPatch && !fsAllowed {
+	if !set.Has(scope) && !adminPatch && !fsAllowed && !detach {
 		return call, fmt.Errorf("%s holds no api grant for scope %s, which %s needs", principal, scope, pattern)
 	}
 	if fsRoutes[pattern] == "src" && !set.Has("deployment:src") {
@@ -2257,10 +2604,19 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 		}
 		adminPatchAllowed = true
 	}
+	if detach && !set.Allows(scope, call.repo) && set.Allows("capabilities:detach", call.repo) {
+		if err := s.capabilitiesDetachAllowed(ctx, principal, pattern, call.repo, call.targetTask, call.reason, body); err != nil {
+			return call, err
+		}
+		adminPatchAllowed = true
+	}
 	if !set.Allows(scope, call.repo) && !adminPatchAllowed && !fsAllowed {
 		missingScope := scope
 		if !set.Has(scope) && adminPatch {
 			missingScope = "tasks:admin"
+		}
+		if !set.Has(scope) && detach {
+			missingScope = "capabilities:detach"
 		}
 		if call.repo == "" {
 			return call, fmt.Errorf("%s holds %s only for %s, and %s does not name a repository it reaches",

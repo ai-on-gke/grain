@@ -564,7 +564,8 @@ func (c *Client) redBaseBranches(ctx context.Context) redBaseLookup {
 	}
 	if relRows, err := c.Store.ListBaseBranchRelease(ctx); err == nil {
 		for _, r := range relRows {
-			if r.Failing() || (r.Conclusion != "" && r.Conclusion != "success" && r.Conclusion != "skipped") {
+			if r.Failing() || (r.Conclusion != "" && r.Conclusion != "success" && r.Conclusion != "skipped" &&
+				!r.Superseded()) {
 				out.broken[strings.ToLower(r.Repo.String())+":"+r.Branch] = true
 			}
 		}
@@ -6375,6 +6376,7 @@ func (c *Client) cancelActiveRuns(ctx context.Context, id string, now time.Time,
 	if err != nil {
 		return err
 	}
+	finishedAny := false
 	for i := range runs {
 		if runs[i].FinishedAt != nil {
 			continue
@@ -6382,12 +6384,13 @@ func (c *Client) cancelActiveRuns(ctx context.Context, id string, now time.Time,
 		if err := c.Store.FinishRun(ctx, runs[i].ID, now, "cancelled", detail); err != nil {
 			return err
 		}
+		finishedAny = true
 	}
-	// Asked again now the rows are finished: a run that registered its
-	// canceller after the first ask, but before its row was finished
-	// here, is reached this way, and one that registers after this sees
-	// its row finished and stops itself (orchestrator.checkRunStopped).
-	if c.Config.TaskCanceller != nil {
+	// Ask the canceller again once the rows are finished: a run that
+	// registered after the first check above but before FinishRun committed
+	// is cancelled immediately here, while any run that registers after
+	// FinishRun sees store.RunFinished and cancels itself on registration.
+	if finishedAny && c.Config.TaskCanceller != nil {
 		c.Config.TaskCanceller.CancelTask(ctx, id)
 	}
 	return nil

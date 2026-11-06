@@ -87,7 +87,7 @@ With `-json` it prints the `ui.Task` array.
 | `-external-ref` | string |  |  | shorthand for -filter externalRef:any:VALUE (e.g. CA-204, or "none" for tasks with no external reference) |
 | `-filter` | value |  |  | only tasks matching this condition, written attribute:comparison:value -- repeatable, and every one of them has to hold |
 | `-interactive` | bool |  |  | only live chats (-interactive=false for only background tasks) |
-| `-origin` | string |  |  | shorthand for -filter origin:any:VALUE (hand, external, proposed, schedule, suite, fix, review) |
+| `-origin` | string |  |  | shorthand for -filter origin:any:VALUE (hand, external, proposed, imported, schedule, suite, fix, review) |
 | `-owner` | string |  |  | shorthand for -filter owner:any:VALUE (or "me" for your own tasks) |
 | `-repo` | string |  |  | shorthand for -filter repo:any:VALUE (owner/name, or "none" for the tasks with no target repo) |
 | `-search` | string |  |  | only tasks whose title or id contains this text, case-insensitively |
@@ -1435,6 +1435,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-postgres-url` | string |  |  | PostgreSQL connection URL (alias for -db-driver=postgres -db-dsn=URL) |
 | `-reboot-cmd` | value |  |  | one argument of the command the UI's reboot-host button runs -- repeat for every argument. Defaults to sudo systemctl reboot. |
 | `-registry-auth-mode` | string |  | $GRAIN_REGISTRY_TOKEN | credential mode for registry heartbeats: "token" (secret registry-registration-token, -registry-token-file, or $GRAIN_REGISTRY_TOKEN) or "oidc" (ID token for -registry-oidc-audience) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
+| `-registry-connect` | bool |  | $GRAIN_REGISTRY_CONNECT | supervise an outbound wss://<registry-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the registry assertion verifier gate ($GRAIN_REGISTRY_CONNECT; requires -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url) |
 | `-registry-display-name` | string |  |  | human-readable display name advertised in the registry directory (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
 | `-registry-entry` | string |  | $GRAIN_REGISTRY_ENTRY | entry name this daemon registers and heartbeats as in the grain registry ($GRAIN_REGISTRY_ENTRY) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
 | `-registry-host-kind` | string |  |  | connected entry host kind advertised to the registry: "workstation", "kubernetes", or "other" (defaults to the active sandbox backend) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |

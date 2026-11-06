@@ -21,6 +21,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -505,7 +506,7 @@ type HeartbeatScope struct {
 	Branch     string    `json:"branch,omitempty"`
 }
 
-// HeartbeatRequest is sent to POST /api/entries/<name>/heartbeat by a connected daemon.
+// HeartbeatRequest is sent to PUT /api/entries/<name>/heartbeat by a connected daemon.
 type HeartbeatRequest struct {
 	GrainVersion       string           `json:"grain_version,omitempty"`
 	GrainCommit        string           `json:"grain_commit,omitempty"`
@@ -519,12 +520,36 @@ type HeartbeatRequest struct {
 	Scopes             []HeartbeatScope `json:"scopes,omitempty"`
 }
 
-// HeartbeatResponse is returned by POST /api/entries/<name>/heartbeat.
+// HeartbeatResponse is returned by PUT /api/entries/<name>/heartbeat.
 type HeartbeatResponse struct {
-	Status              EntryStatus     `json:"status"`
-	ActiveScopes        []Scope         `json:"active_scopes,omitempty"`
-	Conflicts           []ScopeConflict `json:"conflicts,omitempty"`
-	NextIntervalSeconds int             `json:"next_interval_seconds,omitempty"`
+	Status               EntryStatus     `json:"status"`
+	ActiveScopes         []Scope         `json:"active_scopes,omitempty"`
+	Conflicts            []ScopeConflict `json:"conflicts,omitempty"`
+	ScopeConflicts       []ScopeConflict `json:"scope_conflicts,omitempty"`
+	NextIntervalSeconds  int             `json:"next_interval_seconds,omitempty"`
+	NextHeartbeatSeconds int             `json:"next_heartbeat_seconds,omitempty"`
+}
+
+// UnmarshalJSON accepts both "conflicts" and "scope_conflicts" as well as both
+// "next_interval_seconds" and "next_heartbeat_seconds".
+func (r *HeartbeatResponse) UnmarshalJSON(data []byte) error {
+	type alias HeartbeatResponse
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*r = HeartbeatResponse(a)
+	if len(r.Conflicts) == 0 && len(r.ScopeConflicts) > 0 {
+		r.Conflicts = r.ScopeConflicts
+	} else if len(r.ScopeConflicts) == 0 && len(r.Conflicts) > 0 {
+		r.ScopeConflicts = r.Conflicts
+	}
+	if r.NextIntervalSeconds == 0 && r.NextHeartbeatSeconds > 0 {
+		r.NextIntervalSeconds = r.NextHeartbeatSeconds
+	} else if r.NextHeartbeatSeconds == 0 && r.NextIntervalSeconds > 0 {
+		r.NextHeartbeatSeconds = r.NextIntervalSeconds
+	}
+	return nil
 }
 
 // InstanceStatusResponse is the read-only payload served by a hosted daemon's

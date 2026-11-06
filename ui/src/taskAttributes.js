@@ -134,11 +134,11 @@ export const NONE_LABEL_FALLBACK = "Not set";
 
 const ORIGIN_LABELS = {
   hand: "Filed by hand",
+  external: "Filed by an external agent",
   proposed: "Proposed by an agent",
+  imported: "Imported issue",
   schedule: "Scheduled",
   suite: "Suite run",
-  imported: "Imported issue",
-  external: "Filed by an external agent",
   fix: "Merge fix",
   review: "Review",
 };
@@ -412,11 +412,15 @@ export const ATTRIBUTES = [
       "hand",
       "external",
       "proposed",
+      "imported",
       "schedule",
       "suite",
       "fix",
       "review",
     ],
+    // Every value originOf returns, so `origin:any:robot` says it
+    // matches nothing rather than reading as a real origin.
+    closed: true,
     labelOf: (v) => ORIGIN_LABELS[v] || v,
     // The same two figures the rows carry: a task filed by a schedule
     // wears the hourglass on its own chip (TaskList/TaskBoard), so the

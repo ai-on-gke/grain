@@ -177,7 +177,7 @@ every `DELETE`.
 |---|---|---|
 | `tasks:read` | read tasks, conversations, transcripts, trees | |
 | `tasks:write` | file, edit, comment on, reorder, defer, pause, resume, retry, stop, close and reopen tasks | |
-| `tasks:admin` | approve proposed tasks, recreate sandboxes, edit numeric task `priority` (`PATCH /api/tasks/{id}` with `{"priority": <int>}` only) | yes |
+| `tasks:admin` | approve proposed tasks (never its own proposals or a task held for a person: see [Self-protection rails](#self-protection-rails)), recreate sandboxes, edit numeric task `priority` (`PATCH /api/tasks/{id}` with `{"priority": <int>}` only) | yes |
 | `tasks:from-template` | file a task from a repository's own declared template (`POST /api/tasks/from-template`); an agent's call also needs `tasks:write`, since it is served as `POST /api/tasks` | |
 | `merge:write` | open pull requests for tasks, retry their merges | |
 | `merge:force` | force-merge past the gate | yes |
@@ -215,6 +215,7 @@ every `DELETE`.
 | `connections:read` | read git connections and model backends | |
 | `connections:write` | change them | yes |
 | `capabilities:read` | read capability servers and policy, check grants | |
+| `capabilities:detach` | remove grants only: detach one from a task (`POST /api/tasks/{id}/capabilities` with `attach: false`, no `replace`) or narrow a repository's `defaultCapabilities` / `ciCapabilities` to a subset of what is stored; every call needs a reason, it never touches a standing session's task, and it is model-only (never on the sandbox channel). See *Detaching grants* under [Policy](#policy) | |
 | `capabilities:admin` | change capability servers, policy, and any task's or repository's grants | yes |
 | `secrets:read` | list secrets, keys and tokens by name, never their values | |
 | `secrets:write` | set and delete secrets, keys and tokens | yes |
@@ -613,6 +614,31 @@ Actions job's log when given a `gha:` run id. `grain ci wait` and
   (`pkg/orchestrator/finish.go`). A follow-up from a priority-9 task
   that should run as urgently has to ask for 9 itself, which it may do
   without a person's approval because 9 is not above its parent's.
+- **Detaching grants (`capabilities:detach`).**
+  `capabilities:detach` lets an agent such as the director clean up
+  stale or over-broad grants without holding the dangerous
+  `capabilities:admin` (director-capabilities.spec.md §3.1.2). It
+  reaches three `capabilities:admin` routes, and only to remove:
+  - `POST /api/tasks/{id}/capabilities` with `"attach": false` spelled
+    out and no `replace` (naming the grant by `id`, `grant`, or
+    `capability` with its `with`);
+  - `PUT /api/repos/{owner}/{name}/capabilities` whose
+    `defaultCapabilities` list, and
+    `PUT /api/repos/{owner}/{name}/ci-capabilities` whose
+    `ciCapabilities` list, names only entries already stored on that
+    field (an empty list clears it). The body may carry nothing else.
+
+  Every call needs a non-empty reason (`X-Grain-Acting-Reason`; the
+  generated tool's `reason`). A call on a task for which
+  `IsConsoleSession()` holds is refused, whether it is another standing
+  session or the caller's own. An attach, a `replace`, a list naming
+  anything the row does not already hold, or any other route still needs
+  `capabilities:admin`. The scope is not dangerous, so a person need not
+  grant it, but it is sandbox-denied: `grain api` from inside a sandbox
+  (`X-Grain-Channel: sandbox-cli`) cannot spend it, so every detach is a
+  reasoned MCP tool call in the transcript. A repository-limited grant
+  (`api:capabilities:detach@owner/name`) reaches that repository's
+  tasks and lists only.
 - **Edits to grants go through the existing policy.** Approval rules,
   `capability_policy.go` and the proposal trust gate apply to api grants
   exactly as they apply to any other capability.
@@ -638,6 +664,29 @@ Actions job's log when given a `gha:` run id. `grain ci wait` and
   parks the session or acts on its run. It reaches the session the same
   way whether it is sent through the agent API, `grain task message` or
   `grain mcpserver`'s `message_task`.
+- **Approving its own work, or a person's.** Even holding a person's
+  `api:tasks:admin` or `api:dispatch-control` (`dispatch:write`), a run
+  always files work unapproved (`approved: true` is refused) and can't
+  approve (`POST /api/tasks/{id}/approve`, `api_approve_task`, or
+  `POST /api/tasks/{id}/run-now` on an unapproved task):
+  - a task in its own proposal lineage: one it proposed or filed over the
+    API, or one proposed by any task down that chain, however many hops;
+  - a task held for a person: one filed with `hold_for_approval`
+    (`held-for-approval` tag), targeting or writing `grain/config`, or
+    targeting a change target that requires a person's approval; one
+    carrying a repository-declared `push:` set or ungranted `autoMerge`;
+    one holding a grant `settings/capabilities.yml` marks `requires_person`,
+    or a person-only grant (a dangerous api scope, a capability method
+    only a person may grant, `durable`, `priority-dispatch`); or one
+    setting `keep_running`, or asking for a capability, write target, read
+    or priority its own proposer doesn't hold.
+
+  The refusal is a 403 naming the chain or the holds. Once a task is
+  approved, `run-now` still jumps it ahead of the queue under
+  `dispatch:write`, and any other unapproved task outside the run's lineage
+  and held for nobody is still approved under `tasks:admin`. A person
+  approves either kind as before
+  (design/spec/director/director-capabilities.spec.md §3.3 item 3, G8).
 - **Upgrade holds.** A run honours them. It can't lift a dispatch pause
   someone else took. It can't upgrade, restart or reboot while an upgrade
   check holds dispatch for another task.

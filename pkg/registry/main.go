@@ -263,6 +263,12 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return err
 	}
 
+	replicaID := "replica-" + uuid.NewString()[:8]
+	peerAddr := cfg.Tunnel.SelfAddr
+	if peerAddr == "" {
+		peerAddr = cfg.Tunnel.PeerListen
+	}
+
 	srv, err := NewServer(ServerOptions{
 		Config:     cfg,
 		Store:      st,
@@ -272,6 +278,8 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		Signer:     signer,
 		Transport:  transport,
 		Metrics:    NewMetrics(),
+		ReplicaID:  replicaID,
+		PeerAddr:   peerAddr,
 	})
 	if err != nil {
 		return err
@@ -292,14 +300,19 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		defer jwksLn.Close()
 	}
 
-	replicaID := "replica-" + uuid.NewString()[:8]
-	if st != nil {
-		peerAddr := cfg.Tunnel.SelfAddr
-		if peerAddr == "" {
-			peerAddr = cfg.Tunnel.PeerListen
+	var peerLn net.Listener
+	if cfg.Tunnel.PeerListen != "" && cfg.Tunnel.PeerListen != cfg.Listen && cfg.Tunnel.PeerListen != cfg.JWKSListen {
+		peerLn, err = net.Listen("tcp", cfg.Tunnel.PeerListen)
+		if err != nil {
+			return fmt.Errorf("listening on peer address %s: %w", cfg.Tunnel.PeerListen, err)
 		}
-		_ = st.UpsertReplica(ctx, replicaID, peerAddr)
+		defer peerLn.Close()
+		if cfg.Tunnel.SelfAddr == "" {
+			srv.Router().SetPeerAddr(peerLn.Addr().String())
+		}
 	}
+
+	srv.StartBackground(ctx)
 
 	mainHTTPSrv := &http.Server{
 		Handler:           srv.Handler(),
@@ -308,12 +321,19 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	var jwksHTTPSrv *http.Server
 	if jwksLn != nil {
 		jwksHTTPSrv = &http.Server{
-			Handler:           srv.JWKSHandler(),
+			Handler:           srv.PublicHandler(),
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+	}
+	var peerHTTPSrv *http.Server
+	if peerLn != nil {
+		peerHTTPSrv = &http.Server{
+			Handler:           srv.PeerHandler(),
 			ReadHeaderTimeout: 10 * time.Second,
 		}
 	}
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	go func() {
 		if err := mainHTTPSrv.Serve(mainLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("main server: %w", err)
@@ -326,17 +346,27 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			}
 		}()
 	}
+	if peerHTTPSrv != nil {
+		go func() {
+			if err := peerHTTPSrv.Serve(peerLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errCh <- fmt.Errorf("peer server: %w", err)
+			}
+		}()
+	}
 
-	fmt.Fprintf(stdout, "grain-registry listening on %s (jwks: %s)\n", mainLn.Addr().String(), cfg.JWKSListen)
+	fmt.Fprintf(stdout, "grain-registry listening on %s (jwks: %s, peer: %s)\n", mainLn.Addr().String(), cfg.JWKSListen, cfg.Tunnel.PeerListen)
 
 	select {
 	case <-ctx.Done():
-		srv.SetDraining(true)
-		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		srv.BeginDrain(shutCtx)
 		_ = mainHTTPSrv.Shutdown(shutCtx)
 		if jwksHTTPSrv != nil {
 			_ = jwksHTTPSrv.Shutdown(shutCtx)
+		}
+		if peerHTTPSrv != nil {
+			_ = peerHTTPSrv.Shutdown(shutCtx)
 		}
 		if st != nil {
 			_ = st.DeleteReplica(shutCtx, replicaID)
