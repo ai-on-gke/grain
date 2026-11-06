@@ -2246,7 +2246,13 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if s.tasks.Config.ReconcilerDown != nil {
 		resp.ReconcilerDown = s.tasks.Config.ReconcilerDown()
 	}
-	resp.DispatchBlocked = s.tasks.dispatchBlocked()
+	// Why, with the daemon's own error text and remedy, is for a caller
+	// who has signed in: the sign-in page needs none of it, and the
+	// text names the host's ports, flags and paths. The boolean above
+	// stays, as it was.
+	if authenticated || singleTenantTrusted(r) {
+		resp.DispatchBlocked = s.tasks.dispatchBlocked()
+	}
 	if s.tasks.Config.StoreSwitch != nil {
 		resp.StoreSwitch = s.tasks.Config.StoreSwitch()
 	}

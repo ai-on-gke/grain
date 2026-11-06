@@ -47,7 +47,8 @@ type Condition struct {
 	// Name identifies the condition for a machine: "git-proxy",
 	// "reconciler". One per cause; setting a name twice updates it.
 	Name string `json:"name"`
-	// Error is the underlying failure's text, as it was logged.
+	// Error is the underlying failure's text: its first line, with the
+	// rest -- a panic's stack -- left to the journal (Block).
 	Error string `json:"error"`
 	// Since is when the condition was set.
 	Since time.Time `json:"since"`
@@ -115,6 +116,16 @@ func (s *Set) logf(format string, args ...any) {
 // already in force keeps its Since and takes the new error text, so a
 // setter that re-reports the same failure every cycle neither moves
 // the clock nor writes a line each time.
+//
+// Only the error's first line is kept (errorLine). A condition is read
+// far outside the journal -- by every queued task's reason, which any
+// agent reads for its own task from its sandbox, by GET /api/config,
+// and by the health route and the pipeline feed -- and the one error
+// that arrives with more than a line is runDaemon's recovered panic,
+// whose text is the panic value followed by a goroutine stack: the
+// build's file paths, every frame and its pointers. That is for the
+// journal, where the daemon logs the whole error beside this
+// condition; the condition carries what the operator reads first.
 func (s *Set) Block(name string, err error, remedy string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -123,7 +134,7 @@ func (s *Set) Block(name string, err error, remedy string) {
 	}
 	text := "unknown error"
 	if err != nil {
-		text = err.Error()
+		text = errorLine(err)
 	}
 	if c, ok := s.active[name]; ok {
 		c.Error, c.Remedy = text, remedy
@@ -134,6 +145,23 @@ func (s *Set) Block(name string, err error, remedy string) {
 	s.active[name] = c
 	s.record(Event{At: c.Since, Set: true, Condition: c})
 	s.logf("grain daemon: dispatch blocked [%s]: %s -- no task is dispatched until this clears", name, text)
+}
+
+// errorLine is err's first line, trimmed, and "unknown error" when that
+// is empty: the condition's text (Block). A multi-line error -- a
+// recovered panic with its stack -- keeps its first line and says the
+// rest is in the journal.
+func errorLine(err error) string {
+	text := err.Error()
+	first, rest, more := strings.Cut(text, "\n")
+	first = strings.TrimSpace(first)
+	if first == "" {
+		return "unknown error"
+	}
+	if more && strings.TrimSpace(rest) != "" {
+		first += " (the rest is in the daemon's journal)"
+	}
+	return first
 }
 
 // Clear lifts the condition name, logging it; a name not in force is

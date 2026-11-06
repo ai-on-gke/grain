@@ -113,3 +113,37 @@ func TestBlockWithNilErrorStillNamesTheCondition(t *testing.T) {
 		t.Errorf("Why() = %q", got)
 	}
 }
+
+// A condition is read from places the journal is not -- every queued
+// task's reason, which an agent reads from its sandbox, GET /api/config,
+// the health route -- so a multi-line error, which is runDaemon's
+// recovered panic and its goroutine stack, is kept to its first line
+// there. The stack is in the journal, where run() logs the whole error.
+func TestBlockKeepsOnlyTheErrorsFirstLine(t *testing.T) {
+	var lines []string
+	s := &dispatchcondition.Set{Logf: func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }}
+	stack := "goroutine 42 [running]:\nruntime/debug.Stack()\n\t/usr/local/go/src/runtime/debug/stack.go:26 +0x5e\n" +
+		"github.com/ai-on-gke/grain/pkg/daemon.runDaemon.func1()\n\t/home/builder/grain/pkg/daemon/run.go:1140 +0x3c"
+	s.Block("reconciler", fmt.Errorf("panic: runtime error: index out of range [3] with length 2\n%s", stack), "")
+
+	got := s.Active()[0].Error
+	if strings.Contains(got, "\n") || strings.Contains(got, "goroutine") || strings.Contains(got, "/home/builder") {
+		t.Errorf("Error = %q, want the panic's first line without its stack", got)
+	}
+	if !strings.HasPrefix(got, "panic: runtime error: index out of range [3] with length 2") || !strings.Contains(got, "journal") {
+		t.Errorf("Error = %q, want the first line and a pointer to the journal", got)
+	}
+	if why := s.Why(); strings.Contains(why, "\n") {
+		t.Errorf("Why() = %q, want one line", why)
+	}
+	if len(lines) != 1 || strings.Contains(lines[0], "goroutine") {
+		t.Errorf("log lines = %q, want one, without the stack", lines)
+	}
+
+	// A one-line error is kept as it is, and trailing whitespace is not
+	// a second line.
+	s.Block("git-proxy", errors.New("listen tcp :7100: address already in use\n"), "")
+	if got := s.Active()[1].Error; got != "listen tcp :7100: address already in use" {
+		t.Errorf("Error = %q, want the one line, trimmed", got)
+	}
+}
