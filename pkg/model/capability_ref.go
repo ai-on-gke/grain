@@ -552,8 +552,21 @@ func (p CapabilityPolicy) Permits(g string, s CapabilitySubject, servers ...map[
 		}
 	}
 	refs := equivalentCapabilityRefs(ref, servers)
+	denyRefs := slices.Clone(refs)
+	// Schema migration 118 rewrote a deny rule on bootstrap-playbooks to
+	// ConfigMapRef (https://grain.dev/capabilities/config-map#config-map).
+	// Bootstrap playbooks can also be requested via #skill (or an unnormalized
+	// unnamed #skill grant whose server default includes "bootstrap"); widen
+	// deny-only matching (never allow/allowUntrusted) so #skill cannot bypass it.
+	if IsBootstrapPlaybooksGrant(g) || BootstrapSkillSetUnnamed(g) {
+		for _, extra := range equivalentCapabilityRefs(ConfigMapRef, servers) {
+			if !slices.Contains(denyRefs, extra) {
+				denyRefs = append(denyRefs, extra)
+			}
+		}
+	}
 	for i, r := range p.Rules {
-		if !r.Deny || !r.namesAny(refs) {
+		if !r.Deny || !r.namesAny(denyRefs) {
 			continue
 		}
 		if r.covers(s) {
@@ -717,8 +730,7 @@ func equivalentCapabilityRefs(ref string, serverMaps []map[string]protocol.Serve
 	}
 	for _, servers := range serverMaps {
 		_, hasSkill := servers[SkillCapabilityServerID]
-		_, hasCM := servers[ConfigMapCapabilityServerID]
-		if !(hasSkill && hasCM) && (hasCM || hasSkill || len(servers) == 0) {
+		if !hasSkill {
 			addImplicitSkillConfigMapAlias()
 		}
 		for entryID, cfg := range servers {

@@ -213,3 +213,98 @@ func TestSkillAndConfigMapImplicitServerAliasBindsPolicyAndCatalogue(t *testing.
 		t.Errorf("independent skill server was denied by config-map rule: %v", err)
 	}
 }
+
+func TestCapabilityPolicyDenyConfigMapCoversBootstrapSkillAndUnensuredServers(t *testing.T) {
+	skill := SkillCapabilityServerID + "#skill"
+	cmSkill := ConfigMapCapabilityServerID + "#skill"
+	skillCM := SkillCapabilityServerID + "#" + ConfigMapMethod
+	subj := CapabilitySubject{Repo: &RepoRef{Owner: "acme", Name: "widgets"}, Kind: CapabilityRunTask}
+
+	// Pre-EnsureBuiltins MCPServers map holding an unrelated server entry:
+	// implicit skill/config-map alias and #skill bootstrap deny must still bind.
+	unensured := map[string]protocol.ServerConfig{
+		GCPCapabilityServerID: {Command: "grain", Args: []string{"capability", "gcp"}, Builtin: "gcp"},
+	}
+	pol := CapabilityPolicy{
+		Rules: []CapabilityPolicyRule{{Capability: ConfigMapRef, Deny: true}},
+	}
+	for _, blocked := range []string{
+		BootstrapPlaybooksGrant,
+		skillCM + `={"config_maps":["bootstrap"]}`,
+		skillCM + `={"secrets":["prod"]}`,
+		cmSkill + `={"skills":["bootstrap"]}`,
+		skill + `={"skills":["bootstrap"]}`,
+		cmSkill,
+		skill,
+	} {
+		if err := pol.Permits(blocked, subj, unensured); err == nil {
+			t.Errorf("Permits(%q, unensured) = nil under ConfigMapRef deny, want refusal", blocked)
+		}
+	}
+
+	// Unrelated explicit #skill grants remain permitted under a migrated
+	// ConfigMapRef deny rule.
+	for _, allowed := range []string{
+		cmSkill + `={"skills":["ops"]}`,
+		skill + `={"skills":["ops"]}`,
+	} {
+		if err := pol.Permits(allowed, subj, unensured); err != nil {
+			t.Errorf("Permits(%q, unensured) = %v under ConfigMapRef deny, want nil", allowed, err)
+		}
+	}
+
+	// Widening is strictly deny-only: AllowUntrusted on ConfigMapRef never
+	// admits untrusted #skill grants.
+	allowUntrustedCM := CapabilityPolicy{
+		Rules: []CapabilityPolicyRule{{Capability: ConfigMapRef, AllowUntrusted: true}},
+	}
+	untrusted := CapabilitySubject{Repo: subj.Repo, Kind: CapabilityRunCI, Event: "pull_request", Untrusted: true}
+	if err := allowUntrustedCM.Permits(cmSkill+`={"skills":["bootstrap"]}`, untrusted); err == nil {
+		t.Error("AllowUntrusted on ConfigMapRef admitted untrusted #skill grant")
+	}
+}
+
+func TestDangerousAndTemplateGrantsExpandLegacyCapabilities(t *testing.T) {
+	const testSrv = "https://acme.example/capabilities/host-script"
+	protocol.NotePersonGrantedArgs(testSrv, map[string]*protocol.MethodInfo{
+		"host-script": {
+			ArgsSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"script": map[string]any{
+						"type":                       "string",
+						protocol.PersonGrantedArgKey: []any{"guarded-wipe"},
+					},
+				},
+			},
+		},
+	})
+	defer protocol.NotePersonGrantedArgs(testSrv, map[string]*protocol.MethodInfo{"host-script": {}})
+
+	restore := SetRuntimeGrantExpansions(map[string][]string{
+		"local-scripts:guarded": {testSrv + `#host-script={"script":"guarded-wipe"}`},
+		"local-scripts:safe":    {testSrv + `#host-script={"script":"lint"}`},
+	})
+	defer restore()
+
+	if !IsDangerousGrant("local-scripts:guarded") || !IsPersonOnlyGrant("local-scripts:guarded") {
+		t.Error("runtime-expanded person-granted capability was not classified as dangerous/person-only")
+	}
+	if IsDangerousGrant("local-scripts:safe") {
+		t.Error("non-person-granted runtime expansion was classified as dangerous")
+	}
+
+	acting := Task{Grants: []Grant{{Capability: BootstrapPlaybooksGrant}}}
+	bootTmpl := Template{ID: "t-boot", Grants: []Grant{{Capability: "bootstrap-playbooks"}}}
+	if err := TemplateWithinTask(acting, bootTmpl); err != nil {
+		t.Errorf("TemplateWithinTask(acting with canonical bootstrap, template with legacy alias) = %v, want nil", err)
+	}
+	if err := TemplateWithinTask(Task{}, bootTmpl); err == nil {
+		t.Error("TemplateWithinTask(empty acting, template with bootstrap-playbooks) = nil, want refusal")
+	}
+	guardedTmpl := Template{ID: "t-guarded", Grants: []Grant{{Capability: "local-scripts:guarded"}}}
+	actingWithGuarded := Task{Grants: []Grant{{Capability: testSrv + `#host-script={"script":"guarded-wipe"}`}}}
+	if err := TemplateWithinTask(actingWithGuarded, guardedTmpl); err == nil {
+		t.Error("TemplateWithinTask admitted person-only runtime-expanded grant")
+	}
+}
