@@ -19,7 +19,7 @@ import "slices"
 // GKESandboxClusterTemplateID names the built-in interactive template
 // that walks a person through setting up an off-cluster GKE sandbox
 // cluster and attaching it to this deployment: the gke-sandbox-cluster
-// bootstrap playbook (pkg/capability/bootstrap/playbooks), driven as a
+// bootstrap playbook (pkg/playbooks), driven as a
 // live chat.
 //
 // Unlike every other system template it backs no schedule. It is filed
