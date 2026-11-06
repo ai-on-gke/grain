@@ -188,6 +188,10 @@ const (
 	MaxPurposeRunes = 280
 	// MaxTagsPerEntry bounds the number of catalog tags on an entry.
 	MaxTagsPerEntry = 10
+	// DefaultHeartbeatInterval is the default connected-entry heartbeat cadence (~15s).
+	DefaultHeartbeatInterval = 15 * time.Second
+	// RegistrationTokenPrefix identifies registry-minted connected-entry credentials.
+	RegistrationTokenPrefix = "grc_"
 )
 
 var (
@@ -444,19 +448,21 @@ type Entry struct {
 
 // CreateEntryRequest is the request body for POST /api/entries.
 type CreateEntryRequest struct {
-	Name            string       `json:"name"`
-	Kind            EntryKind    `json:"kind"`
-	DisplayName     string       `json:"display_name,omitempty"`
-	Purpose         string       `json:"purpose,omitempty"`
-	OwnerGroup      string       `json:"owner_group,omitempty"`
-	Listed          *bool        `json:"listed,omitempty"`
-	Tags            []string     `json:"tags,omitempty"`
-	Shape           string       `json:"shape,omitempty"`
-	Zone            string       `json:"zone,omitempty"`
-	AllowSSH        *bool        `json:"allow_ssh,omitempty"`
-	ShipLogs        *bool        `json:"ship_logs,omitempty"`
-	Scopes          []ScopeInput `json:"scopes,omitempty"`
-	CredentialLabel string       `json:"credential_label,omitempty"`
+	Name               string       `json:"name"`
+	Kind               EntryKind    `json:"kind"`
+	HostKind           HostKind     `json:"host_kind,omitempty"`
+	ConnectedPrincipal string       `json:"connected_principal,omitempty"`
+	DisplayName        string       `json:"display_name,omitempty"`
+	Purpose            string       `json:"purpose,omitempty"`
+	OwnerGroup         string       `json:"owner_group,omitempty"`
+	Listed             *bool        `json:"listed,omitempty"`
+	Tags               []string     `json:"tags,omitempty"`
+	Shape              string       `json:"shape,omitempty"`
+	Zone               string       `json:"zone,omitempty"`
+	AllowSSH           *bool        `json:"allow_ssh,omitempty"`
+	ShipLogs           *bool        `json:"ship_logs,omitempty"`
+	Scopes             []ScopeInput `json:"scopes,omitempty"`
+	CredentialLabel    string       `json:"credential_label,omitempty"`
 }
 
 // CreateEntryResponse is returned by POST /api/entries. RegistrationToken is
@@ -469,13 +475,15 @@ type CreateEntryResponse struct {
 
 // UpdateEntryRequest is the PATCH /api/entries/<name> payload for mutable catalog and VM flags.
 type UpdateEntryRequest struct {
-	DisplayName *string   `json:"display_name,omitempty"`
-	Purpose     *string   `json:"purpose,omitempty"`
-	OwnerGroup  *string   `json:"owner_group,omitempty"`
-	Listed      *bool     `json:"listed,omitempty"`
-	Tags        *[]string `json:"tags,omitempty"`
-	AllowSSH    *bool     `json:"allow_ssh,omitempty"`
-	ShipLogs    *bool     `json:"ship_logs,omitempty"`
+	DisplayName        *string   `json:"display_name,omitempty"`
+	Purpose            *string   `json:"purpose,omitempty"`
+	HostKind           *HostKind `json:"host_kind,omitempty"`
+	ConnectedPrincipal *string   `json:"connected_principal,omitempty"`
+	OwnerGroup         *string   `json:"owner_group,omitempty"`
+	Listed             *bool     `json:"listed,omitempty"`
+	Tags               *[]string `json:"tags,omitempty"`
+	AllowSSH           *bool     `json:"allow_ssh,omitempty"`
+	ShipLogs           *bool     `json:"ship_logs,omitempty"`
 }
 
 // SetScopesRequest replaces an entry's declared scopes via PUT /api/entries/<name>/scopes.
@@ -491,21 +499,24 @@ type SetScopesResponse struct {
 
 // HeartbeatScope is a single repository checkout or workspace reported by a running daemon.
 type HeartbeatScope struct {
-	Repo       string `json:"repo"`
-	PathPrefix string `json:"path_prefix,omitempty"`
-	Branch     string `json:"branch,omitempty"`
+	Repo       string    `json:"repo"`
+	PathPrefix string    `json:"path_prefix,omitempty"`
+	Role       ScopeRole `json:"role,omitempty"`
+	Branch     string    `json:"branch,omitempty"`
 }
 
 // HeartbeatRequest is sent to POST /api/entries/<name>/heartbeat by a connected daemon.
 type HeartbeatRequest struct {
-	GrainVersion   string           `json:"grain_version,omitempty"`
-	GrainCommit    string           `json:"grain_commit,omitempty"`
-	HostKind       HostKind         `json:"host_kind,omitempty"`
-	Health         HealthState      `json:"health,omitempty"`
-	ActiveTasks    int              `json:"active_tasks"`
-	QueueDepth     int              `json:"queue_depth"`
-	ActiveSessions int              `json:"active_sessions"`
-	Scopes         []HeartbeatScope `json:"scopes,omitempty"`
+	GrainVersion       string           `json:"grain_version,omitempty"`
+	GrainCommit        string           `json:"grain_commit,omitempty"`
+	HostKind           HostKind         `json:"host_kind,omitempty"`
+	Health             HealthState      `json:"health,omitempty"`
+	HealthDetail       string           `json:"health_detail,omitempty"`
+	ActiveTasks        int              `json:"active_tasks"`
+	AwaitingReplyTasks int              `json:"awaiting_reply_tasks"`
+	QueueDepth         int              `json:"queue_depth"`
+	ActiveSessions     int              `json:"active_sessions"`
+	Scopes             []HeartbeatScope `json:"scopes,omitempty"`
 }
 
 // HeartbeatResponse is returned by POST /api/entries/<name>/heartbeat.
@@ -519,14 +530,16 @@ type HeartbeatResponse struct {
 // InstanceStatusResponse is the read-only payload served by a hosted daemon's
 // GET /api/registry/status endpoint when probed by the registry reconciler.
 type InstanceStatusResponse struct {
-	GrainVersion   string           `json:"grain_version"`
-	GrainCommit    string           `json:"grain_commit,omitempty"`
-	HostKind       HostKind         `json:"host_kind,omitempty"`
-	Health         HealthState      `json:"health"`
-	ActiveTasks    int              `json:"active_tasks"`
-	QueueDepth     int              `json:"queue_depth"`
-	ActiveSessions int              `json:"active_sessions"`
-	Scopes         []HeartbeatScope `json:"scopes,omitempty"`
+	GrainVersion       string           `json:"grain_version"`
+	GrainCommit        string           `json:"grain_commit,omitempty"`
+	HostKind           HostKind         `json:"host_kind,omitempty"`
+	Health             HealthState      `json:"health"`
+	HealthDetail       string           `json:"health_detail,omitempty"`
+	ActiveTasks        int              `json:"active_tasks"`
+	AwaitingReplyTasks int              `json:"awaiting_reply_tasks"`
+	QueueDepth         int              `json:"queue_depth"`
+	ActiveSessions     int              `json:"active_sessions"`
+	Scopes             []HeartbeatScope `json:"scopes,omitempty"`
 }
 
 // RotateCredentialRequest is the request body for POST /api/entries/<name>/credentials/rotate.

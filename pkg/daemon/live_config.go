@@ -154,6 +154,9 @@ type LiveConfig struct {
 	// pinned task's run is routed to; Refresh hands it each mcp_servers
 	// too. Nil beside a nil capabilityServers.
 	hostdCapabilityServers *hostdCapabilityServers
+	// registry is the background grain registry manager (registry.go);
+	// Refresh notifies it whenever grain_config.registry or target_repos changes.
+	registry *RegistryManager
 
 	Mu      sync.Mutex
 	Applied Config
@@ -196,6 +199,21 @@ func (l *LiveConfig) WithSandboxImages(src *sandboximage.Source, stock string, l
 func (l *LiveConfig) WithCapabilityServers(r *servers.Registry) *LiveConfig {
 	l.capabilityServers = r
 	return l
+}
+
+// WithRegistry hands Refresh the background registry manager to wake whenever
+// grain_config.registry or target_repos changes.
+func (l *LiveConfig) WithRegistry(r *RegistryManager) *LiveConfig {
+	l.registry = r
+	return l
+}
+
+// Registry returns the background registry manager attached to l, or nil.
+func (l *LiveConfig) Registry() *RegistryManager {
+	if l == nil {
+		return nil
+	}
+	return l.registry
 }
 
 // withHostdCapabilityServers hands Refresh the hostds' registries of run:
@@ -455,6 +473,9 @@ func (l *LiveConfig) Refresh(ctx context.Context, deps *orchestrator.Deps) (poll
 		configured := registerBuiltinCapabilityServers(ctx, l.store, now.DataDir, stored.MCPServers)
 		l.capabilityServers.Update(deploymentCapabilityServers(configured))
 		l.hostdCapabilityServers.update(configured)
+	}
+	if l.registry != nil {
+		l.registry.NotifyStoreConfig(stored.Registry, stored.TargetRepos)
 	}
 
 	wasCPUOvercommit, wasMemOvercommit := was.overcommitRatios()

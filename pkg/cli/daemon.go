@@ -552,6 +552,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			"A job's sandbox is built the way a run's is and given no credential beyond a read-only checkout of "+
 			"the one repository under test (pkg/ci, \"What a workflow file is trusted with\").")
 	grit := daemon.RegisterGritFlags(fs)
+	registryFlags := registerRegistryFlags(fs)
 
 	// The CI job cache's bounds (ci.DirCacheOptions). Seeds, like the CI
 	// history's four below and unlike what they were until
@@ -1353,6 +1354,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		K8sGranuleAccess:      *k8sGranuleAccess, K8sGranuleReattachTimeout: *k8sGranuleReattachTimeout, SandboxCPUs: *sandboxCPUs, SandboxMemoryMB: *sandboxMemoryMB, SandboxDiskGB: *sandboxDiskGB,
 	}
 	grit.Apply(&cfg)
+	registryFlags.apply(&cfg, passed)
 	if err = upgradeSource.apply(&cfg, passed); err != nil {
 		return cfg, fs, unknownFlags, err
 	}
@@ -1366,5 +1368,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 // checkConfig validates the flags parsed into cfg (daemon.CheckDaemonFlags plus
 // the CLI's own package-cache upstream syntax check).
 func checkConfig(cfg daemon.Config) error {
-	return daemon.CheckDaemonFlags(cfg, daemon.LocalSandboxes != nil, checkPackageCacheUpstreams)
+	if err := daemon.CheckDaemonFlags(cfg, daemon.LocalSandboxes != nil, checkPackageCacheUpstreams); err != nil {
+		return err
+	}
+	return checkRegistryConfig(cfg)
 }

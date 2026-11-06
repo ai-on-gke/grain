@@ -465,7 +465,7 @@ func TestServerAuthBoundariesMetricsAndErrorSanitization(t *testing.T) {
 		}
 	}
 
-	// 2. Service principals may read /api/directory and /api/route, but GET /api/entries rejects them with 403.
+	// 2. Service principals may read /api/directory and /api/route; GET /api/entries, /api/me and /api/shapes reject them with 403.
 	for _, tc := range []struct {
 		path string
 		want int
@@ -474,6 +474,7 @@ func TestServerAuthBoundariesMetricsAndErrorSanitization(t *testing.T) {
 		{"/api/route?repo=acme/repo", http.StatusOK},
 		{"/api/entries", http.StatusForbidden},
 		{"/api/me", http.StatusForbidden},
+		{"/api/shapes", http.StatusForbidden},
 	} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "https://registry.example.com"+tc.path, nil)
