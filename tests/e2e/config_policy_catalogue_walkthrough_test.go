@@ -331,7 +331,7 @@ func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 		t.Fatal(err)
 	}
 	importCatalogue(t, w.store, `in_process:
-  read-issues:
+  priority-dispatch:
     restrictions: {requires_person: true}
   read-issues:
     restrictions: {templates: [walk-ops]}
@@ -349,7 +349,7 @@ func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 		}
 		steps := w.changeScript(task, "echo 'typo' >> docs/guide.md")
 		return append([]antigravity.Step{
-			propose("needs read-issues", "read-issues"),
+			propose("needs priority-dispatch", "priority-dispatch"),
 			propose("needs read-issues", "read-issues"),
 			propose("needs nothing"),
 		}, steps...)
@@ -371,7 +371,7 @@ func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 		state        model.State
 		note         string
 	}{
-		{"needs read-issues", "read-issues", model.StateProposed, model.CatalogueRequiresPersonNote([]string{"read-issues"})},
+		{"needs priority-dispatch", "priority-dispatch", model.StateProposed, model.CatalogueRequiresPersonNote([]string{"priority-dispatch"})},
 		{"needs read-issues", "read-issues", model.StateProposed, "settings/capabilities.yml refuses what it asked for"},
 		{"needs nothing", "", model.StateQueued, ""},
 	} {
