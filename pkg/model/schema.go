@@ -552,7 +552,12 @@ import "strconv"
 // `https://grain.dev/capabilities/grain#source={}`: the in-process
 // `self-debug` provider is retired for the api preset and the grain
 // server's `#source` method.
-const SchemaVersion = 115
+//
+// 116 adds `grain_config`.`registry` (model.Config.Registry): the connected
+// entry settings (registry URL, entry name, auth mode, catalog metadata, and
+// scope overrides) for daemon self-registration and heartbeating
+// (design/design/registry.design.md).
+const SchemaVersion = 116
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
@@ -2514,6 +2519,7 @@ var Tables = []string{
   ` + "`auto_upgrade_on`" + `              TEXT    NOT NULL DEFAULT '',
   ` + "`owner_trust`" + `                  TEXT    NOT NULL DEFAULT '',
   ` + "`auto_grant_context_reads`" + `     TEXT    NOT NULL DEFAULT '',
+  ` + "`registry`" + `                     TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
