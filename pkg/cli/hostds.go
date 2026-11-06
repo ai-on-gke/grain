@@ -19,14 +19,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"sort"
 	"strings"
 
-	"github.com/ai-on-gke/grain/pkg/daemon"
-	"github.com/ai-on-gke/grain/pkg/hostd"
-	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -237,36 +233,4 @@ func writeTokenFile(path, token string) error {
 		return err
 	}
 	return f.Close()
-}
-
-// hostdRemote is the acceptor for a grain hostd dialing in with the token
-// in tokenFile, or $GRAIN_HOSTD_TOKEN, as hostd name owned by owner; nil
-// when neither names a token.
-func hostdRemote(tokenFile, name, owner string) (*hostd.Remote, error) {
-	token := strings.TrimSpace(os.Getenv("GRAIN_HOSTD_TOKEN"))
-	if tokenFile != "" {
-		t, err := daemon.ReadTokenFile(tokenFile)
-		if err != nil {
-			return nil, fmt.Errorf("reading -hostd-token-file: %w", err)
-		}
-		token = t
-	}
-	if token == "" {
-		return nil, nil
-	}
-	if name == "" {
-		name = hostd.DefaultSharedName
-	}
-	if err := model.ValidateHostdName(name); err != nil {
-		return nil, fmt.Errorf("-hostd-token-name: %w", err)
-	}
-	if name == model.LocalHostd {
-		return nil, fmt.Errorf("-hostd-token-name: %q is the co-located host's name", name)
-	}
-	owner, err := model.NormalizeHostdOwner(owner)
-	if err != nil {
-		return nil, fmt.Errorf("-hostd-token-owner: %w", err)
-	}
-	log.Printf("grain daemon: -hostd-token-file is deprecated and goes in the next release: register hostd %s in the hostd registry (POST /api/hostds) and give it the token it answers with", name)
-	return &hostd.Remote{Token: token, SharedName: name, SharedOwner: owner, Logf: log.Printf}, nil
 }

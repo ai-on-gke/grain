@@ -149,7 +149,18 @@ export default function SettingsPage({
   const { settings, settingsError, reloadSettings } = s;
   const [filter, setFilter] = useState("");
   const filterRef = useRef(null);
-  const matches = useMemo(() => matchSettings(filter), [filter]);
+  const matches = useMemo(() => {
+    const raw = matchSettings(filter);
+    if (!config?.selfUpgradeDisabled) return raw;
+    return raw.filter(
+      (entry) =>
+        !(
+          !entry.card &&
+          entry.section === "general" &&
+          entry.anchor === "updates"
+        ),
+    );
+  }, [filter, config?.selfUpgradeDisabled]);
   const current = section || (isPhone ? "" : DEFAULT_SETTINGS_SECTION);
   const externalConfigRepo =
     (settings ? settings.externalConfigRepo : config?.externalConfigRepo) || "";

@@ -298,7 +298,14 @@ test("lists the built-in capability servers first, full width, badged and disabl
   // model-proxy is grain's own in-process server now, not a built-in
   // `grain capability` entry.
   await expect(list.locator('[data-builtin-row="model-proxy"]')).toHaveCount(0);
-  for (const name of ["config-map", "gchat", "gcp", "git", "host-script"]) {
+  for (const name of [
+    "config-map",
+    "figma",
+    "gchat",
+    "gcp",
+    "git",
+    "host-script",
+  ]) {
     const row = list.locator(`[data-builtin-row="${name}"]`);
     await expect(row).toHaveAttribute(
       "data-capability-server-row",
@@ -328,7 +335,7 @@ test("lists the built-in capability servers first, full width, badged and disabl
     await expect(
       card.getByRole("button", { name: "Edit connection" }),
     ).toBeVisible();
-    if (["config-map", "gchat", "gcp", "host-script"].includes(name)) {
+    if (["config-map", "figma", "gchat", "gcp", "host-script"].includes(name)) {
       await expect(
         card.getByRole("region", { name: "Server settings" }),
       ).toBeVisible();

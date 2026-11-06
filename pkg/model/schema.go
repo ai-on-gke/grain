@@ -3427,6 +3427,19 @@ var Tables = []string{
   PRIMARY KEY (` + "`schedule_id`" + `)
 )`,
 
+	// How far the daemon's GitHub webhook consumer has acknowledged webhook
+	// deliveries (model.GitHubWebhookCursor) when running on PostgreSQL, so
+	// replacing a VM's scratch disk preserves the replay cursor while
+	// github-webhooks.jsonl remains ephemeral on local disk. Grain's own
+	// runtime record, like git_ref_cursor. Needs no SchemaVersion bump:
+	// Init's CREATE TABLE IF NOT EXISTS creates it on every database.
+	`CREATE TABLE IF NOT EXISTS ` + "`github_webhook_cursor`" + ` (
+  ` + "`id`" + `             TEXT     NOT NULL,
+  ` + "`last_acked_seq`" + ` INTEGER  NOT NULL DEFAULT 0,
+  ` + "`updated_at`" + `     DATETIME NOT NULL,
+  PRIMARY KEY (` + "`id`" + `)
+)`,
+
 	// What grain has learned about working here (model.Memory,
 	// grain/task-237): one row per scope, the deployment-wide memory
 	// keyed by two empty strings and a repo's by its own (owner, name).

@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -168,6 +169,44 @@ func (s *CapabilityServer) HandleTool(name, description string, schema map[strin
 	return nil
 }
 
+// ImageContent is an image a tool returns beside its JSON answer.
+type ImageContent struct {
+	MIMEType string
+	Data     []byte
+}
+
+type imageSinkKey struct{}
+
+// imageSink collects the images one tools/call's handler attaches.
+type imageSink struct {
+	mu     sync.Mutex
+	images []ImageContent
+}
+
+func (s *imageSink) take() []ImageContent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.images
+}
+
+// ToolImage attaches an image to the answer of the tools/call ctx is
+// serving: an MCP image content block after the text one, so a
+// multimodal agent looks at the picture instead of reading its base64 in
+// the JSON (structuredContent stays the handler's JSON alone). It
+// reports false, attaching nothing, when ctx is not a tools/call's -- a
+// handler called directly -- so the handler can fall back to carrying
+// the bytes in its JSON.
+func ToolImage(ctx context.Context, mimeType string, data []byte) bool {
+	sink, _ := ctx.Value(imageSinkKey{}).(*imageSink)
+	if sink == nil {
+		return false
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	sink.images = append(sink.images, ImageContent{MIMEType: mimeType, Data: data})
+	return true
+}
+
 // isPlain reports whether HandleTool added name. Called with s.mu not
 // held by the caller's goroutine for writing.
 func (s *CapabilityServer) isPlain(name string) bool {
@@ -270,15 +309,24 @@ func (s *CapabilityServer) handle(ctx context.Context, line []byte) []byte {
 		if !ok {
 			return rpcReply(req.ID, nil, &RPCError{Code: -32602, Message: "unknown tool " + p.Name})
 		}
-		out, err := t.handle(ctx, p.Arguments)
+		sink := &imageSink{}
+		out, err := t.handle(context.WithValue(ctx, imageSinkKey{}, sink), p.Arguments)
 		if err != nil {
 			return rpcReply(req.ID, map[string]any{
 				"content": []map[string]any{{"type": "text", "text": err.Error()}},
 				"isError": true,
 			}, nil)
 		}
+		content := []map[string]any{{"type": "text", "text": string(out)}}
+		for _, img := range sink.take() {
+			content = append(content, map[string]any{
+				"type":     "image",
+				"data":     base64.StdEncoding.EncodeToString(img.Data),
+				"mimeType": img.MIMEType,
+			})
+		}
 		return rpcReply(req.ID, map[string]any{
-			"content":           []map[string]any{{"type": "text", "text": string(out)}},
+			"content":           content,
 			"structuredContent": json.RawMessage(out),
 			"isError":           false,
 		}, nil)

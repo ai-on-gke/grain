@@ -804,3 +804,19 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/sandboxcli/flags_test.go`: `TestSandboxHelpSaysBytesAndHasLiveExamples`, `TestSandboxHelpLeavesOutTheProxyToken`.
+
+### 7.3 `grain screenshot` {#CLI-109}
+
+`grain screenshot --url <app-url> [flags]` screenshots a web app the run is working on -- a dev server it started in the sandbox, a preview deployment -- with Playwright's Chromium, at each of `--widths` (desktop 1440×900, tablet 820×1180, phone 390×844) and `--themes` (light, dark, via `prefers-color-scheme` and optionally `localStorage[--theme-key]`), into `--out` (default `screenshots/`) as `<page>-<width>-<theme>.png`, then writes `contact-sheet.png` with every shot (and any `--reference` design images first). It talks to no grain service: the sandbox CLI writes the embedded `pkg/sandboxcli/screenshot.mjs` to a temporary directory and runs it with `node`, so its flags are the script's own and are not in `sandboxCommandFlags`.
+
+- Playwright is resolved from the working directory's `node_modules`, then `~/.cache/grain/screenshot/node_modules`, then `npm root -g`. With none, the script exits 3 and the CLI installs `playwright-core@$GRAIN_PLAYWRIGHT_VERSION` (default the images' `PLAYWRIGHT_VERSION`) into the cache with `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`, and runs it once more.
+- An uncaught page error, or an HTTP status of 400 or more for a page, fails the run (status 1) unless `--allow-errors`.
+- The contact sheet is what a run attaches to its closing note by `path`; grain previews image attachments inline in the task's conversation and publishes them into the pull request's description (`docs/ui-screenshots.md`).
+
+<!-- BEGIN GENERATED FLAGS: grain screenshot -->
+Usage: `grain screenshot --url <app-url> [--pages /,/settings] [flags]`
+
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/sandboxcli/screenshot_test.go`: `TestGrainScreenshotInstallsPlaywrightOnceAndPassesFlagsThrough`, `TestGrainScreenshotHelp`.
