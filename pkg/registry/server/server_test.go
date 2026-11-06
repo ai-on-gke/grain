@@ -1334,3 +1334,93 @@ func TestReconnectWaiterCap32AndDelegationAndSIGTERMDrain(t *testing.T) {
 		t.Fatalf("expected 503 with Retry-After: 2 on /connect while draining, got %d", recDrainConnect.Code)
 	}
 }
+
+func TestServeInstanceHostAssertionAcceptedByWebauthRegistryVerifier(t *testing.T) {
+	signer := newTestAssertionSigner(t)
+	jwksSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		pub := signer.priv.PublicKey
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"keys": []map[string]any{{
+				"kty": "EC",
+				"crv": "P-256",
+				"alg": "ES256",
+				"use": "sig",
+				"kid": signer.kid,
+				"x":   base64.RawURLEncoding.EncodeToString(pub.X.FillBytes(make([]byte, 32))),
+				"y":   base64.RawURLEncoding.EncodeToString(pub.Y.FillBytes(make([]byte, 32))),
+			}},
+		})
+	}))
+	defer jwksSrv.Close()
+
+	var gotAssertion string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAssertion = r.Header.Get(api.HeaderRegistryAssertion)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
+		Verifier:       testIdentityVerifier{},
+		AllowedDomains: []string{"example.com"},
+		Creators:       []string{"user:alice@example.com"},
+	})
+	if err != nil {
+		t.Fatalf("NewAdmitter: %v", err)
+	}
+	rt, err := NewRouter(RouterOptions{
+		RegistryHost:   "registry.example.com",
+		InstanceDomain: "instances.example.com",
+		IAPAudience:    "/projects/123/global/backendServices/456",
+		Admitter:       admitter,
+		Signer:         signer,
+	})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	defer rt.Close()
+
+	rt.HostCache().Put(&store.EntryRow{
+		ID:             "entry-iap-sub",
+		Name:           "alice-vm",
+		Kind:           api.KindInstance,
+		LifecycleState: api.StateRunning,
+		OwnerEmail:     "alice@example.com",
+		Visibility:     store.VisibilityOwner,
+		BackendURL:     backend.URL,
+	})
+
+	h := rt.WrapMainHandler(http.NotFoundHandler())
+	req := httptest.NewRequest(http.MethodGet, "https://alice-vm.instances.example.com/api/tasks", nil)
+	req.Host = "alice-vm.instances.example.com"
+	req.Header.Set("X-Test-Email", "alice@example.com")
+	// Cloud IAP puts a numeric Gaia ID in `sub`, not the user's email address.
+	req.Header.Set("X-Test-Sub", "accounts.google.com:10492837492837492")
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK from routed request, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if gotAssertion == "" {
+		t.Fatal("expected non-empty X-Grain-Registry-Assertion")
+	}
+
+	verifyCtx := webauth.WithRegistryConfig(context.Background(), webauth.RegistryConfig{
+		Issuer:   "grain-registry",
+		Audience: "https://alice-vm.instances.example.com",
+		KeysURL:  jwksSrv.URL,
+	})
+	claims, err := webauth.ValidateRegistryToken(verifyCtx, gotAssertion, "https://alice-vm.instances.example.com")
+	if err != nil {
+		t.Fatalf("ValidateRegistryToken: %v", err)
+	}
+	id, err := webauth.IdentityFromRegistryClaims(claims)
+	if err != nil {
+		t.Fatalf("IdentityFromRegistryClaims failed on IAP numeric sub: %v", err)
+	}
+	if id.Email != "alice@example.com" || id.Kind != webauth.PrincipalHuman {
+		t.Fatalf("unexpected verified identity: %+v", id)
+	}
+}
