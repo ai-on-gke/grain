@@ -331,6 +331,8 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/hostds/{name}/install":               trusted,
 	"POST /api/hostds/{name}/rotate":               trusted,
 	"POST /api/hostds/{name}/revoke":               trusted,
+	"DELETE /api/hostds/{name}":                    trusted,
+	"POST /api/hostds/delete-revoked":              trusted,
 	"GET /api/access/principals":                   trusted,
 	"POST /api/access/principals":                  trusted,
 	"PATCH /api/access/principals/{entry}":         trusted,
