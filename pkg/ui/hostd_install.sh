@@ -57,6 +57,8 @@ VERSIONS_DIR=/usr/local/lib/grain/hostd
 CONFIG_DIR=/etc/grain
 ALLOWLIST="$CONFIG_DIR/hostd.yaml"
 TOKEN_FILE="$CONFIG_DIR/hostd-token"
+AUTH_DIR="$CONFIG_DIR/hostd-auth"
+KEY_FILE=""
 UNIT=/etc/systemd/system/grain-hostd.service
 SOCKET_DIR=/run/grain-hostd
 STATE_DIR=/var/lib/grain-hostd
@@ -67,17 +69,21 @@ UNIT_MARKER='# Written by grain'"'"'s /api/hostd/install.sh.'
 
 usage() {
   cat <<EOF
-Usage: grain-hostd-install --name NAME [options]
+Usage: grain-hostd-install [--join CODE | --name NAME] [options]
 
 Installs grain hostd on this machine as grain-hostd.service, dialing in to
-the grain daemon at ${GRAIN_DAEMON_URL:-(--server)}. Run as root. The hostd's
-token is read from \$GRAIN_HOSTD_TOKEN, or else from stdin (asked for, without
-echoing it, when stdin is a terminal).
+the grain daemon at ${GRAIN_DAEMON_URL:-(--server)}. With --join CODE, generates
+an Ed25519 keypair, files a join request for the deployment owner to accept in
+Settings -> Hosts, and receives a key-bound credential. Otherwise, reads a
+per-host token from \$GRAIN_HOSTD_TOKEN or stdin.
 
 Options:
-  --name NAME          the hostd's name in the daemon's registry (Settings -> Hostds; required)
+  --join CODE          enroll via a shared code from Settings -> Hosts -> Invite hosts
+  --agentd             enroll and install rootless grain-agentd (--user systemd service)
+  --agentd-bin PATH    grain-agentd binary to install when --agentd is set
+  --name NAME          the host's name in the daemon's registry (Settings -> Hosts; optional with --join)
   --user USER          the account hostd runs as and the CLIs it starts run as
-                       (default: \$SUDO_USER; never root)
+                       (default: current user with --join, else \$SUDO_USER; never root)
   --capacity N         how many agent CLI runs at once this hostd takes (hostd.yaml's capacity:)
   --label KEY=VALUE    a label hostd describes itself with (hostd.yaml's labels:); repeatable
   --server URL         the daemon to dial (default: ${GRAIN_DAEMON_URL:-none})
@@ -92,8 +98,8 @@ Options:
   --no-start           write everything but do not start grain-hostd.service
   -h, --help           show this help
 
-Environment: GRAIN_HOSTD_TOKEN, GRAIN_HOSTD_NAME, GRAIN_HOSTD_USER, GRAIN_SERVER,
-GRAIN_BIN, GRAIN_IMAGE, GRAIN_BINARY_URL, GRAIN_BINARY_SHA256, GRAIN_RELEASE.
+Environment: GRAIN_HOST_JOIN_CODE, GRAIN_HOSTD_TOKEN, GRAIN_HOSTD_NAME, GRAIN_HOSTD_USER,
+GRAIN_SERVER, GRAIN_BIN, GRAIN_IMAGE, GRAIN_BINARY_URL, GRAIN_BINARY_SHA256, GRAIN_RELEASE.
 EOF
 }
 
@@ -110,6 +116,17 @@ need_arg() {
   [ "$2" -ge 2 ] || die "$1 needs a value"
 }
 
+as_root() {
+  if [ "$(id -u)" = 0 ]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+JOIN_CODE="${GRAIN_HOST_JOIN_CODE:-}"
+AGENTD=0
+AGENTD_BIN="${GRAIN_AGENTD_BIN:-}"
 NAME="${GRAIN_HOSTD_NAME:-}"
 HOSTD_USER="${GRAIN_HOSTD_USER:-${SUDO_USER:-}}"
 CAPACITY=""
@@ -129,6 +146,9 @@ parse_args() {
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
+      --join) need_arg "$1" $#; JOIN_CODE="$2"; shift 2 ;;
+      --agentd) AGENTD=1; shift ;;
+      --agentd-bin) need_arg "$1" $#; AGENTD_BIN="$2"; shift 2 ;;
       --name) need_arg "$1" $#; NAME="$2"; shift 2 ;;
       --user) need_arg "$1" $#; HOSTD_USER="$2"; shift 2 ;;
       --capacity) need_arg "$1" $#; CAPACITY="$2"; shift 2 ;;
@@ -153,17 +173,7 @@ parse_args() {
 # Everything below reaches a systemd unit or YAML, so each value is held
 # to a plain character set rather than quoted for either.
 
-check_request() {
-  [ "$(id -u)" = 0 ] || die "run this as root (sudo): it writes $CONFIG_DIR and $UNIT"
-  [ "$(uname -s)" = Linux ] || die "the host agent's service is a systemd unit: this installs it on Linux only"
-  command -v systemctl >/dev/null 2>&1 || die "systemctl not found: grain-hostd.service needs systemd"
-
-  [ -n "$NAME" ] || die "--name is required: the host's name in Settings -> Hosts"
-  case "$NAME" in
-    *[!a-z0-9-]*|-*|*-) die "--name $NAME is not a host name: lowercase letters, digits and '-', at most 63" ;;
-  esac
-  [ "${#NAME}" -le 63 ] || die "--name $NAME is longer than 63 characters"
-
+check_server() {
   case "$SERVER" in
     http://*|https://*) ;;
     "") die "--server is required: the URL of the grain daemon" ;;
@@ -173,6 +183,42 @@ check_request() {
     *[!]A-Za-z0-9._~:/@[-]*) die "--server $SERVER holds a character grain-hostd.service cannot carry: give the daemon's plain URL" ;;
   esac
   SERVER="${SERVER%/}"
+}
+
+check_join_code() {
+  if [ -n "$JOIN_CODE" ]; then
+    case "$JOIN_CODE" in
+      -*|*[!A-Za-z0-9_-]*) die "--join $JOIN_CODE is not a valid enrollment code" ;;
+    esac
+  fi
+}
+
+check_name() {
+  if [ -z "$JOIN_CODE" ] && [ -z "$NAME" ]; then
+    die "--name is required: the host's name in Settings -> Hosts (or pass --join CODE)"
+  fi
+  if [ -n "$NAME" ]; then
+    case "$NAME" in
+      *[!a-z0-9-]*|-*|*-) die "--name $NAME is not a host name: lowercase letters, digits and '-', at most 63" ;;
+    esac
+    [ "${#NAME}" -le 63 ] || die "--name $NAME is longer than 63 characters"
+  fi
+}
+
+check_request() {
+  check_join_code
+  if [ "$(id -u)" != 0 ]; then
+    if [ -n "$JOIN_CODE" ] && command -v sudo >/dev/null 2>&1; then
+      [ -n "$HOSTD_USER" ] || HOSTD_USER="$(id -un)"
+    else
+      die "run this as root (sudo): it writes $CONFIG_DIR and $UNIT"
+    fi
+  fi
+  [ "$(uname -s)" = Linux ] || die "the host agent's service is a systemd unit: this installs it on Linux only"
+  command -v systemctl >/dev/null 2>&1 || die "systemctl not found: grain-hostd.service needs systemd"
+
+  check_name
+  check_server
 
   [ -n "$HOSTD_USER" ] || die "--user is required when not run through sudo: the account the host agent runs as"
   case "$HOSTD_USER" in
@@ -378,13 +424,13 @@ install_grain() {
 
   # A root-owned copy in its own version directory, and current pointed at
   # it by rename, the layout scripts/setup.sh gives a co-located hostd.
-  install -d -m0755 -o root -g root "$VERSIONS_DIR" "$VERSIONS_DIR/$BUILD"
+  as_root install -d -m0755 -o root -g root "$VERSIONS_DIR" "$VERSIONS_DIR/$BUILD"
   if [ "$FOUND" != "$VERSIONS_DIR/$BUILD/grain" ]; then
-    install -m0755 -o root -g root "$FOUND" "$VERSIONS_DIR/$BUILD/.grain.new"
-    mv -f "$VERSIONS_DIR/$BUILD/.grain.new" "$VERSIONS_DIR/$BUILD/grain"
+    as_root install -m0755 -o root -g root "$FOUND" "$VERSIONS_DIR/$BUILD/.grain.new"
+    as_root mv -f "$VERSIONS_DIR/$BUILD/.grain.new" "$VERSIONS_DIR/$BUILD/grain"
   fi
-  ln -sfn -- "$BUILD" "$VERSIONS_DIR/.current.new"
-  mv -fT "$VERSIONS_DIR/.current.new" "$VERSIONS_DIR/current"
+  as_root ln -sfn -- "$BUILD" "$VERSIONS_DIR/.current.new"
+  as_root mv -fT "$VERSIONS_DIR/.current.new" "$VERSIONS_DIR/current"
   GRAIN="$VERSIONS_DIR/current/grain"
   log "grain $BUILD is at $VERSIONS_DIR/$BUILD/grain"
 }
@@ -392,7 +438,7 @@ install_grain() {
 # --- /etc/grain ----------------------------------------------------------------
 
 write_token() {
-  install -d -m0755 -o root -g root "$CONFIG_DIR"
+  as_root install -d -m0755 -o root -g root "$CONFIG_DIR"
   [ ! -L "$TOKEN_FILE" ] || die "$TOKEN_FILE is a symlink; not writing the token through it"
   # Created 0600 under a 077 umask and handed to the hostd user before it
   # is renamed into place, so nobody else can read it at any moment.
@@ -403,6 +449,38 @@ write_token() {
   mv -f "$tmp" "$TOKEN_FILE"
   TOKEN=""
   log "the token is in $TOKEN_FILE, readable by $HOSTD_USER alone"
+}
+
+run_as_hostd_user() {
+  if [ "$(id -u)" != 0 ]; then
+    "$@"
+  elif command -v runuser >/dev/null 2>&1; then
+    runuser -u "$HOSTD_USER" -- "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo -u "$HOSTD_USER" -- "$@"
+  else
+    su -s /bin/sh "$HOSTD_USER" -c '"$@"' -- sh "$@"
+  fi
+}
+
+enroll_host() {
+  as_root install -d -m0755 -o root -g root "$CONFIG_DIR"
+  [ ! -L "$AUTH_DIR" ] || die "$AUTH_DIR is a symlink; not writing credentials through it"
+  as_root install -d -m0700 -o "$HOSTD_USER" -g "$HOSTD_GROUP" "$AUTH_DIR"
+  KEY_FILE="$AUTH_DIR/hostd-key"
+  TOKEN_FILE="$AUTH_DIR/hostd-token"
+
+  set -- "$GRAIN" hostd -server "$SERVER" -join "$JOIN_CODE" -join-only \
+    -key-file "$KEY_FILE" -token-file "$TOKEN_FILE" -allowlist "$ALLOWLIST"
+  [ -z "$NAME" ] || set -- "$@" -name "$NAME"
+  [ -z "$IAP_AUDIENCE" ] || set -- "$@" -iap-audience "$IAP_AUDIENCE"
+  [ -z "$CA_FILE" ] || set -- "$@" -ca-file "$CA_FILE"
+
+  if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+    run_as_hostd_user "$@" </dev/tty
+  else
+    run_as_hostd_user "$@"
+  fi
 }
 
 allowlist_content() {
@@ -439,6 +517,7 @@ YAML
 }
 
 write_allowlist() {
+  as_root install -d -m0755 -o root -g root "$CONFIG_DIR"
   [ ! -L "$ALLOWLIST" ] || die "$ALLOWLIST is a symlink; the host agent refuses one, and this script will not write through it"
   if [ -e "$ALLOWLIST" ]; then
     if [ -n "$CAPACITY$LABELS" ]; then
@@ -447,18 +526,17 @@ write_allowlist() {
       log "keeping $ALLOWLIST as it is"
     fi
   else
-    tmp="$(mktemp "$ALLOWLIST.XXXXXX")"
+    tmp="$WORK/hostd.yaml"
     allowlist_content > "$tmp"
-    chown root:root "$tmp"
-    chmod 0644 "$tmp"
-    mv -f "$tmp" "$ALLOWLIST"
+    as_root install -m0644 -o root -g root "$tmp" "$ALLOWLIST"
+    rm -f "$tmp"
     log "wrote $ALLOWLIST"
   fi
-  chown root:root "$ALLOWLIST"
-  chmod 0644 "$ALLOWLIST"
-  "$GRAIN" hostd -ensure-builtins -allowlist "$ALLOWLIST" -command "$GRAIN" >&2 ||
+  as_root chown root:root "$ALLOWLIST"
+  as_root chmod 0644 "$ALLOWLIST"
+  as_root "$GRAIN" hostd -ensure-builtins -allowlist "$ALLOWLIST" -command "$GRAIN" >&2 ||
     log "WARNING: could not add grain's own capabilities entries to $ALLOWLIST"
-  if ! "$GRAIN" hostd -check -allowlist "$ALLOWLIST" >/dev/null; then
+  if ! as_root "$GRAIN" hostd -check -allowlist "$ALLOWLIST" >/dev/null; then
     log "WARNING: the host agent will refuse $ALLOWLIST as it stands: fix it before host work reaches this machine"
   fi
 }
@@ -466,11 +544,13 @@ write_allowlist() {
 # --- grain-hostd.service ---------------------------------------------------------
 
 write_unit() {
-  ARGS="-server $SERVER -token-file $TOKEN_FILE -name $NAME -allowlist $ALLOWLIST -socket $SOCKET_DIR/hostd.sock -state-dir $STATE_DIR"
+  ARGS="-server $SERVER -token-file $TOKEN_FILE -allowlist $ALLOWLIST -socket $SOCKET_DIR/hostd.sock -state-dir $STATE_DIR"
+  [ -z "$KEY_FILE" ] || ARGS="$ARGS -key-file $KEY_FILE"
+  [ -z "$NAME" ] || ARGS="$ARGS -name $NAME"
   [ -z "$IAP_AUDIENCE" ] || ARGS="$ARGS -iap-audience $IAP_AUDIENCE"
   [ -z "$CA_FILE" ] || ARGS="$ARGS -ca-file $CA_FILE"
 
-  tmp="$(mktemp "$UNIT.XXXXXX")"
+  tmp="$WORK/grain-hostd.service"
   cat > "$tmp" <<UNIT
 $UNIT_MARKER
 # Re-run it to change anything here.
@@ -495,38 +575,90 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 UNIT
-  chmod 0644 "$tmp"
-  mv -f "$tmp" "$UNIT"
-  systemctl daemon-reload
-  log "wrote $UNIT: $GRAIN hostd -server $SERVER -name $NAME, as $HOSTD_USER"
+  as_root install -m0644 -o root -g root "$tmp" "$UNIT"
+  rm -f "$tmp"
+  as_root systemctl daemon-reload
+  log "wrote $UNIT: $GRAIN hostd -server $SERVER${NAME:+ -name $NAME}, as $HOSTD_USER"
 }
 
 start_unit() {
   if [ "$START" = 1 ]; then
-    systemctl enable grain-hostd.service >/dev/null 2>&1
-    systemctl restart grain-hostd.service
+    as_root systemctl enable grain-hostd.service >/dev/null 2>&1
+    as_root systemctl restart grain-hostd.service
     log "grain-hostd.service started; it shows as connected in Settings -> Hosts once it has dialed in (journalctl -u grain-hostd -f)"
   else
     log "not starting grain-hostd.service (--no-start): systemctl enable --now grain-hostd.service"
   fi
 }
 
+run_agentd_install() {
+  [ "$(id -u)" != 0 ] || die "--agentd installs a rootless user service: run this as yourself, not root"
+  check_join_code
+  check_server
+  if [ -n "$NAME" ]; then
+    check_name
+  fi
+  for value in "$IAP_AUDIENCE" "$AGENTD_BIN"; do
+    case "$value" in
+      -*) die "$value holds a leading '-': give a plain value" ;;
+    esac
+  done
+  if [ -n "$AGENTD_BIN" ]; then
+    [ -x "$AGENTD_BIN" ] || die "--agentd-bin $AGENTD_BIN is not an executable"
+    AGENTD_CMD="$AGENTD_BIN"
+  elif command -v grain-agentd >/dev/null 2>&1; then
+    AGENTD_CMD="$(command -v grain-agentd)"
+  elif [ -n "${HOME:-}" ] && [ -x "$HOME/.local/bin/grain-agentd" ]; then
+    AGENTD_CMD="$HOME/.local/bin/grain-agentd"
+  else
+    die "grain-agentd not found on \$PATH or ~/.local/bin (pass --agentd-bin PATH, or omit --agentd to install the host agent)"
+  fi
+
+  set -- "$AGENTD_CMD" install -server "$SERVER"
+  [ -z "$JOIN_CODE" ] || set -- "$@" -join "$JOIN_CODE"
+  [ -z "$NAME" ] || set -- "$@" -name "$NAME"
+  [ -z "$IAP_AUDIENCE" ] || set -- "$@" -iap-audience "$IAP_AUDIENCE"
+  [ "$START" = 1 ] || set -- "$@" -no-start
+  if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+    exec "$@" </dev/tty
+  else
+    exec "$@"
+  fi
+}
+
+make_work_dir() {
+  [ ! -L "$VERSIONS_DIR" ] || die "$VERSIONS_DIR is a symlink"
+  if [ "$(id -u)" = 0 ]; then
+    install -d -m0755 -o root -g root "$VERSIONS_DIR"
+    WORK="$(umask 077; mktemp -d "$VERSIONS_DIR/.work.XXXXXX")"
+  else
+    STAGE_BASE="${XDG_CACHE_HOME:-${HOME:-/var/tmp}/.cache}"
+    mkdir -p "$STAGE_BASE"
+    WORK="$(umask 077; mktemp -d "$STAGE_BASE/grain-hostd-install.XXXXXX")"
+  fi
+}
+
 main() {
   parse_args "$@"
+  if [ "$AGENTD" = 1 ]; then
+    run_agentd_install
+    return 0
+  fi
   check_request
   TOKEN=""
-  read_token
-  # Stage under root-owned $VERSIONS_DIR rather than $TMPDIR: an
-  # unprivileged caller's TMPDIR survives sudo -E, and /tmp is often
-  # mounted noexec where usable runs `grain hostd -build`.
-  [ ! -L "$VERSIONS_DIR" ] || die "$VERSIONS_DIR is a symlink"
-  install -d -m0755 -o root -g root "$VERSIONS_DIR"
-  WORK="$(umask 077; mktemp -d "$VERSIONS_DIR/.work.XXXXXX")"
+  if [ -z "$JOIN_CODE" ]; then
+    read_token
+  fi
+  make_work_dir
   trap 'rm -rf "$WORK"' EXIT
   FOUND=""
   install_grain
-  write_token
   write_allowlist
+  if [ -n "$JOIN_CODE" ]; then
+    enroll_host
+  else
+    write_token
+  fi
   write_unit
   start_unit
 }

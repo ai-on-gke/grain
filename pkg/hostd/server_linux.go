@@ -18,6 +18,7 @@ package hostd
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -76,6 +77,14 @@ type Server struct {
 	// RemoteMinBackoff and RemoteMaxBackoff bound the wait between
 	// reconnects to Remote: 1s and defaultRemoteMaxBackoff (5s) when zero.
 	RemoteMinBackoff, RemoteMaxBackoff time.Duration
+	// RenewName, RenewKey, RenewInterval, CurrentToken, and OnTokenRenewed
+	// silently renew this host's 30-day key-bound credential over the live
+	// mux session while connected (DefaultRenewInterval when RenewInterval <= 0).
+	RenewName      string
+	RenewKey       ed25519.PrivateKey
+	RenewInterval  time.Duration
+	CurrentToken   func() string
+	OnTokenRenewed func(token string, expiresAt time.Time)
 	// StageRoot is where OpStage may write on this machine, for a run a
 	// daemon reaches over Remote: "~/.grain/hostd-stage" under hostd's
 	// home when empty (stageRoot). It should be a directory nothing else

@@ -14,11 +14,10 @@
 
 import { expect, test } from "./fixtures.js";
 
-// Settings → Hosts: the registry the demo seeds (local, a workstation
-// with an owner and labels, a runner with no owner, a revoked laptop) in
-// its table, the actions in the right-hand column, and the add form
-// inside its card -- on a wide screen and on a phone, with nothing
-// pushing the page sideways.
+// Settings → Hosts (/settings/hosts and /settings/hostds): Invite hosts
+// shared --join snippet, Pending join requests, the host registry
+// table, and the legacy per-host token form -- on a wide screen and on a
+// phone, with nothing pushing the page sideways.
 const DESKTOP = { width: 1440, height: 900 };
 const PHONE = { width: 390, height: 844 };
 
@@ -28,7 +27,23 @@ for (const [name, viewport] of [
 ]) {
   test(`Settings → Hosts fits a ${name} screen`, async ({ page }) => {
     await page.setViewportSize(viewport);
-    await page.goto("/settings/hostds");
+    await page.goto("/settings/hosts");
+
+    await expect(
+      page.getByRole("heading", { name: "Hosts", level: 1 }),
+    ).toBeVisible();
+
+    const snippet = page.getByTestId("invite-hosts-snippet");
+    await expect(snippet).toBeVisible();
+    await expect(snippet).toContainText(
+      "/hostd/install | sh -s -- --join ghe_",
+    );
+
+    const pendingCard = page.getByTestId("pending-hosts-card");
+    await expect(pendingCard).toBeVisible();
+    await expect(pendingCard).toContainText("devbox-carol.example.com");
+    await expect(pendingCard).toContainText("carol@example.com");
+    await expect(pendingCard).not.toContainText("Pairing code");
 
     const table = page.getByTestId("hostds-table");
     await expect(table).toBeVisible();
@@ -54,6 +69,32 @@ for (const [name, viewport] of [
     );
     expect(overflow, "the page scrolls sideways").toBe(false);
 
+    const inviteBox = await page.locator("#invite-hosts").boundingBox();
+    const snippetBox = await snippet.boundingBox();
+    const copyInvite = await page
+      .getByRole("button", { name: "Copy invite command" })
+      .boundingBox();
+    expect(snippetBox.x).toBeGreaterThanOrEqual(inviteBox.x - 1);
+    expect(copyInvite.x + copyInvite.width).toBeLessThanOrEqual(
+      inviteBox.x + inviteBox.width + 1,
+    );
+    expect(Math.abs(copyInvite.y - snippetBox.y)).toBeLessThan(
+      copyInvite.height,
+    );
+
+    const pendingBox = await page.locator("#pending-hosts").boundingBox();
+    const acceptBtn = await pendingCard
+      .getByRole("button", { name: "Accept" })
+      .boundingBox();
+    const rejectBtn = await pendingCard
+      .getByRole("button", { name: "Reject" })
+      .boundingBox();
+    expect(acceptBtn.x).toBeGreaterThanOrEqual(pendingBox.x - 1);
+    expect(rejectBtn.x + rejectBtn.width).toBeLessThanOrEqual(
+      pendingBox.x + pendingBox.width + 1,
+    );
+    expect(Math.abs(acceptBtn.y - rejectBtn.y)).toBeLessThan(4);
+
     const card = await page.locator("#add-hostd").boundingBox();
     const add = await page
       .getByRole("button", { name: "Add host" })
@@ -61,14 +102,34 @@ for (const [name, viewport] of [
     expect(add.x).toBeGreaterThanOrEqual(card.x - 1);
     expect(add.x + add.width).toBeLessThanOrEqual(card.x + card.width + 1);
     if (name === "desktop") {
-      // The actions sit at the row's right edge, past the token column.
+      // The actions sit at the row's right edge, past the auth column.
       const rowBox = await ws.boundingBox();
       const rotate = await ws
         .getByRole("button", { name: "Rotate" })
         .boundingBox();
       expect(rotate.x).toBeGreaterThan(rowBox.x + rowBox.width / 2);
-      const nameField = await page.getByLabel("Name").boundingBox();
+      const nameField = await page
+        .getByLabel("Name", { exact: true })
+        .boundingBox();
       expect(Math.abs(add.y - nameField.y)).toBeLessThan(16);
     }
   });
 }
+
+test("Accepting a pending host moves it into the Hosts table as key-bound", async ({
+  page,
+}) => {
+  await page.setViewportSize(DESKTOP);
+  await page.goto("/settings/hostds");
+  const pendingCard = page.getByTestId("pending-hosts-card");
+  await expect(pendingCard).toContainText("devbox-carol.example.com");
+  await pendingCard.getByRole("button", { name: "Accept" }).click();
+
+  const row = page.getByTestId("hostd-row-devbox-carol");
+  await expect(row).toBeVisible();
+  await expect(row).toContainText("carol@example.com");
+  await expect(row).toContainText("cap=4");
+  await expect(row).toContainText("pool=workstation");
+  await expect(row).toContainText("via workstations");
+  await expect(pendingCard).toContainText("No hosts are waiting for approval.");
+});
