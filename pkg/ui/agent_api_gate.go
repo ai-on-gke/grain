@@ -805,14 +805,14 @@ func (s *Server) agentApprovalRail(ctx context.Context, acting *model.Task, targ
 			how = "it is in the chain that proposed it (" + strings.Join(chain, " → ") + ")"
 		}
 		return fmt.Errorf("task %s cannot approve task %s: %s, and an agent never approves its own proposals, "+
-			"directly or through the tasks they filed, even under api:tasks:admin -- a person approves them "+
+			"directly or through the tasks they filed, even under api:tasks:admin or dispatch:write -- a person approves them "+
 			"(docs/agent-api.md)", me, task.ID, how)
 	}
 	if holds, err := s.proposalPersonHolds(ctx, *task, proposer, acting); err != nil {
 		return err
 	} else if len(holds) > 0 {
 		return fmt.Errorf("task %s cannot approve task %s: it is held for a person (%s), and an agent never "+
-			"approves a task held for a person, even under api:tasks:admin (docs/agent-api.md)",
+			"approves a task held for a person, even under api:tasks:admin or dispatch:write (docs/agent-api.md)",
 			me, task.ID, strings.Join(holds, "; "))
 	}
 	return nil
