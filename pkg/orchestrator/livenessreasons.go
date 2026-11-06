@@ -244,6 +244,10 @@ const (
 	taskReasonMergeGaveUp    = "completed/merge_failed"
 	taskReasonUnapproved     = "proposed/unapproved"
 	taskReasonQuestion       = "awaiting_reply/question"
+	taskReasonAnswered       = "awaiting_reply/answered"
+	taskReasonYourMessage    = "awaiting_reply/your_message"
+	taskReasonAccessRequest  = "awaiting_reply/access_request"
+	taskReasonStopped        = "awaiting_reply/stopped"
 	taskReasonSubmit         = "awaiting_submit/not_auto_merge"
 	taskReasonFailedRuns     = "failed/consecutive_failures"
 	taskReasonDeferredNoWake = "deferred/no_wake_time"
@@ -309,6 +313,10 @@ var taskReasons = map[string]reasonLiveness{
 	taskReasonMergeGaveUp:    {class: livenessAwaitingPerson, control: "Retry merge"},
 	taskReasonUnapproved:     {class: livenessAwaitingPerson, control: "Approve"},
 	taskReasonQuestion:       {class: livenessAwaitingPerson, control: "Reply"},
+	taskReasonAnswered:       {class: livenessAwaitingPerson, control: "Reply"},
+	taskReasonYourMessage:    {class: livenessAwaitingPerson, control: "Reply"},
+	taskReasonStopped:        {class: livenessAwaitingPerson, control: "Reply"},
+	taskReasonAccessRequest:  {class: livenessAwaitingPerson, control: "Grant"},
 	taskReasonSubmit:         {class: livenessAwaitingPerson, control: "Submit"},
 	taskReasonFailedRuns:     {class: livenessAwaitingPerson, control: "Retry"},
 	taskReasonDeferredNoWake: {class: livenessAwaitingPerson, control: "Undefer"},
@@ -457,7 +465,11 @@ func mergeReasonOfState(state string) string {
 // Of the queued sub-cases, an open dependency outranks a hold: the
 // pause ends on a clock, and a task still waiting on another would not
 // be dispatched when it did.
-func taskReasonOf(t model.Task, state model.State, obs *model.Observation, openDeps []string, hold queuedHold) string {
+//
+// An awaiting_reply task's sub-case is awaitingReplyReasonOf its asked
+// facts.
+func taskReasonOf(t model.Task, state model.State, obs *model.Observation, openDeps []string, hold queuedHold,
+	asked model.ReplyFacts) string {
 	switch state {
 	case model.StateQueued:
 		switch {
@@ -482,7 +494,7 @@ func taskReasonOf(t model.Task, state model.State, obs *model.Observation, openD
 	case model.StateProposed:
 		return taskReasonUnapproved
 	case model.StateAwaitingReply:
-		return taskReasonQuestion
+		return awaitingReplyReasonOf(t, asked)
 	case model.StateAwaitingSubmit:
 		return taskReasonSubmit
 	case model.StateFailed:
@@ -499,6 +511,28 @@ func taskReasonOf(t model.Task, state model.State, obs *model.Observation, openD
 		return taskReasonClosed
 	}
 	return ""
+}
+
+// awaitingReplyReasonOf is which ask an awaiting_reply task is parked on,
+// in the UI's askedCase order (ui/src/state.js), so the reason chip and
+// the badge beside it name the same case: a stopped turn first, then an
+// access request, then an interactive task or console session (whose
+// every park is a wait for its next message, a question included), then
+// a pending question or secret request, and otherwise a run that
+// answered in a comment. Each is a person's: Reply ends all of them but
+// an access request, which a person's Grant (or Deny) on its card ends.
+func awaitingReplyReasonOf(t model.Task, asked model.ReplyFacts) string {
+	switch {
+	case asked.Stopped:
+		return taskReasonStopped
+	case asked.Access:
+		return taskReasonAccessRequest
+	case t.Interactive:
+		return taskReasonYourMessage
+	case asked.Question:
+		return taskReasonQuestion
+	}
+	return taskReasonAnswered
 }
 
 // ReasonLiveness is one sub-case as a row draws it: which reason, which of
@@ -548,9 +582,14 @@ func reasonLivenessOf(reasons map[string]reasonLiveness, reason string) ReasonLi
 // capability, network access or approval it broke, in policy.CheckAs's
 // words -- and policyFile, the -policy file to edit ("" for a daemon
 // started without one, whose only refusal is checkUnisolated's).
+//
+// asked is what the reader resolved about an awaiting_reply task's ask
+// (model.ReplyFacts) -- the pending comment it is parked on, a secret or
+// access request -- which tells its sub-cases apart; the zero value for
+// a task in any other state.
 func TaskReason(t model.Task, state model.State, obs *model.Observation, openDeps []string,
-	wait *model.GrantWait, policyFile string) ReasonLiveness {
-	r := reasonLivenessOf(taskReasons, taskReasonOf(t, state, obs, openDeps, queuedHoldOf(wait)))
+	wait *model.GrantWait, asked model.ReplyFacts, policyFile string) ReasonLiveness {
+	r := reasonLivenessOf(taskReasons, taskReasonOf(t, state, obs, openDeps, queuedHoldOf(wait), asked))
 	if r.Reason == taskReasonLocalPolicy {
 		r.Resource = localPolicyResource(wait.Resource, policyFile)
 	}
