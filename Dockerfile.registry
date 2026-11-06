@@ -28,6 +28,11 @@ FROM ${GO_IMAGE}:${GO_VERSION}-bookworm@${GO_IMAGE_DIGEST} AS build
 
 ENV GOTOOLCHAIN=local
 
+# A build inside a grain sandbox reaches the network through grain's
+# TLS-intercepting proxy, so the build stage trusts the deployment's CA
+# when one is staged. Only this stage: the runtime stage below installs
+# its own ca-certificates and must never carry that CA, or every
+# published image would trust whoever holds the deployment's key.
 COPY Dockerfile.registry .grain-ca.cr[t] /tmp/
 RUN if [ -f /tmp/.grain-ca.crt ]; then \
         cp /tmp/.grain-ca.crt /usr/local/share/ca-certificates/grain-ca.crt && \
