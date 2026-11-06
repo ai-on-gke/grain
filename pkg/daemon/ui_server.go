@@ -778,6 +778,9 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		log.Print("grain daemon: upgrading from the UI is off -- neither -upgrade-image nor -upgrade-src-dir is set")
 	}
 
+	if ep := strings.TrimSpace(cfg.UiCloudIdentityEndpoint); ep != "" {
+		uiCfg.GroupChecker = ui.NewCloudIdentityGroupChecker(ui.WithCloudIdentityEndpoint(ep))
+	}
 	uiClient := ui.NewClient(uiCfg, store)
 	if err := uiClient.MigrateAllowedPrincipals(context.Background()); err != nil {
 		log.Printf("grain daemon: WARNING: migrating allowed principals: %v", err)
