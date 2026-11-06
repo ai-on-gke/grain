@@ -46,7 +46,7 @@ func hostdConnectRoute(r *http.Request) bool {
 // remote hostd is admitted only as its row's owner.
 func (s *Server) handleHostdConnect(w http.ResponseWriter, r *http.Request) {
 	if s.tasks == nil || s.tasks.Config.HostdRemote == nil {
-		writeError(w, http.StatusServiceUnavailable, apierror.Public("this daemon takes no grain hostd dialing in: start it with -hostd-token-file"))
+		writeError(w, http.StatusServiceUnavailable, apierror.Public("this daemon takes no host agent dialing in: start it with -hostd-token-file"))
 		return
 	}
 	id, code, err := s.hostdConnectIdentity(r)
@@ -55,7 +55,7 @@ func (s *Server) handleHostdConnect(w http.ResponseWriter, r *http.Request) {
 		if code == http.StatusServiceUnavailable {
 			w.Header().Set("Retry-After", verifierRetryAfter)
 		}
-		http.Error(w, "grain hostd: "+err.Error(), code)
+		http.Error(w, "host: "+err.Error(), code)
 		return
 	}
 	s.tasks.Config.HostdRemote.ServeHTTP(w, r.WithContext(hostd.WithConnectIdentity(r.Context(), id)))

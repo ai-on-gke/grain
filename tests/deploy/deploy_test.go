@@ -301,7 +301,7 @@ func TestHostdOptOutLeavesItOutAndRemovesAnInstalledOne(t *testing.T) {
 	// A host run location it has no hostd for would stop the daemon
 	// starting (daemon.CheckCLIRunFlags), so it is dropped.
 	out, _ = resolveHostd(t, "GRAIN_HOSTD=0", "GRAIN_AGY_RUN=host")
-	contains(t, out, "ignoring GRAIN_AGY_RUN=host: there is no grain hostd")
+	contains(t, out, "ignoring GRAIN_AGY_RUN=host: there is no host agent")
 	// hostd refuses to run as root, so auto installs none for root.
 	if out, hostd := resolveHostd(t, "GRAIN_HOSTD=auto", "GRAIN_USER=root"); hostd != "0" {
 		t.Errorf("auto with GRAIN_USER=root settled on %q:\n%s", hostd, out)
@@ -4267,7 +4267,7 @@ func TestTheReadinessReportNamesWhereEachCLIRunsAndHostdsAgy(t *testing.T) {
 	}
 
 	out := runBash(t, script, env("GRAIN_AGY_RUN=host")...)
-	contains(t, out, `agy: host, through grain hostd: `+agy+` (its allowlist entry "agy")`)
+	contains(t, out, `agy: host, through the host agent: `+agy+` (its allowlist entry "agy")`)
 	absent(t, out, "/usr/local/bin/agy")
 	contains(t, out, "claude: container: /usr/local/bin/claude (in img)")
 	contains(t, out, "codex: container: /usr/local/bin/codex (in img)")
@@ -4278,11 +4278,11 @@ func TestTheReadinessReportNamesWhereEachCLIRunsAndHostdsAgy(t *testing.T) {
 	// A host CLI hostd has no entry for, or one naming nothing runnable,
 	// is MISSING -- which the report's per-CLI warnings key on.
 	contains(t, runBash(t, script, env("GRAIN_CLAUDE_RUN=host")...),
-		`claude: host, through grain hostd: MISSING (`+allow+` has no cli entry "claude")`)
+		`claude: host, through the host agent: MISSING (`+allow+` has no cli entry "claude")`)
 	if err := os.Remove(agy); err != nil {
 		t.Fatal(err)
 	}
-	contains(t, runBash(t, script, env("GRAIN_AGY_RUN=host")...), "agy: host, through grain hostd: MISSING (its allowlist entry \"agy\" names "+agy)
+	contains(t, runBash(t, script, env("GRAIN_AGY_RUN=host")...), "agy: host, through the host agent: MISSING (its allowlist entry \"agy\" names "+agy)
 
 	readiness := body(t, setupCode(t), "report_readiness() {")
 	contains(t, readiness, `status: $(hostd_status)`)

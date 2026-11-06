@@ -126,8 +126,8 @@ func (e HostExecutor) hostdWhere() string {
 func (e HostExecutor) HostdClient() hostd.Client { return e.hostdClient() }
 
 // remoteHostdReason is HostExecutorHostd's reason with a hostd dialing in.
-const remoteHostdReason = "host CLIs and run: host capability servers run through a grain hostd on the operator's machine " +
-	"that dials in to this daemon (grain hostd -server, at " + hostd.RemotePath + ")"
+const remoteHostdReason = "host CLIs and run: host capability servers run through a host on the operator's machine " +
+	"that dials in to this daemon (grain host -server, at " + hostd.RemotePath + ")"
 
 // HostAvailable reports whether "host" is a location this deployment
 // can run anything at.
@@ -155,7 +155,7 @@ func (c Config) hostExecutor() HostExecutor {
 	}
 	if c.HostdSocket != "" {
 		return HostExecutor{Kind: HostExecutorHostd, Socket: c.HostdSocket,
-			Reason: "host CLIs run through grain hostd at " + c.HostdSocket}
+			Reason: "host CLIs run through the host agent at " + c.HostdSocket}
 	}
 	return HostExecutor{Kind: HostExecutorLocal, Reason: "the daemon runs on this machine"}
 }
@@ -188,7 +188,7 @@ func DetectHostExecutor(cfg Config, where whererun.Detection, socketDirExists fu
 			whereAt = "on this machine"
 		}
 		return HostExecutor{Kind: HostExecutorHostd, Socket: cfg.HostdSocket,
-			Reason: "the daemon runs " + whereAt + " (" + where.Signal + "), and host CLIs run through grain hostd at " + cfg.HostdSocket}
+			Reason: "the daemon runs " + whereAt + " (" + where.Signal + "), and host CLIs run through the host agent at " + cfg.HostdSocket}
 	}
 	if where.Host {
 		return HostExecutor{Kind: HostExecutorLocal, Reason: "the daemon runs on this machine (" + where.Signal + ")"}
@@ -198,10 +198,10 @@ func DetectHostExecutor(cfg Config, where whererun.Detection, socketDirExists fu
 	}
 	if dir := filepath.Dir(hostd.DefaultSocketPath); socketDirExists(dir) {
 		return HostExecutor{Kind: HostExecutorHostd, Socket: hostd.DefaultSocketPath,
-			Reason: "the daemon runs in a container (" + where.Signal + "), and host CLIs run through grain hostd at " + hostd.DefaultSocketPath}
+			Reason: "the daemon runs in a container (" + where.Signal + "), and host CLIs run through the host agent at " + hostd.DefaultSocketPath}
 	}
 	return HostExecutor{Kind: HostExecutorNone, Reason: fmt.Sprintf("this deployment has no host executor: the daemon runs in a container (%s) "+
-		"with no grain hostd -- installed with GRAIN_HOSTD=0, or no -hostd-socket and nothing mounted at %s -- so every agent CLI "+
+		"with no host agent -- installed with GRAIN_HOSTD=0, or no -hostd-socket and nothing mounted at %s -- so every agent CLI "+
 		"runs in the daemon's own container and nothing runs on the machine itself; re-run the installer without GRAIN_HOSTD=0 to add it",
 		where.Signal, filepath.Dir(hostd.DefaultSocketPath))}
 }
@@ -210,11 +210,11 @@ func DetectHostExecutor(cfg Config, where whererun.Detection, socketDirExists fu
 // for hostd to run on.
 func CheckHostExecutorFlags(cfg Config) error {
 	if cfg.HostdSocket != "" && KubernetesMode(cfg) {
-		return fmt.Errorf("-hostd-socket=%s: %s, so there is no grain hostd to reach; "+
-			"a grain hostd on another machine can dial in instead (-hostd-token-file here, grain hostd -server there)", cfg.HostdSocket, kubernetesNoHost)
+		return fmt.Errorf("-hostd-socket=%s: %s, so there is no host agent to reach; "+
+			"a host on another machine can dial in instead (-hostd-token-file here, grain host -server there)", cfg.HostdSocket, kubernetesNoHost)
 	}
 	if cfg.HostdSocket != "" && cfg.HostdRemote != nil {
-		return fmt.Errorf("-hostd-socket=%s and -hostd-token-file: host CLIs go through one grain hostd -- the one at the socket, or one that dials in -- not both", cfg.HostdSocket)
+		return fmt.Errorf("-hostd-socket=%s and -hostd-token-file: host CLIs go through one grain host -- the one at the socket, or one that dials in -- not both", cfg.HostdSocket)
 	}
 	return nil
 }
@@ -418,7 +418,7 @@ func hostdProcesses(ctx context.Context, exec HostExecutor) []HostdProcess {
 
 // hostdUpdating is what Settings and a refused run say while grain hostd
 // drains for its own upgrade.
-const hostdUpdating = "grain hostd is updating (draining for its own upgrade): new host runs wait until it is back, and runs already going carry on"
+const hostdUpdating = "the host agent is updating (draining for its own upgrade): new host runs wait until it is back, and runs already going carry on"
 
 // hostdHello fills st's handshake fields from a hello to exec's hostd,
 // and returns why no new host run can start there, or "".
@@ -433,7 +433,7 @@ func hostdHello(ctx context.Context, exec HostExecutor, st *HostdStatus) string 
 		st.Mismatch = err.Error()
 		return st.Mismatch
 	case err != nil:
-		return "grain hostd did not answer hello: " + err.Error()
+		return "the host agent did not answer hello: " + err.Error()
 	case peer.Draining:
 		st.Updating = true
 		return hostdUpdating
@@ -544,7 +544,7 @@ func (c Config) cliHostdHost(r CLIRunResolution) (agent.Host, error) {
 	h.Path = r.HostPath
 	if exec := c.hostExecutor(); exec.Remote != nil {
 		if err := remoteHostdHost(&h, exec.Remote.Carrier(exec.Hostd)); err != nil {
-			return nil, fmt.Errorf("%s is set to run on the host, through the grain hostd that dials in: %w", cliBinaryName(r.Framework), err)
+			return nil, fmt.Errorf("%s is set to run on the host, through the host agent that dials in: %w", cliBinaryName(r.Framework), err)
 		}
 	}
 	return h, nil
@@ -567,7 +567,7 @@ func remoteHostdHost(h *agent.HostdHost, remote *hostd.HostdCarrier) error {
 		return err
 	}
 	if !hello.SupportsCarry() || !hello.Remote {
-		return fmt.Errorf("it speaks hostd protocol %d (build %s), which cannot stage a run's files on its machine or carry grain's endpoints there; update grain hostd to this daemon's build", hello.Protocol, hello.Build)
+		return fmt.Errorf("it speaks host protocol %d (build %s), which cannot stage a run's files on its machine or carry grain's endpoints there; update the host agent to this daemon's build", hello.Protocol, hello.Build)
 	}
 	h.Remote = remote
 	h.Grain = hello.Grain
@@ -784,7 +784,7 @@ func hostdOffers(ctx context.Context, exec HostExecutor, kind hostd.Kind, entry 
 				return o.Path, ""
 			}
 		}
-		return "", fmt.Sprintf("grain hostd answers, but its allowlist (%s) offers no %s entry %q", hostd.DefaultAllowlistPath, kind, entry)
+		return "", fmt.Sprintf("the host agent answers, but its allowlist (%s) offers no %s entry %q", hostd.DefaultAllowlistPath, kind, entry)
 	}
 	offers, err := queryHostdOffers(ctx, exec, hostdOffersTimeout)
 	if err != nil {
@@ -807,7 +807,7 @@ func hostdOffers(ctx context.Context, exec HostExecutor, kind hostd.Kind, entry 
 			return o.Path, ""
 		}
 	}
-	return "", fmt.Sprintf("grain hostd answers, but its allowlist (%s) offers no %s entry %q", hostd.DefaultAllowlistPath, kind, entry)
+	return "", fmt.Sprintf("the host agent answers, but its allowlist (%s) offers no %s entry %q", hostd.DefaultAllowlistPath, kind, entry)
 }
 
 // capabilityHostd is the client run: host capability servers start

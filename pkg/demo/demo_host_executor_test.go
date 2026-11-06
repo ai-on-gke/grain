@@ -98,7 +98,7 @@ func TestDemoHostExecutorCapabilityServers(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 				t.Fatalf("executor=%q decoding host-entries: %v", executor, err)
 			}
-			if got.Available || !strings.Contains(got.Reason, "no grain hostd beside it") {
+			if got.Available || !strings.Contains(got.Reason, "no host agent beside it") {
 				t.Errorf("executor=%q host-entries = %+v, want unavailable with no-hostd reason", executor, got)
 			}
 		}
@@ -116,7 +116,7 @@ func TestDemoHostExecutorCapabilityServers(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 				t.Fatalf("executor=%q decoding host-entries: %v", executor, err)
 			}
-			if got.Available || !strings.Contains(got.Reason, "asking grain hostd what it offers") {
+			if got.Available || !strings.Contains(got.Reason, "asking the host agent what it offers") {
 				t.Errorf("executor=%q host-entries = %+v, want unavailable with hostd query error", executor, got)
 			}
 		}

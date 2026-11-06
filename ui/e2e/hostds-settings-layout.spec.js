@@ -14,7 +14,7 @@
 
 import { expect, test } from "./fixtures.js";
 
-// Settings → Hostds: the registry the demo seeds (local, a workstation
+// Settings → Hosts: the registry the demo seeds (local, a workstation
 // with an owner and labels, a runner with no owner, a revoked laptop) in
 // its table, the actions in the right-hand column, and the add form
 // inside its card -- on a wide screen and on a phone, with nothing
@@ -26,7 +26,7 @@ for (const [name, viewport] of [
   ["desktop", DESKTOP],
   ["phone", PHONE],
 ]) {
-  test(`Settings → Hostds fits a ${name} screen`, async ({ page }) => {
+  test(`Settings → Hosts fits a ${name} screen`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.goto("/settings/hostds");
 
@@ -56,7 +56,7 @@ for (const [name, viewport] of [
 
     const card = await page.locator("#add-hostd").boundingBox();
     const add = await page
-      .getByRole("button", { name: "Add hostd" })
+      .getByRole("button", { name: "Add host" })
       .boundingBox();
     expect(add.x).toBeGreaterThanOrEqual(card.x - 1);
     expect(add.x + add.width).toBeLessThanOrEqual(card.x + card.width + 1);

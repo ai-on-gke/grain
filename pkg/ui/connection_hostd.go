@@ -33,7 +33,7 @@ import (
 
 // TaskHostdRefusal is what a request that still sets a hostd on a
 // task, template, schedule or repository is told.
-const TaskHostdRefusal = "hostd is set on the model connection or capability server, not the task " +
+const TaskHostdRefusal = "The host is set on the model connection or capability server, not the task " +
 	"(Settings -> Models or Settings -> Capabilities)"
 
 // errTaskHostd is TaskHostdRefusal as a validation error, prefixed with
@@ -94,7 +94,7 @@ func (c *Client) normalizeConnectionHostd(ctx context.Context, stored []model.Ag
 		}
 	}
 	if len(fallback) > 0 && h == "" {
-		return validationErrorf("hostdFallback lists where to go when hostd is not connected; set hostd first")
+		return validationErrorf("hostdFallback lists where to go when the host is not connected; set hostd first")
 	}
 	b.HostdFallback = fallback
 	return nil
@@ -123,10 +123,10 @@ func (c *Client) checkHostdSelector(ctx context.Context, selector string) error 
 			return err
 		}
 		if h == nil {
-			return validationErrorf("hostd %s is not in the registry (Settings -> Hostds)", name)
+			return validationErrorf("host %s is not in the registry (Settings -> Hosts)", name)
 		}
 		if h.Revoked() {
-			return validationErrorf("hostd %s is revoked", name)
+			return validationErrorf("host %s is revoked", name)
 		}
 		return nil
 	}
@@ -139,7 +139,7 @@ func (c *Client) checkHostdSelector(ctx context.Context, selector string) error 
 			return nil
 		}
 	}
-	return validationErrorf("no hostd in the registry is labelled %s (Settings -> Hostds)", selector)
+	return validationErrorf("no host in the registry is labelled %s (Settings -> Hosts)", selector)
 }
 
 // hostdLabelled is whether a hostd's registry labels carry every one
