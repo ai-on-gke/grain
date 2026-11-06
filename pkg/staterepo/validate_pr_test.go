@@ -110,6 +110,10 @@ func TestValidateCandidateConfigRefusesAChangeThatLocksDispatch(t *testing.T) {
 		{"director model unserved", func(c *model.Config) {
 			c.ConsoleSessions = []model.ConsoleSession{{ID: model.DirectorSessionID, Title: "Director", Model: "gpt-9"}}
 		}, "director_model gpt-9"},
+		{"director given a Tier 3 grant", func(c *model.Config) {
+			c.ConsoleSessions = []model.ConsoleSession{{ID: model.DirectorSessionID, Title: "Director",
+				Capabilities: []string{"self-debug", "api:merge:force"}}}
+		}, "built-in Tier 3 floor"},
 	} {
 		dir := candidate(t, db, store, live, tc.edit)
 		report, err := staterepo.ValidateCandidateConfig(context.Background(), db, dir)

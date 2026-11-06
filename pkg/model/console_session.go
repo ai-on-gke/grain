@@ -451,9 +451,12 @@ func DecodeConsoleSessions(stored string) ([]ConsoleSession, error) {
 // same task), and a named network access has to be one grain can
 // actually build a sandbox for.
 //
-// It says nothing about the capability ids -- ui.UpdateSettings checks
-// those against the capabilities this build actually offers, which this
-// package cannot see.
+// It says nothing else about the capability ids -- ui.UpdateSettings
+// checks those against the capabilities this build actually offers,
+// which this package cannot see -- except that the director session may
+// not name one grain's built-in Tier 3 floor refuses it
+// (DirectorFloorRefusal): saving it would only leave the director held
+// at dispatch.
 func ValidateConsoleSessions(sessions []ConsoleSession) error {
 	seen := map[string]bool{}
 	for _, s := range sessions {
@@ -473,6 +476,13 @@ func ValidateConsoleSessions(sessions []ConsoleSession) error {
 		}
 		if !validConsoleSessionTitleSource(s.TitleSource) {
 			return fmt.Errorf("console session %q has title source %q, which is not one grain knows", id, s.TitleSource)
+		}
+		if id == DirectorSessionID {
+			for _, capID := range s.Capabilities {
+				if r := DirectorFloorRefusal(capID, CatalogueKindDirector); r != nil {
+					return fmt.Errorf("console session %q: %s", id, r.Reason)
+				}
+			}
 		}
 	}
 	return nil

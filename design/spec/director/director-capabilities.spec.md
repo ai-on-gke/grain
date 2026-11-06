@@ -108,11 +108,31 @@ refused without it. The reason is written to the controller log
   checkout is read-only today.
 - The `self-debug` alias also grants the `api:self-debug` preset
   (`tasks:read`, `deployment:read`).
-- `CatalogueKindDirector` is only a kind that `CatalogueKindOf` returns
-  and `kindWord` prints. **No `DefaultCapabilityCatalogue` exists** on
-  `main`: a deployment without `settings/capabilities.yml` has a nil
-  catalogue, which admits everything, and no shipped rule names the
-  director kind.
+- `CatalogueKindDirector` carries a **built-in Tier 3 floor**
+  (`pkg/model/director_floor.go`, G7). `model.DirectorFloorRefusal`
+  refuses any grant reaching `merge:force`, `settings:write`,
+  `secrets:write`, `connections:write` or `repos:write`
+  (`model.DirectorForbiddenAPIScopes`) to a run of that kind, in every
+  spelling `model.GrantAPIScopes` reads: `api:<scope>`, `api:<preset>`
+  or a scope set expanding to one (`api:grain/operator`), either narrowed
+  with `@owner/name`, a preset alias or retired name, and the canonical
+  `…/api#<scope-or-preset>` reference. `CapabilityCatalogue.ValidateGrants`
+  and `Refusals` apply it before the operator's
+  `settings/capabilities.yml` rules and on a nil catalogue too, so an
+  operator file may narrow the director but never widen it past the
+  floor. It is enforced:
+  - at dispatch, by `orchestrator.catalogueHold`, which on a deployment
+    with no catalogue judges the director alone against the floor alone;
+  - on a grant attached to the director's task
+    (`ui.catalogueEditRefusal`, `ui.CheckAccessRequest`), whether or not
+    the deployment has a catalogue;
+  - on saving the director's session row
+    (`model.ValidateConsoleSessions`), and in a `grain/config` candidate's
+    liveness report (`staterepo.CheckDispatchLiveness`);
+  - at the agent API gate and MCP endpoint, where
+    `model.WithinDirectorFloor` strips those scopes from the director's
+    grant set, so a scope set redefined after admission still reaches
+    none of their routes.
 - `propose_config_change` is implemented (`pkg/mcp/config_change_tool.go`,
   `pkg/ui/task_config_change.go`, `pkg/model/config_change.go`): offered
   on repo-less runs holding the state repository in `Writes`, it validates
@@ -388,7 +408,7 @@ gate, not merely left ungranted.
    - `POST /api/tasks/{id}/submit` and any `autoMerge: true` are refused
      for every agent (`errAgentAutoMerge`).
    - `merge:force` and `api:merge:force` MUST NOT be granted to the
-     director kind: the catalogue rule in §5 enforces it.
+     director kind: the built-in floor (§1.4, §5 G7) enforces it.
    - `merge-on-green` writes (`repos:write`) MUST NOT be held by the
      director either.
 3. **Approving its own work.**
@@ -491,14 +511,14 @@ holds them.
 | G4 | State repo read | **done**: implicit via `StateRepo`, read-only checkout pinned by `consolesessions_test.go` and `director_state_internal_test.go` | Unchanged | None. |
 | G5 | `propose_config_change` & config-repo proposal rail | Tool and `grain/config/<task-id>/*` push policy implemented (`pkg/mcp/config_change_tool.go`, `pkg/ui/task_config_change.go`), keyed on `Writes: [<state repo>]`; `DefaultConsoleSessions` still ships `Writes: []`, and `AutoApprovalRefusal` does not yet hold `IsConfigRepo` targets/writes when the parent holds `Writes: [<state repo>]` | Shipped on the director, while child `propose_task` calls targeting or writing `IsConfigRepo` always wait for a person (§3.1.3) | Hold `IsConfigRepo` target and write proposals unconditionally in `AutoApprovalRefusal` (`pkg/model/hold_for_approval.go`), then enable `propose_config_change` on the shipped director without widening `propose_task`. |
 | G6 | `capabilities:detach` | does not exist | New non-dangerous, MCP-only scope (§3.1.2) | Add it to `model.apiScopes`, `IsSandboxDeniedAPIScope`, `route_scopes.go` (a detach-body check like `tasksAdminTaskPatchBodyAllowed`), `docs/agent-api.md`; then add it to G1. |
-| G7 | Default catalogue for the director kind | none (`DefaultCapabilityCatalogue` absent; nil catalogue admits all) | Shipped rule set denying the director kind `merge:force`, `settings:write`, `secrets:write`, `connections:write`, `repos:write` | Add a built-in restriction layer applied under any `settings/capabilities.yml`, keyed on `CatalogueKindDirector` (operator files may narrow, not widen). |
+| G7 | Default catalogue for the director kind | **done**: built-in floor `model.DirectorFloorRefusal` (`pkg/model/director_floor.go`) applied by `ValidateGrants`/`Refusals` under any `settings/capabilities.yml` and on a nil catalogue; enforced at dispatch (`catalogueHold`), on grant edits (`catalogueEditRefusal`), on session saves (`ValidateConsoleSessions`) and at the API gate (`WithinDirectorFloor`); tests in `pkg/model`, `pkg/ui`, `pkg/orchestrator` | Shipped rule set denying the director kind `merge:force`, `settings:write`, `secrets:write`, `connections:write`, `repos:write` | None. Operator files may narrow the director further, never widen it past the floor. |
 | G8 | Self-approval | relies on `tasks:admin` being person-granted | Gate refuses `POST /api/tasks/{id}/approve` on a task in the actor's proposal subtree or held for a person | Add to `agentRails` in `pkg/ui/agent_api_gate.go`, with tests. |
 | G9 | Seeded repo defaults on director proposals | held as "seeded" escalations | Admitted under §4.2 | Change `EscalatedCapabilities` / `AutoApprovalRefusal` (`pkg/model/auto_submit.go`, `hold_for_approval.go`) to take the seeding source; tests for each excluded case. |
 | G10 | `DirectorSessionBody` | — | Tells the director to use `expect` on stop/close, `hold_for_approval` for destructive proposals, and give reasons | Update the reviewed body text. |
 | G11 | Docs | Retired capability names and the `NetworkAccess: open` note in `docs/director.md` updated in [Task #3185](/tasks/3185); envelope table still reflects pre-G1–G3 defaults | Matches §3 | Update `docs/director.md` alongside G1–G3 as each default flips. |
 | G12 | Capacity bound on session-queued proposals | session-queued proposals skip `AutoSubmitLimits` | Per-turn fan-out bound; over it, filed for a person (§3.1.5) | Add the check beside `ExceededAutoSubmitLimit` in `ui.Client.CreateTask` and `orchestrator.relayProposedTasks`, with tests. |
 
-Ordering: G4 is done, and G10 can land with G1. G6 precedes the detach part of
+Ordering: G4 and G7 are done, and G10 can land with G1. G6 precedes the detach part of
 G1, and G3's verification precedes its default change. G5's `IsConfigRepo`
-proposal hold, G7, G8 and G12 MUST land before G2, so that the auto-queueing
+proposal hold, G7 (done), G8 and G12 MUST land before G2, so that the auto-queueing
 director never runs on a deployment without the Tier 3 rails.
