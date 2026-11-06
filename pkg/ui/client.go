@@ -5373,7 +5373,41 @@ func (c *Client) mutate(ctx context.Context, id string, apply func(*model.Task) 
 		return &NotFoundError{ID: id}
 	}
 	c.ensureConsoleSessionSnapshot(ctx, *task)
-	return c.Store.UpdateTask(ctx, id, apply)
+	actor := c.requestActor(ctx).Actor
+	var released []model.HumanReviewReason
+	if err := c.Store.UpdateTask(ctx, id, func(t *model.Task) error {
+		released = nil
+		before := model.HumanReviewReasons(*t)
+		if err := apply(t); err != nil {
+			return err
+		}
+		if len(before) > 0 && !model.HumanReviewHeld(*t) {
+			// An edit that ends a human-review hold -- a Submit, a PATCH
+			// turning auto-merge on -- is a person's decision, and only a
+			// person's (human_review_hold.go): an agent may raise the
+			// hold, never release it.
+			if !mayReleaseHumanReview(actor) {
+				return forbiddenErrorf("%s is held for a person's review (%s), and only a person may release it",
+					id, model.HumanReviewSummary(*t))
+			}
+			released = before
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if len(released) > 0 {
+		if err := c.Store.RecordHumanReviewRelease(ctx, id, actor, "submitted", released); err != nil {
+			return fmt.Errorf("recording the release of %s's human-review hold: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// mayReleaseHumanReview reports whether p may end a human-review hold:
+// anybody but an agent or grain's own automation.
+func mayReleaseHumanReview(p model.Principal) bool {
+	return p.Kind != model.PrincipalAgent && p.Kind != model.PrincipalAutomation
 }
 
 // SetCapability attaches or detaches one capability grant. Detaching one
@@ -5868,6 +5902,9 @@ func (c *Client) submit(ctx context.Context, id string) error {
 // orchestrator to pin before it merges anything into the branch -- and
 // only if the branch is still there (orchestrator.pinHumanSubmit).
 func humanSubmitted(t *model.Task, now time.Time, head string) {
+	// A human-review hold waits for exactly this decision too, and is
+	// recorded as released by whoever made it (Client.mutate).
+	model.DropHumanReviewHold(t)
 	t.Links = slices.DeleteFunc(t.Links, func(l model.Link) bool {
 		switch l.Kind {
 		case model.LinkSecurityHold, model.LinkHumanOnlyHold, model.LinkBrokenRulesHold,

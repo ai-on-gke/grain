@@ -56,11 +56,11 @@ const hostdRenewGrace = 2 * time.Minute
 
 var (
 	// ErrHostdNotFound is a registry operation on a name it does not hold.
-	ErrHostdNotFound = errors.New("model: hostd not found")
+	ErrHostdNotFound = errors.New("model: host not found")
 	// ErrHostdRevoked is a token minted for a hostd that is revoked.
-	ErrHostdRevoked = errors.New("model: hostd is revoked")
+	ErrHostdRevoked = errors.New("model: host is revoked")
 	// ErrHostdExists is CreateHostd or RenameHostd on a name already taken.
-	ErrHostdExists = errors.New("model: a hostd by that name already exists")
+	ErrHostdExists = errors.New("model: a host by that name already exists")
 	// ErrHostdNotKeyBound is RenewHostdCredential on a host holding a legacy
 	// per-host token: only key-bound credentials renew (migrate with rekey).
 	ErrHostdNotKeyBound = errors.New("model: this host holds a legacy per-host token, which does not renew; migrate it with rekey")
@@ -97,7 +97,7 @@ func NormalizeHostdOwner(owner string) (string, error) {
 	}
 	at := strings.Index(owner, "@")
 	if at <= 0 || at == len(owner)-1 || strings.ContainsAny(owner, " \t,") || strings.Count(owner, "@") != 1 {
-		return "", fmt.Errorf("hostd owner %q must be a full email address or service account", owner)
+		return "", fmt.Errorf("host owner %q must be a full email address or service account", owner)
 	}
 	return owner, nil
 }
@@ -151,7 +151,7 @@ func HashHostdToken(token string) string {
 func GenerateHostdToken() (string, error) {
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("generating a hostd token: %w", err)
+		return "", fmt.Errorf("generating a host token: %w", err)
 	}
 	return HostdTokenPrefix + hex.EncodeToString(b), nil
 }
@@ -191,7 +191,7 @@ func ParseHostdLabels(s string) (map[string]string, error) {
 		k, v, ok := strings.Cut(strings.TrimSpace(part), "=")
 		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
 		if !ok || k == "" || v == "" || strings.ContainsAny(k+v, ",= \t\n\r") {
-			return nil, fmt.Errorf("hostd label %q must be key=value", part)
+			return nil, fmt.Errorf("host label %q must be key=value", part)
 		}
 		out[k] = v
 	}
@@ -202,7 +202,7 @@ func ParseHostdLabels(s string) (map[string]string, error) {
 func ValidateHostdLabels(labels map[string]string) error {
 	for k, v := range labels {
 		if k == "" || v == "" || strings.ContainsAny(k+v, ",= \t\n\r") {
-			return fmt.Errorf("hostd label %q=%q: keys and values may not be empty or hold ',', '=' or spaces", k, v)
+			return fmt.Errorf("host label %q=%q: keys and values may not be empty or hold ',', '=' or spaces", k, v)
 		}
 	}
 	return nil
@@ -287,7 +287,7 @@ func ensureLocalHostd(ctx context.Context, tx *sql.Tx) error {
 		"INSERT INTO `hostd` (`name`,`owner`,`labels`,`created_by`,`created_at`,`revoked_at`) VALUES (?, '', '', 'grain', ?, NULL) ON CONFLICT (`name`) DO NOTHING",
 		LocalHostd, time.Now().UTC())
 	if err != nil {
-		return fmt.Errorf("adding the local hostd to the registry: %w", err)
+		return fmt.Errorf("adding the local host to the registry: %w", err)
 	}
 	return nil
 }
@@ -299,7 +299,7 @@ func (s *Store) CreateHostd(ctx context.Context, h Hostd) (*Hostd, string, error
 		return nil, "", err
 	}
 	if h.Name == LocalHostd {
-		return nil, "", fmt.Errorf("%q is the co-located hostd's name, and it takes no token", LocalHostd)
+		return nil, "", fmt.Errorf("%q is the co-located host's name, and it takes no token", LocalHostd)
 	}
 	owner, err := NormalizeHostdOwner(h.Owner)
 	if err != nil {
@@ -323,7 +323,7 @@ func (s *Store) CreateHostd(ctx context.Context, h Hostd) (*Hostd, string, error
 	if err != nil {
 		return nil, "", err
 	}
-	err = s.write(ctx, "create hostd "+h.Name, func(tx *sql.Tx) error {
+	err = s.write(ctx, "create host "+h.Name, func(tx *sql.Tx) error {
 		var n int
 		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM `hostd` WHERE `name` = ?", h.Name).Scan(&n); err != nil {
 			return err
@@ -357,7 +357,7 @@ func insertHostdToken(ctx context.Context, tx *sql.Tx, name, token string, now t
 		"INSERT INTO `hostd_token` (`token_hash`,`hostd`,`prefix`,`created_at`,`expires_at`,`revoked_at`) VALUES (?, ?, ?, ?, ?, NULL)",
 		HashHostdToken(token), name, hostdTokenDisplayPrefix(token), now.UTC(), exp)
 	if err != nil {
-		return fmt.Errorf("inserting hostd token: %w", err)
+		return fmt.Errorf("inserting host token: %w", err)
 	}
 	return nil
 }
@@ -403,7 +403,7 @@ func (s *Store) liveHostdTokens(ctx context.Context, now time.Time) (map[string]
 	rows, err := s.db.QueryContext(ctx,
 		"SELECT `hostd`, `prefix`, `expires_at` FROM `hostd_token` WHERE `revoked_at` IS NULL ORDER BY `created_at`")
 	if err != nil {
-		return nil, fmt.Errorf("listing hostd tokens: %w", err)
+		return nil, fmt.Errorf("listing host tokens: %w", err)
 	}
 	defer rows.Close()
 	now = now.UTC()
@@ -434,7 +434,7 @@ func (s *Store) GetHostd(ctx context.Context, name string) (*Hostd, error) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("getting hostd %q: %w", name, err)
+		return nil, fmt.Errorf("getting host %q: %w", name, err)
 	}
 	tokens, err := s.liveHostdTokens(ctx, time.Now().UTC())
 	if err != nil {
@@ -468,7 +468,7 @@ func (s *Store) HostdForTokenAt(ctx context.Context, token string, now time.Time
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("looking up a hostd token: %w", err)
+		return nil, fmt.Errorf("looking up a host token: %w", err)
 	}
 	if exp.Valid && !exp.Time.UTC().After(now.UTC()) {
 		return nil, nil
@@ -485,13 +485,13 @@ func (s *Store) HostdForTokenAt(ctx context.Context, token string, now time.Time
 // session until it drops; it cannot connect again with it.
 func (s *Store) RotateHostdToken(ctx context.Context, name string) (string, error) {
 	if name == LocalHostd {
-		return "", fmt.Errorf("%q is the co-located hostd, and it takes no token", LocalHostd)
+		return "", fmt.Errorf("%q is the co-located host, and it takes no token", LocalHostd)
 	}
 	token, err := GenerateHostdToken()
 	if err != nil {
 		return "", err
 	}
-	err = s.write(ctx, "rotate hostd token "+name, func(tx *sql.Tx) error {
+	err = s.write(ctx, "rotate host token "+name, func(tx *sql.Tx) error {
 		h, err := scanHostd(tx.QueryRowContext(ctx, "SELECT "+hostdColumns+" FROM `hostd` WHERE `name` = ?", name).Scan)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrHostdNotFound
@@ -505,7 +505,7 @@ func (s *Store) RotateHostdToken(ctx context.Context, name string) (string, erro
 		now := time.Now().UTC()
 		if _, err := tx.ExecContext(ctx,
 			"UPDATE `hostd_token` SET `revoked_at` = ? WHERE `hostd` = ? AND `revoked_at` IS NULL", now, name); err != nil {
-			return fmt.Errorf("revoking hostd tokens: %w", err)
+			return fmt.Errorf("revoking host tokens: %w", err)
 		}
 		var expiresAt *time.Time
 		if h.KeyBound() {
@@ -633,9 +633,9 @@ func (s *Store) RecordHostdCheckin(ctx context.Context, name, hostname, osName, 
 // no-op that returns the row as it is.
 func (s *Store) RevokeHostd(ctx context.Context, name string) (*Hostd, error) {
 	if name == LocalHostd {
-		return nil, fmt.Errorf("%q is the co-located hostd and cannot be revoked", LocalHostd)
+		return nil, fmt.Errorf("%q is the co-located host and cannot be revoked", LocalHostd)
 	}
-	err := s.write(ctx, "revoke hostd "+name, func(tx *sql.Tx) error {
+	err := s.write(ctx, "revoke host "+name, func(tx *sql.Tx) error {
 		now := time.Now().UTC()
 		res, err := tx.ExecContext(ctx, "UPDATE `hostd` SET `revoked_at` = ? WHERE `name` = ? AND `revoked_at` IS NULL", now, name)
 		if err != nil {
@@ -690,7 +690,7 @@ func (s *Store) UpdateHostdDetails(ctx context.Context, name string, u HostdUpda
 	if u.Capacity != nil && *u.Capacity < 0 {
 		return nil, fmt.Errorf("host capacity %d may not be negative", *u.Capacity)
 	}
-	err := s.write(ctx, "update hostd "+name, func(tx *sql.Tx) error {
+	err := s.write(ctx, "update host "+name, func(tx *sql.Tx) error {
 		var c int
 		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM `hostd` WHERE `name` = ?", name).Scan(&c); err != nil {
 			return err

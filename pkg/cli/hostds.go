@@ -25,7 +25,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-const hostdsUsage = `usage: grain host <subcommand> [args]
+const hostRegistryUsage = `usage: grain host <subcommand> [args]
 
   list
   pending
@@ -45,10 +45,25 @@ const hostdsUsage = `usage: grain host <subcommand> [args]
   set-owner <name> <email|"">
 
 Hosts (Settings -> Hosts): invite machines with one shared enrollment snippet,
-verify their pairing code before accepting, and manage accepted hosts.`
+verify their pairing code before accepting, and manage accepted hosts.
+invite creates an enrollment code; a host joins with grain host -server
+-join <code>, prints a pairing code, and waits for the deployment owner to
+check it and accept (pending, accept, reject).
 
-// cmdHostds is `grain host` (and aliases `grain hosts` and `grain hostds`):
-// the host registry and enrollment handshake over /api/hostds.
+register is the legacy per-host token registry: it prints the new host's
+token once, or writes it to -token-file (mode 0600) for grain host -server
+-token-file, and then how to install it on its machine. install prints
+those instructions again for a host already registered; they never carry
+its token. rekey moves a registered host to a key-bound credential.
+
+A host's owner is the person or service account answerable for it. A
+host that dials in through IAP or another identity verifier's proxy
+must be verified as its owner. A host over loopback is named by its
+token alone and needs no owner.`
+
+// cmdHostds is `grain host <subcommand>` (alias `grain hosts`, hidden aliases
+// `grain hostds` and `grain hostd <verb>`): the host registry and enrollment
+// handshake over /api/hostds.
 func cmdHostds(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	if len(args) == 0 {
 		args = []string{"list"}
@@ -56,7 +71,7 @@ func cmdHostds(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	sub, subArgs := args[0], args[1:]
 	switch sub {
 	case "-h", "-help", "--help", "help":
-		fmt.Println(hostdsUsage)
+		fmt.Println(hostRegistryUsage)
 		return nil
 	case "list", "ls":
 		fs := flag.NewFlagSet("grain host list", flag.ContinueOnError)
@@ -150,7 +165,7 @@ func cmdHostds(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	case "register", "create":
 		return cmdHostdsRegister(ctx, c, out, subArgs)
 	case "install":
-		fs := flag.NewFlagSet("grain hostds install", flag.ContinueOnError)
+		fs := flag.NewFlagSet("grain host install", flag.ContinueOnError)
 		rest, err := parseArgs(fs, subArgs)
 		if err != nil {
 			return err
@@ -172,7 +187,7 @@ func cmdHostds(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		printHostdInstall(&inst)
 		return nil
 	case "set-owner":
-		fs := flag.NewFlagSet("grain hostds set-owner", flag.ContinueOnError)
+		fs := flag.NewFlagSet("grain host set-owner", flag.ContinueOnError)
 		rest, err := parseArgs(fs, subArgs)
 		if err != nil {
 			return err
@@ -192,7 +207,7 @@ func cmdHostds(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		fmt.Printf("host %s: owner %s\n", h.Name, ownerOrNone(h.Owner))
 		return nil
 	default:
-		return fmt.Errorf("unknown host subcommand %q\n%s", sub, hostdsUsage)
+		return fmt.Errorf("unknown host subcommand %q\n%s", sub, hostRegistryUsage)
 	}
 }
 
@@ -250,17 +265,17 @@ func cmdHostUpdate(ctx context.Context, c *ui.HTTPClient, out *printer, args []s
 }
 
 func cmdHostdsRegister(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
-	fs := flag.NewFlagSet("grain hostds register", flag.ContinueOnError)
-	owner := fs.String("owner", "", "the hostd's owner: the email or service account it connects as through IAP")
-	tokenFile := fs.String("token-file", "", "write the hostd's token to this file (mode 0600) rather than print it")
+	fs := flag.NewFlagSet("grain host register", flag.ContinueOnError)
+	owner := fs.String("owner", "", "the host's owner: the email or service account it connects as through IAP")
+	tokenFile := fs.String("token-file", "", "write the host's token to this file (mode 0600) rather than print it")
 	var labels stringList
-	fs.Var(&labels, "label", "k=v the hostd is selected by (repeatable)")
+	fs.Var(&labels, "label", "k=v the host is selected by (repeatable)")
 	rest, err := parseArgs(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(rest) != 1 {
-		return errors.New(hostdsUsage)
+		return errors.New(hostRegistryUsage)
 	}
 	req := ui.CreateHostdRequest{Name: rest[0], Owner: *owner}
 	if req.Labels, err = pairs("-label", labels); err != nil {
@@ -284,7 +299,7 @@ func cmdHostdsRegister(ctx context.Context, c *ui.HTTPClient, out *printer, args
 	}
 	fmt.Printf("registered host %s, owner %s\n", issued.Hostd.Name, ownerOrNone(issued.Hostd.Owner))
 	if *tokenFile != "" {
-		fmt.Printf("its token is in %s: grain hostd -server <this daemon's URL> -token-file %s\n", *tokenFile, *tokenFile)
+		fmt.Printf("its token is in %s: grain host -server <this daemon's URL> -token-file %s\n", *tokenFile, *tokenFile)
 	} else {
 		fmt.Printf("its token, shown this once: %s\n", issued.Token)
 	}

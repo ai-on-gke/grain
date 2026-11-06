@@ -14,7 +14,7 @@ In **Settings → Capabilities → Capability servers**, add a stdio server:
 }
 ```
 
-- **Run on the host as you** with `"run": "host"` and `"command": "host-script"`, which is the name of an entry in grain hostd's allowlist, `/etc/grain/hostd.yaml`, and no `args`:
+- **Run on the host as you** with `"run": "host"` and `"command": "host-script"`, which is the name of an entry in the host agent's allowlist, `/etc/grain/hostd.yaml`, and no `args`:
 
   ```yaml
   capabilities:
@@ -25,7 +25,7 @@ In **Settings → Capabilities → Capability servers**, add a stdio server:
       pass_env: [KUBECONFIG, SSH_AUTH_SOCK, CLOUDSDK_CONFIG]
   ```
 
-  Scripts then run with your ambient identity: your uid, plus the `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG` and `TZ` hostd passes to every entry. Anything else of yours a script needs, such as `KUBECONFIG` or `SSH_AUTH_SOCK`, must be listed in `pass_env`.
+  Scripts then run with your ambient identity: your uid, plus the `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG` and `TZ` host passes to every entry. Anything else of yours a script needs, such as `KUBECONFIG` or `SSH_AUTH_SOCK`, must be listed in `pass_env`.
 
   Scripts also run at `oom_score_adj` +500. `grain-hostd.service` itself runs at `OOMScoreAdjust=-900`, as the daemon does, so that under memory pressure the kernel kills the work and not the controller ([design/auto-overcommit.md](../design/design/auto-overcommit.design.md)).
 - **Run in the daemon's container** by leaving `run` unset. Scripts then run with the container's identity.

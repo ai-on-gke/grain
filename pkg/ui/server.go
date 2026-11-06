@@ -354,6 +354,8 @@ func (s *Server) routes() {
 	// messages.go, and mcp's chat tool at the other end of it.
 	s.route("POST /api/tasks/{id}/messages", s.handlePostTaskMessage)
 	s.route("POST /api/tasks/{id}/notes", s.handlePostTaskNote)
+	s.route("POST /api/tasks/{id}/human-review", s.handleRequestHumanReview)
+	s.route("POST /api/tasks/{id}/human-review/release", s.handleReleaseHumanReview)
 	s.route("POST /api/tasks/{id}/notify", s.handleAgentNotify)
 	s.route("POST /api/notifications", s.handleRaiseNotification)
 	s.route("GET /api/notifications", s.handleListNotifications)

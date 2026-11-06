@@ -33,7 +33,7 @@ import (
 // ErrRemoteNotConnected is Remote.Dial's error while no hostd has dialed
 // in: Client.dial waits it out for a moment, as it does a restarting
 // hostd's missing socket.
-var ErrRemoteNotConnected = errors.New("no grain hostd is connected to this daemon")
+var ErrRemoteNotConnected = errors.New("no host agent is connected to this daemon")
 
 // DefaultSharedName is the hostd the shared token (Remote.Token) names
 // when Remote.SharedName does not say.
@@ -222,7 +222,7 @@ func (r *Remote) IdentifyCredential(ctx context.Context, token string) (Resolved
 		// The shared token's hostd holds this name: a registry hostd by
 		// it would take over that hostd's session, and work sent to it
 		// would not be checked against the registry's revocation.
-		return ResolvedCredential{}, false, fmt.Errorf("registry hostd %q has the name -hostd-token-name gives the shared token's hostd; rename one of them", cred.Name)
+		return ResolvedCredential{}, false, fmt.Errorf("registry host %q has the name -hostd-token-name gives the shared token's host; rename one of them", cred.Name)
 	}
 	return cred, ok, err
 }
@@ -533,16 +533,16 @@ func (r *Remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	name, owner := cred.Name, cred.Owner
 	if err != nil {
 		r.logf("grain daemon: looking up a grain hostd's token: %v", err)
-		http.Error(w, "grain hostd: this controller could not check that hostd token", http.StatusServiceUnavailable)
+		http.Error(w, "host agent: this controller could not check that host token", http.StatusServiceUnavailable)
 		return
 	}
 	if !ok {
-		why := "it presented a token that is not a hostd token here (/api/hostds, or -hostd-token-file)"
+		why := "it presented a token that is not a host token here (/api/hostds, or -hostd-token-file)"
 		if tok == "" {
-			why = "it presented no hostd token"
+			why = "it presented no host token"
 		}
 		r.logRefused(req, "token", why)
-		http.Error(w, "grain hostd: this controller does not take that hostd token", http.StatusUnauthorized)
+		http.Error(w, "host agent: this controller does not take that host token", http.StatusUnauthorized)
 		return
 	}
 	if strings.TrimSpace(cred.PublicKey) != "" {
@@ -552,13 +552,13 @@ func (r *Remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 		if err := VerifyConnectHeaders(req, tok, cred.PublicKey, now(), &r.replay); err != nil {
 			r.logRefused(req, "key\x00"+name, fmt.Sprintf("key-bound host %q failed proof-of-possession: %v", name, err))
-			http.Error(w, "grain hostd: "+err.Error(), http.StatusUnauthorized)
+			http.Error(w, "host agent: "+err.Error(), http.StatusUnauthorized)
 			return
 		}
 	}
 	if claimed := strings.TrimSpace(req.Header.Get(NameHeader)); claimed != "" && claimed != name {
-		r.logRefused(req, "name\x00"+name+"\x00"+claimed, fmt.Sprintf("it calls itself hostd %q, but its token is hostd %q's", claimed, name))
-		http.Error(w, fmt.Sprintf("grain hostd: this token belongs to hostd %q, not %q", name, claimed), http.StatusForbidden)
+		r.logRefused(req, "name\x00"+name+"\x00"+claimed, fmt.Sprintf("it calls itself host %q, but its token is host %q's", claimed, name))
+		http.Error(w, fmt.Sprintf("host agent: this token belongs to host %q, not %q", name, claimed), http.StatusForbidden)
 		return
 	}
 	id := ConnectIdentityFrom(req.Context())
@@ -568,16 +568,16 @@ func (r *Remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		if id.Principal == "" {
 			code = http.StatusUnauthorized
 		}
-		http.Error(w, "grain hostd: "+why, code)
+		http.Error(w, "host agent: "+why, code)
 		return
 	}
 	if !strings.EqualFold(req.Header.Get("Upgrade"), wsupgrade.Protocol) {
-		http.Error(w, "grain hostd: expected a WebSocket upgrade", http.StatusBadRequest)
+		http.Error(w, "host agent: expected a WebSocket upgrade", http.StatusBadRequest)
 		return
 	}
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		http.Error(w, "grain hostd: this server cannot take over the connection", http.StatusInternalServerError)
+		http.Error(w, "host agent: this server cannot take over the connection", http.StatusInternalServerError)
 		return
 	}
 	conn, brw, err := hj.Hijack()

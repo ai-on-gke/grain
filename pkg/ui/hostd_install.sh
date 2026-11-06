@@ -199,7 +199,7 @@ check_name() {
   fi
   if [ -n "$NAME" ]; then
     case "$NAME" in
-      *[!a-z0-9-]*|-*|*-) die "--name $NAME is not a hostd name: lowercase letters, digits and '-', at most 63" ;;
+      *[!a-z0-9-]*|-*|*-) die "--name $NAME is not a host name: lowercase letters, digits and '-', at most 63" ;;
     esac
     [ "${#NAME}" -le 63 ] || die "--name $NAME is longer than 63 characters"
   fi
@@ -214,24 +214,24 @@ check_request() {
       die "run this as root (sudo): it writes $CONFIG_DIR and $UNIT"
     fi
   fi
-  [ "$(uname -s)" = Linux ] || die "grain hostd's service is a systemd unit: this installs it on Linux only"
+  [ "$(uname -s)" = Linux ] || die "the host agent's service is a systemd unit: this installs it on Linux only"
   command -v systemctl >/dev/null 2>&1 || die "systemctl not found: grain-hostd.service needs systemd"
 
   check_name
   check_server
 
-  [ -n "$HOSTD_USER" ] || die "--user is required when not run through sudo: the account hostd runs as"
+  [ -n "$HOSTD_USER" ] || die "--user is required when not run through sudo: the account the host agent runs as"
   case "$HOSTD_USER" in
     *[!A-Za-z0-9._-]*|-*) die "--user $HOSTD_USER is not a plain user name" ;;
   esac
   id -u "$HOSTD_USER" >/dev/null 2>&1 || die "no user $HOSTD_USER on this machine"
-  [ "$(id -u "$HOSTD_USER")" != 0 ] || die "--user $HOSTD_USER is root, and grain hostd refuses to run as root"
+  [ "$(id -u "$HOSTD_USER")" != 0 ] || die "--user $HOSTD_USER is root, and the host agent refuses to run as root"
   HOSTD_GROUP="$(id -gn "$HOSTD_USER")"
 
   # A version this copy was not told is not a version it may skip
   # checking: without one, it installs nothing until it is given one.
   if [ "$ANY_VERSION" != 1 ]; then
-    [ -n "$RELEASE" ] || die "this copy of the script does not know the daemon's version (the daemon tells only a signed-in caller): run the command Settings -> Hostds shows, which passes --release, or pass --release VERSION (or --any-version)"
+    [ -n "$RELEASE" ] || die "this copy of the script does not know the daemon's version (the daemon tells only a signed-in caller): run the command Settings -> Hosts shows, which passes --release, or pass --release VERSION (or --any-version)"
     case "$RELEASE" in
       *[!A-Za-z0-9.+-]*|-*) die "--release $RELEASE is not a grain version" ;;
     esac
@@ -297,7 +297,7 @@ read_token() {
   if [ -n "${GRAIN_HOSTD_TOKEN:-}" ]; then
     TOKEN="$GRAIN_HOSTD_TOKEN"
   elif [ -t 0 ]; then
-    printf 'grain hostd token for %s (Settings -> Hostds; not echoed): ' "$NAME" >&2
+    printf 'Host token for %s (Settings -> Hosts; not echoed): ' "$NAME" >&2
     stty -echo
     trap 'stty echo' EXIT
     trap 'stty echo; exit 130' INT
@@ -397,7 +397,7 @@ from_url() {
 
 find_grain() {
   if [ -n "$GRAIN_BIN" ]; then
-    usable "$GRAIN_BIN" || die "--grain-bin $GRAIN_BIN is not a grain hostd this daemon takes (--any-version to install it anyway)"
+    usable "$GRAIN_BIN" || die "--grain-bin $GRAIN_BIN is not a host agent this daemon takes (--any-version to install it anyway)"
     FOUND="$GRAIN_BIN"
     return 0
   fi
@@ -492,11 +492,11 @@ allowlist_content() {
 # it is owned by root and writable by nobody else.
 YAML
   if [ -n "$CAPACITY" ]; then
-    echo "# How many agent CLI runs at once this hostd takes; 0 is no limit."
+    echo "# How many agent CLI runs at once this host takes; 0 is no limit."
     echo "capacity: $CAPACITY"
   fi
   if [ -n "$LABELS" ]; then
-    echo "# What this hostd says about itself, beside the registry's labels for it."
+    echo "# What this host says about itself, beside the registry's labels for it."
     echo "labels:"
     for label in $LABELS; do
       printf '  "%s": "%s"\n' "${label%%=*}" "${label#*=}"
@@ -518,7 +518,7 @@ YAML
 
 write_allowlist() {
   as_root install -d -m0755 -o root -g root "$CONFIG_DIR"
-  [ ! -L "$ALLOWLIST" ] || die "$ALLOWLIST is a symlink; grain hostd refuses one, and this script will not write through it"
+  [ ! -L "$ALLOWLIST" ] || die "$ALLOWLIST is a symlink; the host agent refuses one, and this script will not write through it"
   if [ -e "$ALLOWLIST" ]; then
     if [ -n "$CAPACITY$LABELS" ]; then
       log "keeping $ALLOWLIST as it is: set capacity: and labels: in it by hand (--capacity and --label only write a new one)"
@@ -537,7 +537,7 @@ write_allowlist() {
   as_root "$GRAIN" hostd -ensure-builtins -allowlist "$ALLOWLIST" -command "$GRAIN" >&2 ||
     log "WARNING: could not add grain's own capabilities entries to $ALLOWLIST"
   if ! as_root "$GRAIN" hostd -check -allowlist "$ALLOWLIST" >/dev/null; then
-    log "WARNING: grain hostd will refuse $ALLOWLIST as it stands: fix it before host work reaches this machine"
+    log "WARNING: the host agent will refuse $ALLOWLIST as it stands: fix it before host work reaches this machine"
   fi
 }
 
@@ -611,7 +611,7 @@ run_agentd_install() {
   elif [ -n "${HOME:-}" ] && [ -x "$HOME/.local/bin/grain-agentd" ]; then
     AGENTD_CMD="$HOME/.local/bin/grain-agentd"
   else
-    die "grain-agentd not found on \$PATH or ~/.local/bin (pass --agentd-bin PATH, or omit --agentd to install grain hostd)"
+    die "grain-agentd not found on \$PATH or ~/.local/bin (pass --agentd-bin PATH, or omit --agentd to install the host agent)"
   fi
 
   set -- "$AGENTD_CMD" install -server "$SERVER"

@@ -1,0 +1,267 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package webauth
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/apierror"
+)
+
+type fakeIdentityVerifier struct {
+	caller *Caller
+	err    error
+}
+
+func (f *fakeIdentityVerifier) Authenticate(r *http.Request) (*Caller, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if hdr := r.Header.Get("X-Test-Email"); hdr != "" {
+		return &Caller{
+			Email:   hdr,
+			Subject: "sub:" + hdr,
+		}, nil
+	}
+	if f.caller != nil {
+		return f.caller, nil
+	}
+	return nil, errors.New("missing test identity")
+}
+
+type failingGroupChecker struct{}
+
+func (failingGroupChecker) IsMember(ctx context.Context, groupEmail, memberEmail string) (bool, error) {
+	return false, errors.New("upstream directory timeout")
+}
+
+func TestAdmitterHumanServicePrincipalAndRoles(t *testing.T) {
+	groups := NewStaticGroups(map[string][]string{
+		"group:platform-admins@example.com": {"admin-group@example.com"},
+		"group:builders@example.com":        {"builder@example.com"},
+	})
+	disabledSet := map[string]bool{
+		"disabled@example.com": true,
+	}
+
+	admitter, err := NewAdmitter(AdmissionConfig{
+		Verifier: &fakeIdentityVerifier{},
+		Groups:   groups,
+		AllowedDomains: []string{
+			"example.com",
+		},
+		Admins: []string{
+			"user:direct-admin@example.com",
+			"group:platform-admins@example.com",
+		},
+		Creators: []string{
+			"user:direct-creator@example.com",
+			"group:builders@example.com",
+		},
+		ServicePrincipals: []string{
+			"serviceAccount:scanner@project.iam.gserviceaccount.com",
+		},
+		IsDisabled: func(ctx context.Context, email string) (bool, error) {
+			return disabledSet[email], nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewAdmitter: %v", err)
+	}
+
+	t.Run("direct admin", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		req.Header.Set("X-Test-Email", "direct-admin@example.com")
+		c, err := admitter.Admit(req)
+		if err != nil {
+			t.Fatalf("Admit: %v", err)
+		}
+		if c.Kind != PrincipalHuman || !c.IsAdmin || !c.CanCreate {
+			t.Fatalf("unexpected caller: %+v", c)
+		}
+	})
+
+	t.Run("group admin", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		req.Header.Set("X-Test-Email", "admin-group@example.com")
+		c, err := admitter.Admit(req)
+		if err != nil {
+			t.Fatalf("Admit: %v", err)
+		}
+		if !c.IsAdmin || !c.CanCreate {
+			t.Fatalf("expected group admin with create rights: %+v", c)
+		}
+	})
+
+	t.Run("group creator", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		req.Header.Set("X-Test-Email", "builder@example.com")
+		c, err := admitter.Admit(req)
+		if err != nil {
+			t.Fatalf("Admit: %v", err)
+		}
+		if c.IsAdmin || !c.CanCreate {
+			t.Fatalf("expected non-admin creator: %+v", c)
+		}
+	})
+
+	t.Run("regular viewer when creators configured", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		req.Header.Set("X-Test-Email", "viewer@example.com")
+		c, err := admitter.Admit(req)
+		if err != nil {
+			t.Fatalf("Admit: %v", err)
+		}
+		if c.IsAdmin || c.CanCreate {
+			t.Fatalf("expected viewer without create rights: %+v", c)
+		}
+	})
+
+	t.Run("service principal admitted for catalog read but rejected on human endpoint", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/directory", nil)
+		req.Header.Set("X-Test-Email", "scanner@project.iam.gserviceaccount.com")
+		c, err := admitter.Admit(req)
+		if err != nil {
+			t.Fatalf("Admit: %v", err)
+		}
+		if c.Kind != PrincipalService || c.IsAdmin || c.CanCreate {
+			t.Fatalf("unexpected service principal: %+v", c)
+		}
+
+		rec := httptest.NewRecorder()
+		h := admitter.RequireHuman(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 for service principal on human route, got %d", rec.Code)
+		}
+	})
+
+	t.Run("disallowed domain rejected", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		req.Header.Set("X-Test-Email", "stranger@other.org")
+		if _, err := admitter.Admit(req); !errors.Is(err, ErrCallerForbidden) {
+			t.Fatalf("expected ErrCallerForbidden, got %v", err)
+		}
+	})
+
+	t.Run("disabled human rejected", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		req.Header.Set("X-Test-Email", "disabled@example.com")
+		if _, err := admitter.Admit(req); !errors.Is(err, ErrCallerForbidden) {
+			t.Fatalf("expected ErrCallerForbidden, got %v", err)
+		}
+	})
+
+	t.Run("unauthorized service principal in allowed_domains never promoted to human", func(t *testing.T) {
+		svcAdmitter, err := NewAdmitter(AdmissionConfig{
+			Verifier: &fakeIdentityVerifier{
+				caller: &Caller{
+					Email:   "ci-bot@example.com",
+					Subject: "sub:ci-bot",
+					Kind:    PrincipalService,
+				},
+			},
+			AllowedDomains: []string{"example.com"},
+		})
+		if err != nil {
+			t.Fatalf("NewAdmitter: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		if c, err := svcAdmitter.Admit(req); !errors.Is(err, ErrCallerForbidden) {
+			t.Fatalf("expected ErrCallerForbidden for unlisted service principal, got caller=%+v err=%v", c, err)
+		}
+	})
+
+	t.Run("unauthorized gserviceaccount email rejected", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/directory", nil)
+		req.Header.Set("X-Test-Email", "unlisted@project.iam.gserviceaccount.com")
+		if _, err := admitter.Admit(req); !errors.Is(err, ErrCallerForbidden) {
+			t.Fatalf("expected ErrCallerForbidden, got %v", err)
+		}
+	})
+
+	t.Run("custom ServicePrincipalChecker admits authorized reader and fails closed on error", func(t *testing.T) {
+		var failLookup bool
+		dynAdmitter, err := NewAdmitter(AdmissionConfig{
+			Verifier:       &fakeIdentityVerifier{},
+			AllowedDomains: []string{"example.com"},
+			ServicePrincipalChecker: func(ctx context.Context, email string) (bool, error) {
+				if failLookup {
+					return false, errors.New("delegation store unreachable")
+				}
+				return email == "dynamic-bot@project.iam.gserviceaccount.com", nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewAdmitter: %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodGet, "/api/directory", nil)
+		req.Header.Set("X-Test-Email", "dynamic-bot@project.iam.gserviceaccount.com")
+		c, err := dynAdmitter.Admit(req)
+		if err != nil || c.Kind != PrincipalService || c.IsAdmin || c.CanCreate {
+			t.Fatalf("expected dynamic service principal admission, got caller=%+v err=%v", c, err)
+		}
+
+		failLookup = true
+		rec := httptest.NewRecorder()
+		dynAdmitter.RequireAdmitted(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})).ServeHTTP(rec, req)
+		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "5" {
+			t.Fatalf("expected 503 with Retry-After: 5 on ServicePrincipalChecker failure, got %d", rec.Code)
+		}
+		var errResp apierror.Response
+		if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+			t.Fatalf("decode apierror.Response: %v (%s)", err, rec.Body.String())
+		}
+		if errResp.Code != "unavailable" || errResp.Error == "" {
+			t.Fatalf("unexpected apierror.Response: %+v", errResp)
+		}
+	})
+}
+
+func TestAdmitterDefaultCreatorsAndFailClosed503(t *testing.T) {
+	admitter, err := NewAdmitter(AdmissionConfig{
+		Verifier:       &fakeIdentityVerifier{},
+		Groups:         failingGroupChecker{},
+		AllowedDomains: []string{"example.com"},
+		Admins:         []string{"group:admins@example.com"},
+	})
+	if err != nil {
+		t.Fatalf("NewAdmitter: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	req.Header.Set("X-Test-Email", "alice@example.com")
+	rec := httptest.NewRecorder()
+	h := admitter.RequireAdmitted(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when group resolver fails, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "5" {
+		t.Fatalf("expected Retry-After: 5, got %q", got)
+	}
+}

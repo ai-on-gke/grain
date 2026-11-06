@@ -353,7 +353,7 @@ func readToken(path string) (string, error) {
 	if t := strings.TrimSpace(os.Getenv(TokenEnv)); t != "" {
 		return t, nil
 	}
-	return "", fmt.Errorf("no hostd token: put it in %s (mode 0600) or $%s", path, TokenEnv)
+	return "", fmt.Errorf("no host token: put it in %s (mode 0600) or $%s", path, TokenEnv)
 }
 
 func defaultSocket() string {

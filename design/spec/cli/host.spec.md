@@ -645,9 +645,14 @@ _No flags._
 
 **Pinned by:** *untested*.
 
-### 4.7 `grain hostds list|register|install|set-owner` {#CLI-36}
+### 4.7 `grain host list|pending|accept|reject|codes|invite|rotate-code|revoke-code|rename|update|revoke|delete|rekey|register|install|set-owner` {#CLI-36}
 
-This is the hostd registry. A hostd is registered with its owner, the identity it dials in as through IAP.
+This is the host registry and its enrollment handshake (Settings -> Hosts; docs/host-placement.md). A host joins with one shared enrollment code (`grain host -server <url> -join <code>`), prints a pairing code, and waits for the deployment owner to accept it; a legacy host is registered with its owner, the identity it dials in as through IAP. `grain hostds` (and `grain hostd <verb>`) are hidden aliases that keep working; a bare `grain hostds` still lists.
+- `pending` calls `GET /api/hostds/pending` and prints each pending join request with its pairing code, enrolling identity, host details and key fingerprint.
+- `accept [-name -labels -capacity] <id>` calls `POST /api/hostds/pending/{id}/accept`; `reject <id>` calls `POST /api/hostds/pending/{id}/reject`. Both are the deployment owner's alone and audited.
+- `codes` calls `GET /api/hostds/enrollment-codes`; `invite` creates one (`POST /api/hostds/enrollment-codes`) and prints the shared `--join` snippet; `rotate-code` and `revoke-code` call `.../{name}/rotate` and `.../{name}/revoke`. Revoking a code stops new joins and leaves accepted hosts alone.
+- `rename <old> <new>` calls `POST /api/hostds/{name}/rename`; `update` calls `PATCH /api/hostds/{name}` (owner, labels, capacity); `revoke` calls `POST /api/hostds/{name}/revoke` and drops a live connection; `delete` calls `DELETE /api/hostds/{name}` for an offline or revoked host.
+- `rekey <name>` moves a host registered with a legacy per-host token to a key-bound credential through the same pairing handshake.
 - `list` (`ls`) calls `GET /api/hostds`.
 - `register` (`create`) calls `POST /api/hostds`. It prints the token once, then the install instructions the daemon rendered (`install.lines`, `install.note`; `ui.RegisterHostdInstall`), which never carry the token.
 - `install <name>` calls `GET /api/hostds/{name}/install` and prints the same instructions again, without rotating the token.
@@ -655,24 +660,93 @@ This is the hostd registry. A hostd is registered with its owner, the identity i
 
 **Scope:** admin.
 
-<!-- BEGIN GENERATED FLAGS: grain hostds -->
+<!-- BEGIN GENERATED FLAGS: grain host list -->
 _No flags._
 <!-- END GENERATED FLAGS -->
 
-<!-- BEGIN GENERATED FLAGS: grain hostds list -->
-_No flags._
-<!-- END GENERATED FLAGS -->
-
-<!-- BEGIN GENERATED FLAGS: grain hostds register -->
+<!-- BEGIN GENERATED FLAGS: grain host register -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-label` | value |  |  | k=v the hostd is selected by (repeatable) |
-| `-owner` | string |  |  | the hostd's owner: the email or service account it connects as through IAP |
-| `-token-file` | string |  |  | write the hostd's token to this file (mode 0600) rather than print it |
+| `-label` | value |  |  | k=v the host is selected by (repeatable) |
+| `-owner` | string |  |  | the host's owner: the email or service account it connects as through IAP |
+| `-token-file` | string |  |  | write the host's token to this file (mode 0600) rather than print it |
 <!-- END GENERATED FLAGS -->
 
-<!-- BEGIN GENERATED FLAGS: grain hostds set-owner -->
+<!-- BEGIN GENERATED FLAGS: grain host set-owner -->
 _No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host install -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host pending -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host accept -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-capacity` | int | `-1` |  | maximum concurrent agent CLI runs on this host (0 for unlimited) |
+| `-label` | value |  |  | k=v label for the accepted host (repeatable) |
+| `-labels` | string |  |  | comma-separated k=v labels for the accepted host |
+| `-name` | string |  |  | name for the accepted host (defaults to sanitized hostname) |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host reject -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host codes -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host invite -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-allow` | string |  |  | comma-separated allowed principals (user:<email>, group:<email>, github:<login>, org:<org>) |
+| `-capacity` | int |  |  | default capacity for hosts enrolled with this code |
+| `-expires` | string |  |  | expiry duration (e.g. 24h, 168h) or RFC3339 timestamp when creating a code |
+| `-label` | value |  |  | default k=v label for hosts enrolled with this code (repeatable) |
+| `-labels` | string |  |  | default comma-separated k=v labels for hosts enrolled with this code |
+| `-max-uses` | int |  |  | maximum number of join requests this code may file (0 for unlimited) |
+| `-name` | string |  |  | create a new enrollment code with this name (if omitted, shows the active snippet) |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host rotate-code -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host revoke-code -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host rename -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host update -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-capacity` | int | `-1` |  | set maximum concurrent agent CLI runs (0 for unlimited) |
+| `-label` | value |  |  | k=v label for the host (repeatable) |
+| `-labels` | string |  |  | replace labels with comma-separated k=v pairs |
+| `-owner` | string |  |  | update the host's owner email or service account |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host revoke -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host delete -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host rekey -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-key-file` | string |  |  | file where the host's Ed25519 private key (mode 0600) will be generated or loaded |
+| `-token-file` | string |  | $GRAIN_HOSTD_TOKEN | file holding the host's current token, and where the new key-bound credential is saved ($GRAIN_HOSTD_TOKEN when unset) |
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/hostds_test.go`: `TestHostdsRegisterAndSetOwner`.
@@ -1158,7 +1232,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-actions-cache-dir` | string |  |  | root directory for the GitHub Actions cache -- defaults to <sandbox-dir>/cache/actions when -sandbox-dir is set, and <data-dir>/cache/actions otherwise |
 | `-actions-cache-size-gb` | int | `20` |  | how much disk, in GiB, this deployment's GitHub Actions cache may use before it starts evicting the entries nothing has read for longest. It is what makes a cache-from: type=gha build warm across CI runs, and every branch of a repository shares one. 0 seeds a deployment that keeps no such cache. Seeds a fresh database only: the stored setting (Settings -> Sandbox, 'Actions cache') wins from then on |
 | `-agy-path` | string |  |  | path to the Antigravity CLI binary (agy) agent/antigravity runs as a subprocess; empty resolves "agy" against $PATH instead. Only used by a run driven by the "antigravity" framework |
-| `-agy-run` | string |  |  | where the agy CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through grain hostd, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release |
+| `-agy-run` | string |  |  | where the agy CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through the host agent, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release |
 | `-allow-unisolated-host-sandboxes` | bool |  |  | let -host-sandboxes start on a daemon others can reach, accepting that everyone who can file a task there may run anything on this host as this daemon's user |
 | `-as` | string |  |  | principal the UI/API attributes tasks and comments it creates to (defaults to the OS user) |
 | `-backup-gcs-bucket` | string |  |  | GCS bucket for scheduled backups; when set, upload to GCS instead of Google Drive |
@@ -1182,13 +1256,13 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-ci-step-output-mb` | value |  |  | ceiling on the step output grain CI keeps across its whole history, in MiB -- whole runs' output is swept, oldest first, until what is left fits, and the runs themselves stay where they are. This is the expensive half and the only one that makes a red run diagnosable rather than merely countable, so it is bounded by disk rather than by a count of runs: what one run prints is between nothing and the -ci-run-output-kb cap. 0 uses grain's own default, 64MiB, which is three or four days of a deployment starting 300 runs a day; a negative number keeps every byte forever. Stored on this deployment's config row the first time it starts; change it in Settings (or 'grain settings') after that, where it takes effect without a restart. |
 | `-claude-oauth-token-file` | string |  |  | file holding the Claude Code OAuth token the agent authenticates as, passed to the claude subprocess as CLAUDE_CODE_OAUTH_TOKEN. Optional, and the exact counterpart of -gemini-api-key-file above: the UI stores one as the "claude-oauth-token" secret and that wins over this file |
 | `-claude-path` | string |  |  | path to the claude CLI binary agent/claude runs as a subprocess; empty resolves "claude" against $PATH instead. Only used when the agent-framework setting is "claude" |
-| `-claude-run` | string |  |  | where the claude CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through grain hostd, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release. claude also takes "detached": the image's claude, through grain hostd's claude-detached entry, so a daemon upgrade does not interrupt it |
+| `-claude-run` | string |  |  | where the claude CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through the host agent, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release. claude also takes "detached": the image's claude, through the host agent's claude-detached entry, so a daemon upgrade does not interrupt it |
 | `-cli-container-engine` | string |  |  | deprecated and ignored: agent CLIs no longer run in a per-run container of an image |
 | `-cli-image` | string |  |  | deprecated and ignored: agent CLIs no longer run in a per-run container of an image |
 | `-cli-image-file` | string |  |  | deprecated and ignored: agent CLIs no longer run in a per-run container of an image |
 | `-codex-auth-file` | value |  |  | shared auth.json written by codex login for ChatGPT authentication. Used only when no OpenAI API key is configured. The file must be writable so Codex can persist refreshed tokens; Grain links it into each private per-run CODEX_HOME |
 | `-codex-path` | string |  |  | path to the codex CLI binary agent/codex runs as a subprocess; empty resolves "codex" against $PATH instead. Only used when the agent-framework setting is "codex" |
-| `-codex-run` | string |  |  | where the codex CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through grain hostd, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release. codex also takes "detached": the image's codex, through grain hostd's codex-detached entry, so a daemon upgrade does not interrupt it |
+| `-codex-run` | string |  |  | where the codex CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through the host agent, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release. codex also takes "detached": the image's codex, through the host agent's codex-detached entry, so a daemon upgrade does not interrupt it |
 | `-container-git-proxy-host` | string |  |  | host address grain services are reachable at from local sandbox containers |
 | `-container-sandbox-cap-add` | string |  |  | comma-separated Linux capabilities handed back to local sandbox containers, which otherwise run with every capability dropped and no-new-privileges set; the stock sandbox image needs none |
 | `-container-sandbox-fence` | string | `"auto"` |  | auto, require or off: whether local sandbox containers are fenced off from this host, its networks and link-local (the metadata server) by a per-container nftables chain. auto fences when nft can be run and otherwise runs containers unfenced and refuses external capability grants; require refuses a container that cannot be fenced; off never fences and refuses external capability grants |
@@ -1230,11 +1304,11 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-grit-url` | value |  |  | EXPERIMENTAL, refused without -grit-experimental: remote grit server base url (e.g. http://127.0.0.1:4244); when unset, CI runs in-process. It runs none of a repository's workflows yet (design/design/grit-split.design.md, GS-3 to GS-5 deferred) |
 | `-host-sandbox-env` | value |  |  | NAME or NAME=VALUE, repeatable, only with -host-sandboxes: an environment variable every host-sandbox run of this machine's own tasks (not anybody else's) gets on top of the default allowlist -- NAME alone passes this daemon's own value, NAME=VALUE sets that one. For ambient workstation credentials a run should use as you: SSH_AUTH_SOCK, HTTPS_PROXY/HTTP_PROXY/NO_PROXY, CLOUDSDK_CONFIG=$HOME/.config/gcloud. Every run then acts with that identity. HOME cannot be set (it stays pinned to the run's directory, which keeps its git credentials its own). Values reach runs through a 0600 file and are redacted from what run_command returns, but a NAME=VALUE entry sits on this daemon's own command line, so one with credentials in a URL (user:pass@) is refused: export it and pass NAME alone |
 | `-host-sandboxes` | bool |  |  | dispatch each run into its own plain directory under -sandbox-dir on this host, with NO isolation: runs execute as this daemon's user, with this host's tools and network. For a single-user workstation; refused on a daemon others can reach (a non-loopback -ui-addr, IAP, -run-host-image) unless -allow-unisolated-host-sandboxes is also passed |
-| `-hostd-reattach-timeout` | duration | `15m0s` |  | how long a run's agent CLI, running detached on a grain hostd whose connection drops, waits for that same hostd to reconnect before the run fails as an infrastructure failure (no strike against the task); re-attached in time, it carries on from where its output stood. Runs queued for a hostd that is not connected wait for it whatever this is. 0 fails at once |
-| `-hostd-socket` | string |  |  | grain hostd's unix socket, for a daemon in a container whose host CLIs run through hostd; empty uses /run/grain-hostd/hostd.sock when its directory is mounted into the container. Refused on Kubernetes, which has no host |
-| `-hostd-token-file` | string |  | $GRAIN_HOSTD_TOKEN | deprecated, for one release: file holding a shared token a grain hostd on another machine dials in to /api/hostd/connect with (grain hostd -server <this daemon's URL> -token-file ...), as the one hostd -hostd-token-name names: its host CLIs and run: host capability servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each hostd in the hostd registry (/api/hostds) instead, which gives it a token of its own |
-| `-hostd-token-name` | string | `"remote"` |  | the hostd name a hostd dialing in with -hostd-token-file's shared token is known by |
-| `-hostd-token-owner` | string |  |  | the owner of -hostd-token-name's hostd: the email or service account a hostd dialing in with the shared token through IAP (or another identity verifier's proxy) must be verified as. A remote hostd with no owner is refused; one over loopback is not |
+| `-hostd-reattach-timeout` | duration | `15m0s` |  | how long a run's agent CLI, running detached on a host whose connection drops, waits for that same host to reconnect before the run fails as an infrastructure failure (no strike against the task); re-attached in time, it carries on from where its output stood. Runs queued for a host that is not connected wait for it whatever this is. 0 fails at once |
+| `-hostd-socket` | string |  |  | the host agent's unix socket, for a daemon in a container whose host CLIs run through the host agent; empty uses /run/grain-hostd/hostd.sock when its directory is mounted into the container. Refused on Kubernetes, which has no host |
+| `-hostd-token-file` | string |  | $GRAIN_HOSTD_TOKEN | deprecated, for one release: file holding a shared token a host on another machine dials in to /api/hostd/connect with (grain host -server <this daemon's URL> -token-file ...), as the one host -hostd-token-name names: its host CLIs and run: host capability servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each host in the host registry (/api/hostds) instead, which gives it a token of its own |
+| `-hostd-token-name` | string | `"remote"` |  | the host name a host dialing in with -hostd-token-file's shared token is known by |
+| `-hostd-token-owner` | string |  |  | the owner of -hostd-token-name's host: the email or service account a host dialing in with the shared token through IAP (or another identity verifier's proxy) must be verified as. A remote host with no owner is refused; one over loopback is not |
 | `-iap-backend-service` | string |  |  | GCP Compute backend service name for dynamic IAP IAM reconciliation; empty disables IAP reconciliation (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
 | `-iap-resource` | string |  |  | IAP web resource whose IAP access is reconciled from the teams and access list too, e.g. projects/<NUMBER>/iap_web/compute/services/<SERVICE>; empty or "none" disables it (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
 | `-k8s-container` | string | `"grain"` |  | name of grain's own container within that Deployment (only used with -k8s-sandboxes and -upgrade-image) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
@@ -1384,8 +1458,9 @@ Serves the task UI on localhost over a throwaway store of fake tasks. Every call
 | `-github-sim-public` | bool |  |  | with -git-proxy, let the simulated GitHub serve its repo to an anonymous fetch, as GitHub does a public repository; an anonymous push is still refused |
 | `-github-webhook-addr` | string |  |  | local address (e.g. :4244) to listen on directly for signed GitHub App webhooks using GITHUB_WEBHOOK_SECRET or a GitHub App credential's webhook_secret; mutually exclusive with -github-webhook-url |
 | `-github-webhook-url` | string |  |  | base URL of this deployment's github-webhook gateway service (e.g. http://grain-webhook:8080), signed with GITHUB_WEBHOOK_RELAY_SECRET; empty disables remote webhook long-polling |
-| `-host-executor` | string |  |  | resolve Settings' run locations (Models and Capability servers) as this deployment would: empty for a development daemon on the bare machine, "kubernetes" (no host executor), "none" (a container with no grain hostd), "hostd-down" (a container whose grain hostd is configured but not answering), "hostd" (a container with a real grain hostd on a throwaway allowlist offering agy and corp-search), "hostd-remote" (a Kubernetes daemon with a real grain hostd dialed in) or "hostd-remote-down" (none dialed in) |
+| `-host-executor` | string |  |  | resolve Settings' run locations (Models and Capability servers) as this deployment would: empty for a development daemon on the bare machine, "kubernetes" (no host executor), "none" (a container with no host agent), "hostd-down" (a container whose host agent is configured but not answering), "hostd" (a container with a real host agent on a throwaway allowlist offering agy and corp-search), "hostd-remote" (a Kubernetes daemon with a real host agent dialed in) or "hostd-remote-down" (none dialed in) |
 | `-host-mode-install` | bool |  |  | show the notice an unmigrated host-mode install shows (banner, System -> Health, Upgrade), with the CLIs the default bare-machine run locations leave nowhere to run |
+| `-human-review` | bool |  |  | seed a change a review held for a person's decision (request_human_review), waiting for Submit or Release hold |
 | `-management-url` | string |  |  | as on grain daemon: optional external http:// or https:// URL shown where upgrades are managed externally |
 | `-mechanical-port` | bool |  |  | seed a change merged onto main and the port grain cherry-picked to candidate itself, with no agent run |
 | `-merge-queue-states` | bool |  |  | also seed two pull requests the merge queue is waiting on: one for its base branch to go green, one for an approval GitHub requires |
@@ -1486,31 +1561,33 @@ _No flags._
 
 **Pinned by:** `pkg/runhost` tests.
 
-### 5.5 `grain hostd [flags]` {#CLI-47}
+### 5.5 `grain host [flags]` {#CLI-47}
 
-On the bare machine, `hostd` runs the allowlisted host CLIs and capability servers a containerised daemon asks for. The allowlist (`-allowlist`, default `/etc/grain/hostd.yaml`) must be root-owned and not group- or world-writable.
+On the bare machine, `grain host` runs the host agent: the allowlisted host CLIs and capability servers a containerised daemon asks for. The allowlist (`-allowlist`, default `/etc/grain/hostd.yaml`) must be root-owned and not group- or world-writable.
 
-<!-- BEGIN GENERATED FLAGS: grain hostd -->
+`grain hostd` is a hidden alias for it, kept for installed units and scripts. `grain host` followed by a registry verb (`list`, `register`, `install`, `set-owner`) is §4.7 instead.
+
+<!-- BEGIN GENERATED FLAGS: grain host -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-allowlist` | string | `"/etc/grain/hostd.yaml"` |  | the allowlist of what this host will run; must be root-owned and not group- or world-writable |
-| `-build` | bool |  |  | print this binary's build and exit: what a hostd asks of the version its current link names |
+| `-build` | bool |  |  | print this binary's build and exit: what a host agent asks of the version its current link names |
 | `-ca-file` | string |  |  | with -server: PEM file of the certificate authority to verify the daemon's certificate against. Implies -tls |
 | `-check` | bool |  |  | check the allowlist, print what it offers, and exit |
 | `-command` | string | `"/usr/local/bin/grain"` |  | with -ensure-builtins: the grain binary on the host the added entries run |
 | `-disconnect-grace` | duration | `10s` |  | how long a process may outlive the daemon connection that started it |
-| `-drain` | bool |  |  | ask the hostd serving -socket to drain for an upgrade, and exit: it refuses new starts, waits for what it runs (up to the allowlist's drain_cap), then exits for systemd to restart it on the new binary. A hostd speaking this build's protocol is asked for a cutover instead: it keeps taking starts and exits the first moment nothing runs, draining only if no such moment comes within drain_cap. SIGUSR1 to hostd drains |
-| `-ensure-builtins` | bool |  |  | add to -allowlist the capabilities entries grain's own servers need in this build (host-git, grain-gcp, ... and the edition's, registered by the build's edition) that it has no entry of that name for, print each one added, and exit. An entry already there is never changed, only reported when it differs from the default. Run as root on the host, by grain-hostd.service before each start and by the upgrade step; hostd re-reads the allowlist on every request, so nothing needs restarting |
+| `-drain` | bool |  |  | ask the host agent serving -socket to drain for an upgrade, and exit: it refuses new starts, waits for what it runs (up to the allowlist's drain_cap), then exits for systemd to restart it on the new binary. A host agent speaking this build's protocol is asked for a cutover instead: it keeps taking starts and exits the first moment nothing runs, draining only if no such moment comes within drain_cap. SIGUSR1 to the host agent drains |
+| `-ensure-builtins` | bool |  |  | add to -allowlist the capabilities entries grain's own servers need in this build (host-git, grain-gcp, ... and the edition's, registered by the build's edition) that it has no entry of that name for, print each one added, and exit. An entry already there is never changed, only reported when it differs from the default. Run as root on the host, by grain-hostd.service before each start and by the upgrade step; the host agent re-reads the allowlist on every request, so nothing needs restarting |
 | `-iap-audience` | string |  |  | with -server: the OAuth client ID of the GCP Identity-Aware Proxy in front of the daemon, to send its OIDC token |
 | `-join` | string |  | $GRAIN_HOST_JOIN_CODE | with -server: enroll this host using an enrollment code from Settings -> Hosts -> Invite hosts ($GRAIN_HOST_JOIN_CODE), generating -key-file, printing the pairing code, and waiting for the deployment owner to accept |
 | `-join-only` | bool |  |  | with -join or -rekey: exit 0 once accepted and the credential is written to -token-file, without starting the server |
 | `-key-file` | string |  |  | with -server: the file holding this host's Ed25519 private key (mode 0600), generated by -join or -rekey |
-| `-name` | string |  |  | with -server: the registry name this hostd expects to be (/api/hostds). Optional: the daemon names it from its token, and refuses the connection when this says otherwise |
+| `-name` | string |  |  | with -server: the registry name this host expects to be (/api/hostds). Optional: the daemon names it from its token, and refuses the connection when this says otherwise |
 | `-rekey` | string |  |  | with -server: migrate an existing per-host token for the named host to a key-bound credential (-key-file) via pairing handshake |
-| `-server` | string |  |  | the URL of a grain daemon this host cannot share a socket with (https://grain.example.com, http://127.0.0.1:4242): hostd keeps a connection open to its /api/hostd/connect and serves the daemon over it, as well as listening on -socket (set -socket= for no local listener) |
+| `-server` | string |  |  | the URL of a grain daemon this host cannot share a socket with (https://grain.example.com, http://127.0.0.1:4242): the host agent keeps a connection open to its /api/hostd/connect and serves the daemon over it, as well as listening on -socket (set -socket= for no local listener) |
 | `-socket` | string | `"/run/grain-hostd/hostd.sock"` |  | the unix socket to listen on (mode 0600); bind mount it into the daemon's container at the same path |
-| `-state-dir` | string | `"<tmp>/home/.local/state/grain-hostd"` |  | where hostd records the process groups it started, so a restarted hostd reaps what the last one left |
-| `-status` | bool |  |  | ask the hostd serving -socket whether it answers and what it offers, print that on one line, then one line per process it holds (a detached run's id, run, task and pid), and exit: 1 when it does not answer. scripts/setup.sh's readiness report runs it |
+| `-state-dir` | string | `"<tmp>/home/.local/state/grain-hostd"` |  | where the host agent records the process groups it started, so a restarted host agent reaps what the last one left |
+| `-status` | bool |  |  | ask the host agent serving -socket whether it answers and what it offers, print that on one line, then one line per process it holds (a detached run's id, run, task and pid), and exit: 1 when it does not answer. scripts/setup.sh's readiness report runs it |
 | `-tls` | bool |  |  | with -server: dial over TLS even for an http:// URL (an https:// one always is) |
 | `-tls-server-name` | string |  |  | with -server: server name to verify the daemon's certificate against when it differs from the -server host. Implies -tls |
 | `-token-file` | string |  | $GRAIN_HOSTD_TOKEN, $GRAIN_TOKEN | with -server: the file holding this host's credential -- issued on acceptance or when registered in Settings -> Hosts (or the daemon's deprecated shared -hostd-token-file); $GRAIN_HOSTD_TOKEN or $GRAIN_TOKEN when unset |
@@ -2058,146 +2135,3 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/sandboximage_test.go`: `TestSandboxImageCommandPrintsDefaultAndBase`, `TestSandboxImageContractSubcommand`, `TestSandboxImageCheckSubcommand`.
-
-## Unplaced commands
-
-### `grain hostds install`
-
-<!-- BEGIN GENERATED FLAGS: grain hostds install -->
-_No flags._
-<!-- END GENERATED FLAGS -->
-
-## Unplaced commands
-
-### `grain host`
-
-<!-- BEGIN GENERATED FLAGS: grain host -->
-_No flags._
-<!-- END GENERATED FLAGS -->
-
-### `grain host accept`
-
-<!-- BEGIN GENERATED FLAGS: grain host accept -->
-| Flag | Type | Default | Env | Description |
-|---|---|---|---|---|
-| `-capacity` | int | `-1` |  | maximum concurrent agent CLI runs on this host (0 for unlimited) |
-| `-label` | value |  |  | k=v label for the accepted host (repeatable) |
-| `-labels` | string |  |  | comma-separated k=v labels for the accepted host |
-| `-name` | string |  |  | name for the accepted host (defaults to sanitized hostname) |
-<!-- END GENERATED FLAGS -->
-
-### `grain host codes`
-
-<!-- BEGIN GENERATED FLAGS: grain host codes -->
-_No flags._
-<!-- END GENERATED FLAGS -->
-
-### `grain host delete`
-
-<!-- BEGIN GENERATED FLAGS: grain host delete -->
-_No flags._
-<!-- END GENERATED FLAGS -->
-
-### `grain host install`
-
-<!-- BEGIN GENERATED FLAGS: grain host install -->
-_No flags._
-<!-- END GENERATED FLAGS -->
-
-### `grain host invite`
-
-<!-- BEGIN GENERATED FLAGS: grain host invite -->
-| Flag | Type | Default | Env | Description |
-|---|---|---|---|---|
-| `-allow` | string |  |  | comma-separated allowed principals (user:<email>, group:<email>, github:<login>, org:<org>) |
-| `-capacity` | int |  |  | default capacity for hosts enrolled with this code |
-| `-expires` | string |  |  | expiry duration (e.g. 24h, 168h) or RFC3339 timestamp when creating a code |
-| `-label` | value |  |  | default k=v label for hosts enrolled with this code (repeatable) |
-| `-labels` | string |  |  | default comma-separated k=v labels for hosts enrolled with this code |
-| `-max-uses` | int |  |  | maximum number of join requests this code may file (0 for unlimited) |
-| `-name` | string |  |  | create a new enrollment code with this name (if omitted, shows the active snippet) |
-<!-- END GENERATED FLAGS -->
-
-### `grain host list`
-
-<!-- BEGIN GENERATED FLAGS: grain host list -->
-_No flags._
-<!-- END GENERATED FLAGS -->
-
-### `grain host pending`
-
-<!-- BEGIN GENERATED FLAGS: grain host pending -->
-_No flags._
-<!-- END GENERATED FLAGS -->
-
-### `grain host register`
-
-<!-- BEGIN GENERATED FLAGS: grain host register -->
-| Flag | Type | Default | Env | Description |
-|---|---|---|---|---|
-| `-label` | value |  |  | k=v the hostd is selected by (repeatable) |
-| `-owner` | string |  |  | the hostd's owner: the email or service account it connects as through IAP |
-| `-token-file` | string |  |  | write the hostd's token to this file (mode 0600) rather than print it |
-<!-- END GENERATED FLAGS -->
-
-### `grain host reject`
-
-<!-- BEGIN GENERATED FLAGS: grain host reject -->
-_No flags._
-<!-- END GENERATED FLAGS -->
-
-### `grain host rekey`
-
-<!-- BEGIN GENERATED FLAGS: grain host rekey -->
-| Flag | Type | Default | Env | Description |
-|---|---|---|---|---|
-| `-key-file` | string |  |  | file where the host's Ed25519 private key (mode 0600) will be generated or loaded |
-| `-token-file` | string |  | $GRAIN_HOSTD_TOKEN | file holding the host's current token, and where the new key-bound credential is saved ($GRAIN_HOSTD_TOKEN when unset) |
-<!-- END GENERATED FLAGS -->
-
-### `grain host rename`
-
-<!-- BEGIN GENERATED FLAGS: grain host rename -->
-_No flags._
-<!-- END GENERATED FLAGS -->
-
-### `grain host revoke`
-
-<!-- BEGIN GENERATED FLAGS: grain host revoke -->
-_No flags._
-<!-- END GENERATED FLAGS -->
-
-### `grain host revoke-code`
-
-<!-- BEGIN GENERATED FLAGS: grain host revoke-code -->
-_No flags._
-<!-- END GENERATED FLAGS -->
-
-### `grain host rotate-code`
-
-<!-- BEGIN GENERATED FLAGS: grain host rotate-code -->
-_No flags._
-<!-- END GENERATED FLAGS -->
-
-### `grain host set-owner`
-
-<!-- BEGIN GENERATED FLAGS: grain host set-owner -->
-_No flags._
-<!-- END GENERATED FLAGS -->
-
-### `grain host update`
-
-<!-- BEGIN GENERATED FLAGS: grain host update -->
-| Flag | Type | Default | Env | Description |
-|---|---|---|---|---|
-| `-capacity` | int | `-1` |  | set maximum concurrent agent CLI runs (0 for unlimited) |
-| `-label` | value |  |  | k=v label for the host (repeatable) |
-| `-labels` | string |  |  | replace labels with comma-separated k=v pairs |
-| `-owner` | string |  |  | update the host's owner email or service account |
-<!-- END GENERATED FLAGS -->
-
-### `grain hosts`
-
-<!-- BEGIN GENERATED FLAGS: grain hosts -->
-_No flags._
-<!-- END GENERATED FLAGS -->

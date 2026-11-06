@@ -147,14 +147,14 @@ func TestDefaultModelsFallBackToTheContainerWhileHostdDrains(t *testing.T) {
 	drainTestHostd(t, socket)
 
 	fw := buildChecked(t, pool, orchestrator.AgentChoice{}, "claude-opus-5-5", model.AgentFrameworkClaude)
-	if !strings.Contains(fw.Fallback, "gemini-pro-coordinator runs on the host, and grain hostd is updating") {
+	if !strings.Contains(fw.Fallback, "gemini-pro-coordinator runs on the host, and the host agent is updating") {
 		t.Errorf("fallback = %q, want it to say hostd is why gemini-pro-coordinator was passed over", fw.Fallback)
 	}
 	reason := pool.Availability(ctx, pinned)
 	if !strings.Contains(reason, "agy runs on the host") || !strings.Contains(reason, "draining for its own upgrade") {
 		t.Errorf("Availability pinned to the host-run model while hostd drains = %q, want it waiting on hostd", reason)
 	}
-	if _, err := pool.Build(ctx, pinned); err == nil || !strings.Contains(err.Error(), "grain hostd updates") {
+	if _, err := pool.Build(ctx, pinned); err == nil || !strings.Contains(err.Error(), "the host agent updates") {
 		t.Errorf("Build pinned to the host-run model while hostd drains = %v, want it refused naming hostd", err)
 	}
 }

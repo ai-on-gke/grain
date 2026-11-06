@@ -92,9 +92,9 @@ func hostdConnectionNotifier(store *model.Store, hub *hostd.Remote) func(name st
 			if _, err := store.RaiseNotification(ctx, model.Notification{
 				Subject:  subject,
 				Severity: model.NotificationWarning,
-				Title:    "grain hostd " + name + " disconnected",
-				Body: "Host work pinned to hostd " + name + " waits for it to dial in again (grain hostd -server); " +
-					"nothing is moved to another hostd. This clears itself when it reconnects.",
+				Title:    "Host " + name + " disconnected",
+				Body: "Host work pinned to host " + name + " waits for it to dial in again (grain host -server); " +
+					"nothing is moved to another host. This clears itself when it reconnects.",
 				RaisedBy: "automation:hostd",
 				RaisedAt: time.Now().UTC(),
 			}); err != nil {
@@ -189,7 +189,7 @@ type HostdSelector struct {
 // String is s as a log line or a wait reason says it.
 func (s HostdSelector) String() string {
 	if s.Name != "" {
-		return "hostd " + s.Name
+		return "host " + s.Name
 	}
 	if len(s.Labels) == 0 {
 		return "the default hostd"
@@ -203,7 +203,7 @@ func (s HostdSelector) String() string {
 	for _, k := range keys {
 		parts = append(parts, k+"="+s.Labels[k])
 	}
-	return "a hostd labelled " + strings.Join(parts, ",")
+	return "a host labelled " + strings.Join(parts, ",")
 }
 
 // HostdWaitError is SelectHostd's answer when the hostd host work is
@@ -218,7 +218,7 @@ type HostdWaitError struct {
 
 func (e *HostdWaitError) Error() string {
 	if e.Name != "" {
-		return "waiting for hostd " + e.Name
+		return "waiting for host " + e.Name
 	}
 	return "waiting for " + e.Selector.String()
 }
@@ -255,7 +255,7 @@ func (c Config) SelectHostd(ctx context.Context, store *model.Store, sel HostdSe
 		return exec, sel.Name, err
 	}
 	if store == nil {
-		return HostExecutor{}, "", fmt.Errorf("no hostd registry to select %s from", sel)
+		return HostExecutor{}, "", fmt.Errorf("no host registry to select %s from", sel)
 	}
 	rows, err := store.ListHostds(ctx)
 	if err != nil {
@@ -287,7 +287,7 @@ func (c Config) SelectHostd(ctx context.Context, store *model.Store, sel HostdSe
 	}
 	switch len(matched) {
 	case 0:
-		return HostExecutor{}, "", fmt.Errorf("no hostd in the registry is %s", strings.TrimPrefix(sel.String(), "a hostd "))
+		return HostExecutor{}, "", fmt.Errorf("no host in the registry is %s", strings.TrimPrefix(sel.String(), "a host "))
 	case 1:
 		return HostExecutor{}, "", &HostdWaitError{Name: matched[0], Selector: sel}
 	}
@@ -311,24 +311,24 @@ func (c Config) hostdExecutor(ctx context.Context, store *model.Store, name stri
 	if name == model.LocalHostd {
 		exec := c.hostExecutor()
 		if exec.Remote != nil || !exec.HostAvailable() {
-			return HostExecutor{}, fmt.Errorf("this deployment has no co-located hostd (%s)", exec.Reason)
+			return HostExecutor{}, fmt.Errorf("this deployment has no co-located host (%s)", exec.Reason)
 		}
 		return exec, nil
 	}
 	shared := c.HostdRemote != nil && name == c.HostdRemote.DefaultName()
 	if !shared {
 		if store == nil {
-			return HostExecutor{}, fmt.Errorf("hostd %s: no hostd registry to look it up in", name)
+			return HostExecutor{}, fmt.Errorf("host %s: no host registry to look it up in", name)
 		}
 		h, err := store.GetHostd(ctx, name)
 		if err != nil {
 			return HostExecutor{}, err
 		}
 		if h == nil {
-			return HostExecutor{}, fmt.Errorf("hostd %s is not in the registry (/api/hostds)", name)
+			return HostExecutor{}, fmt.Errorf("host %s is not in the registry (/api/hostds)", name)
 		}
 		if h.Revoked() {
-			return HostExecutor{}, fmt.Errorf("hostd %s is revoked", name)
+			return HostExecutor{}, fmt.Errorf("host %s is revoked", name)
 		}
 	}
 	hub := c.HostdHub
@@ -339,5 +339,5 @@ func (c Config) hostdExecutor(ctx context.Context, store *model.Store, name stri
 		return HostExecutor{}, &HostdWaitError{Name: name, Selector: HostdSelector{Name: name}}
 	}
 	return HostExecutor{Kind: HostExecutorHostd, Remote: hub, RemoteHostd: true, Hostd: name,
-		Reason: "host work pinned to grain hostd " + name + ", which dials in to this daemon"}, nil
+		Reason: "host work pinned to host " + name + ", which dials in to this daemon"}, nil
 }

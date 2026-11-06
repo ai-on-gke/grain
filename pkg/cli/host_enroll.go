@@ -36,15 +36,7 @@ import (
 // `reject`, `rekey`, `codes`, `invite`, `rotate-code`, `revoke-code`) rather
 // than starting the local hostd process server.
 func isHostdRegistryVerb(args []string) bool {
-	if len(args) == 0 {
-		return false
-	}
-	switch args[0] {
-	case "pending", "accept", "reject", "rekey", "codes", "invite", "rotate-code", "revoke-code":
-		return true
-	default:
-		return false
-	}
+	return len(args) > 0 && hostRegistryVerb(args[0])
 }
 
 func parseHostLabelFlags(csv string, repeated stringList) (map[string]string, bool, error) {

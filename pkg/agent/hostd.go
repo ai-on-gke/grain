@@ -78,20 +78,20 @@ func (h HostdHost) binary() string {
 // (hostd.IsDraining). Nothing ran, and nothing about the task earned it:
 // the run goes back to the queue without a strike, and the next attempt
 // starts on the hostd that replaces this one.
-var ErrHostdDraining = errors.New("grain hostd is updating (draining for its own upgrade); the run goes back to the queue")
+var ErrHostdDraining = errors.New("the host agent is updating (draining for its own upgrade); the run goes back to the queue")
 
 // ErrHostdLost is HostdHost.Run's error, wrapped, for a CLI whose grain
 // hostd dropped mid-run and did not reconnect within the reattach
 // timeout (runhost.Hostd.ReattachTimeout, -hostd-reattach-timeout). It
 // is the machine's doing, not the task's: the run ends as an
 // infrastructure failure, without a strike, and goes back to the queue.
-var ErrHostdLost = errors.New("grain hostd disconnected mid-run and did not reconnect in time; the run goes back to the queue")
+var ErrHostdLost = errors.New("the host agent disconnected mid-run and did not reconnect in time; the run goes back to the queue")
 
 // ErrHostdWaiting is matched (errors.Is) by a framework build refused
 // because the hostd a run is pinned or selected to is not connected
 // (the daemon's HostdWaitError): nothing ran, and the run goes back to
 // the queue, where its task waits for that hostd to reconnect.
-var ErrHostdWaiting = errors.New("waiting for grain hostd to reconnect")
+var ErrHostdWaiting = errors.New("waiting for the host agent to reconnect")
 
 // IsHostdStop reports whether err is a grain hostd infrastructure stop
 // (ErrHostdDraining or ErrHostdLost): a start hostd refused because it is
@@ -109,7 +109,7 @@ func IsHostdStop(err error) bool {
 // descendants hold its output open past hostd.WaitDelay still returns.
 func (h HostdHost) Run(ctx context.Context, c Command, tee io.Writer) (string, error) {
 	c.Path = h.binary()
-	h.logf("agent: running on the host through grain hostd (entry %q): %s", h.Entry, CommandLine(c))
+	h.logf("agent: running on the host through the host agent (entry %q): %s", h.Entry, CommandLine(c))
 	var stdout, stderr bytes.Buffer
 	var out io.Writer = &stdout
 	if tee != nil {

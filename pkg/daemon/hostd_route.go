@@ -76,7 +76,7 @@ type errHostdFull struct {
 }
 
 func (e *errHostdFull) Error() string {
-	return fmt.Sprintf("hostd %s is at its capacity (%d of %d runs); the run waits for one to finish", e.name, e.inUse, e.capcity)
+	return fmt.Sprintf("host %s is at its capacity (%d of %d runs); the run waits for one to finish", e.name, e.inUse, e.capcity)
 }
 
 // resolveHostdSelector is the route for one hostd selector
@@ -148,7 +148,7 @@ func wrapConnectionTargetErr(id string, targets []string, badSel string, wait, f
 		if len(targets) == 0 {
 			return fatal
 		}
-		return fmt.Errorf("connection %q's hostd %s: %w", id, badSel, fatal)
+		return fmt.Errorf("connection %q's host %s: %w", id, badSel, fatal)
 	}
 	if wait != nil {
 		return fmt.Errorf("connection %q runs its CLI on %s, which is not connected; its runs wait (%w)",
@@ -160,7 +160,7 @@ func wrapConnectionTargetErr(id string, targets []string, badSel string, wait, f
 // describeHostdTargets says a connection's hostd list as a wait reason
 // does: "hostd ws-a", or "hostd ws-a (fallback ws-b)".
 func describeHostdTargets(targets []string) string {
-	out := "hostd " + targets[0]
+	out := "host " + targets[0]
 	if len(targets) > 1 {
 		out += " (fallback " + strings.Join(targets[1:], ", ") + ")"
 	}
@@ -300,7 +300,7 @@ func (req poolRequest) pauseOwner(live Config, b model.AgentBackend) string {
 func (req poolRequest) pausedConnection(live Config, b model.AgentBackend) string {
 	name := fmt.Sprintf("connection %q", b.ID)
 	if req.pauseOwner(live, b) != b.CredentialOwnerID() {
-		name += " on hostd " + req.pauseHostdOf(live, b)
+		name += " on host " + req.pauseHostdOf(live, b)
 	}
 	return name
 }
