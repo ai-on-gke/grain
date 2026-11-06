@@ -54,7 +54,7 @@ func TestRemoteLogsRefusedTokensRateLimited(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("after one refusal, logged %q; want one line", lines)
 	}
-	want := "grain daemon: refused a grain hostd on workstation connecting from 10.0.0.7:5555: it presented a token that is not a hostd token here"
+	want := "grain daemon: refused a grain hostd on workstation connecting from 10.0.0.7:5555: it presented a token that is not a host token here"
 	if !strings.HasPrefix(lines[0], want) {
 		t.Errorf("logged %q; want it to start %q", lines[0], want)
 	}
@@ -72,7 +72,7 @@ func TestRemoteLogsRefusedTokensRateLimited(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("a refusal a minute on logged %q; want a second line", lines)
 	}
-	if want := "it presented no hostd token (5 more refused since the last line like this)"; !strings.HasSuffix(lines[1], want) {
+	if want := "it presented no host token (5 more refused since the last line like this)"; !strings.HasSuffix(lines[1], want) {
 		t.Errorf("logged %q; want it to end %q", lines[1], want)
 	}
 }
@@ -110,7 +110,7 @@ func TestRemoteLogsANameMismatchBesideARetryingStaleToken(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("logged %q; want the stale token's first line and the name mismatch's", lines)
 	}
-	if want := `it calls itself hostd "ws-b", but its token is hostd "ws-a"'s`; !strings.HasSuffix(lines[1], want) {
+	if want := `it calls itself host "ws-b", but its token is host "ws-a"'s`; !strings.HasSuffix(lines[1], want) {
 		t.Errorf("logged %q; want it to end %q", lines[1], want)
 	}
 	clock = clock.Add(2 * time.Second)

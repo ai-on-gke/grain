@@ -15,6 +15,7 @@
 package cli
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -355,6 +356,28 @@ var builtinAttributes = attributeSet{
 			return []string{"off"}
 		},
 		order: []string{"on", "off"},
+	},
+	{
+		// Held for a person's decision (ui.Task.HumanReviewHold), by the
+		// categories of the reasons it is held for:
+		// `-filter humanReview:filled` is every held change.
+		id:  "humanReview",
+		typ: typeEnum,
+		values: func(t ui.Task) []string {
+			var out []string
+			for _, r := range t.HumanReviewHold {
+				c := r.Category
+				if c == "" {
+					c = "other"
+				}
+				if !slices.Contains(out, c) {
+					out = append(out, c)
+				}
+			}
+			return out
+		},
+		order:     []string{"product-decision", "risk", "security", "intent-unclear", "other"},
+		noneLabel: "Not held",
 	},
 	{
 		id:  "blocked",

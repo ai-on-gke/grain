@@ -273,8 +273,8 @@ func TestTheMemoryAgentScheduleFilesATaskWithNoTargetAndTheStateRepoToRead(t *te
 	for _, g := range task.Grants {
 		held[g.Capability] = true
 	}
-	if !held["api:memory"] || !held["self-debug"] {
-		t.Errorf("grants = %v, want api:memory (to write anything at all) and self-debug", task.Grants)
+	if !held["api:memory"] || !held["api:self-debug"] || !held[model.GrainSourceGrant] {
+		t.Errorf("grants = %v, want api:memory (to write anything at all) and what self-debug became", task.Grants)
 	}
 	if task.Body == "" || task.Title == "" {
 		t.Error("the filed task carries no prompt; the whole of the memory agent is what it is told")
@@ -526,7 +526,7 @@ func TestSystemSchedulesSeedsTheReleaseNotesJobWeekly(t *testing.T) {
 	for _, g := range tmpl.Grants {
 		granted[g.Capability] = true
 	}
-	for _, want := range []string{"api:release-notes", "self-debug"} {
+	for _, want := range []string{"api:release-notes", "api:self-debug", model.GrainSourceGrant} {
 		if !granted[want] {
 			t.Errorf("the release-notes template does not hold %q; its grants are %+v", want, tmpl.Grants)
 		}
@@ -598,7 +598,7 @@ func TestSystemSchedulesSeedsTheInfraReviewNightly(t *testing.T) {
 	}
 	// It reads the record, the measurements and grain's own source
 	// through one grant, and the deployment's CI runs through the other.
-	for _, want := range []string{"self-debug", model.GrainCIGrant} {
+	for _, want := range []string{"api:self-debug", model.GrainSourceGrant, model.GrainCIGrant} {
 		if !granted[want] {
 			t.Errorf("the infrastructure review template does not hold %q; its grants are %+v",
 				want, tmpl.Grants)

@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -148,5 +149,40 @@ func TestTaskBlockShowsPausedStatus(t *testing.T) {
 	block = taskBlock(ui.Task{ID: "3", Title: "unpaused work", State: "queued"})
 	if strings.Contains(block, "paused:") {
 		t.Errorf("taskBlock on an unpaused task printed a paused line:\n%s", block)
+	}
+}
+
+func TestTaskBlockShowsDependenciesAfterDeferredUntil(t *testing.T) {
+	t.Parallel()
+	until := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
+	block := taskBlock(ui.Task{
+		ID:            "3145",
+		Title:         "follow-up work",
+		State:         model.StateQueued,
+		DeferredUntil: &until,
+		DependsOn:     []string{"3144", "3140"},
+		DependsOnStates: map[string]model.State{
+			"3144": model.StateQueued,
+			"3140": model.StateClosed,
+		},
+		Blocked:   true,
+		BlockedBy: []string{"3144"},
+	})
+	wantDeferred := "deferred until: 2026-09-14T00:00:00Z\n"
+	wantDeps := "depends on: 3144 (queued), 3140 (closed)\n"
+	wantPriority := "priority:   5\n"
+	for _, want := range []string{wantDeferred, wantDeps, wantPriority} {
+		if !strings.Contains(block, want) {
+			t.Fatalf("taskBlock missing %q:\n%s", want, block)
+		}
+	}
+	if strings.Index(block, wantDeferred) > strings.Index(block, wantDeps) ||
+		strings.Index(block, wantDeps) > strings.Index(block, wantPriority) {
+		t.Errorf("depends on is not placed between deferred until and priority:\n%s", block)
+	}
+
+	block = taskBlock(ui.Task{ID: "3145", Title: "independent work", State: model.StateQueued})
+	if strings.Contains(block, "depends on:") {
+		t.Errorf("taskBlock with no dependencies still printed a depends on line:\n%s", block)
 	}
 }

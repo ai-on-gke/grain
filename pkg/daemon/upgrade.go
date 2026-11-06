@@ -17,7 +17,9 @@ package daemon
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -88,6 +90,39 @@ func latestRelease(upgrader *upgrade.Upgrader) func(context.Context) (string, er
 	return upgrader.LatestRelease
 }
 
+// ValidateManagementURL validates an optional external management URL
+// (-management-url / $GRAIN_MANAGEMENT_URL), accepting either the empty string
+// or an absolute http:// or https:// URL with a non-empty hostname and no
+// embedded user credentials.
+func ValidateManagementURL(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", nil
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
+		redacted := trimmed
+		if u != nil && u.User != nil {
+			uCopy := *u
+			uCopy.User = nil
+			redacted = uCopy.String()
+		} else if u == nil && strings.Contains(trimmed, "@") {
+			// Unparseable, so there is no userinfo to strip precisely: a
+			// value with an '@' in it may still carry a password, and this
+			// error is printed to the journal at startup.
+			redacted = "<redacted>"
+		}
+		return "", fmt.Errorf("-management-url must be an absolute http:// or https:// URL without user credentials, got %q", redacted)
+	}
+	return u.String(), nil
+}
+
+// CheckManagementURL validates cfg.ManagementURL for checkConfig.
+func CheckManagementURL(cfg Config) error {
+	_, err := ValidateManagementURL(cfg.ManagementURL)
+	return err
+}
+
 // SplitBranchPatterns reads -upgrade-allowed-branches: comma-separated,
 // with blanks around and between the commas ignored.
 func SplitBranchPatterns(s string) []string {
@@ -140,6 +175,9 @@ func deploymentMode(cfg Config) upgrade.Mode {
 // and it is what an upgrade holds the queue with while it runs
 // (orchestrator.UpgradeHold). Nil takes no hold.
 func newUpgrader(cfg Config, db *sql.DB, store *model.Store, creds ...*gitproxy.CredentialSet) *upgrade.Upgrader {
+	if cfg.DisableSelfUpgrade {
+		return nil
+	}
 	var credentials *gitproxy.CredentialSet
 	if len(creds) > 0 {
 		credentials = creds[0]

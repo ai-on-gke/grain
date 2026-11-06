@@ -94,7 +94,7 @@ TASKS, CAPABILITIES & AGENT API (shown to every run; the proxy refuses what this
   grain quarantine <pkg> <test> --reason <why> [--no-follow-up]
                                          Quarantine a flaky test in .grain/quarantine.yml and file a follow-up (api:test-quarantine)
   grain metrics [<section>] [--window 7d | --since <d> --until <d>]
-                                         grain's own measurements (self-debug)
+                                         grain's own measurements (api:self-debug)
   grain health                           This deployment's health (deployment-health)
   grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority <p>] [--contains <s>] [--lines N]
                                          grain's own log, redacted (grain-log)
@@ -314,7 +314,7 @@ var sandboxCommandHelp = map[string]string{
 	"release-notes publish": "grain release-notes publish --version <v> (<markdown> | --file <f>) [--period <p>] [--title <t>] [--reason <why>]\n\nPublish release notes for a version. Needs api:release-notes or api:release-notes:write.\n",
 	"quarantine":            "grain quarantine <package> <test-name> --reason <why> [--ttl 30d] [--no-follow-up] [-C <dir>]\n\nAdd a flaky test entry to .grain/quarantine.yml in the workspace and file a follow-up task.\nNeeds api:test-quarantine or api:tests:write.\n",
 	"metrics": "grain metrics [<section>] [--window 7d | --since <date> [--until <date>]] [--repo owner/name]... [--author <a>]...\n\n" +
-		"grain's own measurements (deploy://metrics). Needs self-debug.\n\n" +
+		"grain's own measurements (deploy://metrics). Needs api:self-debug or api:deployment:read.\n\n" +
 		"  --window   how far back to measure: 36h, 7d, 2w (default: the daemon's own)\n" +
 		"  --since, --until  an absolute span instead: a date or an RFC 3339 timestamp\n" +
 		"  --repo, --author  only tasks on these repositories / by these authors (repeat or comma-separate)\n",
@@ -341,7 +341,7 @@ var sandboxCommandHelp = map[string]string{
 // sandboxTaskListHelp is grain task list --help.
 const sandboxTaskListHelp = "grain task list [--state <s>[,<s>...]] [--repo <owner/name>] [--search <title text>]\n" +
 	"                [--kind <k>] [--changed-since <30m|24h|7d|time>] [--stalled] [--limit N] [--json]\n\n" +
-	"The tasks this run may read (its own, or every task with self-debug), one line each:\n" +
+	"The tasks this run may read (its own, or every task with api:self-debug or api:tasks:read), one line each:\n" +
 	"id, state, repo, title, then \"(stopped by operator)\" or \"(stalled)\" and \"blocked on <ids>\" where they apply.\n" +
 	"Oldest first by filing; --limit (default 50) keeps the newest. The count, and how many\n" +
 	"were left out, go to stderr. --state may be repeated or comma-separated (proposed, queued,\n" +

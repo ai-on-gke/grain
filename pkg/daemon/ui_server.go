@@ -55,12 +55,64 @@ func checkUIAllowedPrincipalsWithPool(cfg Config, gcpPoolEmails []string) error 
 	return nil
 }
 
+// CheckUIRegistryVerifier validates -ui-registry-issuer, -ui-registry-audience,
+// and -ui-registry-keys-url (or $GRAIN_REGISTRY_ISSUER,
+// $GRAIN_REGISTRY_AUDIENCE, and $GRAIN_REGISTRY_KEYS_URL): if any is set, all
+// three must be set, and neither issuer nor audience may contain commas.
+func CheckUIRegistryVerifier(cfg Config) error {
+	ctx := ui.WithIAPConfig(context.Background(), ui.IAPConfig{
+		RegistryIssuer:   cfg.UiRegistryIssuer,
+		RegistryAudience: cfg.UiRegistryAudience,
+		RegistryKeysURL:  cfg.UiRegistryKeysURL,
+	})
+	iss := strings.TrimSpace(ui.GetRegistryIssuer())
+	aud := strings.TrimSpace(ui.GetRegistryAudience())
+	keysURL := strings.TrimSpace(ui.GetRegistryKeysURL())
+	if rc, ok := ui.RegistryConfigFromContext(ctx); ok {
+		if v := strings.TrimSpace(rc.Issuer); v != "" {
+			iss = v
+		}
+		if v := strings.TrimSpace(rc.Audience); v != "" {
+			aud = v
+		}
+		if v := strings.TrimSpace(rc.KeysURL); v != "" {
+			keysURL = v
+		}
+	}
+	if iss == "" && aud == "" && keysURL == "" {
+		return nil
+	}
+	var missing []string
+	if iss == "" {
+		missing = append(missing, "-ui-registry-issuer")
+	}
+	if aud == "" {
+		missing = append(missing, "-ui-registry-audience")
+	}
+	if keysURL == "" {
+		missing = append(missing, "-ui-registry-keys-url")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("incomplete registry verifier configuration: missing %s (set all three of -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url, or none)", strings.Join(missing, ", "))
+	}
+	if strings.Contains(iss, ",") {
+		return errors.New("-ui-registry-issuer must be a single issuer URL, not a comma-separated list")
+	}
+	if strings.Contains(aud, ",") {
+		return errors.New("-ui-registry-audience must be a single URL (https://<name>.<instance-domain>), not a comma-separated list")
+	}
+	return nil
+}
+
 // CheckUIRequireVerifier validates -ui-require-verifier (and its
 // -ui-require-iap alias): it refuses conflicting flags and refuses to start
 // when the named IdentityVerifier is not active, because with no assertion
 // able to verify and no access code accepted over the network, nobody could
 // reach the UI except from the daemon's own host.
 func CheckUIRequireVerifier(cfg Config) error {
+	if err := CheckUIRegistryVerifier(cfg); err != nil {
+		return err
+	}
 	req := strings.TrimSpace(cfg.UiRequireVerifier)
 	if cfg.UiRequireIAP && req != "" && req != string(ui.AuthMethodIAP) {
 		return fmt.Errorf("cannot set both -ui-require-iap and -ui-require-verifier=%q: -ui-require-iap is an alias for -ui-require-verifier=iap", req)
@@ -74,9 +126,12 @@ func CheckUIRequireVerifier(cfg Config) error {
 		return nil
 	}
 	ctx := ui.WithIAPConfig(context.Background(), ui.IAPConfig{
-		Audience: cfg.UiIAPAudience,
-		Issuer:   cfg.UiIAPIssuer,
-		KeysURL:  cfg.UiIAPKeysURL,
+		Audience:         cfg.UiIAPAudience,
+		Issuer:           cfg.UiIAPIssuer,
+		KeysURL:          cfg.UiIAPKeysURL,
+		RegistryIssuer:   cfg.UiRegistryIssuer,
+		RegistryAudience: cfg.UiRegistryAudience,
+		RegistryKeysURL:  cfg.UiRegistryKeysURL,
 	})
 	if ui.HasActiveVerifier(ctx, req) {
 		return nil
@@ -88,6 +143,9 @@ func CheckUIRequireVerifier(cfg Config) error {
 		}
 		return errors.New("-ui-require-verifier=iap needs an IAP audience: set -ui-iap-audience (or $GRAIN_IAP_AUDIENCE) to the IAP backend's " +
 			"/projects/NUMBER/global/backendServices/ID, or drop -ui-require-verifier to keep accepting the access code over the network")
+	}
+	if req == string(ui.AuthMethodRegistry) {
+		return fmt.Errorf("-ui-require-verifier=%q names no active IdentityVerifier: set -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url first, or drop -ui-require-verifier to keep accepting the access code over the network", req)
 	}
 	return fmt.Errorf("-ui-require-verifier=%q names no active IdentityVerifier: configure that verifier first, or drop -ui-require-verifier to keep accepting the access code over the network", req)
 }
@@ -185,6 +243,9 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 	if err := checkUIAllowedPrincipalsWithPool(cfg, combinedPoolSAs); err != nil {
 		return nil, err
 	}
+	if err := CheckUIRegistryVerifier(cfg); err != nil {
+		return nil, err
+	}
 	var provisionedSAs []string
 	if proj := strings.TrimSpace(cfg.GcpProject); proj != "" {
 		daemonSA := "grain-daemon@" + strings.ToLower(proj) + ".iam.gserviceaccount.com"
@@ -207,6 +268,9 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		IAPAudience:                cfg.UiIAPAudience,
 		IAPIssuer:                  cfg.UiIAPIssuer,
 		IAPKeysURL:                 cfg.UiIAPKeysURL,
+		RegistryIssuer:             cfg.UiRegistryIssuer,
+		RegistryAudience:           cfg.UiRegistryAudience,
+		RegistryKeysURL:            cfg.UiRegistryKeysURL,
 		RequireVerifier:            cfg.UiRequireVerifier,
 		RequireIAP:                 cfg.UiRequireIAP,
 		AllowedPrincipals:          cfg.UiAllowedPrincipals,
@@ -675,12 +739,20 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		uiCfg.Upgrader = upgrader
 		uiCfg.LastRestart = lastRestart(store, upgrader, cfg.runHostUpgrade.adoption())
 	}
+	uiCfg.DisableSelfUpgrade = cfg.DisableSelfUpgrade
+	uiCfg.ManagementURL = strings.TrimSpace(cfg.ManagementURL)
 	// And one line in the journal saying which of the two pipelines this
 	// deployment's upgrades actually run, or that they are off. Here
 	// rather than inside newUpgrader, so that it is said where the
 	// upgrader is put to use rather than wherever it happens to be
 	// built.
 	switch {
+	case cfg.DisableSelfUpgrade:
+		if uiCfg.ManagementURL != "" {
+			log.Printf("grain daemon: in-VM self-upgrade is disabled (-disable-self-upgrade); upgrades are managed externally at %s", uiCfg.ManagementURL)
+		} else {
+			log.Print("grain daemon: in-VM self-upgrade is disabled (-disable-self-upgrade); upgrades are managed externally")
+		}
 	case cfg.UpgradeImage != "":
 		log.Print(upgradeImageNote(cfg))
 		if len(cfg.UpgradeVerifyCmd) == 0 {

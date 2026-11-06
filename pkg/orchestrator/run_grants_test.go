@@ -33,7 +33,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
-	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
@@ -173,7 +172,9 @@ func TestRunCycleTellsAReadIssuesTaskItHoldsTheGrant(t *testing.T) {
 func TestRunCycleForwardsAllKnownToolGrants(t *testing.T) {
 	t.Parallel()
 	allToolGrants := []string{
-		selfdebug.CapabilityName,
+		model.SelfDebugCapability,
+		model.GrainSourceGrant,
+		model.APIGrantPrefix + "self-debug",
 		grainlog.CapabilityName,
 		model.GrainJournalGrant,
 		deploymenthealth.CapabilityName,

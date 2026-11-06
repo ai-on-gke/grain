@@ -46,35 +46,35 @@ import (
 // reach its socket -- one in a GKE cluster -- and serves that daemon
 // over the connection (hostd.Server.Remote).
 func hostdCmd(args []string) {
-	fs := flag.NewFlagSet("hostd", flag.ExitOnError)
+	fs := flag.NewFlagSet("host", flag.ExitOnError)
 	socket := fs.String("socket", hostd.DefaultSocketPath, "the unix socket to listen on (mode 0600); bind mount it into the daemon's container at the same path")
 	allowlist := fs.String("allowlist", hostd.DefaultAllowlistPath, "the allowlist of what this host will run; must be root-owned and not group- or world-writable")
-	stateDir := fs.String("state-dir", defaultHostdStateDir(), "where hostd records the process groups it started, so a restarted hostd reaps what the last one left")
+	stateDir := fs.String("state-dir", defaultHostdStateDir(), "where the host agent records the process groups it started, so a restarted host agent reaps what the last one left")
 	grace := fs.Duration("disconnect-grace", hostd.DefaultDisconnectGrace, "how long a process may outlive the daemon connection that started it")
 	check := fs.Bool("check", false, "check the allowlist, print what it offers, and exit")
-	drain := fs.Bool("drain", false, "ask the hostd serving -socket to drain for an upgrade, and exit: it refuses new starts, "+
+	drain := fs.Bool("drain", false, "ask the host agent serving -socket to drain for an upgrade, and exit: it refuses new starts, "+
 		"waits for what it runs (up to the allowlist's drain_cap), then exits for systemd to restart it on the new binary. "+
-		"A hostd speaking this build's protocol is asked for a cutover instead: it keeps taking starts and exits the first "+
-		"moment nothing runs, draining only if no such moment comes within drain_cap. SIGUSR1 to hostd drains")
-	status := fs.Bool("status", false, "ask the hostd serving -socket whether it answers and what it offers, print that on one line, "+
+		"A host agent speaking this build's protocol is asked for a cutover instead: it keeps taking starts and exits the first "+
+		"moment nothing runs, draining only if no such moment comes within drain_cap. SIGUSR1 to the host agent drains")
+	status := fs.Bool("status", false, "ask the host agent serving -socket whether it answers and what it offers, print that on one line, "+
 		"then one line per process it holds (a detached run's id, run, task and pid), and exit: 1 when it does not answer. "+
 		"scripts/setup.sh's readiness report runs it")
 	ensure := fs.Bool("ensure-builtins", false, "add to -allowlist the capabilities entries grain's own servers need in this build (host-git, grain-gcp, ... and the edition's, "+
 		"registered by the build's edition) that it has no entry of that name for, print each one added, and exit. An entry already there is never changed, "+
 		"only reported when it differs from the default. Run as root on the host, by grain-hostd.service before each start and by the upgrade step; "+
-		"hostd re-reads the allowlist on every request, so nothing needs restarting")
+		"the host agent re-reads the allowlist on every request, so nothing needs restarting")
 	command := fs.String("command", hostd.DefaultGrainCommand, "with -ensure-builtins: the grain binary on the host the added entries run")
 	server := fs.String("server", "", "the URL of a grain daemon this host cannot share a socket with (https://grain.example.com, http://127.0.0.1:4242): "+
-		"hostd keeps a connection open to its "+hostd.RemotePath+" and serves the daemon over it, as well as listening on -socket (set -socket= for no local listener)")
-	tokenFile := fs.String("token-file", "", "with -server: the file holding this hostd's token -- the one the hostd registry (/api/hostds) answered with when it was registered, "+
+		"the host agent keeps a connection open to its "+hostd.RemotePath+" and serves the daemon over it, as well as listening on -socket (set -socket= for no local listener)")
+	tokenFile := fs.String("token-file", "", "with -server: the file holding this host's token -- the one the host registry (/api/hostds) answered with when it was registered, "+
 		"which names it to the daemon (or the daemon's deprecated shared -hostd-token-file); $GRAIN_HOSTD_TOKEN or $GRAIN_TOKEN when unset")
-	name := fs.String("name", "", "with -server: the registry name this hostd expects to be (/api/hostds). Optional: the daemon names it from its token, "+
+	name := fs.String("name", "", "with -server: the registry name this host expects to be (/api/hostds). Optional: the daemon names it from its token, "+
 		"and refuses the connection when this says otherwise")
 	iapAudience := fs.String("iap-audience", "", "with -server: the OAuth client ID of the GCP Identity-Aware Proxy in front of the daemon, to send its OIDC token")
 	useTLS := fs.Bool("tls", false, "with -server: dial over TLS even for an http:// URL (an https:// one always is)")
 	caFile := fs.String("ca-file", "", "with -server: PEM file of the certificate authority to verify the daemon's certificate against. Implies -tls")
 	serverName := fs.String("tls-server-name", "", "with -server: server name to verify the daemon's certificate against when it differs from the -server host. Implies -tls")
-	build := fs.Bool("build", false, "print this binary's build and exit: what a hostd asks of the version its current link names")
+	build := fs.Bool("build", false, "print this binary's build and exit: what a host agent asks of the version its current link names")
 	_ = fs.Parse(args)
 
 	if *build {
@@ -84,7 +84,7 @@ func hostdCmd(args []string) {
 
 	if *ensure {
 		if err := ensureHostdBuiltins(os.Stdout, *allowlist, *command); err != nil {
-			fmt.Fprintln(os.Stderr, "grain hostd: "+err.Error())
+			fmt.Fprintln(os.Stderr, "grain host: "+err.Error())
 			os.Exit(1)
 		}
 		return
@@ -96,7 +96,7 @@ func hostdCmd(args []string) {
 		c := hostd.Client{Socket: *socket, Build: version.Get().Release}
 		line, err := hostdStatusLine(ctx, c)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "grain hostd: "+err.Error())
+			fmt.Fprintln(os.Stderr, "grain host: "+err.Error())
 			os.Exit(1)
 		}
 		fmt.Println(line)
@@ -120,7 +120,7 @@ func hostdCmd(args []string) {
 			do = c.Cutover
 		}
 		if err := do(ctx); err != nil {
-			fmt.Fprintln(os.Stderr, "grain hostd: "+err.Error())
+			fmt.Fprintln(os.Stderr, "grain host: "+err.Error())
 			os.Exit(1)
 		}
 		return
@@ -129,7 +129,7 @@ func hostdCmd(args []string) {
 	if *check {
 		a, err := hostd.LoadAllowlist(*allowlist, []uint32{0})
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "grain hostd: "+err.Error())
+			fmt.Fprintln(os.Stderr, "grain host: "+err.Error())
 			os.Exit(1)
 		}
 		for _, o := range a.Offers() {
@@ -141,7 +141,7 @@ func hostdCmd(args []string) {
 	if *server != "" {
 		d, err := hostdDialer(*server, *tokenFile, *name, *iapAudience, *useTLS, *caFile, *serverName)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "grain hostd: "+err.Error())
+			fmt.Fprintln(os.Stderr, "grain host: "+err.Error())
 			os.Exit(2)
 		}
 		remote = d
@@ -172,7 +172,7 @@ func hostdCmd(args []string) {
 		}
 	}()
 	if err := srv.Serve(ctx); err != nil {
-		fmt.Fprintln(os.Stderr, "grain hostd: "+err.Error())
+		fmt.Fprintln(os.Stderr, "grain host: "+err.Error())
 		os.Exit(1)
 	}
 }
@@ -228,7 +228,7 @@ func hostdDialer(server, tokenFile, name, iapAudience string, useTLS bool, caFil
 		}
 	}
 	if token == "" {
-		return nil, errors.New("-server needs this hostd's token (/api/hostds): -token-file, or $GRAIN_HOSTD_TOKEN")
+		return nil, errors.New("-server needs this host's token (/api/hostds): -token-file, or $GRAIN_HOSTD_TOKEN")
 	}
 	host, _ := os.Hostname()
 	d := &hostd.Dialer{Server: server, Token: token, Name: name, Host: host, Build: version.Get().Release}

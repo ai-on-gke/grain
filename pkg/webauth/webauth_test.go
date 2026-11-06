@@ -360,3 +360,324 @@ func TestCSRFHelpers(t *testing.T) {
 		t.Fatalf("cookie-less CLI POST failed: %v", err)
 	}
 }
+
+func ecJWK(kid string, pub *ecdsa.PublicKey) map[string]string {
+	byteLen := (pub.Curve.Params().BitSize + 7) / 8
+	xBytes := pub.X.FillBytes(make([]byte, byteLen))
+	yBytes := pub.Y.FillBytes(make([]byte, byteLen))
+	return map[string]string{
+		"kty": "EC",
+		"crv": "P-256",
+		"alg": "ES256",
+		"use": "sig",
+		"kid": kid,
+		"x":   base64.RawURLEncoding.EncodeToString(xBytes),
+		"y":   base64.RawURLEncoding.EncodeToString(yBytes),
+	}
+}
+
+func TestRegistryVerifier(t *testing.T) {
+	webauth.ResetRegistryConfig()
+	t.Cleanup(webauth.ResetRegistryConfig)
+
+	ecKey1, _ := generateECKey(t)
+	ecKey2, _ := generateECKey(t)
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey: %v", err)
+	}
+
+	var jwksFetches atomic.Int32
+	var serveKey2 atomic.Bool
+	var failJWKS atomic.Bool
+
+	jwksSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		jwksFetches.Add(1)
+		if failJWKS.Load() {
+			http.Error(w, "jwks down", http.StatusInternalServerError)
+			return
+		}
+		keys := []map[string]string{
+			ecJWK("reg-ec-1", &ecKey1.PublicKey),
+			{
+				"kty": "RSA",
+				"alg": "RS256",
+				"use": "sig",
+				"kid": "reg-rsa-1",
+				"n":   base64.RawURLEncoding.EncodeToString(rsaKey.N.Bytes()),
+				"e":   base64.RawURLEncoding.EncodeToString([]byte{0x01, 0x00, 0x01}),
+			},
+		}
+		if serveKey2.Load() {
+			keys = append(keys, ecJWK("reg-ec-2", &ecKey2.PublicKey))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"keys": keys})
+	}))
+	t.Cleanup(jwksSrv.Close)
+
+	const (
+		issuer   = "https://grain.example.com"
+		audience = "https://my-grain.grain.example.com"
+	)
+
+	verifier := webauth.NewRegistryVerifier(
+		webauth.WithRegistryIssuer(issuer),
+		webauth.WithRegistryAudience(audience),
+		webauth.WithRegistryKeysURL(jwksSrv.URL),
+		webauth.WithRegistryVerifierHTTPClient(jwksSrv.Client()),
+	)
+	if verifier.Name() != "registry" {
+		t.Fatalf("Name() = %q, want registry", verifier.Name())
+	}
+	if headers := verifier.Headers(); len(headers) != 1 || headers[0] != webauth.RegistryAssertionHeader {
+		t.Fatalf("Headers() = %v, want [%s]", headers, webauth.RegistryAssertionHeader)
+	}
+	if verifier.AccessCodeWins() {
+		t.Fatal("AccessCodeWins() = true, want false")
+	}
+
+	now := time.Now()
+	signES256 := func(kid string, key *ecdsa.PrivateKey, claims jwt.Claims) string {
+		tok := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+		if kid != "" {
+			tok.Header["kid"] = kid
+		}
+		s, err := tok.SignedString(key)
+		if err != nil {
+			t.Fatalf("SignedString: %v", err)
+		}
+		return s
+	}
+
+	// 1. Initial JWKS fetch failure returns an error implementing Unavailable() == true.
+	failJWKS.Store(true)
+	validClaims := webauth.RegistryClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    issuer,
+			Audience:  jwt.ClaimStrings{audience},
+			Subject:   "Alice@Example.com",
+			IssuedAt:  jwt.NewNumericDate(now.Add(-5 * time.Second)),
+			NotBefore: jwt.NewNumericDate(now.Add(-5 * time.Second)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(55 * time.Second)),
+			ID:        "jti-1",
+		},
+		Email:     "Alice@Example.com",
+		Kind:      webauth.PrincipalHuman,
+		RequestID: "req_1",
+	}
+	validTok := signES256("reg-ec-1", ecKey1, validClaims)
+	req := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/tasks", nil)
+	req.Header.Set(webauth.RegistryAssertionHeader, validTok)
+	if _, _, err := verifier.VerifyRequest(req); err == nil {
+		t.Fatal("expected initial JWKS failure to return error")
+	} else {
+		var u interface{ Unavailable() bool }
+		if !errors.As(err, &u) || !u.Unavailable() {
+			t.Fatalf("initial JWKS failure err = %v, want Unavailable() == true", err)
+		}
+	}
+	failJWKS.Store(false)
+
+	// 2. Valid human token verifies and normalizes email.
+	id, ok, err := verifier.VerifyRequest(req)
+	if err != nil || !ok {
+		t.Fatalf("VerifyRequest(valid human): ok=%v, err=%v", ok, err)
+	}
+	if id.Email != "alice@example.com" || id.Kind != webauth.PrincipalHuman {
+		t.Fatalf("id = %+v, want {alice@example.com, human}", id)
+	}
+
+	// 3. Valid service account token classifies as PrincipalService.
+	saTok := signES256("reg-ec-1", ecKey1, webauth.RegistryClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    issuer,
+			Audience:  jwt.ClaimStrings{audience},
+			Subject:   "ci-runner@proj.iam.gserviceaccount.com",
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(time.Minute)),
+		},
+		Email: "ci-runner@proj.iam.gserviceaccount.com",
+	})
+	reqSA := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/tasks", nil)
+	reqSA.Header.Set(webauth.RegistryAssertionHeader, saTok)
+	idSA, ok, err := verifier.VerifyRequest(reqSA)
+	if err != nil || !ok || idSA.Kind != webauth.PrincipalService || idSA.Email != "ci-runner@proj.iam.gserviceaccount.com" {
+		t.Fatalf("VerifyRequest(valid service): id=%+v, ok=%v, err=%v", idSA, ok, err)
+	}
+
+	// 4. Algorithm pinning: reject RS256, HS256, none, and missing kid.
+	rsTok := jwt.NewWithClaims(jwt.SigningMethodRS256, validClaims)
+	rsTok.Header["kid"] = "reg-rsa-1"
+	rsStr, err := rsTok.SignedString(rsaKey)
+	if err != nil {
+		t.Fatalf("RSA SignedString: %v", err)
+	}
+	reqRS := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/tasks", nil)
+	reqRS.Header.Set(webauth.RegistryAssertionHeader, rsStr)
+	if _, _, err := verifier.VerifyRequest(reqRS); err == nil {
+		t.Fatal("expected RS256 token to be rejected")
+	}
+
+	hsTok := jwt.NewWithClaims(jwt.SigningMethodHS256, validClaims)
+	hsTok.Header["kid"] = "reg-ec-1"
+	hsStr, err := hsTok.SignedString([]byte("secret"))
+	if err != nil {
+		t.Fatalf("HS256 SignedString: %v", err)
+	}
+	reqHS := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/tasks", nil)
+	reqHS.Header.Set(webauth.RegistryAssertionHeader, hsStr)
+	if _, _, err := verifier.VerifyRequest(reqHS); err == nil {
+		t.Fatal("expected HS256 token to be rejected")
+	}
+
+	noneTok := jwt.NewWithClaims(jwt.SigningMethodNone, validClaims)
+	noneTok.Header["kid"] = "reg-ec-1"
+	noneStr, err := noneTok.SignedString(jwt.UnsafeAllowNoneSignatureType)
+	if err != nil {
+		t.Fatalf("none SignedString: %v", err)
+	}
+	reqNone := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/tasks", nil)
+	reqNone.Header.Set(webauth.RegistryAssertionHeader, noneStr)
+	if _, _, err := verifier.VerifyRequest(reqNone); err == nil {
+		t.Fatal("expected alg=none token to be rejected")
+	}
+
+	noKidStr := signES256("", ecKey1, validClaims)
+	reqNoKid := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/tasks", nil)
+	reqNoKid.Header.Set(webauth.RegistryAssertionHeader, noKidStr)
+	if _, _, err := verifier.VerifyRequest(reqNoKid); err == nil {
+		t.Fatal("expected token without kid to be rejected")
+	}
+
+	// 5. Wrong issuer, wrong audience, and multi-audience token rejected.
+	wrongIss := validClaims
+	wrongIss.Issuer = "https://other.example.com"
+	reqWrongIss := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/tasks", nil)
+	reqWrongIss.Header.Set(webauth.RegistryAssertionHeader, signES256("reg-ec-1", ecKey1, wrongIss))
+	if _, _, err := verifier.VerifyRequest(reqWrongIss); err == nil {
+		t.Fatal("expected wrong issuer to be rejected")
+	}
+
+	wrongAud := validClaims
+	wrongAud.Audience = jwt.ClaimStrings{"https://other-grain.grain.example.com"}
+	reqWrongAud := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/tasks", nil)
+	reqWrongAud.Header.Set(webauth.RegistryAssertionHeader, signES256("reg-ec-1", ecKey1, wrongAud))
+	if _, _, err := verifier.VerifyRequest(reqWrongAud); err == nil {
+		t.Fatal("expected wrong audience to be rejected")
+	}
+
+	multiAud := validClaims
+	multiAud.Audience = jwt.ClaimStrings{audience, "https://other-grain.grain.example.com"}
+	reqMultiAud := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/tasks", nil)
+	reqMultiAud.Header.Set(webauth.RegistryAssertionHeader, signES256("reg-ec-1", ecKey1, multiAud))
+	if _, _, err := verifier.VerifyRequest(reqMultiAud); err == nil {
+		t.Fatal("expected multi-audience token to be rejected")
+	}
+
+	// 6. Lifetime and clock-skew checks:
+	// - expired beyond 30s skew rejected; expired within 30s skew accepted
+	// - nbf in future beyond 30s skew rejected; within 30s skew accepted
+	// - iat missing rejected
+	// - exp - iat > 5m rejected; exp <= iat rejected
+	expiredClaims := validClaims
+	expiredClaims.IssuedAt = jwt.NewNumericDate(now.Add(-2 * time.Minute))
+	expiredClaims.ExpiresAt = jwt.NewNumericDate(now.Add(-45 * time.Second))
+	reqExpired := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/tasks", nil)
+	reqExpired.Header.Set(webauth.RegistryAssertionHeader, signES256("reg-ec-1", ecKey1, expiredClaims))
+	if _, _, err := verifier.VerifyRequest(reqExpired); err == nil {
+		t.Fatal("expected expired token beyond 30s skew to be rejected")
+	}
+
+	skewExpClaims := validClaims
+	skewExpClaims.IssuedAt = jwt.NewNumericDate(now.Add(-75 * time.Second))
+	skewExpClaims.ExpiresAt = jwt.NewNumericDate(now.Add(-15 * time.Second))
+	reqSkewExp := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/tasks", nil)
+	reqSkewExp.Header.Set(webauth.RegistryAssertionHeader, signES256("reg-ec-1", ecKey1, skewExpClaims))
+	if _, ok, err := verifier.VerifyRequest(reqSkewExp); err != nil || !ok {
+		t.Fatalf("expected token expired by 15s (within 30s skew) to verify: ok=%v, err=%v", ok, err)
+	}
+
+	futureNbfClaims := validClaims
+	futureNbfClaims.NotBefore = jwt.NewNumericDate(now.Add(45 * time.Second))
+	reqFutureNbf := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/tasks", nil)
+	reqFutureNbf.Header.Set(webauth.RegistryAssertionHeader, signES256("reg-ec-1", ecKey1, futureNbfClaims))
+	if _, _, err := verifier.VerifyRequest(reqFutureNbf); err == nil {
+		t.Fatal("expected future nbf beyond 30s skew to be rejected")
+	}
+
+	noIatClaims := validClaims
+	noIatClaims.IssuedAt = nil
+	reqNoIat := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/tasks", nil)
+	reqNoIat.Header.Set(webauth.RegistryAssertionHeader, signES256("reg-ec-1", ecKey1, noIatClaims))
+	if _, _, err := verifier.VerifyRequest(reqNoIat); err == nil {
+		t.Fatal("expected token missing iat to be rejected")
+	}
+
+	longLifetimeClaims := validClaims
+	longLifetimeClaims.IssuedAt = jwt.NewNumericDate(now)
+	longLifetimeClaims.ExpiresAt = jwt.NewNumericDate(now.Add(5*time.Minute + time.Second))
+	reqLong := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/tasks", nil)
+	reqLong.Header.Set(webauth.RegistryAssertionHeader, signES256("reg-ec-1", ecKey1, longLifetimeClaims))
+	if _, _, err := verifier.VerifyRequest(reqLong); err == nil || !strings.Contains(err.Error(), "lifetime") {
+		t.Fatalf("expected token with exp-iat > 5m to be rejected, got %v", err)
+	}
+
+	// 7. Reserved act claim rejected (object, string, or null).
+	for _, rawAct := range []string{`{"sub":"service@example.com"}`, `"service@example.com"`, `null`} {
+		actClaims := validClaims
+		actClaims.Act = json.RawMessage(rawAct)
+		reqAct := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/tasks", nil)
+		reqAct.Header.Set(webauth.RegistryAssertionHeader, signES256("reg-ec-1", ecKey1, actClaims))
+		if _, _, err := verifier.VerifyRequest(reqAct); err == nil || !strings.Contains(err.Error(), "act claim") {
+			t.Fatalf("expected token with act=%s to be rejected, got %v", rawAct, err)
+		}
+	}
+
+	// 8. Principal claim validation: mismatched sub/email, email_verified=false, SA claiming human.
+	mismatchClaims := validClaims
+	mismatchClaims.Subject = "alice@example.com"
+	mismatchClaims.Email = "bob@example.com"
+	reqMismatch := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/tasks", nil)
+	reqMismatch.Header.Set(webauth.RegistryAssertionHeader, signES256("reg-ec-1", ecKey1, mismatchClaims))
+	if _, _, err := verifier.VerifyRequest(reqMismatch); err == nil {
+		t.Fatal("expected mismatched sub and email to be rejected")
+	}
+
+	f := false
+	unverifiedClaims := validClaims
+	unverifiedClaims.EmailVerified = &f
+	reqUnverified := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/tasks", nil)
+	reqUnverified.Header.Set(webauth.RegistryAssertionHeader, signES256("reg-ec-1", ecKey1, unverifiedClaims))
+	if _, _, err := verifier.VerifyRequest(reqUnverified); err == nil {
+		t.Fatal("expected email_verified=false to be rejected")
+	}
+
+	saHumanClaims := validClaims
+	saHumanClaims.Subject = "bot@proj.iam.gserviceaccount.com"
+	saHumanClaims.Email = "bot@proj.iam.gserviceaccount.com"
+	saHumanClaims.Kind = webauth.PrincipalHuman
+	reqSAHuman := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/tasks", nil)
+	reqSAHuman.Header.Set(webauth.RegistryAssertionHeader, signES256("reg-ec-1", ecKey1, saHumanClaims))
+	if _, _, err := verifier.VerifyRequest(reqSAHuman); err == nil {
+		t.Fatal("expected .gserviceaccount.com claiming human kind to be rejected")
+	}
+
+	// 9. Unknown kid refetch floor (1m default): within floor does not refetch; after floor refetches and picks up rotated key.
+	fetchesBefore := jwksFetches.Load()
+	serveKey2.Store(true)
+	tokKey2 := signES256("reg-ec-2", ecKey2, validClaims)
+	reqKey2 := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/tasks", nil)
+	reqKey2.Header.Set(webauth.RegistryAssertionHeader, tokKey2)
+	if _, _, err := verifier.VerifyRequest(reqKey2); err == nil {
+		t.Fatal("expected unknown kid within 1m refetch floor to be rejected without refetching")
+	}
+	if jwksFetches.Load() != fetchesBefore {
+		t.Fatalf("JWKS fetches = %d, want %d (rate-limited within floor)", jwksFetches.Load(), fetchesBefore)
+	}
+
+	webauth.SetRegistryRefetchFloor(time.Nanosecond)
+	if id2, ok, err := verifier.VerifyRequest(reqKey2); err != nil || !ok || id2.Email != "alice@example.com" {
+		t.Fatalf("after refetch floor elapsed: id=%+v, ok=%v, err=%v", id2, ok, err)
+	}
+}

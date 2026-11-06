@@ -689,6 +689,32 @@ as its route is scoped. The frameworks' allowed-tool lists name only
 `grain-controller`'s six fixed tools, so a new route needs no entry
 there either.
 
+### Asking for a person's decision (`api_request_human_review`)
+
+A review run -- a security review or a template review -- may hold the
+change it reviews for a person's decision with `POST
+/api/tasks/{id}/human-review` (`tasks:write`), `{id}` being the review's
+own task. Its run is also offered the same call as the
+`request_human_review` MCP tool, which reaches the daemon over this route.
+The body is `reason` (required, one line), `details` (markdown, said on the
+held task's conversation) and `category` (`product-decision`, `risk`,
+`security`, `intent-unclear` or `other`, the default). The answer names
+the held task, whether the reason was new, and every reason it is held
+for now.
+
+It is for decisions, not defects: a code defect an agent can fix stays a
+finding (`add_review_comment`). The implementing run is not offered it --
+an agent that needs a person to decide something about its own work asks
+them (`ask_question`). An agent may only ask as its own task, and a task
+that is not a review is refused.
+
+Holding a change turns its auto-merge off and records the reason with the
+review task and run that raised it; a later clean review, CI, a push or
+auto-submit do not release it. `POST /api/tasks/{id}/human-review/release`
+(`tasks:write`) releases it as a person, recorded with who did; every
+agent is refused there, and on Submit or a `PATCH` turning auto-merge on
+while the hold stands. See [merging.design.md](../design/design/merging.design.md#gates).
+
 ## The controller MCP server (`POST /api/mcp`)
 
 `grain-controller` is one stateless Streamable HTTP MCP server on the

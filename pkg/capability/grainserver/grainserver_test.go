@@ -106,6 +106,28 @@ func TestInProcessServerNormalizesAndMintsJournal(t *testing.T) {
 	if !grainserver.IsCIGrant(grainserver.CIGrant) || !grainserver.IsCIGrant("grain-ci") {
 		t.Fatalf("IsCIGrant failed to match canonical or legacy ci grant")
 	}
+
+	source, err := model.NormalizeCapabilityNames([]string{grainserver.SourceRef}, lookup)
+	if err != nil || !slices.Equal(source, []string{grainserver.SourceGrant}) {
+		t.Fatalf("NormalizeCapabilityNames(source) = %v, %v; want [%s]", source, err, grainserver.SourceGrant)
+	}
+	if !slices.Contains(st.Methods, grainserver.SourceMethod) {
+		t.Fatalf("Status().Methods = %v, want %s", st.Methods, grainserver.SourceMethod)
+	}
+	if model.IsDangerousGrant(grainserver.SourceGrant) {
+		t.Fatalf("SourceGrant should not be dangerous: it is read-only, as self-debug was")
+	}
+	wantSelfDebug := []string{"api:self-debug", grainserver.SourceGrant}
+	if got := model.CanonicalLegacyGrants(grainserver.LegacySelfDebug); !slices.Equal(got, wantSelfDebug) {
+		t.Fatalf("CanonicalLegacyGrants(self-debug) = %v, want %v", got, wantSelfDebug)
+	}
+	if !grainserver.HasSource([]string{grainserver.SourceGrant}) || !grainserver.HasSource([]string{"self-debug"}) ||
+		!grainserver.IsSourceGrant(grainserver.SourceRef) {
+		t.Fatalf("HasSource/IsSourceGrant failed to match canonical, bare or legacy source grant")
+	}
+	if grainserver.HasSource([]string{"api:self-debug"}) {
+		t.Fatalf("HasSource matched api:self-debug, which grants no source checkout")
+	}
 }
 
 // A pass's deadline comes from the orchestrator's clock, which need not

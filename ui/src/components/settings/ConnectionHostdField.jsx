@@ -51,7 +51,7 @@ export default function ConnectionHostdField({
   onChange,
   noFallback = false,
   emptyLabel = "Where its framework's run location says",
-  helperText = "Which grain hostd this connection's CLI, and the CLI login an " +
+  helperText = "Which host this connection's CLI, and the CLI login an " +
     "ambient credential is, runs on. While it is not connected the " +
     "connection is unavailable and its runs wait.",
   disabled = false,
@@ -88,7 +88,7 @@ export default function ConnectionHostdField({
         select
         size={noFallback ? "small" : undefined}
         disabled={disabled}
-        label={noFallback ? "Hostd" : "Run on"}
+        label={noFallback ? "Host" : "Run on host"}
         value={named || pick === "" || pick === LABELS ? pick : selector}
         onChange={(event) => {
           const v = event.target.value;
@@ -110,27 +110,25 @@ export default function ConnectionHostdField({
         <MenuItem value="">{emptyLabel}</MenuItem>
         {listed.map((h) => (
           <MenuItem key={h.name} value={h.name}>
-            hostd {hostdOption(h)}
+            host {hostdOption(h)}
           </MenuItem>
         ))}
         {selector && !named && !labelled && (
-          <MenuItem value={selector}>
-            hostd {selector} (not registered)
-          </MenuItem>
+          <MenuItem value={selector}>host {selector} (not registered)</MenuItem>
         )}
-        <MenuItem value={LABELS}>A hostd selected by label…</MenuItem>
+        <MenuItem value={LABELS}>A host selected by label…</MenuItem>
       </TextField>
       {labelled && (
         <TextField
           size={noFallback ? "small" : undefined}
           disabled={disabled}
-          label="Hostd labels"
+          label="Host labels"
           placeholder="pool=gpu,zone=b"
           value={selector}
           onChange={(event) =>
             onChange({ hostd: event.target.value.trim() || undefined })
           }
-          helperText="label=value[,label=value]: any connected hostd carrying every one"
+          helperText="label=value[,label=value]: any connected host carrying every one"
           inputProps={{ "data-testid": `${testId}-labels` }}
           fullWidth
         />
@@ -149,7 +147,7 @@ export default function ConnectionHostdField({
             onChange({ hostdFallback: list.length ? list : undefined });
           }}
           helperText={
-            "Hostds tried in order, separated by ';', while the one above " +
+            "Hosts tried in order, separated by ';', while the one above " +
             "is not connected. " +
             "Empty, the default, means a run waits for it."
           }

@@ -96,6 +96,14 @@ func securityReviewBody() string {
 		"change for the owner's decision, and their reply sends another run to carry it out; a " +
 		"concern recorded any other way -- a comment, your closing note -- holds nothing. If there " +
 		"was nothing to fix or ask, finish with a comment_on_issue saying what you checked.\n\n")
+	b.WriteString("When the code is right -- or you have fixed it -- but something about the change is " +
+		"still not an agent's call, call `request_human_review` instead of leaving a finding: a product " +
+		"or design decision, a risky migration, a security-sensitive behaviour change, or a brief whose " +
+		"intent is unclear. Give a one-line `reason`, the context and your recommendation in `details`, " +
+		"and a `category`. It holds the change for its owner, who alone may Submit or release it -- a " +
+		"clean review, CI or a later push do not -- and your review still finishes normally. Keep using " +
+		"findings for code defects an agent can fix; a decision dressed as a finding gets \"fixed\" by " +
+		"an agent or reads as a defect.\n\n")
 	b.WriteString("Some paths only a human may release (`human: required`, `sensitive: true`, or " +
 		"grain's own list of them). Fix what you find there too; the change still waits for its " +
 		"owner's Submit, however clean your review is.\n")

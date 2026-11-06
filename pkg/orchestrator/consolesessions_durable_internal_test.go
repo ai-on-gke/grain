@@ -30,7 +30,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
-	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -304,7 +303,7 @@ func TestConsoleSessionAddingCapabilityMidConversationRestartsAndResumes(t *test
 			AgentFramework:     model.AgentFrameworkClaude,
 			TaskCancellers:     cancellers,
 			CapabilityRestarts: restarts,
-			Capabilities:       SessionTestRegistry(durable.New(), selfdebug.New()),
+			Capabilities:       SessionTestRegistry(durable.New()),
 		},
 	}
 
