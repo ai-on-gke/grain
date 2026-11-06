@@ -714,10 +714,10 @@ func (rt *Router) cleanupActiveTunnel(t *ActiveTunnel) {
 
 // ReconcileLocalTunnel checks whether the local ActiveTunnel for `name` (if any)
 // is still authorized and current in PostgreSQL.
-// - If the entry was deleted, owner disabled, transferred, `connected_principal` changed,
-//   or its `cred_id` was revoked, the live tunnel socket is terminated immediately (aborting open streams).
-// - If `session_epoch` advanced to a newer session on another replica, the local tunnel
-//   stops receiving new streams, drains in-flight streams, and closes.
+//   - If the entry was deleted, owner disabled, transferred, `connected_principal` changed,
+//     or its `cred_id` was revoked, the live tunnel socket is terminated immediately (aborting open streams).
+//   - If `session_epoch` advanced to a newer session on another replica, the local tunnel
+//     stops receiving new streams, drains in-flight streams, and closes.
 func (rt *Router) ReconcileLocalTunnel(ctx context.Context, name string) {
 	name = strings.ToLower(strings.TrimSpace(name))
 	rt.tunnelsMu.RLock()

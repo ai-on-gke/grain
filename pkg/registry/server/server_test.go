@@ -83,9 +83,9 @@ func (testIdentityVerifier) Authenticate(r *http.Request) (*webauth.Caller, erro
 }
 
 type testAssertionSigner struct {
-	priv *ecdsa.PrivateKey
-	kid  string
-	mu   sync.Mutex
+	priv   *ecdsa.PrivateKey
+	kid    string
+	mu     sync.Mutex
 	signed []AssertionClaims
 }
 

@@ -379,6 +379,7 @@ func (rt *Router) WrapMainHandler(controlPlane http.Handler) http.Handler {
 //   - `GET /healthz`
 //   - `GET /api/entries/{name}/connect` (`X-Grain-Auth: token` + `grc_…` required)
 //   - `PUT /api/entries/{name}/heartbeat` and `POST /api/entries/{name}/heartbeat` (`grc_…` required)
+//
 // and returning 404 for all other paths or Host headers.
 func (rt *Router) PublicHandler(jwksHandler, healthzHandler http.HandlerFunc) http.Handler {
 	mux := http.NewServeMux()
