@@ -231,6 +231,7 @@ func TestOnlyAPersonDecidesAnAccessRequest(t *testing.T) {
 	for _, who := range []model.Principal{
 		{Kind: model.PrincipalAgent, ID: "task-" + task.ID},
 		{Kind: model.PrincipalAutomation, ID: "grain"},
+		{Kind: model.PrincipalService, ID: "ci-bot@my-proj.iam.gserviceaccount.com", Source: model.SourceIAP},
 	} {
 		actor := ui.WithPrincipal(ctx, who)
 		if err := c.GrantAccessRequest(actor, task.ID, ui.AccessGrantDecision{}); !errors.As(err, &forbidden) {
@@ -266,5 +267,120 @@ func TestAnAgentCannotApproveItsOwnAccessRequest(t *testing.T) {
 	// A person, through the same route, may.
 	if rec := do(t, srv, http.MethodPost, "/api/tasks/1/access-request/grant", `{"items":[0]}`); rec.Code != http.StatusOK {
 		t.Fatalf("a person granting: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSecondAccessRequestAfterPartialGrantShowsEarlierAnswer(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	task := create(t, c, ctx)
+	items := []model.AccessRequestItem{
+		{Kind: model.AccessRead, Repo: "acme/docs"},
+		{Kind: model.AccessNetwork, Access: "open"},
+		{Kind: model.AccessGrant, Capability: "api:tasks:admin"},
+	}
+	parkOnAccess(t, c, ctx, task.ID, items)
+
+	picked := []int{0, 1}
+	if err := c.GrantAccessRequest(ctx, task.ID, ui.AccessGrantDecision{Items: &picked}); err != nil {
+		t.Fatalf("GrantAccessRequest: %v", err)
+	}
+	// Run 2 cannot re-ask for items 0 and 1 because the task now holds them;
+	// asking again for the declined item 2 must still show the earlier answer.
+	parkOnAccess(t, c, ctx, task.ID, []model.AccessRequestItem{
+		{Kind: model.AccessGrant, Capability: "api:tasks:admin"},
+	})
+	detail, err := c.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.PendingAccess == nil || len(detail.PendingAccess.Earlier) != 1 {
+		t.Fatalf("PendingAccess.Earlier = %+v, want the earlier partial grant decision", detail.PendingAccess)
+	}
+	earlier := detail.PendingAccess.Earlier[0]
+	if earlier.Denied || len(earlier.Granted) != 2 || len(earlier.Declined) != 1 || earlier.Declined[0].Capability != "api:tasks:admin" {
+		t.Fatalf("earlier decision = %+v, want 2 granted and api:tasks:admin declined", earlier)
+	}
+
+	// An unrelated later request does not show a decision whose items do not overlap.
+	parkOnAccess(t, c, ctx, task.ID, []model.AccessRequestItem{
+		{Kind: model.AccessWrite, Repo: "acme/lib", Base: "dev"},
+	})
+	detail, err = c.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.PendingAccess == nil || len(detail.PendingAccess.Earlier) != 0 {
+		t.Fatalf("unrelated request Earlier = %+v, want none", detail.PendingAccess)
+	}
+}
+
+func TestCheckAccessRequestHonorsTemplateAndSessionCatalogueContext(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	now := time.Now().UTC()
+	if err := store.PutTemplate(ctx, model.Template{
+		ID: "tmpl-release", Name: "release-audit", Title: "Audit", Body: "Check", CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		cfg.CapabilityPolicy.Catalogue = &model.CapabilityCatalogue{
+			InProcess: map[string]model.CatalogueInProcess{
+				"read-issues": {
+					Restrictions: &model.CapabilityRestrictions{
+						Templates:      model.Patterns{"release-audit"},
+						RequiresPerson: true,
+					},
+				},
+				"bootstrap-playbooks": {
+					Restrictions: &model.CapabilityRestrictions{
+						Kinds: model.Patterns{model.CatalogueKindSession},
+					},
+				},
+			},
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	adhoc := create(t, c, ctx)
+	if _, err := c.CheckAccessRequest(ctx, adhoc.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: "read-issues"}}); err == nil {
+		t.Fatal("ad-hoc task admitted template-restricted capability in CheckAccessRequest")
+	}
+
+	fromTemplate := model.Task{
+		ID: "tmpl-task", Title: "Audit", Body: "Check",
+		Target:     &model.RepoRef{Owner: "acme", Name: "widgets"},
+		TemplateID: "tmpl-release", ApprovedAt: &now, CreatedAt: &now,
+	}
+	if err := store.PutTask(ctx, fromTemplate); err != nil {
+		t.Fatal(err)
+	}
+	views, err := c.CheckAccessRequest(ctx, fromTemplate.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: "read-issues"}})
+	if err != nil {
+		t.Fatalf("template task CheckAccessRequest: %v", err)
+	}
+	if len(views) != 1 || !views[0].RequiresPerson {
+		t.Fatalf("views = %+v, want RequiresPerson=true on template-matched capability", views)
+	}
+
+	sessionTask := model.Task{
+		ID: "sess-task", Title: "Console", Body: "Session",
+		Interactive: true, Tags: []string{model.ConsoleSessionTag("ops")},
+		Origin:     model.Origin{Reason: model.ReasonConsoleSession},
+		ApprovedAt: &now, CreatedAt: &now,
+	}
+	if err := store.PutTask(ctx, sessionTask); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.CheckAccessRequest(ctx, sessionTask.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: "bootstrap-playbooks"}}); err != nil {
+		t.Fatalf("session task CheckAccessRequest for session-restricted capability: %v", err)
+	}
+	// The same session-only capability stays refused to an ordinary task:
+	// judging in the task's own context must not admit it everywhere.
+	if _, err := c.CheckAccessRequest(ctx, adhoc.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: "bootstrap-playbooks"}}); err == nil {
+		t.Fatal("ad-hoc task admitted session-restricted capability in CheckAccessRequest")
 	}
 }
