@@ -505,6 +505,7 @@ func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
 	for _, p := range []string{
 		"pkg/ui/access_roles.go",
 		"pkg/ui/request_actor.go",
+		"pkg/ui/host_enroll.go",
 		"pkg/model/api_scope_set.go",
 		"pkg/model/host_enroll.go",
 		"pkg/ui/external_cli.go",

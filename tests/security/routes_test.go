@@ -325,12 +325,21 @@ var routeAuthorization = map[string]authLevel{
 	// tokens, secrets.
 	"GET /api/external-agents/tokens":              trusted,
 	"POST /api/external-agents/tokens":             trusted,
-	"GET /api/hostds":                              trusted,
-	"POST /api/hostds":                             trusted,
-	"PATCH /api/hostds/{name}":                     trusted,
-	"GET /api/hostds/{name}/install":               trusted,
-	"POST /api/hostds/{name}/rotate":               trusted,
-	"POST /api/hostds/{name}/revoke":               trusted,
+	"GET /api/hostds":                                      trusted,
+	"POST /api/hostds":                                     trusted,
+	"GET /api/hostds/enrollment-codes":                     trusted,
+	"POST /api/hostds/enrollment-codes":                    trusted,
+	"POST /api/hostds/enrollment-codes/{name}/rotate":      trusted,
+	"POST /api/hostds/enrollment-codes/{name}/revoke":      trusted,
+	"GET /api/hostds/pending":                              trusted,
+	"POST /api/hostds/pending/{id}/accept":                 trusted,
+	"POST /api/hostds/pending/{id}/reject":                 trusted,
+	"PATCH /api/hostds/{name}":                             trusted,
+	"DELETE /api/hostds/{name}":                            trusted,
+	"GET /api/hostds/{name}/install":                       trusted,
+	"POST /api/hostds/{name}/rename":                       trusted,
+	"POST /api/hostds/{name}/rotate":                       trusted,
+	"POST /api/hostds/{name}/revoke":                       trusted,
 	"GET /api/access/principals":                   trusted,
 	"POST /api/access/principals":                  trusted,
 	"PATCH /api/access/principals/{entry}":         trusted,
@@ -471,9 +480,14 @@ var routeAuthorization = map[string]authLevel{
 	// A grain hostd dialing in authenticates with the hostd token in
 	// its upgrade (hostd.Remote.ServeHTTP), not with a principal.
 	"GET /api/hostd/connect": public,
+	// Ed25519-signed host enrollment and silent credential renewal protocol.
+	"POST /api/hostd/join":           public,
+	"POST /api/hostd/join/{id}/poll": public,
+	"POST /api/hostd/renew":          public,
 	// The script that installs one: grain's own, with no token in it
 	// (TestHostdInstallScriptIsPublicAndHoldsNoSecret).
 	"GET /api/hostd/install.sh": public,
+	"GET /hostd/install":        public,
 }
 
 // The people the fixtures name. On the single-tenant daemon
