@@ -306,6 +306,24 @@ func (g *CiGrantReservations) mintCIPass(ctx context.Context, req ci.SandboxRequ
 		}
 	}
 	configured, _ = intree.EnsureBuiltins(configured)
+	normalizedCaps := make([]string, 0, len(grants))
+	for _, grant := range grants {
+		normalizedCaps = append(normalizedCaps, model.RecordedCapabilityGrant(grant))
+	}
+	normalizedReq := req
+	if normalizedReq.Repo == "" && repo.Owner != "" {
+		normalizedReq.Repo = repo.String()
+	}
+	normalizedReq.Capabilities = normalizedCaps
+	if err := ciPolicyRefusal(g.Policy, normalizedReq, g.Log); err != nil {
+		return nil, time.Time{}, err
+	}
+	if err := CheckCIJobCatalogue(policy.Catalogue, normalizedReq); err != nil {
+		if g.Log != nil {
+			g.Log("grain ci: %s: %s job %s refused by settings/capabilities.yml: %v", normalizedReq.Repo, req.Event, req.Name, err)
+		}
+		return nil, time.Time{}, fmt.Errorf("the capability catalogue refuses this CI job: %w", err)
+	}
 	subject := model.CapabilitySubject{Repo: &repo, Kind: model.CapabilityRunCI, Event: string(req.Event), Untrusted: req.Untrusted,
 		TrustedSchedule: req.TrustedSchedule}
 	for _, grant := range grants {
