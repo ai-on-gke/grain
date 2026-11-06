@@ -64,8 +64,8 @@ Settings does.
 
 ## Built-in servers
 
-grain's own in-tree capability servers (`config-map`, `gcp`, `gchat`, `git`
-and `host-script`) are listed first on every deployment
+grain's own in-tree capability servers (`config-map`, `figma`, `gcp`, `gchat`,
+`git` and `host-script`) are listed first on every deployment
 without anyone adding them
 ([capabilities.md](capabilities.md#in-tree-capability-servers-grain-capability-name)).
 Each row carries the **built-in** chip; its page is titled `<name> server`,
