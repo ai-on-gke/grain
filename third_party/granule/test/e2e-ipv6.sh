@@ -70,7 +70,7 @@ TARGETS=()
 
 PEER_IMAGE="${E2E_PEER_IMAGE:-busybox:1.36}"
 COREDNS_IMAGE="${E2E_COREDNS_IMAGE:-coredns/coredns:1.11.3}"
-GKE_PROJECT="${GKE_PROJECT:-bsalmon-fun-sandbox}"
+GKE_PROJECT="${GKE_PROJECT:-grain-sandbox-dev}"
 GKE_REGION="${GKE_REGION:-us-central1}"
 GKE_ZONE="${GKE_ZONE:-${GKE_REGION}-a}"
 GKE_NAME="${GKE_NAME:-granule-ipv6-e2e-$(date +%m%d%H%M)}"
