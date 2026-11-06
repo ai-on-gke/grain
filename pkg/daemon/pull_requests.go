@@ -54,7 +54,7 @@ func (o *PullRequestOpener) OpenForTaskWithOptions(ctx context.Context, taskID s
 	if task == nil {
 		return ui.PullRequestStatus{}, fmt.Errorf("no task %s", taskID)
 	}
-	status, err := orchestrator.OpenPullRequestForTaskWithQA(ctx, o.Store, o.Client, *task, orchestrator.QAOpenPROptions{
+	status, err := orchestrator.OpenPullRequestForTaskWithQA(ctx, o.Store, github.ForTask(o.Client, task.ID), *task, orchestrator.QAOpenPROptions{
 		CallerNotes:         opts.CallerNotes,
 		AllowHoldAfterS3Cap: opts.AllowHoldAfterS3Cap,
 	})
@@ -116,7 +116,7 @@ func (o *PullRequestOpener) ReattachForTask(ctx context.Context, taskID string) 
 	if err != nil || task == nil {
 		return err
 	}
-	_, err = orchestrator.ReattachPullRequest(ctx, o.Store, o.Client, *task, true, time.Now().UTC())
+	_, err = orchestrator.ReattachPullRequest(ctx, o.Store, github.ForTask(o.Client, task.ID), *task, true, time.Now().UTC())
 	return err
 }
 
