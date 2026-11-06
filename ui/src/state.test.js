@@ -83,7 +83,6 @@ import {
   taskPause,
   reasonControl,
   reasonLabel,
-  taskReasonLabel,
   reasonTitle,
 } from "./state.js";
 
@@ -2645,40 +2644,19 @@ describe("liveness sub-cases", () => {
       "usage limit paused",
     );
     expect(reasonLabel(null)).toBe(null);
-    // The task chip's form: awaiting_reply's one sub-case is named by
-    // askedCase's kind, so a finished report's chip does not say
-    // "question" beside its "Answered in a comment" badge.
-    const awaiting = { reason: "awaiting_reply/question" };
-    expect(taskReasonLabel({ state: "awaiting_reply", reason: awaiting })).toBe(
-      "answered",
+    // awaiting_reply's sub-cases name the ask (orchestrator's
+    // awaitingReplyReasonOf), so a finished report's chip says
+    // "answered" beside its "Answered in a comment" badge rather than
+    // "question".
+    expect(reasonLabel({ reason: "awaiting_reply/answered" })).toBe("answered");
+    expect(reasonLabel({ reason: "awaiting_reply/question" })).toBe("question");
+    expect(reasonLabel({ reason: "awaiting_reply/your_message" })).toBe(
+      "your message",
     );
-    expect(
-      taskReasonLabel({
-        state: "awaiting_reply",
-        reason: awaiting,
-        questionSummary: "Which?",
-      }),
-    ).toBe("question");
-    expect(
-      taskReasonLabel({
-        state: "awaiting_reply",
-        reason: awaiting,
-        interactive: true,
-      }),
-    ).toBe("your message");
-    expect(
-      taskReasonLabel({
-        state: "awaiting_reply",
-        reason: awaiting,
-        awaitingAccess: true,
-      }),
-    ).toBe("access request");
-    expect(
-      taskReasonLabel({
-        state: "queued",
-        reason: { reason: "queued/usage_limit_paused" },
-      }),
-    ).toBe("usage limit paused");
+    expect(reasonLabel({ reason: "awaiting_reply/access_request" })).toBe(
+      "access request",
+    );
+    expect(reasonLabel({ reason: "awaiting_reply/stopped" })).toBe("stopped");
   });
 
   it("explains which condition a sub-case is in and why", () => {

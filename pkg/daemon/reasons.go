@@ -32,8 +32,8 @@ type ReasonClassifier struct {
 
 // TaskReason is orchestrator.TaskReason.
 func (c ReasonClassifier) TaskReason(t model.Task, state model.State, obs *model.Observation,
-	openDeps []string, wait *model.GrantWait) ui.Reason {
-	return uiReason(orchestrator.TaskReason(t, state, obs, openDeps, wait, c.PolicyFile))
+	openDeps []string, wait *model.GrantWait, asked model.ReplyFacts) ui.Reason {
+	return uiReason(orchestrator.TaskReason(t, state, obs, openDeps, wait, asked, c.PolicyFile))
 }
 
 // MergeReason is orchestrator.MergeReason.
