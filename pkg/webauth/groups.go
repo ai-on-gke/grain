@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -322,8 +323,12 @@ type CloudIdentityGroupChecker struct {
 // NewCloudIdentityGroupChecker returns a GroupMemberChecker backed by the
 // Cloud Identity groups API with in-memory caching.
 func NewCloudIdentityGroupChecker(opts ...CloudIdentityOption) *CloudIdentityGroupChecker {
+	defaultEndpoint := strings.TrimRight(strings.TrimSpace(os.Getenv("GRAIN_CLOUD_IDENTITY_ENDPOINT")), "/")
+	if defaultEndpoint == "" {
+		defaultEndpoint = DefaultCloudIdentityEndpoint
+	}
 	c := &CloudIdentityGroupChecker{
-		endpoint:   DefaultCloudIdentityEndpoint,
+		endpoint:   defaultEndpoint,
 		ttl:        DefaultGroupMembershipCacheTTL,
 		now:        time.Now,
 		groupNames: map[string]groupNameCacheEntry{},
@@ -335,7 +340,7 @@ func NewCloudIdentityGroupChecker(opts ...CloudIdentityOption) *CloudIdentityGro
 		}
 	}
 	if c.endpoint == "" {
-		c.endpoint = DefaultCloudIdentityEndpoint
+		c.endpoint = defaultEndpoint
 	}
 	if c.ttl <= 0 {
 		c.ttl = DefaultGroupMembershipCacheTTL

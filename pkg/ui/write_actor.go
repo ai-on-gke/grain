@@ -81,6 +81,9 @@ func (c *Client) recordConfigWrite(ctx context.Context, r *http.Request) {
 	who := RequestActor(ctx)
 	surface := configAuditSurface(r)
 	summary := r.Method + " " + r.URL.Path
+	if reason := strings.NewReplacer("\r", " ", "\n", " ").Replace(strings.TrimSpace(r.Header.Get(ActingReasonHeader))); reason != "" {
+		summary += " (" + reason + ")"
+	}
 	log.Printf("grain api: %s (%s) changed %s: %s",
 		PrincipalLabel(who.Actor, who.OnBehalfOf), sourceName(who.Actor.Source), surface, summary)
 	if _, err := c.Store.RecordConfigAudit(ctx, model.ConfigAuditEntry{

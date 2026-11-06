@@ -211,7 +211,7 @@ every `DELETE`.
 | `settings:read` | read deployment settings and configuration | |
 | `settings:write` | change deployment settings, the database, the state repository | yes |
 | `access:read` | read the allowed users and groups list | |
-| `access:write` | add and remove allowed users and groups | yes |
+| `access:write` | add and remove allowed users and groups (people only; an agent holding this scope is still refused allowlist edits) | yes |
 | `connections:read` | read git connections and model backends | |
 | `connections:write` | change them | yes |
 | `capabilities:read` | read capability servers and policy, check grants | |

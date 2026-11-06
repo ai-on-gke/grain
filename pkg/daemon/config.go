@@ -242,9 +242,10 @@ type Config struct {
 	UiRequireVerifier string
 	// UiRequireIAP is -ui-require-iap (ui.Config.RequireIAP), an alias for
 	// UiRequireVerifier = "iap".
-	UiRequireIAP        bool
-	UiAllowedPrincipals []string
-	UiOpen              bool
+	UiRequireIAP            bool
+	UiAllowedPrincipals     []string
+	UiCloudIdentityEndpoint string
+	UiOpen                  bool
 	Actor               string
 	DefaultTargetRepo   string
 	// PolicyFile is -policy: this workstation's local policy

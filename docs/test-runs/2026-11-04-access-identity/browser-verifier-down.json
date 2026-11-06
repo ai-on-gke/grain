@@ -1,0 +1,9 @@
+[
+  {
+    "id": "UI-6a",
+    "desc": "Browser receives 503 Retry-After: 5 and usable starting-up message when verifier JWKS is down",
+    "expected": "503 Retry-After=5 'Sign-in verification is starting up'",
+    "got": "503 Retry-After=5 h1=Sign-in verification is starting up",
+    "pass": true
+  }
+]

@@ -1,0 +1,212 @@
+[
+  {
+    "id": "UI-2a",
+    "desc": "Settings -> Access warns about dropped serviceAccount: and domain: entries from -ui-allowed-principals",
+    "expected": "dropped-ct@my-proj.iam.gserviceaccount.com & domain:example.com",
+    "got": "Ignored startup flag entries during one-time migration: serviceAccount:dropped-ci@my-proj.iam.gserviceaccount.com, domain:example.com. Only ",
+    "pass": true
+  },
+  {
+    "id": "UI-1a",
+    "desc": "Settings -> Access displays verified IAP identity and grain/operator role",
+    "expected": "Signed in through IAP as alice@example.com + grain/operator",
+    "got": "this browser Your role: grain/operator Signed in through IAP as alice@example.com. log out | Your role: grain/operator",
+    "pass": true
+  },
+  {
+    "id": "UI-1b",
+    "desc": "frank@example.com refused before UI allowlist add, pointing to Settings -> Access",
+    "expected": "403 mentioning Settings -> Access",
+    "got": "403 principal \"frank@example.com\" is not on the allowed users and groups list (Settings -> Access)",
+    "pass": true
+  },
+  {
+    "id": "UI-1c",
+    "desc": "UI allowlist add admits frank@example.com immediately without restart",
+    "expected": "200 allowed=true verified=true",
+    "got": "200 allowed=true verified=true label=frank@example.com",
+    "pass": true
+  },
+  {
+    "id": "UI-1d",
+    "desc": "UI allowlist remove refuses frank@example.com immediately without restart",
+    "expected": "403",
+    "got": "403",
+    "pass": true
+  },
+  {
+    "id": "UI-2b",
+    "desc": "UI refuses serviceAccount: entry with empty reason",
+    "expected": "row count 0 and reason prompt shown",
+    "got": "rows=0, mentions reason=true",
+    "pass": true
+  },
+  {
+    "id": "UI-2c",
+    "desc": "Service accounts section shows admitted SA separately with role and reason",
+    "expected": "release-bot@my-proj.iam.gserviceaccount.com + release pipeline files tasks through IAP",
+    "got": "service accounts Non-human callers, each added deliberately with a reason and held to its role. Accounts whose keys grain hands to tasks are",
+    "pass": true
+  },
+  {
+    "id": "UI-1e",
+    "desc": "Settings -> Access has zero uncaught page errors",
+    "expected": "0",
+    "got": "0",
+    "pass": true
+  },
+  {
+    "id": "UI-5-iap-custom-role",
+    "desc": "Settings -> Audit (iap-custom-role, settings:read only) renders Configuration changes and clean refusal warnings on Credential access & Secret resolutions",
+    "expected": "config-audit-table populated + 2 clean refusal alerts + 0 pageErrors",
+    "got": "cfgHasReason=true, teamErr=The credential accesses could not be read (auditor@exam, secErr=The secret resolutions could not be read (auditor@examp, errs=0",
+    "pass": true
+  },
+  {
+    "id": "layout-audit-partial-1440-light",
+    "desc": "audit-partial-1440-light has no horizontal overflow",
+    "expected": "scrollWidth <= clientWidth + 1",
+    "got": "1440 <= 1440",
+    "pass": true
+  },
+  {
+    "id": "UI-5-gma-settings-read",
+    "desc": "Settings -> Audit (gma-settings-read, settings:read only) renders Configuration changes and clean refusal warnings on Credential access & Secret resolutions",
+    "expected": "config-audit-table populated + 2 clean refusal alerts + 0 pageErrors",
+    "got": "cfgHasReason=true, teamErr=The credential accesses could not be read (external:aud, secErr=The secret resolutions could not be read (external:audi, errs=0",
+    "pass": true
+  },
+  {
+    "id": "UI-4a",
+    "desc": "Task detail page shows consistent PrincipalLabel across Filed by, comments, timeline, and pause banner with no raw {human, operator}",
+    "expected": "missing=[] hasRawPair=false",
+    "got": "filedBy=alice@example.com, missing=[], hasRawPair=false",
+    "pass": true
+  },
+  {
+    "id": "UI-4b",
+    "desc": "Interactive chat view shows identical PrincipalLabel senders and no raw operator",
+    "expected": "chatHasLabels=true chatRaw=false",
+    "got": "chatHasLabels=true chatRaw=false",
+    "pass": true
+  },
+  {
+    "id": "layout-access-1440-light",
+    "desc": "access-1440-light has no horizontal overflow",
+    "expected": "scrollWidth <= clientWidth + 1",
+    "got": "1440 <= 1440",
+    "pass": true
+  },
+  {
+    "id": "UI-3-audit",
+    "desc": "Settings -> Audit displays config_audit reasons and actor labels (and access-code sidebar user-tile shows operator (access code))",
+    "expected": "reasons & actor labels visible + tile=operator (access code)",
+    "got": "tile=operator (access code) who=operator (access code) | when who surface change 11/6/2026, 6:23:03 AM alice@example.com access removed user:frank@example.com 11/6/2026, 6:23:03",
+    "pass": true
+  },
+  {
+    "id": "layout-audit-1440-light",
+    "desc": "audit-1440-light has no horizontal overflow",
+    "expected": "scrollWidth <= clientWidth + 1",
+    "got": "1440 <= 1440",
+    "pass": true
+  },
+  {
+    "id": "layout-task-1440-light",
+    "desc": "task-1440-light has no horizontal overflow",
+    "expected": "scrollWidth <= clientWidth + 1",
+    "got": "1440 <= 1440",
+    "pass": true
+  },
+  {
+    "id": "layout-sidebar-1440-light",
+    "desc": "sidebar-1440-light has no horizontal overflow",
+    "expected": "scrollWidth <= clientWidth + 1",
+    "got": "1440 <= 1440",
+    "pass": true
+  },
+  {
+    "id": "layout-access-1440-dark",
+    "desc": "access-1440-dark has no horizontal overflow",
+    "expected": "scrollWidth <= clientWidth + 1",
+    "got": "1440 <= 1440",
+    "pass": true
+  },
+  {
+    "id": "layout-audit-1440-dark",
+    "desc": "audit-1440-dark has no horizontal overflow",
+    "expected": "scrollWidth <= clientWidth + 1",
+    "got": "1440 <= 1440",
+    "pass": true
+  },
+  {
+    "id": "layout-task-1440-dark",
+    "desc": "task-1440-dark has no horizontal overflow",
+    "expected": "scrollWidth <= clientWidth + 1",
+    "got": "1440 <= 1440",
+    "pass": true
+  },
+  {
+    "id": "layout-sidebar-1440-dark",
+    "desc": "sidebar-1440-dark has no horizontal overflow",
+    "expected": "scrollWidth <= clientWidth + 1",
+    "got": "1440 <= 1440",
+    "pass": true
+  },
+  {
+    "id": "layout-access-390-light",
+    "desc": "access-390-light has no horizontal overflow",
+    "expected": "scrollWidth <= clientWidth + 1",
+    "got": "390 <= 390",
+    "pass": true
+  },
+  {
+    "id": "layout-audit-390-light",
+    "desc": "audit-390-light has no horizontal overflow",
+    "expected": "scrollWidth <= clientWidth + 1",
+    "got": "390 <= 390",
+    "pass": true
+  },
+  {
+    "id": "layout-task-390-light",
+    "desc": "task-390-light has no horizontal overflow",
+    "expected": "scrollWidth <= clientWidth + 1",
+    "got": "390 <= 390",
+    "pass": true
+  },
+  {
+    "id": "layout-sidebar-390-light",
+    "desc": "sidebar-390-light has no horizontal overflow",
+    "expected": "scrollWidth <= clientWidth + 1",
+    "got": "390 <= 390",
+    "pass": true
+  },
+  {
+    "id": "layout-access-390-dark",
+    "desc": "access-390-dark has no horizontal overflow",
+    "expected": "scrollWidth <= clientWidth + 1",
+    "got": "390 <= 390",
+    "pass": true
+  },
+  {
+    "id": "layout-audit-390-dark",
+    "desc": "audit-390-dark has no horizontal overflow",
+    "expected": "scrollWidth <= clientWidth + 1",
+    "got": "390 <= 390",
+    "pass": true
+  },
+  {
+    "id": "layout-task-390-dark",
+    "desc": "task-390-dark has no horizontal overflow",
+    "expected": "scrollWidth <= clientWidth + 1",
+    "got": "390 <= 390",
+    "pass": true
+  },
+  {
+    "id": "layout-sidebar-390-dark",
+    "desc": "sidebar-390-dark has no horizontal overflow",
+    "expected": "scrollWidth <= clientWidth + 1",
+    "got": "390 <= 390",
+    "pass": true
+  }
+]

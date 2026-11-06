@@ -4756,6 +4756,18 @@ fieldset legend {
   .cs-message__content {
   background: var(--accent-subtle);
 }
+/* @chatscope/chat-ui-kit-styles hides .cs-message__sender-name on every
+   outgoing bubble, assuming a 1:1 messenger where outgoing is always one
+   unattributed "you". TaskChat sets position="single" so every bubble
+   carries its own PrincipalLabel header across verified people, the
+   shared access code and external agents; show the sender name on
+   outgoing bubbles to match incoming ones. */
+.task-chat-window
+  .cs-message-list
+  .cs-message.cs-message--outgoing.cs-message--single
+  .cs-message__sender-name {
+  display: block;
+}
 /* A separator and the typing indicator are the quietest things in a
    conversation -- a date, a rule, "the agent is working" -- and the kit
    draws all three in its accent. The accent is reserved here for what
