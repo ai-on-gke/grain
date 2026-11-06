@@ -258,13 +258,13 @@ func TestHostdConfiguredButDownStillOffersHostAndFailsTheRunClearly(t *testing.T
 	}
 
 	// The run is refused before anything is staged, naming hostd's socket.
-	if _, err := cfg.cliHostdHost(agy); err == nil || !strings.Contains(err.Error(), "grain hostd is not reachable at "+socket) {
+	if _, err := cfg.cliHostdHost(agy); err == nil || !strings.Contains(err.Error(), "the host agent is not reachable at "+socket) {
 		t.Errorf("a host run with hostd down: %v, want it to fail naming hostd's socket", err)
 	}
 	// And a host that somehow got past that still fails the same way.
 	host := agent.HostdHost{Client: hostd.Client{Socket: socket}, Entry: "agy"}
 	_, err := host.Run(context.Background(), agent.Command{Path: "agy", Args: []string{"--version"}}, nil)
-	if err == nil || !strings.Contains(err.Error(), "grain hostd is not reachable at "+socket) {
+	if err == nil || !strings.Contains(err.Error(), "the host agent is not reachable at "+socket) {
 		t.Errorf("a host run with hostd down: %v, want it to fail naming hostd's socket", err)
 	}
 }

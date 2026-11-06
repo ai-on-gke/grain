@@ -104,7 +104,7 @@ func TestHostdResolutionMatrix(t *testing.T) {
 		{"", map[string]want{"absent": {"container", ViaDaemon, ""}, "not offering": {"container", ViaDaemon, ""}, "offering": {"container", ViaDaemon, ""}}},
 		{"container", map[string]want{"absent": {"container", ViaDaemon, ""}, "not offering": {"container", ViaDaemon, ""}, "offering": {"container", ViaDaemon, ""}}},
 		{"host", map[string]want{
-			"absent":       {"host", ViaHostd, "grain hostd is not reachable"},
+			"absent":       {"host", ViaHostd, "the host agent is not reachable"},
 			"not offering": {"host", ViaHostd, `offers no cli entry "agy"`},
 			"offering":     {"host", ViaHostd, ""},
 		}},
@@ -455,7 +455,7 @@ func TestDetachedResolution(t *testing.T) {
 				}
 				return
 			}
-			want := map[string]string{"absent": "grain hostd is not reachable", "not offering": `offers no cli entry "claude-detached"`}[name]
+			want := map[string]string{"absent": "the host agent is not reachable", "not offering": `offers no cli entry "claude-detached"`}[name]
 			if r.Location != model.CLIRunContainer || r.Via != ViaDaemon || !strings.Contains(r.Warning, want) {
 				t.Fatalf("resolved %+v, want the container with a warning containing %q", r, want)
 			}
