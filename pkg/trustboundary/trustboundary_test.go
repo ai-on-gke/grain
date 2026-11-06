@@ -499,12 +499,14 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 // reach, the approval-callback tokens and the daemon's UI listeners. v16
 // classified none of them, so a change to any merged itself.
 func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v17" {
-		t.Errorf("Version = %q, want trust-boundary/v17", Version)
+	if Version != "trust-boundary/v18" {
+		t.Errorf("Version = %q, want trust-boundary/v18", Version)
 	}
 	for _, p := range []string{
 		"pkg/ui/access_roles.go",
+		"pkg/ui/request_actor.go",
 		"pkg/model/api_scope_set.go",
+		"pkg/model/host_enroll.go",
 		"pkg/ui/external_cli.go",
 		"pkg/ui/local_script_approvals.go",
 		"pkg/daemon/ui_server.go",

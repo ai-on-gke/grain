@@ -622,8 +622,8 @@ var Migrations = []Migration{
 		Version:     92,
 		Description: "add the hostd registry (hostd, hostd_token), with the co-located hostd as local",
 		Statements: []string{
-			hostdTable,
-			hostdTokenTable,
+			schema92HostdTable,
+			schema92HostdTokenTable,
 		},
 		Up: ensureLocalHostd,
 	},
@@ -800,7 +800,49 @@ var Migrations = []Migration{
 			"CREATE INDEX IF NOT EXISTS `ci_run_repo_ref` ON `ci_run` (`repo`, `ref`, `started_at`)",
 		},
 	},
+	{
+		Version:     115,
+		Description: "add host enrollment codes, pending pairing-code join requests, key-bound host metadata and 30-day credential expiry",
+		Statements: []string{
+			"ALTER TABLE `hostd` ADD COLUMN `public_key` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `key_fingerprint` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `enrollment_code` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `capacity` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `hostd` ADD COLUMN `hostname` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `os` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `arch` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `clis` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `version` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `local_user` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `last_seen_at` DATETIME NULL",
+			"ALTER TABLE `hostd_token` ADD COLUMN `expires_at` DATETIME NULL",
+			hostEnrollmentCodeTable,
+			hostJoinRequestTable,
+		},
+	},
 }
+
+// schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as
+// schema 92 created them, frozen so migration 92 followed by migration 115's
+// ALTER TABLE statements runs cleanly from any earlier baseline.
+const schema92HostdTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd`" + ` (
+  ` + "`name`" + `       TEXT     NOT NULL,
+  ` + "`owner`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`labels`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`created_by`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + ` DATETIME NOT NULL,
+  ` + "`revoked_at`" + ` DATETIME NULL,
+  PRIMARY KEY (` + "`name`" + `)
+)`
+
+const schema92HostdTokenTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd_token`" + ` (
+  ` + "`token_hash`" + ` TEXT     NOT NULL,
+  ` + "`hostd`" + `      TEXT     NOT NULL,
+  ` + "`prefix`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + ` DATETIME NOT NULL,
+  ` + "`revoked_at`" + ` DATETIME NULL,
+  PRIMARY KEY (` + "`token_hash`" + `)
+)`
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as
 // schemas before 95 wrote it, with the default captured for replacing.
