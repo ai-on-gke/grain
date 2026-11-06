@@ -599,6 +599,11 @@ func (s *Server) agentRails(ctx context.Context, acting *model.Task, pattern, me
 			}
 		}
 	}
+	if pattern == approveTaskRoute && target != "" {
+		if err := s.agentApprovalRail(ctx, acting, target); err != nil {
+			return err
+		}
+	}
 	path := pathOf(pattern)
 	if strings.HasPrefix(path, "/api/console/{id}") {
 		return fmt.Errorf("task %s cannot type into or close a live console through the agent API", acting.ID)
@@ -635,6 +640,187 @@ func (s *Server) agentRails(ctx context.Context, acting *model.Task, pattern, me
 		}
 	}
 	return nil
+}
+
+// approveTaskRoute is the agent API's approval: the person's half of
+// every proposal gate, which agentApprovalRail keeps an agent from
+// spending on its own work or on work held for a person.
+const approveTaskRoute = "POST /api/tasks/{id}/approve"
+
+// maxProposalLineageDepth bounds agentApprovalRail's walk up a task's
+// LinkProposedBy chain. Proposal trees are shallow in practice; the bound
+// is only there so a malformed chain cannot make one request walk the
+// store forever (the walk also stops at a task it has already seen).
+const maxProposalLineageDepth = 256
+
+// agentApprovalRail refuses an agent approving target
+// (POST /api/tasks/{id}/approve) when the approval would be the agent
+// deciding something a person must
+// (design/spec/director/director-capabilities.spec.md §3.3 item 3, G8):
+//
+//   - target is in acting's own proposal lineage: acting proposed it, or
+//     proposed a task that proposed it, however far down the
+//     LinkProposedBy chain. Approving it would be a run queueing its own
+//     work on a permission nobody gave that work.
+//   - target is held for a person (proposalPersonHolds): it asked for
+//     hold_for_approval, holds a requires_person or person-only grant, or
+//     asks for capabilities, writes, reads or settings its own proposer
+//     could not give it.
+//
+// It holds whatever acting is granted, api:tasks:admin included, which
+// is what makes it a rail rather than a scope: tasks:admin being a
+// person's grant says a person trusts the run to approve other work, not
+// that the run may stand in for the person every hold is waiting for. A
+// task outside acting's lineage and held for nobody is still approved
+// under tasks:admin as before; a person approving anything is not this
+// function's business, since only an agent call reaches it.
+func (s *Server) agentApprovalRail(ctx context.Context, acting *model.Task, target string) error {
+	id := model.NormalizeTaskID(target)
+	task, err := s.tasks.Store.GetTask(ctx, id)
+	if err != nil {
+		return fmt.Errorf("reading task %s: %w", id, err)
+	}
+	if task == nil {
+		// Not there: the handler's own 404 says so.
+		return nil
+	}
+	me := model.NormalizeTaskID(acting.ID)
+	proposer, chain, err := s.proposalLineage(ctx, *task, me)
+	if err != nil {
+		return err
+	}
+	if len(chain) > 0 {
+		how := "it proposed it"
+		if len(chain) > 1 {
+			how = "it is in the chain that proposed it (" + strings.Join(chain, " → ") + ")"
+		}
+		return fmt.Errorf("task %s cannot approve task %s: %s, and an agent never approves its own proposals, "+
+			"directly or through the tasks they filed, even under api:tasks:admin -- a person approves them "+
+			"(docs/agent-api.md)", me, task.ID, how)
+	}
+	if holds, err := s.proposalPersonHolds(ctx, *task, proposer); err != nil {
+		return err
+	} else if len(holds) > 0 {
+		return fmt.Errorf("task %s cannot approve task %s: it is held for a person (%s), and an agent never "+
+			"approves a task held for a person, even under api:tasks:admin (docs/agent-api.md)",
+			me, task.ID, strings.Join(holds, "; "))
+	}
+	return nil
+}
+
+// proposalLineage walks task's LinkProposedBy chain upwards. It returns
+// task's own proposer (nil when it has none, or it is no longer stored)
+// and, when actor is somewhere on that chain, the chain from actor down
+// to task's proposer, nearest last -- empty when actor proposed none of
+// it.
+func (s *Server) proposalLineage(ctx context.Context, task model.Task, actor string) (*model.Task, []string, error) {
+	var proposer *model.Task
+	var chain []string
+	seen := map[string]bool{task.ID: true}
+	cur := task
+	for range maxProposalLineageDepth {
+		up := proposedByOf(cur)
+		if up == "" || seen[up] {
+			break
+		}
+		seen[up] = true
+		chain = append(chain, up)
+		if up == actor {
+			slices.Reverse(chain)
+			return proposer, chain, nil
+		}
+		next, err := s.tasks.Store.GetTask(ctx, up)
+		if err != nil {
+			return nil, nil, fmt.Errorf("reading task %s, which proposed %s: %w", up, cur.ID, err)
+		}
+		if next == nil {
+			break
+		}
+		if proposer == nil {
+			proposer = next
+		}
+		cur = *next
+	}
+	return proposer, nil, nil
+}
+
+// proposedByOf is the task that proposed t (its LinkProposedBy target),
+// or "" for a task nobody proposed.
+func proposedByOf(t model.Task) string {
+	for _, l := range t.Links {
+		if l.Kind == model.LinkProposedBy {
+			return model.NormalizeTaskID(l.Target)
+		}
+	}
+	return ""
+}
+
+// proposalPersonHolds is every reason task waits for a person rather than
+// for any automated approver, each phrased to sit in a list after "held
+// for a person": none means it waits for nobody in particular. The
+// reasons are the ones filing a proposal holds it for (ui.CreateTask,
+// orchestrator.relayProposedTasks), asked again of the task as it stands
+// now:
+//
+//   - hold_for_approval (model.HeldForApprovalTag);
+//   - a grant settings/capabilities.yml marks requires_person, for the
+//     capability or the method it names (catalogueRequiresPerson);
+//   - a person-only grant (model.IsPersonOnlyGrant): a dangerous api
+//     scope, a capability method only a person may grant, durable or
+//     priority-dispatch;
+//   - against proposer, when there is one: capabilities, write targets or
+//     reads it does not hold (model.EscalatedCapabilities, UngrantedWrites,
+//     UngrantedReads), and keep_running or a priority above its own
+//     (model.PersonOnlyProposalSettings).
+func (s *Server) proposalPersonHolds(ctx context.Context, task model.Task, proposer *model.Task) ([]string, error) {
+	var holds []string
+	if model.HeldForApproval(task) {
+		holds = append(holds, "it was filed with hold_for_approval")
+	}
+	needsPerson, err := s.tasks.catalogueRequiresPerson(ctx, task)
+	if err != nil {
+		return nil, fmt.Errorf("reading the capability catalogue: %w", err)
+	}
+	if len(needsPerson) > 0 {
+		holds = append(holds, fmt.Sprintf("it holds %s, which settings/capabilities.yml marks requires_person",
+			strings.Join(needsPerson, ", ")))
+	}
+	var personOnly []string
+	for _, g := range task.Grants {
+		if model.IsPersonOnlyGrant(g.Capability) && !slices.Contains(personOnly, g.Capability) {
+			personOnly = append(personOnly, g.Capability)
+		}
+	}
+	if len(personOnly) > 0 {
+		holds = append(holds, fmt.Sprintf("it holds %s, which only a person may grant", strings.Join(personOnly, ", ")))
+	}
+	if proposer == nil {
+		return holds, nil
+	}
+	if escalated := model.EscalatedCapabilities(task, *proposer); len(escalated) > 0 {
+		holds = append(holds, fmt.Sprintf("it asks for %s, which task %s that proposed it does not hold",
+			strings.Join(escalated, ", "), proposer.ID))
+	}
+	if writes := model.UngrantedWrites(task, *proposer); len(writes) > 0 {
+		names := make([]string, 0, len(writes))
+		for _, w := range writes {
+			names = append(names, w.Repo.String())
+		}
+		holds = append(holds, fmt.Sprintf("it may land work in %s, which task %s that proposed it was never given",
+			strings.Join(names, ", "), proposer.ID))
+	}
+	if reads := model.UngrantedReads(task, *proposer); len(reads) > 0 {
+		names := make([]string, 0, len(reads))
+		for _, r := range reads {
+			names = append(names, r.String())
+		}
+		holds = append(holds, fmt.Sprintf("it reads %s, which task %s that proposed it cannot read",
+			strings.Join(names, ", "), proposer.ID))
+	}
+	if why := model.PersonOnlyProposalSettings(task, *proposer); why != "" {
+		holds = append(holds, why)
+	}
+	return holds, nil
 }
 
 // agentGrantEscalation refuses a body that writes any capability the

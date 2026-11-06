@@ -397,8 +397,10 @@ gate, not merely left ungranted.
        (the `LinkProposedBy` chain);
      - a proposal held for `requires_person`, escalation or
        `HeldForApprovalTag`.
-   - This holds even under `api:tasks:admin`. It is a **proposed gate
-     rail**: `main` relies on `tasks:admin` being person-granted.
+   - This holds even under `api:tasks:admin`. It is a **gate rail**
+     (`agentApprovalRail`, called from `agentRails` in
+     `pkg/ui/agent_api_gate.go`), not a grant decision: it refuses every
+     agent, the director included, whatever it holds.
 4. **Config approval.**
    - The director MUST NOT approve, merge or push to the default branch
      of the state repository.
@@ -492,13 +494,13 @@ holds them.
 | G5 | `propose_config_change` & config-repo proposal rail | Tool and `grain/config/<task-id>/*` push policy implemented (`pkg/mcp/config_change_tool.go`, `pkg/ui/task_config_change.go`), keyed on `Writes: [<state repo>]`; `DefaultConsoleSessions` still ships `Writes: []`, and `AutoApprovalRefusal` does not yet hold `IsConfigRepo` targets/writes when the parent holds `Writes: [<state repo>]` | Shipped on the director, while child `propose_task` calls targeting or writing `IsConfigRepo` always wait for a person (§3.1.3) | Hold `IsConfigRepo` target and write proposals unconditionally in `AutoApprovalRefusal` (`pkg/model/hold_for_approval.go`), then enable `propose_config_change` on the shipped director without widening `propose_task`. |
 | G6 | `capabilities:detach` | does not exist | New non-dangerous, MCP-only scope (§3.1.2) | Add it to `model.apiScopes`, `IsSandboxDeniedAPIScope`, `route_scopes.go` (a detach-body check like `tasksAdminTaskPatchBodyAllowed`), `docs/agent-api.md`; then add it to G1. |
 | G7 | Default catalogue for the director kind | none (`DefaultCapabilityCatalogue` absent; nil catalogue admits all) | Shipped rule set denying the director kind `merge:force`, `settings:write`, `secrets:write`, `connections:write`, `repos:write` | Add a built-in restriction layer applied under any `settings/capabilities.yml`, keyed on `CatalogueKindDirector` (operator files may narrow, not widen). |
-| G8 | Self-approval | relies on `tasks:admin` being person-granted | Gate refuses `POST /api/tasks/{id}/approve` on a task in the actor's proposal subtree or held for a person | Add to `agentRails` in `pkg/ui/agent_api_gate.go`, with tests. |
+| G8 | Self-approval | **done**: `agentRails` (`agentApprovalRail` in `pkg/ui/agent_api_gate.go`) refuses an agent's `POST /api/tasks/{id}/approve` on a task in its own `LinkProposedBy` lineage or held for a person (`HeldForApprovalTag`, catalogue `requires_person`, person-only grants, `EscalatedCapabilities` / `UngrantedWrites` / `UngrantedReads` / `PersonOnlyProposalSettings` against the task's proposer), pinned by `pkg/ui/agent_approval_rail_test.go` | Unchanged | None. |
 | G9 | Seeded repo defaults on director proposals | held as "seeded" escalations | Admitted under §4.2 | Change `EscalatedCapabilities` / `AutoApprovalRefusal` (`pkg/model/auto_submit.go`, `hold_for_approval.go`) to take the seeding source; tests for each excluded case. |
 | G10 | `DirectorSessionBody` | — | Tells the director to use `expect` on stop/close, `hold_for_approval` for destructive proposals, and give reasons | Update the reviewed body text. |
 | G11 | Docs | Retired capability names and the `NetworkAccess: open` note in `docs/director.md` updated in [Task #3185](/tasks/3185); envelope table still reflects pre-G1–G3 defaults | Matches §3 | Update `docs/director.md` alongside G1–G3 as each default flips. |
 | G12 | Capacity bound on session-queued proposals | session-queued proposals skip `AutoSubmitLimits` | Per-turn fan-out bound; over it, filed for a person (§3.1.5) | Add the check beside `ExceededAutoSubmitLimit` in `ui.Client.CreateTask` and `orchestrator.relayProposedTasks`, with tests. |
 
-Ordering: G4 is done, and G10 can land with G1. G6 precedes the detach part of
+Ordering: G4 and G8 are done, and G10 can land with G1. G6 precedes the detach part of
 G1, and G3's verification precedes its default change. G5's `IsConfigRepo`
-proposal hold, G7, G8 and G12 MUST land before G2, so that the auto-queueing
+proposal hold, G7 and G12 MUST land before G2, so that the auto-queueing
 director never runs on a deployment without the Tier 3 rails.
