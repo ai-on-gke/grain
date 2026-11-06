@@ -70,7 +70,7 @@ TARGETS=()
 
 PEER_IMAGE="${E2E_PEER_IMAGE:-busybox:1.36}"
 COREDNS_IMAGE="${E2E_COREDNS_IMAGE:-coredns/coredns:1.11.3}"
-GKE_PROJECT="${GKE_PROJECT:-grain-sandbox-dev}"
+GKE_PROJECT="${GKE_PROJECT:-bsalmon-fun-sandbox}"
 GKE_REGION="${GKE_REGION:-us-central1}"
 GKE_ZONE="${GKE_ZONE:-${GKE_REGION}-a}"
 GKE_NAME="${GKE_NAME:-granule-ipv6-e2e-$(date +%m%d%H%M)}"
@@ -391,12 +391,20 @@ kubectl() { command kubectl --context "$KCTX" "$@"; }
 # k8s_checks: everything after the cluster exists and has the images.
 k8s_checks() {
   local out pod6 peer6 svc6 dns6 nodes
-  kubectl apply -f "$REPO_ROOT/deploy/k8s/kvm-device-plugin.yaml" >/dev/null || { fail "apply the device plugin"; return; }
-  if [ -n "${K8S_DEVICE_PLUGIN_IMAGE:-}" ]; then
-    kubectl -n kube-system set image ds/granule-device-plugin "generic-device-plugin=$K8S_DEVICE_PLUGIN_IMAGE" >/dev/null
-  fi
+  # The image is swapped before the DaemonSet exists rather than with a
+  # "set image" after it: applied as written, its first pods pull from
+  # GHCR, and a hosted runner's kind node that hits a pull failure there
+  # sits in ImagePullBackOff past the rollout timeout.
+  sed "s|image: $DEVICE_PLUGIN_IMAGE|image: ${K8S_DEVICE_PLUGIN_IMAGE:-$DEVICE_PLUGIN_IMAGE}|" \
+    "$REPO_ROOT/deploy/k8s/kvm-device-plugin.yaml" | kubectl apply -f - >/dev/null || { fail "apply the device plugin"; return; }
   if ! out=$(kubectl -n kube-system rollout status ds/granule-device-plugin --timeout=180s 2>&1); then
     fail "the device plugin rolls out" "$out"
+    # The rollout status alone does not say whether the plugin pods are
+    # still pulling, crash-looping or failing container creation.
+    kubectl -n kube-system get pod -l app.kubernetes.io/name=granule-device-plugin -o wide 2>&1 | sed 's/^/     | /'
+    kubectl -n kube-system describe pod -l app.kubernetes.io/name=granule-device-plugin 2>&1 | tail -40 | sed 's/^/     | /'
+    kubectl -n kube-system logs -l app.kubernetes.io/name=granule-device-plugin --all-containers --tail=20 2>&1 | sed 's/^/     | /'
+    kubectl -n kube-system get events --sort-by=.lastTimestamp 2>&1 | grep granule-device-plugin | tail -20 | sed 's/^/     | /'
     return
   fi
   # A cluster that outlives the run (GKE_EXISTING, --keep aside) is left
