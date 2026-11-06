@@ -70,8 +70,10 @@ func writeCommitNote(ctx context.Context) string {
 // export is triggered (ServeHTTP's onSuccess), so it covers every write
 // guardConfigWrite let through -- settings, a repo's settings, a
 // schedule, a template, a session -- without each handler having to
-// remember. The summary is the method and path only: a body can carry a
-// secret, and the state repository's diff has the values.
+// remember. The summary is the method and path, plus the caller's own
+// X-Grain-Acting-Reason in parentheses when it gave one (on one line),
+// never the body: a body can carry a secret, and the state repository's
+// diff has the values.
 //
 // ctx is the context the write was made under, r the request it came in.
 func (c *Client) recordConfigWrite(ctx context.Context, r *http.Request) {
