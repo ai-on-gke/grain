@@ -467,8 +467,8 @@ func newFramework(run runner, grainBinaryPath string, opts ...Option) *Framework
 // its pull request, are both independent of which backend its sandbox
 // runs on. So is agent.GrantArgs, which passes on the tool-granting
 // capabilities this run's task holds -- and so whether that server
-// serves the read-only tools for grain's own source (self-debug) or for
-// grain's own bootstrap playbooks (bootstrap-playbooks). So is
+// serves the read-only tools for grain's own source (self-debug) or
+// journal (grain#journal). So is
 // agent.ProposeRepoArgs, which passes on the repositories a proposal
 // this run makes may be filed against, so that propose_task's own
 // description can name them. So is agent.InteractiveArgs, which passes

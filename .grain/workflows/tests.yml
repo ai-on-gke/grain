@@ -462,7 +462,7 @@ jobs:
     #     by anything this job runs. That is what the `!` line is for;
     #     drop it and a stale capture passes.
     #   - README.md (the `*.md` glob does not cross `/`, so it is
-    #     top-level markdown only and pkg/capability/bootstrap's embedded
+    #     top-level markdown only and pkg/playbooks' embedded
     #     playbooks stay in) and the two licence files.
     #
     # Everything else stays in, including terraform/ and .github/, which
@@ -653,7 +653,7 @@ jobs:
             ./pkg/granule/... ./pkg/grit/... ./pkg/gritapi/... ./pkg/hostd/... ./pkg/hostinit/... ./pkg/hostscriptcli/... ./pkg/whererun/... ./pkg/workflows/... \
             ./pkg/hosttop/... ./pkg/iapreconciler/... ./pkg/installtrack/... ./pkg/jwks/... \
             ./pkg/k8s/... ./pkg/kubectlgate/... ./pkg/lifecycle/... ./pkg/localexec/... ./pkg/mcp/... \
-            ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/objectstore/... ./pkg/pkgcache/... \
+            ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/objectstore/... ./pkg/pkgcache/... ./pkg/playbooks/... \
             ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/registry/... ./pkg/registryauth/... \
             ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
             ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \

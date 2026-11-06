@@ -22,6 +22,8 @@ import (
 	"io/fs"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -33,6 +35,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/safepath"
 	"github.com/gke-labs/granule/pkg/sandbox"
 )
 
@@ -223,6 +226,19 @@ func (m *passMaterialization) apply(ctx context.Context, sb Sandbox) error {
 	}
 	commander, ok := sandboxRunsCommands(sb)
 	if !ok {
+		if len(m.forwards) == 0 && len(m.pass.SetupCommands()) == 0 {
+			if rooted, hasRoot := sb.(rootedSandbox); hasRoot {
+				if root, err := rooted.Root(); err == nil && root != "" {
+					return placeAllUnderRoot(root, m.pass.Placements())
+				}
+			}
+			if placer, hasPlacer := sb.(SandboxPlacer); hasPlacer {
+				return placeAllWithPlacer(ctx, placer, m.pass.Placements())
+			}
+			if onlyEmbeddedBootstrapPlacements(m.pass) {
+				return nil
+			}
+		}
 		return fmt.Errorf("this sandbox backend (%T) cannot run commands in its sandbox, so it cannot materialize capability grants", sb)
 	}
 	if err := m.startGuestForwarders(ctx, sb, commander); err != nil {
@@ -232,6 +248,90 @@ func (m *passMaterialization) apply(ctx context.Context, sb Sandbox) error {
 		return err
 	}
 	return m.runSetup(ctx, commander)
+}
+
+func onlyEmbeddedBootstrapPlacements(pass *protocol.Pass) bool {
+	if pass == nil {
+		return true
+	}
+	for _, mg := range pass.Grants {
+		if mg.Response != nil && len(mg.Response.Placements) > 0 && !model.IsEmbeddedBootstrapOnlyGrant(model.RecordedCapabilityGrant(mg.Grant)) {
+			return false
+		}
+	}
+	return true
+}
+
+func placeAllWithPlacer(ctx context.Context, placer SandboxPlacer, placements []protocol.Placement) error {
+	for _, pl := range placements {
+		if pl.Owner != "" && pl.Owner != sandboxUser {
+			return fmt.Errorf("placing %s: cannot set owner %q without a sandbox command runner", pl.Path, pl.Owner)
+		}
+		data, err := pl.Decoded()
+		if err != nil {
+			return fmt.Errorf("placing %s: %w", pl.Path, err)
+		}
+		mode := fmt.Sprintf("0%o", pl.FileMode())
+		if err := placer.PlaceFile(ctx, pl.Path, string(data), mode); err != nil {
+			return fmt.Errorf("placing %s: %w", pl.Path, err)
+		}
+	}
+	return nil
+}
+
+func placeAllUnderRoot(root string, placements []protocol.Placement) error {
+	for _, pl := range placements {
+		if pl.Owner != "" && pl.Owner != sandboxUser {
+			return fmt.Errorf("placing %s: cannot set owner %q without a sandbox command runner", pl.Path, pl.Owner)
+		}
+		data, err := pl.Decoded()
+		if err != nil {
+			return fmt.Errorf("placing %s: %w", pl.Path, err)
+		}
+		clean := filepath.Clean(pl.Path)
+		rel := strings.TrimPrefix(clean, capabilityRootDir+"/")
+		if rel == clean {
+			rel = strings.TrimPrefix(clean, "/")
+		}
+		dir, err := safepath.Within(root, filepath.Dir(rel))
+		if err != nil {
+			return fmt.Errorf("placing %s: %w", pl.Path, err)
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("placing %s: %w", pl.Path, err)
+		}
+		full, err := safepath.Within(root, rel)
+		if err != nil {
+			return fmt.Errorf("placing %s: %w", pl.Path, err)
+		}
+		if fi, err := os.Lstat(full); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("placing %s: target is a symlink", pl.Path)
+		}
+		mode := fs.FileMode(pl.FileMode())
+		tmp, err := os.CreateTemp(filepath.Dir(full), ".grain-placement.*")
+		if err != nil {
+			return fmt.Errorf("placing %s: %w", pl.Path, err)
+		}
+		tmpName := tmp.Name()
+		if _, err := tmp.Write(data); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
+			return fmt.Errorf("placing %s: %w", pl.Path, err)
+		}
+		if err := tmp.Close(); err != nil {
+			_ = os.Remove(tmpName)
+			return fmt.Errorf("placing %s: %w", pl.Path, err)
+		}
+		if err := os.Chmod(tmpName, mode); err != nil {
+			_ = os.Remove(tmpName)
+			return fmt.Errorf("placing %s: %w", pl.Path, err)
+		}
+		if err := os.Rename(tmpName, full); err != nil {
+			_ = os.Remove(tmpName)
+			return fmt.Errorf("placing %s: %w", pl.Path, err)
+		}
+	}
+	return nil
 }
 
 func (m *passMaterialization) startGuestForwarders(ctx context.Context, sb Sandbox, commander SandboxCommander) error {

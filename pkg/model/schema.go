@@ -544,7 +544,11 @@ import "strconv"
 // 114 adds `external_ref` to `task` (model.Task.ExternalRef) and the
 // `task_external_ref`, `github_ci_job_repo_ref` and `ci_run_repo_ref`
 // indexes that back external-reference filtering and GET /api/refs/{ref}/summary.
-const SchemaVersion = 114
+//
+// 115 rewrites stored `bootstrap-playbooks` grants across the grant tables,
+// deployment and repository default/CI capabilities, console sessions, and
+// capability_policy to `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}`.
+const SchemaVersion = 115
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted

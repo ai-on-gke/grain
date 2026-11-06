@@ -31,7 +31,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability"
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
@@ -1446,7 +1445,7 @@ func (g GrantNames) Has(name string) bool { return slices.Contains(g, name) }
 // served by the run's agent framework -- agent/antigravity's pre-tool
 // hook, say -- rather than by any tool of this process.
 var servedGrants = []string{
-	selfdebug.CapabilityName, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant, bootstrap.CapabilityName,
+	selfdebug.CapabilityName, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant,
 	grainserver.LegacyGrainCI, grainserver.CIRef, grainserver.CIGrant, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
@@ -1460,7 +1459,7 @@ func warnUnknownGrants(grants GrantNames) {
 		if _, isAPI, err := ui.ParseAPIGrant(name); isAPI && err == nil {
 			continue // served by grain-controller on POST /api/mcp
 		}
-		if grainserver.IsInProcessGrant(name) {
+		if grainserver.IsInProcessGrant(name) || model.IsCapabilityRef(name) {
 			continue
 		}
 		if model.APIAliasPreset(name) != "" {
@@ -1494,9 +1493,6 @@ func GrantedDaemonTools(grants GrantNames, srcDir, secretsDir, stateDir, taskID 
 			reader = daemonDeploymentHealth{client: client}
 		}
 		tools = append(tools, deploymenthealth.Tools(deploymenthealth.Config{TaskID: taskID, StateDir: stateDir, Reader: reader, Redact: redact})...)
-	}
-	if grants.Has(bootstrap.CapabilityName) {
-		tools = append(tools, bootstrap.PlaybookTools()...)
 	}
 	if grainserver.HasSQL(grants) {
 		var executor dbaccess.DBExecutor
@@ -1950,8 +1946,7 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 			"repeat the flag for each. \"self-debug\" serves the four task readers and read_grain_metrics "+
 			"over -server, along with the api:self-debug preset tools (api:tasks:read and api:deployment:read); "+
 			"\"grain-log\" serves read_grain_log over this host's journal, "+
-			"redacted with -grain-secrets-dir; \"bootstrap-playbooks\" serves list_bootstrap_playbooks/"+
-			"read_bootstrap_playbook off the playbooks embedded in this binary. Passed "+
+			"redacted with -grain-secrets-dir. Passed "+
 			"by a Framework from the grants on the run's own task (agent.RunConfig.Grants, "+
 			"agent.GrantArgs).")
 	grainSrcDir := fs.String("grain-src-dir", "",
@@ -2357,7 +2352,7 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 				MayReadAllCI:     mayReadAllCI,
 				AllowedRepos:     allowedCIRepos,
 				MayReadSrc:       grants.Has(selfdebug.CapabilityName),
-				MayReadPlaybooks: grants.Has(bootstrap.CapabilityName) || grants.Has(selfdebug.CapabilityName),
+				MayReadPlaybooks: model.HasBootstrapPlaybooks(grants) || grants.Has(selfdebug.CapabilityName),
 				MayReadAllTasks:  grants.Has(selfdebug.CapabilityName) || apiGrants.Allows("tasks:read", ""),
 				TaskReadRepos:    taskReadRepos,
 				MayReadFullConfig: grants.Has(selfdebug.CapabilityName) ||

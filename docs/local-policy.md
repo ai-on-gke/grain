@@ -161,7 +161,7 @@ all of these holds it, and the Director never runs:
 - Every grant the Director is given in `capabilities.allow`: `durable`,
   `self-debug`, `https://grain.dev/capabilities/grain#journal`,
   `api:deployment:read`, `https://grain.dev/capabilities/grain#health`,
-  `bootstrap-playbooks` and `api:ci-read`, plus any your build adds.
+  `https://grain.dev/capabilities/config-map#config-map` and `api:ci-read`, plus any your build adds.
   A held task's log line names the one that refused it.
 - `open` in `network`, unless the Director's own network has been closed.
 

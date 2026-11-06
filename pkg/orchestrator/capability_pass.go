@@ -659,11 +659,12 @@ func capabilityAdmitterFor(deps Deps, admit dispatch.Admitter, connectionOf func
 }
 
 // hasExternalCapabilityRef reports whether any grant in grants is a capability
-// reference targeting an external/subprocess capability server rather than the
-// in-process grain server (which opens no control- or data-plane listener).
+// reference targeting an external/subprocess capability server rather than an
+// in-process server or the stateless embedded bootstrap playbooks (neither of
+// which opens a control- or data-plane listener or holds host secrets).
 func hasExternalCapabilityRef(grants []model.Grant) bool {
 	for _, g := range grants {
-		if model.IsCapabilityRef(g.Capability) && !grainserver.IsInProcessGrant(g.Capability) {
+		if model.IsCapabilityRef(g.Capability) && !grainserver.IsInProcessGrant(g.Capability) && !model.IsEmbeddedBootstrapOnlyGrant(g.Capability) {
 			return true
 		}
 	}

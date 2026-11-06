@@ -77,8 +77,8 @@ func TestEveryInTreeServerIsRegisteredUnderItsCanonicalID(t *testing.T) {
 	if _, ok := Lookup("model-proxy"); !ok {
 		t.Error("the model-proxy CLI builder is not registered")
 	}
-	if b, _ := BuiltinNamed("config-map"); !b.NeedsConfig {
-		t.Errorf("config-map = %+v, want needs-config", b)
+	if b, _ := BuiltinNamed("config-map"); b.NeedsConfig {
+		t.Errorf("config-map = %+v, want NeedsConfig=false (serves built-in bootstrap playbooks out of the box)", b)
 	}
 	if _, ok := Lookup("skill"); !ok {
 		t.Error("legacy skill CLI builder is not registered")

@@ -158,6 +158,7 @@ var retiredGrants = []struct {
 	{101, "registry-push", []string{model.RegistryPushRef + "={}"}},
 	{101, "package-publish", []string{model.PackagePublishRef + "={}"}},
 	{103, "gemini-key", []string{model.GCPGeminiKeyGrant}},
+	{115, "bootstrap-playbooks", []string{model.BootstrapPlaybooksGrant}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'

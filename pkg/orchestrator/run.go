@@ -32,7 +32,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/authfix"
 	"github.com/ai-on-gke/grain/pkg/capability"
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
@@ -1544,6 +1543,9 @@ func grainCLIGrantBullets(grants []model.Grant) string {
 	}
 	if grainserver.HasHealth(names) || apiSet.Has("deployment:read") {
 		held["deployment-health"] = true
+	}
+	if model.HasBootstrapPlaybooks(names) {
+		held["bootstrap-playbooks"] = true
 	}
 	if grainserver.HasSQL(names) {
 		held["db-read"] = true
@@ -4269,7 +4271,7 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 // serves no MCP tool at all may be read by the run's agent framework
 // instead (agent/antigravity's host-tool grants).
 var toolGrants = []string{
-	selfdebug.CapabilityName, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant, bootstrap.CapabilityName,
+	selfdebug.CapabilityName, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant,
 	grainserver.LegacyGrainCI, grainserver.CIRef, grainserver.CIGrant, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,

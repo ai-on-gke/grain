@@ -54,7 +54,7 @@ the chat is in:
 
 | setting | shipped as | what it decides |
 |---|---|---|
-| `Capabilities` | `self-debug`, `https://grain.dev/capabilities/grain#journal` (formerly `grain-log`), `api:deployment:read` and `…/grain#health` (formerly `deployment-health`), `bootstrap-playbooks` (plus any capability a wrapper distribution registers as on by default) | what the agent may reach |
+| `Capabilities` | `self-debug`, `https://grain.dev/capabilities/grain#journal` (formerly `grain-log`), `api:deployment:read` and `…/grain#health` (formerly `deployment-health`), `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`, plus any capability a wrapper distribution registers as on by default) | what the agent may reach |
 | `ReadsAll` | true (every session) | whether it reads every repository this deployment works in |
 | `DeclinedDefaults` | none | which of the defaults every session holds (`api:ci-read`) it opts out of |
 | `NetworkAccess` | open (`model.DefaultConsoleSessions`; `none` is the target, `director-capabilities.spec.md` G3) | whether its sandbox reaches the internet |

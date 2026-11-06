@@ -12,12 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package playbooks embeds the bootstrap-playbooks capability's
-// markdown runbooks. It is its own package, importing nothing of
-// grain's, so that both pkg/capability/bootstrap and pkg/namespace
-// (which serves them as src://playbooks) can read them: bootstrap
-// already depends on namespace through pkg/mcp, so namespace cannot
-// import bootstrap itself.
+// Package playbooks embeds grain's bootstrap playbooks -- markdown runbooks
+// served both by the built-in config-map capability server ("bootstrap") and
+// by pkg/namespace as src://playbooks. It imports nothing of grain's so any
+// package can read them without cycles.
 package playbooks
 
 import (

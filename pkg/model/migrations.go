@@ -800,6 +800,11 @@ var Migrations = []Migration{
 			"CREATE INDEX IF NOT EXISTS `ci_run_repo_ref` ON `ci_run` (`repo`, `ref`, `started_at`)",
 		},
 	},
+	{
+		Version:     115,
+		Description: "rewrite stored bootstrap-playbooks grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]} (the in-process bootstrap-playbooks is retired)",
+		Up:          migrateBootstrapPlaybooksGrants,
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as

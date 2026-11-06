@@ -513,6 +513,9 @@ func retiredInProcessNames(g string) []string {
 			}
 		}
 	}
+	if IsBootstrapPlaybooksGrant(grant) && !slices.Contains(out, "bootstrap-playbooks") {
+		out = append(out, "bootstrap-playbooks")
+	}
 	sort.Strings(out)
 	return out
 }

@@ -106,8 +106,10 @@ func TestTheDirectorIsFiledOnTheFirstCycleAndParkedOnItsOwnOpening(t *testing.T)
 		grants = append(grants, g.Capability)
 	}
 	slices.Sort(grants)
-	if !slices.Equal(grants, []string{model.ConsoleSessionCIReadGrant, "api:deployment:read", "bootstrap-playbooks", "durable", model.GrainHealthGrant, model.GrainJournalGrant, "self-debug"}) {
-		t.Errorf("Grants = %v, want the shipped default set plus durable", grants)
+	wantGrants := []string{model.ConsoleSessionCIReadGrant, "api:deployment:read", model.BootstrapPlaybooksGrant, "durable", model.GrainHealthGrant, model.GrainJournalGrant, "self-debug"}
+	slices.Sort(wantGrants)
+	if !slices.Equal(grants, wantGrants) {
+		t.Errorf("Grants = %v, want the shipped default set plus durable (%v)", grants, wantGrants)
 	}
 	goal, err := store.TaskGoal(ctx, director.ID)
 	if err != nil {

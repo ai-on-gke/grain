@@ -197,8 +197,9 @@ func OfferedCapabilities() []Capability {
 			Description: prioritydispatch.Description},
 		{ID: durable.CapabilityName, Name: "Durable",
 			Description: durable.Description},
-		{ID: "bootstrap-playbooks", Name: "Bootstrap playbooks",
-			Description: "Let this task read grain's own bootstrap playbooks -- the runbooks for setting up GCP service accounts, the primary GitHub connection, CloudRun-based IAP access, and test repos -- so it can walk whoever is on the other end of this chat through one of them"},
+		// No bootstrap-playbooks row: it was retired onto the config-map
+		// server's config-map {"config_maps":["bootstrap"]} (schema migration
+		// 115), which is offered with the other capability-server methods.
 		{ID: "github-sandbox", Name: "GitHub sandbox",
 			Description: "Create a private, single-use GitHub sandbox repo for this task to work in instead of /repo"},
 		{ID: "console", Name: "Interactive console",
