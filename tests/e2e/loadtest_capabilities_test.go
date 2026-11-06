@@ -60,7 +60,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
-	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -88,7 +87,7 @@ func loadHarnessRegistry(extra ...model.CapabilityProvider) *model.CapabilityReg
 	providers = append(providers,
 		selfdebug.New(),
 		bootstrap.New(), registrypush.New(),
-		consolecap.New(), readissues.New(),
+		consolecap.New(),
 		prioritydispatch.New(), durable.New())
 	for _, r := range capability.Registered() {
 		providers = append(providers, r.New())

@@ -432,14 +432,14 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
 		t.Fatal(err)
 	}
-	deployment := []string{"read-issues"}
+	deployment := []string{"bootstrap-playbooks"}
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &deployment}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"self-debug"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/gadgets", []string{"self-debug", "read-issues"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/gadgets", []string{"self-debug", "bootstrap-playbooks"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -451,12 +451,12 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	for _, status := range read.Capabilities {
 		byID[status.ID] = status
 	}
-	if got := byID["read-issues"]; !got.Default {
+	if got := byID["bootstrap-playbooks"]; !got.Default {
 		t.Errorf("gemini-key Default = false, want true: the deployment defaults it")
 	}
 	// Reported even though the deployment already defaults it: dropping
 	// the deployment-wide entry leaves acme/gadgets' own standing.
-	if got := byID["read-issues"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets"}) {
+	if got := byID["bootstrap-playbooks"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets"}) {
 		t.Errorf("gemini-key DefaultRepos = %v, want [acme/gadgets]", got)
 	}
 	if got := byID["self-debug"]; got.Default {

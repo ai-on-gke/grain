@@ -37,7 +37,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
-	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/release"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
@@ -90,10 +89,11 @@ func CapabilityProviders(cfg Config, store *model.Store, _ map[string]*modelprox
 		Host: cfg.GithubHost, InsecureHTTP: cfg.GithubInsecureHTTP,
 	}))
 	providers = append(providers, admincaps.Providers()...)
+	// read-issues is no longer a provider here: it was retired onto the
+	// in-process github server's read-issues method (schema migration 115).
 	providers = append(providers,
 		bootstrap.New(),
 		consolecap.New(),
-		readissues.New(),
 		prioritydispatch.New(),
 		durable.New(),
 	)

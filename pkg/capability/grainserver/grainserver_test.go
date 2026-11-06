@@ -240,3 +240,53 @@ func TestRepoServerNormalizesRepoAccess(t *testing.T) {
 		}
 	}
 }
+
+func TestGitHubServerNormalizesAndMintsReadIssues(t *testing.T) {
+	t.Parallel()
+
+	lookup := grainserver.Lookup(nil)
+	names, err := model.NormalizeCapabilityNames([]string{grainserver.ReadIssuesRef, grainserver.ReadIssuesGrant}, lookup)
+	if err != nil {
+		t.Fatalf("NormalizeCapabilityNames: %v", err)
+	}
+	if !slices.Equal(names, []string{grainserver.ReadIssuesGrant}) {
+		t.Fatalf("normalized = %v, want [%s]", names, grainserver.ReadIssuesGrant)
+	}
+	if _, err := model.NormalizeCapabilityNames([]string{grainserver.ReadIssuesRef + `={"repo":"acme/widgets"}`}, lookup); err == nil {
+		t.Errorf("NormalizeCapabilityNames accepted unexpected args on %s", grainserver.ReadIssuesRef)
+	}
+	if got := model.CanonicalLegacyGrant(grainserver.LegacyReadIssues); got != grainserver.ReadIssuesGrant {
+		t.Fatalf("CanonicalLegacyGrant(read-issues) = %q, want %q", got, grainserver.ReadIssuesGrant)
+	}
+	if !grainserver.IsReadIssuesGrant(grainserver.ReadIssuesGrant) ||
+		!grainserver.IsReadIssuesGrant(grainserver.ReadIssuesRef) ||
+		!grainserver.IsReadIssuesGrant(grainserver.LegacyReadIssues) {
+		t.Fatal("IsReadIssuesGrant missed canonical grant, bare ref, or legacy alias")
+	}
+	if !grainserver.HasReadIssues([]string{grainserver.ReadIssuesGrant}) || !grainserver.HasReadIssues([]string{grainserver.LegacyReadIssues}) {
+		t.Fatal("HasReadIssues missed canonical grant or legacy alias")
+	}
+	if model.IsDangerousGrant(grainserver.ReadIssuesGrant) || model.IsPersonOnlyGrant(grainserver.ReadIssuesGrant) {
+		t.Error("ReadIssuesGrant should not be dangerous or person-only")
+	}
+	if !grainserver.IsInProcessGrant(grainserver.ReadIssuesGrant) {
+		t.Error("ReadIssuesGrant is not read as an in-process grant")
+	}
+
+	grants, err := model.CapabilityGrants([]model.Grant{{Capability: grainserver.ReadIssuesGrant, Via: model.GrantByLabel}}, lookup)
+	if err != nil {
+		t.Fatalf("CapabilityGrants: %v", err)
+	}
+	pass, err := protocol.MintPass(context.Background(), grants, func(id string) (protocol.Minter, error) {
+		return lookup(id)
+	}, protocol.PassOptions{Deployment: "test", Task: "1", Attempt: 1, Deadline: time.Now().Add(time.Hour)})
+	if err != nil {
+		t.Fatalf("MintPass: %v", err)
+	}
+	pass.Release(context.Background())
+
+	st := grainserver.GitHubStatus()
+	if want := []string{grainserver.ReadIssuesMethod}; st.ID != grainserver.GitHubID || !slices.Equal(st.Methods, want) {
+		t.Fatalf("GitHubStatus() = %+v, want %s with %v", st, grainserver.GitHubID, want)
+	}
+}

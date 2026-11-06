@@ -98,8 +98,9 @@ type CapabilityInProcessServer struct {
 
 // inProcessSummaries are what core's in-process servers give a task.
 var inProcessSummaries = map[string]string{
-	grainserver.ID:     "grain's own host and database: its journal, health probes, SQL against its database and confirmed shell commands on its host.",
-	grainserver.RepoID: "Access to repositories beyond a run's own: a CI job's read or write access to another repository, or pushing any ref of a repository a task may write.",
+	grainserver.ID:       "grain's own host and database: its journal, health probes, SQL against its database and confirmed shell commands on its host.",
+	grainserver.RepoID:   "Access to repositories beyond a run's own: a CI job's read or write access to another repository, or pushing any ref of a repository a task may write.",
+	grainserver.GitHubID: "GitHub operations answered with the run's team git credential: reading issues and comments on the repositories it may reach.",
 }
 
 // inProcessServers are the in-process servers' rows, by capability_id,

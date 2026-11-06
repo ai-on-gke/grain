@@ -45,7 +45,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
-	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
@@ -208,8 +207,9 @@ func OfferedCapabilities() []Capability {
 		// repository's tasks itself (pkg/capability/grainci's package
 		// doc). Every place a capability is chosen refuses it with
 		// grainci.Refusal, by way of capabilityRefusal.
-		{ID: readissues.CapabilityName, Name: "Read issues",
-			Description: "Let this task read issues and comments from GitHub"},
+		// Not read-issues: retired onto the in-process github server's
+		// read-issues method (schema migration 115), offered with the
+		// other capability-server methods.
 	}...)
 	// No row for the model proxies: claude-proxy, openai-proxy and
 	// gemini-proxy were retired onto the in-process model-proxy server's

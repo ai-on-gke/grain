@@ -104,17 +104,17 @@ func TestHTTPClientUpdateSetCapabilityCommentCloseReopen(t *testing.T) {
 		t.Fatalf("title after update = %q, want %q", updated.Title, title)
 	}
 
-	if err := c.SetCapability(ctx, created.ID, "read-issues", true); err != nil {
+	if err := c.SetCapability(ctx, created.ID, "bootstrap-playbooks", true); err != nil {
 		t.Fatalf("SetCapability(attach): %v", err)
 	}
 	withCap, err := c.Task(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("Task: %v", err)
 	}
-	if len(withCap.Capabilities) != 1 || withCap.Capabilities[0] != "read-issues" {
+	if len(withCap.Capabilities) != 1 || withCap.Capabilities[0] != "bootstrap-playbooks" {
 		t.Fatalf("capabilities after attach = %+v, want [gemini-key]", withCap.Capabilities)
 	}
-	if err := c.SetCapability(ctx, created.ID, "read-issues", false); err != nil {
+	if err := c.SetCapability(ctx, created.ID, "bootstrap-playbooks", false); err != nil {
 		t.Fatalf("SetCapability(detach): %v", err)
 	}
 

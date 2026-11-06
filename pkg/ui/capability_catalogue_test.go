@@ -40,13 +40,13 @@ func setCatalogue(t *testing.T, ctx context.Context, store *model.Store, cat *mo
 func TestCatalogueRequiresPersonHoldsAProposal(t *testing.T) {
 	client, store, ctx := testClient(t)
 	parent, err := client.CreateTask(ctx, ui.CreateTaskRequest{
-		Title: "the whole job", Approved: true, AutoMerge: true, Capabilities: &[]string{"read-issues"},
+		Title: "the whole job", Approved: true, AutoMerge: true, Capabilities: &[]string{"bootstrap-playbooks"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	setCatalogue(t, ctx, store, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
-		"read-issues": {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
+		"bootstrap-playbooks": {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
 	}})
 	plain, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "no grant", Description: "d", ProposedBy: parent.ID, AutoMerge: true,
@@ -59,7 +59,7 @@ func TestCatalogueRequiresPersonHoldsAProposal(t *testing.T) {
 	}
 	held, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "a piece of it", Description: "d", ProposedBy: parent.ID, AutoMerge: true,
-		Capabilities: &[]string{"read-issues"},
+		Capabilities: &[]string{"bootstrap-playbooks"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestCatalogueRequiresPersonHoldsAProposal(t *testing.T) {
 	// by asking to be.
 	agentCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: parent.ID})
 	direct, err := client.CreateTask(agentCtx, ui.CreateTaskRequest{
-		Title: "direct", Approved: true, Capabilities: &[]string{"read-issues"},
+		Title: "direct", Approved: true, Capabilities: &[]string{"bootstrap-playbooks"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -93,17 +93,17 @@ func TestCatalogueRequiresPersonRefusesAnAgentsApproval(t *testing.T) {
 	client, store, ctx := testClient(t)
 	parent, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "the whole job", Approved: true,
-		Capabilities: &[]string{"read-issues", "api:tasks:admin"},
+		Capabilities: &[]string{"bootstrap-playbooks", "api:tasks:admin"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	setCatalogue(t, ctx, store, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
-		"read-issues": {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
+		"bootstrap-playbooks": {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
 	}})
 	agentCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: parent.ID})
 	held, err := client.CreateTask(agentCtx, ui.CreateTaskRequest{
-		Title: "direct", Approved: true, Capabilities: &[]string{"read-issues"},
+		Title: "direct", Approved: true, Capabilities: &[]string{"bootstrap-playbooks"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +118,7 @@ func TestCatalogueRequiresPersonRefusesAnAgentsApproval(t *testing.T) {
 		err := approve(agentCtx, held.ID)
 		var ferr *ui.ForbiddenError
 		if !errors.As(err, &ferr) || !strings.Contains(err.Error(), "requires_person") ||
-			!strings.Contains(err.Error(), "read-issues") {
+			!strings.Contains(err.Error(), "bootstrap-playbooks") {
 			t.Errorf("agent %s = %v, want a 403 naming gemini-key and requires_person", name, err)
 		}
 		if state, err := store.State(ctx, held.ID); err != nil || state != model.StateProposed {
@@ -144,26 +144,26 @@ func TestCatalogueRefusesFilingAndEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 	setCatalogue(t, ctx, store, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
-		"read-issues": {Restrictions: &model.CapabilityRestrictions{CIOnly: true}},
+		"bootstrap-playbooks": {Restrictions: &model.CapabilityRestrictions{CIOnly: true}},
 	}})
-	_, err = client.CreateTask(ctx, ui.CreateTaskRequest{Title: "t", Capabilities: &[]string{"read-issues"}})
+	_, err = client.CreateTask(ctx, ui.CreateTaskRequest{Title: "t", Capabilities: &[]string{"bootstrap-playbooks"}})
 	var verr *ui.ValidationError
 	if !errors.As(err, &verr) || !strings.Contains(err.Error(), "CI-only") {
 		t.Fatalf("CreateTask = %v, want a validation error saying CI-only", err)
 	}
-	if err := client.SetCapability(ctx, task.ID, "read-issues", true); !errors.As(err, &verr) {
+	if err := client.SetCapability(ctx, task.ID, "bootstrap-playbooks", true); !errors.As(err, &verr) {
 		t.Fatalf("SetCapability = %v, want a validation error", err)
 	}
 
 	setCatalogue(t, ctx, store, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
-		"read-issues": {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
+		"bootstrap-playbooks": {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
 	}})
 	agentCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: task.ID})
-	err = client.SetCapability(agentCtx, task.ID, "read-issues", true)
+	err = client.SetCapability(agentCtx, task.ID, "bootstrap-playbooks", true)
 	if err == nil || !strings.Contains(err.Error(), "requires human approval") {
 		t.Fatalf("agent SetCapability = %v, want a refusal", err)
 	}
-	if err := client.SetCapability(ctx, task.ID, "read-issues", true); err != nil {
+	if err := client.SetCapability(ctx, task.ID, "bootstrap-playbooks", true); err != nil {
 		t.Fatalf("a person attaching it: %v", err)
 	}
 }
@@ -174,7 +174,7 @@ func TestCatalogueRefusesFilingAndEdit(t *testing.T) {
 func TestSetCapabilityPolicyKeepsTheCatalogue(t *testing.T) {
 	client, store, ctx := testClient(t)
 	setCatalogue(t, ctx, store, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
-		"read-issues": {Restrictions: &model.CapabilityRestrictions{CIOnly: true}},
+		"bootstrap-playbooks": {Restrictions: &model.CapabilityRestrictions{CIOnly: true}},
 	}})
 	if err := client.SetCapabilityPolicy(ctx, model.CapabilityPolicy{}); err != nil {
 		t.Fatal(err)
@@ -183,10 +183,10 @@ func TestSetCapabilityPolicyKeepsTheCatalogue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Catalogue == nil || got.Catalogue.InProcess["read-issues"].Restrictions == nil {
+	if got.Catalogue == nil || got.Catalogue.InProcess["bootstrap-playbooks"].Restrictions == nil {
 		t.Fatalf("catalogue after saving the rules = %+v, want it kept", got.Catalogue)
 	}
-	if _, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "t", Capabilities: &[]string{"read-issues"}}); err == nil {
+	if _, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "t", Capabilities: &[]string{"bootstrap-playbooks"}}); err == nil {
 		t.Fatal("CreateTask with a CI-only grant succeeded after saving the rules; want the catalogue still refusing it")
 	}
 }

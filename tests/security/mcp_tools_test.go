@@ -33,7 +33,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
-	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/mcp"
@@ -143,7 +142,7 @@ var toolGrants = []string{
 	"https://grain.dev/capabilities/grain#health",
 	bootstrap.CapabilityName,
 	grainci.Grant,
-	readissues.CapabilityName,
+	"https://grain.dev/capabilities/github#read-issues",
 	`https://grain.dev/capabilities/grain#sql={"write":false}`,
 	`https://grain.dev/capabilities/grain#sql={"write":true}`,
 }

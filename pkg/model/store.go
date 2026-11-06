@@ -5145,6 +5145,9 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		case "db-read", "db-write":
 			mayReadDB = true
 		}
+		if IsGitHubReadIssuesGrant(name) {
+			mayReadIssues = true
+		}
 		if IsGrainSQLGrant(name) {
 			mayReadDB = true
 		}

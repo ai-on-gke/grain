@@ -751,19 +751,19 @@ func TestCreateTaskCarriesCapabilityGrants(t *testing.T) {
 	c, store, ctx := testClient(t)
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{
-		Title: "needs a key", Approved: true, Capabilities: &[]string{"read-issues"},
+		Title: "needs a key", Approved: true, Capabilities: &[]string{"bootstrap-playbooks"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(task.Capabilities) != 1 || task.Capabilities[0] != "read-issues" {
+	if len(task.Capabilities) != 1 || task.Capabilities[0] != "bootstrap-playbooks" {
 		t.Fatalf("capabilities = %v, want [gemini-key]", task.Capabilities)
 	}
 	stored, err := store.GetTask(ctx, task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stored.Grants) != 1 || stored.Grants[0].Capability != "read-issues" {
+	if len(stored.Grants) != 1 || stored.Grants[0].Capability != "bootstrap-playbooks" {
 		t.Fatalf("grants = %+v, want one gemini-key grant", stored.Grants)
 	}
 }
@@ -776,7 +776,7 @@ func TestCreateTaskProposalAcceptsGrainCICapability(t *testing.T) {
 	proposal, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title:        "proposed subtask",
 		ProposedBy:   parent.ID,
-		Capabilities: &[]string{"grain-ci", "read-issues"},
+		Capabilities: &[]string{"grain-ci", "bootstrap-playbooks"},
 	})
 	if err != nil {
 		t.Fatalf("CreateTask proposal: %v", err)
@@ -787,7 +787,7 @@ func TestCreateTaskProposalAcceptsGrainCICapability(t *testing.T) {
 	}
 	hasGemini := false
 	for _, g := range stored.Grants {
-		if g.Capability == "read-issues" {
+		if g.Capability == "bootstrap-playbooks" {
 			hasGemini = true
 		}
 	}
@@ -863,12 +863,12 @@ func TestCreateTaskCapabilitiesOverrideDeploymentDefaults(t *testing.T) {
 	putDefaultCapabilities(t, ctx, store, "gcp-key")
 
 	named, err := c.CreateTask(ctx, ui.CreateTaskRequest{
-		Title: "only this one", Approved: true, Capabilities: &[]string{"read-issues"},
+		Title: "only this one", Approved: true, Capabilities: &[]string{"bootstrap-playbooks"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(named.Capabilities, []string{"read-issues"}) {
+	if !reflect.DeepEqual(named.Capabilities, []string{"bootstrap-playbooks"}) {
 		t.Errorf("capabilities = %v, want [gemini-key] alone", named.Capabilities)
 	}
 	stored, err := store.GetTask(ctx, named.ID)
@@ -899,13 +899,13 @@ func TestCreateTaskCapabilitiesOverrideDeploymentDefaults(t *testing.T) {
 func TestCreateTaskSkipsRetiredDefaultCapability(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
-	putDefaultCapabilities(t, ctx, store, "scratch-repo", "read-issues")
+	putDefaultCapabilities(t, ctx, store, "scratch-repo", "bootstrap-playbooks")
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "still filable", Approved: true})
 	if err != nil {
 		t.Fatalf("filing a task on a deployment defaulting a retired capability: %v", err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{"read-issues"}) {
+	if !reflect.DeepEqual(task.Capabilities, []string{"bootstrap-playbooks"}) {
 		t.Fatalf("capabilities = %v, want [gemini-key]: the retired id is skipped, the rest still granted",
 			task.Capabilities)
 	}
@@ -932,7 +932,7 @@ func putRepoDefaultCapabilities(t *testing.T, ctx context.Context, store *model.
 func TestCreateTaskUnionsRepoDefaultCapabilities(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
-	putDefaultCapabilities(t, ctx, store, "read-issues")
+	putDefaultCapabilities(t, ctx, store, "bootstrap-playbooks")
 	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "gcp-key")
 
 	here, err := c.CreateTask(ctx, ui.CreateTaskRequest{
@@ -944,8 +944,8 @@ func TestCreateTaskUnionsRepoDefaultCapabilities(t *testing.T) {
 	// Compared sorted: a task's capabilities come back in the order
 	// Store.grantsOf reads them (by capability), not in the order they
 	// were seeded.
-	if !reflect.DeepEqual(here.Capabilities, []string{model.GCPKeySandboxAgentGrant, "read-issues"}) {
-		t.Errorf("capabilities = %v, want both the deployment's read-issues and the repo's %s",
+	if !reflect.DeepEqual(here.Capabilities, []string{"bootstrap-playbooks", model.GCPKeySandboxAgentGrant}) {
+		t.Errorf("capabilities = %v, want both the deployment's bootstrap-playbooks and the repo's %s",
 			here.Capabilities, model.GCPKeySandboxAgentGrant)
 	}
 	stored, err := store.GetTask(ctx, here.ID)
@@ -966,7 +966,7 @@ func TestCreateTaskUnionsRepoDefaultCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(elsewhere.Capabilities, []string{"read-issues"}) {
+	if !reflect.DeepEqual(elsewhere.Capabilities, []string{"bootstrap-playbooks"}) {
 		t.Errorf("capabilities = %v, want [gemini-key] alone on a repo with no defaults of its own",
 			elsewhere.Capabilities)
 	}
@@ -996,7 +996,7 @@ func TestCreateTaskUsesDefaultTargetRepoDefaultCapabilities(t *testing.T) {
 func TestCreateTaskWithNoRepoTakesOnlyDeploymentDefaultCapabilities(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
-	putDefaultCapabilities(t, ctx, store, "read-issues")
+	putDefaultCapabilities(t, ctx, store, "bootstrap-playbooks")
 	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "gcp-key")
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{
@@ -1005,7 +1005,7 @@ func TestCreateTaskWithNoRepoTakesOnlyDeploymentDefaultCapabilities(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{"read-issues"}) {
+	if !reflect.DeepEqual(task.Capabilities, []string{"bootstrap-playbooks"}) {
 		t.Fatalf("capabilities = %v, want [gemini-key] alone", task.Capabilities)
 	}
 }
@@ -1016,13 +1016,13 @@ func TestCreateTaskWithNoRepoTakesOnlyDeploymentDefaultCapabilities(t *testing.T
 func TestCreateTaskSkipsRetiredRepoDefaultCapability(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
-	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "scratch-repo", "read-issues")
+	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "scratch-repo", "bootstrap-playbooks")
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "still filable", Approved: true})
 	if err != nil {
 		t.Fatalf("filing a task against a repo defaulting a retired capability: %v", err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{"read-issues"}) {
+	if !reflect.DeepEqual(task.Capabilities, []string{"bootstrap-playbooks"}) {
 		t.Fatalf("capabilities = %v, want [gemini-key]", task.Capabilities)
 	}
 }
@@ -1142,12 +1142,12 @@ func TestCreateTaskCapabilitiesOverrideRepoDefaults(t *testing.T) {
 	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "gcp-key")
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{
-		Title: "not that one", Approved: true, Capabilities: &[]string{"read-issues"},
+		Title: "not that one", Approved: true, Capabilities: &[]string{"bootstrap-playbooks"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{"read-issues"}) {
+	if !reflect.DeepEqual(task.Capabilities, []string{"bootstrap-playbooks"}) {
 		t.Fatalf("capabilities = %v, want [gemini-key] alone", task.Capabilities)
 	}
 }
@@ -2116,7 +2116,7 @@ func TestSetCapabilityAttachesAndDetaches(t *testing.T) {
 	c, _, ctx := testClient(t)
 	task := create(t, c, ctx)
 
-	if err := c.SetCapability(ctx, task.ID, "read-issues", true); err != nil {
+	if err := c.SetCapability(ctx, task.ID, "bootstrap-playbooks", true); err != nil {
 		t.Fatal(err)
 	}
 	got, err := c.Task(ctx, task.ID)
@@ -2128,14 +2128,14 @@ func TestSetCapabilityAttachesAndDetaches(t *testing.T) {
 	}
 
 	// Attaching twice must not produce two grants.
-	if err := c.SetCapability(ctx, task.ID, "read-issues", true); err != nil {
+	if err := c.SetCapability(ctx, task.ID, "bootstrap-playbooks", true); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ = c.Task(ctx, task.ID); len(got.Capabilities) != 1 {
 		t.Fatalf("capabilities after a second attach = %v, want still one", got.Capabilities)
 	}
 
-	if err := c.SetCapability(ctx, task.ID, "read-issues", false); err != nil {
+	if err := c.SetCapability(ctx, task.ID, "bootstrap-playbooks", false); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ = c.Task(ctx, task.ID); len(got.Capabilities) != 0 {
@@ -2143,7 +2143,7 @@ func TestSetCapabilityAttachesAndDetaches(t *testing.T) {
 	}
 	// Detaching one that is not attached is a no-op, matching what
 	// removing an absent label used to do.
-	if err := c.SetCapability(ctx, task.ID, "read-issues", false); err != nil {
+	if err := c.SetCapability(ctx, task.ID, "bootstrap-playbooks", false); err != nil {
 		t.Fatalf("detaching an absent capability: %v", err)
 	}
 }

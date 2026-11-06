@@ -108,6 +108,10 @@ export const RETIRED_IN_PROCESS = {
     grant: "https://grain.dev/capabilities/gcp#gemini-key={}",
     moveTo: "servers (https://grain.dev/capabilities/gcp#gemini-key)",
   },
+  "read-issues": {
+    grant: "https://grain.dev/capabilities/github#read-issues={}",
+    moveTo: "servers (https://grain.dev/capabilities/github#read-issues)",
+  },
 };
 
 export function describeRestrictions(r) {

@@ -800,6 +800,27 @@ var Migrations = []Migration{
 			"CREATE INDEX IF NOT EXISTS `ci_run_repo_ref` ON `ci_run` (`repo`, `ref`, `started_at`)",
 		},
 	},
+	{
+		Version:     115,
+		Description: "rewrite stored read-issues grants, repo_config.ci_capabilities and capability_policy included, to https://grain.dev/capabilities/github#read-issues={} (the in-process capability is retired)",
+		Up:          migrateReadIssuesGrants,
+	},
+}
+
+// migrateReadIssuesGrants is schema migration 115's Up: rewrites stored
+// read-issues grants across the three grant tables, deployment and repository
+// default_capabilities, repo_config.ci_capabilities, standing console_sessions
+// and capability_policy rules/catalogue defaults to
+// https://grain.dev/capabilities/github#read-issues={}.
+func migrateReadIssuesGrants(ctx context.Context, tx *sql.Tx) error {
+	renames := map[string][]string{"read-issues": {GitHubReadIssuesGrant}}
+	if err := rewriteLegacyGrantsMulti(renames)(ctx, tx); err != nil {
+		return err
+	}
+	if err := rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", renames); err != nil {
+		return err
+	}
+	return rewritePolicyRenames(ctx, tx, renames, GitHubReadIssuesRef)
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as

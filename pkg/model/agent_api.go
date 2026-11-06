@@ -250,6 +250,17 @@ const (
 	ModelProxyCapabilityServerID = "https://grain.dev/capabilities/model-proxy"
 	ModelProxyMethod             = "model-proxy"
 	ModelProxyRef                = ModelProxyCapabilityServerID + "#" + ModelProxyMethod
+
+	// GitHubCapabilityServerID is the canonical capability_id of the
+	// in-process github server (design/design/unified-grants.design.md §1, §4),
+	// answered by grain itself with the run's team git credential.
+	GitHubCapabilityServerID = "https://grain.dev/capabilities/github"
+
+	// GitHubReadIssuesMethod lets a task read GitHub issues and comments on
+	// the repositories its run may reach (formerly read-issues).
+	GitHubReadIssuesMethod = "read-issues"
+	GitHubReadIssuesRef    = GitHubCapabilityServerID + "#" + GitHubReadIssuesMethod
+	GitHubReadIssuesGrant  = GitHubReadIssuesRef + "={}"
 )
 
 // ModelProxyVendors are the vendors the model-proxy server proxies, in
@@ -425,6 +436,22 @@ func HasGrainCI(grants []string) bool {
 	return slices.ContainsFunc(grants, IsGrainCIGrant)
 }
 
+// IsGitHubReadIssuesGrant reports whether grant names github#read-issues
+// (recorded or bare) or the retired bare read-issues alias.
+func IsGitHubReadIssuesGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if s == "read-issues" {
+		return true
+	}
+	return CapabilityGrantRef(s) == GitHubReadIssuesRef
+}
+
+// HasGitHubReadIssues reports whether any grant in grants opens
+// github#read-issues.
+func HasGitHubReadIssues(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGitHubReadIssuesGrant)
+}
+
 // ParseGrainSQLGrant reports whether grant names grain#sql (recorded or bare)
 // or the retired bare db-read / db-write aliases, and whether it allows writes.
 func ParseGrainSQLGrant(grant string) (ok bool, write bool) {
@@ -505,6 +532,9 @@ var legacyGrantReplacements = map[string]string{
 	// Retired by schema migration 103 onto the gcp server's gemini-key,
 	// which mints with the same gcp-key-minter secret.
 	"gemini-key": GCPGeminiKeyGrant,
+	// Retired by schema migration 115 onto the in-process github server's
+	// read-issues method, which reads with the same team git credential.
+	"read-issues": GitHubReadIssuesGrant,
 }
 
 // legacyGrantMultiReplacements maps retired bare capabilities that split into

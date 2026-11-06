@@ -126,8 +126,8 @@ var capabilityForTool = map[string]string{
 	"read_deployment_health":     "https://grain.dev/capabilities/grain#health",
 	"read_deployment_state":      "https://grain.dev/capabilities/grain#health",
 	"run_host_command":           "https://grain.dev/capabilities/grain#host-exec",
-	"list_issues":                "read-issues",
-	"read_issue":                 "read-issues",
+	"list_issues":                "https://grain.dev/capabilities/github#read-issues",
+	"read_issue":                 "https://grain.dev/capabilities/github#read-issues",
 	"query_grain_db":             "https://grain.dev/capabilities/grain#sql",
 	"execute_grain_db":           `https://grain.dev/capabilities/grain#sql={"write":true}`,
 }
