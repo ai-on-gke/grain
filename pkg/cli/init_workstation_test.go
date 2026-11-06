@@ -159,8 +159,15 @@ func TestTheStarterPolicyFailsClosed(t *testing.T) {
 	if err := p.Check(directorChat, model.NetworkNone); err != nil {
 		t.Errorf("the Director chat's own grants were refused: %v", err)
 	}
-	// Its open network is not: the owner chose none, and init says so.
-	directorChat.NetworkAccess = session.NetworkAccess
+	// It asks for none, which a granule sandbox honours and a none
+	// policy allows.
+	directorChat.NetworkAccess = model.ConsoleSessionNetworkAccess(session, true)
+	if err := p.Check(directorChat, model.NetworkNone); err != nil {
+		t.Errorf("the Director's none network on an isolating sandbox under a none policy was refused: %v", err)
+	}
+	// On a backend that cannot isolate it is filed open, which a none
+	// policy refuses: the owner chose none, and init says so.
+	directorChat.NetworkAccess = model.ConsoleSessionNetworkAccess(session, false)
 	if err := p.Check(directorChat, model.NetworkNone); err == nil || !strings.Contains(err.Error(), "network") {
 		t.Errorf("the Director's open network under a none policy = %v, want a network refusal", err)
 	}
@@ -170,8 +177,13 @@ func TestTheStarterPolicyFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := open.Check(directorChat, model.NetworkOpen); err != nil {
-		t.Errorf("the Director chat was held on a fresh workstation: %v", err)
+	// An open policy holds the Director on no backend: open where the
+	// backend cannot isolate, none on granule.
+	for _, isolates := range []bool{false, true} {
+		directorChat.NetworkAccess = model.ConsoleSessionNetworkAccess(session, isolates)
+		if err := open.Check(directorChat, model.NetworkOpen); err != nil {
+			t.Errorf("the Director chat (network %q) was held on a fresh workstation: %v", directorChat.NetworkAccess, err)
+		}
 	}
 	// Named exactly: a capability the Director is not granted stays
 	// refused, even one in a family it holds a grant of.
@@ -214,6 +226,26 @@ func TestTheStarterPolicyFailsClosed(t *testing.T) {
 	}
 	if err := withCaps.Check(model.Task{Target: widgets, Creator: "me", Grants: []model.Grant{{Capability: grainci.Grant}}}, ""); err != nil {
 		t.Errorf("naming a capability took grain-ci away: %v", err)
+	}
+}
+
+// A granule sandbox can give the Director the none it asks for, so a
+// none policy does not hold it there and init does not say it does.
+func TestInitWorkstationOnGranuleDoesNotWarnTheDirectorIsHeld(t *testing.T) {
+	pinDefaultGitHost(t)
+	home := t.TempDir()
+	env, _ := fakeWorkstation(home, []string{"docker", "granule", "codex", "systemctl"}, true, true)
+	var out bytes.Buffer
+	err := runInitWorkstation(context.Background(), []string{"-non-interactive", "-repo", "acme/widgets",
+		"-owner", "me@example.com", "-network", "none", "-start-service=false"}, strings.NewReader(""), &out, env)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "granule") {
+		t.Fatalf("init did not pick granule:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), directorNetworkWarning) {
+		t.Errorf("init on granule with -network none said the Director is held for its network:\n%s", out.String())
 	}
 }
 

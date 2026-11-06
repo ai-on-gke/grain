@@ -98,8 +98,8 @@ func TestTheDirectorIsFiledOnTheFirstCycleAndParkedOnItsOwnOpening(t *testing.T)
 	if len(director.Reads) != 1 || director.Reads[0].Name != "grain-home" {
 		t.Errorf("Reads = %v, want the state repository", director.Reads)
 	}
-	if director.NetworkAccess != model.NetworkOpen {
-		t.Errorf("NetworkAccess = %q, want open by default", director.NetworkAccess)
+	if director.NetworkAccess != model.NetworkNone {
+		t.Errorf("NetworkAccess = %q, want none by default on a deployment whose sandboxes isolate (director-capabilities.spec.md §3.1.6)", director.NetworkAccess)
 	}
 	var grants []string
 	for _, g := range director.Grants {
