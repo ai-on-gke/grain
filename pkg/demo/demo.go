@@ -23,6 +23,7 @@ package demo
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"log"
 	"maps"
@@ -2122,6 +2123,26 @@ func seedDemoHostds(ctx context.Context, store *model.Store) error {
 	}
 	if _, err := store.RevokeHostd(ctx, "old-laptop"); err != nil {
 		return fmt.Errorf("seeding a revoked hostd: %w", err)
+	}
+	defCode, err := store.EnsureDefaultHostEnrollmentCode(ctx, "operator")
+	if err != nil {
+		return fmt.Errorf("seeding default host enrollment code: %w", err)
+	}
+	if pub, _, err := ed25519.GenerateKey(nil); err == nil && defCode != nil && defCode.SecretCode != "" {
+		encPub := hostd.PublicKeyString(pub)
+		_, _ = store.CreateHostJoinRequest(ctx, model.HostJoinRequest{
+			PublicKey:       encPub,
+			KeyFingerprint:  hostd.KeyFingerprint(pub),
+			Hostname:        "devbox-carol.example.com",
+			OS:              "linux",
+			Arch:            "amd64",
+			CLIs:            []string{"claude", "codex"},
+			Version:         "v2.4.0",
+			LocalUser:       "carol",
+			EnrolledBy:      "carol@example.com",
+			DefaultLabels:   map[string]string{"os": "linux", "pool": "workstation"},
+			DefaultCapacity: 4,
+		}, defCode.SecretCode, time.Now().UTC())
 	}
 	return nil
 }

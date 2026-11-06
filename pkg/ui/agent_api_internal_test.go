@@ -774,7 +774,8 @@ var capabilitiesAdminBodies = map[string]struct {
 	// A hostd's registry row grants a task nothing: which hostd a run
 	// goes to is the task's own pin or selector, not this.
 	"CreateHostdRequest": {reflect.TypeFor[CreateHostdRequest](), nil, []string{"name", "owner", "labels"}},
-	"UpdateHostdRequest": {reflect.TypeFor[UpdateHostdRequest](), nil, []string{"owner", "labels"}},
+	"UpdateHostdRequest": {reflect.TypeFor[UpdateHostdRequest](), nil, []string{"owner", "labels", "capacity"}},
+	"RenameHostdRequest": {reflect.TypeFor[RenameHostdRequest](), nil, []string{"name"}},
 }
 
 // capabilitiesAdminBodylessRoutes are capabilities:admin routes that act by URL
@@ -786,6 +787,7 @@ var capabilitiesAdminBodylessRoutes = map[string]bool{
 	"POST /api/external-agents/tokens/revoke-all":  true,
 	"POST /api/hostds/{name}/rotate":               true,
 	"POST /api/hostds/{name}/revoke":               true,
+	"DELETE /api/hostds/{name}":                    true,
 }
 
 // TestCapabilitiesAdminGrantKeysAreScanned holds agentGrantEscalation to

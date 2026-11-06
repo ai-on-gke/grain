@@ -56,7 +56,7 @@ for (const [name, viewport] of [
 
     const card = await page.locator("#add-hostd").boundingBox();
     const add = await page
-      .getByRole("button", { name: "Add hostd" })
+      .getByRole("button", { name: "Add host" })
       .boundingBox();
     expect(add.x).toBeGreaterThanOrEqual(card.x - 1);
     expect(add.x + add.width).toBeLessThanOrEqual(card.x + card.width + 1);

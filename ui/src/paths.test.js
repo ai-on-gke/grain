@@ -563,8 +563,12 @@ describe("parsePath", () => {
       view: "settings",
       settingsSection: "credentials",
     });
-    // The retired Settings -> Executors lands on what replaced it.
+    // The retired Settings -> Executors and /settings/hosts land on Hosts.
     expect(parsePath("/settings/executors")).toEqual({
+      view: "settings",
+      settingsSection: "hostds",
+    });
+    expect(parsePath("/settings/hosts")).toEqual({
       view: "settings",
       settingsSection: "hostds",
     });

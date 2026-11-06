@@ -19,6 +19,7 @@ import HostdsSection, {
   connectionText,
   installCommand,
   installLines,
+  inviteLines,
   parseLabels,
 } from "./HostdsSection.jsx";
 import api from "../../api.js";
@@ -124,7 +125,7 @@ describe("HostdsSection", () => {
       { ...WS, name: "ws-3", connection: null },
     ]);
     await userEvent.type(screen.getByLabelText("Name"), "ws-3");
-    await userEvent.click(screen.getByText("Add hostd"));
+    await userEvent.click(screen.getByText("Add host"));
     const issued = await screen.findByTestId("hostd-issued-token");
     expect(issued).toHaveTextContent("ghd_secret");
     // The lines are one block, in order, with nothing of the root
@@ -185,7 +186,7 @@ describe("HostdsSection", () => {
     ]);
     await userEvent.type(screen.getByLabelText("Name"), "ws-2");
     await userEvent.type(screen.getByLabelText("Labels"), "gpu=yes");
-    await userEvent.click(screen.getByText("Add hostd"));
+    await userEvent.click(screen.getByText("Add host"));
     expect(await screen.findByTestId("hostd-issued-token")).toHaveTextContent(
       "ghd_secret",
     );
@@ -199,6 +200,105 @@ describe("HostdsSection", () => {
       method: "POST",
       body: JSON.stringify({ name: "ws-2", owner: "", labels: { gpu: "yes" } }),
     });
+  });
+
+  it("renders shared --join snippet, pairing code handshake, accept, rename, and delete", async () => {
+    const codeView = {
+      name: "default",
+      code: "ghe_11223344556677889900aabbccddeeff0011223344556677",
+      uses: 1,
+      default_capacity: 4,
+      default_labels: { pool: "eng" },
+    };
+    const pendingReq = {
+      id: "hjr_123",
+      enrollment_code: "default",
+      hostname: "devbox.corp",
+      suggested_name: "devbox",
+      os: "linux",
+      arch: "amd64",
+      clis: ["claude", "codex"],
+      version: "v2.4.0",
+      local_user: "alice",
+      key_fingerprint: "SHA256:abcdef0123456789abcdef0123456789",
+      enrolled_by: "alice@example.com",
+      default_labels: { pool: "eng" },
+      default_capacity: 4,
+      pairing_code: "7K9M-2P4Q",
+    };
+    api.mockImplementation(async (path, opts) => {
+      if (path === "/api/hostds" && !opts) {
+        return [
+          LOCAL,
+          {
+            name: "devbox",
+            owner: "alice@example.com",
+            capacity: 4,
+            labels: { pool: "eng" },
+            key_fingerprint: "SHA256:abcdef0123456789abcdef0123456789",
+            enrollment_code: "default",
+            connection: null,
+          },
+        ];
+      }
+      if (path === "/api/hostds/enrollment-codes" && !opts) return [codeView];
+      if (path === "/api/hostds/pending" && !opts) return [pendingReq];
+      return {};
+    });
+
+    render(<HostdsSection showError={vi.fn()} />);
+    const snippet = await screen.findByTestId("invite-hosts-snippet");
+    expect(snippet).toHaveTextContent(
+      `/hostd/install | sh -s -- --join ${codeView.code}`,
+    );
+    const pairing = screen.getByTestId("pending-pairing-code-hjr_123");
+    expect(pairing).toHaveTextContent("7K9M-2P4Q");
+
+    await userEvent.clear(screen.getByLabelText("Host name"));
+    await userEvent.type(screen.getByLabelText("Host name"), "alice-box");
+    await userEvent.click(screen.getByRole("button", { name: "Accept" }));
+    expect(api).toHaveBeenCalledWith("/api/hostds/pending/hjr_123/accept", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "alice-box",
+        labels: { pool: "eng" },
+        capacity: 4,
+      }),
+    });
+
+    const row = await screen.findByTestId("hostd-row-devbox");
+    expect(within(row).getByText("cap=4")).toBeInTheDocument();
+    expect(within(row).getByText("via default")).toBeInTheDocument();
+
+    await userEvent.click(within(row).getByRole("button", { name: "Rename" }));
+    const renameInput = within(row).getByLabelText("New host name");
+    await userEvent.clear(renameInput);
+    await userEvent.type(renameInput, "devbox-2");
+    await userEvent.click(within(row).getByRole("button", { name: "Save" }));
+    expect(api).toHaveBeenCalledWith("/api/hostds/devbox/rename", {
+      method: "POST",
+      body: JSON.stringify({ name: "devbox-2" }),
+    });
+
+    await userEvent.click(within(row).getByRole("button", { name: "Delete" }));
+    expect(api).toHaveBeenCalledWith("/api/hostds/devbox", {
+      method: "DELETE",
+    });
+  });
+
+  it("hides enrollment codes cleanly when caller is not deployment owner", async () => {
+    const showError = vi.fn();
+    api.mockImplementation(async (path) => {
+      if (path === "/api/hostds") return [LOCAL];
+      const err = new Error("only the deployment owner may view codes");
+      err.status = 403;
+      throw err;
+    });
+    render(<HostdsSection showError={showError} />);
+    expect(
+      await screen.findByTestId("invite-hosts-owner-only"),
+    ).toHaveTextContent("deployment owner");
+    expect(showError).not.toHaveBeenCalled();
   });
 });
 
