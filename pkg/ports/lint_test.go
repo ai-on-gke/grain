@@ -61,8 +61,8 @@ var allowlist = []allowed{
 	{8080, "cmd/github-webhook/", "github-webhook is a separate gateway service whose deployment (deploy/kubernetes/github-webhook.yaml) publishes :8080"},
 	{8080, "pkg/cli/ghwebhook_flags.go", "-github-webhook-url's example names the github-webhook gateway service's :8080"},
 	{8080, "pkg/registry/", "grain-registry is a separate service whose front listener defaults to :8080 (design/design/registry.design.md)"},
-	{8081, "pkg/registry/", "grain-registry is a separate service whose VPC-internal heartbeat listener defaults to :8081 (design/design/registry.design.md)"},
-	{8082, "pkg/registry/", "grain-registry is a separate service whose public JWKS listener defaults to :8082 (design/design/registry.design.md)"},
+	{8081, "pkg/registry/", "grain-registry is a separate service whose public JWKS listener (jwks_listen) defaults to :8081 (design/design/registry.design.md)"},
+	{8082, "pkg/registry/", "grain-registry is a separate service whose VPC-internal peer-forward address (tunnel.peer_listen) defaults to :8082 (design/design/registry.design.md)"},
 }
 
 // skipDirs are never linted wherever they are: other people's code and

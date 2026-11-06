@@ -413,11 +413,17 @@ type CachingSigner struct {
 	entries map[signerCacheKey]cachedAssertion
 }
 
+// signerCacheKey holds every claim a caller chooses, so a cached assertion
+// is only ever reused for a request asking for exactly the same claims.
+// Only the time claims (iat/nbf/exp) and jti, which the signer fills in,
+// are left out; RequestID/JWTID bypass the cache altogether.
 type signerCacheKey struct {
+	issuer   string
 	email    string
 	sub      string
 	audience string
 	kind     string
+	hasActor bool
 	actorSub string
 }
 
@@ -472,6 +478,8 @@ func (c *CachingSigner) SignAssertion(ctx context.Context, claims RegistryClaims
 		actorSub = claims.Actor.Sub
 	}
 	key := signerCacheKey{
+		issuer:   claims.Issuer,
+		hasActor: claims.Actor != nil,
 		email:    strings.ToLower(strings.TrimSpace(claims.Email)),
 		sub:      claims.Subject,
 		audience: claims.Audience,

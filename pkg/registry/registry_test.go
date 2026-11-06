@@ -564,6 +564,28 @@ func TestCachingSignerClampsShortJWTTTLAndBypassesRequestID(t *testing.T) {
 	if t1 == t2 {
 		t.Fatalf("SignAssertion returned cached token for distinct RequestIDs")
 	}
+
+	// A cached assertion is only reused for exactly the same claims: an
+	// empty delegation actor is not the same token as no actor at all.
+	base := RegistryClaims{
+		Audience: "grain-instance:dev",
+		Subject:  "sub-alice",
+		Email:    "alice@example.com",
+		Kind:     "human",
+	}
+	plain, err := signer.SignAssertion(ctx, base)
+	if err != nil {
+		t.Fatalf("SignAssertion plain: %v", err)
+	}
+	withActor := base
+	withActor.Actor = &DelegationActor{}
+	acted, err := signer.SignAssertion(ctx, withActor)
+	if err != nil {
+		t.Fatalf("SignAssertion with actor: %v", err)
+	}
+	if plain == acted {
+		t.Fatalf("SignAssertion returned the actor-less cached token for claims carrying an act claim")
+	}
 }
 
 func TestWSMuxSessionRoundTripClosesStreams(t *testing.T) {
