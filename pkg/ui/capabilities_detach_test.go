@@ -321,3 +321,58 @@ func TestCapabilitiesDetachListsItsRoutesAsTools(t *testing.T) {
 		t.Errorf("api:capabilities:detach lists %d tools, want exactly the %d detach routes: %v", len(got), len(want), got)
 	}
 }
+
+// TestCapabilitiesDetachOverTheControllerMCPServer pins the scope over the
+// path the director's MCP tools take for an external credential: the
+// generated tool is listed and detaches, and the same tool is still held
+// to detach-only bodies and refused on a standing session.
+func TestCapabilitiesDetachOverTheControllerMCPServer(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	enableExternalAgentAPI(t, client.Store)
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	seedAPITask(t, client, "2", "acme/widgets", "self-debug", model.GrainCIGrant)
+	seedSessionTask(t, client, "8", "ops", "self-debug")
+
+	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:   "detacher",
+		Scopes: []string{"capabilities:detach"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := ""
+	for _, rt := range ui.AgentAPIRoutes() {
+		if rt.Pattern == "POST /api/tasks/{id}/capabilities" {
+			tool = rt.Tool
+		}
+	}
+	if tool == "" {
+		t.Fatal("no generated tool for POST /api/tasks/{id}/capabilities")
+	}
+
+	call := func(id string, body map[string]any) (bool, string) {
+		t.Helper()
+		rec, res := callMCPTool(t, srv, issued.Token, tool, map[string]any{"id": id, "body": body, "reason": "stale grant"})
+		if rec.Code != http.StatusOK || len(res.Content) == 0 {
+			t.Fatalf("calling %s over MCP: %d %s", tool, rec.Code, rec.Body.String())
+		}
+		text := ""
+		if len(res.Content) > 0 {
+			text = res.Content[0].Text
+		}
+		return res.IsError, text
+	}
+	if isErr, text := call("2", map[string]any{"grant": "self-debug", "attach": true}); !isErr || !strings.Contains(text, "capabilities:detach") {
+		t.Errorf("attach over MCP under capabilities:detach was not refused by the detach check: %v %s", isErr, text)
+	}
+	if isErr, text := call("8", map[string]any{"grant": "self-debug", "attach": false}); !isErr || !strings.Contains(text, "standing session") {
+		t.Errorf("detach from a standing session over MCP was not refused: %v %s", isErr, text)
+	}
+	if isErr, text := call("2", map[string]any{"grant": "self-debug", "attach": false}); isErr {
+		t.Fatalf("detach over MCP under capabilities:detach failed: %s", text)
+	}
+	if got := taskGrantNames(t, client, "2"); slices.Contains(got, "self-debug") {
+		t.Errorf("task 2 grants after MCP detach = %v, want self-debug removed", got)
+	}
+}
