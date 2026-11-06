@@ -1,0 +1,1107 @@
+[
+  {
+    "form": "New Task",
+    "width": 1440,
+    "boxes": [
+      {
+        "box": 0,
+        "label": "area",
+        "clearable": false,
+        "before": "",
+        "options": 4,
+        "axe": [],
+        "axeIncomplete": [
+          "color-contrast"
+        ],
+        "search": {
+          "word": "frontend",
+          "hits": 1,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "",
+          "chips": [
+            "frontend"
+          ],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true
+        },
+        "finalWrites": []
+      },
+      {
+        "box": 1,
+        "label": "repos the first is the one this task's own work lands in",
+        "clearable": false,
+        "before": "",
+        "options": 4,
+        "axe": [],
+        "axeIncomplete": [
+          "aria-valid-attr-value"
+        ],
+        "search": {
+          "word": "—",
+          "hits": 1,
+          "targetListed": false
+        },
+        "pick": {
+          "value": "",
+          "chips": [
+            "self debug",
+            "read issues"
+          ],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": false,
+          "listClosed": true,
+          "formStillOpen": false,
+          "urlUnchanged": false
+        },
+        "finalWrites": []
+      }
+    ],
+    "found": 6
+  },
+  {
+    "form": "Schedule",
+    "width": 1440,
+    "boxes": [
+      {
+        "box": 0,
+        "label": "template",
+        "clearable": false,
+        "before": "None -- fill in the fields below",
+        "options": 3,
+        "axe": [],
+        "axeIncomplete": [
+          "color-contrast"
+        ],
+        "search": {
+          "word": "audit",
+          "hits": 1,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "security-audit",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": [
+            "POST /api/schedules/composition"
+          ]
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true
+        },
+        "finalWrites": [
+          "POST /api/schedules/composition"
+        ]
+      },
+      {
+        "box": 1,
+        "label": "model",
+        "clearable": false,
+        "before": "The template's model",
+        "options": 3,
+        "axe": [],
+        "axeIncomplete": [
+          "color-contrast"
+        ],
+        "search": {
+          "word": "pro",
+          "hits": 0,
+          "targetListed": false
+        },
+        "pick": {
+          "value": null,
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": false,
+          "urlUnchanged": true,
+          "writes": [
+            "POST /api/schedules"
+          ]
+        },
+        "escape": {
+          "opened": false,
+          "listClosed": true,
+          "formStillOpen": false,
+          "urlUnchanged": true
+        },
+        "finalWrites": [
+          "POST /api/schedules"
+        ]
+      }
+    ],
+    "found": 6
+  },
+  {
+    "form": "Template",
+    "width": 1440,
+    "boxes": [
+      {
+        "box": 0,
+        "label": "repos optional -- leave the first empty to let whatever fires this template choose it",
+        "clearable": false,
+        "before": "",
+        "options": 3,
+        "axe": [],
+        "axeIncomplete": [
+          "aria-valid-attr-value"
+        ],
+        "search": {
+          "word": "—",
+          "hits": 1,
+          "targetListed": false
+        },
+        "pick": {
+          "value": "Deployment default (gemini-2.5-pro)",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": false,
+          "listClosed": true,
+          "formStillOpen": false,
+          "urlUnchanged": true
+        },
+        "finalWrites": []
+      }
+    ],
+    "found": 4
+  },
+  {
+    "form": "Suite run",
+    "width": 1440,
+    "boxes": [
+      {
+        "box": 0,
+        "label": "suite",
+        "clearable": false,
+        "before": "Release Qualification Suite",
+        "options": 1,
+        "axe": [],
+        "axeIncomplete": [
+          "color-contrast"
+        ],
+        "search": {
+          "word": "Suite",
+          "hits": 1,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "Release Qualification Suite",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true
+        },
+        "finalWrites": []
+      },
+      {
+        "box": 1,
+        "label": "repo owner/name",
+        "clearable": false,
+        "before": "acme/widgets",
+        "options": 2,
+        "axe": [],
+        "axeIncomplete": [
+          "aria-valid-attr-value"
+        ],
+        "search": {
+          "word": "Other…",
+          "hits": 2,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "acme/widgets",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true
+        },
+        "finalWrites": []
+      }
+    ],
+    "found": 2
+  },
+  {
+    "form": "Bulk edit",
+    "width": 1440,
+    "boxes": [
+      {
+        "box": 0,
+        "label": ":r8h:",
+        "clearable": false,
+        "before": "acme/widgets",
+        "options": 3,
+        "axe": [],
+        "axeIncomplete": [
+          "aria-valid-attr-value"
+        ],
+        "search": {
+          "word": "—",
+          "hits": 1,
+          "targetListed": false
+        },
+        "pick": {
+          "value": "Deployment default (gemini-2.5-pro)",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": false,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true
+        },
+        "finalWrites": []
+      },
+      {
+        "box": 1,
+        "label": "specific connection",
+        "clearable": false,
+        "before": "Any enabled connection serving the model",
+        "options": 2,
+        "axe": [],
+        "axeIncomplete": [
+          "color-contrast"
+        ],
+        "search": {
+          "word": "Antigravity",
+          "hits": 1,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "Gemini 2.5 Pro · Antigravity",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true
+        },
+        "finalWrites": []
+      },
+      {
+        "box": 2,
+        "label": "review",
+        "clearable": false,
+        "before": "No review",
+        "options": 4,
+        "axe": [],
+        "axeIncomplete": [
+          "color-contrast"
+        ],
+        "search": {
+          "word": "audit",
+          "hits": 1,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "security-audit",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true
+        },
+        "finalWrites": []
+      }
+    ],
+    "found": 5
+  },
+  {
+    "form": "Settings → Models",
+    "width": 1440,
+    "boxes": [],
+    "error": "locator.waitFor: Timeout 8000ms exceeded."
+  },
+  {
+    "form": "Git connections",
+    "width": 1440,
+    "boxes": [],
+    "error": "locator.waitFor: Timeout 8000ms exceeded."
+  },
+  {
+    "form": "Preferences time zone",
+    "width": 1440,
+    "boxes": [],
+    "error": "locator.waitFor: Timeout 8000ms exceeded."
+  },
+  {
+    "form": "Repo releases",
+    "width": 1440,
+    "boxes": [],
+    "found": 0
+  },
+  {
+    "form": "NarrowingBar",
+    "width": 1440,
+    "boxes": [
+      {
+        "box": 0,
+        "label": "Attribute for filter 2",
+        "clearable": false,
+        "before": "Repo",
+        "options": 31,
+        "axe": [],
+        "axeIncomplete": [
+          "aria-valid-attr-value",
+          "color-contrast"
+        ],
+        "search": {
+          "word": "State",
+          "hits": 1,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "State",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": false,
+          "writes": []
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": false
+        },
+        "finalWrites": []
+      },
+      {
+        "box": 1,
+        "label": "Value for filter 2",
+        "clearable": false,
+        "before": "",
+        "options": 7,
+        "axe": [
+          "label(critical) x7",
+          "nested-interactive(serious) x7"
+        ],
+        "axeIncomplete": [
+          "aria-valid-attr-value",
+          "color-contrast"
+        ],
+        "search": {
+          "word": "Proposed",
+          "hits": 1,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "",
+          "chips": [
+            "proposed"
+          ],
+          "listClosed": false,
+          "formStillOpen": true,
+          "urlUnchanged": false,
+          "writes": []
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": false
+        },
+        "finalWrites": []
+      }
+    ],
+    "found": 2
+  },
+  {
+    "form": "Logs",
+    "width": 1440,
+    "boxes": [],
+    "error": "locator.waitFor: Timeout 8000ms exceeded."
+  },
+  {
+    "form": "CI",
+    "width": 1440,
+    "boxes": [],
+    "found": 0
+  },
+  {
+    "form": "Customize sidebar",
+    "width": 1440,
+    "boxes": [
+      {
+        "box": 0,
+        "label": "item",
+        "clearable": false,
+        "before": "",
+        "options": 36,
+        "axe": [],
+        "axeIncomplete": [
+          "color-contrast"
+        ],
+        "search": {
+          "word": "Inbox",
+          "hits": 1,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "Inbox",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true
+        },
+        "finalWrites": []
+      },
+      {
+        "box": 1,
+        "label": "icon (optional)",
+        "clearable": false,
+        "before": "Default icon",
+        "options": 20,
+        "axe": [],
+        "axeIncomplete": [
+          "color-contrast"
+        ],
+        "search": {
+          "word": "(Tray)",
+          "hits": 1,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "Inbox (Tray)",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true
+        },
+        "finalWrites": []
+      }
+    ],
+    "found": 2
+  },
+  {
+    "form": "New Task",
+    "width": 390,
+    "boxes": [
+      {
+        "box": 0,
+        "label": "area",
+        "clearable": false,
+        "before": "",
+        "options": 4,
+        "axe": [],
+        "axeIncomplete": [
+          "color-contrast"
+        ],
+        "search": {
+          "word": "frontend",
+          "hits": 1,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "",
+          "chips": [
+            "frontend"
+          ],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true
+        },
+        "finalWrites": []
+      },
+      {
+        "box": 1,
+        "label": "repos the first is the one this task's own work lands in",
+        "clearable": false,
+        "before": "",
+        "options": 4,
+        "axe": [],
+        "axeIncomplete": [
+          "aria-valid-attr-value"
+        ],
+        "search": {
+          "word": "—",
+          "hits": 1,
+          "targetListed": false
+        },
+        "pick": {
+          "value": "",
+          "chips": [
+            "self debug",
+            "read issues"
+          ],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": false,
+          "listClosed": true,
+          "formStillOpen": false,
+          "urlUnchanged": false
+        },
+        "finalWrites": []
+      }
+    ],
+    "found": 6
+  },
+  {
+    "form": "Schedule",
+    "width": 390,
+    "boxes": [
+      {
+        "box": 0,
+        "label": "template",
+        "clearable": false,
+        "before": "None -- fill in the fields below",
+        "options": 3,
+        "axe": [],
+        "axeIncomplete": [
+          "color-contrast"
+        ],
+        "search": {
+          "word": "audit",
+          "hits": 1,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "security-audit",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": [
+            "POST /api/schedules/composition"
+          ]
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true
+        },
+        "finalWrites": [
+          "POST /api/schedules/composition"
+        ]
+      },
+      {
+        "box": 1,
+        "label": "model",
+        "clearable": false,
+        "before": "The template's model",
+        "options": 3,
+        "axe": [],
+        "axeIncomplete": [
+          "color-contrast"
+        ],
+        "search": {
+          "word": "pro",
+          "hits": 3,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "The template's model",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true
+        },
+        "finalWrites": []
+      },
+      {
+        "box": 2,
+        "label": "time zone",
+        "clearable": false,
+        "before": "UTC (default)",
+        "options": 420,
+        "axe": [],
+        "axeIncomplete": [
+          "color-contrast"
+        ],
+        "search": {
+          "word": "Abidjan",
+          "hits": 1,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "Africa/Abidjan",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true
+        },
+        "finalWrites": []
+      }
+    ],
+    "found": 6
+  },
+  {
+    "form": "Template",
+    "width": 390,
+    "boxes": [
+      {
+        "box": 0,
+        "label": "repos optional -- leave the first empty to let whatever fires this template choose it",
+        "clearable": false,
+        "before": "",
+        "options": 3,
+        "axe": [],
+        "axeIncomplete": [
+          "aria-valid-attr-value"
+        ],
+        "search": {
+          "word": "—",
+          "hits": 1,
+          "targetListed": false
+        },
+        "pick": {
+          "value": "Deployment default (gemini-2.5-pro)",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": false,
+          "listClosed": true,
+          "formStillOpen": false,
+          "urlUnchanged": true
+        },
+        "finalWrites": []
+      }
+    ],
+    "found": 4
+  },
+  {
+    "form": "Suite run",
+    "width": 390,
+    "boxes": [
+      {
+        "box": 0,
+        "label": "suite",
+        "clearable": false,
+        "before": "Release Qualification Suite",
+        "options": 1,
+        "axe": [],
+        "axeIncomplete": [
+          "color-contrast"
+        ],
+        "search": {
+          "word": "Suite",
+          "hits": 1,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "Release Qualification Suite",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true
+        },
+        "finalWrites": []
+      },
+      {
+        "box": 1,
+        "label": "repo owner/name",
+        "clearable": false,
+        "before": "acme/widgets",
+        "options": 2,
+        "axe": [],
+        "axeIncomplete": [
+          "aria-valid-attr-value"
+        ],
+        "search": {
+          "word": "Other…",
+          "hits": 2,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "acme/widgets",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true
+        },
+        "finalWrites": []
+      }
+    ],
+    "found": 2
+  },
+  {
+    "form": "Bulk edit",
+    "width": 390,
+    "boxes": [
+      {
+        "box": 0,
+        "label": ":r8b:",
+        "clearable": false,
+        "before": "acme/widgets",
+        "options": 3,
+        "axe": [],
+        "axeIncomplete": [
+          "aria-valid-attr-value"
+        ],
+        "search": {
+          "word": "—",
+          "hits": 1,
+          "targetListed": false
+        },
+        "pick": {
+          "value": "Deployment default (gemini-2.5-pro)",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": false,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true
+        },
+        "finalWrites": []
+      },
+      {
+        "box": 1,
+        "label": "specific connection",
+        "clearable": false,
+        "before": "Any enabled connection serving the model",
+        "options": 2,
+        "axe": [],
+        "axeIncomplete": [
+          "color-contrast"
+        ],
+        "search": {
+          "word": "Antigravity",
+          "hits": 1,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "Gemini 2.5 Pro · Antigravity",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true
+        },
+        "finalWrites": []
+      },
+      {
+        "box": 2,
+        "label": "review",
+        "clearable": false,
+        "before": "No review",
+        "options": 4,
+        "axe": [],
+        "axeIncomplete": [
+          "color-contrast"
+        ],
+        "search": {
+          "word": "audit",
+          "hits": 1,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "security-audit",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true
+        },
+        "finalWrites": []
+      }
+    ],
+    "found": 5
+  },
+  {
+    "form": "Settings → Models",
+    "width": 390,
+    "boxes": [],
+    "error": "locator.waitFor: Timeout 8000ms exceeded."
+  },
+  {
+    "form": "Git connections",
+    "width": 390,
+    "boxes": [],
+    "error": "locator.waitFor: Timeout 8000ms exceeded."
+  },
+  {
+    "form": "Preferences time zone",
+    "width": 390,
+    "boxes": [],
+    "error": "locator.waitFor: Timeout 8000ms exceeded."
+  },
+  {
+    "form": "Repo releases",
+    "width": 390,
+    "boxes": [],
+    "found": 0
+  },
+  {
+    "form": "NarrowingBar",
+    "width": 390,
+    "boxes": [
+      {
+        "box": 0,
+        "label": "Attribute for filter 2",
+        "clearable": false,
+        "before": "Repo",
+        "options": 31,
+        "axe": [],
+        "axeIncomplete": [
+          "aria-valid-attr-value",
+          "color-contrast"
+        ],
+        "search": {
+          "word": "State",
+          "hits": 1,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "State",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": false,
+          "writes": []
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": false
+        },
+        "finalWrites": []
+      },
+      {
+        "box": 1,
+        "label": "Value for filter 2",
+        "clearable": false,
+        "before": "",
+        "options": 7,
+        "axe": [
+          "label(critical) x7",
+          "nested-interactive(serious) x7"
+        ],
+        "axeIncomplete": [
+          "aria-valid-attr-value",
+          "color-contrast"
+        ],
+        "search": {
+          "word": "Proposed",
+          "hits": 1,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "",
+          "chips": [
+            "proposed"
+          ],
+          "listClosed": false,
+          "formStillOpen": true,
+          "urlUnchanged": false,
+          "writes": []
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": false
+        },
+        "finalWrites": []
+      }
+    ],
+    "found": 2
+  },
+  {
+    "form": "Logs",
+    "width": 390,
+    "boxes": [],
+    "error": "locator.waitFor: Timeout 8000ms exceeded."
+  },
+  {
+    "form": "CI",
+    "width": 390,
+    "boxes": [],
+    "found": 0
+  },
+  {
+    "form": "Customize sidebar",
+    "width": 390,
+    "boxes": [
+      {
+        "box": 0,
+        "label": "item",
+        "clearable": false,
+        "before": "",
+        "options": 36,
+        "axe": [],
+        "axeIncomplete": [
+          "color-contrast"
+        ],
+        "search": {
+          "word": "Inbox",
+          "hits": 1,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "Inbox",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true
+        },
+        "finalWrites": []
+      },
+      {
+        "box": 1,
+        "label": "icon (optional)",
+        "clearable": false,
+        "before": "Default icon",
+        "options": 20,
+        "axe": [],
+        "axeIncomplete": [
+          "color-contrast"
+        ],
+        "search": {
+          "word": "(Tray)",
+          "hits": 1,
+          "targetListed": true
+        },
+        "pick": {
+          "value": "Inbox (Tray)",
+          "chips": [],
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true,
+          "writes": []
+        },
+        "escape": {
+          "opened": true,
+          "listClosed": true,
+          "formStillOpen": true,
+          "urlUnchanged": true
+        },
+        "finalWrites": []
+      }
+    ],
+    "found": 2
+  }
+]

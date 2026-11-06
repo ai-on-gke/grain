@@ -808,6 +808,13 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     116,
+		Description: "add grain_config.registry for connected-entry self-registration and heartbeat settings (design/design/registry.design.md)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `registry` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     117,
 		Description: "rewrite stored bootstrap-playbooks grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]} (the in-process bootstrap-playbooks is retired)",
 		Up:          migrateBootstrapPlaybooksGrants,
 	},

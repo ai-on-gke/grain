@@ -19,15 +19,15 @@ import (
 	"database/sql"
 )
 
-// bootstrapPlaybooksRenames is migration 116's renames: the retired bare
+// bootstrapPlaybooksRenames is migration 117's renames: the retired bare
 // bootstrap-playbooks capability to config-map's built-in bootstrap map. Kept
 // as the migration's own copy so later alias additions do not alter what
-// migration 116 rewrote.
+// migration 117 rewrote.
 var bootstrapPlaybooksRenames = map[string][]string{
 	"bootstrap-playbooks": {BootstrapPlaybooksGrant},
 }
 
-// migrateBootstrapPlaybooksGrants is schema migration 116's Up: the in-process
+// migrateBootstrapPlaybooksGrants is schema migration 117's Up: the in-process
 // bootstrap-playbooks provider is retired onto the built-in config-map server's
 // bootstrap map, rewriting every stored grant across the three grant tables,
 // deployment and repository default capabilities, standing console sessions,

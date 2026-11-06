@@ -201,7 +201,7 @@ func OfferedCapabilities() []Capability {
 			Description: durable.Description},
 		// No bootstrap-playbooks row: it was retired onto the config-map
 		// server's config-map {"config_maps":["bootstrap"]} (schema migration
-		// 116), which is offered with the other capability-server methods.
+		// 117), which is offered with the other capability-server methods.
 		{ID: "github-sandbox", Name: "GitHub sandbox",
 			Description: "Create a private, single-use GitHub sandbox repo for this task to work in instead of /repo"},
 		{ID: "console", Name: "Interactive console",
@@ -843,6 +843,19 @@ type Config struct {
 	// TriggerIAPSync requests an immediate IAP IAM synchronization cycle when team
 	// memberships or admin access lists are modified.
 	TriggerIAPSync func()
+	// RegistryStatus, when set, returns the live RegistrySnapshot from the
+	// daemon's RegistryManager; nil falls back to reading stored settings and
+	// repo configurations directly.
+	RegistryStatus func(ctx context.Context) (model.RegistrySnapshot, error)
+	// TriggerRegistryHeartbeat, when set, runs an immediate registry
+	// registration/heartbeat step and returns the updated snapshot.
+	TriggerRegistryHeartbeat func(ctx context.Context) (model.RegistrySnapshot, error)
+	// TriggerRegistrySync wakes the daemon's RegistryManager after settings,
+	// secrets, or repository configurations change.
+	TriggerRegistrySync func()
+	// RegistryAllowInsecureHTTP permits non-loopback plain HTTP registry URLs
+	// in test setups.
+	RegistryAllowInsecureHTTP bool
 	// SandboxBackends names the backend methods this daemon has enough
 	// startup configuration to build. SandboxBackendOptions lists every backend
 	// in model.SandboxBackends() with Available and Reason so Settings never

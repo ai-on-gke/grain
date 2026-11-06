@@ -56,7 +56,7 @@ async function rowsLookRight(box, width) {
   for (let i = 0; i < n; i++) {
     const row = rows.nth(i);
     const r = await row.boundingBox();
-    const check = await row.locator(".MuiCheckbox-root").boundingBox();
+    const check = await row.locator(".search-select-check").boundingBox();
     const text = await row
       .locator(".MuiListItemText-primary")
       .first()

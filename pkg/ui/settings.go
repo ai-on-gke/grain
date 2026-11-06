@@ -757,6 +757,12 @@ type Settings struct {
 	// settings are locked in the UI and REST API in favour of config
 	// repository pull requests. False by default.
 	SettingsLocked bool `json:"settingsLocked"`
+	// Registry holds the deployment's connected-entry grain registry
+	// settings (model.Config.Registry). RegistryTokenSet reports whether
+	// the registration credential secret ("registry-registration-token") is
+	// populated in pkg/secrets.
+	Registry         model.RegistryConfig `json:"registry"`
+	RegistryTokenSet bool                 `json:"registryTokenSet"`
 	// ConfigRepoOnly is GET /api/config's configRepoOnly for this row:
 	// whether the API refuses its non-bootstrap writes in favour of a
 	// config pull request. Unlike SettingsLocked it is false without a
@@ -1200,6 +1206,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		RestartRequired:                    restartRequiredKeys(),
 		PendingRestart:                     c.pendingRestart(cfg, sandboxImgDefault, granuleImgDefault),
 		Unrunnable:                         unrunnable,
+		Registry:                           cfg.Registry,
+		RegistryTokenSet:                   c.registryTokenSet(),
 	}
 	c.resolveSandboxImageFields(ctx, cfg, sandboxImgDefault, granuleImgDefault).apply(&out)
 	out.K8sGranuleImageEffective = effectiveGranule
@@ -1471,6 +1479,8 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			NetworkAccess:                      string(model.NormalizeNetworkAccess(def.NetworkAccess)),
 			NetworkAccesses:                    networkAccessNames(),
 			SettingsLocked:                     def.SettingsLocked,
+			Registry:                           def.Registry,
+			RegistryTokenSet:                   c.registryTokenSet(),
 			RestartRequired:                    restartRequiredKeys(),
 		}
 		c.resolveSandboxImageFields(ctx, def, sandboxImgDefault, granuleImgDefault).apply(&out)
@@ -1587,6 +1597,7 @@ type UpdateSettingsRequest struct {
 	DeploymentID          *string               `json:"deploymentId"`
 	DefaultCapabilities   *[]string             `json:"defaultCapabilities"`
 	SettingsLocked        *bool                 `json:"settingsLocked"`
+	Registry              *model.RegistryConfig `json:"registry"`
 }
 
 func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
@@ -1627,6 +1638,9 @@ func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) 
 		}
 		return Settings{}, err
 	}
+	if err := c.checkRegistryAuthTargetWrite(ctx, current, cfg); err != nil {
+		return Settings{}, err
+	}
 	// A request changing only the Models and Sandboxes settings writes
 	// them here; any other field is the config repository's to change.
 	if err := c.checkGrainConfigWritable(ctx, current, &cfg); err != nil {
@@ -1643,8 +1657,12 @@ func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) 
 		if changed := changedConfigFields(current, cfg); len(changed) > 0 {
 			log.Printf("grain ui: settings saved by %s: changed %s", writerName(ctx), strings.Join(changed, ", "))
 		}
+		if req.Registry != nil {
+			c.auditRegistryChanges(ctx, current, cfg)
+		}
 	}
 	c.triggerIAPSync()
+	c.triggerRegistrySync()
 	if req.AgentBackends != nil {
 		var before []model.AgentBackend
 		if current != nil {
@@ -2202,6 +2220,13 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	}
 	if req.SettingsLocked != nil {
 		cfg.SettingsLocked = *req.SettingsLocked
+	}
+	if req.Registry != nil {
+		normReg, err := model.NormalizeRegistryConfig(*req.Registry, c.Config.RegistryAllowInsecureHTTP)
+		if err != nil {
+			return model.Config{}, validationErrorf("%v", err)
+		}
+		cfg.Registry = normReg
 	}
 	if req.EnvironmentName != nil {
 		name := strings.TrimSpace(*req.EnvironmentName)

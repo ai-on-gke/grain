@@ -31,6 +31,7 @@ import {
   mergeQueueStall,
   reasonControl,
   reasonLabel,
+  taskReasonLabel,
   reasonTitle,
   runActivity,
   stackedChip,
@@ -946,7 +947,7 @@ export function TaskRow({
           variant="outlined"
           className="task-reason"
           title={reasonTitle(t.reason)}
-          label={reasonLabel(t.reason)}
+          label={taskReasonLabel(t)}
         />
       )}
       {/* And the control that ends the wait, on a row grain has flagged

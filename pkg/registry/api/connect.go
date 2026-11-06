@@ -207,9 +207,19 @@ func DialConnect(ctx context.Context, cfg ConnectConfig) (ConnectResult, error) 
 type DefaultConnectDialer struct{}
 
 func normalizeConnectURL(raw string, allowInsecure bool) (*url.URL, bool, error) {
-	u, err := url.Parse(strings.TrimSpace(raw))
+	trimmed := strings.TrimSpace(raw)
+	if len(trimmed) > 2048 {
+		return nil, false, fmt.Errorf("connect URL exceeds 2048 bytes")
+	}
+	u, err := url.Parse(trimmed)
 	if err != nil {
 		return nil, false, fmt.Errorf("invalid registry URL %q: %w", raw, err)
+	}
+	if u.User != nil {
+		return nil, false, fmt.Errorf("connect URL must not include userinfo credentials")
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return nil, false, fmt.Errorf("connect URL must not include query parameters or fragments")
 	}
 	scheme := strings.ToLower(u.Scheme)
 	useTLS := false
@@ -225,12 +235,15 @@ func normalizeConnectURL(raw string, allowInsecure bool) (*url.URL, bool, error)
 	default:
 		return nil, false, fmt.Errorf("connect URL %q must use https:// or wss:// (or http:// on loopback)", raw)
 	}
-	if strings.TrimSpace(u.Host) == "" {
+	host := u.Hostname()
+	if host == "" {
 		return nil, false, fmt.Errorf("connect URL %q is missing host", raw)
 	}
+	if isForbiddenMetadataHost(host) {
+		return nil, false, fmt.Errorf("connect URL host %q is not permitted", host)
+	}
 	u.Path = strings.TrimRight(u.Path, "/")
-	u.RawQuery = ""
-	u.Fragment = ""
+	u.RawPath = ""
 	return u, useTLS, nil
 }
 

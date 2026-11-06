@@ -1,0 +1,107 @@
+{
+  "steps": [
+    {
+      "name": "live poll",
+      "liveTasks": 135,
+      "liveSeed": 117,
+      "target": "20"
+    },
+    {
+      "name": "API closed pages",
+      "pages": 15,
+      "ids": 2865,
+      "unique": 2865,
+      "total": 2865
+    },
+    {
+      "name": "closed list at load",
+      "rows": 200
+    },
+    {
+      "name": "close in tab B -> tab A closed list",
+      "closeStatus": 200,
+      "ms": 3579
+    },
+    {
+      "name": "reopen in tab B -> left closed list, back in open list",
+      "reopenStatus": 200,
+      "goneMs": 2430
+    },
+    {
+      "name": "load older to the end",
+      "clicks": 14,
+      "pageResponses": 2665,
+      "rowsDrawn": 2865,
+      "uniqueRows": 2865,
+      "buttonGone": true
+    },
+    {
+      "name": "search filter finds the oldest closed task after paging",
+      "oldest": "10",
+      "filtered": true
+    },
+    {
+      "name": "saved list board shows the oldest closed task",
+      "board": "board-5",
+      "seen": true
+    },
+    {
+      "name": "saved tree board shows the oldest closed task",
+      "board": "board-6",
+      "seen": true
+    },
+    {
+      "name": "saved kanban board shows the oldest closed task",
+      "board": "board-7",
+      "seen": true
+    },
+    {
+      "name": "deep link to the oldest closed task",
+      "oldest": "10",
+      "opened": true
+    }
+  ],
+  "har": {
+    "livePolls": [
+      {
+        "url": "/api/tasks",
+        "status": 200,
+        "encoding": "gzip",
+        "bodySize": 106360,
+        "transfer": 6794
+      },
+      {
+        "url": "/api/tasks",
+        "status": 200,
+        "encoding": "gzip",
+        "bodySize": 106360,
+        "transfer": 6794
+      },
+      {
+        "url": "/api/tasks",
+        "status": 304,
+        "encoding": "",
+        "bodySize": -1,
+        "transfer": -1
+      }
+    ],
+    "live304s": 38,
+    "closedFirstPage": [
+      {
+        "url": "/api/tasks?state=closed&limit=200&cursor=",
+        "status": 200,
+        "encoding": "gzip",
+        "bodySize": 156005,
+        "transfer": 8442
+      },
+      {
+        "url": "/api/tasks?state=closed&limit=200&cursor=",
+        "status": 200,
+        "encoding": "gzip",
+        "bodySize": 156005,
+        "transfer": 8442
+      }
+    ],
+    "entries": 97
+  }
+}

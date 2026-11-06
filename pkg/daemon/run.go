@@ -44,6 +44,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
 	"github.com/ai-on-gke/grain/pkg/policy"
+	"github.com/ai-on-gke/grain/pkg/registry/api"
 	"github.com/ai-on-gke/grain/pkg/sandboxaddr"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -859,6 +860,24 @@ func Run(ctx context.Context, cfg Config) error {
 		WithSandboxImages(sandboxImages, stockSandboxImage, sandboxImageLabels()).
 		WithCapabilityServers(capabilityServers).
 		withHostdCapabilityServers(hostdCapabilityServers)
+	registryMgr := NewRegistryManager(RegistryManagerOptions{
+		Store:      store,
+		Secrets:    secretStore,
+		LiveConfig: live.Current,
+		StateRepo:  stateManager.settingsRepo,
+		LocalRepos: cfg.LocalRepos,
+		Health: func() (api.HealthState, string) {
+			if ReconcilerDown.Load() {
+				return api.HealthDegraded, "reconcile loop is down"
+			}
+			if sf := stateManager.syncFailure(); sf != nil {
+				return api.HealthDegraded, "state repository sync failing"
+			}
+			return api.HealthOK, ""
+		},
+	})
+	live.WithRegistry(registryMgr)
+	go registryMgr.Run(ctx)
 	if cfg.ObjectStore != nil && cfg.ciArtifacts == nil {
 		cfg.ciArtifacts = CiArtifactStore(cfg, live.ciStorageBounds)
 	}

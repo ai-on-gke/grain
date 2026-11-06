@@ -553,10 +553,15 @@ import "strconv"
 // `self-debug` provider is retired for the api preset and the grain
 // server's `#source` method.
 //
-// 116 rewrites stored `bootstrap-playbooks` grants across the grant tables,
+// 116 adds `grain_config`.`registry` (model.Config.Registry): the connected
+// entry settings (registry URL, entry name, auth mode, catalog metadata, and
+// scope overrides) for daemon self-registration and heartbeating
+// (design/design/registry.design.md).
+//
+// 117 rewrites stored `bootstrap-playbooks` grants across the grant tables,
 // deployment and repository default/CI capabilities, console sessions, and
 // capability_policy to `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}`.
-const SchemaVersion = 116
+const SchemaVersion = 117
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
@@ -2518,6 +2523,7 @@ var Tables = []string{
   ` + "`auto_upgrade_on`" + `              TEXT    NOT NULL DEFAULT '',
   ` + "`owner_trust`" + `                  TEXT    NOT NULL DEFAULT '',
   ` + "`auto_grant_context_reads`" + `     TEXT    NOT NULL DEFAULT '',
+  ` + "`registry`" + `                     TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

@@ -659,7 +659,7 @@ var legacyGrantReplacements = map[string]string{
 	// Retired by schema migration 103 onto the gcp server's gemini-key,
 	// which mints with the same gcp-key-minter secret.
 	"gemini-key": GCPGeminiKeyGrant,
-	// Retired by schema migration 116 onto the built-in config-map server's
+	// Retired by schema migration 117 onto the built-in config-map server's
 	// bootstrap map.
 	"bootstrap-playbooks": BootstrapPlaybooksGrant,
 }

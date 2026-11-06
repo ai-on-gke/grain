@@ -70,6 +70,7 @@ var hostSpecSubcommands = map[string][]string{
 	"host":               {"list", "register", "install", "set-owner"},
 	"init":               {"workstation"},
 	"pr":                 {"adopt", "review", "status"},
+	"registry":           {"status", "register", "unregister"},
 	"release":            {"approve", "reject", "rollback"},
 	"repo": {"list", "add", "remove", "capabilities", "ci-capabilities", "prompt-extension",
 		"setup-command", "unfixable-checks", "work-ownership", "workflows"},

@@ -66,3 +66,17 @@ func TestTextCutsKnownValuesAndLeavesCleanTextAlone(t *testing.T) {
 		t.Errorf("Text(clean) = %q, %d", got, n)
 	}
 }
+
+func TestTextCutsRegistryTokenShapes(t *testing.T) {
+	text := "X-Grain-Registry-Token: grc_shorttok\n" +
+		"token=grc_AbCdEfGhIjKlMnOpQrStUvWxYz012345\n"
+	got, n := (*redact.Redactor)(nil).Text(text)
+	for _, leaked := range []string{"grc_shorttok", "grc_AbCdEfGh"} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("Text left %q in:\n%s", leaked, got)
+		}
+	}
+	if n != 2 {
+		t.Errorf("Text counted %d redactions, want 2:\n%s", n, got)
+	}
+}
