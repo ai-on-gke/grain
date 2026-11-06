@@ -346,12 +346,20 @@ func (c *Client) DeleteBoard(ctx context.Context, id string) error {
 }
 
 func (s *Server) handleListBoards(w http.ResponseWriter, r *http.Request) {
+	page, err := parseListQuery(r, listPageLarge)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	list, err := s.tasks.ListBoards(r.Context())
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, list)
+	list = filterList(list, func(b Board) bool {
+		return page.matches(b.ID, b.Name, b.Folder)
+	})
+	writeList(w, list, page)
 }
 
 func (s *Server) handleCreateBoard(w http.ResponseWriter, r *http.Request) {

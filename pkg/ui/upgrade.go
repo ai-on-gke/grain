@@ -658,22 +658,47 @@ type upgradeTargeter interface {
 // A route of its own rather than part of GET /api/upgrade because
 // listing versions asks the image registry, and that status is polled
 // every few seconds while an upgrade runs.
+type upgradeTargetsResponse struct {
+	upgrade.Targets
+	Total      int    `json:"total,omitempty"`
+	Truncated  bool   `json:"truncated,omitempty"`
+	NextCursor string `json:"nextCursor,omitempty"`
+}
+
 func (s *Server) handleGetUpgradeTargets(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageMedium)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	if s.isSelfUpgradeDisabled() || s.tasks.Config.Upgrader == nil {
 		writeError(w, http.StatusNotFound, s.upgradeUnavailableErr())
 		return
 	}
-	targeter, ok := s.tasks.Config.Upgrader.(upgradeTargeter)
-	if !ok {
-		writeJSON(w, http.StatusOK, upgrade.Targets{Targets: []upgrade.Target{},
-			Default: deploymentChannel(s.tasks.Config.Upgrader)})
-		return
+	var targets upgrade.Targets
+	if targeter, ok := s.tasks.Config.Upgrader.(upgradeTargeter); ok {
+		targets = targeter.Targets(r.Context())
+	} else {
+		targets = upgrade.Targets{
+			Targets: []upgrade.Target{},
+			Default: deploymentChannel(s.tasks.Config.Upgrader),
+		}
 	}
-	targets := targeter.Targets(r.Context())
 	if targets.Targets == nil {
 		targets.Targets = []upgrade.Target{}
 	}
-	writeJSON(w, http.StatusOK, targets)
+	resp := upgradeTargetsResponse{Targets: targets}
+	if list.Paged {
+		matched := filterList(targets.Targets, func(t upgrade.Target) bool {
+			return list.matches(t.Name, string(t.Kind))
+		})
+		page := pageOf(matched, list)
+		resp.Targets.Targets = page.Items
+		resp.Total = page.Total
+		resp.Truncated = page.Truncated
+		resp.NextCursor = page.NextCursor
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 type startUpgradeRequest struct {

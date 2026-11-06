@@ -73,7 +73,10 @@ type RepoWorkflowsResponse struct {
 	// a run does and not a thing a settings form should wait on. So this
 	// pane shows what grain declares, and the run's own job list is
 	// where the union of the two is visible.
-	Workflows []RepoWorkflow `json:"workflows"`
+	Workflows  []RepoWorkflow `json:"workflows"`
+	Total      int            `json:"total,omitempty"`
+	Truncated  bool           `json:"truncated,omitempty"`
+	NextCursor string         `json:"nextCursor,omitempty"`
 }
 
 // SetRepoWorkflowsRequest is PUT /api/repos/{owner}/{name}/workflows'
@@ -183,10 +186,25 @@ func (c *Client) SetRepoWorkflows(ctx context.Context, repo string, workflows []
 }
 
 func (s *Server) handleGetRepoWorkflows(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageTiny)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	out, err := s.tasks.RepoWorkflows(r.Context(), r.PathValue("owner")+"/"+r.PathValue("name"))
 	if err != nil {
 		writeClientError(w, err)
 		return
+	}
+	if list.Paged {
+		matched := filterList(out.Workflows, func(wf RepoWorkflow) bool {
+			return list.matches(wf.Path, wf.Name)
+		})
+		page := pageOf(matched, list)
+		out.Workflows = page.Items
+		out.Total = page.Total
+		out.Truncated = page.Truncated
+		out.NextCursor = page.NextCursor
 	}
 	writeJSON(w, http.StatusOK, out)
 }

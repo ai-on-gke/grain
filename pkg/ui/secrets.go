@@ -40,8 +40,11 @@ var errSecretsUnavailable = errors.New(
 // frontend uses that to hide the pane entirely rather than show controls
 // that can only ever 404.
 type secretsResponse struct {
-	Enabled bool          `json:"enabled"`
-	Secrets []secretEntry `json:"secrets"`
+	Enabled    bool          `json:"enabled"`
+	Secrets    []secretEntry `json:"secrets"`
+	Total      int           `json:"total,omitempty"`
+	Truncated  bool          `json:"truncated,omitempty"`
+	NextCursor string        `json:"nextCursor,omitempty"`
 }
 
 // secretEntry is one secret as GET /api/secrets lists it: its name and
@@ -61,11 +64,39 @@ type secretEntry struct {
 // handleListSecrets answers GET /api/secrets: the deployment's whole
 // credential inventory.
 func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageMedium)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	if s.tasks.Config.Secrets == nil {
 		writeJSON(w, http.StatusOK, secretsResponse{Enabled: false, Secrets: []secretEntry{}})
 		return
 	}
-	s.respondWithSecrets(w, r)
+	raw, err := s.tasks.Config.Secrets.List()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	owners, err := s.tasks.CapabilityServerSecretOwners(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	entries := secretEntries(raw, owners)
+	resp := secretsResponse{Enabled: true, Secrets: entries}
+	if list.Paged {
+		matched := filterList(entries, func(e secretEntry) bool {
+			keys := append([]string{e.Name}, e.Keys...)
+			return list.matches(keys...)
+		})
+		page := pageOf(matched, list)
+		resp.Secrets = page.Items
+		resp.Total = page.Total
+		resp.Truncated = page.Truncated
+		resp.NextCursor = page.NextCursor
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 type setSecretRequest struct {

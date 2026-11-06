@@ -474,12 +474,20 @@ func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request)
 		}
 		f.After = after
 	}
-	list, err := s.tasks.ListNotifications(r.Context(), f)
+	list, err := parseListQuery(r, listPageLarge)
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, list)
+	notifications, err := s.tasks.ListNotifications(r.Context(), f)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	notifications = filterList(notifications, func(n model.Notification) bool {
+		return list.matches(n.Subject, n.Title)
+	})
+	writeList(w, notifications, list)
 }
 
 // handleAckNotification answers POST /api/notifications/{id}/ack.

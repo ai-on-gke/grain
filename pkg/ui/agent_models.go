@@ -78,10 +78,13 @@ type AgentModelLister interface {
 // convenience over a setting that has always been free text, and it must
 // not become the only way to change one.
 type agentModelsResponse struct {
-	Available bool         `json:"available"`
-	Models    []AgentModel `json:"models,omitempty"`
-	Efforts   []string     `json:"efforts,omitempty"`
-	Error     string       `json:"error,omitempty"`
+	Available  bool         `json:"available"`
+	Models     []AgentModel `json:"models,omitempty"`
+	Efforts    []string     `json:"efforts,omitempty"`
+	Error      string       `json:"error,omitempty"`
+	Total      int          `json:"total,omitempty"`
+	Truncated  bool         `json:"truncated,omitempty"`
+	NextCursor string       `json:"nextCursor,omitempty"`
 }
 
 // handleListAgentModels answers with the installed CLI's own catalog.
@@ -92,6 +95,11 @@ type agentModelsResponse struct {
 // fetch from a failed probe to render the same fallback would be reading
 // the status code for something the body already says.
 func (s *Server) handleListAgentModels(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageMedium)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	lister := s.tasks.Config.AgentModels
 	switch r.URL.Query().Get("framework") {
 	case "", "gemini", "antigravity":
@@ -112,9 +120,20 @@ func (s *Server) handleListAgentModels(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, agentModelsResponse{Available: true, Error: err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, agentModelsResponse{
+	resp := agentModelsResponse{
 		Available: true,
 		Models:    catalog.Models,
 		Efforts:   catalog.Efforts,
-	})
+	}
+	if list.Paged {
+		matched := filterList(catalog.Models, func(m AgentModel) bool {
+			return list.matches(m.ID, m.Label, m.Family)
+		})
+		page := pageOf(matched, list)
+		resp.Models = page.Items
+		resp.Total = page.Total
+		resp.Truncated = page.Truncated
+		resp.NextCursor = page.NextCursor
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
