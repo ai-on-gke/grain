@@ -110,6 +110,9 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/settings/plan":           trusted,
 	"GET /api/settings/cli-run":         trusted,
 	"PUT /api/settings/cli-run":         trusted,
+	"GET /api/registry":                 trusted,
+	"POST /api/registry/heartbeat":      trusted,
+	"GET /api/registry/status":          trusted,
 	"POST /api/capabilities/{id}/check": trusted,
 
 	// Tasks.

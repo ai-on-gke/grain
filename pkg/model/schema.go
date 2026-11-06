@@ -553,12 +553,17 @@ import "strconv"
 // `self-debug` provider is retired for the api preset and the grain
 // server's `#source` method.
 //
-// 116 adds shared host enrollment codes (`host_enrollment_code`), pending
-// pairing-code join handshakes (`host_join_request`), key-bound host metadata
+// 116 adds `grain_config`.`registry` (model.Config.Registry): the connected
+// entry settings (registry URL, entry name, auth mode, catalog metadata, and
+// scope overrides) for daemon self-registration and heartbeating
+// (design/design/registry.design.md).
+//
+// 117 adds shared host enrollment codes (`host_enrollment_code`), pending
+// join requests (`host_join_request`), key-bound host metadata
 // on `hostd` (`public_key`, `key_fingerprint`, `enrollment_code`, `capacity`,
 // `hostname`, `os`, `arch`, `clis`, `version`, `local_user`, `last_seen_at`),
 // and 30-day credential expiry on `hostd_token` (`expires_at`).
-const SchemaVersion = 116
+const SchemaVersion = 117
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
@@ -2579,6 +2584,7 @@ var Tables = []string{
   ` + "`auto_upgrade_on`" + `              TEXT    NOT NULL DEFAULT '',
   ` + "`owner_trust`" + `                  TEXT    NOT NULL DEFAULT '',
   ` + "`auto_grant_context_reads`" + `     TEXT    NOT NULL DEFAULT '',
+  ` + "`registry`" + `                     TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

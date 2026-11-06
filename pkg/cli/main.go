@@ -502,6 +502,8 @@ Commands:
                                        snippet, accept or reject the hosts that join, and manage hosts
   host register|install|set-owner      the legacy host registry: register a host with its owner, the
                                        identity it dials in through IAP as, and print how to install it
+  registry status|register|unregister  self-register this deployment with a grain registry and inspect
+                                       heartbeats and self-reported scopes (Settings -> Registry)
   access list|allow|deny               the allowed users and groups list (Settings -> Access): who may
                                        sign in through IAP or another identity verifier
   broadcast [-all] <message...>        send a notice to all running task agents (or with -all, all active tasks)
@@ -727,6 +729,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdCapabilityServers(ctx, c, out, cmdArgs)
 	case "host":
 		return cmdHostds(ctx, c, out, cmdArgs)
+	case "registry":
+		return cmdRegistry(ctx, c, out, cmdArgs)
 	case "access":
 		return cmdAccess(ctx, c, out, cmdArgs)
 	case "git-ambient":

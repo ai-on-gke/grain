@@ -91,6 +91,11 @@ export const SETTINGS_GROUPS = [
       { id: "upgrade", label: "Upgrade" },
       { id: "caches", label: "Caches" },
       { id: "engine", label: "Engine" },
+      {
+        id: "registry",
+        label: "Registry",
+        keywords: ["registry", "heartbeat", "directory", "scopes", "connected"],
+      },
       { id: "config-repo", label: "Config repo" },
     ],
   },

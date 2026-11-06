@@ -799,6 +799,7 @@ var neverAttributedRoutes = map[string]bool{
 	"POST /api/capability-servers/figma-test":            true,
 	"POST /api/capability-servers/figma-oauth-authorize": true,
 	"POST /api/deployment/git-connections/check":         true,
+	"POST /api/registry/heartbeat":                       true,
 	"POST /api/settings/plan":                            true,
 	// The MCP endpoints are transports: each tool they serve calls one of
 	// the routes here, and is attributed there. POST /api/mcp's

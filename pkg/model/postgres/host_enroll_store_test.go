@@ -24,20 +24,20 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-func TestPostgresHostEnrollmentCodeJoinHandshakeAndMigration116(t *testing.T) {
+func TestPostgresHostEnrollmentCodeJoinHandshakeAndMigration117(t *testing.T) {
 	t.Parallel()
 	s, db, ctx := openStore(t)
 
-	// Rewind from 116 -> 115, drop the two tables migration 116 creates, and
-	// verify migrating 115 -> 116 succeeds cleanly on PostgreSQL.
+	// Rewind from 117 -> 116, drop the two tables migration 117 creates, and
+	// verify migrating 116 -> 117 succeeds cleanly on PostgreSQL.
 	for _, stmt := range []string{"DROP TABLE `host_join_request`", "DROP TABLE `host_enrollment_code`"} {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			t.Fatal(err)
 		}
 	}
-	rewindSchemaTo(t, ctx, db, 115)
+	rewindSchemaTo(t, ctx, db, 116)
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-115 store to 116: %v", err)
+		t.Fatalf("migrating a version-116 store to 117: %v", err)
 	}
 
 	now := time.Date(2026, 11, 6, 2, 0, 0, 0, time.UTC)

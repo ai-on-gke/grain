@@ -1,0 +1,529 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/ai-on-gke/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/registry/api"
+	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/version"
+)
+
+func TestRegistryCLIRegisterStatusUnregister(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+
+	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(tmp, "data")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	secStore := secrets.Open(secrets.Config{
+		File:    filepath.Join(tmp, "secrets.age"),
+		KeyFile: filepath.Join(tmp, "secrets.key"),
+	})
+
+	// Fake grain registry server tracking entries, minted tokens, and heartbeats.
+	var (
+		mu             sync.Mutex
+		entries        = map[string]api.Entry{}
+		activeTokens   = map[string]string{}
+		lastHeartbeat  api.HeartbeatRequest
+		heartbeatCount int
+		rotateCount    int
+	)
+	regSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/entries/"):
+			name := strings.TrimPrefix(r.URL.Path, "/api/entries/")
+			e, ok := entries[name]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": "not found"})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(e)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/entries":
+			if auth != "oidc-creator-jwt" {
+				w.WriteHeader(http.StatusUnauthorized)
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": "creator token required"})
+				return
+			}
+			var req api.CreateEntryRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			listed := true
+			if req.Listed != nil {
+				listed = *req.Listed
+			}
+			e := api.Entry{
+				Name:        req.Name,
+				Kind:        req.Kind,
+				HostKind:    req.HostKind,
+				DisplayName: req.DisplayName,
+				Purpose:     req.Purpose,
+				Listed:      listed,
+				Status:      api.StatusOffline,
+			}
+			entries[req.Name] = e
+			tok := "grc_minted_initial_token"
+			activeTokens[req.Name] = tok
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(api.CreateEntryResponse{Entry: e, RegistrationToken: tok})
+		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/entries/"):
+			name := strings.TrimPrefix(r.URL.Path, "/api/entries/")
+			e := entries[name]
+			var req api.UpdateEntryRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if req.DisplayName != nil {
+				e.DisplayName = *req.DisplayName
+			}
+			if req.Purpose != nil {
+				e.Purpose = *req.Purpose
+			}
+			if req.HostKind != nil {
+				e.HostKind = *req.HostKind
+			}
+			if req.Listed != nil {
+				e.Listed = *req.Listed
+			}
+			entries[name] = e
+			_ = json.NewEncoder(w).Encode(e)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/credentials/rotate"):
+			name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/entries/"), "/credentials/rotate")
+			rotateCount++
+			tok := "grc_rotated_token"
+			activeTokens[name] = tok
+			_ = json.NewEncoder(w).Encode(api.RotateCredentialResponse{RegistrationToken: tok})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/heartbeat"):
+			name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/entries/"), "/heartbeat")
+			if want := activeTokens[name]; want != "" && auth != want {
+				w.WriteHeader(http.StatusUnauthorized)
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": "invalid registration credential"})
+				return
+			}
+			_ = json.NewDecoder(r.Body).Decode(&lastHeartbeat)
+			heartbeatCount++
+			_ = json.NewEncoder(w).Encode(api.HeartbeatResponse{
+				Status:              api.StatusOnline,
+				NextIntervalSeconds: 15,
+			})
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/entries/"):
+			if auth != "oidc-creator-jwt" {
+				w.WriteHeader(http.StatusUnauthorized)
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": "creator token required"})
+				return
+			}
+			name := strings.TrimPrefix(r.URL.Path, "/api/entries/")
+			delete(entries, name)
+			delete(activeTokens, name)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer regSrv.Close()
+
+	prevHTTP := registryHTTPClient
+	prevOIDC := registryOIDCToken
+	registryHTTPClient = regSrv.Client()
+	registryOIDCToken = func(_ context.Context, _, _ string) (string, error) {
+		return "oidc-creator-jwt", nil
+	}
+	defer func() {
+		registryHTTPClient = prevHTTP
+		registryOIDCToken = prevOIDC
+	}()
+
+	mgr := daemon.NewRegistryManager(daemon.RegistryManagerOptions{
+		Store:   store,
+		Secrets: secStore,
+		LiveConfig: func() daemon.Config {
+			mc, _ := store.GetConfig(ctx)
+			if mc == nil {
+				return daemon.Config{HostSandboxes: true}
+			}
+			return daemon.Config{HostSandboxes: true, Registry: mc.Registry}
+		},
+		Health:         func() (api.HealthState, string) { return api.HealthOK, "" },
+		Version:        func() version.Info { return version.Info{Release: "v1.4.0", Revision: "abc1234"} },
+		HTTPClient:     regSrv.Client(),
+		JitterFraction: -1,
+	})
+
+	uiCfg := withAccessCode(ui.Config{
+		Actor:                    ui.DefaultActor("operator"),
+		Capabilities:             ui.OfferedCapabilities(),
+		Secrets:                  secStore,
+		RegistryStatus:           mgr.Snapshot,
+		TriggerRegistryHeartbeat: mgr.TriggerHeartbeat,
+		TriggerRegistrySync:      mgr.Trigger,
+	})
+	daemonSrv := httptest.NewServer(ui.NewServer(uiCfg, store))
+	defer daemonSrv.Close()
+
+	c := accessCodeClient(daemonSrv.URL)
+	if _, err := c.UpdateSettings(ctx, *settingsRequest("30s", 2, "github.example")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.AddTargetRepo(ctx, "acme/widgets"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Initial status is disabled.
+	outText := captureStdout(t, func() {
+		if err := cmdRegistry(ctx, c, &printer{}, []string{"status"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(outText, "Registry: disabled") {
+		t.Fatalf("initial status = %q, want disabled", outText)
+	}
+
+	// 2. Register creates the connected entry, stores grc_minted_initial_token in secrets,
+	// updates Settings, and runs an immediate heartbeat.
+	regText := captureStdout(t, func() {
+		err := cmdRegistry(ctx, c, &printer{}, []string{
+			"register",
+			"-registry-url", regSrv.URL,
+			"-display-name", "Widgets Grain",
+			"-purpose", "Widgets CI and tasks",
+			"widgets-dev",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(regText, "State:       connected") || !strings.Contains(regText, "acme/widgets") {
+		t.Fatalf("register output = %q, want connected state and acme/widgets scope", regText)
+	}
+
+	storedTok, err := secStore.Resolve(ctx, secrets.RegistryRegistrationTokenSecret+"/"+secrets.AgentCredentialKey)
+	if err != nil || storedTok != "grc_minted_initial_token" {
+		t.Fatalf("stored secret = %q, %v; want grc_minted_initial_token", storedTok, err)
+	}
+
+	mu.Lock()
+	hbCount := heartbeatCount
+	hb := lastHeartbeat
+	mu.Unlock()
+	if hbCount != 1 || hb.GrainVersion != "v1.4.0" || hb.GrainCommit != "abc1234" || len(hb.Scopes) != 1 || hb.Scopes[0].Repo != "acme/widgets" {
+		t.Fatalf("heartbeat (%d) = %+v", hbCount, hb)
+	}
+
+	// 3. Status JSON reports connected snapshot.
+	statusJSON := captureStdout(t, func() {
+		if err := cmdRegistry(ctx, c, &printer{json: true}, nil); err != nil {
+			t.Fatal(err)
+		}
+	})
+	var snap model.RegistrySnapshot
+	if err := json.Unmarshal([]byte(statusJSON), &snap); err != nil {
+		t.Fatalf("unmarshal status json: %v (%s)", err, statusJSON)
+	}
+	if !snap.Enabled || snap.State != model.RegistryStateConnected || snap.Config.Entry != "widgets-dev" {
+		t.Fatalf("status snapshot = %+v", snap)
+	}
+
+	// 4. Register with -rotate-token rotates credential and heartbeats with the new token.
+	_ = captureStdout(t, func() {
+		if err := cmdRegistry(ctx, c, &printer{}, []string{"register", "-rotate-token"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	rotatedTok, err := secStore.Resolve(ctx, secrets.RegistryRegistrationTokenSecret+"/"+secrets.AgentCredentialKey)
+	if err != nil || rotatedTok != "grc_rotated_token" {
+		t.Fatalf("rotated secret = %q, %v; want grc_rotated_token", rotatedTok, err)
+	}
+	mu.Lock()
+	if rotateCount != 1 || heartbeatCount != 2 {
+		t.Fatalf("rotateCount=%d heartbeatCount=%d, want 1 and 2", rotateCount, heartbeatCount)
+	}
+	mu.Unlock()
+
+	// 5. Unregister deletes remote entry, clears settings, and removes secret.
+	unregText := captureStdout(t, func() {
+		if err := cmdRegistry(ctx, c, &printer{}, []string{"unregister"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(unregText, "unregistered widgets-dev") {
+		t.Fatalf("unregister output = %q", unregText)
+	}
+	mu.Lock()
+	_, stillOnRegistry := entries["widgets-dev"]
+	mu.Unlock()
+	if stillOnRegistry {
+		t.Fatal("expected widgets-dev to be deleted from fake registry")
+	}
+	hasSec, _ := secStore.Has(secrets.RegistryRegistrationTokenSecret, secrets.AgentCredentialKey)
+	if hasSec {
+		t.Fatal("expected registry-registration-token secret to be deleted")
+	}
+	mcAfter, _ := store.GetConfig(ctx)
+	if mcAfter.Registry.Enabled() {
+		t.Fatalf("expected stored registry config to be cleared, got %+v", mcAfter.Registry)
+	}
+
+	// 6. Standalone register writes 0600 token file without contacting a daemon.
+	tokFile := filepath.Join(tmp, "standalone.token")
+	_ = captureStdout(t, func() {
+		err := cmdRegistry(ctx, nil, &printer{}, []string{
+			"register",
+			"-standalone",
+			"-registry-url", regSrv.URL,
+			"-token-file", tokFile,
+			"standalone-grain",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	rawTok, err := os.ReadFile(tokFile)
+	if err != nil || strings.TrimSpace(string(rawTok)) != "grc_minted_initial_token" {
+		t.Fatalf("standalone token file = %q, %v", rawTok, err)
+	}
+	if fi, err := os.Stat(tokFile); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("standalone token file mode = %v, %v; want 0600", fi.Mode().Perm(), err)
+	}
+}
+
+func TestGrainRegistryRegisterRetargetingNeverSendsCrossHostToken(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(tmp, "data")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	secStore := secrets.Open(secrets.Config{
+		File:    filepath.Join(tmp, "secrets.age"),
+		KeyFile: filepath.Join(tmp, "secrets.key"),
+	})
+
+	const (
+		tokOld = "grc_old_registry_token_1111111111"
+		tokNew = "grc_new_registry_token_2222222222"
+	)
+
+	var leakMu sync.Mutex
+	var crossHostLeaks []string
+
+	newFakeReg := func(label, ownTok, otherTok string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotRegTok := r.Header.Get(api.HeaderRegistryToken)
+			if gotRegTok == "" {
+				if authz := r.Header.Get("Authorization"); strings.HasPrefix(authz, "Bearer grc_") {
+					gotRegTok = strings.TrimPrefix(authz, "Bearer ")
+				}
+			}
+			if gotRegTok == otherTok {
+				leakMu.Lock()
+				crossHostLeaks = append(crossHostLeaks, fmt.Sprintf("%s received other registry's token on %s %s", label, r.Method, r.URL.Path))
+				leakMu.Unlock()
+			}
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/entries/widgets-dev":
+				_ = json.NewEncoder(w).Encode(api.Entry{Name: "widgets-dev", Kind: api.KindConnected, HostKind: api.HostKindWorkstation, Listed: true})
+			case r.Method == http.MethodPatch && r.URL.Path == "/api/entries/widgets-dev":
+				_ = json.NewEncoder(w).Encode(api.Entry{Name: "widgets-dev", Kind: api.KindConnected, HostKind: api.HostKindWorkstation, Listed: true})
+			case r.Method == http.MethodPost && r.URL.Path == "/api/entries/widgets-dev/credentials/rotate":
+				_ = json.NewEncoder(w).Encode(api.RotateCredentialResponse{RegistrationToken: ownTok})
+			case r.Method == http.MethodPost && r.URL.Path == "/api/entries/widgets-dev/heartbeat":
+				if gotRegTok != ownTok {
+					w.WriteHeader(http.StatusUnauthorized)
+					_, _ = w.Write([]byte(`{"error":"unexpected token"}`))
+					return
+				}
+				_ = json.NewEncoder(w).Encode(api.HeartbeatResponse{Status: api.StatusOnline, NextIntervalSeconds: 60})
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+	}
+
+	regOld := newFakeReg("regOld", tokOld, tokNew)
+	defer regOld.Close()
+	regNew := newFakeReg("regNew", tokNew, tokOld)
+	defer regNew.Close()
+
+	prevHTTP := registryHTTPClient
+	prevOIDC := registryOIDCToken
+	registryHTTPClient = regOld.Client()
+	registryOIDCToken = func(_ context.Context, _, _ string) (string, error) {
+		return "oidc-creator-jwt", nil
+	}
+	defer func() {
+		registryHTTPClient = prevHTTP
+		registryOIDCToken = prevOIDC
+	}()
+
+	mgr := daemon.NewRegistryManager(daemon.RegistryManagerOptions{
+		Store:   store,
+		Secrets: secStore,
+		LiveConfig: func() daemon.Config {
+			mc, _ := store.GetConfig(ctx)
+			if mc == nil {
+				return daemon.Config{HostSandboxes: true}
+			}
+			return daemon.Config{HostSandboxes: true, Registry: mc.Registry}
+		},
+		Health:         func() (api.HealthState, string) { return api.HealthOK, "" },
+		Version:        func() version.Info { return version.Info{Release: "v1.4.0", Revision: "abc1234"} },
+		HTTPClient:     regOld.Client(),
+		BaseInterval:   time.Hour,
+		JitterFraction: -1,
+	})
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		mgr.Run(runCtx)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	uiCfg := withAccessCode(ui.Config{
+		Actor:                    ui.DefaultActor("operator"),
+		Capabilities:             ui.OfferedCapabilities(),
+		Secrets:                  secStore,
+		RegistryStatus:           mgr.Snapshot,
+		TriggerRegistryHeartbeat: mgr.TriggerHeartbeat,
+		TriggerRegistrySync: func() {
+			// Run an immediate synchronous step whenever settings or secrets
+			// change, maximizing race sensitivity for cross-host token leaks.
+			_, _ = mgr.TriggerHeartbeat(ctx)
+		},
+	})
+	daemonSrv := httptest.NewServer(ui.NewServer(uiCfg, store))
+	defer daemonSrv.Close()
+
+	c := accessCodeClient(daemonSrv.URL)
+	if _, err := c.UpdateSettings(ctx, *settingsRequest("30s", 2, "github.example")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Register initially against regOld.
+	_ = captureStdout(t, func() {
+		if err := cmdRegistry(ctx, c, &printer{}, []string{"register", "-registry-url", regOld.URL, "widgets-dev"}); err != nil {
+			t.Fatalf("register regOld: %v", err)
+		}
+	})
+
+	// Retarget live daemon from regOld to regNew where widgets-dev already exists.
+	_ = captureStdout(t, func() {
+		if err := cmdRegistry(ctx, c, &printer{}, []string{"register", "-registry-url", regNew.URL, "widgets-dev"}); err != nil {
+			t.Fatalf("retarget regNew: %v", err)
+		}
+	})
+
+	leakMu.Lock()
+	leaks := append([]string(nil), crossHostLeaks...)
+	leakMu.Unlock()
+	if len(leaks) > 0 {
+		t.Fatalf("cross-host registry token leak detected:\n%s", strings.Join(leaks, "\n"))
+	}
+	gotTok, err := secStore.Resolve(ctx, secrets.RegistryRegistrationTokenSecret+"/"+secrets.AgentCredentialKey)
+	if err != nil || gotTok != tokNew {
+		t.Fatalf("stored secret after retarget = %q, %v; want %q", gotTok, err, tokNew)
+	}
+}
+
+func TestDaemonRegistryFlags(t *testing.T) {
+	t.Setenv(daemon.RegistryURLEnv, "")
+	t.Setenv(daemon.RegistryEntryEnv, "")
+
+	cfg, _, unknown, err := parseDaemonArgs([]string{
+		"-data-dir", "/tmp/grain-data",
+		"-disable-native-sandboxes",
+		"-registry-url", "https://registry.example.com",
+		"-registry-entry", "team-alpha",
+		"-registry-auth-mode", "oidc",
+		"-registry-oidc-audience", "https://registry.example.com",
+		"-registry-display-name", "Team Alpha",
+		"-registry-purpose", "Core backend services",
+		"-registry-host-kind", "kubernetes",
+		"-registry-listed=false",
+		"-registry-token-file", "/etc/grain/reg.token",
+	})
+	if err != nil || len(unknown) != 0 {
+		t.Fatalf("parseDaemonArgs = %v, unknown=%v", err, unknown)
+	}
+	if err := checkConfig(cfg); err != nil {
+		t.Fatalf("checkConfig(valid registry flags) = %v", err)
+	}
+	if cfg.Registry.URL != "https://registry.example.com" ||
+		cfg.Registry.Entry != "team-alpha" ||
+		cfg.Registry.AuthMode != model.RegistryAuthOIDC ||
+		cfg.Registry.HostKind != api.HostKindKubernetes ||
+		cfg.Registry.Listed != false ||
+		cfg.RegistryTokenFile != "/etc/grain/reg.token" {
+		t.Fatalf("parsed Registry = %+v (tokenFile=%q)", cfg.Registry, cfg.RegistryTokenFile)
+	}
+
+	// Environment variable fallback when flags are omitted.
+	t.Setenv(daemon.RegistryURLEnv, "https://env-registry.example.com")
+	t.Setenv(daemon.RegistryEntryEnv, "env-grain")
+	envCfg, _, _, err := parseDaemonArgs([]string{"-data-dir", "/tmp/grain-data", "-disable-native-sandboxes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envCfg.Registry.URL != "https://env-registry.example.com" || envCfg.Registry.Entry != "env-grain" {
+		t.Fatalf("env fallback Registry = %+v", envCfg.Registry)
+	}
+
+	// Partial configuration (URL without entry) is rejected by checkConfig.
+	bad := cfg
+	bad.Registry.Entry = ""
+	if err := checkConfig(bad); err == nil || !strings.Contains(err.Error(), "-registry-url and -registry-entry") {
+		t.Fatalf("checkConfig(missing entry) = %v, want paired flag error", err)
+	}
+
+	// Non-HTTPS non-loopback URL is rejected by checkConfig.
+	badURL := cfg
+	badURL.Registry.URL = "http://registry.example.com"
+	if err := checkConfig(badURL); err == nil || !strings.Contains(err.Error(), "insecure http://") {
+		t.Fatalf("checkConfig(http url) = %v, want insecure http:// error", err)
+	}
+}

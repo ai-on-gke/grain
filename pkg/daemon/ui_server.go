@@ -232,6 +232,16 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 	if reader, ok := stateRepo.(ui.SettingsHistoryReader); ok {
 		settingsHistory = reader
 	}
+	var (
+		registryStatus           func(context.Context) (model.RegistrySnapshot, error)
+		triggerRegistryHeartbeat func(context.Context) (model.RegistrySnapshot, error)
+		triggerRegistrySync      func()
+	)
+	if reg := live.Registry(); reg != nil {
+		registryStatus = reg.Snapshot
+		triggerRegistryHeartbeat = reg.TriggerHeartbeat
+		triggerRegistrySync = reg.Trigger
+	}
 	gcpPoolSAs := ui.GCPKeyPoolEmails(cfg.GcpServiceAccountEmail, cfg.GcpServiceAccountCount, cfg.GcpProject)
 	combinedPoolSAs := append([]string(nil), gcpPoolSAs...)
 	if store != nil {
@@ -539,10 +549,13 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		// unconditionally, since a wake written before that loop starts
 		// (this server is up first, deliberately) sits in the buffer and
 		// is read when it does.
-		Wake:                  wakeCycle,
-		TriggerIAPSync:        TriggerIAPSync,
-		SandboxBackends:       cfg.availableSandboxBackends(),
-		SandboxBackendOptions: cfg.sandboxBackendOptions(),
+		Wake:                     wakeCycle,
+		TriggerIAPSync:           TriggerIAPSync,
+		RegistryStatus:           registryStatus,
+		TriggerRegistryHeartbeat: triggerRegistryHeartbeat,
+		TriggerRegistrySync:      triggerRegistrySync,
+		SandboxBackends:          cfg.availableSandboxBackends(),
+		SandboxBackendOptions:    cfg.sandboxBackendOptions(),
 		// And whether a merged settings change reset something on this
 		// deployment that grain had nowhere to say out loud -- the same
 		// marker, for a fact that reaches nobody without one

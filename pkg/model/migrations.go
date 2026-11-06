@@ -808,7 +808,14 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     116,
-		Description: "add host enrollment codes, pending pairing-code join requests, key-bound host metadata and 30-day credential expiry",
+		Description: "add grain_config.registry for connected-entry self-registration and heartbeat settings (design/design/registry.design.md)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `registry` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     117,
+		Description: "add host enrollment codes, pending join requests, key-bound host metadata and 30-day credential expiry",
 		Statements: []string{
 			"ALTER TABLE `hostd` ADD COLUMN `public_key` TEXT NOT NULL DEFAULT ''",
 			"ALTER TABLE `hostd` ADD COLUMN `key_fingerprint` TEXT NOT NULL DEFAULT ''",
@@ -829,7 +836,7 @@ var Migrations = []Migration{
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as
-// schema 92 created them, frozen so migration 92 followed by migration 116's
+// schema 92 created them, frozen so migration 92 followed by migration 117's
 // ALTER TABLE statements runs cleanly from any earlier baseline.
 const schema92HostdTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd`" + ` (
   ` + "`name`" + `       TEXT     NOT NULL,
