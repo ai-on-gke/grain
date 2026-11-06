@@ -804,6 +804,373 @@ func (r staticGroupResolverForTest) NormalizeGroup(raw string) (string, error) {
 	return defaultNormalizeGroup(raw)
 }
 
+type toggleableGroupResolverForTest struct {
+	inner   *webauth.StaticGroupChecker
+	failNow atomic.Bool
+}
+
+func (r *toggleableGroupResolverForTest) IsMember(ctx context.Context, groupEmail, memberEmail string) (bool, error) {
+	if r.failNow.Load() {
+		return false, errors.New("simulated group directory outage")
+	}
+	return r.inner.IsMember(ctx, groupEmail, memberEmail)
+}
+
+func (r *toggleableGroupResolverForTest) NormalizeGroup(raw string) (string, error) {
+	return defaultNormalizeGroup(raw)
+}
+
+func isAPIStatus(err error, code int) bool {
+	var ae *api.APIError
+	if errors.As(err, &ae) {
+		return ae.StatusCode == code
+	}
+	return false
+}
+
+func TestStep12CatalogCRUDGroupAuthHeartbeatsDirectoryAndRouteEndToEnd(t *testing.T) {
+	pgURL := startEphemeralPostgresForRegistryTest(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 6, 14, 0, 0, 0, time.UTC)
+	st, err := store.Open(ctx, pgURL, store.DefaultThresholds())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer st.Close()
+	st.SetNow(func() time.Time { return now })
+
+	if err := st.SeedShapes(ctx, []store.ShapeRow{
+		{Name: "small", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+		{Name: "large", MachineType: "n2-standard-8", BootDiskGB: 100, QuotaUnits: 2},
+	}); err != nil {
+		t.Fatalf("SeedShapes: %v", err)
+	}
+
+	groups := &toggleableGroupResolverForTest{
+		inner: webauth.NewStaticGroups(map[string][]string{
+			"group:team-alpha@example.com": {"alice@example.com", "coowner@example.com"},
+			"group:team-other@example.com": {"outsider@example.com"},
+		}),
+	}
+	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
+		Verifier:          fakeFrontIdentity{},
+		Groups:            groups,
+		AllowedDomains:    []string{"example.com"},
+		Admins:            []string{"user:admin@example.com"},
+		ServicePrincipals: []string{"serviceAccount:planner@proj.iam.gserviceaccount.com"},
+	})
+	if err != nil {
+		t.Fatalf("NewAdmitter: %v", err)
+	}
+	signer, err := NewEphemeralLocalSigner("step12-k1")
+	if err != nil {
+		t.Fatalf("NewEphemeralLocalSigner: %v", err)
+	}
+	cfg, err := ParseConfig([]byte(validTestYAML()))
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	srv, err := NewServer(ServerOptions{
+		Config:    *cfg,
+		Store:     st,
+		Admitter:  admitter,
+		Groups:    groups,
+		Signer:    signer,
+		ReplicaID: "rep-step12",
+		PeerAddr:  "127.0.0.1:18082",
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	srv.Router().SetNow(func() time.Time { return now })
+	_ = st.UpsertReplica(ctx, "rep-step12", "127.0.0.1:18082")
+
+	mainTS := httptest.NewServer(srv.Handler())
+	defer mainTS.Close()
+	pubTS := httptest.NewServer(srv.PublicHandler())
+	defer pubTS.Close()
+
+	clientFor := func(email string) *api.Client {
+		c, err := api.NewClient(api.ClientConfig{
+			BaseURL:           mainTS.URL,
+			AllowInsecureHTTP: true,
+			ExtraHeaders:      http.Header{"X-Test-Email": []string{email}},
+		})
+		if err != nil {
+			t.Fatalf("NewClient(%s): %v", email, err)
+		}
+		return c
+	}
+
+	aliceCli := clientFor("alice@example.com")
+	coownerCli := clientFor("coowner@example.com")
+	bobCli := clientFor("bob@example.com")
+	plannerCli := clientFor("planner@proj.iam.gserviceaccount.com")
+
+	// 1. Setting an owner_group to which the caller does not belong is rejected with 403.
+	if _, err := aliceCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name:       "bad-group-entry",
+		Kind:       api.KindConnected,
+		OwnerGroup: "group:team-other@example.com",
+	}); !isAPIStatus(err, http.StatusForbidden) {
+		t.Fatalf("expected 403 when creating entry with non-member owner_group, got %v", err)
+	}
+
+	// 2. Create a connected entry with owner_group=group:team-alpha@example.com (omitting listed -> defaults to false).
+	createAlpha, err := aliceCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name:               "alpha-conn",
+		Kind:               api.KindConnected,
+		HostKind:           api.HostKindWorkstation,
+		DisplayName:        "Alpha Workstation",
+		Purpose:            "Payments & autoscaler controller",
+		OwnerGroup:         "group:team-alpha@example.com",
+		ConnectedPrincipal: "serviceAccount:ci-bot@proj.iam.gserviceaccount.com",
+		Tags:               []string{"payments", "prod"},
+		Scopes: []api.ScopeInput{
+			{Repo: "acme/monorepo", PathPrefix: "services/payments", Role: api.RolePrimary},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry alpha-conn: %v", err)
+	}
+	if createAlpha.Entry.Listed {
+		t.Fatalf("expected POST /api/entries to default listed=false, got listed=true")
+	}
+	if !strings.HasPrefix(createAlpha.RegistrationToken, "grc_") || createAlpha.Credential == nil {
+		t.Fatalf("expected grc_ token and Credential metadata for connected entry, got %+v", createAlpha)
+	}
+
+	// Unlisted entry is never in CatalogCache.Snapshot() or /api/directory.
+	dirBeforeList, err := plannerCli.Directory(ctx, api.DirectoryQuery{})
+	if err != nil || len(dirBeforeList.Entries) != 0 {
+		t.Fatalf("expected 0 directory entries while unlisted, got %+v (err=%v)", dirBeforeList, err)
+	}
+
+	// 3. Verified owner_group member (coowner@example.com) can co-manage alpha-conn:
+	// flip listed=true, update display_name, and resize/create instance entries where quota stays on owner (alice).
+	listedTrue := true
+	newDisplay := "Alpha Team Controller"
+	updatedAlpha, err := coownerCli.UpdateEntry(ctx, "alpha-conn", api.UpdateEntryRequest{
+		DisplayName: &newDisplay,
+		Listed:      &listedTrue,
+	})
+	if err != nil {
+		t.Fatalf("coowner UpdateEntry alpha-conn: %v", err)
+	}
+	if !updatedAlpha.Listed || updatedAlpha.DisplayName != newDisplay {
+		t.Fatalf("unexpected updated entry: %+v", updatedAlpha)
+	}
+
+	// Non-member bob cannot update or view credentials on alpha-conn.
+	if _, err := bobCli.UpdateEntry(ctx, "alpha-conn", api.UpdateEntryRequest{DisplayName: &newDisplay}); !isAPIStatus(err, http.StatusForbidden) {
+		t.Fatalf("expected 403 for bob updating alpha-conn, got %v", err)
+	}
+
+	// 4. GroupResolver failure fails closed with 503 + Retry-After: 5 for group-dependent checks,
+	// while direct owner (alice) remains unaffected!
+	groups.failNow.Store(true)
+	if _, err := coownerCli.GetEntry(ctx, "alpha-conn"); !isAPIStatus(err, http.StatusServiceUnavailable) {
+		t.Fatalf("expected 503 for coowner when GroupResolver fails, got %v", err)
+	}
+	if _, err := aliceCli.GetEntry(ctx, "alpha-conn"); err != nil {
+		t.Fatalf("expected direct owner alice to succeed even when GroupResolver fails, got %v", err)
+	}
+	groups.failNow.Store(false)
+
+	// 5. Synchronous 409 primary-prefix conflict on POST /api/entries and PUT /api/entries/<name>/scopes.
+	_, err = bobCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name:   "bob-overlap",
+		Kind:   api.KindConnected,
+		Listed: &listedTrue,
+		Scopes: []api.ScopeInput{
+			{Repo: "acme/monorepo", PathPrefix: "services/payments/sub", Role: api.RolePrimary},
+		},
+	})
+	if !isAPIStatus(err, http.StatusConflict) {
+		t.Fatalf("expected 409 Conflict on overlapping listed primary scope, got %v", err)
+	}
+
+	// 6. Heartbeats on :8081 (grc_ token) and :8080 (FrontIdentity + dual-binding) and live tunnel liveness.
+	// Simulate active tunnel session for alpha-conn so connected entry is online once heartbeat lands.
+	alphaRow, err := st.GetEntryByName(ctx, "alpha-conn")
+	if err != nil {
+		t.Fatalf("GetEntryByName alpha-conn: %v", err)
+	}
+	if _, err := st.AcquireTunnelSessionWithCred(ctx, alphaRow.ID, "rep-step12", "198.51.100.20:5000", createAlpha.Credential.CredentialID); err != nil {
+		t.Fatalf("AcquireTunnelSessionWithCred: %v", err)
+	}
+	_, _ = srv.Router().TunnelCache().RefreshEntry(ctx, "alpha-conn")
+
+	pubHbCli, err := api.NewClient(api.ClientConfig{
+		BaseURL:           pubTS.URL,
+		AllowInsecureHTTP: true,
+		RegistrationToken: createAlpha.RegistrationToken,
+	})
+	if err != nil {
+		t.Fatalf("NewClient pubHbCli: %v", err)
+	}
+	hbResp, err := pubHbCli.Heartbeat(ctx, "alpha-conn", api.HeartbeatRequest{
+		GrainVersion:       "v1.5.0",
+		GrainCommit:        "deadbeef",
+		HostKind:           api.HostKindWorkstation,
+		Health:             api.HealthOK,
+		ActiveTasks:        1,
+		AwaitingReplyTasks: 2,
+		Scopes: []api.HeartbeatScope{
+			{Repo: "acme/monorepo", PathPrefix: "", Role: api.RolePrimary},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Heartbeat on :8081: %v", err)
+	}
+	if hbResp.Status != api.StatusOnline || hbResp.NextIntervalSeconds != 15 {
+		t.Fatalf("expected online and next_interval_seconds=15, got %+v", hbResp)
+	}
+	// Declared scope narrowed acme/monorepo "" -> "services/payments".
+	if len(hbResp.ActiveScopes) != 1 || hbResp.ActiveScopes[0].PathPrefix != "services/payments" {
+		t.Fatalf("expected active scope narrowed to services/payments, got %+v", hbResp.ActiveScopes)
+	}
+
+	// Also verify FrontIdentity heartbeat as connected_principal (`ci-bot@proj.iam.gserviceaccount.com`) on :8080.
+	ciBotCli := clientFor("ci-bot@proj.iam.gserviceaccount.com")
+	if _, err := ciBotCli.Heartbeat(ctx, "alpha-conn", api.HeartbeatRequest{
+		GrainVersion: "v1.5.0",
+		GrainCommit:  "deadbeef",
+		HostKind:     api.HostKindWorkstation,
+		Health:       api.HealthOK,
+		ActiveTasks:  1,
+		Scopes: []api.HeartbeatScope{
+			{Repo: "acme/monorepo", PathPrefix: "", Role: api.RolePrimary},
+		},
+	}); err != nil {
+		t.Fatalf("Heartbeat as connected_principal on :8080: %v", err)
+	}
+
+	// 7. Create a second listed connected entry (`bob-catchall`) with secondary repo-wide scope on acme/monorepo.
+	createBob, err := bobCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name:     "bob-catchall",
+		Kind:     api.KindConnected,
+		HostKind: api.HostKindKubernetes,
+		Listed:   &listedTrue,
+		Tags:     []string{"catchall"},
+		Scopes: []api.ScopeInput{
+			{Repo: "acme/monorepo", PathPrefix: "", Role: api.RoleSecondary},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry bob-catchall: %v", err)
+	}
+	bobRow, _ := st.GetEntryByName(ctx, "bob-catchall")
+	bobTS, err := st.AcquireTunnelSessionWithCred(ctx, bobRow.ID, "rep-step12", "198.51.100.21:5000", createBob.Credential.CredentialID)
+	if err != nil {
+		t.Fatalf("AcquireTunnelSessionWithCred bob: %v", err)
+	}
+	_, _ = srv.Router().TunnelCache().RefreshEntry(ctx, "bob-catchall")
+	_, err = bobCli.Heartbeat(ctx, "bob-catchall", api.HeartbeatRequest{
+		GrainVersion: "v1.5.0",
+		HostKind:     api.HostKindKubernetes,
+		Health:       api.HealthOK,
+		ActiveTasks:  0,
+		Scopes: []api.HeartbeatScope{
+			{Repo: "acme/monorepo", PathPrefix: "", Role: api.RoleSecondary},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Heartbeat bob-catchall: %v", err)
+	}
+
+	// 8. Verify CatalogCache-backed GET /api/directory and GET /api/route (and zero-SQL hot path!).
+	dirAll, err := plannerCli.Directory(ctx, api.DirectoryQuery{Repo: "acme/monorepo"})
+	if err != nil {
+		t.Fatalf("Directory: %v", err)
+	}
+	if len(dirAll.Entries) != 2 {
+		t.Fatalf("expected 2 listed entries in directory, got %+v", dirAll.Entries)
+	}
+	reloadsBeforeHotPath := srv.Router().CatalogCache().ReloadCount()
+
+	// Multiple /api/directory and /api/route queries must execute with ZERO additional SQL reloads!
+	for i := 0; i < 5; i++ {
+		d, err := plannerCli.Directory(ctx, api.DirectoryQuery{Tag: "payments", HostKind: api.HostKindWorkstation})
+		if err != nil || len(d.Entries) != 1 || d.Entries[0].Name != "alpha-conn" {
+			t.Fatalf("filtered Directory failed: %+v (err=%v)", d, err)
+		}
+		rtRes, err := plannerCli.Route(ctx, api.RouteQuery{Repo: "acme/monorepo", Path: "services/payments/charge.go"})
+		if err != nil || len(rtRes.Candidates) != 2 || rtRes.Candidates[0].Name != "alpha-conn" || rtRes.Candidates[1].Name != "bob-catchall" {
+			t.Fatalf("unexpected route ranking: %+v (err=%v)", rtRes, err)
+		}
+	}
+	if srv.Router().CatalogCache().ReloadCount() != reloadsBeforeHotPath {
+		t.Fatalf("expected zero SQL reloads on /api/directory and /api/route hot path, reloads changed %d -> %d", reloadsBeforeHotPath, srv.Router().CatalogCache().ReloadCount())
+	}
+
+	// Path traversal (`..`) on /api/route is rejected with 400 Bad Request.
+	if _, err := plannerCli.Route(ctx, api.RouteQuery{Repo: "acme/monorepo", Path: "services/../secrets"}); !isAPIStatus(err, http.StatusBadRequest) {
+		t.Fatalf("expected 400 Bad Request on .. path traversal in /api/route, got %v", err)
+	}
+
+	// Advance clock by 2 minutes so alpha-conn becomes offline while bob-catchall stays online:
+	// By default, offline primary (alpha-conn) stays in rank 1 with status=offline ahead of online secondary (bob-catchall);
+	// with include_offline=false, only online secondary (bob-catchall) is returned!
+	now = now.Add(2 * time.Minute)
+	_ = st.UpsertReplica(ctx, "rep-step12", "127.0.0.1:18082")
+	_, _ = st.RecordHeartbeat(ctx, bobRow.ID, api.HeartbeatRequest{
+		GrainVersion: "v1.5.0",
+		HostKind:     api.HostKindKubernetes,
+		Health:       api.HealthOK,
+		Scopes: []api.HeartbeatScope{
+			{Repo: "acme/monorepo", PathPrefix: "", Role: api.RoleSecondary},
+		},
+	})
+	_ = st.TouchTunnelSession(ctx, bobRow.ID, bobTS.SessionEpoch, 5)
+	_, _ = srv.Router().TunnelCache().RefreshEntry(ctx, "bob-catchall")
+
+	rtOfflinePrimary, err := plannerCli.Route(ctx, api.RouteQuery{Repo: "acme/monorepo", Path: "services/payments/charge.go"})
+	if err != nil {
+		t.Fatalf("Route with offline primary: %v", err)
+	}
+	if len(rtOfflinePrimary.Candidates) != 2 ||
+		rtOfflinePrimary.Candidates[0].Name != "alpha-conn" ||
+		rtOfflinePrimary.Candidates[0].Status != api.StatusOffline ||
+		rtOfflinePrimary.Candidates[1].Name != "bob-catchall" ||
+		rtOfflinePrimary.Candidates[1].Status != api.StatusOnline {
+		t.Fatalf("expected offline primary in rank 1 ahead of online secondary, got %+v", rtOfflinePrimary.Candidates)
+	}
+
+	// With include_offline=false, even offline primaries are excluded so only online secondary is returned.
+	reqOnlineOnly := httptest.NewRequest(http.MethodGet, "https://registry.example.com/api/route?repo=acme/monorepo&path=services/payments/charge.go&include_offline=false", nil)
+	reqOnlineOnly.Header.Set("X-Test-Email", "planner@proj.iam.gserviceaccount.com")
+	recOnlineOnly := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recOnlineOnly, reqOnlineOnly)
+	if recOnlineOnly.Code != http.StatusOK {
+		t.Fatalf("GET /api/route?include_offline=false: %d %s", recOnlineOnly.Code, recOnlineOnly.Body.String())
+	}
+	var rtOnlineOnly api.RouteResponse
+	if err := json.Unmarshal(recOnlineOnly.Body.Bytes(), &rtOnlineOnly); err != nil {
+		t.Fatalf("decode RouteResponse: %v", err)
+	}
+	if len(rtOnlineOnly.Candidates) != 1 || rtOnlineOnly.Candidates[0].Name != "bob-catchall" {
+		t.Fatalf("expected only online secondary when include_offline=false, got %+v", rtOnlineOnly.Candidates)
+	}
+
+	// 9. Two-step ownership transfer (`POST /api/entries/<name>/transfer` -> `.../transfer/accept`).
+	offered, err := coownerCli.OfferTransfer(ctx, "alpha-conn", api.TransferRequest{
+		To: "bob@example.com",
+	})
+	if err != nil || offered.PendingOwner != "bob@example.com" {
+		t.Fatalf("OfferTransfer by coowner failed: %+v (err=%v)", offered, err)
+	}
+	// Non-recipient (coowner) cannot accept transfer on bob's behalf.
+	if _, err := coownerCli.AcceptTransfer(ctx, "alpha-conn"); !isAPIStatus(err, http.StatusBadRequest) && !isAPIStatus(err, http.StatusForbidden) {
+		t.Fatalf("expected non-recipient AcceptTransfer to fail, got %v", err)
+	}
+	// Recipient (bob) accepts transfer; owner_group is preserved across transfer unless cleared.
+	accepted, err := bobCli.AcceptTransfer(ctx, "alpha-conn")
+	if err != nil || accepted.Owner != "bob@example.com" || accepted.OwnerGroup != "group:team-alpha@example.com" {
+		t.Fatalf("AcceptTransfer by bob failed: %+v (err=%v)", accepted, err)
+	}
+}
+
 func startEphemeralPostgresForRegistryTest(t *testing.T) string {
 	t.Helper()
 	if envURL := strings.TrimSpace(os.Getenv("GRAIN_TEST_POSTGRES_URL")); envURL != "" {
