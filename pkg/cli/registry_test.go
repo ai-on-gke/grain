@@ -129,7 +129,7 @@ func TestRegistryCLIRegisterStatusUnregister(t *testing.T) {
 			tok := "grc_rotated_token"
 			activeTokens[name] = tok
 			_ = json.NewEncoder(w).Encode(api.RotateCredentialResponse{RegistrationToken: tok})
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/heartbeat"):
+		case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/heartbeat"):
 			name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/entries/"), "/heartbeat")
 			if want := activeTokens[name]; want != "" && auth != want {
 				w.WriteHeader(http.StatusUnauthorized)
@@ -368,7 +368,7 @@ func TestGrainRegistryRegisterRetargetingNeverSendsCrossHostToken(t *testing.T) 
 				_ = json.NewEncoder(w).Encode(api.Entry{Name: "widgets-dev", Kind: api.KindConnected, HostKind: api.HostKindWorkstation, Listed: true})
 			case r.Method == http.MethodPost && r.URL.Path == "/api/entries/widgets-dev/credentials/rotate":
 				_ = json.NewEncoder(w).Encode(api.RotateCredentialResponse{RegistrationToken: ownTok})
-			case r.Method == http.MethodPost && r.URL.Path == "/api/entries/widgets-dev/heartbeat":
+			case r.Method == http.MethodPut && r.URL.Path == "/api/entries/widgets-dev/heartbeat":
 				if gotRegTok != ownTok {
 					w.WriteHeader(http.StatusUnauthorized)
 					_, _ = w.Write([]byte(`{"error":"unexpected token"}`))
@@ -525,5 +525,44 @@ func TestDaemonRegistryFlags(t *testing.T) {
 	badURL.Registry.URL = "http://registry.example.com"
 	if err := checkConfig(badURL); err == nil || !strings.Contains(err.Error(), "insecure http://") {
 		t.Fatalf("checkConfig(http url) = %v, want insecure http:// error", err)
+	}
+
+	// -registry-connect without registry verifier flags fails closed in checkConfig.
+	t.Setenv(daemon.RegistryConnectEnv, "")
+	t.Setenv("GRAIN_REGISTRY_ISSUER", "")
+	t.Setenv("GRAIN_REGISTRY_AUDIENCE", "")
+	t.Setenv("GRAIN_REGISTRY_KEYS_URL", "")
+	connCfg, _, _, err := parseDaemonArgs([]string{
+		"-data-dir", "/tmp/grain-data",
+		"-disable-native-sandboxes",
+		"-registry-connect",
+	})
+	if err != nil {
+		t.Fatalf("parseDaemonArgs(-registry-connect): %v", err)
+	}
+	if !connCfg.RegistryConnect {
+		t.Fatal("connCfg.RegistryConnect = false, want true")
+	}
+	if err := checkConfig(connCfg); err == nil || !strings.Contains(err.Error(), "-ui-registry-issuer") {
+		t.Fatalf("checkConfig(-registry-connect without verifier flags) = %v, want missing -ui-registry-issuer error", err)
+	}
+
+	// $GRAIN_REGISTRY_CONNECT=true + verifier flags passes checkConfig.
+	t.Setenv(daemon.RegistryConnectEnv, "true")
+	connEnvCfg, _, _, err := parseDaemonArgs([]string{
+		"-data-dir", "/tmp/grain-data",
+		"-disable-native-sandboxes",
+		"-ui-registry-issuer", "https://grain.example.com",
+		"-ui-registry-audience", "https://my-grain.grain.example.com",
+		"-ui-registry-keys-url", "https://grain.example.com/.well-known/jwks.json",
+	})
+	if err != nil {
+		t.Fatalf("parseDaemonArgs(GRAIN_REGISTRY_CONNECT=true): %v", err)
+	}
+	if !connEnvCfg.RegistryConnect {
+		t.Fatal("connEnvCfg.RegistryConnect = false, want true")
+	}
+	if err := checkConfig(connEnvCfg); err != nil {
+		t.Fatalf("checkConfig(-registry-connect with verifier flags) = %v, want nil", err)
 	}
 }

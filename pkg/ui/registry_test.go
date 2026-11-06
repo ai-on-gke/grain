@@ -16,8 +16,14 @@ package ui_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -29,6 +35,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/registry/api"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/webauth"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestRegistrySettingsAndEndpoints(t *testing.T) {
@@ -267,5 +275,193 @@ func TestRegistryTargetRequiresSecretsWriteRole(t *testing.T) {
 	}
 	if code, resp := h.call("ops@example.com", http.MethodPut, "/api/settings", body); code != http.StatusOK {
 		t.Fatalf("settings+secrets role PUT /api/settings(registry.url): %d %s, want 200", code, resp)
+	}
+}
+
+func TestRegistryTunnelHandlerRequiresAssertionAndRejectsShortcuts(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+
+	c, _, ctx := testClient(t)
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	byteLen := (ecKey.PublicKey.Curve.Params().BitSize + 7) / 8
+	xBytes := ecKey.PublicKey.X.FillBytes(make([]byte, byteLen))
+	yBytes := ecKey.PublicKey.Y.FillBytes(make([]byte, byteLen))
+	jwksSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"keys": []map[string]string{
+				{
+					"kty": "EC",
+					"crv": "P-256",
+					"alg": "ES256",
+					"use": "sig",
+					"kid": "reg-key-1",
+					"x":   base64.RawURLEncoding.EncodeToString(xBytes),
+					"y":   base64.RawURLEncoding.EncodeToString(yBytes),
+				},
+			},
+		})
+	}))
+	t.Cleanup(jwksSrv.Close)
+
+	const (
+		issuer     = "https://grain.example.com"
+		audience   = "https://my-grain.grain.example.com"
+		accessCode = "local-access-code-secret"
+	)
+
+	c.Config.LocalAPIToken = accessCode
+	c.Config.RegistryIssuer = issuer
+	c.Config.RegistryAudience = audience
+	c.Config.RegistryKeysURL = jwksSrv.URL
+	c.Config.AllowedPrincipals = []string{"user:alice@example.com"}
+	c.Config.StateRepoRef = func() model.RepoRef {
+		return model.RepoRef{Owner: "acme", Name: "grain-config"}
+	}
+	// Intentionally leave RequireVerifier empty on c.Config to simulate a
+	// workstation grain whose local listener accepts the access code while
+	// -registry-connect serves accepted mux streams behind RegistryTunnelHandler.
+
+	srv := ui.NewServerWithClient(c)
+	ui.SetAccessCodeForTest(srv, accessCode)
+	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	if _, err := c.AddTargetRepo(ctx, "acme/widgets"); err != nil {
+		t.Fatalf("AddTargetRepo(acme/widgets): %v", err)
+	}
+	if _, err := c.AddTargetRepo(ctx, "acme/grain-config"); err != nil {
+		t.Fatalf("AddTargetRepo(acme/grain-config): %v", err)
+	}
+	if _, err := c.AddTargetRepo(ctx, model.ConfigRepo().String()); err != nil {
+		t.Fatalf("AddTargetRepo(%s): %v", model.ConfigRepo(), err)
+	}
+
+	// 1. On the local listener (srv), local access code is accepted and
+	// HTTPClient.GetRegistryInstanceStatus returns scopes excluding grain/config and stateRepo.
+	localHTTP := httptest.NewServer(srv)
+	t.Cleanup(localHTTP.Close)
+	hc := ui.NewHTTPClient(localHTTP.URL)
+	hc.Token = accessCode
+	instStatus, err := hc.GetRegistryInstanceStatus(ctx)
+	if err != nil {
+		t.Fatalf("GetRegistryInstanceStatus on local listener: %v", err)
+	}
+	if len(instStatus.Scopes) != 1 || instStatus.Scopes[0].Repo != "acme/widgets" {
+		t.Fatalf("GetRegistryInstanceStatus scopes = %+v, want [acme/widgets] (excluding grain/config)", instStatus.Scopes)
+	}
+
+	// 2. On RegistryTunnelHandler(), every route unconditionally requires a
+	// valid X-Grain-Registry-Assertion and rejects loopback/access-code shortcuts.
+	tunnelHandler := srv.RegistryTunnelHandler()
+	mintAssertion := func(aud string, exp time.Time) string {
+		now := time.Now()
+		claims := webauth.RegistryClaims{
+			RegisteredClaims: jwt.RegisteredClaims{
+				Issuer:    issuer,
+				Audience:  jwt.ClaimStrings{aud},
+				Subject:   "alice@example.com",
+				IssuedAt:  jwt.NewNumericDate(now.Add(-5 * time.Second)),
+				NotBefore: jwt.NewNumericDate(now.Add(-5 * time.Second)),
+				ExpiresAt: jwt.NewNumericDate(exp),
+				ID:        "jti-tunnel-1",
+			},
+			Email:     "alice@example.com",
+			Kind:      webauth.PrincipalHuman,
+			RequestID: "req_tunnel_1",
+		}
+		tok := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+		tok.Header["kid"] = "reg-key-1"
+		signed, err := tok.SignedString(ecKey)
+		if err != nil {
+			t.Fatalf("SignedString: %v", err)
+		}
+		return signed
+	}
+	validAssertion := mintAssertion(audience, time.Now().Add(55*time.Second))
+
+	for _, path := range []string{"/", "/api/config", "/api/auth/whoami", "/api/hostd/connect", "/api/registry/status"} {
+		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080"+path, nil)
+		req.RemoteAddr = "127.0.0.1:54321"
+		rec := httptest.NewRecorder()
+		tunnelHandler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("tunnel GET %s without assertion = %d, want 401", path, rec.Code)
+		}
+	}
+
+	// Reject wrong audience and expired assertions.
+	for name, tok := range map[string]string{
+		"wrong-audience": mintAssertion("https://other.grain.example.com", time.Now().Add(55*time.Second)),
+		"expired":        mintAssertion(audience, time.Now().Add(-5*time.Minute)),
+	} {
+		req := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/registry/status", nil)
+		req.Header.Set(ui.RegistryAssertionHeader, tok)
+		rec := httptest.NewRecorder()
+		tunnelHandler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("tunnel GET with %s assertion = %d, want 401", name, rec.Code)
+		}
+	}
+
+	// Reject access-code headers, cookies, and non-external-agent bearer tokens
+	// even when accompanied by a valid X-Grain-Registry-Assertion and loopback RemoteAddr.
+	shortcutCases := []struct {
+		name   string
+		mutate func(*http.Request)
+	}{
+		{
+			name: "X-Grain-Access-Code header",
+			mutate: func(r *http.Request) {
+				r.Header.Set("X-Grain-Access-Code", accessCode)
+			},
+		},
+		{
+			name: "grain_access cookie",
+			mutate: func(r *http.Request) {
+				r.AddCookie(&http.Cookie{Name: "grain_access", Value: accessCode})
+			},
+		},
+		{
+			name: "Authorization Bearer access code",
+			mutate: func(r *http.Request) {
+				r.Header.Set("Authorization", "Bearer "+accessCode)
+			},
+		},
+		{
+			name: "Authorization Bearer callback token (ghsa_)",
+			mutate: func(r *http.Request) {
+				r.Header.Set("Authorization", "Bearer ghsa_localscriptcallbacktoken")
+			},
+		},
+	}
+	for _, sc := range shortcutCases {
+		req := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/registry/status", nil)
+		req.RemoteAddr = "127.0.0.1:54321"
+		req.Header.Set(ui.RegistryAssertionHeader, validAssertion)
+		sc.mutate(req)
+		rec := httptest.NewRecorder()
+		tunnelHandler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("tunnel request with %s = %d (%s), want 401", sc.name, rec.Code, rec.Body.String())
+		}
+	}
+
+	// Valid X-Grain-Registry-Assertion without shortcuts succeeds on tunnel stream.
+	okReq := httptest.NewRequest(http.MethodGet, "https://my-grain.grain.example.com/api/registry/status", nil)
+	okReq.RemoteAddr = "127.0.0.1:54321"
+	okReq.Header.Set(ui.RegistryAssertionHeader, validAssertion)
+	okRec := httptest.NewRecorder()
+	tunnelHandler.ServeHTTP(okRec, okReq)
+	if okRec.Code != http.StatusOK {
+		t.Fatalf("tunnel GET /api/registry/status with valid assertion = %d: %s", okRec.Code, okRec.Body.String())
+	}
+	gotStatus := decode[api.InstanceStatusResponse](t, okRec)
+	if len(gotStatus.Scopes) != 1 || gotStatus.Scopes[0].Repo != "acme/widgets" {
+		t.Errorf("tunnel InstanceStatusResponse.Scopes = %+v, want [acme/widgets]", gotStatus.Scopes)
 	}
 }

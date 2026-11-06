@@ -104,13 +104,39 @@ func CheckUIRegistryVerifier(cfg Config) error {
 	return nil
 }
 
+// CheckRegistryConnect validates -registry-connect: starting with
+// -registry-connect requires an active "registry" IdentityVerifier
+// (-ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url, or a
+// registered "registry" IdentityVerifier) so incoming tunnel streams can never
+// be served without X-Grain-Registry-Assertion verification.
+func CheckRegistryConnect(cfg Config) error {
+	if err := CheckUIRegistryVerifier(cfg); err != nil {
+		return err
+	}
+	if !cfg.RegistryConnect {
+		return nil
+	}
+	ctx := ui.WithIAPConfig(context.Background(), ui.IAPConfig{
+		Audience:         cfg.UiIAPAudience,
+		Issuer:           cfg.UiIAPIssuer,
+		KeysURL:          cfg.UiIAPKeysURL,
+		RegistryIssuer:   cfg.UiRegistryIssuer,
+		RegistryAudience: cfg.UiRegistryAudience,
+		RegistryKeysURL:  cfg.UiRegistryKeysURL,
+	})
+	if ui.HasActiveVerifier(ctx, string(ui.AuthMethodRegistry)) {
+		return nil
+	}
+	return errors.New("-registry-connect requires -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url")
+}
+
 // CheckUIRequireVerifier validates -ui-require-verifier (and its
 // -ui-require-iap alias): it refuses conflicting flags and refuses to start
 // when the named IdentityVerifier is not active, because with no assertion
 // able to verify and no access code accepted over the network, nobody could
 // reach the UI except from the daemon's own host.
 func CheckUIRequireVerifier(cfg Config) error {
-	if err := CheckUIRegistryVerifier(cfg); err != nil {
+	if err := CheckRegistryConnect(cfg); err != nil {
 		return err
 	}
 	req := strings.TrimSpace(cfg.UiRequireVerifier)
@@ -253,7 +279,7 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 	if err := checkUIAllowedPrincipalsWithPool(cfg, combinedPoolSAs); err != nil {
 		return nil, err
 	}
-	if err := CheckUIRegistryVerifier(cfg); err != nil {
+	if err := CheckRegistryConnect(cfg); err != nil {
 		return nil, err
 	}
 	var provisionedSAs []string
@@ -796,6 +822,14 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 	// client (sandbox_cli.go).
 	liveSandboxCLI.Store(uiClient)
 	srv := ui.NewServerWithClient(uiClient)
+	if cfg.RegistryConnect {
+		if reg := live.Registry(); reg != nil && !reg.HasTunnelConnector() {
+			reg.SetTunnelConnector(NewRegistryTunnelSupervisor(RegistryTunnelSupervisorOptions{
+				Handler:        srv.RegistryTunnelHandler(),
+				OnUnauthorized: reg.InvalidateOIDCCache,
+			}))
+		}
+	}
 	// A CI job's api token is answered by this same handler, in process,
 	// held to its route table (pkg/capability/ciapi).
 	CIAPI.SetUpstream(srv)
