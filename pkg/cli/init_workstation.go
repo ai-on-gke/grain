@@ -272,6 +272,22 @@ func renderWorkstationPolicy(o workstationOptions) string {
 const directorNetworkWarning = "This sandbox backend cannot withhold a network, so grain files the Director chat with open network, " +
 	"and this policy holds it: add \"open\" to network: in the policy, or use granule sandboxes, which can give the Director none."
 
+// directorEgressNetworkWarning is what init says when a build registers a
+// DefaultOn capability needing sandbox egress (Registration.SandboxEgress),
+// which keeps the shipped Director open even on granule while the policy
+// written for -network none allows only none.
+const directorEgressNetworkWarning = "The Director chat ships with open network on this build, so this policy holds it: " +
+	"add \"open\" to network: in the policy, or set the Director's network to none in its console session settings."
+
+func directorDefaultNetwork(isolates bool) model.NetworkAccess {
+	for _, s := range model.DefaultConsoleSessions() {
+		if s.ID == model.DirectorSessionID {
+			return model.ConsoleSessionNetworkAccess(s, isolates)
+		}
+	}
+	return model.NetworkNone
+}
+
 // directorCapabilities is every capability the Director chat is granted
 // (model.DefaultConsoleSessions, by way of model.ConsoleSessionGrants),
 // as local policy's capabilities.allow names it: a capability reference
@@ -682,8 +698,12 @@ func runInitWorkstation(ctx context.Context, args []string, stdin io.Reader, out
 	} else if o.Network == string(model.NetworkNone) {
 		fmt.Fprintln(out, "Once the daemon is up, run `grain settings -network-access none`: the policy allows only that network.")
 	}
-	if o.Network == string(model.NetworkNone) && o.SandboxBackend != string(model.SandboxBackendGranule) {
-		fmt.Fprintln(out, directorNetworkWarning)
+	if o.Network == string(model.NetworkNone) {
+		if o.SandboxBackend != string(model.SandboxBackendGranule) {
+			fmt.Fprintln(out, directorNetworkWarning)
+		} else if directorDefaultNetwork(true) != model.NetworkNone {
+			fmt.Fprintln(out, directorEgressNetworkWarning)
+		}
 	}
 	if !started {
 		fmt.Fprintf(out, "Run the daemon in the foreground with: %s\n", launcher)

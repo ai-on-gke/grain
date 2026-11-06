@@ -249,6 +249,25 @@ func TestInitWorkstationOnGranuleDoesNotWarnTheDirectorIsHeld(t *testing.T) {
 	}
 }
 
+// A build that registers a DefaultOn capability needing sandbox egress keeps
+// shipping the Director open even on granule, so -network none holds it there
+// and init warns accordingly.
+func TestInitWorkstationOnGranuleWarnsWhenEgressCapabilityKeepsDirectorOpen(t *testing.T) {
+	pinDefaultGitHost(t)
+	t.Cleanup(model.RegisterDefaultConsoleSessionEgressCapability("zz-egress-init-test"))
+	home := t.TempDir()
+	env, _ := fakeWorkstation(home, []string{"docker", "granule", "codex", "systemctl"}, true, true)
+	var out bytes.Buffer
+	err := runInitWorkstation(context.Background(), []string{"-non-interactive", "-repo", "acme/widgets",
+		"-owner", "me@example.com", "-network", "none", "-start-service=false"}, strings.NewReader(""), &out, env)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), directorEgressNetworkWarning) {
+		t.Errorf("init on granule with -network none on an egress-default build did not warn:\n%s", out.String())
+	}
+}
+
 func TestInitWorkstationWritesWhatTheServiceRuns(t *testing.T) {
 	pinDefaultGitHost(t)
 	home := t.TempDir()

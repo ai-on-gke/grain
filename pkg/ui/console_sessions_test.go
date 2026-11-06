@@ -1191,3 +1191,98 @@ func TestActiveConsoleSessionEditableWhenStateRepoConfigured(t *testing.T) {
 		t.Errorf("PUT /api/console-sessions/director Capabilities = %v", putResp.Sessions[0].Capabilities)
 	}
 }
+
+type unisolatedShapedSandboxes struct{}
+
+func (unisolatedShapedSandboxes) Health(context.Context) []ui.SandboxSnapshot { return nil }
+func (unisolatedShapedSandboxes) SandboxCount() int                           { return 0 }
+func (unisolatedShapedSandboxes) IsolatesNetwork() bool                       { return false }
+
+// ContainerSandboxes and plain K8sSandboxes apply a sandbox shape
+// (SandboxShapeIgnored is false) yet cannot withhold a network, so their
+// Acquire refuses model.NetworkNone. With the shipped Director asking for
+// NetworkNone, the console-session API must resolve its task and sync snapshot
+// to NetworkOpen while still reporting the session's configured "none".
+func TestConsoleSessionsOnShapedUnisolatedBackendResolveNetworkNoneToOpen(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := testClient(t)
+	client.Config.Sandboxes = unisolatedShapedSandboxes{}
+	client.Config.SandboxShapeIgnored = false
+
+	shipped := model.DefaultConsoleSessions()[0]
+	now := time.Date(2026, 11, 6, 18, 0, 0, 0, time.UTC)
+	taskID, err := model.FileConsoleSessionTask(ctx, store, shipped, model.FileConsoleSessionOptions{
+		NetworkIsolates: false,
+		Now:             now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.RecordSyncedConsoleSession(ctx, store, taskID, model.ConsoleSessionConfigSnapshot{
+		Capabilities:  shipped.Capabilities,
+		Writes:        shipped.Writes,
+		NetworkAccess: model.NetworkOpen,
+		Title:         model.ConsoleSessionTitle(shipped),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	listed, err := client.ListConsoleSessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].NetworkAccess != string(model.NetworkNone) {
+		t.Fatalf("ListConsoleSessions NetworkAccess = %q, want %q (not the fallback open)", listed[0].NetworkAccess, model.NetworkNone)
+	}
+
+	none := string(model.NetworkNone)
+	if _, err := client.UpdateConsoleSession(ctx, model.DirectorSessionID, ui.UpdateConsoleSessionRequest{
+		NetworkAccess: &none,
+	}); err != nil {
+		t.Fatalf("UpdateConsoleSession: %v", err)
+	}
+	updatedTask, err := store.GetTask(ctx, taskID)
+	if err != nil || updatedTask == nil {
+		t.Fatalf("GetTask(%s): %v", taskID, err)
+	}
+	if updatedTask.NetworkAccess != model.NetworkOpen {
+		t.Errorf("task NetworkAccess after UpdateConsoleSession(none) = %q, want %q", updatedTask.NetworkAccess, model.NetworkOpen)
+	}
+	if snap, ok := model.LastSyncedConsoleSession(ctx, store, taskID); !ok || snap.NetworkAccess != model.NetworkOpen {
+		t.Errorf("synced snapshot NetworkAccess = %q (ok=%v), want %q", snap.NetworkAccess, ok, model.NetworkOpen)
+	}
+
+	restarted, err := client.RestartConsoleSession(ctx, model.DirectorSessionID, ui.RestartConsoleSessionRequest{})
+	if err != nil {
+		t.Fatalf("RestartConsoleSession: %v", err)
+	}
+	restartedTask, err := store.GetTask(ctx, restarted[0].TaskID)
+	if err != nil || restartedTask == nil {
+		t.Fatalf("GetTask(%s): %v", restarted[0].TaskID, err)
+	}
+	if restartedTask.NetworkAccess != model.NetworkOpen {
+		t.Errorf("restarted task NetworkAccess = %q, want %q", restartedTask.NetworkAccess, model.NetworkOpen)
+	}
+
+	afterCreate, err := client.CreateConsoleSession(ctx, ui.CreateConsoleSessionRequest{
+		ID:            "ops",
+		Title:         "Ops",
+		NetworkAccess: string(model.NetworkNone),
+	})
+	if err != nil {
+		t.Fatalf("CreateConsoleSession: %v", err)
+	}
+	var createdTaskID string
+	for _, s := range afterCreate {
+		if s.ID == "ops" {
+			createdTaskID = s.TaskID
+		}
+	}
+	createdTask, err := store.GetTask(ctx, createdTaskID)
+	if err != nil || createdTask == nil {
+		t.Fatalf("GetTask(%s): %v", createdTaskID, err)
+	}
+	if createdTask.NetworkAccess != model.NetworkOpen {
+		t.Errorf("created session task NetworkAccess = %q, want %q", createdTask.NetworkAccess, model.NetworkOpen)
+	}
+}
