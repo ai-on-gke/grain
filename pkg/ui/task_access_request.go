@@ -156,7 +156,8 @@ func (c *Client) checkAccessItem(ctx context.Context, task model.Task, it model.
 		if ciOnlyCapability(view.Grant) {
 			return fail(fmt.Errorf("%s", model.CIOnlyRefusal(view.Grant)))
 		}
-		if cat, err := c.capabilityCatalogue(ctx); err == nil && cat != nil {
+		// A nil catalogue still applies the built-in director floor.
+		if cat, err := c.capabilityCatalogue(ctx); err == nil {
 			verdict, err := cat.ValidateGrants(c.taskGrantContext(ctx, task, []string{view.Grant}))
 			if err != nil {
 				return fail(err)

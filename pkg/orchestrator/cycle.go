@@ -1907,10 +1907,15 @@ func untilMergedParkHold(ctx context.Context, deps Deps, now time.Time) func(str
 // capability or narrowed who may hold it, and the task waits, saying
 // which grant and why (model.CatalogueWaitCapability), rather than
 // running with it. A wait it recorded is cleared once the task passes.
-// nil when the deployment has no catalogue. Like policyHold it fails
-// closed: a catalogue that cannot be read holds every task this cycle,
-// and a task that cannot be read is held, rather than either being
-// dispatched unjudged.
+// Like policyHold it fails closed: a catalogue that cannot be read holds
+// every task this cycle, and a task that cannot be read is held, rather
+// than either being dispatched unjudged.
+//
+// A deployment with no catalogue still has grain's built-in director
+// floor (model.DirectorFloorRefusal, director-capabilities.spec.md G7):
+// there the hold judges the director session alone, against the floor
+// alone, and lets every other task -- including one it cannot read --
+// through as it always did.
 func catalogueHold(ctx context.Context, deps Deps) func(string) string {
 	cfg, err := deps.Store.GetConfig(ctx)
 	if err != nil {
@@ -1919,17 +1924,23 @@ func catalogueHold(ctx context.Context, deps Deps) func(string) string {
 			return "held by settings/capabilities.yml: the capability catalogue could not be read to check it"
 		}
 	}
-	if cfg == nil || cfg.CapabilityPolicy.Catalogue == nil {
-		return nil
+	var cat *model.CapabilityCatalogue
+	if cfg != nil {
+		cat = cfg.CapabilityPolicy.Catalogue
 	}
-	cat := cfg.CapabilityPolicy.Catalogue
 	return func(taskID string) string {
 		task, err := deps.Store.GetTask(ctx, taskID)
 		if err != nil || task == nil {
+			if cat == nil {
+				return ""
+			}
 			if err != nil {
 				log.Printf("orchestrator: reading %s to check it against the capability catalogue: %v", taskID, err)
 			}
 			return "held by settings/capabilities.yml: the task could not be read to check it"
+		}
+		if cat == nil && model.CatalogueKindOf(*task) != model.CatalogueKindDirector {
+			return ""
 		}
 		gc := model.TaskGrantContext(*task)
 		if gc.TemplateID != "" {
@@ -1942,6 +1953,10 @@ func catalogueHold(ctx context.Context, deps Deps) func(string) string {
 				TaskID: task.ID, Capability: model.CatalogueWaitCapability, Resource: err.Error(), WaitingAt: deps.Config.now(),
 			}); serr != nil {
 				log.Printf("orchestrator: recording why the capability catalogue holds %s: %v", taskID, serr)
+			}
+			var refusal *model.GrantRefusal
+			if errors.As(err, &refusal) && refusal.Builtin {
+				return "held by grain's built-in director floor: " + err.Error()
 			}
 			return "held by settings/capabilities.yml: " + err.Error()
 		}
