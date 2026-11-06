@@ -32,7 +32,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
+	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
@@ -298,7 +298,7 @@ func TestRunCycleDispatchesAGrantWithNoPlacementOntoANonRootedSandbox(t *testing
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	task := filedTask(t, ctx, store, "t1", repo)
 	task.Interactive = true
-	task.Grants = []model.Grant{{Capability: selfdebug.CapabilityName, Via: model.GrantByLabel}}
+	task.Grants = []model.Grant{{Capability: bootstrap.CapabilityName, Via: model.GrantByLabel}}
 	if err := store.PutTask(ctx, task); err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +307,7 @@ func TestRunCycleDispatchesAGrantWithNoPlacementOntoANonRootedSandbox(t *testing
 	deps := orchestrator.Deps{
 		Store: store, Client: client, Sandboxes: sandboxes,
 		Framework:  completesWithAComment(),
-		Config:     orchestrator.Config{Capabilities: model.NewCapabilityRegistry(selfdebug.New())},
+		Config:     orchestrator.Config{Capabilities: model.NewCapabilityRegistry(bootstrap.New())},
 		MaxWorkers: 1,
 	}
 

@@ -5126,20 +5126,6 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		name := strings.TrimSpace(g.Capability)
 		grantNames = append(grantNames, name)
 		switch name {
-		case "self-debug":
-			mayReadCI = true
-			mayReadAllCI = true
-			mayReadSrc = true
-			// What self-debug opens and no more
-			// (design/design/sandbox-first-agent-surface.design.md, and the
-			// tools pkg/mcp/toolnames.go gates on it): memory,
-			// issues and SQL each keep a grant of their own, as their
-			// MCP tools do. Health comes with its api:self-debug
-			// preset's deployment:read, below.
-			mayReadAllTasks = true
-			mayReadFullConfig = true
-			mayReadMetrics = true
-			mayReadPipeline = true
 		case "grain-log", GrainJournalRef, GrainJournalGrant:
 			mayReadGrainLog = true
 		case "deployment-health", GrainHealthRef, GrainHealthGrant:
@@ -5153,6 +5139,20 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		}
 		if IsGrainSQLGrant(name) {
 			mayReadDB = true
+		}
+		// grain#source (or the retired bare self-debug): grain's own
+		// source, and -- for the reason pkg/mcp/ci_repo_scope.go gives --
+		// every repository's CI and the whole of config://. The task
+		// records, metrics, pipeline and health self-debug also opened
+		// are its api:self-debug preset's, below (a bare self-debug is
+		// still read as that preset, apiAliasCapabilities); memory,
+		// issues and SQL each keep a grant of their own, as their MCP
+		// tools do.
+		if IsGrainSourceGrant(name) {
+			mayReadCI = true
+			mayReadAllCI = true
+			mayReadSrc = true
+			mayReadFullConfig = true
 		}
 		if IsGrainCIGrant(name) {
 			mayReadCI = true

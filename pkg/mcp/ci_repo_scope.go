@@ -39,10 +39,11 @@ package mcp
 // its own or red like everything else here" needs, which is what these
 // two tools exist for.
 //
-// A run holding the self-debug grant reads every repository's, because
-// that grant already means "this task is here to work out what grain
-// itself did": it carries read_grain_task and read_grain_task_transcript
-// across every task in the deployment (pkg/capability/selfdebug), and a
+// A run holding the grain#source grant (once self-debug) reads every
+// repository's, because that grant already means "this task is here to
+// work out what grain itself did": it reads grain's own source, and
+// travels with the api:self-debug preset that reads every task in the
+// deployment (model.SelfDebugGrants), and a
 // deployment-wide question about CI -- is this job flaky everywhere, did
 // the guest image break every repository at once -- is the same kind of
 // question asked of the same record. Naming it in the tool description
@@ -89,17 +90,15 @@ import (
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // CIWideReadGrant is the capability whose holder reads every
-// repository's CI rather than only its own task's.
-//
-// Restated here as a string rather than imported: pkg/capability/selfdebug
-// imports pkg/mcp for the tools it grants, so pkg/mcp cannot import it
-// back. cmd/grain holds both and keeps the two spellings equal
-// (TestCIWideReadGrantIsSelfDebug), the same way daemonGrainCI keeps
-// pkg/mcp's restatement of model.CIStatus honest.
-const CIWideReadGrant = "self-debug"
+// repository's CI rather than only its own task's: grain#source (once
+// self-debug), in its deployment-wide form (admincaps.TeamScoped). A run
+// still holding the retired bare self-debug holds it too
+// (model.IsGrainSourceGrant).
+const CIWideReadGrant = model.GrainSourceRef
 
 // CIRepoScope is which repositories one run may read grain CI for. Its
 // zero value grants nothing, which is what a caller that has not been

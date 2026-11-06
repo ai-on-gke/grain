@@ -64,15 +64,20 @@ type Options struct {
 	// with it, as on a real deployment (docs/access-code.md). Empty keeps
 	// it beside the throwaway store and logs it.
 	AccessCodeFile string
-	// IAPAudience, IAPIssuer, IAPKeysURL, RequireVerifier, RequireIAP and
-	// AllowedPrincipals are the daemon's -ui-iap-audience,
-	// -ui-iap-issuer, -ui-iap-keys-url, -ui-require-verifier,
-	// -ui-require-iap and -ui-allowed-principals, so the demo can be put
-	// behind a signing proxy (a real IAP or a test issuer) and sign callers
-	// in as a deployment does (design/design/authentication.design.md).
+	// IAPAudience, IAPIssuer, IAPKeysURL, RegistryIssuer, RegistryAudience,
+	// RegistryKeysURL, RequireVerifier, RequireIAP and AllowedPrincipals are
+	// the daemon's -ui-iap-audience, -ui-iap-issuer, -ui-iap-keys-url,
+	// -ui-registry-issuer, -ui-registry-audience, -ui-registry-keys-url,
+	// -ui-require-verifier, -ui-require-iap and -ui-allowed-principals, so
+	// the demo can be put behind a signing proxy (a real IAP, grain-registry,
+	// or a test issuer) and sign callers in as a deployment does
+	// (design/design/authentication.design.md).
 	IAPAudience       string
 	IAPIssuer         string
 	IAPKeysURL        string
+	RegistryIssuer    string
+	RegistryAudience  string
+	RegistryKeysURL   string
 	RequireVerifier   string
 	RequireIAP        bool
 	AllowedPrincipals []string
@@ -273,6 +278,9 @@ func Run(opts Options) error {
 		IAPAudience:       opts.IAPAudience,
 		IAPIssuer:         opts.IAPIssuer,
 		IAPKeysURL:        opts.IAPKeysURL,
+		RegistryIssuer:    opts.RegistryIssuer,
+		RegistryAudience:  opts.RegistryAudience,
+		RegistryKeysURL:   opts.RegistryKeysURL,
 		RequireVerifier:   opts.RequireVerifier,
 		RequireIAP:        opts.RequireIAP,
 		AllowedPrincipals: opts.AllowedPrincipals,
@@ -397,7 +405,7 @@ func Run(opts Options) error {
 	storedCfg.DefaultModel = "gemini-2.5-pro"
 	storedCfg.GCPProject = "grain-sandbox-dev"
 	storedCfg.GCPServiceAccountEmail = "grain-sb-agent-0@grain-sandbox-dev.iam.gserviceaccount.com"
-	storedCfg.DefaultCapabilities = []string{"self-debug", "read-issues"}
+	storedCfg.DefaultCapabilities = append(model.SelfDebugGrants(), "read-issues")
 	storedCfg.TargetRepos = []string{"acme/widgets"}
 	// The deployment's git connection to the fake credential above, as
 	// `grain connections import` would record it.
@@ -844,7 +852,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		Title:        "Bump the Go toolchain to 1.24",
 		Description:  "go.mod and the CI image both need the version bump.",
 		Approved:     true,
-		Capabilities: &[]string{"self-debug"},
+		Capabilities: &[]string{model.GrainSourceGrant},
 		CustomFields: map[string]ui.CustomFieldValue{
 			"priority": {"medium"},
 			// The field that holds a set, on the task with more than one
@@ -1567,7 +1575,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		Repo:         "acme/widgets",
 		Base:         "main",
 		AutoMerge:    false,
-		Capabilities: []string{"self-debug"},
+		Capabilities: []string{model.GrainSourceGrant},
 		Recurrence:   ui.Recurrence{Kind: "weekly", TimeOfDay: "06:00", Weekday: "monday"},
 	}); err != nil {
 		return fmt.Errorf("seeding schedule: %w", err)

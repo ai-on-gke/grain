@@ -278,7 +278,7 @@ func (s *Store) EnsureLocalHostd(ctx context.Context) error {
 }
 
 // ensureLocalHostd names only the original schema-92 columns so migration 92's
-// Up step runs unchanged before migration 115 adds the enrollment columns.
+// Up step runs unchanged before migration 116 adds the enrollment columns.
 func ensureLocalHostd(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx,
 		"INSERT INTO `hostd` (`name`,`owner`,`labels`,`created_by`,`created_at`,`revoked_at`) VALUES (?, '', '', 'grain', ?, NULL) ON CONFLICT (`name`) DO NOTHING",

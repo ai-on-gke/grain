@@ -236,6 +236,13 @@ type Config struct {
 	UiIAPAudience string
 	UiIAPIssuer   string
 	UiIAPKeysURL  string
+	// UiRegistryIssuer, UiRegistryAudience and UiRegistryKeysURL are
+	// -ui-registry-issuer, -ui-registry-audience and -ui-registry-keys-url:
+	// what a signed X-Grain-Registry-Assertion must carry, and where the
+	// registry's ES256 JWKS is published (ui.Config.RegistryIssuer and the rest).
+	UiRegistryIssuer   string
+	UiRegistryAudience string
+	UiRegistryKeysURL  string
 	// UiRequireVerifier is -ui-require-verifier (ui.Config.RequireVerifier):
 	// network callers must sign in through the named IdentityVerifier, and
 	// the access code works over unforwarded loopback only.

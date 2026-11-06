@@ -545,12 +545,20 @@ import "strconv"
 // `task_external_ref`, `github_ci_job_repo_ref` and `ci_run_repo_ref`
 // indexes that back external-reference filtering and GET /api/refs/{ref}/summary.
 //
-// 115 adds shared host enrollment codes (`host_enrollment_code`), pending
+// 115 changes no table: it rewrites stored `self-debug` grants -- the grant
+// tables, default capabilities, standing sessions,
+// `repo_config`.`ci_capabilities` and the capability policy's catalogue
+// defaults -- to `api:self-debug` and
+// `https://grain.dev/capabilities/grain#source={}`: the in-process
+// `self-debug` provider is retired for the api preset and the grain
+// server's `#source` method.
+//
+// 116 adds shared host enrollment codes (`host_enrollment_code`), pending
 // pairing-code join handshakes (`host_join_request`), key-bound host metadata
 // on `hostd` (`public_key`, `key_fingerprint`, `enrollment_code`, `capacity`,
 // `hostname`, `os`, `arch`, `clis`, `version`, `local_user`, `last_seen_at`),
 // and 30-day credential expiry on `hostd_token` (`expires_at`).
-const SchemaVersion = 115
+const SchemaVersion = 116
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted

@@ -39,7 +39,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
-	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -1506,7 +1505,8 @@ func grainCLISection(task model.Task) string {
 // whose tools stay model tools (db-write) is not here: the
 // tool roster already names those.
 var grainCLIGrants = []struct{ grant, commands string }{
-	{model.SelfDebugCapability, "`grain ls/read/grep src://...`, `grain task list`, `grain task read <id>`, " +
+	{model.GrainSourceRef, "`grain ls/read/grep src://...` (and `src://core/...`)"},
+	{"api:self-debug", "`grain task list`, `grain task read <id>`, " +
 		"`grain task transcript <id>`, `grain metrics [<section>] [--window 7d | --since <t> --until <t>] [--repo <r>]`, `grain read deploy://pipeline-changes [--cursor <c>] [--page N]`"},
 	{"grain-log", "`grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority err] [--contains <s>] [--max-lines N]`"},
 	{"deployment-health", "`grain health`, `grain read deploy://state`"},
@@ -1538,6 +1538,12 @@ func grainCLIGrantBullets(grants []model.Grant) string {
 	}
 	if apiSet.Has("release-notes:read") || apiSet.Has("release-notes:write") {
 		held["release-notes"] = true
+	}
+	if grainserver.HasSource(names) {
+		held[model.GrainSourceRef] = true
+	}
+	if apiSet.Allows("tasks:read", "") && apiSet.Allows("deployment:read", "") {
+		held["api:self-debug"] = true
 	}
 	if grainserver.HasJournal(names) {
 		held["grain-log"] = true
@@ -3054,7 +3060,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		if (cfg.GitRemoteBase != "" || cloneURL != "") && task.Target != nil && !cfg.sandboxReused {
 			notes.say(ctx, cloningNote(*task.Target))
 		}
-		if task.Target == nil && hasGrant(task, model.SelfDebugCapability) {
+		if task.Target == nil && hasGrainSource(task) {
 			var srcOut checkout
 			var srcWG sync.WaitGroup
 			srcWG.Add(1)
@@ -3315,12 +3321,12 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// Not gated on Interactive, which GrantTools is: that gate is
 		// about selfrepair's tools needing a human watching the chat to
 		// answer a confirmation, and nothing here asks anyone anything.
-		// A task granted self-debug is a task somebody wants to be able
+		// A task granted grain#source is a task somebody wants to be able
 		// to debug grain, attended or not, and a playbook is a file to
 		// read whether or not anyone is watching it being read.
 		grants := runGrants(task)
 		grainSourceDir := ""
-		if slices.Contains(grants, selfdebug.CapabilityName) {
+		if grainserver.HasSource(grants) {
 			grainSourceDir = cfg.GrainSourceDir
 		}
 		// Told to the run's forked mcpserver only alongside the grant it
@@ -4249,7 +4255,10 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 // toolGrants are the capability grants whose whole effect is which tools
 // a run gets, and which a forked "grain mcpserver" can therefore serve
 // for itself once it is told the run holds them (pkg/cli/mcpserver.go's
-// -grant). self-debug, grain-log and bootstrap-playbooks are read-only;
+// -grant). grain#source (once self-debug), grain-log and
+// bootstrap-playbooks are read-only, and api:self-debug travels beside
+// them because the task, pipeline and metrics readers it opens are
+// tools of the forked mcpserver too (pkg/daemon's -grant handling);
 // memory writes only through the daemon's own REST API
 // (pkg/capability/memory), and grain-ci replaces wait_for_checks with the
 // task-scoped daemon implementation. deployment-health, read-issues,
@@ -4269,7 +4278,7 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 // serves no MCP tool at all may be read by the run's agent framework
 // instead (agent/antigravity's host-tool grants).
 var toolGrants = []string{
-	selfdebug.CapabilityName, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant, bootstrap.CapabilityName,
+	grainserver.LegacySelfDebug, grainserver.SourceRef, grainserver.SourceGrant, selfDebugAPIGrant, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant, bootstrap.CapabilityName,
 	grainserver.LegacyGrainCI, grainserver.CIRef, grainserver.CIGrant, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
@@ -4384,6 +4393,22 @@ func runGitCredential(ctx context.Context, store *model.Store, task model.Task) 
 // lets a task do, so a self-debug grant a human ticked and one a repo's
 // defaults attached are the same grant here (model.GrantsSubsetOf draws
 // the same line for the same reason).
+// selfDebugAPIGrant is the api preset the retired self-debug became the
+// REST half of (model.SelfDebugGrants).
+const selfDebugAPIGrant = model.APIGrantPrefix + "self-debug"
+
+// hasGrainSource reports whether task holds grain#source in any spelling,
+// the retired bare self-debug included (model.IsGrainSourceGrant): what
+// places grain-src/ in its sandbox.
+func hasGrainSource(task model.Task) bool {
+	for _, g := range task.Grants {
+		if model.IsGrainSourceGrant(g.Capability) {
+			return true
+		}
+	}
+	return false
+}
+
 func hasGrant(task model.Task, capability string) bool {
 	for _, g := range task.Grants {
 		if g.Capability == capability {

@@ -92,6 +92,17 @@ Every normative requirement below is derived from the implementation on `main` a
 - `pkg/ui/mutating_routes_test.go`: `TestEveryMutatingRouteIsAttributed`
 - `pkg/ui/request_actor_source_test.go`: `TestNothingOutsideRequestActorReadsTheActor`
 
+### 2.4 `registry` `IdentityVerifier` (`X-Grain-Registry-Assertion`) {#AU-5B}
+
+1. The built-in `"registry"` `IdentityVerifier` (`pkg/webauth/registry.go`, `pkg/ui/verifier.go`) MUST be active when `-ui-registry-issuer` (`$GRAIN_REGISTRY_ISSUER`), `-ui-registry-audience` (`$GRAIN_REGISTRY_AUDIENCE`), and `-ui-registry-keys-url` (`$GRAIN_REGISTRY_KEYS_URL`) are all configured (`daemon.CheckUIRegistryVerifier` refuses partial configuration or comma-separated issuer/audience values at startup). It inspects `X-Grain-Registry-Assertion` (`ui.RegistryAssertionHeader`), reports `Name() == "registry"` (`ui.AuthMethodRegistry`, `model.SourceRegistry`), and sets `AccessCodeWins() == false`.
+2. Signature verification MUST fetch RFC 7517 JWKS keys via `pkg/jwks` (cached for `1h`, refetched on unknown `kid` at most once per `1m`, retaining stale cached keys on refresh failure, and returning a `VerifierUnavailableError` (`503` with `Retry-After: 5`) when the initial JWKS fetch fails before any keys are cached) and MUST pin the algorithm to `ES256` on an ECDSA P-256 key (`RS256`, `HS256`, and `none` rejected).
+3. The verifier MUST enforce exact `iss` equality against `-ui-registry-issuer`, single-audience equality (`len(aud) == 1 && aud[0] == -ui-registry-audience`), require `exp` and `iat` with `30s` clock-skew tolerance on `exp`, `nbf`, and `iat` and `0 < exp - iat <= 5m`, reject any token carrying the reserved `act` claim (`401`) until delegated-identity support is enabled, and normalize/classify `sub`/`email`/`kind` into `model.Principal{Kind: kind, ID: email, Source: "registry"}`.
+
+**Pinned by:**
+- `pkg/webauth/webauth_test.go`: `TestRegistryVerifier`
+- `pkg/ui/registry_verifier_test.go`: `TestRegistryIdentityVerifierEndToEnd`
+- `pkg/cli/daemon_require_iap_test.go`: `TestCheckConfigRegistryVerifierFlagsAndEnv`
+
 ---
 
 ## 3. Database Principal Allowlist (`allowed_principal`)

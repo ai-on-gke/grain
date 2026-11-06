@@ -801,7 +801,13 @@ var Migrations = []Migration{
 		},
 	},
 	{
-		Version:     115,
+		Version: 115,
+		Description: "rewrite stored self-debug grants, repo_config.ci_capabilities and the capability policy's catalogue " +
+			"included, to api:self-debug and https://grain.dev/capabilities/grain#source={} (the in-process capability is retired)",
+		Up: migrateSelfDebugGrants,
+	},
+	{
+		Version:     116,
 		Description: "add host enrollment codes, pending pairing-code join requests, key-bound host metadata and 30-day credential expiry",
 		Statements: []string{
 			"ALTER TABLE `hostd` ADD COLUMN `public_key` TEXT NOT NULL DEFAULT ''",
@@ -823,7 +829,7 @@ var Migrations = []Migration{
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as
-// schema 92 created them, frozen so migration 92 followed by migration 115's
+// schema 92 created them, frozen so migration 92 followed by migration 116's
 // ALTER TABLE statements runs cleanly from any earlier baseline.
 const schema92HostdTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd`" + ` (
   ` + "`name`" + `       TEXT     NOT NULL,
