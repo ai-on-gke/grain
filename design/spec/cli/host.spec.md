@@ -65,7 +65,7 @@ Each command parses its own flags, with flags allowed after the task id ([#CLI-1
 
 ### 3.1 `grain list` {#CLI-22}
 
-`grain list [flags]` calls `GET /api/config` (the list's configuration and declared custom fields), then `GET /api/tasks`. When no `-filter`/shorthand is given and the deployment has no configured list default, it also reads `GET /api/settings` for the hidden-state settings (`deploymentSettings`), and treats a failed read as empty settings. It prints one aligned line per task. Closed and deferred tasks are left out unless `-closed`, `-deferred` or a filter naming that state asks for them, and the CLI says what it left out.
+`grain list [flags]` calls `GET /api/config` (the list's configuration and declared custom fields), then `GET /api/tasks`. When no `-filter`/shorthand is given and the deployment has no configured list default, it also reads `GET /api/settings` for the hidden-state settings (`deploymentSettings`), and treats a failed read as empty settings. It prints one aligned line per task, marking a queued task that waits on an unfinished dependency with `(waits on <ids>)` in the title column so the `id`, `state` and `repo` columns stay aligned. Closed and deferred tasks are left out unless `-closed`, `-deferred` or a filter naming that state asks for them, and the CLI says what it left out.
 - `-filter attribute:comparison:value` is repeatable, in the UI's link spelling. Shorthands such as `-state`, `-repo` and `-capability` are conditions too.
 - `-sort attribute[:asc|desc]` is repeatable, and the sort is stable.
 - `grain list -h` prints the attribute and comparison vocabulary, including declared custom fields.
@@ -99,7 +99,7 @@ With `-json` it prints the `ui.Task` array.
 
 ### 3.2 `grain get <id>` / `grain show <id>` {#CLI-23}
 
-Calls `GET /api/tasks/{id}` and prints the task block (including `owner:`), the failure streak, a pending credential request and the conversation. `grain show` is an alias for `grain get`. `-json` prints `ui.TaskDetail`. `-comments-since <RFC3339>` (`?comments_since=`) keeps only the conversation items created strictly after that time, for a polling loop ([external-cli #XC-18](../external-cli/external-cli.spec.md#XC-18)).
+Calls `GET /api/tasks/{id}` and prints the task block (including `owner:` and, when dependencies are declared, `depends on:` with each dependency's state), the failure streak, a pending credential request and the conversation. `grain show` is an alias for `grain get`. `-json` prints `ui.TaskDetail`. `-comments-since <RFC3339>` (`?comments_since=`) keeps only the conversation items created strictly after that time, for a polling loop ([external-cli #XC-18](../external-cli/external-cli.spec.md#XC-18)).
 
 <!-- BEGIN GENERATED FLAGS: grain get -->
 | Flag | Type | Default | Env | Description |
