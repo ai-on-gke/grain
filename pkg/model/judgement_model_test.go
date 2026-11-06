@@ -49,6 +49,19 @@ func TestTheJudgementModelResolvesToTheStrongestOfferedModel(t *testing.T) {
 			t.Errorf("%s: ResolveJudgementModel = %q, %v; want %q, %v", tc.name, got, ok, tc.want, tc.ok)
 		}
 	}
+
+	// ResolveJudgementModels returns all matching ranked models in ranking order.
+	models := ResolveJudgementModels(Config{}, []AgentBackend{gemini, opus})
+	if len(models) != 2 || models[0] != "opus-5.5" || models[1] != "opus-5.5-medium" {
+		t.Errorf("ResolveJudgementModels(gemini, opus) = %v; want [opus-5.5, opus-5.5-medium]", models)
+	}
+
+	// Config.JudgementModel is placed first, followed by ranked models.
+	withChoice := ResolveJudgementModels(Config{JudgementModel: "custom-judge"}, []AgentBackend{gemini, opus})
+	if len(withChoice) != 3 || withChoice[0] != "custom-judge" || withChoice[1] != "opus-5.5" || withChoice[2] != "opus-5.5-medium" {
+		t.Errorf("ResolveJudgementModels(with choice) = %v; want [custom-judge, opus-5.5, opus-5.5-medium]", withChoice)
+	}
+
 	if !IsJudgementModel(" Judgement ") || IsJudgementModel("opus-5.5") {
 		t.Error("IsJudgementModel does not recognise the symbol alone")
 	}
