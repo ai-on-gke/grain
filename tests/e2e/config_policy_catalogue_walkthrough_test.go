@@ -321,8 +321,8 @@ in_process:
 func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 	t.Parallel()
 	w := newHoldWorld(t, false)
-	parent := w.create("auto-merging parent", true, []string{"priority-dispatch", "read-issues"})
-	if !holds(parent, "priority-dispatch") || !holds(parent, "read-issues") {
+	parent := w.create("auto-merging parent", true, []string{"priority-dispatch", model.GitHubReadIssuesGrant})
+	if !holds(parent, "priority-dispatch") || !holds(parent, model.GitHubReadIssuesGrant) {
 		t.Fatalf("the parent does not hold both grants: %+v", parent.Grants)
 	}
 	// The parent was filed from the template the catalogue keeps read-issues
@@ -350,7 +350,7 @@ func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 		steps := w.changeScript(task, "echo 'typo' >> docs/guide.md")
 		return append([]antigravity.Step{
 			propose("needs priority-dispatch", "priority-dispatch"),
-			propose("needs read-issues", "read-issues"),
+			propose("needs read-issues", model.GitHubReadIssuesGrant),
 			propose("needs nothing"),
 		}, steps...)
 	})
@@ -372,7 +372,7 @@ func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 		note         string
 	}{
 		{"needs priority-dispatch", "priority-dispatch", model.StateProposed, model.CatalogueRequiresPersonNote([]string{"priority-dispatch"})},
-		{"needs read-issues", "read-issues", model.StateProposed, "settings/capabilities.yml refuses what it asked for"},
+		{"needs read-issues", model.GitHubReadIssuesGrant, model.StateProposed, "settings/capabilities.yml refuses what it asked for"},
 		{"needs nothing", "", model.StateQueued, ""},
 	} {
 		p, ok := byTitle[tc.title]

@@ -80,12 +80,12 @@ func TestConfigPickerReportsACapabilityThisDeploymentCannotHonour(t *testing.T) 
 	// A capability that needs no deployment configuration at all is
 	// reported ready, not merely "not not-ready" -- the picker has to be
 	// able to tell the two apart to warn about only one of them.
-	selfDebug := pickerRow(t, cfg.Capabilities, "read-issues")
+	selfDebug := pickerRow(t, cfg.Capabilities, "console")
 	if selfDebug.Ready == nil || !*selfDebug.Ready {
-		t.Errorf("read-issues: Ready = %v, want true", selfDebug.Ready)
+		t.Errorf("console: Ready = %v, want true", selfDebug.Ready)
 	}
 	if len(selfDebug.Needs) != 0 {
-		t.Errorf("read-issues: Needs = %v, want none", selfDebug.Needs)
+		t.Errorf("console: Needs = %v, want none", selfDebug.Needs)
 	}
 }
 
@@ -112,7 +112,7 @@ func TestCapabilitiesListsEveryKnownCapabilityOnAFreshStore(t *testing.T) {
 		ids = append(ids, s.ID)
 	}
 	sort.Strings(ids)
-	want := []string{"console", "durable", "github-sandbox", "image-signing", "package-publish", "priority-dispatch", "read-issues", "registry-push"}
+	want := []string{"console", "durable", "github-sandbox", "image-signing", "package-publish", "priority-dispatch", "registry-push"}
 	if !reflect.DeepEqual(ids, want) {
 		t.Fatalf("capability ids = %v, want %v", ids, want)
 	}
@@ -125,7 +125,7 @@ func TestCapabilitiesSelfDebugAndSelfRepairAreAlwaysReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"read-issues"} {
+	for _, id := range []string{"console"} {
 		status := capabilityStatus(t, got.Capabilities, id)
 		if !status.Ready {
 			t.Fatalf("%s: Ready = false, want true (status: %+v)", id, status)
@@ -266,7 +266,7 @@ func TestCapabilityStatusReportsWhetherATaskCanBeGrantedIt(t *testing.T) {
 	c, _, ctx := testClient(t)
 	c.Config.Capabilities = []ui.Capability{
 		{ID: "priority-dispatch", Name: "Priority dispatch"},
-		{ID: "read-issues", Name: "Read issues"},
+		{ID: "console", Name: "Interactive console"},
 	}
 
 	got, err := c.GetSettings(ctx)
@@ -275,7 +275,7 @@ func TestCapabilityStatusReportsWhetherATaskCanBeGrantedIt(t *testing.T) {
 	}
 	for id, want := range map[string]bool{
 		"priority-dispatch": true,
-		"read-issues":       true,
+		"console":           true,
 		"github-sandbox":    false,
 	} {
 		if status := capabilityStatus(t, got.Capabilities, id); status.Grantable != want {
@@ -296,11 +296,11 @@ func TestCapabilityStatusKeepsGrantableAndReadyIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	status := capabilityStatus(t, got.Capabilities, "read-issues")
+	status := capabilityStatus(t, got.Capabilities, "console")
 	if !status.Ready {
-		t.Fatalf("read-issues: Ready = false, want true -- it needs no configuration (status: %+v)", status)
+		t.Fatalf("console: Ready = false, want true -- it needs no configuration (status: %+v)", status)
 	}
 	if status.Grantable {
-		t.Fatalf("read-issues: Grantable = true with an empty picker listing (status: %+v)", status)
+		t.Fatalf("console: Grantable = true with an empty picker listing (status: %+v)", status)
 	}
 }

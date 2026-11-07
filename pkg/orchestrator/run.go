@@ -37,7 +37,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
-	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -1632,6 +1631,9 @@ func grainCLIGrantBullets(grants []model.Grant) string {
 	}
 	if grainserver.HasSQL(names) {
 		held["db-read"] = true
+	}
+	if grainserver.HasReadIssues(names) {
+		held["read-issues"] = true
 	}
 	if apiSet.Has("tests:write") {
 		held["test-quarantine"] = true
@@ -4397,7 +4399,7 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 var toolGrants = []string{
 	grainserver.LegacySelfDebug, grainserver.SourceRef, grainserver.SourceGrant, selfDebugAPIGrant, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant,
 	grainserver.LegacyGrainCI, grainserver.CIRef, grainserver.CIGrant, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
-	readissues.CapabilityName,
+	grainserver.LegacyReadIssues, grainserver.ReadIssuesRef, grainserver.ReadIssuesGrant,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
 }
