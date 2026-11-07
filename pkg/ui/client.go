@@ -210,13 +210,44 @@ func validateBase(field, base string) error {
 
 // ForbiddenError marks a request rejected because the caller lacks the required permissions.
 // Server maps this to a 403 Forbidden.
-type ForbiddenError struct{ err error }
+type ForbiddenError struct {
+	err  error
+	code string
+	body map[string]any
+}
 
 func (e *ForbiddenError) Error() string { return e.err.Error() }
 func (e *ForbiddenError) Unwrap() error { return e.err }
 
 func forbiddenErrorf(format string, a ...any) error {
 	return &ForbiddenError{err: fmt.Errorf(format, a...)}
+}
+
+func forbiddenCodeErrorf(code, format string, a ...any) error {
+	return &ForbiddenError{err: fmt.Errorf(format, a...), code: code}
+}
+
+// UnprocessableError marks a semantically invalid request that Server maps
+// to a 422 Unprocessable Entity.
+type UnprocessableError struct{ err error }
+
+func (e *UnprocessableError) Error() string { return e.err.Error() }
+func (e *UnprocessableError) Unwrap() error { return e.err }
+
+func unprocessableErrorf(format string, a ...any) error {
+	return &UnprocessableError{err: fmt.Errorf(format, a...)}
+}
+
+// approvalAttribution returns the Attribution to record on task.Approval:
+// for a delegated registry request (service actor + human OnBehalfOf, both
+// verified by the registry), it preserves OnBehalfOf (AU-26.2); for other
+// callers it records Actor alone.
+func approvalAttribution(a model.Attribution) model.Attribution {
+	if a.Actor.Kind == model.PrincipalService && a.Actor.Source == model.SourceRegistry &&
+		a.OnBehalfOf != nil && a.OnBehalfOf.Kind == model.PrincipalHuman && a.OnBehalfOf.Source == model.SourceRegistry {
+		return a
+	}
+	return model.Attribution{Actor: a.Actor}
 }
 
 // NotFoundError marks a task ID with no task behind it. Server maps this
@@ -2770,6 +2801,23 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			catalogueHold, req.Approved = true, false
 		}
 	}
+	if proposedBy == nil && isDelegatedRequest(ctx) {
+		var delegatedPersonOnly []string
+		for _, g := range grants {
+			if (model.IsPersonOnlyGrant(g.Capability) || model.IsAdminOnlyGrant(g.Capability)) && !slices.Contains(delegatedPersonOnly, g.Capability) {
+				delegatedPersonOnly = append(delegatedPersonOnly, g.Capability)
+			}
+		}
+		if len(delegatedPersonOnly) > 0 {
+			why := fmt.Sprintf("holds %s, which only a person acting directly may grant", strings.Join(delegatedPersonOnly, ", "))
+			if needsPersonWhy == "" {
+				needsPersonWhy = why
+			} else {
+				needsPersonWhy += "; " + why
+			}
+			catalogueHold, req.Approved = true, false
+		}
+	}
 	keepRunning := req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake)
 	autoMerge, autoSubmit, sessionQueued := req.AutoMerge, false, false
 	var limitNote, ungrantedNote, heldNote, needsPersonNote, personOnlyNote, seededNote, refusal string
@@ -3023,7 +3071,8 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	case catalogueHold:
 		task.Body += "\n\n_Filed for a person to approve: " + needsPersonWhy + "._"
 	case req.Approved || (req.Interactive && proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent):
-		task.Approval = &model.Attribution{Actor: c.requestActor(ctx).Actor}
+		attr := approvalAttribution(c.requestActor(ctx))
+		task.Approval = &attr
 		task.ApprovedAt = &now
 	case sessionQueued:
 		task.Approval = &model.Attribution{Actor: model.ConsoleSessionPrincipal}
@@ -5728,7 +5777,7 @@ func (c *Client) Approve(ctx context.Context, id string) error {
 	if err := c.catalogueApprovalRefusal(ctx, *task); err != nil {
 		return err
 	}
-	if err := c.Store.Approve(ctx, id, model.Attribution{Actor: c.requestActor(ctx).Actor}, c.now()); err != nil {
+	if err := c.Store.Approve(ctx, id, approvalAttribution(c.requestActor(ctx)), c.now()); err != nil {
 		return err
 	}
 	if task.Interactive && task.DeferredAt == nil && c.Config.Wake != nil {
@@ -7078,7 +7127,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 		if err := c.agentMayApprove(ctx, *task); err != nil {
 			return err
 		}
-		if err := c.Store.Approve(ctx, id, model.Attribution{Actor: c.requestActor(ctx).Actor}, now); err != nil {
+		if err := c.Store.Approve(ctx, id, approvalAttribution(c.requestActor(ctx)), now); err != nil {
 			return err
 		}
 	}

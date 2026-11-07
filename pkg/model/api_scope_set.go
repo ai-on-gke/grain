@@ -156,6 +156,13 @@ func builtinAccessRoles() []APIScopeSet {
 			Scopes: reads, Version: 1},
 		{Name: APIScopeSetBuiltinPrefix + "contributor", Description: "Read everything, file and edit tasks, and start and re-run CI",
 			Scopes: []string{"tasks:write", "ci:write"}, Includes: []string{APIScopeSetBuiltinPrefix + "viewer"}, Version: 1},
+		{Name: DefaultDelegateAccessRole, Description: "Read everything and perform non-dangerous writes on behalf of a person through a delegating service",
+			Scopes: []string{
+				"tasks:write", "tasks:from-template",
+				"ci:write", "merge:write", "boards:write",
+				"memory:write", "sessions:write", "notifications:write",
+			},
+			Includes: []string{APIScopeSetBuiltinPrefix + "viewer"}, Version: 1},
 	}
 }
 
