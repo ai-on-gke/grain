@@ -876,7 +876,7 @@ jobs:
             npm-${{ runner.os }}-
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry
 
       - name: Build frontend
         run: make frontend
@@ -887,6 +887,10 @@ jobs:
       - name: Test frontend
         working-directory: ui
         run: npm test -- --maxWorkers=4
+
+      - name: Test registry frontend
+        working-directory: ui-registry
+        run: npm ci && npm test -- --maxWorkers=4
 
   ui-e2e:
     name: ui e2e
