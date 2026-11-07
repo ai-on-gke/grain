@@ -2185,6 +2185,9 @@ func (s *Server) enrichAPIEntry(ctx context.Context, e *store.EntryRow, isAdmin 
 	}
 	if s.router != nil && s.router.TunnelCache() != nil {
 		now := time.Now().UTC()
+		if s.store != nil {
+			now = s.store.Now()
+		}
 		replicaTTL := s.cfg.Tunnel.ReplicaTTL
 		if replicaTTL <= 0 {
 			replicaTTL = DefaultTunnelReplicaTTL
