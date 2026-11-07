@@ -299,6 +299,23 @@ func (c *Client) DraftScheduleComposition(ctx context.Context, req CreateSchedul
 	if err != nil {
 		return Composition{}, err
 	}
+	// A template-backed schedule may carry an admission of its own that
+	// raises its template's -- a repository's declared schedule can say
+	// `admission:` beside `template:` (docs/declarations.md), and its
+	// firings are composed with it (model.ComposeScheduleTask).
+	// scheduleFromRequest copies the template's content and nothing
+	// else, so the schedule pane's preview of such a schedule said
+	// "bypass, from the template" over a firing that files "durable,
+	// from the schedule" (2026-11-07 walkthrough). Applied here, to the
+	// preview alone: CreateSchedule still refuses an admission sent
+	// alongside a template (refuseIgnoredScheduleContent).
+	if sched.TemplateID != nil && sched.SuiteID == nil {
+		adm, err := model.ParseOptionalAdmission(req.Admission)
+		if err != nil {
+			return Composition{}, validationErrorf("%v", err)
+		}
+		sched.Admission = model.MaxAdmission(sched.Admission, adm)
+	}
 	return c.compositionOfSchedule(ctx, sched, "this schedule")
 }
 
