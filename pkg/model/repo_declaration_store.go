@@ -138,6 +138,7 @@ func (s *Store) SyncRepoDeclarations(ctx context.Context, repo RepoRef, commit s
 
 		for _, file := range declared.Templates {
 			t := file.Template
+			t.Grants = canonicalizeDeclaredGrants(t.Grants)
 			if existing, err := getTemplate(ctx, tx, t.ID); err != nil {
 				return err
 			} else if existing != nil {
@@ -173,6 +174,7 @@ func (s *Store) SyncRepoDeclarations(ctx context.Context, repo RepoRef, commit s
 		}
 		for _, file := range declared.Schedules {
 			sched := file.Schedule
+			sched.Grants = canonicalizeDeclaredGrants(sched.Grants)
 			existing, err := getSchedule(ctx, tx, sched.ID)
 			if err != nil {
 				return err
@@ -238,6 +240,32 @@ func (s *Store) SyncRepoDeclarations(ctx context.Context, repo RepoRef, commit s
 		return nil, err
 	}
 	return changed, nil
+}
+
+// canonicalizeDeclaredGrants rewrites retired bare capability names (such as
+// bootstrap-playbooks or self-debug) on declared templates and schedules to
+// the canonical grant(s) they became, deduplicating by capability so primary
+// keys on template_grant and schedule_grant never collide.
+func canonicalizeDeclaredGrants(grants []Grant) []Grant {
+	if len(grants) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(grants))
+	out := make([]Grant, 0, len(grants))
+	for _, g := range grants {
+		for _, cap := range CanonicalLegacyGrants(g.Capability) {
+			if cap == "" || seen[cap] {
+				continue
+			}
+			seen[cap] = true
+			out = append(out, Grant{
+				Capability: cap,
+				Via:        g.Via,
+				Folder:     g.Folder,
+			})
+		}
+	}
+	return out
 }
 
 // deleteDeclared removes one withdrawn declaration: the row in whichever

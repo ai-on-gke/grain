@@ -192,6 +192,7 @@ func (s *Server) resolveMCPCallerAccess(ctx context.Context) (mcpCallerAccess, e
 		} else {
 			set = APIGrantsOf(held)
 		}
+		set = model.WithinDirectorFloor(*acting, set)
 		return mcpCallerAccess{
 			actingTaskID: taskID,
 			grantSet:     set,
@@ -217,7 +218,8 @@ func (a mcpCallerAccess) allowsRoute(rt APIRoute) bool {
 		if _, blocked := isNoTaskContextRoute(rt.Pattern); blocked {
 			return false
 		}
-		return a.grantSet.Has(rt.Scope) || tasksAdminAllowsTaskPatch(a.grantSet, rt.Pattern)
+		return a.grantSet.Has(rt.Scope) || tasksAdminAllowsTaskPatch(a.grantSet, rt.Pattern) ||
+			capabilitiesDetachAllowsRoute(a.grantSet, rt.Pattern)
 	}
 	if a.channel == SandboxCLIChannel {
 		if IsSandboxDeniedScope(rt.Scope) || sandboxChannelGuard(rt.Pattern, nil) != nil {
@@ -226,6 +228,7 @@ func (a mcpCallerAccess) allowsRoute(rt APIRoute) bool {
 	}
 	return a.grantSet.Has(rt.Scope) ||
 		tasksAdminAllowsTaskPatch(a.grantSet, rt.Pattern) ||
+		capabilitiesDetachAllowsRoute(a.grantSet, rt.Pattern) ||
 		agentCapabilityAllowsRoute(a.heldGrants, a.grantSet, rt.Pattern, rt.Scope) ||
 		grainCIReadsRoute(a.heldGrants, rt.Pattern)
 }
@@ -1508,6 +1511,13 @@ func taskDetailToMCPRecord(detail TaskDetail) mcp.TaskRecord {
 			latest = at
 		}
 	}
+	var depStates map[string]string
+	if len(t.DependsOnStates) > 0 {
+		depStates = make(map[string]string, len(t.DependsOnStates))
+		for id, st := range t.DependsOnStates {
+			depStates[id] = string(st)
+		}
+	}
 	summary := mcp.TaskSummary{
 		ID:          t.ID,
 		Title:       t.Title,
@@ -1526,9 +1536,13 @@ func taskDetailToMCPRecord(detail TaskDetail) mcp.TaskRecord {
 			StalledAt: t.MergeQueueStalledAt,
 			BlockedAt: t.MergeQueueBlockedAt,
 		},
-		Kinds:     TaskKindTags(t),
-		DependsOn: t.DependsOn,
-		ChangedAt: latest,
+		Kinds:           TaskKindTags(t),
+		DependsOn:       t.DependsOn,
+		DependsOnStates: depStates,
+		ChangedAt:       latest,
+	}
+	if t.Reason != nil {
+		summary.Reason = &mcp.TaskReason{Reason: t.Reason.Reason, Resource: t.Reason.Resource}
 	}
 	rec := mcp.TaskRecord{
 		TaskSummary:         summary,

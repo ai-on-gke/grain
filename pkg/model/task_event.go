@@ -337,6 +337,10 @@ func MergeTaskEvents(ts []Transition, events []TaskEvent) []Transition {
 			state = TransitionOwnerChanged
 		case TaskEventAdmissionChanged:
 			state = TransitionAdmissionChanged
+		case TaskEventHumanReviewRequested:
+			state = TransitionHumanReviewRequested
+		case TaskEventHumanReviewReleased:
+			state = TransitionHumanReviewReleased
 		default:
 			// A note about an action, not a step (TaskEventSubmitted, ...).
 			continue

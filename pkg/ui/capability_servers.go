@@ -302,9 +302,9 @@ func (c *Client) ListCapabilityServers(ctx context.Context) ([]CapabilityServer,
 			}
 			row.Status = &s
 		} else if schema := intree.BuiltinConfigSchema(sc.Builtin); schema != nil {
-			state := servers.NeedsConfig
-			if len(sc.Config) > 0 {
-				state = servers.Pending
+			state := servers.Pending
+			if b, ok := intree.BuiltinNamed(sc.Builtin); (!ok || b.NeedsConfig) && len(sc.Config) == 0 {
+				state = servers.NeedsConfig
 			}
 			row.Status = &servers.Status{
 				ID:           id,
@@ -899,7 +899,7 @@ func (c *Client) checkRunLocation(ctx context.Context, cfg protocol.ServerConfig
 	if cfg.Hostd != "" {
 		pp, ok := c.Config.CapabilityServers.(CapabilityServerPlacedProber)
 		if !ok {
-			return validationErrorf("run: host on hostd %s: this process does not route placed capability servers to their hostd", cfg.Hostd)
+			return validationErrorf("run: host on host %s: this process does not route placed capability servers to their host", cfg.Hostd)
 		}
 		entries, connected, err := pp.HostCapabilityEntriesFor(ctx, string(cfg.Hostd))
 		if err != nil {
@@ -909,9 +909,9 @@ func (c *Client) checkRunLocation(ctx context.Context, cfg protocol.ServerConfig
 				// needs-hostd until that hostd dials in.
 				return nil
 			}
-			return validationErrorf("run: host on hostd %s: %s", cfg.Hostd, err)
+			return validationErrorf("run: host on host %s: %s", cfg.Hostd, err)
 		}
-		return checkHostdOffersEntry(entries, cfg, "on hostd "+string(cfg.Hostd))
+		return checkHostdOffersEntry(entries, cfg, "on host "+string(cfg.Hostd))
 	}
 	hosts := c.HostCapabilityEntries(ctx)
 	if !hosts.Available {
@@ -940,7 +940,7 @@ func checkHostdOffersEntry(entries []string, cfg protocol.ServerConfig, where st
 	if where != "" {
 		prefix += " " + where
 	}
-	return validationErrorf("%s: grain hostd's allowlist has no capabilities entry %q (it offers %s); %s",
+	return validationErrorf("%s: the host agent's allowlist has no capabilities entry %q (it offers %s); %s",
 		prefix, cfg.Command, offered, hostd.MissingEntryHelp(cfg.Command))
 }
 
@@ -961,7 +961,7 @@ func (c *Client) HostCapabilityEntries(ctx context.Context) CapabilityServerHost
 	out.Available, out.Entries = true, append(out.Entries, entries...)
 	out.Missing = MissingHostdBuiltins(out.Entries)
 	if len(entries) == 0 {
-		out.Reason = "grain hostd's allowlist has no capabilities entries"
+		out.Reason = "the host agent's allowlist has no capabilities entries"
 	}
 	return out
 }

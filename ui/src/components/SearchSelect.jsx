@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Fragment, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import {
   Autocomplete,
-  Checkbox,
+  Box,
   Chip,
   ListItemText,
   TextField,
 } from "@mui/material";
+import CheckBoxIcon from "@mui/icons-material/CheckBox";
+import CheckBoxOutlineBlankIcon from "@mui/icons-material/CheckBoxOutlineBlank";
 import { searchFilter } from "../fuzzy.js";
 import { identifierField } from "../identifierField.js";
 
@@ -113,8 +115,19 @@ export default function SearchSelect({
   error,
   renderChip,
   getOptionDisabled = (o) => Boolean(o.disabled),
+  onOpen,
+  onClose,
+  onKeyDown,
   ...rest
 }) {
+  // Whether the list is open, for Enter (onKeyDown below). MUI's own
+  // Enter picks the highlighted option and stops there; with no option
+  // highlighted -- a search matching nothing, the list saying "No
+  // matches" -- it does nothing, and the keypress went on to submit the
+  // form around the box. That is the one way Enter in an open list still
+  // submitted (the 2026-11-04 UI walkthrough, §10 item 3: Enter on a
+  // Schedule picker reading "No matches" filed the schedule).
+  const listOpen = useRef(false);
   const [inner, setInner] = useState(
     defaultValue !== undefined ? defaultValue : multiple ? [] : "",
   );
@@ -165,6 +178,27 @@ export default function SearchSelect({
       disabled={disabled}
       getOptionDisabled={getOptionDisabled}
       disableClearable={!clearable}
+      onOpen={(event) => {
+        listOpen.current = true;
+        onOpen?.(event);
+      }}
+      onClose={(event, reason) => {
+        listOpen.current = false;
+        onClose?.(event, reason);
+      }}
+      onKeyDown={(event) => {
+        onKeyDown?.(event);
+        // Enter on an open list never reaches the form: MUI picks the
+        // highlighted option when there is one, and otherwise this is
+        // the whole of what Enter does.
+        if (
+          event.key === "Enter" &&
+          (rest.open ?? listOpen.current) &&
+          !event.nativeEvent?.isComposing
+        ) {
+          event.preventDefault();
+        }
+      }}
       selectOnFocus={!multiple}
       autoHighlight
       fullWidth={fullWidth}
@@ -261,13 +295,31 @@ export default function SearchSelect({
             data-value={option.value}
             data-label={option.label}
           >
+            {/* The row's tick, drawn rather than an <input>: the option
+                already says it is picked (aria-selected), and a real
+                checkbox inside role="option" was an unlabelled, nested
+                control on every open multiple list (axe's label and
+                nested-interactive, the 2026-11-04 UI walkthrough). */}
             {multiple && (
-              <Checkbox
-                size="small"
-                checked={state.selected}
-                tabIndex={-1}
-                sx={{ p: 0.5, mr: 0.5 }}
-              />
+              <Box
+                component="span"
+                aria-hidden="true"
+                className="search-select-check"
+                data-checked={state.selected ? "true" : "false"}
+                sx={{
+                  display: "inline-flex",
+                  flex: "none",
+                  p: 0.5,
+                  mr: 0.5,
+                  color: state.selected ? "primary.main" : "text.secondary",
+                }}
+              >
+                {state.selected ? (
+                  <CheckBoxIcon fontSize="small" />
+                ) : (
+                  <CheckBoxOutlineBlankIcon fontSize="small" />
+                )}
+              </Box>
             )}
             {renderRow
               ? renderRow(option)

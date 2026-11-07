@@ -301,7 +301,7 @@ func TestHostdOptOutLeavesItOutAndRemovesAnInstalledOne(t *testing.T) {
 	// A host run location it has no hostd for would stop the daemon
 	// starting (daemon.CheckCLIRunFlags), so it is dropped.
 	out, _ = resolveHostd(t, "GRAIN_HOSTD=0", "GRAIN_AGY_RUN=host")
-	contains(t, out, "ignoring GRAIN_AGY_RUN=host: there is no grain hostd")
+	contains(t, out, "ignoring GRAIN_AGY_RUN=host: there is no host agent")
 	// hostd refuses to run as root, so auto installs none for root.
 	if out, hostd := resolveHostd(t, "GRAIN_HOSTD=auto", "GRAIN_USER=root"); hostd != "0" {
 		t.Errorf("auto with GRAIN_USER=root settled on %q:\n%s", hostd, out)
@@ -381,6 +381,7 @@ func TestEveryVariableTheInstallerReadsHasADefault(t *testing.T) {
 	// out of the unit's own EnvironmentFile, and the other by the `sh`
 	// inside the deployment image that image_run hands a script to.
 	elsewhere := map[string]bool{
+		"GRAIN_EXTRA_DAEMON_ARGS":     true,
 		"GRAIN_EXTRA_DOCKER_RUN_ARGS": true,
 		"GRAIN_TARGET_URL":            true,
 	}
@@ -688,7 +689,7 @@ func TestTheCLIWrappersReplaceASymlinkRatherThanWritingThroughIt(t *testing.T) {
 // Both halves are asserted: the wrapper's container, which is where a
 // `grain` invocation on this host actually runs, and the profile script,
 // which is what a shell (and anything reading $GRAIN_DATA_DIR out here,
-// like pkg/capability/bootstrap's playbooks) gets.
+// like pkg/playbooks) gets.
 func TestTheCLIIsToldWhereThisDeploymentsStateLives(t *testing.T) {
 	text := setupText(t)
 
@@ -3396,7 +3397,7 @@ var (
 // GO_IMAGE and GO_VERSION -- neither of which chooses the digest.
 func TestEveryBaseImageIsPinnedByDigest(t *testing.T) {
 	texts := map[string]string{}
-	for _, name := range []string{"Dockerfile", "Dockerfile.build", "Dockerfile.k8s-sandbox", "Granulefile", "Granulefile.guest-base"} {
+	for _, name := range []string{"Dockerfile", "Dockerfile.build", "Dockerfile.k8s-sandbox", "Dockerfile.registry", "Granulefile", "Granulefile.guest-base"} {
 		text := read(t, name)
 		texts[name] = text
 		code := stripComments(text)
@@ -3424,14 +3425,32 @@ func TestEveryBaseImageIsPinnedByDigest(t *testing.T) {
 
 	// The same upstream image carries the same pin everywhere it is used,
 	// so one bump cannot leave a second copy behind on the old bytes.
-	if a, b := buildArgDefault(t, "Dockerfile", texts["Dockerfile"], "GO_IMAGE_DIGEST"), buildArgDefault(t, "Dockerfile.build", texts["Dockerfile.build"], "GO_IMAGE_DIGEST"); a != b {
-		t.Errorf("Dockerfile pins GO_IMAGE_DIGEST=%s and Dockerfile.build pins %s; bump both in the same commit", a, b)
+	for _, name := range []string{"Dockerfile.build", "Dockerfile.registry"} {
+		if a, b := buildArgDefault(t, "Dockerfile", texts["Dockerfile"], "GO_IMAGE_DIGEST"), buildArgDefault(t, name, texts[name], "GO_IMAGE_DIGEST"); a != b {
+			t.Errorf("Dockerfile pins GO_IMAGE_DIGEST=%s and %s pins %s; bump both in the same commit", a, name, b)
+		}
+	}
+	if a, b := buildArgDefault(t, "Dockerfile", texts["Dockerfile"], "RUNTIME_IMAGE"), buildArgDefault(t, "Dockerfile.registry", texts["Dockerfile.registry"], "RUNTIME_IMAGE"); a != b {
+		t.Errorf("Dockerfile pins RUNTIME_IMAGE=%s and Dockerfile.registry pins %s; bump both in the same commit", a, b)
 	}
 	for _, name := range []string{"Dockerfile.k8s-sandbox", "Granulefile", "Granulefile.guest-base"} {
 		if a, b := buildArgDefault(t, "Dockerfile", texts["Dockerfile"], "RUNTIME_IMAGE"), buildArgDefault(t, name, texts[name], "BASE_IMAGE"); a != b {
 			t.Errorf("Dockerfile's RUNTIME_IMAGE=%s and %s's BASE_IMAGE=%s differ; they are the same Debian base, so bump them in the same commit", a, name, b)
 		}
 	}
+}
+
+func TestRegistryDockerfileStampsVersionAndExcludesBuildCA(t *testing.T) {
+	df := read(t, "Dockerfile.registry")
+	contains(t, df, "github.com/ai-on-gke/grain/pkg/version.Release=${RELEASE}")
+	contains(t, df, "github.com/ai-on-gke/grain/pkg/version.Edition=${EDITION}")
+	absent(t, df, "pkg/buildinfo")
+	absent(t, df, "COPY --from=build /usr/local/share/ca-certificates/")
+
+	releaseScript := read(t, "scripts", "release-images.sh")
+	regBuild := body(t, releaseScript, "build_registry_image() {")
+	contains(t, regBuild, `check_release_stamp "$image" "$RELEASE"`)
+	contains(t, regBuild, `check_edition "$image" "$main"`)
 }
 
 // The caches are what make those toolchains usable, and they are warmed
@@ -4194,7 +4213,7 @@ func TestPrivateInfrastructureOrgPoliciesAreConfigured(t *testing.T) {
 	contains(t, iam, `constraint = "constraints/sql.restrictPublicIp"`)
 	contains(t, iam, "var.enforce_private_infrastructure_policies ? 1 : 0")
 
-	playbook := read(t, "pkg", "capability", "bootstrap", "playbooks", "gcp-capabilities.md")
+	playbook := read(t, "pkg", "playbooks", "gcp-capabilities.md")
 	contains(t, playbook, "-target=google_project_organization_policy.restrict_public_endpoints")
 	contains(t, playbook, "-target=google_project_organization_policy.no_external_ip")
 	contains(t, playbook, "-target=google_project_organization_policy.restrict_public_ip")
@@ -4218,7 +4237,7 @@ func TestCloudSQLCapabilityIsConfigured(t *testing.T) {
 	instance := read(t, "deploy", "terraform", "gcp", "instance.tf")
 	contains(t, instance, "var.agent_can_manage_cloud_sql")
 
-	playbook := read(t, "pkg", "capability", "bootstrap", "playbooks", "gcp-capabilities.md")
+	playbook := read(t, "pkg", "playbooks", "gcp-capabilities.md")
 	contains(t, playbook, "-target=google_project_iam_member.agent_cloud_sql")
 	contains(t, playbook, "-target=google_project_service.sqladmin")
 }
@@ -4249,7 +4268,7 @@ func TestTheReadinessReportNamesWhereEachCLIRunsAndHostdsAgy(t *testing.T) {
 	}
 
 	out := runBash(t, script, env("GRAIN_AGY_RUN=host")...)
-	contains(t, out, `agy: host, through grain hostd: `+agy+` (its allowlist entry "agy")`)
+	contains(t, out, `agy: host, through the host agent: `+agy+` (its allowlist entry "agy")`)
 	absent(t, out, "/usr/local/bin/agy")
 	contains(t, out, "claude: container: /usr/local/bin/claude (in img)")
 	contains(t, out, "codex: container: /usr/local/bin/codex (in img)")
@@ -4260,11 +4279,11 @@ func TestTheReadinessReportNamesWhereEachCLIRunsAndHostdsAgy(t *testing.T) {
 	// A host CLI hostd has no entry for, or one naming nothing runnable,
 	// is MISSING -- which the report's per-CLI warnings key on.
 	contains(t, runBash(t, script, env("GRAIN_CLAUDE_RUN=host")...),
-		`claude: host, through grain hostd: MISSING (`+allow+` has no cli entry "claude")`)
+		`claude: host, through the host agent: MISSING (`+allow+` has no cli entry "claude")`)
 	if err := os.Remove(agy); err != nil {
 		t.Fatal(err)
 	}
-	contains(t, runBash(t, script, env("GRAIN_AGY_RUN=host")...), "agy: host, through grain hostd: MISSING (its allowlist entry \"agy\" names "+agy)
+	contains(t, runBash(t, script, env("GRAIN_AGY_RUN=host")...), "agy: host, through the host agent: MISSING (its allowlist entry \"agy\" names "+agy)
 
 	readiness := body(t, setupCode(t), "report_readiness() {")
 	contains(t, readiness, `status: $(hostd_status)`)

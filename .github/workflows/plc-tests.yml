@@ -1,0 +1,98 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: PLC Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "grain-plc/**"
+      - "pkg/registry/api/**"
+      - "pkg/registry/independence_test.go"
+      - "pkg/tunnel/**"
+      - "pkg/apierror/**"
+      - ".github/workflows/plc-tests.yml"
+  pull_request:
+    paths:
+      - "grain-plc/**"
+      - "pkg/registry/api/**"
+      - "pkg/registry/independence_test.go"
+      - "pkg/tunnel/**"
+      - "pkg/apierror/**"
+      - ".github/workflows/plc-tests.yml"
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOFLAGS: -mod=readonly
+
+jobs:
+  plc:
+    name: grain-plc
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: ${{ github.workflow }}-plc-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-plc-${{ runner.os }}-${{ hashFiles('grain-plc/go.sum', 'go.sum') }}
+          restore-keys: |
+            go-plc-${{ runner.os }}-
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: grain-plc/go.mod
+          cache: false
+
+      - name: Check formatting (grain-plc)
+        working-directory: grain-plc
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Files not gofmt'd in grain-plc/:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Build (grain-plc)
+        working-directory: grain-plc
+        run: go build ./...
+
+      - name: Vet (grain-plc)
+        working-directory: grain-plc
+        run: go vet ./...
+
+      - name: Test (grain-plc)
+        working-directory: grain-plc
+        run: go test -race ./...
+
+      - name: Verify one-way import boundary
+        run: go test -race -run 'Test.*GrainPLC|Test.*RegistryAPI' ./pkg/registry

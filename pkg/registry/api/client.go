@@ -23,6 +23,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -91,6 +92,12 @@ func IsRateLimited(err error) bool {
 	return errors.As(err, &ae) && ae.StatusCode == http.StatusTooManyRequests
 }
 
+// IsServiceUnavailable reports whether err is an HTTP 503 APIError.
+func IsServiceUnavailable(err error) bool {
+	var ae *APIError
+	return errors.As(err, &ae) && ae.StatusCode == http.StatusServiceUnavailable
+}
+
 func parseAPIError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBytes))
 	ae := &APIError{
@@ -137,14 +144,40 @@ func isLoopbackHost(hostport string) bool {
 	if strings.EqualFold(host, "localhost") {
 		return true
 	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return addr.Unmap().IsLoopback()
+	}
+	return false
+}
+
+func isForbiddenMetadataHost(host string) bool {
+	lower := strings.ToLower(strings.TrimSuffix(host, "."))
+	if lower == "metadata" || (strings.HasSuffix(lower, ".internal") && strings.HasPrefix(lower, "metadata.")) {
+		return true
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		unmapped := addr.Unmap()
+		if unmapped.IsLinkLocalUnicast() || unmapped.IsLinkLocalMulticast() || unmapped.IsUnspecified() {
+			return true
+		}
+	}
+	return false
 }
 
 func validateBaseURL(raw string, allowInsecureHTTP bool) (*url.URL, error) {
-	u, err := url.Parse(strings.TrimSpace(raw))
+	trimmed := strings.TrimSpace(raw)
+	if len(trimmed) > 2048 {
+		return nil, fmt.Errorf("registry URL exceeds 2048 bytes")
+	}
+	u, err := url.Parse(trimmed)
 	if err != nil {
 		return nil, fmt.Errorf("invalid registry URL %q: %w", raw, err)
+	}
+	if u.User != nil {
+		return nil, fmt.Errorf("registry URL must not include userinfo credentials")
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return nil, fmt.Errorf("registry URL must not include query parameters or fragments")
 	}
 	scheme := strings.ToLower(u.Scheme)
 	switch scheme {
@@ -156,14 +189,27 @@ func validateBaseURL(raw string, allowInsecureHTTP bool) (*url.URL, error) {
 	default:
 		return nil, fmt.Errorf("registry URL %q must use https:// (or http:// on loopback)", raw)
 	}
-	if strings.TrimSpace(u.Host) == "" {
+	host := u.Hostname()
+	if host == "" {
 		return nil, fmt.Errorf("registry URL %q is missing host", raw)
+	}
+	if isForbiddenMetadataHost(host) {
+		return nil, fmt.Errorf("registry URL host %q is not permitted", host)
 	}
 	u.Scheme = scheme
 	u.Path = strings.TrimRight(u.Path, "/")
-	u.RawQuery = ""
-	u.Fragment = ""
+	u.RawPath = ""
 	return u, nil
+}
+
+// ValidateRegistryURL validates and normalizes a grain-registry base URL,
+// requiring https:// except on loopback hosts (or when allowInsecureHTTP is true).
+func ValidateRegistryURL(raw string, allowInsecureHTTP bool) (string, error) {
+	u, err := validateBaseURL(raw, allowInsecureHTTP)
+	if err != nil {
+		return "", err
+	}
+	return u.String(), nil
 }
 
 // ClientConfig configures a typed grain-registry HTTP Client.
@@ -212,13 +258,17 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	if hc == nil {
 		hc = &http.Client{Timeout: defaultHTTPTimeout}
 	}
+	clonedHTTP := *hc
+	clonedHTTP.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
 	return &Client{
 		baseURL:           u,
 		registrationToken: strings.TrimSpace(cfg.RegistrationToken),
 		bearerToken:       strings.TrimSpace(cfg.BearerToken),
 		idToken:           cfg.IDToken,
 		extraHeaders:      cfg.ExtraHeaders.Clone(),
-		httpClient:        hc,
+		httpClient:        &clonedHTTP,
 		userAgent:         strings.TrimSpace(cfg.UserAgent),
 	}, nil
 }
@@ -349,6 +399,9 @@ func (c *Client) Directory(ctx context.Context, q DirectoryQuery) (*DirectoryRes
 	if q.Kind != "" {
 		vals.Set("kind", string(q.Kind))
 	}
+	if q.HostKind != "" {
+		vals.Set("host_kind", string(q.HostKind))
+	}
 	if q.Owner != "" {
 		vals.Set("owner", q.Owner)
 	}
@@ -388,14 +441,26 @@ func (c *Client) ListEntries(ctx context.Context, q ListEntriesQuery) ([]Entry, 
 	if q.Owner != "" {
 		vals.Set("owner", q.Owner)
 	}
+	if q.OwnerGroup != "" {
+		vals.Set("owner_group", q.OwnerGroup)
+	}
 	if q.Kind != "" {
 		vals.Set("kind", string(q.Kind))
 	}
 	if q.Status != "" {
 		vals.Set("status", string(q.Status))
 	}
+	if q.Listed != nil {
+		vals.Set("listed", strconv.FormatBool(*q.Listed))
+	}
+	if q.Conflict != nil {
+		vals.Set("conflict", strconv.FormatBool(*q.Conflict))
+	}
 	if q.IncludeDeleted {
 		vals.Set("include_deleted", "true")
+	}
+	if q.All {
+		vals.Set("all", "true")
 	}
 	var out ListEntriesResponse
 	if err := c.doJSON(ctx, http.MethodGet, "/api/entries", vals, nil, &out); err != nil {
@@ -443,11 +508,20 @@ func (c *Client) SetScopes(ctx context.Context, name string, scopes []ScopeInput
 	return &out, nil
 }
 
-// Heartbeat sends POST /api/entries/<name>/heartbeat.
+// Heartbeat sends PUT /api/entries/<name>/heartbeat.
 func (c *Client) Heartbeat(ctx context.Context, name string, req HeartbeatRequest) (*HeartbeatResponse, error) {
 	var out HeartbeatResponse
 	path := "/api/entries/" + url.PathEscape(name) + "/heartbeat"
-	if err := c.doJSON(ctx, http.MethodPost, path, nil, req, &out); err != nil {
+	if err := c.doJSON(ctx, http.MethodPut, path, nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// InstanceStatus fetches GET /api/registry/status from a grain instance.
+func (c *Client) InstanceStatus(ctx context.Context) (*InstanceStatusResponse, error) {
+	var out InstanceStatusResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/registry/status", nil, nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

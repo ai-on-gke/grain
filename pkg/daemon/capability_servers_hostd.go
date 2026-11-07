@@ -200,7 +200,7 @@ func (h *hostdCapabilityServers) registry(ctx context.Context, name string, clie
 		logf := opts.Logf
 		if logf != nil {
 			opts.Logf = func(format string, args ...any) {
-				logf("on grain hostd "+name+": "+format, args...)
+				logf("on host "+name+": "+format, args...)
 			}
 		}
 		if h.store != nil {
@@ -279,7 +279,7 @@ func (h *hostdCapabilityServers) Lookup(capabilityID string) (*protocol.Server, 
 	}
 	route, err := resolveHostdSelector(h.ctx, h.live(), h.store, string(entry.Hostd))
 	if err != nil {
-		return nil, fmt.Errorf("needs-hostd:%s: capability %s runs on hostd %s: %w", entry.Hostd, capabilityID, entry.Hostd, err)
+		return nil, fmt.Errorf("needs-hostd:%s: capability %s runs on host %s: %w", entry.Hostd, capabilityID, entry.Hostd, err)
 	}
 	reg, err := h.registry(h.ctx, route.Name, route.Exec.hostdClient())
 	if err != nil {
@@ -330,7 +330,7 @@ func (s *hostdRoutedServers) Lookup(capabilityID string) (*protocol.Server, erro
 	}
 	route, err := resolveHostdSelector(lookupCtx, s.cfg, s.h.store, string(entry.Hostd))
 	if err != nil {
-		return nil, fmt.Errorf("needs-hostd:%s: capability %s runs on hostd %s: %w", entry.Hostd, capabilityID, entry.Hostd, err)
+		return nil, fmt.Errorf("needs-hostd:%s: capability %s runs on host %s: %w", entry.Hostd, capabilityID, entry.Hostd, err)
 	}
 	reg, err := s.h.registry(lookupCtx, route.Name, route.Exec.hostdClient())
 	if err != nil {
@@ -474,7 +474,7 @@ func (h *hostdCapabilityServers) rotateManaged(capabilityID string) ([]string, e
 	defer cancel()
 	route, err := resolveHostdSelector(ctx, h.live(), h.store, string(entry.Hostd))
 	if err != nil {
-		return nil, fmt.Errorf("needs-hostd:%s: capability %s runs on hostd %s: %w", entry.Hostd, capabilityID, entry.Hostd, err)
+		return nil, fmt.Errorf("needs-hostd:%s: capability %s runs on host %s: %w", entry.Hostd, capabilityID, entry.Hostd, err)
 	}
 	reg, err := h.registry(ctx, route.Name, route.Exec.hostdClient())
 	if err != nil {

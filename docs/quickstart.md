@@ -157,7 +157,7 @@ capabilities:
     - "https://grain.dev/capabilities/grain#journal"
     - "api:deployment:read"
     - "https://grain.dev/capabilities/grain#health"
-    - "bootstrap-playbooks"
+    - 'https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}'
     - "api:ci-read"
 network: ["open"]
 allow_external_on_host_sandboxes: false
@@ -169,7 +169,9 @@ from anybody else that does not carry your approval.
 
 Init lists some things you did not name:
 
-- `grain-ci`: grain grants it to every task on a repository whose CI mode
+- `grain-ci`: the retired bare name (schema migration 96) of
+  `https://grain.dev/capabilities/grain#ci`, which local policy reads as
+  that grant. Grain grants it to every task on a repository whose CI mode
   is grain, and it carries no credential. It is the run's own
   `wait_for_checks` against the repository's `.grain/workflows`.
 - `grain/config`: this deployment's own state repository, which the

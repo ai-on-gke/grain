@@ -380,6 +380,41 @@ func TestTaskOriginTellsAnExternalAgentsFilingFromAHandFiledOne(t *testing.T) {
 	}
 }
 
+// Imported GitHub issues carry Imported rather than GeneratedFrom, and
+// sort at their precedence between proposed and schedule
+// (docs/test-runs/2026-11-06-saved-boards-and-visualizations.md).
+func TestTaskOriginFindsAndOrdersImportedIssues(t *testing.T) {
+	t.Parallel()
+	tasks := []ui.Task{
+		{ID: "review", Title: "Review it", State: model.StateQueued, Stacked: true, Review: true},
+		{ID: "imported", Title: "[#42] Search results drop the last page", State: model.StateProposed, Imported: true},
+		{ID: "hand", Title: "By hand", State: model.StateQueued},
+		{ID: "schedule", Title: "Scheduled", State: model.StateQueued, Scheduled: true},
+		{ID: "proposed", Title: "Follow-up", State: model.StateProposed, GeneratedFrom: "1"},
+		{ID: "fix", Title: "Repair it", State: model.StateQueued, Stacked: true, GeneratedFrom: "1"},
+		{ID: "suite", Title: "Suite pass", State: model.StateQueued, SuiteRun: true},
+		{ID: "external", Title: "External", State: model.StateProposed, Author: "external:w", AuthorKind: "agent"},
+	}
+	if got := asked(t, "origin:any:imported").apply(tasks); !equal(ids(got), []string{"imported"}) {
+		t.Fatalf("apply(origin:any:imported) = %v, want [imported]", ids(got))
+	}
+	q, err := listFlags{origin: "imported"}.query(builtinAttributes)
+	if err != nil {
+		t.Fatalf("query(-origin imported): %v", err)
+	}
+	if got := q.apply(tasks); !equal(ids(got), []string{"imported"}) {
+		t.Fatalf("apply(-origin imported) = %v, want [imported]", ids(got))
+	}
+	sorted, err := listFlags{sortBy: "origin:asc"}.query(builtinAttributes)
+	if err != nil {
+		t.Fatalf("query(-sort origin:asc): %v", err)
+	}
+	want := []string{"hand", "external", "proposed", "imported", "schedule", "suite", "fix", "review"}
+	if got := ids(sorted.apply(tasks)); !equal(got, want) {
+		t.Fatalf("apply(-sort origin:asc) = %v, want %v", got, want)
+	}
+}
+
 // A word nobody can act on is answered with the words that work, rather
 // than with an empty listing that reads like a deployment with no such
 // tasks. Unlike the frontend -- which drops a clause it cannot answer so
@@ -684,5 +719,130 @@ func TestListDerivedFromAndFiledViaFiltersAndGetCommentsSince(t *testing.T) {
 	err = cmdGet(ctx, c, &printer{}, []string{derived.ID, "-comments-since", "last tuesday"})
 	if exit, _, _ := classifyError(err); exit != exitUsage {
 		t.Errorf("-comments-since with no time: %v (exit %d), want exit 2", err, exit)
+	}
+}
+
+func TestTaskLineMarksQueuedTasksWaitingOnUnfinishedDependencies(t *testing.T) {
+	t.Parallel()
+	ready := taskLine(ui.Task{ID: "3144", State: model.StateQueued, Repo: "acme/widgets", Title: "First step"})
+	waiting := taskLine(ui.Task{
+		ID:              "3145",
+		State:           model.StateQueued,
+		Repo:            "acme/widgets",
+		Title:           "Second step",
+		DependsOn:       []string{"3144"},
+		DependsOnStates: map[string]model.State{"3144": model.StateQueued},
+		Blocked:         true,
+		BlockedBy:       []string{"3144"},
+	})
+	if !strings.Contains(waiting, "Second step (waits on 3144)") {
+		t.Errorf("waiting taskLine = %q, want marker '(waits on 3144)' in title column", waiting)
+	}
+	if strings.Index(waiting, "acme/widgets") != strings.Index(ready, "acme/widgets") {
+		t.Errorf("waiting taskLine shifted repo column:\nready:   %s\nwaiting: %s", ready, waiting)
+	}
+	if fields := strings.Fields(waiting); len(fields) < 3 || fields[0] != "3145" || fields[1] != "queued" || fields[2] != "acme/widgets" {
+		t.Errorf("waiting taskLine fields = %v, want stable id/state/repo columns", fields)
+	}
+
+	// Once the dependency finishes (closed), the task is ready to dispatch and
+	// must no longer be marked as waiting.
+	unblocked := taskLine(ui.Task{
+		ID:              "3145",
+		State:           model.StateQueued,
+		Repo:            "acme/widgets",
+		Title:           "Second step",
+		DependsOn:       []string{"3144"},
+		DependsOnStates: map[string]model.State{"3144": model.StateClosed},
+	})
+	if strings.Contains(unblocked, "waits on") {
+		t.Errorf("taskLine for a task whose dependency finished = %q, want no waiting marker", unblocked)
+	}
+
+	// Non-queued tasks (e.g. proposed) already read as non-dispatchable by state.
+	proposed := taskLine(ui.Task{
+		ID:              "3146",
+		State:           model.StateProposed,
+		Repo:            "acme/widgets",
+		Title:           "Unapproved follow-up",
+		DependsOn:       []string{"3144"},
+		DependsOnStates: map[string]model.State{"3144": model.StateQueued},
+		Blocked:         true,
+		BlockedBy:       []string{"3144"},
+	})
+	if strings.Contains(proposed, "waits on") {
+		t.Errorf("proposed taskLine = %q, want waiting marker only on queued tasks", proposed)
+	}
+}
+
+func TestGetAndListShowDependenciesUntilFinished(t *testing.T) {
+	client, c := externalCLIServer(t)
+	ctx := context.Background()
+
+	first, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "First step", Repo: "acme/widgets", Approved: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "Second step", Repo: "acme/widgets", Approved: true, DependsOn: []string{first.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gotGet := captureStdout(t, func() {
+		if err := cmdGet(ctx, c, &printer{}, []string{second.ID}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if want := "depends on: " + first.ID + " (queued)\n"; !strings.Contains(gotGet, want) {
+		t.Errorf("grain get while dependency is open missing %q:\n%s", want, gotGet)
+	}
+
+	gotFirstGet := captureStdout(t, func() {
+		if err := cmdGet(ctx, c, &printer{}, []string{first.ID}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if strings.Contains(gotFirstGet, "depends on:") {
+		t.Errorf("grain get on task without dependencies printed depends on:\n%s", gotFirstGet)
+	}
+
+	gotList := captureStdout(t, func() {
+		if err := cmdList(ctx, c, &printer{}, nil); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if want := "Second step (waits on " + first.ID + ")"; !strings.Contains(gotList, want) {
+		t.Errorf("grain list while dependency is open missing %q:\n%s", want, gotList)
+	}
+
+	// Finish the dependency and verify grain get shows (closed) while grain list
+	// clears the waiting marker.
+	if err := client.Close(ctx, first.ID, ui.CloseOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	gotGetAfter := captureStdout(t, func() {
+		if err := cmdGet(ctx, c, &printer{}, []string{second.ID}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if want := "depends on: " + first.ID + " (closed)\n"; !strings.Contains(gotGetAfter, want) {
+		t.Errorf("grain get after dependency closed missing %q:\n%s", want, gotGetAfter)
+	}
+
+	gotListAfter := captureStdout(t, func() {
+		if err := cmdList(ctx, c, &printer{}, nil); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if strings.Contains(gotListAfter, "waits on") {
+		t.Errorf("grain list after dependency finished still marked task as waiting:\n%s", gotListAfter)
+	}
+	if !strings.Contains(gotListAfter, "Second step") {
+		t.Errorf("grain list after dependency finished missing Second step:\n%s", gotListAfter)
 	}
 }

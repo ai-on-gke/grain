@@ -22,7 +22,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-func TestSchema115MigratesPriorityDispatchAndDurableToAdmission(t *testing.T) {
+func TestSchema120MigratesPriorityDispatchAndDurableToAdmission(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
@@ -111,7 +111,7 @@ func TestSchema115MigratesPriorityDispatchAndDurableToAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Seed pre-115 grant rows directly, including a task holding both grants.
+	// Seed pre-120 grant rows directly, including a task holding both grants.
 	for _, row := range []struct {
 		table, col, id, capName string
 	}{
@@ -142,11 +142,11 @@ func TestSchema115MigratesPriorityDispatchAndDurableToAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 114 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 119 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("Init from schema 114: %v", err)
+		t.Fatalf("Init from schema 119: %v", err)
 	}
 
 	for id, want := range map[string]model.Admission{

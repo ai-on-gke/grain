@@ -237,7 +237,7 @@ var sandboxCommandFlags = map[string][]string{
 	"quarantine":            {"reason", "ttl", "no-follow-up", "C"},
 	"metrics":               {"window", "since", "until", "repo", "author"},
 	"health":                nil,
-	"log":                   {"source", "since", "until", "priority", "min-priority", "contains", "max-lines", "lines", "n", "tail"},
+	"log":                   {"source", "unit", "since", "until", "priority", "min-priority", "contains", "max-lines", "lines", "n", "tail"},
 	"playbooks":             nil,
 	"issue list":            {"repo", "label", "limit"},
 	"issue read":            {"repo", "comments"},
@@ -1034,7 +1034,7 @@ func flagName(name string) string {
 // instant it names, relative to now; one it cannot is sent as given, for
 // the tool to refuse in its own words.
 func grainLogQuery(p sandboxArgs, now time.Time) url.Values {
-	q := p.query("tail", "contains")
+	q := p.query("tail", "contains", "unit")
 	for _, name := range []string{"since", "until"} {
 		v := p.get(name)
 		if v == "" {

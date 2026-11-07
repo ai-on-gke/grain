@@ -14,8 +14,8 @@
 
 // Package webauth provides shared browser and proxy authentication primitives
 // used by both the grain daemon (pkg/ui) and grain-registry: Google Cloud IAP
-// signed-header JWT verification, group-membership checking with pluggable
-// directory checkers, and Fetch-Metadata / Origin CSRF checks.
+// and grain-registry signed-header JWT verification, group-membership checking
+// with pluggable directory checkers, and Fetch-Metadata / Origin CSRF checks.
 //
 // It intentionally has no dependency on pkg/model or pkg/ui so standalone
 // binaries such as cmd/grain-registry can import it without pulling in daemon
@@ -52,11 +52,25 @@ const (
 	PrincipalService PrincipalKind = "service"
 )
 
+// DelegatingApp describes the service principal that forwarded a request on
+// behalf of a person through the registry (`act` claim in a registry JWT,
+// design/design/authentication.design.md §6, AU-22).
+type DelegatingApp struct {
+	Email     string
+	Name      string
+	Grant     string
+	Access    string
+	JTI       string
+	RequestID string
+}
+
 // VerifiedIdentity is an authenticated caller extracted from a signed proxy
 // assertion header.
 type VerifiedIdentity struct {
 	Email string
+	Sub   string
 	Kind  PrincipalKind
+	Via   *DelegatingApp
 }
 
 // IAPAssertionHeader is the HTTP request header holding the Google Cloud IAP JWT assertion.
@@ -196,12 +210,13 @@ func SetIAPCertURL(u string) {
 // ResetIAPConfig resets all IAP package-level configurations and key caches to defaults.
 func ResetIAPConfig() {
 	iapMu.Lock()
-	defer iapMu.Unlock()
 	iapAudience = ""
 	iapIssuer = ""
 	iapKeySets = nil
 	iapHTTPClient = &http.Client{Timeout: 5 * time.Second}
 	googleIAPCertURL = GoogleIAPCertURL
+	iapMu.Unlock()
+	ResetRegistryConfig()
 }
 
 // IAPKeysURL returns the public-key endpoint URL active for ctx.

@@ -208,11 +208,47 @@ describe("DetailOverlay timeline", () => {
     const lines = document.querySelectorAll(".timeline-attempt-hostd");
     expect(lines).toHaveLength(1);
     expect(lines[0].textContent).toBe(
-      "ran on hostd ws-a on cloudtop · alice@example.com",
+      "ran on host ws-a on cloudtop · alice@example.com",
     );
     expect(lines[0]).toHaveAttribute(
       "title",
-      "The agent CLI ran on grain hostd ws-a, on cloudtop, owned by alice@example.com",
+      "The agent CLI ran on host ws-a, on cloudtop, owned by alice@example.com",
+    );
+  });
+
+  // A run on a hostd since deleted from the registry keeps the name it
+  // recorded, marked deleted.
+  it("marks an attempt's hostd that has since been deleted", () => {
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          attempts: [
+            {
+              number: 1,
+              startedAt: "2026-08-28T12:00:00Z",
+              finishedAt: "2026-08-28T12:10:00Z",
+              outcome: "failed",
+              hostd: {
+                hostd: "rarcea",
+                at: "2026-08-28T12:00:01Z",
+                deleted: true,
+              },
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+    const lines = document.querySelectorAll(".timeline-attempt-hostd");
+    expect(lines).toHaveLength(1);
+    expect(lines[0].textContent).toBe("ran on host rarcea (deleted)");
+    expect(lines[0].getAttribute("title")).toContain(
+      "since deleted from the host registry",
     );
   });
 

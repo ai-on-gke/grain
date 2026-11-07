@@ -244,6 +244,14 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		DefaultCapabilities:         ptr([]string{ui.OfferedCapabilities()[0].ID}),
 		DefaultAdmission:            ptr("bypass"),
 		SettingsLocked:              ptr(true),
+		Registry: &model.RegistryConfig{
+			URL:         "https://registry.example.com",
+			Entry:       "grain-dev",
+			DisplayName: "Dev Grain",
+			Purpose:     "Development queue",
+			HostKind:    "workstation",
+			Listed:      true,
+		},
 	}
 }
 

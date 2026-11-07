@@ -134,9 +134,13 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// and capability server hostd placement, grain/task-2165; v17 only
 	// adds the role gate, built-in scope sets, gma_ inbox reach,
 	// approval-callback tokens and the daemon's UI listeners to
-	// auth-routes, task 3168).
-	if trustboundary.Version != "trust-boundary/v17" {
-		w.t.Fatalf("this walkthrough is about trust-boundary/v17, the build has %s", trustboundary.Version)
+	// auth-routes, task 3168; v18 only adds host enrollment codes, the
+	// pairing-code join handshake and the request-actor check to
+	// auth-routes, task 3287; v19 only adds pkg/playbooks/ and the
+	// capability policy/catalogue/template-grant files to
+	// capabilities-secrets, task 3388).
+	if trustboundary.Version != "trust-boundary/v19" {
+		w.t.Fatalf("this walkthrough is about trust-boundary/v19, the build has %s", trustboundary.Version)
 	}
 	if w.merged(branch) {
 		w.t.Fatal("merged before the pull request read mergeable")

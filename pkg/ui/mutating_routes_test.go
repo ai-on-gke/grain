@@ -93,6 +93,20 @@ func taskParkedOnQuestion(t *testing.T, client *ui.Client, _ sender) string {
 	return id
 }
 
+// taskHeldForHumanReview is a task a review held for a person's decision:
+// what POST /api/tasks/{id}/human-review/release acts on.
+func taskHeldForHumanReview(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	id := fileTask(true)(t, client, nil)
+	if _, err := client.Store.RaiseHumanReviewHold(context.Background(), id, model.HumanReviewRequest{
+		Reason: model.HumanReviewReason{Source: model.HumanReviewRequested, Reason: "a person must decide", ReviewTask: "r1"},
+		By:     model.Principal{Kind: model.PrincipalAgent, ID: "r1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 // taskWithPullRequest is a task whose pull request the merge queue has
 // given up on: what retry-merge and force-merge act on.
 func taskWithPullRequest(t *testing.T, client *ui.Client, _ sender) string {
@@ -159,6 +173,45 @@ func registerHostd(t *testing.T, client *ui.Client, _ sender) string {
 		t.Fatalf("registering ws-1: %v", err)
 	}
 	return "ws-1"
+}
+
+func registerEnrollmentCode(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	if _, _, err := client.Store.CreateHostEnrollmentCode(context.Background(), model.HostEnrollmentCode{Name: "team-invite"}); err != nil {
+		t.Fatalf("creating enrollment code: %v", err)
+	}
+	return "team-invite"
+}
+
+func registerPendingHostJoin(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	ctx := context.Background()
+	_, raw, err := client.Store.CreateHostEnrollmentCode(ctx, model.HostEnrollmentCode{Name: "pending-invite"})
+	if err != nil {
+		t.Fatalf("creating enrollment code: %v", err)
+	}
+	jr, err := client.Store.CreateHostJoinRequest(ctx, model.HostJoinRequest{
+		PublicKey:  "ed25519:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		Hostname:   "devbox-1",
+		OS:         "linux",
+		Arch:       "amd64",
+		EnrolledBy: "alice@example.com",
+	}, raw, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("creating pending join request: %v", err)
+	}
+	return jr.ID
+}
+
+// registerRevokedHostd puts hostd ws-1 in the registry, revoked, as what
+// deleting a hostd acts on.
+func registerRevokedHostd(t *testing.T, client *ui.Client, s sender) string {
+	t.Helper()
+	name := registerHostd(t, client, s)
+	if _, err := client.Store.RevokeHostd(context.Background(), name); err != nil {
+		t.Fatalf("revoking ws-1: %v", err)
+	}
+	return name
 }
 
 // releaseClient is approvalServer's deployment: grain CI on
@@ -454,6 +507,10 @@ var attributedRoutes = map[string]attributedRoute{
 		setup:    taskWithPullRequest,
 		recorded: noted(model.TaskEventSubmitted),
 	},
+	"POST /api/tasks/{id}/human-review/release": {
+		setup:    taskHeldForHumanReview,
+		recorded: noted(model.TaskEventHumanReviewReleased),
+	},
 	"POST /api/tasks/{id}/retry": {
 		setup:       fileTask(true),
 		agentGrants: []string{"api:tasks:write"},
@@ -593,10 +650,40 @@ var attributedRoutes = map[string]attributedRoute{
 		agentGrants: []string{"api:capabilities:admin"},
 		recorded:    lastConfigAudit,
 	},
+	"POST /api/hostds/enrollment-codes": {
+		body:     `{"name":"team-hosts"}`,
+		recorded: lastConfigAudit,
+	},
+	"POST /api/hostds/enrollment-codes/{name}/rotate": {
+		setup:    registerEnrollmentCode,
+		path:     "/api/hostds/enrollment-codes/{id}/rotate",
+		recorded: lastConfigAudit,
+	},
+	"POST /api/hostds/enrollment-codes/{name}/revoke": {
+		setup:    registerEnrollmentCode,
+		path:     "/api/hostds/enrollment-codes/{id}/revoke",
+		recorded: lastConfigAudit,
+	},
+	"POST /api/hostds/pending/{id}/accept": {
+		setup:    registerPendingHostJoin,
+		body:     `{"name":"devbox-1"}`,
+		recorded: lastConfigAudit,
+	},
+	"POST /api/hostds/pending/{id}/reject": {
+		setup:    registerPendingHostJoin,
+		recorded: lastConfigAudit,
+	},
 	"PATCH /api/hostds/{name}": {
 		setup:       registerHostd,
 		path:        "/api/hostds/{id}",
 		body:        `{"owner":"bob@example.com"}`,
+		agentGrants: []string{"api:capabilities:admin"},
+		recorded:    lastConfigAudit,
+	},
+	"POST /api/hostds/{name}/rename": {
+		setup:       registerHostd,
+		path:        "/api/hostds/{id}/rename",
+		body:        `{"name":"ws-2"}`,
 		agentGrants: []string{"api:capabilities:admin"},
 		recorded:    lastConfigAudit,
 	},
@@ -609,6 +696,17 @@ var attributedRoutes = map[string]attributedRoute{
 	"POST /api/hostds/{name}/revoke": {
 		setup:       registerHostd,
 		path:        "/api/hostds/{id}/revoke",
+		agentGrants: []string{"api:capabilities:admin"},
+		recorded:    lastConfigAudit,
+	},
+	"DELETE /api/hostds/{name}": {
+		setup:       registerRevokedHostd,
+		path:        "/api/hostds/{id}",
+		agentGrants: []string{"api:capabilities:admin"},
+		recorded:    lastConfigAudit,
+	},
+	"POST /api/hostds/delete-revoked": {
+		setup:       registerRevokedHostd,
 		agentGrants: []string{"api:capabilities:admin"},
 		recorded:    lastConfigAudit,
 	},
@@ -690,10 +788,21 @@ var attributedRoutes = map[string]attributedRoute{
 // is credited with: signing in and out, and requests that only check,
 // plan or preview a change without making it.
 var neverAttributedRoutes = map[string]bool{
+	// A review's request for human review is recorded as that review's
+	// agent, whoever relays it (its run's MCP server reaches the daemon
+	// as the daemon): the hold is the review's, and the request's own
+	// principal is checked rather than recorded (ui.Client.RequestHumanReview).
+	"POST /api/tasks/{id}/human-review": true,
 	// Signing in and out: there is nobody to credit until it succeeds,
 	// and nothing is written that names them.
 	"POST /api/auth/access-code": true,
 	"POST /api/auth/logout":      true,
+	// Self-authenticating Ed25519 host handshake and silent credential
+	// renewal protocol endpoints; operator approval is attributed on
+	// POST /api/hostds/pending/{id}/accept and .../reject.
+	"POST /api/hostd/join":           true,
+	"POST /api/hostd/join/{id}/poll": true,
+	"POST /api/hostd/renew":          true,
 	// Checks, tests and previews: they report what a change would do and
 	// write nothing.
 	"POST /api/agent-keys/{framework}/check": true,
@@ -706,6 +815,7 @@ var neverAttributedRoutes = map[string]bool{
 	"POST /api/capability-servers/figma-test":            true,
 	"POST /api/capability-servers/figma-oauth-authorize": true,
 	"POST /api/deployment/git-connections/check":         true,
+	"POST /api/registry/heartbeat":                       true,
 	"POST /api/settings/plan":                            true,
 	// The MCP endpoints are transports: each tool they serve calls one of
 	// the routes here, and is attributed there. POST /api/mcp's

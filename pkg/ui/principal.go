@@ -37,6 +37,9 @@ type iapConfigContextKey struct{}
 // IAPAssertionHeader is the HTTP request header holding the Google Cloud IAP JWT assertion.
 const IAPAssertionHeader = webauth.IAPAssertionHeader
 
+// RegistryAssertionHeader is the HTTP request header holding the grain-registry JWT assertion.
+const RegistryAssertionHeader = webauth.RegistryAssertionHeader
+
 // GoogleIAPCertURL is the Google endpoint serving public keys in PEM format.
 const GoogleIAPCertURL = webauth.GoogleIAPCertURL
 
@@ -56,6 +59,20 @@ var PlaintextIdentityHeaders = []string{
 	"Grain-User",
 }
 
+// RegistryConfig holds request-level or server-level registry JWT verification
+// configuration (-ui-registry-issuer, -ui-registry-audience, -ui-registry-keys-url).
+type RegistryConfig = webauth.RegistryConfig
+
+// WithRegistryConfig attaches a RegistryConfig to ctx.
+func WithRegistryConfig(ctx context.Context, cfg RegistryConfig) context.Context {
+	return webauth.WithRegistryConfig(ctx, cfg)
+}
+
+// RegistryConfigFromContext extracts RegistryConfig from ctx if present.
+func RegistryConfigFromContext(ctx context.Context) (RegistryConfig, bool) {
+	return webauth.RegistryConfigFromContext(ctx)
+}
+
 // IAPConfig holds request-level or server-level IAP configuration options.
 type IAPConfig struct {
 	// Audience is the audience a signed assertion must carry, or several
@@ -69,6 +86,15 @@ type IAPConfig struct {
 	// IAP's PEM map or a JWK set. Empty means $GRAIN_IAP_KEYS_URL, and
 	// then GoogleIAPCertURL.
 	KeysURL string
+	// RegistryIssuer is Config.RegistryIssuer (-ui-registry-issuer): the
+	// exact iss claim a signed X-Grain-Registry-Assertion must carry.
+	RegistryIssuer string
+	// RegistryAudience is Config.RegistryAudience (-ui-registry-audience):
+	// the single aud URL a signed X-Grain-Registry-Assertion must carry.
+	RegistryAudience string
+	// RegistryKeysURL is Config.RegistryKeysURL (-ui-registry-keys-url):
+	// the JWKS URL publishing the registry's ES256 public keys.
+	RegistryKeysURL string
 	// RequireVerifier is Config.RequireVerifier (-ui-require-verifier):
 	// when non-empty, names the IdentityVerifier network callers must sign
 	// in through, so the access code counts only where accessCodeAccepted
@@ -92,6 +118,19 @@ func WithIAPConfig(ctx context.Context, cfg IAPConfig) context.Context {
 		Issuer:   cfg.Issuer,
 		KeysURL:  cfg.KeysURL,
 	})
+	if cfg.RegistryIssuer != "" || cfg.RegistryAudience != "" || cfg.RegistryKeysURL != "" {
+		rc, _ := webauth.RegistryConfigFromContext(ctx)
+		if cfg.RegistryIssuer != "" {
+			rc.Issuer = cfg.RegistryIssuer
+		}
+		if cfg.RegistryAudience != "" {
+			rc.Audience = cfg.RegistryAudience
+		}
+		if cfg.RegistryKeysURL != "" {
+			rc.KeysURL = cfg.RegistryKeysURL
+		}
+		ctx = webauth.WithRegistryConfig(ctx, rc)
+	}
 	return context.WithValue(ctx, iapConfigContextKey{}, cfg)
 }
 
@@ -191,6 +230,92 @@ func VerifyIAPToken(ctx context.Context, tokenStr string) (string, error) {
 	return id.Email, nil
 }
 
+// RegistryClaims represents the JWT claims contained in a grain-registry JWT assertion.
+type RegistryClaims = webauth.RegistryClaims
+
+// RegistryValidator validates a grain-registry JWT assertion token string for a target audience.
+type RegistryValidator = webauth.RegistryValidator
+
+// SetRegistryAudience sets the expected audience for grain-registry JWT verification.
+func SetRegistryAudience(aud string) {
+	webauth.SetRegistryAudience(aud)
+}
+
+// GetRegistryAudience returns the configured audience for grain-registry JWT verification.
+func GetRegistryAudience() string {
+	return webauth.GetRegistryAudience()
+}
+
+// SetRegistryIssuer sets the expected issuer for grain-registry JWT verification.
+func SetRegistryIssuer(issuer string) {
+	webauth.SetRegistryIssuer(issuer)
+}
+
+// GetRegistryIssuer returns the configured issuer for grain-registry JWT verification.
+func GetRegistryIssuer() string {
+	return webauth.GetRegistryIssuer()
+}
+
+// SetRegistryKeysURL sets the JWKS endpoint URL for grain-registry JWT verification.
+func SetRegistryKeysURL(u string) {
+	webauth.SetRegistryKeysURL(u)
+}
+
+// GetRegistryKeysURL returns the configured JWKS endpoint URL for grain-registry JWT verification.
+func GetRegistryKeysURL() string {
+	return webauth.GetRegistryKeysURL()
+}
+
+// SetRegistryHTTPClient sets a custom http.Client for fetching grain-registry JWKS keys.
+func SetRegistryHTTPClient(client *http.Client) {
+	webauth.SetRegistryHTTPClient(client)
+}
+
+// SetRegistryRefetchFloor overrides the minimum interval between registry JWKS
+// refetches triggered by an unknown key ID.
+func SetRegistryRefetchFloor(d time.Duration) {
+	webauth.SetRegistryRefetchFloor(d)
+}
+
+// ResetRegistryConfig resets all registry package-level configurations to defaults.
+func ResetRegistryConfig() {
+	webauth.ResetRegistryConfig()
+	refusedVerifiersMu.Lock()
+	clear(refusedVerifiersLogged)
+	refusedVerifiersMu.Unlock()
+}
+
+// VerifyRegistryToken validates a grain-registry JWT assertion and returns the
+// authenticated user email/identity.
+func VerifyRegistryToken(ctx context.Context, tokenStr string) (string, error) {
+	tokenStr = strings.TrimSpace(tokenStr)
+	if tokenStr == "" {
+		return "", errors.New("empty registry assertion token")
+	}
+
+	var claims *RegistryClaims
+	var err error
+	handled := false
+	for _, v := range registeredVerifiersSnapshot() {
+		if rv, ok := v.(*registryVerifier); ok {
+			claims, _, err = rv.inner.VerifyToken(ctx, tokenStr)
+			handled = true
+			break
+		}
+	}
+	if !handled {
+		claims, err = webauth.ValidateRegistryToken(ctx, tokenStr, webauth.RegistryAudienceFor(ctx))
+	}
+	if err != nil {
+		return "", err
+	}
+	id, err := webauth.IdentityFromRegistryClaims(claims)
+	if err != nil {
+		return "", err
+	}
+	return id.Email, nil
+}
+
 // testSourceNets are networks singleTenantTrusted trusts as it does an
 // in-process request in this package's own tests and nowhere else: export_test.go
 // is all that sets it, to the TEST-NET-1 range httptest.NewRequest gives
@@ -204,6 +329,7 @@ var testSourceNets []*net.IPNet
 var (
 	proxyIdentityHeaders = []string{
 		IAPAssertionHeader,
+		RegistryAssertionHeader,
 		"X-Goog-Authenticated-User-Email",
 		"X-Goog-Authenticated-User-Id",
 	}
@@ -263,6 +389,8 @@ const (
 	// AuthMethodIAP is a verified IAP (or other signing proxy's)
 	// assertion.
 	AuthMethodIAP AuthMethod = "iap"
+	// AuthMethodRegistry is a verified grain-registry assertion.
+	AuthMethodRegistry AuthMethod = "registry"
 	// AuthMethodTrusted is nobody signed in, from a source this daemon
 	// trusts as itself: the access code, or an in-process request.
 	AuthMethodTrusted AuthMethod = "trusted"
@@ -350,12 +478,20 @@ func unverifiedIdentity(r *http.Request, proxyOnly bool) string {
 				return fmt.Sprintf("its %s did not verify against this deployment's IAP audience, issuer and keys "+
 					"(-ui-iap-audience, -ui-iap-issuer, -ui-iap-keys-url)", h)
 			}
+			if v.Name() == string(AuthMethodRegistry) {
+				return fmt.Sprintf("its %s did not verify against this deployment's registry audience, issuer and keys "+
+					"(-ui-registry-audience, -ui-registry-issuer, -ui-registry-keys-url)", h)
+			}
 			return fmt.Sprintf("its %s header did not verify (%s)", h, v.Name())
 		}
 	}
 	if strings.TrimSpace(r.Header.Get(IAPAssertionHeader)) != "" {
 		return fmt.Sprintf("its %s did not verify against this deployment's IAP audience, issuer and keys "+
 			"(-ui-iap-audience, -ui-iap-issuer, -ui-iap-keys-url)", IAPAssertionHeader)
+	}
+	if strings.TrimSpace(r.Header.Get(RegistryAssertionHeader)) != "" {
+		return fmt.Sprintf("its %s did not verify against this deployment's registry audience, issuer and keys "+
+			"(-ui-registry-audience, -ui-registry-issuer, -ui-registry-keys-url)", RegistryAssertionHeader)
 	}
 	if h, id, why, _ := ignoredIdentityHeader(r, proxyOnly); h != "" {
 		return fmt.Sprintf("it names %q only in the unsigned %s header, %s", id, h, why)

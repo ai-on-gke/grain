@@ -1009,6 +1009,15 @@ type Config struct {
 	// same reach and fork-head checks processResult gives the rest.
 	sessionReach  *gitproxy.Reach
 	sessionClient github.Client
+
+	// runCtx, cancelRun and stopCancelling carry runOneWithFramework's
+	// per-run cancellation context and TaskCancellers registration into
+	// RunDispatch so a cancellation (Stop, pause, pre-emption, capability
+	// restart) arriving during sandbox setup or checkout reaches the run
+	// rather than missing TaskCancellers until framework.Run begins.
+	runCtx         context.Context
+	cancelRun      context.CancelCauseFunc
+	stopCancelling func()
 }
 
 func (c Config) cancelPollInterval() time.Duration {

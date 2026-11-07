@@ -145,3 +145,52 @@ func (s *Store) selfApprovedProposalCount(ctx context.Context, proposer string) 
 	}
 	return n, nil
 }
+
+// ExceededSessionTurnLimit reports whether queueing one more proposal on
+// proposer's standing-session permission (ConsoleSession.TasksApproved)
+// would exceed AutoSubmitLimits.TurnFanOut: AutoSubmitTurnFanOutReached
+// when it would, AutoSubmitWithinLimits otherwise.
+//
+// A turn starts at the latest comment a person wrote on proposer's own
+// task -- the message the session is answering -- and what it counts is
+// the proposals proposer has had queued on ConsoleSessionPrincipal since
+// then. Read off the store rather than kept as a tally, for
+// ExceededAutoSubmitLimit's reason: both filing paths
+// (ui.Client.CreateTask, orchestrator.relayProposedTasks) write each
+// proposal before deciding the next, so the siblings filed a moment ago
+// are already counted, and neither path holds a counter the other lacks.
+//
+// A session nobody has written to yet (one woken by grain itself, or by
+// a handover) counts from its task's beginning: a turn nobody asked for
+// is not a fresh allowance.
+func (s *Store) ExceededSessionTurnLimit(ctx context.Context, proposer string,
+	limits AutoSubmitLimits) (AutoSubmitLimit, error) {
+
+	limits = limits.Resolved()
+	var since sql.NullTime
+	err := s.db.QueryRowContext(ctx,
+		"SELECT `created_at` FROM `task_comment` WHERE `task_id` = ? "+
+			"AND (`author_kind` = ? OR `author_behalf_kind` = ?) ORDER BY `id` DESC LIMIT 1",
+		proposer, string(PrincipalHuman), string(PrincipalHuman),
+	).Scan(&since)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return AutoSubmitWithinLimits, fmt.Errorf("reading when task %s was last written to: %w", proposer, err)
+	}
+	query := "SELECT COUNT(*) FROM `task_link` AS `l` JOIN `task` AS `t` ON `t`.`id` = `l`.`task_id` " +
+		"WHERE `l`.`kind` = ? AND `l`.`target` = ? " +
+		"AND `t`.`approval_actor_kind` = ? AND `t`.`approval_actor_id` = ? " +
+		"AND (`t`.`approval_behalf_kind` IS NULL OR `t`.`approval_behalf_kind` = '')"
+	args := []any{string(LinkProposedBy), proposer, string(ConsoleSessionPrincipal.Kind), ConsoleSessionPrincipal.ID}
+	if since.Valid {
+		query += " AND `t`.`created_at` >= ?"
+		args = append(args, since.Time.UTC())
+	}
+	var n int
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
+		return AutoSubmitWithinLimits, fmt.Errorf("counting the proposals task %s has queued this turn: %w", proposer, err)
+	}
+	if n >= limits.TurnFanOut {
+		return AutoSubmitTurnFanOutReached, nil
+	}
+	return AutoSubmitWithinLimits, nil
+}

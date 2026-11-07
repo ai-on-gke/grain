@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
@@ -874,7 +873,7 @@ func TestResumeAdoptedRunEnforcesWarmSandboxIsolationAndLedgerPark(t *testing.T)
 			cfg.SessionSandboxIdleTTL = 30 * time.Minute
 			cfg.ConsoleSessions = []model.ConsoleSession{{
 				ID: model.DirectorSessionID, Title: "Director",
-				Capabilities: []string{selfdebug.CapabilityName}, NetworkAccess: model.NetworkOpen,
+				Capabilities: []string{model.GrainSourceGrant}, NetworkAccess: model.NetworkOpen,
 			}}
 		})
 		runSessions(t, store, baseTime)
@@ -933,7 +932,7 @@ func TestResumeAdoptedRunEnforcesWarmSandboxIsolationAndLedgerPark(t *testing.T)
 			Config: orchestrator.Config{
 				SessionSandboxIdleTTL: 30 * time.Minute,
 				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-				Capabilities:          orchestrator.SessionTestRegistry(selfdebug.New()),
+				Capabilities:          orchestrator.SessionTestRegistry(),
 			},
 		}
 		info := runhost.Info{
@@ -960,7 +959,7 @@ func TestResumeAdoptedRunEnforcesWarmSandboxIsolationAndLedgerPark(t *testing.T)
 			cfg.SessionSandboxIdleTTL = 30 * time.Minute
 			cfg.ConsoleSessions = []model.ConsoleSession{{
 				ID: model.DirectorSessionID, Title: "Director",
-				Capabilities: []string{selfdebug.CapabilityName}, NetworkAccess: model.NetworkOpen,
+				Capabilities: []string{model.GrainSourceGrant}, NetworkAccess: model.NetworkOpen,
 			}}
 		})
 		runSessions(t, store, baseTime)
@@ -1010,7 +1009,7 @@ func TestResumeAdoptedRunEnforcesWarmSandboxIsolationAndLedgerPark(t *testing.T)
 				SandboxRecreations:    recreations,
 				SessionSandboxIdleTTL: 30 * time.Minute,
 				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-				Capabilities:          orchestrator.SessionTestRegistry(selfdebug.New()),
+				Capabilities:          orchestrator.SessionTestRegistry(),
 			},
 		}
 		info := runhost.Info{
@@ -1043,7 +1042,7 @@ func TestResumeAdoptedRunEnforcesWarmSandboxIsolationAndLedgerPark(t *testing.T)
 			cfg.SessionSandboxIdleTTL = 30 * time.Minute
 			cfg.ConsoleSessions = []model.ConsoleSession{{
 				ID: model.DirectorSessionID, Title: "Director",
-				Capabilities: []string{selfdebug.CapabilityName}, NetworkAccess: model.NetworkOpen,
+				Capabilities: []string{model.GrainSourceGrant}, NetworkAccess: model.NetworkOpen,
 			}}
 		})
 		runSessions(t, store, baseTime)
@@ -1097,7 +1096,7 @@ func TestResumeAdoptedRunEnforcesWarmSandboxIsolationAndLedgerPark(t *testing.T)
 			Config: orchestrator.Config{
 				SessionSandboxIdleTTL: 30 * time.Minute,
 				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-				Capabilities:          orchestrator.SessionTestRegistry(selfdebug.New()),
+				Capabilities:          orchestrator.SessionTestRegistry(),
 			},
 		}
 		info := runhost.Info{

@@ -59,6 +59,7 @@ type Client struct {
 	localScriptsOnce           sync.Once
 	allowedPrincipalsMigrateMu sync.Mutex
 	allowedPrincipalsMigrated  bool
+	deploymentOwnerSeeded      string
 	// Now is the clock, injectable so tests get deterministic timestamps.
 	// nil means time.Now().UTC().
 	Now func() time.Time
@@ -210,13 +211,44 @@ func validateBase(field, base string) error {
 
 // ForbiddenError marks a request rejected because the caller lacks the required permissions.
 // Server maps this to a 403 Forbidden.
-type ForbiddenError struct{ err error }
+type ForbiddenError struct {
+	err  error
+	code string
+	body map[string]any
+}
 
 func (e *ForbiddenError) Error() string { return e.err.Error() }
 func (e *ForbiddenError) Unwrap() error { return e.err }
 
 func forbiddenErrorf(format string, a ...any) error {
 	return &ForbiddenError{err: fmt.Errorf(format, a...)}
+}
+
+func forbiddenCodeErrorf(code, format string, a ...any) error {
+	return &ForbiddenError{err: fmt.Errorf(format, a...), code: code}
+}
+
+// UnprocessableError marks a semantically invalid request that Server maps
+// to a 422 Unprocessable Entity.
+type UnprocessableError struct{ err error }
+
+func (e *UnprocessableError) Error() string { return e.err.Error() }
+func (e *UnprocessableError) Unwrap() error { return e.err }
+
+func unprocessableErrorf(format string, a ...any) error {
+	return &UnprocessableError{err: fmt.Errorf(format, a...)}
+}
+
+// approvalAttribution returns the Attribution to record on task.Approval:
+// for a delegated registry request (service actor + human OnBehalfOf, both
+// verified by the registry), it preserves OnBehalfOf (AU-26.2); for other
+// callers it records Actor alone.
+func approvalAttribution(a model.Attribution) model.Attribution {
+	if a.Actor.Kind == model.PrincipalService && a.Actor.Source == model.SourceRegistry &&
+		a.OnBehalfOf != nil && a.OnBehalfOf.Kind == model.PrincipalHuman && a.OnBehalfOf.Source == model.SourceRegistry {
+		return a
+	}
+	return model.Attribution{Actor: a.Actor}
 }
 
 // NotFoundError marks a task ID with no task behind it. Server maps this
@@ -564,7 +596,8 @@ func (c *Client) redBaseBranches(ctx context.Context) redBaseLookup {
 	}
 	if relRows, err := c.Store.ListBaseBranchRelease(ctx); err == nil {
 		for _, r := range relRows {
-			if r.Failing() || (r.Conclusion != "" && r.Conclusion != "success" && r.Conclusion != "skipped") {
+			if r.Failing() || (r.Conclusion != "" && r.Conclusion != "success" && r.Conclusion != "skipped" &&
+				!r.Superseded()) {
 				out.broken[strings.ToLower(r.Repo.String())+":"+r.Branch] = true
 			}
 		}
@@ -645,14 +678,6 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 	states, err := c.ReadStates(ctx)
 	if err != nil {
 		return nil, err
-	}
-	// One States call already answers "is X closed?" for every task in
-	// the store, so a list of many tasks costs nothing extra to also
-	// carry each one's blocked signal -- unlike Task below, which has no
-	// reason to fetch every task's state just to render one.
-	closed := make(map[string]bool, len(states))
-	for id, st := range states {
-		closed[id] = st == model.StateClosed
 	}
 	// Same trade for the merge queue's own "gave up on this one" signal:
 	// one query over every task_observation row that has it set, rather
@@ -762,7 +787,7 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 		} else if at, ok := oomRetries[t.ID]; ok && states[t.ID] == model.StateQueued {
 			doing = oomRetryActivity(at)
 		}
-		task := taskFrom(t, states[t.ID], closed, blockedAt, repairing[t.ID], mergeQueueStates[t.ID], doing,
+		task := taskFrom(t, states[t.ID], states, blockedAt, repairing[t.ID], mergeQueueStates[t.ID], doing,
 			reviewNames[t.ReviewTemplateID], spans[t.ID], c.stallNote(states[t.ID], stateTimes[t.ID], now))
 		if at, ok := runNow[t.ID]; ok {
 			task.RunNowAt = &at
@@ -847,7 +872,9 @@ func (c *Client) stallNote(state model.State, times model.StateTimes, now time.T
 // Task.MergeQueueReason) off what the caller has already read about t:
 // its observation (nil for none), and the grant wait dispatch recorded
 // for it (nil for none). The open dependencies are out's own BlockedBy,
-// which taskFrom has just resolved.
+// which taskFrom has just resolved; an awaiting_reply task's ask is
+// out's own TurnStopped, AwaitingAccess and QuestionSummary
+// (Task.replyFacts), so the caller sets those first.
 func (c *Client) withReasons(out Task, t model.Task, obs *model.Observation, wait *model.GrantWait) Task {
 	if obs != nil && obs.MergeQueueState != "" && obs.MergeQueueReason != "" {
 		reason := Reason{Reason: obs.MergeQueueReason}
@@ -861,10 +888,26 @@ func (c *Client) withReasons(out Task, t model.Task, obs *model.Observation, wai
 	if c.Config.Reasons == nil {
 		return out
 	}
-	if reason := c.Config.Reasons.TaskReason(t, out.State, obs, out.BlockedBy, wait); reason.Reason != "" {
+	if reason := c.Config.Reasons.TaskReason(t, out.State, obs, out.BlockedBy, wait, out.replyFacts(obs)); reason.Reason != "" {
 		out.Reason = &reason
 	}
 	return out
+}
+
+// replyFacts is which ask an awaiting_reply task is parked on, off what
+// a read has already set on it -- the facts the frontend's askedCase
+// reads (TurnStopped, AwaitingAccess, QuestionSummary), plus a pending
+// secret request where the read has the observation that names one. The
+// zero value for every other state.
+func (t Task) replyFacts(obs *model.Observation) model.ReplyFacts {
+	if t.State != model.StateAwaitingReply {
+		return model.ReplyFacts{}
+	}
+	return model.ReplyFacts{
+		Question: t.QuestionSummary != "" || (obs != nil && obs.PendingSecret != ""),
+		Access:   t.AwaitingAccess,
+		Stopped:  t.TurnStopped,
+	}
 }
 
 // listObservation is the part of a task's observation a list read has to
@@ -900,7 +943,7 @@ func (c *Client) templateNames(ctx context.Context) (map[string]string, error) {
 // reviewTemplateName is templateNames for a single task: the Name of the
 // template it names as its review, empty when it names none or when that
 // template is gone. One read rather than the whole list, matching
-// closedTargets' own "a few queries for one task" trade.
+// targetStates' own "a few queries for one task" trade.
 func (c *Client) reviewTemplateName(ctx context.Context, t model.Task) (string, error) {
 	if t.ReviewTemplateID == "" {
 		return "", nil
@@ -1011,7 +1054,7 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 	if err != nil {
 		return Task{}, err
 	}
-	closed, err := c.closedTargets(ctx, t.Links)
+	targetStates, err := c.targetStates(ctx, t.Links)
 	if err != nil {
 		return Task{}, err
 	}
@@ -1065,12 +1108,14 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 	if goal != nil {
 		t.GoalKind = goal.Kind
 	}
-	task := c.withReasons(taskFrom(*t, state, closed, blockedAt, obs.RepairInFlight(), observationMergeQueueState(obs), activity, reviewName, span,
-		c.stallNote(state, model.StateTimesFrom(*t, obs, runs), c.now())), *t, obs, wait)
+	task := taskFrom(*t, state, targetStates, blockedAt, obs.RepairInFlight(), observationMergeQueueState(obs), activity, reviewName, span,
+		c.stallNote(state, model.StateTimesFrom(*t, obs, runs), c.now()))
 	task.Goal = goal
 	if obs != nil {
 		task.RunNowAt = obs.RunNowAt
 	}
+	// Which ask an awaiting_reply task is parked on, before its reason,
+	// which is told apart by it (withReasons).
 	if state == model.StateAwaitingReply {
 		comments, err := c.Store.Comments(ctx, id)
 		if err != nil {
@@ -1080,6 +1125,7 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 		task.QuestionSummary = questionSummary(state, obs, comments)
 		task.AwaitingAccess = obs != nil && obs.PendingAccess != nil
 	}
+	task = c.withReasons(task, *t, obs, wait)
 	if err := c.attachPause(ctx, &task); err != nil {
 		return Task{}, err
 	}
@@ -1089,26 +1135,26 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 	return task, nil
 }
 
-// closedTargets resolves whether each of a task's own blocking-link
-// targets reads closed -- a handful of extra queries for one task rather
-// than States' whole-store read, matching ListTasks' own "a few queries
-// per task" trade-off (store.go's hydrate).
-func (c *Client) closedTargets(ctx context.Context, links []model.Link) (map[string]bool, error) {
-	closed := map[string]bool{}
+// targetStates resolves each of a task's own blocking-link targets' states
+// -- a handful of extra queries for one task rather than States' whole-store
+// read, matching ListTasks' own "a few queries per task" trade-off
+// (store.go's hydrate).
+func (c *Client) targetStates(ctx context.Context, links []model.Link) (map[string]model.State, error) {
+	states := map[string]model.State{}
 	for _, l := range links {
 		if !l.Kind.Blocks() {
 			continue
 		}
-		if _, ok := closed[l.Target]; ok {
+		if _, ok := states[l.Target]; ok {
 			continue
 		}
 		state, err := c.Store.State(ctx, l.Target)
 		if err != nil {
 			return nil, err
 		}
-		closed[l.Target] = state == model.StateClosed
+		states[l.Target] = state
 	}
-	return closed, nil
+	return states, nil
 }
 
 // GetTask returns one task plus its conversation.
@@ -1124,7 +1170,7 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	if err != nil {
 		return TaskDetail{}, err
 	}
-	closed, err := c.closedTargets(ctx, t.Links)
+	targetStates, err := c.targetStates(ctx, t.Links)
 	if err != nil {
 		return TaskDetail{}, err
 	}
@@ -1208,15 +1254,18 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	if goal != nil {
 		t.GoalKind = goal.Kind
 	}
+	task := taskFrom(*t, state, targetStates, blockedAt, obs.RepairInFlight(), observationMergeQueueState(obs), activity, reviewName, span,
+		c.stallNote(state, model.StateTimesFrom(*t, obs, runs), c.now()))
+	// Which ask an awaiting_reply task is parked on, before its reason,
+	// which is told apart by it (withReasons).
+	task.TurnStopped = turnStopped(state, obs, comments)
+	task.QuestionSummary = questionSummary(state, obs, comments)
+	task.AwaitingAccess = state == model.StateAwaitingReply && obs != nil && obs.PendingAccess != nil
 	detail := TaskDetail{
-		Task: c.withReasons(taskFrom(*t, state, closed, blockedAt, obs.RepairInFlight(), observationMergeQueueState(obs), activity, reviewName, span,
-			c.stallNote(state, model.StateTimesFrom(*t, obs, runs), c.now())), *t, obs, wait),
+		Task:        c.withReasons(task, *t, obs, wait),
 		Comments:    make([]Comment, 0, len(comments)),
 		Attachments: taskAttachments,
 	}
-	detail.Task.TurnStopped = turnStopped(state, obs, comments)
-	detail.Task.QuestionSummary = questionSummary(state, obs, comments)
-	detail.Task.AwaitingAccess = state == model.StateAwaitingReply && obs != nil && obs.PendingAccess != nil
 	detail.Goal = goal
 	if err := c.attachPause(ctx, &detail.Task); err != nil {
 		return TaskDetail{}, err
@@ -1281,6 +1330,7 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 		log.Printf("ui: task %s: reading its attempts' hostds: %v", id, err)
 		runHostds = nil
 	}
+	c.markDeletedRunHostds(ctx, runHostds)
 	detail.Attempts = make([]Attempt, 0, len(runs))
 	for _, r := range runs {
 		a := attemptFrom(r, promptBytes, auditCounts)
@@ -2081,6 +2131,13 @@ func (c *Client) defaultCapabilities(ctx context.Context, teamID string, target 
 			stored = append(append([]string{}, stored...), repoCfg.DefaultCapabilities...)
 		}
 	}
+	return c.resolveDefaultCapabilities(stored), nil
+}
+
+// resolveDefaultCapabilities is a stored default_capabilities list as
+// defaultCapabilities seeds it: each id normalized, deduplicated, and any
+// this deployment does not offer left out.
+func (c *Client) resolveDefaultCapabilities(stored []string) []string {
 	ids := make([]string, 0, len(stored))
 	seen := make(map[string]bool, len(stored))
 	for _, raw := range stored {
@@ -2099,7 +2156,37 @@ func (c *Client) defaultCapabilities(ctx context.Context, teamID string, target 
 			ids = append(ids, id)
 		}
 	}
-	return ids, nil
+	return ids
+}
+
+// proposalSeeding is the seeding source a director proposal filed against
+// target (nil: no repository) from templateID is measured against
+// (model.ProposalSeeding, director-capabilities.spec.md §4.2): the two
+// layers defaultCapabilities resolves for it, read and normalized the
+// same way but kept apart, so a default is admitted only as the layer it
+// came from wrote it, and the catalogue that judges it in that context.
+func (c *Client) proposalSeeding(ctx context.Context, target *model.RepoRef, templateID string) (*model.ProposalSeeding, error) {
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seeding := &model.ProposalSeeding{GrantContext: c.catalogueGrantContext(ctx, target, templateID, nil)}
+	if cfg != nil {
+		seeding.DeploymentDefaults = c.resolveDefaultCapabilities(cfg.DefaultCapabilities)
+		seeding.Catalogue = cfg.CapabilityPolicy.Catalogue
+	}
+	if target != nil {
+		repo := *target
+		seeding.Target = &repo
+		repoCfg, err := c.Store.GetRepoConfig(ctx, *target)
+		if err != nil {
+			return nil, err
+		}
+		if repoCfg != nil {
+			seeding.RepoDefaults = c.resolveDefaultCapabilities(repoCfg.DefaultCapabilities)
+		}
+	}
+	return seeding, nil
 }
 
 // ownerTrustApproves is the owner a filing is approved on behalf of by
@@ -2553,11 +2640,20 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		}
 	}
 	taskAdmission = model.NormalizeAdmission(taskAdmission)
+	// The template a person filed this from, which is how the task's runs
+	// find that template's declared push set (model.Task.TemplateID) and how
+	// the catalogue judges its template restrictions. An agent's proposal
+	// records none, even one naming a template: a run cannot hand a
+	// template's push set or template-restricted grants on to work it files.
+	var filedFrom string
+	if proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent {
+		filedFrom = strings.TrimSpace(req.TemplateID)
+	}
 	// The capability catalogue (settings/capabilities.yml) refuses what
 	// it does not admit here, and names what only a person may grant:
 	// a proposal or an agent's own filing holding one is left for a
 	// person to approve, whatever permission it would otherwise inherit.
-	grants, catalogueNeedsPerson, err := c.catalogueFilingGrants(ctx, grants, target, req.TemplateID)
+	grants, catalogueNeedsPerson, err := c.catalogueFilingGrants(ctx, grants, target, filedFrom)
 	if err != nil {
 		return Task{}, err
 	}
@@ -2691,6 +2787,11 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// work goes on to queue for itself, so a session-queued task counts
 	// as a level of self-approved work like any other
 	// (model.SelfApproved) and everything below it is bounded as usual.
+	// What does bound the session itself is per turn rather than per
+	// task (model.AutoSubmitLimits.TurnFanOut): one message is still a
+	// fast way to ask for a lot of work, so past that many in one turn
+	// the rest are filed for a person (spec director-capabilities
+	// §3.1.5, gap G12).
 	//
 	// It says nothing about autoMerge, which stays capped by AutoSubmits
 	// alone. Whether a proposal's own pull request is read is a question
@@ -2731,8 +2832,12 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			needsPersonWhy = why
 		}
 	}
+	limitedRole := false
+	if a := accessRoleFromContext(ctx); a != nil && !a.Full {
+		limitedRole = true
+	}
 	catalogueHold := false
-	if len(catalogueNeedsPerson) > 0 && (proposedBy != nil || c.requestActor(ctx).Actor.Kind == model.PrincipalAgent) {
+	if len(catalogueNeedsPerson) > 0 && (proposedBy != nil || c.requestActor(ctx).Actor.Kind != model.PrincipalHuman || limitedRole) {
 		why := model.CatalogueRequiresPersonNote(catalogueNeedsPerson)
 		if needsPersonWhy == "" {
 			needsPersonWhy = why
@@ -2752,15 +2857,50 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		}
 		catalogueHold, req.Approved = true, false
 	}
+	if proposedBy == nil && isDelegatedRequest(ctx) {
+		var delegatedPersonOnly []string
+		for _, g := range grants {
+			if (model.IsPersonOnlyGrant(g.Capability) || model.IsAdminOnlyGrant(g.Capability)) && !slices.Contains(delegatedPersonOnly, g.Capability) {
+				delegatedPersonOnly = append(delegatedPersonOnly, g.Capability)
+			}
+		}
+		if len(delegatedPersonOnly) > 0 {
+			why := fmt.Sprintf("holds %s, which only a person acting directly may grant", strings.Join(delegatedPersonOnly, ", "))
+			if needsPersonWhy == "" {
+				needsPersonWhy = why
+			} else {
+				needsPersonWhy += "; " + why
+			}
+			catalogueHold, req.Approved = true, false
+		}
+	}
 	keepRunning := req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake)
 	autoMerge, autoSubmit, sessionQueued := req.AutoMerge, false, false
-	var limitNote, ungrantedNote, heldNote, needsPersonNote, personOnlyNote, refusal string
+	var limitNote, ungrantedNote, heldNote, needsPersonNote, personOnlyNote, seededNote, refusal string
 	var escalated []string
 	if proposedBy != nil {
-		child := model.Task{Target: target, Base: req.Base, Grants: grants, Writes: writes, Admission: askedAdmission}
+		child := model.Task{Target: target, Base: req.Base, Grants: grants, Writes: writes, Admission: askedAdmission, TemplateID: filedFrom}
 		autoMerge = autoMerge && proposedBy.AutoMerge && model.AutoSubmits(child, *proposedBy)
 		child.Reads = reads
-		escalated = model.EscalatedCapabilities(child, *proposedBy)
+		// Read before the proposal's escalations are measured: a
+		// director allowed to queue its own work is not escalating by
+		// carrying its target repository's or this deployment's
+		// defaults unchanged (model.ProposalEscalations,
+		// director-capabilities.spec.md §4.2), and that is only its
+		// question when the session may queue at all.
+		sessionQueues, err := c.consoleSessionQueuesProposals(ctx, *proposedBy)
+		if err != nil {
+			return Task{}, err
+		}
+		var seeding *model.ProposalSeeding
+		if sessionQueues && model.IsDirectorTask(*proposedBy) {
+			if seeding, err = c.proposalSeeding(ctx, target, child.TemplateID); err != nil {
+				return Task{}, err
+			}
+		}
+		var admitted []model.SeededDefault
+		escalated, admitted = model.ProposalEscalations(child, *proposedBy, sessionQueues, seeding)
+		seededNote = model.SeededDefaultsNote(proposedBy.ID, admitted)
 		autoSubmit = model.AutoSubmits(child, *proposedBy)
 		// A fixture on the proposer's own qualification scratch branch,
 		// queued and merged there on the proposer's own permission to
@@ -2782,14 +2922,24 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		if len(ungrantedReads) > 0 {
 			ungrantedNote += model.UngrantedReadsNote(proposedBy.ID, ungrantedReads)
 		}
-		if sessionQueued, err = c.consoleSessionQueuesProposals(ctx, *proposedBy); err != nil {
-			return Task{}, err
-		}
+		sessionQueued = sessionQueues
 		if len(escalated) > 0 || len(ungrantedWrites) > 0 || len(ungrantedReads) > 0 {
 			sessionQueued = false
 		}
 		if !autoSubmit {
-			refusal = model.AutoApprovalRefusal(child, *proposedBy, sessionQueued)
+			refusal = model.AutoApprovalRefusal(child, *proposedBy, sessionQueues, seeding)
+		}
+		// A proposal that targets or writes grain/config waits for a
+		// person whatever its proposer holds (model.ConfigRepoProposalHold):
+		// a session given propose_config_change holds grain/config in its
+		// Writes, which would otherwise let it queue a child that pushes
+		// there unreviewed. Grain's own hold, so it joins needsPersonWhy.
+		if why := model.ConfigRepoProposalHold(child); why != "" {
+			if needsPersonWhy == "" {
+				needsPersonWhy = why
+			} else {
+				needsPersonWhy += "; " + why
+			}
 		}
 		// A target only a person may approve: grain's own hold, not the
 		// run's, so it is neither tagged nor told to the run as one it
@@ -2848,6 +2998,25 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 				limitNote = model.AutoSubmitLimitNote(proposedBy.ID, limit, limits)
 			}
 		}
+		// A session's own permission has a bound of its own: how many
+		// proposals it may queue in one conversation turn
+		// (model.AutoSubmitLimits.TurnFanOut). Past it, filed for a
+		// person with a note saying why, as orchestrator.relayProposedTasks
+		// files the identical call.
+		if sessionQueued {
+			limits, err := c.autoSubmitLimits(ctx)
+			if err != nil {
+				return Task{}, err
+			}
+			limit, err := c.Store.ExceededSessionTurnLimit(ctx, proposedBy.ID, limits)
+			if err != nil {
+				return Task{}, err
+			}
+			if limit != model.AutoSubmitWithinLimits {
+				autoSubmit, sessionQueued = false, false
+				limitNote = model.AutoSubmitLimitNote(proposedBy.ID, limit, limits)
+			}
+		}
 	}
 	// Who filed this, which for a proposal is not whoever this client
 	// acts as. A request naming ProposedBy is an agent's propose_task
@@ -2870,14 +3039,6 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: proposedBy.ID},
 		}
 	}
-	// The template a person filed this from, which is how the task's runs
-	// find that template's declared push set (model.Task.TemplateID). An
-	// agent's proposal records none, even one naming a template: a run
-	// cannot hand the refs it may push on to work it files.
-	var filedFrom string
-	if proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent {
-		filedFrom = strings.TrimSpace(req.TemplateID)
-	}
 	resolvedOwner, sessionBehalf, err := c.resolveNewTaskOwner(ctx, req, proposedBy)
 	if err != nil {
 		return Task{}, err
@@ -2886,7 +3047,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		ID:                   id,
 		Intent:               model.IntentImplement,
 		Title:                req.Title,
-		Body:                 req.Description + forkNote + ungrantedNote + reviewTemplateNote + limitNote + needsPersonNote + heldNote + personOnlyNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
+		Body:                 req.Description + forkNote + ungrantedNote + seededNote + reviewTemplateNote + limitNote + needsPersonNote + heldNote + personOnlyNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
 		Origin:               origin,
 		Target:               target,
 		ChangeTarget:         changeTarget,
@@ -2967,7 +3128,8 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	case catalogueHold:
 		task.Body += "\n\n_Filed for a person to approve: " + needsPersonWhy + "._"
 	case req.Approved || (req.Interactive && proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent):
-		task.Approval = &model.Attribution{Actor: c.requestActor(ctx).Actor}
+		attr := approvalAttribution(c.requestActor(ctx))
+		task.Approval = &attr
 		task.ApprovedAt = &now
 	case sessionQueued:
 		task.Approval = &model.Attribution{Actor: model.ConsoleSessionPrincipal}
@@ -5444,7 +5606,41 @@ func (c *Client) mutate(ctx context.Context, id string, apply func(*model.Task) 
 	}
 	c.ensureConsoleSessionSnapshot(ctx, *task)
 	ctx = model.WithAdmissionChange(ctx, c.requestActor(ctx))
-	return c.Store.UpdateTask(ctx, id, apply)
+	actor := c.requestActor(ctx).Actor
+	var released []model.HumanReviewReason
+	if err := c.Store.UpdateTask(ctx, id, func(t *model.Task) error {
+		released = nil
+		before := model.HumanReviewReasons(*t)
+		if err := apply(t); err != nil {
+			return err
+		}
+		if len(before) > 0 && !model.HumanReviewHeld(*t) {
+			// An edit that ends a human-review hold -- a Submit, a PATCH
+			// turning auto-merge on -- is a person's decision, and only a
+			// person's (human_review_hold.go): an agent may raise the
+			// hold, never release it.
+			if !mayReleaseHumanReview(actor) {
+				return forbiddenErrorf("%s is held for a person's review (%s), and only a person may release it",
+					id, model.HumanReviewSummary(*t))
+			}
+			released = before
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if len(released) > 0 {
+		if err := c.Store.RecordHumanReviewRelease(ctx, id, actor, "submitted", released); err != nil {
+			return fmt.Errorf("recording the release of %s's human-review hold: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// mayReleaseHumanReview reports whether p may end a human-review hold:
+// anybody but an agent or grain's own automation.
+func mayReleaseHumanReview(p model.Principal) bool {
+	return p.Kind != model.PrincipalAgent && p.Kind != model.PrincipalAutomation
 }
 
 // SetCapability attaches or detaches one capability grant. Detaching one
@@ -5670,7 +5866,7 @@ func (c *Client) Approve(ctx context.Context, id string) error {
 	if err := c.catalogueApprovalRefusal(ctx, *task); err != nil {
 		return err
 	}
-	if err := c.Store.Approve(ctx, id, model.Attribution{Actor: c.requestActor(ctx).Actor}, c.now()); err != nil {
+	if err := c.Store.Approve(ctx, id, approvalAttribution(c.requestActor(ctx)), c.now()); err != nil {
 		return err
 	}
 	if task.Interactive && task.DeferredAt == nil && c.Config.Wake != nil {
@@ -5956,6 +6152,9 @@ func (c *Client) submit(ctx context.Context, id string) error {
 // orchestrator to pin before it merges anything into the branch -- and
 // only if the branch is still there (orchestrator.pinHumanSubmit).
 func humanSubmitted(t *model.Task, now time.Time, head string) {
+	// A human-review hold waits for exactly this decision too, and is
+	// recorded as released by whoever made it (Client.mutate).
+	model.DropHumanReviewHold(t)
 	t.Links = slices.DeleteFunc(t.Links, func(l model.Link) bool {
 		switch l.Kind {
 		case model.LinkSecurityHold, model.LinkHumanOnlyHold, model.LinkBrokenRulesHold,
@@ -6315,6 +6514,7 @@ func (c *Client) cancelActiveRuns(ctx context.Context, id string, now time.Time,
 	if err != nil {
 		return err
 	}
+	finishedAny := false
 	for i := range runs {
 		if runs[i].FinishedAt != nil {
 			continue
@@ -6322,6 +6522,14 @@ func (c *Client) cancelActiveRuns(ctx context.Context, id string, now time.Time,
 		if err := c.Store.FinishRun(ctx, runs[i].ID, now, "cancelled", detail); err != nil {
 			return err
 		}
+		finishedAny = true
+	}
+	// Ask the canceller again once the rows are finished: a run that
+	// registered after the first check above but before FinishRun committed
+	// is cancelled immediately here, while any run that registers after
+	// FinishRun sees store.RunFinished and cancels itself on registration.
+	if finishedAny && c.Config.TaskCanceller != nil {
+		c.Config.TaskCanceller.CancelTask(ctx, id)
 	}
 	return nil
 }
@@ -7008,7 +7216,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 		if err := c.agentMayApprove(ctx, *task); err != nil {
 			return err
 		}
-		if err := c.Store.Approve(ctx, id, model.Attribution{Actor: c.requestActor(ctx).Actor}, now); err != nil {
+		if err := c.Store.Approve(ctx, id, approvalAttribution(c.requestActor(ctx)), now); err != nil {
 			return err
 		}
 	}
@@ -7065,12 +7273,12 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 // start it. A person asking -- the button, `grain run-now` -- is the
 // person those proposals wait for, so nothing is checked for them.
 func (c *Client) agentMayApprove(ctx context.Context, task model.Task) error {
+	if err := c.catalogueApprovalRefusal(ctx, task); err != nil {
+		return err
+	}
 	by := c.requestActor(ctx).Actor
 	if by.Kind != model.PrincipalAgent {
 		return nil
-	}
-	if err := c.catalogueApprovalRefusal(ctx, task); err != nil {
-		return err
 	}
 	requester, err := c.Store.GetTask(ctx, by.ID)
 	if err != nil {

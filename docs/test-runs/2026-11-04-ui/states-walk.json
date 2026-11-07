@@ -1,0 +1,106 @@
+{
+  "setup": {
+    "question": "4",
+    "answer": "7",
+    "blockers": [
+      "21",
+      "22"
+    ],
+    "blocked": "3002",
+    "filedStatus": 201
+  },
+  "blockedApi": {
+    "blocked": true,
+    "blockedBy": [
+      "21",
+      "22"
+    ],
+    "state": "queued"
+  },
+  "listBlocked": {
+    "text": "3002\nwalk: blocked on two open tasks\nacme/widgets\ndebian\nread issues\nself debug\nblocked on task",
+    "attrs": [
+      "Drag this to reorder, or tap it to pick this up and choose where it goes",
+      "Move task 3002",
+      "Select 3002",
+      "Blocked on: #21 (waiting), #22 (waiting)",
+      "Blocked on: #21 (waiting), #22 (waiting)",
+      "Owner: debian",
+      "Read issues",
+      "Self debug",
+      "queued/blocked_on_task\nDriven by reconcileDispatch\nWaiting on the task it depends on closing"
+    ]
+  },
+  "listBlockedTooltip": null,
+  "listAnswer": {
+    "text": "7\nWhy did last week's nightly suite slow down?\nacme/widgets\ndebian\nread issues\nself debug\nquestion",
+    "attrs": [
+      "Drag this to reorder, or tap it to pick this up and choose where it goes",
+      "Move task 7",
+      "Select 7",
+      "Answered in a comment",
+      "Asked",
+      "Owner: debian",
+      "Read issues",
+      "Self debug",
+      "awaiting_reply/question\nAwaiting a person\n\"Reply\" ends this wait"
+    ]
+  },
+  "listQuestion": {
+    "text": "4\nInvestigate the merge queue stall\nFix both lint-stuck PRs, or only unblock the merge queue?\npriorityhigh\nacme/widgets\ndebian\nread issues\nquestion",
+    "attrs": [
+      "Drag this to reorder, or tap it to pick this up and choose where it goes",
+      "Move task 4",
+      "Select 4",
+      "Asked a question",
+      "Asked",
+      "Asked: Fix both lint-stuck PRs, or only unblock the merge queue?",
+      "Priority: high",
+      "Owner: debian",
+      "Read issues",
+      "Self debug",
+      "awaiting_reply/question\nAwaiting a person\n\"Reply\" ends this wait"
+    ]
+  },
+  "paneBlocked": {
+    "blockedLine": "Blocked on #21 seed 0007 branch gzip gzip passing server branch passing (waiting), #22 seed 0012 passing the branch passing branch passing (waiting)",
+    "answered": false,
+    "askedQuestion": false,
+    "badgeTitles": [
+      "Asked a question",
+      "Answered in a comment",
+      "Blocked on: #8 (running)",
+      "Blocked on: #21 (waiting), #22 (waiting)",
+      "Blocked on: #21 (waiting), #22 (waiting)",
+      "Blocked on: #21 (waiting), #22 (waiting)"
+    ]
+  },
+  "paneAnswer": {
+    "blockedLine": null,
+    "answered": false,
+    "askedQuestion": false,
+    "badgeTitles": [
+      "Asked a question",
+      "Answered in a comment",
+      "Blocked on: #8 (running)",
+      "Blocked on: #21 (waiting), #22 (waiting)",
+      "Answered in a comment",
+      "Answered in a comment"
+    ]
+  },
+  "paneQuestion": {
+    "blockedLine": null,
+    "answered": false,
+    "askedQuestion": false,
+    "badgeTitles": [
+      "Asked a question",
+      "Answered in a comment",
+      "Blocked on: #8 (running)",
+      "Blocked on: #21 (waiting), #22 (waiting)",
+      "Asked a question",
+      "Asked a question"
+    ]
+  },
+  "inboxAnswer": "e the merge queue stall\npriorityhigh\nacme/widgets\ndebian\nread issues\nself debug\nquestion\nreply\nacknowledge\n\nAsked a question\n\nfix both lint-stuck prs, or only unblock the merge queue?\nshow question\n7\nWhy did last week's nightly suite slow down?\nacme/widgets\ndebian\nread issues\nself debug\nquestion\nreply\nacknowledge\n\nAnswered in a comment\n\nIt is the fixture download, not us: the upstream mirror started rate-limiting us on 2026-08-31 and every job now waits ~90s on it. Nothing to change in this repo.\n\nasked: submit for merge\n7\nsubmit all (7)\n\nEach pull request is on no queue -- some may still have",
+  "inboxQuestion": " reply\n2\nacknowledge all (2)\n\nA run stopped to ask something, you stopped its turn, or it answered on the task itself and opened no pull request. Reply to run it again, or acknowledge to close it.\n\n4\nInvestigate the merge queue stall\npriorityhigh\nacme/widgets\ndebian\nread issues\nself debug\nquestion\nreply\nacknowledge\n\nAsked a question\n\nfix both lint-stuck prs, or only unblock the merge queue?\nshow question\n7\nWhy did last week's nightly suite slow down?\nacme/widgets\ndebian\nread issues\nself debug\nquestion\nreply\nacknowledge\n\nAnswered in a comment\n\nIt is the fixture download, not us: the upstream mi"
+}

@@ -365,6 +365,59 @@ export default function Actions({ t, config, act, onOpenTask }) {
           review's findings, or because the paths it touches are ones only
           a person may let through -- the review is still what to read
           before pressing Submit (orchestrator's securityhold.go). */}
+      {/* A human-review hold (model.LinkHumanReviewHold): a review asked
+          for a person's decision (request_human_review), a security
+          review left findings, or the change touches a path only a person
+          may release. Nothing automatic ends it -- only Submit, or Release
+          hold, each recorded with who pressed it. */}
+      {t.humanReviewHold?.length > 0 && t.state !== "closed" && (
+        <Alert
+          severity="warning"
+          sx={{ fontSize: "0.8rem" }}
+          data-testid="human-review-hold"
+        >
+          <strong>Held for a person&apos;s review.</strong> This change will not
+          merge itself until somebody presses Submit or Release hold.
+          <ul style={{ margin: "4px 0 0", paddingLeft: "1.2em" }}>
+            {t.humanReviewHold.map((r, i) => (
+              <li key={i} data-testid="human-review-reason">
+                {r.category && <em>{r.category}: </em>}
+                {r.reason}
+                {r.reviewTask && (
+                  <>
+                    {" "}
+                    (
+                    <TaskLink id={r.reviewTask} onOpenTask={onOpenTask}>
+                      review task {r.reviewTask}
+                      {r.run ? `, run ${r.run}` : ""}
+                    </TaskLink>
+                    )
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+          <Button
+            variant="outlined"
+            color="inherit"
+            size="small"
+            sx={{ mt: 1, whiteSpace: "nowrap" }}
+            data-testid="release-human-review"
+            title="Release the hold without merging: recorded with your name. It merges itself again only where grain would have let it; Submit merges it."
+            onClick={() =>
+              act(
+                () =>
+                  api(`/api/tasks/${t.id}/human-review/release`, {
+                    method: "POST",
+                  }),
+                t.id,
+              )
+            }
+          >
+            Release hold
+          </Button>
+        </Alert>
+      )}
       {t.pullRequest &&
         !t.autoMerge &&
         t.state !== "closed" &&

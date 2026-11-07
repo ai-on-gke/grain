@@ -32,12 +32,63 @@ func TestADeploymentThatHasNeverChosenGetsTheDirector(t *testing.T) {
 	if director.TasksApproved {
 		t.Error("the director files approved tasks by default: a chat is a fast way to ask for a lot of work")
 	}
-	if director.NetworkAccess != model.NetworkOpen {
-		t.Errorf("NetworkAccess = %q, want open: the shipped host sandbox cannot enforce none",
+	if director.NetworkAccess != model.NetworkNone {
+		t.Errorf("NetworkAccess = %q, want none: the director reads untrusted text and reaches everything it needs through grain (director-capabilities.spec.md §3.1.6)",
 			director.NetworkAccess)
 	}
 	if slices.ContainsFunc(director.Capabilities, model.IsGrainHostExecGrant) {
 		t.Error("the director ships holding self-repair, which can break the deployment it is talking about")
+	}
+}
+
+// The shipped none is what the director asks for; what it gets turns on
+// the backend. Host-directory and container sandboxes cannot withhold a
+// network, and refuse a run that asks them to, so there the session's
+// task is filed open; an isolating backend (granule) honours none. An
+// operator's explicit open is never narrowed.
+func TestTheShippedDirectorIsClosedOnlyWhereTheBackendCanCloseIt(t *testing.T) {
+	director := model.DefaultConsoleSessions()[0]
+	if got := model.ConsoleSessionNetworkAccess(director, true); got != model.NetworkNone {
+		t.Errorf("on an isolating backend the shipped director resolves to %q, want none", got)
+	}
+	if got := model.ConsoleSessionNetworkAccess(director, false); got != model.NetworkOpen {
+		t.Errorf("on a backend that cannot isolate the shipped director resolves to %q, want open (the backend would refuse none)", got)
+	}
+	director.NetworkAccess = model.NetworkOpen
+	for _, isolates := range []bool{true, false} {
+		if got := model.ConsoleSessionNetworkAccess(director, isolates); got != model.NetworkOpen {
+			t.Errorf("an operator's open director resolves to %q with isolates=%v, want open", got, isolates)
+		}
+	}
+	director.NetworkAccess = ""
+	if got := model.ConsoleSessionNetworkAccess(director, false); got != "" {
+		t.Errorf("a director left on the deployment default resolves to %q, want the default (\"\")", got)
+	}
+}
+
+// A build whose own default-on capability needs the sandbox to reach the
+// internet ships the director open, so the session is not granted a
+// capability it could never use (§3.1.6); one served from grain's side
+// of the boundary leaves it closed.
+func TestADefaultOnCapabilityNeedingSandboxEgressKeepsTheDirectorOpen(t *testing.T) {
+	unregisterHostSide := model.RegisterDefaultConsoleSessionCapability("zz-host-side")
+	t.Cleanup(unregisterHostSide)
+	if got := model.DefaultConsoleSessions()[0].NetworkAccess; got != model.NetworkNone {
+		t.Fatalf("with only a grain-side default capability the director ships %q, want none", got)
+	}
+
+	unregisterEgress := model.RegisterDefaultConsoleSessionEgressCapability("zz-needs-egress")
+	director := model.DefaultConsoleSessions()[0]
+	if director.NetworkAccess != model.NetworkOpen {
+		t.Errorf("with a default capability needing sandbox egress the director ships %q, want open", director.NetworkAccess)
+	}
+	if !slices.Contains(director.Capabilities, "zz-needs-egress") {
+		t.Errorf("Capabilities = %v, want the egress capability granted like any other default", director.Capabilities)
+	}
+
+	unregisterEgress()
+	if got := model.DefaultConsoleSessions()[0].NetworkAccess; got != model.NetworkNone {
+		t.Errorf("after the egress capability unregisters the director ships %q, want none again", got)
 	}
 }
 
@@ -376,6 +427,95 @@ func TestIsConsoleSessionMatchesDirectorTaskSQL(t *testing.T) {
 	} {
 		if tc.task.IsConsoleSession() {
 			t.Errorf("%s: IsConsoleSession() = true, want false", tc.name)
+		}
+	}
+}
+
+func TestDefaultConsoleSessionsShipsTier1Capabilities(t *testing.T) {
+	sessions := model.DefaultConsoleSessions()
+	if len(sessions) != 1 || sessions[0].ID != model.DirectorSessionID {
+		t.Fatalf("DefaultConsoleSessions() = %v, want single director session", sessions)
+	}
+	director := sessions[0]
+	wantTier1 := []string{
+		"api:self-debug",
+		model.GrainSourceGrant,
+		model.GrainJournalGrant,
+		"api:deployment:read",
+		model.GrainHealthGrant,
+		model.BootstrapPlaybooksGrant,
+		"api:task-admin",
+		"api:capabilities:read",
+		"api:capabilities:detach",
+		"api:settings:read",
+		"api:repos:read",
+		"api:releases:read",
+		"api:schedules:read",
+		"api:templates:read",
+		"api:suites:read",
+		"api:dispatch:read",
+	}
+	for _, want := range wantTier1 {
+		if !slices.Contains(director.Capabilities, want) {
+			t.Errorf("DefaultConsoleSessions()[0].Capabilities = %v, missing Tier 1 grant %q", director.Capabilities, want)
+		}
+	}
+	for _, capID := range director.Capabilities {
+		if model.IsPersonOnlyGrant(capID) {
+			t.Errorf("DefaultConsoleSessions() ships person-only grant %q", capID)
+		}
+		if refusal := model.DirectorFloorRefusal(capID, model.CatalogueKindDirector); refusal != nil {
+			t.Errorf("DefaultConsoleSessions() ships grant %q refused by director floor: %v", capID, refusal)
+		}
+	}
+	if err := model.ValidateConsoleSessions(sessions); err != nil {
+		t.Errorf("ValidateConsoleSessions(DefaultConsoleSessions()) = %v, want nil", err)
+	}
+
+	if missing := model.MissingShippedConsoleSessionCapabilities(model.DirectorSessionID, director.Capabilities); len(missing) != 0 {
+		t.Errorf("MissingShippedConsoleSessionCapabilities(complete director) = %v, want empty", missing)
+	}
+	legacySaved := []string{
+		"api:self-debug",
+		model.GrainSourceGrant,
+		model.GrainJournalGrant,
+		"api:deployment:read",
+		model.GrainHealthGrant,
+		model.BootstrapPlaybooksGrant,
+	}
+	missing := model.MissingShippedConsoleSessionCapabilities(model.DirectorSessionID, legacySaved)
+	wantMissing := wantTier1[len(legacySaved):]
+	for _, want := range wantMissing {
+		if !slices.Contains(missing, want) {
+			t.Errorf("MissingShippedConsoleSessionCapabilities(legacy saved) = %v, missing %q", missing, want)
+		}
+	}
+	if other := model.MissingShippedConsoleSessionCapabilities("chat-1", nil); other != nil {
+		t.Errorf("MissingShippedConsoleSessionCapabilities(non-shipped session) = %v, want nil", other)
+	}
+}
+
+func TestDirectorSessionBodyInstructsExpectReasonsAndHoldForApproval(t *testing.T) {
+	repo := model.RepoRef{Owner: "acme", Name: "grain-home"}
+	for _, tasksApproved := range []bool{false, true} {
+		session := model.ConsoleSession{
+			ID:            model.DirectorSessionID,
+			TasksApproved: tasksApproved,
+		}
+		body := model.DirectorSessionBody(repo, session)
+		for _, want := range []string{
+			"`expect`",
+			`{"state": "running"}`,
+			"`reason`",
+			"`--reason`",
+			"`hold_for_approval: true`",
+			"destructive",
+			"irreversible",
+			"surprising",
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("TasksApproved=%v: DirectorSessionBody missing %q:\n%s", tasksApproved, want, body)
+			}
 		}
 	}
 }

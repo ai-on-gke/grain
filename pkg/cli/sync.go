@@ -378,6 +378,10 @@ var settingsDiffRows = []settingsDiffRow{
 	{"autoGrantContextReads", "auto-grant context reads", func(s ui.Settings) any { return strings.Join(s.AutoGrantContextReads, ", ") }},
 	{"timeZone", "time zone", func(s ui.Settings) any { return s.TimeZone }},
 	{"settingsLocked", "settings locked", func(s ui.Settings) any { return s.SettingsLocked }},
+	{"registry", "registry connection", func(s ui.Settings) any {
+		b, _ := json.Marshal(s.Registry)
+		return string(b)
+	}},
 }
 
 // settingsDiffExceptions names any ui.UpdateSettingsRequest field that

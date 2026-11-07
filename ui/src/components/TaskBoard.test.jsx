@@ -248,6 +248,43 @@ describe("TaskBoard", () => {
       ).toBeInTheDocument();
     });
 
+    it("does not say nothing matches when what matches is in no column", () => {
+      // docs/test-runs/2026-11-06-saved-boards-and-visualizations.md,
+      // bug 2: a board whose one column is "Talking", narrowed to
+      // awaiting_submit, said "1 task in no column (Asked to submit)"
+      // and "No tasks match this search and these filters." at once.
+      renderBoard({
+        tasks: [
+          ...tasks,
+          {
+            id: 9,
+            title: "Submit me",
+            state: "awaiting_submit",
+            capabilities: [],
+            blocked: false,
+          },
+        ],
+        fixedColumns: [
+          { id: "talking", title: "Talking", states: ["awaiting_reply"] },
+        ],
+        narrowing: {
+          ...NO_NARROWING,
+          filters: [{ attr: "state", op: "any", values: ["awaiting_submit"] }],
+        },
+      });
+      expect(
+        screen.getByText(/1 task in no column \(Asked to submit\)/),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText("No tasks match this search and these filters."),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "None of the tasks this search and these filters match is in one of these columns.",
+        ),
+      ).toBeInTheDocument();
+    });
+
     it("counts what is on the board, and what is in each column", () => {
       renderBoard();
       expect(
@@ -1110,5 +1147,34 @@ describe("TaskBoard", () => {
     expect(onShownChange).toHaveBeenLastCalledWith(new Set([1, 2, 3]));
     await userEvent.type(screen.getByRole("textbox"), "Answer");
     expect(onShownChange).toHaveBeenLastCalledWith(new Set([3]));
+  });
+
+  it("tells failed task reads from an empty board and keeps held cards across transient failures", async () => {
+    const onRetry = vi.fn();
+    const user = userEvent.setup();
+    renderBoard({
+      tasks: [],
+      tasksLoaded: false,
+      tasksError: "synthetic tasks 500",
+      onRetry,
+    });
+    expect(screen.queryByText("No tasks in any of these columns.")).toBeNull();
+    expect(screen.queryByText("Nothing here.")).toBeNull();
+    expect(document.querySelector(".content-header .count")).toBeNull();
+    expect(
+      screen.getByText("The tasks could not be loaded (synthetic tasks 500)."),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+
+    document.body.innerHTML = "";
+    renderBoard({
+      tasks,
+      tasksLoaded: true,
+      tasksError: "synthetic tasks 500",
+    });
+    expect(screen.queryByText(/The tasks could not be loaded/)).toBeNull();
+    expect(screen.getByText("Fix the thing")).toBeInTheDocument();
   });
 });

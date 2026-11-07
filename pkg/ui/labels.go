@@ -181,18 +181,23 @@ func OfferedCapabilities() []Capability {
 		// No gemini-key row: it was retired onto the gcp server's
 		// gcp#gemini-key (schema migration 103), which is offered with
 		// the other capability-server methods.
-		{ID: "self-debug", Name: "Self debug",
-			Description: "Let this task read grain's own source checkout, this deployment's own tasks and runs, and the measurements it keeps about itself -- throughput, latency, the tool-use census -- to help it debug or explain grain's own behavior. All read-only, and all of it is what anyone with this UI open can already see."},
+		// No self-debug row: it was retired onto the api:self-debug
+		// preset and the grain server's grain#source method (schema
+		// migration 115), which are offered with the other api presets
+		// and capability-server methods.
 	}
 	// Capabilities contributed from outside core
-	// (capability.RegisterProvider) follow self-debug, where the
+	// (capability.RegisterProvider) come first, where the
 	// deployment-level ones begin.
 	for _, r := range capability.Registered() {
 		offered = append(offered, Capability{ID: r.ID, Name: r.Name, Description: r.Description})
 	}
 	offered = append(offered, []Capability{
-		{ID: "bootstrap-playbooks", Name: "Bootstrap playbooks",
-			Description: "Let this task read grain's own bootstrap playbooks -- the runbooks for setting up GCP service accounts, the primary GitHub connection, CloudRun-based IAP access, and test repos -- so it can walk whoever is on the other end of this chat through one of them"},
+		// No priority-dispatch or durable rows: both were retired onto the
+		// task's admission setting (schema migration 120). No
+		// bootstrap-playbooks row: it was retired onto the config-map
+		// server's config-map {"config_maps":["bootstrap"]} (schema migration
+		// 118), which is offered with the other capability-server methods.
 		{ID: "github-sandbox", Name: "GitHub sandbox",
 			Description: "Create a private, single-use GitHub sandbox repo for this task to work in instead of /repo"},
 		{ID: "console", Name: "Interactive console",
@@ -786,6 +791,15 @@ type Config struct {
 	// ReconcilerDown always reports false, the same nil-means-
 	// unavailable-feature default AutoMergeDegraded above gives.
 	ReconcilerDown func() bool
+	// DispatchConditions, when set, is why this deployment is not
+	// dispatching, as named conditions with the error and the time each
+	// was set (pkg/dispatchcondition.Set, wired by pkg/daemon): what
+	// ReconcilerDown's boolean cannot say. GET /api/sandboxes lists the
+	// conditions in force as failing checks, GET /api/config carries
+	// them beside reconcilerDown, and GET /api/pipeline/changes shows
+	// each set and clear as an entry. nil reports none, the same
+	// nil-means-nothing-to-warn-about default ReconcilerDown has.
+	DispatchConditions DispatchConditionReader
 	// StoreSwitch, when set, is polled by GET /api/config and GET
 	// /api/sandbox-health (DaemonHealth.StoreSwitch) for the standing
 	// alert that the store was switched underneath this daemon
@@ -834,6 +848,19 @@ type Config struct {
 	// TriggerIAPSync requests an immediate IAP IAM synchronization cycle when team
 	// memberships or admin access lists are modified.
 	TriggerIAPSync func()
+	// RegistryStatus, when set, returns the live RegistrySnapshot from the
+	// daemon's RegistryManager; nil falls back to reading stored settings and
+	// repo configurations directly.
+	RegistryStatus func(ctx context.Context) (model.RegistrySnapshot, error)
+	// TriggerRegistryHeartbeat, when set, runs an immediate registry
+	// registration/heartbeat step and returns the updated snapshot.
+	TriggerRegistryHeartbeat func(ctx context.Context) (model.RegistrySnapshot, error)
+	// TriggerRegistrySync wakes the daemon's RegistryManager after settings,
+	// secrets, or repository configurations change.
+	TriggerRegistrySync func()
+	// RegistryAllowInsecureHTTP permits non-loopback plain HTTP registry URLs
+	// in test setups.
+	RegistryAllowInsecureHTTP bool
 	// SandboxBackends names the backend methods this daemon has enough
 	// startup configuration to build. SandboxBackendOptions lists every backend
 	// in model.SandboxBackends() with Available and Reason so Settings never
@@ -1176,12 +1203,31 @@ type Config struct {
 	// IAPKeysURL is where the assertion's signing keys are published (a
 	// PEM map or JWK set); empty means GoogleIAPCertURL.
 	IAPKeysURL string
+	// RegistryIssuer is the expected iss claim for verifying grain-registry
+	// JWT assertions (X-Grain-Registry-Assertion) (-ui-registry-issuer /
+	// $GRAIN_REGISTRY_ISSUER). All three of RegistryIssuer,
+	// RegistryAudience, and RegistryKeysURL must be set to enable the
+	// built-in "registry" IdentityVerifier.
+	RegistryIssuer string
+	// RegistryAudience is the single expected aud URL for verifying
+	// grain-registry JWT assertions (-ui-registry-audience /
+	// $GRAIN_REGISTRY_AUDIENCE).
+	RegistryAudience string
+	// RegistryKeysURL is the JWKS endpoint URL publishing grain-registry's
+	// ES256 public keys (-ui-registry-keys-url / $GRAIN_REGISTRY_KEYS_URL).
+	RegistryKeysURL string
 	// AllowedPrincipals, when non-empty, is the allowlist of user:,
 	// serviceAccount:, group:, and domain: entries admitted when a request
 	// authenticates through IAP or another registered IdentityVerifier
 	// (-ui-allowed-principals). When empty, defaults to $GRAIN_ALLOWED_PRINCIPALS,
 	// or the deployment owner (Actor) plus provisioned service accounts.
 	AllowedPrincipals []string
+	// DeploymentOwner is -deployment-owner ($GRAIN_DEPLOYMENT_OWNER): the
+	// human email address that owns this deployment for RBAC
+	// (IsDeploymentOwner, requireDeploymentOwner) and holds an immutable
+	// grain/operator floor on the access allowlist, regardless of the OS
+	// account the daemon runs as.
+	DeploymentOwner string
 	// ProvisionedServiceAccounts lists daemon-owned GCP service accounts grain
 	// itself provisions for this deployment (never gcp-key sandbox agent
 	// accounts), included in the default allowlist when AllowedPrincipals is unset.
@@ -1271,10 +1317,11 @@ type StallNoter func(state model.State, since, now time.Time) string
 // orchestrator.MergeReason, in this package's types.
 type ReasonClassifier interface {
 	// TaskReason is the sub-case of state t is in, given its observation
-	// (nil for none), the blocking tasks it is still waiting on, and the
-	// grant wait dispatch recorded for it (nil for none).
+	// (nil for none), the blocking tasks it is still waiting on, the
+	// grant wait dispatch recorded for it (nil for none), and, for an
+	// awaiting_reply task, which ask it is parked on (Task.replyFacts).
 	TaskReason(t model.Task, state model.State, obs *model.Observation, openDeps []string,
-		wait *model.GrantWait) Reason
+		wait *model.GrantWait, asked model.ReplyFacts) Reason
 	// MergeReason classifies a merge-queue sub-case the cycle recorded,
 	// or answers the zero Reason for one it does not know.
 	MergeReason(reason string) Reason

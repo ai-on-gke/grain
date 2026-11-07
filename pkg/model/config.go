@@ -948,6 +948,11 @@ type Config struct {
 	// -- the default -- requires an explicit -read grant for any non-target
 	// context repository. Stored as JSON in one column.
 	AutoGrantContextReads []string
+	// Registry configures self-registration and periodic heartbeating with a
+	// grain registry as a connected entry (design/design/registry.design.md).
+	// Empty -- the default -- disables registry connection. Stored as JSON in
+	// grain_config.registry; registration tokens live in pkg/secrets.
+	Registry RegistryConfig
 	// CLIRun is where each agent CLI runs, keyed by framework name
 	// (claude, codex, antigravity): on the host, in a per-run
 	// container of an image, or whichever of those the host allows

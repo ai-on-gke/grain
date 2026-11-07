@@ -585,7 +585,8 @@ this deployment" on the repo page) unless its own override says otherwise.
 When it resolves to no:
 
 - `baseBranchCIWanted` refuses with its own reason, which a merged task's
-  grain-ci grant does not overrule, so a merge records nothing and starts
+  `https://grain.dev/capabilities/grain#ci` grant (formerly `grain-ci`,
+  retired in schema migration 96) does not overrule, so a merge records nothing and starts
   nothing;
 - the reconciler starts no run on a new tip, re-asks nothing that judged
   nothing, confirms nothing and files no repair -- and stands an existing
@@ -611,7 +612,7 @@ before.
 
 As first written the whole control hung off one event: `startPostMergeCI`,
 on the cycle the pull-request reconciler observed **grain's own merge of a
-task's pull request**, with that task holding the `grain-ci` grant. Nothing
+task's pull request**, with that task holding the `…/grain#ci` grant. Nothing
 else in grain ever tested a base branch.
 
 That is a narrower trigger than the property needs, and the gap is not
@@ -864,7 +865,7 @@ Two things it deliberately does not do. It changes no semantics and
 starts nothing: every finding is read off state grain had already
 written, and the repair in each case is an operator's. And it reports
 nothing about a repository it has no record of -- a merge into a
-repository with no grain-ci grant writes no row at all
+repository with no `…/grain#ci` grant writes no row at all
 (`orchestrator.recordPostMergeCI`), so if its default branch is not
 watched either, there is nothing in the store to walk and no honest
 finding to make. Watching the default branch is what makes that
@@ -1515,7 +1516,7 @@ pays:
    exists the row itself is the opt-in, exactly as it is for a row a
    merge created, so unticking stops grain enrolling further branches and
    leaves one it is already watching alone. What stops a repository's
-   base branches being judged at all is taking the `grain-ci` capability
+   base branches being judged at all is taking the `…/grain#ci` capability
    off it, and only that: `ReleaseWorkflowsDisabled` changes the event
    the branch is judged under and nothing else ("Publishing is not
    judging", above) -- `baseBranchCIWanted`
@@ -1883,7 +1884,7 @@ reporting those checks for days, which cost four separate things:
 
 ### The decision it forced: a repository with no grain CI
 
-A repository can turn this on without holding `grain-ci`, and it must not
+A repository can turn this on without holding `…/grain#ci`, and it must not
 become a way to merge with no verdict at all. The answer taken is neither
 "refuse to set it" nor "accept it and merge ungated":
 
@@ -1899,7 +1900,7 @@ visibly.
 Refusing to set it was the alternative and was not taken, because the
 condition it would refuse on cannot be computed honestly: whether grain
 CI judges a given pull request is a property of the *task* (does it hold
-`grain-ci`), not of the repository, so "this repository has grain CI
+`…/grain#ci`), not of the repository, so "this repository has grain CI
 enabled" is a guess dressed as a validation. It would also be the wrong
 shape for the situation this exists for -- an operator whose CI provider
 has just died needs the switch before the replacement is finished being
@@ -2063,11 +2064,11 @@ repository nothing is being merged into. Neither is worth spending.
 
 One limit on all of the above, stated because the next person to revisit
 it should not have to rediscover it: the authoritative candidate set is
-`grain-ci` in `model.Config.DefaultCapabilities` and in each repository's
+`…/grain#ci` in `model.Config.DefaultCapabilities` and in each repository's
 own `DefaultCapabilities`, and those live in `grain/config`, which a
 `bwsalmon/grain` sandbox cannot read. The four above are derived from CI
 history instead, which is sound for a repository grain CI has ever run
-for and blind to exactly one case: a repository with `grain-ci` enabled
+for and blind to exactly one case: a repository with `…/grain#ci` enabled
 that has never run anything. Such a repository is also the one the seed
 was built for, so whoever holds the state repository should check the
 list against `tables/repo_config.json` rather than trusting this table to

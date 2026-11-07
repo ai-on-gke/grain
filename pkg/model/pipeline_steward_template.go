@@ -98,23 +98,26 @@ var PipelineStewardAPIPresets = []string{"task-admin", "dispatch-control", "ci-r
 //     nothing resolves.
 //   - NothingNeededAck, so a wake that ends on nothing_needed leaves the
 //     task open to be woken again rather than closing it.
-//   - The grants: the presets above, and self-debug for the task readers
-//     and read_pipeline_changes. Its admission, durable (which includes
-//     bypass, what the retired priority-dispatch grant gave), means a
-//     congested pipeline -- the thing this job exists to unstick --
-//     cannot starve it of a worker, park it behind a red branch's repair
-//     or hold it behind a pause it may itself have to lift. Only a person
-//     may otherwise raise a task's admission above standard; grain sets
-//     it here by construction (unified-grants.design.md §4.1).
+//   - The grants: the presets above, and what self-debug became
+//     (api:self-debug for the task readers and read_pipeline_changes, and
+//     grain#source). Its admission, durable (which includes bypass, what
+//     the retired priority-dispatch grant gave), means a congested
+//     pipeline -- the thing this job exists to unstick -- cannot starve it
+//     of a worker, park it behind a red branch's repair or hold it behind
+//     a pause it may itself have to lift. Only a person may otherwise
+//     raise a task's admission above standard; grain sets it here by
+//     construction (unified-grants.design.md §4.1).
 //     query_merge_queue needs no grant; every run has it.
 func pipelineStewardTemplate(stateRepo RepoRef) *Template {
-	grants := make([]Grant, 0, len(PipelineStewardAPIPresets)+1)
+	grants := make([]Grant, 0, len(PipelineStewardAPIPresets)+2)
 	for _, preset := range PipelineStewardAPIPresets {
 		grants = append(grants, Grant{Capability: APIGrantPrefix + preset, Via: GrantByGrain})
 	}
-	// Named as a string rather than through pkg/capability/selfdebug's
-	// own CapabilityName: that package imports this one.
-	grants = append(grants, Grant{Capability: "self-debug", Via: GrantByGrain})
+	// What self-debug became (SelfDebugGrants): its api preset for the
+	// task readers and grain#source for grain's own source.
+	for _, g := range SelfDebugGrants() {
+		grants = append(grants, Grant{Capability: g, Via: GrantByGrain})
+	}
 	t := &Template{
 		ID:                  PipelineStewardTemplateID,
 		Name:                "Pipeline steward",

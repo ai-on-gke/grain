@@ -303,7 +303,7 @@ for p in paths:
     # docker, kind and kubectl; a host without them says which is missing
     # and moves on. GRANULE_IMAGE names an alpine-guest image to test;
     # without it the script builds one from this tree. GKE is not here: it
-    # needs a GCP key and costs money (.grain/workflows/e2e-ipv6.yml).
+    # needs GCP credentials and costs money (.github/workflows/e2e-ipv6-gke.yml).
     echo "--- 5.4 IPv6 end to end: docker and kind ---"
     bash -n "$REPO_ROOT/test/e2e-ipv6.sh"
     missing=""

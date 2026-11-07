@@ -144,7 +144,7 @@ itself.
 | `api:ci-read` | Read CI runs, logs, merge batches and base-branch gates |
 | `self-debug` | `list_grain_tasks`, `read_grain_task` and the other task readers |
 
-Its **admission** is `durable` (a task setting, not a grant: [capabilities.md](capabilities.md#admission-durable-formerly-durable)). That includes `bypass`, so it is dispatched the way a console session is and a congested pipeline can't starve it (below), and it has no deadline or wait cap and rests on its goal between wakes. Before schema migration 115 these were the `priority-dispatch` and `durable` grants.
+Its **admission** is `durable` (a task setting, not a grant: [capabilities.md](capabilities.md#admission-durable-formerly-durable)). That includes `bypass`, so it is dispatched the way a console session is and a congested pipeline can't starve it (below), and it has no deadline or wait cap and rests on its goal between wakes. Before schema migration 120 these were the `priority-dispatch` and `durable` grants.
 
 `query_merge_queue` needs no grant, because every run has it.
 

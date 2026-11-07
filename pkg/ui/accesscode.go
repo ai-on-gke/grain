@@ -626,7 +626,7 @@ func singleTenantOpenRoute(r *http.Request) bool {
 	case accessCodePath, accessCodeScriptPath, "/api/auth/logout", "/api/auth/whoami":
 		return true
 	}
-	return hostdConnectRoute(r) || hostdInstallRoute(r)
+	return hostdConnectRoute(r) || hostdInstallRoute(r) || hostdEnrollOpenRoute(r)
 }
 
 const errAccessCodeNeeded = "this daemon is single-tenant and every caller shows its access code: " +
@@ -692,6 +692,11 @@ func (s *Server) singleTenantGate(w http.ResponseWriter, r *http.Request, cfg IA
 			return true
 		}
 		if err := s.admitVerifiedPrincipal(r.Context(), cv.id); err != nil {
+			var de *delegateNotAllowedError
+			if errors.As(err, &de) {
+				writeDelegateRefused(w, r, de)
+				return false
+			}
 			if browserNavigation(r) {
 				s.writePrincipalRefusedPage(w, r, cv, err)
 				return false

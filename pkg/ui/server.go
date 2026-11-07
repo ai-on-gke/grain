@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
 )
@@ -68,7 +69,8 @@ type Server struct {
 	taskDetails taskDetailCache
 	// hostdImage is the image /api/hostd/install.sh suggests
 	// (hostdInstallImage), hostd_install.go's.
-	hostdImage hostdImageCache
+	hostdImage      hostdImageCache
+	hostdJoinReplay hostd.NonceReplayCache
 	// access is the single-tenant access gate's rate limiter, and
 	// accessCode the token file it checks codes against
 	// (localAPITokenNow) -- both accesscode.go's.
@@ -119,6 +121,75 @@ func NewServerWithClient(client *Client) *Server {
 	return s
 }
 
+const maxTunnelRequestBodyBytes = 64 << 20 // 64 MiB cap on non-upgraded tunnel request bodies
+
+// RegistryTunnelHandler returns an http.Handler for serving accepted mux
+// streams on an outbound registry tunnel (-registry-connect). Every tunneled
+// request is gated unconditionally behind the "registry" IdentityVerifier
+// (X-Grain-Registry-Assertion, Source == "registry")—including open routes like
+// /api/config, /api/auth/*, and /api/hostd/connect—and loopback or access-code
+// shortcuts (grain_access cookies, X-Grain-Access-Code headers, and bearer
+// access codes) are unconditionally rejected.
+func (s *Server) RegistryTunnelHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setSecurityHeaders(w.Header())
+		r = r.Clone(withRegistryTunnelRequest(r.Context()))
+		if strings.TrimSpace(r.RemoteAddr) == "" || isLoopbackRequest(r) {
+			r.RemoteAddr = "tunnel-stream-remote"
+		}
+		if r.Body != nil && strings.TrimSpace(r.Header.Get("Upgrade")) == "" {
+			r.Body = http.MaxBytesReader(w, r.Body, maxTunnelRequestBodyBytes)
+		}
+		if s.tasks != nil {
+			r = r.WithContext(WithIAPConfig(r.Context(), IAPConfig{
+				Audience:              s.tasks.Config.IAPAudience,
+				Issuer:                s.tasks.Config.IAPIssuer,
+				KeysURL:               s.tasks.Config.IAPKeysURL,
+				RegistryIssuer:        s.tasks.Config.RegistryIssuer,
+				RegistryAudience:      s.tasks.Config.RegistryAudience,
+				RegistryKeysURL:       s.tasks.Config.RegistryKeysURL,
+				RequireVerifier:       string(AuthMethodRegistry),
+				RequireIAP:            false,
+				LocalAPIToken:         "",
+				AccessSessionLifetime: s.tasks.Config.AccessSessionLifetime,
+			}))
+		} else {
+			cfg, _ := IAPConfigFromContext(r.Context())
+			cfg.RequireVerifier = string(AuthMethodRegistry)
+			cfg.RequireIAP = false
+			cfg.LocalAPIToken = ""
+			r = r.WithContext(WithIAPConfig(r.Context(), cfg))
+		}
+		if strings.TrimSpace(r.Header.Get(AccessCodeHeader)) != "" {
+			writeError(w, http.StatusUnauthorized, errors.New("X-Grain-Access-Code is not accepted over the registry tunnel"))
+			return
+		}
+		if c, err := r.Cookie(AccessCookieName); err == nil && c != nil && strings.TrimSpace(c.Value) != "" {
+			writeError(w, http.StatusUnauthorized, errors.New("grain_access cookies are not accepted over the registry tunnel"))
+			return
+		}
+		if presentsApprovalCallbackToken(r) {
+			writeError(w, http.StatusUnauthorized, errors.New("local script approval tokens are not accepted over the registry tunnel"))
+			return
+		}
+		if _, ok := bearerToken(r); ok && !presentsExternalAgentToken(r) {
+			writeError(w, http.StatusUnauthorized, errors.New("bearer access codes are not accepted over the registry tunnel"))
+			return
+		}
+		cv := verifyRegistryTunnelCaller(r)
+		r = r.WithContext(withCallerVerification(r.Context(), &cv))
+		if !cv.present || cv.err != nil {
+			err := cv.err
+			if err == nil {
+				err = errors.New(errVerifierRequired(string(AuthMethodRegistry)))
+			}
+			writeAssertionRefused(w, r, err)
+			return
+		}
+		s.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w.Header())
 	if !checkCrossOrigin(w, r) {
@@ -130,16 +201,26 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	tunnelReq := isRegistryTunnelRequest(r)
 	if s.tasks != nil {
-		r = r.WithContext(WithIAPConfig(r.Context(), IAPConfig{
+		iapCfg := IAPConfig{
 			Audience:              s.tasks.Config.IAPAudience,
 			Issuer:                s.tasks.Config.IAPIssuer,
 			KeysURL:               s.tasks.Config.IAPKeysURL,
+			RegistryIssuer:        s.tasks.Config.RegistryIssuer,
+			RegistryAudience:      s.tasks.Config.RegistryAudience,
+			RegistryKeysURL:       s.tasks.Config.RegistryKeysURL,
 			RequireVerifier:       s.tasks.Config.RequireVerifier,
 			RequireIAP:            s.tasks.Config.RequireIAP,
 			LocalAPIToken:         s.localAPITokenNow(),
 			AccessSessionLifetime: s.tasks.Config.AccessSessionLifetime,
-		}))
+		}
+		if tunnelReq {
+			iapCfg.RequireVerifier = string(AuthMethodRegistry)
+			iapCfg.RequireIAP = false
+			iapCfg.LocalAPIToken = ""
+		}
+		r = r.WithContext(WithIAPConfig(r.Context(), iapCfg))
 	}
 	// Nobody gets further without the access code -- loopback included
 	// (accesscode.go, grain/task-4343) -- unless the request presents a
@@ -147,13 +228,18 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	// PrincipalAgent("external:<name>") and is held to its own scopes by
 	// agentAPIGate and handleMCP.
 	cfg, _ := IAPConfigFromContext(r.Context())
-	cv := verifyCallerNow(r)
-	r = r.WithContext(withCallerVerification(r.Context(), &cv))
+	var cv callerVerification
+	if tunnelReq {
+		cv = cachedOrVerifyCaller(r)
+	} else {
+		cv = verifyCallerNow(r)
+		r = r.WithContext(withCallerVerification(r.Context(), &cv))
+	}
 	if cv.present && cv.err != nil {
 		writeAssertionRefused(w, r, cv.err)
 		return
 	}
-	if presentsApprovalCallbackToken(r) {
+	if !tunnelReq && presentsApprovalCallbackToken(r) {
 		taskID, ok := s.authenticateApprovalCallback(w, r)
 		if !ok {
 			return
@@ -185,6 +271,12 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if roleSlot.role != nil {
 		r = r.WithContext(withAccessRole(r.Context(), roleSlot.role))
 	}
+	if roleSlot.delegation != nil {
+		r = r.WithContext(withDelegatedIdentity(r.Context(), roleSlot.delegation))
+		log.Printf("grain ui: delegated request: %s %s actor=service:%s on_behalf_of=user:%s via=%s registry_rid=%q registry_jti=%q delegation_grant=%q",
+			r.Method, r.URL.Path, roleSlot.delegation.AppEmail, roleSlot.delegation.PersonEmail, roleSlot.delegation.ViaLabel,
+			roleSlot.delegation.RequestID, roleSlot.delegation.JTI, roleSlot.delegation.Grant)
+	}
 	if s.tasks != nil {
 		r = r.WithContext(s.tasks.withOperatorActor(r.Context()))
 	}
@@ -194,7 +286,19 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		p, method, ok := extractPrincipal(r)
 		if ok {
-			if !singleTenantOpenRoute(r) || s.checkAllowedPrincipal(r.Context(), VerifiedIdentity{Email: p.ID, Kind: p.Kind}) == nil {
+			admitted := !singleTenantOpenRoute(r)
+			if !admitted {
+				if err := s.admitVerifiedPrincipal(r.Context(), cv.id); err == nil {
+					admitted = true
+					if roleSlot.role != nil {
+						r = r.WithContext(withAccessRole(r.Context(), roleSlot.role))
+					}
+					if roleSlot.delegation != nil {
+						r = r.WithContext(withDelegatedIdentity(r.Context(), roleSlot.delegation))
+					}
+				}
+			}
+			if admitted {
 				r = r.WithContext(withAuthMethod(WithPrincipal(r.Context(), p), method))
 			} else {
 				ok = false
@@ -251,7 +355,7 @@ func requiresAccess(r *http.Request) bool {
 	return strings.HasPrefix(r.URL.Path, "/api/") &&
 		!(r.URL.Path == "/api/config" && (r.Method == http.MethodGet || r.Method == http.MethodHead)) &&
 		!strings.HasPrefix(r.URL.Path, "/api/auth/") &&
-		!hostdConnectRoute(r) && !hostdInstallRoute(r)
+		!hostdConnectRoute(r) && !hostdInstallRoute(r) && !hostdEnrollOpenRoute(r)
 }
 
 func (s *Server) routes() {
@@ -279,6 +383,9 @@ func (s *Server) routes() {
 	s.route("POST /api/settings/plan", s.handlePlanSettings)
 	s.route("GET /api/settings/cli-run", s.handleGetCLIRunSettings)
 	s.route("PUT /api/settings/cli-run", s.handleUpdateCLIRunSettings)
+	s.route("GET /api/registry", s.handleGetRegistry)
+	s.route("POST /api/registry/heartbeat", s.handleTriggerRegistryHeartbeat)
+	s.route("GET /api/registry/status", s.handleGetRegistryInstanceStatus)
 	s.route("POST /api/capabilities/{id}/check", s.handleCheckCapability)
 	s.route("GET /api/tasks", s.handleListTasks)
 	s.route("GET /api/tasks/states", s.handleTaskStates)
@@ -352,6 +459,8 @@ func (s *Server) routes() {
 	// messages.go, and mcp's chat tool at the other end of it.
 	s.route("POST /api/tasks/{id}/messages", s.handlePostTaskMessage)
 	s.route("POST /api/tasks/{id}/notes", s.handlePostTaskNote)
+	s.route("POST /api/tasks/{id}/human-review", s.handleRequestHumanReview)
+	s.route("POST /api/tasks/{id}/human-review/release", s.handleReleaseHumanReview)
 	s.route("POST /api/tasks/{id}/notify", s.handleAgentNotify)
 	s.route("POST /api/notifications", s.handleRaiseNotification)
 	s.route("GET /api/notifications", s.handleListNotifications)
@@ -698,15 +807,29 @@ func (s *Server) routes() {
 
 	// A grain hostd on another machine dialing in (hostd -server).
 	s.route("GET /api/hostd/connect", s.handleHostdConnect)
-	// The script that installs one there (Settings -> Hostds).
+	s.route("POST /api/hostd/join", s.handleHostdJoin)
+	s.route("POST /api/hostd/join/{id}/poll", s.handleHostdJoinPoll)
+	s.route("POST /api/hostd/renew", s.handleHostdRenew)
+	// The script that installs one there (Settings -> Hosts).
 	s.route("GET "+hostdInstallPath, s.handleHostdInstallScript)
-	// The hostd registry (Settings -> Hostds).
+	s.route("GET "+hostdInstallShortPath, s.handleHostdInstallScript)
+	// The host registry and join handshake (Settings -> Hosts).
 	s.route("GET /api/hostds", s.handleListHostds)
 	s.route("POST /api/hostds", s.handleCreateHostd)
+	s.route("GET /api/hostds/enrollment-codes", s.handleListHostEnrollmentCodes)
+	s.route("POST /api/hostds/enrollment-codes", s.handleCreateHostEnrollmentCode)
+	s.route("POST /api/hostds/enrollment-codes/{name}/rotate", s.handleRotateHostEnrollmentCode)
+	s.route("POST /api/hostds/enrollment-codes/{name}/revoke", s.handleRevokeHostEnrollmentCode)
+	s.route("GET /api/hostds/pending", s.handleListPendingHostJoins)
+	s.route("POST /api/hostds/pending/{id}/accept", s.handleAcceptPendingHostJoin)
+	s.route("POST /api/hostds/pending/{id}/reject", s.handleRejectPendingHostJoin)
 	s.route("PATCH /api/hostds/{name}", s.handleUpdateHostd)
 	s.route("GET /api/hostds/{name}/install", s.handleHostdInstall)
+	s.route("POST /api/hostds/{name}/rename", s.handleRenameHostd)
 	s.route("POST /api/hostds/{name}/rotate", s.handleRotateHostdToken)
 	s.route("POST /api/hostds/{name}/revoke", s.handleRevokeHostd)
+	s.route("DELETE /api/hostds/{name}", s.handleDeleteHostd)
+	s.route("POST /api/hostds/delete-revoked", s.handleDeleteRevokedHostds)
 
 	// Verified-identity sign-in allowlist (Settings -> Access).
 	s.route("GET /api/access/principals", s.handleListAccessPrincipals)

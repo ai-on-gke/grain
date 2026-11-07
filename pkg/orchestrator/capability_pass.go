@@ -640,6 +640,11 @@ func capabilityAdmitterFor(deps Deps, admit dispatch.Admitter, connectionOf func
 			if revokeApproval != nil {
 				revokeApproval()
 			}
+			var hold *admissionHoldError
+			if errors.As(err, &hold) {
+				passes.clearBackoff(task.ID)
+				return decline(hold.gate, hold.reason)
+			}
 			if serr := admissionMintFailed(ctx, deps, passes, *task, err, at); serr != nil {
 				log.Printf("orchestrator: task %s: recording its failed capability admission: %v", task.ID, serr)
 			}
@@ -659,11 +664,12 @@ func capabilityAdmitterFor(deps Deps, admit dispatch.Admitter, connectionOf func
 }
 
 // hasExternalCapabilityRef reports whether any grant in grants is a capability
-// reference targeting an external/subprocess capability server rather than the
-// in-process grain server (which opens no control- or data-plane listener).
+// reference targeting an external/subprocess capability server rather than an
+// in-process server or the stateless embedded bootstrap playbooks (neither of
+// which opens a control- or data-plane listener or holds host secrets).
 func hasExternalCapabilityRef(grants []model.Grant) bool {
 	for _, g := range grants {
-		if model.IsCapabilityRef(g.Capability) && !grainserver.IsInProcessGrant(g.Capability) {
+		if model.IsCapabilityRef(g.Capability) && !grainserver.IsInProcessGrant(g.Capability) && !model.IsEmbeddedBootstrapOnlyGrant(g.Capability) {
 			return true
 		}
 	}
@@ -701,13 +707,19 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 	// So can a container left unfenced on this host's own bridge
 	// (ContainerConfig.Fence): refused the same way, saying why it is
 	// unfenced.
+	unfenced := openNetworkUnfenced(ctx, deps.Sandboxes)
 	if external {
-		if why := openNetworkUnfenced(ctx, deps.Sandboxes); why != "" {
-			return nil, &grainRefusalError{Reason: why + ", so it runs no attempt holding a capability grant"}
+		if unfenced != "" {
+			return nil, &grainRefusalError{Reason: unfenced + ", so it runs no attempt holding a capability grant"}
 		}
 	}
 	var baseLookup protocol.Lookup
-	if deps.CapabilityServers != nil {
+	// On an unisolated host sandbox or an unfenced container, never dial an
+	// attached capability server even for an embedded-bootstrap-only grant:
+	// grainserver.Lookup(nil) serves in-process grants and this binary's
+	// embedded bootstrap playbooks directly, with no external control-plane
+	// listener or host skill directory (§3.2.4).
+	if deps.CapabilityServers != nil && !isUnisolated(deps.Sandboxes) && unfenced == "" {
 		baseLookup = deps.CapabilityServers.Lookup
 	}
 	lookup := grainserver.Lookup(baseLookup)
@@ -715,12 +727,22 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 	if err != nil {
 		return nil, &protocol.TransientError{Grant: "capabilities", Err: err}
 	}
-	if !sameGrantNames(recorded, task.Grants) {
+	rewroteGrants := !sameGrantNames(recorded, task.Grants)
+	if rewroteGrants {
 		if err := deps.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
 			t.Grants = recorded
 			return nil
 		}); err != nil {
 			return nil, &protocol.TransientError{Grant: "capabilities", Err: err}
+		}
+		task.Grants = recorded
+		if deps.Policy != nil || isUnisolated(deps.Sandboxes) {
+			if err := checkPolicy(ctx, deps, task, deploymentNetworkAccess(ctx, deps.Store)); err != nil {
+				if serr := recordPolicyRefusal(ctx, deps, task, policyStageAdmission, err, at); serr != nil {
+					log.Printf("orchestrator: recording why local policy refuses %s after grant normalization: %v", task.ID, serr)
+				}
+				return nil, &admissionHoldError{gate: admissionGatePolicy, reason: err.Error()}
+			}
 		}
 	}
 	grants, err := model.CapabilityGrants(recorded, lookup)
@@ -739,6 +761,22 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 		configured = cfg.MCPServers
 		if id := strings.TrimSpace(cfg.DeploymentID); id != "" {
 			deployment = id
+		}
+	}
+	if rewroteGrants && (policy.Catalogue != nil || model.CatalogueKindOf(task) == model.CatalogueKindDirector) {
+		gc := model.TaskGrantContext(task)
+		if gc.TemplateID != "" {
+			if tmpl, err := deps.Store.GetTemplate(ctx, gc.TemplateID); err == nil && tmpl != nil {
+				gc.TemplateName = tmpl.Name
+			}
+		}
+		if _, err := policy.Catalogue.ValidateGrants(gc); err != nil {
+			if serr := deps.Store.SetGrantWait(ctx, model.GrantWait{
+				TaskID: task.ID, Capability: model.CatalogueWaitCapability, Resource: err.Error(), WaitingAt: at,
+			}); serr != nil {
+				log.Printf("orchestrator: recording why the capability catalogue holds %s after grant normalization: %v", task.ID, serr)
+			}
+			return nil, &admissionHoldError{gate: "capability catalogue", reason: err.Error()}
 		}
 	}
 	configured, _ = intree.EnsureBuiltins(configured)
@@ -779,7 +817,7 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 		}
 		return srv, nil
 	}
-	return protocol.MintPass(ctx, grants, minters, protocol.PassOptions{
+	pass, err := protocol.MintPass(ctx, grants, minters, protocol.PassOptions{
 		Deployment: deployment,
 		Task:       task.ID,
 		Attempt:    candidate.Attempt,
@@ -789,6 +827,14 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 		ReservedSandboxPorts: reservedGuestPorts(deps.Sandboxes),
 		Now:                  func() time.Time { return at },
 	})
+	if err != nil {
+		return nil, err
+	}
+	if (isUnisolated(deps.Sandboxes) || unfenced != "") && !onlyInProcessOrEmbeddedBootstrap(pass) {
+		_, _ = pass.Release(ctx)
+		return nil, &grainRefusalError{Reason: "this sandbox backend cannot fence capability control planes, so it runs no attempt whose grant carries anything beyond in-process grants and the embedded bootstrap playbooks"}
+	}
+	return pass, nil
 }
 
 // guestPortReserver is a Sandboxes backend whose guests have loopback
@@ -828,6 +874,16 @@ func sameGrantNames(a, b []model.Grant) bool {
 	}
 	return true
 }
+
+// admissionHoldError indicates that grant normalization revealed a local-policy
+// or capability-catalogue refusal, which holds the task on its wait record
+// rather than parking it on a server refusal comment.
+type admissionHoldError struct {
+	gate   string
+	reason string
+}
+
+func (e *admissionHoldError) Error() string { return e.reason }
 
 // grainRefusalError is a grant grain itself refused before asking any
 // capability server: the capability policy (and its catalogue) denying

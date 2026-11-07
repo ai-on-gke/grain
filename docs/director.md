@@ -54,10 +54,11 @@ the chat is in:
 
 | setting | shipped as | what it decides |
 |---|---|---|
-| `Capabilities` | `self-debug`, `https://grain.dev/capabilities/grain#journal` (formerly `grain-log`), `api:deployment:read` and `…/grain#health` (formerly `deployment-health`), `bootstrap-playbooks` (plus any capability a wrapper distribution registers as on by default) | what the agent may reach |
+| `Capabilities` | `api:self-debug` and `https://grain.dev/capabilities/grain#source` (formerly `self-debug`), `https://grain.dev/capabilities/grain#journal` (formerly `grain-log`), `api:deployment:read` and `…/grain#health` (formerly `deployment-health`), `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`), `api:task-admin`, `api:capabilities:read`, `api:capabilities:detach`, `api:settings:read`, `api:repos:read`, `api:releases:read`, `api:schedules:read`, `api:templates:read`, `api:suites:read`, `api:dispatch:read` (plus any capability a wrapper distribution registers as on by default) | what the agent may reach |
 | `ReadsAll` | true (every session) | whether it reads every repository this deployment works in |
 | `DeclinedDefaults` | none | which of the defaults every session holds (`api:ci-read`) it opts out of |
-| `NetworkAccess` | open (`model.DefaultConsoleSessions`; `none` is the target, `director-capabilities.spec.md` G3) | whether its sandbox reaches the internet |
+| `NetworkAccess` | none (`model.DefaultConsoleSessions`, `director-capabilities.spec.md` §3.1.6). On a backend that cannot isolate a sandbox's network (host directory, container, plain Kubernetes pods), `model.ConsoleSessionNetworkAccess` files the director open instead, since that backend would refuse every exchange. A build that registers a default-on capability needing egress from the sandbox itself (`capability.Registration.SandboxEgress`) ships it open | whether its sandbox reaches the internet. The director's state-repository checkout, its `ReadsAll` clones and the in-sandbox `grain` CLI all go through the git proxy, and its `api_*` tools run on grain's side, so closing its network takes away nothing it uses |
+| `Writes` | `grain/config` (the director; other sessions none) | where it may push: for the director, candidate `grain/config/<task-id>/*` branches for `propose_config_change` |
 | `TasksApproved` | false | whether the tasks it files are queued or wait for a person |
 | `Title` | "Director" | what the rail calls it |
 
@@ -93,9 +94,10 @@ their title is exactly what their first message would give, and as
 offered for renaming.
 
 Two capabilities are deliberately not shipped on and are one tick away:
-**self-repair**, which lets a run change things on grain's own host and
-is the one grant here that can break the deployment it is talking about,
-and **memory**, which writes the standing instructions every later run is
+**`https://grain.dev/capabilities/grain#host-exec`** (formerly `self-repair`),
+which lets a run change things on grain's own host and is the one grant here
+that can break the deployment it is talking about, and **`api:memory`**
+(formerly `memory`), which writes the standing instructions every later run is
 given.
 
 A wrapper distribution can register further capabilities as on by default
@@ -132,8 +134,16 @@ repositories one at a time (`pkg/model/console_session_reach.go`):
   session's `declinedDefaults`, so it stays off when the session's task is
   filed again. Ticking it brings it back.
 
-Writes are never a default. A session files tasks rather than pushing, and
-what it may push to is `Writes`, named one repository at a time.
+Writes are never a default, with one exception. A session files tasks
+rather than pushing, and what it may push to is `Writes`, named one
+repository at a time. The shipped director holds `grain/config` there, so
+it is offered `propose_config_change`: its `/home/debian/grain-state`
+checkout may push candidate branches under `grain/config/<task-id>/`
+(never the default branch), each validated, classified by the trust
+boundary, and landed only on a person's approval of its pinned head. That
+write is not passed on: any proposal whose repo or `writes` names
+`grain/config` is filed for a person whatever the session's permission
+(`model.ConfigRepoProposalHold`).
 
 `TasksApproved` is false because a chat is a fast way to ask for a lot of
 work: a director that could queue its own tasks would be one
@@ -148,9 +158,13 @@ run (`orchestrator.relayProposedTasks`). It is written that way because
 it was not: the middle one did not exist, so the director was told its
 tasks were queued and every one of them was filed `proposed`
 (grain/task-311). A proposal queued this way is approved as
-`ConsoleSessionPrincipal`, is not bounded by `model.AutoSubmitLimits` —
-every task a session files is one somebody just asked for in a message,
-and bounding those would bound the person — and inherits no auto-merge,
+`ConsoleSessionPrincipal`, is not bounded by `model.AutoSubmitLimits`'
+depth or lifetime fan-out — every task a session files is one somebody
+just asked for in a message, and bounding those over a day would bound
+the person — but is bounded per conversation turn: past
+`AutoSubmitLimits.TurnFanOut` (10) proposals since the last message a
+person sent the session, the rest are filed for a person with a note
+saying why. It inherits no auto-merge,
 since a session that may queue work has been granted nothing about
 anybody's branch.
 
@@ -262,6 +276,20 @@ Its prompt tells it to ask the person for a scope by name rather than
 work around a missing one. It also says that dangerous scopes, and every
 call under one, need a person and a reason. Every call is attributed to
 the session's task. See [agent-api.md](agent-api.md).
+
+Five scopes are out of the director's reach whatever it is granted:
+`merge:force`, `settings:write`, `secrets:write`, `connections:write` and
+`repos:write`. This is grain's built-in floor for the director
+(`model.DirectorFloorRefusal`;
+[director-capabilities.spec.md](../design/spec/director/director-capabilities.spec.md)
+§3.3, G7), and it applies with or without a `settings/capabilities.yml`.
+It covers every grant reaching one of those scopes, including a preset
+or scope set that expands to one, such as `api:grain/operator`. Grain
+refuses such a grant when it is attached to the director's task, refuses
+to save it in the session pane, holds the director at dispatch while it
+holds one, and refuses those routes at the API gate. A rule in
+`settings/capabilities.yml` can take more away from the director, but it
+cannot give these back.
 
 ## Starting a fresh one
 

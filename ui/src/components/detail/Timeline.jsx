@@ -154,6 +154,10 @@ const AUTO_MERGE_STEPS = {
   auto_merge_on: "Auto-merge turned on",
   auto_merge_off: "Auto-merge turned off",
   auto_merge_kept_off: "Auto-merge kept off",
+  // A human-review hold raised and released (model.LinkHumanReviewHold):
+  // who raised it is the review task, who released it the person.
+  human_review_requested: "Held for a person's review",
+  human_review_released: "Human-review hold released",
 };
 
 // ADMISSION_LABELS names each admission value the way the task pane's
@@ -496,14 +500,22 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
             <div
               className="timeline-meta timeline-attempt-hostd"
               title={[
-                `The agent CLI ran on grain hostd ${a.hostd.hostd}`,
+                `The agent CLI ran on host ${a.hostd.hostd}`,
+                a.hostd.deleted &&
+                  "since deleted from the host registry (Settings → Hosts)",
                 a.hostd.instance && `on ${a.hostd.instance}`,
                 a.hostd.owner && `owned by ${a.hostd.owner}`,
               ]
                 .filter(Boolean)
                 .join(", ")}
             >
-              ran on hostd {a.hostd.hostd}
+              ran on host {a.hostd.hostd}
+              {a.hostd.deleted && (
+                <span className="timeline-attempt-hostd-deleted">
+                  {" "}
+                  (deleted)
+                </span>
+              )}
               {a.hostd.instance && <> on {a.hostd.instance}</>}
               {a.hostd.owner && <> · {a.hostd.owner}</>}
             </div>

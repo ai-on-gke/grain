@@ -59,12 +59,12 @@ func ParseHostdSelector(s string) (name string, labels map[string]string, err er
 		k, v, ok := strings.Cut(part, "=")
 		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
 		if !ok || k == "" || v == "" || strings.ContainsAny(k+v, ",= \t\n\r") {
-			return "", nil, fmt.Errorf("hostd selector %q: %q is not label=value", s, part)
+			return "", nil, fmt.Errorf("host selector %q: %q is not label=value", s, part)
 		}
 		labels[k] = v
 	}
 	if len(labels) == 0 {
-		return "", nil, fmt.Errorf("hostd selector %q names no label", s)
+		return "", nil, fmt.Errorf("host selector %q names no label", s)
 	}
 	return "", labels, nil
 }
@@ -98,6 +98,11 @@ type TaskRunHostd struct {
 	Instance string    `json:"instance,omitempty"`
 	Owner    string    `json:"owner,omitempty"`
 	At       time.Time `json:"at"`
+	// Deleted is set by a reader, never stored: the registry no longer
+	// holds the hostd this run used -- it was deleted, or deleted and its
+	// name registered again since (ui's markDeletedRunHostds). Hostd
+	// still names it, as the run recorded.
+	Deleted bool `json:"deleted,omitempty"`
 }
 
 // RecordTaskRunHostd records which hostd r.RunID resolved to, replacing

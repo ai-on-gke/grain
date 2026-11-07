@@ -68,17 +68,17 @@ func RecoverHostdRuns(ctx context.Context, store *model.Store, client github.Cli
 	now time.Time, owns func(runID string) bool, adopted func(runhost.Adoption, int64) bool) (runhost.Plan, error) {
 	cursors, err := store.HostdCursors(ctx)
 	if err != nil {
-		return runhost.Plan{}, fmt.Errorf("orchestrator: reading hostd cursors: %w", err)
+		return runhost.Plan{}, fmt.Errorf("orchestrator: reading host cursors: %w", err)
 	}
 	peer, err := hd.Hello(ctx)
 	if err != nil {
-		return runhost.Plan{}, fmt.Errorf("orchestrator: grain hostd did not answer hello, so the %d run(s) driven "+
+		return runhost.Plan{}, fmt.Errorf("orchestrator: the host agent did not answer hello, so the %d run(s) driven "+
 			"through it are recovered as any other: %w", len(cursors), err)
 	}
 	var procs []hostd.Process
 	if peer.SupportsAttach() {
 		if procs, err = hd.Processes(ctx); err != nil {
-			return runhost.Plan{}, fmt.Errorf("orchestrator: listing grain hostd's processes: %w", err)
+			return runhost.Plan{}, fmt.Errorf("orchestrator: listing the host agent's processes: %w", err)
 		}
 	}
 	runs, err := store.LiveRuns(ctx)
@@ -111,7 +111,7 @@ func RecoverHostdRuns(ctx context.Context, store *model.Store, client github.Cli
 		id, _ := runhost.HostdID(i)
 		log.Printf("orchestrator: releasing grain hostd process %s (task %s, run %s): %s", id, i.Labels.Task, i.Labels.Run, reason)
 		if err := hd.Cancel(ctx, id); err != nil {
-			errs = append(errs, fmt.Errorf("orchestrator: cancelling grain hostd process %s: %w", id, err))
+			errs = append(errs, fmt.Errorf("orchestrator: cancelling the host agent process %s: %w", id, err))
 		}
 	}
 	finish := func(c runhost.Claim, reason string) {
@@ -135,7 +135,7 @@ func RecoverHostdRuns(ctx context.Context, store *model.Store, client github.Cli
 			continue
 		}
 		release(a.Host, "matched its live run, but this daemon could not adopt it")
-		finish(a.Claim, fmt.Sprintf("its host process %s was still running in grain hostd, but this daemon could not "+
+		finish(a.Claim, fmt.Sprintf("its host process %s was still running in the host agent, but this daemon could not "+
 			"adopt the run (see its journal for why)", a.Host.Name))
 	}
 	return plan, errors.Join(errs...)

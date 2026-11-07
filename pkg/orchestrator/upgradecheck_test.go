@@ -126,13 +126,14 @@ func TestUpgradeCheckFilesOneApprovedTaskAtTheHeadOfTheBacklog(t *testing.T) {
 	for _, g := range check.Grants {
 		grants = append(grants, g.Capability)
 	}
-	// Both, and separately: self-debug is the source this host runs,
+	// Both, and separately: grain#source is the source this host runs,
 	// grain-log is the journal it wrote. This task is the one that needs
 	// both, which is exactly why the second is not folded into the first
 	// -- every other self-debug task keeps only the source.
 	slices.Sort(grants)
-	if !slices.Equal(grants, []string{model.GrainJournalGrant, "self-debug"}) {
-		t.Errorf("Grants = %v, want self-debug and %s", grants, model.GrainJournalGrant)
+	if !slices.Equal(grants, []string{"api:self-debug", model.GrainJournalGrant, model.GrainSourceGrant}) {
+		t.Errorf("Grants = %v, want api:self-debug and %s (once self-debug) and %s", grants,
+			model.GrainSourceGrant, model.GrainJournalGrant)
 	}
 	if len(check.Reads) != 1 || check.Reads[0].Name != "grain-home" {
 		t.Errorf("Reads = %v, want the state repository", check.Reads)

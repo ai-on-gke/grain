@@ -33,9 +33,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap/playbooks"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/playbooks"
 	"github.com/ai-on-gke/grain/pkg/redact"
 	"github.com/ai-on-gke/grain/pkg/safepath"
 )
@@ -326,7 +326,7 @@ func (s *Server) resolveSrc(ctx context.Context, scope Scope, relPath string) (*
 		if trimmed == "playbooks" || strings.HasPrefix(trimmed, "playbooks/") {
 			return nil, RefuseCapability("src://"+relPath, "bootstrap-playbooks")
 		}
-		return nil, RefuseCapability("src://"+relPath, "self-debug")
+		return nil, RefuseCapability("src://"+relPath, model.GrainSourceRef)
 	}
 	if trimmed := strings.TrimPrefix(strings.TrimSuffix(relPath, "/"), "/"); trimmed == "playbooks" || strings.HasPrefix(trimmed, "playbooks/") {
 		return resolvePlaybook(relPath, strings.TrimPrefix(strings.TrimPrefix(trimmed, "playbooks"), "/"))
@@ -493,10 +493,10 @@ func hasEntry(entries []Entry, name string) bool {
 }
 
 // resolvePlaybook serves src://playbooks out of the playbooks embedded
-// in this binary (pkg/capability/bootstrap/playbooks) rather than out of
-// SrcDir: no daemon's source tree has a playbooks/ at its root, and the
-// embedded copy is the one the bootstrap-playbooks grant is about. name
-// is "" for the listing, and is read with or without its .md.
+// in this binary (pkg/playbooks) rather than out of SrcDir: no daemon's
+// source tree has a playbooks/ at its root, and the embedded copy is the
+// one the bootstrap config-map grant is about. name is "" for the
+// listing, and is read with or without its .md.
 func resolvePlaybook(relPath, name string) (*ResolvedNode, error) {
 	if name == "" {
 		dirEntries, err := fs.ReadDir(playbooks.FS, ".")

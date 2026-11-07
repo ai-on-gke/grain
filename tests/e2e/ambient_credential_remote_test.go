@@ -52,7 +52,7 @@ import (
 )
 
 const (
-	ambientSSHCapabilityName = "self-debug"
+	ambientSSHCapabilityName = "read-issues"
 	ambientSSHCredentialName = "ambient-ssh-key"
 )
 

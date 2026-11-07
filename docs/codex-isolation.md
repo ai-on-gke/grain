@@ -21,7 +21,7 @@ HTTP adapter does not accept arbitrary commands or sandbox targets.
 Startup is bounded. Finishing a run, failing setup or closing a terminal
 cleans up the endpoint, child process group and private Codex home.
 Retries reuse the same endpoint and home for that run. When Codex runs
-`detached` in `grain hostd` (`-codex-run=detached`, `cli codex-detached`),
+`detached` in `grain host` (`-codex-run=detached`, `cli codex-detached`),
 the host wrapper (`grain codex-detached`) starts `mcp.StartCommandHTTP`
 outside the daemon from `$CODEX_HOME/mcpserver.json`, writes the loopback
 URL, bearer token and tools snapshot into `$CODEX_HOME/config.toml`, and

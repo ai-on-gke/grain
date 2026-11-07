@@ -542,14 +542,14 @@ var PublishedTools = []string{
 	"wait_for_checks", "list_ci_runs", "get_ci_log", "retrigger_ci",
 	"query_test_history", "run_ci_job", "get_ci_artifact", "grain_ls",
 	"grain_read", "grain_grep", "grain_copy", "open_pull_request",
-	"recreate_sandbox", "update_status", "rename_session",
+	"recreate_sandbox", "update_status", "rename_session", "request_human_review",
 	"propose_config_change", "wait_for_task", "resume_later",
 	"notify_operator", "message_task", "query_merge_queue", "revert_task",
 	"revert_merge", "chat", "list_issues", "read_issue", "list_grain_tasks",
 	"read_grain_task", "read_grain_task_prompt", "read_grain_task_transcript",
 	"read_pipeline_changes", "read_grain_metrics", "read_grain_log",
 	"read_deployment_health", "read_deployment_state",
-	"list_bootstrap_playbooks", "read_bootstrap_playbook", "query_grain_db",
+	"query_grain_db",
 	"execute_grain_db", "run_host_command",
 }
 

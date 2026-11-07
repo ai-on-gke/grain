@@ -829,7 +829,7 @@ func retireStaleBranch(ctx context.Context, store *model.Store, task model.Task,
 func salvagePushedBranch(ctx context.Context, store *model.Store, client github.Client,
 	task model.Task, now time.Time) (bool, error) {
 
-	if task.Target == nil {
+	if task.Target == nil || client == nil {
 		return false, nil
 	}
 	if _, inPlace := reviewsInPlace(task); inPlace {
@@ -2194,6 +2194,20 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 				}
 			}
 		}
+		// A proposal that targets or writes grain/config waits for a
+		// person whatever this task holds (model.ConfigRepoProposalHold)
+		// -- ui.CreateTask's rule for the identical call filed live. A
+		// session holding grain/config in its Writes for
+		// propose_config_change would otherwise pass that write on to a
+		// child its own permission queues.
+		if why := model.ConfigRepoProposalHold(proposal); why != "" {
+			proposal.Body += fmt.Sprintf("\n\n_Filed for a person to approve: %s._", why)
+			if needsPersonWhy == "" {
+				needsPersonWhy = why
+			} else {
+				needsPersonWhy += "; " + why
+			}
+		}
 		// Scheduled for later: filed deferred with the wake time the
 		// call asked for, so reconcileWake picks it back up then and not
 		// before -- ui.CreateTask's rule for the identical call filed
@@ -2216,22 +2230,41 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// other proposal is filed for a human to decide on, which is
 		// propose_task's whole contract.
 		//
-		// The session is not bounded here and the tasks below it are.
-		// Its permission is not a run's inherited one but a person
-		// sitting in front of the chat: every task it files is one
-		// somebody just asked for in a message, so a cap on how many
-		// would be a cap on how much a human may ask for in a day. What
-		// that person cannot see is what the work they asked for goes
-		// on to queue for itself, so a session-queued task counts as a
-		// level of self-approved work like any other
-		// (model.SelfApproved) and everything below it is bounded
-		// exactly as an auto-merge job's proposals are.
+		// The session is not bounded by depth or lifetime fan-out, and
+		// the tasks below it are. Its permission is not a run's
+		// inherited one but a person sitting in front of the chat:
+		// every task it files is one somebody just asked for in a
+		// message, so a cap over the session's life would be a cap on
+		// how much a human may ask for in a day. What bounds it instead
+		// is per conversation turn (model.AutoSubmitLimits.TurnFanOut,
+		// counted since the last message a person sent it): one message
+		// is still a fast way to ask for a lot of work, so past that
+		// many the rest are filed for a person, with
+		// model.AutoSubmitLimitNote saying why. What that person cannot
+		// see is what the work they asked for goes on to queue for
+		// itself, so a session-queued task counts as a level of
+		// self-approved work like any other (model.SelfApproved) and
+		// everything below it is bounded exactly as an auto-merge job's
+		// proposals are.
 		//
 		// Neither reaches a proposal that asked for a capability this task
 		// does not hold (model.EscalatedCapabilities): it is filed holding
 		// it, for a person, with a note saying so -- ui.CreateTask's rule
 		// for the identical call filed live.
-		escalated := model.EscalatedCapabilities(proposal, task)
+		//
+		// A director this deployment lets queue its own work is not
+		// escalating by carrying its proposal's target repository's or
+		// this deployment's defaults unchanged
+		// (model.ProposalEscalations, director-capabilities.spec.md
+		// §4.2): those are filed with the note that names them instead.
+		var seeding *model.ProposalSeeding
+		if approved && model.IsDirectorTask(task) {
+			if seeding, err = proposalSeeding(ctx, store, target, catalogue, proposal); err != nil {
+				return fmt.Errorf("orchestrator: resolving the default capabilities seeded on proposed task %q: %w", title, err)
+			}
+		}
+		escalated, admittedDefaults := model.ProposalEscalations(proposal, task, approved, seeding)
+		proposal.Body += model.SeededDefaultsNote(task.ID, admittedDefaults)
 		// Write targets the run asked for that this task was never given
 		// are filed as asked -- a person may well agree the work belongs
 		// there too -- but they keep it from being queued or merging on
@@ -2281,8 +2314,16 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		case hold:
 			// Waiting for a person anyway; nothing was held back.
 		case approved:
-			proposal.Approval = &model.Attribution{Actor: consoleSessionPrincipal}
-			proposal.ApprovedAt = &now
+			limit, err := store.ExceededSessionTurnLimit(ctx, task.ID, limits)
+			if err != nil {
+				return fmt.Errorf("orchestrator: bounding the session's approval of proposed task %q: %w", title, err)
+			}
+			if limit == model.AutoSubmitWithinLimits {
+				proposal.Approval = &model.Attribution{Actor: consoleSessionPrincipal}
+				proposal.ApprovedAt = &now
+			} else {
+				proposal.Body += model.AutoSubmitLimitNote(task.ID, limit, limits)
+			}
 		case selfApproves:
 			limit, err := store.ExceededAutoSubmitLimit(ctx, task.ID, limits)
 			if err != nil {
@@ -2471,6 +2512,9 @@ func defaultTaskGrants(ctx context.Context, store *model.Store, target *model.Re
 	return grants, nil
 }
 
+// defaultTaskAdmission is the admission a task filed against target (nil:
+// no repository) starts at: the repository's default_admission, else the
+// deployment's, else standard.
 func defaultTaskAdmission(ctx context.Context, store *model.Store, target *model.RepoRef) (model.Admission, error) {
 	cfg, err := store.GetConfig(ctx)
 	if err != nil {
@@ -2490,6 +2534,36 @@ func defaultTaskAdmission(ctx context.Context, store *model.Store, target *model
 		}
 	}
 	return model.NormalizeAdmission(adm), nil
+}
+
+// proposalSeeding is the seeding source a director's proposal filed
+// against target (nil: no repository) is measured against
+// (model.ProposalSeeding, director-capabilities.spec.md §4.2): the two
+// layers defaultTaskGrants reads, kept apart and spelled as it spells
+// them, and catalogue judging proposal in its own context --
+// ui.Client.proposalSeeding's answer for the identical call filed live.
+func proposalSeeding(ctx context.Context, store *model.Store, target *model.RepoRef,
+	catalogue *model.CapabilityCatalogue, proposal model.Task) (*model.ProposalSeeding, error) {
+	cfg, err := store.GetConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seeding := &model.ProposalSeeding{Catalogue: catalogue, GrantContext: model.TaskGrantContext(proposal)}
+	if cfg != nil {
+		seeding.DeploymentDefaults = append([]string(nil), cfg.DefaultCapabilities...)
+	}
+	if target != nil {
+		repo := *target
+		seeding.Target = &repo
+		repoCfg, err := store.GetRepoConfig(ctx, *target)
+		if err != nil {
+			return nil, err
+		}
+		if repoCfg != nil {
+			seeding.RepoDefaults = append([]string(nil), repoCfg.DefaultCapabilities...)
+		}
+	}
+	return seeding, nil
 }
 
 // newestFirst is model.Config.NewestFirst, read fresh from the store --

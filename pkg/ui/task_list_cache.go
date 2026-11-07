@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -183,6 +184,11 @@ func (c *taskListCache) response(ctx context.Context, client *Client, repo strin
 		// an optimisation could not be applied. It is not logged either,
 		// because it would be logged on every poll of every tab for as
 		// long as the condition lasted.
+	}
+	// A dispatch condition changes every queued row's reason without a
+	// store write (dispatchConditionVersion), so it is part of the key.
+	if v := client.dispatchConditionVersion(); token != "" && v != 0 {
+		token = token + ":dc=" + strconv.FormatUint(v, 10)
 	}
 	key := taskListKey(view, repo)
 	var tasks []Task

@@ -307,6 +307,13 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	uiIAPIssuer := fs.String("ui-iap-issuer", "", "the issuer a signed assertion must carry; defaults to $GRAIN_IAP_ISSUER, then "+ui.GoogleIAPIssuer)
 	uiIAPKeysURL := fs.String("ui-iap-keys-url", "", "where the signing keys for those assertions are published (IAP's PEM map or a JWK set); "+
 		"defaults to $GRAIN_IAP_KEYS_URL, then "+ui.GoogleIAPCertURL)
+	uiRegistryIssuer := fs.String("ui-registry-issuer", "", "the exact issuer URL a signed X-Grain-Registry-Assertion must carry for the UI/API to accept "+
+		"the identity in it (e.g. \"https://grain.example.com\"); defaults to $GRAIN_REGISTRY_ISSUER. All three of -ui-registry-issuer, "+
+		"-ui-registry-audience, and -ui-registry-keys-url must be set to enable the \"registry\" IdentityVerifier")
+	uiRegistryAudience := fs.String("ui-registry-audience", "", "the single audience URL a signed X-Grain-Registry-Assertion must carry "+
+		"(e.g. \"https://<name>.<instance-domain>\"); defaults to $GRAIN_REGISTRY_AUDIENCE")
+	uiRegistryKeysURL := fs.String("ui-registry-keys-url", "", "where the registry's ES256 signing keys are published as a JWK set "+
+		"(e.g. \"https://grain.example.com/.well-known/jwks.json\"); defaults to $GRAIN_REGISTRY_KEYS_URL")
 	uiRequireIAP := fs.Bool("ui-require-iap", false, "accept the access code (bearer or grain_access cookie) only from loopback with no forwarding "+
 		"or proxy headers, and serve no \"Enter access code\" page, so network callers sign in through IAP alone (docs/access-code.md); "+
 		"needs -ui-iap-audience or $GRAIN_IAP_AUDIENCE. Defaults to $GRAIN_REQUIRE_IAP")
@@ -315,6 +322,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		"(or through a verifier that declares AccessCodeWins), and serve no \"Enter access code\" page (-ui-require-iap is an alias for -ui-require-verifier=iap). "+
 		"Defaults to $GRAIN_REQUIRE_VERIFIER")
 	uiAllowedPrincipals := fs.String("ui-allowed-principals", "", ui.AllowedPrincipalsUsage)
+	deploymentOwner := fs.String("deployment-owner", "", "human email address that owns this deployment for RBAC (IsDeploymentOwner) and holds an immutable grain/operator floor on the access allowlist regardless of the OS user the daemon runs as ($"+ui.DeploymentOwnerEnv+" when unset)")
+	uiCloudIdentityEndpoint := fs.String("ui-cloud-identity-endpoint", "", "resolve allowed group: entries against this Cloud Identity API base URL "+
+		"(a test stand-in) rather than "+ui.DefaultCloudIdentityEndpoint+"; defaults to $GRAIN_CLOUD_IDENTITY_ENDPOINT")
 	uiOpen := fs.Bool("ui-open", false, "open the UI in the system's default browser once it's listening")
 	actor := fs.String("as", "", "principal the UI/API attributes tasks and comments it creates to (defaults to the OS user)")
 	defaultTargetRepo := fs.String("default-target-repo", "", "owner/name a task created through the UI/API with no repo of its own targets")
@@ -366,13 +376,13 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		model.AgentFrameworkCodex+"\"")
 	runHelp := func(cli string) string {
 		return "where the " + cli + " CLI runs: \"container\" (a subprocess in the daemon's own container) or \"host\" " +
-			"(through grain hostd, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty " +
+			"(through the host agent, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty " +
 			"is container in a container and host on the bare machine. \"auto\" is accepted and ignored for one release"
 	}
 	claudeRun := fs.String("claude-run", "", runHelp("claude")+". claude also takes \"detached\": the image's claude, "+
-		"through grain hostd's claude-detached entry, so a daemon upgrade does not interrupt it")
+		"through the host agent's claude-detached entry, so a daemon upgrade does not interrupt it")
 	codexRun := fs.String("codex-run", "", runHelp("codex")+". codex also takes \"detached\": the image's codex, "+
-		"through grain hostd's codex-detached entry, so a daemon upgrade does not interrupt it")
+		"through the host agent's codex-detached entry, so a daemon upgrade does not interrupt it")
 	agyRun := fs.String("agy-run", "", runHelp("agy"))
 	// The per-run docker launcher these configured is gone (v2.3.0). They
 	// stay defined so a unit an older installer wrote still starts, and
@@ -380,19 +390,19 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	fs.String("cli-image", "", "deprecated and ignored: agent CLIs no longer run in a per-run container of an image")
 	fs.String("cli-image-file", "", "deprecated and ignored: agent CLIs no longer run in a per-run container of an image")
 	fs.String("cli-container-engine", "", "deprecated and ignored: agent CLIs no longer run in a per-run container of an image")
-	hostdSocket := fs.String("hostd-socket", "", "grain hostd's unix socket, for a daemon in a container whose host "+
-		"CLIs run through hostd; empty uses "+hostd.DefaultSocketPath+" when its directory is mounted into the container. "+
+	hostdSocket := fs.String("hostd-socket", "", "the host agent's unix socket, for a daemon in a container whose host "+
+		"CLIs run through the host agent; empty uses "+hostd.DefaultSocketPath+" when its directory is mounted into the container. "+
 		"Refused on Kubernetes, which has no host")
-	hostdTokenFile := fs.String("hostd-token-file", "", "deprecated, for one release: file holding a shared token a grain hostd on another machine dials in to "+
-		hostd.RemotePath+" with (grain hostd -server <this daemon's URL> -token-file ...), as the one hostd -hostd-token-name names: its host CLIs and run: host capability "+
-		"servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each hostd in the hostd registry (/api/hostds) instead, "+
+	hostdTokenFile := fs.String("hostd-token-file", "", "deprecated, for one release: file holding a shared token a host on another machine dials in to "+
+		hostd.RemotePath+" with (grain host -server <this daemon's URL> -token-file ...), as the one host -hostd-token-name names: its host CLIs and run: host capability "+
+		"servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each host in the host registry (/api/hostds) instead, "+
 		"which gives it a token of its own")
-	hostdReattachTimeout := fs.Duration("hostd-reattach-timeout", 15*time.Minute, "how long a run's agent CLI, running detached on a grain hostd whose "+
-		"connection drops, waits for that same hostd to reconnect before the run fails as an infrastructure failure (no strike against the task); "+
-		"re-attached in time, it carries on from where its output stood. Runs queued for a hostd that is not connected wait for it whatever this is. 0 fails at once")
-	hostdTokenName := fs.String("hostd-token-name", hostd.DefaultSharedName, "the hostd name a hostd dialing in with -hostd-token-file's shared token is known by")
-	hostdTokenOwner := fs.String("hostd-token-owner", "", "the owner of -hostd-token-name's hostd: the email or service account a hostd dialing in with the shared token "+
-		"through IAP (or another identity verifier's proxy) must be verified as. A remote hostd with no owner is refused; one over loopback is not")
+	hostdReattachTimeout := fs.Duration("hostd-reattach-timeout", 15*time.Minute, "how long a run's agent CLI, running detached on a host whose "+
+		"connection drops, waits for that same host to reconnect before the run fails as an infrastructure failure (no strike against the task); "+
+		"re-attached in time, it carries on from where its output stood. Runs queued for a host that is not connected wait for it whatever this is. 0 fails at once")
+	hostdTokenName := fs.String("hostd-token-name", hostd.DefaultSharedName, "the host name a host dialing in with -hostd-token-file's shared token is known by")
+	hostdTokenOwner := fs.String("hostd-token-owner", "", "the owner of -hostd-token-name's host: the email or service account a host dialing in with the shared token "+
+		"through IAP (or another identity verifier's proxy) must be verified as. A remote host with no owner is refused; one over loopback is not")
 	openAIAPIKeyFile := fs.String("openai-api-key-file", "", "file holding the OpenAI API key the agent "+
 		"authenticates as, passed to the codex subprocess as OPENAI_API_KEY. Optional, and the exact "+
 		"counterpart of the two files above: the UI stores one as the "+
@@ -543,6 +553,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			"A job's sandbox is built the way a run's is and given no credential beyond a read-only checkout of "+
 			"the one repository under test (pkg/ci, \"What a workflow file is trusted with\").")
 	grit := daemon.RegisterGritFlags(fs)
+	registryFlags := registerRegistryFlags(fs)
 
 	// The CI job cache's bounds (ci.DirCacheOptions). Seeds, like the CI
 	// history's four below and unlike what they were until
@@ -1123,6 +1134,11 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			*managementURL = env
 		}
 	}
+	if !passed["deployment-owner"] {
+		if env := strings.TrimSpace(os.Getenv(ui.DeploymentOwnerEnv)); env != "" {
+			*deploymentOwner = env
+		}
+	}
 	if !passed["object-store"] {
 		if env := strings.TrimSpace(os.Getenv("GRAIN_OBJECT_STORE")); env != "" {
 			*objectStoreURI = env
@@ -1238,9 +1254,14 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UiIAPAudience:           *uiIAPAudience,
 		UiIAPIssuer:             *uiIAPIssuer,
 		UiIAPKeysURL:            *uiIAPKeysURL,
+		UiRegistryIssuer:        *uiRegistryIssuer,
+		UiRegistryAudience:      *uiRegistryAudience,
+		UiRegistryKeysURL:       *uiRegistryKeysURL,
 		UiRequireVerifier:       strings.TrimSpace(*uiRequireVerifier),
 		UiRequireIAP:            *uiRequireIAP,
 		UiAllowedPrincipals:     ui.SplitAllowedPrincipals(*uiAllowedPrincipals),
+		DeploymentOwner:         strings.TrimSpace(*deploymentOwner),
+		UiCloudIdentityEndpoint: strings.TrimSpace(*uiCloudIdentityEndpoint),
 		GeminiAPIKeyFile:        *geminiAPIKeyFile,
 		MaxAgentTurns:           *maxAgentTurns,
 		AgyPath:                 *agyPath,
@@ -1340,6 +1361,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		K8sGranuleAccess:      *k8sGranuleAccess, K8sGranuleReattachTimeout: *k8sGranuleReattachTimeout, SandboxCPUs: *sandboxCPUs, SandboxMemoryMB: *sandboxMemoryMB, SandboxDiskGB: *sandboxDiskGB,
 	}
 	grit.Apply(&cfg)
+	registryFlags.apply(&cfg, passed)
 	if err = upgradeSource.apply(&cfg, passed); err != nil {
 		return cfg, fs, unknownFlags, err
 	}
@@ -1353,5 +1375,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 // checkConfig validates the flags parsed into cfg (daemon.CheckDaemonFlags plus
 // the CLI's own package-cache upstream syntax check).
 func checkConfig(cfg daemon.Config) error {
-	return daemon.CheckDaemonFlags(cfg, daemon.LocalSandboxes != nil, checkPackageCacheUpstreams)
+	if err := daemon.CheckDaemonFlags(cfg, daemon.LocalSandboxes != nil, checkPackageCacheUpstreams); err != nil {
+		return err
+	}
+	return checkRegistryConfig(cfg)
 }

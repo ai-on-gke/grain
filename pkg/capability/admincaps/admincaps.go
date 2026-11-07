@@ -24,21 +24,27 @@ package admincaps
 
 import (
 	"github.com/ai-on-gke/grain/pkg/capability"
-	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // TeamScoped is the capabilities that a team other than an admin team
-// used to hold scoped to its own work (grain/task-2555). Every grant of
-// them is now deployment-wide: self-debug reads every task and the whole
-// metrics report.
+// used to hold scoped to its own work (grain/task-2555), by capability
+// reference. Every grant of them is now deployment-wide: grain#source
+// (once self-debug, whose task and metrics readers are the api:self-debug
+// preset now) reads grain's own source and, deployment-wide, every
+// repository's CI and the whole of config://.
 var TeamScoped = []string{
-	selfdebug.CapabilityName,
+	model.GrainSourceRef,
 }
 
-// IsTeamScoped reports whether id is one of TeamScoped.
+// IsTeamScoped reports whether the grant id opens one of TeamScoped's
+// methods: recorded (grain#source={}), bare (grain#source), or the
+// retired bare self-debug that still grants it for one release.
 func IsTeamScoped(id string) bool {
 	for _, have := range TeamScoped {
+		if have == model.GrainSourceRef && model.IsGrainSourceGrant(id) {
+			return true
+		}
 		if have == id {
 			return true
 		}
@@ -47,13 +53,12 @@ func IsTeamScoped(id string) bool {
 }
 
 // Providers builds every host- or deployment-level provider that needs
-// no deployment configuration. gcp-key and package-publish are built by
+// no deployment configuration. Core's own are all retired onto capability
+// servers (self-debug, the last, onto api:self-debug and grain#source). gcp-key and package-publish are built by
 // the caller, which has their other settings. Every capability registered
 // with capability.RegisterProvider follows core's.
 func Providers() []model.CapabilityProvider {
-	providers := []model.CapabilityProvider{
-		selfdebug.NewWithConfig(selfdebug.Config{}),
-	}
+	var providers []model.CapabilityProvider
 	for _, r := range capability.Registered() {
 		providers = append(providers, r.New())
 	}

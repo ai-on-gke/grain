@@ -161,7 +161,9 @@ type CatalogueDefaults struct {
 }
 
 // CapabilityCatalogue is the whole of settings/capabilities.yml's
-// judgement. A nil catalogue judges nothing.
+// judgement. A nil catalogue judges nothing of its own; ValidateGrants
+// and Refusals still apply grain's built-in director floor
+// (director_floor.go) underneath it.
 type CapabilityCatalogue struct {
 	Defaults  CatalogueDefaults             `json:"defaults,omitempty"`
 	Servers   []CatalogueServer             `json:"servers,omitempty"`
@@ -194,6 +196,9 @@ type GrantVerdict struct {
 type GrantRefusal struct {
 	Grant  string
 	Reason string
+	// Builtin says the refusal is grain's own built-in floor
+	// (DirectorFloorRefusal), not a rule of settings/capabilities.yml.
+	Builtin bool
 }
 
 func (r GrantRefusal) Error() string { return r.Reason }
@@ -230,15 +235,20 @@ func TaskGrantContext(t Task) GrantContext {
 
 // ValidateGrants judges every grant in gc: the first refusal is returned
 // as a *GrantRefusal, and otherwise the verdict says which of them a
-// person has to approve. A nil catalogue admits everything.
+// person has to approve. Grain's built-in floor (DirectorFloorRefusal)
+// is applied first and binds whatever the catalogue says; past it, a nil
+// catalogue admits everything.
 func (c *CapabilityCatalogue) ValidateGrants(gc GrantContext) (GrantVerdict, error) {
 	var v GrantVerdict
-	if c == nil {
-		return v, nil
-	}
 	for _, g := range gc.Grants {
 		g = strings.TrimSpace(g)
 		if g == "" {
+			continue
+		}
+		if r := DirectorFloorRefusal(g, gc.Kind); r != nil {
+			return GrantVerdict{}, r
+		}
+		if c == nil {
 			continue
 		}
 		person, err := c.judge(g, gc)
@@ -254,13 +264,18 @@ func (c *CapabilityCatalogue) ValidateGrants(gc GrantContext) (GrantVerdict, err
 }
 
 // Refusals is ValidateGrants without stopping at the first: every grant
-// the catalogue refuses, in gc's order.
+// the catalogue (or grain's built-in floor) refuses, in gc's order.
 func (c *CapabilityCatalogue) Refusals(gc GrantContext) []GrantRefusal {
-	if c == nil {
-		return nil
-	}
 	var out []GrantRefusal
 	for _, g := range gc.Grants {
+		if r := DirectorFloorRefusal(g, gc.Kind); r != nil {
+			r.Grant = g
+			out = append(out, *r)
+			continue
+		}
+		if c == nil {
+			continue
+		}
 		if _, err := c.judge(strings.TrimSpace(g), gc); err != nil {
 			out = append(out, GrantRefusal{Grant: g, Reason: err.Error()})
 		}
@@ -404,6 +419,10 @@ func (c *CapabilityCatalogue) judgeRetiredInProcess(g string, gc GrantContext) (
 		sort.Strings(extra)
 		names = append(names, extra...)
 	}
+	if BootstrapSkillSetUnnamed(g) && !slices.Contains(names, "bootstrap-playbooks") {
+		names = append(names, "bootstrap-playbooks")
+		sort.Strings(names)
+	}
 	for _, legacy := range names {
 		entry, key, ok := c.inProcessEntry(legacy)
 		if !ok {
@@ -513,6 +532,9 @@ func retiredInProcessNames(g string) []string {
 			}
 		}
 	}
+	if IsBootstrapPlaybooksGrant(grant) && !slices.Contains(out, "bootstrap-playbooks") {
+		out = append(out, "bootstrap-playbooks")
+	}
 	sort.Strings(out)
 	return out
 }
@@ -618,6 +640,25 @@ func (c *CapabilityCatalogue) server(id string) (CatalogueServer, bool) {
 	for _, s := range c.Servers {
 		if s.ID == id || containsString(s.Aliases, id) {
 			return s, true
+		}
+	}
+	// servers.Registry implicitly aliases https://grain.dev/capabilities/skill
+	// to https://grain.dev/capabilities/config-map when skill is not configured
+	// as an independent server, even when ServerConfig.Aliases is empty. Bind
+	// both IDs in the catalogue so restrictions on either apply to grants
+	// spelled under the other.
+	switch id {
+	case SkillCapabilityServerID:
+		for _, s := range c.Servers {
+			if s.ID == ConfigMapCapabilityServerID {
+				return s, true
+			}
+		}
+	case ConfigMapCapabilityServerID:
+		for _, s := range c.Servers {
+			if s.ID == SkillCapabilityServerID {
+				return s, true
+			}
 		}
 	}
 	return CatalogueServer{}, false

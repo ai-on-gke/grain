@@ -278,7 +278,7 @@ test("run location offers host only where grain hostd is, and says why not", asy
   );
   await add.getByLabel("Run location").click();
   await expect(
-    page.getByRole("option", { name: /host \(through grain hostd\)/ }),
+    page.getByRole("option", { name: /host \(through the host agent\)/ }),
   ).toHaveAttribute("aria-disabled", "true");
 });
 
@@ -407,7 +407,7 @@ test("configures the built-in config-map server with config maps and secret maps
     .click();
   const cmCard = page.locator('[data-builtin="config-map"]');
   await expect(cmCard.getByTestId("capability-server-state")).toHaveText(
-    "needs configuring",
+    "attached",
   );
   await cmCard.getByRole("button", { name: "Edit server settings" }).click();
   const cmForm = cmCard.getByTestId("capability-server-config");

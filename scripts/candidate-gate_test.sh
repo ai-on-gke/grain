@@ -407,6 +407,9 @@ check "check-qualification: a foreign success between grain's failures is no ret
 CHECK_QUALIFICATION_APP=42 qualify "$green1" "$(checks_file q-c-appid actions:failure success)"
 check "check-qualification: CHECK_QUALIFICATION_APP may name the app by id" 0 \
   "PASS grain/release-qualification: passed" "Qualification: PASS"
+CHECK_QUALIFICATION_APP=42 qualify "$green1" "$(checks_file q-c-numslug 42:success)"
+check "check-qualification: an app id is never matched against another app's slug" 2 \
+  "IGNORED grain/release-qualification: 1 from 42, not 42" "Qualification: PENDING"
 CHECK_QUALIFICATION_APP='' qualify "$green1" "$(checks_file q-c-noapp success)"
 check "check-qualification: with no app configured no check run is trusted" 64 "CHECK_QUALIFICATION_APP is unset"
 lacks "check-qualification: an unconfigured gate never passes" "Qualification: PASS"

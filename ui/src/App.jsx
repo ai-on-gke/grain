@@ -60,6 +60,7 @@ import PageHeader, {
 import PhoneNav from "./components/PhoneNav.jsx";
 import InboxPage from "./components/InboxPage.jsx";
 import TaskList from "./components/TaskList.jsx";
+import { tasksLoadFailed } from "./components/ListPrimitives.jsx";
 import TaskBoard from "./components/TaskBoard.jsx";
 import GanttChart from "./components/GanttChart.jsx";
 import TaskTreeBoard from "./components/TaskTreeBoard.jsx";
@@ -357,6 +358,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // has, the empty `tasks` below is not "no tasks" but "not read yet",
   // and a page that would say nothing is waiting must not say it.
   const [tasksListed, setTasksListed] = useState(false);
+  const [tasksError, setTasksError] = useState(null);
   const closedTasks = useClosedTasks(tasksListed);
   const tasks = useMemo(
     () => mergeTaskLists(liveTasks, closedTasks.closed),
@@ -985,7 +987,19 @@ function AppContent({ onReload = () => window.location.reload() }) {
     // this tab does not do. There is nothing to set and nothing to
     // prune when it does -- the ids below would be the same ids -- so
     // the tick ends here.
-    const next = await api("/api/tasks", { poll: true });
+    let next;
+    try {
+      next = await api("/api/tasks", { poll: true });
+    } catch (err) {
+      setTasksError(
+        isUnreachable(err) && !err?.explained
+          ? unreachableReason(err)
+          : String(err?.message || err),
+      );
+      throw err;
+    }
+    setTasksError(null);
+    setTasksListed(true);
     if (next === UNCHANGED) return;
     // The array already held when this poll brought back the same tasks
     // (poll.js). It is the identity every view downstream is keyed on --
@@ -996,7 +1010,6 @@ function AppContent({ onReload = () => window.location.reload() }) {
     // endpoint's own bytes, this covers a change those views do not care
     // about.
     setLiveTasks((prev) => keepIfSame(prev, next));
-    setTasksListed(true);
     const ids = new Set(next.map((t) => String(t.id)));
     // A task that has dropped out of the live list has most likely
     // closed: ask for the newest closed page now rather than up to a
@@ -1015,6 +1028,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
       return kept.size === prev.size ? prev : kept;
     });
   }, [refreshClosed]);
+
+  const retryTasks = useCallback(() => {
+    refreshList().catch(showError);
+  }, [refreshList, showError]);
 
   // All three of these drop an open item the store no longer reports --
   // one deleted from its own pane, or a URL naming one that never
@@ -3079,6 +3096,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
       <TaskList
         landmark={landmark}
         tasks={list}
+        tasksLoaded={tasksListed}
+        tasksError={tasksError}
+        onRetry={retryTasks}
         stateFilter={filter}
         config={config}
         narrowing={narrowing}
@@ -3122,6 +3142,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
       <TaskBoard
         landmark={landmark}
         tasks={list}
+        tasksLoaded={tasksListed}
+        tasksError={tasksError}
+        onRetry={retryTasks}
         fixedColumns={columns}
         config={config}
         narrowing={narrowing}
@@ -3165,6 +3188,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
     <GanttChart
       landmark={landmark}
       tasks={list}
+      tasksLoaded={tasksListed}
+      tasksError={tasksError}
+      onRetry={retryTasks}
       config={config}
       narrowing={narrowing}
       onNarrow={narrow}
@@ -3182,6 +3208,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
       <TaskTreeBoard
         landmark={landmark}
         tasks={list}
+        tasksLoaded={tasksListed}
+        tasksError={tasksError}
+        onRetry={retryTasks}
         config={config}
         narrowing={narrowing}
         onNarrow={narrow}
@@ -3235,6 +3264,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
     <PanelBoard
       board={board}
       tasks={tasks}
+      tasksLoaded={tasksListed}
+      tasksError={tasksError}
+      onRetryTasks={retryTasks}
       config={config}
       narrowing={narrowing}
       onNarrow={narrow}
@@ -3454,6 +3486,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
       settingsSection={settingsSection}
       onSetView={navigateFromRail}
       tasks={tasks}
+      tasksLoaded={tasksListed}
+      tasksError={tasksError}
+      onRetryTasks={retryTasks}
       unseenClosed={closedTasks.unseen}
       notificationCount={notifications.length}
       schedules={schedules}
@@ -3784,7 +3819,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
                    flat list. */
                           <InboxPage
                             tasks={tasks}
-                            tasksLoaded={tasksListed}
+                            tasksLoaded={
+                              !tasksLoadFailed(tasks, tasksListed, tasksError)
+                            }
                             config={config}
                             onOpenTask={openTask}
                             onOpenConfigRepo={() => openSettings("config-repo")}

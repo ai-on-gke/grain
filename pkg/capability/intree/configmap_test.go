@@ -16,6 +16,7 @@ package intree
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -23,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/playbooks"
 )
 
 func TestConfigMapStartsUnconfiguredAndConfiguresMaps(t *testing.T) {
@@ -30,17 +32,58 @@ func TestConfigMapStartsUnconfiguredAndConfiguresMaps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Before configuration, it attaches with its configure schema and zero
-	// methods, so the registry marks the built-in needs-config.
+	// Before operator configuration, it attaches with its configure schema and
+	// the stateless config-map method serving the built-in bootstrap playbooks.
 	unconfigured, err := attachConfigured(t, s, nil, nil)
 	if err != nil {
 		t.Fatalf("unconfigured attach: %v", err)
 	}
-	if len(unconfigured.Methods) != 0 {
-		t.Errorf("unconfigured methods = %v, want empty", unconfigured.Methods)
+	if unconfigured.Methods["config-map"] == nil || unconfigured.Methods["config-map"].Releasable {
+		t.Fatalf("unconfigured methods = %v, want stateless config-map serving bootstrap", unconfigured.Methods)
 	}
 	if got := protocol.SecretFields(unconfigured.ConfigSchema); !reflect.DeepEqual(got, []string{"secret_values"}) {
 		t.Errorf("secret fields = %v, want [secret_values]", got)
+	}
+	// Implicit default selection (nil args) never hands out the built-in
+	// bootstrap playbooks unasked.
+	if implicit := mint(t, unconfigured, "config-map", "e0-1-0", nil); implicit.Status != protocol.StatusRefused {
+		t.Errorf("unconfigured implicit mint = %+v, want refused", implicit)
+	}
+	boot := mint(t, unconfigured, "config-map", "e0-2-0", map[string]any{"config_maps": []any{"bootstrap"}})
+	if boot.Status != protocol.StatusOK || len(boot.Placements) == 0 {
+		t.Fatalf("mint bootstrap = %+v", boot)
+	}
+	embeddedEntries, err := fs.ReadDir(playbooks.FS, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPlaybooks := 0
+	for _, de := range embeddedEntries {
+		if de.IsDir() || !strings.HasSuffix(de.Name(), ".md") {
+			continue
+		}
+		wantPlaybooks++
+		raw, err := fs.ReadFile(playbooks.FS, de.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := placement(t, boot, "/home/debian/.config-map/bootstrap/"+de.Name())
+		if p.Mode != "0644" || p.Content != string(raw) {
+			t.Errorf("bootstrap placement %s mode=%q len=%d, want 0644 len=%d", de.Name(), p.Mode, len(p.Content), len(raw))
+		}
+	}
+	if len(boot.Placements) != wantPlaybooks {
+		t.Errorf("bootstrap placements = %d, want %d", len(boot.Placements), wantPlaybooks)
+	}
+	for _, want := range []string{
+		"- config map bootstrap in /home/debian/.config-map/bootstrap:",
+		"gcp-capabilities.md (0644)",
+		"gke-sandbox-cluster.md (0644)",
+		"run_host_command",
+	} {
+		if !strings.Contains(boot.PromptSection, want) {
+			t.Errorf("bootstrap PromptSection missing %q:\n%s", want, boot.PromptSection)
+		}
 	}
 
 	s2, err := NewConfigMap(ConfigMapConfig{})
@@ -156,6 +199,56 @@ func TestConfigMapStartsUnconfiguredAndConfiguresMaps(t *testing.T) {
 	if _, err := protocol.ValidateArgs(ps.Methods["config-map"].ArgsSchema, map[string]any{"keys": []any{"app/nope"}}); err == nil {
 		t.Error("unknown key was accepted by ArgsSchema")
 	}
+	// Built-in bootstrap remains grantable alongside operator-configured maps.
+	bootConfigured := mint(t, ps, "config-map", "e1-7-0", map[string]any{"config_maps": []any{"bootstrap"}})
+	if bootConfigured.Status != protocol.StatusOK || len(bootConfigured.Placements) != wantPlaybooks {
+		t.Errorf("bootstrap on configured server = %+v (placements=%d, want %d)", bootConfigured, len(bootConfigured.Placements), wantPlaybooks)
+	}
+}
+
+func TestSkillServerDirBootstrapServesEmbeddedPlaybooks(t *testing.T) {
+	s, err := NewSkill(SkillConfig{Dir: "bootstrap"})
+	if err != nil {
+		t.Fatalf("NewSkill(Dir: bootstrap): %v", err)
+	}
+	ps := attach(t, s)
+	resp := mint(t, ps, "skill", "sk-boot-1", map[string]any{"skills": []any{"bootstrap"}})
+	if resp.Status != protocol.StatusOK {
+		t.Fatalf("mint skill bootstrap = %+v", resp)
+	}
+	if p := placement(t, resp, "/home/debian/.skills/bootstrap/SKILL.md"); !strings.Contains(p.Content, "gcp-capabilities.md") {
+		t.Errorf("SKILL.md = %q, want playbook index", p.Content)
+	}
+	raw, err := fs.ReadFile(playbooks.FS, "gcp-capabilities.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := placement(t, resp, "/home/debian/.skills/bootstrap/gcp-capabilities.md"); p.Content != string(raw) {
+		t.Errorf("gcp-capabilities.md len = %d, want %d", len(p.Content), len(raw))
+	}
+
+	// EnsureBuiltins migrates `grain capability skill -dir bootstrap` to
+	// `grain capability config-map -dir bootstrap`; NewConfigMap must still
+	// expose #skill for the embedded bootstrap playbooks without a ./bootstrap
+	// directory on disk, while keeping #config-map's implicit default refused.
+	cm, err := NewConfigMap(ConfigMapConfig{Dir: "bootstrap"})
+	if err != nil {
+		t.Fatalf("NewConfigMap(Dir: bootstrap): %v", err)
+	}
+	cmPS, err := attachConfigured(t, cm, nil, nil)
+	if err != nil {
+		t.Fatalf("attach NewConfigMap(Dir: bootstrap): %v", err)
+	}
+	if cmPS.Methods["config-map"] == nil || cmPS.Methods["skill"] == nil {
+		t.Fatalf("NewConfigMap(Dir: bootstrap) methods = %v, want both config-map and skill", cmPS.Methods)
+	}
+	if implicit := mint(t, cmPS, "config-map", "cm-boot-implicit", nil); implicit.Status != protocol.StatusRefused {
+		t.Errorf("NewConfigMap(Dir: bootstrap) implicit config-map mint = %+v, want refused", implicit)
+	}
+	cmSkillResp := mint(t, cmPS, "skill", "cm-boot-sk-1", map[string]any{"skills": []any{"bootstrap"}})
+	if cmSkillResp.Status != protocol.StatusOK || placement(t, cmSkillResp, "/home/debian/.skills/bootstrap/SKILL.md").Content == "" {
+		t.Errorf("NewConfigMap(Dir: bootstrap) skill mint = %+v", cmSkillResp)
+	}
 }
 
 func placementPaths(r *protocol.MintResponse) []string {
@@ -179,6 +272,14 @@ func TestConfigMapValidationAndReservedPaths(t *testing.T) {
 		"invalid name": {
 			config: map[string]any{"config_maps": []any{cm("../bad", map[string]any{"f": file("x")})}},
 			want:   "does not match",
+		},
+		"reserved bootstrap name": {
+			config: map[string]any{"config_maps": []any{cm("bootstrap", map[string]any{"f": file("x")})}},
+			want:   "reserved for grain's built-in bootstrap playbooks",
+		},
+		"path colliding with built-in bootstrap": {
+			config: map[string]any{"config_maps": []any{map[string]any{"name": "other", "dir": "/home/debian/.config-map/bootstrap", "data": map[string]any{"gcp-capabilities.md": file("x")}}}},
+			want:   "already placed by bootstrap/gcp-capabilities.md",
 		},
 		"key with slash": {
 			config: map[string]any{"config_maps": []any{cm("a", map[string]any{"sub/f": file("x")})}},
@@ -328,5 +429,35 @@ func TestConfigMapSupportsOptionalDirFallback(t *testing.T) {
 	resp := mint(t, ps, "config-map", "e1-1-0", nil)
 	if len(resp.Placements) != 1 || resp.Placements[0].Path != "/home/debian/.skills/alpha/SKILL.md" {
 		t.Errorf("mint config-map from -dir = %+v", resp)
+	}
+}
+
+func TestNewEmbeddedBootstrapServerServesConfigMapAndSkill(t *testing.T) {
+	s, err := NewEmbeddedBootstrapServer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps := attach(t, s)
+	if ps.Methods["config-map"] == nil || ps.Methods["skill"] == nil {
+		t.Fatalf("methods = %v, want both config-map and skill", ps.Methods)
+	}
+	if implicit := mint(t, ps, "config-map", "e0-1-0", nil); implicit.Status != protocol.StatusRefused {
+		t.Errorf("implicit config-map mint = %+v, want refused", implicit)
+	}
+	embedded, err := EmbeddedBootstrapPlacements()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmResp := mint(t, ps, "config-map", "e0-2-0", map[string]any{"config_maps": []any{"bootstrap"}})
+	skResp := mint(t, ps, "skill", "e0-3-0", map[string]any{"skills": []any{"bootstrap"}})
+	if cmResp.Status != protocol.StatusOK || skResp.Status != protocol.StatusOK {
+		t.Fatalf("mint responses = %+v / %+v", cmResp, skResp)
+	}
+	got := map[string]string{}
+	for _, pl := range append(cmResp.Placements, skResp.Placements...) {
+		got[pl.Path] = pl.Content
+	}
+	if !reflect.DeepEqual(got, embedded) {
+		t.Errorf("minted paths = %d, want exact EmbeddedBootstrapPlacements (%d)", len(got), len(embedded))
 	}
 }

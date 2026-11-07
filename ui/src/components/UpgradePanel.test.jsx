@@ -771,7 +771,7 @@ describe("UpgradePanel", () => {
     const warning = await screen.findByText(/4 runs are in flight/);
     expect(warning).toHaveTextContent(/3 would be lost \(claude 2, setup 1\)/);
     expect(warning).toHaveTextContent(
-      /1 is in a run host or grain hostd and would be adopted/,
+      /1 is in a run host or the host agent and would be adopted/,
     );
   });
 

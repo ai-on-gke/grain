@@ -118,7 +118,7 @@ ordinary work, and it passes every pipeline pause except an upgrade's own hold.
 ### What can still hold a session, and how to see it
 
 A session needs an agent to run on. When every connection that could serve
-its model is paused after a usage limit, disabled, or draining for a hostd
+its model is paused after a usage limit, disabled, or draining for a host
 upgrade, the model-availability check refuses it as it would any task. On
 2026-10-31 that is what held session 2174 for 16 minutes, not the budget.
 Each refusal is now diagnosable:

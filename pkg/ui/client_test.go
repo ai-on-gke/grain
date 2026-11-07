@@ -326,8 +326,8 @@ func TestAttachingTheMissingCapabilityStopsTheTaskSayingItIsWaiting(t *testing.T
 	c, store, ctx := testClient(t)
 	task := create(t, c, ctx)
 	if err := store.SetGrantWait(ctx, model.GrantWait{
-		TaskID: task.ID, Capability: "self-debug",
-		Resource: "self-debug", WaitingAt: baseTime,
+		TaskID: task.ID, Capability: "read-issues",
+		Resource: "read-issues", WaitingAt: baseTime,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +339,7 @@ func TestAttachingTheMissingCapabilityStopsTheTaskSayingItIsWaiting(t *testing.T
 		t.Fatal("detail says nothing while the task is parked for a missing grant")
 	}
 
-	if err := c.SetCapability(ctx, task.ID, "self-debug", true); err != nil {
+	if err := c.SetCapability(ctx, task.ID, "read-issues", true); err != nil {
 		t.Fatalf("attaching self-debug: %v", err)
 	}
 
@@ -3418,6 +3418,46 @@ func TestStop(t *testing.T) {
 	}
 	if comments[len(comments)-1].Body != "Turn stopped by user" {
 		t.Errorf("last comment = %q, want 'Turn stopped by user'", comments[len(comments)-1].Body)
+	}
+}
+
+type lateRegisteringTaskCanceller struct {
+	calls int
+}
+
+func (l *lateRegisteringTaskCanceller) CancelTask(_ context.Context, _ string) bool {
+	l.calls++
+	// Misses the first check (before the run registered its canceller), then
+	// succeeds once Stop re-checks after finishing the open run row.
+	return l.calls >= 2
+}
+
+func TestStopReachesRunRegisteredDuringFinishRun(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	task := create(t, c, ctx)
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	if err := store.StartRun(ctx, model.Run{
+		ID: task.ID + "-1", TaskID: task.ID, Attempt: 1, StartedAt: now,
+	}, model.Limits{}); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	canceller := &lateRegisteringTaskCanceller{}
+	c.Config.TaskCanceller = canceller
+
+	if err := c.Stop(ctx, task.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if canceller.calls != 2 {
+		t.Fatalf("CancelTask calls = %d, want 2 (before and after FinishRun)", canceller.calls)
+	}
+	runs, err := store.Runs(ctx, task.ID)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("Runs: %v, len = %d", err, len(runs))
+	}
+	if runs[0].FinishedAt == nil || runs[0].Outcome != "cancelled" || runs[0].Detail != model.TurnStoppedDetail {
+		t.Fatalf("run = %+v, want finished cancelled/%q", runs[0], model.TurnStoppedDetail)
 	}
 }
 

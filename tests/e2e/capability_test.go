@@ -24,7 +24,7 @@
 // the real gcpkey/geminikey providers -- those need real GCP/Gemini
 // credentials this sandbox should not assume it has. It is attached to the
 // task through the real CLI's `capability <id> <cap> attach`, under the one
-// capability ID (self-debug) cmd/grain/main.go's ui.OfferedCapabilities
+// capability ID (read-issues) cmd/grain/main.go's ui.OfferedCapabilities
 // allow-list accepts that needs no such credential, exactly the way an
 // operator would toggle it on -- the orchestrator.Config.Capabilities
 // registry that actually resolves and materializes it, by contrast, is
@@ -154,7 +154,7 @@ func TestCLIAttachedCapabilityIsMaterializedAppliedAndRevokedThroughRunCycle(t *
 
 	// Step 1: file the task, then attach a capability to it, both through
 	// the real CLI binary -- not a seeded store row and not a hand-built
-	// Grant -- the way an operator actually would. self-debug is the
+	// Grant -- the way an operator actually would. read-issues is the
 	// capability ID because it is on cmd/grain/main.go's own
 	// ui.OfferedCapabilities allow-list and needs no real credential; the
 	// registry that actually resolves and materializes it below is this
@@ -176,7 +176,7 @@ func TestCLIAttachedCapabilityIsMaterializedAppliedAndRevokedThroughRunCycle(t *
 		t.Fatalf("grain create did not return a task id: %s", created)
 	}
 
-	const capabilityID = "self-debug"
+	const capabilityID = "read-issues"
 	attached := runCLIStore(t, bin, storeDir, "-json", "capability", task.ID, capabilityID, "attach")
 	var afterAttach ui.Task
 	if err := json.Unmarshal([]byte(attached), &afterAttach); err != nil {
@@ -201,7 +201,7 @@ func TestCLIAttachedCapabilityIsMaterializedAppliedAndRevokedThroughRunCycle(t *
 	remote := "http://" + githubHost + "/" + owner + "/" + repoName + ".git"
 	sandboxes := credentialed(t, remote)
 
-	const placementPath = "/secrets/self-debug-token"
+	const placementPath = "/secrets/read-issues-token"
 	const placementContent = "sh-sh-sh-e2e"
 	provider := &testCapabilityProvider{name: capabilityID, path: placementPath, content: placementContent}
 
