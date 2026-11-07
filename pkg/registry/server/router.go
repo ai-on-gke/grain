@@ -30,6 +30,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/registry/api"
 	"github.com/ai-on-gke/grain/pkg/registry/store"
+	"github.com/ai-on-gke/grain/pkg/tunnel/mux"
 	"github.com/ai-on-gke/grain/pkg/webauth"
 )
 
@@ -158,6 +159,12 @@ type Router struct {
 	activeTunnels  map[string]*ActiveTunnel
 	nextLocalEpoch atomic.Int64
 
+	// handshakes tracks /connect handshakes that have acquired their session
+	// in PostgreSQL but not yet registered their ActiveTunnel (see
+	// beginHandshake).
+	handshakesMu sync.Mutex
+	handshakes   map[string]*pendingHandshake
+
 	stopOnce sync.Once
 	stopCh   chan struct{}
 	draining atomic.Bool
@@ -227,6 +234,7 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 		peerHTTPTransport:     opts.PeerHTTPTransport,
 		nowFn:                 time.Now,
 		activeTunnels:         make(map[string]*ActiveTunnel),
+		handshakes:            make(map[string]*pendingHandshake),
 		stopCh:                make(chan struct{}),
 	}
 	return rt, nil
@@ -922,7 +930,7 @@ func (rt *Router) routeInstanceEntry(w http.ResponseWriter, r *http.Request, ent
 func (rt *Router) routeConnectedEntry(w http.ResponseWriter, r *http.Request, entry *store.EntryRow, isManager bool, graceDeadline time.Time) {
 	// 1. Check local active tunnel first (1 hop).
 	if local := rt.GetLocalTunnel(entry.Name); local != nil {
-		rt.serveLocalTunnel(w, r, entry, isManager, local)
+		rt.serveLocalTunnel(w, r, entry, isManager, local, graceDeadline)
 		return
 	}
 
@@ -948,7 +956,38 @@ func (rt *Router) routeConnectedEntry(w http.ResponseWriter, r *http.Request, en
 	rt.handleOfflineOrWait(w, r, entry, isManager, graceDeadline)
 }
 
-func (rt *Router) serveLocalTunnel(w http.ResponseWriter, r *http.Request, entry *store.EntryRow, isManager bool, local *ActiveTunnel) {
+// serveLocalTunnel proxies a request over local, the tunnel this replica holds
+// for entry.
+//
+// The tunnel can go between routing picking it and the request reaching it:
+// a SIGTERM drain, a newer session superseding it, or the grain hanging up.
+// That is the moment a rolling restart is made of -- the draining replica lets
+// go of the tunnel and the grain redials onto another replica -- so a request
+// caught in it is handed to reconnect_grace to follow the tunnel, exactly as a
+// request that arrives a moment later and finds no local tunnel is, rather
+// than answered 503. The stream is opened before the request is proxied so
+// that a request whose stream never opened is known not to have reached the
+// grain, and can be handed off whatever its method; one whose tunnel went
+// mid-request is handed off only when it is safe to replay (the same rule
+// forwardToPeer applies to a peer that reports its tunnel gone).
+func (rt *Router) serveLocalTunnel(w http.ResponseWriter, r *http.Request, entry *store.EntryRow, isManager bool, local *ActiveTunnel, graceDeadline time.Time) {
+	stream, err := local.OpenStream(r.Context())
+	if err != nil {
+		if local.Gone() || errors.Is(err, mux.ErrSessionClosed) {
+			rt.handOffGoneLocalTunnel(w, r, entry, isManager, local, graceDeadline)
+			return
+		}
+		handleProxyError(w, r, err)
+		return
+	}
+	pre := &preopenedStream{conn: stream}
+	defer func() {
+		if c := pre.take(); c != nil {
+			_ = c.Close()
+		}
+	}()
+	r = r.WithContext(context.WithValue(r.Context(), preopenedStreamKey{}, pre))
+
 	origHost := r.Host
 	if origHost == "" {
 		origHost = entry.Name + "." + rt.opts.InstanceDomain
@@ -959,7 +998,11 @@ func (rt *Router) serveLocalTunnel(w http.ResponseWriter, r *http.Request, entry
 	}
 	proxy := NewInstanceReverseProxy(targetURL, origHost, local.Transport())
 	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
-		if local.IsClosed() || local.IsSuperseded() {
+		if local.Gone() {
+			if isReplayableRequest(r) {
+				rt.handOffGoneLocalTunnel(rw, r, entry, isManager, local, graceDeadline)
+				return
+			}
 			tc, _ := rt.tunnelCache.Get(entry.Name)
 			WriteOfflineConnectedState(rw, req, rt.enrichOfflineEntry(req.Context(), entry), tc, rt.now(), isManager)
 			return
@@ -967,6 +1010,36 @@ func (rt *Router) serveLocalTunnel(w http.ResponseWriter, r *http.Request, entry
 		handleProxyError(rw, req, err)
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+// handOffGoneLocalTunnel routes a request whose local tunnel went before it
+// could be served. The tunnel cache is told this replica no longer holds the
+// session -- cleanupActiveTunnel does the same once the lifecycle goroutine
+// notices, but the request should not wait on that -- so routing either
+// forwards to the replica that holds a newer session or waits in
+// reconnect_grace for the grain to redial.
+func (rt *Router) handOffGoneLocalTunnel(w http.ResponseWriter, r *http.Request, entry *store.EntryRow, isManager bool, local *ActiveTunnel, graceDeadline time.Time) {
+	reason := local.CloseReason()
+	if reason == "" {
+		reason = "disconnected"
+	}
+	if tc, ok := rt.tunnelCache.Get(entry.Name); !ok || tc.SessionEpoch <= 0 || (tc.ReplicaID == rt.replicaID && tc.SessionEpoch <= local.SessionEpoch) {
+		rt.tunnelCache.MarkDisconnected(entry.Name, local.SessionEpoch, rt.now(), reason)
+	}
+	if rt.GetLocalTunnel(entry.Name) == local {
+		// The mux is mid-close and does not read as gone yet; routing again
+		// would pick the same tunnel, so wait in reconnect_grace instead.
+		rt.handleOfflineOrWait(w, r, entry, isManager, graceDeadline)
+		return
+	}
+	rt.routeConnectedEntry(w, r, entry, isManager, graceDeadline)
+}
+
+// isReplayableRequest reports whether r can be sent again after a tunnel
+// failed under it: it has no body, or its method is one that does not change
+// state.
+func isReplayableRequest(r *http.Request) bool {
+	return r.Body == nil || r.Body == http.NoBody || r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions
 }
 
 // handleOfflineOrWait holds a request for an offline connected entry until its
