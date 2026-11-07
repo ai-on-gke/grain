@@ -202,6 +202,14 @@ run bash "$assets" --dry-run train-tag v3.5.0-pending
 check "a pushed -pending tag publishes vX.Y.Z-pending with version vX.Y.Z" \
   '[ "$status" = 0 ] && grep -q "published v3.5.0-pending" <<< "$out" && [ "$(jq -r .version "$m")" = v3.5.0 ]'
 run bash "$assets" --dry-run train-tag v3.5.0-rc.2-discarded
+check "train-tag refuses a marker tag nobody pushed (publishing it would create the tag)" \
+  '[ "$status" != 0 ] && grep -q "not a tag the release train has pushed" <<< "$out" && ! grep -q "published" <<< "$out"'
+run bash "$assets" --dry-run train-tag v3.4.0-retracted
+check "train-tag refuses an unpushed -retracted marker" \
+  '[ "$status" != 0 ] && grep -q "not a tag the release train has pushed" <<< "$out" && ! grep -q "published" <<< "$out"'
+git tag -a v3.5.0-rc.2-discarded -m discarded "$commit"
+git push -q origin v3.5.0-rc.2-discarded
+run bash "$assets" --dry-run train-tag v3.5.0-rc.2-discarded
 check "a pushed -discarded tag publishes the discarded marker" '[ "$status" = 0 ] && grep -q "published v3.5.0-rc.2-discarded" <<< "$out"'
 for promoted in v3.4.0 latest; do
   run bash "$assets" --dry-run train-tag "$promoted"
@@ -233,6 +241,82 @@ check "a RELEASE_RETAIN_SHA that is not a number fails" '[ "$status" != 0 ] && g
 
 run bash "$assets" load
 check "load checks every image ID the manifest names" '[ "$status" = 0 ] && [ "$(grep -c "^release-assets.sh: loaded" <<< "$out")" = 3 ]'
+
+# Against a fake GitHub API (a curl on PATH that answers from the URL):
+# prune and publish read every manifest they act on through the API, and
+# one they cannot read stops them before they write anything.
+mkdir -p "$work/fakeapi"
+cat > "$work/fakeapi/curl" <<'EOF'
+#!/usr/bin/env bash
+out=/dev/null method=GET url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift ;;
+    -X) method="$2"; shift ;;
+    -w | -H | --data-binary | -T) shift ;;
+    -*) ;;
+    *) url="$1" ;;
+  esac
+  shift
+done
+echo "$method $url" >> "$FAKE_LOG"
+case "$method $url" in
+  "GET "*"/releases?per_page=100&page=1")
+    cat > "$out" <<JSON
+[{"created_at":"2026-11-03T00:00:00Z","id":3,"tag_name":"sha-cccccccccccc","assets":[{"id":30,"name":"images.json"}]},
+ {"created_at":"2026-11-02T00:00:00Z","id":2,"tag_name":"sha-bbbbbbbbbbbb","assets":[{"id":20,"name":"images.json"}]},
+ {"created_at":"2026-11-01T00:00:00Z","id":1,"tag_name":"sha-aaaaaaaaaaaa","assets":[{"id":10,"name":"images.json"}]},
+ {"created_at":"2026-10-30T00:00:00Z","id":4,"tag_name":"sha-dddddddddddd","assets":[{"id":40,"name":"images.json"}]},
+ {"created_at":"2026-11-01T00:00:00Z","id":9,"tag_name":"channel-main","assets":[{"id":90,"name":"images.json"}]},
+ {"created_at":"2026-11-01T00:00:00Z","id":8,"tag_name":"channel-candidate","assets":[{"id":80,"name":"${FAKE_CANDIDATE_MANIFEST:-images.json}"}]}]
+JSON
+    printf 200 ;;
+  "GET "*"/releases/assets/90")
+    if [ "${FAKE_MANIFEST_STATUS:-200}" = 200 ]; then
+      echo '{"schema":2,"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","images":{"grain":{"release":"sha-aaaaaaaaaaaa"}}}' > "$out"
+    else
+      echo '{"message":"Not Found"}' > "$out"
+    fi
+    printf '%s' "${FAKE_MANIFEST_STATUS:-200}" ;;
+  "GET "*"/releases/assets/80")
+    echo '{"schema":2,"images":{"grain":{"release":"sha-dddddddddddd"}}}' > "$out"
+    printf 200 ;;
+  "GET "*"/releases/tags/channel-main")
+    echo '{"id":9,"upload_url":"https://uploads.example/repos/x/releases/9/assets{?name,label}"}' > "$out"
+    printf 200 ;;
+  "GET "*"/releases/tags/sha-"*)
+    echo '{"id":5,"upload_url":"https://uploads.example/repos/x/releases/5/assets{?name,label}"}' > "$out"
+    printf 200 ;;
+  "GET "*"/releases/9/assets?"*)
+    echo '[{"id":90,"name":"images.json"}]' > "$out"
+    printf 200 ;;
+  "GET "*"/releases/5/assets?"*)
+    jq -c '[.images[] | .asset, .asset + ".sha256"] | to_entries | map({id: (.key + 100), name: .value})' "$FAKE_MANIFEST" > "$out"
+    printf 200 ;;
+  "DELETE "*) echo '' > "$out"; printf 204 ;;
+  *) echo "{}" > "$out"; printf 404 ;;
+esac
+EOF
+chmod +x "$work/fakeapi/curl"
+export FAKE_LOG="$work/fakeapi/log" FAKE_MANIFEST="$RELEASE_ASSETS_DIR/images.json"
+fake() { : > "$FAKE_LOG"; run env PATH="$work/fakeapi:$PATH" GITHUB_TOKEN=fake RELEASE_RETAIN_SHA=1 "$@"; }
+
+fake FAKE_MANIFEST_STATUS=404 bash "$assets" prune
+check "prune deletes nothing when a channel's manifest cannot be read" \
+  '[ "$status" != 0 ] && grep -q "pruning nothing" <<< "$out" && ! grep -q "^DELETE" "$FAKE_LOG"'
+fake bash "$assets" prune
+check "prune keeps the newest and every holder pointed at, and deletes the rest" \
+  '[ "$status" = 0 ] && grep -q "keeping sha-aaaaaaaaaaaa" <<< "$out" && grep -q "keeping sha-dddddddddddd" <<< "$out" &&
+   grep -q "pruned sha-bbbbbbbbbbbb" <<< "$out" && [ "$(grep -c "^DELETE" "$FAKE_LOG")" = 2 ] &&
+   ! grep -qE "^DELETE .*/releases/(1|3|4|8|9)$" "$FAKE_LOG"'
+fake FAKE_CANDIDATE_MANIFEST=images.json.next bash "$assets" prune
+check "prune keeps a holder only a channel's mid-swap images.json.next points at" \
+  '[ "$status" = 0 ] && grep -q "keeping sha-dddddddddddd" <<< "$out" && ! grep -qE "^DELETE .*/releases/4$" "$FAKE_LOG"'
+
+fake FAKE_MANIFEST_STATUS=404 bash "$assets" publish channel-main
+check "publish refuses to move a channel whose manifest it cannot read" \
+  '[ "$status" != 0 ] && grep -q "could not read channel-main" <<< "$out" &&
+   ! grep -qE "^(POST|PATCH|DELETE) " "$FAKE_LOG"'
 
 echo "$((cases - failures)) of $cases passed"
 [ "$failures" = 0 ]

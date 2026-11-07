@@ -490,6 +490,17 @@ type Config struct {
 	// another machine dialing in to /api/hostd/connect (hostd.Remote,
 	// which checks the hostd token itself); nil refuses them.
 	HostdRemote http.Handler
+	// LocalHostdLogins, when set, is the agent CLI logins on the machine
+	// of the co-located grain hostd (model.LocalHostd), from its hello,
+	// and whether it said: what the host pickers show beside "local". A
+	// dialing-in hostd's come with its session (hostd.RemotePeer.Logins).
+	LocalHostdLogins func(ctx context.Context) ([]string, bool)
+	// AmbientNeedsHost, when set, reports whether a connection of
+	// framework would start its CLI through grain hostd, with stored as
+	// Settings -> Models' run locations: where it would, a connection
+	// with ambient credentials has to name its host
+	// (model.CheckAmbientPlacement). Nil refuses no ambient connection.
+	AmbientNeedsHost func(framework string, stored map[string]model.CLIRunSetting) bool
 	// Upgrader is set only when this deployment was told how it
 	// upgrades itself: which image to pull per branch
 	// (pkg/cli/daemon.go's -upgrade-image, the shape scripts/setup.sh
@@ -1157,6 +1168,12 @@ type Config struct {
 	DBDSN string
 	// DataDir is the root data directory of the grain installation.
 	DataDir string
+	// ReleaseApprovalDir is where the release-approval signing key
+	// (pkg/releaseapproval.KeyFile) is kept, when it is not DataDir: the
+	// demo, which has no data directory, keeps one in its throwaway
+	// store's directory so an Inbox Approve over -github-sim can sign
+	// its record.
+	ReleaseApprovalDir string
 	// SourceDB is the raw *sql.DB backing this store, which a task's
 	// database access queries (task_db.go).
 	SourceDB *sql.DB

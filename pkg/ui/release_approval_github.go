@@ -93,16 +93,13 @@ func (c *Client) releaseForge() (github.ReleaseTagReader, github.WorkflowDispatc
 }
 
 // publishesFromGitHub reports whether repo's releases are GitHub
-// Actions': its effective ci_mode is github.
+// Actions' (model.Store.ReleasesFromGitHubActions): its ci_mode is
+// github, or it set none and grain CI is not on for it.
 func (c *Client) publishesFromGitHub(ctx context.Context, repo model.RepoRef) (bool, error) {
 	if c.Store == nil {
 		return false, nil
 	}
-	eff, err := c.Store.EffectiveRepoConfig(ctx, repo)
-	if err != nil {
-		return false, err
-	}
-	return eff.CIMode == model.CIModeGitHub, nil
+	return c.Store.ReleasesFromGitHubActions(ctx, repo)
 }
 
 // dispatchGitHubRelease signs approver's answer about version and
@@ -138,7 +135,7 @@ func (c *Client) dispatchGitHubRelease(ctx context.Context, repo model.RepoRef, 
 	if commit == "" {
 		return ReleaseDispatch{}, &NotFoundError{ID: version, message: fmt.Sprintf("%s is not pending: %s has no %s-pending tag", version, repo, version)}
 	}
-	signer, err := releaseapproval.LoadSigner(c.Config.DataDir)
+	signer, err := releaseapproval.LoadSigner(c.releaseApprovalDir())
 	if err != nil {
 		return ReleaseDispatch{}, err
 	}
@@ -197,7 +194,7 @@ func (c *Client) dispatchGitHubRollback(ctx context.Context, repo model.RepoRef,
 	if commit == "" {
 		return ReleaseDispatch{}, &NotFoundError{ID: version, message: fmt.Sprintf("%s is not a release: %s has no %s tag", version, repo, version)}
 	}
-	signer, err := releaseapproval.LoadSigner(c.Config.DataDir)
+	signer, err := releaseapproval.LoadSigner(c.releaseApprovalDir())
 	if err != nil {
 		return ReleaseDispatch{}, err
 	}
@@ -233,7 +230,7 @@ func (c *Client) dispatchGitHubRollback(ctx context.Context, repo model.RepoRef,
 // Inbox approval with: the value for the repository variable
 // GRAIN_RELEASE_APPROVAL_KEY.
 func (c *Client) ReleaseApprovalKey(context.Context) (string, error) {
-	signer, err := releaseapproval.LoadSigner(c.Config.DataDir)
+	signer, err := releaseapproval.LoadSigner(c.releaseApprovalDir())
 	if err != nil {
 		return "", err
 	}
@@ -247,4 +244,13 @@ func (s *Server) handleReleaseApprovalKey(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"variable": "GRAIN_RELEASE_APPROVAL_KEY", "publicKey": key})
+}
+
+// releaseApprovalDir is the directory the deployment's signing key is
+// kept in: Config.ReleaseApprovalDir, else its data directory.
+func (c *Client) releaseApprovalDir() string {
+	if c.Config.ReleaseApprovalDir != "" {
+		return c.Config.ReleaseApprovalDir
+	}
+	return c.Config.DataDir
 }

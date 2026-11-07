@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v19"
+const Version = "trust-boundary/v21"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +81,21 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v21 adds what release assets brought onto the boundary (task 2990,
+// reviewed by task 3039): scripts/release-assets.sh, which publishes,
+// re-points and prunes every release's images with a contents: write
+// token, and .github/workflows/release-train-assets.yml, which runs it on
+// the release train's tag pushes (release-machinery); and
+// scripts/install-grain.sh, which loads a release's image and installs
+// the binary out of it (setup-scripts).
+//
+// v20 adds the external-agent owner-trust policy and the gma_ bearer
+// token model and lifecycle handlers (pkg/model/owner_trust.go,
+// pkg/model/external_agent_token.go, and pkg/ui/external_agents.go) to
+// auth-routes (task 3026): whose external agents skip a person's
+// approval on an unapproved filing, and gma_ token scope resolution,
+// ownership, authentication, issuance and rotation.
 //
 // v19 adds the embedded bootstrap playbooks moved out of pkg/capability/
 // (pkg/playbooks/, task 3148) and the capability reference/policy,
@@ -249,6 +264,12 @@ var Categories = []Category{
 			// the deny/includes resolution every role and every agent's
 			// api:<set> grant expands through.
 			"pkg/model/api_scope_set.go",
+			// Which external-agent owners skip a person's approval on an
+			// unapproved filing (OwnerTrusted, OwnerTrustedForTask), and
+			// gma_ bearer token scope resolution, ownership, authentication,
+			// issuance and rotation.
+			"pkg/model/owner_trust.go", "pkg/model/external_agent_token.go",
+			"pkg/ui/external_agents.go",
 			// Which repositories' parked questions, secret requests,
 			// proposals and notifications a gma_ token reads through
 			// GET /api/inbox (inboxReadable), and its replies (CheckReply).
@@ -380,6 +401,10 @@ var Categories = []Category{
 			// The rc's Actions housekeeping: re-running qualification jobs
 			// and cancelling a dropped rc's runs.
 			"scripts/release-train-actions.sh", ".github/workflows/rc-qualification.yml",
+			// Release assets (docs/release-assets.md): the publisher every
+			// assets job runs with contents: write, and the workflow that
+			// runs it on the release train's tag pushes.
+			"scripts/release-assets.sh", ".github/workflows/release-train-assets.yml",
 			".grain/workflows/release.yml", ".github/workflows/release.yml",
 			".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 			".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
@@ -449,6 +474,8 @@ var Categories = []Category{
 		Description: "setup scripts run with the deployment's own privileges",
 		files: []string{
 			"scripts/setup.sh",
+			// Loads a release's image and installs the binary out of it.
+			"scripts/install-grain.sh",
 			// Served unauthenticated and run as root on every hostd machine,
 			// and the route that renders it and decides who sees what.
 			"pkg/ui/hostd_install.sh", "pkg/ui/hostd_install.go",

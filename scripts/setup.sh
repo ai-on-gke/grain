@@ -3477,6 +3477,10 @@ image_repo_can_transition() {
     [ -n "$repo" ] && known+=("$repo")
   done
   local from_ok=0 to_ok=0
+  # A release-asset install records the local grain/grain ref it loaded
+  # (install_release_assets): a re-run keeps its tag. Only ever a "from":
+  # grain/grain is never a repository to pull from.
+  [ "$from" = grain/grain ] && from_ok=1
   for repo in "${known[@]}"; do
     [ "$repo" = "$from" ] && from_ok=1
     [ "$repo" = "$to" ] && to_ok=1
@@ -4057,18 +4061,36 @@ gcp_access_token() {
 # something that does not exist.
 # release_for_tag prints the release-asset release image tag $1 lives in:
 # a moving tag's channel-<branch> release ('..' or '/' as '-'), and every
-# immutable name as itself.
+# immutable name as itself. The name becomes a path segment of a
+# github.com URL, and curl normalises "..": every name is held to an exact
+# pattern, so a tag such as sha-x/../../<owner>/<repo> cannot fetch
+# images.json (and every tarball it names) from another repository.
+# Anything else returns 1.
 release_for_tag() {
-  local tag="$1"
+  local tag="$1" rel
   case "$tag" in
-    latest | sha-* | v[0-9]*) printf '%s\n' "$tag" ;;
-    channel-*) printf '%s\n' "$tag" ;;
-    rc | candidate) printf 'channel-candidate\n' ;;
+    latest) rel=latest ;;
+    sha-*)
+      [[ "$tag" =~ ^sha-[0-9a-f]{7,40}$ ]] || return 1
+      rel="$tag"
+      ;;
+    v[0-9]*)
+      [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+([.-][A-Za-z0-9]+)*)?$ ]] || return 1
+      rel="$tag"
+      ;;
+    channel-*)
+      [[ "$tag" =~ ^channel-[A-Za-z0-9._-]+$ ]] && [[ "$tag" != *..* ]] || return 1
+      rel="$tag"
+      ;;
+    rc | candidate) rel=channel-candidate ;;
     *)
       tag="${tag//../-}"
-      printf 'channel-%s\n' "${tag//\//-}"
+      tag="${tag//\//-}"
+      [[ "$tag" =~ ^[A-Za-z0-9._-]+$ ]] && [[ "$tag" != *..* ]] || return 1
+      rel="channel-$tag"
       ;;
   esac
+  printf '%s\n' "$rel"
 }
 
 # manifest_field prints images.json $1's field $3 of image $2 (or the
@@ -4102,7 +4124,14 @@ manifest_field() {
 # tried again, never taken for a release with nothing in it.
 install_release_assets() {
   local release base dir key asset sum side ref id got attempt holder holder_base
-  release="$(release_for_tag "$GRAIN_IMAGE_TAG")"
+  if ! [[ "$GRAIN_RELEASE_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || [[ "$GRAIN_RELEASE_REPO" == *..* ]]; then
+    echo "setup.sh: GRAIN_RELEASE_REPO must be OWNER/NAME, not '$GRAIN_RELEASE_REPO'" >&2
+    exit 2
+  fi
+  release="$(release_for_tag "$GRAIN_IMAGE_TAG")" || {
+    echo "setup.sh: GRAIN_IMAGE_TAG '$GRAIN_IMAGE_TAG' names no release-asset release (sha-<hex>, vX.Y.Z, latest, or a branch)" >&2
+    exit 2
+  }
   # latest is GitHub's latest-release marker (contract v2), not a release
   # of that name; every other name is a release tag.
   if [ "$release" = latest ]; then
@@ -4154,11 +4183,26 @@ install_release_assets() {
       ;;
   esac
   for key in guest k8s-sandbox grain; do
-    asset="$(manifest_field "$dir/images.json" "$key" asset)" || { echo "setup.sh: $release's images.json names no $key asset" >&2; exit 1; }
-    sum="$(manifest_field "$dir/images.json" "$key" sha256)"
-    ref="$(manifest_field "$dir/images.json" "$key" ref)"
-    id="$(manifest_field "$dir/images.json" "$key" imageId)"
-    case "$asset" in */* | .* | "") echo "setup.sh: $release names an unsafe asset '$asset'" >&2; exit 1 ;; esac
+    asset="$(manifest_field "$dir/images.json" "$key" asset)" || { rm -rf "$dir"; echo "setup.sh: $release's images.json names no $key asset" >&2; exit 1; }
+    sum="$(manifest_field "$dir/images.json" "$key" sha256)" || sum=""
+    ref="$(manifest_field "$dir/images.json" "$key" ref)" || ref=""
+    id="$(manifest_field "$dir/images.json" "$key" imageId)" || id=""
+    # Every field is held to the contract before it reaches a URL, a
+    # docker command, or GRAIN_IMAGE_REF -- which root writes into the
+    # unit's EnvironmentFile. The ref must be a grain/<image>:<tag>
+    # (release_asset_ref): only those are never pulled, by this script,
+    # the unit's ExecStartPre, the CLI wrapper, the extractor and the
+    # orchestrator alike, so any other name could be fetched from a
+    # registry the manifest chose once the loaded image was gone.
+    if ! [[ "$asset" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*\.tar\.gz$ ]] || [[ "$asset" == *..* ]]; then
+      rm -rf "$dir"; echo "setup.sh: $release names an unsafe asset '$asset'" >&2; exit 1
+    fi
+    if ! [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || ! [[ "$id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+      rm -rf "$dir"; echo "setup.sh: $release names no valid sha256/imageId for $asset" >&2; exit 1
+    fi
+    if ! [[ "$ref" =~ ^grain/[a-z0-9][a-z0-9._-]*:[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]]; then
+      rm -rf "$dir"; echo "setup.sh: $release names '$ref' for $asset, which is not a local grain/<image>:<tag> ref" >&2; exit 1
+    fi
     # Schema 2 names the immutable release that holds each asset; schema 1
     # keeps it on the release itself.
     holder="$(manifest_field "$dir/images.json" "$key" release 2>/dev/null || true)"
@@ -4188,7 +4232,18 @@ install_release_assets() {
       exit 1
     fi
     log "  loaded $ref"
-    [ "$key" = grain ] && GRAIN_IMAGE_REF="$ref"
+    if [ "$key" = grain ]; then
+      GRAIN_IMAGE_REF="$ref"
+      # Tag the loaded image with the name it was asked for (main,
+      # latest, vX.Y.Z...) as well, so the ref file says which channel
+      # this host follows and a re-run (resolve_image_tag) keeps it,
+      # rather than reading only sha-<short> and pinning the host there.
+      # Still a grain/ ref: loaded, never pulled.
+      if [[ "$GRAIN_IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] && [ "${ref##*:}" != "$GRAIN_IMAGE_TAG" ]; then
+        docker tag "$ref" "${ref%:*}:$GRAIN_IMAGE_TAG"
+        GRAIN_IMAGE_REF="${ref%:*}:$GRAIN_IMAGE_TAG"
+      fi
+    fi
   done
   rm -rf "$dir"
   # GRAIN_IMAGE stays the registry repository: it is the unit's

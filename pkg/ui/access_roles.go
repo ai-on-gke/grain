@@ -15,9 +15,11 @@
 package ui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"slices"
@@ -39,12 +41,13 @@ const scopeSignedIn APIScope = "signed-in"
 
 // humanRouteScopes is what an `internal` route of route_scopes.go needs of
 // a person's role: the routes a person reaches from the UI that agents
-// never call. An internal route with no entry here is grain's own
-// plumbing and answers only a role holding every scope (operatorOnlyRoutes
-// names them, so TestRoleGateCoversEveryRoute can hold the two tables
-// total). GET /api/config is the sign-in page's own read, so every
-// admitted caller gets it, as do the hostd routes, which authenticate in
-// their own protocol.
+// never call, plus the MCP endpoints whose dispatches hold each tool call
+// to the caller's role in process. An internal route with no entry here is
+// grain's own plumbing and answers only a role holding every scope
+// (operatorOnlyRoutes names them, so TestRoleGateCoversEveryRoute can hold
+// the two tables total). GET /api/config is the sign-in page's own read,
+// so every admitted caller gets it, as do the hostd routes, which
+// authenticate in their own protocol.
 var humanRouteScopes = map[string]APIScope{
 	"GET /api/config":                                               scopeSignedIn,
 	"GET /api/auth/access-code":                                     scopeSignedIn,
@@ -62,6 +65,8 @@ var humanRouteScopes = map[string]APIScope{
 	"POST /api/hostd/renew":                                         scopeSignedIn,
 	"GET /api/hostd/install.sh":                                     scopeSignedIn,
 	"GET /hostd/install":                                            scopeSignedIn,
+	"POST /api/mcp":                                                 scopeSignedIn,
+	"POST /mcp":                                                     scopeSignedIn,
 	"POST /api/tasks/{id}/config-change/approve":                    "settings:write",
 	"POST /api/tasks/{id}/config-change/reject":                     "settings:write",
 	"POST /api/tasks/{id}/access-request/check":                     "capabilities:read",
@@ -74,9 +79,8 @@ var humanRouteScopes = map[string]APIScope{
 }
 
 // operatorOnlyRoutes are the internal routes no limited role reaches: a
-// run's own plumbing, a persistent sandbox's running service, and the MCP
-// endpoints, whose tools dispatch to many routes in process without a
-// per-tool role check.
+// run's own plumbing, hostd enrollment administration, and a persistent
+// sandbox's running service.
 var operatorOnlyRoutes = map[string]bool{
 	"POST /api/tasks/{id}/config-change":                            true,
 	"POST /api/tasks/{id}/activity":                                 true,
@@ -100,8 +104,6 @@ var operatorOnlyRoutes = map[string]bool{
 	"POST /api/hostds/pending/{id}/accept":                          true,
 	"POST /api/hostds/pending/{id}/reject":                          true,
 	"/staging/{name}/{path...}":                                     true,
-	"POST /api/mcp":                                                 true,
-	"POST /mcp":                                                     true,
 }
 
 // accessRole is what a verified session's matching allowlist entries let
@@ -874,4 +876,166 @@ func accessRoleInfo(ctx context.Context) *AccessRoleInfo {
 	}
 	return &AccessRoleInfo{Role: strings.Join(a.Roles, ", "), Roles: a.Roles, Missing: a.Missing,
 		Full: a.Full, Scopes: scopes, RepoLimits: limits}
+}
+
+// knownRepos returns the sorted repositories explicitly named across a's
+// repo-limited scopes, or nil when a is nil or unlimited.
+func (a *accessRole) knownRepos() []string {
+	if a == nil || a.Full {
+		return nil
+	}
+	var out []string
+	for _, sc := range a.set.Scopes() {
+		if a.deny[sc] {
+			continue
+		}
+		for _, r := range a.set.Repos(sc) {
+			if !slices.Contains(out, r) {
+				out = append(out, r)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// isUnconditionalPersonOnlyRoute reports whether pattern is always refused
+// to a delegated caller regardless of request body or stored task state.
+func isUnconditionalPersonOnlyRoute(pattern string) bool {
+	switch pattern {
+	case "POST /api/access/principals",
+		"PATCH /api/access/principals/{entry}",
+		"DELETE /api/access/principals/{entry}",
+		"POST /api/hostds",
+		"POST /api/hostds/enrollment-codes",
+		"POST /api/hostds/pending/{id}/accept",
+		"POST /api/tasks/{id}/access-request/grant",
+		"POST /api/tasks/{id}/access-request/deny":
+		return true
+	default:
+		return false
+	}
+}
+
+// roleAllowsMCPRoute reports whether a may reach rt at the scope level,
+// for MCP tool discovery (grain_explore_scope on POST /api/mcp and
+// tools/list on POST /mcp). Repository, body, and escalation checks still
+// run per call through authorizeRoleCall.
+func roleAllowsMCPRoute(a *accessRole, rt APIRoute) bool {
+	if rt.Scope == "" || rt.Scope == scopeInternal {
+		return false
+	}
+	if a == nil {
+		return true
+	}
+	if a.Delegated {
+		if a.ViaAccess == "read" && rt.Method != http.MethodGet && rt.Method != http.MethodHead {
+			return false
+		}
+		if isUnconditionalPersonOnlyRoute(rt.Pattern) {
+			return false
+		}
+	}
+	if a.Full {
+		return true
+	}
+	sc := roleScopeOf(rt.Pattern)
+	if sc == "" {
+		return false
+	}
+	return sc == scopeSignedIn || a.has(sc)
+}
+
+func delegatedRefusalError(code string, a *accessRole, err error) error {
+	payload, _ := json.Marshal(map[string]any{
+		"error":         err.Error(),
+		"code":          code,
+		"delegatedFrom": a.DelegatedFrom,
+		"delegatingApp": a.DelegatingApp,
+	})
+	return routeError(http.StatusForbidden, payload)
+}
+
+// authorizeMCPRoleScope checks ctx's role against pattern's scope before an
+// MCP tool validates call arguments or reads a target task, using the same
+// authorizeRoleCall refusal as roleGate. Repository and body escalations run
+// when the inner request is dispatched (or in authorizeMCPRoleCall when an
+// expect preflight read runs first).
+func (s *Server) authorizeMCPRoleScope(ctx context.Context, pattern string) error {
+	a := accessRoleFromContext(ctx)
+	if a == nil {
+		return nil
+	}
+	method, _, _ := strings.Cut(pattern, " ")
+	if a.Delegated {
+		if a.ViaAccess == "read" && method != http.MethodGet && method != http.MethodHead {
+			err := fmt.Errorf("%s holds read-only delegation (act.access=read) and cannot call %s", a.label(), pattern)
+			log.Printf("grain api: refused {delegated, %s via %s} %s: %v", a.DelegatedFrom, a.DelegatingApp, pattern, err)
+			return delegatedRefusalError("read_only_delegation", a, err)
+		}
+		if isUnconditionalPersonOnlyRoute(pattern) {
+			if err := s.checkDelegatedPersonOnly(nil, pattern, a); err != nil {
+				log.Printf("grain api: refused {delegated, %s via %s} %s: %v", a.DelegatedFrom, a.DelegatingApp, pattern, err)
+				return delegatedRefusalError("requires_person", a, err)
+			}
+		}
+	}
+	if a.Full {
+		return nil
+	}
+	sc := roleScopeOf(pattern)
+	if sc == "" || (sc != scopeSignedIn && !a.has(sc)) {
+		req, err := http.NewRequestWithContext(ctx, method, "http://localhost/", http.NoBody)
+		if err != nil {
+			return err
+		}
+		if err := s.authorizeRoleCall(req, pattern, a); err != nil {
+			log.Printf("grain api: refused {human, %s} %s: %v", a.Who, pattern, err)
+			return fmt.Errorf("HTTP %d: %w", agentRefusalStatus(err), err)
+		}
+	}
+	return nil
+}
+
+// authorizeMCPRoleCall runs roleGate's full checkDelegatedPersonOnly and
+// authorizeRoleCall checks against the built routeCall before an MCP tool
+// performs an auxiliary preflight (such as reading a task for arguments.expect).
+func (s *Server) authorizeMCPRoleCall(ctx context.Context, pattern string, rc routeCall) error {
+	a := accessRoleFromContext(ctx)
+	if a == nil || (a.Full && !a.Delegated) {
+		return nil
+	}
+	method, _, _ := strings.Cut(pattern, " ")
+	var reader io.Reader = http.NoBody
+	if rc.body != nil {
+		reader = bytes.NewReader(rc.body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, "http://localhost"+rc.path, reader)
+	if err != nil {
+		return err
+	}
+	if rc.body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range rc.params {
+		req.SetPathValue(k, v)
+	}
+	if a.Delegated {
+		if a.ViaAccess == "read" && method != http.MethodGet && method != http.MethodHead {
+			err := fmt.Errorf("%s holds read-only delegation (act.access=read) and cannot call %s", a.label(), pattern)
+			log.Printf("grain api: refused {delegated, %s via %s} %s: %v", a.DelegatedFrom, a.DelegatingApp, pattern, err)
+			return delegatedRefusalError("read_only_delegation", a, err)
+		}
+		if err := s.checkDelegatedPersonOnly(req, pattern, a); err != nil {
+			log.Printf("grain api: refused {delegated, %s via %s} %s: %v", a.DelegatedFrom, a.DelegatingApp, pattern, err)
+			return delegatedRefusalError("requires_person", a, err)
+		}
+	}
+	if !a.Full {
+		if err := s.authorizeRoleCall(req, pattern, a); err != nil {
+			log.Printf("grain api: refused {human, %s} %s: %v", a.Who, pattern, err)
+			return fmt.Errorf("HTTP %d: %w", agentRefusalStatus(err), err)
+		}
+	}
+	return nil
 }

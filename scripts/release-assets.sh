@@ -399,6 +399,21 @@ point_tag() {
   ok "$status" || die "pointing tag $1 at $2 answered $status: $(head -c 300 "$scratch/body")"
 }
 
+# get_asset ASSET-ID OUT: one release asset's bytes, through the API, with
+# the same retries as api; 1 if it could not be read.
+get_asset() {
+  local attempt status
+  for attempt in 1 2 3; do
+    status="$(curl -sSL -o "$2" -w '%{http_code}' ${token:+-H "Authorization: Bearer $token"} \
+      -H 'Accept: application/octet-stream' "$api_url/repos/$repo/releases/assets/$1" || echo 000)"
+    case "$status" in
+      000 | 5??) sleep $((5 * attempt)) ;;
+      *) break ;;
+    esac
+  done
+  ok "$status"
+}
+
 held_version() {
   jq -r '.version // empty' "$scratch/held.json" 2>/dev/null || true
 }
@@ -455,7 +470,7 @@ swap_manifest() {
 }
 
 publish_one() {
-  local release="$1" kind commit version id="" held="" status name prerelease=true make_latest=false listed missing
+  local release="$1" kind commit version id="" held="" held_asset status name prerelease=true make_latest=false listed missing
   upload_base=""
   rm -f "$scratch/held.json"
   kind="$(release_kind "$release")"
@@ -483,10 +498,18 @@ publish_one() {
     id="$(jq -r .id "$scratch/release")"
     upload_base="$(jq -r '.upload_url | sub("\\{.*$"; "")' "$scratch/release")"
     asset_list "$id" > "$scratch/existing"
-    if grep -q ' images.json$' "$scratch/existing"; then
-      curl -sSL ${token:+-H "Authorization: Bearer $token"} -H 'Accept: application/octet-stream' -o "$scratch/held.json" \
-        "$api_url/repos/$repo/releases/assets/$(awk '$2 == "images.json" {print $1; exit}' "$scratch/existing")" || true
+    # The manifest the release holds -- images.json, or the images.json.next
+    # a publisher that died mid-swap left in its place. One that is there
+    # but cannot be read is not "no manifest": taking it for one would let
+    # may_move move a channel onto a commit its current one is not an
+    # ancestor of, or an immutable release be published over. Fail closed.
+    held_asset="$(awk '$2 == "images.json" {print $1; exit}' "$scratch/existing")"
+    [ -n "$held_asset" ] || held_asset="$(awk '$2 == "images.json.next" {print $1; exit}' "$scratch/existing")"
+    if [ -n "$held_asset" ]; then
+      get_asset "$held_asset" "$scratch/held.json" ||
+        die "could not read $release's manifest (asset $held_asset); refusing to publish over it"
       held="$(jq -r '.commit // empty' "$scratch/held.json" 2>/dev/null || true)"
+      [[ "$held" =~ ^[0-9a-f]{40}$ ]] || die "$release's manifest (asset $held_asset) names no commit; refusing to publish over it"
     fi
   else
     : > "$scratch/existing"
@@ -602,23 +625,29 @@ prune() {
   while :; do
     status="$(api GET "/repos/$repo/releases?per_page=100&page=$page")"
     ok "$status" || die "listing releases answered $status"
-    jq -r '.[] | "\(.created_at) \(.id) \(.tag_name)"' "$scratch/body" >> "$scratch/releases"
+    jq -r '.[] | "\(.created_at) \(.id) \(.tag_name) \([.assets[]? | select(.name == "images.json" or .name == "images.json.next" or .name == "images.json.prev") | .id] | join(","))"' \
+      "$scratch/body" >> "$scratch/releases"
     n="$(jq length "$scratch/body")"
     [ "$n" -lt 100 ] && break
     page=$((page + 1))
   done
   : > "$scratch/referenced"
-  while read -r _ id tag; do
+  # Every manifest a release carries -- images.json, and images.json.next
+  # (or a legacy .prev) mid-swap -- is read through the API, and one that
+  # cannot be read stops the prune: a holder left off this list for a
+  # transient error would be deleted while a channel or train release
+  # still points at it. GitHub's latest release is one of the releases
+  # listed, so it is read here too.
+  local manifests asset
+  while read -r _ id tag manifests; do
     case "$tag" in sha-*) continue ;; esac
-    if download "$server_url/$repo/releases/download/$tag" images.json "$scratch/ref.json"; then
-      jq -r '.images[]?.release // empty' "$scratch/ref.json" >> "$scratch/referenced" 2>/dev/null || true
-    fi
+    for asset in ${manifests//,/ }; do
+      get_asset "$asset" "$scratch/ref.json" || die "could not read $tag's manifest (asset $asset); pruning nothing"
+      jq -r '.images | to_entries | .[] | .value.release // empty' "$scratch/ref.json" >> "$scratch/referenced" ||
+        die "$tag's manifest (asset $asset) is not one this can read; pruning nothing"
+    done
   done < "$scratch/releases"
-  # GitHub's latest release is the latest channel, whatever it is tagged.
-  if download "$server_url/$repo/releases/latest/download" images.json "$scratch/ref.json"; then
-    jq -r '.images[]?.release // empty' "$scratch/ref.json" >> "$scratch/referenced" 2>/dev/null || true
-  fi
-  while read -r _ id tag; do
+  while read -r _ id tag _; do
     i=$((i + 1))
     [ "$i" -le "$keep" ] && continue
     if grep -qx "$tag" "$scratch/referenced"; then
@@ -630,7 +659,7 @@ prune() {
     status="$(write DELETE "/repos/$repo/git/refs/tags/$tag")"
     ok "$status" || [ "$status" = 422 ] || [ "$status" = 404 ] || die "deleting tag $tag answered $status"
     say "pruned $tag"
-  done < <(grep ' sha-' "$scratch/releases" | sort -r)
+  done < <(awk '$3 ~ /^sha-[0-9a-f]{12}$/' "$scratch/releases" | sort -r)
 }
 
 # --- reading releases -------------------------------------------------------
@@ -888,6 +917,17 @@ train_phase() {
 # train_tag TAG: publish what a pushed release-train tag names.
 train_tag() {
   local tag="${1:?train-tag needs a tag}"
+  case "$tag" in
+    v*-rc.* | v*-pending | v*-retracted)
+      # The release of a tag the train has pushed, never a tag of its own:
+      # publishing a release on a tag that does not exist creates it, and
+      # release-from-trunk.sh reads -discarded and -retracted tags to drop
+      # an rc or skip a release. A dispatch of release-train-assets.yml
+      # naming a marker nobody pushed must not plant one.
+      [[ "$(remote_commit_of_tag "$tag")" =~ ^[0-9a-f]{40}$ ]] ||
+        die "$tag is not a tag the release train has pushed to $remote: train-tag publishes a pushed tag's release, never creates the tag"
+      ;;
+  esac
   case "$tag" in
     v*-rc.*-discarded) train_phase discard-rc "${tag%-discarded}" ;;
     v*-rc.*) train_phase rc "$tag" ;;

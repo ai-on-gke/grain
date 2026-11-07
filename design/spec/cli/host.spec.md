@@ -1226,14 +1226,20 @@ _No flags._
 
 ---
 
-### 4.17 `grain registry status|register|unregister` {#CLI-109}
+### 4.17 `grain registry <subcommand>` {#CLI-109}
 
-Self-registers a grain deployment as a `connected` entry in a grain registry (`design/design/registry.design.md`) and inspects its background heartbeats and self-reported scopes.
+Self-registers a grain deployment in a grain registry (`design/design/registry.design.md`), queries the organization directory and path router, and manages hosted (`instance`) and self-registered (`connected`) entries.
 - `status` (also bare `grain registry`) calls `GET /api/registry` and prints connection state, registry URL, entry metadata, last heartbeat, active and awaiting-reply task counts, any heartbeat error or scope conflicts, and advertised `(repo, path_prefix, role)` scopes.
-- `register` creates or updates the `connected` entry on the registry (`POST /api/entries` or `PATCH /api/entries/{name}` / `POST /api/entries/{name}/credentials/rotate`), updates `Registry` in `POST /api/settings` (clearing any previous registry URL before swapping credentials when retargeting), stores any minted `grc_...` registration credential in the daemon's secret store under `registry-registration-token` (`PUT /api/secrets/registry-registration-token/value`), and runs an immediate heartbeat via `POST /api/registry/heartbeat`. `-standalone` registers on the registry without contacting a local daemon.
+- `list` calls `GET /api/entries` for the caller's entries (or `-all` for admins), with optional `-owner`, `-owner-group`, `-kind`, `-status`, `-listed`, `-conflict`, and `-include-deleted` filters.
+- `directory` calls `GET /api/directory` across listed catalog entries with optional `-q`, `-repo`, `-tag`, `-status`, `-kind`, `-host-kind`, `-owner`, and `-limit` filters.
+- `route` calls `GET /api/route` to resolve the primary and ranked candidate entries covering `-repo` and `-path` (with optional `-include-offline`).
+- `show` calls `GET /api/entries/{name}` and prints full metadata, tunnel status, scopes, conflicts, and credential metadata.
+- `create` calls `POST /api/entries` (`kind = "instance"`) to provision a hosted VM entry (generating a random name when `<name>` is omitted).
+- `register` creates or updates a `connected` entry on the registry (`POST /api/entries` or `PATCH /api/entries/{name}` / `POST /api/entries/{name}/credentials/rotate`), updates `Registry` in `POST /api/settings` (clearing any previous registry URL before swapping credentials when retargeting), stores any minted `grc_...` registration credential in the daemon's secret store under `registry-registration-token` (`PUT /api/secrets/registry-registration-token/value`), and runs an immediate heartbeat via `POST /api/registry/heartbeat`. `-standalone` registers on the registry without contacting a local daemon and prints the `-registry-connect` configuration snippet.
 - `unregister` deletes the entry on the registry (`DELETE /api/entries/{name}` unless `-keep-remote` is given), clears `Registry` in `POST /api/settings`, and deletes `registry-registration-token` from the daemon's secret store.
+- `update`, `scopes`, `rotate-credential`, `upgrade`, `resize`, `delete`, `restore`, `transfer`, and `accept-transfer` manage entry catalog fields, declared scopes, `grc_...` credentials, VM lifecycle replacements, soft-deletion/restoration, and two-step ownership transfers.
 
-**Scope:** `status` requires `api:read`; `register` and `unregister` require `admin` (unless `-standalone` is set).
+**Scope:** `status` requires `api:read`; `register` and `unregister` require `admin` on the local daemon (unless `-standalone` is set); remote registry control-plane subcommands authenticate directly to `-registry-url` with OIDC or `-registry-token`.
 
 <!-- BEGIN GENERATED FLAGS: grain registry -->
 _No flags._
@@ -1245,15 +1251,97 @@ _No flags._
 _No flags._
 <!-- END GENERATED FLAGS -->
 
+#### `grain registry list`
+
+<!-- BEGIN GENERATED FLAGS: grain registry list -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-all` | bool |  |  | list all entries across the registry (admin only) |
+| `-conflict` | bool |  |  | filter entries that have active primary scope conflicts |
+| `-include-deleted` | bool |  |  | include soft-deleted entries within their 30-day reservation window |
+| `-kind` | string |  |  | filter by entry kind: instance or connected |
+| `-listed` | bool |  |  | filter by listed state |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-owner` | string |  |  | filter by owner email |
+| `-owner-group` | string |  |  | filter by co-owning group |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+| `-status` | string |  |  | filter by status: online, degraded, or offline |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry directory`
+
+<!-- BEGIN GENERATED FLAGS: grain registry directory -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-host-kind` | string |  |  | filter by host kind: registry-vm, workstation, kubernetes, or other |
+| `-kind` | string |  |  | filter by entry kind: instance or connected |
+| `-limit` | int |  |  | maximum number of entries to return |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-owner` | string |  |  | filter by owner email |
+| `-q` | string |  |  | free-text search across name, display name, purpose, owner, tags, and scopes |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+| `-repo` | string |  |  | filter by repository (<owner/name>) |
+| `-status` | string |  |  | filter by status: online, degraded, or offline |
+| `-tag` | string |  |  | filter by catalog tag |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry route`
+
+<!-- BEGIN GENERATED FLAGS: grain registry route -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-include-offline` | bool |  |  | include offline candidates in route resolution |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-path` | string |  |  | path within repository |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+| `-repo` | string |  |  | repository (<owner/name>) |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry show`
+
+<!-- BEGIN GENERATED FLAGS: grain registry show -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry create`
+
+<!-- BEGIN GENERATED FLAGS: grain registry create -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-allow-ssh` | bool | `true` |  | enable OS Login break-glass SSH access |
+| `-display-name` | string |  |  | human-readable display name in the registry directory |
+| `-listed` | bool |  |  | include this entry in default registry directory listings |
+| `-name` | string |  |  | entry name (defaults to a random generated name when omitted) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-owner-group` | string |  |  | optional co-owning group principal |
+| `-purpose` | string |  |  | short description of this hosted grain's purpose |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+| `-scope` | value |  |  | declared repository scope <owner/repo>[:<path_prefix>[:<primary\|secondary>]] (repeatable) |
+| `-shape` | string |  |  | VM shape name (defaults to registry default shape) |
+| `-ship-logs` | bool |  |  | enable fleet log shipping |
+| `-tags` | string |  |  | comma-separated catalog tags |
+| `-zone` | string |  |  | optional GCE zone override |
+<!-- END GENERATED FLAGS -->
+
 #### `grain registry register`
 
 <!-- BEGIN GENERATED FLAGS: grain registry register -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
+| `-connected-principal` | string |  |  | optional workload service account email authorized to connect on behalf of this entry |
 | `-display-name` | string |  |  | human-readable display name in the registry directory |
 | `-entry` | string |  | $GRAIN_REGISTRY_ENTRY | entry name in the grain registry ($GRAIN_REGISTRY_ENTRY; or positional <entry>) |
 | `-host-kind` | string |  |  | connected entry host kind: "workstation", "kubernetes", or "other" |
 | `-listed` | bool | `true` |  | include this entry in default registry directory listings |
+| `-mint-token` | bool |  |  | mint a fresh grc_... registration credential for this connected entry |
 | `-oidc` | bool |  |  | use OIDC ID tokens for registration and daemon heartbeats instead of minting a grc_... token |
 | `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
 | `-owner-group` | string |  |  | optional group principal that co-owns this entry |
@@ -1261,7 +1349,9 @@ _No flags._
 | `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
 | `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
 | `-rotate-token` | bool |  |  | rotate an existing connected entry's grc_... registration credential |
+| `-scope` | value |  |  | declared repository scope <owner/repo>[:<path_prefix>[:<primary\|secondary>]] (repeatable) |
 | `-standalone` | bool |  |  | register on the registry without writing settings or secrets to a local grain daemon |
+| `-tags` | string |  |  | comma-separated catalog tags |
 | `-token-file` | string |  |  | with -standalone, write a minted grc_... token to this file (mode 0600) instead of printing it |
 <!-- END GENERATED FLAGS -->
 
@@ -1279,7 +1369,124 @@ _No flags._
 | `-standalone` | bool |  |  | delete the entry on the registry without contacting a local grain daemon |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/registry_test.go`: `TestRegistryCLIRegisterStatusUnregister`, `TestDaemonRegistryFlags`.
+#### `grain registry update`
+
+<!-- BEGIN GENERATED FLAGS: grain registry update -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-allow-ssh` | bool |  |  | enable or disable break-glass SSH |
+| `-connected-principal` | string |  |  | connected workload principal |
+| `-display-name` | string |  |  | human-readable display name |
+| `-host-kind` | string |  |  | connected entry host kind: workstation, kubernetes, or other |
+| `-listed` | bool |  |  | mark entry listed in directory |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-owner-group` | string |  |  | co-owning group principal |
+| `-purpose` | string |  |  | short purpose description |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+| `-shape` | string |  |  | target VM shape |
+| `-ship-logs` | bool |  |  | enable or disable fleet log shipping |
+| `-tags` | string |  |  | comma-separated catalog tags |
+| `-unlisted` | bool |  |  | mark entry unlisted in directory |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry scopes`
+
+<!-- BEGIN GENERATED FLAGS: grain registry scopes -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-clear` | bool |  |  | clear all declared scope overrides on the entry |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+| `-set` | value |  |  | declared scope <owner/repo>[:<path_prefix>[:<primary\|secondary>]] (repeatable) |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry rotate-credential`
+
+<!-- BEGIN GENERATED FLAGS: grain registry rotate-credential -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-cred-id` | string |  |  | specific credential UUID to replace or expire |
+| `-label` | string |  |  | optional label for the new grc_... credential |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-overlap` | duration |  |  | grace period before previous credentials expire (for example 1h) |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+| `-revoke-previous` | bool |  |  | immediately revoke previous active credentials |
+| `-token-file` | string |  |  | write the newly minted grc_... token to this file (mode 0600) |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry upgrade`
+
+<!-- BEGIN GENERATED FLAGS: grain registry upgrade -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+| `-version` | string |  |  | target grain release version (defaults to registry's current pinned release) |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry resize`
+
+<!-- BEGIN GENERATED FLAGS: grain registry resize -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+| `-shape` | string |  |  | target VM shape name |
+| `-version` | string |  |  | optional target grain version to apply during replacement |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry delete`
+
+<!-- BEGIN GENERATED FLAGS: grain registry delete -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-confirm` | string |  |  | type the entry name to confirm deletion |
+| `-delete-disk` | bool |  |  | immediately purge the instance database/disk instead of retaining it for the 30-day restore window |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+| `-yes` | bool |  |  | confirm deletion without repeating the entry name |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry restore`
+
+<!-- BEGIN GENERATED FLAGS: grain registry restore -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry transfer`
+
+<!-- BEGIN GENERATED FLAGS: grain registry transfer -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-clear-owner-group` | bool |  |  | clear the entry's co-owning group |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-owner-group` | string |  |  | optional co-owning group to set alongside transfer |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+| `-to` | string |  |  | email of the new individual owner to offer transfer to |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry accept-transfer`
+
+<!-- BEGIN GENERATED FLAGS: grain registry accept-transfer -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/registry_test.go`: `TestRegistryCLIRegisterStatusUnregister`, `TestRegistryCLISubcommands`, `TestDaemonRegistryFlags`.
 
 ---
 
@@ -2216,3 +2423,4 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/sandboximage_test.go`: `TestSandboxImageCommandPrintsDefaultAndBase`, `TestSandboxImageContractSubcommand`, `TestSandboxImageCheckSubcommand`.
+

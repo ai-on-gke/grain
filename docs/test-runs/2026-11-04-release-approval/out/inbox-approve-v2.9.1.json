@@ -1,0 +1,31 @@
+{
+  "rowsBefore": [
+    "v3.0.0 is ready to promote",
+    "v2.9.1 is ready to promote",
+    "v2.4.0 is ready to promote (v2.4.0-rc.2 passed its soak)"
+  ],
+  "confirm": "Approve v2.9.1? This tags v2.9.1, moves latest onto it and publishes its images.",
+  "approveStatus": 202,
+  "approveResponse": {
+    "version": "v2.9.1",
+    "approve": true,
+    "run": {
+      "id": "",
+      "key": "",
+      "repo": "",
+      "ref": "",
+      "event": "",
+      "jobs": null
+    },
+    "dispatched": {
+      "repo": "acme/widgets",
+      "workflow": "promote-release.yml",
+      "ref": "main",
+      "commit": "c7da47041a303ff4f2bed13a71b9b5eaa253ff9a",
+      "by": "debian",
+      "at": "2026-11-07T05:17:06.431887263Z",
+      "expires": "2026-11-07T05:32:06.431887263Z"
+    }
+  },
+  "rowGoneAfterApprove": true
+}

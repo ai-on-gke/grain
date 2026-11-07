@@ -64,6 +64,13 @@ fi
 command -v docker >/dev/null || { echo "install-grain.sh: needs docker to load the release image" >&2; exit 1; }
 
 if [ -z "$image" ]; then
+  # A path segment of every github.com URL below: OWNER/NAME and nothing
+  # else, so "..", a query or a fragment cannot point the download at
+  # another repository.
+  if ! [[ "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || [[ "$repo" == *..* ]]; then
+    echo "install-grain.sh: -repo must be OWNER/NAME, not '${repo}'" >&2
+    exit 2
+  fi
   [ -z "$key" ] || { echo "install-grain.sh: -key verifies a registry signature; release assets are checked by sha256 (use -image to verify a signed registry image)" >&2; exit 2; }
   command -v curl >/dev/null || { echo "install-grain.sh: needs curl to download release assets" >&2; exit 1; }
   command -v jq >/dev/null || { echo "install-grain.sh: needs jq to read the release's images.json" >&2; exit 1; }
@@ -81,6 +88,14 @@ if [ -z "$image" ]; then
   ref="$(jq -er .images.grain.ref "${work}/images.json")"
   id="$(jq -er .images.grain.imageId "${work}/images.json")"
   case "$asset" in */* | .* | "") echo "install-grain.sh: unsafe asset name '${asset}'" >&2; exit 1 ;; esac
+  # Every field held to the contract before it reaches a URL or docker:
+  # the ref must be a local grain/<image>:<tag>, the only names that are
+  # loaded and never pulled (docs/release-assets.md).
+  [[ "$asset" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*\.tar\.gz$ ]] || { echo "install-grain.sh: unsafe asset name '${asset}'" >&2; exit 1; }
+  [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { echo "install-grain.sh: ${version}'s images.json names no valid sha256 ('${sum}')" >&2; exit 1; }
+  [[ "$id" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "install-grain.sh: ${version}'s images.json names no valid imageId ('${id}')" >&2; exit 1; }
+  [[ "$ref" =~ ^grain/[a-z0-9][a-z0-9._-]*:[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]] ||
+    { echo "install-grain.sh: ${version}'s images.json names '${ref}', which is not a local grain/<image>:<tag> ref" >&2; exit 1; }
   # Schema 2: the asset lives on the immutable release the image names.
   holder="$(jq -r --arg v "$version" '.images.grain.release // $v' "${work}/images.json")"
   # The contract's own pattern, exactly, so a manifest cannot point the
