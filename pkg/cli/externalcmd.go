@@ -331,7 +331,9 @@ func printWait(out *printer, resp ui.TasksWaitResponse) {
 		if t.PendingSecret != "" {
 			fmt.Println("  secret requested: " + t.PendingSecret + " (set it on /tasks/" + t.ID + ")")
 		}
-		if t.ClosingNote != "" {
+		// A parked task's closing note is the question it parked on,
+		// already printed just above; say it once.
+		if t.ClosingNote != "" && oneLine(t.ClosingNote) != oneLine(t.Question) {
 			fmt.Println("  " + oneLine(t.ClosingNote))
 		}
 	}

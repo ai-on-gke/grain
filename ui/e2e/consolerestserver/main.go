@@ -56,6 +56,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -628,6 +629,12 @@ func run() error {
 		// The run's access code (e2e/global-setup.js): every caller,
 		// loopback included, shows it, as on every grain daemon.
 		LocalAPIToken: os.Getenv("GRAIN_E2E_ACCESS_CODE"),
+		// A secret store, as every daemon has: without one a run parked
+		// on request_secret could never be answered here (PUT
+		// /api/tasks/{id}/secret answered 404 "no local secrets
+		// directory"), so the request_secret -> set -> requeue loop
+		// went unexercised end to end.
+		Secrets: secrets.New(filepath.Join(root, "secrets")),
 	}, store)
 	// api grants resolve as on every grain daemon
 	// (ui.AgentAPIDynamicProvider): every console session holds
