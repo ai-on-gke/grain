@@ -95,11 +95,11 @@ var (
 )
 
 func releaseStallKey(store *model.Store, repo model.RepoRef) string {
-	return fmt.Sprintf("%p|%s", store, strings.ToLower(repo.String()))
+	return fmt.Sprintf("%d|%s", store.ID(), strings.ToLower(repo.String()))
 }
 
 func releaseSkipKey(store *model.Store, repo model.RepoRef, branch string) string {
-	return fmt.Sprintf("%p|%s", store, strings.ToLower(model.BranchKey(repo, branch)))
+	return fmt.Sprintf("%d|%s", store.ID(), strings.ToLower(model.BranchKey(repo, branch)))
 }
 
 // noteReleaseSkip records why startBaseBranchRelease did not start a

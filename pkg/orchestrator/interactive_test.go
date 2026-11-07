@@ -265,7 +265,10 @@ func TestInteractiveMultiTurnConversationMixingChatAndPlainTextExits(t *testing.
 
 	// Step 3: Turn 1 exits with plain text "plain-reply-2". Wait until continueSessionTurns
 	// parks in-process (StateAwaitingReply), verify state is StateAwaitingReply, then send "msg-3".
-	deadline := time.Now().Add(5 * time.Second)
+	// The same 30s bound waitFor gives every other step: under the nightly
+	// -race -shuffle=on -count=2 shard this test shares the machine with
+	// the rest of the package, and 5s was not always enough for a turn.
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		st, _ := store.State(ctx, director.ID)
 		comments, _ := store.Comments(ctx, director.ID)

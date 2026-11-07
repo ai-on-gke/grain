@@ -62,7 +62,27 @@ type ReleaseDispatch struct {
 // releaseDispatchMu serialises release workflow dispatches: answers are
 // rare, and two presses racing must read the store, dispatch, and record
 // the decision as one step rather than starting two runs.
-var releaseDispatchMu sync.Mutex
+//
+// Pending-release decisions live in model.Store (release_approval);
+// releaseDispatches remembers recent rollback dispatches while their
+// signed records are good, keyed by Store.ID so a second press starts
+// nothing more without crossing stores in tests.
+var (
+	releaseDispatchMu sync.Mutex
+	releaseDispatches = map[string]ReleaseDispatch{} // releaseDispatchKey(store, repo + "\x00rollback\x00" + version)
+)
+
+// releaseDispatchKey qualifies a releaseDispatches key by the store the
+// answer was given against (model.Store.ID, never its address, which a
+// later store can reuse), so two deployments in one process -- or two
+// tests, or one test's two -count iterations -- never see each other's
+// dispatch as already made.
+func releaseDispatchKey(store *model.Store, key string) string {
+	if store == nil {
+		return key
+	}
+	return fmt.Sprintf("%d\x00%s", store.ID(), key)
+}
 
 // releaseForge is the forge connection release tags are read and the
 // workflow dispatched through, or nils when this deployment has none.
@@ -187,11 +207,11 @@ func (c *Client) dispatchGitHubRollback(ctx context.Context, repo model.RepoRef,
 	if tags == nil {
 		return ReleaseDispatch{}, fmt.Errorf("this deployment has no forge connection that can dispatch %s's %s", repo, GitHubPromoteReleaseWorkflow)
 	}
-	key := repo.String() + "\x00" + version
+	key := releaseDispatchKey(c.Store, repo.String()+"\x00rollback\x00"+version)
 	now := c.now().UTC()
 	releaseDispatchMu.Lock()
 	defer releaseDispatchMu.Unlock()
-	if d, ok := c.rollbackDispatches[key]; ok {
+	if d, ok := releaseDispatches[key]; ok {
 		if now.Before(d.Expires) {
 			return ReleaseDispatch{}, validationErrorf("%s rollback was already started: %s dispatched %s for it at %s; "+
 				"watch that run rather than starting another", version, d.By, d.Workflow, d.At.Format(time.RFC3339))
@@ -232,10 +252,7 @@ func (c *Client) dispatchGitHubRollback(ctx context.Context, repo model.RepoRef,
 	if err := dispatcher.DispatchWorkflow(repo.Owner, repo.Name, GitHubPromoteReleaseWorkflow, releaseTrunk, inputs); err != nil {
 		return ReleaseDispatch{}, fmt.Errorf("dispatching %s's %s: %w", repo, GitHubPromoteReleaseWorkflow, github.Readable(err))
 	}
-	if c.rollbackDispatches == nil {
-		c.rollbackDispatches = map[string]ReleaseDispatch{}
-	}
-	c.rollbackDispatches[key] = d
+	releaseDispatches[key] = d
 	return d, nil
 }
 

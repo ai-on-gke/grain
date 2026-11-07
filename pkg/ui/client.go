@@ -114,10 +114,6 @@ type Client struct {
 	ciDisk    ciDiskUsageCache
 	prFilesMu sync.Mutex
 	prFiles   *cifault.FileCache
-	// rollbackDispatches remembers recent promote-release.yml rollback
-	// dispatches on this client while their signed records are good, so a
-	// double click starts one rollback rather than two.
-	rollbackDispatches map[string]ReleaseDispatch
 }
 
 // NewClient builds a Client over a store.
@@ -241,18 +237,6 @@ func (e *UnprocessableError) Unwrap() error { return e.err }
 
 func unprocessableErrorf(format string, a ...any) error {
 	return &UnprocessableError{err: fmt.Errorf(format, a...)}
-}
-
-// approvalAttribution returns the Attribution to record on task.Approval:
-// for a delegated registry request (service actor + human OnBehalfOf, both
-// verified by the registry), it preserves OnBehalfOf (AU-26.2); for other
-// callers it records Actor alone.
-func approvalAttribution(a model.Attribution) model.Attribution {
-	if a.Actor.Kind == model.PrincipalService && a.Actor.Source == model.SourceRegistry &&
-		a.OnBehalfOf != nil && a.OnBehalfOf.Kind == model.PrincipalHuman && a.OnBehalfOf.Source == model.SourceRegistry {
-		return a
-	}
-	return model.Attribution{Actor: a.Actor}
 }
 
 // NotFoundError marks a task ID with no task behind it. Server maps this
@@ -1384,6 +1368,7 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 		}
 		detail.Transitions = append(detail.Transitions, transitionFromWithAttempt(tr, proposingAttempt))
 	}
+	c.nameSessions(ctx, &detail, *t, comments, transitions)
 	detail.PullRequestEvents = pullRequestEventsFrom(obs)
 	if obs != nil {
 		detail.RunNowAt = obs.RunNowAt
@@ -3160,8 +3145,8 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	case catalogueHold:
 		task.Body += "\n\n_Filed for a person to approve: " + needsPersonWhy + "._"
 	case req.Approved || (req.Interactive && proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent):
-		attr := approvalAttribution(c.requestActor(ctx))
-		task.Approval = &attr
+		approval := c.requestActor(ctx)
+		task.Approval = &approval
 		task.ApprovedAt = &now
 	case sessionQueued:
 		task.Approval = &model.Attribution{Actor: model.ConsoleSessionPrincipal}
@@ -3239,7 +3224,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			// whoever reads the pair will find it.
 			if _, err := c.Store.AddComment(ctx, model.Comment{
 				TaskID:    id,
-				Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
+				Author:    c.requestActor(ctx),
 				Body:      model.SupersedeRefusedLine(supersedes, refusal),
 				CreatedAt: now,
 			}); err != nil {
@@ -5618,7 +5603,7 @@ func (c *Client) noteEdit(ctx context.Context, id string, titleChanged bool, tit
 	}
 	_, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
-		Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
+		Author:    c.requestActor(ctx),
 		Body:      body,
 		CreatedAt: c.now(),
 	})
@@ -5901,7 +5886,7 @@ func (c *Client) Approve(ctx context.Context, id string) error {
 	if err := c.catalogueApprovalRefusal(ctx, *task); err != nil {
 		return err
 	}
-	if err := c.Store.Approve(ctx, id, approvalAttribution(c.requestActor(ctx)), c.now()); err != nil {
+	if err := c.Store.Approve(ctx, id, c.requestActor(ctx), c.now()); err != nil {
 		return err
 	}
 	if task.Interactive && task.DeferredAt == nil && c.Config.Wake != nil {
@@ -6322,7 +6307,7 @@ func (c *Client) commentWithAuthor(ctx context.Context, id, body string, uploads
 	// An author naming the request's own principal keeps its kind: a
 	// verified *.gserviceaccount.com caller is a service principal, as it
 	// is on the tasks it files and closes, not a human.
-	if trimmed := strings.TrimSpace(author); trimmed != "" && trimmed != by.Actor.ID {
+	if trimmed := strings.TrimSpace(author); trimmed != "" && trimmed != by.Actor.ID && (by.OnBehalfOf == nil || trimmed != by.OnBehalfOf.ID) {
 		by = model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: trimmed}}
 	}
 	return c.addAttributedComment(ctx, id, body, attachments, by, now, reopenAck)
@@ -6373,14 +6358,15 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 			return err
 		}
 	}
-	if reopenAck && by.Actor.Kind == model.PrincipalHuman {
+	isPerson := attributedHuman(by) != nil
+	if reopenAck && isPerson {
 		reopened, err := c.reopenAcknowledgeable(ctx, id, now)
 		if err != nil || reopened {
 			return err
 		}
 	}
 	if obs == nil || obs.PendingQuestionCommentID == nil {
-		if (wokeOnMessage || (task.Interactive && by.Actor.Kind == model.PrincipalHuman)) && c.Config.Wake != nil {
+		if (wokeOnMessage || (task.Interactive && isPerson)) && c.Config.Wake != nil {
 			c.Config.Wake()
 		}
 		return nil
@@ -6503,7 +6489,7 @@ func (c *Client) Stop(ctx context.Context, id string) error {
 
 	commentID, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
-		Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
+		Author:    c.requestActor(ctx),
 		Body:      model.TurnStoppedComment,
 		CreatedAt: now,
 	})
@@ -6836,7 +6822,7 @@ func (c *Client) RetryMerge(ctx context.Context, id string) error {
 	// later has no other way to see happened.
 	_, err = c.Store.AddComment(ctx, model.Comment{
 		TaskID: id,
-		Author: model.Attribution{Actor: c.requestActor(ctx).Actor},
+		Author: c.requestActor(ctx),
 		Body: fmt.Sprintf(
 			"Asked the merge queue to try %s again. It takes its place in the queue "+
 				"as if it had never been given up on: the checks are read afresh -- and "+
@@ -7025,7 +7011,7 @@ func (c *Client) ForceMerge(ctx context.Context, id, reason, head string) error 
 		"forced again."
 	if _, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
-		Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
+		Author:    c.requestActor(ctx),
 		Body:      body,
 		CreatedAt: now,
 	}); err != nil {
@@ -7251,7 +7237,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 		if err := c.agentMayApprove(ctx, *task); err != nil {
 			return err
 		}
-		if err := c.Store.Approve(ctx, id, approvalAttribution(c.requestActor(ctx)), now); err != nil {
+		if err := c.Store.Approve(ctx, id, c.requestActor(ctx), now); err != nil {
 			return err
 		}
 	}
@@ -7279,7 +7265,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 	// thread), so it names the branch that work belongs on.
 	if _, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
-		Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
+		Author:    c.requestActor(ctx),
 		Body:      runNowComment(state, pullRequestRefOf(*task)),
 		CreatedAt: now,
 	}); err != nil {
@@ -7469,7 +7455,8 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 		return &NotFoundError{ID: id}
 	}
 	now := c.now()
-	by := c.requestActor(ctx).Actor
+	who := c.requestActor(ctx)
+	by := who.Actor
 	eventReason := strings.TrimSpace(opts.Reason)
 	if eventReason == "" {
 		if call, ok := agentCallFromContext(ctx); ok {
@@ -7511,7 +7498,7 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	if !closed {
 		if changed {
 			c.recordTaskEvent(ctx, model.TaskEvent{TaskID: id, Kind: model.TaskEventReopened, At: now,
-				By: by, Reason: eventReason})
+				By: by, OnBehalfOf: who.OnBehalfOf, Reason: eventReason})
 		}
 		return nil
 	}
@@ -7539,7 +7526,7 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	}
 	if changed {
 		c.recordTaskEvent(ctx, model.TaskEvent{TaskID: id, Kind: model.TaskEventClosed, At: now,
-			By: by, Reason: eventReason, Detail: closeCancelled(liveRun, cancelledCI)})
+			By: by, OnBehalfOf: who.OnBehalfOf, Reason: eventReason, Detail: closeCancelled(liveRun, cancelledCI)})
 	}
 	// After the close is written, not before: the note says the task *is*
 	// closed, and a note left in front of a close that then failed would
