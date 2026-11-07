@@ -103,7 +103,10 @@ func TestDaemonAddendaReadsTheConversationFromTheCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []mcp.Addendum{{ID: 41, Body: "wrong branch"}, {ID: 42, Body: "target release-3 instead"}}
+	want := []mcp.Addendum{
+		{ID: 41, AuthorKind: "human", Body: "wrong branch"},
+		{ID: 42, AuthorKind: "human", Body: "target release-3 instead"},
+	}
 	if len(got) != len(want) {
 		t.Fatalf("addenda = %v, want %v", got, want)
 	}
@@ -128,13 +131,69 @@ func TestDaemonAddendaIncludesAuthorTag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []mcp.Addendum{{ID: 41, Body: "[alice]: wrong branch"}, {ID: 42, Body: "[bob]: target release-3 instead"}}
+	want := []mcp.Addendum{
+		{ID: 41, AuthorKind: "human", Body: "[alice]: wrong branch"},
+		{ID: 42, AuthorKind: "human", Body: "[bob]: target release-3 instead"},
+	}
 	if len(got) != len(want) {
 		t.Fatalf("addenda = %v, want %v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("addenda[%d] = %v, want %v", i, got[i], want[i])
+		}
+	}
+}
+
+// Automation-authored notices (such as CapabilityChangePrincipal drops) carry
+// AuthorKind="automation" through to pkg/mcp without prepending "[grain]: ",
+// so the tool result introduces the note as grain's own and never stutters
+// "[grain]: grain:".
+func TestDaemonAddendaCarriesAutomationAuthorWithoutDoubleTagging(t *testing.T) {
+	daemon := &addendaDaemon{messages: []ui.Message{
+		{
+			ID:         41,
+			Author:     "grain",
+			AuthorKind: "automation",
+			Body:       "Capability server https://capabilities.example.com/gcp, which minted this run's grant, is down (failed).",
+		},
+	}}
+	reader := addendaAgainst(t, daemon)
+
+	got, err := reader.Addenda(context.Background(), 40)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []mcp.Addendum{{
+		ID:         41,
+		AuthorKind: "automation",
+		Body:       "Capability server https://capabilities.example.com/gcp, which minted this run's grant, is down (failed).",
+	}}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("addenda = %+v, want %+v", got, want)
+	}
+
+	registry := mcp.NewRegistry()
+	registry.AnnounceAddenda(40, reader)
+	registry.Register(mcp.Tool{
+		Name:        "say",
+		InputSchema: map[string]any{"type": "object"},
+		Handler:     func(context.Context, map[string]any) mcp.Result { return mcp.Result{Text: "ok"} },
+	})
+	client := mcp.NewInProcess(context.Background(), registry)
+	t.Cleanup(func() { client.Close() })
+	res, err := client.CallTool(context.Background(), "say", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := res.Text()
+	if !strings.Contains(text, "[grain] grain added this to the task's conversation") ||
+		!strings.Contains(text, "This is grain's own note, not a person's:") {
+		t.Errorf("tool result = %q, want grain's own addendum framing", text)
+	}
+	for _, wrong := range []string{"A person added", "a person's own words", "[grain]: "} {
+		if strings.Contains(text, wrong) {
+			t.Errorf("tool result = %q, must not carry %q", text, wrong)
 		}
 	}
 }

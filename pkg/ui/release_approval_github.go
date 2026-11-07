@@ -66,8 +66,17 @@ type ReleaseDispatch struct {
 // presses racing must start one run, not two.
 var (
 	releaseDispatchMu sync.Mutex
-	releaseDispatches = map[string]ReleaseDispatch{} // repo + "\x00" + version
+	releaseDispatches = map[string]ReleaseDispatch{} // releaseDispatchKey(store, repo + "\x00" + version)
 )
+
+// releaseDispatchKey qualifies a releaseDispatches key by the store the
+// answer was given against (model.Store.ID, never its address, which a
+// later store can reuse), so two deployments in one process -- or two
+// tests, or one test's two -count iterations -- never see each other's
+// dispatch as already made.
+func releaseDispatchKey(store *model.Store, key string) string {
+	return fmt.Sprintf("%d\x00%s", store.ID(), key)
+}
 
 // releaseForge is the forge connection release tags are read and the
 // workflow dispatched through, or nils when this deployment has none.
@@ -118,7 +127,7 @@ func (c *Client) dispatchGitHubRelease(ctx context.Context, repo model.RepoRef, 
 	if approve {
 		decision = "approve"
 	}
-	key := repo.String() + "\x00" + version
+	key := releaseDispatchKey(c.Store, repo.String()+"\x00"+version)
 	now := time.Now().UTC()
 	releaseDispatchMu.Lock()
 	defer releaseDispatchMu.Unlock()
@@ -177,7 +186,7 @@ func (c *Client) dispatchGitHubRollback(ctx context.Context, repo model.RepoRef,
 	if tags == nil {
 		return ReleaseDispatch{}, fmt.Errorf("this deployment has no forge connection that can dispatch %s's %s", repo, GitHubPromoteReleaseWorkflow)
 	}
-	key := repo.String() + "\x00rollback\x00" + version
+	key := releaseDispatchKey(c.Store, repo.String()+"\x00rollback\x00"+version)
 	now := time.Now().UTC()
 	releaseDispatchMu.Lock()
 	defer releaseDispatchMu.Unlock()

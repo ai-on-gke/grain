@@ -78,6 +78,13 @@ func fakeWorkstation(home string, binaries []string, dockerWorks, kvm bool) (wor
 			return ""
 		},
 		KVM: func() bool { return kvm },
+		// No daemon runs behind the fake systemctl: answer at once
+		// rather than polling 127.0.0.1:4242 for the real wait's 90s
+		// (or reaching whatever else happens to listen there).
+		SetNetwork: func(_ context.Context, base, network string) error {
+			ran = append(ran, "set network "+network+" on "+base)
+			return nil
+		},
 	}, &ran
 }
 
@@ -315,6 +322,9 @@ func TestInitWorkstationWritesWhatTheServiceRuns(t *testing.T) {
 	}
 	if got := strings.Join(*ran, "; "); !strings.Contains(got, "systemctl --user enable --now grain.service") {
 		t.Errorf("the service was not enabled; ran %s", got)
+	}
+	if got := strings.Join(*ran, "; "); !strings.Contains(got, "set network none on http://127.0.0.1:4242") {
+		t.Errorf("the started daemon was not given none as its network default; ran %s", got)
 	}
 
 	// A re-run keeps the owner's own policy.

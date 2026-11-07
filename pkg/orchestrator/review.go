@@ -503,6 +503,7 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 		Title:     title,
 		Body:      body,
 		Admission: admission,
+		Hosting:   model.NormalizeHosting(tmpl.Hosting),
 		Origin: model.Origin{
 			Attribution: model.Attribution{Actor: reviewer},
 			Reason:      model.ReasonReview,

@@ -354,9 +354,15 @@ func (c *Client) PostMessageToAgent(ctx context.Context, from, to, body string, 
 		return Message{}, err
 	}
 	signed := fmt.Sprintf("Message from %s to this task's agent:\n\n%s", signature, body)
+	// Signed as the sender, with the person it is acting for when the
+	// request is that sender's own (operator-attribution spec §3.2).
+	author := model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: from}}
+	if who := c.requestActor(ctx); who.Actor.Same(author.Actor) {
+		author = who
+	}
 	commentID, attIDs, err := c.Store.AddCommentWithAttachments(ctx, model.Comment{
 		TaskID:    to,
-		Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: from}},
+		Author:    author,
 		Body:      signed,
 		CreatedAt: now,
 	}, attachments)

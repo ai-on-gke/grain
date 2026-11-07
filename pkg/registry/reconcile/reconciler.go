@@ -390,7 +390,7 @@ func (r *Reconciler) reconcileCreatingEntry(ctx context.Context, entry *store.En
 	}
 
 	// Phase 2: Probe `<backend_url>/healthz` and `<backend_url>/api/registry/status`.
-	statusResp, probeErr := r.probeInstanceHealthAndStatus(ctx, entry.Name, entry.BackendURL)
+	statusResp, probeErr := r.probeInstanceHealthAndStatus(ctx, entry.Name, entry.OwnerEmail, entry.BackendURL)
 	if probeErr != nil {
 		if r.now().Sub(entry.UpdatedAt) >= r.healthTimeout {
 			r.failEntry(ctx, entry, fmt.Sprintf("instance health check timed out after %s: %v", r.healthTimeout, probeErr))
@@ -437,7 +437,7 @@ func (r *Reconciler) reconcileReplacingEntry(ctx context.Context, entry *store.E
 	case api.ReplaceStepDraining:
 		// If the old VM is reachable and still running active tasks within drain_timeout, wait before stopping.
 		if entry.BackendURL != "" && r.now().Sub(entry.UpdatedAt) < r.drainTimeout {
-			if stResp, err := r.fetchInstanceStatus(ctx, entry.Name, entry.BackendURL); err == nil && stResp != nil {
+			if stResp, err := r.fetchInstanceStatus(ctx, entry.Name, entry.OwnerEmail, entry.BackendURL); err == nil && stResp != nil {
 				_, _ = r.recordStatusHeartbeat(ctx, entry.ID, stResp)
 				if stResp.ActiveTasks > 0 {
 					return nil
@@ -528,7 +528,7 @@ func (r *Reconciler) reconcileReplacingEntry(ctx context.Context, entry *store.E
 		fallthrough
 
 	case api.ReplaceStepProbing:
-		statusResp, probeErr := r.probeInstanceHealthAndStatus(ctx, entry.Name, entry.BackendURL)
+		statusResp, probeErr := r.probeInstanceHealthAndStatus(ctx, entry.Name, entry.OwnerEmail, entry.BackendURL)
 		if probeErr != nil {
 			if r.now().Sub(entry.UpdatedAt) >= r.healthTimeout {
 				r.failEntry(ctx, entry, fmt.Sprintf("replacement VM health check timed out after %s: %v", r.healthTimeout, probeErr))
@@ -580,7 +580,7 @@ func (r *Reconciler) reconcileReplacingEntry(ctx context.Context, entry *store.E
 func (r *Reconciler) reconcileStoppingEntry(ctx context.Context, entry *store.EntryRow) error {
 	// Wait for active tasks to drain up to drainTimeout before halting the VM.
 	if entry.BackendURL != "" && r.now().Sub(entry.UpdatedAt) < r.drainTimeout {
-		if stResp, err := r.fetchInstanceStatus(ctx, entry.Name, entry.BackendURL); err == nil && stResp != nil {
+		if stResp, err := r.fetchInstanceStatus(ctx, entry.Name, entry.OwnerEmail, entry.BackendURL); err == nil && stResp != nil {
 			_, _ = r.recordStatusHeartbeat(ctx, entry.ID, stResp)
 			if stResp.ActiveTasks > 0 {
 				return nil
@@ -917,7 +917,7 @@ func (r *Reconciler) PollRunningInstances(ctx context.Context) error {
 		if entry.BackendURL == "" {
 			continue
 		}
-		statusResp, err := r.fetchInstanceStatus(ctx, entry.Name, entry.BackendURL)
+		statusResp, err := r.fetchInstanceStatus(ctx, entry.Name, entry.OwnerEmail, entry.BackendURL)
 		if err != nil {
 			continue
 		}
@@ -1220,7 +1220,7 @@ func (r *Reconciler) resolveZoneAndVMName(entry *store.EntryRow) (string, string
 	return zone, vmID
 }
 
-func (r *Reconciler) probeInstanceHealthAndStatus(ctx context.Context, entryName, backendURL string) (*api.InstanceStatusResponse, error) {
+func (r *Reconciler) probeInstanceHealthAndStatus(ctx context.Context, entryName, ownerEmail, backendURL string) (*api.InstanceStatusResponse, error) {
 	backendURL = strings.TrimRight(strings.TrimSpace(backendURL), "/")
 	if backendURL == "" {
 		return nil, errors.New("empty backend_url")
@@ -1229,22 +1229,22 @@ func (r *Reconciler) probeInstanceHealthAndStatus(ctx context.Context, entryName
 	if err != nil {
 		return nil, err
 	}
-	r.attachRegistryAssertion(ctx, healthReq, entryName)
+	r.attachRegistryAssertion(ctx, healthReq, entryName, ownerEmail)
 	resp, err := r.httpClient.Do(healthReq)
 	if err != nil {
 		return nil, err
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
 		return nil, fmt.Errorf("/healthz returned HTTP %d", resp.StatusCode)
 	}
 
-	statusResp, statusErr := r.fetchInstanceStatus(ctx, entryName, backendURL)
+	statusResp, statusErr := r.fetchInstanceStatus(ctx, entryName, ownerEmail, backendURL)
 	if statusErr != nil {
 		// If `/healthz` returned 200 OK and `/api/registry/status` returned 404 on a minimal stub,
 		// synthesize a basic OK status response; otherwise return the error so probing continues until ready.
-		if strings.Contains(statusErr.Error(), "HTTP 404") {
+		if resp.StatusCode == http.StatusOK && strings.Contains(statusErr.Error(), "HTTP 404") {
 			return &api.InstanceStatusResponse{Health: api.HealthOK}, nil
 		}
 		return nil, statusErr
@@ -1252,7 +1252,7 @@ func (r *Reconciler) probeInstanceHealthAndStatus(ctx context.Context, entryName
 	return statusResp, nil
 }
 
-func (r *Reconciler) fetchInstanceStatus(ctx context.Context, entryName, backendURL string) (*api.InstanceStatusResponse, error) {
+func (r *Reconciler) fetchInstanceStatus(ctx context.Context, entryName, ownerEmail, backendURL string) (*api.InstanceStatusResponse, error) {
 	backendURL = strings.TrimRight(strings.TrimSpace(backendURL), "/")
 	if backendURL == "" {
 		return nil, errors.New("empty backend_url")
@@ -1261,7 +1261,7 @@ func (r *Reconciler) fetchInstanceStatus(ctx context.Context, entryName, backend
 	if err != nil {
 		return nil, err
 	}
-	r.attachRegistryAssertion(ctx, req, entryName)
+	r.attachRegistryAssertion(ctx, req, entryName, ownerEmail)
 	resp, err := r.httpClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -1281,15 +1281,30 @@ func (r *Reconciler) fetchInstanceStatus(ctx context.Context, entryName, backend
 	return &statusResp, nil
 }
 
-func (r *Reconciler) attachRegistryAssertion(ctx context.Context, req *http.Request, entryName string) {
+func (r *Reconciler) attachRegistryAssertion(ctx context.Context, req *http.Request, entryName, ownerEmail string) {
+	instDom := strings.TrimPrefix(strings.TrimSpace(r.cfg.InstanceDomain), ".")
+	aud := "grain-instance:" + entryName
+	if instDom != "" {
+		entryHost := entryName + "." + instDom
+		aud = "https://" + entryHost
+		req.Host = entryHost
+	}
 	if r.signer == nil {
 		return
 	}
+	sub := "serviceAccount:grain-registry"
+	email := "grain-registry@system.local"
+	kind := "service"
+	if owner := strings.ToLower(strings.TrimSpace(ownerEmail)); owner != "" {
+		sub = owner
+		email = owner
+		kind = "human"
+	}
 	tok, err := r.signer.SignAssertion(ctx, registry.RegistryClaims{
-		Audience: "grain-instance:" + entryName,
-		Subject:  "serviceAccount:grain-registry",
-		Email:    "grain-registry@system.local",
-		Kind:     "service",
+		Audience: aud,
+		Subject:  sub,
+		Email:    email,
+		Kind:     kind,
 	})
 	if err == nil && tok != "" {
 		req.Header.Set(api.HeaderRegistryAssertion, tok)

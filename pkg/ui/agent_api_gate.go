@@ -144,6 +144,9 @@ type agentCall struct {
 	// session is whether the acting task is a console session, whose
 	// calls are recorded with source session rather than sandbox.
 	session bool
+	// onBehalfOf is the person the call is made for, from grain's own
+	// records (agentOnBehalfOf), and nil for nobody.
+	onBehalfOf *model.Principal
 }
 
 // source is how the gate established the agent principal it runs this
@@ -266,7 +269,8 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 			return
 		}
 		agent := model.Principal{Kind: model.PrincipalAgent, ID: taskID, Source: call.source()}
-		callCtx := withAgentCall(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call)
+		ctx := withOnBehalfOf(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call.onBehalfOf)
+		callCtx := withAgentCall(ctx, call)
 		r = r.WithContext(model.WithEventActor(callCtx, RequestActor(callCtx)))
 		s.serveAgentCall(w, r, next, call)
 	}
@@ -325,6 +329,7 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 		return call, fmt.Errorf("acting task %s could not be read: %v", taskID, err)
 	}
 	call.session = acting.IsConsoleSession()
+	call.onBehalfOf = agentOnBehalfOf(ctx, s.tasks.Store, *acting)
 	held := grantNames(acting.Grants)
 	var set APIGrantSet
 	if call.channel == SandboxCLIChannel {
@@ -1078,6 +1083,9 @@ func (s *Server) storedRepoConfig(ctx context.Context, repo string) *model.RepoC
 func agentGrantRefusal(held []string, name string, normalize func(string) (string, error)) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
+		return nil
+	}
+	if _, ok := model.LegacyHostingAlias(name); ok {
 		return nil
 	}
 	if expanded := model.CanonicalLegacyGrants(name); len(expanded) > 1 {
@@ -3291,6 +3299,7 @@ func editedPatchResponseKeys(body []byte) []string {
 	add(req.Priority != nil, "priority")
 	add(req.PriorityDispatch != nil, "priorityDispatch")
 	add(req.Admission != nil, "admission")
+	add(req.Hosting != nil, "hosting")
 	add(req.Issue != nil, "issue")
 	add(req.AutoMerge != nil, "autoMerge")
 	add(req.AutoApproveProposals != nil, "autoApproveProposals")

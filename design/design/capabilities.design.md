@@ -68,13 +68,12 @@ A `.grain/workflows` job names what it needs under `capabilities:` and `optional
 
 ## Retiring the legacy in-process capabilities
 
-Before capability servers, grain had a registry of in-process providers, each granted by a bare name (`pkg/capability/<name>`, `model.CapabilityProvider`). They are being converted one at a time into server methods or `api:` presets. Each conversion follows the same steps: add the method, migrate stored grants in a schema migration, keep the bare name as a one-release alias (`model.CanonicalLegacyGrant`), and delete the provider. [`unified-grants.design.md` §4](unified-grants.design.md#4-retiring-the-in-process-capabilities) is the per-capability table. Most are done (`gcp-key`, `gemini-key`, the model proxies, `github-credential:<name>`, `local-scripts`, the CI publishing grants, `repo-read`/`repo-write`, `bootstrap-playbooks`, the `…/grain` methods, the api presets, and `priority-dispatch` and `durable`, which became the task setting `admission` (§4.1, schema migration 122)). The last of the `…/grain` conversions was `self-debug`, which became the `api:self-debug` preset plus `…/grain#source` (schema migration 115): its bare name is a one-release alias for both, and nothing registers a provider for it.
+Before capability servers, grain had a registry of in-process providers, each granted by a bare name (`pkg/capability/<name>`, `model.CapabilityProvider`). They are being converted one at a time into server methods or `api:` presets. Each conversion follows the same steps: add the method, migrate stored grants in a schema migration, keep the bare name as a one-release alias (`model.CanonicalLegacyGrant`), and delete the provider. [`unified-grants.design.md` §4](unified-grants.design.md#4-retiring-the-in-process-capabilities) is the per-capability table. Most are done (`gcp-key`, `gemini-key`, the model proxies, `github-credential:<name>`, `local-scripts`, the CI publishing grants, `repo-read`/`repo-write`, `bootstrap-playbooks`, the `…/grain` methods, the api presets, `priority-dispatch` and `durable`, which became the task setting `admission` (§4.1, schema migration 122), and `console`, which became the task setting `hosting` (§4.1, schema migration 123)). The last of the `…/grain` conversions was `self-debug`, which became the `api:self-debug` preset plus `…/grain#source` (schema migration 115): its bare name is a one-release alias for both, and nothing registers a provider for it.
 
 `daemon.CapabilityProviders` still registers these:
 
 - `github-sandbox` (becoming `#sandbox-repo` on the in-process `…/github` server, which already answers `#read-issues`);
-- the CI alias `release-gate-read` (retiring with `…/api` references in unified-grants slices 2–4);
-- `console`, which is decided to become the task setting `hosting` (§4.1).
+- the CI alias `release-gate-read` (retiring with `…/api` references in unified-grants slices 2–4).
 
 Until each one is converted, the UI shows it under **Legacy capabilities**.
 

@@ -300,6 +300,9 @@ admission: standard                # optional; "standard", "bypass" or "durable"
                                    #   Above standard it is a person's to give, as those grants
                                    #   were: an agent filing from the template is refused, or
                                    #   its proposal held for a person
+hosting: unattended                # optional; "unattended" or "console" -- what the retired
+                                   #   console capability gave (capabilities.md); a bare console
+                                   #   under capabilities: is read as this, with a warning
 priority: 10                       # optional; positive integer (unset/0 files tasks at default 5)
 custom-fields:                     # optional; this deployment's declared fields
   team: infra
@@ -490,6 +493,7 @@ overlap: skip                      # optional; "skip" (default) or "allow"; "ski
 review: on-failure                 # optional, workflow: only; "on-failure" (default) or "always"
 model: gemini-3.1-pro              # optional; beats the template's own; refused with suite:
 admission: bypass                  # optional; raises the template's own, never lowers it; refused with suite:
+hosting: console                   # optional; raises the template's own to console; refused with suite:
 
 # Exactly one cadence:
 every:                             # every N hours from the last firing

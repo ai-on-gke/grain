@@ -170,6 +170,9 @@ type Template struct {
 	// Admission is the optional admission setting for tasks filed from this
 	// template (empty leaves the task on standard or deployment/repo defaults).
 	Admission Admission
+	// Hosting is the optional hosting setting for tasks filed from this
+	// template (empty leaves the task on unattended or deployment/repo defaults).
+	Hosting Hosting
 
 	// Priority is the optional default numeric priority for tasks filed from
 	// this template (nil or 0 leaves the task on DefaultTaskPriority).

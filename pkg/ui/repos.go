@@ -326,6 +326,9 @@ type RepoDefaults struct {
 	DefaultAdmission             string   `json:"defaultAdmission"`
 	DeploymentDefaultAdmission   string   `json:"deploymentDefaultAdmission"`
 	EffectiveDefaultAdmission    string   `json:"effectiveDefaultAdmission"`
+	DefaultHosting               string   `json:"defaultHosting"`
+	DeploymentDefaultHosting     string   `json:"deploymentDefaultHosting"`
+	EffectiveDefaultHosting      string   `json:"effectiveDefaultHosting"`
 	// PromptExtension is this repo's own standing instructions for a run
 	// working in it -- model.RepoConfig.PromptExtension, exactly as
 	// stored, and the only one of the three fields below that a PUT to
@@ -608,6 +611,7 @@ type SetRepoSettingsRequest struct {
 	MergeRecheck        *string   `json:"mergeRecheck,omitempty"`
 	DefaultCapabilities *[]string `json:"defaultCapabilities,omitempty"`
 	DefaultAdmission    *string   `json:"defaultAdmission,omitempty"`
+	DefaultHosting      *string   `json:"defaultHosting,omitempty"`
 	CICapabilities      *[]string `json:"ciCapabilities,omitempty"`
 	PromptExtension     *string   `json:"promptExtension,omitempty"`
 	RepairTemplateID    *string   `json:"repairTemplateID,omitempty"`
@@ -729,6 +733,7 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 		out.IssueImport = repoIssueImportOf(stored.IssueImport)
 		out.DefaultCapabilities = stored.DefaultCapabilities
 		out.DefaultAdmission = string(stored.DefaultAdmission)
+		out.DefaultHosting = string(stored.DefaultHosting)
 		out.CICapabilities = stored.CICapabilities
 		out.PromptExtension = stored.PromptExtension
 		out.RepairTemplateID = stored.RepairTemplateID
@@ -771,10 +776,12 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 		return RepoDefaults{}, err
 	}
 	var deploymentAdmission model.Admission
+	var deploymentHosting model.Hosting
 	if cfg != nil {
 		out.DeploymentDefaultCapabilities = cfg.DefaultCapabilities
 		out.DeploymentPromptExtension = cfg.PromptExtension
 		deploymentAdmission = cfg.DefaultAdmission
+		deploymentHosting = cfg.DefaultHosting
 	}
 	out.DeploymentDefaultAdmission = string(model.NormalizeAdmission(deploymentAdmission))
 	effAdm := model.NormalizeAdmission(deploymentAdmission)
@@ -782,6 +789,12 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 		effAdm = model.NormalizeAdmission(model.MaxAdmission(effAdm, stored.DefaultAdmission))
 	}
 	out.EffectiveDefaultAdmission = string(effAdm)
+	out.DeploymentDefaultHosting = string(model.NormalizeHosting(deploymentHosting))
+	effHosting := model.NormalizeHosting(deploymentHosting)
+	if stored != nil {
+		effHosting = model.NormalizeHosting(model.MaxHosting(effHosting, stored.DefaultHosting))
+	}
+	out.EffectiveDefaultHosting = string(effHosting)
 	// The same composition dispatch itself applies, with no task layer:
 	// what a run here is told when nothing overrides it
 	// (model.PromptExtensionFor).
@@ -835,14 +848,21 @@ func (c *Client) SetRepoDefaultCapabilities(ctx context.Context, repo string, id
 		return RepoDefaults{}, validationErrorf("repo: %v", err)
 	}
 	capsWithoutLegacy, legacyAdm, hadLegacy := extractLegacyAdmissionCaps("repo "+parsed.String()+" defaultCapabilities", ids)
+	capsWithoutLegacy, legacyHosting, hadLegacyHosting := extractLegacyHostingCaps("repo "+parsed.String()+" defaultCapabilities", capsWithoutLegacy)
 	clean, err := c.cleanRepoDefaultCapabilities(capsWithoutLegacy)
 	if err != nil {
+		return RepoDefaults{}, err
+	}
+	if err := c.validateCatalogueRepoDefaults(ctx, parsed, clean, nil); err != nil {
 		return RepoDefaults{}, err
 	}
 	return c.putRepoConfig(ctx, parsed, func(rc *model.RepoConfig) {
 		rc.DefaultCapabilities = clean
 		if hadLegacy {
 			rc.DefaultAdmission = model.MaxAdmission(rc.DefaultAdmission, legacyAdm)
+		}
+		if hadLegacyHosting {
+			rc.DefaultHosting = model.MaxHosting(rc.DefaultHosting, legacyHosting)
 		}
 	})
 }
@@ -1100,9 +1120,12 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 	var defaultCaps []string
 	var legacyAdmission model.Admission
 	var hadLegacyAdmission bool
+	var legacyHosting model.Hosting
+	var hadLegacyHosting bool
 	if req.DefaultCapabilities != nil {
 		var capsWithoutLegacy []string
 		capsWithoutLegacy, legacyAdmission, hadLegacyAdmission = extractLegacyAdmissionCaps("repo "+parsed.String()+" defaultCapabilities", *req.DefaultCapabilities)
+		capsWithoutLegacy, legacyHosting, hadLegacyHosting = extractLegacyHostingCaps("repo "+parsed.String()+" defaultCapabilities", capsWithoutLegacy)
 		if defaultCaps, err = c.cleanRepoDefaultCapabilities(capsWithoutLegacy); err != nil {
 			return RepoDefaults{}, err
 		}
@@ -1115,11 +1138,22 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		}
 		chosenDefaultAdmission = &adm
 	}
+	var chosenDefaultHosting *model.Hosting
+	if req.DefaultHosting != nil {
+		h, err := model.ParseOptionalHosting(*req.DefaultHosting)
+		if err != nil {
+			return RepoDefaults{}, validationErrorf("defaultHosting: %v", err)
+		}
+		chosenDefaultHosting = &h
+	}
 	var ciCaps []string
 	if req.CICapabilities != nil {
 		if ciCaps, err = c.cleanRepoCICapabilities(*req.CICapabilities); err != nil {
 			return RepoDefaults{}, err
 		}
+	}
+	if err := c.validateCatalogueRepoDefaults(ctx, parsed, defaultCaps, ciCaps); err != nil {
+		return RepoDefaults{}, err
 	}
 	var unfixable []string
 	if req.UnfixableChecks != nil {
@@ -1184,6 +1218,12 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		}
 		if hadLegacyAdmission {
 			rc.DefaultAdmission = model.MaxAdmission(rc.DefaultAdmission, legacyAdmission)
+		}
+		if chosenDefaultHosting != nil {
+			rc.DefaultHosting = *chosenDefaultHosting
+		}
+		if hadLegacyHosting {
+			rc.DefaultHosting = model.MaxHosting(rc.DefaultHosting, legacyHosting)
 		}
 		if req.CICapabilities != nil {
 			rc.CICapabilities = ciCaps
@@ -1721,6 +1761,9 @@ func (c *Client) SetRepoCICapabilities(ctx context.Context, repo string, ids []s
 	}
 	clean, err := c.cleanRepoCICapabilities(ids)
 	if err != nil {
+		return RepoDefaults{}, err
+	}
+	if err := c.validateCatalogueRepoDefaults(ctx, parsed, nil, clean); err != nil {
 		return RepoDefaults{}, err
 	}
 	return c.putRepoConfig(ctx, parsed, func(rc *model.RepoConfig) { rc.CICapabilities = clean })

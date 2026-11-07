@@ -18,6 +18,7 @@ paths:
   - scripts/build-version.sh
   - scripts/grain-ci-host.sh
   - scripts/release-train-actions.sh
+  - scripts/release-assets.sh
   - .github/workflows/rc-qualification.yml
   - .grain/workflows/release.yml
   - .github/workflows/release.yml
@@ -25,5 +26,6 @@ paths:
   - .github/workflows/promote.yml
   - .grain/workflows/release-train.yml
   - .github/workflows/release-train.yml
+  - .github/workflows/release-train-assets.yml
 gate: true
 sensitive: true

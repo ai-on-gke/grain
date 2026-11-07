@@ -94,6 +94,10 @@ type RepoConfig struct {
 	// composed by union (MaxAdmission) with Config.DefaultAdmission when
 	// seeding a new ad-hoc task targeting this repository.
 	DefaultAdmission Admission
+	// DefaultHosting is the per-repository default hosting setting composed
+	// by union (MaxHosting) with Config.DefaultHosting when seeding a new
+	// ad-hoc task targeting this repository.
+	DefaultHosting Hosting
 	// CICapabilities is the explicit capability set for this repo's CI jobs.
 	// It is independent of task defaults and is read when a CI run starts.
 	CICapabilities []string
@@ -880,7 +884,7 @@ func RepoUsesGrainCI(repoCfg *RepoConfig, repo RepoRef) bool {
 // change -- PromptExtension, the second, and SetupCommand, the third,
 // are exactly that.
 func (c RepoConfig) Empty() bool {
-	return c.CloneURL == "" && len(c.DefaultCapabilities) == 0 && c.DefaultAdmission == "" && len(c.CICapabilities) == 0 &&
+	return c.CloneURL == "" && len(c.DefaultCapabilities) == 0 && c.DefaultAdmission == "" && c.DefaultHosting == "" && len(c.CICapabilities) == 0 &&
 		c.Work.Empty() && len(c.ReleaseSecrets) == 0 &&
 		len(c.BaseBranchCIJobs) == 0 && len(c.PostMergeDispatchJobs) == 0 &&
 		c.PromptExtension == "" && c.SetupCommand == "" && !c.Declarations &&
