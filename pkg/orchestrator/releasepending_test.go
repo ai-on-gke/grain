@@ -442,7 +442,7 @@ func TestACLIApprovalBeforeTheWatcherPollsNeitherRaisesNorDispatchesAgain(t *tes
 	client := github.NewClient(forge, nil)
 	deps := Deps{Store: store, Client: client}
 
-	now := time.Date(2026, 11, 7, 5, 17, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second).Add(-50 * time.Hour)
 	dataDir := t.TempDir()
 	person := model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com"}
 	uic := ui.NewClient(ui.Config{Actor: person, DataDir: dataDir, GitHubPullRequests: client}, store)
@@ -539,5 +539,26 @@ func TestACLIApprovalBeforeTheWatcherPollsNeitherRaisesNorDispatchesAgain(t *tes
 	}
 	if d := forge.dispatched(); len(d) != 3 {
 		t.Fatalf("dispatched %d times after ReleaseApprovalHold retry, want 3", len(d))
+	}
+
+	// 5. If the hold expires again and a person dismisses the re-raised
+	// notification directly without dispatching, the watcher honours that
+	// dismissal rather than re-raising on the next 10-minute poll.
+	now = now.Add(model.ReleaseApprovalHold)
+	if err := reconcileReleasePending(ctx, deps, now); err != nil {
+		t.Fatalf("reconcileReleasePending after second ReleaseApprovalHold: %v", err)
+	}
+	if open, err := store.OpenNotification(ctx, subject); err != nil || open == nil {
+		t.Fatalf("second expired hold did not re-raise %s: %+v (err %v)", subject, open, err)
+	}
+	if _, err := store.ClearNotification(ctx, subject, model.PrincipalString(person)); err != nil {
+		t.Fatalf("ClearNotification (human dismiss): %v", err)
+	}
+	now = time.Now().UTC().Add(releasePendingPollInterval)
+	if err := reconcileReleasePending(ctx, deps, now); err != nil {
+		t.Fatalf("reconcileReleasePending after human dismiss: %v", err)
+	}
+	if open, err := store.OpenNotification(ctx, subject); err != nil || open != nil {
+		t.Fatalf("watcher re-raised %s after human dismiss: %+v (err %v)", subject, open, err)
 	}
 }

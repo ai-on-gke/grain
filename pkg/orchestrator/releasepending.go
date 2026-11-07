@@ -254,37 +254,40 @@ func activeDecisionForTag(tags github.ReleaseTagReader, repo model.RepoRef, vers
 
 // releaseCommitAnswered reports whether (repo, version, commit) was already
 // answered within releasePendingAnswerHold -- either recorded in
-// release_approval (CLI, API, or Inbox Approve/Reject) or, when no decision
-// row exists for version (e.g. a notification dismissed directly or
-// answered before this table existed), cleared on the notification row by a
-// person.
+// release_approval (CLI, API, or Inbox Approve/Reject) or dismissed directly
+// on the notification row by a person after any earlier recorded decision.
 func releaseCommitAnswered(decisions []model.ReleaseApprovalDecision, all []model.Notification,
 	repo model.RepoRef, version, commit string, now time.Time) bool {
-	hasDecisionForVersion := false
+	var latestDecisionAt time.Time
 	for _, d := range decisions {
 		if d.Version != version {
 			continue
 		}
-		hasDecisionForVersion = true
 		if d.Commit == commit && d.ActiveAt(now) {
 			return true
 		}
+		if d.DecidedAt.After(latestDecisionAt) {
+			latestDecisionAt = d.DecidedAt
+		}
 	}
-	if hasDecisionForVersion {
-		return false
-	}
-	return releaseAnswered(all, repo, version, now)
+	return releaseAnsweredAfter(all, repo, version, latestDecisionAt, now)
 }
 
-// releaseAnswered reports whether a person cleared repo's version
-// notification within releasePendingAnswerHold.
-func releaseAnswered(all []model.Notification, repo model.RepoRef, version string, now time.Time) bool {
+// releaseAnsweredAfter reports whether a person cleared repo's version
+// notification within releasePendingAnswerHold on a raise younger than after.
+// When after is non-zero (an earlier commit or expired hold recorded a
+// decision), a clear from before the subsequent raise belonged to that earlier
+// decision rather than to what is staged now.
+func releaseAnsweredAfter(all []model.Notification, repo model.RepoRef, version string, after, now time.Time) bool {
 	subject := model.NotificationSubject(model.FamilyReleasePending, version)
 	for _, n := range all {
 		if n.Subject != subject || n.ClearedAt == nil {
 			continue
 		}
 		if n.Repo != "" && n.Repo != repo.String() {
+			continue
+		}
+		if !after.IsZero() && !n.LastRaisedAt.After(after) {
 			continue
 		}
 		if strings.HasPrefix(n.ClearedBy, string(model.PrincipalHuman)+":") && now.Sub(*n.ClearedAt) < releasePendingAnswerHold {
