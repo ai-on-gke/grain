@@ -851,6 +851,11 @@ var Migrations = []Migration{
 		Description: "rewrite stored github-credential:<name> grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/repo#credential={\"credential\":\"<name>\"} (the in-process github-credential:<name> providers are retired)",
 		Up:          migrateGitHubCredentialGrants,
 	},
+	{
+		Version:     121,
+		Description: "rewrite grain-ci in the capability policy's rules and catalogue defaults to https://grain.dev/capabilities/grain#ci={} (migration 96 rewrote every other stored grain-ci grant)",
+		Up:          migrateGrainCIPolicy,
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

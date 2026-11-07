@@ -28,6 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
 	"github.com/ai-on-gke/grain/pkg/capability/release"
+	"github.com/ai-on-gke/grain/pkg/capability/servers"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
@@ -264,5 +265,71 @@ func TestReleaseServerRulesCannotBeLoosenedByPolicy(t *testing.T) {
 	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "denies") {
 		t.Errorf("a release job under a policy denying image-signing: %v, want the policy's denial", err)
+	}
+}
+
+// A real daemon hands CI grant admission the attached registry
+// (capabilityServerLookup), which tracks mcp_servers only: the release
+// server is in-process (capability.Register) and is never in it. A
+// workflow_dispatch job holding release#package-publish was refused with
+// "capability https://grain.dev/capabilities/release is not configured in
+// mcpServers" on every attempt -- every repository whose ci_capabilities
+// migration 101 rewrote lost its publish job
+// (docs/test-runs/2026-11-04-capabilities.md, F4). The tests above stood
+// grainserver.Lookup in for the registry, so none of them saw it.
+func TestCIJobMintsAnInProcessReleaseGrantWithOnlyTheAttachedRegistry(t *testing.T) {
+	t.Cleanup(func() { release.Configure(packagepublish.Config{}) })
+	ladder := releaseTestLadder{}
+	// As the daemon configures it (configureCapabilities): with the
+	// refresh route, whose docker credential helper is placed "0755" --
+	// the four-digit form a "0" prefix turned into "00755", which the
+	// protocol refused for the whole mint (F5).
+	release.Configure(packagepublish.Config{Credentials: ladder, Refresh: packagepublish.NewRefresher(),
+		RefreshURL: func() string { return "http://10.0.0.1:4242" }})
+	registry := servers.New(servers.Options{})
+	t.Cleanup(registry.Close)
+	g := &CiGrantReservations{
+		Capabilities: func() *model.CapabilityRegistry { return model.NewCapabilityRegistry() },
+		Credentials:  releaseTestSecrets(),
+		Servers:      func() orchestrator.CapabilityServers { return registry },
+		Config:       func(context.Context) (*model.Config, error) { return &model.Config{DeploymentID: "dep1"}, nil },
+	}
+	req := ci.SandboxRequest{
+		Name: "c0123abcd-2", Repo: "acme/widgets", Ref: "main", Event: ci.EventManual,
+		RunID: "0123abcd", JobAttempt: 2, Capabilities: []string{model.PackagePublishRef + "={}"},
+	}
+	done, err := g.Acquire(context.Background(), req, nil)
+	if err != nil {
+		t.Fatalf("a workflow_dispatch job holding release#package-publish: %v", err)
+	}
+	defer done()
+	pass := g.Pass(req.Name)
+	if pass == nil || len(pass.Placements()) == 0 {
+		t.Fatalf("pass = %+v, want the package-publish files", pass)
+	}
+	modes := map[string]string{}
+	for _, p := range pass.Placements() {
+		modes[p.Path] = p.Mode
+	}
+	if got := modes[packagepublish.HelperPath]; got != "0755" {
+		t.Errorf("%s mode = %q, want 0755 (placements %v)", packagepublish.HelperPath, got, modes)
+	}
+	if got := modes[packagepublish.RefreshTokenPath]; got != "0600" {
+		t.Errorf("%s mode = %q, want 0600", packagepublish.RefreshTokenPath, got)
+	}
+
+	// With no registry at all, an in-process grant still mints, and an
+	// external one is refused as before.
+	g.Servers = nil
+	req.Name, req.JobAttempt = "c0123abcd-3", 3
+	done2, err := g.Acquire(context.Background(), req, nil)
+	if err != nil {
+		t.Fatalf("with no attached registry: %v", err)
+	}
+	done2()
+	req.Name, req.JobAttempt = "c0123abcd-4", 4
+	req.Capabilities = []string{"https://github.com/acme/caps#build={}"}
+	if _, err := g.Acquire(context.Background(), req, nil); err == nil || !strings.Contains(err.Error(), "attaches no capability servers") {
+		t.Fatalf("an external reference with no registry: %v, want the no-servers refusal", err)
 	}
 }
