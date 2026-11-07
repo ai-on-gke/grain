@@ -1148,14 +1148,18 @@ func (r APIRoute) externalTool(s *Server, tok *model.ExternalAgentToken) mcp.Too
 }
 
 // externalCall dispatches r in-process on s on behalf of the external agent
-// credential tok, running through s.ServeHTTP and agentAPIGate so the same
-// scope, repository, rail, and audit checks apply as on HTTP requests.
+// credential tok, running through s.ServeHTTP, roleGate, and agentAPIGate so
+// the same role, scope, repository, rail, and audit checks apply as on HTTP
+// requests.
 func (r APIRoute) externalCall(ctx context.Context, s *Server, tok *model.ExternalAgentToken, args map[string]any) (string, error) {
 	if s == nil {
 		return "", fmt.Errorf("this server is not initialized")
 	}
 	if tok == nil {
 		return "", fmt.Errorf("missing external agent credential")
+	}
+	if err := s.authorizeMCPRoleScope(ctx, r.Pattern); err != nil {
+		return "", err
 	}
 	rc, err := r.buildCall(args)
 	if err != nil {
@@ -1167,6 +1171,9 @@ func (r APIRoute) externalCall(ctx context.Context, s *Server, tok *model.Extern
 		return "", fmt.Errorf("reason is required: %s is destructive", r.Pattern)
 	}
 	if expect, ok := expectation(args); ok && r.takesExpect() {
+		if err := s.authorizeMCPRoleCall(ctx, r.Pattern, rc); err != nil {
+			return "", err
+		}
 		id := rc.params["id"]
 		detail, err := getTaskAsExternal(ctx, s, tok, id)
 		if err != nil {
