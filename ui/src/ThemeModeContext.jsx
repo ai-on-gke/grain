@@ -13,9 +13,7 @@
 // limitations under the License.
 
 import { createContext, useContext, useMemo, useState } from "react";
-
-const STORAGE_KEY = "grain.themeMode";
-const MODES = ["light", "dark", "auto"];
+import { STORAGE_KEY, loadStoredMode } from "@grain/ui-shared";
 
 // A default context value (rather than null) means components that read
 // this outside a ThemeModeProvider -- notably SettingsOverlay's existing
@@ -23,17 +21,8 @@ const MODES = ["light", "dark", "auto"];
 // instead of needing every render call updated to wrap one in.
 const ThemeModeContext = createContext({ mode: "auto", setMode: () => {} });
 
-function readStoredMode() {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    return MODES.includes(stored) ? stored : "auto";
-  } catch {
-    return "auto";
-  }
-}
-
 export function ThemeModeProvider({ children }) {
-  const [mode, setModeState] = useState(readStoredMode);
+  const [mode, setModeState] = useState(loadStoredMode);
 
   const setMode = (next) => {
     setModeState(next);

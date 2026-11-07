@@ -33,6 +33,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1397,6 +1398,93 @@ func TestStep12CatalogCRUDGroupAuthHeartbeatsDirectoryAndRouteEndToEnd(t *testin
 	if err != nil || accepted.Owner != "bob@example.com" || accepted.OwnerGroup != "group:team-alpha@example.com" {
 		t.Fatalf("AcceptTransfer by bob failed: %+v (err=%v)", accepted, err)
 	}
+
+	// 10. Status & AdminSummary authorization, unlisted privacy, and replica TTL health.
+	listedFalse := false
+	secretConn, err := aliceCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name:   "alice-unlisted-secret",
+		Kind:   api.KindConnected,
+		Listed: &listedFalse,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry alice-unlisted-secret: %v", err)
+	}
+	secretRow, err := st.GetEntryByName(ctx, "alice-unlisted-secret")
+	if err != nil {
+		t.Fatalf("GetEntryByName alice-unlisted-secret: %v", err)
+	}
+	_, _ = st.RecordHeartbeat(ctx, secretRow.ID, api.HeartbeatRequest{
+		GrainVersion: "v9.9.9-unlisted-private",
+		HostKind:     api.HostKindWorkstation,
+		Health:       api.HealthOK,
+	})
+	_, _ = st.AcquireTunnelSessionWithCred(ctx, secretRow.ID, "rep-step12", "198.51.100.99:5000", secretConn.Credential.CredentialID)
+
+	// Register a second replica whose heartbeat is fresh now, then advance past ReplicaTTL for stale-replica check.
+	_ = st.UpsertReplica(ctx, "rep-stale", "10.0.0.99:8082")
+	now = now.Add(20 * time.Second)
+	_ = st.UpsertReplica(ctx, "rep-step12", "127.0.0.1:18082")
+
+	// Non-admin cannot call /api/admin/summary (403) and does NOT see unlisted versions, counts, tunnels, or peer_addr on /api/status.
+	if _, err := bobCli.AdminSummary(ctx); !isAPIStatus(err, http.StatusForbidden) {
+		t.Fatalf("expected 403 Forbidden for non-admin AdminSummary, got %v", err)
+	}
+	bobStatus, err := bobCli.Status(ctx)
+	if err != nil {
+		t.Fatalf("bob Status: %v", err)
+	}
+	if _, leaked := bobStatus.VersionCounts["v9.9.9-unlisted-private"]; leaked {
+		t.Fatalf("non-admin /api/status leaked unlisted entry version: %+v", bobStatus.VersionCounts)
+	}
+	for _, rep := range bobStatus.Replicas {
+		if rep.PeerAddr != "" {
+			t.Fatalf("non-admin /api/status leaked replica peer_addr: %+v", rep)
+		}
+		if rep.ReplicaID == "rep-stale" && rep.Healthy {
+			t.Fatalf("stale replica marked healthy in /api/status: %+v", rep)
+		}
+		if rep.ReplicaID == "rep-step12" && !rep.Healthy {
+			t.Fatalf("fresh replica marked unhealthy in /api/status: %+v", rep)
+		}
+	}
+
+	adminCli := clientFor("admin@example.com")
+	adminStatus, err := adminCli.Status(ctx)
+	if err != nil {
+		t.Fatalf("admin Status: %v", err)
+	}
+	if adminStatus.VersionCounts["v9.9.9-unlisted-private"] != 1 {
+		t.Fatalf("expected admin /api/status to include unlisted entry version, got %+v", adminStatus.VersionCounts)
+	}
+	if adminStatus.TotalEntries != bobStatus.TotalEntries+1 {
+		t.Fatalf("expected admin TotalEntries (%d) == non-admin TotalEntries (%d) + 1", adminStatus.TotalEntries, bobStatus.TotalEntries)
+	}
+	if adminStatus.ActiveTunnels != bobStatus.ActiveTunnels+1 {
+		t.Fatalf("expected admin ActiveTunnels (%d) == non-admin ActiveTunnels (%d) + 1", adminStatus.ActiveTunnels, bobStatus.ActiveTunnels)
+	}
+
+	adminSum, err := adminCli.AdminSummary(ctx)
+	if err != nil {
+		t.Fatalf("admin AdminSummary: %v", err)
+	}
+	for _, rep := range adminSum.Replicas {
+		if rep.ReplicaID == "rep-stale" && rep.Healthy {
+			t.Fatalf("stale replica marked healthy in /api/admin/summary: %+v", rep)
+		}
+		if rep.ReplicaID == "rep-step12" && !rep.Healthy {
+			t.Fatalf("fresh replica marked unhealthy in /api/admin/summary: %+v", rep)
+		}
+	}
+}
+
+func TestDemoRefusesNonLoopbackAddr(t *testing.T) {
+	for _, bad := range []string{"0.0.0.0:0", ":0", "10.0.0.5:8080", "example.com:8080"} {
+		var out, errBuf strings.Builder
+		err := Run(context.Background(), []string{"demo", "-addr", bad}, &out, &errBuf)
+		if err == nil || !strings.Contains(err.Error(), "loopback") {
+			t.Fatalf("Run(demo -addr %q) = %v, want loopback refusal", bad, err)
+		}
+	}
 }
 
 func TestStep17StopStartAutoUpgradeAndMaintenanceWindowEndToEnd(t *testing.T) {
@@ -1558,6 +1646,475 @@ func TestStep17StopStartAutoUpgradeAndMaintenanceWindowEndToEnd(t *testing.T) {
 	}
 	if startingEntry.State != api.StateCreating {
 		t.Fatalf("expected state=creating after StartEntry, got %s", startingEntry.State)
+	}
+}
+
+type fakeOrphanProviderForStep16 struct {
+	mu      sync.Mutex
+	orphans []api.OrphanVMInfo
+}
+
+func (f *fakeOrphanProviderForStep16) ListOrphans() []api.OrphanVMInfo {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]api.OrphanVMInfo, len(f.orphans))
+	copy(out, f.orphans)
+	return out
+}
+
+func (f *fakeOrphanProviderForStep16) DeleteOrphan(ctx context.Context, zone, instanceID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, o := range f.orphans {
+		if o.Zone == zone && o.InstanceID == instanceID {
+			f.orphans = append(f.orphans[:i], f.orphans[i+1:]...)
+			return nil
+		}
+	}
+	return store.ErrNotFound
+}
+
+func TestStep16TwoStepTransferRestoreHardPurgeAndAdminRecoveryEndToEnd(t *testing.T) {
+	pgURL := startEphemeralPostgresForRegistryTest(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 7, 10, 0, 0, 0, time.UTC)
+	st, err := store.Open(ctx, pgURL, store.DefaultThresholds())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer st.Close()
+	st.SetNow(func() time.Time { return now })
+
+	if err := st.SeedShapes(ctx, []store.ShapeRow{
+		{Name: "small", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+		{Name: "large", MachineType: "n2-standard-8", BootDiskGB: 100, QuotaUnits: 2},
+	}); err != nil {
+		t.Fatalf("SeedShapes: %v", err)
+	}
+	if err := st.SeedSQLInstances(ctx, []store.SQLInstanceRow{
+		{
+			Name:           "sql-pool-1",
+			ConnectionName: "proj:us-central1:sql-pool-1",
+			PrivateIP:      "10.128.0.51",
+			MaxDatabases:   40,
+		},
+	}); err != nil {
+		t.Fatalf("SeedSQLInstances: %v", err)
+	}
+	if _, err := st.AcquireOrRenewLease(ctx, "reconciler", "rep-step16", 30*time.Second); err != nil {
+		t.Fatalf("AcquireOrRenewLease: %v", err)
+	}
+
+	groups := staticGroupResolverForTest{
+		StaticGroupChecker: webauth.NewStaticGroups(map[string][]string{
+			"group:team-alpha@example.com": {"alice@example.com", "coowner@example.com", "bob@example.com"},
+		}),
+	}
+	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
+		Verifier:       fakeFrontIdentity{},
+		Groups:         groups,
+		AllowedDomains: []string{"example.com"},
+		Admins:         []string{"user:admin@example.com"},
+	})
+	if err != nil {
+		t.Fatalf("NewAdmitter: %v", err)
+	}
+	signer, err := NewEphemeralLocalSigner("step16-k1")
+	if err != nil {
+		t.Fatalf("NewEphemeralLocalSigner: %v", err)
+	}
+	cfg, err := ParseConfig([]byte(validTestYAML()))
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	fakeOrphans := &fakeOrphanProviderForStep16{
+		orphans: []api.OrphanVMInfo{
+			{
+				InstanceID: "grain-orphan-01",
+				Zone:       "us-central1-a",
+				State:      "RUNNING",
+				InternalIP: "10.128.15.77",
+				EntryName:  "orphan-01",
+				DetectedAt: now.Add(-15 * time.Minute),
+			},
+		},
+	}
+	srv, err := NewServer(ServerOptions{
+		Config:    *cfg,
+		Store:     st,
+		Admitter:  admitter,
+		Groups:    groups,
+		Signer:    signer,
+		Orphans:   fakeOrphans,
+		ReplicaID: "rep-step16",
+		PeerAddr:  "127.0.0.1:18082",
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	srv.Router().SetNow(func() time.Time { return now })
+	_ = st.UpsertReplica(ctx, "rep-step16", "127.0.0.1:18082")
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	clientFor := func(email string) *api.Client {
+		c, err := api.NewClient(api.ClientConfig{
+			BaseURL:           ts.URL,
+			AllowInsecureHTTP: true,
+			ExtraHeaders:      http.Header{"X-Test-Email": []string{email}},
+		})
+		if err != nil {
+			t.Fatalf("NewClient(%s): %v", email, err)
+		}
+		return c
+	}
+
+	aliceCli := clientFor("alice@example.com")
+	coownerCli := clientFor("coowner@example.com")
+	bobCli := clientFor("bob@example.com")
+	carolCli := clientFor("carol@example.com")
+	adminCli := clientFor("admin@example.com")
+
+	// 1. Two-step transfer with 7-day expiry, cancel, credential/tunnel/SSH revocation, and expired offer rejection.
+	listedTrue := true
+	createdConn, err := aliceCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name:       "step16-conn",
+		Kind:       api.KindConnected,
+		OwnerGroup: "group:team-alpha@example.com",
+		Listed:     &listedTrue,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry step16-conn: %v", err)
+	}
+	connRow, err := st.GetEntryByName(ctx, "step16-conn")
+	if err != nil {
+		t.Fatalf("GetEntryByName step16-conn: %v", err)
+	}
+	if _, err := st.AcquireTunnelSessionWithCred(ctx, connRow.ID, "rep-step16", "198.51.100.55:4100", createdConn.Credential.CredentialID); err != nil {
+		t.Fatalf("AcquireTunnelSessionWithCred: %v", err)
+	}
+
+	// Offer transfer to bob; verify transfer_expires_at is ~7 days from now.
+	offered, err := aliceCli.OfferTransfer(ctx, "step16-conn", api.TransferRequest{
+		To: "bob@example.com",
+	})
+	if err != nil {
+		t.Fatalf("OfferTransfer: %v", err)
+	}
+	if offered.PendingOwner != "bob@example.com" || offered.TransferExpiresAt == nil {
+		t.Fatalf("expected pending_owner=bob and transfer_expires_at set, got %+v", offered)
+	}
+	if offered.TransferExpiresAt.Sub(now) != 7*24*time.Hour {
+		t.Fatalf("expected 7-day transfer_expires_at, got %v", offered.TransferExpiresAt.Sub(now))
+	}
+
+	// Cancel pending transfer via cancel=true.
+	cancelled, err := aliceCli.OfferTransfer(ctx, "step16-conn", api.TransferRequest{
+		Cancel: true,
+	})
+	if err != nil {
+		t.Fatalf("OfferTransfer(cancel): %v", err)
+	}
+	if cancelled.PendingOwner != "" || cancelled.TransferExpiresAt != nil {
+		t.Fatalf("expected pending_owner and transfer_expires_at cleared on cancel, got %+v", cancelled)
+	}
+
+	// Re-offer to bob, then advance clock 8 days (>7d) and verify bob's accept is rejected with 409 Conflict.
+	if _, err := aliceCli.OfferTransfer(ctx, "step16-conn", api.TransferRequest{To: "bob@example.com"}); err != nil {
+		t.Fatalf("re-OfferTransfer: %v", err)
+	}
+	now = now.Add(8 * 24 * time.Hour)
+	if _, err := bobCli.AcceptTransfer(ctx, "step16-conn"); !isAPIStatus(err, http.StatusConflict) {
+		t.Fatalf("expected 409 Conflict when accepting expired transfer offer, got %v", err)
+	}
+
+	// Re-offer at current clock; coowner (an owner_group peer) cannot accept on bob's behalf; bob accepts within 7 days.
+	if _, err := coownerCli.OfferTransfer(ctx, "step16-conn", api.TransferRequest{To: "bob@example.com"}); err != nil {
+		t.Fatalf("coowner OfferTransfer: %v", err)
+	}
+	if _, err := coownerCli.AcceptTransfer(ctx, "step16-conn"); !isAPIStatus(err, http.StatusForbidden) && !isAPIStatus(err, http.StatusConflict) {
+		t.Fatalf("expected coowner AcceptTransfer to be rejected with 403/409, got %v", err)
+	}
+	accepted, err := bobCli.AcceptTransfer(ctx, "step16-conn")
+	if err != nil {
+		t.Fatalf("bob AcceptTransfer: %v", err)
+	}
+	if accepted.Owner != "bob@example.com" || accepted.PendingOwner != "" || accepted.TransferExpiresAt != nil {
+		t.Fatalf("unexpected accepted entry: %+v", accepted)
+	}
+	if accepted.OwnerGroup != "group:team-alpha@example.com" {
+		t.Fatalf("expected owner_group preserved on intra-team transfer, got %q", accepted.OwnerGroup)
+	}
+	// Verify grc_ credentials were revoked and active tunnel session terminated on transfer acceptance.
+	if len(accepted.Credentials) == 0 || accepted.Credentials[0].RevokedAt == nil {
+		t.Fatalf("expected grc_ credential revoked on transfer acceptance, got %+v", accepted.Credentials)
+	}
+	if tsRow, _ := st.GetActiveTunnelSession(ctx, connRow.ID); tsRow != nil {
+		t.Fatalf("expected active tunnel session terminated on transfer acceptance, got %+v", tsRow)
+	}
+
+	// 2. Admin force-transfer with clear_owner_group=true.
+	if _, err := bobCli.ForceTransfer(ctx, "step16-conn", api.TransferRequest{To: "carol@example.com"}); !isAPIStatus(err, http.StatusForbidden) {
+		t.Fatalf("expected 403 Forbidden for non-admin ForceTransfer, got %v", err)
+	}
+	forced, err := adminCli.ForceTransfer(ctx, "step16-conn", api.TransferRequest{
+		To:              "carol@example.com",
+		ClearOwnerGroup: true,
+	})
+	if err != nil {
+		t.Fatalf("admin ForceTransfer: %v", err)
+	}
+	if forced.Owner != "carol@example.com" || forced.OwnerGroup != "" {
+		t.Fatalf("expected owner=carol and owner_group cleared after ForceTransfer, got %+v", forced)
+	}
+
+	// 3. Soft-delete, retention restore, and admin immediate hard purge.
+	vmCreated, err := aliceCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name:  "alice-retain-vm",
+		Kind:  api.KindInstance,
+		Shape: "small",
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry alice-retain-vm: %v", err)
+	}
+	if err := aliceCli.DeleteEntry(ctx, vmCreated.Entry.Name, api.DeleteEntryRequest{}); err != nil {
+		t.Fatalf("DeleteEntry alice-retain-vm: %v", err)
+	}
+	// Restore within db_retention_period succeeds and re-charges quota.
+	restored, err := aliceCli.RestoreEntry(ctx, "alice-retain-vm")
+	if err != nil {
+		t.Fatalf("RestoreEntry alice-retain-vm: %v", err)
+	}
+	if restored.State != api.StateCreating || restored.DeletedAt != nil {
+		t.Fatalf("expected restored entry in state=creating with nil deleted_at, got %+v", restored)
+	}
+
+	// Delete again and perform admin immediate hard purge with release_reservation=true.
+	if err := aliceCli.DeleteEntry(ctx, "alice-retain-vm", api.DeleteEntryRequest{}); err != nil {
+		t.Fatalf("DeleteEntry second time: %v", err)
+	}
+	if _, err := aliceCli.PurgeEntry(ctx, "alice-retain-vm", api.HardPurgeRequest{ReleaseReservation: true}); !isAPIStatus(err, http.StatusForbidden) {
+		t.Fatalf("expected 403 Forbidden for non-admin PurgeEntry, got %v", err)
+	}
+	purged, err := adminCli.PurgeEntry(ctx, "alice-retain-vm", api.HardPurgeRequest{
+		Confirm:            "alice-retain-vm",
+		ReleaseReservation: true,
+	})
+	if err != nil {
+		t.Fatalf("admin PurgeEntry: %v", err)
+	}
+	if purged.PurgedAt == nil {
+		t.Fatalf("expected purged_at set after PurgeEntry, got %+v", purged)
+	}
+	// Restore after hard purge is rejected with 409 Conflict.
+	if _, err := aliceCli.RestoreEntry(ctx, "alice-retain-vm"); !isAPIStatus(err, http.StatusConflict) {
+		t.Fatalf("expected 409 Conflict restoring hard-purged entry, got %v", err)
+	}
+	// Because release_reservation=true was passed, another owner (carol) can immediately reuse the name!
+	avail, err := carolCli.CheckName(ctx, "alice-retain-vm")
+	if err != nil || avail.Status != api.NameFree {
+		t.Fatalf("expected alice-retain-vm available after hard purge with release_reservation=true, got %+v (err=%v)", avail, err)
+	}
+
+	// 4. Admin recovery endpoints: Quotas, Owner disable, Scope conflict resolution, SQL draining, Orphan VM deletion, Tunnel disconnect, and AdminSummary.
+	// Create a reported scope conflict between two listed entries.
+	_, err = aliceCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name:   "conflict-incumbent",
+		Kind:   api.KindConnected,
+		Listed: &listedTrue,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry conflict-incumbent: %v", err)
+	}
+	_, err = bobCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name:   "conflict-contender",
+		Kind:   api.KindConnected,
+		Listed: &listedTrue,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry conflict-contender: %v", err)
+	}
+	if _, err := aliceCli.Heartbeat(ctx, "conflict-incumbent", api.HeartbeatRequest{
+		GrainVersion: "v1.6.0",
+		HostKind:     api.HostKindWorkstation,
+		Health:       api.HealthOK,
+		Scopes:       []api.HeartbeatScope{{Repo: "acme/shared", PathPrefix: "", Role: api.RolePrimary}},
+	}); err != nil {
+		t.Fatalf("Heartbeat conflict-incumbent: %v", err)
+	}
+	if _, err := bobCli.Heartbeat(ctx, "conflict-contender", api.HeartbeatRequest{
+		GrainVersion: "v1.6.0",
+		HostKind:     api.HostKindWorkstation,
+		Health:       api.HealthOK,
+		Scopes:       []api.HeartbeatScope{{Repo: "acme/shared", PathPrefix: "", Role: api.RolePrimary}},
+	}); err != nil {
+		t.Fatalf("Heartbeat conflict-contender: %v", err)
+	}
+
+	if _, err := st.AcquireOrRenewLease(ctx, "reconciler", "rep-step16", 30*time.Second); err != nil {
+		t.Fatalf("AcquireOrRenewLease after clock advance: %v", err)
+	}
+	sum, err := adminCli.AdminSummary(ctx)
+	if err != nil {
+		t.Fatalf("adminCli.AdminSummary: %v", err)
+	}
+	if len(sum.ScopeConflicts) != 1 || sum.ScopeConflicts[0].EntryName != "conflict-contender" || sum.ScopeConflicts[0].ConflictWith != "conflict-incumbent" {
+		t.Fatalf("expected 1 active scope conflict in AdminSummary, got %+v", sum.ScopeConflicts)
+	}
+	if len(sum.SQLInstances) != 1 || sum.SQLInstances[0].Name != "sql-pool-1" {
+		t.Fatalf("expected sql-pool-1 in AdminSummary.SQLInstances, got %+v", sum.SQLInstances)
+	}
+	if len(sum.Orphans) != 1 || sum.Orphans[0].InstanceID != "grain-orphan-01" {
+		t.Fatalf("expected grain-orphan-01 in AdminSummary.Orphans, got %+v", sum.Orphans)
+	}
+	if sum.ReconcilerLease == nil || sum.ReconcilerLease.HolderID != "rep-step16" || !sum.ReconcilerLease.Active {
+		t.Fatalf("expected active reconciler lease in AdminSummary, got %+v", sum.ReconcilerLease)
+	}
+
+	// Resolve scope conflict by demoting conflict-incumbent -> conflict-contender promotes to active primary!
+	if err := adminCli.ResolveScopeConflict(ctx, api.ResolveConflictRequest{
+		EntryName:  "conflict-incumbent",
+		Repo:       "acme/shared",
+		PathPrefix: "",
+		Resolution: "demote",
+	}); err != nil {
+		t.Fatalf("ResolveScopeConflict: %v", err)
+	}
+	contenderAfter, err := bobCli.GetEntry(ctx, "conflict-contender")
+	if err != nil {
+		t.Fatalf("GetEntry conflict-contender: %v", err)
+	}
+	if len(contenderAfter.Scopes) != 1 || !contenderAfter.Scopes[0].Active || contenderAfter.Scopes[0].EffectiveRole != api.RolePrimary {
+		t.Fatalf("expected conflict-contender promoted to active primary after incumbent demotion, got %+v", contenderAfter.Scopes)
+	}
+
+	// Set and reset custom quota via admin endpoints.
+	qSet, err := adminCli.SetQuota(ctx, "bob@example.com", api.SetQuotaRequest{
+		MaxInstanceUnits: 16,
+		MaxConnected:     25,
+	})
+	if err != nil || !qSet.HasOverride || qSet.MaxInstanceUnits != 16 || qSet.MaxConnected != 25 {
+		t.Fatalf("SetQuota failed: %+v (err=%v)", qSet, err)
+	}
+	qReset, err := adminCli.ResetQuota(ctx, "bob@example.com")
+	if err != nil || qReset.HasOverride {
+		t.Fatalf("ResetQuota failed: %+v (err=%v)", qReset, err)
+	}
+
+	// Disable owner carol@example.com and verify carol cannot create new entries (403 Forbidden owner_disabled).
+	disabledOwner, err := adminCli.SetOwnerDisabled(ctx, "carol@example.com", true)
+	if err != nil || !disabledOwner.Disabled {
+		t.Fatalf("SetOwnerDisabled failed: %+v (err=%v)", disabledOwner, err)
+	}
+	if _, err := carolCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name: "carol-blocked",
+		Kind: api.KindConnected,
+	}); !isAPIStatus(err, http.StatusForbidden) {
+		t.Fatalf("expected 403 Forbidden when disabled owner creates entry, got %v", err)
+	}
+
+	// Toggle SQL instance draining flag.
+	sqlDraining, err := adminCli.SetSQLInstanceDraining(ctx, "sql-pool-1", true)
+	if err != nil || !sqlDraining.Draining {
+		t.Fatalf("SetSQLInstanceDraining failed: %+v (err=%v)", sqlDraining, err)
+	}
+
+	// Delete orphan VM via admin endpoint.
+	if err := adminCli.DeleteOrphanVM(ctx, "us-central1-a", "grain-orphan-01"); err != nil {
+		t.Fatalf("DeleteOrphanVM: %v", err)
+	}
+	if len(fakeOrphans.ListOrphans()) != 0 {
+		t.Fatalf("expected 0 orphans after DeleteOrphanVM")
+	}
+
+	// Disconnect active tunnel session via admin endpoint.
+	incRow, _ := st.GetEntryByName(ctx, "conflict-incumbent")
+	if _, err := st.AcquireTunnelSession(ctx, incRow.ID, "rep-step16", "198.51.100.70:4200"); err != nil {
+		t.Fatalf("AcquireTunnelSession conflict-incumbent: %v", err)
+	}
+	if err := adminCli.DisconnectTunnel(ctx, "conflict-incumbent"); err != nil {
+		t.Fatalf("DisconnectTunnel: %v", err)
+	}
+	if tsAfter, _ := st.GetActiveTunnelSession(ctx, incRow.ID); tsAfter != nil {
+		t.Fatalf("expected tunnel session removed after DisconnectTunnel, got %+v", tsAfter)
+	}
+}
+
+func TestStep18DocsRegistryAndAccessCode(t *testing.T) {
+	regDocBytes, err := os.ReadFile(filepath.Join("..", "..", "docs", "registry.md"))
+	if err != nil {
+		t.Fatalf("reading docs/registry.md: %v", err)
+	}
+	regDoc := string(regDocBytes)
+
+	for _, want := range []string{
+		"docker.io/grainai/registry",
+		"kind = instance",
+		"kind = connected",
+		"backend_url",
+		"X-Grain-Registry-Assertion",
+		"-registry-connect",
+		"/api/entries/<name>/connect",
+		"/api/entries/<name>/heartbeat",
+		"owner_group",
+		"GET /api/directory",
+		"GET /api/route",
+		"grain registry directory",
+		"grain registry route",
+		"grain registry register",
+		"grain registry scopes",
+		"primary_conflict",
+	} {
+		if !strings.Contains(regDoc, want) {
+			t.Errorf("docs/registry.md missing %q", want)
+		}
+	}
+
+	// Extract the YAML config example from docs/registry.md and validate it via ParseConfig.
+	const yamlStart = "```yaml\n"
+	startIdx := strings.Index(regDoc, yamlStart)
+	if startIdx < 0 {
+		t.Fatalf("docs/registry.md has no ```yaml block")
+	}
+	yamlBody := regDoc[startIdx+len(yamlStart):]
+	endIdx := strings.Index(yamlBody, "\n```")
+	if endIdx < 0 {
+		t.Fatalf("docs/registry.md has unterminated ```yaml block")
+	}
+	yamlSnippet := yamlBody[:endIdx]
+	cfg, err := ParseConfig([]byte(yamlSnippet))
+	if err != nil {
+		t.Fatalf("ParseConfig on docs/registry.md reference config failed: %v", err)
+	}
+	if cfg.Signing.JWTTTL != 60*time.Second {
+		t.Fatalf("docs/registry.md config jwt_ttl = %s, want 60s", cfg.Signing.JWTTTL)
+	}
+	if cfg.Compute.SSHBreakGlass == nil || !*cfg.Compute.SSHBreakGlass {
+		t.Fatalf("docs/registry.md config ssh_break_glass = %v, want true", cfg.Compute.SSHBreakGlass)
+	}
+	if cfg.Observability.FleetLogs {
+		t.Fatalf("docs/registry.md config fleet_logs = true, want false")
+	}
+
+	acDocBytes, err := os.ReadFile(filepath.Join("..", "..", "docs", "access-code.md"))
+	if err != nil {
+		t.Fatalf("reading docs/access-code.md: %v", err)
+	}
+	acDoc := string(acDocBytes)
+	for _, want := range []string{
+		"-ui-require-verifier=registry",
+		"-ui-registry-issuer",
+		"-ui-registry-audience",
+		"-ui-registry-keys-url",
+		"X-Grain-Registry-Assertion",
+		"--tunnel-through-iap",
+		"roles/compute.osAdminLogin",
+		"roles/iap.tunnelResourceAccessor",
+	} {
+		if !strings.Contains(acDoc, want) {
+			t.Errorf("docs/access-code.md missing %q", want)
+		}
 	}
 }
 

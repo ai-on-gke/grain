@@ -41,10 +41,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
-	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
@@ -194,24 +191,23 @@ func OfferedCapabilities() []Capability {
 		offered = append(offered, Capability{ID: r.ID, Name: r.Name, Description: r.Description})
 	}
 	offered = append(offered, []Capability{
-		{ID: prioritydispatch.CapabilityName, Name: "Priority dispatch",
-			Description: prioritydispatch.Description},
-		{ID: durable.CapabilityName, Name: "Durable",
-			Description: durable.Description},
-		// No bootstrap-playbooks row: it was retired onto the config-map
-		// server's config-map {"config_maps":["bootstrap"]} (schema migration
-		// 118), which is offered with the other capability-server methods.
-		{ID: "github-sandbox", Name: "GitHub sandbox",
-			Description: "Create a private, single-use GitHub sandbox repo for this task to work in instead of /repo"},
-		{ID: "console", Name: "Interactive console",
-			Description: "Run this task's agent CLI on a terminal in the UI, and keep it running until somebody closes it -- everything else about the task is unchanged, including the pull request its branch becomes"},
+		// No priority-dispatch or durable rows: both were retired onto the
+		// task's admission setting (schema migration 122). No console row:
+		// it was retired onto the task's hosting setting (schema migration
+		// 123). No bootstrap-playbooks row: it was retired onto the
+		// config-map server's config-map {"config_maps":["bootstrap"]}
+		// (schema migration 118), which is offered with the other
+		// capability-server methods. No github-sandbox row: retired onto
+		// the in-process github server's sandbox-repo method (schema
+		// migration 124), offered with the other capability-server methods.
 		// Not grain#ci: nobody attaches it by hand. A repository's CI
 		// Mode is the switch, and grain grants grain#ci to that
 		// repository's tasks itself (pkg/capability/grainci's package
 		// doc). Every place a capability is chosen refuses it with
 		// grainci.Refusal, by way of capabilityRefusal.
-		{ID: readissues.CapabilityName, Name: "Read issues",
-			Description: "Let this task read issues and comments from GitHub"},
+		// Not read-issues: retired onto the in-process github server's
+		// read-issues method (schema migration 121), offered with the
+		// other capability-server methods.
 	}...)
 	// No row for the model proxies: claude-proxy, openai-proxy and
 	// gemini-proxy were retired onto the in-process model-proxy server's
@@ -490,6 +486,17 @@ type Config struct {
 	// another machine dialing in to /api/hostd/connect (hostd.Remote,
 	// which checks the hostd token itself); nil refuses them.
 	HostdRemote http.Handler
+	// LocalHostdLogins, when set, is the agent CLI logins on the machine
+	// of the co-located grain hostd (model.LocalHostd), from its hello,
+	// and whether it said: what the host pickers show beside "local". A
+	// dialing-in hostd's come with its session (hostd.RemotePeer.Logins).
+	LocalHostdLogins func(ctx context.Context) ([]string, bool)
+	// AmbientNeedsHost, when set, reports whether a connection of
+	// framework would start its CLI through grain hostd, with stored as
+	// Settings -> Models' run locations: where it would, a connection
+	// with ambient credentials has to name its host
+	// (model.CheckAmbientPlacement). Nil refuses no ambient connection.
+	AmbientNeedsHost func(framework string, stored map[string]model.CLIRunSetting) bool
 	// Upgrader is set only when this deployment was told how it
 	// upgrades itself: which image to pull per branch
 	// (pkg/cli/daemon.go's -upgrade-image, the shape scripts/setup.sh
@@ -1157,6 +1164,12 @@ type Config struct {
 	DBDSN string
 	// DataDir is the root data directory of the grain installation.
 	DataDir string
+	// ReleaseApprovalDir is where the release-approval signing key
+	// (pkg/releaseapproval.KeyFile) is kept, when it is not DataDir: the
+	// demo, which has no data directory, keeps one in its throwaway
+	// store's directory so an Inbox Approve over -github-sim can sign
+	// its record.
+	ReleaseApprovalDir string
 	// SourceDB is the raw *sql.DB backing this store, which a task's
 	// database access queries (task_db.go).
 	SourceDB *sql.DB

@@ -37,6 +37,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/daemon"
@@ -145,6 +146,13 @@ type Options struct {
 	// Qualification is -qualification (demo_qualification.go): a release
 	// candidate whose qualification run waits for approval.
 	Qualification bool
+	// LegacyCapability is -legacy-capability: register LegacyCapabilityID,
+	// a made-up provider with nothing to mint, the way an edition
+	// contributes one (capability.RegisterProvider). Every legacy provider
+	// core shipped has been retired onto a capability server method, so
+	// without it the Legacy capabilities pickers -- still how an edition's
+	// providers are granted -- have no row to show or exercise.
+	LegacyCapability bool
 	// SecretsStore is -secrets-store (demo_qualification.go): a real
 	// secrets store in the demo's throwaway directory.
 	SecretsStore bool
@@ -267,6 +275,14 @@ const demoGitHubToken = "ghp_demo_secret_token_acme_widgets"
 // "grain demo: ...", ready for the command to print as it is.
 func Run(opts Options) error {
 	repo := opts.Repo
+	if opts.LegacyCapability {
+		defer capability.RegisterProvider(capability.Registration{
+			ID:          LegacyCapabilityID,
+			Name:        LegacyCapabilityName,
+			Description: "A made-up legacy capability this demo registers, as an edition would, with nothing to mint",
+			New:         func() model.CapabilityProvider { return &legacyCapability{} },
+		})()
+	}
 	cfg := ui.Config{
 		Actor:         ui.DefaultActor(daemon.ActorID(opts.Actor)),
 		DefaultTarget: &repo,
@@ -284,6 +300,12 @@ func Run(opts Options) error {
 		RequireVerifier:   opts.RequireVerifier,
 		RequireIAP:        opts.RequireIAP,
 		AllowedPrincipals: opts.AllowedPrincipals,
+		// The co-located host reports agent CLI logins of its own, as a
+		// real one's hello does (hostd.Hello.Logins), so the host
+		// pickers in Settings show what an ambient connection spends.
+		LocalHostdLogins: func(context.Context) ([]string, bool) {
+			return []string{hostd.LoginAntigravity, hostd.LoginClaude}, true
+		},
 	}
 	if opts.CloudIdentityEndpoint != "" {
 		cfg.GroupChecker = ui.NewCloudIdentityGroupChecker(ui.WithCloudIdentityEndpoint(opts.CloudIdentityEndpoint))
@@ -293,6 +315,9 @@ func Run(opts Options) error {
 	if err != nil {
 		return err
 	}
+	// An ambient connection whose CLI goes through the demo's grain
+	// hostd names its host, as on a deployment.
+	cfg.AmbientNeedsHost = runCfg.CLIRunsThroughHostd
 	demoSandboxCfg := runCfg
 	if demoSandboxCfg.SandboxBackend() == "" {
 		demoSandboxCfg.ContainerSandboxes = true
@@ -325,6 +350,11 @@ func Run(opts Options) error {
 	}
 	defer db.Close()
 	cfg.SourceDB, cfg.DBDriver = db, "sqlite"
+	// The release-approval signing key: a deployment keeps it in its
+	// data directory, which a demo has none of, so an Inbox Approve or a
+	// rollback over -github-sim answered 500
+	// (docs/test-runs/2026-11-04-release-approval.md, F3).
+	cfg.ReleaseApprovalDir = dir
 
 	// The one piece of this demo that is not a row in the store: the
 	// System pane's Logs tab, which reads ui.Config.Logs rather than
@@ -405,7 +435,7 @@ func Run(opts Options) error {
 	storedCfg.DefaultModel = "gemini-2.5-pro"
 	storedCfg.GCPProject = "grain-sandbox-dev"
 	storedCfg.GCPServiceAccountEmail = "grain-sb-agent-0@grain-sandbox-dev.iam.gserviceaccount.com"
-	storedCfg.DefaultCapabilities = append(model.SelfDebugGrants(), "read-issues")
+	storedCfg.DefaultCapabilities = append(model.SelfDebugGrants(), model.GitHubReadIssuesGrant)
 	storedCfg.TargetRepos = []string{"acme/widgets"}
 	// The deployment's git connection to the fake credential above, as
 	// `grain connections import` would record it.
@@ -1436,6 +1466,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		return err
 	}
 	dt.Interactive = true
+	dt.Admission = model.AdmissionDurable
 	dt.Tags = append(dt.Tags, model.ConsoleSessionTag(model.DirectorSessionID))
 	dt.Grants = model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID})
 	dt.Origin = model.Origin{
@@ -2919,4 +2950,27 @@ func processDemoGitHubWebhooks(ctx context.Context, store *model.Store, events o
 		GitHubEvents: events,
 	}
 	return runDemoReconcilers(ctx, deps, now, "github-events", "takeovers")
+}
+
+// LegacyCapabilityID and LegacyCapabilityName are -legacy-capability's
+// made-up provider (Options.LegacyCapability).
+const (
+	LegacyCapabilityID   = "example-legacy"
+	LegacyCapabilityName = "Example legacy capability"
+)
+
+// legacyCapability is -legacy-capability's provider: a grant with nothing
+// to mint or place.
+type legacyCapability struct {
+	model.BaseCapability
+}
+
+func (*legacyCapability) Spec() model.CapabilitySpec {
+	return model.CapabilitySpec{
+		Name:        LegacyCapabilityID,
+		Label:       LegacyCapabilityName,
+		Description: "A made-up legacy capability this demo registers, as an edition would, with nothing to mint",
+		Source:      model.GrantByLabel,
+		Provision:   model.ProvisionGrant,
+	}
 }

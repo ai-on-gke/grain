@@ -46,7 +46,9 @@ func checkGrainCIPolicyRewritten(t *testing.T, pol model.CapabilityPolicy) {
 	if cat == nil {
 		t.Fatal("catalogue lost")
 	}
-	if want := []string{"read-issues", model.GrainCIGrant}; !slices.Equal(cat.Defaults.Task, want) {
+	// read-issues rides along to show the rewrite leaves other entries in
+	// place; migration 121 retired it onto the github server on the way.
+	if want := []string{model.GitHubReadIssuesGrant, model.GrainCIGrant}; !slices.Equal(cat.Defaults.Task, want) {
 		t.Errorf("defaults.task = %v, want %v", cat.Defaults.Task, want)
 	}
 	if want := []string{model.PackagePublishRef + "={}", model.GrainCIGrant}; !slices.Equal(cat.Defaults.CI, want) {
@@ -55,16 +57,16 @@ func checkGrainCIPolicyRewritten(t *testing.T, pol model.CapabilityPolicy) {
 	if want := []string{model.GrainCIGrant}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].CI, want) {
 		t.Errorf("acme/widgets CI defaults = %v, want %v once", cat.Defaults.Repos["acme/widgets"].CI, want)
 	}
-	if want := []string{"read-issues"}; !slices.Equal(cat.Defaults.Repos["acme/tools"].Task, want) {
+	if want := []string{model.GitHubReadIssuesGrant}; !slices.Equal(cat.Defaults.Repos["acme/tools"].Task, want) {
 		t.Errorf("acme/tools task defaults = %v, want %v", cat.Defaults.Repos["acme/tools"].Task, want)
 	}
 }
 
 // Migration 96 rewrote stored grain-ci grants everywhere but the
 // capability policy, so a catalogue naming grain-ci kept the bare alias
-// through every upgrade. Migration 121 finishes the rewrite there, and a
+// through every upgrade. Migration 125 finishes the rewrite there, and a
 // second run changes nothing.
-func TestMigration121RewritesGrainCIInThePolicy(t *testing.T) {
+func TestMigration125RewritesGrainCIInThePolicy(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 	cfg := testConfig()
@@ -88,7 +90,7 @@ func TestMigration121RewritesGrainCIInThePolicy(t *testing.T) {
 	if err := db.QueryRowContext(ctx, "SELECT `capability_policy` FROM `grain_config` WHERE `id` = 1").Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 120 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 124 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {

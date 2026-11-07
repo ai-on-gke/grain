@@ -270,13 +270,13 @@ func TestCreateScheduleAcceptsCapabilitiesAndReads(t *testing.T) {
 	c, _, ctx := testClient(t)
 	sched, err := c.CreateSchedule(ctx, ui.CreateScheduleRequest{
 		Title: "x", Repo: "acme/widgets", Recurrence: everyDay,
-		Capabilities: []string{"read-issues"},
+		Capabilities: []string{model.GitHubSandboxRepoGrant},
 		Reads:        []string{"acme/shared-lib"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sched.Capabilities) != 1 || sched.Capabilities[0] != "read-issues" {
+	if len(sched.Capabilities) != 1 || sched.Capabilities[0] != model.GitHubSandboxRepoGrant {
 		t.Errorf("capabilities = %v, want [gemini-key]", sched.Capabilities)
 	}
 	if len(sched.Reads) != 1 || sched.Reads[0] != "acme/shared-lib" {
@@ -498,7 +498,7 @@ func TestUpdateScheduleReplacesRecurrenceCapabilitiesAndReads(t *testing.T) {
 		t.Fatal(err)
 	}
 	weekly := ui.Recurrence{Kind: "weekly", TimeOfDay: "08:00", Weekday: "friday"}
-	capabilities := []string{"read-issues"}
+	capabilities := []string{model.GitHubSandboxRepoGrant}
 	reads := []string{"acme/shared-lib"}
 	updated, err := c.UpdateSchedule(ctx, sched.ID, ui.UpdateScheduleRequest{
 		Recurrence:   &weekly,
@@ -511,7 +511,7 @@ func TestUpdateScheduleReplacesRecurrenceCapabilitiesAndReads(t *testing.T) {
 	if updated.Recurrence != weekly {
 		t.Errorf("recurrence = %+v, want %+v", updated.Recurrence, weekly)
 	}
-	if len(updated.Capabilities) != 1 || updated.Capabilities[0] != "read-issues" {
+	if len(updated.Capabilities) != 1 || updated.Capabilities[0] != model.GitHubSandboxRepoGrant {
 		t.Errorf("capabilities = %v, want [gemini-key]", updated.Capabilities)
 	}
 	if len(updated.Reads) != 1 || updated.Reads[0] != "acme/shared-lib" {
@@ -753,7 +753,7 @@ func TestCreateScheduleFromATemplateCopiesItsContent(t *testing.T) {
 	tmpl, err := c.CreateTemplate(ctx, ui.CreateTemplateRequest{
 		Name: "Dependency bump", Title: "Bump dependencies", Description: "Bump every dependency.",
 		AutoMerge:    true,
-		Capabilities: []string{"read-issues"}, Reads: []string{"acme/shared-lib"},
+		Capabilities: []string{model.GitHubSandboxRepoGrant}, Reads: []string{"acme/shared-lib"},
 		Writes: []ui.WriteTarget{{Repo: "acme/widgets-state", Base: "deploy"}},
 	})
 	if err != nil {
@@ -780,7 +780,7 @@ func TestCreateScheduleFromATemplateCopiesItsContent(t *testing.T) {
 	if sched.Repo != "acme/widgets" || sched.Base != "main" {
 		t.Errorf("repo/base = %q/%q, want this request's own", sched.Repo, sched.Base)
 	}
-	if len(sched.Capabilities) != 1 || sched.Capabilities[0] != "read-issues" {
+	if len(sched.Capabilities) != 1 || sched.Capabilities[0] != model.GitHubSandboxRepoGrant {
 		t.Errorf("capabilities = %v, want [gemini-key]", sched.Capabilities)
 	}
 	if len(sched.Reads) != 1 || sched.Reads[0] != "acme/shared-lib" {

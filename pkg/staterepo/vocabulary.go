@@ -141,6 +141,14 @@ func grainConfigWarnings(path string, i int, row map[string]any, say func(column
 		say("network_access", word, "%s row %d has network_access %q, which is not %s",
 			path, i, word, model.NetworkAccessNames())
 	}
+	if word, ok := wordIn(row, "default_admission"); ok && word != "" && !model.ValidAdmission(model.Admission(word)) {
+		say("default_admission", word, "%s row %d has default_admission %q, which is not \"standard\", \"bypass\" or \"durable\"",
+			path, i, word)
+	}
+	if word, ok := wordIn(row, "default_hosting"); ok && word != "" && !model.ValidHosting(model.Hosting(word)) {
+		say("default_hosting", word, "%s row %d has default_hosting %q, which is not \"unattended\" or \"console\"",
+			path, i, word)
+	}
 }
 
 // panelWarnings is the dashboard row: three closed vocabularies on one

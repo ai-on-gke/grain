@@ -20,11 +20,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -680,8 +682,42 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 		if err := model.MigrateTaskOwnerAndProposer(ctx, tx); err != nil {
 			return fmt.Errorf("staterepo: %w", err)
 		}
+		if err := model.MigrateAdmissionFromGrants(ctx, tx, true); err != nil {
+			return fmt.Errorf("staterepo: %w", err)
+		}
+		if err := model.MigrateHostingFromGrants(ctx, tx, true); err != nil {
+			return fmt.Errorf("staterepo: %w", err)
+		}
+	}
+	// Host work nothing places, written down as placed on the only host
+	// there is, when the daemon importing says which that is
+	// (SetImplicitHostPlacement): a run: host server or a connection whose
+	// CLI runs on the host by Settings' "Host" or GRAIN_*_RUN=host arrives
+	// from grain/config placed, and the next export writes it so.
+	if p := implicitHostPlacement.Load(); p != nil {
+		changes, err := model.MigrateImplicitHostPlacement(ctx, tx, *p)
+		if err != nil {
+			return fmt.Errorf("staterepo: %w", err)
+		}
+		for _, c := range changes {
+			log.Printf("staterepo: host placement: %s", c)
+		}
 	}
 	return tx.Commit()
+}
+
+// implicitHostPlacement is what the daemon importing knows about where
+// unplaced host work goes (model.ImplicitHostPlacement); nil -- a CLI
+// validating a change, a test -- leaves that work as the dump says.
+var implicitHostPlacement atomic.Pointer[model.ImplicitHostPlacement]
+
+// SetImplicitHostPlacement has every later import place unplaced host
+// work on the only host there is, as p describes it
+// (model.MigrateImplicitHostPlacement); nil stops it. It returns a
+// function putting back what was set before, for a test.
+func SetImplicitHostPlacement(p *model.ImplicitHostPlacement) (restore func()) {
+	prev := implicitHostPlacement.Swap(p)
+	return func() { implicitHostPlacement.Store(prev) }
 }
 
 func importTable(ctx context.Context, tx *sql.Tx, dir, table string, withhold bool, found int) error {

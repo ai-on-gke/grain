@@ -173,6 +173,7 @@ func TestReleaseMachineryClearsOnSecurityReview(t *testing.T) {
 		".grain/workflows/release.yml", ".github/workflows/release.yml",
 		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 		".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
+		"scripts/release-assets.sh", ".github/workflows/release-train-assets.yml",
 	} {
 		if !containsString(trigger.Paths, p) {
 			t.Errorf("the release-machinery trigger does not hold %s (paths %v)", p, trigger.Paths)
@@ -318,6 +319,43 @@ func TestPublishReleaseVerifiesBeforeItPublishes(t *testing.T) {
 		}
 		if !strings.Contains(step, "if: steps.verify.outputs.train == 'true'") {
 			t.Errorf("publish-release.yml step %q runs for a tag verify did not pass as the train's", name)
+		}
+	}
+}
+
+// Regression for task 3060: ai-on-gke/grain runs with ci_mode: github, where
+// applyGrainCIGrant strips grain#ci (`grain-ci`) from scheduled and suite
+// compositions and CreateTask refuses it when copied from a template. Every
+// release and qualification template whose body calls `grain ci` or
+// `list_ci_runs` / `get_ci_log` must carry repo-scoped api:ci-read@ai-on-gke/grain.
+func TestReleaseAndQualificationTemplatesHoldScopedCIRead(t *testing.T) {
+	decl := declarations(t)
+	want := model.APIGrantPrefix + "ci-read@" + model.GrainSourceRepo().String()
+	need := map[string]bool{
+		".grain/templates/release-train.yml":                false,
+		".grain/templates/release-watchdog.yml":             false,
+		".grain/templates/release-process-review.yml":       false,
+		".grain/templates/qualification-ci-diagnostics.yml": false,
+	}
+	for _, tmpl := range decl.Templates {
+		if _, ok := need[tmpl.Path]; !ok {
+			continue
+		}
+		need[tmpl.Path] = true
+		var caps []string
+		for _, g := range tmpl.Template.Grants {
+			caps = append(caps, g.Capability)
+			if model.IsGrainCIGrant(g.Capability) {
+				t.Errorf("%s carries %q, which applyGrainCIGrant strips on ci_mode: github", tmpl.Path, g.Capability)
+			}
+		}
+		if !containsString(caps, want) {
+			t.Errorf("%s grants = %v, want %q", tmpl.Path, caps, want)
+		}
+	}
+	for path, seen := range need {
+		if !seen {
+			t.Errorf("%s is not declared", path)
 		}
 	}
 }

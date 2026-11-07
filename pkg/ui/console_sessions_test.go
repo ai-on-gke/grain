@@ -326,10 +326,14 @@ func TestUpdatingASessionThisDeploymentDoesNotHaveIsRefused(t *testing.T) {
 func TestConsoleSessionCapabilitiesSayWhichOnesThisDeploymentCanHonour(t *testing.T) {
 	t.Parallel()
 	_, store, _ := testClient(t)
+	sec := secrets.New(t.TempDir())
 	srv := ui.NewServer(ui.Config{
-		Actor:        ui.DefaultActor("alice"),
-		Capabilities: ui.OfferedCapabilities(),
-		Secrets:      secrets.New(t.TempDir()),
+		Actor: ui.DefaultActor("alice"),
+		Capabilities: append(ui.OfferedCapabilities(), ui.Capability{
+			ID:   "github-sandbox",
+			Name: "GitHub sandbox",
+		}),
+		Secrets: sec,
 	}, store)
 
 	rec := do(t, srv, http.MethodGet, "/api/console-sessions", "")
@@ -354,13 +358,28 @@ func TestConsoleSessionCapabilitiesSayWhichOnesThisDeploymentCanHonour(t *testin
 	if len(sandbox.Needs) == 0 {
 		t.Error("github-sandbox says it is not ready without naming a single thing it needs")
 	}
-	// One that needs no configuration at all stays on offer.
-	debug, ok := byID["read-issues"]
-	if !ok {
-		t.Fatalf("read-issues is missing from %v", resp.Capabilities)
+	// Once configured, that same capability reports ready on offer.
+	if err := sec.Set("github-app", "app-id", []byte("123")); err != nil {
+		t.Fatal(err)
 	}
-	if debug.Ready == nil || !*debug.Ready {
-		t.Errorf("read-issues ready = %v, want true: it needs nothing configured", debug.Ready)
+	if err := sec.Set("github-app", "private-key", []byte("-----BEGIN KEY-----")); err != nil {
+		t.Fatal(err)
+	}
+	rec = do(t, srv, http.MethodGet, "/api/console-sessions", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	resp = decode[ui.ConsoleSessionSettingsResponse](t, rec)
+	byID = make(map[string]ui.Capability, len(resp.Capabilities))
+	for _, capability := range resp.Capabilities {
+		byID[capability.ID] = capability
+	}
+	readySandbox, ok := byID["github-sandbox"]
+	if !ok {
+		t.Fatalf("github-sandbox is missing from %v", resp.Capabilities)
+	}
+	if readySandbox.Ready == nil || !*readySandbox.Ready {
+		t.Errorf("github-sandbox ready = %v, want true after App secrets set", readySandbox.Ready)
 	}
 }
 
@@ -1151,7 +1170,7 @@ func TestActiveConsoleSessionEditableWhenStateRepoConfigured(t *testing.T) {
 		t.Fatalf("len(listed.Sessions) = %d, want 1", len(listed.Sessions))
 	}
 	dir := listed.Sessions[0]
-	for _, wantCap := range []string{"read-issues", "api:tasks:admin", "api:release-manager"} {
+	for _, wantCap := range []string{model.GitHubReadIssuesGrant, "api:tasks:admin", "api:release-manager"} {
 		if !slices.Contains(dir.Capabilities, wantCap) {
 			t.Errorf("GET /api/console-sessions Capabilities = %v, missing %q", dir.Capabilities, wantCap)
 		}

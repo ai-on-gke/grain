@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -68,13 +69,13 @@ func TestCreateTemplateAcceptsCapabilitiesAndReads(t *testing.T) {
 	c, _, ctx := testClient(t)
 	tmpl, err := c.CreateTemplate(ctx, ui.CreateTemplateRequest{
 		Name: "x", Title: "x",
-		Capabilities: []string{"read-issues"},
+		Capabilities: []string{"github-sandbox"},
 		Reads:        []string{"acme/shared-lib"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tmpl.Capabilities) != 1 || tmpl.Capabilities[0] != "read-issues" {
+	if len(tmpl.Capabilities) != 1 || tmpl.Capabilities[0] != model.GitHubSandboxRepoGrant {
 		t.Errorf("capabilities = %v, want [gemini-key]", tmpl.Capabilities)
 	}
 	if len(tmpl.Reads) != 1 || tmpl.Reads[0] != "acme/shared-lib" {

@@ -80,20 +80,20 @@ func TestThePipelineStewardHoldsTheDocumentedPresetsAndNothingDangerous(t *testi
 	if tmpl.NothingNeededAction != model.NothingNeededAck {
 		t.Errorf("NothingNeededAction = %q, want ack: a closed standing task loses its handover", tmpl.NothingNeededAction)
 	}
+	if tmpl.Admission != model.AdmissionDurable {
+		t.Errorf("Admission = %q, want %q", tmpl.Admission, model.AdmissionDurable)
+	}
 	var names []string
 	for _, g := range tmpl.Grants {
 		names = append(names, g.Capability)
 	}
-	for _, want := range []string{"api:task-admin", "api:dispatch-control", "api:ci-read", "api:self-debug", model.GrainSourceGrant,
-		model.PriorityDispatchCapability, model.DurableCapability} {
+	for _, want := range []string{"api:task-admin", "api:dispatch-control", "api:ci-read", "api:self-debug", model.GrainSourceGrant} {
 		if !slices.Contains(names, want) {
 			t.Errorf("grants = %v, want %s", names, want)
 		}
 	}
 	for _, name := range names {
-		// priority-dispatch and durable are a person's to grant to any
-		// other task; the steward's template carries them by construction.
-		if model.IsPersonOnlyGrant(name) && name != model.PriorityDispatchCapability && name != model.DurableCapability {
+		if model.IsPersonOnlyGrant(name) {
 			t.Errorf("grant %s is one only a person may give", name)
 		}
 		g, isAPI, err := model.ParseAPIGrant(name)

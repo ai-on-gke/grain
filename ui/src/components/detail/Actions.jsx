@@ -18,6 +18,7 @@ import {
   Button,
   Checkbox,
   FormControlLabel,
+  MenuItem,
   Stack,
   TextField,
 } from "@mui/material";
@@ -37,6 +38,25 @@ import TaskLink from "./TaskLink.jsx";
 import AccessGate from "../AccessGate.jsx";
 import { ReviewActions } from "../ClReview.jsx";
 import ClSubmitActions from "../ClSubmit.jsx";
+
+// ADMISSION_HELP explains each admission value under the task pane's
+// Admission select (design/design/unified-grants.design.md §4.1).
+const ADMISSION_HELP = {
+  standard: "Queued with ordinary work, under the worker limit.",
+  bypass:
+    "Admitted past the worker and merger limits and a pipeline pause; still charged to the sandbox budget.",
+  durable:
+    "Bypass queue, plus no wall-clock deadline: suspended when idle and counted under the durable limit.",
+};
+
+// HOSTING_HELP explains each hosting value under the task pane's
+// Hosting select (design/design/unified-grants.design.md §4.1).
+const HOSTING_HELP = {
+  unattended:
+    "Hands the agent its prompt and runs the turn to completion on its own.",
+  console:
+    "Runs the agent CLI on an interactive terminal in the UI until somebody closes it.",
+};
 
 // closePullRequest is deliberately local state that dies with the
 // overlay, and starts false every time it is mounted: it is a choice
@@ -621,6 +641,82 @@ export default function Actions({ t, config, act, onOpenTask }) {
             sx={{ display: "flex", m: 0 }}
             slotProps={{ typography: { fontSize: "0.8rem" } }}
           />
+        </AccessGate>
+      )}
+      {/* Admission (model.Task.Admission, ui.UpdateTaskRequest.Admission,
+          design/design/unified-grants.design.md §4.1): the task setting
+          that replaced the priority-dispatch and durable grants. Each
+          value includes the one before it. Only a person may raise it
+          above Standard; a console session is Durable by construction. */}
+      {t.state !== "closed" && (
+        <AccessGate scope="tasks:write" repo={t.repo}>
+          <TextField
+            select
+            size="small"
+            name="admission"
+            label="Admission"
+            value={t.admission || "standard"}
+            disabled={!!t.consoleSession}
+            onChange={(e) => {
+              const admission = e.target.value;
+              if (admission === (t.admission || "standard")) return;
+              act(
+                () =>
+                  api(`/api/tasks/${t.id}`, {
+                    method: "PATCH",
+                    body: JSON.stringify({ admission }),
+                  }),
+                t.id,
+              );
+            }}
+            helperText={ADMISSION_HELP[t.admission || "standard"]}
+            slotProps={{
+              htmlInput: { "aria-label": "Admission" },
+              formHelperText: { sx: { fontSize: "0.7rem" } },
+            }}
+            sx={{ mt: 1, mb: 0.5 }}
+          >
+            <MenuItem value="standard">Standard</MenuItem>
+            <MenuItem value="bypass">Bypass queue</MenuItem>
+            <MenuItem value="durable">Durable</MenuItem>
+          </TextField>
+        </AccessGate>
+      )}
+      {/* Hosting (model.Task.Hosting, ui.UpdateTaskRequest.Hosting,
+          design/design/unified-grants.design.md §4.1): the task setting
+          that replaced the console capability. Separate from Interactive:
+          it chooses whether dispatch hands the agent a prompt unattended
+          or starts its CLI on a terminal in the UI. */}
+      {t.state !== "closed" && (
+        <AccessGate scope="tasks:write" repo={t.repo}>
+          <TextField
+            select
+            size="small"
+            name="hosting"
+            label="Hosting"
+            value={t.hosting || "unattended"}
+            onChange={(e) => {
+              const hosting = e.target.value;
+              if (hosting === (t.hosting || "unattended")) return;
+              act(
+                () =>
+                  api(`/api/tasks/${t.id}`, {
+                    method: "PATCH",
+                    body: JSON.stringify({ hosting }),
+                  }),
+                t.id,
+              );
+            }}
+            helperText={HOSTING_HELP[t.hosting || "unattended"]}
+            slotProps={{
+              htmlInput: { "aria-label": "Hosting" },
+              formHelperText: { sx: { fontSize: "0.7rem" } },
+            }}
+            sx={{ mt: 1, mb: 0.5 }}
+          >
+            <MenuItem value="unattended">Unattended</MenuItem>
+            <MenuItem value="console">Interactive console</MenuItem>
+          </TextField>
         </AccessGate>
       )}
       {/* "This fixes a red <base>" (ui.UpdateTaskRequest.FixesBaseBranch,

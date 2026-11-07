@@ -721,6 +721,23 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 				{Pattern: "refs/tags/v*"},
 			},
 		}},
+			// And a suite that is a release gate, whose `qualification:`
+			// stanza is in repo_declaration_qualification.
+			Suites: []model.DeclaredSuiteFile{{
+				Path: model.SuiteDeclarationDir + "/edition-qualification.yml",
+				Suite: model.Suite{
+					ID:   model.RepoDeclaredID(model.DeclaredSuite, declaring, "edition-qualification"),
+					Name: "Edition qualification",
+					// No items: a restore issues suite_item's surrogate ids
+					// afresh, in an order the comparison would read as a
+					// difference, and the stanza is what this row is for.
+					Mode: model.SuiteUntilClean, MaxPasses: 1,
+				},
+				Qualification: &model.SuiteQualification{
+					Check: awkward, Candidate: model.CandidateSyncedRelease,
+					Stage1Status: "ci/edition", Upstream: "example.com/acme/core",
+				},
+			}},
 			// And a path trigger (grain/task-1712), whose rule is stored
 			// as JSON in repo_path_trigger.
 			Triggers: []model.PathTrigger{{
@@ -749,6 +766,17 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	}
 	if err := store.SetGitHubWebhookCursor(ctx, 4242, sub); err != nil {
 		t.Fatalf("recording GitHub webhook cursor: %v", err)
+	}
+	if err := store.PutReleaseApprovalDecision(ctx, model.ReleaseApprovalDecision{
+		Repo:      model.RepoRef{Owner: "owner", Name: "payments-api"},
+		Version:   "v2.6.0",
+		Commit:    "2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e",
+		Decision:  "approve",
+		Workflow:  "promote-release.yml",
+		DecidedBy: "alice@example.com",
+		DecidedAt: sub,
+	}); err != nil {
+		t.Fatalf("recording release approval decision: %v", err)
 	}
 	// The grain CI workflows this deployment declares for a repo it does
 	// not control (model.RepoWorkflow). Two of them, since the table's

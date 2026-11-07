@@ -40,13 +40,13 @@ func setCatalogue(t *testing.T, ctx context.Context, store *model.Store, cat *mo
 func TestCatalogueRequiresPersonHoldsAProposal(t *testing.T) {
 	client, store, ctx := testClient(t)
 	parent, err := client.CreateTask(ctx, ui.CreateTaskRequest{
-		Title: "the whole job", Approved: true, AutoMerge: true, Capabilities: &[]string{"read-issues"},
+		Title: "the whole job", Approved: true, AutoMerge: true, Capabilities: &[]string{"github-sandbox"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	setCatalogue(t, ctx, store, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
-		"read-issues": {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
+		"github-sandbox": {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
 	}})
 	plain, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "no grant", Description: "d", ProposedBy: parent.ID, AutoMerge: true,
@@ -59,7 +59,7 @@ func TestCatalogueRequiresPersonHoldsAProposal(t *testing.T) {
 	}
 	held, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "a piece of it", Description: "d", ProposedBy: parent.ID, AutoMerge: true,
-		Capabilities: &[]string{"read-issues"},
+		Capabilities: &[]string{"github-sandbox"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +80,7 @@ func TestCatalogueRequiresPersonHoldsAProposal(t *testing.T) {
 	} {
 		callerCtx := ui.WithPrincipal(ctx, who)
 		direct, err := client.CreateTask(callerCtx, ui.CreateTaskRequest{
-			Title: "direct-" + string(who.Kind), Approved: true, Capabilities: &[]string{"read-issues"},
+			Title: "direct-" + string(who.Kind), Approved: true, Capabilities: &[]string{"github-sandbox"},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -99,17 +99,17 @@ func TestCatalogueRequiresPersonRefusesAnAgentsApproval(t *testing.T) {
 	client, store, ctx := testClient(t)
 	parent, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "the whole job", Approved: true,
-		Capabilities: &[]string{"read-issues", "api:tasks:admin"},
+		Capabilities: &[]string{"github-sandbox", "api:tasks:admin"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	setCatalogue(t, ctx, store, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
-		"read-issues": {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
+		"github-sandbox": {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
 	}})
 	agentCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: parent.ID})
 	held, err := client.CreateTask(agentCtx, ui.CreateTaskRequest{
-		Title: "direct", Approved: true, Capabilities: &[]string{"read-issues"},
+		Title: "direct", Approved: true, Capabilities: &[]string{"github-sandbox"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -130,8 +130,8 @@ func TestCatalogueRequiresPersonRefusesAnAgentsApproval(t *testing.T) {
 			err := approve(callerCtx, held.ID)
 			var ferr *ui.ForbiddenError
 			if !errors.As(err, &ferr) || !strings.Contains(err.Error(), "requires_person") ||
-				!strings.Contains(err.Error(), "read-issues") {
-				t.Errorf("%s %s = %v, want a 403 naming read-issues and requires_person", who.Kind, name, err)
+				!strings.Contains(err.Error(), "sandbox-repo") {
+				t.Errorf("%s %s = %v, want a 403 naming github#sandbox-repo and requires_person", who.Kind, name, err)
 			}
 			if state, err := store.State(ctx, held.ID); err != nil || state != model.StateProposed {
 				t.Errorf("after %s %s: state = %s (%v), want proposed", who.Kind, name, state, err)
@@ -157,19 +157,19 @@ func TestCatalogueRefusesFilingAndEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 	setCatalogue(t, ctx, store, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
-		"read-issues": {Restrictions: &model.CapabilityRestrictions{CIOnly: true}},
+		"github-sandbox": {Restrictions: &model.CapabilityRestrictions{CIOnly: true}},
 	}})
-	_, err = client.CreateTask(ctx, ui.CreateTaskRequest{Title: "t", Capabilities: &[]string{"read-issues"}})
+	_, err = client.CreateTask(ctx, ui.CreateTaskRequest{Title: "t", Capabilities: &[]string{"github-sandbox"}})
 	var verr *ui.ValidationError
 	if !errors.As(err, &verr) || !strings.Contains(err.Error(), "CI-only") {
 		t.Fatalf("CreateTask = %v, want a validation error saying CI-only", err)
 	}
-	if err := client.SetCapability(ctx, task.ID, "read-issues", true); !errors.As(err, &verr) {
+	if err := client.SetCapability(ctx, task.ID, "github-sandbox", true); !errors.As(err, &verr) {
 		t.Fatalf("SetCapability = %v, want a validation error", err)
 	}
 
 	setCatalogue(t, ctx, store, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
-		"read-issues": {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
+		"github-sandbox": {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
 	}})
 	for _, who := range []model.Principal{
 		{Kind: model.PrincipalAgent, ID: task.ID},
@@ -177,12 +177,12 @@ func TestCatalogueRefusesFilingAndEdit(t *testing.T) {
 		{Kind: model.PrincipalAutomation, ID: "grain"},
 	} {
 		callerCtx := ui.WithPrincipal(ctx, who)
-		err = client.SetCapability(callerCtx, task.ID, "read-issues", true)
+		err = client.SetCapability(callerCtx, task.ID, "github-sandbox", true)
 		if err == nil || !strings.Contains(err.Error(), "requires human approval") {
 			t.Fatalf("%s SetCapability = %v, want a refusal", who.Kind, err)
 		}
 	}
-	if err := client.SetCapability(ctx, task.ID, "read-issues", true); err != nil {
+	if err := client.SetCapability(ctx, task.ID, "github-sandbox", true); err != nil {
 		t.Fatalf("a person attaching it: %v", err)
 	}
 }
@@ -193,7 +193,7 @@ func TestCatalogueRefusesFilingAndEdit(t *testing.T) {
 func TestSetCapabilityPolicyKeepsTheCatalogue(t *testing.T) {
 	client, store, ctx := testClient(t)
 	setCatalogue(t, ctx, store, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
-		"read-issues": {Restrictions: &model.CapabilityRestrictions{CIOnly: true}},
+		"github-sandbox": {Restrictions: &model.CapabilityRestrictions{CIOnly: true}},
 	}})
 	if err := client.SetCapabilityPolicy(ctx, model.CapabilityPolicy{}); err != nil {
 		t.Fatal(err)
@@ -202,10 +202,10 @@ func TestSetCapabilityPolicyKeepsTheCatalogue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Catalogue == nil || got.Catalogue.InProcess["read-issues"].Restrictions == nil {
+	if got.Catalogue == nil || got.Catalogue.InProcess["github-sandbox"].Restrictions == nil {
 		t.Fatalf("catalogue after saving the rules = %+v, want it kept", got.Catalogue)
 	}
-	if _, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "t", Capabilities: &[]string{"read-issues"}}); err == nil {
+	if _, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "t", Capabilities: &[]string{"github-sandbox"}}); err == nil {
 		t.Fatal("CreateTask with a CI-only grant succeeded after saving the rules; want the catalogue still refusing it")
 	}
 }

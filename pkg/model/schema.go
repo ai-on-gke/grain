@@ -575,13 +575,32 @@ import "strconv"
 // 120 rewrites stored `github-credential:<name>` grants across the grant
 // tables, deployment and repository default/CI capabilities, console sessions,
 // and capability_policy to `https://grain.dev/capabilities/repo#credential={"credential":"<name>"}`.
-//
-// 121 changes no table: it rewrites `grain-ci` in
+// 121 changes no table: it retires the in-process `read-issues` provider
+// onto the in-process `github` server's `#read-issues` method: stored
+// `read-issues` grants across tasks, templates, schedules,
+// `default_capabilities`, `ci_capabilities`, `console_sessions` and
+// `capability_policy` become
+// `https://grain.dev/capabilities/github#read-issues={}`.
+// 122 adds `admission` to `task`, `template` and `schedule` and
+// `default_admission` to `grain_config` and `repo_config`, moving stored
+// `priority-dispatch` and `durable` grants into the setting and dropping
+// catalogue and policy entries for both names.
+// 123 adds `hosting` to `task`, `template` and `schedule` and
+// `default_hosting` to `grain_config` and `repo_config`, moving stored
+// `console` grants into the setting (ConsoleSession.Hosting included) and
+// dropping catalogue and policy entries for `console`.
+// 124 changes no table: it retires the in-process `github-sandbox` provider
+// onto the in-process `github` server's `#sandbox-repo` method: stored
+// `github-sandbox` grants across tasks, templates, schedules,
+// `default_capabilities`, `ci_capabilities`, `console_sessions` and
+// `capability_policy` become
+// `https://grain.dev/capabilities/github#sandbox-repo={}`.
+// 125 changes no table: it rewrites `grain-ci` in
 // `grain_config`.`capability_policy` -- its rules and its catalogue's task,
 // CI and per-repository defaults -- to
 // `https://grain.dev/capabilities/grain#ci={}`, which migration 96 did
 // everywhere else a grant is stored (grain_ci_policy_migration.go).
-const SchemaVersion = 121
+const SchemaVersion = 125
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -1009,6 +1028,8 @@ var Tables = []string{
   ` + "`proposer_task_id`" + `      TEXT     NOT NULL DEFAULT '',
   ` + "`proposer_run_id`" + `       TEXT     NOT NULL DEFAULT '',
   ` + "`external_ref`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`admission`" + `             TEXT     NOT NULL DEFAULT 'standard',
+  ` + "`hosting`" + `               TEXT     NOT NULL DEFAULT 'unattended',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_external_ref`" + ` ON ` + "`task`" + ` (` + "`external_ref`" + `, ` + "`id`" + `)`,
@@ -2002,6 +2023,8 @@ var Tables = []string{
   ` + "`created_at`" + `            DATETIME NOT NULL,
   ` + "`every_n_minutes`" + `       INTEGER  NULL,
   ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
+  ` + "`admission`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`hosting`" + `               TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2120,6 +2143,8 @@ var Tables = []string{
   ` + "`reviewers`" + `          TEXT NOT NULL DEFAULT '',
   ` + "`priority`" + `           INTEGER NOT NULL DEFAULT 0,
   ` + "`keep_running`" + `       INTEGER NOT NULL DEFAULT 0,
+  ` + "`admission`" + `          TEXT NOT NULL DEFAULT '',
+  ` + "`hosting`" + `            TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2606,6 +2631,8 @@ var Tables = []string{
   ` + "`owner_trust`" + `                  TEXT    NOT NULL DEFAULT '',
   ` + "`auto_grant_context_reads`" + `     TEXT    NOT NULL DEFAULT '',
   ` + "`registry`" + `                     TEXT    NOT NULL DEFAULT '',
+  ` + "`default_admission`" + `            TEXT    NOT NULL DEFAULT '',
+  ` + "`default_hosting`" + `              TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -3359,6 +3386,8 @@ var Tables = []string{
   ` + "`issue_import_approved`" + `    INTEGER NOT NULL DEFAULT 0,
   ` + "`issue_import_interval_seconds`" + ` INTEGER NOT NULL DEFAULT 0,
   ` + "`upstream_repo`" + `            TEXT NOT NULL DEFAULT '',
+  ` + "`default_admission`" + `        TEXT NOT NULL DEFAULT '',
+  ` + "`default_hosting`" + `          TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 
@@ -3452,6 +3481,23 @@ var Tables = []string{
   ` + "`allow_force`" + `  INTEGER NOT NULL DEFAULT 0,
   ` + "`allow_delete`" + ` INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `, ` + "`pattern`" + `)
+)`,
+
+	// A declared suite's `qualification:` stanza (model.SuiteQualification):
+	// one row per suite whose file has one, keyed by the declaration's id,
+	// written by the same sync that writes repo_declaration and deleted
+	// with it -- beside the provenance rather than on the suite row, for
+	// repo_declaration_push's reason: it is only ever what the
+	// repository's default branch says. Grain's own record, not settings.
+	// Needs no SchemaVersion bump, for repo_workflow's own reason.
+	`CREATE TABLE IF NOT EXISTS ` + "`repo_declaration_qualification`" + ` (
+  ` + "`id`" + `              TEXT NOT NULL,
+  ` + "`check_name`" + `      TEXT NOT NULL DEFAULT '',
+  ` + "`candidate`" + `       TEXT NOT NULL DEFAULT '',
+  ` + "`stage1_workflow`" + ` TEXT NOT NULL DEFAULT '',
+  ` + "`stage1_status`" + `   TEXT NOT NULL DEFAULT '',
+  ` + "`upstream`" + `        TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (` + "`id`" + `)
 )`,
 
 	// One row per repository grain reads declarations from
@@ -3651,6 +3697,26 @@ var Tables = []string{
   ` + "`updated_by_id`" + `   TEXT NOT NULL DEFAULT '',
   ` + "`updated_by_source`" + ` TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`period`" + `)
+)`,
+
+	// The promote-release.yml dispatch a person started for a pending GitHub
+	// Actions release (model.ReleaseApprovalDecision), keyed by
+	// (owner, name, version, commit) so the release-pending watcher does not
+	// re-raise release.pending for a commit already approved from the CLI or
+	// API, and DecideRelease refuses a second dispatch while the first is
+	// outstanding. Grain's own runtime record, like base_branch_release.
+	// Needs no SchemaVersion bump: Init's CREATE TABLE IF NOT EXISTS creates
+	// it on every database.
+	`CREATE TABLE IF NOT EXISTS ` + "`release_approval`" + ` (
+  ` + "`owner`" + `      TEXT     NOT NULL,
+  ` + "`name`" + `       TEXT     NOT NULL,
+  ` + "`version`" + `    TEXT     NOT NULL,
+  ` + "`commit`" + `     TEXT     NOT NULL,
+  ` + "`decision`" + `   TEXT     NOT NULL,
+  ` + "`workflow`" + `   TEXT     NOT NULL,
+  ` + "`decided_by`" + ` TEXT     NOT NULL,
+  ` + "`decided_at`" + ` DATETIME NOT NULL,
+  PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `, ` + "`version`" + `, ` + "`commit`" + `)
 )`,
 
 	// A repo's qualification setup -- bwsalmon/agents#518's two switches:

@@ -109,6 +109,7 @@ var tablePrimaryKeys = map[string][]string{
 	"repo_workflow":                  {"owner", "name", "path"},
 	"repo_declaration":               {"id"},
 	"repo_declaration_push":          {"id", "pattern"},
+	"repo_declaration_qualification": {"id"},
 	"repo_declaration_sync":          {"owner", "name"},
 	"repo_path_trigger":              {"owner", "name", "trigger"},
 	"repo_merge_rules":               {"owner", "name"},
@@ -118,6 +119,7 @@ var tablePrimaryKeys = map[string][]string{
 	"memory":                         {"owner", "name"},
 	"memory_document":                {"owner", "name", "document"},
 	"release_note":                   {"period"},
+	"release_approval":               {"owner", "name", "version", "commit"},
 	"qualification_config":           {"owner", "name"},
 	"qualification_item":             {"owner", "name", "template_id"},
 	"qualification_item_depends_on":  {"owner", "name", "template_id", "depends_on_template_id"},
@@ -204,10 +206,11 @@ var autoIncrementTables = map[string]string{
 
 type adaptedConnector struct {
 	inner driver.Connector
+	cfg   Config
 }
 
-func newAdaptedConnector(inner driver.Connector) driver.Connector {
-	return &adaptedConnector{inner: inner}
+func newAdaptedConnector(inner driver.Connector, cfg Config) driver.Connector {
+	return &adaptedConnector{inner: inner, cfg: cfg}
 }
 
 func (c *adaptedConnector) Connect(ctx context.Context) (driver.Conn, error) {
@@ -219,11 +222,12 @@ func (c *adaptedConnector) Connect(ctx context.Context) (driver.Conn, error) {
 }
 
 func (c *adaptedConnector) Driver() driver.Driver {
-	return &adaptedDriver{inner: c.inner.Driver()}
+	return &adaptedDriver{inner: c.inner.Driver(), cfg: c.cfg}
 }
 
 type adaptedDriver struct {
 	inner driver.Driver
+	cfg   Config
 }
 
 func (d *adaptedDriver) Open(name string) (driver.Conn, error) {

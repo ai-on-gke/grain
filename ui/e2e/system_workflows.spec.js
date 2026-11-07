@@ -46,6 +46,26 @@ test.describe("System Administration and Diagnostic Workflows", () => {
     await flushWholeBtn.click();
     await expect(page.getByText(/Total space consumed: 0 B/)).toBeVisible();
 
+    // Flush one Actions cache repository first and confirm its row leaves
+    // the list, then flush the rest and confirm the empty state replaces
+    // the repository list without phantom 0 B rows.
+    await expect(page.getByText("acme/widgets: 2.0 GiB")).toBeVisible();
+    await expect(page.getByText("acme/gadgets: 1.0 GiB")).toBeVisible();
+    await page
+      .getByRole("button", { name: "Flush the Actions cache of acme/gadgets" })
+      .click();
+    await expect(page.getByText(/acme\/gadgets:/)).toHaveCount(0);
+    await expect(page.getByText("acme/widgets: 2.0 GiB")).toBeVisible();
+    const flushActionsWholeBtn = page.getByRole("button", {
+      name: "Flush the whole Actions cache",
+    });
+    await expect(flushActionsWholeBtn).toBeEnabled();
+    await flushActionsWholeBtn.click();
+    await expect(page.getByText("empty (0 B of 20.0 GiB)")).toBeVisible();
+    await expect(page.getByText(/Nothing cached yet\./)).toBeVisible();
+    await expect(page.getByText(/acme\/widgets:/)).toHaveCount(0);
+    await expect(flushActionsWholeBtn).toBeDisabled();
+
     // 2. Navigate to /admin/pipeline
     await page.goto("/system/pipeline");
     await expect(page.getByRole("tab", { name: "Pipeline" })).toBeVisible();
@@ -92,5 +112,12 @@ test.describe("System Administration and Diagnostic Workflows", () => {
     // 4. Navigate to /admin/sandboxes
     await page.goto("/system/sandboxes");
     await expect(page.getByRole("tab", { name: "Sandboxes" })).toBeVisible();
+
+    // 5. Navigate to /system/top and verify the process snapshot is a keyboard-focusable region
+    await page.goto("/system/top");
+    await expect(page.getByRole("tab", { name: "Top" })).toBeVisible();
+    const topRegion = page.getByRole("region", { name: "Process snapshot" });
+    await expect(topRegion).toBeVisible();
+    await expect(topRegion).toHaveAttribute("tabindex", "0");
   });
 });

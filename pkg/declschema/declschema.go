@@ -595,6 +595,8 @@ func templateSchema() Schema {
 			// work may touch.
 			{Model: "Interactive", Keys: carried("interactive"), Columns: []string{"interactive"}},
 			{Model: "KeepRunning", Keys: carried("keep-running"), Columns: []string{"keep_running"}},
+			{Model: "Admission", Keys: carried("admission"), Columns: []string{"admission"}},
+			{Model: "Hosting", Keys: carried("hosting"), Columns: []string{"hosting"}},
 			// `hostd`, which a template once carried (schema 94 to 110):
 			// which grain hostd host work runs on is a model connection's
 			// or a capability server's, never what a template files, so
@@ -705,6 +707,23 @@ func suiteSchema() Schema {
 			// Checked and kept nowhere, as on a template.
 			{Keys: retiredTeam()},
 
+			// What makes the suite a release gate the release-qualification
+			// reconciler runs (model.SuiteQualification): the check run its
+			// verdict is posted as on this repository's own candidate
+			// commit, how that commit is found, and what Stage 1 is. It
+			// decides what this repository's own work does and judges
+			// nothing anywhere else -- the verdict lands on a commit of
+			// this repository, and only its own release reads it -- so it
+			// is declarable for auto-merge's reason above.
+			//
+			// No model field: the stanza is the declaration's, kept beside
+			// its provenance (model.DeclaredSuiteFile.Qualification) rather
+			// than on the suite row, as a template's `push:` is, so the
+			// settings export never carries it and only the repository's
+			// default branch writes it. Which is also why it is accepted
+			// in a repository only.
+			{Keys: []Key{{Name: "qualification", In: Repo}}},
+
 			// A suite has no target of its own -- a suite run takes the
 			// repo and branch it is started against -- so these two keys
 			// have no field behind them in either context. They are
@@ -791,6 +810,8 @@ func scheduleSchema() Schema {
 			// content: a schedule's model beats the template's
 			// (model.Schedule.Model), so a declared schedule may say it.
 			{Model: "Model", Keys: carried("model"), Columns: []string{"agent_model"}},
+			{Model: "Admission", Keys: carried("admission"), Columns: []string{"admission"}},
+			{Model: "Hosting", Keys: carried("hosting"), Columns: []string{"hosting"}},
 
 			// Content, which a declared schedule takes from the template
 			// or the suite it names rather than carrying twice.
@@ -937,6 +958,16 @@ func RepoSettingsSchema() Schema {
 					nowhere("capabilities", Authority),
 				},
 				Columns: []string{"default_capabilities"},
+			},
+			{
+				Model:   "DefaultAdmission",
+				Keys:    []Key{settingsOnly("default-admission", Authority)},
+				Columns: []string{"default_admission"},
+			},
+			{
+				Model:   "DefaultHosting",
+				Keys:    []Key{settingsOnly("default-hosting", Authority)},
+				Columns: []string{"default_hosting"},
 			},
 			// CICapabilities is what this deployment is willing to *give*
 			// this repository's CI jobs, and that is the whole of what

@@ -113,7 +113,7 @@ func ciCapabilityRefs(ids []string, event ci.Event, trustedSchedule, withholdEve
 	var out []model.Grant
 	for _, id := range ids {
 		c := model.CanonicalLegacyGrant(id)
-		if rule, ok := model.CIGrantRuleFor(c); ok && (withholdEventGated || !rule.Admits(string(event), trustedSchedule)) {
+		if rule, ok := model.CIGrantRuleFor(c); ok && ((rule.IsEventGated() && withholdEventGated) || !rule.Admits(string(event), trustedSchedule)) {
 			continue
 		}
 		if model.IsCapabilityRef(c) && !model.IsGrainCIGrant(c) && !model.IsRepoAccessGrant(c) {

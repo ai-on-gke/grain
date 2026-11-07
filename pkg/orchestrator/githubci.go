@@ -176,7 +176,7 @@ func recordPolledChecks(ctx context.Context, store *model.Store, repo model.Repo
 		if commit == "" {
 			commit = sha
 		}
-		key := fmt.Sprintf("%p|%s|%d|%s|%s", store, repo, c.ID, *c.Conclusion, commit)
+		key := fmt.Sprintf("%d|%s|%d|%s|%s", store.ID(), repo, c.ID, *c.Conclusion, commit)
 		polledChecksSeen.Lock()
 		seen := polledChecksSeen.m[key]
 		polledChecksSeen.Unlock()
@@ -489,7 +489,7 @@ func markConcludedGitHubRunSeen(store *model.Store, repo model.RepoRef, runID in
 	if attempt <= 0 {
 		attempt = 1
 	}
-	key := fmt.Sprintf("%p|%s|%d|%d", store, strings.ToLower(repo.String()), runID, attempt)
+	key := fmt.Sprintf("%d|%s|%d|%d", store.ID(), strings.ToLower(repo.String()), runID, attempt)
 	concludedGitHubRunsSeen.Lock()
 	defer concludedGitHubRunsSeen.Unlock()
 	if concludedGitHubRunsSeen.m[key] {
@@ -530,13 +530,15 @@ func recordGitHubWorkflowRunEvent(ctx context.Context, deps Deps, repo model.Rep
 	return handleConcludedGitHubWorkflowRun(ctx, deps, run, now)
 }
 
-const gitHubCompletedRunsPollLimit = 20
+const gitHubCompletedRunsPollLimit = 50
 
 // pollConcludedGitHubWorkflowRuns is the polling fallback for deployments
 // whose webhook gateway GitHub cannot reach: it polls
 // GET /repos/{owner}/{repo}/actions/runs?status=completed (ETag-cached and
 // budget-aware) for target repositories that have a github_workflow_run
-// schedule or a tracked base branch.
+// schedule or a tracked base branch, and also polls ?branch=<base>&status=completed
+// for each tracked base or schedule branch so slow release and scheduled runs
+// on busy repositories are not pushed out of the repo-wide page by faster PR runs.
 func pollConcludedGitHubWorkflowRuns(ctx context.Context, deps Deps, now time.Time) error {
 	if deps.Store == nil || deps.Client == nil || gitHubCIBudgetLow(now) {
 		return nil
@@ -545,12 +547,13 @@ func pollConcludedGitHubWorkflowRuns(ctx context.Context, deps Deps, now time.Ti
 	if !ok {
 		return nil
 	}
-	repos, err := reposWantingGitHubWorkflowRunPoll(ctx, deps.Store)
-	if err != nil || len(repos) == 0 {
+	targets, err := gitHubWorkflowRunPollTargets(ctx, deps.Store)
+	if err != nil || len(targets) == 0 {
 		return err
 	}
+	branchReader, hasBranchReader := deps.Client.(github.BranchWorkflowRunsReader)
 	var errs []error
-	for _, repo := range repos {
+	for _, target := range targets {
 		if err := ctx.Err(); err != nil {
 			errs = append(errs, err)
 			break
@@ -558,38 +561,38 @@ func pollConcludedGitHubWorkflowRuns(ctx context.Context, deps Deps, now time.Ti
 		if gitHubCIBudgetLow(now) {
 			break
 		}
+		repo := target.repo
 		runs, err := reader.CompletedWorkflowRuns(repo.StoredOwner(), repo.Name, gitHubCompletedRunsPollLimit)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("polling completed GitHub workflow runs on %s: %w", repo, err))
+		} else if err := processPolledGitHubWorkflowRuns(ctx, deps, repo, runs, now); err != nil {
+			errs = append(errs, err)
+		}
+		if !hasBranchReader {
 			continue
 		}
-		// Process oldest first so consecutive runs land in order.
-		for i := len(runs) - 1; i >= 0; i-- {
-			r := runs[i]
-			if r.ID == 0 || r.Status != "completed" || r.Conclusion == "" {
+		branches := target.branches
+		if brel, err := deps.Store.ListBaseBranchRelease(ctx); err == nil {
+			for _, row := range brel {
+				if row.Repo.Same(repo) {
+					branches = appendUniquePollBranch(branches, row.Branch)
+				}
+			}
+		}
+		for _, branch := range branches {
+			if err := ctx.Err(); err != nil {
+				errs = append(errs, err)
+				break
+			}
+			if gitHubCIBudgetLow(now) {
+				break
+			}
+			branchRuns, err := branchReader.CompletedBranchWorkflowRuns(repo.StoredOwner(), repo.Name, branch, gitHubCompletedRunsPollLimit)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("polling completed GitHub workflow runs on %s (%s): %w", repo, branch, err))
 				continue
 			}
-			attempt := r.RunAttempt
-			if attempt <= 0 {
-				attempt = 1
-			}
-			concluded := ConcludedGitHubWorkflowRun{
-				Repo:         repo,
-				WorkflowName: r.Name,
-				WorkflowPath: r.Path,
-				RunID:        r.ID,
-				Attempt:      attempt,
-				Conclusion:   strings.ToLower(strings.TrimSpace(r.Conclusion)),
-				HeadSHA:      r.HeadSHA,
-				HeadRepo:     r.HeadRepo,
-				Ref:          strings.TrimPrefix(strings.TrimSpace(r.HeadBranch), "refs/heads/"),
-				Event:        r.Event,
-				HTMLURL:      r.HTMLURL,
-				StartedAt:    r.StartedAt,
-				CompletedAt:  r.UpdatedAt,
-				Via:          "poll",
-			}
-			if err := handleConcludedGitHubWorkflowRun(ctx, deps, concluded, now); err != nil {
+			if err := processPolledGitHubWorkflowRuns(ctx, deps, repo, branchRuns, now); err != nil {
 				errs = append(errs, err)
 			}
 		}
@@ -597,26 +600,88 @@ func pollConcludedGitHubWorkflowRuns(ctx context.Context, deps Deps, now time.Ti
 	return errors.Join(errs...)
 }
 
-func reposWantingGitHubWorkflowRunPoll(ctx context.Context, store *model.Store) ([]model.RepoRef, error) {
+func processPolledGitHubWorkflowRuns(ctx context.Context, deps Deps, repo model.RepoRef, runs []github.WorkflowRun, now time.Time) error {
+	var errs []error
+	// Process oldest first so consecutive runs land in order.
+	for i := len(runs) - 1; i >= 0; i-- {
+		r := runs[i]
+		if r.ID == 0 || r.Status != "completed" || r.Conclusion == "" {
+			continue
+		}
+		attempt := r.RunAttempt
+		if attempt <= 0 {
+			attempt = 1
+		}
+		concluded := ConcludedGitHubWorkflowRun{
+			Repo:         repo,
+			WorkflowName: r.Name,
+			WorkflowPath: r.Path,
+			RunID:        r.ID,
+			Attempt:      attempt,
+			Conclusion:   strings.ToLower(strings.TrimSpace(r.Conclusion)),
+			HeadSHA:      r.HeadSHA,
+			HeadRepo:     r.HeadRepo,
+			Ref:          strings.TrimPrefix(strings.TrimSpace(r.HeadBranch), "refs/heads/"),
+			Event:        r.Event,
+			HTMLURL:      r.HTMLURL,
+			StartedAt:    r.StartedAt,
+			CompletedAt:  r.UpdatedAt,
+			Via:          "poll",
+		}
+		if err := handleConcludedGitHubWorkflowRun(ctx, deps, concluded, now); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+type gitHubWorkflowRunPollTarget struct {
+	repo     model.RepoRef
+	branches []string
+}
+
+func cleanPollBranch(branch string) string {
+	b := strings.TrimPrefix(strings.TrimSpace(branch), "refs/heads/")
+	if b == "" || strings.ContainsAny(b, "*?[") {
+		return ""
+	}
+	return b
+}
+
+func appendUniquePollBranch(branches []string, branch string) []string {
+	b := cleanPollBranch(branch)
+	if b == "" {
+		return branches
+	}
+	for _, existing := range branches {
+		if existing == b {
+			return branches
+		}
+	}
+	return append(branches, b)
+}
+
+func gitHubWorkflowRunPollTargets(ctx context.Context, store *model.Store) ([]gitHubWorkflowRunPollTarget, error) {
 	allowed, err := store.TargetRepos(ctx)
 	if err != nil {
 		return nil, err
 	}
-	seen := map[string]bool{}
-	var out []model.RepoRef
-	add := func(r model.RepoRef) {
+	byRepo := map[string]int{}
+	var out []gitHubWorkflowRunPollTarget
+	add := func(r model.RepoRef) *gitHubWorkflowRunPollTarget {
 		if r.Owner == "" || r.Name == "" || model.IsConfigRepo(r) {
-			return
+			return nil
 		}
 		if len(allowed) > 0 && !model.RepoAllowed(allowed, r) {
-			return
+			return nil
 		}
 		key := strings.ToLower(r.String())
-		if seen[key] {
-			return
+		if idx, ok := byRepo[key]; ok {
+			return &out[idx]
 		}
-		seen[key] = true
-		out = append(out, r)
+		byRepo[key] = len(out)
+		out = append(out, gitHubWorkflowRunPollTarget{repo: r})
+		return &out[len(out)-1]
 	}
 	schedules, err := store.ListSchedules(ctx)
 	if err != nil {
@@ -624,17 +689,31 @@ func reposWantingGitHubWorkflowRunPoll(ctx context.Context, store *model.Store) 
 	}
 	for _, s := range schedules {
 		if s.Enabled && s.Recurrence.Kind == model.RecurrenceGitHubWorkflowRun {
-			add(s.Target)
+			t := add(s.Target)
+			if t == nil {
+				continue
+			}
+			if trig := s.Recurrence.GitHubWorkflowRun; trig != nil && len(trig.Branches) > 0 {
+				for _, b := range trig.Branches {
+					t.branches = appendUniquePollBranch(t.branches, b)
+				}
+			} else if s.Base != "" {
+				t.branches = appendUniquePollBranch(t.branches, s.Base)
+			}
 		}
 	}
 	if bci, err := store.ListBaseBranchCI(ctx); err == nil {
 		for _, row := range bci {
-			add(row.Repo)
+			if t := add(row.Repo); t != nil {
+				t.branches = appendUniquePollBranch(t.branches, row.Branch)
+			}
 		}
 	}
 	if brel, err := store.ListBaseBranchRelease(ctx); err == nil {
 		for _, row := range brel {
-			add(row.Repo)
+			if t := add(row.Repo); t != nil {
+				t.branches = appendUniquePollBranch(t.branches, row.Branch)
+			}
 		}
 	}
 	return out, nil

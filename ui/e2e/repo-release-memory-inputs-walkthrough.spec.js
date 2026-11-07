@@ -14,6 +14,11 @@
 
 import { test, expect } from "./fixtures.js";
 
+// -legacy-capability registers example-legacy, a made-up provider with
+// nothing to mint, so the Legacy capabilities pickers have a row: every
+// legacy provider core shipped has been retired onto a server method.
+test.use({ demoArgs: ["-legacy-capability"] });
+
 test.describe("Repository Settings, Releases, and Memory Views Inputs Walkthrough", () => {
   const repo = "acme/widgets";
 
@@ -94,13 +99,15 @@ test.describe("Repository Settings, Releases, and Memory Views Inputs Walkthroug
       name: /default capabilities/i,
     });
     await expect(defaultCapsSelect).toBeVisible();
-    // Toggle Priority dispatch and toggle it back: every spec file a worker runs
+    // Toggle Example legacy capability and toggle it back: every spec file a worker runs
     // shares one demo store, and repository_release_memory_walkthrough.spec.js
     // turns this same capability on and expects its chip afterwards.
     const selfDebugChip = defaultCapsSelect
       .locator(".MuiChip-root")
-      .filter({ hasText: /Priority dispatch/i });
-    const option = page.getByRole("option", { name: /Priority dispatch/i });
+      .filter({ hasText: /Example legacy capability/i });
+    const option = page.getByRole("option", {
+      name: /Example legacy capability/i,
+    });
     const toggleSelfDebug = async () => {
       await defaultCapsSelect.click();
       await option.click();

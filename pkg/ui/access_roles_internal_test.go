@@ -79,7 +79,7 @@ func TestRoleGateFailsClosed(t *testing.T) {
 	}
 	reached := false
 	next := func(http.ResponseWriter, *http.Request) { reached = true }
-	for _, pattern := range []string{"POST /api/mcp", "/staging/{name}/{path...}", "POST /api/tasks/{id}/activity", "no such route"} {
+	for _, pattern := range []string{"POST /api/tasks/{id}/config-change", "/staging/{name}/{path...}", "POST /api/tasks/{id}/activity", "no such route"} {
 		for _, tc := range []struct {
 			role *accessRole
 			want bool
@@ -91,6 +91,20 @@ func TestRoleGateFailsClosed(t *testing.T) {
 			s.roleGate(pattern, next)(rec, r)
 			if reached != tc.want {
 				t.Errorf("%s as %s: reached=%v (%d %s), want %v", pattern, tc.role.label(), reached, rec.Code, rec.Body, tc.want)
+			}
+		}
+	}
+	// Both MCP endpoints pass roleGate for signed-in roles and enforce
+	// authorizeRoleCall per tool call inside their dispatchers.
+	for _, pattern := range []string{"POST /api/mcp", "POST /mcp"} {
+		for _, role := range []*accessRole{viewer, operator} {
+			reached = false
+			r := httptest.NewRequest(http.MethodPost, "/x", nil)
+			r = r.WithContext(withAccessRole(r.Context(), role))
+			rec := httptest.NewRecorder()
+			s.roleGate(pattern, next)(rec, r)
+			if !reached {
+				t.Errorf("%s as %s: reached=false (%d %s), want true", pattern, role.label(), rec.Code, rec.Body)
 			}
 		}
 	}

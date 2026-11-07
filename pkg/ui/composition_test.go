@@ -319,6 +319,47 @@ func TestDraftScheduleCompositionFollowsTheEdits(t *testing.T) {
 	}
 }
 
+// A template-backed schedule's own admission raises its template's on
+// every firing (model.ComposeScheduleTask), and a repository's declared
+// schedule can say so beside `template:`. The schedule pane previews
+// such a schedule through the draft endpoint, which used to copy the
+// template's content and drop the schedule's admission, so the pane
+// said "bypass, from the template" over a firing that files "durable,
+// from the schedule" (2026-11-07 walkthrough).
+func TestDraftScheduleCompositionKeepsAScheduleAdmissionOverItsTemplates(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	tmpl := templateForComposition(t, c, ctx, ui.CreateTemplateRequest{
+		Name: "Bump", Title: "Bump the dependencies", Admission: "bypass",
+	})
+	req := ui.CreateScheduleRequest{TemplateID: tmpl.ID, Repo: "acme/widgets"}
+	got, err := c.DraftScheduleComposition(ctx, req)
+	if err != nil {
+		t.Fatalf("composing a draft: %v", err)
+	}
+	wantField(t, got.Tasks[0], "admission", "template", "bypass")
+
+	req.Admission = "durable"
+	got, err = c.DraftScheduleComposition(ctx, req)
+	if err != nil {
+		t.Fatalf("composing a draft with its own admission: %v", err)
+	}
+	wantField(t, got.Tasks[0], "admission", "schedule", "durable")
+
+	// Lower than the template's says nothing: the template's stands.
+	req.Admission = "standard"
+	got, err = c.DraftScheduleComposition(ctx, req)
+	if err != nil {
+		t.Fatalf("composing a draft with a lower admission: %v", err)
+	}
+	wantField(t, got.Tasks[0], "admission", "template", "bypass")
+
+	req.Admission = "eventually"
+	if _, err := c.DraftScheduleComposition(ctx, req); err == nil {
+		t.Error("composing a draft with an unknown admission succeeded, want it refused")
+	}
+}
+
 // A draft that names a template resolves it out of the store on every
 // call, exactly as a firing does -- so a preview shows today's template
 // and not a copy taken when the form was opened.
@@ -500,8 +541,8 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 		t.Fatalf("composing draft schedule: %v", err)
 	}
 	caps := field(t, draft.Tasks[0], "capabilities")
-	if !slices.Equal(caps.Values, []string{"read-issues", model.GrainCIGrant}) {
-		t.Errorf("values = %v, want [read-issues grain-ci]", caps.Values)
+	if !slices.Equal(caps.Values, []string{model.GitHubReadIssuesGrant, model.GrainCIGrant}) {
+		t.Errorf("values = %v, want [github#read-issues grain-ci]", caps.Values)
 	}
 	if !slices.Equal(caps.Sources, []string{"schedule", "repo"}) {
 		t.Errorf("sources = %v, want [schedule repo]", caps.Sources)

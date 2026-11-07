@@ -220,7 +220,7 @@ func TestMessageTaskWakesARestingDurableParent(t *testing.T) {
 	parent := create(t, client, ctx)
 	child := create(t, client, ctx)
 	grantTask(t, store, parent.ID, func(m *model.Task) {
-		m.Grants = append(m.Grants, model.Grant{Capability: model.DurableCapability})
+		m.Admission = model.AdmissionDurable
 	})
 	grantTask(t, store, child.ID, func(m *model.Task) {
 		m.Links = append(m.Links, model.Link{Kind: model.LinkProposedBy, Target: parent.ID})

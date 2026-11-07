@@ -16,9 +16,12 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"slices"
+	"sort"
 	"strings"
 
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -161,6 +164,12 @@ func (c *Client) catalogueApprovalRefusal(ctx context.Context, task model.Task) 
 				personOnly = append(personOnly, g.Capability)
 			}
 		}
+		// Admission above standard replaced the person-only
+		// priority-dispatch and durable grants, so it asks for a
+		// person acting directly the way holding either did.
+		if adm := model.NormalizeAdmission(task.Admission); adm.AtLeast(model.AdmissionBypass) {
+			personOnly = append(personOnly, "admission "+string(adm))
+		}
 		if len(personOnly) > 0 {
 			return forbiddenCodeErrorf("requires_person", "task %s holds %s, which only a person acting directly may approve",
 				task.ID, strings.Join(personOnly, ", "))
@@ -223,4 +232,164 @@ func (c *Client) catalogueEditRefusalFor(ctx context.Context, id, grant string) 
 		return nil
 	}
 	return c.catalogueEditRefusal(ctx, *task, grant)
+}
+
+func fieldValidationError(field string, err error) error {
+	msg := err.Error()
+	return &ValidationError{
+		err:    fmt.Errorf("%s: %s", field, msg),
+		fields: map[string]string{field: msg},
+	}
+}
+
+// mergedCapabilityCatalogue builds the model.CapabilityCatalogue that
+// staterepo.ExportConfig writes into settings/capabilities.yml
+// (staterepo.capabilitiesDocumentFor): the policy's catalogue combined with
+// MCPServers' enabled/alias state, deployment task defaults, catalogue CI
+// defaults, and per-repo task and CI defaults. Validating it before a save
+// refuses contradictions grain state check would refuse after export.
+func mergedCapabilityCatalogue(
+	cat *model.CapabilityCatalogue,
+	mcpServers map[string]protocol.ServerConfig,
+	taskDefaults []string,
+	ciDefaults []string,
+	repoDefaults map[string]model.CatalogueRepoDefaults,
+) *model.CapabilityCatalogue {
+	if cat == nil {
+		return nil
+	}
+	servers := make([]model.CatalogueServer, 0, len(cat.Servers)+len(mcpServers))
+	seen := make(map[string]bool, len(cat.Servers))
+	for _, s := range cat.Servers {
+		id := strings.TrimSpace(s.ID)
+		if srvCfg, ok := mcpServers[id]; ok && id != "" {
+			enabled := !srvCfg.Disabled && (s.Enabled == nil || *s.Enabled)
+			s.Enabled = &enabled
+			if len(srvCfg.Aliases) > 0 {
+				s.Aliases = srvCfg.Aliases
+			}
+		}
+		if id != "" {
+			seen[id] = true
+		}
+		servers = append(servers, s)
+	}
+	extraIDs := make([]string, 0, len(mcpServers))
+	for id := range mcpServers {
+		if !seen[id] {
+			extraIDs = append(extraIDs, id)
+		}
+	}
+	sort.Strings(extraIDs)
+	for _, id := range extraIDs {
+		srvCfg := mcpServers[id]
+		enabled := !srvCfg.Disabled
+		servers = append(servers, model.CatalogueServer{
+			ID:      id,
+			Enabled: &enabled,
+			Aliases: srvCfg.Aliases,
+		})
+	}
+	var inProcess map[string]model.CatalogueInProcess
+	if len(cat.InProcess) > 0 {
+		inProcess = make(map[string]model.CatalogueInProcess, len(cat.InProcess))
+		for k, v := range cat.InProcess {
+			if k == model.PriorityDispatchCapability || k == model.DurableCapability {
+				continue
+			}
+			inProcess[k] = v
+		}
+	}
+	keptTask, _, _ := model.ExtractLegacyAdmissionStrings(taskDefaults)
+	keptCI, _, _ := model.ExtractLegacyAdmissionStrings(ciDefaults)
+	var keptRepos map[string]model.CatalogueRepoDefaults
+	if len(repoDefaults) > 0 {
+		keptRepos = make(map[string]model.CatalogueRepoDefaults, len(repoDefaults))
+		for repo, rd := range repoDefaults {
+			rt, _, _ := model.ExtractLegacyAdmissionStrings(rd.Task)
+			rc, _, _ := model.ExtractLegacyAdmissionStrings(rd.CI)
+			keptRepos[repo] = model.CatalogueRepoDefaults{Task: rt, CI: rc}
+		}
+	}
+	return &model.CapabilityCatalogue{
+		Defaults: model.CatalogueDefaults{
+			Task:  keptTask,
+			CI:    keptCI,
+			Repos: keptRepos,
+		},
+		Servers:   servers,
+		InProcess: inProcess,
+		APIScopes: cat.APIScopes,
+	}
+}
+
+func repoDefaultsMap(repoConfigs []model.RepoConfig) map[string]model.CatalogueRepoDefaults {
+	if len(repoConfigs) == 0 {
+		return nil
+	}
+	out := make(map[string]model.CatalogueRepoDefaults, len(repoConfigs))
+	for _, rc := range repoConfigs {
+		if len(rc.DefaultCapabilities) == 0 && len(rc.CICapabilities) == 0 {
+			continue
+		}
+		out[rc.Repo.String()] = model.CatalogueRepoDefaults{
+			Task: rc.DefaultCapabilities,
+			CI:   rc.CICapabilities,
+		}
+	}
+	return out
+}
+
+func validateCataloguePolicySave(
+	cat *model.CapabilityCatalogue,
+	mcpServers map[string]protocol.ServerConfig,
+	taskDefaults []string,
+	repoConfigs []model.RepoConfig,
+) error {
+	if cat == nil {
+		return nil
+	}
+	merged := mergedCapabilityCatalogue(cat, mcpServers, taskDefaults, cat.Defaults.CI, repoDefaultsMap(repoConfigs))
+	if err := merged.Validate(); err != nil {
+		return fieldValidationError("catalogue", err)
+	}
+	return nil
+}
+
+func validateCatalogueTaskDefaults(cfg *model.Config, ids []string) error {
+	if cfg == nil || cfg.CapabilityPolicy.Catalogue == nil || len(ids) == 0 {
+		return nil
+	}
+	merged := mergedCapabilityCatalogue(cfg.CapabilityPolicy.Catalogue, cfg.MCPServers, ids, nil, nil)
+	if err := merged.Validate(); err != nil {
+		return fieldValidationError("defaultCapabilities", err)
+	}
+	return nil
+}
+
+func (c *Client) validateCatalogueRepoDefaults(ctx context.Context, repo model.RepoRef, taskGrants, ciGrants []string) error {
+	if c.Store == nil || (len(taskGrants) == 0 && len(ciGrants) == 0) {
+		return nil
+	}
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil || cfg == nil || cfg.CapabilityPolicy.Catalogue == nil {
+		return err
+	}
+	if len(taskGrants) > 0 {
+		merged := mergedCapabilityCatalogue(cfg.CapabilityPolicy.Catalogue, cfg.MCPServers, nil, nil, map[string]model.CatalogueRepoDefaults{
+			repo.String(): {Task: taskGrants},
+		})
+		if err := merged.Validate(); err != nil {
+			return fieldValidationError("defaultCapabilities", err)
+		}
+	}
+	if len(ciGrants) > 0 {
+		merged := mergedCapabilityCatalogue(cfg.CapabilityPolicy.Catalogue, cfg.MCPServers, nil, nil, map[string]model.CatalogueRepoDefaults{
+			repo.String(): {CI: ciGrants},
+		})
+		if err := merged.Validate(); err != nil {
+			return fieldValidationError("ciCapabilities", err)
+		}
+	}
+	return nil
 }

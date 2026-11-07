@@ -14,6 +14,11 @@
 
 import { expect, test } from "./fixtures.js";
 
+// -legacy-capability registers example-legacy, a made-up provider with
+// nothing to mint, so the director's capability list has a row to tick:
+// every legacy provider core shipped has been retired onto a server method.
+test.use({ demoArgs: ["-legacy-capability"] });
+
 // A standing session's run stays open across messages while its agent
 // waits in the chat tool, and a run keeps the grants it started with
 // (ConsoleSessionPage.jsx, liveRunKey). So a change saved while a run is

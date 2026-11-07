@@ -1206,6 +1206,32 @@ func TestAddWorkflowRunSerialisesWithRequestsAndReplacesReRunAttempts(t *testing
 		t.Fatalf("GET unknown actions run = %+v, %v, want 404", missingResp, err)
 	}
 
+	sim.AddWorkflowRun(WorkflowRun{
+		Name:       "pr-ci",
+		HeadBranch: "feature-x",
+		Status:     "completed",
+		Conclusion: "success",
+	})
+	sim.AddWorkflowRun(WorkflowRun{
+		Name:       "in-flight-release",
+		HeadBranch: "main",
+		Status:     "in_progress",
+	})
+	branchRuns, err := client.CompletedBranchWorkflowRuns("acme", "widgets", "main", 50)
+	if err != nil || len(branchRuns) == 0 {
+		t.Fatalf("CompletedBranchWorkflowRuns(main) = %d runs, %v", len(branchRuns), err)
+	}
+	for _, r := range branchRuns {
+		if r.HeadBranch != "main" || r.Status != "completed" {
+			t.Fatalf("CompletedBranchWorkflowRuns(main) included %+v, want completed main runs only", r)
+		}
+	}
+	// Repeat branch poll with no changes must revalidate via ETag and return (nil, nil).
+	cachedBranchRuns, err := client.CompletedBranchWorkflowRuns("acme", "widgets", "main", 50)
+	if err != nil || cachedBranchRuns != nil {
+		t.Fatalf("unchanged CompletedBranchWorkflowRuns(main) = %+v, %v; want nil, nil (304)", cachedBranchRuns, err)
+	}
+
 	// Sim.Request itself still refuses POST .../actions/runs as an unhandled GitHub endpoint.
 	defer func() {
 		if r := recover(); r == nil {
@@ -1308,5 +1334,38 @@ func TestSimListWorkflowRunsByHeadSHAIncludesAddWorkflowRun(t *testing.T) {
 	logs, err := client.FailedJobLogs("acme", "widgets", head.SHA)
 	if err != nil || len(logs) != 1 || !strings.Contains(logs[0].Log, "--- FAIL: TestController") {
 		t.Fatalf("FailedJobLogs(%s) = %+v, %v, want seeded failing job log", head.SHA, logs, err)
+	}
+}
+
+// promote-release.yml's dispatch (github.RESTClient.DispatchWorkflow,
+// sent on an Inbox Approve or a rollback) is answered 204 and recorded
+// with its ref and inputs, and a GET of the same path lists what was
+// sent, so a walkthrough over `grain demo -github-sim` can read the
+// payload back (docs/test-runs/2026-11-04-release-approval.md, F2). A
+// workflow file named in WorkflowFiles is dispatchable before it has
+// ever run; a dispatch with no ref is GitHub's 422.
+func TestSimRecordsAWorkflowDispatchAndListsIt(t *testing.T) {
+	sim, _ := releaseSim(t)
+	sim.WorkflowFiles = []string{"promote-release.yml"}
+	client := github.NewClient(sim, nil)
+	inputs := map[string]string{"version": "v2.5.0", "decision": "approve", "approval": "cmVjb3Jk"}
+	if err := client.DispatchWorkflow("acme", "widgets", "promote-release.yml", "main", inputs); err != nil {
+		t.Fatalf("DispatchWorkflow: %v", err)
+	}
+	got := sim.Dispatches
+	if len(got) != 1 || got[0].Workflow != "promote-release.yml" || got[0].Ref != "main" || got[0].Inputs["approval"] != "cmVjb3Jk" {
+		t.Fatalf("Dispatches = %+v, want the one promote-release.yml dispatch on main with its inputs", got)
+	}
+	resp, err := sim.Request("GET", "/repos/acme/widgets/actions/workflows/promote-release.yml/dispatches", nil, nil)
+	if err != nil || resp.Status != 200 {
+		t.Fatalf("GET dispatches: %v %+v", err, resp)
+	}
+	var listed []WorkflowDispatch
+	if err := json.Unmarshal(resp.Body, &listed); err != nil || len(listed) != 1 || listed[0].Inputs["version"] != "v2.5.0" {
+		t.Errorf("GET dispatches = %s (%v), want the one dispatch", resp.Body, err)
+	}
+	resp, _ = sim.Request("POST", "/repos/acme/widgets/actions/workflows/promote-release.yml/dispatches", nil, []byte(`{"inputs":{}}`))
+	if resp.Status != 422 || len(sim.Dispatches) != 1 {
+		t.Errorf("a dispatch with no ref = %d (%d recorded), want 422 and nothing recorded", resp.Status, len(sim.Dispatches))
 	}
 }

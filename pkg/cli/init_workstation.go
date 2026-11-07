@@ -89,6 +89,9 @@ type workstationEnv struct {
 	Getenv func(string) string
 	// KVM reports whether /dev/kvm is there and usable by this account.
 	KVM func() bool
+	// SetNetwork waits for the daemon just started at base to answer,
+	// then makes network its sandbox network default.
+	SetNetwork func(ctx context.Context, base, network string) error
 }
 
 func hostWorkstationEnv() workstationEnv {
@@ -122,6 +125,7 @@ func hostWorkstationEnv() workstationEnv {
 			f.Close()
 			return true
 		},
+		SetNetwork: setWorkstationNetwork,
 	}
 }
 
@@ -657,7 +661,7 @@ func runInitWorkstation(ctx context.Context, args []string, stdin io.Reader, out
 		}
 	}
 	if started && o.Network == string(model.NetworkNone) {
-		if err := setWorkstationNetwork(ctx, "http://"+o.UIAddr, o.Network); err != nil {
+		if err := env.SetNetwork(ctx, "http://"+o.UIAddr, o.Network); err != nil {
 			fmt.Fprintf(out, "Could not make none the sandbox network default (%v): run `grain settings -network-access none` once the daemon is up, "+
 				"or the policy refuses every task that does not ask for none itself.\n", err)
 		}
