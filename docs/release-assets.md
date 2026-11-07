@@ -78,8 +78,11 @@ fails, naming the image, before anything is uploaded.
   Docker Hub, so **nothing ever `docker pull`s a manifest ref** — a
   missing one is a failure, not a pull. `pkg/upgrade` refuses to pull a
   ref naming no registry host; the daemon refuses to mirror one that is
-  not in the local image store, and a Kubernetes backend refuses to start
-  with one as its pod image (kubelet would pull it from Docker Hub).
+  not in the local image store, a Kubernetes backend refuses to start
+  with one as its pod image (kubelet would pull it from Docker Hub), and
+  the container backend starts sandboxes from a `grain/...` image with
+  `docker run --pull=never`, so one gone from the local store fails the
+  run instead of being fetched.
 - The daemon image's `grain sandbox-image` and `grain k8s-sandbox-image`
   print exactly the manifest's `guest` and `k8s-sandbox` refs
   (`release-images.sh assets` checks this before anything is packaged).
