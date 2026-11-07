@@ -149,7 +149,7 @@ Re-attach: with the hold removed, the registry re-attached the server at 04:19:0
 
 ## Tests run locally
 
-`go test ./pkg/model/... ./pkg/staterepo/...` (PostgreSQL migration tests also against the Docker PostgreSQL with `GRAIN_POSTGRES_TEST_URL`), `go test ./pkg/daemon` (full package), `go test ./pkg/cli` with `GRAIN_UPDATE_CLI_SPEC=1 … -run CLISpec` (no spec change), `go test ./pkg/capability/...`, and `npx vitest run src/components/settings/CapabilitiesSection.test.jsx`. This run has no access to the repository's GitHub checks: `pull_request_status` says no repository is configured for it, and `grain ci` needs `grain#ci`, which this task does not hold.
+`go test ./pkg/model/... ./pkg/staterepo/...` (PostgreSQL migration tests also against the Docker PostgreSQL with `GRAIN_POSTGRES_TEST_URL`), `go test ./pkg/daemon` (full package), `go test ./pkg/cli` with `GRAIN_UPDATE_CLI_SPEC=1 … -run CLISpec` (no spec change), `go test ./pkg/capability/...`, and `npx vitest run src/components/settings/CapabilitiesSection.test.jsx`. This run has no access to the repository's GitHub checks: `pull_request_status` says no repository is configured for it, and `grain ci` needs `grain#ci`, which this task does not hold. `wait_for_checks` likewise reports no CI for this run, so the pull request (#818) had no check verdict visible from inside the run. Before the final push, the branch (level with `main` at `c6004bc9`) was re-checked with `go build ./...`, `go vet` on the changed packages, `go test ./tests/hygiene ./pkg/model/... ./pkg/cli ./pkg/capability/... ./pkg/staterepo/...`, the four new `pkg/daemon` regression tests by name, and the `CapabilitiesSection` vitest file. All passed.
 
 ## Follow-ups
 
