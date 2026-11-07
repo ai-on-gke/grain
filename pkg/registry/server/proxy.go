@@ -114,12 +114,25 @@ func SanitizeProxyRequest(r *http.Request, entryHostname, registryHost, iapAudie
 		}
 	}
 
-	// 2. Strip Authorization: Bearer <jwt> when <jwt> is an OIDC token whose unverified
-	// audience matches the registry's edge/IAP audience or https://<registry-host>,
-	// while preserving grain-scoped tokens such as `gma_…`.
-	if auth := strings.TrimSpace(r.Header.Get("Authorization")); auth != "" {
-		if shouldStripAuthorizationHeader(auth, registryHost, iapAudience) {
+	// 2. Strip Authorization: Bearer <tok> (and matching X-Grain-Tunnel-Token) when <tok>
+	// is an edge/IAP credential (Google OAuth2 `ya29.` access tokens, `grc_…` registry
+	// tokens, or OIDC JWTs minted for the registry's IAP backend service, registry host,
+	// or a `*.apps.googleusercontent.com` IAP OAuth client), while preserving
+	// grain-scoped tokens such as `gma_…` and installation access codes.
+	for _, auth := range r.Header.Values("Authorization") {
+		if shouldStripAuthorizationHeader(strings.TrimSpace(auth), registryHost, iapAudience) {
 			r.Header.Del("Authorization")
+			break
+		}
+	}
+	for _, tunTok := range r.Header.Values("X-Grain-Tunnel-Token") {
+		rawTok := strings.TrimSpace(tunTok)
+		if len(rawTok) >= 7 && strings.EqualFold(rawTok[:7], "Bearer ") {
+			rawTok = strings.TrimSpace(rawTok[7:])
+		}
+		if shouldStripBearerToken(rawTok, registryHost, iapAudience) {
+			r.Header.Del("X-Grain-Tunnel-Token")
+			break
 		}
 	}
 
@@ -147,7 +160,11 @@ func shouldStripAuthorizationHeader(authHeader, registryHost, iapAudience string
 	if len(authHeader) < 7 || !strings.EqualFold(authHeader[:7], "Bearer ") {
 		return false
 	}
-	tok := strings.TrimSpace(authHeader[7:])
+	return shouldStripBearerToken(authHeader[7:], registryHost, iapAudience)
+}
+
+func shouldStripBearerToken(tok, registryHost, iapAudience string) bool {
+	tok = strings.TrimSpace(tok)
 	if tok == "" {
 		return false
 	}
@@ -155,8 +172,10 @@ func shouldStripAuthorizationHeader(authHeader, registryHost, iapAudience string
 	if strings.HasPrefix(tok, "gma_") {
 		return false
 	}
-	// Strip registry credential tokens (`grc_…`) if accidentally sent on a proxied request.
-	if strings.HasPrefix(tok, "grc_") {
+	// Strip registry credential tokens (`grc_…`) and Google OAuth2 access tokens
+	// (`ya29.…`, such as Google-managed Cloud IAP programmatic bearer tokens) if
+	// sent on a proxied request so they never reach a connected grain.
+	if strings.HasPrefix(tok, "grc_") || strings.HasPrefix(tok, "ya29.") {
 		return true
 	}
 	parts := strings.Split(tok, ".")
@@ -165,7 +184,10 @@ func shouldStripAuthorizationHeader(authHeader, registryHost, iapAudience string
 	}
 	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return false
+		payloadBytes, err = base64.URLEncoding.DecodeString(parts[1])
+		if err != nil {
+			return false
+		}
 	}
 	var claims struct {
 		Aud any `json:"aud"`
@@ -180,6 +202,7 @@ func shouldStripAuthorizationHeader(authHeader, registryHost, iapAudience string
 		regHTTPS = "https://" + normReg
 	}
 	iapAud := strings.TrimSpace(iapAudience)
+	const googleOAuthClientSuffix = ".apps.googleusercontent.com"
 
 	matchesEdgeAud := func(a string) bool {
 		a = strings.TrimSpace(a)
@@ -187,6 +210,10 @@ func shouldStripAuthorizationHeader(authHeader, registryHost, iapAudience string
 			return false
 		}
 		if iapAud != "" && a == iapAud {
+			return true
+		}
+		lowerA := strings.ToLower(a)
+		if strings.HasSuffix(lowerA, googleOAuthClientSuffix) && len(lowerA) > len(googleOAuthClientSuffix) {
 			return true
 		}
 		if normReg != "" && (strings.EqualFold(a, normReg) || strings.EqualFold(strings.TrimSuffix(a, "/"), regHTTPS)) {
