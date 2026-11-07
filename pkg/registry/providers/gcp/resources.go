@@ -337,11 +337,11 @@ func (r *GCPInstanceResources) SecretPrefixForEntry(entryName string) (string, e
 }
 
 // Provision idempotently creates and configures:
-// 1. Per-instance GCP Service Account (`<sa_prefix><slug>@<project>.iam.gserviceaccount.com`)
-// 2. Shared Cloud SQL placement, database (`grain_<slug>`), and `CLOUD_IAM_SERVICE_ACCOUNT` role
-//    with `NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS CONNECTION LIMIT 20` and `REVOKE ALL ON DATABASE ... FROM PUBLIC`
-// 3. GCS Managed Folder `instances/<name>/` with `roles/storage.objectUser`
-// 4. Conditional project IAM bindings for Cloud SQL, Secret Manager (`<secret_prefix><name>-*`), and optional fleet logs.
+//  1. Per-instance GCP Service Account (`<sa_prefix><slug>@<project>.iam.gserviceaccount.com`)
+//  2. Shared Cloud SQL placement, database (`grain_<slug>`), and `CLOUD_IAM_SERVICE_ACCOUNT` role
+//     with `NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS CONNECTION LIMIT 20` and `REVOKE ALL ON DATABASE ... FROM PUBLIC`
+//  3. GCS Managed Folder `instances/<name>/` with `roles/storage.objectUser`
+//  4. Conditional project IAM bindings for Cloud SQL, Secret Manager (`<secret_prefix><name>-*`), and optional fleet logs.
 func (r *GCPInstanceResources) Provision(ctx context.Context, spec registry.InstanceResourceSpec) (*registry.InstanceResourceBundle, error) {
 	accountID, saEmail, err := r.ServiceAccountEmailForEntry(spec.Name)
 	if err != nil {
@@ -406,14 +406,14 @@ func (r *GCPInstanceResources) Provision(ctx context.Context, spec registry.Inst
 }
 
 // Teardown revokes access or permanently purges per-instance cloud resources:
-// - When `retainDB == true` (Fence on Delete during the 7-day retention window):
-//   revokes project and GCS Managed Folder IAM bindings for the GSA, sets
-//   `ALTER DATABASE "<db>" WITH ALLOW_CONNECTIONS false`, sets `ALTER ROLE "<iam_user>" WITH NOLOGIN CONNECTION LIMIT 0`,
-//   and terminates all active PostgreSQL backends via `pg_terminate_backend`.
-// - When `retainDB == false` (Final Purge after `db_purge_after` or `delete_disk: true`):
-//   drops the PostgreSQL database and IAM role, deletes the Cloud SQL user/DB via Admin API,
-//   deletes all `grain-inst-<name>-*` secrets from Secret Manager, deletes all objects and
-//   the Managed Folder under `gs://<bucket>/instances/<name>/`, and deletes the GSA.
+//   - When `retainDB == true` (Fence on Delete during the 7-day retention window):
+//     revokes project and GCS Managed Folder IAM bindings for the GSA, sets
+//     `ALTER DATABASE "<db>" WITH ALLOW_CONNECTIONS false`, sets `ALTER ROLE "<iam_user>" WITH NOLOGIN CONNECTION LIMIT 0`,
+//     and terminates all active PostgreSQL backends via `pg_terminate_backend`.
+//   - When `retainDB == false` (Final Purge after `db_purge_after` or `delete_disk: true`):
+//     drops the PostgreSQL database and IAM role, deletes the Cloud SQL user/DB via Admin API,
+//     deletes all `grain-inst-<name>-*` secrets from Secret Manager, deletes all objects and
+//     the Managed Folder under `gs://<bucket>/instances/<name>/`, and deletes the GSA.
 func (r *GCPInstanceResources) Teardown(ctx context.Context, spec registry.InstanceResourceSpec, bundle registry.InstanceResourceBundle, retainDB bool) error {
 	_, expectedSA, err := r.ServiceAccountEmailForEntry(spec.Name)
 	if err != nil {

@@ -61,23 +61,23 @@ type OrphanInstance struct {
 
 // Options configures a `Reconciler`.
 type Options struct {
-	Config              registry.Config
-	Store               *store.Store
-	Compute             registry.Compute
-	Resources           registry.InstanceResources
-	ConfigRepos         registry.ConfigRepos
-	Signer              registry.Signer
-	HostCache           HostCacheUpdater
-	HolderID            string
-	HTTPClient          *http.Client
-	LeaseTTL            time.Duration
-	LeaseRenewInterval  time.Duration
-	ReconcileInterval   time.Duration
-	StatusPollInterval  time.Duration
-	DrainTimeout        time.Duration
-	HealthTimeout       time.Duration
-	StepByStepReplace   bool
-	Now                 func() time.Time
+	Config             registry.Config
+	Store              *store.Store
+	Compute            registry.Compute
+	Resources          registry.InstanceResources
+	ConfigRepos        registry.ConfigRepos
+	Signer             registry.Signer
+	HostCache          HostCacheUpdater
+	HolderID           string
+	HTTPClient         *http.Client
+	LeaseTTL           time.Duration
+	LeaseRenewInterval time.Duration
+	ReconcileInterval  time.Duration
+	StatusPollInterval time.Duration
+	DrainTimeout       time.Duration
+	HealthTimeout      time.Duration
+	StepByStepReplace  bool
+	Now                func() time.Time
 }
 
 // Reconciler drives hosted VM lifecycle transitions (`creating`, `replacing`, `deleting`),
@@ -711,10 +711,10 @@ func (r *Reconciler) PollRunningInstances(ctx context.Context) error {
 
 // ReconcileOrphans lists all GCE VMs matching `vm_prefix` and `grain-registry` in the configured
 // zones and compares them against `registry.entries`:
-// - If a VM belongs to an entry that is now `deleted` or has moved to a newer `grain-generation`,
-//   the stale VM is automatically deleted via `Compute.DeleteInstance`.
-// - If a VM has no matching entry in `registry.entries`, it is recorded in `Orphans()` and
-//   `registry.audit_log` (`orphan_vm_detected`) for operator visibility.
+//   - If a VM belongs to an entry that is now `deleted` or has moved to a newer `grain-generation`,
+//     the stale VM is automatically deleted via `Compute.DeleteInstance`.
+//   - If a VM has no matching entry in `registry.entries`, it is recorded in `Orphans()` and
+//     `registry.audit_log` (`orphan_vm_detected`) for operator visibility.
 func (r *Reconciler) ReconcileOrphans(ctx context.Context) error {
 	if r.compute == nil {
 		return nil
