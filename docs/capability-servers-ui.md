@@ -88,7 +88,7 @@ with its canonical ID, `https://grain.dev/capabilities/<name>`.
 After them come grain's **in-process** servers, which run inside the daemon
 rather than as a subprocess and have no `mcpServers` entry:
 `https://grain.dev/capabilities/grain` (`#ci`, `#health`, `#host-exec`,
-`#journal`, `#sql`), `https://grain.dev/capabilities/repo` (`#read`,
+`#journal`, `#source`, `#sql`), `https://grain.dev/capabilities/repo` (`#credential`, `#read`,
 `#write`), `https://grain.dev/capabilities/release` (`#image-signing`,
 `#package-publish`, `#registry-push`; CI only),
 `https://grain.dev/capabilities/model-proxy` (`#model-proxy`), and any

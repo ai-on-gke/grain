@@ -866,3 +866,267 @@ func TestReconcilerHealthTimeoutOrphansAndExpiredReplicas(t *testing.T) {
 		t.Fatal("expected stale-generation VM grain-vm-old-stuck to be automatically deleted")
 	}
 }
+
+func TestReconcilerStopStartAutoWakeAndScheduledFleetUpgrades(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	// Start at 01:00 UTC (outside maintenance window 02:00-04:00).
+	now := time.Date(2026, 11, 7, 1, 0, 0, 0, time.UTC)
+	st.SetNow(func() time.Time { return now })
+
+	if err := st.SeedShapes(ctx, []store.ShapeRow{
+		{Name: "standard", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+	}); err != nil {
+		t.Fatalf("SeedShapes: %v", err)
+	}
+	if err := st.SeedSQLInstances(ctx, []store.SQLInstanceRow{
+		{Name: "sql-pool-01", ConnectionName: "test-proj:us-central1:sql-pool-01", PrivateIP: "10.8.0.5", MaxDatabases: 50},
+	}); err != nil {
+		t.Fatalf("SeedSQLInstances: %v", err)
+	}
+	// Give alice enough quota units for 3 VMs.
+	if err := st.SetQuota(ctx, "alice@example.com", 10, 20, "admin@example.com"); err != nil {
+		t.Fatalf("SetQuota: %v", err)
+	}
+
+	var statusMu sync.Mutex
+	reportedVersion := "v1.0.0"
+	activeTasks := 0
+
+	instanceSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+		case "/api/registry/status":
+			statusMu.Lock()
+			ver := reportedVersion
+			tasks := activeTasks
+			statusMu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(api.InstanceStatusResponse{
+				GrainVersion: ver,
+				GrainCommit:  "abc1234",
+				Health:       api.HealthOK,
+				ActiveTasks:  tasks,
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer instanceSrv.Close()
+
+	comp := newFakeCompute(instanceSrv.URL)
+	res := newFakeResources(st)
+
+	rec, err := New(Options{
+		Config: registry.Config{
+			Host:           "grain.example.com",
+			InstanceDomain: "instances.example.com",
+			Compute: registry.ComputeConfig{
+				Project:               "test-proj",
+				Region:                "us-central1",
+				Zones:                 []string{"us-central1-a"},
+				DefaultShape:          "standard",
+				VMPrefix:              "grain-vm-",
+				RegistryID:            "grain.example.com",
+				AutoUpgrade:           string(api.AutoUpgradeMinor),
+				TargetVersion:         "v1.0.0",
+				MaintenanceWindow:     "02:00-04:00",
+				MaxConcurrentUpgrades: 1,
+			},
+			Secrets: registry.SecretsConfig{
+				SecretPrefix: "grain-inst-",
+			},
+		},
+		Store:        st,
+		Compute:      comp,
+		Resources:    res,
+		HolderID:     "leader-1",
+		HTTPClient:   instanceSrv.Client(),
+		DrainTimeout: 5 * time.Minute,
+		Now:          func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("New Reconciler: %v", err)
+	}
+
+	// Create 3 instances:
+	// - vm-minor: inherits fleet AutoUpgrade=minor
+	// - vm-notify: overrides AutoUpgrade=notify
+	// - vm-off: overrides AutoUpgrade=off
+	eMinor, err := st.CreateEntry(ctx, store.CreateEntryInput{
+		Name:       "vm-minor",
+		Kind:       api.KindInstance,
+		OwnerEmail: "alice@example.com",
+		Shape:      "standard",
+		Zone:       "us-central1-a",
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry vm-minor: %v", err)
+	}
+	eNotify, err := st.CreateEntry(ctx, store.CreateEntryInput{
+		Name:        "vm-notify",
+		Kind:        api.KindInstance,
+		OwnerEmail:  "alice@example.com",
+		Shape:       "standard",
+		Zone:        "us-central1-a",
+		AutoUpgrade: string(api.AutoUpgradeNotify),
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry vm-notify: %v", err)
+	}
+	eOff, err := st.CreateEntry(ctx, store.CreateEntryInput{
+		Name:        "vm-off",
+		Kind:        api.KindInstance,
+		OwnerEmail:  "alice@example.com",
+		Shape:       "standard",
+		Zone:        "us-central1-a",
+		AutoUpgrade: string(api.AutoUpgradeOff),
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry vm-off: %v", err)
+	}
+
+	// Reconcile creating -> running for all 3 VMs at v1.0.0.
+	if err := rec.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce initial creating: %v", err)
+	}
+	eMinor, _ = st.GetEntryByID(ctx, eMinor.ID)
+	if eMinor.LifecycleState != api.StateRunning || eMinor.GrainVersion != "v1.0.0" {
+		t.Fatalf("expected vm-minor running at v1.0.0, got %s/%s", eMinor.LifecycleState, eMinor.GrainVersion)
+	}
+
+	// 1. Test Stop -> Stopped (draining wait when activeTasks > 0, then stop+delete VM while keeping externalized state) -> Wake/Start -> Running.
+	statusMu.Lock()
+	activeTasks = 2
+	statusMu.Unlock()
+	eMinor, err = st.BeginStopEntry(ctx, eMinor.ID, eMinor.Version, "stopping vm-minor")
+	if err != nil {
+		t.Fatalf("BeginStopEntry: %v", err)
+	}
+	now = now.Add(10 * time.Second)
+	if err := rec.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce stopping while busy: %v", err)
+	}
+	eMinor, _ = st.GetEntryByID(ctx, eMinor.ID)
+	if eMinor.LifecycleState != api.StateStopping {
+		t.Fatalf("expected vm-minor to stay in stopping while active_tasks=2 within drain_timeout, got %s", eMinor.LifecycleState)
+	}
+
+	// Tasks finish -> next RunOnce stops & deletes VM and transitions to stopped.
+	statusMu.Lock()
+	activeTasks = 0
+	statusMu.Unlock()
+	now = now.Add(10 * time.Second)
+	if err := rec.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce stopping after drain: %v", err)
+	}
+	eMinor, _ = st.GetEntryByID(ctx, eMinor.ID)
+	if eMinor.LifecycleState != api.StateStopped || eMinor.GCEInstanceID != "" || eMinor.BackendURL != "" {
+		t.Fatalf("expected vm-minor stopped with cleared VM placement, got %+v", eMinor)
+	}
+	if eMinor.SQLInstance != "sql-pool-01" || eMinor.DBName != "grain_vm_minor" || eMinor.ServiceAccount == "" {
+		t.Fatalf("expected externalized state preserved while stopped, got %+v", eMinor)
+	}
+
+	// Auto-wake transitions stopped -> creating, and reconciler boots a new VM -> running.
+	_, didWake, err := st.WakeStoppedEntry(ctx, eMinor.ID, "bob@example.com")
+	if err != nil || !didWake {
+		t.Fatalf("WakeStoppedEntry: (%v, %v)", didWake, err)
+	}
+	now = now.Add(10 * time.Second)
+	if err := rec.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce waking: %v", err)
+	}
+	eMinor, _ = st.GetEntryByID(ctx, eMinor.ID)
+	if eMinor.LifecycleState != api.StateRunning || eMinor.GCEInstanceID == "" || eMinor.BackendURL == "" {
+		t.Fatalf("expected vm-minor back to running after wake, got %+v", eMinor)
+	}
+
+	// 2. Test Scheduled Fleet Upgrades:
+	// First test major version bump (v1.0.0 -> v2.0.0): `minor` policy must NOT auto-replace on a major bump, only set upgrade_available.
+	rec.cfg.Compute.TargetVersion = "v2.0.0"
+	now = time.Date(2026, 11, 7, 2, 30, 0, 0, time.UTC) // inside 02:00-04:00 window
+	if err := rec.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce major version check: %v", err)
+	}
+	eMinor, _ = st.GetEntryByID(ctx, eMinor.ID)
+	if eMinor.LifecycleState != api.StateRunning || eMinor.GrainVersion != "v1.0.0" || eMinor.UpgradeAvailable != "v2.0.0" {
+		t.Fatalf("expected major version bump v2.0.0 not to auto-replace under minor policy, got state=%s ver=%s avail=%s",
+			eMinor.LifecycleState, eMinor.GrainVersion, eMinor.UpgradeAvailable)
+	}
+
+	// Now set target version to a minor bump `v1.1.0`, but move clock outside maintenance window (01:30 UTC).
+	rec.cfg.Compute.TargetVersion = "v1.1.0"
+	now = time.Date(2026, 11, 7, 1, 30, 0, 0, time.UTC)
+	if err := rec.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce outside maintenance window: %v", err)
+	}
+	eMinor, _ = st.GetEntryByID(ctx, eMinor.ID)
+	eNotify, _ = st.GetEntryByID(ctx, eNotify.ID)
+	eOff, _ = st.GetEntryByID(ctx, eOff.ID)
+	if eMinor.GrainVersion != "v1.0.0" || eMinor.UpgradeAvailable != "v1.1.0" {
+		t.Fatalf("expected vm-minor to wait outside maintenance window with upgrade_available=v1.1.0, got ver=%s avail=%s",
+			eMinor.GrainVersion, eMinor.UpgradeAvailable)
+	}
+	if eNotify.GrainVersion != "v1.0.0" || eNotify.UpgradeAvailable != "v1.1.0" {
+		t.Fatalf("expected vm-notify to record upgrade_available=v1.1.0 without replacing, got ver=%s avail=%s",
+			eNotify.GrainVersion, eNotify.UpgradeAvailable)
+	}
+	if eOff.UpgradeAvailable != "" {
+		t.Fatalf("expected vm-off to ignore fleet upgrades, got avail=%q", eOff.UpgradeAvailable)
+	}
+
+	// Move inside maintenance window (02:15 UTC), but mark instance busy (`activeTasks = 1`): must wait until idle.
+	now = time.Date(2026, 11, 7, 2, 15, 0, 0, time.UTC)
+	statusMu.Lock()
+	activeTasks = 1
+	statusMu.Unlock()
+	if err := rec.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce inside maintenance window while busy: %v", err)
+	}
+	eMinor, _ = st.GetEntryByID(ctx, eMinor.ID)
+	if eMinor.GrainVersion != "v1.0.0" {
+		t.Fatalf("expected busy vm-minor not to auto-upgrade while active_tasks=1, got ver=%s", eMinor.GrainVersion)
+	}
+
+	comp.mu.Lock()
+	stopsBefore := comp.stopCalls
+	comp.mu.Unlock()
+	statusMu.Lock()
+	activeTasks = 0
+	reportedVersion = "v1.0.0"
+	statusMu.Unlock()
+
+	// Use stepByStepReplace=true so we can observe the transition to replacing, then switch reportedVersion to v1.1.0 when the new VM boots.
+	rec.stepByStepReplace = true
+	if err := rec.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce trigger auto-upgrade: %v", err)
+	}
+	eMinor, _ = st.GetEntryByID(ctx, eMinor.ID)
+	if eMinor.LifecycleState != api.StateReplacing || eMinor.TargetVersion != "v1.1.0" {
+		t.Fatalf("expected vm-minor to enter replacing for target_version=v1.1.0, got state=%s target=%s",
+			eMinor.LifecycleState, eMinor.TargetVersion)
+	}
+
+	// Complete the remaining replace steps (deleting_vm -> creating_vm -> probing -> running with v1.1.0).
+	rec.stepByStepReplace = false
+	statusMu.Lock()
+	reportedVersion = "v1.1.0"
+	statusMu.Unlock()
+	if err := rec.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce complete auto-upgrade: %v", err)
+	}
+	eMinor, _ = st.GetEntryByID(ctx, eMinor.ID)
+	if eMinor.LifecycleState != api.StateRunning || eMinor.GrainVersion != "v1.1.0" || eMinor.UpgradeAvailable != "" {
+		t.Fatalf("expected vm-minor running at v1.1.0 with empty upgrade_available after auto-upgrade, got state=%s ver=%s avail=%q",
+			eMinor.LifecycleState, eMinor.GrainVersion, eMinor.UpgradeAvailable)
+	}
+	comp.mu.Lock()
+	stopsAfter := comp.stopCalls
+	comp.mu.Unlock()
+	if stopsAfter <= stopsBefore {
+		t.Fatalf("expected old VM stop during auto-upgrade (before=%d after=%d)", stopsBefore, stopsAfter)
+	}
+}

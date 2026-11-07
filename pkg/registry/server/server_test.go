@@ -1401,3 +1401,175 @@ func TestReconnectWaiterCap32AndDelegationAndSIGTERMDrain(t *testing.T) {
 		t.Fatalf("expected 503 with Retry-After: 2 on /connect while draining, got %d", recDrainConnect.Code)
 	}
 }
+
+func TestStopStartStatePagesAndAutoWakeOnVisit(t *testing.T) {
+	pgURL := startEphemeralPostgres(t)
+	ctx := context.Background()
+	st, err := store.Open(ctx, pgURL, store.DefaultThresholds())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer st.Close()
+
+	if err := st.SeedShapes(ctx, []store.ShapeRow{
+		{Name: "small", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+	}); err != nil {
+		t.Fatalf("SeedShapes: %v", err)
+	}
+
+	autoWakeFalse := false
+	autoWakeTrue := true
+
+	vmStopping, err := st.CreateEntry(ctx, store.CreateEntryInput{
+		Name:       "vm-stopping",
+		Kind:       api.KindInstance,
+		OwnerEmail: "alice@example.com",
+		Visibility: store.VisibilityPublic,
+		Shape:      "small",
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry vm-stopping: %v", err)
+	}
+	vmStopping, err = st.TransitionEntryState(ctx, vmStopping.ID, vmStopping.Version, api.StateRunning, "")
+	if err != nil {
+		t.Fatalf("TransitionEntryState vm-stopping running: %v", err)
+	}
+	if _, err := st.BeginStopEntry(ctx, vmStopping.ID, vmStopping.Version, "stopping by alice"); err != nil {
+		t.Fatalf("BeginStopEntry vm-stopping: %v", err)
+	}
+
+	vmStoppedNoWake, err := st.CreateEntry(ctx, store.CreateEntryInput{
+		Name:       "vm-stopped-nowake",
+		Kind:       api.KindInstance,
+		OwnerEmail: "carol@example.com",
+		Visibility: store.VisibilityPublic,
+		Shape:      "small",
+		AutoWake:   &autoWakeFalse,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry vm-stopped-nowake: %v", err)
+	}
+	vmStoppedNoWake, err = st.TransitionEntryState(ctx, vmStoppedNoWake.ID, vmStoppedNoWake.Version, api.StateRunning, "")
+	if err != nil {
+		t.Fatalf("TransitionEntryState vm-stopped-nowake: %v", err)
+	}
+	vmStoppedNoWake, err = st.BeginStopEntry(ctx, vmStoppedNoWake.ID, vmStoppedNoWake.Version, "stopping by alice")
+	if err != nil {
+		t.Fatalf("BeginStopEntry vm-stopped-nowake: %v", err)
+	}
+	if _, err := st.CompleteStopEntry(ctx, vmStoppedNoWake.ID, vmStoppedNoWake.Version); err != nil {
+		t.Fatalf("CompleteStopEntry vm-stopped-nowake: %v", err)
+	}
+
+	vmStoppedWake, err := st.CreateEntry(ctx, store.CreateEntryInput{
+		Name:       "vm-stopped-wake",
+		Kind:       api.KindInstance,
+		OwnerEmail: "alice@example.com",
+		Visibility: store.VisibilityOwner,
+		Shape:      "small",
+		AutoWake:   &autoWakeTrue,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry vm-stopped-wake: %v", err)
+	}
+	vmStoppedWake, err = st.TransitionEntryState(ctx, vmStoppedWake.ID, vmStoppedWake.Version, api.StateRunning, "")
+	if err != nil {
+		t.Fatalf("TransitionEntryState vm-stopped-wake: %v", err)
+	}
+	vmStoppedWake, err = st.BeginStopEntry(ctx, vmStoppedWake.ID, vmStoppedWake.Version, "stopping by alice")
+	if err != nil {
+		t.Fatalf("BeginStopEntry vm-stopped-wake: %v", err)
+	}
+	if _, err := st.CompleteStopEntry(ctx, vmStoppedWake.ID, vmStoppedWake.Version); err != nil {
+		t.Fatalf("CompleteStopEntry vm-stopped-wake: %v", err)
+	}
+
+	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
+		Verifier:       testIdentityVerifier{},
+		AllowedDomains: []string{"example.com"},
+		Admins:         []string{"user:admin@example.com"},
+	})
+	if err != nil {
+		t.Fatalf("NewAdmitter: %v", err)
+	}
+	rt, err := NewRouter(RouterOptions{
+		RegistryHost:   "registry.example.com",
+		InstanceDomain: "instances.example.com",
+		ReplicaID:      "replica-step17",
+		Store:          st,
+		Admitter:       admitter,
+		Signer:         newTestAssertionSigner(t),
+	})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	defer rt.Close()
+
+	h := rt.WrapMainHandler(http.NotFoundHandler())
+
+	// 1. Stopping entry returns 503 + Retry-After: 5 (both HTML and JSON).
+	{
+		req := httptest.NewRequest(http.MethodGet, "https://vm-stopping.instances.example.com/", nil)
+		req.Host = "vm-stopping.instances.example.com"
+		req.Header.Set("X-Test-Email", "bob@example.com")
+		req.Header.Set("Accept", "application/json")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "5" || !strings.Contains(rec.Body.String(), "entry_stopping") {
+			t.Fatalf("expected 503 entry_stopping for vm-stopping, got %d %s", rec.Code, rec.Body.String())
+		}
+	}
+
+	// 2. Stopped entry with auto_wake=false returns 503 entry_stopped and stays stopped.
+	{
+		req := httptest.NewRequest(http.MethodGet, "https://vm-stopped-nowake.instances.example.com/", nil)
+		req.Host = "vm-stopped-nowake.instances.example.com"
+		req.Header.Set("X-Test-Email", "bob@example.com")
+		req.Header.Set("Accept", "application/json")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "entry_stopped") {
+			t.Fatalf("expected 503 entry_stopped for vm-stopped-nowake, got %d %s", rec.Code, rec.Body.String())
+		}
+		got, err := st.GetEntryByName(ctx, "vm-stopped-nowake")
+		if err != nil || got.LifecycleState != api.StateStopped {
+			t.Fatalf("expected vm-stopped-nowake to stay stopped, got %+v (err=%v)", got, err)
+		}
+	}
+
+	// 3. Stopped entry with auto_wake=true and visibility=owner:
+	// Unauthorized visitor (bob) gets 403 Forbidden and does NOT wake the instance.
+	{
+		reqBob := httptest.NewRequest(http.MethodGet, "https://vm-stopped-wake.instances.example.com/", nil)
+		reqBob.Host = "vm-stopped-wake.instances.example.com"
+		reqBob.Header.Set("X-Test-Email", "bob@example.com")
+		reqBob.Header.Set("Accept", "text/html")
+		recBob := httptest.NewRecorder()
+		h.ServeHTTP(recBob, reqBob)
+		if recBob.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 Forbidden for bob on owner-private stopped instance, got %d", recBob.Code)
+		}
+		gotAfterBob, err := st.GetEntryByName(ctx, "vm-stopped-wake")
+		if err != nil || gotAfterBob.LifecycleState != api.StateStopped {
+			t.Fatalf("expected vm-stopped-wake to remain stopped after unauthorized visit, got %+v (err=%v)", gotAfterBob, err)
+		}
+
+		// Authorized owner (alice) visits -> atomically wakes stopped -> creating and serves 503 Waking state page!
+		reqAlice := httptest.NewRequest(http.MethodGet, "https://vm-stopped-wake.instances.example.com/", nil)
+		reqAlice.Host = "vm-stopped-wake.instances.example.com"
+		reqAlice.Header.Set("X-Test-Email", "alice@example.com")
+		reqAlice.Header.Set("Accept", "text/html")
+		recAlice := httptest.NewRecorder()
+		h.ServeHTTP(recAlice, reqAlice)
+		if recAlice.Code != http.StatusServiceUnavailable || recAlice.Header().Get("Retry-After") != "5" {
+			t.Fatalf("expected 503 with Retry-After: 5 on auto-wake visit, got %d", recAlice.Code)
+		}
+		if !strings.Contains(recAlice.Body.String(), "waking up") {
+			t.Fatalf("expected waking up state page on auto-wake visit, got %s", recAlice.Body.String())
+		}
+		gotAfterAlice, err := st.GetEntryByName(ctx, "vm-stopped-wake")
+		if err != nil || gotAfterAlice.LifecycleState != api.StateCreating {
+			t.Fatalf("expected vm-stopped-wake to transition stopped -> creating on owner visit, got %+v (err=%v)", gotAfterAlice, err)
+		}
+	}
+}

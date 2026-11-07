@@ -232,6 +232,10 @@ func configureGitHubSimDemoWith(dir string, cfg ui.Config, repo model.RepoRef, s
 		cfg.GitHubCalls = ghCalls
 	}
 	sim := githubsim.New(repo.Owner, repo.Name, bare, demoGitHubSimDefaultBranch)
+	// promote-release.yml is in the repository's .github/workflows, as it
+	// is in a real one, so an Inbox Approve or a rollback can dispatch it
+	// before it has ever run (pkg/ui/release_approval_github.go).
+	sim.WorkflowFiles = []string{"promote-release.yml"}
 	// Seed an open issue, a comment, and a review comment on the first PR number
 	// (sim.PullRequestBase defaults to 9000) so `grain issue list|read` and
 	// `grain pr reply|resolve` have realistic simulated records in `grain demo`.
