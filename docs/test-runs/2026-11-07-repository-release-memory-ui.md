@@ -341,9 +341,11 @@ Nothing replaced Grain's API or its React UI.
 ## Observations (not fixed here)
 
 1. **Compare picker**: it still offers `feature/walk-3356`, which is only
-   "pending" creation, first among the head branches (as on 11-04). With
-   the menu open, ArrowDown then Enter picks the second suggestion
-   rather than the first.
+   "pending" creation, first among the head branches (as on 11-04). The
+   list opens on focus with its first suggestion already highlighted, so
+   Enter takes that one and ArrowDown then Enter takes the second. That
+   is BranchField's deliberate highlight-first behaviour, noted here only
+   because it surprised the driver script.
 2. **Removed repo with a queued task**: after removing acme/gadgets, task
    24 is still queued against it, but the repo leaves the list and its
    page reads "0 tasks filed here". This follows `repoRows`' documented
