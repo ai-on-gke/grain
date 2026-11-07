@@ -363,6 +363,7 @@ var settingsDiffRows = []settingsDiffRow{
 	{"ciReserveAfter", "ci capacity reserved after", func(s ui.Settings) any { return s.CIReserveAfter }},
 	{"defaultCapabilities", "default capabilities", func(s ui.Settings) any { return strings.Join(s.DefaultCapabilities, ", ") }},
 	{"defaultAdmission", "default admission", func(s ui.Settings) any { return s.DefaultAdmission }},
+	{"defaultHosting", "default hosting", func(s ui.Settings) any { return s.DefaultHosting }},
 	{"agentBackends", "agent backends", func(s ui.Settings) any { return fmt.Sprint(s.AgentBackends) }},
 	{"newestFirst", "newest first", func(s ui.Settings) any { return s.NewestFirst }},
 	{"showClosedByDefault", "show closed by default", func(s ui.Settings) any { return s.ShowClosedByDefault }},

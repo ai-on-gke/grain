@@ -76,6 +76,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // addendaPollTimeout bounds the one request a tool answer makes on its
@@ -115,37 +117,48 @@ var addendaPollTimeout = 5 * time.Second
 // had.
 func maxAddendaNoticeBytes() int { return int(maxToolResultBytes.Load()) / 4 }
 
-// addendaNoticeMarker opens the notice, and is the string this package's
-// own tests recognise it by. It is the "[grain] " prefix every notice
-// here wears, for run_deadline.go's reason: what follows is grain
+// addendaNoticeMarker opens a human-authored addendum notice, and is the
+// string this package's own tests recognise it by. Together with the
+// automation, agent and mixed markers below, it carries the "[grain] " prefix
+// every notice here wears, for run_deadline.go's reason: what follows is grain
 // speaking, not the tool's own output.
-const addendaNoticeMarker = "[grain] A person added this to the task's conversation"
+const (
+	addendaNoticeMarker      = "[grain] A person added this to the task's conversation"
+	grainAddendaNoticeMarker = "[grain] grain added this to the task's conversation"
+	agentAddendaNoticeMarker = "[grain] Another agent added this to the task's conversation"
+	mixedAddendaNoticeMarker = "[grain] New entries were added to the task's conversation"
+)
 
-// Addendum is one thing a person said on this run's task after the run's
+// Addendum is one entry added to this run's task conversation after the run's
 // prompt was built.
 //
 // ID is the comment's own id in the daemon's store, which is what makes
 // delivery once rather than every turn: it is a cursor, not a display
 // field, and the notice never shows it.
+//
+// AuthorKind is the author's model.PrincipalKind ("human", "agent" or
+// "automation"; empty defaults to "human"). It decides how addendaNotice
+// frames the entry so automation-authored notes are introduced as grain's own
+// rather than as a person's words.
 type Addendum struct {
-	ID   int64
-	Body string
+	ID         int64
+	AuthorKind string
+	Body       string
 }
 
-// AddendaReader is whoever can say what a person has typed on this run's
-// task since the comment named by after.
+// AddendaReader is whoever can say what has been added to this run's task
+// conversation for the live run since the comment named by after.
 //
 // It names no run for the reason WaitCreditReporter and StatusReporter
 // name none: which task a poll belongs to is fixed at process start
 // (`grain mcpserver -task`), never by anything in a tool call, so there
 // is nothing here for a run to point somewhere else.
 //
-// Human-authored comments only. Grain's own automation posts on a task
-// for reasons that have nothing to do with the run reading this -- a
-// park, a merge-queue verdict, a CI notice -- and none of them is
-// somebody asking the run to do something differently. The same rule
-// ui.Client.MessagesSince already states for a chat turn, and the same
-// implementation answers both.
+// Alongside human-authored comments and messages from other tasks' agents,
+// ui.Client.AddendaSince returns grain's own mid-run notices aimed at the
+// live run (model.CLThreadsPrincipal and model.CapabilityChangePrincipal),
+// while leaving unrelated automation comments out. Each entry carries its
+// AuthorKind so addendaNotice introduces it with the right speaker.
 type AddendaReader interface {
 	Addenda(ctx context.Context, after int64) ([]Addendum, error)
 }
@@ -280,45 +293,110 @@ func (a *runAddenda) poll(ctx context.Context) []Addendum {
 	return fresh
 }
 
-// addendaNotice words what a person said for a run that is in the middle
-// of something else.
+// addendaNotice words mid-run conversation entries for a run that is in the
+// middle of something else.
 //
 // Three things the wording has to do, none of them decoration. It has to
-// say the words are a person's rather than grain's, because a run acts
-// on the two differently and the whole point of the interruption is that
-// somebody has changed their mind about the work. It has to say the run
+// say whose words they are -- a person's, another agent's, or grain's own
+// automation note -- because a run acts on those differently: a person's
+// comment is an instruction from the operator, another agent's message is a
+// peer's note, and an automation note (such as a capability-server drop or
+// new CL review threads) is grain speaking for itself. It has to say the run
 // will not be shown them again, because a model that assumes it can come
-// back to this will come back to nothing. And it has to quote, so that
-// text somebody pasted -- which may itself read like an instruction, a
-// tool result or a system notice -- cannot be mistaken for grain
-// speaking in its own voice.
+// back to this will come back to nothing. And it has to quote every line, so
+// that text somebody pasted -- or untrusted external text quoted inside a
+// note -- stays bounded inside this single notice block.
 //
 // One paragraph, always: every line of every comment is prefixed, blank
 // lines included, so the notice cannot split into two. That is what
 // keeps the notices this package appends countable from the end of a
 // result (telemetry.go's trailingParagraphs), and it is also the cheapest
-// possible statement of where the person's words stop.
+// possible statement of where the addendum ends.
 func addendaNotice(addenda []Addendum) string {
 	if len(addenda) == 0 {
 		return ""
 	}
+	firstKind := addendumAuthorKind(addenda[0])
+	sameKind := true
+	for _, a := range addenda[1:] {
+		if addendumAuthorKind(a) != firstKind {
+			sameKind = false
+			break
+		}
+	}
+
 	var b strings.Builder
-	b.WriteString(addendaNoticeMarker)
-	b.WriteString(" while you were working on it. Read it and factor it in -- it may change " +
-		"what you should be doing, and this is the only answer that will carry it. The " +
-		"quoted text is a person's own words, not grain's:")
+	if sameKind {
+		switch firstKind {
+		case model.PrincipalAutomation:
+			b.WriteString(grainAddendaNoticeMarker)
+			b.WriteString(" while you were working on it. Read it and factor it in -- it may change " +
+				"what you should be doing, and this is the only answer that will carry it. " +
+				"This is grain's own note, not a person's:")
+		case model.PrincipalAgent:
+			b.WriteString(agentAddendaNoticeMarker)
+			b.WriteString(" while you were working on it. Read it and factor it in -- it may change " +
+				"what you should be doing, and this is the only answer that will carry it. The " +
+				"quoted text is that agent's own words, not a person's and not grain's:")
+		default:
+			b.WriteString(addendaNoticeMarker)
+			b.WriteString(" while you were working on it. Read it and factor it in -- it may change " +
+				"what you should be doing, and this is the only answer that will carry it. The " +
+				"quoted text is a person's own words, not grain's:")
+		}
+		for i, addendum := range addenda {
+			// A bare ">" between comments rather than nothing, so that three
+			// short messages read as three things somebody said rather than
+			// as one run-on paragraph -- and a quoted empty line rather than
+			// a real one, because a real one would end the paragraph.
+			if i > 0 {
+				b.WriteString("\n>")
+			}
+			b.WriteString("\n")
+			b.WriteString(quoteAddendum(addendum.Body))
+		}
+		return truncateAddendaNotice(b.String())
+	}
+
+	b.WriteString(mixedAddendaNoticeMarker)
+	b.WriteString(" while you were working on it. Read them and factor them in -- they may change " +
+		"what you should be doing, and this is the only answer that will carry them:")
+	var prevKind model.PrincipalKind
 	for i, addendum := range addenda {
-		// A bare ">" between comments rather than nothing, so that three
-		// short messages read as three things somebody said rather than
-		// as one run-on paragraph -- and a quoted empty line rather than
-		// a real one, because a real one would end the paragraph.
-		if i > 0 {
+		kind := addendumAuthorKind(addendum)
+		if i == 0 || kind != prevKind {
+			b.WriteString("\n")
+			b.WriteString(mixedAddendumHeader(kind))
+			prevKind = kind
+		} else {
 			b.WriteString("\n>")
 		}
 		b.WriteString("\n")
 		b.WriteString(quoteAddendum(addendum.Body))
 	}
 	return truncateAddendaNotice(b.String())
+}
+
+func addendumAuthorKind(a Addendum) model.PrincipalKind {
+	switch model.PrincipalKind(a.AuthorKind) {
+	case model.PrincipalAutomation:
+		return model.PrincipalAutomation
+	case model.PrincipalAgent:
+		return model.PrincipalAgent
+	default:
+		return model.PrincipalHuman
+	}
+}
+
+func mixedAddendumHeader(kind model.PrincipalKind) string {
+	switch kind {
+	case model.PrincipalAutomation:
+		return "[grain] grain's own note (not a person's words):"
+	case model.PrincipalAgent:
+		return "[grain] From another agent (that agent's own words, not a person's and not grain's):"
+	default:
+		return "[grain] From a person (their own words, not grain's):"
+	}
 }
 
 // quoteAddendum renders one comment as a blockquote whose every line is

@@ -48,6 +48,12 @@
 #   all     both, in one process. The default, so a hand-run or a
 #           bootstrap `bash scripts/release-images.sh` behaves as it
 #           always did.
+#   assets  after `build`: tag its guest and Kubernetes sandbox image as
+#           the local refs GitHub release assets carry
+#           (grain/{guest,k8s-sandbox}:sha-<12 hex>) and rebuild the grain
+#           image as grain/grain:sha-<12 hex> naming them, for
+#           scripts/release-assets.sh to package and publish. Pushes
+#           nothing.
 #
 # And one phase that is not part of a release at all:
 #
@@ -350,7 +356,7 @@ while [ $# -gt 0 ]; do
       dry_run=true
       shift
       ;;
-    build | push | all | guest-cache)
+    build | push | all | guest-cache | assets)
       phase="$1"
       shift
       ;;
@@ -1341,6 +1347,7 @@ build_images() {
 # build read this: the suite that drives the image, and the push phase
 # that publishes it.
 RELEASE_IMAGE_COMMIT='$commit'
+RELEASE_IMAGE_VERSION='${RELEASE:-}'
 RELEASE_IMAGE_GUEST_BASE='$guest_base'
 RELEASE_IMAGE_GUEST='$guest'
 RELEASE_IMAGE_K8S_SANDBOX_BASE='$k8s_sandbox_base'
@@ -2555,8 +2562,54 @@ if [ "$require_signing" = true ] && [ ! -r "$signing_key" ] &&
   exit 1
 fi
 
+# assets: what `build` left behind, named for GitHub release assets
+# (scripts/release-assets.sh, docs/release-assets.md) rather than for a
+# registry. The guest and the Kubernetes sandbox image are the very images
+# `build` made, tagged with the local refs release-asset contract v2 names
+# -- grain/guest:sha-<12 hex> and grain/k8s-sandbox:sha-<12 hex> -- and
+# the daemon image is rebuilt (from the Go build cache) as
+# grain/grain:sha-<12 hex> with those refs stamped in, so `grain
+# sandbox-image` and `grain k8s-sandbox-image` print exactly the refs
+# images.json names, never a registry pin. It pushes and pulls nothing;
+# $RELEASE_ASSETS_STATE (default <state>-assets.env) names the three
+# images for `release-assets.sh package`.
+assets_images() {
+  local assets_state="${RELEASE_ASSETS_STATE:-${state%.env}-assets.env}" short12="${commit:0:12}"
+  if [ ! -f "$state" ]; then
+    echo "release-images.sh: $state does not exist: run the build phase before the assets phase" >&2
+    exit 1
+  fi
+  # shellcheck source=/dev/null
+  . "$state"
+  if [ "${RELEASE_IMAGE_COMMIT:-}" != "$commit" ]; then
+    echo "release-images.sh: $state was built from ${RELEASE_IMAGE_COMMIT:-no commit}, not $commit" >&2
+    exit 1
+  fi
+  local asset_guest="grain/guest:sha-$short12" asset_k8s="grain/k8s-sandbox:sha-$short12" asset_grain="grain/grain:sha-$short12"
+  docker tag "$RELEASE_IMAGE_GUEST" "$asset_guest"
+  docker tag "$RELEASE_IMAGE_K8S_SANDBOX" "$asset_k8s"
+  guest_pinned="$asset_guest"
+  k8s_sandbox_pinned="$asset_k8s"
+  RELEASE="${RELEASE_IMAGE_VERSION:-${RELEASE:-}}"
+  export RELEASE
+  stage_grain_ca
+  build_daemon_image "$asset_grain" "$core_main"
+  cleanup_ca
+  cat > "$assets_state" <<ASSETS
+# Written by scripts/release-images.sh assets for scripts/release-assets.sh.
+RELEASE_IMAGE_TARGET='assets'
+RELEASE_IMAGE_COMMIT='$commit'
+RELEASE_IMAGE_VERSION='${RELEASE:-}'
+RELEASE_IMAGE_GUEST='$asset_guest'
+RELEASE_IMAGE_K8S_SANDBOX='$asset_k8s'
+RELEASE_IMAGE_GRAIN='$asset_grain'
+ASSETS
+  echo "release-images.sh: built $asset_grain, naming $asset_guest and $asset_k8s; $assets_state names them"
+}
+
 case "$phase" in
   build) build_images ;;
+  assets) assets_images ;;
   # The guest and nothing else: no Kubernetes image, no grain image, no
   # tag that names this commit or this branch, and no $state file, since
   # there is no push phase after it to read one. What it leaves behind is

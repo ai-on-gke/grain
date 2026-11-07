@@ -1217,7 +1217,7 @@ func formatMessageBody(m ui.Message) string {
 		attLines = append(attLines, fmt.Sprintf("- ./%s", orchestrator.AttachmentPath(a.ID, a.Filename)))
 	}
 	body := m.Body
-	if m.Author != "" && strings.TrimSpace(body) != "" {
+	if m.Author != "" && m.AuthorKind != string(model.PrincipalAutomation) && strings.TrimSpace(body) != "" {
 		body = fmt.Sprintf("[%s]: %s", m.Author, body)
 	}
 	if len(attLines) == 0 {
@@ -1225,7 +1225,7 @@ func formatMessageBody(m ui.Message) string {
 	}
 	attSection := "Files attached to this message are available in the sandbox:\n" + strings.Join(attLines, "\n")
 	if strings.TrimSpace(body) == "" {
-		if m.Author != "" {
+		if m.Author != "" && m.AuthorKind != string(model.PrincipalAutomation) {
 			return fmt.Sprintf("[%s]\n%s", m.Author, attSection)
 		}
 		return attSection
@@ -1234,7 +1234,7 @@ func formatMessageBody(m ui.Message) string {
 }
 
 // daemonAddenda implements mcp.AddendaReader by asking a running "grain
-// daemon" what a person has said on this run's task since a given
+// daemon" what has been added to this run's task conversation since a given
 // comment -- the same REST hop daemonStatus, daemonWaitCredit and
 // daemonChat above make, and literally the same read as daemonChat's own
 // poll (pkg/ui's /api/tasks/{id}/messages, ui.Client.MessagesSince), with
@@ -1245,15 +1245,15 @@ func formatMessageBody(m ui.Message) string {
 // holding a transport into a sandbox, and a run in a sandbox reaches
 // neither. What differs from chat is only who is waiting for whom --
 // chat is the run asking a person a question and blocking on the answer,
-// and this is a person interrupting a run that asked nothing.
+// and this is a mid-run entry reaching a run that asked nothing.
 //
-// Human-authored comments, and other tasks' runs' messages to this one's
-// agent (ui.Client.AddendaSince, POST /api/tasks/{id}/agent-messages),
-// which is that read's own rule rather than anything decided here:
-// grain's own automation posts on a task for reasons that are not
-// somebody telling the run to do something differently, and reading
-// those back to a run mid-turn would spend its context on notices about
-// itself.
+// Human-authored comments, other tasks' runs' messages to this one's agent
+// (POST /api/tasks/{id}/agent-messages), and grain's own mid-run notices
+// aimed at the live run (model.CLThreadsPrincipal and
+// model.CapabilityChangePrincipal), which is ui.Client.AddendaSince's own
+// rule rather than anything decided here: unrelated automation comments stay
+// out so they do not spend the run's context on notices about itself, while
+// AuthorKind travels through so pkg/mcp introduces each speaker accurately.
 type daemonAddenda struct {
 	client    *ui.HTTPClient
 	taskID    string
@@ -1276,7 +1276,11 @@ func (d daemonAddenda) Addenda(ctx context.Context, after int64) ([]mcp.Addendum
 	}
 	addenda := make([]mcp.Addendum, 0, len(messages))
 	for _, message := range messages {
-		addenda = append(addenda, mcp.Addendum{ID: message.ID, Body: formatMessageBody(message)})
+		addenda = append(addenda, mcp.Addendum{
+			ID:         message.ID,
+			AuthorKind: message.AuthorKind,
+			Body:       formatMessageBody(message),
+		})
 	}
 	return addenda, nil
 }

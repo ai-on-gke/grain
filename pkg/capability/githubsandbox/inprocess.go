@@ -27,7 +27,7 @@ import (
 
 // ServerID is the in-process github server's capability_id, and
 // MethodName its sandbox-repo method, which github-sandbox grants became
-// (schema migration 123, model.GitHubSandboxRepoGrant).
+// (schema migration 124, model.GitHubSandboxRepoGrant).
 const (
 	ServerID   = model.GitHubCapabilityServerID
 	MethodName = model.GitHubSandboxRepoMethod

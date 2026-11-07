@@ -168,11 +168,19 @@ const ADMISSION_LABELS = {
   durable: "Durable",
 };
 
+// HOSTING_LABELS names each hosting value the way the task pane's
+// Hosting select does (detail/Actions.jsx).
+const HOSTING_LABELS = {
+  unattended: "Unattended",
+  console: "Interactive console",
+};
+
 function isSettingOrAuditStep(state) {
   return (
     Boolean(AUTO_MERGE_STEPS[state]) ||
     state === "owner_changed" ||
-    state === "admission_changed"
+    state === "admission_changed" ||
+    state === "hosting_changed"
   );
 }
 
@@ -347,10 +355,22 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
       tr.state === "admission_changed" && (tr.oldAdmission || tr.newAdmission)
         ? `from ${ADMISSION_LABELS[tr.oldAdmission] || tr.oldAdmission || "?"} to ${ADMISSION_LABELS[tr.newAdmission] || tr.newAdmission || "?"}`
         : "";
+    // A change to the hosting setting (model.TaskEventHostingChanged,
+    // unified-grants.design.md §4.1) says the old and new values.
+    const hostingDetail =
+      tr.state === "hosting_changed" && (tr.oldHosting || tr.newHosting)
+        ? `from ${HOSTING_LABELS[tr.oldHosting] || tr.oldHosting || "?"} to ${HOSTING_LABELS[tr.newHosting] || tr.newHosting || "?"}`
+        : "";
     const shownDetail =
-      ownerTransferDetail || admissionDetail || tr.detail || "";
+      ownerTransferDetail ||
+      admissionDetail ||
+      hostingDetail ||
+      tr.detail ||
+      "";
     const shownReason =
-      tr.state === "owner_changed" || tr.state === "admission_changed"
+      tr.state === "owner_changed" ||
+      tr.state === "admission_changed" ||
+      tr.state === "hosting_changed"
         ? ""
         : tr.reason || "";
     return {
@@ -383,9 +403,11 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
                 ? "Owner changed"
                 : tr.state === "admission_changed"
                   ? "Admission changed"
-                  : AUTO_MERGE_STEPS[tr.state] ||
-                    STATE_LABELS[tr.state] ||
-                    tr.state}
+                  : tr.state === "hosting_changed"
+                    ? "Hosting changed"
+                    : AUTO_MERGE_STEPS[tr.state] ||
+                      STATE_LABELS[tr.state] ||
+                      tr.state}
           </div>
           {/* Who proposed, closed, reopened, or transferred it, why, and
               what the step did (model.TaskEvent). */}

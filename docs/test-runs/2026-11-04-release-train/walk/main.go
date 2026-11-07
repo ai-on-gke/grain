@@ -425,12 +425,20 @@ func (w *world) dump(name string, v any) {
 	_ = os.WriteFile(filepath.Join(w.out, fmt.Sprintf("%02d-%s.json", w.step, name)), append(b, '\n'), 0o644)
 }
 
-// items is every qualification task filed for rcTag, by template, oldest
-// attempt first.
+// items is every qualification task filed for rcTag across all Stage 2
+// attempts, by template, oldest attempt first.
 func (w *world) items(rcTag string) map[string][]string {
-	runs, err := w.store.SuiteRunsTagged(w.ctx, model.ReleaseQualificationTag(w.repo, rcTag))
-	if err != nil {
-		log.Fatal(err)
+	baseTag := model.ReleaseQualificationTag(w.repo, rcTag)
+	var runs []model.SuiteRun
+	for attempt := 1; ; attempt++ {
+		rs, err := w.store.SuiteRunsTagged(w.ctx, model.QualificationAttemptTag(baseTag, attempt))
+		if err != nil {
+			log.Fatal(err)
+		}
+		if len(rs) == 0 {
+			break
+		}
+		runs = append(runs, rs...)
 	}
 	sort.Slice(runs, func(i, j int) bool { return runs[i].ID < runs[j].ID })
 	out := map[string][]string{}

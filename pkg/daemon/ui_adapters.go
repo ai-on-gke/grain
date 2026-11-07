@@ -348,7 +348,7 @@ func (a CapabilityCheckAdapter) CheckCapability(ctx context.Context, id string) 
 	provider, ok := registry.Lookup(id)
 	if !ok && id == model.LegacyGitHubSandboxCapability {
 		// github-sandbox's provider was retired onto github#sandbox-repo
-		// (schema migration 123); Settings still checks its GitHub App
+		// (schema migration 124); Settings still checks its GitHub App
 		// credentials through the provider against the live GitHub host.
 		provider, ok = githubsandbox.NewProvider(githubsandbox.Config{
 			Host: cfg.GithubHost, InsecureHTTP: cfg.GithubInsecureHTTP,

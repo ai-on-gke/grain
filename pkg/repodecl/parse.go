@@ -148,6 +148,9 @@ type rawTemplate struct {
 	// Admission is model.Template.Admission: "standard", "bypass" or "durable"
 	// (empty for unset).
 	Admission string `yaml:"admission"`
+	// Hosting is model.Template.Hosting: "unattended" or "console"
+	// (empty for unset).
+	Hosting string `yaml:"hosting"`
 	// Priority is model.Template.Priority: optional default priority for
 	// tasks filed from this template.
 	Priority *int `yaml:"priority"`
@@ -277,11 +280,16 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 	if err != nil {
 		return model.Template{}, raw, fmt.Errorf("%s: %w", f.path, err)
 	}
-	reads, writes, grants, capAdm, err := parseCapabilities(f, repo, raw.Capabilities)
+	hosting, err := model.ParseOptionalHosting(raw.Hosting)
+	if err != nil {
+		return model.Template{}, raw, fmt.Errorf("%s: %w", f.path, err)
+	}
+	reads, writes, grants, capAdm, capHost, err := parseCapabilities(f, repo, raw.Capabilities)
 	if err != nil {
 		return model.Template{}, raw, err
 	}
 	admission = model.MaxAdmission(admission, capAdm)
+	hosting = model.MaxHosting(hosting, capHost)
 	if err := checkTeam(f, raw.Team); err != nil {
 		return model.Template{}, raw, err
 	}
@@ -314,6 +322,7 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 		Interactive:         raw.Interactive,
 		KeepRunning:         raw.KeepRunning,
 		Admission:           admission,
+		Hosting:             hosting,
 		Priority:            priority,
 		NothingNeededAction: nothingNeeded,
 	}
@@ -396,11 +405,12 @@ func parsePush(f file, raw []rawPush) (model.RefPushSet, error) {
 // (gitproxy.LocalRepository) and so has no team token in front of it to say no.
 // Naming the declaring repository itself in repo-read/repo-write is allowed
 // and adds nothing -- a task may already read and push its own target.
-func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoRef, []model.WriteTarget, []model.Grant, model.Admission, error) {
+func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoRef, []model.WriteTarget, []model.Grant, model.Admission, model.Hosting, error) {
 	var reads []model.RepoRef
 	var writes []model.WriteTarget
 	var grants []model.Grant
 	var admission model.Admission
+	var hosting model.Hosting
 	var errs []error
 	seenGrants := map[string]bool{}
 
@@ -413,6 +423,11 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 		if adm, ok := model.LegacyAdmissionAlias(c); ok {
 			log.Printf("repodecl: %s: capability %q is deprecated; use `admission: %s` instead", f.path, c, adm)
 			admission = model.MaxAdmission(admission, adm)
+			continue
+		}
+		if host, ok := model.LegacyHostingAlias(c); ok {
+			log.Printf("repodecl: %s: capability %q is deprecated; use `hosting: %s` instead", f.path, c, host)
+			hosting = model.MaxHosting(hosting, host)
 			continue
 		}
 		var (
@@ -528,9 +543,9 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 		}
 	}
 	if err := errors.Join(errs...); err != nil {
-		return nil, nil, nil, "", err
+		return nil, nil, nil, "", "", err
 	}
-	return reads, writes, grants, admission, nil
+	return reads, writes, grants, admission, hosting, nil
 }
 
 // checkTeam refuses a template, suite or schedule file whose `team:`
@@ -687,6 +702,7 @@ type rawSchedule struct {
 	Enabled              *bool                `yaml:"enabled"`
 	Model                string               `yaml:"model"`
 	Admission            string               `yaml:"admission"`
+	Hosting              string               `yaml:"hosting"`
 }
 
 type rawScheduleTrigger struct {
@@ -890,8 +906,12 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 	if err != nil {
 		return model.Schedule{}, fmt.Errorf("%s: %w", f.path, err)
 	}
+	schedHost, err := model.ParseOptionalHosting(raw.Hosting)
+	if err != nil {
+		return model.Schedule{}, fmt.Errorf("%s: %w", f.path, err)
+	}
 
-	reads, writes, grants, capAdm, err := parseCapabilities(f, repo, raw.Capabilities)
+	reads, writes, grants, capAdm, capHost, err := parseCapabilities(f, repo, raw.Capabilities)
 	if err != nil {
 		return model.Schedule{}, err
 	}
@@ -904,6 +924,11 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 	if sched.Admission != "" && sched.SuiteID != nil {
 		return model.Schedule{}, fmt.Errorf("%s: a schedule that runs a suite cannot choose admission -- "+
 			"set `admission:` on the suite's templates instead", f.path)
+	}
+	sched.Hosting = model.MaxHosting(schedHost, capHost)
+	if sched.Hosting != "" && sched.SuiteID != nil {
+		return model.Schedule{}, fmt.Errorf("%s: a schedule that runs a suite cannot choose hosting -- "+
+			"set `hosting:` on the suite's templates instead", f.path)
 	}
 
 	return sched, nil

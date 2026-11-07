@@ -26,7 +26,7 @@ import (
 )
 
 // TestSandboxRepoMigrationFidelity holds github#sandbox-repo, the grant
-// schema migration 123 rewrote github-sandbox to, to the retired
+// schema migration 124 rewrote github-sandbox to, to the retired
 // provider's own dispatch: the same repository created on the same
 // account, the same scoped token permissions, the same two files with the
 // same content and mode, the same prompt, the same CI-job minting, the

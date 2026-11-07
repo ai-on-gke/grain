@@ -1581,6 +1581,9 @@ type Task struct {
 	// Admission says which dispatch pool this task runs in and whether it
 	// bypasses worker saturation (standard, bypass or durable).
 	Admission Admission `json:"admission,omitempty"`
+	// Hosting says whether this task runs unattended or opens an interactive
+	// terminal console attached to its sandbox (unattended or console).
+	Hosting Hosting `json:"hosting,omitempty"`
 	// Branch is the resolved branch this task owns. It is fixed when the
 	// task is first written so changing the deployment's naming template
 	// cannot strand work already pushed under an earlier name. Empty is a

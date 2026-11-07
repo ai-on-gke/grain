@@ -150,18 +150,14 @@ async function expectCapabilityDisclosure(page) {
   await expect(
     page.getByRole("heading", { name: "What it may reach" }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("checkbox", { name: /Interactive console/ }),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: /Add grant/ })).toBeVisible();
   await expect(
     page.getByLabel(/What it may reach on the internet/),
   ).toBeVisible();
   await page
     .getByRole("button", { name: "Hide Director capabilities" })
     .click();
-  await expect(
-    page.getByRole("checkbox", { name: /Interactive console/ }),
-  ).toBeHidden();
+  await expect(page.getByRole("button", { name: /Add grant/ })).toBeHidden();
 }
 
 // Sections 1 and 7 of docs/test-plans/2026-09-13.md. This is deliberately

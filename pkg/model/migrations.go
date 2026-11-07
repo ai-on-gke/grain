@@ -872,6 +872,20 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     123,
+		Description: "replace console grants with the hosting setting on tasks, templates, schedules, console sessions and defaults",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `hosting` TEXT NOT NULL DEFAULT 'unattended'",
+			"ALTER TABLE `template` ADD COLUMN `hosting` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `schedule` ADD COLUMN `hosting` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `grain_config` ADD COLUMN `default_hosting` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `default_hosting` TEXT NOT NULL DEFAULT ''",
+		},
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			return MigrateHostingFromGrants(ctx, tx, false)
+		},
+	},
+	{
+		Version:     124,
 		Description: "rewrite stored github-sandbox grants, repo_config.ci_capabilities and capability_policy included, to https://grain.dev/capabilities/github#sandbox-repo={} (the in-process capability is retired)",
 		Up:          migrateGitHubSandboxGrants,
 	},

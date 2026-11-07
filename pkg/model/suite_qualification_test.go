@@ -79,6 +79,13 @@ func TestQualificationTagOfTheDefaultSuiteIsUnchanged(t *testing.T) {
 	if got := model.QualificationTag("edition-qualification", repo, "v1.0.0@abc"); got != "edition-qualification:acme/widgets@v1.0.0@abc" {
 		t.Fatalf("QualificationTag = %q", got)
 	}
+	base := model.ReleaseQualificationTag(repo, "v1.0.0-rc.1")
+	if got := model.QualificationAttemptTag(base, 1); got != base {
+		t.Fatalf("QualificationAttemptTag(1) = %q, want %q", got, base)
+	}
+	if got := model.QualificationAttemptTag(base, 2); got != base+"#2" {
+		t.Fatalf("QualificationAttemptTag(2) = %q, want %q", got, base+"#2")
+	}
 }
 
 func TestGoModPin(t *testing.T) {

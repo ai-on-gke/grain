@@ -19,15 +19,15 @@ import (
 	"database/sql"
 )
 
-// githubSandboxRenames is migration 123's renames: the retired bare
+// githubSandboxRenames is migration 124's renames: the retired bare
 // github-sandbox capability to the in-process github server's sandbox-repo
 // method. Kept as the migration's own copy so later alias additions do not
-// alter what migration 123 rewrote.
+// alter what migration 124 rewrote.
 var githubSandboxRenames = map[string][]string{
 	LegacyGitHubSandboxCapability: {GitHubSandboxRepoGrant},
 }
 
-// migrateGitHubSandboxGrants is schema migration 123's Up: rewrites stored
+// migrateGitHubSandboxGrants is schema migration 124's Up: rewrites stored
 // github-sandbox grants across the three grant tables, deployment and
 // repository default_capabilities, repo_config.ci_capabilities, standing
 // console_sessions and capability_policy rules/catalogue defaults to

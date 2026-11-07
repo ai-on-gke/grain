@@ -162,22 +162,22 @@ func TestCapabilityProviders(t *testing.T) {
 		{
 			name: "no gcp project configured still registers the built-in capabilities",
 			cfg:  Config{},
-			want: []string{"console", "release-gate-read"},
+			want: []string{"release-gate-read"},
 		},
 		{
 			name: "an agent service account without a gcp project does not add either gcp capability",
 			cfg:  Config{GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"},
-			want: []string{"console", "release-gate-read"},
+			want: []string{"release-gate-read"},
 		},
 		{
 			name: "a gcp project adds nothing: gemini-key is served by the gcp capability server",
 			cfg:  Config{GcpProject: "proj"},
-			want: []string{"console", "release-gate-read"},
+			want: []string{"release-gate-read"},
 		},
 		{
 			name: "a gcp project with an agent service account adds nothing either (gcp-key and gemini-key are served by the gcp capability server)",
 			cfg:  Config{GcpProject: "proj", GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"},
-			want: []string{"console", "release-gate-read"},
+			want: []string{"release-gate-read"},
 		},
 	}
 	for _, tc := range cases {
@@ -218,7 +218,7 @@ func TestEveryLeakableCapabilityIsReaped(t *testing.T) {
 		}
 	}
 	// github#sandbox-repo's provider is retired from CapabilityProviders
-	// (schema migration 123); ReapCapabilitiesBefore sweeps leaked
+	// (schema migration 124); ReapCapabilitiesBefore sweeps leaked
 	// grain-sandbox-* repositories directly through githubsandbox.Current().
 	if _, ok := any(githubsandbox.Current()).(model.Reaper); ok {
 		reaped["github-sandbox"] = true
