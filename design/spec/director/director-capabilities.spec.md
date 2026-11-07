@@ -35,7 +35,7 @@ only when, they appear in all capitals.
 
 - The **current** spelling, which `Task.Grants`,
   `ConsoleSession.Capabilities` and `settings/capabilities.yml` store
-  today. That is a bare capability id (`self-debug`), `api:<scope>`
+  today. That is a bare capability id (`github-sandbox`), `api:<scope>`
   (`api:ci:read`), `api:<preset>` (`api:task-admin`), or either api form
   narrowed with `@owner/name`.
 - The **canonical** unified-grant spelling of
@@ -104,8 +104,11 @@ refused without it. The reason is written to the controller log
     adds every active working repository in `repo_config` and `target_repos`).
 - `model.ConsoleSessionDefaultGrants` adds `api:ci-read` to every console
   session unless `DeclinedDefaults` names it.
-- `model.ConsoleSessionGrants` always prepends `durable` (`GrantByGrain`),
-  which implies `priority-dispatch`.
+- `model.FileConsoleSessionTask` files every console session task with
+  `Admission: AdmissionDurable` (the task setting that replaced the
+  `durable` and `priority-dispatch` grants, unified-grants.design.md
+  §4.1), which includes `bypass`. `model.ConsoleSessionGrants` drops the
+  retired names from a session's stored `Capabilities`.
 - `orchestrator.fileConsoleSession` passes the state repository
   (`Config.settingsRepo()`) as `StateRepo`, so the director task's
   `Reads` always holds `grain/config` (or whatever repository the
@@ -120,8 +123,11 @@ refused without it. The reason is written to the controller log
   `DefaultConsoleSessions()` ships `Writes: [grain/config]`, so the
   shipped director's checkout pushes candidate branches; a deployment
   that saved its own session list keeps whatever `Writes` it saved.
-- The `self-debug` alias also grants the `api:self-debug` preset
-  (`tasks:read`, `deployment:read`).
+- `self-debug` is retired (schema migration 115): the director holds
+  what it became, the `api:self-debug` preset (`tasks:read`,
+  `deployment:read`) and `…/grain#source={}`. The bare name is a
+  one-release alias that `model.CanonicalLegacyGrants` expands to both
+  wherever a grant is recorded.
 - `CatalogueKindDirector` carries a **built-in Tier 3 floor**
   (`pkg/model/director_floor.go`, G7). `model.DirectorFloorRefusal`
   refuses any grant reaching `merge:force`, `settings:write`,
@@ -173,7 +179,7 @@ to. *Implicit* means the grant comes with the task rather than from
 
 | Surface (tool / CLI / route) | Current grant | Canonical reference | Tier |
 |---|---|---|---|
-| Source checkout, metrics tools, `grain task list\|read\|prompt\|transcript`, `task://`, `src://` | `self-debug` (alias → `api:self-debug` = `tasks:read` + `deployment:read`) | `…/api#self-debug` + `…/grain#source` *(proposed)* | 1 |
+| Source checkout, metrics tools, `grain task list\|read\|prompt\|transcript`, `task://`, `src://` | `api:self-debug` (`tasks:read` + `deployment:read`) + `…/grain#source` (formerly `self-debug`, retired in schema migration 115) | `…/api#self-debug` + `…/grain#source` | 1 |
 | Daemon journal (formerly `grain-log`) | `…/grain#journal` | `…/grain#journal` | 1 |
 | Host / sandbox probes; `GET /api/deployment/*` reads | `api:deployment:read` + `…/grain#health` (formerly `deployment-health`) | `…/api#deployment:read` + `…/grain#health` | 1 |
 | Bring-up runbooks | `…/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`) | `…/config-map#config-map` `{"config_maps":["bootstrap"]}` | 1 |
@@ -248,7 +254,7 @@ default, and §5 says how existing deployments are offered it.
 | Field | Value | Rationale |
 |---|---|---|
 | `Capabilities` | `api:self-debug`, `…/grain#source`, `…/grain#journal`, `api:deployment:read`, `…/grain#health`, `…/config-map#config-map={"config_maps":["bootstrap"]}`, `api:task-admin`, `api:capabilities:read`, `api:capabilities:detach`, `api:settings:read`, `api:repos:read`, `api:releases:read`, `api:schedules:read`, `api:templates:read`, `api:suites:read`, `api:dispatch:read`, plus build `DefaultOn` ids | W1–W5 day-to-day. None of these is dangerous, so none needs a person's grant under `IsPersonOnlyGrant`. |
-| (implicit) `durable` | always, via `ConsoleSessionGrants` | Priority admission (§3.1.4). |
+| `Admission` | `durable`, always, via `FileConsoleSessionTask` | Priority admission (§3.1.4). |
 | `Reads` | `[]` in the row; the state repository is added at filing (`FileConsoleSessionOptions.StateRepo`) | Config is always readable without the operator naming a repo (§3.1.3). |
 | `Writes` | `[grain/config]` | The director has no target and lands no code. The one write is the state repository, for `propose_config_change` (§3.1.3); it is never passed on to a proposal. |
 | `TasksApproved` | `true` | §3.1.5. |
@@ -335,13 +341,14 @@ done by proposing a `grain/config` change.
 
 #### 3.1.4 Priority admission
 
-The director MUST hold `durable` (and so `priority-dispatch`) through
-`ConsoleSessionGrants`. That admits it outside `max_workers`, up to
-`max_durable_runs` (`DefaultMaxDurableRuns = 4`), and past pipeline
-pauses and red-base holds. `durable` is a person-only grant
-(`IsPersonOnlyGrant`), so it stays implicit and is never written into
-`Capabilities`. The director cannot pass it to a proposal: a child
-asking for `durable` or `priority-dispatch` is held for a person.
+The director's task MUST have admission `durable` (which includes
+`bypass`), set by construction in `FileConsoleSessionTask`. That admits
+it outside `max_workers`, up to `max_durable_runs`
+(`DefaultMaxDurableRuns = 4`), and past pipeline pauses and red-base
+holds. Admission is a task setting, not a grant, and only a person may
+raise it above `standard`, so the director cannot pass it to a
+proposal: a child asking for `bypass` or `durable` admission (or for the
+retired `durable` or `priority-dispatch` names) is held for a person.
 
 #### 3.1.5 `TasksApproved: true`
 
@@ -446,7 +453,7 @@ director MUST NOT be able to obtain any of them itself:
 | Grant | Unlocks | Why opt-in |
 |---|---|---|
 | `api:tasks:admin` | Approve proposed tasks (other than its own, §3.3), recreate sandboxes | Dangerous: approval is the person's half of every proposal gate. |
-| `api:dispatch-control` (`dispatch:write`) | Pause/resume all dispatch, `run-now` (approving unapproved tasks subject to §3.3) | Deployment-wide stop, and a queue jump equivalent to `priority-dispatch`. MCP-only. |
+| `api:dispatch-control` (`dispatch:write`) | Pause/resume all dispatch, `run-now` (approving unapproved tasks subject to §3.3) | Deployment-wide stop, and a queue jump equivalent to `bypass` admission. MCP-only. |
 | `api:capabilities:admin` | Attach/replace grants, edit capability servers and policy | Dangerous. `agentGrantEscalation` still applies, so the director can only hand out what it holds. |
 | `api:release-manager` | Cut, qualify and promote candidates; write schedules and releases | Publishes artefacts to users. |
 | `api:self-upgrade` (alias `self-upgrade`) | Start or cancel a drained controller upgrade (`deployment:upgrade`) | Dangerous; restarts the deployment the director is talking from. Honours upgrade holds (`agentRails`). |
