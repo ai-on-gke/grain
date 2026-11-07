@@ -621,7 +621,7 @@ describe("capabilityRows", () => {
   it("leaves out a capability this deployment has not configured", () => {
     const listing = [
       ...offered,
-      { id: "console", name: "Console", ready: false },
+      { id: "github-sandbox", name: "GitHub sandbox", ready: false },
     ];
     expect(capabilityRows(listing, [])).toEqual(offered);
   });

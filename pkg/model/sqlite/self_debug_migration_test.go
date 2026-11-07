@@ -32,7 +32,7 @@ func TestMigration115RewritesSelfDebugInTheCatalogue(t *testing.T) {
 	cfg.CapabilityPolicy = model.CapabilityPolicy{
 		Catalogue: &model.CapabilityCatalogue{
 			Defaults: model.CatalogueDefaults{
-				Task: []string{"console", "self-debug"},
+				Task: []string{"github-sandbox", "self-debug"},
 				CI:   []string{"self-debug"},
 				Repos: map[string]model.CatalogueRepoDefaults{
 					"acme/tools": {Task: []string{"self-debug", "api:self-debug"}},
@@ -59,7 +59,7 @@ func TestMigration115RewritesSelfDebugInTheCatalogue(t *testing.T) {
 		t.Fatal("the catalogue was dropped")
 	}
 	became := model.SelfDebugGrants()
-	if want := append([]string{"console"}, became...); !slices.Equal(cat.Defaults.Task, want) {
+	if want := append([]string{"github-sandbox"}, became...); !slices.Equal(cat.Defaults.Task, want) {
 		t.Errorf("defaults.task = %v, want %v", cat.Defaults.Task, want)
 	}
 	if !slices.Equal(cat.Defaults.CI, became) {
@@ -94,7 +94,7 @@ func TestMigration118RewritesBootstrapPlaybooksDenyWithoutWideningAllowUntrusted
 		},
 		Catalogue: &model.CapabilityCatalogue{
 			Defaults: model.CatalogueDefaults{
-				Task: []string{"console", "bootstrap-playbooks"},
+				Task: []string{"github-sandbox", "bootstrap-playbooks"},
 				CI:   []string{"bootstrap-playbooks"},
 			},
 			InProcess: map[string]model.CatalogueInProcess{"bootstrap-playbooks": {Enabled: &disabled}},
@@ -130,7 +130,7 @@ func TestMigration118RewritesBootstrapPlaybooksDenyWithoutWideningAllowUntrusted
 		t.Fatal("Permits admitted config-map secrets on an untrusted run after migration 118")
 	}
 	cat := pol.Catalogue
-	if cat == nil || !slices.Equal(cat.Defaults.Task, []string{"console", model.BootstrapPlaybooksGrant}) ||
+	if cat == nil || !slices.Equal(cat.Defaults.Task, []string{"github-sandbox", model.BootstrapPlaybooksGrant}) ||
 		!slices.Equal(cat.Defaults.CI, []string{model.BootstrapPlaybooksGrant}) {
 		t.Errorf("catalogue defaults after migration 118 = %+v", cat)
 	}

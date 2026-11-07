@@ -685,6 +685,9 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 		if err := model.MigrateAdmissionFromGrants(ctx, tx, true); err != nil {
 			return fmt.Errorf("staterepo: %w", err)
 		}
+		if err := model.MigrateHostingFromGrants(ctx, tx, true); err != nil {
+			return fmt.Errorf("staterepo: %w", err)
+		}
 	}
 	// Host work nothing places, written down as placed on the only host
 	// there is, when the daemon importing says which that is

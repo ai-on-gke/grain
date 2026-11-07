@@ -49,6 +49,15 @@ const ADMISSION_HELP = {
     "Bypass queue, plus no wall-clock deadline: suspended when idle and counted under the durable limit.",
 };
 
+// HOSTING_HELP explains each hosting value under the task pane's
+// Hosting select (design/design/unified-grants.design.md §4.1).
+const HOSTING_HELP = {
+  unattended:
+    "Hands the agent its prompt and runs the turn to completion on its own.",
+  console:
+    "Runs the agent CLI on an interactive terminal in the UI until somebody closes it.",
+};
+
 // closePullRequest is deliberately local state that dies with the
 // overlay, and starts false every time it is mounted: it is a choice
 // about this close, made in the moment (ui.CloseOptions' own doc
@@ -670,6 +679,43 @@ export default function Actions({ t, config, act, onOpenTask }) {
             <MenuItem value="standard">Standard</MenuItem>
             <MenuItem value="bypass">Bypass queue</MenuItem>
             <MenuItem value="durable">Durable</MenuItem>
+          </TextField>
+        </AccessGate>
+      )}
+      {/* Hosting (model.Task.Hosting, ui.UpdateTaskRequest.Hosting,
+          design/design/unified-grants.design.md §4.1): the task setting
+          that replaced the console capability. Separate from Interactive:
+          it chooses whether dispatch hands the agent a prompt unattended
+          or starts its CLI on a terminal in the UI. */}
+      {t.state !== "closed" && (
+        <AccessGate scope="tasks:write" repo={t.repo}>
+          <TextField
+            select
+            size="small"
+            name="hosting"
+            label="Hosting"
+            value={t.hosting || "unattended"}
+            onChange={(e) => {
+              const hosting = e.target.value;
+              if (hosting === (t.hosting || "unattended")) return;
+              act(
+                () =>
+                  api(`/api/tasks/${t.id}`, {
+                    method: "PATCH",
+                    body: JSON.stringify({ hosting }),
+                  }),
+                t.id,
+              );
+            }}
+            helperText={HOSTING_HELP[t.hosting || "unattended"]}
+            slotProps={{
+              htmlInput: { "aria-label": "Hosting" },
+              formHelperText: { sx: { fontSize: "0.7rem" } },
+            }}
+            sx={{ mt: 1, mb: 0.5 }}
+          >
+            <MenuItem value="unattended">Unattended</MenuItem>
+            <MenuItem value="console">Interactive console</MenuItem>
           </TextField>
         </AccessGate>
       )}

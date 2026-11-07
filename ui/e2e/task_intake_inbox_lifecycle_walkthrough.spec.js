@@ -802,12 +802,12 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
         const response = await route.fetch();
         const config = JSON.parse(await response.text());
         config.capabilities = (config.capabilities || []).map((c) =>
-          c.id === "console"
+          c.id === "github-sandbox"
             ? { ...c, ready: false, needs: ["a GCP project"] }
             : c,
         );
         config.defaultCapabilities = [
-          ...new Set([...(config.defaultCapabilities || []), "console"]),
+          ...new Set([...(config.defaultCapabilities || []), "github-sandbox"]),
         ];
         await route.fulfill({ response, json: config });
       } catch {
@@ -835,9 +835,11 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     const capabilities = form.getByRole("combobox", {
       name: "Legacy capabilities",
     });
-    await expect.poll(() => chosenValues(capabilities)).toContain("console");
+    await expect
+      .poll(() => chosenValues(capabilities))
+      .toContain("github-sandbox");
     await capabilities.click();
-    const row = page.getByRole("option", { name: /Interactive console/ });
+    const row = page.getByRole("option", { name: /GitHub sandbox/ });
     await expect(row).toContainText(/Not ready/);
     await row.click();
     await expect(row).toBeVisible();
@@ -849,12 +851,14 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     await page.keyboard.press("Escape");
     await expect(page.getByRole("listbox")).toBeHidden();
     await expect(form).toBeVisible();
-    await expect.poll(() => chosenValues(capabilities)).toContain("console");
+    await expect
+      .poll(() => chosenValues(capabilities))
+      .toContain("github-sandbox");
 
     await form.getByRole("button", { name: "Create task" }).click();
     await expect(form).toBeHidden();
     expect(filed).toHaveLength(1);
-    expect(filed[0].postDataJSON().capabilities).toContain("console");
+    expect(filed[0].postDataJSON().capabilities).toContain("github-sandbox");
   });
 
   // grain/task-1625: a selection outlives the view it was made in.

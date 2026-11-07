@@ -112,6 +112,10 @@ type ConsoleSession struct {
 	// its run exits without asking a question, rather than parking it to
 	// wait for the next message.
 	KeepRunning bool `json:"keepRunning,omitempty"`
+	// Hosting says whether the session's task runs unattended or opens an
+	// interactive terminal console attached to its sandbox (Task.Hosting).
+	// Empty means unattended.
+	Hosting Hosting `json:"hosting,omitempty"`
 	// Reads is the repos this session is granted read-only access to
 	// (Task.Reads). The session's sandbox may clone or fetch from them,
 	// but never push commits directly.
@@ -601,6 +605,9 @@ func ValidateConsoleSessions(sessions []ConsoleSession) error {
 		if s.NetworkAccess != "" && !ValidNetworkAccess(s.NetworkAccess) {
 			return fmt.Errorf("console session %q asks for network access %q, which is not one grain knows", id, s.NetworkAccess)
 		}
+		if !ValidOptionalHosting(s.Hosting) {
+			return fmt.Errorf("console session %q asks for hosting %q, which is not one grain knows", id, s.Hosting)
+		}
 		if !validConsoleSessionTitleSource(s.TitleSource) {
 			return fmt.Errorf("console session %q has title source %q, which is not one grain knows", id, s.TitleSource)
 		}
@@ -1046,6 +1053,9 @@ func ConsoleSessionGrants(session ConsoleSession) []Grant {
 		if _, legacy := LegacyAdmissionAlias(name); legacy {
 			continue
 		}
+		if _, legacy := LegacyHostingAlias(name); legacy {
+			continue
+		}
 		seen[name] = true
 		grants = append(grants, Grant{Capability: name, Via: GrantByGrain})
 	}
@@ -1127,6 +1137,7 @@ type ConsoleSessionConfigSnapshot struct {
 	Title           string
 	TasksApproved   bool
 	KeepRunning     bool
+	Hosting         Hosting `json:",omitempty"`
 	GoogleChatSpace string
 	// OfferedDefaults is the ConsoleSessionDefaultGrants this task has
 	// already been given once. A default named here that the task no
@@ -1221,6 +1232,7 @@ func FileConsoleSessionTask(ctx context.Context, store *Store, session ConsoleSe
 		},
 		Binding:       BindingDirective,
 		Admission:     AdmissionDurable,
+		Hosting:       NormalizeHosting(session.Hosting),
 		Grants:        ConsoleSessionGrants(session),
 		Tags:          []string{ConsoleSessionTag(session.ID)},
 		Interactive:   true,
