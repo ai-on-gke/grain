@@ -928,17 +928,16 @@ func (c *Client) ensureConsoleSessionSnapshot(ctx context.Context, task model.Ta
 // sandboxesIsolateNetwork reports whether this deployment's sandbox backend can
 // honour model.NetworkNone, matching orchestrator.sandboxesIsolateNetwork.
 // ContainerSandboxes and plain K8sSandboxes apply a shape (SandboxShapeIgnored
-// is false) yet still cannot withhold a network, so Config.Sandboxes
-// (daemon.SandboxHealthAdapter) is asked when it answers; SandboxShapeIgnored
-// remains a floor for callers and tests that configure no Sandboxes handle.
+// is false) yet still cannot withhold a network, while DisabledSandboxes skips
+// shape (SandboxShapeIgnored is true) yet preserves configured NetworkNone
+// (IsolatesNetwork is true), so Config.Sandboxes (daemon.SandboxHealthAdapter)
+// is asked first when it answers; !SandboxShapeIgnored is the fallback for
+// callers and tests that configure no Sandboxes handle.
 func (c *Client) sandboxesIsolateNetwork() bool {
-	if c.Config.SandboxShapeIgnored {
-		return false
-	}
 	if iso, ok := c.Config.Sandboxes.(interface{ IsolatesNetwork() bool }); ok {
 		return iso.IsolatesNetwork()
 	}
-	return true
+	return !c.Config.SandboxShapeIgnored
 }
 
 // consoleSessionHeldDefaults is the model.ConsoleSessionDefaultGrants a

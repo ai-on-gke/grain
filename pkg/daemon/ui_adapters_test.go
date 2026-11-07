@@ -105,6 +105,7 @@ func TestSandboxHealthAdapterCarriesNetworkIsolation(t *testing.T) {
 		want  bool
 	}{
 		"nil":         {nil, true},
+		"disabled":    {orchestrator.NewDisabledSandboxes(), true},
 		"granule":     {orchestrator.NewGranuleSandboxes(orchestrator.GranuleConfig{}), true},
 		"k8s-granule": {orchestrator.NewK8sGranuleSandboxes(orchestrator.K8sGranuleConfig{}), true},
 		"container":   {orchestrator.NewContainerSandboxes(orchestrator.ContainerConfig{}), false},
