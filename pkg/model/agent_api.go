@@ -788,6 +788,9 @@ func legacyGrantReplacement(name string) (string, bool) {
 			return GCPKeyServerGrant(keyName), true
 		}
 	}
+	if credName, ok := LegacyGitCredentialName(name); ok && ValidGitCredentialName(credName) {
+		return RepoCredentialGrant(credName), true
+	}
 	registeredLegacyAliasesMu.RLock()
 	defer registeredLegacyAliasesMu.RUnlock()
 	to, ok := registeredLegacyAliases[name]
