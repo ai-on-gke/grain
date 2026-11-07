@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/registry/api"
 	"github.com/ai-on-gke/grain/pkg/registry/store"
 	"github.com/ai-on-gke/grain/pkg/webauth"
 )
@@ -562,6 +563,12 @@ type ConnectSession interface {
 type ConnectTransport interface {
 	Name() string
 	Accept(w http.ResponseWriter, r *http.Request) (ConnectSession, error)
+}
+
+// OrphanProvider reports and deletes unmatched GCE VMs discovered during orphan sweeps.
+type OrphanProvider interface {
+	ListOrphans() []api.OrphanVMInfo
+	DeleteOrphan(ctx context.Context, zone, instanceID string) error
 }
 
 // Factory types for extension hooks.

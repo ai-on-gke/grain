@@ -216,6 +216,51 @@ func (r *Reconciler) Orphans() []OrphanInstance {
 	return out
 }
 
+// ListOrphans implements `registry.OrphanProvider`, converting `Orphans()` to `[]api.OrphanVMInfo`.
+func (r *Reconciler) ListOrphans() []api.OrphanVMInfo {
+	raw := r.Orphans()
+	out := make([]api.OrphanVMInfo, 0, len(raw))
+	for _, o := range raw {
+		out = append(out, api.OrphanVMInfo{
+			InstanceID: o.InstanceID,
+			Zone:       o.Zone,
+			State:      o.State,
+			InternalIP: o.InternalIP,
+			EntryName:  o.Labels["grain-entry"],
+			Labels:     o.Labels,
+			DetectedAt: o.DetectedAt,
+		})
+	}
+	return out
+}
+
+// DeleteOrphan implements `registry.OrphanProvider`, deleting an unmatched GCE VM
+// via `Compute.DeleteInstance` and removing it from the cached orphan snapshot.
+func (r *Reconciler) DeleteOrphan(ctx context.Context, zone, instanceID string) error {
+	zone = strings.TrimSpace(zone)
+	instanceID = strings.TrimSpace(instanceID)
+	if zone == "" || instanceID == "" {
+		return errors.New("reconcile: zone and instanceID are required")
+	}
+	if r.compute != nil {
+		if err := r.compute.DeleteInstance(ctx, zone, instanceID); err != nil {
+			return err
+		}
+	}
+	r.orphanMu.Lock()
+	filtered := r.orphans[:0]
+	for _, o := range r.orphans {
+		if o.Zone == zone && o.InstanceID == instanceID {
+			continue
+		}
+		filtered = append(filtered, o)
+	}
+	r.orphans = filtered
+	delete(r.reportedOrphans, zone+"/"+instanceID)
+	r.orphanMu.Unlock()
+	return nil
+}
+
 // Start launches the background leader-election, reconciliation, and status-polling loops
 // until `ctx` is canceled.
 func (r *Reconciler) Start(ctx context.Context) {
