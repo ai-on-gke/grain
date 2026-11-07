@@ -378,4 +378,71 @@ if [[ "${forbidden_code}" != "403" ]]; then
 fi
 echo "    PASS: Non-admitted user rejected with HTTP 403"
 
+# Verify register-entry.sh's exact --revoke-previous SQL transaction revokes the
+# prior credential, evicts the active tunnel session, and allows re-registration
+# with the newly minted token.
+register_sql="$(awk '/^docker exec -i grain-registry-postgres psql/,/^SQL$/ { if ($0 ~ /<<'\''SQL'\''/) { in_sql=1; next } if ($0 == "SQL") { exit } if (in_sql) print }' "${SCRIPT_DIR}/register-entry.sh")"
+if [[ -z "${register_sql}" ]]; then
+  echo "local-smoke-test.sh: failed to extract SQL block from register-entry.sh" >&2
+  exit 1
+fi
+rot_token="grc_$(openssl rand -hex 32)"
+rot_sha256_hex="$(printf '%s' "${rot_token}" | sha256sum | awk '{print $1}')"
+rot_entry_uuid="$(cat /proc/sys/kernel/random/uuid)"
+rot_cred_uuid="$(cat /proc/sys/kernel/random/uuid)"
+
+docker exec -i "${pg_container}" psql -v ON_ERROR_STOP=1 -U grain -d grain_registry \
+  -v entry_uuid="${rot_entry_uuid}" \
+  -v cred_uuid="${rot_cred_uuid}" \
+  -v entry_name="${entry_name}" \
+  -v owner_email="alice@example.com" \
+  -v display_name="Alice Workstation" \
+  -v purpose="Smoke test daemon" \
+  -v host_kind="workstation" \
+  -v visibility="owner" \
+  -v access_list="[]" \
+  -v revoke_previous="1" \
+  -v token_sha256_hex="${rot_sha256_hex}" >/dev/null <<<"${register_sql}"
+
+old_revoked="$(docker exec "${pg_container}" psql -tAq -U grain -d grain_registry \
+  -c "SELECT count(*) FROM registry.entry_credentials WHERE id = '${cred_uuid}' AND revoked_at IS NOT NULL")"
+if [[ "${old_revoked}" != "1" ]]; then
+  echo "local-smoke-test.sh: expected previous credential ${cred_uuid} to be revoked, got count=${old_revoked}" >&2
+  exit 1
+fi
+
+old_hb_code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+  -H "X-Grain-Auth: token" \
+  -H @<(printf 'Authorization: Bearer %s\n' "${token}") \
+  -H "Content-Type: application/json" \
+  -d '{"health":"ok"}' \
+  "http://127.0.0.1:${pub_loop_port}/api/entries/${entry_name}/heartbeat")"
+if [[ "${old_hb_code}" != "401" ]]; then
+  echo "local-smoke-test.sh: expected revoked grc_ token heartbeat to fail with 401, got ${old_hb_code}" >&2
+  exit 1
+fi
+
+GRAIN_DATA_DIR="${tmp_dir}/daemon-data" "${tmp_dir}/grain" -server "http://127.0.0.1:${daemon_port}" registry register \
+  -registry-url "http://127.0.0.1:${pub_loop_port}" \
+  -registry-token "${rot_token}" \
+  "${entry_name}" >/dev/null
+
+reconnected_ok=0
+for _ in $(seq 1 30); do
+  code="$(curl -sS -o /dev/null -w '%{http_code}' \
+    -H "Host: ${entry_host}" \
+    -H "X-Iapsim-Email: alice@example.com" \
+    "http://127.0.0.1:${iap_proxy_port}/api/tasks" || true)"
+  if [[ "${code}" == "200" ]]; then
+    reconnected_ok=1
+    break
+  fi
+  sleep 0.5
+done
+if [[ "${reconnected_ok}" -ne 1 ]]; then
+  echo "local-smoke-test.sh: rotated token failed to re-establish tunnel routing" >&2
+  exit 1
+fi
+echo "    PASS: --revoke-previous SQL revoked old token (401), evicted old session, and reconnected cleanly"
+
 echo "Local registry sandbox smoke test PASSED."

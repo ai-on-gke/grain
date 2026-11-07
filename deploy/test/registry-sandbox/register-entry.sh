@@ -138,10 +138,37 @@ if [[ -z "${PROJECT_ID}" || -z "${ENTRY_NAME}" || -z "${OWNER_EMAIL}" ]]; then
   exit 2
 fi
 
+if ! [[ "${PROJECT_ID}" =~ ^[a-z][a-z0-9.:-]*[a-z0-9]$ ]]; then
+  echo "register-entry.sh: invalid --project '${PROJECT_ID}'" >&2
+  exit 2
+fi
+
+if ! [[ "${NAME_PREFIX}" =~ ^[a-z][a-z0-9-]{1,10}[a-z0-9]$ ]]; then
+  echo "register-entry.sh: --prefix must match ^[a-z][a-z0-9-]{1,10}[a-z0-9]$" >&2
+  exit 2
+fi
+
+if ! [[ "${ZONE}" =~ ^[a-z][a-z0-9-]*[a-z0-9]$ ]]; then
+  echo "register-entry.sh: invalid --zone '${ZONE}'" >&2
+  exit 2
+fi
+
 if ! [[ "${ENTRY_NAME}" =~ ^[a-z][a-z0-9-]{1,30}[a-z0-9]$ ]]; then
   echo "register-entry.sh: invalid entry name '${ENTRY_NAME}' (must match ^[a-z][a-z0-9-]{1,30}[a-z0-9]$)" >&2
   exit 2
 fi
+
+if ! [[ "${OWNER_EMAIL}" =~ ^[^@[:space:]\"\'\\,]+@[^@[:space:]\"\'\\,]+\.[^@[:space:]\"\'\\,]+$ ]]; then
+  echo "register-entry.sh: invalid --owner email '${OWNER_EMAIL}'" >&2
+  exit 2
+fi
+
+for p in "${ALLOW_PRINCIPALS[@]}"; do
+  if ! [[ "${p}" =~ ^(user|group|serviceAccount):[^@[:space:]\"\'\\,]+@[^@[:space:]\"\'\\,]+\.[^@[:space:]\"\'\\,]+$|^domain:[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+    echo "register-entry.sh: invalid --allow-principal '${p}'" >&2
+    exit 2
+  fi
+done
 
 case "${HOST_KIND}" in
   workstation|kubernetes|other) ;;
@@ -277,14 +304,6 @@ target AS (
   SELECT id FROM updated
   UNION ALL
   SELECT id FROM inserted
-),
-revoked AS (
-  UPDATE registry.entry_credentials
-  SET revoked_at = now()
-  WHERE (:'revoke_previous')::int = 1
-    AND entry_id IN (SELECT id FROM updated)
-    AND revoked_at IS NULL
-  RETURNING id
 )
 INSERT INTO registry.entry_credentials (
   id, entry_id, token_sha256, label, created_by, created_at
@@ -294,8 +313,30 @@ SELECT
   'register-entry.sh', lower(:'owner_email'), now()
 FROM target;
 
+WITH revoked AS (
+  UPDATE registry.entry_credentials
+  SET revoked_at = now()
+  WHERE (:'revoke_previous')::int = 1
+    AND entry_id = (SELECT id FROM registry.entries WHERE name = :'entry_name' AND deleted_at IS NULL)
+    AND id <> (:'cred_uuid')::uuid
+    AND revoked_at IS NULL
+  RETURNING id, entry_id
+),
+kicked AS (
+  DELETE FROM registry.tunnel_sessions
+  WHERE entry_id IN (SELECT DISTINCT entry_id FROM revoked)
+    AND (cred_id IS NULL OR cred_id IN (SELECT id FROM revoked))
+  RETURNING entry_id
+)
+UPDATE registry.entries
+SET last_disconnect_at     = now(),
+    last_disconnect_reason = 'credential revoked',
+    updated_at             = now()
+WHERE id IN (SELECT DISTINCT entry_id FROM kicked);
+
 SELECT pg_notify('registry_entries', :'entry_name');
 SELECT pg_notify('registry_catalog', :'entry_name');
+SELECT pg_notify('registry_tunnels', :'entry_name') WHERE (:'revoke_previous')::int = 1;
 
 COMMIT;
 SQL

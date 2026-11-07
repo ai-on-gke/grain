@@ -101,6 +101,16 @@ if [[ -z "${PROJECT_ID}" ]]; then
   exit 2
 fi
 
+if ! [[ "${PROJECT_ID}" =~ ^[a-z][a-z0-9.:-]*[a-z0-9]$ ]]; then
+  echo "down.sh: invalid --project '${PROJECT_ID}'" >&2
+  exit 2
+fi
+
+if ! [[ "${NAME_PREFIX}" =~ ^[a-z][a-z0-9-]{1,10}[a-z0-9]$ ]]; then
+  echo "down.sh: --prefix must match ^[a-z][a-z0-9-]{1,10}[a-z0-9]$" >&2
+  exit 2
+fi
+
 for cmd in gcloud terraform jq; do
   if ! command -v "${cmd}" >/dev/null 2>&1; then
     echo "down.sh: required command '${cmd}' is not installed" >&2
@@ -204,6 +214,10 @@ fi
 if [[ "${KEEP_IMAGES}" -eq 0 && -s "${tmp_images}" ]]; then
   while IFS= read -r img; do
     [[ -z "${img}" ]] && continue
+    if [[ "${img}" == -* || "${img}" != *-docker.pkg.dev/"${PROJECT_ID}"/* || "${img}" =~ [[:space:]] ]]; then
+      log "Skipping unexpected image reference in pushed-images.txt: ${img}"
+      continue
+    fi
     log "Deleting pushed sandbox image ${img}..."
     gcloud artifacts docker images delete "${img}" --delete-tags --quiet || true
   done < "${tmp_images}"

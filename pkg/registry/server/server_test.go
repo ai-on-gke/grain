@@ -571,12 +571,14 @@ func TestReverseProxyHeadersCookiesCSRFStreamingAndUpgrades(t *testing.T) {
 		}
 	}
 
-	// C. Verify gma_ bearer token is preserved across proxy sanitization.
+	// C. Verify gma_ bearer token (and X-Grain-Tunnel-Token) is preserved while
+	// Google-managed IAP ya29. access tokens and custom OAuth client ID tokens are stripped.
 	{
 		req := httptest.NewRequest(http.MethodGet, "https://alice-vm.instances.example.com/echo", nil)
 		req.Host = "alice-vm.instances.example.com"
 		req.Header.Set("X-Test-Email", "alice@example.com")
 		req.Header.Set("Authorization", "Bearer gma_live_token_123")
+		req.Header.Set("X-Grain-Tunnel-Token", "gma_live_token_123")
 		rec := httptest.NewRecorder()
 		mainHandler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
@@ -584,9 +586,43 @@ func TestReverseProxyHeadersCookiesCSRFStreamingAndUpgrades(t *testing.T) {
 		}
 		lastReceivedReq.mu.Lock()
 		gotAuth := lastReceivedReq.Headers.Get("Authorization")
+		gotTun := lastReceivedReq.Headers.Get("X-Grain-Tunnel-Token")
 		lastReceivedReq.mu.Unlock()
 		if gotAuth != "Bearer gma_live_token_123" {
 			t.Fatalf("expected gma_ token preserved, got %q", gotAuth)
+		}
+		if gotTun != "gma_live_token_123" {
+			t.Fatalf("expected gma_ X-Grain-Tunnel-Token preserved, got %q", gotTun)
+		}
+
+		for _, tc := range []struct {
+			name string
+			tok  string
+		}{
+			{name: "google-managed-iap-ya29", tok: "ya29.a0AfB_byC_live_iap_access_token"},
+			{name: "custom-iap-oauth-client", tok: makeFakeOIDCToken("123456789-abcdef.apps.googleusercontent.com")},
+			{name: "registry-cred-token", tok: "grc_ accidental_entry_token"},
+		} {
+			edgeReq := httptest.NewRequest(http.MethodGet, "https://alice-vm.instances.example.com/echo", nil)
+			edgeReq.Host = "alice-vm.instances.example.com"
+			edgeReq.Header.Set("X-Test-Email", "alice@example.com")
+			edgeReq.Header.Set("Authorization", "Bearer "+tc.tok)
+			edgeReq.Header.Set("X-Grain-Tunnel-Token", tc.tok)
+			edgeRec := httptest.NewRecorder()
+			mainHandler.ServeHTTP(edgeRec, edgeReq)
+			if edgeRec.Code != http.StatusOK {
+				t.Fatalf("%s: expected 200 OK, got %d", tc.name, edgeRec.Code)
+			}
+			lastReceivedReq.mu.Lock()
+			leakedAuth := lastReceivedReq.Headers.Get("Authorization")
+			leakedTun := lastReceivedReq.Headers.Get("X-Grain-Tunnel-Token")
+			lastReceivedReq.mu.Unlock()
+			if leakedAuth != "" {
+				t.Fatalf("%s: expected Authorization stripped before reaching backend, got %q", tc.name, leakedAuth)
+			}
+			if leakedTun != "" {
+				t.Fatalf("%s: expected X-Grain-Tunnel-Token stripped before reaching backend, got %q", tc.name, leakedTun)
+			}
 		}
 	}
 

@@ -100,6 +100,21 @@ if [[ -z "${PROJECT_ID}" ]]; then
   exit 2
 fi
 
+if ! [[ "${PROJECT_ID}" =~ ^[a-z][a-z0-9.:-]*[a-z0-9]$ ]]; then
+  echo "verify.sh: invalid --project '${PROJECT_ID}'" >&2
+  exit 2
+fi
+
+if ! [[ "${NAME_PREFIX}" =~ ^[a-z][a-z0-9-]{1,10}[a-z0-9]$ ]]; then
+  echo "verify.sh: --prefix must match ^[a-z][a-z0-9-]{1,10}[a-z0-9]$" >&2
+  exit 2
+fi
+
+if [[ -n "${ENTRY_NAME}" ]] && ! [[ "${ENTRY_NAME}" =~ ^[a-z][a-z0-9-]{1,30}[a-z0-9]$ ]]; then
+  echo "verify.sh: invalid --entry '${ENTRY_NAME}'" >&2
+  exit 2
+fi
+
 if [[ -z "${STATE_BUCKET}" ]]; then
   STATE_BUCKET="${PROJECT_ID}-${NAME_PREFIX}-tfstate"
 fi
@@ -263,11 +278,17 @@ for name in "${targets[@]}"; do
     exit 1
   fi
 
+  if ! [[ "${name}" =~ ^[a-z][a-z0-9-]{1,30}[a-z0-9]$ ]]; then
+    echo "verify.sh: refusing invalid entry name '${name}' from /api/directory" >&2
+    exit 1
+  fi
+
   echo "==> [4/5] Checking GET /api/route for entry '${name}'..."
   scope_repo="$(jq -r '.scopes[0].repo // "ai-on-gke/grain"' <<<"${entry_obj}")"
-  route_json="$(curl -fsS "${curl_tls_flags[@]}" \
+  route_json="$(curl -fsS --get "${curl_tls_flags[@]}" \
     -H @<(printf 'Authorization: Bearer %s\n' "${iap_tok}") \
-    "https://${registry_host}/api/route?repo=${scope_repo}")"
+    --data-urlencode "repo=${scope_repo}" \
+    "https://${registry_host}/api/route")"
   jq . <<<"${route_json}"
 
   entry_host="${name}.${instance_domain}"
