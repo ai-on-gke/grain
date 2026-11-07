@@ -282,6 +282,14 @@ const (
 	GitHubReadIssuesMethod = "read-issues"
 	GitHubReadIssuesRef    = GitHubCapabilityServerID + "#" + GitHubReadIssuesMethod
 	GitHubReadIssuesGrant  = GitHubReadIssuesRef + "={}"
+
+	// GitHubSandboxRepoMethod provisions a private, single-use GitHub sandbox
+	// repository for a run via this deployment's GitHub App and places a token
+	// scoped to only that repository (formerly github-sandbox).
+	LegacyGitHubSandboxCapability = "github-sandbox"
+	GitHubSandboxRepoMethod       = "sandbox-repo"
+	GitHubSandboxRepoRef          = GitHubCapabilityServerID + "#" + GitHubSandboxRepoMethod
+	GitHubSandboxRepoGrant        = GitHubSandboxRepoRef + "={}"
 )
 
 // ModelProxyVendors are the vendors the model-proxy server proxies, in
@@ -495,6 +503,22 @@ func IsGitHubReadIssuesGrant(grant string) bool {
 // github#read-issues.
 func HasGitHubReadIssues(grants []string) bool {
 	return slices.ContainsFunc(grants, IsGitHubReadIssuesGrant)
+}
+
+// IsGitHubSandboxRepoGrant reports whether grant names github#sandbox-repo
+// (recorded or bare) or the retired bare github-sandbox alias.
+func IsGitHubSandboxRepoGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if s == LegacyGitHubSandboxCapability {
+		return true
+	}
+	return CapabilityGrantRef(s) == GitHubSandboxRepoRef
+}
+
+// HasGitHubSandboxRepo reports whether any grant in grants opens
+// github#sandbox-repo.
+func HasGitHubSandboxRepo(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGitHubSandboxRepoGrant)
 }
 
 // ParseGrainSQLGrant reports whether grant names grain#sql (recorded or bare)
@@ -761,6 +785,10 @@ var legacyGrantReplacements = map[string]string{
 	// Retired by schema migration 121 onto the in-process github server's
 	// read-issues method, which reads with the same team git credential.
 	"read-issues": GitHubReadIssuesGrant,
+	// Retired by schema migration 123 onto the in-process github server's
+	// sandbox-repo method, which provisions the same private sandbox repo
+	// and scoped installation token via this deployment's GitHub App.
+	LegacyGitHubSandboxCapability: GitHubSandboxRepoGrant,
 }
 
 // legacyGrantMultiReplacements maps retired bare capabilities that split into

@@ -321,8 +321,8 @@ in_process:
 func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 	t.Parallel()
 	w := newHoldWorld(t, false)
-	parent := w.create("auto-merging parent", true, []string{"github-sandbox", model.GitHubReadIssuesGrant})
-	if !holds(parent, "github-sandbox") || !holds(parent, model.GitHubReadIssuesGrant) {
+	parent := w.create("auto-merging parent", true, []string{model.GrainHealthGrant, model.GitHubReadIssuesGrant})
+	if !holds(parent, model.GrainHealthGrant) || !holds(parent, model.GitHubReadIssuesGrant) {
 		t.Fatalf("the parent does not hold both grants: %+v", parent.Grants)
 	}
 	// The parent was filed from the template the catalogue keeps read-issues
@@ -331,7 +331,7 @@ func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 		t.Fatal(err)
 	}
 	importCatalogue(t, w.store, `in_process:
-  github-sandbox:
+  deployment-health:
     restrictions: {requires_person: true}
   read-issues:
     restrictions: {templates: [walk-ops]}
@@ -349,7 +349,7 @@ func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 		}
 		steps := w.changeScript(task, "echo 'typo' >> docs/guide.md")
 		return append([]antigravity.Step{
-			propose("needs github-sandbox", "github-sandbox"),
+			propose("needs health", model.GrainHealthGrant),
 			propose("needs read-issues", model.GitHubReadIssuesGrant),
 			propose("needs nothing"),
 		}, steps...)
@@ -371,7 +371,7 @@ func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 		state        model.State
 		note         string
 	}{
-		{"needs github-sandbox", "github-sandbox", model.StateProposed, model.CatalogueRequiresPersonNote([]string{"github-sandbox"})},
+		{"needs health", model.GrainHealthGrant, model.StateProposed, model.CatalogueRequiresPersonNote([]string{model.GrainHealthGrant})},
 		{"needs read-issues", model.GitHubReadIssuesGrant, model.StateProposed, "settings/capabilities.yml refuses what it asked for"},
 		{"needs nothing", "", model.StateQueued, ""},
 	} {

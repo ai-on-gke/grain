@@ -585,7 +585,13 @@ import "strconv"
 // `default_admission` to `grain_config` and `repo_config`, moving stored
 // `priority-dispatch` and `durable` grants into the setting and dropping
 // catalogue and policy entries for both names.
-const SchemaVersion = 122
+// 123 changes no table: it retires the in-process `github-sandbox` provider
+// onto the in-process `github` server's `#sandbox-repo` method: stored
+// `github-sandbox` grants across tasks, templates, schedules,
+// `default_capabilities`, `ci_capabilities`, `console_sessions` and
+// `capability_policy` become
+// `https://grain.dev/capabilities/github#sandbox-repo={}`.
+const SchemaVersion = 123
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or

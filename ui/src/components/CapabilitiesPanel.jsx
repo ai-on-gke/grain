@@ -33,6 +33,13 @@ import { formatDateTime } from "../time.js";
 
 const GCP_CAPABILITY_SERVER_ID = "https://grain.dev/capabilities/gcp";
 
+// Capabilities kept on this tab for their standing secret configuration and
+// live Check button while tasks and CI jobs grant them via an in-process
+// capability server method instead.
+const SERVED_BY_CAPABILITY_SERVER = {
+  "github-sandbox": "https://grain.dev/capabilities/github#sandbox-repo",
+};
+
 // The guide this tab and Settings → Capabilities share
 // (docs/capability-servers-ui.md), which says how the two differ.
 const CAPABILITIES_GUIDE =
@@ -97,14 +104,16 @@ function CapabilityChips({ cap }) {
           help={chipHelp.ciOnly}
         />
       )}
-      {cap.grantable === false && !cap.ciOnly && (
-        <HelpChip
-          label="Not grantable"
-          color="warning"
-          variant="filled"
-          help={chipHelp.notGrantable}
-        />
-      )}
+      {cap.grantable === false &&
+        !cap.ciOnly &&
+        !SERVED_BY_CAPABILITY_SERVER[cap.id] && (
+          <HelpChip
+            label="Not grantable"
+            color="warning"
+            variant="filled"
+            help={chipHelp.notGrantable}
+          />
+        )}
       {cap.default && (
         <HelpChip
           label="Default"
@@ -291,13 +300,23 @@ function CapabilityDetail({ cap, showError, onSecretsChanged }) {
           Turn it on per repository, on the repos page under CI capabilities.
         </Typography>
       )}
-      {cap.grantable === false && !cap.ciOnly && (
+      {SERVED_BY_CAPABILITY_SERVER[cap.id] && (
         <Typography variant="body2" className="hint" sx={{ mt: 0.5 }}>
-          No task can be granted this: grain registers a provider for it, but
-          the task capability picker does not offer it, so attaching it is
-          rejected as an unknown capability. Configuration cannot fix this one.
+          Granted on Settings → Capabilities as{" "}
+          <code>{SERVED_BY_CAPABILITY_SERVER[cap.id]}</code>; configure and test
+          its standing GitHub App credentials below.
         </Typography>
       )}
+      {cap.grantable === false &&
+        !cap.ciOnly &&
+        !SERVED_BY_CAPABILITY_SERVER[cap.id] && (
+          <Typography variant="body2" className="hint" sx={{ mt: 0.5 }}>
+            No task can be granted this: grain registers a provider for it, but
+            the task capability picker does not offer it, so attaching it is
+            rejected as an unknown capability. Configuration cannot fix this
+            one.
+          </Typography>
+        )}
       {cap.default && cap.ready === false && (
         <Typography variant="body2" className="hint" sx={{ mt: 0.5 }}>
           Every new task is filed holding this, and it is not ready: each of

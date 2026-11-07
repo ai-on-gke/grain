@@ -870,6 +870,11 @@ var Migrations = []Migration{
 			return MigrateAdmissionFromGrants(ctx, tx, false)
 		},
 	},
+	{
+		Version:     123,
+		Description: "rewrite stored github-sandbox grants, repo_config.ci_capabilities and capability_policy included, to https://grain.dev/capabilities/github#sandbox-repo={} (the in-process capability is retired)",
+		Up:          migrateGitHubSandboxGrants,
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

@@ -45,6 +45,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -161,22 +162,22 @@ func TestCapabilityProviders(t *testing.T) {
 		{
 			name: "no gcp project configured still registers the built-in capabilities",
 			cfg:  Config{},
-			want: []string{"github-sandbox", "console", "release-gate-read"},
+			want: []string{"console", "release-gate-read"},
 		},
 		{
 			name: "an agent service account without a gcp project does not add either gcp capability",
 			cfg:  Config{GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"},
-			want: []string{"github-sandbox", "console", "release-gate-read"},
+			want: []string{"console", "release-gate-read"},
 		},
 		{
 			name: "a gcp project adds nothing: gemini-key is served by the gcp capability server",
 			cfg:  Config{GcpProject: "proj"},
-			want: []string{"github-sandbox", "console", "release-gate-read"},
+			want: []string{"console", "release-gate-read"},
 		},
 		{
 			name: "a gcp project with an agent service account adds nothing either (gcp-key and gemini-key are served by the gcp capability server)",
 			cfg:  Config{GcpProject: "proj", GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"},
-			want: []string{"github-sandbox", "console", "release-gate-read"},
+			want: []string{"console", "release-gate-read"},
 		},
 	}
 	for _, tc := range cases {
@@ -215,6 +216,12 @@ func TestEveryLeakableCapabilityIsReaped(t *testing.T) {
 		if _, ok := p.(model.Reaper); ok {
 			reaped[p.Spec().Name] = true
 		}
+	}
+	// github#sandbox-repo's provider is retired from CapabilityProviders
+	// (schema migration 123); ReapCapabilitiesBefore sweeps leaked
+	// grain-sandbox-* repositories directly through githubsandbox.Current().
+	if _, ok := any(githubsandbox.Current()).(model.Reaper); ok {
+		reaped["github-sandbox"] = true
 	}
 	for _, name := range []string{"github-sandbox"} {
 		if !reaped[name] {

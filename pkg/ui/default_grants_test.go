@@ -100,7 +100,7 @@ func TestRepoDefaultAndCICapabilitiesTakeMethodGrants(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("PUT ci-capabilities: %d %v", code, out)
 	}
-	if got := stringsOf(out["ciCapabilities"]); !slices.Equal(got, []string{"github-sandbox", defaultGrantRecorded}) {
+	if got := stringsOf(out["ciCapabilities"]); !slices.Equal(got, []string{model.GitHubSandboxRepoGrant, defaultGrantRecorded}) {
 		t.Fatalf("ciCapabilities = %v", got)
 	}
 	// The task defaults are left as they were.

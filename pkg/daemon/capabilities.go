@@ -55,14 +55,6 @@ func newCapabilityRegistryWithStore(_ *model.Store, providers ...model.Capabilit
 // grants a capability against a registry that never registered one is
 // refused, cleanly, by model.ResolveGrants -- not a crash at startup.
 //
-// github-sandbox needs no deployment-level config -- its two secrets are all it
-// resolves, and FindInstallation asks GitHub itself which account to
-// act on (pkg/capability/githubsandbox's own doc comment) -- so it
-// registers unconditionally; an operator
-// who never runs `grain controller bootstrap-github-app` simply leaves
-// its two secrets unresolvable, and Materialize fails closed the same
-// way any other missing secret does.
-//
 // proxies and githubTokens are unused since the claude-, openai- and
 // gemini-proxy providers were retired onto the in-process model-proxy server
 // (modelProxyMethod) and github-credential:<name> was retired onto the
@@ -73,9 +65,13 @@ func CapabilityProviders(cfg Config, _ *model.Store, _ map[string]*modelproxy.En
 	// gemini-key is no longer a provider here: it was retired onto the
 	// gcp server's gemini-key (schema migration 103), which mints with
 	// the same gcp-key-minter secret and reaps keys older than 24h.
-	providers = append(providers, githubsandbox.NewProvider(githubsandbox.Config{
+	// github-sandbox is no longer a provider here: it was retired onto
+	// the in-process github server's sandbox-repo method (schema migration
+	// 123), which mints and revokes through githubsandbox.Current() and
+	// reaps leaked grain-sandbox-* repositories in ReapCapabilitiesBefore.
+	githubsandbox.Configure(githubsandbox.Config{
 		Host: cfg.GithubHost, InsecureHTTP: cfg.GithubInsecureHTTP,
-	}))
+	})
 	providers = append(providers, admincaps.Providers()...)
 	// bootstrap-playbooks is no longer a provider here: it was retired onto
 	// the config-map server's config-map {"config_maps":["bootstrap"]}

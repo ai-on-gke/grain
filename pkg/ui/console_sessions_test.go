@@ -327,9 +327,12 @@ func TestConsoleSessionCapabilitiesSayWhichOnesThisDeploymentCanHonour(t *testin
 	t.Parallel()
 	_, store, _ := testClient(t)
 	srv := ui.NewServer(ui.Config{
-		Actor:        ui.DefaultActor("alice"),
-		Capabilities: ui.OfferedCapabilities(),
-		Secrets:      secrets.New(t.TempDir()),
+		Actor: ui.DefaultActor("alice"),
+		Capabilities: append(ui.OfferedCapabilities(), ui.Capability{
+			ID:   "github-sandbox",
+			Name: "GitHub sandbox",
+		}),
+		Secrets: secrets.New(t.TempDir()),
 	}, store)
 
 	rec := do(t, srv, http.MethodGet, "/api/console-sessions", "")

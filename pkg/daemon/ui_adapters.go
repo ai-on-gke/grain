@@ -21,6 +21,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
 	"github.com/ai-on-gke/grain/pkg/agent/credcheck"
+	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/k8s"
 	"github.com/ai-on-gke/grain/pkg/metrics"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -340,10 +341,19 @@ type CapabilityCheckAdapter struct {
 }
 
 func (a CapabilityCheckAdapter) CheckCapability(ctx context.Context, id string) (ui.CapabilityCheckResult, error) {
+	cfg := a.Live.Current()
 	registry := newCapabilityRegistryWithStore(
 		a.Live.store,
-		CapabilityProviders(a.Live.Current(), a.Live.store, ModelProxies, a.Live.GitHubTokens(), a.Live.gitHubCredentialSource())...)
+		CapabilityProviders(cfg, a.Live.store, ModelProxies, a.Live.GitHubTokens(), a.Live.gitHubCredentialSource())...)
 	provider, ok := registry.Lookup(id)
+	if !ok && id == model.LegacyGitHubSandboxCapability {
+		// github-sandbox's provider was retired onto github#sandbox-repo
+		// (schema migration 123); Settings still checks its GitHub App
+		// credentials through the provider against the live GitHub host.
+		provider, ok = githubsandbox.NewProvider(githubsandbox.Config{
+			Host: cfg.GithubHost, InsecureHTTP: cfg.GithubInsecureHTTP,
+		}), true
+	}
 	if !ok {
 		// An answer about this deployment rather than a fault:
 		// capabilityProviders registers gcp-key and gemini-key only once

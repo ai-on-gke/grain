@@ -16,20 +16,21 @@ credential decides whether it holds. See
 The equivalent CLI is:
 
 ```sh
-grain repo ci-capabilities -set github-sandbox bwsalmon/grain
+grain repo ci-capabilities -set 'https://grain.dev/capabilities/github#sandbox-repo={}' bwsalmon/grain
 grain repo ci-capabilities bwsalmon/grain
 grain repo ci-capabilities -set '' bwsalmon/grain
 ```
 
 The API is `GET` / `PUT /api/repos/{owner}/{name}/ci-capabilities`, with a PUT
-body such as `{"ciCapabilities":["github-sandbox"]}`. The database
+body such as `{"ciCapabilities":["https://grain.dev/capabilities/github#sandbox-repo={}"]}` (bare `"github-sandbox"` remains accepted as a one-release alias). The database
 stores the list in `repo_config.ci_capabilities`; existing databases migrate to
 an empty list. State/settings exports preserve it with the other repo settings.
 
-What this list grants today is the legacy in-process providers that remain
-(`github-sandbox`, a temporary GitHub repository) and the release-only
+What this list grants today is `https://grain.dev/capabilities/github#sandbox-repo`
+(a temporary single-use GitHub repository, formerly `github-sandbox`, migrated in
+schema migration 123) and the release-only
 publishing credentials of grain's in-process release server described below
-(`model.CIGrantRule.RepoGranted`). Capability references are not granted
+(`model.CIGrantRule.RepoGranted`). Other capability references are not granted
 here: GCP keys (`https://grain.dev/capabilities/gcp#gcp-key`), Gemini keys
 (`…/gcp#gemini-key`) and the model proxies
 (`https://grain.dev/capabilities/model-proxy#model-proxy` `{vendor}`) are

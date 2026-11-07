@@ -51,16 +51,33 @@ const (
 // job's own declaration only narrows what that list provides, as it
 // narrows every other deployment grant -- rather than the declaration
 // granting it, as it does other capability references.
+//
+// TaskGrantable marks a reference that may also be granted to tasks,
+// templates, schedules and console sessions (such as github#sandbox-repo,
+// whose retired provider had CIOnly false); when false, the reference is
+// CI-only. AllEvents admits every CI trigger event without event-gating
+// (when the retired provider did not implement CIEventCapability).
 type CIGrantRule struct {
 	Events          []string
 	TrustedSchedule bool
 	RepoGranted     bool
+	TaskGrantable   bool
+	AllEvents       bool
 }
+
+// IsCIOnly reports whether r restricts the capability to CI jobs only.
+func (r CIGrantRule) IsCIOnly() bool { return !r.TaskGrantable }
+
+// IsEventGated reports whether r restricts which CI events receive the grant.
+func (r CIGrantRule) IsEventGated() bool { return !r.AllEvents }
 
 // Admits reports whether a CI job of event, trustedSchedule being
 // whether it is the schedule run grain fired from a workflow's cron
 // (ci.Request.TrustedSchedule), is handed the grant.
 func (r CIGrantRule) Admits(event string, trustedSchedule bool) bool {
+	if r.AllEvents {
+		return true
+	}
 	if slices.Contains(r.Events, event) {
 		return true
 	}
@@ -84,7 +101,13 @@ func (r CIGrantRule) describe() string {
 
 var (
 	ciGrantRulesMu sync.RWMutex
-	ciGrantRules   = map[string]CIGrantRule{}
+	ciGrantRules   = map[string]CIGrantRule{
+		// github#sandbox-repo (formerly github-sandbox) may be granted to
+		// tasks and, for CI jobs, is granted by the repository's
+		// ci_capabilities list on every event rather than by a job's own
+		// declaration alone.
+		GitHubSandboxRepoRef: {RepoGranted: true, TaskGrantable: true, AllEvents: true},
+	}
 )
 
 // RegisterCIGrantRule declares rule for the capability reference ref
@@ -138,6 +161,9 @@ func CIGrantRuleRefusal(grant string, s CapabilitySubject) string {
 		return ""
 	}
 	if s.Kind != CapabilityRunCI {
+		if !rule.IsCIOnly() {
+			return ""
+		}
 		return CIGrantRuleCIOnlyRefusal(grant, rule)
 	}
 	if !rule.Admits(s.Event, s.TrustedSchedule) {

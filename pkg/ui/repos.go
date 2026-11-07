@@ -1699,7 +1699,11 @@ func (c *Client) ciCapabilityIDs() []string {
 		if !spec.SupportsCI() {
 			continue
 		}
-		if _, offered := c.capabilityByID(spec.Name); offered || spec.CIOnly {
+		_, offered := c.capabilityByID(spec.Name)
+		if !offered {
+			_, offered = c.capabilityByID(model.CanonicalLegacyGrant(spec.Name))
+		}
+		if offered || spec.CIOnly {
 			// A provider retired onto a method with a CI rule (the
 			// release server's) is offered as the grant it became,
 			// which is what its stored rows were rewritten to.
