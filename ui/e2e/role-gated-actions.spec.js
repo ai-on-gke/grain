@@ -89,6 +89,31 @@ test("a viewer's task Edit is disabled beside Prompt, which still opens", async 
   expect(e.x).toBeGreaterThan(p.x);
 });
 
+// The Admission select's place in the task pane's action column, for an
+// unlimited caller and then for a viewer, whose select is disabled inside
+// AccessGate's wrapper: the wrapper must not shrink it or shift it.
+async function admissionBox(page) {
+  await page.goto("/tasks/1");
+  const select = page.getByRole("combobox", { name: "Admission" });
+  await expect(select).toBeVisible();
+  return { select, box: await select.boundingBox() };
+}
+
+test("a viewer's Admission select is disabled and keeps its place", async ({
+  page,
+}) => {
+  const { box: open } = await admissionBox(page);
+  await asViewer(page);
+  const { select, box: gated } = await admissionBox(page);
+  await expect(select).toHaveAttribute("aria-disabled", "true");
+  expect(Math.abs(gated.x - open.x)).toBeLessThan(2);
+  expect(Math.abs(gated.width - open.width)).toBeLessThan(2);
+  await select.locator("xpath=ancestor::*[@data-access-denied][1]").hover();
+  await expect(page.getByRole("tooltip")).toHaveText(
+    "Needs tasks:write, which your role grain/viewer does not grant.",
+  );
+});
+
 test("a viewer sees a settings section read-only, and why", async ({
   page,
 }) => {
@@ -115,6 +140,14 @@ test.describe("on a phone", () => {
       .first();
     await expect(button).toBeDisabled();
     const box = await button.boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(390);
+  });
+
+  test("a viewer's Admission select stays on the screen", async ({ page }) => {
+    await asViewer(page);
+    const { select, box } = await admissionBox(page);
+    await expect(select).toHaveAttribute("aria-disabled", "true");
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(390);
   });
