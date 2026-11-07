@@ -341,19 +341,17 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		DBDSN:                      cfg.DbDSN,
 		DataDir:                    cfg.DataDir,
 		SourceDB:                   db,
-		// The fixed set grain ships providers for, plus one row per named
-		// GitHub token this deployment has beyond its default one
-		// (grain/task-117) -- the same names capabilityProviders builds
-		// the matching providers from, so every id the picker offers is
-		// one a dispatch can actually resolve. The api rows appended last
-		// are only a marker that this picker offers the agent API: the
-		// Client reads them again per request (pickerCapabilities), so a
-		// scope set declared after startup is offered too.
-		Capabilities: append(append(ui.OfferedCapabilities(), ui.GitHubTokenCapabilities(live.GitHubTokens())...),
-			ui.APICapabilities()...),
-		Consoles:             consoleSessions,
-		Secrets:              uiSecrets,
-		LocalScriptApprovals: localScriptApprovals,
+		// The fixed set grain ships providers for, plus the api rows appended
+		// last as a marker that this picker offers the agent API (pickerCapabilities).
+		// Named GitHub credentials are served on the in-process repo server
+		// (repo#credential) rather than as legacy checklist rows; OfferedGitCredentials
+		// records the startup credential list for Settings -> GitHub tokens and
+		// per-client repo#credential validation.
+		Capabilities:          append(ui.OfferedCapabilities(), ui.APICapabilities()...),
+		OfferedGitCredentials: live.GitHubTokens(),
+		Consoles:              consoleSessions,
+		Secrets:               uiSecrets,
+		LocalScriptApprovals:  localScriptApprovals,
 		// The registry run() attaches capability servers into, for the
 		// status column of Settings' Capability servers pane.
 		CapabilityServers: capabilityServerStatuses(live),

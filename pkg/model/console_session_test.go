@@ -29,8 +29,8 @@ func TestADeploymentThatHasNeverChosenGetsTheDirector(t *testing.T) {
 		t.Fatalf("ConsoleSessionsOr(nil) = %v, want exactly the director", sessions)
 	}
 	director := sessions[0]
-	if director.TasksApproved {
-		t.Error("the director files approved tasks by default: a chat is a fast way to ask for a lot of work")
+	if !director.TasksApproved {
+		t.Error("the shipped director does not file approved tasks by default (director-capabilities.spec.md §3.1.5)")
 	}
 	if director.NetworkAccess != model.NetworkNone {
 		t.Errorf("NetworkAccess = %q, want none: the director reads untrusted text and reaches everything it needs through grain (director-capabilities.spec.md §3.1.6)",
@@ -517,5 +517,91 @@ func TestDirectorSessionBodyInstructsExpectReasonsAndHoldForApproval(t *testing.
 				t.Errorf("TasksApproved=%v: DirectorSessionBody missing %q:\n%s", tasksApproved, want, body)
 			}
 		}
+	}
+}
+
+func TestShippedDirectorTasksApprovedAndStickyOperatorOverrides(t *testing.T) {
+	shipped := model.DefaultConsoleSessions()
+	if len(shipped) != 1 || shipped[0].ID != model.DirectorSessionID {
+		t.Fatalf("DefaultConsoleSessions() = %v, want single director session", shipped)
+	}
+	director := shipped[0]
+	if !director.TasksApproved || !director.QueuesProposals() {
+		t.Fatalf("shipped director TasksApproved=%v QueuesProposals()=%v, want both true",
+			director.TasksApproved, director.QueuesProposals())
+	}
+
+	directorTask := func(tags ...string) model.Task {
+		return model.Task{
+			Origin:      model.Origin{Reason: model.ReasonConsoleSession},
+			Interactive: true,
+			Tags:        append([]string{model.ConsoleSessionTag(model.DirectorSessionID)}, tags...),
+		}
+	}
+
+	// 1. Fresh deployment (nil ConsoleSessions) uses the shipped default.
+	if !model.ConsoleSessionQueuesProposals(model.ConsoleSessionsOr(nil), directorTask()) {
+		t.Error("ConsoleSessionQueuesProposals(ConsoleSessionsOr(nil), directorTask) = false, want true")
+	}
+
+	// 2. Active-task tag overrides (ConsoleSessionTasksUnapprovedTag / ConsoleSessionTasksApprovedTag)
+	// take precedence over the shipped TasksApproved: true default, even if AutoApproveProposals is set.
+	unapprovedTask := directorTask(model.ConsoleSessionTasksUnapprovedTag)
+	unapprovedTask.AutoApproveProposals = true
+	if model.ConsoleSessionQueuesProposals(shipped, unapprovedTask) {
+		t.Error("ConsoleSessionTasksUnapprovedTag failed to override shipped TasksApproved: true")
+	}
+	if !model.ConsoleSessionQueuesProposals(shipped, directorTask(model.ConsoleSessionTasksApprovedTag)) {
+		t.Error("ConsoleSessionTasksApprovedTag on shipped director returned false, want true")
+	}
+
+	// 3. Saved ConsoleSessions rows with TasksApproved: false (explicit or omitted in JSON) stay sticky.
+	for _, tc := range []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "explicit false",
+			raw:  `[{"ID":"director","Title":"Director","Capabilities":["api:self-debug"],"TasksApproved":false}]`,
+		},
+		{
+			name: "omitted field",
+			raw:  `[{"ID":"director","Title":"Director","Capabilities":["api:self-debug"]}]`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decoded, err := model.DecodeConsoleSessions(tc.raw)
+			if err != nil {
+				t.Fatalf("DecodeConsoleSessions: %v", err)
+			}
+			effective := model.ConsoleSessionsOr(decoded)
+			if len(effective) != 1 || effective[0].TasksApproved || effective[0].QueuesProposals() {
+				t.Fatalf("saved row after ConsoleSessionsOr = %+v, want TasksApproved=false", effective)
+			}
+			if model.ConsoleSessionQueuesProposals(effective, directorTask()) {
+				t.Error("saved row with TasksApproved=false queued proposals without an override tag")
+			}
+			// Operator tag on the active task still overrides the saved false row in either direction.
+			if !model.ConsoleSessionQueuesProposals(effective, directorTask(model.ConsoleSessionTasksApprovedTag)) {
+				t.Error("ConsoleSessionTasksApprovedTag failed to override saved TasksApproved=false")
+			}
+			alsoUnapproved := directorTask(model.ConsoleSessionTasksUnapprovedTag)
+			alsoUnapproved.AutoApproveProposals = true
+			if model.ConsoleSessionQueuesProposals(effective, alsoUnapproved) {
+				t.Error("ConsoleSessionTasksUnapprovedTag failed to hold saved session when AutoApproveProposals=true")
+			}
+
+			encoded, err := model.EncodeConsoleSessions(effective)
+			if err != nil {
+				t.Fatalf("EncodeConsoleSessions: %v", err)
+			}
+			roundTrip, err := model.DecodeConsoleSessions(encoded)
+			if err != nil {
+				t.Fatalf("round-trip DecodeConsoleSessions: %v", err)
+			}
+			if roundTrip[0].TasksApproved {
+				t.Error("round-trip Encode/Decode flipped saved TasksApproved=false to true")
+			}
+		})
 	}
 }
