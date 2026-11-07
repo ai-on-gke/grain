@@ -421,11 +421,26 @@ type StaticToken struct {
 
 func (s StaticToken) TokenFor(owner, repo string) *string { return s.Token }
 
-// GitOnlySource is a TokenSource that can say a repository has no forge
-// API credential at all -- one reached with an SSH key and nothing paired
-// to it (gitproxy.GitOnlyReason). GitOnly is that sentence, or "".
+// GitOnlySource is a TokenSource or Client that can say a repository has no
+// forge API credential at all -- one reached with an SSH key and nothing
+// paired to it (gitproxy.GitOnlyReason), or on a plain git host with no
+// forge API. GitOnly is that sentence, or "".
 type GitOnlySource interface {
 	GitOnly(owner, repo string) string
+}
+
+var _ GitOnlySource = (*RESTClient)(nil)
+
+// GitOnly reports why owner/repo has no forge API credential (GitOnlySource),
+// or "".
+func (c *RESTClient) GitOnly(owner, repo string) string {
+	if c == nil {
+		return ""
+	}
+	if src, ok := c.Tokens.(GitOnlySource); ok {
+		return src.GitOnly(owner, repo)
+	}
+	return ""
 }
 
 // GitBranchSource is a TokenSource that can read a repository's branch
@@ -441,10 +456,8 @@ type GitBranchSource interface {
 // only: said plainly rather than as the 401 or 404 an unauthenticated
 // call would come back with.
 func (c *RESTClient) gitOnly(owner, repo string) error {
-	if src, ok := c.Tokens.(GitOnlySource); ok {
-		if reason := src.GitOnly(owner, repo); reason != "" {
-			return errors.New(reason)
-		}
+	if reason := c.GitOnly(owner, repo); reason != "" {
+		return errors.New(reason)
 	}
 	return nil
 }

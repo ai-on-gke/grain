@@ -422,8 +422,9 @@ func TestAnActionsRepoThatNeverSetACIModeIsApprovedThroughActions(t *testing.T) 
 // -pending tag raises release.pending without an explicit ci_mode: github
 // (docs/test-runs/2026-11-04-release-approval.md, F1b). Unset repositories
 // where grain CI is in effect (.grain/workflows, IgnoreGitHubCI), ones
-// with ci_mode: none, ones with release work turned off, and ones off
-// TargetRepos are not polled.
+// with ci_mode: none, ones with release work turned off, git-only/plain-git
+// repositories behind a wrapped Client, retired grain/config-<team>
+// aliases, and ones off TargetRepos are not polled.
 func TestAnActionsRepoThatNeverSetACIModeRaisesReleasePending(t *testing.T) {
 	resetReleaseWatch(t)
 	ctx := context.Background()
@@ -435,6 +436,9 @@ func TestAnActionsRepoThatNeverSetACIModeRaisesReleasePending(t *testing.T) {
 	legacyGrain := model.RepoRef{Owner: "example", Name: "legacygrain"}
 	noneMode := model.RepoRef{Owner: "example", Name: "nonemode"}
 	releaseOff := model.RepoRef{Owner: "example", Name: "releaseoff"}
+	sshOnly := model.RepoRef{Owner: "example", Name: "sshonly"}
+	plainGit := model.RepoRef{Host: "git.example.com", Owner: "example", Name: "plaingit"}
+	retiredCfg := model.RepoRef{Owner: "grain", Name: "config-legacy"}
 	offList := model.RepoRef{Owner: "example", Name: "offlist"}
 
 	cfg := model.DefaultConfig()
@@ -445,6 +449,9 @@ func TestAnActionsRepoThatNeverSetACIModeRaisesReleasePending(t *testing.T) {
 		legacyGrain.String(),
 		noneMode.String(),
 		releaseOff.String(),
+		sshOnly.String(),
+		plainGit.String(),
+		retiredCfg.String(),
 	}
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
@@ -469,6 +476,9 @@ func TestAnActionsRepoThatNeverSetACIModeRaisesReleasePending(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: retiredCfg, SetupCommand: "make deps"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: offList, SetupCommand: "make deps"}); err != nil {
 		t.Fatal(err)
 	}
@@ -488,14 +498,21 @@ func TestAnActionsRepoThatNeverSetACIModeRaisesReleasePending(t *testing.T) {
 			},
 		},
 	}
-	for _, skipped := range []model.RepoRef{declaring, legacyGrain, noneMode, releaseOff, offList} {
+	skippedRepos := []model.RepoRef{declaring, legacyGrain, noneMode, releaseOff, sshOnly, plainGit, retiredCfg, offList}
+	for _, skipped := range skippedRepos {
 		forges[skipped] = &fixtureForge{
 			repo: skipped.String(),
 			tags: map[string]fixtureTag{"v9.0.0-pending": {commit: "deadbeef"}},
 		}
 	}
 	router := roundTripByRepo(forges)
-	deps := Deps{Store: store, Client: github.NewClient(router, nil)}
+	tokens := mapGitOnlyTokens{
+		sshOnly.StoredOwner() + "/" + sshOnly.Name:   "SSH credential covers git only",
+		plainGit.StoredOwner() + "/" + plainGit.Name: "plain git host with no forge API",
+	}
+	// Wrap the RESTClient the way daemon's StateRepoPullRequestClient + WithCaller do.
+	wrappedClient := github.WithCaller(wrappedReleaseClient{Client: github.NewClient(router, tokens)}, "release-pending")
+	deps := Deps{Store: store, Client: wrappedClient}
 	now := time.Now().UTC()
 
 	if err := reconcileReleasePending(ctx, deps, now); err != nil {
@@ -517,7 +534,7 @@ func TestAnActionsRepoThatNeverSetACIModeRaisesReleasePending(t *testing.T) {
 		t.Fatalf("no open %s for %s (unset ci_mode row): %+v (err %v)", subUnset, unsetRow, nUnset, err)
 	}
 
-	for _, skipped := range []model.RepoRef{declaring, legacyGrain, noneMode, releaseOff, offList} {
+	for _, skipped := range skippedRepos {
 		if forges[skipped].reads != 0 {
 			t.Errorf("read %s's tags %d times, want 0", skipped, forges[skipped].reads)
 		}
@@ -542,10 +559,47 @@ type roundTripByRepo map[model.RepoRef]*fixtureForge
 func (r roundTripByRepo) Request(method, path string, headers map[string]string, body []byte) (github.ApiResponse, error) {
 	for repo, f := range r {
 		if strings.HasPrefix(path, "/repos/"+repo.String()+"/") {
+			if repo.Host != "" {
+				f.mu.Lock()
+				f.reads++
+				f.mu.Unlock()
+				return github.ApiResponse{Status: http.StatusOK, Body: []byte(`[]`)}, nil
+			}
 			return f.Request(method, path, headers, body)
 		}
 	}
 	return github.ApiResponse{Status: http.StatusNotFound, Body: []byte(`{"message":"Not Found"}`)}, nil
+}
+
+type mapGitOnlyTokens map[string]string
+
+func (m mapGitOnlyTokens) TokenFor(owner, repo string) *string { return nil }
+func (m mapGitOnlyTokens) GitOnly(owner, repo string) string   { return m[owner+"/"+repo] }
+
+// wrappedReleaseClient stands in for daemon.StateRepoPullRequestClient,
+// wrapping a github.Client without exposing *github.RESTClient directly.
+type wrappedReleaseClient struct {
+	github.Client
+}
+
+func (w wrappedReleaseClient) WithCaller(caller string) github.Client {
+	return wrappedReleaseClient{Client: github.WithCaller(w.Client, caller)}
+}
+
+func (w wrappedReleaseClient) ListMatchingTags(owner, repo, prefix string) ([]github.TagRef, error) {
+	return w.Client.(github.ReleaseTagReader).ListMatchingTags(owner, repo, prefix)
+}
+
+func (w wrappedReleaseClient) GetAnnotatedTag(owner, repo, sha string) (*github.AnnotatedTag, error) {
+	return w.Client.(github.ReleaseTagReader).GetAnnotatedTag(owner, repo, sha)
+}
+
+func (w wrappedReleaseClient) ReadFile(owner, repo, ref, path string) ([]byte, bool, error) {
+	return w.Client.(github.FileReader).ReadFile(owner, repo, ref, path)
+}
+
+func (w wrappedReleaseClient) GitOnly(owner, repo string) string {
+	return w.Client.(github.GitOnlySource).GitOnly(owner, repo)
 }
 
 // Approving a staged release from the CLI or API before the watcher has

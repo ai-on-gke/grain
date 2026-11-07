@@ -50,6 +50,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -101,7 +102,7 @@ func releasePendingCandidates(ctx context.Context, store *model.Store) ([]releas
 	var out []releasePendingCandidate
 	for i := range configs {
 		r := configs[i].Repo
-		if r.Owner == "" || r.Name == "" {
+		if r.Owner == "" || r.Name == "" || model.IsConfigRepo(r) || gitproxy.RetiredConfigRepo(r.Host, r.Owner, r.Name) {
 			continue
 		}
 		out = append(out, releasePendingCandidate{repo: r, cfg: &configs[i]})
@@ -112,7 +113,7 @@ func releasePendingCandidates(ctx context.Context, store *model.Store) ([]releas
 			continue
 		}
 		r, err := model.ParseRepo(entry)
-		if err != nil || r.Owner == "" || r.Name == "" {
+		if err != nil || r.Owner == "" || r.Name == "" || model.IsConfigRepo(r) || gitproxy.RetiredConfigRepo(r.Host, r.Owner, r.Name) {
 			continue
 		}
 		if slices.ContainsFunc(out, func(c releasePendingCandidate) bool { return c.repo.Same(r) }) {
@@ -127,10 +128,8 @@ func releasePendingCandidates(ctx context.Context, store *model.Store) ([]releas
 }
 
 func isGitOnlyRepo(client github.Client, repo model.RepoRef) bool {
-	if rc, ok := client.(*github.RESTClient); ok {
-		if src, ok := rc.Tokens.(github.GitOnlySource); ok {
-			return src.GitOnly(repo.StoredOwner(), repo.Name) != ""
-		}
+	if src, ok := client.(github.GitOnlySource); ok {
+		return src.GitOnly(repo.StoredOwner(), repo.Name) != ""
 	}
 	return false
 }
