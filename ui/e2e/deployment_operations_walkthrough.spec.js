@@ -488,7 +488,10 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
     page.once("dialog", (dialog) => dialog.accept());
     await cancelBtn.click();
     await expect.poll(() => runConclusion(page, cancelledId)).toBe("cancelled");
-    await expect(cancelBtn).toHaveCount(0);
+    // DELETE answers 202 and the conclusion lands after it, so the pane
+    // only sees it on its next poll (REFRESH_MS, 5s) -- as long as
+    // expect's own default, which made this race.
+    await expect(cancelBtn).toHaveCount(0, { timeout: 15_000 });
 
     // A run that finishes, inspected from the list down to its step's
     // own output.

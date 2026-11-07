@@ -58,6 +58,7 @@ var (
 	_ github.ActionsReader            = (*StateRepoPullRequestClient)(nil)
 	_ github.CommitStatusReader       = (*StateRepoPullRequestClient)(nil)
 	_ github.PathCommitLister         = (*StateRepoPullRequestClient)(nil)
+	_ github.GitOnlySource            = (*StateRepoPullRequestClient)(nil)
 
 	_ orchestrator.ReleaseQualificationForge = (*StateRepoPullRequestClient)(nil)
 )
@@ -1499,6 +1500,19 @@ func (c *StateRepoPullRequestClient) ListPathCommits(owner, name, ref, filePath 
 		return nil, nil
 	}
 	return lister.ListPathCommits(owner, name, ref, filePath)
+}
+
+// GitOnly is the wrapped client's GitOnlySource answer, so reconcilers
+// behind StateRepoPullRequestClient (such as release-pending) skip
+// git-only credentials and plain-git hosts rather than polling a forge API.
+func (c *StateRepoPullRequestClient) GitOnly(owner, name string) string {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return ""
+	}
+	if src, ok := c.Client.(github.GitOnlySource); ok {
+		return src.GitOnly(owner, name)
+	}
+	return ""
 }
 
 // ListMatchingTags is the wrapped client's own, as ListTags is: what the
