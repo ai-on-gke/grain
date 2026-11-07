@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// End-to-end multi-replica registry test suite (design/design/registry.design.md, Step 15).
 package registry_test
 
 import (
