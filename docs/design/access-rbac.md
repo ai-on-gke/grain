@@ -129,7 +129,7 @@ follows). Requests with role grants are checked as follows:
 | SSE and event streams, log tails (`/api/console/{id}/output`, `/api/restart-watch`, `/api/logs/...`) | These are ordinary routes in the table and are gated by their scope like any JSON route. |
 | Terminal and console input (`/api/console/...`) | `sessions:read` to watch, `sessions:write` to type. Already in the table. |
 | File downloads (`/api/fs/...`, CI artifacts and logs) | Their table scope, on the repository the path names. |
-| `/api/mcp`, `/mcp` | Refused to any role that does not resolve to every scope. Their tools dispatch to many routes in process, and we have not given that dispatch a per-tool role check. |
+| `/api/mcp`, `/mcp` | Open to any signed-in role at the outer route (`humanRouteScopes`: `signed-in`), and checked per tool call against the caller's role on the request context (`accessRoleFromContext`) with the same `authorizeRoleCall` check as the route the tool maps to. Discovery (`grain_explore_scope` on `/api/mcp`, `tools/list` on `/mcp`) and `grain_filing_context` expose only scopes and repositories the role covers; invoking an unauthorized tool is refused naming the caller's role and the missing scope. |
 | `/staging/{name}/...` (persistent sandboxes' running services) | Refused to any role that does not resolve to every scope. |
 | hostd data plane (`/api/hostd/connect`, `/hostd/install`, `/api/hostd/install.sh`, `/api/hostd/join*`, `/api/hostd/renew`) | Authenticate in their own protocol with the host's credential and Ed25519 proof-of-possession signature (or verified enrolling identity on `/api/hostd/join`). Viewing/managing enrollment codes and accepting/rejecting pending join requests require the deployment owner (`IsDeploymentOwner`); host registry lifecycle actions require `capabilities:admin`. |
 | CI data plane (`/cli/ci/...`, sandbox proxy) | Served by the sandbox proxy to run tokens, never to a verified session. Not affected. |
@@ -228,8 +228,6 @@ Deployments compose their own roles from these (`includes:
 
 ## Not done here
 
-- Per-tool role checks inside `/api/mcp` (refused to limited roles for
-  now).
 - Hiding every action across every UI page. The capability helper is in
   place and the Access page uses it. Other pages adopt it as they are
   touched, and the server refuses regardless.
