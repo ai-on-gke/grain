@@ -101,7 +101,10 @@ func TestBackendCodexAuthModeSettings(t *testing.T) {
 	if _, _, err := store.CreateHostd(ctx, model.Hostd{Name: "ws-a"}); err != nil {
 		t.Fatal(err)
 	}
-	srv := ui.NewServer(ui.Config{Actor: ui.DefaultActor("alice")}, store)
+	// Every CLI here starts through grain hostd, so ambient credentials
+	// need their host named (model.CheckAmbientPlacement).
+	srv := ui.NewServer(ui.Config{Actor: ui.DefaultActor("alice"),
+		AmbientNeedsHost: func(string, map[string]model.CLIRunSetting) bool { return true }}, store)
 	for _, mode := range []string{"", "api_key", "subscription"} {
 		body, _ := json.Marshal(map[string]any{"agentBackends": []model.AgentBackend{{ID: "codex", Framework: "codex", AuthMode: mode}}})
 		r := do(t, srv, http.MethodPut, "/api/settings", string(body))

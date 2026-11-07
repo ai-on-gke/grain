@@ -94,12 +94,18 @@ the connection authenticates with:
   (`authMode: ambient`, for Antigravity, Claude and Codex alike). grain
   stores no secret for it.
 
-Ambient is accepted only on a connection placed on a host (`hostd`), so
-which machine's login a run spends is always said
-(`model.CheckAmbientPlacement`). A save that makes a connection ambient
-with no host, or clears the host of an ambient one, is refused with
-"ambient credentials are the agent CLI's own login on the machine it runs
-on ...". A connection saved ambient and unplaced before the rule keeps
+Where the connection's CLI starts through grain hostd (its framework runs
+`host` or `detached` on a daemon whose host executor is grain hostd),
+ambient is accepted only on a connection placed on a host (`hostd`), so
+which machine's login a run spends is always said rather than implied by
+the default host (`model.CheckAmbientPlacement`). A save that makes such a
+connection ambient with no host, or clears the host of an ambient one, is
+refused with "ambient credentials are the agent CLI's own login on the
+machine it runs on ...". A CLI the daemon starts as its own child -- in its
+container, or on the bare machine of a development daemon -- has one login
+an unplaced ambient connection can mean, the daemon's own, and is not
+refused by the API. Settings always asks for the host when Ambient is
+chosen. A connection saved ambient and unplaced before the rule keeps
 running through the default host, untouched by unrelated saves, until it
 is changed; where there is only one host it is placed on it (below).
 

@@ -75,13 +75,34 @@ func TestCheckAmbientPlacementRefusesOnlyOnChange(t *testing.T) {
 		{"reusing an ambient connection, with no host", []model.AgentBackend{placed,
 			{ID: "reuse", Framework: model.AgentFrameworkAntigravity, CredentialBackendID: "agy"}}, nil, true},
 	} {
-		err := model.CheckAmbientPlacement(tc.next, tc.before)
+		err := model.CheckAmbientPlacement(tc.next, tc.before, func(string) bool { return true })
 		if (err != nil) != tc.refused {
 			t.Errorf("%s: err = %v, want refused=%v", tc.name, err, tc.refused)
 		}
 		if err != nil && !strings.Contains(err.Error(), model.AmbientCredentialsNeedHost) {
 			t.Errorf("%s: err = %v, want it to say %q", tc.name, err, model.AmbientCredentialsNeedHost)
 		}
+	}
+}
+
+// Ambient on a CLI the daemon starts as its own child means the daemon's
+// own login, and a caller that cannot say where a CLI runs refuses
+// nothing.
+func TestCheckAmbientPlacementOnlyWhereTheCLIGoesThroughHostd(t *testing.T) {
+	t.Parallel()
+	next := []model.AgentBackend{
+		{ID: "agy", Framework: model.AgentFrameworkAntigravity, AuthMode: model.AntigravityAuthAmbient},
+		{ID: "claude", Framework: model.AgentFrameworkClaude, AuthMode: model.AntigravityAuthAmbient},
+	}
+	onlyAgy := func(fw string) bool { return fw == model.AgentFrameworkAntigravity }
+	if err := model.CheckAmbientPlacement(next[1:], nil, onlyAgy); err != nil {
+		t.Errorf("claude in the container: %v, want accepted", err)
+	}
+	if err := model.CheckAmbientPlacement(next, nil, onlyAgy); err == nil || !strings.Contains(err.Error(), "(agy)") {
+		t.Errorf("agy through hostd: %v, want agy refused", err)
+	}
+	if err := model.CheckAmbientPlacement(next, nil, nil); err != nil {
+		t.Errorf("no way to tell: %v, want nothing refused", err)
 	}
 }
 

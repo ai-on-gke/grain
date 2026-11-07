@@ -299,6 +299,9 @@ func Run(opts Options) error {
 	if err != nil {
 		return err
 	}
+	// An ambient connection whose CLI goes through the demo's grain
+	// hostd names its host, as on a deployment.
+	cfg.AmbientNeedsHost = runCfg.CLIRunsThroughHostd
 	demoSandboxCfg := runCfg
 	if demoSandboxCfg.SandboxBackend() == "" {
 		demoSandboxCfg.ContainerSandboxes = true

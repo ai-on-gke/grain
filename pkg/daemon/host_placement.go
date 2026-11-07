@@ -73,3 +73,20 @@ func (c Config) localHostdLogins(ctx context.Context) ([]string, bool) {
 	}
 	return h.Logins, true
 }
+
+// CLIRunsThroughHostd reports whether framework's CLI starts through
+// grain hostd -- host or detached, on a daemon whose host executor is
+// grain hostd -- with stored as Settings -> Models' run locations and
+// then the daemon's flags and defaults (CLIRunSetting). It is what a
+// connection with ambient credentials needs a host named for
+// (ui.Config.AmbientNeedsHost): its login is otherwise the default
+// host's by implication.
+func (c Config) CLIRunsThroughHostd(framework string, stored map[string]model.CLIRunSetting) bool {
+	if c.hostExecutor().Kind != HostExecutorHostd {
+		return false
+	}
+	live := c
+	live.CLIRun = stored
+	loc, _ := live.CLIRunSetting(model.NormalizeAgentFrameworkName(framework))
+	return loc == model.CLIRunHost || loc == model.CLIRunDetached
+}

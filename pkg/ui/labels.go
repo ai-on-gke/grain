@@ -531,6 +531,12 @@ type Config struct {
 	// and whether it said: what the host pickers show beside "local". A
 	// dialing-in hostd's come with its session (hostd.RemotePeer.Logins).
 	LocalHostdLogins func(ctx context.Context) ([]string, bool)
+	// AmbientNeedsHost, when set, reports whether a connection of
+	// framework would start its CLI through grain hostd, with stored as
+	// Settings -> Models' run locations: where it would, a connection
+	// with ambient credentials has to name its host
+	// (model.CheckAmbientPlacement). Nil refuses no ambient connection.
+	AmbientNeedsHost func(framework string, stored map[string]model.CLIRunSetting) bool
 	// Upgrader is set only when this deployment was told how it
 	// upgrades itself: which image to pull per branch
 	// (pkg/cli/daemon.go's -upgrade-image, the shape scripts/setup.sh

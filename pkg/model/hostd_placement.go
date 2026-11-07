@@ -18,9 +18,10 @@ package model
 //
 //   - A connection's credentials are stored (a key or file grain holds)
 //     or ambient (the agent CLI's own login on the machine it runs on).
-//     Ambient is only accepted on a connection placed on a host
-//     (AgentBackend.Hostd): grain stores no secret for it, so which
-//     machine's login a run spends has to be said, not implied.
+//     Ambient on a CLI that starts through grain hostd is only accepted
+//     on a connection placed on a host (AgentBackend.Hostd): grain stores
+//     no secret for it, so which machine's login a run spends has to be
+//     said, not implied by the default host.
 //   - Host work nothing places -- a run: host capability server with no
 //     hostd, a connection whose framework runs on the host because
 //     Settings -> Models says "Host" or the daemon's -<cli>-run flag
@@ -86,13 +87,23 @@ const AmbientCredentialsNeedHost = "ambient credentials are the agent CLI's own 
 	"and grain stores no secret for them: choose the host it runs on (Run on host) first, or use stored credentials"
 
 // CheckAmbientPlacement refuses each connection in backends whose
-// credentials are ambient and that names no host, unless stored holds it
-// already that way: a connection saved before the rule keeps running
-// through the default host until it is changed (refused on change, never
-// on an unrelated save). The answer names the first one refused.
-func CheckAmbientPlacement(backends, stored []AgentBackend) error {
+// credentials are ambient, that names no host, and whose CLI would start
+// through grain hostd (needsHost, by framework) -- so through the default
+// host, by implication. A CLI the daemon starts as its own child (in its
+// container, or on the bare machine of a development daemon) has one
+// login it can mean, the daemon's own, and is not refused; nor is any
+// connection when needsHost is nil, for a caller that cannot say where a
+// CLI runs. A connection stored that way already is not refused either:
+// one saved before the rule keeps running through the default host until
+// it is changed (refused on change, never on an unrelated save). The
+// answer names the first one refused.
+func CheckAmbientPlacement(backends, stored []AgentBackend, needsHost func(framework string) bool) error {
+	if needsHost == nil {
+		return nil
+	}
 	for i, b := range backends {
-		if b.IsRemovedCustomConnection() || strings.TrimSpace(b.Hostd) != "" || b.Credentials(backends) != CredentialsAmbient {
+		if b.IsRemovedCustomConnection() || strings.TrimSpace(b.Hostd) != "" || b.Credentials(backends) != CredentialsAmbient ||
+			!needsHost(NormalizeAgentFrameworkName(b.Framework)) {
 			continue
 		}
 		var prev *AgentBackend

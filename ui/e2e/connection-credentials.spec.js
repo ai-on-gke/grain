@@ -21,7 +21,8 @@ import { expect, test } from "./fixtures.js";
 // logins each host reports (GET /api/hostds' logins, from the host's
 // hello). The demo's hosts do not dial in, so the registry is answered
 // with logins added; nothing here saves, so the shared demo server is
-// left as it was. The API refuses an ambient connection with no host.
+// left as it was. (The API's refusal of an ambient connection with no
+// host is pkg/ui's and pkg/model's Go tests'.)
 const DESKTOP = { width: 1440, height: 900 };
 const PHONE = { width: 390, height: 844 };
 
@@ -104,16 +105,4 @@ test("ambient credentials ask for the host whose logins the picker shows", async
     ).toContainText("no CLI logins");
     await page.keyboard.press("Escape");
   }
-
-  const settings = await (await page.request.get("/api/settings")).json();
-  const refused = await page.request.put("/api/settings", {
-    data: {
-      agentBackends: [
-        ...(settings.agentBackends || []),
-        { id: "e2e-ambient", framework: "antigravity", authMode: "ambient" },
-      ],
-    },
-  });
-  expect(refused.status()).toBe(400);
-  expect(await refused.text()).toContain("ambient credentials");
 });

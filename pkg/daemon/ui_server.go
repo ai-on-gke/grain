@@ -776,6 +776,7 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		uiCfg.HostdRemote = cfg.HostdRemote
 	}
 	uiCfg.LocalHostdLogins = cfg.localHostdLogins
+	uiCfg.AmbientNeedsHost = cfg.CLIRunsThroughHostd
 	branchGate := repoBranchGate{remote: githubTokens}
 	if lister, ok := stateRepo.(configRepoBranchLister); ok {
 		branchGate.local = lister
