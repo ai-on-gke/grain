@@ -364,3 +364,48 @@ func TestTheReleaseWatchReadsOnlyGitHubActionsRepos(t *testing.T) {
 		t.Errorf("read a grain CI repository's tags %d times", forge.reads)
 	}
 }
+
+// A repository that never set a CI Mode is an Actions repository -- what
+// its repo page shows and what the merge queue gates it on -- so a
+// person's Approve of its -pending tag dispatches promote-release.yml.
+// Reading EffectiveRepoConfig's raw, empty CIMode sent it down the grain
+// CI path, which refused it as "grain CI is not enabled"
+// (docs/test-runs/2026-11-04-release-approval.md, F1). One that set none
+// but declares grain CI workflows is still grain CI's.
+func TestAnActionsRepoThatNeverSetACIModeIsApprovedThroughActions(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStoreForOrchestrator(t)
+	repo := model.RepoRef{Owner: "example", Name: "unset"}
+	declaring := model.RepoRef{Owner: "example", Name: "declares"}
+	cfg := model.DefaultConfig()
+	cfg.TargetRepos = []string{repo.String(), declaring.String()}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRepoWorkflows(ctx, declaring, []model.RepoWorkflow{{Repo: declaring, Path: ".grain/workflows/tests.yml",
+		Text: "jobs:\n  t:\n    steps:\n      - run: true\n"}}); err != nil {
+		t.Fatal(err)
+	}
+	for r, want := range map[model.RepoRef]bool{repo: true, declaring: false} {
+		if got, err := store.ReleasesFromGitHubActions(ctx, r); err != nil || got != want {
+			t.Errorf("ReleasesFromGitHubActions(%s) = %v, %v; want %v", r, got, err, want)
+		}
+	}
+	commit := strings.Repeat("d", 40)
+	forge := &fixtureForge{repo: repo.String(), tags: map[string]fixtureTag{
+		"v1.0.1-pending": {commit: commit, message: "patch"},
+	}}
+	client := github.NewClient(forge, nil)
+	person := model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com"}
+	uic := ui.NewClient(ui.Config{Actor: person, DataDir: t.TempDir(), GitHubPullRequests: client}, store)
+	decision, err := uic.DecideRelease(ui.WithPrincipal(ctx, person), repo.String(), "v1.0.1", true, ui.ReleaseApproval{})
+	if err != nil {
+		t.Fatalf("a person's approval of a patch release on a repository with no CI Mode set: %v", err)
+	}
+	if decision.Dispatched == nil || decision.Dispatched.Commit != commit {
+		t.Errorf("decision = %+v, want a promote-release.yml dispatch for %s", decision, commit)
+	}
+	if d := forge.dispatched(); len(d) != 1 {
+		t.Fatalf("dispatched %d times, want once", len(d))
+	}
+}

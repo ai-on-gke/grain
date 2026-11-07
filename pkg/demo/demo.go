@@ -325,6 +325,11 @@ func Run(opts Options) error {
 	}
 	defer db.Close()
 	cfg.SourceDB, cfg.DBDriver = db, "sqlite"
+	// The release-approval signing key: a deployment keeps it in its
+	// data directory, which a demo has none of, so an Inbox Approve or a
+	// rollback over -github-sim answered 500
+	// (docs/test-runs/2026-11-04-release-approval.md, F3).
+	cfg.ReleaseApprovalDir = dir
 
 	// The one piece of this demo that is not a row in the store: the
 	// System pane's Logs tab, which reads ui.Config.Logs rather than
