@@ -887,6 +887,56 @@ Times of day are read against the deployment's own wall clock
 (`Config.TimeZone`); there is no per-schedule timezone here for the same
 reason there is none anywhere else (`model.Recurrence`).
 
+### `qualification:` on a suite -- a release gate
+
+A suite whose file carries a `qualification:` stanza is run by grain's
+release-qualification reconciler (`pkg/orchestrator/releasequalification.go`)
+as a release gate. The suite named `release-qualification` is one without
+the stanza, with every default below, which is how it always worked.
+
+```yaml
+# .grain/suites/edition-qualification.yml
+templates: [edition-smoke, edition-system]
+mode: until-clean
+max-passes: 1
+auto-merge: false
+qualification:
+  check: grain/edition-qualification              # default grain/release-qualification
+  candidate: synced-release                       # default rc-tags
+  stage1: { status: grain/edition-qualification } # or { workflow: nightly }, the default
+  upstream: github.com/ai-on-gke/grain            # synced-release only; this is the default
+```
+
+- `candidate: rc-tags` qualifies the newest `vX.Y.Z-rc.N` tag that is
+  neither discarded nor promoted. `candidate: synced-release` is for a
+  repository that cuts no rc tags because it builds on another module's
+  releases. It qualifies the newest commit on the default branch that
+  changed `go.mod` to pin a release (`vX.Y.Z`) of `upstream`, as long as
+  the repository has not tagged that release itself yet. The pin is either
+  the version itself or a pseudo-version of the commit the upstream tagged.
+  `upstream`'s repository, whose tags name its releases, is the module
+  path's second and third elements. A red verdict is retried by landing
+  another `go.mod` change that pins the same release.
+- `stage1` is what has to be green on the candidate before any item is
+  filed. It is either the newest run of a workflow (by its `name:`) or
+  the newest commit status of a context.
+- `check` is the check run the verdict is posted as, on the candidate's
+  commit.
+
+Every item gets `rc_tag` (the rc tag, or the release for a synced
+release), `rc_sha` (the candidate commit) and `release` (`vX.Y.Z`), and
+its closing note's `Qualified-Tag:` has to name `rc_tag`. The verdict
+works the same way in both modes: one flake re-run, infrastructure
+re-runs, and the suite's last item filed only after every other item has
+passed. The red-candidate notifications and `grain/rc-hold` are about rc
+tags, so a synced release doesn't raise them. Its failed check run is
+the signal.
+
+The stanza is kept beside the declaration's provenance
+(`repo_declaration_qualification`), as a template's `push:` is, so it
+is only ever what the default branch says. The settings export doesn't
+carry it, and it is accepted in a repository's files only.
+
 ### `.grain/workflows/<name>.yml` -- a workflow's own cron
 
 grain/task-344. A repository declares a fourth schedule without naming

@@ -109,6 +109,7 @@ var tablePrimaryKeys = map[string][]string{
 	"repo_workflow":                  {"owner", "name", "path"},
 	"repo_declaration":               {"id"},
 	"repo_declaration_push":          {"id", "pattern"},
+	"repo_declaration_qualification": {"id"},
 	"repo_declaration_sync":          {"owner", "name"},
 	"repo_path_trigger":              {"owner", "name", "trigger"},
 	"repo_merge_rules":               {"owner", "name"},

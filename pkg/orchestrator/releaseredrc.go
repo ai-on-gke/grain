@@ -104,7 +104,7 @@ func (q *rcQualification) raiseRCFailed(ctx context.Context, tags map[string]str
 		Subject:  subject,
 		Severity: model.NotificationWarning,
 		Title:    fmt.Sprintf("Release candidate %s of %s failed qualification", q.rcTag, q.repo),
-		Body:     rcFailedBody(q.repo, tags, rc, q.sha, lines, escalate),
+		Body:     rcFailedBody(q.repo, q.check, tags, rc, q.sha, lines, escalate),
 		Repo:     q.repo.String(),
 		RaisedBy: releaseQualificationNotifier,
 		Actions:  []string{"investigate"},
@@ -129,10 +129,10 @@ func (q *rcQualification) raiseRCFailed(ctx context.Context, tags map[string]str
 	}, q.now)
 }
 
-func rcFailedBody(repo model.RepoRef, tags map[string]string, rc model.RCTag, sha string, lines []string, escalate bool) string {
+func rcFailedBody(repo model.RepoRef, check string, tags map[string]string, rc model.RCTag, sha string, lines []string, escalate bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "`%s` (%s) of %s failed Stage 2 qualification (%s): attempt %d of RELEASE_MAX_RC_ATTEMPTS (%d).\n\n",
-		rc, shortSHA(sha), repo, model.ReleaseQualificationCheckName, rc.RC, model.ReleaseMaxRCAttempts)
+		rc, shortSHA(sha), repo, check, rc.RC, model.ReleaseMaxRCAttempts)
 	if name, floor, ok := model.ReleaseFloor(tags, rc); ok {
 		fmt.Fprintf(&b, "Commits to triage: `%s..%s` (everything since %s).\n", floor, sha, name)
 	} else {
@@ -205,7 +205,7 @@ func failedCandidates(ctx context.Context, store *model.Store, repo model.RepoRe
 // candidate.
 func (q *rcQualification) raiseInfraStalled(ctx context.Context, why string) error {
 	return ensurePipelineNotification(ctx, q.store, model.Notification{
-		Subject:  model.NotificationSubject(model.FamilyReleaseInfraStalled, q.rcTag),
+		Subject:  model.NotificationSubject(model.FamilyReleaseInfraStalled, q.notifyKey),
 		Severity: model.NotificationWarning,
 		Title:    fmt.Sprintf("Qualification of %s on %s is stalled on infrastructure", q.rcTag, q.repo),
 		Body: fmt.Sprintf("`%s` (%s) is still qualifying, and is not discarded: %s.\n\nAn infrastructure verdict "+
@@ -226,7 +226,7 @@ func (q *rcQualification) trackInfra(ctx context.Context, items []string, attemp
 	redRCMu.Lock()
 	var stalled []string
 	for _, item := range items {
-		key := redRCKey(q.store, q.repo.String()+"@"+q.rcTag, item)
+		key := redRCKey(q.store, q.tag, item)
 		if !infraBlocked(attempts[item]) {
 			delete(redRCInfraSince, key)
 			continue
@@ -244,7 +244,7 @@ func (q *rcQualification) trackInfra(ctx context.Context, items []string, attemp
 	redRCMu.Unlock()
 	if len(stalled) == 0 {
 		return clearPipelineNotification(ctx, q.store,
-			model.NotificationSubject(model.FamilyReleaseInfraStalled, q.rcTag), releaseQualificationNotifier)
+			model.NotificationSubject(model.FamilyReleaseInfraStalled, q.notifyKey), releaseQualificationNotifier)
 	}
 	return q.raiseInfraStalled(ctx, strings.Join(stalled, "; "))
 }
@@ -322,7 +322,10 @@ func syncRedRCHolds(ctx context.Context, store *model.Store, forge ReleaseQualif
 		case model.FamilyRCFailed:
 			errs = append(errs, syncRCHold(ctx, store, forge, repo, tags, key, now))
 		case model.FamilyReleaseInfraStalled:
-			if key != current {
+			// Only an rc tag's: a synced-release gate's are keyed
+			// <stem>@<release>, and cleared by that gate itself
+			// (clearStaleInfraStalled).
+			if _, isRC := model.ParseRCTag(key); isRC && key != current {
 				errs = append(errs, clearPipelineNotification(ctx, store, n.Subject, releaseQualificationNotifier))
 			}
 		case model.FamilyReleaseEscalated:

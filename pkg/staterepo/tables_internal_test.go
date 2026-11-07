@@ -389,6 +389,8 @@ var notSettings = []string{
 	// of row again: re-read from the repository's default branch by every
 	// sync, and never a setting anybody proposes.
 	"repo_declaration_push",
+	// A declared suite's `qualification:` stanza, for the same reason.
+	"repo_declaration_qualification",
 	// A repository's path triggers (grain/task-1712) are the same kind
 	// of row as repo_declaration -- re-read from the repository by the
 	// next poll -- and the cursor beside them is grain's note of how far
