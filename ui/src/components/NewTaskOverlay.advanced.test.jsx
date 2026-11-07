@@ -429,6 +429,49 @@ describe("NewTaskOverlay", () => {
     expect(JSON.parse(createCall()[1].body).keepRunning).toBe(true);
   });
 
+  it("seeds admission from deployment/repo defaults and sends it only when edited", async () => {
+    api.mockResolvedValue({ id: "42" });
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <NewTaskOverlay
+        config={{
+          defaultAdmission: "bypass",
+          repoDefaultAdmission: { "acme/widgets": "durable" },
+          targetRepos: ["acme/widgets"],
+        }}
+        defaultRepo="acme/widgets"
+        onClose={() => {}}
+        onCreated={() => Promise.resolve()}
+        showError={() => {}}
+      />,
+    );
+
+    expect(
+      screen.getByRole("combobox", { name: "Admission" }),
+    ).toHaveTextContent("Durable");
+    await user.type(screen.getByLabelText(/Title/), "Default admission task");
+    await user.click(screen.getByRole("button", { name: "Create task" }));
+    expect(JSON.parse(createCall()[1].body).admission).toBeUndefined();
+    unmount();
+
+    api.mockClear();
+    api.mockResolvedValue({ id: "43" });
+    render(
+      <NewTaskOverlay
+        config={{ defaultAdmission: "bypass" }}
+        onClose={() => {}}
+        onCreated={() => Promise.resolve()}
+        showError={() => {}}
+      />,
+    );
+    await user.type(screen.getByLabelText(/Title/), "Explicit standard task");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
+    await user.click(screen.getByRole("combobox", { name: "Admission" }));
+    await user.click(screen.getByRole("option", { name: "Standard" }));
+    await user.click(screen.getByRole("button", { name: "Create task" }));
+    expect(JSON.parse(createCall()[1].body).admission).toBe("standard");
+  });
+
   // Left alone it sends "", which follows the deployment rather than
   // pinning this task to whatever the deployment happens to say today --
   // the same reading the framework picker above has.

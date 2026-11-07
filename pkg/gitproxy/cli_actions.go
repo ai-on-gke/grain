@@ -278,6 +278,7 @@ type CLIProposeRequest struct {
 	FixesBaseBranch bool                `json:"fixes_base_branch,omitempty"`
 	NoPort          bool                `json:"no_port,omitempty"`
 	KeepRunning     bool                `json:"keep_running,omitempty"`
+	Admission       string              `json:"admission,omitempty"`
 	Origin          string              `json:"origin,omitempty"`
 	Reads           []string            `json:"reads,omitempty"`
 	Designs         []string            `json:"designs,omitempty"`

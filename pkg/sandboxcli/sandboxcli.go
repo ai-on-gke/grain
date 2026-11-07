@@ -226,7 +226,7 @@ var sandboxCommandFlags = map[string][]string{
 	"task transcript":       {"attempt", "tail", "offset", "limit", "lines", "n"},
 	"task wait":             {"until", "timeout", "json", "park", "resume-at"},
 	"task message":          {"body", "file"},
-	"task propose":          {"title", "body", "file", "id", "repo", "branch", "no-repo", "depends-on", "capability", "fixes-base-branch", "no-port", "keep-running", "origin", "read", "design", "custom-field", "not-before", "priority", "json", "supersedes", "auto-merge", "hold-for-approval"},
+	"task propose":          {"title", "body", "file", "id", "repo", "branch", "no-repo", "depends-on", "capability", "fixes-base-branch", "no-port", "keep-running", "admission", "origin", "read", "design", "custom-field", "not-before", "priority", "json", "supersedes", "auto-merge", "hold-for-approval"},
 	"api":                   {"scope", "json", "body", "file", "field", "reason"},
 	"memory list":           nil,
 	"memory read":           nil,

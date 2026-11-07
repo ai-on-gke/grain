@@ -851,6 +851,19 @@ var Migrations = []Migration{
 		Description: "rewrite stored github-credential:<name> grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/repo#credential={\"credential\":\"<name>\"} (the in-process github-credential:<name> providers are retired)",
 		Up:          migrateGitHubCredentialGrants,
 	},
+	{
+		Version: 121,
+		Description: "add admission to task, template and schedule and default_admission to grain_config and repo_config, " +
+			"moving stored priority-dispatch and durable grants into them (design/design/unified-grants.design.md §4.1)",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `admission` TEXT NOT NULL DEFAULT 'standard'",
+			"ALTER TABLE `template` ADD COLUMN `admission` TEXT NOT NULL DEFAULT 'standard'",
+			"ALTER TABLE `schedule` ADD COLUMN `admission` TEXT NOT NULL DEFAULT 'standard'",
+			"ALTER TABLE `grain_config` ADD COLUMN `default_admission` TEXT NOT NULL DEFAULT 'standard'",
+			"ALTER TABLE `repo_config` ADD COLUMN `default_admission` TEXT NOT NULL DEFAULT 'standard'",
+		},
+		Up: MigrateAdmissionGrants,
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

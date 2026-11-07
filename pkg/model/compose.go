@@ -189,6 +189,7 @@ type CompositionSources struct {
 	Approved             CompositionLayer
 	Interactive          CompositionLayer
 	KeepRunning          CompositionLayer
+	Admission            CompositionLayer
 }
 
 // Composition is one task a firing will file, resolved: every value it
@@ -253,6 +254,8 @@ type Composition struct {
 	// KeepRunning is whether the task immediately restarts when its run
 	// exits (Task.KeepRunning).
 	KeepRunning bool
+	// Admission is how the task's runs are let in (Task.Admission).
+	Admission Admission
 	// Priority is the resolved numeric priority for the task (DefaultTaskPriority = 5).
 	Priority int
 
@@ -306,6 +309,7 @@ func (c Composition) Task(id string, actor Principal, reason OriginReason, now t
 		TemplateID:           c.TemplateID,
 		Interactive:          c.Interactive,
 		KeepRunning:          c.KeepRunning,
+		Admission:            c.Admission,
 		CreatedAt:            &now,
 	}
 	if c.Model != "" {
@@ -425,6 +429,7 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 		Approved:             approved,
 		Interactive:          tmpl.Interactive,
 		KeepRunning:          tmpl.KeepRunning,
+		Admission:            tmpl.Admission,
 		Priority:             priority,
 		TemplateID:           tmpl.ID,
 		TemplateName:         tmpl.Name,
@@ -445,6 +450,7 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 			Approved:             approvedBy,
 			Interactive:          LayerTemplate,
 			KeepRunning:          LayerTemplate,
+			Admission:            LayerTemplate,
 		},
 	}
 }
@@ -472,6 +478,9 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 		// has no other way to make it.
 		if sched.Model != "" {
 			comp.Model, comp.Sources.Model = sched.Model, LayerSchedule
+		}
+		if sched.Admission > comp.Admission {
+			comp.Admission, comp.Sources.Admission = sched.Admission, LayerSchedule
 		}
 		// A template-backed schedule stores a copy of its template's
 		// grants (ui.scheduleContentFromTemplate), so only a capability
@@ -520,6 +529,7 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 		AutoApproveProposals: sched.AutoApproveProposals,
 		Approved:             true,
 		KeepRunning:          sched.KeepRunning,
+		Admission:            sched.Admission,
 		Priority:             DefaultTaskPriority,
 		Sources: CompositionSources{
 			Title:                LayerSchedule,
@@ -538,6 +548,7 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 			Approved:             LayerSchedule,
 			Interactive:          LayerSchedule,
 			KeepRunning:          LayerSchedule,
+			Admission:            LayerSchedule,
 		},
 	}
 }

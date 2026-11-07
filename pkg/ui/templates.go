@@ -104,6 +104,7 @@ type Template struct {
 	// switch existed keeps the revision it had.
 	Interactive  bool                        `json:"interactive,omitempty"`
 	KeepRunning  bool                        `json:"keepRunning,omitempty"`
+	Admission    string                      `json:"admission"`
 	Reads        []string                    `json:"reads,omitempty"`
 	Writes       []WriteTarget               `json:"writes,omitempty"`
 	CustomFields map[string]CustomFieldValue `json:"customFields,omitempty"`
@@ -191,6 +192,7 @@ func templateFrom(t model.Template) Template {
 		AutoMerge:     t.AutoMerge,
 		Interactive:   t.Interactive,
 		KeepRunning:   t.KeepRunning,
+		Admission:     t.Admission.String(),
 		NetworkAccess: string(t.NetworkAccess),
 		Model:         t.Model,
 		CustomFields:  customFieldValues(t.CustomFields),
@@ -336,9 +338,10 @@ type CreateTemplateRequest struct {
 	// (model.Template.Model), or "" to leave it to the team's default.
 	Model string `json:"model"`
 	// Interactive sets model.Template.Interactive.
-	Interactive      bool  `json:"interactive"`
-	KeepRunning      bool  `json:"keepRunning,omitempty"`
-	KeepRunningSnake *bool `json:"keep_running,omitempty"`
+	Interactive      bool   `json:"interactive"`
+	KeepRunning      bool   `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool  `json:"keep_running,omitempty"`
+	Admission        string `json:"admission,omitempty"`
 	// Hostd is read only to be refused (TaskHostdRefusal): a template's
 	// tasks have no hostd of their own.
 	Hostd        string                      `json:"hostd,omitempty"`
@@ -401,7 +404,11 @@ func (c *Client) CreateTemplate(ctx context.Context, req CreateTemplateRequest) 
 	if err := refuseTaskHostd("hostd", req.Hostd); err != nil {
 		return Template{}, err
 	}
-	grants, err := c.grantsFor(req.Capabilities, model.GrantByLabel)
+	admission, err := validateAdmission(req.Admission)
+	if err != nil {
+		return Template{}, err
+	}
+	grants, admission, _, err := c.grantsAndAdmissionFor("template", req.Name, req.Capabilities, model.GrantByLabel, admission)
 	if err != nil {
 		return Template{}, err
 	}
@@ -455,6 +462,7 @@ func (c *Client) CreateTemplate(ctx context.Context, req CreateTemplateRequest) 
 		AutoMerge:     req.AutoMerge,
 		Interactive:   req.Interactive,
 		KeepRunning:   req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
+		Admission:     admission,
 		NetworkAccess: model.NetworkAccess(req.NetworkAccess),
 		Model:         chosenModel,
 		Reads:         reads,
@@ -572,6 +580,9 @@ func (c *Client) fromTemplate(ctx context.Context, req CreateTaskRequest) (Creat
 	}
 	if !req.KeepRunning && req.KeepRunningSnake == nil {
 		req.KeepRunning = comp.KeepRunning
+	}
+	if strings.TrimSpace(req.Admission) == "" && comp.Admission > model.AdmissionStandard {
+		req.Admission = comp.Admission.String()
 	}
 	if req.Priority == nil && comp.Priority != 0 {
 		p := comp.Priority
@@ -732,9 +743,10 @@ type UpdateTemplateRequest struct {
 	// clears it, so the template's tasks go back to the team's default.
 	Model *string `json:"model,omitempty"`
 	// Interactive edits CreateTemplateRequest.Interactive's own field.
-	Interactive      *bool `json:"interactive,omitempty"`
-	KeepRunning      *bool `json:"keepRunning,omitempty"`
-	KeepRunningSnake *bool `json:"keep_running,omitempty"`
+	Interactive      *bool   `json:"interactive,omitempty"`
+	KeepRunning      *bool   `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool   `json:"keep_running,omitempty"`
+	Admission        *string `json:"admission,omitempty"`
 	// Hostd is read only to be refused (TaskHostdRefusal).
 	Hostd        *string                      `json:"hostd,omitempty"`
 	Capabilities *[]string                    `json:"capabilities,omitempty"`
@@ -795,10 +807,19 @@ func (c *Client) UpdateTemplate(ctx context.Context, id string, req UpdateTempla
 			return Template{}, err
 		}
 	}
+	var chosenAdmission *model.Admission
+	if req.Admission != nil {
+		a, err := validateAdmission(*req.Admission)
+		if err != nil {
+			return Template{}, err
+		}
+		chosenAdmission = &a
+	}
 	var grants []model.Grant
+	var foldedAdmission model.Admission
 	if req.Capabilities != nil {
 		var err error
-		grants, err = c.grantsFor(*req.Capabilities, model.GrantByLabel)
+		grants, foldedAdmission, _, err = c.grantsAndAdmissionFor("template", id, *req.Capabilities, model.GrantByLabel, model.AdmissionStandard)
 		if err != nil {
 			return Template{}, err
 		}
@@ -933,6 +954,11 @@ func (c *Client) UpdateTemplate(ctx context.Context, id string, req UpdateTempla
 			t.KeepRunning = *req.KeepRunning
 		} else if req.KeepRunningSnake != nil {
 			t.KeepRunning = *req.KeepRunningSnake
+		}
+		if chosenAdmission != nil {
+			t.Admission = *chosenAdmission
+		} else if foldedAdmission > model.AdmissionStandard {
+			t.Admission = max(t.Admission, foldedAdmission)
 		}
 		if req.NetworkAccess != nil {
 			t.NetworkAccess = model.NetworkAccess(*req.NetworkAccess)

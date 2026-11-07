@@ -309,6 +309,9 @@ func taskBlock(t ui.Task) string {
 		priority = 5
 	}
 	fmt.Fprintf(&b, "priority:   %d\n", priority)
+	if t.Admission != "" && t.Admission != model.AdmissionStandard.String() {
+		fmt.Fprintf(&b, "admission:  %s\n", t.Admission)
+	}
 	fmt.Fprintf(&b, "auto-merge: %t\n", t.AutoMerge)
 	if len(t.Capabilities) > 0 {
 		fmt.Fprintf(&b, "capabilities: %s\n", strings.Join(t.Capabilities, ", "))

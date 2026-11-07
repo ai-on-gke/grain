@@ -1316,6 +1316,51 @@ describe("DetailOverlay actions", () => {
     });
   });
 
+  it("updates admission on a task from the actions column and disables it for console sessions", async () => {
+    const act = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <DetailOverlay
+        task={{ ...baseTask, admission: "standard" }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+        showError={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Admission" }));
+    await user.click(screen.getByRole("option", { name: "Durable" }));
+
+    act.mock.calls[0][0]();
+    expect(api).toHaveBeenCalledWith("/api/tasks/12", {
+      method: "PATCH",
+      body: JSON.stringify({ admission: "durable" }),
+    });
+
+    rerender(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          admission: "durable",
+          consoleSession: "director",
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+        showError={() => {}}
+      />,
+    );
+    expect(screen.getByRole("combobox", { name: "Admission" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
   // Auto-merge is read after the run, not at checkout, so unlike the
   // repo and base above it is the one edit here that does count for the
   // run already in flight.

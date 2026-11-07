@@ -1586,6 +1586,79 @@ export function defaultCapabilitiesFor(config, repo) {
   );
 }
 
+// ADMISSION_OPTIONS is the ordered task admission setting
+// (model.Admission, design/design/unified-grants.design.md §4.1), replacing
+// the retired priority-dispatch and durable grants.
+export const ADMISSION_OPTIONS = [
+  {
+    value: "standard",
+    label: "Standard",
+    description: "Wait in the normal priority queue for a free worker slot.",
+  },
+  {
+    value: "bypass",
+    label: "Bypass queue",
+    description:
+      "Dispatch past concurrency caps, rate limits, pauses, and red-base holds.",
+  },
+  {
+    value: "durable",
+    label: "Durable",
+    description:
+      "Bypass the queue and keep the task's sandbox and conversation alive across rests.",
+  },
+];
+
+const ADMISSION_RANK = {
+  standard: 0,
+  bypass: 1,
+  durable: 2,
+};
+
+export function normalizeAdmission(value) {
+  const v = String(value || "")
+    .trim()
+    .toLowerCase();
+  return Object.prototype.hasOwnProperty.call(ADMISSION_RANK, v)
+    ? v
+    : "standard";
+}
+
+export function admissionLabel(value) {
+  const norm = normalizeAdmission(value);
+  return ADMISSION_OPTIONS.find((o) => o.value === norm)?.label || "Standard";
+}
+
+export function maxAdmission(...values) {
+  let best = "standard";
+  for (const raw of values) {
+    const v = normalizeAdmission(raw);
+    if (ADMISSION_RANK[v] > ADMISSION_RANK[best]) best = v;
+  }
+  return best;
+}
+
+// defaultAdmissionFor is the starting admission of a task filed against
+// repo: max(config.defaultAdmission, config.repoDefaultAdmission[repo]),
+// matching model.Store.EffectiveDefaultAdmission on the server.
+export function defaultAdmissionFor(config, repo) {
+  let repoAdm = "standard";
+  if (repo && config?.repoDefaultAdmission) {
+    if (config.repoDefaultAdmission[repo]) {
+      repoAdm = config.repoDefaultAdmission[repo];
+    } else {
+      const target = repoKey(repo);
+      for (const [k, v] of Object.entries(config.repoDefaultAdmission)) {
+        if (repoKey(k) === target) {
+          repoAdm = v;
+          break;
+        }
+      }
+    }
+  }
+  return maxAdmission(config?.defaultAdmission, repoAdm);
+}
+
 // repoTasks is every task a repo's own page is about: the ones filed
 // against it, plus the ones filed elsewhere that may land work in it
 // anyway (Task.Writes, grain/task-54).
@@ -1708,6 +1781,11 @@ export function repoRows(config, tasks) {
     config?.repoDefaultCapabilities || {},
   )) {
     if ((ids || []).length > 0) note(repo);
+  }
+  for (const [repo, adm] of Object.entries(
+    config?.repoDefaultAdmission || {},
+  )) {
+    if (normalizeAdmission(adm) !== "standard") note(repo);
   }
   // The other half of that same source: a repo whose only configuration
   // is standing instructions of its own

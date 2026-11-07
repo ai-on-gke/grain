@@ -43,12 +43,12 @@ func TestDurableImpliesPriorityDispatchAndIsAPersonsToGrant(t *testing.T) {
 	if err := model.TemplateWithinTask(parent, tmpl); err == nil {
 		t.Fatal("an agent holding durable may file from a template granting it")
 	}
-	durable := model.Task{Grants: []model.Grant{{Capability: model.DurableCapability}}}
+	durable := model.Task{Admission: model.AdmissionDurable}
 	if !durable.IsDurable() || !durable.HasPriorityDispatch() {
 		t.Fatalf("a durable task: IsDurable = %v, HasPriorityDispatch = %v, want both true",
 			durable.IsDurable(), durable.HasPriorityDispatch())
 	}
-	priority := model.Task{Grants: []model.Grant{{Capability: model.PriorityDispatchCapability}}}
+	priority := model.Task{Admission: model.AdmissionBypass}
 	if priority.IsDurable() {
 		t.Fatal("priority-dispatch alone reads as durable")
 	}
@@ -74,7 +74,7 @@ func durableTestTask(id string, durable bool) model.Task {
 		Approval: &model.Attribution{Actor: human},
 	}
 	if durable {
-		tk.Grants = []model.Grant{{Capability: model.DurableCapability, Via: model.GrantByLabel}}
+		tk.Admission = model.AdmissionDurable
 	}
 	return tk
 }

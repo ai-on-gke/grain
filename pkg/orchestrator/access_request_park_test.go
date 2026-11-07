@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
@@ -156,7 +155,7 @@ func TestPersistentSessionTurnLoopStopsOnAccessRequest(t *testing.T) {
 			MaxWorkers: 1,
 			Config: orchestrator.Config{
 				StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-				Capabilities: orchestrator.SessionTestRegistry(durable.New()),
+				Capabilities: orchestrator.SessionTestRegistry(),
 				// Long enough that waiting it out is unmistakable next to
 				// the elapsed bound below, which has to leave room for a
 				// -race build of the whole package running in parallel on
@@ -233,7 +232,7 @@ func TestPersistentSessionTurnLoopStopsOnAccessRequest(t *testing.T) {
 			MaxWorkers: 1,
 			Config: orchestrator.Config{
 				StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-				Capabilities: orchestrator.SessionTestRegistry(durable.New()),
+				Capabilities: orchestrator.SessionTestRegistry(),
 			},
 		}
 

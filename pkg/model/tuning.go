@@ -71,6 +71,7 @@ var RecognizedGrainConfigParameters = map[string]struct{}{
 	"auto_merge_by_default":          {},
 	"task_defaults_on_backfilled":    {},
 	"default_capabilities":           {},
+	"default_admission":              {},
 	"environment_name":               {},
 	"prompt_extension":               {},
 	"task_branch_template":           {},

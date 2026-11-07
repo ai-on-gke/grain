@@ -1021,7 +1021,10 @@ type FileConsoleSessionOptions struct {
 }
 
 // ConsoleSessionGrants returns the session's configured capabilities as
-// GrantByGrain grants, always including DurableCapability.
+// GrantByGrain grants. A session's durability is not a grant: every
+// session task is AdmissionDurable by construction (CreateConsoleSessionTask),
+// and the retired admission grant names are skipped if a stored list
+// still carries them.
 //
 // session.Capabilities is the single source of truth for what capabilities a
 // standing session holds: build-level DefaultOn capabilities seed
@@ -1035,9 +1038,8 @@ type FileConsoleSessionOptions struct {
 // holds GrantByDefault without its Capabilities naming them, unless it
 // declines them (ConsoleSession.DeclinedDefaults).
 func ConsoleSessionGrants(session ConsoleSession) []Grant {
-	grants := make([]Grant, 0, len(session.Capabilities)+1+len(consoleSessionDefaultGrants))
-	grants = append(grants, Grant{Capability: DurableCapability, Via: GrantByGrain})
-	seen := map[string]bool{DurableCapability: true}
+	grants := make([]Grant, 0, len(session.Capabilities)+len(consoleSessionDefaultGrants))
+	seen := map[string]bool{PriorityDispatchCapability: true, DurableCapability: true}
 	for _, name := range session.Capabilities {
 		name = strings.TrimSpace(name)
 		if name == "" || seen[name] {
@@ -1218,6 +1220,7 @@ func FileConsoleSessionTask(ctx context.Context, store *Store, session ConsoleSe
 		},
 		Binding:       BindingDirective,
 		Grants:        ConsoleSessionGrants(session),
+		Admission:     AdmissionDurable,
 		Tags:          []string{ConsoleSessionTag(session.ID)},
 		Interactive:   true,
 		KeepRunning:   session.KeepRunning,

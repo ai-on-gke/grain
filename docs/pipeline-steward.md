@@ -43,13 +43,13 @@ This describes what is implemented, not a proposal:
   `pipeline.*` (`model.PipelineStewardSubscriptions`), so a red base, a
   stalled merge or task, a failing batch or repair, or a stale port wakes
   it the moment it is raised (`Store.WakeNotificationSubscribers`).
-- **Durable, with a goal.** It holds the `durable` grant (no deadline or
-  wait cap, never held behind `max_workers`) and the goal
-  `pipeline-healthy` with `on_met: rest` and `on_limit: notify`. A wake
-  that ends rests the task on its goal instead of completing it. The
-  goal and the subscriptions are applied to the standing task at every
-  firing (`Store.applyStandingDeclarations`), so a task filed before
-  DT-S9 gets them without losing its handover.
+- **Durable, with a goal.** It carries `Admission: AdmissionDurable`
+  (`admission: durable`: no deadline or wait cap, never held behind
+  `max_workers`) and the goal `pipeline-healthy` with `on_met: rest` and
+  `on_limit: notify`. A wake that ends rests the task on its goal instead
+  of completing it. The admission, goal and subscriptions are applied to
+  the standing task at every firing (`Store.applyStandingDeclarations`),
+  so a task filed before DT-S9 gets them without losing its handover.
 - **On the judgement model.** The template names `Model: "judgement"`.
   Dispatch resolves it to `Config.JudgementModel` (`grain_config.judgement_model`)
   when the deployment set one, and otherwise to the strongest model its
@@ -143,15 +143,16 @@ itself.
 | `api:dispatch-control` | Pause and resume dispatch, run a task now |
 | `api:ci-read` | Read CI runs, logs, merge batches and base-branch gates |
 | `self-debug` | `list_grain_tasks`, `read_grain_task` and the other task readers |
-| `priority-dispatch` | Dispatched the way a console session is, so a congested pipeline can't starve it (below) |
-| `durable` | No deadline or wait cap; rests on its goal between wakes |
 
 `query_merge_queue` needs no grant, because every run has it.
 
-Apart from `priority-dispatch` and `durable`, it gets nothing that only a
-person may grant: no `merge:force` (it escalates a force-merge instead of
-performing one), no `capabilities:admin`, `settings:write` or
-`secrets:write`, and no `deployment:*`.
+The template also sets `Admission: AdmissionDurable` (`admission: durable`,
+formerly the `priority-dispatch` and `durable` grants; below), so a
+congested pipeline cannot starve it and it rests on its goal between wakes
+with no deadline or wait cap. Apart from `admission: durable`, it gets
+nothing that only a person may grant: no `merge:force` (it escalates a
+force-merge instead of performing one), no `capabilities:admin`,
+`settings:write` or `secrets:write`, and no `deployment:*`.
 `TestThePipelineStewardHoldsTheDocumentedPresetsAndNothingDangerous`
 enforces this list.
 
@@ -191,16 +192,17 @@ setup. It then sat queued for more than 13 hours behind a full worker
 pool, directors and merge-queue tasks. While it was queued every firing
 was held, so nothing managed the pipeline all day.
 
-`priority-dispatch` (`docs/capabilities.md`) gives it the admission
+`admission: durable` (implying `admission: bypass`, formerly
+`priority-dispatch`; `docs/capabilities.md`) gives it the admission
 console sessions get. It starts with every worker busy, ahead of
 merge-queue repairs and ordinary work. It passes any pause but an
 upgrade's own hold, and it is never parked behind a red branch's
 repair. A connection's concurrency limit doesn't hold it, and a setup
-failure is retried within two minutes. It still needs room in the
-sandbox budget. Only a person may grant `priority-dispatch` to any
-other task. The steward's template carries it by construction, and a
-standing task filed before the template did is given it at its next
-wake.
+failure is suspended and retried within two minutes. It still needs room
+in the sandbox budget. Only a person may raise `admission` above
+`standard` on any other task. The steward's template sets it by
+construction, and a standing task filed before the template did is given
+it at its next wake.
 
 ### Releases are not its job, but a red candidate is
 

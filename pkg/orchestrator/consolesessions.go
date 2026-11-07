@@ -831,6 +831,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 	}
 	if task.Title == title && task.Body == body && task.NetworkAccess == network &&
 		task.Model == chosenModel && task.KeepRunning == keepRunning &&
+		task.Admission == model.AdmissionDurable &&
 		slices.Equal(task.Grants, grants) &&
 		slices.Equal(taskReads, reads) &&
 		slices.Equal(taskWrites, writes) &&
@@ -862,6 +863,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		t.Title = title
 		t.Body = body
 		t.Grants = grants
+		t.Admission = model.AdmissionDurable
 		t.NetworkAccess = network
 		t.KeepRunning = keepRunning
 		t.Reads = reads
@@ -978,9 +980,13 @@ func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSessi
 		}
 	}
 
-	out := make([]model.Grant, 0, len(current)+len(session.Capabilities)+1)
-	out = append(out, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
-	seen := map[string]bool{model.DurableCapability: true}
+	out := make([]model.Grant, 0, len(current)+len(session.Capabilities))
+	// A session is durable by construction (Task.Admission = AdmissionDurable,
+	// guardAdmission); neither retired admission grant belongs in Grants.
+	seen := map[string]bool{
+		model.PriorityDispatchCapability: true,
+		model.DurableCapability:          true,
+	}
 
 	for _, g := range current {
 		if g.Capability == "" || seen[g.Capability] {

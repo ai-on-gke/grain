@@ -10,7 +10,7 @@ Capabilities are how Grain equips an isolated sandbox VM or CI container with ex
 - **Working-tree and sandbox setup** (`setup_root`, `setup`) — a command Grain runs in the sandbox before the agent starts: `setup_root`, from the one grant per attempt that initializes an otherwise empty root working directory when the run has no task `Target` checkout of its own (a `#git-repo` with `root: true` cloning a standalone primary repository into it; for tasks with a `Target`, Grain clones `Target` into `work/` itself), and `setup`, from any number of grants, for everything after it (a `root: false` `#git-repo` cloning an additional repository beside the root, a credential capability signing its CLI in) (spec §5.5, §6.3);
 - **Agent instructions** (`prompt_section`) — a note telling the agent what was provisioned and how to use it.
 
-**Normative specification:** [design/spec/capabilities/capabilities.spec.md](../design/spec/capabilities/capabilities.spec.md) — it wins wherever this page is briefer. **Status:** implemented. Grain's side of the protocol — references, grants and argument validation, the `mcpServers` entry, the stdio and HTTP client, mint-response validation and the admission pass — and a Go helper for writing a capability server (`protocol.NewMethod`, `protocol.NewCapabilityServer`) are in [`pkg/capability/protocol`](../pkg/capability/protocol). The in-tree servers built on it are served by `grain capability <name>` and registered on every deployment as built-ins ([below](#in-tree-capability-servers-grain-capability-name)), and grain answers its in-process servers (`…/grain`, `…/repo`, `…/release`, `…/model-proxy`) itself. A pass is materialized: admission mints every reference grant before the sandbox is built (`pkg/orchestrator/capability_pass.go`, and `pkg/daemon/ci_capability_pass.go` for CI), and the pass is applied to task runs and grain CI jobs in §5's order (`capability_materialize.go`): ports are forwarded, placements written, `setup_root` and `setup` run, then each `mcp_endpoint` proxied and each `prompt_section` rendered (`capability_endpoints.go`). `recreate_sandbox` re-applies it without minting, and every stateful grant is released when the attempt ends. What is not wired: a grant returning `ports` is refused on a deployment that serves no capability port relay; a sandbox backend that cannot run commands cannot take a pass at all; and grants from servers other than in-process ones are refused on the unisolated `host` backend and on an unfenced `container` backend. Most of the older in-process registry (`model.CapabilityProvider`, granted by a bare name) has been retired onto server methods, each bare name kept as a one-release alias (`model.CanonicalLegacyGrant`): `gcp-key` and `gcp-key:<name>` onto `https://grain.dev/capabilities/gcp#gcp-key` (schema migration 97), `claude-proxy`, `openai-proxy` and `gemini-proxy` onto the in-process `https://grain.dev/capabilities/model-proxy#model-proxy` `{vendor}` (migration 100, [Model proxy](#model-proxy-in-process)), the CI-only `image-signing`, `registry-push` and `package-publish` onto the in-process `https://grain.dev/capabilities/release` server's methods of those names (migration 101), whose CI-only and event rules the server declares in code and grain enforces ahead of the capability policy ([ci-capabilities.md](ci-capabilities.md)), `gemini-key` onto `https://grain.dev/capabilities/gcp#gemini-key` (migration 103), `bootstrap-playbooks` onto `https://grain.dev/capabilities/config-map#config-map` `{"config_maps":["bootstrap"]}` (migration 118), `github-credential:<name>` onto `https://grain.dev/capabilities/repo#credential` `{credential}` (migration 120), `local-scripts:<name>` onto [host-script](#host-scripts-grain-capability-host-script), and `grain-log`, `deployment-health`, `db-read`/`db-write`, `self-repair`, `self-debug` and `grain-ci` onto `…/grain` methods. What `daemon.CapabilityProviders` still registers is `read-issues`, `github-sandbox`, the CI alias `release-gate-read`, and `console`, `priority-dispatch` and `durable`. The UI lists them under **Legacy capabilities** until [unified-grants.design.md §4](../design/design/unified-grants.design.md#4-retiring-the-in-process-capabilities) converts them.
+**Normative specification:** [design/spec/capabilities/capabilities.spec.md](../design/spec/capabilities/capabilities.spec.md) — it wins wherever this page is briefer. **Status:** implemented. Grain's side of the protocol — references, grants and argument validation, the `mcpServers` entry, the stdio and HTTP client, mint-response validation and the admission pass — and a Go helper for writing a capability server (`protocol.NewMethod`, `protocol.NewCapabilityServer`) are in [`pkg/capability/protocol`](../pkg/capability/protocol). The in-tree servers built on it are served by `grain capability <name>` and registered on every deployment as built-ins ([below](#in-tree-capability-servers-grain-capability-name)), and grain answers its in-process servers (`…/grain`, `…/repo`, `…/release`, `…/model-proxy`) itself. A pass is materialized: admission mints every reference grant before the sandbox is built (`pkg/orchestrator/capability_pass.go`, and `pkg/daemon/ci_capability_pass.go` for CI), and the pass is applied to task runs and grain CI jobs in §5's order (`capability_materialize.go`): ports are forwarded, placements written, `setup_root` and `setup` run, then each `mcp_endpoint` proxied and each `prompt_section` rendered (`capability_endpoints.go`). `recreate_sandbox` re-applies it without minting, and every stateful grant is released when the attempt ends. What is not wired: a grant returning `ports` is refused on a deployment that serves no capability port relay; a sandbox backend that cannot run commands cannot take a pass at all; and grants from servers other than in-process ones are refused on the unisolated `host` backend and on an unfenced `container` backend. Most of the older in-process registry (`model.CapabilityProvider`, granted by a bare name) has been retired onto server methods, each bare name kept as a one-release alias (`model.CanonicalLegacyGrant`): `gcp-key` and `gcp-key:<name>` onto `https://grain.dev/capabilities/gcp#gcp-key` (schema migration 97), `claude-proxy`, `openai-proxy` and `gemini-proxy` onto the in-process `https://grain.dev/capabilities/model-proxy#model-proxy` `{vendor}` (migration 100, [Model proxy](#model-proxy-in-process)), the CI-only `image-signing`, `registry-push` and `package-publish` onto the in-process `https://grain.dev/capabilities/release` server's methods of those names (migration 101), whose CI-only and event rules the server declares in code and grain enforces ahead of the capability policy ([ci-capabilities.md](ci-capabilities.md)), `gemini-key` onto `https://grain.dev/capabilities/gcp#gemini-key` (migration 103), `bootstrap-playbooks` onto `https://grain.dev/capabilities/config-map#config-map` `{"config_maps":["bootstrap"]}` (migration 118), `github-credential:<name>` onto `https://grain.dev/capabilities/repo#credential` `{credential}` (migration 121), `local-scripts:<name>` onto [host-script](#host-scripts-grain-capability-host-script), and `grain-log`, `deployment-health`, `db-read`/`db-write`, `self-repair`, `self-debug` and `grain-ci` onto `…/grain` methods. What `daemon.CapabilityProviders` still registers is `read-issues`, `github-sandbox`, the CI alias `release-gate-read`, and `console` (`priority-dispatch` and `durable` moved out of grants into the `admission` task setting in schema migration 121; [below](#task-admission-admission-standard--bypass--durable)). The UI lists them under **Legacy capabilities** until [unified-grants.design.md §4](../design/design/unified-grants.design.md#4-retiring-the-in-process-capabilities) converts them.
 
 ## What you build
 
@@ -384,7 +384,7 @@ Under the sandbox-first agent surface ([design/design/sandbox-first-agent-surfac
 
 ## Granting from the UI
 
-Every place the UI edits grants -- the **New task** overlay, the task pane, and the template and schedule editors -- has one **Grants** section for grain API scopes and presets and capability server methods with their `with:` arguments ([unified-grants.design.md](../design/design/unified-grants.design.md)). The legacy in-process capabilities that remain (`github-sandbox`, `read-issues`, `priority-dispatch`, ...) stay a separate checklist, **Legacy capabilities**, until each is converted ([unified-grants.design.md §4](../design/design/unified-grants.design.md#4-retiring-the-in-process-capabilities)).
+Every place the UI edits grants -- the **New task** overlay, the task pane, and the template and schedule editors -- has one **Grants** section for grain API scopes and presets and capability server methods with their `with:` arguments ([unified-grants.design.md](../design/design/unified-grants.design.md)). The legacy in-process capabilities that remain (`read-issues`, `github-sandbox`, `console`, ...) stay a separate checklist, **Legacy capabilities**, until each is converted ([unified-grants.design.md §4](../design/design/unified-grants.design.md#4-retiring-the-in-process-capabilities)).
 
 - **Add grant…** is one search over everything that can be granted, grouped by kind: Grain API presets, Grain API scopes by area (a scope can be limited to one repository with **Grain API grants apply to**), then capability server methods. It re-reads the attached servers' methods every time it opens. Server methods are listed as every method the attached servers advertise. A method without arguments is granted straight away. So is a method with arguments whose defaults already pass its schema (`mint_<method>`'s `inputSchema.properties.args`); one with a required argument still to fill in is added as a draft section, with its form inline, and is granted as soon as what is typed into it passes the schema's check. There is no separate dialog and no **Grant** button.
 - Every grant is a section in one list. A grant with nothing to set is a single line: an API grant reads `api:ci:write` (or `api:ci:write on acme/widgets`) with its summary, badged `dangerous` or `no longer offered`; a method without arguments reads its server and method, for example `github.com › gcp-key`, badged when its server is gone. Its tooltip has the whole grant. **×** removes it.
@@ -432,14 +432,15 @@ The API behind this:
 
 `grain demo` attaches a real capability server for trying this out: `https://capabilities.demo.grain.example/cloud`, with a `cloud-key` method that has required, enum, pattern, bounded, boolean, array and nested arguments, and a `cloud-viewer` method with no arguments.
 
-## Priority dispatch (`priority-dispatch`)
+## Task admission (`admission: standard | bypass | durable`)
 
-> **Legacy, and moving out of grants.** `priority-dispatch`, `durable` (below) and `console` are still in-process grants on `main` (`pkg/capability/prioritydispatch`, `durable`, `console`), and this section describes how they behave today. They reach nothing and only change how a task is scheduled or hosted, so they are decided to become the task settings `admission: standard | bypass | durable` and `hosting: unattended | console` ([unified-grants.design.md §4.1](../design/design/unified-grants.design.md#41-admission-and-hosting-are-task-settings-not-grants)). That conversion has not started.
+> **Moved out of grants (schema migration 121).** `priority-dispatch` and `durable` were retired from grants into the ordered `admission` task setting ([unified-grants.design.md §4.1](../design/design/unified-grants.design.md#41-admission-and-hosting-are-task-settings-not-grants)). For one release the bare names `priority-dispatch` and `durable` are still accepted on input (`POST /api/tasks`, `-grant`, `.grain/` declarations, `grain/config` import) and folded onto `admission` with a deprecation warning, never stored as grants. (`console` remains an in-process grant until `hosting: unattended | console` lands.)
 
-A task granted `priority-dispatch` is dispatched the way a console
-session is. It is meant for work whose job is to manage a congested
-pipeline, such as the pipeline steward (`docs/pipeline-steward.md`),
-which would otherwise be starved by that congestion. Such a task:
+`admission` (`model.Admission`, **Admission: Standard / Bypass queue / Durable** in the UI) controls how a task's runs are admitted to dispatch across tasks, templates, schedules, and deployment/repository defaults (`grain_config.default_admission`, `repo_config.default_admission`). It places nothing in the sandbox and serves no tool.
+
+### Bypass queue (`admission: bypass`, formerly `priority-dispatch`)
+
+A task with `admission: bypass` (`t.Admission >= AdmissionBypass`, `model.Task.HasPriorityDispatch`) is admitted outside the normal worker queue. It is meant for work whose job is to manage a congested pipeline, which would otherwise be starved by that congestion. Such a task:
 
 - starts whenever it is ready, even with every worker busy: it isn't
   counted against or held by `max_workers` or the merger count. Its
@@ -456,36 +457,35 @@ which would otherwise be starved by that congestion. Such a task:
   slot of it;
 - after a run that never got past setup (`setup-failed`: the sandbox
   couldn't be prepared), is retried within two minutes rather than
-  backing off up to half an hour. The failure still counts toward the
-  task's consecutive-failure limit.
+  backing off up to half an hour. On `bypass`, the failure still counts
+  toward the task's consecutive-failure limit.
 
-It places nothing in the sandbox and serves no tool. Its whole effect is
-on dispatch, through one predicate, `model.Task.HasPriorityDispatch`,
-which is true for console sessions and for every holder of this grant.
-The store's queries use the same predicate in SQL. It is separate from a
-task's numeric `priority` (`model.Task.Priority`, default `5`), which
-orders ready tasks and merge-queue entries within each admission group
-without bypassing `max_workers`, pauses, or concurrency limits
-(`design/spec/task-priorities/task-priorities.spec.md`), and from
-Kubernetes `PriorityClass` settings (`k8sPriorityClass*`).
+It is separate from a task's numeric `priority` (`model.Task.Priority`,
+default `5`), which orders ready tasks and merge-queue entries within
+each admission group without bypassing `max_workers`, pauses, or
+concurrency limits (`design/spec/task-priorities/task-priorities.spec.md`),
+and from Kubernetes `PriorityClass` settings (`k8sPriorityClass*`).
 
-**Only a person may grant it,** because it lets a task jump the queue.
-Grant it from a task's, template's or schedule's capability checklist,
-or through `POST /api/tasks/{id}/capabilities`, as a person. An agent
-can't grant it to anything, even when its own task holds it: a request
-body naming it is refused, a `propose_task` naming it is filed for a
-person to approve, and a template carrying it can't be named by an
-agent. grain's own pipeline steward template is the one exception,
-because it carries the grant by construction.
+**Only a person may raise `admission` above `standard`,** because it lets
+a task jump the queue (`model.PersonOnlyProposalSettings`). Set it from
+the **Admission** select on a task, template, schedule, repository, or
+**Settings → Tasks**, or through `-admission` / `PATCH /api/tasks/{id}`,
+as a person. An agent can't raise it above the target's default: a
+mutation raising it is refused, a `propose_task` asking for `bypass` or
+`durable` waits for a person to approve, and a template carrying
+`admission > standard` requires an unlimited operator role. grain's own
+pipeline steward template and console sessions are exempt by construction
+(`durable`). Every change to a task's `admission` is recorded on its
+timeline (`admission_changed`) with the old value, new value, and actor.
 
-## Durable (`durable`)
+### Durable (`admission: durable`, formerly `durable`)
 
-> Legacy grant, moving to `admission: durable` (see the note under Priority dispatch).
-
-A task granted `durable` keeps going until its work is done rather than
-until a clock runs out (`design/design/durable-tasks.design.md#DT-1`). It implies
-`priority-dispatch`, so everything above applies to it too. Only a person
-may grant it, for the same reason. In addition:
+A task with `admission: durable` (`t.Admission == AdmissionDurable`,
+`model.Task.IsDurable`) keeps going until its work is done rather than
+until a clock runs out (`design/design/durable-tasks.design.md#DT-1`).
+Because `Admission` is ordered, `durable` implies `bypass`, so everything
+above applies to it too. Only a person may set it, for the same reason.
+In addition:
 
 - its runs have **no wall-clock deadline** and no wait-credit cap. The
   prompt says so instead of stating a budget. Its capability leases are
@@ -497,8 +497,7 @@ may grant it, for the same reason. In addition:
   `idle` and resumed on the next cycle;
 - it is held to its own ceiling, `orchestrator.Config.MaxDurableRuns`
   (default 4), rather than `max_workers`. A durable task the full ceiling
-  holds back records why on its row and logs `durable.ceiling:<team>`.
-  That log becomes an operator notification once DT-S6 exists;
+  holds back records why on its row and logs `durable.ceiling:<team>`;
 - a **setup failure is a suspension** of kind `setup`, not a strike. It
   is retried after two minutes, and the fifth in a row logs
   `durable.setup-failing:<task>`.

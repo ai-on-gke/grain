@@ -807,6 +807,13 @@ export const SETTINGS_INDEX = [
     keywords: ["capabilities"],
   },
   {
+    id: "defaultAdmission",
+    section: "tasks",
+    anchor: "task-defaults",
+    label: "Default admission",
+    keywords: ["admission", "bypass", "durable", "priority-dispatch"],
+  },
+  {
     id: "newestFirst",
     section: "tasks",
     anchor: "backlog",

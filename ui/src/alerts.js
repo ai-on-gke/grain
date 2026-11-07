@@ -267,7 +267,7 @@ export function pipelinePauseTitle(pause) {
 // heldForRunNow is whether task t is waiting only because of the pause:
 // the deployment is paused under a pause Run now passes, and t is queued
 // -- one the queue would otherwise pick up -- and not already asked for,
-// individually paused, exempt by priority-dispatch / standing session,
+// individually paused, exempt by bypass/durable admission or standing session,
 // or the task the pause itself is waiting on. A blocked task is not
 // waiting only for the pause -- lifting it would not start the task
 // either -- so it says "blocked", not this.
@@ -278,6 +278,8 @@ export function heldForRunNow(pause, t) {
     t.paused ||
     t.blocked ||
     t.consoleSession ||
+    t.admission === "bypass" ||
+    t.admission === "durable" ||
     (t.capabilities || []).includes("priority-dispatch") ||
     pause.untilTask === t.id
   ) {

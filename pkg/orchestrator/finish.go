@@ -1754,6 +1754,13 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		}
 		noPort, _ := p["no_port"].(bool)
 		keepRunning, keepRunningSet := p["keep_running"].(bool)
+		var admission model.Admission
+		var admissionSet bool
+		if v, ok := p["admission"].(string); ok && strings.TrimSpace(v) != "" {
+			if parsed, err := model.ParseAdmission(v); err == nil {
+				admission, admissionSet = parsed, true
+			}
+		}
 		fixesBase, _ := p["fixes_base_branch"].(bool)
 		priority := model.DefaultTaskPriority
 		var hasExplicitPriority bool
@@ -1807,6 +1814,9 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 				if !keepRunningSet {
 					keepRunning = comp.KeepRunning
 				}
+				if !admissionSet && comp.Admission > model.AdmissionStandard {
+					admission, admissionSet = comp.Admission, true
+				}
 			}
 		}
 
@@ -1855,8 +1865,14 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// dropped here, as a non-string entry always was, since the
 		// live propose_task call already refused it.
 		capabilities, _ := model.CapabilityEntries(p["capabilities"])
+		var foldedAdmissionGrant bool
 		for _, cap := range capabilities {
 			cap = strings.TrimSpace(cap)
+			if a := model.AdmissionOfGrantName(cap); a > model.AdmissionStandard {
+				admission = max(admission, a)
+				admissionSet, foldedAdmissionGrant = true, true
+				continue
+			}
 			// A review grant is grain's to give, on a review it files
 			// itself (SyncCLReviews); the live call refused it too.
 			if model.GrantNamesReviewOf(cap) {
@@ -1885,6 +1901,9 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 					Via:        model.GrantByLabel,
 				})
 			}
+		}
+		if foldedAdmissionGrant {
+			model.WarnAdmissionGrants("proposed task", id, admission)
 		}
 		customFields, droppedFields, err := proposedCustomFields(ctx, store, p)
 		if err != nil {
@@ -1999,6 +2018,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			Model:               agentModel,
 			NothingNeededAction: nothingNeeded,
 			KeepRunning:         keepRunning,
+			Admission:           admission,
 			NoPort:              noPort,
 			WorkOrigin:          explicitOrigin,
 			// What the run asked this proposal to say about this
@@ -2090,10 +2110,11 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 				needsPersonWhy += "; " + why
 			}
 		}
-		// keep_running, or a priority above this task's own: settings only
-		// a person may give a task (model.PersonOnlyProposalSettings), so
-		// filed as asked, for a person, saying which -- ui.CreateTask's
-		// rule for the identical call filed live.
+		// keep_running, admission above standard, or a priority above this
+		// task's own: settings only a person may give a task
+		// (model.PersonOnlyProposalSettings), so filed as asked, for a
+		// person, saying which -- ui.CreateTask's rule for the identical
+		// call filed live.
 		if why := model.PersonOnlyProposalSettings(proposal, task); why != "" {
 			proposal.Body += fmt.Sprintf("\n\n_Filed for a person to approve: %s._", why)
 			if needsPersonWhy == "" {
@@ -2101,6 +2122,13 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			} else {
 				needsPersonWhy += "; " + why
 			}
+		}
+		if !admissionSet {
+			defaultAdm, err := store.EffectiveDefaultAdmission(ctx, proposal.Target)
+			if err != nil {
+				return fmt.Errorf("orchestrator: resolving default admission for proposed task %q: %w", title, err)
+			}
+			proposal.Admission = max(proposal.Admission, defaultAdm)
 		}
 		// The capability catalogue, as ui.CreateTask applies it to the
 		// identical call filed live: a default it refuses this proposal is

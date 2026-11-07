@@ -48,7 +48,7 @@ work is done, and any task can be granted this, not only the steward.
 | Handover | `write_handover`, `conversationHandoverBudget` | A standing summary carried into every later prompt. |
 | Parking | `wait_for_task` (`park`, `resume_at`), `model.ParkedOutcome`, `pkg/model/wait_target.go` | An agent-chosen exit that re-queues the task when another task closes or a time passes. |
 | Adoption | `RecoverRunHosts`, `ResumeAdoptedRun` (`pkg/orchestrator/adopt.go`), `SandboxReadopter` | A restarted daemon carries on a run whose CLI outlived the old process. |
-| Priority dispatch | task 834 (`priority-dispatch` grant, `Task.HasPriorityDispatch`) | Outside `max_workers`, passes the pipeline pause, never linked behind a red base's repair. |
+| Priority dispatch | task 834 (`admission: bypass`, `Task.HasPriorityDispatch`; originally the `priority-dispatch` grant, moved to `task.admission` in task 3309 / migration 121) | Outside `max_workers`, passes the pipeline pause, never linked behind a red base's repair. |
 | Run-now survives | task 837; `task_run.run_now_at` and `Store.RestoreRunNow` (task-pause work) | A run-now request spent by a run that did no work is given back. |
 | Liveness | `design/design/task-liveness.design.md`, `livenessreasons.go` | Every wait has a named resource, a driver, and an escalation. |
 | Alerts | `ui/src/alerts.js`, `AlertsButton.jsx` | One list of standing deployment warnings, by severity. |
@@ -58,9 +58,11 @@ the gaps between them, and making the rule hold for every way a run stops.
 
 ## Decisions at a glance
 
-1. **One grant, `durable`**, person-only. It implies `priority-dispatch`.
-   Sessions, the steward and repairs that should not give up all get it
-   the same way.
+1. **One ordered task setting, `admission: durable`**, person-only (originally
+   shipped as the `durable` grant and moved into `task.admission` in task 3309 /
+   migration 121; [`unified-grants.design.md` §4.1](unified-grants.design.md#41-admission-and-hosting-are-task-settings-not-grants)).
+   It implies `admission: bypass` (formerly `priority-dispatch`). Sessions, the
+   steward and repairs that should not give up all get it the same way.
 2. **A durable run has no deadline and no wait-credit cap.** An idle
    watchdog replaces the deadline. It counts against a separate
    `max_durable_runs` ceiling, not `max_workers`.
@@ -81,21 +83,29 @@ the gaps between them, and making the rule hold for every way a run stops.
    notifications** rather than polling every 30 minutes. Its mechanical
    duties move into daemon reconcilers. It is pinned to a strong model.
 8. **A console session is a durable task whose goal is "a person closes
-   it".** The session-only exemptions collapse into that grant.
+   it".** The session-only exemptions collapse into `admission: durable`.
 
 ## Long-lived runs {#DT-1}
 
-### The grant
+### The admission setting
 
-`durable` is a capability in the same family as task 834's
-`priority-dispatch`. `model.IsPersonOnlyGrant` covers it: an agent cannot
-grant it, a `propose_task` naming it is filed unapproved, and a template
-carrying it cannot be named by an agent. A template may carry it by
-construction, as the steward and console-session templates do.
+`admission: durable` (`model.AdmissionDurable`) is the top level of the
+ordered `admission: standard | bypass | durable` task setting
+([`unified-grants.design.md` §4.1](unified-grants.design.md#41-admission-and-hosting-are-task-settings-not-grants),
+schema migration 121; originally introduced as the `durable` and
+`priority-dispatch` grants). Only a person may raise `admission` above
+`standard` (`model.PersonOnlyProposalSettings`, `agent_api_gate.go`): an
+agent cannot raise it on an existing task, a `propose_task` asking for
+`bypass` or `durable` is filed unapproved, and a template carrying
+`admission > standard` cannot be queued by an agent without a person. A
+template or session may carry it by construction, as `pipelineStewardTemplate`
+and console sessions do.
 
-`Task.IsDurable()` is true for a holder of the grant. Durable implies
-priority dispatch, so `HasPriorityDispatch()` is true too. The
-`priorityDispatchTaskSQL` twin gains the same clause.
+`Task.IsDurable()` reads `t.Admission == AdmissionDurable`. Because
+`Admission` is ordered (`AdmissionStandard < AdmissionBypass < AdmissionDurable`),
+durable implies bypass, so `Task.HasPriorityDispatch()` (`t.Admission >=
+AdmissionBypass`) and `priorityDispatchTaskSQL` (`t.admission IN ('bypass',
+'durable')`) hold automatically.
 
 ### What a durable run is exempt from
 
@@ -713,18 +723,19 @@ The steward's actions shrink to: comment, reorder, retry, `notify_operator`,
 
 ## Sessions on durable tasks {#DT-7}
 
-A console session (director or chat) is a task with the `durable` grant
-and goal `person-closes`. `reconcileConsoleSessions` files it that way,
-and between exchanges it rests (suspension kind `requested`,
+A console session (director or chat) is a task with `admission: durable`
+(originally the `durable` grant, moved to `task.admission` in task 3309 /
+migration 121) and goal `person-closes`. `reconcileConsoleSessions` files it
+that way, and between exchanges it rests (suspension kind `requested`,
 `resume_on: {message: true}`). That replaces each session-specific rule:
 
 | Session-only rule today | Becomes |
 |---|---|
 | Never done: a completed session is un-completed and parked (`reconcileConsoleSessions`) | The `person-closes` goal: an ending never completes it, and it rests on messages. |
 | Never retired for failing | Suspensions do not strike. A genuine failure streak on a durable task raises `task.no-progress` instead of retiring it. |
-| Started whenever ready, outside `max_workers` | `durable` implies `priority-dispatch` (task 834). |
+| Started whenever ready, outside `max_workers` | `admission: durable` implies `admission: bypass` (formerly `priority-dispatch`, task 834). |
 | Passes the pipeline pause (`SessionsPassPause` → `PriorityPassesPause`, task 834) | The same predicate. |
-| Never linked behind a red base's repair (task 833, `waitOnBaseRepair` refusing `IsConsoleSession`) | `waitOnBaseRepair` refuses `HasPriorityDispatch`, which task 834 already moves it to. |
+| Never linked behind a red base's repair (task 833, `waitOnBaseRepair` refusing `IsConsoleSession`) | `waitOnBaseRepair` refuses `HasPriorityDispatch` (`t.Admission >= AdmissionBypass`). |
 | 8h deadline, 45m wait cap | None (DT-1). |
 | Interrupted by restart (828) | Adopted, or a `restart` suspension resumed on the first cycle (DT-1). |
 | A capability added needs a new run | A `capability` suspension applied automatically, or in place for API presets (DT-2). |
@@ -867,7 +878,7 @@ findings are rows in the same table.
 | Change | Stage |
 |---|---|
 | `task_suspension` table; `task_run.suspend_kind`; `model.SuspensionKind`; `model.DispatchStanding` | DT-S1 |
-| `durable` grant; `Config.MaxDurableRuns`; `Config.DurableIdleTimeout` | DT-S2 |
+| `task.admission = 'durable'` (originally the `durable` grant; migration 121); `Config.MaxDurableRuns`; `Config.DurableIdleTimeout` | DT-S2 |
 | Session store on persistent storage on Kubernetes | DT-S3 |
 | `task.resume_on_deadline`; `resume_later` tool; `model.ResumeOn` (the `task_suspension.resume_on` wait target) with `ci`, `message`; `POST /api/tasks/{id}/resume-later` | DT-S4 |
 | `task_goal` table; `Template.Goal`; `propose_task.goal` | DT-S5 |

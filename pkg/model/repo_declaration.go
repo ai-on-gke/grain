@@ -429,6 +429,10 @@ type RepoDeclarations struct {
 	// MergeRules is its `.grain/merge-rules.yml` (grain/task-1659), nil
 	// where it has none. Kept in a table of its own, like Triggers.
 	MergeRules *MergeRules
+	// Warnings are deprecation or non-fatal notices from reading the
+	// declarations (for example, a retired capability name folded into a
+	// setting for one release).
+	Warnings []string
 }
 
 // Empty reports whether a repository declared nothing at all, which is

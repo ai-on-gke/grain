@@ -155,6 +155,10 @@ func (c *Client) catalogueEditRefusal(ctx context.Context, task model.Task, gran
 // dispatch holds that task whoever approves it (orchestrator.catalogueHold).
 func (c *Client) catalogueApprovalRefusal(ctx context.Context, task model.Task) error {
 	if isDelegatedRequest(ctx) {
+		if task.Admission > model.AdmissionStandard && !task.IsConsoleSession() {
+			return forbiddenCodeErrorf("requires_person", "task %s has admission %s, which only a person acting directly may approve",
+				task.ID, task.Admission)
+		}
 		var personOnly []string
 		for _, g := range task.Grants {
 			if (model.IsPersonOnlyGrant(g.Capability) || model.IsAdminOnlyGrant(g.Capability)) && !slices.Contains(personOnly, g.Capability) {

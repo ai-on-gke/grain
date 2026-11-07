@@ -161,6 +161,7 @@ func cmdCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	approve := fs.Bool("approve", false, "queue the task immediately instead of filing it as a proposal awaiting approval")
 	position := fs.String("position", "", `which end of the backlog to file it at: "front" to run ahead of everything already queued, "end" to queue behind it. Unset files it wherever the last task added chose, and leaves that choice alone`)
 	priority := priorityFlag(fs, "task priority, 1 or more (default 5; higher numbers mean higher priority)")
+	admission := fs.String("admission", "", "task admission level: standard, bypass, or durable -- unset takes the deployment or repo default")
 	interactive := fs.Bool("interactive", false, "file this as a live chat rather than a change to run unattended (bwsalmon/agents#539); implies -approve and dispatches ahead of the backlog")
 	var attach stringList
 	fs.Var(&attach, "attach", "path to a local file to attach to the task (repeatable)")
@@ -223,6 +224,7 @@ func cmdCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		ExternalRef: strings.TrimSpace(*externalRef),
 		AutoMerge:   autoMerge, Reads: reads, Writes: writeTargets, Approved: *approve, AtFront: atFront,
 		Priority:    priorityOpt,
+		Admission:   strings.TrimSpace(*admission),
 		Interactive: *interactive, Attachments: attachments,
 		ReviewTemplateID: *reviewTemplate, CustomFields: customFields,
 		NetworkAccess: *networkAccess, AgentBackendID: *agentBackend,
@@ -237,10 +239,11 @@ func cmdCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	// afterwards (`grain capability <task> <cap> detach`).
 	if len(capabilities) > 0 {
 		ids := []string(capabilities)
-		// A reference's ref={json} form is checked here, so a mistyped
-		// argument object is refused before anything is filed; its
-		// server checks the arguments themselves when the task is.
 		for _, id := range ids {
+			if adm := model.AdmissionOfGrantName(id); adm > model.AdmissionStandard {
+				fmt.Fprintln(os.Stderr, "warning: "+model.AdmissionDeprecationWarning(adm))
+				continue
+			}
 			if model.IsCapabilityRef(id) {
 				if err := model.CheckCapabilityGrantSyntax(id); err != nil {
 					return fmt.Errorf("-capability: %w", err)
@@ -335,6 +338,7 @@ func cmdUpdate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		"ID of the one connection this task's next run must use -- empty takes the pin off; "+
 			"pass it with -model when the pinned connection does not serve the new model")
 	priority := priorityFlag(fs, "new task priority, 1 or more (default 5; higher numbers mean higher priority)")
+	admission := fs.String("admission", "", "new task admission level: standard, bypass, or durable")
 	var fields stringList
 	fs.Var(&fields, "field", customFieldFlagUsage)
 	// Unlike -read and -write these add to and take from the set the
@@ -432,6 +436,9 @@ func cmdUpdate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		case "priority":
 			v := int(*priority)
 			req.Priority = &v
+		case "admission":
+			v := strings.TrimSpace(*admission)
+			req.Admission = &v
 		}
 	})
 	// Not read through fs.Visit like the rest: a -field is only ever
@@ -599,6 +606,9 @@ func cmdCapability(ctx context.Context, c *ui.HTTPClient, out *printer, args []s
 		return err
 	}
 	capability := fs.Arg(1)
+	if adm := model.AdmissionOfGrantName(capability); adm > model.AdmissionStandard {
+		fmt.Fprintln(os.Stderr, "warning: "+model.AdmissionDeprecationWarning(adm))
+	}
 	var attach bool
 	switch fs.Arg(2) {
 	case "attach":

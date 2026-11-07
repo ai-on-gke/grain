@@ -30,6 +30,7 @@ func TestHasPriorityDispatchIsSessionsAndHoldersOfTheGrant(t *testing.T) {
 	session := model.Task{
 		Origin:      model.Origin{Reason: model.ReasonConsoleSession},
 		Interactive: true,
+		Admission:   model.AdmissionDurable,
 		Tags:        []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 		Grants:      model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID}),
 	}
@@ -38,7 +39,7 @@ func TestHasPriorityDispatchIsSessionsAndHoldersOfTheGrant(t *testing.T) {
 		Interactive: true,
 		Tags:        []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 	}
-	holder := model.Task{Grants: []model.Grant{{Capability: model.PriorityDispatchCapability}}}
+	holder := model.Task{Admission: model.AdmissionBypass}
 	for name, c := range map[string]struct {
 		task model.Task
 		want bool

@@ -167,6 +167,9 @@ type Template struct {
 	// until somebody replies, the same as any other interactive task.
 	Interactive bool
 	KeepRunning bool
+	// Admission is the admission every task filed from this template
+	// gets (Task.Admission).
+	Admission Admission
 
 	// Priority is the optional default numeric priority for tasks filed from
 	// this template (nil or 0 leaves the task on DefaultTaskPriority).

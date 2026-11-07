@@ -170,6 +170,8 @@ type Task struct {
 	// immediately restarts the task when its run exits rather than completing
 	// or parking it.
 	KeepRunning bool `json:"keepRunning,omitempty"`
+	// Admission is model.Task.Admission: "standard", "bypass", or "durable".
+	Admission string `json:"admission"`
 	// NoPort is model.Task.NoPort: this task's change is not ported to
 	// its repository's other paired branches.
 	NoPort bool `json:"noPort,omitempty"`
@@ -951,6 +953,8 @@ type Transition struct {
 	OnBehalfOfOwner     string `json:"onBehalfOfOwner,omitempty"`
 	OldOwner            string `json:"oldOwner,omitempty"`
 	NewOwner            string `json:"newOwner,omitempty"`
+	OldAdmission        string `json:"oldAdmission,omitempty"`
+	NewAdmission        string `json:"newAdmission,omitempty"`
 	Reason              string `json:"reason,omitempty"`
 	Detail              string `json:"detail,omitempty"`
 }
@@ -979,6 +983,12 @@ func transitionFromWithAttempt(t model.Transition, proposingAttempt int) Transit
 		if oldOwn, newOwn, ok := model.ParseOwnerChangeReason(t.Reason); ok {
 			out.OldOwner = oldOwn
 			out.NewOwner = newOwn
+		}
+	}
+	if t.State == model.TransitionAdmissionChanged {
+		if oldAdm, newAdm, ok := model.ParseAdmissionChangeReason(t.Reason); ok {
+			out.OldAdmission = oldAdm.String()
+			out.NewAdmission = newAdm.String()
 		}
 	}
 	if t.By != nil {
@@ -1135,6 +1145,7 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		NetworkAccess:        string(t.NetworkAccess),
 		NothingNeededAction:  string(t.NothingNeededAction),
 		KeepRunning:          t.KeepRunning,
+		Admission:            t.Admission.String(),
 		NoPort:               t.NoPort,
 		FixesBaseBranch:      model.FixesBaseBranch(t),
 		GrainBaseRepair:      model.GrainBaseRepair(t),
@@ -1788,26 +1799,10 @@ type configResponse struct {
 	// Only ever the form's starting state, like ApprovedByDefault and
 	// AutoMergeByDefault above. What is filed is what the request names;
 	// this is only what it names when nobody has said otherwise.
-	DefaultCapabilities []string `json:"defaultCapabilities"`
-	// RepoDefaultCapabilities is the per-repo layer of the same thing
-	// (model.RepoConfig.DefaultCapabilities, grain/task-24): what each
-	// repo adds to DefaultCapabilities above, keyed by "owner/name". Only
-	// repos that add something appear -- Store.ListRepoConfigs keeps no
-	// row for a repo that says nothing -- so an absent key and an empty
-	// list mean the same thing here.
-	//
-	// Sent with the config rather than fetched per repo because the
-	// new-task form needs it the moment the repo picker changes, on a
-	// form that has not been submitted yet: this is one small map for a
-	// deployment's whole repo list, and re-seeding the capability picker
-	// from a round trip per keystroke would be a request for every
-	// character typed into a repo field. The repos pane, which edits one
-	// repo at a time and has somewhere to show a save failing, reads and
-	// writes GET/PUT /api/repos/{owner}/{name}/capabilities instead.
-	//
-	// Filtered to what this build offers, the same as DefaultCapabilities
-	// above and for the same reason.
+	DefaultCapabilities     []string            `json:"defaultCapabilities"`
+	DefaultAdmission        string              `json:"defaultAdmission"`
 	RepoDefaultCapabilities map[string][]string `json:"repoDefaultCapabilities,omitempty"`
+	RepoDefaultAdmission    map[string]string   `json:"repoDefaultAdmission,omitempty"`
 	// PromptExtension mirrors model.Config.PromptExtension -- this
 	// deployment's own standing instructions for every run -- read from
 	// the store the same way AgentFramework above is.
@@ -2116,10 +2111,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		ManagementURL:       sanitizeManagementURL(s.tasks.Config.ManagementURL),
 		GitCredentialsConfigured: s.tasks.Config.Credentials != nil &&
 			len(s.tasks.Config.Credentials.Names()) > 0,
-		TargetRepos:  allTargetRepos,
-		CustomFields: customFieldDeclarations(customFields),
-		Deployment:   &deployment,
-		Version:      versionResponseFrom(version.Get()),
+		TargetRepos:      allTargetRepos,
+		DefaultAdmission: model.AdmissionStandard.String(),
+		CustomFields:     customFieldDeclarations(customFields),
+		Deployment:       &deployment,
+		Version:          versionResponseFrom(version.Get()),
 	}
 	if s.tasks.Config.Sandboxes != nil {
 		resp.SandboxCount = s.tasks.Config.Sandboxes.SandboxCount()
@@ -2170,6 +2166,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		resp.Models = allDistinctModels(*cfg)
 		resp.NetworkAccess = string(model.NormalizeNetworkAccess(cfg.NetworkAccess))
 		resp.PromptExtension = cfg.PromptExtension
+		resp.DefaultAdmission = cfg.DefaultAdmission.String()
 		// Filtered to what this build actually offers, the same way
 		// (*Client).defaultCapabilities filters before granting -- the
 		// form should tick what a task would really be filed with, and
@@ -2216,6 +2213,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		if !rc.Work.Empty() || len(rc.ReleaseSecrets) > 0 ||
 			len(rc.BaseBranchCIJobs) > 0 || len(rc.PostMergeDispatchJobs) > 0 {
 			resp.ReposWithReleaseSettings = append(resp.ReposWithReleaseSettings, rc.Repo.String())
+		}
+		if rc.DefaultAdmission > model.AdmissionStandard {
+			if resp.RepoDefaultAdmission == nil {
+				resp.RepoDefaultAdmission = make(map[string]string, len(repoConfigs))
+			}
+			resp.RepoDefaultAdmission[rc.Repo.String()] = rc.DefaultAdmission.String()
 		}
 		var ids []string
 		for _, id := range rc.DefaultCapabilities {

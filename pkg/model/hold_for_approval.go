@@ -188,6 +188,9 @@ func ConfigRepoProposalHold(child Task) string {
 // (ui.CreateTask) apply it the same way.
 func PersonOnlyProposalSettings(child, parent Task) string {
 	var why []string
+	if child.Admission > AdmissionStandard {
+		why = append(why, fmt.Sprintf("it asks for admission: %s, which only a person may give a task", child.Admission))
+	}
 	if child.KeepRunning {
 		why = append(why, "it asks to keep running (keep_running), restarting every time its run exits, "+
 			"which only a person may ask of a task")

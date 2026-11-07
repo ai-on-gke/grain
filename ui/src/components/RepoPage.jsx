@@ -58,13 +58,17 @@ import { isApiGrant, withoutApiRows } from "../apiGrants.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
 import { buildPath } from "../paths.js";
 import {
+  ADMISSION_OPTIONS,
   LEGACY_CAPABILITIES_HINT,
   NO_CAPABILITIES_HINT,
   STATE_LABELS,
+  admissionLabel,
   displayCounts,
   capabilityName,
   capabilityRows,
   capabilityUnavailableHint,
+  maxAdmission,
+  normalizeAdmission,
   repoRows,
   repoUrl,
   unionCapabilities,
@@ -909,6 +913,20 @@ export default function RepoPage({
       await onRefreshConfig();
     } catch (err) {
       refuseSave("capabilities", err);
+    }
+  };
+
+  const saveDefaultAdmission = async (nextAdmission) => {
+    try {
+      const updated = await api(`${root}/settings`, {
+        method: "PUT",
+        body: JSON.stringify({ defaultAdmission: nextAdmission }),
+      });
+      settleSave("admission");
+      setCaps(updated);
+      await onRefreshConfig();
+    } catch (err) {
+      refuseSave("admission", err);
     }
   };
 
@@ -2367,6 +2385,59 @@ export default function RepoPage({
                     : capsEffective
                         .map((id) => capabilityName(config, id))
                         .join(", ")}
+                </Typography>
+              </Stack>
+            )}
+          </Box>
+
+          <Box data-testid="repo-default-admission">
+            <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+              Default admission
+            </Typography>
+            {caps === null ? (
+              <Typography variant="body2" color="text.secondary">
+                Loading admission…
+              </Typography>
+            ) : (
+              <Stack spacing={1}>
+                <FormControl fullWidth size="small">
+                  <InputLabel id="repo-admission-label">
+                    Default admission
+                  </InputLabel>
+                  <Select
+                    labelId="repo-admission-label"
+                    disabled={readOnly}
+                    inputProps={{
+                      "aria-describedby": refusedBy(readOnly),
+                    }}
+                    label="Default admission"
+                    value={normalizeAdmission(caps.defaultAdmission)}
+                    onChange={(e) => saveDefaultAdmission(e.target.value)}
+                  >
+                    {ADMISSION_OPTIONS.map((o) => (
+                      <MenuItem
+                        key={o.value}
+                        value={o.value}
+                        title={o.description}
+                      >
+                        {o.label}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                  <FormHelperText>
+                    Combined with this deployment&apos;s own default admission
+                    by taking the higher of the two -- whoever files a task can
+                    still pick another level on the new-task form.
+                  </FormHelperText>
+                </FormControl>
+                <Typography variant="body2" color="text.secondary">
+                  A task filed against {repo} starts at admission:{" "}
+                  {admissionLabel(
+                    maxAdmission(
+                      caps.deploymentDefaultAdmission,
+                      caps.defaultAdmission,
+                    ),
+                  )}
                 </Typography>
               </Stack>
             )}

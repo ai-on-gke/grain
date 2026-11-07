@@ -128,6 +128,7 @@ Calls `POST /api/tasks` (`HTTPClient.CreateTask`) and prints the new task.
 <!-- BEGIN GENERATED FLAGS: grain create -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
+| `-admission` | string |  |  | task admission level: standard, bypass, or durable -- unset takes the deployment or repo default |
 | `-approve` | bool |  |  | queue the task immediately instead of filing it as a proposal awaiting approval |
 | `-attach` | value |  |  | path to a local file to attach to the task (repeatable) |
 | `-author` | string |  |  | who asked for this task, recorded as its requester (defaults to the daemon's own actor) |
@@ -164,6 +165,7 @@ Calls `PATCH /api/tasks/{id}` (`UpdateTask`) and prints the task the `PATCH` ret
 <!-- BEGIN GENERATED FLAGS: grain update -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
+| `-admission` | string |  |  | new task admission level: standard, bypass, or durable |
 | `-auto-merge` | bool |  |  | whether the task auto-merges once clean |
 | `-base` | string |  |  | new base branch |
 | `-body` | string |  |  | new task description |

@@ -49,6 +49,7 @@ func TestConsoleSessionBypassesConnectionConcurrencyAndTakesNoSlot(t *testing.T)
 		Interactive: true,
 		Tags:        []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 		Grants:      model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID}),
+		Admission:   model.AdmissionDurable,
 	}
 	if !sessionTask.IsConsoleSession() {
 		t.Fatalf("sessionTask.IsConsoleSession() = false, want true")
@@ -134,8 +135,7 @@ func TestAPriorityDispatchTaskIsAdmittedOntoAConnectionAtItsLimit(t *testing.T) 
 	pool := providerDefaultPool(t, "gemini-3.1-pro", conn)
 
 	workerChoice := orchestrator.ChoiceFor(model.Task{ID: "worker-1"})
-	steward := model.Task{ID: "steward-1", Grants: []model.Grant{
-		{Capability: model.PriorityDispatchCapability, Via: model.GrantByGrain}}}
+	steward := model.Task{ID: "steward-1", Admission: model.AdmissionBypass}
 	stewardChoice := orchestrator.ChoiceFor(steward)
 	if !stewardChoice.Priority {
 		t.Fatalf("ChoiceFor(a priority-dispatch holder).Priority = false, want true")

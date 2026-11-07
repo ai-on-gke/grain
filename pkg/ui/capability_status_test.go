@@ -112,7 +112,7 @@ func TestCapabilitiesListsEveryKnownCapabilityOnAFreshStore(t *testing.T) {
 		ids = append(ids, s.ID)
 	}
 	sort.Strings(ids)
-	want := []string{"console", "durable", "github-sandbox", "image-signing", "package-publish", "priority-dispatch", "read-issues", "registry-push"}
+	want := []string{"console", "github-sandbox", "image-signing", "package-publish", "read-issues", "registry-push"}
 	if !reflect.DeepEqual(ids, want) {
 		t.Fatalf("capability ids = %v, want %v", ids, want)
 	}
@@ -265,7 +265,7 @@ func TestCapabilityStatusReportsWhetherATaskCanBeGrantedIt(t *testing.T) {
 	t.Parallel()
 	c, _, ctx := testClient(t)
 	c.Config.Capabilities = []ui.Capability{
-		{ID: "priority-dispatch", Name: "Priority dispatch"},
+		{ID: "console", Name: "Interactive console"},
 		{ID: "read-issues", Name: "Read issues"},
 	}
 
@@ -274,9 +274,9 @@ func TestCapabilityStatusReportsWhetherATaskCanBeGrantedIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	for id, want := range map[string]bool{
-		"priority-dispatch": true,
-		"read-issues":       true,
-		"github-sandbox":    false,
+		"console":        true,
+		"read-issues":    true,
+		"github-sandbox": false,
 	} {
 		if status := capabilityStatus(t, got.Capabilities, id); status.Grantable != want {
 			t.Errorf("%s: Grantable = %t, want %t (status: %+v)", id, status.Grantable, want, status)

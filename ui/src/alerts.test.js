@@ -377,7 +377,7 @@ describe("the sentences", () => {
       heldForRunNow(manual, { id: "1", state: "queued", blocked: true }),
     ).toBe(false);
     // An individually paused task waits on its own Resume, and a
-    // priority-dispatch task or standing session dispatches through the pause.
+    // bypass/durable task or standing session dispatches through the pause.
     expect(
       heldForRunNow(manual, {
         id: "1",
@@ -389,7 +389,14 @@ describe("the sentences", () => {
       heldForRunNow(manual, {
         id: "1",
         state: "queued",
-        capabilities: ["priority-dispatch"],
+        admission: "bypass",
+      }),
+    ).toBe(false);
+    expect(
+      heldForRunNow(manual, {
+        id: "1",
+        state: "queued",
+        admission: "durable",
       }),
     ).toBe(false);
     expect(

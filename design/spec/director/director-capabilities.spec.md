@@ -104,8 +104,10 @@ refused without it. The reason is written to the controller log
     adds every active working repository in `repo_config` and `target_repos`).
 - `model.ConsoleSessionDefaultGrants` adds `api:ci-read` to every console
   session unless `DeclinedDefaults` names it.
-- `model.ConsoleSessionGrants` always prepends `durable` (`GrantByGrain`),
-  which implies `priority-dispatch`.
+- `Store.FileConsoleSession` and `syncConsoleSessionTask` always set
+  `Admission: AdmissionDurable` (`task.admission = 'durable'`), which
+  implies `admission: bypass` (formerly the `durable` and
+  `priority-dispatch` grants; schema migration 121).
 - `orchestrator.fileConsoleSession` passes the state repository
   (`Config.settingsRepo()`) as `StateRepo`, so the director task's
   `Reads` always holds `grain/config` (or whatever repository the
@@ -251,7 +253,7 @@ default, and §5 says how existing deployments are offered it.
 | Field | Value | Rationale |
 |---|---|---|
 | `Capabilities` | `api:self-debug`, `…/grain#source`, `…/grain#journal`, `api:deployment:read`, `…/grain#health`, `…/config-map#config-map={"config_maps":["bootstrap"]}`, `api:task-admin`, `api:capabilities:read`, `api:capabilities:detach`, `api:settings:read`, `api:repos:read`, `api:releases:read`, `api:schedules:read`, `api:templates:read`, `api:suites:read`, `api:dispatch:read`, plus build `DefaultOn` ids | W1–W5 day-to-day. None of these is dangerous, so none needs a person's grant under `IsPersonOnlyGrant`. |
-| (implicit) `durable` | always, via `ConsoleSessionGrants` | Priority admission (§3.1.4). |
+| `Admission` | `durable`, always, via `FileConsoleSession` / `syncConsoleSessionTask` | Priority admission (§3.1.4). |
 | `Reads` | `[]` in the row; the state repository is added at filing (`FileConsoleSessionOptions.StateRepo`) | Config is always readable without the operator naming a repo (§3.1.3). |
 | `Writes` | `[grain/config]` | The director has no target and lands no code. The one write is the state repository, for `propose_config_change` (§3.1.3); it is never passed on to a proposal. |
 | `TasksApproved` | `true` | §3.1.5. |
@@ -338,13 +340,16 @@ done by proposing a `grain/config` change.
 
 #### 3.1.4 Priority admission
 
-The director MUST hold `durable` (and so `priority-dispatch`) through
-`ConsoleSessionGrants`. That admits it outside `max_workers`, up to
-`max_durable_runs` (`DefaultMaxDurableRuns = 4`), and past pipeline
-pauses and red-base holds. `durable` is a person-only grant
-(`IsPersonOnlyGrant`), so it stays implicit and is never written into
-`Capabilities`. The director cannot pass it to a proposal: a child
-asking for `durable` or `priority-dispatch` is held for a person.
+The director task MUST carry `Admission: AdmissionDurable` (`admission:
+durable`, which implies `admission: bypass`; [`unified-grants.design.md`
+§4.1](../../design/unified-grants.design.md#41-admission-and-hosting-are-task-settings-not-grants))
+by construction (`Store.FileConsoleSession`, `syncConsoleSessionTask`).
+That admits it outside `max_workers`, up to `max_durable_runs`
+(`DefaultMaxDurableRuns = 4`), and past pipeline pauses and red-base
+holds. Raising `admission` above `standard` is person-only
+(`model.PersonOnlyProposalSettings`), so the director cannot pass it on
+to a proposal: a child asking for `admission: bypass` or `durable` (or
+either retired grant alias) is held for a person.
 
 #### 3.1.5 `TasksApproved: true`
 
@@ -449,7 +454,7 @@ director MUST NOT be able to obtain any of them itself:
 | Grant | Unlocks | Why opt-in |
 |---|---|---|
 | `api:tasks:admin` | Approve proposed tasks (other than its own, §3.3), recreate sandboxes | Dangerous: approval is the person's half of every proposal gate. |
-| `api:dispatch-control` (`dispatch:write`) | Pause/resume all dispatch, `run-now` (approving unapproved tasks subject to §3.3) | Deployment-wide stop, and a queue jump equivalent to `priority-dispatch`. MCP-only. |
+| `api:dispatch-control` (`dispatch:write`) | Pause/resume all dispatch, `run-now` (approving unapproved tasks subject to §3.3) | Deployment-wide stop, and a queue jump equivalent to `admission: bypass`. MCP-only. |
 | `api:capabilities:admin` | Attach/replace grants, edit capability servers and policy | Dangerous. `agentGrantEscalation` still applies, so the director can only hand out what it holds. |
 | `api:release-manager` | Cut, qualify and promote candidates; write schedules and releases | Publishes artefacts to users. |
 | `api:self-upgrade` (alias `self-upgrade`) | Start or cancel a drained controller upgrade (`deployment:upgrade`) | Dangerous; restarts the deployment the director is talking from. Honours upgrade holds (`agentRails`). |

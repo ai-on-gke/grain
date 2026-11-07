@@ -106,6 +106,7 @@ func (s *Store) wakeStandingTask(ctx context.Context, open Task, comp Compositio
 		t.Title, t.Body = comp.Title, comp.Body
 		t.Reads, t.NetworkAccess, t.NothingNeededAction, t.KeepRunning = comp.Reads, comp.NetworkAccess, comp.NothingNeededAction, comp.KeepRunning
 		t.Grants = mergeStandingGrants(t.Grants, comp.Grants)
+		t.Admission = max(t.Admission, comp.Admission)
 		// The model is refreshed only onto a task nobody chose one for:
 		// a model a person set on the standing task is their decision
 		// about this job, like a grant they added.

@@ -37,7 +37,10 @@ import {
   closablePullRequest,
   completionPhase,
   configuredCapabilities,
+  admissionLabel,
+  defaultAdmissionFor,
   defaultCapabilitiesFor,
+  maxAdmission,
   INBOX_STATES,
   inboxCount,
   inboxGateKey,
@@ -1522,6 +1525,27 @@ describe("defaultCapabilitiesFor", () => {
 
   it("survives a config that has never been loaded", () => {
     expect(defaultCapabilitiesFor(null, "acme/widgets")).toEqual([]);
+  });
+});
+
+describe("defaultAdmissionFor", () => {
+  const config = {
+    defaultAdmission: "bypass",
+    repoDefaultAdmission: { "Acme/Widgets": "durable" },
+  };
+
+  it("takes the higher of the deployment and repo default admission, case-insensitively", () => {
+    expect(defaultAdmissionFor(config, "acme/widgets")).toBe("durable");
+    expect(defaultAdmissionFor(config, "acme/gadgets")).toBe("bypass");
+    expect(defaultAdmissionFor(null, "acme/widgets")).toBe("standard");
+    expect(maxAdmission("standard", "durable", "bypass")).toBe("durable");
+    expect(admissionLabel("bypass")).toBe("Bypass queue");
+  });
+
+  it("includes a repo whose only configuration is repoDefaultAdmission above standard", () => {
+    expect(
+      repoRows({ repoDefaultAdmission: { "acme/urgent": "bypass" } }, []),
+    ).toMatchObject([{ repo: "acme/urgent", defaults: true }]);
   });
 });
 

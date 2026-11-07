@@ -949,8 +949,16 @@ func (s *Server) proposalPersonHolds(ctx context.Context, task model.Task, propo
 	if task.AutoMerge && (acting == nil || !(acting.AutoMerge && model.LandsWhereGranted(task, *acting))) {
 		holds = append(holds, "it has auto-merge enabled, which would land its change without review")
 	}
+	var defaultAdm model.Admission
+	if s.tasks != nil && s.tasks.Store != nil {
+		defaultAdm, _ = s.tasks.Store.EffectiveDefaultAdmission(ctx, task.Target)
+	}
+	checkedTask := task
+	if checkedTask.Admission <= defaultAdm {
+		checkedTask.Admission = model.AdmissionStandard
+	}
 	if proposer == nil {
-		if why := model.PersonOnlyProposalSettings(model.Task{KeepRunning: task.KeepRunning}, model.Task{}); why != "" {
+		if why := model.PersonOnlyProposalSettings(model.Task{KeepRunning: checkedTask.KeepRunning, Admission: checkedTask.Admission}, model.Task{}); why != "" {
 			holds = append(holds, why)
 		}
 		return holds, nil
@@ -975,7 +983,7 @@ func (s *Server) proposalPersonHolds(ctx context.Context, task model.Task, propo
 		holds = append(holds, fmt.Sprintf("it reads %s, which task %s that proposed it cannot read",
 			strings.Join(names, ", "), proposer.ID))
 	}
-	if why := model.PersonOnlyProposalSettings(task, *proposer); why != "" {
+	if why := model.PersonOnlyProposalSettings(checkedTask, *proposer); why != "" {
 		holds = append(holds, why)
 	}
 	return holds, nil
@@ -1291,6 +1299,7 @@ func fieldTouchesTaskGrants(key string, raw json.RawMessage) bool {
 	}
 	return strings.Contains(lower, "capabilit") || lower == "grants" ||
 		lower == "keeprunning" || lower == "keep_running" ||
+		lower == "admission" ||
 		lower == "prioritydispatch" || lower == "priority_dispatch"
 }
 
@@ -1318,6 +1327,25 @@ type grantField struct {
 
 func grantNamesFromField(pattern string, f jsonField, stored map[string][]string, normalize func(string) (string, error)) []string {
 	lower := gateKey(f.key)
+	if lower == "admission" || lower == "defaultadmission" || lower == "default_admission" {
+		var s string
+		if json.Unmarshal(f.raw, &s) == nil {
+			trimmed := strings.TrimSpace(s)
+			if pattern == "PATCH /api/tasks/{id}" {
+				if strings.EqualFold(trimmed, model.AdmissionDurable.String()) {
+					return []string{model.DurableCapability}
+				}
+				return []string{model.PriorityDispatchCapability}
+			}
+			if trimmed != "" && !strings.EqualFold(trimmed, model.AdmissionStandard.String()) {
+				if strings.EqualFold(trimmed, model.AdmissionDurable.String()) {
+					return []string{model.DurableCapability}
+				}
+				return []string{model.PriorityDispatchCapability}
+			}
+		}
+		return nil
+	}
 	if lower == "priority" || lower == "prioritydispatch" || lower == "priority_dispatch" {
 		var on bool
 		if json.Unmarshal(f.raw, &on) == nil && (on || pattern == "PATCH /api/tasks/{id}") {
@@ -1757,6 +1785,21 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 			case opts.external != nil:
 				return errors.New("an external agent cannot turn on keepRunning")
 			}
+		case "admission", "defaultadmission", "default_admission":
+			var s string
+			if json.Unmarshal(raw, &s) != nil {
+				continue
+			}
+			adm, err := model.ParseAdmission(s)
+			if err != nil || adm <= model.AdmissionStandard {
+				continue
+			}
+			switch {
+			case opts.role != nil:
+				return fmt.Errorf("%s cannot set %s: admission %s requires an unlimited role (grain/operator)", opts.role.label(), key, adm)
+			case opts.external != nil:
+				return fmt.Errorf("an external agent cannot set %s to %s", key, adm)
+			}
 		case "priority":
 			var on bool
 			if json.Unmarshal(raw, &on) == nil {
@@ -2013,6 +2056,9 @@ func (s *Server) checkFilingTemplate(ctx context.Context, tmpl model.Template, k
 		}
 		if tmpl.KeepRunning {
 			return fmt.Errorf("template %s sets keepRunning, which an external agent cannot turn on", tmpl.ID)
+		}
+		if tmpl.Admission > model.AdmissionStandard {
+			return fmt.Errorf("template %s sets admission %s, which an external agent cannot set", tmpl.ID, tmpl.Admission)
 		}
 		if tmpl.Interactive && !set.Allows("tasks:admin", repo) {
 			return fmt.Errorf("template %s is interactive: approving it needs tasks:admin", tmpl.ID)
@@ -3250,6 +3296,7 @@ func editedPatchResponseKeys(body []byte) []string {
 	add(req.Base != nil, "base")
 	add(req.ExternalRef != nil, "externalRef")
 	add(req.Priority != nil, "priority")
+	add(req.Admission != nil, "admission")
 	add(req.PriorityDispatch != nil, "priorityDispatch")
 	add(req.Issue != nil, "issue")
 	add(req.AutoMerge != nil, "autoMerge")

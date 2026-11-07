@@ -175,4 +175,16 @@ describe("TemplateOverlay keep running", () => {
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
     expect(sentBody("PATCH")).toMatchObject({ keepRunning: false });
   });
+
+  it("reads and saves a template's Admission", async () => {
+    api.mockResolvedValue(saved);
+    const onSaved = overlay({ ...saved, admission: "bypass" });
+    const select = screen.getByRole("combobox", { name: "Admission" });
+    expect(select).toHaveTextContent("Bypass queue");
+    fireEvent.mouseDown(select);
+    fireEvent.click(screen.getByRole("option", { name: "Durable" }));
+    fireEvent.submit(select.closest("form"));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(sentBody("PATCH")).toMatchObject({ admission: "durable" });
+  });
 });

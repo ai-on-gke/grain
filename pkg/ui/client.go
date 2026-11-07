@@ -1819,8 +1819,9 @@ type CreateTaskRequest struct {
 	// KeepRunning sets model.Task.KeepRunning: when true, the orchestrator
 	// immediately restarts the task when its run exits rather than completing
 	// or parking it.
-	KeepRunning      bool  `json:"keepRunning,omitempty"`
-	KeepRunningSnake *bool `json:"keep_running,omitempty"`
+	KeepRunning      bool   `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool  `json:"keep_running,omitempty"`
+	Admission        string `json:"admission,omitempty"`
 	// Goal declares the task's goal (model.TaskGoal,
 	// design/design/durable-tasks.design.md#DT-4) as it is filed; nil for none, or
 	// for the goal of the template it is filed from.
@@ -2215,9 +2216,9 @@ func (c *Client) proposalSeeding(ctx context.Context, target *model.RepoRef, tem
 // may give -- keepRunning, or a priority above the default. The
 // X-Grain-Client label plays no part.
 func (c *Client) ownerTrustApproves(ctx context.Context, req CreateTaskRequest, proposedBy *model.Task,
-	target *model.RepoRef, reads []model.RepoRef, writes []model.WriteTarget, held, keepRunning bool, priority int) (*model.Principal, error) {
+	target *model.RepoRef, reads []model.RepoRef, writes []model.WriteTarget, held, keepRunning bool, priority int, admission model.Admission) (*model.Principal, error) {
 	tok := externalTokenFromContext(ctx)
-	if tok == nil || proposedBy != nil || req.Approved || req.HoldForApproval || req.FixesBaseBranch || req.Interactive || held || keepRunning || priority > model.DefaultTaskPriority {
+	if tok == nil || proposedBy != nil || req.Approved || req.HoldForApproval || req.FixesBaseBranch || req.Interactive || held || keepRunning || priority > model.DefaultTaskPriority || admission > model.AdmissionStandard {
 		return nil, nil
 	}
 	if p, ok := PrincipalFromContext(ctx); !ok || p.Kind != model.PrincipalAgent || p.Source != model.SourceExternalToken {
@@ -2292,7 +2293,17 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			return c.Task(ctx, existing.ID)
 		}
 	}
+	callerChoseAdmission := strings.TrimSpace(req.Admission) != ""
+	if callerChoseAdmission {
+		if _, err := validateAdmission(req.Admission); err != nil {
+			return Task{}, err
+		}
+	}
 	req, err := c.fromTemplate(ctx, req)
+	if err != nil {
+		return Task{}, err
+	}
+	requestedAdmission, err := validateAdmission(req.Admission)
 	if err != nil {
 		return Task{}, err
 	}
@@ -2607,9 +2618,12 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			return Task{}, err
 		}
 	}
-	grants, droppedRefusals, err := c.creationGrants(ctx, req, target, teamID)
+	grants, droppedRefusals, foldedAdmission, hadFoldedAdmission, err := c.creationGrants(ctx, req, target, teamID)
 	if err != nil {
 		return Task{}, err
+	}
+	if hadFoldedAdmission && foldedAdmission > requestedAdmission {
+		requestedAdmission = foldedAdmission
 	}
 	// The template a person filed this from, which is how the task's runs
 	// find that template's declared push set (model.Task.TemplateID) and how
@@ -2922,7 +2936,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		// so neither permission queues a proposal that asks for one. Filed
 		// as asked, with a note saying which, and told to the run as what
 		// its permission does not cover.
-		if why := model.PersonOnlyProposalSettings(model.Task{KeepRunning: keepRunning, Priority: priority}, *proposedBy); why != "" {
+		if why := model.PersonOnlyProposalSettings(model.Task{KeepRunning: keepRunning, Priority: priority, Admission: requestedAdmission}, *proposedBy); why != "" {
 			if autoSubmit || sessionQueued || req.Approved {
 				personOnlyNote = fmt.Sprintf("\n\n_Filed for a person to approve: %s._", why)
 			}
@@ -3005,6 +3019,16 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err != nil {
 		return Task{}, err
 	}
+	taskAdmission := requestedAdmission
+	if !callerChoseAdmission && c.Store != nil {
+		defaultAdm, err := c.Store.EffectiveDefaultAdmission(ctx, target)
+		if err != nil {
+			return Task{}, err
+		}
+		if defaultAdm > taskAdmission {
+			taskAdmission = defaultAdm
+		}
+	}
 	task := model.Task{
 		ID:                   id,
 		Intent:               model.IntentImplement,
@@ -3017,6 +3041,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		Binding:              model.BindingDirective,
 		Base:                 req.Base,
 		Priority:             priority,
+		Admission:            taskAdmission,
 		Issue:                req.Issue,
 		AutoMerge:            autoMerge,
 		AutoApproveProposals: req.AutoApproveProposals,
@@ -3081,7 +3106,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// can be interactive too, through an interactive template's
 	// templateId (fromTemplate), and that must not turn propose_task into
 	// a way to approve its own work.
-	ownerTrust, err := c.ownerTrustApproves(ctx, req, proposedBy, target, reads, writes, catalogueHold || needsPersonWhy != "", keepRunning, priority)
+	ownerTrust, err := c.ownerTrustApproves(ctx, req, proposedBy, target, reads, writes, catalogueHold || needsPersonWhy != "", keepRunning, priority, requestedAdmission)
 	if err != nil {
 		return Task{}, err
 	}
@@ -3752,6 +3777,26 @@ func (c *Client) park(ctx context.Context, taskID, reason string, now time.Time)
 // one boundary is how an operator ends up told two different things
 // about the same list.
 
+func validateAdmission(raw string) (model.Admission, error) {
+	a, err := model.ParseAdmission(raw)
+	if err != nil {
+		return model.AdmissionStandard, validationErrorf("%v", err)
+	}
+	return a, nil
+}
+
+func (c *Client) grantsAndAdmissionFor(kind, subject string, ids []string, via model.GrantSource, base model.Admission) ([]model.Grant, model.Admission, bool, error) {
+	filtered, adm, changed := model.FoldAdmissionNames(ids, base)
+	if changed && via != model.GrantByDefault {
+		model.WarnAdmissionGrants(kind, subject, adm)
+	}
+	grants, err := c.grantsFor(filtered, via)
+	if err != nil {
+		return nil, base, false, err
+	}
+	return grants, adm, changed, nil
+}
+
 // grantsFor turns capability ids into model.Grants, rejecting any this
 // deployment does not offer. via is what each one records as its source
 // -- model.GrantByLabel for ids a caller named, model.GrantByDefault for
@@ -3759,6 +3804,9 @@ func (c *Client) park(ctx context.Context, taskID, reason string, now time.Time)
 func (c *Client) grantsFor(ids []string, via model.GrantSource) ([]model.Grant, error) {
 	grants := make([]model.Grant, 0, len(ids))
 	for _, id := range ids {
+		if via == model.GrantByDefault && model.IsRetiredAdmissionGrant(id) {
+			continue
+		}
 		// grain#ci (or the retired grain-ci) is the target repository's CI Mode to grant, never
 		// a caller's (pkg/capability/grainci's package doc), and
 		// creationGrants adds or strips it from that mode after this.
@@ -3841,20 +3889,27 @@ func (c *Client) grantsFor(ids []string, via model.GrantSource) ([]model.Grant, 
 // which of the two attached it is a question the two panes that own them
 // answer, and a task holding a grant it can drop either way has nothing
 // to do differently with the answer.
-func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, target *model.RepoRef, teamID string) ([]model.Grant, []string, error) {
+func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, target *model.RepoRef, teamID string) ([]model.Grant, []string, model.Admission, bool, error) {
 	var grants []model.Grant
+	var foldedAdmission model.Admission
+	var hadFoldedAdmission bool
 	if req.ProposedBy != "" {
 		ids, err := c.defaultCapabilities(ctx, teamID, target)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, 0, false, err
 		}
 		defaults, err := c.grantsFor(ids, model.GrantByDefault)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, 0, false, err
 		}
 		grants = defaults
 		if req.Capabilities != nil {
-			for _, id := range *req.Capabilities {
+			var filteredCaps []string
+			filteredCaps, foldedAdmission, hadFoldedAdmission = model.FoldAdmissionNames(*req.Capabilities, model.AdmissionStandard)
+			if hadFoldedAdmission {
+				model.WarnAdmissionGrants("task proposal", req.Title, foldedAdmission)
+			}
+			for _, id := range filteredCaps {
 				id = strings.TrimSpace(id)
 				if id == "" {
 					continue
@@ -3870,11 +3925,11 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 				}
 				normalizedIDs, err := c.normalizeCapabilityIDs(id)
 				if err != nil {
-					return nil, nil, err
+					return nil, nil, 0, false, err
 				}
 				for _, nid := range normalizedIDs {
 					if _, ok := c.capabilityByID(nid); !ok {
-						return nil, nil, validationErrorf("%s", capabilityRefusal(nid))
+						return nil, nil, 0, false, validationErrorf("%s", capabilityRefusal(nid))
 					}
 					found := false
 					for _, g := range grants {
@@ -3893,10 +3948,11 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 			}
 		}
 	} else if req.Capabilities != nil {
-		named, err := c.grantsFor(*req.Capabilities, model.GrantByLabel)
+		named, adm, changed, err := c.grantsAndAdmissionFor("task", req.Title, *req.Capabilities, model.GrantByLabel, model.AdmissionStandard)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, 0, false, err
 		}
+		foldedAdmission, hadFoldedAdmission = adm, changed
 		if len(req.grantsFromTemplate) > 0 {
 			tmplGrants := make(map[string]model.GrantSource, len(req.grantsFromTemplate))
 			for _, g := range req.grantsFromTemplate {
@@ -3912,18 +3968,19 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 	} else {
 		ids, err := c.defaultCapabilities(ctx, teamID, target)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, 0, false, err
 		}
-		defaults, err := c.grantsFor(ids, model.GrantByDefault)
+		defaults, adm, changed, err := c.grantsAndAdmissionFor("task", req.Title, ids, model.GrantByDefault, model.AdmissionStandard)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, 0, false, err
 		}
+		foldedAdmission, hadFoldedAdmission = adm, changed
 		grants = defaults
 	}
 	if target != nil {
 		usesGrainCI, err := c.teamRepoUsesGrainCI(ctx, teamID, *target)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, 0, false, err
 		}
 		if usesGrainCI {
 			found := false
@@ -3968,7 +4025,7 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 				if !liveValidated {
 					configured, err := c.hasConfiguredGCPKeyOrSet(ctx, set)
 					if err != nil {
-						return nil, nil, err
+						return nil, nil, 0, false, err
 					}
 					if !configured {
 						if g.Via == model.GrantByDefault {
@@ -3979,14 +4036,14 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 							droppedRefusals = append(droppedRefusals, refusal)
 							continue
 						}
-						return nil, nil, validationErrorf("%s", refusal)
+						return nil, nil, 0, false, validationErrorf("%s", refusal)
 					}
 				}
 			}
 		}
 		allowed = append(allowed, g)
 	}
-	return allowed, droppedRefusals, nil
+	return allowed, droppedRefusals, foldedAdmission, hadFoldedAdmission, nil
 }
 
 func (c *Client) teamRepoUsesGrainCI(ctx context.Context, teamID string, repo model.RepoRef) (bool, error) {
@@ -4515,8 +4572,9 @@ type UpdateTaskRequest struct {
 	// Capabilities, given, replaces the task's capability grants while
 	// preserving durable on standing console-session tasks.
 	Capabilities *[]string `json:"capabilities,omitempty"`
-	// PriorityDispatch attaches or detaches PriorityDispatchCapability on the
-	// task (also populated when JSON "priority" is a boolean).
+	// Admission edits CreateTaskRequest.Admission's field ("standard", "bypass", "durable").
+	Admission *string `json:"admission,omitempty"`
+	// Deprecated: accepted for one release and mapped onto Admission.
 	PriorityDispatch *bool `json:"priorityDispatch,omitempty"`
 }
 
@@ -4730,7 +4788,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	// sent as agentBackendId as the model choice it was.
 	var editModel *string
 	var isConsoleSessionTask bool
-	if req.Model != nil || req.AgentBackendID != nil || req.Capabilities != nil || req.PriorityDispatch != nil || req.KeepRunning != nil {
+	if req.Model != nil || req.AgentBackendID != nil || req.Capabilities != nil || req.Admission != nil || req.PriorityDispatch != nil || req.KeepRunning != nil {
 		if existing, err := c.Store.GetTask(ctx, id); err == nil && existing != nil {
 			isConsoleSessionTask = existing.IsConsoleSession()
 		}
@@ -4907,11 +4965,26 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	if err != nil {
 		return Task{}, err
 	}
+	var editAdmission *model.Admission
+	if req.Admission != nil {
+		a, err := validateAdmission(*req.Admission)
+		if err != nil {
+			return Task{}, err
+		}
+		editAdmission = &a
+	}
 	var normalizedCaps []string
+	var foldedCapAdmission model.Admission
+	var hadFoldedCapAdmission bool
 	if req.Capabilities != nil {
+		var filteredCaps []string
+		filteredCaps, foldedCapAdmission, hadFoldedCapAdmission = model.FoldAdmissionNames(*req.Capabilities, model.AdmissionStandard)
+		if hadFoldedCapAdmission {
+			model.WarnAdmissionGrants("task", id, foldedCapAdmission)
+		}
 		seen := map[string]bool{}
-		normalizedCaps = make([]string, 0, len(*req.Capabilities))
-		for _, rawCap := range *req.Capabilities {
+		normalizedCaps = make([]string, 0, len(filteredCaps))
+		for _, rawCap := range filteredCaps {
 			capIDs, err := c.normalizeCapabilityIDs(rawCap)
 			if err != nil {
 				return Task{}, err
@@ -4988,7 +5061,8 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			return Task{}, validationErrorf("%v", err)
 		}
 	}
-	if err := c.mutate(model.WithOwnerChange(model.WithAutoMergeChange(ctx, c.requestActor(ctx).Actor, "edited"), c.requestActor(ctx)), id, func(task *model.Task) error {
+	mutateCtx := model.WithAdmissionChange(model.WithOwnerChange(model.WithAutoMergeChange(ctx, c.requestActor(ctx).Actor, "edited"), c.requestActor(ctx)), c.requestActor(ctx))
+	if err := c.mutate(mutateCtx, id, func(task *model.Task) error {
 		submitted = false
 		if req.Owner != nil {
 			task.Owner = normalizedOwner
@@ -5176,61 +5250,59 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		if req.Reviewers != nil {
 			task.Reviewers = model.NormalizeReviewers(*req.Reviewers)
 		}
-		if req.Capabilities != nil || req.PriorityDispatch != nil {
+		if req.Capabilities != nil {
 			existingByCap := make(map[string]model.Grant, len(task.Grants))
 			for _, g := range task.Grants {
 				existingByCap[g.Capability] = g
 			}
-			if req.Capabilities != nil {
-				policy, configured, err := c.capabilityPolicyFor(ctx)
-				if err != nil {
-					return err
-				}
-				for _, capID := range normalizedCaps {
-					if _, had := existingByCap[capID]; !had {
-						if model.IsCapabilityRef(capID) {
-							subject := model.CapabilitySubject{Repo: task.Target, Kind: model.CapabilityRunTask}
-							if err := policy.Permits(capID, subject, configured); err != nil {
-								return validationErrorf("%v", err)
-							}
-						}
-						if err := c.catalogueEditRefusal(ctx, *task, capID); err != nil {
-							return err
-						}
-					}
-				}
-				newGrants := make([]model.Grant, 0, len(normalizedCaps)+1)
-				seen := map[string]bool{}
-				if task.IsConsoleSession() {
-					newGrants = append(newGrants, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
-					seen[model.DurableCapability] = true
-				}
-				for _, capID := range normalizedCaps {
-					if capID == "" || seen[capID] {
-						continue
-					}
-					seen[capID] = true
-					if prevGrant, had := existingByCap[capID]; had {
-						newGrants = append(newGrants, prevGrant)
-					} else {
-						newGrants = append(newGrants, model.Grant{Capability: capID, Via: model.GrantByLabel})
-					}
-				}
-				task.Grants = newGrants
+			policy, configured, err := c.capabilityPolicyFor(ctx)
+			if err != nil {
+				return err
 			}
-			if req.PriorityDispatch != nil {
-				if *req.PriorityDispatch {
-					if _, had := existingByCap[model.PriorityDispatchCapability]; !had {
-						if err := c.catalogueEditRefusal(ctx, *task, model.PriorityDispatchCapability); err != nil {
-							return err
+			for _, capID := range normalizedCaps {
+				if _, had := existingByCap[capID]; !had {
+					if model.IsCapabilityRef(capID) {
+						subject := model.CapabilitySubject{Repo: task.Target, Kind: model.CapabilityRunTask}
+						if err := policy.Permits(capID, subject, configured); err != nil {
+							return validationErrorf("%v", err)
 						}
 					}
-					if !slices.ContainsFunc(task.Grants, func(g model.Grant) bool { return g.Capability == model.PriorityDispatchCapability }) {
-						task.Grants = append(task.Grants, model.Grant{Capability: model.PriorityDispatchCapability, Via: model.GrantByLabel})
+					if err := c.catalogueEditRefusal(ctx, *task, capID); err != nil {
+						return err
 					}
-				} else {
-					task.Grants = slices.DeleteFunc(task.Grants, func(g model.Grant) bool { return g.Capability == model.PriorityDispatchCapability })
 				}
+			}
+			newGrants := make([]model.Grant, 0, len(normalizedCaps))
+			seen := map[string]bool{}
+			for _, capID := range normalizedCaps {
+				if capID == "" || seen[capID] {
+					continue
+				}
+				seen[capID] = true
+				if prevGrant, had := existingByCap[capID]; had {
+					newGrants = append(newGrants, prevGrant)
+				} else {
+					newGrants = append(newGrants, model.Grant{Capability: capID, Via: model.GrantByLabel})
+				}
+			}
+			task.Grants = newGrants
+		}
+		if editAdmission != nil {
+			if task.IsConsoleSession() && *editAdmission < model.AdmissionDurable {
+				return validationErrorf("a standing console session is always durable")
+			}
+			task.Admission = *editAdmission
+		} else if hadFoldedCapAdmission && foldedCapAdmission > task.Admission {
+			task.Admission = foldedCapAdmission
+		}
+		if req.PriorityDispatch != nil {
+			model.WarnAdmissionGrants("task", id, model.AdmissionBypass)
+			if *req.PriorityDispatch {
+				if task.Admission < model.AdmissionBypass {
+					task.Admission = model.AdmissionBypass
+				}
+			} else if !task.IsConsoleSession() && task.Admission == model.AdmissionBypass {
+				task.Admission = model.AdmissionStandard
 			}
 		}
 		if retargeted {
@@ -5614,6 +5686,23 @@ func (c *Client) SetCapability(ctx context.Context, id, capabilityID string, att
 	if capabilityID == "" {
 		return validationErrorf("capability id is required")
 	}
+	if adm := model.AdmissionOfGrantName(capabilityID); adm > model.AdmissionStandard {
+		model.WarnAdmissionGrants("task", id, adm)
+		mutateCtx := model.WithAdmissionChange(ctx, c.requestActor(ctx))
+		return c.mutate(mutateCtx, id, func(task *model.Task) error {
+			task.Grants = slices.DeleteFunc(task.Grants, func(g model.Grant) bool {
+				return model.IsRetiredAdmissionGrant(g.Capability)
+			})
+			if attach {
+				if adm > task.Admission {
+					task.Admission = adm
+				}
+			} else if !task.IsConsoleSession() && task.Admission == adm {
+				task.Admission = model.AdmissionStandard
+			}
+			return nil
+		})
+	}
 	var targetIDs []string
 	if attach {
 		normalized, err := c.normalizeCapabilityIDs(capabilityID)
@@ -5641,10 +5730,6 @@ func (c *Client) SetCapability(ctx context.Context, id, capabilityID string, att
 	return c.mutate(ctx, id, func(task *model.Task) error {
 		kept := make([]model.Grant, 0, len(task.Grants)+len(targetIDs))
 		for _, g := range task.Grants {
-			if !attach && g.Capability == model.DurableCapability && task.IsConsoleSession() {
-				kept = append(kept, g)
-				continue
-			}
 			if !slices.Contains(targetIDs, g.Capability) {
 				kept = append(kept, g)
 			}
@@ -7221,6 +7306,13 @@ func (c *Client) agentMayApprove(ctx context.Context, task model.Task) error {
 			task.ID, by.ID)
 	}
 	var asked []string
+	defaultAdm, err := c.Store.EffectiveDefaultAdmission(ctx, task.Target)
+	if err != nil {
+		return err
+	}
+	if task.Admission > defaultAdm {
+		asked = append(asked, "admission "+task.Admission.String())
+	}
 	for _, capability := range agentEscalatedCapabilities(task, *requester) {
 		asked = append(asked, "capability "+capability)
 	}

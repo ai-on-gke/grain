@@ -58,7 +58,7 @@ func TaskKindTags(t Task) []string {
 	if t.State == model.StateProposed {
 		out = append(out, TaskKindProposal)
 	}
-	if slices.Contains(t.Capabilities, DurableCapability) {
+	if t.Admission == model.AdmissionDurable.String() {
 		out = append(out, TaskKindDurable)
 	}
 	if t.Imported {

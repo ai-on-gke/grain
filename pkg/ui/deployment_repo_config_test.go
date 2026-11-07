@@ -86,7 +86,8 @@ func TestDeploymentRepoConfigWritesRepoConfig(t *testing.T) {
 	setReq := `{
 		"setupCommand": "npm run custom-setup",
 		"promptExtension": "team-specific prompt",
-		"defaultCapabilities": ["read-issues", "priority-dispatch"],
+		"defaultCapabilities": ["read-issues", "console"],
+		"defaultAdmission": "bypass",
 		"ciCapabilities": ["repo-read:acme/widgets"],
 		"ciMode": "grain",
 		"repairTemplateId": "template-123",
@@ -108,7 +109,8 @@ func TestDeploymentRepoConfigWritesRepoConfig(t *testing.T) {
 		t.Fatalf("GetRepoConfig = %+v, %v", saved, err)
 	}
 	if saved.SetupCommand != "npm run custom-setup" || saved.CIMode != model.CIModeGrain || saved.RepairTemplateID != "template-123" ||
-		!slices.Equal(saved.DefaultCapabilities, []string{"read-issues", "priority-dispatch"}) {
+		saved.DefaultAdmission != model.AdmissionBypass ||
+		!slices.Equal(saved.DefaultCapabilities, []string{"read-issues", "console"}) {
 		t.Fatalf("repo_config after PUT = %+v", saved)
 	}
 

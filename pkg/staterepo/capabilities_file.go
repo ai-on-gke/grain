@@ -317,6 +317,9 @@ func (d *capabilitiesDoc) validateWithGCPSets(configuredSets []string, gcpServer
 	// One-release compatibility (schema 109): accept old-form gcp#gcp-key
 	// arguments in settings/capabilities.yml during state-repo import/check.
 	model.RewriteGCPKeyCatalogue(cat, configuredSets, gcpServerIDs, nil)
+	// One-release compatibility (schema 121): accept retired
+	// priority-dispatch and durable entries and fold/drop them on import.
+	model.StripAdmissionFromCatalogue(cat)
 	if err := cat.Validate(); err != nil {
 		errs = append(errs, err.Error())
 	}
@@ -822,6 +825,9 @@ func checkCapabilities(dir string) error {
 			id := fmt.Sprint(g[kind.parent])
 			owner := byID[id]
 			capability, _ := textOf(g["capability"])
+			if model.IsRetiredAdmissionGrant(capability) {
+				continue
+			}
 			if rewritten, changed, missing := model.RewriteGCPKeyGrant(capability, configuredSets, serverIDs); changed && missing == "" {
 				capability = rewritten
 			}
@@ -847,24 +853,72 @@ func checkCapabilities(dir string) error {
 	return nil
 }
 
-// capabilitiesWarnings reports retired in_process keys in
-// settings/capabilities.yml that should be moved to api_scopes.presets.<name>.
+// capabilitiesWarnings reports retired keys in settings/capabilities.yml and
+// retired priority-dispatch/durable grants in settings tables that import
+// folds onto admission for one release.
 func capabilitiesWarnings(dir string) ([]string, error) {
+	var warnings []string
 	doc, err := readCapabilitiesDoc(dir)
-	if err != nil || doc == nil || len(doc.InProcess) == 0 {
+	if err != nil {
 		return nil, err
 	}
-	names := make([]string, 0, len(doc.InProcess))
-	for name := range doc.InProcess {
-		names = append(names, name)
+	if doc != nil {
+		names := make([]string, 0, len(doc.InProcess))
+		for name := range doc.InProcess {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if preset, ok := model.RetiredInProcessPreset(name); ok {
+				warnings = append(warnings, fmt.Sprintf(
+					"%s: in_process.%s is retired; its entry still binds %s%s, so move it to api_scopes.presets.%s",
+					CapabilitiesPath, name, model.APIGrantPrefix, preset, preset))
+			} else if model.IsRetiredAdmissionGrant(name) {
+				warnings = append(warnings, fmt.Sprintf(
+					"%s: in_process.%s is retired and dropped on import; use default-admission / admission instead",
+					CapabilitiesPath, name))
+			}
+		}
+		if doc.Defaults != nil {
+			if doc.Defaults.Task != nil {
+				if _, a, folded := model.FoldAdmissionNames(*doc.Defaults.Task, model.AdmissionStandard); folded {
+					warnings = append(warnings, fmt.Sprintf("%s: defaults.task: %s", CapabilitiesPath, model.AdmissionDeprecationWarning(a)))
+				}
+			}
+			if doc.Defaults.Repos != nil {
+				for _, repo := range sortedRepoNames(*doc.Defaults.Repos) {
+					rd := (*doc.Defaults.Repos)[repo]
+					if _, a, folded := model.FoldAdmissionNames(rd.Task, model.AdmissionStandard); folded {
+						warnings = append(warnings, fmt.Sprintf("%s: defaults.repos[%s].task: %s", CapabilitiesPath, repo, model.AdmissionDeprecationWarning(a)))
+					}
+				}
+			}
+		}
 	}
-	sort.Strings(names)
-	var warnings []string
-	for _, name := range names {
-		if preset, ok := model.RetiredInProcessPreset(name); ok {
-			warnings = append(warnings, fmt.Sprintf(
-				"%s: in_process.%s is retired; its entry still binds %s%s, so move it to api_scopes.presets.%s",
-				CapabilitiesPath, name, model.APIGrantPrefix, preset, preset))
+	for _, kind := range []struct{ table, grants, parent string }{
+		{"template", "template_grant", "template_id"},
+		{"schedule", "schedule_grant", "schedule_id"},
+	} {
+		grants, _, err := dumpRowsOf(dir, kind.grants)
+		if err != nil {
+			return nil, err
+		}
+		byOwner := map[string]model.Admission{}
+		for _, g := range grants {
+			capName, _ := textOf(g["capability"])
+			if a := model.AdmissionOfGrantName(capName); a > model.AdmissionStandard {
+				id := fmt.Sprint(g[kind.parent])
+				byOwner[id] = max(byOwner[id], a)
+			}
+		}
+		ids := make([]string, 0, len(byOwner))
+		for id := range byOwner {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			warnings = append(warnings, fmt.Sprintf("%s (%s %s): %s",
+				DumpPath(kind.table), kind.table, id, model.AdmissionDeprecationWarning(byOwner[id])))
 		}
 	}
 	return warnings, nil

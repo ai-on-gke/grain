@@ -50,9 +50,11 @@ import RepoField from "./RepoField.jsx";
 import { taskPriority, wholeNumber } from "../wholeNumber.js";
 import WriteReposField from "./WriteReposField.jsx";
 import {
+  ADMISSION_OPTIONS,
   configuredCapabilities,
   LEGACY_CAPABILITIES_HINT,
   NO_CAPABILITIES_HINT,
+  normalizeAdmission,
   targetableRepos,
 } from "../state.js";
 import AccessGate from "./AccessGate.jsx";
@@ -194,6 +196,7 @@ function TemplateOverlay({
       // Every task this template files restarts when its run exits
       // (model.Template.KeepRunning), as the new-task form's own box.
       keepRunning: form.elements.keepRunning.checked,
+      admission: normalizeAdmission(data.get("admission")),
       // How much of the internet the sandbox of every task this
       // template files may reach (grain/task-269). "" is a template
       // that fixes nothing, so each firing takes the deployment's own
@@ -457,6 +460,22 @@ function TemplateOverlay({
             title="Immediately restart every task this template files when its run exits, instead of completing or parking it."
             sx={{ display: "flex" }}
           />
+          <TextField
+            select
+            name="admission"
+            label="Admission"
+            defaultValue={normalizeAdmission(template?.admission)}
+            helperText="how every task this template files is admitted to dispatch"
+            fullWidth
+            margin="normal"
+            size="small"
+          >
+            {ADMISSION_OPTIONS.map((o) => (
+              <MenuItem key={o.value} value={o.value} title={o.description}>
+                {o.label}
+              </MenuItem>
+            ))}
+          </TextField>
           <TextField
             select
             name="networkAccess"

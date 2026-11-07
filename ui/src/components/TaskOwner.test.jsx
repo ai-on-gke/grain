@@ -182,6 +182,14 @@ describe("Task owner UI and timeline proposer attribution", () => {
               oldOwner: "alice@example.com",
               newOwner: "bob@example.com",
             },
+            {
+              state: "admission_changed",
+              at: "2026-11-05T10:06:00Z",
+              actorLabel: "alice@example.com",
+              oldAdmission: "standard",
+              newAdmission: "bypass",
+              reason: "standard -> bypass",
+            },
           ],
         }}
         act={vi.fn()}
@@ -204,6 +212,10 @@ describe("Task owner UI and timeline proposer attribution", () => {
     expect(screen.getByText("Owner changed")).toBeInTheDocument();
     expect(
       screen.getByText(/from alice@example\.com to bob@example\.com/),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Admission changed")).toBeInTheDocument();
+    expect(
+      screen.getByText(/from Standard to Bypass queue/),
     ).toBeInTheDocument();
 
     await user.click(taskLink);

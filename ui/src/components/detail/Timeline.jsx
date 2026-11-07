@@ -21,6 +21,7 @@ import { formatDateTime } from "../../time.js";
 import fileToAttachment from "../../attachments.js";
 import {
   STATE_LABELS,
+  admissionLabel,
   outcomeLabel,
   pullRequestUrl,
   isAgentRunning,
@@ -161,7 +162,11 @@ const AUTO_MERGE_STEPS = {
 };
 
 function isSettingOrAuditStep(state) {
-  return Boolean(AUTO_MERGE_STEPS[state]) || state === "owner_changed";
+  return (
+    Boolean(AUTO_MERGE_STEPS[state]) ||
+    state === "owner_changed" ||
+    state === "admission_changed"
+  );
 }
 
 function renderTaskRefLink(taskId, label, onOpenTask, testId) {
@@ -329,8 +334,16 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
       tr.state === "owner_changed" && (tr.oldOwner || tr.newOwner)
         ? `from ${tr.oldOwner || "?"} to ${tr.newOwner || "?"}`
         : "";
-    const shownDetail = ownerTransferDetail || tr.detail || "";
-    const shownReason = tr.state === "owner_changed" ? "" : tr.reason || "";
+    const admissionChangeDetail =
+      tr.state === "admission_changed" && (tr.oldAdmission || tr.newAdmission)
+        ? `from ${admissionLabel(tr.oldAdmission)} to ${admissionLabel(tr.newAdmission)}`
+        : "";
+    const shownDetail =
+      ownerTransferDetail || admissionChangeDetail || tr.detail || "";
+    const shownReason =
+      tr.state === "owner_changed" || tr.state === "admission_changed"
+        ? ""
+        : tr.reason || "";
     return {
       key: `transition-${tr.state}-${i}`,
       at,
@@ -359,9 +372,11 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
               ? "Reopened"
               : tr.state === "owner_changed"
                 ? "Owner changed"
-                : AUTO_MERGE_STEPS[tr.state] ||
-                  STATE_LABELS[tr.state] ||
-                  tr.state}
+                : tr.state === "admission_changed"
+                  ? "Admission changed"
+                  : AUTO_MERGE_STEPS[tr.state] ||
+                    STATE_LABELS[tr.state] ||
+                    tr.state}
           </div>
           {/* Who proposed, closed, reopened, or transferred it, why, and
               what the step did (model.TaskEvent). */}

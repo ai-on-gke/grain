@@ -606,6 +606,7 @@ type SetDeploymentRepoConfigRequest struct {
 	SetupCommand                 *string   `json:"setupCommand,omitempty"`
 	PromptExtension              *string   `json:"promptExtension,omitempty"`
 	DefaultCapabilities          *[]string `json:"defaultCapabilities,omitempty"`
+	DefaultAdmission             *string   `json:"defaultAdmission,omitempty"`
 	CICapabilities               *[]string `json:"ciCapabilities,omitempty"`
 	CIMode                       *string   `json:"ciMode,omitempty"`
 	RepairTemplateID             *string   `json:"repairTemplateId,omitempty"`
@@ -716,13 +717,27 @@ func (c *Client) SetDeploymentRepoConfigWithUser(ctx context.Context, repo strin
 	if req.PromptExtension != nil {
 		cfg.PromptExtension = strings.TrimSpace(*req.PromptExtension)
 	}
+	if req.DefaultAdmission != nil {
+		adm, err := validateAdmission(*req.DefaultAdmission)
+		if err != nil {
+			return DeploymentRepoConfigResponse{}, validationErrorf("defaultAdmission: %v", err)
+		}
+		cfg.DefaultAdmission = adm
+	}
 	if req.DefaultCapabilities != nil {
+		filteredCaps, foldedAdm, hadRetired := model.FoldAdmissionNames(*req.DefaultCapabilities, model.AdmissionStandard)
+		if hadRetired {
+			model.WarnAdmissionGrants("repo "+parsedRepo.String(), "defaultCapabilities", foldedAdm)
+			if req.DefaultAdmission == nil && foldedAdm > cfg.DefaultAdmission {
+				cfg.DefaultAdmission = foldedAdm
+			}
+		}
 		// Unknown capabilities and hand-attached grain-ci are refused
 		// with capabilityRefusal, matching repo and settings defaults.
 		// Ids already stored are let through, as for ciCapabilities below.
-		clean := make([]string, 0, len(*req.DefaultCapabilities))
-		seen := make(map[string]bool, len(*req.DefaultCapabilities))
-		for _, capID := range *req.DefaultCapabilities {
+		clean := make([]string, 0, len(filteredCaps))
+		seen := make(map[string]bool, len(filteredCaps))
+		for _, capID := range filteredCaps {
 			t := strings.TrimSpace(capID)
 			if t != "" {
 				if slices.Contains(cfg.DefaultCapabilities, t) {

@@ -1785,6 +1785,11 @@ type Task struct {
 	// instead of completing, closing on nothing_needed, or resting on a
 	// goal.
 	KeepRunning bool
+	// Admission is how this task's runs are let in: standard, bypass or
+	// durable (design/design/unified-grants.design.md §4.1). Only a person
+	// may raise it above standard. It replaced the priority-dispatch and
+	// durable grants (HasPriorityDispatch, IsDurable).
+	Admission Admission `json:"admission,omitempty"`
 	// FiledVia is the sanitized X-Grain-Client label of the tool that
 	// filed this task ("jetski/1.4 session=abc"), "" when none was sent
 	// (SanitizeGrainClient). A label for provenance only: it is the

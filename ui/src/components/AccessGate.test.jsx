@@ -123,6 +123,20 @@ describe("task actions for a signed-in role", () => {
     expect(screen.getByRole("button", { name: "Prompt" })).toBeEnabled();
   });
 
+  it("disables a grain/viewer's admission select, saying why", () => {
+    detail(viewerConfig, {
+      ...baseTask,
+      repo: "acme/widgets",
+      state: "queued",
+      admission: "standard",
+    });
+    const admission = screen.getByRole("combobox", { name: "Admission" });
+    expect(admission).toHaveAttribute("aria-disabled", "true");
+    expect(refusal(admission)).toBe(
+      "Needs tasks:write, which your role grain/viewer does not grant.",
+    );
+  });
+
   it("disables a grain/viewer's retry and re-run CI on a failed task", () => {
     detail(viewerConfig, {
       ...baseTask,

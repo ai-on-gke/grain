@@ -53,7 +53,7 @@ Three layers decide, all in grain rather than in the server (spec §4.2.2):
 
 - **The catalogue**, `settings/capabilities.yml` in `grain/config` (`model.CapabilityCatalogue`, kept in `CapabilityPolicy.Catalogue`), lists capabilities with their defaults and restrictions: repositories, templates, run kinds (task, session, director, ci, process, review) and `requires_person`. It judges only what it lists.
 - **The capability policy**, `grain_config.capability_policy` (`model.CapabilityPolicy.Permits`), is a list of allow and deny rules over reference patterns, repositories, run kinds and CI events. An untrusted CI run (a fork, or an author without write access) holds no reference unless an allow rule opts it in. Settings previews what a change would newly refuse.
-- **Approval rules** (`unified-grants.design.md` §2). An agent can pass on only grants its own task holds (`GrantsSubsetOf`). A proposal asking for more is filed for a person. Some grants are **person-only**, which an agent can never grant or pass on: dangerous `api:` scopes (`IsDangerousGrant`), `priority-dispatch` and `durable` (`IsPersonOnlyGrant`), methods a linked server marks `protocol.RequirePersonGrant` (`…/grain#host-exec`), and arguments a server marks person-granted (`x-grain-person-granted`, such as a gcp set over an existing service account). `…/grain#sql` with `write: true` is dangerous.
+- **Approval rules** (`unified-grants.design.md` §2). An agent can pass on only grants its own task holds (`GrantsSubsetOf`). A proposal asking for more is filed for a person. Some grants are **person-only**, which an agent can never grant or pass on: dangerous `api:` scopes (`IsDangerousGrant`), methods a linked server marks `protocol.RequirePersonGrant` (`…/grain#host-exec`), and arguments a server marks person-granted (`x-grain-person-granted`, such as a gcp set over an existing service account). `…/grain#sql` with `write: true` is dangerous. (Task admission above `standard` — formerly the `priority-dispatch` and `durable` grants — follows the same person-only escalation rule on the `admission` task setting; `unified-grants.design.md` §4.1.)
 
 Grain's own API is granted as `api:<scope>` or `api:<preset>`, optionally limited with `@owner/name` ([`docs/agent-api.md`](../../docs/agent-api.md)). It is the planned `…/api` in-process server, but is not yet recorded under that reference (unified-grants slices 2–4).
 
@@ -74,7 +74,7 @@ Before capability servers, grain had a registry of in-process providers, each gr
 
 - `github-sandbox` and `read-issues` (becoming `#sandbox-repo` and `#read-issues` on an in-process `…/github` server);
 - the CI alias `release-gate-read` (retiring with `…/api` references in unified-grants slices 2–4);
-- `console`, `priority-dispatch` and `durable`, which are decided to become the task settings `hosting` and `admission` (§4.1).
+- `console`, which is decided to become the `hosting` task setting (§4.1; `priority-dispatch` and `durable` moved into the `admission` task setting in schema migration 121).
 
 Until each one is converted, the UI shows it under **Legacy capabilities**.
 

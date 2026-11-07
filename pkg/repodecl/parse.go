@@ -144,6 +144,9 @@ type rawTemplate struct {
 	// KeepRunning is model.Template.KeepRunning: every task filed from
 	// this template immediately restarts when its run exits.
 	KeepRunning bool `yaml:"keep-running"`
+	// Admission is model.Template.Admission: "standard", "bypass" or
+	// "durable".
+	Admission string `yaml:"admission"`
 	// Priority is model.Template.Priority: optional default priority for
 	// tasks filed from this template.
 	Priority *int `yaml:"priority"`
@@ -224,62 +227,72 @@ type rawField struct {
 	Required bool     `yaml:"required"`
 }
 
-func parseTemplate(f file, repo model.RepoRef) (model.Template, model.RefPushSet, error) {
-	tmpl, raw, err := parseTemplateRaw(f, repo)
+func parseTemplate(f file, repo model.RepoRef) (model.Template, model.RefPushSet, string, error) {
+	tmpl, raw, warn, err := parseTemplateRaw(f, repo)
 	if err != nil {
-		return model.Template{}, nil, err
+		return model.Template{}, nil, "", err
 	}
 	push, err := parsePush(f, raw.Push)
 	if err != nil {
-		return model.Template{}, nil, err
+		return model.Template{}, nil, "", err
 	}
-	return tmpl, push, nil
+	return tmpl, push, warn, nil
 }
 
-func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, error) {
+func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, string, error) {
 	var raw rawTemplate
 	if err := decode(f, model.DeclaredTemplate, &raw); err != nil {
-		return model.Template{}, raw, err
+		return model.Template{}, raw, "", err
 	}
 	body := raw.Body
 	if strings.TrimSpace(raw.Prompt) != "" {
 		if strings.TrimSpace(body) != "" && strings.TrimSpace(body) != strings.TrimSpace(raw.Prompt) {
-			return model.Template{}, raw, fmt.Errorf("%s: specify body or prompt, not both", f.path)
+			return model.Template{}, raw, "", fmt.Errorf("%s: specify body or prompt, not both", f.path)
 		}
 		body = raw.Prompt
 	}
 	title := strings.TrimSpace(raw.Title)
 	if title == "" && f.stem != model.DefaultReviewStem {
-		return model.Template{}, raw, fmt.Errorf("%s: a template needs a title -- it is what the task it files is called", f.path)
+		return model.Template{}, raw, "", fmt.Errorf("%s: a template needs a title -- it is what the task it files is called", f.path)
 	}
 	network, err := parseNetwork(f, raw.Network)
 	if err != nil {
-		return model.Template{}, raw, err
+		return model.Template{}, raw, "", err
 	}
 	nothingNeeded, err := model.ParseNothingNeededAction(strings.TrimSpace(raw.NothingNeeded))
 	if err != nil {
-		return model.Template{}, raw, fmt.Errorf("%s: nothing-needed is %q or %q, got %q",
+		return model.Template{}, raw, "", fmt.Errorf("%s: nothing-needed is %q or %q, got %q",
 			f.path, model.NothingNeededClose, model.NothingNeededAck, strings.TrimSpace(raw.NothingNeeded))
 	}
 	values, err := parseCustomFields(f, raw.CustomFields)
 	if err != nil {
-		return model.Template{}, raw, err
+		return model.Template{}, raw, "", err
 	}
 	fields, err := parseFields(f, raw.Fields)
 	if err != nil {
-		return model.Template{}, raw, err
+		return model.Template{}, raw, "", err
+	}
+	admission, err := model.ParseAdmission(raw.Admission)
+	if err != nil {
+		return model.Template{}, raw, "", fmt.Errorf("%s: %w", f.path, err)
 	}
 	reads, writes, grants, err := parseCapabilities(f, repo, raw.Capabilities)
 	if err != nil {
-		return model.Template{}, raw, err
+		return model.Template{}, raw, "", err
+	}
+	var warn string
+	grants, admission, foldedAdmission := model.FoldAdmissionGrants(grants, admission)
+	if foldedAdmission {
+		model.WarnAdmissionGrants("declared template", f.path, admission)
+		warn = fmt.Sprintf("%s: capabilities: %s", f.path, model.AdmissionDeprecationWarning(admission))
 	}
 	if err := checkTeam(f, raw.Team); err != nil {
-		return model.Template{}, raw, err
+		return model.Template{}, raw, "", err
 	}
 	var priority *int
 	if raw.Priority != nil {
 		if *raw.Priority < 0 {
-			return model.Template{}, raw, fmt.Errorf("%s: priority must be a positive integer, got %d", f.path, *raw.Priority)
+			return model.Template{}, raw, "", fmt.Errorf("%s: priority must be a positive integer, got %d", f.path, *raw.Priority)
 		}
 		if *raw.Priority > 0 {
 			p := *raw.Priority
@@ -304,13 +317,14 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 
 		Interactive:         raw.Interactive,
 		KeepRunning:         raw.KeepRunning,
+		Admission:           admission,
 		Priority:            priority,
 		NothingNeededAction: nothingNeeded,
 	}
 	if raw.AutoMerge != nil {
 		tmpl.AutoMerge = *raw.AutoMerge
 	}
-	return tmpl, raw, nil
+	return tmpl, raw, warn, nil
 }
 
 // TemplatePush is the push set the template file at filePath declares, as
@@ -608,6 +622,7 @@ type rawSchedule struct {
 	Review               string               `yaml:"review"`
 	Enabled              *bool                `yaml:"enabled"`
 	Model                string               `yaml:"model"`
+	Admission            string               `yaml:"admission"`
 }
 
 type rawScheduleTrigger struct {
@@ -653,14 +668,14 @@ type rawDayAt struct {
 // workflows do not parse is already an error for the whole repository,
 // so a schedule naming one is not also told that it does not exist.
 func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool,
-	workflows []ci.Workflow, workflowsRead bool) (model.Schedule, error) {
+	workflows []ci.Workflow, workflowsRead bool) (model.Schedule, string, error) {
 	var raw rawSchedule
 	if err := decode(f, model.DeclaredSchedule, &raw); err != nil {
-		return model.Schedule{}, err
+		return model.Schedule{}, "", err
 	}
 
 	if err := checkTeam(f, raw.Team); err != nil {
-		return model.Schedule{}, err
+		return model.Schedule{}, "", err
 	}
 	sched := model.Schedule{
 		ID:       model.RepoDeclaredID(model.DeclaredSchedule, repo, f.stem),
@@ -679,23 +694,23 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 	}
 	switch {
 	case named > 1:
-		return model.Schedule{}, fmt.Errorf("%s: a schedule fires a template, runs a suite or runs a "+
+		return model.Schedule{}, "", fmt.Errorf("%s: a schedule fires a template, runs a suite or runs a "+
 			"workflow -- one of `template:`, `suite:` and `workflow:`, not several", f.path)
 	case workflow != "":
 		if !workflowsRead {
-			return model.Schedule{}, fmt.Errorf("%s: cannot check the workflow %q, because this "+
+			return model.Schedule{}, "", fmt.Errorf("%s: cannot check the workflow %q, because this "+
 				"repository's %s did not parse", f.path, workflow, ci.WorkflowDir)
 		}
 		stem, err := scheduledWorkflowStem(f, workflow, workflows)
 		if err != nil {
-			return model.Schedule{}, err
+			return model.Schedule{}, "", err
 		}
 		id := model.WorkflowReviewTemplateID(stem)
 		review := model.SystemTemplate(id, model.RepoRef{})
 		if review == nil {
 			// Unreachable unless pkg/model and this package have been
 			// changed apart -- workflowSchedule's own check.
-			return model.Schedule{}, fmt.Errorf("%s: grain has no template to review a scheduled workflow with (%s)",
+			return model.Schedule{}, "", fmt.Errorf("%s: grain has no template to review a scheduled workflow with (%s)",
 				f.path, id)
 		}
 		sched.TemplateID = &id
@@ -708,7 +723,7 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 		sched.AutoApproveProposals = true
 	case template != "":
 		if !templates[template] {
-			return model.Schedule{}, fmt.Errorf("%s: no template %q -- a schedule fires a template this "+
+			return model.Schedule{}, "", fmt.Errorf("%s: no template %q -- a schedule fires a template this "+
 				"repository declares, named by file (%s/%s.yml)",
 				f.path, template, model.TemplateDeclarationDir, template)
 		}
@@ -717,12 +732,12 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 		sched.Title = displayName(raw.Name, f.stem)
 	case suite != "":
 		if !suites[suite] {
-			return model.Schedule{}, fmt.Errorf("%s: no suite %q -- a schedule runs a suite this "+
+			return model.Schedule{}, "", fmt.Errorf("%s: no suite %q -- a schedule runs a suite this "+
 				"repository declares, named by file (%s/%s.yml)",
 				f.path, suite, model.SuiteDeclarationDir, suite)
 		}
 		if sched.Base == "" {
-			return model.Schedule{}, fmt.Errorf("%s: a schedule that runs a suite needs `base:` -- "+
+			return model.Schedule{}, "", fmt.Errorf("%s: a schedule that runs a suite needs `base:` -- "+
 				"a suite run has no default branch to fall back to", f.path)
 		}
 		id := model.RepoDeclaredID(model.DeclaredSuite, repo, suite)
@@ -735,7 +750,7 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 		}
 		stem := gh.WorkflowStem()
 		if err := model.ValidateDeclarationStem(stem); err != nil {
-			return model.Schedule{}, fmt.Errorf("%s: github_workflow_run workflow %q: %w", f.path, gh.Workflow, err)
+			return model.Schedule{}, "", fmt.Errorf("%s: github_workflow_run workflow %q: %w", f.path, gh.Workflow, err)
 		}
 		// GitHub's run, not grain CI's: its own prompt
 		// (model.GitHubWorkflowReviewTemplateID), which sends the agent to
@@ -743,7 +758,7 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 		id := model.GitHubWorkflowReviewTemplateID(stem)
 		review := model.SystemTemplate(id, model.RepoRef{})
 		if review == nil {
-			return model.Schedule{}, fmt.Errorf("%s: grain has no template to review a workflow with (%s)",
+			return model.Schedule{}, "", fmt.Errorf("%s: grain has no template to review a workflow with (%s)",
 				f.path, id)
 		}
 		sched.TemplateID = &id
@@ -753,20 +768,20 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 		}
 		sched.AutoApproveProposals = true
 	default:
-		return model.Schedule{}, fmt.Errorf("%s: a schedule needs a `template:` to fire, a `suite:` to run "+
+		return model.Schedule{}, "", fmt.Errorf("%s: a schedule needs a `template:` to fire, a `suite:` to run "+
 			"or a `workflow:` to run", f.path)
 	}
 
 	recurrence, err := parseRecurrence(f, raw)
 	if err != nil {
-		return model.Schedule{}, err
+		return model.Schedule{}, "", err
 	}
 	sched.Recurrence = recurrence
 	switch overlap := model.OverlapPolicy(strings.TrimSpace(raw.Overlap)); overlap {
 	case "", model.OverlapSkip, model.OverlapAllow:
 		sched.Overlap = overlap
 	default:
-		return model.Schedule{}, fmt.Errorf("%s: overlap is \"skip\" or \"allow\", got %q", f.path, string(overlap))
+		return model.Schedule{}, "", fmt.Errorf("%s: overlap is \"skip\" or \"allow\", got %q", f.path, string(overlap))
 	}
 	if workflow != "" || (sched.Recurrence.Kind == model.RecurrenceGitHubWorkflowRun && template == "" && suite == "") {
 		// A workflow firing is unfinished until its run has ended and its
@@ -776,7 +791,7 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 		// nobody coming to read it. Which is why a workflow's own cron is
 		// always OverlapSkip (workflowSchedule), and why this one is too.
 		if sched.Overlap == model.OverlapAllow {
-			return model.Schedule{}, fmt.Errorf("%s: a schedule that runs a workflow cannot overlap -- "+
+			return model.Schedule{}, "", fmt.Errorf("%s: a schedule that runs a workflow cannot overlap -- "+
 				"grain reviews one run of it at a time, so `overlap:` is \"skip\" or left out", f.path)
 		}
 		sched.Overlap = model.OverlapSkip
@@ -786,10 +801,10 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 	// template or a suite files its tasks whatever happens.
 	sched.WorkflowReview = model.WorkflowReviewPolicy(strings.TrimSpace(raw.Review))
 	if err := sched.WorkflowReview.Validate(); err != nil {
-		return model.Schedule{}, fmt.Errorf("%s: %w", f.path, err)
+		return model.Schedule{}, "", fmt.Errorf("%s: %w", f.path, err)
 	}
 	if sched.WorkflowReview != "" && workflow == "" && sched.Recurrence.Kind != model.RecurrenceGitHubWorkflowRun {
-		return model.Schedule{}, fmt.Errorf("%s: `review:` says when the run of a scheduled workflow is "+
+		return model.Schedule{}, "", fmt.Errorf("%s: `review:` says when the run of a scheduled workflow is "+
 			"reviewed, and this schedule runs no `workflow:`", f.path)
 	}
 	if raw.AutoApproveProposals != nil {
@@ -804,21 +819,36 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 	// and saying one there is refused rather than ignored.
 	sched.Model = strings.TrimSpace(raw.Model)
 	if sched.Model != "" && sched.SuiteID != nil {
-		return model.Schedule{}, fmt.Errorf("%s: a schedule that runs a suite cannot choose a model -- "+
+		return model.Schedule{}, "", fmt.Errorf("%s: a schedule that runs a suite cannot choose a model -- "+
 			"set `model:` on the suite's templates instead", f.path)
 	}
 
+	admission, err := model.ParseAdmission(raw.Admission)
+	if err != nil {
+		return model.Schedule{}, "", fmt.Errorf("%s: %w", f.path, err)
+	}
+	if admission != model.AdmissionStandard && sched.SuiteID != nil {
+		return model.Schedule{}, "", fmt.Errorf("%s: a schedule that runs a suite cannot choose admission -- "+
+			"set `admission:` on the suite's templates instead", f.path)
+	}
 	reads, writes, grants, err := parseCapabilities(f, repo, raw.Capabilities)
 	if err != nil {
-		return model.Schedule{}, err
+		return model.Schedule{}, "", err
 	}
 	if len(reads) > 0 || len(writes) > 0 {
-		return model.Schedule{}, fmt.Errorf("%s: capabilities: a schedule fires a template, runs a suite or runs a workflow, "+
+		return model.Schedule{}, "", fmt.Errorf("%s: capabilities: a schedule fires a template, runs a suite or runs a workflow, "+
 			"and repository access belongs on the template it fires (repo-read/repo-write)", f.path)
 	}
+	var warn string
+	grants, admission, foldedAdmission := model.FoldAdmissionGrants(grants, admission)
+	if foldedAdmission {
+		model.WarnAdmissionGrants("declared schedule", f.path, admission)
+		warn = fmt.Sprintf("%s: capabilities: %s", f.path, model.AdmissionDeprecationWarning(admission))
+	}
 	sched.Grants = grants
+	sched.Admission = admission
 
-	return sched, nil
+	return sched, warn, nil
 }
 
 // scheduledWorkflowStem resolves a schedule's `workflow:` -- a stem

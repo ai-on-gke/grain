@@ -323,6 +323,9 @@ type RepoDefaults struct {
 	// (*Client).defaultCapabilities' own answer, for this repo, rather
 	// than a second computation of it that could drift.
 	EffectiveDefaultCapabilities []string `json:"effectiveDefaultCapabilities"`
+	DefaultAdmission             string   `json:"defaultAdmission"`
+	DeploymentDefaultAdmission   string   `json:"deploymentDefaultAdmission"`
+	EffectiveDefaultAdmission    string   `json:"effectiveDefaultAdmission"`
 	// PromptExtension is this repo's own standing instructions for a run
 	// working in it -- model.RepoConfig.PromptExtension, exactly as
 	// stored, and the only one of the three fields below that a PUT to
@@ -604,6 +607,7 @@ type SetRepoSettingsRequest struct {
 	// default, observe.
 	MergeRecheck        *string   `json:"mergeRecheck,omitempty"`
 	DefaultCapabilities *[]string `json:"defaultCapabilities,omitempty"`
+	DefaultAdmission    *string   `json:"defaultAdmission,omitempty"`
 	CICapabilities      *[]string `json:"ciCapabilities,omitempty"`
 	PromptExtension     *string   `json:"promptExtension,omitempty"`
 	RepairTemplateID    *string   `json:"repairTemplateID,omitempty"`
@@ -711,9 +715,12 @@ func (c *Client) RepoDefaults(ctx context.Context, repo string) (RepoDefaults, e
 
 func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefaults, error) {
 	out := RepoDefaults{
-		Repo:                    repo.String(),
-		AvailableCICapabilities: c.ciCapabilityIDs(),
-		GrainCICheckName:        forge.GrainCICheckName,
+		Repo:                       repo.String(),
+		AvailableCICapabilities:    c.ciCapabilityIDs(),
+		GrainCICheckName:           forge.GrainCICheckName,
+		DefaultAdmission:           model.AdmissionStandard.String(),
+		DeploymentDefaultAdmission: model.AdmissionStandard.String(),
+		EffectiveDefaultAdmission:  model.AdmissionStandard.String(),
 	}
 	stored, err := c.Store.GetRepoConfig(ctx, repo)
 	if err != nil {
@@ -721,9 +728,12 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 	}
 	out.MergeRecheck = string(model.MergeRecheckModeOf(stored))
 	out.IssueImport = repoIssueImportOf(model.IssueImport{})
+	var storedAdmission model.Admission
 	if stored != nil {
 		out.IssueImport = repoIssueImportOf(stored.IssueImport)
 		out.DefaultCapabilities = stored.DefaultCapabilities
+		storedAdmission = stored.DefaultAdmission
+		out.DefaultAdmission = stored.DefaultAdmission.String()
 		out.CICapabilities = stored.CICapabilities
 		out.PromptExtension = stored.PromptExtension
 		out.RepairTemplateID = stored.RepairTemplateID
@@ -765,10 +775,14 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 	if err != nil {
 		return RepoDefaults{}, err
 	}
+	var deploymentAdmission model.Admission
 	if cfg != nil {
 		out.DeploymentDefaultCapabilities = cfg.DefaultCapabilities
+		deploymentAdmission = cfg.DefaultAdmission
+		out.DeploymentDefaultAdmission = cfg.DefaultAdmission.String()
 		out.DeploymentPromptExtension = cfg.PromptExtension
 	}
+	out.EffectiveDefaultAdmission = max(deploymentAdmission, storedAdmission).String()
 	// The same composition dispatch itself applies, with no task layer:
 	// what a run here is told when nothing overrides it
 	// (model.PromptExtensionFor).
@@ -821,20 +835,29 @@ func (c *Client) SetRepoDefaultCapabilities(ctx context.Context, repo string, id
 	if err != nil {
 		return RepoDefaults{}, validationErrorf("repo: %v", err)
 	}
-	clean, err := c.cleanRepoDefaultCapabilities(ids)
+	clean, foldedAdm, hadRetired, err := c.cleanRepoDefaultCapabilities(parsed.String(), ids)
 	if err != nil {
 		return RepoDefaults{}, err
 	}
-	return c.putRepoConfig(ctx, parsed, func(rc *model.RepoConfig) { rc.DefaultCapabilities = clean })
+	return c.putRepoConfig(ctx, parsed, func(rc *model.RepoConfig) {
+		rc.DefaultCapabilities = clean
+		if hadRetired && foldedAdm > rc.DefaultAdmission {
+			rc.DefaultAdmission = foldedAdm
+		}
+	})
 }
 
-func (c *Client) cleanRepoDefaultCapabilities(ids []string) ([]string, error) {
-	seen := make(map[string]bool, len(ids))
-	clean := make([]string, 0, len(ids))
-	for _, rawID := range ids {
+func (c *Client) cleanRepoDefaultCapabilities(repo string, ids []string) ([]string, model.Admission, bool, error) {
+	filtered, foldedAdm, hadRetired := model.FoldAdmissionNames(ids, model.AdmissionStandard)
+	if hadRetired {
+		model.WarnAdmissionGrants("repo "+repo, "defaultCapabilities", foldedAdm)
+	}
+	seen := make(map[string]bool, len(filtered))
+	clean := make([]string, 0, len(filtered))
+	for _, rawID := range filtered {
 		normalizedIDs, err := c.normalizeCapabilityIDs(rawID)
 		if err != nil {
-			return nil, err
+			return nil, 0, false, err
 		}
 		for _, id := range normalizedIDs {
 			if _, ok := c.capabilityByID(id); !ok {
@@ -844,7 +867,7 @@ func (c *Client) cleanRepoDefaultCapabilities(ids []string) ([]string, error) {
 				// whole repository's tasks rather than one of them. The CI
 				// grant an operator reaching for it actually wants is the
 				// next field along (SetRepoCICapabilities).
-				return nil, validationErrorf("defaultCapabilities: %s", capabilityRefusal(id))
+				return nil, 0, false, validationErrorf("defaultCapabilities: %s", capabilityRefusal(id))
 			}
 			if seen[id] {
 				continue
@@ -853,7 +876,7 @@ func (c *Client) cleanRepoDefaultCapabilities(ids []string) ([]string, error) {
 			clean = append(clean, id)
 		}
 	}
-	return clean, nil
+	return clean, foldedAdm, hadRetired, nil
 }
 
 // SetRepoPromptExtension replaces repo's own standing instructions --
@@ -1078,9 +1101,19 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 			return RepoDefaults{}, validationErrorf("mergeRecheck: %v", err)
 		}
 	}
+	var defaultAdm *model.Admission
+	if req.DefaultAdmission != nil {
+		a, err := validateAdmission(*req.DefaultAdmission)
+		if err != nil {
+			return RepoDefaults{}, validationErrorf("defaultAdmission: %v", err)
+		}
+		defaultAdm = &a
+	}
 	var defaultCaps []string
+	var foldedAdm model.Admission
+	var hadRetired bool
 	if req.DefaultCapabilities != nil {
-		if defaultCaps, err = c.cleanRepoDefaultCapabilities(*req.DefaultCapabilities); err != nil {
+		if defaultCaps, foldedAdm, hadRetired, err = c.cleanRepoDefaultCapabilities(parsed.String(), *req.DefaultCapabilities); err != nil {
 			return RepoDefaults{}, err
 		}
 	}
@@ -1147,6 +1180,11 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		}
 		if req.DefaultCapabilities != nil {
 			rc.DefaultCapabilities = defaultCaps
+		}
+		if defaultAdm != nil {
+			rc.DefaultAdmission = *defaultAdm
+		} else if hadRetired && foldedAdm > rc.DefaultAdmission {
+			rc.DefaultAdmission = foldedAdm
 		}
 		if req.CICapabilities != nil {
 			rc.CICapabilities = ciCaps

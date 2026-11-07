@@ -680,6 +680,14 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 		if err := model.MigrateTaskOwnerAndProposer(ctx, tx); err != nil {
 			return fmt.Errorf("staterepo: %w", err)
 		}
+		// One-release compatibility (schema 121): a repository at the
+		// current schema whose files still name the retired
+		// priority-dispatch or durable grants is accepted, and those
+		// grants are stored as the admission setting instead
+		// (design/design/unified-grants.design.md §4.1). Remove next release.
+		if err := model.MigrateAdmissionGrants(ctx, tx); err != nil {
+			return fmt.Errorf("staterepo: %w", err)
+		}
 	}
 	return tx.Commit()
 }
