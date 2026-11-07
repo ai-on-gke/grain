@@ -31,7 +31,7 @@ import AppIcon from "../AppIcon.jsx";
 import SecretField from "../SecretField.jsx";
 import { ConfigManagedNotice } from "../ConfigRepoLink.jsx";
 import { identifierField } from "../../identifierField.js";
-import SettingsCard from "./SettingsCard.jsx";
+import SettingsCard, { ReadOnlyFieldset } from "./SettingsCard.jsx";
 
 function connectionBadge(state, enabled) {
   if (!enabled || state === "disabled") {
@@ -324,11 +324,7 @@ export default function RegistrySection({ s }) {
         anchor="registry-config"
         allowInExternalMode
       >
-        <Box
-          component="fieldset"
-          disabled={locked}
-          sx={{ border: 0, p: 0, m: 0, minInlineSize: 0 }}
-        >
+        <ReadOnlyFieldset disabled={locked}>
           {!readOnly && s.configLocked && (
             <ConfigManagedNotice
               what="Registry connection and catalog settings"
@@ -473,7 +469,7 @@ export default function RegistrySection({ s }) {
             }
             sx={{ display: "flex", mt: 1 }}
           />
-        </Box>
+        </ReadOnlyFieldset>
 
         <Typography variant="subtitle2" sx={{ mt: 3 }}>
           Registration credential
@@ -500,11 +496,7 @@ export default function RegistrySection({ s }) {
         anchor="registry-scopes"
         allowInExternalMode
       >
-        <Box
-          component="fieldset"
-          disabled={locked}
-          sx={{ border: 0, p: 0, m: 0, minInlineSize: 0 }}
-        >
+        <ReadOnlyFieldset disabled={locked}>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
             Scopes come automatically from Settings → Repositories and each
             repo&apos;s work ownership (<code>on</code> → <code>primary</code>,{" "}
@@ -627,7 +619,7 @@ export default function RegistrySection({ s }) {
               Add rule
             </Button>
           </Stack>
-        </Box>
+        </ReadOnlyFieldset>
       </SettingsCard>
     </>
   );

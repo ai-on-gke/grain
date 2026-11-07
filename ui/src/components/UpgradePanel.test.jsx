@@ -1870,6 +1870,25 @@ describe("AutoUpgradeSettings", () => {
     expect(onSave).toHaveBeenCalledWith({ autoUpgradeTime: "04:30" });
   });
 
+  it("saves a new time of day on Enter, as every Settings box does", async () => {
+    const onSave = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <AutoUpgradeSettings
+        settings={{
+          ...settings,
+          autoUpgradeOn: "daily",
+          autoUpgradeChannel: "latest",
+        }}
+        onSave={onSave}
+      />,
+    );
+    const time = screen.getByLabelText(/time of day/i);
+    await user.clear(time);
+    await user.type(time, "04:30{Enter}");
+    expect(onSave).toHaveBeenCalledWith({ autoUpgradeTime: "04:30" });
+  });
+
   it("offers a channel set some other way", async () => {
     const user = userEvent.setup();
     render(

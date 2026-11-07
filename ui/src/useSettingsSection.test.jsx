@@ -86,6 +86,41 @@ describe("useSettingsSection", () => {
     expect(result.current.settings.showClosedByDefault).toBe(true);
   });
 
+  // A save refused because the setting lives in a config repository
+  // (409 config_managed_externally) handed showError the message alone,
+  // so the refusal dialog with its Create Config PR never opened and the
+  // patch landed in a toast instead (2026-11-07 settings walkthrough).
+  it("hands a config-repo refusal to showError whole, without a Retry", async () => {
+    const { result, showError } = await loaded();
+    const refusal = {
+      code: "config_managed_externally",
+      repo: "grain/config",
+      path: ["tables/grain_config.json"],
+      change: [{ path: "tables/grain_config.json", patch: "diff --git a b" }],
+    };
+    const err = Object.assign(
+      new Error("this setting is not written directly: ... diff --git a b"),
+      {
+        status: 409,
+        configRefusal: refusal,
+      },
+    );
+    api.mockRejectedValueOnce(err);
+    await act(() => result.current.saveChoice({ showClosedByDefault: true }));
+    expect(showError).toHaveBeenCalledWith(err);
+    expect(result.current.settings.showClosedByDefault).toBe(false);
+    expect(statusLine(result.current)).toBe(
+      "Couldn't save Show closed tasks by default",
+    );
+    expect(result.current.error.message).not.toContain("diff --git");
+    expect(result.current.error.retry).toBeUndefined();
+
+    // A later save that lands clears the refusal from the header.
+    api.mockResolvedValueOnce({ showClosedByDefault: true });
+    await act(() => result.current.saveChoice({ showClosedByDefault: true }));
+    expect(result.current.status).toBe("saved");
+  });
+
   // The auto overcommit bounds are saved inside sandboxOvercommit; a bound
   // the daemon refused (cpuMin above cpuMax) used to read "Couldn't save
   // Overcommit mode", naming a field nobody had touched.

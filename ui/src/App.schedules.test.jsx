@@ -194,6 +194,92 @@ describe("App", () => {
     expect(JSON.parse(opts.body)).not.toHaveProperty("model");
   });
 
+  // Admission (model.Schedule.Admission) is a column on schedules as on
+  // tasks; a raw schedule's pane had no way to say it (2026-11-07
+  // walkthrough).
+  it("reads and saves a raw schedule's admission", async () => {
+    const schedule = {
+      id: "sched-1",
+      title: "Nightly dependency bump",
+      description: "",
+      repo: "acme/widgets",
+      base: "",
+      autoMerge: false,
+      admission: "bypass",
+      recurrence: { kind: "everyNHours", everyNHours: 24 },
+      enabled: true,
+      nextRunAt: "2026-08-29T00:00:00Z",
+    };
+    setupApi(initialTasks, [schedule]);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Fix bug");
+
+    await user.click(screen.getByRole("button", { name: /^Processes/ }));
+    await user.click(await screen.findByText("Nightly dependency bump"));
+    const select = await screen.findByRole("combobox", { name: "Admission" });
+    expect(select).toHaveTextContent("Bypass queue");
+    await user.click(select);
+    await user.click(await screen.findByRole("option", { name: "Durable" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(
+        api.mock.calls.find(
+          ([path, opts]) =>
+            path === "/api/schedules/sched-1" && opts?.method === "PATCH",
+        ),
+      ).toBeTruthy(),
+    );
+    const [, opts] = api.mock.calls.find(
+      ([path, o]) => path === "/api/schedules/sched-1" && o?.method === "PATCH",
+    );
+    expect(JSON.parse(opts.body)).toMatchObject({ admission: "durable" });
+  });
+
+  // A declared schedule may raise its template's admission (template
+  // bypass, schedule durable): the preview has to be composed with the
+  // schedule's own, which the draft endpoint cannot read off a saved
+  // row (2026-11-07 walkthrough).
+  it("previews a template-backed schedule with its own admission", async () => {
+    const schedule = {
+      id: "sched-1",
+      title: "Bump dependencies",
+      description: "",
+      repo: "acme/widgets",
+      base: "",
+      autoMerge: false,
+      templateId: "template-1",
+      templateName: "Nightly dependency bump",
+      admission: "durable",
+      recurrence: { kind: "everyNHours", everyNHours: 24 },
+      enabled: true,
+      nextRunAt: "2026-08-29T00:00:00Z",
+    };
+    setupApi(initialTasks, [schedule]);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Fix bug");
+
+    await user.click(screen.getByRole("button", { name: /^Processes/ }));
+    await user.click(await screen.findByText("Bump dependencies"));
+    await screen.findByRole("heading", { name: "Edit schedule" });
+    const previews = () =>
+      api.mock.calls
+        .filter(
+          ([path, o]) =>
+            path === "/api/schedules/composition" && o?.method === "POST",
+        )
+        .map(([, o]) => JSON.parse(o.body));
+    await waitFor(() => expect(previews().length).toBeGreaterThan(0));
+    expect(previews().at(-1)).toMatchObject({
+      templateId: "template-1",
+      admission: "durable",
+    });
+    // Its admission is the template's to edit, not this pane's.
+    expect(screen.queryByRole("combobox", { name: "Admission" })).toBeNull();
+  });
+
   it("switches a schedule to every N minutes", async () => {
     const schedule = {
       id: "sched-1",

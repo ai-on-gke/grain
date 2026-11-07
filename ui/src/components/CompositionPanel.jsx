@@ -70,6 +70,7 @@ const LABELS = {
   model: "Model",
   autoMerge: "Auto-merge",
   keepRunning: "Keep running",
+  admission: "Admission",
   approval: "Approval",
   priority: "Task priority",
 };
@@ -116,6 +117,9 @@ const VALUES = {
     none: "none (this deployment only)",
   },
   nothingNeeded: { ack: "leave for acknowledgement" },
+  // The task pane's own Admission select words it "Bypass queue"
+  // (detail/Actions.jsx); "durable" reads the same either way.
+  admission: { bypass: "bypass queue" },
 };
 
 // passes says how many times the tasks below are filed. A suite run
