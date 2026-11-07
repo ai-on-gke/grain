@@ -1605,6 +1605,21 @@ func TestSetImageSourceHoldsTheReleaseRepositoryToTheAllowedOnes(t *testing.T) {
 	if got := u.EffectiveReleaseAssets().Repository; got != "github.com/ai-on-gke/grain" {
 		t.Fatalf("release repository loaded from the override file = %q, want github.com/ai-on-gke/grain", got)
 	}
+
+	// A private or loopback image repository with no -upgrade-release-repo
+	// derives no allowed release repository at all; refusing an override must
+	// say so plainly instead of rendering an empty "allowed are  (...)".
+	unmapped := New(Config{Image: &ImageConfig{
+		Repository:         "127.0.0.1:4255/x/grain",
+		SourceOverrideFile: filepath.Join(dir, "unmapped-source.json"),
+	}})
+	err := unmapped.SetImageSource(ImageSourceOverride{
+		Mode:              "release-assets",
+		ReleaseRepository: "github.com/acme/grain-fork",
+	})
+	if err == nil || !strings.Contains(err.Error(), "none is configured for this image repository") || strings.Contains(err.Error(), "allowed are ") {
+		t.Fatalf("unmapped SetImageSource error = %v, want 'none is configured for this image repository'", err)
+	}
 }
 
 // A deployment with -upgrade-verify-cmd defaults to the registry, and

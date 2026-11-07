@@ -153,6 +153,18 @@ func QualificationTag(stem string, repo RepoRef, candidate string) string {
 	return stem + ":" + strings.ToLower(repo.Owner) + "/" + strings.ToLower(repo.Name) + "@" + candidate
 }
 
+// QualificationAttemptTag is the SuiteRunOptions.Tag and check-run
+// ExternalID of attempt (1-based) of a candidate whose first Stage 2
+// attempt is tagged baseTag (QualificationTag). Attempt 1 keeps baseTag
+// unchanged so single-attempt candidates and existing check runs match as
+// they are; retries after an infrastructure stall are baseTag#2, #3, ...
+func QualificationAttemptTag(baseTag string, attempt int) string {
+	if attempt <= 1 {
+		return baseTag
+	}
+	return fmt.Sprintf("%s#%d", baseTag, attempt)
+}
+
 // GoModPin is the version go.mod requires module at, after any replace
 // of module by another version of itself. ok is false when go.mod does
 // not require module, replaces it with anything but a version of the

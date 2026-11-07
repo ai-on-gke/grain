@@ -73,6 +73,20 @@ ZONE="${ZONE:-us-east1-b}"
 PROJECT="${PROJECT:-grain-host}"
 MACHINE_TYPE="${MACHINE_TYPE:-e2-standard-4}"
 NAMESPACE="${NAMESPACE:-grain}"
+# The k8s-sandbox image comes from release assets (docs/release-assets.md):
+# RELEASE's (default channel-main) is loaded and pushed into IMAGE_MIRROR,
+# a registry the cluster pulls from, by scripts/release-assets.sh mirror.
+# With no IMAGE_MIRROR there is nowhere to push it, and the last image
+# published to Docker Hub is used instead; SANDBOX_IMAGE always wins.
+RELEASE="${RELEASE:-channel-main}"
+IMAGE_MIRROR="${IMAGE_MIRROR:-}"
+if [ -z "${SANDBOX_IMAGE:-}" ] && [ -n "$IMAGE_MIRROR" ]; then
+  SANDBOX_IMAGE="$(bash "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/release-assets.sh" mirror "$RELEASE" "$IMAGE_MIRROR" k8s-sandbox | sed -n 's/^k8s-sandbox=//p')"
+  [ -n "$SANDBOX_IMAGE" ] || { echo "could not mirror $RELEASE's k8s-sandbox image into $IMAGE_MIRROR" >&2; exit 1; }
+fi
+if [ -z "${SANDBOX_IMAGE:-}" ]; then
+  echo "SANDBOX_IMAGE and IMAGE_MIRROR unset: using docker.io/grainai/sandbox-k8s:main" >&2
+fi
 SANDBOX_IMAGE="${SANDBOX_IMAGE:-docker.io/grainai/sandbox-k8s:main}"
 TARGET_REPO="${TARGET_REPO:-bwsalmon/grain}"
 # The repository this verifies is the one this script lives in, so the

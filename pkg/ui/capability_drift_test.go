@@ -57,11 +57,10 @@ func TestOfferedCapabilitiesCoversEveryShippedCapability(t *testing.T) {
 	t.Parallel()
 	offered, shipped := capabilityIDs(), catalogIDs()
 	for _, id := range shipped {
-		// Except the ones no task may hold: those are shipped, granted
-		// and reported on, and their absence from the picker is the
-		// point rather than the drift this test is about
-		// (TestCIOnlyCapabilitiesAreNotOfferedToTasks below).
-		if ciOnlyCapability(id) {
+		// Except the ones no task may hold, or retired providers kept in
+		// capabilityProviderCatalog for Settings' secret status/check while
+		// tasks grant their capability-server method instead.
+		if ciOnlyCapability(id) || model.CanonicalLegacyGrant(id) != id {
 			continue
 		}
 		if !slices.Contains(offered, id) {

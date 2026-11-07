@@ -326,8 +326,8 @@ func TestAttachingTheMissingCapabilityStopsTheTaskSayingItIsWaiting(t *testing.T
 	c, store, ctx := testClient(t)
 	task := create(t, c, ctx)
 	if err := store.SetGrantWait(ctx, model.GrantWait{
-		TaskID: task.ID, Capability: "console",
-		Resource: "console", WaitingAt: baseTime,
+		TaskID: task.ID, Capability: model.GitHubSandboxRepoGrant,
+		Resource: model.GitHubSandboxRepoGrant, WaitingAt: baseTime,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +339,7 @@ func TestAttachingTheMissingCapabilityStopsTheTaskSayingItIsWaiting(t *testing.T
 		t.Fatal("detail says nothing while the task is parked for a missing grant")
 	}
 
-	if err := c.SetCapability(ctx, task.ID, "console", true); err != nil {
+	if err := c.SetCapability(ctx, task.ID, model.GitHubSandboxRepoGrant, true); err != nil {
 		t.Fatalf("attaching self-debug: %v", err)
 	}
 
@@ -751,19 +751,19 @@ func TestCreateTaskCarriesCapabilityGrants(t *testing.T) {
 	c, store, ctx := testClient(t)
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{
-		Title: "needs a key", Approved: true, Capabilities: &[]string{"console"},
+		Title: "needs a key", Approved: true, Capabilities: &[]string{model.GitHubSandboxRepoGrant},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(task.Capabilities) != 1 || task.Capabilities[0] != "console" {
+	if len(task.Capabilities) != 1 || task.Capabilities[0] != model.GitHubSandboxRepoGrant {
 		t.Fatalf("capabilities = %v, want [gemini-key]", task.Capabilities)
 	}
 	stored, err := store.GetTask(ctx, task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stored.Grants) != 1 || stored.Grants[0].Capability != "console" {
+	if len(stored.Grants) != 1 || stored.Grants[0].Capability != model.GitHubSandboxRepoGrant {
 		t.Fatalf("grants = %+v, want one gemini-key grant", stored.Grants)
 	}
 }
@@ -776,7 +776,7 @@ func TestCreateTaskProposalAcceptsGrainCICapability(t *testing.T) {
 	proposal, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title:        "proposed subtask",
 		ProposedBy:   parent.ID,
-		Capabilities: &[]string{"grain-ci", "console"},
+		Capabilities: &[]string{"grain-ci", model.GitHubSandboxRepoGrant},
 	})
 	if err != nil {
 		t.Fatalf("CreateTask proposal: %v", err)
@@ -787,7 +787,7 @@ func TestCreateTaskProposalAcceptsGrainCICapability(t *testing.T) {
 	}
 	hasGemini := false
 	for _, g := range stored.Grants {
-		if g.Capability == "console" {
+		if g.Capability == model.GitHubSandboxRepoGrant {
 			hasGemini = true
 		}
 	}
@@ -863,12 +863,12 @@ func TestCreateTaskCapabilitiesOverrideDeploymentDefaults(t *testing.T) {
 	putDefaultCapabilities(t, ctx, store, "gcp-key")
 
 	named, err := c.CreateTask(ctx, ui.CreateTaskRequest{
-		Title: "only this one", Approved: true, Capabilities: &[]string{"console"},
+		Title: "only this one", Approved: true, Capabilities: &[]string{model.GitHubSandboxRepoGrant},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(named.Capabilities, []string{"console"}) {
+	if !reflect.DeepEqual(named.Capabilities, []string{model.GitHubSandboxRepoGrant}) {
 		t.Errorf("capabilities = %v, want [gemini-key] alone", named.Capabilities)
 	}
 	stored, err := store.GetTask(ctx, named.ID)
@@ -899,13 +899,13 @@ func TestCreateTaskCapabilitiesOverrideDeploymentDefaults(t *testing.T) {
 func TestCreateTaskSkipsRetiredDefaultCapability(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
-	putDefaultCapabilities(t, ctx, store, "scratch-repo", "console")
+	putDefaultCapabilities(t, ctx, store, "scratch-repo", model.GitHubSandboxRepoGrant)
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "still filable", Approved: true})
 	if err != nil {
 		t.Fatalf("filing a task on a deployment defaulting a retired capability: %v", err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{"console"}) {
+	if !reflect.DeepEqual(task.Capabilities, []string{model.GitHubSandboxRepoGrant}) {
 		t.Fatalf("capabilities = %v, want [gemini-key]: the retired id is skipped, the rest still granted",
 			task.Capabilities)
 	}
@@ -932,7 +932,7 @@ func putRepoDefaultCapabilities(t *testing.T, ctx context.Context, store *model.
 func TestCreateTaskUnionsRepoDefaultCapabilities(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
-	putDefaultCapabilities(t, ctx, store, "console")
+	putDefaultCapabilities(t, ctx, store, model.GitHubSandboxRepoGrant)
 	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "gcp-key")
 
 	here, err := c.CreateTask(ctx, ui.CreateTaskRequest{
@@ -944,8 +944,8 @@ func TestCreateTaskUnionsRepoDefaultCapabilities(t *testing.T) {
 	// Compared sorted: a task's capabilities come back in the order
 	// Store.grantsOf reads them (by capability), not in the order they
 	// were seeded.
-	if !reflect.DeepEqual(here.Capabilities, []string{"console", model.GCPKeySandboxAgentGrant}) {
-		t.Errorf("capabilities = %v, want both the deployment's console and the repo's %s",
+	if !reflect.DeepEqual(here.Capabilities, []string{model.GCPKeySandboxAgentGrant, model.GitHubSandboxRepoGrant}) {
+		t.Errorf("capabilities = %v, want both the deployment's github#sandbox-repo and the repo's %s",
 			here.Capabilities, model.GCPKeySandboxAgentGrant)
 	}
 	stored, err := store.GetTask(ctx, here.ID)
@@ -966,7 +966,7 @@ func TestCreateTaskUnionsRepoDefaultCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(elsewhere.Capabilities, []string{"console"}) {
+	if !reflect.DeepEqual(elsewhere.Capabilities, []string{model.GitHubSandboxRepoGrant}) {
 		t.Errorf("capabilities = %v, want [gemini-key] alone on a repo with no defaults of its own",
 			elsewhere.Capabilities)
 	}
@@ -996,7 +996,7 @@ func TestCreateTaskUsesDefaultTargetRepoDefaultCapabilities(t *testing.T) {
 func TestCreateTaskWithNoRepoTakesOnlyDeploymentDefaultCapabilities(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
-	putDefaultCapabilities(t, ctx, store, "console")
+	putDefaultCapabilities(t, ctx, store, model.GitHubSandboxRepoGrant)
 	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "gcp-key")
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{
@@ -1005,7 +1005,7 @@ func TestCreateTaskWithNoRepoTakesOnlyDeploymentDefaultCapabilities(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{"console"}) {
+	if !reflect.DeepEqual(task.Capabilities, []string{model.GitHubSandboxRepoGrant}) {
 		t.Fatalf("capabilities = %v, want [gemini-key] alone", task.Capabilities)
 	}
 }
@@ -1016,13 +1016,13 @@ func TestCreateTaskWithNoRepoTakesOnlyDeploymentDefaultCapabilities(t *testing.T
 func TestCreateTaskSkipsRetiredRepoDefaultCapability(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
-	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "scratch-repo", "console")
+	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "scratch-repo", model.GitHubSandboxRepoGrant)
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "still filable", Approved: true})
 	if err != nil {
 		t.Fatalf("filing a task against a repo defaulting a retired capability: %v", err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{"console"}) {
+	if !reflect.DeepEqual(task.Capabilities, []string{model.GitHubSandboxRepoGrant}) {
 		t.Fatalf("capabilities = %v, want [gemini-key]", task.Capabilities)
 	}
 }
@@ -1142,12 +1142,12 @@ func TestCreateTaskCapabilitiesOverrideRepoDefaults(t *testing.T) {
 	putRepoDefaultCapabilities(t, ctx, store, "acme/widgets", "gcp-key")
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{
-		Title: "not that one", Approved: true, Capabilities: &[]string{"console"},
+		Title: "not that one", Approved: true, Capabilities: &[]string{model.GitHubSandboxRepoGrant},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{"console"}) {
+	if !reflect.DeepEqual(task.Capabilities, []string{model.GitHubSandboxRepoGrant}) {
 		t.Fatalf("capabilities = %v, want [gemini-key] alone", task.Capabilities)
 	}
 }
@@ -2116,7 +2116,7 @@ func TestSetCapabilityAttachesAndDetaches(t *testing.T) {
 	c, _, ctx := testClient(t)
 	task := create(t, c, ctx)
 
-	if err := c.SetCapability(ctx, task.ID, "console", true); err != nil {
+	if err := c.SetCapability(ctx, task.ID, model.GitHubSandboxRepoGrant, true); err != nil {
 		t.Fatal(err)
 	}
 	got, err := c.Task(ctx, task.ID)
@@ -2128,14 +2128,14 @@ func TestSetCapabilityAttachesAndDetaches(t *testing.T) {
 	}
 
 	// Attaching twice must not produce two grants.
-	if err := c.SetCapability(ctx, task.ID, "console", true); err != nil {
+	if err := c.SetCapability(ctx, task.ID, model.GitHubSandboxRepoGrant, true); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ = c.Task(ctx, task.ID); len(got.Capabilities) != 1 {
 		t.Fatalf("capabilities after a second attach = %v, want still one", got.Capabilities)
 	}
 
-	if err := c.SetCapability(ctx, task.ID, "console", false); err != nil {
+	if err := c.SetCapability(ctx, task.ID, model.GitHubSandboxRepoGrant, false); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ = c.Task(ctx, task.ID); len(got.Capabilities) != 0 {
@@ -2143,7 +2143,7 @@ func TestSetCapabilityAttachesAndDetaches(t *testing.T) {
 	}
 	// Detaching one that is not attached is a no-op, matching what
 	// removing an absent label used to do.
-	if err := c.SetCapability(ctx, task.ID, "console", false); err != nil {
+	if err := c.SetCapability(ctx, task.ID, model.GitHubSandboxRepoGrant, false); err != nil {
 		t.Fatalf("detaching an absent capability: %v", err)
 	}
 }
@@ -2160,7 +2160,7 @@ func TestGCPKeyAndGitHubSandboxCanBeGranted(t *testing.T) {
 
 	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "mint me a key", Approved: true,
-		Capabilities: &[]string{"gcp-key", "github-sandbox"},
+		Capabilities: &[]string{"gcp-key", model.GitHubSandboxRepoGrant},
 	})
 	if err != nil {
 		t.Fatalf("creating a task granting gcp-key and github-sandbox: %v", err)
@@ -2172,7 +2172,7 @@ func TestGCPKeyAndGitHubSandboxCanBeGranted(t *testing.T) {
 	}
 
 	plain := create(t, c, ctx)
-	for _, id := range []string{"gcp-key", "github-sandbox"} {
+	for _, id := range []string{"gcp-key", model.GitHubSandboxRepoGrant} {
 		if err := c.SetCapability(ctx, plain.ID, id, true); err != nil {
 			t.Errorf("attaching %s: %v", id, err)
 		}

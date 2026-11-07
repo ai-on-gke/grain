@@ -595,6 +595,8 @@ func templateSchema() Schema {
 			// work may touch.
 			{Model: "Interactive", Keys: carried("interactive"), Columns: []string{"interactive"}},
 			{Model: "KeepRunning", Keys: carried("keep-running"), Columns: []string{"keep_running"}},
+			{Model: "Admission", Keys: carried("admission"), Columns: []string{"admission"}},
+			{Model: "Hosting", Keys: carried("hosting"), Columns: []string{"hosting"}},
 			// `hostd`, which a template once carried (schema 94 to 110):
 			// which grain hostd host work runs on is a model connection's
 			// or a capability server's, never what a template files, so
@@ -808,6 +810,8 @@ func scheduleSchema() Schema {
 			// content: a schedule's model beats the template's
 			// (model.Schedule.Model), so a declared schedule may say it.
 			{Model: "Model", Keys: carried("model"), Columns: []string{"agent_model"}},
+			{Model: "Admission", Keys: carried("admission"), Columns: []string{"admission"}},
+			{Model: "Hosting", Keys: carried("hosting"), Columns: []string{"hosting"}},
 
 			// Content, which a declared schedule takes from the template
 			// or the suite it names rather than carrying twice.
@@ -954,6 +958,16 @@ func RepoSettingsSchema() Schema {
 					nowhere("capabilities", Authority),
 				},
 				Columns: []string{"default_capabilities"},
+			},
+			{
+				Model:   "DefaultAdmission",
+				Keys:    []Key{settingsOnly("default-admission", Authority)},
+				Columns: []string{"default_admission"},
+			},
+			{
+				Model:   "DefaultHosting",
+				Keys:    []Key{settingsOnly("default-hosting", Authority)},
+				Columns: []string{"default_hosting"},
 			},
 			// CICapabilities is what this deployment is willing to *give*
 			// this repository's CI jobs, and that is the whole of what

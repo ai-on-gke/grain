@@ -19,20 +19,21 @@ import (
 	"database/sql"
 )
 
-// githubSandboxRenames is migration 122's rename: the retired bare
+// githubSandboxRenames is migration 124's renames: the retired bare
 // github-sandbox capability to the in-process github server's sandbox-repo
-// method. Kept as the migration's own copy so later alias changes do not
-// alter what migration 122 rewrote.
+// method. Kept as the migration's own copy so later alias additions do not
+// alter what migration 124 rewrote.
 var githubSandboxRenames = map[string][]string{
-	"github-sandbox": {GitHubSandboxRepoGrant},
+	LegacyGitHubSandboxCapability: {GitHubSandboxRepoGrant},
 }
 
-// migrateGitHubSandboxGrants is schema migration 122's Up: the in-process
-// github-sandbox provider is retired onto the in-process github server's
-// sandbox-repo method, rewriting every stored grant across the three grant
-// tables, deployment and repository default capabilities, standing console
-// sessions, repo_config.ci_capabilities, and capability_policy rules and
-// catalogue defaults.
+// migrateGitHubSandboxGrants is schema migration 124's Up: rewrites stored
+// github-sandbox grants across the three grant tables, deployment and
+// repository default_capabilities, repo_config.ci_capabilities, standing
+// console_sessions and capability_policy rules/catalogue defaults to
+// https://grain.dev/capabilities/github#sandbox-repo={}. The github server's
+// sandbox-repo method is dedicated to what github-sandbox granted, so policy
+// rules of every kind are renamed onto GitHubSandboxRepoRef.
 func migrateGitHubSandboxGrants(ctx context.Context, tx *sql.Tx) error {
 	if err := rewriteLegacyGrantsMulti(githubSandboxRenames)(ctx, tx); err != nil {
 		return err

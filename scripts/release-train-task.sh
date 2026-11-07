@@ -56,6 +56,34 @@ fail() {
   exit 1
 }
 
+# read_ci <dest> <what> <grain ci args...>: run `grain ci <args>` into
+# <dest>. On failure, say which command failed, its exit status and what
+# grain wrote to stderr -- the reason, which is otherwise lost behind the
+# one-line fail -- and, for a capability refusal, which grant is missing,
+# then fail with <what>.
+read_ci() {
+  local dest="$1" what="$2" status=0
+  shift 2
+  "$grain" ci "$@" >"$dest" 2>"$out/ci.err" || status=$?
+  if [ "$status" = 0 ]; then
+    cat "$out/ci.err" >&2
+    return 0
+  fi
+  say "\`grain ci $*\` exited $status:"
+  if [ -s "$out/ci.err" ]; then
+    sed 's/^/release-train-task:   /' "$out/ci.err"
+  else
+    say "  (nothing on stderr)"
+  fi
+  if grep -qiE 'forbidden|does not hold|capabilit' "$out/ci.err"; then
+    say "this task cannot read $repo's CI: it needs ci:read on $repo (api:ci-read@$repo)."
+    say "grain-ci alone is stripped from a task filed for a repository grain CI does not gate"
+    say "(ci_mode: github); check the capabilities of .grain/templates/release-train.yml and of"
+    say "the task this run is for."
+  fi
+  fail "$what"
+}
+
 url="$(git -C "$checkout" remote get-url origin)" || fail "no origin remote in $checkout"
 rm -rf "$dir"
 git clone -q "$url" "$dir" || fail "could not clone $url"
@@ -103,8 +131,8 @@ fi
 if [ -n "$required" ]; then
   : > "$out/runs.jsonl"
   for wf in $required; do
-    "$grain" ci list --repo "$repo" --ref "$cut_branch" --workflow "$wf.yml" --provider github-actions --format github --limit 500 > "$out/runs-$wf.json" ||
-      fail "grain ci list could not read $wf.yml's GitHub Actions runs on $cut_branch"
+    read_ci "$out/runs-$wf.json" "grain ci list could not read $wf.yml's GitHub Actions runs on $cut_branch" \
+      list --repo "$repo" --ref "$cut_branch" --workflow "$wf.yml" --provider github-actions --format github --limit 500
     cat "$out/runs-$wf.json" >> "$out/runs.jsonl"
     rm -f "$out/runs-$wf.json"
   done
@@ -115,8 +143,8 @@ if [ -n "$required" ]; then
   } | if .grain_note == "" then del(.grain_note) else . end' "$out/runs.jsonl" > "$out/runs.json" ||
     fail "could not combine $cut_branch's GitHub Actions runs"
 else
-  "$grain" ci list --repo "$repo" --ref "$cut_branch" --provider github-actions --format github --limit 500 > "$out/runs.json" ||
-    fail "grain ci list could not read $cut_branch's GitHub Actions runs"
+  read_ci "$out/runs.json" "grain ci list could not read $cut_branch's GitHub Actions runs" \
+    list --repo "$repo" --ref "$cut_branch" --provider github-actions --format github --limit 500
 fi
 
 app=""
@@ -124,10 +152,10 @@ env_args=()
 if [ -n "$rc" ]; then
   rc_sha="$(git rev-parse "$rc^{commit}")"
   say "$rc (${rc_sha:0:12}) is in qualification; reading its verdicts"
-  "$grain" ci list --repo "$repo" --ref "$rc" --workflow nightly.yml --format github-jobs > "$out/qual-runs.json" ||
-    fail "grain ci list could not read nightly.yml's jobs on $rc"
-  "$grain" ci checks "$rc_sha" --repo "$repo" --name grain/release-qualification --format github > "$out/qual-checks.json" ||
-    fail "grain ci checks could not read grain/release-qualification on $rc"
+  read_ci "$out/qual-runs.json" "grain ci list could not read nightly.yml's jobs on $rc" \
+    list --repo "$repo" --ref "$rc" --workflow nightly.yml --format github-jobs
+  read_ci "$out/qual-checks.json" "grain ci checks could not read grain/release-qualification on $rc" \
+    checks "$rc_sha" --repo "$repo" --name grain/release-qualification --format github
   app="$(jq -r '.grain_app // empty' "$out/qual-checks.json")"
   env_args+=(RELEASE_QUALIFICATION_RUNS_JSON="$out/qual-runs.json" RELEASE_QUALIFICATION_CHECKS_JSON="$out/qual-checks.json")
 fi
@@ -137,8 +165,8 @@ fi
 hold_rc="${rc:-$dropped}"
 if [ -n "$hold_rc" ]; then
   hold_sha="$(git rev-parse "$hold_rc^{commit}")"
-  "$grain" ci checks "$hold_sha" --repo "$repo" --name grain/rc-hold --format github > "$out/hold-checks.json" ||
-    fail "grain ci checks could not read grain/rc-hold on $hold_rc"
+  read_ci "$out/hold-checks.json" "grain ci checks could not read grain/rc-hold on $hold_rc" \
+    checks "$hold_sha" --repo "$repo" --name grain/rc-hold --format github
   app="${app:-$(jq -r '.grain_app // empty' "$out/hold-checks.json")}"
   env_args+=(RELEASE_HOLD_CHECKS_JSON="$out/hold-checks.json")
 fi

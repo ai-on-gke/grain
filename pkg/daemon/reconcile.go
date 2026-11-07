@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability"
+	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
@@ -56,59 +56,42 @@ func ReapBoundary(ctx context.Context, store *model.Store, now time.Time) (time.
 	return edge.Add(-ReapGracePeriod), nil
 }
 
-// reapCapabilitiesBefore calls every registered Reaper -- both legacy
-// providers and in-process capability server methods declaring Reap -- with an
-// explicit boundary timestamp. Providers return partial deletion errors
-// alongside successes; both are logged so cleanup cannot silently remove
-// nothing.
+// reapCapabilitiesBefore calls every registered Reaper with an explicit
+// boundary timestamp. Providers return partial deletion errors alongside
+// successes; both are logged so cleanup cannot silently remove nothing.
 func ReapCapabilitiesBefore(ctx context.Context, registry *model.CapabilityRegistry, creds model.CredentialResolver, before time.Time) {
-	if registry != nil {
-		for _, p := range registry.Providers() {
-			reaper, ok := p.(model.Reaper)
-			if !ok {
-				continue
-			}
-			deleted, err := reaper.Reap(ctx, creds, before)
-			if len(deleted) > 0 {
-				log.Printf("grain daemon: reaped %d resource(s) created before %s for capability %q: %v",
-					len(deleted), before.Format(time.RFC3339), p.Spec().Name, deleted)
-			}
-			if err != nil {
-				log.Printf("grain daemon: reaping capability %q before %s: %v",
-					p.Spec().Name, before.Format(time.RFC3339), err)
-			}
-		}
+	if registry == nil {
+		return
 	}
-	for _, m := range capability.Methods() {
-		if m.Reap == nil {
+	// github#sandbox-repo's provider is no longer in the registry (schema
+	// migration 124), so leaked grain-sandbox-* repositories are swept
+	// through githubsandbox.Current().
+	providers := registry.Providers()
+	if _, has := registry.Lookup(model.LegacyGitHubSandboxCapability); !has && creds != nil {
+		providers = append(providers, githubsandbox.Current())
+	}
+	for _, p := range providers {
+		reaper, ok := p.(model.Reaper)
+		if !ok {
 			continue
 		}
-		deleted, err := m.Reap(ctx, creds, before)
+		deleted, err := reaper.Reap(ctx, creds, before)
 		if len(deleted) > 0 {
 			log.Printf("grain daemon: reaped %d resource(s) created before %s for capability %q: %v",
-				len(deleted), before.Format(time.RFC3339), m.Ref(), deleted)
+				len(deleted), before.Format(time.RFC3339), p.Spec().Name, deleted)
 		}
 		if err != nil {
 			log.Printf("grain daemon: reaping capability %q before %s: %v",
-				m.Ref(), before.Format(time.RFC3339), err)
+				p.Spec().Name, before.Format(time.RFC3339), err)
 		}
 	}
-}
-
-func hasMethodReapers() bool {
-	for _, m := range capability.Methods() {
-		if m.Reap != nil {
-			return true
-		}
-	}
-	return false
 }
 
 // reapCapabilities calls every registered Reaper with one boundary derived
 // from all live agent and CI work. A census failure fails closed and skips the
 // whole sweep.
 func reapCapabilities(ctx context.Context, store *model.Store, registry *model.CapabilityRegistry, creds model.CredentialResolver, now time.Time) {
-	if registry == nil && !hasMethodReapers() {
+	if registry == nil {
 		return
 	}
 	before, err := ReapBoundary(ctx, store, now)

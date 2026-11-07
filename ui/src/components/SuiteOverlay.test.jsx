@@ -16,6 +16,8 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SuiteOverlay from "./SuiteOverlay.jsx";
+import { AccessConfigProvider } from "../AccessContext.jsx";
+import { viewerConfig } from "../accessTestConfigs.js";
 import api from "../api.js";
 import {
   chips,
@@ -173,5 +175,41 @@ describe("SuiteOverlay", () => {
     );
     expect(post).toBeTruthy();
     expect(JSON.parse(post[1].body).templateIds).toEqual(["t-docs"]);
+  });
+
+  // A grain/viewer may open a suite but not change it: Delete, Save and
+  // "+ New template" are drawn disabled with the role's reason, as every
+  // other write on the Processes page is (AccessGate.jsx) -- this pane
+  // was missed when the rest were gated (2026-11-07 walkthrough).
+  it("draws a suite's writes disabled for a role without suites:write", () => {
+    render(
+      <AccessConfigProvider config={viewerConfig}>
+        <SuiteOverlay
+          suite={{
+            id: "suite-1",
+            name: "Release qualification",
+            mode: "count",
+            count: 1,
+            items: [{ templateId: "template-1" }],
+          }}
+          templates={[{ id: "template-1", name: "Bump", title: "Bump deps" }]}
+          onSaved={() => Promise.resolve()}
+          onClose={() => {}}
+          showError={() => {}}
+        />
+      </AccessConfigProvider>,
+    );
+    for (const name of ["Delete", "Save", "+ New template"]) {
+      expect(screen.getByRole("button", { name })).toBeDisabled();
+    }
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+    const denied = [...document.querySelectorAll("[data-access-denied]")].map(
+      (el) => el.getAttribute("data-access-denied"),
+    );
+    expect(denied.sort()).toEqual([
+      "suites:write",
+      "suites:write",
+      "templates:write",
+    ]);
   });
 });

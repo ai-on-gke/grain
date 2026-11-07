@@ -511,13 +511,6 @@ func retiredInProcessNames(g string) []string {
 	for legacy, to := range allLegacyGrantReplacements() {
 		if to == grant {
 			out = append(out, legacy)
-			continue
-		}
-		if IsCapabilityRef(to) && IsCapabilityRef(grant) && !strings.Contains(CapabilityGrantRef(grant), "#") {
-			toServer, _, _ := strings.Cut(CapabilityGrantRef(to), "#")
-			if strings.EqualFold(toServer, CapabilityGrantRef(grant)) {
-				out = append(out, legacy)
-			}
 		}
 	}
 	for legacy, tos := range legacyGrantMultiReplacements {

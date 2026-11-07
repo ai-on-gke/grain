@@ -81,17 +81,17 @@ test("drops a credential verdict when the re-check gets no answer", async ({
 }) => {
   // GET /api/settings is the real answer: the demo wires a capability
   // checker (demoCapabilityChecks in pkg/demo/demo_scenarios.go), so
-  // image-signing is checkable. The check itself is intercepted. Its
-  // verdict is the answer from the credential check, and the
+  // github-sandbox is checkable. The check itself is intercepted. Its
+  // verdict is the answer from GitHub, which issued the App's key, and the
   // demo has no key to send. That external boundary is the one thing stubbed here:
   // ok first, then a 502.
   let checks = 0;
-  await page.route("**/api/capabilities/image-signing/check", (route) => {
+  await page.route("**/api/capabilities/github-sandbox/check", (route) => {
     checks += 1;
     return checks === 1
       ? route.fulfill({
           json: {
-            id: "image-signing",
+            id: "github-sandbox",
             ok: true,
             detail: "The key was accepted (intercepted).",
             checkedAt: new Date().toISOString(),
@@ -104,7 +104,7 @@ test("drops a credential verdict when the re-check gets no answer", async ({
   });
 
   await page.goto("/admin/integrations");
-  await page.getByRole("button", { name: /^Image signing, / }).click();
+  await page.getByRole("button", { name: /^GitHub sandbox, / }).click();
   const testButton = page.getByRole("button", { name: "Test credential" });
 
   await testButton.click();

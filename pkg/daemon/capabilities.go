@@ -27,13 +27,10 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
 	"github.com/ai-on-gke/grain/pkg/capability/ciapi"
-	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
-	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/release"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
@@ -57,14 +54,6 @@ func newCapabilityRegistryWithStore(_ *model.Store, providers ...model.Capabilit
 // grants a capability against a registry that never registered one is
 // refused, cleanly, by model.ResolveGrants -- not a crash at startup.
 //
-// github-sandbox needs no deployment-level config -- its two secrets are all it
-// resolves, and FindInstallation asks GitHub itself which account to
-// act on (pkg/capability/githubsandbox's own doc comment) -- so it
-// registers unconditionally; an operator
-// who never runs `grain controller bootstrap-github-app` simply leaves
-// its two secrets unresolvable, and Materialize fails closed the same
-// way any other missing secret does.
-//
 // proxies and githubTokens are unused since the claude-, openai- and
 // gemini-proxy providers were retired onto the in-process model-proxy server
 // (modelProxyMethod) and github-credential:<name> was retired onto the
@@ -75,10 +64,10 @@ func CapabilityProviders(cfg Config, _ *model.Store, _ map[string]*modelproxy.En
 	// gemini-key is no longer a provider here: it was retired onto the
 	// gcp server's gemini-key (schema migration 103), which mints with
 	// the same gcp-key-minter secret and reaps keys older than 24h.
-	// github-sandbox is no longer a provider here either: it was retired
-	// onto the in-process github server's #sandbox-repo method
-	// (pkg/capability/githubsandbox, schema migration 122), configured here
-	// with the deployment's GitHub API host and transport settings.
+	// github-sandbox is no longer a provider here: it was retired onto
+	// the in-process github server's sandbox-repo method (schema migration
+	// 124), which mints and revokes through githubsandbox.Current() and
+	// reaps leaked grain-sandbox-* repositories in ReapCapabilitiesBefore.
 	githubsandbox.Configure(githubsandbox.Config{
 		Host: cfg.GithubHost, InsecureHTTP: cfg.GithubInsecureHTTP,
 	})
@@ -88,11 +77,8 @@ func CapabilityProviders(cfg Config, _ *model.Store, _ map[string]*modelproxy.En
 	// (schema migration 118), which places the same embedded playbooks.
 	// read-issues is no longer a provider here: it was retired onto the
 	// in-process github server's read-issues method (schema migration 121).
-	providers = append(providers,
-		consolecap.New(),
-		prioritydispatch.New(),
-		durable.New(),
-	)
+	// console is no longer a provider here: it was retired onto the task's
+	// hosting setting (schema migration 123).
 	// image-signing, registry-push and package-publish are no longer
 	// providers here: they were retired onto the in-process release
 	// server (pkg/capability/release, schema migration 101), whose

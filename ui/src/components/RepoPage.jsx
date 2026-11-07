@@ -98,6 +98,36 @@ export function sameWorkflowPath(path, typed) {
   return t !== "" && (path === t || path.endsWith(`/${t}`));
 }
 
+// issueImportDraftOf is the issue importer's text settings as the form
+// shows them: what was typed, or else what imp (the stored
+// issueImport) says, in the boxes' own shape -- the interval in whole
+// minutes, empty for the default.
+export function issueImportDraftOf(draft, imp) {
+  if (draft) return draft;
+  return {
+    repo: imp?.repo || "",
+    label: imp?.label || "",
+    interval: imp?.intervalSeconds
+      ? String(Math.round(imp.intervalSeconds / 60))
+      : "",
+  };
+}
+
+// issueImportDraftUnsaved reports whether the issue importer's source,
+// label or interval boxes hold something their Save has not stored.
+// Unlike the boxes that save when left, these wait for Save, so leaving
+// the page -- "← Repos", the rail, Back, a reload -- used to take a typed
+// label with it without asking (2026-11-07 repository walkthrough).
+export function issueImportDraftUnsaved(draft, imp) {
+  if (!draft || !imp) return false;
+  const stored = issueImportDraftOf(null, imp);
+  return (
+    draft.repo !== stored.repo ||
+    draft.label !== stored.label ||
+    draft.interval !== stored.interval
+  );
+}
+
 // workflowEditsUnsaved reports whether the CI tab's workflow rows hold
 // something the server has not stored: a row with only one of its two
 // halves, which the boxes' blur-save holds back on purpose, or a row the
@@ -403,6 +433,13 @@ export default function RepoPage({
   // box, so a save that succeeds takes down only its own refusal and never
   // an unrelated one shown since.
   const refusals = useRef(new Map());
+  // blurSaving names the boxes that save when they are left (upstream
+  // repository, prompt extension, setup command) whose save is in
+  // flight. Leaving the page by a click blurs the box first, so its
+  // save is already on its way and there is nothing to ask about; the
+  // leave guard below skips those, and asks only about an edit no save
+  // has been started for -- a reload or a closed tab, which blur nothing.
+  const blurSaving = useRef(new Set());
   const refuseSave = (key, err) => {
     refusals.current.set(key, String(err?.message || err));
     showError(err);
@@ -913,6 +950,7 @@ export default function RepoPage({
   };
 
   const saveUpstreamRepo = async (upstream) => {
+    blurSaving.current.add("upstream");
     try {
       const updated = await api(`${root}/settings`, {
         method: "PUT",
@@ -925,6 +963,8 @@ export default function RepoPage({
     } catch (err) {
       setUpstreamRepoText(storedUpstreamRepo);
       refuseSave("upstream", err);
+    } finally {
+      blurSaving.current.delete("upstream");
     }
   };
 
@@ -943,6 +983,7 @@ export default function RepoPage({
   // that would go missing.
   const savePromptExtension = async (textToSave) => {
     const val = typeof textToSave === "string" ? textToSave : promptText.trim();
+    blurSaving.current.add("prompt");
     try {
       const updated = await api(`${root}/prompt-extension`, {
         method: "PUT",
@@ -954,6 +995,8 @@ export default function RepoPage({
       await onRefreshConfig();
     } catch (err) {
       refuseSave("prompt", err);
+    } finally {
+      blurSaving.current.delete("prompt");
     }
   };
 
@@ -966,6 +1009,7 @@ export default function RepoPage({
   // it reachable, and clearing the last one is what takes it away.
   const saveSetupCommand = async (cmdToSave) => {
     const val = typeof cmdToSave === "string" ? cmdToSave : setupText.trim();
+    blurSaving.current.add("setup");
     try {
       const updated = await api(`${root}/setup-command`, {
         method: "PUT",
@@ -977,6 +1021,8 @@ export default function RepoPage({
       await onRefreshConfig();
     } catch (err) {
       refuseSave("setup", err);
+    } finally {
+      blurSaving.current.delete("setup");
     }
   };
 
@@ -1039,6 +1085,12 @@ export default function RepoPage({
   // (model.RepoConfig.IssueImport) through PUT .../settings, which
   // leaves every field it is not sent alone. The orchestrator's next
   // cycle reads the row; nothing is imported here.
+  //
+  // Only a save that carried the typed source, label and interval
+  // settles them. The two switches save on their own, and flipping
+  // "Queue imported tasks at once" used to clear a label typed and not
+  // yet saved beside it: the box went back to the stored one without a
+  // word (2026-11-07 repository walkthrough).
   const saveIssueImport = async (fields) => {
     try {
       setUpToDate(
@@ -1048,7 +1100,7 @@ export default function RepoPage({
         }),
       );
       settleSave("issueImport");
-      setImportDraft(null);
+      if ("issueImportLabel" in fields) setImportDraft(null);
       await onRefreshConfig();
     } catch (err) {
       refuseSave("issueImport", err);
@@ -1262,10 +1314,27 @@ export default function RepoPage({
   // Asked by "← Repos" and App's popstate (leavingLosesEdits) and by the
   // browser's beforeunload, like the Releases tab's job boxes. Read
   // through a ref, since guardLeaving holds the one function it is given.
+  //
+  // It asks about the issue importer's boxes too, which wait for their
+  // own Save, and about a box that saves when left but has not been left
+  // yet: a reload or a closed tab with the cursor still in the prompt
+  // extension used to drop what was typed there without a word
+  // (2026-11-07 repository walkthrough).
+  const blurBoxUnsaved = (key, loaded, text, stored) =>
+    loaded && !blurSaving.current.has(key) && text.trim() !== stored;
   const workflowsUnsaved = useRef(() => false);
   workflowsUnsaved.current = () =>
-    workflows !== null &&
-    workflowEditsUnsaved(workflowEdits, workflows.workflows);
+    (workflows !== null &&
+      workflowEditsUnsaved(workflowEdits, workflows.workflows)) ||
+    issueImportDraftUnsaved(importDraft, upToDate?.issueImport) ||
+    blurBoxUnsaved(
+      "upstream",
+      caps !== null,
+      upstreamRepoText,
+      storedUpstreamRepo,
+    ) ||
+    blurBoxUnsaved("prompt", prompt !== null, promptText, storedPromptText) ||
+    blurBoxUnsaved("setup", setup !== null, setupText, storedSetupText);
   useEffect(() => guardLeaving(() => workflowsUnsaved.current()), []);
 
   const editWorkflow = (index, field, value) => {
@@ -2599,21 +2668,8 @@ export default function RepoPage({
             ) : (
               (() => {
                 const imp = upToDate.issueImport;
-                const draft = importDraft || {
-                  repo: imp.repo || "",
-                  label: imp.label || "",
-                  interval: imp.intervalSeconds
-                    ? String(Math.round(imp.intervalSeconds / 60))
-                    : "",
-                };
-                const dirty =
-                  importDraft !== null &&
-                  (draft.repo !== (imp.repo || "") ||
-                    draft.label !== (imp.label || "") ||
-                    draft.interval !==
-                      (imp.intervalSeconds
-                        ? String(Math.round(imp.intervalSeconds / 60))
-                        : ""));
+                const draft = issueImportDraftOf(importDraft, imp);
+                const dirty = issueImportDraftUnsaved(importDraft, imp);
                 const edit = (field) => (e) =>
                   setImportDraft({ ...draft, [field]: e.target.value });
                 // The fields as typed, in the shape PUT .../settings takes.

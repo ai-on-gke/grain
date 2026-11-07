@@ -20,172 +20,166 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
-// ServerID is the canonical capability_id of the in-process GitHub capability
-// server, and MethodName its sandbox-repo method, which the retired
-// github-sandbox provider became (design/design/unified-grants.design.md §4,
-// schema migration 122).
+// ServerID is the in-process github server's capability_id, and
+// MethodName its sandbox-repo method, which github-sandbox grants became
+// (schema migration 124, model.GitHubSandboxRepoGrant).
 const (
 	ServerID   = model.GitHubCapabilityServerID
 	MethodName = model.GitHubSandboxRepoMethod
 )
 
-// SandboxRepoRule declares that a CI job receives #sandbox-repo only when the
-// repository's CI capabilities list grants it (repo_config.ci_capabilities),
-// narrowed by the job's own declaration -- while keeping #sandbox-repo
-// available to task runs too (TaskGrantable), as the retired github-sandbox
-// provider was.
-var SandboxRepoRule = model.CIGrantRule{RepoGranted: true, TaskGrantable: true}
+// current is the provider the daemon configured (Configure), built
+// afresh whenever its configuration changes; until then the default
+// one, on github.com.
+var current atomic.Pointer[Provider]
 
-var configuredProvider atomic.Pointer[Provider]
-
-// Configure sets the deployment's GitHub API host and transport settings for
-// the in-process #sandbox-repo method and its reaper.
-func Configure(cfg Config) {
-	configuredProvider.Store(NewProvider(cfg))
+// Configure gives the sandbox-repo method the deployment's GitHub host.
+// The daemon calls it whenever it builds its capability providers, and
+// tests use the returned restore function to reset package state.
+func Configure(cfg Config) func() {
+	return SetCurrent(NewProvider(cfg))
 }
 
-// ConfigureProvider sets p as the active #sandbox-repo provider until the
-// returned restore func is called. Intended for tests substituting a fake
-// GitHub App client.
-func ConfigureProvider(p *Provider) (restore func()) {
-	prev := configuredProvider.Swap(p)
-	return func() {
-		configuredProvider.Store(prev)
-	}
+// SetCurrent installs p as the active sandbox-repo provider and returns
+// a restore function resetting the previous provider.
+func SetCurrent(p *Provider) func() {
+	prev := current.Swap(p)
+	return func() { current.Store(prev) }
 }
 
-func currentProvider() *Provider {
-	if p := configuredProvider.Load(); p != nil {
+// Current is the provider sandbox-repo mints through: what the daemon's
+// hourly sweep reaps leaked sandbox repositories with (model.Reaper) and
+// Settings checks the App's credentials with, now that no registry holds
+// it.
+func Current() *Provider {
+	if p := current.Load(); p != nil {
 		return p
 	}
 	return NewProvider(Config{})
 }
 
-// Method returns the in-process https://grain.dev/capabilities/github#sandbox-repo
-// method, as capability.Register serves it.
-func Method() capability.Method {
-	type held struct {
-		p       *Provider
-		creds   model.CredentialResolver
-		ci      bool
-		auditID string
-		lease   *model.Lease
-		resp    *protocol.MintResponse
-	}
-	var mu sync.Mutex
-	leases := map[string]held{}
-	return capability.Method{
-		Server: ServerID,
-		Name:   "GitHub sandbox",
-		CI:     &SandboxRepoRule,
-		Reap: func(ctx context.Context, creds model.CredentialResolver, before time.Time) ([]string, error) {
-			return currentProvider().Reap(ctx, creds, before)
-		},
-		Spec: protocol.MethodSpec{
-			Name:        MethodName,
-			Description: "Create a private, single-use GitHub sandbox repo for this run",
-			Args:        map[string]any{"type": "object", "additionalProperties": false},
-			// The pass's deadline comes from grain's clock (task or CI pass).
-			Now: func() time.Time { return time.Time{} },
-			Mint: func(ctx context.Context, attemptID string, deadline time.Time, _ map[string]any) (*protocol.MintResponse, error) {
-				mu.Lock()
-				h, renewing := leases[attemptID]
-				mu.Unlock()
-				if renewing {
-					return h.resp, nil
-				}
-
-				now := time.Now().UTC()
-				p := currentProvider()
-				cc := model.CapabilityContext{
-					Run:      model.Run{ID: attemptID, Sandbox: attemptID, StartedAt: now},
-					Now:      now,
-					Deadline: deadline,
-				}
-				var auditID string
-				if job, isCI := model.CIMintFrom(ctx); isCI {
-					repo := job.Repo
-					cc.Task = model.Task{Target: &repo}
-					cc.Credentials = job.Credentials
-					cc.CI = true
-					auditID = job.RunID
-				} else {
-					cc.Credentials = model.MintCredentials(ctx)
-					auditID = model.MintRunID(ctx)
-				}
-				if auditID == "" {
-					auditID = attemptID
-				}
-				ctx = secrets.WithRun(ctx, auditID)
-
-				res, err := p.Resolve(ctx, cc)
-				if err != nil {
-					return nil, err
-				}
-				if res.Refused {
-					return &protocol.MintResponse{Status: protocol.StatusRefused, Reason: res.Reason}, nil
-				}
-				mat, err := p.Materialize(ctx, cc)
-				if err != nil {
-					return nil, err
-				}
-				prompt, err := p.PromptSection(ctx, cc, mat.Placements)
-				if err != nil {
-					if mat.Lease != nil {
-						_ = p.Revoke(ctx, cc, *mat.Lease)
-					}
-					return nil, err
-				}
-				resp := &protocol.MintResponse{
-					Status:        protocol.StatusOK,
-					PromptSection: prompt,
-				}
-				for _, pl := range mat.Placements {
-					resp.Placements = append(resp.Placements, protocol.Placement{
-						Path:    pl.Path,
-						Mode:    "0" + pl.EffectiveMode(),
-						Content: pl.Content,
-					})
-				}
-				mu.Lock()
-				leases[attemptID] = held{
-					p:       p,
-					creds:   cc.Credentials,
-					ci:      cc.CI,
-					auditID: auditID,
-					lease:   mat.Lease,
-					resp:    resp,
-				}
-				mu.Unlock()
-				return resp, nil
-			},
-			Release: func(ctx context.Context, attemptID string) error {
-				mu.Lock()
-				h, ok := leases[attemptID]
-				delete(leases, attemptID)
-				mu.Unlock()
-				if !ok || h.lease == nil {
-					return nil
-				}
-				if h.auditID != "" {
-					ctx = secrets.WithRun(ctx, h.auditID)
-				}
-				return h.p.Revoke(ctx, model.CapabilityContext{
-					Now:         time.Now().UTC(),
-					CI:          h.ci,
-					Credentials: h.creds,
-				}, *h.lease)
-			},
-		},
-	}
+type heldLease struct {
+	p     *Provider
+	creds model.CredentialResolver
+	ci    bool
+	lease *model.Lease
+	resp  *protocol.MintResponse
 }
 
-func init() {
-	capability.Register(Method())
+var (
+	leasesMu sync.Mutex
+	leases   = map[string]heldLease{}
+)
+
+// MethodSpec is github#sandbox-repo on grainserver.GitHubServer.
+//
+// Each mint is the retired Provider's own Resolve, Materialize and
+// PromptSection for the task run (model.MintRunID, model.MintCredentials)
+// or CI job (model.CIMintFrom) in the mint's context: the same refusal on
+// a deployment with no GitHub App, the same grain-sandbox-<run> repository
+// on the App's one installation, the same two files with the same content
+// and mode, and the same prompt. Releasing the pass revokes the lease --
+// deletes the repository -- as the provider's Revoke did when the run
+// ended, and the daemon's sweep still reaps any a lost pass leaked
+// (Current).
+func MethodSpec() protocol.MethodSpec {
+	return protocol.MethodSpec{
+		Name: MethodName,
+		Description: "Create a private, single-use GitHub repository for this run with this deployment's " +
+			"GitHub App, and place a token scoped to only that repository (formerly github-sandbox). " +
+			"The repository is deleted when the run ends.",
+		Args: map[string]any{"type": "object", "additionalProperties": false},
+		// The orchestrator and CI engine set the pass's deadline from their
+		// own clocks, so there is no second clock to hold it to.
+		Now: func() time.Time { return time.Time{} },
+		Mint: func(ctx context.Context, attemptID string, deadline time.Time, _ map[string]any) (*protocol.MintResponse, error) {
+			// A renewal (protocol.Pass.Renew) mints the same attempt again:
+			// the run keeps the repository and token it was given.
+			leasesMu.Lock()
+			h, renewing := leases[attemptID]
+			leasesMu.Unlock()
+			if renewing {
+				return h.resp, nil
+			}
+
+			var (
+				runID string
+				creds model.CredentialResolver
+				repo  *model.RepoRef
+				isCI  bool
+			)
+			if job, ok := model.CIMintFrom(ctx); ok {
+				runID = job.RunID
+				creds = job.Credentials
+				r := job.Repo
+				repo = &r
+				isCI = true
+			} else {
+				runID = model.MintRunID(ctx)
+				creds = model.MintCredentials(ctx)
+			}
+			if runID == "" {
+				runID = attemptID
+			}
+
+			p := Current()
+			now := time.Now().UTC()
+			cc := model.CapabilityContext{
+				Task:        model.Task{Target: repo},
+				Run:         model.Run{ID: runID, Sandbox: runID, StartedAt: now},
+				Now:         now,
+				Deadline:    deadline,
+				Credentials: creds,
+				CI:          isCI,
+			}
+			// The secret store's audit names the run, as it did for the
+			// provider (model.ResolveGrants).
+			ctx = secrets.WithRun(ctx, runID)
+			res, err := p.Resolve(ctx, cc)
+			if err != nil {
+				return nil, err
+			}
+			if res.Refused {
+				return &protocol.MintResponse{Status: protocol.StatusRefused, Reason: res.Reason}, nil
+			}
+			mat, err := p.Materialize(ctx, cc)
+			if err != nil {
+				return nil, err
+			}
+			prompt, err := p.PromptSection(ctx, cc, mat.Placements)
+			if err != nil {
+				if mat.Lease != nil {
+					_ = p.Revoke(ctx, cc, *mat.Lease)
+				}
+				return nil, err
+			}
+			resp := &protocol.MintResponse{Status: protocol.StatusOK, PromptSection: prompt}
+			for _, pl := range mat.Placements {
+				resp.Placements = append(resp.Placements, protocol.Placement{
+					Path:    pl.Path,
+					Mode:    "0" + pl.EffectiveMode(),
+					Content: pl.Content,
+				})
+			}
+			leasesMu.Lock()
+			leases[attemptID] = heldLease{p: p, creds: creds, ci: isCI, lease: mat.Lease, resp: resp}
+			leasesMu.Unlock()
+			return resp, nil
+		},
+		Release: func(ctx context.Context, attemptID string) error {
+			leasesMu.Lock()
+			h, ok := leases[attemptID]
+			delete(leases, attemptID)
+			leasesMu.Unlock()
+			if !ok || h.lease == nil {
+				return nil
+			}
+			return h.p.Revoke(ctx, model.CapabilityContext{Now: time.Now(), Credentials: h.creds, CI: h.ci}, *h.lease)
+		},
+	}
 }

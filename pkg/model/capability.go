@@ -231,19 +231,20 @@ func MintRunID(ctx context.Context) string {
 
 type mintCredentialsKey struct{}
 
-// WithMintCredentials is ctx carrying creds, the deployment's
-// CredentialResolver, to a method of an in-process capability server
-// minting for a task run (such as github#sandbox-repo, which resolves
-// github-app/app-id and github-app/private-key).
+// WithMintCredentials is ctx carrying creds, the resolver the run's
+// in-process providers resolved their secrets through
+// (CapabilityContext.Credentials), to a method of an in-process capability
+// server minting for it: the github server's sandbox-repo resolves the
+// GitHub App's two secrets through it, as the retired github-sandbox
+// provider did.
 func WithMintCredentials(ctx context.Context, creds CredentialResolver) context.Context {
 	return context.WithValue(ctx, mintCredentialsKey{}, creds)
 }
 
-// MintCredentials is the CredentialResolver WithMintCredentials put in
-// ctx, or nil.
+// MintCredentials is the resolver WithMintCredentials put in ctx, or nil.
 func MintCredentials(ctx context.Context) CredentialResolver {
-	creds, _ := ctx.Value(mintCredentialsKey{}).(CredentialResolver)
-	return creds
+	c, _ := ctx.Value(mintCredentialsKey{}).(CredentialResolver)
+	return c
 }
 
 // CapabilitySpec is a capability's fixed identity: what a grant of it
@@ -614,22 +615,15 @@ func ResolveGrants(ctx context.Context, reg *CapabilityRegistry, cc CapabilityCo
 			}
 			continue
 		}
-		// So is a reference whose server declared a CI-only rule
-		// (CIGrantRule.IsCIOnly), and a retired name rewritten to a CI rule
-		// that no provider in reg still answers: its CI job's event gate is
-		// the pass's.
+		// So is a reference whose server declared a CI rule
+		// (CIGrantRule), and a retired name rewritten to one that no
+		// provider in reg still answers: its CI job's event gate is the
+		// pass's.
 		if rule, ok := CIGrantRuleFor(g.Capability); ok && (IsCapabilityRef(g.Capability) || !registered(reg, g.Capability)) {
-			if !cc.CI {
-				if rule.IsCIOnly() {
-					out = append(out, GrantResolution{Grant: g, Resolution: RefusedBecause(CIGrantRuleCIOnlyRefusal(g.Capability, rule))})
-					continue
-				}
-				if IsCapabilityRef(g.Capability) {
-					continue
-				}
-			} else {
-				continue
+			if !cc.CI && rule.IsCIOnly() {
+				out = append(out, GrantResolution{Grant: g, Resolution: RefusedBecause(CIGrantRuleCIOnlyRefusal(g.Capability, rule))})
 			}
+			continue
 		}
 		// A capability reference is a capability server's to mint, at
 		// admission (protocol.MintPass), not an in-process provider's.

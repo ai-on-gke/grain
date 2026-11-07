@@ -14,6 +14,10 @@
 
 import { test, expect } from "./fixtures.js";
 
+// -legacy-capability registers example-legacy, a made-up provider with
+// nothing to mint, for the repo pane's Default capabilities to offer.
+test.use({ demoArgs: ["-legacy-capability"] });
+
 test.describe("Walkthrough: Auto-Saving Repo Pane & Sidebar Release Stamp (docs/test-plans/2026-09-30.md §3)", () => {
   // A repository of the deployment's own that no other spec knows, so
   // what this saves is seen nowhere else, and taken off the deployment's
@@ -84,16 +88,16 @@ test.describe("Walkthrough: Auto-Saving Repo Pane & Sidebar Release Stamp (docs/
       });
       await expect(capsSelect).toBeVisible();
       await capsSelect.click();
-      // Select "Durable" from capabilities menu list. Not GCP key or
-      // Self debug: the demo makes those deployment defaults,
+      // Select "Example legacy capability" from capabilities menu list. Not GCP key,
+      // Read issues, or Self debug: the demo makes those deployment defaults,
       // which every repo has on whatever it says, so choosing one here would
       // prove nothing saved.
-      const durableOption = page.getByRole("option", {
-        name: "Durable",
+      const sandboxOption = page.getByRole("option", {
+        name: "Example legacy capability",
         exact: true,
       });
-      await expect(durableOption).toBeVisible();
-      await durableOption.click();
+      await expect(sandboxOption).toBeVisible();
+      await sandboxOption.click();
       await page.keyboard.press("Escape"); // Close select dropdown
 
       // 3. Modify Prompt Extension
@@ -149,7 +153,9 @@ test.describe("Walkthrough: Auto-Saving Repo Pane & Sidebar Release Stamp (docs/
         `/api/repos/${targetRepo}/capabilities`,
       );
       expect(capsRes.ok()).toBe(true);
-      expect((await capsRes.json()).defaultCapabilities).toContain("durable");
+      expect((await capsRes.json()).defaultCapabilities).toContain(
+        "example-legacy",
+      );
     });
   });
 });

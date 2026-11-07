@@ -118,7 +118,7 @@ func init() {
 		IsRepoAccess: IsRepoAccessCapability,
 		IsRepoRead:   IsRepoReadCapability,
 		DeclaredOnly: declaredOnly,
-		Canonical:    model.CanonicalCIGrant,
+		Canonical:    model.CanonicalLegacyGrant,
 	}
 }
 

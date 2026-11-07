@@ -167,7 +167,7 @@ func TestEventGatedCapabilitiesAreWithheldFromNonHumanDispatches(t *testing.T) {
 				{"pull_request", ci.EventPullRequest, false, false, false},
 			} {
 				var granted bool
-				if rule, ok := model.CIGrantRuleFor(tc.id); ok && rule.IsEventGated() {
+				if _, ok := model.CIGrantRuleFor(tc.id); ok {
 					// The release server's method: its declared rule
 					// decides whether the job's pass carries it, and a
 					// withheld run is handed none of it.

@@ -27,8 +27,11 @@ import {
 } from "@grain/ui-shared";
 import {
   acceptTransfer,
+  cancelTransfer,
   createEntry,
   deleteEntry,
+  deleteOrphanVM,
+  disconnectTunnel,
   fetchAdminSummary,
   fetchDirectory,
   fetchEntries,
@@ -38,12 +41,19 @@ import {
   fetchRoute,
   fetchShapes,
   fetchStatus,
+  forceTransferEntry,
   offerTransfer,
+  purgeEntry,
   replaceEntry,
+  resetQuota,
+  resolveScopeConflict,
   restoreEntry,
   revokeCredential,
   rotateCredential,
   setEntryScopes,
+  setOwnerDisabled,
+  setQuota,
+  setSQLInstanceDraining,
   updateEntry,
   upgradeEntry,
 } from "./api.js";
@@ -1350,6 +1360,8 @@ function EntryDetailView({
 
   // Transfer & lifecycle state
   const [transferTo, setTransferTo] = useState("");
+  const [clearOwnerGroupOnTransfer, setClearOwnerGroupOnTransfer] =
+    useState(false);
   const [resizeShape, setResizeShape] = useState("");
   const [upgradeVersion, setUpgradeVersion] = useState("");
   const [rotateLabel, setRotateLabel] = useState("rotated-token");
@@ -1500,12 +1512,26 @@ function EntryDetailView({
     try {
       const updated = await offerTransfer(entry.name, {
         to: transferTo.trim(),
+        clear_owner_group: clearOwnerGroupOnTransfer,
       });
       syncFromEntry(updated);
       setTransferTo("");
+      setClearOwnerGroupOnTransfer(false);
       setNotice(`Offered ownership transfer to ${updated.pending_owner}.`);
     } catch (err) {
       setError(err.message || "Failed to offer transfer");
+    }
+  };
+
+  const handleCancelTransfer = async () => {
+    setError("");
+    setNotice("");
+    try {
+      const updated = await cancelTransfer(entry.name);
+      syncFromEntry(updated);
+      setNotice("Cancelled pending ownership transfer offer.");
+    } catch (err) {
+      setError(err.message || "Failed to cancel transfer offer");
     }
   };
 
@@ -1693,20 +1719,38 @@ function EntryDetailView({
       ) : null}
 
       {entry.pending_owner ? (
-        <div className="reg-banner reg-banner-info">
+        <div
+          className="reg-banner reg-banner-info"
+          data-testid="pending-transfer-banner"
+        >
           <div>
             <strong>Pending ownership transfer to {entry.pending_owner}</strong>
+            {entry.transfer_expires_at ? (
+              <span className="reg-hint">
+                {" "}
+                · expires {entry.transfer_expires_at}
+              </span>
+            ) : null}
           </div>
-          {me?.email &&
-          entry.pending_owner.toLowerCase() === me.email.toLowerCase() ? (
+          <div className="reg-actions-row">
+            {me?.email &&
+            entry.pending_owner.toLowerCase() === me.email.toLowerCase() ? (
+              <button
+                type="button"
+                className="gs-btn gs-btn-sm gs-btn-primary"
+                onClick={handleAcceptTransfer}
+              >
+                Accept transfer
+              </button>
+            ) : null}
             <button
               type="button"
-              className="gs-btn gs-btn-sm gs-btn-primary"
-              onClick={handleAcceptTransfer}
+              className="gs-btn gs-btn-sm"
+              onClick={handleCancelTransfer}
             >
-              Accept transfer
+              Cancel transfer offer
             </button>
-          ) : null}
+          </div>
         </div>
       ) : null}
 
@@ -1933,6 +1977,16 @@ function EntryDetailView({
             value={transferTo}
             onChange={(e) => setTransferTo(e.target.value)}
           />
+          {entry.owner_group ? (
+            <label className="reg-checkbox-row">
+              <input
+                type="checkbox"
+                checked={clearOwnerGroupOnTransfer}
+                onChange={(e) => setClearOwnerGroupOnTransfer(e.target.checked)}
+              />
+              <span>Clear co-owning group ({entry.owner_group})</span>
+            </label>
+          ) : null}
           <button type="submit" className="gs-btn">
             Offer ownership transfer
           </button>
@@ -2345,31 +2399,190 @@ function AdminView({ onNavigateEntry }) {
   const [allEntries, setAllEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  // Quota editor state
+  const [quotaEmail, setQuotaEmail] = useState("");
+  const [quotaMaxUnits, setQuotaMaxUnits] = useState("10");
+  const [quotaMaxConnected, setQuotaMaxConnected] = useState("20");
+
+  // Force transfer state
+  const [forceTransferEntryName, setForceTransferEntryName] = useState("");
+  const [forceTransferTo, setForceTransferTo] = useState("");
+  const [forceClearGroup, setForceClearGroup] = useState(false);
+
+  const loadAdmin = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [sumData, entData] = await Promise.all([
+        fetchAdminSummary(),
+        fetchEntries({ all: "1", include_deleted: "true" }),
+      ]);
+      setSummary(sumData);
+      setAllEntries(
+        Array.isArray(entData && entData.entries) ? entData.entries : [],
+      );
+    } catch (err) {
+      setError(err.message || "Failed to load admin summary");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    Promise.all([
-      fetchAdminSummary(),
-      fetchEntries({ all: "1", include_deleted: "true" }),
-    ])
-      .then(([sumData, entData]) => {
-        if (cancelled) return;
-        setSummary(sumData);
-        setAllEntries(
-          Array.isArray(entData && entData.entries) ? entData.entries : [],
-        );
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err.message || "Failed to load admin summary");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+    loadAdmin();
+  }, [loadAdmin]);
+
+  const handleToggleOwnerDisabled = async (email, nextDisabled) => {
+    setError("");
+    setNotice("");
+    try {
+      await setOwnerDisabled(email, nextDisabled);
+      await loadAdmin();
+      setNotice(`${nextDisabled ? "Disabled" : "Enabled"} owner ${email}.`);
+    } catch (err) {
+      setError(err.message || "Failed to update owner disabled state");
+    }
+  };
+
+  const handleSaveQuota = async (e) => {
+    e.preventDefault();
+    if (!quotaEmail.trim()) return;
+    setError("");
+    setNotice("");
+    try {
+      await setQuota(quotaEmail.trim(), {
+        max_instance_units: Number(quotaMaxUnits) || 10,
+        max_connected: Number(quotaMaxConnected) || 20,
       });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+      await loadAdmin();
+      setNotice(`Saved custom quota override for ${quotaEmail.trim()}.`);
+    } catch (err) {
+      setError(err.message || "Failed to update quota");
+    }
+  };
+
+  const handleResetQuota = async (email) => {
+    setError("");
+    setNotice("");
+    try {
+      await resetQuota(email);
+      await loadAdmin();
+      setNotice(`Reset quota override for ${email} to default limits.`);
+    } catch (err) {
+      setError(err.message || "Failed to reset quota");
+    }
+  };
+
+  const handleResolveConflict = async (cf, resolution) => {
+    setError("");
+    setNotice("");
+    try {
+      await resolveScopeConflict({
+        entry_name: cf.entry_name,
+        repo: cf.repo,
+        path_prefix: cf.path_prefix || "",
+        resolution,
+      });
+      await loadAdmin();
+      setNotice(
+        `Resolved conflict on ${cf.repo}/${cf.path_prefix || ""} (${resolution} ${cf.entry_name}).`,
+      );
+    } catch (err) {
+      setError(err.message || "Failed to resolve scope conflict");
+    }
+  };
+
+  const handleToggleSQLDraining = async (name, nextDraining) => {
+    setError("");
+    setNotice("");
+    try {
+      await setSQLInstanceDraining(name, nextDraining);
+      await loadAdmin();
+      setNotice(
+        `Set Cloud SQL instance ${name} draining=${String(nextDraining)}.`,
+      );
+    } catch (err) {
+      setError(err.message || "Failed to update SQL draining state");
+    }
+  };
+
+  const handleDeleteOrphan = async (zone, instanceId) => {
+    setError("");
+    setNotice("");
+    try {
+      await deleteOrphanVM(zone, instanceId);
+      await loadAdmin();
+      setNotice(`Deleted orphan VM ${instanceId} in ${zone}.`);
+    } catch (err) {
+      setError(err.message || "Failed to delete orphan VM");
+    }
+  };
+
+  const handleDisconnectTunnel = async (entryName) => {
+    setError("");
+    setNotice("");
+    try {
+      await disconnectTunnel(entryName);
+      await loadAdmin();
+      setNotice(`Disconnected active tunnel for ${entryName}.`);
+    } catch (err) {
+      setError(err.message || "Failed to disconnect tunnel");
+    }
+  };
+
+  const handleRestoreDeleted = async (entryName) => {
+    setError("");
+    setNotice("");
+    try {
+      await restoreEntry(entryName);
+      await loadAdmin();
+      setNotice(`Restored soft-deleted entry ${entryName}.`);
+    } catch (err) {
+      setError(err.message || "Failed to restore entry");
+    }
+  };
+
+  const handleHardPurge = async (entryName, releaseReservation = true) => {
+    setError("");
+    setNotice("");
+    try {
+      await purgeEntry(entryName, {
+        confirm: entryName,
+        force: true,
+        release_reservation: releaseReservation,
+      });
+      await loadAdmin();
+      setNotice(
+        `Hard-purged retained resources for ${entryName}${releaseReservation ? " and released 30-day name reservation" : ""}.`,
+      );
+    } catch (err) {
+      setError(err.message || "Failed to hard-purge entry");
+    }
+  };
+
+  const handleForceTransfer = async (e) => {
+    e.preventDefault();
+    if (!forceTransferEntryName.trim() || !forceTransferTo.trim()) return;
+    setError("");
+    setNotice("");
+    try {
+      await forceTransferEntry(forceTransferEntryName.trim(), {
+        to: forceTransferTo.trim(),
+        clear_owner_group: forceClearGroup,
+      });
+      await loadAdmin();
+      setNotice(
+        `Force-transferred ${forceTransferEntryName.trim()} to ${forceTransferTo.trim()}.`,
+      );
+      setForceTransferEntryName("");
+      setForceTransferTo("");
+      setForceClearGroup(false);
+    } catch (err) {
+      setError(err.message || "Failed to force-transfer entry");
+    }
+  };
 
   if (loading) {
     return (
@@ -2379,12 +2592,20 @@ function AdminView({ onNavigateEntry }) {
     );
   }
 
+  const lease = summary?.reconciler_lease;
+
   return (
     <div>
       <PageHeader
         title="Registry Administration"
-        subtitle="Inspect active outbound tunnels per replica, organization-wide entries, scope conflicts, and control-plane audit logs."
+        subtitle="Inspect active outbound tunnels per replica, organization-wide entries, owners & quotas, scope conflicts, shared Cloud SQL pool, orphan VMs, retention recovery, and control-plane audit logs."
       />
+
+      {notice ? (
+        <div className="reg-banner reg-banner-success" role="status">
+          <span>{notice}</span>
+        </div>
+      ) : null}
 
       {error ? (
         <div className="reg-banner reg-banner-danger" role="alert">
@@ -2410,6 +2631,18 @@ function AdminView({ onNavigateEntry }) {
               </div>
             </div>
           ))}
+          {lease ? (
+            <div className="reg-stat-card" data-testid="reconciler-lease-card">
+              <div className="reg-stat-label">Reconciler Leader Lease</div>
+              <div className="reg-stat-value">
+                <span className="reg-mono">{lease.holder_id || "none"}</span>
+              </div>
+              <div className="reg-stat-meta">
+                {lease.active ? "Active leader" : "Lease expired"} · lag{" "}
+                {lease.lag_seconds ?? 0}s
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <SortableTable
@@ -2461,13 +2694,338 @@ function AdminView({ onNavigateEntry }) {
               header: "Last Seen",
               render: (t) => <span>{formatRelativeAge(t.last_seen_at)}</span>,
             },
+            {
+              key: "action",
+              header: "Action",
+              render: (t) => (
+                <button
+                  type="button"
+                  className="gs-btn gs-btn-sm gs-btn-danger"
+                  onClick={() => handleDisconnectTunnel(t.entry_name)}
+                >
+                  Disconnect
+                </button>
+              ),
+            },
           ]}
         />
       </section>
 
-      <section className="reg-section">
+      {/* Owners & Quotas section */}
+      <section className="reg-section reg-card">
+        <h2 className="reg-section-title">Owners & Quotas</h2>
+        <SortableTable
+          emptyMessage="No registered entry owners."
+          rowKey={(o) => o.email}
+          rows={summary?.owners || []}
+          columns={[
+            {
+              key: "email",
+              header: "Owner Email",
+              sortValue: (o) => o.email,
+              render: (o) => (
+                <div className="reg-badge-row">
+                  <span className="reg-mono">{o.email}</span>
+                  {o.disabled ? (
+                    <span className="gs-badge gs-badge-danger">disabled</span>
+                  ) : null}
+                  {o.has_override ? (
+                    <span className="gs-badge gs-badge-vm">custom quota</span>
+                  ) : null}
+                </div>
+              ),
+            },
+            {
+              key: "instance_units",
+              header: "VM Quota Units",
+              render: (o) => (
+                <span>
+                  {o.used_instance_units} / {o.max_instance_units}
+                </span>
+              ),
+            },
+            {
+              key: "connected",
+              header: "Connected Cap",
+              render: (o) => (
+                <span>
+                  {o.used_connected} / {o.max_connected}
+                </span>
+              ),
+            },
+            {
+              key: "actions",
+              header: "Actions",
+              render: (o) => (
+                <div className="reg-actions-row">
+                  <button
+                    type="button"
+                    className="gs-btn gs-btn-sm"
+                    onClick={() => {
+                      setQuotaEmail(o.email);
+                      setQuotaMaxUnits(String(o.max_instance_units));
+                      setQuotaMaxConnected(String(o.max_connected));
+                    }}
+                  >
+                    Edit quota
+                  </button>
+                  {o.has_override ? (
+                    <button
+                      type="button"
+                      className="gs-btn gs-btn-sm"
+                      onClick={() => handleResetQuota(o.email)}
+                    >
+                      Reset quota
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className={
+                      o.disabled
+                        ? "gs-btn gs-btn-sm gs-btn-primary"
+                        : "gs-btn gs-btn-sm gs-btn-danger"
+                    }
+                    onClick={() =>
+                      handleToggleOwnerDisabled(o.email, !o.disabled)
+                    }
+                  >
+                    {o.disabled ? "Enable owner" : "Disable owner"}
+                  </button>
+                </div>
+              ),
+            },
+          ]}
+        />
+        <form className="reg-actions-row" onSubmit={handleSaveQuota}>
+          <input
+            className="gs-input reg-filter-item"
+            aria-label="Quota owner email"
+            placeholder="Owner email (e.g. alice@example.com)"
+            value={quotaEmail}
+            onChange={(e) => setQuotaEmail(e.target.value)}
+          />
+          <input
+            className="gs-input"
+            aria-label="Max VM quota units"
+            type="number"
+            min="1"
+            placeholder="Max VM units"
+            value={quotaMaxUnits}
+            onChange={(e) => setQuotaMaxUnits(e.target.value)}
+          />
+          <input
+            className="gs-input"
+            aria-label="Max connected entries"
+            type="number"
+            min="1"
+            placeholder="Max connected"
+            value={quotaMaxConnected}
+            onChange={(e) => setQuotaMaxConnected(e.target.value)}
+          />
+          <button type="submit" className="gs-btn gs-btn-primary">
+            Save quota override
+          </button>
+        </form>
+      </section>
+
+      {/* Active Scope Conflicts section */}
+      <section className="reg-section reg-card">
+        <h2 className="reg-section-title">Active Scope Conflicts</h2>
+        <SortableTable
+          emptyMessage="No active primary-prefix scope conflicts across listed entries."
+          rowKey={(cf, idx) =>
+            `${cf.entry_name}-${cf.repo}-${cf.path_prefix}-${idx}`
+          }
+          rows={summary?.scope_conflicts || []}
+          columns={[
+            {
+              key: "entry",
+              header: "Contender Entry",
+              render: (cf) => (
+                <div>
+                  <button
+                    type="button"
+                    className="reg-inline-link"
+                    onClick={() => onNavigateEntry(cf.entry_name)}
+                  >
+                    {cf.entry_name}
+                  </button>
+                  <div className="reg-hint">{cf.owner}</div>
+                </div>
+              ),
+            },
+            {
+              key: "scope",
+              header: "Repo & Prefix",
+              render: (cf) => (
+                <span className="reg-mono">
+                  {cf.repo}
+                  {cf.path_prefix ? `/${cf.path_prefix}` : " (repo root)"}
+                </span>
+              ),
+            },
+            {
+              key: "incumbent",
+              header: "Incumbent Primary",
+              render: (cf) => (
+                <div>
+                  <button
+                    type="button"
+                    className="reg-inline-link"
+                    onClick={() => onNavigateEntry(cf.conflict_with)}
+                  >
+                    {cf.conflict_with}
+                  </button>
+                  {cf.incumbent_owner ? (
+                    <div className="reg-hint">{cf.incumbent_owner}</div>
+                  ) : null}
+                </div>
+              ),
+            },
+            {
+              key: "actions",
+              header: "Resolution",
+              render: (cf) => (
+                <div className="reg-actions-row">
+                  <button
+                    type="button"
+                    className="gs-btn gs-btn-sm"
+                    onClick={() => handleResolveConflict(cf, "demote")}
+                  >
+                    Demote to secondary
+                  </button>
+                  <button
+                    type="button"
+                    className="gs-btn gs-btn-sm gs-btn-danger"
+                    onClick={() => handleResolveConflict(cf, "remove")}
+                  >
+                    Remove scope
+                  </button>
+                </div>
+              ),
+            },
+          ]}
+        />
+      </section>
+
+      {/* Shared Cloud SQL Pool & Orphan VMs section */}
+      <section className="reg-section reg-card">
         <h2 className="reg-section-title">
-          All Registry Entries ({allEntries.length})
+          Shared Cloud SQL Pool & Orphan GCE VMs
+        </h2>
+        <div className="reg-stack">
+          <SortableTable
+            emptyMessage="No shared Cloud SQL instances registered."
+            rowKey={(sql) => sql.name}
+            rows={summary?.sql_instances || []}
+            columns={[
+              {
+                key: "name",
+                header: "SQL Instance",
+                render: (sql) => (
+                  <div>
+                    <div className="reg-mono">{sql.name}</div>
+                    <div className="reg-hint reg-mono">
+                      {sql.connection_name} ({sql.private_ip})
+                    </div>
+                  </div>
+                ),
+              },
+              {
+                key: "utilization",
+                header: "Databases (Active / Retained / Cap)",
+                render: (sql) => (
+                  <span>
+                    {sql.used_databases} / {sql.max_databases} (
+                    {sql.active_databases} active · {sql.retained_databases}{" "}
+                    retained)
+                  </span>
+                ),
+              },
+              {
+                key: "state",
+                header: "Placement Status",
+                render: (sql) => (
+                  <span
+                    className={
+                      sql.draining
+                        ? "gs-badge gs-badge-warning"
+                        : "gs-badge gs-badge-workstation"
+                    }
+                  >
+                    {sql.draining ? "draining" : "accepting"}
+                  </span>
+                ),
+              },
+              {
+                key: "action",
+                header: "Action",
+                render: (sql) => (
+                  <button
+                    type="button"
+                    className="gs-btn gs-btn-sm"
+                    onClick={() =>
+                      handleToggleSQLDraining(sql.name, !sql.draining)
+                    }
+                  >
+                    {sql.draining ? "Resume placement" : "Drain instance"}
+                  </button>
+                ),
+              },
+            ]}
+          />
+
+          <SortableTable
+            emptyMessage="No orphan GCE VMs detected."
+            rowKey={(o) => `${o.zone}-${o.instance_id}`}
+            rows={summary?.orphans || []}
+            columns={[
+              {
+                key: "instance_id",
+                header: "Orphan GCE VM",
+                render: (o) => (
+                  <span className="reg-mono">{o.instance_id}</span>
+                ),
+              },
+              {
+                key: "zone",
+                header: "Zone & IP",
+                render: (o) => (
+                  <span className="reg-mono">
+                    {o.zone} {o.internal_ip ? `(${o.internal_ip})` : ""}
+                  </span>
+                ),
+              },
+              {
+                key: "entry",
+                header: "Label Entry & State",
+                render: (o) => (
+                  <span>
+                    {o.entry_name || "unlabeled"} · {o.state}
+                  </span>
+                ),
+              },
+              {
+                key: "action",
+                header: "Action",
+                render: (o) => (
+                  <button
+                    type="button"
+                    className="gs-btn gs-btn-sm gs-btn-danger"
+                    onClick={() => handleDeleteOrphan(o.zone, o.instance_id)}
+                  >
+                    Delete orphan VM
+                  </button>
+                ),
+              },
+            ]}
+          />
+        </div>
+      </section>
+
+      <section className="reg-section reg-card">
+        <h2 className="reg-section-title">
+          All Registry Entries & Retention Recovery ({allEntries.length})
         </h2>
         <SortableTable
           emptyMessage="No entries in registry."
@@ -2499,10 +3057,19 @@ function AdminView({ onNavigateEntry }) {
               key: "status",
               header: "Status",
               render: (e) => (
-                <StatusPill
-                  status={e.state === "deleted" ? "deleted" : e.status}
-                  ageSeconds={e.heartbeat_age_seconds}
-                />
+                <div>
+                  <StatusPill
+                    status={e.state === "deleted" ? "deleted" : e.status}
+                    ageSeconds={e.heartbeat_age_seconds}
+                  />
+                  {e.purged_at ? (
+                    <div className="reg-hint">hard-purged</div>
+                  ) : e.db_purge_after ? (
+                    <div className="reg-hint">
+                      DB retention until {e.db_purge_after}
+                    </div>
+                  ) : null}
+                </div>
               ),
             },
             {
@@ -2522,8 +3089,71 @@ function AdminView({ onNavigateEntry }) {
                 <span className="reg-mono">{e.grain_version || "—"}</span>
               ),
             },
+            {
+              key: "admin_actions",
+              header: "Admin Recovery",
+              render: (e) => (
+                <div className="reg-actions-row">
+                  {e.state === "deleted" && !e.purged_at ? (
+                    <button
+                      type="button"
+                      className="gs-btn gs-btn-sm gs-btn-primary"
+                      onClick={() => handleRestoreDeleted(e.name)}
+                    >
+                      Restore
+                    </button>
+                  ) : null}
+                  {e.state === "deleted" && !e.purged_at ? (
+                    <button
+                      type="button"
+                      className="gs-btn gs-btn-sm gs-btn-danger"
+                      onClick={() => handleHardPurge(e.name, true)}
+                    >
+                      Hard purge
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="gs-btn gs-btn-sm"
+                    onClick={() => {
+                      setForceTransferEntryName(e.name);
+                      setForceTransferTo(e.owner || "");
+                    }}
+                  >
+                    Force transfer
+                  </button>
+                </div>
+              ),
+            },
           ]}
         />
+        <form className="reg-actions-row" onSubmit={handleForceTransfer}>
+          <input
+            className="gs-input"
+            aria-label="Force transfer entry name"
+            placeholder="Entry name"
+            value={forceTransferEntryName}
+            onChange={(e) => setForceTransferEntryName(e.target.value)}
+          />
+          <input
+            className="gs-input reg-filter-item"
+            aria-label="Force transfer new owner email"
+            placeholder="New accountable owner email"
+            value={forceTransferTo}
+            onChange={(e) => setForceTransferTo(e.target.value)}
+          />
+          <label className="reg-checkbox-row">
+            <input
+              type="checkbox"
+              checked={forceClearGroup}
+              onChange={(e) => setForceClearGroup(e.target.checked)}
+            />
+            <span>Clear owner_group</span>
+          </label>
+          <button type="submit" className="gs-btn gs-btn-danger">
+            Execute force transfer
+          </button>
+        </form>
       </section>
 
       <section className="reg-section">
@@ -2540,8 +3170,19 @@ function AdminView({ onNavigateEntry }) {
             },
             {
               key: "actor",
-              header: "Actor",
-              render: (a) => <span className="reg-mono">{a.actor_email}</span>,
+              header: "Actor & Authority",
+              render: (a) => (
+                <div>
+                  <span className="reg-mono">{a.actor_email}</span>
+                  {a.via ? (
+                    <span className="reg-hint">
+                      {" "}
+                      ({a.via}
+                      {a.grant_id ? `: ${a.grant_id}` : ""})
+                    </span>
+                  ) : null}
+                </div>
+              ),
             },
             {
               key: "action",

@@ -75,3 +75,20 @@ func principalLabelOf(p model.Principal) string {
 	}
 	return id + " (unverified)"
 }
+
+// sessionLabel is PrincipalLabel with a console session's agent named by
+// its session's title -- "director for alice@example.com" rather than
+// "session 7 for alice@example.com" (spec §1.2.2) -- where title knows
+// it. title is the session task's title by id, "" for one it cannot
+// name, which keeps PrincipalLabel's "session <id>".
+func sessionLabel(p model.Principal, behalf *model.Principal, title func(id string) string) string {
+	label := PrincipalLabel(p, behalf)
+	if p.Kind != model.PrincipalAgent || p.Source != model.SourceSession || title == nil {
+		return label
+	}
+	id := strings.TrimSpace(p.ID)
+	if name := strings.TrimSpace(title(id)); name != "" {
+		label = name + strings.TrimPrefix(label, "session "+id)
+	}
+	return label
+}

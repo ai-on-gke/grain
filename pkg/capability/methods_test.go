@@ -104,7 +104,7 @@ func TestRegisterMethodRefusesABadMethod(t *testing.T) {
 		"duplicate":        {Server: capabilitytest.MethodServer, Spec: capabilitytest.MethodSpec(capabilitytest.MethodName)},
 		"core grain":       {Server: model.GrainCapabilityServerID, Spec: capabilitytest.MethodSpec("extra")},
 		"core repo":        {Server: model.RepoCapabilityServerID, Spec: capabilitytest.MethodSpec("extra")},
-		"core github name": {Server: model.GitHubCapabilityServerID, Spec: capabilitytest.MethodSpec(model.GitHubReadIssuesMethod)},
+		"core github":      {Server: model.GitHubCapabilityServerID, Spec: capabilitytest.MethodSpec("extra")},
 		"no server":        {Spec: capabilitytest.MethodSpec("extra")},
 		"bad method name":  {Server: capabilitytest.MethodServer, Spec: capabilitytest.MethodSpec("Not A Method")},
 		"core alias taken": {Server: capabilitytest.MethodServer, Spec: capabilitytest.MethodSpec("extra"), Aliases: []string{"self-repair"}},

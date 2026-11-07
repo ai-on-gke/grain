@@ -142,7 +142,7 @@ runs() {
   } > "$work/runs.json"
 }
 
-# qualification <none|pass|flake|infra|fail> [<commit>] [<app>]: what
+# qualification <none|pass|flake|infra|fail|stage2-fail|stage2-infra|stage2-infra-retry|stage2-infra-pass|stage2-infra-fail> [<commit>] [<app>]: what
 # check-qualification reads for the rc on commit -- nightly.yml's jobs
 # (grain CI runs, one per attempt: the first runs every Stage 1 job, a
 # retry only upgrade-test, which is the one that fails) and the
@@ -151,7 +151,7 @@ runs() {
 stage1_ids=(go-long staterepo-soak loadtest scalability merge-stress long-term-test long-sim postgres-stress
   tunnel-stress ui-e2e-long installer-variants vulns cmd-grain-stress upgrade-test)
 qualification() {
-  local sha="${2:-}" app="${3:-grain-test}" app_id=42 check=success attempts=() a id t jobs runs=() ids
+  local sha="${2:-}" app="${3:-grain-test}" app_id=42 check=success check2="" attempts=() a id t jobs runs=() ids
   [ "$app" = grain-test ] || app_id=15368
   case "$1" in
     none) check="" ;;
@@ -160,6 +160,10 @@ qualification() {
     infra) attempts=(cancelled) ;;
     fail) attempts=(failure failure) ;;
     stage2-fail) attempts=(success) check=failure ;;
+    stage2-infra) attempts=(success) check=neutral ;;
+    stage2-infra-retry) attempts=(success) check=neutral check2=in_progress ;;
+    stage2-infra-pass) attempts=(success) check=neutral check2=success ;;
+    stage2-infra-fail) attempts=(success) check=neutral check2=failure ;;
   esac
   t=$((now - 7200))
   ids=("${stage1_ids[@]}")
@@ -174,7 +178,13 @@ qualification() {
     t=$((t + 600))
   done
   printf '{"enabled":true,"runs":[%s]}' "$(IFS=,; echo "${runs[*]}")" > "$work/qual-runs.json"
-  if [ -n "$check" ]; then
+  if [ -n "$check" ] && [ -n "$check2" ]; then
+    local c2_status=completed c2_conc="\"$check2\""
+    if [ "$check2" = in_progress ]; then c2_status=in_progress; c2_conc=null; fi
+    printf '{"check_runs":[{"id":1,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"%s","external_id":"release-qualification:o/r@rc","started_at":"%s","app":{"id":%s,"slug":"%s"}},{"id":2,"name":"grain/release-qualification","head_sha":"%s","status":"%s","conclusion":%s,"external_id":"release-qualification:o/r@rc#2","started_at":"%s","app":{"id":%s,"slug":"%s"}}]}' \
+      "$sha" "$check" "$(iso $((now - 600)))" "$app_id" "$app" \
+      "$sha" "$c2_status" "$c2_conc" "$(iso "$now")" "$app_id" "$app" > "$work/qual-checks.json"
+  elif [ -n "$check" ]; then
     printf '{"check_runs":[{"id":1,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"%s","started_at":"%s","app":{"id":%s,"slug":"%s"}}]}' \
       "$sha" "$check" "$(iso "$now")" "$app_id" "$app" > "$work/qual-checks.json"
   else
@@ -275,6 +285,40 @@ expect "infra" "exits 0" eq "$status" 0
 expect "infra" "outputs infra" grep -qxF "qualification=infra" "$work/train.out"
 expect "infra" "asks for a re-run" grep -qxF "qualification_rerun=nightly:upgrade-test:infra" "$work/train.out"
 expect "infra" "drops nothing" eq "$(remote_tag v2.3.0-rc.1-discarded)" ""
+
+# --- grain's own grain/release-qualification neutral (infra-stalled), then re-qualified ---
+# grain posts completed/neutral once an item uses its Stage 2 infra re-runs,
+# then posts a fresh check run (#2) on the same rc once the stall clears:
+# the train holds while neutral or running, and reads the newest attempt.
+qualification stage2-infra "$c3"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "stage 2 infra-stalled" "exits 0" eq "$status" 0
+expect "stage 2 infra-stalled" "outputs infra" grep -qxF "qualification=infra" "$work/train.out"
+expect "stage 2 infra-stalled" "marks the rc stalled" grep -qxF "qualification_stalled=v2.3.0-rc.1" "$work/train.out"
+expect "stage 2 infra-stalled" "names Stage 2 as the re-run" grep -qxF "qualification_rerun=qualification:grain/release-qualification:infra" "$work/train.out"
+expect "stage 2 infra-stalled" "drops nothing" eq "$(remote_tag v2.3.0-rc.1-discarded)" ""
+
+qualification stage2-infra-retry "$c3"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "stage 2 re-qualifying" "exits 0" eq "$status" 0
+expect "stage 2 re-qualifying" "waits on the fresh Stage 2 attempt" grep -qxF "qualification=pending" "$work/train.out"
+expect "stage 2 re-qualifying" "is no longer stalled" not grep -q "qualification_stalled=" "$work/train.out"
+expect "stage 2 re-qualifying" "asks for no re-run while running" not grep -q "qualification_rerun=" "$work/train.out"
+
+qualification stage2-infra-pass "$c3"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out" RELEASE_AUTO_PROMOTE=true DRY_RUN=true
+expect "stage 2 re-qualified pass" "exits 0" eq "$status" 0
+expect "stage 2 re-qualified pass" "promotes on the newest Stage 2 attempt" grep -qxF "promoted_version=v2.3.0" "$work/train.out"
+expect "stage 2 re-qualified pass" "a dry run leaves the remote untouched" eq "$(remote_tag v2.3.0)" ""
+
+qualification stage2-infra-fail "$c3"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out" DRY_RUN=true
+expect "stage 2 re-qualified red" "exits 0" eq "$status" 0
+expect "stage 2 re-qualified red" "drops the rc when the fresh attempt fails" grep -qxF "discarded_rc=v2.3.0-rc.1" "$work/train.out"
 
 # --- grain's own grain/release-qualification failure: red at once ---
 # grain posts failure only after an item has failed its own retry, and
@@ -460,6 +504,43 @@ expect "rc-hold, completed" "cuts rc.2 once completed" eq "$(remote_tag v2.3.0-r
 expect "rc-hold, completed" "moves candidate onto rc.2" eq "$(remote_candidate)" "$c3"
 expect "rc-hold, completed" "publishes rc.2" images_were "rc v2.3.0-rc.2"
 expect "rc-hold, completed" "emits no rc_held" no_line '^rc_held=' "$work/train.out"
+
+# Stage 2 failure with triage-pending grain/rc-hold: grain posts grain/rc-hold
+# in progress as soon as it concludes failure, before any [rc-blocker] task
+# exists, so the next 20-minute tick drops rc.1 in Phase 1 and holds rc.2 in
+# Phase 2 instead of cutting rc.2 off an unfixed main; once triage completes
+# (or its grace window elapses, completing neutral), a later tick cuts rc.2.
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+git -C "$work/seed" push -q --force origin "$c2:refs/heads/candidate"
+qualification stage2-fail "$c2"
+jq -cn --arg sha "$c2" --arg t "$(iso $((now - 60)))" \
+  '{check_runs:[{id:1,name:"grain/rc-hold",head_sha:$sha,status:"in_progress",started_at:$t,
+    output:{title:"Holding v2.3.0-rc.2 (triage pending)",summary:"v2.3.0-rc.1 failed qualification; v2.3.0-rc.2 is held while pipeline.rc-failed:v2.3.0-rc.1 awaits triage (up to 1h) or tasks titled [rc-blocker v2.3.0-rc.1] remain open."},
+    app:{id:42,slug:"grain-test"}}]}' > "$work/hold-checks.json"
+runs "$c2" "$c3"
+: > "$work/images.log"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out" RELEASE_PUSH_GRANT=train
+expect "rc-hold, triage pending" "exits 0" eq "$status" 0
+expect "rc-hold, triage pending" "drops rc.1 in phase 1" eq "$(remote_tag v2.3.0-rc.1-discarded)" "$c2"
+expect "rc-hold, triage pending" "says rc.2 is held while triage is pending" \
+  has "phase 2: v2.3.0-rc.2 is held by grain/rc-hold on ${c2:0:12}: v2.3.0-rc.1 failed qualification; v2.3.0-rc.2 is held while pipeline.rc-failed:v2.3.0-rc.1 awaits triage"
+expect "rc-hold, triage pending" "emits discarded_rc=v2.3.0-rc.1" grep -qxF "discarded_rc=v2.3.0-rc.1" "$work/train.out"
+expect "rc-hold, triage pending" "emits rc_held=v2.3.0-rc.2" grep -qxF "rc_held=v2.3.0-rc.2" "$work/train.out"
+expect "rc-hold, triage pending" "cuts no rc.2 onto unfixed main" eq "$(remote_tag v2.3.0-rc.2)" ""
+expect "rc-hold, triage pending" "leaves candidate on rc.1" eq "$(remote_candidate)" "$c2"
+
+jq -cn --arg sha "$c2" --arg t1 "$(iso $((now - 3660)))" --arg t2 "$(iso $((now - 60)))" \
+  '{check_runs:[{id:1,name:"grain/rc-hold",head_sha:$sha,status:"completed",conclusion:"neutral",started_at:$t1,completed_at:$t2,
+    output:{title:"Triage window elapsed",summary:"No task titled [rc-blocker v2.3.0-rc.1] was filed within 1h of v2.3.0-rc.1 failing; v2.3.0-rc.2 may be cut."},
+    app:{id:42,slug:"grain-test"}}]}' > "$work/hold-checks.json"
+: > "$work/images.log"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out" RELEASE_PUSH_GRANT=train
+expect "rc-hold, triage elapsed" "exits 0" eq "$status" 0
+expect "rc-hold, triage elapsed" "cuts rc.2 once triage window completes" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
+expect "rc-hold, triage elapsed" "emits no rc_held" no_line '^rc_held=' "$work/train.out"
 
 # Absent: no grain/rc-hold check run at all means no hold.
 setup ""

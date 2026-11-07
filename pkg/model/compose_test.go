@@ -92,6 +92,7 @@ func TestComposeScheduleTaskInlineContentIsAllTheSchedules(t *testing.T) {
 		NothingNeededAction: model.LayerSchedule,
 		AutoMerge:           model.LayerSchedule, AutoApproveProposals: model.LayerSchedule, Approved: model.LayerSchedule,
 		Interactive: model.LayerSchedule, KeepRunning: model.LayerSchedule,
+		Admission: model.LayerDeployment, Hosting: model.LayerDeployment,
 	}
 	if comp.Sources != want {
 		t.Errorf("sources = %+v, want %+v", comp.Sources, want)

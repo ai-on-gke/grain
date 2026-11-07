@@ -100,7 +100,7 @@ type CapabilityInProcessServer struct {
 var inProcessSummaries = map[string]string{
 	grainserver.ID:       "grain's own host and database: its journal, health probes, SQL against its database and confirmed shell commands on its host.",
 	grainserver.RepoID:   "Access to repositories and git credentials: a CI job's read or write access to another repository, pushing any ref of a repository a task may write, or selecting a named git credential under secrets/github.",
-	grainserver.GitHubID: "GitHub operations answered by grain itself: reading issues and comments on the repositories a run may reach with its team git credential, and ephemeral private scratch repositories minted for a single run and deleted when it ends.",
+	grainserver.GitHubID: "GitHub operations answered in-process: reading issues and comments on the repositories the run may reach with its team git credential, or provisioning a private single-use sandbox repository via the deployment's GitHub App.",
 }
 
 // inProcessStatuses returns grainserver.Statuses() with RepoID's #credential
@@ -397,7 +397,12 @@ func (c *Client) updateCapabilityServers(ctx context.Context, mutate func(map[st
 	if err := c.checkSettingsWritable(ctx, "grain_config"); err != nil {
 		return err
 	}
+	repoConfigs, err := c.Store.ListRepoConfigs(ctx)
+	if err != nil {
+		return err
+	}
 	return c.Store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		before, _ := intree.EnsureBuiltins(cfg.MCPServers)
 		next, _ := intree.EnsureBuiltins(cfg.MCPServers)
 		if err := mutate(next); err != nil {
 			return err
@@ -408,6 +413,27 @@ func (c *Client) updateCapabilityServers(ctx context.Context, mutate func(map[st
 		}
 		if _, err := protocol.ParseServers(data); err != nil {
 			return validationErrorf("%s", err)
+		}
+		if cfg.CapabilityPolicy.Catalogue != nil {
+			newlyDisabled := false
+			for id, sc := range next {
+				if sc.Disabled && !before[id].Disabled {
+					newlyDisabled = true
+					break
+				}
+			}
+			if newlyDisabled {
+				merged := mergedCapabilityCatalogue(
+					cfg.CapabilityPolicy.Catalogue,
+					next,
+					cfg.DefaultCapabilities,
+					cfg.CapabilityPolicy.Catalogue.Defaults.CI,
+					repoDefaultsMap(repoConfigs),
+				)
+				if err := merged.Validate(); err != nil {
+					return fieldValidationError("disabled", err)
+				}
+			}
 		}
 		cfg.MCPServers = next
 		return nil

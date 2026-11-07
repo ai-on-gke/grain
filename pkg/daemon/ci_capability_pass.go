@@ -111,8 +111,8 @@ func WithCICapabilityServers(service *ci.Service, servers func() orchestrator.Ca
 func ciCapabilityRefs(ids []string, event ci.Event, trustedSchedule, withholdEventGated bool) []model.Grant {
 	var out []model.Grant
 	for _, id := range ids {
-		c := model.CanonicalCIGrant(id)
-		if rule, ok := model.CIGrantRuleFor(c); ok && rule.IsEventGated() && (withholdEventGated || !rule.Admits(string(event), trustedSchedule)) {
+		c := model.CanonicalLegacyGrant(id)
+		if rule, ok := model.CIGrantRuleFor(c); ok && ((rule.IsEventGated() && withholdEventGated) || !rule.Admits(string(event), trustedSchedule)) {
 			continue
 		}
 		if model.IsCapabilityRef(c) && !model.IsGrainCIGrant(c) && !model.IsRepoAccessGrant(c) {

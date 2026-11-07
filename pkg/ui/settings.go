@@ -461,8 +461,10 @@ type Settings struct {
 	// sandboxing, and annotated by the same SandboxShapeIgnored: a
 	// directory on this host has the host's own network, and nothing
 	// here can take it away.
-	NetworkAccess   string   `json:"networkAccess"`
-	NetworkAccesses []string `json:"networkAccesses"`
+	NetworkAccess    string   `json:"networkAccess"`
+	NetworkAccesses  []string `json:"networkAccesses"`
+	DefaultAdmission string   `json:"defaultAdmission"`
+	DefaultHosting   string   `json:"defaultHosting"`
 	// SandboxShapeIgnored is true when the three numbers above shape
 	// nothing on this deployment, because the sandbox backend it runs has
 	// no shape at all -- Config.SandboxShapeIgnored's own doc comment for
@@ -1170,6 +1172,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		SandboxDiskFloors:                  c.sandboxDiskFloors(cfg.SandboxDiskFloor()),
 		NetworkAccess:                      string(model.NormalizeNetworkAccess(cfg.NetworkAccess)),
 		NetworkAccesses:                    networkAccessNames(),
+		DefaultAdmission:                   string(model.NormalizeAdmission(cfg.DefaultAdmission)),
+		DefaultHosting:                     string(model.NormalizeHosting(cfg.DefaultHosting)),
 		SandboxShapeIgnored:                c.Config.SandboxShapeIgnored,
 		SandboxCommitment:                  c.sandboxCommitment(cfg),
 		ShowClosedByDefault:                cfg.ShowClosedByDefault,
@@ -1478,6 +1482,8 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			TimeZone:                           model.TimeZoneOrDefault(def.TimeZone),
 			NetworkAccess:                      string(model.NormalizeNetworkAccess(def.NetworkAccess)),
 			NetworkAccesses:                    networkAccessNames(),
+			DefaultAdmission:                   string(model.NormalizeAdmission(def.DefaultAdmission)),
+			DefaultHosting:                     string(model.NormalizeHosting(def.DefaultHosting)),
 			SettingsLocked:                     def.SettingsLocked,
 			Registry:                           def.Registry,
 			RegistryTokenSet:                   c.registryTokenSet(),
@@ -1567,6 +1573,8 @@ type UpdateSettingsRequest struct {
 	CIAgeBoost          *string `json:"ciAgeBoost"`
 	CIReserveAfter      *string `json:"ciReserveAfter"`
 	NetworkAccess       *string `json:"networkAccess"`
+	DefaultAdmission    *string `json:"defaultAdmission"`
+	DefaultHosting      *string `json:"defaultHosting"`
 	ShowClosedByDefault *bool   `json:"showClosedByDefault"`
 	EnvironmentName     *string `json:"environmentName"`
 	// TimeZone is model.Config.TimeZone: the IANA zone every timestamp the
@@ -1610,6 +1618,8 @@ func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
 	var snake struct {
 		SettingsLocked        *bool     `json:"settings_locked"`
 		DefaultCapabilities   *[]string `json:"default_capabilities"`
+		DefaultAdmission      *string   `json:"default_admission"`
+		DefaultHosting        *string   `json:"default_hosting"`
 		AutoGrantContextReads *[]string `json:"auto_grant_context_reads"`
 	}
 	if err := json.Unmarshal(data, &snake); err == nil {
@@ -1618,6 +1628,12 @@ func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
 		}
 		if r.DefaultCapabilities == nil && snake.DefaultCapabilities != nil {
 			r.DefaultCapabilities = snake.DefaultCapabilities
+		}
+		if r.DefaultAdmission == nil && snake.DefaultAdmission != nil {
+			r.DefaultAdmission = snake.DefaultAdmission
+		}
+		if r.DefaultHosting == nil && snake.DefaultHosting != nil {
+			r.DefaultHosting = snake.DefaultHosting
 		}
 		if r.AutoGrantContextReads == nil && snake.AutoGrantContextReads != nil {
 			r.AutoGrantContextReads = snake.AutoGrantContextReads
@@ -1807,9 +1823,17 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		cfg.IAPResource = v
 	}
 	if req.DefaultCapabilities != nil {
+		capsWithoutLegacy, legacyAdm, hadLegacy := extractLegacyAdmissionCaps("defaultCapabilities", *req.DefaultCapabilities)
+		if hadLegacy {
+			cfg.DefaultAdmission = model.MaxAdmission(cfg.DefaultAdmission, legacyAdm)
+		}
+		capsWithoutLegacy, legacyHosting, hadLegacyHosting := extractLegacyHostingCaps("defaultCapabilities", capsWithoutLegacy)
+		if hadLegacyHosting {
+			cfg.DefaultHosting = model.MaxHosting(cfg.DefaultHosting, legacyHosting)
+		}
 		seen := map[string]bool{}
-		ids := make([]string, 0, len(*req.DefaultCapabilities))
-		for _, rawID := range *req.DefaultCapabilities {
+		ids := make([]string, 0, len(capsWithoutLegacy))
+		for _, rawID := range capsWithoutLegacy {
 			normalizedIDs, err := c.normalizeCapabilityIDs(rawID)
 			if err != nil {
 				return model.Config{}, err
@@ -1829,6 +1853,9 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 				seen[id] = true
 				ids = append(ids, id)
 			}
+		}
+		if err := validateCatalogueTaskDefaults(&cfg, ids); err != nil {
+			return model.Config{}, err
 		}
 		cfg.DefaultCapabilities = ids
 	}
@@ -2214,6 +2241,26 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 				model.NetworkAccessNames(), model.NetworkOpen)
 		}
 		cfg.NetworkAccess = access
+	}
+	if req.DefaultAdmission != nil {
+		adm, err := model.ParseOptionalAdmission(*req.DefaultAdmission)
+		if err != nil {
+			return model.Config{}, validationErrorf("defaultAdmission: %v", err)
+		}
+		if adm == model.AdmissionStandard {
+			adm = ""
+		}
+		cfg.DefaultAdmission = adm
+	}
+	if req.DefaultHosting != nil {
+		h, err := model.ParseOptionalHosting(*req.DefaultHosting)
+		if err != nil {
+			return model.Config{}, validationErrorf("defaultHosting: %v", err)
+		}
+		if h == model.HostingUnattended {
+			h = ""
+		}
+		cfg.DefaultHosting = h
 	}
 	if req.ShowClosedByDefault != nil {
 		cfg.ShowClosedByDefault = *req.ShowClosedByDefault

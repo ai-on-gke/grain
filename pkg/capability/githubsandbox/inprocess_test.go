@@ -16,174 +16,158 @@ package githubsandbox
 
 import (
 	"context"
+	"reflect"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-func testSandboxCredentials() *fakeCredentials {
-	return &fakeCredentials{
-		material: map[string]string{
-			DefaultAppIDCredential:      "12345",
-			DefaultPrivateKeyCredential: "-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----\n",
-		},
+// TestSandboxRepoMigrationFidelity holds github#sandbox-repo, the grant
+// schema migration 124 rewrote github-sandbox to, to the retired
+// provider's own dispatch: the same repository created on the same
+// account, the same scoped token permissions, the same two files with the
+// same content and mode, the same prompt, the same CI-job minting, the
+// same refusal on a deployment with no GitHub App, and the repository
+// deleted when the pass is released, as Revoke deleted it when the run
+// ended.
+func TestSandboxRepoMigrationFidelity(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+	prev := Current()
+	t.Cleanup(func() { SetCurrent(prev) })
+
+	// 1. Task mint fidelity: retired provider vs github#sandbox-repo MethodSpec.
+	oldClient := newFakeAppClient("grain-bot")
+	old := testProvider(oldClient)
+	cc := testContext(testCredentials(), now)
+	if res, err := old.Resolve(ctx, cc); err != nil || res.Refused {
+		t.Fatalf("provider Resolve = %+v, %v", res, err)
+	}
+	mat, err := old.Materialize(ctx, cc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPrompt, err := old.PromptSection(ctx, cc, mat.Placements)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var oldPlacements []protocol.Placement
+	for _, pl := range mat.Placements {
+		oldPlacements = append(oldPlacements, protocol.Placement{Path: pl.Path, Mode: "0" + pl.EffectiveMode(), Content: pl.Content})
+	}
+
+	newClient := newFakeAppClient("grain-bot")
+	SetCurrent(testProvider(newClient))
+	spec := MethodSpec()
+	if got := model.CanonicalLegacyGrant("github-sandbox"); got != model.GitHubSandboxRepoGrant {
+		t.Fatalf("github-sandbox is an alias for %q, want %q", got, model.GitHubSandboxRepoGrant)
+	}
+
+	mintCtx := model.WithMintCredentials(model.WithMintRunID(ctx, cc.Run.ID), testCredentials())
+	resp, err := spec.Mint(mintCtx, "attempt-1", now.Add(time.Hour), map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Status != protocol.StatusOK {
+		t.Fatalf("mint = %+v", resp)
+	}
+	if !slices.Equal(sortedRepoNames(oldClient), sortedRepoNames(newClient)) {
+		t.Errorf("repositories created: provider %v, method %v", sortedRepoNames(oldClient), sortedRepoNames(newClient))
+	}
+	if !reflect.DeepEqual(oldClient.mintedPerms, newClient.mintedPerms) || !reflect.DeepEqual(oldClient.mintedRepos, newClient.mintedRepos) {
+		t.Errorf("tokens minted: provider %v %v, method %v %v",
+			oldClient.mintedRepos, oldClient.mintedPerms, newClient.mintedRepos, newClient.mintedPerms)
+	}
+	if !reflect.DeepEqual(resp.Placements, oldPlacements) {
+		t.Errorf("placements: method %+v, provider %+v", resp.Placements, oldPlacements)
+	}
+	if resp.PromptSection != oldPrompt {
+		t.Errorf("prompt: method %q, provider %q", resp.PromptSection, oldPrompt)
+	}
+
+	// Renewal idempotence: keeps the repository and token the run was given.
+	again, err := spec.Mint(mintCtx, "attempt-1", now.Add(time.Hour), map[string]any{})
+	if err != nil || !reflect.DeepEqual(again, resp) {
+		t.Errorf("renewal = %+v, %v; want the first mint again", again, err)
+	}
+
+	// Releasing deletes the repository, identically to Revoke.
+	if err := old.Revoke(ctx, cc, *mat.Lease); err != nil {
+		t.Fatal(err)
+	}
+	if err := spec.Release(mintCtx, "attempt-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(sortedRepoNames(oldClient)) != 0 || len(sortedRepoNames(newClient)) != 0 {
+		t.Errorf("after release: provider left %v, method left %v", sortedRepoNames(oldClient), sortedRepoNames(newClient))
+	}
+
+	// 2. CI job mint fidelity: model.WithCIMint vs provider with CI run ID.
+	ciRepo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	oldCIClient := newFakeAppClient("grain-bot")
+	oldCI := testProvider(oldCIClient)
+	ciCC := model.CapabilityContext{
+		Task:        model.Task{ID: "ci-42-build", Target: &ciRepo},
+		Run:         model.Run{ID: "ci-42-build", StartedAt: now},
+		Credentials: testCredentials(),
+	}
+	if res, err := oldCI.Resolve(ctx, ciCC); err != nil || res.Refused {
+		t.Fatalf("CI provider Resolve = %+v, %v", res, err)
+	}
+	ciMat, err := oldCI.Materialize(ctx, ciCC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var oldCIPlacements []protocol.Placement
+	for _, pl := range ciMat.Placements {
+		oldCIPlacements = append(oldCIPlacements, protocol.Placement{Path: pl.Path, Mode: "0" + pl.EffectiveMode(), Content: pl.Content})
+	}
+
+	newCIClient := newFakeAppClient("grain-bot")
+	SetCurrent(testProvider(newCIClient))
+	ciMintCtx := model.WithCIMint(ctx, model.CIMint{
+		Repo:        ciRepo,
+		RunID:       "ci-42-build",
+		Event:       "pull_request",
+		Credentials: testCredentials(),
+	})
+	ciResp, err := spec.Mint(ciMintCtx, "ci-attempt-1", now.Add(time.Hour), map[string]any{})
+	if err != nil || ciResp.Status != protocol.StatusOK {
+		t.Fatalf("CI mint = %+v, %v", ciResp, err)
+	}
+	if !slices.Equal(sortedRepoNames(oldCIClient), sortedRepoNames(newCIClient)) {
+		t.Errorf("CI repositories created: provider %v, method %v", sortedRepoNames(oldCIClient), sortedRepoNames(newCIClient))
+	}
+	if !reflect.DeepEqual(ciResp.Placements, oldCIPlacements) {
+		t.Errorf("CI placements: method %+v, provider %+v", ciResp.Placements, oldCIPlacements)
+	}
+	if err := spec.Release(ciMintCtx, "ci-attempt-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(sortedRepoNames(newCIClient)) != 0 {
+		t.Errorf("after CI release: method left %v", sortedRepoNames(newCIClient))
+	}
+
+	// 3. A deployment with no GitHub App is refused identically by both.
+	empty := &fakeCredentials{material: map[string]string{}}
+	res, err := old.Resolve(ctx, testContext(empty, now))
+	if err != nil || !res.Refused {
+		t.Fatalf("provider Resolve without an App = %+v, %v", res, err)
+	}
+	refused, err := spec.Mint(model.WithMintCredentials(mintCtx, empty), "attempt-2", now.Add(time.Hour), map[string]any{})
+	if err != nil || refused.Status != protocol.StatusRefused || refused.Reason != res.Reason {
+		t.Errorf("method without an App = %+v, %v; want refused with %q", refused, err, res.Reason)
 	}
 }
 
-func TestInProcessSandboxRepoTaskAndCIMintReleaseAndReap(t *testing.T) {
-	fake := newFakeAppClient("sandbox-bot")
-	baseNow := time.Date(2026, 11, 7, 2, 0, 0, 0, time.UTC)
-	fake.now = baseNow
-	p := &Provider{
-		newClient: func(context.Context, string, string, string, bool) (appClient, error) {
-			return fake, nil
-		},
+func sortedRepoNames(c *fakeAppClient) []string {
+	var out []string
+	for name := range c.repos {
+		out = append(out, name)
 	}
-	t.Cleanup(ConfigureProvider(p))
-
-	srv, ok, err := capability.MethodServer(ServerID)
-	if err != nil || !ok || srv == nil {
-		t.Fatalf("MethodServer(%q) = %v, %v, %v", ServerID, srv, ok, err)
-	}
-	minter := func(id string) (protocol.Minter, error) {
-		if id != ServerID {
-			t.Fatalf("unexpected server lookup %q", id)
-		}
-		return srv, nil
-	}
-	grants, err := model.CapabilityGrants([]model.Grant{{
-		Capability: model.GitHubSandboxRepoGrant,
-		Via:        model.GrantByLabel,
-	}}, func(id string) (*protocol.Server, error) { return srv, nil })
-	if err != nil {
-		t.Fatalf("CapabilityGrants: %v", err)
-	}
-
-	// 1. Task mint: creates grain-sandbox-<attempt>, places 0600 repo + token
-	// files and PromptSection, renews idempotently, and deletes repo on Release.
-	creds := testSandboxCredentials()
-	taskCtx := model.WithMintRunID(context.Background(), "run-42")
-	taskCtx = model.WithMintCredentials(taskCtx, creds)
-	deadline := baseNow.Add(30 * time.Minute)
-
-	pass, err := protocol.MintPass(taskCtx, grants, minter, protocol.PassOptions{
-		Deployment: "grain",
-		Task:       "42",
-		Attempt:    1,
-		Deadline:   deadline,
-		Now:        func() time.Time { return baseNow },
-	})
-	if err != nil {
-		t.Fatalf("MintPass(task): %v", err)
-	}
-	wantRepoName := repoName(pass.Grants[0].AttemptID)
-	if !strings.HasPrefix(wantRepoName, "grain-sandbox-") {
-		t.Fatalf("unexpected repo name %q", wantRepoName)
-	}
-	if _, exists := fake.repos[wantRepoName]; !exists {
-		t.Fatalf("expected ephemeral repo %q to exist, got %v", wantRepoName, fake.repos)
-	}
-	pls := pass.Placements()
-	if len(pls) != 2 {
-		t.Fatalf("Placements() = %+v, want 2 files", pls)
-	}
-	byPath := map[string]protocol.Placement{}
-	for _, pl := range pls {
-		byPath[pl.Path] = pl
-	}
-	if got := byPath[SandboxRepoPath]; got.Mode != "0600" || got.Content != "sandbox-bot/"+wantRepoName {
-		t.Errorf("repo placement = %+v, want 0600 sandbox-bot/%s", got, wantRepoName)
-	}
-	if got := byPath[SandboxTokenPath]; got.Mode != "0600" || got.Content != "token-for-"+wantRepoName {
-		t.Errorf("token placement = %+v, want 0600 token-for-%s", got, wantRepoName)
-	}
-	prompt := pass.Grants[0].Response.PromptSection
-	if !strings.Contains(prompt, SandboxRepoPath) || !strings.Contains(prompt, SandboxTokenPath) {
-		t.Errorf("PromptSection = %q, want sandbox repo instructions", prompt)
-	}
-
-	// Renewing the same attempt must reuse the lease rather than failing on
-	// duplicate repo creation.
-	if err := pass.Renew(taskCtx, deadline.Add(15*time.Minute)); err != nil {
-		t.Fatalf("Renew(task): %v", err)
-	}
-
-	// Release with a bare background context still revokes using the mint's
-	// held credential resolver.
-	if _, err := pass.Release(context.Background()); err != nil {
-		t.Fatalf("Release(task): %v", err)
-	}
-	if _, exists := fake.repos[wantRepoName]; exists {
-		t.Errorf("repo %q still exists after pass.Release", wantRepoName)
-	}
-
-	// 2. CI mint: creates grain-sandbox-<attempt> via WithCIMint and deletes
-	// it on Release.
-	ciCtx := model.WithCIMint(context.Background(), model.CIMint{
-		Repo:        model.RepoRef{Owner: "acme", Name: "widgets"},
-		RunID:       "c999-0",
-		Credentials: creds,
-	})
-	ciPass, err := protocol.MintPass(ciCtx, grants, minter, protocol.PassOptions{
-		Deployment: "grain",
-		Task:       "ci-999",
-		Attempt:    1,
-		Deadline:   deadline,
-		Now:        func() time.Time { return baseNow },
-	})
-	if err != nil {
-		t.Fatalf("MintPass(CI): %v", err)
-	}
-	ciRepoName := repoName(ciPass.Grants[0].AttemptID)
-	if _, exists := fake.repos[ciRepoName]; !exists {
-		t.Fatalf("expected CI ephemeral repo %q, got %v", ciRepoName, fake.repos)
-	}
-	if _, err := ciPass.Release(context.Background()); err != nil {
-		t.Fatalf("Release(CI): %v", err)
-	}
-	if _, exists := fake.repos[ciRepoName]; exists {
-		t.Errorf("CI repo %q still exists after Release", ciRepoName)
-	}
-
-	// 3. Missing App secret refuses cleanly with bootstrap-github-app guidance.
-	unconfiguredCtx := model.WithMintCredentials(context.Background(), &fakeCredentials{material: map[string]string{}})
-	_, err = protocol.MintPass(unconfiguredCtx, grants, minter, protocol.PassOptions{
-		Deployment: "grain",
-		Task:       "99",
-		Attempt:    1,
-		Deadline:   deadline,
-		Now:        func() time.Time { return baseNow },
-	})
-	if err == nil || !strings.Contains(err.Error(), "bootstrap-github-app") {
-		t.Fatalf("MintPass(unconfigured) = %v, want bootstrap-github-app refusal", err)
-	}
-
-	// 4. Registered method's Reap sweeps stray grain-sandbox-* repos older
-	// than boundary and leaves newer ones alone.
-	fake.repos["grain-sandbox-leaked"] = &fakeRepo{createdAt: baseNow.Add(-2 * time.Hour)}
-	fake.repos["grain-sandbox-fresh"] = &fakeRepo{createdAt: baseNow.Add(-5 * time.Minute)}
-	var reaper func(context.Context, model.CredentialResolver, time.Time) ([]string, error)
-	for _, m := range capability.Methods() {
-		if m.Ref() == model.GitHubSandboxRepoRef {
-			reaper = m.Reap
-		}
-	}
-	if reaper == nil {
-		t.Fatalf("method %s registered no Reap function", model.GitHubSandboxRepoRef)
-	}
-	deleted, err := reaper(context.Background(), creds, baseNow.Add(-10*time.Minute))
-	if err != nil {
-		t.Fatalf("Reap: %v", err)
-	}
-	if !slices.Equal(deleted, []string{"sandbox-bot/grain-sandbox-leaked"}) {
-		t.Errorf("Reap deleted %v, want [sandbox-bot/grain-sandbox-leaked]", deleted)
-	}
-	if _, still := fake.repos["grain-sandbox-fresh"]; !still {
-		t.Errorf("Reap deleted fresh repo grain-sandbox-fresh")
-	}
+	slices.Sort(out)
+	return out
 }

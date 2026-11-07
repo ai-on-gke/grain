@@ -21,7 +21,7 @@ import { chooseOption, chosenValues } from "./searchSelect.js";
 // inbox.spec.js) may already have spent those rows. The flag repeats the
 // fixture's own `-open=false`; a distinct demoArgs is what puts this file
 // on a worker, and a server, no other file shares.
-test.use({ demoArgs: ["-open=false"] });
+test.use({ demoArgs: ["-open=false", "-legacy-capability"] });
 test.setTimeout(120_000);
 
 test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
@@ -802,12 +802,12 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
         const response = await route.fetch();
         const config = JSON.parse(await response.text());
         config.capabilities = (config.capabilities || []).map((c) =>
-          c.id === "console"
+          c.id === "example-legacy"
             ? { ...c, ready: false, needs: ["a GCP project"] }
             : c,
         );
         config.defaultCapabilities = [
-          ...new Set([...(config.defaultCapabilities || []), "console"]),
+          ...new Set([...(config.defaultCapabilities || []), "example-legacy"]),
         ];
         await route.fulfill({ response, json: config });
       } catch {
@@ -835,9 +835,11 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     const capabilities = form.getByRole("combobox", {
       name: "Legacy capabilities",
     });
-    await expect.poll(() => chosenValues(capabilities)).toContain("console");
+    await expect
+      .poll(() => chosenValues(capabilities))
+      .toContain("example-legacy");
     await capabilities.click();
-    const row = page.getByRole("option", { name: /Interactive console/ });
+    const row = page.getByRole("option", { name: /Example legacy capability/ });
     await expect(row).toContainText(/Not ready/);
     await row.click();
     await expect(row).toBeVisible();
@@ -849,12 +851,14 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     await page.keyboard.press("Escape");
     await expect(page.getByRole("listbox")).toBeHidden();
     await expect(form).toBeVisible();
-    await expect.poll(() => chosenValues(capabilities)).toContain("console");
+    await expect
+      .poll(() => chosenValues(capabilities))
+      .toContain("example-legacy");
 
     await form.getByRole("button", { name: "Create task" }).click();
     await expect(form).toBeHidden();
     expect(filed).toHaveLength(1);
-    expect(filed[0].postDataJSON().capabilities).toContain("console");
+    expect(filed[0].postDataJSON().capabilities).toContain("example-legacy");
   });
 
   // grain/task-1625: a selection outlives the view it was made in.

@@ -291,8 +291,12 @@ func (u *Upgrader) validateReleaseRepositoryLocked(repo string) error {
 		return nil
 	}
 	slices.Sort(allowed)
+	allowed = slices.Compact(allowed)
+	if len(allowed) == 0 {
+		return fmt.Errorf("release repository %q is not one this deployment may upgrade from: none is configured for this image repository (set one with the daemon's -upgrade-release-repo flag)", repo)
+	}
 	return fmt.Errorf("release repository %q is not one this deployment may upgrade from; allowed are %s (set another with the daemon's -upgrade-release-repo flag)",
-		repo, strings.Join(slices.Compact(allowed), ", "))
+		repo, strings.Join(allowed, ", "))
 }
 
 func (u *Upgrader) applyImageSourceOverrideLocked(ov ImageSourceOverride) {

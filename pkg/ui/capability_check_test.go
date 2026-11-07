@@ -146,8 +146,8 @@ func TestACheckDoesNotChangeTheReadyBadge(t *testing.T) {
 		t.Fatalf("settings status = %d, want 200", rec.Code)
 	}
 	settings := decode[ui.Settings](t, rec)
-	if !capabilityStatus(t, settings.Capabilities, "durable").Ready {
-		t.Error("durable stopped being Ready because a check was run")
+	if !capabilityStatus(t, settings.Capabilities, "package-publish").Ready {
+		t.Error("package-publish stopped being Ready because a check was run")
 	}
 }
 
@@ -199,12 +199,12 @@ func TestCapabilityStatusReportsWhichCapabilitiesCanBeChecked(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	settings := decode[ui.Settings](t, rec)
-	for _, id := range []string{"image-signing"} {
+	for _, id := range []string{"github-sandbox"} {
 		if !capabilityStatus(t, settings.Capabilities, id).Checkable {
 			t.Errorf("%s: Checkable = false, but it holds a standing credential that can go stale", id)
 		}
 	}
-	for _, id := range []string{"durable"} {
+	for _, id := range []string{"package-publish"} {
 		if capabilityStatus(t, settings.Capabilities, id).Checkable {
 			t.Errorf("%s: Checkable = true, but it holds no standing credential", id)
 		}
@@ -219,8 +219,8 @@ func TestCapabilityStatusIsUncheckableWithNoCheckerWired(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	settings := decode[ui.Settings](t, rec)
-	if capabilityStatus(t, settings.Capabilities, "image-signing").Checkable {
-		t.Error("image-signing: Checkable = true on a UI with nothing to run a check through")
+	if capabilityStatus(t, settings.Capabilities, "github-sandbox").Checkable {
+		t.Error("github-sandbox: Checkable = true on a UI with nothing to run a check through")
 	}
 }
 

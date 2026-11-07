@@ -105,6 +105,8 @@ func (s *Store) wakeStandingTask(ctx context.Context, open Task, comp Compositio
 	if err := s.UpdateTask(ctx, open.ID, func(t *Task) error {
 		t.Title, t.Body = comp.Title, comp.Body
 		t.Reads, t.NetworkAccess, t.NothingNeededAction, t.KeepRunning = comp.Reads, comp.NetworkAccess, comp.NothingNeededAction, comp.KeepRunning
+		t.Admission = NormalizeAdmission(MaxAdmission(t.Admission, comp.Admission))
+		t.Hosting = NormalizeHosting(MaxHosting(t.Hosting, comp.Hosting))
 		t.Grants = mergeStandingGrants(t.Grants, comp.Grants)
 		// The model is refreshed only onto a task nobody chose one for:
 		// a model a person set on the standing task is their decision

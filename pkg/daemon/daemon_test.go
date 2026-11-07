@@ -45,7 +45,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability"
+	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -162,22 +162,22 @@ func TestCapabilityProviders(t *testing.T) {
 		{
 			name: "no gcp project configured still registers the built-in capabilities",
 			cfg:  Config{},
-			want: []string{"console", "priority-dispatch", "durable", "release-gate-read"},
+			want: []string{"release-gate-read"},
 		},
 		{
 			name: "an agent service account without a gcp project does not add either gcp capability",
 			cfg:  Config{GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"},
-			want: []string{"console", "priority-dispatch", "durable", "release-gate-read"},
+			want: []string{"release-gate-read"},
 		},
 		{
 			name: "a gcp project adds nothing: gemini-key is served by the gcp capability server",
 			cfg:  Config{GcpProject: "proj"},
-			want: []string{"console", "priority-dispatch", "durable", "release-gate-read"},
+			want: []string{"release-gate-read"},
 		},
 		{
 			name: "a gcp project with an agent service account adds nothing either (gcp-key and gemini-key are served by the gcp capability server)",
 			cfg:  Config{GcpProject: "proj", GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"},
-			want: []string{"console", "priority-dispatch", "durable", "release-gate-read"},
+			want: []string{"release-gate-read"},
 		},
 	}
 	for _, tc := range cases {
@@ -217,16 +217,17 @@ func TestEveryLeakableCapabilityIsReaped(t *testing.T) {
 			reaped[p.Spec().Name] = true
 		}
 	}
-	for _, m := range capability.Methods() {
-		if m.Reap != nil {
-			reaped[m.Ref()] = true
-		}
+	// github#sandbox-repo's provider is retired from CapabilityProviders
+	// (schema migration 124); ReapCapabilitiesBefore sweeps leaked
+	// grain-sandbox-* repositories directly through githubsandbox.Current().
+	if _, ok := any(githubsandbox.Current()).(model.Reaper); ok {
+		reaped["github-sandbox"] = true
 	}
-	for _, name := range []string{model.GitHubSandboxRepoRef} {
+	for _, name := range []string{"github-sandbox"} {
 		if !reaped[name] {
-			t.Errorf("capability %q is registered but does not declare Reap: "+
+			t.Errorf("capability %q is registered but does not implement model.Reaper: "+
 				"reapCapabilities skips it entirely, so a resource it minted for a run whose record was "+
-				"lost outlives its reaper bound forever", name)
+				"lost outlives its 24-hour bound forever", name)
 		}
 	}
 }

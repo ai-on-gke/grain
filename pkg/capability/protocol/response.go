@@ -202,8 +202,8 @@ var (
 		"/home/debian/.bashrc", "/home/debian/.bash_profile", "/home/debian/.bash_login",
 		"/home/debian/.bash_logout", "/home/debian/.profile",
 		// Grain writes the sandbox's git proxy credential and the config
-		// that points git at it.
-		"/home/debian/.git-credentials", "/home/debian/.gitconfig",
+		// that points git at it, and the github-sandbox capability's token.
+		"/home/debian/.git-credentials", "/home/debian/.gitconfig", "/home/debian/.github-sandbox-token",
 	}
 )
 
