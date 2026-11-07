@@ -25,6 +25,7 @@ type EffectiveRepoConfig struct {
 	CloneURL              string    `json:"cloneUrl,omitempty"`
 	DefaultCapabilities   []string  `json:"defaultCapabilities,omitempty"`
 	DefaultAdmission      Admission `json:"defaultAdmission,omitempty"`
+	DefaultHosting        Hosting   `json:"defaultHosting,omitempty"`
 	CICapabilities        []string  `json:"ciCapabilities,omitempty"`
 	PromptExtension       string    `json:"promptExtension,omitempty"`
 	SetupCommand          string    `json:"setupCommand,omitempty"`
@@ -41,6 +42,7 @@ func (c EffectiveRepoConfig) Empty() bool {
 	return c.CloneURL == "" &&
 		len(c.DefaultCapabilities) == 0 &&
 		c.DefaultAdmission == "" &&
+		c.DefaultHosting == "" &&
 		len(c.CICapabilities) == 0 &&
 		c.PromptExtension == "" &&
 		c.SetupCommand == "" &&
@@ -92,6 +94,13 @@ func EffectiveRepoConfigFor(global Config, repoCfg *RepoConfig) EffectiveRepoCon
 		repoAdm = repoCfg.DefaultAdmission
 	}
 	eff.DefaultAdmission = MaxAdmission(global.DefaultAdmission, repoAdm)
+
+	// DefaultHosting
+	var repoHost Hosting
+	if repoCfg != nil {
+		repoHost = repoCfg.DefaultHosting
+	}
+	eff.DefaultHosting = MaxHosting(global.DefaultHosting, repoHost)
 
 	// PromptExtension
 	if repoCfg != nil && repoCfg.PromptExtension != "" {

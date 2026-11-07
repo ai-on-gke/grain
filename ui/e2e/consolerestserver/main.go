@@ -624,7 +624,7 @@ func run() error {
 		TaskCanceller: taskCanceller{cancellers},
 		Wake:          wake,
 		Actor:         model.Principal{Kind: model.PrincipalHuman, ID: "console-rest-e2e-operator"},
-		DefaultTarget: &defaultRepo, Capabilities: ui.OfferedCapabilities(),
+		DefaultTarget: &defaultRepo, Capabilities: append(ui.OfferedCapabilities(), ui.APICapabilities()...),
 		// The run's access code (e2e/global-setup.js): every caller,
 		// loopback included, shows it, as on every grain daemon.
 		LocalAPIToken: os.Getenv("GRAIN_E2E_ACCESS_CODE"),

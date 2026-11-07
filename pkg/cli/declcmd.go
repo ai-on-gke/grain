@@ -286,6 +286,8 @@ type declaredTemplateView struct {
 	KeepRunning bool `json:"keepRunning,omitempty"`
 	// Admission is the template's admission: "standard", "bypass" or "durable".
 	Admission string `json:"admission,omitempty"`
+	// Hosting is the template's hosting: "unattended" or "console".
+	Hosting string `json:"hosting,omitempty"`
 	// NothingNeeded is the template's nothing-needed: "" for close.
 	NothingNeeded string              `json:"nothingNeeded,omitempty"`
 	CustomFields  map[string][]string `json:"customFields,omitempty"`
@@ -321,6 +323,7 @@ type declaredScheduleView struct {
 	Overlap    string      `json:"overlap"`
 	Enabled    bool        `json:"enabled"`
 	Admission  string      `json:"admission,omitempty"`
+	Hosting    string      `json:"hosting,omitempty"`
 	NextFiring []time.Time `json:"nextFiring,omitempty"`
 }
 
@@ -364,6 +367,7 @@ func (v *declarationsView) fill(declared model.RepoDeclarations, now time.Time, 
 			Interactive:  t.Template.Interactive,
 			KeepRunning:  t.Template.KeepRunning,
 			Admission:    string(t.Template.Admission),
+			Hosting:      string(t.Template.Hosting),
 			CustomFields: t.Template.CustomFields,
 			Push:         t.Push,
 
@@ -407,6 +411,7 @@ func (v *declarationsView) fill(declared model.RepoDeclarations, now time.Time, 
 			Overlap:   overlapWording(s.Schedule.Overlap),
 			Enabled:   s.Schedule.Enabled,
 			Admission: string(s.Schedule.Admission),
+			Hosting:   string(s.Schedule.Hosting),
 		}
 		at := now
 		schedLoc := s.Schedule.Location()

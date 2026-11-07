@@ -1766,6 +1766,17 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 				hasExplicitAdmission = true
 			}
 		}
+		var explicitHosting, tmplHosting, legacyHosting model.Hosting
+		var hasExplicitHosting bool
+		var droppedHosting string
+		if v, ok := p["hosting"].(string); ok && strings.TrimSpace(v) != "" {
+			if parsed, perr := model.ParseHosting(v); perr != nil {
+				droppedHosting = strings.TrimSpace(v)
+			} else {
+				explicitHosting = parsed
+				hasExplicitHosting = true
+			}
+		}
 		priority := model.DefaultTaskPriority
 		var hasExplicitPriority bool
 		if v, ok := p["priority"]; ok {
@@ -1821,6 +1832,9 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 				if !hasExplicitAdmission && comp.Admission != "" {
 					tmplAdmission = comp.Admission
 				}
+				if !hasExplicitHosting && comp.Hosting != "" {
+					tmplHosting = comp.Hosting
+				}
 			}
 		}
 
@@ -1868,6 +1882,10 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		if err != nil {
 			return fmt.Errorf("orchestrator: resolving default admission for proposed task %q: %w", title, err)
 		}
+		defaultHosting, err := defaultTaskHosting(ctx, store, target)
+		if err != nil {
+			return fmt.Errorf("orchestrator: resolving default hosting for proposed task %q: %w", title, err)
+		}
 		// A {capability, with} entry the run wrote is read as the
 		// grant string it stands for; one that does not parse is
 		// dropped here, as a non-string entry always was, since the
@@ -1878,6 +1896,11 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			if aliasAdm, isLegacyAdm := model.LegacyAdmissionAlias(cap); isLegacyAdm {
 				log.Printf("orchestrator: deprecated capability %q on proposed task %q; use admission=%q instead", cap, title, aliasAdm)
 				legacyAdmission = model.MaxAdmission(legacyAdmission, aliasAdm)
+				continue
+			}
+			if aliasHost, isLegacyHost := model.LegacyHostingAlias(cap); isLegacyHost {
+				log.Printf("orchestrator: deprecated capability %q on proposed task %q; use hosting=%q instead", cap, title, aliasHost)
+				legacyHosting = model.MaxHosting(legacyHosting, aliasHost)
 				continue
 			}
 			// A review grant is grain's to give, on a review it files
@@ -1922,6 +1945,9 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		if droppedAdmission != "" {
 			body += fmt.Sprintf("\n\n_grain could not use this proposal's admission (%q): want standard, bypass or durable._", droppedAdmission)
 		}
+		if droppedHosting != "" {
+			body += fmt.Sprintf("\n\n_grain could not use this proposal's hosting (%q): want unattended or console._", droppedHosting)
+		}
 		proposalAdmission := defaultAdmission
 		var askedAdmission model.Admission
 		if tmplAdmission != "" {
@@ -1937,6 +1963,17 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			askedAdmission = model.MaxAdmission(askedAdmission, legacyAdmission)
 		}
 		proposalAdmission = model.NormalizeAdmission(proposalAdmission)
+		proposalHosting := defaultHosting
+		if tmplHosting != "" {
+			proposalHosting = tmplHosting
+		}
+		if hasExplicitHosting {
+			proposalHosting = explicitHosting
+		}
+		if legacyHosting != "" {
+			proposalHosting = model.MaxHosting(proposalHosting, legacyHosting)
+		}
+		proposalHosting = model.NormalizeHosting(proposalHosting)
 		// Whether the task this proposal replaces may be closed is
 		// decided before the proposal is written and the close is done
 		// after it: the note belongs in the body a human approves, and
@@ -2029,6 +2066,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			Binding:             model.BindingDirective,
 			Base:                base,
 			Admission:           proposalAdmission,
+			Hosting:             proposalHosting,
 			Priority:            priority,
 			Interactive:         interactive,
 			Grants:              grants,
@@ -2537,6 +2575,30 @@ func defaultTaskAdmission(ctx context.Context, store *model.Store, target *model
 		}
 	}
 	return model.NormalizeAdmission(adm), nil
+}
+
+// defaultTaskHosting is the hosting a task filed against target (nil:
+// no repository) starts at: the higher of the repository's and the
+// deployment's default_hosting, else unattended.
+func defaultTaskHosting(ctx context.Context, store *model.Store, target *model.RepoRef) (model.Hosting, error) {
+	cfg, err := store.GetConfig(ctx)
+	if err != nil {
+		return model.HostingUnattended, err
+	}
+	host := model.HostingUnattended
+	if cfg != nil && cfg.DefaultHosting != "" {
+		host = cfg.DefaultHosting
+	}
+	if target != nil {
+		repoCfg, err := store.GetRepoConfig(ctx, *target)
+		if err != nil {
+			return model.HostingUnattended, err
+		}
+		if repoCfg != nil {
+			host = model.MaxHosting(host, repoCfg.DefaultHosting)
+		}
+	}
+	return model.NormalizeHosting(host), nil
 }
 
 // proposalSeeding is the seeding source a director's proposal filed
