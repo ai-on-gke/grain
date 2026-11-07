@@ -2267,8 +2267,10 @@ func (c *Client) defaultTaskAdmission(ctx context.Context, target *model.RepoRef
 		if err != nil {
 			return "", err
 		}
-		if rc != nil && rc.DefaultAdmission != "" {
-			adm = rc.DefaultAdmission
+		if rc != nil {
+			// Composed by union with the deployment's, as the
+			// default capability lists it replaced were: the higher wins.
+			adm = model.MaxAdmission(adm, rc.DefaultAdmission)
 		}
 	}
 	return model.NormalizeAdmission(adm), nil
@@ -2865,8 +2867,17 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			catalogueHold, req.Approved = true, false
 		}
 	}
-	if proposedBy == nil && c.requestActor(ctx).Actor.Kind == model.PrincipalAgent && taskAdmission.AtLeast(model.AdmissionBypass) {
+	// Admission above standard is what the retired priority-dispatch and
+	// durable grants gave, and is held the way they were: for an agent,
+	// and for a person acting through a delegating app (AU-25.3), which
+	// the delegated person-only grant check below no longer sees now that
+	// neither name reaches grants.
+	if proposedBy == nil && taskAdmission.AtLeast(model.AdmissionBypass) &&
+		(c.requestActor(ctx).Actor.Kind == model.PrincipalAgent || isDelegatedRequest(ctx)) {
 		why := fmt.Sprintf("it sets admission to %s, which only a person may give", taskAdmission)
+		if isDelegatedRequest(ctx) {
+			why = fmt.Sprintf("it sets admission to %s, which only a person acting directly may give", taskAdmission)
+		}
 		if needsPersonWhy == "" {
 			needsPersonWhy = why
 		} else {

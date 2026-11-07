@@ -737,9 +737,29 @@ func roleGrantRefusal(a *accessRole, key, name string, normalize func(string) (s
 	return nil
 }
 
+// admissionGrantName is the retired grant an admission above standard
+// stands for (priority-dispatch for bypass, durable for durable), or ""
+// for standard: the role checks below refused a template or schedule
+// carrying either grant, and refuse one carrying the setting that
+// replaced them the same way (unified-grants.design.md §4.1).
+func admissionGrantName(adm model.Admission) string {
+	switch model.NormalizeAdmission(adm) {
+	case model.AdmissionDurable:
+		return model.DurableCapability
+	case model.AdmissionBypass:
+		return model.PriorityDispatchCapability
+	}
+	return ""
+}
+
 func roleTemplateWithin(a *accessRole, key string, tmpl model.Template, allowedRepo func(APIScope, string) bool, normalize func(string) (string, error)) error {
 	for _, g := range tmpl.Grants {
 		if err := roleGrantRefusal(a, key, g.Capability, normalize); err != nil {
+			return err
+		}
+	}
+	if name := admissionGrantName(tmpl.Admission); name != "" {
+		if err := roleGrantRefusal(a, key, name, normalize); err != nil {
 			return err
 		}
 	}
@@ -803,6 +823,11 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 			}
 			for _, g := range sched.Grants {
 				if err := roleGrantRefusal(a, "capabilities", g.Capability, normalize); err != nil {
+					return err
+				}
+			}
+			if name := admissionGrantName(sched.Admission); name != "" {
+				if err := roleGrantRefusal(a, "admission", name, normalize); err != nil {
 					return err
 				}
 			}

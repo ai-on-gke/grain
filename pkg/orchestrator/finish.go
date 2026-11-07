@@ -2513,8 +2513,8 @@ func defaultTaskGrants(ctx context.Context, store *model.Store, target *model.Re
 }
 
 // defaultTaskAdmission is the admission a task filed against target (nil:
-// no repository) starts at: the repository's default_admission, else the
-// deployment's, else standard.
+// no repository) starts at: the higher of the repository's and the
+// deployment's default_admission, else standard.
 func defaultTaskAdmission(ctx context.Context, store *model.Store, target *model.RepoRef) (model.Admission, error) {
 	cfg, err := store.GetConfig(ctx)
 	if err != nil {
@@ -2529,8 +2529,11 @@ func defaultTaskAdmission(ctx context.Context, store *model.Store, target *model
 		if err != nil {
 			return model.AdmissionStandard, err
 		}
-		if repoCfg != nil && repoCfg.DefaultAdmission != "" {
-			adm = repoCfg.DefaultAdmission
+		if repoCfg != nil {
+			// Composed by union with the deployment's, as
+			// defaultTaskGrants composes the default capability lists
+			// this replaced: the higher wins.
+			adm = model.MaxAdmission(adm, repoCfg.DefaultAdmission)
 		}
 	}
 	return model.NormalizeAdmission(adm), nil

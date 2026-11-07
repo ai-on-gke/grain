@@ -778,8 +778,8 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 	}
 	out.DeploymentDefaultAdmission = string(model.NormalizeAdmission(deploymentAdmission))
 	effAdm := model.NormalizeAdmission(deploymentAdmission)
-	if stored != nil && stored.DefaultAdmission != "" {
-		effAdm = model.NormalizeAdmission(stored.DefaultAdmission)
+	if stored != nil {
+		effAdm = model.NormalizeAdmission(model.MaxAdmission(effAdm, stored.DefaultAdmission))
 	}
 	out.EffectiveDefaultAdmission = string(effAdm)
 	// The same composition dispatch itself applies, with no task layer:
