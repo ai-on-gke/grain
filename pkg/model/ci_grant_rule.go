@@ -48,9 +48,14 @@ const (
 // SupportsTrustedSchedule decided, carried by the reference now that no
 // provider stands behind it.
 //
-// It is grain's rule, not the deployment's. When CIOnly is set (or the
-// rule gates on CI Events or TrustedSchedule), no task or process run is
-// ever granted it, whatever the capability policy says. When Events or
+// It is grain's rule, not the deployment's. A rule is CI-only unless it
+// sets TaskGrantable: no task or process run is ever granted it, whatever
+// the capability policy says. That default is fail-closed on purpose --
+// before TaskGrantable existed, declaring any rule at all made a method
+// CI-only, so a rule written to that contract (in core or a layer built on
+// it) stays CI-only rather than silently becoming a task grant. A rule that
+// gates on CI Events or TrustedSchedule is CI-only even with TaskGrantable
+// set, since a task has no event for the gate to admit. When Events or
 // TrustedSchedule is set, it is handed to a CI job only on Events (and
 // on the schedule run grain itself fired, when TrustedSchedule); a job
 // of any other event is not handed it at all, as the provider's gate
@@ -63,7 +68,9 @@ const (
 // narrows every other deployment grant -- rather than the declaration
 // granting it, as it does other capability references.
 type CIGrantRule struct {
-	CIOnly          bool
+	// TaskGrantable opts the method in to task and process runs as well
+	// as CI jobs (github#sandbox-repo). Unset, the method is CI-only.
+	TaskGrantable   bool
 	Events          []string
 	TrustedSchedule bool
 	RepoGranted     bool
@@ -75,10 +82,11 @@ func (r CIGrantRule) IsEventGated() bool {
 	return len(r.Events) > 0 || r.TrustedSchedule
 }
 
-// IsCIOnly reports whether r restricts the grant to CI jobs alone. Every
-// event-gated rule is CI-only because tasks have no CI trigger event.
+// IsCIOnly reports whether r restricts the grant to CI jobs alone: every
+// rule that does not opt in with TaskGrantable, and every event-gated rule,
+// because tasks have no CI trigger event.
 func (r CIGrantRule) IsCIOnly() bool {
-	return r.CIOnly || r.IsEventGated()
+	return !r.TaskGrantable || r.IsEventGated()
 }
 
 // Admits reports whether a CI job of event, trustedSchedule being
