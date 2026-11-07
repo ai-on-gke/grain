@@ -599,3 +599,80 @@ func TestGrainSkillInstallPreservesMCPPermissionsTOMLTablesAndScrubsURLUserinfo(
 		}
 	}
 }
+
+func TestGrainSkillInstallRefusesProjectSymlinksAndScrubsUnauthURL(t *testing.T) {
+	homeDir, projectDir, _, _ := setupSkillTestEnv(t)
+
+	// 1. A malicious repository checkout with .mcp.json symlinked to ~/.claude.json
+	// must NOT trick `grain skill install --claude --project --mcp` into copying
+	// user-level MCP secrets into the repository worktree.
+	userClaudeMCP := filepath.Join(homeDir, ".claude.json")
+	if err := os.WriteFile(userClaudeMCP, []byte(`{"mcpServers":{"private":{"env":{"API_KEY":"USER_HOME_SECRET_999"}}}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	projMCP := filepath.Join(projectDir, ".mcp.json")
+	if err := os.Symlink(userClaudeMCP, projMCP); err != nil {
+		t.Fatal(err)
+	}
+	if err := runCLI([]string{"skill", "install", "--claude", "--project", "--mcp"}); err == nil {
+		t.Fatal("expected grain skill install --claude --project --mcp to refuse symlinked .mcp.json")
+	}
+	info, err := os.Lstat(projMCP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf(".mcp.json was replaced with a regular file in project worktree (mode=%v)", info.Mode())
+	}
+	if _, err := os.Stat(filepath.Join(projectDir, ".claude", "skills", "grain", "SKILL.md")); !os.IsNotExist(err) {
+		t.Fatalf("expected SKILL.md not to be written when MCP target validation fails, got err=%v", err)
+	}
+	if err := os.Remove(projMCP); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. A symlinked intermediate directory (.claude/skills -> outsideDir) inside
+	// the project must also be refused before writing SKILL.md outside projectDir.
+	outsideDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(projectDir, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideDir, filepath.Join(projectDir, ".claude", "skills")); err != nil {
+		t.Fatal(err)
+	}
+	if err := runCLI([]string{"skill", "install", "--claude", "--project"}); err == nil {
+		t.Fatal("expected grain skill install --claude --project to refuse symlinked .claude/skills")
+	}
+	if _, err := os.Stat(filepath.Join(outsideDir, "grain", "SKILL.md")); !os.IsNotExist(err) {
+		t.Fatalf("SKILL.md escaped project root via symlink into %s", outsideDir)
+	}
+
+	// 3. Unauthenticated error envelope must scrub embedded URL userinfo credentials.
+	ctxs, err := loadContexts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(ctxs.Contexts["team"].Server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.User = url.UserPassword("deploy-bot", "url-embedded-secret-xyz")
+	ctxs.Contexts["unauth-url"] = &cliContext{
+		Server: u.String(),
+		Auth:   "none",
+	}
+	if err := saveContexts(ctxs); err != nil {
+		t.Fatal(err)
+	}
+	var errBuf bytes.Buffer
+	out := captureStdout(t, func() {
+		code := runTaskCLI([]string{"--context", "unauth-url", "skill", "install", "--jetski", "--json"}, &errBuf)
+		if code == 0 {
+			t.Fatal("expected unauthenticated skill install to fail")
+		}
+	})
+	combined := out + "\n" + errBuf.String()
+	if strings.Contains(combined, "url-embedded-secret-xyz") || strings.Contains(combined, "deploy-bot") {
+		t.Errorf("unauthenticated error leaked URL userinfo credentials:\n%s", combined)
+	}
+}

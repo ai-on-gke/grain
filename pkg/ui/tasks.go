@@ -2355,9 +2355,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func narrowConfigForAgentCall(resp *configResponse, call agentCall) {
-	if !call.grants.Has("settings:read") {
+	if !call.grants.Allows("settings:read", "") {
 		resp.Deployment = nil
 		resp.PromptExtension = ""
+		resp.NewTaskForm = nil
 	}
 	if call.grants.Allows("settings:read", "") || call.grants.Allows("deployment:read", "") {
 		return
@@ -2402,6 +2403,14 @@ func narrowConfigForAgentCall(resp *configResponse, call agentCall) {
 	if len(resp.RepoDefaultAdmissions) == 0 {
 		resp.RepoDefaultAdmissions = nil
 	}
+	for repo := range resp.RepoDefaultHostings {
+		if !repoAllowed(repo) {
+			delete(resp.RepoDefaultHostings, repo)
+		}
+	}
+	if len(resp.RepoDefaultHostings) == 0 {
+		resp.RepoDefaultHostings = nil
+	}
 	for repo := range resp.RepoDefaultCapabilities {
 		if !repoAllowed(repo) {
 			delete(resp.RepoDefaultCapabilities, repo)
@@ -2410,25 +2419,12 @@ func narrowConfigForAgentCall(resp *configResponse, call agentCall) {
 	if len(resp.RepoDefaultCapabilities) == 0 {
 		resp.RepoDefaultCapabilities = nil
 	}
-	if resp.Deployment != nil {
-		resp.Deployment.TargetRepos = filterRepos(resp.Deployment.TargetRepos)
-		if resp.Deployment.ConfigRepo != "" && !repoAllowed(resp.Deployment.ConfigRepo) {
-			resp.Deployment.ConfigRepo = ""
-			resp.Deployment.ConfigCloneURL = ""
-			resp.Deployment.CloneCommand = ""
-		}
-		filterAssoc := func(in []TeamRepoAssociation) []TeamRepoAssociation {
-			var out []TeamRepoAssociation
-			for _, a := range in {
-				if repoAllowed(a.Repo) {
-					out = append(out, a)
-				}
-			}
-			return out
-		}
-		resp.Deployment.Repos = filterAssoc(resp.Deployment.Repos)
-		resp.Deployment.AssociatedRepos = filterAssoc(resp.Deployment.AssociatedRepos)
+	if resp.StateRepoSyncFailure != nil && (resp.StateRepoSyncFailure.Repo == "" || !repoAllowed(resp.StateRepoSyncFailure.Repo)) {
+		resp.StateRepoSyncFailure = nil
 	}
+	resp.InstallTrackSignals = nil
+	resp.DispatchBlocked = nil
+	resp.InstallNotice = nil
 }
 
 // handleListTasks answers the live task list -- every task not closed,

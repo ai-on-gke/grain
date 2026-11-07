@@ -21,6 +21,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -99,13 +101,33 @@ func TestGrainMCPStdioToolsCallSharedClientAndSliceWaitForTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.Contexts["broken-default"] = &cliContext{
-		Server: "http://127.0.0.1:1",
-		Auth:   "none",
+		Server:   "http://127.0.0.1:1",
+		Auth:     "none",
+		Audience: "https://wrong-default-audience.example",
 	}
 	cfg.Current = "broken-default"
 	if err := saveContexts(cfg); err != nil {
 		t.Fatal(err)
 	}
+
+	workspaceDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspaceDir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceDir, "note.txt"), []byte("workspace log excerpt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceDir, ".env"), []byte("SECRET_KEY=topsecret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outsideFile := filepath.Join(t.TempDir(), "host-secret.txt")
+	if err := os.WriteFile(outsideFile, []byte("HOST_SECRET_CONTENT\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideFile, filepath.Join(workspaceDir, "escape-link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workspaceDir)
 
 	origDefaultSlice := defaultMCPWaitSlice
 	origMaxSlice := maxMCPWaitSlice
@@ -119,26 +141,27 @@ func TestGrainMCPStdioToolsCallSharedClientAndSliceWaitForTask(t *testing.T) {
 		waitSlice = origWaitSlice
 	})
 
-	// Drive cmdMCP over real stdio pipes (testing both `--context mcpctx`
-	// resolution and JSON-RPC 2.0 stdio framing).
+	// Drive resolveMCPClient + serveExternalMCP over real stdio pipes (testing
+	// `--context mcpctx` resolution, audience isolation from broken-default, and
+	// JSON-RPC 2.0 stdio framing).
+	badClient := ui.NewHTTPClient("http://127.0.0.1:1")
+	badClient.Audience = "https://wrong-default-audience.example"
+	realClient, err := resolveMCPClient(badClient, nilFlagSet(), selectedContext{
+		name: "broken-default",
+		ctx:  cfg.Contexts["broken-default"],
+	}, "mcpctx")
+	if err != nil {
+		t.Fatalf("resolveMCPClient: %v", err)
+	}
+	if realClient.Audience != "" {
+		t.Fatalf("resolveMCPClient leaked default context audience %q onto mcpctx", realClient.Audience)
+	}
+
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	srvCtx, cancelSrv := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	go func() {
-		// Resolve through cmdMCP with an initially broken base client so
-		// `--context mcpctx` must replace both URL and context credential.
-		badClient := ui.NewHTTPClient("http://127.0.0.1:1")
-		var sel selectedContext
-		server := badClient.BaseURL
-		nextSel, _, rerr := resolveTarget(nilFlagSet(), &server, "mcpctx")
-		if rerr != nil {
-			done <- rerr
-			return
-		}
-		sel = nextSel
-		realClient := ui.NewHTTPClient(server)
-		useContextCredential(realClient, sel, "")
 		err := serveExternalMCP(srvCtx, realClient, inR, outW)
 		_ = outW.Close()
 		done <- err
@@ -219,13 +242,38 @@ func TestGrainMCPStdioToolsCallSharedClientAndSliceWaitForTask(t *testing.T) {
 		t.Fatalf("unexpected proposed task: %+v", createdTask)
 	}
 
-	// 4. comment_on_task and read_grain_task (including invalid RFC 3339 check).
+	// 4. comment_on_task (including workspace attachment confinement) and read_grain_task.
 	commentRes, err := client.CallTool(ctx, "comment_on_task", map[string]any{
-		"id":   createdTask.ID,
-		"body": "Tracking note from workstation MCP client.",
+		"id":          createdTask.ID,
+		"body":        "Tracking note from workstation MCP client.",
+		"attachments": []string{"note.txt"},
 	})
 	if err != nil || commentRes.IsError {
 		t.Fatalf("comment_on_task failed: err=%v res=%v", err, commentRes)
+	}
+
+	cfgDir, err := grainConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	credFile := filepath.Join(cfgDir, "credentials", "mcpctx")
+	for _, badAttach := range []struct {
+		name string
+		path string
+	}{
+		{"outside-workspace", outsideFile},
+		{"symlink-escaping-workspace", "escape-link.txt"},
+		{"dotenv-secret", ".env"},
+		{"grain-credential-store", credFile},
+	} {
+		badAttachRes, err := client.CallTool(ctx, "comment_on_task", map[string]any{
+			"id":          createdTask.ID,
+			"body":        "Should fail attachment confinement",
+			"attachments": []string{badAttach.path},
+		})
+		if err != nil || !badAttachRes.IsError {
+			t.Fatalf("comment_on_task(%s) should have refused attachment %q, got err=%v res=%+v", badAttach.name, badAttach.path, err, badAttachRes)
+		}
 	}
 
 	readRes, err := client.CallTool(ctx, "read_grain_task", map[string]any{
@@ -293,6 +341,16 @@ func TestGrainMCPStdioToolsCallSharedClientAndSliceWaitForTask(t *testing.T) {
 	badCILog, err := client.CallTool(ctx, "ci_log", map[string]any{})
 	if err != nil || !badCILog.IsError {
 		t.Fatalf("expected ci_log to require run_id, got err=%v res=%+v", err, badCILog)
+	}
+	for _, badCIArgs := range []map[string]any{
+		{"repo": "acme/widgets", "run_id": "../other/1"},
+		{"repo": "acme/widgets", "run_id": "run-1", "job": "build?raw=1"},
+		{"repo": "not-a-valid-repo-slug", "run_id": "run-1"},
+	} {
+		res, err := client.CallTool(ctx, "ci_log", badCIArgs)
+		if err != nil || !res.IsError {
+			t.Fatalf("expected ci_log(%v) to reject unsafe URI segment, got err=%v res=%+v", badCIArgs, err, res)
+		}
 	}
 	badAdopt, err := client.CallTool(ctx, "adopt_pull_request", map[string]any{"pr": "not-a-valid-pr"})
 	if err != nil || !badAdopt.IsError {

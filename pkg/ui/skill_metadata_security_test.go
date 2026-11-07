@@ -43,11 +43,27 @@ func TestExternalAgentSkillMetadataEndpointsEnforceRepoAndSettingsBoundaries(t *
 	cfg.PromptExtension = "SECRET_GLOBAL_PROMPT_EXTENSION"
 	cfg.TargetRepos = []string{"acme/widgets", "acme/secret"}
 	cfg.ExternalAgentAPI = true
+	cfg.NewTaskForm = &model.NewTaskForm{
+		Repos: map[string]model.NewTaskFormLayer{
+			"acme/secret": {
+				Fields: map[string]model.NewTaskFormField{
+					"title": {Label: "SECRET_FORM_LABEL"},
+				},
+			},
+		},
+	}
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
 	client.Config.DefaultTarget = &model.RepoRef{Owner: "acme", Name: "secret"}
 	client.Config.StateRepoRef = func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "config"} }
+	client.Config.StateRepoSyncFailure = func() *ui.StateRepoSyncFailure {
+		return &ui.StateRepoSyncFailure{
+			Since: time.Now(),
+			Error: "SECRET_SYNC_FAILURE_DETAIL",
+			Repo:  "acme/config",
+		}
+	}
 
 	secretRepo := model.RepoRef{Owner: "acme", Name: "secret"}
 	widgetsRepo := model.RepoRef{Owner: "acme", Name: "widgets"}
@@ -56,6 +72,7 @@ func TestExternalAgentSkillMetadataEndpointsEnforceRepoAndSettingsBoundaries(t *
 		PromptExtension:  "secret-repo-prompt",
 		SetupCommand:     "make secret-setup",
 		DefaultAdmission: model.AdmissionDurable,
+		DefaultHosting:   model.HostingConsole,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -116,6 +133,21 @@ func TestExternalAgentSkillMetadataEndpointsEnforceRepoAndSettingsBoundaries(t *
 			Body:   "TOP_SECRET_WRITES_BODY",
 		},
 		{
+			ID:     "secret-cap-tmpl",
+			Name:   "Cross-repo API Grant",
+			Target: &widgetsRepo,
+			Grants: []model.Grant{{Capability: "api:ci:read@acme/secret"}},
+			Title:  "Cap reaches secret repo",
+			Body:   "TOP_SECRET_CAP_BODY",
+		},
+		{
+			ID:           "change-target-tmpl",
+			Name:         "Non-git Change Target",
+			ChangeTarget: &model.ChangeTarget{Kind: "workspace", Spec: json.RawMessage(`{"id":"TOP_SECRET_CHANGE_TARGET"}`)},
+			Title:        "Non-git workspace template",
+			Body:         "TOP_SECRET_CHANGE_TARGET_BODY",
+		},
+		{
 			ID:    "global-unbound-tmpl",
 			Name:  "Global Unbound",
 			Title: "Unbound template",
@@ -148,15 +180,27 @@ func TestExternalAgentSkillMetadataEndpointsEnforceRepoAndSettingsBoundaries(t *
 		t.Fatal(err)
 	}
 
+	// Token 3: repo-qualified settings:read@acme/widgets must NOT unlock
+	// deployment-wide PromptExtension, Deployment, or NewTaskForm.
+	tokByScopedSettings, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:   "by-scoped-settings",
+		Scopes: []string{"settings:read@acme/widgets", "templates:read@acme/widgets"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	for _, tc := range []struct {
 		name  string
 		token string
 	}{
 		{"tok-repos-list", tokByRepos.Token},
 		{"per-scope-repo-qualifier", tokByScopeQualifier.Token},
+		{"per-scope-settings-read", tokByScopedSettings.Token},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// 1. GET /api/templates must exclude every template tied to acme/secret.
+			// 1. GET /api/templates must exclude every template tied to acme/secret
+			// or non-git change targets.
 			tmplReq := httptest.NewRequest(http.MethodGet, "/api/templates", nil)
 			tmplReq.Header.Set("Authorization", "Bearer "+tc.token)
 			tmplRec := httptest.NewRecorder()
@@ -177,6 +221,8 @@ func TestExternalAgentSkillMetadataEndpointsEnforceRepoAndSettingsBoundaries(t *
 				declaredUnboundID,
 				"secret-reads-tmpl",
 				"secret-writes-tmpl",
+				"secret-cap-tmpl",
+				"change-target-tmpl",
 			} {
 				if slices.Contains(ids, forbiddenID) {
 					t.Errorf("GET /api/templates leaked unauthorized template %q in %v", forbiddenID, ids)
@@ -189,8 +235,9 @@ func TestExternalAgentSkillMetadataEndpointsEnforceRepoAndSettingsBoundaries(t *
 				t.Errorf("GET /api/templates ids = %v, want widgets-tmpl and global-unbound-tmpl", ids)
 			}
 
-			// 2. GET /api/config must redact settings:read fields (Deployment, PromptExtension)
-			// and filter all repository lists/maps to acme/widgets only.
+			// 2. GET /api/config must redact unscoped settings:read fields
+			// (Deployment, PromptExtension, NewTaskForm) and filter all repository
+			// lists/maps to acme/widgets only.
 			cfgReq := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 			cfgReq.Header.Set("Authorization", "Bearer "+tc.token)
 			cfgRec := httptest.NewRecorder()
@@ -203,6 +250,8 @@ func TestExternalAgentSkillMetadataEndpointsEnforceRepoAndSettingsBoundaries(t *
 				"acme/secret",
 				"acme/config",
 				"SECRET_GLOBAL_PROMPT_EXTENSION",
+				"SECRET_FORM_LABEL",
+				"SECRET_SYNC_FAILURE_DETAIL",
 			} {
 				if strings.Contains(rawBody, leaked) {
 					t.Errorf("GET /api/config leaked %q to repo-scoped external token: %s", leaked, rawBody)
@@ -213,7 +262,16 @@ func TestExternalAgentSkillMetadataEndpointsEnforceRepoAndSettingsBoundaries(t *
 				t.Fatalf("unmarshal /api/config: %v", err)
 			}
 			if parsed["deployment"] != nil {
-				t.Errorf("GET /api/config exposed deployment object without settings:read: %v", parsed["deployment"])
+				t.Errorf("GET /api/config exposed deployment object without unscoped settings:read: %v", parsed["deployment"])
+			}
+			if parsed["newTaskForm"] != nil {
+				t.Errorf("GET /api/config exposed newTaskForm without unscoped settings:read: %v", parsed["newTaskForm"])
+			}
+			if parsed["repoDefaultHostings"] != nil {
+				t.Errorf("GET /api/config exposed out-of-scope repoDefaultHostings: %v", parsed["repoDefaultHostings"])
+			}
+			if parsed["stateRepoSyncFailure"] != nil {
+				t.Errorf("GET /api/config exposed out-of-scope stateRepoSyncFailure: %v", parsed["stateRepoSyncFailure"])
 			}
 			targetRepos, _ := parsed["targetRepos"].([]any)
 			if len(targetRepos) != 1 || targetRepos[0] != "acme/widgets" {

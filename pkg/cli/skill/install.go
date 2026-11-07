@@ -102,6 +102,56 @@ func WriteFileWithMode(path string, data []byte, defaultPerm os.FileMode) error 
 	return nil
 }
 
+// EnsureNoSymlinksUnderRoot verifies that targetPath resides strictly inside
+// root and that no path component beneath root (including targetPath itself, if
+// it exists) is a symbolic link. This prevents untrusted repository checkouts
+// from tricking `grain skill install --project [--mcp]` into reading user-level
+// MCP configs (e.g. .mcp.json -> ~/.claude.json) into the repository worktree
+// or writing files outside the project root via directory symlinks.
+func EnsureNoSymlinksUnderRoot(root, targetPath string) error {
+	cleanRoot, err := filepath.Abs(root)
+	if err != nil {
+		return fmt.Errorf("resolving project root %s: %w", root, err)
+	}
+	cleanTarget, err := filepath.Abs(targetPath)
+	if err != nil {
+		return fmt.Errorf("resolving target path %s: %w", targetPath, err)
+	}
+	rel, err := filepath.Rel(cleanRoot, cleanTarget)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return fmt.Errorf("refusing project target %s outside project root %s", cleanTarget, cleanRoot)
+	}
+	cur := cleanRoot
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		cur = filepath.Join(cur, part)
+		info, err := os.Lstat(cur)
+		if errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("inspecting %s: %w", cur, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to follow symlink %s inside project directory %s", cur, cleanRoot)
+		}
+	}
+	return nil
+}
+
+// SanitizeContextFlag strips control characters and backticks from a context
+// name rendered into SKILL.md inline code spans.
+func SanitizeContextFlag(name string) string {
+	return cleanInline(name)
+}
+
+func cleanInline(s string) string {
+	s = strings.NewReplacer("\r", " ", "\n", " ", "`", "'").Replace(s)
+	return strings.TrimSpace(s)
+}
+
 // ScrubServerURL strips any embedded userinfo credentials from rawURL.
 func ScrubServerURL(rawURL string) string {
 	trimmed := strings.TrimSpace(rawURL)
@@ -209,20 +259,25 @@ func FormatDeploymentSection(ctxLabel, baseURL string, who ui.AuthWhoamiResponse
 
 	var b strings.Builder
 	b.WriteString("## 5. Active Deployment Metadata\n\n")
-	fmt.Fprintf(&b, "- **Context:** `%s`\n", ctxLabel)
-	fmt.Fprintf(&b, "- **Server:** `%s`\n", ScrubServerURL(baseURL))
-	if cfg.EnvironmentName != "" {
-		fmt.Fprintf(&b, "- **Deployment name:** %s\n", cfg.EnvironmentName)
+	fmt.Fprintf(&b, "- **Context:** `%s`\n", cleanInline(ctxLabel))
+	fmt.Fprintf(&b, "- **Server:** `%s`\n", cleanInline(ScrubServerURL(baseURL)))
+	if envName := cleanInline(cfg.EnvironmentName); envName != "" {
+		fmt.Fprintf(&b, "- **Deployment name:** %s\n", envName)
 	}
-	fmt.Fprintf(&b, "- **Principal:** `%s`\n", who.Principal)
-	if who.Owner != "" {
-		fmt.Fprintf(&b, "- **Owner (`on behalf of`):** `%s`\n", who.Owner)
+	fmt.Fprintf(&b, "- **Principal:** `%s`\n", cleanInline(who.Principal))
+	if owner := cleanInline(who.Owner); owner != "" {
+		fmt.Fprintf(&b, "- **Owner (`on behalf of`):** `%s`\n", owner)
 	}
-	if who.ScopeSet != "" {
-		fmt.Fprintf(&b, "- **Scope set:** `%s`\n", who.ScopeSet)
+	if scopeSet := cleanInline(who.ScopeSet); scopeSet != "" {
+		fmt.Fprintf(&b, "- **Scope set:** `%s`\n", scopeSet)
 	}
 	if len(who.ResolvedScopes) > 0 {
-		scopes := slices.Clone(who.ResolvedScopes)
+		scopes := make([]string, 0, len(who.ResolvedScopes))
+		for _, sc := range who.ResolvedScopes {
+			if c := cleanInline(sc); c != "" {
+				scopes = append(scopes, c)
+			}
+		}
 		sort.Strings(scopes)
 		fmt.Fprintf(&b, "- **Held scopes:** `%s`\n", strings.Join(scopes, "`, `"))
 	} else {
@@ -239,10 +294,11 @@ func FormatDeploymentSection(ctxLabel, baseURL string, who ui.AuthWhoamiResponse
 		b.WriteString("- Unrestricted across deployment repositories\n")
 	} else {
 		for _, r := range repos {
+			cr := cleanInline(r)
 			if cfg.DefaultTarget != "" && strings.EqualFold(r, cfg.DefaultTarget) {
-				fmt.Fprintf(&b, "- `%s` (default target)\n", r)
+				fmt.Fprintf(&b, "- `%s` (default target)\n", cr)
 			} else {
-				fmt.Fprintf(&b, "- `%s`\n", r)
+				fmt.Fprintf(&b, "- `%s`\n", cr)
 			}
 		}
 	}
@@ -254,12 +310,14 @@ func FormatDeploymentSection(ctxLabel, baseURL string, who ui.AuthWhoamiResponse
 		b.WriteString("- None advertised\n")
 	} else {
 		for _, t := range sortedTemplates {
-			line := fmt.Sprintf("- `%s`", t.ID)
-			if t.Name != "" && t.Name != t.ID {
-				line += " (" + t.Name + ")"
+			id := cleanInline(t.ID)
+			name := cleanInline(t.Name)
+			line := fmt.Sprintf("- `%s`", id)
+			if name != "" && name != id {
+				line += " (" + name + ")"
 			}
-			if t.Repo != "" {
-				line += " [repo: `" + t.Repo + "`]"
+			if repo := cleanInline(t.Repo); repo != "" {
+				line += " [repo: `" + repo + "`]"
 			}
 			b.WriteString(line + "\n")
 		}
@@ -272,13 +330,17 @@ func FormatDeploymentSection(ctxLabel, baseURL string, who ui.AuthWhoamiResponse
 		b.WriteString("- None declared\n")
 	} else {
 		for _, f := range fields {
-			desc := fmt.Sprintf("- `%s` (`%s`", f.Name, f.Type)
+			desc := fmt.Sprintf("- `%s` (`%s`", cleanInline(f.Name), cleanInline(f.Type))
 			if f.Multiple {
 				desc += ", repeatable"
 			}
 			desc += ")"
 			if len(f.Options) > 0 {
-				desc += ": `" + strings.Join(f.Options, "`, `") + "`"
+				opts := make([]string, 0, len(f.Options))
+				for _, opt := range f.Options {
+					opts = append(opts, cleanInline(opt))
+				}
+				desc += ": `" + strings.Join(opts, "`, `") + "`"
 			}
 			b.WriteString(desc + "\n")
 		}

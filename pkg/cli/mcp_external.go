@@ -56,7 +56,15 @@ func cmdMCP(ctx context.Context, c *ui.HTTPClient, parentFS *flag.FlagSet, sel s
 	if err := noArgs(fs, pos); err != nil {
 		return err
 	}
-	if name := strings.TrimSpace(*ctxFlag); name != "" && name != sel.name {
+	c, err = resolveMCPClient(c, parentFS, sel, *ctxFlag)
+	if err != nil {
+		return err
+	}
+	return serveExternalMCP(ctx, c, os.Stdin, os.Stdout)
+}
+
+func resolveMCPClient(c *ui.HTTPClient, parentFS *flag.FlagSet, sel selectedContext, ctxFlag string) (*ui.HTTPClient, error) {
+	if name := strings.TrimSpace(ctxFlag); name != "" && name != sel.name {
 		targetFS := parentFS
 		if targetFS == nil {
 			targetFS = flag.NewFlagSet("grain", flag.ContinueOnError)
@@ -64,18 +72,22 @@ func cmdMCP(ctx context.Context, c *ui.HTTPClient, parentFS *flag.FlagSet, sel s
 		server := c.BaseURL
 		nextSel, _, err := resolveTarget(targetFS, &server, name)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		nextClient := ui.NewHTTPClient(server)
 		nextClient.HTTP = c.HTTP
 		nextClient.RetryPolicy = c.RetryPolicy
 		nextClient.Token = c.Token
-		nextClient.Audience = c.Audience
+		if flagWasSet(targetFS, "audience") {
+			nextClient.Audience = c.Audience
+		} else {
+			nextClient.Audience = audienceDefault()
+		}
 		nextClient.User = c.User
 		useContextCredential(nextClient, nextSel, tokenSource(c.Token))
-		c = nextClient
+		return nextClient, nil
 	}
-	return serveExternalMCP(ctx, c, os.Stdin, os.Stdout)
+	return c, nil
 }
 
 func serveExternalMCP(ctx context.Context, c *ui.HTTPClient, in io.Reader, out io.Writer) error {
@@ -628,7 +640,7 @@ func externalTaskMessageTool(c *ui.HTTPClient, name, description string, isReply
 			if err != nil {
 				return mcpToolErr(err)
 			}
-			attachments, err := loadAttachments(a.Attachments)
+			attachments, err := loadMCPAttachments(a.Attachments)
 			if err != nil {
 				return mcpToolErr(err)
 			}

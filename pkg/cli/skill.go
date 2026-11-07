@@ -192,7 +192,7 @@ func cmdSkillInstall(ctx context.Context, c *ui.HTTPClient, out *printer, sel se
 
 	rendered, err := skill.Render(skill.Data{
 		MetadataJSON:      string(metaJSON),
-		ContextFlag:       sel.name,
+		ContextFlag:       skill.SanitizeContextFlag(sel.name),
 		DeploymentSection: strings.TrimRight(section, "\n"),
 	})
 	if err != nil {
@@ -212,8 +212,11 @@ func cmdSkillInstall(ctx context.Context, c *ui.HTTPClient, out *printer, sel se
 
 	for i := range targets {
 		t := &targets[i]
-		if err := skill.WriteFileAtomically(t.SkillPath, []byte(rendered)); err != nil {
-			return err
+		projRoot := projectRootForSkillTarget(*t)
+		if projRoot != "" {
+			if err := skill.EnsureNoSymlinksUnderRoot(projRoot, t.SkillPath); err != nil {
+				return err
+			}
 		}
 		if *withMCP || t.MCPConfigPath != "" {
 			if t.MCPConfigPath == "" {
@@ -223,6 +226,16 @@ func cmdSkillInstall(ctx context.Context, c *ui.HTTPClient, out *printer, sel se
 				}
 				t.MCPConfigPath = mcpPath
 			}
+			if projRoot != "" {
+				if err := skill.EnsureNoSymlinksUnderRoot(projRoot, t.MCPConfigPath); err != nil {
+					return err
+				}
+			}
+		}
+		if err := skill.WriteFileAtomically(t.SkillPath, []byte(rendered)); err != nil {
+			return err
+		}
+		if *withMCP || t.MCPConfigPath != "" {
 			if err := skill.RegisterMCPServer(t.Agent == skillAgentCodex, t.MCPConfigPath, grainBin, sel.name); err != nil {
 				return err
 			}
@@ -483,18 +496,30 @@ func upsertSkillTarget(rec *skillContextState, next skillTarget) {
 	rec.Targets = append(rec.Targets, next)
 }
 
+func projectRootForSkillTarget(t skillTarget) string {
+	if !t.Project {
+		return ""
+	}
+	if t.Agent == skillAgentDir {
+		return filepath.Dir(t.SkillPath)
+	}
+	// <root>/.{agents,claude,gemini}/skills/grain/SKILL.md
+	return filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(t.SkillPath))))
+}
+
 func buildDeploymentSection(ctx context.Context, c *ui.HTTPClient, sel selectedContext) (section, digest string, err error) {
 	who, err := c.AuthWhoami(ctx)
 	if err != nil {
 		return "", "", expiredForContext(err, sel.name)
 	}
 	if !who.Authenticated {
-		fix := "grain login " + c.BaseURL
+		safeURL := skill.ScrubServerURL(c.BaseURL)
+		fix := "grain login " + safeURL
 		return "", "", &cliError{
 			exit: exitAuth,
 			code: "unauthenticated",
 			fix:  fix,
-			err:  fmt.Errorf("not signed in to %s (it accepts %s): run %s", c.BaseURL, strings.Join(who.AcceptedAuth, ", "), fix),
+			err:  fmt.Errorf("not signed in to %s (it accepts %s): run %s", safeURL, strings.Join(who.AcceptedAuth, ", "), fix),
 		}
 	}
 	cfg, cfgErr := c.SkillDeploymentConfig(ctx)
@@ -631,6 +656,10 @@ func candidateTargetsForStatus(ctxKey string, rec *skillContextState) []skillTar
 			if err != nil {
 				continue
 			}
+			cand := skillTarget{Agent: kind, Project: proj, SkillPath: p}
+			if root := projectRootForSkillTarget(cand); root != "" && skill.EnsureNoSymlinksUnderRoot(root, p) != nil {
+				continue
+			}
 			raw, err := os.ReadFile(p)
 			if err != nil {
 				continue
@@ -639,7 +668,7 @@ func candidateTargetsForStatus(ctxKey string, rec *skillContextState) []skillTar
 				continue
 			}
 			if !slices.ContainsFunc(found, func(t skillTarget) bool { return t.SkillPath == p }) {
-				found = append(found, skillTarget{Agent: kind, Project: proj, SkillPath: p})
+				found = append(found, cand)
 			}
 		}
 	}

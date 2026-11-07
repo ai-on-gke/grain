@@ -20,6 +20,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -182,8 +184,16 @@ func externalCILogTool(c *ui.HTTPClient) mcp.Tool {
 			run, err := c.CIRun(ctx, runID)
 			if err != nil {
 				if repo := strings.TrimSpace(a.Repo); repo != "" {
-					uri := "ci://" + strings.Trim(repo, "/") + "/" + runID
-					if j := strings.TrimSpace(a.Job); j != "" {
+					parsedRepo, rerr := model.ParseRepo(repo)
+					j := strings.TrimSpace(a.Job)
+					if rerr != nil {
+						return mcpToolErr(fmt.Errorf("ci_log repo: %w", rerr))
+					}
+					if !isSafeCIURISegment(runID) || (j != "" && !isSafeCIURISegment(j)) {
+						return mcpToolErr(errors.New("ci_log: invalid run_id or job segment"))
+					}
+					uri := "ci://" + parsedRepo.String() + "/" + runID
+					if j != "" {
 						uri += "/" + j + "/log"
 					} else {
 						uri += "/log"
@@ -444,4 +454,81 @@ func externalAdoptPRTool(c *ui.HTTPClient) mcp.Tool {
 			return mcpJSONResult(got)
 		},
 	}
+}
+
+func isSafeCIURISegment(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	return !strings.ContainsAny(s, "/\\?#\r\n\x00")
+}
+
+// loadMCPAttachments confines attachment file reads in `grain mcp` to regular
+// files inside the current project/working directory root, preventing a
+// prompt-injected coding agent from using reply_to_task or comment_on_task to
+// exfiltrate host credentials or arbitrary files outside the workspace.
+func loadMCPAttachments(paths []string) ([]ui.AttachmentUpload, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	root, err := resolveProjectRoot()
+	if err != nil {
+		return nil, err
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolving workspace root %s: %w", root, err)
+	}
+	var blockedDirs []string
+	if cfgDir, err := grainConfigDir(); err == nil && cfgDir != "" {
+		blockedDirs = append(blockedDirs, filepath.Clean(cfgDir))
+		if realCfg, err := filepath.EvalSymlinks(cfgDir); err == nil && realCfg != "" {
+			blockedDirs = append(blockedDirs, realCfg)
+		}
+	}
+
+	resolved := make([]string, 0, len(paths))
+	for _, p := range paths {
+		absP, err := filepath.Abs(p)
+		if err != nil {
+			return nil, fmt.Errorf("reading attachment %s: %w", p, err)
+		}
+		realP, err := filepath.EvalSymlinks(absP)
+		if err != nil {
+			return nil, fmt.Errorf("reading attachment %s: %w", p, err)
+		}
+		for _, bd := range blockedDirs {
+			if realP == bd || strings.HasPrefix(realP, bd+string(filepath.Separator)) ||
+				absP == bd || strings.HasPrefix(absP, bd+string(filepath.Separator)) {
+				return nil, fmt.Errorf("refusing attachment %s inside grain config directory", p)
+			}
+		}
+		rel, err := filepath.Rel(realRoot, realP)
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			return nil, fmt.Errorf("refusing attachment %s outside workspace %s", p, root)
+		}
+		for _, seg := range strings.Split(rel, string(filepath.Separator)) {
+			lower := strings.ToLower(seg)
+			if lower == ".git" || lower == ".ssh" || lower == ".gnupg" || lower == ".aws" ||
+				lower == ".env" || strings.HasPrefix(lower, ".env.") {
+				return nil, fmt.Errorf("refusing sensitive attachment path %s", p)
+			}
+		}
+		info, err := os.Stat(realP)
+		if err != nil {
+			return nil, fmt.Errorf("reading attachment %s: %w", p, err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("refusing non-regular attachment %s", p)
+		}
+		resolved = append(resolved, realP)
+	}
+	uploads, err := loadAttachments(resolved)
+	if err != nil {
+		return nil, err
+	}
+	for i := range uploads {
+		uploads[i].Filename = filepath.Base(paths[i])
+	}
+	return uploads, nil
 }
