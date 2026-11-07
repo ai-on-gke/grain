@@ -63,6 +63,7 @@ import {
   defaultRepoChoice,
   targetableRepos,
 } from "../state.js";
+import AccessGate from "./AccessGate.jsx";
 
 const WEEKDAYS = [
   "sunday",
@@ -1176,23 +1177,31 @@ function ScheduleOverlay({
         >
           {!isNew && (
             <Stack direction="row" spacing={1}>
-              <Button color="error" onClick={remove} disabled={!!declaredIn}>
-                Delete
-              </Button>
-              <Button onClick={toggleEnabled} disabled={!!declaredIn}>
-                {schedule.enabled ? "Pause" : "Resume"}
-              </Button>
+              <AccessGate scope="schedules:write" repo={repo}>
+                <Button color="error" onClick={remove} disabled={!!declaredIn}>
+                  Delete
+                </Button>
+              </AccessGate>
+              <AccessGate scope="schedules:write" repo={repo}>
+                <Button onClick={toggleEnabled} disabled={!!declaredIn}>
+                  {schedule.enabled ? "Pause" : "Resume"}
+                </Button>
+              </AccessGate>
               {/* Offered on a paused schedule too: pausing stops the
                   cadence, and this is a human asking for one run, which
                   is not the cadence. */}
-              <Button onClick={runNow}>Run now</Button>
+              <AccessGate scope="schedules:write" repo={repo}>
+                <Button onClick={runNow}>Run now</Button>
+              </AccessGate>
             </Stack>
           )}
           <Stack direction="row" spacing={1} sx={{ ml: "auto" }}>
             <Button onClick={onClose}>{declaredIn ? "Close" : "Cancel"}</Button>
-            <Button type="submit" variant="contained" disabled={!!declaredIn}>
-              {isNew ? "Add schedule" : "Save"}
-            </Button>
+            <AccessGate scope="schedules:write" repo={repo}>
+              <Button type="submit" variant="contained" disabled={!!declaredIn}>
+                {isNew ? "Add schedule" : "Save"}
+              </Button>
+            </AccessGate>
           </Stack>
         </Stack>
       </form>

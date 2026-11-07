@@ -84,6 +84,7 @@ import TaskLink from "./detail/TaskLink.jsx";
 import Timeline from "./detail/Timeline.jsx";
 import WorkTree from "./detail/WorkTree.jsx";
 import WriteRepos from "./detail/WriteRepos.jsx";
+import AccessGate from "./AccessGate.jsx";
 
 // useBranchPushed reports whether branch is really on repo's remote --
 // false until GitHub's own refs say it is, and false too while nobody
@@ -323,13 +324,15 @@ export default function DetailOverlay({
                 <Button size="small" onClick={() => setShowPrompt(true)}>
                   Prompt
                 </Button>
-                <Button
-                  size="small"
-                  startIcon={<AppIcon name="edit" size={15} />}
-                  onClick={() => setEditing(true)}
-                >
-                  Edit
-                </Button>
+                <AccessGate scope="tasks:write" repo={t.repo}>
+                  <Button
+                    size="small"
+                    startIcon={<AppIcon name="edit" size={15} />}
+                    onClick={() => setEditing(true)}
+                  >
+                    Edit
+                  </Button>
+                </AccessGate>
               </div>
 
               <div className="freshness">
