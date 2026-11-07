@@ -50,6 +50,8 @@ import { boardMoves } from "./boardOrder.js";
 import { panelMove } from "./panelOrder.js";
 import { sectionMove } from "./sectionOrder.js";
 import { TimeZoneProvider } from "./TimeZoneContext.jsx";
+import { AccessConfigProvider } from "./AccessContext.jsx";
+import { canAccess } from "./access.js";
 import Sidebar from "./components/Sidebar.jsx";
 import { useSidebarCollapsed } from "./sidebarCollapse.js";
 import { SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_WIDTH } from "./theme.js";
@@ -1842,6 +1844,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // snapped back on the next refresh would be worse than a drag that
   // takes a moment. A refresh follows a failure too, so a half-applied
   // renumber shows what actually landed rather than what was asked for.
+  // Moving a board, a panel or a report section is a PATCH
+  // /api/boards/{id} (boards:write): a role without it is not offered the
+  // drag handles at all (access.js).
+  const canMoveBoards = canAccess(config, "boards:write");
   const moveBoard = useCallback(
     async (id, place) => {
       const moves = boardMoves(boards, id, place);
@@ -3274,7 +3280,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       onOpen={openPanelView}
       onAddPanel={openAddPanelTask}
       onKeepPanelQuery={openKeepPanelQueryTask}
-      onMovePanel={movePanel}
+      onMovePanel={canMoveBoards ? movePanel : undefined}
     />
   );
 
@@ -3295,7 +3301,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       onOpenTask={openTask}
       onOpen={openPanelView}
       showError={showError}
-      onMoveSection={moveSection}
+      onMoveSection={canMoveBoards ? moveSection : undefined}
       pickedWindow={boardWindow}
       onPickWindow={setBoardWindow}
     />
@@ -3621,7 +3627,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
     stateFilter,
   ]);
 
-  return (
+  // The shell, under the caller's resolved access (AccessContext.jsx):
+  // every write control below it is drawn for what the signed-in
+  // person's role covers.
+  const shell = (
     <TimeZoneProvider zone={preferredTimeZone || config?.timeZone}>
       <div className="app-shell">
         {/* The one standing banner left (grain/task-4008): while
@@ -4025,7 +4034,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                               if (board) openBoard(board);
                             }}
                             onNewBoard={openNewBoardTask}
-                            onMoveBoard={moveBoard}
+                            onMoveBoard={canMoveBoards ? moveBoard : undefined}
                           />
                         ) : (
                           <div className="main-column">
@@ -4158,6 +4167,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       </div>
     </TimeZoneProvider>
   );
+  return <AccessConfigProvider config={config}>{shell}</AccessConfigProvider>;
 }
 
 // DEPLOYMENT_SETTINGS_TAB maps a Team settings tab an older link or
