@@ -15,7 +15,9 @@
 # GitHub Actions port of .grain/workflows/promote.yml.
 #
 # Keeps the `:latest` and `:vX.Y.Z` image tags on `docker.io/grainai/*`
-# aligned with the git `latest` tag by running `scripts/release-images.sh promote`.
+# aligned with the git `latest` tag by running `scripts/release-images.sh promote`,
+# and the `vX.Y.Z` GitHub release's assets (and GitHub's latest-release
+# marker) with it by running `scripts/release-assets.sh promote`.
 
 name: promote
 
@@ -260,3 +262,59 @@ jobs:
           else
             bash ./scripts/release-images.sh "${args[@]}"
           fi
+
+  # The same promotion as release assets (scripts/release-assets.sh,
+  # release-asset contract v2, docs/release-assets.md): vX.Y.Z gets its
+  # own copies of its commit's sha-<12 hex> tarballs and images.json, and
+  # is marked GitHub's latest release when the git tag latest names it.
+  # A job of its own so `contents: write` is held by nothing but
+  # release-assets.sh -- no build, no registry credential.
+  assets:
+    name: promote release assets
+    needs: on-demand
+    if: ${{ !cancelled() && (needs.on-demand.result == 'success' || needs.on-demand.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    concurrency:
+      group: ${{ github.workflow }}-assets-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      RELEASE_ASSETS_DIR: /tmp/release-assets
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse a patch tag that did not come from its release branch
+        env:
+          PROMOTE_VERSION: ${{ inputs.version }}
+        run: bash ./scripts/patch-tag-guard.sh --latest "${GITHUB_REF:-}" "${PROMOTE_VERSION:-}"
+
+      - name: Promote the release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          PROMOTE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          case "${GITHUB_REF:-}" in
+            refs/heads/main|refs/heads/candidate|refs/tags/v*) is_release_ref=true ;;
+            *) is_release_ref=false ;;
+          esac
+          dry_run="${INPUT_DRY_RUN:-}"
+          if [ "$is_release_ref" != "true" ] && [ "${GITHUB_EVENT_NAME:-}" != "release" ]; then
+            dry_run="true"
+          fi
+          args=()
+          if [ "${dry_run}" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          args+=(promote)
+          if [ -n "${PROMOTE_VERSION:-}" ]; then
+            args+=("${PROMOTE_VERSION}")
+          fi
+          bash ./scripts/release-assets.sh "${args[@]}"
