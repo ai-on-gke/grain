@@ -16,28 +16,30 @@ credential decides whether it holds. See
 The equivalent CLI is:
 
 ```sh
-grain repo ci-capabilities -set github-sandbox bwsalmon/grain
+grain repo ci-capabilities -set https://grain.dev/capabilities/github#sandbox-repo bwsalmon/grain
 grain repo ci-capabilities bwsalmon/grain
 grain repo ci-capabilities -set '' bwsalmon/grain
 ```
 
 The API is `GET` / `PUT /api/repos/{owner}/{name}/ci-capabilities`, with a PUT
-body such as `{"ciCapabilities":["github-sandbox"]}`. The database
+body such as `{"ciCapabilities":["https://grain.dev/capabilities/github#sandbox-repo={}"]}`
+(the bare `github-sandbox` alias is also accepted for one release). The database
 stores the list in `repo_config.ci_capabilities`; existing databases migrate to
 an empty list. State/settings exports preserve it with the other repo settings.
 
-What this list grants today is the legacy in-process providers that remain
-(`github-sandbox`, a temporary GitHub repository) and the release-only
-publishing credentials of grain's in-process release server described below
-(`model.CIGrantRule.RepoGranted`). Capability references are not granted
+What this list grants today is the repository-granted methods of grain's
+in-process `github` (`https://grain.dev/capabilities/github#sandbox-repo`, a
+temporary GitHub repository, rewritten from `github-sandbox` by schema
+migration 120) and `release` servers described below
+(`model.CIGrantRule.RepoGranted`). Ordinary capability references are not granted
 here: GCP keys (`https://grain.dev/capabilities/gcp#gcp-key`), Gemini keys
 (`…/gcp#gemini-key`) and the model proxies
 (`https://grain.dev/capabilities/model-proxy#model-proxy` `{vendor}`) are
 references since schema migrations 97, 100 and 103, and a job gets one only by
 declaring it, with the deployment's capability policy deciding
 ([Capability servers](#capability-servers)). Those migrations rewrote the
-retired bare names in this list too. A reference here is not handed to a job
-that does not declare it, so such an entry can be removed.
+retired bare names in this list too. A reference without `RepoGranted` here is
+not handed to a job that does not declare it, so such an entry can be removed.
 Agent-only MCP tools and named Git credential selectors are not offered.
 Configure the providers in Settings first. Missing or refused providers fail
 job preparation and report the capability's error before workflow steps run.
@@ -92,7 +94,7 @@ the same:
 | --- | --- |
 | no `capabilities:` key | **everything** this list grants the repository -- what every job got before the key existed |
 | `capabilities: []` | **nothing** from this list (only what it names under `optional-capabilities:` and is granted) |
-| `capabilities: [github-sandbox]` | exactly what it names; a name this list does not grant means the job does not run, and says which |
+| `capabilities: [https://grain.dev/capabilities/github#sandbox-repo]` | exactly what it names (the bare `github-sandbox` alias also matches for one release); a name this list does not grant means the job does not run, and says which |
 
 The table is about this list. Capability references, repository access and
 `api:` grants are granted by being declared, whichever case applies, and a job
@@ -123,7 +125,7 @@ A job's capability references are minted through capability servers
 the built-in stdio servers (`https://grain.dev/capabilities/gcp#gcp-key` and
 `#gemini-key`, `…/git#git-repo`, `…/config-map#config-map`,
 `…/host-script#host-script`; a CI job is refused host-script grants converted
-from `local-scripts`), grain's in-process servers (`…/model-proxy`,
+from `local-scripts`), grain's in-process servers (`…/github`, `…/model-proxy`,
 `…/release`, `…/repo`, `…/grain`), and any server an operator attached. A job
 names them with `with:` arguments, as a reference string or a
 `{capability, with}` object:
@@ -140,9 +142,10 @@ jobs:
 The arguments, the environment each built-in reads its credential from, and
 what each mint places are in
 [docs/capabilities.md](capabilities.md#in-tree-capability-servers-grain-capability-name).
-The few providers still in `pkg/capability/` (`github-sandbox`, the
-`release-gate-read` alias) are granted the older way, from this repository's
-list or by declaring the alias.
+The one CI provider still in `pkg/capability/` (the `release-gate-read` alias)
+is granted by declaring the alias; repository-granted methods (`…/github#sandbox-repo`
+and `…/release#*`) come from this repository's CI capabilities list ahead of
+`capability_policy`.
 A job naming a reference has it minted before its sandbox is
 built, through the server attached for it in `mcpServers`: the reference
 need not be in the repository's CI capabilities, the deployment's
@@ -638,7 +641,7 @@ Both are gone:
 - A job that relied on such an entry without declaring it must now
   declare it in its workflow file. Its team must also have a credential
   that can reach the repository.
-- Everything else in this list, such as `github-sandbox`,
+- Everything else in this list, such as `github#sandbox-repo`,
   `package-publish`, `registry-push` and release secrets, is a
   deployment-owned credential that belongs to no team. Those are still
   the operator's to grant here. (`gcp-key` and `gemini-key` were here too,

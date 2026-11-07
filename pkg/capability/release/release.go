@@ -54,8 +54,8 @@ const ServerID = model.ReleaseCapabilityServerID
 
 // The rules each method declares (model.CIGrantRule).
 var (
-	ImageSigningRule   = model.CIGrantRule{CIOnly: true, Events: []string{"release"}, RepoGranted: true}
-	RegistryPushRule   = model.CIGrantRule{CIOnly: true, Events: []string{"release", "workflow_dispatch"}, RepoGranted: true}
+	ImageSigningRule = model.CIGrantRule{CIOnly: true, Events: []string{"release"}, RepoGranted: true}
+	RegistryPushRule = model.CIGrantRule{CIOnly: true, Events: []string{"release", "workflow_dispatch"}, RepoGranted: true}
 	// PackagePublishRule also admits grain's own scheduled run, as
 	// packagepublish.Provider.SupportsTrustedSchedule does.
 	PackagePublishRule = model.CIGrantRule{CIOnly: true, Events: []string{"release", "workflow_dispatch"}, TrustedSchedule: true, RepoGranted: true}
