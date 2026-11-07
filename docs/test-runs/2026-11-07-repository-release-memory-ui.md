@@ -362,3 +362,318 @@ Nothing replaced Grain's API or its React UI.
    sent, because the value is unchanged, so the refusal stays on the
    banner until its five seconds run out. Short-lived, and the box itself
    is correct.
+
+---
+
+# Second pass: task 3160
+
+Task 3160 walked the same area again on the same day, against a newer
+`main`. It found three bugs that the first pass did not reach, in the
+Releases tab's qualification plan and in Settings → Repositories. All
+three are fixed here. Everything else matched the first pass above.
+
+## Environment
+
+- **Commit tested**: `5dd24214` (`main`, merge of #858). The fixes were
+  checked on this branch's build of the same tree.
+- **Build**: `cd ui && npm ci && npm run build`, then `go build` of
+  `./cmd/grain`. `e2e/global-setup.js` builds the binary for the suite.
+  Note: `make frontend` runs `npm ci --omit=dev`, which removes
+  Playwright and Vitest. Run `npm ci` again before running tests.
+- **Servers**: real `grain demo` processes, each over its own throwaway
+  embedded store, signed in with the access code:
+  - **A**: `-github-sim -reconcile=500ms -fake-ci -scheduled-workflows
+    -base-branch-ci -secrets-store -merge-rules -merge-queue-states
+    -qualification`.
+  - **B**: `-github-sim -reconcile=500ms`, for the base-branch gates.
+  - **C**: `-github-sim -qualification
+    -external-config-repo=https://github.com/grain/config.git`. Here
+    `/api/config` itself answers `configRepoOnly: true` and every
+    settings write is refused with 409.
+- **Driver**: Playwright's Chromium
+  (`PLAYWRIGHT_BROWSERS_PATH=/var/cache/playwright`). The ad hoc walks
+  ran through the suite's own `e2e/fixtures.js`, kept outside the
+  repository. Each walk recorded:
+  - console errors and warnings, and `pageerror`;
+  - failed requests and responses `>= 400`;
+  - every `dialog`, dismissed or accepted on purpose.
+- **Viewports**: 1280×900 and 390×844, in light and dark.
+- **Gemini**: `/home/debian/.gemini-api-key` is not present, so nothing
+  used it.
+- **Two sandbox runs**: the first run (attempt 1) did the exploratory
+  walk and found the bugs. A usage limit stopped it before anything was
+  pushed. The second run, in a fresh sandbox, rebuilt the fixes and
+  re-ran the walk where noted. It also ran the regression specs and the
+  30 repository, merge queue and release e2e specs listed below.
+
+## Stubs
+
+- **GitHub** is `grain demo`'s own `-github-sim`, reached through the
+  real GitHub client. The simulator's bare `acme/widgets.git` got:
+  - `.grain/settings.yml` with `port-branches: [main, candidate]` and
+    `port-types` (`candidate->main: [fix]`, `main->release: [fix]`);
+  - `.grain/triggers/walk-docs.yml`;
+  - `.grain/templates/release-cut.yml`, with extra push refs;
+  - the branch `feature/compare-3160`.
+  These were pushed through `/api/e2e/scheduled-workflows`, the demo's
+  e2e hook. An issue labelled for import was opened through the
+  simulator's issue hook.
+- **CI** is `-fake-ci`. The merge re-check batch carries the seeded run
+  `demo-recheck-1`.
+- **Delays**: two `page.route` delays of 1.2 s on `POST /api/repos` and
+  1.0 s on `POST …/import-issues`. They were used only to see the
+  **Adding…** and **Importing…** states. Both requests still reached the
+  real server.
+- **Config repo** (server C) is the demo's own `-external-config-repo`
+  mode, not a rewritten answer.
+
+Nothing replaced Grain's API or its React UI.
+
+## Steps and outcomes
+
+### 1. Repos list, repo page and task filing (A; attempt 1, 34 checks, no page errors)
+
+- **Opening it**: the rail's **Repos** item and the direct `/repos` URL
+  both open the list.
+- **Counts, search and sort**: they behave as in the first pass.
+- **Adding a repo**: the add form locks while the add is in flight
+  (**Adding…**).
+- **Long name and busy row at 390, light and dark**:
+  - no horizontal overflow;
+  - **Blocked** is the first chip on acme/widgets and stays visible;
+  - **Add repo** stays on screen.
+- **Reorder**: pointer drag, keyboard (Enter on the handle, then a "Move
+  here" target) and a tap at 390 each move the row. The order survives
+  a reload.
+- **Repo row**: opening it and returning through **← Repos** works.
+- **Task count**: "N tasks filed here" opens `/?f=repo:any:acme/widgets`,
+  and browser Back returns to the repo page.
+- **New task** from the repo page preselects acme/widgets. The filed
+  task keeps it after a reload.
+
+### 2. Tabs and Settings → Repositories (A)
+
+- **Tabs**: each of the seven tabs rides in the URL as
+  `/repos/acme/widgets/settings/<tab>`. Each survives a reload and
+  Back/Forward. At 390 the selected tab is scrolled into view in the
+  tab strip.
+- **Settings → Repositories**: each row shows the base branches, the
+  declarations, the CI mode and the git connection. Each fact links to
+  the tab that changes it.
+- **Overview**: shows the summary, the issue-import status, the overlap
+  re-check card and recent CI runs.
+- **CI**:
+  - CI mode and **Watch default branch**;
+  - CI workflows;
+  - CI capabilities, with each policy verdict judged for acme/widgets.
+- **Agents**:
+  - **Prompt extension** shows beside the read-only deployment and
+    `.grain/settings.yml` layers.
+  - **Setup command** shows beside its `.grain/settings.yml` layer.
+  - **Default capabilities** are shown.
+  - **GitHub issue import**: the enable switch, and the queue-at-once
+    switch with its trust warning. Source, label and interval are saved,
+    and each survives a reload.
+  - **Import issues now** shows **Importing…**, then "Read 1 open issue"
+    and "1 already imported".
+  - A source repository the simulator lacks reads as a 404 refusal.
+  - An unsaved label asks before **← Repos**.
+- **Branches**: **Add branch** behaves as in the first pass.
+- **Advanced**:
+  - The declarations read "Read at <sha>".
+  - Path triggers lists `.grain/triggers/walk-docs.yml`.
+  - Extra push refs for `release-cut.yml` are listed.
+  - The read-only **Ports** table has three rows, with two port
+    warnings.
+  - On server C, a broken trigger reads "Last read failed: …
+    `.grain/triggers/broken.yml` …". The tab still reports what the
+    last good read (`0f1e2d3c4b5a`) declared.
+  - On server C, `/repos/grain/config/settings/advanced` refuses
+    removal: "This is the deployment's own configuration repository and
+    cannot be removed here."
+  - **Remove** on acme/widgets runs the stranding plan and asks first.
+    The question was dismissed.
+
+### 3. Merge queue and base-branch gates (A, B; re-run in attempt 2 on A)
+
+- **Require branches to be up to date** and **Merge when green and
+  clean** toggle with no prompt. Each change survives a reload and was
+  restored afterwards.
+- **Base-branch repair PRs may merge without a human** on Repo → Merge
+  queue:
+  - Turning it on asks "Let base-branch repair PRs in acme/widgets merge
+    without a human when their CI is green? …".
+  - Dismissing leaves it off. Accepting saves it, and it survives a
+    reload.
+  - Turning it off does not ask.
+- **The same switch on Settings → Repositories**: turning it on asks the
+  same question, the change survives a reload, and turning it off does
+  not ask.
+- **Unfixable checks**:
+  - `cla/walk-3160` is added, and it survives a reload.
+  - `grain CI` is refused inline: "grain CI judges one exact commit on
+    the branch …".
+  - A blank box leaves **Add** disabled.
+  - The case-insensitive duplicate refusal is covered by
+    `merge-rules-walkthrough.spec.js`, which passed.
+- **Overlap re-check**, on Overview: "1 change on main", the **testing**
+  chip, "5m of 90m", the recheck ref at `abcdef012345`, and PR #101.
+  **Show the run** opens the run overlay, with **Cancel run**.
+- **Overlap re-check on `/tasks/5`**: shows the same "5m of 90m" and the
+  **testing** chip.
+- **CI mode (B)**: switching between **Use GitHub CI**, **Use No CI** and
+  **Use Grain CI**:
+  - The "Nothing is testing acme/widgets's default branch …" alert
+    appears on Overview and on the Releases tab, and at 390 with no
+    overflow.
+  - **Go to CI Mode** lands on `settings/ci` with CI Mode in view.
+  - Back on Grain CI, both alerts clear without a reload.
+  - `base-branch-gate-warnings-walkthrough.spec.js` passed on this
+    build.
+
+### 4. Compare (A; attempt 1)
+
+- **Picker**: the Head branch box lists the repository's own branches.
+- **Compare** opens
+  `/repos/acme/widgets/compare/main...feature/compare-3160` and shows
+  the diff. The direct link and a reload both redraw it.
+- **Other refs by URL**:
+  - `release/1.0...main` parses the slashed base.
+  - `main...main` reads "There are no changes between these branches."
+  - An unknown ref answers 404 and reads "GitHub has nothing to compare
+    …".
+
+### 5. Releases and work ownership (A)
+
+- **Work ownership** (attempt 2):
+  - Turning **Standing work on this deployment** off asks nothing, and
+    the change survives a reload. It was restored afterwards.
+  - The per-item buttons (26 `aria-pressed` buttons across the schedules
+    and the release) were tested on the first item: "the repository
+    default: on" stays pressed after a reload. It was cleared afterwards.
+- **Releases** (attempt 1, and the passing specs
+  `release_name_validation_walkthrough`, `release_delete_walkthrough`,
+  `release-unknown-url` and `qualification-promote-and-recheck-run`):
+  - `bad name`, `-lead` and `1.0` are refused on the name box.
+  - Creating a release opens `/releases/<name>`, which survives a
+    reload.
+  - **Cut new RC** is greyed while an RC is active, with "… is active: a
+    new RC is cut once it is promoted."
+  - **Promote current RC** asks first. Dismissing does nothing.
+    Accepting reaches "promoted", and Promote is then greyed with "…
+    already promoted".
+  - Cut then makes `rc.2`, which survives a reload.
+  - **Merge … into the default branch** and **Delete release** each ask
+    first.
+  - An unknown release URL names the missing release and shows another
+    instead.
+- **Qualification plan**: see bugs 1 and 2.
+
+### Console and network
+
+- No page errors, and no console errors from the app.
+- **Expected 4xx**: the 404 for a missing issue-import source, the 404
+  for an unknown compare ref, the 400s for refused release names and
+  unfixable checks, and the 409s on server C.
+- **Aborted requests**: `GET /api/tasks` showed `net::ERR_ABORTED` when a
+  navigation cancelled an in-flight poll. That is harmless.
+
+## Bugs
+
+1. **The qualification plan dropped unsaved edits on leaving, and
+   showed rows as typed rather than as saved** (fixed).
+   - **Reproduction 1**: on `/repos/acme/widgets/releases`, clear the
+     plan row's **Repeat** and click **Add item**. Click
+     **← acme/widgets**: the page leaves with no question, and the edit
+     is gone.
+   - **Reproduction 2**: make the same edit and click **Save
+     qualification plan**. The PUT saves one row with `repeat: 1`, but
+     the blank row and the empty Repeat stay on screen until a reload.
+   - **What happened**:
+     - `QualificationPlanEditor` copied the plan into state once, on
+       mount, and never took on the saved plan again.
+     - Nothing registered the form with `guardLeaving`.
+     - The pane's **← repo** and **Open repository settings** buttons
+       called `onBack` directly. App's own openers already ask through
+       `leavingLosesEdits`, but this path did not.
+   - **Fix** (`RepoReleases.jsx`):
+     - The editor tracks a baseline and is dirty while what it shows
+       differs from it.
+     - A successful save makes the payload the new baseline and shows
+       it.
+     - A poll's new plan replaces the form only while it is clean, so
+       the 3 s poll never wipes an edit in progress.
+     - The form registers with `guardLeaving`, so a reload and App's own
+       navigation ask about it.
+     - **← repo** and **Open repository settings** ask
+       (`DISCARD_PROMPT`) when there is an unsaved edit.
+     - `savePlan` now answers whether the save succeeded, so a refused
+       save leaves the edit on screen.
+2. **The qualification plan stayed editable when the API refuses its
+   save** (fixed).
+   - **Reproduction**: on server C, open `/repos/acme/widgets/releases`.
+     Every plan control is live, and **Save** answers 409. The same
+     happens for a caller who is not one of the repo's admins
+     (`adminScoped`), where the save answers 403.
+   - **Fix**: the editor is read-only when `manageRefused`,
+     `configRepoOnly` or `!repoAdministered(config, repo)`. Under
+     `configRepoOnly` a `ConfigManagedNotice` links
+     `tables/qualification_config.json` and
+     `tables/qualification_item.json`, which are the tables
+     `PutQualificationPlan`'s `checkSettingsWritable` names.
+3. **Settings → Repositories' base-branch repair switch stayed live
+   where the repo's own Merge queue tab is read-only, and swallowed the
+   refusal** (fixed).
+   - **Reproduction**: on server C, open `/settings/repositories`. The
+     acme/widgets switch is enabled, while the repo page's copy is
+     disabled. Ticking it asks the confirmation, then the 409 is
+     swallowed and the box springs back with no message.
+   - **Fix** (`RepositoriesSection.jsx`, `SettingsPage.jsx`):
+     - The switch is disabled under `configRepoOnly` or
+       `!repoAdministered(config, repo)`, the same rule as RepoPage's
+       `readOnly`.
+     - The section now gets `showError` from the Settings page, and a
+       failed PUT is reported through it.
+- **Regression coverage**:
+  - **Unit tests**, all failing without the fix:
+    - `RepoReleases.test.jsx`, four tests: "shows the saved plan after
+      Save, not the rows as typed", "asks before leaving with an unsaved
+      qualification plan edit", and read-only under config-repo-only
+      and for a non-admin.
+    - `RepositoriesSection.test.jsx`, two tests: disabled where the
+      repo page is, and the refusal is reported.
+    - `npx vitest run` on these two files plus `SettingsPage.test.jsx`
+      and `RepoPage.test.jsx`: 182 passed.
+  - **Playwright, against the real demo, at 1280 and 390**. All four
+    tests fail on `main`'s frontend and pass with the fix:
+    - `ui/e2e/repo-release-plan-edits.spec.js`: leaving asks; Save shows
+      the saved plan; reload; clean leave does not ask.
+    - `ui/e2e/repo-release-plan-config-repo.spec.js`: on server C the
+      plan is read-only under the notice, and the bypass switch is
+      disabled on both surfaces.
+  - **Suite**: 30 repository, merge queue and release specs, including
+    the two new ones (71 tests), all passed on this build:
+    `base-branch-gate-warnings-walkthrough`, `config-repo-only-settings`,
+    `issue-import-walkthrough`, `merge-on-green-base-repair-walkthrough`,
+    `merge-on-green`, `merge-rules-walkthrough`,
+    `new_task_draft_repo_page`, `qualification-promote-and-recheck-run`,
+    `release-unknown-url`, `release_delete_walkthrough`,
+    `release_name_validation_walkthrough`, `repo-ci-capabilities`,
+    `repo-compare-picker`, `repo-issue-import-draft-kept`,
+    `repo-list-blocked-chip`, `repo-ownership-ci-security`,
+    `repo-page-unsaved-edits`, `repo-pane`,
+    `repo-release-memory-inputs-walkthrough`,
+    `repo-setting-refusal-clears`, `repo-tab-strip-phone`,
+    `repo-tabs-walkthrough`, `repo_release_memory_edits_walkthrough`,
+    `repos-add-form-phone`, `repos-autosave-walkthrough`,
+    `repos_workflows`, `repository-release-memory-regressions-walkthrough`
+    and `repository_release_memory_walkthrough`.
+  - **Screenshots**: `e2e/screenshot.mjs` was run on server C's flags
+    for `/repos/acme/widgets/releases` and `/settings/repositories`, at
+    desktop and phone, light and dark, before and after the fix. They
+    were not committed.
+
+## Observations (not fixed here)
+
+The first pass's observations 2 to 5 still hold. The second pass found
+nothing new outside the bugs above.
