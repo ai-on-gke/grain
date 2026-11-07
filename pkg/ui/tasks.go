@@ -2348,7 +2348,83 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if authenticated || singleTenantTrusted(r) {
 		resp.InstallTrackSignals = det.Signals
 	}
+	if call, ok := agentCallFromContext(r.Context()); ok {
+		narrowConfigForAgentCall(&resp, call)
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func narrowConfigForAgentCall(resp *configResponse, call agentCall) {
+	if !call.grants.Allows("settings:read", "") {
+		resp.Deployment = nil
+		resp.PromptExtension = ""
+		resp.NewTaskForm = nil
+	}
+	if call.grants.Allows("settings:read", "") || call.grants.Allows("deployment:read", "") {
+		return
+	}
+	repoAllowed := func(repo string) bool {
+		repo = strings.TrimSpace(repo)
+		return repo != "" && (call.grants.Allows("settings:read", repo) || call.grants.Allows("deployment:read", repo))
+	}
+	filterRepos := func(in []string) []string {
+		if len(in) == 0 {
+			return nil
+		}
+		var out []string
+		for _, r := range in {
+			if repoAllowed(r) {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	resp.TargetRepos = filterRepos(resp.TargetRepos)
+	if resp.DefaultTarget != "" && !repoAllowed(resp.DefaultTarget) {
+		resp.DefaultTarget = ""
+	}
+	if resp.ConfigRepo != "" && !repoAllowed(resp.ConfigRepo) {
+		resp.ConfigRepo = ""
+	}
+	if resp.ExternalConfigRepo != "" && !repoAllowed(resp.ExternalConfigRepo) {
+		resp.ExternalConfigRepo = ""
+		resp.ExternalConfigBranch = ""
+	}
+	resp.ReposWithWorkflows = filterRepos(resp.ReposWithWorkflows)
+	resp.ReposWithCICapabilities = filterRepos(resp.ReposWithCICapabilities)
+	resp.ReposWithPromptExtension = filterRepos(resp.ReposWithPromptExtension)
+	resp.ReposWithSetupCommand = filterRepos(resp.ReposWithSetupCommand)
+	resp.ReposWithReleaseSettings = filterRepos(resp.ReposWithReleaseSettings)
+	for repo := range resp.RepoDefaultAdmissions {
+		if !repoAllowed(repo) {
+			delete(resp.RepoDefaultAdmissions, repo)
+		}
+	}
+	if len(resp.RepoDefaultAdmissions) == 0 {
+		resp.RepoDefaultAdmissions = nil
+	}
+	for repo := range resp.RepoDefaultHostings {
+		if !repoAllowed(repo) {
+			delete(resp.RepoDefaultHostings, repo)
+		}
+	}
+	if len(resp.RepoDefaultHostings) == 0 {
+		resp.RepoDefaultHostings = nil
+	}
+	for repo := range resp.RepoDefaultCapabilities {
+		if !repoAllowed(repo) {
+			delete(resp.RepoDefaultCapabilities, repo)
+		}
+	}
+	if len(resp.RepoDefaultCapabilities) == 0 {
+		resp.RepoDefaultCapabilities = nil
+	}
+	if resp.StateRepoSyncFailure != nil && (resp.StateRepoSyncFailure.Repo == "" || !repoAllowed(resp.StateRepoSyncFailure.Repo)) {
+		resp.StateRepoSyncFailure = nil
+	}
+	resp.InstallTrackSignals = nil
+	resp.DispatchBlocked = nil
+	resp.InstallNotice = nil
 }
 
 // handleListTasks answers the live task list -- every task not closed,
