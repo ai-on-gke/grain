@@ -211,6 +211,11 @@ func (s *Server) serveDockerDirect(w http.ResponseWriter, r *http.Request, regis
 		return
 	}
 
+	if !s.restrictedClient(r) && isArtifactRegistryUpload(r.Host, path) {
+		s.proxyDocker(w, r, upstream)
+		return
+	}
+
 	if !strings.HasPrefix(path, "/v2") {
 		s.refuse(w, r, http.StatusNotFound, "grain's package cache mirrors OCI registries: requests must start with /v2/.")
 		return
@@ -298,6 +303,13 @@ func isDockerDirectWrite(method, subpath string) bool {
 		return true
 	}
 	return false
+}
+
+// isArtifactRegistryUpload reports whether a request targets Google Artifact
+// Registry's blob upload session endpoint (/artifacts-uploads/... on *.pkg.dev),
+// returned in the Location header of POST /v2/.../blobs/uploads/.
+func isArtifactRegistryUpload(host, path string) bool {
+	return strings.HasSuffix(hostKey(host), ".pkg.dev") && strings.HasPrefix(path, "/artifacts-uploads/")
 }
 
 // copyProxyRequestHeaders copies client request headers to the proxied upstream request,

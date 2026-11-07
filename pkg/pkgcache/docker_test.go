@@ -482,3 +482,177 @@ func TestIsDockerAuthEndpoint(t *testing.T) {
 		}
 	}
 }
+
+func TestDockerArtifactRegistryBlobUploadDirectProxy(t *testing.T) {
+	ca, err := NewCA()
+	if err != nil {
+		t.Fatalf("NewCA: %v", err)
+	}
+
+	const (
+		registryHost = "us-central1-docker.pkg.dev"
+		uploadPath   = "/artifacts-uploads/namespaces/acme-proj/repositories/containers/uploads/upload-123"
+		uploadURL    = "https://" + registryHost + uploadPath
+		blobBytes    = "artifact-registry-layer-bytes"
+	)
+	wantDigest := digestOf(blobBytes)
+
+	var chunkedBytes []byte
+	var finalBytes []byte
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != registryHost {
+			http.Error(w, "unexpected host: "+r.Host, http.StatusBadRequest)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer ar-push-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v2/acme-proj/containers/widgets/blobs/uploads/":
+			w.Header().Set("Location", uploadURL)
+			w.WriteHeader(http.StatusAccepted)
+		case r.Method == http.MethodPatch && r.URL.Path == uploadPath:
+			b, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			chunkedBytes = append(chunkedBytes, b...)
+			w.Header().Set("Location", uploadURL)
+			w.WriteHeader(http.StatusAccepted)
+		case r.Method == http.MethodPut && r.URL.Path == uploadPath:
+			if got := r.URL.Query().Get("digest"); got != wantDigest {
+				http.Error(w, "unexpected digest: "+got, http.StatusBadRequest)
+				return
+			}
+			b, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			finalBytes = append(chunkedBytes, b...)
+			w.Header().Set("Docker-Content-Digest", wantDigest)
+			w.WriteHeader(http.StatusCreated)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstreamServer.Close()
+
+	upstreamClient := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "tcp", upstreamServer.Listener.Addr().String())
+			},
+		},
+	}
+
+	srv, _ := newTestServer(t, Config{
+		Client:         upstreamClient,
+		DockerRegistry: "http://registry-1.docker.io",
+		GHCRRegistry:   "http://ghcr.io",
+	})
+
+	proxyServer := httptest.NewUnstartedServer(srv)
+	proxyServer.TLS = ca.TLSConfig()
+	proxyServer.StartTLS()
+	defer proxyServer.Close()
+
+	rootPool := x509.NewCertPool()
+	rootPool.AppendCertsFromPEM(ca.RootCertPEM())
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "tcp", proxyServer.Listener.Addr().String())
+			},
+			TLSClientConfig: &tls.Config{
+				RootCAs: rootPool,
+			},
+		},
+	}
+
+	doReq := func(method, rawURL, body string) *http.Response {
+		t.Helper()
+		var bodyReader io.Reader
+		if body != "" {
+			bodyReader = strings.NewReader(body)
+		}
+		req, err := http.NewRequest(method, rawURL, bodyReader)
+		if err != nil {
+			t.Fatalf("http.NewRequest(%s, %s): %v", method, rawURL, err)
+		}
+		req.Header.Set("Authorization", "Bearer ar-push-token")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("client.Do(%s %s): %v", method, rawURL, err)
+		}
+		return resp
+	}
+
+	// Step 1: Start blob upload under /v2/.../blobs/uploads/.
+	postResp := doReq(http.MethodPost, "https://"+registryHost+"/v2/acme-proj/containers/widgets/blobs/uploads/", "")
+	postResp.Body.Close()
+	if postResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST blobs/uploads status = %d, want 202", postResp.StatusCode)
+	}
+	loc := postResp.Header.Get("Location")
+	if loc != uploadURL {
+		t.Fatalf("POST blobs/uploads Location = %q, want %q", loc, uploadURL)
+	}
+
+	// Step 2: Follow Location to /artifacts-uploads/... with PATCH chunk.
+	patchResp := doReq(http.MethodPatch, loc, blobBytes[:10])
+	patchResp.Body.Close()
+	if patchResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("PATCH %s status = %d, want 202", loc, patchResp.StatusCode)
+	}
+	if got := patchResp.Header.Get(cacheStatusHeader); got != "pass" {
+		t.Errorf("PATCH cacheStatus = %q, want pass", got)
+	}
+	loc = patchResp.Header.Get("Location")
+	if loc != uploadURL {
+		t.Fatalf("PATCH Location = %q, want %q", loc, uploadURL)
+	}
+
+	// Step 3: Complete upload with PUT /artifacts-uploads/...?digest=...
+	putResp := doReq(http.MethodPut, loc+"?digest="+url.QueryEscape(wantDigest), blobBytes[10:])
+	putResp.Body.Close()
+	if putResp.StatusCode != http.StatusCreated {
+		t.Fatalf("PUT %s status = %d, want 201", loc, putResp.StatusCode)
+	}
+	if got := putResp.Header.Get(cacheStatusHeader); got != "pass" {
+		t.Errorf("PUT cacheStatus = %q, want pass", got)
+	}
+	if got := putResp.Header.Get("Docker-Content-Digest"); got != wantDigest {
+		t.Errorf("Docker-Content-Digest = %q, want %q", got, wantDigest)
+	}
+	if string(finalBytes) != blobBytes {
+		t.Errorf("uploaded bytes = %q, want %q", string(finalBytes), blobBytes)
+	}
+
+	// Non-*.pkg.dev registries and bare pkg.dev still reject /artifacts-uploads/.
+	for _, host := range []string{"ghcr.io", "registry-1.docker.io", "pkg.dev"} {
+		resp := doReq(http.MethodPut, "https://"+host+uploadPath+"?digest="+url.QueryEscape(wantDigest), blobBytes)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("PUT https://%s%s status = %d, want 404", host, uploadPath, resp.StatusCode)
+		}
+	}
+
+	// Other non-/v2/ paths on *.pkg.dev remain 404, and dot-dot traversal remains 400.
+	otherResp := doReq(http.MethodPut, "https://"+registryHost+"/v1/projects/acme-proj", blobBytes)
+	otherResp.Body.Close()
+	if otherResp.StatusCode != http.StatusNotFound {
+		t.Errorf("PUT /v1/... on %s status = %d, want 404", registryHost, otherResp.StatusCode)
+	}
+
+	badResp := doReq(http.MethodPut, "https://"+registryHost+"/artifacts-uploads/../v1/secret", blobBytes)
+	badResp.Body.Close()
+	if badResp.StatusCode != http.StatusBadRequest {
+		t.Errorf("PUT dot-dot on %s status = %d, want 400", registryHost, badResp.StatusCode)
+	}
+}

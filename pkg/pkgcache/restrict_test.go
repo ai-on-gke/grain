@@ -76,6 +76,9 @@ func TestRestrictedClientCannotWriteThroughTheCache(t *testing.T) {
 		{"OCI blob upload chunk", http.MethodPatch, "/v2/acme/widgets/blobs/uploads/abc", "ghcr.io"},
 		{"OCI manifest push", http.MethodPut, "/v2/acme/widgets/manifests/latest", "ghcr.io"},
 		{"OCI delete", http.MethodDelete, "/v2/acme/widgets/manifests/sha256:" + strings.Repeat("a", 64), "ghcr.io"},
+		{"Artifact Registry blob upload start", http.MethodPost, "/v2/p/r/widgets/blobs/uploads/", "us-docker.pkg.dev"},
+		{"Artifact Registry blob upload chunk", http.MethodPatch, "/artifacts-uploads/namespaces/p/repositories/r/uploads/u1", "us-docker.pkg.dev"},
+		{"Artifact Registry blob upload finish", http.MethodPut, "/artifacts-uploads/namespaces/p/repositories/r/uploads/u1?digest=sha256:" + strings.Repeat("a", 64), "us-docker.pkg.dev"},
 		{"Artifact Registry push", http.MethodPut, "/v2/p/r/widgets/manifests/latest", "us-docker.pkg.dev"},
 	}
 	send := func(method, target, host string) *httptest.ResponseRecorder {
@@ -104,6 +107,18 @@ func TestRestrictedClientCannotWriteThroughTheCache(t *testing.T) {
 		t.Fatalf("upstream saw %d requests from a sandbox with no network, want none", hits)
 	}
 
+	// Even GET/HEAD on Artifact Registry's /artifacts-uploads/ session path
+	// is not forwarded for a restricted client.
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		rec := send(method, "/artifacts-uploads/namespaces/p/repositories/r/uploads/u1", "us-docker.pkg.dev")
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s /artifacts-uploads/... from a sandbox with no network answered %d, want 404", method, rec.Code)
+		}
+	}
+	if hits := atomic.LoadInt32(&upstreamHits); hits != 0 {
+		t.Fatalf("upstream saw %d requests on /artifacts-uploads/ GET/HEAD from a restricted sandbox, want none", hits)
+	}
+
 	// A fetch is a read, and still goes through: git's fetch POSTs.
 	for _, c := range []struct{ method, target, host string }{
 		{http.MethodGet, "/acme/widgets.git/info/refs?service=git-upload-pack", "github.com"},
@@ -119,13 +134,15 @@ func TestRestrictedClientCannotWriteThroughTheCache(t *testing.T) {
 	restricted.UnrestrictClient(testClientIP)
 	atomic.StoreInt32(&upstreamHits, 0)
 	for _, c := range writes {
-		if rec := send(c.method, c.target, c.host); rec.Code == http.StatusForbidden {
+		rec := send(c.method, c.target, c.host)
+		if rec.Code != http.StatusAccepted {
 			firstLine, _, _ := strings.Cut(rec.Body.String(), "\n")
-			t.Errorf("%s from a client with network was refused: %d %s", c.name, rec.Code, firstLine)
+			t.Errorf("%s (%s %s, Host %q) from a client with network answered %d (%s), want 202 from upstream",
+				c.name, c.method, c.target, c.host, rec.Code, firstLine)
 		}
 	}
-	if hits := atomic.LoadInt32(&upstreamHits); hits == 0 {
-		t.Error("no write from a client with network reached upstream")
+	if hits := atomic.LoadInt32(&upstreamHits); int(hits) != len(writes) {
+		t.Errorf("upstream saw %d writes from a client with network, want %d", hits, len(writes))
 	}
 }
 
