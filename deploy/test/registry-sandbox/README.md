@@ -15,7 +15,7 @@ sandbox project (`deploy/test/registry-sandbox/`).
 - **Compute & Database (`instance.tf`, `files/startup.sh`)**: One private-IP
   `e2-small` Debian 12 GCE VM (no external IP, outbound egress via Cloud NAT to
   satisfy `constraints/compute.vmExternalIpAccess`) running:
-  - `postgres:16-alpine` bound strictly to `127.0.0.1:5432` with persistent data
+  - `postgres:16-alpine` (pinned by digest) bound strictly to `127.0.0.1:5432` with persistent data
     on the VM boot disk (`/var/lib/grain-registry/pgdata`);
   - `grain-registry` built from `Dockerfile.registry` (`make image-registry`),
     configured with `compute.provider: "none"` and `config_repos.provider: "none"`,
@@ -49,8 +49,10 @@ sandbox project (`deploy/test/registry-sandbox/`).
        `ACTIVE` (~10–15 minutes);
     2. A **self-signed wildcard fallback certificate** covering
        `*.<instance_domain>` so dynamically added `<entry>.<instance_domain>`
-       names still terminate TLS immediately (`curl -k` / browser click-through,
-       following the "TLS later" decision).
+       names still terminate TLS immediately (browser click-through, following
+       the "TLS later" decision). `verify.sh` trusts this certificate from the
+       `selfsigned_cert_pem` Terraform output rather than passing `curl -k`,
+       because it sends the verifier service account's IAP bearer token.
   - Pass `--tls-mode self-signed` for instant provisioning without waiting for
     Google's ACME certificate issuance.
 

@@ -169,6 +169,11 @@ payload_json="$(jq -n \
     token_sha256_hex: $token_sha256_hex
   }')"
 
+# The payload carries operator-supplied text (--display-name, --purpose,
+# owners, principals) into a root shell on the VM. Ship it base64-encoded so a
+# quote in any of those values cannot break out of the remote script.
+payload_b64="$(printf '%s' "${payload_json}" | base64 | tr -d '\n')"
+
 remote_out="$(gcloud compute ssh "${vm_name}" \
   --project="${PROJECT_ID}" \
   --zone="${ZONE}" \
@@ -176,7 +181,7 @@ remote_out="$(gcloud compute ssh "${vm_name}" \
   --quiet \
   --command="sudo bash -s" <<EOF
 set -euo pipefail
-payload='${payload_json}'
+payload="\$(printf '%s' '${payload_b64}' | base64 -d)"
 entry_name="\$(jq -r '.entry_name' <<<"\${payload}")"
 owner_email="\$(jq -r '.owner_email' <<<"\${payload}")"
 display_name="\$(jq -r '.display_name' <<<"\${payload}")"

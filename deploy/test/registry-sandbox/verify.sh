@@ -46,7 +46,8 @@ Options:
   --entry <name>           Specific connected entry name to verify (default: all connected entries)
   --state-bucket <bucket>  GCS bucket holding Terraform state (default: <project>-<prefix>-tfstate)
   --local-state            Read Terraform outputs from local state
-  --insecure-tls           Pass -k to curl (use when tls_mode=self-signed or before managed cert is ACTIVE)
+  --insecure-tls           Pass -k to curl instead of trusting the generated self-signed
+                           certificate (only needed before a managed cert is ACTIVE)
   -h, --help               Show this help text
 EOF
 }
@@ -139,13 +140,31 @@ instance_domain="$(terraform -chdir="${SCRIPT_DIR}" output -raw instance_domain)
 verifier_sa="$(terraform -chdir="${SCRIPT_DIR}" output -raw verifier_service_account)"
 tls_mode="$(terraform -chdir="${SCRIPT_DIR}" output -raw tls_mode)"
 
-if [[ "${tls_mode}" == "self-signed" ]]; then
-  INSECURE_TLS=1
-fi
+# verify.sh sends an IAP-accepted bearer token for the verifier service account
+# with every authenticated request, so it never turns TLS verification off on
+# its own: the self-signed wildcard certificate Terraform generated (public
+# `selfsigned_cert_pem` output) is trusted alongside the system roots instead.
+# `--insecure-tls` remains an explicit operator opt-in.
+selfsigned_pem="$(terraform -chdir="${SCRIPT_DIR}" output -raw selfsigned_cert_pem 2>/dev/null || true)"
 
 curl_tls_flags=()
 if [[ "${INSECURE_TLS}" -eq 1 ]]; then
   curl_tls_flags+=(-k)
+elif [[ "${selfsigned_pem}" == *"BEGIN CERTIFICATE"* ]]; then
+  ca_bundle="${tmp_dir}/ca-bundle.pem"
+  : > "${ca_bundle}"
+  for cand in "${CURL_CA_BUNDLE:-}" "${SSL_CERT_FILE:-}" \
+    /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem; do
+    if [[ -n "${cand}" && -r "${cand}" ]]; then
+      cat "${cand}" >> "${ca_bundle}"
+      printf '\n' >> "${ca_bundle}"
+    fi
+  done
+  printf '%s\n' "${selfsigned_pem}" >> "${ca_bundle}"
+  curl_tls_flags+=(--cacert "${ca_bundle}")
+elif [[ "${tls_mode}" != "managed" ]]; then
+  echo "verify.sh: tls_mode=${tls_mode} but Terraform state has no selfsigned_cert_pem output; re-run up.sh to refresh outputs, or pass --insecure-tls" >&2
+  exit 1
 fi
 
 mint_iap_bearer_token() {
@@ -240,14 +259,9 @@ for name in "${targets[@]}"; do
   entry_host="${name}.${instance_domain}"
   echo "==> [5/5] Routing HTTP request through https://${entry_host}/api/auth/whoami over outbound tunnel..."
   # When tls_mode=hybrid and <name> was not pre-listed in managed_entry_names,
-  # *.instance_domain uses the self-signed wildcard fallback certificate.
+  # *.instance_domain uses the self-signed wildcard fallback certificate, which
+  # curl_tls_flags already trusts (pinned, not -k).
   entry_curl_flags=("${curl_tls_flags[@]}")
-  if [[ "${tls_mode}" == "hybrid" && "${#entry_curl_flags[@]}" -eq 0 ]]; then
-    if ! curl -fsS --max-time 5 -o /dev/null "https://${entry_host}/healthz" 2>/dev/null && \
-       ! curl -sS --max-time 5 -o /dev/null "https://${entry_host}/" 2>/dev/null; then
-      entry_curl_flags+=(-k)
-    fi
-  fi
   whoami_json="$(curl -fsS "${entry_curl_flags[@]}" \
     -H "Authorization: Bearer ${iap_tok}" \
     "https://${entry_host}/api/auth/whoami")"

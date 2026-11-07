@@ -64,6 +64,7 @@ fi
 chmod 0600 "${pgpass_file}"
 pgpass="$(tr -d '\r\n' < "${pgpass_file}")"
 
+# Pinned by digest so a retagged upstream image cannot change what runs here.
 if ! docker inspect grain-registry-postgres >/dev/null 2>&1; then
   docker run -d \
     --name grain-registry-postgres \
@@ -73,7 +74,7 @@ if ! docker inspect grain-registry-postgres >/dev/null 2>&1; then
     -e POSTGRES_PASSWORD="${pgpass}" \
     -e POSTGRES_DB=grain_registry \
     -v /var/lib/grain-registry/pgdata:/var/lib/postgresql/data \
-    postgres:16-alpine
+    postgres:16-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
 else
   docker start grain-registry-postgres >/dev/null || true
 fi

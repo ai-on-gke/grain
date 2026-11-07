@@ -244,6 +244,17 @@ if [[ "${LOCAL_STATE}" -eq 0 ]]; then
   ensure_gcs_bucket "${STATE_BUCKET}"
 fi
 
+# Only remove a .grain-ca.crt this script staged itself (never one the operator
+# placed in the checkout), including when the image build fails part-way.
+staged_grain_ca=0
+remove_staged_grain_ca() {
+  if [[ "${staged_grain_ca}" -eq 1 ]]; then
+    rm -f "${REPO_ROOT}/.grain-ca.crt"
+    staged_grain_ca=0
+  fi
+}
+trap remove_staged_grain_ca EXIT
+
 if [[ "${SKIP_IMAGE_BUILD}" -eq 0 ]]; then
   log "Ensuring Artifact Registry repository ${AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}..."
   if ! gcloud artifacts repositories describe "${AR_REPO}" \
@@ -260,15 +271,12 @@ if [[ "${SKIP_IMAGE_BUILD}" -eq 0 ]]; then
   gcloud auth configure-docker "${AR_LOCATION}-docker.pkg.dev" --quiet
 
   log "Building Dockerfile.registry -> ${REGISTRY_IMAGE}..."
-  staged_grain_ca=0
   if [[ -f /usr/local/share/ca-certificates/grain-ca.crt && ! -f "${REPO_ROOT}/.grain-ca.crt" ]]; then
     cp /usr/local/share/ca-certificates/grain-ca.crt "${REPO_ROOT}/.grain-ca.crt"
     staged_grain_ca=1
   fi
   make -C "${REPO_ROOT}" image-registry IMAGE_REGISTRY="${REGISTRY_IMAGE}"
-  if [[ "${staged_grain_ca}" -eq 1 ]]; then
-    rm -f "${REPO_ROOT}/.grain-ca.crt"
-  fi
+  remove_staged_grain_ca
 
   log "Pushing ${REGISTRY_IMAGE}..."
   if ! docker push "${REGISTRY_IMAGE}"; then
@@ -313,7 +321,8 @@ chmod 0700 "${tmp_work_dir}"
 tmp_tfvars="${tmp_work_dir}/terraform.tfvars.json"
 tmp_override=""
 cleanup() {
-  rm -rf "${tmp_work_dir}" "${REPO_ROOT}/.grain-ca.crt"
+  rm -rf "${tmp_work_dir}"
+  remove_staged_grain_ca
   if [[ -n "${tmp_override}" ]]; then
     rm -f "${tmp_override}"
   fi

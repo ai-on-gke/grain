@@ -71,3 +71,8 @@ output "verifier_service_account" {
   description = "Service account email admitted to IAP and registry service_principals for verify.sh."
   value       = local.effective_verifier_sa
 }
+
+output "selfsigned_cert_pem" {
+  description = "PEM of the self-signed wildcard certificate on the HTTPS Load Balancer (public certificate only; empty when tls_mode is managed). verify.sh trusts it instead of disabling TLS verification."
+  value       = local.use_selfsigned_cert ? tls_self_signed_cert.wildcard[0].cert_pem : ""
+}

@@ -57,6 +57,9 @@ iap_issuer_port="$(pick_port)"
 iap_proxy_port="$(pick_port)"
 daemon_port="$(pick_port)"
 
+# Pinned by digest (the same image files/startup.sh runs on the sandbox VM) so
+# a retagged upstream image cannot change what this test executes.
+POSTGRES_IMAGE="postgres:16-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139"
 pgpass="smokepass_$(openssl rand -hex 8)"
 registry_host="reg.127-0-0-1.sslip.io"
 instance_domain="i-reg.127-0-0-1.sslip.io"
@@ -71,7 +74,7 @@ docker run -d \
   -e POSTGRES_USER=grain \
   -e POSTGRES_PASSWORD="${pgpass}" \
   -e POSTGRES_DB=grain_registry \
-  postgres:16-alpine >/dev/null
+  "${POSTGRES_IMAGE}" >/dev/null
 
 for _ in $(seq 1 30); do
   if docker exec "${pg_container}" pg_isready -U grain -d grain_registry >/dev/null 2>&1; then
