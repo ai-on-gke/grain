@@ -15,11 +15,9 @@
 package orchestrator_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"testing"
@@ -322,20 +320,20 @@ func (s *gatingAcquireSandboxes) Acquire(ctx context.Context, name string, shape
 // A task the model-availability check holds is logged with that gate and
 // its reason, not a bare "admission refused" -- session 2174 waited 16
 // minutes behind usage-limit pauses with nothing in the log saying so.
-// Not parallel: it redirects the standard logger.
+// Not parallel: it reads back what the orchestrator logged, and a
+// parallel neighbour's lines would land in the same journal.
+//
+// It reads the log through the package's test router rather than pointing
+// log.SetOutput at a bytes.Buffer of its own: a goroutine an earlier test
+// left winding down could write that buffer while this one read it, which
+// -race reports as a failure of whichever test is running, and the writer
+// it put back afterwards was whatever it found rather than the router.
 func TestAModelWaitIsLoggedWithItsGateAndReason(t *testing.T) {
+	journal := orchestrator.LogToTest(t)
 	store, ctx := openStore(t)
 	_, client := newSim(t, "acme", "widgets", "main")
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	task := filedTask(t, ctx, store, "t1", repo)
-
-	var buf bytes.Buffer
-	prev, flags := log.Writer(), log.Flags()
-	log.SetOutput(&buf)
-	t.Cleanup(func() {
-		log.SetOutput(prev)
-		log.SetFlags(flags)
-	})
 
 	reason := "all connections serving claude-x are busy (2 cooling off after a usage limit)"
 	deps := orchestrator.Deps{
@@ -351,7 +349,7 @@ func TestAModelWaitIsLoggedWithItsGateAndReason(t *testing.T) {
 		t.Fatalf("RunCycle: %v", err)
 	}
 	want := fmt.Sprintf("dispatch: candidate %s skipped: admission refused by model availability -- %s", task.ID, reason)
-	if !strings.Contains(buf.String(), want) {
-		t.Fatalf("log lacks %q:\n%s", want, buf.String())
+	if !strings.Contains(journal.String(), want) {
+		t.Fatalf("log lacks %q:\n%s", want, journal.String())
 	}
 }

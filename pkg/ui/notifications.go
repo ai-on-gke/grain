@@ -195,7 +195,7 @@ func (c *Client) liveRunKey(ctx context.Context, taskID string) string {
 			}
 		}
 	}
-	return fmt.Sprintf("%p/%s", c.Store, key)
+	return fmt.Sprintf("%d/%s", c.Store.ID(), key)
 }
 
 func (c *Client) raise(ctx context.Context, req RaiseNotificationRequest, raisedBy string) (NotificationRaiseResponse, error) {
