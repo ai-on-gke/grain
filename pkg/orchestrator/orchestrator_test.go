@@ -17,7 +17,6 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -191,61 +190,61 @@ func newSim(t *testing.T, owner, repo, branch string) (*githubsim.Sim, *github.R
 	return sim, github.NewClient(sim, nil)
 }
 
-// multiSim routes REST and GraphQL calls across one githubsim.Sim per
-// repository, panicking on any repository none of its sims owns just as a
-// single Sim does. Tests whose cycles work in more than one Actions
-// repository need one, because reconcileReleasePending reads the tags of
-// every working Actions repository.
-type multiSim struct {
-	mu     sync.Mutex
-	sims   map[string]*githubsim.Sim
-	counts map[string]int
+type multiSimTransport struct {
+	sims []*githubsim.Sim
 }
 
-func newMultiSim(t *testing.T, branch string, repos ...model.RepoRef) (*multiSim, *github.RESTClient) {
-	t.Helper()
-	ms := &multiSim{
-		sims:   make(map[string]*githubsim.Sim, len(repos)),
-		counts: make(map[string]int, len(repos)),
-	}
-	for _, r := range repos {
-		sim, _ := newSim(t, r.Owner, r.Name, branch)
-		ms.sims[r.String()] = sim
-	}
-	return ms, github.NewClient(ms, nil)
-}
-
-func (m *multiSim) Request(method, path string, headers map[string]string, body []byte) (github.ApiResponse, error) {
-	repo := ""
-	if rest, ok := strings.CutPrefix(path, "/repos/"); ok {
-		parts := strings.SplitN(rest, "/", 3)
-		if len(parts) >= 2 {
-			repo = parts[0] + "/" + parts[1]
-		}
-	} else if path == "/graphql" {
+func (m *multiSimTransport) Request(method, path string, headers map[string]string, body []byte) (github.ApiResponse, error) {
+	if path == "/graphql" {
 		var req struct {
 			Variables map[string]any `json:"variables"`
 		}
 		if json.Unmarshal(body, &req) == nil {
-			repo = fmt.Sprintf("%v/%v", req.Variables["owner"], req.Variables["repo"])
+			owner, _ := req.Variables["owner"].(string)
+			repo, _ := req.Variables["repo"].(string)
+			for _, sim := range m.sims {
+				if strings.EqualFold(sim.Owner, owner) && strings.EqualFold(sim.Repo, repo) {
+					return sim.Request(method, path, headers, body)
+				}
+			}
 		}
 	}
-	m.mu.Lock()
-	sim := m.sims[repo]
-	if sim != nil {
-		m.counts[repo]++
+	if rest, ok := strings.CutPrefix(path, "/repos/"); ok {
+		if idx := strings.IndexByte(rest, '?'); idx >= 0 {
+			rest = rest[:idx]
+		}
+		parts := strings.SplitN(rest, "/", 3)
+		if len(parts) >= 2 {
+			for _, sim := range m.sims {
+				if strings.EqualFold(sim.Owner, parts[0]) && strings.EqualFold(sim.Repo, parts[1]) {
+					return sim.Request(method, path, headers, body)
+				}
+			}
+		}
 	}
-	m.mu.Unlock()
-	if sim == nil {
-		panic(fmt.Sprintf("multiSim: unconfigured repo %q for %s %s", repo, method, path))
-	}
-	return sim.Request(method, path, headers, body)
+	return m.sims[0].Request(method, path, headers, body)
 }
 
-func (m *multiSim) calls(repo model.RepoRef) int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.counts[repo.String()]
+// newMultiSim wires one github.RESTClient across several simulated
+// repositories; requests for an unconfigured repository fall through to the
+// first Sim and panic in mustOwn as a single-repo Sim does.
+func newMultiSim(t *testing.T, branch string, repos ...model.RepoRef) (map[model.RepoRef]*githubsim.Sim, *github.RESTClient) {
+	t.Helper()
+	orchestrator.LogToTest(t)
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	byRepo := make(map[model.RepoRef]*githubsim.Sim, len(repos))
+	sims := make([]*githubsim.Sim, 0, len(repos))
+	for _, r := range repos {
+		bare := copySeededBareRepo(t, filepath.Join(dir, r.Owner+"-"+r.Name+".git"), branch)
+		sim := githubsim.New(r.Owner, r.Name, bare, branch)
+		sim.PullRequestBase = githubsim.UniquePullRequestBase()
+		byRepo[r] = sim
+		sims = append(sims, sim)
+	}
+	return byRepo, github.NewClient(&multiSimTransport{sims: sims}, nil)
 }
 
 // pushBranch pushes an empty commit on branch straight to bare, standing

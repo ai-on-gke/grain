@@ -1645,13 +1645,19 @@ type RESTClient struct {
 	// in the process-wide ledger (budget.go). Empty is Unattributed; As
 	// and WithCaller make a labelled copy.
 	Caller string
+
+	// completedRunsETags caches the last ETag seen per (owner, repo, branch,
+	// limit) for CompletedWorkflowRuns across As / WithCaller shallow copies
+	// of this client, without keying a process-wide map by a Transport heap
+	// address (%p) that the garbage collector can reuse for a later fake.
+	completedRunsETags *sync.Map
 }
 
 // NewClient returns a RESTClient. tokens may be nil, meaning every
 // request goes out unauthenticated -- a fine, deliberate credential shape
 // for a public repo, not an error case.
 func NewClient(transport Transport, tokens TokenSource) *RESTClient {
-	return &RESTClient{Transport: transport, Tokens: tokens}
+	return &RESTClient{Transport: transport, Tokens: tokens, completedRunsETags: &sync.Map{}}
 }
 
 func (c *RESTClient) headers(owner, repo string, jsonBody bool) map[string]string {
@@ -3977,11 +3983,6 @@ func (c *RESTClient) RerunFailedJobs(owner, repo string, runID int64) error {
 	return nil
 }
 
-// completedRunsETags caches the last ETag seen per (Transport, owner, repo) for
-// CompletedWorkflowRuns so unchanged polls cost 304 Not Modified. Keyed in a
-// package-level sync.Map because RESTClient.As makes a shallow copy of RESTClient.
-var completedRunsETags sync.Map
-
 // CompletedWorkflowRuns returns the most recent completed workflow runs in
 // owner/repo (up to limit), sending If-None-Match when an ETag was previously
 // observed and returning (nil, nil) on 304 Not Modified or 404.
@@ -4010,10 +4011,12 @@ func (c *RESTClient) completedWorkflowRuns(owner, repo, branch string, limit int
 			owner, repo, url.QueryEscape(branch), limit)
 	}
 	headers := c.headers(owner, repo, false)
-	cacheKey := fmt.Sprintf("%p/%s/%s/%s/%d", c.Transport, strings.ToLower(owner), strings.ToLower(repo), branch, limit)
-	if etag, ok := completedRunsETags.Load(cacheKey); ok {
-		if s, ok := etag.(string); ok && s != "" {
-			headers["If-None-Match"] = s
+	cacheKey := fmt.Sprintf("%s/%s/%s/%d", strings.ToLower(owner), strings.ToLower(repo), branch, limit)
+	if c.completedRunsETags != nil {
+		if etag, ok := c.completedRunsETags.Load(cacheKey); ok {
+			if s, ok := etag.(string); ok && s != "" {
+				headers["If-None-Match"] = s
+			}
 		}
 	}
 	resp, err := c.request("GET", endpoint, headers, nil)
@@ -4027,10 +4030,12 @@ func (c *RESTClient) completedWorkflowRuns(owner, repo, branch string, limit int
 	default:
 		return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
 	}
-	if etag := strings.TrimSpace(resp.Headers["ETag"]); etag != "" {
-		completedRunsETags.Store(cacheKey, etag)
-	} else if etag := strings.TrimSpace(resp.Headers["Etag"]); etag != "" {
-		completedRunsETags.Store(cacheKey, etag)
+	if c.completedRunsETags != nil {
+		if etag := strings.TrimSpace(resp.Headers["ETag"]); etag != "" {
+			c.completedRunsETags.Store(cacheKey, etag)
+		} else if etag := strings.TrimSpace(resp.Headers["Etag"]); etag != "" {
+			c.completedRunsETags.Store(cacheKey, etag)
+		}
 	}
 	var data struct {
 		WorkflowRuns []struct {

@@ -75,58 +75,16 @@ var releaseTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 // keyed by the store (model.Store.ID) and the repository, so that two
 // stores in one process -- tests running side by side, or one test's two
 // -count iterations -- never hold each other's poll back.
-var releasePendingPolled sync.Map // releasePendingKey -> time.Time
+var releasePendingPolled sync.Map // store id | repo string -> time.Time
 
 func releasePendingKey(store *model.Store, repo model.RepoRef) string {
 	return fmt.Sprintf("%d|%s", store.ID(), strings.ToLower(repo.String()))
 }
 
-type releasePendingCandidate struct {
-	repo model.RepoRef
-	cfg  *model.RepoConfig
-}
-
-// releasePendingCandidates lists every repository this deployment works
-// in that could release from GitHub Actions: each repo_config row, plus
-// each repository Config.TargetRepos names outright (not by pattern),
-// which has no row of its own when it keeps every default.
-func releasePendingCandidates(ctx context.Context, store *model.Store) ([]releasePendingCandidate, error) {
-	configs, err := store.ListRepoConfigs(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("orchestrator: reading repo configs: %w", err)
-	}
-	targets, err := store.TargetRepos(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("orchestrator: reading target repos: %w", err)
-	}
-	var out []releasePendingCandidate
-	for i := range configs {
-		r := configs[i].Repo
-		if r.Owner == "" || r.Name == "" || model.IsConfigRepo(r) || gitproxy.RetiredConfigRepo(r.Host, r.Owner, r.Name) {
-			continue
-		}
-		out = append(out, releasePendingCandidate{repo: r, cfg: &configs[i]})
-	}
-	for _, entry := range targets {
-		entry = strings.TrimSpace(entry)
-		if entry == "" || strings.ContainsAny(entry, "*?[") {
-			continue
-		}
-		r, err := model.ParseRepo(entry)
-		if err != nil || r.Owner == "" || r.Name == "" || model.IsConfigRepo(r) || gitproxy.RetiredConfigRepo(r.Host, r.Owner, r.Name) {
-			continue
-		}
-		if slices.ContainsFunc(out, func(c releasePendingCandidate) bool { return c.repo.Same(r) }) {
-			continue
-		}
-		out = append(out, releasePendingCandidate{repo: r})
-	}
-	slices.SortFunc(out, func(a, b releasePendingCandidate) int {
-		return strings.Compare(a.repo.String(), b.repo.String())
-	})
-	return out, nil
-}
-
+// isGitOnlyRepo reports whether this deployment reaches repo over plain
+// git only (SSH-only credentials, or a host with no forge API), asking
+// the client -- or the wrapper around it, such as the daemon's
+// StateRepoPullRequestClient -- through github.GitOnlySource.
 func isGitOnlyRepo(client github.Client, repo model.RepoRef) bool {
 	if src, ok := client.(github.GitOnlySource); ok {
 		return src.GitOnly(repo.StoredOwner(), repo.Name) != ""
@@ -147,22 +105,54 @@ func reconcileReleasePending(ctx context.Context, deps Deps, now time.Time) erro
 		return nil // a forge connection that cannot read tags raises nothing
 	}
 	files, _ := deps.Client.(github.FileReader)
-	candidates, err := releasePendingCandidates(ctx, deps.Store)
+	configs, err := deps.Store.ListRepoConfigs(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("orchestrator: reading repo configs: %w", err)
+	}
+	targets, err := deps.Store.TargetRepos(ctx)
+	if err != nil {
+		return fmt.Errorf("orchestrator: reading target repos: %w", err)
+	}
+	byRepo := make(map[string]*model.RepoConfig, len(configs))
+	var repos []model.RepoRef
+	add := func(r model.RepoRef) {
+		// grain/config-<team> repositories (and their retired aliases) live
+		// in this deployment, not on a forge: never send their tag reads out.
+		if r.Owner == "" || r.Name == "" || model.IsConfigRepo(r) || gitproxy.RetiredConfigRepo(r.Host, r.Owner, r.Name) {
+			return
+		}
+		if slices.ContainsFunc(repos, func(e model.RepoRef) bool { return e.Same(r) }) {
+			return
+		}
+		repos = append(repos, r)
+	}
+	for i := range configs {
+		cfg := &configs[i]
+		byRepo[strings.ToLower(cfg.Repo.String())] = cfg
+		add(cfg.Repo)
+	}
+	for _, raw := range targets {
+		t := strings.TrimSpace(raw)
+		if t == "" || strings.ContainsAny(t, "*?[") {
+			continue
+		}
+		if r, err := model.ParseRepo(t); err == nil {
+			add(r)
+		}
 	}
 	var errs []error
-	for _, cand := range candidates {
-		if !model.RunsWorkItem(cand.cfg, model.ReleaseItem) {
+	for _, repo := range repos {
+		cfg := byRepo[strings.ToLower(repo.String())]
+		if !model.RunsWorkItem(cfg, model.ReleaseItem) {
 			continue
 		}
-		if allowed, err := repoAllowedForAnyTeam(ctx, deps.Store, cand.repo); err != nil || !allowed {
+		if allowed, err := repoAllowedForAnyTeam(ctx, deps.Store, repo); err != nil || !allowed {
 			continue
 		}
-		if isGitOnlyRepo(deps.Client, cand.repo) {
-			continue
+		if isGitOnlyRepo(deps.Client, repo) {
+			continue // SSH-only credentials or a plain-git host: no forge API to poll
 		}
-		actions, err := deps.Store.ReleasesFromGitHubActions(ctx, cand.repo)
+		actions, err := deps.Store.ReleasesFromGitHubActions(ctx, repo)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("orchestrator: %w", err))
 			continue
@@ -170,12 +160,12 @@ func reconcileReleasePending(ctx context.Context, deps Deps, now time.Time) erro
 		if !actions {
 			continue
 		}
-		key := releasePendingKey(deps.Store, cand.repo)
+		key := releasePendingKey(deps.Store, repo)
 		if last, ok := releasePendingPolled.Load(key); ok && now.Sub(last.(time.Time)) < releasePendingPollInterval {
 			continue
 		}
 		releasePendingPolled.Store(key, now)
-		if err := watchPendingReleases(ctx, deps.Store, tags, files, cand.repo, now); err != nil {
+		if err := watchPendingReleases(ctx, deps.Store, tags, files, repo, now); err != nil {
 			errs = append(errs, err)
 		}
 	}

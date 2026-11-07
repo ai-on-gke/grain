@@ -415,6 +415,119 @@ func TestAnActionsRepoThatNeverSetACIModeIsApprovedThroughActions(t *testing.T) 
 	}
 }
 
+type multiFixtureForge map[string]*fixtureForge
+
+func (m multiFixtureForge) Request(method, path string, headers map[string]string, body []byte) (github.ApiResponse, error) {
+	if rest, ok := strings.CutPrefix(path, "/repos/"); ok {
+		if idx := strings.IndexByte(rest, '?'); idx >= 0 {
+			rest = rest[:idx]
+		}
+		parts := strings.SplitN(rest, "/", 3)
+		if len(parts) >= 2 {
+			if f, ok := m[parts[0]+"/"+parts[1]]; ok {
+				return f.Request(method, path, headers, body)
+			}
+		}
+	}
+	return github.ApiResponse{Status: http.StatusNotFound, Body: []byte(`{"message":"Not Found"}`)}, nil
+}
+
+// Both kinds of default-mode GitHub Actions repository -- a concrete target
+// repository with no repo_config row at all, and a repository whose row left
+// CIMode unset -- have their tags watched while their release work item runs
+// and TargetRepos admits them; repositories whose release item is off, that
+// declare grain CI workflows, set ci_mode: none, or sit outside TargetRepos
+// are not polled (docs/test-runs/2026-11-04-release-approval.md, F1b).
+func TestTheReleaseWatchRaisesPendingForDefaultModeActionsRepos(t *testing.T) {
+	resetReleaseWatch(t)
+	ctx := context.Background()
+	store := openTestStoreForOrchestrator(t)
+
+	noRow := model.RepoRef{Owner: "example", Name: "norow"}
+	unsetRow := model.RepoRef{Owner: "other", Name: "unsetrow"}
+	releaseOff := model.RepoRef{Owner: "example", Name: "releaseoff"}
+	declaring := model.RepoRef{Owner: "example", Name: "declares"}
+	ciNone := model.RepoRef{Owner: "example", Name: "cinone"}
+	offAllowlist := model.RepoRef{Owner: "stranger", Name: "repo"}
+
+	cfg := model.DefaultConfig()
+	cfg.TargetRepos = []string{
+		noRow.String(),
+		"other/*",
+		releaseOff.String(),
+		declaring.String(),
+		ciNone.String(),
+	}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, rc := range []model.RepoConfig{
+		{Repo: unsetRow, SetupCommand: "make deps"},
+		{Repo: releaseOff, Work: model.ItemOwnership(model.ReleaseItem, model.OwnershipOff)},
+		{Repo: ciNone, CIMode: model.CIModeNone},
+		{Repo: offAllowlist, SetupCommand: "true"},
+	} {
+		if err := store.PutRepoConfig(ctx, rc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.PutRepoWorkflows(ctx, declaring, []model.RepoWorkflow{{
+		Repo: declaring, Path: ".grain/workflows/tests.yml",
+		Text: "jobs:\n  t:\n    steps:\n      - run: true\n",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.GetRepoConfig(ctx, noRow); err != nil || got != nil {
+		t.Fatalf("GetRepoConfig(%s) = %+v, %v; want nil row for a repository left on every default", noRow, got, err)
+	}
+
+	forges := multiFixtureForge{}
+	seed := func(r model.RepoRef, version string) *fixtureForge {
+		f := &fixtureForge{
+			repo: r.String(),
+			tags: map[string]fixtureTag{version + "-pending": {commit: strings.Repeat("a", 40), message: "staged"}},
+		}
+		forges[r.String()] = f
+		return f
+	}
+	noRowForge := seed(noRow, "v3.0.0")
+	unsetRowForge := seed(unsetRow, "v3.1.0")
+	releaseOffForge := seed(releaseOff, "v3.2.0")
+	declaringForge := seed(declaring, "v3.3.0")
+	ciNoneForge := seed(ciNone, "v3.4.0")
+	offAllowlistForge := seed(offAllowlist, "v3.5.0")
+
+	now := time.Now().UTC()
+	deps := Deps{Store: store, Client: github.NewClient(forges, nil)}
+	if err := reconcileReleasePending(ctx, deps, now); err != nil {
+		t.Fatalf("reconcileReleasePending: %v", err)
+	}
+
+	for repo, version := range map[model.RepoRef]string{noRow: "v3.0.0", unsetRow: "v3.1.0"} {
+		subject := model.NotificationSubject(model.FamilyReleasePending, version)
+		n, err := store.OpenNotification(ctx, subject)
+		if err != nil || n == nil || n.Repo != repo.String() {
+			t.Errorf("OpenNotification(%s) = %+v, %v; want open for %s", subject, n, err, repo)
+		}
+	}
+	if noRowForge.reads != 1 {
+		t.Errorf("reads on %s = %d, want 1", noRow, noRowForge.reads)
+	}
+	if unsetRowForge.reads != 1 {
+		t.Errorf("reads on %s = %d, want 1", unsetRow, unsetRowForge.reads)
+	}
+	for name, f := range map[string]*fixtureForge{
+		"release work item off":      releaseOffForge,
+		"declaring .grain/workflows": declaringForge,
+		"ci_mode: none":              ciNoneForge,
+		"outside Config.TargetRepos": offAllowlistForge,
+	} {
+		if f.reads != 0 {
+			t.Errorf("read %s (%s) %d times, want 0", f.repo, name, f.reads)
+		}
+	}
+}
+
 // A repository that never set a CI Mode -- either because it has no
 // repo_config row at all (only TargetRepos names it, as in `grain demo
 // -github-sim`) or because its repo_config row sets other defaults and

@@ -143,15 +143,13 @@ func TestNarrowingTheTargetRepoListParksQueuedWorkRatherThanDispatchingIt(t *tes
 func TestTheDispatchTimeParkLiftsWhenTheRepoGoesBackOnTheList(t *testing.T) {
 	t.Parallel()
 	store, ctx := openStore(t)
-	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	gadgets := model.RepoRef{Owner: "acme", Name: "gadgets"}
 	restrictTo(t, ctx, store, "acme/widgets", "acme/gadgets")
 	filedTask(t, ctx, store, "t1", gadgets)
 
 	fw := newBlockingFramework()
 	deps, runs := asyncDeps(t, store, fw, 2)
-	sims, gh := newMultiSim(t, "main", widgets, gadgets)
-	deps.Client = gh
+	_, deps.Client = newMultiSim(t, "main", model.RepoRef{Owner: "acme", Name: "widgets"}, gadgets)
 	client := settingsClient(store, "acme/widgets", "acme/gadgets")
 
 	narrowTo(t, ctx, client, "acme/widgets")
@@ -164,9 +162,6 @@ func TestTheDispatchTimeParkLiftsWhenTheRepoGoesBackOnTheList(t *testing.T) {
 	stateIs(t, store, "t1", model.StateAwaitingReply)
 	cycle(t, ctx, deps)
 	notDispatched(t, store, "t1", "after a reply that did not widen the list")
-	if got := sims.calls(gadgets); got != 0 {
-		t.Errorf("GitHub calls to %s while off the target repo list = %d, want 0", gadgets, got)
-	}
 
 	// Both acts, in the order the comment asks for them.
 	narrowTo(t, ctx, client, "acme/widgets", "acme/gadgets")
@@ -183,9 +178,6 @@ func TestTheDispatchTimeParkLiftsWhenTheRepoGoesBackOnTheList(t *testing.T) {
 
 	cycle(t, ctx, deps)
 	enteredRun(t, fw, "t1-1")
-	if got := sims.calls(gadgets); got != 1 {
-		t.Errorf("GitHub calls to %s once back on the target repo list = %d, want 1 tag read from release-pending", gadgets, got)
-	}
 	fw.releaseAll()
 	drainRuns(t, ctx, runs)
 }
@@ -293,7 +285,6 @@ func TestTheTargetRepoParkIsWrittenOnceRatherThanEveryTick(t *testing.T) {
 func TestAScheduleStopsFiringWhileItsRepoIsOffTheTargetRepoList(t *testing.T) {
 	t.Parallel()
 	store, ctx := openStore(t)
-	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	gadgets := model.RepoRef{Owner: "acme", Name: "gadgets"}
 	restrictTo(t, ctx, store, "acme/widgets", "acme/gadgets")
 	// filedSchedule (schedule_test.go) targets acme/widgets, which is the
@@ -310,16 +301,12 @@ func TestAScheduleStopsFiringWhileItsRepoIsOffTheTargetRepoList(t *testing.T) {
 
 	fw := newBlockingFramework()
 	deps, runs := asyncDeps(t, store, fw, 2)
-	sims, gh := newMultiSim(t, "main", widgets, gadgets)
-	deps.Client = gh
+	_, deps.Client = newMultiSim(t, "main", model.RepoRef{Owner: "acme", Name: "widgets"}, gadgets)
 	// Three of this schedule's own occurrences, a day apart, since the
 	// question is what a cadence does over time rather than what one
 	// firing does.
 	for i := range 3 {
 		cycleAt(t, ctx, deps, baseTime.Add(time.Duration(i)*24*time.Hour))
-	}
-	if got := sims.calls(gadgets); got != 0 {
-		t.Errorf("GitHub calls to %s while off the target repo list = %d, want 0", gadgets, got)
 	}
 
 	if filed := scheduledTasksTagged(t, store, "schedule:stranded"); len(filed) != 0 {
@@ -367,9 +354,6 @@ func TestAScheduleStopsFiringWhileItsRepoIsOffTheTargetRepoList(t *testing.T) {
 	// schedule.
 	narrowTo(t, ctx, client, "acme/widgets", "acme/gadgets")
 	cycleAt(t, ctx, deps, baseTime.Add(72*time.Hour))
-	if got := sims.calls(gadgets); got != 1 {
-		t.Errorf("GitHub calls to %s once back on the target repo list = %d, want 1 tag read from release-pending", gadgets, got)
-	}
 	filed := scheduledTasksTagged(t, store, "schedule:stranded")
 	if len(filed) != 1 {
 		t.Fatalf("filed %d tasks after the repo went back on the list, want 1", len(filed))
