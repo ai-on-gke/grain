@@ -52,9 +52,9 @@ func TestExternalAgentSkillMetadataEndpointsEnforceRepoAndSettingsBoundaries(t *
 	secretRepo := model.RepoRef{Owner: "acme", Name: "secret"}
 	widgetsRepo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{
-		Repo:            secretRepo,
-		PromptExtension: "secret-repo-prompt",
-		SetupCommand:    "make secret-setup",
+		Repo:             secretRepo,
+		PromptExtension:  "secret-repo-prompt",
+		SetupCommand:     "make secret-setup",
 		DefaultAdmission: model.AdmissionDurable,
 	}); err != nil {
 		t.Fatal(err)
