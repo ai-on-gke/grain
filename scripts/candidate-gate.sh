@@ -98,10 +98,12 @@
 #               jobs are systemic, not coincidence.
 #     except the check run, whose newest attempt is its verdict: grain
 #     posts failure only once an item has failed its own retry inside
-#     Stage 2 (model.DecideReleaseQualification), and never looks at a
-#     candidate again once its check run is completed, so a failure is
-#     confirmed red the first time -- waiting on a retry of it would hold
-#     the train on that rc for good.
+#     Stage 2 (model.DecideReleaseQualification) and never re-runs a
+#     completed failure, so a failure is confirmed red the first time; a
+#     neutral conclusion is an infrastructure stall
+#     (pipeline.release-infra-stalled), which grain re-qualifies as a new
+#     check run on the same commit once the stall is acknowledged or
+#     cleared.
 #
 #     Prints "<PASS|FAIL|PENDING|INFRA> <job>: ..." per job, a
 #     "RERUN <stage> <job> <flake|infra>" line for each job the train is to
@@ -516,6 +518,14 @@ check_qualification() {
             fail "$job" "failed ($attempts): grain concludes failure only once an item has failed its own retry, so it is confirmed red"
             ;;
           success) pass "$job" "passed ($attempts)" ;;
+          pending) wait_for "$job" "still running ($attempts)" ;;
+          infra)
+            # grain concludes neutral only once a Stage 2 item has used all
+            # of its own infrastructure re-runs (pipeline.release-infra-stalled).
+            echo "INFRA $job: cancelled, timed out or starved of capacity ($attempts); re-run, not red; stalled after Stage 2's infra re-runs"
+            infra+=("$job")
+            rerun "$stage" "$job" infra
+            ;;
           *) judge "$stage" "$job" "$attempts" ;;
         esac
       done <<< "$table"

@@ -222,20 +222,63 @@ func failedCandidates(ctx context.Context, store *model.Store, repo model.RepoRe
 }
 
 // raiseInfraStalled raises pipeline.release-infra-stalled for q's
-// candidate.
-func (q *rcQualification) raiseInfraStalled(ctx context.Context, why string) error {
-	return ensurePipelineNotification(ctx, q.store, model.Notification{
-		Subject:  model.NotificationSubject(model.FamilyReleaseInfraStalled, q.notifyKey),
+// candidate. When concluded is true, Stage 2 has used all of an item's
+// infrastructure re-runs and is posting a completed neutral check run: any
+// earlier acknowledgement from a mid-run 2-hour warning is cleared so the
+// candidate waits for a person to repair the infrastructure and acknowledge
+// or clear the stall before starting a fresh Stage 2 attempt.
+func (q *rcQualification) raiseInfraStalled(ctx context.Context, why string, concluded bool) error {
+	subject := model.NotificationSubject(model.FamilyReleaseInfraStalled, q.notifyKey)
+	body := fmt.Sprintf("`%s` (%s) is still qualifying, and is not discarded: %s.\n\nAn infrastructure verdict "+
+		"never counts against a candidate, so nothing here is the release's fault. Repair the runner, quota or "+
+		"credential the item keeps failing on; this clears once the candidate qualifies, fails, or is "+
+		"superseded.", q.rcTag, shortSHA(q.sha), why)
+	if concluded {
+		q.clearInfraSince()
+		body = fmt.Sprintf("`%s` (%s) is left in qualification (not discarded) with a `neutral` Stage 2 check run: %s.\n\n"+
+			"An infrastructure verdict never counts against a candidate, so nothing here is the release's fault. "+
+			"Repair the runner, quota or credential the item kept failing on, then acknowledge or clear this "+
+			"notification to start a fresh Stage 2 qualification attempt on `%s` (or this clears if `%s` is superseded).",
+			q.rcTag, shortSHA(q.sha), why, q.rcTag, q.rcTag)
+	}
+	n := model.Notification{
+		Subject:  subject,
 		Severity: model.NotificationWarning,
 		Title:    fmt.Sprintf("Qualification of %s on %s is stalled on infrastructure", q.rcTag, q.repo),
-		Body: fmt.Sprintf("`%s` (%s) is still qualifying, and is not discarded: %s.\n\nAn infrastructure verdict "+
-			"never counts against a candidate, so nothing here is the release's fault. Repair the runner, quota or "+
-			"credential the item keeps failing on; this clears once the candidate qualifies, fails, or is "+
-			"superseded.", q.rcTag, shortSHA(q.sha), why),
+		Body:     body,
 		Repo:     q.repo.String(),
 		RaisedBy: releaseQualificationNotifier,
 		Actions:  []string{"investigate"},
-	}, q.now)
+	}
+	if !concluded {
+		return ensurePipelineNotification(ctx, q.store, n, q.now)
+	}
+	open, err := q.store.OpenNotification(ctx, subject)
+	if err != nil {
+		return err
+	}
+	if open != nil && open.AckedAt != nil {
+		if err := clearPipelineNotification(ctx, q.store, subject, releaseQualificationNotifier); err != nil {
+			return err
+		}
+		open = nil
+	}
+	if open != nil && open.Severity.Rank() >= n.Severity.Rank() && open.Body == n.Body {
+		return nil
+	}
+	_, err = raisePipelineNotification(ctx, q.store, n, q.now)
+	return err
+}
+
+func (q *rcQualification) clearInfraSince() {
+	prefix := redRCKey(q.store, q.tag, "")
+	redRCMu.Lock()
+	for k := range redRCInfraSince {
+		if strings.HasPrefix(k, prefix) {
+			delete(redRCInfraSince, k)
+		}
+	}
+	redRCMu.Unlock()
 }
 
 // trackInfra raises pipeline.release-infra-stalled once an item has been
@@ -266,7 +309,7 @@ func (q *rcQualification) trackInfra(ctx context.Context, items []string, attemp
 		return clearPipelineNotification(ctx, q.store,
 			model.NotificationSubject(model.FamilyReleaseInfraStalled, q.notifyKey), releaseQualificationNotifier)
 	}
-	return q.raiseInfraStalled(ctx, strings.Join(stalled, "; "))
+	return q.raiseInfraStalled(ctx, strings.Join(stalled, "; "), false)
 }
 
 func infraBlocked(history []model.ItemVerdict) bool {

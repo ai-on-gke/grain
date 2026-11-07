@@ -278,7 +278,9 @@ What takes judgement is the steward's. Woken by
 On `pipeline.flake-budget` it proposes one de-flake task for the item. On
 `pipeline.release-infra-stalled` it names the failing runner, quota or
 credential in a notification a person can act on. The candidate stays
-qualifying, and an infrastructure verdict never counts against it.
+qualifying, an infrastructure verdict never counts against it, and
+acknowledging or clearing `pipeline.release-infra-stalled` after repair
+starts a fresh Stage 2 qualification attempt if Stage 2 concluded `neutral`.
 
 ## What it is told
 

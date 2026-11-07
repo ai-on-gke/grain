@@ -389,6 +389,157 @@ func TestAnItemBlockedOnInfraForTwoHoursStallsTheCandidate(t *testing.T) {
 	}
 }
 
+func rcAttemptTasks(t *testing.T, ctx context.Context, store *model.Store, repo model.RepoRef, rcTag string, attempt int) map[string][]string {
+	t.Helper()
+	tag := model.QualificationAttemptTag(model.ReleaseQualificationTag(repo, rcTag), attempt)
+	runs, err := store.SuiteRunsTagged(ctx, tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string][]string{}
+	for _, run := range runs {
+		for _, task := range run.Tasks {
+			out[task.TemplateID] = append(out[task.TemplateID], task.TaskID)
+		}
+	}
+	return out
+}
+
+// stallAttemptOnInfra drives attempt of rcTag to a completed neutral
+// verdict by failing qualification-ci-diagnostics on INFRA across its
+// initial run and all MaxInfraReruns re-runs while the other gating items
+// pass. When ackMidRun is true, it also exercises a 2h mid-run stall
+// warning acknowledged before the attempt exhausts its re-runs.
+func stallAttemptOnInfra(t *testing.T, ctx context.Context, store *model.Store, forge *fakeQualificationForge,
+	repo model.RepoRef, rcTag string, attempt int, ackMidRun bool, start time.Time) time.Time {
+	t.Helper()
+	syncQualification(t, ctx, store, forge, start)
+	tasks := rcAttemptTasks(t, ctx, store, repo, rcTag, attempt)
+	at := start.Add(time.Minute)
+	for _, item := range []string{"qualification-mergequeue", "qualification-base-triage"} {
+		finishQualificationTask(t, ctx, store, tasks[item][0], "PASS", at)
+	}
+	for i := 0; i <= model.DefaultQualificationPolicy.MaxInfraReruns; i++ {
+		tasks = rcAttemptTasks(t, ctx, store, repo, rcTag, attempt)
+		if len(tasks["qualification-ci-diagnostics"]) != i+1 {
+			t.Fatalf("attempt %d step %d: ci-diagnostics tasks = %v, want %d",
+				attempt, i, tasks["qualification-ci-diagnostics"], i+1)
+		}
+		finishQualificationTask(t, ctx, store, tasks["qualification-ci-diagnostics"][i], "INFRA", at)
+		syncQualification(t, ctx, store, forge, at)
+		if i == 0 && ackMidRun {
+			at = at.Add(model.ReleaseInfraStalledAfter)
+			syncQualification(t, ctx, store, forge, at)
+			mid := openNotification(t, ctx, store, model.FamilyReleaseInfraStalled, rcTag)
+			if mid == nil {
+				t.Fatal("expected mid-run 2h infra-stalled notification")
+			}
+			if err := store.AckNotification(ctx, mid.ID, "human:alice", at); err != nil {
+				t.Fatalf("acking mid-run warning: %v", err)
+			}
+		}
+		at = at.Add(time.Minute)
+	}
+	return at
+}
+
+func TestANeutralCandidateRequalifiesOnceTheInfraStallIsAckedOrCleared(t *testing.T) {
+	t.Parallel()
+	store, ctx, repo, forge := newQualificationRepo(t)
+	forge.nightly = "success"
+	baseTag := model.ReleaseQualificationTag(repo, rqTag)
+
+	// Attempt 1 exhausts its infra re-runs (even after an operator acked
+	// the earlier 2h warning): Stage 2 posts completed/neutral and leaves
+	// an unacknowledged stall notification telling a person how to retry.
+	at := stallAttemptOnInfra(t, ctx, store, forge, repo, rqTag, 1, true, baseTime)
+	if forge.countNamed(model.ReleaseQualificationCheckName) != 1 {
+		t.Fatalf("checks = %+v, want one check run on attempt 1", forge.checks)
+	}
+	c1 := forge.checks[0]
+	if c1.Status != "completed" || c1.Conclusion == nil || *c1.Conclusion != model.ConclusionNeutral ||
+		c1.ExternalID != baseTag {
+		t.Fatalf("attempt 1 check = %+v, want completed neutral with external_id %s", c1, baseTag)
+	}
+	n := openNotification(t, ctx, store, model.FamilyReleaseInfraStalled, rqTag)
+	if n == nil || n.AckedAt != nil || !strings.Contains(n.Body, "acknowledge or clear this notification") {
+		t.Fatalf("infra-stalled after neutral = %+v, want open and unacknowledged with retry instructions", n)
+	}
+
+	// While the stall is neither acked nor cleared, reconcile cycles leave
+	// the candidate waiting and file nothing new.
+	syncQualification(t, ctx, store, forge, at.Add(10*time.Minute))
+	if got := rcAttemptTasks(t, ctx, store, repo, rqTag, 2); len(got) != 0 {
+		t.Fatalf("attempt 2 started before stall cleared: %v", got)
+	}
+	if forge.countNamed(model.ReleaseQualificationCheckName) != 1 {
+		t.Fatalf("checks while stalled = %+v, want still 1", forge.checks)
+	}
+
+	// Acknowledging the stall starts fresh Stage 2 attempt 2 (#2) in a new
+	// check run, clears the acknowledged stall, and leaves attempt 1's
+	// neutral check run intact. If attempt 2 stalls again, it stops on a
+	// fresh unacknowledged notification rather than looping.
+	if err := store.AckNotification(ctx, n.ID, "human:alice", at.Add(15*time.Minute)); err != nil {
+		t.Fatalf("AckNotification: %v", err)
+	}
+	at = stallAttemptOnInfra(t, ctx, store, forge, repo, rqTag, 2, false, at.Add(16*time.Minute))
+	if forge.countNamed(model.ReleaseQualificationCheckName) != 2 {
+		t.Fatalf("checks after attempt 2 = %+v, want 2 check runs", forge.checks)
+	}
+	if forge.checks[0].Conclusion == nil || *forge.checks[0].Conclusion != model.ConclusionNeutral ||
+		forge.checks[0].ExternalID != baseTag {
+		t.Fatalf("attempt 1 check mutated: %+v", forge.checks[0])
+	}
+	if c2 := forge.checks[1]; c2.Status != "completed" || c2.Conclusion == nil ||
+		*c2.Conclusion != model.ConclusionNeutral || c2.ExternalID != baseTag+"#2" {
+		t.Fatalf("attempt 2 check = %+v, want completed neutral with external_id %s#2", c2, baseTag)
+	}
+	n2 := openNotification(t, ctx, store, model.FamilyReleaseInfraStalled, rqTag)
+	if n2 == nil || n2.AckedAt != nil {
+		t.Fatalf("infra-stalled after attempt 2 = %+v, want a fresh unacknowledged notification", n2)
+	}
+	syncQualification(t, ctx, store, forge, at.Add(time.Minute))
+	if got := rcAttemptTasks(t, ctx, store, repo, rqTag, 3); len(got) != 0 {
+		t.Fatalf("attempt 3 started without clearing attempt 2's stall: %v", got)
+	}
+
+	// Clearing the stall starts attempt 3 (#3), which passes and qualifies
+	// the same rc without cutting rc.3 or spending an RC attempt.
+	subject := model.NotificationSubject(model.FamilyReleaseInfraStalled, rqTag)
+	if _, err := store.ClearNotification(ctx, subject, "human:alice"); err != nil {
+		t.Fatalf("ClearNotification: %v", err)
+	}
+	syncQualification(t, ctx, store, forge, at.Add(2*time.Minute))
+	tasks3 := rcAttemptTasks(t, ctx, store, repo, rqTag, 3)
+	if len(tasks3) != 3 {
+		t.Fatalf("attempt 3 gating tasks = %v, want 3 items", tasks3)
+	}
+	if c3 := forge.checkNamed(model.ReleaseQualificationCheckName); c3 == nil || c3.Status != "in_progress" ||
+		c3.ExternalID != baseTag+"#3" {
+		t.Fatalf("attempt 3 in-progress check = %+v, want in_progress with external_id %s#3", c3, baseTag)
+	}
+	for _, item := range rqItems[:3] {
+		finishQualificationTask(t, ctx, store, tasks3[item][0], "PASS", at.Add(3*time.Minute))
+	}
+	syncQualification(t, ctx, store, forge, at.Add(3*time.Minute))
+	tasks3 = rcAttemptTasks(t, ctx, store, repo, rqTag, 3)
+	finishQualificationTask(t, ctx, store, tasks3["qualification-system-smoke"][0], "PASS", at.Add(4*time.Minute))
+	syncQualification(t, ctx, store, forge, at.Add(4*time.Minute))
+
+	if forge.countNamed(model.ReleaseQualificationCheckName) != 3 {
+		t.Fatalf("total check runs = %d, want 3", forge.countNamed(model.ReleaseQualificationCheckName))
+	}
+	c3 := forge.checkNamed(model.ReleaseQualificationCheckName)
+	if c3 == nil || c3.Status != "completed" || c3.Conclusion == nil || *c3.Conclusion != model.ConclusionSuccess ||
+		c3.ExternalID != baseTag+"#3" {
+		t.Fatalf("attempt 3 final check = %+v, want completed success on %s#3", c3, baseTag)
+	}
+	if open := openNotification(t, ctx, store, model.FamilyReleaseInfraStalled, rqTag); open != nil {
+		t.Fatalf("infra-stalled still open after qualification passed: %+v", open)
+	}
+}
+
 func TestTwoFlakeRetriesOfOneItemInADaySpendItsFlakeBudget(t *testing.T) {
 	t.Parallel()
 	store, ctx, repo, forge := newQualificationRepo(t)
