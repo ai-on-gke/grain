@@ -235,20 +235,29 @@ var mergeReasons = map[string]reasonLiveness{
 
 // The task lane's reasons.
 const (
-	taskReasonReady          = "queued/ready"
-	taskReasonBlocked        = "queued/blocked_on_task"
-	taskReasonUsagePaused    = "queued/usage_limit_paused"
-	taskReasonLocalPolicy    = "queued/held_by_local_policy"
-	taskReasonRunLive        = "running/live_run"
-	taskReasonOnMergeQueue   = "completed/on_merge_queue"
-	taskReasonMergeGaveUp    = "completed/merge_failed"
-	taskReasonUnapproved     = "proposed/unapproved"
-	taskReasonQuestion       = "awaiting_reply/question"
-	taskReasonSubmit         = "awaiting_submit/not_auto_merge"
-	taskReasonFailedRuns     = "failed/consecutive_failures"
-	taskReasonDeferredNoWake = "deferred/no_wake_time"
-	taskReasonDeferredWake   = "deferred/wake_time"
-	taskReasonClosed         = "closed/closed"
+	taskReasonReady       = "queued/ready"
+	taskReasonBlocked     = "queued/blocked_on_task"
+	taskReasonUsagePaused = "queued/usage_limit_paused"
+	taskReasonLocalPolicy = "queued/held_by_local_policy"
+	// Nothing is dispatched on this deployment at all: a condition the
+	// daemon recorded against itself (pkg/dispatchcondition) -- the git
+	// proxy failed to bind, the reconcile loop gave up -- and not
+	// anything about this task.
+	taskReasonDispatchBlocked = "queued/dispatch_blocked"
+	taskReasonRunLive         = "running/live_run"
+	taskReasonOnMergeQueue    = "completed/on_merge_queue"
+	taskReasonMergeGaveUp     = "completed/merge_failed"
+	taskReasonUnapproved      = "proposed/unapproved"
+	taskReasonQuestion        = "awaiting_reply/question"
+	taskReasonAnswered        = "awaiting_reply/answered"
+	taskReasonYourMessage     = "awaiting_reply/your_message"
+	taskReasonAccessRequest   = "awaiting_reply/access_request"
+	taskReasonStopped         = "awaiting_reply/stopped"
+	taskReasonSubmit          = "awaiting_submit/not_auto_merge"
+	taskReasonFailedRuns      = "failed/consecutive_failures"
+	taskReasonDeferredNoWake  = "deferred/no_wake_time"
+	taskReasonDeferredWake    = "deferred/wake_time"
+	taskReasonClosed          = "closed/closed"
 	// A goal task at rest (model.TaskGoal): deferred, waiting for its
 	// goal's condition, which reconcileTaskGoals checks every cycle. One
 	// per goal kind, "deferred/awaiting-goal/<kind>".
@@ -298,6 +307,16 @@ var taskReasons = map[string]reasonLiveness{
 	taskReasonLocalPolicy: {class: livenessAwaitingExternal,
 		resource:   "an edit to this machine's local policy file allowing it",
 		escalation: stallToResource},
+	// Dispatch is down for the whole deployment: no component of grain
+	// drives this task out of it -- what clears the condition is an
+	// operator fixing what it names (freeing the port, restarting the
+	// daemon), outside grain -- and one condition holds every queued
+	// task, so the escalation is the deployment's (its health lists the
+	// condition as a failing check) rather than each row's. The resource
+	// TaskReason gives names the condition itself.
+	taskReasonDispatchBlocked: {class: livenessAwaitingExternal,
+		resource:   "the deployment dispatching again",
+		escalation: stallToResource},
 	taskReasonRunLive: {class: livenessDriven, driver: "ProcessResult",
 		resource:   "the run in flight",
 		escalation: stallToPerson, control: "Cancel"},
@@ -309,6 +328,10 @@ var taskReasons = map[string]reasonLiveness{
 	taskReasonMergeGaveUp:    {class: livenessAwaitingPerson, control: "Retry merge"},
 	taskReasonUnapproved:     {class: livenessAwaitingPerson, control: "Approve"},
 	taskReasonQuestion:       {class: livenessAwaitingPerson, control: "Reply"},
+	taskReasonAnswered:       {class: livenessAwaitingPerson, control: "Reply"},
+	taskReasonYourMessage:    {class: livenessAwaitingPerson, control: "Reply"},
+	taskReasonStopped:        {class: livenessAwaitingPerson, control: "Reply"},
+	taskReasonAccessRequest:  {class: livenessAwaitingPerson, control: "Grant"},
 	taskReasonSubmit:         {class: livenessAwaitingPerson, control: "Submit"},
 	taskReasonFailedRuns:     {class: livenessAwaitingPerson, control: "Retry"},
 	taskReasonDeferredNoWake: {class: livenessAwaitingPerson, control: "Undefer"},
@@ -454,13 +477,22 @@ func mergeReasonOfState(state string) string {
 // gatedByPause asks it), or this machine's local policy refusing it
 // (heldByPolicy). obs may be nil.
 //
-// Of the queued sub-cases, an open dependency outranks a hold: the
-// pause ends on a clock, and a task still waiting on another would not
-// be dispatched when it did.
-func taskReasonOf(t model.Task, state model.State, obs *model.Observation, openDeps []string, hold queuedHold) string {
+// Of the queued sub-cases, dispatch being down outranks everything: it
+// is the one fact about the deployment that makes every other reason a
+// task could give moot, and the one a reader of a stuck task most needs.
+// Below it, an open dependency outranks a hold: the pause ends on a
+// clock, and a task still waiting on another would not be dispatched
+// when it did.
+//
+// An awaiting_reply task's sub-case is awaitingReplyReasonOf its asked
+// facts.
+func taskReasonOf(t model.Task, state model.State, obs *model.Observation, openDeps []string, hold queuedHold,
+	asked model.ReplyFacts) string {
 	switch state {
 	case model.StateQueued:
 		switch {
+		case hold == holdDispatchBlocked:
+			return taskReasonDispatchBlocked
 		case len(openDeps) > 0:
 			return taskReasonBlocked
 		case hold == holdUsagePaused:
@@ -482,7 +514,7 @@ func taskReasonOf(t model.Task, state model.State, obs *model.Observation, openD
 	case model.StateProposed:
 		return taskReasonUnapproved
 	case model.StateAwaitingReply:
-		return taskReasonQuestion
+		return awaitingReplyReasonOf(t, asked)
 	case model.StateAwaitingSubmit:
 		return taskReasonSubmit
 	case model.StateFailed:
@@ -499,6 +531,28 @@ func taskReasonOf(t model.Task, state model.State, obs *model.Observation, openD
 		return taskReasonClosed
 	}
 	return ""
+}
+
+// awaitingReplyReasonOf is which ask an awaiting_reply task is parked on,
+// in the UI's askedCase order (ui/src/state.js), so the reason chip and
+// the badge beside it name the same case: a stopped turn first, then an
+// access request, then an interactive task or console session (whose
+// every park is a wait for its next message, a question included), then
+// a pending question or secret request, and otherwise a run that
+// answered in a comment. Each is a person's: Reply ends all of them but
+// an access request, which a person's Grant (or Deny) on its card ends.
+func awaitingReplyReasonOf(t model.Task, asked model.ReplyFacts) string {
+	switch {
+	case asked.Stopped:
+		return taskReasonStopped
+	case asked.Access:
+		return taskReasonAccessRequest
+	case t.Interactive:
+		return taskReasonYourMessage
+	case asked.Question:
+		return taskReasonQuestion
+	}
+	return taskReasonAnswered
 }
 
 // ReasonLiveness is one sub-case as a row draws it: which reason, which of
@@ -548,13 +602,38 @@ func reasonLivenessOf(reasons map[string]reasonLiveness, reason string) ReasonLi
 // capability, network access or approval it broke, in policy.CheckAs's
 // words -- and policyFile, the -policy file to edit ("" for a daemon
 // started without one, whose only refusal is checkUnisolated's).
+//
+// asked is what the reader resolved about an awaiting_reply task's ask
+// (model.ReplyFacts) -- the pending comment it is parked on, a secret or
+// access request -- which tells its sub-cases apart; the zero value for
+// a task in any other state.
+//
+// dispatchBlocked is the condition holding the whole deployment's
+// dispatch, in the daemon's words (pkg/dispatchcondition's Set.Why), or
+// "" when it is dispatching: with one, every queued task's reason is
+// that condition, named in its resource, ahead of anything about the
+// task itself.
 func TaskReason(t model.Task, state model.State, obs *model.Observation, openDeps []string,
-	wait *model.GrantWait, policyFile string) ReasonLiveness {
-	r := reasonLivenessOf(taskReasons, taskReasonOf(t, state, obs, openDeps, queuedHoldOf(wait)))
-	if r.Reason == taskReasonLocalPolicy {
+	wait *model.GrantWait, asked model.ReplyFacts, policyFile, dispatchBlocked string) ReasonLiveness {
+	hold := queuedHoldOf(wait)
+	if dispatchBlocked != "" {
+		hold = holdDispatchBlocked
+	}
+	r := reasonLivenessOf(taskReasons, taskReasonOf(t, state, obs, openDeps, hold, asked))
+	switch r.Reason {
+	case taskReasonLocalPolicy:
 		r.Resource = localPolicyResource(wait.Resource, policyFile)
+	case taskReasonDispatchBlocked:
+		r.Resource = dispatchBlockedResource(dispatchBlocked)
 	}
 	return r
+}
+
+// dispatchBlockedResource is what a task held by a dispatch condition
+// waits on: the condition, as the row and the API say it -- "dispatch
+// blocked -- git proxy: listen tcp :7100: address already in use".
+func dispatchBlockedResource(why string) string {
+	return "dispatch blocked -- " + why
 }
 
 // queuedHold is what dispatch last held a queued task back for, as its
@@ -565,6 +644,10 @@ const (
 	holdNone queuedHold = iota
 	holdUsagePaused
 	holdLocalPolicy
+	// holdDispatchBlocked is not read off a wait: it is the deployment's
+	// own condition (TaskReason's dispatchBlocked), and holds every
+	// queued task alike.
+	holdDispatchBlocked
 )
 
 // queuedHoldOf is the hold wait records: a usage-limit pause

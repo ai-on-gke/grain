@@ -23,7 +23,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secretsrepo"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 // scheduleNotFoundError marks a schedule ID with no schedule behind it --
@@ -51,6 +54,7 @@ type Recurrence struct {
 	DayOfMonth        int                             `json:"dayOfMonth,omitempty"`
 	TimeZone          string                          `json:"timeZone,omitempty"`
 	GitHubWorkflowRun *model.GitHubWorkflowRunTrigger `json:"githubWorkflowRun,omitempty"`
+	GitRef            *model.GitRefTrigger            `json:"gitRef,omitempty"`
 }
 
 var weekdayNames = [...]string{"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"}
@@ -98,6 +102,8 @@ func recurrenceFrom(r model.Recurrence) Recurrence {
 		out.DayOfMonth = r.DayOfMonth
 	case model.RecurrenceGitHubWorkflowRun:
 		out.GitHubWorkflowRun = r.GitHubWorkflowRun
+	case model.RecurrenceGitRef:
+		out.GitRef = r.GitRef
 	}
 	return out
 }
@@ -116,6 +122,7 @@ func parseRecurrence(req Recurrence) (model.Recurrence, error) {
 		DayOfMonth:        req.DayOfMonth,
 		TimeZone:          strings.TrimSpace(req.TimeZone),
 		GitHubWorkflowRun: req.GitHubWorkflowRun,
+		GitRef:            req.GitRef,
 	}
 	if req.TimeOfDay != "" {
 		minutes, err := parseTimeOfDay(req.TimeOfDay)
@@ -201,6 +208,7 @@ type Schedule struct {
 	// is set, kept in sync like the content fields around it.
 	NothingNeededAction string `json:"nothingNeededAction,omitempty"`
 	KeepRunning         bool   `json:"keepRunning,omitempty"`
+	Admission           string `json:"admission,omitempty"`
 	// Model is the model every firing asks for (model.Schedule.Model):
 	// this schedule's own choice, which beats its template's. Empty for
 	// a schedule that chose none.
@@ -439,6 +447,7 @@ func scheduleFrom(s model.Schedule, templateName, suiteName string) Schedule {
 		NetworkAccess:        string(s.NetworkAccess),
 		NothingNeededAction:  string(s.NothingNeededAction),
 		KeepRunning:          s.KeepRunning,
+		Admission:            string(s.Admission),
 		Model:                s.Model,
 		CustomFields:         customFieldValues(s.CustomFields),
 		Capabilities:         []string{},
@@ -455,7 +464,7 @@ func scheduleFrom(s model.Schedule, templateName, suiteName string) Schedule {
 		out.TemplateName = templateName
 		out.System = model.IsSystemTemplateID(*s.TemplateID)
 	}
-	if s.TemplateID != nil && strings.HasPrefix(*s.TemplateID, model.WorkflowReviewTemplatePrefix) {
+	if s.TemplateID != nil && model.IsWorkflowReviewTemplateID(*s.TemplateID) {
 		out.WorkflowReview = string(model.WorkflowReviewOnFailure)
 		if s.WorkflowReview.Always() {
 			out.WorkflowReview = string(model.WorkflowReviewAlways)
@@ -710,6 +719,7 @@ type CreateScheduleRequest struct {
 	NothingNeededAction string `json:"nothingNeededAction"`
 	KeepRunning         bool   `json:"keepRunning,omitempty"`
 	KeepRunningSnake    *bool  `json:"keep_running,omitempty"`
+	Admission           string `json:"admission,omitempty"`
 	// Model is the model every firing asks for (model.Schedule.Model),
 	// or empty to take the template's, and failing that the team's
 	// default. Not content: it is this schedule's own, given alongside
@@ -756,11 +766,23 @@ type CreateScheduleRequest struct {
 // as this schedule's display title, re-read by fireSuiteSchedule on every
 // firing rather than trusted from here.
 func (c *Client) CreateSchedule(ctx context.Context, req CreateScheduleRequest) (Schedule, error) {
+	if req.Recurrence.Kind == string(model.RecurrenceGitRef) {
+		r, err := parseRecurrence(req.Recurrence)
+		if err != nil {
+			return Schedule{}, err
+		}
+		if err := c.validateGitRefRecurrence(ctx, r); err != nil {
+			return Schedule{}, err
+		}
+	}
 	if err := c.checkSettingsWritable(ctx, "schedule"); err != nil {
 		return Schedule{}, err
 	}
 	recurrence, err := parseRecurrence(req.Recurrence)
 	if err != nil {
+		return Schedule{}, err
+	}
+	if err := c.validateGitRefRecurrence(ctx, recurrence); err != nil {
 		return Schedule{}, err
 	}
 	overlap, err := parseOverlap(req.Overlap)
@@ -866,7 +888,91 @@ func (c *Client) CreateSchedule(ctx context.Context, req CreateScheduleRequest) 
 	if err := c.Store.PutSchedule(ctx, sched); err != nil {
 		return Schedule{}, err
 	}
-	return scheduleFrom(sched, templateName, suiteName), nil
+	out := scheduleFrom(sched, templateName, suiteName)
+	if suppressed, err := c.Store.SuppressedFiring(ctx, sched, now, sched.Location()); err == nil {
+		out.Suppressed = suppressionFrom(suppressed)
+	}
+	return out, nil
+}
+
+// validateGitRefRecurrence refuses a git_ref schedule whose watched
+// repository this deployment forbids polling at all: the encrypted secrets
+// backup repository (and any other repository in ForbiddenRepos), a retired
+// per-team grain/config-<team> alias, or grain/config when an external
+// config repository disables the controller-local one.
+func (c *Client) validateGitRefRecurrence(ctx context.Context, r model.Recurrence) error {
+	if r.Kind != model.RecurrenceGitRef || r.GitRef == nil {
+		return nil
+	}
+	watched, err := model.ParseRepo(r.GitRef.Repo)
+	if err != nil {
+		return validationErrorf("recurrence.gitRef.repo: %v", err)
+	}
+	if gitproxy.RetiredConfigRepo(watched.Host, watched.Owner, watched.Name) {
+		return validationErrorf("recurrence.gitRef.repo: %s",
+			gitproxy.RetiredConfigRepoReason(watched.Owner, watched.Name))
+	}
+	if model.IsConfigRepo(watched) {
+		if remote := c.externalStateRepoRemote(ctx); remote != "" {
+			return validationErrorf(
+				"recurrence.gitRef.repo: %s cannot be watched because local %s is disabled when configuration is managed in external repository %s",
+				watched, model.ConfigRepo(), remote)
+		}
+	}
+	if reason, forbidden := c.forbidsWatchedRepo(ctx, watched); forbidden {
+		return validationErrorf("recurrence.gitRef.repo: %s cannot be watched: %s", watched, reason)
+	}
+	return nil
+}
+
+func (c *Client) externalStateRepoRemote(ctx context.Context) string {
+	if c.Config.StateRepo != nil {
+		if status, err := c.Config.StateRepo.Status(ctx); err == nil {
+			if remote := strings.TrimSpace(status.Remote); remote != "" {
+				return remote
+			}
+		}
+	}
+	if c.Config.DataDir != "" {
+		if settings, err := staterepo.LoadSettings(c.Config.DataDir); err == nil {
+			if remote := strings.TrimSpace(settings.Remote); remote != "" {
+				return remote
+			}
+		}
+	}
+	return ""
+}
+
+func (c *Client) forbidsWatchedRepo(ctx context.Context, watched model.RepoRef) (string, bool) {
+	if c.Config.ForbiddenRepos != nil {
+		if c.Config.ForbiddenRepos.Forbids(watched.StoredOwner(), watched.Name) ||
+			(watched.Host != "" && c.Config.ForbiddenRepos.Forbids(watched.Owner, watched.Name)) {
+			return "it is in this deployment's forbidden repository set (encrypted secrets backup repository): " + gitproxy.ForbiddenReason, true
+		}
+	}
+	if c.Config.StateRepo != nil {
+		if status, err := c.Config.StateRepo.Status(ctx); err == nil && remoteNamesRepo(status.SecretsRepo, watched) {
+			return "it is this deployment's encrypted secrets backup repository: " + gitproxy.ForbiddenReason, true
+		}
+	}
+	if c.Config.DataDir != "" {
+		if settings, err := secretsrepo.LoadSettings(c.Config.DataDir); err == nil && remoteNamesRepo(settings.Remote, watched) {
+			return "it is this deployment's encrypted secrets backup repository: " + gitproxy.ForbiddenReason, true
+		}
+	}
+	return "", false
+}
+
+func remoteNamesRepo(remote string, repo model.RepoRef) bool {
+	slug := strings.TrimSpace(repoSlugFromRemote(remote))
+	if slug == "" {
+		return false
+	}
+	owner, name, ok := strings.Cut(slug, "/")
+	if !ok || owner == "" || name == "" {
+		return false
+	}
+	return strings.EqualFold(owner, repo.Owner) && strings.EqualFold(strings.TrimSuffix(name, ".git"), repo.Name)
 }
 
 // scheduleFromRequest is the schedule req describes: the content a
@@ -945,7 +1051,15 @@ func (c *Client) scheduleFromRequest(ctx context.Context, req CreateScheduleRequ
 		if err != nil {
 			return model.Schedule{}, "", "", err
 		}
-		grants, err := c.grantsFor(req.Capabilities, model.GrantByLabel)
+		admission, err := model.ParseOptionalAdmission(req.Admission)
+		if err != nil {
+			return model.Schedule{}, "", "", validationErrorf("%v", err)
+		}
+		capsWithoutLegacy, legacyAdm, hadLegacy := extractLegacyAdmissionCaps("schedule", req.Capabilities)
+		if hadLegacy {
+			admission = model.MaxAdmission(admission, legacyAdm)
+		}
+		grants, err := c.grantsFor(capsWithoutLegacy, model.GrantByLabel)
 		if err != nil {
 			return model.Schedule{}, "", "", err
 		}
@@ -969,6 +1083,7 @@ func (c *Client) scheduleFromRequest(ctx context.Context, req CreateScheduleRequ
 			NetworkAccess:        model.NetworkAccess(req.NetworkAccess),
 			NothingNeededAction:  nothingNeeded,
 			KeepRunning:          req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
+			Admission:            admission,
 			Reads:                reads,
 			Writes:               writes,
 			Grants:               grants,
@@ -1127,6 +1242,8 @@ func refuseSystemScheduleContentEdit(sched model.Schedule, req UpdateScheduleReq
 		refused = "whether its work merges on its own"
 	case keepRunning != nil && *keepRunning != sched.KeepRunning:
 		refused = "whether its tasks keep running"
+	case changes(req.Admission, string(sched.Admission)):
+		refused = "what admission its tasks get"
 	case changes(req.TemplateID, *sched.TemplateID), req.SuiteID != nil:
 		refused = "what it fires"
 	}
@@ -1161,6 +1278,7 @@ type scheduleContentOffered struct {
 
 	NothingNeededAction *string
 	KeepRunning         *bool
+	Admission           *string
 }
 
 // contentOfferedOnCreate is req's content fields, in the shape
@@ -1199,6 +1317,9 @@ func contentOfferedOnCreate(req CreateScheduleRequest) scheduleContentOffered {
 		on := true
 		out.KeepRunning = &on
 	}
+	if strings.TrimSpace(req.Admission) != "" {
+		out.Admission = &req.Admission
+	}
 	return out
 }
 
@@ -1217,6 +1338,7 @@ func contentOfferedOnUpdate(req UpdateScheduleRequest) scheduleContentOffered {
 
 		NothingNeededAction: req.NothingNeededAction,
 		KeepRunning:         updateKeepRunningChoice(req),
+		Admission:           req.Admission,
 	}
 }
 
@@ -1286,6 +1408,9 @@ func refuseIgnoredScheduleContent(kind, name string, effective model.Schedule, g
 	}
 	if given.KeepRunning != nil && *given.KeepRunning != current.KeepRunning {
 		refused = append(refused, "keepRunning")
+	}
+	if given.Admission != nil && strings.TrimSpace(*given.Admission) != current.Admission {
+		refused = append(refused, "admission")
 	}
 	if len(refused) == 0 {
 		return nil
@@ -1389,6 +1514,7 @@ func scheduleContentFromTemplate(t model.Template) model.Schedule {
 
 		NothingNeededAction: t.NothingNeededAction,
 		KeepRunning:         t.KeepRunning,
+		Admission:           t.Admission,
 	}
 }
 
@@ -1454,6 +1580,7 @@ type UpdateScheduleRequest struct {
 	NothingNeededAction *string `json:"nothingNeededAction,omitempty"`
 	KeepRunning         *bool   `json:"keepRunning,omitempty"`
 	KeepRunningSnake    *bool   `json:"keep_running,omitempty"`
+	Admission           *string `json:"admission,omitempty"`
 	// Model edits CreateScheduleRequest.Model; an empty string clears
 	// the schedule's own choice. Allowed while a template is attached --
 	// it is not content -- and on one of grain's own schedules, whose
@@ -1490,6 +1617,15 @@ type UpdateScheduleRequest struct {
 // (Enabled is not a cadence), which is what makes a pause a pause
 // rather than a reset.
 func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateScheduleRequest) (Schedule, error) {
+	if req.Recurrence != nil && req.Recurrence.Kind == string(model.RecurrenceGitRef) && !(req.Enabled != nil && !*req.Enabled) {
+		r, err := parseRecurrence(*req.Recurrence)
+		if err != nil {
+			return Schedule{}, err
+		}
+		if err := c.validateGitRefRecurrence(ctx, r); err != nil {
+			return Schedule{}, err
+		}
+	}
 	if err := c.checkSettingsWritable(ctx, "schedule"); err != nil {
 		return Schedule{}, err
 	}
@@ -1689,6 +1825,9 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 	var reads []model.RepoRef
 	var writes []model.WriteTarget
 	var nothingNeeded model.NothingNeededAction
+	var chosenAdmission *model.Admission
+	var legacyAdmission model.Admission
+	var hadLegacyAdmission bool
 	if attaching == nil && !suiteBacked {
 		if req.Title != nil && strings.TrimSpace(*req.Title) == "" {
 			return Schedule{}, validationErrorf("title cannot be empty")
@@ -1704,9 +1843,18 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 				return Schedule{}, err
 			}
 		}
+		if req.Admission != nil {
+			adm, err := model.ParseOptionalAdmission(*req.Admission)
+			if err != nil {
+				return Schedule{}, validationErrorf("%v", err)
+			}
+			chosenAdmission = &adm
+		}
 		if req.Capabilities != nil {
+			var capsWithoutLegacy []string
+			capsWithoutLegacy, legacyAdmission, hadLegacyAdmission = extractLegacyAdmissionCaps("schedule "+id, *req.Capabilities)
 			var err error
-			grants, err = c.grantsFor(*req.Capabilities, model.GrantByLabel)
+			grants, err = c.grantsFor(capsWithoutLegacy, model.GrantByLabel)
 			if err != nil {
 				return Schedule{}, err
 			}
@@ -1732,7 +1880,23 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 		if err != nil {
 			return Schedule{}, err
 		}
+		// Pausing an existing schedule from a form that resends the whole
+		// payload keeps the refusal out of the operator's way when gitRef.repo
+		// did not change; any other edit or re-enable validates the watched repo.
+		pausingSameGitRef := req.Enabled != nil && !*req.Enabled &&
+			existing.Recurrence.Kind == model.RecurrenceGitRef && existing.Recurrence.GitRef != nil &&
+			r.Kind == model.RecurrenceGitRef && r.GitRef != nil &&
+			strings.EqualFold(strings.TrimSpace(existing.Recurrence.GitRef.Repo), strings.TrimSpace(r.GitRef.Repo))
+		if !pausingSameGitRef {
+			if err := c.validateGitRefRecurrence(ctx, r); err != nil {
+				return Schedule{}, err
+			}
+		}
 		recurrence = &r
+	} else if req.Enabled != nil && *req.Enabled && !existing.Enabled {
+		if err := c.validateGitRefRecurrence(ctx, existing.Recurrence); err != nil {
+			return Schedule{}, err
+		}
 	}
 	var timeZone *string
 	if req.TimeZone != nil {
@@ -1784,9 +1948,9 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 		} else if attaching != nil {
 			content := scheduleContentFromTemplate(*attaching)
 			s.Title, s.Body, s.AutoMerge, s.Reads, s.Writes, s.Grants, s.CustomFields,
-				s.NetworkAccess, s.NothingNeededAction, s.KeepRunning, s.TemplateID =
+				s.NetworkAccess, s.NothingNeededAction, s.KeepRunning, s.Admission, s.TemplateID =
 				content.Title, content.Body, content.AutoMerge, content.Reads, content.Writes,
-				content.Grants, content.CustomFields, content.NetworkAccess, content.NothingNeededAction, content.KeepRunning, content.TemplateID
+				content.Grants, content.CustomFields, content.NetworkAccess, content.NothingNeededAction, content.KeepRunning, content.Admission, content.TemplateID
 		} else {
 			// req.TemplateID != nil here means the empty-string case:
 			// detach, keeping whatever content is already on the row and
@@ -1836,6 +2000,14 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 			}
 			if kr := updateKeepRunningChoice(req); kr != nil && s.TemplateID == nil {
 				s.KeepRunning = *kr
+			}
+			if s.TemplateID == nil {
+				if chosenAdmission != nil {
+					s.Admission = *chosenAdmission
+				}
+				if hadLegacyAdmission {
+					s.Admission = model.MaxAdmission(s.Admission, legacyAdmission)
+				}
 			}
 		}
 		// Target and Base are applied on their own, template attached or
@@ -1930,7 +2102,11 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 			suiteName = suite.Name
 		}
 	}
-	return scheduleFrom(*updated, templateName, suiteName), nil
+	out := scheduleFrom(*updated, templateName, suiteName)
+	if suppressed, err := c.Store.SuppressedFiring(ctx, *updated, now, updated.Location()); err == nil {
+		out.Suppressed = suppressionFrom(suppressed)
+	}
+	return out, nil
 }
 
 // ScheduleRun is what one firing somebody asked for by hand actually
@@ -2029,7 +2205,7 @@ func (c *Client) RunScheduleNow(ctx context.Context, id string) (ScheduleRun, er
 	if firing.Skipped {
 		workflow := false
 		if sched.TemplateID != nil {
-			_, workflow = model.WorkflowReviewStem(*sched.TemplateID)
+			workflow = model.IsWorkflowReviewTemplateID(*sched.TemplateID)
 		}
 		return ScheduleRun{}, &scheduleBusyError{ID: id, Review: firing.OpenReview, Workflow: workflow}
 	}

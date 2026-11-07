@@ -463,7 +463,9 @@ describe("TaskList", () => {
       screen.getAllByTitle("Asked you to submit acme/widgets#1").length,
     ).toBeGreaterThan(0);
     expect(screen.getAllByTitle("Merging").length).toBe(1);
-    expect(screen.getAllByTitle("Asked a question").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByTitle("Answered in a comment").length,
+    ).toBeGreaterThan(0);
   });
 
   // The one correction still worth a chip: on the queue in name only.
@@ -2541,5 +2543,47 @@ describe("a task parked on a question", () => {
       ],
     });
     expect(document.querySelector(".task-activity-note")).toBeNull();
+  });
+});
+
+describe("when tasks could not be loaded", () => {
+  it("says tasks could not be loaded with a retry rather than claiming none exist", async () => {
+    const onRetry = vi.fn();
+    const user = userEvent.setup();
+    renderList({
+      tasks: [],
+      tasksLoaded: false,
+      tasksError: "synthetic tasks 500",
+      onRetry,
+    });
+    expect(screen.queryByText("No tasks in this state.")).toBeNull();
+    expect(document.querySelector(".content-header .count")).toBeNull();
+    expect(
+      screen.getByText("The tasks could not be loaded (synthetic tasks 500)."),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the load error when the last fetch failed with nothing held, and keeps held rows when non-empty", () => {
+    renderList({
+      tasks: [],
+      tasksLoaded: true,
+      tasksError: "upstream 500",
+    });
+    expect(
+      screen.getByText("The tasks could not be loaded (upstream 500)."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("No tasks in this state.")).toBeNull();
+
+    document.body.innerHTML = "";
+    renderList({
+      tasks,
+      tasksLoaded: true,
+      tasksError: "upstream 500",
+    });
+    expect(screen.queryByText(/The tasks could not be loaded/)).toBeNull();
+    expect(screen.getByText("Fix the thing")).toBeInTheDocument();
   });
 });

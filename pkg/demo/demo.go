@@ -23,6 +23,7 @@ package demo
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"log"
 	"maps"
@@ -46,6 +47,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/namespace"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/systemlog"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -62,15 +64,21 @@ type Options struct {
 	// with it, as on a real deployment (docs/access-code.md). Empty keeps
 	// it beside the throwaway store and logs it.
 	AccessCodeFile string
-	// IAPAudience, IAPIssuer, IAPKeysURL, RequireIAP and
-	// AllowedPrincipals are the daemon's -ui-iap-audience,
-	// -ui-iap-issuer, -ui-iap-keys-url, -ui-require-iap and
-	// -ui-allowed-principals, so the demo can be put behind a signing
-	// proxy (a real IAP or a test issuer) and sign callers in as a
-	// deployment does (design/design/authentication.design.md).
+	// IAPAudience, IAPIssuer, IAPKeysURL, RegistryIssuer, RegistryAudience,
+	// RegistryKeysURL, RequireVerifier, RequireIAP and AllowedPrincipals are
+	// the daemon's -ui-iap-audience, -ui-iap-issuer, -ui-iap-keys-url,
+	// -ui-registry-issuer, -ui-registry-audience, -ui-registry-keys-url,
+	// -ui-require-verifier, -ui-require-iap and -ui-allowed-principals, so
+	// the demo can be put behind a signing proxy (a real IAP, grain-registry,
+	// or a test issuer) and sign callers in as a deployment does
+	// (design/design/authentication.design.md).
 	IAPAudience       string
 	IAPIssuer         string
 	IAPKeysURL        string
+	RegistryIssuer    string
+	RegistryAudience  string
+	RegistryKeysURL   string
+	RequireVerifier   string
 	RequireIAP        bool
 	AllowedPrincipals []string
 	// CloudIdentityEndpoint, when set, is the base URL group: entries in
@@ -124,6 +132,9 @@ type Options struct {
 	// so an owner's reply sends that change back to the queue as a
 	// daemon's cycle would.
 	ReviewQuestions bool
+	// HumanReview is -human-review (demo_human_review.go): a change a
+	// review held for a person's decision (model.LinkHumanReviewHold).
+	HumanReview bool
 	// ExternalConfigRepo is -external-config-repo
 	// (demo_external_config.go): the remote of an external config
 	// repository this deployment's configuration is managed in, so every
@@ -143,6 +154,8 @@ type Options struct {
 	// into its patterns.
 	UpgradeAllowedBranches []string
 	UpgradeVerifyCmd       []string
+	DisableSelfUpgrade     bool
+	ManagementURL          string
 	// ModelCatalog is -model-catalog: the host:port of an Anthropic model
 	// listing stub on loopback (demo_model_catalog.go). Empty wires no
 	// lister, so model discovery has nothing to ask.
@@ -265,8 +278,18 @@ func Run(opts Options) error {
 		IAPAudience:       opts.IAPAudience,
 		IAPIssuer:         opts.IAPIssuer,
 		IAPKeysURL:        opts.IAPKeysURL,
+		RegistryIssuer:    opts.RegistryIssuer,
+		RegistryAudience:  opts.RegistryAudience,
+		RegistryKeysURL:   opts.RegistryKeysURL,
+		RequireVerifier:   opts.RequireVerifier,
 		RequireIAP:        opts.RequireIAP,
 		AllowedPrincipals: opts.AllowedPrincipals,
+		// The co-located host reports agent CLI logins of its own, as a
+		// real one's hello does (hostd.Hello.Logins), so the host
+		// pickers in Settings show what an ambient connection spends.
+		LocalHostdLogins: func(context.Context) ([]string, bool) {
+			return []string{hostd.LoginAntigravity, hostd.LoginClaude}, true
+		},
 	}
 	if opts.CloudIdentityEndpoint != "" {
 		cfg.GroupChecker = ui.NewCloudIdentityGroupChecker(ui.WithCloudIdentityEndpoint(opts.CloudIdentityEndpoint))
@@ -276,6 +299,9 @@ func Run(opts Options) error {
 	if err != nil {
 		return err
 	}
+	// An ambient connection whose CLI goes through the demo's grain
+	// hostd names its host, as on a deployment.
+	cfg.AmbientNeedsHost = runCfg.CLIRunsThroughHostd
 	demoSandboxCfg := runCfg
 	if demoSandboxCfg.SandboxBackend() == "" {
 		demoSandboxCfg.ContainerSandboxes = true
@@ -308,6 +334,11 @@ func Run(opts Options) error {
 	}
 	defer db.Close()
 	cfg.SourceDB, cfg.DBDriver = db, "sqlite"
+	// The release-approval signing key: a deployment keeps it in its
+	// data directory, which a demo has none of, so an Inbox Approve or a
+	// rollback over -github-sim answered 500
+	// (docs/test-runs/2026-11-04-release-approval.md, F3).
+	cfg.ReleaseApprovalDir = dir
 
 	// The one piece of this demo that is not a row in the store: the
 	// System pane's Logs tab, which reads ui.Config.Logs rather than
@@ -388,7 +419,7 @@ func Run(opts Options) error {
 	storedCfg.DefaultModel = "gemini-2.5-pro"
 	storedCfg.GCPProject = "grain-sandbox-dev"
 	storedCfg.GCPServiceAccountEmail = "grain-sb-agent-0@grain-sandbox-dev.iam.gserviceaccount.com"
-	storedCfg.DefaultCapabilities = []string{"self-debug", "gemini-key"}
+	storedCfg.DefaultCapabilities = append(model.SelfDebugGrants(), model.GitHubReadIssuesGrant)
 	storedCfg.TargetRepos = []string{"acme/widgets"}
 	// The deployment's git connection to the fake credential above, as
 	// `grain connections import` would record it.
@@ -398,6 +429,9 @@ func Run(opts Options) error {
 	if opts.GitHubAPI != "" {
 		storedCfg.GitHubHost = opts.GitHubAPI
 		storedCfg.GitHubInsecureHTTP = true
+	}
+	if !opts.Unconfigured {
+		configureRegistryDemo(&storedCfg, store, &cfg)
 	}
 	// cfg.Secrets is read at each lookup, so -secrets-store's store,
 	// configured below, is the one a saved server configuration uses.
@@ -499,7 +533,9 @@ func Run(opts Options) error {
 			return fmt.Errorf("grain demo: -unconfigured: %v", err)
 		}
 	}
-	if opts.UpgradeImage != "" {
+	cfg.DisableSelfUpgrade = opts.DisableSelfUpgrade
+	cfg.ManagementURL = opts.ManagementURL
+	if opts.UpgradeImage != "" && !opts.DisableSelfUpgrade {
 		if cfg, err = configureUpgradeDemo(dir, store, cfg, opts.UpgradeImage, opts.UpgradeAllowedBranches, opts.UpgradeVerifyCmd); err != nil {
 			return fmt.Errorf("grain demo: -upgrade-image: %v", err)
 		}
@@ -542,6 +578,11 @@ func Run(opts Options) error {
 	if opts.ReviewQuestions {
 		if err := seedReviewQuestionsDemo(ctx, store, cfg, repo, githubSimRepo); err != nil {
 			return fmt.Errorf("grain demo: -review-questions: %v", err)
+		}
+	}
+	if opts.HumanReview {
+		if err := seedHumanReviewDemo(ctx, store, cfg, repo, githubSimRepo); err != nil {
+			return fmt.Errorf("grain demo: -human-review: %v", err)
 		}
 	}
 	if opts.MechanicalPort {
@@ -640,7 +681,21 @@ func Run(opts Options) error {
 		}
 		go runDemoReviewQuestions(context.Background(), store, interval)
 	}
-	var srv http.Handler = ui.NewServerWithClient(client)
+	uiSrv := ui.NewServerWithClient(client)
+	var srv http.Handler = uiSrv
+	var (
+		demoNS    *namespace.Server
+		demoNSCLI *daemon.SandboxCLIBackend
+		demoNSAPI *daemon.InProcessAPI
+	)
+	if gitProxy != nil {
+		ns := gitProxy.ns
+		uiSrv.SetNamespace(func() *namespace.Server { return ns })
+	} else {
+		demoNS, demoNSCLI, demoNSAPI = newDemoNamespace(dir, store)
+		uiSrv.SetNamespace(func() *namespace.Server { return demoNS })
+	}
+	defer ui.RegisterHealthCounters("sign-in verification (demo)", demoHealthCounters(time.Now()))()
 	if fakeCI, ok := cfg.CI.(*demoFakeCI); ok {
 		srv = scheduledWorkflowsDemoHandler(srv, fakeCI, githubSimRepo)
 	}
@@ -658,6 +713,9 @@ func Run(opts Options) error {
 		if simClient, ok := cfg.GitHubBranches.(github.Client); ok {
 			srv = githubSimDemoHandler(srv, simClient)
 		}
+	}
+	if demoNS != nil {
+		wireDemoNamespace(demoNS, demoNSCLI, demoNSAPI, srv, client, cfg, store)
 	}
 	ln, err := net.Listen("tcp", opts.Addr)
 	if err != nil {
@@ -753,6 +811,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	darkMode, err := create(ago(4*time.Hour), ui.CreateTaskRequest{
 		Title:       "Add a dark mode toggle",
 		Description: "Settings page needs a theme switch; several people have asked for it.",
+		Designs:     []string{"design/ui/theme-toggle@9f4c2b81e7a03d5f6c8912a4b0e3f7d81c2e5a90"},
 		// The one task with every field filled in, so the detail pane has
 		// a row of each kind to show.
 		CustomFields: map[string]ui.CustomFieldValue{
@@ -765,6 +824,32 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		},
 	})
 	if err != nil {
+		return err
+	}
+	if err := store.UpdateTask(ctx, darkMode.ID, func(t *model.Task) error {
+		ref, err := model.ParseContextRef("design/ui/theme-toggle@9f4c2b81e7a03d5f6c8912a4b0e3f7d81c2e5a90")
+		if err != nil {
+			return err
+		}
+		model.SetTaskContextManifest(t, ref, &model.ContextManifest{
+			Title:       "Theme Switcher Spec",
+			Description: "Approved product brief, contrast tokens, and settings mock",
+			Files: []model.ContextManifestFile{
+				{
+					Path:      "spec.md",
+					Kind:      "spec",
+					Title:     "Theme switch product brief",
+					SourceURL: "https://example.com/specs/theme-toggle",
+				},
+				{
+					Path:  "settings-mock.html",
+					Kind:  "mock",
+					Title: "Settings pane layout mock",
+				},
+			},
+		})
+		return nil
+	}); err != nil {
 		return err
 	}
 
@@ -784,7 +869,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		Title:        "Bump the Go toolchain to 1.24",
 		Description:  "go.mod and the CI image both need the version bump.",
 		Approved:     true,
-		Capabilities: &[]string{"self-debug"},
+		Capabilities: &[]string{model.GrainSourceGrant},
 		CustomFields: map[string]ui.CustomFieldValue{
 			"priority": {"medium"},
 			// The field that holds a set, on the task with more than one
@@ -1093,6 +1178,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		Title:       "Add pagination to the tasks API",
 		Description: "GET /api/tasks returns everything at once; needs a page size and a cursor.",
 		Approved:    true,
+		ExternalRef: "CA-204",
 		CustomFields: map[string]ui.CustomFieldValue{
 			"priority":     {"low"},
 			"area":         {"backend"},
@@ -1275,6 +1361,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		Title:       "Extract pagination query helper",
 		Description: "Decomposed sub-task: extract reusable cursor pagination builder for SQL queries.",
 		Approved:    true,
+		ProposedBy:  repairing.ID,
 		CustomFields: map[string]ui.CustomFieldValue{
 			"priority": {"low"},
 			"area":     {"backend"},
@@ -1295,13 +1382,27 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		},
 		Reason: model.ReasonProposal,
 	}
+	st.Proposer = model.TaskProposer{
+		Attribution: model.Attribution{
+			Actor: model.Principal{Kind: model.PrincipalAgent, ID: firstRun},
+		},
+		TaskID: repairing.ID,
+		RunID:  firstRun,
+	}
 	st.Links = append(st.Links,
 		model.Link{Kind: model.LinkChildOf, Target: repairing.ID},
 		model.Link{Kind: model.LinkDependsOn, Target: repairing.ID},
-		model.Link{Kind: model.LinkProposedBy, Target: repairing.ID},
 	)
 	if err := store.PutTask(ctx, *st); err != nil {
 		return err
+	}
+	if err := store.UpdateTask(model.WithOwnerChange(ctx, model.Attribution{
+		Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator", Source: model.SourceAccessCode},
+	}), subtask.ID, func(t *model.Task) error {
+		t.Owner = "dana@example.com"
+		return nil
+	}); err != nil {
+		return fmt.Errorf("seeding subtask owner transfer: %w", err)
 	}
 
 	// An open GitHub issue the issue importer filed and nobody has
@@ -1319,6 +1420,11 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		t.Origin = model.Origin{
 			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "issue-import"}},
 			Reason:      model.ReasonImported,
+		}
+		t.Proposer = model.TaskProposer{
+			Attribution: model.Attribution{
+				Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "issue-import"},
+			},
 		}
 		if t.Target != nil {
 			t.Issue = 42
@@ -1344,6 +1450,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		return err
 	}
 	dt.Interactive = true
+	dt.Admission = model.AdmissionDurable
 	dt.Tags = append(dt.Tags, model.ConsoleSessionTag(model.DirectorSessionID))
 	dt.Grants = model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID})
 	dt.Origin = model.Origin{
@@ -1422,6 +1529,12 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		}
 		if t.Parent() == "" {
 			t.Links = append(t.Links, model.Link{Kind: model.LinkProposedBy, Target: directorTask.ID})
+			t.Proposer = model.TaskProposer{
+				Attribution: model.Attribution{
+					Actor: model.Principal{Kind: model.PrincipalAgent, ID: "director-agent", Source: "session"},
+				},
+				TaskID: directorTask.ID,
+			}
 		}
 		t.WorkOrigin = treeOrigin
 		if err := store.PutTask(ctx, *t); err != nil {
@@ -1480,7 +1593,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		Repo:         "acme/widgets",
 		Base:         "main",
 		AutoMerge:    false,
-		Capabilities: []string{"self-debug"},
+		Capabilities: []string{model.GrainSourceGrant},
 		Recurrence:   ui.Recurrence{Kind: "weekly", TimeOfDay: "06:00", Weekday: "monday"},
 	}); err != nil {
 		return fmt.Errorf("seeding schedule: %w", err)
@@ -1535,6 +1648,9 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		return err
 	}
 	if err := seedDemoAllowedPrincipals(ctx, store, cfg, ago); err != nil {
+		return err
+	}
+	if err := seedDemoAudit(ctx, store, ago); err != nil {
 		return err
 	}
 	if err := seedDemoMemory(ctx, store, cfg, ago); err != nil {
@@ -2042,11 +2158,73 @@ func seedDemoHostds(ctx context.Context, store *model.Store) error {
 	if _, err := store.RevokeHostd(ctx, "old-laptop"); err != nil {
 		return fmt.Errorf("seeding a revoked hostd: %w", err)
 	}
+	if _, err := store.EnsureDefaultHostEnrollmentCode(ctx, "operator"); err != nil {
+		return fmt.Errorf("seeding default host enrollment code: %w", err)
+	}
+	wsCode, wsRaw, err := store.CreateHostEnrollmentCode(ctx, model.HostEnrollmentCode{
+		Name:              "workstations",
+		CreatedBy:         "operator",
+		DefaultLabels:     map[string]string{"os": "linux", "pool": "workstation"},
+		DefaultCapacity:   4,
+		AllowedPrincipals: []string{"group:eng@example.com"},
+	})
+	if err != nil {
+		return fmt.Errorf("seeding workstations host enrollment code: %w", err)
+	}
+	if pub, _, err := ed25519.GenerateKey(nil); err == nil && wsCode != nil && wsRaw != "" {
+		encPub := hostd.PublicKeyString(pub)
+		_, _ = store.CreateHostJoinRequest(ctx, model.HostJoinRequest{
+			PublicKey:      encPub,
+			KeyFingerprint: hostd.KeyFingerprint(pub),
+			Hostname:       "devbox-carol.example.com",
+			OS:             "linux",
+			Arch:           "amd64",
+			CLIs:           []string{"claude", "codex"},
+			Version:        "v2.4.0",
+			LocalUser:      "carol",
+			EnrolledBy:     "carol@example.com",
+		}, wsRaw, time.Now().UTC())
+	}
 	return nil
 }
 
-// seedDemoAllowedPrincipals populates Settings -> Access with a user and a
-// group when no explicit -ui-allowed-principals flag or environment variable
+// seedDemoAudit fills Settings -> Audit: config changes by a verified
+// person, by the operator on the access code and by grain itself, and a
+// few credential accesses and secret resolutions to go beside them.
+func seedDemoAudit(ctx context.Context, store *model.Store, ago func(time.Duration) time.Time) error {
+	alice := model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceIAP}
+	operator := model.Principal{Kind: model.PrincipalHuman, ID: "operator", Source: model.SourceAccessCode}
+	for _, e := range []model.ConfigAuditEntry{
+		{At: ago(26 * time.Hour), By: operator, Surface: "settings", Summary: "default model set to claude-opus-5-5"},
+		{At: ago(5 * time.Hour), By: model.Principal{Kind: model.PrincipalAutomation, ID: "grain", Source: model.SourceInternal}, Surface: "schedule:nightly-triage", Summary: "next run moved to 02:00 after a missed window"},
+		{At: ago(3 * time.Hour), By: alice, Surface: "repo:demo/widgets", Summary: "work ownership set to on"},
+		{At: ago(40 * time.Minute), By: alice, Surface: "settings", Summary: "max concurrent runs 4 → 6"},
+	} {
+		if _, err := store.RecordConfigAudit(ctx, e); err != nil {
+			return fmt.Errorf("seeding config audit: %w", err)
+		}
+	}
+	for _, e := range []model.CredentialAccessEntry{
+		{Timestamp: ago(2 * time.Hour), TaskID: "1", Kind: model.CredentialAccessGit, Resource: "demo/widgets", Action: "fetch", Credential: "github-app", Outcome: "allowed"},
+		{Timestamp: ago(90 * time.Minute), TaskID: "1", Kind: model.CredentialAccessGit, Resource: "demo/gadgets", Action: "push", Credential: "github-app", Outcome: "denied: outside the task's writes"},
+	} {
+		if err := store.RecordCredentialAccess(ctx, e); err != nil {
+			return fmt.Errorf("seeding credential access audit: %w", err)
+		}
+	}
+	for _, e := range []model.SecretAuditEntry{
+		{Timestamp: ago(4 * time.Hour), TaskID: "1", SecretName: "stripe-api-key", Key: "value", Principal: "operator"},
+		{Timestamp: ago(time.Hour), TaskID: "1", SecretName: "github-app", Key: "private-key", Principal: "alice@example.com"},
+	} {
+		if err := store.RecordSecretAuditEntry(ctx, e); err != nil {
+			return fmt.Errorf("seeding secret audit: %w", err)
+		}
+	}
+	return nil
+}
+
+// seedDemoAllowedPrincipals populates Settings -> Access with a user, a
+// group and a service account when no explicit -ui-allowed-principals flag or environment variable
 // was given (so tests passing the deprecated flag still exercise its one-time
 // migration into an empty allowlist).
 func seedDemoAllowedPrincipals(ctx context.Context, store *model.Store, cfg ui.Config, ago func(time.Duration) time.Time) error {
@@ -2056,12 +2234,15 @@ func seedDemoAllowedPrincipals(ctx context.Context, store *model.Store, cfg ui.C
 	for _, item := range []struct {
 		entry   string
 		addedBy string
+		reason  string
+		role    string
 		at      time.Time
 	}{
-		{"user:alice@example.com", "the access code", ago(48 * time.Hour)},
-		{"group:eng-oncall@example.com", "alice@example.com", ago(12 * time.Hour)},
+		{"user:alice@example.com", "the access code", "", "", ago(48 * time.Hour)},
+		{"group:eng-oncall@example.com", "alice@example.com", "", "grain/contributor", ago(12 * time.Hour)},
+		{"serviceAccount:release-bot@demo-project.iam.gserviceaccount.com", "alice@example.com", "release pipeline files tasks through IAP", "grain/release-manager", ago(6 * time.Hour)},
 	} {
-		if _, _, err := store.AddAllowedPrincipal(ctx, item.entry, item.addedBy, item.at); err != nil {
+		if _, _, err := store.AddAllowedPrincipalWithRole(ctx, item.entry, item.addedBy, item.reason, item.role, item.at); err != nil {
 			return fmt.Errorf("seeding allowed principal %s: %w", item.entry, err)
 		}
 	}

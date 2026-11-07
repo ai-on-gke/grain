@@ -30,7 +30,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/guestforward"
+	"github.com/gke-labs/granule/pkg/guestforward"
 )
 
 func TestForwardArgsAndKubectlForwardArgs(t *testing.T) {

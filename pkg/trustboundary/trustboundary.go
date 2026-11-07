@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v12"
+const Version = "trust-boundary/v20"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +81,57 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v20 adds the external-agent owner-trust policy and the gma_ bearer
+// token model and lifecycle handlers (pkg/model/owner_trust.go,
+// pkg/model/external_agent_token.go, and pkg/ui/external_agents.go) to
+// auth-routes (task 3026): whose external agents skip a person's
+// approval on an unapproved filing, and gma_ token scope resolution,
+// ownership, authentication, issuance and rotation.
+//
+// v19 adds the embedded bootstrap playbooks moved out of pkg/capability/
+// (pkg/playbooks/, task 3148) and the capability reference/policy,
+// catalogue and template-grant admission files
+// (pkg/model/capability_ref.go, pkg/model/capability_catalogue.go, and
+// pkg/model/template_grants.go) to capabilities-secrets (task 3388).
+//
+// v18 adds host enrollment codes, pending pairing-code handshakes and
+// deployment-owner request checks (pkg/model/host_enroll.go,
+// pkg/ui/request_actor.go, and pkg/ui/host_enroll.go) to auth-routes.
+//
+// v17 added the authorization-bearing files the 2026-11-05 nightly
+// security review found unclassified (finding 2, task 3168) to
+// auth-routes: the role gate for verified-identity sessions
+// (access_roles.go), the built-in scope sets every role and api:<set>
+// grant expands through (api_scope_set.go), the inbox reach of a gma_
+// token (external_cli.go), the approval-callback bearer tokens and the
+// recording of a person's host-script approval
+// (local_script_approvals.go), and the daemon's UI listeners and their
+// guards (ui_server.go).
+//
+// v16 added connection_hostd.go to auth-routes and capability server
+// hostd placement (capability_servers.go, capability_servers_hostd.go,
+// pkg/ui/capability_servers.go) to capabilities-secrets (grain/task-2165):
+// where run: hostd capability servers start and receive their resolved
+// secrets.
+//
+// v15 added the authorization-bearing files the 2026-11-04 nightly
+// security review found unclassified (finding 2, task 2977): the
+// controller MCP endpoint that authorizes every grain_invoke, the
+// database-held sign-in allowlist's entry refusal and its API, and the
+// person-only check on applying a run's requested grants (auth-routes);
+// the code-declared CI grant rule (capabilities-secrets); the store-level
+// auto-merge guard and its restore after a hold (hold-policy); and the
+// hostd install script served unauthenticated and run as root, with the
+// route that renders it (setup-scripts).
+//
+// v14 added the rc qualification housekeeping workflow and its Actions
+// helper to release-machinery (grain/task-2584).
+//
+// v13 added the GitHub Actions Inbox approval (grain/task-2666,
+// design/playbook/releases.playbook.md §0.2) to release-promotion: the
+// route that signs a person's answer and dispatches promote-release.yml,
+// the signed record, and the script the workflow verifies it with.
 //
 // v12 narrowed release-promotion to the approval path (grain/task-2664,
 // design/playbook/releases.playbook.md §0.3): the approval workflow, in
@@ -155,6 +206,9 @@ var Categories = []Category{
 			// The repository-declared half of the list, and who may
 			// release what it holds (grain/task-1714).
 			"pkg/orchestrator/repoguard.go", "pkg/model/sensitive_path.go", "pkg/ui/approvals.go",
+			// The store-level guard that keeps auto-merge off a held task,
+			// and the one place it is handed back once the hold clears.
+			"pkg/model/task_auto_merge.go",
 		},
 	},
 	{
@@ -162,7 +216,7 @@ var Categories = []Category{
 		Description: "authentication, principals, request guards and the UI/API route table",
 		prefixes:    []string{"pkg/access/", "pkg/iapreconciler/", "pkg/policy/", "pkg/jwks/"},
 		files: []string{
-			"pkg/ui/server.go", "pkg/ui/principal.go", "pkg/ui/access.go",
+			"pkg/ui/server.go", "pkg/ui/principal.go", "pkg/ui/request_actor.go", "pkg/ui/access.go",
 			"pkg/ui/accesscode.go", "pkg/ui/single_tenant.go",
 			"pkg/ui/allowlist.go", "pkg/ui/verifier.go",
 			"pkg/ui/auth.go", "pkg/ui/agent_keys.go", "pkg/ui/github_tokens.go",
@@ -176,25 +230,78 @@ var Categories = []Category{
 			// The hostd registry: whether a dialing hostd is local or must
 			// present its owner's identity, token -> hostd/owner, revocation,
 			// and which hostd a run is routed to.
-			"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/taskhostd.go",
+			"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/host_enroll.go", "pkg/ui/connection_hostd.go",
 			"pkg/daemon/hostd_registry.go", "pkg/daemon/hostd_route.go",
-			"pkg/daemon/hostexec.go", "pkg/model/hostd.go",
+			"pkg/daemon/hostexec.go", "pkg/model/hostd.go", "pkg/model/host_enroll.go",
 			// messagesSince's human-only filter is what makes the answer a
 			// host-exec confirmation reads a person's.
 			"pkg/ui/messages.go",
+			// The controller MCP endpoint, which agentAPIGate exempts by
+			// name: whose access a call runs with (token scopes, the acting
+			// task's grants, or full access) and the re-issue of each
+			// grain_invoke through the route table and its gate.
+			"pkg/ui/mcp_endpoint.go",
+			// The sign-in allowlist held in the database: which entries it
+			// refuses (service accounts, domains) and its API.
+			"pkg/model/allowed_principals.go", "pkg/ui/access_principals.go",
+			// That only a person applies a run's requested grants.
+			"pkg/ui/task_access_request.go",
+			// The role gate for verified-identity sessions: whether a
+			// session is gated at all (resolveAccessRoles' Full), which
+			// routes a limited role reaches (humanRouteScopes,
+			// operatorOnlyRoutes) and the per-call check (roleGate,
+			// authorizeRoleCall).
+			"pkg/ui/access_roles.go",
+			// The built-in roles (grain/operator, viewer, contributor) and
+			// the deny/includes resolution every role and every agent's
+			// api:<set> grant expands through.
+			"pkg/model/api_scope_set.go",
+			// Which external-agent owners skip a person's approval on an
+			// unapproved filing (OwnerTrusted, OwnerTrustedForTask), and
+			// gma_ bearer token scope resolution, ownership, authentication,
+			// issuance and rotation.
+			"pkg/model/owner_trust.go", "pkg/model/external_agent_token.go",
+			"pkg/ui/external_agents.go",
+			// Which repositories' parked questions, secret requests,
+			// proposals and notifications a gma_ token reads through
+			// GET /api/inbox (inboxReadable), and its replies (CheckReply).
+			"pkg/ui/external_cli.go",
+			// The ghsa_ approval-callback bearer tokens: mint, expiry and
+			// lookup, their scoping to their task's callback routes, and
+			// where a person's approval of a host-script call is recorded.
+			"pkg/ui/local_script_approvals.go",
+			// Which listeners the daemon opens for the UI/API -- the
+			// -ui-addr one and the loopback approval-callback one -- and
+			// the HostGuard in front of each.
+			"pkg/daemon/ui_server.go",
 		},
 	},
 	{
 		ID:          "capabilities-secrets",
 		Description: "capability grants, secret storage and the cloud identities credentials are minted from",
-		prefixes:    []string{"pkg/capability/", "pkg/secrets/", "pkg/secretsrepo/", "pkg/gcpsetup/", "pkg/redact/"},
+		prefixes:    []string{"pkg/capability/", "pkg/playbooks/", "pkg/secrets/", "pkg/secretsrepo/", "pkg/gcpsetup/", "pkg/redact/"},
 		files: []string{
 			// Running a command on grain's own host once a person approves.
 			"pkg/daemon/mcpserver_hostexec.go",
+			// Which grain hostd starts a run: hostd capability server and
+			// receives its resolved secrets, and the Settings routes that
+			// write and probe mcpServers entries.
+			"pkg/daemon/capability_servers.go", "pkg/daemon/capability_servers_hostd.go",
+			"pkg/ui/capability_servers.go",
 			// What a CI sandbox is handed on other repositories, on which
 			// events, and the refusal of untrusted pull-request runs.
 			"pkg/model/repo_access.go", "pkg/daemon/ci.go", "pkg/daemon/ci_policy.go",
 			"pkg/daemon/ci_capability_pass.go", "pkg/daemon/capabilities.go",
+			// Which CI events may be handed signing and publishing
+			// capabilities, read by all three of their enforcers.
+			"pkg/model/ci_grant_rule.go",
+			// Capability reference parsing and policy admission
+			// (CapabilityPolicy.Permits, UncoveredCapabilityRefs), catalogue
+			// grant validation (CapabilityCatalogue.ValidateGrants), and
+			// dangerous-grant and template escalation checks
+			// (IsDangerousGrant, TemplateWithinTask, ReviewGrants).
+			"pkg/model/capability_ref.go", "pkg/model/capability_catalogue.go",
+			"pkg/model/template_grants.go",
 		},
 	},
 	{
@@ -235,15 +342,30 @@ var Categories = []Category{
 	},
 	{
 		ID: "release-promotion",
-		Description: "the person-only approval that makes a pending release official: the workflow that " +
-			"pushes vX.Y.0 and latest, the route that starts it, and the release train's template, whose " +
-			"push: list decides which tags the train may move without it",
+		Description: "what makes a release official: the person-only approval workflow that pushes " +
+			"vX.Y.0 and latest and the route that starts it; the release train that promotes a qualified " +
+			"rc on its own -- its script, its operator settings (release.conf), its template, whose push: " +
+			"list decides which tags it may move, and its schedule; and the workflow that publishes what it " +
+			"promotes",
 		RequiresHuman: true,
 		// Before github-workflows and grain-config, which would otherwise
 		// take the workflow's two copies and the template.
 		files: []string{
 			".grain/workflows/promote-release.yml", ".github/workflows/promote-release.yml",
 			"pkg/ui/release_approval.go", ".grain/templates/release-train.yml",
+			// The Inbox approval of a release on GitHub Actions (gap 4):
+			// the signed record, the route that signs and dispatches it,
+			// and the check the workflow verifies it with.
+			"pkg/ui/release_approval_github.go", "pkg/releaseapproval/releaseapproval.go",
+			"scripts/verify-release-approval.sh",
+			// The continuous train's own promotion (playbook section 1):
+			// the script that tags vX.Y.0 and latest on a qualified rc,
+			// the settings that turn it on and off, its schedule, and the
+			// workflow that publishes the release from the tag. The tick
+			// wrapper too: it writes the CI verdicts and the trusted
+			// qualification app the train promotes on.
+			"scripts/release-from-trunk.sh", "scripts/release.conf", "scripts/release-train-task.sh",
+			".grain/schedules/release-train.yml", ".github/workflows/publish-release.yml",
 		},
 	},
 	{
@@ -254,19 +376,23 @@ var Categories = []Category{
 		// reach the approval (design/playbook/releases.playbook.md §0.3).
 		Review: []string{
 			"the change cannot move a `vX.Y.Z` or `latest` git tag or image except as a result of a person's " +
-				"approval in promote-release.yml",
+				"approval in promote-release.yml or the release train's promotion of a qualified rc " +
+				"(scripts/release-from-trunk.sh, publish-release.yml: release-promotion)",
 			"it does not widen any workflow's `permissions:`, the secrets it reads, or who may dispatch it",
 			"it does not weaken a check that refuses anybody but a person (`GRAIN_CI_REQUESTED_BY_KIND`)",
 			"in scripts/release.conf, it does not raise `RELEASE_MAJOR`, which only a person may do",
 		},
 		files: []string{
-			"scripts/release-images.sh", "scripts/release-from-trunk.sh",
-			"scripts/release-notes.sh", "scripts/candidate-gate.sh", "scripts/release.conf",
+			"scripts/release-images.sh",
+			"scripts/release-notes.sh", "scripts/candidate-gate.sh",
 			// What the release jobs run besides: the patch-tag guard
 			// that refuses a vX.Y.Z not cut from its release branch, the
 			// version every published image is tagged with, and the host
 			// setup the publishing job sources.
 			"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
+			// The rc's Actions housekeeping: re-running qualification jobs
+			// and cancelling a dropped rc's runs.
+			"scripts/release-train-actions.sh", ".github/workflows/rc-qualification.yml",
 			".grain/workflows/release.yml", ".github/workflows/release.yml",
 			".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 			".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
@@ -334,7 +460,12 @@ var Categories = []Category{
 	{
 		ID:          "setup-scripts",
 		Description: "setup scripts run with the deployment's own privileges",
-		files:       []string{"scripts/setup.sh"},
+		files: []string{
+			"scripts/setup.sh",
+			// Served unauthenticated and run as root on every hostd machine,
+			// and the route that renders it and decides who sees what.
+			"pkg/ui/hostd_install.sh", "pkg/ui/hostd_install.go",
+		},
 	},
 }
 
@@ -437,6 +568,24 @@ var StatePrivilege = Category{
 	ID: "state-privilege",
 	Description: "this deployment's own settings that grant capabilities, repositories or secrets, " +
 		"or set what a sandbox runs and how it is isolated -- applied to the running daemon once merged",
+	RequiresHuman: true,
+}
+
+// TemplatePush is the category orchestrator's security hold reports for
+// a change to any repository-declared template's `push:` list
+// (design/playbook/releases.playbook.md §0.3, §0.4). A push set is a
+// grant: it lets every task filed from that template update refs beyond
+// its own branch -- the release train's is how it tags release
+// candidates -- so it is made by a person, once, when it merges, and
+// widened only by a person. Which files carry one is the repository's to
+// say, so it cannot be a path on Categories: the hold compares each
+// changed template's push set at the base with the head's
+// (repodecl.TemplatePush), and holds every changed template as if its
+// set changed when it cannot read both.
+var TemplatePush = Category{
+	ID: "template-push",
+	Description: "a template's `push:` list: the refs beyond their own branch that the tasks filed from it " +
+		"may push, which only a person grants or widens",
 	RequiresHuman: true,
 }
 

@@ -89,6 +89,7 @@ func TestRepositoryTransitionRules(t *testing.T) {
 }
 
 func TestRepositoryForTrack(t *testing.T) {
+	t.Setenv(installtrack.OSSImageRepoEnv, "")
 	for _, c := range []struct {
 		repo  string
 		track installtrack.Track
@@ -96,6 +97,7 @@ func TestRepositoryForTrack(t *testing.T) {
 	}{
 		{installtrack.LegacyGrainRepository, installtracktest.Track, installtracktest.Repository},
 		{installtrack.LegacyGrainRepository, installtrack.TrackOSS, installtrack.DefaultOSSGrainRepository},
+		{"ghcr.io/ai-on-gke/grain/grain", installtrack.TrackOSS, installtrack.DefaultOSSGrainRepository},
 		{installtrack.LegacyGrainRepository, "", installtrack.LegacyGrainRepository},
 		{installtracktest.MovedRepository, installtracktest.Track, installtracktest.Repository},
 		{installtracktest.MovedRepository, installtrack.TrackOSS, installtracktest.MovedRepository},
@@ -105,6 +107,56 @@ func TestRepositoryForTrack(t *testing.T) {
 		if got := installtrack.RepositoryForTrack(c.repo, c.track); got != c.want {
 			t.Errorf("RepositoryForTrack(%q, %q) = %q, want %q", c.repo, c.track, got, c.want)
 		}
+	}
+}
+
+func TestLegacyGHCRToDockerHubAliasTable(t *testing.T) {
+	cases := []struct {
+		legacy      string
+		wantOSS     string
+		wantPrimary bool
+	}{
+		{"ghcr.io/bwsalmon/grain/grain", "docker.io/grainai/grain", true},
+		{"ghcr.io/ai-on-gke/grain/grain", "docker.io/grainai/grain", false},
+		{"ghcr.io/bwsalmon/grain/guest", "docker.io/grainai/sandbox", true},
+		{"ghcr.io/bwsalmon/grain/granule-sandbox", "docker.io/grainai/sandbox", false},
+		{"ghcr.io/ai-on-gke/grain/guest", "docker.io/grainai/sandbox", false},
+		{"ghcr.io/bwsalmon/grain/guest-base", "docker.io/grainai/sandbox-base", true},
+		{"ghcr.io/ai-on-gke/grain/guest-base", "docker.io/grainai/sandbox-base", false},
+		{"ghcr.io/bwsalmon/grain/k8s-sandbox", "docker.io/grainai/sandbox-k8s", true},
+		{"ghcr.io/ai-on-gke/grain/k8s-sandbox", "docker.io/grainai/sandbox-k8s", false},
+		{"ghcr.io/bwsalmon/grain/k8s-sandbox-base", "docker.io/grainai/sandbox-k8s-base", true},
+		{"ghcr.io/ai-on-gke/grain/k8s-sandbox-base", "docker.io/grainai/sandbox-k8s-base", false},
+	}
+	for _, tc := range cases {
+		if !installtrack.IsLegacyRepository(tc.legacy) {
+			t.Errorf("IsLegacyRepository(%q) = false, want true", tc.legacy)
+		}
+		if got := installtrack.ResolveLegacyRepository(tc.legacy); got != tc.wantOSS {
+			t.Errorf("ResolveLegacyRepository(%q) = %q, want %q", tc.legacy, got, tc.wantOSS)
+		}
+		if tc.wantPrimary {
+			leg, ok := installtrack.LegacyRepositoryFor(tc.wantOSS)
+			if !ok || leg != tc.legacy {
+				t.Errorf("LegacyRepositoryFor(%q) = (%q, %v), want (%q, true)", tc.wantOSS, leg, ok, tc.legacy)
+			}
+		}
+		ref, changed := installtrack.ResolveLegacyImageRef(tc.legacy + ":v3.1.0")
+		if !changed || ref != tc.wantOSS+":v3.1.0" {
+			t.Errorf("ResolveLegacyImageRef(%q) = (%q, %v), want (%q, true)", tc.legacy+":v3.1.0", ref, changed, tc.wantOSS+":v3.1.0")
+		}
+	}
+	// Short Docker Hub names normalize cleanly without reporting as legacy GHCR.
+	if got := installtrack.ResolveLegacyRepository("grainai/sandbox"); got != "docker.io/grainai/sandbox" {
+		t.Errorf("ResolveLegacyRepository(grainai/sandbox) = %q", got)
+	}
+	if installtrack.IsLegacyRepository("docker.io/grainai/grain") {
+		t.Error("docker.io/grainai/grain reported as legacy repository")
+	}
+	// Digest-pinned legacy refs are not blindly rewritten onto Docker Hub.
+	pinned := "ghcr.io/bwsalmon/grain/guest:sha-abc1234@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	if got, changed := installtrack.ResolveLegacyImageRef(pinned); changed || got != pinned {
+		t.Errorf("ResolveLegacyImageRef(pinned) = (%q, %v), want unchanged", got, changed)
 	}
 }
 

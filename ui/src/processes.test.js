@@ -246,5 +246,89 @@ describe("processes", () => {
         timeZone: "America/New_York",
       }),
     ).toBe("Fridays at 08:30 America/New_York");
+    expect(
+      describeRecurrence({
+        kind: "git_ref",
+        gitRef: { repo: "upstream/core", ref: "refs/tags/latest" },
+      }),
+    ).toBe("on ref upstream/core refs/tags/latest");
+    expect(
+      describeRecurrence({
+        kind: "github_workflow_run",
+        githubWorkflowRun: { workflow: "nightly.yml" },
+      }),
+    ).toBe("on workflow nightly.yml");
+  });
+
+  it("shows event labels instead of placeholder nextRunAt dates on git_ref and github_workflow_run schedules", () => {
+    const built = buildProcessRows({
+      schedules: [
+        {
+          id: "sched-ref",
+          title: "Sync upstream",
+          repo: "acme/edition",
+          templateId: "tmpl-sync",
+          enabled: true,
+          nextRunAt: "2027-11-05T00:00:00Z",
+          recurrence: {
+            kind: "git_ref",
+            gitRef: { repo: "upstream/core", ref: "refs/tags/latest" },
+          },
+        },
+        {
+          id: "sched-wf",
+          title: "Triage nightly",
+          repo: "acme/edition",
+          enabled: true,
+          nextRunAt: "2027-11-05T00:00:00Z",
+          recurrence: {
+            kind: "github_workflow_run",
+            githubWorkflowRun: { workflow: "nightly.yml" },
+          },
+        },
+      ],
+      templates: [
+        { id: "tmpl-sync", name: "Sync template", repo: "acme/edition" },
+      ],
+    });
+
+    const refRow = built.find((r) => r.key === "schedule:sched-ref");
+    expect(refRow.nextRunAt).toBeNull();
+    expect(refRow.nextLabel).toBe("on ref move");
+
+    const wfRow = built.find((r) => r.key === "schedule:sched-wf");
+    expect(wfRow.nextRunAt).toBeNull();
+    expect(wfRow.nextLabel).toBe("on workflow run");
+
+    const tmplRow = built.find((r) => r.key === "template:tmpl-sync");
+    expect(tmplRow.nextRunAt).toBeNull();
+    expect(tmplRow.nextLabel).toBe("on demand");
+  });
+
+  it("marks off-target git_ref schedules as suppressed instead of active on ref move", () => {
+    const built = buildProcessRows({
+      schedules: [
+        {
+          id: "sched-off-target",
+          title: "Watch external release",
+          repo: "acme/edition",
+          enabled: true,
+          nextRunAt: "2027-11-05T00:00:00Z",
+          recurrence: {
+            kind: "git_ref",
+            gitRef: { repo: "offlist/upstream", ref: "refs/tags/latest" },
+          },
+          suppressed: {
+            reason: "watchedRepoOffTarget",
+            detail:
+              "watches offlist/upstream, which is not on this deployment's target repo list",
+          },
+        },
+      ],
+    });
+
+    const row = built.find((r) => r.key === "schedule:sched-off-target");
+    expect(row.nextRunAt).toBeNull();
+    expect(row.nextLabel).toBe("suppressed");
   });
 });

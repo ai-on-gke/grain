@@ -21,6 +21,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
 )
 
@@ -28,12 +29,17 @@ import (
 // create and upload runs g4 twice.
 const changeControlTimeout = 3 * time.Minute
 
+type changeControlRegistry interface {
+	Statuses() []servers.Status
+	Lookup(capabilityID string) (*protocol.Server, error)
+}
+
 // changeControl is change.Control over the capability server registry:
 // the first attached server offering tool answers, called with its own
 // data-plane token, which is what authenticates a daemon-only control
 // tool (ObserveTool, changelists.md §2.5).
 type changeControl struct {
-	reg *servers.Registry
+	reg changeControlRegistry
 }
 
 func (c changeControl) CallControl(ctx context.Context, tool string, args map[string]any) ([]byte, error) {

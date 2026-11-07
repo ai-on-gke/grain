@@ -71,12 +71,17 @@ func (r Request) Summary() string {
 	return b.String()
 }
 
-// setStdin fills in r's stdin fields from the whole of stdin.
-func (r *Request) setStdin(stdin string) {
-	sum := sha256.Sum256([]byte(stdin))
+// SetStdin fills in r's stdin fields from the whole of stdin.
+func (r *Request) SetStdin(stdin []byte) {
+	sum := sha256.Sum256(stdin)
 	r.Stdin = len(stdin)
 	r.StdinSHA256 = hex.EncodeToString(sum[:])
-	r.StdinPreview, r.StdinTruncated = Preview(stdin, StdinPreviewMax)
+	r.StdinPreview, r.StdinTruncated = Preview(string(stdin), StdinPreviewMax)
+}
+
+// setStdin fills in r's stdin fields from the whole of stdin.
+func (r *Request) setStdin(stdin string) {
+	r.SetStdin([]byte(stdin))
 }
 
 // Preview is at most max bytes of s, cut back to a character boundary,

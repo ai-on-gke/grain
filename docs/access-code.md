@@ -48,12 +48,19 @@ network listener takes depends on two settings:
   refuses to start with `-ui-require-iap` and no IAP audience.
   `grain access-code` still prints the code, and says the server takes
   it over loopback only.
+- **Another verifier required.** `-ui-require-verifier=<name>` (or
+  `GRAIN_REQUIRE_VERIFIER=<name>`) is the general form of the flag above:
+  `-ui-require-iap` is an alias for `-ui-require-verifier=iap`, and the
+  two together with a name other than `iap` are refused. It closes the
+  network listener to the access code the same way, and the daemon
+  refuses to start unless an `IdentityVerifier` of that name is active
+  (for `iap`, an IAP audience; otherwise one a wrapper build registered).
+  Any active verifier's assertion still signs its caller in.
 
-`-ui-require-iap` governs IAP only. A wrapper build's own
-`IdentityVerifier` that declares the access code wins over it
-(`AccessCodeWins()`, as a verifier behind an identity-aware proxy may) keeps
-taking the code over its proxy, so break-glass through that proxy still
-works with the flag set.
+Neither flag stops a wrapper build's own `IdentityVerifier` that declares
+the access code wins over it (`AccessCodeWins()`, as a verifier behind an
+identity-aware proxy may): it keeps taking the code over its proxy, so
+break-glass through that proxy still works with the flag set.
 
 In every mode the executor routes stay open
 ([Remote executors](#remote-executors)), and calls from inside a
@@ -83,20 +90,77 @@ the database (`allowed_principal`).
   through the Cloud Identity groups API (cached briefly) only when at
   least one `group:` entry is present and no `user:` entry already
   matched.
-- **Equal privileges:** A verified user admitted through the list has
-  full operator access, the same as an access-code holder, including
-  viewing, adding and removing entries on the list. Anyone not on the
-  list gets a `403` naming **Settings → Access** and `grain access allow`.
+- **Service accounts:** `serviceAccount:<email>` admits a non-human
+  caller (a `*.gserviceaccount.com` address), at full operator access
+  unless its entry is given a narrower role (see **Roles** below).
+  Each one is added explicitly, with a reason: `grain access allow
+  serviceAccount:<email> --reason "<why>"`, or **Settings → Access**
+  with the Reason field filled in (`POST /api/access/principals` takes
+  it as `reason`, or as `X-Grain-Acting-Reason`). The reason is kept
+  with the entry and recorded in `config_audit`, and Settings → Access
+  lists service accounts in their own group with who added each, when
+  and why. A service account is admitted only by its own
+  `serviceAccount:` entry, never through a `group:`, and what it does is
+  attributed to it as kind `service`, not `operator`. Accounts whose
+  keys grain hands to tasks -- the `gcp-key` pool and the gcp
+  capability's permission-set accounts -- are always refused, both when
+  added and at sign-in, even if an entry for one is already in the
+  table. `domain:` entries are not supported.
+- **Roles:** every entry has a role, which is an API scope set
+  ([`docs/agent-api.md`, "Scope sets"](agent-api.md#scope-sets)). A
+  verified session can call only the routes its role's scopes cover, on
+  the repositories they reach. It is checked against the same route
+  table as an agent ([`docs/design/access-rbac.md`](design/access-rbac.md)).
+  grain ships three roles:
+  - `grain/operator`: every scope. This is the default, and every entry
+    that existed before roles has it.
+  - `grain/contributor`: `grain/viewer` plus `tasks:write` and `ci:write`.
+  - `grain/viewer`: every `*:read` scope.
+
+  A deployment can also declare its own sets, for example one with
+  `repos: [acme/widgets]` to limit a role to one repository. A person
+  who matches several entries (a `user:` entry plus `group:` entries)
+  holds the union of their roles. A scope that any of those roles'
+  sets `deny` is withheld from that person, even when another role
+  grants it. A refusal is a `403` that names the missing scope and the
+  caller's role. `GET /api/auth/user` and `GET /api/config` report the
+  caller's role and scopes as `access`, and Settings → Access shows
+  your role and hides controls your role does not cover. Anyone not on
+  the list gets a `403` naming **Settings → Access** and
+  `grain access allow`.
+- **Who assigns roles:** the access code (and loopback break-glass) can
+  assign any role. A role that holds a dangerous scope, including
+  `grain/operator` itself, can be assigned only with the access code,
+  and the assignment needs a reason (`--reason`). The reason is
+  recorded in `config_audit` along with the old and new role. A
+  verified session whose role holds `access:write` can add, re-role and
+  remove entries, but only at roles no wider than its own and holding
+  no dangerous scope. It cannot change or remove an entry at a wider or
+  dangerous role. Agents and sandboxes cannot change the list by any
+  route, whatever they hold.
+- **Routes outside the scope table:** the SPA's static pages are served
+  to every admitted caller, and so are sign-in, `GET /api/config` and
+  `whoami`. Event streams, console terminals and file downloads are
+  ordinary scoped routes. `/api/mcp` and `/mcp` admit any signed-in role
+  and check each tool call against the caller's role using the scope and
+  repository rules of the route that tool maps to (filtering tool
+  discovery and `grain_filing_context` to the role's scopes and naming
+  the missing scope on a refused call). Persistent sandboxes' `/staging/`
+  services and a run's own plumbing routes are refused to every role that
+  does not hold every scope.
 - **Live changes (no restart):** Adding or removing an entry takes
   effect immediately. Manage the list in **Settings → Access → Allowed
   users and groups** (`/settings/access#allowed-principals`), over the
   REST API (`GET /api/access/principals`, `POST /api/access/principals`,
+  `PATCH /api/access/principals/{entry}` with `{"role": ...}`,
   `DELETE /api/access/principals/{entry}`), or from the CLI:
 
   ```bash
   grain access list
-  grain access allow user:alice@example.com
-  grain access allow group:team@example.com
+  grain access allow user:alice@example.com --reason "on-call lead"
+  grain access allow group:team@example.com --role grain/viewer
+  grain access role group:team@example.com grain/contributor
+  grain access allow serviceAccount:ci@my-project.iam.gserviceaccount.com --role acme/ci-bot --reason "release pipeline"
   grain access deny user:alice@example.com
   ```
 
@@ -108,30 +172,33 @@ the database (`allowed_principal`).
   the code, and with `-ui-require-iap` the code is taken over loopback
   only ([Break-glass over loopback](#break-glass-over-loopback)). Every
   addition and removal is recorded in `config_audit` (`surface =
-  "access"`).
+  "access"`), and so is every role change.
 - **No implicit owner entry:** the daemon's own `-as` actor is no
   longer admitted by default. A deployment that relied on the old
   default allowlist (no `-ui-allowed-principals`) admits no verified
   person after upgrading until someone runs `grain access allow
   user:<owner-email>` -- with the access code, or from the daemon's own
   host when `-ui-require-iap` is set.
-- **Agent API scopes:** `api:access:read` allows listing entries.
-  `api:access:write` is a **dangerous** scope: only a person may grant
-  it, every call requires an acting reason (`X-Grain-Acting-Reason`)
-  recorded in `config_audit`, and it is refused on the `sandbox-cli`
-  channel. Without `api:access:write`, sandboxes and agents cannot
-  modify the list.
+- **Agent API scopes:** `api:access:read` allows listing entries. Agents
+  and sandboxes cannot add, re-role or remove entries by any route, even
+  with a person-granted `api:access:write`. Only people decide who signs
+  in. In a person's role, `access:write` is what lets a verified session
+  manage the list, as described above.
 - **State repository:** `allowed_principal` lives in the database (and
-  cold backups) and is never exported to `grain/config` pull requests,
-  so a config PR can neither lock operators out nor grant sign-in
-  access.
+  cold backups), and so do its roles. It is never exported to
+  `grain/config` pull requests, so a config PR can neither lock
+  operators out nor grant sign-in access. What a role grants is its
+  scope set, which is exported in `tables/api_scope_set.json`. The state
+  check's scope-set diff therefore also reports how each role built on
+  a set widens or narrows.
 - **One-time migration off `-ui-allowed-principals`:** On start, if
   `-ui-allowed-principals` or `$GRAIN_ALLOWED_PRINCIPALS` is set and the
   database list has never been populated or migrated, grain imports its
-  `user:` and `group:` entries once and logs the import. Entries of
-  other kinds (`serviceAccount:`, `domain:`) are not imported; each
-  dropped entry is logged and shown as a warning in **Settings →
-  Access**. On subsequent starts, `-ui-allowed-principals` and
+  `user:` and `group:` entries once and logs the import.
+  `serviceAccount:` entries are not imported -- an operator adds each
+  one back deliberately, with a reason -- and neither are `domain:`
+  entries; each dropped entry is logged and shown as a warning in
+  **Settings → Access**. On subsequent starts, `-ui-allowed-principals` and
   `$GRAIN_ALLOWED_PRINCIPALS` are deprecated: grain logs a warning when
   either is set and ignores its value.
 
@@ -233,46 +300,66 @@ any remote source.
 Codes are compared in constant time (hashed first). A wrong code gets the
 same answer as any other wrong code.
 
-### A grain hostd dialing in
+### A host dialing in
 
 The daemon serves `GET /api/hostd/connect` without the access code. A
-`grain hostd -server` on another machine upgrades it and presents its
-hostd token, which says which hostd it is (the hostd registry,
-`/api/hostds`, or the deprecated shared `-hostd-token-file`). A bearer
-on that route (the hostd token, or an IAP token) is never counted as an
-access-code guess.
+`grain host -server` or `grain-agentd -server` on another machine upgrades
+it and presents its host credential (`ghd_...`), which says which host it is
+(the host registry in **Settings → Hosts** / `/api/hostds`, or the deprecated
+shared `-hostd-token-file`). Hosts enrolled via `--join` or migrated with
+`rekey` also sign every `/api/hostd/connect` request with their Ed25519
+private key (`X-Grain-Hostd-Timestamp`, `X-Grain-Hostd-Nonce`,
+`X-Grain-Hostd-Signature`, bounded to a 5-minute replay cache), so a copied
+credential without the host's private key is refused; their 30-day credentials
+renew silently while connected (`OpRenew` and `POST /api/hostd/renew`). A
+bearer on that route (the host credential, or an IAP token) is never counted
+as an access-code guess.
 
-What else the hostd needs depends on how it reaches the daemon:
+What else the host needs depends on how it reaches the daemon:
 
 - **Remote**: it dials in through the IAP Gateway or another registered
   identity verifier's proxy, so the request carries a verified identity.
   The daemon records that identity as the connection's principal and
   checks that it is admitted (either on the database allowlist in
   **Settings → Access**, a daemon-provisioned non-pool service account,
-  or the non-pool service account registered as an active hostd's owner
-  in **Settings → Hostds**). The
-  identity must also equal the hostd row's owner, compared as full,
-  lowercased emails. A stolen hostd token is no use without its
-  owner's identity. Service accounts may be owners, so a hostd running
+  or the non-pool service account registered as an active host's owner
+  in **Settings → Hosts**). The
+  identity must also equal the host row's owner, compared as full,
+  lowercased emails. A stolen host token is no use without its
+  owner's identity. Service accounts may be owners, so a host running
   under Workload Identity or a key needs its service account as the
-  owner. The daemon refuses, and logs, a remote hostd that connects as
-  somebody else, a remote hostd whose row has no owner, and a request
+  owner. The daemon refuses, and logs, a remote host that connects as
+  somebody else, a remote host whose row has no owner, and a request
   that came through a proxy, or from another host to a daemon with a
   verifier configured, with no verified identity. It never falls back to
   the token alone.
 - **Local**: over loopback with no forwarding headers and no assertion,
   such as through `kubectl port-forward`. The token alone names it, as
-  it always has, and it needs no owner. The same goes for every hostd
+  it always has, and it needs no owner. The same goes for every host
   of a daemon that has no identity verifier configured. The co-located
-  hostd at `/run/grain-hostd/hostd.sock` does not dial in at all.
+  host at `/run/grain-hostd/hostd.sock` does not dial in at all.
 
-Set the owner when you register the hostd (Settings → Hostds,
-`grain hostds register -owner <email> <name>`, or `POST /api/hostds`),
-or later (`grain hostds set-owner <name> <email>`, or `PATCH
-/api/hostds/{name}`). For the shared token, use `-hostd-token-owner`.
-Start the hostd with `-iap-audience <IAP client ID>` so that it sends an
-ID token from its service account or its user's login. At startup it
-logs the email that token names, which is the owner the daemon expects.
+Set the owner automatically by enrolling with `--join <enrollment-code>` from
+**Settings → Hosts → Invite hosts** (the verified enrolling identity becomes
+the host's owner once the deployment owner accepts its join request), or set it on a legacy per-host token (**Settings → Hosts**,
+`grain host register -owner <email> <name>`, `POST /api/hostds`,
+`grain host set-owner <name> <email>`, or `PATCH /api/hostds/{name}`). For
+the shared token, use `-hostd-token-owner`. Start the host with
+`-iap-audience <IAP client ID>` so that it sends an ID token from its service
+account or its user's login. At startup it logs the email that token names,
+which is the owner the daemon expects.
+
+`GET /hostd/install` (and `GET /api/hostd/install.sh`), `POST /api/hostd/join`,
+`POST /api/hostd/join/{id}/poll`, and `POST /api/hostd/renew` are served
+without the access code too: an enrolling host signs its join and poll
+requests with its generated Ed25519 keypair, presents a shared `ghe_...`
+enrollment code (which grants nothing except filing a pending join request)
+plus a verified enrolling identity (from the proxy `IdentityVerifier`,
+`ui.RegisterHostJoinVerifier`, or a GitHub device-flow token verified
+server-side), and waits for the deployment owner to accept it. For
+legacy per-host token installs, the script reads the token on the machine
+itself from stdin or `$GRAIN_HOSTD_TOKEN`; `--release` and `--image` are
+filled in only for an admitted caller or passed on the command line.
 
 The remote executor routes that were open the same way, including the
 executor bootstrap routes (`executorBootstrapRoute`), were removed with

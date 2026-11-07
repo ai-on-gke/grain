@@ -14,7 +14,11 @@
 
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { themeChatscopeCss } from "./src/chatscopeTheme.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // The chat kit's stylesheet, re-pointed at this shell's theme as it is
 // loaded. @chatscope/chat-ui-kit-styles is Sass compiled with its own
@@ -46,6 +50,11 @@ function chatscopeTheme() {
 // single binary with this output baked in.
 export default defineConfig({
   plugins: [chatscopeTheme(), react()],
+  resolve: {
+    alias: {
+      "@grain/ui-shared": path.resolve(__dirname, "../ui-shared"),
+    },
+  },
   build: {
     outDir: "../pkg/ui/static",
     // False, and left to the `frontend` Makefile target instead: Vite's

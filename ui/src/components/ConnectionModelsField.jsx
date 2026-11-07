@@ -24,6 +24,8 @@ import {
 } from "@mui/material";
 import api from "../api.js";
 import { identifierField } from "../identifierField.js";
+import { searchFilter } from "../fuzzy.js";
+import { HighlightedText } from "./SearchSelect.jsx";
 import { DISCOVERING_FRAMEWORKS, NO_MODELS_LABEL } from "../state.js";
 
 // ConnectionModelsField is what one connection says about models: what
@@ -37,8 +39,6 @@ import { DISCOVERING_FRAMEWORKS, NO_MODELS_LABEL } from "../state.js";
 // lists by default, with nothing to save: grain keeps that list live
 // (`discovered`). The operator may exclude models from it
 // (`excludedModels`), or pin the connection to a fixed list (`models`).
-// A provider that cannot be asked (a custom command) is only ever the
-// list typed in.
 export default function ConnectionModelsField({
   backend,
   onChange,
@@ -201,6 +201,20 @@ export default function ConnectionModelsField({
           size="small"
           options={discovered}
           value={listed}
+          filterOptions={(opts, state) =>
+            searchFilter(opts, state.inputValue).map(({ item }) => item)
+          }
+          renderOption={(props, option, { inputValue }) => {
+            const { key, ...rest } = props;
+            const ranges = inputValue.trim()
+              ? searchFilter([option], inputValue)[0]?.ranges
+              : undefined;
+            return (
+              <li key={key} {...rest} data-value={option}>
+                <HighlightedText text={option} ranges={ranges} />
+              </li>
+            );
+          }}
           onChange={(_event, values) =>
             onChange({
               models: Array.from(
@@ -229,7 +243,7 @@ export default function ConnectionModelsField({
               helperText={
                 discoverable
                   ? "Pinned: this connection advertises exactly these, and nothing its provider adds later. Type a name the provider does not list, such as an alias, to add it by hand."
-                  : "The models this connection serves. A task's model is matched against this list. A custom command cannot be asked, so list them here."
+                  : "The models this connection serves. A task's model is matched against this list."
               }
               inputProps={{ ...params.inputProps, ...identifierField }}
             />

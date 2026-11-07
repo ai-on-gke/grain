@@ -74,7 +74,7 @@ test("the run dialog lists suites in the order the Processes page does", async (
       page.getByRole("heading", { name: "Run a suite" }),
     ).toBeVisible();
     const picker = page.getByRole("combobox", { name: "Suite" });
-    await expect(picker).toHaveText(order[0]);
+    await expect(picker).toHaveValue(order[0]);
     await picker.click();
     await expect(page.getByRole("listbox").getByRole("option")).toHaveText(
       order,

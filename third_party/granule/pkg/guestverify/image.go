@@ -6,7 +6,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/bwsalmon/granule/pkg/guestboot"
+	"github.com/gke-labs/granule/pkg/guestboot"
 )
 
 // imageID resolves a reference to the content digest of the image it

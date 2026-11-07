@@ -17,7 +17,12 @@
 # instructions kept in sync by hand.
 
 BIN := bin
-CMDS := grain grit
+CMDS := grain grit grain-registry
+# Commands built the same way, but only when asked for by name and never
+# by `build` (so not into the image, which runs `make build`):
+# grain-agentd is the agents-only, rootless hostd for a machine that is
+# not the daemon's (docs/grain-agentd.md), and nothing ships it yet.
+EXTRA_CMDS := grain-agentd
 
 BUILDVCS ?= auto
 
@@ -81,6 +86,10 @@ EDITION ?=
 # main of its own and names it here. `make image` passes it on to the
 # Dockerfile as MAIN_GRAIN.
 MAIN_grain ?= ./cmd/grain
+MAIN_grain-registry ?= ./cmd/grain-registry
+# The same for bin/grain-agentd: a build that registers a transport or
+# host-tool grants of its own (pkg/agentd) names its own main here.
+MAIN_grain-agentd ?= ./cmd/grain-agentd
 LDFLAGS := $(strip \
 	$(if $(RELEASE),-X github.com/ai-on-gke/grain/pkg/version.Release=$(RELEASE),) \
 	$(if $(EDITION),-X github.com/ai-on-gke/grain/pkg/version.Edition=$(EDITION),) \
@@ -141,8 +150,8 @@ CONTAINER_USER ?= $(shell id -u):$(shell id -g)
 # `make image` builds Dockerfile (not Dockerfile.build: that one is the
 # toolchain `container-build` above runs in) -- the runtime image a
 # deployment actually runs, carrying bin/grain and every binary it shells
-# out to. .github/workflows/build-artifacts.yml builds the same image
-# the same way on every commit and pushes it to GHCR, so this target is
+# out to. .github/workflows/release.yml builds the same image
+# the same way on every commit and pushes it to Docker Hub, so this target is
 # for a local build against a change to the Dockerfile itself, not
 # something a deployment ever needs to run.
 #
@@ -151,7 +160,8 @@ CONTAINER_USER ?= $(shell id -u):$(shell id -g)
 # from .git. GO_VERSION is passed for the same reason `builder` passes
 # it -- one version, read out of go.mod.
 IMAGE ?= grain:dev
-.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-long playwright-browsers ui-screenshots vet vuln security fmt fmt-frontend clean builder container-build image frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli $(CMDS)
+IMAGE_REGISTRY ?= grain-registry:dev
+.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-long playwright-browsers ui-screenshots vet vuln security fmt fmt-frontend clean builder container-build image image-registry frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli $(CMDS) $(EXTRA_CMDS)
 
 all: vet test build
 
@@ -188,6 +198,9 @@ frontend:
 	find pkg/ui/static -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' \
 		-not -name 'placeholder.html' -delete
 	cd ui && npm ci --omit=dev && npm run build
+	find pkg/registry/server/static -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' \
+		-not -name 'placeholder.html' -delete
+	cd ui-registry && npm ci --omit=dev && npm run build
 
 # BUILDVCS is passed explicitly rather than left to `go build`'s default
 # (which is this same `auto`) so that turning it off is a documented word
@@ -228,7 +241,7 @@ frontend:
 # left to carry to the controller. `test` and `vet` below leave
 # CGO_ENABLED alone: `go test -race` requires it (the race detector is a
 # cgo library), and nothing about testing this module ships anywhere.
-$(CMDS):
+$(CMDS) $(EXTRA_CMDS):
 	CGO_ENABLED=0 go build -buildvcs=$$(./scripts/buildvcs.sh $(BUILDVCS)) -ldflags "$(LDFLAGS)" -o $(BIN)/$@ $(or $(MAIN_$@),./cmd/$@)
 
 cli: grain
@@ -303,6 +316,7 @@ container-build: builder
 test: frontend
 	go test -race -timeout 30m ./...
 	cd ui && { [ -x node_modules/.bin/vitest ] || npm ci; } && npm test
+	cd ui-registry && { [ -x node_modules/.bin/vitest ] || npm ci; } && npm test
 
 # The same suite, turned up: what .github/workflows/nightly.yml runs
 # while nobody is waiting for it.
@@ -378,6 +392,7 @@ playwright-browsers:
 
 test-e2e-suite:
 	cd ui && { [ -x node_modules/.bin/playwright ] || npm ci; } && npm run test:e2e $${PLAYWRIGHT_PROJECT:+-- --project="$$PLAYWRIGHT_PROJECT"}
+	cd ui-registry && { [ -x node_modules/.bin/playwright ] || npm ci; } && npm run test:e2e
 
 test-e2e: frontend playwright-browsers test-e2e-suite
 
@@ -642,6 +657,7 @@ fmt:
 # be pure waste.
 fmt-frontend:
 	cd ui && { [ -x node_modules/.bin/prettier ] || npm ci; } && npm run format:check
+	cd ui-registry && { [ -x node_modules/.bin/prettier ] || npm ci; } && npm run format:check && npx prettier --check ../ui-shared
 
 clean:
 	rm -rf $(BIN) $(CONTAINER_CACHE)
@@ -658,3 +674,14 @@ image:
 		$(if $(GIT_REVISION),--build-arg GIT_REVISION=$(GIT_REVISION),) \
 		$(if $(RELEASE),--build-arg RELEASE=$(RELEASE),) \
 		-t $(IMAGE) -f Dockerfile .
+
+image-registry:
+	$(CONTAINER_ENGINE) build \
+		--build-arg GO_IMAGE=$(GO_IMAGE) \
+		--build-arg GO_VERSION=$(GO_VERSION) \
+		--build-arg BUILDVCS=$(BUILDVCS) \
+		--build-arg MAIN_GRAIN_REGISTRY=$(MAIN_grain-registry) \
+		$(if $(GIT_REVISION),--build-arg GIT_REVISION=$(GIT_REVISION),) \
+		$(if $(RELEASE),--build-arg RELEASE=$(RELEASE),) \
+		$(if $(EDITION),--build-arg EDITION=$(EDITION),) \
+		-t $(IMAGE_REGISTRY) -f Dockerfile.registry .

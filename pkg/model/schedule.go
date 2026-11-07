@@ -153,6 +153,8 @@ type Schedule struct {
 	// the default, means close.
 	NothingNeededAction NothingNeededAction
 	KeepRunning         bool
+	// Admission is the optional admission setting for tasks this schedule files.
+	Admission Admission
 
 	// Model is the model every task this schedule files asks for
 	// (Task.Model, docs/connections-and-models.md). Empty means this
@@ -292,6 +294,7 @@ type (
 	RecurrenceKind           = workflows.RecurrenceKind
 	Recurrence               = workflows.Recurrence
 	GitHubWorkflowRunTrigger = workflows.GitHubWorkflowRunTrigger
+	GitRefTrigger            = workflows.GitRefTrigger
 	WorkflowReviewPolicy     = workflows.ReviewPolicy
 )
 
@@ -302,6 +305,7 @@ const (
 	RecurrenceWeekly            = workflows.RecurrenceWeekly
 	RecurrenceMonthly           = workflows.RecurrenceMonthly
 	RecurrenceGitHubWorkflowRun = workflows.RecurrenceGitHubWorkflowRun
+	RecurrenceGitRef            = workflows.RecurrenceGitRef
 	MaxEveryNHours              = workflows.MaxEveryNHours
 	MinEveryNMinutes            = workflows.MinEveryNMinutes
 	MaxEveryNMinutes            = workflows.MaxEveryNMinutes
@@ -315,3 +319,6 @@ var RecurrenceKinds = workflows.RecurrenceKinds
 
 // ParseStoredRecurrenceKind re-exports workflows.ParseStoredRecurrenceKind.
 var ParseStoredRecurrenceKind = workflows.ParseStoredRecurrenceKind
+
+// ParseStoredGitRefTrigger re-exports workflows.ParseStoredGitRefTrigger.
+var ParseStoredGitRefTrigger = workflows.ParseStoredGitRefTrigger

@@ -96,7 +96,7 @@ func storedBackend(t *testing.T, client *ui.Client, id string) model.AgentBacken
 
 // grain/task-4320: a connection with no saved models advertises what its
 // provider reports now -- not a snapshot written into its Models once --
-// and a pinned list, a custom command and a provider that cannot be
+// and a pinned list and a provider that cannot be
 // asked are each left as they were.
 func TestDiscoveredModelsAreAdvertisedLiveNotSaved(t *testing.T) {
 	t.Parallel()
@@ -112,7 +112,6 @@ func TestDiscoveredModelsAreAdvertisedLiveNotSaved(t *testing.T) {
 		model.AgentBackend{ID: "gemini-excluding", Framework: model.AgentFrameworkAntigravity, ExcludedModels: []string{"gemini-3.7-flash"}},
 		model.AgentBackend{ID: "claude-nokey", Framework: model.AgentFrameworkClaude},
 		model.AgentBackend{ID: "codex-unwired", Framework: model.AgentFrameworkCodex},
-		model.AgentBackend{ID: "custom", Framework: model.AgentFrameworkCustom, Command: "run-agent", Models: []string{"house-model"}},
 	)
 
 	if _, err := client.AdvertiseDiscoveredModels(ctx); err != nil {
@@ -126,7 +125,6 @@ func TestDiscoveredModelsAreAdvertisedLiveNotSaved(t *testing.T) {
 		// Never answered: no models, rather than a name grain made up.
 		"claude-nokey":  nil,
 		"codex-unwired": nil,
-		"custom":        {"house-model"},
 	} {
 		if got := advertised(id); !slices.Equal(got, want) {
 			t.Errorf("%s advertises %v, want %v", id, got, want)
@@ -137,9 +135,6 @@ func TestDiscoveredModelsAreAdvertisedLiveNotSaved(t *testing.T) {
 	}
 	if b := storedBackend(t, client, "claude-nokey"); b.Discovered == nil || b.Discovered.Error != "no Anthropic key" {
 		t.Errorf("claude-nokey Discovered = %+v, want the lister's error", b.Discovered)
-	}
-	if b := storedBackend(t, client, "custom"); b.Discovered != nil {
-		t.Errorf("a custom command was asked for its models: %+v", b.Discovered)
 	}
 
 	// An unchanged answer writes nothing.

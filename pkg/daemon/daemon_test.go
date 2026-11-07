@@ -161,22 +161,22 @@ func TestCapabilityProviders(t *testing.T) {
 		{
 			name: "no gcp project configured still registers the built-in capabilities",
 			cfg:  Config{},
-			want: []string{"github-sandbox", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
+			want: []string{"github-sandbox", "console", "release-gate-read"},
 		},
 		{
 			name: "an agent service account without a gcp project does not add either gcp capability",
 			cfg:  Config{GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"},
-			want: []string{"github-sandbox", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
+			want: []string{"github-sandbox", "console", "release-gate-read"},
 		},
 		{
-			name: "a gcp project with no agent service account only adds gemini-key to the built-in capabilities",
+			name: "a gcp project adds nothing: gemini-key is served by the gcp capability server",
 			cfg:  Config{GcpProject: "proj"},
-			want: []string{"gemini-key", "github-sandbox", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
+			want: []string{"github-sandbox", "console", "release-gate-read"},
 		},
 		{
-			name: "a gcp project with an agent service account adds gemini-key to the built-in capabilities (gcp-key is served by the gcp capability server)",
+			name: "a gcp project with an agent service account adds nothing either (gcp-key and gemini-key are served by the gcp capability server)",
 			cfg:  Config{GcpProject: "proj", GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"},
-			want: []string{"gemini-key", "github-sandbox", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
+			want: []string{"github-sandbox", "console", "release-gate-read"},
 		},
 	}
 	for _, tc := range cases {
@@ -202,9 +202,9 @@ func TestCapabilityProviders(t *testing.T) {
 // no caller outside a test, so a key minted for a run whose controller
 // died before the lease was written was never deleted by anything.
 //
-// The two in-process providers named here each mint a bearer resource GCP
-// or GitHub will never expire on its own (gcp#gcp-key reaps inside the gcp
-// capability server); a future MINT provider whose resource does expire by
+// The in-process provider named here mints a bearer resource GitHub will
+// never expire on its own (gcp#gcp-key and gcp#gemini-key reap inside the
+// gcp capability server, gemini keys older than 24h); a future MINT provider whose resource does expire by
 // itself needs no Reap, which is why this lists names rather than asserting
 // over every model.ProvisionMint spec.
 func TestEveryLeakableCapabilityIsReaped(t *testing.T) {
@@ -216,7 +216,7 @@ func TestEveryLeakableCapabilityIsReaped(t *testing.T) {
 			reaped[p.Spec().Name] = true
 		}
 	}
-	for _, name := range []string{"gemini-key", "github-sandbox"} {
+	for _, name := range []string{"github-sandbox"} {
 		if !reaped[name] {
 			t.Errorf("capability %q is registered but does not implement model.Reaper: "+
 				"reapCapabilities skips it entirely, so a resource it minted for a run whose record was "+
@@ -265,29 +265,21 @@ func TestGitHubCredentialLadderNamesTheExtraTokens(t *testing.T) {
 	}
 }
 
-// A named GitHub token is a capability of its own (grain/task-117), and
-// the two ends of that -- the picker row a human ticks and the provider
-// a dispatch resolves it against -- are built from the same list of
-// names in startUIServer and capabilityProviders. This is that pairing:
-// the ids have to match exactly, or granting a token would be refused at
-// dispatch as a capability no provider is registered for.
-func TestCapabilityProvidersRegistersEachNamedGitHubToken(t *testing.T) {
+// Named GitHub credentials under secrets/github are served on the in-process
+// https://grain.dev/capabilities/repo#credential method rather than registered
+// as dynamic in-process providers in CapabilityProviders (schema migration 120).
+func TestCapabilityProvidersRetiresGitHubCredentialProviders(t *testing.T) {
 	t.Parallel()
 	names := []string{"release-bot", "docs-bot"}
 	var registered []string
 	for _, p := range CapabilityProviders(Config{}, nil, NewModelProxies(), names, nil) {
 		registered = append(registered, p.Spec().Name)
-	}
-	for _, capability := range ui.GitHubTokenCapabilities(names) {
-		if !slices.Contains(registered, capability.ID) {
-			t.Errorf("the picker offers %q but no provider is registered for it (registered: %v)",
-				capability.ID, registered)
+		if strings.HasPrefix(p.Spec().Name, model.GitCredentialCapabilityPrefix) {
+			t.Errorf("CapabilityProviders still registered legacy github-credential provider %q", p.Spec().Name)
 		}
 	}
-	// And nothing extra: a deployment with no named tokens registers
-	// exactly what it did before this existed (TestCapabilityProviders).
-	if len(registered) != len(CapabilityProviders(Config{}, nil, NewModelProxies(), nil, nil))+len(names) {
-		t.Errorf("registered %v, want the fixed set plus one provider per name %v", registered, names)
+	if len(registered) != len(CapabilityProviders(Config{}, nil, NewModelProxies(), nil, nil)) {
+		t.Errorf("registered %v, want the fixed provider set without per-token providers", registered)
 	}
 }
 
@@ -300,10 +292,10 @@ func TestCapabilityProvidersRegistersEachNamedGitHubToken(t *testing.T) {
 // to the catalog of providers grain ships; this ties it to the registry
 // a real daemon actually builds, which is the pair the gap was in.
 //
-// The config is fully populated on purpose: capabilityProviders gates
-// gcp-key and gemini-key on it (TestCapabilityProviders above covers
-// the gated cases), and gating one off is a deployment being
-// unconfigured, not the picker and the registry disagreeing.
+// The config is fully populated on purpose: capabilityProviders once
+// gated gcp-key and gemini-key on it, and a provider gated on it again
+// would be a deployment being unconfigured, not the picker and the
+// registry disagreeing.
 func TestEveryRegisteredCapabilityIsGrantable(t *testing.T) {
 	t.Parallel()
 	cfg := Config{GcpProject: "proj", GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"}

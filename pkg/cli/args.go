@@ -43,6 +43,7 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"strings"
 )
 
 // noArgs refuses every leftover word on a command that reads none of
@@ -74,7 +75,7 @@ func atMostArgsFor(name string, rest []string, want int) error {
 	if len(rest) <= want {
 		return nil
 	}
-	return fmt.Errorf("%s takes %s, so %q would be ignored -- a value goes with the flag it belongs to",
+	return usageErrorf("%s takes %s, so %q would be ignored -- a value goes with the flag it belongs to",
 		name, argumentCount(want), rest[want])
 }
 
@@ -95,4 +96,147 @@ func argumentCount(n int) string {
 	default:
 		return fmt.Sprintf("%d arguments", n)
 	}
+}
+
+// globalFlagNames are runCLI's own flags, the ones #XC-11 lets a person
+// write after the command as readily as before it: `grain list -json`
+// and `grain ci show ci-42 --json` as well as `grain -json list`.
+var globalFlagNames = map[string]bool{
+	"json": true, "server": true, "token": true, "audience": true, "as": true,
+	"connect-timeout": true, "timeout": true, "context": true,
+}
+
+// freeTextCommands take a body of free text after their id, where a word
+// like "-as" is the sentence's and not a flag (`grain comment 5 file
+// this -as a bug`). A global flag is lifted from them only before the
+// first word that is not a flag.
+var freeTextCommands = map[string]bool{"comment": true, "reply": true, "broadcast": true, "notify": true}
+
+// splitFlag reads one argument as a flag: its name without the dashes
+// (one or two, the same either way), and the value written after an "="
+// if there was one. name is "" for a word that is not flag-shaped.
+func splitFlag(arg string) (name, value string, hasValue bool) {
+	if len(arg) < 2 || arg[0] != '-' || arg == "--" {
+		return "", "", false
+	}
+	name = strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-")
+	if name == "" || name[0] == '-' || name[0] == '=' {
+		return "", "", false
+	}
+	name, value, hasValue = strings.Cut(name, "=")
+	return name, value, hasValue
+}
+
+// liftGlobalFlags sets fs's global flags from wherever they were written
+// among a command's own arguments, and returns those arguments without
+// them -- so no subcommand has to define -json, -server and the rest a
+// second time to accept them after its name. Everything after a bare
+// "--" is left alone, as it is everywhere else.
+func liftGlobalFlags(fs *flag.FlagSet, cmd string, args []string) ([]string, error) {
+	kept := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			kept = append(kept, args[i:]...)
+			break
+		}
+		name, value, hasValue := splitFlag(arg)
+		if name == "" && freeTextCommands[cmd] {
+			kept = append(kept, args[i:]...)
+			break
+		}
+		if !globalFlagNames[name] {
+			kept = append(kept, arg)
+			continue
+		}
+		if !hasValue {
+			if bf, ok := fs.Lookup(name).Value.(interface{ IsBoolFlag() bool }); ok && bf.IsBoolFlag() {
+				value = "true"
+			} else if i+1 < len(args) {
+				i++
+				value = args[i]
+			} else {
+				return nil, usageErrorf("flag needs an argument: -%s", name)
+			}
+		}
+		if err := fs.Set(name, value); err != nil {
+			return nil, usageErrorf("invalid value %q for flag -%s: %v", value, name, err)
+		}
+	}
+	return kept, nil
+}
+
+// parseArgs is flag.FlagSet.Parse for a command that takes positional
+// arguments as well as flags, and it exists because Go's own Parse stops
+// at the first word that is not a flag. Every usage line here is written
+// the way people type these commands -- `grain update <id> [flags]`,
+// `grain repo capabilities [-set a,b] <owner/name>` -- and with a plain
+// Parse the first of those forms silently did nothing at all: the id
+// ended parsing, -title was left among the leftover arguments, fs.Visit
+// saw no flag set, and the command sent an empty request and printed the
+// unchanged task as though it had worked. `grain repo capabilities
+// acme/widgets -set self-debug` was the same shape of quiet failure --
+// it printed the repo's capabilities instead of replacing them.
+//
+// So flags are parsed wherever they appear: Parse is called again on
+// what is left after each positional word, which is what a GNU-style
+// getopt does with permutation, and the positional words are returned in
+// the order they were written. A bare "--" still ends the flags, and
+// everything after it is positional verbatim -- which is how a value
+// that starts with a dash is passed to a command that takes one.
+//
+// `grain comment <id> <body...>` deliberately does not use this: its
+// body is free text, and a body word that happens to name a flag has to
+// stay a body word. misplacedFlag below is what that command says
+// instead of guessing.
+func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
+	var terminated []string
+	for i, arg := range args {
+		if arg == "--" {
+			terminated = args[i+1:]
+			args = args[:i]
+			break
+		}
+	}
+	var positional []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			break
+		}
+		positional = append(positional, rest[0])
+		args = rest[1:]
+	}
+	return append(positional, terminated...), nil
+}
+
+// first is args[0] or "", so a command missing its one positional
+// argument reports that through taskID's own error rather than panicking
+// on an empty slice -- flag.FlagSet.Arg's behaviour, which parseArgs'
+// callers no longer go through.
+func first(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return args[0]
+}
+
+// misplacedFlag reports the first word in args that names a flag defined
+// on fs -- a flag written after the positional arguments, where
+// flag.Parse has already stopped looking at them.
+func misplacedFlag(fs *flag.FlagSet, args []string) (string, bool) {
+	for _, arg := range args {
+		name := strings.TrimLeft(arg, "-")
+		if name == arg || name == "" {
+			continue // not a flag-shaped word, or a bare "--"
+		}
+		name, _, _ = strings.Cut(name, "=")
+		if fs.Lookup(name) != nil {
+			return name, true
+		}
+	}
+	return "", false
 }

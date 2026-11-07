@@ -1030,8 +1030,10 @@ opened by the build that did not start the run.
    default-branch lookup, and `list_issues`/`read_issue`. In a run host
    these read GitHub anonymously, which fails for a private repository.
    The grant directories under it (`-grain-secrets-dir`,
-   `-grain-state-dir`) are absent too. `grain-log` and
-   `deployment-health` then refuse rather than answer unredacted. The
+   `-grain-state-dir`) are absent too. `…/grain#journal` and
+   `…/grain#health` (formerly `grain-log` and `deployment-health`,
+   retired in schema migrations 80 and 81) then refuse rather than
+   answer unredacted. The
    self-debug checkout (`-grain-src-dir`) is a third path that is not
    mounted.
 7. **Is the front door worth its own process**, or do we accept a

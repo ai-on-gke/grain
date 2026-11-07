@@ -12,61 +12,56 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# GitHub Actions port of .grain/workflows/release-train.yml.
+# GitHub Actions port of .grain/workflows/release-train.yml -- retired as a
+# train (design/playbook/releases.playbook.md §0.4, task 2382).
 #
-# Runs daily at 04:15 UTC (and on demand via workflow_dispatch) to drive
-# `scripts/release-from-trunk.sh`:
-#   1. Judges any release candidate currently soaking on staging (`:4280`).
-#      A passing 24h soak tags `vX.Y.0-pending`, publishes `:vX.Y.0-pending`
-#      images, files the release-notes task, and sends the operator approval
-#      notification. A failing soak tags `vX.Y.0-rc.N-discarded`.
-#   2. With nothing soaking, selects the newest known-good `main` commit, tags
-#      `vX.Y.0-rc.N`, force-moves `refs/heads/candidate`, and publishes
-#      `:vX.Y.0-rc.N`, `:candidate`, and `:rc` images.
+# The release train is a grain task now, filed from
+# .grain/templates/release-train.yml on grain's own schedule, and it pushes
+# the rc, -pending and -discarded tags and candidate with that template's
+# narrow `push:` grant. This workflow used to cut on a daily cron, but a
+# GitHub-hosted runner cannot reach the grain deployment or grain-candidate
+# (vars.GRAIN_API_URL, secrets.GRAIN_API_TOKEN, vars.RELEASE_STAGING_URL), so
+# every scheduled run failed preflight. It has no `schedule:` any more, and
+# every run is a dry run, so the two trains can never both cut: a dispatch
+# selects the LKG from GitHub's own runs and says what it would tag, and
+# pushes, publishes and files nothing. Making it cut again is a change to
+# this file, which waits for a review.
 #
-# On non-main refs, `dry_run` defaults to and is enforced as `true`.
-#
-# This repository's gate is GitHub Actions (ci_mode: github), so the train
-# reads main's tests.yml, release.yml and nightly.yml verdicts from this
-# repository's own workflow runs (RELEASE_CI_SOURCE=github, through
-# GITHUB_TOKEN with `actions: read`); grain CI has none. The soak and the
-# task list still come from the grain deployment and grain-candidate, which
-# a GitHub-hosted runner can only reach at the URLs vars.GRAIN_API_URL and
-# vars.RELEASE_STAGING_URL name (with secrets.GRAIN_API_TOKEN): a live run
-# without them is refused before anything is tagged. A dry run without
-# them still selects the LKG from GitHub's runs, with an empty task list.
+# scripts/release-from-trunk.sh reads main's tests.yml, release.yml and
+# nightly.yml verdicts from this repository's own workflow runs
+# (RELEASE_CI_SOURCE=github, through GITHUB_TOKEN with `actions: read`).
 
 name: release-train
 
 on:
-  schedule:
-    - cron: "15 4 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Run release-from-trunk in dry-run mode without pushing git refs or images (always true on non-main refs)"
+        description: "Ignored: this workflow is retired as a train and always runs dry (the release train is .grain/templates/release-train.yml)"
         required: false
-        default: false
+        default: true
         type: boolean
       force:
-        description: "Bypass the 24h soak elapsed-time gate (--force)"
+        description: "Cut an rc.1 inside RELEASE_MIN_INTERVAL_MINUTES of the last release (FORCE=true; a dry run only says what it would cut)"
         required: false
         default: false
         type: boolean
 
 permissions:
   actions: read
+  # grain/release-qualification and grain/rc-hold check runs.
+  checks: read
   contents: write
   packages: write
   id-token: write
 
 env:
   GOFLAGS: -mod=readonly
-  RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO || 'bwsalmon/grain' }}
+  RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO }}
 
 jobs:
   train:
-    name: cut, soak and stage a release from trunk
+    name: dry-run the release train
     runs-on: ubuntu-latest
     timeout-minutes: 120
     concurrency:
@@ -129,12 +124,13 @@ jobs:
               ;;
           esac
 
-          dry_run="${INPUT_DRY_RUN:-}"
-          if [ "$is_main_ref" != "true" ]; then
-            dry_run="true"
-          elif [ -z "$dry_run" ]; then
-            dry_run="false"
+          # Retired as a train: the grain task filed from
+          # .grain/templates/release-train.yml cuts, so this never does.
+          dry_run="true"
+          if [ "${INPUT_DRY_RUN:-}" = "false" ]; then
+            echo "release-train: this workflow is retired as a train and always runs dry; the release train is .grain/templates/release-train.yml" >&2
           fi
+          echo "Running on main: ${is_main_ref}"
           {
             echo "GRAIN_CI_REPO=${GITHUB_REPOSITORY}"
             echo "GRAIN_CI_COMMIT=${GITHUB_SHA}"
@@ -158,38 +154,20 @@ jobs:
       - name: Configure package-publish credentials
         if: env.DRY_RUN != 'true'
         env:
+          DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
           GHCR_PAT: ${{ secrets.GHCR_TOKEN }}
-          FALLBACK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY || 'ghcr.io' }}
-          PUBLISH_USERNAME: ${{ vars.GHCR_USERNAME || 'bwsalmon' }}
+          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY }}
         run: |
           set -euo pipefail
-          token="${GHCR_PAT:-}"
-          username="${PUBLISH_USERNAME}"
-          if [ -z "$token" ]; then
-            case "${RELEASE_IMAGE_REPO}" in
-              bwsalmon/*)
-                token=""
-                ;;
-              *)
-                token="${FALLBACK_TOKEN}"
-                username="${GITHUB_ACTOR}"
-                ;;
-            esac
-          fi
-          if [ -n "$token" ]; then
-            echo "::add-mask::${token}"
-            {
-              echo "PACKAGE_PUBLISH_REGISTRY=${PUBLISH_REGISTRY}"
-              echo "PACKAGE_PUBLISH_USERNAME=${username}"
-              echo "PACKAGE_PUBLISH_TOKEN=${token}"
-            } >> "$GITHUB_ENV"
-            sudo mkdir -p /home/debian
-            printf '%s\n' "${PUBLISH_REGISTRY}" | sudo tee /home/debian/.package-publish-registry >/dev/null
-            printf '%s\n' "${username}" | sudo tee /home/debian/.package-publish-username >/dev/null
-            printf '%s\n' "${token}" | sudo tee /home/debian/.package-publish-token >/dev/null
-            sudo chmod 600 /home/debian/.package-publish-token
-          fi
+          bash ./scripts/configure-dockerhub-auth.sh
+          sudo mkdir -p /home/debian
+          # shellcheck source=scripts/release-image-repos.sh
+          . ./scripts/release-image-repos.sh
+          printf '%s\n' "${PUBLISH_REGISTRY:-$RELEASE_IMAGE_REGISTRY_DEFAULT}" | sudo tee /home/debian/.package-publish-registry >/dev/null
+          printf '%s\n' "${DOCKERHUB_USERNAME:-$DOCKERHUB_USERNAME_DEFAULT}" | sudo tee /home/debian/.package-publish-username >/dev/null
+          printf '%s\n' "${DOCKER_PAT:-${GHCR_PAT:-}}" | sudo tee /home/debian/.package-publish-token >/dev/null
+          sudo chmod 600 /home/debian/.package-publish-token
 
       - name: Configure optional image-signing key
         if: env.DRY_RUN != 'true'
@@ -229,27 +207,7 @@ jobs:
           fi
           if [ -z "${PACKAGE_PUBLISH_TOKEN:-}" ] && [ ! -s /home/debian/.package-publish-token ] && [ "${RELEASE_IMAGES:-}" != off ]; then
             echo "release-train: no package-publish credential reached this ${GRAIN_CI_EVENT:-} run, so the rc and pending images could not be published; nothing was tagged." >&2
-            echo "release-train: configure the GHCR_TOKEN secret (see docs/github-actions-ci.md)." >&2
-            exit 1
-          fi
-
-      - name: Require the grain API and staging endpoints
-        env:
-          GRAIN_API_URL: ${{ vars.GRAIN_API_URL }}
-          GRAIN_API_TOKEN: ${{ secrets.GRAIN_API_TOKEN }}
-          RELEASE_STAGING_URL: ${{ vars.RELEASE_STAGING_URL }}
-        run: |
-          if [ "${DRY_RUN}" = "true" ]; then
-            echo "Dry-run mode enabled: skipping the grain API and staging endpoint requirement"
-            exit 0
-          fi
-          missing=""
-          [ -n "${GRAIN_API_URL:-}" ] || missing="$missing vars.GRAIN_API_URL"
-          [ -n "${GRAIN_API_TOKEN:-}" ] || missing="$missing secrets.GRAIN_API_TOKEN"
-          [ -n "${RELEASE_STAGING_URL:-}" ] || missing="$missing vars.RELEASE_STAGING_URL"
-          if [ -n "$missing" ]; then
-            echo "release-train: a GitHub-hosted runner cannot reach the grain deployment or grain-candidate on localhost; set${missing} to URLs it can reach; nothing was tagged." >&2
-            echo "release-train: see docs/github-actions-ci.md." >&2
+            echo "release-train: configure the DOCKER_PAT secret (see docs/github-actions-ci.md)." >&2
             exit 1
           fi
 
@@ -257,14 +215,14 @@ jobs:
         env:
           GRAIN_API_URL: ${{ vars.GRAIN_API_URL }}
           GRAIN_API_TOKEN: ${{ secrets.GRAIN_API_TOKEN }}
-          RELEASE_STAGING_URL: ${{ vars.RELEASE_STAGING_URL }}
           RELEASE_CI_SOURCE: ${{ vars.RELEASE_CI_SOURCE || 'github' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_IMAGES: ${{ vars.RELEASE_IMAGES }}
           RELEASE_NOTES_TASK: ${{ vars.RELEASE_NOTES_TASK }}
           RELEASE_NOTIFY: ${{ vars.RELEASE_NOTIFY }}
           # The GitHub App (slug or id) grain posts grain/release-qualification
-          # as; a same-named check run from anything else never qualifies an rc.
+          # and grain/rc-hold as; a same-named check run from anything else
+          # never qualifies an rc or lifts a hold.
           RELEASE_QUALIFICATION_APP: ${{ vars.RELEASE_QUALIFICATION_APP }}
           FORCE: ${{ inputs.force || false }}
         run: |
@@ -274,6 +232,5 @@ jobs:
             if [ "${RELEASE_CI_SOURCE}" != github ]; then
               export RELEASE_RUNS_JSON="${RUNNER_TEMP}/dry-run-empty.json"
             fi
-            export RELEASE_TASKS_JSON="${RUNNER_TEMP}/dry-run-empty.json"
           fi
           bash ./scripts/release-from-trunk.sh

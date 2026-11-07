@@ -1,6 +1,12 @@
 # Unified grants: one grant model, one Grants picker
 
 Status: design, with slice 1 (UI only) landed alongside it (task 1060).
+As of 2026-11-07 slices 2–5 have not started (`model.Grant` is still
+`{Capability, Via, Folder}` and there is no `model.CanonicalGrant`), and
+slice 6, the per-capability conversions of §4, is mostly done; §4's
+table says which, and the remaining slices and conversions are filed from
+[Task #3274](/tasks/3274). The overview of capabilities as a whole is
+[capabilities.design.md](capabilities.design.md).
 Operator direction of 2026-10-26: everything a task is given should be
 the same kind of grant, edited in one place in the UI.
 
@@ -13,7 +19,7 @@ own checks and its own form control:
 |---|---|---|---|
 | Grain's own API | `api:<scope>`, `api:<preset>`, either `@owner/repo`-limited ([agent-api.md](../../docs/agent-api.md)) | `task_grant.capability` (the capabilities list) | "Grain API" accordion, `ApiGrantPicker` |
 | Capability server methods | `https://…#method` plus `with:`, stored as `<ref>=<normalized json>` ([capabilities.md](../../docs/capabilities.md), [capabilities-spec.md](../spec/capabilities/capabilities.spec.md)) | `task_grant.capability` | "Capability server methods", `CapabilityMethodGrants` |
-| In-process capabilities | bare names: `gemini-key`, `self-debug`, … (`pkg/capability/`) | `task_grant.capability` | the "Capabilities" checklist |
+| In-process capabilities | bare names: `github-sandbox`, `read-issues`, … (`pkg/capability/`) | `task_grant.capability` | the "Capabilities" checklist |
 | Repository access | `Target`/`Base`, `Reads` (`task_read`), `Writes` (`task_write`, repo + base), a declared template's `push:` refs (`model.RefPush`), CI's `repo-read:<repo>` / `repo-write:<repo>` | their own columns and tables | Repo and Base branch fields, `ReadOnlyReposField`, `WriteReposField` |
 
 The first three already share one list and one table. `model.Grant` is
@@ -57,7 +63,7 @@ shorter, but it would give the codebase a third spelling to recognise.
 | `api:ci:write@acme/widgets` | `{capability: "…/api#ci:write", with: {repo: "acme/widgets"}}` |
 | `api:task-admin` (preset) | `{capability: "…/api#task-admin"}`. A preset is a method whose description lists the scopes it expands to, as today (`model.APIGrantsOf`). |
 | `https://…/gcp#gcp-key` `with: {permission_set: ci}` | unchanged |
-| bare `gcp-key`, `self-debug`, … | unchanged while they exist (they are read as legacy, see §4), then converted, one by one, to a reference |
+| bare `github-sandbox`, `read-issues`, … | unchanged while they exist (they are read as legacy, see §4), then converted, one by one, to a reference |
 | task `Target` + `Base` | `{capability: "…/repo#target", with: {repo, base}}`, exactly one per task with a repo. It is a projection: storage stays `task.target_*`/`task.base` (Q2). |
 | `Reads` entry | `{capability: "…/repo#read", with: {repo}}` |
 | `Writes` entry | `{capability: "…/repo#write", with: {repo, base}}` |
@@ -79,7 +85,7 @@ moved to read the reference rather than the old spelling.
 | Consumer | api | server method | repo |
 |---|---|---|---|
 | **Admission** (`ResolveGrants`, `task_grant_wait`) | Resolves the scope set (`APIGrantsOf`). No resource, never waits. | `attach` / lease as today, including `needs-config` and finite-resource waits. | `#target`/`#write`: the filing team's git credential must reach the repo (today's dispatch check). `#read`: the fetch check `mayRead`. |
-| **Sandbox pass** (`MaterializeGrants`) | Nothing placed; `api_*` tools are served to the run (`agent.RunConfig.Grants`). | `setup_root`/`setup`, `mcp_endpoint` wiring, as today. | `#target` cloned to `/repo`. `#read`/`#write` reachable through the proxy for clone. Nothing else placed. |
+| **Sandbox pass** (`MaterializeGrants`) | Nothing placed; `api_*` tools are served to the run (`agent.RunConfig.Grants`). | `setup_root`/`setup`, `mcp_endpoint` wiring, as today. | `#target` cloned to `work/` under `/home/debian`. `#read`/`#write` reachable through the proxy for clone. Nothing else placed. |
 | **Prompt** | "grain api" tool section, as today. | Method's own prompt text, as today. | The repository section and `writeTargetsSection` (run.go), generated from the grants rather than from three fields. |
 | **Git proxy ref policy** (`AuthorizeRefUpdates`) | none | `git#git-repo` grants, as today | Push to the task's own branch of `#target`, and nothing else, as today. `refs` widen it **only** when read from the declaration on the repository's default branch (`Store.GitDeclaredPush`), never from a copy on the task row. A `refs` value a person or agent types onto a task is refused at write time. `git-push-any-ref` becomes `#write` with `refs: ["refs/heads/*", "refs/tags/*"]`, which `ValidateRefPushPattern` today refuses for declarations; the migration keeps it a team grant, as `git-push-any-ref` was, and whether to make it admin-only is still Q3. |
 | **Approval / danger** | §2 | §2 | §2 |
@@ -134,8 +140,8 @@ once with a fidelity test.**
   and `writes`. A request that sends both for one kind is refused rather
   than merged.
 - **Slice 3 (write one).** Writers switch to references. This is the
-  first change an older binary cannot read, so it waits a release behind
-  slice 2 (the `main`/`candidate` pairing gives that for free).
+  first change an older binary cannot read, so it lands in the release
+  after slice 2 ships.
 - **Slice 4 (migrate once).** One store migration rewrites
   `task_grant`, `schedule_grant`, `template_grant`, repo config's
   `default_capabilities` / `ci_capabilities`, console sessions'
@@ -166,21 +172,21 @@ once with a fidelity test.**
 Operator decision (2026-10-26): the in-process capabilities stay **out**
 of the unified picker, in their own checklist labelled **Legacy
 capabilities**. They are converted, not merged as they are.
-[capabilities.md](../../docs/capabilities.md) already says the providers under
-`pkg/capability/` "stay in use until runs are moved over". This is the
-per-capability list, with what each one becomes:
+This is the per-capability list, with what each one becomes. The
+providers still registered on `main` (`daemon.CapabilityProviders`) are
+the rows not marked **done**:
 
 | In-process id | Becomes (proposed) | Kind of change |
 |---|---|---|
 | `gcp-key` | `https://grain.dev/capabilities/gcp#gcp-key` `{permission_set}` | **done** (task 2430): in-process `gcp-key` and `gcp-key:<name>` providers removed; schema migration 97 seeds `sandbox-agent` and `<name>` permission sets on `https://grain.dev/capabilities/gcp` from `grain_config` and `gcp_key` rows (keeping `/home/debian/.gcp-service-account-<name>.json` key placement) and rewrites stored grants across tasks, templates, schedules, default/CI capabilities, console sessions, catalogue, and policy (`gcp-key` and `gcp-key:<name>` remain one-release aliases; [gcp-key-permission-sets.md](../../docs/gcp-key-permission-sets.md)) |
-| `gemini-key` | `https://grain.dev/capabilities/gcp#gemini-key` (Q6) | **method added** (task 2431): `…/gcp` offers `#gemini-key` when configured with `gemini_key: {project, admin?}`, minting with that admin's credential and placing `/home/debian/.gemini-api-key` with the in-process prompt. Still to do: retire the in-process provider, seed `gemini_key` from `grain_config.gcp_project` and the `gcp-key-minter` secret, and rewrite stored `gemini-key` grants (a later schema migration) |
+| `gemini-key` | `https://grain.dev/capabilities/gcp#gemini-key` (Q6) | **done** (tasks 2431, 2847): `…/gcp` offers `#gemini-key` when configured with `gemini_key: {project, admin?}`, minting with that admin's credential and placing `/home/debian/.gemini-api-key` with the in-process prompt, and reaping unreleased keys older than 24h. The in-process provider is removed; schema migration 103 seeds `gemini_key: {project}` from `grain_config.gcp_project`, minting with the `gcp-key-minter` secret (an existing admin holding it, the top-level admin on an unconfigured entry, or a new `GRAIN_GCP_MINTER_*` admin beside the old one kept as `default`), and rewrites stored grants, `ci_capabilities` and the policy to `…#gemini-key={}`; bare `gemini-key` remains a one-release alias |
 | `<vendor>-proxy` (model proxies) | `https://grain.dev/capabilities/model-proxy#model-proxy` `{vendor}` | **done** (task 2431): the in-process `claude-proxy`, `openai-proxy` and `gemini-proxy` providers removed; `…/model-proxy` is now an in-process server (`pkg/capability/modelproxy.Method`, registered by the daemon over its own proxy endpoints), not the `grain capability model-proxy` built-in, so each mint still forwards with the run's own team connection (the run's agent connection, handed in the mint's context, `model.WithRunConnection`) with no deployment-wide key. Same token registry, same allowlist, same `/home/debian/.<vendor>-proxy-{url,token}` files and the same prompt. Stored grants rewritten to `…#model-proxy={"vendor":"<vendor>"}` by schema migration 100; the bare names remain one-release aliases |
-| `github-credential:<name>` | `…/git#git-repo` `{credential: <name>, repo}` | existing server, gains an argument |
-| `github-sandbox` | `…/github#sandbox-repo` | new method on existing `github` server |
+| `github-credential:<name>` | `…/repo#credential` `{credential: <name>}` | **done** (task 3307): `githubtoken` provider wrapper removed from `daemon.CapabilityProviders`; `https://grain.dev/capabilities/repo#credential` `{credential}` added on the in-process `…/repo` server (`grainserver.RepoServer`), validating `githubtoken.NamePattern` (excluding `"anonymous"`), enumerating configured names under `<secrets>/github`, and refusing tasks holding more than one `#credential` grant with `model.ErrConflictingGitCredentials`. Overrides which named `secrets/github/<name>` credential `pkg/gitproxy`, `-pr-credential` and `git_identity` select on the live task (`TaskGitCredentialOn`, `GitCredentialOverrideOn`), with no `repo` argument yet (like `git-push-any-ref`); `pkg/ui/github_tokens.go` refuses deleting a named credential held via either `repo#credential` or the legacy prefix. Stored grants across tasks, templates, schedules, default/CI capabilities, console sessions, catalogue, and policy rewritten to `https://grain.dev/capabilities/repo#credential={"credential":"<name>"}` (policy rules to `…/repo#credential`) by schema migration 120; `github-credential:<name>` remains a one-release alias |
+| `github-sandbox` | `…/github#sandbox-repo` | **not started**: the in-process `…/github` server exists (`grainserver.GitHubServer`, task 3147), so this needs the `#sandbox-repo` method on it, declaring its `model.CIGrantRule.RepoGranted` rule and reaping stray `grain-sandbox-*` repositories. The `githubsandbox` provider is still registered by `daemon.CapabilityProviders` |
 | `git-push-any-ref` | `…/repo#write` `{refs: ["refs/heads/*", "refs/tags/*"], force: true}` | **done** (task 1063): provider removed, `https://grain.dev/capabilities/repo#write` added on a new in-process `…/repo` server (`grainserver.RepoServer`); its schema validates only that one `refs`/`force` value (beside `{repo}`, a CI job's write access, since task 2365), the one the git proxy honours (`model.IsGitPushAnyRefGrant`), so a narrower task-level `refs` is refused rather than recorded as doing something (Q3). It stays a team grant, not dangerous, as `git-push-any-ref` was. `repo` is not an argument yet: like the bare grant it applies to every repository the task may write. Stored grants rewritten to `https://grain.dev/capabilities/repo#write={"force":true,"refs":["refs/heads/*","refs/tags/*"]}` by schema migration 85 |
-| `local-scripts:<name>` | `…/host-script#host-script` `{script}` | existing server method |
+| `local-scripts:<name>` | `…/host-script#host-script` `{script}`, one grant per script of the declaration | **done** (tasks 2366, 3077): at each start the daemon converts every declaration it can read (`localscripts.ConvertToHostScripts`, including `approve: true` scripts) into scripts `<declaration>-<script>` on the in-daemon host-script server (`https://grain.dev/capabilities/host-script`), binding secrets as `$env:GRAIN_LOCAL_SCRIPTS_<SECRET>` → `$secret:<name>`, rewriting stored grants (`Store.RewriteRetiredGrants`), and keeping `local-scripts:<name>` as a runtime alias (`model.SetRuntimeGrantExpansions`) whose expanded grants remain withheld from scheduled runs and refused to CI jobs (`localscripts.MigratedFrom`). `host-script` supports optional stdin (`grain host-script --stdin <name>`) and per-call `approve: true` via a per-task callback URL + scoped `ghsa_` token handed over at mint (`localexec.HTTPApprover`). `localscripts.DynamicProvider` and `grain mcpserver`'s local-scripts MCP serving are removed |
 | `repo-read:<repo>`, `repo-write:<repo>` (CI) | `…/repo#read` / `…/repo#write` `{repo}` | **done** (task 2365): `reporead` / `repowrite` providers removed; `https://grain.dev/capabilities/repo#read` `{repo}` added and `#write` widened to take `{repo}` beside the any-ref value (`model.IsGitPushAnyRefGrant` still means only the latter). What the providers decided rides on the grant (`model.IsRepoAccessGrant`): it is CI-only (a task holding one is refused with `CIOnlyRefusal`), and `model.RepoAccessAdmitsCIEvent` is write's event gate (release, workflow_dispatch, grain's own trusted schedule). `daemon/ci.go` widens the proxy's scopes from the job's declared ids through that gate. The bare `repo-read:`/`repo-write:` are read as the same grants indefinitely (a repository's own `.grain/workflows`), and the local policy matches either spelling. Stored grants, `repo_config.ci_capabilities` included, rewritten by schema migration 88 |
-| `self-debug` | `…/api#self-debug` preset (already an alias) plus a new `…/grain#source` method for the source checkout and metrics tools | api scope + new in-process server `…/grain` |
+| `self-debug` | `…/api#self-debug` preset (already an alias) plus a new `…/grain#source` method for the source checkout | **done** (task 3146): provider (`pkg/capability/selfdebug`) and its `admincaps.Providers` entry removed; `https://grain.dev/capabilities/grain#source` added on the in-process `…/grain` server for what is not a REST route: `grain-src/` in the sandbox (`placeGrainSource`), `src://` and `src://core/...`, and -- held deployment-wide -- every repository's CI and the whole of `config://`. It stays team-scoped: `admincaps.TeamScoped` now names `grain#source` (`IsTeamScoped` matches any spelling of it, the bare alias included), so `TaskDetail.DeploymentWide` and the mcpserver's CI scope read it as they read `self-debug`. Everything `self-debug` served over a REST route is the `api:self-debug` preset (`tasks:read` + `deployment:read`): the task readers, `read_pipeline_changes`, `read_grain_metrics`, `task://`, `deploy://metrics` and `deploy://pipeline-changes`; the orchestrator forwards `api:self-debug` to the forked mcpserver beside `grain#source` so those tools stay on the roster, and `model.DefaultConsoleSessions()` seeds the director with both. `CanonicalLegacyGrants` maps the bare name to both (`model.SelfDebugGrants`), the catalogue's `in_process.self-debug` binds both, and schema migration 115 rewrites stored grants -- the grant tables, default capabilities, console sessions, `repo_config.ci_capabilities` and the capability policy's catalogue defaults -- to `api:self-debug` + `https://grain.dev/capabilities/grain#source={}`, keeping each once where either was already held (a capability policy rule naming `self-debug` names `…/grain#source`). The bare name remains a one-release alias (`model.IsGrainSourceGrant` and `apiAliasCapabilities` still read it) |
 | `grain-log` | `…/grain#journal` | **done** (task 2037): provider removed, `https://grain.dev/capabilities/grain#journal` added on the in-process `…/grain` server (redaction kept, deliberately in no api preset), stored grants rewritten to `https://grain.dev/capabilities/grain#journal={}` by schema migration 80 |
 | `deployment-health` | `…/api#deployment:read` plus `…/grain#health` for the host/sandbox probes | **done** (task 2037): provider removed, `https://grain.dev/capabilities/grain#health` added on the in-process `…/grain` server alongside `api:deployment:read`, stored grants rewritten to `api:deployment:read` + `https://grain.dev/capabilities/grain#health={}` by schema migration 81 |
 | `self-repair` | `…/grain#host-exec` (each command still needs a live chat reply) | **done** (task 2252): provider removed, `https://grain.dev/capabilities/grain#host-exec` added on the in-process `…/grain` server and marked person-only (`protocol.RequirePersonGrant`), `run_host_command` still built by pkg/capability/selfrepair, still confirmed by a live chat reply (`selfrepair.Confirm`) and still added only to an Interactive task's run; stored grants rewritten to `https://grain.dev/capabilities/grain#host-exec={}` by schema migration 84 (repo_config.ci_capabilities included). Q7 answered: a grant |
@@ -188,28 +194,129 @@ per-capability list, with what each one becomes:
 | `pipeline-control` | `…/api#pipeline-control` preset | **done** (task 2004): provider and its two tools removed, stored grants rewritten to `api:pipeline-control` by schema migration 69 |
 | `dispatch-control` | `…/api#dispatch-control` preset | **done** (task 2004): provider and its four tools removed, stored grants rewritten to `api:dispatch-control` by schema migration 68 |
 | `test-quarantine` | `…/api#tests:write` (new scope), preset `test-quarantine` | **done** (task 2036): provider and `quarantine_test` removed, `POST /api/tests/quarantine` added under `tests:write` and `grain quarantine` gated on it, stored grants rewritten to `api:test-quarantine` by schema migration 76 |
-| `read-issues` | `…/github#read-issues` | new method on `github` server |
+| `read-issues` | `…/github#read-issues` | **done** (task 3147): provider removed, `https://grain.dev/capabilities/github#read-issues` added on a new in-process `…/github` server (`grainserver.GitHubServer`), gated with the same reach as the provider (`grain issue` and `list_issues`/`read_issue` over the repositories the run may read via its team git credential). Stored grants, `repo_config.ci_capabilities` and `capability_policy` rewritten to `https://grain.dev/capabilities/github#read-issues={}` by schema migration 121; bare `read-issues` remains an input-only alias for one release |
 | `release-notes` | `…/api#release-notes` preset (`release-notes:read` + `release-notes:write`) | **done** (task 2035): provider and its tools removed, `/api/release-notes*` routes moved to `release-notes:read`/`release-notes:write`, stored grants rewritten to `api:release-notes` by schema migration 72 |
 | `memory` | `…/api#memory` preset (`memory:read` + `memory:write`) | **done** (task 2035): provider and its tools removed, stored grants rewritten to `api:memory` by schema migration 71 |
 | `team-broadcast` | `…/api#teams:broadcast` (new scope), preset `team-broadcast` | **done** (task 2004): provider and `broadcast_team_message` removed, stored grants rewritten to `api:team-broadcast` by schema migration 67 |
-| `bootstrap-playbooks` | `…/skill#skill` `{dir: bootstrap}` | existing server method |
-| `console` | stays a task setting, not a grant (it changes how the run is hosted, not what it may reach) | moved out of grants (Q8) |
+| `bootstrap-playbooks` | `…/config-map#config-map` `{"config_maps":["bootstrap"]}` | **done** (task 3148): embedded markdown moved to `pkg/playbooks`, `pkg/capability/bootstrap` and its two MCP tools deleted, and `bootstrap.New()` removed from `daemon.CapabilityProviders`. The built-in `…/config-map` server always serves a reserved `bootstrap` map placing `/home/debian/.config-map/bootstrap/*.md` (`0644`, never included in an implicit empty-args mint) with the live-approval `run_host_command` prompt guidance (`grain capability skill -dir bootstrap` serves the same embedded directory); `src://playbooks` and `grain playbooks` remain enabled by the grant. Stored grants and `repo_config.ci_capabilities` rewritten to `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}` (policy rules to `…/config-map#config-map`) by schema migration 118; bare `bootstrap-playbooks` remains a one-release input alias. Task 3274 had recorded `…/grain#playbooks` as the target; task 3148's brief named the config-map server instead, and the concerns behind `#playbooks` are met here: the embedded map needs no operator configuration (the built-in server serves it even with no config-map directory), an embedded-only grant (`model.IsEmbeddedBootstrapOnlyGrant`) is minted and placed on the unisolated `host` backend while operator config maps stay refused there, and `DefaultConsoleSessions()` seeds `model.BootstrapPlaybooksGrant` |
+| `console` | task setting `hosting: unattended \| console` (§4.1) | **decided** (Q8, 2026-11-04): moved out of grants. Not started: `pkg/capability/console` is still a provider in `daemon.CapabilityProviders` |
+| `priority-dispatch` | task setting `admission: standard \| bypass` (§4.1) | **done** (task 3144): an `admission` column (`standard \| bypass \| durable`) on tasks, templates and schedules, with `default_admission` on repository and deployment settings; `Task.HasPriorityDispatch` is `Admission >= bypass` and `priorityDispatchTaskSQL` the column predicate. Only a person may raise it above `standard` (agent-filed tasks and proposals asking for more wait for a person; the pipeline steward template and console sessions set it by construction), and each change is an `admission-changed` task event with old value, new value and actor. Schema migration 122 moved stored grants from tasks, templates, schedules, default capability lists and console sessions into the column and dropped the catalogue and policy entries (Q10); `pkg/capability/prioritydispatch` and its `daemon.CapabilityProviders` entry are removed, the task pane's toggle is an **Admission** select, and the bare name is a one-release input alias mapped to `bypass` with a deprecation warning |
+| `durable` | task setting `admission: durable` (§4.1) | **done** (task 3144): with `priority-dispatch` above; `Task.IsDurable` is `Admission == durable` and `durableTaskSQL` the column predicate, a row holding both grants migrated to `durable`, `pkg/capability/durable` and its `daemon.CapabilityProviders` entry removed, and the bare name a one-release input alias mapped to `durable` with a deprecation warning |
+| `release-gate-read` (CI) | `…/api#release-gate-read` preset | **already an alias**: the bare name is read as `api:release-gate-read` and served through `ciapi.NewAlias`, which `daemon.CapabilityProviders` still registers. It retires with api grants becoming references (slices 2–4) |
 | `db-read`, `db-write` | `…/grain#sql` `{write: bool}` | **done** (task 2037): providers removed, `https://grain.dev/capabilities/grain#sql` (`{write: bool}`, with `write: true` dangerous) added on the in-process `…/grain` server, stored grants rewritten to `https://grain.dev/capabilities/grain#sql={"write":false}` / `{"write":true}` by schema migration 82 |
 | `grain-ci` | `…/grain#ci` | **done** (task 2364): provider removed, `https://grain.dev/capabilities/grain#ci` added on the in-process `…/grain` server (still granted solely from a repository's CI Mode and refused when attached by hand), stored grants rewritten to `https://grain.dev/capabilities/grain#ci={}` by schema migration 96 (repo_config.ci_capabilities included) |
 | `image-signing`, `registry-push`, `package-publish` (CI) | `…/release#image-signing`, `…/release#registry-push`, `…/release#package-publish` | **done** (task 2432): the three providers removed from the daemon's registry; `…/release` is an in-process server (`pkg/capability/release`) whose mints are the retired providers' own Resolve and Materialize for the CI job in the mint's context (`model.WithCIMint`). The CI-only, event (image-signing: `release`; the others: `release`, `workflow_dispatch`, and package-publish grain's trusted schedule) and repository-list rules are declared by the server (`capability.Method.CI`, `model.CIGrantRule`) and enforced ahead of `capability_policy`, which can only narrow them. Stored grants rewritten to `…#<name>={}` by schema migration 101; the bare names remain one-release aliases |
-| `corp-research` (wrapper distribution build) | a `…/corp#research` method registered by the wrapper distribution's build through the same `capability.Register` seam | **seam landed, wrapper half pending** (task 2377): core's `capability.Register` takes an in-process server ID, a `protocol.MethodSpec`, `RunGrant`, `DefaultOn`, display name, description and legacy bare `Aliases`; `grainserver.Lookup`/`IsInProcessGrant`/`Statuses` (and so admission, `GET /api/capability-methods` and the mcpserver allowlist) resolve the server built from registered methods, `capability.RunGrants` forwards the method's ref, grant and aliases to the run, aliases go through `model.RegisterLegacyGrantAlias` into `CanonicalLegacyGrant(s)`, and antigravity matches a host-tool grant by method. Stored grants are rewritten to `https://grain.dev/capabilities/corp#research={}` by schema migration 86 (repo_config.ci_capabilities included). The wrapper distribution's build still has to register the method with `corp-research` as its alias and delete its `corpresearch` provider |
+| `corp-research` (wrapper distribution build) | a `…/corp#research` method registered by the wrapper distribution's build through the same `capability.Register` seam | **done** (task 2377): core's `capability.Register` takes an in-process server ID, a `protocol.MethodSpec`, `RunGrant`, `DefaultOn`, display name, description and legacy bare `Aliases`; `grainserver.Lookup`/`IsInProcessGrant`/`Statuses` (and so admission, `GET /api/capability-methods` and the mcpserver allowlist) resolve the server built from registered methods, `capability.RunGrants` forwards the method's ref, grant and aliases to the run, aliases go through `model.RegisterLegacyGrantAlias` into `CanonicalLegacyGrant(s)`, and antigravity matches a host-tool grant by method. Stored grants are rewritten to `https://grain.dev/capabilities/corp#research={}` by schema migration 86 (repo_config.ci_capabilities included). The wrapper distribution's build now registers the method (`capability.Register(Method())` in its `capability/corpresearch`) with `corp-research` as its alias, and its `corpresearch` provider is gone |
 
-How `self-debug`, `grain-log` and `deployment-health` style grants fit:
-they are grain reading itself. Each becomes either api scopes (anything
-that is a REST route already) or methods of one in-process `…/grain`
-server for the parts that are not routes: the source checkout, the
-journal and host probes. That server is answered by the daemon, exactly
-like `…/api` and `…/repo`. `grain-log` stays separate from `self-debug`
-for the reason its description gives: the journal is a different
-exposure. Converting one capability is one task. It adds the
-method, makes `CanonicalGrant` map the bare id to it, migrates its rows,
-and deletes the provider. Until then, the bare id keeps working and
-stays in the legacy checklist.
+How the `self-debug`, `grain-log` and `deployment-health` style grants
+fit (all three now converted): they are grain reading itself. Each
+became either api scopes (anything that is a REST route already) or
+methods of one in-process `…/grain` server for the parts that are not
+routes: the source checkout (`#source`), the journal (`#journal`) and
+host probes (`#health`). That server is answered by the daemon, exactly
+like `…/api` and `…/repo`. `grain#journal` stays separate from
+`grain#source` for the reason its description gives: the journal is a
+different exposure. Converting one capability is one task. It adds the
+method, makes `CanonicalLegacyGrant(s)` map the bare id to it, migrates
+its rows, and deletes the provider. Until then, the bare id keeps working
+and stays in the legacy checklist.
+
+### 4.1 Admission and hosting are task settings, not grants
+
+`console`, `priority-dispatch` and `durable` are grants in name only.
+None of them mints, places or reaches anything: each provider is a bare
+`Spec` over `model.BaseCapability`, and `pkg/capability/durable` says it
+"exists so the grant is offered, listed and audited like any other
+capability". What they really change is how the task is scheduled and
+hosted, and the grant table is only where that is stored:
+`Task.HasPriorityDispatch` and `Task.IsDurable` loop over `t.Grants`, and
+dispatch asks `priorityDispatchTaskSQL`, an `EXISTS` over `task_grant`, in
+`StartRun`'s own transaction. They move out of grants into two task
+settings (operator decision, 2026-11-04, Q8).
+
+**`admission: standard | bypass | durable`** replaces `priority-dispatch`
+and `durable`. The values are ordered, and each one includes the one
+before it, which is how the grants already behave (`durable` implies
+`priority-dispatch` in two hand-kept places, `HasPriorityDispatch` and
+the SQL's `IN (?, ?)`):
+
+| Value | What a run of it gets | Today |
+|---|---|---|
+| `standard` | ordinary admission: worker and merger counts, pipeline pause, base-repair parking, per-connection concurrency limit, CI preemption | neither grant |
+| `bypass` | admitted outside the worker and merger counts, ordered ahead of mergers and ordinary work, passes a pipeline pause other than an upgrade's own hold, never parked behind a red base branch's repair, not held by a connection's concurrency limit, never preempted by CI; still charged to the sandbox budget under the priority policy | `priority-dispatch` |
+| `durable` | `bypass`, plus no wall-clock deadline and no wait-credit cap, suspended by the idle watchdog instead, counted under `Limits.Durable` rather than `max_workers`, setup failures suspended rather than counted | `durable` |
+
+The name is chosen to avoid "priority" on purpose. The numeric
+`task.priority` column (schema migration 73) is a different thing and is
+unchanged: it orders the queue (`taskQueueOrderSQL`) and nothing else.
+It goes on ordering tasks within an admission level. In the UI the
+setting reads **Admission: Standard / Bypass queue / Durable**.
+
+**`hosting: unattended | console`** replaces `console`: whether dispatch
+starts the agent CLI on a pseudo-terminal for somebody to type into
+(`pkg/console`), or hands it a prompt and reads the answer back. It
+stays separate from `admission` because it says who drives the run, not
+when it is let in. Every console session is `admission: durable` by
+construction (`model.ConsoleSessionGrants` adds `durable` today), and it
+is `hosting: console` only if it holds `console` today. `hosting` is
+also still not `Interactive`, which marks a task filed as a live chat
+and changes nothing about how the run is driven.
+
+What carries over:
+
+- **Only a person may raise `admission`** above `standard`, as
+  `IsPersonOnlyGrant` does for the two grants today. A task an agent
+  files, or a proposal, that asks for more waits for a person the way
+  `EscalatedCapabilities` makes a grant wait today. Two places set it
+  by construction and stay exempt: `pipelineStewardTemplate` (`bypass`,
+  and in fact `durable`, which includes it: the steward held both grants,
+  and a row holding both migrates to `durable`, DT-6)
+  and `model.ConsoleSessionGrants` (`durable`). `hosting` has
+  no such rule, because `console` has none today.
+- **Same places as today.** Both settings are columns on tasks,
+  templates and schedules. Repositories and the deployment can set
+  defaults for them, which replaces naming `console` (or either
+  admission grant) in `DefaultCapabilities`.
+- **Audit.** A change to either setting is recorded as a task event
+  with the old value, the new value and the actor, the way grant attach
+  and detach are recorded today.
+- **One predicate.** `HasPriorityDispatch` becomes `t.Admission >=
+  AdmissionBypass`, `IsDurable` becomes `t.Admission == AdmissionDurable`,
+  and `priorityDispatchTaskSQL` / `durableTaskSQL` become
+  `t.admission IN ('bypass', 'durable')` / `t.admission = 'durable'`: a
+  column read in place of a subquery.
+- **Who may hold it.** `catalogueEditRefusal` checks
+  `priority-dispatch` against the catalogue's `CatalogueInProcess`
+  restrictions (repos, templates, kinds) today. No deployment narrows
+  them (Q10), so nothing replaces that check. The person-only rule and
+  `Limits.Durable` are the only gates.
+
+Migration, like the other conversions:
+
+1. One schema migration moves `console`, `priority-dispatch` and
+   `durable` rows into the new columns, from wherever grants are stored:
+   tasks, templates, schedules, deployment and repository default
+   capability lists, console sessions, the catalogue and the policy. It
+   then deletes the rows. A task holding both admission grants becomes
+   `durable`. Catalogue and policy entries for the three names are
+   dropped, not converted (Q10).
+2. For one release the bare names are still accepted on input (API,
+   `-grant`, declarations, grain/config import) and turned into the
+   setting with a deprecation warning. They are never written.
+3. `pkg/capability/console`, `pkg/capability/durable` and
+   `pkg/capability/prioritydispatch` are deleted, along with their
+   entries in `daemon.CapabilityProviders`. The task pane's
+   `PriorityDispatch` toggle, which today adds and removes the grant,
+   becomes the Admission select. All three leave the Legacy
+   capabilities checklist.
+4. The docs that describe them as grants are updated:
+   [durable-tasks.design.md](durable-tasks.design.md) (DT-1, DT-7, and the sessions
+   section's "a task with the `durable` grant") and
+   [capabilities.md](../../docs/capabilities.md).
+
+This is two tasks, not three. `admission` is one task because
+`priority-dispatch` and `durable` share every predicate. `hosting` is
+the other.
 
 ## 5. The UI
 
@@ -308,6 +415,18 @@ should adopt `GrantsPicker` once 885 lands, which is a follow-up there.
   Interactive-only rule are what keep it safe, and both stay.
 - **Q8.** `console` is how a run is hosted, not access. Should it move out
   of grants into a task setting?
+  **Answered (2026-11-04, operator): yes, and `priority-dispatch` and
+  `durable` with it.** None of the three reaches anything. They become
+  the `hosting` and `admission` task settings (§4.1).
 - **Q9.** Retirement order for §4. Proposed: the api-alias ones first
   (no new code), then the model proxies and `gcp-key` (servers exist),
   then the new `…/grain` server.
+- **Q10.** Does `admission` need its own "who may set it" restriction?
+  Today the catalogue can limit `priority-dispatch` and `durable` to
+  certain repos, templates and kinds (`CatalogueInProcess`, checked by
+  `catalogueEditRefusal`).
+  **Answered (2026-11-04, operator): no.** No deployment sets anything
+  but the default for these. The person-only rule and `Limits.Durable`
+  are enough, no `admission:` allowlist is built, and the migration
+  drops the catalogue and policy entries for the three names instead of
+  converting them.

@@ -63,12 +63,15 @@ It carries none of the host CLI's commands.
 The task CLI's target daemon **MUST** be:
 1. `-server`, when given;
 2. else `$GRAIN_SERVER`;
-3. else `GRAIN_SERVER` in the CLI env file;
-4. else `http://127.0.0.1:4242`.
+3. else the `server` of the selected context, when it has one;
+4. else `GRAIN_SERVER` in the CLI env file;
+5. else `http://127.0.0.1:4242`.
+
+The context is `-context`, else `$GRAIN_CONTEXT`, else `current` in `$XDG_CONFIG_HOME/grain/config.json` (else `~/.config/grain/config.json`). A missing `config.json` means no context. This is [`external-cli.spec.md` #XC-2 and #XC-3](../external-cli/external-cli.spec.md#XC-3), and the commands that manage contexts are [`host.spec.md` #CLI-108](host.spec.md#CLI-108).
 
 The source that won is remembered and reported in connection errors ([#CLI-7](#CLI-7)). `-server` is only a global flag of the task CLI; mode commands that talk to a daemon (`sync`, `demo`'s clients, `mcpserver -server`) take their own flags listed in `host.spec.md`.
 
-**Pinned by:** `pkg/cli/cliconn_test.go`: `TestTheCLIFindsItsDaemonInCLIEnv`, `TestARefusedConnectionFailsFastAndSaysWhereTheDaemonIs`.
+**Pinned by:** `pkg/cli/cliconn_test.go`: `TestTheCLIFindsItsDaemonInCLIEnv`, `TestContextCommandsAndServerPrecedence`, `TestARefusedConnectionFailsFastAndSaysWhereTheDaemonIs`.
 
 ### 2.3 Data directory {#CLI-5}
 
@@ -93,13 +96,13 @@ The exceptions:
 2. a programmatic `TokenProvider` (none is set by `cmd/grain` today);
 3. the first non-empty of `$GRAIN_TOKEN`, `$GRAIN_AUTH_TOKEN`, `$GRAIN_ID_TOKEN`, `$GRAIN_TUNNEL_TOKEN`;
 4. for a loopback server only, the **local API token**, which is the daemon's **access code**. It is read from `$GRAIN_LOCAL_API_TOKEN_FILE`, else `$GRAIN_DATA_DIR/local-api-token`, and silently skipped when it cannot be read;
-5. a Google ID token, when `-audience` is set or the server is `https://` or `*.run.app`. The token comes from Application Default Credentials for the audience (default: the server URL), else `gcloud auth print-identity-token --audiences=<aud>`, else, for `*.run.app` servers only, a plain `gcloud auth print-identity-token`. It is cached until a minute before it expires.
+5. a Google ID token, when `-audience` (`$GRAIN_AUDIENCE`, else `$GRAIN_TUNNEL_AUDIENCE`) is set or the server is `https://` or `*.run.app`. The token comes from Application Default Credentials for the audience (default: the server URL), else `gcloud auth print-identity-token --audiences=<aud>`, else, for `*.run.app` servers only, a plain `gcloud auth print-identity-token`. It is cached until a minute before it expires.
 
-A chosen credential **MUST** be sent with any leading `Bearer ` stripped, as both `Authorization: Bearer <tok>` and `X-Grain-Tunnel-Token: <tok>`. `-as` **MUST** be sent as `X-Forwarded-User`. Every request carries `User-Agent: grain-cli` unless one is already set.
+A chosen credential **MUST** be sent with any leading `Bearer ` stripped, as both `Authorization: Bearer <tok>` and `X-Grain-Tunnel-Token: <tok>`. `-as` (`$GRAIN_USER`) **MUST** be sent as `X-Forwarded-User`. Every request carries `User-Agent: grain-cli` unless one is already set.
 
 A scoped external agent token (`gma_…`) is not special-cased by the CLI. Passed as `-token` or `$GRAIN_TOKEN`, it is sent like any other bearer. The daemon authenticates it as `external:<name>`, held to its own scopes (`pkg/ui/server.go`, `pkg/ui/external_agents.go`). In **IAP mode** (`grain daemon -ui-require-iap`), the CLI reaches the daemon through the IAP proxy with a Google ID token minted for the IAP audience (`-audience`). Loopback break-glass is specified in [`authentication.spec.md` §5](../authentication/authentication.spec.md).
 
-**Pinned by:** `pkg/cli/cli_flags_test.go`: `TestRunCLI_GlobalFlags`; `pkg/ui/httpclient_auth_test.go`.
+**Pinned by:** `pkg/cli/cli_flags_test.go`: `TestRunCLI_GlobalFlags`, `TestRunCLI_EnvVarDefaults`, `TestAudienceDefault_EnvVars`, `TestAsUserDefault_EnvVars`; `pkg/ui/httpclient_auth_test.go`.
 
 ### 3.2 Timeouts, retry and connection errors {#CLI-7}
 
@@ -108,12 +111,12 @@ A scoped external agent token (`gma_…`) is not special-cased by the CLI. Passe
 3. `explainDaemonError` **MUST** rewrite:
    - a refused connection or DNS failure into `no grain daemon answered at <url>[ (the default)| (from <source>)]<hint>. Set GRAIN_SERVER or pass -server (<root cause>)`;
    - a timeout into `the grain daemon at <where> did not answer in time (-connect-timeout <d>, -timeout <d>)<hint>. Set GRAIN_SERVER or pass -server, or pass a longer -timeout for a slow call (<root cause>)`;
-   - a 401, or a 403 saying `does not have access to this server`, into `the grain daemon at <where> refused this CLI's credentials (<daemon's message>): <credential hint>`. The credential hint says whether the local API token is absent, unreadable (naming the account to `sudo -u` as), or stale.
+   - a 401, or a 403 saying `does not have access to this server`, into `the grain daemon at <where> refused this CLI's credentials (<daemon's message>): <credential hint>`. The credential hint follows the credential source: `the token passed with -token was refused` when `-token` was given; `the token from $<VAR> was refused` when `$GRAIN_TOKEN` (or `$GRAIN_AUTH_TOKEN`, `$GRAIN_ID_TOKEN`, `$GRAIN_TUNNEL_TOKEN`) supplied it; for a loopback server with no explicit token, whether the local API token is absent, unreadable (naming the account to `sudo -u` as), or stale; and for a non-loopback server with no explicit token, `no -token was given; pass a token with -token or set GRAIN_TOKEN` (no local-token advice).
 
    `<hint>` is `; this host's daemon listens on <url> per <cli.env path>` when the CLI env file names a different server.
 4. Any other error, including every structured error the daemon returns, **MUST** pass through unchanged.
 
-**Pinned by:** `pkg/cli/cliconn_test.go`: `TestARefusedConnectionFailsFastAndSaysWhereTheDaemonIs`, `TestAnUnansweredCallTimesOut`, `TestATimeoutNamesTheHostDaemonAfterTheServerThatTimedOut`, `TestAnUnauthorisedCallNamesTheUnreadableToken`, `TestADaemonErrorIsNotRewritten`; `pkg/cli/list_unavailable_test.go`: `TestListStopsAtTheFirstCallTheDaemonDidNotAnswer`.
+**Pinned by:** `pkg/cli/cliconn_test.go`: `TestARefusedConnectionFailsFastAndSaysWhereTheDaemonIs`, `TestAnUnansweredCallTimesOut`, `TestATimeoutNamesTheHostDaemonAfterTheServerThatTimedOut`, `TestAnUnauthorisedCallNamesTheUnreadableToken`, `TestAnUnauthorisedCallNamesTheCredentialSource`, `TestADaemonErrorIsNotRewritten`; `pkg/cli/list_unavailable_test.go`: `TestListStopsAtTheFirstCallTheDaemonDidNotAnswer`.
 
 ---
 
@@ -144,12 +147,12 @@ A scoped external agent token (`gma_…`) is not special-cased by the CLI. Passe
 
 | CLI | Status | Meaning |
 |---|---|---|
-| task CLI (`runCLI`) | 0 | success |
-| task CLI | 1 | any error, printed as `grain: <message>` on stderr. This includes flag errors (`flag provided but not defined: -x`) and `-h` (`grain: flag: help requested`, after the command's usage) |
-| mode commands | 0 / 1 | each mode exits 1 on error after printing `grain <mode>: <message>`. Exceptions are listed per command in `host.spec.md`: `init` has three outcomes, `backup -h` exits 0, and `version`, `schema-version` and the image printers exit 0 |
+| task CLI (`runCLI`) | 0 | success (and `-h` / `--help`) |
+| task CLI | 1–5 | classified exit codes per [external-cli #XC-13](../external-cli/external-cli.spec.md#XC-13): `1` target failed or unclassified `5xx`/daemon error, `2` CLI usage error / unknown flag / `400`/`404`/`409`/`422`, `3` authentication or authorization failure (`401`/`403` / login redirect), `4` daemon unreachable (DNS, refused/reset TCP, TLS mismatch, HTTP timeout), `5` blocking wait (`wait`, `ci wait`) timed out; printed as `grain: <message>` on stderr in text mode or `{"error": ...}` under `-json` |
+| mode commands | 0 / 1 | each mode exits 1 on error after printing `grain <mode>: <message>`. Exceptions are listed per command in `host.spec.md`: `init` has three outcomes, `backup -h` and `access-code -h` exit 0, `release-notes` given stray arguments exits 2 (`grain release-notes: unexpected arguments: …`), and `version`, `schema-version` and the image printers exit 0 (they ignore stray arguments) |
 | sandbox CLI | 0 | success |
 | sandbox CLI | 1 | an error. Either the proxy refused (its body printed as `grain: <body>`), the transport failed (`grain: reaching the sandbox proxy at <base>: <err>`), or a verdict command reported failure (`ci wait`/`run-job` on a failed run; `grep` on a truncated walk that matched nothing) |
-| sandbox CLI | 2 | a usage error, printed as given with no `grain:` prefix: an unknown command, subcommand or flag, a missing positional argument, or a malformed count |
+| sandbox CLI | 2 | a usage error, printed as given with no `grain:` prefix: an unknown command, subcommand or flag, a missing positional argument, or one of the malformed counts the parser checks itself (`grep -C`/`--max`, `read --page`, `log` counts). Value checks made later by the command are status-1 errors with the `grain:` prefix instead: `task list --limit 0`, `ci wait`/`run-job --timeout`, `pr --comment-id`/`--line`, `task propose --priority`/`--custom-field`/`--not-before`/missing `--body`, `git revert` without exactly one of `--task`/`--commit` |
 
 **Pinned by:** `pkg/sandboxcli/flags_test.go`: `TestMissingArgumentIsAUsageError`, `TestUnknownSubcommandGetsTheSandboxHelp`; `pkg/sandboxcli/flags_test.go`: `TestSandboxCommandsRefuseFlagsTheyDoNotRead`; `pkg/cli/init_test.go`: `TestInitExitCodeDistinguishesTheThreeOutcomes`; `pkg/cli/backup_test.go`: `TestBackupHelpExitsZero`; `pkg/sandboxcli/actions_test.go`: `TestSandboxCIWaitReportsEachVerdict`.
 
@@ -165,7 +168,7 @@ A scoped external agent token (`gma_…`) is not special-cased by the CLI. Passe
    - parsing stops at the first non-flag argument.
 2. To accept `grain <verb> <id> [flags]`, task commands reorder arguments (`parseArgs`) so flags after the id are parsed. Exception: `comment` keeps everything after the id as its body. A flag written after the id **MUST** be refused with a message naming the flag (`misplacedFlag`).
 3. A task command given positional arguments it has no use for **MUST** refuse them (`atMostArgs`).
-4. Global flags **MUST** come before the command.
+4. Global flags (`-url`, `-token`, `-token-file`, `-context`, `-as`, `-json`) are accepted either before or after the command (`liftGlobalFlags`, [external-cli #XC-11](../external-cli/external-cli.spec.md#XC-11)), except after `comment <id>`, where every remaining token belongs to the comment body.
 
 **Pinned by:** `pkg/cli/args_test.go`: `TestCommandsRefuseArgumentsTheyHaveNoUseFor`, `TestHostLocalCommandsRefuseArgumentsTheyHaveNoUseFor`, `TestArgumentCheckWording`; `pkg/cli/comment_flag_order_test.go`: `TestCommentRefusesAFlagWrittenAfterTheTaskID`, `TestMisplacedFlagOnlyMatchesThisCommandsOwnFlags`.
 
@@ -204,6 +207,7 @@ The command and flag tables in `host.spec.md` and `sandbox.spec.md` are **genera
 The guard does **not** check:
 - flags of in-tree capability servers (`grain capability <server> …`), which belong to each server's package;
 - flags `pkg/cli` builds with non-literal names;
+- subcommand verbs missing from the hand-kept `hostSpecSubcommands` list: they are never run with `-h`, so a new verb is not noticed, and a flag added to one is caught only by the literal-name test. Today that is `access list|allow|deny` and `db upgrade-postgres|upgrade-sqlite-to-postgres` (none of which has flags of its own);
 - the per-tool flags of `grain cap`, which are generated from each tool's schema at run time.
 
 **Pinned by:** the three tests named above.
@@ -215,22 +219,16 @@ The guard does **not** check:
 Places where a design says something the code does not do. The designs were not changed here.
 
 1. **`external-cli.design.md` and `external-cli.spec.md`** (task #2767):
-   - The binary registers **no** `grain context`, `grain login`, `grain logout`, `grain whoami`, `grain skill` or `grain mcp` command, and does not read `~/.config/grain/config.json`. Server resolution is `-server` → `$GRAIN_SERVER` → cli.env → default ([#CLI-4](#CLI-4)), with no context step (XC-1–XC-3).
-   - `sandboxcli` yields to the host CLI only for `GRAIN_SANDBOX_CLI=0|false` or a non-empty `$GRAIN_SERVER`. It does **not** yield for `$GRAIN_CONTEXT` or for a `-server`/`-context` flag (XC-3.4).
-   - Credential sources registered through `cli.RegisterCredentialSource` (XC-4, XC-10) do not exist. `TokenProvider` is never set by `cmd/grain`.
-2. **Help text that claims environment variables the code does not read:**
-   - The global usage and the `-audience` flag name `$GRAIN_AUDIENCE` and `$GRAIN_TUNNEL_AUDIENCE`, but `HTTPClient` reads neither; `$GRAIN_AUDIENCE` is read only by the daemon's IAP verifier.
-   - `-as` names `$GRAIN_USER`, which nothing reads.
-   - The fix belongs in the code or the help, not here.
-3. **`sandbox-first-agent-surface.design.md`:**
+   - The binary registers **no** `grain skill` or `grain mcp` command. Contexts, `grain login`, `logout`, `whoami`, `cli.RegisterCredentialSource` and the sandbox CLI's yielding for `-server`, `-context` and `$GRAIN_CONTEXT` (XC-1–XC-4, XC-7–XC-10) are implemented ([#CLI-4](#CLI-4), [`host.spec.md` #CLI-108](host.spec.md#CLI-108)).
+2. **`sandbox-first-agent-surface.design.md`:**
    - §4 says every subcommand has a `--json` mode "where applicable". In the code only `notify`, `task list`, `task wait`, `task propose`, `api` and `cap` take `--json`; every other command prints the proxy's text.
    - §7 writes `grain log [--since ...] [--grep ...]`. The code's substring filter is `--contains`, and `--grep` is refused as an unknown flag.
    - §4's prompt bullet writes `grain metrics [--section <name>]`. The code takes the section as a positional argument (`grain metrics <section>`), and `--section` is refused.
    - The design leaves write commands to MCP tools, but the CLI also has `status`, `handover write`, `task message`, `task propose`, `notify`, `pr reply|resolve|review-comment`, `git revert`, `memory write|doc-write`, `quarantine`, `release-notes publish`, `api` and `cap`.
    - The turn-ending controls stay MCP-only. `task wait --park`/`--resume-at` are refused, and `task propose` refuses `--supersedes`, `--auto-merge` and `--hold-for-approval=false` ([`sandbox.spec.md` #CLI-93](sandbox.spec.md#CLI-93)).
-4. **`cli-run-location.design.md`** is about where agent CLIs (claude, codex, agy) run, not about `grain`'s own CLI. Its command-line surface is the daemon's `-claude-run`, `-codex-run` and `-agy-run` flags and `grain hostd`, and both exist as it describes ([`host.spec.md`](host.spec.md), `grain daemon` and `grain hostd`). No divergence was found in the CLI surface.
-5. **Commands the task brief names that do not exist:**
-   - There is no `grain upgrade` command: schema upgrades are `grain state prepare-upgrade`, and the store move is `grain upgrade-postgres`/`grain db`.
+3. **`cli-run-location.design.md`** is about where agent CLIs (claude, codex, agy) run, not about `grain`'s own CLI. Its command-line surface is the daemon's `-claude-run`, `-codex-run` and `-agy-run` flags and `grain hostd`, and both exist as it describes ([`host.spec.md`](host.spec.md), `grain daemon` and `grain hostd`). No divergence was found in the CLI surface.
+4. **Commands the task brief names that do not exist:**
+   - There is no `grain upgrade` command: schema upgrades are `grain state prepare-upgrade`, and the store move is `grain upgrade-postgres`/`grain db upgrade-postgres`.
    - There is no `grain executor` command.
    - `grain create` and `grain ci` are task-CLI commands, not modes.
 

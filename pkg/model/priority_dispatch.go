@@ -21,37 +21,14 @@ import (
 	"fmt"
 )
 
-// PriorityDispatchCapability is the grant that gives a task the admission
-// console sessions get (docs/capabilities.md's priority-dispatch): a run
-// of it is admitted outside every worker and merger count, ordered ahead
-// of mergers and ordinary work, passes a pipeline pause other than an
-// upgrade's own hold, is never parked behind a red base branch's repair,
-// and is not held by a provider connection's concurrency limit. It still
-// charges the sandbox budget, on the same priority policy a session's
-// does (Limits.AdmitDirectorSandboxShape, Budget.AdmitsPriority).
-//
-// Only a person may grant it (IsPersonOnlyGrant): it lets the task jump
-// the queue, so an agent can neither attach it to work it files nor pass
-// it on from a task that holds it. grain's own system templates are the
-// one exception, and only because they carry it by construction (the
-// pipeline steward's, pipelineStewardTemplate).
-//
-// Named here rather than only in pkg/capability/prioritydispatch because
-// the store has to recognise it: the identity is a SQL predicate
-// (priorityDispatchTaskSQL) read inside StartRun's own transaction.
+// PriorityDispatchCapability is the retired legacy capability name for
+// AdmissionBypass, retained for one release as an input-only alias
+// (design/design/unified-grants.design.md §4.1).
 const PriorityDispatchCapability = "priority-dispatch"
 
-// DurableCapability is the grant that makes a task durable
-// (design/design/durable-tasks.design.md#DT-1, docs/capabilities.md's durable): a
-// run of it has no wall-clock deadline and no wait-credit cap, is
-// suspended by an idle watchdog rather than ended by a clock, counts
-// under the deployment's durable-run ceiling (Limits.Durable) rather than
-// max_workers, and has its setup failures suspended rather than counted.
-// It implies PriorityDispatchCapability (HasPriorityDispatch).
-//
-// Person-only (IsPersonOnlyGrant), for the same reason priority-dispatch
-// is and a stronger one: a durable run holds a sandbox for as long as its
-// work lasts.
+// DurableCapability is the retired legacy capability name for
+// AdmissionDurable, retained for one release as an input-only alias
+// (design/design/unified-grants.design.md §4.1).
 const DurableCapability = "durable"
 
 // SetupFailedOutcome is a run's outcome when it never reached its agent:
@@ -60,65 +37,52 @@ const DurableCapability = "durable"
 const SetupFailedOutcome = "setup-failed"
 
 // HasPriorityDispatch is the one answer to "is this task admitted the way
-// a console session is": true for any task holding
-// PriorityDispatchCapability and for every durable task (IsDurable), which
-// durable implies (including console sessions). Every exemption that used
-// to be a session's alone -- dispatch's ordering, counts and pause, the
-// base-repair link, the per-connection concurrency limit -- asks this, and
-// priorityDispatchTaskSQL is the same predicate for the store's queries,
-// so the two cannot disagree.
+// a console session is": true for any task with admission >= bypass
+// (AdmissionBypass or AdmissionDurable, including console sessions). Every
+// exemption that used to be a session's alone -- dispatch's ordering,
+// counts and pause, the base-repair link, the per-connection concurrency
+// limit -- asks this, and priorityDispatchTaskSQL is the same predicate for
+// the store's queries, so the two cannot disagree.
 func (t Task) HasPriorityDispatch() bool {
-	for _, g := range t.Grants {
-		if g.Capability == PriorityDispatchCapability || g.Capability == DurableCapability {
-			return true
-		}
-	}
-	return false
+	return NormalizeAdmission(t.Admission).AtLeast(AdmissionBypass)
 }
 
-// IsDurable reports whether t holds DurableCapability: its runs have no
+// IsDurable reports whether t has AdmissionDurable: its runs have no
 // deadline and are watched for idleness instead (orchestrator's
 // durableDispatch), and it is dispatched with priority
 // (HasPriorityDispatch) under its own ceiling (Limits.Durable).
 func (t Task) IsDurable() bool {
-	for _, g := range t.Grants {
-		if g.Capability == DurableCapability {
-			return true
-		}
-	}
-	return false
+	return NormalizeAdmission(t.Admission) == AdmissionDurable
 }
 
 // IsPersonOnlyGrant reports whether only a person may grant name: a
-// dangerous api grant (IsDangerousGrant), priority-dispatch, or durable,
-// which implies it. An agent
-// holding one still cannot hand it to anything it files, and a proposal
-// naming one waits for a person (EscalatedCapabilities).
+// dangerous api grant (IsDangerousGrant), or the one-release input aliases
+// priority-dispatch and durable.
 func IsPersonOnlyGrant(name string) bool {
 	return name == PriorityDispatchCapability || name == DurableCapability || IsDangerousGrant(name)
 }
 
-// priorityDispatchTaskSQL is HasPriorityDispatch for the store's own
-// queries: a task holding PriorityDispatchCapability or DurableCapability.
-// It expects `t` bound to the task row and takes priorityDispatchArgs, in
-// that order.
-const priorityDispatchTaskSQL = "EXISTS (" +
-	"SELECT 1 FROM `task_grant` AS `pg` WHERE `pg`.`task_id` = `t`.`id` AND `pg`.`capability` IN (?, ?))"
-
-// priorityDispatchArgs is priorityDispatchTaskSQL's parameters.
-func priorityDispatchArgs() []any {
-	return []any{PriorityDispatchCapability, DurableCapability}
+// IsAdminOnlyGrant reports whether name is a grant only a direct human
+// operator may approve or assign (AU-25.3).
+func IsAdminOnlyGrant(name string) bool {
+	return IsPersonOnlyGrant(name)
 }
 
-// durableTaskSQL is IsDurable for the store's own queries. It expects `t`
-// bound to the task row and takes DurableCapability.
-const durableTaskSQL = "EXISTS (SELECT 1 FROM `task_grant` AS `dg` WHERE `dg`.`task_id` = `t`.`id` AND `dg`.`capability` = ?)"
+// priorityDispatchTaskSQL is HasPriorityDispatch for the store's own
+// queries: a task whose admission is bypass or durable. It expects `t`
+// bound to the task row. Parenthesised and COALESCEd so `NOT ` +
+// priorityDispatchTaskSQL over a LEFT JOIN stays boolean.
+const priorityDispatchTaskSQL = "(COALESCE(`t`.`admission`, 'standard') IN ('bypass', 'durable'))"
+
+// durableTaskSQL is IsDurable for the store's own queries: a task whose
+// admission is durable. It expects `t` bound to the task row.
+const durableTaskSQL = "(COALESCE(`t`.`admission`, 'standard') = 'durable')"
 
 // taskIsDurable answers durableTaskSQL for one task id.
 func taskIsDurable(ctx context.Context, q querier, taskID string) (bool, error) {
 	var durable bool
 	err := q.QueryRowContext(ctx, "SELECT "+durableTaskSQL+" FROM `task` AS `t` WHERE `t`.`id` = ?",
-		DurableCapability, taskID).Scan(&durable)
+		taskID).Scan(&durable)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -133,7 +97,7 @@ func taskIsDurable(ctx context.Context, q querier, taskID string) (bool, error) 
 func liveDurableRuns(ctx context.Context, q querier) (int, error) {
 	var n int
 	err := q.QueryRowContext(ctx, "SELECT COUNT(*) FROM `task_run` AS `r` JOIN `task` AS `t` ON `t`.`id` = `r`.`task_id` "+
-		"WHERE `r`.`finished_at` IS NULL AND "+durableTaskSQL, DurableCapability).Scan(&n)
+		"WHERE `r`.`finished_at` IS NULL AND "+durableTaskSQL).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("counting live durable runs: %w", err)
 	}
@@ -157,7 +121,7 @@ func taskHasPriorityDispatch(ctx context.Context, q querier, taskID string) (boo
 	var priority bool
 	err := q.QueryRowContext(ctx,
 		"SELECT "+priorityDispatchTaskSQL+" FROM `task` AS `t` WHERE `t`.`id` = ?",
-		append(priorityDispatchArgs(), taskID)...).Scan(&priority)
+		taskID).Scan(&priority)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}

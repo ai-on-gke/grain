@@ -353,7 +353,7 @@ func branchCommits(client github.Client, repo model.RepoRef, base, branch string
 // branchCommits' own are: neither line is worth failing a finish over,
 // and the pull request is open either way.
 func refreshPullRequest(ctx context.Context, store *model.Store, client github.Client, task model.Task, number int) {
-	repo := *task.Target
+	repo, headRef, _ := taskPullRequestTarget(ctx, store, task)
 	detail, err := client.GetPullRequest(repo.Owner, repo.Name, number)
 	if err != nil {
 		log.Printf("orchestrator: reading %s/%s#%d to refresh its description: %v",
@@ -382,7 +382,7 @@ func refreshPullRequest(ctx context.Context, store *model.Store, client github.C
 	// title and the description are the same commits arranged twice, and
 	// two compares could disagree with each other about a branch a run is
 	// still pushing to.
-	commits, _ := branchCommits(client, repo, base, task.BranchName())
+	commits, _ := branchCommits(client, repo, base, headRef)
 	if title := titleFromCommits(commits); title != "" && title != detail.Title {
 		if err := client.UpdatePullRequestTitle(repo.Owner, repo.Name, number, title); err != nil {
 			log.Printf("orchestrator: renaming %s/%s#%d: %v -- "+
@@ -398,6 +398,7 @@ func refreshPullRequest(ctx context.Context, store *model.Store, client github.C
 	// Commit messages cannot say what images a run published, so the
 	// section publishImages wrote is carried over rather than rebuilt.
 	body = withImages(body, imagesSection(detail.Body))
+	body = github.PreservePullRequestSignature(body, detail.Body)
 	if body == detail.Body {
 		return
 	}

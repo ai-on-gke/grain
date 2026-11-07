@@ -28,8 +28,10 @@ import (
 func escapeHatchText(t *testing.T) map[string]struct{ description, confirmation string } {
 	t.Helper()
 	args := map[string]map[string]any{
-		"ask_question":       {"question": "which config file?"},
-		"request_secret":     {"secret": "stripe-api-key", "reason": "the deploy script authenticates with it"},
+		"ask_question":   {"question": "which config file?"},
+		"request_secret": {"secret": "stripe-api-key", "reason": "the deploy script authenticates with it"},
+		"request_access": {"summary": "Grant read of acme/lib", "reason": "the fix spans both repos",
+			"requests": []any{map[string]any{"kind": "read", "repo": "acme/lib"}}},
 		"comment_on_issue":   {"comment": "the answer is 4"},
 		"nothing_needed":     {"reason": "the flag is already off on main"},
 		"write_handover":     {"handover": "the merge lane may only ever hold one branch"},
@@ -250,6 +252,36 @@ func TestProposeTaskParsesReadsWritesReviewTemplateID(t *testing.T) {
 	}
 	if task.ReviewTemplateID != "tmpl-review-123" {
 		t.Errorf("ReviewTemplateID = %q, want tmpl-review-123", task.ReviewTemplateID)
+	}
+}
+
+func TestProposeTaskParsesAndValidatesDesigns(t *testing.T) {
+	sink := &MockSink{}
+	tool := toolNamed(t, NewMockTools(sink, nil), "propose_task")
+
+	bad := tool.Handler(context.Background(), map[string]any{
+		"title":   "[PLC] child",
+		"body":    "implement slice",
+		"designs": []any{"../escape"},
+	})
+	if !bad.IsError {
+		t.Fatalf("expected error on escaping design path, got %+v", bad)
+	}
+	if len(sink.ProposedTasks()) != 0 {
+		t.Fatalf("invalid proposal should not be recorded")
+	}
+
+	ok := tool.Handler(context.Background(), map[string]any{
+		"title":   "[PLC] child",
+		"body":    "implement slice",
+		"designs": []any{"design/plc/042@abcdef1", "acme/specs:plc/042@0123456789abcdef0123456789abcdef01234567"},
+	})
+	if ok.IsError {
+		t.Fatalf("unexpected error: %s", ok.Text)
+	}
+	got := sink.ProposedTasks()
+	if len(got) != 1 || len(got[0].Designs) != 2 {
+		t.Fatalf("ProposedTasks = %+v, want 1 task with 2 designs", got)
 	}
 }
 

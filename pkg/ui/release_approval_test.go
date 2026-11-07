@@ -200,3 +200,84 @@ func TestAPersonMayAcceptBreakingChangesOnTheApproval(t *testing.T) {
 		t.Errorf("started %d runs, want 3: a refused decision starts nothing", len(runner.started))
 	}
 }
+
+// Rolling back a promoted release is person-only just like approving one:
+// an agent holding releases:write, an agent principal, automation, and an
+// unidentified caller are all refused before anything is started.
+func TestAnAgentMayNotRollBackARelease(t *testing.T) {
+	srv, client, _, runner := approvalServer(t)
+	seedAPITask(t, client, "7", "ai-on-gke/grain", "api:releases:write")
+
+	path := "/api/releases/v2.4.0/rollback"
+	code, body := asAgent(t, srv, "7", http.MethodPost, path, `{"to":"v2.3.0","reason":"bad schema"}`, "")
+	if code != http.StatusForbidden || !strings.Contains(body, "only a person may roll back") {
+		t.Errorf("an agent holding releases:write rolling back: %d %s, want 403 saying only a person may", code, body)
+	}
+	if rec := doAsCaller(t, srv, agentPrefix+"run-1", http.MethodPost, path, ""); rec.Code != http.StatusForbidden {
+		t.Errorf("an agent principal rolling back: %d %s, want 403", rec.Code, rec.Body)
+	}
+	for _, p := range []model.Principal{
+		{Kind: model.PrincipalAgent, ID: "run-9"},
+		{Kind: model.PrincipalAutomation, ID: "schedule:release-watchdog"},
+		{Kind: model.PrincipalService, ID: "steward"},
+	} {
+		if _, err := client.RollbackRelease(ui.WithPrincipal(context.Background(), p), "", "v2.4.0", ui.ReleaseRollback{}); err == nil ||
+			!strings.Contains(err.Error(), "only a person may roll back") {
+			t.Errorf("%s rolling back: %v, want refused", model.PrincipalString(p), err)
+		}
+	}
+	if len(runner.started) != 0 {
+		t.Fatalf("a non-person's rollback started CI anyway: %+v", runner.started)
+	}
+}
+
+// A person's rollback starts promote-release.yml's rollback job on trunk,
+// carrying RequestedByKind="human", ReleaseVersion, ReleaseRollbackTo and
+// ReleaseRollbackReason in fields no API caller can set.
+func TestAPersonRollsAReleaseBack(t *testing.T) {
+	srv, _, _, runner := approvalServer(t)
+
+	rec := do(t, srv, http.MethodPost, "/api/releases/v2.4.0/rollback", "")
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"rollback":true`) {
+		t.Fatalf("a plain rollback: %d %s, want 202 with rollback:true", rec.Code, rec.Body)
+	}
+	if len(runner.started) != 1 {
+		t.Fatalf("started %d runs, want 1", len(runner.started))
+	}
+	got := runner.started[0]
+	if got.Workflow != ui.PromoteReleaseWorkflow || got.Ref != "main" || got.Event != ci.EventManual ||
+		len(got.Jobs) != 1 || got.Jobs[0] != ui.PromoteReleaseWorkflow+":rollback" {
+		t.Errorf("rollback started %+v, want promote-release.yml's rollback job on main", got)
+	}
+	if got.Repo != "ai-on-gke/grain" || got.RequestedByKind != "human" || got.ReleaseVersion != "v2.4.0" ||
+		got.RequestedBy == "" || got.ReleaseRollbackTo != "" || got.ReleaseRollbackReason != "" {
+		t.Errorf("plain rollback run = %+v, want human rollback of ai-on-gke/grain v2.4.0 with empty to/reason", got)
+	}
+
+	rec = do(t, srv, http.MethodPost, "/api/releases/v2.4.0/rollback", `{"to":"v2.3.0","reason":"panics on startup"}`)
+	if rec.Code != http.StatusAccepted ||
+		!strings.Contains(rec.Body.String(), `"rollbackTo":"v2.3.0"`) ||
+		!strings.Contains(rec.Body.String(), `"rollbackReason":"panics on startup"`) {
+		t.Fatalf("rollback with to/reason: %d %s, want 202 with rollbackTo and rollbackReason", rec.Code, rec.Body)
+	}
+	got = runner.started[1]
+	if got.RequestedByKind != "human" || got.ReleaseVersion != "v2.4.0" ||
+		got.ReleaseRollbackTo != "v2.3.0" || got.ReleaseRollbackReason != "panics on startup" {
+		t.Errorf("rollback with to/reason started %+v", got)
+	}
+
+	for _, bad := range []string{"latest", "v2.4.0-rc.1", "v2.4.0-retracted", "2.4.0", "v2.4"} {
+		if rec := do(t, srv, http.MethodPost, "/api/releases/"+bad+"/rollback", ""); rec.Code != http.StatusBadRequest {
+			t.Errorf("rolling back %q: %d %s, want 400", bad, rec.Code, rec.Body)
+		}
+		if rec := do(t, srv, http.MethodPost, "/api/releases/v2.4.0/rollback", `{"to":"`+bad+`"}`); rec.Code != http.StatusBadRequest {
+			t.Errorf("rolling back to %q: %d %s, want 400", bad, rec.Code, rec.Body)
+		}
+	}
+	if rec := do(t, srv, http.MethodPost, "/api/releases/v2.4.0/rollback", `{"reason":"line1\nline2"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("multiline reason: %d %s, want 400", rec.Code, rec.Body)
+	}
+	if len(runner.started) != 2 {
+		t.Errorf("started %d runs, want 2: refused rollbacks start nothing", len(runner.started))
+	}
+}

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { expect, test } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // The gcp capability's permission sets end to end (docs/capabilities.md,
 // "GCP"), against grain demo's gcp server: grain's own in-tree gcp
@@ -91,7 +92,7 @@ test("adds a permission set, tests it, and grants the set on a task", async ({
   const title = `E2E gcp set ${Date.now()}`;
   await page.getByRole("button", { name: "+ New task" }).click();
   await page.getByLabel("Title").fill(title);
-  await page.getByLabel(/^Repos/).selectOption("none");
+  await chooseOption(page.getByLabel(/^Repos/), "none");
   const grants = page.getByTestId("new-task-grants");
   await grants.getByRole("button", { name: "Add grant…" }).click();
   await page.getByRole("menuitem", { name: /gcp-key/ }).click();
@@ -99,6 +100,8 @@ test("adds a permission set, tests it, and grants the set on a task", async ({
   // set saves the grant (there is no dialog to confirm).
   const section = grants.locator(`[data-method="${KEY}"] .grant-section`);
   await expect(section).toHaveCount(1);
+  await expect(section.locator('[data-arg="account"]')).toHaveCount(0);
+  await expect(section.locator('[data-arg="activate"]')).toHaveCount(0);
   await pick(page, section, "permission_set", "e2e-reader");
   await expect(grants.locator(`[data-grant^="${KEY}="]`)).toHaveAttribute(
     "data-grant",

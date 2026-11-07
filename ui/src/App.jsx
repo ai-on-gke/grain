@@ -31,6 +31,7 @@ import { useIsPhone } from "./phone.js";
 import { keepIfSame, UNCHANGED } from "./poll.js";
 import {
   NO_NARROWING,
+  admitsState,
   defaultFilters,
   defaultNarrowing,
   defaultSortFor,
@@ -50,6 +51,8 @@ import { boardMoves } from "./boardOrder.js";
 import { panelMove } from "./panelOrder.js";
 import { sectionMove } from "./sectionOrder.js";
 import { TimeZoneProvider } from "./TimeZoneContext.jsx";
+import { AccessConfigProvider } from "./AccessContext.jsx";
+import { canAccess } from "./access.js";
 import Sidebar from "./components/Sidebar.jsx";
 import { useSidebarCollapsed } from "./sidebarCollapse.js";
 import { SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_WIDTH } from "./theme.js";
@@ -60,6 +63,7 @@ import PageHeader, {
 import PhoneNav from "./components/PhoneNav.jsx";
 import InboxPage from "./components/InboxPage.jsx";
 import TaskList from "./components/TaskList.jsx";
+import { tasksLoadFailed } from "./components/ListPrimitives.jsx";
 import TaskBoard from "./components/TaskBoard.jsx";
 import GanttChart from "./components/GanttChart.jsx";
 import TaskTreeBoard from "./components/TaskTreeBoard.jsx";
@@ -114,6 +118,12 @@ import NewSessionPage, {
 } from "./components/NewSessionPage.jsx";
 import { PreferencesProvider, usePreferences } from "./PreferencesContext.jsx";
 import { PinnedNavProvider, usePinnedNav } from "./PinnedNavContext.jsx";
+import {
+  mergeTaskLists,
+  stateFilterAdmitsClosed,
+  useClosedTasks,
+} from "./closedTasks.js";
+import ClosedTasksMore from "./components/ClosedTasksMore.jsx";
 import {
   notificationsEnabled,
   useInboxNotifications,
@@ -346,11 +356,31 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // until this is true the shell draws LoadingScreen rather than a page
   // that says, in prose and in counts, that this deployment has nothing.
   const [loaded, setLoaded] = useState(false);
-  const [tasks, setTasks] = useState([]);
+  // liveTasks is what the poll brings back: every task that is not
+  // closed, without descriptions (pkg/ui/task_list_cache.go's
+  // taskListLive). Closed ones are paged in beside it (closedTasks.js),
+  // and `tasks` -- what every view draws -- is the two together.
+  const [liveTasks, setLiveTasks] = useState([]);
   // Whether /api/tasks has answered with a list at least once. Until it
-  // has, the empty `tasks` above is not "no tasks" but "not read yet",
+  // has, the empty `tasks` below is not "no tasks" but "not read yet",
   // and a page that would say nothing is waiting must not say it.
   const [tasksListed, setTasksListed] = useState(false);
+  const [tasksError, setTasksError] = useState(null);
+  // closedSearch is the search box's text while the task views could
+  // show closed work, "" otherwise: what useClosedTasks asks the server
+  // to search closed tasks for (set below, once the narrowing is known).
+  const [closedSearch, setClosedSearch] = useState("");
+  const closedTasks = useClosedTasks(tasksListed, closedSearch);
+  const tasks = useMemo(
+    () => mergeTaskLists(liveTasks, closedTasks.closed),
+    [liveTasks, closedTasks.closed],
+  );
+  // The ids the last poll listed and the closed ones held, for
+  // refreshList to tell a task that closed from one that is gone.
+  const liveIdsRef = useRef(null);
+  const closedIdsRef = useRef(new Set());
+  closedIdsRef.current = new Set(closedTasks.closed.map((t) => String(t.id)));
+  const refreshClosed = closedTasks.refresh;
   const [schedules, setSchedules] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [suites, setSuites] = useState([]);
@@ -480,6 +510,26 @@ function AppContent({ onReload = () => window.location.reload() }) {
     () => askedNarrowing || listDefault(),
     [askedNarrowing, listDefault],
   );
+  // closedInView is whether the narrowing lets a closed task through at
+  // all: the default one sets them aside, and a view that cannot show
+  // one neither pages older ones in nor has the server search them
+  // (closedTasks.js).
+  const closedInView = useMemo(
+    () => admitsState(narrowing, config, "closed"),
+    [narrowing, config],
+  );
+  const closedSearchWanted =
+    closedInView && stateFilterAdmitsClosed(stateFilter)
+      ? (narrowing.search || "").trim()
+      : "";
+  useEffect(() => {
+    setClosedSearch(closedSearchWanted);
+  }, [closedSearchWanted]);
+  // closedFloor is whether closed tasks a view could show are still to
+  // be read -- a next page of the newest-closed list, or of the server's
+  // search while the box is set -- so a count over that view is a floor.
+  const closedFloor =
+    closedTasks.hasMore || (closedTasks.searching && closedTasks.loading);
   // narrow takes a patch rather than a whole narrowing, so a toolbar
   // control only has to name what it changed. A patch over the default
   // is a patch over what is on screen: the first thing anybody changes
@@ -968,7 +1018,19 @@ function AppContent({ onReload = () => window.location.reload() }) {
     // this tab does not do. There is nothing to set and nothing to
     // prune when it does -- the ids below would be the same ids -- so
     // the tick ends here.
-    const next = await api("/api/tasks", { poll: true });
+    let next;
+    try {
+      next = await api("/api/tasks", { poll: true });
+    } catch (err) {
+      setTasksError(
+        isUnreachable(err) && !err?.explained
+          ? unreachableReason(err)
+          : String(err?.message || err),
+      );
+      throw err;
+    }
+    setTasksError(null);
+    setTasksListed(true);
     if (next === UNCHANGED) return;
     // The array already held when this poll brought back the same tasks
     // (poll.js). It is the identity every view downstream is keyed on --
@@ -978,16 +1040,29 @@ function AppContent({ onReload = () => window.location.reload() }) {
     // expensive. Still worth doing beside the 304: that covers the
     // endpoint's own bytes, this covers a change those views do not care
     // about.
-    setTasks((prev) => keepIfSame(prev, next));
-    setTasksListed(true);
+    setLiveTasks((prev) => keepIfSame(prev, next));
+    const ids = new Set(next.map((t) => String(t.id)));
+    // A task that has dropped out of the live list has most likely
+    // closed: ask for the newest closed page now rather than up to a
+    // minute from now, so a view showing closed work does not lose it.
+    const before = liveIdsRef.current;
+    liveIdsRef.current = ids;
+    if (before && [...before].some((id) => !ids.has(id))) refreshClosed();
     // Drop any selected id the store no longer reports, so a stale
     // selection never quietly outlives the task it named.
-    const ids = new Set(next.map((t) => t.id));
     setSelected((prev) => {
-      const kept = new Set([...prev].filter((id) => ids.has(id)));
+      const kept = new Set(
+        [...prev].filter(
+          (id) => ids.has(String(id)) || closedIdsRef.current.has(String(id)),
+        ),
+      );
       return kept.size === prev.size ? prev : kept;
     });
-  }, []);
+  }, [refreshClosed]);
+
+  const retryTasks = useCallback(() => {
+    refreshList().catch(showError);
+  }, [refreshList, showError]);
 
   // All three of these drop an open item the store no longer reports --
   // one deleted from its own pane, or a URL naming one that never
@@ -1798,6 +1873,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // snapped back on the next refresh would be worse than a drag that
   // takes a moment. A refresh follows a failure too, so a half-applied
   // renumber shows what actually landed rather than what was asked for.
+  // Moving a board, a panel or a report section is a PATCH
+  // /api/boards/{id} (boards:write): a role without it is not offered the
+  // drag handles at all (access.js).
+  const canMoveBoards = canAccess(config, "boards:write");
   const moveBoard = useCallback(
     async (id, place) => {
       const moves = boardMoves(boards, id, place);
@@ -2021,6 +2100,18 @@ function AppContent({ onReload = () => window.location.reload() }) {
       });
     },
     [narrow, setViewAndCloseOpen],
+  );
+  const showExternalRef = useCallback(
+    (ref) => {
+      closeDetail();
+      setStateFilter("all");
+      setViewAndCloseOpen("tasks");
+      narrow({
+        search: "",
+        filters: [{ attr: "externalRef", op: "any", values: [ref] }],
+      });
+    },
+    [closeDetail, narrow, setViewAndCloseOpen],
   );
   // A named run opens over whichever page named it. With no run id this
   // remains the trip to the deployment-wide listing, optionally narrowed
@@ -3040,6 +3131,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
       <TaskList
         landmark={landmark}
         tasks={list}
+        tasksLoaded={tasksListed}
+        tasksError={tasksError}
+        onRetry={retryTasks}
         stateFilter={filter}
         config={config}
         narrowing={narrowing}
@@ -3052,6 +3146,15 @@ function AppContent({ onReload = () => window.location.reload() }) {
         onShownChange={setShownIds}
         onRefresh={refreshList}
         showError={showError}
+        footer={
+          <ClosedTasksMore
+            closed={closedTasks}
+            active={closedInView && stateFilterAdmitsClosed(filter)}
+          />
+        }
+        countFloor={
+          closedInView && stateFilterAdmitsClosed(filter) && closedFloor
+        }
       />
       <BatchActionsBar
         selection={selectedTasks}
@@ -3082,6 +3185,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
       <TaskBoard
         landmark={landmark}
         tasks={list}
+        tasksLoaded={tasksListed}
+        tasksError={tasksError}
+        onRetry={retryTasks}
         fixedColumns={columns}
         config={config}
         narrowing={narrowing}
@@ -3092,6 +3198,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
         onSelectAll={setSelection}
         onReorder={reorderTasks}
         onShownChange={setShownIds}
+        countFloor={closedInView && closedFloor}
+        footer={<ClosedTasksMore closed={closedTasks} active={closedInView} />}
       />
       <BatchActionsBar
         selection={selectedTasks}
@@ -3122,6 +3230,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
     <GanttChart
       landmark={landmark}
       tasks={list}
+      tasksLoaded={tasksListed}
+      tasksError={tasksError}
+      onRetry={retryTasks}
       config={config}
       narrowing={narrowing}
       onNarrow={narrow}
@@ -3135,14 +3246,23 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // batch bar, for the timeline's reason: a tree row has no checkbox to
   // feed one.
   const taskTreePane = (list, { landmark = true } = {}) => (
-    <TaskTreeBoard
-      landmark={landmark}
-      tasks={list}
-      config={config}
-      narrowing={narrowing}
-      onNarrow={narrow}
-      onOpenTask={openTask}
-    />
+    <>
+      <TaskTreeBoard
+        landmark={landmark}
+        tasks={list}
+        tasksLoaded={tasksListed}
+        tasksError={tasksError}
+        onRetry={retryTasks}
+        config={config}
+        narrowing={narrowing}
+        onNarrow={narrow}
+        onOpenTask={openTask}
+      />
+      <ClosedTasksMore
+        closed={closedTasks}
+        active={closedInView && list.some((t) => t.state === "closed")}
+      />
+    </>
   );
 
   // openPanelView is a click on a panel's heading, or on one of the
@@ -3187,6 +3307,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
     <PanelBoard
       board={board}
       tasks={tasks}
+      tasksLoaded={tasksListed}
+      tasksError={tasksError}
+      onRetryTasks={retryTasks}
+      closedPartial={closedTasks.partial}
       config={config}
       narrowing={narrowing}
       onNarrow={narrow}
@@ -3194,7 +3318,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       onOpen={openPanelView}
       onAddPanel={openAddPanelTask}
       onKeepPanelQuery={openKeepPanelQueryTask}
-      onMovePanel={movePanel}
+      onMovePanel={canMoveBoards ? movePanel : undefined}
     />
   );
 
@@ -3215,7 +3339,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       onOpenTask={openTask}
       onOpen={openPanelView}
       showError={showError}
-      onMoveSection={moveSection}
+      onMoveSection={canMoveBoards ? moveSection : undefined}
       pickedWindow={boardWindow}
       onPickWindow={setBoardWindow}
     />
@@ -3397,7 +3521,6 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const sidebar = (
     <Sidebar
       pinFooter={isPhone}
-      hideCreateButton={!isPhone}
       collapsed={sidebarCollapsed}
       onToggleCollapsed={isPhone ? undefined : toggleSidebarCollapsed}
       config={config}
@@ -3407,6 +3530,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
       settingsSection={settingsSection}
       onSetView={navigateFromRail}
       tasks={tasks}
+      tasksLoaded={tasksListed}
+      tasksError={tasksError}
+      onRetryTasks={retryTasks}
+      unseenClosed={closedTasks.unseen}
       notificationCount={notifications.length}
       schedules={schedules}
       templates={templates}
@@ -3517,11 +3644,6 @@ function AppContent({ onReload = () => window.location.reload() }) {
       config={config}
       onOpenSystem={() => openSystem("")}
       onOpenSettings={() => openSettings()}
-      onOpenAccess={() => openSettings("access")}
-      onLogout={handleLogout}
-      onOpenNewTask={openNewTask}
-      onNewSession={openNewSession}
-      onNewBoard={openNewBoardTask}
     />
   );
 
@@ -3543,7 +3665,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
     stateFilter,
   ]);
 
-  return (
+  // The shell, under the caller's resolved access (AccessContext.jsx):
+  // every write control below it is drawn for what the signed-in
+  // person's role covers.
+  const shell = (
     <TimeZoneProvider zone={preferredTimeZone || config?.timeZone}>
       <div className="app-shell">
         {/* The one standing banner left (grain/task-4008): while
@@ -3614,6 +3739,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
                     icon={pageIcon}
                     globals={globalButtons}
                     onSlot={setPageHeaderSlot}
+                    onExpandSidebar={
+                      sidebarCollapsed ? toggleSidebarCollapsed : undefined
+                    }
                   />
                 )}
                 <div className="page-frame-body">
@@ -3664,6 +3792,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                             repoTab={repoTab}
                             onShowTab={setRepoTab}
                             tasks={tasks}
+                            closedPartial={closedTasks.partial}
                             config={config}
                             baseBranchGates={baseBranchGates}
                             onOpenComparison={setRepoComparison}
@@ -3678,10 +3807,12 @@ function AppContent({ onReload = () => window.location.reload() }) {
                             onRefreshConfig={refreshConfig}
                             onRefreshGates={refreshBaseBranchGates}
                             showError={showError}
+                            dismissError={dismissError}
                           />
                         ) : view === "repos" ? (
                           <RepoList
                             tasks={tasks}
+                            closedPartial={closedTasks.partial}
                             config={config}
                             onOpenRepo={openRepoPage}
                             onOpenSettings={openDeploymentSettings}
@@ -3737,7 +3868,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
                    flat list. */
                           <InboxPage
                             tasks={tasks}
-                            tasksLoaded={tasksListed}
+                            tasksLoaded={
+                              !tasksLoadFailed(tasks, tasksListed, tasksError)
+                            }
                             config={config}
                             onOpenTask={openTask}
                             onOpenConfigRepo={() => openSettings("config-repo")}
@@ -3941,7 +4074,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                               if (board) openBoard(board);
                             }}
                             onNewBoard={openNewBoardTask}
-                            onMoveBoard={moveBoard}
+                            onMoveBoard={canMoveBoards ? moveBoard : undefined}
                           />
                         ) : (
                           <div className="main-column">
@@ -4004,6 +4137,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
               onClose={closeDetail}
               onOpenTask={openTask}
               onNewTaskFrom={openNewTaskWithFields}
+              onFilterExternalRef={showExternalRef}
               onOpenCIRun={openCIRun}
               onOpenSuiteRun={openSuiteRun}
               act={act}
@@ -4073,6 +4207,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       </div>
     </TimeZoneProvider>
   );
+  return <AccessConfigProvider config={config}>{shell}</AccessConfigProvider>;
 }
 
 // DEPLOYMENT_SETTINGS_TAB maps a Team settings tab an older link or

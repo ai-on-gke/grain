@@ -122,8 +122,8 @@ func TestGoogleTrackRunsAgyThroughHostdAndMigratesFromHostMode(t *testing.T) {
 		t.Fatalf("GRAIN_INSTALL_MODE=host was accepted: %s", refused)
 	}
 	if out := refused.stdout + refused.stderr; !strings.Contains(out, "GRAIN_INSTALL_MODE=host is no longer supported") ||
-		!strings.Contains(out, "container mode plus grain hostd") {
-		t.Errorf("the refusal does not point to container mode plus grain hostd: %s", refused)
+		!strings.Contains(out, "container mode plus the host agent") {
+		t.Errorf("the refusal does not point to container mode plus the host agent: %s", refused)
 	}
 	if unit := sudoRead(daemonUnit); !strings.Contains(unit, "Environment=GRAIN_INSTALL_MODE=host") {
 		t.Fatalf("a refused GRAIN_INSTALL_MODE=host changed the installed unit:\n%s", unit)
@@ -135,7 +135,7 @@ func TestGoogleTrackRunsAgyThroughHostdAndMigratesFromHostMode(t *testing.T) {
 	if migrated.exitCode != 0 {
 		t.Fatalf("migrating to container mode plus hostd: %s", migrated)
 	}
-	for _, want := range []string{"moving this host-mode install to container mode plus grain hostd",
+	for _, want := range []string{"moving this host-mode install to container mode plus the host agent",
 		"hostd:             installed", "clis: claude-detached, codex-detached, agy"} {
 		if !strings.Contains(migrated.stdout, want) {
 			t.Errorf("the migration does not say %q:\n%s", want, tail(migrated.stdout, 60))
@@ -171,8 +171,10 @@ func TestGoogleTrackRunsAgyThroughHostdAndMigratesFromHostMode(t *testing.T) {
 	}
 
 	backends := []model.AgentBackend{
+		// Ambient on a CLI through grain hostd names the host whose
+		// login it is (model.CheckAmbientPlacement): the co-located one.
 		{ID: "hostd-agy", Name: "agy through hostd", Framework: model.AgentFrameworkAntigravity,
-			AuthMode: model.AntigravityAuthAmbient, Models: []string{"fake-agy-model"}},
+			AuthMode: model.AntigravityAuthAmbient, Hostd: model.LocalHostd, Models: []string{"fake-agy-model"}},
 		// Ambient: the fake needs no token, and with none grain would
 		// refuse the run before starting it.
 		{ID: "container-claude", Name: "claude in the container", Framework: model.AgentFrameworkClaude,
@@ -1187,7 +1189,7 @@ func (f *hostdFixture) assertNoHostd(t *testing.T, ctx context.Context, d *deplo
 		}
 	}
 	got, body := f.cliRun(t, ctx, d)
-	if got.HostExecutor.Kind != "none" || !strings.Contains(got.HostExecutor.Reason, "no grain hostd") {
+	if got.HostExecutor.Kind != "none" || !strings.Contains(got.HostExecutor.Reason, "no host agent") {
 		t.Errorf("%s: the host executor is %q (%q), want none, saying there is no grain hostd: %s",
 			when, got.HostExecutor.Kind, got.HostExecutor.Reason, body)
 	}

@@ -158,8 +158,8 @@ These apply to the `kubernetes` and `kubernetes-granule` backends. Every field e
 | --- | --- | --- | --- | --- |
 | Kubernetes namespace | `k8sNamespace` | `k8s_namespace` | `grain`. A DNS-1123 label (≤ 63 characters: lowercase letters, digits, `-`). | restart |
 | Kubectl binary | `k8sKubectl` | `k8s_kubectl` | `kubectl` | restart |
-| Kubernetes sandbox pod image | `k8sSandboxImage` | `k8s_sandbox_image` | `ghcr.io/bwsalmon/grain/k8s-sandbox:latest` (or the build stamp) | restart |
-| Kubernetes Granule VM pod image | `k8sGranuleImage` | `k8s_granule_image` | `ghcr.io/bwsalmon/grain/guest:latest` (or the build stamp) | restart |
+| Kubernetes sandbox pod image | `k8sSandboxImage` | `k8s_sandbox_image` | `docker.io/grainai/sandbox-k8s:latest` (or the build stamp) | restart |
+| Kubernetes Granule VM pod image | `k8sGranuleImage` | `k8s_granule_image` | `docker.io/grainai/sandbox:latest` (or the build stamp) | restart |
 | Kubernetes workspace directory | `k8sWorkspace` | `k8s_workspace` | `/home/agent` (`kubernetes`) or `/home/debian` (`kubernetes-granule`) | restart |
 | Kubernetes git & model proxy host | `k8sGitProxyHost` | `k8s_git_proxy_host` | Empty, or a host name or IP | restart |
 | Kubernetes sandbox Service | `k8sSandboxService` | `k8s_sandbox_service` | A Kubernetes object name | restart |
@@ -183,8 +183,8 @@ Component: `CredentialsSection.jsx`. The aliases `/settings/secrets` and `/setti
 | --- | --- | --- | --- | --- |
 | GitHub host | `githubHost` | `github_host` | Host (normalised by `gitHubHostSetting`). Required the first time settings are saved. Default `github.com`. | **restart** |
 | (checkbox) plain HTTP | `githubInsecureHttp` | `github_insecure_http` | `false`; for mock servers only | **restart** |
-| GCP project | `gcpProject` | `gcp_project` | Empty disables `gcp-key` and `gemini-key` | live (tick): the capability registry is rebuilt |
-| GCP service account email | `gcpServiceAccountEmail` | `gcp_service_account_email` | The narrow agent SA `gcp-key` mints keys for | live (tick) |
+| GCP project | `gcpProject` | `gcp_project` | Empty disabled the in-process `gcp-key` and `gemini-key`, both retired: schema migrations 97 and 103 seeded `https://grain.dev/capabilities/gcp`'s permission sets and its `gemini_key` from it, and that server's own configuration is what `…/gcp#gcp-key` and `…/gcp#gemini-key` mint with now | live (tick): the capability registry is rebuilt |
+| GCP service account email | `gcpServiceAccountEmail` | `gcp_service_account_email` | The narrow agent SA the retired in-process `gcp-key` minted keys for; schema migration 97 seeded `…/gcp#gcp-key`'s permission sets from it | live (tick) |
 | GCP service account count | `gcpServiceAccountCount` | `gcp_service_account_count` | `0` or `1` means a single account; `N` means a numbered pool | live (tick) |
 | Secret values | `GET /api/secrets` (names only), `PUT /api/secrets/{secret}/{key}`, `DELETE /api/secrets/{secret}[/{key}]`, `PUT`/`DELETE /api/github-tokens/{name}` | `<data-dir>/secrets` | Write-only. A GitHub token cannot be deleted while a git connection names it. | immediate |
 
@@ -201,7 +201,7 @@ Component: `AccessSection.jsx`. Card: *This browser*. It shows how this browser 
 
 ### 3.6 System / Operations → Upgrade (`/settings/upgrade`)
 
-Component: `UpgradeSection.jsx` → `UpgradePanel`. The panel holds the imperative actions: `POST /api/upgrade` (branch or image, optional `afterTasksFinish`), `DELETE /api/upgrade/scheduled`, and the Postgres migration `POST /api/database/upgrade`. These are actions, not standing settings. The standing upgrade *policy* is in General → Updates (§3.10). Startup-only knobs: `-upgrade-src-dir`, `-upgrade-install-path`, `-upgrade-image`, `-upgrade-allowed-branches`, `-upgrade-drain-window`, `-upgrade-image-ref-file`, `-upgrade-restart-cmd`, `-upgrade-verify-cmd`, `-restart-cmd`, `-reboot-cmd`, `-shutdown-cmd` (§10).
+Component: `UpgradeSection.jsx` → `UpgradePanel`. The panel holds the imperative actions: `POST /api/upgrade` (branch or image, optional `afterTasksFinish`) and `DELETE /api/upgrade/scheduled`. Below them, a read-only Database Backend section shows the store in use (`GET /api/database`) and the offline commands that move it; nothing in the panel moves the store (docs/database.md). These are actions, not standing settings. The standing upgrade *policy* is in General → Updates (§3.10). Startup-only knobs: `-upgrade-src-dir`, `-upgrade-install-path`, `-upgrade-image`, `-upgrade-allowed-branches`, `-upgrade-drain-window`, `-upgrade-image-ref-file`, `-upgrade-restart-cmd`, `-upgrade-verify-cmd`, `-restart-cmd`, `-reboot-cmd`, `-shutdown-cmd` (§10).
 
 ### 3.7 System / Operations → Caches (`/settings/caches`)
 
@@ -491,7 +491,7 @@ This file is re-read per request and never exported (`pkg/staterepo/settings.go`
 - Listeners and sign-in: `-ui-addr` (default `0.0.0.0:4242`), `-ui-allowed-hosts`, `-ui-iap-audience` / `-ui-iap-issuer` / `-ui-iap-keys-url` (with the `$GRAIN_IAP_*` fallbacks), `-ui-access-session-lifetime`, `-ui-open`, `-as`, `-sandbox-port-base` (the git proxy, model proxies and caches bind from here; use `0` inside a sandbox), `-hostd-socket`, `-hostd-token-file`
 - Credentials by file: `-gemini-api-key-file`, `-claude-oauth-token-file`, `-openai-api-key-file`, `-codex-auth-file`. Each is optional, because the same credential can be set from Settings → Models into the secret store.
 - Agent CLIs: `-agy-path`, `-claude-path`, `-codex-path`, `-model-backend`, `-mcp-surface`, `-model-proxy-unrestricted`, `-model-proxy-max-concurrent`, `-model-proxy-slot-wait`, `-recorded-tools`, `-tool-budget`
-- Sandbox plumbing: the `-granule-*` flags (each also under a legacy `-kontur-*` name), `-container-git-proxy-host`, `-container-sandbox-network`, `-container-sandbox-cap-add`, `-k8s-kubeconfig`, `-k8s-granule-access`, `-k8s-granule-reattach-timeout`, `-sandbox-access-addr` / `-dial` / `-ca-secret`, `-run-host-image`, `-run-host-credential-dir`, `-run-host-dir`, `-run-host-daemon-url`, `-k8s-run-host-rwx`, `-k8s-run-host-service-account`, `-k8s-run-host-volume`, `-sandbox-env`, `-sandbox-env-file`, `-host-sandbox-env`, `-allow-unisolated-host-sandboxes`, `-native-sandboxes` / `-disable-native-sandboxes`, `-repair-reserve-sandboxes`
+- Sandbox plumbing: the `-granule-*` flags (each also under a legacy `-kontur-*` name), `-container-git-proxy-host`, `-container-sandbox-network`, `-container-sandbox-cap-add`, `-container-sandbox-fence`, `-k8s-kubeconfig`, `-k8s-granule-access`, `-k8s-granule-reattach-timeout`, `-sandbox-access-addr` / `-dial` / `-ca-secret`, `-run-host-image`, `-run-host-credential-dir`, `-run-host-dir`, `-run-host-daemon-url`, `-k8s-run-host-rwx`, `-k8s-run-host-service-account`, `-k8s-run-host-volume`, `-sandbox-env`, `-sandbox-env-file`, `-host-sandbox-env`, `-allow-unisolated-host-sandboxes`, `-native-sandboxes` / `-disable-native-sandboxes`, `-repair-reserve-sandboxes`
 - CI: `-ci` (default `true`), `-grit-url`, `-grit-client-token`, `-checkpost-url`, `-checkpost-expect`
 - Caches: `-package-cache-dir` and its upstream mirror flags, `-actions-cache-dir`
 - Upgrade and power: §3.6

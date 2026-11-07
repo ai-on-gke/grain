@@ -63,6 +63,13 @@ func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 type AuthUserResponse struct {
 	Authenticated bool   `json:"authenticated"`
 	User          string `json:"user,omitempty"`
+	// Actor, OnBehalfOf, and Via are populated for delegated (on-behalf-of)
+	// requests (AU-26.5): Actor is "service:<app email>", OnBehalfOf is
+	// "user:<person>", and Via is the delegate: label (or local part of the
+	// app email).
+	Actor      string `json:"actor,omitempty"`
+	OnBehalfOf string `json:"onBehalfOf,omitempty"`
+	Via        string `json:"via,omitempty"`
 	// IdentityNotAccepted is configResponse.IdentityNotAccepted.
 	IdentityNotAccepted string `json:"identityNotAccepted,omitempty"`
 	// Tenancy is always "single": this daemon has no accounts to sign in
@@ -72,6 +79,8 @@ type AuthUserResponse struct {
 	// "iap", "header", or "trusted" for nobody signed in from a source
 	// this daemon trusts as itself. Empty for anybody else.
 	AuthMethod AuthMethod `json:"authMethod,omitempty"`
+	// Access is configResponse.Access.
+	Access *AccessRoleInfo `json:"access,omitempty"`
 }
 
 // identityNotAccepted is, for a request that is not authenticated, the
@@ -115,8 +124,14 @@ func (s *Server) handleAuthUser(w http.ResponseWriter, r *http.Request) {
 	resp.AuthMethod, resp.User = s.authMethod(r)
 	resp.Authenticated = resp.User != ""
 	resp.IdentityNotAccepted = identityNotAccepted(r, resp.Authenticated)
+	if del := delegatedIdentityFromContext(r.Context()); del != nil {
+		resp.Actor = "service:" + del.AppEmail
+		resp.OnBehalfOf = "user:" + del.PersonEmail
+		resp.Via = del.ViaLabel
+	}
 
 	resp.Tenancy = "single"
+	resp.Access = accessRoleInfo(r.Context())
 
 	writeJSON(w, http.StatusOK, resp)
 }

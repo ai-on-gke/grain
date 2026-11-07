@@ -187,29 +187,29 @@ func TestTheMergeRulesNeedTheRepositorysOwners(t *testing.T) {
 // have let merge itself.
 func TestClassifyWhatThe24AuditFoundOutsideV5(t *testing.T) {
 	cases := map[string]string{
-		"pkg/ui/agent_api_gate.go":               "auth-routes",
-		"pkg/ui/route_scopes.go":                 "auth-routes",
-		"pkg/ui/agent_api.go":                    "auth-routes",
-		"pkg/ui/agent_api_tools.go":              "auth-routes",
-		"pkg/model/agent_api.go":                 "auth-routes",
-		"pkg/ui/config_refusal.go":               "auth-routes",
-		"pkg/ui/persistent_sandboxes.go":         "auth-routes",
-		"pkg/ui/accesscode.go":                   "auth-routes",
-		"pkg/ui/single_tenant.go":                "auth-routes",
-		"pkg/ui/allowlist.go":                    "auth-routes",
-		"pkg/ui/verifier.go":                     "auth-routes",
-		"pkg/policy/policy.go":                   "auth-routes",
-		"pkg/jwks/jwks.go":                       "auth-routes",
-		"pkg/redact/redact.go":                   "capabilities-secrets",
-		"pkg/k8s/pod.go":                         "exec-sandbox",
-		"pkg/hostd/server.go":                    "exec-sandbox",
-		"pkg/localexec/exec.go":                  "exec-sandbox",
-		"pkg/runhost/host.go":                    "exec-sandbox",
-		"pkg/sandboximage/build.go":              "exec-sandbox",
-		"third_party/granule/pkg/forward/mux.go": "exec-sandbox",
-		"pkg/daemon/run.go":                      "exec-sandbox",
-		"pkg/daemon/sandboxnet.go":               "exec-sandbox",
-		"pkg/staterepo/sync.go":                  "state-repo",
+		"pkg/ui/agent_api_gate.go":                    "auth-routes",
+		"pkg/ui/route_scopes.go":                      "auth-routes",
+		"pkg/ui/agent_api.go":                         "auth-routes",
+		"pkg/ui/agent_api_tools.go":                   "auth-routes",
+		"pkg/model/agent_api.go":                      "auth-routes",
+		"pkg/ui/config_refusal.go":                    "auth-routes",
+		"pkg/ui/persistent_sandboxes.go":              "auth-routes",
+		"pkg/ui/accesscode.go":                        "auth-routes",
+		"pkg/ui/single_tenant.go":                     "auth-routes",
+		"pkg/ui/allowlist.go":                         "auth-routes",
+		"pkg/ui/verifier.go":                          "auth-routes",
+		"pkg/policy/policy.go":                        "auth-routes",
+		"pkg/jwks/jwks.go":                            "auth-routes",
+		"pkg/redact/redact.go":                        "capabilities-secrets",
+		"pkg/k8s/pod.go":                              "exec-sandbox",
+		"pkg/hostd/server.go":                         "exec-sandbox",
+		"pkg/localexec/exec.go":                       "exec-sandbox",
+		"pkg/runhost/host.go":                         "exec-sandbox",
+		"pkg/sandboximage/build.go":                   "exec-sandbox",
+		"third_party/granule/pkg/guestforward/mux.go": "exec-sandbox",
+		"pkg/daemon/run.go":                           "exec-sandbox",
+		"pkg/daemon/sandboxnet.go":                    "exec-sandbox",
+		"pkg/staterepo/sync.go":                       "state-repo",
 	}
 	for p, want := range cases {
 		got := categoryIDs(Classify([]string{p}))
@@ -236,15 +236,23 @@ var knownBoundaryFiles = []string{
 	"pkg/policy/", "pkg/jwks/", "pkg/hostd/", "pkg/localexec/", "pkg/runhost/",
 	"pkg/k8s/", "pkg/sandboximage/", "pkg/staterepo/", "pkg/redact/",
 	"third_party/granule/pkg/agent/", "third_party/granule/pkg/execwire/",
-	"third_party/granule/pkg/guestexec/", "third_party/granule/pkg/forward/",
+	"third_party/granule/pkg/guestexec/", "third_party/granule/pkg/guestforward/",
 	"pkg/daemon/run.go", "pkg/daemon/sandboxnet.go",
 	"pkg/ui/server.go", "pkg/ui/auth.go", "pkg/orchestrator/securityhold.go",
 	"pkg/gitproxy/", "pkg/secrets/", "pkg/ci/", "pkg/workflows/", "deploy/kubernetes/",
-	"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/taskhostd.go",
+	"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/connection_hostd.go",
 	"pkg/daemon/hostd_registry.go", "pkg/daemon/hostd_route.go", "pkg/daemon/hostexec.go",
 	"pkg/model/hostd.go", "pkg/ui/messages.go", "pkg/daemon/mcpserver_hostexec.go",
+	"pkg/daemon/capability_servers.go", "pkg/daemon/capability_servers_hostd.go",
+	"pkg/ui/capability_servers.go",
+	"pkg/ui/access_roles.go", "pkg/model/api_scope_set.go", "pkg/ui/external_cli.go",
+	"pkg/ui/local_script_approvals.go", "pkg/daemon/ui_server.go",
 	"pkg/model/repo_access.go", "pkg/daemon/ci.go", "pkg/daemon/ci_policy.go",
 	"pkg/daemon/ci_capability_pass.go", "pkg/daemon/capabilities.go",
+	"pkg/playbooks/", "pkg/model/capability_ref.go",
+	"pkg/model/capability_catalogue.go", "pkg/model/template_grants.go",
+	"pkg/model/owner_trust.go", "pkg/model/external_agent_token.go",
+	"pkg/ui/external_agents.go",
 }
 
 // Entries ending in "/" are directories: every .go file under them, as it
@@ -292,20 +300,23 @@ func TestEveryKnownBoundaryFileIsClassified(t *testing.T) {
 // of which v10 held, so a change to who may do what there merged itself.
 func TestHostdAndCIRepoAccessGatesAreClassified(t *testing.T) {
 	cases := map[string]string{
-		"pkg/ui/hostd_connect.go":          "auth-routes",
-		"pkg/ui/hostds.go":                 "auth-routes",
-		"pkg/ui/taskhostd.go":              "auth-routes",
-		"pkg/daemon/hostd_registry.go":     "auth-routes",
-		"pkg/daemon/hostd_route.go":        "auth-routes",
-		"pkg/daemon/hostexec.go":           "auth-routes",
-		"pkg/model/hostd.go":               "auth-routes",
-		"pkg/ui/messages.go":               "auth-routes",
-		"pkg/daemon/mcpserver_hostexec.go": "capabilities-secrets",
-		"pkg/model/repo_access.go":         "capabilities-secrets",
-		"pkg/daemon/ci.go":                 "capabilities-secrets",
-		"pkg/daemon/ci_policy.go":          "capabilities-secrets",
-		"pkg/daemon/ci_capability_pass.go": "capabilities-secrets",
-		"pkg/daemon/capabilities.go":       "capabilities-secrets",
+		"pkg/ui/hostd_connect.go":                "auth-routes",
+		"pkg/ui/hostds.go":                       "auth-routes",
+		"pkg/ui/connection_hostd.go":             "auth-routes",
+		"pkg/daemon/hostd_registry.go":           "auth-routes",
+		"pkg/daemon/hostd_route.go":              "auth-routes",
+		"pkg/daemon/hostexec.go":                 "auth-routes",
+		"pkg/model/hostd.go":                     "auth-routes",
+		"pkg/ui/messages.go":                     "auth-routes",
+		"pkg/daemon/mcpserver_hostexec.go":       "capabilities-secrets",
+		"pkg/daemon/capability_servers.go":       "capabilities-secrets",
+		"pkg/daemon/capability_servers_hostd.go": "capabilities-secrets",
+		"pkg/ui/capability_servers.go":           "capabilities-secrets",
+		"pkg/model/repo_access.go":               "capabilities-secrets",
+		"pkg/daemon/ci.go":                       "capabilities-secrets",
+		"pkg/daemon/ci_policy.go":                "capabilities-secrets",
+		"pkg/daemon/ci_capability_pass.go":       "capabilities-secrets",
+		"pkg/daemon/capabilities.go":             "capabilities-secrets",
 	}
 	for p, want := range cases {
 		got := categoryIDs(Classify([]string{p}))
@@ -322,8 +333,63 @@ func TestHostdAndCIRepoAccessGatesAreClassified(t *testing.T) {
 			"RepoAccessAdmitsCIEvent", "RepoReadTarget", "RepoWriteTarget", "IsGitPushAnyRefGrant",
 			"HostdForToken", "CreateHostd", "RotateHostdToken", "NormalizeHostdOwner",
 		},
-		"pkg/ui":     {"hostdConnectIdentity", "messagesSince"},
-		"pkg/daemon": {"registryResolver", "SelectHostd", "grantRepoAccess", "ciRepoAccessAdmitted", "CheckCIJobRepoAccessPolicy"},
+		"pkg/ui":     {"hostdConnectIdentity", "normalizeConnectionHostd", "normalizeServerHostd", "messagesSince"},
+		"pkg/daemon": {"registryResolver", "SelectHostd", "placedOn", "grantRepoAccess", "ciRepoAccessAdmitted", "CheckCIJobRepoAccessPolicy"},
+	}
+	for dir, names := range gates {
+		defined := funcFiles(t, dir)
+		for _, name := range names {
+			file, ok := defined[name]
+			if !ok {
+				t.Errorf("%s: no func or method %s -- update this test to where it went", dir, name)
+				continue
+			}
+			if Classify([]string{file}) == nil {
+				t.Errorf("%s is defined in %s, which Classify leaves unclassified", name, file)
+			}
+		}
+	}
+}
+
+// One path per file v15 added (2026-11-04 security review finding 2): each
+// decides who may do what -- the controller MCP endpoint's caller access,
+// the hostd install script run as root, the CI grant rule, the auto-merge
+// guard, the sign-in allowlist's refusals and the person-only access
+// decision -- and v14 classified none of them, so a change to any merged
+// itself.
+func TestNewAuthorizationFilesAreClassified(t *testing.T) {
+	cases := map[string]string{
+		"pkg/ui/mcp_endpoint.go":          "auth-routes",
+		"pkg/model/allowed_principals.go": "auth-routes",
+		"pkg/ui/access_principals.go":     "auth-routes",
+		"pkg/ui/task_access_request.go":   "auth-routes",
+		"pkg/model/ci_grant_rule.go":      "capabilities-secrets",
+		"pkg/model/task_auto_merge.go":    "hold-policy",
+		"pkg/ui/hostd_install.sh":         "setup-scripts",
+		"pkg/ui/hostd_install.go":         "setup-scripts",
+	}
+	for p, want := range cases {
+		got := categoryIDs(Classify([]string{p}))
+		if !reflect.DeepEqual(got, []string{want}) {
+			t.Errorf("Classify(%q) = %v, want [%s]", p, got, want)
+		}
+	}
+	// Control: an ordinary pkg/ui file is still nothing.
+	if got := Classify([]string{"pkg/ui/actionscache.go"}); got != nil {
+		t.Errorf("Classify(pkg/ui/actionscache.go) = %v, want nothing", categoryIDs(got))
+	}
+
+	// The gates by name, as in TestHostdAndCIRepoAccessGatesAreClassified.
+	gates := map[string][]string{
+		"pkg/model": {
+			"NormalizeAllowedPrincipalEntry", "RegisterCIGrantRule", "CIGrantRuleFor",
+			"guardAutoMerge", "restoreAfterHolds",
+		},
+		"pkg/ui": {
+			"resolveMCPCallerAccess", "allowsRoute", "dispatchSubrequest", "filingContextTool",
+			"hostdInstallRoute", "hostdInstallCallerHasAccess", "renderHostdInstallScript",
+			"pendingAccessToDecide", "refuseAgentAccessDecision",
+		},
 	}
 	for dir, names := range gates {
 		defined := funcFiles(t, dir)
@@ -379,6 +445,11 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 		".github/workflows/promote-release.yml": "release-promotion",
 		"pkg/ui/release_approval.go":            "release-promotion",
 		".grain/templates/release-train.yml":    "release-promotion",
+		"scripts/release-from-trunk.sh":         "release-promotion",
+		"scripts/release.conf":                  "release-promotion",
+		"scripts/release-train-task.sh":         "release-promotion",
+		".grain/schedules/release-train.yml":    "release-promotion",
+		".github/workflows/publish-release.yml": "release-promotion",
 		"pkg/trustboundary/trustboundary.go":    "hold-policy",
 		".grain/triggers/release-promotion.yml": "path-triggers",
 		".grain/triggers/release-machinery.yml": "path-triggers",
@@ -395,8 +466,8 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 	}
 
 	reviewed := []string{
-		"scripts/release-images.sh", "scripts/release-from-trunk.sh",
-		"scripts/release-notes.sh", "scripts/candidate-gate.sh", "scripts/release.conf",
+		"scripts/release-images.sh",
+		"scripts/release-notes.sh", "scripts/candidate-gate.sh",
 		"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
 		".grain/workflows/release.yml", ".github/workflows/release.yml",
 		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
@@ -423,6 +494,150 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 		"anybody but a person", "RELEASE_MAJOR"} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("release-machinery's review brief does not mention %s:\n%s", want, brief)
+		}
+	}
+}
+
+// One path per file v17 added (2026-11-05 security review finding 2, task
+// 3168): the role gate, the built-in scope sets, the gma_ token's inbox
+// reach, the approval-callback tokens and the daemon's UI listeners. v16
+// classified none of them, so a change to any merged itself.
+func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
+	if Version != "trust-boundary/v20" {
+		t.Errorf("Version = %q, want trust-boundary/v20", Version)
+	}
+	for _, p := range []string{
+		"pkg/ui/access_roles.go",
+		"pkg/ui/request_actor.go",
+		"pkg/ui/host_enroll.go",
+		"pkg/model/api_scope_set.go",
+		"pkg/model/host_enroll.go",
+		"pkg/ui/external_cli.go",
+		"pkg/ui/local_script_approvals.go",
+		"pkg/daemon/ui_server.go",
+	} {
+		if got := categoryIDs(Classify([]string{p})); !reflect.DeepEqual(got, []string{"auth-routes"}) {
+			t.Errorf("Classify(%q) = %v, want [auth-routes]", p, got)
+		}
+	}
+
+	// The gates by name, as in TestHostdAndCIRepoAccessGatesAreClassified.
+	gates := map[string][]string{
+		"pkg/model": {"APIScopeSetNamed"},
+		"pkg/ui": {
+			"resolveAccessRoles", "roleDenies", "roleGate", "roleScopeOf", "authorizeRoleCall",
+			"admitVerifiedPrincipal",
+			"MintToken", "RevokeToken", "CheckToken", "approvalCallbackRouteTask",
+			"authenticateApprovalCallback", "handleAnswerLocalScriptApproval",
+			"inboxReadable", "CheckReply", "handleReplyTask",
+		},
+		"pkg/daemon": {"startUIServer", "localScriptCallbackServer"},
+	}
+	for dir, names := range gates {
+		defined := funcFiles(t, dir)
+		for _, name := range names {
+			file, ok := defined[name]
+			if !ok {
+				t.Errorf("%s: no func or method %s -- update this test to where it went", dir, name)
+				continue
+			}
+			if Classify([]string{file}) == nil {
+				t.Errorf("%s is defined in %s, which Classify leaves unclassified", name, file)
+			}
+		}
+	}
+}
+
+// v19 (task 3388): the embedded bootstrap playbooks moved out of
+// pkg/capability/ in task 3148 (pkg/playbooks/) and the capability
+// reference/policy, catalogue and template-grant admission files in
+// pkg/model/ classify under capabilities-secrets.
+func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
+	if Version != "trust-boundary/v20" {
+		t.Errorf("Version = %q, want trust-boundary/v20", Version)
+	}
+	for _, p := range []string{
+		"pkg/playbooks/playbooks.go",
+		"pkg/playbooks/gcp-capabilities.md",
+		"pkg/playbooks/gke-sandbox-cluster.md",
+		"pkg/model/capability_ref.go",
+		"pkg/model/capability_catalogue.go",
+		"pkg/model/template_grants.go",
+	} {
+		if got := categoryIDs(Classify([]string{p})); !reflect.DeepEqual(got, []string{"capabilities-secrets"}) {
+			t.Errorf("Classify(%q) = %v, want [capabilities-secrets]", p, got)
+		}
+	}
+
+	defined := funcFiles(t, "pkg/model")
+	for _, name := range []string{
+		"Permits", "UncoveredCapabilityRefs", "ValidateGrants",
+		"IsDangerousGrant", "TemplateWithinTask", "ReviewTemplateWithinTask", "ReviewGrants",
+	} {
+		file, ok := defined[name]
+		if !ok {
+			t.Errorf("pkg/model: no func or method %s -- update this test to where it went", name)
+			continue
+		}
+		if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"capabilities-secrets"}) {
+			t.Errorf("%s is defined in %s, Classify = %v, want [capabilities-secrets]", name, file, got)
+		}
+	}
+}
+
+// v20 (task 3026): the external-agent owner-trust policy and the gma_
+// bearer token model and lifecycle handlers classify under auth-routes, while
+// the provenance-only X-Grain-Client / FiledVia helpers stay unclassified.
+func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
+	if Version != "trust-boundary/v20" {
+		t.Errorf("Version = %q, want trust-boundary/v20", Version)
+	}
+	for _, p := range []string{
+		"pkg/model/owner_trust.go",
+		"pkg/model/external_agent_token.go",
+		"pkg/ui/external_agents.go",
+	} {
+		if got := categoryIDs(Classify([]string{p})); !reflect.DeepEqual(got, []string{"auth-routes"}) {
+			t.Errorf("Classify(%q) = %v, want [auth-routes]", p, got)
+		}
+	}
+
+	// Control: X-Grain-Client / FiledVia is provenance-only (XC-15) and
+	// consulted by no scope, repository, approval or owner-trust decision.
+	for _, p := range []string{
+		"pkg/model/grain_client.go",
+		"pkg/ui/grain_client.go",
+	} {
+		if got := Classify([]string{p}); got != nil {
+			t.Errorf("Classify(%q) = %v, want nothing", p, categoryIDs(got))
+		}
+	}
+
+	// The gates by name, as in TestNewAuthorizationFilesAreClassified.
+	gates := map[string][]string{
+		"pkg/model": {
+			"NormalizeOwnerTrust", "OwnerTrusted", "OwnerTrustedForTask",
+			"OwnerPrincipal", "AllowsRepo", "NormalizeExternalAgentSpec",
+			"ResolveExternalAgentGrants", "GetExternalAgentTokenByHash",
+			"RotateExternalAgentToken", "RevokeExternalAgentToken", "RevokeAllExternalAgentTokens",
+		},
+		"pkg/ui": {
+			"canIssuePersonExternalAgentToken", "externalAgentTokenOwner", "selfServiceLimits",
+			"CreateExternalAgentToken", "RotateExternalAgentToken",
+			"authenticateExternalAgent", "ExternalAgentAPITools", "handleMCP",
+		},
+	}
+	for dir, names := range gates {
+		defined := funcFiles(t, dir)
+		for _, name := range names {
+			file, ok := defined[name]
+			if !ok {
+				t.Errorf("%s: no func or method %s -- update this test to where it went", dir, name)
+				continue
+			}
+			if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"auth-routes"}) {
+				t.Errorf("%s is defined in %s, Classify = %v, want [auth-routes]", name, file, got)
+			}
 		}
 	}
 }

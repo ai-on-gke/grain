@@ -16,6 +16,7 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"errors"
 	"fmt"
@@ -28,7 +29,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/namespace"
 )
 
 //go:embed static
@@ -64,7 +67,10 @@ type Server struct {
 	// mentions them.
 	taskList    taskListCache
 	taskDetails taskDetailCache
-	dbConfirm   databaseConfirmations
+	// hostdImage is the image /api/hostd/install.sh suggests
+	// (hostdInstallImage), hostd_install.go's.
+	hostdImage      hostdImageCache
+	hostdJoinReplay hostd.NonceReplayCache
 	// access is the single-tenant access gate's rate limiter, and
 	// accessCode the token file it checks codes against
 	// (localAPITokenNow) -- both accesscode.go's.
@@ -72,11 +78,15 @@ type Server struct {
 	accessCode        atomic.Pointer[accessCodeFile]
 	externalLimiter   *externalAgentLimiter
 	defaultGroupsOnce sync.Once
-	defaultGroups     *CloudIdentityGroupChecker
+	defaultGroups     GroupMemberChecker
 	// controllerMCPHandler serves POST /api/mcp (mcp_endpoint.go), built
 	// once on first use.
 	controllerMCPOnce    sync.Once
 	controllerMCPHandler http.Handler
+	// fsNamespace is the namespace GET /api/fs/ serves (api_fs.go).
+	fsNamespace func() *namespace.Server
+	// eventsKeepalive overrides defaultEventsKeepalive in tests (events.go).
+	eventsKeepalive time.Duration
 }
 
 // NewServer builds a Server over a store.
@@ -111,24 +121,106 @@ func NewServerWithClient(client *Client) *Server {
 	return s
 }
 
+const maxTunnelRequestBodyBytes = 64 << 20 // 64 MiB cap on non-upgraded tunnel request bodies
+
+// RegistryTunnelHandler returns an http.Handler for serving accepted mux
+// streams on an outbound registry tunnel (-registry-connect). Every tunneled
+// request is gated unconditionally behind the "registry" IdentityVerifier
+// (X-Grain-Registry-Assertion, Source == "registry")—including open routes like
+// /api/config, /api/auth/*, and /api/hostd/connect—and loopback or access-code
+// shortcuts (grain_access cookies, X-Grain-Access-Code headers, and bearer
+// access codes) are unconditionally rejected.
+func (s *Server) RegistryTunnelHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setSecurityHeaders(w.Header())
+		r = r.Clone(withRegistryTunnelRequest(r.Context()))
+		if strings.TrimSpace(r.RemoteAddr) == "" || isLoopbackRequest(r) {
+			r.RemoteAddr = "tunnel-stream-remote"
+		}
+		if r.Body != nil && strings.TrimSpace(r.Header.Get("Upgrade")) == "" {
+			r.Body = http.MaxBytesReader(w, r.Body, maxTunnelRequestBodyBytes)
+		}
+		if s.tasks != nil {
+			r = r.WithContext(WithIAPConfig(r.Context(), IAPConfig{
+				Audience:              s.tasks.Config.IAPAudience,
+				Issuer:                s.tasks.Config.IAPIssuer,
+				KeysURL:               s.tasks.Config.IAPKeysURL,
+				RegistryIssuer:        s.tasks.Config.RegistryIssuer,
+				RegistryAudience:      s.tasks.Config.RegistryAudience,
+				RegistryKeysURL:       s.tasks.Config.RegistryKeysURL,
+				RequireVerifier:       string(AuthMethodRegistry),
+				RequireIAP:            false,
+				LocalAPIToken:         "",
+				AccessSessionLifetime: s.tasks.Config.AccessSessionLifetime,
+			}))
+		} else {
+			cfg, _ := IAPConfigFromContext(r.Context())
+			cfg.RequireVerifier = string(AuthMethodRegistry)
+			cfg.RequireIAP = false
+			cfg.LocalAPIToken = ""
+			r = r.WithContext(WithIAPConfig(r.Context(), cfg))
+		}
+		if strings.TrimSpace(r.Header.Get(AccessCodeHeader)) != "" {
+			writeError(w, http.StatusUnauthorized, errors.New("X-Grain-Access-Code is not accepted over the registry tunnel"))
+			return
+		}
+		if c, err := r.Cookie(AccessCookieName); err == nil && c != nil && strings.TrimSpace(c.Value) != "" {
+			writeError(w, http.StatusUnauthorized, errors.New("grain_access cookies are not accepted over the registry tunnel"))
+			return
+		}
+		if presentsApprovalCallbackToken(r) {
+			writeError(w, http.StatusUnauthorized, errors.New("local script approval tokens are not accepted over the registry tunnel"))
+			return
+		}
+		if _, ok := bearerToken(r); ok && !presentsExternalAgentToken(r) {
+			writeError(w, http.StatusUnauthorized, errors.New("bearer access codes are not accepted over the registry tunnel"))
+			return
+		}
+		cv := verifyRegistryTunnelCaller(r)
+		r = r.WithContext(withCallerVerification(r.Context(), &cv))
+		if !cv.present || cv.err != nil {
+			err := cv.err
+			if err == nil {
+				err = errors.New(errVerifierRequired(string(AuthMethodRegistry)))
+			}
+			writeAssertionRefused(w, r, err)
+			return
+		}
+		s.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w.Header())
 	if !checkCrossOrigin(w, r) {
 		return
 	}
-	serveRecovered(w, r, http.HandlerFunc(s.serveHTTP))
+	withCompression(w, r, func(w http.ResponseWriter, r *http.Request) {
+		serveRecovered(w, r, http.HandlerFunc(s.serveHTTP))
+	})
 }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	tunnelReq := isRegistryTunnelRequest(r)
 	if s.tasks != nil {
-		r = r.WithContext(WithIAPConfig(r.Context(), IAPConfig{
+		iapCfg := IAPConfig{
 			Audience:              s.tasks.Config.IAPAudience,
 			Issuer:                s.tasks.Config.IAPIssuer,
 			KeysURL:               s.tasks.Config.IAPKeysURL,
+			RegistryIssuer:        s.tasks.Config.RegistryIssuer,
+			RegistryAudience:      s.tasks.Config.RegistryAudience,
+			RegistryKeysURL:       s.tasks.Config.RegistryKeysURL,
+			RequireVerifier:       s.tasks.Config.RequireVerifier,
 			RequireIAP:            s.tasks.Config.RequireIAP,
 			LocalAPIToken:         s.localAPITokenNow(),
 			AccessSessionLifetime: s.tasks.Config.AccessSessionLifetime,
-		}))
+		}
+		if tunnelReq {
+			iapCfg.RequireVerifier = string(AuthMethodRegistry)
+			iapCfg.RequireIAP = false
+			iapCfg.LocalAPIToken = ""
+		}
+		r = r.WithContext(WithIAPConfig(r.Context(), iapCfg))
 	}
 	// Nobody gets further without the access code -- loopback included
 	// (accesscode.go, grain/task-4343) -- unless the request presents a
@@ -136,10 +228,30 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	// PrincipalAgent("external:<name>") and is held to its own scopes by
 	// agentAPIGate and handleMCP.
 	cfg, _ := IAPConfigFromContext(r.Context())
-	cv := verifyCallerNow(r)
-	r = r.WithContext(withCallerVerification(r.Context(), &cv))
+	var cv callerVerification
+	if tunnelReq {
+		cv = cachedOrVerifyCaller(r)
+	} else {
+		cv = verifyCallerNow(r)
+		r = r.WithContext(withCallerVerification(r.Context(), &cv))
+	}
 	if cv.present && cv.err != nil {
 		writeAssertionRefused(w, r, cv.err)
+		return
+	}
+	if !tunnelReq && presentsApprovalCallbackToken(r) {
+		taskID, ok := s.authenticateApprovalCallback(w, r)
+		if !ok {
+			return
+		}
+		r.Header.Del(ActingTaskHeader)
+		ctx := r.Context()
+		if s.tasks != nil {
+			ctx = s.tasks.withOperatorActor(ctx)
+		}
+		agent := model.Principal{Kind: model.PrincipalAgent, ID: taskID, Source: model.SourceInternal}
+		r = r.WithContext(withAuthMethod(WithPrincipal(ctx, agent), AuthMethodTrusted))
+		s.mux.ServeHTTP(w, r)
 		return
 	}
 	if externalTokenFromContext(r.Context()) == nil && presentsExternalAgentToken(r) {
@@ -151,8 +263,19 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name, Source: model.SourceExternalToken}
 		r = r.WithContext(withExternalToken(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), tok))
 	}
+	roleSlot := &accessRoleSlot{}
+	r = r.WithContext(context.WithValue(r.Context(), accessRoleSlotKey{}, roleSlot))
 	if !s.singleTenantGate(w, r, cfg) {
 		return
+	}
+	if roleSlot.role != nil {
+		r = r.WithContext(withAccessRole(r.Context(), roleSlot.role))
+	}
+	if roleSlot.delegation != nil {
+		r = r.WithContext(withDelegatedIdentity(r.Context(), roleSlot.delegation))
+		log.Printf("grain ui: delegated request: %s %s actor=service:%s on_behalf_of=user:%s via=%s registry_rid=%q registry_jti=%q delegation_grant=%q",
+			r.Method, r.URL.Path, roleSlot.delegation.AppEmail, roleSlot.delegation.PersonEmail, roleSlot.delegation.ViaLabel,
+			roleSlot.delegation.RequestID, roleSlot.delegation.JTI, roleSlot.delegation.Grant)
 	}
 	if s.tasks != nil {
 		r = r.WithContext(s.tasks.withOperatorActor(r.Context()))
@@ -163,7 +286,19 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		p, method, ok := extractPrincipal(r)
 		if ok {
-			if !singleTenantOpenRoute(r) || s.checkAllowedPrincipal(r.Context(), VerifiedIdentity{Email: p.ID, Kind: p.Kind}) == nil {
+			admitted := !singleTenantOpenRoute(r)
+			if !admitted {
+				if err := s.admitVerifiedPrincipal(r.Context(), cv.id); err == nil {
+					admitted = true
+					if roleSlot.role != nil {
+						r = r.WithContext(withAccessRole(r.Context(), roleSlot.role))
+					}
+					if roleSlot.delegation != nil {
+						r = r.WithContext(withDelegatedIdentity(r.Context(), roleSlot.delegation))
+					}
+				}
+			}
+			if admitted {
 				r = r.WithContext(withAuthMethod(WithPrincipal(r.Context(), p), method))
 			} else {
 				ok = false
@@ -182,6 +317,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			r = r.WithContext(withRequestSource(r.Context(), trustedRequestSource(r)))
 		}
 	}
+	r = r.WithContext(model.WithEventActor(r.Context(), RequestActor(r.Context())))
 	// Unarmed until a configuration write's guard finds the deployment
 	// managed by an external config repository (checkSettingsWritable).
 	rehearsal := &configWriteRehearsal{}
@@ -206,7 +342,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 // sign-in page reads) and /api/auth/* (signing in itself) are the only
 // things served to a caller nobody has vouched for. A grain hostd dialing
 // in to /api/hostd/connect authenticates in its own protocol
-// (hostdConnectRoute).
+// (hostdConnectRoute), and the script that installs one
+// (hostdInstallRoute) is grain's own, with nothing in it to keep.
 //
 // A persistent sandbox's staging environment under /staging/ is held to
 // the same gate as the API: it is somebody's running service, not a page
@@ -218,13 +355,19 @@ func requiresAccess(r *http.Request) bool {
 	return strings.HasPrefix(r.URL.Path, "/api/") &&
 		!(r.URL.Path == "/api/config" && (r.Method == http.MethodGet || r.Method == http.MethodHead)) &&
 		!strings.HasPrefix(r.URL.Path, "/api/auth/") &&
-		!hostdConnectRoute(r)
+		!hostdConnectRoute(r) && !hostdInstallRoute(r) && !hostdEnrollOpenRoute(r)
 }
 
 func (s *Server) routes() {
 	s.route("GET /api/config", s.handleConfig)
-	s.mux.HandleFunc("PUT /api/config", s.agentAPIGate("PUT /api/settings", s.handleUpdateSettings))
+	s.mux.HandleFunc("PUT /api/config", s.roleGate("PUT /api/settings", s.agentAPIGate("PUT /api/settings", s.handleUpdateSettings)))
 	s.route("GET /api/restart-watch", s.handleRestartWatch)
+	s.route("GET /api/fs/ci/{path...}", s.handleReadCINamespace)
+	s.route("GET /api/fs/task/{path...}", s.handleReadTaskNamespace)
+	s.route("GET /api/fs/deploy/{path...}", s.handleReadDeployNamespace)
+	s.route("GET /api/fs/config/{path...}", s.handleReadConfigNamespace)
+	s.route("GET /api/fs/memory/{path...}", s.handleReadMemoryNamespace)
+	s.route("GET /api/fs/src/{path...}", s.handleReadSrcNamespace)
 	s.route("GET /api/auth/access-code", s.handleAccessCodeStatus)
 	s.route("POST /api/auth/access-code", s.handleAccessCodeLogin)
 	s.route("GET /api/auth/access-code/login.js", s.handleAccessCodeScript)
@@ -232,6 +375,7 @@ func (s *Server) routes() {
 	s.route("GET /api/auth/logout", s.handleAuthLogout)
 	s.route("GET /api/auth/user", s.handleAuthUser)
 	s.route("GET /api/auth/status", s.handleAuthUser)
+	s.route("GET /api/auth/whoami", s.handleAuthWhoami)
 	s.route("GET /api/whoami", s.handleWhoami)
 	s.route("GET /api/settings", s.handleGetSettings)
 	s.route("PUT /api/settings", s.handleUpdateSettings)
@@ -239,9 +383,16 @@ func (s *Server) routes() {
 	s.route("POST /api/settings/plan", s.handlePlanSettings)
 	s.route("GET /api/settings/cli-run", s.handleGetCLIRunSettings)
 	s.route("PUT /api/settings/cli-run", s.handleUpdateCLIRunSettings)
+	s.route("GET /api/registry", s.handleGetRegistry)
+	s.route("POST /api/registry/heartbeat", s.handleTriggerRegistryHeartbeat)
+	s.route("GET /api/registry/status", s.handleGetRegistryInstanceStatus)
 	s.route("POST /api/capabilities/{id}/check", s.handleCheckCapability)
 	s.route("GET /api/tasks", s.handleListTasks)
 	s.route("GET /api/tasks/states", s.handleTaskStates)
+	s.route("GET /api/tasks/wait", s.handleTasksWait)
+	s.route("GET /api/inbox", s.handleInbox)
+	s.route("GET /api/refs/{ref}/summary", s.handleRefSummary)
+	s.route("GET /api/events", s.handleEvents)
 	s.route("GET /api/states", s.handleTaskStates)
 	s.route("POST /api/tasks", s.handleCreateTask)
 	s.route("POST /api/tasks/from-template", s.handleCreateTaskFromTemplate)
@@ -256,6 +407,7 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/undefer", s.handleUndefer)
 	s.route("POST /api/tasks/{id}/submit", s.handleSubmit)
 	s.route("POST /api/tasks/{id}/comments", s.handleAddComment)
+	s.route("POST /api/tasks/{id}/reply", s.handleReplyTask)
 	// PUT, not POST: setting the one secret a parked run asked for is an
 	// idempotent write of a value at a name the task already fixed --
 	// the same shape (and the same verb) /api/secrets/{secret}/{key}
@@ -264,6 +416,9 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/config-change", s.handleProposeConfigChange)
 	s.route("POST /api/tasks/{id}/config-change/approve", s.handleApproveConfigChange)
 	s.route("POST /api/tasks/{id}/config-change/reject", s.handleRejectConfigChange)
+	s.route("POST /api/tasks/{id}/access-request/check", s.handleCheckAccessRequest)
+	s.route("POST /api/tasks/{id}/access-request/grant", s.handleGrantAccessRequest)
+	s.route("POST /api/tasks/{id}/access-request/deny", s.handleDenyAccessRequest)
 	s.route("GET /api/tasks/{id}/attachments/{attachmentId}", s.handleGetAttachment)
 	s.route("POST /api/tasks/{id}/close", s.handleClose)
 	s.route("POST /api/tasks/{id}/stop", s.handleStop)
@@ -282,6 +437,11 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/force-merge", s.handleForceMerge)
 	s.route("POST /api/tasks/{id}/run-now", s.handleRunNow)
 	s.route("POST /api/tasks/{id}/pull-request", s.handleOpenPullRequest)
+	// A pull request grain did not open (pull_requests_api.go, #XC-28,
+	// #XC-29): adopt it, review it, or report where it stands.
+	s.route("POST /api/pull-requests/adopt", s.handleAdoptPullRequest)
+	s.route("POST /api/pull-requests/review", s.handleReviewPullRequest)
+	s.route("GET /api/pull-requests/status", s.handlePullRequestStatus)
 	s.route("POST /api/tasks/{id}/sandbox/recreate", s.handleRecreateSandbox)
 	s.route("POST /api/sandbox-probe", s.handleSandboxProbe)
 	s.route("POST /api/tasks/{id}/activity", s.handleSetTaskActivity)
@@ -299,6 +459,8 @@ func (s *Server) routes() {
 	// messages.go, and mcp's chat tool at the other end of it.
 	s.route("POST /api/tasks/{id}/messages", s.handlePostTaskMessage)
 	s.route("POST /api/tasks/{id}/notes", s.handlePostTaskNote)
+	s.route("POST /api/tasks/{id}/human-review", s.handleRequestHumanReview)
+	s.route("POST /api/tasks/{id}/human-review/release", s.handleReleaseHumanReview)
 	s.route("POST /api/tasks/{id}/notify", s.handleAgentNotify)
 	s.route("POST /api/notifications", s.handleRaiseNotification)
 	s.route("GET /api/notifications", s.handleListNotifications)
@@ -419,6 +581,8 @@ func (s *Server) routes() {
 	s.route("POST /api/repos/{owner}/{name}/releases/{release}/candidates/promote", s.handlePromoteCandidate)
 	s.route("POST /api/repos/{owner}/{name}/pending-releases/{version}/approve", s.handleApproveRelease)
 	s.route("POST /api/repos/{owner}/{name}/pending-releases/{version}/reject", s.handleRejectRelease)
+	s.route("POST /api/releases/{version}/rollback", s.handleRollbackRelease)
+	s.route("GET /api/release-approval-key", s.handleReleaseApprovalKey)
 
 	s.route("GET /api/repos/{owner}/{name}/branches", s.handleListBranches)
 	s.route("POST /api/repos/{owner}/{name}/branches", s.handleCreateBranch)
@@ -504,6 +668,9 @@ func (s *Server) routes() {
 	s.route("POST /api/capability-servers/test-script", s.handleTestHostScript)
 	s.route("POST /api/capability-servers/gchat-test", s.handleTestGChatPost)
 	s.route("GET /api/capability-servers/gchat-usage", s.handleGChatUsage)
+	s.route("POST /api/capability-servers/figma-test", s.handleTestFigmaAccount)
+	s.route("POST /api/capability-servers/figma-oauth-authorize", s.handleAuthorizeFigmaOAuth)
+	s.route("POST /api/capability-servers/figma-oauth-exchange", s.handleExchangeFigmaOAuth)
 	s.route("GET /api/capability-servers/host-entries", s.handleCapabilityServerHostEntries)
 	s.route("GET /api/capability-servers/usage", s.handleCapabilityServerUsage)
 	s.route("GET /api/capability-policy", s.handleGetCapabilityPolicy)
@@ -550,14 +717,11 @@ func (s *Server) routes() {
 	s.route("GET /api/host/top", s.handleGetHostTop)
 	s.route("GET /api/upgrade", s.handleGetUpgradeStatus)
 	s.route("POST /api/upgrade", s.handleStartUpgrade)
+	s.route("PUT /api/upgrade/source", s.handleUpdateUpgradeSource)
 	s.route("DELETE /api/upgrade/scheduled", s.handleCancelScheduledUpgrade)
 	s.route("GET /api/upgrade/targets", s.handleGetUpgradeTargets)
 	s.route("GET /api/upgrade/release-notes", s.handleUpgradeReleaseNotes)
 	s.route("GET /api/database", s.handleGetDatabase)
-	s.route("POST /api/database/test", s.handleTestDatabaseConnection)
-	s.route("POST /api/database/upgrade", s.handleUpgradeDatabase)
-	s.route("POST /api/upgrade/postgres", s.handleUpgradeDatabase)
-	s.route("POST /api/settings/db/migrate-to-postgres", s.handleUpgradeDatabase)
 
 	s.route("GET /api/logs", s.handleListLogSources)
 	s.route("GET /api/logs/{source}", s.handleGetLogLines)
@@ -643,16 +807,34 @@ func (s *Server) routes() {
 
 	// A grain hostd on another machine dialing in (hostd -server).
 	s.route("GET /api/hostd/connect", s.handleHostdConnect)
-	// The hostd registry (Settings -> Hostds).
+	s.route("POST /api/hostd/join", s.handleHostdJoin)
+	s.route("POST /api/hostd/join/{id}/poll", s.handleHostdJoinPoll)
+	s.route("POST /api/hostd/renew", s.handleHostdRenew)
+	// The script that installs one there (Settings -> Hosts).
+	s.route("GET "+hostdInstallPath, s.handleHostdInstallScript)
+	s.route("GET "+hostdInstallShortPath, s.handleHostdInstallScript)
+	// The host registry and join handshake (Settings -> Hosts).
 	s.route("GET /api/hostds", s.handleListHostds)
 	s.route("POST /api/hostds", s.handleCreateHostd)
+	s.route("GET /api/hostds/enrollment-codes", s.handleListHostEnrollmentCodes)
+	s.route("POST /api/hostds/enrollment-codes", s.handleCreateHostEnrollmentCode)
+	s.route("POST /api/hostds/enrollment-codes/{name}/rotate", s.handleRotateHostEnrollmentCode)
+	s.route("POST /api/hostds/enrollment-codes/{name}/revoke", s.handleRevokeHostEnrollmentCode)
+	s.route("GET /api/hostds/pending", s.handleListPendingHostJoins)
+	s.route("POST /api/hostds/pending/{id}/accept", s.handleAcceptPendingHostJoin)
+	s.route("POST /api/hostds/pending/{id}/reject", s.handleRejectPendingHostJoin)
 	s.route("PATCH /api/hostds/{name}", s.handleUpdateHostd)
+	s.route("GET /api/hostds/{name}/install", s.handleHostdInstall)
+	s.route("POST /api/hostds/{name}/rename", s.handleRenameHostd)
 	s.route("POST /api/hostds/{name}/rotate", s.handleRotateHostdToken)
 	s.route("POST /api/hostds/{name}/revoke", s.handleRevokeHostd)
+	s.route("DELETE /api/hostds/{name}", s.handleDeleteHostd)
+	s.route("POST /api/hostds/delete-revoked", s.handleDeleteRevokedHostds)
 
 	// Verified-identity sign-in allowlist (Settings -> Access).
 	s.route("GET /api/access/principals", s.handleListAccessPrincipals)
 	s.route("POST /api/access/principals", s.handleAllowPrincipal)
+	s.route("PATCH /api/access/principals/{entry}", s.handleSetPrincipalRole)
 	s.route("DELETE /api/access/principals/{entry}", s.handleDenyPrincipal)
 
 	// Controller MCP server (mcp_endpoint.go) shared by external BYO
@@ -707,6 +889,9 @@ func (s *Server) route(pattern string, handler http.HandlerFunc) {
 	// Every route answers an acting agent only within its scope
 	// (route_scopes.go, agent_api_gate.go).
 	handler = s.agentAPIGate(pattern, handler)
+	// And a verified person only within their role (access_roles.go),
+	// ahead of the agent gate so an acting-task header never widens one.
+	handler = s.roleGate(pattern, handler)
 	if timedRoutes[pattern] {
 		next := handler
 		handler = func(w http.ResponseWriter, r *http.Request) {

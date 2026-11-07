@@ -1433,54 +1433,11 @@ describe("RepoPage", () => {
     expect(onRefreshConfig).toHaveBeenCalled();
   });
 
-  it("saves the repo's default hostd through its settings and says where its tasks run", async () => {
+  it("offers no default hostd: a repo's tasks have none", async () => {
     routeApi();
-    const user = userEvent.setup();
     renderPage();
-
-    const input = await screen.findByLabelText(
-      /Default hostd for acme\/widgets/,
-    );
-    expect(screen.getByTestId("repo-default-hostd-summary")).toHaveTextContent(
-      /the default hostd, unless it or its template names one/,
-    );
-    answerOnce(
-      (path, opts) => !!opts && /\/settings$/.test(path),
-      () => Promise.resolve({ ...noCaps, defaultHostd: "gpu=yes,zone=b" }),
-    );
-    await user.type(input, " zone=b, gpu=yes ");
-    await user.tab();
-
-    expect(api).toHaveBeenCalledWith("/api/repos/acme/widgets/settings", {
-      method: "PUT",
-      body: JSON.stringify({ defaultHostd: "zone=b, gpu=yes" }),
-    });
-    await waitFor(() => expect(input).toHaveValue("gpu=yes,zone=b"));
-    expect(screen.getByTestId("repo-default-hostd-summary")).toHaveTextContent(
-      /on hostd gpu=yes,zone=b, unless it or its template names another/,
-    );
-  });
-
-  it("puts the default hostd back when the server refuses it", async () => {
-    routeApi({ caps: { ...noCaps, defaultHostd: "laptop" } });
-    const showError = vi.fn();
-    const user = userEvent.setup();
-    renderPage({ showError });
-
-    const input = await screen.findByLabelText(
-      /Default hostd for acme\/widgets/,
-    );
-    await waitFor(() => expect(input).toHaveValue("laptop"));
-    answerOnce(
-      (path, opts) => !!opts && /\/settings$/.test(path),
-      () => Promise.reject(new Error("hostd nowhere is not in the registry")),
-    );
-    await user.clear(input);
-    await user.type(input, "nowhere");
-    await user.tab();
-
-    await waitFor(() => expect(showError).toHaveBeenCalled());
-    expect(input).toHaveValue("laptop");
+    await screen.findByLabelText(/Setup command for acme\/widgets/);
+    expect(screen.queryByLabelText(/Default hostd/)).toBeNull();
   });
 
   it("reports the error when saving the repo's setup command fails", async () => {
@@ -1501,6 +1458,52 @@ describe("RepoPage", () => {
     expect(showError).toHaveBeenCalledWith(
       expect.objectContaining({ message: "store is down" }),
     );
+  });
+
+  // The banner a refusal goes to stays up for five seconds whatever
+  // happens next, so a box fixed and saved a second later still read as
+  // refused (the 2026-11-04 repository walkthrough). The good save takes
+  // down its own box's refusal -- and only that one.
+  it("takes a box's refusal down once that box saves, and leaves another box's alone", async () => {
+    routeApi();
+    const showError = vi.fn();
+    const dismissError = vi.fn();
+    const user = userEvent.setup();
+    renderPage({ showError, dismissError });
+    const setup = await screen.findByLabelText(
+      /Setup command for acme\/widgets/,
+    );
+    const prompt = await screen.findByLabelText(
+      /Prompt extension for acme\/widgets/,
+    );
+
+    answerOnce(savingSetupCommand, () =>
+      Promise.reject(new Error("setupCommand: too long")),
+    );
+    await user.type(setup, "make deps");
+    await user.tab();
+    await waitFor(() => expect(showError).toHaveBeenCalled());
+
+    // Another box saving does not take the setup command's refusal down.
+    await user.type(prompt, "Be brief.");
+    await user.tab();
+    await waitFor(() =>
+      expect(
+        api.mock.calls.some(
+          ([path, opts]) =>
+            /\/prompt-extension$/.test(path) && opts?.method === "PUT",
+        ),
+      ).toBe(true),
+    );
+    expect(dismissError).not.toHaveBeenCalled();
+
+    await user.clear(setup);
+    await user.type(setup, "make d");
+    await user.tab();
+    await waitFor(() =>
+      expect(dismissError).toHaveBeenCalledWith("setupCommand: too long"),
+    );
+    expect(dismissError).toHaveBeenCalledTimes(1);
   });
 
   // The CI workflows grain declares for this repo (grain/task-245).
@@ -2130,6 +2133,79 @@ describe("RepoPage", () => {
         issueImportIntervalSeconds: 0,
       }),
     });
+  });
+
+  it("flipping Queue imported tasks at once keeps a label typed beside it", async () => {
+    // Only Save (or switching import on) stores the typed boxes; the
+    // queue switch saves on its own and used to put the label box back to
+    // the stored one (docs/test-runs/2026-11-07-repository-release-memory-ui.md).
+    routeApi({
+      upToDate: {
+        repo: "acme/widgets",
+        issueImport: {
+          enabled: true,
+          approved: false,
+          repo: "",
+          label: "stored-label",
+          intervalSeconds: 0,
+          effectiveIntervalSeconds: 600,
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderPage({ tab: "agents" });
+
+    const queue = await screen.findByLabelText(
+      "Queue imported issues in acme/widgets without approval",
+    );
+    const label = screen.getByLabelText("Label");
+    await user.clear(label);
+    await user.type(label, "typed-label");
+    await user.click(queue);
+    expect(api).toHaveBeenCalledWith("/api/repos/acme/widgets/settings", {
+      method: "PUT",
+      body: JSON.stringify({ issueImportApproved: true }),
+    });
+    await waitFor(() => expect(queue).toBeChecked());
+    expect(screen.getByLabelText("Label")).toHaveValue("typed-label");
+    expect(leavingLosesEdits()).toBe(true);
+  });
+
+  it("asks before leaving with an unsaved issue import box or a box not yet left", async () => {
+    routeApi({
+      upToDate: {
+        repo: "acme/widgets",
+        issueImport: {
+          enabled: true,
+          approved: false,
+          repo: "",
+          label: "",
+          intervalSeconds: 0,
+          effectiveIntervalSeconds: 600,
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderPage({ tab: "agents" });
+
+    const imp = await screen.findByTestId("repo-issue-import");
+    expect(leavingLosesEdits()).toBe(false);
+    await user.type(within(imp).getByLabelText("Label"), "grain-agent");
+    expect(leavingLosesEdits()).toBe(true);
+    await user.click(within(imp).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(leavingLosesEdits()).toBe(false));
+
+    // A box that saves when left asks only while it has not been left:
+    // a reload blurs nothing, so its edit would go unsaved.
+    const prompt = screen.getByLabelText("Prompt extension for acme/widgets");
+    await user.type(prompt, "Run make lint first.");
+    expect(leavingLosesEdits()).toBe(true);
+    await user.tab();
+    expect(api).toHaveBeenCalledWith(
+      "/api/repos/acme/widgets/prompt-extension",
+      expect.objectContaining({ method: "PUT" }),
+    );
+    await waitFor(() => expect(leavingLosesEdits()).toBe(false));
   });
 
   it("shows merge when green as on for a repo that has it on", async () => {

@@ -16,6 +16,7 @@ package ui
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -106,46 +107,98 @@ func (c *Client) markCatalogueRefusals(ctx context.Context, checks []GrantCheck,
 	return checks, nil
 }
 
-// catalogueEditRefusal judges one grant being attached to an existing
-// task: 400 for one the catalogue refuses the task, 403 for an agent
-// attaching one the catalogue says is a person's decision.
-func (c *Client) catalogueEditRefusal(ctx context.Context, task model.Task, grant string) error {
-	cat, err := c.capabilityCatalogue(ctx)
-	if err != nil || cat == nil {
-		return err
-	}
+// taskGrantContext is the GrantContext an existing task's grant edit or
+// access request is judged in, with its template's name resolved.
+func (c *Client) taskGrantContext(ctx context.Context, task model.Task, grants []string) model.GrantContext {
 	gc := model.TaskGrantContext(task)
-	gc.Grants = []string{grant}
+	gc.Grants = grants
 	if gc.TemplateID != "" {
 		if tmpl, err := c.Store.GetTemplate(ctx, gc.TemplateID); err == nil && tmpl != nil {
 			gc.TemplateName = tmpl.Name
 		}
 	}
-	verdict, err := cat.ValidateGrants(gc)
+	return gc
+}
+
+// catalogueEditRefusal judges one grant being attached to an existing
+// task: 400 for one the catalogue refuses the task, 403 for an agent
+// attaching one the catalogue says is a person's decision. It asks even
+// when the deployment has no catalogue, since a nil catalogue still
+// applies grain's built-in director floor (model.DirectorFloorRefusal):
+// nobody -- person, agent or config import -- attaches api:merge:force
+// and the rest of the Tier 3 scopes to the director session.
+func (c *Client) catalogueEditRefusal(ctx context.Context, task model.Task, grant string) error {
+	cat, err := c.capabilityCatalogue(ctx)
+	if err != nil {
+		return err
+	}
+	verdict, err := cat.ValidateGrants(c.taskGrantContext(ctx, task, []string{grant}))
 	if err != nil {
 		return validationErrorf("%v", err)
 	}
-	if len(verdict.RequiresPerson) > 0 && c.requestActor(ctx).Actor.Kind == model.PrincipalAgent {
+	if isDelegatedRequest(ctx) && (len(verdict.RequiresPerson) > 0 || model.IsPersonOnlyGrant(grant) || model.IsAdminOnlyGrant(grant)) {
+		return forbiddenCodeErrorf("requires_person", "capability %s requires a person acting directly (not via a delegating app)", grant)
+	}
+	if len(verdict.RequiresPerson) > 0 && c.requestActor(ctx).Actor.Kind != model.PrincipalHuman {
 		return forbiddenErrorf("capability %s requires human approval (settings/capabilities.yml marks it requires_person)", grant)
 	}
 	return nil
 }
 
-// catalogueApprovalRefusal refuses an agent approving a task that holds a
+// catalogueApprovalRefusal refuses a non-person approving a task that holds a
 // grant the catalogue marks as a person's decision. Filing leaves such a
 // task proposed for a person to approve (catalogueFilingGrants), and
 // nothing at dispatch asks again whether a person did: without this, an
-// agent holding api:tasks:admin could file the task and approve it
+// agent or service account holding tasks:admin could file the task and approve it
 // itself, and the run would hold the grant with no person deciding.
 // A grant the catalogue refuses outright is not this check's business:
 // dispatch holds that task whoever approves it (orchestrator.catalogueHold).
 func (c *Client) catalogueApprovalRefusal(ctx context.Context, task model.Task) error {
-	if c.requestActor(ctx).Actor.Kind != model.PrincipalAgent {
+	if isDelegatedRequest(ctx) {
+		var personOnly []string
+		for _, g := range task.Grants {
+			if (model.IsPersonOnlyGrant(g.Capability) || model.IsAdminOnlyGrant(g.Capability)) && !slices.Contains(personOnly, g.Capability) {
+				personOnly = append(personOnly, g.Capability)
+			}
+		}
+		// Admission above standard replaced the person-only
+		// priority-dispatch and durable grants, so it asks for a
+		// person acting directly the way holding either did.
+		if adm := model.NormalizeAdmission(task.Admission); adm.AtLeast(model.AdmissionBypass) {
+			personOnly = append(personOnly, "admission "+string(adm))
+		}
+		if len(personOnly) > 0 {
+			return forbiddenCodeErrorf("requires_person", "task %s holds %s, which only a person acting directly may approve",
+				task.ID, strings.Join(personOnly, ", "))
+		}
+		needsPerson, err := c.catalogueRequiresPerson(ctx, task)
+		if err != nil || len(needsPerson) == 0 {
+			return err
+		}
+		return forbiddenCodeErrorf("requires_person", "task %s holds %s, which settings/capabilities.yml marks as a person's decision (requires_person): only a person acting directly may approve it",
+			task.ID, strings.Join(needsPerson, ", "))
+	}
+	if c.requestActor(ctx).Actor.Kind == model.PrincipalHuman {
 		return nil
 	}
+	needsPerson, err := c.catalogueRequiresPerson(ctx, task)
+	if err != nil || len(needsPerson) == 0 {
+		return err
+	}
+	return forbiddenErrorf("task %s holds %s, which settings/capabilities.yml marks as a person's decision (requires_person): only a person may approve it",
+		task.ID, strings.Join(needsPerson, ", "))
+}
+
+// catalogueRequiresPerson is the grants task holds that the capability
+// catalogue marks as a person's decision (requires_person), whoever is
+// asking: catalogueApprovalRefusal's question without its exemption for
+// a person, so the agent API's approval rail (Server.agentApprovalRail)
+// can ask it of the task an agent is about to approve. nil for none, or
+// for a deployment with no catalogue.
+func (c *Client) catalogueRequiresPerson(ctx context.Context, task model.Task) ([]string, error) {
 	cat, err := c.capabilityCatalogue(ctx)
 	if err != nil || cat == nil {
-		return err
+		return nil, err
 	}
 	gc := model.TaskGrantContext(task)
 	if gc.TemplateID != "" {
@@ -161,11 +214,7 @@ func (c *Client) catalogueApprovalRefusal(ctx context.Context, task model.Task) 
 			needsPerson = append(needsPerson, verdict.RequiresPerson...)
 		}
 	}
-	if len(needsPerson) == 0 {
-		return nil
-	}
-	return forbiddenErrorf("task %s holds %s, which settings/capabilities.yml marks as a person's decision (requires_person): only a person may approve it",
-		task.ID, strings.Join(needsPerson, ", "))
+	return needsPerson, nil
 }
 
 // catalogueEditRefusalFor is catalogueEditRefusal for the task stored as

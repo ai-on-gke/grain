@@ -76,10 +76,13 @@ descriptor() {
 }
 help() {
   descriptor "$1"
-  printf 'Usage: grain host-script %s [arguments...]\n\n%s\n' "$1" "$(text description "$f")"
+  printf 'Usage: grain host-script %s [arguments...]\n       grain host-script --stdin %s [arguments...]\n\n%s\n' "$1" "$1" "$(text description "$f")"
   u=$(text usage "$f")
   if [ -n "$u" ]; then printf '\n%s\n' "$u"; fi
-  printf "\nRuns on grain's side, not in this sandbox; arguments are passed through exactly, without a shell, and are logged.\n"
+  printf "\nRuns on grain's side, not in this sandbox; arguments are passed through exactly, without a shell, and are logged. Pass --stdin before the script name to forward standard input.\n"
+  if [ "$(field approve "$f")" = true ]; then
+    printf "Each call waits for a person's approval before it runs.\n"
+  fi
   exit 0
 }
 case "${1-}" in
@@ -100,6 +103,15 @@ case "${1-}" in
     usage
     exit 0 ;;
 esac
+forward_stdin=0
+if [ "${1-}" = --stdin ] || [ "${1-}" = -stdin ]; then
+  forward_stdin=1
+  shift
+  if [ "$#" -eq 0 ]; then
+    usage >&2
+    exit 2
+  fi
+fi
 name=$1
 shift
 if [ "$#" -ge 1 ] && [ "$1" = --grain-help ]; then help "$name"; fi
@@ -107,10 +119,16 @@ descriptor "$name"
 port=$(field port "$f")
 attempt=$(field attempt_id "$f")
 tok=$(field token "$f")
-for a in "$@"; do
-  printf '%s' "$a" | od -An -v -tx1 | tr -d ' \n'
-  echo
-done | curl -sS -N -X POST -H "Authorization: Bearer $tok" -H 'Content-Type: ` + ArgvType + `' \
+{
+  for a in "$@"; do
+    printf '%s' "$a" | od -An -v -tx1 | tr -d ' \n'
+    echo
+  done
+  if [ "$forward_stdin" = 1 ]; then
+    echo ` + StdinSeparator + `
+    cat
+  fi
+} | curl -sS -N -X POST -H "Authorization: Bearer $tok" -H 'Content-Type: ` + ArgvType + `' \
   --data-binary @- "http://127.0.0.1:$port/runs/$attempt/exec" | {
   while IFS= read -r line; do
     case $line in

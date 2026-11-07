@@ -83,6 +83,14 @@ func (s *ForbiddenSet) Repos() []model.RepoRef {
 	return *held
 }
 
+// Forbids reports whether owner/repo is in the set as it stands, matched
+// the way every other repo comparison here is: case-insensitively, with
+// or without .git. For a repository on a git host other than the default,
+// owner is host/owner (model.RepoRef.StoredOwner).
+func (s *ForbiddenSet) Forbids(owner, repo string) bool {
+	return s.forbids(canonicalizeRepo(owner, repo))
+}
+
 // forbids reports whether owner/repo is in the set as it stands, matched
 // the way every other repo comparison here is: case-insensitively, with
 // or without .git.

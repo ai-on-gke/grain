@@ -465,6 +465,22 @@ The tests that hold this in place are in `pkg/hostd`:
 - `TestServeSocketIsOwnerOnly`;
 - the reaping, deadline, cancel, disconnect and stdin back-pressure tests.
 
+### Which hostd (schema 111)
+
+With more than one hostd registered, which one a run's CLI starts on is
+its model connection's placement (`model.AgentBackend.Hostd`, then
+`HostdFallback`), resolved once the pool has chosen the connection
+(`connectionHostdRoute`, `pkg/daemon/hostd_route.go`). A connection placed
+on a hostd runs its CLI on the host there whatever the framework's run
+location says. A connection with no placement goes where this document's
+run location says, through the default hostd. Tasks, templates and
+repositories had a hostd selector from schema 93 to 110 (`task_hostd`,
+`template.hostd`, `repo_config.default_hostd`); 111 dropped them, and a
+request that still names one is refused. `task_run_hostd` stays, recording
+where each run's CLI ran. A `run: hostd` capability server names its own
+hostd (`protocol.ServerConfig.Hostd`). See
+[docs/host-placement.md](../../docs/host-placement.md).
+
 ## Trust levels
 
 Host mode is gone, so a machine install is one of three trust levels,
@@ -544,8 +560,9 @@ With no host executor:
 - `-claude-run`, `-codex-run` and `-agy-run=host` (and so
   `GRAIN_*_RUN=host`) are refused at startup, as is `-hostd-socket` on
   Kubernetes.
-- The default is `container`. That includes agy and custom commands,
-  because the daemon's own container needs no launcher.
+- The default is `container`. That includes agy, because the daemon's
+  own container needs no launcher. (Custom commands, the fourth row this
+  table once had, were removed in v3.2.0.)
 - A `host` stored by an earlier install, after a migration say, runs in
   the container. It is logged once per CLI per process, and the
   resolution carries a `warning` that Settings shows. It does not fail
@@ -586,7 +603,7 @@ allowlist, so the card can be seen this way.
 the daemon's own. An edition can register another with
 `daemon.RegisterHostdDefault`, which applies only behind hostd. The
 wrapper distribution build registers agy `host`, so a Google-track install defaults to
-agy on the host and claude, codex and custom commands in the container.
+agy on the host and claude and codex in the container.
 The bare machine, Kubernetes and a container with no hostd keep their
 defaults.
 

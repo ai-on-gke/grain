@@ -16,29 +16,18 @@ package ui
 
 import (
 	"context"
-	"crypto"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rsa"
-	"crypto/x509"
-	"encoding/base64"
-	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
-	"io"
 	"log"
-	"math/big"
 	"net"
 	"net/http"
-	"os"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/golang-jwt/jwt/v5"
+	"github.com/ai-on-gke/grain/pkg/webauth"
 )
 
 type principalContextKey struct{}
@@ -46,13 +35,16 @@ type authMethodContextKey struct{}
 type iapConfigContextKey struct{}
 
 // IAPAssertionHeader is the HTTP request header holding the Google Cloud IAP JWT assertion.
-const IAPAssertionHeader = "X-Goog-IAP-JWT-Assertion"
+const IAPAssertionHeader = webauth.IAPAssertionHeader
+
+// RegistryAssertionHeader is the HTTP request header holding the grain-registry JWT assertion.
+const RegistryAssertionHeader = webauth.RegistryAssertionHeader
 
 // GoogleIAPCertURL is the Google endpoint serving public keys in PEM format.
-const GoogleIAPCertURL = "https://www.gstatic.com/iap/verify/public_key"
+const GoogleIAPCertURL = webauth.GoogleIAPCertURL
 
 // GoogleIAPIssuer is the expected issuer claim in Google IAP JWT assertions.
-const GoogleIAPIssuer = "https://cloud.google.com/iap"
+const GoogleIAPIssuer = webauth.GoogleIAPIssuer
 
 // PlaintextIdentityHeaders are the unsigned identity headers a proxy or
 // grain's own older clients send. Anything able to reach the daemon can
@@ -67,29 +59,18 @@ var PlaintextIdentityHeaders = []string{
 	"Grain-User",
 }
 
-// iapKeysTTL is how long a fetched key set is used before it is fetched
-// again; iapKeysRefetchFloor is how soon an unknown key ID may trigger
-// another fetch, so a stream of made-up kids cannot hammer the endpoint.
-const (
-	iapKeysTTL          = time.Hour
-	iapKeysRefetchFloor = 10 * time.Second
-)
+// RegistryConfig holds request-level or server-level registry JWT verification
+// configuration (-ui-registry-issuer, -ui-registry-audience, -ui-registry-keys-url).
+type RegistryConfig = webauth.RegistryConfig
 
-var (
-	iapMu            sync.RWMutex
-	iapAudience      string
-	iapIssuer        string
-	iapKeySets       map[string]*iapKeySet
-	iapHTTPClient    = &http.Client{Timeout: 5 * time.Second}
-	googleIAPCertURL = GoogleIAPCertURL
-)
+// WithRegistryConfig attaches a RegistryConfig to ctx.
+func WithRegistryConfig(ctx context.Context, cfg RegistryConfig) context.Context {
+	return webauth.WithRegistryConfig(ctx, cfg)
+}
 
-// iapKeySet is one key endpoint's keys, by key ID, and when they were
-// fetched. Keys are cached per URL, since a deployment can name its own
-// (IAPConfig.KeysURL) and a test names another.
-type iapKeySet struct {
-	keys    map[string]crypto.PublicKey
-	fetched time.Time
+// RegistryConfigFromContext extracts RegistryConfig from ctx if present.
+func RegistryConfigFromContext(ctx context.Context) (RegistryConfig, bool) {
+	return webauth.RegistryConfigFromContext(ctx)
 }
 
 // IAPConfig holds request-level or server-level IAP configuration options.
@@ -105,8 +86,22 @@ type IAPConfig struct {
 	// IAP's PEM map or a JWK set. Empty means $GRAIN_IAP_KEYS_URL, and
 	// then GoogleIAPCertURL.
 	KeysURL string
-	// RequireIAP is Config.RequireIAP (-ui-require-iap): the access code
-	// counts only where accessCodeAccepted says so.
+	// RegistryIssuer is Config.RegistryIssuer (-ui-registry-issuer): the
+	// exact iss claim a signed X-Grain-Registry-Assertion must carry.
+	RegistryIssuer string
+	// RegistryAudience is Config.RegistryAudience (-ui-registry-audience):
+	// the single aud URL a signed X-Grain-Registry-Assertion must carry.
+	RegistryAudience string
+	// RegistryKeysURL is Config.RegistryKeysURL (-ui-registry-keys-url):
+	// the JWKS URL publishing the registry's ES256 public keys.
+	RegistryKeysURL string
+	// RequireVerifier is Config.RequireVerifier (-ui-require-verifier):
+	// when non-empty, names the IdentityVerifier network callers must sign
+	// in through, so the access code counts only where accessCodeAccepted
+	// says so.
+	RequireVerifier string
+	// RequireIAP is Config.RequireIAP (-ui-require-iap), an alias for
+	// RequireVerifier = "iap".
 	RequireIAP bool
 	// LocalAPIToken is Config.LocalAPIToken: the secret this host's own
 	// CLI presents (presentsLocalAPIToken).
@@ -118,6 +113,24 @@ type IAPConfig struct {
 
 // WithIAPConfig attaches an IAPConfig to the context.
 func WithIAPConfig(ctx context.Context, cfg IAPConfig) context.Context {
+	ctx = webauth.WithIAPConfig(ctx, webauth.IAPConfig{
+		Audience: cfg.Audience,
+		Issuer:   cfg.Issuer,
+		KeysURL:  cfg.KeysURL,
+	})
+	if cfg.RegistryIssuer != "" || cfg.RegistryAudience != "" || cfg.RegistryKeysURL != "" {
+		rc, _ := webauth.RegistryConfigFromContext(ctx)
+		if cfg.RegistryIssuer != "" {
+			rc.Issuer = cfg.RegistryIssuer
+		}
+		if cfg.RegistryAudience != "" {
+			rc.Audience = cfg.RegistryAudience
+		}
+		if cfg.RegistryKeysURL != "" {
+			rc.KeysURL = cfg.RegistryKeysURL
+		}
+		ctx = webauth.WithRegistryConfig(ctx, rc)
+	}
 	return context.WithValue(ctx, iapConfigContextKey{}, cfg)
 }
 
@@ -131,129 +144,51 @@ func IAPConfigFromContext(ctx context.Context) (IAPConfig, bool) {
 }
 
 // IAPClaims represents the JWT claims contained in a Google Cloud IAP JWT assertion.
-type IAPClaims struct {
-	jwt.RegisteredClaims
-	Email string `json:"email,omitempty"`
-	HD    string `json:"hd,omitempty"`
-}
+type IAPClaims = webauth.IAPClaims
 
 // IAPValidator validates a Google Cloud IAP JWT assertion token string for a target audience.
-type IAPValidator func(ctx context.Context, tokenStr string, audience string) (*IAPClaims, error)
+type IAPValidator = webauth.IAPValidator
 
 // SetIAPAudience sets the expected audience for Google Cloud IAP JWT verification.
 func SetIAPAudience(aud string) {
-	iapMu.Lock()
-	defer iapMu.Unlock()
-	iapAudience = strings.TrimSpace(aud)
+	webauth.SetIAPAudience(aud)
 }
 
 // GetIAPAudience returns the configured audience for Google Cloud IAP JWT verification.
 func GetIAPAudience() string {
-	iapMu.RLock()
-	defer iapMu.RUnlock()
-	if iapAudience != "" {
-		return iapAudience
-	}
-	if aud := os.Getenv("GRAIN_IAP_AUDIENCE"); aud != "" {
-		return strings.TrimSpace(aud)
-	}
-	if aud := os.Getenv("GRAIN_AUDIENCE"); aud != "" {
-		return strings.TrimSpace(aud)
-	}
-	return strings.TrimSpace(os.Getenv("IAP_AUDIENCE"))
+	return webauth.GetIAPAudience()
+}
+
+// SetIAPIssuer sets the expected issuer for Google Cloud IAP JWT verification.
+func SetIAPIssuer(issuer string) {
+	webauth.SetIAPIssuer(issuer)
 }
 
 // GetIAPIssuer returns the issuer a signed assertion must carry.
 func GetIAPIssuer() string {
-	iapMu.RLock()
-	defer iapMu.RUnlock()
-	if iapIssuer != "" {
-		return iapIssuer
-	}
-	if iss := strings.TrimSpace(os.Getenv("GRAIN_IAP_ISSUER")); iss != "" {
-		return iss
-	}
-	return GoogleIAPIssuer
-}
-
-// splitAudiences is an audience setting's audiences: one, or several
-// separated by commas, for a deployment reached through more than one
-// signing proxy.
-func splitAudiences(aud string) []string {
-	var out []string
-	for _, a := range strings.Split(aud, ",") {
-		if a = strings.TrimSpace(a); a != "" {
-			out = append(out, a)
-		}
-	}
-	return out
+	return webauth.GetIAPIssuer()
 }
 
 // SetIAPHTTPClient sets a custom http.Client for fetching IAP public keys.
 func SetIAPHTTPClient(client *http.Client) {
-	iapMu.Lock()
-	defer iapMu.Unlock()
-	if client != nil {
-		iapHTTPClient = client
-	} else {
-		iapHTTPClient = &http.Client{Timeout: 5 * time.Second}
-	}
+	webauth.SetIAPHTTPClient(client)
 }
 
 // SetIAPCertURL overrides the URL used to fetch Google IAP public keys
 // (an operator's -ui-iap-keys-url, or a test's own server).
 func SetIAPCertURL(u string) {
-	iapMu.Lock()
-	defer iapMu.Unlock()
-	if u != "" {
-		googleIAPCertURL = u
-	} else {
-		googleIAPCertURL = GoogleIAPCertURL
-	}
-}
-
-// iapKeysURL is where the keys for a request's assertions come from.
-func iapKeysURL(ctx context.Context) string {
-	if cfg, ok := IAPConfigFromContext(ctx); ok && strings.TrimSpace(cfg.KeysURL) != "" {
-		return strings.TrimSpace(cfg.KeysURL)
-	}
-	iapMu.RLock()
-	u := googleIAPCertURL
-	iapMu.RUnlock()
-	if u == GoogleIAPCertURL {
-		if env := strings.TrimSpace(os.Getenv("GRAIN_IAP_KEYS_URL")); env != "" {
-			return env
-		}
-	}
-	return u
+	webauth.SetIAPCertURL(u)
 }
 
 // iapAudienceFor is the audience (or comma-separated audiences) a request's
 // IAP assertions must carry.
 func iapAudienceFor(ctx context.Context) string {
-	if cfg, ok := IAPConfigFromContext(ctx); ok && strings.TrimSpace(cfg.Audience) != "" {
-		return strings.TrimSpace(cfg.Audience)
-	}
-	return GetIAPAudience()
-}
-
-// iapIssuerFor is the issuer a request's assertions must carry.
-func iapIssuerFor(ctx context.Context) string {
-	if cfg, ok := IAPConfigFromContext(ctx); ok && strings.TrimSpace(cfg.Issuer) != "" {
-		return strings.TrimSpace(cfg.Issuer)
-	}
-	return GetIAPIssuer()
+	return webauth.IAPAudienceFor(ctx)
 }
 
 // ResetIAPConfig resets all IAP package-level configurations to defaults.
 func ResetIAPConfig() {
-	iapMu.Lock()
-	defer iapMu.Unlock()
-	iapAudience = ""
-	iapIssuer = ""
-	iapKeySets = nil
-	iapHTTPClient = &http.Client{Timeout: 5 * time.Second}
-	googleIAPCertURL = GoogleIAPCertURL
+	webauth.ResetIAPConfig()
 	ignoredIdentityHeadersMu.Lock()
 	clear(ignoredIdentityHeadersLogged)
 	ignoredIdentityHeadersMu.Unlock()
@@ -265,254 +200,6 @@ func ResetIAPConfig() {
 	refusedVerifiersMu.Unlock()
 }
 
-// fetchGoogleIAPKeys fetches the signing keys published at certURL. Two
-// shapes are understood: IAP's own map of key ID to PEM public key
-// (https://www.gstatic.com/iap/verify/public_key), and a standard JWK set
-// ({"keys": [...]}, as IAP's public_key-jwk and most other signing
-// proxies publish). EC P-256 and RSA keys are kept; anything else is
-// skipped.
-func fetchGoogleIAPKeys(ctx context.Context, client *http.Client, certURL string) (map[string]crypto.PublicKey, error) {
-	if client == nil {
-		client = http.DefaultClient
-	}
-	if certURL == "" {
-		certURL = GoogleIAPCertURL
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, certURL, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetching IAP public keys: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetching IAP public keys: unexpected status %d", resp.StatusCode)
-	}
-
-	var raw map[string]json.RawMessage
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&raw); err != nil {
-		return nil, fmt.Errorf("decoding IAP public keys: %w", err)
-	}
-
-	parsed := map[string]crypto.PublicKey{}
-	if set, ok := raw["keys"]; ok {
-		var jwks []jsonWebKey
-		if err := json.Unmarshal(set, &jwks); err != nil {
-			return nil, fmt.Errorf("decoding JWK set: %w", err)
-		}
-		for _, k := range jwks {
-			if pub, err := k.publicKey(); err == nil && k.Kid != "" {
-				parsed[k.Kid] = pub
-			}
-		}
-	} else {
-		for kid, msg := range raw {
-			var pemStr string
-			if json.Unmarshal(msg, &pemStr) != nil {
-				continue
-			}
-			block, _ := pem.Decode([]byte(pemStr))
-			if block == nil {
-				continue
-			}
-			pub, err := x509.ParsePKIXPublicKey(block.Bytes)
-			if err != nil {
-				continue
-			}
-			switch pub.(type) {
-			case *ecdsa.PublicKey, *rsa.PublicKey:
-				parsed[kid] = pub
-			}
-		}
-	}
-	if len(parsed) == 0 {
-		return nil, errors.New("no usable public keys found at the IAP key endpoint")
-	}
-	return parsed, nil
-}
-
-// jsonWebKey is the part of an RFC 7517 key fetchGoogleIAPKeys reads.
-type jsonWebKey struct {
-	Kty string `json:"kty"`
-	Kid string `json:"kid"`
-	Crv string `json:"crv"`
-	X   string `json:"x"`
-	Y   string `json:"y"`
-	N   string `json:"n"`
-	E   string `json:"e"`
-}
-
-func (k jsonWebKey) publicKey() (crypto.PublicKey, error) {
-	dec := base64.RawURLEncoding.DecodeString
-	switch k.Kty {
-	case "EC":
-		if k.Crv != "P-256" {
-			return nil, fmt.Errorf("unsupported curve %q", k.Crv)
-		}
-		x, err := dec(k.X)
-		if err != nil {
-			return nil, err
-		}
-		y, err := dec(k.Y)
-		if err != nil {
-			return nil, err
-		}
-		pub := &ecdsa.PublicKey{Curve: elliptic.P256(), X: new(big.Int).SetBytes(x), Y: new(big.Int).SetBytes(y)}
-		if !pub.Curve.IsOnCurve(pub.X, pub.Y) {
-			return nil, errors.New("EC key is not on its curve")
-		}
-		return pub, nil
-	case "RSA":
-		n, err := dec(k.N)
-		if err != nil {
-			return nil, err
-		}
-		e, err := dec(k.E)
-		if err != nil {
-			return nil, err
-		}
-		exp := new(big.Int).SetBytes(e)
-		if !exp.IsInt64() || exp.Int64() < 3 || exp.Int64() > 1<<31 {
-			return nil, errors.New("RSA key has an unusable exponent")
-		}
-		return &rsa.PublicKey{N: new(big.Int).SetBytes(n), E: int(exp.Int64())}, nil
-	}
-	return nil, fmt.Errorf("unsupported key type %q", k.Kty)
-}
-
-// getIAPPublicKey is key kid from the key set published at certURL,
-// fetched at most once an hour, and again early (at most every
-// iapKeysRefetchFloor) for a kid the cached set does not hold, which is
-// how a rotated key is picked up. A failed fetch keeps serving the keys
-// already held.
-func getIAPPublicKey(ctx context.Context, certURL, kid string) (crypto.PublicKey, error) {
-	iapMu.RLock()
-	set := iapKeySets[certURL]
-	iapMu.RUnlock()
-	if set != nil {
-		if key, ok := set.keys[kid]; ok && time.Since(set.fetched) < iapKeysTTL {
-			return key, nil
-		}
-	}
-
-	iapMu.Lock()
-	defer iapMu.Unlock()
-
-	set = iapKeySets[certURL]
-	if set != nil {
-		key, ok := set.keys[kid]
-		if ok && time.Since(set.fetched) < iapKeysTTL {
-			return key, nil
-		}
-		if time.Since(set.fetched) < iapKeysRefetchFloor {
-			if ok {
-				return key, nil
-			}
-			return nil, fmt.Errorf("unknown IAP key ID %q", kid)
-		}
-	}
-
-	newKeys, err := fetchGoogleIAPKeys(ctx, iapHTTPClient, certURL)
-	if err != nil {
-		if set != nil {
-			if key, ok := set.keys[kid]; ok {
-				return key, nil
-			}
-		}
-		return nil, err
-	}
-	if iapKeySets == nil {
-		iapKeySets = map[string]*iapKeySet{}
-	}
-	iapKeySets[certURL] = &iapKeySet{keys: newKeys, fetched: time.Now()}
-
-	k, exists := newKeys[kid]
-	if !exists {
-		return nil, fmt.Errorf("unknown IAP key ID %q", kid)
-	}
-	return k, nil
-}
-
-// iapClockSkew is how far an assertion's exp, iat and nbf may be off
-// this host's clock and still be taken.
-const iapClockSkew = 30 * time.Second
-
-// defaultIAPValidator verifies an assertion as IAP documents it must be
-// verified (https://cloud.google.com/iap/docs/signed-headers-howto):
-// signed (ES256, or RS256 for a JWK-publishing proxy) by a key the
-// configured endpoint publishes, issued by exactly the configured
-// issuer, for one of the configured audiences, and current -- an
-// expiry is required, not merely checked when present.
-//
-// An empty expectedAudience verifies nothing: an assertion is only
-// worth anything bound to this deployment, and one Google signed for
-// some other backend is exactly what whoever runs that backend could
-// replay here.
-func defaultIAPValidator(ctx context.Context, tokenStr string, expectedAudience string) (*IAPClaims, error) {
-	tokenStr = strings.TrimSpace(tokenStr)
-	if tokenStr == "" {
-		return nil, errors.New("empty IAP assertion token")
-	}
-	audiences := splitAudiences(expectedAudience)
-	if len(audiences) == 0 {
-		return nil, errors.New("no IAP audience is configured (GRAIN_IAP_AUDIENCE / -ui-iap-audience), so no assertion can be verified")
-	}
-	issuer := iapIssuerFor(ctx)
-	certURL := iapKeysURL(ctx)
-
-	claims := &IAPClaims{}
-	token, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (any, error) {
-		kid, ok := t.Header["kid"].(string)
-		if !ok || strings.TrimSpace(kid) == "" {
-			return nil, errors.New("missing kid in IAP JWT header")
-		}
-		key, err := getIAPPublicKey(ctx, certURL, kid)
-		if err != nil {
-			return nil, err
-		}
-		// The algorithm is the key's, never the token's to choose.
-		switch key.(type) {
-		case *ecdsa.PublicKey:
-			if t.Method.Alg() != jwt.SigningMethodES256.Alg() {
-				return nil, fmt.Errorf("unexpected IAP signing algorithm %v for an EC key", t.Header["alg"])
-			}
-		case *rsa.PublicKey:
-			if t.Method.Alg() != jwt.SigningMethodRS256.Alg() {
-				return nil, fmt.Errorf("unexpected IAP signing algorithm %v for an RSA key", t.Header["alg"])
-			}
-		default:
-			return nil, errors.New("unsupported IAP key type")
-		}
-		return key, nil
-	},
-		jwt.WithValidMethods([]string{jwt.SigningMethodES256.Alg(), jwt.SigningMethodRS256.Alg()}),
-		jwt.WithExpirationRequired(),
-		jwt.WithIssuedAt(),
-		jwt.WithLeeway(iapClockSkew),
-		jwt.WithIssuer(issuer),
-	)
-	if err != nil || !token.Valid {
-		return nil, fmt.Errorf("invalid IAP JWT assertion: %w", err)
-	}
-
-	matched := false
-	for _, want := range audiences {
-		if slices.Contains(claims.Audience, want) {
-			matched = true
-			break
-		}
-	}
-	if !matched {
-		return nil, fmt.Errorf("IAP audience mismatch: expected %q, got %v", strings.Join(audiences, ","), claims.Audience)
-	}
-
-	return claims, nil
-}
-
 // VerifyIAPToken validates an IAP JWT assertion and returns the authenticated user email/identity.
 func VerifyIAPToken(ctx context.Context, tokenStr string) (string, error) {
 	tokenStr = strings.TrimSpace(tokenStr)
@@ -520,52 +207,113 @@ func VerifyIAPToken(ctx context.Context, tokenStr string) (string, error) {
 		return "", errors.New("empty IAP assertion token")
 	}
 
-	var validator IAPValidator
-	aud := iapAudienceFor(ctx)
-
+	var claims *IAPClaims
+	var err error
+	handled := false
 	for _, v := range registeredVerifiersSnapshot() {
 		if iv, ok := v.(*iapVerifier); ok {
-			validator = iv.validator
-			if iv.audience != "" {
-				aud = iv.audience
-			}
-			if iv.issuer != "" || iv.keysURL != "" {
-				cfg, _ := IAPConfigFromContext(ctx)
-				if iv.issuer != "" {
-					cfg.Issuer = iv.issuer
-				}
-				if iv.keysURL != "" {
-					cfg.KeysURL = iv.keysURL
-				}
-				ctx = WithIAPConfig(ctx, cfg)
-			}
+			claims, _, err = iv.inner.VerifyToken(ctx, tokenStr)
+			handled = true
 			break
 		}
 	}
-
-	var claims *IAPClaims
-	var err error
-	if validator != nil {
-		claims, err = validator(ctx, tokenStr, aud)
-	} else {
-		claims, err = defaultIAPValidator(ctx, tokenStr, aud)
+	if !handled {
+		claims, err = webauth.ValidateIAPToken(ctx, tokenStr, iapAudienceFor(ctx))
 	}
 	if err != nil {
 		return "", err
 	}
-	if claims == nil {
-		return "", errors.New("nil IAP claims")
+	id, err := webauth.IdentityFromIAPClaims(claims)
+	if err != nil {
+		return "", err
+	}
+	return id.Email, nil
+}
+
+// RegistryClaims represents the JWT claims contained in a grain-registry JWT assertion.
+type RegistryClaims = webauth.RegistryClaims
+
+// RegistryValidator validates a grain-registry JWT assertion token string for a target audience.
+type RegistryValidator = webauth.RegistryValidator
+
+// SetRegistryAudience sets the expected audience for grain-registry JWT verification.
+func SetRegistryAudience(aud string) {
+	webauth.SetRegistryAudience(aud)
+}
+
+// GetRegistryAudience returns the configured audience for grain-registry JWT verification.
+func GetRegistryAudience() string {
+	return webauth.GetRegistryAudience()
+}
+
+// SetRegistryIssuer sets the expected issuer for grain-registry JWT verification.
+func SetRegistryIssuer(issuer string) {
+	webauth.SetRegistryIssuer(issuer)
+}
+
+// GetRegistryIssuer returns the configured issuer for grain-registry JWT verification.
+func GetRegistryIssuer() string {
+	return webauth.GetRegistryIssuer()
+}
+
+// SetRegistryKeysURL sets the JWKS endpoint URL for grain-registry JWT verification.
+func SetRegistryKeysURL(u string) {
+	webauth.SetRegistryKeysURL(u)
+}
+
+// GetRegistryKeysURL returns the configured JWKS endpoint URL for grain-registry JWT verification.
+func GetRegistryKeysURL() string {
+	return webauth.GetRegistryKeysURL()
+}
+
+// SetRegistryHTTPClient sets a custom http.Client for fetching grain-registry JWKS keys.
+func SetRegistryHTTPClient(client *http.Client) {
+	webauth.SetRegistryHTTPClient(client)
+}
+
+// SetRegistryRefetchFloor overrides the minimum interval between registry JWKS
+// refetches triggered by an unknown key ID.
+func SetRegistryRefetchFloor(d time.Duration) {
+	webauth.SetRegistryRefetchFloor(d)
+}
+
+// ResetRegistryConfig resets all registry package-level configurations to defaults.
+func ResetRegistryConfig() {
+	webauth.ResetRegistryConfig()
+	refusedVerifiersMu.Lock()
+	clear(refusedVerifiersLogged)
+	refusedVerifiersMu.Unlock()
+}
+
+// VerifyRegistryToken validates a grain-registry JWT assertion and returns the
+// authenticated user email/identity.
+func VerifyRegistryToken(ctx context.Context, tokenStr string) (string, error) {
+	tokenStr = strings.TrimSpace(tokenStr)
+	if tokenStr == "" {
+		return "", errors.New("empty registry assertion token")
 	}
 
-	email := strings.TrimSpace(claims.Email)
-	if email == "" {
-		email = strings.TrimSpace(claims.Subject)
+	var claims *RegistryClaims
+	var err error
+	handled := false
+	for _, v := range registeredVerifiersSnapshot() {
+		if rv, ok := v.(*registryVerifier); ok {
+			claims, _, err = rv.inner.VerifyToken(ctx, tokenStr)
+			handled = true
+			break
+		}
 	}
-	email = normalizeIdentityEmail(email)
-	if email == "" {
-		return "", errors.New("no email or subject found in verified IAP token claims")
+	if !handled {
+		claims, err = webauth.ValidateRegistryToken(ctx, tokenStr, webauth.RegistryAudienceFor(ctx))
 	}
-	return email, nil
+	if err != nil {
+		return "", err
+	}
+	id, err := webauth.IdentityFromRegistryClaims(claims)
+	if err != nil {
+		return "", err
+	}
+	return id.Email, nil
 }
 
 // testSourceNets are networks singleTenantTrusted trusts as it does an
@@ -581,6 +329,7 @@ var testSourceNets []*net.IPNet
 var (
 	proxyIdentityHeaders = []string{
 		IAPAssertionHeader,
+		RegistryAssertionHeader,
 		"X-Goog-Authenticated-User-Email",
 		"X-Goog-Authenticated-User-Id",
 	}
@@ -640,6 +389,8 @@ const (
 	// AuthMethodIAP is a verified IAP (or other signing proxy's)
 	// assertion.
 	AuthMethodIAP AuthMethod = "iap"
+	// AuthMethodRegistry is a verified grain-registry assertion.
+	AuthMethodRegistry AuthMethod = "registry"
 	// AuthMethodTrusted is nobody signed in, from a source this daemon
 	// trusts as itself: the access code, or an in-process request.
 	AuthMethodTrusted AuthMethod = "trusted"
@@ -727,12 +478,20 @@ func unverifiedIdentity(r *http.Request, proxyOnly bool) string {
 				return fmt.Sprintf("its %s did not verify against this deployment's IAP audience, issuer and keys "+
 					"(-ui-iap-audience, -ui-iap-issuer, -ui-iap-keys-url)", h)
 			}
+			if v.Name() == string(AuthMethodRegistry) {
+				return fmt.Sprintf("its %s did not verify against this deployment's registry audience, issuer and keys "+
+					"(-ui-registry-audience, -ui-registry-issuer, -ui-registry-keys-url)", h)
+			}
 			return fmt.Sprintf("its %s header did not verify (%s)", h, v.Name())
 		}
 	}
 	if strings.TrimSpace(r.Header.Get(IAPAssertionHeader)) != "" {
 		return fmt.Sprintf("its %s did not verify against this deployment's IAP audience, issuer and keys "+
 			"(-ui-iap-audience, -ui-iap-issuer, -ui-iap-keys-url)", IAPAssertionHeader)
+	}
+	if strings.TrimSpace(r.Header.Get(RegistryAssertionHeader)) != "" {
+		return fmt.Sprintf("its %s did not verify against this deployment's registry audience, issuer and keys "+
+			"(-ui-registry-audience, -ui-registry-issuer, -ui-registry-keys-url)", RegistryAssertionHeader)
 	}
 	if h, id, why, _ := ignoredIdentityHeader(r, proxyOnly); h != "" {
 		return fmt.Sprintf("it names %q only in the unsigned %s header, %s", id, h, why)
@@ -805,13 +564,7 @@ func logIgnoredIdentityHeader(r *http.Request) {
 }
 
 func cleanIdentity(val string) string {
-	val = strings.TrimSpace(val)
-	if val == "" {
-		return ""
-	}
-	val = strings.TrimPrefix(val, "https://accounts.google.com:")
-	val = strings.TrimPrefix(val, "accounts.google.com:")
-	return strings.TrimSpace(val)
+	return webauth.CleanIdentity(val)
 }
 
 // withAgentRequester is requestPrincipal for a write an agent makes on

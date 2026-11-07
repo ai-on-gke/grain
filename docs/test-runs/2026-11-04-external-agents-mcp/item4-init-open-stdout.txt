@@ -1,0 +1,8 @@
+Model backend: claude -- found /var/tmp/grain-workstation-3070/home-open/bin/claude.
+Wrote the starter policy /var/tmp/grain-workstation-3070/home-open/.grain/grain_policy.yml.
+Wrote /var/tmp/grain-workstation-3070/home-open/.grain/daemon.sh, the daemon's command line.
+Run the daemon in the foreground with: /var/tmp/grain-workstation-3070/home-open/.grain/daemon.sh
+Point the grain CLI at it (add this to your shell's profile):
+  export GRAIN_DATA_DIR='/var/tmp/grain-workstation-3070/home-open/.grain'
+Then open http://127.0.0.1:14320, add a model connection under Settings, and file a task:
+  grain create -title "Say hello" -approve

@@ -146,8 +146,8 @@ func TestACheckDoesNotChangeTheReadyBadge(t *testing.T) {
 		t.Fatalf("settings status = %d, want 200", rec.Code)
 	}
 	settings := decode[ui.Settings](t, rec)
-	if !capabilityStatus(t, settings.Capabilities, "self-debug").Ready {
-		t.Error("self-debug stopped being Ready because a check was run")
+	if !capabilityStatus(t, settings.Capabilities, "console").Ready {
+		t.Error("console stopped being Ready because a check was run")
 	}
 }
 
@@ -166,7 +166,7 @@ func TestCheckCapabilityRejectsOneWithNoStandingCredential(t *testing.T) {
 	t.Parallel()
 	checker := &fakeChecker{}
 	srv := testServerWithChecker(t, checker)
-	rec := do(t, srv, http.MethodPost, "/api/capabilities/bootstrap-playbooks/check", "")
+	rec := do(t, srv, http.MethodPost, "/api/capabilities/self-debug/check", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body)
 	}
@@ -199,12 +199,12 @@ func TestCapabilityStatusReportsWhichCapabilitiesCanBeChecked(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	settings := decode[ui.Settings](t, rec)
-	for _, id := range []string{"gemini-key", "github-sandbox"} {
+	for _, id := range []string{"github-sandbox"} {
 		if !capabilityStatus(t, settings.Capabilities, id).Checkable {
 			t.Errorf("%s: Checkable = false, but it holds a standing credential that can go stale", id)
 		}
 	}
-	for _, id := range []string{"self-debug", "bootstrap-playbooks"} {
+	for _, id := range []string{"console"} {
 		if capabilityStatus(t, settings.Capabilities, id).Checkable {
 			t.Errorf("%s: Checkable = true, but it holds no standing credential", id)
 		}
@@ -219,98 +219,8 @@ func TestCapabilityStatusIsUncheckableWithNoCheckerWired(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	settings := decode[ui.Settings](t, rec)
-	if capabilityStatus(t, settings.Capabilities, "gemini-key").Checkable {
-		t.Error("gemini-key: Checkable = true on a UI with nothing to run a check through")
-	}
-}
-
-// serverWithTokenChecker is testServerWithChecker plus the picker rows a
-// real deployment's named GitHub tokens add (pkg/cli/daemon.go's own
-// startUIServer), which is the only thing that makes one of those ids a
-// capability this deployment has: they are an operator's files, and no
-// build of grain ships a catalog entry for them.
-func serverWithTokenChecker(t *testing.T, checker ui.CapabilityChecker, names ...string) *ui.Server {
-	t.Helper()
-	_, store, _ := testClient(t)
-	if err := store.PutConfig(context.Background(), model.Config{PollInterval: model.DefaultPollInterval}); err != nil {
-		t.Fatal(err)
-	}
-	return ui.NewServer(ui.Config{
-		Actor:            ui.DefaultActor("alice"),
-		Capabilities:     append(ui.OfferedCapabilities(), ui.GitHubTokenCapabilities(names)...),
-		Secrets:          secrets.New(t.TempDir()),
-		CapabilityChecks: checker,
-	}, store)
-}
-
-// grain/task-189: a named GitHub token's row reports Ready by
-// construction -- the file exists -- and a token revoked, expired or
-// rotated at GitHub's end changes nothing about that file. The check is
-// the one thing that can tell the difference, so the endpoint has to
-// reach the provider for one of these ids rather than refusing it as a
-// capability with nothing to test.
-func TestCheckCapabilityReachesANamedGitHubToken(t *testing.T) {
-	t.Parallel()
-	checker := &fakeChecker{result: ui.CapabilityCheckResult{
-		Credentials: []string{"secrets/github/release-bot.token"},
-		Detail:      "github.com accepted the \"release-bot\" token (4999 of 5000 core API requests left this hour).",
-	}}
-	srv := serverWithTokenChecker(t, checker, "release-bot")
-
-	rec := do(t, srv, http.MethodPost, "/api/capabilities/github-credential:release-bot/check", "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
-	}
-	check := decode[ui.CapabilityCheck](t, rec)
-	if !check.OK || check.Detail != checker.result.Detail {
-		t.Errorf("check = %+v, want the provider's own answer", check)
-	}
-	// The remedy for a refused token is replacing a file, so the answer
-	// names it the same way every other capability's names its secret.
-	if len(check.Credentials) != 1 || check.Credentials[0] != "secrets/github/release-bot.token" {
-		t.Errorf("Credentials = %v, want the file the token lives in", check.Credentials)
-	}
-	if len(checker.asked) != 1 || checker.asked[0] != "github-credential:release-bot" {
-		t.Errorf("checker was asked %v, want exactly the token's own id", checker.asked)
-	}
-}
-
-// The other half of that: which tokens exist is this deployment's own
-// files, so a token-shaped id this deployment does not offer is an
-// unknown capability -- a 400 about grain, not a check that goes out and
-// fails.
-func TestCheckCapabilityRejectsAnUnofferedGitHubToken(t *testing.T) {
-	t.Parallel()
-	checker := &fakeChecker{}
-	srv := serverWithTokenChecker(t, checker, "release-bot")
-
-	rec := do(t, srv, http.MethodPost, "/api/capabilities/github-credential:no-such-token/check", "")
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body)
-	}
-	if len(checker.asked) != 0 {
-		t.Errorf("the checker was called for a token this deployment has no file for: %v", checker.asked)
-	}
-}
-
-// And the row itself: Ready stays true by construction (nothing about
-// the file is missing), with the answer it cannot give reported beside
-// it as a check somebody can run.
-func TestCapabilityStatusReportsANamedGitHubTokenAsCheckable(t *testing.T) {
-	t.Parallel()
-	srv := serverWithTokenChecker(t, &fakeChecker{}, "release-bot")
-
-	rec := do(t, srv, http.MethodGet, "/api/settings", "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	settings := decode[ui.Settings](t, rec)
-	status := capabilityStatus(t, settings.Capabilities, "github-credential:release-bot")
-	if !status.Ready {
-		t.Errorf("Ready = false for a token whose file exists: %+v", status)
-	}
-	if !status.Checkable {
-		t.Error("Checkable = false, so the pane offers no way to test a token it reports Ready")
+	if capabilityStatus(t, settings.Capabilities, "github-sandbox").Checkable {
+		t.Error("github-sandbox: Checkable = true on a UI with nothing to run a check through")
 	}
 }
 

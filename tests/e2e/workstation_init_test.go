@@ -68,16 +68,11 @@ func TestWorkstationInitToAFirstTask(t *testing.T) {
 		}
 	}
 
-	// The fake agent: one JSON request in, one closing comment out.
+	// The fake agent: a stand-in for agy that leaves one closing comment.
 	ran := filepath.Join(home, "fake-agent-ran")
 	agent := filepath.Join(home, "fake-agent")
-	script := fmt.Sprintf(`#!/bin/sh
-cat > %[1]s
-printf '%%s\n' '{"protocol_version":2,"result":{"final_text":"Hello from the fake agent.","tool_calls":[{"name":"comment_on_issue","arguments":{"comment":"Hello from the fake agent."},"text":"ok","is_error":false}],"transcript":"said hello"}}'
-`, ran)
-	if err := os.WriteFile(agent, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeFakeAgy(t, agent, "touch "+shellQuote(ran), "Hello from the fake agent.",
+		fakeAgyTool{Name: "comment_on_issue", Args: map[string]any{"comment": "Hello from the fake agent."}, Output: "Comment recorded."})
 
 	var logs bytes.Buffer
 	// -sandbox-port-base=0 for the reason the standalone merge test
@@ -132,18 +127,13 @@ printf '%%s\n' '{"protocol_version":2,"result":{"final_text":"Hello from the fak
 		return err
 	})
 
-	backends := []model.AgentBackend{{
-		ID: "fake", Name: "fake agent", Framework: model.AgentFrameworkCustom, Command: agent,
-		// A custom command with an empty list has no models, and its
-		// tasks wait for one to be set.
-		Models: []string{"fake-model"},
-	}}
+	backends := []model.AgentBackend{fakeAgyConnection(agent)}
 	if _, err := client.UpdateSettings(ctx, ui.UpdateSettingsRequest{AgentBackends: &backends}); err != nil {
 		t.Fatalf("configuring the fake agent: %v", err)
 	}
 	task, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "Say hello", Description: "Leave a closing comment.", NoRepo: true,
-		AgentFramework: model.AgentFrameworkCustom,
+		AgentFramework: model.AgentFrameworkAntigravity,
 	})
 	if err != nil {
 		t.Fatalf("filing the task: %v", err)

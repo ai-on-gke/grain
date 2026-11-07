@@ -104,13 +104,13 @@ func (c Client) SocketOwner(ctx context.Context, inode uint64) (int, error) {
 	err := c.oneShot(ctx, Request{Op: OpSocketOwner, Inode: inode}, frameSocketOwner, &out)
 	var r *RefusedError
 	if errors.As(err, &r) && strings.HasPrefix(r.Reason, "unknown op") {
-		return 0, errors.New("grain hostd is on an older protocol that cannot check socket ownership")
+		return 0, errors.New("the host agent is on an older protocol that cannot check socket ownership")
 	}
 	if err != nil {
 		return 0, err
 	}
 	if out.PID <= 0 {
-		return 0, fmt.Errorf("no process started by grain hostd holds socket %d", inode)
+		return 0, fmt.Errorf("no process started by the host agent holds socket %d", inode)
 	}
 	return out.PID, nil
 }
@@ -209,22 +209,22 @@ func (c Client) dial(ctx context.Context) (net.Conn, error) {
 func (c Client) unreachable(err error, down bool) error {
 	if c.Dial != nil {
 		if down {
-			return fmt.Errorf("grain hostd is not reachable: %w; on the host, run grain hostd -server with this daemon's URL "+
+			return fmt.Errorf("the host agent is not reachable: %w; on the host, run grain host -server with this daemon's URL "+
 				"and the token in its -hostd-token-file, and journalctl -u grain-hostd says why it is not connecting", err)
 		}
-		return fmt.Errorf("grain hostd is not reachable over its connection to this daemon: %w", err)
+		return fmt.Errorf("the host agent is not reachable over its connection to this daemon: %w", err)
 	}
 	if !down {
-		return fmt.Errorf("grain hostd is not reachable at %s: %w", c.Socket, err)
+		return fmt.Errorf("the host agent is not reachable at %s: %w", c.Socket, err)
 	}
-	why := "grain hostd is not running (grain-hostd.service is stopped, failing, or restarting for an upgrade)"
+	why := "the host agent is not running (grain-hostd.service is stopped, failing, or restarting for an upgrade)"
 	if socketDirRemoved(c.Socket) {
 		// The directory this process sees is not the one hostd makes its
 		// socket in any more: a container that mounted it before the
 		// host removed and remade it keeps the old, empty one.
-		why = "the socket directory this process mounted was removed on the host since it started, so a socket hostd makes there now is not visible here; restart grain-daemon to mount it again"
+		why = "the socket directory this process mounted was removed on the host since it started, so a socket the host agent makes there now is not visible here; restart grain-daemon to mount it again"
 	}
-	return fmt.Errorf("grain hostd is not reachable at %s: %s; on the host, systemctl status grain-hostd and journalctl -u grain-hostd say why (%w)", c.Socket, why, err)
+	return fmt.Errorf("the host agent is not reachable at %s: %s; on the host, systemctl status grain-hostd and journalctl -u grain-hostd say why (%w)", c.Socket, why, err)
 }
 
 // Offers asks hostd which entries this host's allowlist offers.
@@ -306,7 +306,7 @@ func (c Client) Run(ctx context.Context, req Request, stdin io.Reader, stdout, s
 	case frameExit:
 		var e Exit
 		_ = json.Unmarshal(payload, &e)
-		return e, fmt.Errorf("hostd could not start %s %q: %s", req.Kind, req.Name, e.Error)
+		return e, fmt.Errorf("the host agent could not start %s %q: %s", req.Kind, req.Name, e.Error)
 	case frameStarted:
 	default:
 		return Exit{Code: -1}, fmt.Errorf("hostd: unexpected frame %q", typ)

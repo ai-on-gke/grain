@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // Walkthrough: System's sandboxes and caches tabs (docs/test-plans/2026-09-25.md §3)
 // Exercises System overlay tab navigation, Sandboxes live metrics and sparklines,
@@ -24,9 +25,11 @@ async function startRun(page) {
   await page.getByRole("button", { name: /^CI \d+$/ }).click();
   await expect(page.getByRole("heading", { name: "CI" })).toBeVisible();
   await page.getByRole("button", { name: "Start a run" }).click();
-  const repoSelect = page.locator('select[name="repo"]');
+  const repoSelect = page.locator(
+    '.repo-field:has(input[name="repo"]) [role="combobox"]',
+  );
   await expect(repoSelect).toBeVisible();
-  await repoSelect.selectOption("acme/widgets");
+  await chooseOption(repoSelect, "acme/widgets");
   await page.getByLabel("Branch").fill("main");
   await page.getByRole("button", { name: "Load workflows" }).click();
   await expect(page.getByLabel("Workflow")).toBeVisible();
@@ -39,6 +42,9 @@ test("system sandboxes and caches tabs walkthrough", async ({ page }) => {
   test.setTimeout(90_000);
 
   // 1. Navigate to dashboard and initiate a background CI job to populate active sandbox metrics
+  await page.addInitScript(() =>
+    localStorage.setItem("grain.sidebar.hidden", "[]"),
+  );
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
 

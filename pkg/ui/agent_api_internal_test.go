@@ -756,6 +756,12 @@ var capabilitiesAdminBodies = map[string]struct {
 		nil, []string{"id", "config", "configSecrets"}},
 	"TestHostScriptRequest": {reflect.TypeFor[TestHostScriptRequest](), nil, []string{"id", "script", "argv"}},
 	"TestGChatPostRequest":  {reflect.TypeFor[TestGChatPostRequest](), nil, []string{"id", "space"}},
+	"TestFigmaAccountRequest": {reflect.TypeFor[TestFigmaAccountRequest](),
+		nil, []string{"id", "account"}},
+	"FigmaOAuthAuthorizeRequest": {reflect.TypeFor[FigmaOAuthAuthorizeRequest](),
+		nil, []string{"id", "account", "redirectUri"}},
+	"FigmaOAuthExchangeRequest": {reflect.TypeFor[FigmaOAuthExchangeRequest](),
+		nil, []string{"id", "account", "code", "state", "redirectUri"}},
 	// A scope set is a definition: declaring one hands it to no task, but
 	// editing one already granted widens every grant of it. set is not a
 	// grant name, so it is sorted here; grantBodies reads it as the scopes
@@ -764,11 +770,12 @@ var capabilitiesAdminBodies = map[string]struct {
 	"PutAPIScopeSetRequest":    {reflect.TypeFor[PutAPIScopeSetRequest](), nil, []string{"set"}},
 	"DeleteAPIScopeSetRequest": {reflect.TypeFor[DeleteAPIScopeSetRequest](), nil, []string{"name"}},
 	"CreateExternalAgentTokenRequest": {reflect.TypeFor[CreateExternalAgentTokenRequest](),
-		nil, []string{"name", "scopeSet", "scopes", "repos", "expiresAt", "rateLimit", "maxConcurrent"}},
+		nil, []string{"name", "scopeSet", "scopes", "repos", "expiresAt", "rateLimit", "maxConcurrent", "owner", "selfService"}},
 	// A hostd's registry row grants a task nothing: which hostd a run
 	// goes to is the task's own pin or selector, not this.
 	"CreateHostdRequest": {reflect.TypeFor[CreateHostdRequest](), nil, []string{"name", "owner", "labels"}},
-	"UpdateHostdRequest": {reflect.TypeFor[UpdateHostdRequest](), nil, []string{"owner", "labels"}},
+	"UpdateHostdRequest": {reflect.TypeFor[UpdateHostdRequest](), nil, []string{"owner", "labels", "capacity"}},
+	"RenameHostdRequest": {reflect.TypeFor[RenameHostdRequest](), nil, []string{"name"}},
 }
 
 // capabilitiesAdminBodylessRoutes are capabilities:admin routes that act by URL
@@ -780,6 +787,8 @@ var capabilitiesAdminBodylessRoutes = map[string]bool{
 	"POST /api/external-agents/tokens/revoke-all":  true,
 	"POST /api/hostds/{name}/rotate":               true,
 	"POST /api/hostds/{name}/revoke":               true,
+	"DELETE /api/hostds/{name}":                    true,
+	"POST /api/hostds/delete-revoked":              true,
 }
 
 // TestCapabilitiesAdminGrantKeysAreScanned holds agentGrantEscalation to

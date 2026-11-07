@@ -15,6 +15,9 @@
 package github
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -201,4 +204,195 @@ func intString(n int) string {
 		n /= 10
 	}
 	return string(digits[i:])
+}
+
+// TestAttemptReadersAskForEveryAttempt: the release train's gate counts a
+// job's or a check run's failed attempt before its retry, so both readers
+// ask GitHub for filter=all rather than its default of the latest alone,
+// and carry what GitHub repeats of the run on each job.
+func TestAttemptReadersAskForEveryAttempt(t *testing.T) {
+	t.Parallel()
+	forge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		switch r.URL.Path {
+		case "/repos/acme/widgets/actions/runs/42/jobs":
+			if q.Get("filter") != "all" {
+				t.Errorf("jobs asked with filter %q, want all", q.Get("filter"))
+			}
+			w.Write([]byte(`{"jobs":[{"id":7,"run_id":42,"run_attempt":1,"workflow_name":"nightly","head_sha":"abc",
+				"name":"go-long","status":"completed","conclusion":"failure","created_at":"2026-11-01T10:00:00Z"},
+				{"id":8,"run_id":42,"run_attempt":2,"workflow_name":"nightly","head_sha":"abc",
+				"name":"go-long","status":"completed","conclusion":"success","created_at":"2026-11-01T11:00:00Z"}]}`))
+		case "/repos/acme/widgets/commits/abc/check-runs":
+			if q.Get("filter") != "all" || q.Get("check_name") != "grain/release-qualification" {
+				t.Errorf("check runs asked with %v, want filter=all and check_name", q)
+			}
+			w.Write([]byte(`{"total_count":1,"check_runs":[{"id":5,"head_sha":"abc","name":"grain/release-qualification",
+				"status":"completed","conclusion":"success","app":{"slug":"grain-forge"}}]}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	t.Cleanup(forge.Close)
+	transport := &RealTransport{Host: strings.TrimPrefix(forge.URL, "http://"), ledger: &callerLedger{logf: func(string, ...any) {}}}
+	client := NewClient(transport, StaticToken{strPtr("t")})
+
+	jobs, err := client.ListActionsJobAttempts("acme", "widgets", 42)
+	if err != nil || len(jobs) != 2 || jobs[0].RunAttempt != 1 || jobs[0].WorkflowName != "nightly" ||
+		jobs[0].HeadSHA != "abc" || jobs[0].CreatedAt == nil {
+		t.Fatalf("ListActionsJobAttempts = %+v, %v", jobs, err)
+	}
+	checks, err := client.ListCheckRunAttempts("acme", "widgets", "abc", "grain/release-qualification")
+	if err != nil || len(checks) != 1 || checks[0].App != "grain-forge" || checks[0].HeadSHA != "abc" {
+		t.Fatalf("ListCheckRunAttempts = %+v, %v", checks, err)
+	}
+}
+
+// ghesLogForge is an Enterprise Server shaped for job logs: its REST API
+// under /api/v3 on one host, and the logs endpoint answering 302 to a
+// signed URL on a blob host of its own (blob), which wants no
+// credential and must not be sent one.
+func ghesLogForge(t *testing.T, blob http.HandlerFunc) (api *httptest.Server, blobAuth *[]string) {
+	t.Helper()
+	var auths []string
+	blobSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auths = append(auths, r.Header.Get("Authorization"))
+		blob(w, r)
+	}))
+	t.Cleanup(blobSrv.Close)
+	// The same server under another name: "localhost" rather than
+	// 127.0.0.1, so the redirect crosses hosts as a real one does.
+	blobURL := strings.Replace(blobSrv.URL, "127.0.0.1", "localhost", 1)
+	api = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v3/repos/acme/widgets/actions/jobs/19190336/logs" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if r.Header.Get("Authorization") != "token t" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		http.Redirect(w, r, blobURL+"/logs/19190336.txt?sig=secret", http.StatusFound)
+	}))
+	t.Cleanup(api.Close)
+	return api, &auths
+}
+
+func TestActionsJobLogFollowsAnEnterpriseServersRedirect(t *testing.T) {
+	const log = "2026-11-04T03:10:00.0000000Z ##[group]Run ./verify.sh\n2026-11-04T03:10:02.0000000Z ERROR: image is not Google-linked\n"
+	for _, stop := range []bool{false, true} {
+		t.Run(fmt.Sprintf("transportFollows=%v", !stop), func(t *testing.T) {
+			api, auths := ghesLogForge(t, func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, log) })
+			hc := &http.Client{}
+			if stop {
+				// A transport that hands the redirect back un-followed.
+				hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			}
+			transport := &RealTransport{Host: strings.TrimPrefix(api.URL, "http://"), PathPrefix: "/api/v3", Client: hc,
+				ledger: &callerLedger{logf: func(string, ...any) {}}}
+			client := NewClient(transport, StaticToken{strPtr("t")})
+			got, err := client.ActionsJobLog("acme", "widgets", 19190336)
+			if err != nil || got != log {
+				t.Fatalf("ActionsJobLog = %q, %v; want the blob's log", got, err)
+			}
+			if len(*auths) != 1 || (*auths)[0] != "" {
+				t.Errorf("the blob host saw Authorization %q; want one request carrying none", *auths)
+			}
+		})
+	}
+}
+
+func TestActionsJobLogRefusedByTheBlobHostNamesStatusAndHost(t *testing.T) {
+	for _, stop := range []bool{false, true} {
+		t.Run(fmt.Sprintf("transportFollows=%v", !stop), func(t *testing.T) {
+			api, _ := ghesLogForge(t, func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusForbidden)
+				io.WriteString(w, "<Error>AuthenticationFailed</Error>")
+			})
+			hc := &http.Client{}
+			if stop {
+				// Followed here rather than by the transport: the error
+				// must still name the blob host and not its signed URL.
+				hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			}
+			transport := &RealTransport{Host: strings.TrimPrefix(api.URL, "http://"), PathPrefix: "/api/v3", Client: hc,
+				ledger: &callerLedger{logf: func(string, ...any) {}}}
+			_, err := NewClient(transport, StaticToken{strPtr("t")}).ActionsJobLog("acme", "widgets", 19190336)
+			var gh *Error
+			if !errors.As(err, &gh) || gh.Status != http.StatusForbidden {
+				t.Fatalf("ActionsJobLog error = %v; want a 403 *Error", err)
+			}
+			if !strings.Contains(err.Error(), "localhost") || !strings.Contains(err.Error(), api.URL) {
+				t.Errorf("error %q should name both the API host and the blob host it was redirected to", err)
+			}
+			if strings.Contains(err.Error(), "sig=secret") || strings.Contains(err.Error(), "/logs/19190336.txt") {
+				t.Errorf("error %q leaks the signed URL", err)
+			}
+		})
+	}
+}
+
+func TestActionsJobLogUnreachableBlobHostKeepsTheSignedQueryOut(t *testing.T) {
+	for _, stop := range []bool{false, true} {
+		t.Run(fmt.Sprintf("transportFollows=%v", !stop), func(t *testing.T) {
+			api, _ := ghesLogForge(t, func(w http.ResponseWriter, r *http.Request) {
+				// Drop the connection: the transport fails rather than answers.
+				conn, _, _ := w.(http.Hijacker).Hijack()
+				conn.Close()
+			})
+			hc := &http.Client{}
+			if stop {
+				hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			}
+			transport := &RealTransport{Host: strings.TrimPrefix(api.URL, "http://"), PathPrefix: "/api/v3", Client: hc,
+				ledger: &callerLedger{logf: func(string, ...any) {}}}
+			_, err := NewClient(transport, StaticToken{strPtr("t")}).ActionsJobLog("acme", "widgets", 19190336)
+			if err == nil {
+				t.Fatal("ActionsJobLog succeeded against a blob host that hung up")
+			}
+			if strings.Contains(err.Error(), "sig=secret") || strings.Contains(err.Error(), "/logs/19190336.txt") {
+				t.Errorf("error %q leaks the signed blob URL", err)
+			}
+			if !strings.Contains(err.Error(), "localhost") {
+				t.Errorf("error %q should still name the blob host", err)
+			}
+		})
+	}
+}
+
+// A job log the blob store answers 200 with no body is ErrEmptyJobLog,
+// naming the status, both hosts and who the headers say answered, so the
+// hop that lost the log can be told -- not a log that is just empty.
+func TestActionsJobLogAnsweredEmptyNamesStatusHostsAndServer(t *testing.T) {
+	for _, stop := range []bool{false, true} {
+		t.Run(fmt.Sprintf("transportFollows=%v", !stop), func(t *testing.T) {
+			api, _ := ghesLogForge(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/plain")
+				w.Header().Set("Server", "blobstore")
+				w.WriteHeader(http.StatusOK)
+			})
+			hc := &http.Client{}
+			if stop {
+				hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			}
+			transport := &RealTransport{Host: strings.TrimPrefix(api.URL, "http://"), PathPrefix: "/api/v3", Client: hc,
+				ledger: &callerLedger{logf: func(string, ...any) {}}}
+			got, err := NewClient(transport, StaticToken{strPtr("t")}).ActionsJobLog("acme", "widgets", 19190336)
+			if !errors.Is(err, ErrEmptyJobLog) {
+				t.Fatalf("ActionsJobLog = %q, %v; want ErrEmptyJobLog", got, err)
+			}
+			var gh *Error
+			if !errors.As(err, &gh) || gh.Status != http.StatusOK {
+				t.Fatalf("error %v should carry the 200 *Error", err)
+			}
+			for _, want := range []string{"localhost", "content-type text/plain", "server blobstore"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q should name %q", err, want)
+				}
+			}
+			if strings.Contains(err.Error(), "sig=secret") {
+				t.Errorf("error %q leaks the signed URL's query", err)
+			}
+		})
+	}
 }

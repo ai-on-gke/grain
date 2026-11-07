@@ -48,6 +48,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -107,10 +108,10 @@ func (r CLIRunResolution) Summary() string {
 		return fmt.Sprintf("%s: container (the daemon's own, %s) -- %s", name, orNone(r.HostPath), r.Reason)
 	}
 	if r.Location == model.CLIRunDetached {
-		return fmt.Sprintf("%s: detached (%s, through grain hostd, entry %q) -- %s", name, orNone(r.HostPath), r.Entry, r.Reason)
+		return fmt.Sprintf("%s: detached (%s, through the host agent, entry %q) -- %s", name, orNone(r.HostPath), r.Entry, r.Reason)
 	}
 	if r.Via == ViaHostd {
-		return fmt.Sprintf("%s: host (%s, through grain hostd, entry %q) -- %s", name, orNone(r.HostPath), name, r.Reason)
+		return fmt.Sprintf("%s: host (%s, through the host agent, entry %q) -- %s", name, orNone(r.HostPath), name, r.Reason)
 	}
 	return fmt.Sprintf("%s: host (%s) -- %s", name, orNone(r.HostPath), r.Reason)
 }
@@ -127,8 +128,6 @@ func cliBinaryName(framework string) string {
 	switch framework {
 	case model.AgentFrameworkAntigravity:
 		return "agy"
-	case model.AgentFrameworkCustom:
-		return "custom"
 	}
 	return framework
 }
@@ -230,9 +229,9 @@ func (e HostExecutor) runsDetached(framework string) (bool, string) {
 	switch {
 	case e.Kind != HostExecutorHostd:
 		if e.Kind == HostExecutorLocal {
-			return false, "detached runs the image's CLI through grain hostd, and this daemon runs on the bare machine (" + e.Reason + ")"
+			return false, "detached runs the image's CLI through the host agent, and this daemon runs on the bare machine (" + e.Reason + ")"
 		}
-		return false, "detached runs the image's CLI through grain hostd, and " + e.Reason
+		return false, "detached runs the image's CLI through the host agent, and " + e.Reason
 	case !detachedFrameworks[framework]:
 		if why := noDetached[framework]; why != "" {
 			return false, why
@@ -266,8 +265,7 @@ func (c Config) cliHostPath(framework string) string {
 	case model.AgentFrameworkAntigravity:
 		path = c.AgyPath
 	}
-	if path != "" || framework == model.AgentFrameworkCustom {
-		// A custom command is each connection's own, never one binary.
+	if path != "" {
 		return path
 	}
 	if resolved, err := exec.LookPath(cliBinaryName(framework)); err == nil {
@@ -332,7 +330,7 @@ func (c Config) resolveContainerised(ctx context.Context, r *CLIRunResolution, e
 		ok, why := exec.runsOnHost(r.Framework)
 		if ok {
 			r.Location, r.Via, r.HostPath, r.Entry = model.CLIRunHost, ViaHostd, offered, cliBinaryName(r.Framework)
-			r.Reason = "host " + from + ": through grain hostd " + exec.hostdWhere() + ", as its allowlist entry \"" + cliBinaryName(r.Framework) + "\""
+			r.Reason = "host " + from + ": through the host agent " + exec.hostdWhere() + ", as its allowlist entry \"" + cliBinaryName(r.Framework) + "\""
 			// Allowed only for an entry hostd offers: otherwise the run
 			// fails, saying which of the two is missing.
 			r.Err = r.HostUnavailable
@@ -362,13 +360,13 @@ func (c Config) resolveDetached(ctx context.Context, r *CLIRunResolution, exec H
 	}
 	if why != "" {
 		r.Reason = "detached " + from + ", but " + why
-		r.Warning = "set to detached, but " + why + ". It runs in the container, and an upgrade interrupts it, until grain hostd offers the \"" +
+		r.Warning = "set to detached, but " + why + ". It runs in the container, and an upgrade interrupts it, until the host agent offers the \"" +
 			entry + "\" entry (re-run the installer to add it) or this is set to container"
 		warnDetachedOnce(r.Framework, from, why)
 		return
 	}
 	r.Location, r.Via, r.HostPath, r.Entry = model.CLIRunDetached, ViaHostd, path, entry
-	r.Reason = "detached " + from + ": the image's CLI with the deployment's login, through grain hostd " + exec.hostdWhere() +
+	r.Reason = "detached " + from + ": the image's CLI with the deployment's login, through the host agent " + exec.hostdWhere() +
 		" as its allowlist entry \"" + entry + "\", so it outlives a daemon upgrade"
 }
 
@@ -431,7 +429,7 @@ func (c Config) upgradeInterruptNotes(ctx context.Context, store *model.Store) m
 		c.CLIRun = mc.CLIRun
 	}
 	out := map[string]string{}
-	for _, r := range c.ResolveCLIRuns(ctx) {
+	for _, r := range c.ResolveCLIRuns(hostd.ForDisplay(ctx)) {
 		if r.UpgradeInterrupts != "" {
 			out[r.Framework] = r.UpgradeInterrupts
 		}

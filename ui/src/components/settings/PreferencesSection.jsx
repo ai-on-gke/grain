@@ -19,10 +19,10 @@ import {
   FormControlLabel,
   Radio,
   RadioGroup,
-  TextField,
   Typography,
 } from "@mui/material";
 import CustomizeSidebarOverlay from "../CustomizeSidebarOverlay.jsx";
+import SearchSelect from "../SearchSelect.jsx";
 import SettingsCard from "./SettingsCard.jsx";
 import { useThemeMode } from "../../ThemeModeContext.jsx";
 import { useTimelineOrder } from "../../TimelineOrderContext.jsx";
@@ -59,12 +59,11 @@ export default function PreferencesSection({
         </RadioGroup>
       </SettingsCard>
       <SettingsCard title="Time zone" anchor="time-zone">
-        <TextField
-          select
-          SelectProps={{ native: true }}
-          InputLabelProps={{ shrink: true }}
+        <SearchSelect
+          shrinkLabel
           name="userTimeZone"
           label="Time zone"
+          margin="normal"
           helperText={
             userTimeZone
               ? timeZoneHelp(userTimeZone)
@@ -73,22 +72,20 @@ export default function PreferencesSection({
                 : "Times here follow this browser's own clock until it picks one."
           }
           value={userTimeZone || ""}
-          onChange={(evt) => setUserTimeZone(evt.target.value)}
-          fullWidth
-          margin="normal"
-        >
-          <option value="">
-            {deploymentTimeZone
-              ? `Deployment default (${deploymentTimeZone})`
-              : `Browser default (${browserZone})`}
-          </option>
-          {timeZoneOptions(userTimeZone).map((zone) => (
-            <option key={zone} value={zone}>
-              {zone}
-              {zone === browserZone ? " (this browser)" : ""}
-            </option>
-          ))}
-        </TextField>
+          onChange={(next) => setUserTimeZone(next)}
+          options={[
+            {
+              value: "",
+              label: deploymentTimeZone
+                ? `Deployment default (${deploymentTimeZone})`
+                : `Browser default (${browserZone})`,
+            },
+            ...timeZoneOptions(userTimeZone).map((zone) => ({
+              value: zone,
+              label: `${zone}${zone === browserZone ? " (this browser)" : ""}`,
+            })),
+          ]}
+        />
       </SettingsCard>
       <SettingsCard title="Task timeline" anchor="timeline">
         <RadioGroup

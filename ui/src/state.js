@@ -184,16 +184,28 @@ export function displayCounts(counts) {
 
 // askedCase says which of the several things "Asked" covers one task is
 // in, or null for a task in neither of ASKED_STATES: kind is "question"
-// (an agent's ask_question), "message" (an interactive task or console
-// session waiting for its next message), "stopped" (a turn the reader
-// stopped -- ui.Task.TurnStopped) or "submit" (awaiting_submit); title
-// is the chip's tooltip; action is what ends it, "reply" or "submit".
+// (an agent's ask_question or request_secret), "answer" (a run that
+// answered in a comment and opened no pull request), "message" (an
+// interactive task or console session waiting for its next message),
+// "access" (an agent's request_access -- ui.Task.AwaitingAccess),
+// "stopped" (a turn the reader stopped -- ui.Task.TurnStopped) or
+// "submit" (awaiting_submit); title is the chip's tooltip; action is what
+// ends it, "reply", "grant" or "submit".
+// humanReviewLine is a human-review hold's reasons on one line.
+export function humanReviewLine(t) {
+  return [...new Set((t.humanReviewHold || []).map((r) => r.reason))].join(
+    "; ",
+  );
+}
+
 export function askedCase(t) {
   if (!t || !ASKED_STATES.includes(t.state)) return null;
   if (t.state === "awaiting_submit") {
     const what = t.pullRequest || "its change";
     let title = `Asked you to submit ${what}`;
-    if (t.pathTriggerHold) {
+    if (t.humanReviewHold?.length) {
+      title += ` — held for a person's review: ${humanReviewLine(t)}`;
+    } else if (t.pathTriggerHold) {
       title += ` — held by repository gating triggers (human: ${t.pathTriggerHold})`;
     } else if (t.securityHold) {
       const review = t.securityReviewTask
@@ -205,13 +217,17 @@ export function askedCase(t) {
   }
   if (t.turnStopped)
     return { kind: "stopped", title: "Stopped by you", action: "reply" };
+  if (t.awaitingAccess)
+    return { kind: "access", title: "Asked for access", action: "grant" };
   if (t.interactive || t.consoleSession)
     return {
       kind: "message",
       title: "Waiting for your message",
       action: "reply",
     };
-  return { kind: "question", title: "Asked a question", action: "reply" };
+  if (t.questionSummary || t.pendingSecret)
+    return { kind: "question", title: "Asked a question", action: "reply" };
+  return { kind: "answer", title: "Answered in a comment", action: "reply" };
 }
 
 // SET_ASIDE_STATES is the states a task list leaves out unless it is
@@ -421,6 +437,21 @@ export function stateTitle(t, byId) {
   return label;
 }
 
+// blockerState returns the short state label shown in parentheses for an
+// open blocking task (e.g. "running", "asked", "cancelled", "merged").
+export function blockerState(dep) {
+  if (!dep) return "";
+  let state = dep.state;
+  if (isTaskMerged(dep)) {
+    state = "merged";
+  } else if (state === "closed" && !dep.endedAt) {
+    state = "cancelled";
+  } else if (STATE_LABELS[state]) {
+    state = STATE_LABELS[state].toLowerCase();
+  }
+  return state || "";
+}
+
 // blockedDescription describes the open blocking dependencies for a task,
 // including each blocker's current state (e.g. "Blocked on: #105 (cancelled)").
 export function blockedDescription(t, byId) {
@@ -435,15 +466,7 @@ export function blockedDescription(t, byId) {
           ? byId.find((x) => x.id === id)
           : byId?.[id];
     if (!dep) return `#${id}`;
-    let state = dep.state;
-    if (isTaskMerged(dep)) {
-      state = "merged";
-    } else if (state === "closed" && !dep.endedAt) {
-      state = "cancelled";
-    } else if (STATE_LABELS[state]) {
-      state = STATE_LABELS[state].toLowerCase();
-    }
-    return `#${id} (${state})`;
+    return `#${id} (${blockerState(dep)})`;
   });
   // A task its own run parked (wait_for_task) is waiting by choice.
   return `${t.parked ? "Waiting on" : "Blocked on"}: ${parts.join(", ")}`;
@@ -491,6 +514,16 @@ export function completionPhase(t) {
   // clean. Without the chip it looked like every other change waiting for
   // a Submit click (docs/test-runs/2026-10-01-security-hold-escalated-
   // proposals.md, finding 3).
+  // A human-review hold (ui.Task.HumanReviewHold) waits on a person and
+  // nothing else: a review asked for a decision, a security review left
+  // findings, or the change touches a path only a person may release.
+  if (t.humanReviewHold?.length) {
+    return {
+      label: "Human review",
+      color: "warning",
+      title: `Held for a person's review: ${humanReviewLine(t)}. It will not merge itself until somebody presses Submit or Release hold.`,
+    };
+  }
   if (t.securityHold) {
     const review = t.securityReviewTask
       ? `security review (task ${t.securityReviewTask})`
@@ -1098,6 +1131,9 @@ export function baseRepairWaitReason(t) {
         .join(", ");
       return `waiting for human approval on ${rules}`;
     }
+    if (t.humanReviewHold?.length) {
+      return `held for a person's review (${humanReviewLine(t)}) — waiting for Submit or Release hold`;
+    }
     if (t.pathTriggerHold) {
       return `held by repository gating triggers (human: ${t.pathTriggerHold}) — waiting for Submit`;
     }
@@ -1111,7 +1147,9 @@ export function baseRepairWaitReason(t) {
       return `waiting on review questions from #${t.reviewQuestions}`;
     }
     if (t.state === "awaiting_reply") {
-      return "waiting for a reply to its question";
+      return t.questionSummary || t.pendingSecret
+        ? "waiting for a reply to its question"
+        : "answered in a comment";
     }
     if (t.state === "failed") {
       return "failed and waiting for retry";
@@ -1140,7 +1178,9 @@ export function baseRepairWaitReason(t) {
     return `stalled (${t.stall})`;
   }
   if (t.state === "awaiting_reply") {
-    return "waiting for a reply to its question";
+    return t.questionSummary || t.pendingSecret
+      ? "waiting for a reply to its question"
+      : "answered in a comment";
   }
   if (t.state === "failed") {
     return "failed and waiting for retry";
@@ -2094,7 +2134,9 @@ export function branchesInUse(tasks, repo) {
 const FRAMEWORK_LABELS = {
   claude: "Claude",
   codex: "Codex",
-  custom: "Custom command",
+  // Removed: a task or session from before the custom command connection
+  // type was retired can still name it.
+  custom: "Custom command (removed)",
 };
 
 export function frameworkLabel(framework) {
@@ -2331,13 +2373,11 @@ export function taskPause(t, config) {
 export const PROVIDER_DEFAULT_LABEL = "provider default (unset)";
 
 // NO_MODELS_LABEL is what a connection that advertises no model at all
-// says: its provider has never answered, or it is a custom command with
-// an empty list. Tasks that would run on it wait until somebody sets one.
+// says: its provider has never answered. Tasks that would run on it wait until somebody sets one.
 export const NO_MODELS_LABEL = "no models — set one";
 
 // DISCOVERING_FRAMEWORKS are the frameworks whose provider grain can ask
-// what it serves (model.AgentBackend.DiscoversModels). A custom command
-// cannot be asked.
+// what it serves (model.AgentBackend.DiscoversModels).
 export const DISCOVERING_FRAMEWORKS = [
   "antigravity",
   "gemini",

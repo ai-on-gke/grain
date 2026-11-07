@@ -66,6 +66,11 @@ export function revealSelectedTab(root) {
 // for the theme's standard transition (300ms).
 export const REVEAL_AFTER_MUI_MS = 400;
 
+// REVEAL_SETTLE_MS is the window after a layout/resize change during
+// which any programmatic scroll on the strip (MUI's requestAnimationFrame
+// scroll starting late on a busy runner) re-triggers revealSelectedTab.
+const REVEAL_SETTLE_MS = 2000;
+
 // useRevealSelectedTab keeps a scrollable strip's selected tab in view
 // whenever the strip itself changes width, and returns the ref to put on
 // the Tabs. MUI scrolls the selected tab into view when the selection
@@ -95,18 +100,65 @@ export function useRevealSelectedTab() {
       revealSelectedTab(root);
     };
     let again = null;
-    const observer = new ResizeObserver(() => {
+    let settlingUntil = 0;
+    const scheduleReveal = () => {
       reveal();
       // MUI's own scroll to the selected tab is animated, towards the
       // place it worked out for the wider strip, and it overwrites any
       // scroll made while it runs: say it again once that has finished.
       clearTimeout(again);
       again = setTimeout(reveal, REVEAL_AFTER_MUI_MS);
-    });
+    };
+    const onResize = () => {
+      settlingUntil = Date.now() + REVEAL_SETTLE_MS;
+      scheduleReveal();
+    };
+    // On a busy CI runner, MUI's requestAnimationFrame loop can begin or
+    // finish more than REVEAL_AFTER_MUI_MS after the ResizeObserver callback
+    // fired. Each animation frame writes scroller.scrollLeft and dispatches
+    // a scroll event; following scroll during the post-resize settle window
+    // (until any user scroll/button interaction) guarantees the final frame
+    // of MUI's animation cannot leave the selected tab under a scroll button.
+    const onScroll = () => {
+      if (Date.now() > settlingUntil) return;
+      scheduleReveal();
+    };
+    const cancelSettle = (event) => {
+      if (
+        event?.type === "pointerdown" &&
+        event.target?.closest?.('[role="tab"]')
+      ) {
+        return;
+      }
+      settlingUntil = 0;
+      clearTimeout(again);
+    };
+    const observer = new ResizeObserver(onResize);
     observer.observe(scroller);
+    // The tabs themselves can change width after the strip has settled
+    // -- a label or badge rendered once its data arrives -- and MUI
+    // scrolls again when they do, with the scroller's own width
+    // unchanged. Watch the row of tabs and each tab in it too, so that
+    // scroll is followed by a reveal as well (a slow CI runner lost the
+    // Advanced tab this way).
+    const list = scroller.querySelector(".MuiTabs-flexContainer");
+    if (list) {
+      observer.observe(list);
+      for (const tab of list.children || []) {
+        observer.observe(tab);
+      }
+    }
+    scroller.addEventListener?.("scroll", onScroll, { passive: true });
+    root.addEventListener?.("wheel", cancelSettle, { passive: true });
+    root.addEventListener?.("touchmove", cancelSettle, { passive: true });
+    root.addEventListener?.("pointerdown", cancelSettle, { passive: true });
     stop.current = () => {
       observer.disconnect();
       clearTimeout(again);
+      scroller.removeEventListener?.("scroll", onScroll);
+      root.removeEventListener?.("wheel", cancelSettle);
+      root.removeEventListener?.("touchmove", cancelSettle);
+      root.removeEventListener?.("pointerdown", cancelSettle);
     };
   }, []);
 }

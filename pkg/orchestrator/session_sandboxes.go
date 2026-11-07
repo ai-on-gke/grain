@@ -826,6 +826,9 @@ func continueSessionTurns(
 		if _, ok := firstToolCallArg(turnResult, "request_secret", "secret"); ok {
 			break
 		}
+		if _, ok := firstToolCallArg(turnResult, "request_access", "summary"); ok {
+			break
+		}
 		if _, ok := firstToolCallArg(turnResult, "propose_config_change", "summary"); ok {
 			break
 		}
@@ -846,7 +849,7 @@ func continueSessionTurns(
 		}
 
 		now := cfg.now()
-		if err := relayProposedTasks(daemonCtx, store, cfg.sessionReach, cfg.sessionClient, task, turnResult, now); err != nil {
+		if err := relayProposedTasks(withRelayingRunID(daemonCtx, runID), store, cfg.sessionReach, cfg.sessionClient, task, turnResult, now); err != nil {
 			log.Printf("orchestrator: run %s: relaying proposed tasks in-process: %v", runID, err)
 			break
 		}

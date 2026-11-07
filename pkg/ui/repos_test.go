@@ -113,7 +113,7 @@ func TestAddRepoRejectsAMalformedRepoWith400(t *testing.T) {
 func TestSetRepoDefaultCapabilitiesStoresAndReportsAllThreeSets(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
-	putDefaultCapabilities(t, ctx, store, "gemini-key")
+	putDefaultCapabilities(t, ctx, store, "console")
 
 	got, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"gcp-key"})
 	if err != nil {
@@ -122,10 +122,10 @@ func TestSetRepoDefaultCapabilitiesStoresAndReportsAllThreeSets(t *testing.T) {
 	if !reflect.DeepEqual(got.DefaultCapabilities, []string{model.GCPKeySandboxAgentGrant}) {
 		t.Errorf("defaultCapabilities = %v, want [%s]", got.DefaultCapabilities, model.GCPKeySandboxAgentGrant)
 	}
-	if !reflect.DeepEqual(got.DeploymentDefaultCapabilities, []string{"gemini-key"}) {
+	if !reflect.DeepEqual(got.DeploymentDefaultCapabilities, []string{"console"}) {
 		t.Errorf("deploymentDefaultCapabilities = %v, want [gemini-key]", got.DeploymentDefaultCapabilities)
 	}
-	if !reflect.DeepEqual(got.EffectiveDefaultCapabilities, []string{"gemini-key", model.GCPKeySandboxAgentGrant}) {
+	if !reflect.DeepEqual(got.EffectiveDefaultCapabilities, []string{"console", model.GCPKeySandboxAgentGrant}) {
 		t.Errorf("effectiveDefaultCapabilities = %v, want [gemini-key %s]: the deployment's, then this repo's",
 			got.EffectiveDefaultCapabilities, model.GCPKeySandboxAgentGrant)
 	}
@@ -147,7 +147,7 @@ func TestSetRepoDefaultCapabilitiesStoresAndReportsAllThreeSets(t *testing.T) {
 	if len(none.DefaultCapabilities) != 0 {
 		t.Errorf("defaultCapabilities = %v, want none", none.DefaultCapabilities)
 	}
-	if !reflect.DeepEqual(none.EffectiveDefaultCapabilities, []string{"gemini-key"}) {
+	if !reflect.DeepEqual(none.EffectiveDefaultCapabilities, []string{"console"}) {
 		t.Errorf("effectiveDefaultCapabilities = %v, want the deployment's [gemini-key]",
 			none.EffectiveDefaultCapabilities)
 	}
@@ -222,7 +222,7 @@ func TestSetRepoDefaultCapabilitiesAcceptsDroppingARetiredOne(t *testing.T) {
 	// would never have accepted "scratch-repo", so this is the state an
 	// upgrade that retired an id leaves behind.
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{
-		Repo: repo, DefaultCapabilities: []string{"gemini-key", "scratch-repo"},
+		Repo: repo, DefaultCapabilities: []string{"console", "scratch-repo"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -231,25 +231,25 @@ func TestSetRepoDefaultCapabilitiesAcceptsDroppingARetiredOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"gemini-key", "scratch-repo"}) {
+	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"console", "scratch-repo"}) {
 		t.Fatalf("defaultCapabilities = %v, want it reported as stored: an operator can only clear one they can see",
 			read.DefaultCapabilities)
 	}
-	if !reflect.DeepEqual(read.EffectiveDefaultCapabilities, []string{"gemini-key"}) {
+	if !reflect.DeepEqual(read.EffectiveDefaultCapabilities, []string{"console"}) {
 		t.Fatalf("effectiveDefaultCapabilities = %v, want [gemini-key]: a retired id grants nothing",
 			read.EffectiveDefaultCapabilities)
 	}
 
-	got, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"gemini-key"})
+	got, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"console"})
 	if err != nil {
 		t.Fatalf("dropping a retired default capability: %v", err)
 	}
-	if !reflect.DeepEqual(got.DefaultCapabilities, []string{"gemini-key"}) {
+	if !reflect.DeepEqual(got.DefaultCapabilities, []string{"console"}) {
 		t.Fatalf("defaultCapabilities = %v, want [gemini-key] with the retired id gone", got.DefaultCapabilities)
 	}
 	if read, err = c.RepoDefaults(ctx, "acme/widgets"); err != nil {
 		t.Fatal(err)
-	} else if !reflect.DeepEqual(read.DefaultCapabilities, []string{"gemini-key"}) {
+	} else if !reflect.DeepEqual(read.DefaultCapabilities, []string{"console"}) {
 		t.Fatalf("defaultCapabilities = %v after a re-read, want [gemini-key]: the retired id is gone for good",
 			read.DefaultCapabilities)
 	}
@@ -358,5 +358,52 @@ func TestRemoveTargetRepoCleansUpRepoAndDropsFromList(t *testing.T) {
 	}
 	if len(defs.DefaultCapabilities) != 0 || defs.PromptExtension != "" {
 		t.Errorf("repo defaults after removal = %+v, want empty", defs)
+	}
+}
+
+func TestSetRepoSettingsUpstreamRepo(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
+		t.Fatal(err)
+	}
+
+	upstream := "gke-labs/kube-agents"
+	defs, err := c.SetRepoSettings(ctx, "sackheads/kube-agents", ui.SetRepoSettingsRequest{
+		UpstreamRepo: &upstream,
+	})
+	if err != nil {
+		t.Fatalf("SetRepoSettings upstreamRepo: %v", err)
+	}
+	if defs.UpstreamRepo != "gke-labs/kube-agents" {
+		t.Fatalf("defs.UpstreamRepo = %q, want gke-labs/kube-agents", defs.UpstreamRepo)
+	}
+
+	readBack, err := c.RepoDefaults(ctx, "sackheads/kube-agents")
+	if err != nil {
+		t.Fatalf("RepoDefaults: %v", err)
+	}
+	if readBack.UpstreamRepo != "gke-labs/kube-agents" {
+		t.Fatalf("readBack.UpstreamRepo = %q, want gke-labs/kube-agents", readBack.UpstreamRepo)
+	}
+
+	// Setting upstreamRepo to the repository itself normalizes to empty.
+	self := "sackheads/kube-agents"
+	defs, err = c.SetRepoSettings(ctx, "sackheads/kube-agents", ui.SetRepoSettingsRequest{
+		UpstreamRepo: &self,
+	})
+	if err != nil {
+		t.Fatalf("SetRepoSettings self upstreamRepo: %v", err)
+	}
+	if defs.UpstreamRepo != "" {
+		t.Fatalf("defs.UpstreamRepo = %q, want empty when set to self", defs.UpstreamRepo)
+	}
+
+	// Invalid owner/name is rejected as a validation error.
+	bad := "not-a-repo"
+	if _, err := c.SetRepoSettings(ctx, "sackheads/kube-agents", ui.SetRepoSettingsRequest{
+		UpstreamRepo: &bad,
+	}); err == nil {
+		t.Fatal("expected validation error for malformed upstreamRepo")
 	}
 }

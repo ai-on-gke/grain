@@ -27,6 +27,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/ai-on-gke/grain/pkg/safepath"
 )
@@ -113,6 +114,10 @@ type MemoryDocView struct {
 	Slug    string
 	Summary string
 	Text    string
+	// Size is the byte length of Text when ReadMemoryLayer lists documents
+	// without reading their bodies (MemoryDocumentReader); when 0, len(Text)
+	// is used.
+	Size int64
 }
 
 // MemoryLayerView is one standing memory layer and its documents under
@@ -129,6 +134,88 @@ type MemoryProvider interface {
 	ReadMemoryLayer(ctx context.Context, scope string) (*MemoryLayerView, error)
 }
 
+// MemoryDocumentReader is what a MemoryProvider also implements when it can
+// read a single memory document without loading every document in the layer:
+// ReadMemoryLayer may then list its Docs (Slug, Summary, Size) with Text left
+// empty, and resolving memory://global/<doc> or
+// memory://repos/<owner>/<repo>/<doc> calls ReadMemoryDocument directly
+// instead of ReadMemoryLayer.
+type MemoryDocumentReader interface {
+	ReadMemoryDocument(ctx context.Context, scope, slug string) (*MemoryDocView, error)
+}
+
+// MemoryTextReader is what a MemoryProvider also implements when it can read
+// a scope's standing MEMORY.md text without listing every document in the
+// layer.
+type MemoryTextReader interface {
+	ReadMemoryText(ctx context.Context, scope string) (string, error)
+}
+
+// MemoryDocumentBatchReader is what a MemoryProvider also implements when a
+// subtree walk opening multiple documents in one layer can fetch all documents
+// in that scope in a single batch read instead of one roundtrip per document.
+type MemoryDocumentBatchReader interface {
+	ReadMemoryDocuments(ctx context.Context, scope string) (map[string]MemoryDocView, error)
+}
+
+type memoryWalkCacheKey struct{}
+
+type memoryWalkCache struct {
+	mu       sync.Mutex
+	layers   map[string]*MemoryLayerView
+	docs     map[string]map[string]MemoryDocView
+	docReads map[string]int
+}
+
+func withMemoryWalkCache(ctx context.Context) context.Context {
+	if ctx.Value(memoryWalkCacheKey{}) != nil {
+		return ctx
+	}
+	return context.WithValue(ctx, memoryWalkCacheKey{}, &memoryWalkCache{
+		layers:   make(map[string]*MemoryLayerView),
+		docs:     make(map[string]map[string]MemoryDocView),
+		docReads: make(map[string]int),
+	})
+}
+
+func (s *Server) readMemoryLayer(ctx context.Context, scope string) (*MemoryLayerView, error) {
+	if c, ok := ctx.Value(memoryWalkCacheKey{}).(*memoryWalkCache); ok && c != nil {
+		c.mu.Lock()
+		cached, hit := c.layers[scope]
+		c.mu.Unlock()
+		if hit {
+			return cached, nil
+		}
+		layer, err := s.Memory.ReadMemoryLayer(ctx, scope)
+		if err == nil && layer != nil {
+			c.mu.Lock()
+			c.layers[scope] = layer
+			c.mu.Unlock()
+		}
+		return layer, err
+	}
+	return s.Memory.ReadMemoryLayer(ctx, scope)
+}
+
+func (s *Server) readMemoryText(ctx context.Context, scope string) (string, error) {
+	if c, ok := ctx.Value(memoryWalkCacheKey{}).(*memoryWalkCache); ok && c != nil {
+		c.mu.Lock()
+		cached, hit := c.layers[scope]
+		c.mu.Unlock()
+		if hit {
+			return cached.Text, nil
+		}
+	}
+	if tr, ok := s.Memory.(MemoryTextReader); ok {
+		return tr.ReadMemoryText(ctx, scope)
+	}
+	layer, err := s.readMemoryLayer(ctx, scope)
+	if err != nil || layer == nil {
+		return "", ErrNotFound
+	}
+	return layer.Text, nil
+}
+
 // DeployProvider backs the deploy:// namespace root.
 type DeployProvider interface {
 	ReadMergeQueue(ctx context.Context) (string, error)
@@ -142,6 +229,32 @@ type DeployProvider interface {
 	ListStateTables(ctx context.Context) ([]string, error)
 	ReadGrainLog(ctx context.Context, source string, q GrainLogQuery) (string, error)
 	ListGrainLogSources(ctx context.Context) ([]string, error)
+}
+
+// MergeQueueRepoReader is what a DeployProvider also implements to
+// answer deploy://merge-queue for a scope with MergeQueueByCI: the queue
+// with every gate, batch and change of a repository permits refuses left
+// out. A provider without it answers such a scope nothing.
+type MergeQueueRepoReader interface {
+	ReadMergeQueueFor(ctx context.Context, permits func(repo string) bool) (string, error)
+}
+
+// MergeQueueQuery is deploy://merge-queue read with a query: ?repo=
+// narrows it to one repository and ?format=json asks for the report as
+// JSON rather than text (the external `grain merge-queue [--repo] [--json]`).
+// Permits is nil for a caller that may read every repository's queue,
+// and otherwise the scope's PermitsCI.
+type MergeQueueQuery struct {
+	Repo    string
+	JSON    bool
+	Permits func(repo string) bool
+}
+
+// MergeQueueQueryReader is what a DeployProvider also implements to
+// answer a deploy://merge-queue read that carries ?repo= or
+// ?format=json. A provider without it answers such a read 400.
+type MergeQueueQueryReader interface {
+	ReadMergeQueueQuery(ctx context.Context, q MergeQueueQuery) (string, error)
 }
 
 // MetricsSectionLister is what a DeployProvider also implements to name
@@ -195,13 +308,14 @@ func (s Scope) mayReadRepoTasks() bool {
 }
 
 // refuseTaskRead refuses task://<relPath> for a task other than the run's
-// own, naming both ways in: the self-debug capability, or an
-// api:tasks:read@<repo> grant.
+// own, naming both ways in: an api:tasks:read grant (the api:self-debug
+// preset, once the self-debug capability, holds one), or one naming the
+// task's repository.
 func refuseTaskRead(relPath string) error {
 	return fmt.Errorf(
-		"%w: task://%s: another task's record needs the %q capability or an %q grant naming its repository, and this run holds neither. "+
+		"%w: task://%s: another task's record needs an %q grant (the api:self-debug preset holds one) or an %q grant naming its repository, and this run holds neither. "+
 			"Nothing you can do from inside this run will add one -- a human attaches it to the task.",
-		ErrForbidden, relPath, "self-debug", "api:tasks:read@<owner/repo>")
+		ErrForbidden, relPath, "api:tasks:read", "api:tasks:read@<owner/repo>")
 }
 
 // PermitsConfig reports whether this scope may read config://<relPath>.
@@ -240,13 +354,22 @@ func (s Scope) PermitsMemory(relPath string) bool {
 	if relPath == "" || relPath == "global" || relPath == "global.md" || strings.HasPrefix(relPath, "global/") || relPath == "repos" {
 		return true
 	}
-	if s.TaskRepo != "" {
-		repoPrefix := "repos/" + strings.ToLower(s.TaskRepo)
-		lower := strings.ToLower(relPath)
-		if strings.HasPrefix(repoPrefix, lower+"/") ||
+	lower := strings.ToLower(relPath)
+	permitsRepo := func(repo string) bool {
+		if repo == "" {
+			return false
+		}
+		repoPrefix := "repos/" + strings.ToLower(repo)
+		return strings.HasPrefix(repoPrefix, lower+"/") ||
 			lower == repoPrefix ||
 			lower == repoPrefix+".md" ||
-			strings.HasPrefix(lower, repoPrefix+"/") {
+			strings.HasPrefix(lower, repoPrefix+"/")
+	}
+	if permitsRepo(s.TaskRepo) {
+		return true
+	}
+	for repo, ok := range s.MemoryReadRepos {
+		if ok && permitsRepo(repo) {
 			return true
 		}
 	}
@@ -259,7 +382,7 @@ func (s *Server) resolveTask(ctx context.Context, scope Scope, relPath string) (
 		if !scope.MayReadAllTasks {
 			own := scope.ownTaskID()
 			if own == "" {
-				return nil, RefuseCapability("task://", "self-debug")
+				return nil, RefuseCapability("task://", "api:tasks:read")
 			}
 			return &ResolvedNode{
 				Scheme:  "task",
@@ -430,7 +553,7 @@ func (s *Server) resolveTask(ctx context.Context, scope Scope, relPath string) (
 func (s *Server) resolveConfig(ctx context.Context, scope Scope, relPath string) (*ResolvedNode, error) {
 	relPath = strings.TrimPrefix(strings.TrimSuffix(relPath, "/"), "/")
 	if !scope.PermitsConfig(relPath) {
-		return nil, RefuseCapability("config://"+relPath, "self-debug")
+		return nil, RefuseCapability("config://"+relPath, "https://grain.dev/capabilities/grain#source")
 	}
 	for _, seg := range strings.Split(relPath, "/") {
 		if seg == ".git" || seg == "secrets.enc" {
@@ -745,20 +868,16 @@ func (s *Server) resolveMemory(ctx context.Context, scope Scope, relPath string)
 	}
 
 	if relPath == "global.md" {
-		layer, err := s.Memory.ReadMemoryLayer(ctx, "global")
-		if err != nil || layer == nil {
+		text, err := s.readMemoryText(ctx, "global")
+		if err != nil {
 			return nil, fmt.Errorf("%w: memory://%s", ErrNotFound, relPath)
 		}
-		return stringNode("memory", relPath, layer.Text, false), nil
+		return stringNode("memory", relPath, text, false), nil
 	}
 
 	if relPath == "global" || strings.HasPrefix(relPath, "global/") {
-		layer, err := s.Memory.ReadMemoryLayer(ctx, "global")
-		if err != nil || layer == nil {
-			return nil, fmt.Errorf("%w: memory://%s", ErrNotFound, relPath)
-		}
 		rest := strings.TrimPrefix(strings.TrimPrefix(relPath, "global"), "/")
-		return resolveMemoryLayerNode("global", relPath, rest, layer)
+		return s.resolveMemoryLayerSubpath(ctx, "global", relPath, "global", rest)
 	}
 
 	if relPath == "repos" {
@@ -821,18 +940,81 @@ func (s *Server) resolveMemory(ctx context.Context, scope Scope, relPath string)
 		}
 		repoName := strings.TrimSuffix(parts[repoSegs-1], ".md")
 		repo := strings.Join(append(parts[:repoSegs-1:repoSegs-1], repoName), "/")
-		layer, err := s.Memory.ReadMemoryLayer(ctx, repo)
-		if err != nil || layer == nil {
-			return nil, fmt.Errorf("%w: memory://%s", ErrNotFound, relPath)
-		}
 		if len(parts) == repoSegs && strings.HasSuffix(parts[repoSegs-1], ".md") {
-			return stringNode("memory", relPath, layer.Text, false), nil
+			text, err := s.readMemoryText(ctx, repo)
+			if err != nil {
+				return nil, fmt.Errorf("%w: memory://%s", ErrNotFound, relPath)
+			}
+			return stringNode("memory", relPath, text, false), nil
 		}
 		subPath := strings.Join(parts[repoSegs:], "/")
-		return resolveMemoryLayerNode("repos/"+repo, relPath, subPath, layer)
+		return s.resolveMemoryLayerSubpath(ctx, "repos/"+repo, relPath, repo, subPath)
 	}
 
 	return nil, fmt.Errorf("%w: memory://%s", ErrNotFound, relPath)
+}
+
+func (s *Server) resolveMemoryLayerSubpath(ctx context.Context, basePath, relPath, scope, subPath string) (*ResolvedNode, error) {
+	if subPath == "" {
+		layer, err := s.readMemoryLayer(ctx, scope)
+		if err != nil || layer == nil {
+			return nil, fmt.Errorf("%w: memory://%s", ErrNotFound, relPath)
+		}
+		return resolveMemoryLayerNode(basePath, relPath, "", layer)
+	}
+	if subPath == "MEMORY.md" || subPath == "memory.md" || subPath == "index.md" {
+		text, err := s.readMemoryText(ctx, scope)
+		if err != nil {
+			return nil, fmt.Errorf("%w: memory://%s", ErrNotFound, relPath)
+		}
+		return stringNode("memory", relPath, text, false), nil
+	}
+	if docReader, ok := s.Memory.(MemoryDocumentReader); ok {
+		slug := strings.TrimSuffix(strings.TrimPrefix(subPath, "docs/"), ".md")
+		doc, err := s.readMemoryDocument(ctx, docReader, scope, slug)
+		if err != nil || doc == nil {
+			return nil, fmt.Errorf("%w: memory://%s (%s)", ErrNotFound, relPath, basePath)
+		}
+		return stringNode("memory", relPath, doc.Text, false), nil
+	}
+	layer, err := s.readMemoryLayer(ctx, scope)
+	if err != nil || layer == nil {
+		return nil, fmt.Errorf("%w: memory://%s", ErrNotFound, relPath)
+	}
+	return resolveMemoryLayerNode(basePath, relPath, subPath, layer)
+}
+
+func (s *Server) readMemoryDocument(ctx context.Context, docReader MemoryDocumentReader, scope, slug string) (*MemoryDocView, error) {
+	if c, ok := ctx.Value(memoryWalkCacheKey{}).(*memoryWalkCache); ok && c != nil {
+		if batchReader, hasBatch := s.Memory.(MemoryDocumentBatchReader); hasBatch {
+			c.mu.Lock()
+			docs, loaded := c.docs[scope]
+			seen := c.docReads[scope]
+			c.docReads[scope] = seen + 1
+			c.mu.Unlock()
+			if loaded {
+				doc, exists := docs[slug]
+				if !exists {
+					return nil, ErrNotFound
+				}
+				return &doc, nil
+			}
+			if seen >= 1 {
+				fetched, err := batchReader.ReadMemoryDocuments(ctx, scope)
+				if err == nil && fetched != nil {
+					c.mu.Lock()
+					c.docs[scope] = fetched
+					c.mu.Unlock()
+					doc, exists := fetched[slug]
+					if !exists {
+						return nil, ErrNotFound
+					}
+					return &doc, nil
+				}
+			}
+		}
+	}
+	return docReader.ReadMemoryDocument(ctx, scope, slug)
 }
 
 func resolveMemoryLayerNode(basePath, relPath, subPath string, layer *MemoryLayerView) (*ResolvedNode, error) {
@@ -845,7 +1027,11 @@ func resolveMemoryLayerNode(basePath, relPath, subPath string, layer *MemoryLaye
 			if !strings.HasSuffix(name, ".md") {
 				name += ".md"
 			}
-			entries = append(entries, Entry{Name: name, Type: "file", Size: int64(len(doc.Text))})
+			sz := doc.Size
+			if sz == 0 && doc.Text != "" {
+				sz = int64(len(doc.Text))
+			}
+			entries = append(entries, Entry{Name: name, Type: "file", Size: sz})
 		}
 		sortEntries(entries)
 		node := stringNode("memory", relPath, layer.Text, false)
@@ -929,7 +1115,32 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 		if len(parts) > 1 {
 			return nil, fmt.Errorf("%w: deploy://%s", ErrNotFound, relPath)
 		}
-		text, err := s.Deploy.ReadMergeQueue(ctx)
+		var text string
+		var err error
+		q := queryFrom(ctx)
+		mq := MergeQueueQuery{Repo: strings.TrimSpace(q.Get("repo")), JSON: q.Get("format") == "json"}
+		if mq.Repo != "" || mq.JSON {
+			reader, ok := s.Deploy.(MergeQueueQueryReader)
+			if !ok {
+				return nil, fmt.Errorf("%w: deploy://%s: this daemon does not answer ?repo= or ?format=json on the merge queue", ErrBadRequest, relPath)
+			}
+			if scope.MergeQueueByCI {
+				mq.Permits = scope.PermitsCI
+			}
+			if text, err = reader.ReadMergeQueueQuery(ctx, mq); err != nil {
+				return nil, err
+			}
+			return stringNode("deploy", relPath, text, false), nil
+		}
+		if scope.MergeQueueByCI {
+			limited, ok := s.Deploy.(MergeQueueRepoReader)
+			if !ok {
+				return nil, fmt.Errorf("%w: deploy://%s: this daemon cannot narrow the merge queue to the repositories this caller may read", ErrForbidden, relPath)
+			}
+			text, err = limited.ReadMergeQueueFor(ctx, scope.PermitsCI)
+		} else {
+			text, err = s.Deploy.ReadMergeQueue(ctx)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -1017,7 +1228,7 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 
 	case "metrics", "metrics.txt":
 		if !scope.MayReadMetrics {
-			return nil, RefuseCapability("deploy://"+relPath, "self-debug")
+			return nil, RefuseCapability("deploy://"+relPath, "api:deployment:read")
 		}
 		if s == nil || s.Deploy == nil {
 			return nil, fmt.Errorf("%w: deploy://metrics is not configured on this daemon", ErrNotFound)
@@ -1050,7 +1261,7 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 
 	case "pipeline-changes", "pipeline-changes.md":
 		if !scope.MayReadPipeline {
-			return nil, RefuseCapability("deploy://"+relPath, "self-debug")
+			return nil, RefuseCapability("deploy://"+relPath, "api:deployment:read")
 		}
 		if s == nil || s.Deploy == nil {
 			return nil, fmt.Errorf("%w: deploy://pipeline-changes is not configured on this daemon", ErrNotFound)

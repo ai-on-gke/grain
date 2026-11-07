@@ -51,12 +51,12 @@ func TestGrantArgsOmitsAnAbsentSourceDir(t *testing.T) {
 // beside it, not at the end of the list.
 func TestGrantArgsCarriesEveryGrant(t *testing.T) {
 	args := agent.GrantArgs(agent.RunConfig{
-		Grants:         []string{"self-debug", "bootstrap-playbooks"},
+		Grants:         []string{"self-debug", "read-issues"},
 		GrainSourceDir: "/usr/local/share/grain/src",
 	})
 	want := []string{
 		"-grant", "self-debug", "-grain-src-dir", "/usr/local/share/grain/src",
-		"-grant", "bootstrap-playbooks",
+		"-grant", "read-issues",
 	}
 	if !slices.Equal(args, want) {
 		t.Fatalf("GrantArgs = %v, want %v", args, want)
@@ -68,9 +68,9 @@ func TestGrantArgsCarriesEveryGrant(t *testing.T) {
 // was never granted a way to read it.
 func TestGrantArgsWithholdsTheSourceDirFromAnotherGrant(t *testing.T) {
 	args := agent.GrantArgs(agent.RunConfig{
-		Grants: []string{"bootstrap-playbooks"}, GrainSourceDir: "/usr/local/share/grain/src",
+		Grants: []string{"read-issues"}, GrainSourceDir: "/usr/local/share/grain/src",
 	})
-	if want := []string{"-grant", "bootstrap-playbooks"}; !slices.Equal(args, want) {
+	if want := []string{"-grant", "read-issues"}; !slices.Equal(args, want) {
 		t.Fatalf("GrantArgs = %v, want %v", args, want)
 	}
 }
@@ -153,26 +153,6 @@ func TestGrantArgsCarriesStateAndSecretsWithDeploymentHealth(t *testing.T) {
 		if !slices.Equal(args, want) {
 			t.Fatalf("GrantArgs(%s) = %v, want %v", grant, args, want)
 		}
-	}
-}
-
-// Local scripts travel with the grants, so every Framework that forks
-// the mcpserver passes them: each declaration as NAME=PATH, and the
-// credentials as a file path, never their values.
-func TestGrantArgsCarriesLocalScripts(t *testing.T) {
-	args := agent.GrantArgs(agent.RunConfig{
-		Grants:              []string{"self-debug"},
-		LocalScripts:        []agent.LocalScripts{{Name: "ops", Path: "/state/local-scripts/ops/local-scripts.yaml"}},
-		LocalScriptsEnvFile: "/tmp/grain-local-scripts-1.json",
-	})
-	want := []string{"-grant", "self-debug",
-		"-local-scripts", "ops=/state/local-scripts/ops/local-scripts.yaml",
-		"-local-scripts-env-file", "/tmp/grain-local-scripts-1.json"}
-	if !slices.Equal(args, want) {
-		t.Fatalf("GrantArgs = %v, want %v", args, want)
-	}
-	if args := agent.GrantArgs(agent.RunConfig{LocalScriptsEnvFile: "/tmp/x"}); len(args) != 0 {
-		t.Fatalf("GrantArgs = %v: want no credentials file without a declaration", args)
 	}
 }
 

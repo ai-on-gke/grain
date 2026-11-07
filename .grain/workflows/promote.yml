@@ -14,7 +14,7 @@
 
 # Keep the `latest` image tag on the last promoted release.
 #
-# `latest` -- on ghcr.io/bwsalmon/grain/{grain,guest,k8s-sandbox} alike --
+# `latest` -- on docker.io/grainai/{grain,sandbox,sandbox-k8s} alike --
 # means the last promoted release and nothing else: the commit the git
 # tag `latest` names. main's head is `main`, the current candidate is
 # `candidate`, and an operator who upgrades to `latest` gets the release.

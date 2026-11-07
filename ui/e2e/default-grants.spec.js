@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { expect, test } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // A capability server method with arguments set as a deployment default
 // capability, from Settings → Tasks' own GrantsPicker, against grain
@@ -57,7 +58,7 @@ test("a default method grant is an editable section on a new task", async ({
     await page.goto("/");
     await page.getByRole("button", { name: "+ New task" }).click();
     await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
-    await page.getByLabel(/^Repos/).selectOption("none");
+    await chooseOption(page.getByLabel(/^Repos/), "none");
     const grants = page.getByTestId("new-task-grants");
     const section = grants.locator(`[data-grant^="${KEY}="]`);
     await expect(section).toHaveCount(1);

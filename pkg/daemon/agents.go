@@ -34,10 +34,9 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
 	"github.com/ai-on-gke/grain/pkg/agent/claude"
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
-	"github.com/ai-on-gke/grain/pkg/agent/custom"
 	"github.com/ai-on-gke/grain/pkg/agent/sessionstore"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 )
@@ -263,10 +262,12 @@ type poolRequest struct {
 	// (preferPrevious).
 	preferFramework string
 	preferModel     string
-	// pauseHostd is the hostd an ambient credential's usage-limit pause
-	// is scoped to for this run (hostdRoute.scopesPauses), "" for the
-	// connection's bare key.
-	pauseHostd string
+	// routes is the hostd each connection a run may go to starts its CLI
+	// on (AgentPool.connectionRoutes), which also scopes a usage-limit
+	// pause on its ambient credential (pauseOwner); blocked is the
+	// connections whose hostd cannot take a run now, with why.
+	routes  map[string]hostdRoute
+	blocked map[string]error
 }
 
 // frameworkFor is the framework a run of m on req is restricted to: m's
@@ -311,6 +312,13 @@ func (p *AgentPool) resolve(ctx context.Context, live Config, choice orchestrato
 		req.team = model.DefaultTeamID
 	}
 	backendID := strings.TrimSpace(choice.BackendID)
+	// A task pinned to the retired custom command framework, to one of
+	// its connections (which migration 104 disabled and kept), or to a
+	// model only such a connection served, falls back to the default
+	// model selection: there is nothing left that can run the pin.
+	// Not logged here, which every dispatch tick reaches: the daemon
+	// names each such connection when it starts.
+	dropRemovedCustomPin(live.AgentBackends, &req.framework, &backendID, &req.model)
 	// A pin that names no connection is a model choice from before
 	// model.Task.Model existed, which a task filed by an older proposer
 	// can still carry.
@@ -440,6 +448,28 @@ func (p *AgentPool) resolve(ctx context.Context, live Config, choice orchestrato
 	return req, nil
 }
 
+// dropRemovedCustomPin clears whichever of framework, backendID and
+// modelName pin a run to the retired custom command framework. A model
+// is only cleared when no other connection serves it.
+func dropRemovedCustomPin(backends []model.AgentBackend, framework, backendID, modelName *string) {
+	if strings.TrimSpace(*framework) == model.RemovedAgentFrameworkCustom {
+		*framework = ""
+	}
+	if b := findBackendByID(backends, *backendID); b != nil && b.IsRemovedCustomConnection() {
+		*backendID = ""
+	}
+	if *modelName != "" && !servedOutsideCustom(backends, *modelName) &&
+		slices.ContainsFunc(backends, func(b model.AgentBackend) bool { return b.IsRemovedCustomConnection() && b.SupportsModel(*modelName) }) {
+		*modelName = ""
+	}
+}
+
+// servedOutsideCustom reports whether a connection other than a retired
+// custom command one advertises m.
+func servedOutsideCustom(backends []model.AgentBackend, m string) bool {
+	return slices.ContainsFunc(backends, func(b model.AgentBackend) bool { return !b.IsRemovedCustomConnection() && b.SupportsModel(m) })
+}
+
 // avoidLast is models with every one of avoid moved, in order, behind
 // the rest. Nothing is dropped: a rotation whose every model has failed
 // still has one to run on.
@@ -490,7 +520,9 @@ func (p *AgentPool) candidatesLocked(live Config, req poolRequest, now time.Time
 			// Nothing chose a model and this connection advertises none:
 			// grain does not guess one for it.
 			excluded.addNoModels(backend.ID)
-		case req.hostdDraining[model.NormalizeAgentFrameworkName(backend.Framework)]:
+		case req.blocked[backend.ID] != nil:
+			excluded.addHostdBlocked(req.blocked[backend.ID])
+		case req.hostdDraining[model.NormalizeAgentFrameworkName(backend.Framework)] && !req.routes[backend.ID].Pinned:
 			excluded.hostdDraining++
 		case now.Before(p.unavailable[backendUnavailableKey(backend)]),
 			p.Pause.ConnectionPaused(req.pauseOwner(live, backend), bTeam, now):
@@ -565,7 +597,11 @@ func (p *AgentPool) multiModelExclusionsLocked(live Config, req poolRequest, now
 			excluded.disabled++
 			continue
 		}
-		if req.hostdDraining[model.NormalizeAgentFrameworkName(backend.Framework)] {
+		if err := req.blocked[backend.ID]; err != nil {
+			excluded.addHostdBlocked(err)
+			continue
+		}
+		if req.hostdDraining[model.NormalizeAgentFrameworkName(backend.Framework)] && !req.routes[backend.ID].Pinned {
 			excluded.hostdDraining++
 			continue
 		}
@@ -607,28 +643,6 @@ func (p *AgentPool) multiModelExclusionsLocked(live Config, req poolRequest, now
 // Build as busy, the same as a connection that filled up between ticks.
 func (p *AgentPool) Availability(ctx context.Context, choice orchestrator.AgentChoice) string {
 	live := DispatchConfig(ctx, p.Store, p.cfg)
-	// A task pinned to a hostd that is not connected, or that is at its
-	// capacity, waits for it; nothing moves it to another hostd.
-	route, err := p.routeHostd(ctx, live, choice.TaskID)
-	if err != nil {
-		return hostdWaitReason(err)
-	}
-	live = route.apply(live)
-	if route.Name != "" && !choice.Priority {
-		framework := choice.Framework
-		if framework == "" {
-			framework = live.DefaultAgentFramework()
-		}
-		if runsOnHostd(live, route, framework) {
-			capacity := p.hostdCapacity(ctx, route)
-			p.mu.Lock()
-			full := p.hostdFullLocked(route, capacity, time.Now())
-			p.mu.Unlock()
-			if full != nil {
-				return full.Error()
-			}
-		}
-	}
 	if len(live.AgentBackends) == 0 {
 		// No connections at all is the single-framework deployment the
 		// daemon's own flags configure; Build reports what it lacks.
@@ -639,9 +653,6 @@ func (p *AgentPool) Availability(ctx context.Context, choice orchestrator.AgentC
 		return p.hostdHold(ctx, live, framework)
 	}
 	req, err := p.resolve(ctx, live, choice)
-	if route.scopesPauses(live) {
-		req.pauseHostd = route.Name
-	}
 	if err != nil {
 		// A connection pinned with a model its provider has stopped
 		// listing waits for the provider (or the operator) to bring it
@@ -660,6 +671,13 @@ func (p *AgentPool) Availability(ctx context.Context, choice orchestrator.AgentC
 		if req.model == "" {
 			return noModelsReason([]string{req.pinned.ID})
 		}
+		// A connection placed on a hostd that is not connected, or that
+		// is at its capacity, waits for it; nothing moves the run to
+		// another hostd its connection does not list.
+		req.routes, req.blocked = p.connectionRoutes(ctx, live, []model.AgentBackend{*req.pinned}, choice.Priority)
+		if why := hostdWaitReason(req.blocked[req.pinned.ID]); why != "" {
+			return why
+		}
 		// A pin bypasses the rotation, but not a usage-limit pause on the
 		// pinned connection's credential for the model it would run:
 		// there is nothing else for it to run on, so it waits for the
@@ -675,6 +693,11 @@ func (p *AgentPool) Availability(ctx context.Context, choice orchestrator.AgentC
 		if p.Pause.ModelPaused(owner, req.model, team, time.Now()) {
 			return fmt.Sprintf("model %s on %s is paused after a usage limit", req.model, conn) + pin
 		}
+		route := req.routes[req.pinned.ID]
+		if route.Pinned {
+			why, _ := hostdDrainHold(ctx, route.apply(live, req.pinned.Framework), req.pinned.Framework)
+			return why
+		}
 		return p.hostdHold(ctx, live, req.pinned.Framework)
 	}
 	// While hostd drains, the connections that would start their CLI
@@ -682,6 +705,7 @@ func (p *AgentPool) Availability(ctx context.Context, choice orchestrator.AgentC
 	// in the container -- further down the default models, or elsewhere
 	// in the rotation -- and waits on hostd only when there is none.
 	req.hostdDraining, req.hostdWhy = p.hostdDrainingFrameworks(ctx, live)
+	req.routes, req.blocked = p.connectionRoutes(ctx, live, live.AgentBackends, choice.Priority)
 	p.mu.Lock()
 	_, candidates, excluded := p.selectCandidateLocked(live, req, time.Now())
 	p.mu.Unlock()
@@ -690,6 +714,9 @@ func (p *AgentPool) Availability(ctx context.Context, choice orchestrator.AgentC
 	}
 	if excluded.hostdDraining > 0 {
 		return req.hostdWhy
+	}
+	if excluded.hostdBlocked > 0 && excluded.busy+excluded.coolingOff+excluded.modelPaused == 0 {
+		return excluded.hostdBlockedWhy
 	}
 	reason := waitReason(req, excluded)
 	if req.pinnedModel {
@@ -719,7 +746,7 @@ func (p *AgentPool) fallbackReasonLocked(live Config, req poolRequest, picked st
 			if b.Disabled || !b.SupportsModel(m) || (want != "" && model.NormalizeAgentFrameworkName(b.Framework) != want) {
 				continue
 			}
-			if req.hostdDraining[model.NormalizeAgentFrameworkName(b.Framework)] {
+			if req.hostdDraining[model.NormalizeAgentFrameworkName(b.Framework)] && !req.routes[b.ID].Pinned {
 				onHost = true
 			}
 			// The model is back as soon as any connection serving it is.
@@ -731,12 +758,20 @@ func (p *AgentPool) fallbackReasonLocked(live Config, req poolRequest, picked st
 		case !until.IsZero():
 			why = append(why, fmt.Sprintf("%s is paused until %s", m, until.UTC().Format("15:04 UTC")))
 		case onHost:
-			why = append(why, fmt.Sprintf("%s runs on the host, and grain hostd is updating", m))
+			why = append(why, fmt.Sprintf("%s runs on the host, and the host agent is updating", m))
 		default:
 			why = append(why, fmt.Sprintf("%s has no free connection", m))
 		}
 	}
 	return strings.Join(why, ", and ")
+}
+
+// addHostdBlocked counts one connection whose hostd cannot take a run.
+func (e *backendExclusions) addHostdBlocked(err error) {
+	e.hostdBlocked++
+	if e.hostdBlockedWhy == "" {
+		e.hostdBlockedWhy = err.Error()
+	}
 }
 
 // waitReason is the sentence a held task shows: either nothing enabled
@@ -819,17 +854,9 @@ func (p *AgentPool) Build(ctx context.Context, choice orchestrator.AgentChoice) 
 	// holds such a team's tasks (orchestrator.Deps.TeamHasAgentBackend), so a
 	// dispatch that finds none is a race with its admin removing the last
 	// one, and fails naming what is missing.
-	route, err := p.routeHostd(ctx, live, choice.TaskID)
-	if err != nil {
-		return nil, err
-	}
-	live = route.apply(live)
 	req, err := p.resolve(ctx, live, choice)
 	if err != nil {
 		return nil, err
-	}
-	if route.scopesPauses(live) {
-		req.pauseHostd = route.Name
 	}
 	settings = req.settings
 	chosenModel = req.model
@@ -840,12 +867,19 @@ func (p *AgentPool) Build(ctx context.Context, choice orchestrator.AgentChoice) 
 		// A task that named a connection gets that connection, and none
 		// of the rotation's reasons skip it: it is used while disabled
 		// (model.Task.AgentBackendID), and it does not advance rotation.
+		// Its hostd is not skipped either: one that cannot take the run
+		// now is a wait (agent.ErrHostdWaiting), not another hostd.
 		selected = req.pinned
+		req.routes, req.blocked = p.connectionRoutes(ctx, live, []model.AgentBackend{*selected}, choice.Priority)
+		if err := req.blocked[selected.ID]; err != nil {
+			return nil, err
+		}
 	} else {
 		// Availability's rule: a draining hostd's connections are not
 		// candidates, so a run that may go elsewhere never meets its
 		// refusal.
 		req.hostdDraining, req.hostdWhy = p.hostdDrainingFrameworks(ctx, live)
+		req.routes, req.blocked = p.connectionRoutes(ctx, live, live.AgentBackends, choice.Priority)
 		p.mu.Lock()
 		now := time.Now()
 		pickedModel, candidates, excluded := p.selectCandidateLocked(live, req, now)
@@ -871,6 +905,9 @@ func (p *AgentPool) Build(ctx context.Context, choice orchestrator.AgentChoice) 
 		p.mu.Unlock()
 		selected = &backend
 	}
+	// The run's host work goes to its connection's hostd.
+	route := req.routes[selected.ID]
+	live = route.apply(live, selected.Framework)
 	// The hostd's own capacity holds every run whose CLI starts there,
 	// priority dispatch included: it is the machine's, not a
 	// connection's.
@@ -899,10 +936,7 @@ func (p *AgentPool) Build(ctx context.Context, choice orchestrator.AgentChoice) 
 		hostdLease.Release()
 		return built, err
 	}
-	credential := selected.CredentialOwnerID()
-	if route.scopesPauses(live) && ambientCredential(live, *selected) {
-		credential = hostdPauseOwner(credential, route.Name)
-	}
+	credential := req.pauseOwner(live, *selected)
 	var instance, owner string
 	if route.Name != "" {
 		instance, owner = p.hostdAudit(ctx, live, route)
@@ -983,13 +1017,6 @@ func (p *AgentPool) buildOn(ctx context.Context, live Config, framework string, 
 	// "gemini" spelling dispatches onto the framework that name now
 	// means, rather than falling into the error below.
 	switch model.NormalizeAgentFrameworkName(framework) {
-	case model.AgentFrameworkCustom:
-		if selected == nil {
-			return nil, errors.New("custom agent framework requires a configured backend and command (Settings -> Models)")
-		}
-		// A custom command is handed the model and effort chosen for
-		// this run (docs/custom-agent-backends.md).
-		return buildCustomFramework(live, *selected, chosenModel, effort, secretStore)
 	case model.AgentFrameworkClaude, model.AgentFrameworkCodex, model.AgentFrameworkAntigravity:
 		var built agent.Framework
 		var err error
@@ -1019,6 +1046,11 @@ type backendExclusions struct {
 	// hostdDraining counts the connections passed over because their CLI
 	// runs on the host and grain hostd is draining (poolRequest.hostdDraining).
 	hostdDraining int
+	// hostdBlocked counts the connections passed over because the hostd
+	// they run their CLI on cannot take a run now (poolRequest.blocked),
+	// and hostdBlockedWhy is the first one's reason.
+	hostdBlocked    int
+	hostdBlockedWhy string
 	// busyRuns and busyLimit are the runs the busy connections are
 	// carrying and the concurrency they allow between them, so the
 	// sentence a held task shows says the limit that is full rather than
@@ -1102,7 +1134,10 @@ func noBackendError(team, framework, targetModel string, configured int, e backe
 		why = append(why, fmt.Sprintf("%d with no models (set one)", len(e.noModels)))
 	}
 	if e.hostdDraining > 0 {
-		why = append(why, fmt.Sprintf("%d running its CLI on the host while grain hostd updates", e.hostdDraining))
+		why = append(why, fmt.Sprintf("%d running its CLI on the host while the host agent updates", e.hostdDraining))
+	}
+	if e.hostdBlocked > 0 {
+		why = append(why, fmt.Sprintf("%d whose host cannot take a run now (%s)", e.hostdBlocked, e.hostdBlockedWhy))
 	}
 	if e.coolingOff > 0 {
 		why = append(why, fmt.Sprintf("%d cooling off after a recent refusal", e.coolingOff))
@@ -1437,13 +1472,13 @@ func BuildAntigravityFramework(ctx context.Context, cfg Config, secretStore *sec
 			return backendCredential(ctx, cfg, secretStore, secrets.GeminiAPIKeySecret, cfg.GeminiAPIKeyFile)
 		}))
 	}
-	if dir := agentSessionsDir(cfg.DataDir); dir != "" {
+	if s := agentSessionStoreFor(cfg); s != nil {
 		// The per-task HOME that lets a run pick up the conversation the
 		// task's last run left -- what agent/claude has always had for
 		// free, its sessions living in the controller's own ~/.claude.
 		// See agentSessionsDir, and pkg/agent/sessionstore for what is
 		// kept there and what bounds it.
-		opts = append(opts, antigravity.WithSessionStore(sessionstore.New(dir)))
+		opts = append(opts, antigravity.WithSessionStore(s))
 	}
 	if cfg.GranuleSandboxes {
 		// Only meaningful with -granule-sandboxes, exactly as for
@@ -1583,6 +1618,11 @@ func BuildClaudeFramework(ctx context.Context, cfg Config, secretStore *secrets.
 		// daemon's sandbox access and GitHub credentials, and the
 		// container is given neither.
 		opts = append(opts, claude.WithHost(container), claude.WithHostMCP())
+	}
+	if cfg.RunHost == nil && container == nil {
+		if arch := claudeSessionArchiveFor(cfg); arch != nil {
+			opts = append(opts, claude.WithSessionArchive(arch))
+		}
 	}
 	if isVertex {
 		opts = append(opts, claude.WithVertex(true))
@@ -1740,8 +1780,8 @@ func buildCodexFramework(ctx context.Context, cfg Config, secretStore *secrets.S
 	if hostLogin != "" {
 		authFile = ""
 	} else if remoteHostd(container) && apiKey == "" && cfg.codexAuthMode != model.AntigravityAuthAmbient {
-		return nil, errors.New("codex runs through the grain hostd that dials in, on a machine with no codex login of its own " +
-			"($CODEX_HOME/auth.json or ~/.codex/auth.json): run `codex login` there as hostd's user, or set an OpenAI API key " +
+		return nil, errors.New("codex runs through the host agent that dials in, on a machine with no codex login of its own " +
+			"($CODEX_HOME/auth.json or ~/.codex/auth.json): run `codex login` there as the host agent's user, or set an OpenAI API key " +
 			"on this connection in Settings -> Models (/settings/models)")
 	}
 	if apiKey == "" && hostLogin == "" && cfg.codexAuthMode != model.AntigravityAuthAmbient {
@@ -1791,11 +1831,11 @@ func buildCodexFramework(ctx context.Context, cfg Config, secretStore *secrets.S
 	} else {
 		opts = append(opts, codex.WithAuthFile(authFile))
 	}
-	if dir := agentSessionsDir(cfg.DataDir); dir != "" {
+	if s := agentSessionStoreFor(cfg); s != nil {
 		// The per-task CODEX_HOME that lets a run pick up the thread the
 		// task's last run left -- see the identical line in
 		// buildAntigravityFramework, and agentSessionsDir.
-		opts = append(opts, codex.WithSessionStore(sessionstore.New(dir)))
+		opts = append(opts, codex.WithSessionStore(s))
 	}
 	if cfg.GranuleSandboxes {
 		opts = append(opts, codex.WithGranuleSSH(cfg.GranuleSSHUser, cfg.GranuleExecKey, cfg.GranuleWorkspace))
@@ -1808,158 +1848,27 @@ func buildCodexFramework(ctx context.Context, cfg Config, secretStore *secrets.S
 	return codex.New(codexPath, grainBinaryPath, opts...), nil
 }
 
-func buildCustomFramework(cfg Config, backend model.AgentBackend, runModel, effort string, secretStore *secrets.Store) (agent.Framework, error) {
-	grainBinaryPath, err := os.Executable()
-	if err != nil {
-		return nil, fmt.Errorf("custom agent backend: locate grain binary: %w", err)
+func agentSessionStoreFor(cfg Config) *sessionstore.Store {
+	dir := agentSessionsDir(cfg.DataDir)
+	if dir == "" {
+		return nil
 	}
-	return custom.New(custom.Config{
-		Command: backend.Command, StateRepoDir: StateRepoDir(cfg.DataDir),
-		Model: runModel, Effort: effort,
-		ModelProxy: func(ctx context.Context, run agent.RunConfig) (string, string, func(), error) {
-			return CustomBackendModelProxy(ctx, backend, runModel, run)
-		},
-		MCPServer: func(ctx context.Context, run agent.RunConfig) (custom.Command, error) {
-			args, err := CustomMCPServerArgs(ctx, cfg, run)
-			if err != nil {
-				return custom.Command{}, err
-			}
-			return custom.Command{Command: grainBinaryPath, Args: args}, nil
-		},
-	})
+	s := sessionstore.New(dir)
+	if cfg.ObjectStore != nil {
+		s.WithObjectStore(objectstore.WithPrefix(cfg.ObjectStore, "agent-sessions"))
+	}
+	return s
 }
 
-// customBackendModelProxy resolves the model proxy URL and mints a short-lived
-// token for one custom backend run, matching the built-in frameworks' model proxy
-// integration.
-//
-// release revokes that token, and the framework calls it as the run ends:
-// the proxy's registry would otherwise keep honouring it until its lease
-// ran out -- the run's deadline, or DefaultLease for a run that has none
-// -- long after the backend that held it had exited.
-//
-// A backend whose vendor customBackendVendor cannot name gets empty
-// fields rather than a token for whichever proxy happens to be running:
-// that would hand it a vendor it never asked for.
-//
-// The token forwards with the deployment's connection of that vendor
-// (modelproxy.Endpoint.ConnectionFor), as every model proxy token does; a
-// deployment with none gets a token every request on which is refused
-// saying so.
-func CustomBackendModelProxy(ctx context.Context, backend model.AgentBackend, runModel string, run agent.RunConfig) (url, token string, release func(), err error) {
-	vendor, ok := customBackendVendor(backend, runModel)
-	if !ok {
-		return "", "", nil, nil
+func claudeSessionArchiveFor(cfg Config) *sessionstore.ClaudeArchive {
+	if cfg.ObjectStore == nil {
+		return nil
 	}
-	endpoint := ModelProxies[vendor.Name]
-	if endpoint == nil || endpoint.URL() == "" {
-		return "", "", nil, nil
+	claudeDir := sessionstore.ResolveClaudeConfigDir(os.Getenv)
+	if claudeDir == "" {
+		return nil
 	}
-	owner := run.TaskID
-	if owner == "" {
-		owner = "custom"
-	}
-	// Held to the run's own deadline, credit included, as a backstop for
-	// a run whose release never comes (the daemon dying mid-run).
-	var until time.Time
-	if !run.Deadline.IsZero() {
-		until = run.Deadline.Add(orchestrator.RunWaitCreditCap)
-	}
-	connection, err := endpoint.ConnectionFor(ctx, "")
-	if err != nil {
-		return "", "", nil, fmt.Errorf("choosing the proxy's connection: %w", err)
-	}
-	id, token, err := endpoint.MintUntil(owner, connection, until)
-	if err != nil {
-		return "", "", nil, fmt.Errorf("minting proxy token: %w", err)
-	}
-	return endpoint.URL() + vendor.BaseURLSuffix, token, func() { endpoint.Revoke(id) }, nil
-}
-
-func customBackendVendor(backend model.AgentBackend, runModel string) (modelproxy.Vendor, bool) {
-	name := strings.ToLower(runModel)
-	if name == "" {
-		name = strings.ToLower(backend.Name)
-	}
-	if name == "" {
-		name = strings.ToLower(backend.ID)
-	}
-	for _, vendor := range modelproxy.Vendors() {
-		if strings.Contains(name, vendor.Name) {
-			return vendor, true
-		}
-	}
-	if strings.Contains(name, "gpt") || strings.Contains(name, "codex") || strings.Contains(name, "openai") || strings.HasPrefix(name, "o1") || strings.HasPrefix(name, "o3") || strings.HasPrefix(name, "o4") {
-		return modelproxy.OpenAI, true
-	}
-	if strings.Contains(name, "sonnet") || strings.Contains(name, "opus") || strings.Contains(name, "haiku") || strings.Contains(name, "anthropic") {
-		return modelproxy.Claude, true
-	}
-	if strings.Contains(name, "flash") || strings.Contains(name, "google") {
-		return modelproxy.Gemini, true
-	}
-	return modelproxy.Vendor{}, false
-}
-
-// customMCPServerArgs gives an external backend the same Grain tool server
-// the built-in agent CLIs receive. The command owns the transport-specific
-// translation into its agent SDK or CLI.
-func CustomMCPServerArgs(ctx context.Context, cfg Config, run agent.RunConfig) ([]string, error) {
-	var args []string
-	switch {
-	case run.SandboxRoot != "":
-		args = []string{"mcpserver", "-sandbox-root", run.SandboxRoot}
-	case run.GranuleVM != "":
-		if cfg.GranuleSSHUser == "" || cfg.GranuleWorkspace == "" {
-			return nil, errors.New("custom agent backend: granule run requires SSH user and workspace")
-		}
-		args = []string{"mcpserver", "-granule-vm", run.GranuleVM,
-			"-ssh-user", cfg.GranuleSSHUser, "-workspace", cfg.GranuleWorkspace}
-		if cfg.GranuleExecKey != "" {
-			args = append(args, "-exec-key", cfg.GranuleExecKey)
-		}
-	case run.Container != "":
-		args = []string{"mcpserver", "-container", run.Container}
-	default:
-		return nil, errors.New("custom agent backend: sandbox root, granule VM, or container is required")
-	}
-	if run.Repo != "" && run.Branch != "" {
-		args = append(args, "-data-dir", cfg.DataDir, "-pr-repo", run.Repo, "-pr-branch", run.Branch)
-		if run.Base != "" {
-			args = append(args, "-pr-base", run.Base)
-		}
-		if run.Repair {
-			args = append(args, "-pr-repair")
-		}
-		if run.GitHubCIIgnored {
-			args = append(args, "-pr-ignore-github-ci")
-		}
-		if run.BaseIncident != "" {
-			args = append(args, "-pr-base-incident", run.BaseIncident)
-		}
-		if run.PullRequestNumber > 0 {
-			args = append(args, "-pr-number", fmt.Sprintf("%d", run.PullRequestNumber))
-		}
-		if run.GitCredential != "" {
-			args = append(args, "-pr-credential", run.GitCredential)
-		}
-		if cfg.GithubHost != "" {
-			args = append(args, "-github-host", cfg.GithubHost)
-		}
-		if cfg.GithubInsecureHTTP {
-			args = append(args, "-github-insecure-http")
-		}
-	}
-	if server := daemonServerURL(cfg.UiAddr); server != "" && run.TaskID != "" {
-		args = append(args, "-server", server, "-task", run.TaskID)
-	}
-	args = append(args, agent.GrantArgs(run)...)
-	args = append(args, agent.ProposeRepoArgs(run)...)
-	args = append(args, agent.SandboxEnvArgs(run)...)
-	args = append(args, agent.InteractiveArgs(run)...)
-	args = append(args, agent.AddendaArgs(run)...)
-	args = append(args, agent.RunDeadlineArgs(ctx, run)...)
-	return args, nil
+	return sessionstore.NewClaudeArchive(objectstore.WithPrefix(cfg.ObjectStore, "agent-sessions"), claudeDir)
 }
 
 // daemonServerURL is the base URL this same process's own UI/API server
@@ -2140,7 +2049,7 @@ func remoteHostd(h agent.Host) bool {
 // beside itself, with this daemon's sandbox access and credentials,
 // which that machine does not have.
 func errDetachedRemote(cli string) error {
-	return fmt.Errorf("%s is set to run detached on the host, but the grain hostd it would run through dials in from another machine, "+
+	return fmt.Errorf("%s is set to run detached on the host, but the host agent it would run through dials in from another machine, "+
 		"where the mcpserver a detached run forks has none of this daemon's sandbox access or credentials: "+
 		"set %s to run on the host instead (Settings -> Models, \"Where each agent CLI runs\")", cli, cli)
 }

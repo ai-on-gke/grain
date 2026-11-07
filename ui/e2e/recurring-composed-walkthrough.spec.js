@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 test.describe("Recurring and Composed Work Automation UI Walkthrough", () => {
   // Helper to create API items directly
@@ -63,9 +64,11 @@ test.describe("Recurring and Composed Work Automation UI Walkthrough", () => {
     await page.locator('textarea[name="description"]').fill(tmplDesc);
 
     // Target Repo & Base Branch
-    const repoSelect = page.locator('select[name="repo"]').first();
+    const repoSelect = page
+      .locator('.repo-field:has(input[name="repo"]) [role="combobox"]')
+      .first();
     await expect(repoSelect).toBeVisible();
-    await repoSelect.selectOption("acme/widgets");
+    await chooseOption(repoSelect, "acme/widgets");
     await page.locator('input[name="base"]').first().fill("main");
 
     // Auto-merge checkbox
@@ -217,9 +220,11 @@ test.describe("Recurring and Composed Work Automation UI Walkthrough", () => {
       .last()
       .fill(`Inline Gate ${stamp}`);
 
-    const inlineRepoSelect = page.locator('select[name="repo"]');
+    const inlineRepoSelect = page.locator(
+      '.repo-field:has(input[name="repo"]) [role="combobox"]',
+    );
     await expect(inlineRepoSelect.last()).toBeVisible();
-    await inlineRepoSelect.last().selectOption("acme/widgets");
+    await chooseOption(inlineRepoSelect.last(), "acme/widgets");
     await page.getByRole("button", { name: "Add template" }).click();
 
     // Back in suite overlay, verify inline template was created and added to suite
@@ -339,9 +344,11 @@ test.describe("Recurring and Composed Work Automation UI Walkthrough", () => {
       .getByRole("option", { name: /Release Qualification Suite/i })
       .click();
 
-    const suiteSchedRepo = page.locator('select[name="repo"]');
+    const suiteSchedRepo = page.locator(
+      '.repo-field:has(input[name="repo"]) [role="combobox"]',
+    );
     await expect(suiteSchedRepo.first()).toBeVisible();
-    await suiteSchedRepo.first().selectOption("acme/widgets");
+    await chooseOption(suiteSchedRepo.first(), "acme/widgets");
     await page.locator('input[name="base"]').first().fill("main");
 
     // Recurrence: Weekly on Monday at 07:00
@@ -429,9 +436,11 @@ test.describe("Recurring and Composed Work Automation UI Walkthrough", () => {
       page.getByRole("heading", { name: "Run a suite" }),
     ).toBeVisible();
 
-    const runRepo = page.locator('select[name="repo"]');
+    const runRepo = page.locator(
+      '.repo-field:has(input[name="repo"]) [role="combobox"]',
+    );
     await expect(runRepo.first()).toBeVisible();
-    await runRepo.first().selectOption("acme/widgets");
+    await chooseOption(runRepo.first(), "acme/widgets");
     await page.locator('input[name="base"]').first().fill("main");
 
     await page.getByRole("button", { name: "Run", exact: true }).click();
@@ -449,9 +458,11 @@ test.describe("Recurring and Composed Work Automation UI Walkthrough", () => {
       .getByRole("option", { name: /Release Qualification Suite/i })
       .click();
 
-    const genericRunRepo = page.locator('select[name="repo"]');
+    const genericRunRepo = page.locator(
+      '.repo-field:has(input[name="repo"]) [role="combobox"]',
+    );
     await expect(genericRunRepo.first()).toBeVisible();
-    await genericRunRepo.first().selectOption("acme/widgets");
+    await chooseOption(genericRunRepo.first(), "acme/widgets");
     await page.locator('input[name="base"]').first().fill("main");
     await page.getByRole("button", { name: "Run", exact: true }).click();
     await expect(
@@ -676,9 +687,11 @@ test.describe("Recurring and Composed Work Automation UI Walkthrough", () => {
     await page.getByRole("button", { name: "+ New template" }).click();
     await page.locator('input[name="name"]').fill("fail-template");
     await page.locator('input[name="title"]').fill("Should fail gracefully");
-    const repoSelect = page.locator('select[name="repo"]');
+    const repoSelect = page.locator(
+      '.repo-field:has(input[name="repo"]) [role="combobox"]',
+    );
     await expect(repoSelect).toBeVisible();
-    await repoSelect.selectOption("acme/widgets");
+    await chooseOption(repoSelect, "acme/widgets");
     await page.locator('input[name="base"]').fill("release..broken");
     const created = page.waitForResponse(
       (res) =>
@@ -763,10 +776,12 @@ test.describe("Recurring and Composed Work Automation UI Walkthrough", () => {
       .click();
     // Named rather than left to the form's default: other specs on this
     // worker's store can add repos ahead of it.
-    await page
-      .locator('select[name="repo"]')
-      .first()
-      .selectOption("acme/widgets");
+    await chooseOption(
+      page
+        .locator('.repo-field:has(input[name="repo"]) [role="combobox"]')
+        .first(),
+      "acme/widgets",
+    );
     await page.locator('input[name="base"]').first().fill("main");
     await page.getByRole("button", { name: "Run", exact: true }).click();
     // The run form is modal: until it has closed, its focus trap takes
@@ -1706,13 +1721,13 @@ test.describe("Recurring and Composed Work Automation UI Walkthrough", () => {
       const caps = page
         .locator("dt", { hasText: /^Capabilities$/ })
         .locator("..");
-      await expect(caps).toContainText("self-debug");
+      await expect(caps).toContainText("grain › source");
       await expect(caps).toContainText("from the schedule");
       await expect(caps).toContainText("grain › ci");
       await expect(caps).toContainText("from the repo");
 
       const schedVal = await caps
-        .getByText("self-debug", { exact: true })
+        .getByText("grain › source", { exact: true })
         .boundingBox();
       const schedChip = await caps
         .getByText("from the schedule", { exact: true })

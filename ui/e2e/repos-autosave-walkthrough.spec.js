@@ -84,16 +84,16 @@ test.describe("Walkthrough: Auto-Saving Repo Pane & Sidebar Release Stamp (docs/
       });
       await expect(capsSelect).toBeVisible();
       await capsSelect.click();
-      // Select "Bootstrap playbooks" from capabilities menu list. Not GCP
-      // key or Self debug: the demo makes those deployment defaults, which
-      // every repo has on whatever it says, so choosing one here would
+      // Select "Interactive console" from capabilities menu list. Not GCP key,
+      // Read issues, or Self debug: the demo makes those deployment defaults,
+      // which every repo has on whatever it says, so choosing one here would
       // prove nothing saved.
-      const playbooksOption = page.getByRole("option", {
-        name: "Bootstrap playbooks",
+      const consoleOption = page.getByRole("option", {
+        name: "Interactive console",
         exact: true,
       });
-      await expect(playbooksOption).toBeVisible();
-      await playbooksOption.click();
+      await expect(consoleOption).toBeVisible();
+      await consoleOption.click();
       await page.keyboard.press("Escape"); // Close select dropdown
 
       // 3. Modify Prompt Extension
@@ -149,9 +149,7 @@ test.describe("Walkthrough: Auto-Saving Repo Pane & Sidebar Release Stamp (docs/
         `/api/repos/${targetRepo}/capabilities`,
       );
       expect(capsRes.ok()).toBe(true);
-      expect((await capsRes.json()).defaultCapabilities).toContain(
-        "bootstrap-playbooks",
-      );
+      expect((await capsRes.json()).defaultCapabilities).toContain("console");
     });
   });
 });

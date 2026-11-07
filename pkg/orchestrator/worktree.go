@@ -252,8 +252,8 @@ func identityTrailers(task model.Task) []string {
 	if requester := requestedBy(task); requester != "" {
 		out = append(out, "Requested-by: "+requester)
 	}
-	if a := task.Approval; a != nil && namesAPerson(a.Actor) {
-		out = append(out, "Approved-by: "+strings.TrimSpace(a.Actor.ID))
+	if approver := approvedBy(task.Approval); approver != "" {
+		out = append(out, "Approved-by: "+approver)
 	}
 	return out
 }
@@ -262,11 +262,19 @@ func identityTrailers(task model.Task) []string {
 // (identityTrailers).
 func requestedBy(task model.Task) string {
 	requester := strings.TrimSpace(task.Creator)
-	if requester == "" {
+	lowerReq := strings.ToLower(requester)
+	if requester == "" || strings.HasSuffix(lowerReq, ".gserviceaccount.com") || strings.HasPrefix(lowerReq, "serviceaccount:") {
 		return ""
 	}
-	filer := task.Origin.Attribution.Actor
-	if filer.Kind != model.PrincipalHuman && filer.Kind != model.PrincipalService {
+	attr := task.Origin.Attribution
+	filer := attr.Actor
+	if filer.Kind == model.PrincipalService {
+		if attr.OnBehalfOf != nil && namesAPerson(*attr.OnBehalfOf) && strings.EqualFold(requester, strings.TrimSpace(attr.OnBehalfOf.ID)) {
+			return requester
+		}
+		return ""
+	}
+	if filer.Kind != model.PrincipalHuman {
 		return requester
 	}
 	if !strings.EqualFold(requester, strings.TrimSpace(filer.ID)) || !namesAPerson(filer) {
@@ -275,19 +283,32 @@ func requestedBy(task model.Task) string {
 	return requester
 }
 
+func approvedBy(a *model.Attribution) string {
+	if a == nil {
+		return ""
+	}
+	if a.Actor.Kind == model.PrincipalService {
+		if a.OnBehalfOf != nil && namesAPerson(*a.OnBehalfOf) {
+			return strings.TrimSpace(a.OnBehalfOf.ID)
+		}
+		return ""
+	}
+	if namesAPerson(a.Actor) {
+		return strings.TrimSpace(a.Actor.ID)
+	}
+	return ""
+}
+
 // namesAPerson reports whether p may be named in a commit trailer: a
-// verified person or service account, or the operator fallback (a human
-// with one of the sources nobody in particular is behind, or none, for
-// a row written before sources existed).
+// verified human principal, or the operator fallback (a human with one of
+// the sources nobody in particular is behind, or none, for a row written
+// before sources existed). Service principals never name a person (AU-26.4).
 func namesAPerson(p model.Principal) bool {
-	if strings.TrimSpace(p.ID) == "" {
+	if p.Kind != model.PrincipalHuman || strings.TrimSpace(p.ID) == "" {
 		return false
 	}
 	if p.Verified() {
 		return true
-	}
-	if p.Kind != model.PrincipalHuman {
-		return false
 	}
 	switch p.Source {
 	case "", model.SourceAccessCode, model.SourceLoopback, model.SourceInProcess:
@@ -310,13 +331,28 @@ func labelOrigin(client github.Client, task model.Task, number int) {
 	if task.Target == nil {
 		return
 	}
-	label := task.WorkOrigin.Label(*task.Target)
+	labelOriginRepo(client, *task.Target, task, number)
+}
+
+func labelOriginOn(ctx context.Context, store *model.Store, client github.Client, task model.Task, number int) {
+	if task.Target == nil {
+		return
+	}
+	prRepo, _, _ := taskPullRequestTarget(ctx, store, task)
+	labelOriginRepo(client, prRepo, task, number)
+}
+
+func labelOriginRepo(client github.Client, prRepo model.RepoRef, task model.Task, number int) {
+	if task.Target == nil {
+		return
+	}
+	label := task.WorkOrigin.Label(prRepo)
 	if label == "" {
 		return
 	}
-	if err := client.AddLabel(task.Target.Owner, task.Target.Name, number, label); err != nil {
+	if err := client.AddLabel(prRepo.Owner, prRepo.Name, number, label); err != nil {
 		log.Printf("orchestrator: labelling %s#%d %q: %v -- the pull request goes unlabelled",
-			task.Target, number, label, err)
+			prRepo, number, label, err)
 	}
 }
 

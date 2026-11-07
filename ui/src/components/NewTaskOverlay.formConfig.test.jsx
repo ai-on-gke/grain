@@ -21,6 +21,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import NewTaskOverlay from "./NewTaskOverlay.jsx";
 import api from "../api.js";
+import { chooseOption } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
 
@@ -74,7 +75,7 @@ describe("NewTaskOverlay with settings/new-task-form.yml", () => {
     await user.click(screen.getByRole("button", { name: "Advanced options" }));
     expect(screen.queryByLabelText("Network access")).toBeNull();
     await user.type(screen.getByLabelText(/Title/), "Hidden");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Create task" }));
     const payload = JSON.parse(createCall()[1].body);
     expect(payload).toMatchObject({
@@ -120,7 +121,6 @@ describe("NewTaskOverlay with settings/new-task-form.yml", () => {
         "nothingNeededAction",
         "reviewTemplateId",
         "promptExtension",
-        "hostd",
         "sandboxShape",
       ].map((id) => [id, { visibility: "hidden" }]),
     );
@@ -146,7 +146,7 @@ describe("NewTaskOverlay with settings/new-task-form.yml", () => {
     await user.click(noPort);
     await user.click(noPort);
     expect(noPort).not.toBeChecked();
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "b/two");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "b/two");
     expect(autoMerge).toBeChecked();
     expect(noPort).not.toBeChecked();
   });
@@ -180,7 +180,7 @@ describe("NewTaskOverlay with settings/new-task-form.yml", () => {
     expect(screen.getByRole("option", { name: /None/ })).toBeInTheDocument();
     await user.keyboard("{Escape}");
     await user.type(screen.getByLabelText(/Title/), "Shape");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Create task" }));
     const payload = JSON.parse(createCall()[1].body);
     expect(payload).toMatchObject({

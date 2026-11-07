@@ -246,46 +246,54 @@ describe("PageHeader", () => {
     }
   });
 
-  it("shows the signed-in email in GlobalButtons for IAP/verifier auth and opens Access/Logout menu", () => {
-    const onOpenAccess = vi.fn();
-    const onLogout = vi.fn();
-    const { rerender } = render(
-      <GlobalButtons
-        config={{
-          authenticated: false,
-          authMethod: "trusted",
-          actor: "operator@example.com",
-        }}
-        onOpenSystem={() => {}}
-        onOpenSettings={() => {}}
-        onOpenAccess={onOpenAccess}
-        onLogout={onLogout}
+  it("omits any username pill or New task split button from GlobalButtons, and renders Expand sidebar at the leading edge of PageHeader when collapsed", () => {
+    const onExpandSidebar = vi.fn();
+    const { container, rerender } = render(
+      <PageHeader
+        title="tasks"
+        globals={
+          <GlobalButtons
+            config={{
+              authenticated: true,
+              authMethod: "iap",
+              actor: "user:alice@example.com",
+            }}
+            onOpenSystem={() => {}}
+            onOpenSettings={() => {}}
+          />
+        }
       />,
     );
     expect(screen.queryByTestId("top-bar-user")).toBeNull();
+    expect(screen.queryByTestId("header-new-task-group")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Expand sidebar" })).toBeNull();
 
     rerender(
-      <GlobalButtons
-        config={{
-          authenticated: true,
-          authMethod: "iap",
-          actor: "user:alice@example.com",
-        }}
-        onOpenSystem={() => {}}
-        onOpenSettings={() => {}}
-        onOpenAccess={onOpenAccess}
-        onLogout={onLogout}
+      <PageHeader
+        title="tasks"
+        onExpandSidebar={onExpandSidebar}
+        globals={
+          <GlobalButtons onOpenSystem={() => {}} onOpenSettings={() => {}} />
+        }
       />,
     );
-    const badge = screen.getByTestId("top-bar-user");
-    expect(badge).toHaveTextContent("alice@example.com");
+    const expand = screen.getByRole("button", { name: "Expand sidebar" });
+    expect(expand).toHaveAttribute("data-testid", "sidebar-toggle");
+    expect(expand).toHaveAttribute("aria-expanded", "false");
+    expect(expand).toHaveAttribute("aria-controls", "sidebar-rail");
+    expect(expand).toHaveAttribute("aria-keyshortcuts", "[");
+    expect(
+      expand.querySelector('svg[data-icon="sidebar"]'),
+    ).toBeInTheDocument();
 
-    fireEvent.click(badge);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Access settings" }));
-    expect(onOpenAccess).toHaveBeenCalledTimes(1);
+    // Leading edge: Expand sidebar precedes the section glyph and title.
+    const headerIcon = container.querySelector(".header-icon");
+    expect(
+      expand.compareDocumentPosition(headerIcon) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
 
-    fireEvent.click(badge);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Log out" }));
-    expect(onLogout).toHaveBeenCalledTimes(1);
+    fireEvent.click(expand);
+    expect(onExpandSidebar).toHaveBeenCalledTimes(1);
   });
 });

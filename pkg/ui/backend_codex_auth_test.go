@@ -98,7 +98,13 @@ func TestBackendCodexAuthModeSettings(t *testing.T) {
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
-	srv := ui.NewServer(ui.Config{Actor: ui.DefaultActor("alice")}, store)
+	if _, _, err := store.CreateHostd(ctx, model.Hostd{Name: "ws-a"}); err != nil {
+		t.Fatal(err)
+	}
+	// Every CLI here starts through grain hostd, so ambient credentials
+	// need their host named (model.CheckAmbientPlacement).
+	srv := ui.NewServer(ui.Config{Actor: ui.DefaultActor("alice"),
+		AmbientNeedsHost: func(string, map[string]model.CLIRunSetting) bool { return true }}, store)
 	for _, mode := range []string{"", "api_key", "subscription"} {
 		body, _ := json.Marshal(map[string]any{"agentBackends": []model.AgentBackend{{ID: "codex", Framework: "codex", AuthMode: mode}}})
 		r := do(t, srv, http.MethodPut, "/api/settings", string(body))
@@ -111,10 +117,34 @@ func TestBackendCodexAuthModeSettings(t *testing.T) {
 		}
 	}
 	for _, mode := range []string{"", "api_key", "ambient"} {
-		body, _ := json.Marshal(map[string]any{"agentBackends": []model.AgentBackend{{ID: "agy", Framework: "antigravity", AuthMode: mode}}})
+		// Ambient credentials are a login on a host, so they name one
+		// (model.CheckAmbientPlacement).
+		hostd := ""
+		if mode == "ambient" {
+			hostd = "ws-a"
+		}
+		body, _ := json.Marshal(map[string]any{"agentBackends": []model.AgentBackend{{ID: "agy", Framework: "antigravity", AuthMode: mode, Hostd: hostd}}})
 		r := do(t, srv, http.MethodPut, "/api/settings", string(body))
 		if r.Code != http.StatusOK {
 			t.Fatalf("antigravity %s: %d %s", mode, r.Code, r.Body)
+		}
+	}
+	// Codex and Claude take ambient credentials too, on a host.
+	for _, fw := range []string{"codex", "claude"} {
+		body, _ := json.Marshal(map[string]any{"agentBackends": []model.AgentBackend{{ID: fw + "-login", Framework: fw, AuthMode: "ambient", Hostd: "ws-a"}}})
+		if r := do(t, srv, http.MethodPut, "/api/settings", string(body)); r.Code != http.StatusOK {
+			t.Fatalf("%s ambient on a host: %d %s", fw, r.Code, r.Body)
+		}
+	}
+	// ... and never with no host: not for a new connection, and not for
+	// one whose host is cleared.
+	for _, body := range []string{
+		`{"agentBackends":[{"id":"fresh","framework":"antigravity","authMode":"ambient"}]}`,
+		`{"agentBackends":[{"id":"codex-login","framework":"codex","authMode":"ambient"}]}`,
+	} {
+		r := do(t, srv, http.MethodPut, "/api/settings", body)
+		if r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), "ambient credentials") {
+			t.Fatalf("ambient with no host: %d %s", r.Code, r.Body)
 		}
 	}
 	for _, mode := range []string{"", "api_key", "vertex"} {

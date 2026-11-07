@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -89,6 +90,10 @@ type RepoConfig struct {
 	// keeps it if the deployment-wide entry is later dropped. The union
 	// is what a task is filed with either way.
 	DefaultCapabilities []string
+	// DefaultAdmission is the per-repository default admission setting
+	// composed by union (MaxAdmission) with Config.DefaultAdmission when
+	// seeding a new ad-hoc task targeting this repository.
+	DefaultAdmission Admission
 	// CICapabilities is the explicit capability set for this repo's CI jobs.
 	// It is independent of task defaults and is read when a CI run starts.
 	CICapabilities []string
@@ -749,21 +754,18 @@ type RepoConfig struct {
 	// until schema 23 folded that table in.
 	GitCredential string
 
-	// DefaultHostd is the hostd pin or label selector a task filed
-	// against this repository starts with when neither the filing nor
-	// its template names one (NormalizeHostdSelector's form; "" for the
-	// default hostd). It is resolved where DefaultCapabilities is, in
-	// ui.(*Client).CreateTask, and by the model-level filings
-	// (RepoDefaultHostd). Settings only: which machine runs a task's
-	// host side is the deployment's to say, so a repository's own
-	// `.grain/settings.yml` cannot name one (pkg/declschema).
-	DefaultHostd string
-
 	// IssueImport is the periodic GitHub issue importer's settings for
 	// this repository: whether grain files a task for each open issue it
 	// has not imported yet, from where, and whether those tasks wait for
 	// a person (orchestrator.reconcileIssueImports, schema 65).
 	IssueImport IssueImport
+
+	// UpstreamRepo is the upstream `<owner>/<name>` repository that pull
+	// requests are opened and tracked against when tasks target this fork
+	// repository (for example, pushing branches to `sackheads/kube-agents`
+	// while opening pull requests on `gke-labs/kube-agents`). Empty opens
+	// pull requests against Repo itself.
+	UpstreamRepo string
 }
 
 // IssueImport is RepoConfig.IssueImport. Its zero value imports nothing.
@@ -878,7 +880,7 @@ func RepoUsesGrainCI(repoCfg *RepoConfig, repo RepoRef) bool {
 // change -- PromptExtension, the second, and SetupCommand, the third,
 // are exactly that.
 func (c RepoConfig) Empty() bool {
-	return c.CloneURL == "" && len(c.DefaultCapabilities) == 0 && len(c.CICapabilities) == 0 &&
+	return c.CloneURL == "" && len(c.DefaultCapabilities) == 0 && c.DefaultAdmission == "" && len(c.CICapabilities) == 0 &&
 		c.Work.Empty() && len(c.ReleaseSecrets) == 0 &&
 		len(c.BaseBranchCIJobs) == 0 && len(c.PostMergeDispatchJobs) == 0 &&
 		c.PromptExtension == "" && c.SetupCommand == "" && !c.Declarations &&
@@ -889,7 +891,87 @@ func (c RepoConfig) Empty() bool {
 		c.DeclaredPromptExtension == "" && c.DeclaredSetupCommand == "" &&
 		c.RepairTemplateID == "" && len(c.PortBranches) == 0 && len(c.DeclaredPortBranches) == 0 &&
 		len(c.PortTypes) == 0 && len(c.DeclaredPortTypes) == 0 &&
-		c.GitCredential == "" && c.DefaultHostd == "" && c.IssueImport.Empty()
+		c.GitCredential == "" && c.IssueImport.Empty() &&
+		c.UpstreamRepo == ""
+}
+
+// PullRequestRepo returns the repository where pull requests for a task
+// targeting repo are opened and tracked, and whether that repository is a
+// cross-repository upstream distinct from repo. When UpstreamRepo is empty
+// or names repo itself, it returns (repo, false, nil).
+func (c RepoConfig) PullRequestRepo(repo RepoRef) (RepoRef, bool, error) {
+	raw := strings.TrimSpace(c.UpstreamRepo)
+	if raw == "" {
+		return repo, false, nil
+	}
+	up, err := ParseRepo(raw)
+	if err != nil {
+		return RepoRef{}, false, err
+	}
+	if up.Host == "" && repo.Host != "" {
+		up.Host = repo.Host
+	}
+	if up.Same(repo) {
+		return repo, false, nil
+	}
+	return up, true, nil
+}
+
+// PullRequestHead returns the pull-request target repository, the head
+// selector to pass to GitHub (`<fork-owner>:<branch>` when opening a
+// cross-repository pull request from repo into UpstreamRepo, or `branch`
+// when opening within repo itself), and whether the pull request is
+// cross-repository.
+func (c RepoConfig) PullRequestHead(repo RepoRef, branch string) (RepoRef, string, bool, error) {
+	prRepo, cross, err := c.PullRequestRepo(repo)
+	if err != nil {
+		return RepoRef{}, "", false, err
+	}
+	if !cross {
+		return repo, branch, false, nil
+	}
+	head := branch
+	if !strings.Contains(branch, ":") && repo.Owner != "" {
+		head = repo.Owner + ":" + branch
+	}
+	return prRepo, head, true, nil
+}
+
+// upstreamRepos remembers the most recently read or written UpstreamRepo for
+// each repository so pure helpers (PullRequestOffTarget, TaskPullRequest)
+// can recognise a task's cross-repository upstream pull request as on-target.
+var upstreamRepos sync.Map
+
+func recordUpstreamRepo(repo RepoRef, upstream string) {
+	key := strings.ToLower(repo.String())
+	raw := strings.TrimSpace(upstream)
+	if raw == "" {
+		upstreamRepos.Delete(key)
+		return
+	}
+	up, err := ParseRepo(raw)
+	if err != nil || up.Same(repo) {
+		upstreamRepos.Delete(key)
+		return
+	}
+	if up.Host == "" && repo.Host != "" {
+		up.Host = repo.Host
+	}
+	upstreamRepos.Store(key, up)
+}
+
+// IsUpstreamRepoFor reports whether candidate is the configured UpstreamRepo
+// for target.
+func IsUpstreamRepoFor(target, candidate RepoRef) bool {
+	if target.Owner == "" || candidate.Owner == "" {
+		return false
+	}
+	v, ok := upstreamRepos.Load(strings.ToLower(target.String()))
+	if !ok {
+		return false
+	}
+	up, ok := v.(RepoRef)
+	return ok && up.Same(candidate)
 }
 
 // RepoPromptExtension is this repository's whole layer of the prompt

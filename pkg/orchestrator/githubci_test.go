@@ -438,8 +438,8 @@ trigger:
 		parsedSched.Recurrence.GitHubWorkflowRun.Workflow != "nightly.yml" {
 		t.Fatalf("parsed recurrence = %+v", parsedSched.Recurrence)
 	}
-	if parsedSched.TemplateID == nil || *parsedSched.TemplateID != model.WorkflowReviewTemplateID("nightly") {
-		t.Fatalf("default template = %v, want %q", parsedSched.TemplateID, model.WorkflowReviewTemplateID("nightly"))
+	if parsedSched.TemplateID == nil || *parsedSched.TemplateID != model.GitHubWorkflowReviewTemplateID("nightly") {
+		t.Fatalf("default template = %v, want %q", parsedSched.TemplateID, model.GitHubWorkflowReviewTemplateID("nightly"))
 	}
 	// Allow multiple reviews in this test so we can observe attempt 2 firing while attempt 1's review is open.
 	parsedSched.Overlap = model.OverlapAllow
@@ -651,13 +651,15 @@ func TestGitHubReleaseWorkflowFailureFilesTriageAndRaisesNotPublishing(t *testin
 		t.Fatal(err)
 	}
 
+	commit1 := headSHA(t, client, repo, "main")
+
 	// Failed GitHub Actions release workflow on main.
 	sim.WorkflowRuns = []githubsim.WorkflowRun{{
 		ID:         1201,
 		Name:       "release",
 		Path:       ".github/workflows/release.yml",
 		HeadBranch: "main",
-		HeadSHA:    "deadbeef12345678",
+		HeadSHA:    commit1,
 		Event:      "push",
 		Status:     "completed",
 		Conclusion: "failure",
@@ -701,13 +703,16 @@ func TestGitHubReleaseWorkflowFailureFilesTriageAndRaisesNotPublishing(t *testin
 		}
 	}
 
-	// Now a subsequent release run on main succeeds: BaseBranchRelease resets and triage task is closed as superseded.
+	// Now a subsequent release run on a descendant commit on main succeeds:
+	// BaseBranchRelease resets and triage task is closed as superseded.
+	pushBranch(t, sim.BareRepo, "main")
+	commit2 := headSHA(t, client, repo, "main")
 	sim.WorkflowRuns = append(sim.WorkflowRuns, githubsim.WorkflowRun{
 		ID:         1202,
 		Name:       "release",
 		Path:       ".github/workflows/release.yml",
 		HeadBranch: "main",
-		HeadSHA:    "feedface87654321",
+		HeadSHA:    commit2,
 		Event:      "push",
 		Status:     "completed",
 		Conclusion: "success",
@@ -730,6 +735,193 @@ func TestGitHubReleaseWorkflowFailureFilesTriageAndRaisesNotPublishing(t *testin
 	if len(triageIDs) != 0 {
 		t.Errorf("expected release-triage task to be closed as superseded after green release, still open: %v", triageIDs)
 	}
+}
+
+func TestGitHubReleaseTriageSupersedeRequiresCommitAtOrAfterFailure(t *testing.T) {
+	t.Parallel()
+
+	// Build a real commit graph on main: older -> failing -> descendant -> tip,
+	// plus a diverged branch off older.
+	setupGraph := func(t *testing.T) (
+		*model.Store, context.Context, *githubsim.Sim, github.Client, model.RepoRef,
+		string, string, string, string,
+	) {
+		t.Helper()
+		store, ctx := openStore(t)
+		sim, client := newSim(t, "acme", "widgets", "main")
+		repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+		if err := store.PutBaseBranchCI(ctx, model.BaseBranchCI{Repo: repo, Branch: "main"}); err != nil {
+			t.Fatal(err)
+		}
+		older := headSHA(t, client, repo, "main")
+		pushBranch(t, sim.BareRepo, "diverged-side")
+		diverged := headSHA(t, client, repo, "diverged-side")
+		pushBranch(t, sim.BareRepo, "main")
+		failing := headSHA(t, client, repo, "main")
+		pushBranch(t, sim.BareRepo, "main")
+		descendant := headSHA(t, client, repo, "main")
+		pushBranch(t, sim.BareRepo, "main")
+		return store, ctx, sim, client, repo, older, failing, descendant, diverged
+	}
+
+	failAt := func(t *testing.T, ctx context.Context, deps orchestrator.Deps, sim *githubsim.Sim, sha string, at time.Time) string {
+		t.Helper()
+		sim.WorkflowRuns = append(sim.WorkflowRuns, githubsim.WorkflowRun{
+			ID:         42061264,
+			Name:       "release",
+			Path:       ".github/workflows/release.yml",
+			HeadBranch: "main",
+			HeadSHA:    sha,
+			Event:      "push",
+			Status:     "completed",
+			Conclusion: "failure",
+			RunAttempt: 1,
+			CreatedAt:  at.Add(-5 * time.Minute),
+			Jobs: []githubsim.WorkflowJob{{
+				Name:        "publish-image",
+				Conclusion:  "failure",
+				FailingStep: "push",
+			}},
+		})
+		runGitHubCITails(t, ctx, deps, at)
+		ids, err := deps.Store.OpenTasksWithTag(ctx, orchestrator.BaseReleaseTriageBranchTag(
+			model.RepoRef{Owner: "acme", Name: "widgets"}, "main"))
+		if err != nil || len(ids) != 1 {
+			t.Fatalf("open release-triage tasks = %v, %v; want 1", ids, err)
+		}
+		return ids[0]
+	}
+
+	t.Run("older commit finishing after failure keeps triage open", func(t *testing.T) {
+		t.Parallel()
+		store, ctx, sim, client, repo, older, failing, _, _ := setupGraph(t)
+		deps := orchestrator.Deps{Store: store, Client: client}
+
+		triageID := failAt(t, ctx, deps, sim, failing, baseTime)
+
+		// Older commit started before failing commit, finished long after it.
+		olderFinished := baseTime.Add(60 * time.Minute)
+		sim.WorkflowRuns = append(sim.WorkflowRuns, githubsim.WorkflowRun{
+			ID:         42060866,
+			Name:       "release",
+			Path:       ".github/workflows/release.yml",
+			HeadBranch: "main",
+			HeadSHA:    older,
+			Event:      "push",
+			Status:     "completed",
+			Conclusion: "success",
+			RunAttempt: 1,
+			CreatedAt:  baseTime.Add(-10 * time.Minute),
+			Jobs:       []githubsim.WorkflowJob{{Name: "publish-image", Conclusion: "success"}},
+		})
+		runGitHubCITails(t, ctx, deps, olderFinished)
+
+		open, err := store.OpenTasksWithTag(ctx, orchestrator.BaseReleaseTriageBranchTag(repo, "main"))
+		if err != nil || len(open) != 1 || open[0] != triageID {
+			t.Fatalf("open release-triage tasks after older commit's success = %v (%v), want [%s] still open",
+				open, err, triageID)
+		}
+	})
+
+	t.Run("re-run of the same failing commit closes triage", func(t *testing.T) {
+		t.Parallel()
+		store, ctx, sim, client, _, _, failing, _, _ := setupGraph(t)
+		deps := orchestrator.Deps{Store: store, Client: client}
+
+		triageID := failAt(t, ctx, deps, sim, failing, baseTime)
+
+		rerunFinished := baseTime.Add(15 * time.Minute)
+		sim.WorkflowRuns = append(sim.WorkflowRuns, githubsim.WorkflowRun{
+			ID:         42061264,
+			Name:       "release",
+			Path:       ".github/workflows/release.yml",
+			HeadBranch: "main",
+			HeadSHA:    failing,
+			Event:      "push",
+			Status:     "completed",
+			Conclusion: "success",
+			RunAttempt: 2,
+			CreatedAt:  baseTime.Add(5 * time.Minute),
+			Jobs:       []githubsim.WorkflowJob{{Name: "publish-image", Conclusion: "success"}},
+		})
+		runGitHubCITails(t, ctx, deps, rerunFinished)
+
+		if st, err := store.State(ctx, triageID); err != nil || st != model.StateClosed {
+			t.Fatalf("triage task %s state after green re-run of same commit = %q (%v), want closed",
+				triageID, st, err)
+		}
+	})
+
+	t.Run("descendant commit on branch closes triage", func(t *testing.T) {
+		t.Parallel()
+		store, ctx, sim, client, _, _, failing, descendant, _ := setupGraph(t)
+		deps := orchestrator.Deps{Store: store, Client: client}
+
+		triageID := failAt(t, ctx, deps, sim, failing, baseTime)
+
+		descFinished := baseTime.Add(20 * time.Minute)
+		sim.WorkflowRuns = append(sim.WorkflowRuns, githubsim.WorkflowRun{
+			ID:         42062000,
+			Name:       "release",
+			Path:       ".github/workflows/release.yml",
+			HeadBranch: "main",
+			HeadSHA:    descendant,
+			Event:      "push",
+			Status:     "completed",
+			Conclusion: "success",
+			RunAttempt: 1,
+			CreatedAt:  baseTime,
+			Jobs:       []githubsim.WorkflowJob{{Name: "publish-image", Conclusion: "success"}},
+		})
+		runGitHubCITails(t, ctx, deps, descFinished)
+
+		if st, err := store.State(ctx, triageID); err != nil || st != model.StateClosed {
+			t.Fatalf("triage task %s state after descendant green release = %q (%v), want closed",
+				triageID, st, err)
+		}
+	})
+
+	t.Run("unknown ancestry or diverged commit keeps triage open", func(t *testing.T) {
+		t.Parallel()
+		store, ctx, sim, client, repo, _, failing, _, diverged := setupGraph(t)
+		deps := orchestrator.Deps{Store: store, Client: client}
+
+		triageID := failAt(t, ctx, deps, sim, failing, baseTime)
+
+		// 1. Unknown commit SHA not present in git.
+		sim.WorkflowRuns = append(sim.WorkflowRuns, githubsim.WorkflowRun{
+			ID:         42063001,
+			Name:       "release",
+			Path:       ".github/workflows/release.yml",
+			HeadBranch: "main",
+			HeadSHA:    "9999999999999999999999999999999999999999",
+			Event:      "push",
+			Status:     "completed",
+			Conclusion: "success",
+			RunAttempt: 1,
+			Jobs:       []githubsim.WorkflowJob{{Name: "publish-image", Conclusion: "success"}},
+		})
+		// 2. Diverged commit not on main.
+		sim.WorkflowRuns = append(sim.WorkflowRuns, githubsim.WorkflowRun{
+			ID:         42063002,
+			Name:       "release",
+			Path:       ".github/workflows/release.yml",
+			HeadBranch: "main",
+			HeadSHA:    diverged,
+			Event:      "push",
+			Status:     "completed",
+			Conclusion: "success",
+			RunAttempt: 1,
+			Jobs:       []githubsim.WorkflowJob{{Name: "publish-image", Conclusion: "success"}},
+		})
+		runGitHubCITails(t, ctx, deps, baseTime.Add(10*time.Minute))
+
+		open, err := store.OpenTasksWithTag(ctx, orchestrator.BaseReleaseTriageBranchTag(repo, "main"))
+		if err != nil || len(open) != 1 || open[0] != triageID {
+			t.Fatalf("open release-triage tasks after unknown/diverged commits = %v (%v), want [%s] still open",
+				open, err, triageID)
+		}
+	})
 }
 
 func TestForkPullRequestWorkflowRunIsNotTheBaseBranch(t *testing.T) {
@@ -1081,5 +1273,363 @@ func TestGitHubCIThreeSegmentRepoEventsTailsAndSynthesizedWorkflowRun(t *testing
 	}
 	if synthJob.Conclusion != "startup_failure" || synthJob.JobName != "Nightly" {
 		t.Errorf("synthesized GitHubCIJob = %+v, want conclusion=startup_failure and JobName=Nightly", synthJob)
+	}
+}
+
+// A 35-minute release.yml run on main starts before a wave of faster PR runs
+// and completes after them. GitHub orders /actions/runs newest-created first,
+// so once >20 newer runs have already completed, the release run is never in
+// the top-20 repo-wide page and must still be observed so it resets Failures.
+func TestPollConcludedGitHubWorkflowRunsFindsLongRunningReleaseBehindBusyRepo(t *testing.T) {
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	t.Cleanup(orchestrator.SetGitHubCIBudgetLow(false))
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutBaseBranchCI(ctx, model.BaseBranchCI{Repo: repo, Branch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed an existing 3-failure release streak on main so BaseBranchPublishingFindings is active.
+	failStart := baseTime
+	for i := range 3 {
+		pushBranch(t, sim.BareRepo, "main")
+		sha := headSHA(t, client, repo, "main")
+		sim.WorkflowRuns = []githubsim.WorkflowRun{{
+			ID:         int64(1900 + i),
+			Name:       "release",
+			Path:       ".github/workflows/release.yml",
+			HeadBranch: "main",
+			HeadSHA:    sha,
+			Event:      "push",
+			Status:     "completed",
+			Conclusion: "failure",
+			RunAttempt: 1,
+			CreatedAt:  baseTime.Add(time.Duration(i) * time.Minute),
+			Jobs:       []githubsim.WorkflowJob{{Name: "publish-image", Conclusion: "failure"}},
+		}}
+		runGitHubCITails(t, ctx, orchestrator.Deps{Store: store, Client: client}, baseTime.Add(time.Duration(i+1)*time.Minute))
+	}
+	rel, err := store.GetBaseBranchRelease(ctx, repo, "main")
+	if err != nil || rel == nil || rel.Failures != 3 {
+		t.Fatalf("initial BaseBranchRelease = %+v, %v; want Failures=3", rel, err)
+	}
+	if findings, err := store.BaseBranchPublishingFindings(ctx, failStart.Add(10*time.Minute)); err != nil || len(findings) != 1 {
+		t.Fatalf("initial BaseBranchPublishingFindings = %+v, %v; want 1 finding", findings, err)
+	}
+
+	// Merge a fix onto main: release run 2001 starts at +10m (in_progress),
+	// then 110 faster PR runs are created after it (+11m..+38m) and complete
+	// before run 2001 finishes at +45m. GitHub lists newest-created first.
+	pushBranch(t, sim.BareRepo, "main")
+	fixSHA := headSHA(t, client, repo, "main")
+	releaseStart := baseTime.Add(10 * time.Minute)
+	const newerCompletedRuns = 110
+	runs := make([]githubsim.WorkflowRun, 0, newerCompletedRuns+1)
+	for i := newerCompletedRuns; i >= 1; i-- {
+		runs = append(runs, githubsim.WorkflowRun{
+			ID:         int64(2001 + i),
+			Name:       "Tests",
+			Path:       ".github/workflows/tests.yml",
+			HeadBranch: "pr-branch",
+			HeadSHA:    "deadbeefdeadbeef",
+			Event:      "pull_request",
+			Status:     "completed",
+			Conclusion: "success",
+			RunAttempt: 1,
+			CreatedAt:  releaseStart.Add(time.Duration(i) * 15 * time.Second),
+			Jobs:       []githubsim.WorkflowJob{{Name: "unit", Conclusion: "success"}},
+		})
+	}
+	runs = append(runs, githubsim.WorkflowRun{
+		ID:         2001,
+		Name:       "release",
+		Path:       ".github/workflows/release.yml",
+		HeadBranch: "main",
+		HeadSHA:    fixSHA,
+		Event:      "push",
+		Status:     "in_progress",
+		RunAttempt: 1,
+		CreatedAt:  releaseStart,
+		Jobs:       []githubsim.WorkflowJob{{Name: "publish-image", Conclusion: "success"}},
+	})
+	sim.WorkflowRuns = runs
+
+	deps := orchestrator.Deps{Store: store, Client: client}
+	runGitHubCITails(t, ctx, deps, baseTime.Add(40*time.Minute))
+
+	// Now run 2001 finishes green behind all 110 newer completed runs.
+	sim.WorkflowRuns[len(sim.WorkflowRuns)-1].Status = "completed"
+	sim.WorkflowRuns[len(sim.WorkflowRuns)-1].Conclusion = "success"
+	runGitHubCITails(t, ctx, deps, baseTime.Add(45*time.Minute))
+
+	rel, err = store.GetBaseBranchRelease(ctx, repo, "main")
+	if err != nil || rel == nil {
+		t.Fatalf("GetBaseBranchRelease = %+v, %v", rel, err)
+	}
+	if rel.RunID != "2001" || rel.Conclusion != "success" || rel.Failures != 0 || rel.FailingSince != nil {
+		t.Fatalf("BaseBranchRelease after green release behind %d newer runs = %+v, want RunID=2001 success Failures=0 FailingSince=nil",
+			newerCompletedRuns, rel)
+	}
+	if findings, err := store.BaseBranchPublishingFindings(ctx, baseTime.Add(50*time.Minute)); err != nil || len(findings) != 0 {
+		t.Fatalf("BaseBranchPublishingFindings after green release = %+v, %v; want none", findings, err)
+	}
+	if open, err := store.OpenTasksWithTag(ctx, orchestrator.BaseReleaseTriageBranchTag(repo, "main")); err != nil || len(open) != 0 {
+		t.Fatalf("open release-triage tasks after green release = %v, %v; want none", open, err)
+	}
+}
+
+// A slow scheduled workflow (nightly.yml on main) behind >50 faster PR runs on
+// a repo with no BaseBranchCI row is still discovered via the schedule branch
+// poll and files its review task with job logs.
+func TestPollConcludedGitHubWorkflowRunsFiresSlowScheduleBehindBusyRepo(t *testing.T) {
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	t.Cleanup(orchestrator.SetGitHubCIBudgetLow(false))
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+
+	tmplID := model.GitHubWorkflowReviewTemplateID("nightly")
+	sched := model.Schedule{
+		ID:         "sched-slow-nightly",
+		Title:      "Review nightly",
+		Target:     repo,
+		Enabled:    true,
+		Overlap:    model.OverlapSkip,
+		TemplateID: &tmplID,
+		Recurrence: model.Recurrence{
+			Kind: model.RecurrenceGitHubWorkflowRun,
+			GitHubWorkflowRun: &model.GitHubWorkflowRunTrigger{
+				Workflow:    "nightly.yml",
+				Conclusions: []string{"failure"},
+				Branches:    []string{"main"},
+			},
+		},
+	}
+	if err := store.PutSchedule(ctx, sched); err != nil {
+		t.Fatal(err)
+	}
+
+	const newerCompletedRuns = 80
+	runs := make([]githubsim.WorkflowRun, 0, newerCompletedRuns+1)
+	for i := newerCompletedRuns; i >= 1; i-- {
+		runs = append(runs, githubsim.WorkflowRun{
+			ID:         int64(3001 + i),
+			Name:       "Tests",
+			Path:       ".github/workflows/tests.yml",
+			HeadBranch: "pr-branch",
+			HeadSHA:    "deadbeefdeadbeef",
+			Event:      "pull_request",
+			Status:     "completed",
+			Conclusion: "success",
+			RunAttempt: 1,
+			CreatedAt:  baseTime.Add(time.Duration(i) * time.Minute),
+			Jobs:       []githubsim.WorkflowJob{{Name: "unit", Conclusion: "success"}},
+		})
+	}
+	runs = append(runs, githubsim.WorkflowRun{
+		ID:         3001,
+		Name:       "nightly",
+		Path:       ".github/workflows/nightly.yml",
+		HeadBranch: "main",
+		HeadSHA:    headSHA(t, client, repo, "main"),
+		Event:      "schedule",
+		Status:     "completed",
+		Conclusion: "failure",
+		RunAttempt: 1,
+		CreatedAt:  baseTime,
+		Jobs: []githubsim.WorkflowJob{{
+			Name:        "go-long",
+			Conclusion:  "failure",
+			FailingStep: "go test -race ./...",
+			Log:         "2026-11-04T03:15:00.0000000Z --- FAIL: TestSlowSuite (42.0s)\n",
+		}},
+	})
+	sim.WorkflowRuns = runs
+
+	runGitHubCITails(t, ctx, orchestrator.Deps{Store: store, Client: client}, baseTime.Add(2*time.Hour))
+
+	tasks, err := store.ListTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("filed %d tasks for slow nightly behind %d PR runs, want 1: %+v", len(tasks), newerCompletedRuns, tasks)
+	}
+	for _, want := range []string{"3001", "go-long", "TestSlowSuite"} {
+		if !strings.Contains(tasks[0].Body, want) {
+			t.Errorf("review task body missing %q:\n%s", want, tasks[0].Body)
+		}
+	}
+}
+
+// Late-arriving older release cancellations or failures (StartedAt older than
+// the row's current StartedAt when the row already has a verdict) must not
+// re-open a streak that a newer success closed, or double-count the same run.
+func TestRecordGitHubBaseBranchReleaseIgnoresOlderRunsAfterLaterVerdict(t *testing.T) {
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	t.Cleanup(orchestrator.SetGitHubCIBudgetLow(false))
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutBaseBranchCI(ctx, model.BaseBranchCI{Repo: repo, Branch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+
+	commitOld := headSHA(t, client, repo, "main")
+	pushBranch(t, sim.BareRepo, "main")
+	commitMid := headSHA(t, client, repo, "main")
+	pushBranch(t, sim.BareRepo, "main")
+	commitNew := headSHA(t, client, repo, "main")
+
+	oldStart := baseTime.Add(5 * time.Minute)
+	oldDone := baseTime.Add(12 * time.Minute)
+	midStart := baseTime.Add(15 * time.Minute)
+	midDone := baseTime.Add(18 * time.Minute)
+	newStart := baseTime.Add(30 * time.Minute)
+	newDone := baseTime.Add(65 * time.Minute)
+
+	// 1. First record a failure, then close the streak with a newer green release (run 4003).
+	source := &fakeEventSource{events: []ghwebhook.Event{
+		{
+			Seq: 1, DeliveryID: "d-fail-1", Event: "workflow_run", Action: "completed",
+			Repo: "acme/widgets", WorkflowRun: 4000, RunAttempt: 1,
+			WorkflowName: "release", WorkflowPath: ".github/workflows/release.yml", WorkflowEvent: "push",
+			CheckStatus: "completed", CheckConclusion: "failure", CheckApp: "github-actions",
+			HeadRef: "main", HeadSHA: commitOld, CheckStartedAt: &baseTime, CheckCompletedAt: &oldStart,
+		},
+		{
+			Seq: 2, DeliveryID: "d-green", Event: "workflow_run", Action: "completed",
+			Repo: "acme/widgets", WorkflowRun: 4003, RunAttempt: 1,
+			WorkflowName: "release", WorkflowPath: ".github/workflows/release.yml", WorkflowEvent: "push",
+			CheckStatus: "completed", CheckConclusion: "success", CheckApp: "github-actions",
+			HeadRef: "main", HeadSHA: commitNew, CheckStartedAt: &newStart, CheckCompletedAt: &newDone,
+		},
+	}}
+	deps := orchestrator.Deps{Store: store, Client: client, GitHubEvents: source}
+	runGitHubEventsReconciler(t, ctx, deps, baseTime.Add(70*time.Minute))
+
+	rel, err := store.GetBaseBranchRelease(ctx, repo, "main")
+	if err != nil || rel == nil || rel.RunID != "4003" || rel.Conclusion != "success" || rel.Failures != 0 || rel.FailingSince != nil {
+		t.Fatalf("after green release 4003: BaseBranchRelease = %+v, %v", rel, err)
+	}
+
+	// 2. Now deliver late-arriving older runs: a non-superseded cancellation at commitNew
+	// (so CompareRefs does not call it superseded) with StartedAt=midStart < newStart,
+	// and an older failure with StartedAt=oldStart < newStart.
+	lateSource := &fakeEventSource{events: []ghwebhook.Event{
+		{
+			Seq: 3, DeliveryID: "d-late-cancel", Event: "workflow_run", Action: "completed",
+			Repo: "acme/widgets", WorkflowRun: 4002, RunAttempt: 1,
+			WorkflowName: "release", WorkflowPath: ".github/workflows/release.yml", WorkflowEvent: "push",
+			CheckStatus: "completed", CheckConclusion: "cancelled", CheckApp: "github-actions",
+			HeadRef: "main", HeadSHA: commitNew, CheckStartedAt: &midStart, CheckCompletedAt: &midDone,
+		},
+		{
+			Seq: 4, DeliveryID: "d-late-fail", Event: "workflow_run", Action: "completed",
+			Repo: "acme/widgets", WorkflowRun: 4001, RunAttempt: 1,
+			WorkflowName: "release", WorkflowPath: ".github/workflows/release.yml", WorkflowEvent: "push",
+			CheckStatus: "completed", CheckConclusion: "failure", CheckApp: "github-actions",
+			HeadRef: "main", HeadSHA: commitMid, CheckStartedAt: &oldStart, CheckCompletedAt: &oldDone,
+		},
+	}}
+	deps.GitHubEvents = lateSource
+	runGitHubEventsReconciler(t, ctx, deps, baseTime.Add(75*time.Minute))
+
+	rel, err = store.GetBaseBranchRelease(ctx, repo, "main")
+	if err != nil || rel == nil {
+		t.Fatalf("GetBaseBranchRelease = %+v, %v", rel, err)
+	}
+	if rel.RunID != "4003" || rel.Conclusion != "success" || rel.Failures != 0 || rel.FailingSince != nil {
+		t.Fatalf("older runs clobbered newer verdict: BaseBranchRelease = %+v, want RunID=4003 success Failures=0 FailingSince=nil", rel)
+	}
+	if open, _ := store.OpenTasksWithTag(ctx, orchestrator.BaseReleaseTriageBranchTag(repo, "main")); len(open) != 0 {
+		t.Fatalf("older failure filed release triage after newer green release: %v", open)
+	}
+}
+
+// The stale-run guard in fireOneGitHubWorkflowRunSchedule is scoped to one
+// branch and workflow: a schedule that watches main and release-1 still
+// reviews a slow release-1 failure that started before a faster main failure
+// it recorded first, while an older run on main itself stays ignored.
+func TestGitHubWorkflowRunScheduleReviewsSlowRunOnAnotherBranch(t *testing.T) {
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	t.Cleanup(orchestrator.SetGitHubCIBudgetLow(false))
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+
+	tmplID := model.GitHubWorkflowReviewTemplateID("nightly")
+	sched := model.Schedule{
+		ID:         "sched-two-branch-nightly",
+		Title:      "Review nightly",
+		Target:     repo,
+		Enabled:    true,
+		Overlap:    model.OverlapAllow,
+		TemplateID: &tmplID,
+		Recurrence: model.Recurrence{
+			Kind: model.RecurrenceGitHubWorkflowRun,
+			GitHubWorkflowRun: &model.GitHubWorkflowRunTrigger{
+				Workflow:    "nightly.yml",
+				Conclusions: []string{"failure"},
+				Branches:    []string{"main", "release-1"},
+			},
+		},
+	}
+	if err := store.PutSchedule(ctx, sched); err != nil {
+		t.Fatal(err)
+	}
+	mainSHA := headSHA(t, client, repo, "main")
+	nightly := func(id int64, branch, sha, status, conclusion string, created time.Time) githubsim.WorkflowRun {
+		r := githubsim.WorkflowRun{
+			ID:         id,
+			Name:       "nightly",
+			Path:       ".github/workflows/nightly.yml",
+			HeadBranch: branch,
+			HeadSHA:    sha,
+			Event:      "schedule",
+			Status:     status,
+			Conclusion: conclusion,
+			RunAttempt: 1,
+			CreatedAt:  created,
+		}
+		if status == "completed" {
+			r.UpdatedAt = created.Add(10 * time.Minute)
+			r.Jobs = []githubsim.WorkflowJob{{Name: "go-long", Conclusion: conclusion}}
+		}
+		return r
+	}
+
+	// release-1's run started first but is still going; main's, started a
+	// minute later, has already failed.
+	sim.WorkflowRuns = []githubsim.WorkflowRun{
+		nightly(4002, "main", mainSHA, "completed", "failure", baseTime.Add(time.Minute)),
+		nightly(4001, "release-1", "feedfacefeedface", "in_progress", "", baseTime),
+	}
+	runGitHubCITails(t, ctx, orchestrator.Deps{Store: store, Client: client}, baseTime.Add(20*time.Minute))
+	if tasks, _ := store.ListTasks(ctx); len(tasks) != 1 {
+		t.Fatalf("filed %d tasks after main's nightly failed, want 1: %+v", len(tasks), tasks)
+	}
+
+	// release-1's slower run now fails too, and an older main run that was
+	// never seen concludes alongside it.
+	sim.WorkflowRuns = []githubsim.WorkflowRun{
+		nightly(4002, "main", mainSHA, "completed", "failure", baseTime.Add(time.Minute)),
+		nightly(4001, "release-1", "feedfacefeedface", "completed", "failure", baseTime),
+		nightly(4000, "main", mainSHA, "completed", "failure", baseTime.Add(-time.Minute)),
+	}
+	sim.WorkflowRuns[1].UpdatedAt = baseTime.Add(40 * time.Minute)
+	runGitHubCITails(t, ctx, orchestrator.Deps{Store: store, Client: client}, baseTime.Add(45*time.Minute))
+	tasks, err := store.ListTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawRelease bool
+	for _, task := range tasks {
+		if strings.Contains(task.Body, "4001") {
+			sawRelease = true
+		}
+		if strings.Contains(task.Body, "4000") {
+			t.Errorf("filed a review for the stale main run 4000 that started before the recorded 4002:\n%s", task.Body)
+		}
+	}
+	if !sawRelease {
+		t.Fatalf("no review filed for release-1's slow nightly failure (run 4001); tasks: %+v", tasks)
 	}
 }

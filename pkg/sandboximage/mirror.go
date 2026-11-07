@@ -67,7 +67,7 @@ func DerivedMirror(k8sGranuleImage, sandboxImageFlag, stampedRepo string) (Mirro
 			continue
 		}
 		tag := ImageTag(image)
-		if image == repo || (strings.HasSuffix(repo, "/guest") && strings.HasPrefix(tag, "sha-")) {
+		if image == repo || ((strings.HasSuffix(repo, "/guest") || strings.HasSuffix(repo, "/sandbox")) && strings.HasPrefix(tag, "sha-")) {
 			return MirrorHint{Field: candidate.field, Image: image, Repository: repo}, true
 		}
 	}

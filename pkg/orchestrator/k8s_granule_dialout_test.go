@@ -25,7 +25,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/granule"
 	"github.com/ai-on-gke/grain/pkg/k8s"
-	granulesandbox "github.com/bwsalmon/granule/pkg/sandbox"
+	granulesandbox "github.com/gke-labs/granule/pkg/sandbox"
 )
 
 // neverConnects is a ChannelProvider whose wrapper never dials in.

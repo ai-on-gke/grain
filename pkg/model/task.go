@@ -37,6 +37,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -97,6 +98,7 @@ type AuthSource string
 
 const (
 	SourceIAP           AuthSource = "iap"            // a verified IAP assertion
+	SourceRegistry      AuthSource = "registry"       // a verified registry assertion
 	SourceToken         AuthSource = "token"          // a per-user API token (future)
 	SourceAccessCode    AuthSource = "access-code"    // the shared access code or its session
 	SourceLoopback      AuthSource = "loopback"       // break-glass over loopback
@@ -226,6 +228,11 @@ type RepoRef struct {
 	// hosts existed, so their RepoRefs, and every form they are written
 	// down in, are unchanged.
 	Host string
+}
+
+// IsZero reports whether r names no repository.
+func (r RepoRef) IsZero() bool {
+	return r.Owner == "" && r.Name == "" && r.Host == ""
 }
 
 // String is r's one written form: owner/name, or host/owner/name off the
@@ -834,35 +841,39 @@ var AutoSubmitPrincipal = Principal{Kind: PrincipalAutomation, ID: "auto-submit"
 // a human's own review) has said nothing about the first.
 func AutoSubmits(child, parent Task) bool {
 	return (parent.AutoMerge || parent.AutoApproveProposals) &&
+		!NormalizeAdmission(child.Admission).AtLeast(AdmissionBypass) &&
 		GrantsSubsetOf(child.Grants, parent.Grants) &&
 		len(UngrantedReads(child, parent)) == 0 &&
 		LandsWhereGranted(child, parent)
 }
 
-// GitCredentialCapabilityPrefix marks a capability id as a per-task git
-// credential override: the named credential (gitproxy's
-// CredentialSet.Get) a sandbox's git proxy requests should use in place
-// of the owner/repo ladder, for a scope the ladder's own credentials
-// deliberately withhold (docs/design.md, "Scopes to withhold" --
-// `workflow`, most notably).
-//
-// One id per named credential a deployment has configured beyond its
-// default one, which is what makes each of those tokens a capability of
-// its own -- offered by ui.GitHubTokenCapabilities, provided by
-// pkg/capability/githubtoken, and attached to a task like any other.
+// GitCredentialCapabilityPrefix is the retired one-release alias prefix for a
+// per-task git credential override (now RepoCredentialGrant on the in-process
+// repo server, https://grain.dev/capabilities/repo#credential).
 const GitCredentialCapabilityPrefix = "github-credential:"
 
-// GitCredentialCapability is the capability id standing for "use the
-// GitHub token named name instead of this deployment's default one".
+// GitCredentialCapability is the canonical capability grant standing for "use
+// the GitHub credential named name instead of this deployment's default one":
+// RepoCredentialGrant(name).
 func GitCredentialCapability(name string) string {
-	return GitCredentialCapabilityPrefix + name
+	return RepoCredentialGrant(name)
 }
 
-// GitCredentialName is the credential a GitCredentialCapability id
-// names, and false for any other capability id.
-func GitCredentialName(capability string) (name string, ok bool) {
-	name, ok = strings.CutPrefix(capability, GitCredentialCapabilityPrefix)
+// LegacyGitCredentialName returns the credential name a retired
+// github-credential:<name> capability id names, and false for any other string.
+func LegacyGitCredentialName(capability string) (name string, ok bool) {
+	name, ok = strings.CutPrefix(strings.TrimSpace(capability), GitCredentialCapabilityPrefix)
 	return name, ok && name != ""
+}
+
+// GitCredentialName returns the credential name a git credential override grant
+// selects -- canonical RepoCredentialGrant or the one-release legacy
+// github-credential:<name> prefix -- and false for any other capability string.
+func GitCredentialName(capability string) (name string, ok bool) {
+	if name, ok := ParseRepoCredentialGrant(capability); ok {
+		return name, true
+	}
+	return LegacyGitCredentialName(capability)
 }
 
 // ReleaseGateReadCapability is the CI capability a release workflow's job
@@ -874,16 +885,19 @@ func GitCredentialName(capability string) (name string, ok bool) {
 // own event gate and repository list are what bound it.
 const ReleaseGateReadCapability = "release-gate-read"
 
-// SelfDebugCapability is the grant that lets a task's run read grain's
-// own source, tasks and metrics (pkg/capability/selfdebug). The source
-// is the deployment's own baked-in copy, placed in the sandbox at
-// grain-src/ (orchestrator's placeGrainSource) and read by
-// read_grain_source: the grant reaches no repository through the git
-// proxy, and implies none (CapabilityRepos).
+// SelfDebugCapability is the retired bare name of SelfDebugGrants: the
+// api:self-debug preset (every task's record, metrics, pipeline and
+// deployment status) and GrainSourceGrant, which places the deployment's
+// own baked-in source at grain-src/ in the sandbox (orchestrator's
+// placeGrainSource) and opens src://. Schema migration 115 rewrote the
+// stored grants; the bare name stays readable as an alias for one release
+// (CanonicalLegacyGrants, IsGrainSourceGrant, apiAliasCapabilities). The
+// source grant reaches no repository through the git proxy, and implies
+// none (CapabilityRepos).
 const SelfDebugCapability = "self-debug"
 
 // GrainSourceRepo is grain's own source repository. Nothing grants a
-// read of it implicitly: a self-debug run is given the deployment's
+// read of it implicitly: a grain#source run is given the deployment's
 // baked-in copy instead, and a task that wants the repository itself
 // names it in its reads or a repo-read: grant like any other.
 func GrainSourceRepo() RepoRef { return RepoRef{Owner: "ai-on-gke", Name: "grain"} }
@@ -891,7 +905,7 @@ func GrainSourceRepo() RepoRef { return RepoRef{Owner: "ai-on-gke", Name: "grain
 // CapabilityRepos returns the repositories a grant of capability lets a
 // run reach beyond its task's own Target, Writes and Reads: the
 // repository a repository access grant (IsRepoAccessGrant) names. Nil for
-// any other capability -- SelfDebugCapability included, whose grain-src/
+// any other capability -- GrainSourceGrant included, whose grain-src/
 // is the deployment's baked-in copy rather than a clone, so a local
 // policy never refuses a self-debug task over bwsalmon/grain. Anything
 // that judges a task by the repositories it touches -- a local policy's
@@ -944,25 +958,51 @@ func GCPKeyGrant(name string) Grant {
 	return Grant{Capability: GCPKeyCapability(name), Via: GrantByLabel}
 }
 
-// gitCredentialOverride returns the credential name a GitCredentialGrant
-// among grants asks for, if any.
-//
-// A task holding more than one of these gets the first in grants' own
-// order -- which, coming from Store.GitCredentialOverride, is the
-// capability id sorted ascending, so the same task resolves to the same
-// token on every request rather than to whichever row was read first.
-// Picking a winner rather than refusing is deliberate: two named tokens
-// on one task is an odd thing to ask for, not a dangerous one (both are
-// credentials this deployment already trusts a task with), and failing
-// the run over it would be a worse answer than quietly using one of
-// them.
-func gitCredentialOverride(grants []Grant) (name string, ok bool) {
+// ErrConflictingGitCredentials is returned when a task holds more than one
+// distinct git credential override grant (repo#credential or legacy
+// github-credential:<name>).
+var ErrConflictingGitCredentials = errors.New("task holds conflicting git credential grants")
+
+// GitCredentialOverride returns the credential name a repo#credential (or
+// legacy github-credential:<name>) grant among grants selects, if any. If
+// grants hold more than one distinct git credential override, it returns
+// ErrConflictingGitCredentials rather than picking a winner silently.
+func GitCredentialOverride(grants []Grant) (name string, ok bool, err error) {
 	for _, g := range grants {
-		if n, isOverride := GitCredentialName(g.Capability); isOverride {
-			return n, true
+		n, isOverride := GitCredentialName(g.Capability)
+		if !isOverride {
+			if IsCapabilityRef(g.Capability) && CapabilityGrantRef(g.Capability) == RepoCredentialRef {
+				return "", false, fmt.Errorf("invalid %s grant %q", RepoCredentialRef, g.Capability)
+			}
+			continue
 		}
+		if !ValidGitCredentialName(n) {
+			return "", false, fmt.Errorf("invalid git credential name %q in grant %q", n, g.Capability)
+		}
+		if ok && n != name {
+			return "", false, fmt.Errorf("%w: %q and %q", ErrConflictingGitCredentials, name, n)
+		}
+		name = n
+		ok = true
 	}
-	return "", false
+	return name, ok, nil
+}
+
+// CheckConflictingGitCredentialNames refuses a capability list that names more
+// than one distinct git credential override with ErrConflictingGitCredentials.
+func CheckConflictingGitCredentialNames(names []string) error {
+	var first string
+	for _, raw := range names {
+		n, ok := GitCredentialName(raw)
+		if !ok {
+			continue
+		}
+		if first != "" && n != first {
+			return fmt.Errorf("%w: %q and %q", ErrConflictingGitCredentials, first, n)
+		}
+		first = n
+	}
+	return nil
 }
 
 // Lease is something minted for a task that must be given back.
@@ -1240,6 +1280,21 @@ const (
 	// itself (unlike LinkFixes). Provenance and PR-tool scoping only; never
 	// blocks dispatch and never places a task in awaiting_submit.
 	LinkExternalPR LinkKind = "external-pr"
+	// LinkDerivedFrom records the pull request ("owner/repo#number") a
+	// task's work was derived from -- the provenance an external
+	// orchestrator filters on with `grain list -filter
+	// derived_from:eq:<owner/name#pr>` (external-cli spec #XC-18).
+	// Provenance only: it blocks nothing.
+	LinkDerivedFrom LinkKind = "derived-from"
+	// LinkDesign records a committed-context specification folder or file
+	// (`[owner/name:]path[@rev]`, `grain create -design`, #XC-19) the task
+	// implements, either in its target repository or in a -read context
+	// repository, inherited by child tasks and reviews. Provenance only.
+	LinkDesign LinkKind = "design"
+	// LinkContextManifest records a parsed context.yml manifest discovered in
+	// one of a task's LinkDesign directories (model.ContextManifest). Display
+	// and prompt metadata only: it never blocks dispatch or enforces gates.
+	LinkContextManifest LinkKind = "context-manifest"
 	// LinkTakeover marks a shepherd task filed by the GitHub bot's
 	// "@<slug> take over" command (-> the pull request it took over,
 	// "owner/repo#number"). The task's own pull request is its LinkFixes
@@ -1523,6 +1578,9 @@ type Task struct {
 	ID string
 	// Priority is the numeric task priority (DefaultTaskPriority = 5; higher = higher priority).
 	Priority int `json:"priority"`
+	// Admission says which dispatch pool this task runs in and whether it
+	// bypasses worker saturation (standard, bypass or durable).
+	Admission Admission `json:"admission,omitempty"`
 	// Branch is the resolved branch this task owns. It is fixed when the
 	// task is first written so changing the deployment's naming template
 	// cannot strand work already pushed under an earlier name. Empty is a
@@ -1731,6 +1789,20 @@ type Task struct {
 	// instead of completing, closing on nothing_needed, or resting on a
 	// goal.
 	KeepRunning bool
+	// FiledVia is the sanitized X-Grain-Client label of the tool that
+	// filed this task ("jetski/1.4 session=abc"), "" when none was sent
+	// (SanitizeGrainClient). A label for provenance only: it is the
+	// caller's own word about itself and grants nothing
+	// (design/spec/external-cli/external-cli.spec.md#XC-15).
+	FiledVia string
+	// ExternalRef is an optional free-text work reference owned by an
+	// external planning layer (for example "CA-204"), "" when unset. It is
+	// inherited automatically by tasks grain spawns from a task carrying
+	// one (proposals, reviews, fixes, ports, triggers and work-tree
+	// children) unless the child explicitly sets its own, and indexed so
+	// task listing and GET /api/refs/{ref}/summary aggregate all tasks
+	// behind one reference in a single indexed query.
+	ExternalRef string
 	// SandboxCPUs, SandboxMemoryMB and SandboxDiskGB
 	// (bwsalmon/agents#534, grain/task-41) override
 	// Config.SandboxCPUs/SandboxMemoryMB/SandboxDiskGB for this task's
@@ -1905,8 +1977,14 @@ type Task struct {
 	// may push (Store.GitDeclaredPush). Never inherited by a proposal: an
 	// agent cannot hand its own push set on to work it files.
 	TemplateID string
-	Creator    string
-	TimeZone   string
+	// Owner is the account responsible for this task (attribution.design.md):
+	// fixed at creation from the filer / on-behalf-of / schedule owner /
+	// deployment fallback, inherited along DerivedFrom, and reassignable by
+	// a person with task-edit access without altering historical Creator.
+	Owner    string
+	Creator  string
+	Proposer TaskProposer
+	TimeZone string
 	// Issue is the GitHub issue number associated with this task, or 0 if unassociated.
 	Issue int
 	// WorkOrigin is the pull request, issue or grain task this task's
@@ -2015,6 +2093,16 @@ type Observation struct {
 	// offered, since the branch it pins is still there to approve.
 	// Cleared by the approval or the rejection.
 	PendingConfigChange *PendingConfigChange
+	// PendingAccess is the access a parked run asked a person for with
+	// request_access (PendingAccessRequest's own doc). Like PendingSecret
+	// it sits beside PendingQuestionCommentID, which is what parks the
+	// task, and like it it is cleared when the task un-parks: by the
+	// person's grant or denial, or by a reply in words instead.
+	PendingAccess *PendingAccessRequest
+	// AccessDecisions are the answers people gave this task's access
+	// requests, latest last, so a request repeating one already denied
+	// shows the denial on its card.
+	AccessDecisions []AccessDecision
 	// MergeQueueBlockedAt is set once the merge queue has stopped driving
 	// this task, for any of the three reasons it ever does: the repair
 	// run it asked for finished and the PR is still conflicted or
@@ -2700,6 +2788,9 @@ type Comment struct {
 	// column existed, which a reader derives one for instead
 	// (DeriveQuestionSummary).
 	Summary string
+	// FiledVia is the sanitized X-Grain-Client label of the tool the
+	// comment was posted from, as Task.FiledVia is the task's.
+	FiledVia string
 }
 
 // Attachment is one file carried alongside a task -- bwsalmon/agents#522's

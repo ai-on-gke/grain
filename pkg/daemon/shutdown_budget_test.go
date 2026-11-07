@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -58,7 +59,11 @@ func TestStopTimeoutsCoverTheShutdownDrain(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		matches := regexp.MustCompile(c.pattern).FindAllStringSubmatch(string(data), -1)
+		text := string(data)
+		if c.file == "scripts/setup.sh" {
+			text = daemonUnitText(t, text)
+		}
+		matches := regexp.MustCompile(c.pattern).FindAllStringSubmatch(text, -1)
 		if len(matches) != c.want {
 			t.Errorf("%s: %d match(es) for %q, want %d", c.file, len(matches), c.pattern, c.want)
 			continue
@@ -85,12 +90,30 @@ func TestStopTimeoutsCoverTheShutdownDrain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, m := range regexp.MustCompile(`(?m)^TimeoutStopSec=(\d+)$`).FindAllStringSubmatch(string(data), -1) {
+	for _, m := range regexp.MustCompile(`(?m)^TimeoutStopSec=(\d+)$`).FindAllStringSubmatch(daemonUnitText(t, string(data)), -1) {
 		secs, _ := strconv.Atoi(m[1])
 		if got := time.Duration(secs) * time.Second; dockerStop > 0 && got <= dockerStop {
 			t.Errorf("scripts/setup.sh: %q allows %s, want more than the unit's docker stop (%s)", m[0], got, dockerStop)
 		}
 	}
+}
+
+// daemonUnitText is the grain-daemon.service heredoc in setup.sh: the
+// other units it writes (grain-postgres.service among them) have stop
+// timeouts of their own, for other processes.
+func daemonUnitText(t *testing.T, setup string) string {
+	t.Helper()
+	const open = "cat > /etc/systemd/system/grain-daemon.service <<UNIT\n"
+	i := strings.Index(setup, open)
+	if i < 0 {
+		t.Fatalf("scripts/setup.sh: no %q", strings.TrimSpace(open))
+	}
+	unit := setup[i+len(open):]
+	j := strings.Index(unit, "\nUNIT\n")
+	if j < 0 {
+		t.Fatalf("scripts/setup.sh: grain-daemon.service's heredoc never closes")
+	}
+	return unit[:j+1]
 }
 
 func TestRunHostUpgradeResumeIsNoOpOnceStopping(t *testing.T) {

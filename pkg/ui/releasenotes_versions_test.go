@@ -99,7 +99,7 @@ func TestUpgradeReleaseNotesPreviewsTheTarget(t *testing.T) {
 	}
 	up := upgrade.New(upgrade.Config{
 		Image: &upgrade.ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			PullCmd:    []string{"true"},
 			DigestCmd:  []string{"sh", "-c", `printf '%s@%s\n' "${1%:*}" ` + testImageDigest, "sh"},
 			RunCmd:     []string{"sh", "-c", "cat " + answer, "sh"},

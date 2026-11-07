@@ -33,6 +33,7 @@ import {
   teamDefaultLabel,
 } from "../../state.js";
 import ModelSelect from "../ModelSelect.jsx";
+import SearchSelect from "../SearchSelect.jsx";
 
 // EditTaskForm is the title/description editor DetailOverlay swaps its
 // header for (bwsalmon/agents#523) -- those two fields are the only ones
@@ -54,6 +55,8 @@ export default function EditTaskForm({
 }) {
   const [title, setTitle] = useState(t.title);
   const [description, setDescription] = useState(t.description || "");
+  const savedExternalRef = t.externalRef || "";
+  const [externalRef, setExternalRef] = useState(savedExternalRef);
   // The review attached to this task (grain/task-284). Editable here and
   // not only on the new-task form because this is where the decision
   // usually gets made: a task is filed, and somewhere between queued and
@@ -67,6 +70,8 @@ export default function EditTaskForm({
   );
   const savedReviewers = (t.reviewers || []).join(", ");
   const [reviewers, setReviewers] = useState(savedReviewers);
+  const savedOwner = t.owner || "";
+  const [owner, setOwner] = useState(savedOwner);
   const reviewFiled = Boolean(t.reviewTask);
   // Which model this task's next run is driven by (grain/task-110),
   // editable here for the reason the review above is: the decision is
@@ -134,8 +139,10 @@ export default function EditTaskForm({
   const isDirty = () => {
     if (title !== t.title) return true;
     if (description !== (t.description || "")) return true;
+    if (externalRef.trim() !== savedExternalRef) return true;
     if (reviewTemplateId !== (t.reviewTemplateId || "")) return true;
     if (reviewers !== savedReviewers) return true;
+    if (owner.trim() !== savedOwner) return true;
     if (nothingNeededAction !== savedNothingNeeded) return true;
     if (keepRunning !== savedKeepRunning) return true;
     if (String(priority).trim() !== String(savedPriority)) return true;
@@ -172,9 +179,15 @@ export default function EditTaskForm({
           body: JSON.stringify({
             title,
             description,
+            ...(externalRef.trim() !== savedExternalRef
+              ? { externalRef: externalRef.trim() }
+              : {}),
             reviewTemplateId,
             ...(reviewers !== savedReviewers
               ? { reviewers: parsedReviewers }
+              : {}),
+            ...(owner.trim() && owner.trim() !== savedOwner
+              ? { owner: owner.trim() }
               : {}),
             ...(nothingNeededAction !== savedNothingNeeded
               ? { nothingNeededAction }
@@ -221,6 +234,24 @@ export default function EditTaskForm({
         size="small"
       />
       <TextField
+        label="External ref"
+        placeholder="CA-204"
+        value={externalRef}
+        onChange={(e) => setExternalRef(e.target.value)}
+        helperText="work identifier from an external planning tool, inherited by spawned tasks"
+        fullWidth
+        size="small"
+      />
+      <TextField
+        label="Owner"
+        placeholder="alice@example.com"
+        value={owner}
+        onChange={(e) => setOwner(e.target.value)}
+        helperText="account responsible for this task (transfers are audited)"
+        fullWidth
+        size="small"
+      />
+      <TextField
         label="Reviewers"
         placeholder="alice, bob"
         value={reviewers}
@@ -229,18 +260,13 @@ export default function EditTaskForm({
         fullWidth
         size="small"
       />
-      <TextField
-        select
+      <SearchSelect
         label="Review"
         value={reviewTemplateId}
-        onChange={(e) => setReviewTemplateId(e.target.value)}
-        // displayEmpty: "" is a real choice (no review), not a blank --
-        // and the label has to shrink for it, since MUI only floats one
-        // out of a field it counts as filled and "" is not: left to
-        // itself the label sits on top of the "No review" displayEmpty
-        // draws inside the box.
+        onChange={setReviewTemplateId}
+        // Shrunk: "" is a real choice (no review), not a blank, and the
+        // label has to be out of the way of the "No review" it shows.
         InputLabelProps={{ shrink: true }}
-        SelectProps={{ displayEmpty: true }}
         disabled={reviewFiled || (templates || []).length === 0}
         helperText={
           reviewFiled
@@ -249,16 +275,14 @@ export default function EditTaskForm({
               ? "no templates yet -- write one in Templates to be able to attach a review here"
               : "run a second agent over this task's own code before it merges, with instructions from a template"
         }
-        fullWidth
-        size="small"
-      >
-        <MenuItem value="">No review</MenuItem>
-        {(templates || []).map((tmpl) => (
-          <MenuItem key={tmpl.id} value={tmpl.id}>
-            {tmpl.name}
-          </MenuItem>
-        ))}
-      </TextField>
+        options={[
+          { value: "", label: "No review" },
+          ...(templates || []).map((tmpl) => ({
+            value: tmpl.id,
+            label: tmpl.name,
+          })),
+        ]}
+      />
       {/* The model, then optionally one connection to run it on: the
           same two pickers NewTaskOverlay has. A model only disabled
           connections serve is still offered, and says so, because
@@ -294,39 +318,38 @@ export default function EditTaskForm({
         />
       )}
       {connections.length > 0 && (
-        <TextField
-          select
+        <SearchSelect
           label="Specific connection"
           value={
             pinChoices.some((c) => c.id === agentBackendId) || savedPin
               ? agentBackendId
               : ""
           }
-          onChange={(e) => setAgentBackendId(e.target.value)}
+          onChange={setAgentBackendId}
           InputLabelProps={{ shrink: true }}
-          SelectProps={{ displayEmpty: true }}
           helperText={
             effectiveModel
               ? `connections that serve ${effectiveModel} -- pin one only if this task needs that account`
               : "pin this task to one connection -- leave it on any connection unless it needs that account"
           }
-          fullWidth
-          size="small"
-        >
-          <MenuItem value="">Any enabled connection serving the model</MenuItem>
-          {pinChoices.map((backend) => (
-            <MenuItem key={backend.id} value={backend.id}>
-              {connectionLabel(backend)}
-            </MenuItem>
-          ))}
-          {savedPin && (
-            <MenuItem value={savedPin.id}>
-              {savedPin.missing
-                ? `${savedPin.id} (not one of the deployment's connections)`
-                : `${connectionLabel(savedPin)} (does not serve ${effectiveModel})`}
-            </MenuItem>
-          )}
-        </TextField>
+          options={[
+            { value: "", label: "Any enabled connection serving the model" },
+            ...pinChoices.map((backend) => ({
+              value: backend.id,
+              label: connectionLabel(backend),
+            })),
+            ...(savedPin
+              ? [
+                  {
+                    value: savedPin.id,
+                    label: savedPin.missing
+                      ? `${savedPin.id} (not one of the deployment's connections)`
+                      : `${connectionLabel(savedPin)} (does not serve ${effectiveModel})`,
+                  },
+                ]
+              : []),
+          ]}
+        />
       )}
       <TextField
         select

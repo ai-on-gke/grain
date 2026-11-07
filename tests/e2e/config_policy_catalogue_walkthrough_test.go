@@ -321,19 +321,19 @@ in_process:
 func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 	t.Parallel()
 	w := newHoldWorld(t, false)
-	parent := w.create("auto-merging parent", true, []string{"self-debug", "gemini-key"})
-	if !holds(parent, "self-debug") || !holds(parent, "gemini-key") {
+	parent := w.create("auto-merging parent", true, []string{"github-sandbox", model.GitHubReadIssuesGrant})
+	if !holds(parent, "github-sandbox") || !holds(parent, model.GitHubReadIssuesGrant) {
 		t.Fatalf("the parent does not hold both grants: %+v", parent.Grants)
 	}
-	// The parent was filed from the template the catalogue keeps gemini-key
+	// The parent was filed from the template the catalogue keeps read-issues
 	// to; its proposals are filed from none.
 	if err := w.store.UpdateTask(w.ctx, parent.ID, func(t *model.Task) error { t.TemplateID = "walk-ops"; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	importCatalogue(t, w.store, `in_process:
-  self-debug:
+  github-sandbox:
     restrictions: {requires_person: true}
-  gemini-key:
+  read-issues:
     restrictions: {templates: [walk-ops]}
 `)
 	propose := func(title string, caps ...string) antigravity.Step {
@@ -349,8 +349,8 @@ func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 		}
 		steps := w.changeScript(task, "echo 'typo' >> docs/guide.md")
 		return append([]antigravity.Step{
-			propose("needs self-debug", "self-debug"),
-			propose("needs gemini-key", "gemini-key"),
+			propose("needs github-sandbox", "github-sandbox"),
+			propose("needs read-issues", model.GitHubReadIssuesGrant),
 			propose("needs nothing"),
 		}, steps...)
 	})
@@ -371,8 +371,8 @@ func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 		state        model.State
 		note         string
 	}{
-		{"needs self-debug", "self-debug", model.StateProposed, model.CatalogueRequiresPersonNote([]string{"self-debug"})},
-		{"needs gemini-key", "gemini-key", model.StateProposed, "settings/capabilities.yml refuses what it asked for"},
+		{"needs github-sandbox", "github-sandbox", model.StateProposed, model.CatalogueRequiresPersonNote([]string{"github-sandbox"})},
+		{"needs read-issues", model.GitHubReadIssuesGrant, model.StateProposed, "settings/capabilities.yml refuses what it asked for"},
 		{"needs nothing", "", model.StateQueued, ""},
 	} {
 		p, ok := byTitle[tc.title]

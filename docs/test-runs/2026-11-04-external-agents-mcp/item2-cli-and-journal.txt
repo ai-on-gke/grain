@@ -1,0 +1,308 @@
+
+=== 1. Minting tokens (alice self-service, operator for bob, external agent, acting task) ===
+alice self-service naming bob -> HTTP 403: {"error":"a self-service credential belongs to alice@example.com, not \"bob@example.com\""}
+Token A (alice-self): {"id":"1","name":"alice-self","principal":"external:alice-self","tokenPrefix":"gma_0435","scopeSet":"grain/external-dev","resolvedScopes":["ci:read@acme/app","ci:write@acme/app","deployment:read@acme/app","merge:write@acme/app","repos:read@acme/app","sandboxes:read@acme/app","tasks:read@acme/app","tasks:write@acme/app","templates:read@acme/app"],"repos":["acme/app"],"rateLimit":60,"maxConcurrent":8,"createdBy":"human:alice@example.com","owner":"alice@example.com","createdAt":"2026-11-04T22:43:03.322452095Z","active":true}
+Token B (bob-by-op): {"id":"2","name":"bob-by-op","principal":"external:bob-by-op","tokenPrefix":"gma_5b84","scopeSet":"grain/external-dev","resolvedScopes":["ci:read@acme/app","ci:write@acme/app","deployment:read@acme/app","merge:write@acme/app","repos:read@acme/app","sandboxes:read@acme/app","tasks:read@acme/app","tasks:write@acme/app","templates:read@acme/app"],"repos":["acme/app"],"rateLimit":60,"maxConcurrent":8,"createdBy":"human:operator@example.com","owner":"bob@example.com","createdAt":"2026-11-04T22:43:03.409126133Z","active":true}
+external agent widening scopes -> HTTP 403: {"error":"an agent cannot grant api:grain/external-dev, which its own task does not hold"}
+external agent naming bob -> HTTP 403: {"error":"an agent cannot issue a credential on behalf of \"bob@example.com\""}
+Token C1 (alice-child-agent, minted by external agent): {"id":"4","name":"alice-child-agent","principal":"external:alice-child-agent","tokenPrefix":"gma_71fc","scopes":["tasks:read","tasks:write"],"resolvedScopes":["tasks:read@acme/app","tasks:write@acme/app"],"repos":["acme/app"],"rateLimit":60,"maxConcurrent":8,"createdBy":"agent:external:alice-issuer","owner":"alice@example.com","createdAt":"2026-11-04T22:43:03.565460803Z","active":true}
+acting task naming alice -> HTTP 403: {"error":"an agent cannot issue a credential on behalf of \"alice@example.com\""}
+Token C2 (task-minted-bot, minted by task 2): {"id":"5","name":"task-minted-bot","principal":"external:task-minted-bot","tokenPrefix":"gma_1702","scopes":["tasks:read","tasks:write"],"resolvedScopes":["tasks:read@acme/app","tasks:write@acme/app"],"repos":["acme/app"],"rateLimit":60,"maxConcurrent":8,"createdBy":"agent:2","createdAt":"2026-11-04T22:43:03.702185585Z","active":true}
+
+=== 2. Filing tasks and comments via grain CLI with GRAIN_CLIENT and GRAIN_CLIENT_SESSION ===
+CLI create (Task from alice self-minted token): 3 Task from alice self-minted token
+state:      proposed
+repo:       acme/app
+priority:   5
+auto-merge: false
+
+Filed via CLI walkthrough (claude-code/1.2.0, sess-alice-101).
+3 Task from alice self-minted token
+state:      proposed
+repo:       acme/app
+priority:   5
+auto-merge: false
+
+Filed via CLI walkthrough (claude-code/1.2.0, sess-alice-101).
+CLI create (Task from operator-minted bob token): 4 Task from operator-minted bob token
+state:      proposed
+repo:       acme/app
+priority:   5
+auto-merge: false
+
+Filed via CLI walkthrough (codex-cli/0.9.2, sess-bob-202).
+4 Task from operator-minted bob token
+state:      proposed
+repo:       acme/app
+priority:   5
+auto-merge: false
+
+Filed via CLI walkthrough (codex-cli/0.9.2, sess-bob-202).
+CLI create (Task from external-agent-minted child token): 5 Task from external-agent-minted child token
+state:      proposed
+repo:       acme/app
+priority:   5
+auto-merge: false
+
+Filed via CLI walkthrough (jetski/2.1, sess-child-303).
+5 Task from external-agent-minted child token
+state:      proposed
+repo:       acme/app
+priority:   5
+auto-merge: false
+
+Filed via CLI walkthrough (jetski/2.1, sess-child-303).
+CLI create (Task from task-minted unowned token): 6 Task from task-minted unowned token
+state:      proposed
+repo:       acme/app
+priority:   5
+auto-merge: false
+
+Filed via CLI walkthrough (subagent-runner/0.4, sess-taskbot-404).
+6 Task from task-minted unowned token
+state:      proposed
+repo:       acme/app
+priority:   5
+auto-merge: false
+
+Filed via CLI walkthrough (subagent-runner/0.4, sess-taskbot-404).
+
+=== 3. Body author spoof and X-Forwarded-User spoof checks ===
+Body author=mallory@example.com -> HTTP 403: {"error":"an agent cannot name somebody else as the author of work it files"}
+X-Forwarded-User=mallory + body filedVia=forged -> task 7 authorLabel=external\ agent\ alice-self\ for\ alice@example.com provenance=filed\ from\ spoof-check/1.0\ session=xfu\ by\ alice@example.com filedVia=spoof-check/1.0\ session=xfu
+
+=== 4. Reading back via grain get, grain list -filter, and grain fs read (grain task read) ===
+
+--- grain get 3 ---
+3 Task from alice self-minted token
+state:      proposed
+repo:       acme/app
+priority:   5
+auto-merge: false
+
+Filed via CLI walkthrough (claude-code/1.2.0, sess-alice-101).
+filed by:        external agent alice-self for alice@example.com
+provenance:      filed from claude-code/1.2.0 session=sess-alice-101 by alice@example.com
+
+history:
+  -> proposed        2026-11-04T22:43:03Z
+
+--- comment #2 by external agent alice-self for alice@example.com (from claude-code/1.2.0 session=sess-alice-101) ---
+Follow-up comment from alice-self CLI
+
+--- comment #3 by grain on behalf of external:alice-self ---
+External agent `alice-self` (`external:alice-self`) on behalf of `alice@example.com` called `POST /api/tasks/{id}/comments` through the agent API (scope `tasks:write`).
+
+--- grain fs read task://3/record.md (sandbox grain task read 3) ---
+Task 3: Task from alice self-minted token
+State: proposed
+Priority: 5
+Filed by: external agent alice-self for alice@example.com
+Provenance: filed from claude-code/1.2.0 session=sess-alice-101 by alice@example.com
+Filed at: 2026-11-04T22:43:03Z
+Repo: acme/app
+
+Description:
+  Filed via CLI walkthrough (claude-code/1.2.0, sess-alice-101).
+
+Attempts:
+  (none -- nothing has been dispatched for this task)
+
+Transitions:
+  2026-11-04T22:43:03Z  proposed
+
+Conversation (2):
+  [2026-11-04T22:43:03Z] external agent alice-self for alice@example.com (agent) (from claude-code/1.2.0 session=sess-alice-101):
+  Follow-up comment from alice-self CLI
+  [2026-11-04T22:43:03Z] grain on behalf of external:alice-self (automation):
+  External agent `alice-self` (`external:alice-self`) on behalf of `alice@example.com` called `POST /api/tasks/{id}/comments` through the agent API (scope `tasks:write`).
+
+--- grain get 4 ---
+4 Task from operator-minted bob token
+state:      proposed
+repo:       acme/app
+priority:   5
+auto-merge: false
+
+Filed via CLI walkthrough (codex-cli/0.9.2, sess-bob-202).
+filed by:        external agent bob-by-op for bob@example.com
+provenance:      filed from codex-cli/0.9.2 session=sess-bob-202 by bob@example.com
+
+history:
+  -> proposed        2026-11-04T22:43:03Z
+
+--- comment #4 by external agent bob-by-op for bob@example.com (from codex-cli/0.9.2 session=sess-bob-202) ---
+Follow-up comment from bob-by-op CLI
+
+--- comment #5 by grain on behalf of external:bob-by-op ---
+External agent `bob-by-op` (`external:bob-by-op`) on behalf of `bob@example.com` called `POST /api/tasks/{id}/comments` through the agent API (scope `tasks:write`).
+
+--- grain fs read task://4/record.md (sandbox grain task read 4) ---
+Task 4: Task from operator-minted bob token
+State: proposed
+Priority: 5
+Filed by: external agent bob-by-op for bob@example.com
+Provenance: filed from codex-cli/0.9.2 session=sess-bob-202 by bob@example.com
+Filed at: 2026-11-04T22:43:03Z
+Repo: acme/app
+
+Description:
+  Filed via CLI walkthrough (codex-cli/0.9.2, sess-bob-202).
+
+Attempts:
+  (none -- nothing has been dispatched for this task)
+
+Transitions:
+  2026-11-04T22:43:03Z  proposed
+
+Conversation (2):
+  [2026-11-04T22:43:03Z] external agent bob-by-op for bob@example.com (agent) (from codex-cli/0.9.2 session=sess-bob-202):
+  Follow-up comment from bob-by-op CLI
+  [2026-11-04T22:43:03Z] grain on behalf of external:bob-by-op (automation):
+  External agent `bob-by-op` (`external:bob-by-op`) on behalf of `bob@example.com` called `POST /api/tasks/{id}/comments` through the agent API (scope `tasks:write`).
+
+--- grain get 5 ---
+5 Task from external-agent-minted child token
+state:      proposed
+repo:       acme/app
+priority:   5
+auto-merge: false
+
+Filed via CLI walkthrough (jetski/2.1, sess-child-303).
+filed by:        external agent alice-child-agent for alice@example.com
+provenance:      filed from jetski/2.1 session=sess-child-303 by alice@example.com
+
+history:
+  -> proposed        2026-11-04T22:43:03Z
+
+--- comment #6 by external agent alice-child-agent for alice@example.com (from jetski/2.1 session=sess-child-303) ---
+Follow-up comment from alice-child-agent CLI
+
+--- comment #7 by grain on behalf of external:alice-child-agent ---
+External agent `alice-child-agent` (`external:alice-child-agent`) on behalf of `alice@example.com` called `POST /api/tasks/{id}/comments` through the agent API (scope `tasks:write`).
+
+--- grain fs read task://5/record.md (sandbox grain task read 5) ---
+Task 5: Task from external-agent-minted child token
+State: proposed
+Priority: 5
+Filed by: external agent alice-child-agent for alice@example.com
+Provenance: filed from jetski/2.1 session=sess-child-303 by alice@example.com
+Filed at: 2026-11-04T22:43:03Z
+Repo: acme/app
+
+Description:
+  Filed via CLI walkthrough (jetski/2.1, sess-child-303).
+
+Attempts:
+  (none -- nothing has been dispatched for this task)
+
+Transitions:
+  2026-11-04T22:43:03Z  proposed
+
+Conversation (2):
+  [2026-11-04T22:43:04Z] external agent alice-child-agent for alice@example.com (agent) (from jetski/2.1 session=sess-child-303):
+  Follow-up comment from alice-child-agent CLI
+  [2026-11-04T22:43:04Z] grain on behalf of external:alice-child-agent (automation):
+  External agent `alice-child-agent` (`external:alice-child-agent`) on behalf of `alice@example.com` called `POST /api/tasks/{id}/comments` through the agent API (scope `tasks:write`).
+
+--- grain get 6 ---
+6 Task from task-minted unowned token
+state:      proposed
+repo:       acme/app
+priority:   5
+auto-merge: false
+
+Filed via CLI walkthrough (subagent-runner/0.4, sess-taskbot-404).
+filed by:        external agent task-minted-bot
+provenance:      filed from subagent-runner/0.4 session=sess-taskbot-404 by operator@example.com
+
+history:
+  -> proposed        2026-11-04T22:43:04Z
+
+--- comment #8 by external agent task-minted-bot (from subagent-runner/0.4 session=sess-taskbot-404) ---
+Follow-up comment from task-minted-bot CLI
+
+--- comment #9 by grain on behalf of external:task-minted-bot ---
+External agent `task-minted-bot` (`external:task-minted-bot`) called `POST /api/tasks/{id}/comments` through the agent API (scope `tasks:write`).
+
+--- grain fs read task://6/record.md (sandbox grain task read 6) ---
+Task 6: Task from task-minted unowned token
+State: proposed
+Priority: 5
+Filed by: external agent task-minted-bot
+Provenance: filed from subagent-runner/0.4 session=sess-taskbot-404 by operator@example.com
+Filed at: 2026-11-04T22:43:04Z
+Repo: acme/app
+
+Description:
+  Filed via CLI walkthrough (subagent-runner/0.4, sess-taskbot-404).
+
+Attempts:
+  (none -- nothing has been dispatched for this task)
+
+Transitions:
+  2026-11-04T22:43:04Z  proposed
+
+Conversation (2):
+  [2026-11-04T22:43:04Z] external agent task-minted-bot (agent) (from subagent-runner/0.4 session=sess-taskbot-404):
+  Follow-up comment from task-minted-bot CLI
+  [2026-11-04T22:43:04Z] grain on behalf of external:task-minted-bot (automation):
+  External agent `task-minted-bot` (`external:task-minted-bot`) called `POST /api/tasks/{id}/comments` through the agent API (scope `tasks:write`).
+
+--- grain get 7 ---
+7 Task with forged X-Forwarded-User and body filedVia
+state:      proposed
+repo:       acme/app
+priority:   5
+auto-merge: false
+filed by:        external agent alice-self for alice@example.com
+provenance:      filed from spoof-check/1.0 session=xfu by alice@example.com
+
+history:
+  -> proposed        2026-11-04T22:43:04Z
+
+--- grain fs read task://7/record.md (sandbox grain task read 7) ---
+Task 7: Task with forged X-Forwarded-User and body filedVia
+State: proposed
+Priority: 5
+Filed by: external agent alice-self for alice@example.com
+Provenance: filed from spoof-check/1.0 session=xfu by alice@example.com
+Filed at: 2026-11-04T22:43:04Z
+Repo: acme/app
+
+Description:
+  (none)
+
+Attempts:
+  (none -- nothing has been dispatched for this task)
+
+Transitions:
+  2026-11-04T22:43:04Z  proposed
+
+Conversation (0):
+
+--- grain list -filter filed_via:has:sess-bob-202 ---
+4      proposed        acme/app                 Task from operator-minted bob token
+
+=== 5. SQLite rows and daemon journal lines ===
+2026/11/04 22:43:02 grain api: operator (access code) (access-code) changed deployment: POST /api/deployment/git-connections
+2026/11/04 22:43:03 grain api: operator (access code) (access-code) changed settings: PUT /api/settings
+2026/11/04 22:43:03 grain api: refused {agent, external:alice-issuer on behalf of alice@example.com} POST /api/external-agents/tokens: an agent cannot grant api:grain/external-dev, which its own task does not hold
+2026/11/04 22:43:03 grain api: {agent, external:alice-issuer on behalf of alice@example.com} POST /api/external-agents/tokens scope=capabilities:admin repo="" reason="walkthrough item 2 cross-owner test" -> 403
+2026/11/04 22:43:03 grain api: {agent, external:alice-issuer on behalf of alice@example.com} POST /api/external-agents/tokens scope=capabilities:admin repo="" reason="walkthrough item 2 child token mint" -> 201
+2026/11/04 22:43:03 grain api: {agent, 2} POST /api/external-agents/tokens scope=capabilities:admin repo="" reason="walkthrough item 2 task spoof owner test" -> 403
+2026/11/04 22:43:03 grain api: {agent, 2} POST /api/external-agents/tokens scope=capabilities:admin repo="" reason="walkthrough item 2 task mint unowned token" -> 201
+2026/11/04 22:43:03 grain api: {agent, external:alice-self on behalf of alice@example.com} POST /api/tasks scope=tasks:write repo="acme/app" reason="" client="claude-code/1.2.0 session=sess-alice-101" -> 201
+2026/11/04 22:43:03 grain api: {agent, external:alice-self on behalf of alice@example.com} POST /api/tasks/{id}/comments scope=tasks:write repo="acme/app" reason="" client="claude-code/1.2.0 session=sess-alice-101" -> 200
+2026/11/04 22:43:03 grain api: {agent, external:alice-self on behalf of alice@example.com} GET /api/tasks/{id} scope=tasks:read repo="acme/app" reason="" client="claude-code/1.2.0 session=sess-alice-101" -> 200
+2026/11/04 22:43:03 grain api: {agent, external:bob-by-op on behalf of bob@example.com} POST /api/tasks scope=tasks:write repo="acme/app" reason="" client="codex-cli/0.9.2 session=sess-bob-202" -> 201
+2026/11/04 22:43:03 grain api: {agent, external:bob-by-op on behalf of bob@example.com} POST /api/tasks/{id}/comments scope=tasks:write repo="acme/app" reason="" client="codex-cli/0.9.2 session=sess-bob-202" -> 200
+2026/11/04 22:43:03 grain api: {agent, external:bob-by-op on behalf of bob@example.com} GET /api/tasks/{id} scope=tasks:read repo="acme/app" reason="" client="codex-cli/0.9.2 session=sess-bob-202" -> 200
+2026/11/04 22:43:03 grain api: {agent, external:alice-child-agent on behalf of alice@example.com} POST /api/tasks scope=tasks:write repo="acme/app" reason="" client="jetski/2.1 session=sess-child-303" -> 201
+2026/11/04 22:43:04 grain api: {agent, external:alice-child-agent on behalf of alice@example.com} POST /api/tasks/{id}/comments scope=tasks:write repo="acme/app" reason="" client="jetski/2.1 session=sess-child-303" -> 200
+2026/11/04 22:43:04 grain api: {agent, external:alice-child-agent on behalf of alice@example.com} GET /api/tasks/{id} scope=tasks:read repo="acme/app" reason="" client="jetski/2.1 session=sess-child-303" -> 200
+2026/11/04 22:43:04 grain api: {agent, external:task-minted-bot} POST /api/tasks scope=tasks:write repo="acme/app" reason="" client="subagent-runner/0.4 session=sess-taskbot-404" -> 201
+2026/11/04 22:43:04 grain api: {agent, external:task-minted-bot} POST /api/tasks/{id}/comments scope=tasks:write repo="acme/app" reason="" client="subagent-runner/0.4 session=sess-taskbot-404" -> 200
+2026/11/04 22:43:04 grain api: {agent, external:task-minted-bot} GET /api/tasks/{id} scope=tasks:read repo="acme/app" reason="" client="subagent-runner/0.4 session=sess-taskbot-404" -> 200
+2026/11/04 22:43:04 grain api: refused {agent, external:alice-self on behalf of alice@example.com} POST /api/tasks: an agent cannot name somebody else as the author of work it files
+2026/11/04 22:43:04 grain api: {agent, external:alice-self on behalf of alice@example.com} POST /api/tasks scope=tasks:write repo="acme/app" reason="" client="spoof-check/1.0 session=xfu" -> 201

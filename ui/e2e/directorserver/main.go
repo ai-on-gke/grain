@@ -42,9 +42,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
-	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
@@ -540,7 +537,7 @@ func run() error {
 
 	// The Director's defaults carry api:deployment:read, which, like
 	// every api grant, is the daemon's dynamic provider's to resolve.
-	capabilities := model.NewCapabilityRegistry(append(admincaps.Providers(), bootstrap.New(), durable.New(), prioritydispatch.New())...)
+	capabilities := model.NewCapabilityRegistry(admincaps.Providers()...)
 	capabilities.RegisterDynamic(ui.AgentAPIDynamicProvider)
 	deps := orchestrator.Deps{
 		Store: store, Sandboxes: sandboxes,

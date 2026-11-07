@@ -155,7 +155,10 @@ func (s *Store) PutGitHubCIJob(ctx context.Context, j GitHubCIJob) error {
 			return err
 		}
 		merged := mergeGitHubCIJob(prev, j)
-		return putGitHubCIJob(ctx, tx, merged)
+		if err := putGitHubCIJob(ctx, tx, merged); err != nil {
+			return err
+		}
+		return recordGitHubCIEventTx(ctx, tx, prev, merged)
 	})
 }
 

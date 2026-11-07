@@ -97,35 +97,13 @@ func DefaultConfig(connURL string) Config {
 // the connection pool and keepalive settings, wraps the driver with
 // query/dialect adaptation for model.Store, and verifies connectivity.
 func Open(cfg Config) (*sql.DB, error) {
-	connConfig, err := parseConnConfig(cfg)
+	connConfig, err := buildConnConfig(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("postgres: parsing config: %w", err)
-	}
-
-	keepAlive := cfg.KeepAlive
-	if keepAlive <= 0 {
-		keepAlive = 1 * time.Minute
-	}
-	connectTimeout := cfg.ConnectTimeout
-	if connectTimeout <= 0 {
-		connectTimeout = 10 * time.Second
-	}
-
-	dialer := &net.Dialer{
-		KeepAlive: keepAlive,
-		Timeout:   connectTimeout,
-	}
-	connConfig.DialFunc = dialer.DialContext
-
-	if cfg.SearchPath != "" {
-		if connConfig.RuntimeParams == nil {
-			connConfig.RuntimeParams = make(map[string]string)
-		}
-		connConfig.RuntimeParams["search_path"] = cfg.SearchPath
+		return nil, err
 	}
 
 	rawConnector := stdlib.GetConnector(*connConfig)
-	wrappedConnector := newAdaptedConnector(rawConnector)
+	wrappedConnector := newAdaptedConnector(rawConnector, cfg)
 	db := sql.OpenDB(wrappedConnector)
 
 	maxOpen := cfg.MaxOpenConns
@@ -175,6 +153,37 @@ FROM pg_indexes
 WHERE schemaname = current_schema()`)
 
 	return db, nil
+}
+
+func buildConnConfig(cfg Config) (*pgx.ConnConfig, error) {
+	connConfig, err := parseConnConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: parsing config: %w", err)
+	}
+
+	keepAlive := cfg.KeepAlive
+	if keepAlive <= 0 {
+		keepAlive = 1 * time.Minute
+	}
+	connectTimeout := cfg.ConnectTimeout
+	if connectTimeout <= 0 {
+		connectTimeout = 10 * time.Second
+	}
+
+	dialer := &net.Dialer{
+		KeepAlive: keepAlive,
+		Timeout:   connectTimeout,
+	}
+	connConfig.DialFunc = dialer.DialContext
+
+	if cfg.SearchPath != "" {
+		if connConfig.RuntimeParams == nil {
+			connConfig.RuntimeParams = make(map[string]string)
+		}
+		connConfig.RuntimeParams["search_path"] = cfg.SearchPath
+	}
+
+	return connConfig, nil
 }
 
 func parseConnConfig(cfg Config) (*pgx.ConnConfig, error) {
@@ -325,4 +334,17 @@ func (cfg Config) SanitizedDSN() string {
 	}
 	u.RawQuery = reQueryPassword.ReplaceAllString(u.RawQuery, "${1}******")
 	return u.String()
+}
+
+// ConfigFromDB returns the Config a *sql.DB was opened with when it was
+// created by Open.
+func ConfigFromDB(db *sql.DB) (Config, bool) {
+	if db == nil {
+		return Config{}, false
+	}
+	d, ok := db.Driver().(*adaptedDriver)
+	if !ok {
+		return Config{}, false
+	}
+	return d.cfg, true
 }

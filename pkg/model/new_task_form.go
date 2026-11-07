@@ -43,8 +43,8 @@ const (
 var NewTaskFormFieldIDs = []string{
 	"title", "description", "attachments", "customFields", "repo", "newBranch", "base",
 	"writes", "reads", "autoMerge", "noPort", "fixesBaseBranch", "grants", "legacyCapabilities",
-	"model", "dependsOn", "agentBackendId", "networkAccess", "nothingNeededAction",
-	"reviewTemplateId", "promptExtension", "hostd", "sandboxShape", "approved", "atFront",
+	"admission", "model", "dependsOn", "agentBackendId", "networkAccess", "nothingNeededAction",
+	"reviewTemplateId", "promptExtension", "sandboxShape", "approved", "atFront",
 }
 
 // IsNewTaskFormField reports whether id names a field of the form.
@@ -279,6 +279,12 @@ func (f *NewTaskForm) Validate() error {
 		for _, id := range ids {
 			fc := l.Fields[id]
 			at := where + ".fields." + id
+			if id == "hostd" {
+				// The form's hostd box until schema 111: a task has no
+				// hostd, so a default for one is refused, not dropped.
+				errs = append(errs, at+": a task has no hostd field any more -- hostd is set on the model connection or capability server, not the task")
+				continue
+			}
 			if !IsNewTaskFormField(id) {
 				errs = append(errs, fmt.Sprintf("%s: unknown field (the form's fields are %s)", at, strings.Join(NewTaskFormFieldIDs, ", ")))
 				continue

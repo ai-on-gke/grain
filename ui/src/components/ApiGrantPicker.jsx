@@ -28,6 +28,7 @@ import {
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
+import SearchSelect from "./SearchSelect.jsx";
 import {
   DANGEROUS_API_HINT,
   apiGrantId,
@@ -225,29 +226,23 @@ export default function ApiGrantPicker({
           </Box>
         )}
         {repos.length > 0 && (
-          <TextField
-            select
-            size="small"
+          <SearchSelect
             margin="dense"
-            fullWidth
             id={`${regionId}-repo`}
             label="Limit what you tick to"
             value={repo}
-            onChange={(e) => setRepo(e.target.value)}
+            onChange={setRepo}
             helperText={
               repo
                 ? `A tick grants it on ${repo} only (api:<scope>@${repo}).`
                 : "A tick grants it on every repository."
             }
             sx={{ mt: 1.5 }}
-          >
-            <MenuItem value="">All repositories</MenuItem>
-            {repos.map((r) => (
-              <MenuItem key={r} value={r}>
-                {r}
-              </MenuItem>
-            ))}
-          </TextField>
+            options={[
+              { value: "", label: "All repositories" },
+              ...repos.map((r) => ({ value: r, label: r })),
+            ]}
+          />
         )}
         {presets.length > 0 && (
           <Box role="group" aria-label="API presets" className="api-presets">

@@ -1,0 +1,104 @@
+name: Release train
+title: Run the release train (check, release, cut)
+base: main
+# Reads main's tests.yml / release.yml / nightly.yml verdicts (GitHub
+# Actions runs) and the rc's grain/release-qualification check run through
+# grain's own forge connection: `grain ci list --format github|github-jobs`
+# and `grain ci checks --format github`, which answer in GitHub's own REST
+# shapes, the ones scripts/candidate-gate.sh reads.
+# Reading them takes ci:read on this repository: api:ci-read@ai-on-gke/grain.
+# grain-ci alone is not enough -- ai-on-gke/grain's CI is GitHub Actions
+# (ci_mode: github), and a task filed for a repository grain CI does not
+# judge has grain#ci stripped (model.applyGrainCIGrant), so every tick
+# failed at its first `grain ci list` (docs/test-runs/2026-11-04-release-train.md,
+# finding 2). grain-ci stays for a deployment that runs grain CI here.
+# The api:release-gate-read preset and package-publish are CI-only
+# (model.CapabilitySpec.CIOnly), so a task holds neither: this train pushes
+# git refs and nothing else, and its images are a CI job's to publish.
+capabilities: [grain-ci, api:ci-read@ai-on-gke/grain]
+# The release train's tag grant (design/playbook/releases.playbook.md §0.4):
+# the refs the train owns, and no more. Read from main by the declaration
+# sync, scoped to ai-on-gke/grain and to tasks filed from this template,
+# and pushed with the filing team's own credential (pkg/model/ref_push.go,
+# gitproxy.ModelAuthorizer.AuthorizeRefUpdates).
+#
+# Since 2026-11-04 the train releases a qualified rc itself (playbook §1),
+# so the grant reaches vM.Y.0 -- created once, never moved or deleted --
+# and `latest`, force-moved. path.Match cannot say "digits", so the
+# release tags are spelt by length: v?.?.0 to v??.???.0, which a -rc,
+# -pending, -retracted or patch (vM.Y.Z, Z >= 1) tag never matches.
+# scripts/release-from-trunk.sh narrows that further before it pushes:
+# only the version it is promoting, and latest, each on the exact commit
+# of the rc whose Stage 1 and Stage 2 both passed in that same run
+# (check_push / promotion_allowed). Changing this list waits for a
+# person's Submit (pkg/trustboundary's template-push category); so does
+# this file.
+#
+# Each push also has to land on a commit main (or candidate, or a
+# release/v* branch) already has: the proxy refuses a commit the push
+# carries or one only on this task's branch (pushCheck.onHistory), since
+# the workflows these refs start run the pushed commit's code.
+push:
+  - refs/tags/v*-rc.*
+  - refs/tags/v*-pending
+  - refs/tags/v*-discarded
+  - ref: refs/heads/candidate
+    force: true
+  # The rc.3 convergence branch (playbook §5), made once from rc.2's
+  # commit: created only -- no force, no delete.
+  - refs/heads/release/v*
+  # The release itself: vM.Y.0 created once, latest moved onto it.
+  - refs/tags/v?.?.0
+  - refs/tags/v?.??.0
+  - refs/tags/v?.???.0
+  - refs/tags/v??.?.0
+  - refs/tags/v??.??.0
+  - refs/tags/v??.???.0
+  - ref: refs/tags/latest
+    force: true
+body: |
+  Run one tick of grain's continuous release train
+  (`design/playbook/releases.playbook.md` §0.4). A schedule
+  (`.grain/schedules/release-train.yml`) files this every 20 minutes; most
+  ticks find nothing to do.
+
+  Run exactly this, once, and nothing else:
+  ```
+  bash ~/work/scripts/release-train-task.sh 2>&1 | tee ~/train.log | tail -n 60
+  ```
+  It makes a scratch clone, writes the CI verdicts from grain's own forge
+  connection (`grain ci list` / `grain ci checks`, unedited), and runs
+  `scripts/release-from-trunk.sh` in train mode under this template's tag
+  grant (`RELEASE_PUSH_GRANT=train`). In one run it may:
+
+  - **check**: judge the rc in qualification (Stage 1 `nightly.yml`, Stage 2
+    `grain/release-qualification`);
+  - **release** an rc that passed both: tag `vX.Y.0` on its commit and move
+    `latest` onto it, with no person's approval. CI publishes the images
+    and the GitHub Release from the tag (`publish-release.yml`);
+  - **stage** `vX.Y.0-pending` instead, for a person, when the train may
+    not release it itself: a major bump, breaking changes, or
+    `RELEASE_AUTO_PROMOTE=false`;
+  - **drop** an rc that failed (`vX.Y.Z-rc.N-discarded`) and cut the next
+    rc once `grain/rc-hold` lets it;
+  - **cut**: tag the newest known-good `main` commit `vX.Y.Z-rc.N` and
+    force-move `refs/heads/candidate` onto it.
+
+  Then end the task by the last line it printed:
+
+  - `RELEASE_TRAIN_RESULT=noop`: call `nothing_needed`, with the train's
+    one-line reason (its last `phase` line). Do not investigate further.
+  - `RELEASE_TRAIN_RESULT=acted`: call `comment_on_issue` with what it did,
+    from its `output` lines: the rc it cut (and the commit), the rc it
+    released as `vX.Y.0` or staged as `-pending` and why, or the rc it
+    dropped and the failing jobs.
+  - `RELEASE_TRAIN_RESULT=failed`: call `comment_on_issue` with the
+    script's output. `escalated_version=` means `RELEASE_MAX_RC_ATTEMPTS`
+    rcs of that version were dropped and a person decides.
+
+  Never re-run it with different settings, never write, edit or filter a
+  verdict file, never run the script's `approve`, `reject` or `rollback`
+  modes or `release-images.sh`, and never push a tag yourself. A refusal
+  from the script or the proxy is the grant doing its job, not something
+  to work around. This task changes no file, so it never opens a pull
+  request.

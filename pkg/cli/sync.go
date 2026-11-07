@@ -71,6 +71,7 @@ import (
 	"google.golang.org/api/option"
 
 	"github.com/ai-on-gke/grain/pkg/gcpsetup"
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -361,6 +362,7 @@ var settingsDiffRows = []settingsDiffRow{
 	{"ciAgeBoost", "ci queue age boost", func(s ui.Settings) any { return s.CIAgeBoost }},
 	{"ciReserveAfter", "ci capacity reserved after", func(s ui.Settings) any { return s.CIReserveAfter }},
 	{"defaultCapabilities", "default capabilities", func(s ui.Settings) any { return strings.Join(s.DefaultCapabilities, ", ") }},
+	{"defaultAdmission", "default admission", func(s ui.Settings) any { return s.DefaultAdmission }},
 	{"agentBackends", "agent backends", func(s ui.Settings) any { return fmt.Sprint(s.AgentBackends) }},
 	{"newestFirst", "newest first", func(s ui.Settings) any { return s.NewestFirst }},
 	{"showClosedByDefault", "show closed by default", func(s ui.Settings) any { return s.ShowClosedByDefault }},
@@ -372,8 +374,14 @@ var settingsDiffRows = []settingsDiffRow{
 	{"autoUpgradeChannel", "automatic upgrade channel", func(s ui.Settings) any { return s.AutoUpgradeChannel }},
 	{"autoUpgradeTime", "automatic upgrade time", func(s ui.Settings) any { return s.AutoUpgradeTime }},
 	{"autoUpgradeOn", "automatic upgrade mode", func(s ui.Settings) any { return s.AutoUpgradeOn }},
+	{"ownerTrust", "owner-trust proposal policy", func(s ui.Settings) any { return ownerTrustRows(s.OwnerTrust) }},
+	{"autoGrantContextReads", "auto-grant context reads", func(s ui.Settings) any { return strings.Join(s.AutoGrantContextReads, ", ") }},
 	{"timeZone", "time zone", func(s ui.Settings) any { return s.TimeZone }},
 	{"settingsLocked", "settings locked", func(s ui.Settings) any { return s.SettingsLocked }},
+	{"registry", "registry connection", func(s ui.Settings) any {
+		b, _ := json.Marshal(s.Registry)
+		return string(b)
+	}},
 }
 
 // settingsDiffExceptions names any ui.UpdateSettingsRequest field that
@@ -390,6 +398,16 @@ var settingsDiffRows = []settingsDiffRow{
 // exception outliving the field it excuses fails rather than quietly
 // excusing nothing.
 var settingsDiffExceptions = map[string]string{}
+
+// ownerTrustRows is the owner-trust policy as a list row reads it:
+// "<owner> on <repo>" per rule.
+func ownerTrustRows(rules []model.OwnerTrustRule) []string {
+	out := make([]string, 0, len(rules))
+	for _, r := range rules {
+		out = append(out, r.Owner+" on "+r.Repo)
+	}
+	return out
+}
 
 // printSettingsDiff prints only what actually changed -- a sync run
 // against a config file whose "settings" section already matches the

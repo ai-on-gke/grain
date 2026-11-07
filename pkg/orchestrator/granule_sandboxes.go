@@ -1051,8 +1051,7 @@ func (k *GranuleSandboxes) networkVanished(ctx context.Context) bool {
 // for this daemon's model-provider keys, GitHub tokens or cloud
 // credentials, and a child started with a nil Env inherits every one of
 // them -- which is what tests/security's exec-env-implicit ratchet exists
-// to stop. The same set pkg/agent/custom's mcpServerEnv names, for the same
-// reason and with the same property: none of them is a key.
+// to stop. None of them is a key.
 // dockerCommand builds a docker invocation with that environment, so a new
 // docker call in this package cannot forget it by being written the obvious
 // way.

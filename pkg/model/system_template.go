@@ -178,6 +178,9 @@ func SystemTemplate(id string, stateRepo RepoRef) *Template {
 	if stem, ok := WorkflowReviewStem(id); ok {
 		return workflowReviewTemplate(stem)
 	}
+	if stem, ok := GitHubWorkflowReviewStem(id); ok {
+		return gitHubWorkflowReviewTemplate(stem)
+	}
 	return nil
 }
 
@@ -308,7 +311,8 @@ func memoryAgentTemplate(stateRepo RepoRef) *Template {
 		NetworkAccess: NetworkOpen,
 		Grants: []Grant{
 			{Capability: "api:memory", Via: GrantByGrain},
-			{Capability: "self-debug", Via: GrantByGrain},
+			{Capability: APIGrantPrefix + "self-debug", Via: GrantByGrain},
+			{Capability: GrainSourceGrant, Via: GrantByGrain},
 		},
 	}
 	if stateRepo.Owner != "" {
@@ -536,7 +540,8 @@ func releaseNotesTemplate(stateRepo RepoRef) *Template {
 		NetworkAccess: NetworkOpen,
 		Grants: []Grant{
 			{Capability: "api:release-notes", Via: GrantByGrain},
-			{Capability: "self-debug", Via: GrantByGrain},
+			{Capability: APIGrantPrefix + "self-debug", Via: GrantByGrain},
+			{Capability: GrainSourceGrant, Via: GrantByGrain},
 		},
 	}
 	if stateRepo.Owner != "" {
@@ -799,7 +804,8 @@ func infraReviewTemplate(stateRepo RepoRef) *Template {
 			// pkg/capability/selfdebug and pkg/capability/grainci's own
 			// CapabilityName constants: those packages import this one,
 			// so this one cannot import them.
-			{Capability: "self-debug", Via: GrantByGrain},
+			{Capability: APIGrantPrefix + "self-debug", Via: GrantByGrain},
+			{Capability: GrainSourceGrant, Via: GrantByGrain},
 			{Capability: GrainCIGrant, Via: GrantByGrain},
 		},
 	}

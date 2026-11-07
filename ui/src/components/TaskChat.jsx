@@ -14,6 +14,7 @@
 
 import LocalScriptApprovals from "./detail/LocalScriptApprovals.jsx";
 import PendingConfigChange from "./detail/PendingConfigChange.jsx";
+import PendingAccess from "./detail/PendingAccess.jsx";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Box, Button, Typography } from "@mui/material";
 import {
@@ -48,6 +49,7 @@ import AttachmentPicker, {
 } from "./AttachmentPicker.jsx";
 import CopyButton from "./CopyButton.jsx";
 import Markdown from "./Markdown.jsx";
+import AccessGate from "./AccessGate.jsx";
 
 // TaskChat is an interactive task's conversation as a chat window
 // (grain/task-414): the messages in bubbles, oldest at the top, a
@@ -642,6 +644,7 @@ export default function TaskChat({
       </span>
       <LocalScriptApprovals t={t} act={act} />
       <PendingConfigChange t={t} act={act} />
+      <PendingAccess t={t} act={act} />
       <div className="task-chat-window" ref={windowRef} id={windowId}>
         <MainContainer>
           <ChatContainer>
@@ -672,9 +675,11 @@ export default function TaskChat({
       <div className="task-chat-compose" ref={composeRef}>
         <AttachmentPicker files={attachments} onChange={setAttachments} />
         {busy && (
-          <Button variant="outlined" color="error" onClick={stop}>
-            Stop
-          </Button>
+          <AccessGate scope="tasks:write" repo={t?.repo}>
+            <Button variant="outlined" color="error" onClick={stop}>
+              Stop
+            </Button>
+          </AccessGate>
         )}
         {/* Pause and Resume (ui.Client.Pause): beside Stop, which ends
             only this turn, because a pause is the other way to make a
@@ -684,21 +689,23 @@ export default function TaskChat({
         {/* Not on a console session (onStop: its own turn control) nor
             on a session not yet started (onSend: there is no task yet). */}
         {t?.id && t.state !== "closed" && !onStop && !onSend && (
-          <Button
-            variant="outlined"
-            onClick={() =>
-              act(
-                () =>
-                  api(
-                    `/api/tasks/${t.id}/${isTaskPaused(t) ? "resume" : "pause"}`,
-                    { method: "POST" },
-                  ),
-                t.id,
-              )
-            }
-          >
-            {isTaskPaused(t) ? "Resume" : "Pause"}
-          </Button>
+          <AccessGate scope="tasks:write" repo={t.repo}>
+            <Button
+              variant="outlined"
+              onClick={() =>
+                act(
+                  () =>
+                    api(
+                      `/api/tasks/${t.id}/${isTaskPaused(t) ? "resume" : "pause"}`,
+                      { method: "POST" },
+                    ),
+                  t.id,
+                )
+              }
+            >
+              {isTaskPaused(t) ? "Resume" : "Pause"}
+            </Button>
+          </AccessGate>
         )}
         <Button
           variant="outlined"

@@ -170,7 +170,6 @@ describe("CLIRunLocations with no host executor", () => {
             "A daemon upgrade interrupts codex runs: codex runs in the daemon's own container, so the restart finishes each run in flight as interrupted and queues its task again.",
         }),
         inPod("antigravity"),
-        inPod("custom"),
       ],
     });
   });
@@ -262,7 +261,7 @@ describe("CLIRunLocations behind grain hostd", () => {
     ).toBeNull();
     expect(
       screen.getByTestId("cli-run-antigravity-resolved"),
-    ).toHaveTextContent("host (/opt/fakeagy/agy, through grain hostd)");
+    ).toHaveTextContent("host (/opt/fakeagy/agy, through the host agent)");
   });
 
   it("says when hostd is updating, and when it speaks a protocol this daemon cannot", async () => {
@@ -322,7 +321,7 @@ describe("a grain hostd that dials in", () => {
     render(<CLIRunLocations showError={vi.fn()} />);
     const status = await screen.findByTestId("cli-run-hostd-status");
     expect(status).toHaveTextContent(
-      "grain hostd is up on workstation, connected to this daemon, offering cli agy, capability corp-search. Host runs go through it.",
+      "The host agent is up on workstation, connected to this daemon, offering cli agy, capability corp-search. Host runs go through it.",
     );
     expect(status).not.toHaveTextContent("at undefined");
   });
@@ -340,20 +339,20 @@ describe("a grain hostd that dials in", () => {
     render(<CLIRunLocations showError={vi.fn()} />);
     const status = await screen.findByTestId("cli-run-hostd-status");
     expect(status).toHaveTextContent(
-      "This daemon takes a grain hostd that dials in to it, but none is connected. A CLI set to host fails its runs until one does.",
+      "This daemon takes a host that dials in to it, but none is connected. A CLI set to host fails its runs until one does.",
     );
     expect(status).toHaveTextContent(
-      "this daemon logs a hostd it refuses for its token.",
+      "this daemon logs a host it refuses for its token.",
     );
     // An installed grain-hostd.service takes the flags in a drop-in, not
     // a second hostd beside it sharing its state directory.
     expect(status).toHaveTextContent(
-      "rather than starting a second hostd beside it (the two would share one state directory). Run sudo systemctl edit grain-hostd.service",
+      "rather than starting a second host agent beside it (the two would share one state directory). Run sudo systemctl edit grain-hostd.service",
     );
     // The browser's origin may be a proxy hostd cannot reach, so the URL
     // stays a placeholder.
     expect(screen.getByTestId("cli-run-hostd-dropin").textContent).toBe(
-      "[Service]\nExecStart=\nExecStart=<the unit's ExecStart> -server <this daemon's URL> -token-file <the hostd token>",
+      "[Service]\nExecStart=\nExecStart=<the unit's ExecStart> -server <this daemon's URL> -token-file <the host token>",
     );
     expect(status).toHaveTextContent(
       "Then run sudo systemctl restart grain-hostd.service.",
@@ -361,7 +360,7 @@ describe("a grain hostd that dials in", () => {
     // A hand-run hostd works without the installer's /run/grain-hostd
     // and /etc/grain/hostd.yaml.
     expect(screen.getByTestId("cli-run-hostd-command").textContent).toBe(
-      "grain hostd -server <this daemon's URL> -token-file <the hostd token> -socket= -allowlist <file>",
+      "grain host -server <this daemon's URL> -token-file <the host token> -socket= -allowlist <file>",
     );
   });
 });
@@ -404,10 +403,10 @@ describe("hostd's build and the processes it holds", () => {
     });
     render(<CLIRunLocations showError={vi.fn()} />);
     expect(await screen.findByTestId("cli-run-hostd-status")).toHaveTextContent(
-      "(build v2.3.0-dev.168+wt5047, hostd protocol 2), offering cli agy",
+      "(build v2.3.0-dev.168+wt5047, host agent protocol 2), offering cli agy",
     );
     const procs = screen.getByTestId("cli-run-hostd-processes");
-    expect(procs).toHaveTextContent("grain hostd is holding 2 processes");
+    expect(procs).toHaveTextContent("The host agent is holding 2 processes");
     expect(procs).toHaveTextContent(
       "agy for run 9-1 of task 9: pid 17616, running, no daemon attached",
     );
@@ -449,7 +448,7 @@ describe("resolvedLine through a containerised daemon", () => {
         location: "host",
         via: "hostd",
       }),
-    ).toBe("host (through grain hostd)");
+    ).toBe("host (through the host agent)");
     expect(
       resolvedLine({
         framework: "antigravity",
@@ -457,7 +456,7 @@ describe("resolvedLine through a containerised daemon", () => {
         via: "hostd",
         hostPath: "/opt/agy/bin/agy",
       }),
-    ).toBe("host (/opt/agy/bin/agy, through grain hostd)");
+    ).toBe("host (/opt/agy/bin/agy, through the host agent)");
   });
 });
 
@@ -486,7 +485,7 @@ describe("the detached location", () => {
         hostPath: "/usr/local/lib/grain/hostd/current/claude",
       }),
     ).toBe(
-      "detached (/usr/local/lib/grain/hostd/current/claude, through grain hostd as claude-detached; outlives a daemon upgrade)",
+      "detached (/usr/local/lib/grain/hostd/current/claude, through the host agent as claude-detached; outlives a daemon upgrade)",
     );
   });
 });
@@ -506,7 +505,7 @@ describe("HostdUpgrade", () => {
       />,
     );
     expect(screen.getByTestId("cli-run-hostd-current")).toHaveTextContent(
-      "Installed: build v2.2.0 (version dddd3333eeee); grain hostd runs version aaaa1111bbbb and restarts on the installed one once the runs it holds have ended.",
+      "Installed: build v2.2.0 (version dddd3333eeee); the host agent runs version aaaa1111bbbb and restarts on the installed one once the runs it holds have ended.",
     );
     expect(screen.getByTestId("cli-run-hostd-suggest")).toHaveTextContent(
       "Suggested allowlist entry: cli agy",

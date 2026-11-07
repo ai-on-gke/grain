@@ -21,13 +21,26 @@
 // serves a deployment whose config repository carries the file.
 
 import { expect, test } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
+// serveForm answers /api/config with the demo's config plus newTaskForm,
+// and hands back the object it reads that from: a test that goes on to a
+// second layout sets `served.newTaskForm` rather than unrouting and
+// routing again. Unrouting while the page still has an /api/config fetch
+// in flight (the app reads it again on its own) disposed that fetch's
+// response under the old handler, which then failed the test with
+// "Response has been disposed" -- seen once the machine is busy.
 async function serveForm(page, newTaskForm) {
+  const served = { newTaskForm };
   await page.route("**/api/config", async (route) => {
     const response = await route.fetch();
     const body = await response.json();
-    await route.fulfill({ response, json: { ...body, newTaskForm } });
+    await route.fulfill({
+      response,
+      json: { ...body, newTaskForm: served.newTaskForm },
+    });
   });
+  return served;
 }
 
 async function openForm(page) {
@@ -114,17 +127,17 @@ test("a repo switch re-applies layer defaults only to fields nobody touched", as
   await openForm(page);
   const dialog = page.getByRole("dialog");
   const repos = dialog.getByLabel(/^Repos/);
-  await repos.selectOption("none");
+  await chooseOption(repos, "none");
   const ext = dialog.locator("textarea[name=promptExtension]");
   await expect(dialog.getByLabel("Extension (default layer)")).toBeVisible();
   await expect(ext).toHaveValue("from the default layer");
-  await repos.selectOption("acme/widgets");
+  await chooseOption(repos, "acme/widgets");
   await expect(dialog.getByLabel("Extension (widgets layer)")).toBeVisible();
   await expect(ext).toHaveValue("from the widgets layer");
-  await repos.selectOption("none");
+  await chooseOption(repos, "none");
   await expect(ext).toHaveValue("from the default layer");
   await ext.fill("typed by a person");
-  await repos.selectOption("acme/widgets");
+  await chooseOption(repos, "acme/widgets");
   await expect(dialog.getByLabel("Extension (widgets layer)")).toBeVisible();
   await expect(ext).toHaveValue("typed by a person");
   await dialog.getByRole("button", { name: "Discard draft" }).click();
@@ -171,7 +184,7 @@ test("New task opened on a board takes the board's layer and files its boardId",
     });
   });
   await dialog.getByLabel(/^Title/).fill(`Board layer ${Date.now()}`);
-  await dialog.getByLabel(/^Repos/).selectOption("none");
+  await chooseOption(dialog.getByLabel(/^Repos/), "none");
   await dialog.getByRole("button", { name: "Create task" }).click();
   await expect.poll(() => filed?.boardId).toBe("board-1");
   await dialog.getByRole("button", { name: "Discard draft" }).click();
@@ -237,7 +250,7 @@ test("New task from a template takes its layer, switches layers, and files its t
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("heading", { name: "New task" })).toBeVisible();
   const picker = dialog.getByRole("combobox", { name: "Template" });
-  await expect(picker).toContainText("E2E release");
+  await expect(picker).toHaveValue(/E2E release/);
   // The picker sits at the top of the form, above the title it fills.
   expect(await top(picker)).toBeLessThan(
     await top(dialog.getByLabel(/^Title/)),
@@ -280,7 +293,7 @@ test("New task from a template takes its layer, switches layers, and files its t
     "placeholder",
     "Cut the release",
   );
-  await dialog.getByLabel(/^Repos/).selectOption("none");
+  await chooseOption(dialog.getByLabel(/^Repos/), "none");
   await dialog.getByRole("button", { name: "Create task" }).click();
   await expect.poll(() => filed?.templateId).toBe("e2e-release");
   expect(filed.title).toBe("");
@@ -296,7 +309,7 @@ test("New task from a template takes its layer, switches layers, and files its t
 test("a /new link names what a tucked-away or hidden custom field leaves out", async ({
   page,
 }) => {
-  await serveForm(page, {
+  const served = await serveForm(page, {
     default: { fields: { customFields: { visibility: "more" } } },
   });
   await page.goto("/new?field.priority=bogus");
@@ -306,11 +319,10 @@ test("a /new link names what a tucked-away or hidden custom field leaves out", a
   await expect(notice).toContainText("“bogus” is not one of its values");
   const title = await dialog.getByLabel(/^Title/).boundingBox();
   expect((await notice.boundingBox()).y).toBeLessThan(title.y);
-  await page.unroute("**/api/config");
 
-  await serveForm(page, {
+  served.newTaskForm = {
     default: { fields: { customFields: { visibility: "hidden" } } },
-  });
+  };
   await page.goto("/new?field.priority=high");
   await expect(notice).toBeVisible();
   await expect(notice).toContainText(
@@ -326,7 +338,7 @@ test("a /new link names what a tucked-away or hidden custom field leaves out", a
     });
   });
   await dialog.getByLabel(/^Title/).fill(`Hidden link value ${Date.now()}`);
-  await dialog.getByLabel(/^Repos/).selectOption("none");
+  await chooseOption(dialog.getByLabel(/^Repos/), "none");
   await dialog.getByRole("button", { name: "Create task" }).click();
   await expect.poll(() => filed !== null).toBe(true);
   expect(filed.customFields?.priority ?? "").not.toBe("high");
@@ -359,7 +371,7 @@ for (const scheme of ["light", "dark"]) {
         "atFront",
       ].map((id) => [id, { visibility: "more" }]),
     );
-    await serveForm(page, { default: { fields: more } });
+    const served = await serveForm(page, { default: { fields: more } });
     await openForm(page);
     const dialog = page.getByRole("dialog");
     const advanced = dialog.getByRole("button", { name: "Advanced options" });
@@ -380,7 +392,6 @@ for (const scheme of ["light", "dark"]) {
       expect(b.x).toBeGreaterThanOrEqual(box.x - 0.5);
       expect(b.x + b.width).toBeLessThanOrEqual(box.x + box.width + 0.5);
     }
-    await page.unroute("**/api/config");
 
     const hidden = Object.fromEntries(
       [
@@ -396,7 +407,7 @@ for (const scheme of ["light", "dark"]) {
         "attachments",
       ].map((id) => [id, { visibility: "hidden" }]),
     );
-    await serveForm(page, { default: { fields: hidden } });
+    served.newTaskForm = { default: { fields: hidden } };
     await openForm(page);
     await expect(advanced).toHaveCount(0);
     await expect(dialog.getByLabel(/^Title/)).toBeVisible();
@@ -442,7 +453,7 @@ test("Task priority follows the picked template and files what it shows", async 
     .click();
   const dialog = page.getByRole("dialog");
   const picker = dialog.getByRole("combobox", { name: "Template" });
-  await expect(picker).toContainText("E2E urgent");
+  await expect(picker).toHaveValue(/E2E urgent/);
   const pane = await dialog.boundingBox();
   const box = await picker.boundingBox();
   expect(box.x).toBeGreaterThanOrEqual(pane.x);
@@ -490,7 +501,7 @@ test("Task priority follows the picked template and files what it shows", async 
   await pick("No template");
   await pick("E2E urgent");
   await expect(priority).toHaveValue("5");
-  await dialog.getByLabel(/^Repos/).selectOption("none");
+  await chooseOption(dialog.getByLabel(/^Repos/), "none");
   await create.click();
   await expect.poll(() => filed?.templateId).toBe("e2e-urgent");
   expect(filed.priority).toBe(5);

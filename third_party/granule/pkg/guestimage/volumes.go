@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bwsalmon/granule/pkg/dockercli"
+	"github.com/gke-labs/granule/pkg/dockercli"
 )
 
 // ParseVolumes parses a raw volume string into normalized in-guest mount points.

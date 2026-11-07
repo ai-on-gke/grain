@@ -49,33 +49,35 @@ type (
 )
 
 const (
-	DefaultJobTimeout       = workflows.DefaultJobTimeout
-	DeployedImagesEnv       = workflows.DeployedImagesEnv
-	EventManual             = workflows.EventManual
-	EventPullRequest        = workflows.EventPullRequest
-	EventPush               = workflows.EventPush
-	EventRelease            = workflows.EventRelease
-	EventSchedule           = workflows.EventSchedule
-	GitHubRunnerLabel       = workflows.GitHubRunnerLabel
-	GitHubWorkflowDir       = workflows.GitHubWorkflowDir
-	NoWorkflowAnswersPrefix = workflows.NoWorkflowAnswersPrefix
-	PriorityMergeHead       = workflows.PriorityMergeHead
-	PriorityNormal          = workflows.PriorityNormal
-	PriorityReleaseGate     = workflows.PriorityReleaseGate
-	PriorityRepair          = workflows.PriorityRepair
-	PriorityUnderway        = workflows.PriorityUnderway
-	RecurrenceDaily         = workflows.RecurrenceDaily
-	RecurrenceEveryNHours   = workflows.RecurrenceEveryNHours
-	RecurrenceEveryNMinutes = workflows.RecurrenceEveryNMinutes
-	RecurrenceMonthly       = workflows.RecurrenceMonthly
-	RecurrenceWeekly        = workflows.RecurrenceWeekly
-	ReleaseAllowBreakingEnv = workflows.ReleaseAllowBreakingEnv
-	ReleaseShortSoakOKEnv   = workflows.ReleaseShortSoakOKEnv
-	ReleaseVersionEnv       = workflows.ReleaseVersionEnv
-	RequestedByEnv          = workflows.RequestedByEnv
-	RequestedByKindEnv      = workflows.RequestedByKindEnv
-	RunnerLabel             = workflows.RunnerLabel
-	WorkflowDir             = workflows.WorkflowDir
+	DefaultJobTimeout        = workflows.DefaultJobTimeout
+	DeployedImagesEnv        = workflows.DeployedImagesEnv
+	EventManual              = workflows.EventManual
+	EventPullRequest         = workflows.EventPullRequest
+	EventPush                = workflows.EventPush
+	EventRelease             = workflows.EventRelease
+	EventSchedule            = workflows.EventSchedule
+	GitHubRunnerLabel        = workflows.GitHubRunnerLabel
+	GitHubWorkflowDir        = workflows.GitHubWorkflowDir
+	NoWorkflowAnswersPrefix  = workflows.NoWorkflowAnswersPrefix
+	PriorityMergeHead        = workflows.PriorityMergeHead
+	PriorityNormal           = workflows.PriorityNormal
+	PriorityReleaseGate      = workflows.PriorityReleaseGate
+	PriorityRepair           = workflows.PriorityRepair
+	PriorityUnderway         = workflows.PriorityUnderway
+	RecurrenceDaily          = workflows.RecurrenceDaily
+	RecurrenceEveryNHours    = workflows.RecurrenceEveryNHours
+	RecurrenceEveryNMinutes  = workflows.RecurrenceEveryNMinutes
+	RecurrenceMonthly        = workflows.RecurrenceMonthly
+	RecurrenceWeekly         = workflows.RecurrenceWeekly
+	ReleaseAllowBreakingEnv  = workflows.ReleaseAllowBreakingEnv
+	ReleaseRollbackReasonEnv = workflows.ReleaseRollbackReasonEnv
+	ReleaseRollbackToEnv     = workflows.ReleaseRollbackToEnv
+	ReleaseShortSoakOKEnv    = workflows.ReleaseShortSoakOKEnv
+	ReleaseVersionEnv        = workflows.ReleaseVersionEnv
+	RequestedByEnv           = workflows.RequestedByEnv
+	RequestedByKindEnv       = workflows.RequestedByKindEnv
+	RunnerLabel              = workflows.RunnerLabel
+	WorkflowDir              = workflows.WorkflowDir
 )
 
 var (

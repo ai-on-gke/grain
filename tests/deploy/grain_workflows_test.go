@@ -444,7 +444,7 @@ func TestTheGuestIsPublishedFromGrainCIAndNotFromActionsAlone(t *testing.T) {
 	// build stamped with nothing -- is the last promoted release's, and
 	// the promote phase moves it (promote_images_test.go).
 	contains(t, script, `push_pinned "$guest"`)
-	contains(t, script, `"$guest $root/guest:$branch"`)
+	contains(t, script, `"$guest $root/sandbox:$branch"`)
 
 	// Retried, for the reason build-artifacts.yml's own push step gives
 	// at length: GHCR loses this race on its own about once in a hundred
@@ -531,7 +531,7 @@ func TestABranchCanWarmTheGuestCacheWithoutPublishingAnythingElse(t *testing.T) 
 	}
 	published := publishImagesBody(t, script)
 	for _, moving := range []string{
-		`"$guest $root/guest:$branch"`,
+		`"$guest $root/sandbox:$branch"`,
 	} {
 		if !strings.Contains(published, moving) {
 			t.Errorf("scripts/release-images.sh moves %s outside publish_images, so `guest-cache` would move it from a branch", moving)
@@ -975,7 +975,7 @@ func TestTheGoJobDeclaresEveryFileItsOwnTestsRead(t *testing.T) {
 		"pkg/ci/paths.go",
 		"ui/package.json",
 		"go.mod",
-		"pkg/capability/bootstrap/playbooks/gcp-capabilities.md",
+		"pkg/playbooks/gcp-capabilities.md",
 	} {
 		if !selectsPath(goJob, path) {
 			t.Errorf("the `go` job does not declare %s, which something it runs reads: "+
@@ -1011,7 +1011,7 @@ func TestTheGoJobDeclaresEveryFileItsOwnTestsRead(t *testing.T) {
 			"docs/claude-surface.md",
 			"docs/codex-surface.md",
 			"docs/agy-surface.md",
-			"pkg/capability/bootstrap/playbooks/gcp-capabilities.md",
+			"pkg/playbooks/gcp-capabilities.md",
 		} {
 			if !selectsPath(job, path) {
 				t.Errorf("the %q job does not declare %s, which something it runs reads", id, path)
@@ -1663,7 +1663,8 @@ func TestTheReleaseDoesNotRequireImageSigning(t *testing.T) {
 
 // third_party/granule is a module of its own, so the main module's shards
 // never reach it: the `granule` job is the only thing in the gate that runs
-// its tests, pkg/forward's refusal of out-of-spec Open frames among them.
+// its tests, pkg/guestforward's -- the port-forward mux grain runs into
+// every kubernetes-granule guest -- among them.
 // It has to stay the whole module, under -race, in that directory, off the
 // vendor tree, and with no credential.
 func TestTheGranuleJobRunsTheVendoredModulesOwnTests(t *testing.T) {
@@ -1697,7 +1698,7 @@ func TestTheGranuleJobRunsTheVendoredModulesOwnTests(t *testing.T) {
 	if !found {
 		t.Errorf("%s: the granule job has no Test step", path)
 	}
-	if _, err := os.Stat(filepath.Join(repoRoot(t), "third_party", "granule", "pkg", "forward", "forward_test.go")); err != nil {
+	if _, err := os.Stat(filepath.Join(repoRoot(t), "third_party", "granule", "pkg", "guestforward", "forward_test.go")); err != nil {
 		t.Errorf("the test this job exists to run is gone: %v", err)
 	}
 }
@@ -1883,9 +1884,10 @@ func TestEverythingTheGateDoesNotRunTheNightlyDoes(t *testing.T) {
 	}
 }
 
-// releaseTrainPath is the daily release train (design/design/release-from-trunk.design.md,
-// RFT-6): it cuts, soaks and stages releases from main, and a person's
-// approval through promote-release.yml is what makes one official.
+// releaseTrainPath is the continuous release train
+// (design/playbook/releases.playbook.md): it cuts, qualifies and stages
+// releases from main, and a person's approval through promote-release.yml
+// is what makes one official.
 const releaseTrainPath = ".grain/workflows/release-train.yml"
 
 func releaseTrainWorkflow(t *testing.T) ci.Workflow {
@@ -1903,8 +1905,12 @@ func releaseTrainWorkflow(t *testing.T) ci.Workflow {
 	return ci.Workflow{}
 }
 
-// The train runs daily at 04:15 UTC from grain's own cron, and on an
-// operator's dispatch, with what scripts/release-from-trunk.sh needs and
+// Neither workflow train cuts on a schedule any more: the release train
+// is the grain task filed from .grain/templates/release-train.yml
+// (releases playbook §0.4), and .github/workflows/release-train.yml is
+// retired to an always-dry dispatch so the two can never both cut (task
+// 2382). This one still answers an operator's dispatch, with what
+// scripts/release-from-trunk.sh needs and
 // nothing else: repo-write for the rc, -discarded and -pending tags and
 // refs/heads/candidate, release-gate-read for main's runs, staging and the
 // release-notes task, and package-publish for the rc and pending images.
@@ -1912,11 +1918,16 @@ func releaseTrainWorkflow(t *testing.T) ci.Workflow {
 func TestTheReleaseTrainRunsDailyWithTheCapabilitiesItUses(t *testing.T) {
 	w := releaseTrainWorkflow(t)
 	if len(w.On.Schedule) != 0 {
-		t.Errorf("%s still declares `on: schedule` (%v); automatic scheduling moved to .github/workflows/release-train.yml", releaseTrainPath, w.On.Schedule)
+		t.Errorf("%s still declares `on: schedule` (%v); the release train is .grain/templates/release-train.yml", releaseTrainPath, w.On.Schedule)
 	}
-	ghTrain := upTo(t, stripComments(read(t, ".github", "workflows", "release-train.yml")), "jobs:")
-	contains(t, ghTrain, "schedule:")
-	contains(t, ghTrain, `cron: "15 4 * * *"`)
+	ghTrainFile := stripComments(read(t, ".github", "workflows", "release-train.yml"))
+	if ghTrain := upTo(t, ghTrainFile, "jobs:"); strings.Contains(ghTrain, "schedule:") || strings.Contains(ghTrain, "cron:") {
+		t.Errorf(".github/workflows/release-train.yml still runs on a schedule; the release train is .grain/templates/release-train.yml, and two trains would both cut")
+	}
+	contains(t, ghTrainFile, `dry_run="true"`)
+	if strings.Contains(ghTrainFile, `dry_run="false"`) {
+		t.Errorf(".github/workflows/release-train.yml can still resolve a live run; it is retired to dry runs")
+	}
 	if !w.On.Matches(ci.EventManual, "main") {
 		t.Errorf("%s does not answer workflow_dispatch on main (%s)", releaseTrainPath, w.On.Describe())
 	}
@@ -2021,16 +2032,55 @@ func TestTheReleaseTrainsCapabilitiesAreGrantedOnGrainsOwnRepository(t *testing.
 	}
 }
 
-// The train stops at vX.Y.0-pending (task 1236): nothing it runs may push
-// vX.Y.0, move `latest`, or call the approve or promote modes that do. Only
-// .grain/workflows/promote-release.yml, which a person starts, makes a
-// release official.
+// rc-qualification.yml asks GitHub Actions for what the grain-task train
+// cannot (playbook §3, §4, §6): the flake retry and infra re-runs of
+// nightly.yml jobs on the rc, and cancelling a superseded rc's runs. It is
+// woken by nightly.yml and an hourly safety cron, and it can never be a
+// second train: it runs release-from-trunk.sh only as a dry run with every
+// publisher off, and holds contents: read, so it cannot push a ref.
+func TestRCQualificationReRunsAndCancelsButNeverCuts(t *testing.T) {
+	text := stripComments(read(t, ".github", "workflows", "rc-qualification.yml"))
+	on := upTo(t, text, "jobs:")
+	contains(t, on, "workflow_run:")
+	contains(t, on, "workflows: [nightly]")
+	contains(t, on, `cron: "17 * * * *"`)
+	contains(t, on, "actions: write")
+	contains(t, on, "contents: read")
+	if strings.Contains(text, "contents: write") || strings.Contains(text, "packages: write") || strings.Contains(text, "REPO_WRITE_TOKEN") {
+		t.Error("rc-qualification.yml can write the repository or its packages; it re-runs and cancels Actions runs and nothing else")
+	}
+	contains(t, text, "DRY_RUN=true RELEASE_CI_SOURCE=github")
+	contains(t, text, "RELEASE_IMAGES=off RELEASE_NOTES_TASK=off RELEASE_NOTIFY=off")
+	if n := strings.Count(text, "scripts/release-from-trunk.sh"); n != 1 {
+		t.Errorf("rc-qualification.yml runs release-from-trunk.sh %d times, want once, as a dry run", n)
+	}
+	contains(t, text, `bash ./scripts/release-train-actions.sh "$RELEASE_TRAIN_OUTPUT"`)
+	contains(t, text, `RELEASE_TAGS_FIRE: "true"`)
+}
+
+// The train stops at vX.Y.0-pending (task 1236; the one person action of
+// design/playbook/releases.playbook.md §0): nothing it runs -- grain's copy,
+// the GitHub Actions copy, or rc-qualification.yml and the Actions helper
+// that re-runs and cancels qualification -- may push vX.Y.0, move
+// `latest`, or call the approve, rollback or promote modes that do. Only promote-release.yml, which a
+// person starts, makes a release official or moves `latest` back.
 func TestTheReleaseTrainNeverPromotesARelease(t *testing.T) {
 	w := releaseTrainWorkflow(t)
 	forbidden := []string{
-		"release-from-trunk.sh approve", "release-from-trunk.sh reject",
+		"release-from-trunk.sh approve", "release-from-trunk.sh reject", "release-from-trunk.sh rollback",
 		"release-images.sh promote", "promote-release.yml", "promote.yml",
 		"refs/tags/latest", "git tag", "git push",
+	}
+	for _, f := range []struct{ path, text string }{
+		{".github/workflows/release-train.yml", stripComments(read(t, ".github", "workflows", "release-train.yml"))},
+		{".github/workflows/rc-qualification.yml", stripComments(read(t, ".github", "workflows", "rc-qualification.yml"))},
+		{"scripts/release-train-actions.sh", stripComments(read(t, "scripts", "release-train-actions.sh"))},
+	} {
+		for _, bad := range append(forbidden, "release-images.sh", "/git/refs", "/git/tags") {
+			if strings.Contains(f.text, bad) {
+				t.Errorf("%s runs %q: the train never promotes a release; a person approves it through promote-release.yml", f.path, bad)
+			}
+		}
 	}
 	for _, job := range w.Jobs {
 		for _, step := range job.Steps {

@@ -13,10 +13,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/cgroupmem"
-	"github.com/bwsalmon/granule/pkg/config"
-	"github.com/bwsalmon/granule/pkg/extents"
-	"github.com/bwsalmon/granule/pkg/guestimage"
+	"github.com/gke-labs/granule/pkg/cgroupmem"
+	"github.com/gke-labs/granule/pkg/config"
+	"github.com/gke-labs/granule/pkg/extents"
+	"github.com/gke-labs/granule/pkg/guestimage"
 )
 
 // killGrace bounds how long the runtime waits after a forced vmm.shutdown

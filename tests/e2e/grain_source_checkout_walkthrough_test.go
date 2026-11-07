@@ -31,7 +31,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
-	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -132,7 +131,7 @@ func bakeGrainSource(t *testing.T) (string, string) {
 func TestGrainSourceCheckoutWalkthrough(t *testing.T) {
 	t.Parallel()
 	grain := model.GrainSourceRepo()
-	selfDebug := []model.Grant{{Capability: selfdebug.CapabilityName}}
+	selfDebug := []model.Grant{{Capability: model.GrainSourceGrant}}
 	newGrainWorld := func(t *testing.T) *world {
 		t.Helper()
 		w := newWorld(t)

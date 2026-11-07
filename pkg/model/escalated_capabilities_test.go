@@ -91,7 +91,7 @@ func TestSeededDefaultReferenceIsReportedAsADefault(t *testing.T) {
 		strings.Contains(note, "asked for `https://caps.example/host-script") {
 		t.Errorf("note = %q, want the asked reference and the seeded default each explained as what it is", note)
 	}
-	refusal := model.AutoApprovalRefusal(child, bare, true)
+	refusal := model.AutoApprovalRefusal(child, bare, true, nil)
 	if !strings.Contains(refusal, "default capability `https://caps.example/host-script") ||
 		strings.Contains(refusal, "asks for `https://caps.example/host-script") {
 		t.Errorf("refusal = %q, want the seeded reference named as a default", refusal)
@@ -101,19 +101,19 @@ func TestSeededDefaultReferenceIsReportedAsADefault(t *testing.T) {
 		ID:           model.DirectorSessionID,
 		Capabilities: []string{"self-debug", "corp-research", ref, "self-debug", ""},
 	}
-	seeded := model.Task{ID: "9", Grants: model.ConsoleSessionGrants(seededSession)}
+	seeded := model.Task{ID: "9", Admission: model.AdmissionDurable, Grants: model.ConsoleSessionGrants(seededSession)}
 	if got := model.EscalatedCapabilities(model.Task{Grants: child.Grants[:2]}, seeded); len(got) != 0 {
 		t.Errorf("EscalatedCapabilities against a session holding the defaults = %v, want none", got)
 	}
-	if refusal := model.AutoApprovalRefusal(model.Task{Grants: child.Grants[:2]}, seeded, true); refusal != "" {
+	if refusal := model.AutoApprovalRefusal(model.Task{Grants: child.Grants[:2]}, seeded, true, nil); refusal != "" {
 		t.Errorf("AutoApprovalRefusal against a session holding the defaults = %q, want none", refusal)
 	}
 	var vias []model.GrantSource
 	for _, g := range seeded.Grants {
 		vias = append(vias, g.Via)
 	}
-	want := []model.GrantSource{model.GrantByGrain, model.GrantByGrain, model.GrantByGrain, model.GrantByGrain, model.GrantByDefault}
+	want := []model.GrantSource{model.GrantByGrain, model.GrantByGrain, model.GrantByGrain, model.GrantByDefault}
 	if !slices.Equal(vias, want) {
-		t.Errorf("session grants = %+v, want durable and each configured capability once by grain, then the session defaults", seeded.Grants)
+		t.Errorf("session grants = %+v, want each configured capability once by grain, then the session defaults", seeded.Grants)
 	}
 }

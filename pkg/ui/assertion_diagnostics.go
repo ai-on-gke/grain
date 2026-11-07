@@ -68,6 +68,12 @@ func logRefusedAssertion(tokenStr, configured string, err error) {
 		log.Printf("ui: refused an %s that is not a JWT: %v", IAPAssertionHeader, err)
 		return
 	}
+	if verifierUnavailable(err) {
+		log.Printf("ui: could not verify %s yet (issuer %q, audience %q): %v -- "+
+			"the verifier's key or identity backend is unreachable; callers receive 503 until it answers",
+			IAPAssertionHeader, iss, aud, err)
+		return
+	}
 	if aud != "" && audienceConfigured(aud, configured) && refusalKind(err) != "issuer" {
 		// Nothing to configure: the audience already matches, so the
 		// hint below would send an operator after a setting that is right.
@@ -97,6 +103,9 @@ func audienceConfigured(aud, configured string) bool {
 // kinds, so logRefusedAssertion's key stays bounded however the error's
 // own text varies (a kid, an expiry time).
 func refusalKind(err error) string {
+	if verifierUnavailable(err) {
+		return "unavailable"
+	}
 	for _, k := range []struct {
 		err  error
 		kind string

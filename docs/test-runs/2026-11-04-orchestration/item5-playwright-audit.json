@@ -1,0 +1,100 @@
+{
+  "viewports": {
+    "desktop_1440x900_light": {
+      "consoleErrors": 0,
+      "pageErrors": 0,
+      "badResponses": 0,
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "horizontalOverflow": false,
+      "rollupText": "by direction\n\n#100 Migrate storage layer to connection pooling (alice@example.com): 2 merged (+275 -52), 2 tasks completed, 1 follow-up task spawned, 2 runs",
+      "rollupBox": {
+        "x": 256,
+        "y": 542,
+        "width": 1160,
+        "height": 46
+      },
+      "releaseNotesBox": {
+        "x": 256,
+        "y": 246,
+        "width": 1160,
+        "height": 1437
+      }
+    },
+    "desktop_1440x900_dark": {
+      "consoleErrors": 0,
+      "pageErrors": 0,
+      "badResponses": 0,
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "horizontalOverflow": false,
+      "rollupText": "by direction\n\n#100 Migrate storage layer to connection pooling (alice@example.com): 2 merged (+275 -52), 2 tasks completed, 1 follow-up task spawned, 2 runs",
+      "rollupBox": {
+        "x": 256,
+        "y": 542,
+        "width": 1160,
+        "height": 46
+      },
+      "releaseNotesBox": {
+        "x": 256,
+        "y": 246,
+        "width": 1160,
+        "height": 1437
+      }
+    },
+    "phone_390x844_light": {
+      "consoleErrors": 0,
+      "pageErrors": 0,
+      "badResponses": 0,
+      "scrollWidth": 390,
+      "innerWidth": 390,
+      "horizontalOverflow": false,
+      "rollupText": "by direction\n\n#100 Migrate storage layer to connection pooling (alice@example.com): 2 merged (+275 -52), 2 tasks completed, 1 follow-up task spawned, 2 runs",
+      "rollupBox": {
+        "x": 12,
+        "y": 717,
+        "width": 366,
+        "height": 86
+      },
+      "releaseNotesBox": {
+        "x": 12,
+        "y": 149,
+        "width": 366,
+        "height": 1813
+      }
+    },
+    "phone_390x844_dark": {
+      "consoleErrors": 0,
+      "pageErrors": 0,
+      "badResponses": 0,
+      "scrollWidth": 390,
+      "innerWidth": 390,
+      "horizontalOverflow": false,
+      "rollupText": "by direction\n\n#100 Migrate storage layer to connection pooling (alice@example.com): 2 merged (+275 -52), 2 tasks completed, 1 follow-up task spawned, 2 runs",
+      "rollupBox": {
+        "x": 12,
+        "y": 717,
+        "width": 366,
+        "height": 86
+      },
+      "releaseNotesBox": {
+        "x": 12,
+        "y": 149,
+        "width": 366,
+        "height": 1813
+      }
+    }
+  },
+  "spaNavigation": {
+    "clickedHref": "/tasks/100",
+    "finalURL": "http://127.0.0.1:4392/tasks/100",
+    "spaMarkerSurvived": true,
+    "badResponsesAfterClick": []
+  },
+  "processesRow": {
+    "hasOnRefCadence": true,
+    "hasOnRefMoveNext": true,
+    "hasRawGitRef": false,
+    "hasFake2027Date": false
+  }
+}

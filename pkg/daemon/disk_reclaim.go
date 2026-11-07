@@ -462,7 +462,9 @@ func (p *DockerPruner) Prune(ctx context.Context) (string, error) {
 		}
 
 		for _, repo := range repos {
-			keep[repo+":previous"] = true
+			for _, alias := range reclaimRepoAliases(repo) {
+				keep[alias+":previous"] = true
+			}
 			lsOut, err := p.run(ctx, "image", "ls", "--format", "{{.Repository}}:{{.Tag}} {{.Repository}}@{{.Digest}} {{.ID}}", repo)
 			if err != nil {
 				continue
@@ -588,25 +590,67 @@ func isDockerUnavailable(out string, err error) bool {
 	return false
 }
 
+// reclaimRepoAliases returns repo together with Docker Engine's local
+// stripped spelling (e.g. "grainai/grain" for "docker.io/grainai/grain")
+// so `docker image ls` entries match both canonical and local references.
+func reclaimRepoAliases(repo string) []string {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return nil
+	}
+	out := []string{repo}
+	add := func(s string) {
+		if s != "" && !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	for _, prefix := range []string{"docker.io/", "index.docker.io/"} {
+		if rest, ok := strings.CutPrefix(repo, prefix); ok {
+			add(rest)
+			if short, ok := strings.CutPrefix(rest, "library/"); ok {
+				add(short)
+			}
+		}
+	}
+	if slash := strings.IndexByte(repo, '/'); slash > 0 {
+		first := repo[:slash]
+		if !strings.ContainsAny(first, ".:") && first != "localhost" {
+			add("docker.io/" + repo)
+		}
+	}
+	return out
+}
+
 // reclaimImageNames returns all normalized spellings of ref so a keep check
-// matches by tag, by digest, or by combined tag@digest.
+// matches by tag, by digest, by combined tag@digest, or by Docker Hub's
+// stripped local repository name.
 func reclaimImageNames(ref string) []string {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return nil
 	}
-	names := []string{ref}
-	repo := imageRepository(ref)
-	at := strings.LastIndex(ref, "@")
-	if at >= 0 && repo != "" {
-		names = append(names, repo+ref[at:])
-		withoutDigest := ref[:at]
-		if withoutDigest != "" && withoutDigest != repo {
-			names = append(names, withoutDigest)
+	var names []string
+	add := func(s string) {
+		if s != "" && !slices.Contains(names, s) {
+			names = append(names, s)
 		}
 	}
-	if at < 0 && repo == ref {
-		names = append(names, repo+":latest")
+	add(ref)
+	repo := imageRepository(ref)
+	suffix := strings.TrimPrefix(ref, repo)
+	for _, alias := range reclaimRepoAliases(repo) {
+		add(alias + suffix)
+		at := strings.LastIndex(alias+suffix, "@")
+		if at >= 0 {
+			add(alias + (alias + suffix)[at:])
+			withoutDigest := (alias + suffix)[:at]
+			if withoutDigest != "" && withoutDigest != alias {
+				add(withoutDigest)
+			}
+		}
+		if at < 0 && suffix == "" {
+			add(alias + ":latest")
+		}
 	}
 	return names
 }
@@ -619,13 +663,15 @@ func reclaimRemovableImage(repo string, names []string) string {
 		return ""
 	}
 	first := names[0]
-	if strings.HasPrefix(first, repo+":") && !strings.HasSuffix(first, ":<none>") {
-		return first
-	}
-	if first == repo+":<none>" || strings.HasPrefix(first, repo+"@") {
-		for _, name := range names {
-			if strings.HasPrefix(name, repo+"@") && name != repo+"@" && !strings.HasSuffix(name, "@<none>") {
-				return name
+	for _, alias := range reclaimRepoAliases(repo) {
+		if strings.HasPrefix(first, alias+":") && !strings.HasSuffix(first, ":<none>") {
+			return first
+		}
+		if first == alias+":<none>" || strings.HasPrefix(first, alias+"@") {
+			for _, name := range names {
+				if strings.HasPrefix(name, alias+"@") && name != alias+"@" && !strings.HasSuffix(name, "@<none>") {
+					return name
+				}
 			}
 		}
 	}

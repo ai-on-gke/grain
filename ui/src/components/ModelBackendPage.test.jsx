@@ -13,11 +13,12 @@
 // limitations under the License.
 
 import { useState } from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import api from "../api.js";
 import ModelBackendPage from "./ModelBackendPage.jsx";
+import { optionValues } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 
@@ -126,19 +127,25 @@ describe("ModelBackendPage", () => {
       "Reuse authentication from backend-aaa",
       "Reuse authentication from backend-bbb",
     ]);
+
+    const auth = screen.getByRole("combobox", {
+      name: /Authentication method/,
+    });
+    await user.type(auth, "claude team");
+    expect(optionValues(auth)).toEqual(["reuse:backend-named"]);
   });
 
-  it("offers no CLI path for a custom command", async () => {
-    render(
-      <ModelBackendPage
-        backend={{ id: "backend-custom", framework: "custom", command: "x" }}
-        backends={[]}
-        isNew={false}
-        onSave={vi.fn()}
-        onBack={() => {}}
-      />,
-    );
-    expect(screen.queryByLabelText("CLI path (optional)")).toBeNull();
+  it("does not offer the removed custom command type", async () => {
+    const user = userEvent.setup();
+    render(<StatefulModelBackendPage onSaveMock={vi.fn()} />);
+    await user.click(screen.getByLabelText(/Agent type/));
+    expect(
+      screen
+        .getAllByRole("option")
+        .filter((option) => !option.getAttribute("aria-disabled"))
+        .map((option) => option.textContent),
+    ).toEqual(["Antigravity", "Claude", "Codex"]);
+    expect(screen.queryByRole("option", { name: /Custom/ })).toBeNull();
   });
 
   it("saves an antigravity connection's model-turn limits", async () => {
@@ -255,9 +262,10 @@ describe("ModelBackendPage", () => {
     );
 
     await user.click(screen.getByLabelText(/Agent type/));
-    await user.click(screen.getByRole("option", { name: "Custom command" }));
-    await user.type(screen.getByLabelText(/Command/), "./bin/my-agent");
+    await user.click(screen.getByRole("option", { name: "Antigravity" }));
     await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(await screen.findByLabelText(/Authentication method/));
+    await user.click(screen.getByRole("option", { name: "Gemini API key" }));
 
     expect(onSave).toHaveBeenLastCalledWith(
       expect.objectContaining({ id: "backend-test-1", disabled: true }),
@@ -271,8 +279,9 @@ describe("ModelBackendPage", () => {
     expect(saveBtn).toBeEnabled();
     await user.click(saveBtn);
 
-    expect(onSave).toHaveBeenCalledTimes(2);
-    expect(onSave.mock.calls[1][0]).not.toHaveProperty("disabled");
+    // Continue, the authentication chosen, and Save connection.
+    expect(onSave).toHaveBeenCalledTimes(3);
+    expect(onSave.mock.calls[2][0]).not.toHaveProperty("disabled");
     expect(onDiscard).not.toHaveBeenCalled();
   });
 
@@ -345,9 +354,10 @@ describe("ModelBackendPage", () => {
       <StatefulModelBackendPage onSaveMock={onSave} onDiscard={onDiscard} />,
     );
     await user.click(screen.getByLabelText(/Agent type/));
-    await user.click(screen.getByRole("option", { name: "Custom command" }));
-    await user.type(screen.getByLabelText(/Command/), "./bin/my-agent");
+    await user.click(screen.getByRole("option", { name: "Antigravity" }));
     await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(await screen.findByLabelText(/Authentication method/));
+    await user.click(screen.getByRole("option", { name: "Gemini API key" }));
     await user.click(
       await screen.findByRole("button", { name: "Save connection" }),
     );
@@ -355,34 +365,87 @@ describe("ModelBackendPage", () => {
     window.dispatchEvent(new Event("pagehide"));
     expect(onDiscard).not.toHaveBeenCalled();
   });
+});
 
-  it("supports creating a custom framework connection with command", async () => {
+// Credentials: stored | ambient (model.CheckAmbientPlacement). Ambient is
+// the CLI's own login on one host, so it is saved only with that host.
+describe("ModelBackendPage credentials", () => {
+  const hosts = [
+    { name: "local" },
+    {
+      name: "ws-a",
+      connection: { connected: true, host: "build-box" },
+      logins: ["antigravity", "codex"],
+      loginsKnown: true,
+    },
+    {
+      name: "ws-b",
+      connection: { connected: true },
+      logins: [],
+      loginsKnown: true,
+    },
+  ];
+
+  it("saves ambient credentials only with the host whose login they are", async () => {
     const user = userEvent.setup();
-    const onSave = vi.fn().mockResolvedValue(true);
-
-    render(<StatefulModelBackendPage onSaveMock={onSave} />);
-
-    await user.click(screen.getByLabelText(/Agent type/));
-    await user.click(screen.getByRole("option", { name: "Custom command" }));
-
-    const commandInput = screen.getByLabelText(/Command/);
-    expect(commandInput).toBeInTheDocument();
-    await user.type(commandInput, "./bin/my-agent");
-
-    const continueBtn = screen.getByRole("button", { name: "Continue" });
-    expect(continueBtn).toBeEnabled();
-
-    await user.click(continueBtn);
-
-    expect(onSave).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "backend-test-1",
-        framework: "custom",
-        command: "./bin/my-agent",
-      }),
+    api.mockImplementation(async (path) =>
+      path === "/api/hostds" ? hosts : {},
     );
+    const onSave = vi.fn().mockResolvedValue(true);
+    render(
+      <ModelBackendPage
+        backend={{ id: "agy", framework: "antigravity", authMode: "api_key" }}
+        backends={[]}
+        isNew={false}
+        onSave={onSave}
+        onBack={() => {}}
+      />,
+    );
+    // Ambient is not an authentication method any more: it is the
+    // Credentials choice.
+    await user.click(screen.getByLabelText(/Authentication method/));
+    expect(screen.queryByRole("option", { name: /Ambient/ })).toBeNull();
+    await user.keyboard("{Escape}");
 
-    expect(await screen.findByText("Authentication")).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Ambient" }));
+    expect(onSave).not.toHaveBeenCalled();
+    const picker = await screen.findByTestId("credentials-hostd-select");
+    await user.click(
+      within(screen.getByTestId("credentials-hostd")).getByRole("combobox"),
+    );
+    const option = await screen.findByRole("option", { name: /host ws-a/ });
+    expect(option.textContent).toContain("logins: antigravity, codex");
+    await user.click(option);
+    expect(onSave).toHaveBeenLastCalledWith(
+      expect.objectContaining({ hostd: "ws-a", authMode: "ambient" }),
+    );
+    expect(picker).toBeDefined();
+    expect(await screen.findByTestId("credentials-ambient")).toHaveTextContent(
+      "Antigravity (agy) login on host ws-a",
+    );
+  });
+
+  it("warns when the chosen host reports no login for the connection's CLI", async () => {
+    api.mockImplementation(async (path) =>
+      path === "/api/hostds" ? hosts : {},
+    );
+    render(
+      <ModelBackendPage
+        backend={{
+          id: "agy",
+          framework: "antigravity",
+          authMode: "ambient",
+          hostd: "ws-b",
+        }}
+        backends={[]}
+        isNew={false}
+        onSave={vi.fn()}
+        onBack={() => {}}
+      />,
+    );
+    expect(
+      await screen.findByTestId("connection-hostd-missing-login"),
+    ).toHaveTextContent("Host ws-b reports no antigravity login");
   });
 });
 

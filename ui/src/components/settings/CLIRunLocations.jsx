@@ -31,7 +31,6 @@ export const CLI_RUN_CLIS = [
   { framework: "claude", label: "claude" },
   { framework: "codex", label: "codex" },
   { framework: "antigravity", label: "agy (Antigravity)" },
-  { framework: "custom", label: "custom commands" },
 ];
 
 const LOCATIONS = [
@@ -42,7 +41,7 @@ const LOCATIONS = [
   // started detached through grain hostd so a daemon upgrade does not
   // interrupt it (design/design/non-disruptive-upgrade.design.md). Only offered where the
   // daemon says so: claude, behind hostd.
-  { value: "detached", label: "Detached in grain hostd" },
+  { value: "detached", label: "Detached in the host agent" },
 ];
 
 // resolvedLine is where a CLI will run on its next dispatch, as the
@@ -53,14 +52,13 @@ export function resolvedLine(r) {
   if (!r) return "";
   if (r.location === "container") return "container (the daemon's own)";
   if (r.location === "detached") {
-    return `detached (${r.hostPath || "the image's CLI"}, through grain hostd as ${r.entry || "its detached entry"}; outlives a daemon upgrade)`;
+    return `detached (${r.hostPath || "the image's CLI"}, through the host agent as ${r.entry || "its detached entry"}; outlives a daemon upgrade)`;
   }
   if (r.via === "hostd") {
     return r.hostPath
-      ? `host (${r.hostPath}, through grain hostd)`
-      : "host (through grain hostd)";
+      ? `host (${r.hostPath}, through the host agent)`
+      : "host (through the host agent)";
   }
-  if (r.framework === "custom") return "host (each connection's own command)";
   return `host (${r.hostPath || "not found on PATH"})`;
 }
 
@@ -105,7 +103,7 @@ function HostdWhere({ executor }) {
 // The daemon does not know a URL hostd can reach it at: the browser's
 // origin may be a proxy (UberProxy, say) that hostd cannot dial.
 const DIAL_IN_FLAGS =
-  "-server <this daemon's URL> -token-file <the hostd token>";
+  "-server <this daemon's URL> -token-file <the host token>";
 
 // CommandBlock is a command to paste: kept whole on a wide screen, and
 // broken anywhere on a phone rather than pushed off its edge.
@@ -140,16 +138,16 @@ function HostdDialInHelp() {
       data-testid="cli-run-hostd-status"
       sx={{ "& .MuiAlert-message": { minWidth: 0 } }}
     >
-      This daemon takes a grain hostd that dials in to it, but none is
-      connected. A CLI set to host fails its runs until one does.{" "}
-      <code>&lt;the hostd token&gt;</code> is a file holding the token in this
-      daemon&apos;s <code>-hostd-token-file</code>; this daemon logs a hostd it
+      This daemon takes a host that dials in to it, but none is connected. A CLI
+      set to host fails its runs until one does.{" "}
+      <code>&lt;the host token&gt;</code> is a file holding the token in this
+      daemon&apos;s <code>-hostd-token-file</code>; this daemon logs a host it
       refuses for its token.
       <Box component="p" sx={{ mt: 1, mb: 0 }}>
         On a host where grain&apos;s installer runs{" "}
         <code>grain-hostd.service</code>, add the flags to its ExecStart in a
-        drop-in, rather than starting a second hostd beside it (the two would
-        share one state directory). Run{" "}
+        drop-in, rather than starting a second host agent beside it (the two
+        would share one state directory). Run{" "}
         <code>sudo systemctl edit grain-hostd.service</code> and write, with the
         unit&apos;s own ExecStart from{" "}
         <code>systemctl cat grain-hostd.service</code>:
@@ -159,13 +157,14 @@ function HostdDialInHelp() {
       </CommandBlock>
       Then run <code>sudo systemctl restart grain-hostd.service</code>.
       <Box component="p" sx={{ mt: 1, mb: 0 }}>
-        On a host without the installer, run hostd by hand with no socket of its
-        own and an allowlist of what this host may run (root-owned, not group-
-        or world-writable): the defaults, <code>/run/grain-hostd</code> and{" "}
-        <code>/etc/grain/hostd.yaml</code>, are the installer&apos;s.
+        On a host without the installer, run the host agent by hand with no
+        socket of its own and an allowlist of what this host may run
+        (root-owned, not group- or world-writable): the defaults,{" "}
+        <code>/run/grain-hostd</code> and <code>/etc/grain/hostd.yaml</code>,
+        are the installer&apos;s.
       </Box>
       <CommandBlock testid="cli-run-hostd-command">
-        {`grain hostd ${DIAL_IN_FLAGS} -socket= -allowlist <file>`}
+        {`grain host ${DIAL_IN_FLAGS} -socket= -allowlist <file>`}
       </CommandBlock>
     </Alert>
   );
@@ -188,7 +187,7 @@ export function HostExecutorNotice({ executor }) {
   // What hostd said in hello: its own build, which an Upgrade brings to
   // the daemon's only once hostd has drained and restarted.
   const build = hostd?.build
-    ? ` (build ${hostd.build}, hostd protocol ${hostd.protocol})`
+    ? ` (build ${hostd.build}, host agent protocol ${hostd.protocol})`
     : "";
   if (hostd?.reachable && (hostd.updating || hostd.mismatch)) {
     // Up, but starting no new host runs: draining for its own upgrade,
@@ -196,7 +195,7 @@ export function HostExecutorNotice({ executor }) {
     // carry on either way.
     return (
       <Alert severity="warning" data-testid="cli-run-hostd-status">
-        grain hostd is up
+        The host agent is up
         <HostdWhere executor={executor} />
         {build}, but{" "}
         {hostd.updating
@@ -211,7 +210,7 @@ export function HostExecutorNotice({ executor }) {
       : ", offering nothing";
     return (
       <Alert severity="success" data-testid="cli-run-hostd-status">
-        grain hostd is up
+        The host agent is up
         <HostdWhere executor={executor} />
         {build}
         {offers}. Host runs go through it.
@@ -227,7 +226,7 @@ export function HostExecutorNotice({ executor }) {
     const host = hostd.remote.host;
     return (
       <Alert severity="warning" data-testid="cli-run-hostd-status">
-        grain hostd is connected
+        The host agent is connected
         {host ? (
           <>
             {" "}
@@ -241,9 +240,9 @@ export function HostExecutorNotice({ executor }) {
   }
   return (
     <Alert severity="warning" data-testid="cli-run-hostd-status">
-      grain hostd is configured at <code>{executor.socket}</code> but is not
+      The host agent is configured at <code>{executor.socket}</code> but is not
       answering{hostd?.error ? ` (${hostd.error})` : ""}. A CLI set to host
-      fails its runs until hostd is back.
+      fails its runs until the host agent is back.
     </Alert>
   );
 }
@@ -284,8 +283,8 @@ export function HostdUpgrade({ hostd }) {
           sx={{ overflowWrap: "anywhere" }}
         >
           Installed: build <code>{hostd.currentBuild || "unknown"}</code>{" "}
-          (version <code>{shortVersion(hostd.current)}</code>); grain hostd runs
-          version <code>{shortVersion(hostd.running)}</code>
+          (version <code>{shortVersion(hostd.current)}</code>); the host agent
+          runs version <code>{shortVersion(hostd.running)}</code>
           {hostd.updating
             ? " and restarts on the installed one once the runs it holds have ended."
             : " until it next drains or restarts."}
@@ -314,7 +313,7 @@ export function HostdProcesses({ hostd }) {
   return (
     <Box data-testid="cli-run-hostd-processes">
       <Typography variant="body2" color="text.secondary">
-        grain hostd is holding {procs.length}{" "}
+        The host agent is holding {procs.length}{" "}
         {procs.length === 1 ? "process" : "processes"}. A host run keeps running
         across a daemon upgrade, and the next daemon adopts it.
       </Typography>
@@ -405,10 +404,10 @@ export default function CLIRunLocations({
         ) : (
           <>
             Where each agent CLI runs: in the daemon&apos;s own container, or on
-            the host through grain hostd where this deployment has one. Detached
-            runs the image&apos;s CLI with the deployment&apos;s login, as a
-            container run does, but through grain hostd, so a daemon upgrade
-            does not interrupt it.
+            the host through the host agent where this deployment has one.
+            Detached runs the image&apos;s CLI with the deployment&apos;s login,
+            as a container run does, but through the host agent, so a daemon
+            upgrade does not interrupt it.
           </>
         )}
       </Typography>

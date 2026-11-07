@@ -112,6 +112,16 @@ type StateManager struct {
 	// seconds, and two nudges arriving together want one cycle between
 	// them, not two in a row.
 	nudge chan struct{}
+
+	// fenced is set when the daemon loses its PostgreSQL single-writer
+	// advisory lock so detached shutdown state-sync passes cannot import
+	// stale files into the database or push to remote mirrors after another
+	// writer has taken over.
+	fenced atomic.Bool
+}
+
+func (m *StateManager) fence() {
+	m.fenced.Store(true)
 }
 
 func NewStateManager(dataDir string, db *sql.DB, repo *staterepo.Repo, secretStore *secrets.Store, secretsRepo *secretsrepo.Repo, forbidden *gitproxy.ForbiddenSet) *StateManager {
@@ -125,6 +135,7 @@ func NewStateManager(dataDir string, db *sql.DB, repo *staterepo.Repo, secretSto
 	// notice already waiting on disk is exactly the one nobody has read
 	// it on yet.
 	m.refreshResetNotice(context.Background())
+	m.refreshForbidden(context.Background())
 	return m
 }
 
@@ -176,6 +187,9 @@ func (m *StateManager) Nudge() {
 // m.repo safe here; the store is an atomic so that the poll on the other
 // side needs neither.
 func (m *StateManager) refreshResetNotice(ctx context.Context) {
+	if m.repo == nil {
+		return
+	}
 	_, pending := m.repo.UndeliveredResets(ctx)
 	m.resetNotice.Store(pending)
 }
@@ -208,6 +222,7 @@ func (m *StateManager) reconcileRepo(ctx context.Context) (staterepo.Settings, b
 	if settings == m.lastSettings {
 		return settings, false, nil
 	}
+	m.repo.SetSSHKeyFile(settings.SSHKeyFile)
 	if err := m.repo.ConfigureMirror(ctx, settings.Remote, settings.Branch, RepoToken(m.dataDir, settings.Remote, settings.TokenFile)); err != nil {
 		return settings, false, err
 	}
@@ -255,6 +270,9 @@ func (m *StateManager) syncAll(ctx context.Context) (bool, error) {
 // instead of the plain one (staterepo.SyncNoted): SyncAfterWrite's,
 // naming who made the write it follows.
 func (m *StateManager) cycle(ctx context.Context, all bool, note string) (bool, error) {
+	if m.fenced.Load() {
+		return false, nil
+	}
 	m.lastCycle = time.Now()
 	// Whatever this cycle imports, the deployment's API scope sets are
 	// installed from the database it leaves behind -- on its way out, so
@@ -266,7 +284,7 @@ func (m *StateManager) cycle(ctx context.Context, all bool, note string) (bool, 
 		m.noteOutcome(err)
 		return false, err
 	}
-	if strings.TrimSpace(settings.Remote) != "" {
+	if settings.IsExternal() {
 		applied, applyErr := staterepo.SyncExternal(ctx, m.repo, m.db, changed || all)
 		m.lastErr = applyErr
 		m.syncSecrets(ctx)
@@ -399,6 +417,9 @@ func stateRepoSyncFailure(stateRepo ui.StateRepoManager) func() *ui.StateRepoSyn
 // that is one push behind for thirty seconds rather than one that is
 // wrong.
 func (m *StateManager) syncSecrets(ctx context.Context) {
+	if m.secrets != nil && m.secrets.Backend() == secrets.BackendSecretManager {
+		return
+	}
 	repo, err := m.currentSecretsRepo(ctx)
 	if err == nil && repo != nil {
 		err = syncOpenSecretsRepo(ctx, repo)
@@ -569,6 +590,41 @@ func (m *StateManager) Branches(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
+// ResolveRev resolves rev (or "" / "HEAD" for HEAD) in the controller's own
+// config repository checkout to a full commit SHA, or ("", nil) when rev is
+// not found.
+func (m *StateManager) ResolveRev(ctx context.Context, rev string) (string, error) {
+	if m == nil {
+		return "", errors.New("config repository is not available")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.repo == nil {
+		return "", errors.New("config repository is not available")
+	}
+	lookup := strings.TrimSpace(rev)
+	if lookup == "" {
+		lookup = "HEAD"
+	}
+	for _, candidate := range []string{
+		lookup,
+		"refs/heads/" + lookup,
+		"refs/remotes/origin/" + lookup,
+		"refs/tags/" + lookup,
+	} {
+		cmd := exec.CommandContext(ctx, "git", "-C", m.repo.Dir(), "rev-parse", "--verify", "--quiet",
+			"--end-of-options", candidate+"^{commit}")
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "GIT_TERMINAL_PROMPT=0"}
+		out, err := cmd.Output()
+		if err == nil {
+			if sha := strings.ToLower(strings.TrimSpace(string(out))); sha != "" {
+				return sha, nil
+			}
+		}
+	}
+	return "", nil
+}
+
 // localMergeBase is `git merge-base`, the commit two revisions last had
 // in common and the commit a three-dot diff between them is taken from.
 // Both arguments are already resolved commit ids, so nothing here can be
@@ -635,6 +691,9 @@ func (m *StateManager) externalConfigRepo(lock bool) (remote, branch string) {
 	}
 	if m.dataDir != "" {
 		if settings, err := staterepo.LoadSettings(m.dataDir); err == nil {
+			if settings.IsMirror() {
+				return "", ""
+			}
 			remote = strings.TrimSpace(settings.Remote)
 			branch = strings.TrimSpace(settings.Branch)
 			if branch == "" && remote != "" {
@@ -817,13 +876,17 @@ func (m *StateManager) status(ctx context.Context) ui.StateRepoStatus {
 		Dir:                m.repo.Dir(),
 		BuildSchemaVersion: model.SchemaVersion,
 	}
-	if state, err := staterepo.LoadSettings(m.dataDir); err == nil && state != m.lastSettings {
-		out.Remote = state.Remote
-		if state.Branch != "" {
-			out.Branch = state.Branch
+	mirror := false
+	if state, err := staterepo.LoadSettings(m.dataDir); err == nil {
+		mirror = state.IsMirror()
+		if state != m.lastSettings {
+			out.Remote = state.Remote
+			if state.Branch != "" {
+				out.Branch = state.Branch
+			}
 		}
 	}
-	if strings.TrimSpace(out.Remote) != "" {
+	if strings.TrimSpace(out.Remote) != "" && !mirror {
 		out.Mode = "external"
 		if owner, name, ok := repoFromRemote(out.Remote); ok {
 			out.Repository = owner + "/" + name

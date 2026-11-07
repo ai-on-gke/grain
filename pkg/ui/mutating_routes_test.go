@@ -19,13 +19,17 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
 // attributedRoute is one write path's row in operator-attribution spec
@@ -70,6 +74,37 @@ func fileTask(approved bool) func(*testing.T, *ui.Client, sender) string {
 		}
 		return task.ID
 	}
+}
+
+// taskParkedOnQuestion is a task whose run parked it on a question
+// (ask_question): what POST /api/tasks/{id}/reply answers.
+func taskParkedOnQuestion(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	ctx := context.Background()
+	id := fileTask(true)(t, client, nil)
+	qid, err := client.Store.AddComment(ctx, model.Comment{TaskID: id, Body: "which one?",
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: "run"}}, CreatedAt: baseTime})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Store.Observe(ctx, model.Observation{TaskID: id, PendingQuestionCommentID: &qid}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// taskHeldForHumanReview is a task a review held for a person's decision:
+// what POST /api/tasks/{id}/human-review/release acts on.
+func taskHeldForHumanReview(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	id := fileTask(true)(t, client, nil)
+	if _, err := client.Store.RaiseHumanReviewHold(context.Background(), id, model.HumanReviewRequest{
+		Reason: model.HumanReviewReason{Source: model.HumanReviewRequested, Reason: "a person must decide", ReviewTask: "r1"},
+		By:     model.Principal{Kind: model.PrincipalAgent, ID: "r1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
 
 // taskWithPullRequest is a task whose pull request the merge queue has
@@ -140,6 +175,45 @@ func registerHostd(t *testing.T, client *ui.Client, _ sender) string {
 	return "ws-1"
 }
 
+func registerEnrollmentCode(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	if _, _, err := client.Store.CreateHostEnrollmentCode(context.Background(), model.HostEnrollmentCode{Name: "team-invite"}); err != nil {
+		t.Fatalf("creating enrollment code: %v", err)
+	}
+	return "team-invite"
+}
+
+func registerPendingHostJoin(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	ctx := context.Background()
+	_, raw, err := client.Store.CreateHostEnrollmentCode(ctx, model.HostEnrollmentCode{Name: "pending-invite"})
+	if err != nil {
+		t.Fatalf("creating enrollment code: %v", err)
+	}
+	jr, err := client.Store.CreateHostJoinRequest(ctx, model.HostJoinRequest{
+		PublicKey:  "ed25519:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		Hostname:   "devbox-1",
+		OS:         "linux",
+		Arch:       "amd64",
+		EnrolledBy: "alice@example.com",
+	}, raw, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("creating pending join request: %v", err)
+	}
+	return jr.ID
+}
+
+// registerRevokedHostd puts hostd ws-1 in the registry, revoked, as what
+// deleting a hostd acts on.
+func registerRevokedHostd(t *testing.T, client *ui.Client, s sender) string {
+	t.Helper()
+	name := registerHostd(t, client, s)
+	if _, err := client.Store.RevokeHostd(context.Background(), name); err != nil {
+		t.Fatalf("revoking ws-1: %v", err)
+	}
+	return name
+}
+
 // releaseClient is approvalServer's deployment: grain CI on
 // ai-on-gke/grain, with a fake runner recording what is started.
 func releaseClient(t *testing.T) *ui.Client {
@@ -206,6 +280,45 @@ func secretsClient(t *testing.T) *ui.Client {
 	return client
 }
 
+// figmaOAuthClient is secretsClient's deployment with the figma
+// capability server configured for one oauth account, "design", whose
+// code exchange goes to a fake Figma token endpoint.
+func figmaOAuthClient(t *testing.T) *ui.Client {
+	t.Helper()
+	client := secretsClient(t)
+	figma := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/oauth/token" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"at","refresh_token":"rt","expires_in":3600,"user_id_string":"42"}`))
+	}))
+	t.Cleanup(figma.Close)
+	prevBase, prevClient := ui.FigmaOAuthAPIBase, ui.FigmaOAuthHTTPClient
+	ui.FigmaOAuthAPIBase, ui.FigmaOAuthHTTPClient = figma.URL, figma.Client()
+	t.Cleanup(func() { ui.FigmaOAuthAPIBase, ui.FigmaOAuthHTTPClient = prevBase, prevClient })
+	if err := client.Config.Secrets.Set("figma-oauth", "client_secrets", []byte(`{"design":"shh"}`)); err != nil {
+		t.Fatal(err)
+	}
+	mc := model.DefaultConfig()
+	mc.MCPServers = map[string]protocol.ServerConfig{
+		"https://grain.dev/capabilities/figma": {
+			Command: "grain",
+			Args:    []string{"capability", "figma"},
+			Builtin: "figma",
+			Config: map[string]any{
+				"accounts":       []any{map[string]any{"name": "design", "auth_mode": "oauth", "client_id": "cid"}},
+				"client_secrets": protocol.SecretRef("figma-oauth/client_secrets"),
+			},
+		},
+	}
+	if err := client.Store.PutConfig(context.Background(), mc); err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
 // externalToken issues an external agent credential for the token
 // routes to act on, and returns its id.
 func externalToken(t *testing.T, client *ui.Client, _ sender) string {
@@ -227,12 +340,47 @@ func releaseSecret(t *testing.T, client *ui.Client, _ sender) string {
 	return ""
 }
 
+// adopterClient is testClient's deployment with a fake pull-request
+// adopter, and adoptedFor who its newest filing was for.
+func adopterClient(t *testing.T) *ui.Client {
+	t.Helper()
+	client, _, _ := testClient(t)
+	client.Config.PullRequests = &fakeAdopter{}
+	return client
+}
+
+func adoptedFor(t *testing.T, _ context.Context, client *ui.Client, _, _ string) model.Principal {
+	t.Helper()
+	return client.Config.PullRequests.(*fakeAdopter).lastRequester()
+}
+
 // ciClient is testClient's deployment with a fake grain CI runner whose
 // every cancel succeeds.
 func ciClient(t *testing.T) *ui.Client {
 	t.Helper()
 	client, _, _ := testClient(t)
 	client.Config.CI = &fakeCIRunner{cancelOK: true}
+	return client
+}
+
+// imageSourceClient is testClient's deployment on the image upgrade
+// pipeline, whose image source an operator may still change.
+func imageSourceClient(t *testing.T) *ui.Client {
+	t.Helper()
+	client, _, _ := testClient(t)
+	dir := t.TempDir()
+	refFile := filepath.Join(dir, "image-ref")
+	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE=ghcr.io/acme/grain:main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	client.Config.Upgrader = upgrade.New(upgrade.Config{
+		StatusFile: filepath.Join(dir, "upgrade-status.json"),
+		Image: &upgrade.ImageConfig{
+			Repository:         "ghcr.io/acme/grain",
+			RefFile:            refFile,
+			SourceOverrideFile: filepath.Join(dir, "upgrade-image-source.json"),
+		},
+	})
 	return client
 }
 
@@ -250,6 +398,18 @@ func cancelledBy(t *testing.T, _ context.Context, client *ui.Client, _, _ string
 // inventory for tasks, the conversation, releases and the merge queue,
 // settings, sessions, and through the agent row the agent API.
 var attributedRoutes = map[string]attributedRoute{
+	"POST /api/pull-requests/adopt": {
+		client:      adopterClient,
+		body:        `{"pr":"acme/widgets#7"}`,
+		agentGrants: []string{"api:merge:write", "api:tasks:write"},
+		recorded:    adoptedFor,
+	},
+	"POST /api/pull-requests/review": {
+		client:      adopterClient,
+		body:        `{"pr":"acme/widgets#7","design":true}`,
+		agentGrants: []string{"api:tasks:write", "api:repos:read"},
+		recorded:    adoptedFor,
+	},
 	"POST /api/tasks": {
 		body:        `{"title":"filed","noRepo":true}`,
 		agentGrants: []string{"api:tasks:write"},
@@ -270,6 +430,12 @@ var attributedRoutes = map[string]attributedRoute{
 	"POST /api/tasks/{id}/comments": {
 		setup:       fileTask(true),
 		body:        `{"body":"a word"}`,
+		agentGrants: []string{"api:tasks:write"},
+		recorded:    newestComment,
+	},
+	"POST /api/tasks/{id}/reply": {
+		setup:       taskParkedOnQuestion,
+		body:        `{"body":"an answer"}`,
 		agentGrants: []string{"api:tasks:write"},
 		recorded:    newestComment,
 	},
@@ -326,6 +492,12 @@ var attributedRoutes = map[string]attributedRoute{
 		idOnly:   true,
 		recorded: releaseRequester,
 	},
+	"POST /api/releases/{version}/rollback": {
+		client:   releaseClient,
+		path:     "/api/releases/v2.4.0/rollback",
+		idOnly:   true,
+		recorded: releaseRequester,
+	},
 	"POST /api/tasks/{id}/withdraw-approval": {
 		setup:       fileTask(true),
 		agentGrants: []string{"api:tasks:write"},
@@ -334,6 +506,10 @@ var attributedRoutes = map[string]attributedRoute{
 	"POST /api/tasks/{id}/submit": {
 		setup:    taskWithPullRequest,
 		recorded: noted(model.TaskEventSubmitted),
+	},
+	"POST /api/tasks/{id}/human-review/release": {
+		setup:    taskHeldForHumanReview,
+		recorded: noted(model.TaskEventHumanReviewReleased),
 	},
 	"POST /api/tasks/{id}/retry": {
 		setup:       fileTask(true),
@@ -429,6 +605,14 @@ var attributedRoutes = map[string]attributedRoute{
 		bareID:   true,
 		recorded: cancelledBy,
 	},
+	// Where image upgrades come from: an override in a file of the
+	// upgrader's, so the handler writes the config_audit row itself.
+	"PUT /api/upgrade/source": {
+		client:      imageSourceClient,
+		body:        `{"mode":"registry"}`,
+		agentGrants: []string{"api:deployment-ops"},
+		recorded:    lastConfigAudit,
+	},
 	"PUT /api/memory": {
 		body:        `{"text":"remember this"}`,
 		agentGrants: []string{"api:memory"},
@@ -451,6 +635,14 @@ var attributedRoutes = map[string]attributedRoute{
 			return notes[0].UpdatedBy
 		},
 	},
+	// Figma OAuth code exchange stores the account's refresh token in the
+	// secret store and writes a config_audit row naming who connected it.
+	"POST /api/capability-servers/figma-oauth-exchange": {
+		client:      figmaOAuthClient,
+		body:        `{"id":"https://grain.dev/capabilities/figma","account":"design","code":"c0de","redirectUri":"https://grain.example/settings/capabilities"}`,
+		agentGrants: []string{"api:capabilities:admin"},
+		recorded:    lastConfigAudit,
+	},
 	// The hostd registry (Settings -> Hostds): each change is a
 	// config_audit entry about hostd:<name>.
 	"POST /api/hostds": {
@@ -458,10 +650,40 @@ var attributedRoutes = map[string]attributedRoute{
 		agentGrants: []string{"api:capabilities:admin"},
 		recorded:    lastConfigAudit,
 	},
+	"POST /api/hostds/enrollment-codes": {
+		body:     `{"name":"team-hosts"}`,
+		recorded: lastConfigAudit,
+	},
+	"POST /api/hostds/enrollment-codes/{name}/rotate": {
+		setup:    registerEnrollmentCode,
+		path:     "/api/hostds/enrollment-codes/{id}/rotate",
+		recorded: lastConfigAudit,
+	},
+	"POST /api/hostds/enrollment-codes/{name}/revoke": {
+		setup:    registerEnrollmentCode,
+		path:     "/api/hostds/enrollment-codes/{id}/revoke",
+		recorded: lastConfigAudit,
+	},
+	"POST /api/hostds/pending/{id}/accept": {
+		setup:    registerPendingHostJoin,
+		body:     `{"name":"devbox-1"}`,
+		recorded: lastConfigAudit,
+	},
+	"POST /api/hostds/pending/{id}/reject": {
+		setup:    registerPendingHostJoin,
+		recorded: lastConfigAudit,
+	},
 	"PATCH /api/hostds/{name}": {
 		setup:       registerHostd,
 		path:        "/api/hostds/{id}",
 		body:        `{"owner":"bob@example.com"}`,
+		agentGrants: []string{"api:capabilities:admin"},
+		recorded:    lastConfigAudit,
+	},
+	"POST /api/hostds/{name}/rename": {
+		setup:       registerHostd,
+		path:        "/api/hostds/{id}/rename",
+		body:        `{"name":"ws-2"}`,
 		agentGrants: []string{"api:capabilities:admin"},
 		recorded:    lastConfigAudit,
 	},
@@ -477,22 +699,45 @@ var attributedRoutes = map[string]attributedRoute{
 		agentGrants: []string{"api:capabilities:admin"},
 		recorded:    lastConfigAudit,
 	},
-	"POST /api/access/principals": {
-		body:        `{"entry":"user:newbie@example.com"}`,
-		agentGrants: []string{"api:access:write"},
+	"DELETE /api/hostds/{name}": {
+		setup:       registerRevokedHostd,
+		path:        "/api/hostds/{id}",
+		agentGrants: []string{"api:capabilities:admin"},
 		recorded:    lastConfigAudit,
 	},
-	"DELETE /api/access/principals/{entry}": {
+	"POST /api/hostds/delete-revoked": {
+		setup:       registerRevokedHostd,
+		agentGrants: []string{"api:capabilities:admin"},
+		recorded:    lastConfigAudit,
+	},
+	// Agents never change who signs in (docs/design/access-rbac.md §3),
+	// and a verified operator assigns only roles with no dangerous scope.
+	"POST /api/access/principals": {
+		body:     `{"entry":"user:newbie@example.com","role":"grain/viewer"}`,
+		recorded: lastConfigAudit,
+	},
+	"PATCH /api/access/principals/{entry}": {
 		setup: func(t *testing.T, client *ui.Client, _ sender) string {
 			t.Helper()
-			if _, err := client.AllowPrincipal(context.Background(), ui.AllowPrincipalRequest{Entry: "user:temp@example.com"}); err != nil {
+			if _, err := client.AllowPrincipal(context.Background(), ui.AllowPrincipalRequest{Entry: "user:temp@example.com", Role: "grain/viewer"}); err != nil {
 				t.Fatalf("seeding allowed principal: %v", err)
 			}
 			return "user:temp@example.com"
 		},
-		path:        "/api/access/principals/{id}",
-		agentGrants: []string{"api:access:write"},
-		recorded:    lastConfigAudit,
+		path:     "/api/access/principals/{id}",
+		body:     `{"role":"grain/contributor"}`,
+		recorded: lastConfigAudit,
+	},
+	"DELETE /api/access/principals/{entry}": {
+		setup: func(t *testing.T, client *ui.Client, _ sender) string {
+			t.Helper()
+			if _, err := client.AllowPrincipal(context.Background(), ui.AllowPrincipalRequest{Entry: "user:temp@example.com", Role: "grain/viewer"}); err != nil {
+				t.Fatalf("seeding allowed principal: %v", err)
+			}
+			return "user:temp@example.com"
+		},
+		path:     "/api/access/principals/{id}",
+		recorded: lastConfigAudit,
 	},
 	"POST /api/pipeline-pause": {
 		body: `{"reason":"maintenance"}`,
@@ -543,20 +788,35 @@ var attributedRoutes = map[string]attributedRoute{
 // is credited with: signing in and out, and requests that only check,
 // plan or preview a change without making it.
 var neverAttributedRoutes = map[string]bool{
+	// A review's request for human review is recorded as that review's
+	// agent, whoever relays it (its run's MCP server reaches the daemon
+	// as the daemon): the hold is the review's, and the request's own
+	// principal is checked rather than recorded (ui.Client.RequestHumanReview).
+	"POST /api/tasks/{id}/human-review": true,
 	// Signing in and out: there is nobody to credit until it succeeds,
 	// and nothing is written that names them.
 	"POST /api/auth/access-code": true,
 	"POST /api/auth/logout":      true,
+	// Self-authenticating Ed25519 host handshake and silent credential
+	// renewal protocol endpoints; operator approval is attributed on
+	// POST /api/hostds/pending/{id}/accept and .../reject.
+	"POST /api/hostd/join":           true,
+	"POST /api/hostd/join/{id}/poll": true,
+	"POST /api/hostd/renew":          true,
 	// Checks, tests and previews: they report what a change would do and
 	// write nothing.
-	"POST /api/agent-keys/{framework}/check":     true,
-	"POST /api/capabilities/{id}/check":          true,
-	"POST /api/capability-grants/check":          true,
-	"POST /api/capability-policy/preview":        true,
-	"POST /api/capability-servers/test":          true,
-	"POST /api/database/test":                    true,
-	"POST /api/deployment/git-connections/check": true,
-	"POST /api/settings/plan":                    true,
+	"POST /api/agent-keys/{framework}/check": true,
+	"POST /api/capabilities/{id}/check":      true,
+	"POST /api/capability-grants/check":      true,
+	"POST /api/capability-policy/preview":    true,
+	"POST /api/capability-servers/test":      true,
+	// Figma's account check calls Figma's /v1/me; authorize only issues an
+	// in-memory, single-use OAuth state. Neither persists anything.
+	"POST /api/capability-servers/figma-test":            true,
+	"POST /api/capability-servers/figma-oauth-authorize": true,
+	"POST /api/deployment/git-connections/check":         true,
+	"POST /api/registry/heartbeat":                       true,
+	"POST /api/settings/plan":                            true,
 	// The MCP endpoints are transports: each tool they serve calls one of
 	// the routes here, and is attributed there. POST /api/mcp's
 	// grain_invoke dispatches the route through s.mux with the outer
@@ -616,7 +876,6 @@ var notYetAttributedRoutes = map[string]bool{
 	"POST /api/console-sessions/{id}/restart":                              true,
 	"POST /api/console/{id}/input":                                         true,
 	"POST /api/console/{id}/resize":                                        true,
-	"POST /api/database/upgrade":                                           true,
 	"POST /api/deployment/broadcast":                                       true,
 	"POST /api/deployment/git-connections":                                 true,
 	"POST /api/external-agents/tokens":                                     true,
@@ -648,7 +907,6 @@ var notYetAttributedRoutes = map[string]bool{
 	"POST /api/schedules/composition":                                      true,
 	"POST /api/schedules/{id}/run":                                         true,
 	"POST /api/settings":                                                   true,
-	"POST /api/settings/db/migrate-to-postgres":                            true,
 	"POST /api/state-repo/import-key":                                      true,
 	"POST /api/state-repo/pull-requests":                                   true,
 	"POST /api/state-repo/remote":                                          true,
@@ -671,6 +929,9 @@ var notYetAttributedRoutes = map[string]bool{
 	"POST /api/tasks/{id}/config-change":                                   true,
 	"POST /api/tasks/{id}/config-change/approve":                           true,
 	"POST /api/tasks/{id}/config-change/reject":                            true,
+	"POST /api/tasks/{id}/access-request/check":                            true,
+	"POST /api/tasks/{id}/access-request/grant":                            true,
+	"POST /api/tasks/{id}/access-request/deny":                             true,
 	"POST /api/tasks/{id}/db/execute":                                      true,
 	"POST /api/tasks/{id}/db/query":                                        true,
 	"POST /api/tasks/{id}/delivered":                                       true,
@@ -691,7 +952,6 @@ var notYetAttributedRoutes = map[string]bool{
 	"POST /api/tasks/{id}/wait-credit":                                     true,
 	"POST /api/tests/quarantine":                                           true,
 	"POST /api/upgrade":                                                    true,
-	"POST /api/upgrade/postgres":                                           true,
 	"PUT /api/agent-backends/{id}/codex-auth":                              true,
 	"PUT /api/agent-backends/{id}/credential":                              true,
 	"PUT /api/agent-keys/{framework}":                                      true,

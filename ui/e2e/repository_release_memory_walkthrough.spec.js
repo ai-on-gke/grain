@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 import { execFileSync } from "node:child_process";
 
 test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
@@ -328,7 +329,7 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
         res.request().method() === "PUT" &&
         /\/api\/repos\/acme\/widgets\/ci-capabilities(\?|$)/.test(res.url()),
     );
-    await page.getByRole("option", { name: /Gemini key/i }).click();
+    await page.getByRole("option", { name: /GitHub sandbox/i }).click();
     expect((await ciCapsSaved).ok()).toBeTruthy();
     await page.keyboard.press("Escape");
     await expect(page.locator(".MuiAlert-filledError")).not.toBeVisible();
@@ -345,7 +346,7 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
         res.request().method() === "PUT" &&
         /\/api\/repos\/acme\/widgets\/capabilities(\?|$)/.test(res.url()),
     );
-    await page.getByRole("option", { name: /Self debug/i }).click();
+    await page.getByRole("option", { name: /Interactive console/i }).click();
     expect((await defCapsSaved).ok()).toBeTruthy();
     await page.keyboard.press("Escape");
     await expect(page.locator(".MuiAlert-filledError")).not.toBeVisible();
@@ -354,11 +355,11 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
     await page.reload();
     await deploymentWide("CI");
     await expect(
-      page.locator(".MuiChip-root").filter({ hasText: /Gemini key/i }),
+      page.locator(".MuiChip-root").filter({ hasText: /GitHub sandbox/i }),
     ).toBeVisible();
     await page.getByRole("tab", { name: "Agents" }).click();
     await expect(
-      page.locator(".MuiChip-root").filter({ hasText: /Self debug/i }),
+      page.locator(".MuiChip-root").filter({ hasText: /Interactive console/i }),
     ).toBeVisible();
 
     // 2.5 Prompt Extension and Setup Command
@@ -651,9 +652,9 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
     const create = async (name) => {
       await nameBox.fill(name);
       await page.getByRole("button", { name: "Create release" }).click();
-      await expect(
-        page.getByRole("combobox", { name: "Release" }),
-      ).toContainText(name);
+      await expect(page.getByRole("combobox", { name: "Release" })).toHaveValue(
+        new RegExp(`^${name} -- `),
+      );
     };
 
     const existing = await (
@@ -679,10 +680,7 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
     const currentCandidate = page.locator(".candidate-current");
     await expect(currentCandidate).toContainText(`${newer}.rc.1`);
 
-    await page.getByRole("combobox", { name: "Release" }).click();
-    await page
-      .getByRole("option", { name: new RegExp(`^${older} -- `) })
-      .click();
+    await chooseOption(page.getByRole("combobox", { name: "Release" }), older);
     expect(
       await page.locator(".candidate-current", { hasText: newer }).count(),
     ).toBe(0);
@@ -720,13 +718,13 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
       new RegExp(`/repos/acme/widgets/releases/${older}$`),
     );
     await page.reload();
-    await expect(picker).toContainText(older);
+    await expect(picker).toHaveValue(new RegExp(`^${older} -- `));
     await expect(currentCandidate).toContainText(`${older}.rc.`);
     await page.goBack();
     await expect(page).toHaveURL(
       new RegExp(`/repos/acme/widgets/releases/${newer}$`),
     );
-    await expect(picker).toContainText(newer);
+    await expect(picker).toHaveValue(new RegExp(`^${newer} -- `));
 
     // A link naming a release the repo does not have opens the newest,
     // says so, and stops naming it.
@@ -735,6 +733,6 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
       page.getByText("acme/widgets has no release named “no-such-release”"),
     ).toBeVisible();
     await expect(page).toHaveURL(/\/repos\/acme\/widgets\/releases$/);
-    await expect(picker).toContainText(newer);
+    await expect(picker).toHaveValue(new RegExp(`^${newer} -- `));
   });
 });

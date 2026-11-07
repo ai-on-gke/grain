@@ -115,13 +115,26 @@ type TaskSummary struct {
 	// from a title.
 	Kinds []string
 	// DependsOn is every task this one names in depends_on, open or not;
+	// DependsOnStates carries each named dependency's current state; and
 	// BlockedBy above is the still-open part of it.
-	DependsOn []string
+	DependsOn       []string
+	DependsOnStates map[string]string
 	// ChangedAt is the latest moment the record stamps a change of this
 	// task's -- filed, a run starting or ending, closed, merged, or a move
 	// of the merge queue's -- which is what list_grain_tasks'
 	// changed_since compares. nil for a record that stamps none.
 	ChangedAt *time.Time
+	// Reason is why the task sits in State (ui.Task.Reason): "queued/ready"
+	// while waiting for a worker vs "queued/dispatch_blocked" with the
+	// deployment's blocking condition in Resource.
+	Reason *TaskReason
+}
+
+// TaskReason is why a task sits in State (ui.Reason, orchestrator's
+// TaskReason): the named sub-case and what it waits on.
+type TaskReason struct {
+	Reason   string
+	Resource string
 }
 
 // TaskMergeQueue is the merge queue's own account of one task, as the
@@ -228,8 +241,11 @@ type TaskComment struct {
 	// operator-attribution spec §4.3); "" from a caller that sets none,
 	// which Who falls back to Author for.
 	AuthorLabel string
-	Body        string
-	CreatedAt   time.Time
+	// FiledVia is the sanitized X-Grain-Client label of the client that
+	// posted this comment (#XC-15), "" when none was sent.
+	FiledVia  string
+	Body      string
+	CreatedAt time.Time
 	// Handover marks the comment a run wrote as the task's standing
 	// summary of its own older conversation (model.Comment.Handover). A
 	// run reading another task's record to work out why it is behaving
@@ -268,7 +284,10 @@ type TaskRecord struct {
 	Author      string
 	AuthorKind  string
 	// AuthorLabel is ui.Task.AuthorLabel: how whoever filed it reads.
-	AuthorLabel  string
+	AuthorLabel string
+	// Provenance is ui.Task.Provenance: "filed from <filed_via> by <owner>"
+	// when filed_via was recorded (#XC-15).
+	Provenance   string
 	Base         string
 	Capabilities []string
 	PullRequest  string
@@ -822,6 +841,13 @@ func renderTaskRecord(t TaskRecord, now time.Time) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Task %s: %s\n", t.ID, singleLine(t.Title))
 	fmt.Fprintf(&b, "State: %s\n", t.State)
+	if r := t.Reason; r != nil && r.Reason != "" {
+		if r.Resource != "" {
+			fmt.Fprintf(&b, "Reason: %s (%s)\n", r.Reason, singleLine(r.Resource))
+		} else {
+			fmt.Fprintf(&b, "Reason: %s\n", r.Reason)
+		}
+	}
 	// Immediately under the state, because it is about that word and
 	// nothing else: the state says what this task is waiting for and
 	// this says that the wait has gone on longer than it should have.
@@ -844,6 +870,9 @@ func renderTaskRecord(t TaskRecord, now time.Time) string {
 			fmt.Fprintf(&b, "Filed by: %s (%s)\n", t.Author, t.AuthorKind)
 		}
 	}
+	if t.Provenance != "" {
+		fmt.Fprintf(&b, "Provenance: %s\n", t.Provenance)
+	}
 	if t.CreatedAt != nil {
 		fmt.Fprintf(&b, "Filed at: %s\n", t.CreatedAt.UTC().Format(time.RFC3339))
 	}
@@ -858,6 +887,9 @@ func renderTaskRecord(t TaskRecord, now time.Time) string {
 		b.WriteString("Kind: configuration agent\n")
 	} else if t.Interactive {
 		b.WriteString("Kind: interactive\n")
+	}
+	if len(t.DependsOn) > 0 {
+		fmt.Fprintf(&b, "Depends on: %s\n", formatDependencies(t.DependsOn, t.DependsOnStates))
 	}
 	if len(t.Capabilities) > 0 {
 		fmt.Fprintf(&b, "Capabilities: %s\n", strings.Join(t.Capabilities, ", "))
@@ -941,7 +973,11 @@ func renderTaskRecord(t TaskRecord, now time.Time) string {
 			kind += ", this task's handover: the summary grain carries into its later " +
 				"prompts when this thread is too long to quote whole"
 		}
-		fmt.Fprintf(&b, "  [%s] %s (%s):\n", c.CreatedAt.UTC().Format(time.RFC3339), c.Author, kind)
+		from := ""
+		if c.FiledVia != "" {
+			from = fmt.Sprintf(" (from %s)", c.FiledVia)
+		}
+		fmt.Fprintf(&b, "  [%s] %s (%s)%s:\n", c.CreatedAt.UTC().Format(time.RFC3339), c.Who(), kind, from)
 		b.WriteString(indent(c.Body))
 	}
 	return strings.TrimRight(b.String(), "\n")
@@ -1325,6 +1361,18 @@ func blankAsNone(s, none string) string {
 		return none
 	}
 	return s
+}
+
+func formatDependencies(deps []string, states map[string]string) string {
+	parts := make([]string, len(deps))
+	for i, id := range deps {
+		if st := states[id]; st != "" {
+			parts[i] = fmt.Sprintf("%s (%s)", id, st)
+		} else {
+			parts[i] = id
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // indent shifts a block of prose in by two spaces, so a description or a

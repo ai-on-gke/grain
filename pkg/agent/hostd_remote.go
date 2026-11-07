@@ -182,12 +182,16 @@ func (h HostdHost) ReadTail(ctx context.Context, path string, limit int64) ([]by
 	return r.Data, r.Truncated, nil
 }
 
-// RemoveAll implements Host.
+// RemoveAll implements Host. On a dialing-in hostd that is not connected
+// right now (for instance, right after -hostd-reattach-timeout gave up with
+// ErrHostdLost), cleanup returns at once rather than waiting out Client.dial's
+// 30s retry window per file; the next run clears its own per-run files before
+// starting and PruneDir sweeps stale homes.
 func (h HostdHost) RemoveAll(ctx context.Context, path string) error {
 	if !h.remote() {
 		return h.LocalHost.RemoveAll(ctx, path)
 	}
-	_, err := h.stage(ctx, hostd.StageOp{Op: hostd.StageRemoveAll, Path: path})
+	_, err := h.stage(hostd.ForDisplay(ctx), hostd.StageOp{Op: hostd.StageRemoveAll, Path: path})
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
@@ -249,12 +253,12 @@ func (h HostdHost) CarryCapabilityServers(servers []CapabilityMCPServer) ([]Capa
 	for _, s := range servers {
 		if s.Handler == nil {
 			releaseAll()
-			return nil, nil, hostSetup(fmt.Errorf("capability MCP server %q is not one grain proxies, so it cannot be carried to the grain hostd's machine", s.Name))
+			return nil, nil, hostSetup(fmt.Errorf("capability MCP server %q is not one grain proxies, so it cannot be carried to the host agent's machine", s.Name))
 		}
 		base, release, err := h.carry(s.Handler)
 		if err != nil {
 			releaseAll()
-			return nil, nil, hostSetup(fmt.Errorf("carrying capability MCP server %q to the grain hostd's machine: %w", s.Name, err))
+			return nil, nil, hostSetup(fmt.Errorf("carrying capability MCP server %q to the host agent's machine: %w", s.Name, err))
 		}
 		releases = append(releases, release)
 		s.URL, err = rebase(base, s.URL)
@@ -298,7 +302,7 @@ func (h HostdHost) CarryMCPEndpoint(endpoint, token string) (string, func(), err
 	}
 	base, release, err := h.carry(proxy)
 	if err != nil {
-		return "", nil, hostSetup(fmt.Errorf("carrying the run's MCP endpoint to the grain hostd's machine: %w", err))
+		return "", nil, hostSetup(fmt.Errorf("carrying the run's MCP endpoint to the host agent's machine: %w", err))
 	}
 	carried, err := rebase(base, endpoint)
 	if err != nil {

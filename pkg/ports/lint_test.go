@@ -56,10 +56,15 @@ var allowlist = []allowed{
 	{5432, "", "PostgreSQL"},
 	{5000, "", "a local Docker registry (localhost:5000)"},
 	{8443, "", "an example GitHub Enterprise host:port in help and validation text"},
+	{5173, "pkg/sandboxcli/help.go", "grain screenshot's example: Vite's default dev-server port, the app under test's, not grain's"},
+	{3000, "pkg/sandboxcli/help.go", "grain screenshot's example: a typical Node dev-server port, the app under test's, not grain's"},
 	// Not grain's to move.
 	{8080, "cmd/checkpost/", "checkpost is a separate service whose deployment publishes :8080"},
 	{8080, "cmd/github-webhook/", "github-webhook is a separate gateway service whose deployment (deploy/kubernetes/github-webhook.yaml) publishes :8080"},
 	{8080, "pkg/cli/ghwebhook_flags.go", "-github-webhook-url's example names the github-webhook gateway service's :8080"},
+	{8080, "pkg/registry/", "grain-registry is a separate service whose front listener defaults to :8080 (design/design/registry.design.md)"},
+	{8081, "pkg/registry/", "grain-registry is a separate service whose public JWKS listener (jwks_listen) defaults to :8081 (design/design/registry.design.md)"},
+	{8082, "pkg/registry/", "grain-registry is a separate service whose VPC-internal peer-forward address (tunnel.peer_listen) defaults to :8082 (design/design/registry.design.md)"},
 }
 
 // skipDirs are never linted wherever they are: other people's code and

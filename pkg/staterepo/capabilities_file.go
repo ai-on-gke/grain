@@ -44,8 +44,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -86,18 +88,19 @@ type capabilitiesRepoDefault struct {
 // is grain_config.mcp_servers' (protocol.ServerConfig), and its methods
 // and restrictions, which are the catalogue's.
 type capabilityServerEntry struct {
-	ID      string            `yaml:"id"`
-	Name    string            `yaml:"name,omitempty"`
-	URL     string            `yaml:"url,omitempty"`
-	Command string            `yaml:"command,omitempty"`
-	Args    []string          `yaml:"args,omitempty"`
-	Env     map[string]string `yaml:"env,omitempty"`
-	Headers map[string]string `yaml:"headers,omitempty"`
-	Run     string            `yaml:"run,omitempty"`
-	Enabled *bool             `yaml:"enabled,omitempty"`
-	Builtin string            `yaml:"builtin,omitempty"`
-	Aliases []string          `yaml:"aliases,omitempty"`
-	Notice  string            `yaml:"notice,omitempty"`
+	ID      string               `yaml:"id"`
+	Name    string               `yaml:"name,omitempty"`
+	URL     string               `yaml:"url,omitempty"`
+	Command string               `yaml:"command,omitempty"`
+	Args    []string             `yaml:"args,omitempty"`
+	Env     map[string]string    `yaml:"env,omitempty"`
+	Headers map[string]string    `yaml:"headers,omitempty"`
+	Run     string               `yaml:"run,omitempty"`
+	Hostd   protocol.HostdTarget `yaml:"hostd,omitempty"`
+	Enabled *bool                `yaml:"enabled,omitempty"`
+	Builtin string               `yaml:"builtin,omitempty"`
+	Aliases []string             `yaml:"aliases,omitempty"`
+	Notice  string               `yaml:"notice,omitempty"`
 	// Secrets are configuration values held by reference
 	// ($secret:<name>), merged into Config: never a secret's value.
 	Secrets      map[string]string             `yaml:"secrets,omitempty"`
@@ -229,10 +232,57 @@ func ValidateCapabilitiesFile(data []byte) (*model.CapabilityCatalogue, error) {
 	return doc.validate()
 }
 
+func (d *capabilitiesDoc) validate() (*model.CapabilityCatalogue, error) {
+	var sets []string
+	var serverIDs map[string]bool
+	hasExplicitSets := false
+	if d.Servers != nil {
+		if servers, err := d.mcpServers(); err == nil {
+			if encoded, err := model.EncodeMCPServers(servers); err == nil {
+				sets, serverIDs = model.GCPPermissionSetsFromMCPServers(encoded)
+				if srv, ok := servers[model.GCPCapabilityServerID]; ok {
+					_, hasExplicitSets = srv.Config["permission_sets"]
+				}
+			}
+		}
+	}
+	if !hasExplicitSets && len(sets) == 0 {
+		// Standalone file check with no gcp server permission_sets block:
+		// allow named account values during the one-release import window.
+		sets = referencedGCPAccountNames(d.catalogue(nil))
+	}
+	return d.validateWithGCPSets(sets, serverIDs)
+}
+
+func referencedGCPAccountNames(cat *model.CapabilityCatalogue) []string {
+	if cat == nil {
+		return nil
+	}
+	var out []string
+	collect := func(grants []string) {
+		for _, g := range grants {
+			spec, err := model.CapabilityGrantSpec(g)
+			if err != nil {
+				continue
+			}
+			if acct, _ := spec.With["account"].(string); strings.TrimSpace(acct) != "" && strings.TrimSpace(acct) != "default" {
+				out = append(out, strings.TrimSpace(acct))
+			}
+		}
+	}
+	collect(cat.Defaults.Task)
+	collect(cat.Defaults.CI)
+	for _, rd := range cat.Defaults.Repos {
+		collect(rd.Task)
+		collect(rd.CI)
+	}
+	return out
+}
+
 // validate is the document's consistency: transports that parse,
 // secrets held by reference, scope sets that resolve, and everything the
 // catalogue checks of itself (model.CapabilityCatalogue.Validate).
-func (d *capabilitiesDoc) validate() (*model.CapabilityCatalogue, error) {
+func (d *capabilitiesDoc) validateWithGCPSets(configuredSets []string, gcpServerIDs map[string]bool) (*model.CapabilityCatalogue, error) {
 	var errs []string
 	if d.Servers != nil {
 		for i, s := range *d.Servers {
@@ -265,6 +315,13 @@ func (d *capabilitiesDoc) validate() (*model.CapabilityCatalogue, error) {
 		}
 	}
 	cat := d.catalogue(nil)
+	// One-release compatibility (schema 109): accept old-form gcp#gcp-key
+	// arguments in settings/capabilities.yml during state-repo import/check.
+	model.RewriteGCPKeyCatalogue(cat, configuredSets, gcpServerIDs, nil)
+	// One-release compatibility (schema 122): strip retired priority-dispatch
+	// and durable entries from settings/capabilities.yml with a deprecation
+	// warning so check passes before the next export rewrites them.
+	stripRetiredAdmissionFromCatalogue(cat)
 	if err := cat.Validate(); err != nil {
 		errs = append(errs, err.Error())
 	}
@@ -272,6 +329,46 @@ func (d *capabilitiesDoc) validate() (*model.CapabilityCatalogue, error) {
 		return nil, fmt.Errorf("staterepo: %s: %s", CapabilitiesPath, strings.Join(errs, "; "))
 	}
 	return cat, nil
+}
+
+func stripRetiredAdmissionFromCatalogue(cat *model.CapabilityCatalogue) {
+	if cat == nil {
+		return
+	}
+	for _, retired := range []string{model.PriorityDispatchCapability, model.DurableCapability} {
+		if _, has := cat.InProcess[retired]; has {
+			delete(cat.InProcess, retired)
+			log.Printf("staterepo: %s: in_process.%s is deprecated and ignored; admission is now a task setting", CapabilitiesPath, retired)
+		}
+	}
+	if kept, adm, matched := model.ExtractLegacyAdmissionStrings(cat.Defaults.Task); len(matched) > 0 {
+		log.Printf("staterepo: %s: defaults.task contains deprecated admission capability (%s); set default_admission to %q instead",
+			CapabilitiesPath, strings.Join(matched, ", "), adm)
+		cat.Defaults.Task = kept
+	}
+	if kept, adm, matched := model.ExtractLegacyAdmissionStrings(cat.Defaults.CI); len(matched) > 0 {
+		log.Printf("staterepo: %s: defaults.ci contains deprecated admission capability (%s -> %q), which does not apply to CI",
+			CapabilitiesPath, strings.Join(matched, ", "), adm)
+		cat.Defaults.CI = kept
+	}
+	for r, rd := range cat.Defaults.Repos {
+		changed := false
+		if kept, adm, matched := model.ExtractLegacyAdmissionStrings(rd.Task); len(matched) > 0 {
+			log.Printf("staterepo: %s: defaults.repos[%s].task contains deprecated admission capability (%s); set repo default_admission to %q instead",
+				CapabilitiesPath, r, strings.Join(matched, ", "), adm)
+			rd.Task = kept
+			changed = true
+		}
+		if kept, adm, matched := model.ExtractLegacyAdmissionStrings(rd.CI); len(matched) > 0 {
+			log.Printf("staterepo: %s: defaults.repos[%s].ci contains deprecated admission capability (%s -> %q), which does not apply to CI",
+				CapabilitiesPath, r, strings.Join(matched, ", "), adm)
+			rd.CI = kept
+			changed = true
+		}
+		if changed {
+			cat.Defaults.Repos[r] = rd
+		}
+	}
 }
 
 // mcpServers is the servers section as grain_config.mcp_servers.
@@ -287,7 +384,7 @@ func (d *capabilitiesDoc) mcpServers() (map[string]protocol.ServerConfig, error)
 		}
 		cfg := protocol.ServerConfig{
 			Command: s.Command, Args: s.Args, Env: s.Env, ServerURL: s.URL, Headers: s.Headers,
-			Disabled: s.Enabled != nil && !*s.Enabled, Run: s.Run, Builtin: s.Builtin,
+			Disabled: s.Enabled != nil && !*s.Enabled, Run: s.Run, Hostd: s.Hostd, Builtin: s.Builtin,
 			Aliases: s.Aliases, Notice: s.Notice,
 		}
 		if len(s.Config) > 0 || len(s.Secrets) > 0 {
@@ -623,7 +720,7 @@ func capabilitiesDocumentFor(ctx context.Context, db querier) ([]byte, error) {
 		enabled := !cfg.Disabled
 		e := capabilityServerEntry{
 			ID: id, Name: meta.Name, URL: cfg.ServerURL, Command: cfg.Command, Args: cfg.Args, Env: cfg.Env,
-			Headers: cfg.Headers, Run: cfg.Run, Enabled: &enabled, Builtin: cfg.Builtin, Aliases: cfg.Aliases,
+			Headers: cfg.Headers, Run: cfg.Run, Hostd: cfg.Hostd, Enabled: &enabled, Builtin: cfg.Builtin, Aliases: cfg.Aliases,
 			Notice: cfg.Notice, Methods: meta.Methods, Restrictions: meta.Restrictions,
 		}
 		for k, v := range cfg.Config {
@@ -712,7 +809,40 @@ func checkCapabilities(dir string) error {
 	if err != nil || doc == nil {
 		return err
 	}
-	cat, err := doc.validate()
+	var configuredSets []string
+	var serverIDs map[string]bool
+	hasExplicitSets := false
+	if doc.Servers != nil {
+		if servers, err := doc.mcpServers(); err == nil {
+			if encoded, err := model.EncodeMCPServers(servers); err == nil {
+				configuredSets, serverIDs = model.GCPPermissionSetsFromMCPServers(encoded)
+				if srv, ok := servers[model.GCPCapabilityServerID]; ok {
+					_, hasExplicitSets = srv.Config["permission_sets"]
+				}
+			}
+		}
+	} else if cfgRows, present, err := dumpRowsOf(dir, grainConfigTable); err == nil && present {
+		for _, r := range cfgRows {
+			mcpText, _ := textOf(r["mcp_servers"])
+			sets, ids := model.GCPPermissionSetsFromMCPServers(mcpText)
+			for _, s := range sets {
+				if !slices.Contains(configuredSets, s) {
+					configuredSets = append(configuredSets, s)
+				}
+			}
+			if serverIDs == nil {
+				serverIDs = ids
+			} else {
+				for id := range ids {
+					serverIDs[id] = true
+				}
+			}
+		}
+	}
+	if !hasExplicitSets && len(configuredSets) == 0 {
+		configuredSets = referencedGCPAccountNames(doc.catalogue(nil))
+	}
+	cat, err := doc.validateWithGCPSets(configuredSets, serverIDs)
 	if err != nil {
 		return err
 	}
@@ -737,6 +867,9 @@ func checkCapabilities(dir string) error {
 			id := fmt.Sprint(g[kind.parent])
 			owner := byID[id]
 			capability, _ := textOf(g["capability"])
+			if rewritten, changed, missing := model.RewriteGCPKeyGrant(capability, configuredSets, serverIDs); changed && missing == "" {
+				capability = rewritten
+			}
 			gc := model.GrantContext{Kind: model.CatalogueKindTask, Grants: []string{capability}}
 			if o, _ := textOf(owner["target_owner"]); o != "" {
 				n, _ := textOf(owner["target_name"])

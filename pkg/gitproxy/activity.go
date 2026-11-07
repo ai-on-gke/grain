@@ -126,13 +126,10 @@ func namespaceRouteTool(path string, query url.Values) string {
 		}
 		return "get_ci_log"
 	case "src":
-		if rel == "playbooks" || strings.HasPrefix(rel, "playbooks/") {
-			if wantList || rel == "playbooks" {
-				return "list_bootstrap_playbooks"
-			}
-			return "read_bootstrap_playbook"
-		}
-		if wantList {
+		// src://playbooks is the bootstrap playbooks (pkg/playbooks); the
+		// MCP tools that once read it went with pkg/capability/bootstrap,
+		// so a listing or a read there is the generic namespace one.
+		if wantList || rel == "playbooks" {
 			return "grain_ls"
 		}
 		return "grain_read"

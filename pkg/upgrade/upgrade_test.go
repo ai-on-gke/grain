@@ -611,7 +611,7 @@ func TestDoneOutlastsTheStatusFileSayingItIsFinished(t *testing.T) {
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    filepath.Join(dir, "image.env"),
 			PullCmd:    []string{"true"},
 		},
@@ -1240,12 +1240,12 @@ func TestUpgraderDiscardedRCDoesNotAutoDowngradeAndReportsUnchanged(t *testing.T
 		t.Run(branch, func(t *testing.T) {
 			dir := t.TempDir()
 			refFile := filepath.Join(dir, "image.env")
-			const prevRef = "ghcr.io/bwsalmon/grain/grain:candidate@" + testDigest
+			const prevRef = "docker.io/grainai/grain:candidate@" + testDigest
 			writeTestFile(t, refFile, "GRAIN_IMAGE="+prevRef+"\n")
 
 			u := newUpgrader(t, Config{
 				Image: &ImageConfig{
-					Repository: "ghcr.io/bwsalmon/grain/grain",
+					Repository: "docker.io/grainai/grain",
 					RefFile:    refFile,
 					PullCmd:    []string{"true"},
 					RunCmd:     []string{"sh", "-c", "echo 7"},

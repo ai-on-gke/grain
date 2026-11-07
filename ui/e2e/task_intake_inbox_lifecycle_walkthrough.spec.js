@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption, chosenValues } from "./searchSelect.js";
 
 // The first test triages the inbox rows `grain demo` seeds -- one in
 // each of its four groups -- and approves and answers two of them, so it
@@ -161,7 +162,7 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     await page.getByLabel("Description").fill(queuedDesc);
 
     // Repos and base branch
-    await page.getByLabel(/^Repos/).selectOption("acme/widgets");
+    await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
     await page.getByLabel("Base branch").fill("main");
 
     // Auto-merge checkbox
@@ -237,9 +238,9 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     // repo: the branch used to be filed anyway and shown as the no-repo
     // task's target (docs/test-runs/
     // 2026-10-13-task-intake-inbox-lifecycle.md).
-    await page.getByLabel(/^Repos/).selectOption("acme/widgets");
+    await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
     await page.getByLabel("Base branch").fill("release-9");
-    await page.getByLabel(/^Repos/).selectOption("none");
+    await chooseOption(page.getByLabel(/^Repos/), "none");
 
     // Uncheck Queue immediately to file as proposal
     await page.getByRole("checkbox", { name: "Queue immediately" }).uncheck();
@@ -684,9 +685,9 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     await page.goto("/new");
     const form = page.getByRole("dialog", { name: "New task" });
     await form.getByLabel("Title").fill("Malformed repo probe");
-    await form
-      .getByRole("combobox", { name: /^Repos/ })
-      .selectOption({ label: "Other…" });
+    await chooseOption(form.getByRole("combobox", { name: /^Repos/ }), {
+      label: "Other…",
+    });
     await form
       .getByPlaceholder("owner/name", { exact: true })
       .fill("not a repo");
@@ -755,7 +756,7 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     const form = page.getByRole("dialog", { name: "New task" });
     const title = `Hidden refusal ${Date.now()}`;
     await form.getByLabel("Title").fill(title);
-    await form.getByRole("combobox", { name: /^Repos/ }).selectOption({
+    await chooseOption(form.getByRole("combobox", { name: /^Repos/ }), {
       label: "No repo (standalone task -- nothing to check out)",
     });
     const advanced = form.getByRole("button", { name: "Advanced options" });
@@ -784,12 +785,13 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     expect(filed[0].postDataJSON()).toMatchObject({ title, sandboxCpus: 2 });
   });
 
-  // 2026-10-26 intake walkthrough: a demo with -github-sim pre-ticks
-  // Gemini key while saying it is not ready. Unticking it took its row
+  // 2026-10-26 intake walkthrough: a demo with -github-sim pre-ticked
+  // Gemini key while saying it was not ready. Unticking it took its row
   // out of the open menu, so it could not be ticked again, and focus fell
   // out of the list. The row now stays for as long as the form is open.
-  // This file's demo has Gemini key ready, so the real /api/config is
-  // read and only that row's readiness is rewritten.
+  // gemini-key, self-debug, bootstrap-playbooks and read-issues are
+  // retired, so this uses console, which this file's demo has ready: the
+  // real /api/config is read and only that row's readiness is rewritten.
   test("keeps an unticked unready capability in the open menu", async ({
     page,
   }) => {
@@ -800,12 +802,12 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
         const response = await route.fetch();
         const config = JSON.parse(await response.text());
         config.capabilities = (config.capabilities || []).map((c) =>
-          c.id === "gemini-key"
+          c.id === "console"
             ? { ...c, ready: false, needs: ["a GCP project"] }
             : c,
         );
         config.defaultCapabilities = [
-          ...new Set([...(config.defaultCapabilities || []), "gemini-key"]),
+          ...new Set([...(config.defaultCapabilities || []), "console"]),
         ];
         await route.fulfill({ response, json: config });
       } catch {
@@ -826,32 +828,33 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     if (await discard.isVisible()) await discard.click();
     const title = `Re-ticked capability ${Date.now()}`;
     await form.getByLabel("Title").fill(title);
-    await form.getByRole("combobox", { name: /^Repos/ }).selectOption({
+    await chooseOption(form.getByRole("combobox", { name: /^Repos/ }), {
       label: "No repo (standalone task -- nothing to check out)",
     });
 
     const capabilities = form.getByRole("combobox", {
       name: "Legacy capabilities",
     });
-    await expect(capabilities).toContainText("Gemini key");
+    await expect.poll(() => chosenValues(capabilities)).toContain("console");
     await capabilities.click();
-    const gemini = page.getByRole("option", { name: /Gemini key/ });
-    await expect(gemini).toContainText(/Not ready/);
-    await gemini.click();
-    await expect(gemini).toBeVisible();
-    await expect(gemini).toHaveAttribute("aria-selected", "false");
-    await expect(gemini).toBeFocused();
-    await gemini.click();
-    await expect(gemini).toHaveAttribute("aria-selected", "true");
+    const row = page.getByRole("option", { name: /Interactive console/ });
+    await expect(row).toContainText(/Not ready/);
+    await row.click();
+    await expect(row).toBeVisible();
+    await expect(row).toHaveAttribute("aria-selected", "false");
+    // The list stays open, and the keys stay with the box.
+    await expect(capabilities).toBeFocused();
+    await row.click();
+    await expect(row).toHaveAttribute("aria-selected", "true");
     await page.keyboard.press("Escape");
     await expect(page.getByRole("listbox")).toBeHidden();
     await expect(form).toBeVisible();
-    await expect(capabilities).toContainText("Gemini key");
+    await expect.poll(() => chosenValues(capabilities)).toContain("console");
 
     await form.getByRole("button", { name: "Create task" }).click();
     await expect(form).toBeHidden();
     expect(filed).toHaveLength(1);
-    expect(filed[0].postDataJSON().capabilities).toContain("gemini-key");
+    expect(filed[0].postDataJSON().capabilities).toContain("console");
   });
 
   // grain/task-1625: a selection outlives the view it was made in.
@@ -994,7 +997,7 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     const title = `Abandoned input ${Date.now()}`;
     await form.getByLabel("Title").fill(title);
     const repos = form.getByRole("combobox", { name: /^Repos/ });
-    await repos.selectOption({ label: "Other…" });
+    await chooseOption(repos, { label: "Other…" });
     await form
       .getByPlaceholder("owner/name", { exact: true })
       .fill("unlisted/custom-repo");
@@ -1005,7 +1008,7 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     await expect(
       form.getByRole("button", { name: "Create task" }),
     ).toBeDisabled();
-    await repos.selectOption("acme/widgets");
+    await chooseOption(repos, "acme/widgets");
     await form.getByRole("button", { name: "Create task" }).click();
     await expect(form).toBeHidden();
     expect(filed).toHaveLength(1);

@@ -150,6 +150,59 @@ func TestTheStarterPolicyFailsClosed(t *testing.T) {
 	if err := p.Check(writer, model.NetworkNone); err != nil {
 		t.Errorf("a repo-less grain/config writer was refused: %v", err)
 	}
+	// The Director's own grants are allowed by name, so the Director
+	// chat this deployment files for itself is not held for one
+	// (docs/test-runs/2026-11-03-config-state.md, "Left open").
+	session := model.DefaultConsoleSessions()[0]
+	directorChat := director
+	directorChat.Grants = model.ConsoleSessionGrants(session)
+	if err := p.Check(directorChat, model.NetworkNone); err != nil {
+		t.Errorf("the Director chat's own grants were refused: %v", err)
+	}
+	// It asks for none, which a granule sandbox honours and a none
+	// policy allows.
+	directorChat.NetworkAccess = model.ConsoleSessionNetworkAccess(session, true)
+	if err := p.Check(directorChat, model.NetworkNone); err != nil {
+		t.Errorf("the Director's none network on an isolating sandbox under a none policy was refused: %v", err)
+	}
+	// On a backend that cannot isolate it is filed open, which a none
+	// policy refuses: the owner chose none, and init says so.
+	directorChat.NetworkAccess = model.ConsoleSessionNetworkAccess(session, false)
+	if err := p.Check(directorChat, model.NetworkNone); err == nil || !strings.Contains(err.Error(), "network") {
+		t.Errorf("the Director's open network under a none policy = %v, want a network refusal", err)
+	}
+	open, err := policy.Parse([]byte(renderWorkstationPolicy(workstationOptions{
+		Repos: []string{"acme/widgets"}, Owners: []string{"me@example.com"}, Network: "open",
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An open policy holds the Director on no backend: open where the
+	// backend cannot isolate, none on granule.
+	for _, isolates := range []bool{false, true} {
+		directorChat.NetworkAccess = model.ConsoleSessionNetworkAccess(session, isolates)
+		if err := open.Check(directorChat, model.NetworkOpen); err != nil {
+			t.Errorf("the Director chat (network %q) was held on a fresh workstation: %v", directorChat.NetworkAccess, err)
+		}
+	}
+	// Named exactly: a capability the Director is not granted stays
+	// refused, even one in a family or method it holds a narrowed grant of
+	// (such as operator config maps or secret maps on config-map#config-map).
+	for _, c := range []string{
+		"api:deployment:write",
+		"repo-write:acme/widgets",
+		model.ConfigMapRef,
+		model.ConfigMapRef + "={}",
+		model.ConfigMapRef + `={"secrets":["prod"]}`,
+		model.ConfigMapRef + `={"config_maps":["bootstrap","tools"]}`,
+	} {
+		if err := p.Check(model.Task{Target: widgets, Creator: "me@example.com", Grants: []model.Grant{{Capability: c}}}, model.NetworkNone); err == nil {
+			t.Errorf("the Director's grants let %s through", c)
+		}
+	}
+	if !strings.Contains(text, "The Director chat's own grants") {
+		t.Errorf("the starter policy does not say which grants are the Director's:\n%s", text)
+	}
 	if got := withConfigRepo([]string{"acme/widgets", "grain/config"}); len(got) != 2 {
 		t.Errorf("grain/config named twice: %v", got)
 	}
@@ -176,11 +229,50 @@ func TestTheStarterPolicyFailsClosed(t *testing.T) {
 	if err := withCaps.Check(model.Task{Target: widgets, Creator: "me", Grants: []model.Grant{{Capability: "gcp-key:team-a"}}}, ""); err != nil {
 		t.Errorf("a named capability was refused: %v", err)
 	}
-	if err := withCaps.Check(model.Task{Target: widgets, Creator: "me", Grants: []model.Grant{{Capability: "self-debug"}}}, ""); err == nil {
+	if err := withCaps.Check(model.Task{Target: widgets, Creator: "me", Grants: []model.Grant{{Capability: "repo-write:acme/widgets"}}}, ""); err == nil {
 		t.Error("a capability nobody named was allowed")
 	}
 	if err := withCaps.Check(model.Task{Target: widgets, Creator: "me", Grants: []model.Grant{{Capability: grainci.Grant}}}, ""); err != nil {
 		t.Errorf("naming a capability took grain-ci away: %v", err)
+	}
+}
+
+// A granule sandbox can give the Director the none it asks for, so a
+// none policy does not hold it there and init does not say it does.
+func TestInitWorkstationOnGranuleDoesNotWarnTheDirectorIsHeld(t *testing.T) {
+	pinDefaultGitHost(t)
+	home := t.TempDir()
+	env, _ := fakeWorkstation(home, []string{"docker", "granule", "codex", "systemctl"}, true, true)
+	var out bytes.Buffer
+	err := runInitWorkstation(context.Background(), []string{"-non-interactive", "-repo", "acme/widgets",
+		"-owner", "me@example.com", "-network", "none", "-start-service=false"}, strings.NewReader(""), &out, env)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "granule") {
+		t.Fatalf("init did not pick granule:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), directorNetworkWarning) {
+		t.Errorf("init on granule with -network none said the Director is held for its network:\n%s", out.String())
+	}
+}
+
+// A build that registers a DefaultOn capability needing sandbox egress keeps
+// shipping the Director open even on granule, so -network none holds it there
+// and init warns accordingly.
+func TestInitWorkstationOnGranuleWarnsWhenEgressCapabilityKeepsDirectorOpen(t *testing.T) {
+	pinDefaultGitHost(t)
+	t.Cleanup(model.RegisterDefaultConsoleSessionEgressCapability("zz-egress-init-test"))
+	home := t.TempDir()
+	env, _ := fakeWorkstation(home, []string{"docker", "granule", "codex", "systemctl"}, true, true)
+	var out bytes.Buffer
+	err := runInitWorkstation(context.Background(), []string{"-non-interactive", "-repo", "acme/widgets",
+		"-owner", "me@example.com", "-network", "none", "-start-service=false"}, strings.NewReader(""), &out, env)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), directorEgressNetworkWarning) {
+		t.Errorf("init on granule with -network none on an egress-default build did not warn:\n%s", out.String())
 	}
 }
 
@@ -193,6 +285,9 @@ func TestInitWorkstationWritesWhatTheServiceRuns(t *testing.T) {
 		"-owner", "me@example.com", "-network", "none"}, strings.NewReader(""), &out, env)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), directorNetworkWarning) {
+		t.Errorf("init with -network none did not say the Director is held for its network:\n%s", out.String())
 	}
 	dataDir := filepath.Join(home, ".grain")
 	if _, err := policy.Load(filepath.Join(dataDir, "grain_policy.yml")); err != nil {

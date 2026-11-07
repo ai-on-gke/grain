@@ -20,11 +20,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -220,10 +222,13 @@ func Export(ctx context.Context, db *sql.DB, dir string) error {
 // per-call logs pruned locally after their retention window.
 var LocalTables = map[string]bool{
 	"task_run_api_call": true,
-	// The digests of each remote hostd's tokens (model.Hostd): the
-	// registry itself is exported, its credentials are not, and a store
-	// restored from the repository mints them again (Rotate).
-	"hostd_token": true,
+	// The digests of each remote hostd's tokens, shared enrollment codes,
+	// and pending pairing-code join requests (model.Hostd,
+	// model.HostEnrollmentCode, model.HostJoinRequest): the registry itself
+	// is exported, its credentials and in-flight handshakes are not.
+	"hostd_token":          true,
+	"host_enrollment_code": true,
+	"host_join_request":    true,
 }
 
 // exportAll is Export's body, against whatever is already reading: the
@@ -642,6 +647,9 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 			return fmt.Errorf("staterepo: clearing %s: %w", t, err)
 		}
 	}
+	if err := model.SuspendTaskOwnerConstraintForImport(ctx, tx); err != nil {
+		return fmt.Errorf("staterepo: suspending task owner constraint: %w", err)
+	}
 	for _, t := range tables {
 		if err := importTable(ctx, tx, dir, t, withhold, found); err != nil {
 			return err
@@ -662,8 +670,51 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 		if err := model.ApplyDataMigrations(ctx, tx, found); err != nil {
 			return fmt.Errorf("staterepo: %w", err)
 		}
+	} else {
+		// One-release compatibility (schema 109): accept old-form gcp#gcp-key
+		// grants carrying "account" or "activate" in grain/config files at the
+		// current schema so applying them does not fail, and rewrite them in
+		// the database so the next export writes canonical permission_set
+		// grants. Remove in the next release's schema so old forms are refused.
+		if err := model.MigrateGCPKeyGrantArgs(ctx, tx); err != nil {
+			return fmt.Errorf("staterepo: %w", err)
+		}
+		if err := model.MigrateTaskOwnerAndProposer(ctx, tx); err != nil {
+			return fmt.Errorf("staterepo: %w", err)
+		}
+		if err := model.MigrateAdmissionFromGrants(ctx, tx, true); err != nil {
+			return fmt.Errorf("staterepo: %w", err)
+		}
+	}
+	// Host work nothing places, written down as placed on the only host
+	// there is, when the daemon importing says which that is
+	// (SetImplicitHostPlacement): a run: host server or a connection whose
+	// CLI runs on the host by Settings' "Host" or GRAIN_*_RUN=host arrives
+	// from grain/config placed, and the next export writes it so.
+	if p := implicitHostPlacement.Load(); p != nil {
+		changes, err := model.MigrateImplicitHostPlacement(ctx, tx, *p)
+		if err != nil {
+			return fmt.Errorf("staterepo: %w", err)
+		}
+		for _, c := range changes {
+			log.Printf("staterepo: host placement: %s", c)
+		}
 	}
 	return tx.Commit()
+}
+
+// implicitHostPlacement is what the daemon importing knows about where
+// unplaced host work goes (model.ImplicitHostPlacement); nil -- a CLI
+// validating a change, a test -- leaves that work as the dump says.
+var implicitHostPlacement atomic.Pointer[model.ImplicitHostPlacement]
+
+// SetImplicitHostPlacement has every later import place unplaced host
+// work on the only host there is, as p describes it
+// (model.MigrateImplicitHostPlacement); nil stops it. It returns a
+// function putting back what was set before, for a test.
+func SetImplicitHostPlacement(p *model.ImplicitHostPlacement) (restore func()) {
+	prev := implicitHostPlacement.Swap(p)
+	return func() { implicitHostPlacement.Store(prev) }
 }
 
 func importTable(ctx context.Context, tx *sql.Tx, dir, table string, withhold bool, found int) error {

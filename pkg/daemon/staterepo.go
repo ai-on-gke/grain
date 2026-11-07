@@ -136,6 +136,46 @@ func SecretsConfig(dataDir string) secrets.Config {
 	}
 }
 
+// CheckSecretsConfig validates -secrets-backend and -secrets-sm-prefix.
+// An empty backend means the default encrypted-file backend ("file").
+func CheckSecretsConfig(backend, smPrefix string) error {
+	switch backend {
+	case "", secrets.BackendFile:
+		if smPrefix != "" {
+			return errors.New("-secrets-sm-prefix requires -secrets-backend=secretmanager")
+		}
+		return nil
+	case secrets.BackendSecretManager:
+		if smPrefix == "" {
+			return errors.New("-secrets-sm-prefix is required when -secrets-backend is secretmanager")
+		}
+		return secrets.ValidateSecretManagerPrefix(smPrefix)
+	default:
+		return fmt.Errorf("-secrets-backend must be %q or %q, got %q",
+			secrets.BackendFile, secrets.BackendSecretManager, backend)
+	}
+}
+
+// OpenSecretsForConfig opens the secret store configured on cfg: either the
+// local encrypted-file store under cfg.DataDir or Google Cloud Secret Manager
+// indexed by catalogue (secret_entries).
+func OpenSecretsForConfig(cfg Config, catalogue secrets.Catalogue) (*secrets.Store, error) {
+	if err := CheckSecretsConfig(cfg.SecretsBackend, cfg.SecretsSMPrefix); err != nil {
+		return nil, err
+	}
+	if cfg.SecretsBackend == secrets.BackendSecretManager {
+		store := secrets.OpenSecretManager(secrets.SecretManagerConfig{
+			Prefix:    cfg.SecretsSMPrefix,
+			Catalogue: catalogue,
+		})
+		if err := store.Check(); err != nil {
+			return nil, err
+		}
+		return store, nil
+	}
+	return OpenSecrets(cfg.DataDir), nil
+}
+
 // openSecrets opens this deployment's secret store, reporting once if it
 // had to mint the key -- the one thing about a fresh install that is
 // urgent, since a key nobody has copied anywhere is a key one disk
@@ -288,11 +328,12 @@ func OpenStateRepo(ctx context.Context, dataDir string) (*staterepo.Repo, error)
 		return nil, err
 	}
 	repo, err := staterepo.Open(ctx, staterepo.Config{
-		Dir:     StateRepoDir(dataDir),
-		DataDir: dataDir,
-		Remote:  settings.Remote,
-		Branch:  settings.Branch,
-		Token:   RepoToken(dataDir, settings.Remote, settings.TokenFile),
+		Dir:        StateRepoDir(dataDir),
+		DataDir:    dataDir,
+		Remote:     settings.Remote,
+		Branch:     settings.Branch,
+		Token:      RepoToken(dataDir, settings.Remote, settings.TokenFile),
+		SSHKeyFile: settings.SSHKeyFile,
 		// grain's own commits, attributed to grain: a reviewer of a
 		// settings diff should be able to tell at a glance which changes
 		// the daemon exported and which a human or an agent proposed.
@@ -324,7 +365,7 @@ func OpenStateRepo(ctx context.Context, dataDir string) (*staterepo.Repo, error)
 }
 
 func loadStateRepo(ctx context.Context, dataDir string, repo *staterepo.Repo, db *sql.DB, migrated storeMigration) error {
-	if settings, err := staterepo.LoadSettings(dataDir); err == nil && strings.TrimSpace(settings.Remote) != "" {
+	if settings, err := staterepo.LoadSettings(dataDir); err == nil && settings.IsExternal() {
 		return staterepo.LoadExternal(ctx, repo, db, model.SchemaVersion)
 	}
 	err := staterepo.Load(ctx, repo, db, model.SchemaVersion)
@@ -703,7 +744,7 @@ const stateSyncInterval = 30 * time.Second
 // instead of exiting with the error
 // (docs/test-runs/2026-10-15-k8s-run-hosts-sandboxes.md, F3).
 func startStateSync(ctx context.Context, sync, syncAll func(context.Context) (bool, error), nudge <-chan struct{}) (stop func()) {
-	loopCtx, cancel := context.WithCancel(ctx)
+	loopCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)

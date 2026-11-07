@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/granule/pkg/dockercli"
+	"github.com/gke-labs/granule/pkg/dockercli"
 )
 
 var fakedockerPath string

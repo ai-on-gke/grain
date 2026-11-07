@@ -49,6 +49,49 @@ describe("DetailOverlay actions", () => {
     });
   });
 
+  it("shows a human-review hold's reasons and a Release hold button wired to the release endpoint", async () => {
+    const act = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          state: "awaiting_submit",
+          pullRequest: "acme/widgets#42",
+          autoMerge: false,
+          humanReviewHold: [
+            {
+              source: "requested",
+              category: "product-decision",
+              reason: "The new default changes billing",
+              reviewTask: "77",
+              run: "77-1",
+              at: "2026-11-05T12:00:00Z",
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    const banner = screen.getByTestId("human-review-hold");
+    expect(banner.textContent).toContain("Held for a person's review");
+    expect(banner.textContent).toContain("product-decision");
+    expect(banner.textContent).toContain("The new default changes billing");
+    expect(banner.textContent).toContain("review task 77, run 77-1");
+
+    await user.click(screen.getByRole("button", { name: "Release hold" }));
+    expect(act).toHaveBeenCalledWith(expect.any(Function), "12");
+    act.mock.calls[0][0]();
+    expect(api).toHaveBeenCalledWith("/api/tasks/12/human-review/release", {
+      method: "POST",
+    });
+  });
+
   it("shows a Withdraw approval button for a queued task, wired to the withdraw endpoint", async () => {
     const act = vi.fn();
     const user = userEvent.setup();
@@ -1271,6 +1314,51 @@ describe("DetailOverlay actions", () => {
       method: "PATCH",
       body: JSON.stringify({ keepRunning: true }),
     });
+  });
+
+  // The Admission select replaced the priority-dispatch toggle
+  // (unified-grants.design.md §4.1).
+  it("sets a task's admission from the actions column", async () => {
+    const act = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, admission: "standard" }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+        showError={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: /Admission/ }));
+    await user.click(screen.getByRole("option", { name: "Bypass queue" }));
+
+    act.mock.calls[0][0]();
+    expect(api).toHaveBeenCalledWith("/api/tasks/12", {
+      method: "PATCH",
+      body: JSON.stringify({ admission: "bypass" }),
+    });
+  });
+
+  it("keeps a console session's admission durable", () => {
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, admission: "durable", consoleSession: "steward" }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+        showError={() => {}}
+      />,
+    );
+
+    const select = screen.getByRole("combobox", { name: /Admission/ });
+    expect(select).toHaveTextContent("Durable");
+    expect(select).toHaveAttribute("aria-disabled", "true");
   });
 
   // Auto-merge is read after the run, not at checkout, so unlike the

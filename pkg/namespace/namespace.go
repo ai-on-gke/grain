@@ -33,9 +33,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap/playbooks"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/playbooks"
 	"github.com/ai-on-gke/grain/pkg/redact"
 	"github.com/ai-on-gke/grain/pkg/safepath"
 )
@@ -107,13 +107,21 @@ type Scope struct {
 	TaskReadRepos     map[string]bool
 	MayReadFullConfig bool
 	MayReadAllMemory  bool
-	MayReadMetrics    bool
-	MayReadPipeline   bool
-	MayReadHealth     bool
-	MayReadGrainLog   bool
-	MayReadPlaybooks  bool
-	MayReadIssues     bool
-	MayReadDB         bool
+	// MemoryReadRepos are the repositories whose memory layers this scope
+	// may read under memory://repos/ without MayReadAllMemory: the ones an
+	// api:memory:read@owner/repo grant names.
+	MemoryReadRepos  map[string]bool
+	MayReadMetrics   bool
+	MayReadPipeline  bool
+	MayReadHealth    bool
+	MayReadGrainLog  bool
+	MayReadPlaybooks bool
+	MayReadIssues    bool
+	MayReadDB        bool
+	// MergeQueueByCI limits deploy://merge-queue to the repositories
+	// PermitsCI allows: a caller reaching it under ci:read rather than
+	// deployment:read (GET /api/fs/deploy/merge-queue).
+	MergeQueueByCI bool
 }
 
 // PermitsCI reports whether this scope may read ci://<repo>/...
@@ -183,7 +191,10 @@ type Server struct {
 	// a run's jobs as its directories, and each job's log as job.log.
 	ExternalCI  ci.ExternalRuns
 	ArtifactDir string
-	SrcDir      string
+	// Artifacts, when set, opens stored CI artifacts (including read-through
+	// object-store caches) when ArtifactDir does not hold the file directly.
+	Artifacts ci.ArtifactStore
+	SrcDir    string
 	// CoreSrcDir, when set, is the source of github.com/ai-on-gke/grain
 	// on a daemon whose own module (SrcDir) builds on it rather than
 	// being it: served under src://core/..., and beneath SrcDir for a
@@ -315,7 +326,7 @@ func (s *Server) resolveSrc(ctx context.Context, scope Scope, relPath string) (*
 		if trimmed == "playbooks" || strings.HasPrefix(trimmed, "playbooks/") {
 			return nil, RefuseCapability("src://"+relPath, "bootstrap-playbooks")
 		}
-		return nil, RefuseCapability("src://"+relPath, "self-debug")
+		return nil, RefuseCapability("src://"+relPath, model.GrainSourceRef)
 	}
 	if trimmed := strings.TrimPrefix(strings.TrimSuffix(relPath, "/"), "/"); trimmed == "playbooks" || strings.HasPrefix(trimmed, "playbooks/") {
 		return resolvePlaybook(relPath, strings.TrimPrefix(strings.TrimPrefix(trimmed, "playbooks"), "/"))
@@ -482,10 +493,10 @@ func hasEntry(entries []Entry, name string) bool {
 }
 
 // resolvePlaybook serves src://playbooks out of the playbooks embedded
-// in this binary (pkg/capability/bootstrap/playbooks) rather than out of
-// SrcDir: no daemon's source tree has a playbooks/ at its root, and the
-// embedded copy is the one the bootstrap-playbooks grant is about. name
-// is "" for the listing, and is read with or without its .md.
+// in this binary (pkg/playbooks) rather than out of SrcDir: no daemon's
+// source tree has a playbooks/ at its root, and the embedded copy is the
+// one the bootstrap config-map grant is about. name is "" for the
+// listing, and is read with or without its .md.
 func resolvePlaybook(relPath, name string) (*ResolvedNode, error) {
 	if name == "" {
 		dirEntries, err := fs.ReadDir(playbooks.FS, ".")
@@ -620,6 +631,18 @@ func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*R
 	if !ok || run.Repo != repo {
 		return nil, fmt.Errorf("%w: ci://%s/%s", ErrNotFound, repo, runID)
 	}
+	if s.ExternalCI != nil && run.Source == ci.FaultSourceGitHub {
+		// grain's polled record of a GitHub Actions run, under its bare
+		// GitHub id: it keeps each job's conclusion and no log, so the
+		// run is read from the forge as its gha: id is. Only a forge
+		// that cannot answer leaves the record standing in.
+		if n, err := strconv.ParseInt(runID, 10, 64); err == nil && n > 0 {
+			ghaID := ci.ActionsRunID(repo, n)
+			if ext, ok, err := s.ExternalCI.ExternalRun(ctx, ghaID); err == nil && ok && strings.EqualFold(ext.Repo, repo) {
+				return s.externalCINode(ctx, repo, relPath, ghaID, ext, rest[1:])
+			}
+		}
+	}
 	if len(rest) == 1 {
 		entries := make([]Entry, 0, len(run.Jobs)+1)
 		seen := make(map[string]bool, len(run.Jobs))
@@ -720,6 +743,13 @@ func (s *Server) resolveExternalCI(ctx context.Context, repo, relPath, runID str
 	if !ok || !strings.EqualFold(run.Repo, repo) {
 		return nil, fmt.Errorf("%w: ci://%s/%s", ErrNotFound, repo, runID)
 	}
+	return s.externalCINode(ctx, repo, relPath, runID, run, rest)
+}
+
+// externalCINode is ci://<repo>/<run>/<rest...> of ExternalCI run run
+// (id runID): its jobs, each job's job.log, and each step's slice of it
+// (<step>.log, ci.ActionsStepLog).
+func (s *Server) externalCINode(ctx context.Context, repo, relPath, runID string, run ci.Run, rest []string) (*ResolvedNode, error) {
 	if len(rest) == 0 {
 		entries := make([]Entry, 0, len(run.Jobs))
 		for _, job := range run.Jobs {
@@ -738,16 +768,54 @@ func (s *Server) resolveExternalCI(ctx context.Context, repo, relPath, runID str
 		return nil, fmt.Errorf("%w: job %q in ci://%s/%s", ErrNotFound, rest[0], repo, runID)
 	}
 	if len(rest) == 1 {
-		return &ResolvedNode{Scheme: "ci", Path: relPath, IsDir: true, Entries: []Entry{{Name: externalJobLog, Type: "file"}}}, nil
+		entries := []Entry{{Name: externalJobLog, Type: "file"}}
+		seen := map[string]bool{externalJobLog: true}
+		for _, step := range job.Steps {
+			if fn := stepFileName(step); !seen[fn] {
+				seen[fn] = true
+				entries = append(entries, Entry{Name: fn, Type: "file"})
+			}
+		}
+		return &ResolvedNode{Scheme: "ci", Path: relPath, IsDir: true, Entries: entries}, nil
 	}
-	if len(rest) != 2 || rest[1] != externalJobLog {
-		return nil, fmt.Errorf("%w: ci://%s (a GitHub Actions job keeps one log, %s)", ErrNotFound, relPath, externalJobLog)
+	step := -1
+	if len(rest) == 2 && rest[1] != externalJobLog {
+		if step = externalStep(job.Steps, rest[1]); step < 0 {
+			names := make([]string, 0, len(job.Steps))
+			for _, st := range job.Steps {
+				names = append(names, st.Name)
+			}
+			return nil, fmt.Errorf("%w: no step %q in job %q (its steps: %s; the whole log is %s)",
+				ErrNotFound, strings.TrimSuffix(rest[1], ".log"), job.Name, strings.Join(names, ", "), externalJobLog)
+		}
+	}
+	if len(rest) != 2 {
+		return nil, fmt.Errorf("%w: ci://%s (a GitHub Actions job keeps one log, %s, and a <step>.log for each step)", ErrNotFound, relPath, externalJobLog)
 	}
 	text, err := s.ExternalCI.ExternalJobLog(ctx, runID, job.JobID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: ci://%s: %v", ErrNotFound, relPath, err)
 	}
+	if step >= 0 {
+		if text, err = ci.ActionsStepLog(text, job.Steps, step); err != nil {
+			return nil, fmt.Errorf("%w: ci://%s: %v", ErrNotFound, relPath, err)
+		}
+		return stringNode("ci", relPath, text, !job.Steps[step].Conclusion.Done()), nil
+	}
 	return stringNode("ci", relPath, text, !job.Conclusion.Done()), nil
+}
+
+// externalStep is the index in steps of the step file names, by its
+// <step>.log file name or its name, case aside; -1 for none.
+func externalStep(steps []ci.StepRun, file string) int {
+	name := strings.TrimSuffix(file, ".log")
+	for i, st := range steps {
+		if stepFileName(st) == file || strings.EqualFold(strings.TrimSpace(st.Name), name) ||
+			strings.EqualFold(strings.TrimSuffix(stepFileName(st), ".log"), name) {
+			return i
+		}
+	}
+	return -1
 }
 
 func (s *Server) resolveCIArtifacts(run ci.Run, relPath string, rem []string) (*ResolvedNode, error) {
@@ -809,31 +877,55 @@ func (s *Server) resolveCIArtifacts(run ci.Run, relPath string, rem []string) (*
 	artName := strings.Join(rem[1:], "/")
 	for _, a := range matching {
 		if a.Name == artName {
-			if s.ArtifactDir == "" {
-				return nil, fmt.Errorf("%w: artifact storage directory is not configured", ErrNotFound)
-			}
 			artJob := a.Job
 			if artJob == "" {
 				artJob = jobName
 			}
-			target, err := safepath.Within(s.ArtifactDir, filepath.Join(run.ID, artJob, filepath.FromSlash(a.Name)))
-			if err != nil {
-				return nil, fmt.Errorf("%w: %v", ErrBadRequest, err)
+			if s.ArtifactDir != "" {
+				target, err := safepath.Within(s.ArtifactDir, filepath.Join(run.ID, artJob, filepath.FromSlash(a.Name)))
+				if err != nil {
+					return nil, fmt.Errorf("%w: %v", ErrBadRequest, err)
+				}
+				if info, statErr := os.Stat(target); statErr == nil {
+					return &ResolvedNode{
+						Scheme:  "ci",
+						Path:    relPath,
+						IsDir:   false,
+						Size:    info.Size(),
+						Growing: false,
+						Open: func() (io.ReadCloser, error) {
+							return os.Open(target)
+						},
+					}, nil
+				}
 			}
-			info, err := os.Stat(target)
-			if err != nil {
+			if s.Artifacts != nil {
+				ref := ci.ArtifactRef{Run: run.ID, Job: artJob, Name: a.Name}
+				rc, opened, err := s.Artifacts.Open(context.Background(), ref)
+				if err == nil {
+					rc.Close()
+					size := opened.Bytes
+					if size == 0 {
+						size = a.Bytes
+					}
+					return &ResolvedNode{
+						Scheme:  "ci",
+						Path:    relPath,
+						IsDir:   false,
+						Size:    size,
+						Growing: false,
+						Open: func() (io.ReadCloser, error) {
+							r, _, openErr := s.Artifacts.Open(context.Background(), ref)
+							return r, openErr
+						},
+					}, nil
+				}
 				return nil, fmt.Errorf("%w: artifact %s", ErrNotFound, artName)
 			}
-			return &ResolvedNode{
-				Scheme:  "ci",
-				Path:    relPath,
-				IsDir:   false,
-				Size:    info.Size(),
-				Growing: false,
-				Open: func() (io.ReadCloser, error) {
-					return os.Open(target)
-				},
-			}, nil
+			if s.ArtifactDir == "" {
+				return nil, fmt.Errorf("%w: artifact storage directory is not configured", ErrNotFound)
+			}
+			return nil, fmt.Errorf("%w: artifact %s", ErrNotFound, artName)
 		}
 	}
 	return nil, fmt.Errorf("%w: artifact %q", ErrNotFound, artName)
@@ -1523,6 +1615,7 @@ func (s *Server) GlobEntries(ctx context.Context, scope Scope, scheme, relPath, 
 			pattern = "*"
 		}
 	}
+	ctx = withMemoryWalkCache(ctx)
 	node, err := s.Resolve(ctx, scope, scheme, relPath)
 	if err != nil {
 		return GlobResult{}, err
@@ -1809,6 +1902,7 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 		ctxLines = MaxGrepContextLines
 	}
 
+	ctx = withMemoryWalkCache(ctx)
 	node, err := s.Resolve(ctx, scope, scheme, relPath)
 	if err != nil {
 		return GrepResult{}, err
@@ -1897,6 +1991,7 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 	// that a pattern matching only the "[redacted: ...]" placeholder no
 	// longer finds a line this pass would have redacted.
 	redactor := s.redactor()
+	scanBuf := make([]byte, 64*1024)
 
 	for _, tf := range files {
 		if totalMatches >= maxMatches {
@@ -1908,7 +2003,7 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 			continue
 		}
 		scanner := bufio.NewScanner(rc)
-		scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+		scanner.Buffer(scanBuf, 4*1024*1024)
 
 		type numberedLine struct {
 			num  int
