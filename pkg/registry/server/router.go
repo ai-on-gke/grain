@@ -106,7 +106,11 @@ type RouterOptions struct {
 	ReplicaTTL       time.Duration
 	ReconnectGrace   time.Duration
 	CatalogTTL       time.Duration
-	TunnelOptions    TunnelOptions
+	// HeartbeatInterval is catalog.heartbeat_interval: the cadence every
+	// heartbeat response tells a connected daemon to keep. Zero means
+	// api.DefaultHeartbeatInterval.
+	HeartbeatInterval time.Duration
+	TunnelOptions     TunnelOptions
 
 	Store        *store.Store
 	Admitter     *webauth.Admitter
@@ -603,8 +607,8 @@ func (rt *Router) HandleEntryHeartbeat(w http.ResponseWriter, r *http.Request, p
 		ActiveScopes:         activeScopes,
 		Conflicts:            conflicts,
 		ScopeConflicts:       conflicts,
-		NextIntervalSeconds:  15,
-		NextHeartbeatSeconds: 15,
+		NextIntervalSeconds:  HeartbeatIntervalSeconds(rt.opts.HeartbeatInterval),
+		NextHeartbeatSeconds: HeartbeatIntervalSeconds(rt.opts.HeartbeatInterval),
 	})
 }
 
@@ -1097,4 +1101,20 @@ func (rt *Router) matchesAccessList(ctx context.Context, email string, accessLis
 
 func webauthErrForbidden(err error) bool {
 	return errors.Is(err, webauth.ErrCallerForbidden)
+}
+
+// HeartbeatIntervalSeconds is the next_interval_seconds a heartbeat response
+// carries for catalog.heartbeat_interval d (api.DefaultHeartbeatInterval when
+// unset), rounded up to whole seconds. Daemons pace themselves on it, so a
+// registry configured with degraded_after/offline_after below the 15s default
+// must say so here or every connected entry flaps offline between heartbeats.
+func HeartbeatIntervalSeconds(d time.Duration) int {
+	if d <= 0 {
+		d = api.DefaultHeartbeatInterval
+	}
+	secs := int((d + time.Second - 1) / time.Second)
+	if secs < 1 {
+		secs = 1
+	}
+	return secs
 }
