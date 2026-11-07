@@ -28,21 +28,21 @@ import (
 
 // DelegatingAppRow represents a row in `registry.delegating_apps`.
 type DelegatingAppRow struct {
-	Name                string     `json:"name"`
-	Principal           string     `json:"principal"`
-	DisplayName         string     `json:"display_name"`
-	Description         string     `json:"description,omitempty"`
-	Homepage            string     `json:"homepage,omitempty"`
-	Owner               string     `json:"owner"`
-	OwnerGroup          string     `json:"owner_group,omitempty"`
-	MaxAccess           string     `json:"max_access"`
+	Name                string        `json:"name"`
+	Principal           string        `json:"principal"`
+	DisplayName         string        `json:"display_name"`
+	Description         string        `json:"description,omitempty"`
+	Homepage            string        `json:"homepage,omitempty"`
+	Owner               string        `json:"owner"`
+	OwnerGroup          string        `json:"owner_group,omitempty"`
+	MaxAccess           string        `json:"max_access"`
 	MaxGrantTTL         time.Duration `json:"max_grant_ttl"`
-	RequireSubjectToken bool       `json:"require_subject_token,omitempty"`
-	RedirectURIs        []string   `json:"redirect_uris,omitempty"`
-	CreatedBy           string     `json:"created_by"`
-	CreatedAt           time.Time  `json:"created_at"`
-	DisabledAt          *time.Time `json:"disabled_at,omitempty"`
-	DisabledBy          string     `json:"disabled_by,omitempty"`
+	RequireSubjectToken bool          `json:"require_subject_token,omitempty"`
+	RedirectURIs        []string      `json:"redirect_uris,omitempty"`
+	CreatedBy           string        `json:"created_by"`
+	CreatedAt           time.Time     `json:"created_at"`
+	DisabledAt          *time.Time    `json:"disabled_at,omitempty"`
+	DisabledBy          string        `json:"disabled_by,omitempty"`
 }
 
 // DelegationGrantRow represents a row in `registry.delegation_grants`.

@@ -437,16 +437,16 @@ func TestRegistryVerifierRefusesMalformedOrNestedAct(t *testing.T) {
 	}
 
 	cases := map[string]ui.RegistryClaims{
-		"non-object-string":     mkClaims("alice@example.com", model.PrincipalHuman, `"slack-bot@proj.iam.gserviceaccount.com"`),
-		"non-object-array":      mkClaims("alice@example.com", model.PrincipalHuman, `["slack-bot@proj.iam.gserviceaccount.com"]`),
-		"null-act":              mkClaims("alice@example.com", model.PrincipalHuman, `null`),
-		"missing-act-sub":       mkClaims("alice@example.com", model.PrincipalHuman, `{"kind":"service"}`),
-		"act-sub-not-email":     mkClaims("alice@example.com", model.PrincipalHuman, `{"sub":"slack-bot","kind":"service"}`),
-		"act-kind-human":        mkClaims("alice@example.com", model.PrincipalHuman, `{"sub":"bob@example.com","kind":"human"}`),
-		"outer-kind-service":    mkClaims("ci@proj.iam.gserviceaccount.com", model.PrincipalService, `{"sub":"slack-bot@proj.iam.gserviceaccount.com","kind":"service"}`),
-		"nested-act-in-act":     mkClaims("alice@example.com", model.PrincipalHuman, `{"sub":"slack-bot@proj.iam.gserviceaccount.com","kind":"service","act":{"sub":"other@proj.iam.gserviceaccount.com","kind":"service"}}`),
-		"self-delegation":       mkClaims("slack-bot@proj.iam.gserviceaccount.com", model.PrincipalHuman, `{"sub":"Slack-Bot@proj.iam.gserviceaccount.com","kind":"service"}`),
-		"unknown-access-value":  mkClaims("alice@example.com", model.PrincipalHuman, `{"sub":"slack-bot@proj.iam.gserviceaccount.com","kind":"service","access":"admin"}`),
+		"non-object-string":    mkClaims("alice@example.com", model.PrincipalHuman, `"slack-bot@proj.iam.gserviceaccount.com"`),
+		"non-object-array":     mkClaims("alice@example.com", model.PrincipalHuman, `["slack-bot@proj.iam.gserviceaccount.com"]`),
+		"null-act":             mkClaims("alice@example.com", model.PrincipalHuman, `null`),
+		"missing-act-sub":      mkClaims("alice@example.com", model.PrincipalHuman, `{"kind":"service"}`),
+		"act-sub-not-email":    mkClaims("alice@example.com", model.PrincipalHuman, `{"sub":"slack-bot","kind":"service"}`),
+		"act-kind-human":       mkClaims("alice@example.com", model.PrincipalHuman, `{"sub":"bob@example.com","kind":"human"}`),
+		"outer-kind-service":   mkClaims("ci@proj.iam.gserviceaccount.com", model.PrincipalService, `{"sub":"slack-bot@proj.iam.gserviceaccount.com","kind":"service"}`),
+		"nested-act-in-act":    mkClaims("alice@example.com", model.PrincipalHuman, `{"sub":"slack-bot@proj.iam.gserviceaccount.com","kind":"service","act":{"sub":"other@proj.iam.gserviceaccount.com","kind":"service"}}`),
+		"self-delegation":      mkClaims("slack-bot@proj.iam.gserviceaccount.com", model.PrincipalHuman, `{"sub":"Slack-Bot@proj.iam.gserviceaccount.com","kind":"service"}`),
+		"unknown-access-value": mkClaims("alice@example.com", model.PrincipalHuman, `{"sub":"slack-bot@proj.iam.gserviceaccount.com","kind":"service","access":"admin"}`),
 	}
 
 	for name, c := range cases {
