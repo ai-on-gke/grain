@@ -1,0 +1,202 @@
+2026/11/07 05:02:11 orchestrator: ai-on-gke/grain at ffa4d36ac54b declares 22 template(s), 3 suite(s), 13 schedule(s), 3 trigger(s)
+2026/11/07 05:02:11 orchestrator: ai-on-gke/grain at ffa4d36ac54b: .grain/settings.yml changes 1 settings field(s) of this repository: prompt-extension: (blank) -> "## Commit Message Standards for Agents"... (1970 characters)
+[05:02:01] setup: upstream ~/scratch/pwalk/upstream/ai-on-gke/grain.git via git http-backend at http://127.0.0.1:41845; scoped proxy at http://127.0.0.1:38351; githubsim REST at http://127.0.0.1:34079
+[05:02:01] setup: schedule repo:schedule:ai-on-gke:grain:release-train filed task 1 "Run the release train (check, release, cut)" from template repo:template:ai-on-gke:grain:release-train
+[05:02:01] setup: the push grant sandbox-train's run holds: {"TaskID":"1","TemplateID":"repo:template:ai-on-gke:grain:release-train","Declaration":{"Kind":"template","ID":"repo:template:ai-on-gke:grain:release-train","Repo":{"Owner":"ai-on-gke","Name":"grain","Host":""},"Path":".grain/templates/release-train.yml","Commit":"ffa4d36ac54bb2231ff234324787377ba55eca88","SyncedAt":"2026-11-07T05:02:01Z","Push":[{"ref":"refs/heads/candidate","force":true},{"ref":"refs/heads/release/v*"},{"ref":"refs/tags/latest","force":true},{"ref":"refs/tags/v*-discarded"},{"ref":"refs/tags/v*-pending"},{"ref":"refs/tags/v*-rc.*"},{"ref":"refs/tags/v?.?.0"},{"ref":"refs/tags/v?.??.0"},{"ref":"refs/tags/v?.???.0"},{"ref":"refs/tags/v??.?.0"},{"ref":"refs/tags/v??.??.0"},{"ref":"refs/tags/v??.???.0"}]},"Push":[{"ref":"refs/heads/candidate","force":true},{"ref":"refs/heads/release/v*"},{"ref":"refs/tags/latest","force":true},{"ref":"refs/tags/v*-discarded"},{"ref":"refs/tags/v*-pending"},{"ref":"refs/tags/v*-rc.*"},{"ref":"refs/tags/v?.?.0"},{"ref":"refs/tags/v?.??.0"},{"ref":"refs/tags/v?.???.0"},{"ref":"refs/tags/v??.?.0"},{"ref":"refs/tags/v??.??.0"},{"ref":"refs/tags/v??.???.0"}]}
+
+=== 1. item 4: the sandbox clones through the proxy and runs the template's one command (tick A: cut)
+--- clone (exit 0): git clone -q http://127.0.0.1:38351/ai-on-gke/grain.git work && git -C work log --oneline -1
+    | ffa4d36a fix(release): grant the release-train task ci:read on its own repository
+2026/11/07 05:02:28 grain: sandbox proxy call run 1-1 -> list_ci_runs (status 200, 1419 bytes)
+--- release-train-task.sh, tick A (exit 0): bash ~/work/scripts/release-train-task.sh 2>&1 | tail -n 40
+    | release-from-trunk: fetching origin's main, candidate and tags
+    | release-from-trunk: major 3 (floor minor 0); newest promoted release v3.1.1; next minor v3.2.0; notes from v3.1.1
+    | release-from-trunk: phase 1: nothing in qualification; the next rc must be after v3.1.1 (0e5f0baf3efd)
+    | release-from-trunk: phase 2: the newest release is off main's history; the next rc must be after where it left main (8a740f996c22)
+    |   Selecting the newest known-good commit on refs/remotes/origin/main after 8a740f996c22 (required: tests release).
+    |     ffa4d36ac54b: tests.yml success release.yml success; known-good.
+    |   LKG ffa4d36ac54bb2231ff234324787377ba55eca88
+    | release-from-trunk: phase 2: the commits since v3.1.1 make a minor release: v3.2.0
+    | release-from-trunk: phase 2: cutting v3.2.0-rc.1 on ffa4d36ac54b
+    | release-from-trunk: output rc_tag=v3.2.0-rc.1
+    | release-from-trunk: RELEASE_IMAGES=off: not running release-images.sh rc v3.2.0-rc.1
+    | release-from-trunk: phase 2: v3.2.0-rc.1 is cut and candidate is on it; nightly.yml qualifies it (Stage 1), then grain/release-qualification (Stage 2)
+    | RELEASE_TRAIN_RESULT=acted
+    OK   v3.2.0-rc.1 and candidate pushed through the proxy on ffa4d36ac54b
+[05:02:01] refs: candidate=ffa4d36a latest=e9d3db81 v3.2.0-rc.1=19942e49
+
+=== 2. item 4/5: Stage 1 and grain's Stage 2 pass on the rc; tick B reads them with grain ci and stages -pending
+2026/11/07 05:02:37 grain: sandbox proxy call run 1-1 -> list_ci_runs (status 200, 1537 bytes)
+2026/11/07 05:02:37 grain: sandbox proxy call run 1-1 -> list_ci_runs (status 200, 5015 bytes)
+2026/11/07 05:02:37 grain: sandbox proxy call run 1-1 -> list_ci_runs (status 200, 640 bytes)
+--- release-train-task.sh, tick B (exit 0): bash ~/work/scripts/release-train-task.sh 2>&1 | tail -n 45
+    | release-train-task: v3.2.0-rc.1 (ffa4d36ac54b) is in qualification; reading its verdicts
+    | release-train-task: grain_note in runs.json: 1 run(s) left out: grain has them only from its record of their jobs, not as the forge's workflow runs
+    | release-from-trunk: fetching origin's main, candidate and tags
+    | release-from-trunk: major 3 (floor minor 0); newest promoted release v3.1.1; next minor v3.2.0; notes from v3.1.1
+    | release-from-trunk: phase 1: v3.2.0-rc.1 (ffa4d36ac54b) is in qualification; asking the qualification gate
+    |   Qualification of v3.2.0-rc.1 (ffa4d36ac54b).
+    |   PASS cmd-grain-stress: passed (success)
+    |   PASS go-long: passed (success)
+    |   PASS installer-variants: passed (success)
+    |   PASS loadtest: passed on its one retry (failure,success): a flake
+    |   PASS long-sim: passed (success)
+    |   PASS long-term-test: passed (success)
+    |   PASS merge-stress: passed (success)
+    |   PASS postgres-stress: passed (success)
+    |   PASS scalability: passed (success)
+    |   PASS staterepo-soak: passed (success)
+    |   PASS tunnel-stress: passed (success)
+    |   PASS ui-e2e-long: passed (success)
+    |   PASS upgrade-test: passed (success)
+    |   PASS vulns: passed (success)
+    |   IGNORED grain/release-qualification: 1 from github-actions, not grain-walkthrough; only grain's own app is trusted
+    |   PASS grain/release-qualification: passed (success)
+    |   Qualification: PASS v3.2.0-rc.1.
+    |   v3.2.0: breaking changes since v3.1.1:
+    |   - refactor(models)!: remove the custom command connection type (#645)
+    |     - custom command connections (framework "custom") are
+    |   <scratch>/sandbox/train/scripts/release-notes.sh: refusing to promote v3.2.0: it carries breaking changes, and it is not a major release.
+    |     v3.1.1 is major 3, v3.2.0 is major 3, and scripts/release.conf at ffa4d36ac54bb2231ff234324787377ba55eca88 has RELEASE_MAJOR=3.
+    |     To release them, raise RELEASE_MAJOR in scripts/release.conf above 3 and cut again,
+    |     or have a person set RELEASE_ALLOW_BREAKING=v3.2.0 for this one promotion.
+    | release-from-trunk: phase 1: v3.2.0-rc.1 qualified, but the train does not release it itself: it carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for; staging v3.2.0-pending for a person to approve (v3.2.0 and latest are not touched)
+    | release-from-trunk: output promotion_blocked=it carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for
+    | release-from-trunk: output pending_version=v3.2.0
+    | release-from-trunk: RELEASE_IMAGES=off: not running release-images.sh pending v3.2.0
+    | release-from-trunk: RELEASE_NOTES_TASK=off: no release-notes task for v3.2.0 (notes from v3.1.1)
+    | release-from-trunk: RELEASE_NOTIFY=off: no notification that v3.2.0 is ready to promote
+    | release-from-trunk: phase 2: v3.2.0 was tagged 0m ago, under RELEASE_MIN_INTERVAL_MINUTES (120); nothing to cut yet (FORCE=true cuts anyway)
+    | RELEASE_TRAIN_RESULT=acted
+    OK   v3.2.0-pending pushed through the proxy (it carries #645's breaking change)
+[05:03:01] refs: candidate=ffa4d36a latest=e9d3db81 v3.2.0-pending=d133e983 v3.2.0-rc.1=19942e49
+
+=== 3. item 5: grain ci checks / ci list --format github|github-jobs against githubsim's own REST answers
+2026/11/07 05:02:45 grain: sandbox proxy call run 1-1 -> list_ci_runs (status 200, 640 bytes)
+--- grain ci checks (exit 0): grain ci checks ffa4d36ac54bb2231ff234324787377ba55eca88 --repo ai-on-gke/grain --name grain/release-qualification --format github > ~/out.json; echo exit=$?; head -c 600 ~/out.json; echo
+    | exit=0
+    | {"total_count":2,"check_runs":[{"id":8001,"name":"grain/release-qualification","head_sha":"ffa4d36ac54bb2231ff234324787377ba55eca88","external_id":"release-qualification:ai-on-gke/grain@v3.2.0-rc.1","status":"completed","conclusion":"success","started_at":"2026-11-07T04:12:01Z","completed_at":"2026-11-07T04:52:01Z","app":{"slug":"grain-walkthrough"}},{"id":7001,"name":"grain/release-qualification","head_sha":"ffa4d36ac54bb2231ff234324787377ba55eca88","status":"completed","conclusion":"failure","started_at":"2026-11-07T04:52:01Z","completed_at":"2026-11-07T04:52:01Z","app":{"slug":"github-actio
+    OK   grain ci checks lists 2 check runs, githubsim 2
+    OK   grain_app is grain-walkthrough
+2026/11/07 05:02:45 grain: sandbox proxy call run 1-1 -> list_ci_runs (status 200, 1537 bytes)
+--- grain ci list github (exit 0): grain ci list --repo ai-on-gke/grain --ref main --provider github-actions --format github --limit 500 > ~/out.json; echo exit=$?; head -c 600 ~/out.json; echo
+    | exit=0
+    | {"total_count":3,"workflow_runs":[{"id":20001,"name":"release","path":".github/workflows/release.yml","head_branch":"main","head_sha":"ffa4d36ac54bb2231ff234324787377ba55eca88","event":"push","status":"completed","conclusion":"success","html_url":"https://github.example/ai-on-gke/grain/actions/runs/20001","run_attempt":1,"run_started_at":"2026-11-07T04:32:01Z","updated_at":"2026-11-07T04:32:01Z","repository":{"full_name":"ai-on-gke/grain"},"head_repository":{"full_name":"ai-on-gke/grain"}},{"id":20000,"name":"tests","path":".github/workflows/tests.yml","head_branch":"main","head_sha":"ffa4d36a
+    grain listed 3 workflow runs on main, githubsim 3; grain_note: 1 run(s) left out: grain has them only from its record of their jobs, not as the forge's workflow runs
+    OK   the run grain knows only from its job record is counted in grain_note, not listed: "1 run(s) left out: grain has them only from its record of their jobs, not as the forge's workflow runs"
+    OK   run 4242 (job record only) is not invented
+    OK   run 4242 (job record only) is not invented
+    OK   run 4242 (job record only) is not invented
+2026/11/07 05:02:45 grain: sandbox proxy call run 1-1 -> list_ci_runs (status 200, 5015 bytes)
+--- grain ci list github-jobs (exit 0): grain ci list --repo ai-on-gke/grain --ref v3.2.0-rc.1 --workflow nightly.yml --format github-jobs > ~/out.json; echo exit=$?; head -c 600 ~/out.json; echo
+    | exit=0
+    | {"total_count":15,"jobs":[{"id":31337000,"run_id":31337,"run_attempt":1,"workflow_name":"nightly","head_sha":"ffa4d36ac54bb2231ff234324787377ba55eca88","name":"go-long","status":"completed","conclusion":"success","created_at":null,"started_at":null,"completed_at":null,"html_url":"https://github.example/ai-on-gke/grain/actions/runs/31337/job/31337000"},{"id":31337001,"run_id":31337,"run_attempt":1,"workflow_name":"nightly","head_sha":"ffa4d36ac54bb2231ff234324787377ba55eca88","name":"staterepo-soak","status":"completed","conclusion":"success","created_at":null,"started_at":null,"completed_at":n
+    OK   grain ci list --format github-jobs lists 15 jobs, githubsim 15 (14 + loadtest's first attempt)
+2026/11/07 05:02:45 grain: sandbox proxy call run 1-1 -> list_ci_runs (status 200, 204 bytes)
+--- grain ci checks (text) (exit 0): grain ci checks ffa4d36ac54bb2231ff234324787377ba55eca88 --repo ai-on-gke/grain
+    | 2 check run(s) on ffa4d36ac54b in ai-on-gke/grain:
+    | success      grain/release-qualification              grain-walkthrough (grain)  
+    | failure      grain/release-qualification              github-actions  
+
+=== 4. item 4: pushes outside the train's grant, by hand from the task's sandbox
+--- push a patch release tag (exit 1): cd work && git push origin ffa4d36ac54bb2231ff234324787377ba55eca88:refs/tags/v3.1.2 2>&1
+    | remote: refusing to update ai-on-gke/grain: refs/tags/v3.1.2 is not declared. This task may push its own branch, refs/heads/grain/task-1, and what `push:` in .grain/templates/release-train.yml declares (as read from ai-on-gke/grain's default branch at ffa4d36ac54b); a run cannot widen that by editing the file on its own branch -- the change has to merge first        
+    | To http://127.0.0.1:38351/ai-on-gke/grain.git
+    |  ! [remote rejected]   ffa4d36ac54bb2231ff234324787377ba55eca88 -> v3.1.2 (refusing to update ai-on-gke/grain: refs/tags/v3.1.2 is not declared. This task may push its own branch, refs/heads/grain/task-1, and what `push:` in .grain/templates/release-train.yml declares (as re...)
+    | error: failed to push some refs to 'http://127.0.0.1:38351/ai-on-gke/grain.git'
+    OK   a patch release tag: refused
+--- push latest, deleted (exit 1): cd work && git push origin :refs/tags/latest 2>&1
+    | remote: refusing to update ai-on-gke/grain: refs/tags/latest may be pushed but not deleted (its entry does not say `delete: true`). This task may push its own branch, refs/heads/grain/task-1, and what `push:` in .grain/templates/release-train.yml declares (as read from ai-on-gke/grain's default branch at ffa4d36ac54b); a run cannot widen that by editing the file on its own branch -- the change has to merge first        
+    | To http://127.0.0.1:38351/ai-on-gke/grain.git
+    |  ! [remote rejected]   latest (refusing to update ai-on-gke/grain: refs/tags/latest may be pushed but not deleted (its entry does not say `delete: true`). This task may push its own branch, refs/heads/grain/task-1, and what `push:`...)
+    | error: failed to push some refs to 'http://127.0.0.1:38351/ai-on-gke/grain.git'
+    OK   latest, deleted: refused
+--- push candidate, deleted (exit 1): cd work && git push origin :refs/heads/candidate 2>&1
+    | remote: refusing to update ai-on-gke/grain: refs/heads/candidate may be pushed but not deleted (its entry does not say `delete: true`). This task may push its own branch, refs/heads/grain/task-1, and what `push:` in .grain/templates/release-train.yml declares (as read from ai-on-gke/grain's default branch at ffa4d36ac54b); a run cannot widen that by editing the file on its own branch -- the change has to merge first        
+    | To http://127.0.0.1:38351/ai-on-gke/grain.git
+    |  ! [remote rejected]   candidate (refusing to update ai-on-gke/grain: refs/heads/candidate may be pushed but not deleted (its entry does not say `delete: true`). This task may push its own branch, refs/heads/grain/task-1, and what `pu...)
+    | error: failed to push some refs to 'http://127.0.0.1:38351/ai-on-gke/grain.git'
+    OK   candidate, deleted: refused
+--- push the -pending tag, deleted (exit 1): cd work && git push origin :refs/tags/v3.2.0-pending 2>&1
+    | remote: refusing to update ai-on-gke/grain: refs/tags/v3.2.0-pending may be pushed but not deleted (its entry does not say `delete: true`). This task may push its own branch, refs/heads/grain/task-1, and what `push:` in .grain/templates/release-train.yml declares (as read from ai-on-gke/grain's default branch at ffa4d36ac54b); a run cannot widen that by editing the file on its own branch -- the change has to merge first        
+    | To http://127.0.0.1:38351/ai-on-gke/grain.git
+    |  ! [remote rejected]   v3.2.0-pending (refusing to update ai-on-gke/grain: refs/tags/v3.2.0-pending may be pushed but not deleted (its entry does not say `delete: true`). This task may push its own branch, refs/heads/grain/task-1, and what...)
+    | error: failed to push some refs to 'http://127.0.0.1:38351/ai-on-gke/grain.git'
+    OK   the -pending tag, deleted: refused
+--- push a released tag, moved (exit 1): cd work && git push origin +ffa4d36ac54bb2231ff234324787377ba55eca88:refs/tags/v3.1.0 2>&1
+    | remote: refusing to update ai-on-gke/grain: refs/tags/v3.1.0 already exists, and moving a tag is a force-push its entry does not allow (`force: true`). This task may push its own branch, refs/heads/grain/task-1, and what `push:` in .grain/templates/release-train.yml declares (as read from ai-on-gke/grain's default branch at ffa4d36ac54b); a run cannot widen that by editing the file on its own branch -- the change has to merge first        
+    | To http://127.0.0.1:38351/ai-on-gke/grain.git
+    |  ! [remote rejected]   ffa4d36ac54bb2231ff234324787377ba55eca88 -> v3.1.0 (refusing to update ai-on-gke/grain: refs/tags/v3.1.0 already exists, and moving a tag is a force-push its entry does not allow (`force: true`). This task may push its own branch, refs/heads/grain/task...)
+    | error: failed to push some refs to 'http://127.0.0.1:38351/ai-on-gke/grain.git'
+    OK   a released tag, moved: refused
+--- push main, rewound (exit 1): cd work && git push origin +151902395567993ac9615161a3bd200ec6a16db6:refs/heads/main 2>&1
+    | remote: refusing to update ai-on-gke/grain: refs/heads/main is not declared. This task may push its own branch, refs/heads/grain/task-1, and what `push:` in .grain/templates/release-train.yml declares (as read from ai-on-gke/grain's default branch at ffa4d36ac54b); a run cannot widen that by editing the file on its own branch -- the change has to merge first        
+    | To http://127.0.0.1:38351/ai-on-gke/grain.git
+    |  ! [remote rejected]   151902395567993ac9615161a3bd200ec6a16db6 -> main (refusing to update ai-on-gke/grain: refs/heads/main is not declared. This task may push its own branch, refs/heads/grain/task-1, and what `push:` in .grain/templates/release-train.yml declares (as rea...)
+    | error: failed to push some refs to 'http://127.0.0.1:38351/ai-on-gke/grain.git'
+    OK   main, rewound: refused
+--- push a retraction (exit 1): cd work && git push origin ffa4d36ac54bb2231ff234324787377ba55eca88:refs/tags/v3.1.0-retracted 2>&1
+    | remote: refusing to update ai-on-gke/grain: refs/tags/v3.1.0-retracted is not declared. This task may push its own branch, refs/heads/grain/task-1, and what `push:` in .grain/templates/release-train.yml declares (as read from ai-on-gke/grain's default branch at ffa4d36ac54b); a run cannot widen that by editing the file on its own branch -- the change has to merge first        
+    | To http://127.0.0.1:38351/ai-on-gke/grain.git
+    |  ! [remote rejected]   ffa4d36ac54bb2231ff234324787377ba55eca88 -> v3.1.0-retracted (refusing to update ai-on-gke/grain: refs/tags/v3.1.0-retracted is not declared. This task may push its own branch, refs/heads/grain/task-1, and what `push:` in .grain/templates/release-train.yml decla...)
+    | error: failed to push some refs to 'http://127.0.0.1:38351/ai-on-gke/grain.git'
+    OK   a retraction: refused
+--- push an rc tag, moved (exit 1): cd work && git push origin +151902395567993ac9615161a3bd200ec6a16db6:refs/tags/v3.2.0-rc.1 2>&1
+    | remote: refusing to update ai-on-gke/grain: refs/tags/v3.2.0-rc.1 already exists, and moving a tag is a force-push its entry does not allow (`force: true`). This task may push its own branch, refs/heads/grain/task-1, and what `push:` in .grain/templates/release-train.yml declares (as read from ai-on-gke/grain's default branch at ffa4d36ac54b); a run cannot widen that by editing the file on its own branch -- the change has to merge first        
+    | To http://127.0.0.1:38351/ai-on-gke/grain.git
+    |  ! [remote rejected]   151902395567993ac9615161a3bd200ec6a16db6 -> v3.2.0-rc.1 (refusing to update ai-on-gke/grain: refs/tags/v3.2.0-rc.1 already exists, and moving a tag is a force-push its entry does not allow (`force: true`). This task may push its own branch, refs/heads/grain...)
+    | error: failed to push some refs to 'http://127.0.0.1:38351/ai-on-gke/grain.git'
+    OK   an rc tag, moved: refused
+--- push a -discarded tag (exit 0): cd work && git push origin ffa4d36ac54bb2231ff234324787377ba55eca88:refs/tags/v3.2.0-rc.1-discarded 2>&1
+    | To http://127.0.0.1:38351/ai-on-gke/grain.git
+    |  * [new tag]           ffa4d36ac54bb2231ff234324787377ba55eca88 -> v3.2.0-rc.1-discarded
+    OK   a -discarded tag: allowed
+--- push the release tag v3.2.0 on the rc's commit (exit 0): cd work && git push origin ffa4d36ac54bb2231ff234324787377ba55eca88:refs/tags/v3.2.0 2>&1
+    | To http://127.0.0.1:38351/ai-on-gke/grain.git
+    |  * [new tag]           ffa4d36ac54bb2231ff234324787377ba55eca88 -> v3.2.0
+    OK   the release tag v3.2.0 on the rc's commit: allowed
+--- push latest, force-moved onto it (exit 0): cd work && git push origin +ffa4d36ac54bb2231ff234324787377ba55eca88:refs/tags/latest 2>&1
+    | To http://127.0.0.1:38351/ai-on-gke/grain.git
+    |  + e9d3db81...ffa4d36a ffa4d36ac54bb2231ff234324787377ba55eca88 -> latest (forced update)
+    OK   latest, force-moved onto it: allowed
+--- a commit only the sandbox has (exit 1): cd work && git -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m 'not on main' && git push origin HEAD:refs/tags/v3.3.0-rc.1 2>&1
+    | remote: refusing to update ai-on-gke/grain: refs/tags/v3.3.0-rc.1: could not show cc7cb3c50184 is already on the default branch or a declared branch (cc7cb3c50184 is a commit this push carries, new to the repository), and a declared push only moves refs onto commits the repository has. This task may push its own branch, refs/heads/grain/task-1, and what `push:` in .grain/templates/release-train.yml declares (as read from ai-on-gke/grain's default branch at ffa4d36ac54b); a run cannot widen that by editing the file on its own branch -- the change has to merge first        
+    | To http://127.0.0.1:38351/ai-on-gke/grain.git
+    |  ! [remote rejected]   HEAD -> v3.3.0-rc.1 (refusing to update ai-on-gke/grain: refs/tags/v3.3.0-rc.1: could not show cc7cb3c50184 is already on the default branch or a declared branch (cc7cb3c50184 is a commit this push carries, new to the rep...)
+    | error: failed to push some refs to 'http://127.0.0.1:38351/ai-on-gke/grain.git'
+[05:03:01] refs: candidate=ffa4d36a latest=ffa4d36a v3.2.0=ffa4d36a v3.2.0-pending=d133e983 v3.2.0-rc.1=19942e49 v3.2.0-rc.1-discarded=ffa4d36a
+
+=== 5. item 4: a pull request editing the template's push: list is held for a person
+2026/11/07 05:02:48 orchestrator: ai-on-gke/grain#9000 touches the trust boundary (release-promotion, template-push); auto-merge withdrawn pending security review
+2026/11/07 05:02:48 orchestrator: ai-on-gke/grain#9000 touches paths gating triggers watch (grain-declarations); held=true
+[05:03:01] task 2 (widens the push list with refs/tags/v*): auto-merge false, pull request "ai-on-gke/grain#9000", human-only hold "trust-boundary/v19", security review "3"
+        | **Held for a person's review** (security): touches release-promotion, template-push path that requires a human
+        | This change will not merge itself while the hold stands: a clean CI run, a later clean review or a new push do not release it. Press Submit to merge it, or Release hold once you have decided.
+        | ai-on-gke/grain#9000 touches grain's trust boundary, so it is no longer merging automatically.
+        | Trust-boundary paths (trust-boundary/v19):
+        | - **release-promotion** (built in) -- what makes a release official: the person-only approval workflow that pushes vX.Y.0 and latest and the route that starts it; the release train that promotes a qualified rc on its own -- its script, its operator settings (release.conf), its template, whose push: list decides which tags it may move, and its schedule; and the workflow that publishes what it promotes:
+        |   - `.grain/templates/release-train.yml`
+        | - **template-push** (built in) -- a template's `push:` list: the refs beyond their own branch that the tasks filed from it may push, which only a person grants or widens:
+        |   - `.grain/templates/release-train.yml`
+        | Filed task 3 to review it, but changes to **release-promotion** and **template-push** never merge automatically: press Submit once you have read the review.
+        | Decided under trust-boundary/v19 and this repository's rules `repo-rules@ffa4d36ac54bb2231ff234324787377ba55eca88:sha256-462b74290d0425ab`.
+        | This change touches paths the repository's gating triggers watch:
+        | - `grain-declarations` (repository file `.grain/triggers/grain-declarations.yml`, sensitive, human: `required`) filed task 3 (grain's security review) for `.grain/templates/release-train.yml`; released only by a person holding the access code
+        | Auto-merge is withdrawn until a human presses Submit: at least one of these triggers requires one, whatever its task finds. Each sensitive trigger above needs a person's Submit; an agent's is refused.
+[05:03:01] task 2 after its security review completed clean: auto-merge false
+    OK   a push list change waits for a person, even after a clean review
+2026/11/07 05:02:50 orchestrator: ai-on-gke/grain#9001 touches the trust boundary (release-promotion); auto-merge withdrawn pending security review
+2026/11/07 05:02:50 orchestrator: ai-on-gke/grain#9001 touches paths gating triggers watch (grain-declarations); held=true
+[05:03:01] task 4 (rewords the body only): auto-merge false, pull request "ai-on-gke/grain#9001", human-only hold "trust-boundary/v19", security review "5"
+        | **Held for a person's review** (security): touches release-promotion path that requires a human
+        | This change will not merge itself while the hold stands: a clean CI run, a later clean review or a new push do not release it. Press Submit to merge it, or Release hold once you have decided.
+        | ai-on-gke/grain#9001 touches grain's trust boundary, so it is no longer merging automatically.
+        | Trust-boundary paths (trust-boundary/v19):
+        | - **release-promotion** (built in) -- what makes a release official: the person-only approval workflow that pushes vX.Y.0 and latest and the route that starts it; the release train that promotes a qualified rc on its own -- its script, its operator settings (release.conf), its template, whose push: list decides which tags it may move, and its schedule; and the workflow that publishes what it promotes:
+        |   - `.grain/templates/release-train.yml`
+        | Filed task 5 to review it, but changes to **release-promotion** never merge automatically: press Submit once you have read the review.
+        | Decided under trust-boundary/v19 and this repository's rules `repo-rules@ffa4d36ac54bb2231ff234324787377ba55eca88:sha256-462b74290d0425ab`.
+        | This change touches paths the repository's gating triggers watch:
+        | - `grain-declarations` (repository file `.grain/triggers/grain-declarations.yml`, sensitive, human: `required`) filed task 5 (grain's security review) for `.grain/templates/release-train.yml`; released only by a person holding the access code
+        | Auto-merge is withdrawn until a human presses Submit: at least one of these triggers requires one, whatever its task finds. Each sensitive trigger above needs a person's Submit; an agent's is refused.
+[05:03:01] task 4 after its security review completed clean: auto-merge false

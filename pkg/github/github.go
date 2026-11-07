@@ -4623,35 +4623,46 @@ type TagLister interface {
 
 var _ TagLister = (*RESTClient)(nil)
 
-// ListTags returns owner/repo's most recent tags, one page of them.
+// ListTags returns every one of owner/repo's tags.
 //
 // GET /repos/{owner}/{repo}/tags answers each tag with the commit it
 // points at already peeled, which is the sha a check run is posted on,
-// so an annotated tag costs no second read. One page, deliberately: the
-// caller only ever wants the newest candidate, and this runs on a timer.
+// so an annotated tag costs no second read.
+//
+// Every page of them, not the first alone: a repository whose release
+// train has cut a few dozen versions -- each an rc.N or three, their
+// -discarded markers, a -pending and the release -- is past the first
+// hundred, and GitHub does not promise them newest version first (a name
+// order puts v3.9.0's tags ahead of v3.10.0-rc.1's), so one page alone
+// could miss the newest release candidate, or the -discarded marker that
+// drops it.
 func (c *RESTClient) ListTags(owner, repo string) ([]Tag, error) {
-	resp, err := c.get(owner, repo, fmt.Sprintf("/repos/%s/%s/tags?per_page=100", owner, repo))
-	if err != nil {
-		return nil, err
-	}
-	if resp.Status == 404 {
-		return nil, nil
-	}
-	if resp.Status != 200 {
-		return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
-	}
-	var data []struct {
-		Name   string `json:"name"`
-		Commit struct {
-			SHA string `json:"sha"`
-		} `json:"commit"`
-	}
-	if err := json.Unmarshal(resp.Body, &data); err != nil {
-		return nil, err
-	}
-	tags := make([]Tag, 0, len(data))
-	for _, t := range data {
-		tags = append(tags, Tag{Name: t.Name, SHA: t.Commit.SHA})
+	tags := []Tag{}
+	path := fmt.Sprintf("/repos/%s/%s/tags?per_page=100", owner, repo)
+	for path != "" {
+		resp, err := c.get(owner, repo, path)
+		if err != nil {
+			return nil, err
+		}
+		if resp.Status == 404 {
+			return nil, nil
+		}
+		if resp.Status != 200 {
+			return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+		}
+		var data []struct {
+			Name   string `json:"name"`
+			Commit struct {
+				SHA string `json:"sha"`
+			} `json:"commit"`
+		}
+		if err := json.Unmarshal(resp.Body, &data); err != nil {
+			return nil, err
+		}
+		for _, t := range data {
+			tags = append(tags, Tag{Name: t.Name, SHA: t.Commit.SHA})
+		}
+		path = nextPagePath(resp.Headers["Link"])
 	}
 	return tags, nil
 }
