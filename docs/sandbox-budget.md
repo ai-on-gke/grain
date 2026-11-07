@@ -83,7 +83,8 @@ counting against the task, and a CI job is retried in a fresh sandbox.
 ## Sessions are never held by the budget
 
 A console session (the director, or any configured chat), and any task a
-person granted `priority-dispatch` (such as the pipeline steward), is
+person set to `admission: bypass` or `durable` (such as the pipeline
+steward), is
 admitted under its own rule, `Budget.AdmitsPriority`. Only what is
 **physically short** refuses one:
 

@@ -567,9 +567,14 @@ Actions job's log when given a `gha:` run id. `grain ci wait` and
   - a `propose_task` asking for one is filed for a person to approve,
     even when the proposer holds it (`model.EscalatedCapabilities`).
 
-  The `priority-dispatch` capability (`docs/capabilities.md`) is held to
-  the same three rules (`model.IsPersonOnlyGrant`), because it lets a
-  task jump the dispatch queue.
+  The `admission` task setting (`bypass` or `durable`,
+  `docs/capabilities.md`) is held to the same rules, because it lets a
+  task jump the dispatch queue: an agent can't write `admission` or
+  `defaultAdmission` above `standard` through any route (or `admission` at
+  all on `PATCH /api/tasks/{id}`), and a `propose_task` asking for it is
+  filed for a person (`model.PersonOnlyProposalSettings`). The retired
+  `priority-dispatch` and `durable` grant names, still read for one
+  release, are refused the same way (`model.IsPersonOnlyGrant`).
 - **No escalation through the API.** A run can't use any route to grant
   a capability its own task doesn't hold. Any body field named like
   `capabilities`, `defaultCapabilities`, `ciCapabilities` or `grants`
@@ -677,9 +682,10 @@ Actions job's log when given a `gha:` run id. `grain ci wait` and
     carrying a repository-declared `push:` set or ungranted `autoMerge`;
     one holding a grant `settings/capabilities.yml` marks `requires_person`,
     or a person-only grant (a dangerous api scope, a capability method
-    only a person may grant, `durable`, `priority-dispatch`); or one
-    setting `keep_running`, or asking for a capability, write target, read
-    or priority its own proposer doesn't hold.
+    only a person may grant); or one setting `keep_running` or an
+    `admission` above its repository's default, or asking for a
+    capability, write target, read or priority its own proposer doesn't
+    hold.
 
   The refusal is a 403 naming the chain or the holds. Once a task is
   approved, `run-now` still jumps it ahead of the queue under

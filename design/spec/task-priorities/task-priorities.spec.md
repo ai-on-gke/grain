@@ -102,7 +102,7 @@ COALESCE(`t`.`approved_at`, `t`.`created_at`),
 
 2.3.1. `dispatch.Cycle` (`pkg/dispatch/dispatch.go`) evaluates ready tasks in three separate admission passes, each ordered internally by `taskQueueOrderSQL`:
 
-1. **Priority-dispatch tasks** (`Store.ReadyPriorityDispatch`): console sessions and tasks holding `priority-dispatch` or `durable` (`Task.HasPriorityDispatch`). Admitted via `Budget.AdmitsPriority`, outside `max_workers`, merger counts, pipeline pauses (except upgrade holds), red base-branch holds, and model-connection concurrency limits (`durable` tasks remain subject to `MaxDurableRuns`).
+1. **Priority-dispatch tasks** (`Store.ReadyPriorityDispatch`): console sessions and tasks whose `admission` is `bypass` or `durable` (`Task.HasPriorityDispatch`: `Task.Admission >= AdmissionBypass`; the retired `priority-dispatch` and `durable` grants, schema migration 121). Admitted via `Budget.AdmitsPriority`, outside `max_workers`, merger counts, pipeline pauses (except upgrade holds), red base-branch holds, and model-connection concurrency limits (`durable` tasks remain subject to `MaxDurableRuns`).
 2. **Mergers** (`Store.ReadyMergers`): `ReasonFix` tasks and in-flight merge-queue repairs, admitted under merger capacity.
 3. **Ordinary tasks** (`Store.Ready`): all remaining ready tasks, admitted under `max_workers`, sandbox budget ceilings, pipeline pauses, red base-branch holds, and model-connection limits.
 
@@ -206,7 +206,7 @@ if child.Priority > ceiling {
 4.4.1. On `ui.UpdateTaskRequest` (`PATCH /api/tasks/{id}` in `pkg/ui/tasks.go` and `pkg/ui/client.go`):
 
 - Numeric JSON `"priority": <int>` unmarshals into `UpdateTaskRequest.Priority *int` and updates `Task.Priority`.
-- Boolean JSON `"priority": <bool>`, `"priorityDispatch": <bool>`, and `"priority_dispatch": <bool>` unmarshal into `UpdateTaskRequest.PriorityDispatch *bool` and toggle `model.PriorityDispatchCapability` (`priority-dispatch`). Mutating `PriorityDispatch` is a person-only capability grant change gated on `capabilities:admin` (never `tasks:write` or `tasks:admin`).
+- Boolean JSON `"priority": <bool>`, `"priorityDispatch": <bool>`, and `"priority_dispatch": <bool>` unmarshal into `UpdateTaskRequest.PriorityDispatch *bool`, kept for one release with a deprecation warning: `true` raises `Task.Admission` to at least `bypass`, `false` lowers a `bypass` task (never a console session) to `standard`. `"admission": "standard"|"bypass"|"durable"` sets `Task.Admission` directly. Changing either is a person-only change gated on `capabilities:admin` (never `tasks:write` or `tasks:admin`), refused to every agent (`agent_api_gate.go`).
 - Any other JSON type for `"priority"` (such as a string or array) MUST fail unmarshaling with `400 Bad Request`.
 
 4.4.2. `Task.Priority` is orthogonal to:
