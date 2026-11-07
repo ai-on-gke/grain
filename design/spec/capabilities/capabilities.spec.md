@@ -40,7 +40,7 @@ The design this specifies is [`capabilities.design.md`](../../design/capabilitie
 : The canonical `https://` URL (without query or fragment) that names a Capability Server in Grain's `mcpServers` configuration and in capability references (for example, `https://github.com/my-org/capabilities/cloud`; grain's own servers use `https://grain.dev/capabilities/<name>`, such as `https://grain.dev/capabilities/gcp`). It is an opaque lookup key: Grain never connects to the `capability_id` URL itself (§3.2.1).
 
 **Capability Method (`#<method>`)**
-: A named capability referenced as `<capability_id>[#<method>]` (for example, `gcp-key`, `git-repo`, `model-proxy`, `self-debug`, or `skill`) and advertised by a Capability Server in `tools/list` as a mint tool named **`mint_<method>`** whose `inputSchema` accepts `{attempt_id, deadline, args}`; `inputSchema.properties.args` is the schema of the method's `with:` arguments. A stateful method also advertises a teardown tool **`release_<method>`** accepting `{attempt_id}`; a stateless method MAY omit it (§4.1.2).
+: A named capability referenced as `<capability_id>[#<method>]` (for example, `gcp-key`, `git-repo`, `model-proxy`, `diagnostics`, or `skill`) and advertised by a Capability Server in `tools/list` as a mint tool named **`mint_<method>`** whose `inputSchema` accepts `{attempt_id, deadline, args}`; `inputSchema.properties.args` is the schema of the method's `with:` arguments. A stateful method also advertises a teardown tool **`release_<method>`** accepting `{attempt_id}`; a stateless method MAY omit it (§4.1.2).
 
 **Grant (`{capability, with}`)**
 : An authorization permitting a task, standing process, template, schedule, or CI job to invoke one `<capability_id>#<method>` with one validated argument object (`args`).
@@ -127,7 +127,7 @@ The design this specifies is [`capabilities.design.md`](../../design/capabilitie
 
 ### 2.1 Grammar of `<capability_id>[#<method>]`
 
-2.1.1. In a Grainfile or task configuration, a capability reference is `<capability_id>[#<method>]` (for example, `https://github.com/ai-on-gke/grain/capabilities/gcp#gcp-key`, or bare `https://github.com/ai-on-gke/grain/capabilities/self-debug`) and MUST conform to:
+2.1.1. In a Grainfile or task configuration, a capability reference is `<capability_id>[#<method>]` (for example, `https://github.com/ai-on-gke/grain/capabilities/gcp#gcp-key`, or bare `https://github.com/my-org/capabilities/diagnostics`) and MUST conform to:
 
 ```abnf
 capability-ref = capability-id [ "#" method-name ]
@@ -144,7 +144,7 @@ DIGIT          = %x30-39 ; 0-9
 2.1.3. `<method>` MUST match `^[a-z0-9][a-z0-9_-]{0,62}$`. Because tool names carry the verb prefixes `mint_` and `release_` (§4.1.2), every conforming `<method>` maps unambiguously to `mint_<method>` and `release_<method>` (a method named `github-release` maps to `mint_github-release` and `release_github-release`).
 
 2.1.4. **Single-Method Shorthand Resolution.** When `#<method>` is omitted:
-1. If the attached server advertises `mint_<method>` where `<method>` equals the final path segment of `<capability_id>` (`…/self-debug` → `mint_self-debug`), the reference resolves to `<capability_id>#<that-segment>`.
+1. If the attached server advertises `mint_<method>` where `<method>` equals the final path segment of `<capability_id>` (`…/diagnostics` → `mint_diagnostics`), the reference resolves to `<capability_id>#<that-segment>`.
 2. Otherwise, if the server advertises exactly one `mint_<method>` tool, the reference resolves to that method.
 3. Otherwise the reference MUST be rejected with a validation error listing the server's advertised `#<method>` names.
 
@@ -159,7 +159,7 @@ DIGIT          = %x30-39 ; 0-9
 
 ```yaml
 capabilities:
-  - https://github.com/ai-on-gke/grain/capabilities/self-debug
+  - https://github.com/my-org/capabilities/diagnostics
   - capability: https://github.com/ai-on-gke/grain/capabilities/gcp#gcp-key
     with:
       account: infra-staging
@@ -593,7 +593,7 @@ After `initialize` and `tools/list` succeed on each granted `mcp_endpoint`, Grai
 ```json
 {
   "mcpServers": {
-    "self-debug": { "type": "http", "url": "http://127.0.0.1:38017/runs/e1010c47-175-2-0/mcp" }
+    "diagnostics": { "type": "http", "url": "http://127.0.0.1:38017/runs/e1010c47-175-2-0/mcp" }
   }
 }
 ```
@@ -666,15 +666,17 @@ Every capability combines the primitives of §4–§5 into one of four patterns.
 - `mint_gcp-key({attempt_id: "e1010c47-175-2-0", deadline, args: {permission_set: "staging", primary: true}})` mints a short-lived IAM key for `staging`, records `attempt_id → key_name` with a timer at `deadline`, and returns a `placements` entry for `/home/debian/.gcp-service-account.json` (`mode: "0600"`) plus a `prompt_section`; it MAY add a `setup` command (a placed `0700` script that runs `gcloud auth activate-service-account` against the key, §5.5) so the CLI is signed in before the agent starts. If the service account is at its key limit it returns `{"status": "resource_exhausted", "retry_after": "2026-10-19T21:05:30Z"}` and the run stays queued without booting. A `deadline` past the key's maximum lifetime returns `refused`.
 - `release_gcp-key({attempt_id})` deletes the recorded key and returns `{"status": "ok"}`.
 
-### 6.2 Attempt-Scoped MCP Toolset (`#self-debug` → `mint_self-debug` + `release_self-debug`)
+### 6.2 Attempt-Scoped MCP Toolset (`#diagnostics` → `mint_diagnostics` + `release_diagnostics`)
 
-- `mint_self-debug({attempt_id: "e1010c47-175-2-0", deadline, args: {}})` mounts a per-attempt MCP toolset at `/runs/e1010c47-175-2-0/mcp` and returns:
+- `mint_diagnostics({attempt_id: "e1010c47-175-2-0", deadline, args: {}})` mounts a per-attempt MCP toolset at `/runs/e1010c47-175-2-0/mcp` and returns:
   ```json
   { "status": "ok", "mcp_endpoint": "/runs/e1010c47-175-2-0/mcp",
     "prompt_section": "Host diagnostic tools are available on this grant's MCP server." }
   ```
-  Grain proxies the endpoint, learns the server name (`self-debug`) and tool list from `initialize` and `tools/list`, wires the server into the active agent CLI's native per-run configuration (`agy`, `claude`, `codex`, or custom) or CI `mcp.json` (§5.2.4), and names it in the attribution block.
-- `release_self-debug({attempt_id})` unregisters the path and returns `{"status": "ok"}`.
+  Grain proxies the endpoint, learns the server name (`diagnostics`) and tool list from `initialize` and `tools/list`, wires the server into the active agent CLI's native per-run configuration (`agy`, `claude`, `codex`, or custom) or CI `mcp.json` (§5.2.4), and names it in the attribution block.
+- `release_diagnostics({attempt_id})` unregisters the path and returns `{"status": "ok"}`.
+
+> **Implementation note (non-normative).** `diagnostics` is an illustrative external server. grain's own diagnostic grants are not this pattern: the retired in-process `self-debug` provider became the `api:self-debug` preset (task, metrics and pipeline readers over grain's REST API) plus `https://grain.dev/capabilities/grain#source` (grain's source checkout as `grain-src/` and `src://`), both answered inside the daemon with no `mcp_endpoint` (schema migration 115; [`unified-grants.design.md` §4](../../design/unified-grants.design.md#4-retiring-the-in-process-capabilities)).
 
 ### 6.3 Authenticated Proxy Port and Working Tree (`#git-repo` / `#model-proxy`)
 
