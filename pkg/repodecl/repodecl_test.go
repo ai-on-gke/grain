@@ -799,3 +799,32 @@ trigger:
 		t.Fatalf("no template: error = %q", msg)
 	}
 }
+
+// A .grain template or schedule that declares `capabilities: [grain-ci]` (or
+// its canonical grain#ci ref) wants read-only CI access to its own declaring
+// repository: grain#ci itself is stripped by applyGrainCIGrant on a
+// ci_mode: github repository and refused by CreateTask.
+func TestDeclaredGrainCICapabilityMapsToRepoScopedCIRead(t *testing.T) {
+	want := model.APIGrantPrefix + "ci-read@" + repo.String()
+	for _, entry := range []string{"grain-ci", model.GrainCIRef, model.GrainCIGrant} {
+		declared := load(t, map[string]string{
+			".grain/templates/train.yml": "title: Run train\ncapabilities:\n  - '" + entry + "'\n",
+			".grain/schedules/train.yml": "template: train\nevery:\n  minutes: 20\ncapabilities:\n  - '" + entry + "'\n",
+		})
+		if len(declared.Templates) != 1 || len(declared.Templates[0].Template.Grants) != 1 ||
+			declared.Templates[0].Template.Grants[0].Capability != want {
+			t.Errorf("template(%q) grants = %+v, want [{Capability:%s}]", entry, declared.Templates[0].Template.Grants, want)
+		}
+		if len(declared.Schedules) != 1 || len(declared.Schedules[0].Schedule.Grants) != 1 ||
+			declared.Schedules[0].Schedule.Grants[0].Capability != want {
+			t.Errorf("schedule(%q) grants = %+v, want [{Capability:%s}]", entry, declared.Schedules[0].Schedule.Grants, want)
+		}
+	}
+
+	// Malformed capability-reference JSON is still rejected at parse time.
+	if msg := loadErr(t, map[string]string{
+		".grain/templates/train.yml": "title: Run train\ncapabilities:\n  - 'https://grain.dev/capabilities/grain#ci={bad'\n",
+	}); msg == "" {
+		t.Fatal("malformed grain#ci capability ref loaded without error")
+	}
+}
