@@ -164,6 +164,12 @@ func (c *Client) catalogueApprovalRefusal(ctx context.Context, task model.Task) 
 				personOnly = append(personOnly, g.Capability)
 			}
 		}
+		// Admission above standard replaced the person-only
+		// priority-dispatch and durable grants, so it asks for a
+		// person acting directly the way holding either did.
+		if adm := model.NormalizeAdmission(task.Admission); adm.AtLeast(model.AdmissionBypass) {
+			personOnly = append(personOnly, "admission "+string(adm))
+		}
 		if len(personOnly) > 0 {
 			return forbiddenCodeErrorf("requires_person", "task %s holds %s, which only a person acting directly may approve",
 				task.ID, strings.Join(personOnly, ", "))
@@ -284,14 +290,35 @@ func mergedCapabilityCatalogue(
 			Aliases: srvCfg.Aliases,
 		})
 	}
+	var inProcess map[string]model.CatalogueInProcess
+	if len(cat.InProcess) > 0 {
+		inProcess = make(map[string]model.CatalogueInProcess, len(cat.InProcess))
+		for k, v := range cat.InProcess {
+			if k == model.PriorityDispatchCapability || k == model.DurableCapability {
+				continue
+			}
+			inProcess[k] = v
+		}
+	}
+	keptTask, _, _ := model.ExtractLegacyAdmissionStrings(taskDefaults)
+	keptCI, _, _ := model.ExtractLegacyAdmissionStrings(ciDefaults)
+	var keptRepos map[string]model.CatalogueRepoDefaults
+	if len(repoDefaults) > 0 {
+		keptRepos = make(map[string]model.CatalogueRepoDefaults, len(repoDefaults))
+		for repo, rd := range repoDefaults {
+			rt, _, _ := model.ExtractLegacyAdmissionStrings(rd.Task)
+			rc, _, _ := model.ExtractLegacyAdmissionStrings(rd.CI)
+			keptRepos[repo] = model.CatalogueRepoDefaults{Task: rt, CI: rc}
+		}
+	}
 	return &model.CapabilityCatalogue{
 		Defaults: model.CatalogueDefaults{
-			Task:  taskDefaults,
-			CI:    ciDefaults,
-			Repos: repoDefaults,
+			Task:  keptTask,
+			CI:    keptCI,
+			Repos: keptRepos,
 		},
 		Servers:   servers,
-		InProcess: cat.InProcess,
+		InProcess: inProcess,
 		APIScopes: cat.APIScopes,
 	}
 }

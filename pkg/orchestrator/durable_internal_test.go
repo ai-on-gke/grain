@@ -32,7 +32,7 @@ import (
 
 func durableStdTask(id string) model.Task {
 	tk := stdTask(id)
-	tk.Grants = []model.Grant{{Capability: model.DurableCapability, Via: model.GrantByLabel}}
+	tk.Admission = model.AdmissionDurable
 	return tk
 }
 

@@ -445,6 +445,20 @@ func TestPersonOnlyOperationsRefuseDelegation(t *testing.T) {
 		t.Fatalf("delegated approve person-only grant = %d %s, want 403 requires_person", recApprove.Code, recApprove.Body.String())
 	}
 
+	// 3b. The same for admission above standard, which replaced the
+	// priority-dispatch and durable grants (schema migration 122): a task
+	// holding no person-only grant but admission bypass or durable is
+	// still a person's to approve directly.
+	for _, adm := range []model.Admission{model.AdmissionBypass, model.AdmissionDurable} {
+		id := "held-admission-" + string(adm)
+		railTask(t, h.client, id, "", func(task *model.Task) { task.Admission = adm })
+		rec := h.do(http.MethodPost, "/api/tasks/"+id+"/approve", `{}`, hdr)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"requires_person"`) ||
+			!strings.Contains(rec.Body.String(), "admission "+string(adm)) {
+			t.Fatalf("delegated approve admission %s = %d %s, want 403 requires_person naming the admission", adm, rec.Code, rec.Body.String())
+		}
+	}
+
 	// 4. Registering a hostd (POST /api/hostds) -> 403 requires_person.
 	recHostd := h.do(http.MethodPost, "/api/hostds",
 		`{"name":"remote-1","owner":"hostd@my-proj.iam.gserviceaccount.com"}`, hdr)
