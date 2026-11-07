@@ -898,7 +898,6 @@ func Run(ctx context.Context, cfg Config) error {
 		},
 	})
 	live.WithRegistry(registryMgr)
-	go registryMgr.Run(ctx)
 	if cfg.ObjectStore != nil && cfg.ciArtifacts == nil {
 		cfg.ciArtifacts = CiArtifactStore(cfg, live.ciStorageBounds)
 	}
@@ -1102,6 +1101,7 @@ func Run(ctx context.Context, cfg Config) error {
 			cfg.restartGaps.Down(upgrade.ServiceAPI)
 			stopWithGrace(stopUI)
 		}()
+		go registryMgr.Run(ctx)
 
 		done := make(chan struct{})
 		go func() {
@@ -1144,6 +1144,7 @@ func Run(ctx context.Context, cfg Config) error {
 		return nil
 	}
 
+	go registryMgr.Run(ctx)
 	err = runDaemon(ctx, cfg, store, sandboxes, transcriptDir, live, sandboxFabric, pkgCache, actionsCache, forbidden,
 		stateRepoHooksFor(stateManager), upgrader, secretStore)
 	if lost := writerLockLost.Load(); lost != nil {
