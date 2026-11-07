@@ -1,0 +1,31 @@
+{
+  "check_runs": [
+    {
+      "app": {
+        "slug": "grain-walkthrough"
+      },
+      "completed_at": "2026-11-07T04:52:01Z",
+      "conclusion": "success",
+      "external_id": "release-qualification:ai-on-gke/grain@v3.2.0-rc.1",
+      "head_sha": "ffa4d36ac54bb2231ff234324787377ba55eca88",
+      "id": 8001,
+      "name": "grain/release-qualification",
+      "started_at": "2026-11-07T04:12:01Z",
+      "status": "completed"
+    },
+    {
+      "app": {
+        "slug": "github-actions"
+      },
+      "completed_at": "2026-11-07T04:52:01Z",
+      "conclusion": "failure",
+      "head_sha": "ffa4d36ac54bb2231ff234324787377ba55eca88",
+      "id": 7001,
+      "name": "grain/release-qualification",
+      "started_at": "2026-11-07T04:52:01Z",
+      "status": "completed"
+    }
+  ],
+  "grain_app": "grain-walkthrough",
+  "total_count": 2
+}

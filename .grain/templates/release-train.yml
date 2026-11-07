@@ -6,10 +6,16 @@ base: main
 # grain's own forge connection: `grain ci list --format github|github-jobs`
 # and `grain ci checks --format github`, which answer in GitHub's own REST
 # shapes, the ones scripts/candidate-gate.sh reads.
+# Reading them takes ci:read on this repository: api:ci-read@ai-on-gke/grain.
+# grain-ci alone is not enough -- ai-on-gke/grain's CI is GitHub Actions
+# (ci_mode: github), and a task filed for a repository grain CI does not
+# judge has grain#ci stripped (model.applyGrainCIGrant), so every tick
+# failed at its first `grain ci list` (docs/test-runs/2026-11-04-release-train.md,
+# finding 2). grain-ci stays for a deployment that runs grain CI here.
 # The api:release-gate-read preset and package-publish are CI-only
 # (model.CapabilitySpec.CIOnly), so a task holds neither: this train pushes
 # git refs and nothing else, and its images are a CI job's to publish.
-capabilities: [grain-ci]
+capabilities: [grain-ci, api:ci-read@ai-on-gke/grain]
 # The release train's tag grant (design/playbook/releases.playbook.md §0.4):
 # the refs the train owns, and no more. Read from main by the declaration
 # sync, scoped to ai-on-gke/grain and to tasks filed from this template,

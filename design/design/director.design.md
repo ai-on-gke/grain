@@ -20,7 +20,7 @@ The director (`ConsoleSessionTag("director")`) is an ordinary task with three st
 |---|---|---|
 | **W1** Bootstrap & onboarding | `…/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`, retired in schema migration 118), `api:deployment:read` + `…/grain#health` (formerly `deployment-health`, retired in schema migration 81), `request_secret` | Secrets write straight to `<data-dir>/secrets`; never read back |
 | **W2** Live triage & observability | `api:self-debug` + `…/grain#source` (formerly `self-debug`, retired in schema migration 115; `task://`, `src://`), `ci://`, `api:ci-read`, `…/grain#journal` (formerly `grain-log`, retired in schema migration 80), `grain metrics` | Read-only diagnostics; no product-repo edits in session |
-| **W3** Decomposition & queue hygiene | `propose_task`, `api:task-admin`, `api:dispatch-control` | `TasksApproved` off by default; `hold_for_approval` & `expect` rails |
+| **W3** Decomposition & queue hygiene | `propose_task`, `api:task-admin`, `api:dispatch-control` | `TasksApproved` on by default (per-turn `TurnFanOut` bound, escalation & `grain/config` holds, `hold_for_approval` & `expect` rails) |
 | **W4** Config & capability hygiene | `/home/debian/grain-state` (`grain/config`), `propose_config_change` | Human approval via `pkg/trustboundary` & `settings_locked` |
 | **W5** CI, merge queue & releases | `ci:write`, `merge:write`, `api:release-manager`, `api:self-upgrade` | Never `autoMerge`, `submit`, or `merge:force`; honours upgrade holds |
 

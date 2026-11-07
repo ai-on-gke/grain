@@ -24,6 +24,7 @@ import {
   RowLink,
 } from "./ListPrimitives.jsx";
 import ChipStrip from "./ChipStrip.jsx";
+import AccessGate from "./AccessGate.jsx";
 
 // BoardsPage is the list of saved dashboards: what boards this
 // deployment has, filed under their folders, and -- the part this page
@@ -112,15 +113,17 @@ export default function BoardsPage({
         count={boards.length}
         icon={<ItemGlyph kind="boards" size={20} />}
         action={
-          <Button
-            size="small"
-            variant="contained"
-            startIcon={<AppIcon name="add" size={16} />}
-            sx={{ ml: "auto" }}
-            onClick={() => onNewBoard()}
-          >
-            New board
-          </Button>
+          <AccessGate scope="tasks:write" wrapperStyle={{ marginLeft: "auto" }}>
+            <Button
+              size="small"
+              variant="contained"
+              startIcon={<AppIcon name="add" size={16} />}
+              sx={{ ml: "auto" }}
+              onClick={() => onNewBoard()}
+            >
+              New board
+            </Button>
+          </AccessGate>
         }
       />
       <Typography
@@ -170,9 +173,11 @@ export default function BoardsPage({
             }}
           >
             <span>No boards yet.</span>
-            <Button variant="contained" onClick={() => onNewBoard()}>
-              New board
-            </Button>
+            <AccessGate scope="tasks:write">
+              <Button variant="contained" onClick={() => onNewBoard()}>
+                New board
+              </Button>
+            </AccessGate>
           </Box>
         </ListEmpty>
       ) : (
