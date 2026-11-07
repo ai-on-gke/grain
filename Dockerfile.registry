@@ -28,6 +28,11 @@ FROM ${GO_IMAGE}:${GO_VERSION}-bookworm@${GO_IMAGE_DIGEST} AS build
 
 ENV GOTOOLCHAIN=local
 
+# ui-registry/ is React+Vite and must be built into pkg/registry/server/static
+# before `go build` embeds it.
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 # A build inside a grain sandbox reaches the network through grain's
 # TLS-intercepting proxy, so the build stage trusts the deployment's CA
 # when one is staged. Only this stage: the runtime stage below installs
@@ -38,6 +43,7 @@ RUN if [ -f /tmp/.grain-ca.crt ]; then \
         cp /tmp/.grain-ca.crt /usr/local/share/ca-certificates/grain-ca.crt && \
         update-ca-certificates; \
     fi && rm -f /tmp/.grain-ca.crt /tmp/Dockerfile.registry
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 
 WORKDIR /src
 COPY . .
@@ -48,6 +54,8 @@ ARG RELEASE=
 ARG EDITION=
 ARG MAIN_GRAIN_REGISTRY=./cmd/grain-registry
 RUN set -eu; \
+    find pkg/registry/server/static -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' -not -name 'placeholder.html' -delete; \
+    (cd ui-registry && npm ci --omit=dev && npm run build); \
     vcs="$(./scripts/buildvcs.sh "${BUILDVCS}")"; \
     ldflags="-s -w"; \
     if [ -n "${RELEASE}" ]; then \

@@ -705,6 +705,23 @@ func suiteSchema() Schema {
 			// Checked and kept nowhere, as on a template.
 			{Keys: retiredTeam()},
 
+			// What makes the suite a release gate the release-qualification
+			// reconciler runs (model.SuiteQualification): the check run its
+			// verdict is posted as on this repository's own candidate
+			// commit, how that commit is found, and what Stage 1 is. It
+			// decides what this repository's own work does and judges
+			// nothing anywhere else -- the verdict lands on a commit of
+			// this repository, and only its own release reads it -- so it
+			// is declarable for auto-merge's reason above.
+			//
+			// No model field: the stanza is the declaration's, kept beside
+			// its provenance (model.DeclaredSuiteFile.Qualification) rather
+			// than on the suite row, as a template's `push:` is, so the
+			// settings export never carries it and only the repository's
+			// default branch writes it. Which is also why it is accepted
+			// in a repository only.
+			{Keys: []Key{{Name: "qualification", In: Repo}}},
+
 			// A suite has no target of its own -- a suite run takes the
 			// repo and branch it is started against -- so these two keys
 			// have no field behind them in either context. They are

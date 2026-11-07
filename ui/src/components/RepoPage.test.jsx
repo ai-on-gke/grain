@@ -2135,6 +2135,79 @@ describe("RepoPage", () => {
     });
   });
 
+  it("flipping Queue imported tasks at once keeps a label typed beside it", async () => {
+    // Only Save (or switching import on) stores the typed boxes; the
+    // queue switch saves on its own and used to put the label box back to
+    // the stored one (docs/test-runs/2026-11-07-repository-release-memory-ui.md).
+    routeApi({
+      upToDate: {
+        repo: "acme/widgets",
+        issueImport: {
+          enabled: true,
+          approved: false,
+          repo: "",
+          label: "stored-label",
+          intervalSeconds: 0,
+          effectiveIntervalSeconds: 600,
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderPage({ tab: "agents" });
+
+    const queue = await screen.findByLabelText(
+      "Queue imported issues in acme/widgets without approval",
+    );
+    const label = screen.getByLabelText("Label");
+    await user.clear(label);
+    await user.type(label, "typed-label");
+    await user.click(queue);
+    expect(api).toHaveBeenCalledWith("/api/repos/acme/widgets/settings", {
+      method: "PUT",
+      body: JSON.stringify({ issueImportApproved: true }),
+    });
+    await waitFor(() => expect(queue).toBeChecked());
+    expect(screen.getByLabelText("Label")).toHaveValue("typed-label");
+    expect(leavingLosesEdits()).toBe(true);
+  });
+
+  it("asks before leaving with an unsaved issue import box or a box not yet left", async () => {
+    routeApi({
+      upToDate: {
+        repo: "acme/widgets",
+        issueImport: {
+          enabled: true,
+          approved: false,
+          repo: "",
+          label: "",
+          intervalSeconds: 0,
+          effectiveIntervalSeconds: 600,
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderPage({ tab: "agents" });
+
+    const imp = await screen.findByTestId("repo-issue-import");
+    expect(leavingLosesEdits()).toBe(false);
+    await user.type(within(imp).getByLabelText("Label"), "grain-agent");
+    expect(leavingLosesEdits()).toBe(true);
+    await user.click(within(imp).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(leavingLosesEdits()).toBe(false));
+
+    // A box that saves when left asks only while it has not been left:
+    // a reload blurs nothing, so its edit would go unsaved.
+    const prompt = screen.getByLabelText("Prompt extension for acme/widgets");
+    await user.type(prompt, "Run make lint first.");
+    expect(leavingLosesEdits()).toBe(true);
+    await user.tab();
+    expect(api).toHaveBeenCalledWith(
+      "/api/repos/acme/widgets/prompt-extension",
+      expect.objectContaining({ method: "PUT" }),
+    );
+    await waitFor(() => expect(leavingLosesEdits()).toBe(false));
+  });
+
   it("shows merge when green as on for a repo that has it on", async () => {
     routeApi({
       upToDate: { repo: "acme/widgets", mergeOnGreen: true },

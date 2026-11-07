@@ -141,9 +141,13 @@ the database (`allowed_principal`).
 - **Routes outside the scope table:** the SPA's static pages are served
   to every admitted caller, and so are sign-in, `GET /api/config` and
   `whoami`. Event streams, console terminals and file downloads are
-  ordinary scoped routes. `/api/mcp`, `/mcp`, persistent sandboxes'
-  `/staging/` services and a run's own plumbing routes are refused to
-  every role that does not hold every scope.
+  ordinary scoped routes. `/api/mcp` and `/mcp` admit any signed-in role
+  and check each tool call against the caller's role using the scope and
+  repository rules of the route that tool maps to (filtering tool
+  discovery and `grain_filing_context` to the role's scopes and naming
+  the missing scope on a refused call). Persistent sandboxes' `/staging/`
+  services and a run's own plumbing routes are refused to every role that
+  does not hold every scope.
 - **Live changes (no restart):** Adding or removing an entry takes
   effect immediately. Manage the list in **Settings → Access → Allowed
   users and groups** (`/settings/access#allowed-principals`), over the

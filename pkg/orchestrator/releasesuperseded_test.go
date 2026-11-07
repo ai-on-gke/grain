@@ -101,12 +101,16 @@ func TestABurstOfSupersededReleaseRunsFilesNothingAndRaisesNoAlert(t *testing.T)
 
 	// The running release publishes, and then the newest one does: nothing
 	// is owed.
+	// updated_at is when a completed run finished, as GitHub serves it:
+	// the in-flight release finishes an hour in, well after the burst.
 	sim.WorkflowRuns[0].Status, sim.WorkflowRuns[0].Conclusion = "completed", "success"
+	sim.WorkflowRuns[0].UpdatedAt = baseTime.Add(60 * time.Minute)
 	runGitHubCITails(t, ctx, deps, baseTime.Add(60*time.Minute))
 	if findings, _ := store.BaseBranchPublishingFindings(ctx, stale); len(findings) != 0 {
 		t.Errorf("BaseBranchPublishingFindings after the running release published = %+v", findings)
 	}
 	sim.WorkflowRuns[4].Status, sim.WorkflowRuns[4].Conclusion = "completed", "success"
+	sim.WorkflowRuns[4].UpdatedAt = baseTime.Add(120 * time.Minute)
 	runGitHubCITails(t, ctx, deps, baseTime.Add(120*time.Minute))
 	rel, _ = store.GetBaseBranchRelease(ctx, repo, "main")
 	if rel == nil || rel.RunID != "1305" || rel.Conclusion != "success" || rel.Failures != 0 || rel.FailingSince != nil {

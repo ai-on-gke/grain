@@ -462,6 +462,9 @@ func (c *Client) ListEntries(ctx context.Context, q ListEntriesQuery) ([]Entry, 
 	if q.All {
 		vals.Set("all", "true")
 	}
+	if q.Mine {
+		vals.Set("mine", "true")
+	}
 	var out ListEntriesResponse
 	if err := c.doJSON(ctx, http.MethodGet, "/api/entries", vals, nil, &out); err != nil {
 		return nil, err
@@ -614,6 +617,24 @@ func (c *Client) AcceptTransfer(ctx context.Context, name string) (*Entry, error
 	var out Entry
 	path := "/api/entries/" + url.PathEscape(name) + "/transfer/accept"
 	if err := c.doJSON(ctx, http.MethodPost, path, nil, struct{}{}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Status fetches GET /api/status.
+func (c *Client) Status(ctx context.Context) (*StatusResponse, error) {
+	var out StatusResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/status", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// AdminSummary fetches GET /api/admin/summary.
+func (c *Client) AdminSummary(ctx context.Context) (*AdminSummaryResponse, error) {
+	var out AdminSummaryResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/admin/summary", nil, nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

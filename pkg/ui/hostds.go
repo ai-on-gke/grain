@@ -48,6 +48,12 @@ type HostdView struct {
 	// names: it is not in the registry, so it is listed to be seen and
 	// has no token here to rotate or revoke.
 	Shared bool `json:"shared,omitempty"`
+	// Logins are the agent CLI logins on the hostd's machine
+	// (hostd.Hello.Logins): what a connection with ambient credentials
+	// placed on it spends. LoginsKnown says the hostd said, so an empty
+	// list is "none" -- not "not connected", or "too old to say".
+	Logins      []string `json:"logins,omitempty"`
+	LoginsKnown bool     `json:"loginsKnown,omitempty"`
 }
 
 // CreateHostdRequest is POST /api/hostds.
@@ -136,6 +142,12 @@ func (c *Client) ListHostds(ctx context.Context) ([]HostdView, error) {
 		v := HostdView{Hostd: h}
 		if st, ok := statuses[h.Name]; ok {
 			v.Connection = &st
+			if st.Connected {
+				v.Logins, v.LoginsKnown = st.Logins, st.LoginsKnown
+			}
+		}
+		if h.Name == model.LocalHostd && !h.Revoked() && c.Config.LocalHostdLogins != nil {
+			v.Logins, v.LoginsKnown = c.Config.LocalHostdLogins(ctx)
 		}
 		v.State = hostdState(h, v.Connection)
 		out = append(out, v)
@@ -151,6 +163,9 @@ func (c *Client) ListHostds(ctx context.Context) ([]HostdView, error) {
 		}
 		if st, ok := statuses[v.Name]; ok {
 			v.Connection = &st
+			if st.Connected {
+				v.Logins, v.LoginsKnown = st.Logins, st.LoginsKnown
+			}
 		}
 		v.State = hostdState(v.Hostd, v.Connection)
 		out = append(out, v)
