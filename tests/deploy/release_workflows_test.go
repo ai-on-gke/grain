@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -299,5 +300,57 @@ func TestReleaseQualification(t *testing.T) {
 	if !regexp.MustCompile(`qualification-system-smoke\s*\n#`).Match(suite) &&
 		!regexp.MustCompile(`- qualification-system-smoke\s*\n[a-z#]`).Match(suite) {
 		t.Errorf("qualification-system-smoke must be the suite's last template, got:\n%s", suite)
+	}
+}
+
+// TestQualificationTemplatesFitAutoSubmitFanOut checks that no qualification
+// template asks its run to propose more scratch-branch fixtures than a single
+// task may self-approve (model.DefaultAutoSubmitFanOut, task 2862). Scratch
+// fixtures go through AutoSubmitLimits: a proposal past FanOut waits for a
+// person with AutoSubmitLimitNote, and releasequalification's children check
+// counts that unqueued task in OpenChildren, so the item cannot pass
+// unattended.
+func TestQualificationTemplatesFitAutoSubmitFanOut(t *testing.T) {
+	decl, err := repodecl.Load(os.DirFS(repoRoot(t)), model.GrainSourceRepo())
+	if err != nil {
+		t.Fatalf("repodecl.Load: %v", err)
+	}
+	cardinal := map[string]int{
+		"one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+		"six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+	}
+	fileCount := regexp.MustCompile(`(?i)\bfile\s+(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\b[^.\n]*\bfixtures?\b`)
+
+	foundMergequeue := false
+	for _, tf := range decl.Templates {
+		stem := model.DeclarationStem(tf.Path)
+		if !strings.HasPrefix(stem, "qualification-") {
+			continue
+		}
+		total := 0
+		for _, m := range fileCount.FindAllStringSubmatch(tf.Template.Body, -1) {
+			word := strings.ToLower(m[1])
+			if n, ok := cardinal[word]; ok {
+				total += n
+			} else if n, err := strconv.Atoi(word); err == nil {
+				total += n
+			}
+		}
+		if total > model.DefaultAutoSubmitFanOut {
+			t.Errorf("%s asks its run to file %d scratch fixtures across its steps, exceeding DefaultAutoSubmitFanOut (%d)",
+				tf.Path, total, model.DefaultAutoSubmitFanOut)
+		}
+		if stem == "qualification-mergequeue" {
+			foundMergequeue = true
+			if total == 0 {
+				t.Errorf("%s matched no fixture-filing directives; check the test pattern", tf.Path)
+			}
+			if !strings.Contains(tf.Template.Body, "at most five") {
+				t.Errorf("%s should state the five-fixture self-approval cap so runs do not file a sixth", tf.Path)
+			}
+		}
+	}
+	if !foundMergequeue {
+		t.Fatal("qualification-mergequeue template not found")
 	}
 }
