@@ -95,6 +95,15 @@ func assertStateExportChecksClean(t *testing.T, store *model.Store) {
 	}
 }
 
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
 func setupAllowlistedRepoServer(t *testing.T) (*ui.Server, *ui.Client) {
 	t.Helper()
 	srv, c := testServer(t)

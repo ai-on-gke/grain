@@ -35,6 +35,7 @@ import { DeclaredFields, DeclaredNotice } from "./Declared.jsx";
 import Overlay from "./Overlay.jsx";
 import { StaleEditNotice, isStaleEdit, withReload } from "./StaleEdit.jsx";
 import TemplateOverlay from "./TemplateOverlay.jsx";
+import AccessGate from "./AccessGate.jsx";
 import { useUnsavedEdits } from "../unsavedEdits.js";
 import { templateLabeler } from "../templateLabels.js";
 
@@ -248,13 +249,21 @@ function SuiteOverlay({
               })}
             />
           </FormControl>
-          <Button
-            size="small"
-            onClick={() => setShowNewTemplate(true)}
-            sx={{ mt: -1, mb: 1 }}
+          {/* Gated like every other write on the Processes page
+              (AccessGate.jsx): a role without templates:write is not
+              offered a template it could not save. */}
+          <AccessGate
+            scope="templates:write"
+            wrapperStyle={{ marginTop: -8, marginBottom: 8 }}
           >
-            + New template
-          </Button>
+            <Button
+              size="small"
+              onClick={() => setShowNewTemplate(true)}
+              sx={{ mt: -1, mb: 1 }}
+            >
+              + New template
+            </Button>
+          </AccessGate>
 
           <FormControl fullWidth margin="normal" size="small">
             <InputLabel id="suite-mode-label">Run mode</InputLabel>
@@ -345,16 +354,24 @@ function SuiteOverlay({
           alignItems="center"
           sx={{ mt: 2 }}
         >
+          {/* Delete and Save are suites:write, as the list's own Run and
+              New are (ProcessesList.jsx) -- missed here when the rest of
+              the page's writes were gated, so a grain/viewer opening a
+              suite was offered both and refused only on the click. */}
           {!isNew && (
-            <Button color="error" onClick={remove} disabled={!!declaredIn}>
-              Delete
-            </Button>
+            <AccessGate scope="suites:write">
+              <Button color="error" onClick={remove} disabled={!!declaredIn}>
+                Delete
+              </Button>
+            </AccessGate>
           )}
           <Stack direction="row" spacing={1}>
             <Button onClick={onClose}>{declaredIn ? "Close" : "Cancel"}</Button>
-            <Button type="submit" variant="contained" disabled={!!declaredIn}>
-              {isNew ? "Add suite" : "Save"}
-            </Button>
+            <AccessGate scope="suites:write">
+              <Button type="submit" variant="contained" disabled={!!declaredIn}>
+                {isNew ? "Add suite" : "Save"}
+              </Button>
+            </AccessGate>
           </Stack>
         </Stack>
       </form>
