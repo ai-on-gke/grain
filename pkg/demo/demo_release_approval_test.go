@@ -73,11 +73,9 @@ func TestDemoGitHubSimApprovesAPendingReleaseThroughTheSim(t *testing.T) {
 	if err := store.PutConfig(ctx, model.Config{TargetRepos: []string{repo.String()}}); err != nil {
 		t.Fatalf("PutConfig: %v", err)
 	}
-	// The release watch reads the tags of a repository whose CI Mode is
-	// GitHub Actions'.
-	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo, CIMode: model.CIModeGitHub}); err != nil {
-		t.Fatalf("PutRepoConfig: %v", err)
-	}
+	// Leave repo_config unset, as `grain demo -github-sim` does for
+	// acme/widgets (F1b): GET /api/repos/.../ci-mode answers github, and
+	// release-pending watches it without an explicit ci_mode: github row.
 	const code = "demo-release-approval-code"
 	cfg.LocalAPIToken = code
 	simClient := cfg.GitHubBranches.(github.Client)

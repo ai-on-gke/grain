@@ -57,7 +57,6 @@ func (f *proposeRepoCapturingFramework) seen() []string {
 func TestRunCycleTellsARunWhichReposAProposalMayName(t *testing.T) {
 	t.Parallel()
 	store, ctx := openStore(t)
-	_, client := newSim(t, "acme", "widgets", "main")
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	filedTask(t, ctx, store, "t1", repo)
 
@@ -66,12 +65,15 @@ func TestRunCycleTellsARunWhichReposAProposalMayName(t *testing.T) {
 	// case the whole list exists for.
 	elsewhere := model.RepoRef{Owner: "acme", Name: "docs"}
 	// With defaults of its own, since a RepoConfig carrying nothing is
-	// deleted rather than stored (Store.PutRepoConfig).
+	// deleted rather than stored (Store.PutRepoConfig). Its CI Mode is
+	// unset, so it releases from GitHub Actions too and release-pending
+	// reads its tags on the cycle.
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo: elsewhere, SetupCommand: "make deps",
 	}); err != nil {
 		t.Fatal(err)
 	}
+	sims, client := newMultiSim(t, "main", repo, elsewhere)
 
 	framework := &proposeRepoCapturingFramework{}
 	deps := orchestrator.Deps{
@@ -81,6 +83,9 @@ func TestRunCycleTellsARunWhichReposAProposalMayName(t *testing.T) {
 	}
 	if err := orchestrator.RunCycle(ctx, deps, baseTime); err != nil {
 		t.Fatalf("RunCycle: %v", err)
+	}
+	if got := sims.calls(elsewhere); got != 1 {
+		t.Errorf("GitHub calls to %s = %d, want 1 tag read from release-pending", elsewhere, got)
 	}
 
 	told := framework.seen()

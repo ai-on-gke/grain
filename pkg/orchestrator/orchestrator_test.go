@@ -16,6 +16,8 @@ package orchestrator_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -187,6 +189,63 @@ func newSim(t *testing.T, owner, repo, branch string) (*githubsim.Sim, *github.R
 	// head out of the queue.
 	sim.PullRequestBase = githubsim.UniquePullRequestBase()
 	return sim, github.NewClient(sim, nil)
+}
+
+// multiSim routes REST and GraphQL calls across one githubsim.Sim per
+// repository, panicking on any repository none of its sims owns just as a
+// single Sim does. Tests whose cycles work in more than one Actions
+// repository need one, because reconcileReleasePending reads the tags of
+// every working Actions repository.
+type multiSim struct {
+	mu     sync.Mutex
+	sims   map[string]*githubsim.Sim
+	counts map[string]int
+}
+
+func newMultiSim(t *testing.T, branch string, repos ...model.RepoRef) (*multiSim, *github.RESTClient) {
+	t.Helper()
+	ms := &multiSim{
+		sims:   make(map[string]*githubsim.Sim, len(repos)),
+		counts: make(map[string]int, len(repos)),
+	}
+	for _, r := range repos {
+		sim, _ := newSim(t, r.Owner, r.Name, branch)
+		ms.sims[r.String()] = sim
+	}
+	return ms, github.NewClient(ms, nil)
+}
+
+func (m *multiSim) Request(method, path string, headers map[string]string, body []byte) (github.ApiResponse, error) {
+	repo := ""
+	if rest, ok := strings.CutPrefix(path, "/repos/"); ok {
+		parts := strings.SplitN(rest, "/", 3)
+		if len(parts) >= 2 {
+			repo = parts[0] + "/" + parts[1]
+		}
+	} else if path == "/graphql" {
+		var req struct {
+			Variables map[string]any `json:"variables"`
+		}
+		if json.Unmarshal(body, &req) == nil {
+			repo = fmt.Sprintf("%v/%v", req.Variables["owner"], req.Variables["repo"])
+		}
+	}
+	m.mu.Lock()
+	sim := m.sims[repo]
+	if sim != nil {
+		m.counts[repo]++
+	}
+	m.mu.Unlock()
+	if sim == nil {
+		panic(fmt.Sprintf("multiSim: unconfigured repo %q for %s %s", repo, method, path))
+	}
+	return sim.Request(method, path, headers, body)
+}
+
+func (m *multiSim) calls(repo model.RepoRef) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.counts[repo.String()]
 }
 
 // pushBranch pushes an empty commit on branch straight to bare, standing
