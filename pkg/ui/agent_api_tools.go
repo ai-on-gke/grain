@@ -254,7 +254,7 @@ var routeDocs = map[string]string{
 	"PUT /api/gcp-keys/{name}":                                             "Create or replace a named GCP key.",
 	"DELETE /api/gcp-keys/{name}":                                          "Delete a named GCP key.",
 	"PUT /api/github-tokens/{name}":                                        "Set a named GitHub token.",
-	"DELETE /api/github-tokens/{name}":                                     "Delete a named GitHub token; refused while a git connection still names it.",
+	"DELETE /api/github-tokens/{name}":                                     "Delete a named GitHub token; refused while a git connection or capability grant still names it.",
 	"PUT /api/secrets/{secret}/{key}":                                      "Set one key of a secret; the value is stored and never shown back.",
 	"DELETE /api/secrets/{secret}/{key}":                                   "Delete one key of a secret.",
 	"DELETE /api/secrets/{secret}":                                         "Delete a secret and every key in it.",
