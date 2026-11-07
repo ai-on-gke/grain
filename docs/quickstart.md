@@ -50,11 +50,18 @@ sha256sum ~/.local/bin/grain         # record it beside $PINNED
 grain version
 ```
 
-`scripts/install-grain.sh` does the same in one command, and refuses to
-install an image whose signature does not verify when you give it a key:
+`scripts/install-grain.sh` does it in one command. By default it installs
+from the release's GitHub release assets instead
+([docs/release-assets.md](release-assets.md)): it downloads `images.json` and
+the `grain-image.tar.gz` tarball it names, checks the tarball against the
+manifest's sha256 and its `.sha256` sidecar, `docker load`s it and checks the
+loaded image ID, so no registry is involved. With `-image` it pulls from the
+registry as above, and refuses an image whose signature does not verify when
+you give it a key:
 
 ```sh
-scripts/install-grain.sh -version v1.9.0 -key cosign.pub
+scripts/install-grain.sh -version v1.9.0                     # release assets
+scripts/install-grain.sh -version v1.9.0 -image docker.io/grainai/grain -key cosign.pub
 ```
 
 If `~/.local/bin` is not on your `PATH`, add it. Without docker, copy the

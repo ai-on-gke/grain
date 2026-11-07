@@ -1450,6 +1450,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		return err
 	}
 	dt.Interactive = true
+	dt.Admission = model.AdmissionDurable
 	dt.Tags = append(dt.Tags, model.ConsoleSessionTag(model.DirectorSessionID))
 	dt.Grants = model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID})
 	dt.Origin = model.Origin{

@@ -240,18 +240,6 @@ func unprocessableErrorf(format string, a ...any) error {
 	return &UnprocessableError{err: fmt.Errorf(format, a...)}
 }
 
-// approvalAttribution returns the Attribution to record on task.Approval:
-// for a delegated registry request (service actor + human OnBehalfOf, both
-// verified by the registry), it preserves OnBehalfOf (AU-26.2); for other
-// callers it records Actor alone.
-func approvalAttribution(a model.Attribution) model.Attribution {
-	if a.Actor.Kind == model.PrincipalService && a.Actor.Source == model.SourceRegistry &&
-		a.OnBehalfOf != nil && a.OnBehalfOf.Kind == model.PrincipalHuman && a.OnBehalfOf.Source == model.SourceRegistry {
-		return a
-	}
-	return model.Attribution{Actor: a.Actor}
-}
-
 // NotFoundError marks a task ID with no task behind it. Server maps this
 // to a 404 -- the one case where the caller's mistake and the store's own
 // trouble need telling apart, which github.Error's status used to answer.
@@ -1381,6 +1369,7 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 		}
 		detail.Transitions = append(detail.Transitions, transitionFromWithAttempt(tr, proposingAttempt))
 	}
+	c.nameSessions(ctx, &detail, *t, comments, transitions)
 	detail.PullRequestEvents = pullRequestEventsFrom(obs)
 	if obs != nil {
 		detail.RunNowAt = obs.RunNowAt
@@ -1820,8 +1809,9 @@ type CreateTaskRequest struct {
 	// KeepRunning sets model.Task.KeepRunning: when true, the orchestrator
 	// immediately restarts the task when its run exits rather than completing
 	// or parking it.
-	KeepRunning      bool  `json:"keepRunning,omitempty"`
-	KeepRunningSnake *bool `json:"keep_running,omitempty"`
+	KeepRunning      bool   `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool  `json:"keep_running,omitempty"`
+	Admission        string `json:"admission,omitempty"`
 	// Goal declares the task's goal (model.TaskGoal,
 	// design/design/durable-tasks.design.md#DT-4) as it is filed; nil for none, or
 	// for the goal of the template it is filed from.
@@ -2216,9 +2206,9 @@ func (c *Client) proposalSeeding(ctx context.Context, target *model.RepoRef, tem
 // may give -- keepRunning, or a priority above the default. The
 // X-Grain-Client label plays no part.
 func (c *Client) ownerTrustApproves(ctx context.Context, req CreateTaskRequest, proposedBy *model.Task,
-	target *model.RepoRef, reads []model.RepoRef, writes []model.WriteTarget, held, keepRunning bool, priority int) (*model.Principal, error) {
+	target *model.RepoRef, reads []model.RepoRef, writes []model.WriteTarget, held, keepRunning bool, priority int, admission model.Admission) (*model.Principal, error) {
 	tok := externalTokenFromContext(ctx)
-	if tok == nil || proposedBy != nil || req.Approved || req.HoldForApproval || req.FixesBaseBranch || req.Interactive || held || keepRunning || priority > model.DefaultTaskPriority {
+	if tok == nil || proposedBy != nil || req.Approved || req.HoldForApproval || req.FixesBaseBranch || req.Interactive || held || keepRunning || priority > model.DefaultTaskPriority || model.NormalizeAdmission(admission).AtLeast(model.AdmissionBypass) {
 		return nil, nil
 	}
 	if p, ok := PrincipalFromContext(ctx); !ok || p.Kind != model.PrincipalAgent || p.Source != model.SourceExternalToken {
@@ -2250,8 +2240,32 @@ func (c *Client) ownerTrustApproves(ctx context.Context, req CreateTaskRequest, 
 	return owner, nil
 }
 
-// CreateTask files a task straight into the store.
-//
+func (c *Client) defaultTaskAdmission(ctx context.Context, target *model.RepoRef) (model.Admission, error) {
+	if c.Store == nil {
+		return model.AdmissionStandard, nil
+	}
+	var adm model.Admission
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		return "", err
+	}
+	if cfg != nil && cfg.DefaultAdmission != "" {
+		adm = cfg.DefaultAdmission
+	}
+	if target != nil {
+		rc, err := c.Store.GetRepoConfig(ctx, *target)
+		if err != nil {
+			return "", err
+		}
+		if rc != nil {
+			// Composed by union with the deployment's, as the
+			// default capability lists it replaced were: the higher wins.
+			adm = model.MaxAdmission(adm, rc.DefaultAdmission)
+		}
+	}
+	return model.NormalizeAdmission(adm), nil
+}
+
 // No GitHub issue is created, and none is needed: Store.NewTaskID
 // allocates identity, so a task exists the moment this returns. That is
 // the whole inversion in one method -- this used to open an issue and let
@@ -2608,10 +2622,33 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			return Task{}, err
 		}
 	}
+	explicitAdmission, err := model.ParseOptionalAdmission(req.Admission)
+	if err != nil {
+		return Task{}, validationErrorf("%v", err)
+	}
+	var legacyAdmission model.Admission
+	var hadLegacyAdmission bool
+	if req.Capabilities != nil {
+		var capsWithoutLegacy []string
+		capsWithoutLegacy, legacyAdmission, hadLegacyAdmission = extractLegacyAdmissionCaps("task", *req.Capabilities)
+		req.Capabilities = &capsWithoutLegacy
+	}
 	grants, droppedRefusals, err := c.creationGrants(ctx, req, target, teamID)
 	if err != nil {
 		return Task{}, err
 	}
+	askedAdmission := explicitAdmission
+	if hadLegacyAdmission {
+		askedAdmission = model.MaxAdmission(askedAdmission, legacyAdmission)
+	}
+	taskAdmission := askedAdmission
+	if taskAdmission == "" {
+		taskAdmission, err = c.defaultTaskAdmission(ctx, target)
+		if err != nil {
+			return Task{}, err
+		}
+	}
+	taskAdmission = model.NormalizeAdmission(taskAdmission)
 	// The template a person filed this from, which is how the task's runs
 	// find that template's declared push set (model.Task.TemplateID) and how
 	// the catalogue judges its template restrictions. An agent's proposal
@@ -2820,6 +2857,24 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			catalogueHold, req.Approved = true, false
 		}
 	}
+	// Admission above standard is what the retired priority-dispatch and
+	// durable grants gave, and is held the way they were: for an agent,
+	// and for a person acting through a delegating app (AU-25.3), which
+	// the delegated person-only grant check below no longer sees now that
+	// neither name reaches grants.
+	if proposedBy == nil && taskAdmission.AtLeast(model.AdmissionBypass) &&
+		(c.requestActor(ctx).Actor.Kind == model.PrincipalAgent || isDelegatedRequest(ctx)) {
+		why := fmt.Sprintf("it sets admission to %s, which only a person may give", taskAdmission)
+		if isDelegatedRequest(ctx) {
+			why = fmt.Sprintf("it sets admission to %s, which only a person acting directly may give", taskAdmission)
+		}
+		if needsPersonWhy == "" {
+			needsPersonWhy = why
+		} else {
+			needsPersonWhy += "; " + why
+		}
+		catalogueHold, req.Approved = true, false
+	}
 	if proposedBy == nil && isDelegatedRequest(ctx) {
 		var delegatedPersonOnly []string
 		for _, g := range grants {
@@ -2842,7 +2897,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	var limitNote, ungrantedNote, heldNote, needsPersonNote, personOnlyNote, seededNote, refusal string
 	var escalated []string
 	if proposedBy != nil {
-		child := model.Task{Target: target, Base: req.Base, Grants: grants, Writes: writes, TemplateID: filedFrom}
+		child := model.Task{Target: target, Base: req.Base, Grants: grants, Writes: writes, Admission: askedAdmission, TemplateID: filedFrom}
 		autoMerge = autoMerge && proposedBy.AutoMerge && model.AutoSubmits(child, *proposedBy)
 		child.Reads = reads
 		// Read before the proposal's escalations are measured: a
@@ -2923,7 +2978,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		// so neither permission queues a proposal that asks for one. Filed
 		// as asked, with a note saying which, and told to the run as what
 		// its permission does not cover.
-		if why := model.PersonOnlyProposalSettings(model.Task{KeepRunning: keepRunning, Priority: priority}, *proposedBy); why != "" {
+		if why := model.PersonOnlyProposalSettings(model.Task{Admission: askedAdmission, KeepRunning: keepRunning, Priority: priority}, *proposedBy); why != "" {
 			if autoSubmit || sessionQueued || req.Approved {
 				personOnlyNote = fmt.Sprintf("\n\n_Filed for a person to approve: %s._", why)
 			}
@@ -3028,6 +3083,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		NetworkAccess:        model.NetworkAccess(req.NetworkAccess),
 		NothingNeededAction:  nothingNeeded,
 		KeepRunning:          keepRunning,
+		Admission:            taskAdmission,
 		NoPort:               req.NoPort,
 		WorkOrigin:           explicitOrigin,
 		AgentFramework:       agentFramework,
@@ -3082,7 +3138,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// can be interactive too, through an interactive template's
 	// templateId (fromTemplate), and that must not turn propose_task into
 	// a way to approve its own work.
-	ownerTrust, err := c.ownerTrustApproves(ctx, req, proposedBy, target, reads, writes, catalogueHold || needsPersonWhy != "", keepRunning, priority)
+	ownerTrust, err := c.ownerTrustApproves(ctx, req, proposedBy, target, reads, writes, catalogueHold || needsPersonWhy != "", keepRunning, priority, taskAdmission)
 	if err != nil {
 		return Task{}, err
 	}
@@ -3090,8 +3146,8 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	case catalogueHold:
 		task.Body += "\n\n_Filed for a person to approve: " + needsPersonWhy + "._"
 	case req.Approved || (req.Interactive && proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent):
-		attr := approvalAttribution(c.requestActor(ctx))
-		task.Approval = &attr
+		approval := c.requestActor(ctx)
+		task.Approval = &approval
 		task.ApprovedAt = &now
 	case sessionQueued:
 		task.Approval = &model.Attribution{Actor: model.ConsoleSessionPrincipal}
@@ -3169,7 +3225,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			// whoever reads the pair will find it.
 			if _, err := c.Store.AddComment(ctx, model.Comment{
 				TaskID:    id,
-				Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
+				Author:    c.requestActor(ctx),
 				Body:      model.SupersedeRefusedLine(supersedes, refusal),
 				CreatedAt: now,
 			}); err != nil {
@@ -4513,11 +4569,12 @@ type UpdateTaskRequest struct {
 	// slice clears it. Refused to agents by agentFilingEscalation /
 	// externalAgentFilingEscalation.
 	Reviewers *[]string `json:"reviewers,omitempty"`
-	// Capabilities, given, replaces the task's capability grants while
-	// preserving durable on standing console-session tasks.
+	// Capabilities, given, replaces the task's capability grants.
 	Capabilities *[]string `json:"capabilities,omitempty"`
-	// PriorityDispatch attaches or detaches PriorityDispatchCapability on the
-	// task (also populated when JSON "priority" is a boolean).
+	// Admission sets model.Task.Admission ("standard", "bypass", or "durable").
+	Admission *string `json:"admission,omitempty"`
+	// PriorityDispatch is a deprecated one-release alias that maps true to
+	// bypass admission and false back to standard admission.
 	PriorityDispatch *bool `json:"priorityDispatch,omitempty"`
 }
 
@@ -4731,7 +4788,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	// sent as agentBackendId as the model choice it was.
 	var editModel *string
 	var isConsoleSessionTask bool
-	if req.Model != nil || req.AgentBackendID != nil || req.Capabilities != nil || req.PriorityDispatch != nil || req.KeepRunning != nil {
+	if req.Model != nil || req.AgentBackendID != nil || req.Capabilities != nil || req.Admission != nil || req.PriorityDispatch != nil || req.KeepRunning != nil {
 		if existing, err := c.Store.GetTask(ctx, id); err == nil && existing != nil {
 			isConsoleSessionTask = existing.IsConsoleSession()
 		}
@@ -4908,11 +4965,27 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	if err != nil {
 		return Task{}, err
 	}
+	var chosenAdmission *model.Admission
+	if req.Admission != nil {
+		adm, err := model.ParseOptionalAdmission(*req.Admission)
+		if err != nil {
+			return Task{}, validationErrorf("%v", err)
+		}
+		norm := model.NormalizeAdmission(adm)
+		chosenAdmission = &norm
+	}
+	if req.PriorityDispatch != nil {
+		log.Printf("task %s: priorityDispatch is deprecated; set admission instead", id)
+	}
 	var normalizedCaps []string
+	var legacyAdmission model.Admission
+	var hadLegacyAdmission bool
 	if req.Capabilities != nil {
+		var capsWithoutLegacy []string
+		capsWithoutLegacy, legacyAdmission, hadLegacyAdmission = extractLegacyAdmissionCaps("task "+id, *req.Capabilities)
 		seen := map[string]bool{}
-		normalizedCaps = make([]string, 0, len(*req.Capabilities))
-		for _, rawCap := range *req.Capabilities {
+		normalizedCaps = make([]string, 0, len(capsWithoutLegacy))
+		for _, rawCap := range capsWithoutLegacy {
 			capIDs, err := c.normalizeCapabilityIDs(rawCap)
 			if err != nil {
 				return Task{}, err
@@ -5177,61 +5250,57 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		if req.Reviewers != nil {
 			task.Reviewers = model.NormalizeReviewers(*req.Reviewers)
 		}
-		if req.Capabilities != nil || req.PriorityDispatch != nil {
+		if req.Capabilities != nil {
 			existingByCap := make(map[string]model.Grant, len(task.Grants))
 			for _, g := range task.Grants {
 				existingByCap[g.Capability] = g
 			}
-			if req.Capabilities != nil {
-				policy, configured, err := c.capabilityPolicyFor(ctx)
-				if err != nil {
-					return err
-				}
-				for _, capID := range normalizedCaps {
-					if _, had := existingByCap[capID]; !had {
-						if model.IsCapabilityRef(capID) {
-							subject := model.CapabilitySubject{Repo: task.Target, Kind: model.CapabilityRunTask}
-							if err := policy.Permits(capID, subject, configured); err != nil {
-								return validationErrorf("%v", err)
-							}
-						}
-						if err := c.catalogueEditRefusal(ctx, *task, capID); err != nil {
-							return err
-						}
-					}
-				}
-				newGrants := make([]model.Grant, 0, len(normalizedCaps)+1)
-				seen := map[string]bool{}
-				if task.IsConsoleSession() {
-					newGrants = append(newGrants, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
-					seen[model.DurableCapability] = true
-				}
-				for _, capID := range normalizedCaps {
-					if capID == "" || seen[capID] {
-						continue
-					}
-					seen[capID] = true
-					if prevGrant, had := existingByCap[capID]; had {
-						newGrants = append(newGrants, prevGrant)
-					} else {
-						newGrants = append(newGrants, model.Grant{Capability: capID, Via: model.GrantByLabel})
-					}
-				}
-				task.Grants = newGrants
+			policy, configured, err := c.capabilityPolicyFor(ctx)
+			if err != nil {
+				return err
 			}
-			if req.PriorityDispatch != nil {
-				if *req.PriorityDispatch {
-					if _, had := existingByCap[model.PriorityDispatchCapability]; !had {
-						if err := c.catalogueEditRefusal(ctx, *task, model.PriorityDispatchCapability); err != nil {
-							return err
+			for _, capID := range normalizedCaps {
+				if _, had := existingByCap[capID]; !had {
+					if model.IsCapabilityRef(capID) {
+						subject := model.CapabilitySubject{Repo: task.Target, Kind: model.CapabilityRunTask}
+						if err := policy.Permits(capID, subject, configured); err != nil {
+							return validationErrorf("%v", err)
 						}
 					}
-					if !slices.ContainsFunc(task.Grants, func(g model.Grant) bool { return g.Capability == model.PriorityDispatchCapability }) {
-						task.Grants = append(task.Grants, model.Grant{Capability: model.PriorityDispatchCapability, Via: model.GrantByLabel})
+					if err := c.catalogueEditRefusal(ctx, *task, capID); err != nil {
+						return err
 					}
-				} else {
-					task.Grants = slices.DeleteFunc(task.Grants, func(g model.Grant) bool { return g.Capability == model.PriorityDispatchCapability })
 				}
+			}
+			newGrants := make([]model.Grant, 0, len(normalizedCaps))
+			seen := map[string]bool{}
+			for _, capID := range normalizedCaps {
+				if capID == "" || seen[capID] {
+					continue
+				}
+				seen[capID] = true
+				if prevGrant, had := existingByCap[capID]; had {
+					newGrants = append(newGrants, prevGrant)
+				} else {
+					newGrants = append(newGrants, model.Grant{Capability: capID, Via: model.GrantByLabel})
+				}
+			}
+			task.Grants = newGrants
+		}
+		if chosenAdmission != nil {
+			if task.IsConsoleSession() && *chosenAdmission != model.AdmissionDurable {
+				return validationErrorf("standing console session task %s must keep admission %q", id, model.AdmissionDurable)
+			}
+			task.Admission = *chosenAdmission
+		}
+		if hadLegacyAdmission {
+			task.Admission = model.MaxAdmission(model.NormalizeAdmission(task.Admission), legacyAdmission)
+		}
+		if req.PriorityDispatch != nil {
+			if *req.PriorityDispatch {
+				task.Admission = model.MaxAdmission(model.NormalizeAdmission(task.Admission), model.AdmissionBypass)
+			} else if !task.IsConsoleSession() && model.NormalizeAdmission(task.Admission) == model.AdmissionBypass {
+				task.Admission = model.AdmissionStandard
 			}
 		}
 		if retargeted {
@@ -5396,6 +5465,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			stillTrusted := ownerTrustCfg != nil &&
 				sameCallerOwner &&
 				!task.KeepRunning &&
+				!task.HasPriorityDispatch() &&
 				task.Priority <= model.DefaultTaskPriority &&
 				!model.FixesBaseBranch(*task) &&
 				!netWidened &&
@@ -5534,7 +5604,7 @@ func (c *Client) noteEdit(ctx context.Context, id string, titleChanged bool, tit
 	}
 	_, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
-		Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
+		Author:    c.requestActor(ctx),
 		Body:      body,
 		CreatedAt: c.now(),
 	})
@@ -5553,6 +5623,7 @@ func (c *Client) mutate(ctx context.Context, id string, apply func(*model.Task) 
 		return &NotFoundError{ID: id}
 	}
 	c.ensureConsoleSessionSnapshot(ctx, *task)
+	ctx = model.WithAdmissionChange(ctx, c.requestActor(ctx))
 	actor := c.requestActor(ctx).Actor
 	var released []model.HumanReviewReason
 	if err := c.Store.UpdateTask(ctx, id, func(t *model.Task) error {
@@ -5615,6 +5686,27 @@ func (c *Client) SetCapability(ctx context.Context, id, capabilityID string, att
 	if capabilityID == "" {
 		return validationErrorf("capability id is required")
 	}
+	if aliasAdm, ok := model.LegacyAdmissionAlias(capabilityID); ok {
+		log.Printf("task %s: capability %q is deprecated; set admission instead", id, capabilityID)
+		return c.mutate(ctx, id, func(task *model.Task) error {
+			task.Grants = slices.DeleteFunc(task.Grants, func(g model.Grant) bool {
+				return g.Capability == capabilityID
+			})
+			cur := model.NormalizeAdmission(task.Admission)
+			if attach {
+				task.Admission = model.MaxAdmission(cur, aliasAdm)
+				return nil
+			}
+			if task.IsConsoleSession() {
+				task.Admission = model.AdmissionDurable
+				return nil
+			}
+			if cur == aliasAdm {
+				task.Admission = model.AdmissionStandard
+			}
+			return nil
+		})
+	}
 	var targetIDs []string
 	if attach {
 		normalized, err := c.normalizeCapabilityIDs(capabilityID)
@@ -5642,10 +5734,6 @@ func (c *Client) SetCapability(ctx context.Context, id, capabilityID string, att
 	return c.mutate(ctx, id, func(task *model.Task) error {
 		kept := make([]model.Grant, 0, len(task.Grants)+len(targetIDs))
 		for _, g := range task.Grants {
-			if !attach && g.Capability == model.DurableCapability && task.IsConsoleSession() {
-				kept = append(kept, g)
-				continue
-			}
 			if !slices.Contains(targetIDs, g.Capability) {
 				kept = append(kept, g)
 			}
@@ -5799,7 +5887,7 @@ func (c *Client) Approve(ctx context.Context, id string) error {
 	if err := c.catalogueApprovalRefusal(ctx, *task); err != nil {
 		return err
 	}
-	if err := c.Store.Approve(ctx, id, approvalAttribution(c.requestActor(ctx)), c.now()); err != nil {
+	if err := c.Store.Approve(ctx, id, c.requestActor(ctx), c.now()); err != nil {
 		return err
 	}
 	if task.Interactive && task.DeferredAt == nil && c.Config.Wake != nil {
@@ -6220,7 +6308,7 @@ func (c *Client) commentWithAuthor(ctx context.Context, id, body string, uploads
 	// An author naming the request's own principal keeps its kind: a
 	// verified *.gserviceaccount.com caller is a service principal, as it
 	// is on the tasks it files and closes, not a human.
-	if trimmed := strings.TrimSpace(author); trimmed != "" && trimmed != by.Actor.ID {
+	if trimmed := strings.TrimSpace(author); trimmed != "" && trimmed != by.Actor.ID && (by.OnBehalfOf == nil || trimmed != by.OnBehalfOf.ID) {
 		by = model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: trimmed}}
 	}
 	return c.addAttributedComment(ctx, id, body, attachments, by, now, reopenAck)
@@ -6271,14 +6359,15 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 			return err
 		}
 	}
-	if reopenAck && by.Actor.Kind == model.PrincipalHuman {
+	isPerson := attributedHuman(by) != nil
+	if reopenAck && isPerson {
 		reopened, err := c.reopenAcknowledgeable(ctx, id, now)
 		if err != nil || reopened {
 			return err
 		}
 	}
 	if obs == nil || obs.PendingQuestionCommentID == nil {
-		if (wokeOnMessage || (task.Interactive && by.Actor.Kind == model.PrincipalHuman)) && c.Config.Wake != nil {
+		if (wokeOnMessage || (task.Interactive && isPerson)) && c.Config.Wake != nil {
 			c.Config.Wake()
 		}
 		return nil
@@ -6401,7 +6490,7 @@ func (c *Client) Stop(ctx context.Context, id string) error {
 
 	commentID, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
-		Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
+		Author:    c.requestActor(ctx),
 		Body:      model.TurnStoppedComment,
 		CreatedAt: now,
 	})
@@ -6734,7 +6823,7 @@ func (c *Client) RetryMerge(ctx context.Context, id string) error {
 	// later has no other way to see happened.
 	_, err = c.Store.AddComment(ctx, model.Comment{
 		TaskID: id,
-		Author: model.Attribution{Actor: c.requestActor(ctx).Actor},
+		Author: c.requestActor(ctx),
 		Body: fmt.Sprintf(
 			"Asked the merge queue to try %s again. It takes its place in the queue "+
 				"as if it had never been given up on: the checks are read afresh -- and "+
@@ -6923,7 +7012,7 @@ func (c *Client) ForceMerge(ctx context.Context, id, reason, head string) error 
 		"forced again."
 	if _, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
-		Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
+		Author:    c.requestActor(ctx),
 		Body:      body,
 		CreatedAt: now,
 	}); err != nil {
@@ -7149,7 +7238,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 		if err := c.agentMayApprove(ctx, *task); err != nil {
 			return err
 		}
-		if err := c.Store.Approve(ctx, id, approvalAttribution(c.requestActor(ctx)), now); err != nil {
+		if err := c.Store.Approve(ctx, id, c.requestActor(ctx), now); err != nil {
 			return err
 		}
 	}
@@ -7177,7 +7266,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 	// thread), so it names the branch that work belongs on.
 	if _, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
-		Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
+		Author:    c.requestActor(ctx),
 		Body:      runNowComment(state, pullRequestRefOf(*task)),
 		CreatedAt: now,
 	}); err != nil {
@@ -7222,6 +7311,9 @@ func (c *Client) agentMayApprove(ctx context.Context, task model.Task) error {
 			task.ID, by.ID)
 	}
 	var asked []string
+	if adm := model.NormalizeAdmission(task.Admission); adm.AtLeast(model.AdmissionBypass) {
+		asked = append(asked, "admission "+string(adm))
+	}
 	for _, capability := range agentEscalatedCapabilities(task, *requester) {
 		asked = append(asked, "capability "+capability)
 	}
@@ -7282,10 +7374,11 @@ func (c *Client) agentMayApprove(ctx context.Context, task model.Task) error {
 // authority waiting for a person just the same. A default is attached to
 // every task filed there whoever files it, so it asks for nothing. A
 // grant only a person may give (model.IsPersonOnlyGrant: a dangerous api
-// grant, or priority-dispatch) asks for a person even when requester
-// holds it, as it does of a proposal: otherwise the pipeline steward,
-// which holds priority-dispatch and run_task_now, could propose a task
-// naming it and then approve that task itself.
+// grant, or a bare priority-dispatch/durable alias) asks for a person even
+// when requester holds it, as it does of a proposal. Admission above
+// standard is the same rule, checked by agentMayApprove: otherwise the
+// pipeline steward, durable and holding run_task_now, could propose a task
+// asking for it and then approve that task itself.
 func agentEscalatedCapabilities(task, requester model.Task) []string {
 	held := make(map[string]bool, len(requester.Grants))
 	for _, g := range requester.Grants {
@@ -7363,7 +7456,8 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 		return &NotFoundError{ID: id}
 	}
 	now := c.now()
-	by := c.requestActor(ctx).Actor
+	who := c.requestActor(ctx)
+	by := who.Actor
 	eventReason := strings.TrimSpace(opts.Reason)
 	if eventReason == "" {
 		if call, ok := agentCallFromContext(ctx); ok {
@@ -7405,7 +7499,7 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	if !closed {
 		if changed {
 			c.recordTaskEvent(ctx, model.TaskEvent{TaskID: id, Kind: model.TaskEventReopened, At: now,
-				By: by, Reason: eventReason})
+				By: by, OnBehalfOf: who.OnBehalfOf, Reason: eventReason})
 		}
 		return nil
 	}
@@ -7433,7 +7527,7 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	}
 	if changed {
 		c.recordTaskEvent(ctx, model.TaskEvent{TaskID: id, Kind: model.TaskEventClosed, At: now,
-			By: by, Reason: eventReason, Detail: closeCancelled(liveRun, cancelledCI)})
+			By: by, OnBehalfOf: who.OnBehalfOf, Reason: eventReason, Detail: closeCancelled(liveRun, cancelledCI)})
 	}
 	// After the close is written, not before: the note says the task *is*
 	// closed, and a note left in front of a close that then failed would

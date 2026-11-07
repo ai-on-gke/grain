@@ -41,9 +41,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
@@ -193,11 +191,9 @@ func OfferedCapabilities() []Capability {
 		offered = append(offered, Capability{ID: r.ID, Name: r.Name, Description: r.Description})
 	}
 	offered = append(offered, []Capability{
-		{ID: prioritydispatch.CapabilityName, Name: "Priority dispatch",
-			Description: prioritydispatch.Description},
-		{ID: durable.CapabilityName, Name: "Durable",
-			Description: durable.Description},
-		// No bootstrap-playbooks row: it was retired onto the config-map
+		// No priority-dispatch or durable rows: both were retired onto the
+		// task's admission setting (schema migration 122). No
+		// bootstrap-playbooks row: it was retired onto the config-map
 		// server's config-map {"config_maps":["bootstrap"]} (schema migration
 		// 118), which is offered with the other capability-server methods.
 		{ID: "github-sandbox", Name: "GitHub sandbox",

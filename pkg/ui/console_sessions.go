@@ -344,7 +344,7 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 				if len(openTask.Grants) > 0 {
 					capabilities = make([]string, 0, len(openTask.Grants))
 					for _, g := range openTask.Grants {
-						if g.Capability == "" || g.Capability == model.DurableCapability {
+						if _, legacy := model.LegacyAdmissionAlias(g.Capability); g.Capability == "" || legacy {
 							continue
 						}
 						if g.Via == model.GrantByDefault && !slices.Contains(s.Capabilities, g.Capability) &&
@@ -617,7 +617,8 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 		// somebody choosing a set, in front of the thing it applies to.
 		seen := map[string]bool{}
 		ids := make([]string, 0, len(*req.Capabilities))
-		for _, rawCap := range *req.Capabilities {
+		capsWithoutLegacy, _, _ := extractLegacyAdmissionCaps("console session "+id, *req.Capabilities)
+		for _, rawCap := range capsWithoutLegacy {
 			normalizedIDs, err := c.normalizeCapabilityIDs(rawCap)
 			if err != nil {
 				return nil, err
@@ -792,9 +793,9 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 						return err
 					}
 				}
-				newGrants := make([]model.Grant, 0, len(session.Capabilities)+1)
-				newGrants = append(newGrants, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
-				seen := map[string]bool{model.DurableCapability: true}
+				newGrants := make([]model.Grant, 0, len(session.Capabilities))
+				seen := map[string]bool{}
+				t.Admission = model.AdmissionDurable
 				for _, capID := range session.Capabilities {
 					if capID == "" || seen[capID] {
 						continue
@@ -933,7 +934,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 func consoleSessionGrainCapabilities(grants []model.Grant) []string {
 	caps := make([]string, 0, len(grants))
 	for _, g := range grants {
-		if g.Via != model.GrantByGrain || g.Capability == "" || g.Capability == model.DurableCapability {
+		if _, legacy := model.LegacyAdmissionAlias(g.Capability); g.Via != model.GrantByGrain || g.Capability == "" || legacy {
 			continue
 		}
 		if !slices.Contains(caps, g.Capability) {
@@ -1239,7 +1240,7 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 		// makes, so it lifts the opening park the task was filed on and
 		// queues the session's first exchange exactly as a message typed
 		// into an existing session would.
-		by := model.Attribution{Actor: c.requestActor(ctx).Actor}
+		by := c.requestActor(ctx)
 		if err := c.addAttributedComment(ctx, taskID, message, attachments, by, now, true); err != nil {
 			return "", nil, err
 		}
@@ -1310,13 +1311,24 @@ func (c *Client) stopAndCloseConsoleSessionTask(ctx context.Context, taskID stri
 		return err
 	}
 	if obs == nil || obs.ClosedAt == nil {
-		if err := c.Store.ObserveClose(ctx, taskID, now, c.requestActor(ctx).Actor, reason, func(o *model.Observation) {
-			o.ClosedAt = &now
+		who := c.requestActor(ctx)
+		changed := false
+		if err := c.Store.ObserveField(ctx, taskID, now, func(o *model.Observation) {
+			if o.ClosedAt == nil {
+				o.ClosedAt = &now
+				changed = true
+			}
 			o.PendingQuestionCommentID = nil
 			o.PendingSecret = ""
 			o.PendingAccess = nil
 		}); err != nil {
 			return err
+		}
+		if changed {
+			c.recordTaskEvent(ctx, model.TaskEvent{
+				TaskID: taskID, Kind: model.TaskEventClosed, At: now,
+				By: who.Actor, OnBehalfOf: who.OnBehalfOf, Reason: reason,
+			})
 		}
 	}
 	if reset && !slices.Contains(task.Tags, model.ConsoleSessionResetTag) {

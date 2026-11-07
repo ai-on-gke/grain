@@ -169,6 +169,13 @@ func networkSourceOf(access NetworkAccess, said CompositionLayer) CompositionLay
 	return said
 }
 
+func admissionSourceOf(admission Admission, said CompositionLayer) CompositionLayer {
+	if admission == "" {
+		return LayerDeployment
+	}
+	return said
+}
+
 // CompositionSources is which layer decided each field of a Composition
 // -- one CompositionLayer per field of it, in the same order, so a
 // reader can put "from the suite" beside "auto-merge: on".
@@ -189,6 +196,7 @@ type CompositionSources struct {
 	Approved             CompositionLayer
 	Interactive          CompositionLayer
 	KeepRunning          CompositionLayer
+	Admission            CompositionLayer
 }
 
 // Composition is one task a firing will file, resolved: every value it
@@ -253,6 +261,9 @@ type Composition struct {
 	// KeepRunning is whether the task immediately restarts when its run
 	// exits (Task.KeepRunning).
 	KeepRunning bool
+	// Admission is the resolved admission setting for the task (empty means
+	// neither template nor schedule set one, so Task defaults to standard).
+	Admission Admission
 	// Priority is the resolved numeric priority for the task (DefaultTaskPriority = 5).
 	Priority int
 
@@ -306,6 +317,7 @@ func (c Composition) Task(id string, actor Principal, reason OriginReason, now t
 		TemplateID:           c.TemplateID,
 		Interactive:          c.Interactive,
 		KeepRunning:          c.KeepRunning,
+		Admission:            NormalizeAdmission(c.Admission),
 		CreatedAt:            &now,
 	}
 	if c.Model != "" {
@@ -425,6 +437,7 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 		Approved:             approved,
 		Interactive:          tmpl.Interactive,
 		KeepRunning:          tmpl.KeepRunning,
+		Admission:            tmpl.Admission,
 		Priority:             priority,
 		TemplateID:           tmpl.ID,
 		TemplateName:         tmpl.Name,
@@ -445,6 +458,7 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 			Approved:             approvedBy,
 			Interactive:          LayerTemplate,
 			KeepRunning:          LayerTemplate,
+			Admission:            admissionSourceOf(tmpl.Admission, LayerTemplate),
 		},
 	}
 }
@@ -472,6 +486,15 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 		// has no other way to make it.
 		if sched.Model != "" {
 			comp.Model, comp.Sources.Model = sched.Model, LayerSchedule
+		}
+		if sched.Admission != "" {
+			if merged := MaxAdmission(comp.Admission, sched.Admission); merged != comp.Admission {
+				comp.Admission = merged
+				comp.Sources.Admission = LayerSchedule
+			} else if comp.Admission == "" {
+				comp.Admission = sched.Admission
+				comp.Sources.Admission = LayerSchedule
+			}
 		}
 		// A template-backed schedule stores a copy of its template's
 		// grants (ui.scheduleContentFromTemplate), so only a capability
@@ -520,6 +543,7 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 		AutoApproveProposals: sched.AutoApproveProposals,
 		Approved:             true,
 		KeepRunning:          sched.KeepRunning,
+		Admission:            sched.Admission,
 		Priority:             DefaultTaskPriority,
 		Sources: CompositionSources{
 			Title:                LayerSchedule,
@@ -538,6 +562,7 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 			Approved:             LayerSchedule,
 			Interactive:          LayerSchedule,
 			KeepRunning:          LayerSchedule,
+			Admission:            admissionSourceOf(sched.Admission, LayerSchedule),
 		},
 	}
 }
@@ -640,6 +665,11 @@ func adjustGrainCIGrant(grants []Grant, usesGrainCI bool) []Grant {
 // applyGrainCIGrant adjusts comp.Grants with adjustGrainCIGrant and records
 // LayerRepo as the source of an added grain#ci grant (and as Sources.Grants
 // when the declaration itself carried no grants of its own).
+//
+// On a repository grain CI does not gate it strips grain#ci, and when that
+// grain#ci was asked for rather than attached as a default, puts
+// api:ci-read@<target> in its place (Via GrantByGrain, credited to the layer
+// that asked), so the task can still read that repository's CI.
 func applyGrainCIGrant(comp *Composition, usesGrainCI bool) {
 	sources := make([]CompositionLayer, len(comp.Grants))
 	for i := range comp.Grants {
@@ -666,12 +696,44 @@ func applyGrainCIGrant(comp *Composition, usesGrainCI bool) {
 		}
 		return
 	}
-	filteredGrants := make([]Grant, 0, len(comp.Grants))
-	filteredSources := make([]CompositionLayer, 0, len(comp.Grants))
+	filteredGrants := make([]Grant, 0, len(comp.Grants)+1)
+	filteredSources := make([]CompositionLayer, 0, len(comp.Grants)+1)
+	// requestedFrom is the layer of the first grain#ci grant a template,
+	// schedule or person asked for (anything but a repo/deployment
+	// default), "" when none did.
+	var requestedFrom CompositionLayer
 	for i, g := range comp.Grants {
 		if !IsGrainCIGrant(g.Capability) {
 			filteredGrants = append(filteredGrants, g)
 			filteredSources = append(filteredSources, sources[i])
+			continue
+		}
+		if g.Via != GrantByDefault && requestedFrom == "" {
+			requestedFrom = sources[i]
+		}
+	}
+	// A declaration that asked for grain#ci on a repository grain CI does
+	// not gate wants what grain#ci would have let it do there short of
+	// gating merges: read the repository's CI (grain ci list / checks /
+	// log). Keeping grain#ci itself would make grainci.GrantedExplicitly
+	// true and change merge gating, so the read-only, repo-scoped
+	// api:ci-read@<repo> stands in for it -- the same substitution
+	// applyWorkflowReviewCIReadGrant makes for workflow-run reviews.
+	// Without it a scheduled template such as the release train, filed
+	// against a ci_mode: github repository, lost every CI read and failed
+	// at its first `grain ci list` with "forbidden".
+	if requestedFrom != "" && comp.Target != nil && *comp.Target != (RepoRef{}) {
+		repo := comp.Target.String()
+		names := make([]string, len(filteredGrants))
+		for i, g := range filteredGrants {
+			names[i] = g.Capability
+		}
+		if !APIGrantsOf(names).Allows("ci:read", repo) {
+			filteredGrants = append(filteredGrants, Grant{
+				Capability: APIGrantPrefix + "ci-read@" + repo,
+				Via:        GrantByGrain,
+			})
+			filteredSources = append(filteredSources, requestedFrom)
 		}
 	}
 	comp.Grants = filteredGrants

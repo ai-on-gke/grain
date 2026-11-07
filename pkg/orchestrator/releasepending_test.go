@@ -148,6 +148,9 @@ func (m forgeMux) Request(method, path string, headers map[string]string, body [
 
 func resetReleaseWatch(t *testing.T) {
 	t.Helper()
+	// The watcher logs what it raises; claim the log first so those lines
+	// arrive under this test rather than as "no test to attach it to".
+	logToTest(t)
 	clear := func() {
 		releasePendingPolled.Range(func(k, _ any) bool { releasePendingPolled.Delete(k); return true })
 	}

@@ -125,6 +125,7 @@ func makeTestTask(id string, director bool) model.Task {
 		tk.Origin.Reason = model.ReasonConsoleSession
 		tk.Tags = []string{model.ConsoleSessionTag(id)}
 		tk.Interactive = true
+		tk.Admission = model.AdmissionDurable
 		tk.Grants = model.ConsoleSessionGrants(model.ConsoleSession{ID: id})
 	}
 	return tk

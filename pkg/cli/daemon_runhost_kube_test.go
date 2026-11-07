@@ -596,7 +596,7 @@ models:
 			// Durable (design/design/durable-tasks.design.md#DT-1): no deadline,
 			// priority dispatch, and placed on the adoptable run host --
 			// the run this roll has to carry across is a durable one.
-			Grants: []model.Grant{{Capability: model.DurableCapability}},
+			Admission: model.AdmissionDurable,
 			// Fixed, so the branch this test pushes and looks for the pull
 			// request on is the one the daemon uses, whatever its
 			// deployment's branch template makes of the title.

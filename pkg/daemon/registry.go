@@ -220,8 +220,11 @@ func (m *RegistryManager) SetTunnelConnector(tc RegistryTunnelConnector) {
 	}
 	m.tunnelMu.Lock()
 	m.tunnelConnector = tc
+	running := m.tunnelRunCtx != nil
 	m.tunnelMu.Unlock()
-	m.Trigger()
+	if running {
+		m.Trigger()
+	}
 }
 
 // HasTunnelConnector reports whether a RegistryTunnelConnector is attached.
@@ -452,6 +455,10 @@ func (m *RegistryManager) loadInputs(ctx context.Context) (registryStepInputs, e
 		targetRepos = stored.TargetRepos
 	}
 	dcfg.Registry = regCfg
+	m.mu.Lock()
+	m.lastObservedCfg = regCfg
+	m.lastObservedRepos = slices.Clone(targetRepos)
+	m.mu.Unlock()
 
 	var stateRepo model.RepoRef
 	if m.opts.StateRepo != nil {

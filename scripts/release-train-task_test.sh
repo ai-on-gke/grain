@@ -40,6 +40,10 @@ cat > "$work/bin/grain" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 echo "$*" >> "$FAKE_CALLS"
+if [ -n "${FAKE_CI_FORBIDDEN:-}" ] && [ "${1:-}" = ci ]; then
+  echo 'grain: forbidden: grain ci: that tool belongs to the "https://grain.dev/capabilities/grain#ci" capability, and this run does not hold it' >&2
+  exit 3
+fi
 sub="${1:-}"; shift || true
 sub2="${1:-}"; shift || true
 case "$sub $sub2" in
@@ -279,6 +283,16 @@ run_tick
 expect_eq "rc.3 convergence: exit" "$status" 0
 expect_has "rc.3 convergence: queries release branch" "$calls" "--ref release/v2.2.0 --workflow release.yml"
 expect_eq "rc.3 convergence: cuts rc.3 on c3" "$(remote_tag v2.2.0-rc.3)" "$c3"
+
+# 6. A task that cannot read CI (grain-ci stripped, no api:ci-read) fails with
+#    grain's own refusal, the command that hit it and the grant it needs.
+run_tick FAKE_CI_FORBIDDEN=1
+expect_eq "ci forbidden: exit 1" "$status" 1
+expect_has "ci forbidden: result failed" "$out" "RELEASE_TRAIN_RESULT=failed"
+expect_has "ci forbidden: names the command and status" "$out" "\`grain ci list --repo ai-on-gke/grain"
+expect_has "ci forbidden: exit status" "$out" "exited 3:"
+expect_has "ci forbidden: quotes grain's stderr" "$out" "release-train-task:   grain: forbidden: grain ci:"
+expect_has "ci forbidden: names the missing grant" "$out" "api:ci-read@ai-on-gke/grain"
 
 echo
 echo "$((cases - failures))/$cases passed"

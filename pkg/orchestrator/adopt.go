@@ -521,13 +521,7 @@ func registerAdoptedRecreation(ctx context.Context, deps Deps, task model.Task, 
 		credentialIdentity: deps.CredentialGitIdentity,
 		unrestorable:       unrestorable,
 	}
-	hasSandboxCap := false
-	for _, capName := range unrestorable {
-		if capName != model.DurableCapability && capName != model.PriorityDispatchCapability {
-			hasSandboxCap = true
-			break
-		}
-	}
+	hasSandboxCap := len(unrestorable) > 0
 	degraded := func() bool {
 		return rec.wasRecreated() && (hasSandboxCap || !isUnisolated(deps.Sandboxes))
 	}

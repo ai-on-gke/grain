@@ -71,14 +71,19 @@ func whoami(r *http.Request) WhoamiResponse {
 		w := wirePrincipal(*b)
 		resp.OnBehalfOf = &w
 	}
-	if del := delegatedIdentityFromContext(r.Context()); del != nil {
+	if del := delegatedIdentityFromContext(r.Context()); del != nil && who.Actor.Kind == model.PrincipalService && who.Actor.Source == model.SourceRegistry {
 		resp.Via = del.ViaLabel
 	}
 	return resp
 }
 
 func (s *Server) handleWhoami(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, whoami(r))
+	resp := whoami(r)
+	if s.tasks != nil && s.tasks.Store != nil && resp.Actor.Kind == string(model.PrincipalAgent) && resp.Actor.Source == string(model.SourceSession) {
+		who := RequestActor(r.Context())
+		resp.Actor.Label = sessionLabel(who.Actor, who.OnBehalfOf, s.tasks.sessionTitles(r.Context()))
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // Who is how c's author reads in a transcript: its AuthorLabel, and when
@@ -127,10 +132,11 @@ func (s *Server) handleGetConfigAudit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	title := s.tasks.sessionTitles(r.Context())
 	out := make([]ConfigAuditView, 0, len(entries))
 	for _, e := range entries {
 		out = append(out, ConfigAuditView{ID: e.ID, At: e.At, Actor: e.By.ID, ActorKind: string(e.By.Kind),
-			ActorSource: string(e.By.Source), ActorLabel: PrincipalLabel(e.By, e.OnBehalfOf),
+			ActorSource: string(e.By.Source), ActorLabel: sessionLabel(e.By, e.OnBehalfOf, title),
 			Surface: e.Surface, Summary: e.Summary})
 	}
 	writeJSON(w, http.StatusOK, out)

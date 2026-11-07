@@ -75,6 +75,7 @@ func consoleSession(id string) model.Task {
 	tk := task(id, true)
 	tk.Origin.Reason = model.ReasonConsoleSession
 	tk.Interactive = true
+	tk.Admission = model.AdmissionDurable
 	tk.Tags = []string{model.ConsoleSessionTag(id)}
 	tk.Grants = model.ConsoleSessionGrants(model.ConsoleSession{ID: id})
 	return tk
@@ -271,7 +272,7 @@ func TestAnAdmissionRefusalNamesItsGateAndASessionsIsAWarning(t *testing.T) {
 	out := buf.String()
 	for _, want := range []string{
 		"dispatch: candidate ordinary skipped: admission refused by model availability -- all connections serving claude-opus-5-5 are busy (2 cooling off after a usage limit)",
-		"dispatch: WARNING: priority-dispatch task director (a console session or a priority-dispatch holder) refused admission by model availability -- all connections serving claude-opus-5-5",
+		"dispatch: WARNING: priority-dispatch task director (a console session or a bypass- or durable-admission task) refused admission by model availability -- all connections serving claude-opus-5-5",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log lacks %q:\n%s", want, out)

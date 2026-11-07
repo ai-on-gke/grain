@@ -176,7 +176,7 @@ func recordPolledChecks(ctx context.Context, store *model.Store, repo model.Repo
 		if commit == "" {
 			commit = sha
 		}
-		key := fmt.Sprintf("%p|%s|%d|%s|%s", store, repo, c.ID, *c.Conclusion, commit)
+		key := fmt.Sprintf("%d|%s|%d|%s|%s", store.ID(), repo, c.ID, *c.Conclusion, commit)
 		polledChecksSeen.Lock()
 		seen := polledChecksSeen.m[key]
 		polledChecksSeen.Unlock()
@@ -489,7 +489,7 @@ func markConcludedGitHubRunSeen(store *model.Store, repo model.RepoRef, runID in
 	if attempt <= 0 {
 		attempt = 1
 	}
-	key := fmt.Sprintf("%p|%s|%d|%d", store, strings.ToLower(repo.String()), runID, attempt)
+	key := fmt.Sprintf("%d|%s|%d|%d", store.ID(), strings.ToLower(repo.String()), runID, attempt)
 	concludedGitHubRunsSeen.Lock()
 	defer concludedGitHubRunsSeen.Unlock()
 	if concludedGitHubRunsSeen.m[key] {
