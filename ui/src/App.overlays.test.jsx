@@ -388,7 +388,7 @@ describe("App", () => {
       const inner = api.getMockImplementation();
       let acked = false;
       api.mockImplementation((path, opts) => {
-        if (path === "/api/notifications?open=1") {
+        if (path === "/api/notifications?open=1&fields=list") {
           return Promise.resolve(
             acked
               ? [

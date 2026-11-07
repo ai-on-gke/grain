@@ -861,7 +861,9 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 			if req.KeepRunning != nil || req.KeepRunningSnake != nil {
 				t.KeepRunning = session.KeepRunning
 			}
-			t.Body = model.DirectorSessionBody(stateRepo, session)
+			effective := session
+			effective.TasksApproved = model.ConsoleSessionQueuesProposals(sessions, *t)
+			t.Body = model.DirectorSessionBody(stateRepo, effective)
 			return nil
 		}); err != nil {
 			return nil, err

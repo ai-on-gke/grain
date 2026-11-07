@@ -1,0 +1,18 @@
+[
+  {
+    "Name": "grain/release-qualification",
+    "Status": "completed",
+    "Conclusion": "failure",
+    "HTMLURL": "",
+    "FailureReason": "Release qualification of v3.3.0-rc.3: failure",
+    "StepsExecuted": 0,
+    "ID": 8005,
+    "CheckSuiteID": 0,
+    "HeadSHA": "cb16d5051c651a16fc03f83bc510c17d18bb9e10",
+    "App": "grain-walkthrough",
+    "ExternalID": "release-qualification:ai-on-gke/grain@v3.3.0-rc.3",
+    "StartedAt": "2026-11-07T23:02:31Z",
+    "CompletedAt": "2026-11-07T23:24:31Z",
+    "Output": "repo:template:ai-on-gke:grain:qualification-mergequeue: fail (task 22, attempt 2) -- task 22 reported Qualification-Verdict: FAIL\nrepo:template:ai-on-gke:grain:qualification-ci-diagnostics: pass (task 20, attempt 1)\nrepo:template:ai-on-gke:grain:qualification-base-triage: pass (task 21, attempt 1)\nrepo:template:ai-on-gke:grain:qualification-system-smoke: not started\nconfirmed red after 1 retry: repo:template:ai-on-gke:grain:qualification-mergequeue"
+  }
+]

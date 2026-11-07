@@ -571,7 +571,11 @@ import "strconv"
 // 119 adds `label` and `last_used_at` to `allowed_principal` for `delegate:`
 // entries (model.AllowedPrincipal.Label and LastUsedAt,
 // design/design/authentication.design.md §6).
-const SchemaVersion = 119
+//
+// 120 rewrites stored `github-credential:<name>` grants across the grant
+// tables, deployment and repository default/CI capabilities, console sessions,
+// and capability_policy to `https://grain.dev/capabilities/repo#credential={"credential":"<name>"}`.
+const SchemaVersion = 120
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
