@@ -143,15 +143,6 @@ func newestAuthor(t *testing.T, client *ui.Client, id string) model.Attribution 
 	return model.Attribution{}
 }
 
-func mustJSON(t *testing.T, v any) string {
-	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(b)
-}
-
 func behalfOf(a model.Attribution) model.Principal {
 	if a.OnBehalfOf == nil {
 		return model.Principal{}
