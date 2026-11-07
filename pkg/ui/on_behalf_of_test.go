@@ -67,7 +67,11 @@ func newBehalfServer(t *testing.T) behalfServer {
 		Tags:        []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 		Interactive: true,
 		Approval:    &model.Attribution{Actor: model.ConsoleSessionPrincipal},
-		Grants:      []model.Grant{{Capability: "api:tasks:write", Via: model.GrantByLabel}},
+		Grants: []model.Grant{
+			{Capability: "api:tasks:write", Via: model.GrantByLabel},
+			{Capability: "api:tasks:admin", Via: model.GrantByLabel},
+			{Capability: "api:capabilities:admin", Via: model.GrantByLabel},
+		},
 	}
 	if err := client.Store.PutTask(context.Background(), session); err != nil {
 		t.Fatal(err)
@@ -191,6 +195,36 @@ func TestConsoleSessionGateActsForTheLastPersonWhoSpoke(t *testing.T) {
 		t.Errorf("the filed task's origin is %+v for %+v, want %+v for %+v", got.Actor, got.OnBehalfOf, want.Actor, aliceIAP)
 	}
 
+	unapproved, err := b.client.CreateTask(ctx, ui.CreateTaskRequest{Title: "awaiting approval", NoRepo: true})
+	if err != nil {
+		t.Fatalf("CreateTask unapproved: %v", err)
+	}
+	b.send(t, behalfSession, http.MethodPost, "/api/tasks/"+unapproved.ID+"/approve", ``, nil)
+	approvedTask, err := b.client.Store.GetTask(ctx, unapproved.ID)
+	if err != nil || approvedTask == nil || approvedTask.Approval == nil {
+		t.Fatalf("the approved task: %v, %v", approvedTask, err)
+	}
+	if got := *approvedTask.Approval; got.Actor != want.Actor || behalfOf(got) != aliceIAP {
+		t.Errorf("the approval was recorded as %+v for %+v, want %+v for %+v", got.Actor, got.OnBehalfOf, want.Actor, aliceIAP)
+	}
+
+	b.send(t, behalfSession, http.MethodPost, "/api/hostds", `{"name":"ws-1"}`, nil)
+	audits, err := b.client.Store.ConfigAudit(ctx, 1)
+	if err != nil || len(audits) == 0 {
+		t.Fatalf("config_audit: %v, %v", audits, err)
+	}
+	if a := audits[0]; a.By != want.Actor || a.OnBehalfOf == nil || *a.OnBehalfOf != aliceIAP {
+		t.Errorf("the config_audit row was recorded as %+v for %+v, want %+v for %+v", a.By, a.OnBehalfOf, want.Actor, aliceIAP)
+	}
+	auditRec := b.send(t, "alice@example.com", http.MethodGet, "/api/deployment/config-audit?limit=1", ``, nil)
+	var auditViews []ui.ConfigAuditView
+	if err := json.Unmarshal(auditRec.Body.Bytes(), &auditViews); err != nil || len(auditViews) == 0 {
+		t.Fatalf("decoding config-audit: %v, %s", err, auditRec.Body)
+	}
+	if auditViews[0].ActorLabel != "director for alice@example.com" {
+		t.Errorf("config-audit ActorLabel = %q, want %q", auditViews[0].ActorLabel, "director for alice@example.com")
+	}
+
 	b.send(t, behalfSession, http.MethodPost, "/api/tasks/"+id+"/close", ``, nil)
 	events, err := b.client.Store.TaskEvents(ctx, id)
 	if err != nil || len(events) == 0 {
@@ -225,6 +259,16 @@ func TestConsoleSessionGateActsForTheLastPersonWhoSpoke(t *testing.T) {
 	}
 	if !commented || !closed {
 		t.Errorf("task %s reads %s, want its comment and its close by \"director for alice@example.com\"", id, rec.Body)
+	}
+	approvedRec := b.send(t, "alice@example.com", http.MethodGet, "/api/tasks/"+unapproved.ID, ``, nil)
+	var approvedDetail struct {
+		ApprovedByLabel string `json:"approvedByLabel"`
+	}
+	if err := json.Unmarshal(approvedRec.Body.Bytes(), &approvedDetail); err != nil {
+		t.Fatalf("decoding task %s: %v", unapproved.ID, err)
+	}
+	if approvedDetail.ApprovedByLabel != "director for alice@example.com" {
+		t.Errorf("ApprovedByLabel = %q, want %q", approvedDetail.ApprovedByLabel, "director for alice@example.com")
 	}
 }
 
@@ -325,12 +369,17 @@ func TestASessionTurnActsForTheMessageItIsAnswering(t *testing.T) {
 // A dispatched run acts for the verified person who approved its task,
 // and for nobody when grain or the shared access code approved it.
 func TestADispatchedRunActsForItsApprover(t *testing.T) {
+	aliceRegistry := model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceRegistry}
+	delegateBot := model.Principal{Kind: model.PrincipalService, ID: "slack-bot@proj.iam.gserviceaccount.com", Source: model.SourceRegistry}
+	plainService := model.Principal{Kind: model.PrincipalService, ID: "ci-bot@proj.iam.gserviceaccount.com", Source: model.SourceIAP}
 	for _, tc := range []struct {
 		name     string
 		approval *model.Attribution
 		want     *model.Principal
 	}{
 		{"approved by alice", &model.Attribution{Actor: aliceIAP}, &aliceIAP},
+		{"approved via delegated registry app", &model.Attribution{Actor: delegateBot, OnBehalfOf: &aliceRegistry}, &aliceRegistry},
+		{"approved by a plain service account", &model.Attribution{Actor: plainService}, nil},
 		{"approved by the access code", &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator", Source: model.SourceAccessCode}}, nil},
 		{"approved by grain", &model.Attribution{Actor: model.AutoSubmitPrincipal}, nil},
 		{"not approved", nil, nil},
@@ -356,5 +405,115 @@ func TestADispatchedRunActsForItsApprover(t *testing.T) {
 				t.Errorf("the run's comment was for %+v, want %+v", got.OnBehalfOf, *tc.want)
 			}
 		})
+	}
+}
+
+// Delegated registry assertions (AU-26) interact with §2.4 and §6.2 two ways:
+//   - a person messaging a console session through an authorized delegate
+//     app is recorded with verified delegated attribution, and the turn
+//     answering them acts on behalf of that person (not an earlier speaker);
+//   - a request carrying both a valid delegated registry assertion and
+//     X-Grain-Acting-Task stays {agent, <task>, sandbox|session} with the
+//     task's own server-derived OnBehalfOf, never becoming the delegate
+//     service account or bypassing PrincipalAgent rails.
+func TestDelegatedSessionMessageAndActingTaskIsolation(t *testing.T) {
+	h := newDelegationHarness(t)
+	ctx := r503Ctx(t)
+	const (
+		alice   = "alice@example.com"
+		slackSA = "slack-bot@my-proj.iam.gserviceaccount.com"
+	)
+	for _, req := range []ui.AllowPrincipalRequest{
+		{Entry: "user:" + alice, Role: "grain/operator", Reason: "owner"},
+		{Entry: "delegate:" + slackSA, Role: "grain/delegated", Reason: "slack bot", Label: "slack-bot"},
+	} {
+		if _, err := h.client.AllowPrincipal(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	session := model.Task{
+		ID:          behalfSession,
+		Intent:      model.IntentAnalyze,
+		Title:       "director",
+		Origin:      model.Origin{Attribution: model.Attribution{Actor: model.ConsoleSessionPrincipal}, Reason: model.ReasonConsoleSession},
+		Tags:        []string{model.ConsoleSessionTag(model.DirectorSessionID)},
+		Interactive: true,
+		Approval:    &model.Attribution{Actor: model.ConsoleSessionPrincipal},
+		Grants:      []model.Grant{{Capability: "api:tasks:write", Via: model.GrantByLabel}},
+	}
+	if err := h.client.Store.PutTask(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	// An earlier IAP speaker (bob) must not be credited once alice speaks
+	// via a delegated registry app.
+	if _, err := h.client.Store.AddComment(ctx, model.Comment{
+		TaskID: behalfSession, Author: model.Attribution{Actor: bobIAP}, Body: "earlier from bob", CreatedAt: time.Now().Add(-time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	tok := h.mintDelegated(t, alice, slackSA, "slack-bot", "dg_sess_1", "write")
+	delHdr := map[string]string{
+		ui.RegistryAssertionHeader: tok,
+		"Content-Type":             "application/json",
+	}
+	if rec := h.do(http.MethodPost, "/api/tasks/"+behalfSession+"/comments", `{"body":"hello from slack"}`, delHdr); rec.Code != http.StatusOK {
+		t.Fatalf("delegated session comment = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	aliceRegistry := model.Principal{Kind: model.PrincipalHuman, ID: alice, Source: model.SourceRegistry}
+	slackActor := model.Principal{Kind: model.PrincipalService, ID: slackSA, Source: model.SourceRegistry}
+	if got := newestAuthor(t, h.client, behalfSession); got.Actor != slackActor || behalfOf(got) != aliceRegistry {
+		t.Fatalf("delegated comment recorded as %+v for %+v, want %+v for %+v", got.Actor, got.OnBehalfOf, slackActor, aliceRegistry)
+	}
+
+	target, err := h.client.CreateTask(ctx, ui.CreateTaskRequest{Title: "target", Approved: true, NoRepo: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentOnSessionHdr := map[string]string{
+		"Authorization":       "Bearer " + h.accessCode,
+		ui.ActingTaskHeader:   behalfSession,
+		ui.ActingReasonHeader: "answering delegated message",
+		"Content-Type":        "application/json",
+	}
+	if rec := h.do(http.MethodPost, "/api/tasks/"+target.ID+"/comments", `{"body":"answering alice"}`, agentOnSessionHdr); rec.Code != http.StatusOK {
+		t.Fatalf("session turn comment = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	if got := newestAuthor(t, h.client, target.ID); got.Actor != sessionSelf || behalfOf(got) != aliceRegistry {
+		t.Errorf("session turn recorded as %+v for %+v, want %+v for %+v", got.Actor, got.OnBehalfOf, sessionSelf, aliceRegistry)
+	}
+
+	// Now combine a valid delegated registry assertion (alice via slack-bot)
+	// with X-Grain-Acting-Task for a run approved by bob: the acting agent
+	// wins over the outer delegated assertion (spec §6.2).
+	ref, _ := model.ParseRepo("acme/widgets")
+	run := model.Task{
+		ID: "903", Intent: model.IntentImplement, Title: "bob's run", Target: &ref,
+		Approval: &model.Attribution{Actor: bobIAP},
+		Grants:   []model.Grant{{Capability: "api:tasks:write", Via: model.GrantByLabel}},
+	}
+	if err := h.client.Store.PutTask(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	combinedHdr := map[string]string{
+		ui.RegistryAssertionHeader: tok,
+		ui.ActingTaskHeader:        "903",
+		ui.ActingReasonHeader:      "agent call over delegated transport",
+		"Content-Type":             "application/json",
+	}
+	if rec := h.do(http.MethodPost, "/api/tasks/"+target.ID+"/comments", `{"body":"from 903"}`, combinedHdr); rec.Code != http.StatusOK {
+		t.Fatalf("combined delegated + acting-task comment = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	wantRunActor := model.Principal{Kind: model.PrincipalAgent, ID: "903", Source: model.SourceSandbox}
+	if got := newestAuthor(t, h.client, target.ID); got.Actor != wantRunActor || behalfOf(got) != bobIAP {
+		t.Errorf("combined delegated + acting-task comment recorded as %+v for %+v, want %+v for %+v",
+			got.Actor, got.OnBehalfOf, wantRunActor, bobIAP)
+	}
+
+	// PrincipalAgent rails (e.g. interactive tasks must not self-approve
+	// without tasks:admin) remain enforced even when a delegated assertion is present.
+	if rec := h.do(http.MethodPost, "/api/tasks", `{"title":"sneaky interactive","noRepo":true,"interactive":true}`, combinedHdr); rec.Code < 400 {
+		t.Errorf("combined delegated + acting-task filing interactive task without tasks:admin = %d %s, want 403", rec.Code, rec.Body.String())
 	}
 }

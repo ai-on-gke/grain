@@ -37,13 +37,28 @@ func agentOnBehalfOf(ctx context.Context, store *model.Store, acting model.Task)
 	if acting.IsConsoleSession() {
 		who = sessionTurnAuthor(ctx, store, acting.ID)
 	} else if a := acting.Approval; a != nil {
-		p := a.Actor
-		who = &p
+		who = attributedHuman(*a)
 	}
-	if who == nil || !who.Verified() {
+	if who == nil || who.Kind != model.PrincipalHuman || !who.Verified() {
 		return nil
 	}
 	return who
+}
+
+// attributedHuman is the human principal a recorded attribution names:
+// Actor when a human acted directly, or OnBehalfOf when a delegated
+// service principal acted on a human's behalf (AU-26). Plain service
+// principals, agents and automations return nil (AU-26.4).
+func attributedHuman(a model.Attribution) *model.Principal {
+	if a.Actor.Kind == model.PrincipalHuman {
+		p := a.Actor
+		return &p
+	}
+	if a.Actor.Kind == model.PrincipalService && a.OnBehalfOf != nil && a.OnBehalfOf.Kind == model.PrincipalHuman {
+		p := *a.OnBehalfOf
+		return &p
+	}
+	return nil
 }
 
 // sessionTurnAuthor is the author of the most recent person's message
@@ -80,11 +95,11 @@ func sessionTurnAuthor(ctx context.Context, store *model.Store, taskID string) *
 	}
 	for i := len(comments) - 1; i >= 0; i-- {
 		c := comments[i]
-		if c.Author.Actor.Kind != model.PrincipalHuman || !shown(c) {
+		who := attributedHuman(c.Author)
+		if who == nil || !shown(c) {
 			continue
 		}
-		p := c.Author.Actor
-		return &p
+		return who
 	}
 	return nil
 }

@@ -94,13 +94,14 @@ func operatorActor(ctx context.Context) model.Principal {
 // person the agent API gate derived from grain's own records
 // (withOnBehalfOf, spec §2.4), and nil for anybody else.
 func RequestActor(ctx context.Context) model.Attribution {
-	if del := delegatedIdentityFromContext(ctx); del != nil {
-		return model.Attribution{
-			Actor:      model.Principal{Kind: model.PrincipalService, ID: del.AppEmail, Source: model.SourceRegistry},
-			OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: del.PersonEmail, Source: model.SourceRegistry},
-		}
-	}
 	if p, ok := PrincipalFromContext(ctx); ok {
+		if del := delegatedIdentityFromContext(ctx); del != nil &&
+			p.Kind == model.PrincipalHuman && p.Source == model.SourceRegistry && strings.EqualFold(p.ID, del.PersonEmail) {
+			return model.Attribution{
+				Actor:      model.Principal{Kind: model.PrincipalService, ID: del.AppEmail, Source: model.SourceRegistry},
+				OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: del.PersonEmail, Source: model.SourceRegistry},
+			}
+		}
 		if p.Kind == model.PrincipalAgent && p.Source == model.SourceExternalToken {
 			if tok := externalTokenFromContext(ctx); tok != nil {
 				return model.Attribution{Actor: p, OnBehalfOf: tok.OwnerPrincipal()}
@@ -108,11 +109,17 @@ func RequestActor(ctx context.Context) model.Attribution {
 		}
 		who := model.Attribution{Actor: p}
 		if p.Kind == model.PrincipalAgent {
-			if b, ok := ctx.Value(onBehalfOfContextKey{}).(model.Principal); ok && b.Verified() {
+			if b, ok := ctx.Value(onBehalfOfContextKey{}).(model.Principal); ok && b.Kind == model.PrincipalHuman && b.Verified() {
 				who.OnBehalfOf = &b
 			}
 		}
 		return who
+	}
+	if del := delegatedIdentityFromContext(ctx); del != nil {
+		return model.Attribution{
+			Actor:      model.Principal{Kind: model.PrincipalService, ID: del.AppEmail, Source: model.SourceRegistry},
+			OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: del.PersonEmail, Source: model.SourceRegistry},
+		}
 	}
 	op := operatorActor(ctx)
 	op.Source = model.SourceInProcess

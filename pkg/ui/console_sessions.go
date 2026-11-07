@@ -1311,13 +1311,24 @@ func (c *Client) stopAndCloseConsoleSessionTask(ctx context.Context, taskID stri
 		return err
 	}
 	if obs == nil || obs.ClosedAt == nil {
-		if err := c.Store.ObserveClose(ctx, taskID, now, c.requestActor(ctx).Actor, reason, func(o *model.Observation) {
-			o.ClosedAt = &now
+		who := c.requestActor(ctx)
+		changed := false
+		if err := c.Store.ObserveField(ctx, taskID, now, func(o *model.Observation) {
+			if o.ClosedAt == nil {
+				o.ClosedAt = &now
+				changed = true
+			}
 			o.PendingQuestionCommentID = nil
 			o.PendingSecret = ""
 			o.PendingAccess = nil
 		}); err != nil {
 			return err
+		}
+		if changed {
+			c.recordTaskEvent(ctx, model.TaskEvent{
+				TaskID: taskID, Kind: model.TaskEventClosed, At: now,
+				By: who.Actor, OnBehalfOf: who.OnBehalfOf, Reason: reason,
+			})
 		}
 	}
 	if reset && !slices.Contains(task.Tags, model.ConsoleSessionResetTag) {

@@ -6307,7 +6307,7 @@ func (c *Client) commentWithAuthor(ctx context.Context, id, body string, uploads
 	// An author naming the request's own principal keeps its kind: a
 	// verified *.gserviceaccount.com caller is a service principal, as it
 	// is on the tasks it files and closes, not a human.
-	if trimmed := strings.TrimSpace(author); trimmed != "" && trimmed != by.Actor.ID {
+	if trimmed := strings.TrimSpace(author); trimmed != "" && trimmed != by.Actor.ID && (by.OnBehalfOf == nil || trimmed != by.OnBehalfOf.ID) {
 		by = model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: trimmed}}
 	}
 	return c.addAttributedComment(ctx, id, body, attachments, by, now, reopenAck)
@@ -6358,14 +6358,15 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 			return err
 		}
 	}
-	if reopenAck && by.Actor.Kind == model.PrincipalHuman {
+	isPerson := attributedHuman(by) != nil
+	if reopenAck && isPerson {
 		reopened, err := c.reopenAcknowledgeable(ctx, id, now)
 		if err != nil || reopened {
 			return err
 		}
 	}
 	if obs == nil || obs.PendingQuestionCommentID == nil {
-		if (wokeOnMessage || (task.Interactive && by.Actor.Kind == model.PrincipalHuman)) && c.Config.Wake != nil {
+		if (wokeOnMessage || (task.Interactive && isPerson)) && c.Config.Wake != nil {
 			c.Config.Wake()
 		}
 		return nil
