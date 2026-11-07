@@ -133,7 +133,7 @@ func (c *Client) DecideRelease(ctx context.Context, repo, version string, approv
 	// Who first, before anything about the release is looked at.
 	actor := c.requestActor(ctx).Actor
 	if actor.Kind != model.PrincipalHuman || actor.ID == "" {
-		return ReleaseDecision{}, forbiddenErrorf("only a person may %s a release: %q is a %s, and a release "+
+		return ReleaseDecision{}, forbiddenErrorf("only a person may %s a release: %q is %s, and a release "+
 			"is made official by a person, never by an agent or a schedule", verb, actor.ID, kindName(actor.Kind))
 	}
 	if answers.ShortSoakOK && !approve {
@@ -200,11 +200,18 @@ func (c *Client) clearReleasePending(ctx context.Context, version string, actor 
 	}
 }
 
+// kindName is k with its article, for "only a person may ...: %q is
+// <kindName>": "an agent", "a service", "an automation". Without the
+// article chosen here the refusal read `"20" is a agent`
+// (docs/test-runs/2026-11-04-release-approval.md, F4).
 func kindName(k model.PrincipalKind) string {
 	if k == "" {
-		return "caller nobody identified"
+		return "a caller nobody identified"
 	}
-	return string(k)
+	if strings.ContainsRune("aeiou", rune(k[0])) {
+		return "an " + string(k)
+	}
+	return "a " + string(k)
 }
 
 func (s *Server) handleApproveRelease(w http.ResponseWriter, r *http.Request) {
@@ -237,7 +244,7 @@ func (c *Client) RollbackRelease(ctx context.Context, repo, version string, opts
 	// Who first, before anything about the release is looked at.
 	actor := c.requestActor(ctx).Actor
 	if actor.Kind != model.PrincipalHuman || actor.ID == "" {
-		return ReleaseDecision{}, forbiddenErrorf("only a person may roll back a release: %q is a %s, and a release "+
+		return ReleaseDecision{}, forbiddenErrorf("only a person may roll back a release: %q is %s, and a release "+
 			"is rolled back by a person, never by an agent or a schedule", actor.ID, kindName(actor.Kind))
 	}
 	if strings.TrimSpace(repo) == "" {

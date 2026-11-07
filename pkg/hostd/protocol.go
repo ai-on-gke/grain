@@ -125,6 +125,13 @@ type Hello struct {
 	// one: what a codex run there links to in place of a login the
 	// daemon holds.
 	CodexAuth string `json:"codex_auth,omitempty"`
+	// Logins are the agent CLIs (LoginCodex, LoginClaude,
+	// LoginAntigravity) with a login of their own on hostd's machine, as
+	// the user hostd runs as: what a model connection with ambient
+	// credentials placed on this hostd spends (loginsUnder). Set by
+	// hostd alone, local or remote; an older hostd says nothing, which
+	// is "not known", not "none".
+	Logins []string `json:"logins,omitempty"`
 }
 
 // ThisHello is this build's Hello; build is its version string.

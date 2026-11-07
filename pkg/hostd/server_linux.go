@@ -579,6 +579,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		h.Cutover = !h.Draining && s.CuttingOver()
 		h.Capacity, h.Labels = a.Capacity, a.Labels
 		describeCopies(ctx, &h, s.CurrentLink)
+		h.Logins = ambientLogins()
 		if sessionMux(ctx) != nil {
 			s.describeRemote(&h)
 		}

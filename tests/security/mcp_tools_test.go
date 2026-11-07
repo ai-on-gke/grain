@@ -32,7 +32,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
-	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -141,7 +140,7 @@ var toolGrants = []string{
 	"https://grain.dev/capabilities/grain#journal",
 	"https://grain.dev/capabilities/grain#health",
 	grainci.Grant,
-	readissues.CapabilityName,
+	"https://grain.dev/capabilities/github#read-issues",
 	`https://grain.dev/capabilities/grain#sql={"write":false}`,
 	`https://grain.dev/capabilities/grain#sql={"write":true}`,
 }

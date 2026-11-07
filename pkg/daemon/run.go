@@ -48,6 +48,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/sandboxaddr"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
 	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
@@ -257,6 +258,15 @@ func Run(ctx context.Context, cfg Config) error {
 		log.Printf("grain daemon: %v", err)
 	}
 	cfg.HostdHub = newHostdHub(cfg, store)
+	// Host work nothing places goes to the default host; where that is
+	// the only host there is, it is written down -- now, and on every
+	// grain/config import (model.MigrateImplicitHostPlacement).
+	if p, ok := cfg.implicitHostPlacement(); ok {
+		staterepo.SetImplicitHostPlacement(&p)
+		if _, err := store.MigrateImplicitHostPlacement(ctx, p); err != nil {
+			log.Printf("grain daemon: placing host work on the only host: %v", err)
+		}
+	}
 
 	// Run hosts (pkg/runhost), when this deployment asks for them. Built
 	// here, as soon as the store is, because every framework built below

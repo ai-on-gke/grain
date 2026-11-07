@@ -475,6 +475,8 @@ type Entry struct {
 	LastSeenAt          *time.Time       `json:"last_seen_at,omitempty"`
 	HeartbeatAgeSeconds *int             `json:"heartbeat_age_seconds,omitempty"`
 	Scopes              []Scope          `json:"scopes,omitempty"`
+	ReportedScopes      []Scope          `json:"reported_scopes,omitempty"`
+	DeclaredScopes      []Scope          `json:"declared_scopes,omitempty"`
 	ScopeConflicts      []ScopeConflict  `json:"scope_conflicts,omitempty"`
 	Credentials         []CredentialMeta `json:"credentials,omitempty"`
 	CreatedAt           time.Time        `json:"created_at"`
@@ -538,8 +540,10 @@ type SetScopesRequest struct {
 
 // SetScopesResponse returns the resulting scopes after PUT /api/entries/<name>/scopes.
 type SetScopesResponse struct {
-	Scopes    []Scope         `json:"scopes"`
-	Conflicts []ScopeConflict `json:"conflicts,omitempty"`
+	Scopes         []Scope         `json:"scopes"`
+	ReportedScopes []Scope         `json:"reported_scopes,omitempty"`
+	DeclaredScopes []Scope         `json:"declared_scopes,omitempty"`
+	Conflicts      []ScopeConflict `json:"conflicts,omitempty"`
 }
 
 // HeartbeatScope is a single repository checkout or workspace reported by a running daemon.
@@ -661,6 +665,7 @@ type ListEntriesQuery struct {
 	Conflict       *bool
 	IncludeDeleted bool
 	All            bool
+	Mine           bool
 }
 
 // ListEntriesResponse wraps the entries returned by GET /api/entries.
@@ -755,21 +760,23 @@ type RouteResponse struct {
 
 // Shape describes an operator-configured VM shape available for hosted instances.
 type Shape struct {
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name"`
-	Description string `json:"description,omitempty"`
-	MachineType string `json:"machine_type"`
-	VCPU        int    `json:"vcpu"`
-	MemoryGB    int    `json:"memory_gb"`
-	BootDiskGB  int    `json:"boot_disk_gb"`
-	DataDiskGB  int    `json:"data_disk_gb"`
-	QuotaUnits  int    `json:"quota_units"`
-	Default     bool   `json:"default,omitempty"`
+	Name         string `json:"name"`
+	DisplayName  string `json:"display_name,omitempty"`
+	Description  string `json:"description,omitempty"`
+	MachineType  string `json:"machine_type"`
+	VCPU         int    `json:"vcpu,omitempty"`
+	MemoryGB     int    `json:"memory_gb,omitempty"`
+	BootDiskGB   int    `json:"boot_disk_gb"`
+	BootDiskIOPS int    `json:"boot_disk_iops,omitempty"`
+	DataDiskGB   int    `json:"data_disk_gb,omitempty"`
+	QuotaUnits   int    `json:"quota_units"`
+	Default      bool   `json:"default,omitempty"`
 }
 
 // ShapesResponse is returned by GET /api/shapes.
 type ShapesResponse struct {
-	Shapes []Shape `json:"shapes"`
+	DefaultShape string  `json:"default_shape,omitempty"`
+	Shapes       []Shape `json:"shapes"`
 }
 
 // QuotaUsage summarizes a caller's current vs permitted VM quota units and connected entries.
@@ -788,6 +795,8 @@ type MeResponse struct {
 	CanCreate       bool       `json:"can_create"`
 	Groups          []string   `json:"groups,omitempty"`
 	Quota           QuotaUsage `json:"quota"`
+	InstanceDomain  string     `json:"instance_domain,omitempty"`
+	RegistryHost    string     `json:"registry_host,omitempty"`
 }
 
 // NameAvailabilityResponse is returned by GET /api/entries/<name>/availability.
@@ -809,4 +818,66 @@ type OfflineErrorResponse struct {
 	OwnerGroup string      `json:"owner_group,omitempty"`
 	LastSeenAt *time.Time  `json:"last_seen_at,omitempty"`
 	Hint       string      `json:"hint,omitempty"`
+}
+
+// ReplicaStatus summarizes a grain-registry replica in GET /api/status and GET /api/admin/summary.
+type ReplicaStatus struct {
+	ReplicaID     string    `json:"replica_id"`
+	PeerAddr      string    `json:"peer_addr,omitempty"`
+	StartedAt     time.Time `json:"started_at"`
+	HeartbeatAt   time.Time `json:"heartbeat_at"`
+	Healthy       bool      `json:"healthy"`
+	ActiveTunnels int       `json:"active_tunnels"`
+}
+
+// TunnelSessionInfo describes an active grain connect tunnel session on a registry replica.
+type TunnelSessionInfo struct {
+	EntryName    string    `json:"entry_name"`
+	ReplicaID    string    `json:"replica_id"`
+	PeerAddr     string    `json:"peer_addr,omitempty"`
+	SessionEpoch int64     `json:"session_epoch"`
+	RemoteAddr   string    `json:"remote_addr"`
+	ConnectedAt  time.Time `json:"connected_at"`
+	LastSeenAt   time.Time `json:"last_seen_at"`
+	RTTMs        int       `json:"rtt_ms,omitempty"`
+	CredID       string    `json:"cred_id,omitempty"`
+}
+
+// AuditLogEntry describes an audit log record returned by GET /api/admin/summary.
+type AuditLogEntry struct {
+	ID         int64          `json:"id"`
+	At         time.Time      `json:"at"`
+	ActorEmail string         `json:"actor_email"`
+	Action     string         `json:"action"`
+	EntryID    string         `json:"entry_id,omitempty"`
+	EntryName  string         `json:"entry_name,omitempty"`
+	Detail     map[string]any `json:"detail,omitempty"`
+}
+
+// StatusResponse is returned by GET /api/status for the Status page.
+type StatusResponse struct {
+	OK              bool            `json:"ok"`
+	Status          string          `json:"status"`
+	Host            string          `json:"host,omitempty"`
+	InstanceDomain  string          `json:"instance_domain,omitempty"`
+	Release         string          `json:"release,omitempty"`
+	Revision        string          `json:"revision,omitempty"`
+	DefaultShape    string          `json:"default_shape,omitempty"`
+	TotalEntries    int             `json:"total_entries"`
+	OnlineEntries   int             `json:"online_entries"`
+	DegradedEntries int             `json:"degraded_entries"`
+	OfflineEntries  int             `json:"offline_entries"`
+	InstanceEntries int             `json:"instance_entries"`
+	ConnectedCount  int             `json:"connected_entries"`
+	ActiveTunnels   int             `json:"active_tunnels"`
+	Replicas        []ReplicaStatus `json:"replicas"`
+	VersionCounts   map[string]int  `json:"version_counts,omitempty"`
+	Shapes          []Shape         `json:"shapes,omitempty"`
+}
+
+// AdminSummaryResponse is returned by GET /api/admin/summary for registry admins.
+type AdminSummaryResponse struct {
+	Replicas       []ReplicaStatus     `json:"replicas"`
+	TunnelSessions []TunnelSessionInfo `json:"tunnel_sessions"`
+	AuditLog       []AuditLogEntry     `json:"audit_log"`
 }
