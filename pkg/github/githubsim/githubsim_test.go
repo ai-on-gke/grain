@@ -1206,6 +1206,32 @@ func TestAddWorkflowRunSerialisesWithRequestsAndReplacesReRunAttempts(t *testing
 		t.Fatalf("GET unknown actions run = %+v, %v, want 404", missingResp, err)
 	}
 
+	sim.AddWorkflowRun(WorkflowRun{
+		Name:       "pr-ci",
+		HeadBranch: "feature-x",
+		Status:     "completed",
+		Conclusion: "success",
+	})
+	sim.AddWorkflowRun(WorkflowRun{
+		Name:       "in-flight-release",
+		HeadBranch: "main",
+		Status:     "in_progress",
+	})
+	branchRuns, err := client.CompletedBranchWorkflowRuns("acme", "widgets", "main", 50)
+	if err != nil || len(branchRuns) == 0 {
+		t.Fatalf("CompletedBranchWorkflowRuns(main) = %d runs, %v", len(branchRuns), err)
+	}
+	for _, r := range branchRuns {
+		if r.HeadBranch != "main" || r.Status != "completed" {
+			t.Fatalf("CompletedBranchWorkflowRuns(main) included %+v, want completed main runs only", r)
+		}
+	}
+	// Repeat branch poll with no changes must revalidate via ETag and return (nil, nil).
+	cachedBranchRuns, err := client.CompletedBranchWorkflowRuns("acme", "widgets", "main", 50)
+	if err != nil || cachedBranchRuns != nil {
+		t.Fatalf("unchanged CompletedBranchWorkflowRuns(main) = %+v, %v; want nil, nil (304)", cachedBranchRuns, err)
+	}
+
 	// Sim.Request itself still refuses POST .../actions/runs as an unhandled GitHub endpoint.
 	defer func() {
 		if r := recover(); r == nil {

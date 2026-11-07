@@ -3925,6 +3925,16 @@ type WorkflowRunsReader interface {
 
 var _ WorkflowRunsReader = (*RESTClient)(nil)
 
+// BranchWorkflowRunsReader is the optional WorkflowRunsReader extension for
+// polling completed workflow runs on one branch (?branch=<branch>&status=completed),
+// so a busy repository's pull-request runs cannot push a slow base-branch
+// release or scheduled workflow out of the page.
+type BranchWorkflowRunsReader interface {
+	CompletedBranchWorkflowRuns(owner, repo, branch string, limit int) ([]WorkflowRun, error)
+}
+
+var _ BranchWorkflowRunsReader = (*RESTClient)(nil)
+
 // WorkflowRunRerunner is the optional Client capability for asking GitHub
 // Actions to run a concluded run's failed jobs again, as a new attempt of
 // the same run: POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs.
@@ -3963,12 +3973,31 @@ var completedRunsETags sync.Map
 // owner/repo (up to limit), sending If-None-Match when an ETag was previously
 // observed and returning (nil, nil) on 304 Not Modified or 404.
 func (c *RESTClient) CompletedWorkflowRuns(owner, repo string, limit int) ([]WorkflowRun, error) {
+	return c.completedWorkflowRuns(owner, repo, "", limit)
+}
+
+// CompletedBranchWorkflowRuns returns the most recent completed workflow runs
+// on branch in owner/repo (up to limit), sending If-None-Match when an ETag was
+// previously observed and returning (nil, nil) on 304 Not Modified or 404.
+func (c *RESTClient) CompletedBranchWorkflowRuns(owner, repo, branch string, limit int) ([]WorkflowRun, error) {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return nil, nil
+	}
+	return c.completedWorkflowRuns(owner, repo, branch, limit)
+}
+
+func (c *RESTClient) completedWorkflowRuns(owner, repo, branch string, limit int) ([]WorkflowRun, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
 	endpoint := fmt.Sprintf("/repos/%s/%s/actions/runs?status=completed&per_page=%d", owner, repo, limit)
+	if branch != "" {
+		endpoint = fmt.Sprintf("/repos/%s/%s/actions/runs?branch=%s&status=completed&per_page=%d",
+			owner, repo, url.QueryEscape(branch), limit)
+	}
 	headers := c.headers(owner, repo, false)
-	cacheKey := fmt.Sprintf("%p/%s/%s/%d", c.Transport, strings.ToLower(owner), strings.ToLower(repo), limit)
+	cacheKey := fmt.Sprintf("%p/%s/%s/%s/%d", c.Transport, strings.ToLower(owner), strings.ToLower(repo), branch, limit)
 	if etag, ok := completedRunsETags.Load(cacheKey); ok {
 		if s, ok := etag.(string); ok && s != "" {
 			headers["If-None-Match"] = s

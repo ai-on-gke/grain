@@ -954,6 +954,15 @@ func fireOneGitHubWorkflowRunSchedule(ctx context.Context, deps Deps, sched mode
 		finished = *run.CompletedAt
 	}
 
+	if existing, err := deps.Store.GetScheduledWorkflowRun(ctx, sched.ID); err == nil && existing != nil {
+		if existing.RunID == runIDStr && max(1, run.Attempt) <= existing.Attempts {
+			return nil
+		}
+		if existing.AttemptedAt != nil && !existing.AttemptedAt.IsZero() && started.Before(*existing.AttemptedAt) {
+			return nil
+		}
+	}
+
 	hasSuite := sched.SuiteID != nil && *sched.SuiteID != ""
 	tmplID := ""
 	if sched.TemplateID != nil {

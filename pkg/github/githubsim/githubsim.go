@@ -347,6 +347,8 @@ type WorkflowRun struct {
 	// CreatedAt, when set, is served as created_at and run_started_at and
 	// is what ?created=>=... filters on; a run without one always matches.
 	CreatedAt time.Time
+	// UpdatedAt, when set, is served as updated_at (the run's completion time).
+	UpdatedAt time.Time
 	Jobs      []WorkflowJob
 }
 
@@ -3187,7 +3189,7 @@ func (s *Sim) repoRunsJSON(owner, repo string) map[string]any {
 			status = "completed"
 		}
 		conclusion := wr.Conclusion
-		if conclusion == "" {
+		if conclusion == "" && status == "completed" {
 			conclusion = "success"
 			for _, job := range wr.Jobs {
 				switch jobConclusion(job) {
@@ -3236,6 +3238,9 @@ func (s *Sim) repoRunsJSON(owner, repo string) map[string]any {
 			at := wr.CreatedAt.UTC().Format(time.RFC3339)
 			runs[len(runs)-1]["created_at"] = at
 			runs[len(runs)-1]["run_started_at"] = at
+		}
+		if !wr.UpdatedAt.IsZero() {
+			runs[len(runs)-1]["updated_at"] = wr.UpdatedAt.UTC().Format(time.RFC3339)
 		}
 	}
 	for _, key := range s.runCommits() {
@@ -3455,6 +3460,7 @@ func workflowFileMatches(runPath string, id int64, workflow string) bool {
 func pageRuns(reqPath string, qs url.Values, payload map[string]any, workflow string) (map[string]any, string) {
 	all, _ := payload["workflow_runs"].([]map[string]any)
 	branch := qs.Get("branch")
+	status := qs.Get("status")
 	var since time.Time
 	if c, ok := strings.CutPrefix(qs.Get("created"), ">="); ok {
 		since, _ = time.Parse(time.RFC3339, c)
@@ -3469,6 +3475,9 @@ func pageRuns(reqPath string, qs url.Values, payload map[string]any, workflow st
 			}
 		}
 		if branch != "" && r["head_branch"] != branch {
+			continue
+		}
+		if status != "" && r["status"] != status {
 			continue
 		}
 		if at, ok := r["created_at"].(string); ok && !since.IsZero() {
