@@ -111,9 +111,10 @@ type Client struct {
 	// over as many as ci.DefaultCacheMaxEntries of them, on the host
 	// whose disk pressure is why anybody has this pane open, so it is
 	// cached for the same ciHistoryStorageTTL and for the same reason.
-	ciDisk    ciDiskUsageCache
-	prFilesMu sync.Mutex
-	prFiles   *cifault.FileCache
+	ciDisk             ciDiskUsageCache
+	prFilesMu          sync.Mutex
+	prFiles            *cifault.FileCache
+	rollbackDispatches map[string]ReleaseDispatch
 }
 
 // NewClient builds a Client over a store.

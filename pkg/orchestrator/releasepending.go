@@ -29,12 +29,13 @@ package orchestrator
 // and the release notes in its body, and clears it once vX.Y.Z is tagged
 // or the -pending tag is gone (approved or rejected).
 //
-// A person's answer clears the notification at once (ui.DecideRelease)
-// while the -pending tag is still there -- the promotion run has only
-// just started. So a release a person answered within
-// releasePendingAnswerHold is not raised again; one still pending after
-// that (its run failed) is, as the daily train run would raise it again
-// on grain CI.
+// A person's answer records a cleared notification at once (ui.DecideRelease,
+// model.Store.RecordReleaseAnswer) -- even when they answered from the CLI
+// or API before this watcher raised it -- while the -pending tag is still
+// there and the promotion run has only just started. So a release a person
+// answered within releasePendingAnswerHold is not raised again; one still
+// pending after that (its run failed) is, as the daily train run would
+// raise it again on grain CI.
 
 import (
 	"context"
@@ -148,7 +149,7 @@ func watchPendingReleases(ctx context.Context, store *model.Store, tags github.R
 	}
 	// Raise what waits.
 	for version, tag := range pending {
-		if released[version] || releaseAnswered(all, version, now) {
+		if released[version] || releaseAnswered(all, repo, version, now) {
 			continue
 		}
 		subject := model.NotificationSubject(model.FamilyReleasePending, version)
@@ -180,16 +181,20 @@ func openBySubject(all []model.Notification, subject string) *model.Notification
 	return nil
 }
 
-// releaseAnswered reports whether a person cleared version's
-// notification -- approved or rejected it -- within
-// releasePendingAnswerHold.
-func releaseAnswered(all []model.Notification, version string, now time.Time) bool {
+// releaseAnswered reports whether a person answered version's
+// notification on repo -- approved or rejected it -- within
+// releasePendingAnswerHold, whether by clearing an open notification or
+// by answering from the CLI or API before one was raised.
+func releaseAnswered(all []model.Notification, repo model.RepoRef, version string, now time.Time) bool {
 	subject := model.NotificationSubject(model.FamilyReleasePending, version)
 	for _, n := range all {
-		if n.Subject != subject || n.ClearedAt == nil {
+		if n.Subject != subject {
 			continue
 		}
-		if strings.HasPrefix(n.ClearedBy, string(model.PrincipalHuman)+":") && now.Sub(*n.ClearedAt) < releasePendingAnswerHold {
+		if n.Repo != "" && repo.String() != "" && n.Repo != repo.String() {
+			continue
+		}
+		if _, at, ok := n.ReleaseAnswerBy(); ok && now.Sub(at) < releasePendingAnswerHold {
 			return true
 		}
 	}
