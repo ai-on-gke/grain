@@ -772,13 +772,31 @@ func (c *Client) actionsJobLog(ctx context.Context, repo model.RepoRef, runID in
 		}
 		return actionsLiveTTL
 	}, func() (string, error) {
-		return reader.ActionsJobLog(repo.StoredOwner(), repo.Name, job.ID)
+		text, err := reader.ActionsJobLog(repo.StoredOwner(), repo.Name, job.ID)
+		if err == nil && text == "" && job.Status == "completed" {
+			// An error rather than a log, so it is not cached: the next
+			// read asks the forge again instead of being handed the same
+			// nothing for actionsFinishedTTL.
+			return "", errEmptyActionsLog
+		}
+		return text, err
 	})
 	if err != nil {
 		var gh *github.Error
 		switch {
 		case errors.Is(err, errActionsBudgetLow):
 			return job, "", http.StatusServiceUnavailable, err
+		case errors.Is(err, errEmptyActionsLog), errors.Is(err, github.ErrEmptyJobLog):
+			// A finished job always wrote something; nothing back is a log
+			// that went missing on its way here, not one that is empty.
+			msg := fmt.Sprintf("the forge answered job %q's log (%d) with no bytes at all", job.Name, job.ID)
+			if errors.As(err, &gh) {
+				msg += ", " + forgeAnswer(gh)
+				if gh.Note != "" {
+					msg += " (" + gh.Note + ")"
+				}
+			}
+			return job, "", http.StatusBadGateway, errors.New(msg)
 		case errors.As(err, &gh) && (gh.Status == http.StatusNotFound || gh.Status == http.StatusGone):
 			return job, "", http.StatusNotFound, fmt.Errorf("the forge has no log for job %q (%d), %s: it is past its retention window, or not written yet", job.Name, job.ID, forgeAnswer(gh))
 		case errors.As(err, &gh) && gh.Status == http.StatusForbidden:
@@ -791,13 +809,12 @@ func (c *Client) actionsJobLog(ctx context.Context, repo model.RepoRef, runID in
 			return job, "", http.StatusBadGateway, fmt.Errorf("reading job %q's log from the forge: %w", job.Name, err)
 		}
 	}
-	if text == "" && job.Status == "completed" {
-		// A finished job always wrote something; nothing back is a log
-		// that went missing on its way here, not one that is empty.
-		return job, "", http.StatusBadGateway, fmt.Errorf("the forge answered job %q's log (%d) with no bytes at all", job.Name, job.ID)
-	}
 	return job, text, http.StatusOK, nil
 }
+
+// errEmptyActionsLog is a finished job's log read back as nothing from a
+// reader that said no more than that.
+var errEmptyActionsLog = errors.New("the forge answered a finished job's log with no bytes at all")
 
 // forgeAnswer is gh's status and the host or hosts it came from ("HTTP
 // 404 from ghe.example.com"), for a sentence saying why a log is not
