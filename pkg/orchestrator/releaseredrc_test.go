@@ -111,7 +111,7 @@ func TestARedCandidateRaisesRCFailedAndHoldsTheNextUntilItsBlockersLand(t *testi
 		"New since v1.4.0-rc.1: `" + rc1 + ".." + rqSHA + "`",
 		"qualification-base-triage: fail",
 		model.RCBlockerMarker(rqTag),
-		"holds v1.4.0-rc.3",
+		"is in progress and holds v1.4.0-rc.3 while triage is pending (up to 1h",
 	} {
 		if !strings.Contains(n.Body, want) {
 			t.Errorf("rc-failed body does not say %q:\n%s", want, n.Body)
@@ -123,11 +123,24 @@ func TestARedCandidateRaisesRCFailedAndHoldsTheNextUntilItsBlockersLand(t *testi
 	if e := openNotification(t, ctx, store, model.FamilyReleaseEscalated, "v1.4.0"); e != nil {
 		t.Fatalf("rc.2 escalated %+v; only the last attempt does", e)
 	}
-	if forge.countNamed(model.ReleaseHoldCheckName) != 0 {
-		t.Fatalf("posted %s with no blocker linked", model.ReleaseHoldCheckName)
+	// grain/rc-hold is posted in progress as soon as failure is concluded,
+	// before any [rc-blocker] task exists, so the train's 20-minute tick
+	// cannot cut rc.3 off the unfixed tree while triage is pending.
+	hold := forge.checkNamed(model.ReleaseHoldCheckName)
+	if hold == nil || hold.Status != "in_progress" || forge.countNamed(model.ReleaseHoldCheckName) != 1 {
+		t.Fatalf("initial hold is %+v (%d posted), want one triage-pending check in progress",
+			hold, forge.countNamed(model.ReleaseHoldCheckName))
+	}
+	if forge.heads[hold.ID] != rqSHA {
+		t.Fatalf("hold is on %s, want the red candidate's commit %s", forge.heads[hold.ID], rqSHA)
+	}
+	if !strings.Contains(hold.Output, "triage pending") || !strings.Contains(hold.Output, "awaits triage") {
+		t.Fatalf("initial hold output is %q, want triage-pending summary", hold.Output)
 	}
 
-	// The steward files a fix titled with the marker: rc.3 is held.
+	// The steward files a fix titled with the marker: the same check run is
+	// updated in place to name the blocker, and stays in progress past the
+	// 1h triage grace window while the blocker remains open.
 	blocker, err := store.NewTaskID(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -140,21 +153,24 @@ func TestARedCandidateRaisesRCFailedAndHoldsTheNextUntilItsBlockersLand(t *testi
 	}
 	at := baseTime.Add(time.Minute)
 	syncQualification(t, ctx, store, forge, at)
-	syncQualification(t, ctx, store, forge, at.Add(time.Minute))
-	hold := forge.checkNamed(model.ReleaseHoldCheckName)
+	syncQualification(t, ctx, store, forge, baseTime.Add(2*model.ReleaseHoldTriageGrace))
+	hold = forge.checkNamed(model.ReleaseHoldCheckName)
 	if hold == nil || hold.Status != "in_progress" || forge.countNamed(model.ReleaseHoldCheckName) != 1 {
 		t.Fatalf("hold is %+v (%d posted), want one in progress", hold, forge.countNamed(model.ReleaseHoldCheckName))
 	}
-	if forge.heads[hold.ID] != rqSHA {
-		t.Fatalf("hold is on %s, want the red candidate's commit %s", forge.heads[hold.ID], rqSHA)
+	if !strings.Contains(hold.Output, "task "+blocker+".") {
+		t.Fatalf("hold output is %q, want it updated to name task %s", hold.Output, blocker)
 	}
 
-	// It lands: the hold completes, and rc-failed stays until rc.3 is cut.
+	// A blocker that lands inside the triage window still completes the hold
+	// at once, without waiting out the rest of the grace period; rc-failed
+	// stays open until rc.3 is cut.
 	closeTask(t, ctx, store, blocker, at.Add(2*time.Minute))
 	syncQualification(t, ctx, store, forge, at.Add(2*time.Minute))
 	hold = forge.checkNamed(model.ReleaseHoldCheckName)
-	if hold.Status != "completed" || hold.Conclusion == nil || *hold.Conclusion != model.ConclusionSuccess {
-		t.Fatalf("hold is %+v once its blocker landed, want completed success", hold)
+	if hold.Status != "completed" || hold.Conclusion == nil || *hold.Conclusion != model.ConclusionSuccess ||
+		!strings.Contains(hold.Output, "Blockers landed") {
+		t.Fatalf("hold is %+v once its blocker landed, want completed success (Blockers landed)", hold)
 	}
 	if openNotification(t, ctx, store, model.FamilyRCFailed, rqTag) == nil {
 		t.Fatal("rc-failed cleared before rc.3 was cut")
@@ -166,6 +182,127 @@ func TestARedCandidateRaisesRCFailedAndHoldsTheNextUntilItsBlockersLand(t *testi
 	syncQualification(t, ctx, store, forge, at.Add(3*time.Minute))
 	if n := openNotification(t, ctx, store, model.FamilyRCFailed, rqTag); n != nil {
 		t.Fatalf("rc-failed still open after rc.3 was cut: %+v", n)
+	}
+}
+
+func TestTriagePendingHoldCompletesWhenStewardTriagesWithNoBlockerOrCleared(t *testing.T) {
+	t.Parallel()
+	store, ctx, repo, forge := newQualificationRepo(t)
+	forge.nightly = "success"
+	failItemTwice(t, ctx, store, forge, repo, rqTag, "qualification-base-triage", baseTime)
+
+	stewardID, err := store.NewTaskID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTask(ctx, model.Task{
+		ID: stewardID, Title: "Pipeline steward", Body: "steward",
+		TemplateID: model.PipelineStewardTemplateID,
+		Tags:       []string{model.ScheduleFiringTag(model.PipelineStewardTemplateID)},
+		CreatedAt:  &baseTime,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Neither an unrelated steward report, nor a comment naming v1.4.0-rc.20,
+	// nor a note from somebody other than the steward's own run lifts the hold.
+	for _, c := range []model.Comment{
+		{TaskID: stewardID, Author: ownRunAuthor(stewardID), Body: "Task 99 stalled on CI [task 99]", CreatedAt: baseTime.Add(time.Minute)},
+		{TaskID: stewardID, Author: ownRunAuthor(stewardID), Body: "Checked v1.4.0-rc.20 earlier [task 99]", CreatedAt: baseTime.Add(2 * time.Minute)},
+		{TaskID: stewardID, Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "op"}},
+			Body: "triaged " + rqTag, CreatedAt: baseTime.Add(3 * time.Minute)},
+	} {
+		if _, err := store.AddComment(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	syncQualification(t, ctx, store, forge, baseTime.Add(5*time.Minute))
+	if hold := forge.checkNamed(model.ReleaseHoldCheckName); hold == nil || hold.Status != "in_progress" {
+		t.Fatalf("hold after unrelated comments is %+v, want still in progress", hold)
+	}
+
+	// The steward's own run triages rqTag and files no blocker: the hold completes.
+	if _, err := store.AddComment(ctx, model.Comment{
+		TaskID:    stewardID,
+		Author:    ownRunAuthor(stewardID),
+		Body:      rqTag + " qualification-base-triage failed on transient runner timeout; no blocker needed [task 1]",
+		CreatedAt: baseTime.Add(10 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	syncQualification(t, ctx, store, forge, baseTime.Add(11*time.Minute))
+	syncQualification(t, ctx, store, forge, baseTime.Add(12*time.Minute))
+	hold := forge.checkNamed(model.ReleaseHoldCheckName)
+	if hold == nil || hold.Status != "completed" || hold.Conclusion == nil || *hold.Conclusion != model.ConclusionSuccess ||
+		!strings.Contains(hold.Output, "Triaged with no blocker") || forge.countNamed(model.ReleaseHoldCheckName) != 1 {
+		t.Fatalf("hold after no-blocker triage is %+v (%d posted), want one completed success",
+			hold, forge.countNamed(model.ReleaseHoldCheckName))
+	}
+
+	// A person files a late [rc-blocker] task before rc.3 is cut: a new hold
+	// goes up and completes once that blocker closes.
+	late, err := store.NewTaskID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := baseTime.Add(15 * time.Minute)
+	if err := store.PutTask(ctx, model.Task{
+		ID: late, Title: model.RCBlockerMarker(rqTag) + " revert suspect merge", Body: "revert", Target: &repo,
+		CreatedAt: &later,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	syncQualification(t, ctx, store, forge, later)
+	hold = forge.checkNamed(model.ReleaseHoldCheckName)
+	if hold == nil || hold.Status != "in_progress" || forge.countNamed(model.ReleaseHoldCheckName) != 2 {
+		t.Fatalf("late blocker hold is %+v (%d posted), want second check run in progress",
+			hold, forge.countNamed(model.ReleaseHoldCheckName))
+	}
+	closeTask(t, ctx, store, late, later.Add(time.Minute))
+	syncQualification(t, ctx, store, forge, later.Add(time.Minute))
+	hold = forge.checkNamed(model.ReleaseHoldCheckName)
+	if hold.Status != "completed" || hold.Conclusion == nil || *hold.Conclusion != model.ConclusionSuccess {
+		t.Fatalf("late blocker hold after close is %+v, want completed success", hold)
+	}
+}
+
+func TestTriagePendingHoldCompletesAfterGraceWindowOrInboxClear(t *testing.T) {
+	t.Setenv("GRAIN_RC_HOLD_GRACE", "30m")
+	store, ctx, repo, forge := newQualificationRepo(t)
+	forge.nightly = "success"
+	failItemTwice(t, ctx, store, forge, repo, rqTag, "qualification-base-triage", baseTime)
+
+	n := openNotification(t, ctx, store, model.FamilyRCFailed, rqTag)
+	if n == nil || !strings.Contains(n.Body, "up to 30m") {
+		t.Fatalf("rc-failed body does not reflect GRAIN_RC_HOLD_GRACE=30m:\n%+v", n)
+	}
+	// At the 20-minute train tick, triage is still within the 30m window.
+	syncQualification(t, ctx, store, forge, baseTime.Add(20*time.Minute))
+	if hold := forge.checkNamed(model.ReleaseHoldCheckName); hold == nil || hold.Status != "in_progress" {
+		t.Fatalf("hold at 20m is %+v, want still in progress", hold)
+	}
+	// Once the 30m grace window elapses with no blocker, the hold completes neutral.
+	syncQualification(t, ctx, store, forge, baseTime.Add(30*time.Minute))
+	syncQualification(t, ctx, store, forge, baseTime.Add(31*time.Minute))
+	hold := forge.checkNamed(model.ReleaseHoldCheckName)
+	if hold == nil || hold.Status != "completed" || hold.Conclusion == nil || *hold.Conclusion != model.ConclusionNeutral ||
+		!strings.Contains(hold.Output, "Triage window elapsed") || forge.countNamed(model.ReleaseHoldCheckName) != 1 {
+		t.Fatalf("hold after 30m grace is %+v (%d posted), want one completed neutral",
+			hold, forge.countNamed(model.ReleaseHoldCheckName))
+	}
+
+	// Clearing pipeline.rc-failed in the Inbox while triage is pending also lifts the hold.
+	store2, ctx2, repo2, forge2 := newQualificationRepo(t)
+	forge2.nightly = "success"
+	failItemTwice(t, ctx2, store2, forge2, repo2, rqTag, "qualification-base-triage", baseTime)
+	if _, err := store2.ClearNotification(ctx2, model.NotificationSubject(model.FamilyRCFailed, rqTag), "human:op"); err != nil {
+		t.Fatal(err)
+	}
+	syncQualification(t, ctx2, store2, forge2, baseTime.Add(5*time.Minute))
+	hold2 := forge2.checkNamed(model.ReleaseHoldCheckName)
+	if hold2 == nil || hold2.Status != "completed" || hold2.Conclusion == nil || *hold2.Conclusion != model.ConclusionSuccess ||
+		!strings.Contains(hold2.Output, "Triage acknowledged") {
+		t.Fatalf("hold after Inbox clear is %+v, want completed success (Triage acknowledged)", hold2)
 	}
 }
 
