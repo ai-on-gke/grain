@@ -176,14 +176,16 @@ test("system sandboxes and caches tabs walkthrough", async ({ page }) => {
     page.getByRole("heading", { name: "System", exact: true }),
   ).toBeVisible();
 
-  // Flush actions cache for acme/widgets
+  // Flush actions cache for acme/widgets: flushed repositories leave the
+  // list rather than staying behind as 0 B rows (matching pkg/actionscache).
   const actionsFlushBtn = page.getByRole("button", {
     name: "Flush the Actions cache of acme/widgets",
   });
   await actionsFlushBtn.click();
-  await expect(page.getByText(/acme\/widgets: 0 B/)).toBeVisible({
+  await expect(page.getByText(/acme\/widgets:/)).toHaveCount(0, {
     timeout: 5_000,
   });
+  await expect(page.getByText(/acme\/gadgets: 1\.0 GiB/)).toBeVisible();
 
   // Flush all remaining package caches via "Flush the whole cache" button
   const flushWholeBtn = page.getByRole("button", {
