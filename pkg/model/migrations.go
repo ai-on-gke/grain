@@ -846,6 +846,11 @@ var Migrations = []Migration{
 			"ALTER TABLE `allowed_principal` ADD COLUMN `last_used_at` DATETIME NULL",
 		},
 	},
+	{
+		Version:     120,
+		Description: "rewrite stored github-credential:<name> grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/repo#credential={\"credential\":\"<name>\"} (the in-process github-credential:<name> providers are retired)",
+		Up:          migrateGitHubCredentialGrants,
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as
