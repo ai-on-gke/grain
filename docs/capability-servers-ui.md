@@ -88,7 +88,7 @@ with its canonical ID, `https://grain.dev/capabilities/<name>`.
 After them come grain's **in-process** servers, which run inside the daemon
 rather than as a subprocess and have no `mcpServers` entry:
 `https://grain.dev/capabilities/grain` (`#ci`, `#health`, `#host-exec`,
-`#journal`, `#sql`), `https://grain.dev/capabilities/repo` (`#read`,
+`#journal`, `#source`, `#sql`), `https://grain.dev/capabilities/repo` (`#read`,
 `#write`), `https://grain.dev/capabilities/release` (`#image-signing`,
 `#package-publish`, `#registry-push`; CI only),
 `https://grain.dev/capabilities/model-proxy` (`#model-proxy`), and any
@@ -216,10 +216,11 @@ until they are changed or the server is added back under the same ID.
 
 **Settings → Legacy capabilities** is a different thing: the capabilities built
 into grain itself before capability servers, each granted by a bare name such
-as `github-sandbox` or `self-debug` and handed over by grain directly rather than by a
+as `github-sandbox` or `read-issues` and handed over by grain directly rather than by a
 server ([ci-capabilities.md](ci-capabilities.md)). Most have been retired onto
 server methods (`gcp-key` onto `…/gcp#gcp-key`, the model proxies onto
-`…/model-proxy`, `grain-log` onto `…/grain#journal`, and so on). What is
+`…/model-proxy`, `grain-log` onto `…/grain#journal`, `self-debug` onto the
+`api:self-debug` preset plus `…/grain#source`, and so on). What is
 left is listed in
 [unified-grants.design.md §4](../design/design/unified-grants.design.md#4-retiring-the-in-process-capabilities). That tab lists them one
 full-width row each, with **Ready** or **Not ready** and chips such as **CI

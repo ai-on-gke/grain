@@ -4,7 +4,7 @@
 
 **The core rule:** a run gets nothing it was not granted, and what it is granted reaches it only for one attempt. A capability server holds the root credential and mints a short-lived, attempt-scoped thing from it; grain checks the grant against policy, places what the server returned in the sandbox, and releases it when the attempt ends. Root credentials never enter a sandbox, and a grant's `with:` arguments never carry one.
 
-**Status:** describes `main` as of 2026-11-06. The normative protocol is [`capabilities.spec.md`](../spec/capabilities/capabilities.spec.md); this page is the overview it specifies. Where they disagree, the spec wins.
+**Status:** describes `main` as of 2026-11-07. The normative protocol is [`capabilities.spec.md`](../spec/capabilities/capabilities.spec.md); this page is the overview it specifies. Where they disagree, the spec wins.
 
 ## What a capability is
 
@@ -20,7 +20,7 @@ A capability server is an MCP server that advertises `mint_<method>` (and, for s
 |---|---|---|---|
 | **stdio** (`command`, `args`, `env`) | spawned by grain and spoken to over stdin/stdout | beside the daemon (`run: container`, the default), or on the bare machine through `grain hostd` (`run: host`, naming an allowlist `capabilities:` entry in `/etc/grain/hostd.yaml`; a `hostd:` selector picks a named hostd) | the built-ins `grain capability gcp`, `git`, `gchat`, `host-script`, `config-map` and `figma` (`pkg/capability/intree`), and `grain/config` plugins |
 | **HTTP** (`serverUrl`, `headers`) | Streamable HTTP, authenticated with the entry's headers | wherever the operator runs it | an organisation's own servers |
-| **in-process** | a Go method table called directly (`protocol.InProcessCaller`) | inside the daemon; no listener, no `mcpServers` entry | `…/grain` (`#journal`, `#health`, `#sql`, `#host-exec`, `#ci`) and `…/repo` (`#read`, `#write`) in `pkg/capability/grainserver`; `…/release` and `…/model-proxy`, and an edition's own (such as `…/corp#research`), contributed through `capability.Register` |
+| **in-process** | a Go method table called directly (`protocol.InProcessCaller`) | inside the daemon; no listener, no `mcpServers` entry | `…/grain` (`#journal`, `#health`, `#sql`, `#host-exec`, `#ci`, `#source`) and `…/repo` (`#read`, `#write`) in `pkg/capability/grainserver`; `…/release` and `…/model-proxy`, and an edition's own (such as `…/corp#research`), contributed through `capability.Register` |
 
 Servers are configured in `grain_config.mcp_servers` (exported to `grain/config`), keyed by `capability_id`, with secrets as `$secret:<name>` references into the encrypted store (spec §3.1). The daemon registers every built-in under its canonical ID on start (`intree.EnsureBuiltins`). It attaches each enabled entry, re-reads `tools/list` hourly and on change, and alerts when one drops (`pkg/daemon/capability_servers.go`). Settings → Capabilities → Capability servers edits them ([`docs/capability-servers-ui.md`](../../docs/capability-servers-ui.md)). `grain hostd -ensure-builtins` keeps the host entries for grain's own servers on the allowlist (`intree.HostdBuiltins`).
 
@@ -68,7 +68,7 @@ A `.grain/workflows` job names what it needs under `capabilities:` and `optional
 
 ## Retiring the legacy in-process capabilities
 
-Before capability servers, grain had a registry of in-process providers, each granted by a bare name (`pkg/capability/<name>`, `model.CapabilityProvider`). They are being converted one at a time into server methods or `api:` presets. Each conversion follows the same steps: add the method, migrate stored grants in a schema migration, keep the bare name as a one-release alias (`model.CanonicalLegacyGrant`), and delete the provider. [`unified-grants.design.md` §4](unified-grants.design.md#4-retiring-the-in-process-capabilities) is the per-capability table. Most are done (`gcp-key`, `gemini-key`, the model proxies, `local-scripts`, the CI publishing grants, `repo-read`/`repo-write`, the `…/grain` methods, the api presets).
+Before capability servers, grain had a registry of in-process providers, each granted by a bare name (`pkg/capability/<name>`, `model.CapabilityProvider`). They are being converted one at a time into server methods or `api:` presets. Each conversion follows the same steps: add the method, migrate stored grants in a schema migration, keep the bare name as a one-release alias (`model.CanonicalLegacyGrant`), and delete the provider. [`unified-grants.design.md` §4](unified-grants.design.md#4-retiring-the-in-process-capabilities) is the per-capability table. Most are done (`gcp-key`, `gemini-key`, the model proxies, `local-scripts`, the CI publishing grants, `repo-read`/`repo-write`, `bootstrap-playbooks`, the `…/grain` methods, the api presets). The last of the `…/grain` conversions was `self-debug`, which became the `api:self-debug` preset plus `…/grain#source` (schema migration 115): its bare name is a one-release alias for both, and nothing registers a provider for it.
 
 `daemon.CapabilityProviders` still registers these:
 
