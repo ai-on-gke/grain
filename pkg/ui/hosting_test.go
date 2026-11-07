@@ -57,8 +57,8 @@ func TestHostingSettingAndLegacyConsoleAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if aliased.Hosting != "console" || !slices.Equal(aliased.Capabilities, []string{"github-sandbox"}) {
-		t.Fatalf("aliased = (hosting=%q, caps=%v), want (console, [github-sandbox])", aliased.Hosting, aliased.Capabilities)
+	if aliased.Hosting != "console" || !slices.Equal(aliased.Capabilities, []string{model.GitHubSandboxRepoGrant}) {
+		t.Fatalf("aliased = (hosting=%q, caps=%v), want (console, [%s])", aliased.Hosting, aliased.Capabilities, model.GitHubSandboxRepoGrant)
 	}
 
 	// 2. Updating hosting records TransitionHostingChanged with OldHosting/NewHosting,

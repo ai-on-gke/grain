@@ -589,7 +589,13 @@ import "strconv"
 // `default_hosting` to `grain_config` and `repo_config`, moving stored
 // `console` grants into the setting (ConsoleSession.Hosting included) and
 // dropping catalogue and policy entries for `console`.
-const SchemaVersion = 123
+// 124 changes no table: it retires the in-process `github-sandbox` provider
+// onto the in-process `github` server's `#sandbox-repo` method: stored
+// `github-sandbox` grants across tasks, templates, schedules,
+// `default_capabilities`, `ci_capabilities`, `console_sessions` and
+// `capability_policy` become
+// `https://grain.dev/capabilities/github#sandbox-repo={}`.
+const SchemaVersion = 124
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or

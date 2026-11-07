@@ -108,7 +108,7 @@ func TestDeploymentRepoConfigWritesRepoConfig(t *testing.T) {
 		t.Fatalf("GetRepoConfig = %+v, %v", saved, err)
 	}
 	if saved.SetupCommand != "npm run custom-setup" || saved.CIMode != model.CIModeGrain || saved.RepairTemplateID != "template-123" ||
-		!slices.Equal(saved.DefaultCapabilities, []string{"github-sandbox", "api:tasks:read"}) {
+		!slices.Equal(saved.DefaultCapabilities, []string{model.GitHubSandboxRepoGrant, "api:tasks:read"}) {
 		t.Fatalf("repo_config after PUT = %+v", saved)
 	}
 
@@ -263,8 +263,10 @@ func TestDeploymentRepoConfigRefusesUnknownAndInvalidCapabilities(t *testing.T) 
 	if err != nil {
 		t.Fatalf("SetDeploymentRepoConfig keeping legacy default: %v", err)
 	}
-	if !slices.Equal(resp.Effective.DefaultCapabilities, keepStoredDefaults) {
-		t.Fatalf("Default capabilities = %+v, want %v", resp.Effective, keepStoredDefaults)
+	// The bare github-sandbox alias is stored as the github server's
+	// sandbox-repo grant it was retired onto (schema migration 124).
+	if want := []string{"legacy-default-cap", model.GitHubSandboxRepoGrant}; !slices.Equal(resp.Effective.DefaultCapabilities, want) {
+		t.Fatalf("Default capabilities = %+v, want %v", resp.Effective, want)
 	}
 
 	keepStoredCI := []string{"legacy-ci-cap", "repo-read:acme/tools"}

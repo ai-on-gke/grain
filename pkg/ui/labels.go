@@ -197,9 +197,9 @@ func OfferedCapabilities() []Capability {
 		// 123). No bootstrap-playbooks row: it was retired onto the
 		// config-map server's config-map {"config_maps":["bootstrap"]}
 		// (schema migration 118), which is offered with the other
-		// capability-server methods.
-		{ID: "github-sandbox", Name: "GitHub sandbox",
-			Description: "Create a private, single-use GitHub sandbox repo for this task to work in instead of /repo"},
+		// capability-server methods. No github-sandbox row: retired onto
+		// the in-process github server's sandbox-repo method (schema
+		// migration 124), offered with the other capability-server methods.
 		// Not grain#ci: nobody attaches it by hand. A repository's CI
 		// Mode is the switch, and grain grants grain#ci to that
 		// repository's tasks itself (pkg/capability/grainci's package

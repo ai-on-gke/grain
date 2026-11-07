@@ -224,8 +224,8 @@ func TestSchema122MigratesPriorityDispatchAndDurableToAdmission(t *testing.T) {
 	if !slices.Equal(afterRepo.DefaultCapabilities, []string{"self-debug"}) {
 		t.Errorf("RepoConfig.DefaultCapabilities = %v, want [self-debug]", afterRepo.DefaultCapabilities)
 	}
-	if !slices.Equal(afterRepo.CICapabilities, []string{"github-sandbox"}) {
-		t.Errorf("RepoConfig.CICapabilities = %v, want [github-sandbox]", afterRepo.CICapabilities)
+	if !slices.Equal(afterRepo.CICapabilities, []string{model.GitHubSandboxRepoGrant}) {
+		t.Errorf("RepoConfig.CICapabilities = %v, want [%s]", afterRepo.CICapabilities, model.GitHubSandboxRepoGrant)
 	}
 
 	unconfigured := model.RepoRef{Owner: "acme", Name: "unconfigured"}

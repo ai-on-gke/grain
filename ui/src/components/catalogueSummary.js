@@ -117,6 +117,10 @@ export const RETIRED_IN_PROCESS = {
     grant: "https://grain.dev/capabilities/github#read-issues={}",
     moveTo: "servers (https://grain.dev/capabilities/github#read-issues)",
   },
+  "github-sandbox": {
+    grant: "https://grain.dev/capabilities/github#sandbox-repo={}",
+    moveTo: "servers (https://grain.dev/capabilities/github#sandbox-repo)",
+  },
 };
 
 export function describeRestrictions(r) {

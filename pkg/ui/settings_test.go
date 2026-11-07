@@ -316,18 +316,18 @@ func TestUpdateSettingsRoundTripsDefaultCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatalf("setting default capabilities: %v", err)
 	}
-	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{"github-sandbox"}) {
+	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{model.GitHubSandboxRepoGrant}) {
 		t.Fatalf("DefaultCapabilities = %v, want [self-debug] with the repeat dropped", saved.DefaultCapabilities)
 	}
 	read, err = c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"github-sandbox"}) {
+	if !reflect.DeepEqual(read.DefaultCapabilities, []string{model.GitHubSandboxRepoGrant}) {
 		t.Fatalf("DefaultCapabilities = %v after a re-read, want [self-debug]", read.DefaultCapabilities)
 	}
 	for _, status := range read.Capabilities {
-		if want := status.ID == "github-sandbox"; status.Default != want {
+		if want := status.ID == model.GitHubSandboxRepoGrant || status.ID == "github-sandbox"; status.Default != want {
 			t.Errorf("capability %s: Default = %t, want %t", status.ID, status.Default, want)
 		}
 	}
@@ -408,14 +408,14 @@ func TestUpdateSettingsAcceptsDroppingARetiredDefaultCapability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dropping a retired default capability: %v", err)
 	}
-	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{"github-sandbox"}) {
+	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{model.GitHubSandboxRepoGrant}) {
 		t.Fatalf("DefaultCapabilities = %v, want [self-debug] with the retired id gone", saved.DefaultCapabilities)
 	}
 	read, err = c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"github-sandbox"}) {
+	if !reflect.DeepEqual(read.DefaultCapabilities, []string{model.GitHubSandboxRepoGrant}) {
 		t.Fatalf("DefaultCapabilities = %v after a re-read, want [self-debug]: the retired id is gone for good",
 			read.DefaultCapabilities)
 	}

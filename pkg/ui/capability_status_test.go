@@ -57,13 +57,22 @@ func TestConfigPickerReportsACapabilityThisDeploymentCannotHonour(t *testing.T) 
 	t.Parallel()
 	srv, client := testServer(t)
 	client.Config.Secrets = secrets.New(t.TempDir())
+	// github-sandbox is retired from OfferedCapabilities() onto
+	// github#sandbox-repo (schema migration 124), while capabilityStatuses
+	// keeps its readiness row; attach a legacy row here to exercise the
+	// join on capabilitiesWithReadiness as well as ciCapabilitiesWithReadiness.
+	client.Config.Capabilities = append(ui.OfferedCapabilities(), ui.Capability{
+		ID:   "github-sandbox",
+		Name: "GitHub sandbox",
+	})
 
 	rec := do(t, srv, http.MethodGet, "/api/config", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	cfg := decode[struct {
-		Capabilities []ui.Capability `json:"capabilities"`
+		Capabilities   []ui.Capability `json:"capabilities"`
+		CICapabilities []ui.Capability `json:"ciCapabilities"`
 	}](t, rec)
 
 	sandbox := pickerRow(t, cfg.Capabilities, "github-sandbox")
@@ -75,6 +84,14 @@ func TestConfigPickerReportsACapabilityThisDeploymentCannotHonour(t *testing.T) 
 	}
 	if want := []string{githubsandbox.DefaultAppIDCredential, githubsandbox.DefaultPrivateKeyCredential}; !reflect.DeepEqual(sandbox.Needs, want) {
 		t.Errorf("github-sandbox: Needs = %v, want %v", sandbox.Needs, want)
+	}
+
+	ciSandbox := pickerRow(t, cfg.CICapabilities, model.GitHubSandboxRepoGrant)
+	if ciSandbox.Ready == nil || *ciSandbox.Ready {
+		t.Errorf("%s: Ready = %v, want false with no App secrets stored", model.GitHubSandboxRepoGrant, ciSandbox.Ready)
+	}
+	if want := []string{githubsandbox.DefaultAppIDCredential, githubsandbox.DefaultPrivateKeyCredential}; !reflect.DeepEqual(ciSandbox.Needs, want) {
+		t.Errorf("%s: Needs = %v, want %v", model.GitHubSandboxRepoGrant, ciSandbox.Needs, want)
 	}
 
 	// Once its secrets are configured, the same picker row reports ready
@@ -91,8 +108,13 @@ func TestConfigPickerReportsACapabilityThisDeploymentCannotHonour(t *testing.T) 
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	cfg = decode[struct {
-		Capabilities []ui.Capability `json:"capabilities"`
+		Capabilities   []ui.Capability `json:"capabilities"`
+		CICapabilities []ui.Capability `json:"ciCapabilities"`
 	}](t, rec)
+	readyCISandbox := pickerRow(t, cfg.CICapabilities, model.GitHubSandboxRepoGrant)
+	if readyCISandbox.Ready == nil || !*readyCISandbox.Ready || len(readyCISandbox.Needs) != 0 {
+		t.Errorf("%s after secrets set: Ready = %v, Needs = %v, want ready with none", model.GitHubSandboxRepoGrant, readyCISandbox.Ready, readyCISandbox.Needs)
+	}
 	readySandbox := pickerRow(t, cfg.Capabilities, "github-sandbox")
 	if readySandbox.Ready == nil || !*readySandbox.Ready {
 		t.Errorf("github-sandbox after secrets set: Ready = %v, want true", readySandbox.Ready)

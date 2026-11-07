@@ -241,7 +241,7 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		RepairTemplateID:            ptr("custom-repair-template"),
 		TaskBranchTemplate:          ptr("alice/grain/task-{id}"),
 		DeploymentID:                ptr("prod"),
-		DefaultCapabilities:         ptr([]string{ui.OfferedCapabilities()[0].ID}),
+		DefaultCapabilities:         ptr([]string{model.GitHubSandboxRepoGrant}),
 		DefaultAdmission:            ptr("bypass"),
 		DefaultHosting:              ptr("console"),
 		SettingsLocked:              ptr(true),

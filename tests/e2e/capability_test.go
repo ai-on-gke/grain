@@ -160,28 +160,34 @@ func TestCLIAttachedCapabilityIsMaterializedAppliedAndRevokedThroughRunCycle(t *
 	// resolves and materializes it below is this test's own, never the real
 	// one a deployment would wire up for it.
 	storeDir := t.TempDir()
-	created := runCLIStore(t, bin, storeDir,
-		"-json",
-		"create",
-		"-title", "add a NOTES entry",
-		"-body", "please add a line to NOTES.md",
-		"-repo", owner+"/"+repoName,
-		"-approve",
-	)
+	const capabilityID = "test-capability"
 	var task ui.Task
-	if err := json.Unmarshal([]byte(created), &task); err != nil {
-		t.Fatalf("parsing grain create -json output: %v\n%s", err, created)
-	}
-	if task.ID == "" {
-		t.Fatalf("grain create did not return a task id: %s", created)
-	}
-
-	const capabilityID = "github-sandbox"
-	attached := runCLIStore(t, bin, storeDir, "-json", "capability", task.ID, capabilityID, "attach")
 	var afterAttach ui.Task
-	if err := json.Unmarshal([]byte(attached), &afterAttach); err != nil {
-		t.Fatalf("parsing grain capability attach -json output: %v\n%s", err, attached)
-	}
+	withStore(t, storeDir, func(store *model.Store, _ context.Context) {
+		srvURL := newTestServer(t, accessCodeServer(ui.NewClient(ui.Config{
+			Actor:        ui.DefaultActor("operator"),
+			Capabilities: []ui.Capability{{ID: capabilityID, Name: "Test capability"}},
+		}, store)))
+		created := runCLI(t, bin,
+			"-server", srvURL,
+			"-json",
+			"create",
+			"-title", "add a NOTES entry",
+			"-body", "please add a line to NOTES.md",
+			"-repo", owner+"/"+repoName,
+			"-approve",
+		)
+		if err := json.Unmarshal([]byte(created), &task); err != nil {
+			t.Fatalf("parsing grain create -json output: %v\n%s", err, created)
+		}
+		if task.ID == "" {
+			t.Fatalf("grain create did not return a task id: %s", created)
+		}
+		attached := runCLI(t, bin, "-server", srvURL, "-json", "capability", task.ID, capabilityID, "attach")
+		if err := json.Unmarshal([]byte(attached), &afterAttach); err != nil {
+			t.Fatalf("parsing grain capability attach -json output: %v\n%s", err, attached)
+		}
+	})
 	attachedOK := false
 	for _, c := range afterAttach.Capabilities {
 		if c == capabilityID {

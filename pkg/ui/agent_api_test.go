@@ -911,8 +911,8 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 		t.Fatalf("PUT /api/repos/acme/widgets/settings narrowing ciCapabilities: %d %s", code, resp)
 	}
 	rc, err := client.Store.GetRepoConfig(ctx, widgets)
-	if err != nil || rc == nil || !slices.Equal(rc.CICapabilities, []string{"github-sandbox", model.PackagePublishRef + "={}"}) {
-		t.Fatalf("stored ciCapabilities = %+v, %v, want [github-sandbox %s={}]", rc, err, model.PackagePublishRef)
+	if err != nil || rc == nil || !slices.Equal(rc.CICapabilities, []string{model.GitHubSandboxRepoGrant, model.PackagePublishRef + "={}"}) {
+		t.Fatalf("stored ciCapabilities = %+v, %v, want [%s %s={}]", rc, err, model.GitHubSandboxRepoGrant, model.PackagePublishRef)
 	}
 
 	// 2. Adding back gcp-key (which is no longer stored and not held by task 1) is refused.
@@ -951,8 +951,8 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 		t.Fatalf("PUT host-qualified /ci-capabilities narrowing: %d %s", code, resp)
 	}
 	rcGgrain, err := client.Store.GetRepoConfig(ctx, ggrain)
-	if err != nil || rcGgrain == nil || !slices.Equal(rcGgrain.CICapabilities, []string{model.PackagePublishRef + "={}", "github-sandbox"}) {
-		t.Fatalf("ggrain ciCapabilities = %+v, %v, want [%s={} github-sandbox]", rcGgrain, err, model.PackagePublishRef)
+	if err != nil || rcGgrain == nil || !slices.Equal(rcGgrain.CICapabilities, []string{model.PackagePublishRef + "={}", model.GitHubSandboxRepoGrant}) {
+		t.Fatalf("ggrain ciCapabilities = %+v, %v, want [%s={} %s]", rcGgrain, err, model.PackagePublishRef, model.GitHubSandboxRepoGrant)
 	}
 
 	// 6. Deployment-wide defaultCapabilities via PUT /api/settings.

@@ -930,7 +930,7 @@ func TestConfigEndpointReportsDefaultCapabilities(t *testing.T) {
 	srv, client := testServer(t)
 
 	cfg := model.DefaultConfig()
-	cfg.DefaultCapabilities = []string{"github-sandbox", "scratch-repo"}
+	cfg.DefaultCapabilities = []string{model.GitHubSandboxRepoGrant, "scratch-repo"}
 	if err := client.Store.PutConfig(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -942,7 +942,7 @@ func TestConfigEndpointReportsDefaultCapabilities(t *testing.T) {
 	got := decode[struct {
 		DefaultCapabilities []string `json:"defaultCapabilities"`
 	}](t, rec)
-	if !reflect.DeepEqual(got.DefaultCapabilities, []string{"github-sandbox"}) {
+	if !reflect.DeepEqual(got.DefaultCapabilities, []string{model.GitHubSandboxRepoGrant}) {
 		t.Fatalf("defaultCapabilities = %v, want [gemini-key]", got.DefaultCapabilities)
 	}
 }
@@ -959,7 +959,7 @@ func TestConfigEndpointReportsRepoDefaultCapabilities(t *testing.T) {
 
 	if err := client.Store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:                model.RepoRef{Owner: "acme", Name: "widgets"},
-		DefaultCapabilities: []string{"github-sandbox", "scratch-repo"},
+		DefaultCapabilities: []string{model.GitHubSandboxRepoGrant, "scratch-repo"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -979,7 +979,7 @@ func TestConfigEndpointReportsRepoDefaultCapabilities(t *testing.T) {
 	got := decode[struct {
 		RepoDefaultCapabilities map[string][]string `json:"repoDefaultCapabilities"`
 	}](t, rec)
-	want := map[string][]string{"acme/widgets": {"github-sandbox"}}
+	want := map[string][]string{"acme/widgets": {model.GitHubSandboxRepoGrant}}
 	if !reflect.DeepEqual(got.RepoDefaultCapabilities, want) {
 		t.Fatalf("repoDefaultCapabilities = %v, want %v", got.RepoDefaultCapabilities, want)
 	}
