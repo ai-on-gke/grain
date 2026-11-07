@@ -18,11 +18,14 @@
 # than as registry packages. It needs nothing but the repository's own
 # GITHUB_TOKEN with `contents: write`.
 #
-# Only sha-<short> releases carry images. Every other release -- vX.Y.Z,
-# channel-<branch>, the release train's -rc.N / -pending / -discarded /
-# -rejected / -retracted -- holds images.json alone (schema 2), whose
-# images each name the sha- release holding their asset. There is no
-# release named `latest`: promote marks vX.Y.Z GitHub's latest release.
+# Only immutable sha-<short> and vX.Y.Z releases carry images; a vX.Y.Z
+# holds its own copies of its commit's sha- tarballs, so pruning sha-
+# releases can never break it. Every other release -- channel-<branch>,
+# the release train's -rc.N / -pending / -discarded / -rejected /
+# -retracted -- holds images.json alone (schema 2), whose images each name
+# the sha- release holding their asset. There is no release named
+# `latest`: promote marks vX.Y.Z GitHub's latest release and deletes a
+# legacy release of that name.
 #
 #   package
 #           `docker save | gzip` the grain, guest and k8s-sandbox images
@@ -39,7 +42,7 @@
 #           commit) if it does not exist. See release_kind.
 #   promote [vX.Y.Z]
 #           publish vX.Y.Z -- the release the git tag `latest` names, with
-#           no argument -- pointing at its commit's sha-<short> release,
+#           no argument -- with copies of its commit's sha-<short> assets,
 #           marked GitHub's latest release when the git tag latest agrees.
 #   retag <from-sha-release> <version> <release>...
 #           the same for any other name: the train's vX.Y.0-rc.N /
@@ -54,8 +57,9 @@
 #           vX.Y.Z-rejected and vX.Y.Z-retracted markers.
 #   train-tag <tag>
 #           the phase a pushed train tag asks for (release-train-assets.yml)
-#   prune   delete sha- releases past the newest $RELEASE_ASSETS_KEEP
-#           (default 50) that no other release points at
+#   prune   delete sha- releases past the newest $RELEASE_RETAIN_SHA
+#           (default 50) that no channel, train release or GitHub's latest
+#           release points at
 #   mirror <release> <registry/prefix> [image...]
 #           for a cluster, which cannot `docker load`: fetch and load the
 #           release, then tag each image (all three by default) as
@@ -299,11 +303,13 @@ asset_list() {
 }
 
 # Which releases are which (release-asset contract v2):
-#   holder   sha-<short>: the only release that carries tarballs. Immutable:
-#            an asset is only ever added, never replaced.
-#   pointer  vX.Y.Z and every vX.Y.Z-<suffix> (rc.N, pending,
-#            rc.N-discarded, rejected, retracted): images.json alone,
-#            naming the sha- release that holds each asset. Immutable.
+#   holder   sha-<short> and vX.Y.Z: the only releases that carry
+#            tarballs, a vX.Y.Z its own copies of its commit's sha-
+#            assets. Immutable: an asset is only ever added, never
+#            replaced.
+#   pointer  every vX.Y.Z-<suffix> (rc.N, pending, rc.N-discarded,
+#            rejected, retracted): images.json alone, naming the sha-
+#            release that holds each asset. Immutable.
 #   channel  channel-<branch>: images.json alone, moved forward only, onto
 #            a commit its current one is an ancestor of (the rule
 #            release-images.sh's tag_may_move applies to registry branch
@@ -315,7 +321,7 @@ release_kind() {
   case "$1" in
     sha-*) echo holder ;;
     channel-*) echo channel ;;
-    v[0-9]*) echo pointer ;;
+    v[0-9]*) if [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo holder; else echo pointer; fi ;;
     latest) die "there is no release named latest: the latest channel is GitHub's latest-release marker on a vX.Y.Z (contract v2)" ;;
     *) die "$1 is not a release name the contract publishes (sha-<short>, channel-<branch>, vX.Y.Z[-...]); never a bare branch name" ;;
   esac
@@ -420,23 +426,32 @@ check_holders() {
   done < <(jq -r '[.images[].release // empty] | unique | .[]' "$dir/images.json")
 }
 
-# swap_manifest ID: replace a channel's images.json -- asset names are
-# unique on a release, so the old one is renamed aside, the new one
-# uploaded, and the old one deleted. A loader that finds none, or two,
-# in between retries on its next poll.
+# swap_manifest ID: replace a channel's images.json. Asset names are
+# unique on a release, so the new manifest goes up as images.json.next,
+# the old images.json is deleted, and .next is renamed into its place. A
+# loader that finds no images.json (or only .next) in between treats the
+# channel as mid-update and retries on its next poll; it never falls back.
 swap_manifest() {
-  local id="$1" old
+  local id="$1" old next
+  # Left behind by a publisher that died mid-move (or by the older
+  # rename-aside scheme): never the manifest a loader should read.
   while read -r old; do
     delete_asset "$old"
-  done < <(awk '$2 == "images.json.prev" {print $1}' "$scratch/existing")
-  while read -r old; do
-    status="$(write PATCH "/repos/$repo/releases/assets/$old" --data '{"name":"images.json.prev"}')"
-    ok "$status" || die "renaming the old images.json of release $id aside answered $status"
-  done < <(awk '$2 == "images.json" {print $1}' "$scratch/existing")
-  upload "$id" images.json
+  done < <(awk '$2 == "images.json.next" || $2 == "images.json.prev" {print $1}' "$scratch/existing")
+  cp "$dir/images.json" "$dir/images.json.next"
+  upload "$id" images.json.next
+  next="$(jq -r '.id // empty' "$scratch/body")"
   while read -r old; do
     delete_asset "$old"
   done < <(awk '$2 == "images.json" || $2 ~ /\.tar\.gz(\.sha256)?$/ {print $1}' "$scratch/existing")
+  if [ "$dry_run" = true ]; then
+    echo "release-assets.sh: [dry-run] would rename images.json.next to images.json" >&2
+  else
+    [ -n "$next" ] || die "uploading images.json.next to release $id returned no asset id"
+    status="$(write PATCH "/repos/$repo/releases/assets/$next" --data '{"name":"images.json"}')"
+    ok "$status" || die "renaming images.json.next into place on release $id answered $status"
+  fi
+  rm -f "$dir/images.json.next"
 }
 
 publish_one() {
@@ -453,7 +468,11 @@ publish_one() {
     [ "$(remote_commit_of_tag latest)" = "$commit" ] && make_latest=true
   fi
   if [ "$kind" = holder ]; then
-    [ "$release" = "sha-${commit:0:12}" ] || die "$release cannot hold ${commit:0:12}'s assets"
+    if [[ "$release" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      [ "$version" = "$release" ] || die "$release cannot hold a manifest whose version is $version"
+    else
+      [ "$release" = "sha-${commit:0:12}" ] || die "$release cannot hold ${commit:0:12}'s assets"
+    fi
     [ "$(jq -r --arg r "$release" '[.images[].release] | all(. == $r)' "$dir/images.json")" = true ] ||
       die "a holder's images.json must name itself as every image's release"
   else
@@ -482,7 +501,7 @@ publish_one() {
     channel)
       may_move "$release" "$commit" "$held" || return 0
       if [ "$held" = "$commit" ] && [ "$version" = "$(held_version)" ] &&
-          [ "$(grep -c ' images.json$' "$scratch/existing")" = 1 ] && ! grep -q ' images.json.prev$' "$scratch/existing"; then
+          [ "$(grep -c ' images.json$' "$scratch/existing")" = 1 ] && ! grep -q ' images.json.next$' "$scratch/existing"; then
         say "$release already points at ${commit:0:12} ($version); nothing to move"
         return 0
       fi
@@ -566,14 +585,15 @@ publish() {
 }
 
 # prune: delete sha- releases (and their tags) past the newest
-# $RELEASE_ASSETS_KEEP (default 50), except any release another one's
-# images.json points at -- a channel, a vX.Y.Z, a train marker. vX.Y.Z
-# and every other release are never pruned.
+# $RELEASE_RETAIN_SHA (default 50), except any release another one's
+# images.json points at -- a channel, a train marker, GitHub's latest
+# release. vX.Y.Z (which holds its own copies) and every other release
+# are never pruned.
 prune() {
   need jq curl
   [ -n "$token" ] || [ "$dry_run" = true ] || die "pruning needs GITHUB_TOKEN (permissions: contents: write)"
-  local keep="${RELEASE_ASSETS_KEEP:-50}" page=1 status n tag id i=0
-  [[ "$keep" =~ ^[0-9]+$ ]] || die "RELEASE_ASSETS_KEEP=$keep is not a number"
+  local keep="${RELEASE_RETAIN_SHA:-${RELEASE_ASSETS_KEEP:-50}}" page=1 status n tag id i=0
+  [[ "$keep" =~ ^[0-9]+$ ]] || die "RELEASE_RETAIN_SHA=$keep is not a number"
   if [ -z "$token" ]; then
     say "[dry-run] no GITHUB_TOKEN to list releases with; would keep the newest $keep sha- releases and every one pointed at"
     return 0
@@ -594,6 +614,10 @@ prune() {
       jq -r '.images[]?.release // empty' "$scratch/ref.json" >> "$scratch/referenced" 2>/dev/null || true
     fi
   done < "$scratch/releases"
+  # GitHub's latest release is the latest channel, whatever it is tagged.
+  if download "$server_url/$repo/releases/latest/download" images.json "$scratch/ref.json"; then
+    jq -r '.images[]?.release // empty' "$scratch/ref.json" >> "$scratch/referenced" 2>/dev/null || true
+  fi
   while read -r _ id tag; do
     i=$((i + 1))
     [ "$i" -le "$keep" ] && continue
@@ -730,6 +754,13 @@ promote() {
   commit="$(remote_commit_of_tag "$version")"
   [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || die "$remote has no tag $version"
   sha_release="sha-${commit:0:12}"
+  # A vX.Y.Z that already holds its copies (a rollback re-pointing latest
+  # at it, or a re-run) is its own source: its sha- release may since have
+  # been pruned.
+  if download "$(base_of "$version")" images.json "$scratch/probe-version.json" &&
+      [ "$(jq -r .commit "$scratch/probe-version.json" 2>/dev/null)" = "$commit" ]; then
+    sha_release="$version"
+  fi
   say "promoting $sha_release as $version"
   # A release promoted before its commit was published as release assets
   # has no sha- release to promote. Asked for by name, that fails; on the
@@ -739,11 +770,35 @@ promote() {
     echo "::warning::release-assets.sh: $version (${commit:0:12}) has no $sha_release release: it predates release assets, so there is nothing to promote as $version"
     return 0
   fi
-  source_into "$sha_release" "$commit"
+  # vX.Y.Z holds its own copies of the sha- release's tarballs, so that
+  # pruning sha- releases can never break it: they are downloaded (unless
+  # the release job left them in $dir), checked, and uploaded again.
+  if [ -f "$dir/images.json" ] && [ "$(jq -r .commit "$dir/images.json")" = "$commit" ] &&
+      validate_manifest "$dir" true 2>/dev/null; then
+    say "using the ${commit:0:12} assets already in $dir"
+  else
+    fetch "$sha_release" "$dir"
+  fi
+  [ "$(jq -r .commit "$dir/images.json")" = "$commit" ] || die "$sha_release holds $(jq -r .commit "$dir/images.json"), not $commit"
   rewrite_manifest "$dir" "$dir" "$version"
-  # vX.Y.Z points at the sha- release's assets; publish_one marks it
-  # GitHub's latest when the git tag latest names its commit.
+  jq --arg r "$version" '.schema = 2 | .images |= map_values(.release = $r)' "$dir/images.json" > "$dir/images.json.tmp"
+  mv "$dir/images.json.tmp" "$dir/images.json"
+  # publish_one marks it GitHub's latest when the git tag latest names
+  # its commit.
   publish "$version"
+  delete_legacy_latest
+}
+
+# delete_legacy_latest: contract v2 has no release tagged latest -- the
+# latest channel is GitHub's own latest-release marker -- so a release of
+# that name left from v1 is deleted. The git tag latest stays: it is the
+# person's approval promote reads.
+delete_legacy_latest() {
+  local status
+  release_json latest || return 0
+  status="$(write DELETE "/repos/$repo/releases/$(jq -r .id "$scratch/release")")"
+  ok "$status" || die "deleting the legacy release named latest answered $status"
+  say "deleted the legacy release named latest (the git tag latest is kept)"
 }
 
 retag() {
@@ -848,7 +903,7 @@ case "$cmd" in
   rc | pending | discard-rc | discard-pending | retract) train_phase "$cmd" "$@" ;;
   prune) prune ;;
   train-tag) train_tag "$@" ;;
-  validate) validate_manifest "${1:-$dir}" && say "${1:-$dir}/images.json meets release-asset contract v1" ;;
+  validate) validate_manifest "${1:-$dir}" && say "${1:-$dir}/images.json meets release-asset contract v2" ;;
   publish) publish "$@" ;;
   promote) promote "$@" ;;
   retag) retag "$@" ;;

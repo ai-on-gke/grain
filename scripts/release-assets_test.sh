@@ -152,6 +152,9 @@ check "images.json is the last asset the sha- release gets" \
   '[ "$(sed -n "1,/published sha-/p" <<< "$out" | grep "would POST .*--upload" | tail -n 1 | grep -c images.json)" = 1 ]'
 check "every release is created as a prerelease that can never be latest" \
   '[ "$(grep -c "\"prerelease\":true,\"make_latest\":\"false\"" <<< "$out")" = 2 ]'
+check "a channel moves by uploading images.json.next and renaming it into place" \
+  'sed -n "/channel-main: holds/,\$p" <<< "$out" | grep -q -- "--upload images.json.next" &&
+   sed -n "/channel-main: holds/,\$p" <<< "$out" | grep -q "would rename images.json.next to images.json"'
 check "nothing was pushed to a registry" '! grep -qE "docker (push|login|tag)" "$DOCKER_LOG"'
 
 run bash "$assets" --dry-run publish main
@@ -162,12 +165,14 @@ run bash "$assets" publish "sha-$short"
 check "a real publish with no token fails before writing anything" '[ "$status" != 0 ] && grep -q "needs GITHUB_TOKEN" <<< "$out"'
 
 run bash "$assets" --dry-run promote
-check "promote points vX.Y.Z at the sha- release and marks it GitHub's latest" \
+check "promote copies the sha- release's assets onto vX.Y.Z and marks it GitHub's latest" \
   '[ "$status" = 0 ] && grep -q "promoting sha-$short as v3.4.0" <<< "$out" && grep -q "published v3.4.0" <<< "$out" &&
-   grep -q "\"prerelease\":false,\"make_latest\":\"true\"" <<< "$out" && [ "$(grep -c "would POST .*--upload" <<< "$out")" = 1 ] &&
+   grep -q "\"prerelease\":false,\"make_latest\":\"true\"" <<< "$out" && [ "$(grep -c "would POST .*--upload" <<< "$out")" = 7 ] &&
+   [ "$(grep "would POST .*--upload" <<< "$out" | tail -n 1 | grep -c "upload images.json$")" = 1 ] &&
    ! grep -q "release latest" <<< "$out"'
-check "a promoted manifest differs only in version and createdAt" \
-  '[ "$(jq -r .version "$m")" = v3.4.0 ] && [ "$(jq -r .commit "$m")" = "$commit" ] && bash "$assets" validate > /dev/null'
+check "a promoted manifest names vX.Y.Z as its version and as every image's release" \
+  '[ "$(jq -r .version "$m")" = v3.4.0 ] && [ "$(jq -r .commit "$m")" = "$commit" ] &&
+   [ "$(jq -r "[.images[].release] | unique | join(\",\")" "$m")" = v3.4.0 ] && bash "$assets" validate > /dev/null'
 
 git tag -a v3.3.0 -m v3.3.0 "$first"
 git push -q origin v3.3.0
@@ -216,6 +221,10 @@ check "mirror retags a release's image into the deployment's registry" \
 bash "$assets" package > /dev/null
 run bash "$assets" --dry-run prune
 check "prune plans retention without writing anything" '[ "$status" = 0 ] && grep -q "keep the newest 50" <<< "$out"'
+run env RELEASE_RETAIN_SHA=7 bash "$assets" --dry-run prune
+check "RELEASE_RETAIN_SHA sets how many sha- releases prune keeps" '[ "$status" = 0 ] && grep -q "keep the newest 7" <<< "$out"'
+run env RELEASE_RETAIN_SHA=many bash "$assets" --dry-run prune
+check "a RELEASE_RETAIN_SHA that is not a number fails" '[ "$status" != 0 ] && grep -q "RELEASE_RETAIN_SHA=many is not a number" <<< "$out"'
 
 run bash "$assets" load
 check "load checks every image ID the manifest names" '[ "$status" = 0 ] && [ "$(grep -c "^release-assets.sh: loaded" <<< "$out")" = 3 ]'
