@@ -121,6 +121,13 @@ type accessRole struct {
 	// repository with nothing denied: grain/operator, as everybody was
 	// before roles.
 	Full bool
+	// Delegated is true when the request is a delegated (on-behalf-of) call
+	// carrying a verified Via identity (AU-25).
+	Delegated     bool
+	DelegatedFrom string
+	DelegatingApp string
+	ViaLabel      string
+	ViaAccess     string
 }
 
 // allows reports whether the role grants scope on repo.
@@ -285,9 +292,52 @@ func roleDenies(role string) map[APIScope]bool {
 
 type accessRoleKey struct{}
 
-// accessRoleSlot is where singleTenantGate leaves the role of the verified
-// session it admitted, for serveHTTP to put on the request's context.
-type accessRoleSlot struct{ role *accessRole }
+// delegatedIdentity records the verified delegating app and person for an
+// admitted on-behalf-of request (AU-22..AU-26).
+type delegatedIdentity struct {
+	PersonEmail string
+	AppEmail    string
+	ViaLabel    string
+	Grant       string
+	Access      string
+	JTI         string
+	RequestID   string
+}
+
+type delegatedIdentityKey struct{}
+
+func withDelegatedIdentity(ctx context.Context, d *delegatedIdentity) context.Context {
+	if d == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, delegatedIdentityKey{}, d)
+}
+
+func delegatedIdentityFromContext(ctx context.Context) *delegatedIdentity {
+	if ctx == nil {
+		return nil
+	}
+	d, _ := ctx.Value(delegatedIdentityKey{}).(*delegatedIdentity)
+	return d
+}
+
+func isDelegatedRequest(ctx context.Context) bool {
+	if delegatedIdentityFromContext(ctx) != nil {
+		return true
+	}
+	if a := accessRoleFromContext(ctx); a != nil && a.Delegated {
+		return true
+	}
+	return false
+}
+
+// accessRoleSlot is where singleTenantGate leaves the role (and optional
+// delegation) of the verified session it admitted, for serveHTTP to put on
+// the request's context.
+type accessRoleSlot struct {
+	role       *accessRole
+	delegation *delegatedIdentity
+}
 
 type accessRoleSlotKey struct{}
 
@@ -299,13 +349,120 @@ func withAccessRole(ctx context.Context, a *accessRole) context.Context {
 // for every other caller: the access code, loopback, in-process callers
 // and agents (whose own gate holds them to their grants).
 func accessRoleFromContext(ctx context.Context) *accessRole {
+	if ctx == nil {
+		return nil
+	}
 	a, _ := ctx.Value(accessRoleKey{}).(*accessRole)
 	return a
+}
+
+func grantListFromSet(set APIGrantSet) []string {
+	var out []string
+	for _, sc := range set.Scopes() {
+		repos := set.Repos(sc)
+		if len(repos) == 0 {
+			out = append(out, model.APIGrantPrefix+string(sc))
+			continue
+		}
+		for _, r := range repos {
+			out = append(out, model.APIGrantPrefix+string(sc)+"@"+r)
+		}
+	}
+	return out
+}
+
+// intersectAccessRoles computes the effective role for a delegated request:
+// personAR intersected with delegateAR (person_scopes ∩ delegate_scopes,
+// per-repository limits intersected per scope, union of deny lists, Full: false)
+// per AU-25.1.
+func intersectAccessRoles(personEmail, appEmail, viaLabel, viaAccess string, personAR, delegateAR *accessRole) *accessRole {
+	deny := make(map[APIScope]bool, len(personAR.deny)+len(delegateAR.deny))
+	for sc := range personAR.deny {
+		deny[sc] = true
+	}
+	for sc := range delegateAR.deny {
+		deny[sc] = true
+	}
+	set := personAR.set.Intersect(delegateAR.set).Without(deny)
+	grants := grantListFromSet(set)
+	var roles []string
+	for _, r := range personAR.Roles {
+		if !slices.Contains(roles, r) {
+			roles = append(roles, r)
+		}
+	}
+	for _, r := range delegateAR.Roles {
+		if !slices.Contains(roles, r) {
+			roles = append(roles, r)
+		}
+	}
+	sort.Strings(roles)
+	missing := append(slices.Clone(personAR.Missing), delegateAR.Missing...)
+	return &accessRole{
+		Who:           fmt.Sprintf("%s (via %s)", personEmail, viaLabel),
+		Roles:         roles,
+		Missing:       missing,
+		grants:        grants,
+		set:           set,
+		deny:          deny,
+		Full:          false,
+		Delegated:     true,
+		DelegatedFrom: personEmail,
+		DelegatingApp: appEmail,
+		ViaLabel:      viaLabel,
+		ViaAccess:     viaAccess,
+	}
 }
 
 // admitVerifiedPrincipal is checkAllowedPrincipal that also resolves the
 // admitted session's role, and leaves it in the request's slot.
 func (s *Server) admitVerifiedPrincipal(ctx context.Context, id VerifiedIdentity) error {
+	if id.Via != nil {
+		personID := VerifiedIdentity{Email: id.Email, Sub: id.Sub, Kind: id.Kind}
+		personRoles, err := s.allowedPrincipalRoles(ctx, personID, true)
+		if err != nil {
+			logRefusedPrincipal(personID, err)
+			return err
+		}
+		personEmail := normalizeIdentityEmail(id.Email)
+		appEmail := normalizeIdentityEmail(id.Via.Email)
+		delEntry, ok, err := s.delegateEntryFor(ctx, appEmail)
+		if err != nil {
+			return fmt.Errorf("delegating app %q cannot be authorized: %w", id.Via.Email, err)
+		}
+		if !ok {
+			de := &delegateNotAllowedError{
+				personEmail: personEmail,
+				appEmail:    appEmail,
+				label:       delegateDisplayLabel(id.Via),
+				verifier:    string(AuthMethodRegistry),
+			}
+			logRefusedDelegate(personEmail, appEmail)
+			return de
+		}
+		s.touchDelegateLastUsed(ctx, "delegate:"+appEmail)
+		viaLabel := strings.TrimSpace(delEntry.Label)
+		if viaLabel == "" {
+			viaLabel = model.DelegateLabelForEmail(appEmail)
+		} else {
+			model.RegisterDelegateLabel(appEmail, viaLabel)
+		}
+		if slot, ok := ctx.Value(accessRoleSlotKey{}).(*accessRoleSlot); ok && slot != nil {
+			personAR := resolveAccessRoles(personEmail, personRoles)
+			delegateAR := resolveAccessRoles("delegate:"+appEmail, []string{delEntry.Role})
+			slot.role = intersectAccessRoles(personEmail, appEmail, viaLabel, id.Via.Access, personAR, delegateAR)
+			slot.delegation = &delegatedIdentity{
+				PersonEmail: personEmail,
+				AppEmail:    appEmail,
+				ViaLabel:    viaLabel,
+				Grant:       id.Via.Grant,
+				Access:      id.Via.Access,
+				JTI:         id.Via.JTI,
+				RequestID:   id.Via.RequestID,
+			}
+		}
+		return nil
+	}
 	roles, err := s.allowedPrincipalRoles(ctx, id, true)
 	if err != nil {
 		logRefusedPrincipal(id, err)
@@ -323,17 +480,110 @@ func (s *Server) admitVerifiedPrincipal(ctx context.Context, id VerifiedIdentity
 func (s *Server) roleGate(pattern string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		a := accessRoleFromContext(r.Context())
-		if a == nil || a.Full {
+		if a == nil {
+			next(w, r)
+			return
+		}
+		if a.Delegated {
+			if a.ViaAccess == "read" && r.Method != http.MethodGet && r.Method != http.MethodHead {
+				err := fmt.Errorf("%s holds read-only delegation (act.access=read) and cannot call %s", a.label(), pattern)
+				log.Printf("grain api: refused {delegated, %s via %s} %s: %v", a.DelegatedFrom, a.DelegatingApp, pattern, err)
+				writeJSON(w, http.StatusForbidden, map[string]any{
+					"error":         err.Error(),
+					"code":          "read_only_delegation",
+					"delegatedFrom": a.DelegatedFrom,
+					"delegatingApp": a.DelegatingApp,
+				})
+				return
+			}
+			if err := s.checkDelegatedPersonOnly(r, pattern, a); err != nil {
+				log.Printf("grain api: refused {delegated, %s via %s} %s: %v", a.DelegatedFrom, a.DelegatingApp, pattern, err)
+				writeJSON(w, http.StatusForbidden, map[string]any{
+					"error":         err.Error(),
+					"code":          "requires_person",
+					"delegatedFrom": a.DelegatedFrom,
+					"delegatingApp": a.DelegatingApp,
+				})
+				return
+			}
+		}
+		if a.Full {
 			next(w, r)
 			return
 		}
 		if err := s.authorizeRoleCall(r, pattern, a); err != nil {
 			log.Printf("grain api: refused {human, %s} %s: %v", a.Who, pattern, err)
+			if a.Delegated {
+				writeJSON(w, agentRefusalStatus(err), map[string]any{
+					"error":         err.Error(),
+					"delegatedFrom": a.DelegatedFrom,
+					"delegatingApp": a.DelegatingApp,
+				})
+				return
+			}
 			writeError(w, agentRefusalStatus(err), err)
 			return
 		}
 		next(w, r)
 	}
+}
+
+func (s *Server) checkDelegatedPersonOnly(r *http.Request, pattern string, a *accessRole) error {
+	switch pattern {
+	case "POST /api/access/principals",
+		"PATCH /api/access/principals/{entry}",
+		"DELETE /api/access/principals/{entry}":
+		return fmt.Errorf("%s cannot call %s: modifying the allowed users, groups and delegating apps list requires a person acting directly", a.label(), pattern)
+	case "POST /api/hostds",
+		"POST /api/hostds/enrollment-codes",
+		"POST /api/hostds/pending/{id}/accept":
+		return fmt.Errorf("%s cannot call %s: enrolling a hostd requires a person acting directly", a.label(), pattern)
+	case "POST /api/tasks/{id}/access-request/grant",
+		"POST /api/tasks/{id}/access-request/deny":
+		return fmt.Errorf("%s cannot call %s: deciding an access request requires a person acting directly", a.label(), pattern)
+	case "POST /api/external-agents/tokens":
+		body, err := peekBody(r)
+		if err == nil && len(body) > 0 {
+			var req CreateExternalAgentTokenRequest
+			if json.Unmarshal(body, &req) == nil {
+				if _, _, _, _, _, needsPerson, nerr := model.NormalizeExternalAgentSpec(req.ScopeSet, req.Scopes, req.Repos); nerr == nil && needsPerson {
+					return fmt.Errorf("%s cannot call %s: minting an external agent token with a dangerous or requires_person scope requires a person acting directly", a.label(), pattern)
+				}
+			}
+		}
+	case "POST /api/external-agents/tokens/{id}/rotate":
+		if s.tasks != nil && s.tasks.Store != nil {
+			if tok, err := s.tasks.Store.GetExternalAgentToken(r.Context(), strings.TrimSpace(r.PathValue("id"))); err == nil && tok != nil {
+				if _, _, needsPerson, rerr := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos); rerr == nil && needsPerson {
+					return fmt.Errorf("%s cannot call %s: rotating an external agent token with a dangerous or requires_person scope requires a person acting directly", a.label(), pattern)
+				}
+			}
+		}
+	case "POST /api/tasks/{id}/approve", "POST /api/tasks/{id}/run-now":
+		if s.tasks != nil && s.tasks.Store != nil {
+			if task, err := s.tasks.Store.GetTask(r.Context(), model.NormalizeTaskID(r.PathValue("id"))); err == nil && task != nil {
+				if err := s.tasks.catalogueApprovalRefusal(r.Context(), *task); err != nil {
+					return err
+				}
+			}
+		}
+	case "POST /api/tasks/{id}/capabilities", "PATCH /api/tasks/{id}", "POST /api/tasks/{id}/capability-grants":
+		body, err := peekBody(r)
+		if err == nil && len(body) > 0 {
+			var stored map[string][]string
+			if s.tasks != nil && s.tasks.Store != nil {
+				stored = s.storedFieldGrants(r.Context(), pattern, "")
+			}
+			normalize := s.normalizeCapFn()
+			for _, gf := range addedGrantFieldsInBody(pattern, body, stored, normalize) {
+				trimmed := strings.TrimSpace(gf.name)
+				if model.IsPersonOnlyGrant(trimmed) || model.IsAdminOnlyGrant(trimmed) || grantNamesPersonScopeSet(trimmed) {
+					return fmt.Errorf("%s cannot set %s: %s requires a person acting directly", a.label(), gf.key, trimmed)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // RoleScopeOf is the scope pattern needs of a person's role: "" for a

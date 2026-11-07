@@ -91,7 +91,7 @@ func CapabilityProviders(cfg Config, store *model.Store, _ map[string]*modelprox
 	// the config-map server's config-map {"config_maps":["bootstrap"]}
 	// (schema migration 118), which places the same embedded playbooks.
 	// priority-dispatch and durable became the admission task setting
-	// (schema migration 119, design/design/unified-grants.design.md §4.1).
+	// (schema migration 120, design/design/unified-grants.design.md §4.1).
 	providers = append(providers,
 		consolecap.New(),
 		readissues.New(),

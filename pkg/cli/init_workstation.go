@@ -238,58 +238,46 @@ func renderWorkstationPolicy(o workstationOptions) string {
 	// and take it away; any task may be granted them, not only the
 	// Director.
 	b.WriteString("    # The Director chat's own grants. Remove one and the Director is held for it.\n")
-	for _, c := range directorCapabilities() {
+	for _, c := range model.DirectorPolicyCapabilities() {
 		if !slices.ContainsFunc(allow, func(a string) bool { return strings.EqualFold(a, c) }) {
 			fmt.Fprintf(&b, "    - %q\n", c)
 		}
 	}
-	b.WriteString("\n# The network a task's sandbox may have.\n")
-	writeYAMLList(&b, "network", []string{o.Network})
+	// open allows none as well: none is strictly less reach, and the
+	// Director chat asks for none (model.DefaultConsoleSessions), which
+	// a granule sandbox honours -- a policy allowing only open held the
+	// Director there. A host or container sandbox cannot withhold a
+	// network, so grain files the Director open on those.
+	networks := []string{o.Network}
+	if o.Network == string(model.NetworkOpen) {
+		b.WriteString("\n# The networks a task's sandbox may have. none is less than open, and is\n" +
+			"# what the Director chat asks for on a sandbox that can isolate (granule).\n")
+		networks = append(networks, string(model.NetworkNone))
+	} else {
+		b.WriteString("\n# The network a task's sandbox may have.\n")
+	}
+	writeYAMLList(&b, "network", networks)
 	b.WriteString("\n# Host sandboxes run as you; only your own tasks run there.\n" +
 		"allow_external_on_host_sandboxes: false\n")
 	return b.String()
 }
 
 // directorNetworkWarning is what init says when the policy it wrote
-// allows only network none: the Director asks for open
-// (model.DefaultConsoleSessions), so local policy holds it until one of
-// them gives way.
-const directorNetworkWarning = "The Director chat asks for open network, so this policy holds it: add \"open\" to network: in the policy, " +
-	"or set the Director's network to none in its console session settings."
+// allows only network none on a sandbox backend that cannot isolate a
+// network (container): the Director asks for none
+// (model.DefaultConsoleSessions), but grain files it open where the
+// backend would refuse none (model.ConsoleSessionNetworkAccess), so
+// local policy holds it until one of them gives way. A granule sandbox
+// honours none, and needs no warning.
+const directorNetworkWarning = "This sandbox backend cannot withhold a network, so grain files the Director chat with open network, " +
+	"and this policy holds it: add \"open\" to network: in the policy, or use granule sandboxes, which can give the Director none."
 
-// directorCapabilities is every capability the Director chat is granted
-// (model.DefaultConsoleSessions, by way of model.ConsoleSessionGrants),
-// as local policy's capabilities.allow names it: a capability reference
-// carrying narrowing arguments keeps its canonical =<json> arguments so
-// the starter policy admits only that grant (for example the built-in
-// bootstrap config map, without opening operator config maps or secrets),
-// while one with empty arguments is named by its reference alone. It is
-// read from this binary, so a capability a linked-in package registers
-// for the Director is among them.
-func directorCapabilities() []string {
-	var out []string
-	for _, s := range model.DefaultConsoleSessions() {
-		if s.ID != model.DirectorSessionID {
-			continue
-		}
-		for _, g := range model.ConsoleSessionGrants(s) {
-			c := g.Capability
-			if model.IsCapabilityRef(c) {
-				if spec, err := model.CapabilityGrantSpec(c); err == nil && len(spec.With) > 0 {
-					if enc, err := model.EncodeCapabilityGrant(spec); err == nil {
-						c = enc
-					}
-				} else {
-					c = model.CapabilityGrantRef(c)
-				}
-			}
-			if !slices.Contains(out, c) {
-				out = append(out, c)
-			}
-		}
-	}
-	return out
-}
+// directorEgressNetworkWarning is what init says when a build registers a
+// DefaultOn capability needing sandbox egress (Registration.SandboxEgress),
+// which keeps the shipped Director open even on granule while the policy
+// written for -network none allows only none.
+const directorEgressNetworkWarning = "The Director chat ships with open network on this build, so this policy holds it: " +
+	"add \"open\" to network: in the policy, or set the Director's network to none in its console session settings."
 
 // withConfigRepo is repos with grain/config (model.ConfigRepo) appended
 // unless it is already named. Left out, local policy held every task
@@ -677,7 +665,11 @@ func runInitWorkstation(ctx context.Context, args []string, stdin io.Reader, out
 		fmt.Fprintln(out, "Once the daemon is up, run `grain settings -network-access none`: the policy allows only that network.")
 	}
 	if o.Network == string(model.NetworkNone) {
-		fmt.Fprintln(out, directorNetworkWarning)
+		if o.SandboxBackend != string(model.SandboxBackendGranule) {
+			fmt.Fprintln(out, directorNetworkWarning)
+		} else if model.DirectorNetworkAccess(true) != model.NetworkNone {
+			fmt.Fprintln(out, directorEgressNetworkWarning)
+		}
 	}
 	if !started {
 		fmt.Fprintf(out, "Run the daemon in the foreground with: %s\n", launcher)

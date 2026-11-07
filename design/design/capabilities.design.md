@@ -74,7 +74,7 @@ Before capability servers, grain had a registry of in-process providers, each gr
 
 - `github-sandbox` and `read-issues` (becoming `#sandbox-repo` and `#read-issues` on an in-process `…/github` server), and the named GitHub tokens `github-credential:<name>` (becoming `…/repo#credential` `{credential}`);
 - the CI alias `release-gate-read` (retiring with `…/api` references in unified-grants slices 2–4);
-- `console`, which is decided to become the `hosting` task setting (§4.1; `priority-dispatch` and `durable` moved into the `admission` task setting in schema migration 119).
+- `console`, which is decided to become the `hosting` task setting (§4.1; `priority-dispatch` and `durable` moved into the `admission` task setting in schema migration 120).
 
 Until each one is converted, the UI shows it under **Legacy capabilities**.
 

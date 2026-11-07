@@ -54,7 +54,11 @@ import {
 import GanttChart from "./GanttChart.jsx";
 import Sparkline from "./Sparkline.jsx";
 import StateDot, { isLiveRunning } from "./StateDot.jsx";
-import { ListEmpty } from "./ListPrimitives.jsx";
+import {
+  ListEmpty,
+  TasksLoadError,
+  tasksLoadFailed,
+} from "./ListPrimitives.jsx";
 import NarrowingBar from "./NarrowingBar.jsx";
 import { TaskRow } from "./TaskList.jsx";
 import { rowFields } from "./CustomFields.jsx";
@@ -502,6 +506,9 @@ function Panel({
   over,
   picked,
   tasks,
+  tasksFailed = false,
+  tasksError = null,
+  onRetryTasks,
   config,
   onOpenTask,
   onOpen,
@@ -535,33 +542,41 @@ function Panel({
   let drawn;
   switch (panel.kind) {
     case "gantt":
-      body = (
-        // The tasks the page holds rather than the ones narrowed above,
-        // even though the count beside the heading is the narrowed
-        // length: GanttChart narrows what it is given by the narrowing
-        // it is given, so handing it the answer as well would be the
-        // same filter run twice over 929 tasks -- and asked the same
-        // question of the same list, its own call lands on the answer
-        // this one just computed.
-        <GanttChart
-          tasks={tasks}
-          config={config}
-          narrowing={narrowing}
-          onOpenTask={onOpenTask}
-          now={now}
-          embedded
-          fixedView={ganttView}
-          maxRows={GANTT_PANEL_ROWS}
-        />
-      );
       drawn = ganttView.range;
-      count = narrowed.length;
+      if (tasksFailed) {
+        body = <TasksLoadError error={tasksError} onRetry={onRetryTasks} />;
+      } else {
+        body = (
+          // The tasks the page holds rather than the ones narrowed above,
+          // even though the count beside the heading is the narrowed
+          // length: GanttChart narrows what it is given by the narrowing
+          // it is given, so handing it the answer as well would be the
+          // same filter run twice over 929 tasks -- and asked the same
+          // question of the same list, its own call lands on the answer
+          // this one just computed.
+          <GanttChart
+            tasks={tasks}
+            config={config}
+            narrowing={narrowing}
+            onOpenTask={onOpenTask}
+            now={now}
+            embedded
+            fixedView={ganttView}
+            maxRows={GANTT_PANEL_ROWS}
+          />
+        );
+        count = narrowed.length;
+      }
       break;
     case "states":
-      body = (
-        <StatesPanel tasks={narrowed} narrowing={narrowing} onOpen={onOpen} />
-      );
-      count = narrowed.length;
+      if (tasksFailed) {
+        body = <TasksLoadError error={tasksError} onRetry={onRetryTasks} />;
+      } else {
+        body = (
+          <StatesPanel tasks={narrowed} narrowing={narrowing} onOpen={onOpen} />
+        );
+        count = narrowed.length;
+      }
       break;
     case "metrics": {
       const scope = reportScope(narrowing, attributesFor(config));
@@ -570,15 +585,19 @@ function Panel({
       break;
     }
     default:
-      body = (
-        <ListPanel
-          tasks={narrowed}
-          config={config}
-          narrowing={narrowing}
-          onOpenTask={onOpenTask}
-        />
-      );
-      count = narrowed.length;
+      if (tasksFailed) {
+        body = <TasksLoadError error={tasksError} onRetry={onRetryTasks} />;
+      } else {
+        body = (
+          <ListPanel
+            tasks={narrowed}
+            config={config}
+            narrowing={narrowing}
+            onOpenTask={onOpenTask}
+          />
+        );
+        count = narrowed.length;
+      }
   }
 
   // Only on a panel that is showing the reader's own narrowing and
@@ -701,6 +720,9 @@ function Panel({
 export default function PanelBoard({
   board,
   tasks,
+  tasksLoaded = true,
+  tasksError = null,
+  onRetryTasks,
   config,
   narrowing = NO_NARROWING,
   // A dashboard rendered without one is a dashboard whose toolbar
@@ -720,6 +742,7 @@ export default function PanelBoard({
   now = Date.now(),
 }) {
   const panels = board.panels || [];
+  const tasksFailed = tasksLoadFailed(tasks, tasksLoaded, tasksError);
   // Worked out once for the whole grid rather than per panel: it is a
   // question about the dashboard ("has its reader narrowed it away from
   // what the board says?"), and every panel gets the same answer.
@@ -882,6 +905,9 @@ export default function PanelBoard({
                 over={dragKey !== null && overKey === panel.key}
                 picked={pickedKey === panel.key}
                 tasks={tasks}
+                tasksFailed={tasksFailed}
+                tasksError={tasksError}
+                onRetryTasks={onRetryTasks}
                 config={config}
                 onOpenTask={onOpenTask}
                 onOpen={onOpen}

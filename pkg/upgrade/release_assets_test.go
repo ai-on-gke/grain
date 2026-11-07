@@ -457,7 +457,9 @@ func TestReleaseTagsForBranch(t *testing.T) {
 		{"main", []string{"channel-main", "main"}},
 		{"candidate", []string{"channel-candidate", "candidate"}},
 		{"rc", []string{"channel-candidate", "candidate"}},
-		{"release/3.1", []string{"channel-release..3.1", "release..3.1"}},
+		{"release/3.1", []string{"channel-release-3.1", "release-3.1"}},
+		{"rc/v3.2", []string{"channel-rc-v3.2", "rc-v3.2"}},
+		{"channel-rc-v3.2", []string{"channel-rc-v3.2"}},
 		{"latest", []string{"latest"}},
 		{"v3.1.0", []string{"v3.1.0"}},
 		{"v3.1.0-rc.2", []string{"v3.1.0-rc.2"}},
@@ -468,7 +470,7 @@ func TestReleaseTagsForBranch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReleaseTagsForBranch(%q): %v", tc.branch, err)
 		}
-		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+		if !slices.Equal(got, tc.want) {
 			t.Errorf("ReleaseTagsForBranch(%q) = %v, want %v", tc.branch, got, tc.want)
 		}
 	}
@@ -1486,6 +1488,54 @@ func TestReleaseContractV2ChannelPointersAndLatestMarker(t *testing.T) {
 		status, _ := run(t, forge, "main")
 		if status.Phase != PhaseFailed || !strings.Contains(status.Detail, "immutable") {
 			t.Fatalf("status = %+v, want a refusal naming an immutable release", status)
+		}
+	})
+
+	t.Run("slashed release branch resolves channel-rc-v3.2 pointer while keeping rc..v3.2 docker tag and channel", func(t *testing.T) {
+		forge := newFakeForgeServer(t, "team", "edition")
+		addV1Release(forge, "sha-111111111111", "github.com/team/edition", testCommit1, "sha-111111111111", daemonRef, testDaemonID1, false)
+		addV2Channel(t, forge, "channel-rc-v3.2", "sha-111111111111")
+
+		dk := newFakeDockerEnv(t)
+		dir := t.TempDir()
+		refFile := filepath.Join(dir, "image.env")
+		u := newUpgrader(t, Config{
+			AllowedBranches: []string{"main", "rc/v*"},
+			Image: &ImageConfig{
+				Repository:   "edition-local/grain",
+				Source:       ImageSourceReleaseAssets,
+				RefFile:      refFile,
+				PullCmd:      []string{"false"},
+				LoadCmd:      dk.loadCmd(map[string][2]string{testCommit1: {daemonRef, testDaemonID1}}),
+				InspectIDCmd: dk.inspectIDCmd(),
+				TagCmd:       dk.tagCmd(),
+				RunCmd:       dk.runCmd(),
+				RemoveCmd:    []string{"true"},
+				ListCmd:      []string{"true"},
+				ReleaseAssets: ReleaseAssetsConfig{
+					Repository:    "github.com/team/edition",
+					ClientForHost: forge.clientFunc("", "", ""),
+				},
+			},
+			HealthCheckArgs: []string{"schema-version"},
+			StatusFile:      filepath.Join(dir, "status.json"),
+		})
+
+		status := runUpgradeToCompletion(t, u, "rc/v3.2")
+		if status.Phase != PhaseOK {
+			t.Fatalf("status = %+v", status)
+		}
+		if want := []string{"channel-rc-v3.2", "sha-111111111111"}; !slices.Equal(forge.lastAskedTags, want) {
+			t.Errorf("GET .../releases/tags/* = %v, want %v", forge.lastAskedTags, want)
+		}
+		if got := dk.getTag("edition-local/grain:rc..v3.2"); got != testDaemonID1 {
+			t.Errorf("edition-local/grain:rc..v3.2 = %q, want %q", got, testDaemonID1)
+		}
+		if got := readFile(t, refFile); got != "GRAIN_IMAGE=edition-local/grain:rc..v3.2\n" {
+			t.Errorf("RefFile = %q, want GRAIN_IMAGE=edition-local/grain:rc..v3.2\\n", got)
+		}
+		if got := u.Channel(); got != "rc/v3.2" {
+			t.Errorf("u.Channel() = %q, want %q", got, "rc/v3.2")
 		}
 	})
 

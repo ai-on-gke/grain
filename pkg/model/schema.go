@@ -568,23 +568,30 @@ import "strconv"
 // deployment and repository default/CI capabilities, console sessions, and
 // capability_policy to `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}`.
 //
-// 119 adds `admission` to `task`, `template` and `schedule`
+// 119 adds `label` and `last_used_at` to `allowed_principal` for `delegate:`
+// entries (model.AllowedPrincipal.Label and LastUsedAt,
+// design/design/authentication.design.md §6).
+//
+// 120 adds `admission` to `task`, `template` and `schedule`
 // (model.Task.Admission, design/design/unified-grants.design.md §4.1) and
 // `default_admission` to `grain_config` and `repo_config`, moves every
 // stored `priority-dispatch` and `durable` grant into them -- the grant
 // tables, default capabilities and standing sessions -- and drops the
 // capability policy's entries for the two names.
-const SchemaVersion = 119
+const SchemaVersion = 120
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
-// `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
-// through a verified identity (model.AllowedPrincipal).
+// `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
+// `delegate:<email>` entry admitted through a verified identity
+// (model.AllowedPrincipal).
 const allowedPrincipalTable = `CREATE TABLE IF NOT EXISTS ` + "`allowed_principal`" + ` (
-  ` + "`entry`" + `    TEXT     NOT NULL PRIMARY KEY,
-  ` + "`added_by`" + ` TEXT     NOT NULL DEFAULT '',
-  ` + "`added_at`" + ` DATETIME NOT NULL,
-  ` + "`reason`" + `   TEXT     NOT NULL DEFAULT '',
-  ` + "`role`" + `     TEXT     NOT NULL DEFAULT 'grain/operator'
+  ` + "`entry`" + `        TEXT     NOT NULL PRIMARY KEY,
+  ` + "`added_by`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`added_at`" + `     DATETIME NOT NULL,
+  ` + "`reason`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`role`" + `         TEXT     NOT NULL DEFAULT 'grain/operator',
+  ` + "`label`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`last_used_at`" + ` DATETIME NULL
 )`
 
 // allowedPrincipalMigrationTable records the one-time startup migration off

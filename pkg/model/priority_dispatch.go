@@ -51,6 +51,12 @@ func IsPersonOnlyGrant(name string) bool {
 	return IsRetiredAdmissionGrant(name) || IsDangerousGrant(name)
 }
 
+// IsAdminOnlyGrant reports whether name is a grant only a direct human
+// operator may approve or assign (AU-25.3).
+func IsAdminOnlyGrant(name string) bool {
+	return IsPersonOnlyGrant(name)
+}
+
 // priorityDispatchTaskSQL is HasPriorityDispatch for the store's own
 // queries: a column read, expecting `t` bound to the task row.
 const priorityDispatchTaskSQL = "(`t`.`admission` IN ('bypass', 'durable'))"

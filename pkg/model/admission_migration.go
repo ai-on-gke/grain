@@ -21,7 +21,7 @@ import (
 	"strings"
 )
 
-// admissionGrantDrops is migration 119's list renames: each retired
+// admissionGrantDrops is migration 120's list renames: each retired
 // admission grant name to nothing, so renameCapabilityListMulti drops it
 // from a stored list. The migration's own copy.
 var admissionGrantDrops = map[string][]string{
@@ -29,7 +29,7 @@ var admissionGrantDrops = map[string][]string{
 	"durable":           {},
 }
 
-// MigrateAdmissionGrants is schema migration 119's Up
+// MigrateAdmissionGrants is schema migration 120's Up
 // (design/design/unified-grants.design.md §4.1, Q8/Q10): the
 // priority-dispatch and durable grants become the admission task setting.
 //
@@ -46,7 +46,7 @@ var admissionGrantDrops = map[string][]string{
 //     names are dropped, not converted (Q10).
 //
 // It is idempotent, so a grain/config import at the current schema runs
-// it too: a repository written before 119 still naming the grants is
+// it too: a repository written before 120 still naming the grants is
 // accepted for one release and stored as admission.
 func MigrateAdmissionGrants(ctx context.Context, tx *sql.Tx) error {
 	for _, t := range []struct{ table, grants, owner string }{

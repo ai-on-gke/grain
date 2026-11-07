@@ -256,6 +256,9 @@ func (c *Client) pendingAccessFor(ctx context.Context, task model.Task, obs *mod
 // pendingAccessToDecide is the request task id is parked on, refusing a
 // caller that is not a person.
 func (c *Client) pendingAccessToDecide(ctx context.Context, id, verb string) (*model.Task, *model.Observation, error) {
+	if isDelegatedRequest(ctx) {
+		return nil, nil, forbiddenCodeErrorf("requires_person", "only a person acting directly may %s an access request", verb)
+	}
 	if c.requestActor(ctx).Actor.Kind != model.PrincipalHuman {
 		return nil, nil, forbiddenErrorf("only a person may %s an access request", verb)
 	}

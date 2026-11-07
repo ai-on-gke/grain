@@ -1990,4 +1990,65 @@ describe("Sidebar sections this browser hides", () => {
       DEFAULT_HIDDEN_SECTIONS,
     );
   });
+
+  it("tells failed task reads from zero tasks on both the main and pinned Tasks rail entries", async () => {
+    localStorage.setItem(
+      "grain.pinned",
+      JSON.stringify([{ kind: "view", id: "tasks" }]),
+    );
+    const onRetryTasks = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <Sidebar
+        {...baseProps}
+        config={null}
+        tasks={[]}
+        tasksLoaded={false}
+        tasksError="synthetic tasks 500"
+        onRetryTasks={onRetryTasks}
+      />,
+    );
+
+    const taskButtons = screen.getAllByRole("button", { name: /^Tasks/ });
+    expect(taskButtons).toHaveLength(2);
+    for (const btn of taskButtons) {
+      expect(btn).toHaveTextContent("Tasks");
+      expect(btn).toHaveTextContent("could not be loaded");
+      expect(btn).not.toHaveTextContent("0");
+      expect(btn).toHaveAttribute(
+        "title",
+        "Tasks could not be loaded (synthetic tasks 500) — click to retry",
+      );
+    }
+
+    await user.click(taskButtons[0]);
+    expect(onRetryTasks).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <Sidebar
+        {...baseProps}
+        config={null}
+        tasks={[]}
+        tasksLoaded={true}
+        tasksError={null}
+      />,
+    );
+    for (const btn of screen.getAllByRole("button", { name: /^Tasks/ })) {
+      expect(btn).not.toHaveTextContent("could not be loaded");
+      expect(btn).toHaveTextContent("0");
+    }
+
+    rerender(
+      <Sidebar
+        {...baseProps}
+        config={null}
+        tasks={tasks}
+        tasksLoaded={true}
+        tasksError="synthetic tasks 500"
+      />,
+    );
+    for (const btn of screen.getAllByRole("button", { name: /^Tasks/ })) {
+      expect(btn).not.toHaveTextContent("could not be loaded");
+    }
+  });
 });

@@ -66,6 +66,12 @@ type ConsoleSessionSetting struct {
 	// Capabilities are the capability ids this session's task is granted
 	// -- what the pane's own tick boxes read and write.
 	Capabilities []string `json:"capabilities"`
+	// MissingShippedDefaults lists the shipped Tier 1 capabilities
+	// (model.DefaultConsoleSessions) that a saved console_sessions row for
+	// this session lacks and that this deployment offers and permits on the
+	// session. Empty when console_sessions has never been saved or when all
+	// shipped defaults are already held.
+	MissingShippedDefaults []string `json:"missingShippedDefaults,omitempty"`
 	// NetworkAccess is "" for the deployment's own default, or one of
 	// model.NetworkAccesses().
 	NetworkAccess string `json:"networkAccess,omitempty"`
@@ -351,7 +357,7 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 					}
 				}
 				if openTask.NetworkAccess != "" || prev.NetworkAccess != openTask.NetworkAccess {
-					if !(s.NetworkAccess == model.NetworkNone && c.Config.SandboxShapeIgnored && openTask.NetworkAccess == model.NetworkOpen) {
+					if !(s.NetworkAccess == model.NetworkNone && !c.sandboxesIsolateNetwork() && openTask.NetworkAccess == model.NetworkOpen) {
 						networkAccess = string(openTask.NetworkAccess)
 					}
 				}
@@ -402,24 +408,74 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 		if team == "" {
 			team = model.DefaultTeamID
 		}
+		var missingShippedDefaults []string
+		if cfg.ConsoleSessions != nil {
+			missing, err := c.missingShippedSessionDefaults(ctx, s.ID, capabilities, openTask)
+			if err != nil {
+				return nil, err
+			}
+			missingShippedDefaults = missing
+		}
 		out = append(out, ConsoleSessionSetting{
-			ID:              s.ID,
-			Title:           title,
-			Team:            team,
-			TaskID:          taskID,
-			Capabilities:    capabilities,
-			NetworkAccess:   networkAccess,
-			TasksApproved:   tasksApproved,
-			KeepRunning:     keepRunning,
-			Reads:           reads,
-			ReadsAll:        s.ReadsAllRepos(),
-			AutoReads:       autoReads,
-			Writes:          writes,
-			GoogleChatSpace: googleChatSpace,
-			Model:           modelChoice,
-			Crowded:         crowded,
-			CrowdedNote:     note,
+			ID:                     s.ID,
+			Title:                  title,
+			Team:                   team,
+			TaskID:                 taskID,
+			Capabilities:           capabilities,
+			MissingShippedDefaults: missingShippedDefaults,
+			NetworkAccess:          networkAccess,
+			TasksApproved:          tasksApproved,
+			KeepRunning:            keepRunning,
+			Reads:                  reads,
+			ReadsAll:               s.ReadsAllRepos(),
+			AutoReads:              autoReads,
+			Writes:                 writes,
+			GoogleChatSpace:        googleChatSpace,
+			Model:                  modelChoice,
+			Crowded:                crowded,
+			CrowdedNote:            note,
 		})
+	}
+	return out, nil
+}
+
+// missingShippedSessionDefaults returns the shipped default capabilities
+// (model.DefaultConsoleSessions) missing from a saved console session's
+// held capabilities, filtered to grants this deployment actually offers
+// and permits on the session's task so "Adopt shipped defaults" never
+// proposes a grant UpdateConsoleSession would refuse.
+func (c *Client) missingShippedSessionDefaults(ctx context.Context, sessionID string, held []string, openTask *model.Task) ([]string, error) {
+	candidates := model.MissingShippedConsoleSessionCapabilities(sessionID, held)
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	var checkTask func(capID string) error
+	if openTask != nil {
+		policy, configured, err := c.capabilityPolicyFor(ctx)
+		if err != nil {
+			return nil, err
+		}
+		checkTask = func(capID string) error {
+			if model.IsCapabilityRef(capID) {
+				subject := model.CapabilitySubject{Repo: openTask.Target, Kind: model.CapabilityRunTask}
+				if err := policy.Permits(capID, subject, configured); err != nil {
+					return err
+				}
+			}
+			return c.catalogueEditRefusal(ctx, *openTask, capID)
+		}
+	}
+	var out []string
+	for _, capID := range candidates {
+		if _, ok := c.capabilityByID(capID); !ok {
+			continue
+		}
+		if checkTask != nil {
+			if err := checkTask(capID); err != nil {
+				continue
+			}
+		}
+		out = append(out, capID)
 	}
 	return out, nil
 }
@@ -759,7 +815,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				t.Grants = newGrants
 			}
 			if req.NetworkAccess != nil {
-				t.NetworkAccess = model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored)
+				t.NetworkAccess = model.ConsoleSessionNetworkAccess(session, c.sandboxesIsolateNetwork())
 			}
 			if req.TasksApproved != nil {
 				t.AutoApproveProposals = *req.TasksApproved
@@ -821,7 +877,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				Capabilities:    session.Capabilities,
 				Reads:           session.Reads,
 				Writes:          session.Writes,
-				NetworkAccess:   model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored),
+				NetworkAccess:   model.ConsoleSessionNetworkAccess(session, c.sandboxesIsolateNetwork()),
 				Model:           strings.TrimSpace(session.Model),
 				Title:           model.ConsoleSessionTitle(session),
 				TasksApproved:   session.TasksApproved,
@@ -857,7 +913,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				Capabilities:    prevCaps,
 				Reads:           prevReads,
 				Writes:          prevWrites,
-				NetworkAccess:   model.ConsoleSessionNetworkAccess(origSession, !c.Config.SandboxShapeIgnored),
+				NetworkAccess:   model.ConsoleSessionNetworkAccess(origSession, c.sandboxesIsolateNetwork()),
 				Model:           strings.TrimSpace(origSession.Model),
 				Title:           model.ConsoleSessionTitle(origSession),
 				TasksApproved:   origSession.TasksApproved,
@@ -921,7 +977,7 @@ func (c *Client) ensureConsoleSessionSnapshot(ctx context.Context, task model.Ta
 		Capabilities:    prevCaps,
 		Reads:           task.Reads,
 		Writes:          task.Writes,
-		NetworkAccess:   model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored),
+		NetworkAccess:   model.ConsoleSessionNetworkAccess(session, c.sandboxesIsolateNetwork()),
 		Model:           strings.TrimSpace(session.Model),
 		Title:           model.ConsoleSessionTitle(session),
 		TasksApproved:   session.TasksApproved,
@@ -929,6 +985,21 @@ func (c *Client) ensureConsoleSessionSnapshot(ctx context.Context, task model.Ta
 		GoogleChatSpace: session.GoogleChatSpace,
 		OfferedDefaults: consoleSessionHeldDefaults(task.Grants),
 	})
+}
+
+// sandboxesIsolateNetwork reports whether this deployment's sandbox backend can
+// honour model.NetworkNone, matching orchestrator.sandboxesIsolateNetwork.
+// ContainerSandboxes and plain K8sSandboxes apply a shape (SandboxShapeIgnored
+// is false) yet still cannot withhold a network, while DisabledSandboxes skips
+// shape (SandboxShapeIgnored is true) yet preserves configured NetworkNone
+// (IsolatesNetwork is true), so Config.Sandboxes (daemon.SandboxHealthAdapter)
+// is asked first when it answers; !SandboxShapeIgnored is the fallback for
+// callers and tests that configure no Sandboxes handle.
+func (c *Client) sandboxesIsolateNetwork() bool {
+	if iso, ok := c.Config.Sandboxes.(interface{ IsolatesNetwork() bool }); ok {
+		return iso.IsolatesNetwork()
+	}
+	return !c.Config.SandboxShapeIgnored
 }
 
 // consoleSessionHeldDefaults is the model.ConsoleSessionDefaultGrants a
@@ -1157,7 +1228,7 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 	}
 	taskID, err := model.FileConsoleSessionTask(ctx, c.Store, newSession, model.FileConsoleSessionOptions{
 		StateRepo:       c.stateRepoRef(),
-		NetworkIsolates: !c.Config.SandboxShapeIgnored,
+		NetworkIsolates: c.sandboxesIsolateNetwork(),
 		Now:             now,
 	})
 	if err != nil {
@@ -1294,7 +1365,7 @@ func (c *Client) RestartConsoleSession(ctx context.Context, id string, req Resta
 	}
 	if _, err := model.FileConsoleSessionTask(ctx, c.Store, session, model.FileConsoleSessionOptions{
 		StateRepo:            c.stateRepoRef(),
-		NetworkIsolates:      !c.Config.SandboxShapeIgnored,
+		NetworkIsolates:      c.sandboxesIsolateNetwork(),
 		PreviousTaskID:       previous,
 		CarryHandoverSummary: req.CarryHandover && previous != "",
 		Now:                  c.now(),

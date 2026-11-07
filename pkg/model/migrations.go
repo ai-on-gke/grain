@@ -839,7 +839,15 @@ var Migrations = []Migration{
 		Up:          migrateBootstrapPlaybooksGrants,
 	},
 	{
-		Version: 119,
+		Version:     119,
+		Description: "add allowed_principal.label and allowed_principal.last_used_at for delegate: entries (design/design/authentication.design.md §6)",
+		Statements: []string{
+			"ALTER TABLE `allowed_principal` ADD COLUMN `label` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `allowed_principal` ADD COLUMN `last_used_at` DATETIME NULL",
+		},
+	},
+	{
+		Version: 120,
 		Description: "add admission to task, template and schedule and default_admission to grain_config and repo_config, " +
 			"moving stored priority-dispatch and durable grants into them (design/design/unified-grants.design.md §4.1)",
 		Statements: []string{

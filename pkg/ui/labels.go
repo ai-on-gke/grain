@@ -194,7 +194,7 @@ func OfferedCapabilities() []Capability {
 	}
 	offered = append(offered, []Capability{
 		// No priority-dispatch or durable rows: they became the admission
-		// task setting (schema migration 119, design/design/unified-grants.design.md §4.1).
+		// task setting (schema migration 120, design/design/unified-grants.design.md §4.1).
 		// No bootstrap-playbooks row: it was retired onto the config-map
 		// server's config-map {"config_maps":["bootstrap"]} (schema migration
 		// 118), which is offered with the other capability-server methods.
@@ -1222,6 +1222,12 @@ type Config struct {
 	// (-ui-allowed-principals). When empty, defaults to $GRAIN_ALLOWED_PRINCIPALS,
 	// or the deployment owner (Actor) plus provisioned service accounts.
 	AllowedPrincipals []string
+	// DeploymentOwner is -deployment-owner ($GRAIN_DEPLOYMENT_OWNER): the
+	// human email address that owns this deployment for RBAC
+	// (IsDeploymentOwner, requireDeploymentOwner) and holds an immutable
+	// grain/operator floor on the access allowlist, regardless of the OS
+	// account the daemon runs as.
+	DeploymentOwner string
 	// ProvisionedServiceAccounts lists daemon-owned GCP service accounts grain
 	// itself provisions for this deployment (never gcp-key sandbox agent
 	// accounts), included in the default allowlist when AllowedPrincipals is unset.

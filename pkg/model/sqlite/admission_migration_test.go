@@ -22,12 +22,12 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// Migration 119 converts stored priority-dispatch and durable grants across
+// Migration 120 converts stored priority-dispatch and durable grants across
 // tasks (holding both -> durable), templates, schedules, deployment and
 // repository defaults, and console sessions into the admission columns,
 // deletes the grant rows, and drops catalogue and policy entries for the two
 // bare names (design/design/unified-grants.design.md §4.1, Q8/Q10).
-func TestMigration119MovesAdmissionGrantsAndDropsPolicyEntries(t *testing.T) {
+func TestMigration120MovesAdmissionGrantsAndDropsPolicyEntries(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
@@ -111,7 +111,7 @@ func TestMigration119MovesAdmissionGrantsAndDropsPolicyEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Seed pre-119 grant rows and list columns directly as a version-118 store held them.
+	// Seed pre-120 grant rows and list columns directly as a version-119 store held them.
 	rawStmts := []string{
 		"INSERT INTO `task_grant` (`task_id`, `capability`, `via`, `folder`) VALUES ('byp', 'priority-dispatch', 'label', NULL)",
 		"INSERT INTO `task_grant` (`task_id`, `capability`, `via`, `folder`) VALUES ('dur', 'durable', 'label', NULL)",
@@ -126,7 +126,7 @@ func TestMigration119MovesAdmissionGrantsAndDropsPolicyEntries(t *testing.T) {
 		"UPDATE `repo_config` SET `default_capabilities` = '[\"priority-dispatch\",\"durable\",\"read-issues\"]', " +
 			"`ci_capabilities` = 'priority-dispatch,github-sandbox' WHERE `owner` = 'acme' AND `name` = 'widgets'",
 		"UPDATE `repo_config` SET `default_capabilities` = 'priority-dispatch' WHERE `owner` = 'acme' AND `name` = 'gadgets'",
-		"UPDATE `grain_schema` SET `version` = 118 WHERE `id` = 1",
+		"UPDATE `grain_schema` SET `version` = 119 WHERE `id` = 1",
 	}
 	for _, stmt := range rawStmts {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
@@ -135,7 +135,7 @@ func TestMigration119MovesAdmissionGrantsAndDropsPolicyEntries(t *testing.T) {
 	}
 
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating from version 118: %v", err)
+		t.Fatalf("migrating from version 119: %v", err)
 	}
 	// Idempotent across a second run (such as staterepo.Import).
 	tx, err := db.BeginTx(ctx, nil)

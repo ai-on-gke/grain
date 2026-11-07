@@ -27,17 +27,28 @@ the resync that carries it lands.
 
 ## Synced at
 
-`gke-labs/granule` `main` at `b2fda8b` (`b2fda8bbff418d5039b808ec25f5a39ebc3b4849`,
-"Merge pull request #243 from gke-labs/grain/049f1e09/task-2949-nightly-master-regression",
-2026-11-04).
+`gke-labs/granule` `main` at `1463ed6` (`1463ed6097335b986e3bbdb37f25c16c28fa1e74`,
+"Merge pull request #244 from gke-labs/grain/098073e4/task-3349-scrub-the-contributor-gcp",
+2026-11-06).
 
-The tree was replaced wholesale from a `git archive` of `b2fda8b`, and the
-one patch listed under "Patches in flight" below was re-applied on top --
-it is the only difference from upstream (grain task 3024). The previous
-sync was `a0aeae5` (`a0aeae57`, grain task 2167).
+The tree was replaced wholesale from a `git archive` of `1463ed6` with no
+local patches on top -- `third_party/granule` is byte-identical to upstream
+(grain task 3350). The previous sync was `b2fda8b` (`b2fda8bb`, grain task
+3024).
 
-This sync carries PRs #242 and #243 on top of `a0aeae5`. Neither touches
-Go code, `go.mod`, `go.sum` or `vendor/`:
+This sync carries PR #244 (`9de041c`) on top of `b2fda8b`, which drops the
+contributor GCP project default from `.github/workflows/e2e-ipv6-gke.yml`,
+`docs/github-actions-ci.md`, `docs/ipv6-dual-stack-design.md` and
+`test/e2e-ipv6.sh` (resolving `$GKE_PROJECT` from `GKE_PROJECT` or gcloud's
+configured project instead), retiring the last local patch grain carried so
+`tests/hygiene` (`TestCoreSaysNoGoogleTokens`) passes on an unmodified
+archive. Nothing touches Go code, `Dockerfile`, `go.mod`, `go.sum` or
+`vendor/`.
+
+### What the `b2fda8b` sync carried
+
+The `b2fda8b` sync (grain task 3024) carried PRs #242 and #243 on top of
+`a0aeae5` (neither touching Go code, `go.mod`, `go.sum` or `vendor/`):
 - granule's `.grain/workflows` are retired in favour of the GitHub Actions
   ports in `.github/workflows`, with `.grain/schedules` that review failed
   scheduled Actions runs (gke-labs/granule#242). Neither directory is read
@@ -48,7 +59,7 @@ Go code, `go.mod`, `go.sum` or `vendor/`:
   image already substituted, and dumps the plugin's pods, logs and events
   when its rollout times out (gke-labs/granule#243).
 
-It also drops the legacy `pkg/forward` compatibility this file listed as
+It also dropped the legacy `pkg/forward` compatibility this file listed as
 in flight: `pkg/forward`, `pkg/execwire`'s `ForwardSpecs`,
 `pkg/agent/forward.go`'s `serveLegacyForward`, `pkg/guestexec/forward.go`,
 `cmd/granule-shim`'s `forward` mode, and the `-kube` path in
@@ -123,26 +134,20 @@ need no change.
 
 ## Patches in flight
 
-- **Sanitized GCP project placeholder in the IPv6 e2e docs and scripts.**
-  `.github/workflows/e2e-ipv6-gke.yml`, `docs/ipv6-dual-stack-design.md`,
-  `docs/github-actions-ci.md` and `test/e2e-ipv6.sh` replace a
-  contributor-specific GCP project name with `grain-sandbox-dev`, one line
-  each, so `tests/hygiene` (`TestCoreSaysNoGoogleTokens`) stays clean
-  (`91c0dfffd`; re-applied by `sed` on top of the `b2fda8b` archive).
-  Upstream still says the original name at `b2fda8b`. The patch goes away
-  either when gke-labs/granule scrubs it (a task asking that is filed
-  against gke-labs/granule) and the next re-vendor is byte-identical, or
-  when a person decides `third_party/granule/` belongs in
-  `tests/hygiene`'s `googleTokensExempt` -- a judgement about what this
-  repository may say that a re-vendor does not get to make on its own.
-  (Upstream's `.grain/workflows/e2e-ipv6-gke.yml`, which this patch also
-  touched, is gone at `b2fda8b`.)
+None.
 
 ## Landed upstream
 
 These were listed here as in flight, and all are on granule's own
 `main` now. The syncs carry them, so grain no longer patches anything
 to get them.
+
+- **IPv6 e2e GKE project resolved from `GKE_PROJECT` or `gcloud`**
+  (gke-labs/granule#244, grain task 3349). `.github/workflows/e2e-ipv6-gke.yml`,
+  `docs/ipv6-dual-stack-design.md`, `docs/github-actions-ci.md` and
+  `test/e2e-ipv6.sh` no longer default to a contributor-specific GCP project
+  name (`91c0dfffd`), so `tests/hygiene` (`TestCoreSaysNoGoogleTokens`) stays
+  clean without patching the vendored copy.
 
 - **Per-VM cgroup memory limits and positive `oom_score_adj` for
   Docker-backed VM containers** (gke-labs/granule#234, grain task 500).

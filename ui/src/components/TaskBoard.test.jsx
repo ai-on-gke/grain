@@ -1148,4 +1148,33 @@ describe("TaskBoard", () => {
     await userEvent.type(screen.getByRole("textbox"), "Answer");
     expect(onShownChange).toHaveBeenLastCalledWith(new Set([3]));
   });
+
+  it("tells failed task reads from an empty board and keeps held cards across transient failures", async () => {
+    const onRetry = vi.fn();
+    const user = userEvent.setup();
+    renderBoard({
+      tasks: [],
+      tasksLoaded: false,
+      tasksError: "synthetic tasks 500",
+      onRetry,
+    });
+    expect(screen.queryByText("No tasks in any of these columns.")).toBeNull();
+    expect(screen.queryByText("Nothing here.")).toBeNull();
+    expect(document.querySelector(".content-header .count")).toBeNull();
+    expect(
+      screen.getByText("The tasks could not be loaded (synthetic tasks 500)."),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+
+    document.body.innerHTML = "";
+    renderBoard({
+      tasks,
+      tasksLoaded: true,
+      tasksError: "synthetic tasks 500",
+    });
+    expect(screen.queryByText(/The tasks could not be loaded/)).toBeNull();
+    expect(screen.getByText("Fix the thing")).toBeInTheDocument();
+  });
 });

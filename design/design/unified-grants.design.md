@@ -200,8 +200,8 @@ the rows not marked **done**:
 | `team-broadcast` | `…/api#teams:broadcast` (new scope), preset `team-broadcast` | **done** (task 2004): provider and `broadcast_team_message` removed, stored grants rewritten to `api:team-broadcast` by schema migration 67 |
 | `bootstrap-playbooks` | `…/config-map#config-map` `{"config_maps":["bootstrap"]}` | **done** (task 3148): embedded markdown moved to `pkg/playbooks`, `pkg/capability/bootstrap` and its two MCP tools deleted, and `bootstrap.New()` removed from `daemon.CapabilityProviders`. The built-in `…/config-map` server always serves a reserved `bootstrap` map placing `/home/debian/.config-map/bootstrap/*.md` (`0644`, never included in an implicit empty-args mint) with the live-approval `run_host_command` prompt guidance (`grain capability skill -dir bootstrap` serves the same embedded directory); `src://playbooks` and `grain playbooks` remain enabled by the grant. Stored grants and `repo_config.ci_capabilities` rewritten to `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}` (policy rules to `…/config-map#config-map`) by schema migration 118; bare `bootstrap-playbooks` remains a one-release input alias. Task 3274 had recorded `…/grain#playbooks` as the target; task 3148's brief named the config-map server instead, and the concerns behind `#playbooks` are met here: the embedded map needs no operator configuration (the built-in server serves it even with no config-map directory), an embedded-only grant (`model.IsEmbeddedBootstrapOnlyGrant`) is minted and placed on the unisolated `host` backend while operator config maps stay refused there, and `DefaultConsoleSessions()` seeds `model.BootstrapPlaybooksGrant` |
 | `console` | task setting `hosting: unattended \| console` (§4.1) | **decided** (Q8, 2026-11-04): moved out of grants. Not started: `pkg/capability/console` is still a provider in `daemon.CapabilityProviders` |
-| `priority-dispatch` | task setting `admission: standard \| bypass` (§4.1) | **done** (task 3309): `pkg/capability/prioritydispatch` deleted and removed from `daemon.CapabilityProviders`; stored grants across tasks, templates, schedules, deployment/repository defaults and console sessions converted to `admission` (`bypass` or `durable`) and catalogue/policy entries dropped by schema migration 119; bare `priority-dispatch` accepted on input for one release with a deprecation warning |
-| `durable` | task setting `admission: durable` (§4.1) | **done** (task 3309): `pkg/capability/durable` deleted and removed from `daemon.CapabilityProviders`; stored grants converted to `admission = 'durable'` and catalogue/policy entries dropped by schema migration 119; bare `durable` accepted on input for one release with a deprecation warning |
+| `priority-dispatch` | task setting `admission: standard \| bypass` (§4.1) | **done** (task 3309): `pkg/capability/prioritydispatch` deleted and removed from `daemon.CapabilityProviders`; stored grants across tasks, templates, schedules, deployment/repository defaults and console sessions converted to `admission` (`bypass` or `durable`) and catalogue/policy entries dropped by schema migration 120; bare `priority-dispatch` accepted on input for one release with a deprecation warning |
+| `durable` | task setting `admission: durable` (§4.1) | **done** (task 3309): `pkg/capability/durable` deleted and removed from `daemon.CapabilityProviders`; stored grants converted to `admission = 'durable'` and catalogue/policy entries dropped by schema migration 120; bare `durable` accepted on input for one release with a deprecation warning |
 | `release-gate-read` (CI) | `…/api#release-gate-read` preset | **already an alias**: the bare name is read as `api:release-gate-read` and served through `ciapi.NewAlias`, which `daemon.CapabilityProviders` still registers. It retires with api grants becoming references (slices 2–4) |
 | `db-read`, `db-write` | `…/grain#sql` `{write: bool}` | **done** (task 2037): providers removed, `https://grain.dev/capabilities/grain#sql` (`{write: bool}`, with `write: true` dangerous) added on the in-process `…/grain` server, stored grants rewritten to `https://grain.dev/capabilities/grain#sql={"write":false}` / `{"write":true}` by schema migration 82 |
 | `grain-ci` | `…/grain#ci` | **done** (task 2364): provider removed, `https://grain.dev/capabilities/grain#ci` added on the in-process `…/grain` server (still granted solely from a repository's CI Mode and refused when attached by hand), stored grants rewritten to `https://grain.dev/capabilities/grain#ci={}` by schema migration 96 (repo_config.ci_capabilities included) |
@@ -229,7 +229,7 @@ None of them minted, placed or reached anything: each provider was a bare
 capability". What they really change is how the task is scheduled and
 hosted, and the grant table was only where that was stored. They move out
 of grants into two task settings (operator decision, 2026-11-04, Q8;
-`admission` landed in task 3309 / schema migration 119; `hosting` is not
+`admission` landed in task 3309 / schema migration 120; `hosting` is not
 yet started).
 
 **`admission: standard | bypass | durable`** (implemented, task 3309)
@@ -284,10 +284,10 @@ What carries over:
   `durable` in the catalogue (Q10), so nothing replaces that check. The
   person-only rule and `Limits.Durable` are the only gates.
 
-Migration (`admission` done in migration 119; `hosting` follows the same
+Migration (`admission` done in migration 120; `hosting` follows the same
 steps when its task lands):
 
-1. Schema migration 119 moved `priority-dispatch` and `durable` rows into
+1. Schema migration 120 moved `priority-dispatch` and `durable` rows into
    the `admission` / `default_admission` columns across tasks, templates,
    schedules, deployment and repository default capability lists, and
    console sessions, then deleted the grant rows (tasks holding both
