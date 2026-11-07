@@ -643,22 +643,25 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
     // Operator notification on System → Health immediately refreshes and clears
     // when acknowledged without waiting for the 30s notification poll.
     let notifAcked = false;
-    await page.route("**/api/notifications?open=1", async (route) => {
-      await route.fulfill({
-        status: 200,
-        json: [
-          {
-            id: "notif-e2e-1",
-            subject: "runner-quota",
-            severity: "warning",
-            title: "CI runner quota exhausted",
-            body: "No cloud runners available in us-central1.",
-            raisedAt: "2026-10-26T15:00:00Z",
-            ...(notifAcked ? { ackedAt: "2026-10-26T15:05:00Z" } : {}),
-          },
-        ],
-      });
-    });
+    await page.route(
+      "**/api/notifications?open=1&fields=list",
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          json: [
+            {
+              id: "notif-e2e-1",
+              subject: "runner-quota",
+              severity: "warning",
+              title: "CI runner quota exhausted",
+              body: "No cloud runners available in us-central1.",
+              raisedAt: "2026-10-26T15:00:00Z",
+              ...(notifAcked ? { ackedAt: "2026-10-26T15:05:00Z" } : {}),
+            },
+          ],
+        });
+      },
+    );
     await page.route("**/api/notifications/notif-e2e-1/ack", async (route) => {
       notifAcked = true;
       await route.fulfill({ status: 200, json: { status: "ok" } });
@@ -673,7 +676,7 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
       "data-severity",
       "warning",
     );
-    await page.unroute("**/api/notifications?open=1");
+    await page.unroute("**/api/notifications?open=1&fields=list");
     await page.unroute("**/api/notifications/notif-e2e-1/ack");
 
     await page.getByRole("tab", { name: "Power" }).click();

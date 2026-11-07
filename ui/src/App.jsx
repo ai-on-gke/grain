@@ -31,6 +31,7 @@ import { useIsPhone } from "./phone.js";
 import { keepIfSame, UNCHANGED } from "./poll.js";
 import {
   NO_NARROWING,
+  admitsState,
   defaultFilters,
   defaultNarrowing,
   defaultSortFor,
@@ -115,7 +116,11 @@ import NewSessionPage, {
 } from "./components/NewSessionPage.jsx";
 import { PreferencesProvider, usePreferences } from "./PreferencesContext.jsx";
 import { PinnedNavProvider, usePinnedNav } from "./PinnedNavContext.jsx";
-import { mergeTaskLists, useClosedTasks } from "./closedTasks.js";
+import {
+  mergeTaskLists,
+  stateFilterAdmitsClosed,
+  useClosedTasks,
+} from "./closedTasks.js";
 import ClosedTasksMore from "./components/ClosedTasksMore.jsx";
 import {
   notificationsEnabled,
@@ -359,7 +364,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // and a page that would say nothing is waiting must not say it.
   const [tasksListed, setTasksListed] = useState(false);
   const [tasksError, setTasksError] = useState(null);
-  const closedTasks = useClosedTasks(tasksListed);
+  // closedSearch is the search box's text while the task views could
+  // show closed work, "" otherwise: what useClosedTasks asks the server
+  // to search closed tasks for (set below, once the narrowing is known).
+  const [closedSearch, setClosedSearch] = useState("");
+  const closedTasks = useClosedTasks(tasksListed, closedSearch);
   const tasks = useMemo(
     () => mergeTaskLists(liveTasks, closedTasks.closed),
     [liveTasks, closedTasks.closed],
@@ -499,6 +508,26 @@ function AppContent({ onReload = () => window.location.reload() }) {
     () => askedNarrowing || listDefault(),
     [askedNarrowing, listDefault],
   );
+  // closedInView is whether the narrowing lets a closed task through at
+  // all: the default one sets them aside, and a view that cannot show
+  // one neither pages older ones in nor has the server search them
+  // (closedTasks.js).
+  const closedInView = useMemo(
+    () => admitsState(narrowing, config, "closed"),
+    [narrowing, config],
+  );
+  const closedSearchWanted =
+    closedInView && stateFilterAdmitsClosed(stateFilter)
+      ? (narrowing.search || "").trim()
+      : "";
+  useEffect(() => {
+    setClosedSearch(closedSearchWanted);
+  }, [closedSearchWanted]);
+  // closedFloor is whether closed tasks a view could show are still to
+  // be read -- a next page of the newest-closed list, or of the server's
+  // search while the box is set -- so a count over that view is a floor.
+  const closedFloor =
+    closedTasks.hasMore || (closedTasks.searching && closedTasks.loading);
   // narrow takes a patch rather than a whole narrowing, so a toolbar
   // control only has to name what it changed. A patch over the default
   // is a patch over what is on screen: the first thing anybody changes
@@ -3111,7 +3140,15 @@ function AppContent({ onReload = () => window.location.reload() }) {
         onShownChange={setShownIds}
         onRefresh={refreshList}
         showError={showError}
-        footer={<ClosedTasksMore closed={closedTasks} />}
+        footer={
+          <ClosedTasksMore
+            closed={closedTasks}
+            active={closedInView && stateFilterAdmitsClosed(filter)}
+          />
+        }
+        countFloor={
+          closedInView && stateFilterAdmitsClosed(filter) && closedFloor
+        }
       />
       <BatchActionsBar
         selection={selectedTasks}
@@ -3155,10 +3192,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
         onSelectAll={setSelection}
         onReorder={reorderTasks}
         onShownChange={setShownIds}
+        countFloor={closedInView && closedFloor}
+        footer={<ClosedTasksMore closed={closedTasks} active={closedInView} />}
       />
-      {list.some((t) => t.state === "closed") && (
-        <ClosedTasksMore closed={closedTasks} />
-      )}
       <BatchActionsBar
         selection={selectedTasks}
         shownIds={shownIds}
@@ -3216,9 +3252,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
         onNarrow={narrow}
         onOpenTask={openTask}
       />
-      {list.some((t) => t.state === "closed") && (
-        <ClosedTasksMore closed={closedTasks} />
-      )}
+      <ClosedTasksMore
+        closed={closedTasks}
+        active={closedInView && list.some((t) => t.state === "closed")}
+      />
     </>
   );
 
@@ -3267,6 +3304,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       tasksLoaded={tasksListed}
       tasksError={tasksError}
       onRetryTasks={retryTasks}
+      closedPartial={closedTasks.partial}
       config={config}
       narrowing={narrowing}
       onNarrow={narrow}
@@ -3745,6 +3783,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                             repoTab={repoTab}
                             onShowTab={setRepoTab}
                             tasks={tasks}
+                            closedPartial={closedTasks.partial}
                             config={config}
                             baseBranchGates={baseBranchGates}
                             onOpenComparison={setRepoComparison}
@@ -3764,6 +3803,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                         ) : view === "repos" ? (
                           <RepoList
                             tasks={tasks}
+                            closedPartial={closedTasks.partial}
                             config={config}
                             onOpenRepo={openRepoPage}
                             onOpenSettings={openDeploymentSettings}
