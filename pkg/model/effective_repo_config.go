@@ -21,19 +21,19 @@ import "context"
 // the default team's team_repo_config layered over both; that table is
 // folded into repo_config now (docs/single-tenant-reset.md, 6-ii-b3).
 type EffectiveRepoConfig struct {
-	Repo                  RepoRef  `json:"repo"`
-	CloneURL              string   `json:"cloneUrl,omitempty"`
+	Repo                  RepoRef   `json:"repo"`
+	CloneURL              string    `json:"cloneUrl,omitempty"`
 	DefaultCapabilities   []string  `json:"defaultCapabilities,omitempty"`
 	DefaultAdmission      Admission `json:"defaultAdmission,omitempty"`
 	CICapabilities        []string  `json:"ciCapabilities,omitempty"`
-	PromptExtension       string   `json:"promptExtension,omitempty"`
-	SetupCommand          string   `json:"setupCommand,omitempty"`
-	CIMode                CIMode   `json:"ciMode,omitempty"`
-	GitCredential         string   `json:"gitCredential,omitempty"`
-	RepairTemplateID      string   `json:"repairTemplateId,omitempty"`
-	RequireBranchUpToDate bool     `json:"requireBranchUpToDate,omitempty"`
-	WatchDefaultBranch    bool     `json:"watchDefaultBranch,omitempty"`
-	ReleaseSecrets        []string `json:"releaseSecrets,omitempty"`
+	PromptExtension       string    `json:"promptExtension,omitempty"`
+	SetupCommand          string    `json:"setupCommand,omitempty"`
+	CIMode                CIMode    `json:"ciMode,omitempty"`
+	GitCredential         string    `json:"gitCredential,omitempty"`
+	RepairTemplateID      string    `json:"repairTemplateId,omitempty"`
+	RequireBranchUpToDate bool      `json:"requireBranchUpToDate,omitempty"`
+	WatchDefaultBranch    bool      `json:"watchDefaultBranch,omitempty"`
+	ReleaseSecrets        []string  `json:"releaseSecrets,omitempty"`
 }
 
 // Empty returns true if all configuration fields are zero-valued.

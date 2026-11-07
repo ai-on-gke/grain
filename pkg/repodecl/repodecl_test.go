@@ -802,10 +802,10 @@ trigger:
 
 func TestDeclaredAdmissionAndLegacyCapabilityAliases(t *testing.T) {
 	declared := load(t, map[string]string{
-		".grain/templates/urgent.yml":  "title: Urgent\nadmission: bypass\n",
-		".grain/templates/legacy.yml":  "title: Legacy\ncapabilities:\n  - priority-dispatch\n  - durable\n",
-		".grain/schedules/urgent.yml":  "template: urgent\nevery:\n  hours: 2\nadmission: durable\n",
-		".grain/schedules/legacy.yml":  "template: legacy\nevery:\n  hours: 4\ncapabilities:\n  - priority-dispatch\n",
+		".grain/templates/urgent.yml": "title: Urgent\nadmission: bypass\n",
+		".grain/templates/legacy.yml": "title: Legacy\ncapabilities:\n  - priority-dispatch\n  - durable\n",
+		".grain/schedules/urgent.yml": "template: urgent\nevery:\n  hours: 2\nadmission: durable\n",
+		".grain/schedules/legacy.yml": "template: legacy\nevery:\n  hours: 4\ncapabilities:\n  - priority-dispatch\n",
 	})
 	tmpls := map[string]model.Template{}
 	for _, f := range declared.Templates {

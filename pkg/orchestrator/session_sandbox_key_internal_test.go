@@ -36,7 +36,7 @@ func TestSessionSandboxKeyChangesWithWhatTheSandboxWasBuiltFor(t *testing.T) {
 			{Repo: model.RepoRef{Owner: "acme", Name: "tools"}, Base: "main"},
 		},
 		Admission:     model.AdmissionDurable,
-		Grants:        []model.Grant{{Capability: "gcp-key"}},
+		Grants:        []model.Grant{{Capability: "gcp-key"}, {Capability: "self-debug", Via: "grain"}},
 		NetworkAccess: model.NetworkOpen,
 	}
 	shape := Shape{NetworkAccess: model.NetworkOpen, Class: "interactive"}

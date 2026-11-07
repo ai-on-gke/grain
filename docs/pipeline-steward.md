@@ -143,13 +143,12 @@ itself.
 | `api:dispatch-control` | Pause and resume dispatch, run a task now |
 | `api:ci-read` | Read CI runs, logs, merge batches and base-branch gates |
 | `self-debug` | `list_grain_tasks`, `read_grain_task` and the other task readers |
-| `priority-dispatch` | Dispatched the way a console session is, so a congested pipeline can't starve it (below) |
-| `durable` | No deadline or wait cap; rests on its goal between wakes |
+
+Its **admission** is `durable` (a task setting, not a grant: [capabilities.md](capabilities.md#admission-durable-formerly-durable)). That includes `bypass`, so it is dispatched the way a console session is and a congested pipeline can't starve it (below), and it has no deadline or wait cap and rests on its goal between wakes. Before schema migration 115 these were the `priority-dispatch` and `durable` grants.
 
 `query_merge_queue` needs no grant, because every run has it.
 
-Apart from `priority-dispatch` and `durable`, it gets nothing that only a
-person may grant: no `merge:force` (it escalates a force-merge instead of
+Apart from its admission, it gets nothing that only a person may give: no `merge:force` (it escalates a force-merge instead of
 performing one), no `capabilities:admin`, `settings:write` or
 `secrets:write`, and no `deployment:*`.
 `TestThePipelineStewardHoldsTheDocumentedPresetsAndNothingDangerous`
@@ -191,14 +190,14 @@ setup. It then sat queued for more than 13 hours behind a full worker
 pool, directors and merge-queue tasks. While it was queued every firing
 was held, so nothing managed the pipeline all day.
 
-`priority-dispatch` (`docs/capabilities.md`) gives it the admission
-console sessions get. It starts with every worker busy, ahead of
+Its `bypass` admission, which `durable` includes (`docs/capabilities.md`),
+gives it the admission console sessions get. It starts with every worker busy, ahead of
 merge-queue repairs and ordinary work. It passes any pause but an
 upgrade's own hold, and it is never parked behind a red branch's
 repair. A connection's concurrency limit doesn't hold it, and a setup
 failure is retried within two minutes. It still needs room in the
-sandbox budget. Only a person may grant `priority-dispatch` to any
-other task. The steward's template carries it by construction, and a
+sandbox budget. Only a person may raise any other task's admission
+above `standard`. The steward's template sets it by construction, and a
 standing task filed before the template did is given it at its next
 wake.
 

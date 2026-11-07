@@ -198,9 +198,9 @@ the rows not marked **done**:
 | `memory` | `…/api#memory` preset (`memory:read` + `memory:write`) | **done** (task 2035): provider and its tools removed, stored grants rewritten to `api:memory` by schema migration 71 |
 | `team-broadcast` | `…/api#teams:broadcast` (new scope), preset `team-broadcast` | **done** (task 2004): provider and `broadcast_team_message` removed, stored grants rewritten to `api:team-broadcast` by schema migration 67 |
 | `bootstrap-playbooks` | `…/skill#skill` `{dir: bootstrap}` | **not started**: the `bootstrap` provider is still registered by `daemon.CapabilityProviders`. `grain capability skill` is no longer a built-in: it is internal now, and the built-in `…/config-map` replaced it. So the target is a `…/config-map` map or a grain-owned method, still to be decided |
-| `console` | task setting `hosting: unattended \| console` (§4.1) | **decided** (Q8, 2026-11-04): moved out of grants. Not started: `pkg/capability/console`, `prioritydispatch` and `durable` are still providers in `daemon.CapabilityProviders` |
-| `priority-dispatch` | task setting `admission: standard \| bypass` (§4.1) | **decided** (Q8, 2026-11-04): moved out of grants. Not started |
-| `durable` | task setting `admission: durable` (§4.1) | **decided** (Q8, 2026-11-04): moved out of grants. Not started |
+| `console` | task setting `hosting: unattended \| console` (§4.1) | **decided** (Q8, 2026-11-04): moved out of grants. Not started: `pkg/capability/console` is still a provider in `daemon.CapabilityProviders` |
+| `priority-dispatch` | task setting `admission: standard \| bypass` (§4.1) | **done** (task 3144): an `admission` column (`standard \| bypass \| durable`) on tasks, templates and schedules, with `default_admission` on repository and deployment settings; `Task.HasPriorityDispatch` is `Admission >= bypass` and `priorityDispatchTaskSQL` the column predicate. Only a person may raise it above `standard` (agent-filed tasks and proposals asking for more wait for a person; the pipeline steward template and console sessions set it by construction), and each change is an `admission-changed` task event with old value, new value and actor. Schema migration 115 moved stored grants from tasks, templates, schedules, default capability lists and console sessions into the column and dropped the catalogue and policy entries (Q10); `pkg/capability/prioritydispatch` and its `daemon.CapabilityProviders` entry are removed, the task pane's toggle is an **Admission** select, and the bare name is a one-release input alias mapped to `bypass` with a deprecation warning |
+| `durable` | task setting `admission: durable` (§4.1) | **done** (task 3144): with `priority-dispatch` above; `Task.IsDurable` is `Admission == durable` and `durableTaskSQL` the column predicate, a row holding both grants migrated to `durable`, `pkg/capability/durable` and its `daemon.CapabilityProviders` entry removed, and the bare name a one-release input alias mapped to `durable` with a deprecation warning |
 | `release-gate-read` (CI) | `…/api#release-gate-read` preset | **already an alias**: the bare name is read as `api:release-gate-read` and served through `ciapi.NewAlias`, which `daemon.CapabilityProviders` still registers. It retires with api grants becoming references (slices 2–4) |
 | `db-read`, `db-write` | `…/grain#sql` `{write: bool}` | **done** (task 2037): providers removed, `https://grain.dev/capabilities/grain#sql` (`{write: bool}`, with `write: true` dangerous) added on the in-process `…/grain` server, stored grants rewritten to `https://grain.dev/capabilities/grain#sql={"write":false}` / `{"write":true}` by schema migration 82 |
 | `grain-ci` | `…/grain#ci` | **done** (task 2364): provider removed, `https://grain.dev/capabilities/grain#ci` added on the in-process `…/grain` server (still granted solely from a repository's CI Mode and refused when attached by hand), stored grants rewritten to `https://grain.dev/capabilities/grain#ci={}` by schema migration 96 (repo_config.ci_capabilities included) |
@@ -266,7 +266,9 @@ What carries over:
   `IsPersonOnlyGrant` does for the two grants today. A task an agent
   files, or a proposal, that asks for more waits for a person the way
   `EscalatedCapabilities` makes a grant wait today. Two places set it
-  by construction and stay exempt: `pipelineStewardTemplate` (`bypass`)
+  by construction and stay exempt: `pipelineStewardTemplate` (`bypass`,
+  and in fact `durable`, which includes it: the steward held both grants,
+  and a row holding both migrates to `durable`, DT-6)
   and `model.ConsoleSessionGrants` (`durable`). `hosting` has
   no such rule, because `console` has none today.
 - **Same places as today.** Both settings are columns on tasks,

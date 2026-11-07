@@ -83,7 +83,8 @@ counting against the task, and a CI job is retried in a fresh sandbox.
 ## Sessions are never held by the budget
 
 A console session (the director, or any configured chat), and any task a
-person granted `priority-dispatch` (such as the pipeline steward), is
+person set to `admission: bypass` or `durable` (such as the pipeline
+steward; the setting replaced the `priority-dispatch` grant), is
 admitted under its own rule, `Budget.AdmitsPriority`. Only what is
 **physically short** refuses one:
 
@@ -106,7 +107,7 @@ The session's sandbox is still **charged**. Until it is released, CI jobs and
 ordinary agent runs see the room it took and wait for it. That is the
 mechanism: a session *defers* CI rather than queueing behind it, and no
 running CI job is killed to make room. Over-commitment is bounded by the
-number of live priority-dispatch runs, which is at most one run per such task.
+number of live bypass- and durable-admission runs, which is at most one run per such task.
 Durable sessions also stay under `max_durable_runs`.
 
 A session is also outside the other ordinary gates: `max_workers` and the
@@ -126,7 +127,7 @@ Each refusal is now diagnosable:
   names the admitter's gate: `model availability`, `local policy`,
   `capability <name>`, or `capability pass`. It also gives the reason that
   gate recorded on the task.
-- A priority-dispatch task's refusal, by an admitter or by the budget, is
+- A bypass- or durable-admission task's refusal, by an admitter or by the budget, is
   logged as `dispatch: WARNING: priority-dispatch task N ...`.
 - The task's row shows the wait: `waiting: all connections serving X are
   busy (...)` for a model wait, and `waiting for sandbox budget: <the

@@ -112,7 +112,7 @@ func TestCapabilitiesListsEveryKnownCapabilityOnAFreshStore(t *testing.T) {
 		ids = append(ids, s.ID)
 	}
 	sort.Strings(ids)
-	want := []string{"bootstrap-playbooks", "console", "durable", "github-sandbox", "image-signing", "package-publish", "priority-dispatch", "read-issues", "registry-push", "self-debug"}
+	want := []string{"bootstrap-playbooks", "console", "github-sandbox", "image-signing", "package-publish", "read-issues", "registry-push", "self-debug"}
 	if !reflect.DeepEqual(ids, want) {
 		t.Fatalf("capability ids = %v, want %v", ids, want)
 	}

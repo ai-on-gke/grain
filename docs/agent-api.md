@@ -566,9 +566,12 @@ Actions job's log when given a `gha:` run id. `grain ci wait` and
   - a `propose_task` asking for one is filed for a person to approve,
     even when the proposer holds it (`model.EscalatedCapabilities`).
 
-  The `priority-dispatch` capability (`docs/capabilities.md`) is held to
-  the same three rules (`model.IsPersonOnlyGrant`), because it lets a
-  task jump the dispatch queue.
+  A task's `admission` above `standard` (`bypass` or `durable`, the
+  setting that replaced the `priority-dispatch` and `durable` grants,
+  `docs/capabilities.md`) is held to the same three rules, because it
+  lets a task jump the dispatch queue: an agent's request setting it is
+  refused, and an agent-filed task or `propose_task` asking for it waits
+  for a person.
 - **No escalation through the API.** A run can't use any route to grant
   a capability its own task doesn't hold. Any body field named like
   `capabilities`, `defaultCapabilities`, `ciCapabilities` or `grants`

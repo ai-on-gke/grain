@@ -347,9 +347,9 @@ type CreateTemplateRequest struct {
 	// (model.Template.Model), or "" to leave it to the team's default.
 	Model string `json:"model"`
 	// Interactive sets model.Template.Interactive.
-	Interactive      bool  `json:"interactive"`
-	KeepRunning      bool  `json:"keepRunning,omitempty"`
-	KeepRunningSnake *bool `json:"keep_running,omitempty"`
+	Interactive      bool   `json:"interactive"`
+	KeepRunning      bool   `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool  `json:"keep_running,omitempty"`
 	Admission        string `json:"admission,omitempty"`
 	// Hostd is read only to be refused (TaskHostdRefusal): a template's
 	// tasks have no hostd of their own.
@@ -756,7 +756,7 @@ type UpdateTemplateRequest struct {
 	// clears it, so the template's tasks go back to the team's default.
 	Model *string `json:"model,omitempty"`
 	// Interactive edits CreateTemplateRequest.Interactive's own field.
-	Interactive      *bool `json:"interactive,omitempty"`
+	Interactive      *bool   `json:"interactive,omitempty"`
 	KeepRunning      *bool   `json:"keepRunning,omitempty"`
 	KeepRunningSnake *bool   `json:"keep_running,omitempty"`
 	Admission        *string `json:"admission,omitempty"`

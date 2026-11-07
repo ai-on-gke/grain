@@ -2169,7 +2169,7 @@ func (c *Client) defaultTaskAdmission(ctx context.Context, target *model.RepoRef
 	}
 	return model.NormalizeAdmission(adm), nil
 }
-//
+
 // No GitHub issue is created, and none is needed: Store.NewTaskID
 // allocates identity, so a task exists the moment this returns. That is
 // the whole inversion in one method -- this used to open an issue and let
@@ -7144,10 +7144,11 @@ func (c *Client) agentMayApprove(ctx context.Context, task model.Task) error {
 // authority waiting for a person just the same. A default is attached to
 // every task filed there whoever files it, so it asks for nothing. A
 // grant only a person may give (model.IsPersonOnlyGrant: a dangerous api
-// grant, or priority-dispatch) asks for a person even when requester
-// holds it, as it does of a proposal: otherwise the pipeline steward,
-// which holds priority-dispatch and run_task_now, could propose a task
-// naming it and then approve that task itself.
+// grant, or a bare priority-dispatch/durable alias) asks for a person even
+// when requester holds it, as it does of a proposal. Admission above
+// standard is the same rule, checked by agentMayApprove: otherwise the
+// pipeline steward, durable and holding run_task_now, could propose a task
+// asking for it and then approve that task itself.
 func agentEscalatedCapabilities(task, requester model.Task) []string {
 	held := make(map[string]bool, len(requester.Grants))
 	for _, g := range requester.Grants {
