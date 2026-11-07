@@ -32,6 +32,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/releaseapproval"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -132,6 +133,17 @@ func (f *fixtureForge) dispatched() []map[string]any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]map[string]any(nil), f.dispatches...)
+}
+
+type forgeMux map[string]*fixtureForge
+
+func (m forgeMux) Request(method, path string, headers map[string]string, body []byte) (github.ApiResponse, error) {
+	for repo, f := range m {
+		if strings.HasPrefix(path, "/repos/"+repo+"/") {
+			return f.Request(method, path, headers, body)
+		}
+	}
+	return github.ApiResponse{Status: http.StatusNotFound, Body: []byte(`{"message":"Not Found"}`)}, nil
 }
 
 func resetReleaseWatch(t *testing.T) {
@@ -407,5 +419,127 @@ func TestAnActionsRepoThatNeverSetACIModeIsApprovedThroughActions(t *testing.T) 
 	}
 	if d := forge.dispatched(); len(d) != 1 {
 		t.Fatalf("dispatched %d times, want once", len(d))
+	}
+}
+
+// Approving a staged release from the CLI or API before release-watch has
+// polled its repository still records the person's answer durably as a
+// cleared release.pending notification
+// (docs/test-runs/2026-11-04-release-approval.md, F5):
+//   - the watcher's next polls while promote-release.yml is still running
+//     do not raise "v2.6.0 is ready to promote" in the Inbox;
+//   - a second press while the dispatch record is good is refused even on
+//     a newly constructed ui.Client (across a daemon restart);
+//   - once releasePendingAnswerHold has passed with the -pending tag
+//     still unpromoted (a failed run), the watcher raises it again; and
+//   - another repository's same version is unaffected.
+func TestApprovingAPendingReleaseBeforeTheWatchPollsDoesNotReRaiseOrReDispatch(t *testing.T) {
+	resetReleaseWatch(t)
+	ctx := context.Background()
+	store := openTestStoreForOrchestrator(t)
+	repo := model.RepoRef{Owner: "example", Name: "widgets"}
+	other := model.RepoRef{Owner: "example", Name: "gizmos"}
+	cfg := model.DefaultConfig()
+	cfg.TargetRepos = []string{repo.String(), other.String()}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []model.RepoRef{repo, other} {
+		if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: r, CIMode: model.CIModeGitHub}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	commit := strings.Repeat("a", 40)
+	forge := &fixtureForge{repo: repo.String(), tags: map[string]fixtureTag{
+		"v2.6.0-pending": {commit: commit, message: "Release v2.6.0 pending approval"},
+	}}
+	otherForge := &fixtureForge{repo: other.String(), tags: map[string]fixtureTag{}}
+	client := github.NewClient(forgeMux{repo.String(): forge, other.String(): otherForge}, nil)
+	deps := Deps{Store: store, Client: client}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	clock := now
+	dataDir := t.TempDir()
+	person := model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com"}
+	uic := ui.NewClient(ui.Config{Actor: person, DataDir: dataDir, GitHubPullRequests: client}, store)
+	uic.Now = func() time.Time { return clock }
+
+	// 1. Approve immediately, before reconcileReleasePending has ever polled.
+	if _, err := uic.DecideRelease(ui.WithPrincipal(ctx, person), repo.String(), "v2.6.0", true, ui.ReleaseApproval{}); err != nil {
+		t.Fatalf("CLI/API approval before the watcher polled: %v", err)
+	}
+	if d := forge.dispatched(); len(d) != 1 {
+		t.Fatalf("dispatched %d times, want once", len(d))
+	}
+
+	subject := model.NotificationSubject(model.FamilyReleasePending, "v2.6.0")
+	if open, err := store.OpenNotification(ctx, subject); err != nil || open != nil {
+		t.Fatalf("open %s right after approval = %+v (err %v), want nil", subject, open, err)
+	}
+	by, at, ok, err := store.LatestReleaseAnswer(ctx, repo, "v2.6.0")
+	if err != nil || !ok || by != person.ID || !at.Equal(now) {
+		t.Fatalf("LatestReleaseAnswer = (%q, %v, %v, %v), want (%q, %v, true, nil)", by, at, ok, err, person.ID, now)
+	}
+
+	// 2. Nine minutes later (and hours later within the 24h hold), the
+	// watcher polls while v2.6.0-pending is still there and raises nothing.
+	for _, elapsed := range []time.Duration{9 * time.Minute, 20 * time.Minute, 12 * time.Hour} {
+		if err := reconcileReleasePending(ctx, deps, now.Add(elapsed)); err != nil {
+			t.Fatalf("reconcileReleasePending at +%s: %v", elapsed, err)
+		}
+		if open, err := store.OpenNotification(ctx, subject); err != nil || open != nil {
+			t.Fatalf("open %s at +%s = %+v (err %v), want suppressed while answered", subject, elapsed, open, err)
+		}
+	}
+
+	// 3. Across a daemon restart (a fresh ui.Client over the same store),
+	// a second press within releaseapproval.Lifetime is still refused from
+	// the durable record and dispatches nothing.
+	clock = now.Add(releaseapproval.Lifetime - time.Minute)
+	restarted := ui.NewClient(ui.Config{Actor: person, DataDir: dataDir, GitHubPullRequests: client}, store)
+	restarted.Now = func() time.Time { return clock }
+	if _, err := restarted.DecideRelease(ui.WithPrincipal(ctx, person), repo.String(), "v2.6.0", true, ui.ReleaseApproval{}); err == nil ||
+		!strings.Contains(err.Error(), "v2.6.0 was already answered: alice@example.com dispatched promote-release.yml") {
+		t.Errorf("second press after restart before expiry: %v, want already-answered refusal", err)
+	}
+	if d := forge.dispatched(); len(d) != 1 {
+		t.Fatalf("dispatched %d times after refused second press, want still 1", len(d))
+	}
+
+	// 4. Another repository staging the same version is neither suppressed
+	// in release-watch nor refused on DecideRelease.
+	otherForge.setTag("v2.6.0-pending", strings.Repeat("b", 40), "other v2.6.0")
+	if err := reconcileReleasePending(ctx, deps, now.Add(13*time.Hour)); err != nil {
+		t.Fatalf("reconcileReleasePending for %s: %v", other, err)
+	}
+	if open, err := store.OpenNotification(ctx, subject); err != nil || open == nil || open.Repo != other.String() {
+		t.Fatalf("open %s for %s = %+v (err %v), want raised for %s", subject, other, open, err, other)
+	}
+	if _, err := restarted.DecideRelease(ui.WithPrincipal(ctx, person), other.String(), "v2.6.0", true, ui.ReleaseApproval{}); err != nil {
+		t.Fatalf("approving %s's v2.6.0: %v", other, err)
+	}
+	if len(otherForge.dispatched()) != 1 {
+		t.Fatalf("%s dispatched %d times, want once", other, len(otherForge.dispatched()))
+	}
+
+	// 5. If promote-release.yml failed and v2.6.0-pending is still stranded
+	// past releasePendingAnswerHold (24h), the watcher raises it again, and
+	// past releaseapproval.Lifetime the person can approve again.
+	otherForge.setTag("v2.6.0", strings.Repeat("b", 40), "other v2.6.0")
+	otherForge.deleteTag("v2.6.0-pending")
+	afterHold := now.Add(releasePendingAnswerHold + releasePendingPollInterval)
+	if err := reconcileReleasePending(ctx, deps, afterHold); err != nil {
+		t.Fatalf("reconcileReleasePending after hold: %v", err)
+	}
+	if open, err := store.OpenNotification(ctx, subject); err != nil || open == nil || open.Repo != repo.String() {
+		t.Fatalf("open %s after hold = %+v (err %v), want re-raised once the 24h hold expired", subject, open, err)
+	}
+	clock = afterHold
+	if _, err := restarted.DecideRelease(ui.WithPrincipal(ctx, person), repo.String(), "v2.6.0", true, ui.ReleaseApproval{}); err != nil {
+		t.Fatalf("re-approving after the first record expired: %v", err)
+	}
+	if d := forge.dispatched(); len(d) != 2 {
+		t.Fatalf("dispatched %d times after retry, want 2", len(d))
 	}
 }

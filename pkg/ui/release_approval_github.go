@@ -59,15 +59,12 @@ type ReleaseDispatch struct {
 	Expires  time.Time `json:"expires"`
 }
 
-// releaseDispatches remembers the dispatch made for each repository and
-// version while its record is good, so a second press -- a double click,
-// two tabs -- starts nothing more.
-// It is held across the whole dispatch: answers are rare, and two
-// presses racing must start one run, not two.
-var (
-	releaseDispatchMu sync.Mutex
-	releaseDispatches = map[string]ReleaseDispatch{} // repo + "\x00" + version
-)
+// releaseDispatchMu is held across the whole dispatch and store record:
+// answers are rare, and two presses racing must start one run, not two.
+// Pending-release answers are persisted in Store (RecordReleaseAnswer,
+// LatestReleaseAnswer) so both release-watch and the second-press refusal
+// survive a restart; rollback dispatches live on Client.rollbackDispatches.
+var releaseDispatchMu sync.Mutex
 
 // releaseForge is the forge connection release tags are read and the
 // workflow dispatched through, or nils when this deployment has none.
@@ -102,10 +99,10 @@ func (c *Client) publishesFromGitHub(ctx context.Context, repo model.RepoRef) (b
 	return c.Store.ReleasesFromGitHubActions(ctx, repo)
 }
 
-// dispatchGitHubRelease signs approver's answer about version and
-// dispatches promote-release.yml with it. The caller has already
-// established that approver is a person.
-func (c *Client) dispatchGitHubRelease(ctx context.Context, repo model.RepoRef, version, approver string,
+// dispatchGitHubRelease signs actor's answer about version, dispatches
+// promote-release.yml with it, and records the answer durably in Store.
+// The caller has already established that actor is a person.
+func (c *Client) dispatchGitHubRelease(ctx context.Context, repo model.RepoRef, version string, actor model.Principal,
 	approve bool, answers ReleaseApproval) (ReleaseDispatch, error) {
 	if err := c.actionsRepoServed(ctx, repo); err != nil {
 		return ReleaseDispatch{}, err
@@ -118,14 +115,17 @@ func (c *Client) dispatchGitHubRelease(ctx context.Context, repo model.RepoRef, 
 	if approve {
 		decision = "approve"
 	}
-	key := repo.String() + "\x00" + version
-	now := time.Now().UTC()
+	now := c.now().UTC()
 	releaseDispatchMu.Lock()
 	defer releaseDispatchMu.Unlock()
-	if d, ok := releaseDispatches[key]; ok {
-		if now.Before(d.Expires) {
+	if c.Store != nil {
+		prevBy, prevAt, ok, err := c.Store.LatestReleaseAnswer(ctx, repo, version)
+		if err != nil {
+			return ReleaseDispatch{}, err
+		}
+		if ok && now.Before(prevAt.Add(releaseapproval.Lifetime)) {
 			return ReleaseDispatch{}, validationErrorf("%s was already answered: %s dispatched %s for it at %s; "+
-				"watch that run rather than starting another", version, d.By, d.Workflow, d.At.Format(time.RFC3339))
+				"watch that run rather than starting another", version, prevBy, GitHubPromoteReleaseWorkflow, prevAt.Format(time.RFC3339))
 		}
 	}
 	commit, err := github.TagCommit(tags, repo.Owner, repo.Name, version+"-pending")
@@ -140,14 +140,14 @@ func (c *Client) dispatchGitHubRelease(ctx context.Context, repo model.RepoRef, 
 		return ReleaseDispatch{}, err
 	}
 	signed, err := signer.Sign(ctx, releaseapproval.Record{
-		Repo: repo.String(), Version: version, Decision: decision, Commit: commit, Approver: approver,
+		Repo: repo.String(), Version: version, Decision: decision, Commit: commit, Approver: actor.ID,
 		ShortSoakOK: answers.ShortSoakOK, AllowBreaking: answers.AllowBreaking, Issued: now, Expires: now.Add(releaseapproval.Lifetime),
 	})
 	if err != nil {
 		return ReleaseDispatch{}, err
 	}
 	d := ReleaseDispatch{Repo: repo.String(), Workflow: GitHubPromoteReleaseWorkflow, Ref: releaseTrunk, Commit: commit,
-		By: approver, At: now, Expires: now.Add(releaseapproval.Lifetime)}
+		By: actor.ID, At: now, Expires: now.Add(releaseapproval.Lifetime)}
 	inputs := map[string]string{
 		"version":            version,
 		"decision":           decision,
@@ -161,7 +161,7 @@ func (c *Client) dispatchGitHubRelease(ctx context.Context, repo model.RepoRef, 
 	if err := dispatcher.DispatchWorkflow(repo.Owner, repo.Name, GitHubPromoteReleaseWorkflow, releaseTrunk, inputs); err != nil {
 		return ReleaseDispatch{}, fmt.Errorf("dispatching %s's %s: %w", repo, GitHubPromoteReleaseWorkflow, github.Readable(err))
 	}
-	releaseDispatches[key] = d
+	c.recordReleaseAnswer(ctx, repo, version, actor, decision, now)
 	return d, nil
 }
 
@@ -178,10 +178,10 @@ func (c *Client) dispatchGitHubRollback(ctx context.Context, repo model.RepoRef,
 		return ReleaseDispatch{}, fmt.Errorf("this deployment has no forge connection that can dispatch %s's %s", repo, GitHubPromoteReleaseWorkflow)
 	}
 	key := repo.String() + "\x00rollback\x00" + version
-	now := time.Now().UTC()
+	now := c.now().UTC()
 	releaseDispatchMu.Lock()
 	defer releaseDispatchMu.Unlock()
-	if d, ok := releaseDispatches[key]; ok {
+	if d, ok := c.rollbackDispatches[key]; ok {
 		if now.Before(d.Expires) {
 			return ReleaseDispatch{}, validationErrorf("%s rollback was already started: %s dispatched %s for it at %s; "+
 				"watch that run rather than starting another", version, d.By, d.Workflow, d.At.Format(time.RFC3339))
@@ -222,7 +222,10 @@ func (c *Client) dispatchGitHubRollback(ctx context.Context, repo model.RepoRef,
 	if err := dispatcher.DispatchWorkflow(repo.Owner, repo.Name, GitHubPromoteReleaseWorkflow, releaseTrunk, inputs); err != nil {
 		return ReleaseDispatch{}, fmt.Errorf("dispatching %s's %s: %w", repo, GitHubPromoteReleaseWorkflow, github.Readable(err))
 	}
-	releaseDispatches[key] = d
+	if c.rollbackDispatches == nil {
+		c.rollbackDispatches = map[string]ReleaseDispatch{}
+	}
+	c.rollbackDispatches[key] = d
 	return d, nil
 }
 

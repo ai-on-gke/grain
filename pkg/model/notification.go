@@ -182,6 +182,19 @@ type Notification struct {
 // Open reports whether n has not been cleared.
 func (n Notification) Open() bool { return n.ClearedAt == nil }
 
+// ReleaseAnswerBy reports the person who cleared n -- a release.pending
+// notification -- and when, if n was cleared by a human principal.
+func (n Notification) ReleaseAnswerBy() (approver string, at time.Time, ok bool) {
+	if n.ClearedAt == nil {
+		return "", time.Time{}, false
+	}
+	approver, ok = strings.CutPrefix(n.ClearedBy, string(PrincipalHuman)+":")
+	if !ok || approver == "" {
+		return "", time.Time{}, false
+	}
+	return approver, n.ClearedAt.UTC(), true
+}
+
 // NotificationFamily is the part of a subject before its first ':' -- the
 // key a subscription names.
 func NotificationFamily(subject string) string {
@@ -524,6 +537,86 @@ func (s *Store) ClearNotificationByID(ctx context.Context, id int64, by string) 
 		return nil
 	})
 	return cleared, err
+}
+
+// RecordReleaseAnswer clears version's open release.pending notification
+// for repo as actor, or writes a cleared one when the person answered
+// from the CLI or API before anything raised it. Both release-watch and
+// the second-press refusal read that cleared row.
+func (s *Store) RecordReleaseAnswer(ctx context.Context, repo RepoRef, version string, actor Principal, verb string, at time.Time) error {
+	subject := NotificationSubject(FamilyReleasePending, version)
+	by := PrincipalString(actor)
+	if at.IsZero() {
+		at = time.Now()
+	}
+	at = at.UTC()
+	return s.write(ctx, "record release answer "+subject, func(tx *sql.Tx) error {
+		open, err := openNotificationBySubject(ctx, tx, subject)
+		if err != nil {
+			return fmt.Errorf("reading notification %s: %w", subject, err)
+		}
+		if open != nil && (open.Repo == "" || repo.String() == "" || open.Repo == repo.String()) {
+			if _, err := tx.ExecContext(ctx, "UPDATE `notification` SET `cleared_at` = ?, `cleared_by` = ?, "+
+				"`repo` = COALESCE(`repo`, ?) WHERE `id` = ? AND `cleared_at` IS NULL",
+				at, by, nullable(repo.String()), open.ID); err != nil {
+				return fmt.Errorf("clearing notification %s: %w", subject, err)
+			}
+			return nil
+		}
+		actions, err := jsonOrNull(ReleasePendingActions, false)
+		if err != nil {
+			return err
+		}
+		past := "answered"
+		switch verb {
+		case "approve":
+			past = "approved"
+		case "reject":
+			past = "rejected"
+		}
+		title := version + " is ready to promote"
+		body := fmt.Sprintf("%s on %s was %s by %s.", version, repo, past, actor.ID)
+		if _, err := tx.ExecContext(ctx, "INSERT INTO `notification` (`subject`,`family`,`severity`,`title`,`body`,"+
+			"`repo`,`raised_by`,`raised_at`,`last_raised_at`,`raise_count`,`actions`,`cleared_at`,`cleared_by`) "+
+			"VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?)",
+			subject, FamilyReleasePending, string(NotificationWarning), title, body,
+			nullable(repo.String()), by, at, at, actions, at, by); err != nil {
+			return fmt.Errorf("recording release answer %s: %w", subject, err)
+		}
+		return nil
+	})
+}
+
+// LatestReleaseAnswer returns the most recent person's answer recorded on
+// version's release.pending notification for repo (the person's id and
+// when they answered), if any.
+func (s *Store) LatestReleaseAnswer(ctx context.Context, repo RepoRef, version string) (string, time.Time, bool, error) {
+	subject := NotificationSubject(FamilyReleasePending, version)
+	var bestBy string
+	var bestAt time.Time
+	var found bool
+	err := each(ctx, s.db, "SELECT "+notificationColumns+" FROM `notification` WHERE `subject` = ? AND `cleared_at` IS NOT NULL ORDER BY `id` DESC LIMIT 50",
+		[]any{subject}, func(rows *sql.Rows) error {
+			n, err := scanNotification(rows.Scan)
+			if err != nil {
+				return err
+			}
+			if n.Repo != "" && repo.String() != "" && n.Repo != repo.String() {
+				return nil
+			}
+			by, at, ok := n.ReleaseAnswerBy()
+			if !ok {
+				return nil
+			}
+			if !found || at.After(bestAt) {
+				bestBy, bestAt, found = by, at, true
+			}
+			return nil
+		})
+	if err != nil {
+		return "", time.Time{}, false, fmt.Errorf("reading release answer %s: %w", subject, err)
+	}
+	return bestBy, bestAt, found, nil
 }
 
 // AckNotification acknowledges notification id. Acknowledging an
