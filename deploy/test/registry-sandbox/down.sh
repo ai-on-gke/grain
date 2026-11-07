@@ -123,12 +123,13 @@ log() {
   printf '[registry-sandbox/down] %s\n' "$*"
 }
 
-tmp_tfvars="$(mktemp)"
-chmod 0600 "${tmp_tfvars}"
-tmp_images="$(mktemp)"
+tmp_work_dir="$(mktemp -d)"
+chmod 0700 "${tmp_work_dir}"
+tmp_tfvars="${tmp_work_dir}/terraform.tfvars.json"
+tmp_images="${tmp_work_dir}/pushed-images.txt"
 tmp_override=""
 cleanup() {
-  rm -f "${tmp_tfvars}" "${tmp_images}"
+  rm -rf "${tmp_work_dir}"
   if [[ -n "${tmp_override}" ]]; then
     rm -f "${tmp_override}"
   fi

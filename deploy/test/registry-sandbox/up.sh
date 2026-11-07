@@ -308,11 +308,12 @@ if [[ "${SKIP_IMAGE_BUILD}" -eq 0 ]]; then
   fi
 fi
 
-tmp_tfvars="$(mktemp)"
-chmod 0600 "${tmp_tfvars}"
+tmp_work_dir="$(mktemp -d)"
+chmod 0700 "${tmp_work_dir}"
+tmp_tfvars="${tmp_work_dir}/terraform.tfvars.json"
 tmp_override=""
 cleanup() {
-  rm -f "${tmp_tfvars}" "${REPO_ROOT}/.grain-ca.crt"
+  rm -rf "${tmp_work_dir}" "${REPO_ROOT}/.grain-ca.crt"
   if [[ -n "${tmp_override}" ]]; then
     rm -f "${tmp_override}"
   fi
