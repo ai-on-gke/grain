@@ -271,6 +271,17 @@ const (
 	ConfigMapMethod             = "config-map"
 	ConfigMapRef                = ConfigMapCapabilityServerID + "#" + ConfigMapMethod
 	BootstrapPlaybooksGrant     = ConfigMapRef + `={"config_maps":["bootstrap"]}`
+
+	// GitHubCapabilityServerID is the canonical capability_id of the
+	// in-process github server (design/design/unified-grants.design.md §1, §4),
+	// answered by grain itself with the run's team git credential.
+	GitHubCapabilityServerID = "https://grain.dev/capabilities/github"
+
+	// GitHubReadIssuesMethod lets a task read GitHub issues and comments on
+	// the repositories its run may reach (formerly read-issues).
+	GitHubReadIssuesMethod = "read-issues"
+	GitHubReadIssuesRef    = GitHubCapabilityServerID + "#" + GitHubReadIssuesMethod
+	GitHubReadIssuesGrant  = GitHubReadIssuesRef + "={}"
 )
 
 // ModelProxyVendors are the vendors the model-proxy server proxies, in
@@ -468,6 +479,22 @@ func IsGrainCIGrant(grant string) bool {
 // HasGrainCI reports whether any grant in grants opens grain#ci.
 func HasGrainCI(grants []string) bool {
 	return slices.ContainsFunc(grants, IsGrainCIGrant)
+}
+
+// IsGitHubReadIssuesGrant reports whether grant names github#read-issues
+// (recorded or bare) or the retired bare read-issues alias.
+func IsGitHubReadIssuesGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if s == "read-issues" {
+		return true
+	}
+	return CapabilityGrantRef(s) == GitHubReadIssuesRef
+}
+
+// HasGitHubReadIssues reports whether any grant in grants opens
+// github#read-issues.
+func HasGitHubReadIssues(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGitHubReadIssuesGrant)
 }
 
 // ParseGrainSQLGrant reports whether grant names grain#sql (recorded or bare)
@@ -732,6 +759,9 @@ var legacyGrantReplacements = map[string]string{
 	// bootstrap map.
 	"bootstrap-playbooks": BootstrapPlaybooksGrant,
 	// Retired by schema migration 121 onto the in-process github server's
+	// read-issues method, which reads with the same team git credential.
+	"read-issues": GitHubReadIssuesGrant,
+	// Retired by schema migration 122 onto the in-process github server's
 	// sandbox-repo method.
 	"github-sandbox": GitHubSandboxRepoGrant,
 }

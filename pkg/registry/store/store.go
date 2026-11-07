@@ -381,6 +381,11 @@ func (s *Store) SetNow(fn func() time.Time) {
 	}
 }
 
+// Now returns the current UTC time according to the store's clock.
+func (s *Store) Now() time.Time {
+	return s.now()
+}
+
 func (s *Store) now() time.Time {
 	if s != nil && s.nowFn != nil {
 		return s.nowFn().UTC()
@@ -2917,6 +2922,44 @@ func CombinedAPIScopes(rows []ScopeRow) []api.Scope {
 	return out
 }
 
+// RawAPIScopes returns the `api.Scope` slices filtered to a single `source` ("reported" or "declared").
+func RawAPIScopes(rows []ScopeRow, source api.ScopeSource) []api.Scope {
+	var out []api.Scope
+	for _, r := range rows {
+		if api.ScopeSource(r.Source) != source {
+			continue
+		}
+		active := r.Active || (r.EntryID == "" && r.InactiveReason == "" && r.ConflictWith == "")
+		role := api.RoleSecondary
+		if r.PrimaryClaim {
+			role = api.RolePrimary
+		}
+		effRole := r.EffectiveRole
+		if effRole == "" {
+			effRole = role
+		}
+		var claimedAt *time.Time
+		if !r.ClaimedAt.IsZero() {
+			t := r.ClaimedAt
+			claimedAt = &t
+		}
+		out = append(out, api.Scope{
+			Repo:           r.Repo,
+			PathPrefix:     r.PathPrefix,
+			Role:           role,
+			EffectiveRole:  effRole,
+			Source:         api.ScopeSource(r.Source),
+			Branch:         r.Branch,
+			Active:         active,
+			InactiveReason: api.InactiveReason(r.InactiveReason),
+			ConflictWith:   r.ConflictWith,
+			ClaimedAt:      claimedAt,
+			UpdatedAt:      r.UpdatedAt,
+		})
+	}
+	return out
+}
+
 // EntryScopeConflicts returns structured `api.ScopeConflict` items for any scopes on `e`
 // that are currently inactive due to `primary_conflict`.
 func (s *Store) EntryScopeConflicts(ctx context.Context, e *EntryRow) []api.ScopeConflict {
@@ -3453,6 +3496,27 @@ func (s *Store) DeleteReplica(ctx context.Context, replicaID string) error {
 	return err
 }
 
+// ListReplicas returns all registered replicas ordered by `replica_id`.
+func (s *Store) ListReplicas(ctx context.Context) ([]ReplicaRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT replica_id, peer_addr, started_at, heartbeat_at
+FROM registry.replicas
+ORDER BY replica_id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ReplicaRow
+	for rows.Next() {
+		var r ReplicaRow
+		if err := rows.Scan(&r.ReplicaID, &r.PeerAddr, &r.StartedAt, &r.HeartbeatAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // AcquireTunnelSession increments `entries.session_epoch` and binds `tunnel_sessions`
 // to `replicaID` at that fenced epoch.
 func (s *Store) AcquireTunnelSession(ctx context.Context, entryID, replicaID, remoteAddr string) (*TunnelSessionRow, error) {
@@ -3785,6 +3849,8 @@ func (s *Store) ToAPIEntry(e *EntryRow, instanceDomain string) api.Entry {
 		LastSeenAt:          lastSeenAt,
 		HeartbeatAgeSeconds: s.HeartbeatAgeSeconds(e),
 		Scopes:              CombinedAPIScopes(e.Scopes),
+		ReportedScopes:      RawAPIScopes(e.Scopes, api.SourceReported),
+		DeclaredScopes:      RawAPIScopes(e.Scopes, api.SourceDeclared),
 		ScopeConflicts:      conflicts,
 		Credentials:         e.Credentials,
 		CreatedAt:           e.CreatedAt,

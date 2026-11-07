@@ -664,7 +664,7 @@ func TestCatalogueGCPKeyAccountOverrideAndUnnamedGrants(t *testing.T) {
 
 // TestCatalogueRetiredGitHubSandboxBindsSandboxRepo: a catalogue saved
 // before github-sandbox was retired onto github#sandbox-repo (schema
-// migration 121) keeps its in_process.github-sandbox entry, which the
+// migration 122) keeps its in_process.github-sandbox entry, which the
 // migration does not rewrite. Disabling or restricting it must keep
 // binding the method in every spelling a task, template or workflow can
 // carry -- recorded, bare reference, other JSON spacing and the

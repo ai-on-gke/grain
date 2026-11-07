@@ -211,7 +211,8 @@ func TestGitHubSandboxServerMigrationFidelity(t *testing.T) {
 			model.GitHubSandboxRepoGrant,
 			model.CanonicalLegacyGrant("github-sandbox"),
 			model.GitHubSandboxRepoRef,
-			model.GitHubCapabilityServerID,
+			// Not the bare server id: the github server also answers
+			// core's #read-issues, so a grant naming no method is refused.
 		} {
 			lookup := grainserver.Lookup(nil)
 			recorded, err := model.NormalizeCapabilityGrants([]model.Grant{{Capability: spelling, Via: model.GrantByLabel}}, lookup)

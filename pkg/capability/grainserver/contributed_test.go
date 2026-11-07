@@ -15,9 +15,13 @@
 package grainserver_test
 
 import (
+	"context"
 	"slices"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/capability/capabilitytest"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
@@ -56,7 +60,7 @@ func TestContributedMethodServer(t *testing.T) {
 			t.Errorf("status = %+v", s)
 		}
 	}
-	if want := []string{grainserver.ID, grainserver.RepoID, capabilitytest.MethodServer}; !slices.Equal(ids, want) {
+	if want := []string{grainserver.ID, grainserver.RepoID, grainserver.GitHubID, capabilitytest.MethodServer}; !slices.Equal(ids, want) {
 		t.Errorf("Statuses() = %v, want %v", ids, want)
 	}
 
@@ -64,5 +68,71 @@ func TestContributedMethodServer(t *testing.T) {
 	_, _ = grainserver.Lookup(func(string) (*protocol.Server, error) { fellBack = true; return nil, nil })("https://grain.example/elsewhere")
 	if !fellBack {
 		t.Error("a server nothing registered did not fall back")
+	}
+}
+
+// A method a build contributes to core's github server (capability.Register:
+// githubsandbox's #sandbox-repo) is served on the one in-process github
+// server beside core's #read-issues, listed once, and released through a
+// server built afresh after its mint: Lookup rebuilds the github server
+// every time, so the contributed method's lease must outlive the server
+// that minted it, or release_ would never reach its Release.
+func TestGitHubServerServesAContributedMethod(t *testing.T) {
+	var minted, released atomic.Int32
+	unregister := capability.Register(capability.Method{
+		Server: grainserver.GitHubID,
+		Spec: protocol.MethodSpec{
+			Name: "scratch",
+			Args: map[string]any{"type": "object", "additionalProperties": false},
+			Mint: func(context.Context, string, time.Time, map[string]any) (*protocol.MintResponse, error) {
+				minted.Add(1)
+				return &protocol.MintResponse{Status: protocol.StatusOK}, nil
+			},
+			Release: func(context.Context, string) error {
+				released.Add(1)
+				return nil
+			},
+			Now: func() time.Time { return time.Time{} },
+		},
+	})
+	defer unregister()
+
+	st := grainserver.GitHubStatus()
+	if want := []string{grainserver.ReadIssuesMethod, "scratch"}; !slices.Equal(st.Methods, want) {
+		t.Fatalf("GitHubStatus().Methods = %v, want %v", st.Methods, want)
+	}
+	var github int
+	for _, s := range grainserver.Statuses() {
+		if s.ID == grainserver.GitHubID {
+			github++
+		}
+	}
+	if github != 1 {
+		t.Errorf("Statuses() lists %s %d times, want once", grainserver.GitHubID, github)
+	}
+
+	lookup := grainserver.Lookup(nil)
+	ref := grainserver.GitHubID + "#scratch"
+	grants, err := model.CapabilityGrants([]model.Grant{
+		{Capability: ref + "={}", Via: model.GrantByLabel},
+		{Capability: grainserver.ReadIssuesGrant, Via: model.GrantByLabel},
+	}, lookup)
+	if err != nil {
+		t.Fatalf("CapabilityGrants: %v", err)
+	}
+	pass, err := protocol.MintPass(context.Background(), grants, func(id string) (protocol.Minter, error) {
+		return lookup(id)
+	}, protocol.PassOptions{Deployment: "test", Task: "1", Attempt: 1, Deadline: time.Now().Add(time.Hour)})
+	if err != nil {
+		t.Fatalf("MintPass: %v", err)
+	}
+	if minted.Load() != 1 {
+		t.Fatalf("minted %d times, want 1", minted.Load())
+	}
+	if _, err := pass.Release(context.Background()); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if released.Load() != 1 {
+		t.Errorf("released %d times, want 1: the release missed the lease its mint recorded", released.Load())
 	}
 }

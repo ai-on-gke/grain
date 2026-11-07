@@ -206,9 +206,6 @@ func CheckDaemonFlags(cfg Config, hasLocalSandboxes bool, checkPackageCache func
 	if cfg.BackupInterval < 0 {
 		return errors.New("-backup-interval cannot be negative")
 	}
-	if cfg.BackupInterval > 0 && cfg.DbDriver == "postgres" {
-		return errors.New("-backup-interval requires SQLite; database snapshotting is not supported on Postgres (use pg_dump or database-native backups)")
-	}
 	if cfg.MaxMergers < 0 {
 		return errors.New("-max-mergers cannot be negative")
 	}

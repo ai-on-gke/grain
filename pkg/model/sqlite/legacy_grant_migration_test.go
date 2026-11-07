@@ -119,7 +119,8 @@ var retiredGrants = []struct {
 	{115, "self-debug", []string{"api:self-debug", model.GrainSourceGrant}},
 	{118, "bootstrap-playbooks", []string{model.BootstrapPlaybooksGrant}},
 	{120, "github-credential:release-bot", []string{model.RepoCredentialGrant("release-bot")}},
-	{121, "github-sandbox", []string{model.GitHubSandboxRepoGrant}},
+	{121, "read-issues", []string{model.GitHubReadIssuesGrant}},
+	{122, "github-sandbox", []string{model.GitHubSandboxRepoGrant}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'
@@ -152,9 +153,9 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 	store, db, ctx := openStore(t)
 
 	cfg := testConfig()
-	cfg.DefaultCapabilities = []string{legacy, "read-issues"}
+	cfg.DefaultCapabilities = []string{legacy, "durable"}
 	cfg.ConsoleSessions = []model.ConsoleSession{
-		{ID: "director", Title: "Director", Capabilities: []string{"read-issues", legacy}},
+		{ID: "director", Title: "Director", Capabilities: []string{"durable", legacy}},
 		{ID: "steward", Title: "Steward", Capabilities: append(slices.Clone(replacements), legacy)},
 		{ID: "quiet", Title: "Quiet"},
 	}
@@ -162,18 +163,18 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 		t.Fatal(err)
 	}
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
-	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets, DefaultCapabilities: []string{"read-issues", legacy},
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets, DefaultCapabilities: []string{"durable", legacy},
 		CICapabilities: []string{"release-gate-read", legacy}}); err != nil {
 		t.Fatal(err)
 	}
 	fixture := map[string]map[string][]string{
 		"task_grant": {
-			"1": {legacy, "read-issues"},
+			"1": {legacy, "durable"},
 			"2": append([]string{legacy}, replacements...),
 			"3": {"api:tasks:write"},
 		},
 		"template_grant": {"t": {legacy}},
-		"schedule_grant": {"s": {legacy, "read-issues"}},
+		"schedule_grant": {"s": {legacy, "durable"}},
 	}
 	owners := map[string]string{"task_grant": "task_id", "template_grant": "template_id", "schedule_grant": "schedule_id"}
 	for table, byOwner := range fixture {
@@ -209,7 +210,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := append(slices.Clone(replacements), "read-issues"); !slices.Equal(after.DefaultCapabilities, want) {
+	if want := append(slices.Clone(replacements), "durable"); !slices.Equal(after.DefaultCapabilities, want) {
 		t.Errorf("default capabilities = %v, want %v", after.DefaultCapabilities, want)
 	}
 	if len(after.ConsoleSessions) != len(cfg.ConsoleSessions) {
@@ -230,7 +231,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := append([]string{"read-issues"}, replacements...); !slices.Equal(repo.DefaultCapabilities, want) {
+	if want := append([]string{"durable"}, replacements...); !slices.Equal(repo.DefaultCapabilities, want) {
 		t.Errorf("repo default capabilities = %v, want %v", repo.DefaultCapabilities, want)
 	}
 	// Migrations 83 to 86 rewrite retired names in repo_config.ci_capabilities as well.
@@ -282,10 +283,10 @@ func TestMigration86RewritesCorpResearchIdempotently(t *testing.T) {
 	store, db, ctx := openStore(t)
 
 	cfg := testConfig()
-	cfg.DefaultCapabilities = []string{"priority-dispatch", "corp-research", "read-issues"}
+	cfg.DefaultCapabilities = []string{"priority-dispatch", "corp-research", "durable"}
 	cfg.ConsoleSessions = []model.ConsoleSession{
-		{ID: "director", Title: "Director", Capabilities: []string{"corp-research", "read-issues"}},
-		{ID: "quiet", Title: "Quiet", Capabilities: []string{"read-issues"}},
+		{ID: "director", Title: "Director", Capabilities: []string{"corp-research", "durable"}},
+		{ID: "quiet", Title: "Quiet", Capabilities: []string{"durable"}},
 	}
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
@@ -298,18 +299,18 @@ func TestMigration86RewritesCorpResearchIdempotently(t *testing.T) {
 	}
 	other := model.RepoRef{Owner: "acme", Name: "other"}
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: other,
-		DefaultCapabilities: []string{"read-issues"}, CICapabilities: []string{"release-gate-read"}}); err != nil {
+		DefaultCapabilities: []string{"durable"}, CICapabilities: []string{"release-gate-read"}}); err != nil {
 		t.Fatal(err)
 	}
 	for _, row := range []struct{ table, owner, id, capability string }{
 		{"task_grant", "task_id", "1", "corp-research"},
-		{"task_grant", "task_id", "1", "read-issues"},
+		{"task_grant", "task_id", "1", "durable"},
 		{"task_grant", "task_id", "2", "corp-research"},
 		{"task_grant", "task_id", "2", model.CorpResearchGrant},
 		{"task_grant", "task_id", "3", "api:tasks:write"},
 		{"template_grant", "template_id", "t", "corp-research"},
 		{"schedule_grant", "schedule_id", "s", "corp-research"},
-		{"schedule_grant", "schedule_id", "s", "read-issues"},
+		{"schedule_grant", "schedule_id", "s", "durable"},
 	} {
 		if _, err := db.ExecContext(ctx, "INSERT INTO `"+row.table+"` (`"+row.owner+"`, `capability`, `via`) VALUES (?, ?, 'label')",
 			row.id, row.capability); err != nil {
@@ -327,24 +328,24 @@ func TestMigration86RewritesCorpResearchIdempotently(t *testing.T) {
 	after := storedGrantState(t, ctx, db)
 
 	corp := model.CorpResearchGrant
-	wantTasks := map[string][]string{"1": {corp, "read-issues"}, "2": {corp}, "3": {"api:tasks:write"}}
+	wantTasks := map[string][]string{"1": {corp, "durable"}, "2": {corp}, "3": {"api:tasks:write"}}
 	if got := after["task_grant"]; !equalRows(got.(map[string][]string), wantTasks) {
 		t.Errorf("task grants = %v, want %v", got, wantTasks)
 	}
 	if got, want := after["template_grant"], map[string][]string{"t": {corp}}; !equalRows(got.(map[string][]string), want) {
 		t.Errorf("template grants = %v, want %v", got, want)
 	}
-	if got, want := after["schedule_grant"], map[string][]string{"s": {"read-issues", corp}}; !equalRows(got.(map[string][]string), want) {
+	if got, want := after["schedule_grant"], map[string][]string{"s": {"durable", corp}}; !equalRows(got.(map[string][]string), want) {
 		t.Errorf("schedule grants = %v, want %v", got, want)
 	}
 	gotCfg, err := store.GetConfig(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"priority-dispatch", corp, "read-issues"}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
+	if want := []string{"priority-dispatch", corp, "durable"}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
 		t.Errorf("default capabilities = %v, want %v", gotCfg.DefaultCapabilities, want)
 	}
-	if got, want := gotCfg.ConsoleSessions[0].Capabilities, []string{corp, "read-issues"}; !slices.Equal(got, want) {
+	if got, want := gotCfg.ConsoleSessions[0].Capabilities, []string{corp, "durable"}; !slices.Equal(got, want) {
 		t.Errorf("director capabilities = %v, want %v", got, want)
 	}
 	gotRepo, err := store.GetRepoConfig(ctx, widgets)
@@ -416,7 +417,7 @@ func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 		}
 		if err := store.PutRepoConfig(ctx, model.RepoConfig{
 			Repo:           dedup,
-			CICapabilities: append(append(slices.Clone(r.to), r.legacy), "read-issues"),
+			CICapabilities: append(append(slices.Clone(r.to), r.legacy), "durable"),
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -457,12 +458,12 @@ func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 		}
 		sameGrantMeaning(t, r.legacy+" widgets CI capabilities", beforeWidgets, gotWidgets.CICapabilities)
 
-		beforeDedup := append(append(slices.Clone(r.to), r.legacy), "read-issues")
+		beforeDedup := append(append(slices.Clone(r.to), r.legacy), "durable")
 		gotDedup, err := store.GetRepoConfig(ctx, dedup)
 		if err != nil || gotDedup == nil {
 			t.Fatalf("%s dedup: %v, %+v", r.legacy, err, gotDedup)
 		}
-		wantDedup := append(slices.Clone(r.to), "read-issues")
+		wantDedup := append(slices.Clone(r.to), "durable")
 		if !slices.Equal(gotDedup.CICapabilities, wantDedup) {
 			t.Errorf("%s: dedup CI capabilities = %v, want %v", r.legacy, gotDedup.CICapabilities, wantDedup)
 		}
@@ -501,7 +502,7 @@ func TestMigrationFoldsRetiredCatalogueInProcess(t *testing.T) {
 	cfg.CapabilityPolicy = model.CapabilityPolicy{
 		Catalogue: &model.CapabilityCatalogue{
 			Defaults: model.CatalogueDefaults{
-				Task: []string{"pipeline-control", "read-issues"},
+				Task: []string{"pipeline-control", "durable"},
 				Repos: map[string]model.CatalogueRepoDefaults{
 					"acme/widgets": {
 						Task: []string{"release-notes", "memory"},
@@ -519,7 +520,7 @@ func TestMigrationFoldsRetiredCatalogueInProcess(t *testing.T) {
 					Repos: model.Patterns{"acme/*"},
 					Kinds: model.Patterns{"task", "session"},
 				}},
-				"read-issues": {Restrictions: &model.CapabilityRestrictions{
+				"durable": {Restrictions: &model.CapabilityRestrictions{
 					Repos: model.Patterns{"ai-on-gke/grain"},
 				}},
 			},
@@ -559,7 +560,7 @@ func TestMigrationFoldsRetiredCatalogueInProcess(t *testing.T) {
 			t.Errorf("inProcess[%q] survived migration: %+v", retired, cat.InProcess)
 		}
 	}
-	if _, exists := cat.InProcess["read-issues"]; !exists {
+	if _, exists := cat.InProcess["durable"]; !exists {
 		t.Error("inProcess[read-issues] was dropped")
 	}
 	mem, ok := cat.APIScopes.Presets["memory"]
@@ -575,7 +576,7 @@ func TestMigrationFoldsRetiredCatalogueInProcess(t *testing.T) {
 		!slices.Equal([]string(tq.Restrictions.Kinds), []string{"task"}) {
 		t.Fatalf("apiScopes.presets[test-quarantine] = %+v, want conservative intersection", tq)
 	}
-	if want := []string{"api:pipeline-control", "read-issues"}; !slices.Equal(cat.Defaults.Task, want) {
+	if want := []string{"api:pipeline-control", "durable"}; !slices.Equal(cat.Defaults.Task, want) {
 		t.Errorf("catalogue.defaults.task = %v, want %v", cat.Defaults.Task, want)
 	}
 	if want := []string{"api:release-notes", "api:memory"}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
@@ -640,9 +641,9 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 	cfg.GCPProject = "acme-pool"
 	cfg.GCPServiceAccountEmail = "sandbox-agent@acme-pool.iam.gserviceaccount.com"
 	cfg.GCPServiceAccountCount = 3
-	cfg.DefaultCapabilities = []string{"read-issues", "gcp-key", "gcp-key:deploy"}
+	cfg.DefaultCapabilities = []string{"durable", "gcp-key", "gcp-key:deploy"}
 	cfg.ConsoleSessions = []model.ConsoleSession{
-		{ID: "director", Title: "Director", Capabilities: []string{"gcp-key", "gcp-key:staging", "read-issues"}},
+		{ID: "director", Title: "Director", Capabilities: []string{"gcp-key", "gcp-key:staging", "durable"}},
 	}
 	cfg.CapabilityPolicy = model.CapabilityPolicy{
 		Rules: []model.CapabilityPolicyRule{
@@ -651,11 +652,11 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		},
 		Catalogue: &model.CapabilityCatalogue{
 			Defaults: model.CatalogueDefaults{
-				Task: []string{"read-issues", "gcp-key", "gcp-key:deploy"},
+				Task: []string{"durable", "gcp-key", "gcp-key:deploy"},
 				CI:   []string{"gcp-key:staging"},
 				Repos: map[string]model.CatalogueRepoDefaults{
 					"acme/widgets": {
-						Task: []string{"gcp-key", "gcp-key:deploy", "read-issues"},
+						Task: []string{"gcp-key", "gcp-key:deploy", "durable"},
 						CI:   []string{"release-gate-read", "gcp-key", "gcp-key:staging"},
 					},
 				},
@@ -690,7 +691,7 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:                widgets,
-		DefaultCapabilities: []string{"gcp-key", "gcp-key:deploy", "read-issues"},
+		DefaultCapabilities: []string{"gcp-key", "gcp-key:deploy", "durable"},
 		CICapabilities:      []string{"release-gate-read", "gcp-key", "gcp-key:staging"},
 	}); err != nil {
 		t.Fatal(err)
@@ -699,7 +700,7 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 	for _, row := range []struct{ table, owner, id, capability string }{
 		{"task_grant", "task_id", "t1", "gcp-key"},
 		{"task_grant", "task_id", "t1", "gcp-key:deploy"},
-		{"task_grant", "task_id", "t1", "read-issues"},
+		{"task_grant", "task_id", "t1", "durable"},
 		{"template_grant", "template_id", "suite-tmpl", "gcp-key"},
 		{"template_grant", "template_id", "suite-tmpl", "gcp-key:staging"},
 		{"schedule_grant", "schedule_id", "sched-1", "gcp-key:deploy"},
@@ -789,10 +790,10 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		deployGrant := model.GCPKeyServerGrant("deploy")
 		stagingGrant := model.GCPKeyServerGrant("staging")
 
-		if want := []string{"read-issues", sandboxGrant, deployGrant}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
+		if want := []string{"durable", sandboxGrant, deployGrant}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
 			t.Errorf("DefaultCapabilities = %v, want %v", gotCfg.DefaultCapabilities, want)
 		}
-		if want := []string{sandboxGrant, stagingGrant, "read-issues"}; !slices.Equal(gotCfg.ConsoleSessions[0].Capabilities, want) {
+		if want := []string{sandboxGrant, stagingGrant, "durable"}; !slices.Equal(gotCfg.ConsoleSessions[0].Capabilities, want) {
 			t.Errorf("ConsoleSessions[0].Capabilities = %v, want %v", gotCfg.ConsoleSessions[0].Capabilities, want)
 		}
 		if len(gotCfg.CapabilityPolicy.Rules) != 2 ||
@@ -803,13 +804,13 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		if gotCfg.CapabilityPolicy.Catalogue == nil {
 			t.Fatalf("CapabilityPolicy.Catalogue nil")
 		}
-		if want := []string{"read-issues", sandboxGrant, deployGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Task, want) {
+		if want := []string{"durable", sandboxGrant, deployGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Task, want) {
 			t.Errorf("Catalogue.Defaults.Task = %v, want %v", gotCfg.CapabilityPolicy.Catalogue.Defaults.Task, want)
 		}
 		if want := []string{stagingGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.CI, want) {
 			t.Errorf("Catalogue.Defaults.CI = %v, want %v", gotCfg.CapabilityPolicy.Catalogue.Defaults.CI, want)
 		}
-		if want := []string{sandboxGrant, deployGrant, "read-issues"}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].Task, want) {
+		if want := []string{sandboxGrant, deployGrant, "durable"}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].Task, want) {
 			t.Errorf("Catalogue.Defaults.Repos[acme/widgets].Task = %v, want %v", gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].Task, want)
 		}
 		if want := []string{"release-gate-read", sandboxGrant, stagingGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].CI, want) {
@@ -820,14 +821,14 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		if err != nil || gotRepo == nil {
 			t.Fatalf("GetRepoConfig: %v, %+v", err, gotRepo)
 		}
-		if want := []string{sandboxGrant, deployGrant, "read-issues"}; !slices.Equal(gotRepo.DefaultCapabilities, want) {
+		if want := []string{sandboxGrant, deployGrant, "durable"}; !slices.Equal(gotRepo.DefaultCapabilities, want) {
 			t.Errorf("repo DefaultCapabilities = %v, want %v", gotRepo.DefaultCapabilities, want)
 		}
 		if want := []string{"release-gate-read", sandboxGrant, stagingGrant}; !slices.Equal(gotRepo.CICapabilities, want) {
 			t.Errorf("repo CICapabilities = %v, want %v", gotRepo.CICapabilities, want)
 		}
 
-		wantTasks := map[string][]string{"t1": {deployGrant, sandboxGrant, "read-issues"}}
+		wantTasks := map[string][]string{"t1": {deployGrant, sandboxGrant, "durable"}}
 		if got := grantRows(t, ctx, sqlDB, "task_grant", "task_id"); !equalRows(got, wantTasks) {
 			t.Errorf("task_grant = %v, want %v", got, wantTasks)
 		}
@@ -963,18 +964,124 @@ func TestMigration96HandlesPreexistingAdminConfigShapes(t *testing.T) {
 	})
 }
 
+func TestMigration121RewritesReadIssuesPolicy(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+
+	cfg := testConfig()
+	cfg.DefaultCapabilities = []string{"durable", "read-issues"}
+	cfg.CapabilityPolicy = model.CapabilityPolicy{
+		Rules: []model.CapabilityPolicyRule{
+			{Capability: "read-issues", Repos: []string{"acme/widgets"}, AllowUntrusted: true},
+		},
+		Catalogue: &model.CapabilityCatalogue{
+			Defaults: model.CatalogueDefaults{
+				Task: []string{"durable", "read-issues"},
+				CI:   []string{"read-issues"},
+				Repos: map[string]model.CatalogueRepoDefaults{
+					"acme/widgets": {
+						Task: []string{"read-issues", "durable"},
+						CI:   []string{"release-gate-read", "read-issues"},
+					},
+				},
+			},
+			InProcess: map[string]model.CatalogueInProcess{
+				"read-issues": {Restrictions: &model.CapabilityRestrictions{
+					Repos: model.Patterns{"acme/*"},
+				}},
+			},
+		},
+	}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:                widgets,
+		DefaultCapabilities: []string{"read-issues", "durable"},
+		CICapabilities:      []string{"release-gate-read", "read-issues"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 120 WHERE `id` = 1"); err != nil {
+		t.Fatal(err)
+	}
+	exportDir := t.TempDir()
+	if err := staterepo.Export(ctx, db, exportDir); err != nil {
+		t.Fatalf("staterepo.Export at schema 120: %v", err)
+	}
+	if err := staterepo.WriteSchemaVersion(exportDir, 120); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("migrating 120 -> 120: %v", err)
+	}
+
+	assertPolicy := func(t *testing.T, s *model.Store) {
+		t.Helper()
+		got, err := s.GetConfig(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.CapabilityPolicy.Rules) != 1 || got.CapabilityPolicy.Rules[0].Capability != model.GitHubReadIssuesRef || !got.CapabilityPolicy.Rules[0].AllowUntrusted {
+			t.Errorf("CapabilityPolicy.Rules = %+v, want %s AllowUntrusted=true", got.CapabilityPolicy.Rules, model.GitHubReadIssuesRef)
+		}
+		cat := got.CapabilityPolicy.Catalogue
+		if cat == nil {
+			t.Fatal("CapabilityPolicy.Catalogue nil")
+		}
+		if want := []string{"durable", model.GitHubReadIssuesGrant}; !slices.Equal(cat.Defaults.Task, want) {
+			t.Errorf("Catalogue.Defaults.Task = %v, want %v", cat.Defaults.Task, want)
+		}
+		if want := []string{model.GitHubReadIssuesGrant}; !slices.Equal(cat.Defaults.CI, want) {
+			t.Errorf("Catalogue.Defaults.CI = %v, want %v", cat.Defaults.CI, want)
+		}
+		if want := []string{model.GitHubReadIssuesGrant, "durable"}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
+			t.Errorf("Catalogue.Defaults.Repos[acme/widgets].Task = %v, want %v", cat.Defaults.Repos["acme/widgets"].Task, want)
+		}
+		if want := []string{"release-gate-read", model.GitHubReadIssuesGrant}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].CI, want) {
+			t.Errorf("Catalogue.Defaults.Repos[acme/widgets].CI = %v, want %v", cat.Defaults.Repos["acme/widgets"].CI, want)
+		}
+		// Legacy in_process.read-issues restriction continues to bind the migrated grant.
+		if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Repo: &model.RepoRef{Owner: "other", Name: "repo"}, Grants: []string{model.GitHubReadIssuesGrant}}); err == nil {
+			t.Error("in_process.read-issues failed to bind migrated github#read-issues grant on disallowed repo")
+		}
+		if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Repo: &model.RepoRef{Owner: "acme", Name: "widgets"}, Grants: []string{model.GitHubReadIssuesGrant}}); err != nil {
+			t.Errorf("ValidateGrants on allowed repo failed: %v", err)
+		}
+	}
+
+	assertPolicy(t, store)
+
+	// Re-running migration 121 is idempotent.
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 120 WHERE `id` = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("re-running migration 121: %v", err)
+	}
+	assertPolicy(t, store)
+
+	importedStore, importedDB, _ := openStore(t)
+	if err := staterepo.Import(ctx, importedDB, exportDir); err != nil {
+		t.Fatalf("staterepo.Import of schema-120 export: %v", err)
+	}
+	assertPolicy(t, importedStore)
+}
+
 func TestMigrate120GitHubCredentialToRepoServer(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	cfg := model.Config{
-		DefaultCapabilities: []string{"github-credential:release-bot", "read-issues"},
+		DefaultCapabilities: []string{"github-credential:release-bot", "durable"},
 		ConsoleSessions: []model.ConsoleSession{
 			{
 				ID:           "director",
 				Title:        "Director",
-				Capabilities: []string{"github-credential:ops-bot", "read-issues"},
+				Capabilities: []string{"github-credential:ops-bot", "durable"},
 			},
 		},
 		CapabilityPolicy: model.CapabilityPolicy{
@@ -1001,7 +1108,7 @@ func TestMigrate120GitHubCredentialToRepoServer(t *testing.T) {
 	}
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:                widgets,
-		DefaultCapabilities: []string{"github-credential:widgets-bot", "read-issues"},
+		DefaultCapabilities: []string{"github-credential:widgets-bot", "durable"},
 		CICapabilities:      []string{"github-credential:ci-bot"},
 	}); err != nil {
 		t.Fatal(err)
@@ -1009,7 +1116,7 @@ func TestMigrate120GitHubCredentialToRepoServer(t *testing.T) {
 
 	for _, ins := range []struct{ table, col, id, cap string }{
 		{"task_grant", "task_id", "t1", "github-credential:release-bot"},
-		{"task_grant", "task_id", "t1", "read-issues"},
+		{"task_grant", "task_id", "t1", "durable"},
 		{"template_grant", "template_id", "rel-tmpl", "github-credential:release-bot"},
 		{"schedule_grant", "schedule_id", "rel-sched", "github-credential:ops-bot"},
 	} {
@@ -1034,10 +1141,10 @@ func TestMigrate120GitHubCredentialToRepoServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{releaseGrant, "read-issues"}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
+	if want := []string{releaseGrant, "durable"}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
 		t.Errorf("DefaultCapabilities = %v, want %v", gotCfg.DefaultCapabilities, want)
 	}
-	if want := []string{opsGrant, "read-issues"}; !slices.Equal(gotCfg.ConsoleSessions[0].Capabilities, want) {
+	if want := []string{opsGrant, "durable"}; !slices.Equal(gotCfg.ConsoleSessions[0].Capabilities, want) {
 		t.Errorf("ConsoleSessions[0].Capabilities = %v, want %v", gotCfg.ConsoleSessions[0].Capabilities, want)
 	}
 	if len(gotCfg.CapabilityPolicy.Rules) != 2 ||
@@ -1061,14 +1168,14 @@ func TestMigrate120GitHubCredentialToRepoServer(t *testing.T) {
 	if err != nil || gotRepo == nil {
 		t.Fatalf("GetRepoConfig: %v, %+v", err, gotRepo)
 	}
-	if want := []string{widgetsGrant, "read-issues"}; !slices.Equal(gotRepo.DefaultCapabilities, want) {
+	if want := []string{widgetsGrant, "durable"}; !slices.Equal(gotRepo.DefaultCapabilities, want) {
 		t.Errorf("repo DefaultCapabilities = %v, want %v", gotRepo.DefaultCapabilities, want)
 	}
 	if want := []string{ciGrant}; !slices.Equal(gotRepo.CICapabilities, want) {
 		t.Errorf("repo CICapabilities = %v, want %v", gotRepo.CICapabilities, want)
 	}
 
-	wantTask := []string{releaseGrant, "read-issues"}
+	wantTask := []string{releaseGrant, "durable"}
 	sort.Strings(wantTask)
 	if got := grantRows(t, ctx, db, "task_grant", "task_id")["t1"]; !slices.Equal(got, wantTask) {
 		t.Errorf("task_grant = %v, want %v", got, wantTask)
@@ -1081,14 +1188,14 @@ func TestMigrate120GitHubCredentialToRepoServer(t *testing.T) {
 	}
 }
 
-func TestMigration121RewritesGitHubSandboxGrantsAndPolicy(t *testing.T) {
+func TestMigration122RewritesGitHubSandboxGrantsAndPolicy(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
 	cfg := testConfig()
-	cfg.DefaultCapabilities = []string{"read-issues", "github-sandbox"}
+	cfg.DefaultCapabilities = []string{"durable", "github-sandbox"}
 	cfg.ConsoleSessions = []model.ConsoleSession{
-		{ID: "director", Title: "Director", Capabilities: []string{"github-sandbox", "read-issues"}},
+		{ID: "director", Title: "Director", Capabilities: []string{"github-sandbox", "durable"}},
 	}
 	cfg.CapabilityPolicy = model.CapabilityPolicy{
 		Rules: []model.CapabilityPolicyRule{
@@ -1097,11 +1204,11 @@ func TestMigration121RewritesGitHubSandboxGrantsAndPolicy(t *testing.T) {
 		},
 		Catalogue: &model.CapabilityCatalogue{
 			Defaults: model.CatalogueDefaults{
-				Task: []string{"read-issues", "github-sandbox"},
+				Task: []string{"durable", "github-sandbox"},
 				CI:   []string{"github-sandbox"},
 				Repos: map[string]model.CatalogueRepoDefaults{
 					"acme/widgets": {
-						Task: []string{"github-sandbox", "read-issues"},
+						Task: []string{"github-sandbox", "durable"},
 						CI:   []string{"github-sandbox", "release-gate-read"},
 					},
 				},
@@ -1114,14 +1221,14 @@ func TestMigration121RewritesGitHubSandboxGrantsAndPolicy(t *testing.T) {
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:                widgets,
-		DefaultCapabilities: []string{"github-sandbox", "read-issues"},
+		DefaultCapabilities: []string{"github-sandbox", "durable"},
 		CICapabilities:      []string{"github-sandbox", "release-gate-read"},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	for _, row := range []struct{ table, owner, id, capability string }{
 		{"task_grant", "task_id", "t1", "github-sandbox"},
-		{"task_grant", "task_id", "t1", "read-issues"},
+		{"task_grant", "task_id", "t1", "durable"},
 		{"task_grant", "task_id", "t2", "github-sandbox"},
 		{"task_grant", "task_id", "t2", model.GitHubSandboxRepoGrant},
 		{"template_grant", "template_id", "tmpl-1", "github-sandbox"},
@@ -1134,19 +1241,19 @@ func TestMigration121RewritesGitHubSandboxGrantsAndPolicy(t *testing.T) {
 		}
 	}
 
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 120 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 121 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	exportDir := t.TempDir()
 	if err := staterepo.Export(ctx, db, exportDir); err != nil {
-		t.Fatalf("exporting version-120 store: %v", err)
+		t.Fatalf("exporting version-121 store: %v", err)
 	}
-	if err := staterepo.WriteSchemaVersion(exportDir, 120); err != nil {
-		t.Fatalf("stamping version-120 export: %v", err)
+	if err := staterepo.WriteSchemaVersion(exportDir, 121); err != nil {
+		t.Fatalf("stamping version-121 export: %v", err)
 	}
 
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating version-120 store to 121: %v", err)
+		t.Fatalf("migrating version-121 store to 122: %v", err)
 	}
 
 	assertMigrated := func(t *testing.T, s *model.Store, sqlDB *sql.DB) {
@@ -1155,10 +1262,10 @@ func TestMigration121RewritesGitHubSandboxGrantsAndPolicy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := []string{"read-issues", model.GitHubSandboxRepoGrant}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
+		if want := []string{"durable", model.GitHubSandboxRepoGrant}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
 			t.Errorf("DefaultCapabilities = %v, want %v", gotCfg.DefaultCapabilities, want)
 		}
-		if want := []string{model.GitHubSandboxRepoGrant, "read-issues"}; !slices.Equal(gotCfg.ConsoleSessions[0].Capabilities, want) {
+		if want := []string{model.GitHubSandboxRepoGrant, "durable"}; !slices.Equal(gotCfg.ConsoleSessions[0].Capabilities, want) {
 			t.Errorf("ConsoleSessions[0].Capabilities = %v, want %v", gotCfg.ConsoleSessions[0].Capabilities, want)
 		}
 		if len(gotCfg.CapabilityPolicy.Rules) != 2 ||
@@ -1169,13 +1276,13 @@ func TestMigration121RewritesGitHubSandboxGrantsAndPolicy(t *testing.T) {
 		if gotCfg.CapabilityPolicy.Catalogue == nil {
 			t.Fatalf("CapabilityPolicy.Catalogue nil")
 		}
-		if want := []string{"read-issues", model.GitHubSandboxRepoGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Task, want) {
+		if want := []string{"durable", model.GitHubSandboxRepoGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Task, want) {
 			t.Errorf("Catalogue.Defaults.Task = %v, want %v", gotCfg.CapabilityPolicy.Catalogue.Defaults.Task, want)
 		}
 		if want := []string{model.GitHubSandboxRepoGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.CI, want) {
 			t.Errorf("Catalogue.Defaults.CI = %v, want %v", gotCfg.CapabilityPolicy.Catalogue.Defaults.CI, want)
 		}
-		if want := []string{model.GitHubSandboxRepoGrant, "read-issues"}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].Task, want) {
+		if want := []string{model.GitHubSandboxRepoGrant, "durable"}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].Task, want) {
 			t.Errorf("Catalogue.Defaults.Repos[acme/widgets].Task = %v, want %v", gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].Task, want)
 		}
 		if want := []string{model.GitHubSandboxRepoGrant, "release-gate-read"}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].CI, want) {
@@ -1185,14 +1292,14 @@ func TestMigration121RewritesGitHubSandboxGrantsAndPolicy(t *testing.T) {
 		if err != nil || gotRepo == nil {
 			t.Fatalf("GetRepoConfig: %v, %+v", err, gotRepo)
 		}
-		if want := []string{model.GitHubSandboxRepoGrant, "read-issues"}; !slices.Equal(gotRepo.DefaultCapabilities, want) {
+		if want := []string{model.GitHubSandboxRepoGrant, "durable"}; !slices.Equal(gotRepo.DefaultCapabilities, want) {
 			t.Errorf("repo DefaultCapabilities = %v, want %v", gotRepo.DefaultCapabilities, want)
 		}
 		if want := []string{model.GitHubSandboxRepoGrant, "release-gate-read"}; !slices.Equal(gotRepo.CICapabilities, want) {
 			t.Errorf("repo CICapabilities = %v, want %v", gotRepo.CICapabilities, want)
 		}
 		wantTasks := map[string][]string{
-			"t1": {model.GitHubSandboxRepoGrant, "read-issues"},
+			"t1": {model.GitHubSandboxRepoGrant, "durable"},
 			"t2": {model.GitHubSandboxRepoGrant},
 		}
 		if got := grantRows(t, ctx, sqlDB, "task_grant", "task_id"); !equalRows(got, wantTasks) {
@@ -1210,17 +1317,17 @@ func TestMigration121RewritesGitHubSandboxGrantsAndPolicy(t *testing.T) {
 
 	assertMigrated(t, store, db)
 
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 120 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 121 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("re-running migration 121: %v", err)
+		t.Fatalf("re-running migration 122: %v", err)
 	}
 	assertMigrated(t, store, db)
 
 	importedStore, importedDB, _ := openStore(t)
 	if err := staterepo.Import(ctx, importedDB, exportDir); err != nil {
-		t.Fatalf("staterepo.Import of schema-120 export: %v", err)
+		t.Fatalf("staterepo.Import of schema-121 export: %v", err)
 	}
 	assertMigrated(t, importedStore, importedDB)
 }

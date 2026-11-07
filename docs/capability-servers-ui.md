@@ -216,10 +216,10 @@ until they are changed or the server is added back under the same ID.
 
 **Settings → Legacy capabilities** is a different thing: the capabilities built
 into grain itself before capability servers, each granted by a bare name such
-as `read-issues` or `priority-dispatch` and handed over by grain directly rather than by a
+as `priority-dispatch` or `durable` and handed over by grain directly rather than by a
 server ([ci-capabilities.md](ci-capabilities.md)). Most have been retired onto
 server methods (`gcp-key` onto `…/gcp#gcp-key`, `github-sandbox` onto
-`…/github#sandbox-repo`, the model proxies onto
+`…/github#sandbox-repo`, `read-issues` onto `…/github#read-issues`, the model proxies onto
 `…/model-proxy`, `grain-log` onto `…/grain#journal`, `self-debug` onto the
 `api:self-debug` preset plus `…/grain#source`, and so on). What is
 left is listed in

@@ -148,13 +148,13 @@ func Load(tree fs.FS, repo model.RepoRef) (model.RepoDeclarations, error) {
 
 	suites := map[string]bool{}
 	for _, file := range suiteFiles {
-		suite, err := parseSuite(file, repo, templates)
+		suite, qualification, err := parseSuite(file, repo, templates)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
 		suites[file.stem] = true
-		declared.Suites = append(declared.Suites, model.DeclaredSuiteFile{Path: file.path, Suite: suite})
+		declared.Suites = append(declared.Suites, model.DeclaredSuiteFile{Path: file.path, Suite: suite, Qualification: qualification})
 	}
 
 	// The repository's own workflows, read once: a schedule file may

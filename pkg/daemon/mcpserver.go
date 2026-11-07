@@ -35,7 +35,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
-	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
@@ -1486,7 +1485,7 @@ var servedGrants = []string{
 	grainserver.LegacySelfDebug, grainserver.SourceRef, grainserver.SourceGrant,
 	grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant,
 	grainserver.LegacyGrainCI, grainserver.CIRef, grainserver.CIGrant, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
-	readissues.CapabilityName,
+	grainserver.LegacyReadIssues, grainserver.ReadIssuesRef, grainserver.ReadIssuesGrant,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
 	selfrepair.CapabilityName, grainserver.HostExecRef, grainserver.HostExecGrant,
@@ -2453,7 +2452,7 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 	}
 
 	registry.Register(GrantedDaemonTools(grants, *grainSrcDir, *grainSecretsDir, *grainStateDir, *taskID, client)...)
-	if grants.Has(readissues.CapabilityName) {
+	if grainserver.HasReadIssues(grants) {
 		registry.Register(issueTools(*dataDir, *githubHost, *githubInsecureHTTP, *prRepo, *prCredential)...)
 	}
 	// The task readers, read_pipeline_changes and read_grain_metrics are

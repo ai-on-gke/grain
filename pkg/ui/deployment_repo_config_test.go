@@ -86,7 +86,7 @@ func TestDeploymentRepoConfigWritesRepoConfig(t *testing.T) {
 	setReq := `{
 		"setupCommand": "npm run custom-setup",
 		"promptExtension": "team-specific prompt",
-		"defaultCapabilities": ["read-issues", "priority-dispatch"],
+		"defaultCapabilities": ["console", "priority-dispatch"],
 		"ciCapabilities": ["repo-read:acme/widgets"],
 		"ciMode": "grain",
 		"repairTemplateId": "template-123",
@@ -108,7 +108,7 @@ func TestDeploymentRepoConfigWritesRepoConfig(t *testing.T) {
 		t.Fatalf("GetRepoConfig = %+v, %v", saved, err)
 	}
 	if saved.SetupCommand != "npm run custom-setup" || saved.CIMode != model.CIModeGrain || saved.RepairTemplateID != "template-123" ||
-		!slices.Equal(saved.DefaultCapabilities, []string{"read-issues", "priority-dispatch"}) {
+		!slices.Equal(saved.DefaultCapabilities, []string{"console", "priority-dispatch"}) {
 		t.Fatalf("repo_config after PUT = %+v", saved)
 	}
 
@@ -258,7 +258,7 @@ func TestDeploymentRepoConfigRefusesUnknownAndInvalidCapabilities(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	keepStoredDefaults := []string{"legacy-default-cap", "read-issues"}
+	keepStoredDefaults := []string{"legacy-default-cap", "console"}
 	resp, err = client.SetDeploymentRepoConfig(ctx, "acme/tools", ui.SetDeploymentRepoConfigRequest{DefaultCapabilities: &keepStoredDefaults})
 	if err != nil {
 		t.Fatalf("SetDeploymentRepoConfig keeping legacy default: %v", err)

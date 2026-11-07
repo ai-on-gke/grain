@@ -721,6 +721,23 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 				{Pattern: "refs/tags/v*"},
 			},
 		}},
+			// And a suite that is a release gate, whose `qualification:`
+			// stanza is in repo_declaration_qualification.
+			Suites: []model.DeclaredSuiteFile{{
+				Path: model.SuiteDeclarationDir + "/edition-qualification.yml",
+				Suite: model.Suite{
+					ID:   model.RepoDeclaredID(model.DeclaredSuite, declaring, "edition-qualification"),
+					Name: "Edition qualification",
+					// No items: a restore issues suite_item's surrogate ids
+					// afresh, in an order the comparison would read as a
+					// difference, and the stanza is what this row is for.
+					Mode: model.SuiteUntilClean, MaxPasses: 1,
+				},
+				Qualification: &model.SuiteQualification{
+					Check: awkward, Candidate: model.CandidateSyncedRelease,
+					Stage1Status: "ci/edition", Upstream: "example.com/acme/core",
+				},
+			}},
 			// And a path trigger (grain/task-1712), whose rule is stored
 			// as JSON in repo_path_trigger.
 			Triggers: []model.PathTrigger{{

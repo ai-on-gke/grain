@@ -26,14 +26,19 @@ import (
 var embeddedStaticFS embed.FS
 
 // NewStaticHandler returns an http.Handler serving the embedded registry SPA
-// bundle from `static/dist` (when built) or `static/placeholder.html`.
+// bundle from `static/` (or `static/dist/` when built there), falling back to
+// `static/placeholder.html` on unbuilt checkouts.
 func NewStaticHandler() http.Handler {
-	distFS, err := fs.Sub(embeddedStaticFS, "static/dist")
-	hasDistIndex := false
-	if err == nil {
-		if f, openErr := distFS.Open("index.html"); openErr == nil {
+	var bundleFS fs.FS
+	for _, candidate := range []string{"static", "static/dist"} {
+		sub, err := fs.Sub(embeddedStaticFS, candidate)
+		if err != nil {
+			continue
+		}
+		if f, openErr := sub.Open("index.html"); openErr == nil {
 			_ = f.Close()
-			hasDistIndex = true
+			bundleFS = sub
+			break
 		}
 	}
 	placeholderBytes, _ := embeddedStaticFS.ReadFile("static/placeholder.html")
@@ -43,17 +48,19 @@ func NewStaticHandler() http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if hasDistIndex {
+		if bundleFS != nil {
 			clean := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
-			if clean == "" || clean == "." {
-				clean = "index.html"
+			if clean != "" && clean != "." && clean != "index.html" && clean != "placeholder.html" {
+				if f, err := bundleFS.Open(clean); err == nil {
+					info, statErr := f.Stat()
+					_ = f.Close()
+					if statErr == nil && !info.IsDir() {
+						http.FileServer(http.FS(bundleFS)).ServeHTTP(w, r)
+						return
+					}
+				}
 			}
-			if f, err := distFS.Open(clean); err == nil {
-				_ = f.Close()
-				http.FileServer(http.FS(distFS)).ServeHTTP(w, r)
-				return
-			}
-			if idx, err := fs.ReadFile(distFS, "index.html"); err == nil {
+			if idx, err := fs.ReadFile(bundleFS, "index.html"); err == nil {
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				_, _ = w.Write(idx)
 				return

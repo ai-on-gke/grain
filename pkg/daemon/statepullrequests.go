@@ -55,6 +55,8 @@ var (
 	_ github.JobLogTailer       = (*StateRepoPullRequestClient)(nil)
 	_ github.WorkflowRunsReader = (*StateRepoPullRequestClient)(nil)
 	_ github.ActionsReader      = (*StateRepoPullRequestClient)(nil)
+	_ github.CommitStatusReader = (*StateRepoPullRequestClient)(nil)
+	_ github.PathCommitLister   = (*StateRepoPullRequestClient)(nil)
 
 	_ orchestrator.ReleaseQualificationForge = (*StateRepoPullRequestClient)(nil)
 )
@@ -1459,6 +1461,32 @@ func (c *StateRepoPullRequestClient) ListTags(owner, name string) ([]github.Tag,
 		return nil, nil
 	}
 	return lister.ListTags(owner, name)
+}
+
+// CommitStatuses is the wrapped client's own, as ListTags is: what the
+// release-qualification reconciler reads a status-declared Stage 1 from.
+func (c *StateRepoPullRequestClient) CommitStatuses(owner, name, ref string) ([]github.CommitStatus, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	reader, ok := c.Client.(github.CommitStatusReader)
+	if !ok {
+		return nil, nil
+	}
+	return reader.CommitStatuses(owner, name, ref)
+}
+
+// ListPathCommits is the wrapped client's own, as ListTags is: what the
+// release-qualification reconciler finds a go.mod sync with.
+func (c *StateRepoPullRequestClient) ListPathCommits(owner, name, ref, filePath string) ([]github.Commit, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	lister, ok := c.Client.(github.PathCommitLister)
+	if !ok {
+		return nil, nil
+	}
+	return lister.ListPathCommits(owner, name, ref, filePath)
 }
 
 // ListMatchingTags is the wrapped client's own, as ListTags is: what the
