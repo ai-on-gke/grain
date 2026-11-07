@@ -526,6 +526,42 @@ describe("DetailOverlay timeline", () => {
     ).toBeInTheDocument();
   });
 
+  // model.TaskEventAdmissionChanged (unified-grants.design.md §4.1): every
+  // change to the admission setting is on the timeline with its old and new
+  // values and who made it.
+  it("shows who changed a task's admission, from what to what", () => {
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          transitions: [
+            { state: "queued", at: "2026-08-28T09:00:00Z" },
+            {
+              state: "admission_changed",
+              at: "2026-08-28T10:00:00Z",
+              by: "human bob@example.com",
+              reason: "standard -> bypass",
+              oldAdmission: "standard",
+              newAdmission: "bypass",
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Admission changed")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "by human bob@example.com · from Standard to Bypass queue",
+      ),
+    ).toBeInTheDocument();
+  });
+
   // bwsalmon/agents#503: a pull request re-linked to a reopened task keeps
   // its own original open time, which can predate this lifecycle's first
   // transition -- it should not sort ahead of everything else. Under the

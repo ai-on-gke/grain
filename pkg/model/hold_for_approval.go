@@ -95,6 +95,9 @@ func AutoApprovalRefusal(child, parent Task, sessionQueues bool, seeding *Propos
 		}
 		return strings.Join(why, "; and ")
 	}
+	if adm := NormalizeAdmission(child.Admission); adm.AtLeast(AdmissionBypass) {
+		return fmt.Sprintf("it sets admission to `%s`, which only a person may give a task", adm)
+	}
 	if writes := UngrantedWrites(child, parent); len(writes) > 0 {
 		names := make([]string, 0, len(writes))
 		for _, w := range writes {
@@ -169,10 +172,11 @@ func ConfigRepoProposalHold(child Task) string {
 // Two settings a person may give any task they file, and a run may not
 // give the work it files on its own permission:
 //
+//   - Admission above standard (`bypass` or `durable`), which lets the
+//     task bypass queue limits or run without a wall-clock deadline.
 //   - KeepRunning, which requeues the task every time its run exits and so
-//     holds a sandbox for as long as the deployment runs. Editing a task
-//     treats it as a grant of `durable` that no agent may make
-//     (ui.agentGrantRefusal); filing one is the same decision.
+//     holds a sandbox for as long as the deployment runs. Filing one is a
+//     person's decision just like editing an existing task.
 //   - A Priority above both its proposer's own and DefaultTaskPriority,
 //     which sorts it ahead of base-branch repairs and of the work people
 //     put at the front of the queue (Store's taskQueueOrderSQL). Filing at
@@ -188,6 +192,9 @@ func ConfigRepoProposalHold(child Task) string {
 // (ui.CreateTask) apply it the same way.
 func PersonOnlyProposalSettings(child, parent Task) string {
 	var why []string
+	if adm := NormalizeAdmission(child.Admission); adm.AtLeast(AdmissionBypass) {
+		why = append(why, fmt.Sprintf("it sets admission to `%s`, which only a person may give a task", adm))
+	}
 	if child.KeepRunning {
 		why = append(why, "it asks to keep running (keep_running), restarting every time its run exits, "+
 			"which only a person may ask of a task")

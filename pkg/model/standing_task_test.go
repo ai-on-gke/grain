@@ -86,11 +86,9 @@ func TestAStandingScheduleWakesItsOneTaskRatherThanFilingAnother(t *testing.T) {
 		// And one an earlier build's template gave it, which this
 		// build's no longer names: a wake must take it away.
 		task.Grants = append(task.Grants, model.Grant{Capability: "api:deployment-ops", Via: model.GrantByGrain})
-		// And a standing task filed before the template carried
-		// priority-dispatch: a wake must add it.
-		task.Grants = slices.DeleteFunc(task.Grants, func(g model.Grant) bool {
-			return g.Capability == model.PriorityDispatchCapability
-		})
+		// And a standing task filed before the template set durable
+		// admission: a wake must raise it.
+		task.Admission = model.AdmissionStandard
 		// And the title an earlier build filed it under: a wake must
 		// rename it to this build's.
 		task.Title = "Keep the merge pipeline moving"
@@ -120,8 +118,8 @@ func TestAStandingScheduleWakesItsOneTaskRatherThanFilingAnother(t *testing.T) {
 	if slices.ContainsFunc(task.Grants, func(g model.Grant) bool { return g.Capability == "api:deployment-ops" }) {
 		t.Errorf("grants after the wake = %v, want grain's api:deployment-ops, which the template no longer names, dropped", task.Grants)
 	}
-	if !task.HasPriorityDispatch() {
-		t.Errorf("grants after the wake = %v, want the template's priority-dispatch added", task.Grants)
+	if !task.HasPriorityDispatch() || !task.IsDurable() {
+		t.Errorf("admission after the wake = %q, want the template's durable admission restored", task.Admission)
 	}
 	for _, preset := range model.PipelineStewardAPIPresets {
 		if !slices.ContainsFunc(task.Grants, func(g model.Grant) bool { return g.Capability == model.APIGrantPrefix+preset }) {

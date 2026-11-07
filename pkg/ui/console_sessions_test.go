@@ -355,12 +355,12 @@ func TestConsoleSessionCapabilitiesSayWhichOnesThisDeploymentCanHonour(t *testin
 		t.Error("github-sandbox says it is not ready without naming a single thing it needs")
 	}
 	// One that needs no configuration at all stays on offer.
-	debug, ok := byID["durable"]
+	debug, ok := byID["console"]
 	if !ok {
-		t.Fatalf("durable is missing from %v", resp.Capabilities)
+		t.Fatalf("console is missing from %v", resp.Capabilities)
 	}
 	if debug.Ready == nil || !*debug.Ready {
-		t.Errorf("durable ready = %v, want true: it needs nothing configured", debug.Ready)
+		t.Errorf("console ready = %v, want true: it needs nothing configured", debug.Ready)
 	}
 }
 
