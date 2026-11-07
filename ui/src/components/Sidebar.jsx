@@ -761,6 +761,23 @@ export default function Sidebar({
   const tasksFailedTitle = tasksError
     ? `Tasks could not be loaded (${tasksError}) — click to retry`
     : "Tasks could not be loaded — click to retry";
+  // tasksStale is a failing poll with a list already held: the views go
+  // on drawing the last list read -- which is right -- but on a
+  // mid-session /api/tasks outage nothing anywhere said it had stopped
+  // being refreshed once the five-second banner faded (2026-11-07
+  // walkthrough §10 item 4). The rail says so beside its count, and the
+  // next poll that answers takes it away.
+  const tasksStale = !tasksFailed && tasksLoaded && !!tasksError;
+  const tasksNote = tasksFailed
+    ? "could not be loaded"
+    : tasksStale
+      ? "not refreshing"
+      : null;
+  const tasksTitle = tasksFailed
+    ? tasksFailedTitle
+    : tasksStale
+      ? `Tasks could not be refreshed (${tasksError}); showing the last list read — click to retry`
+      : undefined;
   const repoCount = repoRows(config, tasks).length;
   // time.Time's zero value is still a non-empty string on the wire, so
   // FinishedAt cannot distinguish a live run here. Conclusion is CI's
@@ -1219,11 +1236,11 @@ export default function Sidebar({
                 <ListItemButton
                   key={`pinned-view-tasks-${idx}`}
                   selected={view === "tasks" && stateFilter === "all"}
-                  title={tasksFailed ? tasksFailedTitle : undefined}
+                  title={tasksTitle}
                   onClick={() => {
                     if (onSetView("tasks") === false) return;
                     onSetFilter("all");
-                    if (tasksFailed) onRetryTasks?.();
+                    if (tasksNote) onRetryTasks?.();
                   }}
                   sx={{ borderRadius: 1.5, py: 0.6, px: 0.9 }}
                 >
@@ -1232,8 +1249,8 @@ export default function Sidebar({
                   </span>
                   <ListItemText
                     primary="Tasks"
-                    secondary={tasksFailed ? "could not be loaded" : null}
-                    sx={{ ml: 1, my: tasksFailed ? 0 : undefined }}
+                    secondary={tasksNote}
+                    sx={{ ml: 1, my: tasksNote ? 0 : undefined }}
                     primaryTypographyProps={{
                       noWrap: true,
                       fontSize: "0.85rem",
@@ -1561,10 +1578,10 @@ export default function Sidebar({
             >
               <ListItemButton
                 selected={view === "tasks" && stateFilter === "all"}
-                title={tasksFailed ? tasksFailedTitle : undefined}
+                title={tasksTitle}
                 onClick={() => {
                   selectState("all");
-                  if (tasksFailed) onRetryTasks?.();
+                  if (tasksNote) onRetryTasks?.();
                 }}
                 sx={{ borderRadius: 1.5, py: 0.6, px: 0.9 }}
               >
@@ -1573,8 +1590,8 @@ export default function Sidebar({
                 </span>
                 <ListItemText
                   primary="Tasks"
-                  secondary={tasksFailed ? "could not be loaded" : null}
-                  sx={{ ml: 1, my: tasksFailed ? 0 : undefined }}
+                  secondary={tasksNote}
+                  sx={{ ml: 1, my: tasksNote ? 0 : undefined }}
                   primaryTypographyProps={{
                     noWrap: true,
                     fontSize: "0.85rem",

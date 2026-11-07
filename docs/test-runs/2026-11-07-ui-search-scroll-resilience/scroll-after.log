@@ -1,0 +1,2 @@
+corpus {"live":41,"closedTotal":3000}
+scroll list (1440) {"wheels":86,"seconds":47,"pageRequests":15,"distinctCursors":14,"repeatedCursors":0,"requestsAfterEnd":0,"rowsDrawn":3000,"closedSeedRows":3000,"duplicateRows":0,"missingClosed":0,"missingSample":[],"backJumps":[],"backJumpCount":0,"loadMoreLeft":0,"scroller":""}

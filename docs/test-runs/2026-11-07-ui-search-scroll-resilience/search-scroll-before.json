@@ -1,0 +1,138 @@
+{
+  "label": "before",
+  "steps": [
+    {
+      "name": "corpus",
+      "live": 41,
+      "closedTotal": 3000
+    },
+    {
+      "name": "search by title (1440)",
+      "q": "zephyrquill",
+      "expectFound": true,
+      "foundMs": 1406,
+      "rows": 1,
+      "searchRequests": [
+        "zephyrquill"
+      ]
+    },
+    {
+      "name": "search by description (1440)",
+      "q": "obsidianlark",
+      "expectFound": true,
+      "foundMs": 1648,
+      "rows": 1,
+      "searchRequests": [
+        "obsidianlark"
+      ]
+    },
+    {
+      "name": "search by externalRef (1440)",
+      "q": "CA-9012",
+      "expectFound": true,
+      "foundMs": null,
+      "rows": 0,
+      "searchRequests": [
+        "ca-9012"
+      ]
+    },
+    {
+      "name": "search by owner (1440)",
+      "q": "deepowner",
+      "expectFound": true,
+      "foundMs": null,
+      "rows": 0,
+      "searchRequests": [
+        "deepowner"
+      ]
+    },
+    {
+      "name": "search by id (1440)",
+      "q": "#14",
+      "expectFound": true,
+      "foundMs": 478,
+      "rows": 1,
+      "searchRequests": [
+        "#14"
+      ]
+    },
+    {
+      "name": "out-of-order answers (1440)",
+      "held": 1,
+      "staleRowsShown": 0,
+      "freshRowsShown": 1
+    },
+    {
+      "name": "search cleared (1440)",
+      "rowsBefore": 200,
+      "rowsAfter": 202,
+      "outOfPlaceRows": [
+        21
+      ]
+    },
+    {
+      "name": "search by title (390)",
+      "q": "zephyrquill",
+      "expectFound": true,
+      "foundMs": 1353,
+      "rows": 1,
+      "searchRequests": [
+        "zephyrquill"
+      ]
+    },
+    {
+      "name": "search by description (390)",
+      "q": "obsidianlark",
+      "expectFound": true,
+      "foundMs": 1551,
+      "rows": 1,
+      "searchRequests": [
+        "obsidianlark"
+      ]
+    },
+    {
+      "name": "search by externalRef (390)",
+      "q": "CA-9012",
+      "expectFound": true,
+      "foundMs": null,
+      "rows": 0,
+      "searchRequests": [
+        "ca-9012"
+      ]
+    },
+    {
+      "name": "search by owner (390)",
+      "q": "deepowner",
+      "expectFound": true,
+      "foundMs": null,
+      "rows": 0,
+      "searchRequests": [
+        "deepowner"
+      ]
+    },
+    {
+      "name": "search by id (390)",
+      "q": "#14",
+      "expectFound": true,
+      "foundMs": 465,
+      "rows": 1,
+      "searchRequests": [
+        "#14"
+      ]
+    },
+    {
+      "name": "out-of-order answers (390)",
+      "held": 1,
+      "staleRowsShown": 0,
+      "freshRowsShown": 1
+    },
+    {
+      "name": "search cleared (390)",
+      "rowsBefore": 200,
+      "rowsAfter": 602,
+      "outOfPlaceRows": [
+        21
+      ]
+    }
+  ]
+}

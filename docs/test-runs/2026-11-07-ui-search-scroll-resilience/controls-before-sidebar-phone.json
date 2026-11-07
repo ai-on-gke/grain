@@ -1,0 +1,49 @@
+{
+  "label": "before",
+  "steps": [
+    {
+      "name": "sidebar (390-light)",
+      "phoneTopBarNewTask": {
+        "x": 338,
+        "right": 378,
+        "w": 40,
+        "h": 40
+      },
+      "phoneTopBarNewTaskInViewport": true,
+      "phoneNewTaskUrl": "/new",
+      "drawerOpen": true,
+      "ciInNav": 0,
+      "newTaskVisible": true,
+      "newTaskInsideRail": true,
+      "newTaskOpens": true,
+      "urlAfterNewTask": "/new",
+      "ciAfterCustomize": 1,
+      "ciAfterReload": 1,
+      "directCiPath": "/ci",
+      "directCiHeading": true,
+      "directCiNavHidden": true
+    },
+    {
+      "name": "sidebar (390-dark)",
+      "phoneTopBarNewTask": {
+        "x": 338,
+        "right": 378,
+        "w": 40,
+        "h": 40
+      },
+      "phoneTopBarNewTaskInViewport": true,
+      "phoneNewTaskUrl": "/new",
+      "drawerOpen": true,
+      "ciInNav": 0,
+      "newTaskVisible": true,
+      "newTaskInsideRail": true,
+      "newTaskOpens": true,
+      "urlAfterNewTask": "/new",
+      "ciAfterCustomize": 1,
+      "ciAfterReload": 1,
+      "directCiPath": "/ci",
+      "directCiHeading": true,
+      "directCiNavHidden": true
+    }
+  ]
+}
