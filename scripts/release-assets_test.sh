@@ -203,6 +203,11 @@ check "a pushed -pending tag publishes vX.Y.Z-pending with version vX.Y.Z" \
   '[ "$status" = 0 ] && grep -q "published v3.5.0-pending" <<< "$out" && [ "$(jq -r .version "$m")" = v3.5.0 ]'
 run bash "$assets" --dry-run train-tag v3.5.0-rc.2-discarded
 check "a pushed -discarded tag publishes the discarded marker" '[ "$status" = 0 ] && grep -q "published v3.5.0-rc.2-discarded" <<< "$out"'
+for promoted in v3.4.0 latest; do
+  run bash "$assets" --dry-run train-tag "$promoted"
+  check "train-tag refuses to promote $promoted (that is promote.yml's and promote-release.yml's)" \
+    '[ "$status" != 0 ] && grep -q "not a release-train tag" <<< "$out" && ! grep -q "published" <<< "$out"'
+done
 run bash "$assets" --dry-run discard-pending v3.5.0
 check "a rejected pending release gets its -rejected marker" '[ "$status" = 0 ] && grep -q "published v3.5.0-rejected" <<< "$out"'
 run bash "$assets" --dry-run retract v3.4.0

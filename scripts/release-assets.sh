@@ -893,7 +893,11 @@ train_tag() {
     v*-rc.*) train_phase rc "$tag" ;;
     v*-pending) train_phase pending "${tag%-pending}" ;;
     v*-retracted) train_phase retract "${tag%-retracted}" ;;
-    v[0-9]*.[0-9]*.[0-9]* | latest) promote "${tag#latest}" ;;
+    # vX.Y.Z and latest are a person's approval (promote-release.yml) or
+    # the train's promotion, published by promote.yml / promote-release.yml
+    # / publish-release.yml with `promote`: never by a train-tag run, which
+    # any rc tag push or dispatch of release-train-assets.yml starts.
+    v[0-9]*.[0-9]*.[0-9]* | latest) die "$tag is a promoted release, not a release-train tag: promote.yml and promote-release.yml publish it (release-assets.sh promote)" ;;
     *) die "$tag is not a tag the release train publishes" ;;
   esac
 }

@@ -25,7 +25,8 @@
 #
 # Each is the sha-<short> release.yml published for the tag's commit, with
 # only images.json's version and createdAt changed: nothing is built here.
-# vX.Y.Z and latest are promote.yml's and promote-release.yml's.
+# vX.Y.Z and latest are promote.yml's and promote-release.yml's: train-tag
+# refuses them, so neither a tag push nor a dispatch here promotes a release.
 
 name: release-train-assets
 
@@ -47,14 +48,18 @@ on:
         default: false
         type: boolean
 
+# Nothing at the workflow level: `contents: write` is held by the one job
+# that runs release-assets.sh, as in release.yml and promote.yml.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   publish:
     name: publish release-train assets
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: write
     concurrency:
       group: ${{ github.workflow }}-candidate
       cancel-in-progress: false

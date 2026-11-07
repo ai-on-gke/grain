@@ -164,6 +164,9 @@ jobs:
     if: ${{ !cancelled() && (needs.on-demand.result == 'skipped' || (needs.on-demand.result == 'success' && needs.on-demand.outputs.build == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    outputs:
+      # Whether this commit packaged release assets for the `assets` job.
+      assets: ${{ steps.assets_support.outputs.supported }}
     permissions:
       contents: read
       packages: write
@@ -462,18 +465,45 @@ jobs:
       # to the `assets` job -- which alone holds `contents: write`, so no
       # build or test step here ever runs beside a token that can write
       # to the repository.
+      #
+      # An on-demand build of a commit from before release assets (a
+      # rollback to an older release whose sha- images were pruned) has no
+      # `release-images.sh assets` or release-assets.sh: it skips these
+      # steps and the `assets` job, and still publishes its registry
+      # images below, as it did before release assets existed.
+      - name: Check this commit can package release assets
+        id: assets_support
+        env:
+          INPUT_COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          # release-assets.sh and `release-images.sh assets` arrived together.
+          if [ -f scripts/release-assets.sh ]; then
+            echo "supported=true" >> "$GITHUB_OUTPUT"
+          elif [ -n "${INPUT_COMMIT:-}" ]; then
+            echo "::notice::${INPUT_COMMIT:0:12} predates release assets: publishing registry images only"
+            echo "supported=false" >> "$GITHUB_OUTPUT"
+          else
+            # Only an on-demand build of an older commit may skip them.
+            echo "scripts/release-assets.sh is missing: this commit cannot publish release assets" >&2
+            exit 1
+          fi
+
       - name: Build the release-asset images
+        if: steps.assets_support.outputs.supported == 'true'
         env:
           RELEASE_ASSETS_STATE: /tmp/release-assets-images.env
         run: bash ./scripts/release-images.sh assets
 
       - name: Package the images as release assets
+        if: steps.assets_support.outputs.supported == 'true'
         env:
           RELEASE_IMAGES_STATE: /tmp/release-assets-images.env
           RELEASE_ASSETS_DIR: /tmp/release-assets
         run: bash ./scripts/release-assets.sh package
 
       - name: Hand the release assets to the publish job
+        if: steps.assets_support.outputs.supported == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-assets
@@ -515,7 +545,7 @@ jobs:
     name: release assets
     needs: [on-demand, images]
     # Only once `images` built, tested and packaged this commit.
-    if: ${{ !cancelled() && needs.images.result == 'success' }}
+    if: ${{ !cancelled() && needs.images.result == 'success' && needs.images.outputs.assets == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     # The only job holding a token that writes to the repository, and it
