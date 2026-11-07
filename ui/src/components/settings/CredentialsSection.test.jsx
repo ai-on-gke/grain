@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import api from "../../api.js";
 import CredentialsSection from "./CredentialsSection.jsx";
@@ -104,7 +104,13 @@ describe("CredentialsSection GCP help", () => {
       within(emailField).getByRole("link", { name: "Other secrets" }),
     ).toHaveAttribute("href", "#other-secrets");
 
-    expect(await screen.findByText("Other secrets")).toBeInTheDocument();
-    expect(container.querySelector("#other-secrets")).not.toBeNull();
+    await waitFor(() =>
+      expect(container.querySelector("#other-secrets")).not.toBeNull(),
+    );
+    expect(
+      within(container.querySelector("#other-secrets")).getByText(
+        "Other secrets",
+      ),
+    ).toBeInTheDocument();
   });
 });
