@@ -62,6 +62,23 @@ func TestMigration121MovesAdmissionGrantsAndDropsPolicyEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Template-backed schedules: one whose grant rows only copy its
+	// template's (tmpl-both, durable), and one whose own durable grant is
+	// more than its template's (tmpl-byp, bypass).
+	for _, s := range []struct{ id, tmpl string }{{"sched-copy", "tmpl-both"}, {"sched-own", "tmpl-byp"}} {
+		tmplID := s.tmpl
+		if err := store.PutSchedule(ctx, model.Schedule{
+			ID: s.id, Title: s.id, Body: "body",
+			Target:     model.RepoRef{Owner: "acme", Name: "widgets"},
+			Recurrence: model.Recurrence{Kind: model.RecurrenceEveryNHours, EveryNHours: 6},
+			NextRunAt:  now.Add(time.Hour),
+			CreatedAt:  now,
+			TemplateID: &tmplID,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	gadgets := model.RepoRef{Owner: "acme", Name: "gadgets"}
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{
@@ -121,6 +138,10 @@ func TestMigration121MovesAdmissionGrantsAndDropsPolicyEntries(t *testing.T) {
 		"INSERT INTO `template_grant` (`template_id`, `capability`, `via`, `folder`) VALUES ('tmpl-both', 'priority-dispatch', 'grain', NULL)",
 		"INSERT INTO `template_grant` (`template_id`, `capability`, `via`, `folder`) VALUES ('tmpl-both', 'durable', 'grain', NULL)",
 		"INSERT INTO `schedule_grant` (`schedule_id`, `capability`, `via`, `folder`) VALUES ('sched-dur', 'durable', 'grain', NULL)",
+		"INSERT INTO `schedule_grant` (`schedule_id`, `capability`, `via`, `folder`) VALUES ('sched-copy', 'priority-dispatch', 'grain', NULL)",
+		"INSERT INTO `schedule_grant` (`schedule_id`, `capability`, `via`, `folder`) VALUES ('sched-copy', 'durable', 'grain', NULL)",
+		"INSERT INTO `schedule_grant` (`schedule_id`, `capability`, `via`, `folder`) VALUES ('sched-own', 'priority-dispatch', 'grain', NULL)",
+		"INSERT INTO `schedule_grant` (`schedule_id`, `capability`, `via`, `folder`) VALUES ('sched-own', 'durable', 'label', NULL)",
 		"UPDATE `grain_config` SET `default_capabilities` = 'priority-dispatch,read-issues', " +
 			"`console_sessions` = '[{\"ID\":\"director\",\"Title\":\"Director\",\"Capabilities\":[\"durable\",\"priority-dispatch\",\"read-issues\"]}]' WHERE `id` = 1",
 		"UPDATE `repo_config` SET `default_capabilities` = '[\"priority-dispatch\",\"durable\",\"read-issues\"]', " +
@@ -179,6 +200,19 @@ func TestMigration121MovesAdmissionGrantsAndDropsPolicyEntries(t *testing.T) {
 	schedDur, err := store.GetSchedule(ctx, "sched-dur")
 	if err != nil || schedDur == nil || schedDur.Admission != model.AdmissionDurable || len(schedDur.Grants) != 1 {
 		t.Fatalf("sched-dur = %+v (%v), want Admission=durable and 1 grant", schedDur, err)
+	}
+
+	// A copy of the template's admission is not the schedule's own: it
+	// stays standard and composes durable from its template, so lowering
+	// the template later lowers its firings too.
+	for id, want := range map[string]model.Admission{"sched-copy": model.AdmissionStandard, "sched-own": model.AdmissionDurable} {
+		got, err := store.GetSchedule(ctx, id)
+		if err != nil || got == nil {
+			t.Fatalf("GetSchedule(%s) = %v, %v", id, got, err)
+		}
+		if got.Admission != want || len(got.Grants) != 0 {
+			t.Errorf("%s = Admission %s, Grants %+v; want %s and no grants", id, got.Admission, got.Grants, want)
+		}
 	}
 
 	gotCfg, err := store.GetConfig(ctx)

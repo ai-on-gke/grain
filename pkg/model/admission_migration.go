@@ -36,7 +36,9 @@ var admissionGrantDrops = map[string][]string{
 //   - Tasks, templates and schedules holding durable become
 //     admission 'durable' (whether or not they also hold
 //     priority-dispatch), those holding only priority-dispatch become
-//     'bypass', and every grant row of either name is deleted.
+//     'bypass', and every grant row of either name is deleted. A
+//     template-backed schedule's rows that only copy its template's
+//     (already converted) admission leave the schedule standard.
 //   - The deployment's and each repository's default capabilities lose
 //     the two names, which raise default_admission instead.
 //   - Standing sessions and repo_config.ci_capabilities lose them: every
@@ -54,12 +56,27 @@ func MigrateAdmissionGrants(ctx context.Context, tx *sql.Tx) error {
 		{"template", "template_grant", "template_id"},
 		{"schedule", "schedule_grant", "schedule_id"},
 	} {
+		// A template-backed schedule's grant rows are a display copy of
+		// its template's (Schedule.syncTemplateCache), and only a grant
+		// the template does not itself hold was the schedule's own
+		// (ComposeScheduleTask). The template rows were converted on the
+		// loop's previous pass, so a schedule whose template's admission
+		// already covers a copied grant keeps standard: making the copy
+		// the schedule's own would outlive a person later lowering the
+		// template's admission.
+		var durableCopy, bypassCopy string
+		if t.table == "schedule" {
+			durableCopy = " AND NOT EXISTS (SELECT 1 FROM `template` AS `tp` WHERE `tp`.`id` = `schedule`.`template_id` " +
+				"AND `tp`.`admission` = 'durable')"
+			bypassCopy = " AND NOT EXISTS (SELECT 1 FROM `template` AS `tp` WHERE `tp`.`id` = `schedule`.`template_id` " +
+				"AND `tp`.`admission` IN ('bypass', 'durable'))"
+		}
 		if _, err := tx.ExecContext(ctx, "UPDATE `"+t.table+"` SET `admission` = 'durable' WHERE `id` IN "+
-			"(SELECT `"+t.owner+"` FROM `"+t.grants+"` WHERE `capability` = 'durable')"); err != nil {
+			"(SELECT `"+t.owner+"` FROM `"+t.grants+"` WHERE `capability` = 'durable')"+durableCopy); err != nil {
 			return fmt.Errorf("%s: moving durable grants into admission: %w", t.table, err)
 		}
 		if _, err := tx.ExecContext(ctx, "UPDATE `"+t.table+"` SET `admission` = 'bypass' WHERE `admission` = 'standard' AND `id` IN "+
-			"(SELECT `"+t.owner+"` FROM `"+t.grants+"` WHERE `capability` = 'priority-dispatch')"); err != nil {
+			"(SELECT `"+t.owner+"` FROM `"+t.grants+"` WHERE `capability` = 'priority-dispatch')"+bypassCopy); err != nil {
 			return fmt.Errorf("%s: moving priority-dispatch grants into admission: %w", t.table, err)
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM `"+t.grants+"` WHERE `capability` IN ('priority-dispatch', 'durable')"); err != nil {

@@ -395,3 +395,55 @@ func TestHasOpenTaskWithTag(t *testing.T) {
 		t.Fatal("want false for a tag nothing carries")
 	}
 }
+
+// A template-backed schedule's admission is its own choice, never a copy
+// of its template's: resyncing the display cache after the template is
+// saved leaves it alone, so lowering the template's admission lowers what
+// the schedule's next firing gets (ComposeScheduleTask takes the higher of
+// the two) instead of leaving the schedule bypassing the queue for good.
+func TestResyncTemplateSchedulesDoesNotRatchetAdmission(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	tmpl := model.Template{
+		ID: "tmpl-adm", Name: "Adm", Title: "Adm", Body: "body",
+		Admission: model.AdmissionDurable,
+		CreatedAt: now,
+	}
+	if err := store.PutTemplate(ctx, tmpl); err != nil {
+		t.Fatal(err)
+	}
+	sched := schedule("sched-adm", now.Add(time.Hour))
+	sched.TemplateID = &tmpl.ID
+	if err := store.PutSchedule(ctx, sched); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.ResyncTemplateSchedules(ctx, tmpl); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetSchedule(ctx, sched.ID)
+	if err != nil || got == nil {
+		t.Fatalf("GetSchedule = %v, %v", got, err)
+	}
+	if got.Admission != model.AdmissionStandard {
+		t.Errorf("after resync from a durable template, schedule Admission = %s, want standard (its own choice)", got.Admission)
+	}
+	if comp := model.ComposeScheduleTask(*got, &tmpl); comp.Admission != model.AdmissionDurable {
+		t.Errorf("firing from the durable template composes Admission = %s, want durable", comp.Admission)
+	}
+
+	tmpl.Admission = model.AdmissionStandard
+	if err := store.PutTemplate(ctx, tmpl); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ResyncTemplateSchedules(ctx, tmpl); err != nil {
+		t.Fatal(err)
+	}
+	got, err = store.GetSchedule(ctx, sched.ID)
+	if err != nil || got == nil {
+		t.Fatalf("GetSchedule = %v, %v", got, err)
+	}
+	if comp := model.ComposeScheduleTask(*got, &tmpl); comp.Admission != model.AdmissionStandard {
+		t.Errorf("after the template was lowered to standard, a firing composes Admission = %s, want standard", comp.Admission)
+	}
+}

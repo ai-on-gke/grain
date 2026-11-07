@@ -614,7 +614,12 @@ func (sc *Schedule) syncTemplateCache(tmpl Template) {
 	sc.AutoMerge, sc.Reads, sc.Writes, sc.Grants, sc.CustomFields, sc.NetworkAccess, sc.NothingNeededAction, sc.KeepRunning =
 		tmpl.AutoMerge, tmpl.Reads, tmpl.Writes,
 		tmpl.Grants, tmpl.CustomFields, tmpl.NetworkAccess, tmpl.NothingNeededAction, tmpl.KeepRunning
-	sc.Admission = max(sc.Admission, tmpl.Admission)
+	// Admission is not part of that cache either: Schedule.Admission is
+	// the schedule's own choice, and ComposeScheduleTask takes the
+	// higher of it and the template's at every firing. Copying the
+	// template's in here would make it the schedule's own for good, so
+	// a person lowering the template's admission would leave every
+	// schedule that had fired from it still bypassing the queue.
 	// Model is not part of that cache: it is the schedule's own
 	// choice, which beats the template's (Schedule.Model), and
 	// copying the template's over it would erase that choice.
