@@ -676,6 +676,11 @@ Grain Registry Sandbox Instance Ready
 Sign in (browser):
   Open ${registry_url}/api/directory (or ${registry_url}/) and sign in with
   ${ADMIN_EMAIL} via Google Cloud IAP.
+  IAP starts on the Google-managed OAuth client, which admits only users in
+  this project's own organization. If an admitted user sees "You don't have
+  access", create a custom OAuth client and apply it with:
+    ${SCRIPT_DIR}/configure-oauth.sh --project ${PROJECT_ID} --prefix ${NAME_PREFIX} --client-id <id>.apps.googleusercontent.com
+  (see README.md, "Admitting users from another organization").
 
 Register / rotate a connected daemon entry:
   ${SCRIPT_DIR}/register-entry.sh \\

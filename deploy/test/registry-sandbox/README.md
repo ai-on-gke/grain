@@ -31,7 +31,9 @@ sandbox project (`deploy/test/registry-sandbox/`).
   - Control plane: `https://<prefix>-<a-b-c-d>.sslip.io`
   - Routed entries: `https://<entry>.i-<prefix>-<a-b-c-d>.sslip.io`
   - **Backend 1 (`iap-bs` -> `:8080`, `timeout_sec = 86400`)**: Cloud IAP
-    enabled (Google-managed OAuth client) with `roles/iap.httpsResourceAccessor`
+    enabled (Google-managed OAuth client by default; a custom client via
+    `configure-oauth.sh` when admitted users are outside the project's
+    organization) with `roles/iap.httpsResourceAccessor`
     granted strictly to `--admin <owner@example.com>` (plus any `--extra-user`
     principals and the read-only verifier service account). Serves the registry
     UI/API (`/api/directory`, `/api/route`, `/api/entries`) and all
@@ -89,6 +91,43 @@ bucket `gs://<project>-<prefix>-tfstate`, applies Terraform, reconciles the VM
 over IAP SSH, waits for the Load Balancer's `/healthz` health checks and
 Google-managed TLS, fetches `/.well-known/jwks.json` with TLS verified (never
 `curl -k`), and registers the `alice` connected entry.
+
+### 1a. Admitting users from another organization (custom OAuth client)
+
+IAP starts on its Google-managed OAuth client, and that client only admits
+users who belong to the project's own Google Cloud organization. If the
+sandbox project sits in a different organization from the people you admit
+(check with `gcloud projects get-ancestors <project>`), they get IAP's
+"You don't have access" page even though `up.sh` granted them
+`roles/iap.httpsResourceAccessor`. Service accounts in the project are not
+affected, which is why `verify.sh` still passes.
+
+The fix is a custom OAuth client. The IAP OAuth Admin API that could create
+one was shut down in March 2026, so a project owner creates it by hand once:
+
+1. Cloud Console > **Google Auth Platform > Branding**: set an app name and
+   support email. Under **Audience** choose **External**, then add each
+   admitted user as a test user (or publish the app; IAP requests only the
+   non-sensitive `openid` and `email` scopes).
+2. **Google Auth Platform > Clients > Create client**, type **Web
+   application**. Copy the client ID and secret; keep the secret out of the
+   repository.
+3. Apply it to the IAP backend. The secret is read from a hidden prompt (or
+   `--client-secret-file`) and sent on stdin, never in argv:
+
+   ```bash
+   ./deploy/test/registry-sandbox/configure-oauth.sh \
+     --project my-gcp-sandbox \
+     --client-id 1234-abc.apps.googleusercontent.com
+   ```
+
+4. Edit the client and add the authorized redirect URI the script prints:
+   `https://iap.googleapis.com/v1/oauth/clientIds/<CLIENT_ID>:handleRedirect`.
+
+Terraform ignores the backend's OAuth client fields, so later `up.sh` runs
+keep the custom client. `down.sh` deletes the backend service; the OAuth
+client itself stays in the project until you delete it in the Console.
+`configure-oauth.sh --project <id> --show` prints which client is active.
 
 ### 2. Connect a `grain` daemon
 

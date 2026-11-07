@@ -110,10 +110,21 @@ resource "google_compute_backend_service" "iap" {
     group = google_compute_instance_group.registry.self_link
   }
 
+  # Created with the Google-managed OAuth client, which only admits users in
+  # the project's own organization. configure-oauth.sh can switch it to a
+  # custom OAuth client (Console-created; its secret never enters this repo
+  # or Terraform state), and Terraform leaves that choice alone.
   iap {
     enabled              = true
     oauth2_client_id     = null
     oauth2_client_secret = null
+  }
+
+  lifecycle {
+    ignore_changes = [
+      iap[0].oauth2_client_id,
+      iap[0].oauth2_client_secret,
+    ]
   }
 
   depends_on = [google_project_service.enabled["iap.googleapis.com"]]
