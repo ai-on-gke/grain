@@ -978,9 +978,13 @@ func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSessi
 		}
 	}
 
-	out := make([]model.Grant, 0, len(current)+len(session.Capabilities)+1)
-	out = append(out, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
-	seen := map[string]bool{model.DurableCapability: true}
+	out := make([]model.Grant, 0, len(current)+len(session.Capabilities))
+	// A session is durable by construction (Task.Admission = AdmissionDurable,
+	// guardAdmission); neither retired admission grant belongs in Grants.
+	seen := map[string]bool{
+		model.PriorityDispatchCapability: true,
+		model.DurableCapability:          true,
+	}
 
 	for _, g := range current {
 		if g.Capability == "" || seen[g.Capability] {

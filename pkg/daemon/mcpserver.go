@@ -1455,6 +1455,10 @@ func (g *GrantNames) Set(value string) error {
 	if value == "" {
 		return fmt.Errorf("a grant name cannot be empty")
 	}
+	if adm := model.AdmissionOfGrantName(value); adm > model.AdmissionStandard {
+		model.WarnAdmissionGrants("grain mcpserver", "-grant", adm)
+		return nil
+	}
 	*g = append(*g, value)
 	return nil
 }
@@ -1812,6 +1816,7 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		SandboxDiskGB: p.SandboxDiskGB, NetworkAccess: p.NetworkAccess,
 		NothingNeededAction: p.NothingNeededAction,
 		KeepRunning:         p.KeepRunning,
+		Admission:           p.Admission,
 		Goal:                p.Goal,
 		NoPort:              p.NoPort,
 		FixesBaseBranch:     p.FixesBaseBranch,

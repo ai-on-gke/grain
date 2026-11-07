@@ -558,6 +558,7 @@ Usage: `grain task propose --title <t> (--body <b> | --file <f>) [flags]`
 | `--fixes-base-branch` | bool |
 | `--no-port` | bool |
 | `--keep-running` | bool |
+| `--admission` | string |
 | `--origin` | string |
 | `--read` | string |
 | `--design` | string |

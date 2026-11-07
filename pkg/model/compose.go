@@ -189,6 +189,7 @@ type CompositionSources struct {
 	Approved             CompositionLayer
 	Interactive          CompositionLayer
 	KeepRunning          CompositionLayer
+	Admission            CompositionLayer
 }
 
 // Composition is one task a firing will file, resolved: every value it
@@ -449,6 +450,7 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 			Approved:             approvedBy,
 			Interactive:          LayerTemplate,
 			KeepRunning:          LayerTemplate,
+			Admission:            LayerTemplate,
 		},
 	}
 }
@@ -478,7 +480,7 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 			comp.Model, comp.Sources.Model = sched.Model, LayerSchedule
 		}
 		if sched.Admission > comp.Admission {
-			comp.Admission = sched.Admission
+			comp.Admission, comp.Sources.Admission = sched.Admission, LayerSchedule
 		}
 		// A template-backed schedule stores a copy of its template's
 		// grants (ui.scheduleContentFromTemplate), so only a capability
@@ -546,6 +548,7 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 			Approved:             LayerSchedule,
 			Interactive:          LayerSchedule,
 			KeepRunning:          LayerSchedule,
+			Admission:            LayerSchedule,
 		},
 	}
 }

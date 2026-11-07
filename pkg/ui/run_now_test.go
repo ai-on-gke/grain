@@ -520,7 +520,7 @@ func TestRunNowByAnAgentDoesNotApprovePriorityDispatchEvenHoldingIt(t *testing.T
 	c, store, ctx := testClient(t)
 	requester := create(t, c, ctx)
 	if err := store.UpdateTask(ctx, requester.ID, func(t *model.Task) error {
-		t.Grants = append(t.Grants, model.Grant{Capability: model.PriorityDispatchCapability, Via: model.GrantByGrain})
+		t.Admission = model.AdmissionBypass
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -529,7 +529,7 @@ func TestRunNowByAnAgentDoesNotApprovePriorityDispatchEvenHoldingIt(t *testing.T
 
 	task := create(t, c, ctx)
 	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
-		t.Grants = append(t.Grants, model.Grant{Capability: model.PriorityDispatchCapability, Via: model.GrantByLabel})
+		t.Admission = model.AdmissionBypass
 		t.Approval = nil
 		return nil
 	}); err != nil {
@@ -537,8 +537,8 @@ func TestRunNowByAnAgentDoesNotApprovePriorityDispatchEvenHoldingIt(t *testing.T
 	}
 	err := c.RunNow(agentCtx, task.ID)
 	var forbidden *ui.ForbiddenError
-	if !errors.As(err, &forbidden) || !strings.Contains(err.Error(), model.PriorityDispatchCapability) {
-		t.Fatalf("RunNow by an agent holding priority-dispatch on a proposal naming it: err = %v, want a refusal naming it", err)
+	if !errors.As(err, &forbidden) || !strings.Contains(err.Error(), "admission bypass") {
+		t.Fatalf("RunNow by an agent holding admission bypass on a proposal asking for it: err = %v, want a refusal naming it", err)
 	}
 	if stored, err := store.GetTask(ctx, task.ID); err != nil || stored.Approval != nil {
 		t.Fatalf("approval = %+v, err = %v; want it left for a person", stored.Approval, err)

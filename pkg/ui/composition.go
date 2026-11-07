@@ -192,6 +192,11 @@ func composedTaskFrom(c model.Composition, modelFallbackSource string, modelFall
 			Name: "keepRunning", Values: []string{onOff(true)}, Source: string(c.Sources.KeepRunning),
 		})
 	}
+	if c.Admission > model.AdmissionStandard {
+		fields = append(fields, ComposedField{
+			Name: "admission", Values: []string{c.Admission.Label()}, Source: string(c.Sources.Admission),
+		})
+	}
 	// Only a template sets a priority other than the default
 	// (model.Template.Priority; an inline schedule's firing always takes
 	// model.DefaultTaskPriority), and only one that does is worth a row:

@@ -195,6 +195,16 @@ func (c *sandboxCLI) taskPropose(p sandboxArgs) error {
 	}
 	hold := true
 	auto := false
+	rawAdmission := strings.TrimSpace(p.get("admission"))
+	if _, err := model.ParseAdmission(rawAdmission); err != nil {
+		return fmt.Errorf("--admission: %w", err)
+	}
+	caps := splitMultiFlag(p, "capability")
+	for _, capName := range caps {
+		if adm := model.AdmissionOfGrantName(capName); adm > model.AdmissionStandard {
+			fmt.Fprintln(c.errOut, "warning: "+model.AdmissionDeprecationWarning(adm))
+		}
+	}
 	req := gitproxy.CLIProposeRequest{
 		ID:              strings.TrimSpace(p.get("id")),
 		Title:           title,
@@ -203,10 +213,11 @@ func (c *sandboxCLI) taskPropose(p sandboxArgs) error {
 		Branch:          strings.TrimSpace(p.get("branch")),
 		NoRepo:          p.has("no-repo"),
 		DependsOn:       splitMultiFlag(p, "depends-on"),
-		Capabilities:    splitMultiFlag(p, "capability"),
+		Capabilities:    caps,
 		FixesBaseBranch: p.has("fixes-base-branch"),
 		NoPort:          p.has("no-port"),
 		KeepRunning:     p.has("keep-running"),
+		Admission:       rawAdmission,
 		Origin:          strings.TrimSpace(p.get("origin")),
 		Reads:           splitMultiFlag(p, "read"),
 		Designs:         splitMultiFlag(p, "design"),

@@ -29,13 +29,11 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
 	"github.com/ai-on-gke/grain/pkg/capability/ciapi"
 	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
-	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/release"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
@@ -92,11 +90,11 @@ func CapabilityProviders(cfg Config, store *model.Store, _ map[string]*modelprox
 	// bootstrap-playbooks is no longer a provider here: it was retired onto
 	// the config-map server's config-map {"config_maps":["bootstrap"]}
 	// (schema migration 118), which places the same embedded playbooks.
+	// priority-dispatch and durable became the admission task setting
+	// (schema migration 119, design/design/unified-grants.design.md §4.1).
 	providers = append(providers,
 		consolecap.New(),
 		readissues.New(),
-		prioritydispatch.New(),
-		durable.New(),
 	)
 	// image-signing, registry-push and package-publish are no longer
 	// providers here: they were retired onto the in-process release

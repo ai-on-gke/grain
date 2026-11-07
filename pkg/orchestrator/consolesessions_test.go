@@ -31,7 +31,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
@@ -1126,7 +1125,7 @@ func TestASessionsAnswerIsStampedAfterTheReplyItAnswers(t *testing.T) {
 		Framework: orchestrator.StaticFramework(textAnswer("the answer")),
 		Config: orchestrator.Config{
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities: orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities: orchestrator.SessionTestRegistry(),
 		},
 		MaxWorkers: 1,
 	}
@@ -1508,7 +1507,7 @@ func TestSessionSandboxReusedWithinIdleTTLFallbackAndReclaimedAfterTTL(t *testin
 		MaxWorkers: 2,
 		Config: orchestrator.Config{
 			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities:          orchestrator.SessionTestRegistry(),
 			SessionSandboxIdleTTL: 30 * time.Minute,
 		},
 	}
@@ -1608,7 +1607,7 @@ func TestParkedSessionSandboxIsReclaimedOnAShortenedTTL(t *testing.T) {
 		MaxWorkers: 2,
 		Config: orchestrator.Config{
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities: orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities: orchestrator.SessionTestRegistry(),
 		},
 	}
 
@@ -1663,7 +1662,7 @@ func TestClosingOrPausingSessionReleasesWarmSandbox(t *testing.T) {
 				MaxWorkers: 2,
 				Config: orchestrator.Config{
 					StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-					Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
+					Capabilities:          orchestrator.SessionTestRegistry(),
 					SessionSandboxIdleTTL: 30 * time.Minute,
 				},
 			}
@@ -1744,7 +1743,7 @@ func TestSessionWarmSandboxCapacityEvictionEvictsOldestIdleFirst(t *testing.T) {
 		MaxWorkers: 2,
 		Config: orchestrator.Config{
 			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities:          orchestrator.SessionTestRegistry(),
 			SessionSandboxIdleTTL: 30 * time.Minute,
 		},
 	}
@@ -1840,7 +1839,7 @@ func TestInProcessSessionContinuationKeepsRunAliveAcrossTurns(t *testing.T) {
 		MaxWorkers: 1,
 		Config: orchestrator.Config{
 			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities:          orchestrator.SessionTestRegistry(),
 			SessionSandboxIdleTTL: 350 * time.Millisecond,
 			WaitForSessionReply:   true,
 			CancelPollInterval:    20 * time.Millisecond,
@@ -1969,7 +1968,7 @@ func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
 			MaxWorkers: 1,
 			Config: orchestrator.Config{
 				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-				Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
+				Capabilities:          orchestrator.SessionTestRegistry(),
 				SessionSandboxIdleTTL: idleTTL,
 				WaitForSessionReply:   inProcess,
 				CancelPollInterval:    5 * time.Millisecond,
@@ -2043,7 +2042,7 @@ func TestSessionSandboxNotReusedWhenTheTaskChangedBetweenTurns(t *testing.T) {
 		MaxWorkers: 2,
 		Config: orchestrator.Config{
 			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities:          orchestrator.SessionTestRegistry(),
 			SessionSandboxIdleTTL: 30 * time.Minute,
 		},
 	}
@@ -2119,7 +2118,7 @@ func TestWarmSessionSandboxReleasedWhenItsGrantsChange(t *testing.T) {
 		MaxWorkers: 2,
 		Config: orchestrator.Config{
 			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities:          orchestrator.SessionTestRegistry(),
 			SessionSandboxIdleTTL: 30 * time.Minute,
 		},
 	}
@@ -2350,7 +2349,7 @@ func TestActiveConsoleSessionPermissionChangesApplyImmediatelyToProposals(t *tes
 		MaxWorkers: 1,
 		Config: orchestrator.Config{
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities: orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities: orchestrator.SessionTestRegistry(),
 		},
 	}
 	if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
@@ -2412,7 +2411,7 @@ func TestFirstReplyWakesConsoleSessionRestingWithRequestedSuspension(t *testing.
 		})),
 		Config: orchestrator.Config{
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities: orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities: orchestrator.SessionTestRegistry(),
 		},
 		MaxWorkers: 1,
 	}

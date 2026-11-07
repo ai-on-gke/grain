@@ -211,7 +211,8 @@ type Schedule struct {
 	// Model is the model every firing asks for (model.Schedule.Model):
 	// this schedule's own choice, which beats its template's. Empty for
 	// a schedule that chose none.
-	Model string `json:"model,omitempty"`
+	Model     string `json:"model,omitempty"`
+	Admission string `json:"admission"`
 	// TemplateID and TemplateName are set when this schedule fires from
 	// a Template (bwsalmon/agents#516) rather than its own inline
 	// content -- Title/Description/AutoMerge/Reads/Writes/Capabilities/
@@ -447,6 +448,7 @@ func scheduleFrom(s model.Schedule, templateName, suiteName string) Schedule {
 		NothingNeededAction:  string(s.NothingNeededAction),
 		KeepRunning:          s.KeepRunning,
 		Model:                s.Model,
+		Admission:            s.Admission.String(),
 		CustomFields:         customFieldValues(s.CustomFields),
 		Capabilities:         []string{},
 		Recurrence:           recurrenceFrom(s.Recurrence),
@@ -723,6 +725,7 @@ type CreateScheduleRequest struct {
 	// a templateId as much as with inline content -- and refused with a
 	// suiteId, whose runs file each template as it stands.
 	Model      string     `json:"model"`
+	Admission  string     `json:"admission,omitempty"`
 	TemplateID string     `json:"templateId"`
 	SuiteID    string     `json:"suiteId"`
 	Recurrence Recurrence `json:"recurrence"`
@@ -1048,7 +1051,7 @@ func (c *Client) scheduleFromRequest(ctx context.Context, req CreateScheduleRequ
 		if err != nil {
 			return model.Schedule{}, "", "", err
 		}
-		grants, err := c.grantsFor(req.Capabilities, model.GrantByLabel)
+		grants, foldedAdm, _, err := c.grantsAndAdmissionFor("schedule", req.Title, req.Capabilities, model.GrantByLabel, model.AdmissionStandard)
 		if err != nil {
 			return model.Schedule{}, "", "", err
 		}
@@ -1072,6 +1075,7 @@ func (c *Client) scheduleFromRequest(ctx context.Context, req CreateScheduleRequ
 			NetworkAccess:        model.NetworkAccess(req.NetworkAccess),
 			NothingNeededAction:  nothingNeeded,
 			KeepRunning:          req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
+			Admission:            foldedAdm,
 			Reads:                reads,
 			Writes:               writes,
 			Grants:               grants,
@@ -1082,7 +1086,12 @@ func (c *Client) scheduleFromRequest(ctx context.Context, req CreateScheduleRequ
 	if err != nil {
 		return model.Schedule{}, "", "", err
 	}
+	chosenAdmission, err := scheduleAdmissionChoice(req.Admission, suiteID != "")
+	if err != nil {
+		return model.Schedule{}, "", "", err
+	}
 	sched.Model = chosenModel
+	sched.Admission = max(sched.Admission, chosenAdmission)
 	sched.Target = target
 	sched.Base = req.Base
 	if firing != nil {
@@ -1102,6 +1111,20 @@ func (c *Client) scheduleFromRequest(ctx context.Context, req CreateScheduleRequ
 // on the suite's templates instead.
 var errSuiteScheduleModel = validationErrorf(
 	"a schedule that runs a suite cannot choose a model: set it on the suite's templates instead")
+
+var errSuiteScheduleAdmission = validationErrorf(
+	"a schedule that runs a suite cannot choose admission: set it on the suite's templates instead")
+
+func scheduleAdmissionChoice(chosen string, suiteBacked bool) (model.Admission, error) {
+	a, err := validateAdmission(chosen)
+	if err != nil {
+		return model.AdmissionStandard, err
+	}
+	if a > model.AdmissionStandard && suiteBacked {
+		return model.AdmissionStandard, errSuiteScheduleAdmission
+	}
+	return a, nil
+}
 
 // scheduleModelChoice is the model a schedule chose (model.Schedule.Model),
 // checked the way a template's is (declaredModelChoice), and refused on a
@@ -1562,6 +1585,7 @@ type UpdateScheduleRequest struct {
 	// it is not content -- and on one of grain's own schedules, whose
 	// model is the deployment's to choose like its cadence.
 	Model      *string     `json:"model,omitempty"`
+	Admission  *string     `json:"admission,omitempty"`
 	TemplateID *string     `json:"templateId,omitempty"`
 	SuiteID    *string     `json:"suiteId,omitempty"`
 	Recurrence *Recurrence `json:"recurrence,omitempty"`
@@ -1798,6 +1822,7 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 		target = &parsed
 	}
 	var grants []model.Grant
+	var foldedAdmission model.Admission
 	var reads []model.RepoRef
 	var writes []model.WriteTarget
 	var nothingNeeded model.NothingNeededAction
@@ -1818,7 +1843,7 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 		}
 		if req.Capabilities != nil {
 			var err error
-			grants, err = c.grantsFor(*req.Capabilities, model.GrantByLabel)
+			grants, foldedAdmission, _, err = c.grantsAndAdmissionFor("schedule", id, *req.Capabilities, model.GrantByLabel, model.AdmissionStandard)
 			if err != nil {
 				return Schedule{}, err
 			}
@@ -1890,6 +1915,14 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 		}
 		chosenModel = &m
 	}
+	var chosenAdmission *model.Admission
+	if req.Admission != nil {
+		a, err := validateAdmission(*req.Admission)
+		if err != nil {
+			return Schedule{}, err
+		}
+		chosenAdmission = &a
+	}
 	now := c.now()
 
 	if err := c.Store.UpdateSchedule(ctx, id, func(s *model.Schedule) error {
@@ -1901,6 +1934,14 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 				return errSuiteScheduleModel
 			}
 			s.Model = *chosenModel
+		}
+		if chosenAdmission != nil {
+			if *chosenAdmission > model.AdmissionStandard && (s.SuiteID != nil || repointing != nil) {
+				return errSuiteScheduleAdmission
+			}
+			s.Admission = *chosenAdmission
+		} else if foldedAdmission > model.AdmissionStandard {
+			s.Admission = max(s.Admission, foldedAdmission)
 		}
 		if s.SuiteID != nil {
 			// A suite-backed schedule carries no content of its own to

@@ -160,6 +160,8 @@ ARGUMENTS & FLAGS:
   --no-port                    Change belongs only on the target branch; do not port to paired branches.
   --keep-running               Immediately restart the task when its run exits instead of completing or parking.
                                Only a person may ask this, so the proposal waits for one.
+  --admission <standard|bypass|durable>
+                               Task admission level (default standard). Bypass or durable waits for a person.
   --fixes-base-branch          Marks this task as repairing a red base branch (gives it a base-green
                                goal and lets it run while the branch is red).
   --origin <ref>               GitHub PR or issue origin (owner/repo#N, #N, or URL).

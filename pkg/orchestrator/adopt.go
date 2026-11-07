@@ -523,7 +523,7 @@ func registerAdoptedRecreation(ctx context.Context, deps Deps, task model.Task, 
 	}
 	hasSandboxCap := false
 	for _, capName := range unrestorable {
-		if capName != model.DurableCapability && capName != model.PriorityDispatchCapability {
+		if !model.IsRetiredAdmissionGrant(capName) {
 			hasSandboxCap = true
 			break
 		}

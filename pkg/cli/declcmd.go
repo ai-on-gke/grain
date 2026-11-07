@@ -146,6 +146,9 @@ func cmdDeclarationsCheck(ctx context.Context, out *printer, args []string) erro
 		out.declarations(view)
 		return fmt.Errorf("%s", declarationVerdict(len(view.Errors)))
 	}
+	for _, w := range declared.Warnings {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
+	}
 	view.OK = true
 	view.fill(declared, time.Now(), loc, *next)
 	out.declarations(view)
@@ -283,7 +286,8 @@ type declaredTemplateView struct {
 	// Interactive is the template's interactive: a live chat.
 	Interactive bool `json:"interactive,omitempty"`
 	// KeepRunning is the template's keep-running: restart on exit.
-	KeepRunning bool `json:"keepRunning,omitempty"`
+	KeepRunning bool   `json:"keepRunning,omitempty"`
+	Admission   string `json:"admission,omitempty"`
 	// NothingNeeded is the template's nothing-needed: "" for close.
 	NothingNeeded string              `json:"nothingNeeded,omitempty"`
 	CustomFields  map[string][]string `json:"customFields,omitempty"`
@@ -316,9 +320,17 @@ type declaredScheduleView struct {
 	Fires      string      `json:"fires"`
 	Cadence    string      `json:"cadence"`
 	Base       string      `json:"base,omitempty"`
+	Admission  string      `json:"admission,omitempty"`
 	Overlap    string      `json:"overlap"`
 	Enabled    bool        `json:"enabled"`
 	NextFiring []time.Time `json:"nextFiring,omitempty"`
+}
+
+func nonStandardAdmission(a model.Admission) string {
+	if a > model.AdmissionStandard {
+		return a.String()
+	}
+	return ""
 }
 
 // fill turns what Load produced into the view, working out each
@@ -360,6 +372,7 @@ func (v *declarationsView) fill(declared model.RepoDeclarations, now time.Time, 
 			Network:      string(t.Template.NetworkAccess),
 			Interactive:  t.Template.Interactive,
 			KeepRunning:  t.Template.KeepRunning,
+			Admission:    nonStandardAdmission(t.Template.Admission),
 			CustomFields: t.Template.CustomFields,
 			Push:         t.Push,
 
@@ -398,9 +411,10 @@ func (v *declarationsView) fill(declared model.RepoDeclarations, now time.Time, 
 			ID:      s.Schedule.ID,
 			Name:    s.Schedule.Title,
 			Fires:   declaredTrigger(stems, s.Schedule),
-			Cadence: declaredCadence(s.Schedule.Recurrence),
-			Base:    s.Schedule.Base,
-			Overlap: overlapWording(s.Schedule.Overlap),
+			Cadence:   declaredCadence(s.Schedule.Recurrence),
+			Base:      s.Schedule.Base,
+			Admission: nonStandardAdmission(s.Schedule.Admission),
+			Overlap:   overlapWording(s.Schedule.Overlap),
 			Enabled: s.Schedule.Enabled,
 		}
 		at := now
@@ -587,6 +601,9 @@ func (p *printer) declarations(v declarationsView) {
 		if t.KeepRunning {
 			fmt.Printf("  keep-running: true\n")
 		}
+		if t.Admission != "" {
+			fmt.Printf("  admission:  %s\n", t.Admission)
+		}
 		if len(t.CustomFields) > 0 {
 			values := make([]string, 0, len(t.CustomFields))
 			for _, name := range daemon.SortedKeys(t.CustomFields) {
@@ -619,6 +636,9 @@ func (p *printer) declarations(v declarationsView) {
 		fmt.Printf("  fires:      %s\n", s.Fires)
 		fmt.Printf("  cadence:    %s\n", s.Cadence)
 		fmt.Printf("  base:       %s\n", baseOrDefault(s.Base))
+		if s.Admission != "" {
+			fmt.Printf("  admission:  %s\n", s.Admission)
+		}
 		fmt.Printf("  overlap:    %s\n", s.Overlap)
 		if !s.Enabled {
 			fmt.Printf("  enabled:    no -- declared, synced, and never comes due until the file says otherwise\n")

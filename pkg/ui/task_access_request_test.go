@@ -375,12 +375,16 @@ func TestCheckAccessRequestHonorsTemplateAndSessionCatalogueContext(t *testing.T
 	if err := store.PutTask(ctx, sessionTask); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.CheckAccessRequest(ctx, sessionTask.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: "priority-dispatch"}}); err != nil {
+	if _, err := c.CheckAccessRequest(ctx, sessionTask.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: "console"}}); err != nil {
 		t.Fatalf("session task CheckAccessRequest for session-restricted capability: %v", err)
 	}
 	// The same session-only capability stays refused to an ordinary task:
 	// judging in the task's own context must not admit it everywhere.
-	if _, err := c.CheckAccessRequest(ctx, adhoc.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: "priority-dispatch"}}); err == nil {
+	if _, err := c.CheckAccessRequest(ctx, adhoc.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: "console"}}); err == nil {
 		t.Fatal("ad-hoc task admitted session-restricted capability in CheckAccessRequest")
+	}
+	// Retired admission grants are refused on request_access for all tasks.
+	if _, err := c.CheckAccessRequest(ctx, sessionTask.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: "priority-dispatch"}}); err == nil {
+		t.Fatal("session task admitted retired priority-dispatch grant in CheckAccessRequest")
 	}
 }

@@ -488,6 +488,10 @@ func roleGrantRefusal(a *accessRole, key, name string, normalize func(string) (s
 }
 
 func roleTemplateWithin(a *accessRole, key string, tmpl model.Template, allowedRepo func(APIScope, string) bool, normalize func(string) (string, error)) error {
+	if tmpl.Admission > model.AdmissionStandard {
+		return fmt.Errorf("%s cannot set %s: template %s sets admission %s, which requires an unlimited role (grain/operator)",
+			a.label(), key, tmpl.ID, tmpl.Admission)
+	}
 	for _, g := range tmpl.Grants {
 		if err := roleGrantRefusal(a, key, g.Capability, normalize); err != nil {
 			return err
@@ -546,6 +550,10 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 			if sched.KeepRunning {
 				return fmt.Errorf("%s cannot modify or run schedule %s (keepRunning): keepRunning requires an unlimited role (grain/operator)",
 					a.label(), sched.ID)
+			}
+			if sched.Admission > model.AdmissionStandard {
+				return fmt.Errorf("%s cannot modify or run schedule %s (admission): admission %s requires an unlimited role (grain/operator)",
+					a.label(), sched.ID, sched.Admission)
 			}
 			if sched.AutoApproveProposals && !a.allows("tasks:admin", schedRepo) {
 				return fmt.Errorf("%s cannot modify or run schedule %s (autoApproveProposals): needs tasks:admin",

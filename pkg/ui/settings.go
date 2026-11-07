@@ -593,6 +593,7 @@ type Settings struct {
 	// present-and-null rather than as an absent key leaving the old one
 	// on screen.
 	DefaultCapabilities []string `json:"defaultCapabilities"`
+	DefaultAdmission    string   `json:"defaultAdmission"`
 	// ApprovedByDefault and AutoMergeByDefault are model.Config's own
 	// fields of the same name (bwsalmon/agents#612): deployment-wide
 	// defaults for whether a new task's "Queue immediately" and
@@ -1182,6 +1183,7 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		DeploymentID:                       cfg.DeploymentID,
 		Capabilities:                       c.capabilityStatuses(cfg, repoConfigs),
 		DefaultCapabilities:                cfg.DefaultCapabilities,
+		DefaultAdmission:                   cfg.DefaultAdmission.String(),
 		ApprovedByDefault:                  cfg.ApprovedByDefault,
 		AutoMergeByDefault:                 cfg.AutoMergeByDefault,
 		UpgradeCheckMode:                   model.NormalizeUpgradeCheckMode(cfg.UpgradeCheckMode),
@@ -1424,6 +1426,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			K8sPriorityClassCIDefault:          model.DefaultK8sPriorityClassCI,
 			Capabilities:                       c.capabilityStatuses(model.Config{DefaultCapabilities: def.DefaultCapabilities}, repoConfigs),
 			DefaultCapabilities:                def.DefaultCapabilities,
+			DefaultAdmission:                   def.DefaultAdmission.String(),
 			AgentKeysEnabled:                   c.Config.Secrets != nil,
 			GeminiAPIKeySet:                    geminiKeySet,
 			ClaudeOAuthTokenSet:                claudeTokenSet,
@@ -1596,6 +1599,7 @@ type UpdateSettingsRequest struct {
 	TaskBranchTemplate    *string               `json:"taskBranchTemplate"`
 	DeploymentID          *string               `json:"deploymentId"`
 	DefaultCapabilities   *[]string             `json:"defaultCapabilities"`
+	DefaultAdmission      *string               `json:"defaultAdmission"`
 	SettingsLocked        *bool                 `json:"settingsLocked"`
 	Registry              *model.RegistryConfig `json:"registry"`
 }
@@ -1610,6 +1614,7 @@ func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
 	var snake struct {
 		SettingsLocked        *bool     `json:"settings_locked"`
 		DefaultCapabilities   *[]string `json:"default_capabilities"`
+		DefaultAdmission      *string   `json:"default_admission"`
 		AutoGrantContextReads *[]string `json:"auto_grant_context_reads"`
 	}
 	if err := json.Unmarshal(data, &snake); err == nil {
@@ -1618,6 +1623,9 @@ func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
 		}
 		if r.DefaultCapabilities == nil && snake.DefaultCapabilities != nil {
 			r.DefaultCapabilities = snake.DefaultCapabilities
+		}
+		if r.DefaultAdmission == nil && snake.DefaultAdmission != nil {
+			r.DefaultAdmission = snake.DefaultAdmission
 		}
 		if r.AutoGrantContextReads == nil && snake.AutoGrantContextReads != nil {
 			r.AutoGrantContextReads = snake.AutoGrantContextReads
@@ -1806,10 +1814,24 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		}
 		cfg.IAPResource = v
 	}
+	if req.DefaultAdmission != nil {
+		adm, err := validateAdmission(*req.DefaultAdmission)
+		if err != nil {
+			return model.Config{}, validationErrorf("defaultAdmission: %v", err)
+		}
+		cfg.DefaultAdmission = adm
+	}
 	if req.DefaultCapabilities != nil {
+		filteredCaps, foldedAdm, hadRetired := model.FoldAdmissionNames(*req.DefaultCapabilities, model.AdmissionStandard)
+		if hadRetired {
+			model.WarnAdmissionGrants("settings", "defaultCapabilities", foldedAdm)
+			if req.DefaultAdmission == nil && foldedAdm > cfg.DefaultAdmission {
+				cfg.DefaultAdmission = foldedAdm
+			}
+		}
 		seen := map[string]bool{}
-		ids := make([]string, 0, len(*req.DefaultCapabilities))
-		for _, rawID := range *req.DefaultCapabilities {
+		ids := make([]string, 0, len(filteredCaps))
+		for _, rawID := range filteredCaps {
 			normalizedIDs, err := c.normalizeCapabilityIDs(rawID)
 			if err != nil {
 				return model.Config{}, err

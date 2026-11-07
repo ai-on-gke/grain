@@ -248,6 +248,10 @@ type ProposedTask struct {
 	// KeepRunning files the proposal so that its task immediately restarts
 	// when its run exits rather than completing or parking (model.Task.KeepRunning).
 	KeepRunning bool
+	// Admission is the proposal's dispatch/runtime admission tier:
+	// "standard" (default when empty), "bypass", or "durable"
+	// (model.Task.Admission). Raising above standard holds for a person.
+	Admission string
 	// FixesBaseBranch files the proposal marked as fixing its base branch
 	// while that branch is red (model.FixesBaseBranch): it is not made to
 	// wait on the branch's repair, because it is one.
@@ -964,6 +968,10 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 					"enum": []any{"close", "ack"},
 				},
 				"keep_running":      map[string]any{"type": "boolean"},
+				"admission": map[string]any{
+					"type": "string",
+					"enum": []any{"standard", "bypass", "durable"},
+				},
 				"no_port":           map[string]any{"type": "boolean"},
 				"fixes_base_branch": map[string]any{"type": "boolean"},
 				"origin":            map[string]any{"type": "string"},
@@ -1071,7 +1079,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 				}
 				designs = append(designs, raw)
 			}
-			model, _ := argString(args, "model")
+			modelName, _ := argString(args, "model")
 			agentFramework, _ := argString(args, "agent_framework")
 			var notBefore *time.Time
 			if raw, _ := argString(args, "not_before"); strings.TrimSpace(raw) != "" {
@@ -1119,7 +1127,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 				NetworkAccess:       networkAccess,
 				NothingNeededAction: strings.TrimSpace(nothingNeeded),
 				Goal:                goal,
-				Model:               strings.TrimSpace(model),
+				Model:               strings.TrimSpace(modelName),
 				AgentFramework:      strings.TrimSpace(agentFramework),
 				NotBefore:           notBefore,
 			}
@@ -1131,6 +1139,13 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 			}
 			if keepRunning, ok := argBool(args, "keep_running"); ok {
 				task.KeepRunning = keepRunning
+			}
+			if rawAdm, ok := argString(args, "admission"); ok && strings.TrimSpace(rawAdm) != "" {
+				adm, err := model.ParseAdmission(rawAdm)
+				if err != nil {
+					return Result{Text: err.Error(), IsError: true}
+				}
+				task.Admission = adm.String()
 			}
 			if fixes, ok := argBool(args, "fixes_base_branch"); ok {
 				task.FixesBaseBranch = fixes
