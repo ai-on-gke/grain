@@ -64,9 +64,7 @@ func TestDefaultMirrorSandboxImageRefusesToPullLocalOnlyRef(t *testing.T) {
 	logFile := filepath.Join(dir, "docker.log")
 	script := "#!/bin/sh\necho \"$@\" >> \"" + logFile + "\"\n" +
 		"if [ \"$1\" = image ] && [ \"$2\" = inspect ]; then exit 1; fi\nexit 0\n"
-	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutableStub(t, filepath.Join(dir, "docker"), script)
 	savedDocker, savedToken := sandboxMirrorDockerCmd, sandboxMirrorTokenSource
 	sandboxMirrorDockerCmd = []string{filepath.Join(dir, "docker")}
 	sandboxMirrorTokenSource = nil
