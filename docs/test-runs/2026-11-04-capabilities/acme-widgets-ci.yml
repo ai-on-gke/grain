@@ -1,0 +1,15 @@
+name: walk
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  publish:
+    capabilities: ['https://grain.dev/capabilities/release#package-publish={}']
+    cache: false
+    steps:
+      - run: |
+          echo "event: $GRAIN_CI_EVENT"
+          ls -l ~/.package-publish-* ~/.docker/config.json ~/.grain/bin/docker-credential-grain 2>&1 || true
+          [ -f ~/.package-publish-refresh-url ] && echo "refresh url: $(cat ~/.package-publish-refresh-url)"
+          [ -f ~/.package-publish-refresh-token ] && echo "refresh token: $(head -c 6 ~/.package-publish-refresh-token)<cut>"
+          true

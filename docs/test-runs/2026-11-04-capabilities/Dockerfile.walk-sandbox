@@ -1,0 +1,10 @@
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends bash ca-certificates curl findutils git tar python3-minimal procps \
+ && rm -rf /var/lib/apt/lists/* \
+ && install -d -m0755 /etc/grain && printf '2\n' > /etc/grain/sandbox-contract \
+ && useradd -m -u 1000 -s /bin/bash debian && ln -s /home/debian /home/agent
+COPY grain /usr/local/bin/grain
+COPY fake-agy /home/debian/walk/fake-agy
+RUN chmod 0755 /home/debian/walk/fake-agy && chown -R debian:debian /home/debian/walk
+USER debian
+WORKDIR /home/debian
